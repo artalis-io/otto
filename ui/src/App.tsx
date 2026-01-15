@@ -14,6 +14,7 @@ const defaultConfig: VehicleConfig = {
   minimumFuel: 20,
   minPurchase: 0,
   stopCost: 0,
+  remainingFuelValue: 0,
 };
 
 function App() {
@@ -79,6 +80,7 @@ function App() {
         minimumFuel: config.minimumFuel,
         minPurchase: config.minPurchase,
         stopCost: config.stopCost,
+        remainingFuelValue: config.remainingFuelValue,
         maxDistance: 10,
       });
       setResult(response);

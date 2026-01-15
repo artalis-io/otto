@@ -34,6 +34,7 @@ export interface VehicleConfig {
   minimumFuel: number;
   minPurchase?: number;
   stopCost?: number;
+  remainingFuelValue?: number;  // Expected $/gallon at destination
 }
 
 export interface OptimizeRequest {
@@ -47,6 +48,7 @@ export interface OptimizeRequest {
   maxDistance?: number;
   minPurchase?: number;
   stopCost?: number;
+  remainingFuelValue?: number;
 }
 
 export interface FuelStop {

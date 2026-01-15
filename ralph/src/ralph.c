@@ -62,7 +62,7 @@ RalphModel* ralph_create(void) {
     /* Default parameters */
     model->max_iterations = RALPH_DEFAULT_MAX_ITER;
     model->time_limit = RALPH_DEFAULT_TIME_LIMIT;
-    model->presolve = 0;
+    model->presolve = 0;  /* Temporarily disabled for testing */
     model->verbose = 0;
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
@@ -206,6 +206,25 @@ int ralph_optimize(RalphModel *model) {
     model->dual_solution = NULL;
     model->reduced_costs = NULL;
 
+    int n_orig = model->lp_model->num_vars;
+    int m_orig = model->lp_model->num_cons;
+
+    /* Apply presolve if enabled */
+    PresolveResult *presolved = NULL;
+    LPModel *solve_model = model->lp_model;
+
+    if (model->presolve && !ralph_is_mip(model)) {
+        presolved = presolve(model->lp_model);
+        if (presolved && presolved->reduced_model) {
+            solve_model = presolved->reduced_model;
+            if (model->verbose) {
+                printf("Presolve: %d vars removed, %d cons removed, %d bounds tightened\n",
+                       presolved->vars_removed, presolved->cons_removed,
+                       presolved->bounds_tightened);
+            }
+        }
+    }
+
     if (ralph_is_mip(model)) {
         /* MIP solve */
         model->mip_solver = mip_create(model->lp_model);
@@ -231,16 +250,16 @@ int ralph_optimize(RalphModel *model) {
             model->node_count = model->mip_solver->nodes_explored;
 
             /* Copy solution */
-            int n = model->lp_model->num_vars;
-            model->solution = (double*)malloc(n * sizeof(double));
+            model->solution = (double*)malloc(n_orig * sizeof(double));
             if (model->solution) {
-                memcpy(model->solution, model->mip_solver->best_solution, n * sizeof(double));
+                memcpy(model->solution, model->mip_solver->best_solution, n_orig * sizeof(double));
             }
         }
     } else {
         /* LP solve */
-        model->lp_solver = simplex_create(model->lp_model);
+        model->lp_solver = simplex_create(solve_model);
         if (!model->lp_solver) {
+            if (presolved) presolve_free(presolved);
             model->status = RALPH_STATUS_ERROR;
             return -1;
         }
@@ -249,6 +268,7 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->max_iterations = model->max_iterations;
         model->lp_solver->time_limit = model->time_limit;
         model->lp_solver->verbose = model->verbose;
+        model->lp_solver->presolve = 0;  /* Already done */
 
         /* Solve */
         simplex_solve(model->lp_solver);
@@ -258,24 +278,44 @@ int ralph_optimize(RalphModel *model) {
         if (model->status == RALPH_STATUS_OPTIMAL) {
             model->obj_value = model->lp_solver->obj_value;
 
-            /* Copy solution */
-            int n = model->lp_model->num_vars;
-            int m = model->lp_model->num_cons;
+            /* Allocate solution arrays for original problem size */
+            model->solution = (double*)calloc(n_orig, sizeof(double));
+            model->dual_solution = (double*)calloc(m_orig, sizeof(double));
+            model->reduced_costs = (double*)calloc(n_orig, sizeof(double));
 
-            model->solution = (double*)malloc(n * sizeof(double));
-            model->dual_solution = (double*)malloc(m * sizeof(double));
-            model->reduced_costs = (double*)malloc(n * sizeof(double));
-
-            if (model->solution && model->lp_solver->solution) {
-                memcpy(model->solution, model->lp_solver->solution, n * sizeof(double));
-            }
-            if (model->dual_solution && model->lp_solver->dual_solution) {
-                memcpy(model->dual_solution, model->lp_solver->dual_solution, m * sizeof(double));
-            }
-            if (model->reduced_costs && model->lp_solver->reduced_costs) {
-                memcpy(model->reduced_costs, model->lp_solver->reduced_costs, n * sizeof(double));
+            if (presolved && presolved->reduced_model) {
+                /* Postsolve: recover original solution */
+                if (model->solution && model->lp_solver->solution) {
+                    postsolve(presolved, model->lp_solver->solution, model->solution);
+                }
+                /* Dual values need postsolve too - for now copy what we have */
+                int m_reduced = solve_model->num_cons;
+                if (model->dual_solution && model->lp_solver->dual_solution) {
+                    for (int i = 0; i < m_reduced && i < m_orig; i++) {
+                        int orig_con = presolved->con_map ? presolved->con_map[i] : i;
+                        if (orig_con >= 0 && orig_con < m_orig) {
+                            model->dual_solution[orig_con] = model->lp_solver->dual_solution[i];
+                        }
+                    }
+                }
+            } else {
+                /* No presolve - direct copy */
+                if (model->solution && model->lp_solver->solution) {
+                    memcpy(model->solution, model->lp_solver->solution, n_orig * sizeof(double));
+                }
+                if (model->dual_solution && model->lp_solver->dual_solution) {
+                    memcpy(model->dual_solution, model->lp_solver->dual_solution, m_orig * sizeof(double));
+                }
+                if (model->reduced_costs && model->lp_solver->reduced_costs) {
+                    memcpy(model->reduced_costs, model->lp_solver->reduced_costs, n_orig * sizeof(double));
+                }
             }
         }
+    }
+
+    /* Free presolve result */
+    if (presolved) {
+        presolve_free(presolved);
     }
 
     return 0;

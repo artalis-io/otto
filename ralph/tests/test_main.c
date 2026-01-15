@@ -44,7 +44,7 @@ static int tests_passed = 0;
  *      2x + y <= 6
  *      x, y >= 0
  *
- * Optimal: x=2, y=2, obj=-4
+ * Optimal: obj=-4 (multiple optimal vertices: (2,2) and (0,4))
  * ============================================================================ */
 void test_simple_lp(void) {
     printf("\n=== Test: Simple 2-variable LP ===\n");
@@ -77,10 +77,15 @@ void test_simple_lp(void) {
     double obj = ralph_get_objval(model);
     ASSERT_NEAR(obj, -4.0, TOLERANCE, "Objective value");
 
+    /* Verify solution satisfies constraints (don't check specific vertex) */
     double x[2];
     ralph_get_solution(model, x);
-    ASSERT_NEAR(x[0], 2.0, TOLERANCE, "x[0] = 2");
-    ASSERT_NEAR(x[1], 2.0, TOLERANCE, "x[1] = 2");
+    double c1 = x[0] + x[1];       /* x + y <= 4 */
+    double c2 = 2*x[0] + x[1];     /* 2x + y <= 6 */
+    ASSERT(x[0] >= -TOLERANCE, "x[0] >= 0");
+    ASSERT(x[1] >= -TOLERANCE, "x[1] >= 0");
+    ASSERT(c1 <= 4.0 + TOLERANCE, "Constraint 1 satisfied");
+    ASSERT(c2 <= 6.0 + TOLERANCE, "Constraint 2 satisfied");
 
     ralph_free(model);
 }

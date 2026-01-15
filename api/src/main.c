@@ -658,6 +658,10 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
     if ((p = find_json_key(hm->body.buf, "stop_cost"))) {
         stop_cost = parse_double(&p);
     }
+    double remaining_fuel_value = 0.0;
+    if ((p = find_json_key(hm->body.buf, "remaining_fuel_value"))) {
+        remaining_fuel_value = parse_double(&p);
+    }
 
     /* Parse segments (optional - for variable consumption) */
     FWRouteSegment *segments = NULL;
@@ -694,6 +698,7 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
     problem.minimum_fuel_at_end = min_fuel;
     problem.min_purchase = min_purchase;
     problem.stop_cost = stop_cost;
+    problem.remaining_fuel_value = remaining_fuel_value;
     problem.num_stations = filtered_count;
     problem.stations = filtered;
 

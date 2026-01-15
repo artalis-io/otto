@@ -165,6 +165,7 @@ int node_queue_push(NodeQueue *queue, BBNode *node);
 BBNode* node_queue_pop(NodeQueue *queue);
 int node_queue_is_empty(const NodeQueue *queue);
 void node_queue_update_bound(NodeQueue *queue, double cutoff);
+double node_queue_best_bound(const NodeQueue *queue);
 
 BBNode* bb_node_create(int num_vars);
 void bb_node_free(BBNode *node);

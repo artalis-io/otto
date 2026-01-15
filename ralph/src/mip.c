@@ -158,6 +158,65 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
 }
 
 /* ============================================================================
+ * Basis Warm Starting Helpers
+ * ============================================================================ */
+
+/* Save current basis from tableau to node */
+static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars) {
+    if (!lp || !lp->tableau || !node) return;
+
+    SimplexTableau *tab = lp->tableau;
+    int m = tab->m;
+    int n = tab->n;
+
+    /* Allocate basis arrays if needed */
+    if (!node->basis) {
+        node->basis = (int*)malloc(m * sizeof(int));
+    }
+    if (!node->var_status) {
+        node->var_status = (VarStatus*)malloc(n * sizeof(VarStatus));
+    }
+
+    if (node->basis && node->var_status) {
+        memcpy(node->basis, tab->basis, m * sizeof(int));
+        memcpy(node->var_status, tab->var_status, n * sizeof(VarStatus));
+    }
+}
+
+/* Restore basis from node to tableau */
+static int restore_basis_from_node(SimplexSolver *lp, BBNode *node) {
+    if (!lp || !lp->tableau || !node || !node->basis || !node->var_status) {
+        return -1;  /* No basis to restore */
+    }
+
+    SimplexTableau *tab = lp->tableau;
+    int m = tab->m;
+    int n = tab->n;
+
+    /* Restore basis indices and variable status */
+    memcpy(tab->basis, node->basis, m * sizeof(int));
+    memcpy(tab->var_status, node->var_status, n * sizeof(VarStatus));
+
+    /* Update basis_pos from basis array */
+    for (int j = 0; j < n; j++) {
+        tab->basis_pos[j] = -1;
+    }
+    for (int k = 0; k < m; k++) {
+        int j = tab->basis[k];
+        if (j >= 0 && j < n) {
+            tab->basis_pos[j] = k;
+        }
+    }
+
+    /* Refactorize to ensure LU is consistent with restored basis */
+    if (tableau_refactorize(tab) != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+/* ============================================================================
  * Solve LP Relaxation at a Node
  * ============================================================================ */
 
@@ -172,32 +231,37 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     SimplexSolver *lp = solver->lp_solver;
 
-    /* Apply node bounds */
-    if (lp->tableau) {
-        for (int j = 0; j < model->num_vars; j++) {
-            lp->tableau->lb_ext[j] = node->lb[j];
-            lp->tableau->ub_ext[j] = node->ub[j];
-        }
+    /* Apply node bounds to model and solve fresh.
+     * Note: We solve each node from scratch to avoid basis issues between nodes
+     * with different bound combinations. A more sophisticated implementation
+     * would properly warm-start using dual simplex with basis restoration. */
 
-        /* Recompute solution with new bounds */
-        tableau_compute_solution(lp->tableau);
-
-        /* Use dual simplex to reoptimize */
-        dual_simplex_solve(lp);
-    } else {
-        /* First solve - need to create tableau */
-        /* Update model bounds */
-        for (int j = 0; j < model->num_vars; j++) {
-            model->lb[j] = node->lb[j];
-            model->ub[j] = node->ub[j];
-        }
-
-        simplex_solve(lp);
+    /* Update model bounds */
+    for (int j = 0; j < model->num_vars; j++) {
+        model->lb[j] = node->lb[j];
+        model->ub[j] = node->ub[j];
     }
+
+    /* Free old tableau and solve fresh */
+    if (lp->tableau) {
+        tableau_free(lp->tableau);
+        lp->tableau = NULL;
+    }
+    simplex_solve(lp);
 
     node->lp_status = lp->status;
     node->lp_bound = lp->obj_value;
     node->lp_iterations = lp->iterations;
+
+    /* Debug output */
+    if (solver->verbose && lp->status != RALPH_STATUS_OPTIMAL) {
+        printf("  solve_node_lp: status=%d, obj=%.4f\n", lp->status, lp->obj_value);
+    }
+
+    /* Save basis to node for warm starting children */
+    if (lp->status == RALPH_STATUS_OPTIMAL) {
+        save_basis_to_node(lp, node, model->num_vars);
+    }
 
     return (lp->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
 }
@@ -231,12 +295,9 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
     }
 
-    /* Update global bound */
-    if (model->obj_sense == 1) {
-        solver->best_bound = fmax(solver->best_bound, lp_obj);
-    } else {
-        solver->best_bound = fmin(solver->best_bound, lp_obj);
-    }
+    /* Note: best_bound should track the best LP bound from OPEN nodes.
+     * We don't update it here (from closed node). The root bound is used
+     * initially, and we update it from the queue after pruning. */
 
     /* Check integer feasibility */
     if (check_integer_feasibility(solver, lp_sol)) {
@@ -435,10 +496,11 @@ int mip_solve(MIPSolver *solver) {
             solver->max_depth = node->depth;
         }
 
-        /* Prune nodes by bound */
+        /* Prune nodes by bound and update best_bound from remaining open nodes */
         if (solver->has_incumbent) {
             node_queue_update_bound(solver->node_queue, solver->cutoff);
         }
+        solver->best_bound = node_queue_best_bound(solver->node_queue);
 
         /* Print progress */
         if (solver->verbose && solver->nodes_explored % 100 == 0) {

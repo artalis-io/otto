@@ -150,6 +150,11 @@ typedef struct {
     int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex */
     int verbose;
 
+    /* Scaling factors (used if scaling enabled) */
+    double *row_scale;      /* Row scaling factors */
+    double *col_scale;      /* Column scaling factors */
+    int is_scaled;          /* Flag indicating if problem was scaled */
+
     /* Solution */
     RalphStatus status;
     double obj_value;

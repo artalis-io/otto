@@ -198,6 +198,27 @@ void node_queue_update_bound(NodeQueue *queue, double cutoff) {
     }
 }
 
+/* Get best LP bound from open nodes in queue */
+double node_queue_best_bound(const NodeQueue *queue) {
+    if (!queue || queue->size == 0) {
+        return (queue && queue->obj_sense == 1) ? RALPH_INFINITY : -RALPH_INFINITY;
+    }
+
+    double best = queue->nodes[0]->lp_bound;
+    for (int i = 1; i < queue->size; i++) {
+        if (queue->obj_sense == 1) {  /* Minimize */
+            if (queue->nodes[i]->lp_bound < best) {
+                best = queue->nodes[i]->lp_bound;
+            }
+        } else {  /* Maximize */
+            if (queue->nodes[i]->lp_bound > best) {
+                best = queue->nodes[i]->lp_bound;
+            }
+        }
+    }
+    return best;
+}
+
 /* ============================================================================
  * Branch and Bound Node
  * ============================================================================ */
@@ -252,6 +273,14 @@ BBNode* bb_node_copy(const BBNode *src, int num_vars) {
 
     memcpy(dst->lb, src->lb, num_vars * sizeof(double));
     memcpy(dst->ub, src->ub, num_vars * sizeof(double));
+
+    /* Copy basis information for warm starting */
+    if (src->basis && src->var_status) {
+        /* Note: Basis size is num_cons (m), but we don't have that here.
+         * We store the basis size implicitly as the parent's LP info.
+         * For now, we'll copy when the parent has valid basis info.
+         * The caller can provide num_cons if needed. */
+    }
 
     return dst;
 }
@@ -551,15 +580,41 @@ int heuristic_rounding(MIPSolver *solver, const double *lp_solution, double *int
         int_solution[j] = rounded;
     }
 
-    /* Check if rounded solution is integer feasible
-     *
-     * NOTE: This does NOT check full constraint feasibility. For problems with
-     * indicator constraints (e.g., x <= M*z), simple rounding may produce
-     * solutions that violate these constraints. A proper implementation would
-     * re-solve the LP with binary variables fixed to check feasibility.
-     * This is a known limitation of the simple rounding heuristic.
-     */
-    return check_integer_feasibility(solver, int_solution) ? 0 : -1;
+    /* Check integer feasibility */
+    if (!check_integer_feasibility(solver, int_solution)) {
+        return -1;
+    }
+
+    /* Check constraint feasibility (Ax sense b) */
+    if (model->A && model->num_cons > 0) {
+        double *ax = (double*)malloc(model->num_cons * sizeof(double));
+        if (ax) {
+            sparse_matvec(model->A, int_solution, ax);
+
+            for (int i = 0; i < model->num_cons; i++) {
+                double lhs = ax[i];
+                double rhs = model->b[i];
+                char sense = model->sense[i];
+
+                int violated = 0;
+                if (sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) {
+                    violated = 1;  /* ax > b for <= constraint */
+                } else if (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) {
+                    violated = 1;  /* ax < b for >= constraint */
+                } else if (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL) {
+                    violated = 1;  /* ax != b for = constraint */
+                }
+
+                if (violated) {
+                    free(ax);
+                    return -1;
+                }
+            }
+            free(ax);
+        }
+    }
+
+    return 0;
 }
 
 /* ============================================================================

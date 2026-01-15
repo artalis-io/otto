@@ -101,6 +101,18 @@ export default function RouteConfig({
           />
           <span className="help-text">Fixed cost per stop</span>
         </div>
+
+        <div className="config-item">
+          <label>Dest. Fuel Value ($/gal)</label>
+          <input
+            type="number"
+            value={config.remainingFuelValue || 0}
+            onChange={(e) => onConfigChange({ remainingFuelValue: parseFloat(e.target.value) || 0 })}
+            min={0}
+            step={0.1}
+          />
+          <span className="help-text">Credit for fuel at destination</span>
+        </div>
       </div>
 
       <div className="segments-section">

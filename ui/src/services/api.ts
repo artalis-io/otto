@@ -71,6 +71,7 @@ export async function optimize(request: OptimizeRequest): Promise<OptimizeRespon
 
   if (request.minPurchase) body.min_purchase = request.minPurchase;
   if (request.stopCost) body.stop_cost = request.stopCost;
+  if (request.remainingFuelValue) body.remaining_fuel_value = request.remainingFuelValue;
 
   const response = await apiCall<{
     status: string;

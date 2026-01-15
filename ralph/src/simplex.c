@@ -19,6 +19,196 @@
 int lp_model_finalize(LPModel *model);
 
 /* ============================================================================
+ * Geometric Mean Scaling
+ * ============================================================================ */
+
+/*
+ * Apply geometric mean scaling to the LP model.
+ * This scales rows and columns to improve numerical stability.
+ *
+ * Row scaling: R[i] such that scaled row has max element ~1
+ * Col scaling: C[j] such that scaled col has max element ~1
+ *
+ * Scaled problem: (R*A*C) * (C^-1 * x) = R*b with objective (C*c)' * (C^-1 * x)
+ */
+static int apply_scaling(SimplexSolver *solver) {
+    LPModel *model = solver->model;
+    if (!model || !model->A) return -1;
+
+    int m = model->num_cons;
+    int n = model->num_vars;
+    SparseMatrix *A = model->A;
+
+    /* Allocate scaling factors */
+    solver->row_scale = (double*)malloc(m * sizeof(double));
+    solver->col_scale = (double*)malloc(n * sizeof(double));
+    if (!solver->row_scale || !solver->col_scale) {
+        free(solver->row_scale);
+        free(solver->col_scale);
+        solver->row_scale = NULL;
+        solver->col_scale = NULL;
+        return -1;
+    }
+
+    /* Initialize scaling factors to 1 */
+    for (int i = 0; i < m; i++) solver->row_scale[i] = 1.0;
+    for (int j = 0; j < n; j++) solver->col_scale[j] = 1.0;
+
+    /* Compute row max absolute values */
+    double *row_max = (double*)calloc(m, sizeof(double));
+    if (!row_max) return -1;
+
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int i = A->rowidx[p];
+            double absval = fabs(A->values[p]);
+            if (absval > row_max[i]) row_max[i] = absval;
+        }
+    }
+
+    /* Compute row scaling factors */
+    for (int i = 0; i < m; i++) {
+        if (row_max[i] > RALPH_ZERO_TOL) {
+            solver->row_scale[i] = 1.0 / sqrt(row_max[i]);
+        }
+    }
+    free(row_max);
+
+    /* Apply row scaling to matrix, then compute column max */
+    double *col_max = (double*)calloc(n, sizeof(double));
+    if (!col_max) return -1;
+
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int i = A->rowidx[p];
+            double scaled_val = fabs(A->values[p]) * solver->row_scale[i];
+            if (scaled_val > col_max[j]) col_max[j] = scaled_val;
+        }
+    }
+
+    /* Compute column scaling factors */
+    for (int j = 0; j < n; j++) {
+        if (col_max[j] > RALPH_ZERO_TOL) {
+            solver->col_scale[j] = 1.0 / sqrt(col_max[j]);
+        }
+    }
+    free(col_max);
+
+    /* Apply scaling to matrix A: A_scaled[i,j] = R[i] * A[i,j] * C[j] */
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int i = A->rowidx[p];
+            A->values[p] *= solver->row_scale[i] * solver->col_scale[j];
+        }
+    }
+
+    /* Scale RHS: b_scaled[i] = R[i] * b[i] */
+    for (int i = 0; i < m; i++) {
+        model->b[i] *= solver->row_scale[i];
+    }
+
+    /* Scale objective: c_scaled[j] = C[j] * c[j] */
+    for (int j = 0; j < n; j++) {
+        model->c[j] *= solver->col_scale[j];
+    }
+
+    /* Scale variable bounds: x_scaled = C^-1 * x, so bounds scale by C */
+    /* lb_scaled[j] = lb[j] / C[j], but we store C[j] and apply later */
+    /* Actually for bounds: if x = C * x_scaled, then lb <= C * x_scaled <= ub */
+    /* So: lb/C <= x_scaled <= ub/C */
+    for (int j = 0; j < n; j++) {
+        if (model->lb[j] > -RALPH_INFINITY/2) {
+            model->lb[j] /= solver->col_scale[j];
+        }
+        if (model->ub[j] < RALPH_INFINITY/2) {
+            model->ub[j] /= solver->col_scale[j];
+        }
+    }
+
+    solver->is_scaled = 1;
+    return 0;
+}
+
+/*
+ * Unscale the solution after solving.
+ * x_original = C * x_scaled
+ * y_original = R * y_scaled
+ * rc_original = C^-1 * rc_scaled
+ */
+static void unscale_solution(SimplexSolver *solver) {
+    if (!solver->is_scaled) return;
+
+    int n = solver->model->num_vars;
+    int m = solver->model->num_cons;
+
+    /* Unscale primal solution: x = C * x_scaled */
+    if (solver->solution) {
+        for (int j = 0; j < n; j++) {
+            solver->solution[j] *= solver->col_scale[j];
+        }
+    }
+
+    /* Unscale dual solution: y = R * y_scaled */
+    if (solver->dual_solution) {
+        for (int i = 0; i < m; i++) {
+            solver->dual_solution[i] *= solver->row_scale[i];
+        }
+    }
+
+    /* Unscale reduced costs: rc = rc_scaled / C */
+    if (solver->reduced_costs) {
+        for (int j = 0; j < n; j++) {
+            solver->reduced_costs[j] /= solver->col_scale[j];
+        }
+    }
+}
+
+/*
+ * Restore the model to its original (unscaled) state.
+ * This reverses the transformations applied by apply_scaling().
+ */
+static void restore_model(SimplexSolver *solver) {
+    if (!solver->is_scaled) return;
+
+    LPModel *model = solver->model;
+    if (!model || !model->A) return;
+
+    int m = model->num_cons;
+    int n = model->num_vars;
+    SparseMatrix *A = model->A;
+
+    /* Unscale matrix A: A_original = A_scaled / (R[i] * C[j]) */
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int i = A->rowidx[p];
+            A->values[p] /= (solver->row_scale[i] * solver->col_scale[j]);
+        }
+    }
+
+    /* Unscale RHS: b_original = b_scaled / R[i] */
+    for (int i = 0; i < m; i++) {
+        model->b[i] /= solver->row_scale[i];
+    }
+
+    /* Unscale objective: c_original = c_scaled / C[j] */
+    for (int j = 0; j < n; j++) {
+        model->c[j] /= solver->col_scale[j];
+    }
+
+    /* Unscale variable bounds: lb/ub_original = lb/ub_scaled * C[j] */
+    for (int j = 0; j < n; j++) {
+        if (model->lb[j] > -RALPH_INFINITY/2) {
+            model->lb[j] *= solver->col_scale[j];
+        }
+        if (model->ub[j] < RALPH_INFINITY/2) {
+            model->ub[j] *= solver->col_scale[j];
+        }
+    }
+
+    solver->is_scaled = 0;
+}
+
+/* ============================================================================
  * Simplex Tableau Creation
  * ============================================================================ */
 
@@ -615,18 +805,52 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         }
     }
 
-    /* Update steepest edge weights (simplified DSE update) */
+    /* Update Devex pricing weights
+     * Devex is an approximation to steepest edge that only requires
+     * the pivot column in basis representation (already in work2).
+     *
+     * Reference: Harris, "Pivot Selection Methods of the Devex LP Code", 1973
+     *
+     * For each nonbasic variable j:
+     *   gamma_j = max(gamma_j, (alpha_j² * gamma_e) / pivot²)
+     * where alpha_j is the j-th component of B^{-1} * a_j
+     *
+     * We approximate alpha_j using the pivot row of the tableau.
+     */
     if (tab->use_steepest_edge) {
         double pivot = tab->work2[leaving_pos];
+        double pivot_sq = pivot * pivot;
         double gamma_e = tab->se_weights[entering];
 
-        for (int j = 0; j < tab->n; j++) {
-            if (j != entering && tab->var_status[j] != RALPH_BASIC) {
-                /* Approximate update */
-                tab->se_weights[j] *= 1.0;  /* Simplified - full DSE is more complex */
+        if (fabs(pivot_sq) > RALPH_ZERO_TOL) {
+            /* Compute pivot row for Devex update: row = e_r^T * B^{-1} * A
+             * This is the leaving_pos-th row of B^{-1} * A
+             * We only need it for nonbasic variables
+             */
+            vec_set_zero(tab->work1, tab->m);
+            tab->work1[leaving_pos] = 1.0;
+            lu_solve_transpose(tab->lu, tab->work1, tab->work3);  /* work3 = (B^{-T} * e_r) */
+
+            for (int j = 0; j < tab->n; j++) {
+                if (j != entering && tab->var_status[j] != RALPH_BASIC) {
+                    /* Compute alpha_j = pivot_row * a_j */
+                    double alpha_j = 0.0;
+                    for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+                        alpha_j += tab->work3[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+                    }
+
+                    /* Devex update: only increase weights */
+                    double new_weight = (alpha_j * alpha_j * gamma_e) / pivot_sq;
+                    if (new_weight > tab->se_weights[j]) {
+                        tab->se_weights[j] = new_weight;
+                    }
+                }
             }
         }
-        tab->se_weights[leaving] = gamma_e / (pivot * pivot);
+
+        /* Weight for leaving variable */
+        tab->se_weights[leaving] = fabs(pivot_sq) > RALPH_ZERO_TOL ?
+                                   gamma_e / pivot_sq : 1.0;
     }
 
     return 0;
@@ -648,10 +872,11 @@ SimplexSolver* simplex_create(LPModel *model) {
     /* Default parameters */
     solver->max_iterations = RALPH_DEFAULT_MAX_ITER;
     solver->time_limit = RALPH_DEFAULT_TIME_LIMIT;
-    solver->presolve = 0;  /* Disable for now */
-    solver->scaling = 0;
+    solver->presolve = 1;  /* Enable presolve for performance */
+    solver->scaling = 1;   /* Enable scaling for numerical stability */
     solver->pricing_strategy = 1;  /* Steepest edge */
     solver->verbose = 0;
+    solver->is_scaled = 0;
 
     return solver;
 }
@@ -663,6 +888,8 @@ void simplex_free(SimplexSolver *solver) {
     free(solver->solution);
     free(solver->dual_solution);
     free(solver->reduced_costs);
+    free(solver->row_scale);
+    free(solver->col_scale);
     free(solver);
 }
 
@@ -863,6 +1090,22 @@ int simplex_solve(SimplexSolver *solver) {
 
     clock_t start = clock();
 
+    /* Finalize model if needed (required before scaling) */
+    if (!solver->model->A) {
+        if (lp_model_finalize(solver->model) != 0) {
+            solver->status = RALPH_STATUS_ERROR;
+            return -1;
+        }
+    }
+
+    /* Apply scaling if enabled */
+    if (solver->scaling) {
+        if (apply_scaling(solver) != 0) {
+            /* Scaling failed, continue without scaling */
+            solver->is_scaled = 0;
+        }
+    }
+
     /* Create tableau */
     solver->tableau = tableau_create(solver->model);
     if (!solver->tableau) {
@@ -932,7 +1175,13 @@ int simplex_solve(SimplexSolver *solver) {
                 solver->dual_solution[i] = tab->y[i] * solver->model->obj_sense;
             }
         }
+
+        /* Unscale solution if scaling was applied */
+        unscale_solution(solver);
     }
+
+    /* Restore original model if scaling was applied */
+    restore_model(solver);
 
     return status;
 }

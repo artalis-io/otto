@@ -373,24 +373,30 @@ int presolve_singleton_cols(PresolveContext *ctx) {
                 }
             }
 
-            /* Implied bounds on singleton_val * x_j */
-            double ax_lb = rhs - other_ub;
-            double ax_ub = rhs - other_lb;
+            /* Derive bounds respecting constraint sense */
+            char sense = model->sense[singleton_row];
 
-            /* Convert to bounds on x_j */
-            if (singleton_val > 0) {
-                if (ax_lb > -RALPH_INFINITY/2) {
-                    model->lb[j] = fmax(model->lb[j], ax_lb / singleton_val);
+            /* For <= or = constraints: a_ij * x_j <= rhs - other_lb */
+            if (sense == 'L' || sense == 'E') {
+                if (other_lb > -RALPH_INFINITY/2) {
+                    double ax_ub = rhs - other_lb;
+                    if (singleton_val > 0) {
+                        model->ub[j] = fmin(model->ub[j], ax_ub / singleton_val);
+                    } else {
+                        model->lb[j] = fmax(model->lb[j], ax_ub / singleton_val);
+                    }
                 }
-                if (ax_ub < RALPH_INFINITY/2) {
-                    model->ub[j] = fmin(model->ub[j], ax_ub / singleton_val);
-                }
-            } else {
-                if (ax_ub < RALPH_INFINITY/2) {
-                    model->lb[j] = fmax(model->lb[j], ax_ub / singleton_val);
-                }
-                if (ax_lb > -RALPH_INFINITY/2) {
-                    model->ub[j] = fmin(model->ub[j], ax_lb / singleton_val);
+            }
+
+            /* For >= or = constraints: a_ij * x_j >= rhs - other_ub */
+            if (sense == 'G' || sense == 'E') {
+                if (other_ub < RALPH_INFINITY/2) {
+                    double ax_lb = rhs - other_ub;
+                    if (singleton_val > 0) {
+                        model->lb[j] = fmax(model->lb[j], ax_lb / singleton_val);
+                    } else {
+                        model->ub[j] = fmin(model->ub[j], ax_lb / singleton_val);
+                    }
                 }
             }
 
@@ -695,14 +701,20 @@ int postsolve(const PresolveResult *result, const double *reduced_solution,
 
     /* Initialize with fixed values */
     for (int j = 0; j < result->num_fixed_vars; j++) {
-        original_solution[result->fixed_vars[j]] = result->fixed_values[j];
+        if (result->fixed_vars && result->fixed_values) {
+            original_solution[result->fixed_vars[j]] = result->fixed_values[j];
+        }
     }
 
     /* Copy solution values using mapping */
-    int num_reduced = 0;
-    for (int j = 0; result->var_map && result->var_map[j] >= 0; j++) {
-        original_solution[result->var_map[j]] = reduced_solution[j];
-        num_reduced++;
+    if (result->var_map && result->reduced_model) {
+        int num_reduced_vars = result->reduced_model->num_vars;
+        for (int j = 0; j < num_reduced_vars; j++) {
+            int orig_idx = result->var_map[j];
+            if (orig_idx >= 0) {
+                original_solution[orig_idx] = reduced_solution[j];
+            }
+        }
     }
 
     return 0;
