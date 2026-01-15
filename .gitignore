@@ -1,0 +1,46 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Test binaries
+test_ralph
+test_fuelwise
+fuelwise-api
+
+# WASM build output
+wasm/build/
+
+# Node modules
+ui/node_modules/
+
+# UI build output
+ui/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Coverage
+coverage/
+
+# Temporary files
+*.tmp
+*.temp

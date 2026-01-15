@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Test binaries
+test_ralph
+test_fuelwise
+
+# Node modules (rebuilt in container)
+ui/node_modules
+ui/dist
+
+# WASM build (rebuilt in container)
+wasm/build
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in runtime)
+*.md
+!README.md
+docs/
+
+# GitHub
+.github
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore

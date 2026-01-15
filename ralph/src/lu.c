@@ -1,0 +1,568 @@
+/*
+ * Ralph - LU Factorization Implementation
+ *
+ * Implements LU factorization with partial pivoting for the basis matrix
+ * in the revised simplex method. Supports both initial factorization
+ * and efficient updates via eta-file method.
+ */
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <math.h>
+#include "lp.h"
+
+/* ============================================================================
+ * LU Factorization Creation/Destruction
+ * ============================================================================ */
+
+LUFactorization* lu_create(int m) {
+    LUFactorization *lu = (LUFactorization*)calloc(1, sizeof(LUFactorization));
+    if (!lu) return NULL;
+
+    lu->m = m;
+    lu->max_updates = 50;  /* Refactorize after this many updates */
+
+    /* Allocate permutation arrays */
+    lu->perm = (int*)malloc(m * sizeof(int));
+    lu->perm_inv = (int*)malloc(m * sizeof(int));
+    lu->col_perm = (int*)malloc(m * sizeof(int));
+    lu->col_perm_inv = (int*)malloc(m * sizeof(int));
+
+    if (!lu->perm || !lu->perm_inv || !lu->col_perm || !lu->col_perm_inv) {
+        lu_free(lu);
+        return NULL;
+    }
+
+    /* Initialize to identity permutation */
+    for (int i = 0; i < m; i++) {
+        lu->perm[i] = i;
+        lu->perm_inv[i] = i;
+        lu->col_perm[i] = i;
+        lu->col_perm_inv[i] = i;
+    }
+
+    /* Eta file for updates */
+    lu->eta_capacity = lu->max_updates;
+    lu->num_eta = 0;
+    lu->eta_col = (int*)malloc(lu->eta_capacity * sizeof(int));
+    lu->eta_vectors = (double**)malloc(lu->eta_capacity * sizeof(double*));
+
+    if (!lu->eta_col || !lu->eta_vectors) {
+        lu_free(lu);
+        return NULL;
+    }
+
+    for (int i = 0; i < lu->eta_capacity; i++) {
+        lu->eta_vectors[i] = NULL;
+    }
+
+    return lu;
+}
+
+void lu_free(LUFactorization *lu) {
+    if (!lu) return;
+
+    free(lu->L_colptr);
+    free(lu->L_rowidx);
+    free(lu->L_values);
+    free(lu->U_colptr);
+    free(lu->U_rowidx);
+    free(lu->U_values);
+    free(lu->perm);
+    free(lu->perm_inv);
+    free(lu->col_perm);
+    free(lu->col_perm_inv);
+    free(lu->eta_col);
+
+    if (lu->eta_vectors) {
+        for (int i = 0; i < lu->eta_capacity; i++) {
+            free(lu->eta_vectors[i]);
+        }
+        free(lu->eta_vectors);
+    }
+
+    free(lu);
+}
+
+/* ============================================================================
+ * Dense LU Factorization (for simplicity and numerical stability)
+ * ============================================================================ */
+
+/* Perform LU factorization: PA = LU using partial pivoting */
+int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
+    if (!lu || !B) return -1;
+    if (B->nrows != B->ncols || B->nrows != lu->m) return -1;
+
+    int m = lu->m;
+
+    /* Convert sparse matrix to dense for factorization */
+    double *A = (double*)calloc(m * m, sizeof(double));
+    if (!A) return -1;
+
+    /* Fill dense matrix from sparse (column-major order) */
+    for (int j = 0; j < m; j++) {
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            A[B->rowidx[p] + j * m] = B->values[p];
+        }
+    }
+
+    /* Initialize permutation to identity */
+    for (int i = 0; i < m; i++) {
+        lu->perm[i] = i;
+    }
+
+    /* Gaussian elimination with partial pivoting */
+    for (int k = 0; k < m; k++) {
+        /* Find pivot */
+        int pivot_row = k;
+        double max_val = fabs(A[k + k * m]);
+
+        for (int i = k + 1; i < m; i++) {
+            double val = fabs(A[i + k * m]);
+            if (val > max_val) {
+                max_val = val;
+                pivot_row = i;
+            }
+        }
+
+        /* Check for singular matrix */
+        if (max_val < RALPH_PIVOT_TOL) {
+            free(A);
+            return -1;  /* Singular or near-singular */
+        }
+
+        /* Swap rows if necessary */
+        if (pivot_row != k) {
+            for (int j = 0; j < m; j++) {
+                double tmp = A[k + j * m];
+                A[k + j * m] = A[pivot_row + j * m];
+                A[pivot_row + j * m] = tmp;
+            }
+            int tmp = lu->perm[k];
+            lu->perm[k] = lu->perm[pivot_row];
+            lu->perm[pivot_row] = tmp;
+        }
+
+        /* Eliminate below diagonal */
+        double pivot = A[k + k * m];
+        for (int i = k + 1; i < m; i++) {
+            double mult = A[i + k * m] / pivot;
+            A[i + k * m] = mult;  /* Store L entry */
+
+            for (int j = k + 1; j < m; j++) {
+                A[i + j * m] -= mult * A[k + j * m];
+            }
+        }
+    }
+
+    /* Compute inverse permutation */
+    for (int i = 0; i < m; i++) {
+        lu->perm_inv[lu->perm[i]] = i;
+    }
+
+    /* Extract L and U in sparse format */
+    /* Count non-zeros */
+    int nnz_L = 0, nnz_U = 0;
+    for (int j = 0; j < m; j++) {
+        for (int i = j + 1; i < m; i++) {
+            if (fabs(A[i + j * m]) > RALPH_ZERO_TOL) nnz_L++;
+        }
+        for (int i = 0; i <= j; i++) {
+            if (fabs(A[i + j * m]) > RALPH_ZERO_TOL) nnz_U++;
+        }
+    }
+
+    /* Add diagonal of L (implicit ones) */
+    nnz_L += m;
+
+    /* Free old storage */
+    free(lu->L_colptr);
+    free(lu->L_rowidx);
+    free(lu->L_values);
+    free(lu->U_colptr);
+    free(lu->U_rowidx);
+    free(lu->U_values);
+
+    /* Allocate new storage */
+    lu->L_colptr = (int*)malloc((m + 1) * sizeof(int));
+    lu->L_rowidx = (int*)malloc(nnz_L * sizeof(int));
+    lu->L_values = (double*)malloc(nnz_L * sizeof(double));
+    lu->U_colptr = (int*)malloc((m + 1) * sizeof(int));
+    lu->U_rowidx = (int*)malloc(nnz_U * sizeof(int));
+    lu->U_values = (double*)malloc(nnz_U * sizeof(double));
+
+    if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
+        !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
+        free(A);
+        return -1;
+    }
+
+    /* Fill L (unit lower triangular stored with explicit diagonal) */
+    int idx = 0;
+    for (int j = 0; j < m; j++) {
+        lu->L_colptr[j] = idx;
+        /* Diagonal (1.0) */
+        lu->L_rowidx[idx] = j;
+        lu->L_values[idx] = 1.0;
+        idx++;
+        /* Below diagonal */
+        for (int i = j + 1; i < m; i++) {
+            double val = A[i + j * m];
+            if (fabs(val) > RALPH_ZERO_TOL) {
+                lu->L_rowidx[idx] = i;
+                lu->L_values[idx] = val;
+                idx++;
+            }
+        }
+    }
+    lu->L_colptr[m] = idx;
+    lu->nnz_L = idx;
+
+    /* Fill U (upper triangular) */
+    idx = 0;
+    for (int j = 0; j < m; j++) {
+        lu->U_colptr[j] = idx;
+        for (int i = 0; i <= j; i++) {
+            double val = A[i + j * m];
+            if (fabs(val) > RALPH_ZERO_TOL) {
+                lu->U_rowidx[idx] = i;
+                lu->U_values[idx] = val;
+                idx++;
+            }
+        }
+    }
+    lu->U_colptr[m] = idx;
+    lu->nnz_U = idx;
+
+    /* Clear eta file */
+    for (int i = 0; i < lu->num_eta; i++) {
+        free(lu->eta_vectors[i]);
+        lu->eta_vectors[i] = NULL;
+    }
+    lu->num_eta = 0;
+    lu->num_updates = 0;
+
+    free(A);
+    return 0;
+}
+
+/* ============================================================================
+ * Solve Systems Using LU Factorization
+ * ============================================================================ */
+
+/* Solve Lx = b (forward substitution) */
+static void solve_L(const LUFactorization *lu, const double *b, double *x) {
+    int m = lu->m;
+
+    /* Apply row permutation */
+    for (int i = 0; i < m; i++) {
+        x[i] = b[lu->perm[i]];
+    }
+
+    /* Forward substitution */
+    for (int j = 0; j < m; j++) {
+        /* x[j] already has the right value (L[j,j] = 1) */
+        double xj = x[j];
+
+        /* Update remaining elements */
+        for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
+            int i = lu->L_rowidx[p];
+            x[i] -= lu->L_values[p] * xj;
+        }
+    }
+}
+
+/* Solve Ux = b (backward substitution) */
+static void solve_U(const LUFactorization *lu, const double *b, double *x) {
+    int m = lu->m;
+
+    vec_copy_data(x, b, m);
+
+    /* Backward substitution */
+    for (int j = m - 1; j >= 0; j--) {
+        /* Find diagonal element */
+        double diag = 0.0;
+        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+            if (lu->U_rowidx[p] == j) {
+                diag = lu->U_values[p];
+                break;
+            }
+        }
+
+        if (fabs(diag) < RALPH_PIVOT_TOL) {
+            x[j] = 0.0;  /* Effectively zero row */
+            continue;
+        }
+
+        x[j] /= diag;
+        double xj = x[j];
+
+        /* Update remaining elements */
+        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+            int i = lu->U_rowidx[p];
+            if (i < j) {
+                x[i] -= lu->U_values[p] * xj;
+            }
+        }
+    }
+}
+
+/* Solve L'x = b (backward substitution with L transpose) */
+static void solve_Lt(const LUFactorization *lu, const double *b, double *x) {
+    int m = lu->m;
+
+    vec_copy_data(x, b, m);
+
+    /* Backward substitution with L transpose */
+    for (int j = m - 1; j >= 0; j--) {
+        double sum = 0.0;
+        for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
+            int i = lu->L_rowidx[p];
+            sum += lu->L_values[p] * x[i];
+        }
+        x[j] -= sum;
+        /* L[j,j] = 1, so no division needed */
+    }
+
+    /* Apply inverse row permutation */
+    double *temp = (double*)malloc(m * sizeof(double));
+    if (temp) {
+        for (int i = 0; i < m; i++) {
+            temp[lu->perm[i]] = x[i];
+        }
+        vec_copy_data(x, temp, m);
+        free(temp);
+    }
+}
+
+/* Solve U'x = b (forward substitution with U transpose) */
+static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
+    int m = lu->m;
+
+    vec_copy_data(x, b, m);
+
+    /* Forward substitution with U transpose */
+    for (int j = 0; j < m; j++) {
+        /* Find diagonal element */
+        double diag = 0.0;
+        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+            if (lu->U_rowidx[p] == j) {
+                diag = lu->U_values[p];
+                break;
+            }
+        }
+
+        if (fabs(diag) < RALPH_PIVOT_TOL) {
+            x[j] = 0.0;
+            continue;
+        }
+
+        x[j] /= diag;
+        double xj = x[j];
+
+        /* Update remaining elements using column j of U (row j of U') */
+        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+            int i = lu->U_rowidx[p];
+            if (i < j) {
+                /* This contributes to x[k] for k > j in U' solve */
+            }
+        }
+    }
+
+    /* Need to properly handle U transpose - iterate over columns of U */
+    vec_copy_data(x, b, m);
+
+    for (int i = 0; i < m; i++) {
+        /* Find diagonal U[i,i] */
+        double diag = 0.0;
+        int diag_p = -1;
+        for (int p = lu->U_colptr[i]; p < lu->U_colptr[i + 1]; p++) {
+            if (lu->U_rowidx[p] == i) {
+                diag = lu->U_values[p];
+                diag_p = p;
+                break;
+            }
+        }
+
+        if (fabs(diag) < RALPH_PIVOT_TOL) {
+            x[i] = 0.0;
+            continue;
+        }
+
+        /* Subtract contributions from earlier solved variables */
+        double sum = 0.0;
+        for (int j = 0; j < i; j++) {
+            for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+                if (lu->U_rowidx[p] == i) {
+                    sum += lu->U_values[p] * x[j];
+                    break;
+                }
+            }
+        }
+
+        x[i] = (x[i] - sum) / diag;
+    }
+}
+
+/* Apply eta updates: E_n^-1 * ... * E_1^-1 * x
+ * Each E^-1 is identity except column 'col' which contains the eta vector.
+ * E^-1 * x: x[i] += eta[i] * x[col] for i != col, x[col] = eta[col] * x[col]
+ */
+static void apply_eta_forward(const LUFactorization *lu, double *x) {
+    for (int k = 0; k < lu->num_eta; k++) {
+        int col = lu->eta_col[k];
+        double *eta = lu->eta_vectors[k];
+        double xc = x[col];  /* Save original x[col] before modifying */
+
+        /* Update all components */
+        for (int i = 0; i < lu->m; i++) {
+            if (i == col) {
+                x[i] = eta[col] * xc;
+            } else {
+                x[i] += eta[i] * xc;
+            }
+        }
+    }
+}
+
+/* Apply eta updates transpose: (E_1^-1)' * ... * (E_n^-1)' * x
+ * Applied in reverse order for the transpose solve.
+ * (E^-1)' * x: x[col] = eta' * x, other components unchanged.
+ */
+static void apply_eta_backward(const LUFactorization *lu, double *x) {
+    for (int k = lu->num_eta - 1; k >= 0; k--) {
+        int col = lu->eta_col[k];
+        double *eta = lu->eta_vectors[k];
+
+        /* Compute new x[col] = eta' * x */
+        double xc = 0.0;
+        for (int i = 0; i < lu->m; i++) {
+            xc += eta[i] * x[i];
+        }
+        x[col] = xc;
+    }
+}
+
+/* Solve Bx = b where B = basis matrix */
+void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
+    int m = lu->m;
+    double *work = (double*)malloc(m * sizeof(double));
+    if (!work) return;
+
+    /* Solve LUx = Pb */
+    /* First: solve Ly = Pb */
+    solve_L(lu, rhs, work);
+
+    /* Then: solve Ux = y */
+    solve_U(lu, work, solution);
+
+    /* Apply eta updates */
+    apply_eta_forward(lu, solution);
+
+    free(work);
+}
+
+/* Solve B'x = b (for computing row prices) */
+void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution) {
+    int m = lu->m;
+    double *work = (double*)malloc(m * sizeof(double));
+    if (!work) return;
+
+    /* Apply eta updates in reverse */
+    vec_copy_data(work, rhs, m);
+    apply_eta_backward(lu, work);
+
+    /* Solve U'y = rhs */
+    solve_Ut(lu, work, solution);
+
+    /* Solve L'x = y and apply P' */
+    solve_Lt(lu, solution, work);
+
+    vec_copy_data(solution, work, m);
+
+    free(work);
+}
+
+/* ============================================================================
+ * Basis Updates via Eta File
+ * ============================================================================ */
+
+/* Update factorization when basis column changes */
+int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) {
+    if (!lu || !entering_col) return -1;
+    if (lu->num_eta >= lu->max_updates) return -1;  /* Need refactorization */
+
+    int m = lu->m;
+
+    /* Solve for eta column: L * U * eta = entering_col */
+    /* First transform entering column */
+    double *work = (double*)malloc(m * sizeof(double));
+    double *eta = (double*)malloc(m * sizeof(double));
+    if (!work || !eta) {
+        free(work);
+        free(eta);
+        return -1;
+    }
+
+    /* Solve L * y = P * entering_col */
+    solve_L(lu, entering_col, work);
+
+    /* Solve U * eta = y */
+    solve_U(lu, work, eta);
+
+    /* Apply existing eta updates */
+    apply_eta_forward(lu, eta);
+
+    /* Check pivot element */
+    if (fabs(eta[leaving_pos]) < RALPH_PIVOT_TOL) {
+        free(work);
+        free(eta);
+        return -1;  /* Singular update */
+    }
+
+    /* Normalize eta column */
+    double pivot = eta[leaving_pos];
+    for (int i = 0; i < m; i++) {
+        if (i == leaving_pos) {
+            eta[i] = 1.0 / pivot;
+        } else {
+            eta[i] = -eta[i] / pivot;
+        }
+    }
+
+    /* Store eta update */
+    lu->eta_col[lu->num_eta] = leaving_pos;
+    lu->eta_vectors[lu->num_eta] = eta;
+    lu->num_eta++;
+    lu->num_updates++;
+
+    free(work);
+    return 0;
+}
+
+int lu_needs_refactorization(const LUFactorization *lu) {
+    return lu && lu->num_updates >= lu->max_updates;
+}
+
+/* ============================================================================
+ * Utility
+ * ============================================================================ */
+
+void lu_print(const LUFactorization *lu) {
+    if (!lu) {
+        printf("NULL LU factorization\n");
+        return;
+    }
+
+    printf("LU Factorization: %d x %d\n", lu->m, lu->m);
+    printf("  L: %d non-zeros\n", lu->nnz_L);
+    printf("  U: %d non-zeros\n", lu->nnz_U);
+    printf("  Updates: %d / %d\n", lu->num_updates, lu->max_updates);
+
+    printf("  Row permutation: [");
+    for (int i = 0; i < lu->m && i < 10; i++) {
+        printf("%d ", lu->perm[i]);
+    }
+    printf("...]\n");
+}

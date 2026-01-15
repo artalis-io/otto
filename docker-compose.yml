@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # Full platform (UI + API)
+  fuelwise:
+    build:
+      context: .
+      target: runtime
+    ports:
+      - "80:80"
+      - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # API only
+  api:
+    build:
+      context: .
+      target: api-only
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    profiles:
+      - api-only
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Development environment
+  dev:
+    build:
+      context: .
+      target: development
+    ports:
+      - "5173:5173"
+      - "8080:8080"
+    volumes:
+      - .:/workspace
+      - /workspace/ui/node_modules
+    working_dir: /workspace
+    profiles:
+      - dev
+    command: >
+      bash -c "
+        make api &&
+        ./api/fuelwise-api -p 8080 &
+        cd ui && npm run dev -- --host 0.0.0.0
+      "
