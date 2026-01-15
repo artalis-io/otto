@@ -15,6 +15,7 @@ TEST_DIR = tests
 SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/model.c \
           $(SRC_DIR)/lu.c \
+          $(SRC_DIR)/lu_sparse.c \
           $(SRC_DIR)/simplex.c \
           $(SRC_DIR)/dual_simplex.c \
           $(SRC_DIR)/presolve.c \

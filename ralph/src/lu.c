@@ -85,12 +85,29 @@ void lu_free(LUFactorization *lu) {
     free(lu);
 }
 
+/* External sparse factorization (from lu_sparse.c) */
+int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);
+
 /* ============================================================================
- * Dense LU Factorization (for simplicity and numerical stability)
+ * Main LU Factorization Entry Point
+ * ============================================================================ */
+
+/* Try sparse factorization first, fall back to dense if it fails */
+int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
+    /* Try sparse Markowitz factorization first for performance */
+    if (lu_factorize_sparse(lu, B) == 0) {
+        return 0;
+    }
+    /* Fall back to dense factorization for numerical robustness */
+    return lu_factorize_dense(lu, B);
+}
+
+/* ============================================================================
+ * Dense LU Factorization (fallback for numerical robustness)
  * ============================================================================ */
 
 /* Perform LU factorization: PA = LU using partial pivoting */
-int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
+int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     if (!lu || !B) return -1;
     if (B->nrows != B->ncols || B->nrows != lu->m) return -1;
 

@@ -181,6 +181,8 @@ LPModel* lp_model_copy(const LPModel *model);
 LUFactorization* lu_create(int m);
 void lu_free(LUFactorization *lu);
 int lu_factorize(LUFactorization *lu, const SparseMatrix *B);
+int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);  /* Sparse with Markowitz */
+int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B);   /* Dense fallback */
 void lu_solve(const LUFactorization *lu, double *rhs, double *solution);
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution);
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
