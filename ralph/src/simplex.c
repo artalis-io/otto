@@ -557,12 +557,50 @@ int tableau_compute_solution(SimplexTableau *tab) {
         }
     }
 
+    /* Save original RHS for iterative refinement */
+    double *orig_rhs = (double*)malloc(tab->m * sizeof(double));
+    if (orig_rhs) {
+        vec_copy_data(orig_rhs, tab->work1, tab->m);
+    }
+
     /* Solve B * x_B = work1 */
     lu_solve(tab->lu, tab->work1, tab->work2);
 
     /* Update basic variable values */
     for (int k = 0; k < tab->m; k++) {
         tab->x[tab->basis[k]] = tab->work2[k];
+    }
+
+    /* Iterative refinement: check residual and correct if needed */
+    if (orig_rhs) {
+        /* Compute residual: r = b - B*x_B */
+        /* work3 will hold B*x_B */
+        vec_set_zero(tab->work3, tab->m);
+        for (int k = 0; k < tab->m; k++) {
+            int j = tab->basis[k];
+            sparse_axpy_column(tab->A_ext, j, tab->x[j], tab->work3);
+        }
+
+        /* work1 = original_rhs - B*x_B = residual */
+        double max_residual = 0.0;
+        for (int i = 0; i < tab->m; i++) {
+            tab->work1[i] = orig_rhs[i] - tab->work3[i];
+            double absval = fabs(tab->work1[i]);
+            if (absval > max_residual) max_residual = absval;
+        }
+
+        /* If residual is large, do one refinement step */
+        if (max_residual > RALPH_FEAS_TOL) {
+            /* Solve B * correction = residual */
+            lu_solve(tab->lu, tab->work1, tab->work2);
+
+            /* Update solution: x_B += correction */
+            for (int k = 0; k < tab->m; k++) {
+                tab->x[tab->basis[k]] += tab->work2[k];
+            }
+        }
+
+        free(orig_rhs);
     }
 
     /* Compute objective value */
@@ -626,6 +664,32 @@ int pricing_dantzig(SimplexTableau *tab, int *entering) {
     return (*entering >= 0) ? 0 : 1;  /* 1 = optimal */
 }
 
+/* Bland's rule pricing: choose smallest index among eligible variables.
+ * Used as fallback when cycling is detected. */
+int pricing_bland(SimplexTableau *tab, int *entering) {
+    *entering = -1;
+
+    for (int j = 0; j < tab->n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        double rc = tab->rc[j];
+
+        /* Check if this variable can improve */
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;  /* Return first eligible */
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        }
+    }
+
+    return 1;  /* 1 = optimal */
+}
+
 int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
     /* Steepest edge pricing: max |rc_j| / sqrt(gamma_j) */
     double best_ratio = RALPH_OPT_TOL;
@@ -660,6 +724,58 @@ int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
 /* ============================================================================
  * Ratio Test (Leaving Variable Selection)
  * ============================================================================ */
+
+/* Bland's ratio test: among ties, choose smallest index leaving variable */
+int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *theta) {
+    /* Compute entering column in basis representation */
+    sparse_get_column(tab->A_ext, entering, tab->work1);
+    lu_solve(tab->lu, tab->work1, tab->work2);  /* d = B^{-1} * a_entering */
+
+    double dir = 1.0;
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        dir = -1.0;
+    }
+
+    *leaving = -1;
+    *theta = RALPH_INFINITY;
+    int leaving_var = tab->n;  /* Track actual variable index for Bland's tie-breaking */
+
+    for (int k = 0; k < tab->m; k++) {
+        double dk = tab->work2[k] * dir;
+        int j = tab->basis[k];
+        double xj = tab->x[j];
+
+        double ratio = RALPH_INFINITY;
+        if (dk > RALPH_PIVOT_TOL) {
+            ratio = (xj - tab->lb_ext[j]) / dk;
+        } else if (dk < -RALPH_PIVOT_TOL) {
+            ratio = (tab->ub_ext[j] - xj) / (-dk);
+        }
+
+        if (ratio < *theta - RALPH_FEAS_TOL) {
+            *theta = ratio;
+            *leaving = k;
+            leaving_var = j;
+        } else if (fabs(ratio - *theta) <= RALPH_FEAS_TOL && j < leaving_var) {
+            /* Bland's rule: among ties, choose smallest variable index */
+            *leaving = k;
+            leaving_var = j;
+        }
+    }
+
+    /* Check bound flip */
+    double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+    if (enter_range < *theta && enter_range < RALPH_INFINITY/2) {
+        *theta = enter_range;
+        *leaving = -2;
+    }
+
+    if (*theta >= RALPH_INFINITY/2) {
+        return -1;  /* Unbounded */
+    }
+
+    return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
+}
 
 int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *theta) {
     /* Compute entering column in basis representation */
@@ -1022,6 +1138,11 @@ static int simplex_phase2(SimplexSolver *solver) {
 
     tab->phase = 2;
 
+    /* Cycling detection: track consecutive degenerate pivots */
+    int degenerate_count = 0;
+    const int DEGEN_THRESHOLD = 50;  /* Switch to Bland's rule after this many */
+    int use_bland = 0;
+
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
 
@@ -1032,7 +1153,10 @@ static int simplex_phase2(SimplexSolver *solver) {
         int entering;
         int price_status;
 
-        if (solver->pricing_strategy == 0) {
+        if (use_bland) {
+            /* Use Bland's rule to prevent cycling */
+            price_status = pricing_bland(tab, &entering);
+        } else if (solver->pricing_strategy == 0) {
             price_status = pricing_dantzig(tab, &entering);
         } else {
             price_status = pricing_steepest_edge(tab, &entering);
@@ -1042,6 +1166,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             /* Optimal */
             solver->status = RALPH_STATUS_OPTIMAL;
             solver->iterations = iter;
+            solver->degenerate_pivots = degenerate_count;
             tableau_compute_solution(tab);
             solver->obj_value = tab->obj_value * solver->model->obj_sense;
             return 0;
@@ -1050,14 +1175,34 @@ static int simplex_phase2(SimplexSolver *solver) {
         /* Ratio test: select leaving variable */
         int leaving;
         double theta;
+        int ratio_status;
 
-        int ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+        if (use_bland) {
+            ratio_status = ratio_test_bland(tab, entering, &leaving, &theta);
+        } else {
+            ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+        }
 
         if (ratio_status != 0) {
             /* Unbounded */
             solver->status = RALPH_STATUS_UNBOUNDED;
             solver->iterations = iter;
             return -1;
+        }
+
+        /* Track degenerate pivots for cycling detection */
+        if (theta < RALPH_FEAS_TOL) {
+            degenerate_count++;
+            if (degenerate_count >= DEGEN_THRESHOLD && !use_bland) {
+                use_bland = 1;
+                if (solver->verbose) {
+                    printf("Iter %d: Switching to Bland's rule due to potential cycling\n", iter);
+                }
+            }
+        } else {
+            /* Reset counter on non-degenerate pivot */
+            degenerate_count = 0;
+            use_bland = 0;
         }
 
         /* Perform pivot */

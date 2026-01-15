@@ -511,6 +511,26 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     lu->num_eta = 0;
     lu->num_updates = 0;
 
+    /* Compute condition number estimate from U diagonal */
+    lu->min_diag_U = RALPH_INFINITY;
+    lu->max_diag_U = 0.0;
+    for (int j = 0; j < m; j++) {
+        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+            if (lu->U_rowidx[p] == j) {
+                double absval = fabs(lu->U_values[p]);
+                if (absval < lu->min_diag_U) lu->min_diag_U = absval;
+                if (absval > lu->max_diag_U) lu->max_diag_U = absval;
+                break;
+            }
+        }
+    }
+    if (lu->min_diag_U > RALPH_ZERO_TOL) {
+        lu->cond_estimate = lu->max_diag_U / lu->min_diag_U;
+    } else {
+        lu->cond_estimate = RALPH_INFINITY;
+    }
+    lu->growth_factor = 1.0;
+
     /* Cleanup */
     free(L_i); free(L_j); free(L_v);
     free(U_i); free(U_j); free(U_v);

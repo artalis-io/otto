@@ -57,6 +57,12 @@ LUFactorization* lu_create(int m) {
         lu->eta_vectors[i] = NULL;
     }
 
+    /* Initialize condition number tracking */
+    lu->min_diag_U = RALPH_INFINITY;
+    lu->max_diag_U = 0.0;
+    lu->cond_estimate = 1.0;
+    lu->growth_factor = 1.0;
+
     return lu;
 }
 
@@ -259,6 +265,26 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     }
     lu->num_eta = 0;
     lu->num_updates = 0;
+
+    /* Compute condition number estimate from U diagonal */
+    lu->min_diag_U = RALPH_INFINITY;
+    lu->max_diag_U = 0.0;
+    for (int j = 0; j < m; j++) {
+        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+            if (lu->U_rowidx[p] == j) {
+                double absval = fabs(lu->U_values[p]);
+                if (absval < lu->min_diag_U) lu->min_diag_U = absval;
+                if (absval > lu->max_diag_U) lu->max_diag_U = absval;
+                break;
+            }
+        }
+    }
+    if (lu->min_diag_U > RALPH_ZERO_TOL) {
+        lu->cond_estimate = lu->max_diag_U / lu->min_diag_U;
+    } else {
+        lu->cond_estimate = RALPH_INFINITY;
+    }
+    lu->growth_factor = 1.0;
 
     free(A);
     return 0;
@@ -554,12 +580,34 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     lu->num_eta++;
     lu->num_updates++;
 
+    /* Track growth factor: measure max element in eta vector */
+    double max_eta = 0.0;
+    for (int i = 0; i < m; i++) {
+        double absval = fabs(eta[i]);
+        if (absval > max_eta) max_eta = absval;
+    }
+    if (max_eta > lu->growth_factor) {
+        lu->growth_factor = max_eta;
+    }
+
     free(work);
     return 0;
 }
 
 int lu_needs_refactorization(const LUFactorization *lu) {
-    return lu && lu->num_updates >= lu->max_updates;
+    if (!lu) return 0;
+
+    /* Refactorize if max updates reached */
+    if (lu->num_updates >= lu->max_updates) return 1;
+
+    /* Refactorize early if condition has degraded significantly */
+    /* Growth factor > 1e8 indicates severe fill-in accumulation */
+    if (lu->growth_factor > 1e8) return 1;
+
+    /* Refactorize if estimated condition is very bad after some updates */
+    if (lu->num_updates > 10 && lu->growth_factor > 1e4) return 1;
+
+    return 0;
 }
 
 /* ============================================================================

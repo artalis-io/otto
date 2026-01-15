@@ -91,6 +91,12 @@ typedef struct {
     int num_eta;
     int *eta_col;
     double **eta_vectors;
+
+    /* Condition number monitoring */
+    double min_diag_U;      /* Minimum |U[i,i]| at factorization */
+    double max_diag_U;      /* Maximum |U[i,i]| at factorization */
+    double cond_estimate;   /* Estimated condition number */
+    double growth_factor;   /* Growth in U during updates */
 } LUFactorization;
 
 /* Simplex tableau representation */
