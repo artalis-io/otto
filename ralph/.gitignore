@@ -1,0 +1,19 @@
+# Compiled binaries
+*.o
+*.a
+test_ralph
+test_edge_cases
+bench_sizes
+bench_quick
+bench_ralph
+compare_glpk
+
+# Profiling
+gmon.out
+*.gcda
+*.gcno
+
+# Editor files
+*~
+*.swp
+.vscode/
