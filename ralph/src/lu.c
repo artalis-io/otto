@@ -21,7 +21,7 @@ LUFactorization* lu_create(int m) {
     if (!lu) return NULL;
 
     lu->m = m;
-    lu->max_updates = 30;  /* Refactorize after this many updates */
+    lu->max_updates = 10;  /* Refactorize frequently to maintain accuracy */
 
     /* Allocate permutation arrays */
     lu->perm = (int*)malloc(m * sizeof(int));
@@ -390,45 +390,31 @@ static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
 
     vec_copy_data(x, b, m);
 
-    /* Forward substitution with U transpose */
-    for (int j = 0; j < m; j++) {
-        /* Find diagonal element */
-        double diag = 0.0;
-        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-            if (lu->U_rowidx[p] == j) {
-                diag = lu->U_values[p];
-                break;
-            }
-        }
-
-        if (fabs(diag) < RALPH_PIVOT_TOL) {
-            x[j] = 0.0;
-            continue;
-        }
-
-        x[j] /= diag;
-        double xj = x[j];
-
-        /* Update remaining elements using column j of U (row j of U') */
-        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-            int i = lu->U_rowidx[p];
-            if (i < j) {
-                /* This contributes to x[k] for k > j in U' solve */
-            }
-        }
-    }
-
-    /* Need to properly handle U transpose - iterate over columns of U */
-    vec_copy_data(x, b, m);
-
+    /* Forward substitution with U transpose (U' is lower triangular)
+     * For i = 0, 1, ..., m-1:
+     *   x[i] = (b[i] - sum_{j<i} U'[i,j] * x[j]) / U'[i,i]
+     *        = (b[i] - sum_{j<i} U[j,i] * x[j]) / U[i,i]
+     * Note: U[j,i] is in column i, row j (for j < i)
+     */
     for (int i = 0; i < m; i++) {
+        /* Subtract contributions from earlier solved variables:
+         * sum of U'[i,j] * x[j] = U[j,i] * x[j] for j < i
+         * U[j,i] is in COLUMN i (not column j!) at ROW j
+         */
+        double sum = 0.0;
+        for (int p = lu->U_colptr[i]; p < lu->U_colptr[i + 1]; p++) {
+            int j = lu->U_rowidx[p];  /* row index j */
+            if (j < i) {
+                /* This is U[j,i] = U'[i,j] */
+                sum += lu->U_values[p] * x[j];
+            }
+        }
+
         /* Find diagonal U[i,i] */
         double diag = 0.0;
-        int diag_p = -1;
         for (int p = lu->U_colptr[i]; p < lu->U_colptr[i + 1]; p++) {
             if (lu->U_rowidx[p] == i) {
                 diag = lu->U_values[p];
-                diag_p = p;
                 break;
             }
         }
@@ -436,17 +422,6 @@ static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
         if (fabs(diag) < RALPH_PIVOT_TOL) {
             x[i] = 0.0;
             continue;
-        }
-
-        /* Subtract contributions from earlier solved variables */
-        double sum = 0.0;
-        for (int j = 0; j < i; j++) {
-            for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-                if (lu->U_rowidx[p] == i) {
-                    sum += lu->U_values[p] * x[j];
-                    break;
-                }
-            }
         }
 
         x[i] = (x[i] - sum) / diag;

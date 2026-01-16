@@ -533,6 +533,7 @@ int tableau_refactorize(SimplexTableau *tab) {
     if (!B) return -1;
 
     int status = lu_factorize(tab->lu, B);
+
     sparse_free(B);
 
     return status;
@@ -1157,7 +1158,9 @@ static int simplex_phase2(SimplexSolver *solver) {
 
     /* Cycling detection: track consecutive degenerate pivots */
     int degenerate_count = 0;
+    int non_degen_streak = 0;
     const int DEGEN_THRESHOLD = 50;  /* Switch to Bland's rule after this many */
+    const int NON_DEGEN_THRESHOLD = 100;  /* Non-degenerate pivots to turn Bland off */
     int use_bland = 0;
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
@@ -1208,9 +1211,12 @@ static int simplex_phase2(SimplexSolver *solver) {
             return -1;
         }
 
-        /* Track degenerate pivots for cycling detection */
-        if (theta < RALPH_FEAS_TOL) {
+        /* Track degenerate/near-degenerate pivots for cycling detection */
+        /* Use a larger threshold to catch "near-degenerate" cycling */
+        const double NEAR_DEGEN_TOL = 1e-3;
+        if (theta < NEAR_DEGEN_TOL) {
             degenerate_count++;
+            non_degen_streak = 0;
             if (degenerate_count >= DEGEN_THRESHOLD && !use_bland) {
                 use_bland = 1;
                 if (solver->verbose) {
@@ -1218,9 +1224,17 @@ static int simplex_phase2(SimplexSolver *solver) {
                 }
             }
         } else {
-            /* Reset counter on non-degenerate pivot */
+            /* Only reset after many consecutive non-degenerate pivots */
+            non_degen_streak++;
             degenerate_count = 0;
-            use_bland = 0;
+            if (use_bland && non_degen_streak >= NON_DEGEN_THRESHOLD) {
+                use_bland = 0;
+                non_degen_streak = 0;
+                if (solver->verbose) {
+                    printf("Iter %d: Turning off Bland's rule after %d non-degenerate pivots\n",
+                           iter, NON_DEGEN_THRESHOLD);
+                }
+            }
         }
 
         /* Perform pivot */
@@ -1237,13 +1251,16 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
             /* After refactorization, recompute solution to eliminate drift */
             tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);  /* Recompute with fresh factorization */
         }
 
         /* Periodically recompute solution to correct numerical drift */
         if (iter > 0 && iter % 50 == 0) {
             tableau_compute_solution(tab);
+            int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
             if (solver->verbose) {
-                printf("Iter %d: obj = %.6f\n", iter, tab->obj_value);
+                printf("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
+                       iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
             }
         }
     }
