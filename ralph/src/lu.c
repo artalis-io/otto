@@ -100,17 +100,14 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);
 
 /* Try sparse factorization first, fall back to dense if it fails */
 int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
-    /* DEBUG: Force dense factorization to test sparse implementation */
+    /* TODO: Sparse LU with column pivoting has subtle issues with eta file
+     * coordinate systems that cause simplex convergence problems. The basic
+     * factorization and solve work correctly, but the eta updates after
+     * pivots need more work to handle column permutation properly.
+     * For now, use dense LU which is correct and fast enough for typical LP sizes.
+     * Sparse LU can be enabled later once coordinate handling is fully fixed. */
+    (void)lu_factorize_sparse;  /* suppress unused warning */
     return lu_factorize_dense(lu, B);
-
-#if 0  /* Temporarily disabled */
-    /* Try sparse Markowitz factorization first for performance */
-    if (lu_factorize_sparse(lu, B) == 0) {
-        return 0;
-    }
-    /* Fall back to dense factorization for numerical robustness */
-    return lu_factorize_dense(lu, B);
-#endif
 }
 
 /* ============================================================================
@@ -471,40 +468,78 @@ static void apply_eta_backward(const LUFactorization *lu, double *x) {
 void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
     int m = lu->m;
     double *work = (double*)malloc(m * sizeof(double));
-    if (!work) return;
+    double *work2 = (double*)malloc(m * sizeof(double));
+    if (!work || !work2) {
+        free(work);
+        free(work2);
+        return;
+    }
 
-    /* Solve LUx = Pb */
+    /* For sparse LU with column pivoting: PAQ = LU
+     * Solve Bx = b  =>  PAQx = Pb  =>  LUQ'x = Pb
+     * Let z = Q'x, then LUz = Pb
+     * 1. Solve Ly = Pb (forward subst with row perm)
+     * 2. Solve Uz = y (backward subst)
+     * 3. x = Qz (apply column permutation)
+     */
+
     /* First: solve Ly = Pb */
     solve_L(lu, rhs, work);
 
-    /* Then: solve Ux = y */
-    solve_U(lu, work, solution);
+    /* Then: solve Uz = y */
+    solve_U(lu, work, work2);
 
-    /* Apply eta updates */
-    apply_eta_forward(lu, solution);
+    /* Apply eta updates (in step coordinates, before column permutation) */
+    apply_eta_forward(lu, work2);
+
+    /* Apply column permutation: x[col_perm[i]] = z[i] */
+    for (int i = 0; i < m; i++) {
+        solution[lu->col_perm[i]] = work2[i];
+    }
 
     free(work);
+    free(work2);
 }
 
 /* Solve B'x = b (for computing row prices) */
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution) {
     int m = lu->m;
     double *work = (double*)malloc(m * sizeof(double));
-    if (!work) return;
+    double *work2 = (double*)malloc(m * sizeof(double));
+    if (!work || !work2) {
+        free(work);
+        free(work2);
+        return;
+    }
 
-    /* Apply eta updates in reverse */
-    vec_copy_data(work, rhs, m);
+    /* For sparse LU with column pivoting: PAQ = LU
+     * So B = P'LUQ', and B' = QU'L'P
+     * With eta updates: B_new' = E_n' * ... * E_1' * B'
+     * Solve B_new'x = b:
+     * 1. Apply inverse col perm: y[i] = b[col_perm[i]] (converts to step coords)
+     * 2. Apply eta updates in reverse (in step coordinates)
+     * 3. Solve U'z = y
+     * 4. Solve L'w = z, then apply P': x[perm[i]] = w[i]
+     */
+
+    /* Apply inverse column permutation: y[i] = b[col_perm[i]] */
+    for (int i = 0; i < m; i++) {
+        work[i] = rhs[lu->col_perm[i]];
+    }
+
+    /* Apply eta updates in reverse (in step coordinates) */
     apply_eta_backward(lu, work);
 
-    /* Solve U'y = rhs */
+    /* Solve U'z = y */
     solve_Ut(lu, work, solution);
 
-    /* Solve L'x = y and apply P' */
+    /* Solve L'x = z and apply P' (solve_Lt handles the row permutation) */
     solve_Lt(lu, solution, work);
 
     vec_copy_data(solution, work, m);
 
     free(work);
+    free(work2);
 }
 
 /* ============================================================================
@@ -517,6 +552,9 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     if (lu->num_eta >= lu->max_updates) return -1;  /* Need refactorization */
 
     int m = lu->m;
+
+    /* Convert leaving_pos to step coordinates (eta is in step coordinates) */
+    int step_pos = lu->col_perm_inv[leaving_pos];
 
     /* Solve for eta column: L * U * eta = entering_col */
     /* First transform entering column */
@@ -531,31 +569,31 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     /* Solve L * y = P * entering_col */
     solve_L(lu, entering_col, work);
 
-    /* Solve U * eta = y */
+    /* Solve U * eta = y (eta is in step coordinates) */
     solve_U(lu, work, eta);
 
     /* Apply existing eta updates */
     apply_eta_forward(lu, eta);
 
-    /* Check pivot element */
-    if (fabs(eta[leaving_pos]) < RALPH_PIVOT_TOL) {
+    /* Check pivot element (in step coordinates) */
+    if (fabs(eta[step_pos]) < RALPH_PIVOT_TOL) {
         free(work);
         free(eta);
         return -1;  /* Singular update */
     }
 
     /* Normalize eta column */
-    double pivot = eta[leaving_pos];
+    double pivot = eta[step_pos];
     for (int i = 0; i < m; i++) {
-        if (i == leaving_pos) {
+        if (i == step_pos) {
             eta[i] = 1.0 / pivot;
         } else {
             eta[i] = -eta[i] / pivot;
         }
     }
 
-    /* Store eta update */
-    lu->eta_col[lu->num_eta] = leaving_pos;
+    /* Store eta update (in step coordinates) */
+    lu->eta_col[lu->num_eta] = step_pos;
     lu->eta_vectors[lu->num_eta] = eta;
     lu->num_eta++;
     lu->num_updates++;
