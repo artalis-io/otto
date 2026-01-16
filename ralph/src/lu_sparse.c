@@ -393,13 +393,17 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
             L_v[L_nnz] = mult;
             L_nnz++;
 
-            /* Update row i: subtract mult * (pivot row) */
-            for (SparseEntry *pe = work->rows[pivot_row]; pe; pe = pe->next) {
-                int j = pe->idx;
+            /* Update row i: subtract mult * (pivot row)
+             * Must iterate through all non-eliminated columns because row lists
+             * don't include fill-in entries from previous elimination steps */
+            for (int j = 0; j < m; j++) {
                 if (work->col_done[j]) continue;  /* Already eliminated column */
 
+                double pivot_row_val = get_col_val(work, j, pivot_row);
+                if (fabs(pivot_row_val) < RALPH_ZERO_TOL) continue;  /* Sparse: skip zeros */
+
                 double old_val = get_col_val(work, j, i);
-                double new_val = old_val - mult * pe->val;
+                double new_val = old_val - mult * pivot_row_val;
                 set_col_val(work, j, i, new_val);
 
                 /* Update row counts */
@@ -410,8 +414,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                 }
             }
 
-            /* Remove pivot column entry from row i */
-            work->row_nnz[i]--;
+            /* The pivot column entry was zeroed out above (mult * pivot_col_val = entry) */
         }
 
         /* Clear pivot column counts for remaining rows */
