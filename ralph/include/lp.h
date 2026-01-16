@@ -8,9 +8,6 @@
 #include "sparse.h"
 #include "ralph.h"
 
-/* Infinity value */
-#define RALPH_INFINITY 1e30
-
 /* Tolerances */
 #define RALPH_FEAS_TOL 1e-6
 #define RALPH_OPT_TOL 1e-6

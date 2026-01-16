@@ -34,6 +34,15 @@ LIB_NAME = libralph.a
 TEST_SOURCES = $(TEST_DIR)/test_main.c
 TEST_EXEC = test_ralph
 
+# Edge case tests
+EDGE_TEST_SOURCES = $(TEST_DIR)/test_edge_cases.c
+EDGE_TEST_EXEC = test_edge_cases
+
+# Benchmarks
+BENCH_DIR = benchmarks
+BENCH_SIZES_EXEC = bench_sizes
+COMPARE_GLPK_EXEC = compare_glpk
+
 # Default target
 all: $(LIB_NAME)
 
@@ -57,9 +66,33 @@ debug: clean all
 test: $(TEST_EXEC)
 	./$(TEST_EXEC)
 
+# Build edge case tests
+$(EDGE_TEST_EXEC): $(EDGE_TEST_SOURCES) $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run edge case tests
+test-edge: $(EDGE_TEST_EXEC)
+	./$(EDGE_TEST_EXEC)
+
+# Build size scaling benchmark
+$(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run size scaling benchmark
+bench: $(BENCH_SIZES_EXEC)
+	./$(BENCH_SIZES_EXEC)
+
+# Build GLPK comparison benchmark
+$(COMPARE_GLPK_EXEC): $(BENCH_DIR)/compare_glpk.c $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run GLPK comparison (requires glpsol to be installed)
+compare-glpk: $(COMPARE_GLPK_EXEC)
+	./$(COMPARE_GLPK_EXEC)
+
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -73,4 +106,4 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all clean debug test install uninstall
+.PHONY: all clean debug test test-edge bench compare-glpk install uninstall

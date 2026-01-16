@@ -46,6 +46,9 @@ typedef enum {
     RALPH_MAXIMIZE = -1
 } RalphObjSense;
 
+/* Constants */
+#define RALPH_INFINITY 1e30
+
 /* Opaque model handle */
 typedef struct RalphModel RalphModel;
 
