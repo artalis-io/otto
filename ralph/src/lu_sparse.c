@@ -334,10 +334,12 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         work->row_done[pivot_row] = 1;
         work->col_done[pivot_col] = 1;
 
-        /* Store U entries from pivot row (in pivot column and to the right in elimination order) */
-        for (SparseEntry *e = work->rows[pivot_row]; e; e = e->next) {
-            int j = e->idx;
+        /* Store U entries from pivot row (read from column lists which have updated values) */
+        for (int j = 0; j < m; j++) {
             if (work->col_done[j] && j != pivot_col) continue;  /* Already eliminated */
+
+            double val = get_col_val(work, j, pivot_row);
+            if (fabs(val) < RALPH_ZERO_TOL) continue;  /* Skip zeros */
 
             /* Ensure capacity */
             if (U_nnz >= U_cap) {
@@ -354,11 +356,8 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
             }
 
             U_i[U_nnz] = step;  /* Row in factored matrix */
-            U_j[U_nnz] = (j == pivot_col) ? step : -1;  /* Will fix column order later */
-            U_v[U_nnz] = e->val;
-
-            /* Store actual column for later sorting */
-            U_j[U_nnz] = j;
+            U_j[U_nnz] = j;     /* Original column */
+            U_v[U_nnz] = val;
             U_nnz++;
         }
 
@@ -370,7 +369,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
             L_j = (int*)realloc(L_j, L_cap * sizeof(int));
             L_v = (double*)realloc(L_v, L_cap * sizeof(double));
         }
-        L_i[L_nnz] = step;
+        L_i[L_nnz] = pivot_row;  /* Original row (must match off-diagonal entries) */
         L_j[L_nnz] = step;
         L_v[L_nnz] = 1.0;
         L_nnz++;
