@@ -707,6 +707,8 @@ int pricing_bland(SimplexTableau *tab, int *entering) {
 
 int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
     /* Steepest edge pricing: max |rc_j| / sqrt(gamma_j) */
+    /* NOTE: Currently disabled due to Devex weight explosion bug.
+     * TODO: Fix weight update formula or implement proper DSE. */
     double best_ratio = RALPH_OPT_TOL;
     *entering = -1;
 
@@ -1005,7 +1007,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->time_limit = RALPH_DEFAULT_TIME_LIMIT;
     solver->presolve = 1;  /* Enable presolve for performance */
     solver->scaling = 1;   /* Enable scaling for numerical stability */
-    solver->pricing_strategy = 1;  /* Steepest edge */
+    solver->pricing_strategy = 0;  /* Dantzig (steepest edge has weight explosion bug) */
     solver->verbose = 0;
     solver->is_scaled = 0;
 
