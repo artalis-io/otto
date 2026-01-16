@@ -14,7 +14,7 @@
 /* Tolerances */
 #define RALPH_FEAS_TOL 1e-6
 #define RALPH_OPT_TOL 1e-6
-#define RALPH_PIVOT_TOL 1e-10
+#define RALPH_PIVOT_TOL 1e-6  /* Increased for numerical stability */
 #define RALPH_ZERO_TOL 1e-12
 #define RALPH_INT_TOL 1e-5
 

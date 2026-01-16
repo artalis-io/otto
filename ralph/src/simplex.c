@@ -589,14 +589,28 @@ int tableau_compute_solution(SimplexTableau *tab) {
             if (absval > max_residual) max_residual = absval;
         }
 
-        /* If residual is large, do one refinement step */
-        if (max_residual > RALPH_FEAS_TOL) {
+        /* If residual is large, do iterative refinement */
+        int max_refine_iters = 5;
+        for (int refine_iter = 0; refine_iter < max_refine_iters && max_residual > RALPH_FEAS_TOL; refine_iter++) {
             /* Solve B * correction = residual */
             lu_solve(tab->lu, tab->work1, tab->work2);
 
             /* Update solution: x_B += correction */
             for (int k = 0; k < tab->m; k++) {
                 tab->x[tab->basis[k]] += tab->work2[k];
+            }
+
+            /* Recompute residual */
+            vec_set_zero(tab->work3, tab->m);
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                sparse_axpy_column(tab->A_ext, j, tab->x[j], tab->work3);
+            }
+            max_residual = 0.0;
+            for (int i = 0; i < tab->m; i++) {
+                tab->work1[i] = orig_rhs[i] - tab->work3[i];
+                double absval = fabs(tab->work1[i]);
+                if (absval > max_residual) max_residual = absval;
             }
         }
 
@@ -1138,6 +1152,9 @@ static int simplex_phase2(SimplexSolver *solver) {
 
     tab->phase = 2;
 
+    /* Compute initial solution for Phase 2 */
+    tableau_compute_solution(tab);
+
     /* Cycling detection: track consecutive degenerate pivots */
     int degenerate_count = 0;
     const int DEGEN_THRESHOLD = 50;  /* Switch to Bland's rule after this many */
@@ -1168,6 +1185,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             solver->iterations = iter;
             solver->degenerate_pivots = degenerate_count;
             tableau_compute_solution(tab);
+
             solver->obj_value = tab->obj_value * solver->model->obj_sense;
             return 0;
         }
