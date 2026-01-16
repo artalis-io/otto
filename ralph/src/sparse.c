@@ -162,36 +162,32 @@ static int triplet_compare(const void *a, const void *b, void *arg) {
     return trips->row[idx_a] - trips->row[idx_b];
 }
 
+/* Global pointer for qsort comparison (thread-unsafe but sufficient for now) */
+static SparseTriplets *g_trips_for_sort = NULL;
+
+static int triplet_cmp(const void *a, const void *b) {
+    int idx1 = *(const int*)a;
+    int idx2 = *(const int*)b;
+    if (g_trips_for_sort->col[idx1] != g_trips_for_sort->col[idx2]) {
+        return g_trips_for_sort->col[idx1] - g_trips_for_sort->col[idx2];
+    }
+    return g_trips_for_sort->row[idx1] - g_trips_for_sort->row[idx2];
+}
+
 SparseMatrix* triplets_to_csc(SparseTriplets *trips) {
     if (!trips || trips->nnz == 0) {
         return sparse_create(trips ? trips->nrows : 0, trips ? trips->ncols : 0, 0);
     }
 
-    /* Create index array and sort */
+    /* Create index array and sort using qsort (O(n log n)) */
     int *perm = (int*)malloc(trips->nnz * sizeof(int));
     if (!perm) return NULL;
 
     for (int i = 0; i < trips->nnz; i++) perm[i] = i;
 
-    /* Simple bubble sort for small arrays, qsort for larger */
-    /* Custom sort to handle column-major ordering */
-    for (int i = 0; i < trips->nnz - 1; i++) {
-        for (int j = 0; j < trips->nnz - 1 - i; j++) {
-            int idx1 = perm[j];
-            int idx2 = perm[j + 1];
-            int cmp = 0;
-            if (trips->col[idx1] != trips->col[idx2]) {
-                cmp = trips->col[idx1] - trips->col[idx2];
-            } else {
-                cmp = trips->row[idx1] - trips->row[idx2];
-            }
-            if (cmp > 0) {
-                int tmp = perm[j];
-                perm[j] = perm[j + 1];
-                perm[j + 1] = tmp;
-            }
-        }
-    }
+    g_trips_for_sort = trips;
+    qsort(perm, trips->nnz, sizeof(int), triplet_cmp);
+    g_trips_for_sort = NULL;
 
     SparseMatrix *mat = sparse_create(trips->nrows, trips->ncols, trips->nnz);
     if (!mat) {

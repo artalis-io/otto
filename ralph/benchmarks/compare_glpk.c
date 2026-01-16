@@ -84,14 +84,23 @@ void run_comparison(int n, int m, double density, unsigned int s) {
     const char *ralph_status = ralph_status_string(ralph_get_status(model));
     ralph_free(model);
 
-    /* Solve with GLPK (suppress output) */
+    /* Solve with GLPK - capture timing from output */
     char cmd[256], solfile[64];
     snprintf(solfile, sizeof(solfile), "/tmp/ralph_bench_%dx%d.sol", n, m);
-    snprintf(cmd, sizeof(cmd), "glpsol --lp %s -o %s 2>/dev/null >/dev/null", filename, solfile);
+    snprintf(cmd, sizeof(cmd), "glpsol --lp %s -o %s 2>&1", filename, solfile);
 
-    start = clock();
-    int ret = system(cmd);
-    double glpk_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+    FILE *glpk_pipe = popen(cmd, "r");
+    double glpk_time = 0;
+    int ret = 0;
+    if (glpk_pipe) {
+        char line[256];
+        while (fgets(line, sizeof(line), glpk_pipe)) {
+            if (strstr(line, "Time used:")) {
+                sscanf(line, "Time used: %lf", &glpk_time);
+            }
+        }
+        ret = pclose(glpk_pipe);
+    }
 
     /* Parse GLPK result */
     double glpk_obj = 0;
