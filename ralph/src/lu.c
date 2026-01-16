@@ -21,7 +21,7 @@ LUFactorization* lu_create(int m) {
     if (!lu) return NULL;
 
     lu->m = m;
-    lu->max_updates = 50;  /* Refactorize after this many updates */
+    lu->max_updates = 30;  /* Refactorize after this many updates */
 
     /* Allocate permutation arrays */
     lu->perm = (int*)malloc(m * sizeof(int));
@@ -100,12 +100,17 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);
 
 /* Try sparse factorization first, fall back to dense if it fails */
 int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
+    /* DEBUG: Force dense factorization to test sparse implementation */
+    return lu_factorize_dense(lu, B);
+
+#if 0  /* Temporarily disabled */
     /* Try sparse Markowitz factorization first for performance */
     if (lu_factorize_sparse(lu, B) == 0) {
         return 0;
     }
     /* Fall back to dense factorization for numerical robustness */
     return lu_factorize_dense(lu, B);
+#endif
 }
 
 /* ============================================================================
@@ -601,11 +606,7 @@ int lu_needs_refactorization(const LUFactorization *lu) {
     if (lu->num_updates >= lu->max_updates) return 1;
 
     /* Refactorize early if condition has degraded significantly */
-    /* Growth factor > 1e8 indicates severe fill-in accumulation */
-    if (lu->growth_factor > 1e8) return 1;
-
-    /* Refactorize if estimated condition is very bad after some updates */
-    if (lu->num_updates > 10 && lu->growth_factor > 1e4) return 1;
+    if (lu->growth_factor > 100.0) return 1;
 
     return 0;
 }
