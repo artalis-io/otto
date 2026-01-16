@@ -1217,11 +1217,16 @@ static int simplex_phase2(SimplexSolver *solver) {
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
             }
+            /* After refactorization, recompute solution to eliminate drift */
+            tableau_compute_solution(tab);
         }
 
-        if (solver->verbose && iter % 100 == 0) {
+        /* Periodically recompute solution to correct numerical drift */
+        if (iter > 0 && iter % 50 == 0) {
             tableau_compute_solution(tab);
-            printf("Iter %d: obj = %.6f\n", iter, tab->obj_value);
+            if (solver->verbose) {
+                printf("Iter %d: obj = %.6f\n", iter, tab->obj_value);
+            }
         }
     }
 
@@ -1235,12 +1240,22 @@ int simplex_solve(SimplexSolver *solver) {
 
     clock_t start = clock();
 
+    if (solver->verbose) printf("[simplex_solve] Starting...\n");
+
     /* Finalize model if needed (required before scaling) */
     if (!solver->model->A) {
+        if (solver->verbose) printf("[simplex_solve] Finalizing model...\n");
         if (lp_model_finalize(solver->model) != 0) {
+            if (solver->verbose) printf("[simplex_solve] ERROR: lp_model_finalize failed\n");
             solver->status = RALPH_STATUS_ERROR;
             return -1;
         }
+    }
+
+    if (solver->verbose) {
+        printf("[simplex_solve] Model: %d vars, %d cons, %d nnz\n",
+               solver->model->num_vars, solver->model->num_cons,
+               solver->model->A ? solver->model->A->nnz : 0);
     }
 
     /* Apply scaling if enabled */
@@ -1252,6 +1267,7 @@ int simplex_solve(SimplexSolver *solver) {
     }
 
     /* Create tableau */
+    if (solver->verbose) printf("[simplex_solve] Creating tableau...\n");
     solver->tableau = tableau_create(solver->model);
     if (!solver->tableau) {
         solver->status = RALPH_STATUS_ERROR;
@@ -1259,49 +1275,66 @@ int simplex_solve(SimplexSolver *solver) {
     }
 
     SimplexTableau *tab = solver->tableau;
+    if (solver->verbose) {
+        printf("[simplex_solve] Tableau: n=%d (extended), m=%d\n", tab->n, tab->m);
+    }
 
     /* Basis is already initialized in tableau_create with proper slack/artificial vars */
 
     /* Factorize initial basis */
+    if (solver->verbose) printf("[simplex_solve] Factorizing initial basis...\n");
     if (tableau_refactorize(tab) != 0) {
-        /* Try to find a better initial basis */
         solver->status = RALPH_STATUS_ERROR;
         return -1;
     }
+    if (solver->verbose) printf("[simplex_solve] Initial factorization OK\n");
 
     /* Phase 1: Find feasible solution */
+    if (solver->verbose) printf("[simplex_solve] Starting Phase 1...\n");
     if (simplex_phase1(solver) != 0) {
         if (solver->status == RALPH_STATUS_INFEASIBLE) {
+            if (solver->verbose) printf("[simplex_solve] Phase 1: INFEASIBLE\n");
             return 0;  /* Infeasible is a valid result */
         }
         return -1;
     }
+    if (solver->verbose) printf("[simplex_solve] Phase 1 complete\n");
 
     /* Phase 2: Optimize */
     int status = simplex_phase2(solver);
 
     solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
 
-    /* Check for infeasibility: if optimal objective is very large (Big-M scale),
-     * it means artificial variables are still in the solution */
+    /* Check for infeasibility: if any artificial variable (Big-M cost) is non-zero,
+     * the original problem is infeasible */
     if (solver->status == RALPH_STATUS_OPTIMAL) {
-        double BIG_M_THRESHOLD = 1e6;  /* If obj > this, likely infeasible */
-        if (fabs(tab->obj_value) > BIG_M_THRESHOLD) {
-            /* Check if any artificial variable is still in basis with non-zero value */
-            int has_artificial = 0;
-            int num_struct = solver->model->num_vars;
-            for (int k = 0; k < tab->m; k++) {
-                int j = tab->basis[k];
-                if (j >= num_struct && tab->c_ext[j] > BIG_M_THRESHOLD/2 &&
-                    fabs(tab->x[j]) > RALPH_FEAS_TOL) {
-                    has_artificial = 1;
-                    break;
+        int num_struct = solver->model->num_vars;
+        double artificial_contrib = 0.0;
+        int artificial_count = 0;
+
+        /* Check all variables, not just basic ones */
+        for (int j = num_struct; j < tab->n; j++) {
+            if (tab->c_ext[j] > 1e6 && fabs(tab->x[j]) > RALPH_FEAS_TOL) {
+                artificial_contrib += tab->c_ext[j] * tab->x[j];
+                artificial_count++;
+                if (solver->verbose) {
+                    fprintf(stderr, "[DEBUG] Artificial var %d still active: x=%.2e, cost=%.0f, contrib=%.2f\n",
+                            j, tab->x[j], tab->c_ext[j], tab->c_ext[j] * tab->x[j]);
                 }
             }
-            if (has_artificial) {
+        }
+
+        if (artificial_count > 0) {
+            if (solver->verbose) {
+                fprintf(stderr, "[DEBUG] %d artificial vars active, total contribution=%.2f\n",
+                        artificial_count, artificial_contrib);
+            }
+            if (artificial_contrib > 1e-2) {  /* Significant artificial contribution */
                 solver->status = RALPH_STATUS_INFEASIBLE;
                 return 0;
             }
+            /* Subtract artificial contribution from objective for reporting */
+            solver->obj_value = (tab->obj_value - artificial_contrib) * solver->model->obj_sense;
         }
     }
 
