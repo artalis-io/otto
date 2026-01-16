@@ -100,13 +100,12 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);
 
 /* Try sparse factorization first, fall back to dense if it fails */
 int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
-    /* TODO: Sparse LU with column pivoting has subtle issues with eta file
-     * coordinate systems that cause simplex convergence problems. The basic
-     * factorization and solve work correctly, but the eta updates after
-     * pivots need more work to handle column permutation properly.
-     * For now, use dense LU which is correct and fast enough for typical LP sizes.
-     * Sparse LU can be enabled later once coordinate handling is fully fixed. */
-    (void)lu_factorize_sparse;  /* suppress unused warning */
+    /* Use sparse LU for larger problems (m >= 20) */
+    if (B->nrows >= 20) {
+        int result = lu_factorize_sparse(lu, B);
+        if (result == 0) return 0;
+        /* Fall back to dense if sparse fails */
+    }
     return lu_factorize_dense(lu, B);
 }
 
@@ -505,12 +504,7 @@ void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution) {
     int m = lu->m;
     double *work = (double*)malloc(m * sizeof(double));
-    double *work2 = (double*)malloc(m * sizeof(double));
-    if (!work || !work2) {
-        free(work);
-        free(work2);
-        return;
-    }
+    if (!work) return;
 
     /* For sparse LU with column pivoting: PAQ = LU
      * So B = P'LUQ', and B' = QU'L'P
@@ -539,7 +533,6 @@ void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution
     vec_copy_data(solution, work, m);
 
     free(work);
-    free(work2);
 }
 
 /* ============================================================================
