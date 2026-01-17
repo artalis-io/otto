@@ -275,8 +275,28 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->verbose = model->verbose;
         model->lp_solver->presolve = 0;  /* Already done */
 
-        /* Solve */
-        simplex_solve(model->lp_solver);
+        /* Solve using selected method */
+        if (model->method == 1) {
+            /* Dual simplex */
+            dual_simplex_solve(model->lp_solver);
+        } else if (model->method == 2) {
+            /* Auto: use dual for all-<= constraints, primal otherwise */
+            int use_dual = 1;
+            for (int i = 0; i < solve_model->num_cons; i++) {
+                if (solve_model->sense[i] != 'L') {
+                    use_dual = 0;
+                    break;
+                }
+            }
+            if (use_dual) {
+                dual_simplex_solve(model->lp_solver);
+            } else {
+                simplex_solve(model->lp_solver);
+            }
+        } else {
+            /* Default: primal simplex */
+            simplex_solve(model->lp_solver);
+        }
 
         model->status = model->lp_solver->status;
         model->iteration_count = model->lp_solver->iterations;

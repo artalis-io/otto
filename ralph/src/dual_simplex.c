@@ -187,7 +187,16 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
  * ============================================================================ */
 
 int dual_simplex_solve(SimplexSolver *solver) {
-    if (!solver || !solver->tableau) return -1;
+    if (!solver) return -1;
+
+    /* If no tableau exists, we need to initialize with primal simplex first.
+     * This creates the tableau, runs Phase 1 to find feasibility, then we
+     * can switch to dual for any subsequent re-optimizations.
+     */
+    if (!solver->tableau) {
+        /* Use primal simplex for full initialization */
+        return simplex_solve(solver);
+    }
 
     SimplexTableau *tab = solver->tableau;
 
