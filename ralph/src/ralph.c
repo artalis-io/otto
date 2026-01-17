@@ -32,6 +32,7 @@ struct RalphModel {
     int verbose;
     double mip_gap;
     int max_nodes;
+    int method;  /* 0=primal simplex, 1=dual simplex, 2=auto */
 
     /* Solution */
     RalphStatus status;
@@ -69,6 +70,7 @@ RalphModel* ralph_create(void) {
     model->verbose = 0;
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
+    model->method = 0;  /* Default: primal simplex */
 
     model->status = RALPH_STATUS_UNKNOWN;
 
@@ -399,6 +401,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
         model->verbose = value;
     } else if (strcmp(name, "max_nodes") == 0 || strcmp(name, "NodeLimit") == 0) {
         model->max_nodes = value;
+    } else if (strcmp(name, "method") == 0 || strcmp(name, "Method") == 0) {
+        /* 0=primal simplex, 1=dual simplex, 2=auto */
+        model->method = value;
     } else {
         return -1;  /* Unknown parameter */
     }
@@ -431,6 +436,8 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
         *value = model->verbose;
     } else if (strcmp(name, "max_nodes") == 0) {
         *value = model->max_nodes;
+    } else if (strcmp(name, "method") == 0) {
+        *value = model->method;
     } else {
         return -1;
     }
