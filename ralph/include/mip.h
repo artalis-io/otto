@@ -87,6 +87,8 @@ typedef struct BBNode {
     /* Basis information for warm start */
     int *basis;
     VarStatus *var_status;
+    int basis_size;         /* Size of basis array (m = num constraints) */
+    int var_status_size;    /* Size of var_status array (n = extended vars) */
 
 } BBNode;
 
