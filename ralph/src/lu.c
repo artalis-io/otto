@@ -21,7 +21,7 @@ LUFactorization* lu_create(int m) {
     if (!lu) return NULL;
 
     lu->m = m;
-    lu->max_updates = 50;  /* Refactorize every 50 updates (balance accuracy vs speed) */
+    lu->max_updates = 100;  /* Refactorize every 100 updates */
 
     /* Allocate permutation arrays */
     lu->perm = (int*)malloc(m * sizeof(int));
@@ -656,7 +656,7 @@ int lu_needs_refactorization(const LUFactorization *lu) {
     if (lu->num_updates >= lu->max_updates) return 1;
 
     /* Refactorize early if condition has degraded significantly */
-    if (lu->growth_factor > 100.0) return 1;
+    if (lu->growth_factor > 1e6) return 1;
 
     return 0;
 }
