@@ -275,11 +275,15 @@ BBNode* bb_node_copy(const BBNode *src, int num_vars) {
     memcpy(dst->ub, src->ub, num_vars * sizeof(double));
 
     /* Copy basis information for warm starting */
-    if (src->basis && src->var_status) {
-        /* Note: Basis size is num_cons (m), but we don't have that here.
-         * We store the basis size implicitly as the parent's LP info.
-         * For now, we'll copy when the parent has valid basis info.
-         * The caller can provide num_cons if needed. */
+    if (src->basis && src->var_status && src->basis_size > 0 && src->var_status_size > 0) {
+        dst->basis = (int*)malloc(src->basis_size * sizeof(int));
+        dst->var_status = (VarStatus*)malloc(src->var_status_size * sizeof(VarStatus));
+        if (dst->basis && dst->var_status) {
+            memcpy(dst->basis, src->basis, src->basis_size * sizeof(int));
+            memcpy(dst->var_status, src->var_status, src->var_status_size * sizeof(VarStatus));
+            dst->basis_size = src->basis_size;
+            dst->var_status_size = src->var_status_size;
+        }
     }
 
     return dst;

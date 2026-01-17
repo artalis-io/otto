@@ -163,6 +163,7 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
 
 /* Save current basis from tableau to node */
 static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars) {
+    (void)num_vars;  /* Not needed, we get sizes from tableau */
     if (!lp || !lp->tableau || !node) return;
 
     SimplexTableau *tab = lp->tableau;
@@ -170,11 +171,15 @@ static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars) {
     int n = tab->n;
 
     /* Allocate basis arrays if needed */
-    if (!node->basis) {
+    if (!node->basis || node->basis_size < m) {
+        free(node->basis);
         node->basis = (int*)malloc(m * sizeof(int));
+        node->basis_size = m;
     }
-    if (!node->var_status) {
+    if (!node->var_status || node->var_status_size < n) {
+        free(node->var_status);
         node->var_status = (VarStatus*)malloc(n * sizeof(VarStatus));
+        node->var_status_size = n;
     }
 
     if (node->basis && node->var_status) {
@@ -231,23 +236,49 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     SimplexSolver *lp = solver->lp_solver;
 
-    /* Apply node bounds to model and solve fresh.
-     * Note: We solve each node from scratch to avoid basis issues between nodes
-     * with different bound combinations. A more sophisticated implementation
-     * would properly warm-start using dual simplex with basis restoration. */
-
     /* Update model bounds */
     for (int j = 0; j < model->num_vars; j++) {
         model->lb[j] = node->lb[j];
         model->ub[j] = node->ub[j];
     }
 
-    /* Free old tableau and solve fresh */
-    if (lp->tableau) {
-        tableau_free(lp->tableau);
-        lp->tableau = NULL;
+    int warm_start_success = 0;
+
+    /* Try warm start from parent basis if available */
+    if (lp->tableau && node->basis && node->var_status &&
+        node->basis_size > 0 && node->var_status_size > 0) {
+
+        SimplexTableau *tab = lp->tableau;
+
+        /* Check sizes match - they should if the model hasn't changed */
+        if (tab->m == node->basis_size && tab->n == node->var_status_size) {
+
+            /* Update bounds in tableau */
+            for (int j = 0; j < model->num_vars; j++) {
+                tab->lb_ext[j] = node->lb[j];
+                tab->ub_ext[j] = node->ub[j];
+            }
+
+            /* Restore parent basis */
+            if (restore_basis_from_node(lp, node) == 0) {
+                /* Use dual simplex for re-optimization */
+                dual_simplex_solve(lp);
+
+                if (lp->status == RALPH_STATUS_OPTIMAL) {
+                    warm_start_success = 1;
+                }
+            }
+        }
     }
-    simplex_solve(lp);
+
+    /* Cold start if warm start failed or wasn't available */
+    if (!warm_start_success) {
+        if (lp->tableau) {
+            tableau_free(lp->tableau);
+            lp->tableau = NULL;
+        }
+        simplex_solve(lp);
+    }
 
     node->lp_status = lp->status;
     node->lp_bound = lp->obj_value;
