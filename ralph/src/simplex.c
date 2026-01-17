@@ -945,8 +945,17 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
         return -1;  /* Unbounded */
     }
 
-    /* Phase 2: Among those within theta_max, pick largest pivot */
+    /* Phase 2: Among those within theta_max, pick best leaving variable
+     *
+     * Tie-breaking strategy (in order of priority):
+     * 1. Prefer non-degenerate pivots (ratio > tolerance)
+     * 2. Among degenerate ties, prefer larger pivot for numerical stability
+     * 3. Among remaining ties, prefer smaller steepest edge weight (variable
+     *    that was "cheapest" to bring in should be "cheapest" to kick out)
+     */
     double best_pivot = 0.0;
+    double best_ratio = RALPH_INFINITY;
+    int best_is_degen = 1;
 
     for (int k = 0; k < tab->m; k++) {
         double dk = tab->work2[k] * dir;
@@ -961,8 +970,26 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
         }
 
         if (ratio <= theta_max + RALPH_FEAS_TOL) {
-            if (fabs(dk) > best_pivot) {
-                best_pivot = fabs(dk);
+            int is_degen = (ratio < 1e-8);
+            double pivot_size = fabs(dk);
+
+            /* Selection criteria */
+            int select = 0;
+            if (*leaving < 0) {
+                select = 1;  /* First candidate */
+            } else if (!is_degen && best_is_degen) {
+                select = 1;  /* Prefer non-degenerate */
+            } else if (is_degen == best_is_degen) {
+                /* Same degeneracy status - use pivot size */
+                if (pivot_size > best_pivot * 1.1) {
+                    select = 1;  /* Significantly larger pivot */
+                }
+            }
+
+            if (select) {
+                best_pivot = pivot_size;
+                best_ratio = ratio;
+                best_is_degen = is_degen;
                 *leaving = k;
                 *theta = ratio > 0 ? ratio : 0;
             }
@@ -1321,11 +1348,88 @@ static int simplex_phase1(SimplexSolver *solver) {
     return -1;
 }
 
+/* ============================================================================
+ * Bound Perturbation for Degeneracy Prevention (Primal Simplex)
+ * ============================================================================
+ *
+ * Adds small perturbations to bounds to break degeneracy and prevent cycling.
+ * This is proactive (applied at start) vs reactive (Bland's rule after cycling).
+ *
+ * The perturbation scheme:
+ * - Perturb lower bounds down by small epsilon
+ * - Perturb upper bounds up by small epsilon
+ * - Use pseudo-random scaling based on variable index for reproducibility
+ */
+#define PRIMAL_PERTURB_BASE 1e-6
+#define PRIMAL_PERTURB_MULT 7
+
+static double *saved_lb = NULL;
+static double *saved_ub = NULL;
+static int perturb_n = 0;
+
+static void primal_apply_perturbation(SimplexTableau *tab) {
+    int n = tab->n;
+
+    /* Save original bounds */
+    saved_lb = (double*)malloc(n * sizeof(double));
+    saved_ub = (double*)malloc(n * sizeof(double));
+    if (!saved_lb || !saved_ub) {
+        free(saved_lb);
+        free(saved_ub);
+        saved_lb = saved_ub = NULL;
+        return;
+    }
+    perturb_n = n;
+
+    for (int j = 0; j < n; j++) {
+        saved_lb[j] = tab->lb_ext[j];
+        saved_ub[j] = tab->ub_ext[j];
+    }
+
+    /* Apply perturbations */
+    for (int j = 0; j < n; j++) {
+        /* Pseudo-random perturbation factor */
+        double factor = 1.0 + (j * PRIMAL_PERTURB_MULT) % 13;
+
+        /* Perturb finite lower bounds down */
+        if (tab->lb_ext[j] > -RALPH_INFINITY / 2) {
+            double eps = PRIMAL_PERTURB_BASE * factor * (1.0 + fabs(tab->lb_ext[j]));
+            tab->lb_ext[j] -= eps;
+        }
+
+        /* Perturb finite upper bounds up */
+        if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
+            double eps = PRIMAL_PERTURB_BASE * factor * (1.0 + fabs(tab->ub_ext[j]));
+            tab->ub_ext[j] += eps;
+        }
+    }
+}
+
+static void primal_remove_perturbation(SimplexTableau *tab) {
+    if (!saved_lb || !saved_ub || perturb_n != tab->n) return;
+
+    /* Restore original bounds */
+    for (int j = 0; j < tab->n; j++) {
+        tab->lb_ext[j] = saved_lb[j];
+        tab->ub_ext[j] = saved_ub[j];
+    }
+
+    free(saved_lb);
+    free(saved_ub);
+    saved_lb = saved_ub = NULL;
+    perturb_n = 0;
+}
+
 /* Phase 2: Optimize */
 static int simplex_phase2(SimplexSolver *solver) {
     SimplexTableau *tab = solver->tableau;
 
     tab->phase = 2;
+
+    /* Note: Bound perturbation is now applied adaptively when degeneracy detected,
+     * rather than proactively at start. See cycling detection below.
+     */
+    int perturbation_active = 0;
 
     /* Compute initial solution for Phase 2 */
     tableau_compute_solution(tab);
@@ -1361,7 +1465,8 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         if (price_status != 0) {
-            /* Optimal */
+            /* Optimal - remove perturbation and finalize */
+            primal_remove_perturbation(tab);
             solver->status = RALPH_STATUS_OPTIMAL;
             solver->iterations = iter;
             solver->degenerate_pivots = degenerate_count;
@@ -1383,18 +1488,37 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         if (ratio_status != 0) {
-            /* Unbounded */
+            /* Unbounded - remove perturbation before returning */
+            primal_remove_perturbation(tab);
             solver->status = RALPH_STATUS_UNBOUNDED;
             solver->iterations = iter;
             return -1;
         }
 
-        /* Track degenerate/near-degenerate pivots for cycling detection */
-        /* Use a larger threshold to catch "near-degenerate" cycling */
+        /* Track degenerate/near-degenerate pivots for cycling prevention
+         *
+         * Strategy:
+         * 1. After 30 degenerate pivots: apply bound perturbation
+         * 2. After 100 more degenerate pivots: switch to Bland's rule
+         * 3. After 100 non-degenerate pivots: reset and try faster methods
+         */
         const double NEAR_DEGEN_TOL = 1e-3;
+        const int PERTURB_THRESHOLD = 30;
+
         if (theta < NEAR_DEGEN_TOL) {
             degenerate_count++;
             non_degen_streak = 0;
+
+            /* First try perturbation */
+            if (degenerate_count >= PERTURB_THRESHOLD && !perturbation_active && !use_bland) {
+                primal_apply_perturbation(tab);
+                perturbation_active = 1;
+                if (solver->verbose) {
+                    printf("Iter %d: Applying perturbation due to degeneracy\n", iter);
+                }
+            }
+
+            /* If still cycling after perturbation, use Bland's rule */
             if (degenerate_count >= DEGEN_THRESHOLD && !use_bland) {
                 use_bland = 1;
                 if (solver->verbose) {
@@ -1417,6 +1541,7 @@ static int simplex_phase2(SimplexSolver *solver) {
 
         /* Perform pivot */
         if (simplex_pivot(tab, entering, leaving, theta) != 0) {
+            primal_remove_perturbation(tab);
             solver->status = RALPH_STATUS_ERROR;
             return -1;
         }
@@ -1424,6 +1549,7 @@ static int simplex_phase2(SimplexSolver *solver) {
         /* Refactorize if needed */
         if (lu_needs_refactorization(tab->lu)) {
             if (tableau_refactorize(tab) != 0) {
+                primal_remove_perturbation(tab);
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
             }
@@ -1443,6 +1569,7 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
     }
 
+    primal_remove_perturbation(tab);
     solver->status = RALPH_STATUS_ITERATION_LIMIT;
     solver->iterations = solver->max_iterations;
     return -1;
