@@ -707,8 +707,8 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
             }
         }
 
-        /* If dual feasibility is significantly violated, fall back to primal */
-        if (dual_violations > tab->n / 10) {
+        /* If too many dual violations, fall back to primal (with higher threshold) */
+        if (dual_violations > tab->n / 5) {  /* 20% threshold (was 10%) */
             if (solver->verbose) {
                 printf("[dual_simplex] Too many dual violations (%d), falling back to primal\n",
                        dual_violations);

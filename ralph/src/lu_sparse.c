@@ -37,9 +37,13 @@ typedef struct {
     int *row_perm_inv;
     int *col_done;              /* 1 if column has been pivoted */
     int *row_done;              /* 1 if row has been pivoted */
-    SparseEntry *pool;          /* Memory pool for entries */
-    int pool_size;
-    int pool_used;
+    /* Chunk-based memory pool for entries (avoids realloc invalidating pointers) */
+    SparseEntry **chunks;       /* Array of chunk pointers */
+    int num_chunks;             /* Number of allocated chunks */
+    int max_chunks;             /* Capacity of chunks array */
+    int chunk_size;             /* Entries per chunk */
+    int cur_chunk;              /* Current chunk index */
+    int cur_pos;                /* Position in current chunk */
 } SparseLUWork;
 
 static SparseLUWork* sparse_work_create(int m, int nnz_estimate) {
@@ -48,10 +52,25 @@ static SparseLUWork* sparse_work_create(int m, int nnz_estimate) {
 
     work->m = m;
 
-    /* Estimate pool size: original + fill-in (rough estimate: 3x original) */
-    work->pool_size = nnz_estimate * 4 + m;
-    work->pool = (SparseEntry*)malloc(work->pool_size * sizeof(SparseEntry));
-    work->pool_used = 0;
+    /* Initialize chunk-based memory pool */
+    work->chunk_size = nnz_estimate * 4 + m;  /* Entries per chunk */
+    work->max_chunks = 16;                     /* Start with room for 16 chunks */
+    work->chunks = (SparseEntry**)calloc(work->max_chunks, sizeof(SparseEntry*));
+    if (!work->chunks) {
+        free(work);
+        return NULL;
+    }
+
+    /* Allocate first chunk */
+    work->chunks[0] = (SparseEntry*)malloc(work->chunk_size * sizeof(SparseEntry));
+    if (!work->chunks[0]) {
+        free(work->chunks);
+        free(work);
+        return NULL;
+    }
+    work->num_chunks = 1;
+    work->cur_chunk = 0;
+    work->cur_pos = 0;
 
     work->cols = (SparseEntry**)calloc(m, sizeof(SparseEntry*));
     work->rows = (SparseEntry**)calloc(m, sizeof(SparseEntry*));
@@ -64,11 +83,14 @@ static SparseLUWork* sparse_work_create(int m, int nnz_estimate) {
     work->col_done = (int*)calloc(m, sizeof(int));
     work->row_done = (int*)calloc(m, sizeof(int));
 
-    if (!work->pool || !work->cols || !work->rows || !work->col_nnz ||
+    if (!work->cols || !work->rows || !work->col_nnz ||
         !work->row_nnz || !work->col_perm || !work->row_perm ||
         !work->col_perm_inv || !work->row_perm_inv ||
         !work->col_done || !work->row_done) {
-        free(work->pool);
+        for (int i = 0; i < work->num_chunks; i++) {
+            free(work->chunks[i]);
+        }
+        free(work->chunks);
         free(work->cols);
         free(work->rows);
         free(work->col_nnz);
@@ -96,7 +118,11 @@ static SparseLUWork* sparse_work_create(int m, int nnz_estimate) {
 
 static void sparse_work_free(SparseLUWork *work) {
     if (!work) return;
-    free(work->pool);
+    /* Free all chunks */
+    for (int i = 0; i < work->num_chunks; i++) {
+        free(work->chunks[i]);
+    }
+    free(work->chunks);
     free(work->cols);
     free(work->rows);
     free(work->col_nnz);
@@ -111,16 +137,32 @@ static void sparse_work_free(SparseLUWork *work) {
 }
 
 static SparseEntry* alloc_entry(SparseLUWork *work) {
-    if (work->pool_used >= work->pool_size) {
-        /* Pool exhausted - reallocate */
-        int new_size = work->pool_size * 2;
-        SparseEntry *new_pool = (SparseEntry*)realloc(work->pool,
-                                                       new_size * sizeof(SparseEntry));
-        if (!new_pool) return NULL;
-        work->pool = new_pool;
-        work->pool_size = new_size;
+    /* Check if current chunk is full */
+    if (work->cur_pos >= work->chunk_size) {
+        /* Need a new chunk */
+        if (work->cur_chunk + 1 >= work->num_chunks) {
+            /* Need to allocate a new chunk */
+            if (work->num_chunks >= work->max_chunks) {
+                /* Grow chunks array */
+                int new_max = work->max_chunks * 2;
+                SparseEntry **new_chunks = (SparseEntry**)realloc(work->chunks,
+                                                    new_max * sizeof(SparseEntry*));
+                if (!new_chunks) return NULL;
+                work->chunks = new_chunks;
+                work->max_chunks = new_max;
+            }
+
+            /* Allocate new chunk */
+            work->chunks[work->num_chunks] = (SparseEntry*)malloc(
+                                                work->chunk_size * sizeof(SparseEntry));
+            if (!work->chunks[work->num_chunks]) return NULL;
+            work->num_chunks++;
+        }
+        work->cur_chunk++;
+        work->cur_pos = 0;
     }
-    return &work->pool[work->pool_used++];
+
+    return &work->chunks[work->cur_chunk][work->cur_pos++];
 }
 
 /* Add entry to column list (maintains row order) */
