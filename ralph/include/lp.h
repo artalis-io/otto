@@ -137,6 +137,9 @@ typedef struct {
     int use_steepest_edge;
     int devex_refcount;     /* Reference count for Devex weight resets */
 
+    /* Partial pricing state */
+    int partial_price_pos;  /* Starting position for next partial price scan */
+
     /* Statistics */
     int iterations;
     int phase;              /* 1 or 2 */
@@ -153,7 +156,7 @@ typedef struct {
     double time_limit;
     int presolve;
     int scaling;
-    int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex */
+    int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial */
     int verbose;
 
     /* Scaling factors (used if scaling enabled) */
@@ -214,6 +217,7 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver);
 int pricing_dantzig(SimplexTableau *tableau, int *entering);
 int pricing_steepest_edge(SimplexTableau *tableau, int *entering);
 int pricing_devex(SimplexTableau *tableau, int *entering);
+int pricing_partial(SimplexTableau *tableau, int *entering);
 
 /* Ratio test */
 int ratio_test_harris(SimplexTableau *tableau, int entering, int *leaving, double *theta);
