@@ -81,18 +81,26 @@ static void presolve_context_free(PresolveContext *ctx) {
 
 void presolve_compute_implied_bounds(PresolveContext *ctx) {
     LPModel *model = ctx->working;
+    int n = model->num_vars;
+
+    /* Allocate dense row buffer once */
+    double *row = (double*)malloc(n * sizeof(double));
+    if (!row) return;
 
     for (int i = 0; i < model->num_cons; i++) {
         if (ctx->row_deleted[i]) continue;
+
+        /* Extract row once instead of O(n) element accesses */
+        sparse_get_row(model->A, i, row);
 
         double lb = 0.0;
         double ub = 0.0;
 
         /* Compute implied bounds: lb <= a'x <= ub based on variable bounds */
-        for (int j = 0; j < model->num_vars; j++) {
+        for (int j = 0; j < n; j++) {
             if (ctx->col_deleted[j]) continue;
 
-            double aij = sparse_get_element(model->A, i, j);
+            double aij = row[j];
             if (fabs(aij) < RALPH_ZERO_TOL) continue;
 
             if (aij > 0) {
@@ -123,6 +131,8 @@ void presolve_compute_implied_bounds(PresolveContext *ctx) {
         ctx->row_lb[i] = lb;
         ctx->row_ub[i] = ub;
     }
+
+    free(row);
 }
 
 /* ============================================================================
@@ -164,17 +174,23 @@ int presolve_remove_fixed_vars(PresolveContext *ctx) {
 int presolve_remove_empty_rows(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int count = 0;
+    int n = model->num_vars;
+
+    /* Allocate dense row buffer once */
+    double *row = (double*)malloc(n * sizeof(double));
+    if (!row) return 0;
 
     for (int i = 0; i < model->num_cons; i++) {
         if (ctx->row_deleted[i]) continue;
 
+        /* Extract row once */
+        sparse_get_row(model->A, i, row);
+
         /* Count non-zeros in row */
         int nnz = 0;
-        for (int j = 0; j < model->num_vars && nnz == 0; j++) {
-            if (!ctx->col_deleted[j]) {
-                if (fabs(sparse_get_element(model->A, i, j)) > RALPH_ZERO_TOL) {
-                    nnz++;
-                }
+        for (int j = 0; j < n && nnz == 0; j++) {
+            if (!ctx->col_deleted[j] && fabs(row[j]) > RALPH_ZERO_TOL) {
+                nnz++;
             }
         }
 
@@ -184,15 +200,15 @@ int presolve_remove_empty_rows(PresolveContext *ctx) {
 
             /* Check feasibility */
             if (model->sense[i] == 'L' && rhs < -RALPH_FEAS_TOL) {
-                /* 0 <= negative: infeasible */
+                free(row);
                 return -1;
             }
             if (model->sense[i] == 'G' && rhs > RALPH_FEAS_TOL) {
-                /* 0 >= positive: infeasible */
+                free(row);
                 return -1;
             }
             if (model->sense[i] == 'E' && fabs(rhs) > RALPH_FEAS_TOL) {
-                /* 0 = nonzero: infeasible */
+                free(row);
                 return -1;
             }
 
@@ -201,6 +217,7 @@ int presolve_remove_empty_rows(PresolveContext *ctx) {
         }
     }
 
+    free(row);
     return count;
 }
 
@@ -269,23 +286,30 @@ int presolve_remove_empty_cols(PresolveContext *ctx) {
 int presolve_singleton_rows(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int count = 0;
+    int n = model->num_vars;
+
+    /* Allocate dense row buffer once */
+    double *row = (double*)malloc(n * sizeof(double));
+    if (!row) return 0;
 
     for (int i = 0; i < model->num_cons; i++) {
         if (ctx->row_deleted[i]) continue;
+
+        /* Extract row once */
+        sparse_get_row(model->A, i, row);
 
         /* Find the single non-zero */
         int singleton_col = -1;
         double singleton_val = 0.0;
         int nnz = 0;
 
-        for (int j = 0; j < model->num_vars; j++) {
+        for (int j = 0; j < n; j++) {
             if (ctx->col_deleted[j]) continue;
 
-            double aij = sparse_get_element(model->A, i, j);
-            if (fabs(aij) > RALPH_ZERO_TOL) {
+            if (fabs(row[j]) > RALPH_ZERO_TOL) {
                 nnz++;
                 singleton_col = j;
-                singleton_val = aij;
+                singleton_val = row[j];
                 if (nnz > 1) break;
             }
         }
@@ -310,6 +334,7 @@ int presolve_singleton_rows(PresolveContext *ctx) {
 
             /* Check for infeasibility */
             if (model->lb[singleton_col] > model->ub[singleton_col] + RALPH_FEAS_TOL) {
+                free(row);
                 return -1;  /* Infeasible */
             }
 
@@ -318,6 +343,7 @@ int presolve_singleton_rows(PresolveContext *ctx) {
         }
     }
 
+    free(row);
     return count;
 }
 
@@ -325,8 +351,13 @@ int presolve_singleton_rows(PresolveContext *ctx) {
 int presolve_singleton_cols(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int count = 0;
+    int n = model->num_vars;
 
-    for (int j = 0; j < model->num_vars; j++) {
+    /* Allocate dense row buffer once */
+    double *row = (double*)malloc(n * sizeof(double));
+    if (!row) return 0;
+
+    for (int j = 0; j < n; j++) {
         if (ctx->col_deleted[j]) continue;
 
         /* Count active non-zeros in column */
@@ -352,12 +383,15 @@ int presolve_singleton_cols(PresolveContext *ctx) {
             /* For now, just tighten bounds based on the constraint */
             double rhs = model->b[singleton_row];
 
+            /* Extract row once instead of O(n) element accesses */
+            sparse_get_row(model->A, singleton_row, row);
+
             /* Get contribution from other variables in the row */
             double other_lb = 0.0, other_ub = 0.0;
-            for (int jj = 0; jj < model->num_vars; jj++) {
+            for (int jj = 0; jj < n; jj++) {
                 if (jj == j || ctx->col_deleted[jj]) continue;
 
-                double aij = sparse_get_element(model->A, singleton_row, jj);
+                double aij = row[jj];
                 if (fabs(aij) < RALPH_ZERO_TOL) continue;
 
                 if (aij > 0) {
@@ -401,6 +435,7 @@ int presolve_singleton_cols(PresolveContext *ctx) {
             }
 
             if (model->lb[j] > model->ub[j] + RALPH_FEAS_TOL) {
+                free(row);
                 return -1;  /* Infeasible */
             }
 
@@ -408,6 +443,7 @@ int presolve_singleton_cols(PresolveContext *ctx) {
         }
     }
 
+    free(row);
     return count;
 }
 
@@ -415,8 +451,13 @@ int presolve_singleton_cols(PresolveContext *ctx) {
 int presolve_forcing_constraints(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int count = 0;
+    int n = model->num_vars;
 
     presolve_compute_implied_bounds(ctx);
+
+    /* Allocate dense row buffer for forcing constraint handling */
+    double *row = (double*)malloc(n * sizeof(double));
+    if (!row) return 0;
 
     for (int i = 0; i < model->num_cons; i++) {
         if (ctx->row_deleted[i]) continue;
@@ -428,6 +469,7 @@ int presolve_forcing_constraints(PresolveContext *ctx) {
         if (model->sense[i] == 'L') {
             /* a'x <= b */
             if (row_lb > rhs + RALPH_FEAS_TOL) {
+                free(row);
                 return -1;  /* Infeasible */
             }
             if (row_ub <= rhs + RALPH_FEAS_TOL) {
@@ -437,9 +479,10 @@ int presolve_forcing_constraints(PresolveContext *ctx) {
             } else if (row_lb >= rhs - RALPH_FEAS_TOL) {
                 /* Forcing: must be at equality */
                 /* All variables at their bounds that achieve row_lb */
-                for (int j = 0; j < model->num_vars; j++) {
+                sparse_get_row(model->A, i, row);
+                for (int j = 0; j < n; j++) {
                     if (ctx->col_deleted[j]) continue;
-                    double aij = sparse_get_element(model->A, i, j);
+                    double aij = row[j];
                     if (fabs(aij) > RALPH_ZERO_TOL) {
                         if (aij > 0) {
                             model->ub[j] = model->lb[j];
@@ -454,6 +497,7 @@ int presolve_forcing_constraints(PresolveContext *ctx) {
         } else if (model->sense[i] == 'G') {
             /* a'x >= b */
             if (row_ub < rhs - RALPH_FEAS_TOL) {
+                free(row);
                 return -1;  /* Infeasible */
             }
             if (row_lb >= rhs - RALPH_FEAS_TOL) {
@@ -463,11 +507,13 @@ int presolve_forcing_constraints(PresolveContext *ctx) {
             }
         } else {  /* Equality */
             if (row_lb > rhs + RALPH_FEAS_TOL || row_ub < rhs - RALPH_FEAS_TOL) {
+                free(row);
                 return -1;  /* Infeasible */
             }
         }
     }
 
+    free(row);
     return count;
 }
 
@@ -475,40 +521,68 @@ int presolve_forcing_constraints(PresolveContext *ctx) {
 int presolve_bound_tightening(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int count = 0;
+    int n = model->num_vars;
+
+    /* Allocate dense row buffer once */
+    double *row = (double*)malloc(n * sizeof(double));
+    if (!row) return 0;
 
     for (int i = 0; i < model->num_cons; i++) {
         if (ctx->row_deleted[i]) continue;
 
         double rhs = model->b[i];
 
-        for (int j = 0; j < model->num_vars; j++) {
-            if (ctx->col_deleted[j]) continue;
+        /* Extract row once (O(nnz) instead of O(n²) element accesses) */
+        sparse_get_row(model->A, i, row);
 
-            double aij = sparse_get_element(model->A, i, j);
+        /* First pass: compute total row_lb and row_ub */
+        double row_lb = 0.0, row_ub = 0.0;
+        int row_lb_finite = 1, row_ub_finite = 1;
+
+        for (int j = 0; j < n; j++) {
+            if (ctx->col_deleted[j]) continue;
+            double aij = row[j];
             if (fabs(aij) < RALPH_ZERO_TOL) continue;
 
-            /* Compute contribution from other variables */
-            double other_lb = 0.0, other_ub = 0.0;
-            int valid = 1;
-
-            for (int jj = 0; jj < model->num_vars; jj++) {
-                if (jj == j || ctx->col_deleted[jj]) continue;
-
-                double aik = sparse_get_element(model->A, i, jj);
-                if (fabs(aik) < RALPH_ZERO_TOL) continue;
-
-                if (aik > 0) {
-                    if (model->lb[jj] <= -RALPH_INFINITY/2) { other_lb = -RALPH_INFINITY; }
-                    else { other_lb += aik * model->lb[jj]; }
-                    if (model->ub[jj] >= RALPH_INFINITY/2) { other_ub = RALPH_INFINITY; }
-                    else { other_ub += aik * model->ub[jj]; }
-                } else {
-                    if (model->ub[jj] >= RALPH_INFINITY/2) { other_lb = -RALPH_INFINITY; }
-                    else { other_lb += aik * model->ub[jj]; }
-                    if (model->lb[jj] <= -RALPH_INFINITY/2) { other_ub = RALPH_INFINITY; }
-                    else { other_ub += aik * model->lb[jj]; }
-                }
+            if (aij > 0) {
+                if (model->lb[j] <= -RALPH_INFINITY/2) row_lb_finite = 0;
+                else row_lb += aij * model->lb[j];
+                if (model->ub[j] >= RALPH_INFINITY/2) row_ub_finite = 0;
+                else row_ub += aij * model->ub[j];
+            } else {
+                if (model->ub[j] >= RALPH_INFINITY/2) row_lb_finite = 0;
+                else row_lb += aij * model->ub[j];
+                if (model->lb[j] <= -RALPH_INFINITY/2) row_ub_finite = 0;
+                else row_ub += aij * model->lb[j];
             }
+        }
+
+        /* Second pass: derive bounds for each variable */
+        for (int j = 0; j < n; j++) {
+            if (ctx->col_deleted[j]) continue;
+            double aij = row[j];
+            if (fabs(aij) < RALPH_ZERO_TOL) continue;
+
+            /* Compute contribution of variable j to row bounds */
+            double j_contrib_lb, j_contrib_ub;
+            int j_lb_finite = 1, j_ub_finite = 1;
+
+            if (aij > 0) {
+                if (model->lb[j] <= -RALPH_INFINITY/2) j_lb_finite = 0;
+                else j_contrib_lb = aij * model->lb[j];
+                if (model->ub[j] >= RALPH_INFINITY/2) j_ub_finite = 0;
+                else j_contrib_ub = aij * model->ub[j];
+            } else {
+                if (model->ub[j] >= RALPH_INFINITY/2) j_lb_finite = 0;
+                else j_contrib_lb = aij * model->ub[j];
+                if (model->lb[j] <= -RALPH_INFINITY/2) j_ub_finite = 0;
+                else j_contrib_ub = aij * model->lb[j];
+            }
+
+            /* other_lb = row_lb - j_contrib_lb (if both finite) */
+            /* other_ub = row_ub - j_contrib_ub (if both finite) */
+            double other_lb = row_lb_finite && j_lb_finite ? row_lb - j_contrib_lb : -RALPH_INFINITY;
+            double other_ub = row_ub_finite && j_ub_finite ? row_ub - j_contrib_ub : RALPH_INFINITY;
 
             /* Derive bounds on a_ij * x_j */
             double new_lb = model->lb[j];
@@ -550,11 +624,13 @@ int presolve_bound_tightening(PresolveContext *ctx) {
 
             /* Check feasibility */
             if (model->lb[j] > model->ub[j] + RALPH_FEAS_TOL) {
+                free(row);
                 return -1;
             }
         }
     }
 
+    free(row);
     return count;
 }
 

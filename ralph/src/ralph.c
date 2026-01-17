@@ -65,7 +65,7 @@ RalphModel* ralph_create(void) {
     /* Default parameters */
     model->max_iterations = RALPH_DEFAULT_MAX_ITER;
     model->time_limit = RALPH_DEFAULT_TIME_LIMIT;
-    model->presolve = 0;  /* Temporarily disabled for testing */
+    model->presolve = 0;  /* Disabled by default - adds overhead on random LPs */
     model->verbose = 0;
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
