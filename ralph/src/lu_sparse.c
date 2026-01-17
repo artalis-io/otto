@@ -379,11 +379,12 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         work->row_done[pivot_row] = 1;
         work->col_done[pivot_col] = 1;
 
-        /* Store U entries from pivot row (read from column lists which have updated values) */
-        for (int j = 0; j < m; j++) {
+        /* Store U entries from pivot row using row list (O(nnz) instead of O(m)) */
+        for (SparseEntry *re = work->rows[pivot_row]; re; re = re->next) {
+            int j = re->idx;
             if (work->col_done[j] && j != pivot_col) continue;  /* Already eliminated */
 
-            double val = get_col_val(work, j, pivot_row);
+            double val = re->val;
             if (fabs(val) < RALPH_ZERO_TOL) continue;  /* Skip zeros */
 
             /* Ensure capacity */
