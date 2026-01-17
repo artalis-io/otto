@@ -27,7 +27,19 @@ void tableau_free(SimplexTableau *tab);
  * Dual Ratio Test
  * ============================================================================ */
 
-/* Select entering variable using dual ratio test */
+/*
+ * Harris Ratio Test for Dual Simplex
+ *
+ * Uses a single-pass algorithm with Harris-style tie-breaking:
+ * - Accept any ratio within tolerance of the best found so far
+ * - Among near-equal ratios, prefer larger pivot elements
+ *
+ * Harris tolerance allows slightly suboptimal ratios if they provide
+ * numerically more stable pivot elements.
+ */
+#define HARRIS_TOL 1e-6
+
+/* Select entering variable using Harris dual ratio test */
 int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *theta) {
     int leaving_var = tab->basis[leaving];
     double x_leave = tab->x[leaving_var];
@@ -100,13 +112,17 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
         }
 
         if (ratio >= -RALPH_OPT_TOL && ratio < *theta) {
+            /* Better ratio found */
             *theta = ratio;
             *entering = j;
             best_pivot = fabs(alpha_j);
-        } else if (fabs(ratio - *theta) < RALPH_OPT_TOL && fabs(alpha_j) > best_pivot) {
-            /* Tie-breaking: prefer larger pivot */
-            *entering = j;
-            best_pivot = fabs(alpha_j);
+        } else if (ratio >= -RALPH_OPT_TOL && ratio < *theta + HARRIS_TOL * (1.0 + fabs(*theta))) {
+            /* Harris: ratio is within tolerance of best - prefer larger pivot */
+            if (fabs(alpha_j) > best_pivot) {
+                *entering = j;
+                best_pivot = fabs(alpha_j);
+                /* Keep *theta as minimum ratio for dual feasibility */
+            }
         }
     }
 
@@ -440,6 +456,53 @@ static int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
 }
 
 /*
+ * Bound Perturbation for Degeneracy Prevention
+ *
+ * Adds small perturbations to upper bounds to break degeneracy and prevent
+ * cycling. Uses pseudo-random perturbations based on variable index to ensure
+ * reproducibility. Perturbations are removed before returning the final solution.
+ */
+#define PERTURB_BASE 1e-6
+#define PERTURB_MULT 7  /* Prime for pseudo-randomness */
+
+static double *original_ub = NULL;
+static int original_ub_size = 0;
+
+static void apply_bound_perturbation(SimplexTableau *tab) {
+    /* Save original bounds */
+    if (original_ub_size < tab->n) {
+        free(original_ub);
+        original_ub = (double*)malloc(tab->n * sizeof(double));
+        original_ub_size = tab->n;
+    }
+    if (!original_ub) return;
+
+    for (int j = 0; j < tab->n; j++) {
+        original_ub[j] = tab->ub_ext[j];
+
+        /* Only perturb finite upper bounds */
+        if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
+            /* Pseudo-random perturbation: eps * (1 + (j*7) mod 13) */
+            double eps = PERTURB_BASE * (1.0 + fabs(tab->ub_ext[j]));
+            tab->ub_ext[j] += eps * (1.0 + (j * PERTURB_MULT) % 13);
+        }
+    }
+}
+
+static void remove_bound_perturbation(SimplexTableau *tab) {
+    if (!original_ub || original_ub_size < tab->n) return;
+
+    for (int j = 0; j < tab->n; j++) {
+        tab->ub_ext[j] = original_ub[j];
+
+        /* Snap non-basic variables at upper bound to original bound */
+        if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+            tab->x[j] = original_ub[j];
+        }
+    }
+}
+
+/*
  * Solve LP using dual simplex from scratch.
  *
  * This is the proper dual Phase 1 approach:
@@ -473,6 +536,9 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
         solver->status = RALPH_STATUS_ERROR;
         return -1;
     }
+
+    /* Apply bound perturbation for degeneracy prevention */
+    apply_bound_perturbation(tab);
 
     /* Compute initial solution and reduced costs */
     tableau_compute_solution(tab);
@@ -530,7 +596,10 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
     }
 
     if (!primal_infeasible) {
-        /* Already optimal! */
+        /* Already optimal! Remove perturbation and finalize */
+        remove_bound_perturbation(tab);
+        tableau_compute_solution(tab);
+
         solver->status = RALPH_STATUS_OPTIMAL;
         solver->obj_value = tab->obj_value * solver->model->obj_sense;
         solver->iterations = 0;
@@ -579,7 +648,10 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
         }
 
         if (leaving < 0) {
-            /* Primal feasible - optimal! */
+            /* Primal feasible - optimal! Remove perturbation and finalize */
+            remove_bound_perturbation(tab);
+            tableau_compute_solution(tab);
+
             solver->status = RALPH_STATUS_OPTIMAL;
             solver->obj_value = tab->obj_value * solver->model->obj_sense;
 
@@ -657,8 +729,13 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
             return simplex_solve(solver);
         }
 
-        /* Periodic refactorization for numerical stability */
-        if (lu_needs_refactorization(tab->lu)) {
+        /* More aggressive refactorization for numerical stability:
+         * - Standard LU update limit
+         * - Every 50 iterations to prevent drift */
+        int need_refactor = lu_needs_refactorization(tab->lu) ||
+                           (iter > 0 && iter % 50 == 0);
+
+        if (need_refactor) {
             if (tableau_refactorize(tab) != 0) {
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
@@ -668,8 +745,8 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
         }
 
         if (solver->verbose && iter % 50 == 0) {
-            printf("Dual iter %d: infeas=%.2e, obj=%.2f\n",
-                   iter, max_infeas, tab->obj_value * solver->model->obj_sense);
+            printf("Dual iter %d: infeas=%.2e, obj=%.2f, dual_viol=%d\n",
+                   iter, max_infeas, tab->obj_value * solver->model->obj_sense, dual_violations);
         }
     }
 
