@@ -21,7 +21,7 @@ LUFactorization* lu_create(int m) {
     if (!lu) return NULL;
 
     lu->m = m;
-    lu->max_updates = 10;  /* Refactorize frequently to maintain accuracy */
+    lu->max_updates = 50;  /* Refactorize every 50 updates (balance accuracy vs speed) */
 
     /* Allocate permutation arrays */
     lu->perm = (int*)malloc(m * sizeof(int));
