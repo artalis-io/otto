@@ -636,14 +636,23 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
 
     lu_solve_transpose(tab->lu, tab->work1, tab->y);
 
-    /* Compute reduced costs: rc_j = c_j - y' * A_j */
-    for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) {
-            tab->rc[j] = 0.0;
-        } else {
-            sparse_get_column(tab->A_ext, j, tab->work1);
-            tab->rc[j] = tab->c_ext[j] - vec_dot(tab->m, tab->y, tab->work1);
-        }
+    /* Compute reduced costs: rc = c - A' * y
+     * Using sparse matrix-transpose-vector multiply: O(nnz) instead of O(n*m) */
+
+    /* First negate y, then compute c + A'*(-y) = c - A'*y */
+    for (int i = 0; i < tab->m; i++) {
+        tab->work1[i] = -tab->y[i];
+    }
+
+    /* rc = c */
+    vec_copy_data(tab->rc, tab->c_ext, tab->n);
+
+    /* rc += A' * (-y) = rc - A' * y */
+    sparse_matvec_transpose_add(tab->A_ext, tab->work1, tab->rc);
+
+    /* Zero out reduced costs for basic variables */
+    for (int k = 0; k < tab->m; k++) {
+        tab->rc[tab->basis[k]] = 0.0;
     }
 
     return 0;
