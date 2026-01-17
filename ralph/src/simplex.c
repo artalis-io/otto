@@ -1010,30 +1010,42 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
      * where alpha_j is the pivot row entry for column j
      */
     if (tab->use_steepest_edge && pivot_row) {
-        for (int j = 0; j < tab->n; j++) {
-            /* Skip entering (now basic) and already basic variables */
-            if (j == entering || j == leaving) continue;
-            if (tab->var_status[j] == RALPH_BASIC) continue;
+        tab->devex_refcount++;
 
-            /* Compute alpha_j = pivot_row * a_j */
-            double alpha_j = 0.0;
-            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
-                alpha_j += pivot_row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+        /* Periodic reference reset: every n iterations, reset weights to 1.0
+         * This prevents unbounded growth and maintains pricing accuracy
+         */
+        if (tab->devex_refcount >= tab->n) {
+            for (int j = 0; j < tab->n; j++) {
+                tab->se_weights[j] = 1.0;
+            }
+            tab->devex_refcount = 0;
+        } else {
+            for (int j = 0; j < tab->n; j++) {
+                /* Skip entering (now basic) and already basic variables */
+                if (j == entering || j == leaving) continue;
+                if (tab->var_status[j] == RALPH_BASIC) continue;
+
+                /* Compute alpha_j = pivot_row * a_j */
+                double alpha_j = 0.0;
+                for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+                    alpha_j += pivot_row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+                }
+
+                /* Devex update: only increase weights, cap at 1e6 */
+                double new_weight = (alpha_j * alpha_j * gamma_e) / pivot_sq;
+                if (new_weight > 1e6) new_weight = 1e6;
+                if (new_weight > tab->se_weights[j]) {
+                    tab->se_weights[j] = new_weight;
+                }
             }
 
-            /* Devex update: only increase weights, cap at 1e6 */
-            double new_weight = (alpha_j * alpha_j * gamma_e) / pivot_sq;
-            if (new_weight > 1e6) new_weight = 1e6;
-            if (new_weight > tab->se_weights[j]) {
-                tab->se_weights[j] = new_weight;
-            }
+            /* Weight for leaving variable (now nonbasic) */
+            double leaving_weight = gamma_e / pivot_sq;
+            if (leaving_weight > 1e6) leaving_weight = 1e6;
+            if (leaving_weight < 1.0) leaving_weight = 1.0;
+            tab->se_weights[leaving] = leaving_weight;
         }
-
-        /* Weight for leaving variable (now nonbasic) */
-        double leaving_weight = gamma_e / pivot_sq;
-        if (leaving_weight > 1e6) leaving_weight = 1e6;
-        if (leaving_weight < 1.0) leaving_weight = 1.0;
-        tab->se_weights[leaving] = leaving_weight;
     }
     free(pivot_row);
 
@@ -1058,7 +1070,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->time_limit = RALPH_DEFAULT_TIME_LIMIT;
     solver->presolve = 1;  /* Enable presolve for performance */
     solver->scaling = 1;   /* Enable scaling for numerical stability */
-    solver->pricing_strategy = 2;  /* Devex pricing */
+    solver->pricing_strategy = 2;  /* Devex pricing (better than Dantzig) */
     solver->verbose = 0;
     solver->is_scaled = 0;
 
