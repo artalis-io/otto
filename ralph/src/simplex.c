@@ -783,6 +783,51 @@ int pricing_devex(SimplexTableau *tab, int *entering) {
     return (*entering >= 0) ? 0 : 1;
 }
 
+/* Partial pricing: scan variables in blocks, accept first good candidate.
+ *
+ * Instead of scanning all n variables for the best reduced cost (O(n) per iteration),
+ * we scan in blocks and accept the first variable with a sufficiently negative
+ * reduced cost. This trades optimality of pivot selection for faster iteration.
+ *
+ * The starting position cycles through the variables to ensure fairness.
+ */
+#define PARTIAL_PRICE_BLOCK 50       /* Variables per block */
+#define PARTIAL_PRICE_THRESHOLD 1e-6 /* Accept if |rc| > threshold */
+
+int pricing_partial(SimplexTableau *tab, int *entering) {
+    *entering = -1;
+
+    int n = tab->n;
+    int start = tab->partial_price_pos;
+
+    /* First pass: scan from current position looking for first eligible variable */
+    for (int i = 0; i < n; i++) {
+        int j = (start + i) % n;
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        double rc = tab->rc[j];
+        int eligible = 0;
+
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -PARTIAL_PRICE_THRESHOLD) {
+            eligible = 1;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > PARTIAL_PRICE_THRESHOLD) {
+            eligible = 1;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > PARTIAL_PRICE_THRESHOLD) {
+            eligible = 1;
+        }
+
+        if (eligible) {
+            /* Accept first eligible variable */
+            *entering = j;
+            /* Update starting position for next call (round-robin fairness) */
+            tab->partial_price_pos = (j + 1) % n;
+            return 0;
+        }
+    }
+
+    return 1;  /* Optimal - no eligible variable found */
+}
+
 /* ============================================================================
  * Ratio Test (Leaving Variable Selection)
  * ============================================================================ */
@@ -1245,6 +1290,8 @@ static int simplex_phase2(SimplexSolver *solver) {
             price_status = pricing_dantzig(tab, &entering);
         } else if (solver->pricing_strategy == 1) {
             price_status = pricing_steepest_edge(tab, &entering);
+        } else if (solver->pricing_strategy == 3) {
+            price_status = pricing_partial(tab, &entering);
         } else {
             price_status = pricing_devex(tab, &entering);
         }

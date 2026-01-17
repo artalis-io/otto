@@ -33,6 +33,7 @@ struct RalphModel {
     double mip_gap;
     int max_nodes;
     int method;  /* 0=primal simplex, 1=dual simplex, 2=auto */
+    int pricing; /* 0=Dantzig, 1=Steepest edge, 2=Devex (default), 3=Partial */
 
     /* Solution */
     RalphStatus status;
@@ -71,6 +72,7 @@ RalphModel* ralph_create(void) {
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
     model->method = 0;  /* Default: primal simplex */
+    model->pricing = 2; /* Default: Devex */
 
     model->status = RALPH_STATUS_UNKNOWN;
 
@@ -274,6 +276,7 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->time_limit = model->time_limit;
         model->lp_solver->verbose = model->verbose;
         model->lp_solver->presolve = 0;  /* Already done */
+        model->lp_solver->pricing_strategy = model->pricing;
 
         /* Solve using selected method */
         if (model->method == 1) {
@@ -424,6 +427,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (strcmp(name, "method") == 0 || strcmp(name, "Method") == 0) {
         /* 0=primal simplex, 1=dual simplex, 2=auto */
         model->method = value;
+    } else if (strcmp(name, "pricing") == 0 || strcmp(name, "Pricing") == 0) {
+        /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial */
+        model->pricing = value;
     } else {
         return -1;  /* Unknown parameter */
     }
