@@ -67,9 +67,8 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
     for (int j = 0; j < tab->n; j++) {
         if (tab->var_status[j] == RALPH_BASIC) continue;
 
-        /* Compute alpha_j = (B^{-1} * a_j)[leaving] = alpha' * a_j */
-        sparse_get_column(tab->A_ext, j, tab->work1);
-        double alpha_j = vec_dot(tab->m, tab->work2, tab->work1);
+        /* Compute alpha_j = (B^{-1} * a_j)[leaving] = alpha' * a_j using sparse dot */
+        double alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
 
         if (fabs(alpha_j) < RALPH_PIVOT_TOL) continue;
 
@@ -140,20 +139,23 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
 static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, double theta) {
     int leaving_var = tab->basis[leaving];
 
-    /* Compute entering column in basis representation */
-    sparse_get_column(tab->A_ext, entering, tab->work1);
-    lu_solve(tab->lu, tab->work1, tab->work3);  /* d = B^{-1} * a_entering */
+    /* Compute entering column in basis representation using sparse solve */
+    int col_nnz;
+    const int *col_idx;
+    const double *col_val;
+    sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
+    lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work3);  /* d = B^{-1} * a_entering */
 
     double pivot = tab->work3[leaving];
 
-    /* Update reduced costs */
+    /* Update reduced costs using sparse solves */
     double rc_leaving = tab->rc[entering] / pivot;
     for (int j = 0; j < tab->n; j++) {
         if (tab->var_status[j] == RALPH_BASIC) {
             tab->rc[j] = 0.0;
         } else if (j != entering) {
-            sparse_get_column(tab->A_ext, j, tab->work1);
-            lu_solve(tab->lu, tab->work1, tab->work2);
+            sparse_get_column_sparse(tab->A_ext, j, &col_nnz, &col_idx, &col_val);
+            lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);
             tab->rc[j] -= rc_leaving * tab->work2[leaving];
         }
     }

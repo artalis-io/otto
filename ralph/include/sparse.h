@@ -57,7 +57,10 @@ void sparse_matvec_transpose_add(const SparseMatrix *A, const double *x, double 
 /* Column operations */
 void sparse_get_column(const SparseMatrix *A, int col, double *dense);
 int sparse_get_column_nnz(const SparseMatrix *A, int col);
+void sparse_get_column_sparse(const SparseMatrix *A, int col,
+                              int *nnz, const int **rowidx, const double **values);
 void sparse_axpy_column(const SparseMatrix *A, int col, double alpha, double *y); /* y += alpha*A[:,col] */
+double sparse_dot_column(const SparseMatrix *A, int col, const double *y);       /* y'*A[:,col] */
 
 /* Row operations (less efficient in CSC) */
 double sparse_get_element(const SparseMatrix *A, int row, int col);
