@@ -392,16 +392,59 @@ apply_eta_forward           2.3%      2230
 - Reset weights to 1.0 every n iterations
 - Prevents unbounded weight growth
 
+### Commit 7484274: Method Parameter
+- Add `method` parameter for solver selection (0=primal, 1=dual, 2=auto)
+
+### Commit a916947: Dual Simplex Integration
+- Wire up dual simplex in solve path
+- Handle fresh solves by falling back to primal for Phase 1
+- Add auto method selection for all-<= constraints
+
+---
+
+## Method Selection (Primal vs Dual Simplex)
+
+The solver now supports method selection via `ralph_set_int_param(model, "method", value)`:
+
+| Value | Method | Description |
+|-------|--------|-------------|
+| 0 | Primal | Default. Uses primal simplex (Phase 1 + Phase 2) |
+| 1 | Dual | Uses dual simplex when applicable |
+| 2 | Auto | Selects dual for all-<= constraints, primal otherwise |
+
+### Current Behavior
+
+**Fresh solves:** Dual simplex falls back to primal simplex for initialization because:
+- Fresh solves require Phase 1 to find a basic feasible solution
+- The Big-M method (primal) is used for Phase 1
+- Dual simplex requires an existing tableau with reduced costs
+
+**Re-optimization:** Dual simplex is effective for:
+- Branch-and-bound warm starts (bound changes on existing basis)
+- Adding constraints to solved LP
+- Any case where we have an existing optimal basis
+
+### Iteration Count Comparison
+
+On fresh solves, all methods produce identical results because dual falls back to primal:
+```
+100x50:   primal=67,  dual=67,  auto=67
+200x100:  primal=69,  dual=69,  auto=69
+500x250:  primal=261, dual=261, auto=261
+```
+
 ---
 
 ## Future Improvements
 
 ### High Priority
 
-1. **Dual Simplex for Main Solve**
+1. **True Dual Phase 1**
+   - Currently uses Big-M (primal) for Phase 1
+   - Could use dual Phase 1 for all-<= problems:
+     - Start with slacks as basis (dual-feasible for max problems)
+     - Use dual pivots to achieve primal feasibility
    - Would likely reduce iteration count 2-3×
-   - Already implemented for MIP re-optimization
-   - Needs to be exposed as solver option
 
 2. **Better Initial Basis**
    - Implement crash procedure
@@ -436,6 +479,7 @@ apply_eta_forward           2.3%      2230
 | `presolve` | 0 | Enable presolve (disabled - adds overhead) |
 | `max_iterations` | 100000 | Iteration limit |
 | `time_limit` | 3600.0 | Time limit in seconds |
+| `method` | 0 | 0=primal, 1=dual, 2=auto |
 | `pricing_strategy` | 2 | 0=Dantzig, 1=Steepest Edge, 2=Devex |
 | `scaling` | 1 | Enable geometric mean scaling |
 
