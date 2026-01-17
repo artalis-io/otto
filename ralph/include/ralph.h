@@ -85,6 +85,9 @@ int ralph_get_solution(const RalphModel *model, double *x);
 int ralph_get_dual_solution(const RalphModel *model, double *y);
 int ralph_get_reduced_costs(const RalphModel *model, double *rc);
 
+/* Statistics */
+int ralph_get_iterations(const RalphModel *model);
+
 /* MIP-specific */
 double ralph_get_best_bound(const RalphModel *model);
 double ralph_get_mip_gap(const RalphModel *model);

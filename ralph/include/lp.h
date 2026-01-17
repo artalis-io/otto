@@ -130,9 +130,10 @@ typedef struct {
     double *work3;
     double *rhs;
 
-    /* Steepest edge weights */
+    /* Steepest edge / Devex weights */
     double *se_weights;     /* Steepest edge weights */
     int use_steepest_edge;
+    int devex_refcount;     /* Reference count for Devex weight resets */
 
     /* Statistics */
     int iterations;
