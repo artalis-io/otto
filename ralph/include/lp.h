@@ -197,6 +197,14 @@ void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
 int lu_needs_refactorization(const LUFactorization *lu);
 
+/* Sparse LU solves - exploit sparsity in RHS */
+void lu_solve_sparse(const LUFactorization *lu,
+                     int nnz_rhs, const int *rhs_idx, const double *rhs_val,
+                     double *solution);
+void lu_solve_transpose_sparse(const LUFactorization *lu,
+                               int nnz_rhs, const int *rhs_idx, const double *rhs_val,
+                               double *solution);
+
 /* Simplex tableau functions */
 SimplexTableau* tableau_create(LPModel *model);
 void tableau_free(SimplexTableau *tableau);

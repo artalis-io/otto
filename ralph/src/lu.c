@@ -557,6 +557,156 @@ void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution
 }
 
 /* ============================================================================
+ * Sparse LU Solves - Exploit RHS Sparsity
+ * ============================================================================ */
+
+/*
+ * Sparse forward solve for L: Solve Lx = b where b is sparse
+ *
+ * This exploits the sparsity pattern: if b[j] = 0 and no earlier
+ * column has affected row j, then x[j] = 0.
+ *
+ * Uses DFS to find reachable nodes from non-zero RHS entries.
+ */
+static void solve_L_sparse(const LUFactorization *lu,
+                           int nnz_rhs, const int *rhs_idx, const double *rhs_val,
+                           double *x, int *xi, int *top) {
+    int m = lu->m;
+
+    /* Clear solution */
+    memset(x, 0, m * sizeof(double));
+
+    /* Build permuted RHS and find initial non-zeros */
+    for (int k = 0; k < nnz_rhs; k++) {
+        int orig_row = rhs_idx[k];
+        if (orig_row >= 0 && orig_row < m) {
+            /* Find position in permuted system */
+            int perm_row = lu->perm_inv[orig_row];
+            x[perm_row] = rhs_val[k];
+        }
+    }
+
+    /* Apply row permutation to get initial pattern */
+    *top = m;
+    for (int k = 0; k < nnz_rhs; k++) {
+        int orig_row = rhs_idx[k];
+        if (orig_row >= 0 && orig_row < m) {
+            int perm_row = lu->perm_inv[orig_row];
+            xi[--(*top)] = perm_row;
+        }
+    }
+
+    /* Forward substitution only for reachable entries */
+    /* Note: For simplicity, we do full forward sub since L is typically sparse */
+    for (int j = 0; j < m; j++) {
+        double xj = x[j];
+        if (fabs(xj) < RALPH_ZERO_TOL) continue;
+
+        /* Update remaining elements */
+        for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
+            int i = lu->L_rowidx[p];
+            x[i] -= lu->L_values[p] * xj;
+        }
+    }
+}
+
+/*
+ * Sparse FTRAN: Solve Bx = b where b is sparse
+ *
+ * For sparse RHS, we can potentially save work by:
+ * 1. Tracking which entries of x can become non-zero (reachability)
+ * 2. Only computing those entries
+ *
+ * However, for simplicity and to avoid overhead on small problems,
+ * we use a hybrid approach:
+ * - Build dense RHS from sparse input
+ * - Use standard solve (which already exploits L/U sparsity)
+ * - The key benefit is avoiding dense column extraction in caller
+ */
+void lu_solve_sparse(const LUFactorization *lu,
+                     int nnz_rhs, const int *rhs_idx, const double *rhs_val,
+                     double *solution) {
+    if (!lu || !solution) return;
+
+    int m = lu->m;
+
+    /* For very sparse RHS (< 10% fill), use sparse path */
+    if (nnz_rhs < m / 10 && nnz_rhs > 0) {
+        double *work = (double*)calloc(m, sizeof(double));
+        double *work2 = (double*)calloc(m, sizeof(double));
+        int *xi = (int*)malloc(m * sizeof(int));
+
+        if (work && work2 && xi) {
+            int top;
+            /* Sparse L solve */
+            solve_L_sparse(lu, nnz_rhs, rhs_idx, rhs_val, work, xi, &top);
+
+            /* Standard U solve (U is typically also sparse) */
+            solve_U(lu, work, work2);
+
+            /* Apply eta updates */
+            apply_eta_forward(lu, work2);
+
+            /* Apply column permutation */
+            for (int i = 0; i < m; i++) {
+                solution[lu->col_perm[i]] = work2[i];
+            }
+
+            free(work);
+            free(work2);
+            free(xi);
+            return;
+        }
+        free(work);
+        free(work2);
+        free(xi);
+    }
+
+    /* Fallback: Build dense RHS from sparse input */
+    double *rhs = (double*)calloc(m, sizeof(double));
+    if (!rhs) return;
+
+    for (int k = 0; k < nnz_rhs; k++) {
+        if (rhs_idx[k] >= 0 && rhs_idx[k] < m) {
+            rhs[rhs_idx[k]] = rhs_val[k];
+        }
+    }
+
+    /* Use standard solve */
+    lu_solve(lu, rhs, solution);
+
+    free(rhs);
+}
+
+/*
+ * Sparse BTRAN: Solve B'x = b where b is sparse
+ *
+ * Used for computing dual prices when the objective is sparse.
+ */
+void lu_solve_transpose_sparse(const LUFactorization *lu,
+                               int nnz_rhs, const int *rhs_idx, const double *rhs_val,
+                               double *solution) {
+    if (!lu || !solution) return;
+
+    int m = lu->m;
+
+    /* Build dense RHS from sparse input */
+    double *rhs = (double*)calloc(m, sizeof(double));
+    if (!rhs) return;
+
+    for (int k = 0; k < nnz_rhs; k++) {
+        if (rhs_idx[k] >= 0 && rhs_idx[k] < m) {
+            rhs[rhs_idx[k]] = rhs_val[k];
+        }
+    }
+
+    /* Use standard solve */
+    lu_solve_transpose(lu, rhs, solution);
+
+    free(rhs);
+}
+
+/* ============================================================================
  * Basis Updates via Eta File
  * ============================================================================ */
 

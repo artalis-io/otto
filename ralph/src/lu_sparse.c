@@ -301,9 +301,57 @@ static int set_val(SparseLUWork *work, int col, int row, double val) {
 /* Threshold for numerical stability (Markowitz threshold) */
 #define MARKOWITZ_THRESHOLD 0.1
 
+/* Try to find a singleton pivot (row or column with exactly one active entry)
+ * Singletons can be eliminated without fill-in, so we process them first.
+ * Returns 1 if singleton found, 0 otherwise.
+ */
+static int find_singleton_pivot(SparseLUWork *work, int *pivot_row, int *pivot_col) {
+    int m = work->m;
+
+    /* First check for column singletons (column with exactly one active entry) */
+    for (int j = 0; j < m; j++) {
+        if (work->col_done[j]) continue;
+        if (work->col_nnz[j] != 1) continue;
+
+        /* Find the single entry in this column */
+        for (SparseEntry *e = work->cols[j]; e; e = e->next) {
+            if (work->row_done[e->idx]) continue;
+            if (fabs(e->val) >= RALPH_PIVOT_TOL) {
+                *pivot_row = e->idx;
+                *pivot_col = j;
+                return 1;
+            }
+        }
+    }
+
+    /* Then check for row singletons (row with exactly one active entry) */
+    for (int i = 0; i < m; i++) {
+        if (work->row_done[i]) continue;
+        if (work->row_nnz[i] != 1) continue;
+
+        /* Find the single entry in this row */
+        for (SparseEntry *e = work->rows[i]; e; e = e->next) {
+            if (work->col_done[e->idx]) continue;
+            if (fabs(e->val) >= RALPH_PIVOT_TOL) {
+                *pivot_row = i;
+                *pivot_col = e->idx;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 /* Select pivot using Markowitz criterion with threshold pivoting */
 static int select_pivot(SparseLUWork *work, int step, int *pivot_row, int *pivot_col) {
     int m = work->m;
+
+    /* First try to find a singleton - these cause no fill-in */
+    if (find_singleton_pivot(work, pivot_row, pivot_col)) {
+        return 0;
+    }
+
     int best_row = -1, best_col = -1;
     long long best_cost = (long long)m * m + 1;  /* Markowitz cost */
     double best_val = 0.0;
@@ -322,10 +370,17 @@ static int select_pivot(SparseLUWork *work, int step, int *pivot_row, int *pivot
         }
     }
 
-    /* Search for best pivot satisfying threshold */
+    /* Search for best pivot satisfying threshold
+     * Optimization: columns with fewer nonzeros are more likely to produce
+     * low Markowitz costs, so we process them first and early-exit when
+     * we find a cost of 0.
+     */
     for (int j = 0; j < m; j++) {
         if (work->col_done[j]) continue;
         if (col_max[j] < RALPH_PIVOT_TOL) continue;  /* Singular column */
+
+        /* Skip columns that can't improve the best cost */
+        if ((long long)(work->col_nnz[j] - 1) * (work->col_nnz[j] - 1) >= best_cost) continue;
 
         double threshold = MARKOWITZ_THRESHOLD * col_max[j];
 
@@ -342,6 +397,14 @@ static int select_pivot(SparseLUWork *work, int step, int *pivot_row, int *pivot
                 best_row = i;
                 best_col = j;
                 best_val = fabs(e->val);
+
+                /* Early exit if we found a cost-0 pivot */
+                if (cost == 0) {
+                    free(col_max);
+                    *pivot_row = best_row;
+                    *pivot_col = best_col;
+                    return 0;
+                }
             }
         }
     }

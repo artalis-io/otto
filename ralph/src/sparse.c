@@ -285,10 +285,26 @@ int sparse_get_column_nnz(const SparseMatrix *A, int col) {
     return A->colptr[col + 1] - A->colptr[col];
 }
 
+void sparse_get_column_sparse(const SparseMatrix *A, int col,
+                              int *nnz, const int **rowidx, const double **values) {
+    int start = A->colptr[col];
+    *nnz = A->colptr[col + 1] - start;
+    *rowidx = &A->rowidx[start];
+    *values = &A->values[start];
+}
+
 void sparse_axpy_column(const SparseMatrix *A, int col, double alpha, double *y) {
     for (int p = A->colptr[col]; p < A->colptr[col + 1]; p++) {
         y[A->rowidx[p]] += alpha * A->values[p];
     }
+}
+
+double sparse_dot_column(const SparseMatrix *A, int col, const double *y) {
+    double result = 0.0;
+    for (int p = A->colptr[col]; p < A->colptr[col + 1]; p++) {
+        result += A->values[p] * y[A->rowidx[p]];
+    }
+    return result;
 }
 
 /* ============================================================================
