@@ -43,6 +43,9 @@ struct RalphModel {
     /* MIP-specific */
     double best_bound;
     int node_count;
+
+    /* Statistics */
+    int iteration_count;
 };
 
 /* ============================================================================
@@ -274,6 +277,7 @@ int ralph_optimize(RalphModel *model) {
         simplex_solve(model->lp_solver);
 
         model->status = model->lp_solver->status;
+        model->iteration_count = model->lp_solver->iterations;
 
         if (model->status == RALPH_STATUS_OPTIMAL) {
             model->obj_value = model->lp_solver->obj_value;
@@ -374,6 +378,10 @@ double ralph_get_mip_gap(const RalphModel *model) {
 
 int ralph_get_node_count(const RalphModel *model) {
     return model ? model->node_count : 0;
+}
+
+int ralph_get_iterations(const RalphModel *model) {
+    return model ? model->iteration_count : 0;
 }
 
 /* ============================================================================

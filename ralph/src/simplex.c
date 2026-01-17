@@ -431,11 +431,12 @@ SimplexTableau* tableau_create(LPModel *model) {
         tab->x[bv] = val;
     }
 
-    /* Initialize steepest edge weights */
+    /* Initialize steepest edge / Devex weights */
     for (int j = 0; j < tab->n; j++) {
         tab->se_weights[j] = 1.0;
     }
     tab->use_steepest_edge = 1;
+    tab->devex_refcount = 0;
 
     /* Create LU factorization */
     tab->lu = lu_create(tab->m);
@@ -747,6 +748,41 @@ int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
     return (*entering >= 0) ? 0 : 1;
 }
 
+int pricing_devex(SimplexTableau *tab, int *entering) {
+    /* Devex pricing: max |rc_j|² / gamma_j
+     *
+     * Uses approximate steepest edge weights with periodic reset.
+     * Reference: Harris, "Pivot Selection Methods of the Devex LP Code", 1973
+     */
+    double best_ratio = RALPH_OPT_TOL * RALPH_OPT_TOL;  /* Squared tolerance */
+    *entering = -1;
+
+    for (int j = 0; j < tab->n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        double rc = tab->rc[j];
+        double weight = tab->se_weights[j];
+        if (weight < 1.0) weight = 1.0;  /* Devex weights are always >= 1 */
+
+        double ratio = 0.0;
+
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            ratio = (rc * rc) / weight;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            ratio = (rc * rc) / weight;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) {
+            ratio = (rc * rc) / weight;
+        }
+
+        if (ratio > best_ratio) {
+            best_ratio = ratio;
+            *entering = j;
+        }
+    }
+
+    return (*entering >= 0) ? 0 : 1;
+}
+
 /* ============================================================================
  * Ratio Test (Leaving Variable Selection)
  * ============================================================================ */
@@ -981,8 +1017,9 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
                         alpha_j += tab->work3[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
                     }
 
-                    /* Devex update: only increase weights */
+                    /* Devex update: only increase weights, cap at 1e6 */
                     double new_weight = (alpha_j * alpha_j * gamma_e) / pivot_sq;
+                    if (new_weight > 1e6) new_weight = 1e6;  /* Cap weight */
                     if (new_weight > tab->se_weights[j]) {
                         tab->se_weights[j] = new_weight;
                     }
@@ -990,9 +1027,12 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
             }
         }
 
-        /* Weight for leaving variable */
-        tab->se_weights[leaving] = fabs(pivot_sq) > RALPH_ZERO_TOL ?
-                                   gamma_e / pivot_sq : 1.0;
+        /* Weight for leaving variable (now nonbasic), capped */
+        double leaving_weight = fabs(pivot_sq) > RALPH_ZERO_TOL ?
+                                gamma_e / pivot_sq : 1.0;
+        if (leaving_weight > 1e6) leaving_weight = 1e6;
+        if (leaving_weight < 1.0) leaving_weight = 1.0;
+        tab->se_weights[leaving] = leaving_weight;
     }
 
     return 0;
@@ -1016,7 +1056,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->time_limit = RALPH_DEFAULT_TIME_LIMIT;
     solver->presolve = 1;  /* Enable presolve for performance */
     solver->scaling = 1;   /* Enable scaling for numerical stability */
-    solver->pricing_strategy = 0;  /* Dantzig (steepest edge has weight explosion bug) */
+    solver->pricing_strategy = 0;  /* Dantzig (Devex needs debugging) */
     solver->verbose = 0;
     solver->is_scaled = 0;
 
@@ -1189,8 +1229,10 @@ static int simplex_phase2(SimplexSolver *solver) {
             price_status = pricing_bland(tab, &entering);
         } else if (solver->pricing_strategy == 0) {
             price_status = pricing_dantzig(tab, &entering);
-        } else {
+        } else if (solver->pricing_strategy == 1) {
             price_status = pricing_steepest_edge(tab, &entering);
+        } else {
+            price_status = pricing_devex(tab, &entering);
         }
 
         if (price_status != 0) {
