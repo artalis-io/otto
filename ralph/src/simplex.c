@@ -974,66 +974,68 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         tab->x[leaving] = tab->ub_ext[leaving];
     }
 
+    /* Compute Devex pivot row BEFORE LU update (using old basis) */
+    double *pivot_row = NULL;
+    double pivot = tab->work2[leaving_pos];
+    double pivot_sq = pivot * pivot;
+    double gamma_e = tab->se_weights[entering];
+
+    if (tab->use_steepest_edge && fabs(pivot_sq) > RALPH_ZERO_TOL) {
+        /* Compute pivot row: e_r^T * B^{-1}
+         * This is used to compute alpha_j = pivot_row * a_j for each nonbasic j
+         */
+        pivot_row = (double*)malloc(tab->m * sizeof(double));
+        if (pivot_row) {
+            vec_set_zero(tab->work1, tab->m);
+            tab->work1[leaving_pos] = 1.0;
+            lu_solve_transpose(tab->lu, tab->work1, pivot_row);
+        }
+    }
+
     /* Update LU factorization */
     sparse_get_column(tab->A_ext, entering, tab->work1);
     if (lu_update(tab->lu, leaving_pos, tab->work1) != 0) {
         /* Update failed, refactorize */
         if (tableau_refactorize(tab) != 0) {
+            free(pivot_row);
             return -1;
         }
     }
 
     /* Update Devex pricing weights
-     * Devex is an approximation to steepest edge that only requires
-     * the pivot column in basis representation (already in work2).
-     *
      * Reference: Harris, "Pivot Selection Methods of the Devex LP Code", 1973
      *
      * For each nonbasic variable j:
      *   gamma_j = max(gamma_j, (alpha_j² * gamma_e) / pivot²)
-     * where alpha_j is the j-th component of B^{-1} * a_j
-     *
-     * We approximate alpha_j using the pivot row of the tableau.
+     * where alpha_j is the pivot row entry for column j
      */
-    if (tab->use_steepest_edge) {
-        double pivot = tab->work2[leaving_pos];
-        double pivot_sq = pivot * pivot;
-        double gamma_e = tab->se_weights[entering];
+    if (tab->use_steepest_edge && pivot_row) {
+        for (int j = 0; j < tab->n; j++) {
+            /* Skip entering (now basic) and already basic variables */
+            if (j == entering || j == leaving) continue;
+            if (tab->var_status[j] == RALPH_BASIC) continue;
 
-        if (fabs(pivot_sq) > RALPH_ZERO_TOL) {
-            /* Compute pivot row for Devex update: row = e_r^T * B^{-1} * A
-             * This is the leaving_pos-th row of B^{-1} * A
-             * We only need it for nonbasic variables
-             */
-            vec_set_zero(tab->work1, tab->m);
-            tab->work1[leaving_pos] = 1.0;
-            lu_solve_transpose(tab->lu, tab->work1, tab->work3);  /* work3 = (B^{-T} * e_r) */
+            /* Compute alpha_j = pivot_row * a_j */
+            double alpha_j = 0.0;
+            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+                alpha_j += pivot_row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+            }
 
-            for (int j = 0; j < tab->n; j++) {
-                if (j != entering && tab->var_status[j] != RALPH_BASIC) {
-                    /* Compute alpha_j = pivot_row * a_j */
-                    double alpha_j = 0.0;
-                    for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
-                        alpha_j += tab->work3[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
-                    }
-
-                    /* Devex update: only increase weights, cap at 1e6 */
-                    double new_weight = (alpha_j * alpha_j * gamma_e) / pivot_sq;
-                    if (new_weight > 1e6) new_weight = 1e6;  /* Cap weight */
-                    if (new_weight > tab->se_weights[j]) {
-                        tab->se_weights[j] = new_weight;
-                    }
-                }
+            /* Devex update: only increase weights, cap at 1e6 */
+            double new_weight = (alpha_j * alpha_j * gamma_e) / pivot_sq;
+            if (new_weight > 1e6) new_weight = 1e6;
+            if (new_weight > tab->se_weights[j]) {
+                tab->se_weights[j] = new_weight;
             }
         }
 
-        /* Weight for leaving variable (now nonbasic), capped */
-        double leaving_weight = fabs(pivot_sq) > RALPH_ZERO_TOL ?
-                                gamma_e / pivot_sq : 1.0;
+        /* Weight for leaving variable (now nonbasic) */
+        double leaving_weight = gamma_e / pivot_sq;
         if (leaving_weight > 1e6) leaving_weight = 1e6;
         if (leaving_weight < 1.0) leaving_weight = 1.0;
         tab->se_weights[leaving] = leaving_weight;
     }
+    free(pivot_row);
 
     return 0;
 }
@@ -1056,7 +1058,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->time_limit = RALPH_DEFAULT_TIME_LIMIT;
     solver->presolve = 1;  /* Enable presolve for performance */
     solver->scaling = 1;   /* Enable scaling for numerical stability */
-    solver->pricing_strategy = 0;  /* Dantzig (Devex needs debugging) */
+    solver->pricing_strategy = 2;  /* Devex pricing */
     solver->verbose = 0;
     solver->is_scaled = 0;
 
