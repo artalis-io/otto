@@ -277,8 +277,8 @@ int ralph_optimize(RalphModel *model) {
 
         /* Solve using selected method */
         if (model->method == 1) {
-            /* Dual simplex */
-            dual_simplex_solve(model->lp_solver);
+            /* Dual simplex - true dual phase 1 */
+            dual_simplex_solve_from_scratch(model->lp_solver);
         } else if (model->method == 2) {
             /* Auto: use dual for all-<= constraints, primal otherwise */
             int use_dual = 1;
@@ -289,7 +289,7 @@ int ralph_optimize(RalphModel *model) {
                 }
             }
             if (use_dual) {
-                dual_simplex_solve(model->lp_solver);
+                dual_simplex_solve_from_scratch(model->lp_solver);
             } else {
                 simplex_solve(model->lp_solver);
             }
