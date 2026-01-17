@@ -2,6 +2,7 @@
  * Ralph - Sparse LU Factorization Implementation
  *
  * Implements sparse LU factorization with:
+ * - AMD (Approximate Minimum Degree) column ordering
  * - Markowitz pivot selection for fill-in reduction
  * - Threshold pivoting for numerical stability
  * - Dynamic sparse storage
@@ -12,6 +13,239 @@
 #include <stdio.h>
 #include <math.h>
 #include "lp.h"
+
+/* ============================================================================
+ * AMD (Approximate Minimum Degree) Ordering
+ * ============================================================================
+ *
+ * Computes a fill-reducing column permutation for the matrix.
+ * Uses a simplified AMD that works on column structure directly.
+ *
+ * For a matrix A, we want to minimize fill-in in the LU factors.
+ * AMD orders columns by approximate "degree" in the elimination graph,
+ * where degree approximates the fill-in caused by eliminating that column.
+ */
+
+typedef struct {
+    int *head;      /* head[d] = first column with degree d, or -1 */
+    int *next;      /* next[j] = next column with same degree as j */
+    int *prev;      /* prev[j] = prev column with same degree as j */
+    int *degree;    /* degree[j] = current degree of column j */
+    int min_degree; /* minimum degree in the structure */
+    int n;          /* dimension */
+} AMDWorkspace;
+
+static AMDWorkspace* amd_workspace_create(int n) {
+    AMDWorkspace *amd = (AMDWorkspace*)malloc(sizeof(AMDWorkspace));
+    if (!amd) return NULL;
+
+    amd->n = n;
+    amd->head = (int*)malloc((n + 1) * sizeof(int));
+    amd->next = (int*)malloc(n * sizeof(int));
+    amd->prev = (int*)malloc(n * sizeof(int));
+    amd->degree = (int*)malloc(n * sizeof(int));
+
+    if (!amd->head || !amd->next || !amd->prev || !amd->degree) {
+        free(amd->head);
+        free(amd->next);
+        free(amd->prev);
+        free(amd->degree);
+        free(amd);
+        return NULL;
+    }
+
+    /* Initialize degree lists */
+    for (int d = 0; d <= n; d++) {
+        amd->head[d] = -1;
+    }
+    amd->min_degree = n;
+
+    return amd;
+}
+
+static void amd_workspace_free(AMDWorkspace *amd) {
+    if (!amd) return;
+    free(amd->head);
+    free(amd->next);
+    free(amd->prev);
+    free(amd->degree);
+    free(amd);
+}
+
+/* Add column j with given degree to the degree list */
+static void amd_add_to_degree_list(AMDWorkspace *amd, int j, int d) {
+    if (d > amd->n) d = amd->n;
+    amd->degree[j] = d;
+    amd->next[j] = amd->head[d];
+    amd->prev[j] = -1;
+    if (amd->head[d] >= 0) {
+        amd->prev[amd->head[d]] = j;
+    }
+    amd->head[d] = j;
+    if (d < amd->min_degree) {
+        amd->min_degree = d;
+    }
+}
+
+/* Remove column j from its degree list */
+static void amd_remove_from_degree_list(AMDWorkspace *amd, int j) {
+    int d = amd->degree[j];
+    if (amd->prev[j] >= 0) {
+        amd->next[amd->prev[j]] = amd->next[j];
+    } else {
+        amd->head[d] = amd->next[j];
+    }
+    if (amd->next[j] >= 0) {
+        amd->prev[amd->next[j]] = amd->prev[j];
+    }
+}
+
+/* Get and remove the column with minimum degree */
+static int amd_get_min_degree_col(AMDWorkspace *amd) {
+    while (amd->min_degree <= amd->n && amd->head[amd->min_degree] < 0) {
+        amd->min_degree++;
+    }
+    if (amd->min_degree > amd->n) return -1;
+
+    int j = amd->head[amd->min_degree];
+    amd_remove_from_degree_list(amd, j);
+    return j;
+}
+
+/*
+ * Compute AMD ordering for matrix B.
+ *
+ * Returns a column permutation array where perm[k] = j means
+ * column j should be the k-th column in the reordered matrix.
+ *
+ * This is a simplified AMD that:
+ * 1. Builds the column intersection graph (columns share rows)
+ * 2. Uses minimum degree heuristic with degree updates
+ */
+static int* compute_amd_ordering(const SparseMatrix *B) {
+    int n = B->ncols;
+    int m = B->nrows;
+
+    int *perm = (int*)malloc(n * sizeof(int));
+    int *eliminated = (int*)calloc(n, sizeof(int));
+    if (!perm || !eliminated) {
+        free(perm);
+        free(eliminated);
+        return NULL;
+    }
+
+    /* Build row-to-column adjacency for degree computation
+     * For each row, store list of columns that have non-zeros in that row
+     */
+    int *row_ptr = (int*)calloc(m + 1, sizeof(int));
+    int *row_cols = (int*)malloc(B->nnz * sizeof(int));
+    if (!row_ptr || !row_cols) {
+        free(perm);
+        free(eliminated);
+        free(row_ptr);
+        free(row_cols);
+        return NULL;
+    }
+
+    /* Count columns per row */
+    for (int j = 0; j < n; j++) {
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            row_ptr[B->rowidx[p] + 1]++;
+        }
+    }
+
+    /* Cumulative sum */
+    for (int i = 0; i < m; i++) {
+        row_ptr[i + 1] += row_ptr[i];
+    }
+
+    /* Fill row_cols */
+    int *row_count = (int*)calloc(m, sizeof(int));
+    if (!row_count) {
+        free(perm);
+        free(eliminated);
+        free(row_ptr);
+        free(row_cols);
+        return NULL;
+    }
+
+    for (int j = 0; j < n; j++) {
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            int i = B->rowidx[p];
+            row_cols[row_ptr[i] + row_count[i]++] = j;
+        }
+    }
+    free(row_count);
+
+    /* Initialize AMD workspace with column degrees
+     * Degree of column j = number of other columns sharing rows with j
+     * Approximated as: sum over rows i in col j of (nnz in row i - 1)
+     */
+    AMDWorkspace *amd = amd_workspace_create(n);
+    if (!amd) {
+        free(perm);
+        free(eliminated);
+        free(row_ptr);
+        free(row_cols);
+        return NULL;
+    }
+
+    /* Compute initial degrees (external degree in elimination graph) */
+    for (int j = 0; j < n; j++) {
+        int degree = 0;
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            int row = B->rowidx[p];
+            /* Add number of other columns in this row */
+            degree += (row_ptr[row + 1] - row_ptr[row] - 1);
+        }
+        /* Clamp to reasonable range */
+        if (degree < 1) degree = 1;
+        if (degree > n - 1) degree = n - 1;
+        amd_add_to_degree_list(amd, j, degree);
+    }
+
+    /* Main AMD loop: repeatedly select minimum degree column */
+    for (int k = 0; k < n; k++) {
+        int j = amd_get_min_degree_col(amd);
+        if (j < 0) {
+            /* Find any remaining column */
+            for (int jj = 0; jj < n; jj++) {
+                if (!eliminated[jj]) {
+                    j = jj;
+                    break;
+                }
+            }
+        }
+
+        perm[k] = j;
+        eliminated[j] = 1;
+
+        /* Update degrees of neighbors (columns sharing rows with j)
+         * This is the "approximate" part - we just decrement degrees
+         * without fully tracking element absorption
+         */
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            int row = B->rowidx[p];
+            for (int q = row_ptr[row]; q < row_ptr[row + 1]; q++) {
+                int neighbor = row_cols[q];
+                if (neighbor != j && !eliminated[neighbor]) {
+                    int old_degree = amd->degree[neighbor];
+                    if (old_degree > 1) {
+                        amd_remove_from_degree_list(amd, neighbor);
+                        amd_add_to_degree_list(amd, neighbor, old_degree - 1);
+                    }
+                }
+            }
+        }
+    }
+
+    amd_workspace_free(amd);
+    free(eliminated);
+    free(row_ptr);
+    free(row_cols);
+
+    return perm;
+}
 
 /* ============================================================================
  * Sparse Working Storage for LU Factorization
@@ -424,15 +658,72 @@ static int select_pivot(SparseLUWork *work, int step, int *pivot_row, int *pivot
  * Sparse LU Factorization
  * ============================================================================ */
 
+/* Select row pivot within a fixed column (threshold pivoting) */
+static int select_row_pivot(SparseLUWork *work, int col, int *pivot_row) {
+    /* Find maximum absolute value in active part of column */
+    double col_max = 0.0;
+    for (SparseEntry *e = work->cols[col]; e; e = e->next) {
+        if (work->row_done[e->idx]) continue;
+        if (fabs(e->val) > col_max) {
+            col_max = fabs(e->val);
+        }
+    }
+
+    if (col_max < RALPH_PIVOT_TOL) {
+        return -1;  /* Singular column */
+    }
+
+    double threshold = MARKOWITZ_THRESHOLD * col_max;
+
+    /* Among entries meeting threshold, prefer smaller row count (less fill-in) */
+    int best_row = -1;
+    int best_nnz = work->m + 1;
+    double best_val = 0.0;
+
+    for (SparseEntry *e = work->cols[col]; e; e = e->next) {
+        int i = e->idx;
+        if (work->row_done[i]) continue;
+        if (fabs(e->val) < threshold) continue;
+
+        int row_nnz = work->row_nnz[i];
+        if (row_nnz < best_nnz || (row_nnz == best_nnz && fabs(e->val) > best_val)) {
+            best_row = i;
+            best_nnz = row_nnz;
+            best_val = fabs(e->val);
+        }
+    }
+
+    if (best_row < 0) return -1;
+
+    *pivot_row = best_row;
+    return 0;
+}
+
 int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     if (!lu || !B) return -1;
     if (B->nrows != B->ncols || B->nrows != lu->m) return -1;
 
     int m = lu->m;
 
+    /* Compute AMD column ordering for fill reduction */
+    int use_amd = 0;  /* TODO: enable when AMD is improved */
+    int *amd_order = NULL;
+    if (use_amd) {
+        amd_order = compute_amd_ordering(B);
+    }
+    if (!amd_order) {
+        /* Fallback to natural order if AMD fails or disabled */
+        amd_order = (int*)malloc(m * sizeof(int));
+        if (!amd_order) return -1;
+        for (int j = 0; j < m; j++) amd_order[j] = j;
+    }
+
     /* Create working storage */
     SparseLUWork *work = sparse_work_create(m, B->nnz);
-    if (!work) return -1;
+    if (!work) {
+        free(amd_order);
+        return -1;
+    }
 
     /* Copy matrix into working storage (both column and row lists) */
     for (int j = 0; j < m; j++) {
@@ -442,6 +733,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
             if (add_to_col(work, j, i, val) < 0 ||
                 add_to_row(work, i, j, val) < 0) {
                 sparse_work_free(work);
+                free(amd_order);
                 return -1;
             }
         }
@@ -462,18 +754,53 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         free(L_i); free(L_j); free(L_v);
         free(U_i); free(U_j); free(U_v);
         sparse_work_free(work);
+        free(amd_order);
         return -1;
     }
 
     /* Main elimination loop */
     for (int step = 0; step < m; step++) {
-        /* Select pivot */
         int pivot_row, pivot_col;
-        if (select_pivot(work, step, &pivot_row, &pivot_col) < 0) {
-            free(L_i); free(L_j); free(L_v);
-            free(U_i); free(U_j); free(U_v);
-            sparse_work_free(work);
-            return -1;  /* Singular */
+
+        if (use_amd) {
+            /* Use AMD column order with row selection */
+            pivot_col = amd_order[step];
+            if (work->col_done[pivot_col]) {
+                for (int j = 0; j < m; j++) {
+                    if (!work->col_done[j]) {
+                        pivot_col = j;
+                        break;
+                    }
+                }
+            }
+            if (select_row_pivot(work, pivot_col, &pivot_row) < 0) {
+                int found = 0;
+                for (int jj = 0; jj < m; jj++) {
+                    if (!work->col_done[jj] && jj != pivot_col) {
+                        if (select_row_pivot(work, jj, &pivot_row) == 0) {
+                            pivot_col = jj;
+                            found = 1;
+                            break;
+                        }
+                    }
+                }
+                if (!found) {
+                    free(L_i); free(L_j); free(L_v);
+                    free(U_i); free(U_j); free(U_v);
+                    sparse_work_free(work);
+                    free(amd_order);
+                    return -1;  /* Singular */
+                }
+            }
+        } else {
+            /* Full Markowitz pivot selection (both row and column) */
+            if (select_pivot(work, step, &pivot_row, &pivot_col) < 0) {
+                free(L_i); free(L_j); free(L_v);
+                free(U_i); free(U_j); free(U_v);
+                sparse_work_free(work);
+                free(amd_order);
+                return -1;  /* Singular */
+            }
         }
 
         double pivot_val = get_col_val(work, pivot_col, pivot_row);
@@ -682,6 +1009,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     free(L_i); free(L_j); free(L_v);
     free(U_i); free(U_j); free(U_v);
     sparse_work_free(work);
+    free(amd_order);
 
     return 0;
 }
