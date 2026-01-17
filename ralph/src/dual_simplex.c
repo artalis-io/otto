@@ -6,6 +6,7 @@
  * - Re-optimization after adding cuts
  * - Re-optimization after fixing variables (in MIP)
  * - Starting from dual feasible basis
+ * - Fresh solves on problems where dual start is beneficial
  */
 
 #include <stdlib.h>
@@ -14,6 +15,13 @@
 #include <math.h>
 #include <time.h>
 #include "lp.h"
+
+/* Forward declarations */
+SimplexTableau* tableau_create(LPModel *model);
+int tableau_refactorize(SimplexTableau *tab);
+int tableau_compute_solution(SimplexTableau *tab);
+int tableau_compute_reduced_costs(SimplexTableau *tab);
+void tableau_free(SimplexTableau *tab);
 
 /* ============================================================================
  * Dual Ratio Test
@@ -56,36 +64,38 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
         double rc_j = tab->rc[j];
         double ratio = RALPH_INFINITY;
 
-        /* Dual ratio test depends on direction and variable bound status */
+        /* Dual ratio test depends on direction and variable bound status.
+         *
+         * For internal minimization, dual feasibility requires:
+         * - At lower bound: rc >= 0
+         * - At upper bound: rc <= 0
+         *
+         * After pivot, the leaving variable's new rc = -rc_entering / pivot.
+         * For dual feasibility at the leaving var's new bound, we need this >= 0
+         * (since leaving goes to lower when below its bound).
+         *
+         * The ratio = -rc_j / alpha_j represents the new rc for the leaving variable.
+         * We select the minimum non-negative ratio.
+         */
         if (dir > 0) {
-            /* Leaving variable needs to increase */
-            /* x_B[leaving] = ... - alpha_j * delta, so need alpha_j > 0 for increase */
-            /* Wait, the formula is x_B = B^{-1}b - B^{-1}N x_N */
-            /* When x_j increases by delta, x_B[k] changes by -alpha_k[j] * delta */
-
-            if (alpha_j > RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                /* Increasing x_j from lower bound, reduces x_B[leaving] */
-                /* We need x_B[leaving] to increase, so this is wrong direction */
-            } else if (alpha_j < -RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                /* Increasing x_j increases x_B[leaving] - good! */
-                /* Maintain dual feasibility: rc_j >= 0 for x_j at lower bound */
-                /* After pivot: rc_j' = rc_j - (rc_leaving / alpha_leaving) * alpha_j */
-                /* For j at lower bound, need rc_j' >= 0 */
-                ratio = -rc_j / alpha_j;  /* Should be non-negative for valid pivot */
+            /* Leaving variable needs to increase (currently below lower bound) */
+            if (alpha_j < -RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+                /* Increasing x_j from lower bound increases x_B[leaving] - good! */
+                /* x_j at lower has rc_j >= 0, alpha_j < 0, so -rc_j/alpha_j >= 0 */
+                ratio = -rc_j / alpha_j;
             } else if (alpha_j > RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_UPPER) {
                 /* Decreasing x_j from upper bound increases x_B[leaving] - good! */
-                ratio = rc_j / alpha_j;
-            } else if (alpha_j < -RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                /* Wrong direction */
+                /* x_j at upper has rc_j <= 0, alpha_j > 0, so -rc_j/alpha_j >= 0 */
+                ratio = -rc_j / alpha_j;
             }
         } else {
-            /* Leaving variable needs to decrease */
+            /* Leaving variable needs to decrease (currently above upper bound) */
             if (alpha_j > RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                /* Increasing x_j decreases x_B[leaving] - good! */
+                /* Increasing x_j from lower bound decreases x_B[leaving] - good! */
                 ratio = -rc_j / alpha_j;
             } else if (alpha_j < -RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                /* Decreasing x_j decreases x_B[leaving] - good! */
-                ratio = rc_j / alpha_j;
+                /* Decreasing x_j from upper bound decreases x_B[leaving] - good! */
+                ratio = -rc_j / alpha_j;
             }
         }
 
@@ -134,13 +144,18 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
     tab->rc[leaving_var] = -rc_leaving;
     tab->rc[entering] = 0.0;
 
-    /* Determine step size from infeasibility */
+    /* Determine step size from infeasibility.
+     * The basic variable update is: x_B = x_B - delta * d
+     * where d = B^{-1} * a_entering.
+     * For the leaving var: x_leave_new = x_leave - delta * pivot
+     * We want x_leave_new = bound, so delta = (x_leave - bound) / pivot
+     */
     double x_leave = tab->x[leaving_var];
     double step;
     if (x_leave < tab->lb_ext[leaving_var]) {
-        step = (tab->lb_ext[leaving_var] - x_leave) / pivot;
+        step = (x_leave - tab->lb_ext[leaving_var]) / pivot;
     } else {
-        step = (tab->ub_ext[leaving_var] - x_leave) / pivot;
+        step = (x_leave - tab->ub_ext[leaving_var]) / pivot;
     }
 
     /* Update primal solution */
@@ -148,11 +163,15 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
         tab->x[tab->basis[k]] -= step * tab->work3[k];
     }
 
-    /* Update entering variable */
+    /* Update entering variable.
+     * When entering is at lower bound and alpha < 0 (increases leaving), step > 0
+     * When entering is at upper bound and alpha > 0 (increases leaving), step < 0
+     * So: x_entering = bound + step (works for both cases)
+     */
     if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
         tab->x[entering] = tab->lb_ext[entering] + step;
     } else {
-        tab->x[entering] = tab->ub_ext[entering] - step;
+        tab->x[entering] = tab->ub_ext[entering] + step;
     }
 
     /* Update basis */
@@ -162,13 +181,33 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
 
     tab->var_status[entering] = RALPH_BASIC;
 
-    /* Set leaving variable to appropriate bound */
-    if (x_leave < tab->lb_ext[leaving_var]) {
-        tab->var_status[leaving_var] = RALPH_NONBASIC_LOWER;
-        tab->x[leaving_var] = tab->lb_ext[leaving_var];
+    /* Set leaving variable to appropriate bound for DUAL feasibility.
+     * The new reduced cost of leaving is rc_leaving_new = -rc_entering / pivot.
+     * For dual feasibility (internal minimization):
+     * - If rc_leaving_new >= 0, go to lower bound
+     * - If rc_leaving_new < 0, go to upper bound
+     */
+    double rc_leaving_new = -tab->rc[entering] / pivot;
+    if (rc_leaving_new >= -RALPH_OPT_TOL) {
+        /* Go to lower bound */
+        if (tab->lb_ext[leaving_var] > -RALPH_INFINITY/2) {
+            tab->var_status[leaving_var] = RALPH_NONBASIC_LOWER;
+            tab->x[leaving_var] = tab->lb_ext[leaving_var];
+        } else {
+            /* No lower bound - this shouldn't happen if ratio test is correct */
+            tab->var_status[leaving_var] = RALPH_NONBASIC_UPPER;
+            tab->x[leaving_var] = tab->ub_ext[leaving_var];
+        }
     } else {
-        tab->var_status[leaving_var] = RALPH_NONBASIC_UPPER;
-        tab->x[leaving_var] = tab->ub_ext[leaving_var];
+        /* Go to upper bound */
+        if (tab->ub_ext[leaving_var] < RALPH_INFINITY/2) {
+            tab->var_status[leaving_var] = RALPH_NONBASIC_UPPER;
+            tab->x[leaving_var] = tab->ub_ext[leaving_var];
+        } else {
+            /* No upper bound - this shouldn't happen if ratio test is correct */
+            tab->var_status[leaving_var] = RALPH_NONBASIC_LOWER;
+            tab->x[leaving_var] = tab->lb_ext[leaving_var];
+        }
     }
 
     /* Update LU factorization */
@@ -177,6 +216,12 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
         if (tableau_refactorize(tab) != 0) {
             return -1;
         }
+    }
+
+    /* Recompute objective value */
+    tab->obj_value = 0.0;
+    for (int j = 0; j < tab->n; j++) {
+        tab->obj_value += tab->c_ext[j] * tab->x[j];
     }
 
     return 0;
@@ -333,4 +378,292 @@ int dual_simplex_reoptimize(SimplexSolver *solver, int var, double new_lb, doubl
 
     /* Run dual simplex to restore optimality */
     return dual_simplex_solve(solver);
+}
+
+/* ============================================================================
+ * True Dual Phase 1 - Initialize for Dual Simplex from Scratch
+ * ============================================================================ */
+
+/*
+ * Initialize tableau for dual simplex by achieving dual feasibility.
+ *
+ * The reduced costs stored in tab->rc are for the INTERNAL minimization problem.
+ * For dual feasibility of the internal minimization:
+ *   - Variables at lower bound need rc >= 0
+ *   - Variables at upper bound need rc <= 0
+ *
+ * Strategy: Flip non-basic variables to the bound that satisfies dual feasibility.
+ * After flipping, basic variable values are recomputed and may become infeasible,
+ * which dual Phase 2 will fix.
+ */
+static int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
+    (void)obj_sense;  /* Not needed - rc is already for internal minimization */
+
+    /* Compute reduced costs with current basis */
+    tableau_compute_reduced_costs(tab);
+
+    int changes = 0;
+
+    for (int j = 0; j < tab->n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        double rc = tab->rc[j];
+        double lb = tab->lb_ext[j];
+        double ub = tab->ub_ext[j];
+
+        /*
+         * For internal minimization:
+         * - At lower bound: need rc >= 0 (else variable wants to increase)
+         * - At upper bound: need rc <= 0 (else variable wants to decrease)
+         */
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            /* Dual infeasible at lower bound, try to flip to upper */
+            if (ub < RALPH_INFINITY/2) {
+                tab->x[j] = ub;
+                tab->var_status[j] = RALPH_NONBASIC_UPPER;
+                changes++;
+            }
+            /* else: can't flip, will need Phase 1 pivots to fix */
+        }
+        else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            /* Dual infeasible at upper bound, try to flip to lower */
+            if (lb > -RALPH_INFINITY/2) {
+                tab->x[j] = lb;
+                tab->var_status[j] = RALPH_NONBASIC_LOWER;
+                changes++;
+            }
+            /* else: can't flip, will need Phase 1 pivots to fix */
+        }
+    }
+
+    return changes;
+}
+
+/*
+ * Solve LP using dual simplex from scratch.
+ *
+ * This is the proper dual Phase 1 approach:
+ * 1. Create tableau with slack basis
+ * 2. Adjust non-basic variables to achieve dual feasibility
+ * 3. Recompute basic variable values (may be primal infeasible)
+ * 4. Run dual simplex to achieve primal feasibility
+ */
+int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
+    if (!solver || !solver->model) return -1;
+
+    clock_t start = clock();
+
+    if (solver->verbose) {
+        printf("[dual_simplex] Starting from scratch...\n");
+    }
+
+    /* Create tableau if needed */
+    if (!solver->tableau) {
+        solver->tableau = tableau_create(solver->model);
+        if (!solver->tableau) {
+            solver->status = RALPH_STATUS_ERROR;
+            return -1;
+        }
+    }
+
+    SimplexTableau *tab = solver->tableau;
+
+    /* Factorize initial basis (slacks) */
+    if (tableau_refactorize(tab) != 0) {
+        solver->status = RALPH_STATUS_ERROR;
+        return -1;
+    }
+
+    /* Compute initial solution and reduced costs */
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+
+    if (solver->verbose) {
+        printf("[dual_simplex] Initial: obj=%.2f\n", tab->obj_value);
+    }
+
+    /* Adjust variable bounds to achieve dual feasibility */
+    int changes = make_dual_feasible(tab, solver->model->obj_sense);
+
+    if (solver->verbose) {
+        printf("[dual_simplex] Moved %d variables for dual feasibility\n", changes);
+    }
+
+    /* Recompute basic variable values after bound changes */
+    if (changes > 0) {
+        tableau_compute_solution(tab);
+        tableau_compute_reduced_costs(tab);
+    }
+
+    /* Check if we achieved dual feasibility */
+    int dual_infeasible = 0;
+    for (int j = 0; j < tab->n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+        double rc = tab->rc[j];
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            dual_infeasible = 1;
+            break;
+        }
+        if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            dual_infeasible = 1;
+            break;
+        }
+    }
+
+    if (dual_infeasible) {
+        /* Bound flipping wasn't enough - fall back to primal simplex */
+        if (solver->verbose) {
+            printf("[dual_simplex] Could not achieve dual feasibility, falling back to primal\n");
+        }
+        return simplex_solve(solver);
+    }
+
+    /* Check if we're already primal feasible */
+    int primal_infeasible = 0;
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL ||
+            tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
+            primal_infeasible = 1;
+            break;
+        }
+    }
+
+    if (!primal_infeasible) {
+        /* Already optimal! */
+        solver->status = RALPH_STATUS_OPTIMAL;
+        solver->obj_value = tab->obj_value * solver->model->obj_sense;
+        solver->iterations = 0;
+
+        /* Copy solution */
+        int n_orig = solver->model->num_vars;
+        if (!solver->solution) {
+            solver->solution = (double*)malloc(n_orig * sizeof(double));
+        }
+        if (solver->solution) {
+            for (int j = 0; j < n_orig; j++) {
+                solver->solution[j] = tab->x[j];
+            }
+        }
+
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        return 0;
+    }
+
+    if (solver->verbose) {
+        printf("[dual_simplex] Running dual Phase 2 to achieve primal feasibility...\n");
+    }
+
+    /* Run dual simplex Phase 2 */
+    for (int iter = 0; iter < solver->max_iterations; iter++) {
+        solver->iterations = iter;
+
+        /* Find most infeasible basic variable (leaving) */
+        int leaving = -1;
+        double max_infeas = RALPH_FEAS_TOL;
+
+        for (int k = 0; k < tab->m; k++) {
+            int j = tab->basis[k];
+            double infeas = 0.0;
+
+            if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL) {
+                infeas = tab->lb_ext[j] - tab->x[j];
+            } else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
+                infeas = tab->x[j] - tab->ub_ext[j];
+            }
+
+            if (infeas > max_infeas) {
+                max_infeas = infeas;
+                leaving = k;
+            }
+        }
+
+        if (leaving < 0) {
+            /* Primal feasible - optimal! */
+            solver->status = RALPH_STATUS_OPTIMAL;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+
+            /* Copy solution */
+            int n_orig = solver->model->num_vars;
+            if (!solver->solution) {
+                solver->solution = (double*)malloc(n_orig * sizeof(double));
+            }
+            if (solver->solution) {
+                for (int j = 0; j < n_orig; j++) {
+                    solver->solution[j] = tab->x[j];
+                }
+            }
+
+            solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+            return 0;
+        }
+
+        /* Dual ratio test */
+        int entering;
+        double theta;
+
+        if (dual_ratio_test(tab, leaving, &entering, &theta) != 0 || entering < 0) {
+            /* No valid entering variable - problem is infeasible */
+            solver->status = RALPH_STATUS_INFEASIBLE;
+            solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+            return 0;
+        }
+
+        /* Perform dual pivot */
+        if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+            /* Pivot failed, try refactorization */
+            if (tableau_refactorize(tab) != 0) {
+                solver->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+        }
+
+        /* Always recompute solution and reduced costs for accuracy */
+        tableau_compute_solution(tab);
+        tableau_compute_reduced_costs(tab);
+
+        /* Check for dual infeasibility */
+        int dual_violations = 0;
+        for (int j = 0; j < tab->n; j++) {
+            if (tab->var_status[j] == RALPH_BASIC) continue;
+            double rc = tab->rc[j];
+            if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+                dual_violations++;
+            }
+            if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+                dual_violations++;
+            }
+        }
+
+        /* If dual feasibility is significantly violated, fall back to primal */
+        if (dual_violations > tab->n / 10) {
+            if (solver->verbose) {
+                printf("[dual_simplex] Too many dual violations (%d), falling back to primal\n",
+                       dual_violations);
+            }
+            /* Reset tableau and use primal simplex */
+            tableau_free(solver->tableau);
+            solver->tableau = NULL;
+            return simplex_solve(solver);
+        }
+
+        /* Periodic refactorization for numerical stability */
+        if (lu_needs_refactorization(tab->lu)) {
+            if (tableau_refactorize(tab) != 0) {
+                solver->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        }
+
+        if (solver->verbose && iter % 50 == 0) {
+            printf("Dual iter %d: infeas=%.2e, obj=%.2f\n",
+                   iter, max_infeas, tab->obj_value * solver->model->obj_sense);
+        }
+    }
+
+    solver->status = RALPH_STATUS_ITERATION_LIMIT;
+    solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+    return -1;
 }
