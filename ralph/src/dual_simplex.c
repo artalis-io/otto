@@ -647,6 +647,16 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
             return simplex_solve(solver);
         }
 
+        /* Fall back early if taking too many iterations (10x the problem size) */
+        if (iter > 10 * tab->m && iter % 100 == 0) {
+            if (solver->verbose) {
+                printf("[dual_simplex] Too many iterations (%d), falling back to primal\n", iter);
+            }
+            tableau_free(solver->tableau);
+            solver->tableau = NULL;
+            return simplex_solve(solver);
+        }
+
         /* Periodic refactorization for numerical stability */
         if (lu_needs_refactorization(tab->lu)) {
             if (tableau_refactorize(tab) != 0) {
