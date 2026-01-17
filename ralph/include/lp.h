@@ -83,11 +83,13 @@ typedef struct {
     int num_updates;        /* Number of updates since refactorization */
     int max_updates;        /* Max updates before refactorization */
 
-    /* Eta file for updates */
+    /* Eta file for updates (sparse storage) */
     int eta_capacity;
     int num_eta;
-    int *eta_col;
-    double **eta_vectors;
+    int *eta_col;           /* Column index for each eta */
+    int **eta_indices;      /* Row indices of non-zeros for each eta */
+    double **eta_values;    /* Values of non-zeros for each eta */
+    int *eta_nnz;           /* Number of non-zeros in each eta */
 
     /* Condition number monitoring */
     double min_diag_U;      /* Minimum |U[i,i]| at factorization */

@@ -542,10 +542,13 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     memcpy(lu->col_perm, work->col_perm, m * sizeof(int));
     memcpy(lu->col_perm_inv, work->col_perm_inv, m * sizeof(int));
 
-    /* Clear eta file */
+    /* Clear sparse eta file */
     for (int i = 0; i < lu->num_eta; i++) {
-        free(lu->eta_vectors[i]);
-        lu->eta_vectors[i] = NULL;
+        free(lu->eta_indices[i]);
+        free(lu->eta_values[i]);
+        lu->eta_indices[i] = NULL;
+        lu->eta_values[i] = NULL;
+        lu->eta_nnz[i] = 0;
     }
     lu->num_eta = 0;
     lu->num_updates = 0;

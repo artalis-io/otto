@@ -42,19 +42,23 @@ LUFactorization* lu_create(int m) {
         lu->col_perm_inv[i] = i;
     }
 
-    /* Eta file for updates */
+    /* Eta file for updates (sparse storage) */
     lu->eta_capacity = lu->max_updates;
     lu->num_eta = 0;
     lu->eta_col = (int*)malloc(lu->eta_capacity * sizeof(int));
-    lu->eta_vectors = (double**)malloc(lu->eta_capacity * sizeof(double*));
+    lu->eta_indices = (int**)malloc(lu->eta_capacity * sizeof(int*));
+    lu->eta_values = (double**)malloc(lu->eta_capacity * sizeof(double*));
+    lu->eta_nnz = (int*)malloc(lu->eta_capacity * sizeof(int));
 
-    if (!lu->eta_col || !lu->eta_vectors) {
+    if (!lu->eta_col || !lu->eta_indices || !lu->eta_values || !lu->eta_nnz) {
         lu_free(lu);
         return NULL;
     }
 
     for (int i = 0; i < lu->eta_capacity; i++) {
-        lu->eta_vectors[i] = NULL;
+        lu->eta_indices[i] = NULL;
+        lu->eta_values[i] = NULL;
+        lu->eta_nnz[i] = 0;
     }
 
     /* Initialize condition number tracking */
@@ -81,12 +85,19 @@ void lu_free(LUFactorization *lu) {
     free(lu->col_perm_inv);
     free(lu->eta_col);
 
-    if (lu->eta_vectors) {
+    if (lu->eta_indices) {
         for (int i = 0; i < lu->eta_capacity; i++) {
-            free(lu->eta_vectors[i]);
+            free(lu->eta_indices[i]);
         }
-        free(lu->eta_vectors);
+        free(lu->eta_indices);
     }
+    if (lu->eta_values) {
+        for (int i = 0; i < lu->eta_capacity; i++) {
+            free(lu->eta_values[i]);
+        }
+        free(lu->eta_values);
+    }
+    free(lu->eta_nnz);
 
     free(lu);
 }
@@ -259,10 +270,13 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     lu->U_colptr[m] = idx;
     lu->nnz_U = idx;
 
-    /* Clear eta file */
+    /* Clear sparse eta file */
     for (int i = 0; i < lu->num_eta; i++) {
-        free(lu->eta_vectors[i]);
-        lu->eta_vectors[i] = NULL;
+        free(lu->eta_indices[i]);
+        free(lu->eta_values[i]);
+        lu->eta_indices[i] = NULL;
+        lu->eta_values[i] = NULL;
+        lu->eta_nnz[i] = 0;
     }
     lu->num_eta = 0;
     lu->num_updates = 0;
@@ -427,19 +441,23 @@ static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
 /* Apply eta updates: E_n^-1 * ... * E_1^-1 * x
  * Each E^-1 is identity except column 'col' which contains the eta vector.
  * E^-1 * x: x[i] += eta[i] * x[col] for i != col, x[col] = eta[col] * x[col]
+ * Now uses sparse eta storage for O(nnz) instead of O(m).
  */
 static void apply_eta_forward(const LUFactorization *lu, double *x) {
     for (int k = 0; k < lu->num_eta; k++) {
         int col = lu->eta_col[k];
-        double *eta = lu->eta_vectors[k];
+        int *indices = lu->eta_indices[k];
+        double *values = lu->eta_values[k];
+        int nnz = lu->eta_nnz[k];
         double xc = x[col];  /* Save original x[col] before modifying */
 
-        /* Update all components */
-        for (int i = 0; i < lu->m; i++) {
+        /* Update only non-zero components */
+        for (int p = 0; p < nnz; p++) {
+            int i = indices[p];
             if (i == col) {
-                x[i] = eta[col] * xc;
+                x[i] = values[p] * xc;
             } else {
-                x[i] += eta[i] * xc;
+                x[i] += values[p] * xc;
             }
         }
     }
@@ -448,16 +466,19 @@ static void apply_eta_forward(const LUFactorization *lu, double *x) {
 /* Apply eta updates transpose: (E_1^-1)' * ... * (E_n^-1)' * x
  * Applied in reverse order for the transpose solve.
  * (E^-1)' * x: x[col] = eta' * x, other components unchanged.
+ * Now uses sparse eta storage for O(nnz) instead of O(m).
  */
 static void apply_eta_backward(const LUFactorization *lu, double *x) {
     for (int k = lu->num_eta - 1; k >= 0; k--) {
         int col = lu->eta_col[k];
-        double *eta = lu->eta_vectors[k];
+        int *indices = lu->eta_indices[k];
+        double *values = lu->eta_values[k];
+        int nnz = lu->eta_nnz[k];
 
-        /* Compute new x[col] = eta' * x */
+        /* Compute new x[col] = eta' * x (sparse dot product) */
         double xc = 0.0;
-        for (int i = 0; i < lu->m; i++) {
-            xc += eta[i] * x[i];
+        for (int p = 0; p < nnz; p++) {
+            xc += values[p] * x[indices[p]];
         }
         x[col] = xc;
     }
@@ -575,33 +596,56 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         return -1;  /* Singular update */
     }
 
-    /* Normalize eta column */
+    /* Normalize eta column and count non-zeros */
     double pivot = eta[step_pos];
+    int nnz = 0;
+    double max_eta = 0.0;
     for (int i = 0; i < m; i++) {
         if (i == step_pos) {
             eta[i] = 1.0 / pivot;
         } else {
             eta[i] = -eta[i] / pivot;
         }
+        double absval = fabs(eta[i]);
+        if (absval > max_eta) max_eta = absval;
+        if (absval > RALPH_ZERO_TOL) nnz++;
     }
 
-    /* Store eta update (in step coordinates) */
+    /* Convert to sparse storage */
+    int *indices = (int*)malloc(nnz * sizeof(int));
+    double *values = (double*)malloc(nnz * sizeof(double));
+    if (!indices || !values) {
+        free(work);
+        free(eta);
+        free(indices);
+        free(values);
+        return -1;
+    }
+
+    int p = 0;
+    for (int i = 0; i < m; i++) {
+        if (fabs(eta[i]) > RALPH_ZERO_TOL) {
+            indices[p] = i;
+            values[p] = eta[i];
+            p++;
+        }
+    }
+
+    /* Store sparse eta update */
     lu->eta_col[lu->num_eta] = step_pos;
-    lu->eta_vectors[lu->num_eta] = eta;
+    lu->eta_indices[lu->num_eta] = indices;
+    lu->eta_values[lu->num_eta] = values;
+    lu->eta_nnz[lu->num_eta] = nnz;
     lu->num_eta++;
     lu->num_updates++;
 
-    /* Track growth factor: measure max element in eta vector */
-    double max_eta = 0.0;
-    for (int i = 0; i < m; i++) {
-        double absval = fabs(eta[i]);
-        if (absval > max_eta) max_eta = absval;
-    }
+    /* Track growth factor */
     if (max_eta > lu->growth_factor) {
         lu->growth_factor = max_eta;
     }
 
     free(work);
+    free(eta);
     return 0;
 }
 
