@@ -176,8 +176,8 @@ static double get_col_val(SparseLUWork *work, int col, int row) {
     return 0.0;
 }
 
-/* Set value in column list (updates existing or adds new) */
-static int set_col_val(SparseLUWork *work, int col, int row, double val) {
+/* Set value in column list only (internal use) */
+static int set_col_val_only(SparseLUWork *work, int col, int row, double val) {
     SparseEntry **pp = &work->cols[col];
 
     while (*pp && (*pp)->idx < row) {
@@ -190,8 +190,10 @@ static int set_col_val(SparseLUWork *work, int col, int row, double val) {
             /* Remove entry */
             *pp = (*pp)->next;
             work->col_nnz[col]--;
+            return 1;  /* Indicate removal */
         } else {
             (*pp)->val = val;
+            return 0;
         }
     } else if (fabs(val) >= RALPH_ZERO_TOL) {
         /* Add new entry */
@@ -202,7 +204,50 @@ static int set_col_val(SparseLUWork *work, int col, int row, double val) {
         entry->next = *pp;
         *pp = entry;
         work->col_nnz[col]++;
+        return 2;  /* Indicate addition */
     }
+
+    return 0;
+}
+
+/* Set value in row list only (internal use) */
+static int set_row_val_only(SparseLUWork *work, int row, int col, double val) {
+    SparseEntry **pp = &work->rows[row];
+
+    while (*pp && (*pp)->idx < col) {
+        pp = &(*pp)->next;
+    }
+
+    if (*pp && (*pp)->idx == col) {
+        /* Update existing */
+        if (fabs(val) < RALPH_ZERO_TOL) {
+            /* Remove entry */
+            *pp = (*pp)->next;
+            work->row_nnz[row]--;
+        } else {
+            (*pp)->val = val;
+        }
+    } else if (fabs(val) >= RALPH_ZERO_TOL) {
+        /* Add new entry */
+        SparseEntry *entry = alloc_entry(work);
+        if (!entry) return -1;
+        entry->idx = col;
+        entry->val = val;
+        entry->next = *pp;
+        *pp = entry;
+        work->row_nnz[row]++;
+    }
+
+    return 0;
+}
+
+/* Set value in both column and row lists */
+static int set_val(SparseLUWork *work, int col, int row, double val) {
+    int col_result = set_col_val_only(work, col, row, val);
+    if (col_result < 0) return -1;
+
+    int row_result = set_row_val_only(work, row, col, val);
+    if (row_result < 0) return -1;
 
     return 0;
 }
@@ -394,27 +439,18 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
             L_nnz++;
 
             /* Update row i: subtract mult * (pivot row)
-             * Must iterate through all non-eliminated columns because row lists
-             * don't include fill-in entries from previous elimination steps */
-            for (int j = 0; j < m; j++) {
+             * Now that row lists are maintained, iterate only over non-zeros */
+            for (SparseEntry *pe = work->rows[pivot_row]; pe; pe = pe->next) {
+                int j = pe->idx;
                 if (work->col_done[j]) continue;  /* Already eliminated column */
 
-                double pivot_row_val = get_col_val(work, j, pivot_row);
-                if (fabs(pivot_row_val) < RALPH_ZERO_TOL) continue;  /* Sparse: skip zeros */
+                /* pe->val is current (row lists are now maintained) */
+                double pivot_row_val = pe->val;
 
                 double old_val = get_col_val(work, j, i);
                 double new_val = old_val - mult * pivot_row_val;
-                set_col_val(work, j, i, new_val);
-
-                /* Update row counts */
-                if (fabs(old_val) < RALPH_ZERO_TOL && fabs(new_val) >= RALPH_ZERO_TOL) {
-                    work->row_nnz[i]++;
-                } else if (fabs(old_val) >= RALPH_ZERO_TOL && fabs(new_val) < RALPH_ZERO_TOL) {
-                    work->row_nnz[i]--;
-                }
+                set_val(work, j, i, new_val);  /* Updates both col and row lists */
             }
-
-            /* The pivot column entry was zeroed out above (mult * pivot_col_val = entry) */
         }
 
         /* Clear pivot column counts for remaining rows */
