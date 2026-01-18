@@ -636,13 +636,53 @@ int tableau_compute_solution(SimplexTableau *tab) {
 }
 
 int tableau_compute_reduced_costs(SimplexTableau *tab) {
-    /* Compute dual values: y = B^{-T} * c_B */
-    vec_set_zero(tab->work1, tab->m);
+    /* Compute dual values: y = B^{-T} * c_B
+     * If c_B is sparse (many slacks with 0 cost), use sparse BTRAN
+     */
+
+    /* Count non-zeros in c_B */
+    int nnz_cb = 0;
     for (int k = 0; k < tab->m; k++) {
-        tab->work1[k] = tab->c_ext[tab->basis[k]];
+        if (fabs(tab->c_ext[tab->basis[k]]) > RALPH_ZERO_TOL) {
+            nnz_cb++;
+        }
     }
 
-    lu_solve_transpose(tab->lu, tab->work1, tab->y);
+    /* If c_B is sparse (less than 10% non-zeros), use sparse BTRAN */
+    if (nnz_cb < tab->m / 10) {
+        int *cb_idx = (int*)malloc(nnz_cb * sizeof(int));
+        double *cb_val = (double*)malloc(nnz_cb * sizeof(double));
+        if (cb_idx && cb_val) {
+            int p = 0;
+            for (int k = 0; k < tab->m; k++) {
+                double c = tab->c_ext[tab->basis[k]];
+                if (fabs(c) > RALPH_ZERO_TOL) {
+                    cb_idx[p] = k;
+                    cb_val[p] = c;
+                    p++;
+                }
+            }
+            lu_solve_transpose_sparse(tab->lu, nnz_cb, cb_idx, cb_val, tab->y);
+            free(cb_idx);
+            free(cb_val);
+        } else {
+            free(cb_idx);
+            free(cb_val);
+            /* Fallback to dense */
+            vec_set_zero(tab->work1, tab->m);
+            for (int k = 0; k < tab->m; k++) {
+                tab->work1[k] = tab->c_ext[tab->basis[k]];
+            }
+            lu_solve_transpose(tab->lu, tab->work1, tab->y);
+        }
+    } else {
+        /* Dense BTRAN */
+        vec_set_zero(tab->work1, tab->m);
+        for (int k = 0; k < tab->m; k++) {
+            tab->work1[k] = tab->c_ext[tab->basis[k]];
+        }
+        lu_solve_transpose(tab->lu, tab->work1, tab->y);
+    }
 
     /* Compute reduced costs: rc = c - A' * y
      * Using sparse matrix-transpose-vector multiply: O(nnz) instead of O(n*m) */
@@ -1060,42 +1100,36 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         tab->x[leaving] = tab->ub_ext[leaving];
     }
 
-    /* Compute steepest edge update data BEFORE LU update (using old basis) */
-    double *pivot_row = NULL;
-    double *tau_helper = NULL;  /* For true steepest edge: B^{-T} * d_entering */
+    /* Compute pivot row and steepest edge update data BEFORE LU update (using old basis) */
     double pivot = tab->work2[leaving_pos];
     double pivot_sq = pivot * pivot;
 
-    /* Compute exact entering column weight: gamma_e = ||d_entering||^2 = ||work2||^2
-     * This is more accurate than using the stored weight which may have drifted
-     */
+    /* Compute exact entering column weight: gamma_e = ||d_entering||^2 = ||work2||^2 */
     double gamma_e = 0.0;
     for (int k = 0; k < tab->m; k++) {
         gamma_e += tab->work2[k] * tab->work2[k];
     }
     if (gamma_e < 1.0) gamma_e = 1.0;
 
-    if (tab->use_steepest_edge && fabs(pivot_sq) > RALPH_ZERO_TOL) {
-        /* Compute pivot row: e_r^T * B^{-1}
-         * This is used to compute alpha_j = pivot_row * a_j for each nonbasic j
-         */
-        pivot_row = (double*)malloc(tab->m * sizeof(double));
-        tau_helper = (double*)malloc(tab->m * sizeof(double));
-        if (pivot_row && tau_helper) {
-            vec_set_zero(tab->work1, tab->m);
-            tab->work1[leaving_pos] = 1.0;
-            lu_solve_transpose(tab->lu, tab->work1, pivot_row);
+    /* Always compute pivot row for incremental reduced cost updates
+     * pivot_row = e_r^T * B^{-1}
+     * This is also used for steepest edge weight updates
+     */
+    double *pivot_row = (double*)malloc(tab->m * sizeof(double));
+    double *tau_helper = NULL;
 
-            /* For true steepest edge: tau_helper = B^{-T} * d_entering
-             * where d_entering = work2 (the entering column direction)
-             * Then tau_j = a_j' * tau_helper
-             */
-            lu_solve_transpose(tab->lu, tab->work2, tau_helper);
-        } else {
-            free(pivot_row);
-            free(tau_helper);
-            pivot_row = NULL;
-            tau_helper = NULL;
+    if (pivot_row) {
+        /* Use sparse BTRAN since e_leaving has only 1 non-zero */
+        int rhs_idx = leaving_pos;
+        double rhs_val = 1.0;
+        lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
+
+        /* For steepest edge: tau_helper = B^{-T} * d_entering */
+        if (tab->use_steepest_edge && fabs(pivot_sq) > RALPH_ZERO_TOL) {
+            tau_helper = (double*)malloc(tab->m * sizeof(double));
+            if (tau_helper) {
+                lu_solve_transpose(tab->lu, tab->work2, tau_helper);
+            }
         }
     }
 
@@ -1180,6 +1214,38 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
             tab->se_weights[leaving] = leaving_weight;
         }
     }
+
+    /* Incremental reduced cost update:
+     * rc_new[j] = rc_old[j] - (rc[entering] / pivot) * alpha_j
+     * where alpha_j = pivot_row * a_j
+     *
+     * This avoids recomputing all reduced costs from scratch each iteration.
+     */
+    if (pivot_row && fabs(pivot) > RALPH_PIVOT_TOL) {
+        double rc_enter = tab->rc[entering];
+        double rc_ratio = rc_enter / pivot;
+
+        /* For all non-basic variables, update reduced costs */
+        for (int j = 0; j < tab->n; j++) {
+            if (tab->var_status[j] != RALPH_BASIC && j != entering) {
+                /* Compute alpha_j = pivot_row * a_j */
+                double alpha_j = 0.0;
+                for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+                    alpha_j += pivot_row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+                }
+                tab->rc[j] -= rc_ratio * alpha_j;
+            }
+        }
+
+        /* Reduced cost for entering variable (now basic) is 0 */
+        tab->rc[entering] = 0.0;
+
+        /* Reduced cost for leaving variable (now non-basic):
+         * rc[leaving] = -rc_enter / pivot
+         */
+        tab->rc[leaving] = -rc_enter / pivot;
+    }
+
     free(pivot_row);
     free(tau_helper);
 
@@ -1441,11 +1507,17 @@ static int simplex_phase2(SimplexSolver *solver) {
     const int NON_DEGEN_THRESHOLD = 100;  /* Non-degenerate pivots to turn Bland off */
     int use_bland = 0;
 
+    /* Compute initial reduced costs */
+    tableau_compute_reduced_costs(tab);
+
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
 
-        /* Compute reduced costs */
-        tableau_compute_reduced_costs(tab);
+        /* Reduced costs are updated incrementally in simplex_pivot().
+         * Full recomputation only needed:
+         * - After refactorization (for numerical stability)
+         * - Periodically to correct drift
+         */
 
         /* Pricing: select entering variable */
         int entering;
@@ -1558,11 +1630,12 @@ static int simplex_phase2(SimplexSolver *solver) {
             tableau_compute_reduced_costs(tab);  /* Recompute with fresh factorization */
         }
 
-        /* Periodically recompute solution to correct numerical drift */
-        if (iter > 0 && iter % 50 == 0) {
+        /* Periodically recompute solution and reduced costs to correct numerical drift */
+        if (iter > 0 && iter % 200 == 0) {
             tableau_compute_solution(tab);
-            int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
+            tableau_compute_reduced_costs(tab);  /* Full recomputation to correct drift */
             if (solver->verbose) {
+                int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
                 printf("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
                        iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
             }

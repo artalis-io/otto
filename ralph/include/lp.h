@@ -91,6 +91,19 @@ typedef struct {
     double **eta_values;    /* Values of non-zeros for each eta */
     int *eta_nnz;           /* Number of non-zeros in each eta */
 
+    /* Forrest-Tomlin update data */
+    int use_ft_updates;     /* 1 to use FT updates, 0 for eta-file */
+    int *ft_col_order;      /* Permutation of columns due to FT updates */
+    int *ft_col_order_inv;  /* Inverse of ft_col_order */
+    int ft_num_updates;     /* Number of FT updates applied */
+
+    /* Spike storage for FT (sparse columns that replaced original U columns) */
+    int ft_spike_capacity;
+    int *ft_spike_col;      /* Which column this spike replaces */
+    int **ft_spike_idx;     /* Row indices of spike non-zeros */
+    double **ft_spike_val;  /* Values of spike non-zeros */
+    int *ft_spike_nnz;      /* Number of non-zeros in each spike */
+
     /* Condition number monitoring */
     double min_diag_U;      /* Minimum |U[i,i]| at factorization */
     double max_diag_U;      /* Maximum |U[i,i]| at factorization */

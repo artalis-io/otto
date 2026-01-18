@@ -113,37 +113,47 @@ static int amd_get_min_degree_col(AMDWorkspace *amd) {
 }
 
 /*
- * Compute AMD ordering for matrix B.
+ * Compute AMD ordering for matrix B with element absorption.
+ *
+ * This implements a proper AMD algorithm that tracks the elimination graph:
+ * - When column j is eliminated, it creates an "element" (clique)
+ * - The degree of remaining columns is computed as their external degree
+ *   in the elimination graph (original rows + element connections)
+ * - Element absorption: when all columns in a row are in the current element,
+ *   that row can be pruned from further degree computations
  *
  * Returns a column permutation array where perm[k] = j means
  * column j should be the k-th column in the reordered matrix.
- *
- * This is a simplified AMD that:
- * 1. Builds the column intersection graph (columns share rows)
- * 2. Uses minimum degree heuristic with degree updates
  */
-static int* compute_amd_ordering(const SparseMatrix *B) {
+static int* compute_col_ordering(const SparseMatrix *B) {
     int n = B->ncols;
     int m = B->nrows;
 
     int *perm = (int*)malloc(n * sizeof(int));
     int *eliminated = (int*)calloc(n, sizeof(int));
-    if (!perm || !eliminated) {
+    int *marker = (int*)malloc(n * sizeof(int));  /* For counting unique neighbors */
+
+    if (!perm || !eliminated || !marker) {
         free(perm);
         free(eliminated);
+        free(marker);
         return NULL;
     }
 
-    /* Build row-to-column adjacency for degree computation
-     * For each row, store list of columns that have non-zeros in that row
-     */
+    for (int j = 0; j < n; j++) marker[j] = -1;
+
+    /* Build row-to-column adjacency */
     int *row_ptr = (int*)calloc(m + 1, sizeof(int));
     int *row_cols = (int*)malloc(B->nnz * sizeof(int));
-    if (!row_ptr || !row_cols) {
+    int *row_len = (int*)calloc(m, sizeof(int));  /* Current active length of each row */
+
+    if (!row_ptr || !row_cols || !row_len) {
         free(perm);
         free(eliminated);
+        free(marker);
         free(row_ptr);
         free(row_cols);
+        free(row_len);
         return NULL;
     }
 
@@ -159,13 +169,15 @@ static int* compute_amd_ordering(const SparseMatrix *B) {
         row_ptr[i + 1] += row_ptr[i];
     }
 
-    /* Fill row_cols */
+    /* Fill row_cols and row_len */
     int *row_count = (int*)calloc(m, sizeof(int));
     if (!row_count) {
         free(perm);
         free(eliminated);
+        free(marker);
         free(row_ptr);
         free(row_cols);
+        free(row_len);
         return NULL;
     }
 
@@ -175,74 +187,324 @@ static int* compute_amd_ordering(const SparseMatrix *B) {
             row_cols[row_ptr[i] + row_count[i]++] = j;
         }
     }
+    for (int i = 0; i < m; i++) {
+        row_len[i] = row_count[i];
+    }
     free(row_count);
 
-    /* Initialize AMD workspace with column degrees
-     * Degree of column j = number of other columns sharing rows with j
-     * Approximated as: sum over rows i in col j of (nnz in row i - 1)
+    /* Element tracking with proper linked list storage.
+     * We use a pool-based approach for element adjacency lists.
      */
+
+    /* For each column, track the latest element it belongs to.
+     * col_element[j] = most recent element containing column j, or -1
+     * This is used for element absorption detection.
+     */
+    int *col_element = (int*)malloc(n * sizeof(int));
+
+    /* For each element, track its member columns as a simple list */
+    int *element_head = (int*)malloc(n * sizeof(int));
+    int *element_next = (int*)malloc(n * sizeof(int));
+
+    if (!col_element || !element_head || !element_next) {
+        free(perm);
+        free(eliminated);
+        free(marker);
+        free(row_ptr);
+        free(row_cols);
+        free(row_len);
+        free(col_element);
+        free(element_head);
+        free(element_next);
+        return NULL;
+    }
+
+    for (int j = 0; j < n; j++) {
+        col_element[j] = -1;
+        element_head[j] = -1;
+    }
+
+    /* Initialize AMD workspace */
     AMDWorkspace *amd = amd_workspace_create(n);
     if (!amd) {
         free(perm);
         free(eliminated);
+        free(marker);
         free(row_ptr);
         free(row_cols);
+        free(row_len);
+        free(col_element);
+        free(element_head);
+        free(element_next);
         return NULL;
     }
 
-    /* Compute initial degrees (external degree in elimination graph) */
+    /* Compute initial degrees: count unique columns reachable through rows */
     for (int j = 0; j < n; j++) {
         int degree = 0;
         for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
             int row = B->rowidx[p];
-            /* Add number of other columns in this row */
-            degree += (row_ptr[row + 1] - row_ptr[row] - 1);
+            for (int q = row_ptr[row]; q < row_ptr[row] + row_len[row]; q++) {
+                int neighbor = row_cols[q];
+                if (neighbor != j && marker[neighbor] != j) {
+                    marker[neighbor] = j;
+                    degree++;
+                }
+            }
         }
-        /* Clamp to reasonable range */
         if (degree < 1) degree = 1;
         if (degree > n - 1) degree = n - 1;
         amd_add_to_degree_list(amd, j, degree);
     }
 
-    /* Main AMD loop: repeatedly select minimum degree column */
+    /* Workspace for tracking adjacent columns */
+    int *adj_cols = (int*)malloc(n * sizeof(int));
+    if (!adj_cols) {
+        amd_workspace_free(amd);
+        free(perm);
+        free(eliminated);
+        free(marker);
+        free(row_ptr);
+        free(row_cols);
+        free(row_len);
+        free(col_element);
+        free(element_head);
+        free(element_next);
+        return NULL;
+    }
+
+    /* Main AMD loop */
     for (int k = 0; k < n; k++) {
-        int j = amd_get_min_degree_col(amd);
-        if (j < 0) {
+        /* Select minimum degree column */
+        int pivot = amd_get_min_degree_col(amd);
+        if (pivot < 0) {
             /* Find any remaining column */
             for (int jj = 0; jj < n; jj++) {
                 if (!eliminated[jj]) {
-                    j = jj;
+                    pivot = jj;
                     break;
                 }
             }
         }
+        if (pivot < 0) break;  /* All done */
 
-        perm[k] = j;
-        eliminated[j] = 1;
+        perm[k] = pivot;
+        eliminated[pivot] = 1;
 
-        /* Update degrees of neighbors (columns sharing rows with j)
-         * This is the "approximate" part - we just decrement degrees
-         * without fully tracking element absorption
-         */
-        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+        /* Gather all non-eliminated columns adjacent to pivot through rows */
+        int num_adj = 0;
+        int mark_id = n + k;  /* Unique marker for this step */
+
+        for (int p = B->colptr[pivot]; p < B->colptr[pivot + 1]; p++) {
             int row = B->rowidx[p];
-            for (int q = row_ptr[row]; q < row_ptr[row + 1]; q++) {
+            if (row_len[row] == 0) continue;  /* Absorbed row */
+
+            for (int q = row_ptr[row]; q < row_ptr[row] + row_len[row]; q++) {
                 int neighbor = row_cols[q];
-                if (neighbor != j && !eliminated[neighbor]) {
-                    int old_degree = amd->degree[neighbor];
-                    if (old_degree > 1) {
-                        amd_remove_from_degree_list(amd, neighbor);
-                        amd_add_to_degree_list(amd, neighbor, old_degree - 1);
+                if (neighbor != pivot && !eliminated[neighbor] && marker[neighbor] != mark_id) {
+                    marker[neighbor] = mark_id;
+                    adj_cols[num_adj++] = neighbor;
+                }
+            }
+        }
+
+        /* Also include columns from the previous element if pivot was in one */
+        int prev_elem = col_element[pivot];
+        if (prev_elem >= 0) {
+            int col = element_head[prev_elem];
+            while (col >= 0) {
+                if (!eliminated[col] && marker[col] != mark_id) {
+                    marker[col] = mark_id;
+                    adj_cols[num_adj++] = col;
+                }
+                col = element_next[col];
+            }
+        }
+
+        /* Create new element k containing all adjacent columns */
+        element_head[k] = -1;
+        for (int i = 0; i < num_adj; i++) {
+            int col = adj_cols[i];
+            element_next[col] = element_head[k];
+            element_head[k] = col;
+            col_element[col] = k;  /* Update column's element membership */
+        }
+
+        /* Update degrees of adjacent columns */
+        for (int i = 0; i < num_adj; i++) {
+            int col = adj_cols[i];
+
+            /* Compute new degree: count unique non-eliminated neighbors through rows */
+            int new_degree = 0;
+            int degree_mark = n * 2 + k * n + col;
+
+            /* From original rows */
+            for (int p = B->colptr[col]; p < B->colptr[col + 1]; p++) {
+                int row = B->rowidx[p];
+                if (row_len[row] == 0) continue;  /* Absorbed row */
+
+                for (int q = row_ptr[row]; q < row_ptr[row] + row_len[row]; q++) {
+                    int neighbor = row_cols[q];
+                    if (neighbor != col && !eliminated[neighbor] && marker[neighbor] != degree_mark) {
+                        marker[neighbor] = degree_mark;
+                        new_degree++;
                     }
                 }
+            }
+
+            /* From current element (all adjacent columns are connected) */
+            int c = element_head[k];
+            while (c >= 0) {
+                if (c != col && !eliminated[c] && marker[c] != degree_mark) {
+                    marker[c] = degree_mark;
+                    new_degree++;
+                }
+                c = element_next[c];
+            }
+
+            if (new_degree < 1) new_degree = 1;
+            if (new_degree > n - k - 1) new_degree = n - k - 1;
+
+            /* Update degree if changed */
+            if (new_degree != amd->degree[col]) {
+                amd_remove_from_degree_list(amd, col);
+                amd_add_to_degree_list(amd, col, new_degree);
+            }
+        }
+
+        /* Row absorption: prune rows whose non-eliminated columns are all in element k */
+        for (int p = B->colptr[pivot]; p < B->colptr[pivot + 1]; p++) {
+            int row = B->rowidx[p];
+            if (row_len[row] == 0) continue;  /* Already absorbed */
+
+            int all_in_element = 1;
+            int active_count = 0;
+            for (int q = row_ptr[row]; q < row_ptr[row] + row_len[row]; q++) {
+                int col = row_cols[q];
+                if (!eliminated[col]) {
+                    active_count++;
+                    if (marker[col] != mark_id) {
+                        all_in_element = 0;
+                        break;
+                    }
+                }
+            }
+            if (all_in_element && active_count > 0) {
+                /* This row is absorbed - all its active columns are in element k */
+                row_len[row] = 0;
             }
         }
     }
 
+    /* Cleanup */
     amd_workspace_free(amd);
     free(eliminated);
+    free(marker);
     free(row_ptr);
     free(row_cols);
+    free(row_len);
+    free(col_element);
+    free(element_head);
+    free(element_next);
+    free(adj_cols);
+
+    return perm;
+}
+
+/* ============================================================================
+ * LP-Specific Column Ordering
+ * ============================================================================
+ *
+ * For LP bases, the matrix B typically contains:
+ * - Structural columns from the constraint matrix A
+ * - Identity columns from slack variables
+ *
+ * An efficient ordering for LP bases:
+ * 1. Identify identity columns (singletons with |value| = 1)
+ * 2. Order structural columns by increasing column count (sparser first)
+ * 3. Put identity columns at the end (they become diagonal of U without fill)
+ *
+ * This exploits the LP structure for faster factorization with less fill-in.
+ */
+static int* compute_lp_column_ordering(const SparseMatrix *B) {
+    int n = B->ncols;
+    int *perm = (int*)malloc(n * sizeof(int));
+    if (!perm) return NULL;
+
+    /* Classify columns: identity (singleton ±1) vs structural */
+    int *is_identity = (int*)calloc(n, sizeof(int));
+    int *col_counts = (int*)malloc(n * sizeof(int));
+
+    if (!is_identity || !col_counts) {
+        free(perm);
+        free(is_identity);
+        free(col_counts);
+        return NULL;
+    }
+
+    int num_identity = 0;
+    for (int j = 0; j < n; j++) {
+        int nnz = B->colptr[j + 1] - B->colptr[j];
+        col_counts[j] = nnz;
+
+        /* Check if column is identity (exactly 1 nonzero with value ±1) */
+        if (nnz == 1) {
+            int p = B->colptr[j];
+            double val = B->values[p];
+            if (fabs(fabs(val) - 1.0) < 1e-10) {
+                is_identity[j] = 1;
+                num_identity++;
+            }
+        }
+    }
+
+    /* Sort structural columns by column count (insertion sort for simplicity) */
+    int *structural = (int*)malloc(n * sizeof(int));
+    int num_structural = 0;
+
+    if (!structural) {
+        free(perm);
+        free(is_identity);
+        free(col_counts);
+        return NULL;
+    }
+
+    for (int j = 0; j < n; j++) {
+        if (!is_identity[j]) {
+            structural[num_structural++] = j;
+        }
+    }
+
+    /* Sort structural columns by increasing column count */
+    for (int i = 1; i < num_structural; i++) {
+        int key = structural[i];
+        int key_count = col_counts[key];
+        int j = i - 1;
+        while (j >= 0 && col_counts[structural[j]] > key_count) {
+            structural[j + 1] = structural[j];
+            j--;
+        }
+        structural[j + 1] = key;
+    }
+
+    /* Build permutation: structural columns first (sorted), then identity columns */
+    int idx = 0;
+
+    /* Add structural columns */
+    for (int i = 0; i < num_structural; i++) {
+        perm[idx++] = structural[i];
+    }
+
+    /* Add identity columns */
+    for (int j = 0; j < n; j++) {
+        if (is_identity[j]) {
+            perm[idx++] = j;
+        }
+    }
+
+    free(is_identity);
+    free(col_counts);
+    free(structural);
 
     return perm;
 }
@@ -705,23 +967,29 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
 
     int m = lu->m;
 
-    /* Compute AMD column ordering for fill reduction */
-    int use_amd = 0;  /* TODO: enable when AMD is improved */
-    int *amd_order = NULL;
-    if (use_amd) {
-        amd_order = compute_amd_ordering(B);
+    /* Compute column ordering for fill reduction
+     * Options: 0 = natural order, 1 = AMD, 2 = LP-specific (default)
+     */
+    int ordering_method = 2;  /* LP-specific ordering for LP bases */
+    int *col_order = NULL;
+
+    if (ordering_method == 1) {
+        col_order = compute_col_ordering(B);
+    } else if (ordering_method == 2) {
+        col_order = compute_lp_column_ordering(B);
     }
-    if (!amd_order) {
-        /* Fallback to natural order if AMD fails or disabled */
-        amd_order = (int*)malloc(m * sizeof(int));
-        if (!amd_order) return -1;
-        for (int j = 0; j < m; j++) amd_order[j] = j;
+
+    if (!col_order) {
+        /* Fallback to natural order */
+        col_order = (int*)malloc(m * sizeof(int));
+        if (!col_order) return -1;
+        for (int j = 0; j < m; j++) col_order[j] = j;
     }
 
     /* Create working storage */
     SparseLUWork *work = sparse_work_create(m, B->nnz);
     if (!work) {
-        free(amd_order);
+        free(col_order);
         return -1;
     }
 
@@ -733,7 +1001,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
             if (add_to_col(work, j, i, val) < 0 ||
                 add_to_row(work, i, j, val) < 0) {
                 sparse_work_free(work);
-                free(amd_order);
+                free(col_order);
                 return -1;
             }
         }
@@ -754,17 +1022,19 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         free(L_i); free(L_j); free(L_v);
         free(U_i); free(U_j); free(U_v);
         sparse_work_free(work);
-        free(amd_order);
+        free(col_order);
         return -1;
     }
 
     /* Main elimination loop */
+    int use_precomputed_order = (ordering_method > 0);
+
     for (int step = 0; step < m; step++) {
         int pivot_row, pivot_col;
 
-        if (use_amd) {
-            /* Use AMD column order with row selection */
-            pivot_col = amd_order[step];
+        if (use_precomputed_order) {
+            /* Use precomputed column order (AMD or LP-specific) with row selection */
+            pivot_col = col_order[step];
             if (work->col_done[pivot_col]) {
                 for (int j = 0; j < m; j++) {
                     if (!work->col_done[j]) {
@@ -788,7 +1058,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                     free(L_i); free(L_j); free(L_v);
                     free(U_i); free(U_j); free(U_v);
                     sparse_work_free(work);
-                    free(amd_order);
+                    free(col_order);
                     return -1;  /* Singular */
                 }
             }
@@ -798,7 +1068,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                 free(L_i); free(L_j); free(L_v);
                 free(U_i); free(U_j); free(U_v);
                 sparse_work_free(work);
-                free(amd_order);
+                free(col_order);
                 return -1;  /* Singular */
             }
         }
@@ -983,6 +1253,21 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         lu->eta_nnz[i] = 0;
     }
     lu->num_eta = 0;
+
+    /* Clear Forrest-Tomlin spikes */
+    for (int i = 0; i < lu->ft_num_updates; i++) {
+        free(lu->ft_spike_idx[i]);
+        free(lu->ft_spike_val[i]);
+        lu->ft_spike_idx[i] = NULL;
+        lu->ft_spike_val[i] = NULL;
+        lu->ft_spike_nnz[i] = 0;
+    }
+    lu->ft_num_updates = 0;
+    for (int i = 0; i < m; i++) {
+        lu->ft_col_order[i] = i;
+        lu->ft_col_order_inv[i] = i;
+    }
+
     lu->num_updates = 0;
 
     /* Compute condition number estimate from U diagonal */
@@ -1009,7 +1294,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     free(L_i); free(L_j); free(L_v);
     free(U_i); free(U_j); free(U_v);
     sparse_work_free(work);
-    free(amd_order);
+    free(col_order);
 
     return 0;
 }
