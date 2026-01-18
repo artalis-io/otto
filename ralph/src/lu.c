@@ -107,8 +107,9 @@ LUFactorization* lu_create(int m) {
     lu->hs_marked = (int*)calloc(m, sizeof(int));
     lu->hs_idx = (int*)malloc(m * sizeof(int));
     lu->hs_val = (double*)malloc(m * sizeof(double));
+    lu->perm_work = (double*)malloc(m * sizeof(double));
 
-    if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx || !lu->hs_val) {
+    if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx || !lu->hs_val || !lu->perm_work) {
         lu_free(lu);
         return NULL;
     }
@@ -170,6 +171,7 @@ void lu_free(LUFactorization *lu) {
     free(lu->hs_marked);
     free(lu->hs_idx);
     free(lu->hs_val);
+    free(lu->perm_work);
 
     free(lu);
 }
@@ -474,15 +476,12 @@ static void solve_Lt(const LUFactorization *lu, const double *b, double *x) {
         /* L[j,j] = 1, so no division needed */
     }
 
-    /* Apply inverse row permutation */
-    double *temp = (double*)malloc(m * sizeof(double));
-    if (temp) {
-        for (int i = 0; i < m; i++) {
-            temp[lu->perm[i]] = x[i];
-        }
-        vec_copy_data(x, temp, m);
-        free(temp);
+    /* Apply inverse row permutation using pre-allocated workspace */
+    double *temp = lu->perm_work;
+    for (int i = 0; i < m; i++) {
+        temp[lu->perm[i]] = x[i];
     }
+    vec_copy_data(x, temp, m);
 }
 
 /* Solve U'x = b (forward substitution with U transpose) */
