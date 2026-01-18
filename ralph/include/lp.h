@@ -116,6 +116,7 @@ typedef struct {
     int *hs_marked;         /* Marked array for reach computation */
     int *hs_idx;            /* Sparse index array */
     double *hs_val;         /* Sparse value array */
+    double *perm_work;      /* Workspace for permutation operations */
 } LUFactorization;
 
 /* Simplex tableau representation */
