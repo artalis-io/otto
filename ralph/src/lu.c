@@ -101,6 +101,18 @@ LUFactorization* lu_create(int m) {
     lu->cond_estimate = 1.0;
     lu->growth_factor = 1.0;
 
+    /* Pre-allocate workspace for hyper-sparse operations */
+    lu->hs_work1 = (double*)calloc(m, sizeof(double));
+    lu->hs_work2 = (double*)calloc(m, sizeof(double));
+    lu->hs_marked = (int*)calloc(m, sizeof(int));
+    lu->hs_idx = (int*)malloc(m * sizeof(int));
+    lu->hs_val = (double*)malloc(m * sizeof(double));
+
+    if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx || !lu->hs_val) {
+        lu_free(lu);
+        return NULL;
+    }
+
     return lu;
 }
 
@@ -151,6 +163,13 @@ void lu_free(LUFactorization *lu) {
         free(lu->ft_spike_val);
     }
     free(lu->ft_spike_nnz);
+
+    /* Free hyper-sparse workspace */
+    free(lu->hs_work1);
+    free(lu->hs_work2);
+    free(lu->hs_marked);
+    free(lu->hs_idx);
+    free(lu->hs_val);
 
     free(lu);
 }
@@ -559,13 +578,9 @@ static void apply_eta_backward(const LUFactorization *lu, double *x) {
 /* Solve Bx = b where B = basis matrix */
 void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
     int m = lu->m;
-    double *work = (double*)malloc(m * sizeof(double));
-    double *work2 = (double*)malloc(m * sizeof(double));
-    if (!work || !work2) {
-        free(work);
-        free(work2);
-        return;
-    }
+    /* Use pre-allocated workspace (avoids malloc in hot path) */
+    double *work = lu->hs_work1;
+    double *work2 = lu->hs_work2;
 
     /* For sparse LU with column pivoting: PAQ = LU
      * Solve Bx = b  =>  PAQx = Pb  =>  LUQ'x = Pb
@@ -592,16 +607,13 @@ void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
     for (int i = 0; i < m; i++) {
         solution[lu->col_perm[i]] = work2[i];
     }
-
-    free(work);
-    free(work2);
 }
 
 /* Solve B'x = b (for computing row prices) */
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution) {
     int m = lu->m;
-    double *work = (double*)malloc(m * sizeof(double));
-    if (!work) return;
+    /* Use pre-allocated workspace (avoids malloc in hot path) */
+    double *work = lu->hs_work1;
 
     /* For sparse LU with column pivoting: PAQ = LU
      * So B = P'LUQ', and B' = QU'L'P
@@ -632,8 +644,6 @@ void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution
     solve_Lt(lu, solution, work);
 
     vec_copy_data(solution, work, m);
-
-    free(work);
 }
 
 /* ============================================================================
@@ -659,30 +669,40 @@ void lu_solve_sparse(const LUFactorization *lu,
 
     int m = lu->m;
 
-    /* If RHS is too dense, use standard dense solve */
+    /* Use pre-allocated workspace (avoids malloc in hot path) */
+    double *work = lu->hs_work1;
+    double *work2 = lu->hs_work2;
+
+    /* Clear workspace */
+    memset(work, 0, m * sizeof(double));
+
+    /* If RHS is too dense, use direct dense solve path
+     * (must inline to avoid aliasing issues with workspace)
+     */
     if (nnz_rhs > m / 10) {
-        double *rhs = (double*)calloc(m, sizeof(double));
-        if (!rhs) return;
+        /* Build dense RHS vector in work */
         for (int k = 0; k < nnz_rhs; k++) {
             if (rhs_idx[k] >= 0 && rhs_idx[k] < m)
-                rhs[rhs_idx[k]] = rhs_val[k];
+                work[rhs_idx[k]] = rhs_val[k];
         }
-        lu_solve(lu, rhs, solution);
-        free(rhs);
+
+        /* Inline the dense solve: Ly=Pb, Uz=y, apply updates, apply col perm */
+        solve_L(lu, work, work2);        /* work2 = L^{-1} * P * work */
+        solve_U(lu, work2, work);        /* work = U^{-1} * work2 */
+
+        if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+            apply_ft_spikes_forward(lu, work);
+        } else if (lu->num_eta > 0) {
+            apply_eta_forward(lu, work);
+        }
+
+        for (int i = 0; i < m; i++) {
+            solution[lu->col_perm[i]] = work[i];
+        }
         return;
     }
 
-    /* Allocate workspace */
-    double *work = (double*)calloc(m, sizeof(double));
-    double *work2 = (double*)calloc(m, sizeof(double));
-
-    if (!work || !work2) {
-        free(work);
-        free(work2);
-        return;
-    }
-
-    /* Build permuted RHS: work[perm_inv[orig]] = val */
+    /* Sparse path: Build permuted RHS */
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_row = rhs_idx[k];
         if (orig_row >= 0 && orig_row < m) {
@@ -715,9 +735,6 @@ void lu_solve_sparse(const LUFactorization *lu,
     for (int i = 0; i < m; i++) {
         solution[lu->col_perm[i]] = work2[i];
     }
-
-    free(work);
-    free(work2);
 }
 
 /*
@@ -736,30 +753,47 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
 
     int m = lu->m;
 
-    /* If RHS is too dense, use standard dense solve */
+    /* Use pre-allocated workspace (avoids malloc in hot path) */
+    double *work = lu->hs_work1;
+    double *work2 = lu->hs_work2;
+
+    /* Clear workspace */
+    memset(work, 0, m * sizeof(double));
+
+    /* If RHS is too dense, use direct dense solve path
+     * (must inline to avoid aliasing issues with workspace)
+     */
     if (nnz_rhs > m / 10) {
-        double *rhs = (double*)calloc(m, sizeof(double));
-        if (!rhs) return;
+        /* Build dense RHS vector in work */
         for (int k = 0; k < nnz_rhs; k++) {
             if (rhs_idx[k] >= 0 && rhs_idx[k] < m)
-                rhs[rhs_idx[k]] = rhs_val[k];
+                work[rhs_idx[k]] = rhs_val[k];
         }
-        lu_solve_transpose(lu, rhs, solution);
-        free(rhs);
+
+        /* Inline the dense transpose solve */
+        /* Apply inverse column permutation: work2[i] = work[col_perm[i]] */
+        for (int i = 0; i < m; i++) {
+            work2[i] = work[lu->col_perm[i]];
+        }
+
+        /* Apply updates in reverse (in step coordinates) */
+        if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+            apply_ft_spikes_backward(lu, work2);
+        } else if (lu->num_eta > 0) {
+            apply_eta_backward(lu, work2);
+        }
+
+        /* Solve U'z = work2 */
+        solve_Ut(lu, work2, work);
+
+        /* Solve L'x = z and apply P' */
+        solve_Lt(lu, work, work2);
+
+        vec_copy_data(solution, work2, m);
         return;
     }
 
-    /* Allocate workspace */
-    double *work = (double*)calloc(m, sizeof(double));
-    double *work2 = (double*)malloc(m * sizeof(double));
-
-    if (!work || !work2) {
-        free(work);
-        free(work2);
-        return;
-    }
-
-    /* Apply inverse column permutation: work[i] = b[col_perm[i]] */
+    /* Sparse path: Apply inverse column permutation */
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_idx = rhs_idx[k];
         if (orig_idx >= 0 && orig_idx < m) {
@@ -781,9 +815,453 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
 
     /* Solve L'x = z and apply P' */
     solve_Lt(lu, work2, solution);
+}
 
-    free(work);
-    free(work2);
+/* ============================================================================
+ * Hyper-Sparse Triangular Solves with Reach Computation
+ * ============================================================================
+ *
+ * For very sparse RHS vectors (e.g., single column of A), we can dramatically
+ * reduce work by only computing entries in the "reach" of the nonzero pattern.
+ *
+ * Reach of b in L: all rows i such that x[i] may be nonzero after solving Lx=b
+ * This is computed via DFS on the graph where j -> i if L[i,j] != 0.
+ *
+ * Key insight: For a column a_j with k nonzeros, the reach typically has
+ * O(k * avg_L_col_nnz) entries, much smaller than m.
+ */
+
+/*
+ * Compute reach of sparse RHS through lower triangular L using DFS.
+ * Returns indices in topological order (increasing for lower triangular).
+ *
+ * reach_out: output array of size m (will contain reached indices)
+ * reach_nnz: output count of reached indices
+ * marked: workspace array of size m (will be modified)
+ */
+static void compute_reach_L(const LUFactorization *lu,
+                            int nnz_rhs, const int *rhs_idx,
+                            int *reach_out, int *reach_nnz,
+                            int *marked) {
+    int m = lu->m;
+    *reach_nnz = 0;
+
+    /* Clear marks for RHS indices and their descendants */
+    /* We use marked[i] = 1 for "in reach", 2 for "processed" */
+
+    /* Stack-based DFS from each nonzero in RHS */
+    int *stack = reach_out + m/2;  /* Use second half of reach_out as stack */
+    int stack_top;
+
+    for (int k = 0; k < nnz_rhs; k++) {
+        int start = rhs_idx[k];
+        if (start < 0 || start >= m || marked[start]) continue;
+
+        /* DFS from start */
+        stack_top = 0;
+        stack[stack_top++] = start;
+
+        while (stack_top > 0) {
+            int j = stack[stack_top - 1];
+
+            if (marked[j] == 0) {
+                /* First visit: mark as in-progress */
+                marked[j] = 1;
+            }
+
+            /* Find unvisited child */
+            int found_child = 0;
+            for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
+                int i = lu->L_rowidx[p];  /* L[i,j] != 0, so j affects i */
+                if (marked[i] == 0) {
+                    stack[stack_top++] = i;
+                    found_child = 1;
+                    break;
+                }
+            }
+
+            if (!found_child) {
+                /* All children visited, add j to reach in reverse postorder */
+                stack_top--;
+                marked[j] = 2;  /* Fully processed */
+            }
+        }
+    }
+
+    /* Collect reached indices in topological order (increasing for L) */
+    for (int j = 0; j < m; j++) {
+        if (marked[j] == 2) {
+            reach_out[(*reach_nnz)++] = j;
+        }
+    }
+
+    /* Clear marks for next use */
+    for (int i = 0; i < *reach_nnz; i++) {
+        marked[reach_out[i]] = 0;
+    }
+}
+
+/*
+ * Compute reach of sparse RHS through upper triangular U using DFS.
+ * Returns indices in reverse topological order (decreasing for upper triangular).
+ */
+static void compute_reach_U(const LUFactorization *lu,
+                            int nnz_rhs, const int *rhs_idx,
+                            int *reach_out, int *reach_nnz,
+                            int *marked) {
+    int m = lu->m;
+    *reach_nnz = 0;
+
+    /* For U, we need to find rows affected by nonzeros.
+     * U is upper triangular: U[i,j] != 0 for i <= j.
+     * If x[j] is nonzero and U[i,j] != 0, then x[i] is affected.
+     * So we go from j to i where i < j.
+     */
+
+    int *stack = reach_out + m/2;
+    int stack_top;
+
+    for (int k = 0; k < nnz_rhs; k++) {
+        int start = rhs_idx[k];
+        if (start < 0 || start >= m || marked[start]) continue;
+
+        stack_top = 0;
+        stack[stack_top++] = start;
+
+        while (stack_top > 0) {
+            int j = stack[stack_top - 1];
+
+            if (marked[j] == 0) {
+                marked[j] = 1;
+            }
+
+            /* Find unvisited predecessor (row i < j where U[i,j] != 0) */
+            int found_child = 0;
+            for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+                int i = lu->U_rowidx[p];
+                if (i < j && marked[i] == 0) {
+                    stack[stack_top++] = i;
+                    found_child = 1;
+                    break;
+                }
+            }
+
+            if (!found_child) {
+                stack_top--;
+                marked[j] = 2;
+            }
+        }
+    }
+
+    /* Collect in decreasing order for U solve */
+    for (int j = m - 1; j >= 0; j--) {
+        if (marked[j] == 2) {
+            reach_out[(*reach_nnz)++] = j;
+        }
+    }
+
+    /* Clear marks */
+    for (int i = 0; i < *reach_nnz; i++) {
+        marked[reach_out[i]] = 0;
+    }
+}
+
+/*
+ * Sparse forward solve: Lx = b where b and x are sparse.
+ *
+ * Input:
+ *   nnz_b, b_idx, b_val: sparse RHS (in permuted coordinates)
+ *   x: dense output vector (zeroed on entry for non-reach indices)
+ *   reach, reach_nnz: precomputed reach (or NULL to compute)
+ *   marked: workspace of size m
+ *
+ * Output:
+ *   x: solution values at reach indices
+ *   x_idx, x_nnz: sparse representation of result
+ */
+static void solve_L_sparse(const LUFactorization *lu,
+                           int nnz_b, const int *b_idx, const double *b_val,
+                           double *x,
+                           int *x_idx, int *x_nnz,
+                           int *marked) {
+    int m = lu->m;
+
+    /* Compute reach if not provided */
+    int *reach = x_idx;  /* Reuse output array */
+    int reach_nnz;
+    compute_reach_L(lu, nnz_b, b_idx, reach, &reach_nnz, marked);
+
+    /* Initialize x with RHS values */
+    for (int k = 0; k < nnz_b; k++) {
+        int j = b_idx[k];
+        if (j >= 0 && j < m) {
+            x[j] = b_val[k];
+        }
+    }
+
+    /* Forward substitution only on reach (already in topological order) */
+    for (int k = 0; k < reach_nnz; k++) {
+        int j = reach[k];
+        double xj = x[j];  /* L[j,j] = 1, so no division needed */
+
+        if (fabs(xj) > RALPH_ZERO_TOL) {
+            /* Update successors */
+            for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
+                int i = lu->L_rowidx[p];
+                x[i] -= lu->L_values[p] * xj;
+            }
+        }
+    }
+
+    /* Build sparse output (indices already in reach) */
+    *x_nnz = 0;
+    for (int k = 0; k < reach_nnz; k++) {
+        int j = reach[k];
+        if (fabs(x[j]) > RALPH_ZERO_TOL) {
+            x_idx[*x_nnz] = j;
+            (*x_nnz)++;
+        }
+    }
+}
+
+/*
+ * Sparse backward solve: Ux = b where b and x are sparse.
+ */
+static void solve_U_sparse(const LUFactorization *lu,
+                           int nnz_b, const int *b_idx, const double *b_val,
+                           double *x,
+                           int *x_idx, int *x_nnz,
+                           int *marked) {
+    int m = lu->m;
+
+    /* Compute reach */
+    int *reach = x_idx;
+    int reach_nnz;
+    compute_reach_U(lu, nnz_b, b_idx, reach, &reach_nnz, marked);
+
+    /* Initialize x with RHS values */
+    for (int k = 0; k < nnz_b; k++) {
+        int j = b_idx[k];
+        if (j >= 0 && j < m) {
+            x[j] = b_val[k];
+        }
+    }
+
+    /* Backward substitution on reach (in decreasing order) */
+    for (int k = 0; k < reach_nnz; k++) {
+        int j = reach[k];
+
+        /* Find diagonal */
+        double diag = 0.0;
+        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+            if (lu->U_rowidx[p] == j) {
+                diag = lu->U_values[p];
+                break;
+            }
+        }
+
+        if (fabs(diag) < RALPH_PIVOT_TOL) {
+            x[j] = 0.0;
+            continue;
+        }
+
+        x[j] /= diag;
+        double xj = x[j];
+
+        if (fabs(xj) > RALPH_ZERO_TOL) {
+            /* Update predecessors */
+            for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+                int i = lu->U_rowidx[p];
+                if (i < j) {
+                    x[i] -= lu->U_values[p] * xj;
+                }
+            }
+        }
+    }
+
+    /* Build sparse output */
+    *x_nnz = 0;
+    for (int k = 0; k < reach_nnz; k++) {
+        int j = reach[k];
+        if (fabs(x[j]) > RALPH_ZERO_TOL) {
+            x_idx[*x_nnz] = j;
+            (*x_nnz)++;
+        }
+    }
+}
+
+/*
+ * Hyper-sparse FTRAN: Solve Bx = b where b is very sparse.
+ *
+ * Returns result in both dense (solution) and sparse (sol_idx, sol_nnz) form.
+ * Uses reach computation to minimize work.
+ *
+ * For a typical LP pivot column with 5-10 nonzeros, this can be 10-100x
+ * faster than dense solve.
+ */
+void lu_ftran_hyper_sparse(const LUFactorization *lu,
+                           int nnz_rhs, const int *rhs_idx, const double *rhs_val,
+                           double *solution,
+                           int *sol_idx, int *sol_nnz) {
+    if (!lu || !solution) return;
+
+    int m = lu->m;
+
+    /* Threshold: if RHS too dense, fall back to regular sparse solve */
+    if (nnz_rhs > m / 8) {
+        /* Use existing sparse solve */
+        lu_solve_sparse(lu, nnz_rhs, rhs_idx, rhs_val, solution);
+        /* Build sparse output by scanning */
+        if (sol_idx && sol_nnz) {
+            *sol_nnz = 0;
+            for (int j = 0; j < m; j++) {
+                if (fabs(solution[j]) > RALPH_ZERO_TOL) {
+                    sol_idx[(*sol_nnz)++] = j;
+                }
+            }
+        }
+        return;
+    }
+
+    /* Use pre-allocated workspace (avoid malloc in hot path) */
+    /* Cast away const for workspace access - workspace is logically mutable */
+    LUFactorization *lu_mut = (LUFactorization*)lu;
+    double *work = lu_mut->hs_work1;
+    double *work2 = lu_mut->hs_work2;
+    int *marked = lu_mut->hs_marked;
+    int *temp_idx = lu_mut->hs_idx;
+    double *temp_val = lu_mut->hs_val;
+
+    /* Step 1: Apply row permutation to RHS */
+    int perm_nnz = 0;
+    for (int k = 0; k < nnz_rhs; k++) {
+        int orig_row = rhs_idx[k];
+        if (orig_row >= 0 && orig_row < m) {
+            temp_idx[perm_nnz] = lu->perm_inv[orig_row];
+            temp_val[perm_nnz] = rhs_val[k];
+            perm_nnz++;
+        }
+    }
+
+    /* Step 2: Sparse L solve */
+    int L_nnz;
+    solve_L_sparse(lu, perm_nnz, temp_idx, temp_val, work, temp_idx, &L_nnz, marked);
+
+    /* Step 3: Sparse U solve */
+    /* Gather values for U solve */
+    for (int k = 0; k < L_nnz; k++) {
+        temp_val[k] = work[temp_idx[k]];
+    }
+
+    int U_nnz;
+    solve_U_sparse(lu, L_nnz, temp_idx, temp_val, work2, temp_idx, &U_nnz, marked);
+
+    /* Step 4: Apply FT/eta updates */
+    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+        apply_ft_spikes_forward(lu, work2);
+    } else if (lu->num_eta > 0) {
+        apply_eta_forward(lu, work2);
+    }
+
+    /* Step 5: Apply column permutation and build output */
+    memset(solution, 0, m * sizeof(double));
+    if (sol_nnz) *sol_nnz = 0;
+
+    for (int i = 0; i < m; i++) {
+        if (fabs(work2[i]) > RALPH_ZERO_TOL) {
+            int out_idx = lu->col_perm[i];
+            solution[out_idx] = work2[i];
+            if (sol_idx && sol_nnz) {
+                sol_idx[(*sol_nnz)++] = out_idx;
+            }
+        }
+    }
+
+    /* Clear workspace for next use (only clear used parts) */
+    for (int k = 0; k < L_nnz; k++) {
+        work[temp_idx[k]] = 0.0;
+    }
+    for (int i = 0; i < m; i++) {
+        work2[i] = 0.0;  /* FT updates may have touched all entries */
+    }
+}
+
+/*
+ * Hyper-sparse BTRAN: Solve B'x = b where b is very sparse.
+ *
+ * Used for computing dual prices when cost vector is sparse.
+ */
+void lu_btran_hyper_sparse(const LUFactorization *lu,
+                           int nnz_rhs, const int *rhs_idx, const double *rhs_val,
+                           double *solution,
+                           int *sol_idx, int *sol_nnz) {
+    if (!lu || !solution) return;
+
+    int m = lu->m;
+
+    /* Threshold for falling back to dense */
+    if (nnz_rhs > m / 8) {
+        lu_solve_transpose_sparse(lu, nnz_rhs, rhs_idx, rhs_val, solution);
+        if (sol_idx && sol_nnz) {
+            *sol_nnz = 0;
+            for (int j = 0; j < m; j++) {
+                if (fabs(solution[j]) > RALPH_ZERO_TOL) {
+                    sol_idx[(*sol_nnz)++] = j;
+                }
+            }
+        }
+        return;
+    }
+
+    /* For transpose solve, the operations are reversed:
+     * B' = Q U' L' P
+     * B'^{-1} = P' L'^{-1} U'^{-1} Q'
+     *
+     * 1. Apply Q' (inverse column perm)
+     * 2. Apply eta/FT updates in reverse
+     * 3. Solve U'^{-1} (forward sub on U')
+     * 4. Solve L'^{-1} (backward sub on L')
+     * 5. Apply P'
+     */
+
+    /* Use pre-allocated workspace - need to cast away const for workspace access */
+    LUFactorization *lu_mut = (LUFactorization*)lu;
+    double *work = lu_mut->hs_work1;
+    double *work2 = lu_mut->hs_work2;
+
+    /* Step 1: Apply inverse column permutation */
+    for (int k = 0; k < nnz_rhs; k++) {
+        int orig_idx = rhs_idx[k];
+        if (orig_idx >= 0 && orig_idx < m) {
+            int step_pos = lu->col_perm_inv[orig_idx];
+            work[step_pos] = rhs_val[k];
+        }
+    }
+
+    /* Step 2: Apply updates in reverse */
+    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+        apply_ft_spikes_backward(lu, work);
+    } else if (lu->num_eta > 0) {
+        apply_eta_backward(lu, work);
+    }
+
+    /* Step 3 & 4: Solve U' and L' (use dense for now - transpose sparsity is different) */
+    solve_Ut(lu, work, work2);
+    solve_Lt(lu, work2, solution);
+
+    /* Build sparse output */
+    if (sol_idx && sol_nnz) {
+        *sol_nnz = 0;
+        for (int j = 0; j < m; j++) {
+            if (fabs(solution[j]) > RALPH_ZERO_TOL) {
+                sol_idx[(*sol_nnz)++] = j;
+            }
+        }
+    }
+
+    /* Clear workspace */
+    memset(work, 0, m * sizeof(double));
+    memset(work2, 0, m * sizeof(double));
 }
 
 /* ============================================================================
