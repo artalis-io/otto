@@ -289,6 +289,8 @@ SimplexTableau* tableau_create(LPModel *model) {
     tab->work2 = (double*)calloc(tab->m, sizeof(double));
     tab->work3 = (double*)calloc(tab->n, sizeof(double));
     tab->rhs = (double*)calloc(tab->m, sizeof(double));
+    tab->pivot_row = (double*)calloc(tab->m, sizeof(double));
+    tab->tau_work = (double*)calloc(tab->m, sizeof(double));
 
     tab->se_weights = (double*)calloc(tab->n, sizeof(double));
 
@@ -296,7 +298,7 @@ SimplexTableau* tableau_create(LPModel *model) {
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
         !tab->x || !tab->y || !tab->rc ||
         !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs ||
-        !tab->se_weights) {
+        !tab->pivot_row || !tab->tau_work || !tab->se_weights) {
         free(norm_sense);
         free(norm_sign);
         tableau_free(tab);
@@ -479,6 +481,8 @@ void tableau_free(SimplexTableau *tab) {
     free(tab->work2);
     free(tab->work3);
     free(tab->rhs);
+    free(tab->pivot_row);
+    free(tab->tau_work);
     free(tab->se_weights);
     lu_free(tab->lu);
     free(tab);
@@ -882,12 +886,14 @@ int pricing_partial(SimplexTableau *tab, int *entering) {
 
 /* Bland's ratio test: among ties, choose smallest index leaving variable */
 int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *theta) {
-    /* Compute entering column in basis representation using sparse solve */
+    /* Compute entering column in basis representation */
     int col_nnz;
     const int *col_idx;
     const double *col_val;
     sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
-    lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);  /* d = B^{-1} * a_entering */
+
+    /* Use regular sparse solve for stability */
+    lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);
 
     double dir = 1.0;
     if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
@@ -936,12 +942,14 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
 }
 
 int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *theta) {
-    /* Compute entering column in basis representation using sparse solve */
+    /* Compute entering column in basis representation */
     int col_nnz;
     const int *col_idx;
     const double *col_val;
     sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
-    lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);  /* d = B^{-1} * a_entering */
+
+    /* Use regular sparse solve for stability (hyper-sparse was unstable) */
+    lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);
 
     double dir = 1.0;  /* Direction of movement */
     if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
@@ -1114,23 +1122,22 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     /* Always compute pivot row for incremental reduced cost updates
      * pivot_row = e_r^T * B^{-1}
      * This is also used for steepest edge weight updates
+     * Use pre-allocated workspace to avoid malloc in hot path
      */
-    double *pivot_row = (double*)malloc(tab->m * sizeof(double));
-    double *tau_helper = NULL;
+    double *pivot_row = tab->pivot_row;
+    double *tau_helper = tab->tau_work;
 
-    if (pivot_row) {
-        /* Use sparse BTRAN since e_leaving has only 1 non-zero */
-        int rhs_idx = leaving_pos;
-        double rhs_val = 1.0;
-        lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
+    /* Use sparse BTRAN since e_leaving has only 1 non-zero */
+    int rhs_idx = leaving_pos;
+    double rhs_val = 1.0;
+    lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
 
-        /* For steepest edge: tau_helper = B^{-T} * d_entering */
-        if (tab->use_steepest_edge && fabs(pivot_sq) > RALPH_ZERO_TOL) {
-            tau_helper = (double*)malloc(tab->m * sizeof(double));
-            if (tau_helper) {
-                lu_solve_transpose(tab->lu, tab->work2, tau_helper);
-            }
-        }
+    /* For steepest edge: tau_helper = B^{-T} * d_entering
+     * This enables exact weight updates.
+     */
+    int use_true_se = tab->use_steepest_edge;  /* Enable steepest edge when flag is set */
+    if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
+        lu_solve_transpose(tab->lu, tab->work2, tau_helper);
     }
 
     /* Update LU factorization */
@@ -1152,22 +1159,22 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
      *   tau_j = d_j' * d_entering = a_j' * (B^{-T} * d_entering)
      *   gamma_e = ||d_entering||^2 (entering column norm squared)
      *
-     * Devex approximation (simpler but less accurate):
+     * Devex approximation (simpler but much faster):
      *   gamma_j = max(gamma_j, (alpha_j^2 * gamma_e) / pivot^2)
+     * This doesn't need tau_helper, making it O(n) instead of O(n*m).
      */
-    if (tab->use_steepest_edge && pivot_row && tau_helper) {
+    if (tab->use_steepest_edge) {
         tab->devex_refcount++;
+        double pivot_inv_sq = 1.0 / (pivot * pivot);
 
-        /* Periodic reference reset: recalculate exact weights
-         * Reset when weights may have accumulated too much error
-         * (approximately every 2*n iterations)
-         */
+        /* Weight for leaving variable (now nonbasic): gamma_e / pivot^2 */
+        double leaving_weight = gamma_e * pivot_inv_sq;
+        if (leaving_weight < 1.0) leaving_weight = 1.0;
+        if (leaving_weight > 1e8) leaving_weight = 1e8;
+        tab->se_weights[leaving] = leaving_weight;
+
+        /* Periodic reference reset: recalculate weights from column norms */
         if (tab->devex_refcount >= 2 * tab->n) {
-            /* Reset weights based on current column norms
-             * For exact reset, we'd need to compute ||B^{-1}*a_j||^2 for all j
-             * which is expensive. Instead, we reset to column norms and let
-             * the updates refine them.
-             */
             for (int j = 0; j < tab->n; j++) {
                 double col_norm_sq = 0.0;
                 for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
@@ -1177,51 +1184,33 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
             }
             tab->devex_refcount = 0;
         } else {
-            /* True steepest edge update */
+            /* Steepest edge weight update for all non-basic variables */
             double pivot_inv = 1.0 / pivot;
-            double pivot_inv_sq = pivot_inv * pivot_inv;
 
             for (int j = 0; j < tab->n; j++) {
-                /* Skip entering (now basic) and already basic variables */
                 if (j == entering || j == leaving) continue;
                 if (tab->var_status[j] == RALPH_BASIC) continue;
 
-                /* Compute alpha_j = pivot_row * a_j (sparse) */
                 double alpha_j = sparse_dot_column(tab->A_ext, j, pivot_row);
-
-                /* Compute tau_j = a_j' * tau_helper (sparse) */
                 double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
 
-                /* Exact steepest edge update:
-                 * gamma_new = gamma - 2*(alpha/pivot)*tau + (alpha/pivot)^2 * gamma_e
-                 */
                 double alpha_ratio = alpha_j * pivot_inv;
                 double new_weight = tab->se_weights[j]
                                   - 2.0 * alpha_ratio * tau_j
                                   + alpha_ratio * alpha_ratio * gamma_e;
 
-                /* Numerical safeguards */
                 if (new_weight < 1.0) new_weight = 1.0;
                 if (new_weight > 1e8) new_weight = 1e8;
-
                 tab->se_weights[j] = new_weight;
             }
-
-            /* Weight for leaving variable (now nonbasic): gamma_e / pivot^2 */
-            double leaving_weight = gamma_e * pivot_inv_sq;
-            if (leaving_weight < 1.0) leaving_weight = 1.0;
-            if (leaving_weight > 1e8) leaving_weight = 1e8;
-            tab->se_weights[leaving] = leaving_weight;
         }
     }
 
     /* Incremental reduced cost update:
      * rc_new[j] = rc_old[j] - (rc[entering] / pivot) * alpha_j
      * where alpha_j = pivot_row * a_j
-     *
-     * This avoids recomputing all reduced costs from scratch each iteration.
      */
-    if (pivot_row && fabs(pivot) > RALPH_PIVOT_TOL) {
+    if (fabs(pivot) > RALPH_PIVOT_TOL) {
         double rc_enter = tab->rc[entering];
         double rc_ratio = rc_enter / pivot;
 
@@ -1245,9 +1234,6 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
          */
         tab->rc[leaving] = -rc_enter / pivot;
     }
-
-    free(pivot_row);
-    free(tau_helper);
 
     return 0;
 }

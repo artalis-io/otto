@@ -109,6 +109,13 @@ typedef struct {
     double max_diag_U;      /* Maximum |U[i,i]| at factorization */
     double cond_estimate;   /* Estimated condition number */
     double growth_factor;   /* Growth in U during updates */
+
+    /* Pre-allocated workspace for hyper-sparse operations */
+    double *hs_work1;       /* Dense workspace 1 */
+    double *hs_work2;       /* Dense workspace 2 */
+    int *hs_marked;         /* Marked array for reach computation */
+    int *hs_idx;            /* Sparse index array */
+    double *hs_val;         /* Sparse value array */
 } LUFactorization;
 
 /* Simplex tableau representation */
@@ -144,6 +151,8 @@ typedef struct {
     double *work2;
     double *work3;
     double *rhs;
+    double *pivot_row;      /* Pre-allocated for simplex_pivot */
+    double *tau_work;       /* Pre-allocated for steepest edge */
 
     /* Steepest edge / Devex weights */
     double *se_weights;     /* Steepest edge weights */
@@ -217,6 +226,16 @@ void lu_solve_sparse(const LUFactorization *lu,
 void lu_solve_transpose_sparse(const LUFactorization *lu,
                                int nnz_rhs, const int *rhs_idx, const double *rhs_val,
                                double *solution);
+
+/* Hyper-sparse LU solves - with reach computation for very sparse RHS */
+void lu_ftran_hyper_sparse(const LUFactorization *lu,
+                           int nnz_rhs, const int *rhs_idx, const double *rhs_val,
+                           double *solution,
+                           int *sol_idx, int *sol_nnz);
+void lu_btran_hyper_sparse(const LUFactorization *lu,
+                           int nnz_rhs, const int *rhs_idx, const double *rhs_val,
+                           double *solution,
+                           int *sol_idx, int *sol_nnz);
 
 /* Simplex tableau functions */
 SimplexTableau* tableau_create(LPModel *model);
