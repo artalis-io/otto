@@ -148,6 +148,9 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
 
     double pivot = tab->work3[leaving];
 
+    /* Save rc_entering BEFORE updating reduced costs (needed for bound selection) */
+    double rc_entering_orig = tab->rc[entering];
+
     /* Update reduced costs using sparse solves */
     double rc_leaving = tab->rc[entering] / pivot;
     for (int j = 0; j < tab->n; j++) {
@@ -204,8 +207,9 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
      * For dual feasibility (internal minimization):
      * - If rc_leaving_new >= 0, go to lower bound
      * - If rc_leaving_new < 0, go to upper bound
+     * NOTE: Use rc_entering_orig saved before zeroing rc[entering]
      */
-    double rc_leaving_new = -tab->rc[entering] / pivot;
+    double rc_leaving_new = -rc_entering_orig / pivot;
     if (rc_leaving_new >= -RALPH_OPT_TOL) {
         /* Go to lower bound */
         if (tab->lb_ext[leaving_var] > -RALPH_INFINITY/2) {
