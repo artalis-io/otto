@@ -12,6 +12,16 @@
 #include <math.h>
 #include "lp.h"
 
+/* Forward declarations for reach computation (used by sparse solves) */
+static void compute_reach_L(const LUFactorization *lu,
+                            int nnz_rhs, const int *rhs_idx,
+                            int *reach_out, int *reach_nnz,
+                            int *marked);
+static void compute_reach_U(const LUFactorization *lu,
+                            int nnz_rhs, const int *rhs_idx,
+                            int *reach_out, int *reach_nnz,
+                            int *marked);
+
 /* ============================================================================
  * LU Factorization Creation/Destruction
  * ============================================================================ */
@@ -743,8 +753,9 @@ void lu_solve_sparse(const LUFactorization *lu,
 
     /* If RHS is too dense, use direct dense solve path
      * (must inline to avoid aliasing issues with workspace)
+     * Threshold: use sparse path for RHS with <= 25% density (m/4)
      */
-    if (nnz_rhs > m / 10) {
+    if (nnz_rhs > m / 4) {
         /* Build dense RHS vector in work */
         for (int k = 0; k < nnz_rhs; k++) {
             if (rhs_idx[k] >= 0 && rhs_idx[k] < m)
@@ -767,16 +778,29 @@ void lu_solve_sparse(const LUFactorization *lu,
         return;
     }
 
-    /* Sparse path: Build permuted RHS */
+    /* Sparse path: Clear work2 for sparse solve (work already cleared) */
+    memset(work2, 0, m * sizeof(double));
+
+    /* Build permuted RHS and track nonzero indices */
+    int *perm_rhs_idx = (int*)lu->perm_work;  /* Reuse perm_work as int array */
+    int perm_rhs_nnz = 0;
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_row = rhs_idx[k];
         if (orig_row >= 0 && orig_row < m) {
-            work[lu->perm_inv[orig_row]] = rhs_val[k];
+            int perm_row = lu->perm_inv[orig_row];
+            work[perm_row] = rhs_val[k];
+            perm_rhs_idx[perm_rhs_nnz++] = perm_row;
         }
     }
 
-    /* Forward solve L: for each column j in order */
-    for (int j = 0; j < m; j++) {
+    /* Compute reach through L - only these indices need processing */
+    int *reach = lu->hs_idx;
+    int reach_nnz;
+    compute_reach_L(lu, perm_rhs_nnz, perm_rhs_idx, reach, &reach_nnz, lu->hs_marked);
+
+    /* Forward solve L: only process indices in reach (sorted ascending) */
+    for (int i = 0; i < reach_nnz; i++) {
+        int j = reach[i];
         double xj = work[j];
         if (fabs(xj) < RALPH_ZERO_TOL) continue;
 
@@ -786,8 +810,48 @@ void lu_solve_sparse(const LUFactorization *lu,
         }
     }
 
-    /* Backward solve U */
-    solve_U(lu, work, work2);
+    /* Backward solve U - use reach-based solve for U as well */
+    /* After L solve, nonzeros are at reach indices; use these for U reach */
+    int *u_reach = (int*)lu->perm_work;  /* Reuse for U reach */
+    int u_reach_nnz;
+    compute_reach_U(lu, reach_nnz, reach, u_reach, &u_reach_nnz, lu->hs_marked);
+
+    /* Backward solve U: only process indices in u_reach (sorted descending) */
+    for (int i = 0; i < u_reach_nnz; i++) {
+        int j = u_reach[i];
+
+        /* Find diagonal entry */
+        double diag = 0.0;
+        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+            if (lu->U_rowidx[p] == j) {
+                diag = lu->U_values[p];
+                break;
+            }
+        }
+
+        if (fabs(diag) < RALPH_PIVOT_TOL) {
+            work2[j] = 0.0;
+            continue;
+        }
+
+        work2[j] = work[j] / diag;
+        double xj = work2[j];
+
+        if (fabs(xj) > RALPH_ZERO_TOL) {
+            /* Update predecessors */
+            for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+                int r = lu->U_rowidx[p];
+                if (r < j) {
+                    work[r] -= lu->U_values[p] * xj;
+                }
+            }
+        }
+    }
+
+    /* Clear work for non-reached indices to avoid stale values */
+    for (int i = 0; i < reach_nnz; i++) {
+        work[reach[i]] = 0.0;
+    }
 
     /* Apply updates */
     if (lu->use_ft_updates && lu->ft_num_updates > 0) {
@@ -827,8 +891,9 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
 
     /* If RHS is too dense, use direct dense solve path
      * (must inline to avoid aliasing issues with workspace)
+     * Threshold: use sparse path for RHS with <= 25% density (m/4)
      */
-    if (nnz_rhs > m / 10) {
+    if (nnz_rhs > m / 4) {
         /* Build dense RHS vector in work */
         for (int k = 0; k < nnz_rhs; k++) {
             if (rhs_idx[k] >= 0 && rhs_idx[k] < m)
@@ -903,6 +968,9 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
  * reach_out: output array of size m (will contain reached indices)
  * reach_nnz: output count of reached indices
  * marked: workspace array of size m (will be modified)
+ *
+ * OPTIMIZED: Collects visited indices during DFS, then sorts only those
+ * instead of scanning all m indices. This makes the function O(reach) instead of O(m).
  */
 static void compute_reach_L(const LUFactorization *lu,
                             int nnz_rhs, const int *rhs_idx,
@@ -911,11 +979,11 @@ static void compute_reach_L(const LUFactorization *lu,
     int m = lu->m;
     *reach_nnz = 0;
 
-    /* Clear marks for RHS indices and their descendants */
-    /* We use marked[i] = 1 for "in reach", 2 for "processed" */
+    /* We collect visited indices in reach_out during DFS, then sort at the end.
+     * Use marked[i] = 1 for "visited" */
 
     /* Stack-based DFS from each nonzero in RHS */
-    int *stack = reach_out + m/2;  /* Use second half of reach_out as stack */
+    int *stack = (int*)lu->hs_val;  /* Reuse hs_val as int stack (same size as m doubles) */
     int stack_top;
 
     for (int k = 0; k < nnz_rhs; k++) {
@@ -925,42 +993,52 @@ static void compute_reach_L(const LUFactorization *lu,
         /* DFS from start */
         stack_top = 0;
         stack[stack_top++] = start;
+        marked[start] = 1;
 
         while (stack_top > 0) {
-            int j = stack[stack_top - 1];
+            int j = stack[--stack_top];
 
-            if (marked[j] == 0) {
-                /* First visit: mark as in-progress */
-                marked[j] = 1;
-            }
+            /* Add j to reach (will sort later) */
+            reach_out[(*reach_nnz)++] = j;
 
-            /* Find unvisited child */
-            int found_child = 0;
+            /* Visit all unvisited children */
             for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
                 int i = lu->L_rowidx[p];  /* L[i,j] != 0, so j affects i */
                 if (marked[i] == 0) {
+                    marked[i] = 1;
                     stack[stack_top++] = i;
-                    found_child = 1;
-                    break;
                 }
             }
+        }
+    }
 
-            if (!found_child) {
-                /* All children visited, add j to reach in reverse postorder */
-                stack_top--;
-                marked[j] = 2;  /* Fully processed */
+    /* Sort reach indices to get topological order (ascending for L solve) */
+    /* Use insertion sort for small reaches, it's faster than qsort for small n */
+    if (*reach_nnz <= 32) {
+        for (int i = 1; i < *reach_nnz; i++) {
+            int key = reach_out[i];
+            int j = i - 1;
+            while (j >= 0 && reach_out[j] > key) {
+                reach_out[j + 1] = reach_out[j];
+                j--;
+            }
+            reach_out[j + 1] = key;
+        }
+    } else {
+        /* Shell sort for medium sizes - O(n^1.3) but no recursion overhead */
+        for (int gap = *reach_nnz / 2; gap > 0; gap /= 2) {
+            for (int i = gap; i < *reach_nnz; i++) {
+                int temp = reach_out[i];
+                int j;
+                for (j = i; j >= gap && reach_out[j - gap] > temp; j -= gap) {
+                    reach_out[j] = reach_out[j - gap];
+                }
+                reach_out[j] = temp;
             }
         }
     }
 
-    /* Collect reached indices in topological order (increasing for L) */
-    for (int j = 0; j < m; j++) {
-        if (marked[j] == 2) {
-            reach_out[(*reach_nnz)++] = j;
-        }
-    }
-
-    /* Clear marks for next use */
+    /* Clear marks for next use - only clear what we visited */
     for (int i = 0; i < *reach_nnz; i++) {
         marked[reach_out[i]] = 0;
     }
@@ -969,6 +1047,9 @@ static void compute_reach_L(const LUFactorization *lu,
 /*
  * Compute reach of sparse RHS through upper triangular U using DFS.
  * Returns indices in reverse topological order (decreasing for upper triangular).
+ *
+ * OPTIMIZED: Collects visited indices during DFS, then sorts only those
+ * instead of scanning all m indices.
  */
 static void compute_reach_U(const LUFactorization *lu,
                             int nnz_rhs, const int *rhs_idx,
@@ -983,7 +1064,7 @@ static void compute_reach_U(const LUFactorization *lu,
      * So we go from j to i where i < j.
      */
 
-    int *stack = reach_out + m/2;
+    int *stack = (int*)lu->hs_val;  /* Reuse hs_val as int stack */
     int stack_top;
 
     for (int k = 0; k < nnz_rhs; k++) {
@@ -992,40 +1073,52 @@ static void compute_reach_U(const LUFactorization *lu,
 
         stack_top = 0;
         stack[stack_top++] = start;
+        marked[start] = 1;
 
         while (stack_top > 0) {
-            int j = stack[stack_top - 1];
+            int j = stack[--stack_top];
 
-            if (marked[j] == 0) {
-                marked[j] = 1;
-            }
+            /* Add j to reach (will sort later) */
+            reach_out[(*reach_nnz)++] = j;
 
-            /* Find unvisited predecessor (row i < j where U[i,j] != 0) */
-            int found_child = 0;
+            /* Visit all unvisited predecessors (row i < j where U[i,j] != 0) */
             for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
                 int i = lu->U_rowidx[p];
                 if (i < j && marked[i] == 0) {
+                    marked[i] = 1;
                     stack[stack_top++] = i;
-                    found_child = 1;
-                    break;
                 }
             }
+        }
+    }
 
-            if (!found_child) {
-                stack_top--;
-                marked[j] = 2;
+    /* Sort reach indices in DECREASING order for U solve (backward substitution) */
+    /* Use insertion sort for small reaches */
+    if (*reach_nnz <= 32) {
+        for (int i = 1; i < *reach_nnz; i++) {
+            int key = reach_out[i];
+            int j = i - 1;
+            while (j >= 0 && reach_out[j] < key) {  /* Note: < for decreasing */
+                reach_out[j + 1] = reach_out[j];
+                j--;
+            }
+            reach_out[j + 1] = key;
+        }
+    } else {
+        /* Shell sort for medium sizes - descending order */
+        for (int gap = *reach_nnz / 2; gap > 0; gap /= 2) {
+            for (int i = gap; i < *reach_nnz; i++) {
+                int temp = reach_out[i];
+                int j;
+                for (j = i; j >= gap && reach_out[j - gap] < temp; j -= gap) {
+                    reach_out[j] = reach_out[j - gap];
+                }
+                reach_out[j] = temp;
             }
         }
     }
 
-    /* Collect in decreasing order for U solve */
-    for (int j = m - 1; j >= 0; j--) {
-        if (marked[j] == 2) {
-            reach_out[(*reach_nnz)++] = j;
-        }
-    }
-
-    /* Clear marks */
+    /* Clear marks - only clear what we visited */
     for (int i = 0; i < *reach_nnz; i++) {
         marked[reach_out[i]] = 0;
     }
