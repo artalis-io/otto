@@ -6,6 +6,8 @@ test_edge_cases
 bench_sizes
 bench_quick
 bench_ralph
+bench_mip
+bench_vs_glpk
 compare_glpk
 
 # Profiling
