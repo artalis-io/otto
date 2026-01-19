@@ -100,9 +100,16 @@ typedef struct {
     /* Spike storage for FT (sparse columns that replaced original U columns) */
     int ft_spike_capacity;
     int *ft_spike_col;      /* Which column this spike replaces */
-    int **ft_spike_idx;     /* Row indices of spike non-zeros */
-    double **ft_spike_val;  /* Values of spike non-zeros */
-    int *ft_spike_nnz;      /* Number of non-zeros in each spike */
+    double *ft_spike_diag;  /* Diagonal value (1/pivot) - stored separately for branchless apply */
+    int **ft_spike_idx;     /* Row indices of OFF-DIAGONAL non-zeros */
+    double **ft_spike_val;  /* Values of OFF-DIAGONAL non-zeros */
+    int *ft_spike_nnz;      /* Number of OFF-DIAGONAL non-zeros in each spike */
+
+    /* Compacted spike blocks - periodically merge spikes for faster application */
+    int ft_compact_interval;    /* Compact every N spikes (0 = disabled) */
+    int ft_num_compacted;       /* Number of spikes already compacted */
+    double *ft_compact_matrix;  /* Dense m×m matrix for compacted spikes (when used) */
+    int ft_compact_valid;       /* 1 if compact_matrix is valid */
 
     /* Condition number monitoring */
     double min_diag_U;      /* Minimum |U[i,i]| at factorization */
