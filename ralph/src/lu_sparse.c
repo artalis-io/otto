@@ -1155,6 +1155,59 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                     }
                 }
             }
+
+            /* FAST PATH: Singleton column (identity column in LP) */
+            /* These columns have exactly 1 nonzero - no elimination needed */
+            if (work->col_nnz[pivot_col] == 1) {
+                /* Find the single nonzero entry - that's our pivot */
+                SparseEntry *e = work->cols[pivot_col];
+                while (e && work->row_done[e->idx]) e = e->next;
+                if (e) {
+                    pivot_row = e->idx;
+                    (void)e->val;  /* pivot_val = e->val, stored via loop below */
+
+                    /* Record permutations */
+                    work->row_perm[step] = pivot_row;
+                    work->col_perm[step] = pivot_col;
+                    work->row_done[pivot_row] = 1;
+                    work->col_done[pivot_col] = 1;
+
+                    /* Store U entries from pivot row (all active columns) */
+                    for (SparseEntry *re = work->rows[pivot_row]; re; re = re->next) {
+                        int j = re->idx;
+                        if (work->col_done[j] && j != pivot_col) continue;
+                        double val = re->val;
+                        if (fabs(val) < RALPH_ZERO_TOL) continue;
+
+                        if (U_nnz >= U_cap) {
+                            U_cap *= 2;
+                            U_i = (int*)realloc(U_i, U_cap * sizeof(int));
+                            U_j = (int*)realloc(U_j, U_cap * sizeof(int));
+                            U_v = (double*)realloc(U_v, U_cap * sizeof(double));
+                        }
+                        U_i[U_nnz] = step;
+                        U_j[U_nnz] = j;
+                        U_v[U_nnz] = val;
+                        U_nnz++;
+                    }
+
+                    /* Store L diagonal (always 1) */
+                    if (L_nnz >= L_cap) {
+                        L_cap *= 2;
+                        L_i = (int*)realloc(L_i, L_cap * sizeof(int));
+                        L_j = (int*)realloc(L_j, L_cap * sizeof(int));
+                        L_v = (double*)realloc(L_v, L_cap * sizeof(double));
+                    }
+                    L_i[L_nnz] = pivot_row;
+                    L_j[L_nnz] = step;
+                    L_v[L_nnz] = 1.0;
+                    L_nnz++;
+
+                    work->col_nnz[pivot_col] = 0;
+                    continue;  /* Skip to next step - no elimination needed */
+                }
+            }
+
             if (select_row_pivot(work, pivot_col, &pivot_row) < 0) {
                 int found = 0;
                 for (int jj = 0; jj < m; jj++) {
