@@ -190,6 +190,7 @@ static SolveResult solve_with_ralph(TestProblem *prob) {
     /* Suppress output */
     ralph_set_int_param(model, "verbose", 0);
     ralph_set_int_param(model, "max_iterations", 100000);
+    /* Note: method=2 (dual simplex) has stability issues, use primal (default) */
 
     /* Add variables */
     for (int j = 0; j < prob->num_vars; j++) {
