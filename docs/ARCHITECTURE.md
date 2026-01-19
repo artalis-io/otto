@@ -1,259 +1,358 @@
-# FuelWise Platform Architecture
+# Ralph LP/MIP Solver Architecture
 
 ## Overview
 
-FuelWise is a truck refueling optimization platform that finds the minimum-cost fueling strategy for long-haul routes. Built on **Ralph** (**R**obust **A**I **L**inear **P**rogramming **H**elper), a zero-dependency LP/MIP solver.
-
-The platform consists of five main components organized in a layered architecture.
+Ralph is a complete LP (Linear Programming) and MIP (Mixed Integer Programming) solver implementing industrial-strength algorithms. This document describes the high-level architecture and how the components interact.
 
 ## System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         Presentation Layer                       │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                    React UI (ui/)                        │    │
-│  │  • Interactive map with Leaflet                          │    │
-│  │  • CSV upload for stations/waypoints                     │    │
-│  │  • Vehicle configuration                                 │    │
-│  │  • Optimization results display                          │    │
-│  └─────────────────────────────────────────────────────────┘    │
+│                        Public API (ralph.h)                      │
+│  ralph_create, ralph_add_var, ralph_add_constraint, ralph_solve  │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-┌─────────────────────────┐     ┌─────────────────────────┐
-│   REST API (api/)       │     │   WASM Module (wasm/)   │
-│   • mongoose HTTP       │     │   • Emscripten build    │
-│   • JSON endpoints      │     │   • Browser-native      │
-│   • CORS support        │     │   • JS wrapper API      │
-└───────────┬─────────────┘     └───────────┬─────────────┘
-            │                               │
-            └───────────────┬───────────────┘
-                            ▼
+                                 │
+                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Domain Layer                                │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │               FuelWise Library (fuelwise/)               │    │
-│  │  • Geospatial: Haversine, projections                    │    │
-│  │  • Route: Station filtering, polyline ops                │    │
-│  │  • Refuel: LP/MILP problem formulation                   │    │
-│  │  • Piecewise consumption support                         │    │
-│  └─────────────────────────────────────────────────────────┘    │
+│                      Model Layer (model.c)                       │
+│         LPModel: variables, constraints, bounds, objective       │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     Solver Layer                                 │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                 Ralph Solver (ralph/)                    │    │
-│  │  • Revised Simplex (primal & dual)                       │    │
-│  │  • LU factorization with Markowitz                       │    │
-│  │  • Branch & Bound MIP                                    │    │
-│  │  • Presolve & cutting planes                             │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
+                                 │
+                    ┌────────────┴────────────┐
+                    ▼                         ▼
+┌──────────────────────────┐    ┌──────────────────────────┐
+│   LP Solver (simplex.c)   │    │   MIP Solver (mip.c)     │
+│   Revised Simplex Method  │◄───│   Branch and Bound       │
+└──────────────────────────┘    └──────────────────────────┘
+            │                              │
+            ▼                              ▼
+┌──────────────────────────┐    ┌──────────────────────────┐
+│  LU Factorization (lu.c)  │    │  Cutting Planes (cuts.c) │
+│  Basis matrix operations  │    │  Gomory, MIR cuts        │
+└──────────────────────────┘    └──────────────────────────┘
+            │
+            ▼
+┌──────────────────────────┐
+│  Sparse Matrix (sparse.c) │
+│  CSC format operations    │
+└──────────────────────────┘
 ```
 
-## Component Dependencies
+## Core Components
 
-```
-ui/ ──────► api/ ──────► fuelwise/ ──────► ralph/
-  │                          │
-  └──────► wasm/ ───────────┘
-```
+### 1. Sparse Matrix Layer (`sparse.c`, `sparse.h`)
 
-- **ralph/**: Zero external dependencies (standalone C library)
-- **fuelwise/**: Depends on ralph/ for optimization
-- **api/**: Depends on fuelwise/, uses mongoose for HTTP
-- **wasm/**: Depends on fuelwise/, uses Emscripten
-- **ui/**: Depends on api/ or wasm/, uses React + Leaflet
+**Purpose:** Efficient storage and operations for sparse matrices.
 
-## Data Flow
-
-### Optimization Pipeline
-
-```
-1. Input
-   ├── Stations: [id, lat, lon, price]
-   ├── Waypoints: [lat, lon]
-   └── Config: tank_capacity, current_fuel, mpg, min_fuel
-
-2. Route Acquisition (External)
-   └── OSRM/Google/Mapbox → Polyline coordinates
-
-3. Station Filtering (fuelwise/fw_route)
-   ├── Project stations onto polyline
-   ├── Filter by perpendicular distance
-   └── Sort by distance along route
-
-4. Problem Formulation (fuelwise/fw_refuel)
-   ├── Build LP model with fuel constraints
-   ├── Add binary variables for MILP (if min_purchase/stop_cost)
-   └── Pass to solver
-
-5. Optimization (ralph/)
-   ├── Presolve: tighten bounds, remove redundancy
-   ├── Simplex: find LP optimal
-   └── Branch & Bound: enforce integrality (MILP only)
-
-6. Output
-   ├── Total cost
-   ├── Fuel stops: [station_id, gallons, cost]
-   └── Remaining fuel at destination
-```
-
-## Mathematical Model
-
-### LP Formulation (Continuous)
-
-**Variables:**
-- `x[i]` = gallons purchased at station i
-- `y[i]` = cumulative fuel before arriving at station i
-
-**Objective:**
-```
-minimize Σ price[i] * x[i]
-```
-
-**Constraints:**
-```
-y[i] = current_fuel + Σ(j<i) x[j]                    # Fuel balance
-y[i] - fuel_consumed(0, dist[i]) ≥ min_fuel         # Min fuel at station
-y[i] + x[i] - fuel_consumed(0, dist[i]) ≤ capacity  # Tank capacity
-Σ x[i] ≥ total_fuel_needed - current_fuel + min_end # Reach destination
-```
-
-### MILP Extension (Discrete Stops)
-
-**Additional Variables:**
-- `z[i]` ∈ {0, 1} = 1 if stopping at station i
-
-**Additional Constraints:**
-```
-x[i] ≤ capacity * z[i]           # Link purchase to stop
-x[i] ≥ min_purchase * z[i]       # Minimum purchase if stopping
-```
-
-**Extended Objective:**
-```
-minimize Σ price[i] * x[i] + Σ stop_cost * z[i]
-```
-
-## Key Design Decisions
-
-### 1. C-First Architecture
-All core logic is in C for maximum portability:
-- Native performance
-- WASM compilation via Emscripten
-- No runtime dependencies
-- Embedded system support
-
-### 2. Separation of Concerns
-- **ralph/**: General-purpose LP/MIP solver (domain-agnostic)
-- **fuelwise/**: Domain-specific refueling logic
-- **api/wasm/**: Delivery mechanisms
-- **ui/**: Presentation
-
-### 3. Piecewise Consumption
-Supports variable fuel efficiency via route segments:
+**Data Structure:**
 ```c
 typedef struct {
-    double start_distance;    // Segment start (miles)
-    double cargo_weight_lbs;  // Weight in segment
-    double consumption_mpg;   // Fuel efficiency
-} FWRouteSegment;
+    int nrows, ncols, nnz;
+    int *colptr;    // Column pointers (size: ncols + 1)
+    int *rowidx;    // Row indices (size: nnz)
+    double *values; // Non-zero values (size: nnz)
+} SparseMatrix;
 ```
 
-### 4. Two-Step Filtering
-For large station datasets:
-1. Coarse filter with overview polyline (fast)
-2. Fine snap with detailed polyline (accurate)
+**Key Operations:**
+- Matrix-vector multiplication: O(nnz)
+- Column extraction: O(column_nnz)
+- Submatrix extraction
 
-### 5. Abstract Routing
-UI supports multiple routing providers via common interface:
-- OSRM (default, free)
-- Google Maps
-- Mapbox
-- PTV
+### 2. Model Layer (`model.c`, `lp.h`)
 
-## File Organization
+**Purpose:** Represent optimization problems in standard form.
 
-```
-lp-solver/
-├── ralph/                  # LP/MIP Solver
-│   ├── include/            # Public headers
-│   ├── src/                # Implementation
-│   └── tests/              # Solver tests
-│
-├── fuelwise/               # Refueling Library
-│   ├── include/            # Public API
-│   ├── src/                # Implementation
-│   └── tests/              # Domain tests
-│
-├── api/                    # REST API
-│   ├── src/                # Server code
-│   └── mongoose/           # HTTP library
-│
-├── wasm/                   # WebAssembly
-│   ├── src/                # WASM bindings
-│   └── build/              # Compiled output
-│
-├── ui/                     # React Frontend
-│   ├── src/
-│   │   ├── components/     # React components
-│   │   ├── services/       # API client
-│   │   └── types/          # TypeScript types
-│   └── public/             # Static assets
-│
-├── docs/                   # Architecture docs
-└── Makefile                # Build orchestration
+**Data Structure:**
+```c
+typedef struct {
+    int num_vars, num_cons;
+    SparseMatrix *A;       // Constraint matrix
+    double *c;             // Objective coefficients
+    double *b;             // RHS values
+    double *lb, *ub;       // Variable bounds
+    char *sense;           // Constraint sense (L, G, E)
+    char *var_type;        // Variable type (C, I, B)
+    int obj_sense;         // 1 = minimize, -1 = maximize
+} LPModel;
 ```
 
-## Build System
+### 3. Simplex Tableau (`simplex.c`)
 
-```makefile
-# Build everything
-make all        # ralph + fuelwise
+**Purpose:** Maintain the simplex tableau in revised form.
 
-# Individual targets
-make ralph      # LP/MIP solver only
-make fuelwise   # Refueling library
-make api        # REST API server
-make wasm       # WebAssembly module (requires Emscripten)
+**Data Structure:**
+```c
+typedef struct {
+    LPModel *model;
+    int m, n;                  // Dimensions (constraints, total vars)
+    SparseMatrix *A_ext;       // Extended matrix with slacks
+    double *c_ext;             // Extended costs
+    double *lb_ext, *ub_ext;   // Extended bounds
 
-# Testing
-make test       # All tests
-make test-ralph
-make test-fuelwise
-make test-api
+    int *basis;                // Basic variable indices
+    int *basis_pos;            // Position of each var in basis (-1 if nonbasic)
+    VarStatus *var_status;     // BASIC, NONBASIC_LOWER, NONBASIC_UPPER
 
-# Run
-make run-api    # Start API server on :8080
+    double *x;                 // Solution vector
+    double *y;                 // Dual values
+    double *rc;                // Reduced costs
+
+    LUFactorization *lu;       // Basis factorization
+} SimplexTableau;
 ```
+
+### 4. LU Factorization (`lu.c`)
+
+**Purpose:** Efficiently solve systems with the basis matrix.
+
+**Key Insight:** Instead of refactorizing B after each pivot, we maintain:
+- Initial factorization: PA = LU
+- Eta matrices E₁, E₂, ... for subsequent updates
+- B_current = B_initial × E₁ × E₂ × ... × Eₖ
+
+**Data Structure:**
+```c
+typedef struct {
+    int m;
+    int *L_colptr, *L_rowidx;  // L matrix in CSC
+    double *L_values;
+    int *U_colptr, *U_rowidx;  // U matrix in CSC
+    double *U_values;
+    int *perm, *perm_inv;      // Row permutation
+
+    // Eta file for updates
+    int num_eta;
+    int *eta_col;              // Which column each eta modifies
+    double **eta_vectors;      // The eta vectors
+} LUFactorization;
+```
+
+### 5. MIP Solver (`mip.c`, `branch_bound.c`)
+
+**Purpose:** Solve mixed-integer problems via branch and bound.
+
+**Components:**
+- **Node Queue:** Priority queue of B&B nodes
+- **Branching:** Select fractional variable, create child nodes
+- **Bounding:** Solve LP relaxation at each node
+- **Pruning:** Discard nodes that can't improve incumbent
+
+## Algorithm Details
+
+### Revised Simplex Method
+
+The simplex method finds optimal solutions to LP problems by moving from vertex to vertex of the feasible region.
+
+**Main Loop:**
+```
+1. Compute reduced costs: rc = c - y'A where y = B⁻ᵀcB
+2. Pricing: Select entering variable j with rc[j] < 0 (for min)
+3. Ratio test: Compute direction d = B⁻¹Aⱼ, find leaving variable
+4. Pivot: Update basis, solution, and LU factorization
+5. Repeat until optimal (no negative rc) or unbounded
+```
+
+**Pricing Strategies:**
+- Dantzig: Most negative reduced cost
+- Steepest Edge: Best improvement per unit movement
+
+**Ratio Test:**
+- Standard: θ = min{xB[i]/d[i] : d[i] > 0}
+- Harris: Two-pass with tolerance for numerical stability
+
+### Branch and Bound
+
+For MIP problems with integer constraints:
+
+```
+1. Solve LP relaxation (root node)
+2. If solution is integer-feasible → done
+3. Select fractional variable xⱼ = f
+4. Branch: Create nodes with xⱼ ≤ ⌊f⌋ and xⱼ ≥ ⌈f⌉
+5. Process nodes in priority order
+6. Prune nodes with bound worse than incumbent
+7. Update incumbent when integer solution found
+```
+
+**Node Selection:**
+- Best-first: Prioritize best LP bound
+- Depth-first: Dive deep to find incumbents fast
+- Hybrid: Mix of both strategies
+
+### Cutting Planes
+
+Strengthen LP relaxation to get tighter bounds:
+
+**Gomory Mixed-Integer Cuts:**
+For a basic variable xᵢ with fractional value:
+```
+∑ⱼ aᵢⱼxⱼ = bᵢ  (tableau row)
+
+Cut: ∑ⱼ (fⱼ if fⱼ ≤ f₀, else f₀(1-fⱼ)/(1-f₀)) xⱼ ≥ f₀
+
+where fⱼ = fractional part of aᵢⱼ, f₀ = fractional part of bᵢ
+```
+
+## Data Flow Example
+
+**Solving: min -x - y, s.t. x + y ≤ 4, 2x + y ≤ 6, x,y ≥ 0**
+
+1. **Model Creation:**
+   ```
+   Variables: x (idx 0), y (idx 1)
+   Constraint matrix: [[1, 1], [2, 1]]
+   RHS: [4, 6]
+   Objective: [-1, -1]
+   ```
+
+2. **Tableau Creation:**
+   ```
+   Add slack s₁, s₂ for ≤ constraints
+   Extended matrix: [[1, 1, 1, 0], [2, 1, 0, 1]]
+   Extended costs: [-1, -1, 0, 0]
+   Initial basis: [s₁, s₂] = [2, 3]
+   ```
+
+3. **Initial Solution:**
+   ```
+   x = 0, y = 0, s₁ = 4, s₂ = 6
+   Objective = 0
+   ```
+
+4. **Simplex Iterations:**
+   ```
+   Iter 1: x enters, s₂ leaves → x = 3, y = 0, s₁ = 1, s₂ = 0
+   Iter 2: y enters, s₁ leaves → x = 2, y = 2, s₁ = 0, s₂ = 0
+   Optimal: obj = -4
+   ```
+
+## Error Handling
+
+- **Infeasibility:** Detected via Big-M method (artificial vars remain)
+- **Unboundedness:** Ratio test finds no blocking variable
+- **Numerical Issues:** Refactorization, tolerances, perturbation
 
 ## Performance Characteristics
 
-| Component | Typical Performance |
-|-----------|-------------------|
-| Station filtering | O(n × m) where n=stations, m=polyline points |
-| LP solve | O(n³) worst case, typically much faster |
-| MILP solve | Exponential worst case, practical for <100 stations |
-| API latency | <100ms for typical problems |
-| WASM load | ~500KB, <100ms initialization |
+| Operation | Complexity |
+|-----------|------------|
+| Matrix-vector multiply | O(nnz) |
+| LU factorization | O(m³) worst case, often O(m × nnz) |
+| Simplex iteration | O(m²) typical |
+| MIP node processing | O(LP solve) |
+| Branch and bound | Exponential worst case |
 
-## Security Considerations
+## Current Performance (vs GLPK 5.0)
 
-- API validates all inputs
-- No SQL/command injection vectors
-- CORS headers for browser security
-- Input size limits (10MB max request)
-- No authentication (add if deploying publicly)
+### LP Benchmarks (Random Dense LPs)
 
-## Future Extensions
+| Problem Size | Ralph Time | GLPK Time | Slowdown | Per-Iter Slowdown |
+|--------------|------------|-----------|----------|-------------------|
+| 50×25        | 0.0001s    | 0.0001s   | 0.9×     | 1.2×              |
+| 100×50       | 0.0006s    | 0.0004s   | 1.3×     | 1.5×              |
+| 200×100      | 0.0049s    | 0.0023s   | 2.1×     | 2.5×              |
+| 500×250      | 0.114s     | 0.018s    | 6.2×     | 6.1×              |
+| 1000×500     | 1.44s      | 0.12s     | **11.5×** | **13.2×**        |
 
-1. **Multi-vehicle optimization**: Fleet routing
-2. **Time windows**: Station operating hours
-3. **Dynamic pricing**: Real-time price feeds
-4. **Historical analysis**: Price trends
-5. **Mobile app**: React Native frontend
+**Key Finding:** The per-iteration cost is the main bottleneck. At 1000×500, Ralph
+takes 0.58ms per iteration vs GLPK's 0.044ms.
+
+### MIP Benchmarks (Classic Problems, Quick Mode)
+
+| Problem Type      | Size       | Ralph       | GLPK    | Notes                    |
+|-------------------|------------|-------------|---------|--------------------------|
+| SetCovering       | 20×10      | 0.0001s ✓   | 0.0001s | Matches objective        |
+| SetCovering       | 40×20      | 0.0002s ✓   | 0.0002s | Matches objective        |
+| SetPartitioning   | 30×10      | 36.9s ⚠     | 0.0002s | ~185,000× slower         |
+| SetPartitioning   | 60×20      | 63.4s ⚠     | 0.003s  | Hit time limit           |
+| LinearAssignment  | 100×20     | 0.0001s ✓   | 0.0003s | Matches objective        |
+| LinearAssignment  | 400×40     | 0.0005s ✓   | 0.002s  | Matches objective        |
+| NetworkFlow (LP)  | 77×20      | 0.0001s ✓   | 0.0000s | Matches objective        |
+| NetworkFlow (LP)  | 295×40     | 0.0002s ⚠   | 0.0001s | **Objective mismatch**   |
+| FacilityLocation  | 55×60      | 0.0001s ✓   | 0.0003s | Matches objective        |
+| FacilityLocation  | 210×220    | 160.7s ⚠    | 0.002s  | ~70,000× slower          |
+
+**Key Findings:**
+- LP relaxations solved correctly and quickly
+- MIP enumeration is extremely slow on hard combinatorial problems
+- One potential correctness issue with NetworkFlow (25.42 vs 125.42)
+
+## Known Issues and TODO
+
+### High Priority
+
+1. **LP Per-Iteration Performance (13× slowdown)**
+   - Root cause: Dense operations in FTRAN/BTRAN instead of hyper-sparse
+   - TODO: Use `lu_ftran_hyper_sparse` and `lu_btran_hyper_sparse` in simplex.c
+   - TODO: Eliminate O(m) memset in sparse solve routines
+   - TODO: Profile and optimize hot paths in pricing and ratio test
+
+2. **MIP Branch-and-Bound Performance**
+   - SetPartitioning 185,000× slower than GLPK
+   - TODO: Implement proper node presolve (bound tightening, probing)
+   - TODO: Add pseudocost branching or reliability branching
+   - TODO: Implement diving heuristics for faster incumbent finding
+   - TODO: Add symmetry detection and breaking
+
+3. **NetworkFlow Objective Mismatch (Potential Bug)**
+   - Ralph: 25.42, GLPK: 125.42 on 295×40 problem
+   - TODO: Debug and fix potential correctness issue
+
+### Medium Priority
+
+4. **Dual Simplex Stability**
+   - Currently falls back to primal on many problems due to numerical issues
+   - See plan file: `~/.claude/plans/kind-napping-aho.md`
+   - TODO: Efficient pivot row computation (BTRAN once, not per-column)
+   - TODO: Periodic reduced cost recomputation
+   - TODO: Iterative refinement for reduced costs
+
+5. **LP-Aware LU Factorization**
+   - Schur complement implemented for cross-terms (4× factorization speedup)
+   - TODO: Extend to LU updates (currently only helps initial factorization)
+   - TODO: Block-aware solve routines for further speedup
+
+6. **Presolve Improvements**
+   - TODO: Dominated rows/columns elimination
+   - TODO: Probing on integer variables
+   - TODO: Clique detection from set-packing constraints
+
+### Low Priority
+
+7. **Cut Generation**
+   - GMI cut infrastructure implemented (cuts.c) but disabled by default
+   - Fixed GMI formula for variables at upper bound (complemented coefficients)
+   - Fixed issue with empty cuts (no variable coefficients) causing infeasibility
+   - **Outstanding**: GMI cuts still produce incorrect cuts on some problems with >= constraints and negative coefficients; needs investigation
+   - TODO: Debug GMI cut formula for >= constraints
+   - TODO: Lift-and-project cuts
+   - TODO: Flow cover cuts
+   - TODO: Clique cuts from conflict graph
+
+8. **Parallel Processing**
+   - TODO: Parallel pricing in simplex
+   - TODO: Parallel node processing in B&B
+
+## Recent Optimizations
+
+### LU Factorization (January 2025)
+
+1. **U Diagonal Cache** (`lu.c`)
+   - Added `U_diag[]` array for O(1) diagonal access
+   - Eliminates O(m) search per column in backward substitution
+
+2. **LP-Aware Factorization with Schur Complement** (`lu_sparse.c`)
+   - Exploits LP basis structure: identity columns (slacks) vs structural columns
+   - For k structural columns out of m: O(k³) instead of O(m³)
+   - Handles cross-terms (structural entries in identity rows) via Schur complement
+   - Block structure: L = [L11, 0; L21, I], U = [U11, 0; 0, D]
+   - **Result:** 4× factorization speedup on m=500, k=200
+
+3. **Spike Pool Allocation** (`lu.c`)
+   - Pre-allocated storage for Forrest-Tomlin update spikes
+   - Eliminates malloc in LU update hot path
+
+4. **Reach-Based Sparse Triangular Solves** (`lu.c`)
+   - Compute reach of sparse RHS before solving
+   - Only touch non-zero elements in solution
