@@ -151,18 +151,28 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
     /* Save rc_entering BEFORE updating reduced costs (needed for bound selection) */
     double rc_entering_orig = tab->rc[entering];
 
-    /* Update reduced costs using sparse solves */
-    double rc_leaving = tab->rc[entering] / pivot;
+    /* Compute pivot row = e_leaving^T * B^{-1} via single BTRAN
+     * This is MUCH more efficient than calling lu_solve_sparse for each column.
+     * The pivot row gives us (B^{-1} * a_j)[leaving] for any j via a sparse dot product.
+     */
+    vec_set_zero(tab->work1, tab->m);
+    tab->work1[leaving] = 1.0;
+    lu_solve_transpose(tab->lu, tab->work1, tab->work2);  /* work2 = pivot_row */
+
+    /* Update all reduced costs using sparse dot products:
+     * rc'[j] = rc[j] - (rc_entering / pivot) * (pivot_row * a_j)
+     */
+    double rc_factor = tab->rc[entering] / pivot;
     for (int j = 0; j < tab->n; j++) {
         if (tab->var_status[j] == RALPH_BASIC) {
             tab->rc[j] = 0.0;
         } else if (j != entering) {
-            sparse_get_column_sparse(tab->A_ext, j, &col_nnz, &col_idx, &col_val);
-            lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);
-            tab->rc[j] -= rc_leaving * tab->work2[leaving];
+            /* Compute pivot_row * a_j via sparse dot product */
+            double dot = sparse_dot_column(tab->A_ext, j, tab->work2);
+            tab->rc[j] -= rc_factor * dot;
         }
     }
-    tab->rc[leaving_var] = -rc_leaving;
+    tab->rc[leaving_var] = -rc_factor;
     tab->rc[entering] = 0.0;
 
     /* Determine step size from infeasibility.
@@ -629,6 +639,13 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
         printf("[dual_simplex] Running dual Phase 2 to achieve primal feasibility...\n");
     }
 
+    /* Degeneracy tracking for cycling prevention.
+     * In dual simplex, a degenerate pivot has theta ≈ 0 (no dual objective change).
+     * Too many consecutive degenerate pivots suggests cycling.
+     */
+    int degenerate_count = 0;
+    const int DEGEN_PERTURB_THRESHOLD = 15;  /* Re-perturb after this many degenerate pivots */
+
     /* Run dual simplex Phase 2 */
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         solver->iterations = iter;
@@ -696,6 +713,23 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
             }
         }
 
+        /* Detect degenerate pivots (theta ≈ 0 means no dual objective change).
+         * Too many consecutive degenerate pivots indicates potential cycling.
+         */
+        if (fabs(theta) < RALPH_FEAS_TOL) {
+            degenerate_count++;
+            if (degenerate_count >= DEGEN_PERTURB_THRESHOLD) {
+                /* Re-apply perturbation to break cycling */
+                apply_bound_perturbation(tab);
+                degenerate_count = 0;
+                if (solver->verbose) {
+                    printf("[dual_simplex] Iter %d: Re-applying perturbation due to degeneracy\n", iter);
+                }
+            }
+        } else {
+            degenerate_count = 0;
+        }
+
         /* Always recompute solution and reduced costs for accuracy */
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
@@ -735,9 +769,10 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
             return simplex_solve(solver);
         }
 
-        /* More aggressive refactorization for numerical stability:
-         * - Standard LU update limit
-         * - Every 50 iterations to prevent drift */
+        /* More aggressive numerical stability:
+         * - Refactorize when LU needs it or every 50 iterations
+         * - Recompute reduced costs every 20 iterations (even without refactorization)
+         *   to catch drift before it accumulates to problematic levels */
         int need_refactor = lu_needs_refactorization(tab->lu) ||
                            (iter > 0 && iter % 50 == 0);
 
@@ -747,6 +782,9 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
                 return -1;
             }
             tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        } else if (iter > 0 && iter % 20 == 0) {
+            /* Periodic RC recomputation without full refactorization */
             tableau_compute_reduced_costs(tab);
         }
 
