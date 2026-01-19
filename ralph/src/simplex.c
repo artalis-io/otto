@@ -1806,31 +1806,32 @@ int simplex_solve(SimplexSolver *solver) {
         double artificial_contrib = 0.0;
         int artificial_count = 0;
 
-        /* Check all variables, not just basic ones */
+        /* Compute true objective from original variables only.
+         * This is more reliable than subtracting artificial contributions
+         * from tab->obj_value, which can have numerical issues. */
+        double true_obj = 0.0;
+        for (int j = 0; j < num_struct; j++) {
+            true_obj += tab->c_ext[j] * tab->x[j];
+        }
+
+        /* Check if any artificial variables (Big-M cost) have significant non-zero values.
+         * This indicates the original problem is infeasible. */
         for (int j = num_struct; j < tab->n; j++) {
             if (tab->c_ext[j] > 1e6 && fabs(tab->x[j]) > RALPH_FEAS_TOL) {
                 artificial_contrib += tab->c_ext[j] * tab->x[j];
                 artificial_count++;
-                if (solver->verbose) {
-                    fprintf(stderr, "[DEBUG] Artificial var %d still active: x=%.2e, cost=%.0f, contrib=%.2f\n",
-                            j, tab->x[j], tab->c_ext[j], tab->c_ext[j] * tab->x[j]);
-                }
             }
         }
 
-        if (artificial_count > 0) {
-            if (solver->verbose) {
-                fprintf(stderr, "[DEBUG] %d artificial vars active, total contribution=%.2f\n",
-                        artificial_count, artificial_contrib);
-            }
-            if (artificial_contrib > 1e-2) {  /* Significant artificial contribution */
-                extract_farkas_ray(solver);
-                solver->status = RALPH_STATUS_INFEASIBLE;
-                return 0;
-            }
-            /* Subtract artificial contribution from objective for reporting */
-            solver->obj_value = (tab->obj_value - artificial_contrib) * solver->model->obj_sense;
+        if (artificial_count > 0 && artificial_contrib > 1e-2) {
+            /* Significant positive artificial contribution means infeasible */
+            extract_farkas_ray(solver);
+            solver->status = RALPH_STATUS_INFEASIBLE;
+            return 0;
         }
+
+        /* Use true objective computed from original variables */
+        solver->obj_value = true_obj * solver->model->obj_sense;
     }
 
     /* Copy solution */
