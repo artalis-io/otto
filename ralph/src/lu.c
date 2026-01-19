@@ -248,14 +248,17 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);
  * Main LU Factorization Entry Point
  * ============================================================================ */
 
-/* Try sparse factorization first, fall back to dense if it fails */
+/* Main factorization entry point.
+ *
+ * NOTE: We always use dense factorization because the sparse implementation
+ * has O(n^2) linked-list overhead that makes it 200-1200x slower than dense
+ * for typical LP basis matrices. Dense O(n^3) Gaussian elimination is faster
+ * than sparse O(nnz) with bad constants up to m=500+.
+ *
+ * TODO: Replace lu_sparse.c with proper sparse factorization using arrays
+ * instead of linked lists, with scatter-gather pattern for elimination.
+ */
 int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
-    /* Use sparse LU for larger problems (m >= 20) */
-    if (B->nrows >= 20) {
-        int result = lu_factorize_sparse(lu, B);
-        if (result == 0) return 0;
-        /* Fall back to dense if sparse fails */
-    }
     return lu_factorize_dense(lu, B);
 }
 
