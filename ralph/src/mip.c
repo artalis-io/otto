@@ -90,7 +90,7 @@ MIPSolver* mip_create(LPModel *model) {
     solver->node_select = NODE_SELECT_HYBRID;
     solver->var_select = VAR_SELECT_RELIABILITY;
     solver->max_cuts_per_round = 50;
-    solver->max_cut_rounds = 10;
+    solver->max_cut_rounds = 0;  /* Cuts disabled - GMI formula needs more work */
     solver->verbose = 0;
 
     /* Create node queue */
@@ -232,6 +232,8 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     if (!solver->lp_solver) {
         solver->lp_solver = simplex_create(model);
         if (!solver->lp_solver) return -1;
+        /* Disable scaling for MIP */
+        solver->lp_solver->scaling = 0;
     }
 
     SimplexSolver *lp = solver->lp_solver;
@@ -402,6 +404,10 @@ static int solve_root_node(MIPSolver *solver) {
         return -1;
     }
 
+    /* Disable scaling for MIP - cuts are generated from tableau which would need unscaling */
+    solver->lp_solver->scaling = 0;
+    solver->lp_solver->verbose = solver->verbose;
+
     simplex_solve(solver->lp_solver);
 
     if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL) {
@@ -431,6 +437,9 @@ static int solve_root_node(MIPSolver *solver) {
 
     /* Generate cuts at root node */
     int cut_rounds = 0;
+    double prev_bound = root->lp_bound;
+    int no_improvement_rounds = 0;
+
     while (cut_rounds < solver->max_cut_rounds) {
         int cuts_added = 0;
 
@@ -439,14 +448,76 @@ static int solve_root_node(MIPSolver *solver) {
 
         if (cuts_added == 0) break;
 
+        /* Check for stalling - stop if bound hasn't improved for 3 rounds */
+        if (no_improvement_rounds >= 3) break;
+
         solver->cuts_generated += cuts_added;
 
         if (solver->verbose) {
             printf("Cut round %d: %d cuts generated\n", cut_rounds + 1, cuts_added);
         }
 
-        /* Apply cuts - this would modify the LP */
-        /* For now, just count them - full implementation would rebuild LP */
+        /* Apply cuts to the LP relaxation */
+        int cuts_applied = apply_cuts(solver, solver->cut_pool, solver->max_cuts_per_round);
+
+        if (cuts_applied > 0) {
+            if (solver->verbose) {
+                printf("Cut round %d: %d cuts applied\n", cut_rounds + 1, cuts_applied);
+            }
+
+            /* Rebuild simplex solver with new constraints */
+            simplex_free(solver->lp_solver);
+            solver->lp_solver = simplex_create(solver->working_model);
+            if (!solver->lp_solver) {
+                bb_node_free(root);
+                return -1;
+            }
+
+            /* Disable scaling for MIP */
+            solver->lp_solver->scaling = 0;
+
+            /* Re-solve LP with cuts */
+            simplex_solve(solver->lp_solver);
+
+            if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL) {
+                /* LP became infeasible with cuts - shouldn't happen */
+                solver->status = solver->lp_solver->status;
+                bb_node_free(root);
+                return 0;
+            }
+
+            double new_bound = solver->lp_solver->obj_value;
+
+            /* Check if bound improved significantly */
+            double improvement = (solver->original_model->obj_sense == 1) ?
+                                 (new_bound - prev_bound) : (prev_bound - new_bound);
+            if (improvement > RALPH_OPT_TOL) {
+                no_improvement_rounds = 0;
+                prev_bound = new_bound;
+            } else {
+                no_improvement_rounds++;
+            }
+
+            if (solver->verbose) {
+                printf("LP bound improved: %.6f -> %.6f (improvement rounds: %d)\n",
+                       root->lp_bound, new_bound, no_improvement_rounds);
+            }
+            root->lp_bound = new_bound;
+
+            /* Check if LP solution is now integer feasible */
+            if (check_integer_feasibility(solver, solver->lp_solver->solution)) {
+                update_incumbent(solver, solver->lp_solver->solution, solver->lp_solver->obj_value);
+                solver->status = RALPH_STATUS_OPTIMAL;
+                bb_node_free(root);
+                return 0;
+            }
+
+            /* Clear cut pool for next round */
+            for (int i = 0; i < solver->cut_pool->count; i++) {
+                cut_free(solver->cut_pool->cuts[i]);
+            }
+            solver->cut_pool->count = 0;
+        }
 
         cut_rounds++;
     }
