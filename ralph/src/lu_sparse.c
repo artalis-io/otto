@@ -533,6 +533,9 @@ typedef struct {
     int *row_perm_inv;
     int *col_done;              /* 1 if column has been pivoted */
     int *row_done;              /* 1 if row has been pivoted */
+    /* Dense workspace for scatter-gather elimination */
+    double *work_dense;         /* Dense array of size m for fast row updates */
+    int *work_marker;           /* Marker array for tracking non-zeros */
     /* Chunk-based memory pool for entries (avoids realloc invalidating pointers) */
     SparseEntry **chunks;       /* Array of chunk pointers */
     int num_chunks;             /* Number of allocated chunks */
@@ -578,11 +581,14 @@ static SparseLUWork* sparse_work_create(int m, int nnz_estimate) {
     work->row_perm_inv = (int*)malloc(m * sizeof(int));
     work->col_done = (int*)calloc(m, sizeof(int));
     work->row_done = (int*)calloc(m, sizeof(int));
+    work->work_dense = (double*)calloc(m, sizeof(double));
+    work->work_marker = (int*)calloc(m, sizeof(int));
 
     if (!work->cols || !work->rows || !work->col_nnz ||
         !work->row_nnz || !work->col_perm || !work->row_perm ||
         !work->col_perm_inv || !work->row_perm_inv ||
-        !work->col_done || !work->row_done) {
+        !work->col_done || !work->row_done ||
+        !work->work_dense || !work->work_marker) {
         for (int i = 0; i < work->num_chunks; i++) {
             free(work->chunks[i]);
         }
@@ -597,6 +603,8 @@ static SparseLUWork* sparse_work_create(int m, int nnz_estimate) {
         free(work->row_perm_inv);
         free(work->col_done);
         free(work->row_done);
+        free(work->work_dense);
+        free(work->work_marker);
         free(work);
         return NULL;
     }
@@ -629,6 +637,8 @@ static void sparse_work_free(SparseLUWork *work) {
     free(work->row_perm_inv);
     free(work->col_done);
     free(work->row_done);
+    free(work->work_dense);
+    free(work->work_marker);
     free(work);
 }
 
@@ -788,6 +798,108 @@ static int set_val(SparseLUWork *work, int col, int row, double val) {
     if (row_result < 0) return -1;
 
     return 0;
+}
+
+/* Efficient row update using scatter-gather pattern
+ * Updates row i by subtracting mult * pivot_row
+ * This is O(nnz_row + nnz_pivot_row) instead of O(nnz_row * nnz_pivot_row)
+ */
+static void update_row_scatter_gather(SparseLUWork *work, int i, int pivot_row,
+                                       double mult, int pivot_col) {
+    double *dense = work->work_dense;
+    int *marker = work->work_marker;
+    int m = work->m;
+
+    /* Step 1: Scatter row i to dense array */
+    int *nz_cols = (int*)alloca(m * sizeof(int));  /* Stack allocation for speed */
+    int nnz = 0;
+
+    for (SparseEntry *re = work->rows[i]; re; re = re->next) {
+        int j = re->idx;
+        if (!work->col_done[j]) {
+            dense[j] = re->val;
+            marker[j] = 1;
+            nz_cols[nnz++] = j;
+        }
+    }
+
+    /* Step 2: Update using pivot row entries */
+    for (SparseEntry *pe = work->rows[pivot_row]; pe; pe = pe->next) {
+        int j = pe->idx;
+        if (work->col_done[j]) continue;
+
+        double delta = mult * pe->val;
+        dense[j] -= delta;
+
+        if (!marker[j]) {
+            /* New fill-in */
+            marker[j] = 1;
+            nz_cols[nnz++] = j;
+        }
+    }
+
+    /* Step 3: Gather back - update sparse row and column structures */
+    /* First, remove old row entries from column lists */
+    for (SparseEntry *re = work->rows[i]; re; re = re->next) {
+        int j = re->idx;
+        if (!work->col_done[j]) {
+            /* Remove from column j */
+            SparseEntry **pp = &work->cols[j];
+            while (*pp && (*pp)->idx != i) {
+                pp = &(*pp)->next;
+            }
+            if (*pp && (*pp)->idx == i) {
+                *pp = (*pp)->next;
+                work->col_nnz[j]--;
+            }
+        }
+    }
+
+    /* Clear old row list */
+    work->rows[i] = NULL;
+    work->row_nnz[i] = 0;
+
+    /* Rebuild row from dense values */
+    for (int k = 0; k < nnz; k++) {
+        int j = nz_cols[k];
+        double val = dense[j];
+
+        /* Clear dense array and marker for next use */
+        dense[j] = 0.0;
+        marker[j] = 0;
+
+        if (fabs(val) < RALPH_ZERO_TOL) continue;  /* Skip zeros */
+
+        /* Add to column list */
+        SparseEntry *col_entry = alloc_entry(work);
+        if (!col_entry) continue;
+        col_entry->idx = i;
+        col_entry->val = val;
+
+        /* Insert in sorted order into column */
+        SparseEntry **pp = &work->cols[j];
+        while (*pp && (*pp)->idx < i) {
+            pp = &(*pp)->next;
+        }
+        col_entry->next = *pp;
+        *pp = col_entry;
+        work->col_nnz[j]++;
+
+        /* Add to row list */
+        SparseEntry *row_entry = alloc_entry(work);
+        if (!row_entry) continue;
+        row_entry->idx = j;
+        row_entry->val = val;
+
+        /* Insert in sorted order into row */
+        SparseEntry **rp = &work->rows[i];
+        while (*rp && (*rp)->idx < j) {
+            rp = &(*rp)->next;
+        }
+        row_entry->next = *rp;
+        *rp = row_entry;
+        work->row_nnz[i]++;
+    }
 }
 
 /* ============================================================================
@@ -1141,18 +1253,14 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
             L_v[L_nnz] = mult;
             L_nnz++;
 
-            /* Update row i: subtract mult * (pivot row)
-             * Now that row lists are maintained, iterate only over non-zeros */
+            /* Update row i: row[i] -= mult * row[pivot_row] */
             for (SparseEntry *pe = work->rows[pivot_row]; pe; pe = pe->next) {
                 int j = pe->idx;
-                if (work->col_done[j]) continue;  /* Already eliminated column */
-
-                /* pe->val is current (row lists are now maintained) */
-                double pivot_row_val = pe->val;
+                if (work->col_done[j]) continue;
 
                 double old_val = get_col_val(work, j, i);
-                double new_val = old_val - mult * pivot_row_val;
-                set_val(work, j, i, new_val);  /* Updates both col and row lists */
+                double new_val = old_val - mult * pe->val;
+                set_val(work, j, i, new_val);
             }
         }
 
@@ -1261,8 +1369,11 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         lu->ft_spike_idx[i] = NULL;
         lu->ft_spike_val[i] = NULL;
         lu->ft_spike_nnz[i] = 0;
+        lu->ft_spike_diag[i] = 0.0;
     }
     lu->ft_num_updates = 0;
+    lu->ft_num_compacted = 0;
+    lu->ft_compact_valid = 0;
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;

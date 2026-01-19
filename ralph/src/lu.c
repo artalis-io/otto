@@ -21,7 +21,7 @@ LUFactorization* lu_create(int m) {
     if (!lu) return NULL;
 
     lu->m = m;
-    lu->max_updates = 100;  /* Refactorize every 100 updates */
+    lu->max_updates = 3000;  /* Refactorize every 3000 updates */
 
     /* Allocate permutation arrays */
     lu->perm = (int*)malloc(m * sizeof(int));
@@ -80,11 +80,13 @@ LUFactorization* lu_create(int m) {
     /* Spike storage for FT updates */
     lu->ft_spike_capacity = lu->max_updates;
     lu->ft_spike_col = (int*)malloc(lu->ft_spike_capacity * sizeof(int));
+    lu->ft_spike_diag = (double*)malloc(lu->ft_spike_capacity * sizeof(double));
     lu->ft_spike_idx = (int**)malloc(lu->ft_spike_capacity * sizeof(int*));
     lu->ft_spike_val = (double**)malloc(lu->ft_spike_capacity * sizeof(double*));
     lu->ft_spike_nnz = (int*)malloc(lu->ft_spike_capacity * sizeof(int));
 
-    if (!lu->ft_spike_col || !lu->ft_spike_idx || !lu->ft_spike_val || !lu->ft_spike_nnz) {
+    if (!lu->ft_spike_col || !lu->ft_spike_diag || !lu->ft_spike_idx ||
+        !lu->ft_spike_val || !lu->ft_spike_nnz) {
         lu_free(lu);
         return NULL;
     }
@@ -93,7 +95,14 @@ LUFactorization* lu_create(int m) {
         lu->ft_spike_idx[i] = NULL;
         lu->ft_spike_val[i] = NULL;
         lu->ft_spike_nnz[i] = 0;
+        lu->ft_spike_diag[i] = 0.0;
     }
+
+    /* Spike compaction settings */
+    lu->ft_compact_interval = 500;  /* Compact every 500 spikes */
+    lu->ft_num_compacted = 0;
+    lu->ft_compact_matrix = NULL;   /* Allocated lazily if needed */
+    lu->ft_compact_valid = 0;
 
     /* Initialize condition number tracking */
     lu->min_diag_U = RALPH_INFINITY;
@@ -150,6 +159,7 @@ void lu_free(LUFactorization *lu) {
     free(lu->ft_col_order);
     free(lu->ft_col_order_inv);
     free(lu->ft_spike_col);
+    free(lu->ft_spike_diag);
 
     if (lu->ft_spike_idx) {
         for (int i = 0; i < lu->ft_spike_capacity; i++) {
@@ -164,6 +174,7 @@ void lu_free(LUFactorization *lu) {
         free(lu->ft_spike_val);
     }
     free(lu->ft_spike_nnz);
+    free(lu->ft_compact_matrix);
 
     /* Free hyper-sparse workspace */
     free(lu->hs_work1);
@@ -361,8 +372,11 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
         lu->ft_spike_idx[i] = NULL;
         lu->ft_spike_val[i] = NULL;
         lu->ft_spike_nnz[i] = 0;
+        lu->ft_spike_diag[i] = 0.0;
     }
     lu->ft_num_updates = 0;
+    lu->ft_num_compacted = 0;
+    lu->ft_compact_valid = 0;
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;
@@ -1280,6 +1294,88 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
  * the way eta matrices do.
  */
 
+/*
+ * Compact multiple FT spikes into a dense matrix for faster application.
+ * The product M = E_N * ... * E_1 is computed and stored.
+ * This is O(N * m) but applying M is just O(m²) instead of O(N * nnz).
+ */
+static void compact_ft_spikes(LUFactorization *lu, int start, int end) {
+    int m = lu->m;
+
+    /* Allocate compact matrix if needed (stored row-major for cache efficiency) */
+    if (!lu->ft_compact_matrix) {
+        lu->ft_compact_matrix = (double*)malloc(m * m * sizeof(double));
+        if (!lu->ft_compact_matrix) return;
+    }
+
+    double *M = lu->ft_compact_matrix;
+
+    /* Initialize to identity */
+    memset(M, 0, m * m * sizeof(double));
+    for (int i = 0; i < m; i++) {
+        M[i * m + i] = 1.0;
+    }
+
+    /* Apply spikes to M: M = E_k * M for k = start..end-1
+     * E_k * M:
+     *   row[col] = diag * row[col]
+     *   row[i] = row[i] + spike[i] * row[col]  (for i in off-diag)
+     * IMPORTANT: Must use original row[col] for off-diag updates!
+     */
+    double *row_copy = lu->perm_work;  /* Temporary for row copy */
+
+    for (int k = start; k < end; k++) {
+        int col = lu->ft_spike_col[k];
+        double diag = lu->ft_spike_diag[k];
+        int *idx = lu->ft_spike_idx[k];
+        double *val = lu->ft_spike_val[k];
+        int nnz = lu->ft_spike_nnz[k];
+
+        double *row_col = &M[col * m];
+
+        /* Save original row[col] for off-diagonal updates */
+        memcpy(row_copy, row_col, m * sizeof(double));
+
+        /* Scale row[col] by diag */
+        for (int j = 0; j < m; j++) {
+            row_col[j] *= diag;
+        }
+
+        /* Update other affected rows using ORIGINAL row[col] values */
+        for (int p = 0; p < nnz; p++) {
+            int i = idx[p];
+            double v = val[p];
+            double *row_i = &M[i * m];
+            for (int j = 0; j < m; j++) {
+                row_i[j] += v * row_copy[j];
+            }
+        }
+    }
+
+    lu->ft_num_compacted = end;
+    lu->ft_compact_valid = 1;
+}
+
+/* Apply compacted matrix M to x: x = M * x */
+static void apply_compacted_matrix(const LUFactorization *lu, double *x) {
+    int m = lu->m;
+    const double *M = lu->ft_compact_matrix;
+    double *work = lu->perm_work;  /* Temporary storage */
+
+    /* Dense matrix-vector multiply */
+    for (int i = 0; i < m; i++) {
+        double sum = 0.0;
+        const double *row = &M[i * m];
+        for (int j = 0; j < m; j++) {
+            sum += row[j] * x[j];
+        }
+        work[i] = sum;
+    }
+
+    /* Copy result back */
+    memcpy(x, work, m * sizeof(double));
+}
+
 /* Apply Forrest-Tomlin spikes during forward solve
  * FT spikes are stored with the same format as eta matrices:
  * spike[col] = 1/pivot, spike[i] = -original_spike[i]/pivot for i != col
@@ -1289,24 +1385,79 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
  * x[i] += spike[i] * x_old[col] for i != col
  */
 static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
-    for (int k = 0; k < lu->ft_num_updates; k++) {
-        int col = lu->ft_spike_col[k];
-        int *idx = lu->ft_spike_idx[k];
-        double *val = lu->ft_spike_val[k];
-        int nnz = lu->ft_spike_nnz[k];
+    const int n = lu->ft_num_updates;
 
-        double xc = x[col];  /* Save original x[col] */
+    /* If we have compacted spikes, apply the compacted matrix first */
+    if (lu->ft_compact_valid && lu->ft_num_compacted > 0) {
+        apply_compacted_matrix(lu, x);
 
-        /* Update all components */
-        for (int p = 0; p < nnz; p++) {
-            int i = idx[p];
-            if (i == col) {
-                x[i] = val[p] * xc;
-            } else {
-                x[i] += val[p] * xc;
+        /* Apply only the non-compacted spikes */
+        const int start = lu->ft_num_compacted;
+        const int *cols = lu->ft_spike_col;
+        const double *diags = lu->ft_spike_diag;
+        int *const *idxs = lu->ft_spike_idx;
+        double *const *vals = lu->ft_spike_val;
+        const int *nnzs = lu->ft_spike_nnz;
+
+        for (int k = start; k < n; k++) {
+            int col = cols[k];
+            double xc = x[col];
+            if (fabs(xc) < RALPH_ZERO_TOL) continue;
+            x[col] = diags[k] * xc;
+            const int *idx = idxs[k];
+            const double *val = vals[k];
+            int nnz = nnzs[k];
+            for (int p = 0; p < nnz; p++) {
+                x[idx[p]] += val[p] * xc;
             }
         }
+        return;
     }
+
+    /* No compaction - apply all spikes individually */
+    const int *cols = lu->ft_spike_col;
+    const double *diags = lu->ft_spike_diag;
+    int *const *idxs = lu->ft_spike_idx;
+    double *const *vals = lu->ft_spike_val;
+    const int *nnzs = lu->ft_spike_nnz;
+
+    for (int k = 0; k < n; k++) {
+        int col = cols[k];
+        double xc = x[col];  /* Save original x[col] */
+
+        /* Skip if xc is zero - no update needed */
+        if (fabs(xc) < RALPH_ZERO_TOL) continue;
+
+        /* Update diagonal (branchless) */
+        x[col] = diags[k] * xc;
+
+        /* Update off-diagonal entries */
+        const int *idx = idxs[k];
+        const double *val = vals[k];
+        int nnz = nnzs[k];
+
+        for (int p = 0; p < nnz; p++) {
+            x[idx[p]] += val[p] * xc;
+        }
+    }
+}
+
+/* Apply compacted matrix transpose M' to x: x = M' * x */
+static void apply_compacted_matrix_transpose(const LUFactorization *lu, double *x) {
+    int m = lu->m;
+    const double *M = lu->ft_compact_matrix;
+    double *work = lu->perm_work;
+
+    /* Dense matrix-vector multiply with M' (column-major access of row-major M) */
+    for (int j = 0; j < m; j++) {
+        double sum = 0.0;
+        for (int i = 0; i < m; i++) {
+            sum += M[i * m + j] * x[i];  /* M'[j,i] = M[i,j] */
+        }
+        work[j] = sum;
+    }
+
+    memcpy(x, work, m * sizeof(double));
 }
 
 /* Apply Forrest-Tomlin spikes during backward solve (transpose)
@@ -1314,18 +1465,33 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
  * Applied in reverse order.
  */
 static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
-    for (int k = lu->ft_num_updates - 1; k >= 0; k--) {
-        int col = lu->ft_spike_col[k];
-        int *idx = lu->ft_spike_idx[k];
-        double *val = lu->ft_spike_val[k];
-        int nnz = lu->ft_spike_nnz[k];
+    const int n = lu->ft_num_updates;
+    const int *cols = lu->ft_spike_col;
+    const double *diags = lu->ft_spike_diag;
+    int *const *idxs = lu->ft_spike_idx;
+    double *const *vals = lu->ft_spike_val;
+    const int *nnzs = lu->ft_spike_nnz;
 
-        /* Compute new x[col] = spike' * x (sparse dot product) */
-        double xc = 0.0;
+    /* Apply non-compacted spikes first (in reverse order) */
+    int start = lu->ft_compact_valid ? lu->ft_num_compacted : 0;
+
+    for (int k = n - 1; k >= start; k--) {
+        int col = cols[k];
+        const int *idx = idxs[k];
+        const double *val = vals[k];
+        int nnz = nnzs[k];
+
+        /* Compute new x[col] = diag * x[col] + sum(off_diag * x) */
+        double xc = diags[k] * x[col];
         for (int p = 0; p < nnz; p++) {
             xc += val[p] * x[idx[p]];
         }
         x[col] = xc;
+    }
+
+    /* Then apply compacted matrix transpose if available */
+    if (lu->ft_compact_valid && lu->ft_num_compacted > 0) {
+        apply_compacted_matrix_transpose(lu, x);
     }
 }
 
@@ -1339,14 +1505,10 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     /* Convert leaving_pos to step coordinates */
     int step_pos = lu->col_perm_inv[leaving_pos];
 
-    /* Solve for spike: s = U^{-1} * L^{-1} * P * entering_col */
-    double *work = (double*)malloc(m * sizeof(double));
-    double *spike = (double*)malloc(m * sizeof(double));
-    if (!work || !spike) {
-        free(work);
-        free(spike);
-        return -1;
-    }
+    /* Solve for spike: s = U^{-1} * L^{-1} * P * entering_col
+     * Use pre-allocated workspaces to avoid malloc in hot path */
+    double *work = lu->hs_work1;
+    double *spike = lu->hs_work2;
 
     /* Solve L * y = P * entering_col */
     solve_L(lu, entering_col, work);
@@ -1363,61 +1525,81 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
 
     /* Check pivot element (in step coordinates) */
     if (fabs(spike[step_pos]) < RALPH_PIVOT_TOL) {
-        free(work);
-        free(spike);
         return -1;  /* Singular update */
     }
 
-    /* Normalize spike column and count non-zeros */
+    /* Normalize spike column and count OFF-DIAGONAL non-zeros */
     double pivot = spike[step_pos];
-    int nnz = 0;
-    double max_spike = 0.0;
+    double diag_val = 1.0 / pivot;
+    int off_diag_nnz = 0;
+    double max_spike = fabs(diag_val);
+
     for (int i = 0; i < m; i++) {
-        if (i == step_pos) {
-            spike[i] = 1.0 / pivot;
-        } else {
+        if (i != step_pos) {
             spike[i] = -spike[i] / pivot;
-        }
-        double absval = fabs(spike[i]);
-        if (absval > max_spike) max_spike = absval;
-        if (absval > RALPH_ZERO_TOL) nnz++;
-    }
-
-    /* Convert to sparse storage */
-    int *indices = (int*)malloc(nnz * sizeof(int));
-    double *values = (double*)malloc(nnz * sizeof(double));
-    if (!indices || !values) {
-        free(work);
-        free(spike);
-        free(indices);
-        free(values);
-        return -1;
-    }
-
-    int p = 0;
-    for (int i = 0; i < m; i++) {
-        if (fabs(spike[i]) > RALPH_ZERO_TOL) {
-            indices[p] = i;
-            values[p] = spike[i];
-            p++;
+            double absval = fabs(spike[i]);
+            if (absval > max_spike) max_spike = absval;
+            if (absval > RALPH_ZERO_TOL) off_diag_nnz++;
         }
     }
+    spike[step_pos] = diag_val;  /* For eta-file compatibility */
 
     /* Store as Forrest-Tomlin spike or eta-file update */
     if (lu->use_ft_updates) {
-        /* Store as FT spike */
+        /* Convert OFF-DIAGONAL entries to sparse storage */
+        int *indices = NULL;
+        double *values = NULL;
+        if (off_diag_nnz > 0) {
+            indices = (int*)malloc(off_diag_nnz * sizeof(int));
+            values = (double*)malloc(off_diag_nnz * sizeof(double));
+            if (!indices || !values) {
+                free(indices);
+                free(values);
+                return -1;
+            }
+
+            int p = 0;
+            for (int i = 0; i < m; i++) {
+                if (i != step_pos && fabs(spike[i]) > RALPH_ZERO_TOL) {
+                    indices[p] = i;
+                    values[p] = spike[i];
+                    p++;
+                }
+            }
+        }
+
+        /* Store FT spike with separate diagonal */
         int k = lu->ft_num_updates;
         lu->ft_spike_col[k] = step_pos;
+        lu->ft_spike_diag[k] = diag_val;
         lu->ft_spike_idx[k] = indices;
         lu->ft_spike_val[k] = values;
-        lu->ft_spike_nnz[k] = nnz;
+        lu->ft_spike_nnz[k] = off_diag_nnz;
         lu->ft_num_updates++;
     } else {
-        /* Store as eta-file update */
+        /* Store as eta-file update (includes diagonal) */
+        int total_nnz = off_diag_nnz + 1;  /* +1 for diagonal */
+        int *indices = (int*)malloc(total_nnz * sizeof(int));
+        double *values = (double*)malloc(total_nnz * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            return -1;
+        }
+
+        int p = 0;
+        for (int i = 0; i < m; i++) {
+            if (fabs(spike[i]) > RALPH_ZERO_TOL) {
+                indices[p] = i;
+                values[p] = spike[i];
+                p++;
+            }
+        }
+
         lu->eta_col[lu->num_eta] = step_pos;
         lu->eta_indices[lu->num_eta] = indices;
         lu->eta_values[lu->num_eta] = values;
-        lu->eta_nnz[lu->num_eta] = nnz;
+        lu->eta_nnz[lu->num_eta] = total_nnz;
         lu->num_eta++;
     }
     lu->num_updates++;
@@ -1427,8 +1609,14 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         lu->growth_factor = max_spike;
     }
 
-    free(work);
-    free(spike);
+    /* Trigger spike compaction if interval reached and using FT updates */
+    if (lu->use_ft_updates && lu->ft_compact_interval > 0) {
+        int uncompacted = lu->ft_num_updates - lu->ft_num_compacted;
+        if (uncompacted >= lu->ft_compact_interval) {
+            compact_ft_spikes(lu, 0, lu->ft_num_updates);
+        }
+    }
+
     return 0;
 }
 
