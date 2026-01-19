@@ -98,8 +98,14 @@ LUFactorization* lu_create(int m) {
         lu->ft_spike_diag[i] = 0.0;
     }
 
-    /* Spike compaction settings */
-    lu->ft_compact_interval = 500;  /* Compact every 500 spikes */
+    /* Spike compaction settings - 200 is a good balance:
+     * - Compaction is O(m²) but only done once per interval
+     * - Applying compacted matrix is O(m²) per solve
+     * - Applying N individual spikes is O(N * avg_nnz) per solve
+     * For m=250 with ~5-10 nnz per spike: 200 spikes takes ~1000-2000 ops
+     * but compacted matrix takes 62,500 ops per solve.
+     * So keep compaction for when spikes accumulate significantly. */
+    lu->ft_compact_interval = 300;  /* Compact after 300 spikes */
     lu->ft_num_compacted = 0;
     lu->ft_compact_matrix = NULL;   /* Allocated lazily if needed */
     lu->ft_compact_valid = 0;
@@ -119,6 +125,19 @@ LUFactorization* lu_create(int m) {
     lu->perm_work = (double*)malloc(m * sizeof(double));
 
     if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx || !lu->hs_val || !lu->perm_work) {
+        lu_free(lu);
+        return NULL;
+    }
+
+    /* Pre-allocate spike storage pool
+     * Estimate: each spike has ~m/4 non-zeros on average, max_updates spikes
+     * Pool size = max_updates * m / 4 (with some margin) */
+    lu->spike_pool_size = lu->max_updates * (m / 4 + 10);
+    lu->spike_pool_idx = (int*)malloc(lu->spike_pool_size * sizeof(int));
+    lu->spike_pool_val = (double*)malloc(lu->spike_pool_size * sizeof(double));
+    lu->spike_pool_used = 0;
+
+    if (!lu->spike_pool_idx || !lu->spike_pool_val) {
         lu_free(lu);
         return NULL;
     }
@@ -163,13 +182,33 @@ void lu_free(LUFactorization *lu) {
 
     if (lu->ft_spike_idx) {
         for (int i = 0; i < lu->ft_spike_capacity; i++) {
-            free(lu->ft_spike_idx[i]);
+            /* Only free if not from the pool */
+            int *idx = lu->ft_spike_idx[i];
+            if (idx != NULL && lu->spike_pool_idx != NULL) {
+                int in_pool = (idx >= lu->spike_pool_idx &&
+                              idx < lu->spike_pool_idx + lu->spike_pool_size);
+                if (!in_pool) {
+                    free(idx);
+                }
+            } else if (idx != NULL) {
+                free(idx);
+            }
         }
         free(lu->ft_spike_idx);
     }
     if (lu->ft_spike_val) {
         for (int i = 0; i < lu->ft_spike_capacity; i++) {
-            free(lu->ft_spike_val[i]);
+            /* Only free if not from the pool */
+            double *val = lu->ft_spike_val[i];
+            if (val != NULL && lu->spike_pool_val != NULL) {
+                int in_pool = (val >= lu->spike_pool_val &&
+                              val < lu->spike_pool_val + lu->spike_pool_size);
+                if (!in_pool) {
+                    free(val);
+                }
+            } else if (val != NULL) {
+                free(val);
+            }
         }
         free(lu->ft_spike_val);
     }
@@ -183,6 +222,10 @@ void lu_free(LUFactorization *lu) {
     free(lu->hs_idx);
     free(lu->hs_val);
     free(lu->perm_work);
+
+    /* Free spike storage pool */
+    free(lu->spike_pool_idx);
+    free(lu->spike_pool_val);
 
     free(lu);
 }
@@ -365,10 +408,18 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     }
     lu->num_eta = 0;
 
-    /* Clear Forrest-Tomlin spikes */
+    /* Clear Forrest-Tomlin spikes - only free if allocated outside pool */
     for (int i = 0; i < lu->ft_num_updates; i++) {
-        free(lu->ft_spike_idx[i]);
-        free(lu->ft_spike_val[i]);
+        /* Check if pointer is from the pool (don't free pool memory) */
+        int *idx = lu->ft_spike_idx[i];
+        if (idx != NULL) {
+            int in_pool = (idx >= lu->spike_pool_idx &&
+                          idx < lu->spike_pool_idx + lu->spike_pool_size);
+            if (!in_pool) {
+                free(idx);
+                free(lu->ft_spike_val[i]);
+            }
+        }
         lu->ft_spike_idx[i] = NULL;
         lu->ft_spike_val[i] = NULL;
         lu->ft_spike_nnz[i] = 0;
@@ -377,6 +428,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     lu->ft_num_updates = 0;
     lu->ft_num_compacted = 0;
     lu->ft_compact_valid = 0;
+    lu->spike_pool_used = 0;  /* Reset pool */
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;
@@ -1546,16 +1598,24 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
 
     /* Store as Forrest-Tomlin spike or eta-file update */
     if (lu->use_ft_updates) {
-        /* Convert OFF-DIAGONAL entries to sparse storage */
+        /* Convert OFF-DIAGONAL entries to sparse storage using pool */
         int *indices = NULL;
         double *values = NULL;
         if (off_diag_nnz > 0) {
-            indices = (int*)malloc(off_diag_nnz * sizeof(int));
-            values = (double*)malloc(off_diag_nnz * sizeof(double));
-            if (!indices || !values) {
-                free(indices);
-                free(values);
-                return -1;
+            /* Try to use pre-allocated pool first */
+            if (lu->spike_pool_used + off_diag_nnz <= lu->spike_pool_size) {
+                indices = &lu->spike_pool_idx[lu->spike_pool_used];
+                values = &lu->spike_pool_val[lu->spike_pool_used];
+                lu->spike_pool_used += off_diag_nnz;
+            } else {
+                /* Pool full - fall back to malloc */
+                indices = (int*)malloc(off_diag_nnz * sizeof(int));
+                values = (double*)malloc(off_diag_nnz * sizeof(double));
+                if (!indices || !values) {
+                    free(indices);
+                    free(values);
+                    return -1;
+                }
             }
 
             int p = 0;
@@ -1577,7 +1637,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         lu->ft_spike_nnz[k] = off_diag_nnz;
         lu->ft_num_updates++;
     } else {
-        /* Store as eta-file update (includes diagonal) */
+        /* Store as eta-file update (includes diagonal) - still uses malloc */
         int total_nnz = off_diag_nnz + 1;  /* +1 for diagonal */
         int *indices = (int*)malloc(total_nnz * sizeof(int));
         double *values = (double*)malloc(total_nnz * sizeof(double));

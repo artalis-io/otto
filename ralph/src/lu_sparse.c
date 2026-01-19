@@ -1362,10 +1362,18 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     }
     lu->num_eta = 0;
 
-    /* Clear Forrest-Tomlin spikes */
+    /* Clear Forrest-Tomlin spikes - only free if allocated outside pool */
     for (int i = 0; i < lu->ft_num_updates; i++) {
-        free(lu->ft_spike_idx[i]);
-        free(lu->ft_spike_val[i]);
+        /* Check if pointer is from the pool (don't free pool memory) */
+        int *idx = lu->ft_spike_idx[i];
+        if (idx != NULL) {
+            int in_pool = (idx >= lu->spike_pool_idx &&
+                          idx < lu->spike_pool_idx + lu->spike_pool_size);
+            if (!in_pool) {
+                free(idx);
+                free(lu->ft_spike_val[i]);
+            }
+        }
         lu->ft_spike_idx[i] = NULL;
         lu->ft_spike_val[i] = NULL;
         lu->ft_spike_nnz[i] = 0;
@@ -1374,6 +1382,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     lu->ft_num_updates = 0;
     lu->ft_num_compacted = 0;
     lu->ft_compact_valid = 0;
+    lu->spike_pool_used = 0;  /* Reset pool */
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;

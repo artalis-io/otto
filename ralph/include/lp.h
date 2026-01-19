@@ -124,6 +124,12 @@ typedef struct {
     int *hs_idx;            /* Sparse index array */
     double *hs_val;         /* Sparse value array */
     double *perm_work;      /* Workspace for permutation operations */
+
+    /* Pre-allocated spike storage pool to avoid malloc in hot path */
+    int *spike_pool_idx;    /* Contiguous storage for all spike indices */
+    double *spike_pool_val; /* Contiguous storage for all spike values */
+    int spike_pool_size;    /* Total size of pool */
+    int spike_pool_used;    /* Currently used entries in pool */
 } LUFactorization;
 
 /* Simplex tableau representation */
