@@ -163,9 +163,103 @@ static int temp_con_count = 0;
 static int temp_con_capacity = 0;
 static LPModel* temp_model = NULL;
 
+/* Rebuild temporary constraint storage from a finalized model's sparse matrix.
+ * This is called when adding constraints after the model has been solved. */
+static int rebuild_temp_storage(LPModel *model) {
+    if (!model || !model->A) return -1;
+
+    int m = model->num_cons;
+    int n = model->num_vars;
+    SparseMatrix *A = model->A;
+
+    /* Free old temp storage */
+    if (temp_constraints) {
+        for (int i = 0; i < temp_con_count; i++) {
+            if (temp_constraints[i]) {
+                free(temp_constraints[i]->indices);
+                free(temp_constraints[i]->values);
+                free(temp_constraints[i]);
+            }
+        }
+        free(temp_constraints);
+    }
+
+    /* Allocate new temp storage */
+    temp_constraints = (ConstraintEntry**)calloc(m + 64, sizeof(ConstraintEntry*));
+    if (!temp_constraints) return -1;
+
+    temp_con_count = m;
+    temp_con_capacity = m + 64;
+    temp_model = model;
+
+    /* Count non-zeros per row */
+    int *row_nnz = (int*)calloc(m, sizeof(int));
+    if (!row_nnz) return -1;
+
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j+1]; p++) {
+            row_nnz[A->rowidx[p]]++;
+        }
+    }
+
+    /* Create constraint entries */
+    for (int i = 0; i < m; i++) {
+        ConstraintEntry *entry = (ConstraintEntry*)malloc(sizeof(ConstraintEntry));
+        if (!entry) {
+            free(row_nnz);
+            return -1;
+        }
+
+        entry->nnz = 0;
+        entry->capacity = row_nnz[i];
+        entry->indices = (int*)malloc(row_nnz[i] * sizeof(int));
+        entry->values = (double*)malloc(row_nnz[i] * sizeof(double));
+        entry->sense = model->sense[i];
+        entry->rhs = model->b[i];
+
+        if (!entry->indices || !entry->values) {
+            free(entry->indices);
+            free(entry->values);
+            free(entry);
+            free(row_nnz);
+            return -1;
+        }
+
+        temp_constraints[i] = entry;
+    }
+
+    /* Fill in constraint entries from sparse matrix (CSC -> row format) */
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j+1]; p++) {
+            int i = A->rowidx[p];
+            double v = A->values[p];
+            ConstraintEntry *entry = temp_constraints[i];
+            entry->indices[entry->nnz] = j;
+            entry->values[entry->nnz] = v;
+            entry->nnz++;
+        }
+    }
+
+    free(row_nnz);
+
+    /* Free the old sparse matrix */
+    sparse_free(model->A);
+    model->A = NULL;
+
+    return 0;
+}
+
 int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
                             const double *values, char sense, double rhs) {
     if (!model) return -1;
+
+    /* If model was already finalized, rebuild temp storage from A
+     * so we can add the new constraint. */
+    if (model->A != NULL) {
+        if (rebuild_temp_storage(model) != 0) {
+            return -1;
+        }
+    }
 
     /* Initialize temporary storage if needed */
     if (temp_model != model) {

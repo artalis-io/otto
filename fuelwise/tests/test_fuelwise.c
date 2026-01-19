@@ -332,6 +332,81 @@ void test_milp_min_purchase(void)
 }
 
 /* ============================================================================
+ * Test: Benders Decomposition with Minimum Purchase
+ *
+ * Tests the Benders decomposition solver with Farkas feasibility cuts.
+ * Should produce equivalent results to the MILP solver.
+ * ============================================================================ */
+void test_benders_decomposition(void)
+{
+    printf("\n=== Test: Benders Decomposition ===\n");
+
+    FWSnappedStation stations[] = {
+        {1, 200.0, 0.5, {40.0, -99.8}, 1.20},
+        {2, 500.0, 0.3, {40.0, -99.5}, 1.00},
+        {3, 700.0, 0.4, {40.0, -99.3}, 1.30}
+    };
+
+    FWRefuelProblem problem = {
+        .total_distance = 1000.0,
+        .num_segments = 0,
+        .segments = NULL,
+        .base_consumption_mpg = 10.0,
+        .tank_capacity = 100.0,
+        .current_fuel = 50.0,
+        .minimum_fuel = 10.0,
+        .minimum_fuel_at_end = 10.0,
+        .num_stations = 3,
+        .stations = stations,
+        .min_purchase = 20.0,  /* Minimum 20 gallon purchase */
+        .stop_cost = 5.0,      /* $5 per stop */
+        .remaining_fuel_value = 0.0
+    };
+
+    /* Solve with Benders */
+    FWRefuelSolution benders_sol;
+    int ret = fw_solve_refuel_benders(&problem, &benders_sol);
+
+    ASSERT(ret == 0, "Benders solver returned success");
+    ASSERT(benders_sol.status == FW_STATUS_OPTIMAL, "Benders solution is optimal");
+
+    if (benders_sol.status == FW_STATUS_OPTIMAL) {
+        printf("  Benders total cost: $%.2f\n", benders_sol.total_cost);
+        printf("  Benders num stops: %d\n", benders_sol.num_stops);
+        printf("  Benders remaining fuel: %.2f gal\n", benders_sol.remaining_fuel);
+
+        for (int i = 0; i < 3; i++) {
+            printf("  Station %d: %.2f gal (stop=%d)\n",
+                   i + 1, benders_sol.purchases[i], benders_sol.stop_flags[i]);
+        }
+
+        /* Verify fuel sufficiency */
+        double total_purchased = 0;
+        for (int i = 0; i < 3; i++) {
+            total_purchased += benders_sol.purchases[i];
+        }
+        double fuel_needed = 100.0 + 10.0 - 50.0;  /* 60 gallons */
+        ASSERT(total_purchased >= fuel_needed - 0.1, "Sufficient fuel purchased");
+
+        /* Compare with MILP solution */
+        FWRefuelSolution milp_sol;
+        ret = fw_solve_refuel_milp(&problem, &milp_sol);
+
+        if (ret == 0 && milp_sol.status == FW_STATUS_OPTIMAL) {
+            printf("  MILP total cost: $%.2f (for comparison)\n", milp_sol.total_cost);
+
+            /* Benders should find a solution with cost within reasonable range of MILP */
+            double cost_diff = fabs(benders_sol.total_cost - milp_sol.total_cost);
+            ASSERT(cost_diff < milp_sol.total_cost * 0.1 + 1.0,
+                   "Benders cost within 10% of MILP");
+        }
+        fw_free_solution(&milp_sol);
+    }
+
+    fw_free_solution(&benders_sol);
+}
+
+/* ============================================================================
  * Test: Problem Validation
  * ============================================================================ */
 void test_problem_validation(void)
@@ -480,6 +555,7 @@ int main(void)
     test_fuel_consumption();
     test_basic_lp_refueling();
     test_milp_min_purchase();
+    test_benders_decomposition();
     test_problem_validation();
     test_full_pipeline();
     test_json_serialization();
