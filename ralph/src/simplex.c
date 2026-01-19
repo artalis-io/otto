@@ -445,6 +445,7 @@ SimplexTableau* tableau_create(LPModel *model) {
         tab->se_weights[j] = (col_norm_sq > 1.0) ? col_norm_sq : 1.0;
     }
     tab->use_steepest_edge = 1;
+    tab->pricing_strategy = 2;  /* Default to Devex */
     tab->devex_refcount = 0;
 
     /* Create LU factorization */
@@ -1132,10 +1133,11 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     double rhs_val = 1.0;
     lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
 
-    /* For steepest edge: tau_helper = B^{-T} * d_entering
-     * This enables exact weight updates.
+    /* For steepest edge weight updates: tau_helper = B^{-T} * d_entering
+     * This enables exact weight updates. Computed for all SE-based pricing
+     * (pricing_strategy 1 or 2) since true SE weights reduce iterations.
      */
-    int use_true_se = tab->use_steepest_edge;  /* Enable steepest edge when flag is set */
+    int use_true_se = tab->use_steepest_edge;  /* True SE weights for both SE and Devex */
     if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
         lu_solve_transpose(tab->lu, tab->work2, tau_helper);
     }
@@ -1187,12 +1189,14 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         }
     }
 
-    /* Update reduced costs incrementally */
+    /* Update reduced costs and weights in a single merged loop */
     if (fabs(pivot) > RALPH_PIVOT_TOL) {
         double rc_enter = tab->rc[entering];
         double rc_ratio = rc_enter / pivot;
+        double pivot_inv = 1.0 / pivot;
+        int do_se_update = tab->use_steepest_edge && !skip_se_update;
 
-        /* For all non-basic variables, update reduced costs */
+        /* For all non-basic variables, update reduced costs and optionally weights */
         for (int j = 0; j < tab->n; j++) {
             if (tab->var_status[j] == RALPH_BASIC) continue;
             if (j == entering) continue;
@@ -1205,6 +1209,19 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
 
             /* Update reduced cost */
             tab->rc[j] -= rc_ratio * alpha_j;
+
+            /* Update steepest edge weights if enabled */
+            if (do_se_update && j != leaving) {
+                /* True Steepest Edge: exact formula using tau_helper */
+                double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
+                double alpha_ratio = alpha_j * pivot_inv;
+                double new_weight = tab->se_weights[j]
+                                  - 2.0 * alpha_ratio * tau_j
+                                  + alpha_ratio * alpha_ratio * gamma_e;
+                if (new_weight < 1.0) new_weight = 1.0;
+                if (new_weight > 1e8) new_weight = 1e8;
+                tab->se_weights[j] = new_weight;
+            }
         }
 
         /* Reduced cost for entering variable (now basic) is 0 */
@@ -1212,33 +1229,6 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
 
         /* Reduced cost for leaving variable (now non-basic) */
         tab->rc[leaving] = -rc_enter / pivot;
-    }
-
-    /* Update steepest edge weights (separate loop to avoid alpha_j recomputation when SE disabled) */
-    if (tab->use_steepest_edge && !skip_se_update && fabs(pivot) > RALPH_PIVOT_TOL) {
-        double pivot_inv = 1.0 / pivot;
-        double rc_enter = tab->rc[entering];  /* Note: this is now 0 after the RC update above */
-
-        for (int j = 0; j < tab->n; j++) {
-            if (tab->var_status[j] == RALPH_BASIC) continue;
-            if (j == entering || j == leaving) continue;
-
-            /* Recompute alpha_j for SE update */
-            double alpha_j = 0.0;
-            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
-                alpha_j += pivot_row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
-            }
-
-            double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
-            double alpha_ratio = alpha_j * pivot_inv;
-            double new_weight = tab->se_weights[j]
-                              - 2.0 * alpha_ratio * tau_j
-                              + alpha_ratio * alpha_ratio * gamma_e;
-
-            if (new_weight < 1.0) new_weight = 1.0;
-            if (new_weight > 1e8) new_weight = 1e8;
-            tab->se_weights[j] = new_weight;
-        }
     }
 
     return 0;
@@ -1683,6 +1673,7 @@ int simplex_solve(SimplexSolver *solver) {
 
     /* Only use steepest edge weights for strategies that need them (1=SE, 2=Devex) */
     tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2);
+    tab->pricing_strategy = solver->pricing_strategy;
 
     if (solver->verbose) {
         printf("[simplex_solve] Tableau: n=%d (extended), m=%d\n", tab->n, tab->m);

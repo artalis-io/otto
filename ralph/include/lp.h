@@ -171,6 +171,7 @@ typedef struct {
     /* Steepest edge / Devex weights */
     double *se_weights;     /* Steepest edge weights */
     int use_steepest_edge;
+    int pricing_strategy;   /* 0=Dantzig, 1=SE, 2=Devex, 3=Partial - for pivot fn */
     int devex_refcount;     /* Reference count for Devex weight resets */
 
     /* Partial pricing state */
