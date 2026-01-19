@@ -83,6 +83,31 @@ int fw_solve_refuel_milp(
 );
 
 /*
+ * Solve a refueling optimization problem using Benders decomposition.
+ *
+ * This decomposes the MILP into:
+ *   - Master problem: binary z[i] variables (stop decisions)
+ *   - Subproblem: continuous x[i], y[i] given fixed z
+ *
+ * When the subproblem is infeasible for a given z, a Farkas feasibility
+ * cut is added to the master problem using ralph_get_farkas_ray().
+ *
+ * This approach can be faster than full MILP for problems with many
+ * integer variables but relatively simple continuous structure.
+ *
+ * Parameters:
+ *   problem  - The refueling problem definition
+ *   solution - Output: solution (caller must call fw_free_solution)
+ *
+ * Returns:
+ *   0 on success, -1 on error
+ */
+int fw_solve_refuel_benders(
+    const FWRefuelProblem *problem,
+    FWRefuelSolution *solution
+);
+
+/*
  * Free resources allocated in a solution.
  *
  * Parameters:
