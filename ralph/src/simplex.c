@@ -341,6 +341,24 @@ SimplexTableau* tableau_create(LPModel *model) {
         return NULL;
     }
 
+    /* Compute initial Ax values (x at lower bounds) for each row to decide
+     * whether surplus or artificial should be basic for >= constraints */
+    double *ax_initial = (double*)calloc(model->num_cons, sizeof(double));
+    if (!ax_initial) {
+        free(norm_sense);
+        free(norm_sign);
+        triplets_free(trips);
+        tableau_free(tab);
+        return NULL;
+    }
+    for (int j = 0; j < model->num_vars; j++) {
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            int row = model->A->rowidx[p];
+            double val = model->A->values[p] * norm_sign[row];  /* Apply row normalization */
+            ax_initial[row] += val * model->lb[j];  /* x starts at lower bound */
+        }
+    }
+
     /* Add auxiliary variables */
     int aux_idx = model->num_vars;
     for (int i = 0; i < model->num_cons; i++) {
@@ -354,19 +372,35 @@ SimplexTableau* tableau_create(LPModel *model) {
             aux_idx++;
         } else if (norm_sense[i] == 'G') {
             /* >= : add surplus with coef -1, then artificial with coef +1 */
-            /* Surplus variable (not basic) */
-            triplets_add(trips, i, aux_idx, -1.0);
-            tab->c_ext[aux_idx] = 0.0;
-            tab->lb_ext[aux_idx] = 0.0;
-            tab->ub_ext[aux_idx] = RALPH_INFINITY;
-            aux_idx++;
-            /* Artificial variable (basic) */
-            triplets_add(trips, i, aux_idx, 1.0);
-            tab->c_ext[aux_idx] = 1e8;  /* Big-M cost */
-            tab->lb_ext[aux_idx] = 0.0;
-            tab->ub_ext[aux_idx] = RALPH_INFINITY;
-            basic_var_for_row[i] = aux_idx;
-            aux_idx++;
+            double rhs = fabs(model->b[i]);
+
+            /* Check if constraint is already satisfied at initial point (x at lb) */
+            int surplus_idx = aux_idx;
+            int artificial_idx = aux_idx + 1;
+
+            /* Surplus variable */
+            triplets_add(trips, i, surplus_idx, -1.0);
+            tab->c_ext[surplus_idx] = 0.0;
+            tab->lb_ext[surplus_idx] = 0.0;
+            tab->ub_ext[surplus_idx] = RALPH_INFINITY;
+
+            /* Artificial variable */
+            triplets_add(trips, i, artificial_idx, 1.0);
+            tab->c_ext[artificial_idx] = 1e8;  /* Big-M cost */
+            tab->lb_ext[artificial_idx] = 0.0;
+            tab->ub_ext[artificial_idx] = RALPH_INFINITY;
+
+            /* Decide which is basic: if ax_initial >= rhs, surplus can be basic.
+             * Otherwise we need the artificial variable. */
+            if (ax_initial[i] >= rhs - RALPH_FEAS_TOL) {
+                /* Constraint already satisfied, surplus is basic */
+                basic_var_for_row[i] = surplus_idx;
+            } else {
+                /* Need artificial variable to be basic */
+                basic_var_for_row[i] = artificial_idx;
+            }
+
+            aux_idx += 2;
         } else {
             /* = : add artificial with coef +1 (basic) */
             triplets_add(trips, i, aux_idx, 1.0);
@@ -377,6 +411,7 @@ SimplexTableau* tableau_create(LPModel *model) {
             aux_idx++;
         }
     }
+    free(ax_initial);
 
     tab->A_ext = triplets_to_csc(trips);
     triplets_free(trips);
@@ -410,15 +445,16 @@ SimplexTableau* tableau_create(LPModel *model) {
         tab->var_status[bv] = RALPH_BASIC;
     }
 
-    /* Compute initial basic variable values: x_B = b - A_N * x_N
-     * Since initial basis is slacks/artificials with B = I, we have x_B directly.
-     * But we need to subtract the contribution from nonbasic vars at non-zero bounds.
+    /* Compute initial basic variable values: x_B = B^{-1} * (b - N * x_N)
+     * For slack/artificial (coeff +1): B^{-1} = 1, so x_B = rhs - sum(A_N * x_N)
+     * For surplus (coeff -1): B^{-1} = -1, so x_B = -(rhs - sum(A_N * x_N))
+     * General formula: x_B = (rhs - sum(A_N * x_N)) / col_coeff
      */
     for (int i = 0; i < model->num_cons; i++) {
         int bv = basic_var_for_row[i];
         double val = tab->rhs[i];
 
-        /* Subtract A[i,j] * x[j] for nonbasic variables j */
+        /* Subtract A[i,j] * x[j] for nonbasic structural variables j */
         for (int j = 0; j < model->num_vars; j++) {
             if (tab->var_status[j] != RALPH_BASIC && fabs(tab->x[j]) > RALPH_ZERO_TOL) {
                 /* Get A[i,j] from sparse matrix */
@@ -430,7 +466,22 @@ SimplexTableau* tableau_create(LPModel *model) {
                 }
             }
         }
-        tab->x[bv] = val;
+
+        /* Get the diagonal coefficient of the basic variable (column of bv in row i) */
+        double col_coeff = 0.0;
+        for (int p = tab->A_ext->colptr[bv]; p < tab->A_ext->colptr[bv + 1]; p++) {
+            if (tab->A_ext->rowidx[p] == i) {
+                col_coeff = tab->A_ext->values[p];
+                break;
+            }
+        }
+
+        /* Divide by column coefficient to get correct basic variable value */
+        if (fabs(col_coeff) > RALPH_ZERO_TOL) {
+            tab->x[bv] = val / col_coeff;
+        } else {
+            tab->x[bv] = val;  /* Fallback (shouldn't happen) */
+        }
     }
 
     /* Initialize steepest edge / Devex weights
