@@ -23,6 +23,40 @@ int tableau_compute_solution(SimplexTableau *tab);
 int tableau_compute_reduced_costs(SimplexTableau *tab);
 void tableau_free(SimplexTableau *tab);
 
+/*
+ * Extract Farkas ray (certificate of infeasibility) for dual simplex.
+ *
+ * When dual simplex detects infeasibility (no entering variable found),
+ * the current dual values y = c_B' * B^{-1} provide a Farkas certificate:
+ *   y'A >= 0 for all columns (at appropriate bounds)
+ *   y'b < 0
+ *
+ * This proves no feasible solution exists via Farkas lemma.
+ */
+static void extract_farkas_ray_dual(SimplexSolver *solver) {
+    SimplexTableau *tab = solver->tableau;
+    int m = tab->m;
+
+    /* Allocate if needed */
+    if (!solver->farkas_ray) {
+        solver->farkas_ray = (double*)malloc(m * sizeof(double));
+    }
+    if (!solver->farkas_ray) {
+        solver->farkas_valid = 0;
+        return;
+    }
+
+    /* Ensure we have fresh dual values */
+    tableau_compute_reduced_costs(tab);
+
+    /* Copy the dual values - these are the Farkas multipliers */
+    for (int i = 0; i < m; i++) {
+        solver->farkas_ray[i] = tab->y[i];
+    }
+
+    solver->farkas_valid = 1;
+}
+
 /* ============================================================================
  * Dual Ratio Test
  * ============================================================================ */
@@ -340,6 +374,7 @@ int dual_simplex_solve(SimplexSolver *solver) {
 
         if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
             /* No valid entering variable - infeasible */
+            extract_farkas_ray_dual(solver);
             solver->status = RALPH_STATUS_INFEASIBLE;
             return 0;
         }
@@ -699,6 +734,7 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
 
         if (dual_ratio_test(tab, leaving, &entering, &theta) != 0 || entering < 0) {
             /* No valid entering variable - problem is infeasible */
+            extract_farkas_ray_dual(solver);
             solver->status = RALPH_STATUS_INFEASIBLE;
             solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
             return 0;

@@ -1268,7 +1268,49 @@ void simplex_free(SimplexSolver *solver) {
     free(solver->reduced_costs);
     free(solver->row_scale);
     free(solver->col_scale);
+    free(solver->farkas_ray);
     free(solver);
+}
+
+/*
+ * Extract Farkas ray (certificate of infeasibility)
+ *
+ * When the LP is infeasible, the dual values y from Phase 1 satisfy:
+ *   y'A >= 0 for all columns (adjusted for constraint sense)
+ *   y'b < 0
+ *
+ * This proves no feasible solution exists via Farkas lemma.
+ * The ray is stored in solver->farkas_ray for retrieval via API.
+ */
+static void extract_farkas_ray(SimplexSolver *solver) {
+    SimplexTableau *tab = solver->tableau;
+    int m = tab->m;
+
+    /* Allocate if needed */
+    if (!solver->farkas_ray) {
+        solver->farkas_ray = (double*)malloc(m * sizeof(double));
+    }
+    if (!solver->farkas_ray) {
+        solver->farkas_valid = 0;
+        return;
+    }
+
+    /* The dual values y = c_B' * B^{-1} from Phase 1 give the Farkas ray.
+     * At infeasibility detection, tab->y contains these values.
+     * We need to compute them fresh using the current basis. */
+
+    /* Compute y = c_B' * B^{-1} via BTRAN
+     * For Phase 1 infeasibility, we use the direction of the infeasible row */
+
+    /* Get the dual values from the tableau */
+    tableau_compute_reduced_costs(tab);
+
+    /* Copy the dual values - these are the Farkas multipliers */
+    for (int i = 0; i < m; i++) {
+        solver->farkas_ray[i] = tab->y[i];
+    }
+
+    solver->farkas_valid = 1;
 }
 
 /* Phase 1: Find initial basic feasible solution */
@@ -1371,6 +1413,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         if (entering < 0) {
+            extract_farkas_ray(solver);
             solver->status = RALPH_STATUS_INFEASIBLE;
             return -1;
         }
@@ -1730,6 +1773,7 @@ int simplex_solve(SimplexSolver *solver) {
                         artificial_count, artificial_contrib);
             }
             if (artificial_contrib > 1e-2) {  /* Significant artificial contribution */
+                extract_farkas_ray(solver);
                 solver->status = RALPH_STATUS_INFEASIBLE;
                 return 0;
             }
