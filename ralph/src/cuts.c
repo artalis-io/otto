@@ -118,10 +118,15 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     int m = tab->m;
     int n = tab->n;
     int basic_var = tab->basis[basic_pos];
+    int verbose = 0;  /* Set to 1 to enable debug output */
 
     /* Get fractional part of basic variable */
     double b_i = tab->x[basic_var];
     double f_0 = b_i - floor(b_i);
+
+    if (verbose) {
+        printf("[GMI-row] basic_var=%d, b_i=%.6f, f_0=%.6f\n", basic_var, b_i, f_0);
+    }
 
     /* Check if fractional enough to generate cut */
     if (f_0 < RALPH_INT_TOL || f_0 > 1.0 - RALPH_INT_TOL) {
@@ -146,6 +151,10 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     cut->sense = 'G';  /* >= cut */
     cut->rhs = f_0;
 
+    /* Track if we have significant slack variable contributions.
+     * If slacks have positive coefficients, we can't safely project them out. */
+    double max_slack_coef = 0.0;
+
     /* Compute cut coefficients for each non-basic variable */
     for (int j = 0; j < n; j++) {
         if (tab->var_status[j] == RALPH_BASIC) continue;
@@ -154,6 +163,13 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
         double a_ij = 0.0;
         for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
             a_ij += row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+        }
+
+        if (verbose) {
+            const char *status_str = (tab->var_status[j] == RALPH_NONBASIC_LOWER) ? "NB_LO" :
+                                     (tab->var_status[j] == RALPH_NONBASIC_UPPER) ? "NB_UP" : "OTHER";
+            printf("[GMI-row] var %d: a_ij=%.6f, status=%s, x=%.4f, lb=%.4f, ub=%.4f\n",
+                   j, a_ij, status_str, tab->x[j], tab->lb_ext[j], tab->ub_ext[j]);
         }
 
         if (fabs(a_ij) < RALPH_ZERO_TOL) continue;
@@ -176,12 +192,20 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
             } else {
                 alpha_j = (1.0 - f_j) * f_0 / (1.0 - f_0);
             }
+            if (verbose) {
+                printf("[GMI-row]   INTEGER: coef_for_formula=%.6f, f_j=%.6f, alpha_j=%.6f\n",
+                       coef_for_formula, f_j, alpha_j);
+            }
         } else {
             /* Continuous variable (or slack) */
             if (coef_for_formula >= 0) {
                 alpha_j = coef_for_formula;
             } else {
                 alpha_j = -coef_for_formula * f_0 / (1.0 - f_0);
+            }
+            if (verbose) {
+                printf("[GMI-row]   CONTINUOUS: coef_for_formula=%.6f, alpha_j=%.6f\n",
+                       coef_for_formula, alpha_j);
             }
         }
 
@@ -193,23 +217,56 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
                 /* s_j = u_j - x_j, so alpha_j * s_j = alpha_j * u_j - alpha_j * x_j */
                 final_coef = -alpha_j;
                 cut->rhs -= alpha_j * tab->ub_ext[j];
+                if (verbose) {
+                    printf("[GMI-row]   NB_UPPER adjustment: final_coef=%.6f, rhs adjusted by -%.6f*%.6f\n",
+                           final_coef, alpha_j, tab->ub_ext[j]);
+                }
             } else {
                 /* For lower bound: x_j - l_j */
                 cut->rhs -= alpha_j * tab->lb_ext[j];
+                if (verbose && fabs(tab->lb_ext[j]) > RALPH_ZERO_TOL) {
+                    printf("[GMI-row]   NB_LOWER adjustment: rhs adjusted by -%.6f*%.6f\n",
+                           alpha_j, tab->lb_ext[j]);
+                }
             }
 
             alpha_j = final_coef;
 
             /* Add to cut if non-zero */
             if (fabs(alpha_j) > RALPH_ZERO_TOL && j < tab->model->num_vars) {
+                if (verbose) {
+                    printf("[GMI-row]   Adding to cut: x%d with coef %.6f\n", j, alpha_j);
+                }
                 cut->indices[cut->nnz] = j;
                 cut->values[cut->nnz] = alpha_j;
                 cut->nnz++;
+            }
+
+            /* Track slack variable contributions (j >= num_vars means slack/auxiliary) */
+            if (j >= tab->model->num_vars && fabs(final_coef) > RALPH_ZERO_TOL) {
+                /* For NB_LOWER slacks with positive coef, we can't project safely */
+                if (tab->var_status[j] == RALPH_NONBASIC_LOWER && final_coef > max_slack_coef) {
+                    max_slack_coef = final_coef;
+                }
             }
         }
     }
 
     free(row);
+
+    /* Reject cuts with significant slack variable contributions.
+     * When slack variables have positive GMI coefficients and are at their
+     * lower bound (0), projecting them out creates an invalid cut because
+     * at integer feasible points, the slacks might be positive, making the
+     * original cut's LHS larger and the projected cut too restrictive. */
+    if (max_slack_coef > 0.1) {  /* Threshold to avoid rejecting tiny contributions */
+        if (verbose) {
+            printf("[GMI-row] Rejected: significant positive slack coefficient (%.4f) "
+                   "makes projection unsafe\n", max_slack_coef);
+        }
+        cut_free(cut);
+        return NULL;
+    }
 
     /* Calculate violation */
     double lhs = 0.0;
@@ -218,18 +275,43 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     }
     cut->violation = cut->rhs - lhs;
 
+    if (verbose) {
+        printf("[GMI-row] Final cut: nnz=%d, rhs=%.6f, lhs=%.6f, violation=%.6f, max_slack=%.6f\n",
+               cut->nnz, cut->rhs, lhs, cut->violation, max_slack_coef);
+    }
+
     /* Skip cuts with no variable coefficients - they would be infeasible */
     if (cut->nnz == 0) {
+        if (verbose) printf("[GMI-row] Rejected: no variable coefficients\n");
+        cut_free(cut);
+        return NULL;
+    }
+
+    /* Skip cuts where all coefficients are negative and RHS > 0.
+     * Such cuts have form: -a*x - b*y >= c (with a,b,c > 0)
+     * which means a*x + b*y <= -c, impossible for non-negative vars.
+     * This happens when we project out slack terms with positive coefficients. */
+    int has_positive_coef = 0;
+    for (int k = 0; k < cut->nnz; k++) {
+        if (cut->values[k] > RALPH_ZERO_TOL) {
+            has_positive_coef = 1;
+            break;
+        }
+    }
+    if (!has_positive_coef && cut->rhs > RALPH_ZERO_TOL) {
+        if (verbose) printf("[GMI-row] Rejected: all negative coefs with positive RHS (would cut off all solutions)\n");
         cut_free(cut);
         return NULL;
     }
 
     /* Only return if cut is violated */
     if (cut->violation < RALPH_FEAS_TOL) {
+        if (verbose) printf("[GMI-row] Rejected: not violated (violation < %.9f)\n", RALPH_FEAS_TOL);
         cut_free(cut);
         return NULL;
     }
 
+    if (verbose) printf("[GMI-row] Cut accepted!\n");
     return cut;
 }
 
@@ -238,24 +320,54 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
 
     int cuts_added = 0;
 
+    if (solver->verbose >= 2) {
+        printf("[GMI] Scanning %d basic positions for cuts\n", tab->m);
+        printf("[GMI] Original vars: %d, is_integer array: %p\n",
+               solver->original_model->num_vars, (void*)solver->is_integer);
+    }
+
     for (int k = 0; k < tab->m; k++) {
         int j = tab->basis[k];
 
+        if (solver->verbose >= 2) {
+            printf("[GMI] Basic pos %d: var %d, val %.4f", k, j, tab->x[j]);
+        }
+
         /* Only generate cuts from integer variables */
-        if (j >= solver->original_model->num_vars) continue;
-        if (!solver->is_integer[j]) continue;
+        if (j >= solver->original_model->num_vars) {
+            if (solver->verbose >= 2) printf(" -> skip (slack/aux)\n");
+            continue;
+        }
+        if (!solver->is_integer[j]) {
+            if (solver->verbose >= 2) printf(" -> skip (continuous)\n");
+            continue;
+        }
 
         /* Check if fractional */
         double val = tab->x[j];
         double frac = val - floor(val);
-        if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) continue;
+        if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) {
+            if (solver->verbose >= 2) printf(" -> skip (integer: frac=%.6f)\n", frac);
+            continue;
+        }
+
+        if (solver->verbose >= 2) printf(" -> fractional! Generating cut...\n");
 
         Cut *cut = generate_gmi_cut_from_row(tab, k, solver->is_integer);
         if (cut) {
+            if (solver->verbose >= 2) {
+                printf("[GMI] Cut generated: ");
+                for (int i = 0; i < cut->nnz; i++) {
+                    printf("%.4f*x%d ", cut->values[i], cut->indices[i]);
+                }
+                printf(">= %.4f (violation=%.4f)\n", cut->rhs, cut->violation);
+            }
             cut_pool_add(pool, cut);
             cuts_added++;
 
             if (cuts_added >= solver->max_cuts_per_round) break;
+        } else {
+            if (solver->verbose >= 2) printf("[GMI] Cut was NULL (filtered out)\n");
         }
     }
 

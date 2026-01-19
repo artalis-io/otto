@@ -32,6 +32,7 @@ struct RalphModel {
     int verbose;
     double mip_gap;
     int max_nodes;
+    int max_cut_rounds;
     int method;  /* 0=primal simplex, 1=dual simplex, 2=auto */
     int pricing; /* 0=Dantzig, 1=Steepest edge, 2=Devex (default), 3=Partial */
 
@@ -71,6 +72,7 @@ RalphModel* ralph_create(void) {
     model->verbose = 0;
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
+    model->max_cut_rounds = 0;  /* Disabled by default */
     model->method = 0;  /* Default: primal simplex */
     model->pricing = 2; /* Default: Devex */
 
@@ -245,6 +247,7 @@ int ralph_optimize(RalphModel *model) {
         model->mip_solver->time_limit = model->time_limit;
         model->mip_solver->mip_gap = model->mip_gap;
         model->mip_solver->verbose = model->verbose;
+        model->mip_solver->max_cut_rounds = model->max_cut_rounds;
 
         /* Solve */
         mip_solve(model->mip_solver);
@@ -441,6 +444,8 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
         model->verbose = value;
     } else if (strcmp(name, "max_nodes") == 0 || strcmp(name, "NodeLimit") == 0) {
         model->max_nodes = value;
+    } else if (strcmp(name, "max_cut_rounds") == 0 || strcmp(name, "CutRounds") == 0) {
+        model->max_cut_rounds = value;
     } else if (strcmp(name, "method") == 0 || strcmp(name, "Method") == 0) {
         /* 0=primal simplex, 1=dual simplex, 2=auto */
         model->method = value;
@@ -479,6 +484,8 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
         *value = model->verbose;
     } else if (strcmp(name, "max_nodes") == 0) {
         *value = model->max_nodes;
+    } else if (strcmp(name, "max_cut_rounds") == 0) {
+        *value = model->max_cut_rounds;
     } else if (strcmp(name, "method") == 0) {
         *value = model->method;
     } else {
