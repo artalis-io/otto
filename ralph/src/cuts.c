@@ -159,42 +159,46 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
         if (fabs(a_ij) < RALPH_ZERO_TOL) continue;
 
         double alpha_j = 0.0;
+        double coef_for_formula = a_ij;
+
+        /* For variables at upper bound, use complemented coefficient (-a_ij)
+         * because we substitute x_j = u_j - s_j where s_j >= 0 */
+        if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+            coef_for_formula = -a_ij;
+        }
 
         if (j < tab->model->num_vars && is_integer && is_integer[j]) {
             /* Integer variable */
-            double f_j = a_ij - floor(a_ij);
-            if (f_j < 0) f_j += 1.0;  /* Ensure positive */
+            double f_j = coef_for_formula - floor(coef_for_formula);
 
-            if (f_j <= f_0) {
+            if (f_j <= f_0 + RALPH_ZERO_TOL) {
                 alpha_j = f_j;
             } else {
                 alpha_j = (1.0 - f_j) * f_0 / (1.0 - f_0);
             }
         } else {
             /* Continuous variable (or slack) */
-            if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                if (a_ij >= 0) {
-                    alpha_j = a_ij;
-                } else {
-                    alpha_j = -a_ij * f_0 / (1.0 - f_0);
-                }
-            } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                if (a_ij <= 0) {
-                    alpha_j = -a_ij;
-                } else {
-                    alpha_j = a_ij * f_0 / (1.0 - f_0);
-                }
+            if (coef_for_formula >= 0) {
+                alpha_j = coef_for_formula;
+            } else {
+                alpha_j = -coef_for_formula * f_0 / (1.0 - f_0);
             }
         }
 
         if (fabs(alpha_j) > RALPH_ZERO_TOL) {
-            /* Adjust sign based on bound status */
+            double final_coef = alpha_j;
+
+            /* Convert back to original variable for upper-bounded variables */
             if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                alpha_j = -alpha_j;
+                /* s_j = u_j - x_j, so alpha_j * s_j = alpha_j * u_j - alpha_j * x_j */
+                final_coef = -alpha_j;
                 cut->rhs -= alpha_j * tab->ub_ext[j];
             } else {
+                /* For lower bound: x_j - l_j */
                 cut->rhs -= alpha_j * tab->lb_ext[j];
             }
+
+            alpha_j = final_coef;
 
             /* Add to cut if non-zero */
             if (fabs(alpha_j) > RALPH_ZERO_TOL && j < tab->model->num_vars) {
@@ -214,6 +218,12 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     }
     cut->violation = cut->rhs - lhs;
 
+    /* Skip cuts with no variable coefficients - they would be infeasible */
+    if (cut->nnz == 0) {
+        cut_free(cut);
+        return NULL;
+    }
+
     /* Only return if cut is violated */
     if (cut->violation < RALPH_FEAS_TOL) {
         cut_free(cut);
@@ -225,6 +235,7 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
 
 int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
     SimplexTableau *tab = solver->lp_solver->tableau;
+
     int cuts_added = 0;
 
     for (int k = 0; k < tab->m; k++) {

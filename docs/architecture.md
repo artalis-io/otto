@@ -321,6 +321,11 @@ takes 0.58ms per iteration vs GLPK's 0.044ms.
 ### Low Priority
 
 7. **Cut Generation**
+   - GMI cut infrastructure implemented (cuts.c) but disabled by default
+   - Fixed GMI formula for variables at upper bound (complemented coefficients)
+   - Fixed issue with empty cuts (no variable coefficients) causing infeasibility
+   - **Outstanding**: GMI cuts still produce incorrect cuts on some problems with >= constraints and negative coefficients; needs investigation
+   - TODO: Debug GMI cut formula for >= constraints
    - TODO: Lift-and-project cuts
    - TODO: Flow cover cuts
    - TODO: Clique cuts from conflict graph
