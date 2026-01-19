@@ -571,7 +571,7 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit) {
 
     /* Solve and time */
     clock_t start = clock();
-    int status = ralph_optimize(model);
+    ralph_optimize(model);
     clock_t end = clock();
 
     result.solve_time = (double)(end - start) / CLOCKS_PER_SEC;
@@ -579,6 +579,8 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit) {
     result.nodes = ralph_get_node_count(model);
     result.iterations = ralph_get_iterations(model);
 
+    /* Get status via ralph_get_status, not return value of ralph_optimize */
+    RalphStatus status = ralph_get_status(model);
     if (status == RALPH_STATUS_OPTIMAL) {
         result.status = 0;
     } else if (status == RALPH_STATUS_INFEASIBLE) {
