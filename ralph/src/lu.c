@@ -40,7 +40,10 @@ LUFactorization* lu_create(int m) {
     lu->col_perm = (int*)malloc(m * sizeof(int));
     lu->col_perm_inv = (int*)malloc(m * sizeof(int));
 
-    if (!lu->perm || !lu->perm_inv || !lu->col_perm || !lu->col_perm_inv) {
+    /* U diagonal cache for fast access during solve */
+    lu->U_diag = (double*)malloc(m * sizeof(double));
+
+    if (!lu->perm || !lu->perm_inv || !lu->col_perm || !lu->col_perm_inv || !lu->U_diag) {
         lu_free(lu);
         return NULL;
     }
@@ -165,6 +168,7 @@ void lu_free(LUFactorization *lu) {
     free(lu->U_colptr);
     free(lu->U_rowidx);
     free(lu->U_values);
+    free(lu->U_diag);
     free(lu->perm);
     free(lu->perm_inv);
     free(lu->col_perm);
@@ -451,13 +455,16 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
 
     lu->num_updates = 0;
 
-    /* Compute condition number estimate from U diagonal */
+    /* Extract U diagonals and compute condition number estimate */
     lu->min_diag_U = RALPH_INFINITY;
     lu->max_diag_U = 0.0;
     for (int j = 0; j < m; j++) {
+        lu->U_diag[j] = 0.0;  /* Default in case not found */
         for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
             if (lu->U_rowidx[p] == j) {
-                double absval = fabs(lu->U_values[p]);
+                double val = lu->U_values[p];
+                lu->U_diag[j] = val;
+                double absval = fabs(val);
                 if (absval < lu->min_diag_U) lu->min_diag_U = absval;
                 if (absval > lu->max_diag_U) lu->max_diag_U = absval;
                 break;
@@ -508,19 +515,13 @@ static void solve_L(const LUFactorization *lu, const double *b, double *x) {
 /* Solve Ux = b (backward substitution) */
 static void solve_U(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const double *U_diag = lu->U_diag;
 
     vec_copy_data(x, b, m);
 
-    /* Backward substitution */
+    /* Backward substitution - use cached diagonals for speed */
     for (int j = m - 1; j >= 0; j--) {
-        /* Find diagonal element */
-        double diag = 0.0;
-        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-            if (lu->U_rowidx[p] == j) {
-                diag = lu->U_values[p];
-                break;
-            }
-        }
+        double diag = U_diag[j];
 
         if (fabs(diag) < RALPH_PIVOT_TOL) {
             x[j] = 0.0;  /* Effectively zero row */
@@ -530,7 +531,7 @@ static void solve_U(const LUFactorization *lu, const double *b, double *x) {
         x[j] /= diag;
         double xj = x[j];
 
-        /* Update remaining elements */
+        /* Update remaining elements (off-diagonal) */
         for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
             int i = lu->U_rowidx[p];
             if (i < j) {
@@ -568,6 +569,7 @@ static void solve_Lt(const LUFactorization *lu, const double *b, double *x) {
 /* Solve U'x = b (forward substitution with U transpose) */
 static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const double *U_diag = lu->U_diag;
 
     vec_copy_data(x, b, m);
 
@@ -591,14 +593,7 @@ static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
             }
         }
 
-        /* Find diagonal U[i,i] */
-        double diag = 0.0;
-        for (int p = lu->U_colptr[i]; p < lu->U_colptr[i + 1]; p++) {
-            if (lu->U_rowidx[p] == i) {
-                diag = lu->U_values[p];
-                break;
-            }
-        }
+        double diag = U_diag[i];
 
         if (fabs(diag) < RALPH_PIVOT_TOL) {
             x[i] = 0.0;

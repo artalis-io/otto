@@ -1443,13 +1443,16 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
 
     lu->num_updates = 0;
 
-    /* Compute condition number estimate from U diagonal */
+    /* Extract U diagonals and compute condition number estimate */
     lu->min_diag_U = RALPH_INFINITY;
     lu->max_diag_U = 0.0;
     for (int j = 0; j < m; j++) {
+        lu->U_diag[j] = 0.0;
         for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
             if (lu->U_rowidx[p] == j) {
-                double absval = fabs(lu->U_values[p]);
+                double val = lu->U_values[p];
+                lu->U_diag[j] = val;
+                double absval = fabs(val);
                 if (absval < lu->min_diag_U) lu->min_diag_U = absval;
                 if (absval > lu->max_diag_U) lu->max_diag_U = absval;
                 break;
@@ -1473,246 +1476,592 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
 }
 
 /* ============================================================================
- * NEW: Efficient Sparse LU with Dense Work Arrays (Right-Looking)
+ * LP-Aware Sparse LU Factorization
  * ============================================================================
  *
- * Key improvements over the linked-list version:
- * 1. Uses dense work array during elimination - O(nnz) per row update
- * 2. No linked-list traversal for value lookups
- * 3. Builds CSC output directly
- * 4. Uses AMD column ordering for fill-in reduction
+ * Exploits LP basis structure for dramatically faster factorization:
+ *
+ * LP bases typically contain:
+ * - Identity columns from slack variables (singleton with value ±1)
+ * - Structural columns from the constraint matrix
+ *
+ * Key insight: If the basis has k structural columns and (m-k) identity columns,
+ * we only need to factorize a k×k submatrix instead of the full m×m matrix.
+ * This gives O(k³) complexity instead of O(m³).
+ *
+ * For typical LP problems with 20-50% structural columns:
+ * - 20% structural → ~100x speedup (k=0.2m gives 0.008m³ vs m³)
+ * - 50% structural → ~8x speedup (k=0.5m gives 0.125m³ vs m³)
  */
 
+/* Analysis result for LP basis structure */
+typedef struct {
+    int *identity_cols;     /* Indices of identity columns in B */
+    int *identity_rows;     /* Row where each identity col has its 1 */
+    double *identity_vals;  /* Value (±1) at each identity position */
+    int num_identity;
+
+    int *structural_cols;   /* Indices of structural columns */
+    int num_structural;
+
+    int *row_is_identity;   /* For each row: 1 if covered by identity col, 0 otherwise */
+    int *row_to_sub;        /* Map: original row -> submatrix row (-1 if identity) */
+    int *sub_to_row;        /* Map: submatrix row -> original row */
+    int *id_to_step;        /* Map: identity row -> its step in elimination (k+i) */
+
+    /* Cross-terms B21: structural col entries in identity rows */
+    int *B21_col;           /* Column index (structural column 0..k-1) */
+    int *B21_row;           /* Row index (identity row as step k..m-1) */
+    double *B21_val;        /* Value */
+    int B21_nnz;            /* Number of cross-term entries */
+    int B21_cap;            /* Capacity */
+} LPBasisStructure;
+
+static LPBasisStructure* analyze_lp_basis(const SparseMatrix *B) {
+    int m = B->nrows;
+
+    LPBasisStructure *lp = (LPBasisStructure*)calloc(1, sizeof(LPBasisStructure));
+    if (!lp) return NULL;
+
+    lp->identity_cols = (int*)malloc(m * sizeof(int));
+    lp->identity_rows = (int*)malloc(m * sizeof(int));
+    lp->identity_vals = (double*)malloc(m * sizeof(double));
+    lp->structural_cols = (int*)malloc(m * sizeof(int));
+    lp->row_is_identity = (int*)calloc(m, sizeof(int));
+    lp->row_to_sub = (int*)malloc(m * sizeof(int));
+    lp->sub_to_row = (int*)malloc(m * sizeof(int));
+    lp->id_to_step = (int*)malloc(m * sizeof(int));
+
+    /* Initial capacity for cross-terms */
+    lp->B21_cap = B->nnz / 4 + 16;
+    lp->B21_col = (int*)malloc(lp->B21_cap * sizeof(int));
+    lp->B21_row = (int*)malloc(lp->B21_cap * sizeof(int));
+    lp->B21_val = (double*)malloc(lp->B21_cap * sizeof(double));
+    lp->B21_nnz = 0;
+
+    if (!lp->identity_cols || !lp->identity_rows || !lp->identity_vals ||
+        !lp->structural_cols || !lp->row_is_identity ||
+        !lp->row_to_sub || !lp->sub_to_row || !lp->id_to_step ||
+        !lp->B21_col || !lp->B21_row || !lp->B21_val) {
+        free(lp->identity_cols); free(lp->identity_rows); free(lp->identity_vals);
+        free(lp->structural_cols); free(lp->row_is_identity);
+        free(lp->row_to_sub); free(lp->sub_to_row); free(lp->id_to_step);
+        free(lp->B21_col); free(lp->B21_row); free(lp->B21_val);
+        free(lp);
+        return NULL;
+    }
+
+    for (int i = 0; i < m; i++) {
+        lp->row_to_sub[i] = -1;
+        lp->id_to_step[i] = -1;
+    }
+
+    /* Classify columns: identity (singleton ±1) vs structural */
+    for (int j = 0; j < m; j++) {
+        int nnz = B->colptr[j + 1] - B->colptr[j];
+
+        if (nnz == 1) {
+            int p = B->colptr[j];
+            int row = B->rowidx[p];
+            double val = B->values[p];
+
+            /* Identity column: exactly one entry with |value| = 1, row not yet claimed */
+            if (fabs(fabs(val) - 1.0) < RALPH_ZERO_TOL && !lp->row_is_identity[row]) {
+                lp->identity_cols[lp->num_identity] = j;
+                lp->identity_rows[lp->num_identity] = row;
+                lp->identity_vals[lp->num_identity] = val;
+                lp->row_is_identity[row] = 1;
+                lp->num_identity++;
+                continue;
+            }
+        }
+
+        /* Not an identity column - it's structural */
+        lp->structural_cols[lp->num_structural++] = j;
+    }
+
+    /* Build row mapping: non-identity rows -> submatrix indices */
+    int sub_idx = 0;
+    for (int i = 0; i < m; i++) {
+        if (!lp->row_is_identity[i]) {
+            lp->row_to_sub[i] = sub_idx;
+            lp->sub_to_row[sub_idx] = i;
+            sub_idx++;
+        }
+    }
+
+    /* Build id_to_step mapping for identity rows */
+    int k = lp->num_structural;
+    for (int i = 0; i < lp->num_identity; i++) {
+        int row = lp->identity_rows[i];
+        lp->id_to_step[row] = k + i;  /* Identity rows come after structural */
+    }
+
+    /* Capture cross-terms: structural columns with entries in identity rows */
+    /* These go into B21 for Schur complement computation */
+    for (int jj = 0; jj < lp->num_structural; jj++) {
+        int j = lp->structural_cols[jj];
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            int row = B->rowidx[p];
+            double val = B->values[p];
+            if (lp->row_is_identity[row] && fabs(val) > RALPH_ZERO_TOL) {
+                /* This is a cross-term: structural col jj has entry in identity row */
+                if (lp->B21_nnz >= lp->B21_cap) {
+                    lp->B21_cap *= 2;
+                    lp->B21_col = (int*)realloc(lp->B21_col, lp->B21_cap * sizeof(int));
+                    lp->B21_row = (int*)realloc(lp->B21_row, lp->B21_cap * sizeof(int));
+                    lp->B21_val = (double*)realloc(lp->B21_val, lp->B21_cap * sizeof(double));
+                }
+                lp->B21_col[lp->B21_nnz] = jj;  /* Structural column index (0..k-1) */
+                lp->B21_row[lp->B21_nnz] = lp->id_to_step[row];  /* Step index (k..m-1) */
+                lp->B21_val[lp->B21_nnz] = val;
+                lp->B21_nnz++;
+            }
+        }
+    }
+
+    return lp;
+}
+
+static void free_lp_basis_structure(LPBasisStructure *lp) {
+    if (!lp) return;
+    free(lp->identity_cols);
+    free(lp->identity_rows);
+    free(lp->identity_vals);
+    free(lp->structural_cols);
+    free(lp->row_is_identity);
+    free(lp->row_to_sub);
+    free(lp->sub_to_row);
+    free(lp->id_to_step);
+    free(lp->B21_col);
+    free(lp->B21_row);
+    free(lp->B21_val);
+    free(lp);
+}
+
 /*
- * Right-looking sparse LU factorization with partial pivoting.
+ * LP-Aware LU Factorization
  *
  * Algorithm:
- * 1. Apply AMD column ordering to reduce fill-in
- * 2. For each pivot step k = 0 to m-1:
- *    a. Find pivot element with largest absolute value in column k (rows k to m-1)
- *    b. Swap rows if necessary
- *    c. Compute multipliers L[i,k] = A[i,k] / A[k,k] for i > k
- *    d. Update submatrix: A[i,j] -= L[i,k] * A[k,j] for i,j > k
- *
- * Uses dense work array for scatter-gather to achieve O(nnz) updates.
+ * 1. Analyze basis to identify identity vs structural columns
+ * 2. Extract k×k submatrix from structural columns × non-identity rows
+ * 3. Factorize the small submatrix with partial pivoting
+ * 4. Build full L/U by combining:
+ *    - Trivial parts from identity columns (L[i,j]=1, U[j,j]=±1)
+ *    - Dense factorization of structural submatrix
  */
 int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     if (!lu || !B) return -1;
     if (B->nrows != B->ncols || B->nrows != lu->m) return -1;
 
     int m = lu->m;
-    
+
     /* For small matrices, dense is faster due to overhead */
-    if (m < 50) {
+    if (m < 30) {
         return lu_factorize_dense(lu, B);
     }
 
-    /* Compute column ordering using AMD or LP-specific ordering */
-    int *col_order = compute_lp_column_ordering(B);
-    if (!col_order) {
-        col_order = compute_col_ordering(B);  /* Fall back to general AMD */
-    }
-    if (!col_order) return -1;
-
-    /* Allocate working storage */
-    double *work = (double*)calloc(m, sizeof(double));    /* Dense column */
-    int *work_idx = (int*)malloc(m * sizeof(int));        /* Non-zero indices */
-    int *row_perm = (int*)malloc(m * sizeof(int));        /* Row permutation */
-    int *row_perm_inv = (int*)malloc(m * sizeof(int));    /* Inverse row perm */
-    int *col_perm_inv = (int*)malloc(m * sizeof(int));    /* Inverse col perm */
-
-    /* Storage for L and U in COO format (convert to CSC at end) */
-    int L_cap = B->nnz + m;  /* Initial capacity */
-    int U_cap = B->nnz + m;
-    int *L_row = (int*)malloc(L_cap * sizeof(int));
-    int *L_col = (int*)malloc(L_cap * sizeof(int));
-    double *L_val = (double*)malloc(L_cap * sizeof(double));
-    int *U_row = (int*)malloc(U_cap * sizeof(int));
-    int *U_col = (int*)malloc(U_cap * sizeof(int));
-    double *U_val = (double*)malloc(U_cap * sizeof(double));
-    int L_nnz = 0, U_nnz = 0;
-
-    /* Copy of A for in-place elimination - use dense row storage */
-    /* A_dense[i * m + j] = A[i, col_order[j]] after col permutation */
-    double *A_dense = (double*)calloc((size_t)m * m, sizeof(double));
-
-    if (!work || !work_idx || !row_perm || !row_perm_inv || !col_perm_inv ||
-        !L_row || !L_col || !L_val || !U_row || !U_col || !U_val || !A_dense) {
-        free(work); free(work_idx); free(row_perm); free(row_perm_inv);
-        free(col_perm_inv); free(L_row); free(L_col); free(L_val);
-        free(U_row); free(U_col); free(U_val); free(A_dense); free(col_order);
-        return -1;
+    /* Analyze LP basis structure */
+    LPBasisStructure *lp = analyze_lp_basis(B);
+    if (!lp) {
+        return lu_factorize_dense(lu, B);
     }
 
-    /* Initialize permutations */
-    for (int i = 0; i < m; i++) {
-        row_perm[i] = i;
-        row_perm_inv[i] = i;
-        col_perm_inv[col_order[i]] = i;
+    int k = lp->num_structural;    /* Submatrix dimension */
+    int num_id = lp->num_identity; /* Number of identity columns */
+
+    /* If very few identity columns, fall back to dense (not worth the overhead) */
+    if (num_id < m / 4) {
+        free_lp_basis_structure(lp);
+        return lu_factorize_dense(lu, B);
     }
 
-    /* Copy A with column permutation into dense storage */
-    for (int j_new = 0; j_new < m; j_new++) {
-        int j_orig = col_order[j_new];  /* Original column */
-        for (int p = B->colptr[j_orig]; p < B->colptr[j_orig + 1]; p++) {
-            int i = B->rowidx[p];
-            A_dense[i * m + j_new] = B->values[p];
+    /* Special case: pure identity matrix */
+    if (k == 0) {
+        /* L and U are both identity (with sign from identity_vals) */
+        free(lu->L_colptr); free(lu->L_rowidx); free(lu->L_values);
+        free(lu->U_colptr); free(lu->U_rowidx); free(lu->U_values);
+
+        lu->L_colptr = (int*)malloc((m + 1) * sizeof(int));
+        lu->L_rowidx = (int*)malloc(m * sizeof(int));
+        lu->L_values = (double*)malloc(m * sizeof(double));
+        lu->U_colptr = (int*)malloc((m + 1) * sizeof(int));
+        lu->U_rowidx = (int*)malloc(m * sizeof(int));
+        lu->U_values = (double*)malloc(m * sizeof(double));
+
+        /* Build identity L and U using column order from identity analysis */
+        for (int step = 0; step < m; step++) {
+            int j = lp->identity_cols[step];
+            int row = lp->identity_rows[step];
+            double val = lp->identity_vals[step];
+
+            lu->perm[step] = row;
+            lu->perm_inv[row] = step;
+            lu->col_perm[step] = j;
+            lu->col_perm_inv[j] = step;
+
+            lu->L_colptr[step] = step;
+            lu->L_rowidx[step] = step;
+            lu->L_values[step] = 1.0;
+
+            lu->U_colptr[step] = step;
+            lu->U_rowidx[step] = step;
+            lu->U_values[step] = val;
+        }
+        lu->L_colptr[m] = m;
+        lu->U_colptr[m] = m;
+        lu->nnz_L = m;
+        lu->nnz_U = m;
+
+        /* Set U diagonals - all ±1 for identity matrix */
+        for (int step = 0; step < m; step++) {
+            lu->U_diag[step] = lp->identity_vals[step];
+        }
+
+        /* Clear update structures */
+        lu->num_updates = 0;
+        lu->ft_num_updates = 0;
+        lu->ft_num_compacted = 0;
+        lu->ft_compact_valid = 0;
+        lu->spike_pool_used = 0;
+        for (int i = 0; i < m; i++) {
+            lu->ft_col_order[i] = i;
+            lu->ft_col_order_inv[i] = i;
+        }
+
+        lu->min_diag_U = 1.0;
+        lu->max_diag_U = 1.0;
+        lu->cond_estimate = 1.0;
+        lu->growth_factor = 1.0;
+
+        free_lp_basis_structure(lp);
+        return 0;
+    }
+
+    /* Extract k×k structural submatrix */
+    /* A_sub[ii + jj*k] = B[sub_to_row[ii], structural_cols[jj]] */
+    double *A_sub = (double*)calloc((size_t)k * k, sizeof(double));
+    int *sub_perm = (int*)malloc(k * sizeof(int));        /* Row permutation within submatrix */
+    int *sub_perm_inv = (int*)malloc(k * sizeof(int));
+
+    if (!A_sub || !sub_perm || !sub_perm_inv) {
+        free(A_sub); free(sub_perm); free(sub_perm_inv);
+        free_lp_basis_structure(lp);
+        return lu_factorize_dense(lu, B);
+    }
+
+    /* Initialize submatrix permutation */
+    for (int i = 0; i < k; i++) {
+        sub_perm[i] = i;
+        sub_perm_inv[i] = i;
+    }
+
+    /* Fill submatrix from structural columns */
+    for (int jj = 0; jj < k; jj++) {
+        int j = lp->structural_cols[jj];
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            int row = B->rowidx[p];
+            int ii = lp->row_to_sub[row];
+            if (ii >= 0) {
+                A_sub[ii + jj * k] = B->values[p];
+            }
         }
     }
 
-    /* Main elimination loop */
-    for (int k = 0; k < m; k++) {
-        /* Find pivot: maximum absolute value in column k, rows k to m-1 */
-        int pivot_row = -1;
+    /* Dense LU on k×k submatrix with partial pivoting */
+    for (int step = 0; step < k; step++) {
+        /* Find pivot: max |A_sub[i, step]| for i >= step */
+        int pivot_idx = -1;
         double max_val = 0.0;
 
-        for (int i = k; i < m; i++) {
-            int orig_row = row_perm[i];
-            double val = fabs(A_dense[orig_row * m + k]);
+        for (int ii = step; ii < k; ii++) {
+            int orig_ii = sub_perm[ii];
+            double val = fabs(A_sub[orig_ii + step * k]);
             if (val > max_val) {
                 max_val = val;
-                pivot_row = i;
+                pivot_idx = ii;
             }
         }
 
         if (max_val < RALPH_PIVOT_TOL) {
-            /* Singular matrix */
-            free(work); free(work_idx); free(row_perm); free(row_perm_inv);
-            free(col_perm_inv); free(L_row); free(L_col); free(L_val);
-            free(U_row); free(U_col); free(U_val); free(A_dense); free(col_order);
-            return -1;
+            /* Singular submatrix - fall back to dense */
+            free(A_sub); free(sub_perm); free(sub_perm_inv);
+            free_lp_basis_structure(lp);
+            return lu_factorize_dense(lu, B);
         }
 
-        /* Swap rows k and pivot_row in permutation */
-        if (pivot_row != k) {
-            int tmp = row_perm[k];
-            row_perm[k] = row_perm[pivot_row];
-            row_perm[pivot_row] = tmp;
+        /* Swap rows in permutation */
+        if (pivot_idx != step) {
+            int tmp = sub_perm[step];
+            sub_perm[step] = sub_perm[pivot_idx];
+            sub_perm[pivot_idx] = tmp;
         }
 
-        int piv_orig = row_perm[k];  /* Original row index of pivot */
-        double pivot_val = A_dense[piv_orig * m + k];
+        int piv = sub_perm[step];
+        double pivot_val = A_sub[piv + step * k];
 
-        /* Store U[k, k:m] (pivot row from column k onwards) */
-        for (int j = k; j < m; j++) {
-            double val = A_dense[piv_orig * m + j];
-            if (fabs(val) > RALPH_ZERO_TOL || j == k) {
-                if (U_nnz >= U_cap) {
-                    U_cap *= 2;
-                    U_row = (int*)realloc(U_row, U_cap * sizeof(int));
-                    U_col = (int*)realloc(U_col, U_cap * sizeof(int));
-                    U_val = (double*)realloc(U_val, U_cap * sizeof(double));
-                }
-                U_row[U_nnz] = k;
-                U_col[U_nnz] = j;
-                U_val[U_nnz] = val;
-                U_nnz++;
-            }
-        }
-
-        /* Store L[k, k] = 1 (diagonal) */
-        if (L_nnz >= L_cap) {
-            L_cap *= 2;
-            L_row = (int*)realloc(L_row, L_cap * sizeof(int));
-            L_col = (int*)realloc(L_col, L_cap * sizeof(int));
-            L_val = (double*)realloc(L_val, L_cap * sizeof(double));
-        }
-        L_row[L_nnz] = k;
-        L_col[L_nnz] = k;
-        L_val[L_nnz] = 1.0;
-        L_nnz++;
-
-        /* Eliminate: for each row i > k with non-zero in column k */
-        for (int ii = k + 1; ii < m; ii++) {
-            int i_orig = row_perm[ii];
-            double a_ik = A_dense[i_orig * m + k];
+        /* Eliminate: compute multipliers and update submatrix */
+        for (int ii = step + 1; ii < k; ii++) {
+            int row_ii = sub_perm[ii];
+            double a_ik = A_sub[row_ii + step * k];
 
             if (fabs(a_ik) < RALPH_ZERO_TOL) continue;
 
             double mult = a_ik / pivot_val;
+            A_sub[row_ii + step * k] = mult;  /* Store L multiplier */
 
-            /* Store L[ii, k] = mult */
-            if (L_nnz >= L_cap) {
-                L_cap *= 2;
-                L_row = (int*)realloc(L_row, L_cap * sizeof(int));
-                L_col = (int*)realloc(L_col, L_cap * sizeof(int));
-                L_val = (double*)realloc(L_val, L_cap * sizeof(double));
-            }
-            L_row[L_nnz] = ii;
-            L_col[L_nnz] = k;
-            L_val[L_nnz] = mult;
-            L_nnz++;
-
-            /* Update row i: A[i, j] -= mult * A[pivot, j] for j > k */
-            A_dense[i_orig * m + k] = 0.0;  /* Explicitly zero out */
-            for (int j = k + 1; j < m; j++) {
-                A_dense[i_orig * m + j] -= mult * A_dense[piv_orig * m + j];
+            for (int jj = step + 1; jj < k; jj++) {
+                A_sub[row_ii + jj * k] -= mult * A_sub[piv + jj * k];
             }
         }
     }
 
-    /* Build inverse row permutation */
-    for (int i = 0; i < m; i++) {
-        row_perm_inv[row_perm[i]] = i;
+    /* Build inverse permutation */
+    for (int i = 0; i < k; i++) {
+        sub_perm_inv[sub_perm[i]] = i;
     }
 
-    /* Convert L and U from COO to CSC format */
+    /* Now build full L and U in CSC format */
+    /*
+     * Column ordering: structural columns first (in order), then identity columns
+     * Row ordering: follows pivot selection
+     *
+     * For step s:
+     *   If s < k: pivot from structural submatrix
+     *     - col_perm[s] = structural_cols[s]
+     *     - perm[s] = sub_to_row[sub_perm[s]]  (original row of s-th pivot)
+     *   If s >= k: identity column
+     *     - col_perm[s] = identity_cols[s-k]
+     *     - perm[s] = identity_rows[s-k]
+     */
+
     /* Free old storage */
     free(lu->L_colptr); free(lu->L_rowidx); free(lu->L_values);
     free(lu->U_colptr); free(lu->U_rowidx); free(lu->U_values);
 
+    /* Estimate L/U sizes:
+     * - Structural part: up to k² entries
+     * - Identity part: m-k diagonal entries each
+     * - Cross terms: structural cols may have entries in identity rows (U only)
+     */
+    int L_cap = k * k + (m - k) + m;
+    int U_cap = k * k + (m - k) + B->nnz;
+
+    int *L_row_arr = (int*)malloc(L_cap * sizeof(int));
+    int *L_col_arr = (int*)malloc(L_cap * sizeof(int));
+    double *L_val_arr = (double*)malloc(L_cap * sizeof(double));
+    int *U_row_arr = (int*)malloc(U_cap * sizeof(int));
+    int *U_col_arr = (int*)malloc(U_cap * sizeof(int));
+    double *U_val_arr = (double*)malloc(U_cap * sizeof(double));
+
+    if (!L_row_arr || !L_col_arr || !L_val_arr ||
+        !U_row_arr || !U_col_arr || !U_val_arr) {
+        free(L_row_arr); free(L_col_arr); free(L_val_arr);
+        free(U_row_arr); free(U_col_arr); free(U_val_arr);
+        free(A_sub); free(sub_perm); free(sub_perm_inv);
+        free_lp_basis_structure(lp);
+        return -1;
+    }
+
+    int L_nnz = 0, U_nnz = 0;
+
+    /* Build permutations */
+    for (int step = 0; step < k; step++) {
+        lu->col_perm[step] = lp->structural_cols[step];
+        lu->col_perm_inv[lp->structural_cols[step]] = step;
+
+        int sub_row = sub_perm[step];
+        int orig_row = lp->sub_to_row[sub_row];
+        lu->perm[step] = orig_row;
+        lu->perm_inv[orig_row] = step;
+    }
+
+    for (int i = 0; i < num_id; i++) {
+        int step = k + i;
+        lu->col_perm[step] = lp->identity_cols[i];
+        lu->col_perm_inv[lp->identity_cols[i]] = step;
+
+        int orig_row = lp->identity_rows[i];
+        lu->perm[step] = orig_row;
+        lu->perm_inv[orig_row] = step;
+    }
+
+    /* Build L entries (COO format) */
+    /* Structural part: L is lower triangular in permuted order */
+    for (int step = 0; step < k; step++) {
+        /* Diagonal: L[step, step] = 1 */
+        L_row_arr[L_nnz] = step;
+        L_col_arr[L_nnz] = step;
+        L_val_arr[L_nnz] = 1.0;
+        L_nnz++;
+
+        /* Sub-diagonal: L[ii, step] = multipliers from A_sub */
+        for (int ii = step + 1; ii < k; ii++) {
+            int sub_row = sub_perm[ii];
+            double mult = A_sub[sub_row + step * k];
+            if (fabs(mult) > RALPH_ZERO_TOL) {
+                L_row_arr[L_nnz] = ii;
+                L_col_arr[L_nnz] = step;
+                L_val_arr[L_nnz] = mult;
+                L_nnz++;
+            }
+        }
+    }
+
+    /* Identity part: L diagonal = 1 */
+    for (int i = 0; i < num_id; i++) {
+        int step = k + i;
+        L_row_arr[L_nnz] = step;
+        L_col_arr[L_nnz] = step;
+        L_val_arr[L_nnz] = 1.0;
+        L_nnz++;
+    }
+
+    /* Schur complement: Lower-left block L21 = B21 * U11^{-1}
+     * For each identity row with cross-terms, solve U11^T * y = b
+     * where b contains the cross-term entries, then L21[row,:] = y
+     */
+    if (lp->B21_nnz > 0) {
+        /* Allocate workspace for triangular solve */
+        double *b_vec = (double*)calloc(k, sizeof(double));
+        double *y_vec = (double*)calloc(k, sizeof(double));
+        int *has_entry = (int*)calloc(m, sizeof(int));  /* Track which identity rows have cross-terms */
+
+        if (b_vec && y_vec && has_entry) {
+            /* Mark identity rows that have cross-terms */
+            for (int i = 0; i < lp->B21_nnz; i++) {
+                has_entry[lp->B21_row[i]] = 1;
+            }
+
+            /* Process each identity row with cross-terms */
+            for (int id_idx = 0; id_idx < num_id; id_idx++) {
+                int row_step = k + id_idx;
+                if (!has_entry[row_step]) continue;
+
+                /* Gather B21 entries for this row into b_vec */
+                memset(b_vec, 0, k * sizeof(double));
+                for (int i = 0; i < lp->B21_nnz; i++) {
+                    if (lp->B21_row[i] == row_step) {
+                        b_vec[lp->B21_col[i]] = lp->B21_val[i];
+                    }
+                }
+
+                /* Solve U11^T * y = b (forward substitution since U11^T is lower triangular)
+                 * U11 is stored in A_sub: U11[step, col] = A_sub[sub_perm[step] + col*k] for col >= step
+                 * U11^T[col, step] = U11[step, col]
+                 */
+                memset(y_vec, 0, k * sizeof(double));
+                for (int col = 0; col < k; col++) {
+                    /* y[col] = (b[col] - sum_{j<col} U11^T[col,j]*y[j]) / U11^T[col,col] */
+                    double sum = b_vec[col];
+                    for (int j = 0; j < col; j++) {
+                        /* U11^T[col, j] = U11[j, col] = A_sub[sub_perm[j] + col*k] (if col >= j) */
+                        sum -= A_sub[sub_perm[j] + col * k] * y_vec[j];
+                    }
+                    /* U11^T[col, col] = U11[col, col] = A_sub[sub_perm[col] + col*k] */
+                    double diag = A_sub[sub_perm[col] + col * k];
+                    if (fabs(diag) > RALPH_ZERO_TOL) {
+                        y_vec[col] = sum / diag;
+                    }
+                }
+
+                /* Store L entries for this identity row */
+                for (int col = 0; col < k; col++) {
+                    if (fabs(y_vec[col]) > RALPH_ZERO_TOL) {
+                        /* Ensure capacity */
+                        if (L_nnz >= L_cap) {
+                            L_cap *= 2;
+                            L_row_arr = (int*)realloc(L_row_arr, L_cap * sizeof(int));
+                            L_col_arr = (int*)realloc(L_col_arr, L_cap * sizeof(int));
+                            L_val_arr = (double*)realloc(L_val_arr, L_cap * sizeof(double));
+                        }
+                        L_row_arr[L_nnz] = row_step;
+                        L_col_arr[L_nnz] = col;
+                        L_val_arr[L_nnz] = y_vec[col];
+                        L_nnz++;
+                    }
+                }
+            }
+        }
+        free(b_vec);
+        free(y_vec);
+        free(has_entry);
+    }
+
+    /* Build U entries (COO format) */
+    /* Structural part: U is upper triangular in permuted order */
+    /* With Schur complement, U has block structure: [U11, 0; 0, D] */
+    for (int step = 0; step < k; step++) {
+        int piv_sub = sub_perm[step];
+
+        /* U[step, jj] for jj >= step comes from A_sub[piv_sub, jj] */
+        for (int jj = step; jj < k; jj++) {
+            double val = A_sub[piv_sub + jj * k];
+            if (fabs(val) > RALPH_ZERO_TOL || jj == step) {
+                U_row_arr[U_nnz] = step;
+                U_col_arr[U_nnz] = jj;
+                U_val_arr[U_nnz] = val;
+                U_nnz++;
+            }
+        }
+        /* Note: Cross-terms (structural cols in identity rows) are handled in L
+         * via the Schur complement L21 = B21 * U11^{-1}, so U is block diagonal */
+    }
+
+    /* Identity part: U diagonal = ±1 */
+    for (int i = 0; i < num_id; i++) {
+        int step = k + i;
+        U_row_arr[U_nnz] = step;
+        U_col_arr[U_nnz] = step;
+        U_val_arr[U_nnz] = lp->identity_vals[i];
+        U_nnz++;
+    }
+
+    /* Convert L from COO to CSC */
     lu->L_colptr = (int*)calloc(m + 1, sizeof(int));
     lu->L_rowidx = (int*)malloc(L_nnz * sizeof(int));
     lu->L_values = (double*)malloc(L_nnz * sizeof(double));
-    lu->U_colptr = (int*)calloc(m + 1, sizeof(int));
-    lu->U_rowidx = (int*)malloc(U_nnz * sizeof(int));
-    lu->U_values = (double*)malloc(U_nnz * sizeof(double));
 
-    /* Count entries per column for L */
-    for (int k = 0; k < L_nnz; k++) {
-        lu->L_colptr[L_col[k] + 1]++;
+    for (int i = 0; i < L_nnz; i++) {
+        lu->L_colptr[L_col_arr[i] + 1]++;
     }
     for (int j = 0; j < m; j++) {
         lu->L_colptr[j + 1] += lu->L_colptr[j];
     }
 
-    /* Fill L in CSC */
     int *L_pos = (int*)calloc(m, sizeof(int));
-    for (int k = 0; k < L_nnz; k++) {
-        int col = L_col[k];
+    for (int i = 0; i < L_nnz; i++) {
+        int col = L_col_arr[i];
         int pos = lu->L_colptr[col] + L_pos[col]++;
-        lu->L_rowidx[pos] = L_row[k];
-        lu->L_values[pos] = L_val[k];
+        lu->L_rowidx[pos] = L_row_arr[i];
+        lu->L_values[pos] = L_val_arr[i];
     }
     free(L_pos);
     lu->nnz_L = L_nnz;
 
-    /* Count entries per column for U */
-    for (int k = 0; k < U_nnz; k++) {
-        lu->U_colptr[U_col[k] + 1]++;
+    /* Convert U from COO to CSC */
+    lu->U_colptr = (int*)calloc(m + 1, sizeof(int));
+    lu->U_rowidx = (int*)malloc(U_nnz * sizeof(int));
+    lu->U_values = (double*)malloc(U_nnz * sizeof(double));
+
+    for (int i = 0; i < U_nnz; i++) {
+        lu->U_colptr[U_col_arr[i] + 1]++;
     }
     for (int j = 0; j < m; j++) {
         lu->U_colptr[j + 1] += lu->U_colptr[j];
     }
 
-    /* Fill U in CSC */
     int *U_pos = (int*)calloc(m, sizeof(int));
-    for (int k = 0; k < U_nnz; k++) {
-        int col = U_col[k];
+    for (int i = 0; i < U_nnz; i++) {
+        int col = U_col_arr[i];
         int pos = lu->U_colptr[col] + U_pos[col]++;
-        lu->U_rowidx[pos] = U_row[k];
-        lu->U_values[pos] = U_val[k];
+        lu->U_rowidx[pos] = U_row_arr[i];
+        lu->U_values[pos] = U_val_arr[i];
     }
     free(U_pos);
     lu->nnz_U = U_nnz;
 
-    /* Store permutations */
-    memcpy(lu->perm, row_perm, m * sizeof(int));
-    memcpy(lu->perm_inv, row_perm_inv, m * sizeof(int));
-    memcpy(lu->col_perm, col_order, m * sizeof(int));
-    memcpy(lu->col_perm_inv, col_perm_inv, m * sizeof(int));
-
-    /* Clear eta file */
+    /* Clear eta/FT structures */
     for (int i = 0; i < lu->num_eta; i++) {
         int *idx = lu->ft_spike_idx[i];
         if (idx != NULL) {
@@ -1737,14 +2086,18 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         lu->ft_col_order_inv[i] = i;
     }
     lu->num_updates = 0;
+    lu->num_eta = 0;
 
-    /* Compute condition number estimate */
+    /* Extract U diagonals and compute condition number estimate */
     lu->min_diag_U = RALPH_INFINITY;
     lu->max_diag_U = 0.0;
     for (int j = 0; j < m; j++) {
+        lu->U_diag[j] = 0.0;
         for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
             if (lu->U_rowidx[p] == j) {
-                double absval = fabs(lu->U_values[p]);
+                double val = lu->U_values[p];
+                lu->U_diag[j] = val;
+                double absval = fabs(val);
                 if (absval < lu->min_diag_U) lu->min_diag_U = absval;
                 if (absval > lu->max_diag_U) lu->max_diag_U = absval;
                 break;
@@ -1759,9 +2112,10 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     lu->growth_factor = 1.0;
 
     /* Cleanup */
-    free(work); free(work_idx); free(row_perm); free(row_perm_inv);
-    free(col_perm_inv); free(L_row); free(L_col); free(L_val);
-    free(U_row); free(U_col); free(U_val); free(A_dense); free(col_order);
+    free(L_row_arr); free(L_col_arr); free(L_val_arr);
+    free(U_row_arr); free(U_col_arr); free(U_val_arr);
+    free(A_sub); free(sub_perm); free(sub_perm_inv);
+    free_lp_basis_structure(lp);
 
     return 0;
 }

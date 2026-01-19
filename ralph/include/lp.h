@@ -76,6 +76,7 @@ typedef struct {
     int *U_colptr;
     int *U_rowidx;
     double *U_values;
+    double *U_diag;         /* Diagonal values of U for fast access */
     int *perm;              /* Row permutation */
     int *perm_inv;          /* Inverse permutation */
     int *col_perm;          /* Column permutation */
