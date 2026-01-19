@@ -242,3 +242,112 @@ where fⱼ = fractional part of aᵢⱼ, f₀ = fractional part of bᵢ
 | Simplex iteration | O(m²) typical |
 | MIP node processing | O(LP solve) |
 | Branch and bound | Exponential worst case |
+
+## Current Performance (vs GLPK 5.0)
+
+### LP Benchmarks (Random Dense LPs)
+
+| Problem Size | Ralph Time | GLPK Time | Slowdown | Per-Iter Slowdown |
+|--------------|------------|-----------|----------|-------------------|
+| 50×25        | 0.0001s    | 0.0001s   | 0.9×     | 1.2×              |
+| 100×50       | 0.0006s    | 0.0004s   | 1.3×     | 1.5×              |
+| 200×100      | 0.0049s    | 0.0023s   | 2.1×     | 2.5×              |
+| 500×250      | 0.114s     | 0.018s    | 6.2×     | 6.1×              |
+| 1000×500     | 1.44s      | 0.12s     | **11.5×** | **13.2×**        |
+
+**Key Finding:** The per-iteration cost is the main bottleneck. At 1000×500, Ralph
+takes 0.58ms per iteration vs GLPK's 0.044ms.
+
+### MIP Benchmarks (Classic Problems, Quick Mode)
+
+| Problem Type      | Size       | Ralph       | GLPK    | Notes                    |
+|-------------------|------------|-------------|---------|--------------------------|
+| SetCovering       | 20×10      | 0.0001s ✓   | 0.0001s | Matches objective        |
+| SetCovering       | 40×20      | 0.0002s ✓   | 0.0002s | Matches objective        |
+| SetPartitioning   | 30×10      | 36.9s ⚠     | 0.0002s | ~185,000× slower         |
+| SetPartitioning   | 60×20      | 63.4s ⚠     | 0.003s  | Hit time limit           |
+| LinearAssignment  | 100×20     | 0.0001s ✓   | 0.0003s | Matches objective        |
+| LinearAssignment  | 400×40     | 0.0005s ✓   | 0.002s  | Matches objective        |
+| NetworkFlow (LP)  | 77×20      | 0.0001s ✓   | 0.0000s | Matches objective        |
+| NetworkFlow (LP)  | 295×40     | 0.0002s ⚠   | 0.0001s | **Objective mismatch**   |
+| FacilityLocation  | 55×60      | 0.0001s ✓   | 0.0003s | Matches objective        |
+| FacilityLocation  | 210×220    | 160.7s ⚠    | 0.002s  | ~70,000× slower          |
+
+**Key Findings:**
+- LP relaxations solved correctly and quickly
+- MIP enumeration is extremely slow on hard combinatorial problems
+- One potential correctness issue with NetworkFlow (25.42 vs 125.42)
+
+## Known Issues and TODO
+
+### High Priority
+
+1. **LP Per-Iteration Performance (13× slowdown)**
+   - Root cause: Dense operations in FTRAN/BTRAN instead of hyper-sparse
+   - TODO: Use `lu_ftran_hyper_sparse` and `lu_btran_hyper_sparse` in simplex.c
+   - TODO: Eliminate O(m) memset in sparse solve routines
+   - TODO: Profile and optimize hot paths in pricing and ratio test
+
+2. **MIP Branch-and-Bound Performance**
+   - SetPartitioning 185,000× slower than GLPK
+   - TODO: Implement proper node presolve (bound tightening, probing)
+   - TODO: Add pseudocost branching or reliability branching
+   - TODO: Implement diving heuristics for faster incumbent finding
+   - TODO: Add symmetry detection and breaking
+
+3. **NetworkFlow Objective Mismatch (Potential Bug)**
+   - Ralph: 25.42, GLPK: 125.42 on 295×40 problem
+   - TODO: Debug and fix potential correctness issue
+
+### Medium Priority
+
+4. **Dual Simplex Stability**
+   - Currently falls back to primal on many problems due to numerical issues
+   - See plan file: `~/.claude/plans/kind-napping-aho.md`
+   - TODO: Efficient pivot row computation (BTRAN once, not per-column)
+   - TODO: Periodic reduced cost recomputation
+   - TODO: Iterative refinement for reduced costs
+
+5. **LP-Aware LU Factorization**
+   - Schur complement implemented for cross-terms (4× factorization speedup)
+   - TODO: Extend to LU updates (currently only helps initial factorization)
+   - TODO: Block-aware solve routines for further speedup
+
+6. **Presolve Improvements**
+   - TODO: Dominated rows/columns elimination
+   - TODO: Probing on integer variables
+   - TODO: Clique detection from set-packing constraints
+
+### Low Priority
+
+7. **Cut Generation**
+   - TODO: Lift-and-project cuts
+   - TODO: Flow cover cuts
+   - TODO: Clique cuts from conflict graph
+
+8. **Parallel Processing**
+   - TODO: Parallel pricing in simplex
+   - TODO: Parallel node processing in B&B
+
+## Recent Optimizations
+
+### LU Factorization (January 2025)
+
+1. **U Diagonal Cache** (`lu.c`)
+   - Added `U_diag[]` array for O(1) diagonal access
+   - Eliminates O(m) search per column in backward substitution
+
+2. **LP-Aware Factorization with Schur Complement** (`lu_sparse.c`)
+   - Exploits LP basis structure: identity columns (slacks) vs structural columns
+   - For k structural columns out of m: O(k³) instead of O(m³)
+   - Handles cross-terms (structural entries in identity rows) via Schur complement
+   - Block structure: L = [L11, 0; L21, I], U = [U11, 0; 0, D]
+   - **Result:** 4× factorization speedup on m=500, k=200
+
+3. **Spike Pool Allocation** (`lu.c`)
+   - Pre-allocated storage for Forrest-Tomlin update spikes
+   - Eliminates malloc in LU update hot path
+
+4. **Reach-Based Sparse Triangular Solves** (`lu.c`)
+   - Compute reach of sparse RHS before solving
+   - Only touch non-zero elements in solution
