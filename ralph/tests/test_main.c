@@ -423,6 +423,76 @@ void test_infeasible_lp(void) {
 }
 
 /* ============================================================================
+ * Test: Farkas Ray for Infeasibility Certificate
+ *
+ * min  x + y
+ * s.t. x + y >= 5
+ *      x <= 1
+ *      y <= 1
+ *      x, y >= 0
+ *
+ * Infeasible because x <= 1 and y <= 1 means x + y <= 2, but we need x + y >= 5.
+ *
+ * Farkas ray y should satisfy:
+ *   y' * A >= 0 (for variables at their bounds)
+ *   y' * b < 0
+ * ============================================================================ */
+void test_farkas_ray(void) {
+    printf("\n=== Test: Farkas Ray for Infeasibility Certificate ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* Add variables x and y with bounds [0, inf) and objective 1.0 */
+    ralph_add_var(model, 0, 1e30, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(model, 0, 1e30, 1.0, RALPH_CONTINUOUS);  /* y */
+
+    /* Constraint 1: x + y >= 5 */
+    int idx1[] = {0, 1};
+    double val1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx1, val1, RALPH_GREATER_EQUAL, 5.0);
+
+    /* Constraint 2: x <= 1 */
+    int idx2[] = {0};
+    double val2[] = {1.0};
+    ralph_add_constraint(model, 1, idx2, val2, RALPH_LESS_EQUAL, 1.0);
+
+    /* Constraint 3: y <= 1 */
+    int idx3[] = {1};
+    double val3[] = {1.0};
+    ralph_add_constraint(model, 1, idx3, val3, RALPH_LESS_EQUAL, 1.0);
+
+    /* Solve */
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_INFEASIBLE, "Status is INFEASIBLE");
+
+    /* Get Farkas ray */
+    int m = ralph_get_num_cons(model);
+    double *ray = (double*)malloc(m * sizeof(double));
+    int ret = ralph_get_farkas_ray(model, ray);
+    ASSERT(ret == 0, "Farkas ray retrieved successfully");
+
+    if (ret == 0) {
+        /* Compute y' * b to verify it's negative
+         * b = [5, 1, 1] (RHS values, but normalized for sense)
+         * For G constraint: we need -5 (since Ax >= b becomes -Ax <= -b)
+         * For L constraints: b stays positive (1, 1) */
+        double yTb = ray[0] * (-5.0) + ray[1] * 1.0 + ray[2] * 1.0;
+
+        printf("  Farkas ray: [%.4f, %.4f, %.4f]\n", ray[0], ray[1], ray[2]);
+        printf("  y' * b = %.6f\n", yTb);
+
+        /* The Farkas certificate should have y'b < 0 (proving infeasibility) */
+        ASSERT(yTb < TOLERANCE, "y' * b < 0 (infeasibility proven)");
+    }
+
+    free(ray);
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Test: API Functions
  * ============================================================================ */
 void test_api_functions(void) {
@@ -533,6 +603,7 @@ int main(int argc, char **argv) {
     test_greater_equal_constraint();
     test_diet_problem();
     test_infeasible_lp();
+    test_farkas_ray();
     test_larger_lp();
 
     /* MIP Tests */

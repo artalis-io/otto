@@ -85,6 +85,12 @@ int ralph_get_solution(const RalphModel *model, double *x);
 int ralph_get_dual_solution(const RalphModel *model, double *y);
 int ralph_get_reduced_costs(const RalphModel *model, double *rc);
 
+/* Infeasibility certificate (Farkas ray)
+ * Returns 0 on success, -1 if not available (problem not infeasible or no certificate)
+ * The ray y satisfies: y'A >= 0 and y'b < 0, proving infeasibility
+ * Array must be pre-allocated with size >= ralph_get_num_cons(model) */
+int ralph_get_farkas_ray(const RalphModel *model, double *ray);
+
 /* Statistics */
 int ralph_get_iterations(const RalphModel *model);
 

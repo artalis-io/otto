@@ -386,6 +386,23 @@ int ralph_get_reduced_costs(const RalphModel *model, double *rc) {
     return 0;
 }
 
+int ralph_get_farkas_ray(const RalphModel *model, double *ray) {
+    if (!model || !ray) return -1;
+
+    /* Check if status is infeasible and we have a valid Farkas ray */
+    if (model->status != RALPH_STATUS_INFEASIBLE) return -1;
+
+    /* For LP problems, get the ray from the simplex solver */
+    if (model->lp_solver && model->lp_solver->farkas_valid && model->lp_solver->farkas_ray) {
+        int m = ralph_get_num_cons(model);
+        memcpy(ray, model->lp_solver->farkas_ray, m * sizeof(double));
+        return 0;
+    }
+
+    /* No valid Farkas ray available */
+    return -1;
+}
+
 /* ============================================================================
  * MIP-Specific
  * ============================================================================ */

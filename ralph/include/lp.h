@@ -214,6 +214,10 @@ typedef struct {
     double solve_time;
     int degenerate_pivots;
 
+    /* Farkas ray (certificate of infeasibility) */
+    double *farkas_ray;     /* Size num_cons, valid when status == INFEASIBLE */
+    int farkas_valid;       /* 1 if farkas_ray contains valid certificate */
+
 } SimplexSolver;
 
 /* LP model functions */
