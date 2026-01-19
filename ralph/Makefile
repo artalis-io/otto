@@ -42,6 +42,12 @@ EDGE_TEST_EXEC = test_edge_cases
 BENCH_DIR = benchmarks
 BENCH_SIZES_EXEC = bench_sizes
 COMPARE_GLPK_EXEC = compare_glpk
+BENCH_VS_GLPK_EXEC = bench_vs_glpk
+
+# GLPK configuration (via Homebrew)
+GLPK_PREFIX = $(shell brew --prefix glpk 2>/dev/null || echo "/opt/homebrew/opt/glpk")
+GLPK_INCLUDES = -I$(GLPK_PREFIX)/include
+GLPK_LIBS = -L$(GLPK_PREFIX)/lib -lglpk
 
 # Default target
 all: $(LIB_NAME)
@@ -82,7 +88,7 @@ $(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME)
 bench: $(BENCH_SIZES_EXEC)
 	./$(BENCH_SIZES_EXEC)
 
-# Build GLPK comparison benchmark
+# Build GLPK comparison benchmark (old version)
 $(COMPARE_GLPK_EXEC): $(BENCH_DIR)/compare_glpk.c $(LIB_NAME)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
 
@@ -90,9 +96,21 @@ $(COMPARE_GLPK_EXEC): $(BENCH_DIR)/compare_glpk.c $(LIB_NAME)
 compare-glpk: $(COMPARE_GLPK_EXEC)
 	./$(COMPARE_GLPK_EXEC)
 
+# Build Ralph vs GLPK benchmark (direct library comparison)
+$(BENCH_VS_GLPK_EXEC): $(BENCH_DIR)/bench_vs_glpk.c $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< -L. -lralph $(GLPK_LIBS) $(LDFLAGS) -o $@
+
+# Run Ralph vs GLPK benchmark
+bench-glpk: $(BENCH_VS_GLPK_EXEC)
+	./$(BENCH_VS_GLPK_EXEC)
+
+# Quick benchmark
+bench-glpk-quick: $(BENCH_VS_GLPK_EXEC)
+	./$(BENCH_VS_GLPK_EXEC) --quick
+
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -106,4 +124,4 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all clean debug test test-edge bench compare-glpk install uninstall
+.PHONY: all clean debug test test-edge bench compare-glpk bench-glpk bench-glpk-quick install uninstall
