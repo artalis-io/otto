@@ -730,10 +730,6 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
             degenerate_count = 0;
         }
 
-        /* Always recompute solution and reduced costs for accuracy */
-        tableau_compute_solution(tab);
-        tableau_compute_reduced_costs(tab);
-
         /* Check for dual infeasibility */
         int dual_violations = 0;
         for (int j = 0; j < tab->n; j++) {

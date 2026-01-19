@@ -31,6 +31,7 @@ LUFactorization* lu_create(int m) {
     if (!lu) return NULL;
 
     lu->m = m;
+
     lu->max_updates = 3000;  /* Refactorize every 3000 updates */
 
     /* Allocate permutation arrays */
