@@ -588,6 +588,125 @@ void test_larger_lp(void) {
 }
 
 /* ============================================================================
+ * Test: Network Flow LP
+ *
+ * Tests objective computation with equality constraints (regression test for
+ * the bug where artificial variable residuals caused incorrect objectives).
+ *
+ * Simple flow network: source(0) -> transit(1,2) -> sink(3)
+ * Supply: source=100, sink=-100
+ * Optimal: route all flow through cheapest path (0->1->3), cost = 100 * (1+3) = 400
+ * ============================================================================ */
+void test_network_flow(void) {
+    printf("\n=== Test: Network Flow LP ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* 4 arcs with costs */
+    ralph_add_var(model, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x0: 0->1, cost=1 */
+    ralph_add_var(model, 0.0, 100.0, 2.0, RALPH_CONTINUOUS);  /* x1: 0->2, cost=2 */
+    ralph_add_var(model, 0.0, 100.0, 3.0, RALPH_CONTINUOUS);  /* x2: 1->3, cost=3 */
+    ralph_add_var(model, 0.0, 100.0, 4.0, RALPH_CONTINUOUS);  /* x3: 2->3, cost=4 */
+
+    /* Node 0: x0 + x1 = 100 (source) */
+    int idx0[] = {0, 1};
+    double coef0[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx0, coef0, RALPH_EQUAL, 100.0);
+
+    /* Node 1: -x0 + x2 = 0 */
+    int idx1[] = {0, 2};
+    double coef1[] = {-1.0, 1.0};
+    ralph_add_constraint(model, 2, idx1, coef1, RALPH_EQUAL, 0.0);
+
+    /* Node 2: -x1 + x3 = 0 */
+    int idx2[] = {1, 3};
+    double coef2[] = {-1.0, 1.0};
+    ralph_add_constraint(model, 2, idx2, coef2, RALPH_EQUAL, 0.0);
+
+    /* Node 3: -x2 - x3 = -100 (sink) */
+    int idx3[] = {2, 3};
+    double coef3[] = {-1.0, -1.0};
+    ralph_add_constraint(model, 2, idx3, coef3, RALPH_EQUAL, -100.0);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, 400.0, TOLERANCE, "Objective value");
+
+    /* Verify solution manually */
+    double sol[4];
+    ralph_get_solution(model, sol);
+    double manual_obj = sol[0]*1.0 + sol[1]*2.0 + sol[2]*3.0 + sol[3]*4.0;
+    ASSERT_NEAR(obj, manual_obj, TOLERANCE, "Objective matches manual calculation");
+
+    /* Verify flow conservation */
+    double node0_balance = sol[0] + sol[1];
+    double node3_balance = -sol[2] - sol[3];
+    ASSERT_NEAR(node0_balance, 100.0, TOLERANCE, "Source flow = 100");
+    ASSERT_NEAR(node3_balance, -100.0, TOLERANCE, "Sink flow = -100");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: GMI Cuts on Knapsack
+ *
+ * Tests GMI cut generation on a simple knapsack problem.
+ * min -10x - 6y - 4z
+ * s.t. 5x + 3y + 2z <= 9
+ *      x, y, z in {0,1}
+ *
+ * LP optimal: x=1, y=1, z=0.5 (obj=-18)
+ * MIP optimal: x=1, y=1, z=0 (obj=-16)
+ * ============================================================================ */
+void test_gmi_cuts_knapsack(void) {
+    printf("\n=== Test: GMI Cuts Knapsack ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* Three binary variables */
+    ralph_add_var(model, 0.0, 1.0, -10.0, RALPH_BINARY);  /* x */
+    ralph_add_var(model, 0.0, 1.0, -6.0, RALPH_BINARY);   /* y */
+    ralph_add_var(model, 0.0, 1.0, -4.0, RALPH_BINARY);   /* z */
+
+    /* 5x + 3y + 2z <= 9 */
+    int idx[] = {0, 1, 2};
+    double coeffs[] = {5.0, 3.0, 2.0};
+    ralph_add_constraint(model, 3, idx, coeffs, RALPH_LESS_EQUAL, 9.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "max_cut_rounds", 3);
+    ralph_set_int_param(model, "max_nodes", 100);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, -16.0, TOLERANCE, "Optimal objective is -16");
+
+    double sol[3];
+    ralph_get_solution(model, sol);
+
+    /* Verify solution is binary */
+    ASSERT(fabs(sol[0] - 0.0) < TOLERANCE || fabs(sol[0] - 1.0) < TOLERANCE, "x is binary");
+    ASSERT(fabs(sol[1] - 0.0) < TOLERANCE || fabs(sol[1] - 1.0) < TOLERANCE, "y is binary");
+    ASSERT(fabs(sol[2] - 0.0) < TOLERANCE || fabs(sol[2] - 1.0) < TOLERANCE, "z is binary");
+
+    /* Verify constraint satisfied */
+    double lhs = 5*sol[0] + 3*sol[1] + 2*sol[2];
+    ASSERT(lhs <= 9.0 + TOLERANCE, "Knapsack constraint satisfied");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -605,6 +724,7 @@ int main(int argc, char **argv) {
     test_infeasible_lp();
     test_farkas_ray();
     test_larger_lp();
+    test_network_flow();  /* Regression test for objective computation bug */
 
     /* MIP Tests */
     if (!skip_mip) {
@@ -612,6 +732,7 @@ int main(int argc, char **argv) {
         test_integer_programming();
         test_mixed_integer();
         test_facility_location();
+        test_gmi_cuts_knapsack();  /* Test GMI cut generation */
     } else {
         printf("\n=== MIP tests skipped ===\n");
     }

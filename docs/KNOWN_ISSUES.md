@@ -1,0 +1,108 @@
+# Known Issues and Limitations
+
+## Performance Issues
+
+### LP Solver
+- **GLPK comparison**: Ralph is 2-13x slower than GLPK per iteration on larger problems (500+ variables)
+- **Dual simplex stability**: Dual simplex can accumulate reduced cost errors, sometimes falling back to primal simplex (see `dual_simplex.c`)
+
+### MIP Solver
+- **Set partitioning problems**: Very slow on equality-constrained MIP problems (e.g., 37s vs 0.0002s for GLPK on 30-variable problems)
+- **Large facility location**: Times out on medium-sized problems (210 variables, 10 integer)
+- **No presolve for MIP**: MIP solver doesn't use presolve, limiting its effectiveness
+
+## GMI Cuts Limitations
+
+### Slack Variable Projection
+- GMI cuts with significant positive slack coefficients (>0.1) are rejected to prevent cutting off integer feasible points
+- This makes GMI cuts mostly ineffective for >= constraints
+- See `cuts.c:generate_gmi_cut()` for the rejection logic
+
+### Cut Types Not Implemented
+- MIR (Mixed Integer Rounding) cuts
+- Knapsack cover cuts
+- Clique cuts
+- Flow cover cuts
+
+## Numerical Issues
+
+### Artificial Variable Residuals
+- After Big-M phase 1, artificial variables may have tiny non-zero values (1e-5 to 1e-6)
+- These are numerical noise but were previously causing incorrect objective reporting
+- Fixed in commit `eb50d7e` by computing objective from original variables only
+
+### LU Factorization
+- LU update accumulates numerical errors over many pivots
+- Refactorization every 50 iterations helps but may not be sufficient for ill-conditioned problems
+- Sparse triangular solves use reach-based algorithms which can accumulate rounding errors
+
+## API Issues
+
+### Return Value Confusion
+- `ralph_optimize()` returns 0 for success, -1 for error (not the solve status)
+- Use `ralph_get_status()` to get the actual solve status
+- This was a source of bugs in benchmark code (fixed in commit `eb50d7e`)
+
+## Missing Features
+
+### LP Features
+- Barrier/interior point method
+- Network simplex for pure network problems
+- Basis crash procedures
+
+### MIP Features
+- Primal heuristics (RINS, feasibility pump)
+- Conflict analysis and learning
+- Pseudo-cost branching
+- Strong branching
+- Symmetry breaking
+- Parallel branch and bound
+
+### Presolve
+- No bound tightening based on constraint propagation
+- No probing
+- No clique detection
+- Limited variable/constraint removal
+
+## Test Coverage Gaps
+
+### Untested Scenarios
+- Very sparse problems (density < 5%)
+- Highly degenerate problems
+- Problems with many equality constraints
+- Problems requiring many branching iterations
+- Numerical edge cases (very large/small coefficients)
+
+## Platform-Specific Issues
+
+### macOS
+- No known platform-specific issues
+
+### Linux
+- Not actively tested but should work
+
+### Windows
+- Not tested, may need build system adjustments
+
+## Workarounds
+
+### For slow MIP problems
+1. Try adding cuts manually if you know the problem structure
+2. Use `max_nodes` parameter to limit exploration
+3. Use `time_limit` parameter to cap solve time
+4. Consider reformulating with fewer equality constraints
+
+### For numerical issues
+1. Scale your problem data to avoid very large/small coefficients
+2. Reduce iteration count between refactorizations if needed
+3. Use `verbose=2` to see iteration details
+
+## Reporting Issues
+
+File issues at: https://github.com/artalis-io/ralph/issues
+
+Include:
+- Problem description (ideally MPS or C code to reproduce)
+- Expected vs actual behavior
+- Ralph version (`ralph_version()`)
+- Platform and compiler
