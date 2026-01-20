@@ -2,9 +2,25 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math
+
+# OpenMP SIMD support (portable vectorization)
+# On macOS: brew install libomp && use clang with -Xclang -fopenmp
+# On Linux: gcc has native OpenMP support with -fopenmp
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    # macOS: use Homebrew's libomp with clang
+    OMP_PREFIX := $(shell brew --prefix libomp 2>/dev/null || echo "/opt/homebrew/opt/libomp")
+    CFLAGS += -Xclang -fopenmp -I$(OMP_PREFIX)/include
+    OMP_LDFLAGS = -L$(OMP_PREFIX)/lib -lomp
+else
+    # Linux: use gcc's native OpenMP
+    CFLAGS += -fopenmp
+    OMP_LDFLAGS = -fopenmp
+endif
+
 CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG
 INCLUDES = -I./include
-LDFLAGS = -lm
+LDFLAGS = -lm $(OMP_LDFLAGS)
 
 # Directories
 SRC_DIR = src
