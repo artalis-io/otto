@@ -299,12 +299,17 @@ SimplexTableau* tableau_create(LPModel *model) {
     tab->aux_row = (int*)malloc(num_aux_vars * sizeof(int));
     tab->aux_coef = (double*)malloc(num_aux_vars * sizeof(double));
 
+    /* Partial pricing candidate list (hot set) */
+    tab->partial_cand_capacity = 100;  /* Fixed size hot set */
+    tab->partial_candidates = (int*)malloc(tab->partial_cand_capacity * sizeof(int));
+    tab->partial_cand_count = 0;
+
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
         !tab->x || !tab->y || !tab->rc ||
         !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs ||
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
-        !tab->aux_row || !tab->aux_coef) {
+        !tab->aux_row || !tab->aux_coef || !tab->partial_candidates) {
         free(norm_sense);
         free(norm_sign);
         tableau_free(tab);
@@ -567,6 +572,7 @@ void tableau_free(SimplexTableau *tab) {
     free(tab->se_weights);
     free(tab->aux_row);
     free(tab->aux_coef);
+    free(tab->partial_candidates);
     lu_free(tab->lu);
     free(tab);
 }
@@ -922,46 +928,134 @@ int pricing_devex(SimplexTableau *tab, int *entering) {
     return (*entering >= 0) ? 0 : 1;
 }
 
-/* Partial pricing: scan variables in blocks, accept first good candidate.
+/* Partial pricing with candidate list (hot set):
  *
- * Instead of scanning all n variables for the best reduced cost (O(n) per iteration),
- * we scan in blocks and accept the first variable with a sufficiently negative
- * reduced cost. This trades optimality of pivot selection for faster iteration.
+ * Instead of scanning all n variables each iteration, we maintain a "hot set" of
+ * promising variables. The algorithm:
+ * 1. First scan the hot set for eligible variables
+ * 2. If no good candidate in hot set, do a partial scan of remaining variables
+ * 3. Selected variables are added to the hot set for future iterations
+ * 4. Periodically clean the hot set (remove basic variables, refresh)
  *
- * The starting position cycles through the variables to ensure fairness.
+ * This reduces O(n) to approximately O(hot_set_size + block_size) per iteration.
  */
-#define PARTIAL_PRICE_BLOCK 50       /* Variables per block */
-#define PARTIAL_PRICE_THRESHOLD 1e-6 /* Accept if |rc| > threshold */
+#define PARTIAL_PRICE_BLOCK 100       /* Variables per partial scan block */
+#define PARTIAL_PRICE_THRESHOLD 1e-6  /* Accept if |rc| > threshold */
+#define PARTIAL_HOT_ACCEPT 1e-4       /* Accept immediately from hot set if |rc| > this */
+
+/* Check if variable j is eligible for entering */
+static inline int is_entering_eligible(SimplexTableau *tab, int j, double *rc_out) {
+    if (tab->var_status[j] == RALPH_BASIC) return 0;
+
+    double rc = tab->rc[j];
+    *rc_out = rc;
+
+    if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -PARTIAL_PRICE_THRESHOLD) {
+        return 1;
+    } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > PARTIAL_PRICE_THRESHOLD) {
+        return 1;
+    } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > PARTIAL_PRICE_THRESHOLD) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Add variable to hot set if not already present and not full */
+static inline void add_to_hot_set(SimplexTableau *tab, int var) {
+    /* Check if already in hot set */
+    for (int i = 0; i < tab->partial_cand_count; i++) {
+        if (tab->partial_candidates[i] == var) return;
+    }
+    /* Add if space available */
+    if (tab->partial_cand_count < tab->partial_cand_capacity) {
+        tab->partial_candidates[tab->partial_cand_count++] = var;
+    }
+}
 
 int pricing_partial(SimplexTableau *tab, int *entering) {
     *entering = -1;
 
     int n = tab->n;
-    int start = tab->partial_price_pos;
+    double best_rc_val = 0.0;
+    int best_var = -1;
 
-    /* First pass: scan from current position looking for first eligible variable */
-    for (int i = 0; i < n; i++) {
+    /* Phase 1: Scan hot set first (fast path) */
+    int write_idx = 0;
+    for (int i = 0; i < tab->partial_cand_count; i++) {
+        int j = tab->partial_candidates[i];
+
+        /* Skip and remove basic variables from hot set */
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        /* Keep this variable in the compacted hot set */
+        tab->partial_candidates[write_idx++] = j;
+
+        double rc;
+        if (is_entering_eligible(tab, j, &rc)) {
+            double rc_abs = fabs(rc);
+
+            /* Accept immediately if reduced cost is very attractive */
+            if (rc_abs > PARTIAL_HOT_ACCEPT) {
+                *entering = j;
+                tab->partial_cand_count = write_idx;
+                return 0;
+            }
+
+            /* Track best candidate seen */
+            if (rc_abs > fabs(best_rc_val)) {
+                best_rc_val = rc;
+                best_var = j;
+            }
+        }
+    }
+    /* Update hot set count after compaction */
+    tab->partial_cand_count = write_idx;
+
+    /* Phase 2: Partial scan from current position */
+    int start = tab->partial_price_pos;
+    int scanned = 0;
+
+    for (int i = 0; i < n && scanned < PARTIAL_PRICE_BLOCK; i++) {
         int j = (start + i) % n;
         if (tab->var_status[j] == RALPH_BASIC) continue;
 
-        double rc = tab->rc[j];
-        int eligible = 0;
-
-        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -PARTIAL_PRICE_THRESHOLD) {
-            eligible = 1;
-        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > PARTIAL_PRICE_THRESHOLD) {
-            eligible = 1;
-        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > PARTIAL_PRICE_THRESHOLD) {
-            eligible = 1;
+        scanned++;
+        double rc;
+        if (is_entering_eligible(tab, j, &rc)) {
+            double rc_abs = fabs(rc);
+            if (rc_abs > fabs(best_rc_val)) {
+                best_rc_val = rc;
+                best_var = j;
+            }
         }
+    }
 
-        if (eligible) {
-            /* Accept first eligible variable */
-            *entering = j;
-            /* Update starting position for next call (round-robin fairness) */
-            tab->partial_price_pos = (j + 1) % n;
-            return 0;
+    /* Update scan position for next call (round-robin) */
+    tab->partial_price_pos = (start + PARTIAL_PRICE_BLOCK) % n;
+
+    /* Use best variable found (if any) */
+    if (best_var >= 0) {
+        *entering = best_var;
+        add_to_hot_set(tab, best_var);
+        return 0;
+    }
+
+    /* Phase 3: Full scan if partial scan found nothing (rare) */
+    for (int i = 0; i < n; i++) {
+        double rc;
+        if (is_entering_eligible(tab, i, &rc)) {
+            double rc_abs = fabs(rc);
+            if (rc_abs > fabs(best_rc_val)) {
+                best_rc_val = rc;
+                best_var = i;
+            }
         }
+    }
+
+    if (best_var >= 0) {
+        *entering = best_var;
+        add_to_hot_set(tab, best_var);
+        return 0;
     }
 
     return 1;  /* Optimal - no eligible variable found */
