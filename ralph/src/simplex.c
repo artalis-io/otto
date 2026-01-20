@@ -1804,9 +1804,32 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         if (ratio_status != 0) {
-            /* Unbounded - remove perturbation before returning */
+            /* No leaving variable found. This could mean:
+             * 1. The problem is unbounded (rare in practice)
+             * 2. Numerical issues with Big-M artificial variables
+             *
+             * If there are artificial variables (Big-M cost) that are still
+             * at non-zero values, the problem is actually INFEASIBLE, not UNBOUNDED.
+             */
             primal_remove_perturbation(tab);
-            solver->status = RALPH_STATUS_UNBOUNDED;
+
+            /* Check for non-zero artificial variables */
+            int num_struct = solver->model->num_vars;
+            double artificial_sum = 0.0;
+            for (int j = num_struct; j < tab->n; j++) {
+                if (tab->c_ext[j] > 1e6 && fabs(tab->x[j]) > RALPH_FEAS_TOL) {
+                    artificial_sum += fabs(tab->x[j]);
+                }
+            }
+
+            if (artificial_sum > RALPH_FEAS_TOL) {
+                /* Non-zero artificials mean the original problem is infeasible */
+                extract_farkas_ray(solver);
+                solver->status = RALPH_STATUS_INFEASIBLE;
+            } else {
+                /* No artificials - truly unbounded */
+                solver->status = RALPH_STATUS_UNBOUNDED;
+            }
             solver->iterations = iter;
             return -1;
         }
