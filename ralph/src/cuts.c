@@ -423,62 +423,182 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
  * ============================================================================ */
 
 /*
- * MIR cuts are derived by applying the MIR inequality to a constraint:
+ * MIR cuts from optimal simplex tableau rows.
  *
- *   sum_j (a_j * x_j) <= b
+ * For a tableau row: x_B[i] + sum_j (a_ij * x_j) = beta_i
+ * (where j ranges over non-basic variables)
  *
- * The MIR cut is:
- *   sum_j (mir_coef(a_j) * x_j) <= floor(b) + f_b / (1 - f_b) * slacks
+ * If beta_i has fractional part f_0 and there are integer non-basic variables,
+ * apply the MIR inequality:
  *
- * where f_b = b - floor(b) and:
- *   mir_coef(a) = floor(a) + max(f_a - f_b, 0) / (1 - f_b)
+ *   sum_j mir_coef(a_ij) * x_j <= floor(beta_i)
+ *
+ * where:
+ *   - For integer x_j: mir_coef = floor(a_ij) + max(frac(a_ij) - f_0, 0)/(1-f_0)
+ *   - For continuous x_j >= 0: mir_coef = a_ij / (1 - f_0) if a_ij > 0, else 0
+ *
+ * MIR cuts differ from GMI in that they generate <= inequalities and can be
+ * applied to any tableau row with fractional RHS, not just rows with integer
+ * basic variables.
  */
-static Cut* generate_mir_cut_from_row(SimplexTableau *tab, int row,
-                                      const double *row_coefs, double rhs,
-                                      const int *is_integer) {
-    double f_b = rhs - floor(rhs);
+static Cut* generate_mir_cut_from_tableau(SimplexTableau *tab, int basic_pos,
+                                          const int *is_integer) {
+    int m = tab->m;
+    int n = tab->n;
+    int num_orig = tab->model->num_vars;
+    int basic_var = tab->basis[basic_pos];
 
-    /* Need sufficient fractionality */
-    if (f_b < 0.05 || f_b > 0.95) return NULL;
+    /* Get the RHS (value of basic variable) */
+    double beta = tab->x[basic_var];
+    double f_0 = beta - floor(beta);
 
-    Cut *cut = cut_create(tab->model->num_vars);
-    if (!cut) return NULL;
+    /* Need sufficient fractionality in the RHS */
+    if (f_0 < 0.05 || f_0 > 0.95) return NULL;
+
+    /* Check if row has integer non-basic variables (otherwise MIR won't help) */
+    int has_int_nonbasic = 0;
+    for (int j = 0; j < num_orig; j++) {
+        if (tab->var_status[j] != RALPH_BASIC && is_integer && is_integer[j]) {
+            has_int_nonbasic = 1;
+            break;
+        }
+    }
+    if (!has_int_nonbasic) return NULL;
+
+    /* Compute tableau row: e_i' * B^{-1} */
+    double *row = (double*)calloc(m, sizeof(double));
+    if (!row) return NULL;
+
+    row[basic_pos] = 1.0;
+    lu_solve_transpose(tab->lu, row, row);
+
+    /* Allocate dense array for cut coefficients */
+    double *cut_coefs = (double*)calloc(num_orig, sizeof(double));
+    if (!cut_coefs) {
+        free(row);
+        return NULL;
+    }
+
+    Cut *cut = cut_create(num_orig);
+    if (!cut) {
+        free(row);
+        free(cut_coefs);
+        return NULL;
+    }
 
     cut->type = CUT_MIR;
-    cut->sense = 'L';
-    cut->rhs = floor(rhs);
+    cut->sense = 'L';  /* MIR generates <= cuts */
+    cut->rhs = floor(beta);
 
-    double violation = -cut->rhs;
+    /* Process each non-basic variable */
+    for (int j = 0; j < n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
 
-    for (int j = 0; j < tab->model->num_vars; j++) {
-        double a_j = row_coefs[j];
-        if (fabs(a_j) < RALPH_ZERO_TOL) continue;
+        /* Get tableau coefficient a_ij = row' * A_j */
+        double a_ij = 0.0;
+        for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+            a_ij += row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+        }
 
-        double mir_coef;
+        if (fabs(a_ij) < RALPH_ZERO_TOL) continue;
 
-        if (is_integer && is_integer[j]) {
+        /* Adjust for variables at upper bound */
+        double coef = a_ij;
+        if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+            coef = -a_ij;  /* Complement: x_j -> u_j - x_j */
+        }
+
+        double mir_coef = 0.0;
+
+        if (j < num_orig && is_integer && is_integer[j]) {
             /* Integer variable: use MIR formula */
-            double f_a = a_j - floor(a_j);
-            mir_coef = floor(a_j) + fmax(f_a - f_b, 0.0) / (1.0 - f_b);
+            double f_j = coef - floor(coef);
+            mir_coef = floor(coef) + fmax(f_j - f_0, 0.0) / (1.0 - f_0);
         } else {
-            /* Continuous variable */
-            if (a_j >= 0) {
-                mir_coef = a_j / (1.0 - f_b);
-            } else {
-                mir_coef = 0.0;  /* Negative continuous vars don't contribute */
+            /* Continuous variable (including slacks) */
+            if (coef > RALPH_ZERO_TOL) {
+                mir_coef = coef / (1.0 - f_0);
             }
+            /* Negative coefficients contribute 0 in MIR */
         }
 
         if (fabs(mir_coef) > RALPH_ZERO_TOL) {
-            cut->indices[cut->nnz] = j;
-            cut->values[cut->nnz] = mir_coef;
-            cut->nnz++;
-            violation += mir_coef * tab->x[j];
+            if (j < num_orig) {
+                /* Original variable */
+                if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+                    /* Undo complementation: mir_coef * (u_j - x_j) */
+                    cut_coefs[j] -= mir_coef;
+                    cut->rhs -= mir_coef * tab->ub_ext[j];
+                } else {
+                    cut_coefs[j] += mir_coef;
+                    cut->rhs += mir_coef * tab->lb_ext[j];
+                }
+            } else {
+                /* Slack variable: substitute back using constraint mapping */
+                int aux_idx = j - num_orig;
+                if (aux_idx >= 0 && aux_idx < tab->num_aux && tab->aux_row && tab->aux_coef) {
+                    int con_row = tab->aux_row[aux_idx];
+                    double aux_c = tab->aux_coef[aux_idx];
+                    LPModel *model = tab->model;
+                    double con_rhs = model->b[con_row];
+
+                    /* s = aux_c * (b - Ax), so mir_coef * s contributes:
+                     * -mir_coef * aux_c * a_k to x_k, and mir_coef * aux_c * b to RHS */
+                    if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+                        /* Complemented slack */
+                        cut->rhs += mir_coef * aux_c * con_rhs;
+                        for (int k = 0; k < num_orig; k++) {
+                            double a_rk = 0.0;
+                            for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
+                                if (model->A->rowidx[p] == con_row) {
+                                    a_rk = model->A->values[p];
+                                    break;
+                                }
+                            }
+                            if (fabs(a_rk) > RALPH_ZERO_TOL) {
+                                cut_coefs[k] += mir_coef * aux_c * a_rk;
+                            }
+                        }
+                    } else {
+                        cut->rhs -= mir_coef * aux_c * con_rhs;
+                        for (int k = 0; k < num_orig; k++) {
+                            double a_rk = 0.0;
+                            for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
+                                if (model->A->rowidx[p] == con_row) {
+                                    a_rk = model->A->values[p];
+                                    break;
+                                }
+                            }
+                            if (fabs(a_rk) > RALPH_ZERO_TOL) {
+                                cut_coefs[k] -= mir_coef * aux_c * a_rk;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    cut->violation = violation;
+    free(row);
 
+    /* Convert dense to sparse */
+    for (int k = 0; k < num_orig; k++) {
+        if (fabs(cut_coefs[k]) > RALPH_ZERO_TOL) {
+            cut->indices[cut->nnz] = k;
+            cut->values[cut->nnz] = cut_coefs[k];
+            cut->nnz++;
+        }
+    }
+    free(cut_coefs);
+
+    /* Calculate violation: LHS - RHS for <= cut */
+    double lhs = 0.0;
+    for (int k = 0; k < cut->nnz; k++) {
+        lhs += cut->values[k] * tab->x[cut->indices[k]];
+    }
+    cut->violation = lhs - cut->rhs;
+
+    /* Reject if not violated or empty */
     if (cut->violation < RALPH_FEAS_TOL || cut->nnz == 0) {
         cut_free(cut);
         return NULL;
@@ -489,28 +609,24 @@ static Cut* generate_mir_cut_from_row(SimplexTableau *tab, int row,
 
 int generate_mir_cuts(MIPSolver *solver, CutPool *pool) {
     SimplexTableau *tab = solver->lp_solver->tableau;
-    LPModel *model = solver->original_model;
     int cuts_added = 0;
 
-    double *row_coefs = (double*)calloc(model->num_vars, sizeof(double));
-    if (!row_coefs) return 0;
+    /* Generate MIR cuts from tableau rows with fractional RHS */
+    for (int k = 0; k < tab->m; k++) {
+        int basic_var = tab->basis[k];
+        double val = tab->x[basic_var];
+        double frac = val - floor(val);
 
-    /* Generate MIR cuts from each constraint */
-    for (int i = 0; i < model->num_cons; i++) {
-        /* Get row coefficients */
-        sparse_get_row(model->A, i, row_coefs);
+        /* Skip rows with nearly-integer RHS */
+        if (frac < 0.05 || frac > 0.95) continue;
 
-        /* Skip if row doesn't have enough integer variables */
-        int int_count = 0;
-        for (int j = 0; j < model->num_vars; j++) {
-            if (fabs(row_coefs[j]) > RALPH_ZERO_TOL && solver->is_integer[j]) {
-                int_count++;
-            }
+        /* Skip rows where GMI already applies (integer basic var) */
+        if (basic_var < solver->original_model->num_vars &&
+            solver->is_integer[basic_var]) {
+            continue;  /* GMI handles these */
         }
-        if (int_count < 1) continue;
 
-        Cut *cut = generate_mir_cut_from_row(tab, i, row_coefs, model->b[i],
-                                             solver->is_integer);
+        Cut *cut = generate_mir_cut_from_tableau(tab, k, solver->is_integer);
         if (cut) {
             cut_pool_add(pool, cut);
             cuts_added++;
@@ -519,7 +635,6 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool) {
         }
     }
 
-    free(row_coefs);
     return cuts_added;
 }
 

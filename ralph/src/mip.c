@@ -443,8 +443,11 @@ static int solve_root_node(MIPSolver *solver) {
     while (cut_rounds < solver->max_cut_rounds) {
         int cuts_added = 0;
 
-        /* Generate Gomory cuts */
+        /* Generate Gomory cuts (from integer basic variable rows) */
         cuts_added += generate_gomory_cuts(solver, solver->cut_pool);
+
+        /* Generate MIR cuts (from continuous basic variable rows) */
+        cuts_added += generate_mir_cuts(solver, solver->cut_pool);
 
         if (cuts_added == 0) break;
 
