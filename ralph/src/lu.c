@@ -938,68 +938,49 @@ static void compute_reach_L(const LUFactorization *lu,
     int m = lu->m;
     *reach_nnz = 0;
 
-    /* We collect visited indices in reach_out during DFS, then sort at the end.
-     * Use marked[i] = 1 for "visited" */
+    /* For lower triangular L, topological order is ascending indices.
+     * Strategy: mark reachable indices via DFS, then scan 0..m-1 to collect.
+     * This avoids sorting since we collect in ascending order naturally.
+     */
 
-    /* Stack-based DFS from each nonzero in RHS */
-    int *stack = (int*)lu->hs_val;  /* Reuse hs_val as int stack (same size as m doubles) */
+    /* Track min/max reached for efficient scan bounds */
+    int min_reached = m, max_reached = -1;
+
+    /* Stack-based DFS to mark all reachable indices */
+    int *stack = (int*)lu->hs_val;  /* Reuse hs_val as int stack */
     int stack_top;
 
     for (int k = 0; k < nnz_rhs; k++) {
         int start = rhs_idx[k];
         if (start < 0 || start >= m || marked[start]) continue;
 
-        /* DFS from start */
         stack_top = 0;
         stack[stack_top++] = start;
         marked[start] = 1;
+        if (start < min_reached) min_reached = start;
+        if (start > max_reached) max_reached = start;
 
         while (stack_top > 0) {
             int j = stack[--stack_top];
 
-            /* Add j to reach (will sort later) */
-            reach_out[(*reach_nnz)++] = j;
-
-            /* Visit all unvisited children */
+            /* Visit all unvisited children (L[i,j] != 0 means i > j) */
             for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
-                int i = lu->L_rowidx[p];  /* L[i,j] != 0, so j affects i */
+                int i = lu->L_rowidx[p];
                 if (marked[i] == 0) {
                     marked[i] = 1;
                     stack[stack_top++] = i;
+                    if (i > max_reached) max_reached = i;
                 }
             }
         }
     }
 
-    /* Sort reach indices to get topological order (ascending for L solve) */
-    /* Use insertion sort for small reaches, it's faster than qsort for small n */
-    if (*reach_nnz <= 32) {
-        for (int i = 1; i < *reach_nnz; i++) {
-            int key = reach_out[i];
-            int j = i - 1;
-            while (j >= 0 && reach_out[j] > key) {
-                reach_out[j + 1] = reach_out[j];
-                j--;
-            }
-            reach_out[j + 1] = key;
+    /* Collect marked indices in ascending order (no sorting needed) */
+    for (int j = min_reached; j <= max_reached; j++) {
+        if (marked[j]) {
+            reach_out[(*reach_nnz)++] = j;
+            marked[j] = 0;  /* Clear as we go */
         }
-    } else {
-        /* Shell sort for medium sizes - O(n^1.3) but no recursion overhead */
-        for (int gap = *reach_nnz / 2; gap > 0; gap /= 2) {
-            for (int i = gap; i < *reach_nnz; i++) {
-                int temp = reach_out[i];
-                int j;
-                for (j = i; j >= gap && reach_out[j - gap] > temp; j -= gap) {
-                    reach_out[j] = reach_out[j - gap];
-                }
-                reach_out[j] = temp;
-            }
-        }
-    }
-
-    /* Clear marks for next use - only clear what we visited */
-    for (int i = 0; i < *reach_nnz; i++) {
-        marked[reach_out[i]] = 0;
     }
 }
 
@@ -1007,8 +988,9 @@ static void compute_reach_L(const LUFactorization *lu,
  * Compute reach of sparse RHS through upper triangular U using DFS.
  * Returns indices in reverse topological order (decreasing for upper triangular).
  *
- * OPTIMIZED: Collects visited indices during DFS, then sorts only those
- * instead of scanning all m indices.
+ * OPTIMIZED: Uses mark + descending scan instead of collect + sort.
+ * For upper triangular U, topological order is descending indices.
+ * Strategy: mark reachable via DFS, then scan max..min to collect in order.
  */
 static void compute_reach_U(const LUFactorization *lu,
                             int nnz_rhs, const int *rhs_idx,
@@ -1023,6 +1005,9 @@ static void compute_reach_U(const LUFactorization *lu,
      * So we go from j to i where i < j.
      */
 
+    /* Track min/max reached for efficient scan bounds */
+    int min_reached = m, max_reached = -1;
+
     int *stack = (int*)lu->hs_val;  /* Reuse hs_val as int stack */
     int stack_top;
 
@@ -1033,12 +1018,11 @@ static void compute_reach_U(const LUFactorization *lu,
         stack_top = 0;
         stack[stack_top++] = start;
         marked[start] = 1;
+        if (start < min_reached) min_reached = start;
+        if (start > max_reached) max_reached = start;
 
         while (stack_top > 0) {
             int j = stack[--stack_top];
-
-            /* Add j to reach (will sort later) */
-            reach_out[(*reach_nnz)++] = j;
 
             /* Visit all unvisited predecessors (row i < j where U[i,j] != 0) */
             for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
@@ -1046,40 +1030,18 @@ static void compute_reach_U(const LUFactorization *lu,
                 if (i < j && marked[i] == 0) {
                     marked[i] = 1;
                     stack[stack_top++] = i;
+                    if (i < min_reached) min_reached = i;
                 }
             }
         }
     }
 
-    /* Sort reach indices in DECREASING order for U solve (backward substitution) */
-    /* Use insertion sort for small reaches */
-    if (*reach_nnz <= 32) {
-        for (int i = 1; i < *reach_nnz; i++) {
-            int key = reach_out[i];
-            int j = i - 1;
-            while (j >= 0 && reach_out[j] < key) {  /* Note: < for decreasing */
-                reach_out[j + 1] = reach_out[j];
-                j--;
-            }
-            reach_out[j + 1] = key;
+    /* Collect marked indices in DESCENDING order (no sorting needed) */
+    for (int j = max_reached; j >= min_reached; j--) {
+        if (marked[j]) {
+            reach_out[(*reach_nnz)++] = j;
+            marked[j] = 0;  /* Clear as we go */
         }
-    } else {
-        /* Shell sort for medium sizes - descending order */
-        for (int gap = *reach_nnz / 2; gap > 0; gap /= 2) {
-            for (int i = gap; i < *reach_nnz; i++) {
-                int temp = reach_out[i];
-                int j;
-                for (j = i; j >= gap && reach_out[j - gap] < temp; j -= gap) {
-                    reach_out[j] = reach_out[j - gap];
-                }
-                reach_out[j] = temp;
-            }
-        }
-    }
-
-    /* Clear marks - only clear what we visited */
-    for (int i = 0; i < *reach_nnz; i++) {
-        marked[reach_out[i]] = 0;
     }
 }
 
