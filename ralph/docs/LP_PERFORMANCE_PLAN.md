@@ -1,15 +1,80 @@
 # Ralph LP Solver Performance Improvement Plan
 
 ## Goal
-Match GLPK performance (currently 6-11x faster on large problems).
+Match GLPK performance (currently ~8x faster on large problems).
 
-## Current Benchmark (1000x500 LP)
+## Current Benchmark (1000x500 LP) - Updated January 2026
 | Solver | Time | Iterations | Per-Iteration |
 |--------|------|------------|---------------|
-| Ralph  | 1.4s | 2476       | 0.58ms        |
+| Ralph  | 0.95s | 2476       | 0.385ms       |
 | GLPK   | 0.12s| 2826       | 0.044ms       |
 
-**Key insight**: Ralph does fewer iterations but each is **13x slower**. The bottleneck is per-iteration cost, not algorithmic.
+**Progress**: Per-iteration time reduced from 0.58ms to 0.385ms (33% improvement).
+**Remaining gap**: 8.8x per-iteration (down from 13x).
+
+---
+
+## Profiling Results (500x250 LP, 20 trials)
+
+**Total samples in simplex_solve: 1859**
+
+| Function | Samples | % | Notes |
+|----------|---------|---|-------|
+| `apply_ft_spikes_backward` | 461 | 24.8% | BTRAN spike application |
+| `apply_ft_spikes_forward` | 362 | 19.5% | FTRAN spike application |
+| `compact_ft_spikes` | 112 | 6.0% | Spike compaction |
+| `lu_solve_transpose_sparse` | 417 | 22.4% | Sparse BTRAN |
+| `lu_solve_transpose` | 400 | 21.5% | Dense BTRAN |
+| `compute_reach_L/U` | 155 | 8.3% | Sparse triangular reach |
+| `sparse_dot_column` | 42 | 2.3% | Reduced cost calculation |
+| `lu_factorize` | 19 | 1.0% | Refactorization |
+
+**Key finding**: Forrest-Tomlin spike application is **50% of solve time**.
+
+---
+
+## Completed Optimizations ✓
+
+### ✓ Contiguous Spike Storage (Phase 2.1)
+Changed from pointer-of-pointers to contiguous pool with offset tracking.
+**Result**: ~20% improvement in per-iteration time.
+
+### ✓ Eliminate sqrt() in Steepest Edge (Phase 1.1)
+Use squared ratios for comparison.
+**Result**: Minimal impact (Devex already used squared ratios).
+
+### ✓ Merge Ratio Test Phases (Phase 1.2)
+Single-pass Harris ratio test.
+**Result**: Minimal impact (LU dominates).
+
+### ✓ Use Cached U Diagonal (Phase 1.3)
+O(1) diagonal lookup instead of O(nnz_col) search.
+**Result**: Minimal impact (not on hot path).
+
+### ✓ OpenMP SIMD (Phase 2.4 partial)
+Added `#pragma omp simd` to sparse_dot_column and matrix operations.
+**Result**: ~17% improvement in per-iteration time.
+
+### ✓ Partial Pricing with Candidate List (Phase 3.1)
+Hot set of promising variables + partial scan.
+**Result**: Available via pricing_strategy=3.
+
+---
+
+## Next Priorities (Based on Profiling)
+
+### Priority 1: Reduce Spike Application Cost (50% of time)
+The FT spike application dominates. Options:
+1. **More frequent refactorization** - Reduce spike count
+2. **SIMD in spike application** - Vectorize inner loops
+3. **Adaptive refactor threshold** - Tune based on problem size
+
+### Priority 2: BTRAN Result Caching
+`lu_solve_transpose` called twice per pivot (pricing + update).
+Opportunity to cache and reuse.
+
+### Priority 3: Smarter Compaction
+`compact_ft_spikes` at 6% - may be triggered too often.
 
 ---
 
