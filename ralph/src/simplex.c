@@ -1348,11 +1348,14 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     double rhs_val = 1.0;
     lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
 
-    /* For steepest edge weight updates: tau_helper = B^{-T} * d_entering
-     * This enables exact weight updates. Computed for all SE-based pricing
-     * (pricing_strategy 1 or 2) since true SE weights reduce iterations.
+    /* For steepest edge weight updates: compute tau_helper = B^{-T} * d_entering
+     * This enables exact weight updates using: gamma_j' = gamma_j - 2*(alpha_j/p)*tau_j + (alpha_j/p)^2*gamma_e
+     *
+     * Note: We use exact SE weights for both SE and Devex pricing because the
+     * Devex approximation (max formula) leads to worse pivot selection and
+     * significantly more iterations, which outweighs the BTRAN savings.
      */
-    int use_true_se = tab->use_steepest_edge;  /* True SE weights for both SE and Devex */
+    int use_true_se = tab->use_steepest_edge;
     if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
         lu_solve_transpose(tab->lu, tab->work2, tau_helper);
     }
