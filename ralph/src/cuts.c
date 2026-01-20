@@ -73,8 +73,107 @@ void cut_free(Cut *cut) {
     free(cut);
 }
 
+/*
+ * Check if two cuts are duplicates (parallel or identical).
+ * Returns 1 if duplicate, 0 otherwise.
+ */
+static int cuts_are_duplicate(const Cut *a, const Cut *b) {
+    /* Must have same sense and similar number of nonzeros */
+    if (a->sense != b->sense) return 0;
+    if (a->nnz != b->nnz) return 0;
+    if (a->nnz == 0) return 1;  /* Both empty */
+
+    /* Check if indices match (cuts are stored sorted by index) */
+    for (int i = 0; i < a->nnz; i++) {
+        if (a->indices[i] != b->indices[i]) return 0;
+    }
+
+    /* Indices match - check if coefficients are proportional */
+    /* Find first non-zero coefficient to compute ratio */
+    double ratio = 0.0;
+    int found_ratio = 0;
+    for (int i = 0; i < a->nnz; i++) {
+        if (fabs(b->values[i]) > RALPH_ZERO_TOL) {
+            ratio = a->values[i] / b->values[i];
+            found_ratio = 1;
+            break;
+        }
+    }
+    if (!found_ratio) return 1;  /* All zeros in b */
+
+    /* Check all coefficients have same ratio */
+    for (int i = 0; i < a->nnz; i++) {
+        double expected = b->values[i] * ratio;
+        if (fabs(a->values[i] - expected) > RALPH_ZERO_TOL * (1 + fabs(expected))) {
+            return 0;  /* Not parallel */
+        }
+    }
+
+    /* Check RHS ratio */
+    if (fabs(b->rhs) > RALPH_ZERO_TOL) {
+        double rhs_ratio = a->rhs / b->rhs;
+        if (fabs(ratio - rhs_ratio) > RALPH_ZERO_TOL * (1 + fabs(ratio))) {
+            return 0;  /* Different RHS scaling */
+        }
+    } else if (fabs(a->rhs) > RALPH_ZERO_TOL) {
+        return 0;  /* a has non-zero RHS, b has zero */
+    }
+
+    return 1;  /* Cuts are duplicates */
+}
+
+/*
+ * Normalize a cut by sorting indices and making lead coefficient positive.
+ * This helps with duplicate detection.
+ */
+static void cut_normalize(Cut *cut) {
+    if (!cut || cut->nnz <= 1) return;
+
+    /* Simple insertion sort (cuts are typically small) */
+    for (int i = 1; i < cut->nnz; i++) {
+        int idx = cut->indices[i];
+        double val = cut->values[i];
+        int j = i - 1;
+        while (j >= 0 && cut->indices[j] > idx) {
+            cut->indices[j + 1] = cut->indices[j];
+            cut->values[j + 1] = cut->values[j];
+            j--;
+        }
+        cut->indices[j + 1] = idx;
+        cut->values[j + 1] = val;
+    }
+
+    /* Make lead coefficient positive for consistent comparison */
+    if (cut->nnz > 0 && cut->values[0] < -RALPH_ZERO_TOL) {
+        for (int i = 0; i < cut->nnz; i++) {
+            cut->values[i] = -cut->values[i];
+        }
+        cut->rhs = -cut->rhs;
+        /* Flip sense */
+        if (cut->sense == 'L') cut->sense = 'G';
+        else if (cut->sense == 'G') cut->sense = 'L';
+    }
+}
+
 int cut_pool_add(CutPool *pool, Cut *cut) {
     if (!pool || !cut) return -1;
+
+    /* Normalize the cut for consistent comparison */
+    cut_normalize(cut);
+
+    /* Check for duplicates */
+    for (int i = 0; i < pool->count; i++) {
+        if (cuts_are_duplicate(cut, pool->cuts[i])) {
+            /* Keep the one with higher violation */
+            if (cut->violation > pool->cuts[i]->violation) {
+                cut_free(pool->cuts[i]);
+                pool->cuts[i] = cut;
+            } else {
+                cut_free(cut);
+            }
+            return 0;  /* Duplicate handled */
+        }
+    }
 
     /* Expand if needed */
     if (pool->count >= pool->capacity) {
@@ -683,17 +782,19 @@ int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts) {
 }
 
 /* ============================================================================
- * Cut Pool Cleanup
+ * Cut Pool Cleanup and Aging
  * ============================================================================ */
 
-/* Remove old/weak cuts */
+/* Remove old/weak cuts from the pool */
 void cut_pool_cleanup(CutPool *pool, int max_age) {
     if (!pool) return;
 
     int write_idx = 0;
+    int removed = 0;
     for (int i = 0; i < pool->count; i++) {
         if (pool->cuts[i]->age > max_age) {
             cut_free(pool->cuts[i]);
+            removed++;
         } else {
             pool->cuts[write_idx++] = pool->cuts[i];
         }
@@ -701,11 +802,71 @@ void cut_pool_cleanup(CutPool *pool, int max_age) {
     pool->count = write_idx;
 }
 
-/* Increment age of all cuts and mark as active if binding */
+/* Increment age of all cuts */
 void cut_pool_age(CutPool *pool) {
     if (!pool) return;
 
     for (int i = 0; i < pool->count; i++) {
         pool->cuts[i]->age++;
     }
+}
+
+/*
+ * Update cut efficacy based on current solution.
+ * Cuts that are binding (tight) have their age reset to 0.
+ * Returns number of binding cuts.
+ */
+int cut_pool_update_efficacy(CutPool *pool, const double *x, int n) {
+    if (!pool || !x) return 0;
+
+    int binding_count = 0;
+
+    for (int i = 0; i < pool->count; i++) {
+        Cut *cut = pool->cuts[i];
+
+        /* Compute LHS */
+        double lhs = 0.0;
+        for (int k = 0; k < cut->nnz; k++) {
+            if (cut->indices[k] < n) {
+                lhs += cut->values[k] * x[cut->indices[k]];
+            }
+        }
+
+        /* Check if binding (slack < tolerance) */
+        double slack;
+        if (cut->sense == 'L') {
+            slack = cut->rhs - lhs;  /* <= : slack = rhs - lhs */
+        } else if (cut->sense == 'G') {
+            slack = lhs - cut->rhs;  /* >= : slack = lhs - rhs */
+        } else {
+            slack = fabs(lhs - cut->rhs);  /* = : slack = |lhs - rhs| */
+        }
+
+        if (slack < RALPH_FEAS_TOL) {
+            /* Cut is binding - reset age */
+            cut->age = 0;
+            binding_count++;
+        }
+
+        /* Update violation for potential future use */
+        if (cut->sense == 'L') {
+            cut->violation = lhs - cut->rhs;  /* Positive if violated */
+        } else if (cut->sense == 'G') {
+            cut->violation = cut->rhs - lhs;  /* Positive if violated */
+        } else {
+            cut->violation = fabs(lhs - cut->rhs);
+        }
+    }
+
+    return binding_count;
+}
+
+/* Clear the cut pool (free all cuts) */
+void cut_pool_clear(CutPool *pool) {
+    if (!pool) return;
+
+    for (int i = 0; i < pool->count; i++) {
+        cut_free(pool->cuts[i]);
+    }
+    pool->count = 0;
 }

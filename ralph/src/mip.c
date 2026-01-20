@@ -443,21 +443,32 @@ static int solve_root_node(MIPSolver *solver) {
     while (cut_rounds < solver->max_cut_rounds) {
         int cuts_added = 0;
 
+        /* Age existing cuts before generating new ones */
+        cut_pool_age(solver->cut_pool);
+
         /* Generate Gomory cuts (from integer basic variable rows) */
         cuts_added += generate_gomory_cuts(solver, solver->cut_pool);
 
         /* Generate MIR cuts (from continuous basic variable rows) */
         cuts_added += generate_mir_cuts(solver, solver->cut_pool);
 
-        if (cuts_added == 0) break;
+        if (cuts_added == 0) {
+            /* No new cuts - clean up old ones and try one more time */
+            cut_pool_cleanup(solver->cut_pool, 3);  /* Remove cuts older than 3 rounds */
+            break;
+        }
 
         /* Check for stalling - stop if bound hasn't improved for 3 rounds */
-        if (no_improvement_rounds >= 3) break;
+        if (no_improvement_rounds >= 3) {
+            cut_pool_cleanup(solver->cut_pool, 2);  /* Aggressive cleanup when stalling */
+            break;
+        }
 
         solver->cuts_generated += cuts_added;
 
         if (solver->verbose) {
-            printf("Cut round %d: %d cuts generated\n", cut_rounds + 1, cuts_added);
+            printf("Cut round %d: %d cuts generated (pool size: %d)\n",
+                   cut_rounds + 1, cuts_added, solver->cut_pool->count);
         }
 
         /* Apply cuts to the LP relaxation */
@@ -491,6 +502,14 @@ static int solve_root_node(MIPSolver *solver) {
 
             double new_bound = solver->lp_solver->obj_value;
 
+            /* Update cut efficacy based on new LP solution */
+            int binding = cut_pool_update_efficacy(solver->cut_pool,
+                                                   solver->lp_solver->solution,
+                                                   solver->original_model->num_vars);
+            if (solver->verbose >= 2) {
+                printf("Cut round %d: %d binding cuts\n", cut_rounds + 1, binding);
+            }
+
             /* Check if bound improved significantly */
             double improvement = (solver->original_model->obj_sense == 1) ?
                                  (new_bound - prev_bound) : (prev_bound - new_bound);
@@ -502,7 +521,7 @@ static int solve_root_node(MIPSolver *solver) {
             }
 
             if (solver->verbose) {
-                printf("LP bound improved: %.6f -> %.6f (improvement rounds: %d)\n",
+                printf("LP bound improved: %.6f -> %.6f (stall count: %d)\n",
                        root->lp_bound, new_bound, no_improvement_rounds);
             }
             root->lp_bound = new_bound;
@@ -511,19 +530,26 @@ static int solve_root_node(MIPSolver *solver) {
             if (check_integer_feasibility(solver, solver->lp_solver->solution)) {
                 update_incumbent(solver, solver->lp_solver->solution, solver->lp_solver->obj_value);
                 solver->status = RALPH_STATUS_OPTIMAL;
+                cut_pool_clear(solver->cut_pool);
                 bb_node_free(root);
                 return 0;
             }
 
-            /* Clear cut pool for next round */
-            for (int i = 0; i < solver->cut_pool->count; i++) {
-                cut_free(solver->cut_pool->cuts[i]);
+            /* Periodic cleanup of old cuts */
+            if (cut_rounds > 0 && cut_rounds % 5 == 0) {
+                int before = solver->cut_pool->count;
+                cut_pool_cleanup(solver->cut_pool, 5);  /* Remove cuts older than 5 rounds */
+                if (solver->verbose >= 2 && solver->cut_pool->count < before) {
+                    printf("Cut cleanup: removed %d old cuts\n", before - solver->cut_pool->count);
+                }
             }
-            solver->cut_pool->count = 0;
         }
 
         cut_rounds++;
     }
+
+    /* Final cleanup of cut pool */
+    cut_pool_clear(solver->cut_pool);
 
     /* Initialize best bound */
     solver->best_bound = root->lp_bound;
