@@ -707,6 +707,214 @@ void test_gmi_cuts_knapsack(void) {
 }
 
 /* ============================================================================
+ * Regression Test: MIP Warm Start Bound Adjustment
+ *
+ * Tests that non-basic variable values are properly adjusted when bounds
+ * change during branch-and-bound warm start. This bug caused suboptimal
+ * solutions in facility location problems.
+ *
+ * Uses deterministic random generation to create a facility location problem
+ * with known optimal objective (verified against GLPK).
+ * ============================================================================ */
+static unsigned int g_test_seed = 123;
+static double test_rand_double(double min, double max) {
+    g_test_seed = g_test_seed * 1103515245 + 12345;
+    return min + (double)(g_test_seed % 100000) / 100000.0 * (max - min);
+}
+
+void test_mip_bound_adjustment_regression(void) {
+    printf("\n=== Test: MIP Warm Start Bound Adjustment ===\n");
+
+    int num_customers = 20;
+    int num_facilities = 10;
+    int num_vars = num_facilities + num_customers * num_facilities;
+
+    /* Reset seed for reproducibility */
+    g_test_seed = 123;
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_dbl_param(model, "time_limit", 30.0);
+    ralph_set_dbl_param(model, "mip_gap", 0.0001);
+
+    /* Generate fixed costs and demands */
+    double *fixed_cost = malloc(num_facilities * sizeof(double));
+    double *demand = malloc(num_customers * sizeof(double));
+    for (int j = 0; j < num_facilities; j++) {
+        fixed_cost[j] = test_rand_double(100.0, 500.0);
+    }
+    for (int i = 0; i < num_customers; i++) {
+        demand[i] = test_rand_double(1.0, 10.0);
+    }
+
+    /* Variables y[j]: facility opening decisions (binary) */
+    for (int j = 0; j < num_facilities; j++) {
+        ralph_add_var(model, 0.0, 1.0, fixed_cost[j], RALPH_BINARY);
+    }
+
+    /* Variables x[i,j]: assignment fractions (continuous) */
+    for (int i = 0; i < num_customers; i++) {
+        for (int j = 0; j < num_facilities; j++) {
+            double dist = test_rand_double(1.0, 50.0);
+            ralph_add_var(model, 0.0, 1.0, dist * demand[i], RALPH_CONTINUOUS);
+        }
+    }
+
+    /* Demand constraints: sum_j(x[i,j]) = 1 */
+    int *indices = malloc(num_facilities * sizeof(int));
+    double *values = malloc(num_facilities * sizeof(double));
+    for (int i = 0; i < num_customers; i++) {
+        for (int j = 0; j < num_facilities; j++) {
+            indices[j] = num_facilities + i * num_facilities + j;
+            values[j] = 1.0;
+        }
+        ralph_add_constraint(model, num_facilities, indices, values, RALPH_EQUAL, 1.0);
+    }
+
+    /* Linking constraints: x[i,j] <= y[j] */
+    int idx2[2];
+    double val2[2];
+    for (int i = 0; i < num_customers; i++) {
+        for (int j = 0; j < num_facilities; j++) {
+            idx2[0] = num_facilities + i * num_facilities + j;
+            idx2[1] = j;
+            val2[0] = 1.0;
+            val2[1] = -1.0;
+            ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 0.0);
+        }
+    }
+
+    free(indices);
+    free(values);
+    free(fixed_cost);
+    free(demand);
+
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    /* Known optimal value from GLPK: 1799.329423 */
+    double expected_obj = 1799.329423;
+    ASSERT_NEAR(obj, expected_obj, 1.0, "Optimal objective matches GLPK");
+
+    double *sol = malloc(num_vars * sizeof(double));
+    ralph_get_solution(model, sol);
+
+    /* Verify facilities are binary */
+    int binary_ok = 1;
+    for (int j = 0; j < num_facilities; j++) {
+        if (fabs(sol[j]) > TOLERANCE && fabs(sol[j] - 1.0) > TOLERANCE) {
+            binary_ok = 0;
+        }
+    }
+    ASSERT(binary_ok, "Facility decisions are binary");
+
+    free(sol);
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Regression Test: Strong Branching State Restoration
+ *
+ * Tests that strong branching properly saves and restores LP state.
+ * This bug caused crashes (SIGSEGV) when accessing corrupt solution data
+ * after strong branching modified bounds.
+ *
+ * Uses a set partitioning-like problem that triggers strong branching.
+ * ============================================================================ */
+void test_mip_strong_branching_regression(void) {
+    printf("\n=== Test: Strong Branching State Restoration ===\n");
+
+    /* Set partitioning: cover elements with minimum cost sets
+     * Variables: x[j] = 1 if set j is selected (binary)
+     * Constraints: each element must be covered exactly once */
+    int num_sets = 10;
+    int num_elements = 5;
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "var_select", 2);  /* Strong branching */
+    ralph_set_dbl_param(model, "time_limit", 30.0);
+    ralph_set_dbl_param(model, "mip_gap", 0.0001);
+
+    /* Set costs and coverage matrix */
+    double costs[] = {3, 2, 1, 4, 5, 2, 3, 1, 4, 2};
+    int coverage[10][5] = {
+        {1, 0, 0, 1, 0},  /* Set 0 covers elements 0, 3 */
+        {0, 1, 0, 0, 1},  /* Set 1 covers elements 1, 4 */
+        {1, 1, 0, 0, 0},  /* Set 2 covers elements 0, 1 */
+        {0, 0, 1, 1, 0},  /* Set 3 covers elements 2, 3 */
+        {0, 0, 0, 1, 1},  /* Set 4 covers elements 3, 4 */
+        {1, 0, 1, 0, 0},  /* Set 5 covers elements 0, 2 */
+        {0, 1, 1, 0, 0},  /* Set 6 covers elements 1, 2 */
+        {0, 0, 0, 0, 1},  /* Set 7 covers element 4 */
+        {1, 1, 1, 0, 0},  /* Set 8 covers elements 0, 1, 2 */
+        {0, 0, 1, 1, 1},  /* Set 9 covers elements 2, 3, 4 */
+    };
+
+    /* Add binary variables */
+    for (int j = 0; j < num_sets; j++) {
+        ralph_add_var(model, 0.0, 1.0, costs[j], RALPH_BINARY);
+    }
+
+    /* Each element must be covered exactly once */
+    for (int i = 0; i < num_elements; i++) {
+        int idx[10];
+        double val[10];
+        int nnz = 0;
+        for (int j = 0; j < num_sets; j++) {
+            if (coverage[j][i]) {
+                idx[nnz] = j;
+                val[nnz] = 1.0;
+                nnz++;
+            }
+        }
+        ralph_add_constraint(model, nnz, idx, val, RALPH_EQUAL, 1.0);
+    }
+
+    /* This should not crash due to strong branching state corruption */
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL || status == RALPH_STATUS_INFEASIBLE,
+           "Status is OPTIMAL or INFEASIBLE (not crashed)");
+
+    if (status == RALPH_STATUS_OPTIMAL) {
+        double sol[10];
+        ralph_get_solution(model, sol);
+
+        /* Verify each element is covered exactly once */
+        int coverage_ok = 1;
+        for (int i = 0; i < num_elements; i++) {
+            double covered = 0.0;
+            for (int j = 0; j < num_sets; j++) {
+                if (coverage[j][i]) {
+                    covered += sol[j];
+                }
+            }
+            if (fabs(covered - 1.0) > TOLERANCE) {
+                coverage_ok = 0;
+            }
+        }
+        ASSERT(coverage_ok, "Each element covered exactly once");
+
+        /* Verify variables are binary */
+        int binary_ok = 1;
+        for (int j = 0; j < num_sets; j++) {
+            if (fabs(sol[j]) > TOLERANCE && fabs(sol[j] - 1.0) > TOLERANCE) {
+                binary_ok = 0;
+            }
+        }
+        ASSERT(binary_ok, "All variables are binary");
+    }
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -733,6 +941,10 @@ int main(int argc, char **argv) {
         test_mixed_integer();
         test_facility_location();
         test_gmi_cuts_knapsack();  /* Test GMI cut generation */
+
+        /* Regression tests for MIP bugs */
+        test_mip_bound_adjustment_regression();     /* Suboptimal solution bug */
+        test_mip_strong_branching_regression();     /* Strong branching crash */
     } else {
         printf("\n=== MIP tests skipped ===\n");
     }
