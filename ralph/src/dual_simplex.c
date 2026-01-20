@@ -27,6 +27,9 @@ void tableau_free(SimplexTableau *tab);
 static void apply_bound_perturbation(SimplexTableau *tab);
 static void remove_bound_perturbation(SimplexTableau *tab);
 
+/* Forward declaration for dual feasibility function */
+static int make_dual_feasible(SimplexTableau *tab, int obj_sense);
+
 /*
  * Extract Farkas ray (certificate of infeasibility) for dual simplex.
  *
@@ -334,8 +337,38 @@ int dual_simplex_solve(SimplexSolver *solver) {
     }
 
     if (!dual_feasible) {
-        /* Need to achieve dual feasibility first - use primal */
-        return simplex_solve(solver);
+        /* Try to achieve dual feasibility by flipping non-basic variables */
+        int changes = make_dual_feasible(tab, solver->model->obj_sense);
+
+        if (changes > 0) {
+            /* Recompute solution and reduced costs after flipping */
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+
+            /* Re-check dual feasibility */
+            dual_feasible = 1;
+            for (int j = 0; j < tab->n; j++) {
+                if (tab->var_status[j] == RALPH_BASIC) continue;
+
+                if (tab->var_status[j] == RALPH_NONBASIC_LOWER && tab->rc[j] < -RALPH_OPT_TOL) {
+                    dual_feasible = 0;
+                    break;
+                }
+                if (tab->var_status[j] == RALPH_NONBASIC_UPPER && tab->rc[j] > RALPH_OPT_TOL) {
+                    dual_feasible = 0;
+                    break;
+                }
+            }
+
+            if (solver->verbose && dual_feasible) {
+                printf("[dual_simplex] Achieved dual feasibility after %d bound flips\n", changes);
+            }
+        }
+
+        if (!dual_feasible) {
+            /* Still not dual feasible - fall back to primal */
+            return simplex_solve(solver);
+        }
     }
 
     /* Apply bound perturbation for cycling prevention */
