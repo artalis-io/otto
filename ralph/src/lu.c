@@ -775,14 +775,8 @@ void lu_solve_sparse(const LUFactorization *lu,
     for (int i = 0; i < u_reach_nnz; i++) {
         int j = u_reach[i];
 
-        /* Find diagonal entry */
-        double diag = 0.0;
-        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-            if (lu->U_rowidx[p] == j) {
-                diag = lu->U_values[p];
-                break;
-            }
-        }
+        /* Use cached diagonal for speed (avoids O(nnz_col) search) */
+        double diag = lu->U_diag[j];
 
         if (fabs(diag) < RALPH_PIVOT_TOL) {
             work2[j] = 0.0;
@@ -1164,14 +1158,8 @@ static void solve_U_sparse(const LUFactorization *lu,
     for (int k = 0; k < reach_nnz; k++) {
         int j = reach[k];
 
-        /* Find diagonal */
-        double diag = 0.0;
-        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-            if (lu->U_rowidx[p] == j) {
-                diag = lu->U_values[p];
-                break;
-            }
-        }
+        /* Use cached diagonal for speed (avoids O(nnz_col) search) */
+        double diag = lu->U_diag[j];
 
         if (fabs(diag) < RALPH_PIVOT_TOL) {
             x[j] = 0.0;
