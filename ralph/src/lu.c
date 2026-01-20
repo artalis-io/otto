@@ -38,10 +38,11 @@ LUFactorization* lu_create(int m) {
 
     /* Refactorization threshold based on problem size.
      * With Forrest-Tomlin updates, spike application cost is O(num_spikes * avg_nnz).
-     * Profiling shows spike application is 50% of solve time with many spikes.
-     * Balance: refactorization cost (~1ms for m=500) vs spike application savings.
-     * Rule of thumb: refactorize every m/5 to m/10 updates for large problems. */
-    lu->max_updates = (m < 100) ? 50 : (m < 500) ? 40 : 30;
+     * Profiling shows: too few updates = excessive refactorization (60% of time),
+     * too many updates = excessive spike application.
+     * Optimal balance: around 150-200 updates for large problems.
+     * Rule: m/5 for small, m/10 for medium, ~150 for large (capped). */
+    lu->max_updates = (m < 100) ? 50 : (m < 500) ? m/5 : 200;
 
     /* Allocate permutation arrays */
     lu->perm = (int*)malloc(m * sizeof(int));
