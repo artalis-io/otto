@@ -341,9 +341,19 @@ int dual_simplex_solve(SimplexSolver *solver) {
     /* Apply bound perturbation for cycling prevention */
     apply_bound_perturbation(tab);
 
-    /* Degeneracy tracking for cycling prevention */
+    /* Degeneracy and stalling detection for cycling prevention */
     int degenerate_count = 0;
     const int DEGEN_PERTURB_THRESHOLD = 15;
+
+    /* Stalling detection: track if objective doesn't change */
+    double last_obj = tab->obj_value;
+    int stall_count = 0;
+    const int STALL_THRESHOLD = 50;  /* Iterations without progress */
+    int perturb_attempts = 0;
+    const int MAX_PERTURB_ATTEMPTS = 3;
+
+    /* Track iterations with dual violations to detect lack of progress */
+    int no_progress_count = 0;
 
     /* Main dual simplex loop */
     for (int iter = 0; iter < solver->max_iterations; iter++) {
@@ -415,6 +425,40 @@ int dual_simplex_solve(SimplexSolver *solver) {
             degenerate_count = 0;
         }
 
+        /* Stalling detection: objective not improving significantly
+         * Use generous tolerance to detect "effectively stalled" states */
+        double obj_tol = 1e-4 * (1.0 + fabs(last_obj));
+        double obj_change = fabs(tab->obj_value - last_obj);
+        if (obj_change < obj_tol) {
+            stall_count++;
+            if (stall_count >= STALL_THRESHOLD) {
+                perturb_attempts++;
+                if (perturb_attempts <= MAX_PERTURB_ATTEMPTS) {
+                    /* Re-apply perturbation to break stalling */
+                    remove_bound_perturbation(tab);
+                    apply_bound_perturbation(tab);
+                    stall_count = 0;
+                    if (solver->verbose) {
+                        printf("Dual iter %d: stalled (Δobj=%.2e), re-perturbing (attempt %d)\n",
+                               iter, obj_change, perturb_attempts);
+                    }
+                } else {
+                    /* Too many perturbation attempts - give up on dual */
+                    if (solver->verbose) {
+                        printf("Dual iter %d: stalled after %d perturb attempts, falling back\n",
+                               iter, perturb_attempts);
+                    }
+                    remove_bound_perturbation(tab);
+                    tableau_free(solver->tableau);
+                    solver->tableau = NULL;
+                    return simplex_solve(solver);
+                }
+            }
+        } else {
+            stall_count = 0;
+            last_obj = tab->obj_value;
+        }
+
         /* Check for dual feasibility violations */
         int dual_violations = 0;
         for (int j = 0; j < tab->n; j++) {
@@ -436,8 +480,30 @@ int dual_simplex_solve(SimplexSolver *solver) {
             return simplex_solve(solver);
         }
 
-        /* Fall back early if taking too many iterations */
-        if (iter > 10 * tab->m && iter % 100 == 0) {
+        /* Track if dual violations are improving.
+         * If we consistently have dual violations without reducing them, fall back. */
+        if (dual_violations > 0) {
+            no_progress_count++;
+            /* If we've had 200+ iterations with persistent dual violations, give up */
+            if (no_progress_count >= 200) {
+                if (solver->verbose) {
+                    printf("Dual iter %d: persistent %d violations, falling back\n",
+                           iter, dual_violations);
+                }
+                remove_bound_perturbation(tab);
+                tableau_free(solver->tableau);
+                solver->tableau = NULL;
+                return simplex_solve(solver);
+            }
+        } else {
+            no_progress_count = 0;  /* Reset when we have no violations */
+        }
+
+        /* Fall back early if taking too many iterations (5x problem size) */
+        if (iter > 5 * tab->m && iter % 100 == 0) {
+            if (solver->verbose) {
+                printf("Dual iter %d: too many iterations, falling back to primal\n", iter);
+            }
             remove_bound_perturbation(tab);
             tableau_free(solver->tableau);
             solver->tableau = NULL;
@@ -584,7 +650,7 @@ static int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
  * Uses per-tableau storage in work4 array instead of static storage to be
  * safe for concurrent use and multiple tableaux.
  */
-#define PERTURB_BASE 1e-6
+#define PERTURB_BASE 1e-4  /* Larger perturbation to break cycles more aggressively */
 #define PERTURB_MULT 7  /* Prime for pseudo-randomness */
 
 static void apply_bound_perturbation(SimplexTableau *tab) {
