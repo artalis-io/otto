@@ -1504,8 +1504,10 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
             x[col] = diags[k] * xc;
             int start = starts[k];
             int nnz = nnzs[k];
+            const int *idx = pool_idx + start;
+            const double *val = pool_val + start;
             for (int p = 0; p < nnz; p++) {
-                x[pool_idx[start + p]] += pool_val[start + p] * xc;
+                x[idx[p]] += val[p] * xc;
             }
         }
         return;
@@ -1529,12 +1531,15 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
         /* Update diagonal (branchless) */
         x[col] = diags[k] * xc;
 
-        /* Update off-diagonal entries from contiguous pool */
+        /* Update off-diagonal entries from contiguous pool
+         * Use local pointers for better cache access */
         int start = starts[k];
         int nnz = nnzs[k];
+        const int *idx = pool_idx + start;
+        const double *val = pool_val + start;
 
         for (int p = 0; p < nnz; p++) {
-            x[pool_idx[start + p]] += pool_val[start + p] * xc;
+            x[idx[p]] += val[p] * xc;
         }
     }
 }
@@ -1580,10 +1585,14 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
         int start = starts[k];
         int nnz = nnzs[k];
 
-        /* Compute new x[col] = diag * x[col] + sum(off_diag * x) */
+        /* Compute new x[col] = diag * x[col] + sum(off_diag * x)
+         * SIMD reduction on the sparse dot product */
         double xc = diags[k] * x[col];
+        const int *idx = pool_idx + start;
+        const double *val = pool_val + start;
+        #pragma omp simd reduction(+:xc)
         for (int p = 0; p < nnz; p++) {
-            xc += pool_val[start + p] * x[pool_idx[start + p]];
+            xc += val[p] * x[idx[p]];
         }
         x[col] = xc;
     }
