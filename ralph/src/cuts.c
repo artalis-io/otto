@@ -117,6 +117,7 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
                                       const int *is_integer) {
     int m = tab->m;
     int n = tab->n;
+    int num_orig = tab->model->num_vars;
     int basic_var = tab->basis[basic_pos];
     int verbose = 0;  /* Set to 1 to enable debug output */
 
@@ -140,20 +141,24 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     row[basic_pos] = 1.0;
     lu_solve_transpose(tab->lu, row, row);
 
-    /* Create cut */
-    Cut *cut = cut_create(n);
+    /* Create cut - allocate space for all original variables */
+    Cut *cut = cut_create(num_orig);
     if (!cut) {
         free(row);
+        return NULL;
+    }
+
+    /* Use dense array for accumulating coefficients (enables slack substitution) */
+    double *cut_coefs = (double*)calloc(num_orig, sizeof(double));
+    if (!cut_coefs) {
+        free(row);
+        cut_free(cut);
         return NULL;
     }
 
     cut->type = CUT_GOMORY;
     cut->sense = 'G';  /* >= cut */
     cut->rhs = f_0;
-
-    /* Track if we have significant slack variable contributions.
-     * If slacks have positive coefficients, we can't safely project them out. */
-    double max_slack_coef = 0.0;
 
     /* Compute cut coefficients for each non-basic variable */
     for (int j = 0; j < n; j++) {
@@ -183,7 +188,7 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
             coef_for_formula = -a_ij;
         }
 
-        if (j < tab->model->num_vars && is_integer && is_integer[j]) {
+        if (j < num_orig && is_integer && is_integer[j]) {
             /* Integer variable */
             double f_j = coef_for_formula - floor(coef_for_formula);
 
@@ -230,23 +235,67 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
                 }
             }
 
-            alpha_j = final_coef;
-
-            /* Add to cut if non-zero */
-            if (fabs(alpha_j) > RALPH_ZERO_TOL && j < tab->model->num_vars) {
+            if (j < num_orig) {
+                /* Original variable: accumulate coefficient directly */
                 if (verbose) {
-                    printf("[GMI-row]   Adding to cut: x%d with coef %.6f\n", j, alpha_j);
+                    printf("[GMI-row]   Adding to cut: x%d with coef %.6f\n", j, final_coef);
                 }
-                cut->indices[cut->nnz] = j;
-                cut->values[cut->nnz] = alpha_j;
-                cut->nnz++;
-            }
+                cut_coefs[j] += final_coef;
+            } else {
+                /* Auxiliary variable (slack/surplus): substitute using constraint row
+                 *
+                 * For slack with aux_coef = +1: s = b - Ax  (from Ax + s = b)
+                 * For surplus with aux_coef = -1: s = Ax - b  (from Ax - s = b)
+                 * General: s = aux_coef * (b - Ax)
+                 *
+                 * Substituting alpha * s in cut LHS:
+                 *   alpha * s = alpha * aux_coef * (b - sum_k a_k * x_k)
+                 *             = alpha * aux_coef * b - alpha * aux_coef * sum_k a_k * x_k
+                 *
+                 * So: add -alpha * aux_coef * a_k to x_k coefficient
+                 *     subtract alpha * aux_coef * b from RHS
+                 */
+                int aux_idx = j - num_orig;
+                if (aux_idx >= 0 && aux_idx < tab->num_aux && tab->aux_row && tab->aux_coef) {
+                    int con_row = tab->aux_row[aux_idx];
+                    double aux_c = tab->aux_coef[aux_idx];
 
-            /* Track slack variable contributions (j >= num_vars means slack/auxiliary) */
-            if (j >= tab->model->num_vars && fabs(final_coef) > RALPH_ZERO_TOL) {
-                /* For NB_LOWER slacks with positive coef, we can't project safely */
-                if (tab->var_status[j] == RALPH_NONBASIC_LOWER && final_coef > max_slack_coef) {
-                    max_slack_coef = final_coef;
+                    if (verbose) {
+                        printf("[GMI-row]   SLACK var %d -> row %d, aux_coef=%.1f, substituting...\n",
+                               j, con_row, aux_c);
+                    }
+
+                    /* Get original constraint row coefficients and RHS */
+                    LPModel *model = tab->model;
+                    double con_rhs = model->b[con_row];
+
+                    /* Adjust RHS: subtract alpha * aux_coef * b */
+                    cut->rhs -= final_coef * aux_c * con_rhs;
+
+                    /* Add coefficient contributions from original variables in this row */
+                    for (int k = 0; k < num_orig; k++) {
+                        /* Get coefficient A[con_row, k] by scanning column k */
+                        double a_rk = 0.0;
+                        for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
+                            if (model->A->rowidx[p] == con_row) {
+                                a_rk = model->A->values[p];
+                                break;
+                            }
+                        }
+                        if (fabs(a_rk) > RALPH_ZERO_TOL) {
+                            /* Add -alpha * aux_coef * a_rk to coefficient of x_k */
+                            double contrib = -final_coef * aux_c * a_rk;
+                            cut_coefs[k] += contrib;
+                            if (verbose) {
+                                printf("[GMI-row]     x%d += %.6f (from slack sub)\n", k, contrib);
+                            }
+                        }
+                    }
+                } else {
+                    /* No mapping available (artificial variable) - skip */
+                    if (verbose) {
+                        printf("[GMI-row]   Skipping auxiliary var %d (no mapping or artificial)\n", j);
+                    }
                 }
             }
         }
@@ -254,19 +303,15 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
 
     free(row);
 
-    /* Reject cuts with significant slack variable contributions.
-     * When slack variables have positive GMI coefficients and are at their
-     * lower bound (0), projecting them out creates an invalid cut because
-     * at integer feasible points, the slacks might be positive, making the
-     * original cut's LHS larger and the projected cut too restrictive. */
-    if (max_slack_coef > 0.1) {  /* Threshold to avoid rejecting tiny contributions */
-        if (verbose) {
-            printf("[GMI-row] Rejected: significant positive slack coefficient (%.4f) "
-                   "makes projection unsafe\n", max_slack_coef);
+    /* Convert dense coefficient array to sparse cut */
+    for (int k = 0; k < num_orig; k++) {
+        if (fabs(cut_coefs[k]) > RALPH_ZERO_TOL) {
+            cut->indices[cut->nnz] = k;
+            cut->values[cut->nnz] = cut_coefs[k];
+            cut->nnz++;
         }
-        cut_free(cut);
-        return NULL;
     }
+    free(cut_coefs);
 
     /* Calculate violation */
     double lhs = 0.0;
@@ -276,11 +321,11 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     cut->violation = cut->rhs - lhs;
 
     if (verbose) {
-        printf("[GMI-row] Final cut: nnz=%d, rhs=%.6f, lhs=%.6f, violation=%.6f, max_slack=%.6f\n",
-               cut->nnz, cut->rhs, lhs, cut->violation, max_slack_coef);
+        printf("[GMI-row] Final cut: nnz=%d, rhs=%.6f, lhs=%.6f, violation=%.6f\n",
+               cut->nnz, cut->rhs, lhs, cut->violation);
     }
 
-    /* Skip cuts with no variable coefficients - they would be infeasible */
+    /* Skip cuts with no variable coefficients */
     if (cut->nnz == 0) {
         if (verbose) printf("[GMI-row] Rejected: no variable coefficients\n");
         cut_free(cut);
@@ -289,8 +334,7 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
 
     /* Skip cuts where all coefficients are negative and RHS > 0.
      * Such cuts have form: -a*x - b*y >= c (with a,b,c > 0)
-     * which means a*x + b*y <= -c, impossible for non-negative vars.
-     * This happens when we project out slack terms with positive coefficients. */
+     * which means a*x + b*y <= -c, impossible for non-negative vars. */
     int has_positive_coef = 0;
     for (int k = 0; k < cut->nnz; k++) {
         if (cut->values[k] > RALPH_ZERO_TOL) {
@@ -299,7 +343,7 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
         }
     }
     if (!has_positive_coef && cut->rhs > RALPH_ZERO_TOL) {
-        if (verbose) printf("[GMI-row] Rejected: all negative coefs with positive RHS (would cut off all solutions)\n");
+        if (verbose) printf("[GMI-row] Rejected: all negative coefs with positive RHS\n");
         cut_free(cut);
         return NULL;
     }

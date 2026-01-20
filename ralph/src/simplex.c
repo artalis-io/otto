@@ -270,6 +270,7 @@ SimplexTableau* tableau_create(LPModel *model) {
     }
 
     tab->n = model->num_vars + num_aux_vars;
+    tab->num_aux = num_aux_vars;
 
     /* Allocate extended arrays */
     tab->c_ext = (double*)calloc(tab->n, sizeof(double));
@@ -294,11 +295,16 @@ SimplexTableau* tableau_create(LPModel *model) {
 
     tab->se_weights = (double*)calloc(tab->n, sizeof(double));
 
+    /* Auxiliary variable mapping for cut generation */
+    tab->aux_row = (int*)malloc(num_aux_vars * sizeof(int));
+    tab->aux_coef = (double*)malloc(num_aux_vars * sizeof(double));
+
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
         !tab->x || !tab->y || !tab->rc ||
         !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs ||
-        !tab->pivot_row || !tab->tau_work || !tab->se_weights) {
+        !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
+        !tab->aux_row || !tab->aux_coef) {
         free(norm_sense);
         free(norm_sign);
         tableau_free(tab);
@@ -359,8 +365,9 @@ SimplexTableau* tableau_create(LPModel *model) {
         }
     }
 
-    /* Add auxiliary variables */
+    /* Add auxiliary variables and record their mapping to constraints */
     int aux_idx = model->num_vars;
+    int aux_map_idx = 0;  /* Index into aux_row/aux_coef arrays */
     for (int i = 0; i < model->num_cons; i++) {
         if (norm_sense[i] == 'L') {
             /* <= : add slack with coef +1, slack is basic */
@@ -369,6 +376,12 @@ SimplexTableau* tableau_create(LPModel *model) {
             tab->lb_ext[aux_idx] = 0.0;
             tab->ub_ext[aux_idx] = RALPH_INFINITY;
             basic_var_for_row[i] = aux_idx;
+
+            /* Record mapping: slack for row i with coefficient +1 */
+            tab->aux_row[aux_map_idx] = i;
+            tab->aux_coef[aux_map_idx] = 1.0;
+            aux_map_idx++;
+
             aux_idx++;
         } else if (norm_sense[i] == 'G') {
             /* >= : add surplus with coef -1, then artificial with coef +1 */
@@ -384,11 +397,21 @@ SimplexTableau* tableau_create(LPModel *model) {
             tab->lb_ext[surplus_idx] = 0.0;
             tab->ub_ext[surplus_idx] = RALPH_INFINITY;
 
+            /* Record mapping: surplus for row i with coefficient -1 */
+            tab->aux_row[aux_map_idx] = i;
+            tab->aux_coef[aux_map_idx] = -1.0;
+            aux_map_idx++;
+
             /* Artificial variable */
             triplets_add(trips, i, artificial_idx, 1.0);
             tab->c_ext[artificial_idx] = 1e8;  /* Big-M cost */
             tab->lb_ext[artificial_idx] = 0.0;
             tab->ub_ext[artificial_idx] = RALPH_INFINITY;
+
+            /* Record mapping: artificial for row i with coefficient +1 */
+            tab->aux_row[aux_map_idx] = i;
+            tab->aux_coef[aux_map_idx] = 1.0;
+            aux_map_idx++;
 
             /* Decide which is basic: if ax_initial >= rhs, surplus can be basic.
              * Otherwise we need the artificial variable. */
@@ -408,6 +431,12 @@ SimplexTableau* tableau_create(LPModel *model) {
             tab->lb_ext[aux_idx] = 0.0;
             tab->ub_ext[aux_idx] = RALPH_INFINITY;
             basic_var_for_row[i] = aux_idx;
+
+            /* Record mapping: artificial for row i with coefficient +1 */
+            tab->aux_row[aux_map_idx] = i;
+            tab->aux_coef[aux_map_idx] = 1.0;
+            aux_map_idx++;
+
             aux_idx++;
         }
     }
@@ -536,6 +565,8 @@ void tableau_free(SimplexTableau *tab) {
     free(tab->pivot_row);
     free(tab->tau_work);
     free(tab->se_weights);
+    free(tab->aux_row);
+    free(tab->aux_coef);
     lu_free(tab->lu);
     free(tab);
 }
