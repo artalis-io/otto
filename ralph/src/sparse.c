@@ -8,6 +8,10 @@
 #include <math.h>
 #include "sparse.h"
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 /* ============================================================================
  * Sparse Matrix Creation/Destruction
  * ============================================================================ */
@@ -251,20 +255,36 @@ void sparse_matvec_add(const SparseMatrix *A, const double *x, double *y) {
 }
 
 void sparse_matvec_transpose(const SparseMatrix *A, const double *x, double *y) {
+    const int *colptr = A->colptr;
+    const int *rowidx = A->rowidx;
+    const double *values = A->values;
+
     for (int j = 0; j < A->ncols; j++) {
         double sum = 0.0;
-        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-            sum += A->values[p] * x[A->rowidx[p]];
+        int start = colptr[j];
+        int end = colptr[j + 1];
+        /* SIMD reduction on sparse dot product (indirect indexed) */
+        #pragma omp simd reduction(+:sum)
+        for (int p = start; p < end; p++) {
+            sum += values[p] * x[rowidx[p]];
         }
         y[j] = sum;
     }
 }
 
 void sparse_matvec_transpose_add(const SparseMatrix *A, const double *x, double *y) {
+    const int *colptr = A->colptr;
+    const int *rowidx = A->rowidx;
+    const double *values = A->values;
+
     for (int j = 0; j < A->ncols; j++) {
         double sum = 0.0;
-        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-            sum += A->values[p] * x[A->rowidx[p]];
+        int start = colptr[j];
+        int end = colptr[j + 1];
+        /* SIMD reduction on sparse dot product (indirect indexed) */
+        #pragma omp simd reduction(+:sum)
+        for (int p = start; p < end; p++) {
+            sum += values[p] * x[rowidx[p]];
         }
         y[j] += sum;
     }
@@ -301,8 +321,15 @@ void sparse_axpy_column(const SparseMatrix *A, int col, double alpha, double *y)
 
 double sparse_dot_column(const SparseMatrix *A, int col, const double *y) {
     double result = 0.0;
-    for (int p = A->colptr[col]; p < A->colptr[col + 1]; p++) {
-        result += A->values[p] * y[A->rowidx[p]];
+    int start = A->colptr[col];
+    int end = A->colptr[col + 1];
+    const int *rowidx = A->rowidx;
+    const double *values = A->values;
+
+    /* SIMD reduction on sparse dot product */
+    #pragma omp simd reduction(+:result)
+    for (int p = start; p < end; p++) {
+        result += values[p] * y[rowidx[p]];
     }
     return result;
 }

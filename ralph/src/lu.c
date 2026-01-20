@@ -12,6 +12,10 @@
 #include <math.h>
 #include "lp.h"
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 /* Forward declarations for reach computation (used by sparse solves) */
 static void compute_reach_L(const LUFactorization *lu,
                             int nnz_rhs, const int *rhs_idx,
@@ -1449,10 +1453,11 @@ static void apply_compacted_matrix(const LUFactorization *lu, double *x) {
     const double *M = lu->ft_compact_matrix;
     double *work = lu->perm_work;  /* Temporary storage */
 
-    /* Dense matrix-vector multiply */
+    /* Dense matrix-vector multiply with SIMD */
     for (int i = 0; i < m; i++) {
         double sum = 0.0;
         const double *row = &M[i * m];
+        #pragma omp simd reduction(+:sum)
         for (int j = 0; j < m; j++) {
             sum += row[j] * x[j];
         }
@@ -1535,9 +1540,11 @@ static void apply_compacted_matrix_transpose(const LUFactorization *lu, double *
     const double *M = lu->ft_compact_matrix;
     double *work = lu->perm_work;
 
-    /* Dense matrix-vector multiply with M' (column-major access of row-major M) */
+    /* Dense matrix-vector multiply with M' (column-major access of row-major M)
+     * Note: Strided access (stride=m) is less SIMD-friendly but still benefits */
     for (int j = 0; j < m; j++) {
         double sum = 0.0;
+        #pragma omp simd reduction(+:sum)
         for (int i = 0; i < m; i++) {
             sum += M[i * m + j] * x[i];  /* M'[j,i] = M[i,j] */
         }
