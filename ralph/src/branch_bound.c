@@ -350,32 +350,87 @@ static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
 int strong_branch(MIPSolver *solver, int var, double val,
                   double *down_obj, double *up_obj, int max_iter) {
     SimplexSolver *lp = solver->lp_solver;
+    if (!lp || !lp->tableau) {
+        *down_obj = RALPH_INFINITY;
+        *up_obj = RALPH_INFINITY;
+        return -1;
+    }
     SimplexTableau *tab = lp->tableau;
+    if (!tab->lb_ext || !tab->ub_ext || !tab->basis || !tab->var_status || !tab->basis_pos) {
+        *down_obj = RALPH_INFINITY;
+        *up_obj = RALPH_INFINITY;
+        return -1;
+    }
 
     double orig_lb = tab->lb_ext[var];
     double orig_ub = tab->ub_ext[var];
+    int save_max_iter = lp->max_iterations;
+    lp->max_iterations = max_iter;
+
+    /* Save original basis for restoration */
+    int m = tab->m;
+    int n = tab->n;
+    int *save_basis = (int*)malloc(m * sizeof(int));
+    int *save_var_status = (int*)malloc(n * sizeof(int));
+    if (!save_basis || !save_var_status) {
+        free(save_basis);
+        free(save_var_status);
+        *down_obj = RALPH_INFINITY;
+        *up_obj = RALPH_INFINITY;
+        lp->max_iterations = save_max_iter;
+        return -1;
+    }
+    memcpy(save_basis, tab->basis, m * sizeof(int));
+    memcpy(save_var_status, tab->var_status, n * sizeof(int));
 
     /* Try branching down */
     tab->ub_ext[var] = floor(val);
     tableau_compute_solution(tab);
-
-    int save_max_iter = lp->max_iterations;
-    lp->max_iterations = max_iter;
-
     dual_simplex_solve(lp);
     *down_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
 
-    /* Restore and try branching up */
+    /* Restore basis before trying up branch */
+    memcpy(tab->basis, save_basis, m * sizeof(int));
+    memcpy(tab->var_status, save_var_status, n * sizeof(int));
+    for (int i = 0; i < m; i++) {
+        tab->basis_pos[tab->basis[i]] = i;
+    }
+    for (int j = 0; j < n; j++) {
+        if (tab->var_status[j] != RALPH_BASIC) {
+            tab->basis_pos[j] = -1;
+        }
+    }
+
+    /* Try branching up */
     tab->ub_ext[var] = orig_ub;
     tab->lb_ext[var] = ceil(val);
     tableau_compute_solution(tab);
-
     dual_simplex_solve(lp);
     *up_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
 
-    /* Restore original bounds */
+    /* Restore original bounds and basis */
     tab->lb_ext[var] = orig_lb;
     tab->ub_ext[var] = orig_ub;
+    memcpy(tab->basis, save_basis, m * sizeof(int));
+    memcpy(tab->var_status, save_var_status, n * sizeof(int));
+    for (int i = 0; i < m; i++) {
+        tab->basis_pos[tab->basis[i]] = i;
+    }
+    for (int j = 0; j < n; j++) {
+        if (tab->var_status[j] != RALPH_BASIC) {
+            tab->basis_pos[j] = -1;
+        }
+    }
+
+    /* Recompute solution with restored basis */
+    if (tableau_refactorize(tab) == 0) {
+        tableau_compute_solution(tab);
+        tableau_compute_reduced_costs(tab);
+        lp->status = RALPH_STATUS_OPTIMAL;
+    }
+
+    free(save_basis);
+    free(save_var_status);
     lp->max_iterations = save_max_iter;
 
     return 0;

@@ -263,6 +263,33 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
             /* Restore parent basis */
             if (restore_basis_from_node(lp, node) == 0) {
+                /* After restoring basis, set non-basic variable values to their bounds.
+                 * The parent's var_status may indicate a bound that's no longer valid
+                 * due to branching, so we check and adjust to valid bounds. */
+                for (int j = 0; j < model->num_vars; j++) {
+                    if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+                        double new_lb = tab->lb_ext[j];
+                        double new_ub = tab->ub_ext[j];
+                        /* Check if we can still be at lower bound */
+                        if (new_lb <= new_ub) {
+                            tab->x[j] = new_lb;
+                        } else {
+                            /* Fixed variable - lb == ub */
+                            tab->x[j] = new_lb;
+                        }
+                    } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+                        double new_lb = tab->lb_ext[j];
+                        double new_ub = tab->ub_ext[j];
+                        if (new_ub >= new_lb) {
+                            tab->x[j] = new_ub;
+                        } else {
+                            /* Fixed variable */
+                            tab->x[j] = new_ub;
+                        }
+                    }
+                    /* RALPH_BASIC variables will be computed by dual_simplex */
+                }
+
                 /* Use dual simplex for re-optimization */
                 dual_simplex_solve(lp);
 
@@ -286,7 +313,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     node->lp_bound = lp->obj_value;
     node->lp_iterations = lp->iterations;
 
-    /* Debug output */
+    /* Debug output for non-optimal status */
     if (solver->verbose && lp->status != RALPH_STATUS_OPTIMAL) {
         printf("  solve_node_lp: status=%d, obj=%.4f\n", lp->status, lp->obj_value);
     }
@@ -357,7 +384,15 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     int branch_var;
     if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
         /* No fractional integer variable - should be integer feasible */
+        if (solver->verbose) {
+            printf("  [process_node] No fractional var found - declaring integer feasible\n");
+        }
         return 0;
+    }
+
+    if (solver->verbose) {
+        printf("  [process_node] Branching on var %d (val=%.4f)\n", branch_var,
+               lp_sol ? lp_sol[branch_var] : -999.0);
     }
 
     /* Create child nodes */
@@ -368,10 +403,16 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     if (child_down) {
         child_down->id = solver->node_count++;
         node_queue_push(solver->node_queue, child_down);
+        if (solver->verbose) {
+            printf("  [process_node] Added child_down (id=%d)\n", child_down->id);
+        }
     }
     if (child_up) {
         child_up->id = solver->node_count++;
         node_queue_push(solver->node_queue, child_up);
+        if (solver->verbose) {
+            printf("  [process_node] Added child_up (id=%d)\n", child_up->id);
+        }
     }
 
     return 0;
@@ -617,7 +658,16 @@ int mip_solve(MIPSolver *solver) {
 
         /* Get next node */
         BBNode *node = node_queue_pop(solver->node_queue);
-        if (!node) break;
+        if (!node) {
+            if (solver->verbose) {
+                printf("[mip_solve] Queue empty, exiting loop\n");
+            }
+            break;
+        }
+
+        if (solver->verbose) {
+            printf("[mip_solve] Processing node %d (depth=%d)\n", node->id, node->depth);
+        }
 
         /* Process node */
         process_node(solver, node);
@@ -629,9 +679,18 @@ int mip_solve(MIPSolver *solver) {
 
         /* Prune nodes by bound and update best_bound from remaining open nodes */
         if (solver->has_incumbent) {
+            int queue_size_before = solver->node_queue->size;
             node_queue_update_bound(solver->node_queue, solver->cutoff);
+            if (solver->verbose && solver->node_queue->size < queue_size_before) {
+                printf("[mip_solve] Pruned %d nodes by bound (cutoff=%.4f)\n",
+                       queue_size_before - solver->node_queue->size, solver->cutoff);
+            }
         }
         solver->best_bound = node_queue_best_bound(solver->node_queue);
+        if (solver->verbose) {
+            printf("[mip_solve] Queue size=%d, best_bound=%.4f\n",
+                   solver->node_queue->size, solver->best_bound);
+        }
 
         /* Print progress */
         if (solver->verbose && solver->nodes_explored % 100 == 0) {

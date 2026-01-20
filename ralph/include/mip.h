@@ -9,8 +9,8 @@
 
 /* Default MIP parameters */
 #define RALPH_DEFAULT_NODE_LIMIT 1000000
-#define RALPH_DEFAULT_MIP_GAP 0.15      /* 15% relative gap */
-#define RALPH_DEFAULT_ABS_MIP_GAP 0.5   /* 0.5 absolute gap */
+#define RALPH_DEFAULT_MIP_GAP 0.0001    /* 0.01% relative gap */
+#define RALPH_DEFAULT_ABS_MIP_GAP 1e-6  /* 1e-6 absolute gap */
 #define RALPH_DEFAULT_CUTOFF RALPH_INFINITY
 
 /* Node selection strategy */
