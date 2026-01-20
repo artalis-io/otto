@@ -570,6 +570,7 @@ void tableau_free(SimplexTableau *tab) {
     free(tab->pivot_row);
     free(tab->tau_work);
     free(tab->se_weights);
+    free(tab->perturb_backup);
     free(tab->aux_row);
     free(tab->aux_coef);
     free(tab->partial_candidates);

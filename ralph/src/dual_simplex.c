@@ -23,6 +23,10 @@ int tableau_compute_solution(SimplexTableau *tab);
 int tableau_compute_reduced_costs(SimplexTableau *tab);
 void tableau_free(SimplexTableau *tab);
 
+/* Bound perturbation for degeneracy prevention (defined below) */
+static void apply_bound_perturbation(SimplexTableau *tab);
+static void remove_bound_perturbation(SimplexTableau *tab);
+
 /*
  * Extract Farkas ray (certificate of infeasibility) for dual simplex.
  *
@@ -334,6 +338,13 @@ int dual_simplex_solve(SimplexSolver *solver) {
         return simplex_solve(solver);
     }
 
+    /* Apply bound perturbation for cycling prevention */
+    apply_bound_perturbation(tab);
+
+    /* Degeneracy tracking for cycling prevention */
+    int degenerate_count = 0;
+    const int DEGEN_PERTURB_THRESHOLD = 15;
+
     /* Main dual simplex loop */
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         solver->iterations = iter;
@@ -362,7 +373,9 @@ int dual_simplex_solve(SimplexSolver *solver) {
         }
 
         if (leaving < 0) {
-            /* Primal feasible - optimal */
+            /* Primal feasible - optimal! Remove perturbation and finalize */
+            remove_bound_perturbation(tab);
+            tableau_compute_solution(tab);
             solver->status = RALPH_STATUS_OPTIMAL;
             solver->obj_value = tab->obj_value * solver->model->obj_sense;
             return 0;
@@ -374,6 +387,7 @@ int dual_simplex_solve(SimplexSolver *solver) {
 
         if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
             /* No valid entering variable - infeasible */
+            remove_bound_perturbation(tab);
             extract_farkas_ray_dual(solver);
             solver->status = RALPH_STATUS_INFEASIBLE;
             return 0;
@@ -381,25 +395,79 @@ int dual_simplex_solve(SimplexSolver *solver) {
 
         /* Perform dual pivot */
         if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
-            solver->status = RALPH_STATUS_ERROR;
-            return -1;
-        }
-
-        /* Refactorize if needed */
-        if (lu_needs_refactorization(tab->lu)) {
+            /* Pivot failed, try refactorization */
             if (tableau_refactorize(tab) != 0) {
+                remove_bound_perturbation(tab);
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
             }
+        }
+
+        /* Detect degenerate pivots (theta ≈ 0 means no dual objective change) */
+        if (fabs(theta) < RALPH_FEAS_TOL) {
+            degenerate_count++;
+            if (degenerate_count >= DEGEN_PERTURB_THRESHOLD) {
+                /* Re-apply perturbation to break cycling */
+                apply_bound_perturbation(tab);
+                degenerate_count = 0;
+            }
+        } else {
+            degenerate_count = 0;
+        }
+
+        /* Check for dual feasibility violations */
+        int dual_violations = 0;
+        for (int j = 0; j < tab->n; j++) {
+            if (tab->var_status[j] == RALPH_BASIC) continue;
+            double rc = tab->rc[j];
+            if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+                dual_violations++;
+            }
+            if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+                dual_violations++;
+            }
+        }
+
+        /* Fall back to primal if too many dual violations */
+        if (dual_violations > tab->n / 5) {
+            remove_bound_perturbation(tab);
+            tableau_free(solver->tableau);
+            solver->tableau = NULL;
+            return simplex_solve(solver);
+        }
+
+        /* Fall back early if taking too many iterations */
+        if (iter > 10 * tab->m && iter % 100 == 0) {
+            remove_bound_perturbation(tab);
+            tableau_free(solver->tableau);
+            solver->tableau = NULL;
+            return simplex_solve(solver);
+        }
+
+        /* Numerical stability: refactorize and recompute RCs periodically */
+        int need_refactor = lu_needs_refactorization(tab->lu) ||
+                           (iter > 0 && iter % 50 == 0);
+
+        if (need_refactor) {
+            if (tableau_refactorize(tab) != 0) {
+                remove_bound_perturbation(tab);
+                solver->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        } else if (iter > 0 && iter % 20 == 0) {
+            /* Periodic RC recomputation without full refactorization */
             tableau_compute_reduced_costs(tab);
         }
 
         if (solver->verbose && iter % 100 == 0) {
-            printf("Dual iter %d: infeas = %.6e, obj = %.6f\n",
-                   iter, max_infeas, tab->obj_value);
+            printf("Dual iter %d: infeas = %.6e, obj = %.6f, dual_viol=%d\n",
+                   iter, max_infeas, tab->obj_value, dual_violations);
         }
     }
 
+    remove_bound_perturbation(tab);
     solver->status = RALPH_STATUS_ITERATION_LIMIT;
     return -1;
 }
@@ -512,24 +580,22 @@ static int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
  * Adds small perturbations to upper bounds to break degeneracy and prevent
  * cycling. Uses pseudo-random perturbations based on variable index to ensure
  * reproducibility. Perturbations are removed before returning the final solution.
+ *
+ * Uses per-tableau storage in work4 array instead of static storage to be
+ * safe for concurrent use and multiple tableaux.
  */
 #define PERTURB_BASE 1e-6
 #define PERTURB_MULT 7  /* Prime for pseudo-randomness */
 
-static double *original_ub = NULL;
-static int original_ub_size = 0;
-
 static void apply_bound_perturbation(SimplexTableau *tab) {
-    /* Save original bounds */
-    if (original_ub_size < tab->n) {
-        free(original_ub);
-        original_ub = (double*)malloc(tab->n * sizeof(double));
-        original_ub_size = tab->n;
+    /* Allocate backup storage if needed */
+    if (!tab->perturb_backup) {
+        tab->perturb_backup = (double*)malloc(tab->n * sizeof(double));
+        if (!tab->perturb_backup) return;
     }
-    if (!original_ub) return;
 
     for (int j = 0; j < tab->n; j++) {
-        original_ub[j] = tab->ub_ext[j];
+        tab->perturb_backup[j] = tab->ub_ext[j];
 
         /* Only perturb finite upper bounds */
         if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
@@ -541,14 +607,14 @@ static void apply_bound_perturbation(SimplexTableau *tab) {
 }
 
 static void remove_bound_perturbation(SimplexTableau *tab) {
-    if (!original_ub || original_ub_size < tab->n) return;
+    if (!tab->perturb_backup) return;
 
     for (int j = 0; j < tab->n; j++) {
-        tab->ub_ext[j] = original_ub[j];
+        tab->ub_ext[j] = tab->perturb_backup[j];
 
         /* Snap non-basic variables at upper bound to original bound */
         if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-            tab->x[j] = original_ub[j];
+            tab->x[j] = tab->perturb_backup[j];
         }
     }
 }
