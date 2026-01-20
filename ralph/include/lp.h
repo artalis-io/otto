@@ -179,6 +179,9 @@ typedef struct {
     int pricing_strategy;   /* 0=Dantzig, 1=SE, 2=Devex, 3=Partial - for pivot fn */
     int devex_refcount;     /* Reference count for Devex weight resets */
 
+    /* Bound perturbation backup (for dual simplex anti-cycling) */
+    double *perturb_backup; /* Original upper bounds before perturbation */
+
     /* Partial pricing state */
     int partial_price_pos;  /* Starting position for next partial price scan */
 
