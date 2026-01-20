@@ -182,6 +182,11 @@ typedef struct {
     /* Partial pricing state */
     int partial_price_pos;  /* Starting position for next partial price scan */
 
+    /* Candidate list for improved partial pricing */
+    int *partial_candidates;    /* Hot set of promising variable indices */
+    int partial_cand_count;     /* Current number of candidates in hot set */
+    int partial_cand_capacity;  /* Allocated capacity for candidates */
+
     /* Auxiliary variable mapping (for cut generation) */
     int *aux_row;           /* For each aux var j >= num_vars: which constraint row */
     double *aux_coef;       /* For each aux var: coefficient in that row (+1 or -1) */

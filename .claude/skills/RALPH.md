@@ -38,6 +38,63 @@ make DEBUG=1
 make SANITIZE=1
 ```
 
+### OpenMP SIMD Support
+
+Ralph uses OpenMP SIMD pragmas for portable vectorization that works on both x86 and ARM architectures. The Makefile auto-detects the platform and configures OpenMP accordingly.
+
+#### macOS (Apple Silicon & Intel)
+
+```bash
+# Install libomp via Homebrew (required)
+brew install libomp
+
+# Build (auto-detects and uses libomp)
+make
+```
+
+The Makefile uses:
+- `-Xclang -fopenmp` for clang compiler
+- `-I/opt/homebrew/opt/libomp/include` for headers
+- `-L/opt/homebrew/opt/libomp/lib -lomp` for linking
+
+#### Linux (Ubuntu/Debian)
+
+```bash
+# GCC has native OpenMP support, no extra packages needed
+# Or optionally install:
+sudo apt-get install libomp-dev
+
+# Build
+make
+```
+
+The Makefile uses:
+- `-fopenmp` for gcc (native support)
+
+#### Verifying SIMD is Active
+
+```bash
+# Check if OpenMP is detected during compilation
+make clean && make 2>&1 | grep -i openmp
+
+# You should see: -fopenmp or -Xclang -fopenmp in the compile commands
+```
+
+#### Disabling OpenMP (if needed)
+
+```bash
+# Edit Makefile and remove/comment out the OpenMP section, or:
+make CFLAGS="-Wall -Wextra -O3 -march=native -ffast-math"
+```
+
+#### SIMD-Optimized Functions
+
+The following functions use `#pragma omp simd` for vectorization:
+- `apply_compacted_matrix()` - Dense matrix-vector multiply
+- `apply_compacted_matrix_transpose()` - Dense matrix-vector multiply (transpose)
+- `sparse_matvec_transpose()` - Sparse matrix-vector product
+- `sparse_dot_column()` - Sparse dot product (heavily used in simplex)
+
 ## Using Ralph in Your Code
 
 ### Basic LP Example
