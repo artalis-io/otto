@@ -178,6 +178,11 @@ typedef struct {
     /* Partial pricing state */
     int partial_price_pos;  /* Starting position for next partial price scan */
 
+    /* Auxiliary variable mapping (for cut generation) */
+    int *aux_row;           /* For each aux var j >= num_vars: which constraint row */
+    double *aux_coef;       /* For each aux var: coefficient in that row (+1 or -1) */
+    int num_aux;            /* Number of auxiliary variables */
+
     /* Statistics */
     int iterations;
     int phase;              /* 1 or 2 */
