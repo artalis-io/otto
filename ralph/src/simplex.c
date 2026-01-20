@@ -1043,69 +1043,58 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
         dir = -1.0;
     }
 
-    /* Harris ratio test with tolerance */
-    double theta_max = RALPH_INFINITY;
-    *leaving = -1;
-
-    /* Phase 1: Find theta_max allowing small infeasibility */
-    for (int k = 0; k < tab->m; k++) {
-        double dk = tab->work2[k] * dir;
-        int j = tab->basis[k];
-        double xj = tab->x[j];
-
-        if (dk > RALPH_PIVOT_TOL) {
-            /* Variable will decrease */
-            double bound = tab->lb_ext[j];
-            double ratio = (xj - bound + RALPH_FEAS_TOL) / dk;
-            if (ratio < theta_max) theta_max = ratio;
-        } else if (dk < -RALPH_PIVOT_TOL) {
-            /* Variable will increase */
-            double bound = tab->ub_ext[j];
-            double ratio = (bound - xj + RALPH_FEAS_TOL) / (-dk);
-            if (ratio < theta_max) theta_max = ratio;
-        }
-    }
-
-    /* Check bound on entering variable */
-    if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
-        double range = tab->ub_ext[entering] - tab->lb_ext[entering];
-        if (range < theta_max) theta_max = range;
-    } else if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
-        double range = tab->ub_ext[entering] - tab->lb_ext[entering];
-        if (range < theta_max) theta_max = range;
-    }
-
-    if (theta_max >= RALPH_INFINITY/2) {
-        *theta = RALPH_INFINITY;
-        return -1;  /* Unbounded */
-    }
-
-    /* Phase 2: Among those within theta_max, pick best leaving variable
+    /* Single-pass Harris ratio test (merged from two passes)
      *
-     * Tie-breaking strategy (in order of priority):
+     * Harris ratio test allows small infeasibility (FEAS_TOL) when computing
+     * theta_max, then selects among candidates within that tolerance.
+     *
+     * Tie-breaking strategy:
      * 1. Prefer non-degenerate pivots (ratio > tolerance)
      * 2. Among degenerate ties, prefer larger pivot for numerical stability
-     * 3. Among remaining ties, prefer smaller steepest edge weight (variable
-     *    that was "cheapest" to bring in should be "cheapest" to kick out)
      */
+    double theta_max = RALPH_INFINITY;
     double best_pivot = 0.0;
-    double best_ratio = RALPH_INFINITY;
     int best_is_degen = 1;
+    *leaving = -1;
+    *theta = RALPH_INFINITY;
 
+    /* Check bound on entering variable first (contributes to theta_max) */
+    double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+    if (enter_range < RALPH_INFINITY/2) {
+        theta_max = enter_range;
+    }
+
+    /* Single pass: compute theta_max and select best leaving simultaneously */
     for (int k = 0; k < tab->m; k++) {
         double dk = tab->work2[k] * dir;
+        if (fabs(dk) < RALPH_PIVOT_TOL) continue;  /* Skip tiny pivots */
+
         int j = tab->basis[k];
         double xj = tab->x[j];
 
-        double ratio = RALPH_INFINITY;
-        if (dk > RALPH_PIVOT_TOL) {
-            ratio = (xj - tab->lb_ext[j]) / dk;
-        } else if (dk < -RALPH_PIVOT_TOL) {
-            ratio = (tab->ub_ext[j] - xj) / (-dk);
+        double ratio_harris;  /* Ratio with Harris tolerance */
+        double ratio_exact;   /* Exact ratio for selection */
+
+        if (dk > 0) {
+            /* Variable will decrease toward lower bound */
+            double slack = xj - tab->lb_ext[j];
+            ratio_harris = (slack + RALPH_FEAS_TOL) / dk;
+            ratio_exact = slack / dk;
+        } else {
+            /* Variable will increase toward upper bound (dk < 0) */
+            double slack = tab->ub_ext[j] - xj;
+            ratio_harris = (slack + RALPH_FEAS_TOL) / (-dk);
+            ratio_exact = slack / (-dk);
         }
 
-        if (ratio <= theta_max + RALPH_FEAS_TOL) {
-            int is_degen = (ratio < 1e-8);
+        /* Update theta_max */
+        if (ratio_harris < theta_max) {
+            theta_max = ratio_harris;
+        }
+
+        /* Check if this is a valid candidate (within current theta_max + tolerance) */
+        if (ratio_exact <= theta_max + RALPH_FEAS_TOL) {
+            int is_degen = (ratio_exact < 1e-8);
             double pivot_size = fabs(dk);
 
             /* Selection criteria */
@@ -1114,27 +1103,73 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
                 select = 1;  /* First candidate */
             } else if (!is_degen && best_is_degen) {
                 select = 1;  /* Prefer non-degenerate */
-            } else if (is_degen == best_is_degen) {
-                /* Same degeneracy status - use pivot size */
-                if (pivot_size > best_pivot * 1.1) {
-                    select = 1;  /* Significantly larger pivot */
-                }
+            } else if (is_degen == best_is_degen && pivot_size > best_pivot * 1.1) {
+                select = 1;  /* Significantly larger pivot */
             }
 
             if (select) {
                 best_pivot = pivot_size;
-                best_ratio = ratio;
                 best_is_degen = is_degen;
                 *leaving = k;
-                *theta = ratio > 0 ? ratio : 0;
+                *theta = ratio_exact > 0 ? ratio_exact : 0;
             }
         }
     }
 
+    /* After the pass, invalidate selection if it's no longer within theta_max
+     * (theta_max may have decreased after we selected the candidate) */
+    if (*leaving >= 0 && *theta > theta_max + RALPH_FEAS_TOL) {
+        /* Re-scan for valid candidates - this is rare */
+        best_pivot = 0.0;
+        best_is_degen = 1;
+        *leaving = -1;
+        *theta = RALPH_INFINITY;
+
+        for (int k = 0; k < tab->m; k++) {
+            double dk = tab->work2[k] * dir;
+            if (fabs(dk) < RALPH_PIVOT_TOL) continue;
+
+            int j = tab->basis[k];
+            double xj = tab->x[j];
+            double ratio_exact;
+
+            if (dk > 0) {
+                ratio_exact = (xj - tab->lb_ext[j]) / dk;
+            } else {
+                ratio_exact = (tab->ub_ext[j] - xj) / (-dk);
+            }
+
+            if (ratio_exact <= theta_max + RALPH_FEAS_TOL) {
+                int is_degen = (ratio_exact < 1e-8);
+                double pivot_size = fabs(dk);
+
+                int select = 0;
+                if (*leaving < 0) {
+                    select = 1;
+                } else if (!is_degen && best_is_degen) {
+                    select = 1;
+                } else if (is_degen == best_is_degen && pivot_size > best_pivot * 1.1) {
+                    select = 1;
+                }
+
+                if (select) {
+                    best_pivot = pivot_size;
+                    best_is_degen = is_degen;
+                    *leaving = k;
+                    *theta = ratio_exact > 0 ? ratio_exact : 0;
+                }
+            }
+        }
+    }
+
+    /* Check for unbounded */
+    if (theta_max >= RALPH_INFINITY/2) {
+        *theta = RALPH_INFINITY;
+        return -1;  /* Unbounded */
+    }
+
     /* Check if entering variable hits its bound (bound flip) */
-    double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
     if (enter_range <= theta_max && enter_range < RALPH_INFINITY/2) {
-        /* Bound flip might be better */
         if (*leaving < 0 || enter_range < *theta) {
             *theta = enter_range;
             *leaving = -2;  /* Special flag for bound flip */
