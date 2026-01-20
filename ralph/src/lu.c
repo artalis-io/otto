@@ -91,25 +91,36 @@ LUFactorization* lu_create(int m) {
         lu->ft_col_order_inv[i] = i;
     }
 
-    /* Spike storage for FT updates */
+    /* Spike storage for FT updates - contiguous layout for cache efficiency */
     lu->ft_spike_capacity = lu->max_updates;
     lu->ft_spike_col = (int*)malloc(lu->ft_spike_capacity * sizeof(int));
     lu->ft_spike_diag = (double*)malloc(lu->ft_spike_capacity * sizeof(double));
-    lu->ft_spike_idx = (int**)malloc(lu->ft_spike_capacity * sizeof(int*));
-    lu->ft_spike_val = (double**)malloc(lu->ft_spike_capacity * sizeof(double*));
     lu->ft_spike_nnz = (int*)malloc(lu->ft_spike_capacity * sizeof(int));
+    lu->ft_spike_start = (int*)malloc(lu->ft_spike_capacity * sizeof(int));
 
-    if (!lu->ft_spike_col || !lu->ft_spike_diag || !lu->ft_spike_idx ||
-        !lu->ft_spike_val || !lu->ft_spike_nnz) {
+    if (!lu->ft_spike_col || !lu->ft_spike_diag || !lu->ft_spike_nnz ||
+        !lu->ft_spike_start) {
         lu_free(lu);
         return NULL;
     }
 
     for (int i = 0; i < lu->ft_spike_capacity; i++) {
-        lu->ft_spike_idx[i] = NULL;
-        lu->ft_spike_val[i] = NULL;
         lu->ft_spike_nnz[i] = 0;
         lu->ft_spike_diag[i] = 0.0;
+        lu->ft_spike_start[i] = 0;
+    }
+
+    /* Contiguous spike pool - single allocation for all spike data
+     * Estimate: each spike has ~m/4 non-zeros on average, max_updates spikes
+     * Pool size = max_updates * m / 4 (with some margin) */
+    lu->spike_pool_capacity = lu->max_updates * (m / 4 + 10);
+    lu->spike_pool_idx = (int*)malloc(lu->spike_pool_capacity * sizeof(int));
+    lu->spike_pool_val = (double*)malloc(lu->spike_pool_capacity * sizeof(double));
+    lu->spike_pool_used = 0;
+
+    if (!lu->spike_pool_idx || !lu->spike_pool_val) {
+        lu_free(lu);
+        return NULL;
     }
 
     /* Spike compaction settings - 200 is a good balance:
@@ -139,19 +150,6 @@ LUFactorization* lu_create(int m) {
     lu->perm_work = (double*)malloc(m * sizeof(double));
 
     if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx || !lu->hs_val || !lu->perm_work) {
-        lu_free(lu);
-        return NULL;
-    }
-
-    /* Pre-allocate spike storage pool
-     * Estimate: each spike has ~m/4 non-zeros on average, max_updates spikes
-     * Pool size = max_updates * m / 4 (with some margin) */
-    lu->spike_pool_size = lu->max_updates * (m / 4 + 10);
-    lu->spike_pool_idx = (int*)malloc(lu->spike_pool_size * sizeof(int));
-    lu->spike_pool_val = (double*)malloc(lu->spike_pool_size * sizeof(double));
-    lu->spike_pool_used = 0;
-
-    if (!lu->spike_pool_idx || !lu->spike_pool_val) {
         lu_free(lu);
         return NULL;
     }
@@ -194,41 +192,13 @@ void lu_free(LUFactorization *lu) {
     free(lu->ft_col_order_inv);
     free(lu->ft_spike_col);
     free(lu->ft_spike_diag);
-
-    if (lu->ft_spike_idx) {
-        for (int i = 0; i < lu->ft_spike_capacity; i++) {
-            /* Only free if not from the pool */
-            int *idx = lu->ft_spike_idx[i];
-            if (idx != NULL && lu->spike_pool_idx != NULL) {
-                int in_pool = (idx >= lu->spike_pool_idx &&
-                              idx < lu->spike_pool_idx + lu->spike_pool_size);
-                if (!in_pool) {
-                    free(idx);
-                }
-            } else if (idx != NULL) {
-                free(idx);
-            }
-        }
-        free(lu->ft_spike_idx);
-    }
-    if (lu->ft_spike_val) {
-        for (int i = 0; i < lu->ft_spike_capacity; i++) {
-            /* Only free if not from the pool */
-            double *val = lu->ft_spike_val[i];
-            if (val != NULL && lu->spike_pool_val != NULL) {
-                int in_pool = (val >= lu->spike_pool_val &&
-                              val < lu->spike_pool_val + lu->spike_pool_size);
-                if (!in_pool) {
-                    free(val);
-                }
-            } else if (val != NULL) {
-                free(val);
-            }
-        }
-        free(lu->ft_spike_val);
-    }
     free(lu->ft_spike_nnz);
+    free(lu->ft_spike_start);
     free(lu->ft_compact_matrix);
+
+    /* Free contiguous spike pool (single allocation for all spike data) */
+    free(lu->spike_pool_idx);
+    free(lu->spike_pool_val);
 
     /* Free hyper-sparse workspace */
     free(lu->hs_work1);
@@ -237,10 +207,6 @@ void lu_free(LUFactorization *lu) {
     free(lu->hs_idx);
     free(lu->hs_val);
     free(lu->perm_work);
-
-    /* Free spike storage pool */
-    free(lu->spike_pool_idx);
-    free(lu->spike_pool_val);
 
     free(lu);
 }
@@ -427,27 +393,16 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     }
     lu->num_eta = 0;
 
-    /* Clear Forrest-Tomlin spikes - only free if allocated outside pool */
+    /* Clear Forrest-Tomlin spikes - contiguous pool storage, just reset counters */
     for (int i = 0; i < lu->ft_num_updates; i++) {
-        /* Check if pointer is from the pool (don't free pool memory) */
-        int *idx = lu->ft_spike_idx[i];
-        if (idx != NULL) {
-            int in_pool = (idx >= lu->spike_pool_idx &&
-                          idx < lu->spike_pool_idx + lu->spike_pool_size);
-            if (!in_pool) {
-                free(idx);
-                free(lu->ft_spike_val[i]);
-            }
-        }
-        lu->ft_spike_idx[i] = NULL;
-        lu->ft_spike_val[i] = NULL;
         lu->ft_spike_nnz[i] = 0;
         lu->ft_spike_diag[i] = 0.0;
+        lu->ft_spike_start[i] = 0;
     }
     lu->ft_num_updates = 0;
     lu->ft_num_compacted = 0;
     lu->ft_compact_valid = 0;
-    lu->spike_pool_used = 0;  /* Reset pool */
+    lu->spike_pool_used = 0;  /* Reset contiguous pool */
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;
@@ -1472,8 +1427,7 @@ static void compact_ft_spikes(LUFactorization *lu, int start, int end) {
     for (int k = start; k < end; k++) {
         int col = lu->ft_spike_col[k];
         double diag = lu->ft_spike_diag[k];
-        int *idx = lu->ft_spike_idx[k];
-        double *val = lu->ft_spike_val[k];
+        int spike_start = lu->ft_spike_start[k];
         int nnz = lu->ft_spike_nnz[k];
 
         double *row_col = &M[col * m];
@@ -1488,8 +1442,8 @@ static void compact_ft_spikes(LUFactorization *lu, int start, int end) {
 
         /* Update other affected rows using ORIGINAL row[col] values */
         for (int p = 0; p < nnz; p++) {
-            int i = idx[p];
-            double v = val[p];
+            int i = lu->spike_pool_idx[spike_start + p];
+            double v = lu->spike_pool_val[spike_start + p];
             double *row_i = &M[i * m];
             for (int j = 0; j < m; j++) {
                 row_i[j] += v * row_copy[j];
@@ -1536,35 +1490,36 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
     if (lu->ft_compact_valid && lu->ft_num_compacted > 0) {
         apply_compacted_matrix(lu, x);
 
-        /* Apply only the non-compacted spikes */
-        const int start = lu->ft_num_compacted;
+        /* Apply only the non-compacted spikes from contiguous pool */
+        const int start_spike = lu->ft_num_compacted;
         const int *cols = lu->ft_spike_col;
         const double *diags = lu->ft_spike_diag;
-        int *const *idxs = lu->ft_spike_idx;
-        double *const *vals = lu->ft_spike_val;
+        const int *starts = lu->ft_spike_start;
         const int *nnzs = lu->ft_spike_nnz;
+        const int *pool_idx = lu->spike_pool_idx;
+        const double *pool_val = lu->spike_pool_val;
 
-        for (int k = start; k < n; k++) {
+        for (int k = start_spike; k < n; k++) {
             int col = cols[k];
             double xc = x[col];
             if (fabs(xc) < RALPH_ZERO_TOL) continue;
             x[col] = diags[k] * xc;
-            const int *idx = idxs[k];
-            const double *val = vals[k];
+            int start = starts[k];
             int nnz = nnzs[k];
             for (int p = 0; p < nnz; p++) {
-                x[idx[p]] += val[p] * xc;
+                x[pool_idx[start + p]] += pool_val[start + p] * xc;
             }
         }
         return;
     }
 
-    /* No compaction - apply all spikes individually */
+    /* No compaction - apply all spikes individually using contiguous pool */
     const int *cols = lu->ft_spike_col;
     const double *diags = lu->ft_spike_diag;
-    int *const *idxs = lu->ft_spike_idx;
-    double *const *vals = lu->ft_spike_val;
+    const int *starts = lu->ft_spike_start;
     const int *nnzs = lu->ft_spike_nnz;
+    const int *pool_idx = lu->spike_pool_idx;
+    const double *pool_val = lu->spike_pool_val;
 
     for (int k = 0; k < n; k++) {
         int col = cols[k];
@@ -1576,13 +1531,12 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
         /* Update diagonal (branchless) */
         x[col] = diags[k] * xc;
 
-        /* Update off-diagonal entries */
-        const int *idx = idxs[k];
-        const double *val = vals[k];
+        /* Update off-diagonal entries from contiguous pool */
+        int start = starts[k];
         int nnz = nnzs[k];
 
         for (int p = 0; p < nnz; p++) {
-            x[idx[p]] += val[p] * xc;
+            x[pool_idx[start + p]] += pool_val[start + p] * xc;
         }
     }
 }
@@ -1613,23 +1567,23 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
     const int n = lu->ft_num_updates;
     const int *cols = lu->ft_spike_col;
     const double *diags = lu->ft_spike_diag;
-    int *const *idxs = lu->ft_spike_idx;
-    double *const *vals = lu->ft_spike_val;
+    const int *starts = lu->ft_spike_start;
     const int *nnzs = lu->ft_spike_nnz;
+    const int *pool_idx = lu->spike_pool_idx;
+    const double *pool_val = lu->spike_pool_val;
 
     /* Apply non-compacted spikes first (in reverse order) */
-    int start = lu->ft_compact_valid ? lu->ft_num_compacted : 0;
+    int start_spike = lu->ft_compact_valid ? lu->ft_num_compacted : 0;
 
-    for (int k = n - 1; k >= start; k--) {
+    for (int k = n - 1; k >= start_spike; k--) {
         int col = cols[k];
-        const int *idx = idxs[k];
-        const double *val = vals[k];
+        int start = starts[k];
         int nnz = nnzs[k];
 
         /* Compute new x[col] = diag * x[col] + sum(off_diag * x) */
         double xc = diags[k] * x[col];
         for (int p = 0; p < nnz; p++) {
-            xc += val[p] * x[idx[p]];
+            xc += pool_val[start + p] * x[pool_idx[start + p]];
         }
         x[col] = xc;
     }
@@ -1691,43 +1645,32 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
 
     /* Store as Forrest-Tomlin spike or eta-file update */
     if (lu->use_ft_updates) {
-        /* Convert OFF-DIAGONAL entries to sparse storage using pool */
-        int *indices = NULL;
-        double *values = NULL;
-        if (off_diag_nnz > 0) {
-            /* Try to use pre-allocated pool first */
-            if (lu->spike_pool_used + off_diag_nnz <= lu->spike_pool_size) {
-                indices = &lu->spike_pool_idx[lu->spike_pool_used];
-                values = &lu->spike_pool_val[lu->spike_pool_used];
-                lu->spike_pool_used += off_diag_nnz;
-            } else {
-                /* Pool full - fall back to malloc */
-                indices = (int*)malloc(off_diag_nnz * sizeof(int));
-                values = (double*)malloc(off_diag_nnz * sizeof(double));
-                if (!indices || !values) {
-                    free(indices);
-                    free(values);
-                    return -1;
-                }
-            }
-
-            int p = 0;
-            for (int i = 0; i < m; i++) {
-                if (i != step_pos && fabs(spike[i]) > RALPH_ZERO_TOL) {
-                    indices[p] = i;
-                    values[p] = spike[i];
-                    p++;
-                }
-            }
+        /* Check if pool has room for this spike */
+        if (lu->spike_pool_used + off_diag_nnz > lu->spike_pool_capacity) {
+            /* Pool full - need refactorization */
+            return -1;
         }
 
-        /* Store FT spike with separate diagonal */
+        /* Store FT spike with contiguous pool storage */
         int k = lu->ft_num_updates;
         lu->ft_spike_col[k] = step_pos;
         lu->ft_spike_diag[k] = diag_val;
-        lu->ft_spike_idx[k] = indices;
-        lu->ft_spike_val[k] = values;
+        lu->ft_spike_start[k] = lu->spike_pool_used;
         lu->ft_spike_nnz[k] = off_diag_nnz;
+
+        /* Copy off-diagonal entries to contiguous pool */
+        if (off_diag_nnz > 0) {
+            int p = 0;
+            for (int i = 0; i < m; i++) {
+                if (i != step_pos && fabs(spike[i]) > RALPH_ZERO_TOL) {
+                    lu->spike_pool_idx[lu->spike_pool_used + p] = i;
+                    lu->spike_pool_val[lu->spike_pool_used + p] = spike[i];
+                    p++;
+                }
+            }
+            lu->spike_pool_used += off_diag_nnz;
+        }
+
         lu->ft_num_updates++;
     } else {
         /* Store as eta-file update (includes diagonal) - still uses malloc */

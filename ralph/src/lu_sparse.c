@@ -1415,27 +1415,16 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     }
     lu->num_eta = 0;
 
-    /* Clear Forrest-Tomlin spikes - only free if allocated outside pool */
+    /* Clear Forrest-Tomlin spikes - contiguous pool storage, just reset counters */
     for (int i = 0; i < lu->ft_num_updates; i++) {
-        /* Check if pointer is from the pool (don't free pool memory) */
-        int *idx = lu->ft_spike_idx[i];
-        if (idx != NULL) {
-            int in_pool = (idx >= lu->spike_pool_idx &&
-                          idx < lu->spike_pool_idx + lu->spike_pool_size);
-            if (!in_pool) {
-                free(idx);
-                free(lu->ft_spike_val[i]);
-            }
-        }
-        lu->ft_spike_idx[i] = NULL;
-        lu->ft_spike_val[i] = NULL;
         lu->ft_spike_nnz[i] = 0;
         lu->ft_spike_diag[i] = 0.0;
+        lu->ft_spike_start[i] = 0;
     }
     lu->ft_num_updates = 0;
     lu->ft_num_compacted = 0;
     lu->ft_compact_valid = 0;
-    lu->spike_pool_used = 0;  /* Reset pool */
+    lu->spike_pool_used = 0;  /* Reset contiguous pool */
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;
@@ -2061,26 +2050,16 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     free(U_pos);
     lu->nnz_U = U_nnz;
 
-    /* Clear eta/FT structures */
-    for (int i = 0; i < lu->num_eta; i++) {
-        int *idx = lu->ft_spike_idx[i];
-        if (idx != NULL) {
-            int in_pool = (idx >= lu->spike_pool_idx &&
-                          idx < lu->spike_pool_idx + lu->spike_pool_size);
-            if (!in_pool) {
-                free(idx);
-                free(lu->ft_spike_val[i]);
-            }
-        }
-        lu->ft_spike_idx[i] = NULL;
-        lu->ft_spike_val[i] = NULL;
+    /* Clear eta/FT structures - contiguous pool storage, just reset counters */
+    for (int i = 0; i < lu->ft_num_updates; i++) {
         lu->ft_spike_nnz[i] = 0;
         lu->ft_spike_diag[i] = 0.0;
+        lu->ft_spike_start[i] = 0;
     }
     lu->ft_num_updates = 0;
     lu->ft_num_compacted = 0;
     lu->ft_compact_valid = 0;
-    lu->spike_pool_used = 0;
+    lu->spike_pool_used = 0;  /* Reset contiguous pool */
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;
