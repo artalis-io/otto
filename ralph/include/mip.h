@@ -194,6 +194,12 @@ Cut* cut_create(int max_nnz);
 void cut_free(Cut *cut);
 int cut_pool_add(CutPool *pool, Cut *cut);
 
+/* Cut pool management */
+void cut_pool_cleanup(CutPool *pool, int max_age);
+void cut_pool_age(CutPool *pool);
+int cut_pool_update_efficacy(CutPool *pool, const double *x, int n);
+void cut_pool_clear(CutPool *pool);
+
 /* Cut generation */
 int generate_gomory_cuts(MIPSolver *solver, CutPool *pool);
 int generate_mir_cuts(MIPSolver *solver, CutPool *pool);
