@@ -853,8 +853,12 @@ int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
     /* Steepest edge pricing: max |rc_j| / sqrt(gamma_j)
      * Uses exact weights updated with the formula:
      *   gamma_j = ||B^{-1} * a_j||^2
+     *
+     * Optimization: Compare rc²/weight instead of |rc|/sqrt(weight)
+     * to eliminate expensive sqrt() calls. Mathematically equivalent:
+     *   |rc|/sqrt(w) > t  ⟺  rc²/w > t²
      */
-    double best_ratio = RALPH_OPT_TOL;
+    double best_ratio_sq = RALPH_OPT_TOL * RALPH_OPT_TOL;  /* Squared threshold */
     *entering = -1;
 
     for (int j = 0; j < tab->n; j++) {
@@ -864,18 +868,18 @@ int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
         double weight = tab->se_weights[j];
         if (weight < 1e-10) weight = 1.0;
 
-        double ratio = 0.0;
+        double ratio_sq = 0.0;
 
         if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
-            ratio = (-rc) / sqrt(weight);
+            ratio_sq = (rc * rc) / weight;
         } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
-            ratio = rc / sqrt(weight);
+            ratio_sq = (rc * rc) / weight;
         } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) {
-            ratio = fabs(rc) / sqrt(weight);
+            ratio_sq = (rc * rc) / weight;
         }
 
-        if (ratio > best_ratio) {
-            best_ratio = ratio;
+        if (ratio_sq > best_ratio_sq) {
+            best_ratio_sq = ratio_sq;
             *entering = j;
         }
     }
