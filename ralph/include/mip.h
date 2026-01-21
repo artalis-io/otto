@@ -203,6 +203,7 @@ void cut_pool_clear(CutPool *pool);
 /* Cut generation */
 int generate_gomory_cuts(MIPSolver *solver, CutPool *pool);
 int generate_mir_cuts(MIPSolver *solver, CutPool *pool);
+int generate_cover_cuts(MIPSolver *solver, CutPool *pool);
 int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts);
 
 /* Primal heuristics */

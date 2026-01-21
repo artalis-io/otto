@@ -738,6 +738,214 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool) {
 }
 
 /* ============================================================================
+ * Cover Cuts (Knapsack Covers)
+ * ============================================================================ */
+
+/*
+ * Check if a constraint is a knapsack constraint:
+ * - All variables are binary
+ * - All coefficients are positive
+ * - Constraint sense is <= (or =)
+ *
+ * Returns 1 if knapsack, 0 otherwise
+ */
+static int is_knapsack_constraint(LPModel *model, int row, const int *is_integer,
+                                  double *coefs, int *vars, int *num_vars) {
+    int n = model->num_vars;
+    int count = 0;
+
+    /* Get row coefficients */
+    double *row_data = (double*)calloc(n, sizeof(double));
+    if (!row_data) return 0;
+
+    sparse_get_row(model->A, row, row_data);
+
+    /* Check each variable in the row */
+    for (int j = 0; j < n; j++) {
+        double aij = row_data[j];
+        if (fabs(aij) < RALPH_ZERO_TOL) continue;
+
+        /* Must be positive coefficient */
+        if (aij < RALPH_ZERO_TOL) {
+            free(row_data);
+            return 0;
+        }
+
+        /* Must be binary variable */
+        if (model->var_type[j] != 'B') {
+            free(row_data);
+            return 0;
+        }
+
+        /* Must be in is_integer array */
+        if (!is_integer || !is_integer[j]) {
+            free(row_data);
+            return 0;
+        }
+
+        coefs[count] = aij;
+        vars[count] = j;
+        count++;
+    }
+
+    free(row_data);
+
+    /* Must have at least 2 variables */
+    if (count < 2) return 0;
+
+    /* Constraint sense must be <= */
+    if (model->sense[row] != 'L' && model->sense[row] != 'E') return 0;
+
+    *num_vars = count;
+    return 1;
+}
+
+/*
+ * Generate a cover cut from a knapsack constraint.
+ *
+ * A cover C is a set of variables where sum(a_j for j in C) > b.
+ * The cover inequality is: sum(x_j for j in C) <= |C| - 1
+ *
+ * We greedily build a minimal cover by selecting variables with highest
+ * LP solution values first (most violated in current LP relaxation).
+ */
+static Cut* generate_single_cover_cut(LPModel *model, int row, double rhs,
+                                      int *vars, double *coefs, int num_vars,
+                                      const double *x) {
+    /* Compute coefficient sum and create sorted list by LP value (descending) */
+    double coef_sum = 0.0;
+    for (int i = 0; i < num_vars; i++) {
+        coef_sum += coefs[i];
+    }
+
+    /* If coefficient sum <= rhs, no cover exists */
+    if (coef_sum <= rhs + RALPH_ZERO_TOL) return NULL;
+
+    /* Sort variables by LP value (descending) - simple bubble sort for small sets */
+    int *order = (int*)malloc(num_vars * sizeof(int));
+    for (int i = 0; i < num_vars; i++) order[i] = i;
+
+    for (int i = 0; i < num_vars - 1; i++) {
+        for (int j = i + 1; j < num_vars; j++) {
+            if (x[vars[order[j]]] > x[vars[order[i]]]) {
+                int tmp = order[i];
+                order[i] = order[j];
+                order[j] = tmp;
+            }
+        }
+    }
+
+    /* Greedily build minimal cover */
+    int *in_cover = (int*)calloc(num_vars, sizeof(int));
+    double cover_coef_sum = 0.0;
+    int cover_size = 0;
+
+    for (int i = 0; i < num_vars && cover_coef_sum <= rhs; i++) {
+        int idx = order[i];
+        in_cover[idx] = 1;
+        cover_coef_sum += coefs[idx];
+        cover_size++;
+    }
+
+    free(order);
+
+    /* Verify we have a valid cover */
+    if (cover_coef_sum <= rhs + RALPH_ZERO_TOL) {
+        free(in_cover);
+        return NULL;
+    }
+
+    /* Check if cover cut is violated by current LP solution */
+    double lhs = 0.0;
+    for (int i = 0; i < num_vars; i++) {
+        if (in_cover[i]) {
+            lhs += x[vars[i]];
+        }
+    }
+
+    double cut_rhs = cover_size - 1.0;
+    double violation = lhs - cut_rhs;
+
+    if (violation < RALPH_FEAS_TOL) {
+        /* Cut not violated */
+        free(in_cover);
+        return NULL;
+    }
+
+    /* Create the cut */
+    Cut *cut = cut_create(cover_size);
+    if (!cut) {
+        free(in_cover);
+        return NULL;
+    }
+
+    cut->type = CUT_KNAPSACK;
+    cut->sense = 'L';
+    cut->rhs = cut_rhs;
+    cut->violation = violation;
+
+    for (int i = 0; i < num_vars; i++) {
+        if (in_cover[i]) {
+            cut->indices[cut->nnz] = vars[i];
+            cut->values[cut->nnz] = 1.0;
+            cut->nnz++;
+        }
+    }
+
+    free(in_cover);
+    return cut;
+}
+
+int generate_cover_cuts(MIPSolver *solver, CutPool *pool) {
+    if (!solver || !solver->lp_solver || !solver->lp_solver->solution) return 0;
+
+    LPModel *model = solver->original_model;
+    SimplexTableau *tab = solver->lp_solver->tableau;
+    const double *x = solver->lp_solver->solution;
+    int n = model->num_vars;
+    int m = model->num_cons;
+    int cuts_added = 0;
+
+    /* Skip if no binary variables */
+    if (model->num_binary == 0) return 0;
+
+    /* Allocate working arrays */
+    double *coefs = (double*)malloc(n * sizeof(double));
+    int *vars = (int*)malloc(n * sizeof(int));
+    if (!coefs || !vars) {
+        free(coefs);
+        free(vars);
+        return 0;
+    }
+
+    /* Scan constraints for knapsack structure */
+    for (int i = 0; i < m; i++) {
+        int num_vars_in_row = 0;
+
+        if (!is_knapsack_constraint(model, i, solver->is_integer,
+                                    coefs, vars, &num_vars_in_row)) {
+            continue;
+        }
+
+        double rhs = model->b[i];
+
+        /* Generate cover cut if possible */
+        Cut *cut = generate_single_cover_cut(model, i, rhs, vars, coefs,
+                                             num_vars_in_row, x);
+        if (cut) {
+            cut_pool_add(pool, cut);
+            cuts_added++;
+
+            if (cuts_added >= solver->max_cuts_per_round) break;
+        }
+    }
+
+    free(coefs);
+    free(vars);
+    return cuts_added;
+}
+
+/* ============================================================================
  * Cut Application
  * ============================================================================ */
 
