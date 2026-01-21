@@ -191,6 +191,10 @@ typedef struct {
     int partial_cand_count;     /* Current number of candidates in hot set */
     int partial_cand_capacity;  /* Allocated capacity for candidates */
 
+    /* Lazy reduced cost computation */
+    int duals_valid;            /* 1 if y[] contains valid dual values */
+    int rc_all_valid;           /* 1 if rc[] contains all valid reduced costs */
+
     /* Auxiliary variable mapping (for cut generation) */
     int *aux_row;           /* For each aux var j >= num_vars: which constraint row */
     double *aux_coef;       /* For each aux var: coefficient in that row (+1 or -1) */
