@@ -533,6 +533,10 @@ SimplexTableau* tableau_create(LPModel *model) {
     tab->pricing_strategy = 2;  /* Default to Devex */
     tab->devex_refcount = 0;
 
+    /* Initialize lazy reduced cost computation flags */
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+
     /* Create LU factorization */
     tab->lu = lu_create(tab->m);
     if (!tab->lu) {
@@ -797,7 +801,84 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
         tab->rc[tab->basis[k]] = 0.0;
     }
 
+    /* Mark both duals and full rc as valid */
+    tab->duals_valid = 1;
+    tab->rc_all_valid = 1;
+
     return 0;
+}
+
+/* Compute only dual values y = B^{-T} * c_B (for lazy rc computation) */
+int tableau_compute_duals(SimplexTableau *tab) {
+    /* Count non-zeros in c_B */
+    int nnz_cb = 0;
+    for (int k = 0; k < tab->m; k++) {
+        if (fabs(tab->c_ext[tab->basis[k]]) > RALPH_ZERO_TOL) {
+            nnz_cb++;
+        }
+    }
+
+    /* If c_B is sparse (less than 10% non-zeros), use sparse BTRAN */
+    if (nnz_cb < tab->m / 10) {
+        int *cb_idx = (int*)malloc(nnz_cb * sizeof(int));
+        double *cb_val = (double*)malloc(nnz_cb * sizeof(double));
+        if (cb_idx && cb_val) {
+            int p = 0;
+            for (int k = 0; k < tab->m; k++) {
+                double c = tab->c_ext[tab->basis[k]];
+                if (fabs(c) > RALPH_ZERO_TOL) {
+                    cb_idx[p] = k;
+                    cb_val[p] = c;
+                    p++;
+                }
+            }
+            lu_solve_transpose_sparse(tab->lu, nnz_cb, cb_idx, cb_val, tab->y);
+            free(cb_idx);
+            free(cb_val);
+        } else {
+            free(cb_idx);
+            free(cb_val);
+            /* Fallback to dense */
+            vec_set_zero(tab->work1, tab->m);
+            for (int k = 0; k < tab->m; k++) {
+                tab->work1[k] = tab->c_ext[tab->basis[k]];
+            }
+            lu_solve_transpose(tab->lu, tab->work1, tab->y);
+        }
+    } else {
+        /* Dense BTRAN */
+        vec_set_zero(tab->work1, tab->m);
+        for (int k = 0; k < tab->m; k++) {
+            tab->work1[k] = tab->c_ext[tab->basis[k]];
+        }
+        lu_solve_transpose(tab->lu, tab->work1, tab->y);
+    }
+
+    tab->duals_valid = 1;
+    tab->rc_all_valid = 0;  /* Full rc[] not computed */
+
+    return 0;
+}
+
+/* Compute single reduced cost rc[j] = c[j] - A[:,j]' * y
+ * Requires duals (y) to be valid. Returns the reduced cost.
+ * Caches the result in tab->rc[j] for future use and incremental updates. */
+static inline double tableau_get_rc(SimplexTableau *tab, int j) {
+    /* If full rc[] is valid, just return it */
+    if (tab->rc_all_valid) {
+        return tab->rc[j];
+    }
+
+    /* Compute lazily: rc[j] = c[j] - A[:,j]' * y */
+    double rc = tab->c_ext[j] - sparse_dot_column(tab->A_ext, j, tab->y);
+    tab->rc[j] = rc;  /* Cache for incremental updates in simplex_pivot */
+    return rc;
+}
+
+/* Invalidate reduced costs (call after basis change) */
+static inline void tableau_invalidate_rc(SimplexTableau *tab) {
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
 }
 
 /* ============================================================================
@@ -948,7 +1029,8 @@ int pricing_devex(SimplexTableau *tab, int *entering) {
 static inline int is_entering_eligible(SimplexTableau *tab, int j, double *rc_out) {
     if (tab->var_status[j] == RALPH_BASIC) return 0;
 
-    double rc = tab->rc[j];
+    /* Use lazy RC computation - computes on demand if not already cached */
+    double rc = tableau_get_rc(tab, j);
     *rc_out = rc;
 
     if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -PARTIAL_PRICE_THRESHOLD) {
@@ -975,6 +1057,11 @@ static inline void add_to_hot_set(SimplexTableau *tab, int var) {
 
 int pricing_partial(SimplexTableau *tab, int *entering) {
     *entering = -1;
+
+    /* Ensure duals are valid for lazy RC computation */
+    if (!tab->duals_valid) {
+        tableau_compute_duals(tab);
+    }
 
     int n = tab->n;
     double best_rc_val = 0.0;
@@ -1408,7 +1495,20 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         }
     }
 
-    /* Update reduced costs and weights in a single merged loop */
+    /* Update reduced costs and weights in a single merged loop.
+     *
+     * In lazy RC mode (rc_all_valid == 0), skip the O(n) incremental update
+     * and just invalidate duals. This saves O(n * avg_col_nnz) per iteration
+     * at the cost of O(m²) BTRAN to recompute duals next iteration.
+     * For large n with partial pricing (examining ~200-500 vars), this is faster.
+     */
+    if (!tab->rc_all_valid) {
+        /* Lazy RC mode: skip incremental updates, invalidate duals */
+        tab->duals_valid = 0;
+        tab->rc[entering] = 0.0;  /* Basic variables have rc = 0 */
+        return 0;
+    }
+
     if (fabs(pivot) > RALPH_PIVOT_TOL) {
         double rc_enter = tab->rc[entering];
         double rc_ratio = rc_enter / pivot;
@@ -1751,8 +1851,13 @@ static int simplex_phase2(SimplexSolver *solver) {
     const int NON_DEGEN_THRESHOLD = 100;  /* Non-degenerate pivots to turn Bland off */
     int use_bland = 0;
 
-    /* Compute initial reduced costs */
-    tableau_compute_reduced_costs(tab);
+    /* Compute initial reduced costs.
+     * For partial pricing, use lazy mode (duals only) for efficiency. */
+    if (solver->pricing_strategy == 3) {
+        tableau_compute_duals(tab);  /* Lazy mode: duals only */
+    } else {
+        tableau_compute_reduced_costs(tab);
+    }
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
@@ -1894,13 +1999,24 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
             /* After refactorization, recompute solution to eliminate drift */
             tableau_compute_solution(tab);
-            tableau_compute_reduced_costs(tab);  /* Recompute with fresh factorization */
+            /* For partial pricing, use lazy RC computation (duals only).
+             * For other strategies, compute full RC for incremental updates. */
+            if (solver->pricing_strategy == 3) {
+                tableau_compute_duals(tab);  /* Lazy mode: duals only */
+            } else {
+                tableau_compute_reduced_costs(tab);  /* Full RC for incremental updates */
+            }
         }
 
         /* Periodically recompute solution and reduced costs to correct numerical drift */
         if (iter > 0 && iter % 200 == 0) {
             tableau_compute_solution(tab);
-            tableau_compute_reduced_costs(tab);  /* Full recomputation to correct drift */
+            /* For partial pricing, use lazy RC. For others, full RC. */
+            if (solver->pricing_strategy == 3) {
+                tableau_compute_duals(tab);  /* Lazy mode */
+            } else {
+                tableau_compute_reduced_costs(tab);  /* Full recomputation */
+            }
             if (solver->verbose) {
                 int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
                 printf("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
