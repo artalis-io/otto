@@ -222,7 +222,7 @@ int ralph_optimize(RalphModel *model) {
     PresolveResult *presolved = NULL;
     LPModel *solve_model = model->lp_model;
 
-    if (model->presolve && !ralph_is_mip(model)) {
+    if (model->presolve) {
         presolved = presolve(model->lp_model);
         if (presolved && presolved->reduced_model) {
             solve_model = presolved->reduced_model;
@@ -235,9 +235,10 @@ int ralph_optimize(RalphModel *model) {
     }
 
     if (ralph_is_mip(model)) {
-        /* MIP solve */
-        model->mip_solver = mip_create(model->lp_model);
+        /* MIP solve - use presolved model if available */
+        model->mip_solver = mip_create(solve_model);
         if (!model->mip_solver) {
+            if (presolved) presolve_free(presolved);
             model->status = RALPH_STATUS_ERROR;
             return -1;
         }
@@ -259,11 +260,22 @@ int ralph_optimize(RalphModel *model) {
             model->best_bound = model->mip_solver->best_bound;
             model->node_count = model->mip_solver->nodes_explored;
 
-            /* Copy solution */
-            model->solution = (double*)malloc(n_orig * sizeof(double));
+            /* Copy solution - postsolve if presolve was applied */
+            model->solution = (double*)calloc(n_orig, sizeof(double));
             if (model->solution) {
-                memcpy(model->solution, model->mip_solver->best_solution, n_orig * sizeof(double));
+                if (presolved && presolved->reduced_model) {
+                    /* Postsolve: recover original solution from presolved */
+                    postsolve(presolved, model->mip_solver->best_solution, model->solution);
+                } else {
+                    memcpy(model->solution, model->mip_solver->best_solution, n_orig * sizeof(double));
+                }
             }
+        }
+
+        /* Free presolve result */
+        if (presolved) {
+            presolve_free(presolved);
+            presolved = NULL;
         }
     } else {
         /* LP solve */

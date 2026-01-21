@@ -25,6 +25,10 @@ typedef struct {
     int *var_map_inv;           /* original var -> reduced var (-1 if removed) */
     int *con_map_inv;           /* original con -> reduced con (-1 if removed) */
 
+    /* Variable type preservation for MIP */
+    char *orig_var_types;       /* Original variable types before presolve */
+    int num_orig_vars;          /* Original number of variables */
+
     /* Bound changes for postsolve */
     int num_bound_changes;
     int *bound_change_vars;

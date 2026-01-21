@@ -635,6 +635,191 @@ int presolve_bound_tightening(PresolveContext *ctx) {
 }
 
 /* ============================================================================
+ * MIP-Specific Presolve: Probing
+ * ============================================================================ */
+
+/*
+ * Probing: Fix binary variables by checking if fixing to 0 or 1 leads to
+ * infeasibility. Also tighten bounds by computing implied bounds when
+ * a binary is set to each value.
+ */
+int presolve_probing(PresolveContext *ctx) {
+    LPModel *model = ctx->working;
+    int n = model->num_vars;
+    int count = 0;
+
+    /* Allocate working arrays for implied bounds */
+    double *implied_lb0 = (double*)malloc(n * sizeof(double));
+    double *implied_ub0 = (double*)malloc(n * sizeof(double));
+    double *implied_lb1 = (double*)malloc(n * sizeof(double));
+    double *implied_ub1 = (double*)malloc(n * sizeof(double));
+    double *row = (double*)malloc(n * sizeof(double));
+
+    if (!implied_lb0 || !implied_ub0 || !implied_lb1 || !implied_ub1 || !row) {
+        free(implied_lb0);
+        free(implied_ub0);
+        free(implied_lb1);
+        free(implied_ub1);
+        free(row);
+        return 0;
+    }
+
+    /* Limit probing iterations to avoid expensive O(n*m*n) worst case */
+    int max_probe_vars = 100;
+    int probed = 0;
+
+    for (int j = 0; j < n && probed < max_probe_vars; j++) {
+        if (ctx->col_deleted[j]) continue;
+
+        /* Only probe binary variables */
+        if (model->var_type[j] != 'B') continue;
+        if (model->lb[j] > 0.5 || model->ub[j] < 0.5) continue;  /* Already fixed */
+
+        probed++;
+
+        /* Initialize implied bounds for both settings */
+        for (int k = 0; k < n; k++) {
+            implied_lb0[k] = model->lb[k];
+            implied_ub0[k] = model->ub[k];
+            implied_lb1[k] = model->lb[k];
+            implied_ub1[k] = model->ub[k];
+        }
+
+        /* Try x_j = 0 */
+        implied_lb0[j] = 0.0;
+        implied_ub0[j] = 0.0;
+        int infeas_0 = 0;
+
+        /* Propagate bounds when x_j = 0 */
+        for (int i = 0; i < model->num_cons && !infeas_0; i++) {
+            if (ctx->row_deleted[i]) continue;
+
+            sparse_get_row(model->A, i, row);
+            double a_j = row[j];
+            if (fabs(a_j) < RALPH_ZERO_TOL) continue;
+
+            double rhs = model->b[i];
+
+            /* Compute row activity bounds with x_j = 0 */
+            double row_lb = 0.0, row_ub = 0.0;
+            int row_lb_finite = 1, row_ub_finite = 1;
+
+            for (int k = 0; k < n; k++) {
+                if (ctx->col_deleted[k]) continue;
+                double a_k = row[k];
+                if (fabs(a_k) < RALPH_ZERO_TOL) continue;
+
+                double lb_k = (k == j) ? 0.0 : implied_lb0[k];
+                double ub_k = (k == j) ? 0.0 : implied_ub0[k];
+
+                if (a_k > 0) {
+                    if (lb_k <= -RALPH_INFINITY/2) row_lb_finite = 0;
+                    else row_lb += a_k * lb_k;
+                    if (ub_k >= RALPH_INFINITY/2) row_ub_finite = 0;
+                    else row_ub += a_k * ub_k;
+                } else {
+                    if (ub_k >= RALPH_INFINITY/2) row_lb_finite = 0;
+                    else row_lb += a_k * ub_k;
+                    if (lb_k <= -RALPH_INFINITY/2) row_ub_finite = 0;
+                    else row_ub += a_k * lb_k;
+                }
+            }
+
+            /* Check feasibility */
+            if (model->sense[i] == 'L') {
+                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_0 = 1;
+            } else if (model->sense[i] == 'G') {
+                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_0 = 1;
+            } else {  /* 'E' */
+                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_0 = 1;
+                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_0 = 1;
+            }
+        }
+
+        /* Try x_j = 1 */
+        implied_lb1[j] = 1.0;
+        implied_ub1[j] = 1.0;
+        int infeas_1 = 0;
+
+        /* Propagate bounds when x_j = 1 */
+        for (int i = 0; i < model->num_cons && !infeas_1; i++) {
+            if (ctx->row_deleted[i]) continue;
+
+            sparse_get_row(model->A, i, row);
+            double a_j = row[j];
+            if (fabs(a_j) < RALPH_ZERO_TOL) continue;
+
+            double rhs = model->b[i];
+
+            /* Compute row activity bounds with x_j = 1 */
+            double row_lb = 0.0, row_ub = 0.0;
+            int row_lb_finite = 1, row_ub_finite = 1;
+
+            for (int k = 0; k < n; k++) {
+                if (ctx->col_deleted[k]) continue;
+                double a_k = row[k];
+                if (fabs(a_k) < RALPH_ZERO_TOL) continue;
+
+                double lb_k = (k == j) ? 1.0 : implied_lb1[k];
+                double ub_k = (k == j) ? 1.0 : implied_ub1[k];
+
+                if (a_k > 0) {
+                    if (lb_k <= -RALPH_INFINITY/2) row_lb_finite = 0;
+                    else row_lb += a_k * lb_k;
+                    if (ub_k >= RALPH_INFINITY/2) row_ub_finite = 0;
+                    else row_ub += a_k * ub_k;
+                } else {
+                    if (ub_k >= RALPH_INFINITY/2) row_lb_finite = 0;
+                    else row_lb += a_k * ub_k;
+                    if (lb_k <= -RALPH_INFINITY/2) row_ub_finite = 0;
+                    else row_ub += a_k * lb_k;
+                }
+            }
+
+            /* Check feasibility */
+            if (model->sense[i] == 'L') {
+                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_1 = 1;
+            } else if (model->sense[i] == 'G') {
+                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_1 = 1;
+            } else {  /* 'E' */
+                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_1 = 1;
+                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_1 = 1;
+            }
+        }
+
+        /* Analyze probing results */
+        if (infeas_0 && infeas_1) {
+            /* Both settings infeasible - problem is infeasible */
+            free(implied_lb0);
+            free(implied_ub0);
+            free(implied_lb1);
+            free(implied_ub1);
+            free(row);
+            return -1;  /* Infeasible */
+        } else if (infeas_0) {
+            /* x_j = 0 infeasible -> fix x_j = 1 */
+            model->lb[j] = 1.0;
+            model->ub[j] = 1.0;
+            count++;
+        } else if (infeas_1) {
+            /* x_j = 1 infeasible -> fix x_j = 0 */
+            model->lb[j] = 0.0;
+            model->ub[j] = 0.0;
+            count++;
+        }
+        /* If neither infeasible, we could derive tighter bounds on other variables
+         * by taking the intersection, but we skip this for simplicity */
+    }
+
+    free(implied_lb0);
+    free(implied_ub0);
+    free(implied_lb1);
+    free(implied_ub1);
+    free(row);
+    return count;
+}
+
+/* ============================================================================
  * Main Presolve Interface
  * ============================================================================ */
 
@@ -643,6 +828,11 @@ PresolveResult* presolve(LPModel *model) {
 
     PresolveContext *ctx = presolve_context_create(model);
     if (!ctx) return NULL;
+
+    /* Enable probing for MIP (models with binary variables) */
+    if (model->num_binary > 0) {
+        ctx->probing = 1;
+    }
 
     PresolveResult *result = (PresolveResult*)calloc(1, sizeof(PresolveResult));
     if (!result) {
@@ -706,6 +896,14 @@ PresolveResult* presolve(LPModel *model) {
             changed += n;
             result->bounds_tightened += n;
         }
+
+        /* MIP-specific: probing for binary variables */
+        if (ctx->probing && model->num_binary > 0) {
+            int n = presolve_probing(ctx);
+            if (n < 0) { status = -1; break; }
+            changed += n;
+            result->vars_removed += n;  /* Probing fixes variables */
+        }
     }
 
     if (status < 0) {
@@ -718,6 +916,38 @@ PresolveResult* presolve(LPModel *model) {
     /* Build reduced model */
     result->reduced_model = ctx->working;
     ctx->working = NULL;  /* Transfer ownership */
+
+    /* Preserve original variable types for MIP */
+    result->num_orig_vars = model->num_vars;
+    result->orig_var_types = (char*)malloc(model->num_vars * sizeof(char));
+    if (result->orig_var_types) {
+        memcpy(result->orig_var_types, model->var_type, model->num_vars * sizeof(char));
+    }
+
+    /* Ensure reduced model has correct variable types */
+    if (result->reduced_model && result->reduced_model->var_type) {
+        /* The working model was a copy of original, but we need to update
+         * var_type array to reflect only non-deleted variables in correct order */
+        int new_var = 0;
+        for (int j = 0; j < model->num_vars; j++) {
+            if (!ctx->col_deleted[j]) {
+                result->reduced_model->var_type[new_var] = model->var_type[j];
+                new_var++;
+            }
+        }
+        /* Recount integers and binaries */
+        result->reduced_model->num_integers = 0;
+        result->reduced_model->num_binary = 0;
+        for (int j = 0; j < result->reduced_model->num_vars; j++) {
+            if (result->reduced_model->var_type[j] == 'I' ||
+                result->reduced_model->var_type[j] == 'B') {
+                result->reduced_model->num_integers++;
+                if (result->reduced_model->var_type[j] == 'B') {
+                    result->reduced_model->num_binary++;
+                }
+            }
+        }
+    }
 
     /* Build mappings */
     result->var_map = (int*)malloc(model->num_vars * sizeof(int));
@@ -764,6 +994,7 @@ void presolve_free(PresolveResult *result) {
     free(result->con_map);
     free(result->var_map_inv);
     free(result->con_map_inv);
+    free(result->orig_var_types);
     free(result->bound_change_vars);
     free(result->old_lb);
     free(result->old_ub);
