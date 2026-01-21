@@ -1074,8 +1074,8 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
     const double *col_val;
     sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
 
-    /* Use regular sparse solve for stability */
-    lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);
+    /* Use hyper-sparse FTRAN for better performance on sparse columns */
+    lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
 
     double dir = 1.0;
     if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
@@ -1130,8 +1130,8 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     const double *col_val;
     sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
 
-    /* Use regular sparse solve for stability (hyper-sparse was unstable) */
-    lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);
+    /* Use hyper-sparse FTRAN for better performance on sparse columns */
+    lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
 
     double dir = 1.0;  /* Direction of movement */
     if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {

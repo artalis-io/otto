@@ -157,9 +157,10 @@ LUFactorization* lu_create(int m) {
     lu->hs_marked = (int*)calloc(m, sizeof(int));
     lu->hs_idx = (int*)malloc(m * sizeof(int));
     lu->hs_val = (double*)malloc(m * sizeof(double));
+    lu->hs_stack = (int*)malloc(m * sizeof(int));
     lu->perm_work = (double*)malloc(m * sizeof(double));
 
-    if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx || !lu->hs_val || !lu->perm_work) {
+    if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx || !lu->hs_val || !lu->hs_stack || !lu->perm_work) {
         lu_free(lu);
         return NULL;
     }
@@ -216,6 +217,7 @@ void lu_free(LUFactorization *lu) {
     free(lu->hs_marked);
     free(lu->hs_idx);
     free(lu->hs_val);
+    free(lu->hs_stack);
     free(lu->perm_work);
 
     free(lu);
@@ -947,7 +949,7 @@ static void compute_reach_L(const LUFactorization *lu,
     int min_reached = m, max_reached = -1;
 
     /* Stack-based DFS to mark all reachable indices */
-    int *stack = (int*)lu->hs_val;  /* Reuse hs_val as int stack */
+    int *stack = lu->hs_stack;  /* Dedicated stack workspace */
     int stack_top;
 
     for (int k = 0; k < nnz_rhs; k++) {
@@ -1008,7 +1010,7 @@ static void compute_reach_U(const LUFactorization *lu,
     /* Track min/max reached for efficient scan bounds */
     int min_reached = m, max_reached = -1;
 
-    int *stack = (int*)lu->hs_val;  /* Reuse hs_val as int stack */
+    int *stack = lu->hs_stack;  /* Dedicated stack workspace */
     int stack_top;
 
     for (int k = 0; k < nnz_rhs; k++) {
@@ -1048,29 +1050,37 @@ static void compute_reach_U(const LUFactorization *lu,
 /*
  * Sparse forward solve: Lx = b where b and x are sparse.
  *
+ * NOTE: b_idx and x_idx MUST NOT alias. The caller must ensure this.
+ *
  * Input:
  *   nnz_b, b_idx, b_val: sparse RHS (in permuted coordinates)
- *   x: dense output vector (zeroed on entry for non-reach indices)
- *   reach, reach_nnz: precomputed reach (or NULL to compute)
+ *   x: dense output vector (will be cleared for reach indices)
  *   marked: workspace of size m
  *
  * Output:
  *   x: solution values at reach indices
  *   x_idx, x_nnz: sparse representation of result
+ *   reach_nnz_out: total reach size (for cleanup)
  */
 static void solve_L_sparse(const LUFactorization *lu,
                            int nnz_b, const int *b_idx, const double *b_val,
                            double *x,
                            int *x_idx, int *x_nnz,
-                           int *marked) {
+                           int *marked,
+                           int *reach_nnz_out) {
     int m = lu->m;
 
-    /* Compute reach if not provided */
-    int *reach = x_idx;  /* Reuse output array */
+    /* Compute reach - stored in x_idx */
+    int *reach = x_idx;
     int reach_nnz;
     compute_reach_L(lu, nnz_b, b_idx, reach, &reach_nnz, marked);
 
-    /* Initialize x with RHS values */
+    /* Clear x for all reach indices (critical for correctness!) */
+    for (int k = 0; k < reach_nnz; k++) {
+        x[reach[k]] = 0.0;
+    }
+
+    /* Initialize x with RHS values (b_idx must not alias x_idx!) */
     for (int k = 0; k < nnz_b; k++) {
         int j = b_idx[k];
         if (j >= 0 && j < m) {
@@ -1092,6 +1102,9 @@ static void solve_L_sparse(const LUFactorization *lu,
         }
     }
 
+    /* Return reach size for caller to use for cleanup */
+    if (reach_nnz_out) *reach_nnz_out = reach_nnz;
+
     /* Build sparse output (indices already in reach) */
     *x_nnz = 0;
     for (int k = 0; k < reach_nnz; k++) {
@@ -1105,18 +1118,26 @@ static void solve_L_sparse(const LUFactorization *lu,
 
 /*
  * Sparse backward solve: Ux = b where b and x are sparse.
+ *
+ * NOTE: b_idx and x_idx MUST NOT alias. The caller must ensure this.
  */
 static void solve_U_sparse(const LUFactorization *lu,
                            int nnz_b, const int *b_idx, const double *b_val,
                            double *x,
                            int *x_idx, int *x_nnz,
-                           int *marked) {
+                           int *marked,
+                           int *reach_nnz_out) {
     int m = lu->m;
 
     /* Compute reach */
     int *reach = x_idx;
     int reach_nnz;
     compute_reach_U(lu, nnz_b, b_idx, reach, &reach_nnz, marked);
+
+    /* Clear x for all reach indices (critical for correctness!) */
+    for (int k = 0; k < reach_nnz; k++) {
+        x[reach[k]] = 0.0;
+    }
 
     /* Initialize x with RHS values */
     for (int k = 0; k < nnz_b; k++) {
@@ -1151,6 +1172,9 @@ static void solve_U_sparse(const LUFactorization *lu,
             }
         }
     }
+
+    /* Return reach size for caller to use for cleanup */
+    if (reach_nnz_out) *reach_nnz_out = reach_nnz;
 
     /* Build sparse output */
     *x_nnz = 0;
@@ -1202,32 +1226,38 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     double *work = lu_mut->hs_work1;
     double *work2 = lu_mut->hs_work2;
     int *marked = lu_mut->hs_marked;
-    int *temp_idx = lu_mut->hs_idx;
+    int *perm_rhs_idx = lu_mut->hs_idx;   /* Permuted RHS indices (input to L solve) */
+    int *L_out_idx = (int*)lu_mut->perm_work;  /* L solve output indices (separate!) */
     double *temp_val = lu_mut->hs_val;
+
+    /* Clear work2 - may have stale values from lu_update or previous calls */
+    memset(work2, 0, m * sizeof(double));
 
     /* Step 1: Apply row permutation to RHS */
     int perm_nnz = 0;
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_row = rhs_idx[k];
         if (orig_row >= 0 && orig_row < m) {
-            temp_idx[perm_nnz] = lu->perm_inv[orig_row];
+            perm_rhs_idx[perm_nnz] = lu->perm_inv[orig_row];
             temp_val[perm_nnz] = rhs_val[k];
             perm_nnz++;
         }
     }
 
-    /* Step 2: Sparse L solve */
-    int L_nnz;
-    solve_L_sparse(lu, perm_nnz, temp_idx, temp_val, work, temp_idx, &L_nnz, marked);
+    /* Step 2: Sparse L solve
+     * Input: perm_rhs_idx, temp_val (no aliasing with L_out_idx) */
+    int L_nnz, L_reach_nnz;
+    solve_L_sparse(lu, perm_nnz, perm_rhs_idx, temp_val, work, L_out_idx, &L_nnz, marked, &L_reach_nnz);
 
     /* Step 3: Sparse U solve */
-    /* Gather values for U solve */
+    /* Gather values for U solve - L_out_idx has L solve nonzero indices */
     for (int k = 0; k < L_nnz; k++) {
-        temp_val[k] = work[temp_idx[k]];
+        temp_val[k] = work[L_out_idx[k]];
     }
 
-    int U_nnz;
-    solve_U_sparse(lu, L_nnz, temp_idx, temp_val, work2, temp_idx, &U_nnz, marked);
+    /* U solve: L_out_idx is INPUT, reuse perm_rhs_idx as OUTPUT (safe now) */
+    int U_nnz, U_reach_nnz;
+    solve_U_sparse(lu, L_nnz, L_out_idx, temp_val, work2, perm_rhs_idx, &U_nnz, marked, &U_reach_nnz);
 
     /* Step 4: Apply FT/eta updates */
     if (lu->use_ft_updates && lu->ft_num_updates > 0) {
@@ -1250,13 +1280,11 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
         }
     }
 
-    /* Clear workspace for next use (only clear used parts) */
-    for (int k = 0; k < L_nnz; k++) {
-        work[temp_idx[k]] = 0.0;
-    }
+    /* Clear workspace - FT updates may touch all entries so full clear needed */
     for (int i = 0; i < m; i++) {
-        work2[i] = 0.0;  /* FT updates may have touched all entries */
+        work2[i] = 0.0;
     }
+    /* work is cleared by next solve_L_sparse call, no action needed here */
 }
 
 /*
