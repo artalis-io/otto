@@ -467,40 +467,54 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             /* Restore parent basis */
             if (restore_basis_from_node(lp, node) == 0) {
                 /* Handle bound changes due to branching.
-                 * Update non-basic variable values to their new bounds.
-                 * Basic variables will be recomputed by tableau_compute_solution.
-                 * If a basic variable violates its new bounds, dual simplex will fix it.
+                 *
+                 * CRITICAL: If a basic variable becomes FIXED (lb == ub), we must
+                 * fall back to cold start. This is because tableau_compute_solution
+                 * computes x_B = B^{-1}(b - N*x_N), which may differ from the fixed
+                 * value. Dual simplex cannot detect this since the computed value
+                 * might be within the (now-equal) bounds.
                  */
+                int has_fixed_basic = 0;
                 for (int j = 0; j < model->num_vars; j++) {
-                    if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                        tab->x[j] = tab->lb_ext[j];
+                    double new_lb = tab->lb_ext[j];
+                    double new_ub = tab->ub_ext[j];
+
+                    if (tab->var_status[j] == RALPH_BASIC) {
+                        /* Check if this basic variable is now fixed */
+                        if (fabs(new_lb - new_ub) < RALPH_FEAS_TOL) {
+                            has_fixed_basic = 1;
+                        }
+                    } else if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+                        tab->x[j] = new_lb;
                     } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                        tab->x[j] = tab->ub_ext[j];
+                        tab->x[j] = new_ub;
                     }
-                    /* Basic variables: leave x[j] as is, it will be recomputed */
                 }
 
-                /* Recompute basic variable values x_B = B^{-1}(b - N*x_N) */
-                tableau_compute_solution(tab);
+                if (has_fixed_basic) {
+                    /* Fall back to cold start for correctness */
+                    if (solver->verbose) {
+                        printf("  [warm_start] Fixed basic var detected, using cold start\n");
+                    }
+                } else {
+                    /* Safe to warm start - no basic variables became fixed */
+                    tableau_compute_solution(tab);
 
-                if (solver->verbose) {
-                    printf("  [warm_start] After compute_solution: obj=%.4f\n", tab->obj_value);
-                }
+                    if (solver->verbose) {
+                        printf("  [warm_start] After compute_solution: obj=%.4f\n", tab->obj_value);
+                    }
 
-                /* Use dual simplex for re-optimization.
-                 * Dual simplex handles primal infeasibility (basic variable outside bounds)
-                 * by pivoting to restore primal feasibility while maintaining dual feasibility. */
-                dual_simplex_solve(lp);
+                    /* Use dual simplex for re-optimization */
+                    dual_simplex_solve(lp);
 
-                if (solver->verbose) {
-                    printf("  [solve_node_lp] After dual_simplex: status=%d, obj=%.4f\n",
-                           lp->status, lp->obj_value);
-                }
+                    if (solver->verbose) {
+                        printf("  [solve_node_lp] After dual_simplex: status=%d, obj=%.4f\n",
+                               lp->status, lp->obj_value);
+                    }
 
-                if (lp->status == RALPH_STATUS_OPTIMAL) {
-                    warm_start_success = 1;
-                } else if (solver->verbose) {
-                    printf("  [solve_node_lp] Dual simplex did NOT achieve OPTIMAL\n");
+                    if (lp->status == RALPH_STATUS_OPTIMAL) {
+                        warm_start_success = 1;
+                    }
                 }
             }
         } else if (solver->verbose) {
