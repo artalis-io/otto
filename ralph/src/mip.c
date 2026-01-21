@@ -88,7 +88,7 @@ MIPSolver* mip_create(LPModel *model) {
     solver->abs_mip_gap = RALPH_DEFAULT_ABS_MIP_GAP;
     solver->cutoff = RALPH_INFINITY;
     solver->node_select = NODE_SELECT_HYBRID;
-    solver->var_select = VAR_SELECT_RELIABILITY;
+    solver->var_select = VAR_SELECT_PSEUDO_COST;  /* Faster than reliability branching */
     solver->max_cuts_per_round = 50;
     solver->max_cut_rounds = 0;  /* Cuts disabled - GMI formula needs more work */
     solver->verbose = 0;
@@ -155,6 +155,137 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
             printf("*** New incumbent: %.6f\n", obj);
         }
     }
+}
+
+/* ============================================================================
+ * Diving Heuristic
+ *
+ * Quickly find a feasible integer solution by repeatedly:
+ * 1. Pick most fractional integer variable
+ * 2. Round to nearest integer and fix
+ * 3. Re-solve LP
+ * 4. Repeat until integer feasible or infeasible
+ * ============================================================================ */
+
+static int diving_heuristic(MIPSolver *solver) {
+    if (!solver || !solver->lp_solver || !solver->lp_solver->solution) {
+        return -1;
+    }
+
+    LPModel *model = solver->working_model;
+    SimplexSolver *lp = solver->lp_solver;
+    int num_vars = model->num_vars;
+
+    /* Save original bounds */
+    double *orig_lb = (double*)malloc(num_vars * sizeof(double));
+    double *orig_ub = (double*)malloc(num_vars * sizeof(double));
+    if (!orig_lb || !orig_ub) {
+        free(orig_lb);
+        free(orig_ub);
+        return -1;
+    }
+    memcpy(orig_lb, model->lb, num_vars * sizeof(double));
+    memcpy(orig_ub, model->ub, num_vars * sizeof(double));
+
+    /* Work with copy of solution */
+    double *sol = (double*)malloc(num_vars * sizeof(double));
+    if (!sol) {
+        free(orig_lb);
+        free(orig_ub);
+        return -1;
+    }
+    memcpy(sol, lp->solution, num_vars * sizeof(double));
+
+    int found_incumbent = 0;
+    int max_dive_depth = 50;  /* Limit diving to prevent long runtimes */
+
+    /* Set iteration limit for LP solves during diving */
+    int orig_max_iter = lp->max_iterations;
+    lp->max_iterations = 500;  /* Quick LP solves only */
+
+    for (int dive = 0; dive < max_dive_depth; dive++) {
+        /* Find most fractional integer variable */
+        int best_var = -1;
+        double best_frac = RALPH_INT_TOL;
+
+        for (int k = 0; k < solver->num_integers; k++) {
+            int j = solver->integer_vars[k];
+            double val = sol[j];
+            double frac = val - floor(val);
+            double infeas = fmin(frac, 1.0 - frac);
+
+            /* Only consider variables that aren't already fixed */
+            if (model->lb[j] < model->ub[j] - 0.5 && infeas > best_frac) {
+                best_frac = infeas;
+                best_var = j;
+            }
+        }
+
+        if (best_var < 0) {
+            /* All integer variables are integer-valued - check feasibility */
+            if (check_integer_feasibility(solver, sol)) {
+                /* Compute objective */
+                double obj = 0.0;
+                for (int j = 0; j < num_vars; j++) {
+                    obj += solver->original_model->c[j] * sol[j];
+                }
+                update_incumbent(solver, sol, obj);
+                found_incumbent = 1;
+            }
+            break;
+        }
+
+        /* Round to nearest integer within bounds */
+        double val = sol[best_var];
+        double rounded = round(val);
+        rounded = fmax(rounded, orig_lb[best_var]);
+        rounded = fmin(rounded, orig_ub[best_var]);
+
+        /* Fix variable */
+        model->lb[best_var] = rounded;
+        model->ub[best_var] = rounded;
+
+        /* Update tableau bounds if available */
+        if (lp->tableau) {
+            lp->tableau->lb_ext[best_var] = rounded;
+            lp->tableau->ub_ext[best_var] = rounded;
+        }
+
+        /* Re-solve LP (cold start for simplicity) */
+        if (lp->tableau) {
+            tableau_free(lp->tableau);
+            lp->tableau = NULL;
+        }
+        simplex_solve(lp);
+
+        if (lp->status != RALPH_STATUS_OPTIMAL) {
+            /* LP became infeasible - diving failed */
+            break;
+        }
+
+        /* Update solution for next iteration */
+        memcpy(sol, lp->solution, num_vars * sizeof(double));
+    }
+
+    /* Restore original iteration limit */
+    lp->max_iterations = orig_max_iter;
+
+    /* Restore original bounds */
+    memcpy(model->lb, orig_lb, num_vars * sizeof(double));
+    memcpy(model->ub, orig_ub, num_vars * sizeof(double));
+
+    /* Restore tableau bounds and re-solve to get back to original state */
+    if (lp->tableau) {
+        tableau_free(lp->tableau);
+        lp->tableau = NULL;
+    }
+    simplex_solve(lp);
+
+    free(orig_lb);
+    free(orig_ub);
+    free(sol);
+
+    return found_incumbent ? 0 : -1;
 }
 
 /* ============================================================================
@@ -247,10 +378,19 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     int warm_start_success = 0;
 
     /* Try warm start from parent basis if available */
+    if (solver->verbose) {
+        printf("  [solve_node_lp] node=%d: tableau=%p, basis=%p, var_status=%p, basis_size=%d, var_status_size=%d\n",
+               node->id, (void*)lp->tableau, (void*)node->basis, (void*)node->var_status,
+               node->basis_size, node->var_status_size);
+    }
     if (lp->tableau && node->basis && node->var_status &&
         node->basis_size > 0 && node->var_status_size > 0) {
 
         SimplexTableau *tab = lp->tableau;
+
+        if (solver->verbose) {
+            printf("  [solve_node_lp] tab->m=%d, tab->n=%d\n", tab->m, tab->n);
+        }
 
         /* Check sizes match - they should if the model hasn't changed */
         if (tab->m == node->basis_size && tab->n == node->var_status_size) {
@@ -259,6 +399,13 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             for (int j = 0; j < model->num_vars; j++) {
                 tab->lb_ext[j] = node->lb[j];
                 tab->ub_ext[j] = node->ub[j];
+            }
+
+            if (solver->verbose) {
+                printf("  [warm_start] Updated bounds for node %d\n", node->id);
+                for (int j = 0; j < model->num_vars; j++) {
+                    printf("    x%d: [%.2f, %.2f]\n", j, tab->lb_ext[j], tab->ub_ext[j]);
+                }
             }
 
             /* Restore parent basis */
@@ -287,7 +434,20 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
                             tab->x[j] = new_ub;
                         }
                     }
-                    /* RALPH_BASIC variables will be computed by dual_simplex */
+                    /* RALPH_BASIC variables need to be recomputed below */
+                }
+
+                /* CRITICAL: Recompute basic variable values x_B = B^{-1}(b - N*x_N)
+                 * After changing bounds and non-basic variable values, the basic
+                 * variable values from the parent node are stale. */
+                tableau_compute_solution(tab);
+
+                if (solver->verbose) {
+                    printf("  [warm_start] After compute_solution:\n");
+                    for (int j = 0; j < model->num_vars; j++) {
+                        printf("    x%d = %.4f (status=%d)\n", j, tab->x[j], tab->var_status[j]);
+                    }
+                    printf("    obj = %.4f\n", tab->obj_value);
                 }
 
                 /* Use dual simplex for re-optimization */
@@ -474,6 +634,24 @@ static int solve_root_node(MIPSolver *solver) {
         solver->status = RALPH_STATUS_OPTIMAL;
         bb_node_free(root);
         return 0;
+    }
+
+    /* Try diving heuristic to find an incumbent early.
+     * This enables bound-based pruning in the B&B search. */
+    if (solver->verbose) {
+        printf("Running diving heuristic...\n");
+    }
+    if (diving_heuristic(solver) == 0) {
+        if (solver->verbose) {
+            printf("Diving found incumbent: %.6f\n", solver->best_obj);
+        }
+        /* Check if diving found optimal (gap closed) */
+        double gap = fabs(solver->best_obj - solver->root_bound);
+        if (gap < solver->abs_mip_gap) {
+            solver->status = RALPH_STATUS_OPTIMAL;
+            bb_node_free(root);
+            return 0;
+        }
     }
 
     /* Generate cuts at root node */

@@ -253,35 +253,22 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
 
     tab->var_status[entering] = RALPH_BASIC;
 
-    /* Set leaving variable to appropriate bound for DUAL feasibility.
-     * The new reduced cost of leaving is rc_leaving_new = -rc_entering / pivot.
-     * For dual feasibility (internal minimization):
-     * - If rc_leaving_new >= 0, go to lower bound
-     * - If rc_leaving_new < 0, go to upper bound
-     * NOTE: Use rc_entering_orig saved before zeroing rc[entering]
+    /* Set leaving variable to the bound it was violating.
+     * In dual simplex, the leaving variable was selected because it violated a bound:
+     * - If x_leave < lb, it should go to lb
+     * - If x_leave > ub, it should go to ub
+     * The new var_status is determined by which bound it goes to.
      */
-    double rc_leaving_new = -rc_entering_orig / pivot;
-    if (rc_leaving_new >= -RALPH_OPT_TOL) {
-        /* Go to lower bound */
-        if (tab->lb_ext[leaving_var] > -RALPH_INFINITY/2) {
-            tab->var_status[leaving_var] = RALPH_NONBASIC_LOWER;
-            tab->x[leaving_var] = tab->lb_ext[leaving_var];
-        } else {
-            /* No lower bound - this shouldn't happen if ratio test is correct */
-            tab->var_status[leaving_var] = RALPH_NONBASIC_UPPER;
-            tab->x[leaving_var] = tab->ub_ext[leaving_var];
-        }
+    if (x_leave < tab->lb_ext[leaving_var]) {
+        /* Was below lower bound - go to lower bound */
+        tab->var_status[leaving_var] = RALPH_NONBASIC_LOWER;
+        tab->x[leaving_var] = tab->lb_ext[leaving_var];
     } else {
-        /* Go to upper bound */
-        if (tab->ub_ext[leaving_var] < RALPH_INFINITY/2) {
-            tab->var_status[leaving_var] = RALPH_NONBASIC_UPPER;
-            tab->x[leaving_var] = tab->ub_ext[leaving_var];
-        } else {
-            /* No upper bound - this shouldn't happen if ratio test is correct */
-            tab->var_status[leaving_var] = RALPH_NONBASIC_LOWER;
-            tab->x[leaving_var] = tab->lb_ext[leaving_var];
-        }
+        /* Was above upper bound - go to upper bound */
+        tab->var_status[leaving_var] = RALPH_NONBASIC_UPPER;
+        tab->x[leaving_var] = tab->ub_ext[leaving_var];
     }
+    (void)rc_entering_orig;  /* Suppress unused warning */
 
     /* Update LU factorization */
     sparse_get_column(tab->A_ext, entering, tab->work1);
@@ -318,8 +305,16 @@ int dual_simplex_solve(SimplexSolver *solver) {
 
     SimplexTableau *tab = solver->tableau;
 
+    if (solver->verbose) {
+        printf("  [dual_simplex] Entry: obj=%.4f\n", tab->obj_value);
+    }
+
     /* Ensure we have reduced costs */
     tableau_compute_reduced_costs(tab);
+
+    if (solver->verbose) {
+        printf("  [dual_simplex] After compute_rc: obj=%.4f\n", tab->obj_value);
+    }
 
     /* Check dual feasibility */
     int dual_feasible = 1;
@@ -340,9 +335,16 @@ int dual_simplex_solve(SimplexSolver *solver) {
         /* Try to achieve dual feasibility by flipping non-basic variables */
         int changes = make_dual_feasible(tab, solver->model->obj_sense);
 
+        if (solver->verbose) {
+            printf("  [dual_simplex] After make_dual_feasible: changes=%d, obj=%.4f\n", changes, tab->obj_value);
+        }
+
         if (changes > 0) {
             /* Recompute solution and reduced costs after flipping */
             tableau_compute_solution(tab);
+            if (solver->verbose) {
+                printf("  [dual_simplex] After compute_solution (post-flip): obj=%.4f\n", tab->obj_value);
+            }
             tableau_compute_reduced_costs(tab);
 
             /* Re-check dual feasibility */
@@ -374,6 +376,10 @@ int dual_simplex_solve(SimplexSolver *solver) {
     /* Apply bound perturbation for cycling prevention */
     apply_bound_perturbation(tab);
 
+    if (solver->verbose) {
+        printf("  [dual_simplex] After apply_bound_perturbation: obj=%.4f\n", tab->obj_value);
+    }
+
     /* Degeneracy and stalling detection for cycling prevention */
     int degenerate_count = 0;
     const int DEGEN_PERTURB_THRESHOLD = 15;
@@ -394,6 +400,10 @@ int dual_simplex_solve(SimplexSolver *solver) {
 
         /* Compute primal solution */
         tableau_compute_solution(tab);
+
+        if (solver->verbose && iter == 0) {
+            printf("  [dual_simplex] After first compute_solution in loop: obj=%.4f\n", tab->obj_value);
+        }
 
         /* Find most infeasible basic variable (leaving) */
         int leaving = -1;
@@ -421,6 +431,17 @@ int dual_simplex_solve(SimplexSolver *solver) {
             tableau_compute_solution(tab);
             solver->status = RALPH_STATUS_OPTIMAL;
             solver->obj_value = tab->obj_value * solver->model->obj_sense;
+
+            /* Copy solution to solver */
+            int n_orig = solver->model->num_vars;
+            if (!solver->solution) {
+                solver->solution = (double*)malloc(n_orig * sizeof(double));
+            }
+            if (solver->solution) {
+                for (int j = 0; j < n_orig; j++) {
+                    solver->solution[j] = tab->x[j];
+                }
+            }
             return 0;
         }
 
