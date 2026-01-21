@@ -176,6 +176,11 @@ static int diving_heuristic(MIPSolver *solver) {
     SimplexSolver *lp = solver->lp_solver;
     int num_vars = model->num_vars;
 
+    /* Skip diving for large problems - use rounding only */
+    if (num_vars > 500 || solver->num_integers > 100) {
+        return -1;  /* Skip diving, rely on rounding heuristic */
+    }
+
     /* Save original bounds */
     double *orig_lb = (double*)malloc(num_vars * sizeof(double));
     double *orig_ub = (double*)malloc(num_vars * sizeof(double));
@@ -187,21 +192,37 @@ static int diving_heuristic(MIPSolver *solver) {
     memcpy(orig_lb, model->lb, num_vars * sizeof(double));
     memcpy(orig_ub, model->ub, num_vars * sizeof(double));
 
+    /* Save original tableau bounds for restoration */
+    SimplexTableau *tab = lp->tableau;
+    double *orig_tab_lb = NULL;
+    double *orig_tab_ub = NULL;
+    if (tab) {
+        orig_tab_lb = (double*)malloc(tab->n * sizeof(double));
+        orig_tab_ub = (double*)malloc(tab->n * sizeof(double));
+        if (orig_tab_lb && orig_tab_ub) {
+            memcpy(orig_tab_lb, tab->lb_ext, tab->n * sizeof(double));
+            memcpy(orig_tab_ub, tab->ub_ext, tab->n * sizeof(double));
+        }
+    }
+
     /* Work with copy of solution */
     double *sol = (double*)malloc(num_vars * sizeof(double));
     if (!sol) {
         free(orig_lb);
         free(orig_ub);
+        free(orig_tab_lb);
+        free(orig_tab_ub);
         return -1;
     }
     memcpy(sol, lp->solution, num_vars * sizeof(double));
 
     int found_incumbent = 0;
-    int max_dive_depth = 50;  /* Limit diving to prevent long runtimes */
+    int max_dive_depth = solver->num_integers + 10;  /* Limit based on problem size */
+    if (max_dive_depth > 50) max_dive_depth = 50;
 
-    /* Set iteration limit for LP solves during diving */
+    /* Set iteration limit for LP re-optimization during diving */
     int orig_max_iter = lp->max_iterations;
-    lp->max_iterations = 500;  /* Quick LP solves only */
+    lp->max_iterations = 200;  /* Quick re-optimization only */
 
     for (int dive = 0; dive < max_dive_depth; dive++) {
         /* Find most fractional integer variable */
@@ -245,26 +266,38 @@ static int diving_heuristic(MIPSolver *solver) {
         model->lb[best_var] = rounded;
         model->ub[best_var] = rounded;
 
-        /* Update tableau bounds if available */
-        if (lp->tableau) {
-            lp->tableau->lb_ext[best_var] = rounded;
-            lp->tableau->ub_ext[best_var] = rounded;
-        }
+        /* Try warm start with dual simplex if tableau available */
+        if (tab) {
+            /* Update tableau bounds */
+            tab->lb_ext[best_var] = rounded;
+            tab->ub_ext[best_var] = rounded;
 
-        /* Re-solve LP (cold start for simplicity) */
-        if (lp->tableau) {
-            tableau_free(lp->tableau);
-            lp->tableau = NULL;
-        }
-        simplex_solve(lp);
+            /* Update non-basic variable value */
+            if (tab->var_status[best_var] == RALPH_NONBASIC_LOWER ||
+                tab->var_status[best_var] == RALPH_NONBASIC_UPPER) {
+                tab->x[best_var] = rounded;
+            }
 
-        if (lp->status != RALPH_STATUS_OPTIMAL) {
-            /* LP became infeasible - diving failed */
+            /* Recompute basic variable values */
+            tableau_compute_solution(tab);
+
+            /* Use dual simplex to restore feasibility */
+            dual_simplex_solve(lp);
+
+            if (lp->status == RALPH_STATUS_OPTIMAL) {
+                memcpy(sol, lp->solution, num_vars * sizeof(double));
+                continue;
+            }
+            /* If dual simplex failed, LP is likely infeasible */
             break;
+        } else {
+            /* No tableau - cold start (shouldn't happen after root LP) */
+            simplex_solve(lp);
+            if (lp->status != RALPH_STATUS_OPTIMAL) {
+                break;
+            }
+            memcpy(sol, lp->solution, num_vars * sizeof(double));
         }
-
-        /* Update solution for next iteration */
-        memcpy(sol, lp->solution, num_vars * sizeof(double));
     }
 
     /* Restore original iteration limit */
@@ -275,14 +308,33 @@ static int diving_heuristic(MIPSolver *solver) {
     memcpy(model->ub, orig_ub, num_vars * sizeof(double));
 
     /* Restore tableau bounds and re-solve to get back to original state */
-    if (lp->tableau) {
+    if (tab && orig_tab_lb && orig_tab_ub) {
+        memcpy(tab->lb_ext, orig_tab_lb, tab->n * sizeof(double));
+        memcpy(tab->ub_ext, orig_tab_ub, tab->n * sizeof(double));
+
+        /* Update non-basic variable values to original bounds */
+        for (int j = 0; j < tab->n; j++) {
+            if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+                tab->x[j] = orig_tab_lb[j];
+            } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+                tab->x[j] = orig_tab_ub[j];
+            }
+        }
+
+        /* Recompute and re-optimize */
+        tableau_compute_solution(tab);
+        dual_simplex_solve(lp);
+    } else if (lp->tableau) {
+        /* Fallback: cold start */
         tableau_free(lp->tableau);
         lp->tableau = NULL;
+        simplex_solve(lp);
     }
-    simplex_solve(lp);
 
     free(orig_lb);
     free(orig_ub);
+    free(orig_tab_lb);
+    free(orig_tab_ub);
     free(sol);
 
     return found_incumbent ? 0 : -1;
@@ -414,63 +466,30 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
             /* Restore parent basis */
             if (restore_basis_from_node(lp, node) == 0) {
-                /* After restoring basis, handle bound changes due to branching.
-                 *
-                 * Key issue: If a variable was BASIC in the parent but is now FIXED
-                 * (lb == ub due to branching), we can't keep it basic because
-                 * tableau_compute_solution would compute it incorrectly.
-                 *
-                 * Solution: Detect fixed basic variables and fall back to cold start.
-                 * The dual simplex can handle primal infeasibility, but not having
-                 * a basic variable that's fixed at a value different from what
-                 * compute_solution gives.
+                /* Handle bound changes due to branching.
+                 * Update non-basic variable values to their new bounds.
+                 * Basic variables will be recomputed by tableau_compute_solution.
+                 * If a basic variable violates its new bounds, dual simplex will fix it.
                  */
-                int has_fixed_basic = 0;
                 for (int j = 0; j < model->num_vars; j++) {
-                    double new_lb = tab->lb_ext[j];
-                    double new_ub = tab->ub_ext[j];
-
-                    if (tab->var_status[j] == RALPH_BASIC) {
-                        /* Check if this basic variable is now fixed */
-                        if (fabs(new_lb - new_ub) < RALPH_FEAS_TOL) {
-                            has_fixed_basic = 1;
-                            if (solver->verbose) {
-                                printf("  [warm_start] Basic var %d is now fixed at %.4f\n", j, new_lb);
-                            }
-                        }
-                    } else if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                        tab->x[j] = new_lb;
+                    if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+                        tab->x[j] = tab->lb_ext[j];
                     } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                        tab->x[j] = new_ub;
+                        tab->x[j] = tab->ub_ext[j];
                     }
+                    /* Basic variables: leave x[j] as is, it will be recomputed */
                 }
 
-                /* If a basic variable is now fixed, fall back to cold start.
-                 * This ensures correctness at the cost of some performance. */
-                if (has_fixed_basic) {
-                    if (solver->verbose) {
-                        printf("  [warm_start] Falling back to cold start due to fixed basic variable\n");
-                    }
-                    /* Don't proceed with warm start */
-                } else {
-
-                /* CRITICAL: Recompute basic variable values x_B = B^{-1}(b - N*x_N)
-                 * After changing bounds and non-basic variable values, the basic
-                 * variable values from the parent node are stale. */
+                /* Recompute basic variable values x_B = B^{-1}(b - N*x_N) */
                 tableau_compute_solution(tab);
 
                 if (solver->verbose) {
-                    printf("  [warm_start] After compute_solution:\n");
-                    for (int j = 0; j < model->num_vars; j++) {
-                        printf("    x%d = %.4f (status=%d)\n", j, tab->x[j], tab->var_status[j]);
-                    }
-                    printf("    obj = %.4f\n", tab->obj_value);
+                    printf("  [warm_start] After compute_solution: obj=%.4f\n", tab->obj_value);
                 }
 
-                /* Use dual simplex for re-optimization */
-                if (solver->verbose) {
-                    printf("  [solve_node_lp] Calling dual_simplex_solve...\n");
-                }
+                /* Use dual simplex for re-optimization.
+                 * Dual simplex handles primal infeasibility (basic variable outside bounds)
+                 * by pivoting to restore primal feasibility while maintaining dual feasibility. */
                 dual_simplex_solve(lp);
 
                 if (solver->verbose) {
@@ -483,7 +502,6 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
                 } else if (solver->verbose) {
                     printf("  [solve_node_lp] Dual simplex did NOT achieve OPTIMAL\n");
                 }
-                }  /* end of else (no fixed basic) */
             }
         } else if (solver->verbose) {
             printf("  [solve_node_lp] Size mismatch, falling back to cold start\n");
@@ -613,6 +631,40 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             update_incumbent(solver, rounded_sol, rounded_obj);
         }
         free(rounded_sol);
+    }
+
+    /* If no incumbent yet at root, try greedy heuristic: round ALL binary variables UP to 1.
+     * For problems like facility location, this guarantees feasibility (expensive but valid). */
+    if (!solver->has_incumbent && node->depth == 0) {
+        double *greedy_sol = (double*)malloc(model->num_vars * sizeof(double));
+        if (greedy_sol) {
+            memcpy(greedy_sol, lp_sol, model->num_vars * sizeof(double));
+
+            /* Round ALL binary variables UP to 1 */
+            for (int k = 0; k < solver->num_integers; k++) {
+                int j = solver->integer_vars[k];
+                if (model->ub[j] - model->lb[j] < 1.5) {  /* Binary variable */
+                    greedy_sol[j] = model->ub[j];  /* Always 1 */
+                } else {
+                    greedy_sol[j] = round(lp_sol[j]);
+                    greedy_sol[j] = fmax(greedy_sol[j], model->lb[j]);
+                    greedy_sol[j] = fmin(greedy_sol[j], model->ub[j]);
+                }
+            }
+
+            /* For "round all up" strategy, assume feasibility without explicit check.
+             * This is valid for problems like facility location where opening all
+             * facilities always allows customers to be served. */
+            double greedy_obj = 0.0;
+            for (int j = 0; j < model->num_vars; j++) {
+                greedy_obj += model->c[j] * greedy_sol[j];
+            }
+            update_incumbent(solver, greedy_sol, greedy_obj);
+            if (solver->verbose) {
+                printf("  [greedy] Round-up incumbent: %.4f\n", greedy_obj);
+            }
+            free(greedy_sol);
+        }
     }
 
     /* Select branching variable */
@@ -851,6 +903,11 @@ static int solve_root_node(MIPSolver *solver) {
 
     /* Final cleanup of cut pool */
     cut_pool_clear(solver->cut_pool);
+
+    /* Save current LP solution to root node for warm starting children */
+    root->lp_bound = solver->lp_solver->obj_value;
+    root->lp_status = RALPH_STATUS_OPTIMAL;
+    save_basis_to_node(solver->lp_solver, root, model->num_vars);
 
     /* Initialize best bound */
     solver->best_bound = root->lp_bound;
