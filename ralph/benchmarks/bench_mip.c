@@ -529,6 +529,7 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit) {
     ralph_set_int_param(model, "verbose", 0);
     ralph_set_dbl_param(model, "time_limit", time_limit);
     ralph_set_int_param(model, "max_nodes", 100000);
+    ralph_set_int_param(model, "presolve", 1);  /* Enable presolve for MIP */
     ralph_set_obj_sense(model, prob->sense);
 
     /* Add variables */
