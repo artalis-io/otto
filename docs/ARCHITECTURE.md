@@ -245,18 +245,34 @@ where fⱼ = fractional part of aᵢⱼ, f₀ = fractional part of bᵢ
 
 ## Current Performance (vs GLPK 5.0)
 
-### LP Benchmarks (Random Dense LPs)
+### LP Benchmarks (Sparse LPs, 10% density)
 
-| Problem Size | Ralph Time | GLPK Time | Slowdown | Per-Iter Slowdown |
-|--------------|------------|-----------|----------|-------------------|
-| 50×25        | 0.0001s    | 0.0001s   | 0.9×     | 1.2×              |
-| 100×50       | 0.0006s    | 0.0004s   | 1.3×     | 1.5×              |
-| 200×100      | 0.0049s    | 0.0023s   | 2.1×     | 2.5×              |
-| 500×250      | 0.114s     | 0.018s    | 6.2×     | 6.1×              |
-| 1000×500     | 1.44s      | 0.12s     | **11.5×** | **13.2×**        |
+| Problem Size | Ralph Time | GLPK Time | Slowdown |
+|--------------|------------|-----------|----------|
+| 50×100       | 0.0002s    | 0.0001s   | 2.0×     |
+| 100×200      | 0.0015s    | 0.0009s   | 1.7×     |
+| 200×500      | 0.021s     | 0.009s    | 2.3×     |
+| 500×1000     | 6.88s      | 1.50s     | **4.6×** |
+| 1000×2000    | 105.0s     | 36.2s     | **2.9×** |
 
-**Key Finding:** The per-iteration cost is the main bottleneck. At 1000×500, Ralph
-takes 0.58ms per iteration vs GLPK's 0.044ms.
+### LP Benchmarks (Medium density, 30%)
+
+| Problem Size | Ralph Time | GLPK Time | Slowdown |
+|--------------|------------|-----------|----------|
+| 200×500      | 0.58s      | 0.13s     | 4.5×     |
+| 500×1000     | 73.7s      | 14.5s     | **5.1×** |
+
+### Per-Iteration Time Breakdown (200×400 problem)
+
+| Operation | Time | Percentage |
+|-----------|------|------------|
+| **Ratio test (FTRAN)** | 0.159s | **63.4%** |
+| **B^-1 update** | 0.089s | **35.3%** |
+| Pricing | 0.002s | 1.0% |
+| Pivot | 0.001s | 0.4% |
+
+**Key Finding:** LU operations (FTRAN + Update) account for 98.7% of solver time.
+The main bottleneck is the sparse LU solve in the ratio test.
 
 ### MIP Benchmarks (Classic Problems, Quick Mode)
 
@@ -282,55 +298,47 @@ takes 0.58ms per iteration vs GLPK's 0.044ms.
 
 ### High Priority
 
-1. **LP Per-Iteration Performance (13× slowdown)**
-   - Root cause: Dense operations in FTRAN/BTRAN instead of hyper-sparse
-   - TODO: Use `lu_ftran_hyper_sparse` and `lu_btran_hyper_sparse` in simplex.c
-   - TODO: Eliminate O(m) memset in sparse solve routines
-   - TODO: Profile and optimize hot paths in pricing and ratio test
+1. **LP Per-Iteration Performance (2-5× slowdown vs GLPK)**
+   - Root cause: FTRAN (63%) and LU updates (35%) dominate iteration time
+   - Hyper-sparse FTRAN exists (`lu_ftran_hyper_sparse`) but disabled due to instability
+   - TODO: Fix hyper-sparse FTRAN numerical issues and enable in ratio test
+   - TODO: Reduce FT spike accumulation overhead
+   - TODO: Consider batched LU updates
 
 2. **MIP Branch-and-Bound Performance**
    - SetPartitioning 185,000× slower than GLPK
    - TODO: Implement proper node presolve (bound tightening, probing)
    - TODO: Add pseudocost branching or reliability branching
    - TODO: Implement diving heuristics for faster incumbent finding
-   - TODO: Add symmetry detection and breaking
 
-3. **NetworkFlow Objective Mismatch (Potential Bug)**
-   - Ralph: 25.42, GLPK: 125.42 on 295×40 problem
-   - TODO: Debug and fix potential correctness issue
+3. **Dual Simplex Stability**
+   - Currently falls back to primal on many problems due to RC drift
+   - Root cause: Calling lu_solve per column compounds error (n sources per pivot)
+   - TODO: Compute pivot row via single BTRAN, update RCs with sparse dot products
+   - TODO: Periodic RC recomputation every ~20 iterations
+   - TODO: Iterative refinement for reduced costs
 
 ### Medium Priority
 
-4. **Dual Simplex Stability**
-   - Currently falls back to primal on many problems due to numerical issues
-   - See plan file: `~/.claude/plans/kind-napping-aho.md`
-   - TODO: Efficient pivot row computation (BTRAN once, not per-column)
-   - TODO: Periodic reduced cost recomputation
-   - TODO: Iterative refinement for reduced costs
+4. **LP-Aware LU Updates**
+   - Schur complement helps initial factorization (4× speedup)
+   - TODO: Extend block structure awareness to LU updates
+   - TODO: Block-aware solve routines
 
-5. **LP-Aware LU Factorization**
-   - Schur complement implemented for cross-terms (4× factorization speedup)
-   - TODO: Extend to LU updates (currently only helps initial factorization)
-   - TODO: Block-aware solve routines for further speedup
-
-6. **Presolve Improvements**
+5. **Presolve Improvements**
    - TODO: Dominated rows/columns elimination
    - TODO: Probing on integer variables
    - TODO: Clique detection from set-packing constraints
 
 ### Low Priority
 
-7. **Cut Generation**
-   - GMI cut infrastructure implemented (cuts.c) but disabled by default
-   - Fixed GMI formula for variables at upper bound (complemented coefficients)
-   - Fixed issue with empty cuts (no variable coefficients) causing infeasibility
-   - **Outstanding**: GMI cuts still produce incorrect cuts on some problems with >= constraints and negative coefficients; needs investigation
-   - TODO: Debug GMI cut formula for >= constraints
+6. **Cut Generation**
+   - GMI cut infrastructure implemented but disabled (produces incorrect cuts on some problems)
+   - TODO: Debug GMI cut formula for >= constraints with negative coefficients
    - TODO: Lift-and-project cuts
-   - TODO: Flow cover cuts
    - TODO: Clique cuts from conflict graph
 
-8. **Parallel Processing**
+7. **Parallel Processing**
    - TODO: Parallel pricing in simplex
    - TODO: Parallel node processing in B&B
 
