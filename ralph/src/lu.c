@@ -121,9 +121,10 @@ LUFactorization* lu_create(int m) {
     }
 
     /* Contiguous spike pool - single allocation for all spike data
-     * Estimate: each spike has ~m/4 non-zeros on average, max_updates spikes
-     * Pool size = max_updates * m / 4 (with some margin) */
-    lu->spike_pool_capacity = lu->max_updates * (m / 4 + 10);
+     * Estimate: each spike has ~m/2 non-zeros on average (higher than m/4
+     * initially expected due to fill-in as basis changes), max_updates spikes.
+     * Pool size = max_updates * m / 2 (with margin for safety) */
+    lu->spike_pool_capacity = lu->max_updates * (m / 2 + 20);
     lu->spike_pool_idx = (int*)malloc(lu->spike_pool_capacity * sizeof(int));
     lu->spike_pool_val = (double*)malloc(lu->spike_pool_capacity * sizeof(double));
     lu->spike_pool_used = 0;
@@ -1647,8 +1648,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     if (lu->use_ft_updates) {
         /* Check if pool has room for this spike */
         if (lu->spike_pool_used + off_diag_nnz > lu->spike_pool_capacity) {
-            /* Pool full - need refactorization */
-            return -1;
+            return -1;  /* Pool full - need refactorization */
         }
 
         /* Store FT spike with contiguous pool storage */
@@ -1724,6 +1724,12 @@ int lu_needs_refactorization(const LUFactorization *lu) {
 
     /* Refactorize early if condition has degraded significantly */
     if (lu->growth_factor > 1e6) return 1;
+
+    /* Refactorize early if spike pool is nearly full (>85% capacity)
+     * This prevents update failures when spike density is higher than expected */
+    if (lu->use_ft_updates && lu->spike_pool_capacity > 0) {
+        if (lu->spike_pool_used > lu->spike_pool_capacity * 85 / 100) return 1;
+    }
 
     return 0;
 }
