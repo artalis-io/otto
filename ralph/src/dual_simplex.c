@@ -141,13 +141,19 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
                 ratio = -rc_j / alpha_j;
             }
         } else {
-            /* Leaving variable needs to decrease (currently above upper bound) */
+            /* Leaving variable needs to decrease (currently above upper bound)
+             *
+             * For dir=-1, the ratio formula differs from dir=+1:
+             * - At LOWER with alpha > 0: rc >= 0, so rc/alpha >= 0
+             * - At UPPER with alpha < 0: rc <= 0, so rc/alpha >= 0
+             * Using rc_j/alpha_j (not -rc_j/alpha_j) gives positive ratios.
+             */
             if (alpha_j > RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_LOWER) {
                 /* Increasing x_j from lower bound decreases x_B[leaving] - good! */
-                ratio = -rc_j / alpha_j;
+                ratio = rc_j / alpha_j;
             } else if (alpha_j < -RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_UPPER) {
                 /* Decreasing x_j from upper bound decreases x_B[leaving] - good! */
-                ratio = -rc_j / alpha_j;
+                ratio = rc_j / alpha_j;
             }
         }
 
@@ -977,15 +983,9 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
             return simplex_solve(solver);
         }
 
-        /* Fall back early if taking too many iterations (10x the problem size) */
-        if (iter > 10 * tab->m && iter % 100 == 0) {
-            if (solver->verbose) {
-                printf("[dual_simplex] Too many iterations (%d), falling back to primal\n", iter);
-            }
-            tableau_free(solver->tableau);
-            solver->tableau = NULL;
-            return simplex_solve(solver);
-        }
+        /* Note: The iteration limit fallback was removed since the dual ratio test
+         * bug has been fixed. The algorithm will terminate naturally when optimal
+         * or when hitting max_iterations. */
 
         /* More aggressive numerical stability:
          * - Refactorize when LU needs it or every 50 iterations
