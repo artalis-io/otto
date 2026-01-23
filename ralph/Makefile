@@ -60,6 +60,7 @@ BENCH_SIZES_EXEC = bench_sizes
 COMPARE_GLPK_EXEC = compare_glpk
 BENCH_VS_GLPK_EXEC = bench_vs_glpk
 BENCH_MIP_EXEC = bench_mip
+PROFILE_BENCH_EXEC = profile_bench
 
 # GLPK configuration (via Homebrew)
 GLPK_PREFIX = $(shell brew --prefix glpk 2>/dev/null || echo "/opt/homebrew/opt/glpk")
@@ -137,9 +138,17 @@ bench-mip: $(BENCH_MIP_EXEC)
 bench-mip-quick: $(BENCH_MIP_EXEC)
 	./$(BENCH_MIP_EXEC) --quick
 
+# Build profile benchmark
+$(PROFILE_BENCH_EXEC): $(BENCH_DIR)/profile_bench.c $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run profile benchmark
+profile-bench: $(PROFILE_BENCH_EXEC)
+	./$(PROFILE_BENCH_EXEC)
+
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -153,4 +162,4 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all clean debug test test-edge bench compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick install uninstall
+.PHONY: all clean debug test test-edge bench compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall
