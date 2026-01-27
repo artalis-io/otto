@@ -165,6 +165,9 @@ typedef struct {
     uint32_t *landmark_nodes;       /* Array of landmark node indices */
     double *dist_to_landmark;       /* dist_to[k * num_nodes + v] = dist(v -> landmark k) */
     double *dist_from_landmark;     /* dist_from[k * num_nodes + v] = dist(landmark k -> v) */
+    /* Transposed layout for cache-friendly heuristic computation */
+    double *dist_to_t;              /* dist_to_t[v * num_landmarks + k] */
+    double *dist_from_t;            /* dist_from_t[v * num_landmarks + k] */
 } VLLandmarks;
 
 /* ============================================================================
