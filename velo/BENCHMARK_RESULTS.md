@@ -13,15 +13,22 @@
 |--------------|--------------|--------|---------------|--------|
 | Degree-2 Contraction | 683ms | 0 | ~19% | ✅ Working |
 | ALT (16 Landmarks) | 2.2s | 664 MB | **2.5-3.8x** | ✅ Working |
+| ALT (32 Landmarks) | 3.4s | 1.3 GB | **5-10x** | ✅ Working |
 | Hilbert Reordering | 648ms | 0 | **1.5-2.1x** | ✅ Working |
+| 4-ary Heap | 0 | 0 | ~10% | ✅ Working |
+| Fast Distance Heuristic | 0 | 0 | ~10-15% | ✅ Working |
 | Bucket Heap | 0 | 0 | N/A | ⚠️ Slower than binary heap |
 
-### Combined Optimizations
+### Best Combined Results (Hilbert + 32 Landmarks)
 
-With ALT + Hilbert on Hungary:
-- **Query time**: 40-130ms (vs 150-350ms baseline)
-- **Total preprocessing**: ~3 seconds
-- **Extra memory**: 664 MB for landmarks
+| Route | Baseline | Optimized | Speedup |
+|-------|----------|-----------|---------|
+| Budapest → Szeged | 154ms | **37ms** | 4.2x |
+| Sopron → Nyíregyháza | 345ms | **34ms** | 10.1x |
+| Pécs → Debrecen | 200ms | **39ms** | 5.1x |
+
+- **Total preprocessing**: ~4 seconds (Hilbert 648ms + Landmarks 3.4s)
+- **Extra memory**: 1.3 GB for 32 landmarks
 
 ---
 
@@ -43,11 +50,11 @@ Preprocessing: 648ms (includes mmap → malloc conversion)
 ### A* Bidirectional
 | Route | Time (ms) | Speedup |
 |-------|-----------|---------|
-| Budapest → Szeged | 73 | **2.1x** |
-| Sopron → Nyíregyháza | 232 | **1.5x** |
-| Pécs → Debrecen | 114 | **1.8x** |
+| Budapest → Szeged | 58 | **2.7x** |
+| Sopron → Nyíregyháza | 168 | **2.1x** |
+| Pécs → Debrecen | 89 | **2.2x** |
 
-**Why it helps**: Hilbert curve orders nodes by spatial locality, improving CPU cache hits during graph traversal.
+**Why it helps**: Hilbert curve orders nodes by spatial locality, improving CPU cache hits during graph traversal. Combined with fast equirectangular distance heuristic.
 
 ---
 
