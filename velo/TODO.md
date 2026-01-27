@@ -3,9 +3,99 @@
 ## Overview
 
 Current performance on Hungary (2.7M nodes, 5.5M edges):
-- Baseline A* bidirectional: 150-350ms
-- With ALT + Hilbert: 40-130ms
+- Baseline A* bidirectional: 130-285ms
+- With ALT (16 landmarks): 36-86ms (3-4x speedup)
+- With vehicle profiles: no overhead (bitmask filtering)
 - Target: <10ms (approaching OSRM)
+
+## Recommendations: Closing the Gap Without CH
+
+To reach <10ms without implementing Contraction Hierarchies, the most promising approaches in order of effort/reward:
+
+### Priority 1: Arc Flags (Best ROI)
+**Expected: 3-5x speedup → ~10-25ms**
+
+Arc flags are the clearest path to sub-20ms queries:
+- Partition graph into 64-128 regions (grid-based is simplest)
+- Precompute 64-128 bit flags per edge indicating reachable regions
+- During search: `if (!(edge->arc_flags & target_region_bit)) continue;`
+- Prunes 70-90% of edges with a single bitmask AND operation
+- Combines naturally with ALT and vehicle profiles
+
+**Implementation sketch:**
+```c
+// Preprocessing: for each edge, run Dijkstra from edge.target
+// Mark all regions reachable. Store as edge->arc_flags bitmask.
+
+// Query: precompute target_region = region_of(target)
+// In edge loop: if (!(edge->arc_flags & (1ULL << target_region))) continue;
+```
+
+**Preprocessing cost:** ~30 minutes for Hungary (parallelizable)
+**Memory cost:** +8 bytes/edge (64 regions) = ~44MB
+
+### Priority 2: Reach Pruning (Combines Well)
+**Expected: 2-3x additional speedup when combined with Arc Flags**
+
+Reach pruning eliminates nodes that can't be on any shortest path:
+- Precompute reach(v) = max distance from any shortest path endpoint through v
+- During search: `if (reach[v] < min(g[v], h[v])) continue;`
+- Most effective for interior nodes far from highways
+
+**Can be approximated:** Instead of exact reach, use "local reach" computed
+via bounded Dijkstra. Faster preprocessing, still effective.
+
+### Priority 3: Goal-Directed Arc Flags (GDAF)
+**Expected: Combined 10-20x speedup → ~5-10ms**
+
+Combine Arc Flags with ALT heuristics:
+- Use ALT to determine search direction
+- Use Arc Flags to prune edges not leading to target region
+- The two techniques are orthogonal and multiply
+
+### Priority 4: Hub Labeling (Alternative to CH)
+**Expected: Sub-millisecond queries**
+
+If <10ms is still not enough, hub labeling is simpler than CH:
+- Precompute label sets L(v) for each node
+- Query: find minimum L(s) ∩ L(t) intersection
+- No graph search at all - pure table lookup
+- Higher preprocessing cost but conceptually simpler than CH
+
+**Tradeoff:** ~4-8GB memory for Hungary, but microsecond queries
+
+## Recommended Implementation Order
+
+1. **Arc Flags** (2-3 days)
+   - Grid-based partitioning (simple, no external deps)
+   - 64-bit flags per edge
+   - Test with current ALT
+   - Expected result: **~15ms**
+
+2. **Approximate Reach** (1-2 days)
+   - Bounded Dijkstra from each node (radius ~50km)
+   - Store reach values (~4 bytes/node)
+   - Add pruning check in search loop
+   - Expected result: **~8-12ms**
+
+3. **Evaluate** - if <10ms achieved, stop here
+
+4. **Hub Labeling** (3-5 days) - only if <10ms still needed
+   - Higher memory but guaranteed fast queries
+
+## Current Optimizations Status
+
+| Optimization | Status | Speedup | Combined |
+|--------------|--------|---------|----------|
+| Hilbert reordering | ✅ | 1.5-2x | 1.5-2x |
+| ALT (16 landmarks) | ✅ | 3-4x | 4.5-6x |
+| 4-ary heap | ✅ | ~10% | 5-7x |
+| Vehicle profiles | ✅ | 0% overhead | - |
+| Arc Flags | ⏳ | 3-5x est. | **15-35x** |
+| Reach Pruning | ⏳ | 2-3x est. | **30-100x** |
+
+**Bottom line:** Arc Flags alone should get us to ~15ms. Combined with Reach
+Pruning, <10ms is achievable without Contraction Hierarchies.
 
 ## Quick Wins (Low Effort)
 
