@@ -1,0 +1,191 @@
+/*
+ * ct_tile.h - Tile coordinate math and Web Mercator projection
+ *
+ * Functions for converting between geographic coordinates (lat/lon)
+ * and tile coordinates (z/x/y) using Web Mercator projection.
+ */
+
+#ifndef CT_TILE_H
+#define CT_TILE_H
+
+#include "ct_types.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ============================================================================
+ * Tile Coordinate Functions
+ * ============================================================================ */
+
+/*
+ * Convert lat/lon to tile coordinates at a given zoom level.
+ * Uses Web Mercator projection (EPSG:3857).
+ *
+ * @param lat    Latitude in degrees (-85.051 to 85.051)
+ * @param lon    Longitude in degrees (-180 to 180)
+ * @param zoom   Zoom level (0 to CT_MAX_ZOOM)
+ * @param tile_x Output tile X coordinate
+ * @param tile_y Output tile Y coordinate
+ */
+void ct_latlon_to_tile(double lat, double lon, int zoom,
+                       int *tile_x, int *tile_y);
+
+/*
+ * Convert lat/lon to pixel position within a tile.
+ *
+ * @param lat    Latitude in degrees
+ * @param lon    Longitude in degrees
+ * @param tile   Tile coordinates
+ * @param extent Pixel extent (e.g., 4096 for MVT, 256 for raster)
+ * @param px     Output pixel X (0 to extent-1)
+ * @param py     Output pixel Y (0 to extent-1)
+ */
+void ct_latlon_to_tile_pixel(double lat, double lon, CTTileCoord tile,
+                             int extent, int *px, int *py);
+
+/*
+ * Get geographic bounds of a tile.
+ *
+ * @param tile Tile coordinates
+ * @return Bounding box in lat/lon
+ */
+CTBBox ct_tile_bounds(CTTileCoord tile);
+
+/*
+ * Convert tile coordinates to the center lat/lon.
+ *
+ * @param tile Tile coordinates
+ * @param lat  Output latitude
+ * @param lon  Output longitude
+ */
+void ct_tile_to_latlon(CTTileCoord tile, double *lat, double *lon);
+
+/* ============================================================================
+ * Tile Enumeration
+ * ============================================================================ */
+
+/*
+ * Get all tiles that intersect a bounding box at a zoom level.
+ *
+ * @param bbox   Geographic bounds to cover
+ * @param zoom   Zoom level
+ * @param tiles  Output array of tile coordinates (caller frees)
+ * @return Number of tiles
+ */
+int ct_tiles_for_bbox(CTBBox bbox, int zoom, CTTileCoord **tiles);
+
+/*
+ * Get the parent tile (one zoom level up).
+ */
+CTTileCoord ct_tile_parent(CTTileCoord tile);
+
+/*
+ * Get child tiles (one zoom level down).
+ * Returns 4 tiles in children array.
+ */
+void ct_tile_children(CTTileCoord tile, CTTileCoord children[4]);
+
+/*
+ * Check if a tile coordinate is valid.
+ */
+int ct_tile_is_valid(CTTileCoord tile);
+
+/* ============================================================================
+ * Web Mercator Projection
+ * ============================================================================ */
+
+/*
+ * Project lat/lon to Web Mercator coordinates (meters).
+ * Origin is at (0, 0), X increases east, Y increases north.
+ *
+ * @param lat Latitude in degrees
+ * @param lon Longitude in degrees
+ * @param x   Output X in meters
+ * @param y   Output Y in meters
+ */
+void ct_latlon_to_mercator(double lat, double lon, double *x, double *y);
+
+/*
+ * Unproject Web Mercator to lat/lon.
+ *
+ * @param x   X in meters
+ * @param y   Y in meters
+ * @param lat Output latitude
+ * @param lon Output longitude
+ */
+void ct_mercator_to_latlon(double x, double y, double *lat, double *lon);
+
+/* ============================================================================
+ * Tile Management
+ * ============================================================================ */
+
+/*
+ * Initialize a tile structure.
+ */
+void ct_tile_init(CTTile *tile, CTTileCoord coord);
+
+/*
+ * Add a feature to a tile.
+ * The tile takes ownership of the feature's point array.
+ */
+CTStatus ct_tile_add_feature(CTTile *tile, const CTFeature *feature);
+
+/*
+ * Clear all features from a tile (but keep allocated memory).
+ */
+void ct_tile_clear(CTTile *tile);
+
+/*
+ * Free all memory associated with a tile.
+ */
+void ct_tile_free(CTTile *tile);
+
+/* ============================================================================
+ * Geometry Utilities
+ * ============================================================================ */
+
+/*
+ * Clip a linestring to tile bounds.
+ * Returns clipped segments (may be multiple if line exits and re-enters).
+ *
+ * @param points     Input points (in tile coordinates)
+ * @param num_points Number of input points
+ * @param extent     Tile extent (points outside 0..extent are clipped)
+ * @param buffer     Buffer around tile (allow some overshoot)
+ * @param out        Output clipped points
+ * @param out_count  Output point count
+ * @param segments   Output segment end indices (for multi-part result)
+ * @param seg_count  Output segment count
+ */
+void ct_clip_linestring(const CTTilePoint *points, int num_points,
+                        int extent, int buffer,
+                        CTTilePoint **out, int *out_count,
+                        int **segments, int *seg_count);
+
+/*
+ * Clip a polygon to tile bounds.
+ * Uses Sutherland-Hodgman algorithm.
+ */
+void ct_clip_polygon(const CTTilePoint *points, int num_points,
+                     int extent, int buffer,
+                     CTTilePoint **out, int *out_count);
+
+/*
+ * Simplify a linestring using Douglas-Peucker algorithm.
+ *
+ * @param points     Input points
+ * @param num_points Number of input points
+ * @param tolerance  Simplification tolerance (in tile units)
+ * @param out        Output simplified points
+ * @param out_count  Output point count
+ */
+void ct_simplify_linestring(const CTTilePoint *points, int num_points,
+                            double tolerance,
+                            CTTilePoint **out, int *out_count);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* CT_TILE_H */

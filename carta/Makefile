@@ -1,0 +1,140 @@
+# Carta Makefile
+# Zero-dependency map tile generator
+
+CC ?= gcc
+
+# Optimization flags
+SIMD_FLAGS = -march=native -ftree-vectorize -ffast-math
+CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
+LDFLAGS = -lm
+
+# Include paths
+INCLUDES = -Iinclude -Ivendor
+
+# Debug build
+DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
+
+# Source files
+CORE_SRCS = src/carta.c \
+            src/ct_tile.c \
+            src/ct_pbf.c \
+            src/ct_mvt.c \
+            src/ct_render.c \
+            src/ct_png.c \
+            src/ct_style.c \
+            src/ct_protobuf.c \
+            src/ct_inflate.c
+
+MINIZ_SRCS = vendor/miniz.c \
+             vendor/miniz_tdef.c \
+             vendor/miniz_tinfl.c
+
+# Object files
+CORE_OBJS = $(CORE_SRCS:.c=.o)
+MINIZ_OBJS = $(MINIZ_SRCS:.c=.o)
+ALL_OBJS = $(CORE_OBJS) $(MINIZ_OBJS)
+
+# Library
+LIB = libcarta.a
+
+# Test binary
+TEST_BIN = test_carta
+
+# CLI tool
+CLI_BIN = carta_cli
+
+# Benchmark binary
+BENCH_BIN = bench_carta
+
+# WASM output
+WASM_OUT = carta.js
+
+.PHONY: all clean test bench lib debug wasm cli
+
+# Default target
+all: lib $(TEST_BIN)
+
+# Build library
+lib: $(LIB)
+
+$(LIB): $(ALL_OBJS)
+	ar rcs $@ $^
+
+# Compile rules
+src/%.o: src/%.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+vendor/%.o: vendor/%.c
+	$(CC) $(CFLAGS) -Ivendor -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
+
+# Test binary
+$(TEST_BIN): tests/test_carta.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta $(LDFLAGS) -o $@
+
+# CLI tool
+$(CLI_BIN): src/cli.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta $(LDFLAGS) -o $@
+
+cli: $(CLI_BIN)
+
+# Run tests
+test: $(TEST_BIN)
+	./$(TEST_BIN)
+
+# Benchmarks
+$(BENCH_BIN): benchmarks/bench_carta.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta $(LDFLAGS) -o $@
+
+bench: $(BENCH_BIN)
+	./$(BENCH_BIN)
+
+# Debug build
+debug: CFLAGS = $(DEBUG_CFLAGS)
+debug: clean all
+
+# WASM build (requires Emscripten)
+wasm:
+	emcc $(CORE_SRCS) $(MINIZ_SRCS) \
+		-Iinclude -Ivendor \
+		-DMINIZ_NO_STDIO -DMINIZ_NO_TIME \
+		-O2 \
+		-s WASM=1 \
+		-s EXPORTED_FUNCTIONS='["_ct_load_pbf_memory", "_ct_generate_mvt", "_ct_generate_png", "_ct_free_pbf_context", "_ct_default_style", "_ct_tile_bounds", "_malloc", "_free"]' \
+		-s EXPORTED_RUNTIME_METHODS='["ccall", "cwrap", "getValue", "setValue", "HEAPU8"]' \
+		-s ALLOW_MEMORY_GROWTH=1 \
+		-s INITIAL_MEMORY=67108864 \
+		-o $(WASM_OUT)
+
+# Clean
+clean:
+	rm -f $(CORE_OBJS) $(MINIZ_OBJS) $(LIB)
+	rm -f $(TEST_BIN) $(CLI_BIN) $(BENCH_BIN)
+	rm -f $(WASM_OUT) carta.wasm
+
+# Dependencies
+src/carta.o: include/carta.h include/ct_types.h
+src/ct_tile.o: include/ct_types.h include/ct_tile.h
+src/ct_pbf.o: include/ct_types.h include/ct_pbf.h
+src/ct_mvt.o: include/ct_types.h include/ct_mvt.h
+src/ct_render.o: include/ct_types.h include/ct_render.h
+src/ct_png.o: include/ct_types.h include/ct_png.h
+src/ct_style.o: include/ct_types.h
+
+# Help
+help:
+	@echo "Carta Build System"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all      - Build library and tests (default)"
+	@echo "  lib      - Build static library (libcarta.a)"
+	@echo "  test     - Build and run tests"
+	@echo "  bench    - Build and run benchmarks"
+	@echo "  cli      - Build command-line tool"
+	@echo "  debug    - Build with debug symbols"
+	@echo "  wasm     - Build WebAssembly (requires Emscripten)"
+	@echo "  clean    - Remove build artifacts"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make                      # Build library and tests"
+	@echo "  make test                 # Run test suite"
+	@echo "  make cli && ./carta_cli map.osm.pbf --zoom 14"
