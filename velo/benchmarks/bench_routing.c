@@ -150,6 +150,11 @@ typedef struct {
     VLAlgorithm algorithm;
 } AlgorithmDef;
 
+typedef struct {
+    const char *name;
+    VLProfile profile;
+} ProfileDef;
+
 static void run_benchmark(VLGraph *graph, const char *graph_name,
                           uint32_t source, uint32_t target, int iterations)
 {
@@ -238,6 +243,65 @@ static void run_benchmark(VLGraph *graph, const char *graph_name,
 
         printf("%-20s %12.3f %12u %12.0f\n",
                "Dijkstra Bucket ", avg_time, avg_nodes, distance);
+    }
+}
+
+static void run_profile_benchmark(VLGraph *graph, const char *graph_name,
+                                  uint32_t source, uint32_t target, int iterations)
+{
+    ProfileDef profiles[] = {
+        {"Car (all roads) ", VL_PROFILE_CAR},
+        {"Truck (no res.) ", VL_PROFILE_TRUCK},
+        {"Bike (no mway)  ", VL_PROFILE_BIKE},
+        {"Any (no filter) ", VL_PROFILE_ANY}
+    };
+    int num_profiles = sizeof(profiles) / sizeof(profiles[0]);
+
+    printf("\nProfile Benchmark: %s\n", graph_name);
+    printf("Route: node %u -> node %u, %d iterations\n",
+           source, target, iterations);
+    printf("%-20s %12s %12s %12s\n",
+           "Profile", "Time (ms)", "Nodes", "Distance");
+    printf("%-20s %12s %12s %12s\n",
+           "-------------------", "------------", "------------", "------------");
+
+    for (int p = 0; p < num_profiles; p++) {
+        VLRouteOptions opts;
+        vl_default_options(&opts);
+        opts.algorithm = VL_ALGORITHM_ASTAR_BIDIR;
+        opts.weight = VL_WEIGHT_DISTANCE;
+        opts.include_geometry = 0;
+        opts.profile = profiles[p].profile;
+
+        double total_time = 0;
+        uint32_t total_nodes = 0;
+        double distance = 0;
+        int success_count = 0;
+
+        for (int i = 0; i < iterations; i++) {
+            VLRoute route;
+            double start = get_time_ms();
+            VLStatus status = vl_route(graph, source, target, &opts, &route);
+            double end = get_time_ms();
+
+            if (status == VL_OK) {
+                total_time += (end - start);
+                total_nodes += route.nodes_explored;
+                distance = route.distance_m;
+                success_count++;
+                vl_free_route(&route);
+            }
+        }
+
+        if (success_count > 0) {
+            double avg_time = total_time / success_count;
+            uint32_t avg_nodes = total_nodes / (uint32_t)success_count;
+            printf("%-20s %12.3f %12u %12.0f\n",
+                   profiles[p].name, avg_time, avg_nodes, distance);
+        } else {
+            printf("%-20s %12s %12s %12s\n",
+                   profiles[p].name, "NO ROUTE", "-", "-");
+        }
     }
 }
 
@@ -345,6 +409,17 @@ int main(int argc, char *argv[])
             source = vl_graph_nearest_node(real_graph, pecs);
             target = vl_graph_nearest_node(real_graph, debrecen);
             run_benchmark(real_graph, "Pécs -> Debrecen", source, target, 5);
+
+            /* Profile benchmark */
+            printf("\n\nVehicle Profile Benchmark\n");
+            printf("=========================\n");
+            source = vl_graph_nearest_node(real_graph, budapest);
+            target = vl_graph_nearest_node(real_graph, szeged);
+            run_profile_benchmark(real_graph, "Budapest -> Szeged", source, target, 10);
+
+            source = vl_graph_nearest_node(real_graph, sopron);
+            target = vl_graph_nearest_node(real_graph, nyiregyhaza);
+            run_profile_benchmark(real_graph, "Sopron -> Nyíregyháza", source, target, 5);
 
             /* Landmarks benchmark */
             if (use_landmarks) {

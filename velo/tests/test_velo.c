@@ -649,6 +649,233 @@ TEST(default_options)
     ASSERT_EQ(opts.algorithm, VL_ALGORITHM_ASTAR_BIDIR);
     ASSERT_EQ(opts.weight, VL_WEIGHT_DURATION);
     ASSERT_EQ(opts.include_geometry, 1);
+    ASSERT_EQ(opts.profile, VL_PROFILE_CAR);
+}
+
+/* ============================================================================
+ * Vehicle Profile Tests
+ * ============================================================================ */
+
+/*
+ * Create a test graph with mixed road types for profile testing:
+ *
+ *     0 ---(motorway)--- 1 ---(trunk)--- 2
+ *     |                  |               |
+ * (primary)         (secondary)     (tertiary)
+ *     |                  |               |
+ *     3 --(residential)- 4 --(service)-- 5
+ *
+ * This allows testing that different profiles correctly filter edges.
+ */
+static VLGraph *create_profile_test_graph(void)
+{
+    VLGraph *graph = calloc(1, sizeof(VLGraph));
+    if (!graph) return NULL;
+
+    graph->num_nodes = 6;
+    graph->nodes = calloc(6, sizeof(VLNode));
+    if (!graph->nodes) {
+        free(graph);
+        return NULL;
+    }
+
+    /* Set coordinates */
+    double coords[6][2] = {
+        {47.5, 19.0}, {47.5, 19.1}, {47.5, 19.2},
+        {47.4, 19.0}, {47.4, 19.1}, {47.4, 19.2}
+    };
+    for (int i = 0; i < 6; i++) {
+        graph->nodes[i].coord.lat = (int32_t)(coords[i][0] * 1e7);
+        graph->nodes[i].coord.lon = (int32_t)(coords[i][1] * 1e7);
+        graph->nodes[i].osm_id = i + 1;
+    }
+
+    /* 14 edges (7 bidirectional), each with specific road type */
+    graph->num_edges = 14;
+    graph->edges = calloc(14, sizeof(VLEdge));
+    if (!graph->edges) {
+        free(graph->nodes);
+        free(graph);
+        return NULL;
+    }
+
+    /* Edge definitions: {from, to, dist_km, road_type} */
+    struct { int from, to, dist; uint16_t type; } edge_defs[] = {
+        {0, 1, 10, VL_EDGE_MOTORWAY},    {1, 0, 10, VL_EDGE_MOTORWAY},
+        {1, 2, 15, VL_EDGE_TRUNK},       {2, 1, 15, VL_EDGE_TRUNK},
+        {0, 3, 20, VL_EDGE_PRIMARY},     {3, 0, 20, VL_EDGE_PRIMARY},
+        {1, 4, 25, VL_EDGE_SECONDARY},   {4, 1, 25, VL_EDGE_SECONDARY},
+        {2, 5, 30, VL_EDGE_TERTIARY},    {5, 2, 30, VL_EDGE_TERTIARY},
+        {3, 4, 35, VL_EDGE_RESIDENTIAL}, {4, 3, 35, VL_EDGE_RESIDENTIAL},
+        {4, 5, 40, VL_EDGE_SERVICE},     {5, 4, 40, VL_EDGE_SERVICE}
+    };
+
+    /* Count edges per node */
+    for (int i = 0; i < 14; i++) {
+        graph->nodes[edge_defs[i].from].edge_count++;
+    }
+
+    /* Calculate offsets */
+    uint32_t offset = 0;
+    for (int i = 0; i < 6; i++) {
+        graph->nodes[i].edge_start = offset;
+        offset += graph->nodes[i].edge_count;
+        graph->nodes[i].edge_count = 0;
+    }
+
+    /* Fill edges */
+    for (int i = 0; i < 14; i++) {
+        int from = edge_defs[i].from;
+        uint32_t idx = graph->nodes[from].edge_start + graph->nodes[from].edge_count;
+        graph->edges[idx].target = (uint32_t)edge_defs[i].to;
+        graph->edges[idx].distance = (uint32_t)(edge_defs[i].dist * 1000 * 1000);
+        graph->edges[idx].duration = (uint16_t)(edge_defs[i].dist * 10);
+        graph->edges[idx].flags = edge_defs[i].type;
+        graph->nodes[from].edge_count++;
+    }
+
+    graph->owns_memory = 1;
+    return graph;
+}
+
+TEST(profile_car_all_roads)
+{
+    VLGraph *graph = create_profile_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.weight = VL_WEIGHT_DISTANCE;
+    opts.profile = VL_PROFILE_CAR;
+
+    /* Cars can use all roads, so shortest path 0->5 via motorway+trunk+tertiary */
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    /* Shortest path: 0 -> 1 -> 2 -> 5 (10 + 15 + 30 = 55 km) */
+    ASSERT_NEAR(route.distance_m, 55000.0, 100.0);
+    ASSERT_EQ(route.num_nodes, 4);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(profile_truck_avoids_residential_service)
+{
+    VLGraph *graph = create_profile_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.weight = VL_WEIGHT_DISTANCE;
+    opts.profile = VL_PROFILE_TRUCK;
+
+    /* Trucks must avoid residential (3-4) and service (4-5) roads */
+    /* From 3 to 5: cannot go 3->4->5 (residential+service) */
+    /* Must go 3->0->1->2->5 (primary+motorway+trunk+tertiary = 20+10+15+30 = 75 km) */
+    VLRoute route;
+    VLStatus status = vl_route(graph, 3, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 75000.0, 100.0);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(profile_bike_avoids_motorway_trunk)
+{
+    VLGraph *graph = create_profile_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.weight = VL_WEIGHT_DISTANCE;
+    opts.profile = VL_PROFILE_BIKE;
+
+    /* Bikes must avoid motorway (0-1) and trunk (1-2) */
+    /* From 0 to 2: cannot go 0->1->2 (motorway+trunk) */
+    /* Must go via bottom: 0->3->4->5->2 (primary+residential+service+tertiary = 20+35+40+30 = 125 km) */
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 2, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 125000.0, 100.0);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(profile_foot_avoids_motorway_trunk_primary)
+{
+    VLGraph *graph = create_profile_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.weight = VL_WEIGHT_DISTANCE;
+    opts.profile = VL_PROFILE_FOOT;
+
+    /* Pedestrians must avoid motorway (0-1), trunk (1-2), and primary (0-3) */
+    /* From 0 to 5: no direct path from 0 (blocked by motorway and primary) */
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    /* Should fail - node 0 is isolated for pedestrians */
+    ASSERT_EQ(status, VL_ERROR_NO_ROUTE);
+
+    vl_free_route(&route);
+
+    /* But 3 to 5 should work (residential + service) */
+    status = vl_route(graph, 3, 5, &opts, &route);
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 75000.0, 100.0);  /* 3->4->5 = 35+40 = 75 km */
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(profile_any_no_filtering)
+{
+    VLGraph *graph = create_profile_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.weight = VL_WEIGHT_DISTANCE;
+    opts.profile = VL_PROFILE_ANY;
+
+    /* ANY profile should behave same as CAR - all roads accessible */
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 55000.0, 100.0);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(profile_with_astar)
+{
+    VLGraph *graph = create_profile_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_ASTAR;
+    opts.weight = VL_WEIGHT_DISTANCE;
+    opts.profile = VL_PROFILE_TRUCK;
+
+    /* Same truck test with A* algorithm */
+    VLRoute route;
+    VLStatus status = vl_route(graph, 3, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 75000.0, 100.0);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
 }
 
 /* ============================================================================
@@ -709,6 +936,15 @@ int main(void)
     RUN_TEST(version);
     RUN_TEST(status_strings);
     RUN_TEST(default_options);
+    printf("\n");
+
+    printf("Vehicle Profile Tests:\n");
+    RUN_TEST(profile_car_all_roads);
+    RUN_TEST(profile_truck_avoids_residential_service);
+    RUN_TEST(profile_bike_avoids_motorway_trunk);
+    RUN_TEST(profile_foot_avoids_motorway_trunk_primary);
+    RUN_TEST(profile_any_no_filtering);
+    RUN_TEST(profile_with_astar);
     printf("\n");
 
     printf("================\n");
