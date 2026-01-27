@@ -1,0 +1,29 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Binaries
+test_carta
+carta_cli
+bench_carta
+
+# WASM output
+carta.js
+carta.wasm
+
+# Generated tiles
+*.mvt
+*.png
+tiles/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
