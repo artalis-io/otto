@@ -80,6 +80,40 @@ VLStatus vl_graph_build_grid_index(VLGraph *graph);
 uint32_t vl_graph_nearest_node_grid(const VLGraph *graph, VLCoord coord);
 
 /* ============================================================================
+ * Degree-2 Node Contraction
+ * ============================================================================ */
+
+/*
+ * Contract degree-2 nodes to reduce graph size.
+ * Chains like A -> B -> C -> D (where B, C have degree 2) become A -> D.
+ * Intermediate nodes are stored for path reconstruction.
+ *
+ * This is an optional optimization that reduces node count by 40-60%
+ * on typical road networks, speeding up routing queries.
+ *
+ * graph: graph to contract (modified in place)
+ *
+ * Returns VL_OK on success.
+ */
+VLStatus vl_graph_contract_degree2(VLGraph *graph);
+
+/*
+ * Unpack a contracted path to include intermediate nodes.
+ * Call this after routing to get the full path through original nodes.
+ *
+ * graph: the contracted graph
+ * node_indices: array of node indices from route result
+ * num_nodes: number of nodes in the path
+ * out_indices: (out) unpacked node indices (caller must free)
+ * out_num_nodes: (out) number of nodes in unpacked path
+ *
+ * Returns VL_OK on success.
+ */
+VLStatus vl_graph_unpack_path(const VLGraph *graph,
+                               const uint32_t *node_indices, int num_nodes,
+                               uint32_t **out_indices, int *out_num_nodes);
+
+/* ============================================================================
  * Graph Memory Management
  * ============================================================================ */
 

@@ -252,15 +252,29 @@ int main(int argc, char *argv[])
             printf("Graph loaded: %u nodes, %u edges\n",
                    real_graph->num_nodes, real_graph->num_edges);
 
-            /* Route from Budapest area to Szeged area (roughly) */
-            /* For random testing, use nodes spread across the graph */
-            uint32_t source = real_graph->num_nodes / 4;
-            uint32_t target = real_graph->num_nodes * 3 / 4;
-            run_benchmark(real_graph, "Hungary", source, target, 10);
+            /* Use coordinate-based routing for fair comparison */
+            /* Budapest -> Szeged */
+            VLCoord budapest = {47.4979, 19.0402};
+            VLCoord szeged = {46.2530, 20.1414};
+            uint32_t source = vl_graph_nearest_node(real_graph, budapest);
+            uint32_t target = vl_graph_nearest_node(real_graph, szeged);
 
-            /* Also test corner-to-corner */
-            run_benchmark(real_graph, "Hungary (end-to-end)", 0,
-                         real_graph->num_nodes - 1, 5);
+            printf("Budapest node: %u, Szeged node: %u\n\n", source, target);
+            run_benchmark(real_graph, "Budapest -> Szeged", source, target, 10);
+
+            /* Sopron -> Nyíregyháza (cross-country) */
+            VLCoord sopron = {47.6851, 16.5908};
+            VLCoord nyiregyhaza = {47.9554, 21.7167};
+            source = vl_graph_nearest_node(real_graph, sopron);
+            target = vl_graph_nearest_node(real_graph, nyiregyhaza);
+            run_benchmark(real_graph, "Sopron -> Nyíregyháza", source, target, 5);
+
+            /* Pécs -> Debrecen (diagonal) */
+            VLCoord pecs = {46.0727, 18.2323};
+            VLCoord debrecen = {47.5316, 21.6273};
+            source = vl_graph_nearest_node(real_graph, pecs);
+            target = vl_graph_nearest_node(real_graph, debrecen);
+            run_benchmark(real_graph, "Pécs -> Debrecen", source, target, 5);
 
             vl_graph_free(real_graph);
         } else {

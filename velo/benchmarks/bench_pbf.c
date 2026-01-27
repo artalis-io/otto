@@ -7,6 +7,7 @@
 #include "velo.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -42,15 +43,28 @@ static size_t get_file_size(const char *filename)
     return size > 0 ? (size_t)size : 0;
 }
 
+/* Forward declaration */
+VLStatus vl_graph_contract_degree2(VLGraph *graph);
+
 int main(int argc, char *argv[])
 {
     if (argc < 2) {
-        printf("Usage: %s <file.osm.pbf> [output.vlg]\n", argv[0]);
+        printf("Usage: %s <file.osm.pbf> [output.vlg] [--contract]\n", argv[0]);
+        printf("  --contract: Apply degree-2 node contraction\n");
         return 1;
     }
 
     const char *pbf_file = argv[1];
-    const char *vlg_file = argc > 2 ? argv[2] : NULL;
+    const char *vlg_file = NULL;
+    int do_contract = 0;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--contract") == 0) {
+            do_contract = 1;
+        } else if (argv[i][0] != '-') {
+            vlg_file = argv[i];
+        }
+    }
 
     printf("Velo PBF Parsing Benchmark\n");
     printf("==========================\n\n");
@@ -139,6 +153,26 @@ int main(int argc, char *argv[])
     printf("  Avg out-degree:  %.2f\n", avg_degree);
     printf("  Finalize time:   %.2f ms\n\n", finalize_time);
 
+    /* Phase 3.5: Optional contraction */
+    double contract_time = 0;
+    if (do_contract) {
+        printf("Phase 3.5: Contracting degree-2 nodes...\n");
+        t1 = get_time_ms();
+
+        status = vl_graph_contract_degree2(graph);
+        t2 = get_time_ms();
+
+        if (status == VL_OK) {
+            contract_time = t2 - t1;
+            vl_graph_stats(graph, &num_nodes, &num_edges, &max_degree, &avg_degree);
+            printf("  Contracted nodes: %u\n", num_nodes);
+            printf("  Contracted edges: %u\n", num_edges);
+            printf("  Contract time:    %.2f ms\n\n", contract_time);
+        } else {
+            printf("  Contraction failed: %s\n\n", vl_status_string(status));
+        }
+    }
+
     /* Phase 4: Save to binary (optional) */
     if (vlg_file) {
         printf("Phase 4: Saving binary graph...\n");
@@ -158,10 +192,13 @@ int main(int argc, char *argv[])
     }
 
     /* Summary */
-    double total_time = parse_time + build_time + finalize_time;
+    double total_time = parse_time + build_time + finalize_time + contract_time;
     printf("Summary\n");
     printf("-------\n");
     printf("  Total time:      %.2f ms (%.2f seconds)\n", total_time, total_time / 1000.0);
+    if (do_contract) {
+        printf("  Contract time:   %.2f ms\n", contract_time);
+    }
     printf("  Throughput:      %.2f MB/s\n", (file_size / (1024.0 * 1024.0)) / (total_time / 1000.0));
 
     /* Memory estimate */
