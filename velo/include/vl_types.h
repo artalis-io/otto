@@ -210,6 +210,15 @@ typedef enum {
     VL_ALGORITHM_ASTAR_BIDIR
 } VLAlgorithm;
 
+/* Vehicle profiles for routing */
+typedef enum {
+    VL_PROFILE_CAR = 0,    /* Standard car - all roads */
+    VL_PROFILE_TRUCK,      /* HGV/truck - avoid residential, service */
+    VL_PROFILE_BIKE,       /* Bicycle - avoid motorways, trunks */
+    VL_PROFILE_FOOT,       /* Pedestrian - avoid motorways, trunks, primaries */
+    VL_PROFILE_ANY         /* No filtering (all roads accessible) */
+} VLProfile;
+
 typedef enum {
     VL_WEIGHT_DISTANCE,    /* Optimize for shortest distance */
     VL_WEIGHT_DURATION     /* Optimize for fastest route */
@@ -222,6 +231,7 @@ typedef struct {
     double max_distance;   /* Maximum search distance (0 = unlimited) */
     double max_duration;   /* Maximum search duration (0 = unlimited) */
     double epsilon;        /* Suboptimality bound (0 = optimal, 0.1 = up to 10% longer) */
+    VLProfile profile;     /* Vehicle profile for edge filtering */
 } VLRouteOptions;
 
 /* ============================================================================

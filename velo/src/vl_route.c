@@ -80,6 +80,47 @@ void vl_default_options(VLRouteOptions *opts)
     opts->max_distance = 0;
     opts->max_duration = 0;
     opts->epsilon = 0;  /* Optimal by default */
+    opts->profile = VL_PROFILE_CAR;  /* Standard car profile */
+}
+
+/* ============================================================================
+ * Vehicle Profile Edge Filtering
+ * ============================================================================ */
+
+/*
+ * Check if edge is accessible for given vehicle profile.
+ * Returns 1 if accessible, 0 if not.
+ */
+static inline int edge_accessible(uint16_t flags, VLProfile profile)
+{
+    if (profile == VL_PROFILE_ANY) return 1;
+
+    uint16_t road_type = flags & VL_EDGE_TYPE_MASK;
+
+    switch (profile) {
+    case VL_PROFILE_CAR:
+        /* Cars can use all roads */
+        return 1;
+
+    case VL_PROFILE_TRUCK:
+        /* Trucks avoid residential and service roads */
+        return road_type != VL_EDGE_RESIDENTIAL &&
+               road_type != VL_EDGE_SERVICE;
+
+    case VL_PROFILE_BIKE:
+        /* Bikes avoid motorways and trunks */
+        return road_type != VL_EDGE_MOTORWAY &&
+               road_type != VL_EDGE_TRUNK;
+
+    case VL_PROFILE_FOOT:
+        /* Pedestrians avoid motorways, trunks, primaries */
+        return road_type != VL_EDGE_MOTORWAY &&
+               road_type != VL_EDGE_TRUNK &&
+               road_type != VL_EDGE_PRIMARY;
+
+    default:
+        return 1;
+    }
 }
 
 /* ============================================================================
@@ -398,10 +439,12 @@ static VLStatus dijkstra_ctx(const VLGraph *graph, VLQueryContext *ctx,
 
         const VLNode *node = &graph->nodes[u];
 
-        /* SIMD hint for edge relaxation */
-        #pragma omp simd
         for (uint32_t e = 0; e < node->edge_count; e++) {
             const VLEdge *edge = &graph->edges[node->edge_start + e];
+
+            /* Skip edges not accessible for this profile */
+            if (!edge_accessible(edge->flags, opts->profile)) continue;
+
             uint32_t v = edge->target;
             double w = edge_weight(edge, opts->weight);
             double new_dist = ctx->dist_fwd[u] + w;
@@ -508,6 +551,10 @@ static VLStatus dijkstra_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                 const VLNode *node = &graph->nodes[u];
                 for (uint32_t e = 0; e < node->edge_count; e++) {
                     const VLEdge *edge = &graph->edges[node->edge_start + e];
+
+                    /* Skip edges not accessible for this profile */
+                    if (!edge_accessible(edge->flags, opts->profile)) continue;
+
                     uint32_t v = edge->target;
                     if (IS_SETTLED_FWD(ctx, v)) continue;
 
@@ -557,10 +604,13 @@ static VLStatus dijkstra_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                 uint32_t rev_count = graph->rev_edge_count[u];
 
                 for (uint32_t r = 0; r < rev_count; r++) {
-                    uint32_t v = graph->rev_edges[rev_start + r];
                     uint32_t edge_idx = graph->rev_edge_idx[rev_start + r];
                     const VLEdge *edge = &graph->edges[edge_idx];
 
+                    /* Skip edges not accessible for this profile */
+                    if (!edge_accessible(edge->flags, opts->profile)) continue;
+
+                    uint32_t v = graph->rev_edges[rev_start + r];
                     if (IS_SETTLED_BWD(ctx, v)) continue;
 
                     double w = edge_weight(edge, opts->weight);
@@ -650,6 +700,10 @@ static VLStatus astar_ctx(const VLGraph *graph, VLQueryContext *ctx,
         const VLNode *node = &graph->nodes[u];
         for (uint32_t e = 0; e < node->edge_count; e++) {
             const VLEdge *edge = &graph->edges[node->edge_start + e];
+
+            /* Skip edges not accessible for this profile */
+            if (!edge_accessible(edge->flags, opts->profile)) continue;
+
             uint32_t v = edge->target;
             double w = edge_weight(edge, opts->weight);
             double tentative_g = ctx->dist_fwd[u] + w;
@@ -769,6 +823,10 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                 const VLNode *node = &graph->nodes[u];
                 for (uint32_t e = 0; e < node->edge_count; e++) {
                     const VLEdge *edge = &graph->edges[node->edge_start + e];
+
+                    /* Skip edges not accessible for this profile */
+                    if (!edge_accessible(edge->flags, opts->profile)) continue;
+
                     uint32_t v = edge->target;
                     if (IS_SETTLED_FWD(ctx, v)) continue;
 
@@ -816,10 +874,13 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                 uint32_t rev_count = graph->rev_edge_count[u];
 
                 for (uint32_t r = 0; r < rev_count; r++) {
-                    uint32_t v = graph->rev_edges[rev_start + r];
                     uint32_t edge_idx = graph->rev_edge_idx[rev_start + r];
                     const VLEdge *edge = &graph->edges[edge_idx];
 
+                    /* Skip edges not accessible for this profile */
+                    if (!edge_accessible(edge->flags, opts->profile)) continue;
+
+                    uint32_t v = graph->rev_edges[rev_start + r];
                     if (IS_SETTLED_BWD(ctx, v)) continue;
 
                     double w = edge_weight(edge, opts->weight);
@@ -1062,6 +1123,10 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
         const VLNode *node = &graph->nodes[u];
         for (uint32_t e = 0; e < node->edge_count; e++) {
             const VLEdge *edge = &graph->edges[node->edge_start + e];
+
+            /* Skip edges not accessible for this profile */
+            if (!edge_accessible(edge->flags, opts->profile)) continue;
+
             uint32_t v = edge->target;
 
             if (visited[v]) continue;
@@ -1216,6 +1281,10 @@ VLStatus vl_route_dijkstra_bucket(const VLGraph *graph, uint32_t source, uint32_
         const VLNode *node = &graph->nodes[u];
         for (uint32_t e = 0; e < node->edge_count; e++) {
             const VLEdge *edge = &graph->edges[node->edge_start + e];
+
+            /* Skip edges not accessible for this profile */
+            if (!edge_accessible(edge->flags, opts->profile)) continue;
+
             uint32_t v = edge->target;
 
             if (visited[v]) continue;
