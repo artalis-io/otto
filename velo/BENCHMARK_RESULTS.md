@@ -13,22 +13,26 @@
 |--------------|--------------|--------|---------------|--------|
 | Degree-2 Contraction | 683ms | 0 | ~19% | ✅ Working |
 | ALT (16 Landmarks) | 2.2s | 664 MB | **2.5-3.8x** | ✅ Working |
-| ALT (32 Landmarks) | 3.4s | 1.3 GB | **5-10x** | ✅ Working |
+| ALT (32 Landmarks) | 3.6s | 2.6 GB* | **5-11x** | ✅ Working |
 | Hilbert Reordering | 648ms | 0 | **1.5-2.1x** | ✅ Working |
 | 4-ary Heap | 0 | 0 | ~10% | ✅ Working |
 | Fast Distance Heuristic | 0 | 0 | ~10-15% | ✅ Working |
+| SIMD Landmark Heuristic | 0 | 0 | ~10% | ✅ Working |
 | Bucket Heap | 0 | 0 | N/A | ⚠️ Slower than binary heap |
 
-### Best Combined Results (Hilbert + 32 Landmarks)
+*\*Memory includes transposed layout for SIMD. Use `make LOWMEM=1` to halve memory at ~10% query speed cost.*
+
+### Best Combined Results (Hilbert + 32 Landmarks + SIMD)
 
 | Route | Baseline | Optimized | Speedup |
 |-------|----------|-----------|---------|
-| Budapest → Szeged | 154ms | **37ms** | 4.2x |
-| Sopron → Nyíregyháza | 345ms | **34ms** | 10.1x |
-| Pécs → Debrecen | 200ms | **39ms** | 5.1x |
+| Budapest → Szeged | 154ms | **34ms** | 4.5x |
+| Sopron → Nyíregyháza | 345ms | **32ms** | 10.8x |
+| Pécs → Debrecen | 200ms | **35ms** | 5.7x |
 
-- **Total preprocessing**: ~4 seconds (Hilbert 648ms + Landmarks 3.4s)
-- **Extra memory**: 1.3 GB for 32 landmarks
+- **Total preprocessing**: ~4 seconds (Hilbert 648ms + Landmarks 3.6s)
+- **Memory (default)**: 2.6 GB for 32 landmarks (with transposed SIMD layout)
+- **Memory (LOWMEM)**: 1.3 GB for 32 landmarks (no transpose, ~10% slower)
 
 ---
 
@@ -114,9 +118,10 @@ OSRM with Contraction Hierarchies (MLD algorithm):
 
 | Metric | Velo (best) | OSRM (CH) | Gap |
 |--------|-------------|-----------|-----|
-| Query Time | 40-130 ms | < 1 ms | ~50-150x |
-| Preprocessing | 3 sec | 10-30 min | **Velo 200x faster** |
-| Memory | 125 + 664 MB | ~500 MB | Similar |
+| Query Time | 32-35 ms | < 1 ms | ~30-50x |
+| Preprocessing | 4 sec | 10-30 min | **Velo 150x faster** |
+| Memory | 125 + 2600 MB | ~500 MB | Velo uses more |
+| Memory (LOWMEM) | 125 + 1300 MB | ~500 MB | Similar |
 
 ### When to Use Velo vs OSRM
 

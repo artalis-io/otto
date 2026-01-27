@@ -6,6 +6,21 @@
  *   h(v, t) = max over all L of |dist(v, L) - dist(t, L)|
  *
  * This is admissible and often much tighter than haversine distance.
+ *
+ * MEMORY vs SPEED TRADEOFF:
+ * -------------------------
+ * By default, landmarks use a "transposed" memory layout that stores all
+ * landmark distances for each node contiguously. This enables SIMD and
+ * provides ~10% faster queries, but DOUBLES memory usage.
+ *
+ * To disable transposed layout and save memory, compile with:
+ *   -DVL_LANDMARKS_NO_TRANSPOSE
+ *
+ * Memory usage for Hungary (2.7M nodes, 32 landmarks):
+ *   - With transpose (default): 2.6 GB
+ *   - Without transpose: 1.3 GB
+ *
+ * Query time difference: ~10% slower without transpose.
  */
 
 #include "vl_types.h"
@@ -324,7 +339,12 @@ VLLandmarks *vl_landmarks_create(const VLGraph *graph, int num_landmarks)
         }
     }
 
-    /* Create transposed arrays for cache-friendly heuristic computation */
+    /*
+     * Create transposed arrays for cache-friendly heuristic computation.
+     * This doubles memory usage but provides ~10% faster queries via SIMD.
+     * Disable with -DVL_LANDMARKS_NO_TRANSPOSE to save memory.
+     */
+#ifndef VL_LANDMARKS_NO_TRANSPOSE
     printf("velo: Creating transposed layout for fast queries...\n");
 
     lm->dist_to_t = malloc(dist_size);
@@ -348,6 +368,11 @@ VLLandmarks *vl_landmarks_create(const VLGraph *graph, int num_landmarks)
         lm->dist_to_t = NULL;
         lm->dist_from_t = NULL;
     }
+#else
+    /* Transposed layout disabled - use less memory but slower queries */
+    lm->dist_to_t = NULL;
+    lm->dist_from_t = NULL;
+#endif
 
     double total_mb = dist_size * (lm->dist_to_t ? 4.0 : 2.0) / (1024 * 1024);
     printf("velo: Landmarks ready (%d landmarks, %.1f MB)\n",
