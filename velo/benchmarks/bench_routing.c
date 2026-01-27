@@ -6,6 +6,7 @@
 
 #include "velo.h"
 #include "vl_route.h"
+#include "vl_graph.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -275,6 +276,7 @@ int main(int argc, char *argv[])
         const char *filename = argv[1];
         int use_landmarks = 0;
         int num_landmarks = VL_DEFAULT_LANDMARKS;
+        int use_hilbert = 0;
 
         /* Parse command-line options */
         for (int i = 2; i < argc; i++) {
@@ -286,6 +288,8 @@ int main(int argc, char *argv[])
                         num_landmarks = VL_DEFAULT_LANDMARKS;
                     }
                 }
+            } else if (strcmp(argv[i], "--hilbert") == 0) {
+                use_hilbert = 1;
             }
         }
 
@@ -304,6 +308,19 @@ int main(int argc, char *argv[])
         if (real_graph && real_graph->num_nodes > 0) {
             printf("Graph loaded: %u nodes, %u edges\n",
                    real_graph->num_nodes, real_graph->num_edges);
+
+            /* Apply Hilbert curve reordering if requested */
+            if (use_hilbert) {
+                printf("\nApplying Hilbert curve reordering...\n");
+                double hilbert_start = get_time_ms();
+                VLStatus status = vl_graph_reorder_hilbert(real_graph);
+                double hilbert_time = get_time_ms() - hilbert_start;
+                if (status == VL_OK) {
+                    printf("Hilbert reordering: %.1f ms\n", hilbert_time);
+                } else {
+                    printf("Hilbert reordering failed: %s\n", vl_status_string(status));
+                }
+            }
 
             /* Use coordinate-based routing for fair comparison */
             /* Budapest -> Szeged */
