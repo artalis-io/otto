@@ -1366,3 +1366,223 @@ void vl_graph_stats(const VLGraph *graph, uint32_t *num_nodes, uint32_t *num_edg
         }
     }
 }
+
+/* ============================================================================
+ * Hilbert Curve Reordering for Cache Locality
+ * ============================================================================ */
+
+/*
+ * Convert (x, y) to Hilbert curve index for a 2^order x 2^order grid.
+ * This is the standard algorithm from the Hilbert curve literature.
+ */
+static uint64_t xy_to_hilbert(uint32_t x, uint32_t y, int order)
+{
+    uint64_t d = 0;
+    for (int s = order - 1; s >= 0; s--) {
+        uint32_t rx = (x >> s) & 1;
+        uint32_t ry = (y >> s) & 1;
+        d += (uint64_t)(s > 0 ? ((uint64_t)1 << (2 * s)) : 1) * ((3 * rx) ^ ry);
+
+        /* Rotate quadrant */
+        if (ry == 0) {
+            if (rx == 1) {
+                x = ((uint32_t)1 << s) - 1 - x;
+                y = ((uint32_t)1 << s) - 1 - y;
+            }
+            /* Swap x and y */
+            uint32_t t = x;
+            x = y;
+            y = t;
+        }
+    }
+    return d;
+}
+
+/* Node with Hilbert index for sorting */
+typedef struct {
+    uint32_t original_idx;
+    uint64_t hilbert_idx;
+} HilbertNode;
+
+/* Comparison function for qsort */
+static int compare_hilbert(const void *a, const void *b)
+{
+    const HilbertNode *ha = (const HilbertNode *)a;
+    const HilbertNode *hb = (const HilbertNode *)b;
+    if (ha->hilbert_idx < hb->hilbert_idx) return -1;
+    if (ha->hilbert_idx > hb->hilbert_idx) return 1;
+    return 0;
+}
+
+VLStatus vl_graph_reorder_hilbert(VLGraph *graph)
+{
+    if (!graph || graph->num_nodes == 0) {
+        return VL_ERROR_INVALID_ARGUMENT;
+    }
+
+    printf("velo: Reordering nodes by Hilbert curve...\n");
+
+    uint32_t num_nodes = graph->num_nodes;
+
+    /* Determine grid size (use 16-bit precision = 65536 x 65536) */
+    const int order = 16;
+    const uint32_t grid_size = (uint32_t)1 << order;
+
+    /* Calculate bounding box */
+    double lat_min = graph->bbox_min.lat;
+    double lat_max = graph->bbox_max.lat;
+    double lon_min = graph->bbox_min.lon;
+    double lon_max = graph->bbox_max.lon;
+
+    double lat_range = lat_max - lat_min;
+    double lon_range = lon_max - lon_min;
+    if (lat_range < 1e-9) lat_range = 1e-9;
+    if (lon_range < 1e-9) lon_range = 1e-9;
+
+    /* Allocate arrays for sorting */
+    HilbertNode *hilbert_nodes = malloc(num_nodes * sizeof(HilbertNode));
+    if (!hilbert_nodes) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    /* Compute Hilbert index for each node */
+    #pragma omp parallel for
+    for (uint32_t i = 0; i < num_nodes; i++) {
+        double lat = graph->nodes[i].coord.lat * 1e-7;
+        double lon = graph->nodes[i].coord.lon * 1e-7;
+
+        /* Map to grid coordinates */
+        uint32_t x = (uint32_t)(((lon - lon_min) / lon_range) * (grid_size - 1));
+        uint32_t y = (uint32_t)(((lat - lat_min) / lat_range) * (grid_size - 1));
+
+        /* Clamp to valid range */
+        if (x >= grid_size) x = grid_size - 1;
+        if (y >= grid_size) y = grid_size - 1;
+
+        hilbert_nodes[i].original_idx = i;
+        hilbert_nodes[i].hilbert_idx = xy_to_hilbert(x, y, order);
+    }
+
+    /* Sort by Hilbert index */
+    qsort(hilbert_nodes, num_nodes, sizeof(HilbertNode), compare_hilbert);
+
+    /* Build old-to-new mapping */
+    uint32_t *old_to_new = malloc(num_nodes * sizeof(uint32_t));
+    if (!old_to_new) {
+        free(hilbert_nodes);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    for (uint32_t new_idx = 0; new_idx < num_nodes; new_idx++) {
+        old_to_new[hilbert_nodes[new_idx].original_idx] = new_idx;
+    }
+
+    /* Reorder nodes */
+    VLNode *new_nodes = malloc(num_nodes * sizeof(VLNode));
+    if (!new_nodes) {
+        free(hilbert_nodes);
+        free(old_to_new);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    for (uint32_t new_idx = 0; new_idx < num_nodes; new_idx++) {
+        uint32_t old_idx = hilbert_nodes[new_idx].original_idx;
+        new_nodes[new_idx] = graph->nodes[old_idx];
+    }
+
+    free(hilbert_nodes);
+
+    /* Update edge targets to use new node indices */
+    #pragma omp parallel for
+    for (uint32_t i = 0; i < graph->num_edges; i++) {
+        uint32_t target = graph->edges[i].target;
+        if (target < num_nodes) {
+            graph->edges[i].target = old_to_new[target];
+        }
+        /* else: edge points to invalid node, leave it unchanged */
+    }
+
+    /* Reorder edges to match new node order */
+    /* First, count edges per new node */
+    uint32_t *new_edge_counts = calloc(num_nodes, sizeof(uint32_t));
+    if (!new_edge_counts) {
+        free(new_nodes);
+        free(old_to_new);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    for (uint32_t old_idx = 0; old_idx < num_nodes; old_idx++) {
+        uint32_t new_idx = old_to_new[old_idx];
+        new_edge_counts[new_idx] = graph->nodes[old_idx].edge_count;
+    }
+
+    /* Calculate new edge offsets */
+    uint32_t offset = 0;
+    for (uint32_t i = 0; i < num_nodes; i++) {
+        new_nodes[i].edge_start = offset;
+        new_nodes[i].edge_count = new_edge_counts[i];
+        offset += new_edge_counts[i];
+    }
+
+    /* Copy edges in new order */
+    VLEdge *new_edges = malloc(graph->num_edges * sizeof(VLEdge));
+    if (!new_edges) {
+        free(new_nodes);
+        free(old_to_new);
+        free(new_edge_counts);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    for (uint32_t old_idx = 0; old_idx < num_nodes; old_idx++) {
+        uint32_t new_idx = old_to_new[old_idx];
+        VLNode *old_node = &graph->nodes[old_idx];
+        VLNode *new_node = &new_nodes[new_idx];
+
+        memcpy(&new_edges[new_node->edge_start],
+               &graph->edges[old_node->edge_start],
+               old_node->edge_count * sizeof(VLEdge));
+    }
+
+    /* Replace old arrays with new ones */
+    free(graph->nodes);
+    free(graph->edges);
+    graph->nodes = new_nodes;
+    graph->edges = new_edges;
+
+    free(old_to_new);
+    free(new_edge_counts);
+
+    /* Rebuild reverse index */
+    if (graph->rev_edge_start) {
+        free(graph->rev_edge_start);
+        free(graph->rev_edge_count);
+        free(graph->rev_edges);
+        free(graph->rev_edge_idx);
+        graph->rev_edge_start = NULL;
+        graph->rev_edge_count = NULL;
+        graph->rev_edges = NULL;
+        graph->rev_edge_idx = NULL;
+
+        VLStatus status = vl_graph_build_reverse_index(graph);
+        if (status != VL_OK) {
+            return status;
+        }
+    }
+
+    /* Rebuild grid index */
+    if (graph->grid_index) {
+        free(graph->grid_index->cell_nodes);
+        free(graph->grid_index->cell_offsets);
+        free(graph->grid_index);
+        graph->grid_index = NULL;
+
+        VLStatus status = vl_graph_build_grid_index(graph);
+        if (status != VL_OK) {
+            return status;
+        }
+    }
+
+    printf("velo: Hilbert reordering complete\n");
+
+    return VL_OK;
+}

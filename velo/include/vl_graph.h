@@ -114,6 +114,24 @@ VLStatus vl_graph_unpack_path(const VLGraph *graph,
                                uint32_t **out_indices, int *out_num_nodes);
 
 /* ============================================================================
+ * Cache-Friendly Layout (Hilbert Curve Ordering)
+ * ============================================================================ */
+
+/*
+ * Reorder graph nodes using Hilbert curve for cache locality.
+ * Geographically close nodes will be stored contiguously in memory,
+ * improving cache performance during routing queries.
+ *
+ * NOTE: This is experimental and may have bugs with some graph types.
+ * Use with freshly loaded PBF graphs, not binary (.vlg) files.
+ *
+ * graph: graph to reorder (modified in place)
+ *
+ * Returns VL_OK on success.
+ */
+VLStatus vl_graph_reorder_hilbert(VLGraph *graph);
+
+/* ============================================================================
  * Graph Memory Management
  * ============================================================================ */
 
