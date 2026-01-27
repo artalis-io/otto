@@ -1,0 +1,718 @@
+/*
+ * test_velo.c - Velo comprehensive test suite
+ */
+
+#include "velo.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+/* ============================================================================
+ * Test Framework
+ * ============================================================================ */
+
+static int tests_run = 0;
+static int tests_passed = 0;
+
+#define TEST(name) static void test_##name(void)
+#define RUN_TEST(name) do { \
+    printf("  %-50s", #name); \
+    fflush(stdout); \
+    tests_run++; \
+    test_##name(); \
+    tests_passed++; \
+    printf("PASS\n"); \
+} while (0)
+
+#define ASSERT(cond) do { \
+    if (!(cond)) { \
+        printf("FAIL\n    Assertion failed: %s\n    at %s:%d\n", \
+               #cond, __FILE__, __LINE__); \
+        exit(1); \
+    } \
+} while (0)
+
+#define ASSERT_EQ(a, b) ASSERT((a) == (b))
+#define ASSERT_NE(a, b) ASSERT((a) != (b))
+#define ASSERT_LT(a, b) ASSERT((a) < (b))
+#define ASSERT_LE(a, b) ASSERT((a) <= (b))
+#define ASSERT_GT(a, b) ASSERT((a) > (b))
+#define ASSERT_GE(a, b) ASSERT((a) >= (b))
+
+#define ASSERT_NEAR(a, b, eps) ASSERT(fabs((a) - (b)) < (eps))
+
+/* ============================================================================
+ * Geo Tests
+ * ============================================================================ */
+
+TEST(haversine_same_point)
+{
+    VLCoord a = {47.5, 19.0};
+    double dist = vl_haversine(a, a);
+    ASSERT_NEAR(dist, 0.0, 0.001);
+}
+
+TEST(haversine_known_distance)
+{
+    /* Budapest to Vienna: ~214 km */
+    VLCoord budapest = {47.4979, 19.0402};
+    VLCoord vienna = {48.2082, 16.3738};
+    double dist = vl_haversine(budapest, vienna);
+    ASSERT_GT(dist, 210000);
+    ASSERT_LT(dist, 220000);
+}
+
+TEST(haversine_antipodal)
+{
+    /* Points on opposite sides of Earth: ~20000 km */
+    VLCoord a = {0, 0};
+    VLCoord b = {0, 180};
+    double dist = vl_haversine(a, b);
+    ASSERT_GT(dist, 19900000);
+    ASSERT_LT(dist, 20100000);
+}
+
+TEST(coord_valid)
+{
+    ASSERT(vl_coord_valid((VLCoord){0, 0}));
+    ASSERT(vl_coord_valid((VLCoord){90, 180}));
+    ASSERT(vl_coord_valid((VLCoord){-90, -180}));
+    ASSERT(!vl_coord_valid((VLCoord){91, 0}));
+    ASSERT(!vl_coord_valid((VLCoord){0, 181}));
+}
+
+TEST(fixed_coord_conversion)
+{
+    VLCoord c = {47.123456, -19.654321};
+    VLCoordFixed f = VL_COORD_TO_FIXED(c);
+    VLCoord c2 = VL_FIXED_TO_COORD(f);
+    ASSERT_NEAR(c.lat, c2.lat, 1e-6);
+    ASSERT_NEAR(c.lon, c2.lon, 1e-6);
+}
+
+/* ============================================================================
+ * Heap Tests
+ * ============================================================================ */
+
+/* Forward declarations for heap functions */
+VLHeap *vl_heap_create(size_t num_nodes);
+void vl_heap_free(VLHeap *heap);
+int vl_heap_empty(const VLHeap *heap);
+size_t vl_heap_size(const VLHeap *heap);
+VLStatus vl_heap_push(VLHeap *heap, uint32_t node, double priority);
+VLStatus vl_heap_pop(VLHeap *heap, VLHeapEntry *entry);
+int vl_heap_contains(const VLHeap *heap, uint32_t node);
+VLStatus vl_heap_decrease_key(VLHeap *heap, uint32_t node, double new_priority);
+
+TEST(heap_create_free)
+{
+    VLHeap *heap = vl_heap_create(100);
+    ASSERT_NE(heap, NULL);
+    ASSERT(vl_heap_empty(heap));
+    vl_heap_free(heap);
+}
+
+TEST(heap_push_pop)
+{
+    VLHeap *heap = vl_heap_create(100);
+
+    vl_heap_push(heap, 5, 5.0);
+    vl_heap_push(heap, 2, 2.0);
+    vl_heap_push(heap, 8, 8.0);
+    vl_heap_push(heap, 1, 1.0);
+    vl_heap_push(heap, 3, 3.0);
+
+    ASSERT_EQ(vl_heap_size(heap), 5);
+
+    VLHeapEntry entry;
+
+    vl_heap_pop(heap, &entry);
+    ASSERT_EQ(entry.node, 1);
+    ASSERT_NEAR(entry.priority, 1.0, 0.001);
+
+    vl_heap_pop(heap, &entry);
+    ASSERT_EQ(entry.node, 2);
+
+    vl_heap_pop(heap, &entry);
+    ASSERT_EQ(entry.node, 3);
+
+    vl_heap_pop(heap, &entry);
+    ASSERT_EQ(entry.node, 5);
+
+    vl_heap_pop(heap, &entry);
+    ASSERT_EQ(entry.node, 8);
+
+    ASSERT(vl_heap_empty(heap));
+
+    vl_heap_free(heap);
+}
+
+TEST(heap_decrease_key)
+{
+    VLHeap *heap = vl_heap_create(100);
+
+    vl_heap_push(heap, 5, 50.0);
+    vl_heap_push(heap, 3, 30.0);
+    vl_heap_push(heap, 7, 70.0);
+
+    /* Decrease key of node 7 to make it minimum */
+    vl_heap_decrease_key(heap, 7, 10.0);
+
+    VLHeapEntry entry;
+    vl_heap_pop(heap, &entry);
+    ASSERT_EQ(entry.node, 7);
+    ASSERT_NEAR(entry.priority, 10.0, 0.001);
+
+    vl_heap_free(heap);
+}
+
+TEST(heap_contains)
+{
+    VLHeap *heap = vl_heap_create(100);
+
+    ASSERT(!vl_heap_contains(heap, 5));
+
+    vl_heap_push(heap, 5, 5.0);
+    ASSERT(vl_heap_contains(heap, 5));
+    ASSERT(!vl_heap_contains(heap, 3));
+
+    VLHeapEntry entry;
+    vl_heap_pop(heap, &entry);
+    ASSERT(!vl_heap_contains(heap, 5));
+
+    vl_heap_free(heap);
+}
+
+/* ============================================================================
+ * Protobuf Tests
+ * ============================================================================ */
+
+/* Forward declarations */
+int vl_pb_read_varint(const uint8_t *buf, size_t len, uint64_t *value);
+int vl_pb_read_svarint(const uint8_t *buf, size_t len, int64_t *value);
+int vl_pb_read_tag(const uint8_t *buf, size_t len, uint32_t *field, uint32_t *wire);
+void vl_pb_delta_decode_i64(int64_t *arr, size_t count);
+
+TEST(pb_varint_small)
+{
+    uint8_t buf[] = {0x01};
+    uint64_t value;
+    int n = vl_pb_read_varint(buf, sizeof(buf), &value);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(value, 1);
+}
+
+TEST(pb_varint_300)
+{
+    /* 300 = 0xAC 0x02 */
+    uint8_t buf[] = {0xAC, 0x02};
+    uint64_t value;
+    int n = vl_pb_read_varint(buf, sizeof(buf), &value);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(value, 300);
+}
+
+TEST(pb_varint_large)
+{
+    /* 150 = 0x96 0x01 */
+    uint8_t buf[] = {0x96, 0x01};
+    uint64_t value;
+    int n = vl_pb_read_varint(buf, sizeof(buf), &value);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(value, 150);
+}
+
+TEST(pb_svarint_positive)
+{
+    /* zigzag(1) = 2 */
+    uint8_t buf[] = {0x02};
+    int64_t value;
+    int n = vl_pb_read_svarint(buf, sizeof(buf), &value);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(value, 1);
+}
+
+TEST(pb_svarint_negative)
+{
+    /* zigzag(-1) = 1 */
+    uint8_t buf[] = {0x01};
+    int64_t value;
+    int n = vl_pb_read_svarint(buf, sizeof(buf), &value);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(value, -1);
+}
+
+TEST(pb_svarint_larger)
+{
+    /* zigzag(-2) = 3 */
+    uint8_t buf[] = {0x03};
+    int64_t value;
+    int n = vl_pb_read_svarint(buf, sizeof(buf), &value);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(value, -2);
+}
+
+TEST(pb_tag)
+{
+    /* Field 1, wire type 0 (varint) = 0x08 */
+    uint8_t buf[] = {0x08};
+    uint32_t field, wire;
+    int n = vl_pb_read_tag(buf, sizeof(buf), &field, &wire);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(field, 1);
+    ASSERT_EQ(wire, 0);
+}
+
+TEST(pb_tag_field2_string)
+{
+    /* Field 2, wire type 2 (length-delimited) = 0x12 */
+    uint8_t buf[] = {0x12};
+    uint32_t field, wire;
+    int n = vl_pb_read_tag(buf, sizeof(buf), &field, &wire);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(field, 2);
+    ASSERT_EQ(wire, 2);
+}
+
+TEST(pb_delta_decode)
+{
+    int64_t arr[] = {10, 5, -3, 7};
+    vl_pb_delta_decode_i64(arr, 4);
+    ASSERT_EQ(arr[0], 10);
+    ASSERT_EQ(arr[1], 15);
+    ASSERT_EQ(arr[2], 12);
+    ASSERT_EQ(arr[3], 19);
+}
+
+/* ============================================================================
+ * Graph Tests
+ * ============================================================================ */
+
+static VLGraph *create_test_graph(void)
+{
+    /*
+     * Create a simple test graph:
+     *
+     *     0 --10-- 1 --15-- 2
+     *     |        |        |
+     *    20       25       30
+     *     |        |        |
+     *     3 --35-- 4 --40-- 5
+     *
+     * Distances in km, durations proportional
+     */
+
+    VLGraph *graph = calloc(1, sizeof(VLGraph));
+    if (!graph) return NULL;
+
+    graph->num_nodes = 6;
+    graph->nodes = calloc(6, sizeof(VLNode));
+    if (!graph->nodes) {
+        free(graph);
+        return NULL;
+    }
+
+    /* Set coordinates (arbitrary but consistent) */
+    double coords[6][2] = {
+        {47.5, 19.0},  /* 0 */
+        {47.5, 19.1},  /* 1 */
+        {47.5, 19.2},  /* 2 */
+        {47.4, 19.0},  /* 3 */
+        {47.4, 19.1},  /* 4 */
+        {47.4, 19.2}   /* 5 */
+    };
+
+    for (int i = 0; i < 6; i++) {
+        graph->nodes[i].coord.lat = (int32_t)(coords[i][0] * 1e7);
+        graph->nodes[i].coord.lon = (int32_t)(coords[i][1] * 1e7);
+        graph->nodes[i].osm_id = i + 1;
+    }
+
+    /* Count edges: 14 (7 bidirectional edges) */
+    graph->num_edges = 14;
+    graph->edges = calloc(14, sizeof(VLEdge));
+    if (!graph->edges) {
+        free(graph->nodes);
+        free(graph);
+        return NULL;
+    }
+
+    /* Edge definitions: {from, to, dist_km, speed_kmh} */
+    int edge_defs[][4] = {
+        {0, 1, 10, 50}, {1, 0, 10, 50},
+        {1, 2, 15, 50}, {2, 1, 15, 50},
+        {0, 3, 20, 40}, {3, 0, 20, 40},
+        {1, 4, 25, 40}, {4, 1, 25, 40},
+        {2, 5, 30, 40}, {5, 2, 30, 40},
+        {3, 4, 35, 30}, {4, 3, 35, 30},
+        {4, 5, 40, 30}, {5, 4, 40, 30}
+    };
+
+    /* Count edges per node first */
+    for (int i = 0; i < 14; i++) {
+        graph->nodes[edge_defs[i][0]].edge_count++;
+    }
+
+    /* Calculate offsets */
+    uint32_t offset = 0;
+    for (int i = 0; i < 6; i++) {
+        graph->nodes[i].edge_start = offset;
+        offset += graph->nodes[i].edge_count;
+        graph->nodes[i].edge_count = 0;  /* Reset for filling */
+    }
+
+    /* Fill edges */
+    for (int i = 0; i < 14; i++) {
+        int from = edge_defs[i][0];
+        int to = edge_defs[i][1];
+        int dist_km = edge_defs[i][2];
+        int speed = edge_defs[i][3];
+
+        uint32_t idx = graph->nodes[from].edge_start + graph->nodes[from].edge_count;
+        graph->edges[idx].target = (uint32_t)to;
+        graph->edges[idx].distance = (uint32_t)(dist_km * 1000 * 1000);  /* km to mm */
+        graph->edges[idx].duration = (uint16_t)((dist_km * 36.0) / speed);  /* deciseconds */
+        graph->edges[idx].flags = 0;
+        graph->nodes[from].edge_count++;
+    }
+
+    graph->owns_memory = 1;
+    return graph;
+}
+
+TEST(graph_create)
+{
+    VLGraph *graph = create_test_graph();
+    ASSERT_NE(graph, NULL);
+    ASSERT_EQ(graph->num_nodes, 6);
+    ASSERT_EQ(graph->num_edges, 14);
+    vl_graph_free(graph);
+}
+
+TEST(graph_nearest_node)
+{
+    VLGraph *graph = create_test_graph();
+
+    /* Query near node 0 */
+    VLCoord query = {47.5001, 19.0001};
+    uint32_t nearest = vl_graph_nearest_node(graph, query);
+    ASSERT_EQ(nearest, 0);
+
+    /* Query near node 5 */
+    query = (VLCoord){47.4001, 19.1999};
+    nearest = vl_graph_nearest_node(graph, query);
+    ASSERT_EQ(nearest, 5);
+
+    vl_graph_free(graph);
+}
+
+/* ============================================================================
+ * Routing Tests
+ * ============================================================================ */
+
+TEST(route_same_node)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 0, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 0.0, 0.001);
+    ASSERT_NEAR(route.duration_s, 0.0, 0.001);
+    ASSERT_EQ(route.num_nodes, 1);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(route_adjacent_nodes)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 1, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 10000.0, 100.0);  /* 10 km */
+    ASSERT_EQ(route.num_nodes, 2);
+    ASSERT_EQ(route.node_indices[0], 0);
+    ASSERT_EQ(route.node_indices[1], 1);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(route_shortest_path)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.weight = VL_WEIGHT_DISTANCE;
+
+    /* Route from 0 to 5 */
+    /* Shortest by distance: 0 -> 1 -> 2 -> 5 (10 + 15 + 30 = 55 km) */
+    /* vs 0 -> 3 -> 4 -> 5 (20 + 35 + 40 = 95 km) */
+    /* vs 0 -> 1 -> 4 -> 5 (10 + 25 + 40 = 75 km) */
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 55000.0, 100.0);
+    ASSERT_EQ(route.num_nodes, 4);
+    ASSERT_EQ(route.node_indices[0], 0);
+    ASSERT_EQ(route.node_indices[1], 1);
+    ASSERT_EQ(route.node_indices[2], 2);
+    ASSERT_EQ(route.node_indices[3], 5);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(route_dijkstra_bidir)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA_BIDIR;
+    opts.weight = VL_WEIGHT_DISTANCE;
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 55000.0, 100.0);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(route_astar)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_ASTAR;
+    opts.weight = VL_WEIGHT_DISTANCE;
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 55000.0, 100.0);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(route_astar_bidir)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_ASTAR_BIDIR;
+    opts.weight = VL_WEIGHT_DISTANCE;
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 55000.0, 100.0);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(route_duration_weight)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.weight = VL_WEIGHT_DURATION;
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    /* Duration-optimal path may differ from distance-optimal */
+    ASSERT_GT(route.duration_s, 0);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(route_with_geometry)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.include_geometry = 1;
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NE(route.coords, NULL);
+    ASSERT_EQ(route.num_coords, route.num_nodes);
+
+    /* Verify first and last coords */
+    VLCoord first = VL_FIXED_TO_COORD(graph->nodes[0].coord);
+    VLCoord last = VL_FIXED_TO_COORD(graph->nodes[5].coord);
+    ASSERT_NEAR(route.coords[0].lat, first.lat, 0.0001);
+    ASSERT_NEAR(route.coords[route.num_coords - 1].lat, last.lat, 0.0001);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(route_no_geometry)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.include_geometry = 0;
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_EQ(route.coords, NULL);
+    ASSERT_EQ(route.num_coords, 0);
+    ASSERT_NE(route.node_indices, NULL);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(route_coords_wrapper)
+{
+    VLGraph *graph = create_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+
+    VLCoord origin = {47.5001, 19.0001};      /* Near node 0 */
+    VLCoord destination = {47.4001, 19.1999}; /* Near node 5 */
+
+    VLRoute route;
+    VLStatus status = vl_route_coords(graph, origin, destination, &opts, &route);
+
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_GT(route.distance_m, 0);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+/* ============================================================================
+ * API Tests
+ * ============================================================================ */
+
+TEST(version)
+{
+    const char *ver = vl_version();
+    ASSERT_NE(ver, NULL);
+    ASSERT_EQ(strcmp(ver, VL_VERSION_STRING), 0);
+}
+
+TEST(status_strings)
+{
+    ASSERT_NE(vl_status_string(VL_OK), NULL);
+    ASSERT_NE(vl_status_string(VL_ERROR_NO_ROUTE), NULL);
+    ASSERT_NE(vl_status_string(VL_ERROR_OUT_OF_MEMORY), NULL);
+    ASSERT_NE(vl_status_string((VLStatus)999), NULL);  /* Unknown */
+}
+
+TEST(default_options)
+{
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+
+    ASSERT_EQ(opts.algorithm, VL_ALGORITHM_ASTAR_BIDIR);
+    ASSERT_EQ(opts.weight, VL_WEIGHT_DURATION);
+    ASSERT_EQ(opts.include_geometry, 1);
+}
+
+/* ============================================================================
+ * Main
+ * ============================================================================ */
+
+int main(void)
+{
+    printf("Velo Test Suite\n");
+    printf("================\n\n");
+
+    printf("Geo Tests:\n");
+    RUN_TEST(haversine_same_point);
+    RUN_TEST(haversine_known_distance);
+    RUN_TEST(haversine_antipodal);
+    RUN_TEST(coord_valid);
+    RUN_TEST(fixed_coord_conversion);
+    printf("\n");
+
+    printf("Heap Tests:\n");
+    RUN_TEST(heap_create_free);
+    RUN_TEST(heap_push_pop);
+    RUN_TEST(heap_decrease_key);
+    RUN_TEST(heap_contains);
+    printf("\n");
+
+    printf("Protobuf Tests:\n");
+    RUN_TEST(pb_varint_small);
+    RUN_TEST(pb_varint_300);
+    RUN_TEST(pb_varint_large);
+    RUN_TEST(pb_svarint_positive);
+    RUN_TEST(pb_svarint_negative);
+    RUN_TEST(pb_svarint_larger);
+    RUN_TEST(pb_tag);
+    RUN_TEST(pb_tag_field2_string);
+    RUN_TEST(pb_delta_decode);
+    printf("\n");
+
+    printf("Graph Tests:\n");
+    RUN_TEST(graph_create);
+    RUN_TEST(graph_nearest_node);
+    printf("\n");
+
+    printf("Routing Tests:\n");
+    RUN_TEST(route_same_node);
+    RUN_TEST(route_adjacent_nodes);
+    RUN_TEST(route_shortest_path);
+    RUN_TEST(route_dijkstra_bidir);
+    RUN_TEST(route_astar);
+    RUN_TEST(route_astar_bidir);
+    RUN_TEST(route_duration_weight);
+    RUN_TEST(route_with_geometry);
+    RUN_TEST(route_no_geometry);
+    RUN_TEST(route_coords_wrapper);
+    printf("\n");
+
+    printf("API Tests:\n");
+    RUN_TEST(version);
+    RUN_TEST(status_strings);
+    RUN_TEST(default_options);
+    printf("\n");
+
+    printf("================\n");
+    printf("Results: %d/%d tests passed\n", tests_passed, tests_run);
+
+    return tests_passed == tests_run ? 0 : 1;
+}
