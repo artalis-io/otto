@@ -128,6 +128,7 @@ Current performance on Hungary (2.7M nodes, 5.5M edges):
 | More landmarks (32) | ✅ Done | 8.5x long routes | VL_MAX_LANDMARKS=64 |
 | Fast distance heuristic | ✅ Done | ~10-15% | Equirectangular approx |
 | SIMD landmark heuristic | ✅ Done | ~10% | Requires transposed layout |
+| Bounded suboptimality (ε) | ✅ Done | 2-10% | opts.epsilon, trades quality for speed |
 | Lazy heuristic | ❌ Skipped | N/A | Bottleneck is memory, not compute |
 | SIMD haversine | ❌ Skipped | N/A | Single calls can't batch |
 | Aggressive contraction | ⏳ Pending | | |
