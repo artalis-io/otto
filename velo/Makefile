@@ -32,6 +32,7 @@ CORE_SRCS = src/vl_geo.c \
             src/vl_pbf.c \
             src/vl_graph.c \
             src/vl_route.c \
+            src/vl_landmarks.c \
             src/velo.c
 
 MINIZ_SRCS = vendor/miniz.c \

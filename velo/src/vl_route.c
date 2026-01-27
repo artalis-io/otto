@@ -942,3 +942,140 @@ VLStatus vl_route_coords(const VLGraph *graph, VLCoord origin, VLCoord destinati
 
     return vl_route(graph, source, target, opts, route);
 }
+
+/* ============================================================================
+ * A* with Landmarks (ALT algorithm)
+ * ============================================================================ */
+
+/* External landmark heuristic function */
+double vl_landmarks_heuristic(const VLLandmarks *lm, uint32_t from, uint32_t to);
+
+VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
+                                   uint32_t source, uint32_t target,
+                                   const VLRouteOptions *opts, VLRoute *route)
+{
+    if (!graph || !lm || !route) {
+        return VL_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (source >= graph->num_nodes || target >= graph->num_nodes) {
+        return VL_ERROR_NODE_NOT_FOUND;
+    }
+
+    memset(route, 0, sizeof(VLRoute));
+
+    /* Handle same source and target */
+    if (source == target) {
+        route->status = VL_OK;
+        route->distance_m = 0;
+        route->duration_s = 0;
+        route->num_nodes = 1;
+        route->node_indices = malloc(sizeof(uint32_t));
+        if (route->node_indices) {
+            route->node_indices[0] = source;
+        }
+        return VL_OK;
+    }
+
+    double start_time = get_time_ms();
+
+    /* Use default options if not provided */
+    VLRouteOptions default_opts;
+    if (!opts) {
+        vl_default_options(&default_opts);
+        opts = &default_opts;
+    }
+
+    /* Allocate temporary arrays */
+    double *dist = malloc(graph->num_nodes * sizeof(double));
+    uint32_t *parent = malloc(graph->num_nodes * sizeof(uint32_t));
+    uint8_t *visited = calloc(graph->num_nodes, sizeof(uint8_t));
+
+    if (!dist || !parent || !visited) {
+        free(dist);
+        free(parent);
+        free(visited);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    /* Initialize */
+    for (uint32_t i = 0; i < graph->num_nodes; i++) {
+        dist[i] = VL_INF;
+        parent[i] = VL_INVALID_NODE;
+    }
+    dist[source] = 0;
+
+    /* Create heap */
+    VLHeap *heap = vl_heap_create(graph->num_nodes);
+    if (!heap) {
+        free(dist);
+        free(parent);
+        free(visited);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    /* Initial heuristic using landmarks */
+    double h = vl_landmarks_heuristic(lm, source, target);
+    vl_heap_push(heap, source, h);
+
+    uint32_t nodes_explored = 0;
+    VLStatus status = VL_ERROR_NO_ROUTE;
+
+    while (!vl_heap_empty(heap)) {
+        VLHeapEntry entry;
+        vl_heap_pop(heap, &entry);
+
+        uint32_t u = entry.node;
+
+        if (visited[u]) continue;
+        visited[u] = 1;
+        nodes_explored++;
+
+        if (u == target) {
+            status = VL_OK;
+            break;
+        }
+
+        const VLNode *node = &graph->nodes[u];
+        for (uint32_t e = 0; e < node->edge_count; e++) {
+            const VLEdge *edge = &graph->edges[node->edge_start + e];
+            uint32_t v = edge->target;
+
+            if (visited[v]) continue;
+
+            double w = (opts->weight == VL_WEIGHT_DURATION) ?
+                       (edge->duration * 0.1) : (edge->distance * 0.001);
+            double tentative_g = dist[u] + w;
+
+            if (tentative_g < dist[v]) {
+                dist[v] = tentative_g;
+                parent[v] = u;
+
+                /* Use landmark heuristic for f-value */
+                double h_v = vl_landmarks_heuristic(lm, v, target);
+                double f = tentative_g + h_v;
+                vl_heap_push(heap, v, f);
+            }
+        }
+    }
+
+    route->nodes_explored = nodes_explored;
+    route->search_time_ms = get_time_ms() - start_time;
+
+    if (status == VL_OK) {
+        status = reconstruct_path(graph, parent, source, target, route,
+                                  opts->include_geometry);
+        if (status == VL_OK) {
+            calculate_metrics(graph, route);
+        }
+    }
+
+    route->status = status;
+
+    vl_heap_free(heap);
+    free(dist);
+    free(parent);
+    free(visited);
+
+    return status;
+}

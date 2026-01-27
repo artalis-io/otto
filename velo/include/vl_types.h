@@ -153,6 +153,21 @@ typedef struct VLGridIndex {
 } VLGridIndex;
 
 /* ============================================================================
+ * ALT (A* with Landmarks and Triangle inequality)
+ * ============================================================================ */
+
+#define VL_MAX_LANDMARKS 32
+#define VL_DEFAULT_LANDMARKS 16
+
+typedef struct {
+    int num_landmarks;
+    uint32_t num_nodes;
+    uint32_t *landmark_nodes;       /* Array of landmark node indices */
+    double *dist_to_landmark;       /* dist_to[k * num_nodes + v] = dist(v -> landmark k) */
+    double *dist_from_landmark;     /* dist_from[k * num_nodes + v] = dist(landmark k -> v) */
+} VLLandmarks;
+
+/* ============================================================================
  * Query Context (for lazy initialization and memory reuse)
  * ============================================================================ */
 
