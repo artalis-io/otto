@@ -1414,6 +1414,16 @@ static int compare_hilbert(const void *a, const void *b)
     return 0;
 }
 
+/* Comparison function for sorting edges by target node index */
+static int compare_edges_by_target(const void *a, const void *b)
+{
+    const VLEdge *ea = (const VLEdge *)a;
+    const VLEdge *eb = (const VLEdge *)b;
+    if (ea->target < eb->target) return -1;
+    if (ea->target > eb->target) return 1;
+    return 0;
+}
+
 VLStatus vl_graph_reorder_hilbert(VLGraph *graph)
 {
     if (!graph || graph->num_nodes == 0) {
@@ -1565,6 +1575,18 @@ VLStatus vl_graph_reorder_hilbert(VLGraph *graph)
         memcpy(&new_edges[new_node->edge_start],
                &graph->edges[old_node->edge_start],
                old_node->edge_count * sizeof(VLEdge));
+    }
+
+    /* Sort each node's adjacency list by target node index.
+     * This improves cache locality during traversal since nodes with
+     * close indices are spatially close after Hilbert reordering. */
+    #pragma omp parallel for
+    for (uint32_t i = 0; i < num_nodes; i++) {
+        VLNode *node = &new_nodes[i];
+        if (node->edge_count > 1) {
+            qsort(&new_edges[node->edge_start], node->edge_count,
+                  sizeof(VLEdge), compare_edges_by_target);
+        }
     }
 
     /* Replace old arrays with new ones */
