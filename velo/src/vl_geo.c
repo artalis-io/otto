@@ -44,6 +44,28 @@ double vl_haversine(VLCoord a, VLCoord b)
 }
 
 /*
+ * Fast equirectangular distance approximation.
+ * Much faster than haversine, accurate within ~0.5% for distances < 500km.
+ * Uses the approximation that lat/lon form a flat plane with cos(lat) correction.
+ *
+ * Returns distance in meters.
+ */
+double vl_distance_fast(VLCoord a, VLCoord b)
+{
+    double lat1 = a.lat * DEG_TO_RAD;
+    double lat2 = b.lat * DEG_TO_RAD;
+    double dlat = lat2 - lat1;
+    double dlon = (b.lon - a.lon) * DEG_TO_RAD;
+
+    /* Equirectangular approximation with latitude correction */
+    double cos_lat = cos((lat1 + lat2) / 2.0);
+    double x = dlon * cos_lat;
+    double y = dlat;
+
+    return VL_EARTH_RADIUS_M * sqrt(x * x + y * y);
+}
+
+/*
  * Calculate haversine distance between fixed-point coordinates.
  */
 double vl_haversine_fixed(VLCoordFixed a, VLCoordFixed b)
@@ -51,6 +73,16 @@ double vl_haversine_fixed(VLCoordFixed a, VLCoordFixed b)
     VLCoord ca = VL_FIXED_TO_COORD(a);
     VLCoord cb = VL_FIXED_TO_COORD(b);
     return vl_haversine(ca, cb);
+}
+
+/*
+ * Fast equirectangular distance between fixed-point coordinates.
+ */
+double vl_distance_fast_fixed(VLCoordFixed a, VLCoordFixed b)
+{
+    VLCoord ca = VL_FIXED_TO_COORD(a);
+    VLCoord cb = VL_FIXED_TO_COORD(b);
+    return vl_distance_fast(ca, cb);
 }
 
 /* ============================================================================
