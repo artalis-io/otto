@@ -3,42 +3,42 @@
 # Project Structure:
 #   ralph/     - LP/MIP Solver (libralph.a)
 #   fuelwise/  - Refueling Optimization Library (libfuelwise.a)
-#   wasm/      - WebAssembly Build (future)
-#   api/       - REST API (future)
-#   ui/        - React Application (future)
+#   velo/      - OSM Routing Engine (libvelo.a)
+#   carta/     - Map Tile Generator (libcarta.a)
+#   api/       - REST API Server
+#   wasm/      - WebAssembly Builds
+#   ui/        - React Application
 
-.PHONY: all clean test test-all ralph fuelwise wasm api ui
+.PHONY: all clean test ralph fuelwise velo carta api wasm ui help
 
-# Default: build Ralph and FuelWise
-all: ralph fuelwise
+# Default: build all libraries
+all: ralph fuelwise velo carta
 
-# Build Ralph LP/MIP solver
+# =============================================================================
+# Core Libraries
+# =============================================================================
+
+# Ralph LP/MIP solver (no dependencies)
 ralph:
 	$(MAKE) -C ralph
 
-# Build FuelWise library (depends on Ralph)
+# FuelWise refueling library (depends on Ralph)
 fuelwise: ralph
 	$(MAKE) -C fuelwise
 
-# Run Ralph tests
-test-ralph:
-	$(MAKE) -C ralph test
+# Velo routing engine (no dependencies)
+velo:
+	$(MAKE) -C velo
 
-# Run FuelWise tests
-test-fuelwise: fuelwise
-	$(MAKE) -C fuelwise test
+# Carta tile generator (no dependencies)
+carta:
+	$(MAKE) -C carta
 
-# Run all tests
-test: test-ralph test-fuelwise
+# =============================================================================
+# Applications
+# =============================================================================
 
-test-all: test
-
-# Clean all
-clean:
-	$(MAKE) -C ralph clean
-	$(MAKE) -C fuelwise clean
-
-# Build REST API (depends on FuelWise)
+# REST API server (depends on FuelWise)
 api: fuelwise
 	$(MAKE) -C api
 
@@ -46,35 +46,86 @@ api: fuelwise
 run-api: api
 	$(MAKE) -C api run
 
-# Test API
-test-api: api
-	$(MAKE) -C api test
-
-# Build WebAssembly module (requires Emscripten)
-wasm:
+# WebAssembly builds (requires Emscripten)
+wasm: fuelwise velo carta
 	$(MAKE) -C wasm
 
 wasm-types:
 	$(MAKE) -C wasm types
 
-# Future targets
+# UI (requires Node.js)
 ui:
-	@echo "UI build not yet implemented"
+	cd ui && npm install && npm run build
 
+ui-dev:
+	cd ui && npm run dev
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+# Run all tests
+test: test-ralph test-fuelwise test-velo test-carta
+
+test-ralph:
+	$(MAKE) -C ralph test
+
+test-fuelwise: fuelwise
+	$(MAKE) -C fuelwise test
+
+test-velo: velo
+	$(MAKE) -C velo test
+
+test-carta: carta
+	$(MAKE) -C carta test
+
+test-api: api
+	$(MAKE) -C api test
+
+# =============================================================================
+# Cleanup
+# =============================================================================
+
+clean:
+	$(MAKE) -C ralph clean
+	$(MAKE) -C fuelwise clean
+	$(MAKE) -C velo clean
+	$(MAKE) -C carta clean
+	-$(MAKE) -C api clean 2>/dev/null || true
+	-$(MAKE) -C wasm clean 2>/dev/null || true
+
+clean-all: clean
+	cd ui && rm -rf node_modules dist 2>/dev/null || true
+
+# =============================================================================
 # Help
+# =============================================================================
+
 help:
 	@echo "FuelWise Platform Build System"
 	@echo ""
-	@echo "Targets:"
-	@echo "  all           - Build Ralph and FuelWise libraries"
+	@echo "Libraries:"
+	@echo "  all           - Build all C libraries (ralph, fuelwise, velo, carta)"
 	@echo "  ralph         - Build Ralph LP/MIP solver"
-	@echo "  fuelwise      - Build FuelWise optimization library"
+	@echo "  fuelwise      - Build FuelWise refueling library"
+	@echo "  velo          - Build Velo routing engine"
+	@echo "  carta         - Build Carta tile generator"
+	@echo ""
+	@echo "Applications:"
 	@echo "  api           - Build REST API server"
-	@echo "  wasm          - Build WebAssembly module (requires Emscripten)"
-	@echo "  test          - Run all tests"
-	@echo "  test-ralph    - Run Ralph tests"
-	@echo "  test-fuelwise - Run FuelWise tests"
-	@echo "  test-api      - Test REST API endpoints"
+	@echo "  wasm          - Build WebAssembly modules (requires Emscripten)"
+	@echo "  ui            - Build React UI (requires Node.js)"
+	@echo "  ui-dev        - Run UI dev server"
 	@echo "  run-api       - Run the REST API server"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test          - Run all tests"
+	@echo "  test-ralph    - Run Ralph tests (43)"
+	@echo "  test-fuelwise - Run FuelWise tests (29)"
+	@echo "  test-velo     - Run Velo tests (30+)"
+	@echo "  test-carta    - Run Carta tests (33)"
+	@echo "  test-api      - Test REST API endpoints"
+	@echo ""
+	@echo "Cleanup:"
 	@echo "  clean         - Clean all build artifacts"
-	@echo "  help          - Show this help"
+	@echo "  clean-all     - Clean everything including node_modules"
