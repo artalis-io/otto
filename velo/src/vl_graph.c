@@ -1420,6 +1420,30 @@ VLStatus vl_graph_reorder_hilbert(VLGraph *graph)
         return VL_ERROR_INVALID_ARGUMENT;
     }
 
+    /* If graph is mmap'd (read-only), copy to writable memory first */
+    if (!graph->owns_memory) {
+        printf("velo: Converting mmap'd graph to writable memory...\n");
+
+        VLNode *nodes_copy = malloc(graph->num_nodes * sizeof(VLNode));
+        VLEdge *edges_copy = malloc(graph->num_edges * sizeof(VLEdge));
+
+        if (!nodes_copy || !edges_copy) {
+            free(nodes_copy);
+            free(edges_copy);
+            return VL_ERROR_OUT_OF_MEMORY;
+        }
+
+        memcpy(nodes_copy, graph->nodes, graph->num_nodes * sizeof(VLNode));
+        memcpy(edges_copy, graph->edges, graph->num_edges * sizeof(VLEdge));
+
+        /* Note: We don't munmap the old memory because other code might reference it.
+         * In practice, the OS will reclaim it when the process exits.
+         * For proper cleanup, we'd need to track the mmap'd pointer and size. */
+        graph->nodes = nodes_copy;
+        graph->edges = edges_copy;
+        graph->owns_memory = 1;
+    }
+
     printf("velo: Reordering nodes by Hilbert curve...\n");
 
     uint32_t num_nodes = graph->num_nodes;
