@@ -308,6 +308,7 @@ VLStatus vl_graph_build_from_pbf(VLGraphBuilder *builder, const VLPBFContext *ct
 
                 uint16_t flags = (uint16_t)way->highway_type;
                 if (way->oneway != 0) flags |= VL_EDGE_ONEWAY;
+                flags |= way->access_flags;  /* Add OSM access restrictions */
 
                 if (way->oneway >= 0) {
                     VLStatus status = add_temp_edge(builder, prev_idx, curr_idx,

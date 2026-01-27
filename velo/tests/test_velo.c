@@ -657,15 +657,16 @@ TEST(default_options)
  * ============================================================================ */
 
 /*
- * Create a test graph with mixed road types for profile testing:
+ * Create a test graph with mixed road types and access flags for profile testing:
  *
  *     0 ---(motorway)--- 1 ---(trunk)--- 2
  *     |                  |               |
  * (primary)         (secondary)     (tertiary)
  *     |                  |               |
  *     3 --(residential)- 4 --(service)-- 5
+ *          [hgv=no]         [hgv=no]
  *
- * This allows testing that different profiles correctly filter edges.
+ * This allows testing that profiles correctly use both road types and access flags.
  */
 static VLGraph *create_profile_test_graph(void)
 {
@@ -690,7 +691,7 @@ static VLGraph *create_profile_test_graph(void)
         graph->nodes[i].osm_id = i + 1;
     }
 
-    /* 14 edges (7 bidirectional), each with specific road type */
+    /* 14 edges (7 bidirectional), each with specific road type and access flags */
     graph->num_edges = 14;
     graph->edges = calloc(14, sizeof(VLEdge));
     if (!graph->edges) {
@@ -699,15 +700,19 @@ static VLGraph *create_profile_test_graph(void)
         return NULL;
     }
 
-    /* Edge definitions: {from, to, dist_km, road_type} */
-    struct { int from, to, dist; uint16_t type; } edge_defs[] = {
+    /* Edge definitions: {from, to, dist_km, flags (road_type | access)} */
+    struct { int from, to, dist; uint16_t flags; } edge_defs[] = {
         {0, 1, 10, VL_EDGE_MOTORWAY},    {1, 0, 10, VL_EDGE_MOTORWAY},
         {1, 2, 15, VL_EDGE_TRUNK},       {2, 1, 15, VL_EDGE_TRUNK},
         {0, 3, 20, VL_EDGE_PRIMARY},     {3, 0, 20, VL_EDGE_PRIMARY},
         {1, 4, 25, VL_EDGE_SECONDARY},   {4, 1, 25, VL_EDGE_SECONDARY},
         {2, 5, 30, VL_EDGE_TERTIARY},    {5, 2, 30, VL_EDGE_TERTIARY},
-        {3, 4, 35, VL_EDGE_RESIDENTIAL}, {4, 3, 35, VL_EDGE_RESIDENTIAL},
-        {4, 5, 40, VL_EDGE_SERVICE},     {5, 4, 40, VL_EDGE_SERVICE}
+        /* Residential with hgv=no */
+        {3, 4, 35, VL_EDGE_RESIDENTIAL | VL_ACCESS_NO_TRUCK},
+        {4, 3, 35, VL_EDGE_RESIDENTIAL | VL_ACCESS_NO_TRUCK},
+        /* Service with hgv=no */
+        {4, 5, 40, VL_EDGE_SERVICE | VL_ACCESS_NO_TRUCK},
+        {5, 4, 40, VL_EDGE_SERVICE | VL_ACCESS_NO_TRUCK}
     };
 
     /* Count edges per node */
@@ -730,7 +735,7 @@ static VLGraph *create_profile_test_graph(void)
         graph->edges[idx].target = (uint32_t)edge_defs[i].to;
         graph->edges[idx].distance = (uint32_t)(edge_defs[i].dist * 1000 * 1000);
         graph->edges[idx].duration = (uint16_t)(edge_defs[i].dist * 10);
-        graph->edges[idx].flags = edge_defs[i].type;
+        graph->edges[idx].flags = edge_defs[i].flags;
         graph->nodes[from].edge_count++;
     }
 
@@ -761,7 +766,7 @@ TEST(profile_car_all_roads)
     vl_graph_free(graph);
 }
 
-TEST(profile_truck_avoids_residential_service)
+TEST(profile_truck_respects_hgv_no)
 {
     VLGraph *graph = create_profile_test_graph();
 
@@ -771,8 +776,8 @@ TEST(profile_truck_avoids_residential_service)
     opts.weight = VL_WEIGHT_DISTANCE;
     opts.profile = VL_PROFILE_TRUCK;
 
-    /* Trucks must avoid residential (3-4) and service (4-5) roads */
-    /* From 3 to 5: cannot go 3->4->5 (residential+service) */
+    /* Trucks must avoid edges with VL_ACCESS_NO_TRUCK flag (hgv=no from OSM) */
+    /* 3-4 and 4-5 have hgv=no, so trucks cannot go 3->4->5 */
     /* Must go 3->0->1->2->5 (primary+motorway+trunk+tertiary = 20+10+15+30 = 75 km) */
     VLRoute route;
     VLStatus status = vl_route(graph, 3, 5, &opts, &route);
@@ -807,7 +812,7 @@ TEST(profile_bike_avoids_motorway_trunk)
     vl_graph_free(graph);
 }
 
-TEST(profile_foot_avoids_motorway_trunk_primary)
+TEST(profile_foot_avoids_motorway_trunk)
 {
     VLGraph *graph = create_profile_test_graph();
 
@@ -817,17 +822,18 @@ TEST(profile_foot_avoids_motorway_trunk_primary)
     opts.weight = VL_WEIGHT_DISTANCE;
     opts.profile = VL_PROFILE_FOOT;
 
-    /* Pedestrians must avoid motorway (0-1), trunk (1-2), and primary (0-3) */
-    /* From 0 to 5: no direct path from 0 (blocked by motorway and primary) */
+    /* Pedestrians avoid motorway (0-1) and trunk (1-2) */
+    /* From 0 to 2: cannot go 0->1->2 (motorway+trunk blocked) */
+    /* Must go via bottom: 0->3->4->5->2 (primary+residential+service+tertiary = 20+35+40+30 = 125 km) */
     VLRoute route;
-    VLStatus status = vl_route(graph, 0, 5, &opts, &route);
+    VLStatus status = vl_route(graph, 0, 2, &opts, &route);
 
-    /* Should fail - node 0 is isolated for pedestrians */
-    ASSERT_EQ(status, VL_ERROR_NO_ROUTE);
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_NEAR(route.distance_m, 125000.0, 100.0);
 
     vl_free_route(&route);
 
-    /* But 3 to 5 should work (residential + service) */
+    /* 3 to 5 should also work (residential + service) */
     status = vl_route(graph, 3, 5, &opts, &route);
     ASSERT_EQ(status, VL_OK);
     ASSERT_NEAR(route.distance_m, 75000.0, 100.0);  /* 3->4->5 = 35+40 = 75 km */
@@ -867,7 +873,7 @@ TEST(profile_with_astar)
     opts.weight = VL_WEIGHT_DISTANCE;
     opts.profile = VL_PROFILE_TRUCK;
 
-    /* Same truck test with A* algorithm */
+    /* Same truck test (hgv=no) with A* algorithm */
     VLRoute route;
     VLStatus status = vl_route(graph, 3, 5, &opts, &route);
 
@@ -940,9 +946,9 @@ int main(void)
 
     printf("Vehicle Profile Tests:\n");
     RUN_TEST(profile_car_all_roads);
-    RUN_TEST(profile_truck_avoids_residential_service);
+    RUN_TEST(profile_truck_respects_hgv_no);
     RUN_TEST(profile_bike_avoids_motorway_trunk);
-    RUN_TEST(profile_foot_avoids_motorway_trunk_primary);
+    RUN_TEST(profile_foot_avoids_motorway_trunk);
     RUN_TEST(profile_any_no_filtering);
     RUN_TEST(profile_with_astar);
     printf("\n");
