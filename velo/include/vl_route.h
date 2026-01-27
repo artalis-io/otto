@@ -101,6 +101,53 @@ VLStatus vl_route_with_context(const VLGraph *graph, VLQueryContext *ctx,
                                const VLRouteOptions *opts, VLRoute *route);
 
 /* ============================================================================
+ * ALT (A* with Landmarks and Triangle inequality)
+ * ============================================================================ */
+
+/*
+ * Create landmarks for faster A* heuristic.
+ * Precomputes shortest path distances from/to landmark nodes.
+ *
+ * graph: the road network graph
+ * num_landmarks: number of landmarks (recommend 8-16)
+ *
+ * Returns landmarks data, or NULL on failure.
+ * Preprocessing time: ~num_landmarks * Dijkstra time
+ * Memory: ~num_landmarks * num_nodes * 16 bytes
+ */
+VLLandmarks *vl_landmarks_create(const VLGraph *graph, int num_landmarks);
+
+/*
+ * Free landmarks data.
+ */
+void vl_landmarks_free(VLLandmarks *lm);
+
+/*
+ * Compute ALT heuristic (lower bound on distance).
+ * Use this instead of haversine for faster A* convergence.
+ *
+ * Returns distance lower bound in kilometers.
+ */
+double vl_landmarks_heuristic(const VLLandmarks *lm, uint32_t from, uint32_t to);
+
+/*
+ * Route using A* with landmarks heuristic.
+ * Faster than regular A* when landmarks are precomputed.
+ *
+ * graph: the road network graph
+ * lm: precomputed landmarks (from vl_landmarks_create)
+ * source: source node index
+ * target: target node index
+ * opts: routing options
+ * route: (out) computed route
+ *
+ * Returns VL_OK on success.
+ */
+VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
+                                   uint32_t source, uint32_t target,
+                                   const VLRouteOptions *opts, VLRoute *route);
+
+/* ============================================================================
  * Route Memory Management
  * ============================================================================ */
 

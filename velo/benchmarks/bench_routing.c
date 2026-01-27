@@ -5,10 +5,12 @@
  */
 
 #include "velo.h"
+#include "vl_route.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -236,6 +238,22 @@ int main(int argc, char *argv[])
     /* If a graph file is provided, benchmark with real data */
     if (argc > 1) {
         const char *filename = argv[1];
+        int use_landmarks = 0;
+        int num_landmarks = VL_DEFAULT_LANDMARKS;
+
+        /* Parse command-line options */
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "--landmarks") == 0) {
+                use_landmarks = 1;
+                if (i + 1 < argc && argv[i + 1][0] != '-') {
+                    num_landmarks = atoi(argv[++i]);
+                    if (num_landmarks <= 0 || num_landmarks > VL_MAX_LANDMARKS) {
+                        num_landmarks = VL_DEFAULT_LANDMARKS;
+                    }
+                }
+            }
+        }
+
         printf("\n\nLoading real graph from: %s\n", filename);
 
         VLGraph *real_graph = NULL;
@@ -275,6 +293,96 @@ int main(int argc, char *argv[])
             source = vl_graph_nearest_node(real_graph, pecs);
             target = vl_graph_nearest_node(real_graph, debrecen);
             run_benchmark(real_graph, "Pécs -> Debrecen", source, target, 5);
+
+            /* Landmarks benchmark */
+            if (use_landmarks) {
+                printf("\n\nALT (A* with Landmarks) Benchmark\n");
+                printf("==================================\n");
+                printf("Creating %d landmarks...\n", num_landmarks);
+
+                double lm_start = get_time_ms();
+                VLLandmarks *landmarks = vl_landmarks_create(real_graph, num_landmarks);
+                double lm_time = get_time_ms() - lm_start;
+
+                if (landmarks) {
+                    printf("Landmark preprocessing: %.1f ms\n\n", lm_time);
+
+                    VLRouteOptions opts;
+                    vl_default_options(&opts);
+                    opts.weight = VL_WEIGHT_DISTANCE;
+                    opts.include_geometry = 0;
+
+                    /* Route test cases */
+                    struct {
+                        const char *name;
+                        VLCoord origin;
+                        VLCoord dest;
+                        int iterations;
+                    } routes[] = {
+                        {"Budapest -> Szeged", {47.4979, 19.0402}, {46.2530, 20.1414}, 10},
+                        {"Sopron -> Nyíregyháza", {47.6851, 16.5908}, {47.9554, 21.7167}, 5},
+                        {"Pécs -> Debrecen", {46.0727, 18.2323}, {47.5316, 21.6273}, 5}
+                    };
+                    int num_routes = sizeof(routes) / sizeof(routes[0]);
+
+                    printf("%-25s %8s %8s %12s %12s\n",
+                           "Route", "A* (ms)", "ALT (ms)", "Speedup", "Distance");
+                    printf("%-25s %8s %8s %12s %12s\n",
+                           "-------------------------", "--------", "--------",
+                           "------------", "------------");
+
+                    for (int r = 0; r < num_routes; r++) {
+                        source = vl_graph_nearest_node(real_graph, routes[r].origin);
+                        target = vl_graph_nearest_node(real_graph, routes[r].dest);
+
+                        /* Standard A* */
+                        opts.algorithm = VL_ALGORITHM_ASTAR_BIDIR;
+                        double astar_time = 0;
+                        double distance = 0;
+                        for (int i = 0; i < routes[r].iterations; i++) {
+                            VLRoute route;
+                            double start = get_time_ms();
+                            VLStatus status = vl_route(real_graph, source, target, &opts, &route);
+                            astar_time += get_time_ms() - start;
+                            if (status == VL_OK) {
+                                distance = route.distance_m;
+                                vl_free_route(&route);
+                            }
+                        }
+                        astar_time /= routes[r].iterations;
+
+                        /* ALT */
+                        double alt_time = 0;
+                        double alt_distance = 0;
+                        for (int i = 0; i < routes[r].iterations; i++) {
+                            VLRoute route;
+                            double start = get_time_ms();
+                            VLStatus status = vl_route_astar_landmarks(
+                                real_graph, landmarks, source, target, &opts, &route);
+                            alt_time += get_time_ms() - start;
+                            if (status == VL_OK) {
+                                alt_distance = route.distance_m;
+                                vl_free_route(&route);
+                            }
+                        }
+                        alt_time /= routes[r].iterations;
+
+                        double speedup = astar_time / alt_time;
+                        printf("%-25s %8.1f %8.1f %11.2fx %12.0f\n",
+                               routes[r].name, astar_time, alt_time, speedup, distance);
+
+                        /* Verify distances match */
+                        if (fabs(distance - alt_distance) > 1.0) {
+                            printf("  WARNING: distance mismatch! A*=%.0f ALT=%.0f\n",
+                                   distance, alt_distance);
+                        }
+                    }
+
+                    vl_landmarks_free(landmarks);
+                } else {
+                    printf("Failed to create landmarks.\n");
+                }
+            }
 
             vl_graph_free(real_graph);
         } else {
