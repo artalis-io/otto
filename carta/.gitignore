@@ -8,6 +8,7 @@
 test_carta
 carta_cli
 bench_carta
+gen_budapest
 
 # WASM output
 carta.js
