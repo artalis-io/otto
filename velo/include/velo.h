@@ -117,6 +117,14 @@ VL_EXPORT VLStatus vl_save_binary(const VLGraph *graph, const char *filename);
 VL_EXPORT double vl_haversine(VLCoord a, VLCoord b);
 
 /*
+ * Fast equirectangular distance approximation.
+ * Much faster than haversine, accurate within ~0.5% for distances < 500km.
+ *
+ * Returns distance in meters.
+ */
+VL_EXPORT double vl_distance_fast(VLCoord a, VLCoord b);
+
+/*
  * Check if a coordinate is valid.
  */
 VL_EXPORT int vl_coord_valid(VLCoord c);

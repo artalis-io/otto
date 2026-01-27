@@ -124,8 +124,8 @@ Current performance on Hungary (2.7M nodes, 5.5M edges):
 | Degree-2 contraction | ✅ Done | ~19% | |
 | ALT (16 landmarks) | ✅ Done | 2.5-3.8x | |
 | Hilbert reordering | ✅ Done | 1.5-2.1x | |
-| 4-ary heap | ⏳ Pending | | |
-| More landmarks | ⏳ Pending | | |
+| 4-ary heap | ✅ Done | ~10% | Better cache locality |
+| More landmarks (32) | ✅ Done | 8.5x long routes | VL_MAX_LANDMARKS=64 |
 | Lazy heuristic | ⏳ Pending | | |
 | SIMD haversine | ⏳ Pending | | |
 | Aggressive contraction | ⏳ Pending | | |
@@ -133,3 +133,14 @@ Current performance on Hungary (2.7M nodes, 5.5M edges):
 | Reach pruning | ⏳ Pending | | |
 | Transit nodes | ⏳ Pending | | |
 | Contraction Hierarchies | 🔒 Deferred | | |
+
+## Best Results (Hilbert + 32 landmarks)
+
+| Route | Baseline | Optimized | Speedup |
+|-------|----------|-----------|---------|
+| Budapest → Szeged | 154ms | 37ms | 4.2x |
+| Sopron → Nyíregyháza | 345ms | 34ms | 10.1x |
+| Pécs → Debrecen | 200ms | 39ms | 5.1x |
+
+Preprocessing: Hilbert 648ms + Landmarks 3.3s = ~4s total
+Memory: 1.3 GB for 32 landmarks

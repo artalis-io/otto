@@ -43,6 +43,8 @@ static double get_time_ms(void) {
 /* Forward declarations */
 double vl_haversine(VLCoord a, VLCoord b);
 double vl_haversine_fixed(VLCoordFixed a, VLCoordFixed b);
+double vl_distance_fast(VLCoord a, VLCoord b);
+double vl_distance_fast_fixed(VLCoordFixed a, VLCoordFixed b);
 
 VLHeap *vl_heap_create(size_t num_nodes);
 void vl_heap_free(VLHeap *heap);
@@ -338,8 +340,10 @@ static void calculate_metrics(const VLGraph *graph, VLRoute *route)
 static inline double heuristic(const VLGraph *graph, uint32_t node, uint32_t target,
                                VLWeightType weight)
 {
-    double dist_m = vl_haversine_fixed(graph->nodes[node].coord,
-                                        graph->nodes[target].coord);
+    /* Use fast equirectangular approximation - accurate enough for heuristic
+     * and much faster than haversine (no sin/cos/asin calls) */
+    double dist_m = vl_distance_fast_fixed(graph->nodes[node].coord,
+                                            graph->nodes[target].coord);
 
     if (weight == VL_WEIGHT_DISTANCE) {
         return dist_m;
