@@ -233,16 +233,38 @@ int main(int argc, char *argv[])
         vl_graph_free(large_grid);
     }
 
-    /* If a PBF file is provided, benchmark with real data */
+    /* If a graph file is provided, benchmark with real data */
     if (argc > 1) {
-        printf("\n\nLoading real graph from: %s\n", argv[1]);
-        VLGraph *real_graph = vl_load_pbf(argv[1]);
+        const char *filename = argv[1];
+        printf("\n\nLoading real graph from: %s\n", filename);
+
+        VLGraph *real_graph = NULL;
+        size_t len = strlen(filename);
+
+        /* Detect file type by extension */
+        if (len > 4 && strcmp(filename + len - 4, ".vlg") == 0) {
+            real_graph = vl_load_binary(filename);
+        } else {
+            real_graph = vl_load_pbf(filename);
+        }
+
         if (real_graph && real_graph->num_nodes > 0) {
-            /* Route across the graph */
-            uint32_t source = 0;
-            uint32_t target = real_graph->num_nodes - 1;
-            run_benchmark(real_graph, "Real Graph", source, target, 5);
+            printf("Graph loaded: %u nodes, %u edges\n",
+                   real_graph->num_nodes, real_graph->num_edges);
+
+            /* Route from Budapest area to Szeged area (roughly) */
+            /* For random testing, use nodes spread across the graph */
+            uint32_t source = real_graph->num_nodes / 4;
+            uint32_t target = real_graph->num_nodes * 3 / 4;
+            run_benchmark(real_graph, "Hungary", source, target, 10);
+
+            /* Also test corner-to-corner */
+            run_benchmark(real_graph, "Hungary (end-to-end)", 0,
+                         real_graph->num_nodes - 1, 5);
+
             vl_graph_free(real_graph);
+        } else {
+            printf("Failed to load graph.\n");
         }
     }
 
