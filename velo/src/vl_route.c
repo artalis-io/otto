@@ -88,49 +88,36 @@ void vl_default_options(VLRouteOptions *opts)
  * ============================================================================ */
 
 /*
- * Check if edge is accessible for given vehicle profile.
- * Uses two-tier filtering:
- *   1. Check explicit OSM access tags (hgv=no, bicycle=no, etc.)
- *   2. Fall back to road type restrictions for safety (bikes can't use motorways)
- *
- * Returns 1 if accessible, 0 if not.
+ * Get the access denial bitmask for a profile.
+ * Returns 0 for VL_PROFILE_ANY (no filtering).
  */
-static inline int edge_accessible(uint16_t flags, VLProfile profile)
+static inline uint16_t profile_access_mask(VLProfile profile)
 {
-    if (profile == VL_PROFILE_ANY) return 1;
-
-    uint16_t road_type = flags & VL_EDGE_TYPE_MASK;
-    uint16_t access = flags & VL_ACCESS_MASK;
-
     switch (profile) {
-    case VL_PROFILE_CAR:
-        /* Check explicit access denial */
-        if (access & VL_ACCESS_NO_CAR) return 0;
-        return 1;
-
-    case VL_PROFILE_TRUCK:
-        /* Check explicit HGV denial */
-        if (access & VL_ACCESS_NO_TRUCK) return 0;
-        /* Note: trucks CAN use residential/service roads for local access */
-        return 1;
-
-    case VL_PROFILE_BIKE:
-        /* Check explicit bicycle denial */
-        if (access & VL_ACCESS_NO_BIKE) return 0;
-        /* Safety: bikes cannot use motorways or trunk roads */
-        if (road_type == VL_EDGE_MOTORWAY || road_type == VL_EDGE_TRUNK) return 0;
-        return 1;
-
-    case VL_PROFILE_FOOT:
-        /* Check explicit foot denial */
-        if (access & VL_ACCESS_NO_FOOT) return 0;
-        /* Safety: pedestrians cannot use motorways or trunk roads */
-        if (road_type == VL_EDGE_MOTORWAY || road_type == VL_EDGE_TRUNK) return 0;
-        return 1;
-
-    default:
-        return 1;
+    case VL_PROFILE_CAR:   return VL_ACCESS_NO_CAR;
+    case VL_PROFILE_TRUCK: return VL_ACCESS_NO_TRUCK;
+    case VL_PROFILE_BIKE:  return VL_ACCESS_NO_BIKE;
+    case VL_PROFILE_FOOT:  return VL_ACCESS_NO_FOOT;
+    default:               return 0;  /* VL_PROFILE_ANY - no filtering */
     }
+}
+
+/*
+ * Check if edge is accessible for given vehicle profile.
+ * For profiles with road type restrictions (BIKE, FOOT), also checks road type.
+ */
+static inline int edge_accessible(uint16_t flags, VLProfile profile, uint16_t access_mask)
+{
+    /* Fast path: check access flags with precomputed mask */
+    if (flags & access_mask) return 0;
+
+    /* Bike/Foot: additional road type safety restrictions */
+    if (profile == VL_PROFILE_BIKE || profile == VL_PROFILE_FOOT) {
+        uint16_t rt = flags & VL_EDGE_TYPE_MASK;
+        if (rt == VL_EDGE_MOTORWAY || rt == VL_EDGE_TRUNK) return 0;
+    }
+
+    return 1;
 }
 
 /* ============================================================================
@@ -428,6 +415,10 @@ static VLStatus dijkstra_ctx(const VLGraph *graph, VLQueryContext *ctx,
     uint32_t nodes_explored = 0;
     VLStatus status = VL_ERROR_NO_ROUTE;
 
+    /* Cache profile filtering - precompute access mask for fast checks */
+    const VLProfile profile = opts->profile;
+    const uint16_t access_mask = profile_access_mask(profile);
+
     while (!vl_heap_empty(ctx->heap_fwd)) {
         VLHeapEntry entry;
         vl_heap_pop(ctx->heap_fwd, &entry);
@@ -453,7 +444,7 @@ static VLStatus dijkstra_ctx(const VLGraph *graph, VLQueryContext *ctx,
             const VLEdge *edge = &graph->edges[node->edge_start + e];
 
             /* Skip edges not accessible for this profile */
-            if (!edge_accessible(edge->flags, opts->profile)) continue;
+            if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
             uint32_t v = edge->target;
             double w = edge_weight(edge, opts->weight);
@@ -517,6 +508,10 @@ static VLStatus dijkstra_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
     double best_path = VL_INF;
     uint32_t meeting_node = VL_INVALID_NODE;
 
+    /* Cache profile filtering - precompute access mask for fast checks */
+    const VLProfile profile = opts->profile;
+    const uint16_t access_mask = profile_access_mask(profile);
+
     while (!vl_heap_empty(ctx->heap_fwd) || !vl_heap_empty(ctx->heap_bwd)) {
         /* Peek both heaps to determine which to expand */
         double min_fwd = VL_INF, min_bwd = VL_INF;
@@ -563,7 +558,7 @@ static VLStatus dijkstra_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     const VLEdge *edge = &graph->edges[node->edge_start + e];
 
                     /* Skip edges not accessible for this profile */
-                    if (!edge_accessible(edge->flags, opts->profile)) continue;
+                    if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
                     uint32_t v = edge->target;
                     if (IS_SETTLED_FWD(ctx, v)) continue;
@@ -618,7 +613,7 @@ static VLStatus dijkstra_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     const VLEdge *edge = &graph->edges[edge_idx];
 
                     /* Skip edges not accessible for this profile */
-                    if (!edge_accessible(edge->flags, opts->profile)) continue;
+                    if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
                     uint32_t v = graph->rev_edges[rev_start + r];
                     if (IS_SETTLED_BWD(ctx, v)) continue;
@@ -690,6 +685,10 @@ static VLStatus astar_ctx(const VLGraph *graph, VLQueryContext *ctx,
     uint32_t nodes_explored = 0;
     VLStatus status = VL_ERROR_NO_ROUTE;
 
+    /* Cache profile filtering - precompute access mask for fast checks */
+    const VLProfile profile = opts->profile;
+    const uint16_t access_mask = profile_access_mask(profile);
+
     while (!vl_heap_empty(ctx->heap_fwd)) {
         VLHeapEntry entry;
         vl_heap_pop(ctx->heap_fwd, &entry);
@@ -712,7 +711,7 @@ static VLStatus astar_ctx(const VLGraph *graph, VLQueryContext *ctx,
             const VLEdge *edge = &graph->edges[node->edge_start + e];
 
             /* Skip edges not accessible for this profile */
-            if (!edge_accessible(edge->flags, opts->profile)) continue;
+            if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
             uint32_t v = edge->target;
             double w = edge_weight(edge, opts->weight);
@@ -791,6 +790,10 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
     double best_path = VL_INF;
     uint32_t meeting_node = VL_INVALID_NODE;
 
+    /* Cache profile filtering - precompute access mask for fast checks */
+    const VLProfile profile = opts->profile;
+    const uint16_t access_mask = profile_access_mask(profile);
+
     while (!vl_heap_empty(ctx->heap_fwd) || !vl_heap_empty(ctx->heap_bwd)) {
         /* Peek both heaps to determine which to expand */
         double min_fwd = VL_INF, min_bwd = VL_INF;
@@ -835,7 +838,7 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     const VLEdge *edge = &graph->edges[node->edge_start + e];
 
                     /* Skip edges not accessible for this profile */
-                    if (!edge_accessible(edge->flags, opts->profile)) continue;
+                    if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
                     uint32_t v = edge->target;
                     if (IS_SETTLED_FWD(ctx, v)) continue;
@@ -888,7 +891,7 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     const VLEdge *edge = &graph->edges[edge_idx];
 
                     /* Skip edges not accessible for this profile */
-                    if (!edge_accessible(edge->flags, opts->profile)) continue;
+                    if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
                     uint32_t v = graph->rev_edges[rev_start + r];
                     if (IS_SETTLED_BWD(ctx, v)) continue;
@@ -1115,6 +1118,10 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
     uint32_t nodes_explored = 0;
     VLStatus status = VL_ERROR_NO_ROUTE;
 
+    /* Cache profile filtering - precompute access mask for fast checks */
+    const VLProfile profile = opts->profile;
+    const uint16_t access_mask = profile_access_mask(profile);
+
     while (!vl_heap_empty(heap)) {
         VLHeapEntry entry;
         vl_heap_pop(heap, &entry);
@@ -1135,7 +1142,7 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
             const VLEdge *edge = &graph->edges[node->edge_start + e];
 
             /* Skip edges not accessible for this profile */
-            if (!edge_accessible(edge->flags, opts->profile)) continue;
+            if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
             uint32_t v = edge->target;
 
@@ -1273,6 +1280,10 @@ VLStatus vl_route_dijkstra_bucket(const VLGraph *graph, uint32_t source, uint32_
     uint32_t nodes_explored = 0;
     VLStatus status = VL_ERROR_NO_ROUTE;
 
+    /* Cache profile filtering - precompute access mask for fast checks */
+    const VLProfile profile = opts->profile;
+    const uint16_t access_mask = profile_access_mask(profile);
+
     while (!vl_bucket_heap_empty(heap)) {
         VLHeapEntry entry;
         vl_bucket_heap_pop(heap, &entry);
@@ -1293,7 +1304,7 @@ VLStatus vl_route_dijkstra_bucket(const VLGraph *graph, uint32_t source, uint32_
             const VLEdge *edge = &graph->edges[node->edge_start + e];
 
             /* Skip edges not accessible for this profile */
-            if (!edge_accessible(edge->flags, opts->profile)) continue;
+            if (!edge_accessible(edge->flags, profile, access_mask)) continue;
 
             uint32_t v = edge->target;
 
