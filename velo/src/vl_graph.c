@@ -735,6 +735,332 @@ VLGraph *vl_graph_finalize(VLGraphBuilder *builder)
 }
 
 /* ============================================================================
+ * Degree-2 Node Contraction
+ * ============================================================================ */
+
+/*
+ * Check if a node has exactly 2 edges (in + out combined) and can be contracted.
+ * Returns 1 if contractable, 0 otherwise.
+ */
+static int is_contractable(const VLGraph *graph, uint32_t node)
+{
+    uint32_t out_degree = graph->nodes[node].edge_count;
+    uint32_t in_degree = graph->rev_edge_count ? graph->rev_edge_count[node] : 0;
+
+    /* Only contract nodes with exactly 2 total connections */
+    /* This handles: degree-2 on undirected road, or 1-in + 1-out on directed */
+    if (out_degree + in_degree != 2) return 0;
+
+    /* Don't contract nodes at intersections (multiple ways meeting) */
+    if (out_degree > 1 || in_degree > 1) return 0;
+
+    return 1;
+}
+
+/*
+ * Find the edge from 'from' to 'to', returns edge index or UINT32_MAX if not found.
+ */
+static uint32_t find_edge(const VLGraph *graph, uint32_t from, uint32_t to)
+{
+    const VLNode *node = &graph->nodes[from];
+    for (uint32_t e = 0; e < node->edge_count; e++) {
+        uint32_t idx = node->edge_start + e;
+        if (graph->edges[idx].target == to) {
+            return idx;
+        }
+    }
+    return UINT32_MAX;
+}
+
+VLStatus vl_graph_contract_degree2(VLGraph *graph)
+{
+    if (!graph || !graph->nodes || !graph->edges) {
+        return VL_ERROR_INVALID_ARGUMENT;
+    }
+
+    /* Need reverse index for contraction */
+    if (!graph->rev_edge_start) {
+        VLStatus status = vl_graph_build_reverse_index(graph);
+        if (status != VL_OK) return status;
+    }
+
+    uint32_t num_nodes = graph->num_nodes;
+    uint32_t num_edges = graph->num_edges;
+
+    /* Mark nodes to be contracted */
+    uint8_t *contracted = calloc(num_nodes, sizeof(uint8_t));
+    if (!contracted) return VL_ERROR_OUT_OF_MEMORY;
+
+    /* Count contractable nodes */
+    uint32_t num_contractable = 0;
+    for (uint32_t i = 0; i < num_nodes; i++) {
+        if (is_contractable(graph, i)) {
+            contracted[i] = 1;
+            num_contractable++;
+        }
+    }
+
+    if (num_contractable == 0) {
+        free(contracted);
+        return VL_OK;  /* Nothing to contract */
+    }
+
+    printf("velo: Contracting %u degree-2 nodes (%.1f%% of graph)\n",
+           num_contractable, 100.0 * num_contractable / num_nodes);
+
+    /* Create mapping from old node IDs to new node IDs */
+    uint32_t *old_to_new = malloc(num_nodes * sizeof(uint32_t));
+    uint32_t *new_to_old = malloc((num_nodes - num_contractable) * sizeof(uint32_t));
+    if (!old_to_new || !new_to_old) {
+        free(contracted);
+        free(old_to_new);
+        free(new_to_old);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    uint32_t new_node_count = 0;
+    for (uint32_t i = 0; i < num_nodes; i++) {
+        if (!contracted[i]) {
+            old_to_new[i] = new_node_count;
+            new_to_old[new_node_count] = i;
+            new_node_count++;
+        } else {
+            old_to_new[i] = UINT32_MAX;  /* Contracted away */
+        }
+    }
+
+    /* Build new edges, skipping contracted nodes and merging chains */
+    /* First pass: count new edges */
+    uint32_t new_edge_count = 0;
+    for (uint32_t i = 0; i < num_nodes; i++) {
+        if (contracted[i]) continue;
+
+        const VLNode *node = &graph->nodes[i];
+        for (uint32_t e = 0; e < node->edge_count; e++) {
+            uint32_t target = graph->edges[node->edge_start + e].target;
+
+            /* Follow chain of contracted nodes */
+            while (contracted[target]) {
+                /* Find next node in chain */
+                const VLNode *t = &graph->nodes[target];
+                if (t->edge_count == 0) break;
+                target = graph->edges[t->edge_start].target;
+            }
+
+            /* Only count edge if target is not contracted */
+            if (!contracted[target]) {
+                new_edge_count++;
+            }
+        }
+    }
+
+    /* Allocate new arrays */
+    VLNode *new_nodes = calloc(new_node_count, sizeof(VLNode));
+    VLEdge *new_edges = calloc(new_edge_count, sizeof(VLEdge));
+
+    /* For path unpacking: store intermediate nodes for each edge */
+    /* Estimate: average chain length ~2-3, so intermediates ~ num_contractable */
+    uint32_t *intermediates = malloc(num_contractable * sizeof(uint32_t));
+    uint32_t *edge_offsets = malloc((new_edge_count + 1) * sizeof(uint32_t));
+
+    if (!new_nodes || !new_edges || !intermediates || !edge_offsets) {
+        free(contracted);
+        free(old_to_new);
+        free(new_to_old);
+        free(new_nodes);
+        free(new_edges);
+        free(intermediates);
+        free(edge_offsets);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    /* Second pass: build new graph */
+    uint32_t edge_idx = 0;
+    uint32_t inter_idx = 0;
+
+    for (uint32_t new_i = 0; new_i < new_node_count; new_i++) {
+        uint32_t old_i = new_to_old[new_i];
+
+        /* Copy node data */
+        new_nodes[new_i] = graph->nodes[old_i];
+        new_nodes[new_i].edge_start = edge_idx;
+        new_nodes[new_i].edge_count = 0;
+
+        const VLNode *old_node = &graph->nodes[old_i];
+        for (uint32_t e = 0; e < old_node->edge_count; e++) {
+            uint32_t old_edge_idx = old_node->edge_start + e;
+            VLEdge edge = graph->edges[old_edge_idx];
+            uint32_t target = edge.target;
+
+            /* Record intermediate nodes offset */
+            edge_offsets[edge_idx] = inter_idx;
+
+            /* Follow and accumulate chain */
+            uint32_t chain_dist = edge.distance;
+            uint32_t chain_dur = edge.duration;
+
+            while (contracted[target]) {
+                /* Store intermediate node */
+                if (inter_idx < num_contractable) {
+                    intermediates[inter_idx++] = target;
+                }
+
+                /* Accumulate distance/duration */
+                const VLNode *t = &graph->nodes[target];
+                if (t->edge_count == 0) break;
+
+                VLEdge next_edge = graph->edges[t->edge_start];
+                chain_dist += next_edge.distance;
+                chain_dur += next_edge.duration;
+                target = next_edge.target;
+            }
+
+            /* Skip if target was contracted away (dead end) */
+            if (contracted[target]) continue;
+
+            /* Add contracted edge */
+            new_edges[edge_idx].target = old_to_new[target];
+            new_edges[edge_idx].distance = chain_dist;
+            new_edges[edge_idx].duration = (chain_dur > 65535) ? 65535 : (uint16_t)chain_dur;
+            new_edges[edge_idx].flags = edge.flags;
+
+            edge_idx++;
+            new_nodes[new_i].edge_count++;
+        }
+    }
+    edge_offsets[edge_idx] = inter_idx;  /* Final offset */
+
+    /* Create contraction data structure */
+    VLContraction *cont = malloc(sizeof(VLContraction));
+    if (!cont) {
+        free(contracted);
+        free(old_to_new);
+        free(new_to_old);
+        free(new_nodes);
+        free(new_edges);
+        free(intermediates);
+        free(edge_offsets);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    cont->node_to_original = new_to_old;
+    cont->num_contracted_nodes = new_node_count;
+    cont->edge_intermediates = intermediates;
+    cont->edge_intermediate_offset = edge_offsets;
+    cont->num_intermediates = inter_idx;
+
+    /* Replace graph data */
+    if (graph->owns_memory) {
+        free(graph->nodes);
+        free(graph->edges);
+    }
+
+    graph->nodes = new_nodes;
+    graph->num_nodes = new_node_count;
+    graph->edges = new_edges;
+    graph->num_edges = edge_idx;
+    graph->owns_memory = 1;
+    graph->contraction = cont;
+
+    /* Clear old indexes - they need to be rebuilt */
+    free(graph->rev_edge_start);
+    free(graph->rev_edge_count);
+    free(graph->rev_edges);
+    free(graph->rev_edge_idx);
+    graph->rev_edge_start = NULL;
+    graph->rev_edge_count = NULL;
+    graph->rev_edges = NULL;
+    graph->rev_edge_idx = NULL;
+
+    if (graph->grid_index) {
+        free(graph->grid_index->cell_nodes);
+        free(graph->grid_index->cell_offsets);
+        free(graph->grid_index);
+        graph->grid_index = NULL;
+    }
+
+    free(contracted);
+    free(old_to_new);
+
+    printf("velo: Contracted graph: %u nodes, %u edges\n",
+           graph->num_nodes, graph->num_edges);
+
+    /* Rebuild indexes */
+    vl_graph_build_reverse_index(graph);
+    vl_graph_build_grid_index(graph);
+
+    return VL_OK;
+}
+
+VLStatus vl_graph_unpack_path(const VLGraph *graph,
+                               const uint32_t *node_indices, int num_nodes,
+                               uint32_t **out_indices, int *out_num_nodes)
+{
+    if (!graph || !node_indices || !out_indices || !out_num_nodes) {
+        return VL_ERROR_INVALID_ARGUMENT;
+    }
+
+    /* If no contraction data, just copy the path */
+    if (!graph->contraction) {
+        uint32_t *copy = malloc(num_nodes * sizeof(uint32_t));
+        if (!copy) return VL_ERROR_OUT_OF_MEMORY;
+        memcpy(copy, node_indices, num_nodes * sizeof(uint32_t));
+        *out_indices = copy;
+        *out_num_nodes = num_nodes;
+        return VL_OK;
+    }
+
+    VLContraction *cont = graph->contraction;
+
+    /* First pass: count total nodes including intermediates */
+    int total_nodes = num_nodes;
+    for (int i = 0; i < num_nodes - 1; i++) {
+        uint32_t from = node_indices[i];
+        uint32_t to = node_indices[i + 1];
+
+        /* Find the edge */
+        uint32_t edge_idx = find_edge(graph, from, to);
+        if (edge_idx != UINT32_MAX) {
+            uint32_t start = cont->edge_intermediate_offset[edge_idx];
+            uint32_t end = cont->edge_intermediate_offset[edge_idx + 1];
+            total_nodes += (end - start);
+        }
+    }
+
+    /* Allocate result */
+    uint32_t *result = malloc(total_nodes * sizeof(uint32_t));
+    if (!result) return VL_ERROR_OUT_OF_MEMORY;
+
+    /* Second pass: build unpacked path */
+    int out_idx = 0;
+
+    for (int i = 0; i < num_nodes; i++) {
+        /* Add original node (mapped back to original ID) */
+        uint32_t node = node_indices[i];
+        result[out_idx++] = cont->node_to_original[node];
+
+        /* Add intermediates for edge to next node */
+        if (i < num_nodes - 1) {
+            uint32_t to = node_indices[i + 1];
+            uint32_t edge_idx = find_edge(graph, node, to);
+
+            if (edge_idx != UINT32_MAX) {
+                uint32_t start = cont->edge_intermediate_offset[edge_idx];
+                uint32_t end = cont->edge_intermediate_offset[edge_idx + 1];
+
+                for (uint32_t j = start; j < end; j++) {
+                    result[out_idx++] = cont->edge_intermediates[j];
+                }
+            }
+        }
+    }
+
+    *out_indices = result;
+    *out_num_nodes = out_idx;
+    return VL_OK;
+}
+
+/* ============================================================================
  * Graph Memory Management
  * ============================================================================ */
 
@@ -752,6 +1078,14 @@ void vl_graph_free(VLGraph *graph)
     free(graph->rev_edge_count);
     free(graph->rev_edges);
     free(graph->rev_edge_idx);
+
+    /* Free contraction data */
+    if (graph->contraction) {
+        free(graph->contraction->node_to_original);
+        free(graph->contraction->edge_intermediates);
+        free(graph->contraction->edge_intermediate_offset);
+        free(graph->contraction);
+    }
 
     /* Free grid index */
     if (graph->grid_index) {

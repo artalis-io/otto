@@ -112,6 +112,9 @@ typedef struct {
     /* Grid spatial index for fast nearest-node queries */
     struct VLGridIndex *grid_index;
 
+    /* Degree-2 contraction data (for path unpacking) */
+    struct VLContraction *contraction;
+
     /* Bounding box */
     VLCoord bbox_min;
     VLCoord bbox_max;
@@ -119,6 +122,22 @@ typedef struct {
     /* Memory management */
     int owns_memory;       /* 1 if we should free nodes/edges on destroy */
 } VLGraph;
+
+/*
+ * Degree-2 contraction data.
+ * When a chain A -> B -> C -> D is contracted to A -> D,
+ * we store B, C for path reconstruction.
+ */
+typedef struct VLContraction {
+    /* Mapping from contracted node to original node */
+    uint32_t *node_to_original;     /* contracted_node -> original_node_id */
+    uint32_t num_contracted_nodes;
+
+    /* For each contracted edge, intermediate nodes (for path unpacking) */
+    uint32_t *edge_intermediates;   /* Flattened array of intermediate nodes */
+    uint32_t *edge_intermediate_offset;  /* Start offset for each edge */
+    uint32_t num_intermediates;
+} VLContraction;
 
 /* ============================================================================
  * Grid Spatial Index
