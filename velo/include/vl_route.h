@@ -148,6 +148,25 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
                                    const VLRouteOptions *opts, VLRoute *route);
 
 /* ============================================================================
+ * Bucket Heap Dijkstra (O(1) amortized operations)
+ * ============================================================================ */
+
+/*
+ * Dijkstra using bucket heap for O(1) amortized operations.
+ * Faster than binary heap for graphs with bounded edge weights.
+ *
+ * graph: the road network graph
+ * source: source node index
+ * target: target node index
+ * opts: routing options (can be NULL for defaults)
+ * route: (out) computed route
+ *
+ * Returns VL_OK on success.
+ */
+VLStatus vl_route_dijkstra_bucket(const VLGraph *graph, uint32_t source, uint32_t target,
+                                   const VLRouteOptions *opts, VLRoute *route);
+
+/* ============================================================================
  * Route Memory Management
  * ============================================================================ */
 

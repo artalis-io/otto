@@ -27,6 +27,7 @@ NOMP_CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
 # Source files
 CORE_SRCS = src/vl_geo.c \
             src/vl_heap.c \
+            src/vl_bucket_heap.c \
             src/vl_protobuf.c \
             src/vl_inflate.c \
             src/vl_pbf.c \

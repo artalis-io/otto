@@ -203,6 +203,41 @@ static void run_benchmark(VLGraph *graph, const char *graph_name,
         printf("%-20s %12.3f %12u %12.0f\n",
                algorithms[a].name, avg_time, avg_nodes, distance);
     }
+
+    /* Also test bucket heap Dijkstra */
+    {
+        VLRouteOptions opts;
+        vl_default_options(&opts);
+        opts.weight = VL_WEIGHT_DISTANCE;
+        opts.include_geometry = 0;
+
+        double total_time = 0;
+        uint32_t total_nodes = 0;
+        double distance = 0;
+
+        for (int i = 0; i < iterations; i++) {
+            VLRoute route;
+            double start = get_time_ms();
+            VLStatus status = vl_route_dijkstra_bucket(graph, source, target, &opts, &route);
+            double end = get_time_ms();
+
+            if (status == VL_OK) {
+                total_time += (end - start);
+                total_nodes += route.nodes_explored;
+                distance = route.distance_m;
+                vl_free_route(&route);
+            } else {
+                printf("%-20s FAILED: %s\n", "Dijkstra Bucket", vl_status_string(status));
+                break;
+            }
+        }
+
+        double avg_time = total_time / iterations;
+        uint32_t avg_nodes = total_nodes / (uint32_t)iterations;
+
+        printf("%-20s %12.3f %12u %12.0f\n",
+               "Dijkstra Bucket ", avg_time, avg_nodes, distance);
+    }
 }
 
 /* ============================================================================
