@@ -2,17 +2,15 @@
 
 ## Project Overview
 
-FuelWise is a truck refueling optimization platform written primarily in C with a TypeScript React frontend. It finds minimum-cost fueling strategies for long-haul trucking routes, supporting variable fuel consumption and discrete stop constraints.
-
-Built on **Ralph** (**R**obust **A**I **L**inear **P**rogramming **H**elper), a zero-dependency LP/MIP solver.
+FuelWise is a truck fleet optimization platform written primarily in C with a TypeScript React frontend. It combines route planning, fuel cost optimization, and custom map rendering. All core libraries are zero-dependency and compile to WebAssembly.
 
 ## Quick Start
 
 ```bash
-# Build everything
-make all && make api
+# Build all libraries
+make all
 
-# Run tests
+# Run all tests (150+ across all modules)
 make test
 
 # Start servers
@@ -25,40 +23,68 @@ cd ui && npm run dev      # UI on :5173
 | Component | Location | Language | Purpose |
 |-----------|----------|----------|---------|
 | Ralph | `ralph/` | C | LP/MIP solver engine |
+| Velo | `velo/` | C | OSM routing engine |
+| Carta | `carta/` | C | Map tile generator (MVT/PNG) |
 | FuelWise | `fuelwise/` | C | Refueling domain logic |
 | API | `api/` | C | REST API server |
-| WASM | `wasm/` | C+JS | Browser build |
+| WASM | `wasm/` | C+JS | Browser builds |
 | UI | `ui/` | TypeScript | React frontend |
 
-## Key Files to Understand
+## Key Files by Task
 
-### When working on optimization:
-1. `fuelwise/include/fw_types.h` - Data structures
-2. `fuelwise/src/fw_refuel.c` - LP/MILP formulation
-3. `ralph/src/simplex.c` - Simplex algorithm
-4. `ralph/src/lu.c` - LU factorization (critical)
+### Working on LP/MIP optimization:
+- `ralph/include/ralph.h` - Solver API
+- `ralph/src/simplex.c` - Revised Simplex algorithm
+- `ralph/src/lu.c` - LU factorization (critical)
+- `ralph/src/branch_bound.c` - MIP solver
 
-### When working on API:
-1. `api/src/main.c` - All HTTP handling
-2. `fuelwise/include/fuelwise.h` - Library API
+### Working on routing:
+- `velo/include/velo.h` - Routing API
+- `velo/src/vl_route.c` - Dijkstra, A*, bidirectional
+- `velo/src/vl_pbf.c` - OSM PBF parsing
+- `velo/src/vl_graph.c` - CSR graph structure
 
-### When working on UI:
-1. `ui/src/App.tsx` - Main component
-2. `ui/src/services/api.ts` - API client
-3. `ui/src/components/MapView.tsx` - Map integration
+### Working on map tiles:
+- `carta/include/carta.h` - Tile generation API
+- `carta/src/ct_mvt.c` - MVT encoding
+- `carta/src/ct_render.c` - PNG rasterization
+- `carta/src/ct_tile.c` - Web Mercator math
+
+### Working on refueling:
+- `fuelwise/include/fuelwise.h` - Library API
+- `fuelwise/src/fw_refuel.c` - LP/MILP formulation
+- `fuelwise/src/fw_route.c` - Station filtering
+
+### Working on API:
+- `api/src/main.c` - HTTP handlers
+
+### Working on UI:
+- `ui/src/App.tsx` - Main component
+- `ui/src/components/MapView.tsx` - Map integration
 
 ## Build Commands
 
 ```bash
-make all            # Core libraries (ralph + fuelwise)
+# All libraries
+make all            # ralph + fuelwise + velo + carta
+
+# Individual modules
+make ralph          # LP/MIP solver
+make fuelwise       # Refueling library
+make velo           # Routing engine
+make carta          # Tile generator
 make api            # REST API server
 make wasm           # WebAssembly (needs Emscripten)
+
+# Testing
 make test           # All tests
-make test-ralph     # Solver tests only
-make test-fuelwise  # Domain tests only
-make test-api       # API tests only
+make test-ralph     # 43 tests
+make test-fuelwise  # 29 tests
+make test-velo      # 30+ tests
+make test-carta     # 33 tests
+
+# Run
 make run-api        # Start API server
-make clean          # Clean build artifacts
 ```
 
 ## API Endpoints
@@ -67,101 +93,80 @@ make clean          # Clean build artifacts
 |----------|--------|-------------|
 | `/api/v1/health` | GET | Health check |
 | `/api/v1/filter` | POST | Filter stations to route |
-| `/api/v1/solve` | POST | Solve with pre-snapped stations |
-| `/api/v1/optimize` | POST | Full pipeline (filter + solve) |
+| `/api/v1/solve` | POST | Solve refueling problem |
+| `/api/v1/optimize` | POST | Full pipeline |
 
-## Mathematical Model
-
-The optimizer solves a linear program:
-
-**Minimize**: Σ price[i] × x[i]  (total fuel cost)
-
-**Subject to**:
-- Fuel balance at each station
-- Minimum fuel level constraints
-- Tank capacity constraints
-- Destination reachability
-
-For MILP (with min_purchase or stop_cost):
-- Binary stop indicators z[i]
-- Indicator constraints: x[i] ≤ M × z[i]
-- Minimum purchase: x[i] ≥ min_purchase × z[i]
-
-## Data Flow
+## Architecture
 
 ```
-Input → Filter Stations → Build LP → Solve → Extract Solution
-  │         │                │          │           │
-  │    (fw_route.c)    (fw_refuel.c) (ralph/)  (fw_refuel.c)
-  │         │                │          │           │
-  └─────────┴────────────────┴──────────┴───────────┘
-                    fuelwise library
+┌─────────────────────────────────────────────────────────┐
+│  UI (React) / WASM (Browser) / API (mongoose)          │
+├─────────────────────────────────────────────────────────┤
+│  Domain Libraries                                       │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐       │
+│  │  FuelWise   │ │    Velo     │ │   Carta     │       │
+│  │  Refueling  │ │   Routing   │ │   Tiles     │       │
+│  └──────┬──────┘ └─────────────┘ └─────────────┘       │
+│         │                                               │
+│  ┌──────┴──────────────────────────────────────────┐   │
+│  │  Ralph - LP/MIP Solver                          │   │
+│  │  Simplex, LU Factorization, Branch & Bound      │   │
+│  └─────────────────────────────────────────────────┘   │
+│                                                         │
+│  Shared: miniz (zlib), protobuf decoder, haversine     │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ## Critical Code Sections
 
-### LU Factorization (`ralph/src/lu.c`)
-Most sensitive code - bugs cause wrong solutions. Key functions:
+### Ralph: LU Factorization (`ralph/src/lu.c`)
+Most sensitive - bugs cause wrong solutions:
 - `lu_factorize()` - Initial factorization
 - `lu_solve()` - Solve Bx = b
 - `lu_update()` - Basis change update
 
-### LP Formulation (`fuelwise/src/fw_refuel.c`)
-Problem construction in `fw_solve_refuel_lp()`:
+### Velo: A* Bidirectional (`velo/src/vl_route.c`)
+Performance-critical routing:
+- `vl_route_astar_bidir()` - Main routing function
+- Consistent heuristic for bidirectional search
+
+### Carta: MVT Encoding (`carta/src/ct_mvt.c`)
+Geometry encoding:
+- Delta + zigzag coordinate encoding
+- MoveTo/LineTo/ClosePath commands
+
+### FuelWise: LP Formulation (`fuelwise/src/fw_refuel.c`)
 - Variables: x[i] (purchases), y[i] (cumulative fuel)
-- Constraints built with `ralph_add_constraint()`
+- Constraints: fuel balance, capacity, minimum levels
 
-### Station Filtering (`fuelwise/src/fw_route.c`)
-Geospatial filtering in `fw_filter_stations()`:
-- Projects stations onto polyline
-- Calculates perpendicular distance
-- Sorts by distance along route
-
-## Testing Guidelines
+## Testing
 
 ```bash
-# Run all tests (should pass)
 make test
-
-# Expected results:
-# - ralph: 43/43 tests passed
-# - fuelwise: 29/29 tests passed
-```
-
-For debugging, create test files in `tests/debug_*.c`.
-
-## Common Pitfalls
-
-1. **Constraint normalization**: RHS must be non-negative
-2. **Station ordering**: Must be sorted by distance_from_start
-3. **MILP rounding**: Simple heuristic may violate indicator constraints
-4. **Memory management**: Free solutions with `fw_free_solution()`
-
-## Architecture Decisions
-
-1. **C-first**: Core in C for WASM + native portability
-2. **Zero dependencies**: ralph/ has no external deps
-3. **Layered**: ralph → fuelwise → api/wasm → ui
-4. **Piecewise consumption**: Via FWRouteSegment array
-
-## Useful Debugging
-
-```bash
-# Test API manually
-curl http://localhost:8080/api/v1/health
-
-# Test optimization
-curl -X POST http://localhost:8080/api/v1/optimize \
-  -H "Content-Type: application/json" \
-  -d '{"stations":[...], "route":[...], "tank_capacity":100, ...}'
-
-# Check LP solution details
-# Add verbose=1 to ralph_set_int_param() calls
+# Expected: 150+ tests pass across all modules
 ```
 
 ## Performance Targets
 
-- LP solve: < 100ms for typical problems
-- Station filtering: < 50ms for 1000 stations
-- API latency: < 100ms end-to-end
-- WASM initialization: < 100ms
+| Operation | Target |
+|-----------|--------|
+| LP solve (1000 vars) | < 100ms |
+| Route (country-scale) | < 100ms |
+| PNG tile (512x512) | < 100ms |
+| Refuel optimization | < 100ms |
+| PBF parse (300MB) | < 15s |
+
+## Common Pitfalls
+
+1. **Ralph**: RHS must be non-negative for constraints
+2. **Velo**: Bidirectional search needs consistent heuristic
+3. **Carta**: Coordinate order is (lon, lat) in MVT
+4. **FuelWise**: Stations must be sorted by distance_from_start
+5. **Memory**: Free all allocated structures (solutions, routes, contexts)
+
+## Design Principles
+
+1. **Zero Dependencies** - Core libraries use only standard C
+2. **WASM-First** - All components compile to WebAssembly
+3. **Layered** - solver → domain → api → ui
+4. **Portable** - Linux, macOS, Windows, browsers
