@@ -1,8 +1,12 @@
 /*
- * vl_heap.c - Binary min-heap priority queue
+ * vl_heap.c - 4-ary min-heap priority queue
  *
  * Efficient priority queue for Dijkstra and A* algorithms.
  * Supports push, pop, and decrease-key operations.
+ *
+ * Uses a 4-ary heap (each node has 4 children) instead of binary heap.
+ * This reduces tree height from log2(n) to log4(n) and improves cache
+ * locality since 4 children often fit in a single cache line.
  */
 
 #include "vl_types.h"
@@ -13,12 +17,12 @@
 VLStatus vl_heap_decrease_key(VLHeap *heap, uint32_t node, double new_priority);
 
 /* ============================================================================
- * Internal Helpers
+ * Internal Helpers (4-ary heap)
  * ============================================================================ */
 
-static inline size_t parent(size_t i) { return (i - 1) / 2; }
-static inline size_t left_child(size_t i) { return 2 * i + 1; }
-static inline size_t right_child(size_t i) { return 2 * i + 2; }
+/* 4-ary heap: parent at (i-1)/4, children at 4*i+1, 4*i+2, 4*i+3, 4*i+4 */
+static inline size_t parent(size_t i) { return (i - 1) / 4; }
+static inline size_t first_child(size_t i) { return 4 * i + 1; }
 
 static void swap_entries(VLHeap *heap, size_t i, size_t j)
 {
@@ -46,17 +50,29 @@ static void sift_up(VLHeap *heap, size_t i)
 static void sift_down(VLHeap *heap, size_t i)
 {
     while (1) {
-        size_t smallest = i;
-        size_t l = left_child(i);
-        size_t r = right_child(i);
+        size_t fc = first_child(i);
+        if (fc >= heap->size) break;
 
-        if (l < heap->size &&
-            heap->entries[l].priority < heap->entries[smallest].priority) {
-            smallest = l;
+        /* Find minimum among up to 4 children */
+        size_t smallest = i;
+        double smallest_pri = heap->entries[i].priority;
+
+        /* Check all 4 children (unrolled for performance) */
+        if (fc < heap->size && heap->entries[fc].priority < smallest_pri) {
+            smallest = fc;
+            smallest_pri = heap->entries[fc].priority;
         }
-        if (r < heap->size &&
-            heap->entries[r].priority < heap->entries[smallest].priority) {
-            smallest = r;
+        if (fc + 1 < heap->size && heap->entries[fc + 1].priority < smallest_pri) {
+            smallest = fc + 1;
+            smallest_pri = heap->entries[fc + 1].priority;
+        }
+        if (fc + 2 < heap->size && heap->entries[fc + 2].priority < smallest_pri) {
+            smallest = fc + 2;
+            smallest_pri = heap->entries[fc + 2].priority;
+        }
+        if (fc + 3 < heap->size && heap->entries[fc + 3].priority < smallest_pri) {
+            smallest = fc + 3;
+            /* smallest_pri = heap->entries[fc + 3].priority; */
         }
 
         if (smallest == i) break;

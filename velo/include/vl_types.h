@@ -156,8 +156,8 @@ typedef struct VLGridIndex {
  * ALT (A* with Landmarks and Triangle inequality)
  * ============================================================================ */
 
-#define VL_MAX_LANDMARKS 32
-#define VL_DEFAULT_LANDMARKS 16
+#define VL_MAX_LANDMARKS 64
+#define VL_DEFAULT_LANDMARKS 16  /* 32 gives better long-route performance */
 
 typedef struct {
     int num_landmarks;
