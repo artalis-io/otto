@@ -89,6 +89,10 @@ void vl_default_options(VLRouteOptions *opts)
 
 /*
  * Check if edge is accessible for given vehicle profile.
+ * Uses two-tier filtering:
+ *   1. Check explicit OSM access tags (hgv=no, bicycle=no, etc.)
+ *   2. Fall back to road type restrictions for safety (bikes can't use motorways)
+ *
  * Returns 1 if accessible, 0 if not.
  */
 static inline int edge_accessible(uint16_t flags, VLProfile profile)
@@ -96,27 +100,33 @@ static inline int edge_accessible(uint16_t flags, VLProfile profile)
     if (profile == VL_PROFILE_ANY) return 1;
 
     uint16_t road_type = flags & VL_EDGE_TYPE_MASK;
+    uint16_t access = flags & VL_ACCESS_MASK;
 
     switch (profile) {
     case VL_PROFILE_CAR:
-        /* Cars can use all roads */
+        /* Check explicit access denial */
+        if (access & VL_ACCESS_NO_CAR) return 0;
         return 1;
 
     case VL_PROFILE_TRUCK:
-        /* Trucks avoid residential and service roads */
-        return road_type != VL_EDGE_RESIDENTIAL &&
-               road_type != VL_EDGE_SERVICE;
+        /* Check explicit HGV denial */
+        if (access & VL_ACCESS_NO_TRUCK) return 0;
+        /* Note: trucks CAN use residential/service roads for local access */
+        return 1;
 
     case VL_PROFILE_BIKE:
-        /* Bikes avoid motorways and trunks */
-        return road_type != VL_EDGE_MOTORWAY &&
-               road_type != VL_EDGE_TRUNK;
+        /* Check explicit bicycle denial */
+        if (access & VL_ACCESS_NO_BIKE) return 0;
+        /* Safety: bikes cannot use motorways or trunk roads */
+        if (road_type == VL_EDGE_MOTORWAY || road_type == VL_EDGE_TRUNK) return 0;
+        return 1;
 
     case VL_PROFILE_FOOT:
-        /* Pedestrians avoid motorways, trunks, primaries */
-        return road_type != VL_EDGE_MOTORWAY &&
-               road_type != VL_EDGE_TRUNK &&
-               road_type != VL_EDGE_PRIMARY;
+        /* Check explicit foot denial */
+        if (access & VL_ACCESS_NO_FOOT) return 0;
+        /* Safety: pedestrians cannot use motorways or trunk roads */
+        if (road_type == VL_EDGE_MOTORWAY || road_type == VL_EDGE_TRUNK) return 0;
+        return 1;
 
     default:
         return 1;

@@ -70,7 +70,7 @@ typedef struct {
     uint16_t flags;       /* Edge flags (road type, one-way, etc.) */
 } VLEdge;
 
-/* Edge flags */
+/* Edge flags - bits 0-3: general flags, bits 4-7: road type, bits 8-15: access */
 #define VL_EDGE_ONEWAY      0x0001
 #define VL_EDGE_MOTORWAY    0x0010
 #define VL_EDGE_TRUNK       0x0020
@@ -80,6 +80,13 @@ typedef struct {
 #define VL_EDGE_RESIDENTIAL 0x0060
 #define VL_EDGE_SERVICE     0x0070
 #define VL_EDGE_TYPE_MASK   0x00F0
+
+/* Access restriction flags (from OSM access tags) */
+#define VL_ACCESS_NO_CAR    0x0100  /* motor_vehicle=no or access=no */
+#define VL_ACCESS_NO_TRUCK  0x0200  /* hgv=no */
+#define VL_ACCESS_NO_BIKE   0x0400  /* bicycle=no */
+#define VL_ACCESS_NO_FOOT   0x0800  /* foot=no */
+#define VL_ACCESS_MASK      0x0F00
 
 /*
  * Node in the graph.
@@ -277,6 +284,7 @@ typedef struct {
     int highway_type;      /* Encoded road type */
     int oneway;            /* 1=yes, -1=reverse, 0=no */
     int max_speed;         /* km/h, 0=unknown */
+    uint16_t access_flags; /* Access restriction flags */
 } VLOSMWay;
 
 /* PBF parsing context */

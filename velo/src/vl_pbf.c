@@ -423,6 +423,34 @@ static VLStatus parse_way(VLPBFContext *ctx, const uint8_t *data, size_t len,
                 }
             } else if (strcmp(key, "maxspeed") == 0) {
                 way.max_speed = atoi(val);
+            } else if (strcmp(key, "access") == 0) {
+                /* General access restriction */
+                if (strcmp(val, "no") == 0 || strcmp(val, "private") == 0) {
+                    way.access_flags |= VL_ACCESS_NO_CAR | VL_ACCESS_NO_TRUCK |
+                                        VL_ACCESS_NO_BIKE | VL_ACCESS_NO_FOOT;
+                }
+            } else if (strcmp(key, "motor_vehicle") == 0) {
+                if (strcmp(val, "no") == 0 || strcmp(val, "private") == 0) {
+                    way.access_flags |= VL_ACCESS_NO_CAR | VL_ACCESS_NO_TRUCK;
+                }
+            } else if (strcmp(key, "hgv") == 0) {
+                if (strcmp(val, "no") == 0 || strcmp(val, "private") == 0) {
+                    way.access_flags |= VL_ACCESS_NO_TRUCK;
+                } else if (strcmp(val, "yes") == 0 || strcmp(val, "designated") == 0) {
+                    way.access_flags &= ~VL_ACCESS_NO_TRUCK;  /* Allow trucks */
+                }
+            } else if (strcmp(key, "bicycle") == 0) {
+                if (strcmp(val, "no") == 0 || strcmp(val, "private") == 0) {
+                    way.access_flags |= VL_ACCESS_NO_BIKE;
+                } else if (strcmp(val, "yes") == 0 || strcmp(val, "designated") == 0) {
+                    way.access_flags &= ~VL_ACCESS_NO_BIKE;
+                }
+            } else if (strcmp(key, "foot") == 0) {
+                if (strcmp(val, "no") == 0 || strcmp(val, "private") == 0) {
+                    way.access_flags |= VL_ACCESS_NO_FOOT;
+                } else if (strcmp(val, "yes") == 0 || strcmp(val, "designated") == 0) {
+                    way.access_flags &= ~VL_ACCESS_NO_FOOT;
+                }
             }
         }
     }
