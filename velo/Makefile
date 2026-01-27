@@ -48,6 +48,7 @@ LIB = libvelo.a
 
 # Test binary
 TEST_BIN = test_velo
+TEST_OSRM = test_osrm_comparison
 
 # Benchmark binaries
 BENCH_ROUTING = bench_routing
@@ -82,6 +83,13 @@ $(TEST_BIN): tests/test_velo.c $(LIB)
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
+# OSRM comparison test
+$(TEST_OSRM): tests/test_osrm_comparison.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo $(LDFLAGS) -o $@
+
+test-osrm: $(TEST_OSRM)
+	@echo "Run: ./$(TEST_OSRM) <graph.vlg> [osrm_host:port]"
+
 # Benchmarks
 $(BENCH_ROUTING): benchmarks/bench_routing.c $(LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo $(LDFLAGS) -o $@
@@ -112,7 +120,7 @@ wasm:
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(MINIZ_OBJS) $(LIB)
-	rm -f $(TEST_BIN) $(BENCH_ROUTING) $(BENCH_PBF)
+	rm -f $(TEST_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF)
 	rm -f $(WASM_OUT) velo.wasm
 
 # Dependencies
