@@ -324,8 +324,34 @@ VLLandmarks *vl_landmarks_create(const VLGraph *graph, int num_landmarks)
         }
     }
 
+    /* Create transposed arrays for cache-friendly heuristic computation */
+    printf("velo: Creating transposed layout for fast queries...\n");
+
+    lm->dist_to_t = malloc(dist_size);
+    lm->dist_from_t = malloc(dist_size);
+
+    if (lm->dist_to_t && lm->dist_from_t) {
+        /* Transpose: from [k * num_nodes + v] to [v * num_landmarks + k] */
+        #pragma omp parallel for
+        for (uint32_t v = 0; v < graph->num_nodes; v++) {
+            for (int k = 0; k < num_landmarks; k++) {
+                size_t src_idx = (size_t)k * graph->num_nodes + v;
+                size_t dst_idx = (size_t)v * num_landmarks + k;
+                lm->dist_to_t[dst_idx] = lm->dist_to_landmark[src_idx];
+                lm->dist_from_t[dst_idx] = lm->dist_from_landmark[src_idx];
+            }
+        }
+    } else {
+        /* Fall back to non-transposed if allocation fails */
+        free(lm->dist_to_t);
+        free(lm->dist_from_t);
+        lm->dist_to_t = NULL;
+        lm->dist_from_t = NULL;
+    }
+
+    double total_mb = dist_size * (lm->dist_to_t ? 4.0 : 2.0) / (1024 * 1024);
     printf("velo: Landmarks ready (%d landmarks, %.1f MB)\n",
-           num_landmarks, dist_size * 2.0 / (1024 * 1024));
+           num_landmarks, total_mb);
 
     return lm;
 }
@@ -336,6 +362,8 @@ void vl_landmarks_free(VLLandmarks *lm)
     free(lm->landmark_nodes);
     free(lm->dist_to_landmark);
     free(lm->dist_from_landmark);
+    free(lm->dist_to_t);
+    free(lm->dist_from_t);
     free(lm);
 }
 
@@ -351,26 +379,99 @@ void vl_landmarks_free(VLLandmarks *lm)
  * (they just mean that landmark doesn't help for this query).
  * Do NOT take absolute value - that would make the heuristic inadmissible.
  */
+/* SIMD version for transposed layout */
+#if defined(__AVX__)
+#include <immintrin.h>
+
+static inline double vl_landmarks_heuristic_simd(const VLLandmarks *lm,
+                                                  uint32_t from, uint32_t to)
+{
+    const int n = lm->num_landmarks;
+    const double *from_to = &lm->dist_to_t[(size_t)from * n];
+    const double *to_to = &lm->dist_to_t[(size_t)to * n];
+    const double *from_from = &lm->dist_from_t[(size_t)from * n];
+    const double *to_from = &lm->dist_from_t[(size_t)to * n];
+
+    __m256d max_vec = _mm256_setzero_pd();
+    int k = 0;
+
+    /* Process 4 landmarks at a time */
+    for (; k + 3 < n; k += 4) {
+        __m256d ft = _mm256_loadu_pd(&from_to[k]);
+        __m256d tt = _mm256_loadu_pd(&to_to[k]);
+        __m256d tf = _mm256_loadu_pd(&to_from[k]);
+        __m256d ff = _mm256_loadu_pd(&from_from[k]);
+
+        __m256d bound1 = _mm256_sub_pd(ft, tt);
+        __m256d bound2 = _mm256_sub_pd(tf, ff);
+        __m256d bound = _mm256_max_pd(bound1, bound2);
+        max_vec = _mm256_max_pd(max_vec, bound);
+    }
+
+    /* Horizontal max */
+    double results[4];
+    _mm256_storeu_pd(results, max_vec);
+    double max_bound = results[0];
+    if (results[1] > max_bound) max_bound = results[1];
+    if (results[2] > max_bound) max_bound = results[2];
+    if (results[3] > max_bound) max_bound = results[3];
+
+    /* Handle remaining landmarks */
+    for (; k < n; k++) {
+        double bound1 = from_to[k] - to_to[k];
+        double bound2 = to_from[k] - from_from[k];
+        double bound = (bound1 > bound2) ? bound1 : bound2;
+        if (bound > max_bound) max_bound = bound;
+    }
+
+    return max_bound;
+}
+#endif
+
 double vl_landmarks_heuristic(const VLLandmarks *lm, uint32_t from, uint32_t to)
 {
     if (!lm) return 0;
 
+    const int n = lm->num_landmarks;
+
+    /* Use SIMD with transposed layout if available */
+#if defined(__AVX__)
+    if (lm->dist_to_t) {
+        return vl_landmarks_heuristic_simd(lm, from, to);
+    }
+#else
+    /* Scalar version for transposed layout */
+    if (lm->dist_to_t) {
+        double max_bound = 0;
+        const double *from_to = &lm->dist_to_t[(size_t)from * n];
+        const double *to_to = &lm->dist_to_t[(size_t)to * n];
+        const double *from_from = &lm->dist_from_t[(size_t)from * n];
+        const double *to_from = &lm->dist_from_t[(size_t)to * n];
+
+        for (int k = 0; k < n; k++) {
+            double bound1 = from_to[k] - to_to[k];
+            double bound2 = to_from[k] - from_from[k];
+            double bound = (bound1 > bound2) ? bound1 : bound2;
+            if (bound > max_bound) max_bound = bound;
+        }
+        return max_bound;
+    }
+#endif
+
+    /* Fallback to original strided layout */
     double max_bound = 0;
+    const size_t num_nodes = lm->num_nodes;
+    for (int k = 0; k < n; k++) {
+        size_t offset = (size_t)k * num_nodes;
 
-    for (int k = 0; k < lm->num_landmarks; k++) {
-        size_t offset = (size_t)k * lm->num_nodes;
-
-        /* Lower bound: dist(from, L) - dist(to, L) */
         double d1 = lm->dist_to_landmark[offset + from];
         double d2 = lm->dist_to_landmark[offset + to];
         double bound1 = d1 - d2;
 
-        /* Lower bound: dist(L, to) - dist(L, from) */
         double d3 = lm->dist_from_landmark[offset + to];
         double d4 = lm->dist_from_landmark[offset + from];
         double bound2 = d3 - d4;
 
-        /* Take max of both bounds from this landmark */
         double bound = (bound1 > bound2) ? bound1 : bound2;
         if (bound > max_bound) {
             max_bound = bound;
