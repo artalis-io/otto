@@ -126,21 +126,38 @@ Current performance on Hungary (2.7M nodes, 5.5M edges):
 | Hilbert reordering | ✅ Done | 1.5-2.1x | |
 | 4-ary heap | ✅ Done | ~10% | Better cache locality |
 | More landmarks (32) | ✅ Done | 8.5x long routes | VL_MAX_LANDMARKS=64 |
-| Lazy heuristic | ⏳ Pending | | |
-| SIMD haversine | ⏳ Pending | | |
+| Fast distance heuristic | ✅ Done | ~10-15% | Equirectangular approx |
+| SIMD landmark heuristic | ✅ Done | ~10% | Requires transposed layout |
+| Lazy heuristic | ❌ Skipped | N/A | Bottleneck is memory, not compute |
+| SIMD haversine | ❌ Skipped | N/A | Single calls can't batch |
 | Aggressive contraction | ⏳ Pending | | |
 | Arc flags | ⏳ Pending | | |
 | Reach pruning | ⏳ Pending | | |
 | Transit nodes | ⏳ Pending | | |
 | Contraction Hierarchies | 🔒 Deferred | | |
 
-## Best Results (Hilbert + 32 landmarks)
+## Best Results (Hilbert + 32 landmarks + SIMD)
 
 | Route | Baseline | Optimized | Speedup |
 |-------|----------|-----------|---------|
-| Budapest → Szeged | 154ms | 37ms | 4.2x |
-| Sopron → Nyíregyháza | 345ms | 34ms | 10.1x |
-| Pécs → Debrecen | 200ms | 39ms | 5.1x |
+| Budapest → Szeged | 154ms | **34ms** | 4.5x |
+| Sopron → Nyíregyháza | 345ms | **32ms** | 10.8x |
+| Pécs → Debrecen | 200ms | **35ms** | 5.7x |
 
-Preprocessing: Hilbert 648ms + Landmarks 3.3s = ~4s total
-Memory: 1.3 GB for 32 landmarks
+**Preprocessing**: Hilbert 648ms + Landmarks 3.6s = ~4s total
+
+**Memory tradeoff** (32 landmarks on Hungary):
+- Default (with transpose): 2.6 GB - faster queries via SIMD
+- LOWMEM (no transpose): 1.3 GB - ~10% slower queries
+- Build with `make LOWMEM=1` to use less memory
+
+## Lessons Learned
+
+### SIMD Only Helps with Contiguous Memory
+- SIMD on strided landmark access: ❌ No improvement (memory-bound)
+- SIMD on transposed layout: ✅ ~10% improvement
+- Prefetching strided data: ❌ No improvement (evicted before use)
+
+### Key Insight
+The landmark heuristic was bottlenecked by memory access patterns, not computation.
+Restructuring data layout (transpose) was necessary before SIMD could help.

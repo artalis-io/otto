@@ -24,6 +24,12 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
 # Non-OpenMP build for compatibility
 NOMP_CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
 
+# Low-memory build: disable transposed landmark layout (saves 50% landmark memory)
+# Use: make LOWMEM=1 all
+ifdef LOWMEM
+CFLAGS += -DVL_LANDMARKS_NO_TRANSPOSE
+endif
+
 # Source files
 CORE_SRCS = src/vl_geo.c \
             src/vl_heap.c \
