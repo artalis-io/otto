@@ -147,6 +147,15 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
                                    uint32_t source, uint32_t target,
                                    const VLRouteOptions *opts, VLRoute *route);
 
+/*
+ * Bidirectional ALT - A* with landmarks using bidirectional search.
+ * Faster than unidirectional ALT for long routes.
+ * Requires reverse graph index (automatically falls back if not available).
+ */
+VLStatus vl_route_astar_landmarks_bidir(const VLGraph *graph, const VLLandmarks *lm,
+                                         uint32_t source, uint32_t target,
+                                         const VLRouteOptions *opts, VLRoute *route);
+
 /* ============================================================================
  * Bucket Heap Dijkstra (O(1) amortized operations)
  * ============================================================================ */
