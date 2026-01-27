@@ -22,9 +22,49 @@ make all
 # Run tests
 make test
 
-# Build benchmarks
-make bench
+# Download a map and run benchmarks
+./scripts/download-map.sh hungary
+./scripts/convert-map.sh hungary-latest.osm.pbf
+make bench && ./bench_routing hungary.vlg
 ```
+
+## Getting Map Data
+
+Velo uses OpenStreetMap PBF files, available from [Geofabrik](https://download.geofabrik.de/).
+
+### Download Maps
+
+```bash
+# Download Hungary (~294 MB)
+./scripts/download-map.sh hungary
+
+# Download other countries
+./scripts/download-map.sh germany
+./scripts/download-map.sh france
+
+# Download regions with full path
+./scripts/download-map.sh north-america/us/california
+```
+
+### Convert to Binary Format
+
+Converting to `.vlg` format enables 100x faster loading:
+
+```bash
+# Convert PBF to VLG (takes 10-30s depending on size)
+./scripts/convert-map.sh hungary-latest.osm.pbf
+
+# Custom output name
+./scripts/convert-map.sh hungary-latest.osm.pbf hungary.vlg
+```
+
+### Sample Map Sizes
+
+| Region | PBF Size | VLG Size | Nodes | Edges |
+|--------|----------|----------|-------|-------|
+| Hungary | 294 MB | 125 MB | 2.7M | 5.5M |
+| Germany | 3.9 GB | ~1.5 GB | ~35M | ~70M |
+| California | 1.1 GB | ~400 MB | ~10M | ~20M |
 
 ## Usage
 
@@ -161,13 +201,34 @@ typedef struct {
 
 ## Performance
 
-| Operation | Target | Typical |
-|-----------|--------|---------|
-| PBF parse (100MB) | < 30s | ~15s |
-| Binary graph load | < 1s | ~200ms |
-| Routing (Dijkstra) | < 100ms | ~50ms |
-| Routing (A* bidir) | < 50ms | ~20ms |
-| Memory (1M nodes) | - | ~50MB |
+Baseline performance on Hungary (2.7M nodes, 5.5M edges):
+
+| Operation | Time |
+|-----------|------|
+| PBF parse + build | ~8s |
+| Binary graph load (mmap) | 116ms |
+| A* bidirectional | 150-350ms |
+
+### Optimizations
+
+Optional preprocessing can significantly speed up queries:
+
+| Optimization | Preprocessing | Query Speedup |
+|--------------|--------------|---------------|
+| Hilbert reordering | 648ms | 1.5-2.1x |
+| ALT (16 landmarks) | 2.2s | 2.5-3.8x |
+| Combined | ~3s | 3-4x |
+
+See [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for detailed benchmarks.
+
+```c
+// Enable Hilbert reordering (cache-friendly layout)
+vl_graph_reorder_hilbert(graph);
+
+// Enable ALT (landmark-based heuristic)
+VLLandmarks *lm = vl_landmarks_create(graph, 16);
+vl_route_astar_landmarks(graph, lm, src, dst, &opts, &route);
+```
 
 ## File Formats
 

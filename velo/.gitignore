@@ -1,0 +1,32 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+build/
+
+# Compiled binaries
+test_velo
+bench_routing
+bench_pbf
+
+# Map data files
+*.osm.pbf
+*.vlg
+
+# Editor and IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debug files
+*.dSYM/
+core
+vgcore.*
