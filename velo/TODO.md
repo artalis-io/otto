@@ -129,8 +129,10 @@ Current performance on Hungary (2.7M nodes, 5.5M edges):
 | Fast distance heuristic | ✅ Done | ~10-15% | Equirectangular approx |
 | SIMD landmark heuristic | ✅ Done | ~10% | Requires transposed layout |
 | Bounded suboptimality (ε) | ✅ Done | 2-10% | opts.epsilon, trades quality for speed |
+| Sorted adjacency lists | ✅ Done | marginal | Sorts edges by target during Hilbert reorder |
 | Lazy heuristic | ❌ Skipped | N/A | Bottleneck is memory, not compute |
 | SIMD haversine | ❌ Skipped | N/A | Single calls can't batch |
+| Bidirectional ALT | ❌ Skipped | N/A | Complex potential function, minimal gain over unidirectional |
 | Aggressive contraction | ⏳ Pending | | |
 | Arc flags | ⏳ Pending | | |
 | Reach pruning | ⏳ Pending | | |
