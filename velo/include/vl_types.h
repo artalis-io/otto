@@ -221,6 +221,7 @@ typedef struct {
     int include_geometry;  /* Include path coordinates in result */
     double max_distance;   /* Maximum search distance (0 = unlimited) */
     double max_duration;   /* Maximum search duration (0 = unlimited) */
+    double epsilon;        /* Suboptimality bound (0 = optimal, 0.1 = up to 10% longer) */
 } VLRouteOptions;
 
 /* ============================================================================

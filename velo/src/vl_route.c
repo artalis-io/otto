@@ -79,6 +79,7 @@ void vl_default_options(VLRouteOptions *opts)
     opts->include_geometry = 1;
     opts->max_distance = 0;
     opts->max_duration = 0;
+    opts->epsilon = 0;  /* Optimal by default */
 }
 
 /* ============================================================================
@@ -618,9 +619,12 @@ static VLStatus astar_ctx(const VLGraph *graph, VLQueryContext *ctx,
 
     vl_heap_clear(ctx->heap_fwd);
 
+    /* Weighted A*: multiply heuristic by (1 + epsilon) for faster but suboptimal search */
+    double weight_factor = 1.0 + opts->epsilon;
+
     LAZY_INIT_FWD(ctx, source);
     ctx->dist_fwd[source] = 0;
-    double h = heuristic(graph, source, target, opts->weight);
+    double h = heuristic(graph, source, target, opts->weight) * weight_factor;
     vl_heap_push(ctx->heap_fwd, source, h);
 
     uint32_t nodes_explored = 0;
@@ -639,7 +643,7 @@ static VLStatus astar_ctx(const VLGraph *graph, VLQueryContext *ctx,
         }
 
         LAZY_INIT_FWD(ctx, u);
-        if (entry.priority > ctx->dist_fwd[u] + heuristic(graph, u, target, opts->weight) + 0.001) {
+        if (entry.priority > ctx->dist_fwd[u] + heuristic(graph, u, target, opts->weight) * weight_factor + 0.001) {
             continue;
         }
 
@@ -654,7 +658,7 @@ static VLStatus astar_ctx(const VLGraph *graph, VLQueryContext *ctx,
             if (tentative_g < ctx->dist_fwd[v]) {
                 ctx->dist_fwd[v] = tentative_g;
                 ctx->parent_fwd[v] = u;
-                double f = tentative_g + heuristic(graph, v, target, opts->weight);
+                double f = tentative_g + heuristic(graph, v, target, opts->weight) * weight_factor;
                 vl_heap_push(ctx->heap_fwd, v, f);
             }
         }
@@ -680,10 +684,11 @@ static VLStatus astar_ctx(const VLGraph *graph, VLQueryContext *ctx,
  * ============================================================================ */
 
 static inline double potential_fwd(const VLGraph *graph, uint32_t node,
-                                   uint32_t source, uint32_t target, VLWeightType weight)
+                                   uint32_t source, uint32_t target,
+                                   VLWeightType weight, double weight_factor)
 {
-    double h_to_target = heuristic(graph, node, target, weight);
-    double h_to_source = heuristic(graph, node, source, weight);
+    double h_to_target = heuristic(graph, node, target, weight) * weight_factor;
+    double h_to_source = heuristic(graph, node, source, weight) * weight_factor;
     return (h_to_target - h_to_source) / 2.0;
 }
 
@@ -697,6 +702,9 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
 
     double start_time = get_time_ms();
 
+    /* Weighted A*: multiply heuristic by (1 + epsilon) for faster but suboptimal search */
+    double weight_factor = 1.0 + opts->epsilon;
+
     ctx->current_timestamp++;
     if (ctx->current_timestamp == 0) ctx->current_timestamp = 1;
 
@@ -709,8 +717,8 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
     ctx->dist_fwd[source] = 0;
     ctx->dist_bwd[target] = 0;
 
-    double p_source = potential_fwd(graph, source, source, target, opts->weight);
-    double p_target = -potential_fwd(graph, target, source, target, opts->weight);
+    double p_source = potential_fwd(graph, source, source, target, opts->weight, weight_factor);
+    double p_target = -potential_fwd(graph, target, source, target, opts->weight, weight_factor);
 
     vl_heap_push(ctx->heap_fwd, source, p_source);
     vl_heap_push(ctx->heap_bwd, target, p_target);
@@ -771,7 +779,7 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     if (tentative_g < ctx->dist_fwd[v]) {
                         ctx->dist_fwd[v] = tentative_g;
                         ctx->parent_fwd[v] = u;
-                        double p = potential_fwd(graph, v, source, target, opts->weight);
+                        double p = potential_fwd(graph, v, source, target, opts->weight, weight_factor);
                         vl_heap_push(ctx->heap_fwd, v, tentative_g + p);
 
                         LAZY_INIT_BWD(ctx, v);
@@ -821,7 +829,7 @@ static VLStatus astar_bidir_ctx(const VLGraph *graph, VLQueryContext *ctx,
                     if (tentative_g < ctx->dist_bwd[v]) {
                         ctx->dist_bwd[v] = tentative_g;
                         ctx->parent_bwd[v] = u;
-                        double p = -potential_fwd(graph, v, source, target, opts->weight);
+                        double p = -potential_fwd(graph, v, source, target, opts->weight, weight_factor);
                         vl_heap_push(ctx->heap_bwd, v, tentative_g + p);
 
                         LAZY_INIT_FWD(ctx, v);
@@ -1026,8 +1034,11 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
         return VL_ERROR_OUT_OF_MEMORY;
     }
 
+    /* Weighted A*: multiply heuristic by (1 + epsilon) for faster but suboptimal search */
+    double weight_factor = 1.0 + opts->epsilon;
+
     /* Initial heuristic using landmarks */
-    double h = vl_landmarks_heuristic(lm, source, target);
+    double h = vl_landmarks_heuristic(lm, source, target) * weight_factor;
     vl_heap_push(heap, source, h);
 
     uint32_t nodes_explored = 0;
@@ -1064,7 +1075,7 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
                 parent[v] = u;
 
                 /* Use landmark heuristic for f-value */
-                double h_v = vl_landmarks_heuristic(lm, v, target);
+                double h_v = vl_landmarks_heuristic(lm, v, target) * weight_factor;
                 double f = tentative_g + h_v;
                 vl_heap_push(heap, v, f);
             }

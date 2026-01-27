@@ -430,6 +430,67 @@ int main(int argc, char *argv[])
                         }
                     }
 
+                    /* Epsilon benchmark (bounded suboptimality) */
+                    printf("\n\nEpsilon (Weighted A*) Benchmark\n");
+                    printf("================================\n");
+                    printf("Testing bounded suboptimality with ALT heuristic.\n\n");
+
+                    double epsilons[] = {0.0, 0.05, 0.1, 0.2, 0.5};
+                    int num_eps = sizeof(epsilons) / sizeof(epsilons[0]);
+
+                    printf("%-22s", "Epsilon");
+                    for (int e = 0; e < num_eps; e++) {
+                        printf(" %8.0f%%", epsilons[e] * 100);
+                    }
+                    printf("\n");
+
+                    printf("%-22s", "----------------------");
+                    for (int e = 0; e < num_eps; e++) {
+                        printf(" %8s", "--------");
+                    }
+                    printf("\n\n");
+
+                    for (int r = 0; r < num_routes; r++) {
+                        source = vl_graph_nearest_node(real_graph, routes[r].origin);
+                        target = vl_graph_nearest_node(real_graph, routes[r].dest);
+
+                        double times[5];
+                        double dists[5];
+
+                        for (int e = 0; e < num_eps; e++) {
+                            opts.epsilon = epsilons[e];
+
+                            double total_time = 0;
+                            double dist = 0;
+                            for (int i = 0; i < routes[r].iterations; i++) {
+                                VLRoute route;
+                                double start = get_time_ms();
+                                vl_route_astar_landmarks(real_graph, landmarks, source, target, &opts, &route);
+                                total_time += get_time_ms() - start;
+                                dist = route.distance_m;
+                                vl_free_route(&route);
+                            }
+                            times[e] = total_time / routes[r].iterations;
+                            dists[e] = dist;
+                        }
+
+                        printf("%s:\n", routes[r].name);
+                        printf("  %-20s", "Time (ms)");
+                        for (int e = 0; e < num_eps; e++) {
+                            printf(" %8.1f", times[e]);
+                        }
+                        printf("  (%.0f%% speedup)\n", 100.0 * (times[0] - times[num_eps-1]) / times[0]);
+
+                        printf("  %-20s", "Distance (km)");
+                        for (int e = 0; e < num_eps; e++) {
+                            printf(" %8.1f", dists[e] / 1000.0);
+                        }
+                        printf("  (%.1f%% longer)\n\n", 100.0 * (dists[num_eps-1] - dists[0]) / dists[0]);
+                    }
+
+                    printf("\nNote: epsilon=0 is optimal. Higher epsilon = faster but longer routes.\n");
+                    opts.epsilon = 0;  /* Reset for subsequent tests */
+
                     vl_landmarks_free(landmarks);
                 } else {
                     printf("Failed to create landmarks.\n");
