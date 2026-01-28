@@ -885,6 +885,346 @@ TEST(profile_with_astar)
 }
 
 /* ============================================================================
+ * Shortest vs Fastest Routing Tests
+ *
+ * These tests verify that:
+ * 1. Shortest (distance) routing finds the path with minimum distance
+ * 2. Fastest (duration) routing finds the path with minimum time
+ * 3. These can produce different results when road speeds vary
+ * ============================================================================ */
+
+/*
+ * Create a test graph where shortest and fastest paths differ:
+ *
+ *     0 =====(highway, 10km, 100km/h)=====  1
+ *     |                                     |
+ * (local, 5km, 30km/h)                  (local, 5km, 30km/h)
+ *     |                                     |
+ *     2 -----(local, 5km, 30km/h)---------- 3
+ *
+ * Shortest 0->3: 0->2->3 = 10km (but slow: 20 min)
+ * Fastest 0->3:  0->1->3 = 15km (but fast: 16 min)
+ */
+static VLGraph *create_speed_test_graph(void)
+{
+    VLGraph *graph = calloc(1, sizeof(VLGraph));
+    if (!graph) return NULL;
+
+    graph->num_nodes = 4;
+    graph->nodes = calloc(4, sizeof(VLNode));
+    if (!graph->nodes) {
+        free(graph);
+        return NULL;
+    }
+
+    double coords[4][2] = {
+        {47.5, 19.0}, {47.5, 19.15},  /* top row */
+        {47.4, 19.0}, {47.4, 19.15}   /* bottom row */
+    };
+    for (int i = 0; i < 4; i++) {
+        graph->nodes[i].coord.lat = (int32_t)(coords[i][0] * 1e7);
+        graph->nodes[i].coord.lon = (int32_t)(coords[i][1] * 1e7);
+        graph->nodes[i].osm_id = i + 1;
+    }
+
+    /* 8 edges (4 bidirectional) */
+    graph->num_edges = 8;
+    graph->edges = calloc(8, sizeof(VLEdge));
+    if (!graph->edges) {
+        free(graph->nodes);
+        free(graph);
+        return NULL;
+    }
+
+    /* Edge definitions: {from, to, dist_km, speed_kmh, flags} */
+    struct { int from, to, dist, speed; uint16_t flags; } edge_defs[] = {
+        /* Highway 0-1: 10km at 100km/h = 6 min */
+        {0, 1, 10, 100, VL_EDGE_MOTORWAY}, {1, 0, 10, 100, VL_EDGE_MOTORWAY},
+        /* Local roads */
+        {0, 2, 5, 30, VL_EDGE_RESIDENTIAL}, {2, 0, 5, 30, VL_EDGE_RESIDENTIAL},
+        {1, 3, 5, 30, VL_EDGE_RESIDENTIAL}, {3, 1, 5, 30, VL_EDGE_RESIDENTIAL},
+        {2, 3, 5, 30, VL_EDGE_RESIDENTIAL}, {3, 2, 5, 30, VL_EDGE_RESIDENTIAL}
+    };
+
+    /* Count edges per node */
+    for (int i = 0; i < 8; i++) {
+        graph->nodes[edge_defs[i].from].edge_count++;
+    }
+
+    /* Calculate offsets */
+    uint32_t offset = 0;
+    for (int i = 0; i < 4; i++) {
+        graph->nodes[i].edge_start = offset;
+        offset += graph->nodes[i].edge_count;
+        graph->nodes[i].edge_count = 0;
+    }
+
+    /* Fill edges */
+    for (int i = 0; i < 8; i++) {
+        int from = edge_defs[i].from;
+        uint32_t idx = graph->nodes[from].edge_start + graph->nodes[from].edge_count;
+        graph->edges[idx].target = (uint32_t)edge_defs[i].to;
+        graph->edges[idx].distance = (uint32_t)(edge_defs[i].dist * 1000 * 1000);  /* km to mm */
+        /* duration in deciseconds: (dist_km / speed_kmh) * 3600 * 10 */
+        graph->edges[idx].duration = (uint16_t)((edge_defs[i].dist * 36000) / edge_defs[i].speed);
+        graph->edges[idx].flags = edge_defs[i].flags;
+        graph->nodes[from].edge_count++;
+    }
+
+    graph->owns_memory = 1;
+    return graph;
+}
+
+TEST(shortest_vs_fastest_different_paths)
+{
+    VLGraph *graph = create_speed_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+
+    VLRoute shortest_route, fastest_route;
+
+    /* Shortest path (by distance) */
+    opts.weight = VL_WEIGHT_DISTANCE;
+    VLStatus status = vl_route(graph, 0, 3, &opts, &shortest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* Fastest path (by duration) */
+    opts.weight = VL_WEIGHT_DURATION;
+    status = vl_route(graph, 0, 3, &opts, &fastest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* Shortest path: 0->2->3 = 10km */
+    ASSERT_NEAR(shortest_route.distance_m, 10000.0, 100.0);
+
+    /* Fastest path: 0->1->3 = 15km */
+    ASSERT_NEAR(fastest_route.distance_m, 15000.0, 100.0);
+
+    /* Verify shortest has less distance */
+    ASSERT_LT(shortest_route.distance_m, fastest_route.distance_m);
+
+    /* Verify fastest has less duration */
+    ASSERT_LT(fastest_route.duration_s, shortest_route.duration_s);
+
+    vl_free_route(&shortest_route);
+    vl_free_route(&fastest_route);
+    vl_graph_free(graph);
+}
+
+TEST(shortest_vs_fastest_car_profile)
+{
+    VLGraph *graph = create_speed_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.profile = VL_PROFILE_CAR;
+
+    VLRoute shortest_route, fastest_route;
+
+    /* Car can use all roads */
+    opts.weight = VL_WEIGHT_DISTANCE;
+    VLStatus status = vl_route(graph, 0, 3, &opts, &shortest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    opts.weight = VL_WEIGHT_DURATION;
+    status = vl_route(graph, 0, 3, &opts, &fastest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* Verify different paths were found */
+    ASSERT_LT(shortest_route.distance_m, fastest_route.distance_m);
+    ASSERT_LT(fastest_route.duration_s, shortest_route.duration_s);
+
+    vl_free_route(&shortest_route);
+    vl_free_route(&fastest_route);
+    vl_graph_free(graph);
+}
+
+TEST(shortest_vs_fastest_bike_profile)
+{
+    VLGraph *graph = create_speed_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.profile = VL_PROFILE_BIKE;
+
+    VLRoute shortest_route, fastest_route;
+
+    /* Bike avoids motorway, so both modes use same path: 0->2->3 */
+    opts.weight = VL_WEIGHT_DISTANCE;
+    VLStatus status = vl_route(graph, 0, 3, &opts, &shortest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    opts.weight = VL_WEIGHT_DURATION;
+    status = vl_route(graph, 0, 3, &opts, &fastest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* Both should take same path since motorway is blocked */
+    ASSERT_NEAR(shortest_route.distance_m, fastest_route.distance_m, 100.0);
+    ASSERT_NEAR(shortest_route.duration_s, fastest_route.duration_s, 1.0);
+
+    /* Path should be 0->2->3 = 10km */
+    ASSERT_NEAR(shortest_route.distance_m, 10000.0, 100.0);
+
+    vl_free_route(&shortest_route);
+    vl_free_route(&fastest_route);
+    vl_graph_free(graph);
+}
+
+TEST(shortest_vs_fastest_foot_profile)
+{
+    VLGraph *graph = create_speed_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    opts.profile = VL_PROFILE_FOOT;
+
+    VLRoute shortest_route, fastest_route;
+
+    /* Foot avoids motorway, so both modes use same path: 0->2->3 */
+    opts.weight = VL_WEIGHT_DISTANCE;
+    VLStatus status = vl_route(graph, 0, 3, &opts, &shortest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    opts.weight = VL_WEIGHT_DURATION;
+    status = vl_route(graph, 0, 3, &opts, &fastest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* Both should take same path since motorway is blocked */
+    ASSERT_NEAR(shortest_route.distance_m, fastest_route.distance_m, 100.0);
+
+    vl_free_route(&shortest_route);
+    vl_free_route(&fastest_route);
+    vl_graph_free(graph);
+}
+
+TEST(fastest_always_faster_or_equal)
+{
+    VLGraph *graph = create_speed_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+
+    /* Test all profiles */
+    VLProfile profiles[] = {VL_PROFILE_CAR, VL_PROFILE_TRUCK, VL_PROFILE_BIKE, VL_PROFILE_FOOT, VL_PROFILE_ANY};
+
+    for (int p = 0; p < 5; p++) {
+        opts.profile = profiles[p];
+
+        VLRoute shortest_route, fastest_route;
+
+        opts.weight = VL_WEIGHT_DISTANCE;
+        VLStatus status = vl_route(graph, 0, 3, &opts, &shortest_route);
+        if (status != VL_OK) continue;  /* Skip if no route for this profile */
+
+        opts.weight = VL_WEIGHT_DURATION;
+        status = vl_route(graph, 0, 3, &opts, &fastest_route);
+        if (status != VL_OK) {
+            vl_free_route(&shortest_route);
+            continue;
+        }
+
+        /* Fastest route should have duration <= shortest route's duration */
+        ASSERT_LE(fastest_route.duration_s, shortest_route.duration_s + 0.1);
+
+        /* Shortest route should have distance <= fastest route's distance */
+        ASSERT_LE(shortest_route.distance_m, fastest_route.distance_m + 100.0);
+
+        vl_free_route(&shortest_route);
+        vl_free_route(&fastest_route);
+    }
+
+    vl_graph_free(graph);
+}
+
+TEST(shortest_always_shorter_or_equal)
+{
+    VLGraph *graph = create_speed_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+
+    VLRoute shortest_route, fastest_route;
+
+    opts.weight = VL_WEIGHT_DISTANCE;
+    opts.profile = VL_PROFILE_CAR;
+    VLStatus status = vl_route(graph, 0, 3, &opts, &shortest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    opts.weight = VL_WEIGHT_DURATION;
+    status = vl_route(graph, 0, 3, &opts, &fastest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* Shortest route must have distance <= fastest route distance */
+    ASSERT_LE(shortest_route.distance_m, fastest_route.distance_m + 100.0);
+
+    vl_free_route(&shortest_route);
+    vl_free_route(&fastest_route);
+    vl_graph_free(graph);
+}
+
+TEST(shortest_vs_fastest_with_astar)
+{
+    VLGraph *graph = create_speed_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_ASTAR;
+    opts.profile = VL_PROFILE_CAR;
+
+    VLRoute shortest_route, fastest_route;
+
+    opts.weight = VL_WEIGHT_DISTANCE;
+    VLStatus status = vl_route(graph, 0, 3, &opts, &shortest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    opts.weight = VL_WEIGHT_DURATION;
+    status = vl_route(graph, 0, 3, &opts, &fastest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* A* should produce same optimal results as Dijkstra */
+    ASSERT_NEAR(shortest_route.distance_m, 10000.0, 100.0);
+    ASSERT_NEAR(fastest_route.distance_m, 15000.0, 100.0);
+
+    vl_free_route(&shortest_route);
+    vl_free_route(&fastest_route);
+    vl_graph_free(graph);
+}
+
+TEST(shortest_vs_fastest_bidir_dijkstra)
+{
+    VLGraph *graph = create_speed_test_graph();
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA_BIDIR;
+    opts.profile = VL_PROFILE_CAR;
+
+    VLRoute shortest_route, fastest_route;
+
+    opts.weight = VL_WEIGHT_DISTANCE;
+    VLStatus status = vl_route(graph, 0, 3, &opts, &shortest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    opts.weight = VL_WEIGHT_DURATION;
+    status = vl_route(graph, 0, 3, &opts, &fastest_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* Bidirectional Dijkstra should produce optimal results */
+    ASSERT_NEAR(shortest_route.distance_m, 10000.0, 100.0);
+    ASSERT_NEAR(fastest_route.distance_m, 15000.0, 100.0);
+
+    vl_free_route(&shortest_route);
+    vl_free_route(&fastest_route);
+    vl_graph_free(graph);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -951,6 +1291,17 @@ int main(void)
     RUN_TEST(profile_foot_avoids_motorway_trunk);
     RUN_TEST(profile_any_no_filtering);
     RUN_TEST(profile_with_astar);
+    printf("\n");
+
+    printf("Shortest vs Fastest Routing Tests:\n");
+    RUN_TEST(shortest_vs_fastest_different_paths);
+    RUN_TEST(shortest_vs_fastest_car_profile);
+    RUN_TEST(shortest_vs_fastest_bike_profile);
+    RUN_TEST(shortest_vs_fastest_foot_profile);
+    RUN_TEST(fastest_always_faster_or_equal);
+    RUN_TEST(shortest_always_shorter_or_equal);
+    RUN_TEST(shortest_vs_fastest_with_astar);
+    RUN_TEST(shortest_vs_fastest_bidir_dijkstra);
     printf("\n");
 
     printf("================\n");

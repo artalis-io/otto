@@ -170,11 +170,18 @@ typedef struct {
     int num_landmarks;
     uint32_t num_nodes;
     uint32_t *landmark_nodes;       /* Array of landmark node indices */
+
+    /* Distance-based landmarks (for shortest path routing) */
     double *dist_to_landmark;       /* dist_to[k * num_nodes + v] = dist(v -> landmark k) */
     double *dist_from_landmark;     /* dist_from[k * num_nodes + v] = dist(landmark k -> v) */
-    /* Transposed layout for cache-friendly heuristic computation */
-    double *dist_to_t;              /* dist_to_t[v * num_landmarks + k] */
-    double *dist_from_t;            /* dist_from_t[v * num_landmarks + k] */
+    double *dist_to_t;              /* Transposed: dist_to_t[v * num_landmarks + k] */
+    double *dist_from_t;            /* Transposed: dist_from_t[v * num_landmarks + k] */
+
+    /* Duration-based landmarks (for fastest path routing) */
+    double *time_to_landmark;       /* time_to[k * num_nodes + v] = time(v -> landmark k) */
+    double *time_from_landmark;     /* time_from[k * num_nodes + v] = time(landmark k -> v) */
+    double *time_to_t;              /* Transposed: time_to_t[v * num_landmarks + k] */
+    double *time_from_t;            /* Transposed: time_from_t[v * num_landmarks + k] */
 } VLLandmarks;
 
 /* ============================================================================
