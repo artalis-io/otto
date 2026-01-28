@@ -11,17 +11,20 @@
 #     wasm/       - WebAssembly build
 #   carta/        - Map Tile Generator
 #     api/        - Carta Tile Server
+#     ui/         - Tile Viewer React Application
 #     wasm/       - WebAssembly build
 #   shared/       - Shared Utilities (libshared.a)
 #   vendor/       - Third-party libraries (mongoose, miniz)
+#   scripts/      - Utility scripts (download-osm, benchmark, ci)
 #   docs/         - Architecture documentation
 
 .PHONY: all lib clean test help
 .PHONY: ralph fuelwise velo carta shared
-.PHONY: api tile-server route-server
+.PHONY: fuelwise-api carta-api velo-api
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-types wasm-test
-.PHONY: ui ui-dev
-.PHONY: run-api run-tiles run-routes
+.PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev
+.PHONY: run-fuelwise-api run-carta-api run-velo-api
+.PHONY: benchmark ci
 
 # =============================================================================
 # Default Targets
@@ -67,26 +70,26 @@ carta:
 # =============================================================================
 
 # FuelWise REST API server (depends on FuelWise)
-api: fuelwise
+fuelwise-api: fuelwise
 	$(MAKE) -C fuelwise/api
 
 # Carta tile server (depends on Carta)
-tile-server: carta shared
+carta-api: carta shared
 	$(MAKE) -C carta/api
 
 # Velo route server (depends on Velo)
-route-server: velo
+velo-api: velo
 	$(MAKE) -C velo/api
 
 # Run servers
-run-api: api
+run-fuelwise-api: fuelwise-api
 	$(MAKE) -C fuelwise/api run
 
-run-tiles: tile-server
+run-carta-api: carta-api
 	@echo "Usage: ./carta/api/carta-tile-server <pbf-file>"
 	@echo "Example: ./carta/api/carta-tile-server data/hungary-latest.osm.pbf"
 
-run-routes: route-server
+run-velo-api: velo-api
 	@echo "Usage: ./velo/api/velo-route-server <pbf-file>"
 	@echo "Example: ./velo/api/velo-route-server data/hungary-latest.osm.pbf"
 
@@ -123,11 +126,27 @@ wasm-test: wasm
 # UI (requires Node.js)
 # =============================================================================
 
-ui:
+fuelwise-ui:
 	cd fuelwise/ui && npm install && npm run build
 
-ui-dev:
+fuelwise-ui-dev:
 	cd fuelwise/ui && npm run dev
+
+carta-ui:
+	cd carta/ui && npm install && npm run build
+
+carta-ui-dev:
+	cd carta/ui && npm run dev
+
+# =============================================================================
+# Scripts
+# =============================================================================
+
+benchmark:
+	./scripts/benchmark.sh
+
+ci:
+	./scripts/ci.sh
 
 # =============================================================================
 # Testing
@@ -151,8 +170,17 @@ test-velo: velo
 test-carta: carta
 	$(MAKE) -C carta test
 
-test-api: api
+test-fuelwise-api: fuelwise-api
 	$(MAKE) -C fuelwise/api test
+
+test-velo-api: velo-api
+	$(MAKE) -C velo/api test
+
+test-carta-api: carta-api
+	$(MAKE) -C carta/api test
+
+# Test all API endpoints (requires OSM data in data/)
+test-api: test-fuelwise-api test-velo-api test-carta-api
 
 # =============================================================================
 # Cleanup
@@ -173,7 +201,8 @@ clean:
 	-rm -f vendor/miniz/*.o 2>/dev/null || true
 
 clean-all: clean
-	cd fuelwise/ui && rm -rf node_modules dist 2>/dev/null || true
+	-cd fuelwise/ui && rm -rf node_modules dist 2>/dev/null || true
+	-cd carta/ui && rm -rf node_modules dist 2>/dev/null || true
 
 # =============================================================================
 # Help
@@ -183,43 +212,52 @@ help:
 	@echo "FuelWise Platform Build System"
 	@echo ""
 	@echo "Libraries:"
-	@echo "  all           - Build all libraries with tests (default)"
-	@echo "  lib           - Build all libraries only (no tests)"
-	@echo "  ralph         - Build Ralph LP/MIP solver"
-	@echo "  fuelwise      - Build FuelWise refueling library"
-	@echo "  shared        - Build shared utilities library"
-	@echo "  velo          - Build Velo routing engine"
-	@echo "  carta         - Build Carta tile generator"
+	@echo "  all              - Build all libraries with tests (default)"
+	@echo "  lib              - Build all libraries only (no tests)"
+	@echo "  ralph            - Build Ralph LP/MIP solver"
+	@echo "  fuelwise         - Build FuelWise refueling library"
+	@echo "  shared           - Build shared utilities library"
+	@echo "  velo             - Build Velo routing engine"
+	@echo "  carta            - Build Carta tile generator"
 	@echo ""
 	@echo "API Servers:"
-	@echo "  api           - Build FuelWise REST API (fuelwise/api)"
-	@echo "  tile-server   - Build Carta tile server (carta/api)"
-	@echo "  route-server  - Build Velo route server (velo/api)"
-	@echo "  run-api       - Run FuelWise API server"
-	@echo "  run-tiles     - Show tile server usage"
-	@echo "  run-routes    - Show route server usage"
+	@echo "  fuelwise-api     - Build FuelWise REST API (fuelwise/api)"
+	@echo "  carta-api        - Build Carta tile server (carta/api)"
+	@echo "  velo-api         - Build Velo route server (velo/api)"
+	@echo "  run-fuelwise-api - Run FuelWise API server on :8080"
+	@echo "  run-carta-api    - Show Carta tile server usage"
+	@echo "  run-velo-api     - Show Velo route server usage"
 	@echo ""
 	@echo "WebAssembly (requires Emscripten):"
-	@echo "  wasm          - Build all WASM modules"
-	@echo "  wasm-fuelwise - Build FuelWise WASM"
-	@echo "  wasm-velo     - Build Velo WASM"
-	@echo "  wasm-carta    - Build Carta WASM"
-	@echo "  wasm-types    - Generate TypeScript declarations"
-	@echo "  wasm-test     - Test WASM builds"
+	@echo "  wasm             - Build all WASM modules"
+	@echo "  wasm-fuelwise    - Build FuelWise WASM"
+	@echo "  wasm-velo        - Build Velo WASM"
+	@echo "  wasm-carta       - Build Carta WASM"
+	@echo "  wasm-types       - Generate TypeScript declarations"
+	@echo "  wasm-test        - Test WASM builds"
 	@echo ""
 	@echo "UI (requires Node.js):"
-	@echo "  ui            - Build React UI (fuelwise/ui)"
-	@echo "  ui-dev        - Run UI dev server"
+	@echo "  fuelwise-ui      - Build FuelWise React UI (fuelwise/ui)"
+	@echo "  fuelwise-ui-dev  - Run FuelWise UI dev server on :5173"
+	@echo "  carta-ui         - Build Carta Tile Viewer (carta/ui)"
+	@echo "  carta-ui-dev     - Run Carta UI dev server"
+	@echo ""
+	@echo "Scripts:"
+	@echo "  benchmark        - Run performance benchmarks"
+	@echo "  ci               - Run CI pipeline"
 	@echo ""
 	@echo "Testing:"
-	@echo "  test          - Run all tests (~190)"
-	@echo "  test-ralph    - Run Ralph tests (65)"
-	@echo "  test-fuelwise - Run FuelWise tests (32)"
-	@echo "  test-shared   - Run Shared tests (23)"
-	@echo "  test-velo     - Run Velo tests (39)"
-	@echo "  test-carta    - Run Carta tests (33)"
-	@echo "  test-api      - Test FuelWise API endpoints"
+	@echo "  test             - Run all library tests (~190)"
+	@echo "  test-ralph       - Run Ralph tests (65)"
+	@echo "  test-fuelwise    - Run FuelWise tests (32)"
+	@echo "  test-shared      - Run Shared tests (23)"
+	@echo "  test-velo        - Run Velo tests (39)"
+	@echo "  test-carta       - Run Carta tests (33)"
+	@echo "  test-api         - Test all API endpoints (requires OSM data)"
+	@echo "  test-fuelwise-api- Test FuelWise API endpoints"
+	@echo "  test-velo-api    - Test Velo route API endpoints"
+	@echo "  test-carta-api   - Test Carta tile API endpoints"
 	@echo ""
 	@echo "Cleanup:"
-	@echo "  clean         - Clean all build artifacts"
-	@echo "  clean-all     - Clean everything including node_modules"
+	@echo "  clean            - Clean all build artifacts"
+	@echo "  clean-all        - Clean everything including node_modules"

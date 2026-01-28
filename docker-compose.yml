@@ -1,7 +1,25 @@
 version: '3.8'
 
+# =============================================================================
+# FuelWise Platform - Docker Compose Configuration
+# =============================================================================
+#
+# Profiles:
+#   default     - Full platform (fuelwise + UI)
+#   all-apis    - All 3 API servers
+#   dev         - Development environment
+#
+# Usage:
+#   docker-compose up                        # Full platform
+#   docker-compose --profile all-apis up     # All APIs
+#   docker-compose --profile dev up          # Development
+#
+# =============================================================================
+
 services:
-  # Full platform (UI + API)
+  # ---------------------------------------------------------------------------
+  # Full Platform (FuelWise UI + API)
+  # ---------------------------------------------------------------------------
   fuelwise:
     build:
       context: .
@@ -17,8 +35,10 @@ services:
       retries: 3
       start_period: 10s
 
-  # API only
-  api:
+  # ---------------------------------------------------------------------------
+  # FuelWise API Only
+  # ---------------------------------------------------------------------------
+  fuelwise-api:
     build:
       context: .
       target: api-only
@@ -26,14 +46,65 @@ services:
       - "8080:8080"
     restart: unless-stopped
     profiles:
-      - api-only
+      - all-apis
+      - fuelwise-only
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  # Development environment
+  # ---------------------------------------------------------------------------
+  # Velo Route Server
+  # ---------------------------------------------------------------------------
+  velo-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.velo
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./data:/data:ro
+    environment:
+      - PBF_FILE=/data/hungary-latest.osm.pbf
+    restart: unless-stopped
+    profiles:
+      - all-apis
+      - velo-only
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s  # Extra time for graph loading
+
+  # ---------------------------------------------------------------------------
+  # Carta Tile Server
+  # ---------------------------------------------------------------------------
+  carta-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.carta
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./data:/data:ro
+    environment:
+      - PBF_FILE=/data/hungary-latest.osm.pbf
+    restart: unless-stopped
+    profiles:
+      - all-apis
+      - carta-only
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s  # Extra time for PBF loading
+
+  # ---------------------------------------------------------------------------
+  # Development Environment
+  # ---------------------------------------------------------------------------
   dev:
     build:
       context: .
@@ -41,15 +112,25 @@ services:
     ports:
       - "5173:5173"
       - "8080:8080"
+      - "8081:8081"
+      - "8082:8082"
     volumes:
       - .:/workspace
       - /workspace/fuelwise/ui/node_modules
+      - /workspace/carta/ui/node_modules
     working_dir: /workspace
     profiles:
       - dev
     command: >
       bash -c "
-        make api &&
+        make fuelwise-api &&
         ./fuelwise/api/fuelwise-api -p 8080 &
         cd fuelwise/ui && npm run dev -- --host 0.0.0.0
       "
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  default:
+    name: fuelwise-network

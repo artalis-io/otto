@@ -58,53 +58,65 @@ FuelWise is a truck refueling optimization platform built on a layered architect
 ## Directory Structure
 
 ```
-fuelwise/
+fuelwise-platform/
 ├── ralph/              # LP/MIP Solver (libralph.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   Simplex, LU factorization, Branch & Bound
-│   └── tests/          #   43 tests
+│   └── tests/          #   65 tests
 │
 ├── fuelwise/           # Refueling Library (libfuelwise.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   LP formulation, route filtering
-│   └── tests/          #   29 tests
+│   ├── tests/          #   32 tests
+│   ├── api/            #   FuelWise REST API server
+│   ├── wasm/           #   WebAssembly build
+│   └── ui/             #   React frontend application
 │
 ├── velo/               # Routing Engine (libvelo.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   OSM PBF parsing, Dijkstra, A*, landmarks
-│   └── tests/          #   30+ tests
+│   ├── tests/          #   39 tests
+│   ├── api/            #   Velo Route Server REST API
+│   └── wasm/           #   WebAssembly build
 │
 ├── carta/              # Tile Generator (libcarta.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   MVT encoding, PNG rendering, Web Mercator
-│   ├── examples/       #   Usage examples
-│   └── tests/          #   33 tests
+│   ├── tests/          #   33 tests
+│   ├── api/            #   Carta Tile Server REST API
+│   ├── ui/             #   Tile Viewer React Application
+│   └── wasm/           #   WebAssembly build
 │
 ├── shared/             # Shared utilities (libshared.a)
 │   ├── include/        #   Common headers
 │   ├── src/            #   Geo utilities, protobuf helpers
-│   └── tests/          #   Shared code tests
+│   └── tests/          #   23 tests
 │
-├── vendor/             # Third-party code (header-only or vendored)
-│   └── miniz/          #   Public domain zlib implementation
+├── vendor/             # Third-party code (vendored)
+│   ├── miniz/          #   Public domain zlib implementation
+│   ├── mongoose/       #   Embedded HTTP server
+│   └── clay/           #   UI layout library (future)
 │
-├── api/                # REST API Server
-│   ├── src/            #   HTTP handlers
-│   └── mongoose/       #   Embedded HTTP server
-│
-├── wasm/               # WebAssembly Builds
-│   └── src/            #   WASM bindings
-│
-├── ui/                 # React Application
-│   └── src/            #   TypeScript frontend
+├── scripts/            # Utility scripts
+│   ├── download-osm.sh #   Download OSM PBF from Geofabrik
+│   ├── benchmark.sh    #   Performance benchmarks
+│   └── ci.sh           #   CI/CD pipeline
 │
 ├── docs/               # Documentation
 │   ├── ARCHITECTURE.md #   This file
-│   ├── API.md          #   REST API reference
+│   ├── KNOWN_ISSUES.md #   Known issues and limitations
 │   └── *.md            #   Technical docs
 │
-└── tests/              # Integration tests
-    └── integration/    #   End-to-end tests
+├── docker/             # Docker configuration
+│   ├── nginx.conf      #   Nginx config for UI proxy
+│   └── entrypoint.sh   #   Container entrypoint
+│
+├── Makefile            # Top-level build orchestration
+├── Dockerfile          # Multi-stage Docker build
+├── docker-compose.yml  # Docker Compose config
+├── CLAUDE.md           # Claude Code instructions
+├── AGENTS.md           # AI agents guide
+└── README.md           # Project documentation
 ```
 
 ## Module Dependency Graph
@@ -287,11 +299,30 @@ Route Request → API/WASM → Velo
 
 ### Top-Level Targets
 ```makefile
-make all          # Build all libraries (ralph, fuelwise, velo, carta, shared)
-make test         # Run all tests (~135 tests)
-make clean        # Clean all build artifacts
-make api          # Build REST API server
-make wasm         # Build WebAssembly modules
+make all              # Build all libraries (ralph, fuelwise, velo, carta, shared)
+make lib              # Build libraries only (no tests)
+make test             # Run all tests (~192 tests)
+make clean            # Clean all build artifacts
+```
+
+### API Server Targets
+```makefile
+make fuelwise-api     # Build FuelWise REST API (fuelwise/api)
+make velo-api         # Build Velo route server (velo/api)
+make carta-api        # Build Carta tile server (carta/api)
+make run-fuelwise-api # Run FuelWise API on :8080
+make run-velo-api     # Show Velo route server usage
+make run-carta-api    # Show Carta tile server usage
+```
+
+### WebAssembly Targets
+```makefile
+make wasm             # Build all WASM modules
+make wasm-fuelwise    # Build FuelWise WASM
+make wasm-velo        # Build Velo WASM
+make wasm-carta       # Build Carta WASM
+make wasm-types       # Generate TypeScript declarations
+make wasm-test        # Test WASM builds
 ```
 
 ### Module Targets
@@ -305,11 +336,15 @@ make shared       # Build libshared.a
 
 ### Testing
 ```makefile
-make test-ralph     # 43 tests
-make test-fuelwise  # 29 tests
-make test-velo      # 30+ tests
-make test-carta     # 33 tests
-make test-shared    # Shared code tests
+make test-ralph       # 65 tests
+make test-fuelwise    # 32 tests
+make test-velo        # 39 tests
+make test-carta       # 33 tests
+make test-shared      # 23 tests
+make test-api         # All API endpoint tests (requires OSM data)
+make test-fuelwise-api# FuelWise API tests
+make test-velo-api    # Velo API tests
+make test-carta-api   # Carta API tests
 ```
 
 ## Design Principles
@@ -356,7 +391,27 @@ The following improvements are planned for the project structure:
   - `libshared.a` with 23 tests
   - Provides common types: `SHCoord`, `SHBBox`, coordinate conversions
 
+- [x] **Reorganize API/WASM/UI directories** (COMPLETED)
+  - Moved `api/` → `fuelwise/api/`
+  - Moved `wasm/` → `fuelwise/wasm/`
+  - Moved `ui/` → `fuelwise/ui/`
+  - Created `velo/api/` for route server
+  - Created `carta/api/` for tile server
+  - Created `velo/wasm/` and `carta/wasm/` for WebAssembly builds
+
+- [x] **Standardize Makefile targets** (COMPLETED)
+  - Consistent targets across all modules: `all`, `lib`, `test`, `clean`, `help`
+  - API targets: `fuelwise-api`, `velo-api`, `carta-api`
+  - WASM targets: `wasm-fuelwise`, `wasm-velo`, `wasm-carta`
+  - Run targets: `run-fuelwise-api`, `run-velo-api`, `run-carta-api`
+
 ## Medium Priority
+
+- [x] **Add API endpoint tests** (COMPLETED)
+  - `test-fuelwise-api` - FuelWise API curl tests
+  - `test-velo-api` - Velo route server tests
+  - `test-carta-api` - Carta tile server tests
+  - `test-api` - Run all API tests
 
 - [ ] **Standardize test structure**
   - Currently inconsistent: inline tests vs separate files
@@ -366,17 +421,27 @@ The following improvements are planned for the project structure:
 - [ ] **Add integration tests at root**
   - Create `tests/integration/` directory
   - End-to-end tests (route + refuel + tiles)
-  - API endpoint tests with curl/shell
+  - Cross-module integration tests
 
 ## Low Priority
 
-- [ ] **Add scripts/ directory**
+- [x] **Add scripts/ directory** (COMPLETED)
   - `download-osm.sh` - Fetch OSM data from Geofabrik
-  - `gen-types.sh` - Generate TypeScript types from C headers
   - `benchmark.sh` - Run all benchmarks
   - `ci.sh` - CI/CD pipeline script
 
+- [x] **Add carta-ui** (COMPLETED)
+  - Moved `carta/api/ui/` to `carta/ui/`
+  - Added `carta-ui` and `carta-ui-dev` Makefile targets
+
+- [x] **Docker multi-service** (COMPLETED)
+  - `docker/Dockerfile.velo` - Velo route server
+  - `docker/Dockerfile.carta` - Carta tile server
+  - Updated `docker-compose.yml` with all 3 APIs
+
 - [ ] **Improve documentation**
-  - Add API.md for each module (not just root)
   - Add CONTRIBUTING.md
   - Add CHANGELOG.md
+
+- [ ] **Generate TypeScript types**
+  - `gen-types.sh` - Generate TypeScript types from C headers

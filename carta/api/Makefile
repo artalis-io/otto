@@ -81,3 +81,59 @@ install: $(TARGET)
 # Docker build
 docker:
 	docker build -t carta-tile-server .
+
+# Test the API endpoints
+test: $(TARGET)
+	@echo "Starting Carta tile server for testing..."
+	@./$(TARGET) -p 8083 ../../data/hungary-latest.osm.pbf &
+	@SERVER_PID=$$!; \
+	echo "Waiting for server to load PBF (this may take a moment)..."; \
+	sleep 15; \
+	echo ""; \
+	echo "=== Testing Carta Tile Server API ==="; \
+	echo ""; \
+	echo "Testing health endpoint..."; \
+	HEALTH=$$(curl -s http://localhost:8083/api/v1/health); \
+	echo "$$HEALTH" | head -5; \
+	if echo "$$HEALTH" | grep -q '"status"'; then \
+		echo "  PASS: Health endpoint works"; \
+	else \
+		echo "  FAIL: Health endpoint"; \
+	fi; \
+	echo ""; \
+	echo "Testing stats endpoint..."; \
+	STATS=$$(curl -s http://localhost:8083/api/v1/stats); \
+	echo "$$STATS" | head -10; \
+	if echo "$$STATS" | grep -q '"node_count"'; then \
+		echo "  PASS: Stats endpoint works"; \
+	else \
+		echo "  FAIL: Stats endpoint"; \
+	fi; \
+	echo ""; \
+	echo "Testing tiles.json endpoint..."; \
+	TILEJSON=$$(curl -s http://localhost:8083/tiles.json); \
+	echo "$$TILEJSON" | head -10; \
+	if echo "$$TILEJSON" | grep -q '"tilejson"'; then \
+		echo "  PASS: TileJSON endpoint works"; \
+	else \
+		echo "  FAIL: TileJSON endpoint"; \
+	fi; \
+	echo ""; \
+	echo "Testing PNG tile endpoint (z=10, x=567, y=357)..."; \
+	HTTP_CODE=$$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/tiles/10/567/357.png); \
+	if [ "$$HTTP_CODE" = "200" ]; then \
+		echo "  PASS: PNG tile returned 200 OK"; \
+	else \
+		echo "  FAIL: PNG tile returned $$HTTP_CODE"; \
+	fi; \
+	echo ""; \
+	echo "Testing MVT tile endpoint (z=10, x=567, y=357)..."; \
+	HTTP_CODE=$$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/tiles/10/567/357.mvt); \
+	if [ "$$HTTP_CODE" = "200" ]; then \
+		echo "  PASS: MVT tile returned 200 OK"; \
+	else \
+		echo "  FAIL: MVT tile returned $$HTTP_CODE"; \
+	fi; \
+	echo ""; \
+	echo "=== Carta API Tests Complete ==="; \
+	kill $$SERVER_PID 2>/dev/null || true

@@ -10,12 +10,12 @@ FuelWise is a truck fleet optimization platform written primarily in C with a Ty
 # Build all libraries
 make all
 
-# Run all tests (150+ across all modules)
+# Run all tests (190+ across all modules)
 make test
 
 # Start servers
-make run-api              # API on :8080
-cd fuelwise/ui && npm run dev  # UI on :5173
+make run-fuelwise-api         # FuelWise API on :8080
+make fuelwise-ui-dev          # FuelWise UI on :5173
 ```
 
 ## Component Summary
@@ -85,39 +85,43 @@ cd fuelwise/ui && npm run dev  # UI on :5173
 
 ```bash
 # Libraries
-make all            # Build all with tests (default)
-make lib            # Build libraries only (no tests)
-make ralph          # LP/MIP solver
-make fuelwise       # Refueling library
-make shared         # Shared geo utilities
-make velo           # Routing engine
-make carta          # Tile generator
+make all              # Build all with tests (default)
+make lib              # Build libraries only (no tests)
+make ralph            # LP/MIP solver
+make fuelwise         # Refueling library
+make shared           # Shared geo utilities
+make velo             # Routing engine
+make carta            # Tile generator
 
 # API Servers
-make api            # FuelWise REST API (fuelwise/api)
-make route-server   # Velo route server (velo/api)
-make tile-server    # Carta tile server (carta/api)
+make fuelwise-api     # FuelWise REST API (fuelwise/api)
+make velo-api         # Velo route server (velo/api)
+make carta-api        # Carta tile server (carta/api)
 
 # WebAssembly (requires Emscripten)
-make wasm           # Build all WASM modules
-make wasm-fuelwise  # FuelWise WASM only
-make wasm-velo      # Velo WASM only
-make wasm-carta     # Carta WASM only
-make wasm-types     # Generate TypeScript declarations
-make wasm-test      # Test WASM builds
+make wasm             # Build all WASM modules
+make wasm-fuelwise    # FuelWise WASM only
+make wasm-velo        # Velo WASM only
+make wasm-carta       # Carta WASM only
+make wasm-types       # Generate TypeScript declarations
+make wasm-test        # Test WASM builds
+
+# UI (requires Node.js)
+make fuelwise-ui      # Build FuelWise UI
+make fuelwise-ui-dev  # Run FuelWise UI dev server
 
 # Testing
-make test           # All tests (~190 tests)
-make test-ralph     # 65 tests
-make test-fuelwise  # 32 tests
-make test-shared    # 23 tests
-make test-velo      # 39 tests
-make test-carta     # 33 tests
+make test             # All tests (~190 tests)
+make test-ralph       # 65 tests
+make test-fuelwise    # 32 tests
+make test-shared      # 23 tests
+make test-velo        # 39 tests
+make test-carta       # 33 tests
 
 # Run servers
-make run-api        # Start FuelWise API server
-make run-routes     # Show route server usage
-make run-tiles      # Show tile server usage
+make run-fuelwise-api # Start FuelWise API on :8080
+make run-velo-api     # Show Velo route server usage
+make run-carta-api    # Show Carta tile server usage
 ```
 
 ## API Endpoints
