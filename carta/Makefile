@@ -95,18 +95,9 @@ bench: $(BENCH_BIN)
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: clean all
 
-# WASM build (requires Emscripten)
+# WASM build (delegates to wasm/ subdirectory)
 wasm:
-	emcc $(CORE_SRCS) $(MINIZ_SRCS) \
-		-Iinclude -I$(VENDOR_DIR) \
-		-DMINIZ_NO_STDIO -DMINIZ_NO_TIME \
-		-O2 \
-		-s WASM=1 \
-		-s EXPORTED_FUNCTIONS='["_ct_load_pbf_memory", "_ct_generate_mvt", "_ct_generate_png", "_ct_free_pbf_context", "_ct_default_style", "_ct_tile_bounds", "_malloc", "_free"]' \
-		-s EXPORTED_RUNTIME_METHODS='["ccall", "cwrap", "getValue", "setValue", "HEAPU8"]' \
-		-s ALLOW_MEMORY_GROWTH=1 \
-		-s INITIAL_MEMORY=67108864 \
-		-o $(WASM_OUT)
+	$(MAKE) -C wasm
 
 # Clean
 clean:

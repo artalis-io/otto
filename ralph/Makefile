@@ -68,9 +68,11 @@ GLPK_INCLUDES = -I$(GLPK_PREFIX)/include
 GLPK_LIBS = -L$(GLPK_PREFIX)/lib -lglpk
 
 # Default target
-all: $(LIB_NAME)
+all: lib $(TEST_EXEC)
 
-# Build library
+# Build library only
+lib: $(LIB_NAME)
+
 $(LIB_NAME): $(OBJECTS)
 	ar rcs $@ $^
 
@@ -162,4 +164,21 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all clean debug test test-edge bench compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall
+.PHONY: all lib clean debug test test-edge bench compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
+
+# Help
+help:
+	@echo "Ralph LP/MIP Solver Build System"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all        - Build library and tests (default)"
+	@echo "  lib        - Build static library (libralph.a)"
+	@echo "  test       - Build and run tests"
+	@echo "  test-edge  - Run edge case tests"
+	@echo "  bench      - Run size scaling benchmark"
+	@echo "  debug      - Build with debug symbols"
+	@echo "  clean      - Remove build artifacts"
+	@echo ""
+	@echo "GLPK Benchmarks (requires GLPK):"
+	@echo "  bench-glpk - Compare Ralph vs GLPK"
+	@echo "  bench-mip  - MIP benchmark vs GLPK"

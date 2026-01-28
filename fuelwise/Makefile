@@ -32,13 +32,15 @@ TEST_SOURCES = $(TEST_DIR)/test_fuelwise.c
 TEST_EXEC = test_fuelwise
 
 # Default target
-all: ralph $(LIB_NAME)
+all: ralph lib $(TEST_EXEC)
+
+# Build library only
+lib: $(LIB_NAME)
 
 # Build Ralph first
 ralph:
-	$(MAKE) -C $(RALPH_DIR)
+	$(MAKE) -C $(RALPH_DIR) lib
 
-# Build library
 $(LIB_NAME): $(OBJECTS)
 	ar rcs $@ $^
 
@@ -78,4 +80,20 @@ uninstall:
 	rm -rf /usr/local/include/fuelwise
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all clean clean-all debug test install uninstall ralph
+.PHONY: all lib clean clean-all debug test wasm install uninstall ralph help
+
+# Build WASM (delegates to wasm/ subdirectory)
+wasm:
+	$(MAKE) -C wasm
+
+# Help
+help:
+	@echo "FuelWise Refueling Library Build System"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all      - Build library and tests (default)"
+	@echo "  lib      - Build static library (libfuelwise.a)"
+	@echo "  test     - Build and run tests"
+	@echo "  wasm     - Build WebAssembly (requires Emscripten)"
+	@echo "  debug    - Build with debug symbols"
+	@echo "  clean    - Remove build artifacts"
