@@ -7,7 +7,7 @@
 #   4. runtime      - Final production image
 
 # =============================================================================
-# Stage 1: Build C components (ralph, fuelwise, api)
+# Stage 1: Build C components (ralph, fuelwise, velo, carta, shared, api)
 # =============================================================================
 FROM debian:bookworm-slim AS c-builder
 
@@ -21,17 +21,20 @@ WORKDIR /build
 # Copy source files
 COPY ralph/ ralph/
 COPY fuelwise/ fuelwise/
-COPY api/ api/
-COPY include/ include/
+COPY velo/ velo/
+COPY carta/ carta/
+COPY shared/ shared/
+COPY vendor/ vendor/
 COPY Makefile .
 
-# Build libraries and API
+# Build libraries and FuelWise API
 RUN make ralph && \
     make fuelwise && \
+    make shared && \
     make api
 
 # Run tests to verify build
-RUN make test
+RUN make test-ralph && make test-fuelwise
 
 # =============================================================================
 # Stage 2: Build WebAssembly module (optional, for serving from API)
@@ -43,11 +46,10 @@ WORKDIR /build
 # Copy source files
 COPY ralph/ ralph/
 COPY fuelwise/ fuelwise/
-COPY wasm/ wasm/
-COPY include/ include/
+COPY vendor/ vendor/
 
 # Build WASM
-RUN cd wasm && emmake make
+RUN cd fuelwise/wasm && emmake make
 
 # =============================================================================
 # Stage 3: Build React UI
@@ -57,13 +59,13 @@ FROM node:20-slim AS ui-builder
 WORKDIR /build/ui
 
 # Copy package files first for better caching
-COPY ui/package.json ui/package-lock.json* ./
+COPY fuelwise/ui/package.json fuelwise/ui/package-lock.json* ./
 
 # Install dependencies
 RUN npm ci
 
 # Copy source and build
-COPY ui/ .
+COPY fuelwise/ui/ .
 
 # Build production bundle
 RUN npm run build
@@ -76,15 +78,16 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     nginx \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy API binary
-COPY --from=c-builder /build/api/fuelwise-api /app/fuelwise-api
+COPY --from=c-builder /build/fuelwise/api/fuelwise-api /app/fuelwise-api
 
 # Copy WASM files (optional)
-COPY --from=wasm-builder /build/wasm/build/ /app/wasm/
+COPY --from=wasm-builder /build/fuelwise/wasm/build/ /app/wasm/
 
 # Copy UI build
 COPY --from=ui-builder /build/ui/dist/ /var/www/html/
@@ -111,10 +114,14 @@ ENTRYPOINT ["/app/entrypoint.sh"]
 # =============================================================================
 FROM debian:bookworm-slim AS api-only
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Copy API binary
-COPY --from=c-builder /build/api/fuelwise-api /app/fuelwise-api
+COPY --from=c-builder /build/fuelwise/api/fuelwise-api /app/fuelwise-api
 
 EXPOSE 8080
 
@@ -148,7 +155,7 @@ COPY . .
 RUN make all
 
 # Install UI dependencies
-RUN cd ui && npm install
+RUN cd fuelwise/ui && npm install
 
 EXPOSE 5173 8080
 
