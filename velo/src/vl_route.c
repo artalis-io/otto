@@ -1111,8 +1111,16 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
     /* Weighted A*: multiply heuristic by (1 + epsilon) for faster but suboptimal search */
     double weight_factor = 1.0 + opts->epsilon;
 
+    /*
+     * Landmark heuristic scaling: landmarks are precomputed with distance (km).
+     * When routing by duration, convert distance to time lower bound by dividing
+     * by max speed (110 km/h = 30.56 m/s). This ensures admissibility.
+     * heuristic_scale: 1.0 for distance, 3600/110 = 32.73 for duration (seconds per km)
+     */
+    double heuristic_scale = (opts->weight == VL_WEIGHT_DURATION) ? (3600.0 / 110.0) : 1.0;
+
     /* Initial heuristic using landmarks */
-    double h = vl_landmarks_heuristic(lm, source, target) * weight_factor;
+    double h = vl_landmarks_heuristic(lm, source, target) * heuristic_scale * weight_factor;
     vl_heap_push(heap, source, h);
 
     uint32_t nodes_explored = 0;
@@ -1156,8 +1164,8 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
                 dist[v] = tentative_g;
                 parent[v] = u;
 
-                /* Use landmark heuristic for f-value */
-                double h_v = vl_landmarks_heuristic(lm, v, target) * weight_factor;
+                /* Use landmark heuristic for f-value (scaled for duration routing) */
+                double h_v = vl_landmarks_heuristic(lm, v, target) * heuristic_scale * weight_factor;
                 double f = tentative_g + h_v;
                 vl_heap_push(heap, v, f);
             }
