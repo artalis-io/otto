@@ -1,0 +1,583 @@
+/*
+ * Carta Tile Server
+ *
+ * A lightweight tile server that serves vector (MVT) and raster (PNG) tiles
+ * from OSM PBF files using carta and mongoose.
+ *
+ * Endpoints:
+ *   GET /                         - Tile viewer (served from static dir)
+ *   GET /tiles/{z}/{x}/{y}.mvt    - Vector tile (MVT)
+ *   GET /tiles/{z}/{x}/{y}.png    - Raster tile (PNG)
+ *   GET /tiles.json               - TileJSON metadata
+ *   GET /api/v1/health            - Health check
+ *   GET /api/v1/stats             - PBF statistics
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
+#include <ctype.h>
+#include "mongoose.h"
+#include "carta.h"
+
+/* ============================================================================
+ * Configuration
+ * ============================================================================ */
+
+typedef struct {
+    char pbf_path[512];
+    char static_dir[512];
+    char listen_addr[64];
+    int port;
+    int min_zoom;
+    int max_zoom;
+    int tile_size;
+    char name[128];
+} TileServerConfig;
+
+/* Default configuration */
+static TileServerConfig s_config = {
+    .pbf_path = "",
+    .static_dir = "./static",
+    .listen_addr = "0.0.0.0",
+    .port = 8081,
+    .min_zoom = 0,
+    .max_zoom = 18,
+    .tile_size = 512,
+    .name = "Carta Tile Server"
+};
+
+/* Global state */
+static int s_signo = 0;
+static CTPBFContext *s_pbf_ctx = NULL;
+
+static void signal_handler(int signo) {
+    s_signo = signo;
+}
+
+/* ============================================================================
+ * Configuration Loading
+ * ============================================================================ */
+
+/* Trim whitespace from string */
+static char *trim(char *str) {
+    while (isspace((unsigned char)*str)) str++;
+    if (*str == 0) return str;
+    char *end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) end--;
+    end[1] = '\0';
+    return str;
+}
+
+/* Load configuration from YAML-like file */
+static int load_config_file(const char *filename, TileServerConfig *cfg) {
+    FILE *f = fopen(filename, "r");
+    if (!f) return -1;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), f)) {
+        char *trimmed = trim(line);
+        if (*trimmed == '#' || *trimmed == '\0') continue;
+
+        char *colon = strchr(trimmed, ':');
+        if (!colon) continue;
+
+        *colon = '\0';
+        char *key = trim(trimmed);
+        char *value = trim(colon + 1);
+
+        /* Remove quotes from value */
+        size_t vlen = strlen(value);
+        if (vlen >= 2 && ((value[0] == '"' && value[vlen-1] == '"') ||
+                          (value[0] == '\'' && value[vlen-1] == '\''))) {
+            value[vlen-1] = '\0';
+            value++;
+        }
+
+        if (strcmp(key, "pbf_path") == 0 || strcmp(key, "pbf") == 0) {
+            strncpy(cfg->pbf_path, value, sizeof(cfg->pbf_path) - 1);
+        } else if (strcmp(key, "static_dir") == 0 || strcmp(key, "static") == 0) {
+            strncpy(cfg->static_dir, value, sizeof(cfg->static_dir) - 1);
+        } else if (strcmp(key, "listen") == 0 || strcmp(key, "host") == 0) {
+            strncpy(cfg->listen_addr, value, sizeof(cfg->listen_addr) - 1);
+        } else if (strcmp(key, "port") == 0) {
+            cfg->port = atoi(value);
+        } else if (strcmp(key, "min_zoom") == 0) {
+            cfg->min_zoom = atoi(value);
+        } else if (strcmp(key, "max_zoom") == 0) {
+            cfg->max_zoom = atoi(value);
+        } else if (strcmp(key, "tile_size") == 0) {
+            cfg->tile_size = atoi(value);
+        } else if (strcmp(key, "name") == 0) {
+            strncpy(cfg->name, value, sizeof(cfg->name) - 1);
+        }
+    }
+
+    fclose(f);
+    return 0;
+}
+
+/* Load configuration from environment variables */
+static void load_config_env(TileServerConfig *cfg) {
+    const char *val;
+
+    if ((val = getenv("TILE_PBF_PATH")) || (val = getenv("PBF_PATH"))) {
+        strncpy(cfg->pbf_path, val, sizeof(cfg->pbf_path) - 1);
+    }
+    if ((val = getenv("TILE_STATIC_DIR")) || (val = getenv("STATIC_DIR"))) {
+        strncpy(cfg->static_dir, val, sizeof(cfg->static_dir) - 1);
+    }
+    if ((val = getenv("TILE_PORT")) || (val = getenv("PORT"))) {
+        cfg->port = atoi(val);
+    }
+    if ((val = getenv("TILE_HOST")) || (val = getenv("HOST"))) {
+        strncpy(cfg->listen_addr, val, sizeof(cfg->listen_addr) - 1);
+    }
+    if ((val = getenv("TILE_MIN_ZOOM"))) {
+        cfg->min_zoom = atoi(val);
+    }
+    if ((val = getenv("TILE_MAX_ZOOM"))) {
+        cfg->max_zoom = atoi(val);
+    }
+    if ((val = getenv("TILE_SIZE"))) {
+        cfg->tile_size = atoi(val);
+    }
+    if ((val = getenv("TILE_NAME"))) {
+        strncpy(cfg->name, val, sizeof(cfg->name) - 1);
+    }
+}
+
+/* ============================================================================
+ * HTTP Response Helpers
+ * ============================================================================ */
+
+static void send_json(struct mg_connection *c, int status, const char *json) {
+    mg_http_reply(c, status,
+        "Content-Type: application/json\r\n"
+        "Access-Control-Allow-Origin: *\r\n",
+        "%s", json);
+}
+
+static void send_error(struct mg_connection *c, int status, const char *message) {
+    mg_http_reply(c, status,
+        "Content-Type: application/json\r\n"
+        "Access-Control-Allow-Origin: *\r\n",
+        "{\"error\": \"%s\"}\n", message);
+}
+
+static void send_tile(struct mg_connection *c, const char *content_type,
+                      const uint8_t *data, size_t size) {
+    /* Send HTTP headers manually for binary data */
+    /* Note: mongoose printf doesn't support %zu, use %lu with cast */
+    mg_printf(c,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %lu\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Cache-Control: public, max-age=86400\r\n"
+        "\r\n",
+        content_type, (unsigned long)size);
+    mg_send(c, data, size);
+}
+
+/* ============================================================================
+ * API Handlers
+ * ============================================================================ */
+
+/* GET /api/v1/health */
+static void handle_health(struct mg_connection *c) {
+    char response[512];
+    snprintf(response, sizeof(response),
+        "{\n"
+        "  \"status\": \"healthy\",\n"
+        "  \"service\": \"carta-tile-server\",\n"
+        "  \"version\": \"%s\"\n"
+        "}\n",
+        ct_version());
+    send_json(c, 200, response);
+}
+
+/* GET /api/v1/stats */
+static void handle_stats(struct mg_connection *c) {
+    if (!s_pbf_ctx) {
+        send_error(c, 503, "PBF not loaded");
+        return;
+    }
+
+    size_t nodes, ways, features;
+    CTBBox bbox;
+    ct_pbf_stats(s_pbf_ctx, &nodes, &ways, &features, &bbox);
+
+    char response[1024];
+    snprintf(response, sizeof(response),
+        "{\n"
+        "  \"pbf_path\": \"%s\",\n"
+        "  \"total_nodes\": %zu,\n"
+        "  \"total_ways\": %zu,\n"
+        "  \"features_indexed\": %zu,\n"
+        "  \"bbox\": {\n"
+        "    \"min_lat\": %.6f,\n"
+        "    \"min_lon\": %.6f,\n"
+        "    \"max_lat\": %.6f,\n"
+        "    \"max_lon\": %.6f\n"
+        "  }\n"
+        "}\n",
+        s_config.pbf_path, nodes, ways, features,
+        bbox.min_lat, bbox.min_lon, bbox.max_lat, bbox.max_lon);
+    send_json(c, 200, response);
+}
+
+/* GET /tiles.json - TileJSON metadata */
+static void handle_tilejson(struct mg_connection *c, struct mg_http_message *hm) {
+    if (!s_pbf_ctx) {
+        send_error(c, 503, "PBF not loaded");
+        return;
+    }
+
+    /* Get host header for building tile URLs */
+    struct mg_str host = mg_http_get_header(hm, "Host") ?
+                         *mg_http_get_header(hm, "Host") : mg_str("localhost:8081");
+
+    size_t nodes, ways, features;
+    CTBBox bbox;
+    ct_pbf_stats(s_pbf_ctx, &nodes, &ways, &features, &bbox);
+
+    /* Calculate center */
+    double center_lat = (bbox.min_lat + bbox.max_lat) / 2.0;
+    double center_lon = (bbox.min_lon + bbox.max_lon) / 2.0;
+
+    char response[2048];
+    snprintf(response, sizeof(response),
+        "{\n"
+        "  \"tilejson\": \"3.0.0\",\n"
+        "  \"name\": \"%s\",\n"
+        "  \"description\": \"Map tiles generated by Carta\",\n"
+        "  \"version\": \"1.0.0\",\n"
+        "  \"attribution\": \"OpenStreetMap contributors\",\n"
+        "  \"scheme\": \"xyz\",\n"
+        "  \"tiles\": [\n"
+        "    \"http://%.*s/tiles/{z}/{x}/{y}.png\"\n"
+        "  ],\n"
+        "  \"vector_tiles\": [\n"
+        "    \"http://%.*s/tiles/{z}/{x}/{y}.mvt\"\n"
+        "  ],\n"
+        "  \"minzoom\": %d,\n"
+        "  \"maxzoom\": %d,\n"
+        "  \"bounds\": [%.6f, %.6f, %.6f, %.6f],\n"
+        "  \"center\": [%.6f, %.6f, 10]\n"
+        "}\n",
+        s_config.name,
+        (int)host.len, host.buf,
+        (int)host.len, host.buf,
+        s_config.min_zoom, s_config.max_zoom,
+        bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
+        center_lon, center_lat);
+    send_json(c, 200, response);
+}
+
+/* GET /tiles/{z}/{x}/{y}.mvt */
+static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
+    if (!s_pbf_ctx) {
+        send_error(c, 503, "PBF not loaded");
+        return;
+    }
+
+    if (z < s_config.min_zoom || z > s_config.max_zoom) {
+        send_error(c, 400, "Zoom out of range");
+        return;
+    }
+
+    int max_coord = 1 << z;
+    if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
+        send_error(c, 400, "Tile coordinates out of range");
+        return;
+    }
+
+    /* Allocate buffer for MVT */
+    size_t capacity = 512 * 1024;  /* 512KB should be enough for most tiles */
+    uint8_t *buffer = malloc(capacity);
+    if (!buffer) {
+        send_error(c, 500, "Memory allocation failed");
+        return;
+    }
+
+    CTTileCoord coord = {z, x, y};
+    CTMVTOptions opts;
+    ct_mvt_default_options(&opts);
+
+    size_t size = ct_generate_mvt(s_pbf_ctx, coord, &opts, buffer, capacity);
+
+    if (size == 0) {
+        /* Empty tile - send minimal valid MVT */
+        free(buffer);
+        static const uint8_t empty_mvt[] = {0x1a, 0x00};  /* Empty layer */
+        send_tile(c, "application/vnd.mapbox-vector-tile", empty_mvt, 0);
+        return;
+    }
+
+    send_tile(c, "application/vnd.mapbox-vector-tile", buffer, size);
+    free(buffer);
+}
+
+/* GET /tiles/{z}/{x}/{y}.png */
+static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
+    if (!s_pbf_ctx) {
+        send_error(c, 503, "PBF not loaded");
+        return;
+    }
+
+    if (z < s_config.min_zoom || z > s_config.max_zoom) {
+        send_error(c, 400, "Zoom out of range");
+        return;
+    }
+
+    int max_coord = 1 << z;
+    if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
+        send_error(c, 400, "Tile coordinates out of range");
+        return;
+    }
+
+    /* Allocate buffer for PNG */
+    size_t capacity = ct_png_max_size(s_config.tile_size, s_config.tile_size);
+    uint8_t *buffer = malloc(capacity);
+    if (!buffer) {
+        send_error(c, 500, "Memory allocation failed");
+        return;
+    }
+
+    CTTileCoord coord = {z, x, y};
+    CTPNGOptions opts;
+    ct_png_default_options(&opts);
+    opts.tile_size = s_config.tile_size;
+
+    size_t size = ct_generate_png(s_pbf_ctx, coord, NULL, &opts, buffer, capacity);
+
+    if (size == 0) {
+        send_error(c, 500, "Tile generation failed");
+        free(buffer);
+        return;
+    }
+
+    send_tile(c, "image/png", buffer, size);
+    free(buffer);
+}
+
+/* Parse tile coordinates from URI like /tiles/14/9058/5729.png */
+static int parse_tile_uri(struct mg_str uri, int *z, int *x, int *y, char *ext) {
+    /* Skip /tiles/ prefix */
+    if (uri.len < 8) return -1;
+    const char *p = uri.buf + 7;  /* Skip "/tiles/" */
+    const char *end = uri.buf + uri.len;
+
+    /* Parse z */
+    char *next;
+    *z = (int)strtol(p, &next, 10);
+    if (next == p || *next != '/') return -1;
+    p = next + 1;
+
+    /* Parse x */
+    *x = (int)strtol(p, &next, 10);
+    if (next == p || *next != '/') return -1;
+    p = next + 1;
+
+    /* Parse y and extension */
+    *y = (int)strtol(p, &next, 10);
+    if (next == p) return -1;
+
+    /* Get extension */
+    if (*next == '.') {
+        next++;
+        int i = 0;
+        while (next < end && i < 7 && isalnum(*next)) {
+            ext[i++] = *next++;
+        }
+        ext[i] = '\0';
+    } else {
+        ext[0] = '\0';
+    }
+
+    return 0;
+}
+
+/* ============================================================================
+ * Main Event Handler
+ * ============================================================================ */
+
+static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
+    if (ev == MG_EV_HTTP_MSG) {
+        struct mg_http_message *hm = (struct mg_http_message *)ev_data;
+
+        /* CORS preflight */
+        if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
+            mg_http_reply(c, 204,
+                "Access-Control-Allow-Origin: *\r\n"
+                "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
+                "Access-Control-Allow-Headers: *\r\n"
+                "Access-Control-Max-Age: 86400\r\n",
+                "");
+            return;
+        }
+
+        /* Route requests */
+        if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
+            handle_health(c);
+        } else if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
+            handle_stats(c);
+        } else if (mg_match(hm->uri, mg_str("/tiles.json"), NULL)) {
+            handle_tilejson(c, hm);
+        } else if (hm->uri.len > 7 && strncmp(hm->uri.buf, "/tiles/", 7) == 0) {
+            /* Parse tile request: /tiles/{z}/{x}/{y}.{ext} */
+            int z, x, y;
+            char ext[8];
+            if (parse_tile_uri(hm->uri, &z, &x, &y, ext) == 0) {
+                if (strcmp(ext, "mvt") == 0 || strcmp(ext, "pbf") == 0) {
+                    handle_mvt_tile(c, z, x, y);
+                } else if (strcmp(ext, "png") == 0) {
+                    handle_png_tile(c, z, x, y);
+                } else {
+                    send_error(c, 400, "Unknown tile format. Use .mvt or .png");
+                }
+            } else {
+                send_error(c, 400, "Invalid tile URL format");
+            }
+        } else {
+            /* Serve static files */
+            struct mg_http_serve_opts opts = {
+                .root_dir = s_config.static_dir,
+                .extra_headers = "Access-Control-Allow-Origin: *\r\n"
+            };
+            mg_http_serve_dir(c, hm, &opts);
+        }
+    }
+}
+
+/* ============================================================================
+ * Main
+ * ============================================================================ */
+
+static void print_usage(const char *prog) {
+    printf("Carta Tile Server\n\n");
+    printf("Usage: %s [options] <pbf-file>\n\n", prog);
+    printf("Options:\n");
+    printf("  -p, --port PORT      Port to listen on (default: 8081)\n");
+    printf("  -h, --host HOST      Host to bind to (default: 0.0.0.0)\n");
+    printf("  -s, --static DIR     Static files directory (default: ./static)\n");
+    printf("  -c, --config FILE    Configuration file (YAML format)\n");
+    printf("  --min-zoom N         Minimum zoom level (default: 0)\n");
+    printf("  --max-zoom N         Maximum zoom level (default: 18)\n");
+    printf("  --tile-size N        PNG tile size (default: 512)\n");
+    printf("  --help               Show this help\n");
+    printf("\n");
+    printf("Environment variables:\n");
+    printf("  TILE_PBF_PATH, PBF_PATH     Path to OSM PBF file\n");
+    printf("  TILE_PORT, PORT             Server port\n");
+    printf("  TILE_HOST, HOST             Server host\n");
+    printf("  TILE_STATIC_DIR             Static files directory\n");
+    printf("  TILE_MIN_ZOOM               Minimum zoom\n");
+    printf("  TILE_MAX_ZOOM               Maximum zoom\n");
+    printf("  TILE_SIZE                   PNG tile size\n");
+    printf("\n");
+    printf("Example:\n");
+    printf("  %s -p 8081 hungary-latest.osm.pbf\n", prog);
+}
+
+int main(int argc, char *argv[]) {
+    /* Load config from environment first */
+    load_config_env(&s_config);
+
+    /* Parse command line arguments */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) {
+            if (++i < argc) s_config.port = atoi(argv[i]);
+        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--host") == 0) {
+            if (++i < argc) strncpy(s_config.listen_addr, argv[i], sizeof(s_config.listen_addr) - 1);
+        } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--static") == 0) {
+            if (++i < argc) strncpy(s_config.static_dir, argv[i], sizeof(s_config.static_dir) - 1);
+        } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--config") == 0) {
+            if (++i < argc) {
+                if (load_config_file(argv[i], &s_config) != 0) {
+                    fprintf(stderr, "Warning: Could not load config file: %s\n", argv[i]);
+                }
+            }
+        } else if (strcmp(argv[i], "--min-zoom") == 0) {
+            if (++i < argc) s_config.min_zoom = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--max-zoom") == 0) {
+            if (++i < argc) s_config.max_zoom = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--tile-size") == 0) {
+            if (++i < argc) s_config.tile_size = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else if (argv[i][0] != '-') {
+            /* Positional argument - PBF file */
+            strncpy(s_config.pbf_path, argv[i], sizeof(s_config.pbf_path) - 1);
+        }
+    }
+
+    /* Validate config */
+    if (s_config.pbf_path[0] == '\0') {
+        fprintf(stderr, "Error: No PBF file specified.\n\n");
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    /* Load PBF file */
+    printf("Loading PBF: %s\n", s_config.pbf_path);
+    s_pbf_ctx = ct_load_pbf(s_config.pbf_path);
+    if (!s_pbf_ctx) {
+        fprintf(stderr, "Error: Failed to load PBF file: %s\n", s_config.pbf_path);
+        return 1;
+    }
+
+    /* Print stats */
+    size_t nodes, ways, features;
+    CTBBox bbox;
+    ct_pbf_stats(s_pbf_ctx, &nodes, &ways, &features, &bbox);
+    printf("Loaded: %zu nodes, %zu ways, %zu features indexed\n", nodes, ways, features);
+    printf("Bounds: [%.4f, %.4f] to [%.4f, %.4f]\n",
+           bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat);
+
+    /* Set up signal handlers */
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    /* Initialize mongoose */
+    struct mg_mgr mgr;
+    mg_mgr_init(&mgr);
+
+    /* Build listen address */
+    char listen_url[128];
+    snprintf(listen_url, sizeof(listen_url), "http://%s:%d",
+             s_config.listen_addr, s_config.port);
+
+    /* Start listening */
+    struct mg_connection *c = mg_http_listen(&mgr, listen_url, ev_handler, NULL);
+    if (c == NULL) {
+        fprintf(stderr, "Error: Cannot listen on %s\n", listen_url);
+        ct_free_pbf_context(s_pbf_ctx);
+        return 1;
+    }
+
+    printf("\nCarta Tile Server v%s\n", ct_version());
+    printf("Listening on http://%s:%d\n", s_config.listen_addr, s_config.port);
+    printf("\nEndpoints:\n");
+    printf("  GET  /                       - Static files / tile viewer\n");
+    printf("  GET  /tiles.json             - TileJSON metadata\n");
+    printf("  GET  /tiles/{z}/{x}/{y}.png  - Raster tile\n");
+    printf("  GET  /tiles/{z}/{x}/{y}.mvt  - Vector tile\n");
+    printf("  GET  /api/v1/health          - Health check\n");
+    printf("  GET  /api/v1/stats           - PBF statistics\n");
+    printf("\nPress Ctrl+C to stop.\n\n");
+
+    /* Event loop */
+    while (s_signo == 0) {
+        mg_mgr_poll(&mgr, 1000);
+    }
+
+    printf("\nShutting down...\n");
+    mg_mgr_free(&mgr);
+    ct_free_pbf_context(s_pbf_ctx);
+
+    return 0;
+}
