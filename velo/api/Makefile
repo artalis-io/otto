@@ -69,7 +69,7 @@ test: all
 	echo "Testing stats endpoint..."; \
 	STATS=$$(curl -s http://localhost:8084/api/v1/stats); \
 	echo "$$STATS" | head -10; \
-	if echo "$$STATS" | grep -q '"node_count"'; then \
+	if echo "$$STATS" | grep -q '"num_nodes"'; then \
 		echo "  PASS: Stats endpoint works"; \
 	else \
 		echo "  FAIL: Stats endpoint"; \
@@ -84,10 +84,10 @@ test: all
 		echo "  FAIL: Route endpoint"; \
 	fi; \
 	echo ""; \
-	echo "Testing POST route endpoint (Debrecen to Miskolc)..."; \
+	echo "Testing POST route endpoint (Budapest to Gyor)..."; \
 	ROUTE_POST=$$(curl -s -X POST http://localhost:8084/api/v1/route \
 		-H "Content-Type: application/json" \
-		-d '{"from":{"lat":47.531,"lon":21.625},"to":{"lat":48.103,"lon":20.778},"profile":"truck","mode":"shortest"}'); \
+		-d '{"from":"47.497,19.040","to":"47.687,17.635","profile":"truck","mode":"shortest"}'); \
 	echo "$$ROUTE_POST" | head -15; \
 	if echo "$$ROUTE_POST" | grep -q '"distance"'; then \
 		echo "  PASS: POST route endpoint works"; \

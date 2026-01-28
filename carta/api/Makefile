@@ -104,7 +104,7 @@ test: $(TARGET)
 	echo "Testing stats endpoint..."; \
 	STATS=$$(curl -s http://localhost:8083/api/v1/stats); \
 	echo "$$STATS" | head -10; \
-	if echo "$$STATS" | grep -q '"node_count"'; then \
+	if echo "$$STATS" | grep -q '"total_nodes"'; then \
 		echo "  PASS: Stats endpoint works"; \
 	else \
 		echo "  FAIL: Stats endpoint"; \
