@@ -5,14 +5,16 @@
 #   fuelwise/  - Refueling Optimization Library (libfuelwise.a)
 #   velo/      - OSM Routing Engine (libvelo.a)
 #   carta/     - Map Tile Generator (libcarta.a)
+#   shared/    - Shared Utilities (libshared.a)
+#   vendor/    - Third-party libraries (miniz)
 #   api/       - REST API Server
 #   wasm/      - WebAssembly Builds
 #   ui/        - React Application
 
-.PHONY: all clean test ralph fuelwise velo carta api wasm ui help
+.PHONY: all clean test ralph fuelwise velo carta shared api wasm ui help
 
 # Default: build all libraries
-all: ralph fuelwise velo carta
+all: ralph fuelwise shared velo carta
 
 # =============================================================================
 # Core Libraries
@@ -26,11 +28,15 @@ ralph:
 fuelwise: ralph
 	$(MAKE) -C fuelwise
 
-# Velo routing engine (no dependencies)
+# Shared utilities (no dependencies)
+shared:
+	$(MAKE) -C shared
+
+# Velo routing engine (uses shared vendor/miniz)
 velo:
 	$(MAKE) -C velo
 
-# Carta tile generator (no dependencies)
+# Carta tile generator (uses shared vendor/miniz)
 carta:
 	$(MAKE) -C carta
 
@@ -65,13 +71,16 @@ ui-dev:
 # =============================================================================
 
 # Run all tests
-test: test-ralph test-fuelwise test-velo test-carta
+test: test-ralph test-fuelwise test-shared test-velo test-carta
 
 test-ralph:
 	$(MAKE) -C ralph test
 
 test-fuelwise: fuelwise
 	$(MAKE) -C fuelwise test
+
+test-shared: shared
+	$(MAKE) -C shared test
 
 test-velo: velo
 	$(MAKE) -C velo test
@@ -89,10 +98,12 @@ test-api: api
 clean:
 	$(MAKE) -C ralph clean
 	$(MAKE) -C fuelwise clean
+	$(MAKE) -C shared clean
 	$(MAKE) -C velo clean
 	$(MAKE) -C carta clean
 	-$(MAKE) -C api clean 2>/dev/null || true
 	-$(MAKE) -C wasm clean 2>/dev/null || true
+	-rm -f vendor/miniz/*.o 2>/dev/null || true
 
 clean-all: clean
 	cd ui && rm -rf node_modules dist 2>/dev/null || true
@@ -105,9 +116,10 @@ help:
 	@echo "FuelWise Platform Build System"
 	@echo ""
 	@echo "Libraries:"
-	@echo "  all           - Build all C libraries (ralph, fuelwise, velo, carta)"
+	@echo "  all           - Build all C libraries (ralph, fuelwise, shared, velo, carta)"
 	@echo "  ralph         - Build Ralph LP/MIP solver"
 	@echo "  fuelwise      - Build FuelWise refueling library"
+	@echo "  shared        - Build shared utilities library"
 	@echo "  velo          - Build Velo routing engine"
 	@echo "  carta         - Build Carta tile generator"
 	@echo ""
@@ -122,7 +134,8 @@ help:
 	@echo "  test          - Run all tests"
 	@echo "  test-ralph    - Run Ralph tests (43)"
 	@echo "  test-fuelwise - Run FuelWise tests (29)"
-	@echo "  test-velo     - Run Velo tests (30+)"
+	@echo "  test-shared   - Run Shared tests (23)"
+	@echo "  test-velo     - Run Velo tests (39)"
 	@echo "  test-carta    - Run Carta tests (33)"
 	@echo "  test-api      - Test REST API endpoints"
 	@echo ""

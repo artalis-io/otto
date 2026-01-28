@@ -13,8 +13,8 @@
 #define MINIZ_NO_ARCHIVE_WRITING_APIS
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
 
-#include "../vendor/miniz.h"
-#include "../vendor/miniz_tinfl.h"
+#include "miniz.h"
+#include "miniz_tinfl.h"
 
 #include <stdlib.h>
 #include <string.h>
