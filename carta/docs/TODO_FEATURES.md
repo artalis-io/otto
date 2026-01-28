@@ -1006,28 +1006,188 @@ for (size_t i = 0; i < tile->num_features; i++) {
 
 ### TODOs
 
-- [ ] Create `include/ct_lod.h` with LOD rule structures
-- [ ] Create `src/ct_lod.c` with default LOD configurations
-- [ ] Add `min_zoom` field to `CTOSMWay` during PBF parsing
-- [ ] Modify `ct_pbf_get_bbox_features()` to accept zoom parameter
-- [ ] Implement area/length estimation for LOD filtering
-- [ ] Add Douglas-Peucker simplification in `ct_simplify.c`
-- [ ] Integrate LOD config into `ct_generate_png()` and `ct_generate_mvt()`
-- [ ] Add render-time size threshold filtering
+- [x] Create `include/ct_lod.h` with LOD rule structures
+- [x] Create `src/ct_lod.c` with default LOD configurations
+- [x] Add `min_zoom` field to `CTOSMWay` during PBF parsing
+- [x] Modify `ct_pbf_get_bbox_features()` to accept zoom parameter (`ct_pbf_get_tile_features_lod()`)
+- [x] Implement area/length estimation for LOD filtering
+- [x] Add Douglas-Peucker simplification in `ct_simplify.c`
+- [x] Integrate LOD config into `ct_generate_png()` (`ct_generate_png_lod()`)
+- [x] Add render-time size threshold filtering
 - [ ] Update tests for LOD behavior
 - [ ] Document LOD configuration in README
+### LOD Quality Improvement Plan
+
+Current LOD uses simple min_zoom rules per road type, which produces poor results compared to OSM. Below is a detailed plan to achieve OSM-quality LOD rendering.
+
+#### Phase 1: Road Importance Scoring
+
+Instead of just using highway type, compute an importance score for each road:
+
+```c
+typedef struct {
+    float base_score;      /* From highway type: motorway=100, trunk=80, etc. */
+    float length_bonus;    /* Longer roads get higher scores */
+    float connectivity_bonus; /* Roads connecting important nodes */
+    float ref_bonus;       /* Named routes (A1, M1, E50) get bonus */
+    float final_score;     /* Combined score for LOD decisions */
+} CTRoadImportance;
+```
+
+**Scoring formula:**
+```
+final_score = base_score
+            + log10(length_m / 1000) * 10      /* +10 per order of magnitude in km */
+            + connectivity_bonus               /* +20 if connects cities */
+            + (has_ref ? 15 : 0)               /* +15 for named routes */
+```
+
+**Zoom thresholds based on score:**
+| Score | Min Zoom |
+|-------|----------|
+| 100+  | z4       |
+| 80+   | z6       |
+| 60+   | z8       |
+| 40+   | z10      |
+| 20+   | z12      |
+| 10+   | z14      |
+| <10   | z16      |
+
+#### Phase 2: Connectivity Analysis
+
+Build a simplified road network graph during PBF parsing:
+
+1. **Identify junction nodes** - nodes where 3+ ways meet
+2. **Identify important nodes** - cities, towns (place=city/town tags)
+3. **Score roads by what they connect:**
+   - Connects two cities: +30
+   - Connects city to town: +20
+   - Connects two towns: +15
+   - Dead-end or local loop: +0
+
+```c
+typedef struct {
+    int64_t node_id;
+    int connection_count;    /* Number of roads meeting here */
+    int place_importance;    /* 0=none, 1=village, 2=town, 3=city */
+} CTJunctionNode;
+```
+
+#### Phase 3: Length-Based Filtering
+
+Roads should appear based on their length relative to the tile size:
+
+```c
+/* Meters per pixel at each zoom level (at equator) */
+float meters_per_pixel[23] = {
+    156543, 78271, 39135, 19567, 9783,   /* z0-z4 */
+    4891, 2445, 1222, 611, 305,          /* z5-z9 */
+    152, 76, 38, 19, 9.5,                /* z10-z14 */
+    4.7, 2.3, 1.1, 0.5, 0.25,           /* z15-z19 */
+    0.12, 0.06, 0.03                     /* z20-z22 */
+};
+
+/* Road should appear when it would be at least N pixels long */
+int min_pixels_to_show = 50;  /* ~50 pixels minimum */
+
+/* Check: road_length_m / meters_per_pixel[zoom] >= min_pixels_to_show */
+```
+
+#### Phase 4: Progressive Detail Levels
+
+Instead of binary show/hide, use multiple detail levels:
+
+| Zoom | Roads Shown | Simplification | Buildings | Water |
+|------|-------------|----------------|-----------|-------|
+| z0-z4 | score≥100 | Heavy (500m) | None | >100km² |
+| z5-z7 | score≥60 | Medium (100m) | None | >10km² |
+| z8-z10 | score≥30 | Light (25m) | None | >1km² |
+| z11-z13 | score≥10 | Minimal (5m) | Large only | >0.01km² |
+| z14-z16 | All classified | None | All | All |
+| z17+ | All | None | All | All |
+
+#### Phase 5: Area Feature Scaling
+
+For polygons (buildings, water, landuse), use area-based thresholds:
+
+```c
+/* Minimum area in square meters to show at each zoom */
+float min_area_sqm[23] = {
+    1e12, 1e11, 1e10, 1e9, 1e8,         /* z0-z4: country-scale */
+    1e7, 1e6, 5e5, 2e5, 1e5,            /* z5-z9: region-scale */
+    5e4, 2e4, 1e4, 5000, 2000,          /* z10-z14: city-scale */
+    500, 200, 100, 50, 20,              /* z15-z19: street-scale */
+    10, 5, 1                             /* z20-z22: detail */
+};
+```
+
+#### Phase 6: Improved Simplification
+
+Current Douglas-Peucker tolerance is too aggressive. Use OSM-style tolerances:
+
+| Zoom | Tolerance (meters) | Purpose |
+|------|-------------------|---------|
+| z0-z5 | 500m | Continental overview |
+| z6-z8 | 100m | Country level |
+| z9-z11 | 25m | Regional |
+| z12-z13 | 5m | City level |
+| z14+ | 1m or less | Street detail |
+
+#### Phase 7: Reference Tag Parsing
+
+Parse `ref=*` tags to identify important named routes:
+
+```c
+/* During PBF parsing, extract ref tag */
+if (strcmp(key, "ref") == 0) {
+    way->ref = strdup(val);
+    /* Boost importance for numbered routes */
+    if (val[0] == 'A' || val[0] == 'M' || val[0] == 'E') {
+        way->importance_boost += 20;
+    }
+}
+```
+
+#### Implementation Order
+
+1. **Phase 1** (Road Importance Scoring) - Most impact, moderate complexity
+2. **Phase 3** (Length-Based Filtering) - Quick win, low complexity
+3. **Phase 5** (Area Feature Scaling) - Already partially done, needs tuning
+4. **Phase 6** (Improved Simplification) - Already done, needs parameter tuning
+5. **Phase 4** (Progressive Detail) - Integration of above
+6. **Phase 2** (Connectivity Analysis) - Complex, highest quality improvement
+7. **Phase 7** (Reference Tags) - Polish, requires PBF parser changes
+
+#### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `ct_types.h` | Add `CTRoadImportance` struct, expand `CTOSMWay` |
+| `ct_lod.h` | Add importance-based LOD functions |
+| `ct_lod.c` | Implement scoring and threshold logic |
+| `ct_pbf.c` | Parse `ref` tags, compute importance during load |
+| `ct_simplify.c` | Tune tolerance tables |
+
+#### Success Criteria
+
+- At z6: Only motorways and major trunk roads visible
+- At z10: Primary roads and long secondary roads visible
+- At z12: Most classified roads visible, residential starting to appear
+- At z14: All roads visible, buildings appearing
+- Smooth transitions between zoom levels (no jarring appearance/disappearance)
+- Visual comparison with OSM standard style should be comparable
 
 ### Files to Modify/Create
 
 | File | Action |
 |------|--------|
-| `include/ct_lod.h` | **Create** - LOD rule structures |
-| `src/ct_lod.c` | **Create** - LOD configuration functions |
-| `src/ct_simplify.c` | **Create** - Geometry simplification |
-| `include/ct_simplify.h` | **Create** - Simplification header |
-| `src/ct_pbf.c` | **Modify** - Add zoom-aware feature queries |
-| `src/ct_render.c` | **Modify** - Add render-time LOD filtering |
-| `include/ct_types.h` | **Modify** - Add min_zoom to CTOSMWay |
+| `include/ct_lod.h` | **Created** - LOD rule structures |
+| `src/ct_lod.c` | **Created** - LOD configuration functions |
+| `src/ct_simplify.c` | **Created** - Geometry simplification |
+| `include/ct_simplify.h` | **Created** - Simplification header |
+| `src/ct_pbf.c` | **Modified** - Add zoom-aware feature queries |
+| `src/ct_render.c` | **Modified** - Add render-time LOD filtering |
+| `include/ct_types.h` | **Modified** - Add min_zoom to CTOSMWay |
 
 ---
 

@@ -254,6 +254,9 @@ typedef struct {
     int feature_type;        /* Subtype within class */
     int is_area;             /* Closed polygon? */
     char *name;              /* Optional name */
+    int min_zoom;            /* Minimum zoom for LOD filtering */
+    float area_sqm;          /* Estimated area (for polygons) */
+    float length_m;          /* Estimated length (for lines) */
 } CTOSMWay;
 
 /* R-Tree node for spatial indexing */

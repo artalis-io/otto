@@ -53,6 +53,31 @@ size_t ct_generate_png(const CTPBFContext *ctx, CTTileCoord coord,
                        const CTStyle *style, const CTPNGOptions *opts,
                        uint8_t *buffer, size_t capacity);
 
+/* Forward declaration for LOD config */
+struct CTLODConfig;
+
+/*
+ * Generate PNG tile with LOD filtering.
+ *
+ * This is the recommended function for tile generation. It applies:
+ * - LOD filtering (skip features not visible at this zoom)
+ * - Geometry simplification (reduce points at lower zooms)
+ * - Render-time size filtering (skip features too small to see)
+ *
+ * @param ctx      PBF context with parsed data
+ * @param coord    Tile coordinates
+ * @param style    Rendering style (NULL for defaults)
+ * @param lod      LOD configuration (NULL = no filtering)
+ * @param opts     PNG options (NULL for defaults)
+ * @param buffer   Output buffer
+ * @param capacity Buffer capacity in bytes
+ * @return Number of bytes written, or 0 on error
+ */
+size_t ct_generate_png_lod(const CTPBFContext *ctx, CTTileCoord coord,
+                           const CTStyle *style, const struct CTLODConfig *lod,
+                           const CTPNGOptions *opts,
+                           uint8_t *buffer, size_t capacity);
+
 /* ============================================================================
  * Low-Level PNG Functions
  * ============================================================================ */

@@ -5,9 +5,14 @@
 #include "ct_render.h"
 #include "ct_tile.h"
 #include "ct_pbf.h"
+#include "ct_lod.h"
+#include "ct_simplify.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+
+/* Minimum feature size in pixels for render-time filtering */
+#define MIN_FEATURE_PIXELS 2.0f
 
 /* ============================================================================
  * Render Context Management
@@ -531,6 +536,42 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
     }
 }
 
+/*
+ * Check if a feature is large enough to be visible.
+ * Returns 1 if visible, 0 if too small.
+ */
+static int feature_is_visible(const CTFeature *f, float scale)
+{
+    if (f->num_points < 2) return 0;
+
+    /* Calculate bounding box */
+    int min_x = f->points[0].x, max_x = f->points[0].x;
+    int min_y = f->points[0].y, max_y = f->points[0].y;
+
+    for (int i = 1; i < f->num_points; i++) {
+        if (f->points[i].x < min_x) min_x = f->points[i].x;
+        if (f->points[i].x > max_x) max_x = f->points[i].x;
+        if (f->points[i].y < min_y) min_y = f->points[i].y;
+        if (f->points[i].y > max_y) max_y = f->points[i].y;
+    }
+
+    float width = (max_x - min_x) * scale;
+    float height = (max_y - min_y) * scale;
+
+    /* Lines: check length */
+    if (f->type == CT_GEOM_LINESTRING) {
+        float diag = sqrtf(width * width + height * height);
+        return diag >= MIN_FEATURE_PIXELS;
+    }
+
+    /* Polygons: check area (width * height) */
+    if (f->type == CT_GEOM_POLYGON) {
+        return width >= MIN_FEATURE_PIXELS || height >= MIN_FEATURE_PIXELS;
+    }
+
+    return 1;
+}
+
 void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
                         CTTileCoord coord)
 {
@@ -570,6 +611,67 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
 
     /* Cleanup - ct_tile_free handles freeing the points arrays
      * since ct_tile_add_feature took ownership via shallow copy */
+    free(features);
+    ct_tile_free(&tile);
+}
+
+void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
+                            CTTileCoord coord, const CTLODConfig *lod)
+{
+    /* Get features for this tile with LOD filtering */
+    CTFeature *features;
+    size_t count;
+
+    if (ct_pbf_get_tile_features_lod(pbf, coord, lod, &features, &count) != CT_OK) {
+        return;
+    }
+
+    /* Create tile and convert coordinates */
+    CTTile tile;
+    ct_tile_init(&tile, coord);
+
+    /* Get simplification tolerance for this zoom level */
+    float tolerance = ct_simplify_tolerance(coord.z);
+    float scale = (float)ctx->width / CT_MVT_EXTENT;
+
+    for (size_t i = 0; i < count; i++) {
+        CTFeature *f = &features[i];
+
+        /* Convert from fixed-point lat/lon to tile pixel coords */
+        for (int j = 0; j < f->num_points; j++) {
+            double lon = f->points[j].x * 1e-7;
+            double lat = f->points[j].y * 1e-7;
+
+            int px, py;
+            ct_latlon_to_tile_pixel(lat, lon, coord, CT_MVT_EXTENT, &px, &py);
+
+            f->points[j].x = px;
+            f->points[j].y = py;
+        }
+
+        /* Apply geometry simplification */
+        if (f->num_points > 4) {
+            if (f->type == CT_GEOM_POLYGON) {
+                ct_simplify_poly_inplace(f->points, &f->num_points, tolerance);
+            } else if (f->type == CT_GEOM_LINESTRING) {
+                ct_simplify_line_inplace(f->points, &f->num_points, tolerance);
+            }
+        }
+
+        /* Skip features too small to see */
+        if (!feature_is_visible(f, scale)) {
+            free(f->points);
+            f->points = NULL;
+            continue;
+        }
+
+        ct_tile_add_feature(&tile, f);
+    }
+
+    /* Render */
+    ct_render_tile(ctx, &tile);
+
+    /* Cleanup */
     free(features);
     ct_tile_free(&tile);
 }
