@@ -154,6 +154,34 @@ static void send_error(struct mg_connection *c, int status, const char *message)
         "{\"error\": \"%s\"}\n", message);
 }
 
+/* Escape backslashes in polyline for JSON output */
+static char *json_escape_polyline(const char *polyline) {
+    if (!polyline) return NULL;
+
+    /* Count backslashes */
+    size_t len = strlen(polyline);
+    size_t backslashes = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (polyline[i] == '\\') backslashes++;
+    }
+
+    /* Allocate escaped string */
+    char *escaped = malloc(len + backslashes + 1);
+    if (!escaped) return NULL;
+
+    /* Copy with escaping */
+    char *dst = escaped;
+    for (size_t i = 0; i < len; i++) {
+        if (polyline[i] == '\\') {
+            *dst++ = '\\';
+        }
+        *dst++ = polyline[i];
+    }
+    *dst = '\0';
+
+    return escaped;
+}
+
 /* ============================================================================
  * Query Parameter Parsing
  * ============================================================================ */
@@ -432,8 +460,8 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
         }
     }
 
-    /* Build JSON response */
-    size_t resp_capacity = 4096 + (polyline ? strlen(polyline) : 0);
+    /* Build JSON response (double polyline size for potential backslash escaping) */
+    size_t resp_capacity = 4096 + (polyline ? strlen(polyline) * 2 : 0);
     char *response = malloc(resp_capacity);
     if (!response) {
         if (polyline) free(polyline);
@@ -470,9 +498,13 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
         to_lat, to_lon);
 
     if (polyline) {
-        n += snprintf(response + n, resp_capacity - n,
-            ",\n    \"geometry\": \"%s\"",
-            polyline);
+        char *escaped = json_escape_polyline(polyline);
+        if (escaped) {
+            n += snprintf(response + n, resp_capacity - n,
+                ",\n    \"geometry\": \"%s\"",
+                escaped);
+            free(escaped);
+        }
     }
 
     n += snprintf(response + n, resp_capacity - n,
