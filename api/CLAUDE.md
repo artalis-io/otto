@@ -17,8 +17,8 @@ make test         # Test with curl
 | File | Purpose |
 |------|---------|
 | `src/main.c` | Complete server implementation |
-| `mongoose/mongoose.c` | Vendored HTTP library |
-| `mongoose/mongoose.h` | mongoose headers |
+| `../vendor/mongoose/mongoose.c` | Vendored HTTP library |
+| `../vendor/mongoose/mongoose.h` | mongoose headers |
 
 ## Architecture
 

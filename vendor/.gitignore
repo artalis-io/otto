@@ -1,2 +1,3 @@
 # Object files built from vendored sources
-*.o
+miniz/*.o
+mongoose/*.o

@@ -211,6 +211,7 @@ Common code used by velo and carta:
 
 Vendored libraries:
 - **miniz**: Public domain zlib implementation for DEFLATE compression
+- **mongoose**: Embedded HTTP server library (used by API)
 
 ## Data Flow
 
