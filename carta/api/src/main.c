@@ -170,12 +170,14 @@ static void send_tile(struct mg_connection *c, const char *content_type,
                       const uint8_t *data, size_t size) {
     /* Send HTTP headers manually for binary data */
     /* Note: mongoose printf doesn't support %zu, use %lu with cast */
+    /* Use Connection: close to prevent proxy issues with keep-alive */
     mg_printf(c,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %lu\r\n"
         "Access-Control-Allow-Origin: *\r\n"
         "Cache-Control: public, max-age=86400\r\n"
+        "Connection: close\r\n"
         "\r\n",
         content_type, (unsigned long)size);
     mg_send(c, data, size);
