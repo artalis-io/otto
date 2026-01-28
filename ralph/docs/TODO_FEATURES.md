@@ -9,6 +9,7 @@ This document outlines planned features for the Ralph LP/MIP solver with detaile
 3. [Automatic Problem Detection and Delegation](#3-automatic-problem-detection-and-delegation)
 4. [Benders Decomposition](#4-benders-decomposition)
 5. [Dantzig-Wolfe Decomposition](#5-dantzig-wolfe-decomposition)
+6. [External Solver Backends (HiGHS, GLPK)](#6-external-solver-backends-highs-glpk)
 
 ---
 
@@ -1378,31 +1379,557 @@ DWDecomp *vrptw_to_dw(const VRPTWProblem *vrp);
 
 ---
 
+## 6. External Solver Backends (HiGHS, GLPK)
+
+### Motivation
+
+While Ralph provides a zero-dependency LP/MIP solver suitable for embedded and WASM deployments, production environments may benefit from battle-tested external solvers:
+
+| Solver | License | Strengths |
+|--------|---------|-----------|
+| **HiGHS** | MIT | State-of-the-art performance, active development, dual simplex, interior point, MIP |
+| **GLPK** | GPL | Mature, widely used, good MIP, extensive documentation |
+
+By providing a common API layer with pluggable backends, users can:
+- Use Ralph for zero-dependency builds (WASM, embedded)
+- Switch to HiGHS/GLPK for maximum performance in server environments
+- Benchmark different solvers on the same problem
+- Maintain a single codebase regardless of solver choice
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Application Code                         │
+│                    (uses ralph.h API)                        │
+├─────────────────────────────────────────────────────────────┤
+│                   Ralph API Layer                            │
+│              ralph_create(), ralph_optimize(), etc.          │
+├─────────────────────────────────────────────────────────────┤
+│                    Backend Dispatcher                        │
+│                   (selects active backend)                   │
+├─────────┬─────────────────┬─────────────────┬───────────────┤
+│  Ralph  │     HiGHS       │      GLPK       │   Future...   │
+│ Native  │    Backend      │     Backend     │   (SCIP,etc)  │
+└─────────┴─────────────────┴─────────────────┴───────────────┘
+```
+
+### Backend Interface
+
+```c
+// backend.h
+
+typedef enum {
+    RALPH_BACKEND_NATIVE,   // Built-in Ralph solver (default)
+    RALPH_BACKEND_HIGHS,    // HiGHS solver
+    RALPH_BACKEND_GLPK,     // GLPK solver
+} RalphBackend;
+
+/**
+ * Set the active solver backend
+ * Must be called before ralph_create() or at program start
+ */
+int ralph_set_backend(RalphBackend backend);
+
+/**
+ * Get the currently active backend
+ */
+RalphBackend ralph_get_backend(void);
+
+/**
+ * Check if a backend is available (compiled in)
+ */
+int ralph_backend_available(RalphBackend backend);
+
+/**
+ * Get backend version string
+ */
+const char* ralph_backend_version(RalphBackend backend);
+```
+
+### Internal Backend Abstraction
+
+```c
+// backend_internal.h
+
+typedef struct RalphBackendOps {
+    /* Lifecycle */
+    void* (*create)(void);
+    void  (*free)(void *ctx);
+
+    /* Model building */
+    int (*add_var)(void *ctx, double lb, double ub, double obj, int type);
+    int (*add_constraint)(void *ctx, int nnz, const int *indices,
+                          const double *values, int sense, double rhs);
+    int (*set_obj_sense)(void *ctx, int sense);
+
+    /* Parameters */
+    int (*set_int_param)(void *ctx, const char *name, int value);
+    int (*set_dbl_param)(void *ctx, const char *name, double value);
+
+    /* Solving */
+    int (*optimize)(void *ctx);
+    int (*get_status)(void *ctx);
+
+    /* Solution retrieval */
+    double (*get_objective)(void *ctx);
+    int (*get_solution)(void *ctx, double *x);
+    int (*get_dual)(void *ctx, double *pi);
+    int (*get_reduced_cost)(void *ctx, double *rc);
+
+    /* Advanced */
+    int (*write_lp)(void *ctx, const char *filename);
+    int (*write_mps)(void *ctx, const char *filename);
+    int (*read_lp)(void *ctx, const char *filename);
+    int (*read_mps)(void *ctx, const char *filename);
+
+} RalphBackendOps;
+
+/* Backend implementations */
+extern const RalphBackendOps ralph_native_ops;
+extern const RalphBackendOps ralph_highs_ops;
+extern const RalphBackendOps ralph_glpk_ops;
+```
+
+### HiGHS Backend Implementation
+
+```c
+// backend_highs.c
+
+#ifdef RALPH_WITH_HIGHS
+#include <interfaces/highs_c_api.h>
+
+typedef struct {
+    void *highs;        // HiGHS model handle
+    int num_vars;
+    int num_cons;
+} HiGHSContext;
+
+static void* highs_create(void) {
+    HiGHSContext *ctx = malloc(sizeof(HiGHSContext));
+    ctx->highs = Highs_create();
+    ctx->num_vars = 0;
+    ctx->num_cons = 0;
+    return ctx;
+}
+
+static void highs_free(void *context) {
+    HiGHSContext *ctx = context;
+    Highs_destroy(ctx->highs);
+    free(ctx);
+}
+
+static int highs_add_var(void *context, double lb, double ub, double obj, int type) {
+    HiGHSContext *ctx = context;
+    HighsInt index;
+
+    // HiGHS adds columns via Highs_addCol
+    Highs_addCol(ctx->highs, obj, lb, ub, 0, NULL, NULL);
+    index = ctx->num_vars++;
+
+    // Set integer/binary type if needed
+    if (type == RALPH_INTEGER || type == RALPH_BINARY) {
+        Highs_changeColIntegrality(ctx->highs, index, kHighsVarTypeInteger);
+    }
+
+    return index;
+}
+
+static int highs_add_constraint(void *context, int nnz, const int *indices,
+                                 const double *values, int sense, double rhs) {
+    HiGHSContext *ctx = context;
+    double lower, upper;
+
+    // Convert Ralph sense to HiGHS bounds
+    switch (sense) {
+        case RALPH_LESS_EQUAL:    lower = -kHighsInf; upper = rhs; break;
+        case RALPH_GREATER_EQUAL: lower = rhs; upper = kHighsInf; break;
+        case RALPH_EQUAL:         lower = rhs; upper = rhs; break;
+    }
+
+    Highs_addRow(ctx->highs, lower, upper, nnz, (HighsInt*)indices, values);
+    return ctx->num_cons++;
+}
+
+static int highs_optimize(void *context) {
+    HiGHSContext *ctx = context;
+    HighsInt status = Highs_run(ctx->highs);
+    return (status == kHighsStatusOk) ? 0 : -1;
+}
+
+static int highs_get_status(void *context) {
+    HiGHSContext *ctx = context;
+    HighsInt model_status = Highs_getModelStatus(ctx->highs);
+
+    switch (model_status) {
+        case kHighsModelStatusOptimal:    return RALPH_STATUS_OPTIMAL;
+        case kHighsModelStatusInfeasible: return RALPH_STATUS_INFEASIBLE;
+        case kHighsModelStatusUnbounded:  return RALPH_STATUS_UNBOUNDED;
+        default:                          return RALPH_STATUS_ERROR;
+    }
+}
+
+static double highs_get_objective(void *context) {
+    HiGHSContext *ctx = context;
+    double obj;
+    Highs_getObjectiveValue(ctx->highs, &obj);
+    return obj;
+}
+
+static int highs_get_solution(void *context, double *x) {
+    HiGHSContext *ctx = context;
+    Highs_getSolution(ctx->highs, x, NULL, NULL, NULL);
+    return 0;
+}
+
+const RalphBackendOps ralph_highs_ops = {
+    .create = highs_create,
+    .free = highs_free,
+    .add_var = highs_add_var,
+    .add_constraint = highs_add_constraint,
+    .optimize = highs_optimize,
+    .get_status = highs_get_status,
+    .get_objective = highs_get_objective,
+    .get_solution = highs_get_solution,
+    // ... other ops
+};
+
+#endif /* RALPH_WITH_HIGHS */
+```
+
+### GLPK Backend Implementation
+
+```c
+// backend_glpk.c
+
+#ifdef RALPH_WITH_GLPK
+#include <glpk.h>
+
+typedef struct {
+    glp_prob *lp;
+    int num_vars;
+    int num_cons;
+    int is_mip;
+} GLPKContext;
+
+static void* glpk_create(void) {
+    GLPKContext *ctx = malloc(sizeof(GLPKContext));
+    ctx->lp = glp_create_prob();
+    ctx->num_vars = 0;
+    ctx->num_cons = 0;
+    ctx->is_mip = 0;
+    return ctx;
+}
+
+static void glpk_free(void *context) {
+    GLPKContext *ctx = context;
+    glp_delete_prob(ctx->lp);
+    free(ctx);
+}
+
+static int glpk_add_var(void *context, double lb, double ub, double obj, int type) {
+    GLPKContext *ctx = context;
+    int index = glp_add_cols(ctx->lp, 1);
+
+    // Set bounds
+    int bound_type;
+    if (lb == -RALPH_INFINITY && ub == RALPH_INFINITY) {
+        bound_type = GLP_FR;  // Free
+    } else if (ub == RALPH_INFINITY) {
+        bound_type = GLP_LO;  // Lower bound only
+    } else if (lb == -RALPH_INFINITY) {
+        bound_type = GLP_UP;  // Upper bound only
+    } else if (lb == ub) {
+        bound_type = GLP_FX;  // Fixed
+    } else {
+        bound_type = GLP_DB;  // Double bounded
+    }
+    glp_set_col_bnds(ctx->lp, index, bound_type, lb, ub);
+
+    // Set objective coefficient
+    glp_set_obj_coef(ctx->lp, index, obj);
+
+    // Set variable type
+    if (type == RALPH_INTEGER) {
+        glp_set_col_kind(ctx->lp, index, GLP_IV);
+        ctx->is_mip = 1;
+    } else if (type == RALPH_BINARY) {
+        glp_set_col_kind(ctx->lp, index, GLP_BV);
+        ctx->is_mip = 1;
+    }
+
+    ctx->num_vars++;
+    return index;
+}
+
+static int glpk_add_constraint(void *context, int nnz, const int *indices,
+                                const double *values, int sense, double rhs) {
+    GLPKContext *ctx = context;
+    int row = glp_add_rows(ctx->lp, 1);
+
+    // GLPK uses 1-based indexing
+    int *ind = malloc((nnz + 1) * sizeof(int));
+    double *val = malloc((nnz + 1) * sizeof(double));
+    for (int i = 0; i < nnz; i++) {
+        ind[i + 1] = indices[i] + 1;  // Convert to 1-based
+        val[i + 1] = values[i];
+    }
+
+    glp_set_mat_row(ctx->lp, row, nnz, ind, val);
+
+    // Set constraint bounds
+    int bound_type;
+    switch (sense) {
+        case RALPH_LESS_EQUAL:    bound_type = GLP_UP; break;
+        case RALPH_GREATER_EQUAL: bound_type = GLP_LO; break;
+        case RALPH_EQUAL:         bound_type = GLP_FX; break;
+    }
+    glp_set_row_bnds(ctx->lp, row, bound_type, rhs, rhs);
+
+    free(ind);
+    free(val);
+    ctx->num_cons++;
+    return row;
+}
+
+static int glpk_optimize(void *context) {
+    GLPKContext *ctx = context;
+
+    if (ctx->is_mip) {
+        glp_simplex(ctx->lp, NULL);  // Solve LP relaxation first
+        return glp_intopt(ctx->lp, NULL);
+    } else {
+        return glp_simplex(ctx->lp, NULL);
+    }
+}
+
+static int glpk_get_status(void *context) {
+    GLPKContext *ctx = context;
+    int status = ctx->is_mip ? glp_mip_status(ctx->lp) : glp_get_status(ctx->lp);
+
+    switch (status) {
+        case GLP_OPT:    return RALPH_STATUS_OPTIMAL;
+        case GLP_INFEAS:
+        case GLP_NOFEAS: return RALPH_STATUS_INFEASIBLE;
+        case GLP_UNBND:  return RALPH_STATUS_UNBOUNDED;
+        default:         return RALPH_STATUS_ERROR;
+    }
+}
+
+const RalphBackendOps ralph_glpk_ops = {
+    .create = glpk_create,
+    .free = glpk_free,
+    .add_var = glpk_add_var,
+    .add_constraint = glpk_add_constraint,
+    .optimize = glpk_optimize,
+    .get_status = glpk_get_status,
+    // ... other ops
+};
+
+#endif /* RALPH_WITH_GLPK */
+```
+
+### Build Configuration
+
+```makefile
+# Makefile additions
+
+# Optional solver backends
+RALPH_WITH_HIGHS ?= 0
+RALPH_WITH_GLPK ?= 0
+
+ifeq ($(RALPH_WITH_HIGHS),1)
+    CFLAGS += -DRALPH_WITH_HIGHS
+    LDFLAGS += -lhighs
+    BACKEND_SRCS += src/backend_highs.c
+endif
+
+ifeq ($(RALPH_WITH_GLPK),1)
+    CFLAGS += -DRALPH_WITH_GLPK
+    LDFLAGS += -lglpk
+    BACKEND_SRCS += src/backend_glpk.c
+endif
+```
+
+**CMake alternative:**
+
+```cmake
+# CMakeLists.txt additions
+
+option(RALPH_WITH_HIGHS "Enable HiGHS backend" OFF)
+option(RALPH_WITH_GLPK "Enable GLPK backend" OFF)
+
+if(RALPH_WITH_HIGHS)
+    find_package(HiGHS REQUIRED)
+    target_compile_definitions(ralph PRIVATE RALPH_WITH_HIGHS)
+    target_link_libraries(ralph PRIVATE highs::highs)
+    target_sources(ralph PRIVATE src/backend_highs.c)
+endif()
+
+if(RALPH_WITH_GLPK)
+    find_package(GLPK REQUIRED)
+    target_compile_definitions(ralph PRIVATE RALPH_WITH_GLPK)
+    target_link_libraries(ralph PRIVATE ${GLPK_LIBRARIES})
+    target_sources(ralph PRIVATE src/backend_glpk.c)
+endif()
+```
+
+### Runtime Backend Selection
+
+```c
+// Example usage
+
+#include "ralph.h"
+
+int main() {
+    // Check available backends
+    printf("Native: %s\n", ralph_backend_available(RALPH_BACKEND_NATIVE) ? "yes" : "no");
+    printf("HiGHS:  %s\n", ralph_backend_available(RALPH_BACKEND_HIGHS) ? "yes" : "no");
+    printf("GLPK:   %s\n", ralph_backend_available(RALPH_BACKEND_GLPK) ? "yes" : "no");
+
+    // Select backend (before creating models)
+    if (ralph_backend_available(RALPH_BACKEND_HIGHS)) {
+        ralph_set_backend(RALPH_BACKEND_HIGHS);
+        printf("Using HiGHS %s\n", ralph_backend_version(RALPH_BACKEND_HIGHS));
+    }
+
+    // Use Ralph API as normal - backend is transparent
+    RalphModel *model = ralph_create();
+    ralph_add_var(model, 0, RALPH_INFINITY, 3.0, RALPH_CONTINUOUS);
+    // ... build model ...
+    ralph_optimize(model);
+    // ...
+    ralph_free(model);
+
+    return 0;
+}
+```
+
+### Parameter Mapping
+
+Map Ralph parameters to backend-specific equivalents:
+
+```c
+// param_map.c
+
+typedef struct {
+    const char *ralph_name;
+    const char *highs_name;
+    const char *glpk_name;
+} ParamMapping;
+
+static const ParamMapping int_params[] = {
+    {"verbose",       "output_flag",        NULL},
+    {"presolve",      "presolve",           NULL},
+    {"threads",       "threads",            NULL},
+    {"time_limit",    "time_limit",         NULL},
+    {"iteration_limit", "simplex_iteration_limit", NULL},
+    {NULL, NULL, NULL}
+};
+
+static const ParamMapping dbl_params[] = {
+    {"gap_tolerance", "mip_rel_gap",        "mip_gap"},
+    {"feasibility_tolerance", "primal_feasibility_tolerance", NULL},
+    {"optimality_tolerance", "dual_feasibility_tolerance", NULL},
+    {NULL, NULL, NULL}
+};
+```
+
+### TODOs
+
+**Phase 1: Backend Infrastructure**
+- [ ] Create `include/backend.h` with backend selection API
+- [ ] Create `src/backend.c` with dispatcher implementation
+- [ ] Define `RalphBackendOps` interface
+- [ ] Implement native backend wrapper (`src/backend_native.c`)
+- [ ] Add build system support (Makefile, optional CMake)
+
+**Phase 2: HiGHS Backend**
+- [ ] Create `src/backend_highs.c`
+- [ ] Implement model building (add_var, add_constraint)
+- [ ] Implement solving and status mapping
+- [ ] Implement solution retrieval
+- [ ] Implement parameter mapping
+- [ ] Test against native backend results
+
+**Phase 3: GLPK Backend**
+- [ ] Create `src/backend_glpk.c`
+- [ ] Implement model building (handle 1-based indexing)
+- [ ] Implement solving (LP and MIP paths)
+- [ ] Implement solution retrieval
+- [ ] Implement parameter mapping
+- [ ] Test against native backend results
+
+**Phase 4: Advanced Features**
+- [ ] Add LP/MPS file I/O through backends
+- [ ] Add dual solution retrieval
+- [ ] Add reduced cost retrieval
+- [ ] Add basis information retrieval
+- [ ] Add callback support (where backends allow)
+
+**Phase 5: Testing and Documentation**
+- [ ] Create comparison test suite (same problem, all backends)
+- [ ] Benchmark performance across backends
+- [ ] Document backend-specific limitations
+- [ ] Add examples showing backend selection
+
+### Files to Create/Modify
+
+| File | Action |
+|------|--------|
+| `include/backend.h` | **Create** - Backend selection API |
+| `src/backend.c` | **Create** - Backend dispatcher |
+| `src/backend_native.c` | **Create** - Native Ralph wrapper |
+| `src/backend_highs.c` | **Create** - HiGHS integration |
+| `src/backend_glpk.c` | **Create** - GLPK integration |
+| `src/param_map.c` | **Create** - Parameter mapping |
+| `include/ralph.h` | **Modify** - Add backend selection functions |
+| `Makefile` | **Modify** - Add backend build options |
+| `tests/test_backends.c` | **Create** - Backend comparison tests |
+
+### Notes
+
+**Zero-dependency promise**: The native Ralph backend remains the default and requires no external libraries. HiGHS and GLPK are strictly optional and only linked when explicitly enabled at build time.
+
+**WASM compatibility**: Only the native backend is suitable for WASM builds. External backends require native compilation and linking.
+
+**License considerations**:
+- HiGHS: MIT license (permissive, commercial-friendly)
+- GLPK: GPL license (copyleft, may have implications for proprietary use)
+
+---
+
 ## Implementation Priority
 
 Recommended order of implementation:
 
-1. **Linear Assignment (LAP)** - High priority
+1. **External Solver Backends (HiGHS, GLPK)** - High priority
+   - Enables production-grade performance immediately
+   - Low risk (wraps proven solvers)
+   - Backend abstraction benefits all future development
+   - HiGHS especially valuable (MIT license, excellent MIP)
+
+2. **Linear Assignment (LAP)** - High priority
    - Self-contained module
    - Clear O(n³) improvement over simplex
    - Useful for many practical applications
 
-2. **Problem Detection** - High priority
+3. **Problem Detection** - High priority
    - Foundation for automatic delegation
    - Benefits existing solvers immediately
    - Low implementation complexity
 
-3. **Network Flow** - Medium priority
+4. **Network Flow** - Medium priority
    - Significant speedup for network problems
    - More complex than LAP (tree data structures)
    - Network simplex well-documented
 
-4. **Benders Decomposition** - Medium priority
+5. **Benders Decomposition** - Medium priority
    - Requires Farkas ray extraction (partially implemented)
    - Very useful for two-stage stochastic programming
    - Modular: can start with basic version
 
-5. **Dantzig-Wolfe Decomposition** - Lower priority
+6. **Dantzig-Wolfe Decomposition** - Lower priority
    - Most complex implementation
    - Requires dynamic column management
    - Branch-and-price is even more complex
