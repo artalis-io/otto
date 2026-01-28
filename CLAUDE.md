@@ -27,7 +27,7 @@ cd ui && npm run dev      # UI on :5173
 | Carta | `carta/` | C | Map tile generator (MVT/PNG) |
 | FuelWise | `fuelwise/` | C | Refueling domain logic |
 | Shared | `shared/` | C | Common geo utilities |
-| Vendor | `vendor/` | C | Vendored libs (miniz, mongoose) |
+| Vendor | `vendor/` | C | Third-party libs (see below) |
 | API | `api/` | C | REST API server |
 | WASM | `wasm/` | C+JS | Browser builds |
 | UI | `ui/` | TypeScript | React frontend |
@@ -131,6 +131,16 @@ make run-api        # Start API server
 ```
 
 See `docs/ARCHITECTURE.md` for detailed architecture documentation.
+
+## Vendor Libraries
+
+Each vendor library has its own CLAUDE.md with API documentation:
+
+| Library | Location | Documentation | Purpose |
+|---------|----------|---------------|---------|
+| **miniz** | `vendor/miniz/` | [`vendor/miniz/CLAUDE.md`](vendor/miniz/CLAUDE.md) | zlib-compatible compression (DEFLATE, ZIP) |
+| **mongoose** | `vendor/mongoose/` | [`vendor/mongoose/CLAUDE.md`](vendor/mongoose/CLAUDE.md) | Embedded HTTP/WebSocket server |
+| **clay** | `vendor/clay/` | [`vendor/clay/CLAUDE.md`](vendor/clay/CLAUDE.md) | High-performance 2D UI layout |
 
 ## Critical Code Sections
 

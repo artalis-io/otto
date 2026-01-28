@@ -11,7 +11,7 @@
 #   wasm/      - WebAssembly Builds
 #   ui/        - React Application
 
-.PHONY: all clean test ralph fuelwise velo carta shared api wasm ui help
+.PHONY: all clean test ralph fuelwise velo carta shared api wasm ui tile-server help
 
 # Default: build all libraries
 all: ralph fuelwise shared velo carta
@@ -51,6 +51,15 @@ api: fuelwise
 # Run API server
 run-api: api
 	$(MAKE) -C api run
+
+# Tile server (depends on Carta)
+tile-server: carta shared
+	$(MAKE) -C tile-server
+
+# Run tile server
+run-tiles: tile-server
+	@echo "Usage: ./tile-server/carta-tile-server <pbf-file>"
+	@echo "Example: ./tile-server/carta-tile-server data/hungary-latest.osm.pbf"
 
 # WebAssembly builds (requires Emscripten)
 wasm: fuelwise velo carta
@@ -102,6 +111,7 @@ clean:
 	$(MAKE) -C velo clean
 	$(MAKE) -C carta clean
 	-$(MAKE) -C api clean 2>/dev/null || true
+	-$(MAKE) -C tile-server clean 2>/dev/null || true
 	-$(MAKE) -C wasm clean 2>/dev/null || true
 	-rm -f vendor/miniz/*.o 2>/dev/null || true
 
@@ -125,10 +135,12 @@ help:
 	@echo ""
 	@echo "Applications:"
 	@echo "  api           - Build REST API server"
+	@echo "  tile-server   - Build Carta tile server"
 	@echo "  wasm          - Build WebAssembly modules (requires Emscripten)"
 	@echo "  ui            - Build React UI (requires Node.js)"
 	@echo "  ui-dev        - Run UI dev server"
 	@echo "  run-api       - Run the REST API server"
+	@echo "  run-tiles     - Show tile server usage"
 	@echo ""
 	@echo "Testing:"
 	@echo "  test          - Run all tests"

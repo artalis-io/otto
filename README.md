@@ -254,12 +254,18 @@ make run-api        # Start API on :8080
 
 ## Documentation
 
+### Core Libraries
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [REST API Reference](docs/API.md)
-- [Ralph Solver](ralph/CLAUDE.md)
-- [Velo Routing](velo/CLAUDE.md)
-- [Carta Tiles](carta/CLAUDE.md)
-- [FuelWise Library](fuelwise/CLAUDE.md)
+- [Ralph Solver](ralph/CLAUDE.md) - LP/MIP optimization
+- [Velo Routing](velo/CLAUDE.md) - OSM routing engine
+- [Carta Tiles](carta/CLAUDE.md) - Map tile generation
+- [FuelWise Library](fuelwise/CLAUDE.md) - Refueling domain
+
+### Vendor Libraries
+- [Miniz](vendor/miniz/CLAUDE.md) - zlib-compatible compression
+- [Mongoose](vendor/mongoose/CLAUDE.md) - Embedded HTTP server
+- [Clay](vendor/clay/CLAUDE.md) - UI layout library
 
 ## Design Principles
 

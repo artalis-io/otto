@@ -209,10 +209,10 @@ Common code used by velo and carta:
 **Location:** `vendor/`
 **Dependencies:** None
 
-Vendored libraries:
-- **miniz**: Public domain zlib implementation for DEFLATE compression
-- **mongoose**: Embedded HTTP server library (used by API)
-- **clay**: High-performance 2D UI layout library (see `vendor/clay/CLAUDE.md`)
+Vendored libraries (each has its own `CLAUDE.md` with API documentation):
+- **miniz**: Public domain zlib implementation for DEFLATE compression ([vendor/miniz/CLAUDE.md](../vendor/miniz/CLAUDE.md))
+- **mongoose**: Embedded HTTP server library ([vendor/mongoose/CLAUDE.md](../vendor/mongoose/CLAUDE.md))
+- **clay**: High-performance 2D UI layout library ([vendor/clay/CLAUDE.md](../vendor/clay/CLAUDE.md))
 
 ## Data Flow
 
