@@ -83,6 +83,143 @@
   color: #444;
 }
 
+/* Routing Panel */
+.routing-panel {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: white;
+  padding: 16px;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  min-width: 200px;
+  max-width: 260px;
+}
+
+.routing-panel h3 {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #333;
+}
+
+.route-instructions {
+  font-size: 13px;
+  color: #666;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+  margin-bottom: 12px;
+}
+
+.route-unavailable {
+  font-size: 12px;
+  color: #999;
+  padding: 8px 0;
+}
+
+.route-unavailable code {
+  display: block;
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: #f5f5f5;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 11px;
+  color: #666;
+}
+
+.profile-controls,
+.mode-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.profile-label,
+.mode-label {
+  font-size: 13px;
+  color: #666;
+  min-width: 50px;
+}
+
+.profile-select,
+.mode-select {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  background: white;
+  cursor: pointer;
+}
+
+.profile-select:focus,
+.mode-select:focus {
+  outline: none;
+  border-color: #2196F3;
+}
+
+.route-loading {
+  font-size: 13px;
+  color: #2196F3;
+  padding: 8px 0;
+}
+
+.route-error {
+  font-size: 12px;
+  color: #d32f2f;
+  padding: 8px;
+  background: #ffebee;
+  border-radius: 4px;
+  margin: 8px 0;
+}
+
+.route-info {
+  background: #e3f2fd;
+  padding: 10px;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+.route-stat {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.route-stat-label {
+  font-size: 13px;
+  color: #1565c0;
+}
+
+.route-stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0d47a1;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.clear-route-btn {
+  width: 100%;
+  padding: 8px 12px;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #666;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.clear-route-btn:hover {
+  background: #eee;
+  border-color: #ccc;
+  color: #333;
+}
+
+/* Tile Info */
 .tile-info {
   position: absolute;
   bottom: 24px;
@@ -97,6 +234,7 @@
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
 }
 
+/* Loading States */
 .loading-text {
   color: #666;
   font-size: 13px;
@@ -140,4 +278,26 @@
 .leaflet-top,
 .leaflet-bottom {
   z-index: 1000;
+}
+
+/* Responsive adjustments for routing panel position on small screens */
+@media (max-width: 600px) {
+  .routing-panel {
+    top: auto;
+    bottom: 60px;
+    left: 10px;
+    right: 10px;
+    max-width: none;
+  }
+
+  .info-panel {
+    max-width: 200px;
+    padding: 12px;
+  }
+
+  .tile-info {
+    bottom: 10px;
+    right: 10px;
+    left: auto;
+  }
 }
