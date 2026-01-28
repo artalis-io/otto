@@ -126,9 +126,17 @@ void vl_landmarks_free(VLLandmarks *lm);
  * Compute ALT heuristic (lower bound on distance).
  * Use this instead of haversine for faster A* convergence.
  *
- * Returns distance lower bound in kilometers.
+ * Returns distance lower bound in meters.
  */
 double vl_landmarks_heuristic(const VLLandmarks *lm, uint32_t from, uint32_t to);
+
+/*
+ * Compute ALT heuristic for duration-based routing.
+ * Use this for fastest-route queries.
+ *
+ * Returns time lower bound in seconds.
+ */
+double vl_landmarks_heuristic_time(const VLLandmarks *lm, uint32_t from, uint32_t to);
 
 /*
  * Route using A* with landmarks heuristic.

@@ -1041,8 +1041,9 @@ VLStatus vl_route_coords(const VLGraph *graph, VLCoord origin, VLCoord destinati
  * A* with Landmarks (ALT algorithm)
  * ============================================================================ */
 
-/* External landmark heuristic function */
+/* External landmark heuristic functions */
 double vl_landmarks_heuristic(const VLLandmarks *lm, uint32_t from, uint32_t to);
+double vl_landmarks_heuristic_time(const VLLandmarks *lm, uint32_t from, uint32_t to);
 
 VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
                                    uint32_t source, uint32_t target,
@@ -1111,16 +1112,16 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
     /* Weighted A*: multiply heuristic by (1 + epsilon) for faster but suboptimal search */
     double weight_factor = 1.0 + opts->epsilon;
 
-    /*
-     * Landmark heuristic scaling: landmarks are precomputed with distance (km).
-     * When routing by duration, convert distance to time lower bound by dividing
-     * by max speed (110 km/h = 30.56 m/s). This ensures admissibility.
-     * heuristic_scale: 1.0 for distance, 3600/110 = 32.73 for duration (seconds per km)
+    /* Use appropriate heuristic based on weight type:
+     * - VL_WEIGHT_DISTANCE: use distance-based landmarks (returns meters)
+     * - VL_WEIGHT_DURATION: use time-based landmarks (returns seconds)
      */
-    double heuristic_scale = (opts->weight == VL_WEIGHT_DURATION) ? (3600.0 / 110.0) : 1.0;
+    int use_time_heuristic = (opts->weight == VL_WEIGHT_DURATION);
 
     /* Initial heuristic using landmarks */
-    double h = vl_landmarks_heuristic(lm, source, target) * heuristic_scale * weight_factor;
+    double h = use_time_heuristic ?
+               vl_landmarks_heuristic_time(lm, source, target) * weight_factor :
+               vl_landmarks_heuristic(lm, source, target) * weight_factor;
     vl_heap_push(heap, source, h);
 
     uint32_t nodes_explored = 0;
@@ -1164,8 +1165,10 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
                 dist[v] = tentative_g;
                 parent[v] = u;
 
-                /* Use landmark heuristic for f-value (scaled for duration routing) */
-                double h_v = vl_landmarks_heuristic(lm, v, target) * heuristic_scale * weight_factor;
+                /* Use appropriate landmark heuristic based on weight type */
+                double h_v = use_time_heuristic ?
+                             vl_landmarks_heuristic_time(lm, v, target) * weight_factor :
+                             vl_landmarks_heuristic(lm, v, target) * weight_factor;
                 double f = tentative_g + h_v;
                 vl_heap_push(heap, v, f);
             }
