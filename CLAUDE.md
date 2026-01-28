@@ -32,7 +32,8 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 | Route Server | `velo/api/` | C | Routing REST API |
 | Tile Server | `carta/api/` | C | Tile server REST API |
 | FuelWise WASM | `fuelwise/wasm/` | C+JS | Browser builds |
-| UI | `fuelwise/ui/` | TypeScript | React frontend |
+| FuelWise UI | `fuelwise/ui/` | TypeScript | React frontend |
+| Carta UI | `carta/ui/` | TypeScript | Tile viewer |
 
 ## Key Files by Task
 
@@ -77,9 +78,13 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 - `carta/api/src/main.c` - HTTP handlers
 - `carta/api/CLAUDE.md` - API documentation
 
-### Working on UI:
+### Working on FuelWise UI:
 - `fuelwise/ui/src/App.tsx` - Main component
 - `fuelwise/ui/src/components/MapView.tsx` - Map integration
+
+### Working on Carta UI:
+- `carta/ui/src/App.tsx` - Tile viewer component
+- `carta/ui/src/App.css` - Styling
 
 ## Build Commands
 
@@ -109,14 +114,24 @@ make wasm-test        # Test WASM builds
 # UI (requires Node.js)
 make fuelwise-ui      # Build FuelWise UI
 make fuelwise-ui-dev  # Run FuelWise UI dev server
+make carta-ui         # Build Carta Tile Viewer
+make carta-ui-dev     # Run Carta UI dev server
 
 # Testing
-make test             # All tests (~190 tests)
+make test             # All library tests (~190 tests)
 make test-ralph       # 65 tests
 make test-fuelwise    # 32 tests
 make test-shared      # 23 tests
 make test-velo        # 39 tests
 make test-carta       # 33 tests
+make test-api         # All API tests (requires OSM data)
+make test-fuelwise-api# FuelWise API tests
+make test-velo-api    # Velo API tests
+make test-carta-api   # Carta API tests
+
+# Scripts
+make benchmark        # Run performance benchmarks
+make ci               # Run CI pipeline
 
 # Run servers
 make run-fuelwise-api # Start FuelWise API on :8080
@@ -241,6 +256,42 @@ make test
 3. **Carta**: Coordinate order is (lon, lat) in MVT
 4. **FuelWise**: Stations must be sorted by distance_from_start
 5. **Memory**: Free all allocated structures (solutions, routes, contexts)
+
+## Scripts
+
+Utility scripts in `scripts/` directory:
+
+```bash
+# Download OSM data from Geofabrik
+./scripts/download-osm.sh hungary    # Download Hungary
+./scripts/download-osm.sh monaco     # Download Monaco (small, for testing)
+./scripts/download-osm.sh list       # List available regions
+
+# Performance benchmarks
+./scripts/benchmark.sh               # Run all benchmarks
+./scripts/benchmark.sh velo          # Routing benchmarks
+./scripts/benchmark.sh carta         # Tile generation benchmarks
+
+# CI/CD pipeline
+./scripts/ci.sh                      # Full pipeline (build, test, lint)
+./scripts/ci.sh quick                # Quick build + test
+./scripts/ci.sh lint                 # Lint only
+```
+
+## Docker
+
+Multi-service Docker Compose setup:
+
+```bash
+docker-compose up                       # Full platform (FuelWise + UI)
+docker-compose --profile all-apis up    # All 3 API servers
+docker-compose --profile dev up         # Development environment
+```
+
+Individual Dockerfiles:
+- `Dockerfile` - Main FuelWise image
+- `docker/Dockerfile.velo` - Standalone Velo route server
+- `docker/Dockerfile.carta` - Standalone Carta tile server
 
 ## Design Principles
 

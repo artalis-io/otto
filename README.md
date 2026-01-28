@@ -17,6 +17,7 @@ A complete platform for truck fleet optimization, combining route planning, fuel
 | Route Server | `velo/api/` | REST API server for routing |
 | Tile Server | `carta/api/` | REST API server for map tiles |
 | FuelWise UI | `fuelwise/ui/` | React application with map interface |
+| Carta UI | `carta/ui/` | Tile viewer React application |
 | FuelWise WASM | `fuelwise/wasm/` | WebAssembly builds for browser deployment |
 
 ## Quick Start
@@ -31,6 +32,11 @@ docker run -p 80:80 -p 8080:8080 fuelwise
 # API only
 docker build --target api-only -t fuelwise-api .
 docker run -p 8080:8080 fuelwise-api
+
+# Multi-service with Docker Compose
+docker-compose up                       # Full platform
+docker-compose --profile all-apis up    # All 3 API servers
+docker-compose --profile dev up         # Development environment
 ```
 
 ### Building from Source
@@ -107,7 +113,8 @@ fuelwise-platform/
 │   └── api/            #   Route server REST API
 ├── carta/              # Tile Generator (libcarta.a)
 │   ├── src/            #   MVT encoding, PNG rendering, Web Mercator
-│   └── api/            #   Tile server REST API + Leaflet UI
+│   ├── api/            #   Tile server REST API
+│   └── ui/             #   Tile viewer React application
 ├── fuelwise/           # Refueling Library (libfuelwise.a)
 │   ├── src/            #   LP formulation, route filtering
 │   ├── api/            #   FuelWise REST API
@@ -121,6 +128,10 @@ fuelwise-platform/
 │   ├── mongoose/       #   HTTP server
 │   ├── miniz/          #   zlib compression
 │   └── clay/           #   UI layout (future)
+├── scripts/            # Utility scripts
+│   ├── download-osm.sh #   Download OSM data from Geofabrik
+│   ├── benchmark.sh    #   Performance benchmarks
+│   └── ci.sh           #   CI/CD pipeline
 ├── docs/               # Architecture documentation
 └── docker/             # Docker configuration
 ```
@@ -206,19 +217,48 @@ make wasm-test        # Test WASM builds
 # UI (requires Node.js)
 make fuelwise-ui      # Build FuelWise UI
 make fuelwise-ui-dev  # Run FuelWise UI dev server on :5173
+make carta-ui         # Build Carta Tile Viewer
+make carta-ui-dev     # Run Carta UI dev server
 
 # Testing
-make test             # All tests (~190)
+make test             # All library tests (~190)
 make test-ralph       # Ralph tests (65)
 make test-fuelwise    # FuelWise tests (32)
 make test-shared      # Shared tests (23)
 make test-velo        # Velo tests (39)
 make test-carta       # Carta tests (33)
+make test-api         # All API endpoint tests (requires OSM data)
+make test-fuelwise-api# FuelWise API tests
+make test-velo-api    # Velo API tests
+make test-carta-api   # Carta API tests
+
+# Scripts
+make benchmark        # Run performance benchmarks
+make ci               # Run CI pipeline
 
 # Run servers
 make run-fuelwise-api # Start FuelWise API on :8080
 make run-carta-api    # Show Carta tile server usage
 make run-velo-api     # Show Velo route server usage
+```
+
+## Scripts
+
+```bash
+# Download OSM data
+./scripts/download-osm.sh hungary    # Download Hungary (~300MB)
+./scripts/download-osm.sh monaco     # Download Monaco (~1MB, for testing)
+./scripts/download-osm.sh list       # List available regions
+
+# Performance benchmarks
+./scripts/benchmark.sh               # Run all benchmarks
+./scripts/benchmark.sh velo          # Benchmark routing only
+./scripts/benchmark.sh carta         # Benchmark tile generation only
+
+# CI/CD pipeline
+./scripts/ci.sh                      # Run full CI pipeline
+./scripts/ci.sh quick                # Quick build + test
+./scripts/ci.sh lint                 # Lint only
 ```
 
 ## Requirements
