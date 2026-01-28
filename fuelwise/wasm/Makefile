@@ -11,11 +11,11 @@ CFLAGS += -s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","getValue","setValue"]'
 CFLAGS += -s MODULARIZE=1 -s EXPORT_NAME='FuelWise'
 
 # Include paths
-INCLUDES = -I../fuelwise/include -I../ralph/include
+INCLUDES = -I../include -I../../ralph/include
 
 # Source files
-FUELWISE_SRC = $(wildcard ../fuelwise/src/*.c)
-RALPH_SRC = $(wildcard ../ralph/src/*.c)
+FUELWISE_SRC = $(wildcard ../src/*.c)
+RALPH_SRC = $(wildcard ../../ralph/src/*.c)
 WASM_SRC = src/fuelwise_wasm.c
 
 # All source files

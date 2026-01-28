@@ -1,17 +1,19 @@
 # FuelWise Platform - Top-Level Makefile
 #
 # Project Structure:
-#   ralph/     - LP/MIP Solver (libralph.a)
-#   fuelwise/  - Refueling Optimization Library (libfuelwise.a)
-#   velo/      - OSM Routing Engine (libvelo.a)
-#   carta/     - Map Tile Generator (libcarta.a)
-#   shared/    - Shared Utilities (libshared.a)
-#   vendor/    - Third-party libraries (miniz)
-#   api/       - REST API Server
-#   wasm/      - WebAssembly Builds
-#   ui/        - React Application
+#   ralph/        - LP/MIP Solver (libralph.a)
+#   fuelwise/     - Refueling Optimization Library
+#     api/        - FuelWise REST API
+#     wasm/       - WebAssembly build
+#   velo/         - OSM Routing Engine
+#     api/        - Velo Route Server
+#   carta/        - Map Tile Generator
+#     api/        - Carta Tile Server
+#   shared/       - Shared Utilities (libshared.a)
+#   vendor/       - Third-party libraries (mongoose, miniz)
+#   ui/           - React Application
 
-.PHONY: all clean test ralph fuelwise velo carta shared api wasm ui tile-server help
+.PHONY: all clean test ralph fuelwise velo carta shared api wasm ui tile-server route-server help
 
 # Default: build all libraries
 all: ralph fuelwise shared velo carta
@@ -44,29 +46,38 @@ carta:
 # Applications
 # =============================================================================
 
-# REST API server (depends on FuelWise)
+# FuelWise REST API server (depends on FuelWise)
 api: fuelwise
-	$(MAKE) -C api
+	$(MAKE) -C fuelwise/api
 
 # Run API server
 run-api: api
-	$(MAKE) -C api run
+	$(MAKE) -C fuelwise/api run
 
-# Tile server (depends on Carta)
+# Carta tile server (depends on Carta)
 tile-server: carta shared
-	$(MAKE) -C tile-server
+	$(MAKE) -C carta/api
 
 # Run tile server
 run-tiles: tile-server
-	@echo "Usage: ./tile-server/carta-tile-server <pbf-file>"
-	@echo "Example: ./tile-server/carta-tile-server data/hungary-latest.osm.pbf"
+	@echo "Usage: ./carta/api/carta-tile-server <pbf-file>"
+	@echo "Example: ./carta/api/carta-tile-server data/hungary-latest.osm.pbf"
+
+# Velo route server (depends on Velo)
+route-server: velo
+	$(MAKE) -C velo/api
+
+# Run route server
+run-routes: route-server
+	@echo "Usage: ./velo/api/velo-route-server <pbf-file>"
+	@echo "Example: ./velo/api/velo-route-server data/hungary-latest.osm.pbf"
 
 # WebAssembly builds (requires Emscripten)
 wasm: fuelwise velo carta
-	$(MAKE) -C wasm
+	$(MAKE) -C fuelwise/wasm
 
 wasm-types:
-	$(MAKE) -C wasm types
+	$(MAKE) -C fuelwise/wasm types
 
 # UI (requires Node.js)
 ui:
@@ -98,7 +109,7 @@ test-carta: carta
 	$(MAKE) -C carta test
 
 test-api: api
-	$(MAKE) -C api test
+	$(MAKE) -C fuelwise/api test
 
 # =============================================================================
 # Cleanup
@@ -110,9 +121,10 @@ clean:
 	$(MAKE) -C shared clean
 	$(MAKE) -C velo clean
 	$(MAKE) -C carta clean
-	-$(MAKE) -C api clean 2>/dev/null || true
-	-$(MAKE) -C tile-server clean 2>/dev/null || true
-	-$(MAKE) -C wasm clean 2>/dev/null || true
+	-$(MAKE) -C fuelwise/api clean 2>/dev/null || true
+	-$(MAKE) -C fuelwise/wasm clean 2>/dev/null || true
+	-$(MAKE) -C carta/api clean 2>/dev/null || true
+	-$(MAKE) -C velo/api clean 2>/dev/null || true
 	-rm -f vendor/miniz/*.o 2>/dev/null || true
 
 clean-all: clean
@@ -134,13 +146,15 @@ help:
 	@echo "  carta         - Build Carta tile generator"
 	@echo ""
 	@echo "Applications:"
-	@echo "  api           - Build REST API server"
-	@echo "  tile-server   - Build Carta tile server"
+	@echo "  api           - Build FuelWise REST API (fuelwise/api)"
+	@echo "  tile-server   - Build Carta tile server (carta/api)"
+	@echo "  route-server  - Build Velo route server (velo/api)"
 	@echo "  wasm          - Build WebAssembly modules (requires Emscripten)"
 	@echo "  ui            - Build React UI (requires Node.js)"
 	@echo "  ui-dev        - Run UI dev server"
-	@echo "  run-api       - Run the REST API server"
+	@echo "  run-api       - Run the FuelWise REST API server"
 	@echo "  run-tiles     - Show tile server usage"
+	@echo "  run-routes    - Show route server usage"
 	@echo ""
 	@echo "Testing:"
 	@echo "  test          - Run all tests"
@@ -149,7 +163,7 @@ help:
 	@echo "  test-shared   - Run Shared tests (23)"
 	@echo "  test-velo     - Run Velo tests (39)"
 	@echo "  test-carta    - Run Carta tests (33)"
-	@echo "  test-api      - Test REST API endpoints"
+	@echo "  test-api      - Test FuelWise API endpoints"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  clean         - Clean all build artifacts"
