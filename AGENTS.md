@@ -4,116 +4,166 @@ This document provides guidance for AI agents working on the FuelWise codebase.
 
 ## Project Overview
 
-FuelWise is a truck refueling optimization platform that finds minimum-cost fueling strategies for long-haul routes. Built on **Ralph** (**R**obust **A**I **L**inear **P**rogramming **H**elper), a zero-dependency LP/MIP solver.
+FuelWise is a truck fleet optimization platform that combines route planning, fuel cost optimization, and custom map rendering. Built on **Ralph** (**R**obust **A**I **L**inear **P**rogramming **H**elper), a zero-dependency LP/MIP solver.
 
-It consists of five main components:
+## Components
 
 | Directory | Language | Purpose |
 |-----------|----------|---------|
 | `ralph/` | C | LP/MIP solver (standalone, zero dependencies) |
+| `velo/` | C | OSM routing engine (Dijkstra, A*, landmarks) |
+| `carta/` | C | Map tile generator (MVT, PNG) |
 | `fuelwise/` | C | Refueling domain library |
-| `api/` | C | REST API server (mongoose HTTP) |
-| `wasm/` | C + JS | WebAssembly build for browsers |
-| `ui/` | TypeScript | React frontend with Leaflet maps |
+| `shared/` | C | Common geo utilities |
+| `vendor/` | C | Third-party libs (mongoose, miniz) |
+| `fuelwise/api/` | C | FuelWise REST API server |
+| `velo/api/` | C | Route server REST API |
+| `carta/api/` | C | Tile server REST API |
+| `fuelwise/wasm/` | C + JS | WebAssembly build for browsers |
+| `fuelwise/ui/` | TypeScript | React frontend with Leaflet maps |
 
 ## Repository Structure
 
 ```
-lp-solver/
-├── ralph/                  # LP/MIP Solver
-│   ├── include/            # Public headers (ralph.h, sparse.h, lp.h, mip.h)
-│   ├── src/                # Implementation (simplex.c, lu.c, branch_bound.c, etc.)
-│   └── tests/              # Solver tests (test_main.c)
+fuelwise-platform/
+├── ralph/                      # LP/MIP Solver
+│   ├── include/                # Public headers (ralph.h)
+│   ├── src/                    # Implementation (simplex.c, lu.c, branch_bound.c)
+│   ├── tests/                  # Solver tests + debug utilities
+│   ├── benchmarks/             # Performance benchmarks
+│   └── docs/                   # Simplex, LU documentation
 │
-├── fuelwise/               # Refueling Domain Library
-│   ├── include/            # Public API (fuelwise.h, fw_types.h, fw_*.h)
-│   ├── src/                # Implementation (fw_geo.c, fw_route.c, fw_refuel.c)
-│   └── tests/              # Domain tests (test_fuelwise.c)
+├── velo/                       # OSM Routing Engine
+│   ├── include/                # Public headers (velo.h, vl_*.h)
+│   ├── src/                    # Implementation (vl_route.c, vl_pbf.c)
+│   ├── tests/                  # Routing tests
+│   └── api/                    # Route Server REST API
+│       ├── src/main.c          # HTTP server + handlers
+│       └── src/polyline.c      # Google Polyline encoding
 │
-├── api/                    # REST API Server
-│   ├── src/main.c          # HTTP server + all handlers
-│   └── mongoose/           # mongoose HTTP library
+├── carta/                      # Map Tile Generator
+│   ├── include/                # Public headers (carta.h, ct_*.h)
+│   ├── src/                    # Implementation (ct_mvt.c, ct_render.c)
+│   ├── tests/                  # Tile tests
+│   └── api/                    # Tile Server REST API
+│       ├── src/main.c          # HTTP server + handlers
+│       └── ui/                 # Leaflet viewer
 │
-├── wasm/                   # WebAssembly Build
-│   ├── src/
-│   │   ├── fuelwise_wasm.c # WASM entry points
-│   │   └── fuelwise-wrapper.js  # JavaScript API
-│   └── Makefile            # Emscripten build
+├── fuelwise/                   # Refueling Domain Library
+│   ├── include/                # Public API (fuelwise.h, fw_types.h)
+│   ├── src/                    # Implementation (fw_refuel.c, fw_route.c)
+│   ├── tests/                  # Domain tests + artifacts
+│   ├── examples/               # Usage examples
+│   ├── docs/                   # API documentation
+│   ├── api/                    # FuelWise REST API
+│   │   └── src/main.c          # HTTP server + handlers
+│   ├── wasm/                   # WebAssembly Build
+│   │   ├── src/fuelwise_wasm.c # WASM entry points
+│   │   └── src/fuelwise-wrapper.js
+│   └── ui/                     # React Frontend
+│       ├── src/components/     # MapView, FileUpload, RouteConfig
+│       ├── src/services/api.ts # REST API client
+│       └── src/types/          # TypeScript definitions
 │
-├── ui/                     # React Frontend
-│   ├── src/
-│   │   ├── components/     # MapView, FileUpload, RouteConfig, etc.
-│   │   ├── services/api.ts # REST API client
-│   │   └── types/          # TypeScript definitions
-│   └── public/             # Static assets
+├── shared/                     # Shared Geo Utilities
+│   ├── include/                # Public headers (shared.h, sh_geo.h)
+│   └── src/                    # Implementation (sh_geo.c)
 │
-├── docs/                   # Architecture documentation
-├── Makefile                # Top-level build orchestration
-├── AGENTS.md               # This file
-└── CLAUDE.md               # Claude Code specific instructions
+├── vendor/                     # Third-party Libraries
+│   ├── mongoose/               # HTTP server
+│   ├── miniz/                  # zlib compression
+│   └── clay/                   # UI layout (future)
+│
+├── docs/                       # Architecture documentation
+├── docker/                     # Docker configuration
+├── Makefile                    # Top-level build orchestration
+├── AGENTS.md                   # This file
+└── CLAUDE.md                   # Claude Code specific instructions
 ```
 
 ## Build Commands
 
 ```bash
 # Build core libraries
-make all            # Build ralph + fuelwise
-make ralph          # LP/MIP solver only
-make fuelwise       # Refueling library only
+make all              # Build ralph + fuelwise + shared + velo + carta
 
-# Build deployment targets
-make api            # REST API server
-make wasm           # WebAssembly (requires Emscripten)
+# Individual modules
+make ralph            # LP/MIP solver
+make fuelwise         # Refueling library
+make shared           # Shared utilities
+make velo             # Routing engine
+make carta            # Tile generator
+
+# Build API servers
+make api              # FuelWise REST API (fuelwise/api)
+make route-server     # Velo route server (velo/api)
+make tile-server      # Carta tile server (carta/api)
+make wasm             # WebAssembly (requires Emscripten)
 
 # Testing
-make test           # All tests
-make test-ralph     # Solver tests (43 tests)
-make test-fuelwise  # Domain tests (29 tests)
-make test-api       # API endpoint tests
+make test             # All tests (~190)
+make test-ralph       # Solver tests (65)
+make test-fuelwise    # Domain tests (32)
+make test-shared      # Shared tests (23)
+make test-velo        # Routing tests (39)
+make test-carta       # Tile tests (33)
+make test-api         # API endpoint tests
 
 # Running
-make run-api        # Start API on :8080
-cd ui && npm run dev  # Start UI on :5173
+make run-api          # Start FuelWise API on :8080
+cd fuelwise/ui && npm run dev  # Start UI on :5173
 ```
 
 ## Architecture Principles
 
 1. **C-first core**: All optimization logic in C for portability
 2. **Zero external dependencies**: ralph/ is completely standalone
-3. **Layered design**: ralph → fuelwise → api/wasm → ui
-4. **Domain separation**: Solver logic vs domain logic vs presentation
+3. **Layered design**: ralph -> fuelwise -> api/wasm -> ui
+4. **Modular APIs**: Each major component has its own API server
 
 ## Key Files by Component
 
-### Ralph (Solver)
+### Ralph (LP/MIP Solver)
 - `ralph/include/ralph.h` - Public API entry point
 - `ralph/src/simplex.c` - Primal simplex algorithm
 - `ralph/src/dual_simplex.c` - Dual simplex for re-optimization
 - `ralph/src/lu.c` - LU factorization (CRITICAL for correctness)
 - `ralph/src/branch_bound.c` - MIP branch and bound
 
-### FuelWise (Domain)
+### Velo (Routing Engine)
+- `velo/include/velo.h` - Public API
+- `velo/src/vl_route.c` - Dijkstra, A*, bidirectional routing
+- `velo/src/vl_pbf.c` - OSM PBF parsing
+- `velo/src/vl_landmarks.c` - ALT preprocessing
+- `velo/api/src/main.c` - Route server
+
+### Carta (Tile Generator)
+- `carta/include/carta.h` - Public API
+- `carta/src/ct_mvt.c` - MVT vector tile encoding
+- `carta/src/ct_render.c` - PNG rasterization
+- `carta/src/ct_tile.c` - Web Mercator projection
+- `carta/api/src/main.c` - Tile server
+
+### FuelWise (Refueling Domain)
 - `fuelwise/include/fuelwise.h` - Unified public API
 - `fuelwise/include/fw_types.h` - All type definitions
 - `fuelwise/src/fw_refuel.c` - LP/MILP problem formulation
 - `fuelwise/src/fw_route.c` - Station filtering and snapping
-- `fuelwise/src/fw_geo.c` - Haversine distance calculations
-
-### API (HTTP Server)
-- `api/src/main.c` - Complete server (handlers + routing)
+- `fuelwise/api/src/main.c` - FuelWise API server
 
 ### UI (Frontend)
-- `ui/src/App.tsx` - Main application component
-- `ui/src/components/MapView.tsx` - Leaflet map integration
-- `ui/src/services/api.ts` - REST API client
+- `fuelwise/ui/src/App.tsx` - Main application component
+- `fuelwise/ui/src/components/MapView.tsx` - Leaflet map integration
+- `fuelwise/ui/src/services/api.ts` - REST API client
 
 ## Common Tasks
 
 ### Adding a new API endpoint
-1. Add handler function in `api/src/main.c`
-2. Add route in `ev_handler()` switch statement
-3. Update startup message endpoint list
-4. Test with curl: `curl -X POST http://localhost:8080/api/v1/newpoint`
+1. Identify which API server (fuelwise/api, velo/api, or carta/api)
+2. Add handler function in `src/main.c`
+3. Add route in `ev_handler()` switch statement
+4. Update startup message endpoint list
+5. Test with curl: `curl -X POST http://localhost:PORT/api/v1/endpoint`
 
 ### Adding a FuelWise function
 1. Declare in appropriate header (`fuelwise/include/fw_*.h`)
@@ -128,10 +178,20 @@ cd ui && npm run dev  # Start UI on :5173
 4. Run full test suite
 
 ### Adding a UI component
-1. Create component in `ui/src/components/`
+1. Create component in `fuelwise/ui/src/components/`
 2. Import and use in parent component
 3. Add styles to `App.css`
 4. Test in browser at http://localhost:5173
+
+### Adding routing features
+1. Edit `velo/src/vl_route.c` for algorithm changes
+2. Update `velo/api/src/main.c` for API changes
+3. Run `make test-velo`
+
+### Adding tile features
+1. Edit `carta/src/ct_*.c` for rendering changes
+2. Update `carta/api/src/main.c` for API changes
+3. Run `make test-carta`
 
 ## Code Style
 
@@ -151,9 +211,9 @@ cd ui && npm run dev  # Start UI on :5173
 
 ## Known Limitations
 
-1. **MILP minimum purchase**: Simple rounding heuristic may violate indicator constraints in edge cases (documented in `ralph/src/branch_bound.c`)
+1. **MILP minimum purchase**: Simple rounding heuristic may violate indicator constraints in edge cases
 2. **Node.js version**: UI built with Vite 5 requires Node 18+
-3. **OSRM routing**: Uses public demo server (rate limited)
+3. **Large PBF files**: Memory-mapped for efficiency, but still requires ~2x file size in RAM
 
 ## Debugging Tips
 
@@ -162,6 +222,11 @@ cd ui && npm run dev  # Start UI on :5173
 - Verify stations are sorted by distance_from_start
 - Ensure tank_capacity allows reaching between consecutive stations
 - Check minimum_fuel constraints aren't too tight
+
+### Routing Issues
+- Verify graph is loaded: check `/api/v1/stats`
+- Check coordinates are within PBF bounds
+- Try different profiles (some roads are restricted)
 
 ### API Issues
 - Use `curl -v` to see full request/response
@@ -177,8 +242,11 @@ cd ui && npm run dev  # Start UI on :5173
 
 | Operation | Complexity | Typical Time |
 |-----------|------------|--------------|
-| LP solve | O(n³) worst | < 100ms |
-| Station filtering | O(n × m) | < 50ms |
+| LP solve | O(n^3) worst | < 100ms |
+| Station filtering | O(n x m) | < 50ms |
 | MILP solve | Exponential | < 10s for < 50 stations |
+| Route (with landmarks) | O(E log V) | 30-50ms |
+| Route (without landmarks) | O(E log V) | 150-350ms |
+| PNG tile (512x512) | O(features) | ~75ms |
 | WASM load | - | ~100ms |
 | API request | - | < 100ms total |

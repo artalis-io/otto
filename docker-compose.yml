@@ -43,13 +43,13 @@ services:
       - "8080:8080"
     volumes:
       - .:/workspace
-      - /workspace/ui/node_modules
+      - /workspace/fuelwise/ui/node_modules
     working_dir: /workspace
     profiles:
       - dev
     command: >
       bash -c "
         make api &&
-        ./api/fuelwise-api -p 8080 &
-        cd ui && npm run dev -- --host 0.0.0.0
+        ./fuelwise/api/fuelwise-api -p 8080 &
+        cd fuelwise/ui && npm run dev -- --host 0.0.0.0
       "

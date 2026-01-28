@@ -6,15 +6,18 @@ A complete platform for truck fleet optimization, combining route planning, fuel
 
 ## Platform Components
 
-| Component | Description | Status |
-|-----------|-------------|--------|
-| [**Ralph**](ralph/) | Zero-dependency LP/MIP solver (Revised Simplex, Branch & Bound) | Production |
-| [**Velo**](velo/) | OSM routing engine (Dijkstra, A*, bidirectional, landmarks) | Production |
-| [**Carta**](carta/) | Map tile generator (MVT vector tiles, PNG raster) | Production |
-| [**FuelWise**](fuelwise/) | Refueling optimization library | Production |
-| [**API**](api/) | REST API server | Production |
-| [**WASM**](wasm/) | WebAssembly builds for browser deployment | Production |
-| [**UI**](ui/) | React application with map interface | Production |
+| Component | Location | Description |
+|-----------|----------|-------------|
+| [**Ralph**](ralph/) | `ralph/` | Zero-dependency LP/MIP solver (Revised Simplex, Branch & Bound) |
+| [**Velo**](velo/) | `velo/` | OSM routing engine (Dijkstra, A*, bidirectional, landmarks) |
+| [**Carta**](carta/) | `carta/` | Map tile generator (MVT vector tiles, PNG raster) |
+| [**FuelWise**](fuelwise/) | `fuelwise/` | Refueling optimization library |
+| [**Shared**](shared/) | `shared/` | Common geo utilities |
+| FuelWise API | `fuelwise/api/` | REST API server for refueling optimization |
+| Route Server | `velo/api/` | REST API server for routing |
+| Tile Server | `carta/api/` | REST API server for map tiles |
+| FuelWise UI | `fuelwise/ui/` | React application with map interface |
+| FuelWise WASM | `fuelwise/wasm/` | WebAssembly builds for browser deployment |
 
 ## Quick Start
 
@@ -36,14 +39,19 @@ docker run -p 8080:8080 fuelwise-api
 # Build all C libraries
 make all
 
-# Run all tests (150+ tests across all modules)
+# Run all tests (190+ tests across all modules)
 make test
 
-# Start API server
-make run-api
+# Build and start API servers
+make api            # FuelWise API (fuelwise/api)
+make tile-server    # Carta Tile Server (carta/api)
+make route-server   # Velo Route Server (velo/api)
+
+# Start servers
+make run-api        # FuelWise API on :8080
 
 # Build and run UI
-cd ui && npm install && npm run dev
+cd fuelwise/ui && npm install && npm run dev
 ```
 
 ## Architecture
@@ -54,7 +62,7 @@ cd ui && npm install && npm run dev
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                   │
-│  │  React UI   │   │    WASM     │   │  REST API   │   Applications    │
+│  │  React UI   │   │    WASM     │   │  REST APIs  │   Applications    │
 │  │  (Leaflet)  │   │  (Browser)  │   │ (mongoose)  │                   │
 │  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘                   │
 │         └─────────────────┼─────────────────┘                          │
@@ -79,7 +87,7 @@ cd ui && npm install && npm run dev
 │  ┌──────────────────────────────────────────────────────────────────┐   │
 │  │                     Shared Infrastructure                         │   │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐         │   │
-│  │  │  miniz   │  │ Protobuf │  │ mongoose │  │Haversine │         │   │
+│  │  │  miniz   │  │ Protobuf │  │ mongoose │  │  shared  │         │   │
 │  │  │  (zlib)  │  │ (decode) │  │  (http)  │  │  (geo)   │         │   │
 │  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘         │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
@@ -89,102 +97,37 @@ cd ui && npm install && npm run dev
 ## Project Structure
 
 ```
-fuelwise/
-├── ralph/          # LP/MIP Solver (libralph.a)
-│   └── src/        #   Simplex, LU factorization, Branch & Bound
-├── velo/           # Routing Engine (libvelo.a)
-│   └── src/        #   OSM PBF parsing, Dijkstra, A*, landmarks
-├── carta/          # Tile Generator (libcarta.a)
-│   └── src/        #   MVT encoding, PNG rendering, Web Mercator
-├── fuelwise/       # Refueling Library (libfuelwise.a)
-│   └── src/        #   LP formulation, route filtering
-├── api/            # REST API Server
-├── wasm/           # WebAssembly Builds
-├── ui/             # React Application
-├── docs/           # Documentation
-├── examples/       # Usage Examples
-└── tests/          # Integration Tests
+fuelwise-platform/
+├── ralph/              # LP/MIP Solver (libralph.a)
+│   ├── src/            #   Simplex, LU factorization, Branch & Bound
+│   ├── tests/          #   Solver tests + debug utilities
+│   └── docs/           #   Simplex, LU documentation
+├── velo/               # Routing Engine (libvelo.a)
+│   ├── src/            #   OSM PBF parsing, Dijkstra, A*, landmarks
+│   └── api/            #   Route server REST API
+├── carta/              # Tile Generator (libcarta.a)
+│   ├── src/            #   MVT encoding, PNG rendering, Web Mercator
+│   └── api/            #   Tile server REST API + Leaflet UI
+├── fuelwise/           # Refueling Library (libfuelwise.a)
+│   ├── src/            #   LP formulation, route filtering
+│   ├── api/            #   FuelWise REST API
+│   ├── wasm/           #   WebAssembly build
+│   ├── ui/             #   React application
+│   ├── examples/       #   Usage examples
+│   ├── tests/          #   Domain tests + artifacts
+│   └── docs/           #   API documentation
+├── shared/             # Shared Utilities (libshared.a)
+├── vendor/             # Third-party libraries
+│   ├── mongoose/       #   HTTP server
+│   ├── miniz/          #   zlib compression
+│   └── clay/           #   UI layout (future)
+├── docs/               # Architecture documentation
+└── docker/             # Docker configuration
 ```
-
-## Module Details
-
-### Ralph - LP/MIP Solver
-
-Zero-dependency linear programming solver using the Revised Simplex method with LU factorization and Branch & Bound for mixed-integer problems.
-
-```c
-#include "ralph.h"
-
-RalphModel *model = ralph_create();
-ralph_add_variable(model, 0, 100, 5.0);  // x: 0 ≤ x ≤ 100, cost 5
-ralph_add_constraint(model, ...);
-ralph_optimize(model);
-double x = ralph_get_solution(model, 0);
-ralph_free(model);
-```
-
-**Tests:** 43 | **Performance:** 1000+ variable problems
-
-### Velo - Routing Engine
-
-OSM PBF routing with multiple algorithms and preprocessing optimizations.
-
-```c
-#include "velo.h"
-
-VLGraph *graph = vl_load_pbf("map.osm.pbf");
-VLRoute route;
-vl_route_coords(graph, origin, destination, NULL, &route);
-printf("Distance: %.1f km\n", route.distance_m / 1000);
-vl_graph_free(graph);
-```
-
-**Tests:** 30+ | **Performance:** Country-scale routing in <100ms
-
-### Carta - Map Tile Generator
-
-Generate vector (MVT) and raster (PNG) tiles from OSM data.
-
-```c
-#include "carta.h"
-
-CTPBFContext *ctx = ct_load_pbf("map.osm.pbf");
-CTTileCoord tile = {14, 9058, 5729};  // z/x/y
-
-// Vector tile
-size_t mvt_size = ct_generate_mvt(ctx, tile, NULL, buffer, capacity);
-
-// Raster tile
-size_t png_size = ct_generate_png(ctx, tile, NULL, NULL, buffer, capacity);
-
-ct_free_pbf_context(ctx);
-```
-
-**Tests:** 33 | **Performance:** ~75ms per 512x512 PNG tile
-
-### FuelWise - Refueling Optimization
-
-Optimal fueling strategy using LP/MILP formulation.
-
-```c
-#include "fuelwise.h"
-
-FWProblem problem = {
-    .stations = stations,
-    .num_stations = 10,
-    .tank_capacity = 300,
-    .current_fuel = 50,
-    .consumption_rate = 0.15  // gal/mile
-};
-
-FWRefuelSolution solution;
-fw_solve_refuel_lp(&problem, &solution);
-printf("Total cost: $%.2f\n", solution.total_cost);
-```
-
-**Tests:** 29 | **Performance:** <100ms typical optimization
 
 ## API Endpoints
+
+### FuelWise API (:8080)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -193,9 +136,28 @@ printf("Total cost: $%.2f\n", solution.total_cost);
 | POST | `/api/v1/solve` | Solve refueling optimization |
 | POST | `/api/v1/optimize` | Full pipeline (filter + solve) |
 
+### Velo Route Server (:8082)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/stats` | Graph statistics |
+| GET/POST | `/api/v1/route` | Calculate route with profile |
+
+### Carta Tile Server (:8081)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/stats` | PBF statistics |
+| GET | `/tiles/{z}/{x}/{y}.png` | Raster tile (PNG) |
+| GET | `/tiles/{z}/{x}/{y}.mvt` | Vector tile (MVT) |
+| GET | `/tiles.json` | TileJSON metadata |
+
 ### Example
 
 ```bash
+# Refueling optimization
 curl -X POST http://localhost:8080/api/v1/optimize \
   -H "Content-Type: application/json" \
   -d '{
@@ -208,31 +170,45 @@ curl -X POST http://localhost:8080/api/v1/optimize \
     "current_fuel": 50,
     "consumption_mpg": 6.5
   }'
+
+# Route calculation
+curl 'http://localhost:8082/api/v1/route?from=47.5,19.0&to=46.2,20.1&profile=car&mode=fastest'
+
+# Map tile
+curl 'http://localhost:8081/tiles/14/9058/5729.png' > tile.png
 ```
 
 ## Build Commands
 
 ```bash
 # All libraries
-make all            # ralph + fuelwise + velo + carta
+make all              # ralph + fuelwise + shared + velo + carta
 
 # Individual modules
-make ralph          # LP/MIP solver
-make fuelwise       # Refueling library
-make velo           # Routing engine
-make carta          # Tile generator
-make api            # REST API server
-make wasm           # WebAssembly builds
+make ralph            # LP/MIP solver
+make fuelwise         # Refueling library
+make shared           # Shared utilities
+make velo             # Routing engine
+make carta            # Tile generator
+
+# API servers
+make api              # FuelWise API (fuelwise/api)
+make route-server     # Velo route server (velo/api)
+make tile-server      # Carta tile server (carta/api)
+make wasm             # WebAssembly builds
 
 # Testing
-make test           # All tests
-make test-ralph     # Ralph tests (43)
-make test-fuelwise  # FuelWise tests (29)
-make test-velo      # Velo tests (30+)
-make test-carta     # Carta tests (33)
+make test             # All tests (~190)
+make test-ralph       # Ralph tests (65)
+make test-fuelwise    # FuelWise tests (32)
+make test-shared      # Shared tests (23)
+make test-velo        # Velo tests (39)
+make test-carta       # Carta tests (33)
 
 # Run
-make run-api        # Start API on :8080
+make run-api          # Start FuelWise API on :8080
+make run-tiles        # Show tile server usage
+make run-routes       # Show route server usage
 ```
 
 ## Requirements
@@ -247,7 +223,7 @@ make run-api        # Start API on :8080
 | Operation | Time | Notes |
 |-----------|------|-------|
 | LP solve (1000 vars) | <100ms | Ralph simplex |
-| Route (country-scale) | <100ms | Velo A* bidirectional |
+| Route (country-scale) | <100ms | Velo A* with landmarks |
 | PNG tile (512x512) | ~75ms | Carta rasterizer |
 | Refuel optimization | <100ms | FuelWise LP |
 | PBF parse (Hungary) | ~10s | 300MB, 35M nodes |
@@ -256,11 +232,16 @@ make run-api        # Start API on :8080
 
 ### Core Libraries
 - [Architecture Overview](docs/ARCHITECTURE.md)
-- [REST API Reference](docs/API.md)
 - [Ralph Solver](ralph/CLAUDE.md) - LP/MIP optimization
 - [Velo Routing](velo/CLAUDE.md) - OSM routing engine
 - [Carta Tiles](carta/CLAUDE.md) - Map tile generation
 - [FuelWise Library](fuelwise/CLAUDE.md) - Refueling domain
+
+### API Servers
+- [FuelWise API](fuelwise/api/CLAUDE.md) - Refueling REST API
+- [FuelWise API Reference](fuelwise/docs/API.md) - Endpoint documentation
+- [Velo Route Server](velo/api/CLAUDE.md) - Routing REST API
+- [Carta Tile Server](carta/api/CLAUDE.md) - Tile server REST API
 
 ### Vendor Libraries
 - [Miniz](vendor/miniz/CLAUDE.md) - zlib-compatible compression
@@ -271,7 +252,7 @@ make run-api        # Start API on :8080
 
 1. **Zero Dependencies** - Core libraries use only standard C
 2. **WASM-First** - All components compile to WebAssembly
-3. **Layered Architecture** - Clear separation: solver → domain → API → UI
+3. **Layered Architecture** - Clear separation: solver -> domain -> API -> UI
 4. **Portable** - Runs on Linux, macOS, Windows, browsers
 
 ## License
