@@ -59,6 +59,25 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile);
 void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
                         CTTileCoord coord);
 
+/* Forward declaration for LOD config */
+struct CTLODConfig;
+
+/*
+ * Render tile from PBF context with LOD filtering.
+ *
+ * This is the recommended function for tile generation. It applies:
+ * - LOD filtering (skip features not visible at this zoom)
+ * - Geometry simplification (reduce points at lower zooms)
+ * - Render-time size filtering (skip features too small to see)
+ *
+ * @param ctx    Render context
+ * @param pbf    PBF context with parsed data
+ * @param coord  Tile coordinates
+ * @param lod    LOD configuration (NULL = no filtering)
+ */
+void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
+                            CTTileCoord coord, const struct CTLODConfig *lod);
+
 /* ============================================================================
  * Primitive Drawing
  * ============================================================================ */

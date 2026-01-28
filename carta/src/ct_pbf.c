@@ -7,6 +7,7 @@
 
 #include "ct_pbf.h"
 #include "ct_tile.h"
+#include "ct_lod.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -578,6 +579,18 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     way->is_area = is_area;
     way->name = NULL;
 
+    /* Calculate area/length for LOD filtering */
+    if (is_area) {
+        way->area_sqm = ct_lod_estimate_area(coords, (int)coord_count);
+        way->length_m = 0;
+    } else {
+        way->area_sqm = 0;
+        way->length_m = ct_lod_estimate_length(coords, (int)coord_count);
+    }
+
+    /* min_zoom will be calculated when querying with LOD config */
+    way->min_zoom = 0;
+
     /* Update bbox from this feature's coordinates */
     for (size_t i = 0; i < coord_count; i++) {
         if (coords[i].lat < ctx->bbox.min_lat) ctx->bbox.min_lat = coords[i].lat;
@@ -1041,4 +1054,86 @@ void ct_pbf_stats(const CTPBFContext *ctx,
     if (total_ways) *total_ways = ctx->total_ways_parsed;
     if (features_kept) *features_kept = ctx->features_kept;
     if (bbox) *bbox = ctx->bbox;
+}
+
+/* ============================================================================
+ * LOD-Aware Feature Extraction
+ * ============================================================================ */
+
+CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord,
+                                      const struct CTLODConfig *lod,
+                                      CTFeature **features, size_t *count)
+{
+    if (!ctx || !features || !count) return CT_ERROR_INVALID_ARGUMENT;
+
+    CTBBox bbox = ct_tile_bounds(coord);
+    int zoom = coord.z;
+
+    /* Allocate output array */
+    size_t capacity = 1024;
+    *features = malloc(capacity * sizeof(CTFeature));
+    if (!*features) return CT_ERROR_OUT_OF_MEMORY;
+    *count = 0;
+
+    /* Iterate through ways and check bbox intersection + LOD visibility */
+    for (size_t i = 0; i < ctx->num_ways; i++) {
+        const CTOSMWay *way = &ctx->ways[i];
+
+        /* LOD filter: check if visible at this zoom level */
+        CTLayer layer = layer_from_osm_class(way->feature_class);
+        if (!ct_lod_is_visible(lod, layer, way->feature_type,
+                               zoom, way->area_sqm, way->length_m)) {
+            continue;
+        }
+
+        /* Quick bbox check */
+        int intersects = 0;
+        for (int j = 0; j < way->num_coords; j++) {
+            if (way->coords[j].lat >= bbox.min_lat &&
+                way->coords[j].lat <= bbox.max_lat &&
+                way->coords[j].lon >= bbox.min_lon &&
+                way->coords[j].lon <= bbox.max_lon) {
+                intersects = 1;
+                break;
+            }
+        }
+
+        if (!intersects) continue;
+
+        /* Expand array if needed */
+        if (*count >= capacity) {
+            capacity *= 2;
+            CTFeature *new_features = realloc(*features, capacity * sizeof(CTFeature));
+            if (!new_features) {
+                free(*features);
+                *features = NULL;
+                *count = 0;
+                return CT_ERROR_OUT_OF_MEMORY;
+            }
+            *features = new_features;
+        }
+
+        /* Create feature */
+        CTFeature *f = &(*features)[*count];
+        memset(f, 0, sizeof(CTFeature));
+
+        f->type = way->is_area ? CT_GEOM_POLYGON : CT_GEOM_LINESTRING;
+        f->layer = layer;
+        f->feature_type = way->feature_type;
+
+        /* Convert coordinates to tile space */
+        f->points = malloc(way->num_coords * sizeof(CTTilePoint));
+        if (!f->points) continue;
+
+        f->num_points = way->num_coords;
+        for (int j = 0; j < way->num_coords; j++) {
+            /* Store as fixed-point for now, let caller convert to tile coords */
+            f->points[j].x = (int32_t)(way->coords[j].lon * 1e7);
+            f->points[j].y = (int32_t)(way->coords[j].lat * 1e7);
+        }
+
+        (*count)++;
+    }
+
+    return CT_OK;
 }

@@ -89,6 +89,26 @@ CTStatus ct_pbf_get_tile_features(const CTPBFContext *ctx, CTTileCoord tile,
 CTStatus ct_pbf_get_bbox_features(const CTPBFContext *ctx, CTBBox bbox,
                                   CTFeature **features, size_t *count);
 
+/* Forward declaration for LOD config */
+struct CTLODConfig;
+
+/*
+ * Get features for a tile with LOD filtering.
+ *
+ * Features are filtered based on the LOD configuration and zoom level.
+ * This is the recommended function for tile generation.
+ *
+ * @param ctx      Parsing context with spatial index
+ * @param coord    Tile coordinates (includes zoom level)
+ * @param lod      LOD configuration (NULL = no filtering)
+ * @param features Output feature array (caller frees)
+ * @param count    Output feature count
+ * @return CT_OK on success
+ */
+CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord,
+                                      const struct CTLODConfig *lod,
+                                      CTFeature **features, size_t *count);
+
 /* ============================================================================
  * Statistics
  * ============================================================================ */

@@ -16,6 +16,8 @@
 #include "ct_mvt.h"
 #include "ct_render.h"
 #include "ct_png.h"
+#include "ct_lod.h"
+#include "ct_simplify.h"
 
 #ifdef __cplusplus
 extern "C" {

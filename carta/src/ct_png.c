@@ -247,3 +247,36 @@ size_t ct_generate_png(const CTPBFContext *ctx, CTTileCoord coord,
     ct_render_free(render);
     return png_size;
 }
+
+size_t ct_generate_png_lod(const CTPBFContext *ctx, CTTileCoord coord,
+                           const CTStyle *style, const struct CTLODConfig *lod,
+                           const CTPNGOptions *opts,
+                           uint8_t *buffer, size_t capacity)
+{
+    CTPNGOptions default_opts;
+    if (!opts) {
+        ct_png_default_options(&default_opts);
+        opts = &default_opts;
+    }
+
+    int tile_size = opts->tile_size;
+
+    /* Create render context */
+    CTRenderContext *render = ct_render_create(tile_size, tile_size);
+    if (!render) return 0;
+
+    if (style) {
+        ct_render_set_style(render, style);
+    }
+
+    /* Render tile with LOD filtering */
+    ct_render_from_pbf_lod(render, ctx, coord, lod);
+
+    /* Encode to PNG */
+    size_t png_size = ct_encode_png(ct_render_pixels(render),
+                                    tile_size, tile_size, opts,
+                                    buffer, capacity);
+
+    ct_render_free(render);
+    return png_size;
+}

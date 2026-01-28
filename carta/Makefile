@@ -26,7 +26,9 @@ CORE_SRCS = src/carta.c \
             src/ct_png.c \
             src/ct_style.c \
             src/ct_protobuf.c \
-            src/ct_inflate.c
+            src/ct_inflate.c \
+            src/ct_lod.c \
+            src/ct_simplify.c
 
 MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
              $(VENDOR_DIR)/miniz_tdef.c \
@@ -108,11 +110,13 @@ clean:
 # Dependencies
 src/carta.o: include/carta.h include/ct_types.h
 src/ct_tile.o: include/ct_types.h include/ct_tile.h
-src/ct_pbf.o: include/ct_types.h include/ct_pbf.h
+src/ct_pbf.o: include/ct_types.h include/ct_pbf.h include/ct_lod.h
 src/ct_mvt.o: include/ct_types.h include/ct_mvt.h
-src/ct_render.o: include/ct_types.h include/ct_render.h
+src/ct_render.o: include/ct_types.h include/ct_render.h include/ct_lod.h include/ct_simplify.h
 src/ct_png.o: include/ct_types.h include/ct_png.h
 src/ct_style.o: include/ct_types.h
+src/ct_lod.o: include/ct_types.h include/ct_lod.h
+src/ct_simplify.o: include/ct_types.h include/ct_simplify.h
 
 # Help
 help:

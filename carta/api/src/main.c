@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>  /* For strcasecmp */
 #include <signal.h>
 #include <ctype.h>
 #include "mongoose.h"
@@ -24,6 +25,14 @@
 /* ============================================================================
  * Configuration
  * ============================================================================ */
+
+/* LOD preset options */
+typedef enum {
+    LOD_NONE = 0,      /* No LOD filtering */
+    LOD_DEFAULT,       /* Default LOD rules */
+    LOD_DETAILED,      /* More features at lower zoom */
+    LOD_MINIMAL        /* Fewer features (overview) */
+} LODPreset;
 
 typedef struct {
     char pbf_path[512];
@@ -34,6 +43,7 @@ typedef struct {
     int max_zoom;
     int tile_size;
     char name[128];
+    LODPreset lod_preset;  /* LOD filtering preset */
 } TileServerConfig;
 
 /* Default configuration */
@@ -45,12 +55,14 @@ static TileServerConfig s_config = {
     .min_zoom = 0,
     .max_zoom = 18,
     .tile_size = 512,
-    .name = "Carta Tile Server"
+    .name = "Carta Tile Server",
+    .lod_preset = LOD_NONE  /* LOD disabled by default until rules are improved */
 };
 
 /* Global state */
 static int s_signo = 0;
 static CTPBFContext *s_pbf_ctx = NULL;
+static CTLODConfig s_lod_config = {0};
 
 static void signal_handler(int signo) {
     s_signo = signo;
@@ -59,6 +71,9 @@ static void signal_handler(int signo) {
 /* ============================================================================
  * Configuration Loading
  * ============================================================================ */
+
+/* Forward declaration */
+static LODPreset parse_lod_preset(const char *str);
 
 /* Trim whitespace from string */
 static char *trim(char *str) {
@@ -111,11 +126,32 @@ static int load_config_file(const char *filename, TileServerConfig *cfg) {
             cfg->tile_size = atoi(value);
         } else if (strcmp(key, "name") == 0) {
             strncpy(cfg->name, value, sizeof(cfg->name) - 1);
+        } else if (strcmp(key, "lod") == 0) {
+            cfg->lod_preset = parse_lod_preset(value);
         }
     }
 
     fclose(f);
     return 0;
+}
+
+/* Parse LOD preset from string */
+static LODPreset parse_lod_preset(const char *str) {
+    if (strcasecmp(str, "none") == 0 || strcasecmp(str, "off") == 0 ||
+        strcasecmp(str, "disabled") == 0 || strcmp(str, "0") == 0) {
+        return LOD_NONE;
+    }
+    if (strcasecmp(str, "default") == 0 || strcasecmp(str, "on") == 0 ||
+        strcmp(str, "1") == 0) {
+        return LOD_DEFAULT;
+    }
+    if (strcasecmp(str, "detailed") == 0) {
+        return LOD_DETAILED;
+    }
+    if (strcasecmp(str, "minimal") == 0) {
+        return LOD_MINIMAL;
+    }
+    return LOD_DEFAULT;  /* Default if unrecognized */
 }
 
 /* Load configuration from environment variables */
@@ -145,6 +181,9 @@ static void load_config_env(TileServerConfig *cfg) {
     }
     if ((val = getenv("TILE_NAME"))) {
         strncpy(cfg->name, val, sizeof(cfg->name) - 1);
+    }
+    if ((val = getenv("TILE_LOD"))) {
+        cfg->lod_preset = parse_lod_preset(val);
     }
 }
 
@@ -353,7 +392,13 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
     ct_png_default_options(&opts);
     opts.tile_size = s_config.tile_size;
 
-    size_t size = ct_generate_png(s_pbf_ctx, coord, NULL, &opts, buffer, capacity);
+    /* Use LOD-enabled generation if LOD is configured */
+    size_t size;
+    if (s_config.lod_preset != LOD_NONE) {
+        size = ct_generate_png_lod(s_pbf_ctx, coord, NULL, &s_lod_config, &opts, buffer, capacity);
+    } else {
+        size = ct_generate_png(s_pbf_ctx, coord, NULL, &opts, buffer, capacity);
+    }
 
     if (size == 0) {
         send_error(c, 500, "Tile generation failed");
@@ -469,6 +514,8 @@ static void print_usage(const char *prog) {
     printf("  --min-zoom N         Minimum zoom level (default: 0)\n");
     printf("  --max-zoom N         Maximum zoom level (default: 18)\n");
     printf("  --tile-size N        PNG tile size (default: 512)\n");
+    printf("  --lod PRESET         LOD filtering: none, default, detailed, minimal\n");
+    printf("  --no-lod             Disable LOD filtering (same as --lod none)\n");
     printf("  --help               Show this help\n");
     printf("\n");
     printf("Environment variables:\n");
@@ -479,9 +526,11 @@ static void print_usage(const char *prog) {
     printf("  TILE_MIN_ZOOM               Minimum zoom\n");
     printf("  TILE_MAX_ZOOM               Maximum zoom\n");
     printf("  TILE_SIZE                   PNG tile size\n");
+    printf("  TILE_LOD                    LOD preset (default, detailed, minimal, none)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s -p 8081 hungary-latest.osm.pbf\n", prog);
+    printf("  %s --no-lod hungary-latest.osm.pbf\n", prog);
 }
 
 int main(int argc, char *argv[]) {
@@ -508,6 +557,10 @@ int main(int argc, char *argv[]) {
             if (++i < argc) s_config.max_zoom = atoi(argv[i]);
         } else if (strcmp(argv[i], "--tile-size") == 0) {
             if (++i < argc) s_config.tile_size = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--lod") == 0) {
+            if (++i < argc) s_config.lod_preset = parse_lod_preset(argv[i]);
+        } else if (strcmp(argv[i], "--no-lod") == 0) {
+            s_config.lod_preset = LOD_NONE;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -539,6 +592,27 @@ int main(int argc, char *argv[]) {
     printf("Loaded: %zu nodes, %zu ways, %zu features indexed\n", nodes, ways, features);
     printf("Bounds: [%.4f, %.4f] to [%.4f, %.4f]\n",
            bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat);
+
+    /* Initialize LOD config based on preset */
+    ct_lod_init(&s_lod_config);
+    switch (s_config.lod_preset) {
+        case LOD_DEFAULT:
+            ct_lod_default(&s_lod_config);
+            printf("LOD: default (zoom-dependent feature filtering enabled)\n");
+            break;
+        case LOD_DETAILED:
+            ct_lod_detailed(&s_lod_config);
+            printf("LOD: detailed (more features at lower zoom)\n");
+            break;
+        case LOD_MINIMAL:
+            ct_lod_minimal(&s_lod_config);
+            printf("LOD: minimal (fewer features, overview mode)\n");
+            break;
+        case LOD_NONE:
+        default:
+            printf("LOD: disabled (all features at all zoom levels)\n");
+            break;
+    }
 
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
@@ -579,6 +653,7 @@ int main(int argc, char *argv[]) {
 
     printf("\nShutting down...\n");
     mg_mgr_free(&mgr);
+    ct_lod_free(&s_lod_config);
     ct_free_pbf_context(s_pbf_ctx);
 
     return 0;
