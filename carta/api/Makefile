@@ -7,9 +7,9 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_POSIX_C_SOURCE=200809L -DDEBUG
 # Directories
 SRC_DIR = src
 BUILD_DIR = build
-CARTA_DIR = ../carta
-VENDOR_DIR = ../vendor
-SHARED_DIR = ../shared
+CARTA_DIR = ..
+VENDOR_DIR = ../../vendor
+SHARED_DIR = ../../shared
 
 # Include paths
 INCLUDES = -I$(CARTA_DIR)/include \
@@ -65,7 +65,7 @@ debug: clean deps $(TARGET)
 
 # Run with a sample PBF
 run: $(TARGET)
-	./$(TARGET) -s static -p 8081 ../data/hungary-latest.osm.pbf
+	./$(TARGET) -s static -p 8081 ../../data/hungary-latest.osm.pbf
 
 # Create static directory if it doesn't exist
 static:

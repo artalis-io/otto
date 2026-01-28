@@ -28,8 +28,10 @@ cd ui && npm run dev      # UI on :5173
 | FuelWise | `fuelwise/` | C | Refueling domain logic |
 | Shared | `shared/` | C | Common geo utilities |
 | Vendor | `vendor/` | C | Third-party libs (see below) |
-| API | `api/` | C | REST API server |
-| WASM | `wasm/` | C+JS | Browser builds |
+| FuelWise API | `fuelwise/api/` | C | Refueling REST API |
+| Route Server | `velo/api/` | C | Routing REST API |
+| Tile Server | `carta/api/` | C | Tile server REST API |
+| FuelWise WASM | `fuelwise/wasm/` | C+JS | Browser builds |
 | UI | `ui/` | TypeScript | React frontend |
 
 ## Key Files by Task
@@ -62,8 +64,18 @@ cd ui && npm run dev      # UI on :5173
 - `shared/include/sh_geo.h` - Coordinate types and functions
 - `shared/src/sh_geo.c` - Haversine, Web Mercator
 
-### Working on API:
-- `api/src/main.c` - HTTP handlers
+### Working on FuelWise API:
+- `fuelwise/api/src/main.c` - HTTP handlers
+- `fuelwise/api/CLAUDE.md` - API documentation
+
+### Working on routing API:
+- `velo/api/src/main.c` - HTTP handlers
+- `velo/api/src/polyline.c` - Google Polyline encoding
+- `velo/api/CLAUDE.md` - API documentation
+
+### Working on tile server:
+- `carta/api/src/main.c` - HTTP handlers
+- `carta/api/CLAUDE.md` - API documentation
 
 ### Working on UI:
 - `ui/src/App.tsx` - Main component
@@ -81,7 +93,9 @@ make fuelwise       # Refueling library
 make shared         # Shared geo utilities
 make velo           # Routing engine
 make carta          # Tile generator
-make api            # REST API server
+make api            # FuelWise REST API (fuelwise/api)
+make route-server   # Velo route server (velo/api)
+make tile-server    # Carta tile server (carta/api)
 make wasm           # WebAssembly (needs Emscripten)
 
 # Testing
@@ -93,10 +107,14 @@ make test-velo      # 39 tests
 make test-carta     # 33 tests
 
 # Run
-make run-api        # Start API server
+make run-api        # Start FuelWise API server
+make run-routes     # Show route server usage
+make run-tiles      # Show tile server usage
 ```
 
 ## API Endpoints
+
+### FuelWise API (:8080)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -104,6 +122,24 @@ make run-api        # Start API server
 | `/api/v1/filter` | POST | Filter stations to route |
 | `/api/v1/solve` | POST | Solve refueling problem |
 | `/api/v1/optimize` | POST | Full pipeline |
+
+### Velo Route Server (:8082)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/health` | GET | Health check |
+| `/api/v1/stats` | GET | Graph statistics |
+| `/api/v1/route` | GET/POST | Calculate route (profile, mode, geometry) |
+
+### Carta Tile Server (:8081)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/health` | GET | Health check |
+| `/api/v1/stats` | GET | PBF statistics |
+| `/tiles/{z}/{x}/{y}.png` | GET | Raster tile (PNG) |
+| `/tiles/{z}/{x}/{y}.mvt` | GET | Vector tile (MVT) |
+| `/tiles.json` | GET | TileJSON metadata |
 
 ## Architecture
 

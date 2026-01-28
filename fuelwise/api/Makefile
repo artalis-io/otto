@@ -2,15 +2,15 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g
-INCLUDES = -I../include -I../fuelwise/include -I../ralph/include -I../vendor/mongoose
+INCLUDES = -I../include -I../../ralph/include -I../../vendor/mongoose
 
 # Source files
 SRC_DIR = src
-MONGOOSE_DIR = ../vendor/mongoose
+MONGOOSE_DIR = ../../vendor/mongoose
 
 # Libraries
-FUELWISE_LIB = ../fuelwise/libfuelwise.a
-RALPH_LIB = ../ralph/libralph.a
+FUELWISE_LIB = ../libfuelwise.a
+RALPH_LIB = ../../ralph/libralph.a
 
 # Output
 TARGET = fuelwise-api
@@ -35,10 +35,10 @@ $(MONGOOSE_DIR)/%.o: $(MONGOOSE_DIR)/%.c
 
 # Ensure dependencies are built
 $(FUELWISE_LIB):
-	$(MAKE) -C ../fuelwise
+	$(MAKE) -C ..
 
 $(RALPH_LIB):
-	$(MAKE) -C ../ralph
+	$(MAKE) -C ../../ralph
 
 # Run the server
 run: $(TARGET)
