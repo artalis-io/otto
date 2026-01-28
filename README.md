@@ -181,21 +181,27 @@ curl 'http://localhost:8081/tiles/14/9058/5729.png' > tile.png
 ## Build Commands
 
 ```bash
-# All libraries
-make all              # ralph + fuelwise + shared + velo + carta
-
-# Individual modules
+# Libraries
+make all              # Build all with tests (default)
+make lib              # Build libraries only (no tests)
 make ralph            # LP/MIP solver
 make fuelwise         # Refueling library
 make shared           # Shared utilities
 make velo             # Routing engine
 make carta            # Tile generator
 
-# API servers
+# API Servers
 make api              # FuelWise API (fuelwise/api)
 make route-server     # Velo route server (velo/api)
 make tile-server      # Carta tile server (carta/api)
-make wasm             # WebAssembly builds
+
+# WebAssembly (requires Emscripten)
+make wasm             # Build all WASM modules
+make wasm-fuelwise    # FuelWise WASM only
+make wasm-velo        # Velo WASM only
+make wasm-carta       # Carta WASM only
+make wasm-types       # Generate TypeScript declarations
+make wasm-test        # Test WASM builds
 
 # Testing
 make test             # All tests (~190)
@@ -205,7 +211,7 @@ make test-shared      # Shared tests (23)
 make test-velo        # Velo tests (39)
 make test-carta       # Carta tests (33)
 
-# Run
+# Run servers
 make run-api          # Start FuelWise API on :8080
 make run-tiles        # Show tile server usage
 make run-routes       # Show route server usage

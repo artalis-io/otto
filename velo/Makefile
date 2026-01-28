@@ -115,18 +115,9 @@ bench: $(BENCH_ROUTING) $(BENCH_PBF)
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: clean all
 
-# WASM build (requires Emscripten)
+# WASM build (delegates to wasm/ subdirectory)
 wasm:
-	emcc $(CORE_SRCS) $(MINIZ_SRCS) \
-		-Iinclude -I$(VENDOR_DIR) \
-		-DMINIZ_NO_STDIO -DMINIZ_NO_TIME \
-		-O2 \
-		-s WASM=1 \
-		-s EXPORTED_FUNCTIONS='["_vl_load_pbf", "_vl_load_binary", "_vl_route", "_vl_route_coords", "_vl_free_route", "_vl_graph_free", "_vl_default_options", "_vl_version", "_malloc", "_free"]' \
-		-s EXPORTED_RUNTIME_METHODS='["ccall", "cwrap", "getValue", "setValue"]' \
-		-s ALLOW_MEMORY_GROWTH=1 \
-		-s INITIAL_MEMORY=33554432 \
-		-o $(WASM_OUT)
+	$(MAKE) -C wasm
 
 # Clean
 clean:

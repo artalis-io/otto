@@ -7,10 +7,17 @@
 # Test binaries
 test_ralph
 test_fuelwise
+test_shared
+test_velo
+test_carta
+
+# API server binaries
 fuelwise-api
+carta-tile-server
+velo-route-server
 
 # WASM build output
-wasm/build/
+**/wasm/build/
 
 # Node modules
 ui/node_modules/

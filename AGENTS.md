@@ -84,21 +84,27 @@ fuelwise-platform/
 ## Build Commands
 
 ```bash
-# Build core libraries
-make all              # Build ralph + fuelwise + shared + velo + carta
-
-# Individual modules
+# Libraries
+make all              # Build all with tests (default)
+make lib              # Build libraries only (no tests)
 make ralph            # LP/MIP solver
 make fuelwise         # Refueling library
 make shared           # Shared utilities
 make velo             # Routing engine
 make carta            # Tile generator
 
-# Build API servers
+# API Servers
 make api              # FuelWise REST API (fuelwise/api)
 make route-server     # Velo route server (velo/api)
 make tile-server      # Carta tile server (carta/api)
-make wasm             # WebAssembly (requires Emscripten)
+
+# WebAssembly (requires Emscripten)
+make wasm             # Build all WASM modules
+make wasm-fuelwise    # FuelWise WASM only
+make wasm-velo        # Velo WASM only
+make wasm-carta       # Carta WASM only
+make wasm-types       # Generate TypeScript declarations
+make wasm-test        # Test WASM builds
 
 # Testing
 make test             # All tests (~190)
