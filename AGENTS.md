@@ -94,9 +94,9 @@ make velo             # Routing engine
 make carta            # Tile generator
 
 # API Servers
-make api              # FuelWise REST API (fuelwise/api)
-make route-server     # Velo route server (velo/api)
-make tile-server      # Carta tile server (carta/api)
+make fuelwise-api     # FuelWise REST API (fuelwise/api)
+make velo-api         # Velo route server (velo/api)
+make carta-api        # Carta tile server (carta/api)
 
 # WebAssembly (requires Emscripten)
 make wasm             # Build all WASM modules
@@ -106,6 +106,10 @@ make wasm-carta       # Carta WASM only
 make wasm-types       # Generate TypeScript declarations
 make wasm-test        # Test WASM builds
 
+# UI (requires Node.js)
+make fuelwise-ui      # Build FuelWise UI
+make fuelwise-ui-dev  # Run FuelWise UI dev server on :5173
+
 # Testing
 make test             # All tests (~190)
 make test-ralph       # Solver tests (65)
@@ -113,11 +117,12 @@ make test-fuelwise    # Domain tests (32)
 make test-shared      # Shared tests (23)
 make test-velo        # Routing tests (39)
 make test-carta       # Tile tests (33)
-make test-api         # API endpoint tests
+make test-fuelwise-api # API endpoint tests
 
 # Running
-make run-api          # Start FuelWise API on :8080
-cd fuelwise/ui && npm run dev  # Start UI on :5173
+make run-fuelwise-api # Start FuelWise API on :8080
+make run-carta-api    # Show Carta tile server usage
+make run-velo-api     # Show Velo route server usage
 ```
 
 ## Architecture Principles

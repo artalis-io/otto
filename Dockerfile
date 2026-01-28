@@ -31,7 +31,7 @@ COPY Makefile .
 RUN make ralph && \
     make fuelwise && \
     make shared && \
-    make api
+    make fuelwise-api
 
 # Run tests to verify build
 RUN make test-ralph && make test-fuelwise

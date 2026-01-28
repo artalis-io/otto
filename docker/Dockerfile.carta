@@ -1,0 +1,52 @@
+# Carta Tile Server Dockerfile
+#
+# Build:
+#   docker build -f docker/Dockerfile.carta -t carta-tile-server .
+#
+# Run:
+#   docker run -p 8081:8081 -v $(pwd)/data:/data carta-tile-server /data/hungary-latest.osm.pbf
+#
+
+FROM debian:bookworm-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy source files
+COPY carta/ carta/
+COPY shared/ shared/
+COPY vendor/ vendor/
+COPY Makefile .
+
+# Build carta library and API
+RUN make carta && make shared && make carta-api
+
+# Runtime image
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy binary and static files
+COPY --from=builder /build/carta/api/carta-tile-server /app/carta-tile-server
+COPY --from=builder /build/carta/api/static /app/static
+
+# Create data directory
+RUN mkdir -p /data
+
+EXPOSE 8081
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8081/api/v1/health || exit 1
+
+# Entrypoint expects PBF file path as argument
+ENTRYPOINT ["/app/carta-tile-server", "-p", "8081", "-s", "/app/static"]
+CMD ["/data/map.osm.pbf"]
