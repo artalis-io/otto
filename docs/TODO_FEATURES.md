@@ -6,6 +6,8 @@ This document outlines planned features at the project level, including new comp
 
 1. [Project Renaming](#1-project-renaming)
 2. [HoSE - Hours of Service Engine](#2-hose---hours-of-service-engine)
+3. [Tempo - Business Rules Engine](#3-tempo---business-rules-engine)
+4. [Arbor - State-Space Search Engine](#4-arbor---state-space-search-engine)
 
 ---
 
@@ -23,6 +25,8 @@ The project is currently named "ralph" (after the LP solver component), but the 
 | `carta/` | Map tile generation (MVT, PNG) |
 | `shared/` | Common geo utilities |
 | `hose/` | **Planned**: Hours of Service rule engine |
+| `tempo/` | **Planned**: Business rules / time window engine |
+| `arbor/` | **Planned**: State-space search framework |
 
 ### Problem
 
@@ -309,6 +313,446 @@ compute_transit(state, net_driving, start_time):
 
 ---
 
+## 3. Tempo - Business Rules Engine
+
+**T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator
+
+### Overview
+
+A constraint evaluation engine for business rules that go beyond HoS regulations. Tempo handles operational constraints like time windows, appointment scheduling, facility hours, and custom business policies.
+
+### Constraint Types
+
+| Category | Examples |
+|----------|----------|
+| **Time Windows** | Delivery windows (e.g., 9am-5pm), pickup appointments |
+| **Facility Hours** | Warehouse open hours, gate restrictions, weekend closures |
+| **Service Times** | Loading/unloading durations, dwell time requirements |
+| **Appointment Slots** | Fixed appointment times, slot-based scheduling |
+| **Blackout Periods** | Holidays, restricted hours (e.g., no deliveries 2am-6am) |
+| **Lead Times** | Minimum advance notice for appointments |
+| **Capacity Limits** | Max trucks per hour at facility, dock door limits |
+
+### High-Level Architecture
+
+```
+tempo/
+├── include/
+│   ├── tempo.h             # Public API
+│   ├── tp_types.h          # Data structures
+│   ├── tp_window.h         # Time window operations
+│   ├── tp_calendar.h       # Business calendar/hours
+│   └── tp_constraint.h     # Constraint definitions
+├── src/
+│   ├── tempo.c             # Main API implementation
+│   ├── tp_window.c         # Time window logic
+│   ├── tp_calendar.c       # Calendar computations
+│   ├── tp_constraint.c     # Constraint evaluation
+│   └── tp_feasibility.c    # Feasibility checking
+├── tests/
+│   └── test_tempo.c        # Unit tests
+└── CLAUDE.md
+```
+
+### Core Concepts (Preliminary)
+
+```c
+// tp_types.h
+
+/* Time window (half-open interval [start, end)) */
+typedef struct {
+    time_t start;
+    time_t end;
+} TPTimeWindow;
+
+/* Recurring schedule (e.g., Mon-Fri 9am-5pm) */
+typedef struct {
+    uint8_t days_of_week;       /* Bitmask: bit 0 = Sunday */
+    int start_hour, start_min;  /* Daily start time */
+    int end_hour, end_min;      /* Daily end time */
+    time_t effective_from;      /* Schedule valid from */
+    time_t effective_until;     /* Schedule valid until */
+} TPRecurringSchedule;
+
+/* Facility with operating hours */
+typedef struct {
+    int id;
+    char name[64];
+    TPRecurringSchedule *schedules;
+    int num_schedules;
+    TPTimeWindow *blackouts;    /* Holiday closures, etc. */
+    int num_blackouts;
+} TPFacility;
+
+/* Constraint on an activity */
+typedef struct {
+    enum {
+        TP_CONSTRAINT_TIME_WINDOW,      /* Must occur within window */
+        TP_CONSTRAINT_APPOINTMENT,      /* Must start at exact time */
+        TP_CONSTRAINT_FACILITY_HOURS,   /* Facility must be open */
+        TP_CONSTRAINT_MIN_DWELL,        /* Minimum time at location */
+        TP_CONSTRAINT_MAX_DWELL,        /* Maximum time at location */
+        TP_CONSTRAINT_LEAD_TIME,        /* Minimum advance notice */
+    } type;
+
+    union {
+        TPTimeWindow window;
+        time_t appointment_time;
+        TPFacility *facility;
+        double dwell_seconds;
+        double lead_time_seconds;
+    } data;
+
+    int is_hard;                /* Hard constraint vs soft (preference) */
+    double penalty;             /* Penalty for soft constraint violation */
+} TPConstraint;
+
+/* Result of constraint evaluation */
+typedef struct {
+    int feasible;
+    int num_violations;
+    TPConstraint **violated;    /* Which constraints violated */
+    double total_penalty;       /* Sum of soft constraint penalties */
+    time_t earliest_feasible;   /* Earliest time activity can start */
+    time_t latest_feasible;     /* Latest time activity can start */
+} TPEvalResult;
+```
+
+### Core API (Preliminary)
+
+```c
+// tempo.h
+
+/**
+ * Check if a time falls within facility operating hours
+ */
+int tp_is_facility_open(const TPFacility *facility, time_t when);
+
+/**
+ * Find next time facility opens after given time
+ */
+time_t tp_next_opening(const TPFacility *facility, time_t after);
+
+/**
+ * Evaluate constraints for an activity at given time
+ */
+TPEvalResult tp_evaluate(const TPConstraint *constraints, int num_constraints,
+                         time_t activity_start, double activity_duration);
+
+/**
+ * Find feasible window for activity given constraints
+ */
+int tp_find_feasible_window(const TPConstraint *constraints, int num_constraints,
+                            time_t earliest, time_t latest,
+                            double activity_duration,
+                            TPTimeWindow *result);
+
+/**
+ * Intersect multiple time windows
+ */
+int tp_intersect_windows(const TPTimeWindow *windows, int num_windows,
+                         TPTimeWindow *result);
+```
+
+### Integration Points
+
+| Component | Integration |
+|-----------|-------------|
+| **FuelWise** | Fuel stop must be during station hours |
+| **HoSE** | Break locations must be accessible |
+| **Velo** | Route planning with time-dependent constraints |
+| **API** | Constraint definition and evaluation endpoints |
+
+### TODOs
+
+- [ ] Define core data structures for time windows and constraints
+- [ ] Implement time window intersection/union operations
+- [ ] Implement recurring schedule evaluation
+- [ ] Implement facility hours checking
+- [ ] Implement constraint evaluation engine
+- [ ] Add soft constraint penalty calculation
+- [ ] Integrate with HoSE for combined feasibility
+- [ ] Add API endpoints for constraint management
+- [ ] Create test suite with realistic scenarios
+
+---
+
+## 4. Arbor - State-Space Search Engine
+
+**A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime
+
+### Overview
+
+A generic state-space search framework for solving complex combinatorial problems through systematic exploration. Arbor provides the infrastructure for branching, pruning, bounding, and state management that can be specialized for different problem domains.
+
+### Use Cases
+
+| Problem | State | Branching | Pruning |
+|---------|-------|-----------|---------|
+| Vehicle Routing | Partial route + unvisited stops | Add next stop | Bound vs best known |
+| Scheduling | Partial schedule + unassigned tasks | Assign task to slot | Constraint violation |
+| Bin Packing | Partial packing + remaining items | Place item in bin | Capacity exceeded |
+| Trip Planning | Current location + remaining legs | Choose next leg | HoS/time window violation |
+
+### High-Level Architecture
+
+```
+arbor/
+├── include/
+│   ├── arbor.h             # Public API
+│   ├── ar_types.h          # Data structures
+│   ├── ar_state.h          # State management interface
+│   ├── ar_branch.h         # Branching strategies
+│   ├── ar_bound.h          # Bounding functions
+│   └── ar_search.h         # Search algorithms
+├── src/
+│   ├── arbor.c             # Main API implementation
+│   ├── ar_search_dfs.c     # Depth-first search
+│   ├── ar_search_bfs.c     # Breadth-first search
+│   ├── ar_search_best.c    # Best-first search
+│   ├── ar_search_beam.c    # Beam search
+│   ├── ar_search_bnb.c     # Branch and bound
+│   ├── ar_pool.c           # State pool management
+│   └── ar_stats.c          # Search statistics
+├── tests/
+│   └── test_arbor.c        # Unit tests
+└── CLAUDE.md
+```
+
+### Core Concepts (Preliminary)
+
+```c
+// ar_types.h
+
+/* Opaque state handle - actual state defined by problem domain */
+typedef struct ARState ARState;
+
+/* Branch: a choice point in the search tree */
+typedef struct {
+    int branch_id;
+    void *branch_data;          /* Problem-specific branching data */
+    double priority;            /* For best-first ordering */
+    char description[64];       /* Human-readable description */
+} ARBranch;
+
+/* Bound result */
+typedef enum {
+    AR_BOUND_FEASIBLE,          /* State may lead to feasible solution */
+    AR_BOUND_PRUNED,            /* State cannot improve on best known */
+    AR_BOUND_INFEASIBLE,        /* State violates hard constraints */
+} ARBoundResult;
+
+/* Search result */
+typedef enum {
+    AR_RESULT_OPTIMAL,          /* Proven optimal found */
+    AR_RESULT_FEASIBLE,         /* Feasible solution found (not proven optimal) */
+    AR_RESULT_INFEASIBLE,       /* No feasible solution exists */
+    AR_RESULT_LIMIT,            /* Hit time/node/memory limit */
+} ARSearchResult;
+
+/* Search statistics */
+typedef struct {
+    uint64_t nodes_explored;
+    uint64_t nodes_pruned;
+    uint64_t nodes_infeasible;
+    uint64_t solutions_found;
+    double best_objective;
+    double best_bound;
+    double gap;
+    double elapsed_seconds;
+} ARStats;
+
+/* Search parameters */
+typedef struct {
+    int max_nodes;
+    double time_limit;
+    double gap_tolerance;
+    int solution_limit;
+    enum {
+        AR_STRATEGY_DFS,        /* Depth-first (memory efficient) */
+        AR_STRATEGY_BFS,        /* Breadth-first (level by level) */
+        AR_STRATEGY_BEST_FIRST, /* Priority queue by bound */
+        AR_STRATEGY_BEAM,       /* Limited width BFS */
+        AR_STRATEGY_DIVING,     /* DFS with periodic restarts */
+    } strategy;
+    int beam_width;             /* For beam search */
+    int verbose;
+} ARParams;
+
+/* Problem-specific callbacks */
+typedef struct {
+    /* Create initial state */
+    ARState* (*init)(void *problem_data);
+
+    /* Free state */
+    void (*free_state)(ARState *state);
+
+    /* Clone state */
+    ARState* (*clone)(const ARState *state);
+
+    /* Check if state is complete solution */
+    int (*is_complete)(const ARState *state);
+
+    /* Get objective value (lower is better for minimization) */
+    double (*objective)(const ARState *state);
+
+    /* Compute lower bound on best achievable from this state */
+    double (*lower_bound)(const ARState *state);
+
+    /* Generate branches (children) from state */
+    int (*branch)(const ARState *state, ARBranch **branches, int *num_branches);
+
+    /* Apply branch to state (returns new state) */
+    ARState* (*apply_branch)(const ARState *state, const ARBranch *branch);
+
+    /* Check feasibility (can prune early) */
+    ARBoundResult (*check_feasibility)(const ARState *state);
+
+    /* Free branch data */
+    void (*free_branch)(ARBranch *branch);
+
+    /* Optional: custom pruning beyond bound comparison */
+    int (*should_prune)(const ARState *state, double best_known);
+
+    /* Optional: dominance check (state1 dominates state2?) */
+    int (*dominates)(const ARState *state1, const ARState *state2);
+
+} ARCallbacks;
+```
+
+### Core API (Preliminary)
+
+```c
+// arbor.h
+
+/* Search context */
+typedef struct ARContext ARContext;
+
+/**
+ * Create search context
+ */
+ARContext* ar_create(const ARCallbacks *callbacks, void *problem_data);
+
+/**
+ * Free search context
+ */
+void ar_free(ARContext *ctx);
+
+/**
+ * Run search
+ */
+ARSearchResult ar_search(ARContext *ctx, const ARParams *params);
+
+/**
+ * Get best solution found
+ */
+ARState* ar_get_best_solution(const ARContext *ctx);
+
+/**
+ * Get search statistics
+ */
+ARStats ar_get_stats(const ARContext *ctx);
+
+/**
+ * Set incumbent (warm start with known solution)
+ */
+void ar_set_incumbent(ARContext *ctx, ARState *solution, double objective);
+
+/**
+ * Add callback for solution found events
+ */
+void ar_on_solution(ARContext *ctx, void (*callback)(ARState *solution, void *user_data),
+                    void *user_data);
+```
+
+### Search Strategies
+
+**Depth-First Search (DFS)**
+```
+- Memory efficient: O(depth) states in memory
+- Finds solutions quickly but may not be optimal
+- Good for finding any feasible solution
+```
+
+**Best-First Search**
+```
+- Explores most promising states first (by lower bound)
+- Optimal for branch-and-bound
+- Higher memory usage: O(nodes) states in memory
+```
+
+**Beam Search**
+```
+- Limited-width BFS: keep only top-k states per level
+- Good balance of quality and memory
+- Not guaranteed optimal
+```
+
+**Diving with Restarts**
+```
+- DFS to find solutions quickly
+- Periodically restart from best unexplored state
+- Hybrid of exploration and exploitation
+```
+
+### Integration Points
+
+| Component | Use Case |
+|-----------|----------|
+| **FuelWise** | Route optimization with refueling decisions |
+| **HoSE** | Finding feasible break schedules |
+| **Tempo** | Scheduling with time window constraints |
+| **Ralph** | Complement LP/MIP for combinatorial subproblems |
+
+### Example: Trip Planning Search
+
+```c
+/* State: current location, time, HoS state, remaining stops */
+typedef struct {
+    int current_stop;
+    time_t current_time;
+    HSDriverState driver_state;
+    int *remaining_stops;
+    int num_remaining;
+    double total_cost;
+} TripState;
+
+/* Branch: choose next stop */
+ARBranch* trip_branch(const ARState *state, int *num) {
+    TripState *ts = (TripState*)state;
+    *num = ts->num_remaining;
+    ARBranch *branches = malloc(*num * sizeof(ARBranch));
+    for (int i = 0; i < *num; i++) {
+        branches[i].branch_id = ts->remaining_stops[i];
+        branches[i].priority = /* distance or time to stop */;
+    }
+    return branches;
+}
+
+/* Lower bound: MST on remaining stops */
+double trip_lower_bound(const ARState *state) {
+    TripState *ts = (TripState*)state;
+    return ts->total_cost + mst_cost(ts->remaining_stops, ts->num_remaining);
+}
+```
+
+### TODOs
+
+- [ ] Define state and callback interface
+- [ ] Implement state pool with efficient allocation
+- [ ] Implement DFS search
+- [ ] Implement best-first search with priority queue
+- [ ] Implement beam search
+- [ ] Add node limit, time limit, gap tolerance stopping
+- [ ] Add search statistics collection
+- [ ] Implement warm start with incumbent
+- [ ] Add solution callback mechanism
+- [ ] Implement dominance-based pruning (optional)
+- [ ] Create example applications (TSP, scheduling)
+- [ ] Integrate with other components for combined optimization
+
+---
+
 ## Component Summary
 
 Current and planned components:
@@ -321,6 +765,8 @@ Current and planned components:
 | `carta/` | Active | Map tile generation |
 | `shared/` | Active | Common geo utilities |
 | `hose/` | **Planned** | Hours of Service rule engine |
+| `tempo/` | **Planned** | Business rules / time window engine |
+| `arbor/` | **Planned** | State-space search framework |
 | `api/` | Active | REST API server |
 | `ui/` | Active | React frontend |
 
@@ -328,4 +774,6 @@ Current and planned components:
 
 1. **Project Renaming** - Low priority (cosmetic, do when convenient)
 2. **HoSE Core** - High priority (essential for realistic trucking optimization)
-3. **HoSE-FuelWise Integration** - High priority (after HoSE core)
+3. **Tempo Core** - High priority (time windows needed for realistic planning)
+4. **Arbor Core** - Medium priority (enables advanced optimization)
+5. **Component Integration** - High priority (HoSE + Tempo + FuelWise)
