@@ -2,11 +2,11 @@
 
 CC = gcc
 CFLAGS = -Wall -Wextra -O2 -g
-INCLUDES = -I../include -I../fuelwise/include -I../ralph/include -Imongoose
+INCLUDES = -I../include -I../fuelwise/include -I../ralph/include -I../vendor/mongoose
 
 # Source files
 SRC_DIR = src
-MONGOOSE_DIR = mongoose
+MONGOOSE_DIR = ../vendor/mongoose
 
 # Libraries
 FUELWISE_LIB = ../fuelwise/libfuelwise.a
