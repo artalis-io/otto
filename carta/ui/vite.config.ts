@@ -7,13 +7,22 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Proxy tile and API requests to the tile server
+      // Proxy tile and API requests to the tile server (Carta)
       '/tiles': {
         target: process.env.TILE_SERVER_URL || 'http://localhost:8081',
         changeOrigin: true,
       },
-      '/api': {
+      '/api/v1/stats': {
         target: process.env.TILE_SERVER_URL || 'http://localhost:8081',
+        changeOrigin: true,
+      },
+      '/api/v1/health': {
+        target: process.env.TILE_SERVER_URL || 'http://localhost:8081',
+        changeOrigin: true,
+      },
+      // Proxy routing requests to the Velo route server
+      '/api/v1/route': {
+        target: process.env.ROUTE_SERVER_URL || 'http://localhost:8082',
         changeOrigin: true,
       },
     },
