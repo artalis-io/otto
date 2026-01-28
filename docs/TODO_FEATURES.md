@@ -9,6 +9,7 @@ This document outlines planned features at the project level, including new comp
 3. [Tempo - Business Rules Engine](#3-tempo---business-rules-engine)
 4. [Arbor - State-Space Search Engine](#4-arbor---state-space-search-engine)
 5. [Sigma - Fleet Plan Selection Engine](#5-sigma---fleet-plan-selection-engine)
+6. [Pulse - Execution Tracker and PTA Engine](#6-pulse---execution-tracker-and-pta-engine)
 
 ---
 
@@ -29,6 +30,7 @@ The project is currently named "ralph" (after the LP solver component), but the 
 | `tempo/` | **Planned**: Business rules / time window engine |
 | `arbor/` | **Planned**: State-space search framework |
 | `sigma/` | **Planned**: Fleet-wide plan selection (set covering MIP) |
+| `pulse/` | **Planned**: Execution tracking and PTA computation |
 
 ### Problem
 
@@ -1080,6 +1082,316 @@ double cg_pricing_objective(const ARState *state, const ColumnGenContext *ctx) {
 
 ---
 
+## 6. Pulse - Execution Tracker and PTA Engine
+
+**P**lan **U**tilization and **L**ive **S**tate **E**stimator
+
+### Overview
+
+Pulse is an execution tracking engine that takes a driver's current state and a sequence of assigned tasks, then simulates forward through time to compute:
+
+1. **Predicted Time of Arrival (PTA)** at each stop
+2. **Predicted Driver State** at each point (HoS clocks, status)
+3. **Scheduled Actions** (drives, breaks, rest, service times)
+4. **Feasibility Alerts** (will we violate HoS? miss time windows?)
+
+Pulse is the "what happens if we execute this plan?" simulator, answering questions like:
+- When will the driver arrive at stop #3?
+- What will the driver's remaining driving hours be after delivery?
+- Where should the driver take their 30-minute break?
+
+### Key Distinction from Other Components
+
+| Component | Role |
+|-----------|------|
+| **Arbor** | Explores *possible* plans (search) |
+| **Sigma** | Selects *which* plans to execute (optimization) |
+| **Pulse** | Computes *what happens* when executing a plan (simulation) |
+| **HoSE** | Answers "can I drive X hours?" (rules) |
+| **Tempo** | Answers "is this time window satisfied?" (constraints) |
+
+Pulse *orchestrates* HoSE and Tempo to simulate plan execution.
+
+### High-Level Architecture
+
+```
+pulse/
+├── include/
+│   ├── pulse.h             # Public API
+│   ├── pl_types.h          # Data structures
+│   ├── pl_task.h           # Task definitions
+│   ├── pl_schedule.h       # Schedule building
+│   └── pl_simulate.h       # Simulation engine
+├── src/
+│   ├── pulse.c             # Main API implementation
+│   ├── pl_simulate.c       # Forward simulation
+│   ├── pl_schedule.c       # Break/rest scheduling
+│   ├── pl_optimize.c       # Optimal break placement (optional)
+│   └── pl_report.c         # PTA reporting
+├── tests/
+│   └── test_pulse.c        # Unit tests
+└── CLAUDE.md
+```
+
+### Core Data Structures (Preliminary)
+
+```c
+// pl_types.h
+
+/* Task types */
+typedef enum {
+    PL_TASK_DRIVE,              /* Drive from A to B */
+    PL_TASK_PICKUP,             /* Pickup at location */
+    PL_TASK_DELIVERY,           /* Delivery at location */
+    PL_TASK_FUEL,               /* Refueling stop */
+    PL_TASK_WAIT,               /* Wait (for time window) */
+    PL_TASK_BREAK,              /* HoS break */
+    PL_TASK_REST,               /* HoS rest period */
+} PLTaskType;
+
+/* A task in the plan */
+typedef struct {
+    PLTaskType type;
+    int location_id;            /* Where (for non-drive tasks) */
+    int origin_id;              /* For drive: starting point */
+    int destination_id;         /* For drive: ending point */
+
+    double drive_duration;      /* Driving time (for DRIVE tasks) */
+    double drive_distance;      /* Distance (for DRIVE tasks) */
+    double service_duration;    /* Service time (pickup/delivery/fuel) */
+
+    /* Time window (from Tempo) */
+    time_t window_start;
+    time_t window_end;
+    int has_window;
+} PLTask;
+
+/* A plan: sequence of tasks to execute */
+typedef struct {
+    PLTask *tasks;
+    int num_tasks;
+
+    int driver_id;
+    int vehicle_id;
+
+    time_t plan_start;          /* When plan execution begins */
+} PLPlan;
+
+/* Scheduled action in the timeline */
+typedef struct {
+    PLTaskType type;
+    int task_index;             /* Which task this action is for (-1 for inserted breaks) */
+
+    time_t start_time;
+    time_t end_time;
+    double duration;
+
+    int location_id;
+    char description[128];
+
+    /* Driver state at end of this action */
+    HSDriverState driver_state_after;
+} PLAction;
+
+/* Complete execution schedule */
+typedef struct {
+    PLAction *actions;
+    int num_actions;
+
+    /* PTAs for each task */
+    time_t *task_pta;           /* task_pta[i] = predicted arrival for task i */
+    HSDriverState *task_state;  /* driver state when starting task i */
+
+    /* Summary */
+    time_t plan_end_time;
+    double total_drive_time;
+    double total_wait_time;
+    double total_break_time;
+    double total_rest_time;
+
+    /* Feasibility */
+    int is_feasible;
+    int num_warnings;
+    char **warnings;            /* "Will miss window at task 3", etc. */
+} PLSchedule;
+```
+
+### Core API (Preliminary)
+
+```c
+// pulse.h
+
+/**
+ * Simulate plan execution and compute PTA schedule
+ *
+ * @param plan          The plan to simulate
+ * @param initial_state Driver's HoS state at plan start
+ * @param schedule      Output: computed schedule with PTAs
+ * @return              0 on success, -1 on error
+ */
+int pl_simulate(const PLPlan *plan, const HSDriverState *initial_state,
+                PLSchedule *schedule);
+
+/**
+ * Simulate with automatic break insertion
+ * Uses HoSE to determine when breaks are needed
+ * Optionally optimizes break placement with Ralph LP
+ */
+int pl_simulate_with_breaks(const PLPlan *plan, const HSDriverState *initial_state,
+                            int optimize_breaks, PLSchedule *schedule);
+
+/**
+ * Get PTA for a specific task
+ */
+time_t pl_get_pta(const PLSchedule *schedule, int task_index);
+
+/**
+ * Get driver state at a specific task
+ */
+HSDriverState pl_get_state_at_task(const PLSchedule *schedule, int task_index);
+
+/**
+ * Check if plan will violate any time windows
+ */
+int pl_check_windows(const PLSchedule *schedule, int *violations, int *num_violations);
+
+/**
+ * Free schedule resources
+ */
+void pl_free_schedule(PLSchedule *schedule);
+```
+
+### Simulation Algorithm
+
+```
+simulate(plan, initial_state):
+    current_time = plan.start_time
+    current_state = copy(initial_state)
+    actions = []
+
+    for each task in plan.tasks:
+        # Record PTA for this task
+        task_pta[task] = current_time
+
+        if task.type == DRIVE:
+            # Check if we can drive the full duration
+            remaining_drive = task.drive_duration
+
+            while remaining_drive > 0:
+                # How long can we drive before HoS limit?
+                max_drive = hs_max_driving_time(current_state)
+
+                if max_drive <= 0:
+                    # Insert required break/rest
+                    required_break = hs_get_required_break(current_state)
+                    actions.append(Action(BREAK/REST, current_time, required_break.duration))
+                    hs_apply_action(current_state, required_break)
+                    current_time += required_break.duration
+                else:
+                    drive_now = min(remaining_drive, max_drive)
+                    actions.append(Action(DRIVE, current_time, drive_now))
+                    hs_apply_action(current_state, drive_action)
+                    current_time += drive_now
+                    remaining_drive -= drive_now
+
+        elif task.type in [PICKUP, DELIVERY, FUEL]:
+            # Check time window
+            if task.has_window and current_time < task.window_start:
+                # Wait for window
+                wait_duration = task.window_start - current_time
+                actions.append(Action(WAIT, current_time, wait_duration))
+                current_time = task.window_start
+
+            if task.has_window and current_time > task.window_end:
+                # Window violation!
+                add_warning("Missed window at task %d", task)
+
+            # Service time
+            actions.append(Action(task.type, current_time, task.service_duration))
+            current_time += task.service_duration
+
+    return Schedule(actions, task_pta, ...)
+```
+
+### Break Placement Optimization
+
+Naive: Insert breaks when forced by HoS limits.
+
+Optimized: Use LP to minimize total time by placing breaks optimally:
+
+```
+minimize:    Σ wait_time[i]
+
+subject to:  # Arrival time at each stop
+             arrival[i+1] = arrival[i] + drive[i] + service[i] + break[i] + wait[i]
+
+             # Can't arrive before window opens
+             arrival[i] >= window_start[i] - wait[i]
+
+             # HoS: driving since last break ≤ 8 hours
+             Σ drive[j] for j since last break ≤ 8 * 3600
+
+             # Break placement (binary decision)
+             break[i] ≥ 0
+             break[i] ≤ M * has_break[i]  (has_break is binary)
+```
+
+This can be formulated as a small MIP and solved with Ralph.
+
+### Integration Points
+
+| Component | Integration |
+|-----------|-------------|
+| **HoSE** | Provides driving limits and break requirements |
+| **Tempo** | Provides time window constraints for tasks |
+| **Velo** | Provides drive durations between locations |
+| **FuelWise** | Provides fuel stop locations and durations |
+| **Ralph** | Optionally optimizes break placement |
+
+### Use Cases
+
+1. **Dispatch Planning**: "If driver starts now, when will they arrive at each stop?"
+2. **What-If Analysis**: "What if we add this pickup to the route?"
+3. **ETA Updates**: "Driver is at stop 2, update ETAs for remaining stops"
+4. **Compliance Check**: "Will this plan cause any HoS violations?"
+5. **Schedule Display**: "Show the driver their break schedule"
+
+### Workflow Integration
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    End-to-End Pipeline                       │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Arbor: Generate candidate plans                             │
+│                         ↓                                    │
+│  Pulse: Simulate each plan → compute PTAs, check feasibility │
+│                         ↓                                    │
+│  Sigma: Select best plans (with accurate costs from Pulse)   │
+│                         ↓                                    │
+│  Pulse: Generate final schedules for selected plans          │
+│                         ↓                                    │
+│  Output: Driver schedules with PTAs and break times          │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### TODOs
+
+- [ ] Define task and schedule data structures
+- [ ] Implement basic forward simulation
+- [ ] Integrate HoSE for driving limits and breaks
+- [ ] Integrate Tempo for time window checking
+- [ ] Implement automatic break insertion
+- [ ] Add wait time computation for early arrivals
+- [ ] Implement warning/alert generation
+- [ ] Add break placement optimization with Ralph (optional)
+- [ ] Create schedule visualization/reporting
+- [ ] Test with realistic multi-stop routes
+- [ ] Benchmark simulation performance
+
+---
+
 ## Component Summary
 
 Current and planned components:
@@ -1095,6 +1407,7 @@ Current and planned components:
 | `tempo/` | **Planned** | Business rules / time window engine |
 | `arbor/` | **Planned** | State-space search framework |
 | `sigma/` | **Planned** | Fleet-wide plan selection (set covering MIP) |
+| `pulse/` | **Planned** | Execution tracking and PTA computation |
 | `api/` | Active | REST API server |
 | `ui/` | Active | React frontend |
 
@@ -1103,6 +1416,7 @@ Current and planned components:
 1. **Project Renaming to OTTO** - Low priority (cosmetic, do when convenient)
 2. **HoSE Core** - High priority (essential for realistic trucking optimization)
 3. **Tempo Core** - High priority (time windows needed for realistic planning)
-4. **Arbor Core** - Medium priority (enables advanced optimization)
-5. **Sigma Core** - Medium priority (fleet-wide optimization, depends on Arbor)
-6. **Component Integration** - High priority (HoSE + Tempo + Arbor + Sigma + FuelWise)
+4. **Pulse Core** - High priority (PTA computation needed everywhere)
+5. **Arbor Core** - Medium priority (enables advanced optimization)
+6. **Sigma Core** - Medium priority (fleet-wide optimization, depends on Arbor)
+7. **Component Integration** - High priority (HoSE + Tempo + Pulse + Arbor + Sigma + FuelWise)
