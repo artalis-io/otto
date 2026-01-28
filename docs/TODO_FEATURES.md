@@ -10,6 +10,9 @@ This document outlines planned features at the project level, including new comp
 4. [Arbor - State-Space Search Engine](#4-arbor---state-space-search-engine)
 5. [Sigma - Fleet Plan Selection Engine](#5-sigma---fleet-plan-selection-engine)
 6. [Pulse - Execution Tracker and PTA Engine](#6-pulse---execution-tracker-and-pta-engine)
+7. [Distance and Duration Estimation](#7-distance-and-duration-estimation-cross-cutting)
+8. [Cost and Profit Calculations](#8-cost-and-profit-calculations-cross-cutting)
+9. [FuelWise Integration](#9-fuelwise-integration-refueling-in-search)
 
 ---
 
@@ -110,7 +113,44 @@ A rule engine for computing driver Hours of Service (HoS) compliance under US FM
 | 90-Hour Fortnightly | Max 90 hours in any two consecutive weeks |
 | 11-Hour Daily Rest | Min 11 hours rest in 24-hour period (reducible to 9 hours 3x/week) |
 | 45-Hour Weekly Rest | Min 45 hours weekly rest (reducible to 24 hours every other week) |
-| Ferry/Train Rule | Rest during ferry/train crossings |
+| Ferry/Train Rule | Rest during ferry/train crossings with caps |
+
+**EU Clock Model Implications:**
+
+Unlike FMCSA's 4-clock model, EU requires multiple overlapping clocks:
+- Daily driving clock (4.5h before break, 9/10h total)
+- Daily duty clock
+- Weekly driving clock (56h)
+- Bi-weekly driving clock (90h across 2 weeks)
+- Daily rest counter
+- Weekly rest counter
+
+**EU-Specific State Tracking:**
+
+```c
+typedef struct {
+    /* Driving clocks */
+    double driving_since_break;     /* Reset by 45-min break */
+    double driving_today;           /* 9h or 10h limit */
+    double driving_this_week;       /* 56h limit */
+    double driving_last_week;       /* For bi-weekly calc */
+
+    /* Rest usage counters */
+    int extended_driving_days;      /* 10h days used this week (max 2) */
+    int reduced_daily_rests;        /* 9h rests used this week (max 3) */
+    int reduced_weekly_rest_pending;/* Compensation required? */
+
+    /* Split rest tracking */
+    int split_rest_first_part_taken;/* For 3h+9h split */
+    double split_rest_first_duration;
+
+    /* Weekly rest */
+    time_t last_weekly_rest_end;
+    int was_reduced_weekly;         /* Was last weekly rest reduced? */
+} HSEC561State;
+```
+
+**Implementation Note**: Treat EU HoS as a **separate mode** rather than trying to force-fit into FMCSA clocks. The shared interface should remain `hs_transit_and_loading()`-like, but the underlying rule engine must be EU-specific.
 
 ### High-Level Architecture
 
@@ -252,44 +292,124 @@ HSAction hs_get_required_break(const HSDriverState *state);
 void hs_free_result(HSTransitResult *result);
 ```
 
-### Algorithm Sketch
+### FMCSA Four-Clock Model
+
+The FMCSA HoS rules are best modeled as **four independent clocks**, each with specific reset conditions:
+
+| Clock | Limit | Resets When | Purpose |
+|-------|-------|-------------|---------|
+| 8-hour break clock | 8 hours | 30+ minute off-duty break taken | Tracks driving time since last qualifying break |
+| 11-hour driving clock | 11 hours | 10+ hour off-duty period | Daily driving limit within shift |
+| 14-hour shift clock | 14 hours | 10+ hour off-duty period | On-duty window from shift start |
+| 70-hour cycle clock | 70 hours | 34+ hour off-duty restart | 8-day rolling on-duty limit |
+
+**Key insight**: Clocks advance independently. The 14-hour window runs on wall-clock time regardless of whether driver is working. The 70-hour clock uses per-day on-duty history for recaps.
+
+### Pre/Post Trip Inspections
+
+FMCSA requires inspection time that consumes on-duty (non-driving) time:
+- **Pre-trip inspection**: 30 minutes before driving can begin
+- **Post-trip inspection**: 15 minutes after arriving (if inspection is enabled)
+
+These must be factored into transit duration calculations:
+```c
+typedef struct {
+    int pre_trip_completed;     /* Has pre-trip been done this shift? */
+    int post_trip_required;     /* Is post-trip inspection pending? */
+    double pre_trip_duration;   /* Default: 1800 seconds (30 min) */
+    double post_trip_duration;  /* Default: 900 seconds (15 min) */
+} HSInspectionState;
+```
+
+### Scheduling Strategy
+
+The core scheduling philosophy: **"Drive when you can, rest when you must."**
+
+This means:
+1. Advance time as driving whenever HoS permits
+2. Insert breaks/rest only when a clock would be violated
+3. Merge slack (appointment wait time) into off-duty when beneficial
+
+### Transit + Loading Algorithm
+
+The essential algorithm simulates a transit segment with optional loading:
 
 ```
-compute_transit(state, net_driving, start_time):
-    actions = []
-    current_state = copy(state)
-    current_time = start_time
-    remaining_driving = net_driving
+transit_and_loading(state, segment, ops):
+    # Phase 1: Simulate transit (pure driving + mandatory breaks)
+    transit_result = simulate_transit(state, segment.drive_duration)
 
-    while remaining_driving > 0:
-        # How long can we drive before hitting a limit?
-        max_drive = min(
-            remaining_driving,
-            driving_limit - current_state.driving_today,
-            window_limit - current_state.on_duty_today,
-            break_threshold - current_state.driving_since_break
-        )
+    # Phase 2: Compute slack to appointment window
+    arrival_time = state.current_time + transit_result.duration
+    if segment.has_appointment:
+        slack = segment.appointment_start - arrival_time
+    else:
+        slack = 0
 
-        if max_drive <= 0:
-            # Must take break or rest
-            required_break = get_required_break(current_state)
-            actions.append(required_break)
-            apply_action(current_state, required_break)
-            current_time += required_break.duration
-        else:
-            # Drive
-            drive_action = Action(DRIVE, max_drive, current_time)
-            actions.append(drive_action)
-            apply_action(current_state, drive_action)
-            current_time += max_drive
-            remaining_driving -= max_drive
+    # Phase 3: Merge slack into off-duty if beneficial
+    if ops.MERGE_SLACK and slack > 0:
+        # Convert slack (waiting) into off-duty time
+        # This can help reset clocks or satisfy break requirements
+        off_duty_time += min(slack, needed_for_reset)
 
+    # Phase 4: Determine minimum off-duty before loading
+    min_off_duty = 0
+    if needs_10h_reset(state) and ops.EXTEND_OFF_DUTY_TO_10H:
+        min_off_duty = max(min_off_duty, 10 * 3600)
+    if needs_34h_restart(state) and ops.EXTEND_OFF_DUTY_TO_34H:
+        min_off_duty = max(min_off_duty, 34 * 3600)
+    if state.post_trip_required:
+        min_off_duty = max(min_off_duty, state.post_trip_duration)
+
+    # Phase 5: Perform waiting (off-duty) and loading (on-duty non-driving)
+    apply_off_duty(state, off_duty_time)
+    apply_loading(state, segment.loading_duration)
+
+    # Phase 6: Return total duration and validity
     return TransitResult(
-        total_time = current_time - start_time,
-        eta = current_time,
-        end_state = current_state,
-        actions = actions
+        total_duration = transit_result.duration + off_duty_time + segment.loading_duration,
+        is_valid = check_appointment_window(arrival_time, segment),
+        end_state = state
     )
+```
+
+### Transit Duration Approximation (for Search)
+
+For use during tree search, a **lower-bound cache** provides fast transit duration estimates:
+- Precomputes minimal transit durations for a **fresh driver** at fixed periods
+- Ignores detailed appointment rules and loading
+- Intended for **pruning**, not final scoring
+
+```c
+typedef struct {
+    double *duration_by_distance;   /* duration[d] = time for d miles with fresh driver */
+    int num_entries;
+    double distance_step;           /* Granularity in miles */
+} HSTransitCache;
+
+/* Lower-bound: assumes fresh driver, no loading, no appointments */
+double hs_transit_lower_bound(const HSTransitCache *cache, double distance);
+```
+
+### Pattern-Based Acceleration
+
+For long-haul trips (multiple days), pattern detection accelerates HoS simulation:
+- Detect repeating patterns: 11h drive → 10h rest → 11h drive → ...
+- Skip simulating individual segments within pattern
+- Jump directly to pattern exit point
+
+This is critical for performance on multi-day routes.
+
+### Scheduling Options (Flags)
+
+```c
+typedef enum {
+    HS_OPS_EXTEND_OFF_DUTY_TO_10H = 1 << 0,  /* Allow extending to 10h reset */
+    HS_OPS_EXTEND_OFF_DUTY_TO_34H = 1 << 1,  /* Allow extending to 34h restart */
+    HS_OPS_MERGE_OFF_DUTIES       = 1 << 2,  /* Merge consecutive off-duty periods */
+    HS_OPS_MERGE_SLACK            = 1 << 3,  /* Convert wait slack to off-duty */
+    HS_OPS_LIMIT_REMAINING_ON_DUTY= 1 << 4,  /* Cap remaining on-duty after merge */
+} HSTransitOps;
 ```
 
 ### Integration Points
@@ -311,12 +431,37 @@ compute_transit(state, net_driving, start_time):
 
 ### TODOs
 
-- [ ] Finalize data structures for driver state
-- [ ] Implement FMCSA rule engine
-- [ ] Implement EC/561 rule engine
-- [ ] Create comprehensive test suite with edge cases
-- [ ] Document rule interpretations and assumptions
+**Phase 1: Core FMCSA Implementation**
+- [ ] Implement 4-clock driver state model
+- [ ] Implement clock advancement rules
+- [ ] Implement clock reset detection (10h, 34h)
+- [ ] Implement 30-minute break rule
+- [ ] Implement pre/post trip inspection tracking
+- [ ] Create test suite for individual clock rules
+
+**Phase 2: Transit + Loading Algorithm**
+- [ ] Implement basic transit simulation
+- [ ] Implement slack computation for appointments
+- [ ] Implement slack-to-off-duty merging
+- [ ] Implement scheduling operation flags (HS_OPS_*)
+- [ ] Create test suite for transit scenarios
+
+**Phase 3: Performance Optimization**
+- [ ] Implement lower-bound transit cache
+- [ ] Implement pattern-based acceleration for long-haul
+- [ ] Benchmark and optimize hot paths
+
+**Phase 4: EU EC/561 Implementation**
+- [ ] Design EU clock model (separate from FMCSA)
+- [ ] Implement daily/weekly driving limits
+- [ ] Implement break rules (45-min after 4.5h)
+- [ ] Implement rest rules (daily/weekly, reduced)
+- [ ] Implement split rest tracking
+- [ ] Create EU test suite
+
+**Phase 5: Integration**
 - [ ] Integrate with FuelWise for break-aware routing
+- [ ] Integrate with Velo for travel time estimation
 - [ ] Add API endpoint for HoS computation
 - [ ] Consider WASM build for browser-side computation
 
@@ -347,6 +492,84 @@ A constraint evaluation engine for business rules that go beyond HoS regulations
 | **Blackout Periods** | Holidays, restricted hours (e.g., no deliveries 2am-6am) |
 | **Lead Times** | Minimum advance notice for appointments |
 | **Capacity Limits** | Max trucks per hour at facility, dock door limits |
+| **Exclusion Windows** | Times when pickup/delivery is forbidden |
+| **Max Transit** | Maximum time/distance from one point to next |
+
+### Appointment Window Types
+
+Three common appointment patterns need support:
+
+| Type | Description | Example |
+|------|-------------|---------|
+| **Continuous** | Single open-close window | "Available 9am-5pm on March 15" |
+| **Recurring** | Weekly pattern | "Mon-Fri 8am-6pm" |
+| **Recurring without weekend** | Skips Saturday/Sunday | "Mon-Fri 9am-5pm, closed weekends" |
+
+```c
+typedef enum {
+    TP_WINDOW_CONTINUOUS,           /* One-time window */
+    TP_WINDOW_RECURRING,            /* Weekly pattern */
+    TP_WINDOW_RECURRING_NO_WEEKEND, /* Weekly, skip Sat/Sun */
+} TPWindowType;
+
+typedef struct {
+    TPWindowType type;
+
+    /* For CONTINUOUS */
+    time_t earliest;
+    time_t latest;
+
+    /* For RECURRING */
+    uint8_t days_of_week;       /* Bitmask: bit 0 = Sunday */
+    int open_hour, open_min;
+    int close_hour, close_min;
+
+    /* Common */
+    double max_allowed_delay;   /* Soft window extension */
+} TPAppointment;
+```
+
+### Intermediate Tasks (ITSKs)
+
+An intermediate task is an action inserted between main tasks, such as:
+- Mandatory driver break at a specific location
+- Home time visit
+- Fixed appointment mid-route
+- Fuel stop (when timing matters)
+
+Each ITSK can define:
+
+```c
+typedef struct {
+    int id;
+
+    /* Time window (when itsk must be performed) */
+    time_t earliest;
+    time_t latest;
+    int has_window;
+
+    /* Duration requirements */
+    double min_duration;        /* Minimum off-duty/service time */
+
+    /* Location (optional) */
+    int has_location;
+    double lat, lon;
+    double transit_to_duration; /* Drive time to itsk location */
+    double transit_from_duration;/* Drive time from itsk to next task */
+
+    /* Constraints */
+    double max_transit_from;    /* Max time/distance from itsk to next task */
+    int is_required;            /* Hard requirement vs optional */
+} TPIntermediateTask;
+```
+
+**ITSK Placement Strategy:**
+
+During search, ITSKs are tentatively placed between tasks:
+- Try placing before each task in the sequence
+- Verify ITSK time window is satisfied
+- Verify transit-from constraint is not violated
+- Select feasible placement that minimizes total duration
 
 ### High-Level Architecture
 
@@ -480,15 +703,35 @@ int tp_intersect_windows(const TPTimeWindow *windows, int num_windows,
 
 ### TODOs
 
-- [ ] Define core data structures for time windows and constraints
+**Phase 1: Time Window Core**
+- [ ] Define TPTimeWindow and TPAppointment structures
+- [ ] Implement continuous window evaluation
+- [ ] Implement recurring window evaluation (with/without weekends)
 - [ ] Implement time window intersection/union operations
-- [ ] Implement recurring schedule evaluation
+- [ ] Create test suite for window operations
+
+**Phase 2: Constraint Types**
 - [ ] Implement facility hours checking
-- [ ] Implement constraint evaluation engine
+- [ ] Implement blackout/exclusion window checking
+- [ ] Implement max transit distance/duration constraints
+- [ ] Implement service time requirements
+
+**Phase 3: Intermediate Tasks (ITSKs)**
+- [ ] Define ITSK data structure
+- [ ] Implement ITSK time window validation
+- [ ] Implement ITSK placement feasibility checking
+- [ ] Implement max-transit-from constraint enforcement
+- [ ] Create test suite for ITSK scenarios
+
+**Phase 4: Constraint Evaluation Engine**
+- [ ] Implement combined constraint evaluation
 - [ ] Add soft constraint penalty calculation
+- [ ] Implement delay tolerance handling
+
+**Phase 5: Integration**
 - [ ] Integrate with HoSE for combined feasibility
+- [ ] Integrate with Pulse for schedule validation
 - [ ] Add API endpoints for constraint management
-- [ ] Create test suite with realistic scenarios
 
 ---
 
@@ -687,6 +930,7 @@ void ar_on_solution(ARContext *ctx, void (*callback)(ARState *solution, void *us
 - Memory efficient: O(depth) states in memory
 - Finds solutions quickly but may not be optimal
 - Good for finding any feasible solution
+- Use explicit stack, NOT recursion (better for deep searches)
 ```
 
 **Best-First Search**
@@ -708,6 +952,138 @@ void ar_on_solution(ARContext *ctx, void (*callback)(ARState *solution, void *us
 - DFS to find solutions quickly
 - Periodically restart from best unexplored state
 - Hybrid of exploration and exploitation
+```
+
+### DFS Algorithm (Explicit Stack)
+
+```
+PROCEDURE TreeSearch(root, params):
+    stack ← [root]
+    solutions ← empty priority queue (by objective value, max size N)
+
+    WHILE stack is not empty AND can_continue(params):
+        node ← stack.pop()
+
+        IF is_leaf(node):
+            value ← evaluate_path(node)
+            IF value is valid:
+                solutions.insert(node, value)
+        ELSE:
+            children ← enumerate_children(node, params)
+            children ← apply_selection(children, params)
+            children ← apply_pruning(children, solutions, params)
+
+            FOR each child in children (in reverse order for DFS):
+                stack.push(child)
+
+    RETURN solutions
+```
+
+### Child Enumeration
+
+For each parent node:
+1. Compute remaining time in planning horizon
+2. Iterate candidate actions and intermediate task placements
+3. For each candidate:
+   - Compute **lower-bound** duration (fast filter)
+   - If promising, compute **exact** duration (full validation)
+   - Reject if exceeds time limit or violates hard constraints
+4. Compute updated objective totals for each feasible child
+
+```c
+typedef struct {
+    int *candidate_indices;     /* Which actions to try */
+    int num_candidates;
+    double *lower_bounds;       /* Fast feasibility filter */
+    double remaining_horizon;   /* Time left in planning span */
+} AREnumContext;
+```
+
+### Child Selection Heuristic
+
+Selection ranks children and picks the top ones for expansion:
+
+```c
+typedef enum {
+    AR_SELECT_MAX_VALUE,        /* By objective value */
+    AR_SELECT_MAX_PROFIT,       /* By profit contribution */
+    AR_SELECT_ROUND_ROBIN,      /* Alternate between strategies */
+    AR_SELECT_MIN_COST,         /* By cost (for minimization) */
+} ARSelectStrategy;
+
+/* Round-robin: alternate between value and profit to diversify search */
+```
+
+If no feasible child is found, emit an **unassigned sentinel node** that marks this as a leaf.
+
+### Pruning Heuristics (Composable)
+
+Multiple pruning rules are applied in sequence:
+
+**1. Max Branch Count (Branching Factor)**
+- For depth `d`, keep only first `branching_factors[d]` children
+- Returns PRUNE_ALL for remaining siblings once limit hit
+
+```c
+int branching_factors[] = {10, 8, 6, 4, 3, 2, 2, 2, ...};  /* Per-depth limits */
+```
+
+**2. Remaining Objective Upper Bound**
+- Precompute best achievable objective rate per action
+- For current node, estimate max possible remaining objective
+- If `current + remaining + future < best_known`, prune
+
+```c
+/* Upper bound calculation */
+double estimate_remaining(ARState *state, ARParams *params) {
+    double remaining_time = params->horizon - state->elapsed;
+    double best_rate = precomputed_max_rate;
+    return remaining_time * best_rate;
+}
+```
+
+**3. Forced Coverage (Override)**
+- When certain actions are prioritized/committed, protect nodes on paths that include them
+- Relax branch-count pruning to ensure at least one plan reaches each prioritized action
+- Allow extra branches up to `max_extra_branches_per_prioritized` depth
+
+### Stop Conditions
+
+**Leaf Detection (node is complete):**
+- Unassigned: no feasible children generated
+- Max depth reached: `depth >= max_allowed_depth`
+- Planning horizon reached: `elapsed >= max_total_duration`
+
+**Global Search Stop:**
+- Wall-clock time limit exceeded
+- Node limit exceeded
+- Solution count limit reached
+- Gap tolerance achieved
+
+```c
+typedef struct {
+    int max_nodes;
+    double max_duration_ms;
+    int max_solutions;
+    double gap_tolerance;
+} ARStopConditions;
+```
+
+### Solution Diversity
+
+Maintain a **capped pool** of top-N solutions:
+- New solutions replace worst if better
+- Lower bound for pruning = worst solution in pool
+- Prevents memory explosion on easy problems
+
+```c
+#define AR_MAX_SOLUTIONS 100
+
+typedef struct {
+    ARState *solutions[AR_MAX_SOLUTIONS];
+    double objectives[AR_MAX_SOLUTIONS];
+    int count;
+} ARSolutionPool;
 ```
 
 ### Integration Points
@@ -753,18 +1129,41 @@ double trip_lower_bound(const ARState *state) {
 
 ### TODOs
 
-- [ ] Define state and callback interface
+**Phase 1: Core Infrastructure**
+- [ ] Define ARState and ARCallbacks interface
 - [ ] Implement state pool with efficient allocation
-- [ ] Implement DFS search
+- [ ] Implement explicit-stack DFS (not recursive)
+- [ ] Add stop condition checking (time, nodes, solutions)
+
+**Phase 2: Child Management**
+- [ ] Implement child enumeration framework
+- [ ] Implement lower-bound filtering for child pruning
+- [ ] Implement exact feasibility checking
+- [ ] Implement child selection strategies (value, profit, round-robin)
+
+**Phase 3: Pruning Heuristics**
+- [ ] Implement branching factor limits (per-depth)
+- [ ] Implement remaining-objective upper bound pruning
+- [ ] Implement prioritized/committed action protection
+- [ ] Make pruning rules composable
+
+**Phase 4: Solution Management**
+- [ ] Implement solution pool with fixed capacity
+- [ ] Implement solution insertion/eviction
+- [ ] Use pool worst solution as lower bound for pruning
+- [ ] Add solution callback mechanism
+
+**Phase 5: Advanced Features**
 - [ ] Implement best-first search with priority queue
 - [ ] Implement beam search
-- [ ] Add node limit, time limit, gap tolerance stopping
-- [ ] Add search statistics collection
 - [ ] Implement warm start with incumbent
-- [ ] Add solution callback mechanism
 - [ ] Implement dominance-based pruning (optional)
-- [ ] Create example applications (TSP, scheduling)
-- [ ] Integrate with other components for combined optimization
+- [ ] Add comprehensive search statistics
+
+**Phase 6: Applications**
+- [ ] Create trip planning example (integrate HoSE + Tempo)
+- [ ] Create scheduling example
+- [ ] Benchmark on realistic problem sizes
 
 ---
 
@@ -996,6 +1395,53 @@ int sg_solve(SGProblem *problem, SGSolution *solution)
 }
 ```
 
+### Prioritized/Committed Loads
+
+Some demands may be pre-committed (contracted loads) that **must** be covered:
+
+```c
+typedef struct {
+    int demand_id;
+    int is_committed;           /* Must be covered, no exception */
+    int is_prioritized;         /* Should be covered if at all feasible */
+    double priority_weight;     /* Higher = more important */
+} SGDemandPriority;
+```
+
+**Handling in MIP**:
+
+```
+# Committed demands: hard constraint
+Σⱼ aᵢⱼ xⱼ = 1     ∀i ∈ CommittedDemands
+
+# Prioritized demands: soft constraint with penalty
+Σⱼ aᵢⱼ xⱼ + slack[i] = 1     ∀i ∈ PrioritizedDemands
+minimize: Σⱼ cⱼ xⱼ + Σᵢ penalty[i] * slack[i]
+
+# Optional demands: covered if beneficial
+Σⱼ aᵢⱼ xⱼ ≤ 1     ∀i ∈ OptionalDemands
+```
+
+### Plan End Conditions
+
+Different business scenarios require different plan ending rules:
+
+| Condition | Description | Use Case |
+|-----------|-------------|----------|
+| `LOADED_OR_EMPTY` | Plan can end loaded or empty | Flexible operations |
+| `EMPTY_TRUCK` | Must complete all deliveries within horizon | Strict deadlines |
+| `EMPTY_WITH_PICKUP_OPTION` | Must be empty, but can accept pickup beyond horizon | Next-day coverage |
+| `FORCED_TAKEHOME` | Must end at home location | Work-life balance |
+
+```c
+typedef enum {
+    SG_END_LOADED_OR_EMPTY,
+    SG_END_EMPTY_TRUCK,
+    SG_END_EMPTY_WITH_HIDDEN_PICKUP,  /* Pickup beyond horizon, not counted */
+    SG_END_EMPTY_WITH_VISIBLE_PICKUP, /* Pickup beyond horizon, counted */
+} SGPlanEndCondition;
+```
+
 ### Advanced: Column Generation
 
 For very large plan sets, use dynamic column generation (Dantzig-Wolfe):
@@ -1069,16 +1515,38 @@ double cg_pricing_objective(const ARState *state, const ColumnGenContext *ctx) {
 
 ### TODOs
 
-- [ ] Define data structures for demands, plans, and solutions
-- [ ] Implement MIP model builder for set covering/partitioning
-- [ ] Implement vehicle assignment constraints
+**Phase 1: Core Data Structures**
+- [ ] Define SGDemand, SGPlan, SGSolution structures
+- [ ] Define demand priority levels (committed, prioritized, optional)
+- [ ] Define plan end conditions
+
+**Phase 2: MIP Model Building**
+- [ ] Implement basic set covering constraint generation
+- [ ] Implement set partitioning variant
+- [ ] Implement vehicle assignment constraints (one plan per vehicle)
+- [ ] Implement fleet size limit constraint
+
+**Phase 3: Advanced Constraints**
+- [ ] Implement prioritized/committed demand handling
+- [ ] Implement soft demand penalties
+- [ ] Implement driver-vehicle compatibility constraints
+
+**Phase 4: Ralph Integration**
 - [ ] Integrate with Ralph MIP solver
-- [ ] Add plan import from Arbor states
 - [ ] Implement solution extraction and validation
-- [ ] Add soft demand handling (penalties for uncovered)
-- [ ] Implement column generation framework (optional)
-- [ ] Create test suite with realistic fleet scenarios
+- [ ] Add plan import from Arbor states
+
+**Phase 5: Column Generation (Advanced)**
+- [ ] Implement LP relaxation solving
+- [ ] Implement dual price extraction
+- [ ] Implement pricing subproblem interface (for Arbor)
+- [ ] Implement column pool management
+- [ ] Implement iterative column generation loop
+
+**Phase 6: Testing and Benchmarking**
+- [ ] Create test suite with small fleet scenarios
 - [ ] Benchmark on medium-scale problems (100 demands, 1000 plans)
+- [ ] Test column generation on large-scale problems
 
 ---
 
@@ -1315,9 +1783,48 @@ simulate(plan, initial_state):
 
 ### Break Placement Optimization
 
-Naive: Insert breaks when forced by HoS limits.
+**Naive Strategy**: Insert breaks when forced by HoS limits.
 
-Optimized: Use LP to minimize total time by placing breaks optimally:
+**DP-Based Optimal Strategy**: Use dynamic programming to find optimal ITSK-to-segment assignment:
+
+```
+PROCEDURE OptimalSchedule(segments, itsks, driver_state):
+    # DP state: (n_itsk_scheduled, n_segment_completed) → (state, duration, delay)
+    dp[0][0] = (driver_state, 0, 0)
+
+    FOR s = 0 TO num_segments - 1:
+        FOR i = 0 TO num_itsks:
+            IF dp[i][s] is valid:
+                # Try assigning k itsks (k = 0..num_itsks-i) to segment s
+                FOR k = 0 TO num_itsks - i:
+                    new_state = simulate_segment_with_itsks(
+                        dp[i][s].state,
+                        segments[s],
+                        itsks[i:i+k]
+                    )
+                    IF new_state is feasible:
+                        objective = compute_objective(new_state, params)
+                        IF objective < dp[i+k][s+1].objective:
+                            dp[i+k][s+1] = new_state
+
+    # Traceback from best terminal state
+    RETURN reconstruct_schedule(dp)
+```
+
+**Scheduling Objectives**:
+
+```c
+typedef enum {
+    PL_OBJ_MIN_DURATION,            /* Minimize total transit time */
+    PL_OBJ_MIN_DURATION_NO_DELAY,   /* Minimize duration, reject any delay */
+    PL_OBJ_MIN_TOTAL_DELAY,         /* Minimize sum of appointment delays */
+    PL_OBJ_MIN_MAX_DELAY,           /* Minimize worst-case delay */
+} PLScheduleObjective;
+```
+
+**LP-Based Break Optimization** (alternative to DP):
+
+For simpler cases without ITSKs, formulate as MIP:
 
 ```
 minimize:    Σ wait_time[i]
@@ -1337,6 +1844,35 @@ subject to:  # Arrival time at each stop
 ```
 
 This can be formulated as a small MIP and solved with Ralph.
+
+### Schedule Result Structure
+
+```c
+typedef struct {
+    /* Per-segment data */
+    int *itsk_assignment;           /* itsk_assignment[i] = segment for itsk i */
+    HSDriverState *state_before;    /* Driver state before each segment */
+    HSDriverState *state_after;     /* Driver state after each segment */
+
+    /* Action timeline */
+    PLAction *actions;              /* Flattened list of all actions */
+    int num_actions;
+    int *action_is_itsk;            /* Which actions correspond to ITSKs */
+    int *action_is_inspection;      /* Which actions are pre/post inspections */
+
+    /* Scheduling result */
+    enum {
+        PL_SCHEDULING_OPTIMAL,      /* All segments scheduled */
+        PL_SCHEDULING_PARTIAL,      /* Only prefix schedulable */
+        PL_SCHEDULING_INFEASIBLE,   /* No feasible schedule */
+    } status;
+
+    /* Summary metrics */
+    double total_duration;
+    double total_delay;
+    double max_delay;
+} PLScheduleResult;
+```
 
 ### Integration Points
 
@@ -1378,17 +1914,311 @@ This can be formulated as a small MIP and solved with Ralph.
 
 ### TODOs
 
-- [ ] Define task and schedule data structures
-- [ ] Implement basic forward simulation
-- [ ] Integrate HoSE for driving limits and breaks
-- [ ] Integrate Tempo for time window checking
-- [ ] Implement automatic break insertion
-- [ ] Add wait time computation for early arrivals
-- [ ] Implement warning/alert generation
-- [ ] Add break placement optimization with Ralph (optional)
-- [ ] Create schedule visualization/reporting
-- [ ] Test with realistic multi-stop routes
+**Phase 1: Core Data Structures**
+- [ ] Define PLTask, PLPlan, PLAction structures
+- [ ] Define PLSchedule and PLScheduleResult structures
+- [ ] Define scheduling objective enum
+
+**Phase 2: Basic Simulation**
+- [ ] Implement forward simulation loop
+- [ ] Integrate HoSE for driving limits
+- [ ] Implement automatic break insertion (naive)
+- [ ] Compute PTA for each task
+
+**Phase 3: Time Window Handling**
+- [ ] Integrate Tempo for window checking
+- [ ] Implement wait time computation for early arrivals
+- [ ] Implement window violation detection
+- [ ] Generate warnings for missed windows
+
+**Phase 4: ITSK Handling**
+- [ ] Implement ITSK-aware simulation
+- [ ] Implement DP-based optimal ITSK assignment
+- [ ] Support multiple scheduling objectives
+
+**Phase 5: Optimization**
+- [ ] Implement LP-based break placement (Ralph integration)
+- [ ] Implement slack merging optimization
 - [ ] Benchmark simulation performance
+
+**Phase 6: Reporting and Integration**
+- [ ] Create schedule visualization/reporting
+- [ ] Implement driver state snapshots at each task
+- [ ] Create action-level audit trail
+- [ ] Test with realistic multi-stop routes
+
+---
+
+---
+
+## 7. Distance and Duration Estimation (Cross-Cutting)
+
+### Overview
+
+All components need fast, accurate distance/duration estimates. This is provided by Velo routing engine, but there are important caching and approximation strategies.
+
+### Estimation Tiers
+
+| Tier | Speed | Accuracy | Use Case |
+|------|-------|----------|----------|
+| **Haversine** | O(1) | Low (ignores roads) | Coarse filtering |
+| **Geodesic approx** | O(1) | Medium | Quick feasibility |
+| **H3 Grid Cache** | O(1) | High | Repeated queries |
+| **Full Routing** | O(n log n) | Exact | Final scheduling |
+
+### Haversine Formula
+
+Fast great-circle distance:
+```c
+double haversine_distance(double lat1, double lon1, double lat2, double lon2) {
+    double dlat = (lat2 - lat1) * DEG_TO_RAD;
+    double dlon = (lon2 - lon1) * DEG_TO_RAD;
+    double a = sin(dlat/2) * sin(dlat/2) +
+               cos(lat1 * DEG_TO_RAD) * cos(lat2 * DEG_TO_RAD) *
+               sin(dlon/2) * sin(dlon/2);
+    double c = 2 * atan2(sqrt(a), sqrt(1-a));
+    return EARTH_RADIUS_KM * c;
+}
+```
+
+### Geodesic Approximation with Circuity Factor
+
+Road distance ≈ Haversine distance × circuity factor (typically 1.2-1.4):
+```c
+double estimated_road_distance(double lat1, double lon1, double lat2, double lon2) {
+    double straight = haversine_distance(lat1, lon1, lat2, lon2);
+    return straight * CIRCUITY_FACTOR;  /* 1.3 typical for US */
+}
+
+double estimated_duration(double distance_km, double avg_speed_kmh) {
+    return distance_km / avg_speed_kmh * 3600;  /* seconds */
+}
+```
+
+### H3 Grid Caching
+
+For repeated queries, cache distances between H3 hexagons:
+```c
+typedef struct {
+    uint64_t from_h3;
+    uint64_t to_h3;
+    double distance_km;
+    double duration_sec;
+} H3DistanceEntry;
+
+/* Cache keyed by (from_h3, to_h3) pair */
+/* Use resolution 5-7 for good balance of accuracy/cache size */
+```
+
+### Integration with Velo
+
+For exact routing, use Velo's routing engine:
+```c
+/* Full route computation */
+VeloRoute route;
+velo_find_route(ctx, from_lat, from_lon, to_lat, to_lon, &route);
+double distance = route.total_distance;
+double duration = route.total_duration;
+```
+
+---
+
+## 8. Cost and Profit Calculations (Cross-Cutting)
+
+### Overview
+
+All optimization components need consistent cost/profit calculations. This section describes the shared cost model used by Arbor (node scoring), Sigma (plan selection), and Pulse (schedule costing).
+
+### Cost Model Data Structure
+
+```c
+/* Accumulated metrics during search/simulation */
+typedef struct {
+    /* Distances (meters) */
+    double distance_empty;          /* Empty (deadhead) miles */
+    double distance_loaded;         /* Loaded miles */
+    double distance_penalized;      /* Empty miles that incur penalty */
+
+    /* Durations (seconds) */
+    double duration_off_duty;       /* Off-duty time */
+    double duration_driving_empty;  /* Driving empty */
+    double duration_driving_loaded; /* Driving loaded */
+    double duration_on_duty_other;  /* On-duty non-driving (loading, waiting) */
+
+    /* Costs (cents) */
+    double cost_driver;             /* Driver pay */
+    double cost_fuel;               /* Fuel cost */
+    double cost_insurance;          /* Per-mile insurance */
+    double cost_tractor_lease;      /* Time-based tractor lease */
+    double cost_tractor_mileage;    /* Per-mile tractor cost */
+    double cost_trailer_lease;      /* Time-based trailer lease */
+    double cost_trailer_mileage;    /* Per-mile trailer cost */
+    double cost_deadhead_penalty;   /* Penalty for empty miles */
+    double cost_total;              /* Sum of all costs */
+
+    /* Revenue and Profit (cents) */
+    double revenue;
+    double profit;                  /* revenue - cost_total */
+
+    /* Objective value (for ranking) */
+    double value;
+} CostMetrics;
+```
+
+### Cost Factors (Configurable)
+
+```c
+typedef struct {
+    /* Driver costs */
+    double driver_rate_per_second;  /* Base driver pay rate */
+
+    /* Fuel costs */
+    double fuel_price_per_liter;    /* Current fuel price */
+    double fuel_consumption_empty;  /* L/km when empty */
+    double fuel_consumption_loaded; /* L/km when loaded */
+
+    /* Equipment costs */
+    double tractor_lease_per_second;
+    double tractor_mileage_per_km;
+    double trailer_lease_per_second;
+    double trailer_mileage_per_km;
+
+    /* Operational costs */
+    double insurance_per_km;
+    double deadhead_penalty_per_km;
+
+    /* Piecewise fuel model (optional) */
+    double *weight_breakpoints;     /* kg thresholds */
+    double *consumption_rates;      /* L/km at each weight */
+    int num_pwl_segments;
+} CostFactors;
+```
+
+### Search Goals (Objective Functions)
+
+Different optimization modes:
+
+| Goal | Objective | Use Case |
+|------|-----------|----------|
+| `GROSS_PROFIT` | revenue - all_costs | Absolute profit maximization |
+| `PER_HOUR_GROSS_PROFIT` | gross_profit / total_hours | Efficiency focus |
+| `PROFIT` | revenue - simplified_costs | Quick estimation |
+| `PER_HOUR_PROFIT` | profit / total_hours | Rate-based comparison |
+| `REVENUE` | revenue only | Cost-agnostic selection |
+| `PER_HOUR_REVENUE` | revenue / total_hours | Revenue efficiency |
+
+```c
+typedef enum {
+    GOAL_GROSS_PROFIT,
+    GOAL_PER_HOUR_GROSS_PROFIT,
+    GOAL_PROFIT,
+    GOAL_PER_HOUR_PROFIT,
+    GOAL_REVENUE,
+    GOAL_PER_HOUR_REVENUE,
+} SearchGoal;
+```
+
+### Cost Calculation During Search
+
+**Per-Node Update (Arbor)**:
+- Compute delta metrics from last node
+- Add to cumulative totals
+- Calculate `delta_value` for node scoring
+
+**Full-Path Evaluation (Leaf)**:
+- Recompute total costs from cumulative metrics
+- Apply normalization (per-hour if configured)
+- This is the final ranking value
+
+### Piecewise Linear Fuel Consumption
+
+Fuel consumption depends on vehicle weight:
+
+```c
+/* Convert weight to fuel consumption rate */
+double get_fuel_rate(double weight_kg, const CostFactors *factors) {
+    for (int i = 0; i < factors->num_pwl_segments - 1; i++) {
+        if (weight_kg <= factors->weight_breakpoints[i+1]) {
+            /* Linear interpolation within segment */
+            double t = (weight_kg - factors->weight_breakpoints[i]) /
+                       (factors->weight_breakpoints[i+1] - factors->weight_breakpoints[i]);
+            return factors->consumption_rates[i] +
+                   t * (factors->consumption_rates[i+1] - factors->consumption_rates[i]);
+        }
+    }
+    return factors->consumption_rates[factors->num_pwl_segments - 1];
+}
+```
+
+This allows accurate fuel cost estimation for trucks that consume more fuel when loaded heavily.
+
+---
+
+## 9. FuelWise Integration (Refueling in Search)
+
+### Overview
+
+FuelWise already provides LP-based refueling optimization. For integration with Arbor search, we need two approaches:
+1. **Fast DP approximation**: For search pruning and lower bounds
+2. **Exact MILP solution**: For final plan costing
+
+### DP Strategy (Fast, Approximate)
+
+A recursive divide-and-conquer algorithm for quick refueling cost estimation:
+
+```
+PROCEDURE DPRefuel(start, end, stations, fuel_state):
+    IF can_reach(start, end, fuel_state):
+        RETURN 0  # No refueling needed
+
+    # Find cheapest station between start and end
+    cheapest = find_cheapest_station(stations, start, end)
+
+    # Recurse on subsegments
+    cost1 = DPRefuel(start, cheapest, stations, fuel_state)
+    fuel_at_cheapest = fuel_state - consumption(start, cheapest)
+
+    # Buy enough fuel to reach end with min_fuel buffer
+    fuel_needed = consumption(cheapest, end) + MIN_FUEL - fuel_at_cheapest
+    fuel_to_buy = max(0, min(fuel_needed, TANK_CAPACITY - fuel_at_cheapest))
+    refuel_cost = fuel_to_buy * cheapest.price
+
+    cost2 = DPRefuel(cheapest, end, stations, fuel_at_cheapest + fuel_to_buy)
+
+    RETURN cost1 + refuel_cost + cost2
+```
+
+**Characteristics**:
+- O(n log n) for n stations
+- Yields feasible (not necessarily optimal) solution
+- Good for lower-bound estimation during search
+
+### MILP Strategy (Exact, for Final Costing)
+
+The full FuelWise formulation (already implemented in `fw_refuel.c`).
+
+**When to use**:
+- Final plan evaluation
+- When cost differences between top solutions are small
+- When exact fuel cost is needed for billing/reporting
+
+### Future Fuel Price Optionality
+
+Account for remaining fuel capacity after route:
+```c
+/* Virtual future purchase at estimated price */
+double future_price_per_gallon;  /* Expected price at end location */
+/* Objective includes: fuel_purchased * price + remaining_capacity * future_price */
+```
+
+This lets the optimizer decide whether to buy more now (cheaper) or less now (leaving capacity for potentially cheaper future fuel).
+
+### Piecewise Fuel Consumption
+
+Already supported in FuelWise. Weight-dependent consumption:
+- Segment weight from load profile
+- PWL function maps weight → consumption rate
+- Accurate fuel cost for loaded vs empty segments
 
 ---
 
