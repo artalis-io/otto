@@ -426,11 +426,7 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
         ctx->nodes.coords[idx].lat = lat;
         ctx->nodes.coords[idx].lon = lon;
 
-        /* Update bbox */
-        if (lat < ctx->bbox.min_lat) ctx->bbox.min_lat = lat;
-        if (lat > ctx->bbox.max_lat) ctx->bbox.max_lat = lat;
-        if (lon < ctx->bbox.min_lon) ctx->bbox.min_lon = lon;
-        if (lon > ctx->bbox.max_lon) ctx->bbox.max_lon = lon;
+        /* Note: bbox is updated when features are kept, not for all nodes */
 
         node_map_insert(ctx, ids[i], (uint32_t)idx);
     }
@@ -581,6 +577,14 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     way->feature_type = feature_type;
     way->is_area = is_area;
     way->name = NULL;
+
+    /* Update bbox from this feature's coordinates */
+    for (size_t i = 0; i < coord_count; i++) {
+        if (coords[i].lat < ctx->bbox.min_lat) ctx->bbox.min_lat = coords[i].lat;
+        if (coords[i].lat > ctx->bbox.max_lat) ctx->bbox.max_lat = coords[i].lat;
+        if (coords[i].lon < ctx->bbox.min_lon) ctx->bbox.min_lon = coords[i].lon;
+        if (coords[i].lon > ctx->bbox.max_lon) ctx->bbox.max_lon = coords[i].lon;
+    }
 
     ctx->features_kept++;
 
