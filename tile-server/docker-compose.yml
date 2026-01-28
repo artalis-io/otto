@@ -1,0 +1,28 @@
+# Carta Tile Server - Docker Compose
+#
+# Usage:
+#   # First, download OSM data
+#   ./scripts/download-osm.sh hungary
+#
+#   # Then start the server
+#   docker-compose up --build
+#
+#   # Open browser at http://localhost:8081
+
+services:
+  tile-server:
+    build:
+      context: ..
+      dockerfile: tile-server/Dockerfile
+    ports:
+      - "8081:8081"
+    volumes:
+      - ../data:/data:ro
+    environment:
+      - TILE_PORT=8081
+      - TILE_MIN_ZOOM=0
+      - TILE_MAX_ZOOM=18
+      - TILE_SIZE=512
+      - TILE_NAME=Hungary OSM
+    command: ["/data/hungary-latest.osm.pbf"]
+    restart: unless-stopped
