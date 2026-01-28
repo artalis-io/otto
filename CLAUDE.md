@@ -15,7 +15,7 @@ make test
 
 # Start servers
 make run-api              # API on :8080
-cd ui && npm run dev      # UI on :5173
+cd fuelwise/ui && npm run dev  # UI on :5173
 ```
 
 ## Component Summary
@@ -32,7 +32,7 @@ cd ui && npm run dev      # UI on :5173
 | Route Server | `velo/api/` | C | Routing REST API |
 | Tile Server | `carta/api/` | C | Tile server REST API |
 | FuelWise WASM | `fuelwise/wasm/` | C+JS | Browser builds |
-| UI | `ui/` | TypeScript | React frontend |
+| UI | `fuelwise/ui/` | TypeScript | React frontend |
 
 ## Key Files by Task
 
@@ -78,8 +78,8 @@ cd ui && npm run dev      # UI on :5173
 - `carta/api/CLAUDE.md` - API documentation
 
 ### Working on UI:
-- `ui/src/App.tsx` - Main component
-- `ui/src/components/MapView.tsx` - Map integration
+- `fuelwise/ui/src/App.tsx` - Main component
+- `fuelwise/ui/src/components/MapView.tsx` - Map integration
 
 ## Build Commands
 

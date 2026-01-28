@@ -5,13 +5,14 @@
 #   fuelwise/     - Refueling Optimization Library
 #     api/        - FuelWise REST API
 #     wasm/       - WebAssembly build
+#     ui/         - React Application
 #   velo/         - OSM Routing Engine
 #     api/        - Velo Route Server
 #   carta/        - Map Tile Generator
 #     api/        - Carta Tile Server
 #   shared/       - Shared Utilities (libshared.a)
 #   vendor/       - Third-party libraries (mongoose, miniz)
-#   ui/           - React Application
+#   docs/         - Architecture documentation
 
 .PHONY: all clean test ralph fuelwise velo carta shared api wasm ui tile-server route-server help
 
@@ -81,10 +82,10 @@ wasm-types:
 
 # UI (requires Node.js)
 ui:
-	cd ui && npm install && npm run build
+	cd fuelwise/ui && npm install && npm run build
 
 ui-dev:
-	cd ui && npm run dev
+	cd fuelwise/ui && npm run dev
 
 # =============================================================================
 # Testing
@@ -128,7 +129,7 @@ clean:
 	-rm -f vendor/miniz/*.o 2>/dev/null || true
 
 clean-all: clean
-	cd ui && rm -rf node_modules dist 2>/dev/null || true
+	cd fuelwise/ui && rm -rf node_modules dist 2>/dev/null || true
 
 # =============================================================================
 # Help
@@ -150,8 +151,8 @@ help:
 	@echo "  tile-server   - Build Carta tile server (carta/api)"
 	@echo "  route-server  - Build Velo route server (velo/api)"
 	@echo "  wasm          - Build WebAssembly modules (requires Emscripten)"
-	@echo "  ui            - Build React UI (requires Node.js)"
-	@echo "  ui-dev        - Run UI dev server"
+	@echo "  ui            - Build React UI (fuelwise/ui)"
+	@echo "  ui-dev        - Run UI dev server (fuelwise/ui)"
 	@echo "  run-api       - Run the FuelWise REST API server"
 	@echo "  run-tiles     - Show tile server usage"
 	@echo "  run-routes    - Show route server usage"
