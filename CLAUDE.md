@@ -27,7 +27,7 @@ cd ui && npm run dev      # UI on :5173
 | Carta | `carta/` | C | Map tile generator (MVT/PNG) |
 | FuelWise | `fuelwise/` | C | Refueling domain logic |
 | Shared | `shared/` | C | Common geo utilities |
-| Vendor | `vendor/miniz/` | C | Vendored zlib (miniz) |
+| Vendor | `vendor/` | C | Vendored libs (miniz, mongoose) |
 | API | `api/` | C | REST API server |
 | WASM | `wasm/` | C+JS | Browser builds |
 | UI | `ui/` | TypeScript | React frontend |
