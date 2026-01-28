@@ -26,6 +26,8 @@ cd ui && npm run dev      # UI on :5173
 | Velo | `velo/` | C | OSM routing engine |
 | Carta | `carta/` | C | Map tile generator (MVT/PNG) |
 | FuelWise | `fuelwise/` | C | Refueling domain logic |
+| Shared | `shared/` | C | Common geo utilities |
+| Vendor | `vendor/miniz/` | C | Vendored zlib (miniz) |
 | API | `api/` | C | REST API server |
 | WASM | `wasm/` | C+JS | Browser builds |
 | UI | `ui/` | TypeScript | React frontend |
@@ -55,6 +57,11 @@ cd ui && npm run dev      # UI on :5173
 - `fuelwise/src/fw_refuel.c` - LP/MILP formulation
 - `fuelwise/src/fw_route.c` - Station filtering
 
+### Working on geo utilities (shared):
+- `shared/include/shared.h` - Shared API
+- `shared/include/sh_geo.h` - Coordinate types and functions
+- `shared/src/sh_geo.c` - Haversine, Web Mercator
+
 ### Working on API:
 - `api/src/main.c` - HTTP handlers
 
@@ -66,21 +73,23 @@ cd ui && npm run dev      # UI on :5173
 
 ```bash
 # All libraries
-make all            # ralph + fuelwise + velo + carta
+make all            # ralph + fuelwise + shared + velo + carta
 
 # Individual modules
 make ralph          # LP/MIP solver
 make fuelwise       # Refueling library
+make shared         # Shared geo utilities
 make velo           # Routing engine
 make carta          # Tile generator
 make api            # REST API server
 make wasm           # WebAssembly (needs Emscripten)
 
 # Testing
-make test           # All tests
-make test-ralph     # 43 tests
-make test-fuelwise  # 29 tests
-make test-velo      # 30+ tests
+make test           # All tests (~160 tests)
+make test-ralph     # 65 tests
+make test-fuelwise  # 32 tests
+make test-shared    # 23 tests
+make test-velo      # 39 tests
 make test-carta     # 33 tests
 
 # Run
@@ -106,16 +115,22 @@ make run-api        # Start API server
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐       │
 │  │  FuelWise   │ │    Velo     │ │   Carta     │       │
 │  │  Refueling  │ │   Routing   │ │   Tiles     │       │
-│  └──────┬──────┘ └─────────────┘ └─────────────┘       │
-│         │                                               │
-│  ┌──────┴──────────────────────────────────────────┐   │
-│  │  Ralph - LP/MIP Solver                          │   │
-│  │  Simplex, LU Factorization, Branch & Bound      │   │
-│  └─────────────────────────────────────────────────┘   │
-│                                                         │
-│  Shared: miniz (zlib), protobuf decoder, haversine     │
+│  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘       │
+│         │               │               │               │
+│  ┌──────┴───────┐       └───────┬───────┘               │
+│  │    Ralph     │        ┌──────┴──────┐                │
+│  │  LP/MIP      │        │   shared    │                │
+│  │  Solver      │        │  (geo,proj) │                │
+│  └──────────────┘        └──────┬──────┘                │
+│                                 │                       │
+│                          ┌──────┴──────┐                │
+│                          │   vendor    │                │
+│                          │  (miniz)    │                │
+│                          └─────────────┘                │
 └─────────────────────────────────────────────────────────┘
 ```
+
+See `docs/ARCHITECTURE.md` for detailed architecture documentation.
 
 ## Critical Code Sections
 
@@ -143,7 +158,12 @@ Geometry encoding:
 
 ```bash
 make test
-# Expected: 150+ tests pass across all modules
+# Expected: ~190 tests pass across all modules
+# - ralph: 65 tests
+# - fuelwise: 32 tests
+# - shared: 23 tests
+# - velo: 39 tests
+# - carta: 33 tests
 ```
 
 ## Performance Targets

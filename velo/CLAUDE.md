@@ -33,7 +33,7 @@ velo/
 │   ├── vl_graph.c    # Graph construction
 │   ├── vl_route.c    # Routing algorithms
 │   └── velo.c        # Main API
-├── vendor/           # Third-party (miniz)
+├── ../vendor/        # Shared third-party (miniz)
 ├── tests/            # Test suite
 └── benchmarks/       # Performance tests
 ```
@@ -123,5 +123,5 @@ vl_graph_free(graph);
 ## Dependencies
 
 - **External**: None
-- **Vendored**: miniz (public domain zlib)
+- **Vendored**: ../vendor/miniz (public domain zlib, shared with carta)
 - **Standard Library**: stdio, stdlib, string, math

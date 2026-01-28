@@ -33,7 +33,7 @@ carta/
 │   ├── ct_render.c   # Software renderer
 │   ├── ct_png.c      # PNG encoder
 │   └── ct_style.c    # Styling
-├── vendor/           # miniz (shared with velo)
+├── ../vendor/        # Shared third-party (miniz)
 ├── tests/            # Test suite
 └── benchmarks/       # Performance tests
 ```
@@ -159,8 +159,7 @@ ct_tile_clear(&tile);
 ## Dependencies
 
 - **External**: None
-- **Vendored**: miniz (public domain zlib)
-- **Shared**: Can use velo's vendor/miniz
+- **Vendored**: ../vendor/miniz (public domain zlib, shared with velo)
 - **Standard Library**: stdio, stdlib, string, math
 
 ## Performance Notes

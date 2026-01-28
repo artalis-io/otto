@@ -9,7 +9,10 @@ CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
 LDFLAGS = -lm
 
 # Include paths
-INCLUDES = -Iinclude -Ivendor
+INCLUDES = -Iinclude -I../vendor/miniz
+
+# Vendor path
+VENDOR_DIR = ../vendor/miniz
 
 # Debug build
 DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
@@ -25,9 +28,9 @@ CORE_SRCS = src/carta.c \
             src/ct_protobuf.c \
             src/ct_inflate.c
 
-MINIZ_SRCS = vendor/miniz.c \
-             vendor/miniz_tdef.c \
-             vendor/miniz_tinfl.c
+MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
+             $(VENDOR_DIR)/miniz_tdef.c \
+             $(VENDOR_DIR)/miniz_tinfl.c
 
 # Object files
 CORE_OBJS = $(CORE_SRCS:.c=.o)
@@ -64,8 +67,8 @@ $(LIB): $(ALL_OBJS)
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-vendor/%.o: vendor/%.c
-	$(CC) $(CFLAGS) -Ivendor -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
+$(VENDOR_DIR)/%.o: $(VENDOR_DIR)/%.c
+	$(CC) $(CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
 
 # Test binary
 $(TEST_BIN): tests/test_carta.c $(LIB)
@@ -95,7 +98,7 @@ debug: clean all
 # WASM build (requires Emscripten)
 wasm:
 	emcc $(CORE_SRCS) $(MINIZ_SRCS) \
-		-Iinclude -Ivendor \
+		-Iinclude -I$(VENDOR_DIR) \
 		-DMINIZ_NO_STDIO -DMINIZ_NO_TIME \
 		-O2 \
 		-s WASM=1 \

@@ -1,366 +1,380 @@
-# Ralph LP/MIP Solver Architecture
+# FuelWise Platform Architecture
 
 ## Overview
 
-Ralph is a complete LP (Linear Programming) and MIP (Mixed Integer Programming) solver implementing industrial-strength algorithms. This document describes the high-level architecture and how the components interact.
+FuelWise is a truck refueling optimization platform built on a layered architecture of zero-dependency C libraries. The platform is designed for both native deployment and WebAssembly (WASM) for browser-based applications.
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Public API (ralph.h)                      │
-│  ralph_create, ralph_add_var, ralph_add_constraint, ralph_solve  │
-└─────────────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Model Layer (model.c)                       │
-│         LPModel: variables, constraints, bounds, objective       │
-└─────────────────────────────────────────────────────────────────┘
-                                 │
-                    ┌────────────┴────────────┐
-                    ▼                         ▼
-┌──────────────────────────┐    ┌──────────────────────────┐
-│   LP Solver (simplex.c)   │    │   MIP Solver (mip.c)     │
-│   Revised Simplex Method  │◄───│   Branch and Bound       │
-└──────────────────────────┘    └──────────────────────────┘
-            │                              │
-            ▼                              ▼
-┌──────────────────────────┐    ┌──────────────────────────┐
-│  LU Factorization (lu.c)  │    │  Cutting Planes (cuts.c) │
-│  Basis matrix operations  │    │  Gomory, MIR cuts        │
-└──────────────────────────┘    └──────────────────────────┘
-            │
-            ▼
-┌──────────────────────────┐
-│  Sparse Matrix (sparse.c) │
-│  CSC format operations    │
-└──────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Applications                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐                   │
+│  │  React UI   │     │    WASM     │     │  REST API   │                   │
+│  │  (Leaflet)  │     │  (Browser)  │     │ (mongoose)  │                   │
+│  └──────┬──────┘     └──────┬──────┘     └──────┬──────┘                   │
+│         └───────────────────┼───────────────────┘                           │
+├─────────────────────────────┼───────────────────────────────────────────────┤
+│                             ▼                                                │
+│                      Domain Libraries                                        │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                │   │
+│  │  │   FuelWise   │  │     Velo     │  │    Carta     │                │   │
+│  │  │   Refueling  │  │   Routing    │  │  Map Tiles   │                │   │
+│  │  │ Optimization │  │   Engine     │  │  Generator   │                │   │
+│  │  │              │  │              │  │              │                │   │
+│  │  │ libfuelwise.a│  │  libvelo.a   │  │ libcarta.a   │                │   │
+│  │  └──────┬───────┘  └──────────────┘  └──────────────┘                │   │
+│  └─────────┼────────────────────────────────────────────────────────────┘   │
+│            │                                                                 │
+├────────────┼─────────────────────────────────────────────────────────────────┤
+│            ▼                                                                 │
+│                         Core Solver                                          │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                        Ralph Solver                                   │   │
+│  │  ┌──────────┐  ┌───────────┐  ┌───────────────┐  ┌───────────┐      │   │
+│  │  │ Simplex  │  │    LU     │  │ Branch&Bound  │  │  Gomory   │      │   │
+│  │  │ Revised  │  │ Factorize │  │     MIP       │  │   Cuts    │      │   │
+│  │  └──────────┘  └───────────┘  └───────────────┘  └───────────┘      │   │
+│  │                                                                       │   │
+│  │                         libralph.a                                    │   │
+│  └───────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│                       Shared Infrastructure                                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐     │   │
+│  │  │   shared   │  │   vendor   │  │  Haversine │  │  Protobuf  │     │   │
+│  │  │    geo     │  │   miniz    │  │   (geo)    │  │  (decode)  │     │   │
+│  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘     │   │
+│  │                                                                       │   │
+│  │                  libshared.a  +  vendor/*.o                           │   │
+│  └───────────────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Core Components
-
-### 1. Sparse Matrix Layer (`sparse.c`, `sparse.h`)
-
-**Purpose:** Efficient storage and operations for sparse matrices.
-
-**Data Structure:**
-```c
-typedef struct {
-    int nrows, ncols, nnz;
-    int *colptr;    // Column pointers (size: ncols + 1)
-    int *rowidx;    // Row indices (size: nnz)
-    double *values; // Non-zero values (size: nnz)
-} SparseMatrix;
-```
-
-**Key Operations:**
-- Matrix-vector multiplication: O(nnz)
-- Column extraction: O(column_nnz)
-- Submatrix extraction
-
-### 2. Model Layer (`model.c`, `lp.h`)
-
-**Purpose:** Represent optimization problems in standard form.
-
-**Data Structure:**
-```c
-typedef struct {
-    int num_vars, num_cons;
-    SparseMatrix *A;       // Constraint matrix
-    double *c;             // Objective coefficients
-    double *b;             // RHS values
-    double *lb, *ub;       // Variable bounds
-    char *sense;           // Constraint sense (L, G, E)
-    char *var_type;        // Variable type (C, I, B)
-    int obj_sense;         // 1 = minimize, -1 = maximize
-} LPModel;
-```
-
-### 3. Simplex Tableau (`simplex.c`)
-
-**Purpose:** Maintain the simplex tableau in revised form.
-
-**Data Structure:**
-```c
-typedef struct {
-    LPModel *model;
-    int m, n;                  // Dimensions (constraints, total vars)
-    SparseMatrix *A_ext;       // Extended matrix with slacks
-    double *c_ext;             // Extended costs
-    double *lb_ext, *ub_ext;   // Extended bounds
-
-    int *basis;                // Basic variable indices
-    int *basis_pos;            // Position of each var in basis (-1 if nonbasic)
-    VarStatus *var_status;     // BASIC, NONBASIC_LOWER, NONBASIC_UPPER
-
-    double *x;                 // Solution vector
-    double *y;                 // Dual values
-    double *rc;                // Reduced costs
-
-    LUFactorization *lu;       // Basis factorization
-} SimplexTableau;
-```
-
-### 4. LU Factorization (`lu.c`)
-
-**Purpose:** Efficiently solve systems with the basis matrix.
-
-**Key Insight:** Instead of refactorizing B after each pivot, we maintain:
-- Initial factorization: PA = LU
-- Eta matrices E₁, E₂, ... for subsequent updates
-- B_current = B_initial × E₁ × E₂ × ... × Eₖ
-
-**Data Structure:**
-```c
-typedef struct {
-    int m;
-    int *L_colptr, *L_rowidx;  // L matrix in CSC
-    double *L_values;
-    int *U_colptr, *U_rowidx;  // U matrix in CSC
-    double *U_values;
-    int *perm, *perm_inv;      // Row permutation
-
-    // Eta file for updates
-    int num_eta;
-    int *eta_col;              // Which column each eta modifies
-    double **eta_vectors;      // The eta vectors
-} LUFactorization;
-```
-
-### 5. MIP Solver (`mip.c`, `branch_bound.c`)
-
-**Purpose:** Solve mixed-integer problems via branch and bound.
-
-**Components:**
-- **Node Queue:** Priority queue of B&B nodes
-- **Branching:** Select fractional variable, create child nodes
-- **Bounding:** Solve LP relaxation at each node
-- **Pruning:** Discard nodes that can't improve incumbent
-
-## Algorithm Details
-
-### Revised Simplex Method
-
-The simplex method finds optimal solutions to LP problems by moving from vertex to vertex of the feasible region.
-
-**Main Loop:**
-```
-1. Compute reduced costs: rc = c - y'A where y = B⁻ᵀcB
-2. Pricing: Select entering variable j with rc[j] < 0 (for min)
-3. Ratio test: Compute direction d = B⁻¹Aⱼ, find leaving variable
-4. Pivot: Update basis, solution, and LU factorization
-5. Repeat until optimal (no negative rc) or unbounded
-```
-
-**Pricing Strategies:**
-- Dantzig: Most negative reduced cost
-- Steepest Edge: Best improvement per unit movement
-
-**Ratio Test:**
-- Standard: θ = min{xB[i]/d[i] : d[i] > 0}
-- Harris: Two-pass with tolerance for numerical stability
-
-### Branch and Bound
-
-For MIP problems with integer constraints:
+## Directory Structure
 
 ```
-1. Solve LP relaxation (root node)
-2. If solution is integer-feasible → done
-3. Select fractional variable xⱼ = f
-4. Branch: Create nodes with xⱼ ≤ ⌊f⌋ and xⱼ ≥ ⌈f⌉
-5. Process nodes in priority order
-6. Prune nodes with bound worse than incumbent
-7. Update incumbent when integer solution found
+fuelwise/
+├── ralph/              # LP/MIP Solver (libralph.a)
+│   ├── include/        #   Public headers
+│   ├── src/            #   Simplex, LU factorization, Branch & Bound
+│   └── tests/          #   43 tests
+│
+├── fuelwise/           # Refueling Library (libfuelwise.a)
+│   ├── include/        #   Public headers
+│   ├── src/            #   LP formulation, route filtering
+│   └── tests/          #   29 tests
+│
+├── velo/               # Routing Engine (libvelo.a)
+│   ├── include/        #   Public headers
+│   ├── src/            #   OSM PBF parsing, Dijkstra, A*, landmarks
+│   └── tests/          #   30+ tests
+│
+├── carta/              # Tile Generator (libcarta.a)
+│   ├── include/        #   Public headers
+│   ├── src/            #   MVT encoding, PNG rendering, Web Mercator
+│   ├── examples/       #   Usage examples
+│   └── tests/          #   33 tests
+│
+├── shared/             # Shared utilities (libshared.a)
+│   ├── include/        #   Common headers
+│   ├── src/            #   Geo utilities, protobuf helpers
+│   └── tests/          #   Shared code tests
+│
+├── vendor/             # Third-party code (header-only or vendored)
+│   └── miniz/          #   Public domain zlib implementation
+│
+├── api/                # REST API Server
+│   ├── src/            #   HTTP handlers
+│   └── mongoose/       #   Embedded HTTP server
+│
+├── wasm/               # WebAssembly Builds
+│   └── src/            #   WASM bindings
+│
+├── ui/                 # React Application
+│   └── src/            #   TypeScript frontend
+│
+├── docs/               # Documentation
+│   ├── ARCHITECTURE.md #   This file
+│   ├── API.md          #   REST API reference
+│   └── *.md            #   Technical docs
+│
+└── tests/              # Integration tests
+    └── integration/    #   End-to-end tests
 ```
 
-**Node Selection:**
-- Best-first: Prioritize best LP bound
-- Depth-first: Dive deep to find incumbents fast
-- Hybrid: Mix of both strategies
+## Module Dependency Graph
 
-### Cutting Planes
-
-Strengthen LP relaxation to get tighter bounds:
-
-**Gomory Mixed-Integer Cuts:**
-For a basic variable xᵢ with fractional value:
 ```
-∑ⱼ aᵢⱼxⱼ = bᵢ  (tableau row)
-
-Cut: ∑ⱼ (fⱼ if fⱼ ≤ f₀, else f₀(1-fⱼ)/(1-f₀)) xⱼ ≥ f₀
-
-where fⱼ = fractional part of aᵢⱼ, f₀ = fractional part of bᵢ
+                    ┌─────────────┐
+                    │   React UI  │
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              │            │            │
+              ▼            ▼            ▼
+        ┌──────────┐ ┌──────────┐ ┌──────────┐
+        │   WASM   │ │   API    │ │ Standalone│
+        │ (browser)│ │ (server) │ │   CLI    │
+        └────┬─────┘ └────┬─────┘ └────┬─────┘
+             │            │            │
+             └────────────┼────────────┘
+                          │
+    ┌─────────────────────┼─────────────────────┐
+    │                     │                     │
+    ▼                     ▼                     ▼
+┌─────────┐         ┌──────────┐         ┌──────────┐
+│FuelWise │         │   Velo   │         │  Carta   │
+│Refueling│         │ Routing  │         │  Tiles   │
+└────┬────┘         └────┬─────┘         └────┬─────┘
+     │                   │                    │
+     │                   └────────┬───────────┘
+     │                            │
+     ▼                            ▼
+┌─────────┐              ┌──────────────┐
+│  Ralph  │              │    shared    │
+│ Solver  │              │ (geo, proto) │
+└─────────┘              └──────┬───────┘
+                                │
+                                ▼
+                         ┌──────────┐
+                         │  vendor  │
+                         │  miniz   │
+                         └──────────┘
 ```
 
-## Data Flow Example
+## Component Details
 
-**Solving: min -x - y, s.t. x + y ≤ 4, 2x + y ≤ 6, x,y ≥ 0**
+### Ralph - LP/MIP Solver
+**Location:** `ralph/`
+**Library:** `libralph.a`
+**Dependencies:** None (zero-dependency)
 
-1. **Model Creation:**
-   ```
-   Variables: x (idx 0), y (idx 1)
-   Constraint matrix: [[1, 1], [2, 1]]
-   RHS: [4, 6]
-   Objective: [-1, -1]
-   ```
+Core optimization engine implementing:
+- Revised Simplex Method with LU factorization
+- Branch and Bound for mixed-integer problems
+- Gomory cutting planes
+- Sparse matrix operations (CSC format)
 
-2. **Tableau Creation:**
-   ```
-   Add slack s₁, s₂ for ≤ constraints
-   Extended matrix: [[1, 1, 1, 0], [2, 1, 0, 1]]
-   Extended costs: [-1, -1, 0, 0]
-   Initial basis: [s₁, s₂] = [2, 3]
-   ```
+See [RALPH_ARCHITECTURE.md](RALPH_ARCHITECTURE.md) for detailed solver internals.
 
-3. **Initial Solution:**
-   ```
-   x = 0, y = 0, s₁ = 4, s₂ = 6
-   Objective = 0
-   ```
+### FuelWise - Refueling Optimization
+**Location:** `fuelwise/`
+**Library:** `libfuelwise.a`
+**Dependencies:** `libralph.a`
 
-4. **Simplex Iterations:**
-   ```
-   Iter 1: x enters, s₂ leaves → x = 3, y = 0, s₁ = 1, s₂ = 0
-   Iter 2: y enters, s₁ leaves → x = 2, y = 2, s₁ = 0, s₂ = 0
-   Optimal: obj = -4
-   ```
+Domain-specific library for truck refueling:
+- LP/MILP formulation for minimum-cost fueling
+- Route corridor filtering
+- Piecewise fuel consumption support
 
-## Error Handling
+### Velo - Routing Engine
+**Location:** `velo/`
+**Library:** `libvelo.a`
+**Dependencies:** `libshared.a`, `vendor/miniz`
 
-- **Infeasibility:** Detected via Big-M method (artificial vars remain)
-- **Unboundedness:** Ratio test finds no blocking variable
-- **Numerical Issues:** Refactorization, tolerances, perturbation
+OSM-based routing engine:
+- OSM PBF parsing with protobuf decoding
+- Dijkstra, A*, bidirectional A*
+- ALT (A* Landmarks Triangle inequality)
+- Vehicle profile-based edge filtering
+- CSR graph representation
 
-## Performance Characteristics
+### Carta - Tile Generator
+**Location:** `carta/`
+**Library:** `libcarta.a`
+**Dependencies:** `libshared.a`, `vendor/miniz`
 
-| Operation | Complexity |
-|-----------|------------|
-| Matrix-vector multiply | O(nnz) |
-| LU factorization | O(m³) worst case, often O(m × nnz) |
-| Simplex iteration | O(m²) typical |
-| MIP node processing | O(LP solve) |
-| Branch and bound | Exponential worst case |
+Map tile generation:
+- Vector tiles (MVT/Mapbox Vector Tile)
+- Raster tiles (PNG)
+- Web Mercator projection
+- Software rasterization with anti-aliasing
 
-## Current Performance (vs GLPK 5.0)
+### Shared - Common Utilities
+**Location:** `shared/`
+**Library:** `libshared.a`
+**Dependencies:** None
 
-### LP Benchmarks (Sparse LPs, 10% density)
+Common code used by velo and carta:
+- Haversine distance calculation
+- Coordinate projections
+- Protobuf varint encoding/decoding
 
-| Problem Size | Ralph Time | GLPK Time | Slowdown |
-|--------------|------------|-----------|----------|
-| 50×100       | 0.0002s    | 0.0001s   | 2.0×     |
-| 100×200      | 0.0015s    | 0.0009s   | 1.7×     |
-| 200×500      | 0.021s     | 0.009s    | 2.3×     |
-| 500×1000     | 6.88s      | 1.50s     | **4.6×** |
-| 1000×2000    | 105.0s     | 36.2s     | **2.9×** |
+### Vendor - Third-party Code
+**Location:** `vendor/`
+**Dependencies:** None
 
-### LP Benchmarks (Medium density, 30%)
+Vendored libraries:
+- **miniz**: Public domain zlib implementation for DEFLATE compression
 
-| Problem Size | Ralph Time | GLPK Time | Slowdown |
-|--------------|------------|-----------|----------|
-| 200×500      | 0.58s      | 0.13s     | 4.5×     |
-| 500×1000     | 73.7s      | 14.5s     | **5.1×** |
+## Data Flow
 
-### Per-Iteration Time Breakdown (200×400 problem)
+### Refueling Optimization Flow
+```
+User Request → API/WASM → FuelWise
+                              │
+                    ┌─────────┴─────────┐
+                    │                   │
+                    ▼                   ▼
+             Filter Stations      Build LP Model
+             (fw_route.c)         (fw_refuel.c)
+                    │                   │
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                    Ralph Simplex Solver
+                        (simplex.c)
+                              │
+                              ▼
+                     Extract Solution
+                              │
+                              ▼
+                    Return Fuel Stops
+```
 
-| Operation | Time | Percentage |
-|-----------|------|------------|
-| **Ratio test (FTRAN)** | 0.159s | **63.4%** |
-| **B^-1 update** | 0.089s | **35.3%** |
-| Pricing | 0.002s | 1.0% |
-| Pivot | 0.001s | 0.4% |
+### Tile Generation Flow
+```
+Tile Request → API/WASM → Carta
+                              │
+                              ▼
+                    Load PBF Context
+                       (ct_pbf.c)
+                              │
+                    ┌─────────┴─────────┐
+                    │                   │
+                    ▼                   ▼
+              Vector Tile          Raster Tile
+              (ct_mvt.c)          (ct_render.c)
+                    │                   │
+                    ▼                   ▼
+              MVT Protobuf         PNG Encode
+               Encoding            (ct_png.c)
+                    │                   │
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                      Return Tile Bytes
+```
 
-**Key Finding:** LU operations (FTRAN + Update) account for 98.7% of solver time.
-The main bottleneck is the sparse LU solve in the ratio test.
+### Routing Flow
+```
+Route Request → API/WASM → Velo
+                              │
+                              ▼
+                    Load Graph from PBF
+                       (vl_pbf.c)
+                              │
+                              ▼
+                    Build CSR Graph
+                      (vl_graph.c)
+                              │
+                              ▼
+                    A* / Dijkstra Search
+                      (vl_route.c)
+                              │
+                              ▼
+                    Return Route Path
+```
 
-### MIP Benchmarks (Classic Problems, Quick Mode)
+## Build System
 
-| Problem Type      | Size       | Ralph       | GLPK    | Notes                    |
-|-------------------|------------|-------------|---------|--------------------------|
-| SetCovering       | 20×10      | 0.0001s ✓   | 0.0001s | Matches objective        |
-| SetCovering       | 40×20      | 0.0002s ✓   | 0.0002s | Matches objective        |
-| SetPartitioning   | 30×10      | 36.9s ⚠     | 0.0002s | ~185,000× slower         |
-| SetPartitioning   | 60×20      | 63.4s ⚠     | 0.003s  | Hit time limit           |
-| LinearAssignment  | 100×20     | 0.0001s ✓   | 0.0003s | Matches objective        |
-| LinearAssignment  | 400×40     | 0.0005s ✓   | 0.002s  | Matches objective        |
-| NetworkFlow (LP)  | 77×20      | 0.0001s ✓   | 0.0000s | Matches objective        |
-| NetworkFlow (LP)  | 295×40     | 0.0002s ⚠   | 0.0001s | **Objective mismatch**   |
-| FacilityLocation  | 55×60      | 0.0001s ✓   | 0.0003s | Matches objective        |
-| FacilityLocation  | 210×220    | 160.7s ⚠    | 0.002s  | ~70,000× slower          |
+### Top-Level Targets
+```makefile
+make all          # Build all libraries (ralph, fuelwise, velo, carta, shared)
+make test         # Run all tests (~135 tests)
+make clean        # Clean all build artifacts
+make api          # Build REST API server
+make wasm         # Build WebAssembly modules
+```
 
-**Key Findings:**
-- LP relaxations solved correctly and quickly
-- MIP enumeration is extremely slow on hard combinatorial problems
-- One potential correctness issue with NetworkFlow (25.42 vs 125.42)
+### Module Targets
+```makefile
+make ralph        # Build libralph.a
+make fuelwise     # Build libfuelwise.a (depends on ralph)
+make velo         # Build libvelo.a (depends on shared, vendor)
+make carta        # Build libcarta.a (depends on shared, vendor)
+make shared       # Build libshared.a
+```
 
-## Known Issues and TODO
+### Testing
+```makefile
+make test-ralph     # 43 tests
+make test-fuelwise  # 29 tests
+make test-velo      # 30+ tests
+make test-carta     # 33 tests
+make test-shared    # Shared code tests
+```
 
-### High Priority
+## Design Principles
 
-1. **LP Per-Iteration Performance (2-5× slowdown vs GLPK)**
-   - Root cause: FTRAN (63%) and LU updates (35%) dominate iteration time
-   - Hyper-sparse FTRAN exists (`lu_ftran_hyper_sparse`) but disabled due to instability
-   - TODO: Fix hyper-sparse FTRAN numerical issues and enable in ratio test
-   - TODO: Reduce FT spike accumulation overhead
-   - TODO: Consider batched LU updates
+1. **Zero Dependencies**: Core libraries use only standard C (C11)
+2. **WASM-First**: All components compile to WebAssembly
+3. **Layered Architecture**: Clear separation: solver → domain → API → UI
+4. **Portable**: Runs on Linux, macOS, Windows, browsers
+5. **Single Responsibility**: Each module has a focused purpose
 
-2. **MIP Branch-and-Bound Performance**
-   - SetPartitioning 185,000× slower than GLPK
-   - TODO: Implement proper node presolve (bound tightening, probing)
-   - TODO: Add pseudocost branching or reliability branching
-   - TODO: Implement diving heuristics for faster incumbent finding
+## Performance Targets
 
-3. **Dual Simplex Stability**
-   - Currently falls back to primal on many problems due to RC drift
-   - Root cause: Calling lu_solve per column compounds error (n sources per pivot)
-   - TODO: Compute pivot row via single BTRAN, update RCs with sparse dot products
-   - TODO: Periodic RC recomputation every ~20 iterations
-   - TODO: Iterative refinement for reduced costs
+| Operation | Target | Notes |
+|-----------|--------|-------|
+| LP solve (1000 vars) | <100ms | Ralph simplex |
+| Route (country-scale) | <100ms | Velo A* bidirectional |
+| PNG tile (512x512) | ~75ms | Carta rasterizer |
+| Refuel optimization | <100ms | FuelWise LP |
+| PBF parse (Hungary) | ~10s | 300MB, 35M nodes |
 
-### Medium Priority
+## WASM Considerations
 
-4. **LP-Aware LU Updates**
-   - Schur complement helps initial factorization (4× speedup)
-   - TODO: Extend block structure awareness to LU updates
-   - TODO: Block-aware solve routines
+- No `mmap` - use `malloc` + `fread`
+- Single-threaded execution
+- Memory limits for large PBF files
+- Minimal API surface exported
+- No file system access (data passed as buffers)
 
-5. **Presolve Improvements**
-   - TODO: Dominated rows/columns elimination
-   - TODO: Probing on integer variables
-   - TODO: Clique detection from set-packing constraints
+---
 
-### Low Priority
+# TODO: Structural Improvements
 
-6. **Cut Generation**
-   - GMI cut infrastructure implemented but disabled (produces incorrect cuts on some problems)
-   - TODO: Debug GMI cut formula for >= constraints with negative coefficients
-   - TODO: Lift-and-project cuts
-   - TODO: Clique cuts from conflict graph
+The following improvements are planned for the project structure:
 
-7. **Parallel Processing**
-   - TODO: Parallel pricing in simplex
-   - TODO: Parallel node processing in B&B
+## High Priority
 
-## Recent Optimizations
+- [x] **Consolidate vendor/ directories** (COMPLETED)
+  - Moved miniz from `velo/vendor/` and `carta/vendor/` to root `vendor/miniz/`
+  - Updated Makefiles to reference `../vendor/miniz`
+  - Single source of truth for vendored code
 
-### LU Factorization (January 2025)
+- [x] **Create shared/ library** (COMPLETED)
+  - Created `shared/` with geo utilities (haversine, Web Mercator, coordinates)
+  - `libshared.a` with 23 tests
+  - Provides common types: `SHCoord`, `SHBBox`, coordinate conversions
 
-1. **U Diagonal Cache** (`lu.c`)
-   - Added `U_diag[]` array for O(1) diagonal access
-   - Eliminates O(m) search per column in backward substitution
+## Medium Priority
 
-2. **LP-Aware Factorization with Schur Complement** (`lu_sparse.c`)
-   - Exploits LP basis structure: identity columns (slacks) vs structural columns
-   - For k structural columns out of m: O(k³) instead of O(m³)
-   - Handles cross-terms (structural entries in identity rows) via Schur complement
-   - Block structure: L = [L11, 0; L21, I], U = [U11, 0; 0, D]
-   - **Result:** 4× factorization speedup on m=500, k=200
+- [ ] **Standardize test structure**
+  - Currently inconsistent: inline tests vs separate files
+  - Adopt single pattern across all modules
+  - Consider unified test runner
 
-3. **Spike Pool Allocation** (`lu.c`)
-   - Pre-allocated storage for Forrest-Tomlin update spikes
-   - Eliminates malloc in LU update hot path
+- [ ] **Add integration tests at root**
+  - Create `tests/integration/` directory
+  - End-to-end tests (route + refuel + tiles)
+  - API endpoint tests with curl/shell
 
-4. **Reach-Based Sparse Triangular Solves** (`lu.c`)
-   - Compute reach of sparse RHS before solving
-   - Only touch non-zero elements in solution
+## Low Priority
+
+- [ ] **Add scripts/ directory**
+  - `download-osm.sh` - Fetch OSM data from Geofabrik
+  - `gen-types.sh` - Generate TypeScript types from C headers
+  - `benchmark.sh` - Run all benchmarks
+  - `ci.sh` - CI/CD pipeline script
+
+- [ ] **Improve documentation**
+  - Add API.md for each module (not just root)
+  - Add CONTRIBUTING.md
+  - Add CHANGELOG.md
