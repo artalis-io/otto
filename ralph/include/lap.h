@@ -226,6 +226,102 @@ RalphLapStatus ralph_lap_solve_with_workspace(
 );
 
 /* ============================================================================
+ * Callback-Based LAP Solver (O(n) memory)
+ * ============================================================================ */
+
+/*
+ * Cost function callback type.
+ *
+ * Returns the cost of assigning row i to column j.
+ * Return RALPH_LAP_INFINITY for forbidden assignments.
+ *
+ * Parameters:
+ *   i         - Row index (0 to n-1)
+ *   j         - Column index (0 to n-1)
+ *   user_data - User-provided context pointer
+ *
+ * Returns:
+ *   Cost value for assignment (i, j)
+ */
+typedef double (*RalphLapCostFn)(int i, int j, void *user_data);
+
+/*
+ * Solve LAP using a cost callback instead of storing the full matrix.
+ *
+ * This is useful for very large problems where storing n² costs is prohibitive.
+ * The callback is invoked on-demand during the JVC algorithm phases.
+ *
+ * Memory usage: O(n) instead of O(n²)
+ * Time complexity: O(n³) with higher constant factor due to callback overhead
+ *
+ * Parameters:
+ *   n          - Problem dimension
+ *   cost_fn    - Callback function that returns cost(i, j)
+ *   user_data  - User context passed to cost_fn
+ *   objective  - RALPH_LAP_MINIMIZE or RALPH_LAP_MAXIMIZE
+ *   row_sol    - Output: row_sol[i] = column assigned to row i (size n)
+ *   col_sol    - Output: col_sol[j] = row assigned to column j (size n, can be NULL)
+ *   u          - Output: row dual variables (size n, can be NULL)
+ *   v          - Output: column dual variables (size n, can be NULL)
+ *   total_cost - Output: total assignment cost (can be NULL)
+ *
+ * Returns:
+ *   RALPH_LAP_SUCCESS on success, error code otherwise.
+ *
+ * Example - Euclidean distance assignment:
+ *
+ *   typedef struct { double *x, *y; } Points;
+ *
+ *   double euclidean_cost(int i, int j, void *user_data) {
+ *       Points *p = (Points *)user_data;
+ *       double dx = p->x[i] - p->x[j];
+ *       double dy = p->y[i] - p->y[j];
+ *       return sqrt(dx*dx + dy*dy);
+ *   }
+ *
+ *   ralph_lap_solve_callback(n, euclidean_cost, &points, RALPH_LAP_MINIMIZE,
+ *                            row_sol, NULL, NULL, NULL, &cost);
+ */
+RalphLapStatus ralph_lap_solve_callback(
+    int n,
+    RalphLapCostFn cost_fn,
+    void *user_data,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
+    double *total_cost
+);
+
+/*
+ * Solve callback-based LAP with pre-allocated workspace.
+ *
+ * Same as ralph_lap_solve_callback() but uses provided workspace
+ * to avoid repeated allocations.
+ *
+ * Parameters:
+ *   n, cost_fn, user_data, objective, row_sol, col_sol, u, v, total_cost
+ *       - See ralph_lap_solve_callback()
+ *   ws  - Pre-allocated workspace (must have max_n >= n)
+ *
+ * Returns:
+ *   RALPH_LAP_SUCCESS on success, error code otherwise.
+ */
+RalphLapStatus ralph_lap_solve_callback_with_workspace(
+    int n,
+    RalphLapCostFn cost_fn,
+    void *user_data,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
+    double *total_cost,
+    RalphLapWorkspace *ws
+);
+
+/* ============================================================================
  * Rectangular LAP Solver
  * ============================================================================ */
 

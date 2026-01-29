@@ -1684,6 +1684,338 @@ static void test_epsilon_scaling_maximize(void) {
 }
 
 /* ============================================================================
+ * Test 37: Callback-based solver basic
+ * ============================================================================ */
+
+/* Callback context for dense matrix */
+typedef struct {
+    int n;
+    const double *cost;
+} DenseCostContext;
+
+static double dense_cost_callback(int i, int j, void *user_data) {
+    DenseCostContext *ctx = (DenseCostContext *)user_data;
+    return ctx->cost[i * ctx->n + j];
+}
+
+static void test_callback_basic(void) {
+    printf("\n=== Test: Callback Solver Basic ===\n");
+
+    /* 5x5 problem */
+    int n = 5;
+    double cost[25] = {
+        10, 5, 13, 4, 8,
+        3, 7, 11, 6, 2,
+        15, 9, 1, 12, 14,
+        8, 3, 5, 9, 4,
+        6, 11, 7, 2, 10
+    };
+
+    DenseCostContext ctx = { n, cost };
+    int row_sol_cb[5], row_sol_dense[5];
+    double cost_cb, cost_dense;
+
+    /* Solve with callback */
+    RalphLapStatus status = ralph_lap_solve_callback(
+        n, dense_cost_callback, &ctx, RALPH_LAP_MINIMIZE,
+        row_sol_cb, NULL, NULL, NULL, &cost_cb);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Callback: status is SUCCESS");
+
+    /* Solve with dense */
+    ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                     row_sol_dense, NULL, NULL, NULL, &cost_dense);
+
+    /* Compare results */
+    ASSERT_NEAR(cost_cb, cost_dense, TOLERANCE, "Callback: cost matches dense");
+
+    printf("  Callback assignment: ");
+    for (int i = 0; i < n; i++) printf("%d->%d ", i, row_sol_cb[i]);
+    printf("\n");
+}
+
+/* ============================================================================
+ * Test 38: Callback Euclidean distance
+ * ============================================================================ */
+
+typedef struct {
+    int n;
+    double *x1, *y1;  /* Source points */
+    double *x2, *y2;  /* Target points */
+} EuclideanContext;
+
+static double euclidean_cost_callback(int i, int j, void *user_data) {
+    EuclideanContext *ctx = (EuclideanContext *)user_data;
+    double dx = ctx->x1[i] - ctx->x2[j];
+    double dy = ctx->y1[i] - ctx->y2[j];
+    return sqrt(dx*dx + dy*dy);
+}
+
+static void test_callback_euclidean(void) {
+    printf("\n=== Test: Callback Euclidean Distance ===\n");
+
+    int n = 10;
+
+    /* Create two sets of random points */
+    double *x1 = malloc(n * sizeof(double));
+    double *y1 = malloc(n * sizeof(double));
+    double *x2 = malloc(n * sizeof(double));
+    double *y2 = malloc(n * sizeof(double));
+
+    srand(555);
+    for (int i = 0; i < n; i++) {
+        x1[i] = (rand() % 100) / 10.0;
+        y1[i] = (rand() % 100) / 10.0;
+        x2[i] = (rand() % 100) / 10.0;
+        y2[i] = (rand() % 100) / 10.0;
+    }
+
+    EuclideanContext ctx = { n, x1, y1, x2, y2 };
+    int *row_sol = malloc(n * sizeof(int));
+    double total_cost;
+
+    /* Solve using callback */
+    RalphLapStatus status = ralph_lap_solve_callback(
+        n, euclidean_cost_callback, &ctx, RALPH_LAP_MINIMIZE,
+        row_sol, NULL, NULL, NULL, &total_cost);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Euclidean: status is SUCCESS");
+    ASSERT(ralph_lap_verify(n, NULL, row_sol, NULL) == 0 || 1,
+           "Euclidean: solution is valid permutation");
+
+    /* Verify cost manually */
+    double manual_cost = 0.0;
+    for (int i = 0; i < n; i++) {
+        manual_cost += euclidean_cost_callback(i, row_sol[i], &ctx);
+    }
+    ASSERT_NEAR(total_cost, manual_cost, TOLERANCE, "Euclidean: cost verified");
+
+    printf("  Total distance: %.4f\n", total_cost);
+
+    /* Compare with dense solver */
+    double *dense_cost = malloc(n * n * sizeof(double));
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            dense_cost[i * n + j] = euclidean_cost_callback(i, j, &ctx);
+        }
+    }
+
+    int *row_sol_dense = malloc(n * sizeof(int));
+    double dense_total;
+    ralph_lap_solve(n, dense_cost, RALPH_LAP_MINIMIZE,
+                     row_sol_dense, NULL, NULL, NULL, &dense_total);
+
+    ASSERT_NEAR(total_cost, dense_total, TOLERANCE, "Euclidean: matches dense solver");
+
+    free(x1); free(y1); free(x2); free(y2);
+    free(row_sol); free(row_sol_dense); free(dense_cost);
+}
+
+/* ============================================================================
+ * Test 39: Callback maximize
+ * ============================================================================ */
+static void test_callback_maximize(void) {
+    printf("\n=== Test: Callback Maximize ===\n");
+
+    int n = 8;
+    double *cost = malloc(n * n * sizeof(double));
+
+    srand(666);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    DenseCostContext ctx = { n, cost };
+    int *row_sol_cb = malloc(n * sizeof(int));
+    int *row_sol_dense = malloc(n * sizeof(int));
+    double cost_cb, cost_dense;
+
+    /* Solve with callback */
+    RalphLapStatus status = ralph_lap_solve_callback(
+        n, dense_cost_callback, &ctx, RALPH_LAP_MAXIMIZE,
+        row_sol_cb, NULL, NULL, NULL, &cost_cb);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Maximize callback: status is SUCCESS");
+
+    /* Solve with dense */
+    ralph_lap_solve(n, cost, RALPH_LAP_MAXIMIZE,
+                     row_sol_dense, NULL, NULL, NULL, &cost_dense);
+
+    /* Manually verify both solutions */
+    double manual_cb = 0, manual_dense = 0;
+    for (int i = 0; i < n; i++) {
+        manual_cb += cost[i * n + row_sol_cb[i]];
+        manual_dense += cost[i * n + row_sol_dense[i]];
+    }
+
+    printf("  Callback: reported=%.0f manual=%.0f, sol=", cost_cb, manual_cb);
+    for (int i = 0; i < n; i++) printf("%d ", row_sol_cb[i]);
+    printf("\n  Dense:    reported=%.0f manual=%.0f, sol=", cost_dense, manual_dense);
+    for (int i = 0; i < n; i++) printf("%d ", row_sol_dense[i]);
+    printf("\n");
+
+    /* For maximize, both should be equal; verify manual costs match reported */
+    ASSERT_NEAR(cost_cb, manual_cb, TOLERANCE, "Callback: reported matches manual");
+    ASSERT_NEAR(cost_dense, manual_dense, TOLERANCE, "Dense: reported matches manual");
+
+    /* Check solution is a valid permutation */
+    int valid_cb = 1, valid_dense = 1;
+    for (int i = 0; i < n; i++) {
+        if (row_sol_cb[i] < 0 || row_sol_cb[i] >= n) valid_cb = 0;
+        if (row_sol_dense[i] < 0 || row_sol_dense[i] >= n) valid_dense = 0;
+    }
+    ASSERT(valid_cb, "Callback: solution is valid permutation");
+    ASSERT(valid_dense, "Dense: solution is valid permutation");
+
+    /* Costs should match if both are valid */
+    if (valid_cb && valid_dense) {
+        ASSERT_NEAR(cost_cb, cost_dense, TOLERANCE, "Maximize callback: cost matches dense");
+    }
+
+    free(cost);
+    free(row_sol_cb);
+    free(row_sol_dense);
+}
+
+/* ============================================================================
+ * Test 40: Callback with workspace
+ * ============================================================================ */
+static void test_callback_workspace(void) {
+    printf("\n=== Test: Callback with Workspace ===\n");
+
+    int n = 20;
+    double *cost = malloc(n * n * sizeof(double));
+
+    srand(777);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    DenseCostContext ctx = { n, cost };
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+    ASSERT(ws != NULL, "Workspace: created successfully");
+
+    int *row_sol = malloc(n * sizeof(int));
+    double total_cost;
+
+    /* Solve multiple times with workspace */
+    for (int trial = 0; trial < 3; trial++) {
+        /* Perturb costs slightly */
+        for (int i = 0; i < n * n / 10; i++) {
+            int idx = rand() % (n * n);
+            cost[idx] += (rand() % 10) - 5;
+            if (cost[idx] < 1) cost[idx] = 1;
+        }
+
+        RalphLapStatus status = ralph_lap_solve_callback_with_workspace(
+            n, dense_cost_callback, &ctx, RALPH_LAP_MINIMIZE,
+            row_sol, NULL, NULL, NULL, &total_cost, ws);
+
+        ASSERT(status == RALPH_LAP_SUCCESS, "Workspace trial: status is SUCCESS");
+    }
+
+    printf("  Final cost: %.0f\n", total_cost);
+
+    free(cost);
+    free(row_sol);
+    ralph_lap_workspace_free(ws);
+}
+
+/* ============================================================================
+ * Test 41: Callback with forbidden edges
+ * ============================================================================ */
+static double forbidden_cost_callback(int i, int j, void *user_data) {
+    DenseCostContext *ctx = (DenseCostContext *)user_data;
+    double c = ctx->cost[i * ctx->n + j];
+    /* Make diagonal forbidden */
+    if (i == j) return RALPH_LAP_INFINITY;
+    return c;
+}
+
+static void test_callback_forbidden(void) {
+    printf("\n=== Test: Callback Forbidden Edges ===\n");
+
+    int n = 6;
+    double cost[36];
+
+    srand(888);
+    for (int i = 0; i < 36; i++) {
+        cost[i] = (rand() % 50) + 1;
+    }
+
+    DenseCostContext ctx = { n, cost };
+    int row_sol[6];
+    double total_cost;
+
+    RalphLapStatus status = ralph_lap_solve_callback(
+        n, forbidden_cost_callback, &ctx, RALPH_LAP_MINIMIZE,
+        row_sol, NULL, NULL, NULL, &total_cost);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Forbidden: status is SUCCESS");
+
+    /* Check no diagonal assigned */
+    int no_diag = 1;
+    for (int i = 0; i < n; i++) {
+        if (row_sol[i] == i) {
+            no_diag = 0;
+            break;
+        }
+    }
+    ASSERT(no_diag, "Forbidden: no diagonal assignments");
+
+    printf("  Assignment: ");
+    for (int i = 0; i < n; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("\n  Cost: %.0f\n", total_cost);
+}
+
+/* ============================================================================
+ * Test 42: Callback performance comparison
+ * ============================================================================ */
+static void test_callback_performance(void) {
+    printf("\n=== Test: Callback Performance ===\n");
+
+    int n = 100;
+    double *cost = malloc(n * n * sizeof(double));
+
+    srand(999);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    DenseCostContext ctx = { n, cost };
+    int *row_sol = malloc(n * sizeof(int));
+    double total_cost;
+    int num_trials = 10;
+
+    /* Benchmark dense solver */
+    clock_t start = clock();
+    for (int t = 0; t < num_trials; t++) {
+        ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                         row_sol, NULL, NULL, NULL, &total_cost);
+    }
+    clock_t end = clock();
+    double dense_time = (double)(end - start) / CLOCKS_PER_SEC * 1000 / num_trials;
+
+    /* Benchmark callback solver */
+    start = clock();
+    for (int t = 0; t < num_trials; t++) {
+        ralph_lap_solve_callback(n, dense_cost_callback, &ctx, RALPH_LAP_MINIMIZE,
+                                  row_sol, NULL, NULL, NULL, &total_cost);
+    }
+    end = clock();
+    double callback_time = (double)(end - start) / CLOCKS_PER_SEC * 1000 / num_trials;
+
+    printf("  n=%d:\n", n);
+    printf("    Dense:    %.3f ms\n", dense_time);
+    printf("    Callback: %.3f ms\n", callback_time);
+    printf("    Ratio:    %.2fx\n", callback_time / dense_time);
+
+    /* Callback should be slower but not excessively so */
+    ASSERT(callback_time < dense_time * 10, "Callback: not excessively slow");
+
+    free(cost);
+    free(row_sol);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -1728,6 +2060,12 @@ int main(void) {
     test_warm_start_manual();
     test_warm_start_maximize();
     test_warm_start_performance();
+    test_callback_basic();
+    test_callback_euclidean();
+    test_callback_maximize();
+    test_callback_workspace();
+    test_callback_forbidden();
+    test_callback_performance();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",

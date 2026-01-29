@@ -838,6 +838,71 @@ static void bench_warm_start(void) {
 }
 
 /* ============================================================================
+ * Benchmark: Callback solver (O(n) memory)
+ * ============================================================================ */
+
+/* Callback context */
+typedef struct {
+    int n;
+    const double *cost;
+} CallbackContext;
+
+static double bench_cost_callback(int i, int j, void *user_data) {
+    CallbackContext *ctx = (CallbackContext *)user_data;
+    return ctx->cost[i * ctx->n + j];
+}
+
+static void bench_callback(void) {
+    printf("\n");
+    printf("╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  Callback Solver Benchmark (Dense vs Callback)                           ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+    printf("    Size   Dense (ms)   Callback (ms)     Ratio\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    int sizes[] = {50, 100, 200, 500, 1000};
+    int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
+    Timer timer;
+
+    for (int s = 0; s < num_sizes; s++) {
+        int n = sizes[s];
+        double *cost = malloc(n * n * sizeof(double));
+        int *row_sol = malloc(n * sizeof(int));
+
+        generate_random(n, cost, 12345);
+        CallbackContext ctx = { n, cost };
+
+        int trials = (n <= 200) ? 20 : (n <= 500) ? 10 : 5;
+
+        /* Benchmark dense */
+        timer_start(&timer);
+        for (int t = 0; t < trials; t++) {
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
+        }
+        timer_stop(&timer);
+        double dense_time = timer.elapsed_ms / trials;
+
+        /* Benchmark callback */
+        timer_start(&timer);
+        for (int t = 0; t < trials; t++) {
+            ralph_lap_solve_callback(n, bench_cost_callback, &ctx, RALPH_LAP_MINIMIZE,
+                                      row_sol, NULL, NULL, NULL, NULL);
+        }
+        timer_stop(&timer);
+        double callback_time = timer.elapsed_ms / trials;
+
+        double ratio = callback_time / dense_time;
+        printf("  %6d  %10.3f    %10.3f     %6.2fx\n", n, dense_time, callback_time, ratio);
+
+        free(cost);
+        free(row_sol);
+    }
+
+    printf("\n  Note: Callback overhead due to function call per cost access.\n");
+    printf("        Memory: O(n) for callback vs O(n²) for dense.\n");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -858,6 +923,7 @@ int main(int argc, char *argv[]) {
     int run_sparse = run_all || (argc > 1 && strcmp(argv[1], "sparse") == 0);
     int run_epsilon = run_all || (argc > 1 && strcmp(argv[1], "epsilon") == 0);
     int run_warm = run_all || (argc > 1 && strcmp(argv[1], "warm") == 0);
+    int run_callback = run_all || (argc > 1 && strcmp(argv[1], "callback") == 0);
 
     if (run_size) bench_size_scaling();
     if (run_types) bench_problem_types();
@@ -868,6 +934,7 @@ int main(int argc, char *argv[]) {
     if (run_large) bench_large_problems();
     if (run_epsilon) bench_epsilon_scaling();
     if (run_warm) bench_warm_start();
+    if (run_callback) bench_callback();
     if (run_verify) bench_correctness();
 
     printf("\n");
