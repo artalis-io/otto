@@ -240,6 +240,214 @@ static void bench_problem_types(void) {
 }
 
 /* ============================================================================
+ * Sparse vs Dense benchmark at various sparsity levels
+ * ============================================================================ */
+
+static void bench_sparse_vs_dense(void) {
+    printf("\n╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  Sparse vs Dense Comparison at Various Sparsity Levels                    ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+    printf("  %-8s %8s  %12s  %12s  %10s  %8s\n",
+           "Size", "Density", "Dense (ms)", "Sparse (ms)", "Speedup", "Status");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    int sizes[] = {100, 200, 500, 1000};
+    double densities[] = {1.0, 0.5, 0.3, 0.2, 0.1, 0.05};
+    int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
+    int num_densities = sizeof(densities) / sizeof(densities[0]);
+
+    for (int s = 0; s < num_sizes; s++) {
+        int n = sizes[s];
+        int trials = (n <= 200) ? 5 : 3;
+
+        for (int d = 0; d < num_densities; d++) {
+            double density = densities[d];
+
+            /* Skip very sparse on small problems (not interesting) */
+            if (n <= 100 && density < 0.1) continue;
+
+            /* Allocate arrays - use full n*n for worst case */
+            double *dense_cost = malloc(n * n * sizeof(double));
+            int max_nnz = n * n;  /* Worst case: fully dense */
+            int *row_ptr = malloc((n + 1) * sizeof(int));
+            int *col_idx = malloc(max_nnz * sizeof(int));
+            double *values = malloc(max_nnz * sizeof(double));
+
+            /* Generate sparse problem with guaranteed feasibility */
+            srand(42 + n + (int)(density * 100));
+            int nnz = 0;
+            row_ptr[0] = 0;
+
+            for (int i = 0; i < n * n; i++) {
+                dense_cost[i] = RALPH_LAP_INFINITY;
+            }
+
+            for (int i = 0; i < n; i++) {
+                /* Always include diagonal for feasibility */
+                col_idx[nnz] = i;
+                values[nnz] = (rand() % 10000) / 100.0 + 50.0;
+                dense_cost[i * n + i] = values[nnz];
+                nnz++;
+
+                /* Add random edges based on density */
+                for (int j = 0; j < n; j++) {
+                    if (j != i && (double)rand() / RAND_MAX < density) {
+                        col_idx[nnz] = j;
+                        values[nnz] = (rand() % 10000) / 100.0;
+                        dense_cost[i * n + j] = values[nnz];
+                        nnz++;
+                    }
+                }
+                row_ptr[i + 1] = nnz;
+            }
+
+            double actual_density = (double)nnz / (n * n);
+
+            /* Allocate solution arrays */
+            int *dense_sol = malloc(n * sizeof(int));
+            int *sparse_sol = malloc(n * sizeof(int));
+            double dense_cost_val, sparse_cost_val;
+            Timer timer;
+
+            /* Benchmark dense solver */
+            double dense_total = 0;
+            for (int t = 0; t < trials; t++) {
+                timer_start(&timer);
+                ralph_lap_solve(n, dense_cost, RALPH_LAP_MINIMIZE,
+                               dense_sol, NULL, NULL, NULL, &dense_cost_val);
+                timer_stop(&timer);
+                dense_total += timer.elapsed_ms;
+            }
+            double dense_avg = dense_total / trials;
+
+            /* Benchmark sparse solver */
+            double sparse_total = 0;
+            RalphLapStatus sparse_status = RALPH_LAP_SUCCESS;
+            for (int t = 0; t < trials; t++) {
+                timer_start(&timer);
+                sparse_status = ralph_lap_solve_sparse(n, nnz, row_ptr, col_idx, values,
+                                                        RALPH_LAP_MINIMIZE,
+                                                        sparse_sol, NULL, &sparse_cost_val);
+                timer_stop(&timer);
+                sparse_total += timer.elapsed_ms;
+                if (sparse_status != RALPH_LAP_SUCCESS) break;
+            }
+            double sparse_avg = sparse_total / trials;
+
+            /* Calculate speedup */
+            double speedup = (sparse_status == RALPH_LAP_SUCCESS) ? dense_avg / sparse_avg : 0;
+
+            /* Verify costs match */
+            const char *status = "OK";
+            if (sparse_status != RALPH_LAP_SUCCESS) {
+                status = "FAIL";
+            } else if (fabs(dense_cost_val - sparse_cost_val) > 1e-4) {
+                status = "MISMATCH";
+            }
+
+            printf("  %6d   %5.0f%%    %10.3f    %10.3f    %8.2fx    %s\n",
+                   n, actual_density * 100, dense_avg, sparse_avg, speedup, status);
+
+            free(dense_cost);
+            free(row_ptr);
+            free(col_idx);
+            free(values);
+            free(dense_sol);
+            free(sparse_sol);
+        }
+
+        if (s < num_sizes - 1) {
+            printf("  ────────────────────────────────────────────────────────────────────────\n");
+        }
+    }
+}
+
+/* ============================================================================
+ * Sparse scaling benchmark (native sparse algorithm only)
+ * ============================================================================ */
+
+static void bench_sparse_scaling(void) {
+    printf("\n╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  Sparse LAP Scaling (Native Sparse JVC Algorithm)                         ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+    printf("  %-8s %8s  %10s  %12s  %12s\n",
+           "Size", "Density", "nnz", "Time (ms)", "Cost");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    /* Test with 10% density - where sparse shines */
+    double density = 0.10;
+    int sizes[] = {500, 1000, 2000, 3000, 5000};
+    int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
+
+    for (int s = 0; s < num_sizes; s++) {
+        int n = sizes[s];
+
+        /* Allocate sparse arrays - use n*(density*n + 2) for safety */
+        int edges_per_row = (int)(n * density) + 2;
+        int max_nnz = n * edges_per_row;
+        int *row_ptr = malloc((n + 1) * sizeof(int));
+        int *col_idx = malloc(max_nnz * sizeof(int));
+        double *values = malloc(max_nnz * sizeof(double));
+
+        /* Generate sparse problem */
+        srand(42 + n);
+        int nnz = 0;
+        row_ptr[0] = 0;
+
+        for (int i = 0; i < n; i++) {
+            /* Always include diagonal */
+            col_idx[nnz] = i;
+            values[nnz] = (rand() % 10000) / 100.0 + 50.0;
+            nnz++;
+
+            /* Add random edges */
+            for (int j = 0; j < n; j++) {
+                if (j != i && (double)rand() / RAND_MAX < density) {
+                    col_idx[nnz] = j;
+                    values[nnz] = (rand() % 10000) / 100.0;
+                    nnz++;
+                }
+            }
+            row_ptr[i + 1] = nnz;
+        }
+
+        int *row_sol = malloc(n * sizeof(int));
+        double total_cost;
+        Timer timer;
+
+        int trials = (n <= 1000) ? 3 : 1;
+        double total_time = 0;
+        RalphLapStatus status = RALPH_LAP_SUCCESS;
+
+        for (int t = 0; t < trials; t++) {
+            timer_start(&timer);
+            status = ralph_lap_solve_sparse(n, nnz, row_ptr, col_idx, values,
+                                             RALPH_LAP_MINIMIZE,
+                                             row_sol, NULL, &total_cost);
+            timer_stop(&timer);
+            total_time += timer.elapsed_ms;
+            if (status != RALPH_LAP_SUCCESS) break;
+        }
+
+        double avg_time = total_time / trials;
+        double actual_density = (double)nnz / (n * n);
+
+        if (status == RALPH_LAP_SUCCESS) {
+            printf("  %6d   %5.1f%%   %9d    %10.2f    %10.2f\n",
+                   n, actual_density * 100, nnz, avg_time, total_cost);
+        } else {
+            printf("  %6d   %5.1f%%   %9d    %10s    %10s\n",
+                   n, actual_density * 100, nnz, "FAILED", "N/A");
+        }
+
+        free(row_ptr);
+        free(col_idx);
+        free(values);
+        free(row_sol);
+    }
+}
+
+/* ============================================================================
  * Large problem benchmark (JVC only)
  * ============================================================================ */
 
@@ -344,9 +552,14 @@ int main(int argc, char *argv[]) {
     int run_types = run_all || (argc > 1 && strcmp(argv[1], "types") == 0);
     int run_large = run_all || (argc > 1 && strcmp(argv[1], "large") == 0);
     int run_verify = run_all || (argc > 1 && strcmp(argv[1], "verify") == 0);
+    int run_sparse = run_all || (argc > 1 && strcmp(argv[1], "sparse") == 0);
 
     if (run_size) bench_size_scaling();
     if (run_types) bench_problem_types();
+    if (run_sparse) {
+        bench_sparse_vs_dense();
+        bench_sparse_scaling();
+    }
     if (run_large) bench_large_problems();
     if (run_verify) bench_correctness();
 
