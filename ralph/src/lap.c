@@ -1135,10 +1135,12 @@ RalphLapStatus ralph_lap_solve_warm(
                 int j_cur = row_assign[i];
                 double cur_reduced = work_cost[i * n + j_cur] - col_price[j_cur];
 
-                /* Find the minimum reduced cost for this row */
+                /* Find the minimum reduced cost for this row (SIMD) */
                 double min_reduced = DBL_MAX;
+                const double *row_cost = &work_cost[i * n];
+                #pragma omp simd reduction(min:min_reduced)
                 for (j = 0; j < n; j++) {
-                    double reduced = work_cost[i * n + j] - col_price[j];
+                    double reduced = row_cost[j] - col_price[j];
                     if (reduced < min_reduced) {
                         min_reduced = reduced;
                     }
