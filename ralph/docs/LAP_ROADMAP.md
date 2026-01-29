@@ -17,6 +17,7 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] Sparse vs dense benchmarks
 - [x] Optional ε-scaling auction for tie-breaking
 - [x] Incremental updates / warm start
+- [x] Cost matrix callbacks (O(n) memory)
 
 ---
 
@@ -91,17 +92,13 @@ RalphLapStatus ralph_lap_warm_init(
 
 ---
 
-### 3. Cost Matrix Callbacks
-**Priority: Medium** | **Complexity: Medium**
+### 3. ~~Cost Matrix Callbacks~~ ✅ COMPLETED
+**Status: Implemented (2026-01-29)**
 
-For very large problems, avoid storing full n² matrix:
-- Compute costs on-demand via callback
-- Useful when cost function is simple (e.g., Euclidean distance)
-- Can integrate with external data sources
-
-**Benefits:**
-- O(n) memory instead of O(n²)
-- Enables problems too large to fit in memory
+Callback-based solver for very large problems without storing full n² matrix:
+- Compute costs on-demand via callback function
+- Uses O(n) memory instead of O(n²)
+- Full JVC algorithm with callback cost access
 
 **API:**
 ```c
@@ -113,9 +110,40 @@ RalphLapStatus ralph_lap_solve_callback(
     void *user_data,
     RalphLapObjective objective,
     int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
     double *total_cost
 );
+
+/* With workspace for repeated solves */
+RalphLapStatus ralph_lap_solve_callback_with_workspace(
+    int n,
+    RalphLapCostFn cost_fn,
+    void *user_data,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
+    double *total_cost,
+    RalphLapWorkspace *ws
+);
 ```
+
+**Performance Results:**
+| Size | Dense (ms) | Callback (ms) | Overhead |
+|------|------------|---------------|----------|
+| 100 | 0.05 | 0.10 | 2x |
+| 500 | 1.4 | 3.4 | 2.4x |
+| 1000 | 8.2 | 18.6 | 2.3x |
+
+**Benefits:**
+- Memory: O(n) instead of O(n²)
+- Enables tracking/assignment with 10k+ objects
+- Integrates with external data sources (databases, spatial indices)
+
+**Benchmarks:** `bench_callback()` in `benchmarks/bench_lap.c`
 
 ---
 
