@@ -944,6 +944,31 @@ ralph_set_dbl_param(model, "detect_threshold", 0.95);  // Confidence threshold
 
 ## 4. Benders Decomposition
 
+**Status**: Not yet implemented. FuelWise currently uses enumeration as a workaround.
+
+### Current State (2026-01-29)
+
+The FuelWise library needs Benders decomposition for refueling optimization with stop costs.
+Currently, `fw_solve_refuel_benders()` uses brute-force enumeration of 2^k combinations
+instead of true Benders, because:
+
+1. **MIP Solver Issues**: Ralph's MIP solver has stability issues with small binary-only
+   problems (crashes on some master problem configurations)
+
+2. **Dual Extraction**: Optimality cuts require reliable dual solution extraction from
+   LP subproblems. This works but sign conventions need verification.
+
+3. **Farkas Rays**: Feasibility cuts require Farkas ray extraction. Ralph has
+   `ralph_get_farkas_ray()` but it needs testing with Benders use cases.
+
+### Blockers for FuelWise
+
+To enable proper Benders in FuelWise, Ralph needs:
+- [ ] Fix MIP solver stability with small binary-only problems
+- [ ] Verify dual solution signs match standard Benders formulation
+- [ ] Test Farkas ray extraction for feasibility cuts
+- [ ] Support incremental constraint addition (or efficient model rebuild)
+
 ### Problem Structure
 
 Benders decomposition solves problems with complicating variables:

@@ -388,19 +388,21 @@ void test_benders_decomposition(void)
         double fuel_needed = 100.0 + 10.0 - 50.0;  /* 60 gallons */
         ASSERT(total_purchased >= fuel_needed - 0.1, "Sufficient fuel purchased");
 
-        /* Compare with MILP solution */
-        FWRefuelSolution milp_sol;
-        ret = fw_solve_refuel_milp(&problem, &milp_sol);
-
-        if (ret == 0 && milp_sol.status == FW_STATUS_OPTIMAL) {
-            printf("  MILP total cost: $%.2f (for comparison)\n", milp_sol.total_cost);
-
-            /* Benders should find a solution with cost within reasonable range of MILP */
-            double cost_diff = fabs(benders_sol.total_cost - milp_sol.total_cost);
-            ASSERT(cost_diff < milp_sol.total_cost * 0.1 + 1.0,
-                   "Benders cost within 10% of MILP");
-        }
-        fw_free_solution(&milp_sol);
+        /* Verify against expected optimal solution.
+         *
+         * For this problem:
+         * - Station 0 at 200mi ($1.20), Station 1 at 500mi ($1.00), Station 2 at 700mi ($1.30)
+         * - 50 gal starting fuel, 10 mpg = 500mi range
+         * - To reach station 1 at 500mi with min 10 gal reserve, need 60 gal total
+         * - Must stop at station 0 first to have enough fuel to reach station 1
+         * - Optimal: buy min 20 gal at station 0 ($24), 40 gal at station 1 ($40), plus $10 stops = $74
+         *
+         * Alternative: only stop at station 0, buy 60 gal at $1.20 = $72 + $5 = $77
+         * So 2 stops at $74 is optimal.
+         */
+        double expected_optimal = 74.0;
+        double cost_diff = fabs(benders_sol.total_cost - expected_optimal);
+        ASSERT(cost_diff < 1.0, "Benders finds optimal solution ($74)");
     }
 
     fw_free_solution(&benders_sol);

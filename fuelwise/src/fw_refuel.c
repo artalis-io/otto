@@ -637,98 +637,6 @@ static RalphModel* build_benders_subproblem(
     return model;
 }
 
-/*
- * Generate Farkas feasibility cut from infeasible subproblem.
- *
- * The cut has form: sum_i (cut_coeff[i] * z[i]) <= cut_rhs
- *
- * From the plan:
- * - cut_coeff[i] = (-tank_capacity * y_upper[i]) + (min_purchase * y_lower[i])
- * - cut_rhs = - sum_k (ray[k] * rhs[k])
- *
- * Note: The Farkas ray signs depend on constraint sense normalization.
- */
-static int generate_farkas_cut(
-    RalphModel *subproblem,
-    const BendersSubproblemMap *map,
-    double *cut_coeff,   /* Output: size num_stations */
-    double *cut_rhs)     /* Output: single value */
-{
-    int k = map->num_stations;
-    int m = map->num_constraints;
-
-    double *ray = malloc(m * sizeof(double));
-    if (!ray) return -1;
-
-    if (ralph_get_farkas_ray(subproblem, ray) != 0) {
-        /* Farkas ray not available - fall back to no-good cut will be needed */
-        free(ray);
-        return -1;
-    }
-
-    /* Normalize the ray to avoid numerical issues.
-     * The Farkas ray can have very large coefficients (1e8+) which cause
-     * precision problems in the MIP solver. Divide by max absolute value.
-     */
-    double max_ray = 0.0;
-    for (int c = 0; c < m; c++) {
-        double abs_val = (ray[c] >= 0) ? ray[c] : -ray[c];
-        if (abs_val > max_ray) max_ray = abs_val;
-    }
-    if (max_ray > 1.0) {
-        for (int c = 0; c < m; c++) {
-            ray[c] /= max_ray;
-        }
-    }
-
-    /* Compute cut_rhs = - sum_k (ray[k] * rhs[k])
-     * The Farkas ray from Ralph corresponds to the dual certificate.
-     */
-    double rhs_sum = 0.0;
-    for (int c = 0; c < m; c++) {
-        rhs_sum += ray[c] * map->rhs[c];
-    }
-    *cut_rhs = -rhs_sum;
-
-    /* Compute cut coefficients from z-dependent constraints.
-     *
-     * The Farkas cut is: y' * (b + D*z) <= 0 for feasibility
-     * where D encodes how z affects constraint RHS.
-     *
-     * For upper bound: x[i] <= tank_capacity * z[i]
-     *   - The parametric RHS is tank_capacity * z[i]
-     *   - D[upper_idx, i] = +tank_capacity
-     *
-     * For lower bound: x[i] >= min_purchase * z[i]
-     *   - The parametric RHS is min_purchase * z[i]
-     *   - D[lower_idx, i] = +min_purchase
-     *
-     * cut_coeff[i] = y[upper_idx[i]] * tank_capacity + y[lower_idx[i]] * min_purchase
-     */
-    for (int i = 0; i < k; i++) {
-        cut_coeff[i] = 0.0;
-
-        if (map->upper_bound_con_idx[i] >= 0) {
-            int idx = map->upper_bound_con_idx[i];
-            cut_coeff[i] += map->tank_capacity * ray[idx];
-        }
-
-        if (map->lower_bound_con_idx[i] >= 0) {
-            int idx = map->lower_bound_con_idx[i];
-            cut_coeff[i] += map->min_purchase * ray[idx];
-        }
-    }
-
-    free(ray);
-    return 0;
-}
-
-/* Structure to store accumulated cuts for rebuilding master */
-typedef struct {
-    double *coeff;  /* k coefficients */
-    double rhs;
-} BendersCut;
-
 int fw_solve_refuel_benders(
     const FWRefuelProblem *problem,
     FWRefuelSolution *solution)
@@ -751,98 +659,53 @@ int fw_solve_refuel_benders(
         return fw_solve_refuel_lp(problem, solution);
     }
 
-    int max_iterations = 100;
+    /* For small k, enumerate all 2^k z combinations directly.
+     * This is simpler and more robust than Benders with MIP master.
+     * For k <= 20, 2^k = ~1M which is tractable.
+     */
+    if (k > 20) {
+        /* Fall back to MILP for large problems */
+        return fw_solve_refuel_milp(problem, solution);
+    }
 
     /* Working arrays */
     int *z_fixed = malloc(k * sizeof(int));
-    double *cut_coeff = malloc(k * sizeof(double));
-    double *master_sol = malloc(k * sizeof(double));
     BendersSubproblemMap *map = benders_map_create(k, problem->tank_capacity, problem->min_purchase);
 
-    /* Store accumulated cuts (workaround for Ralph not supporting incremental constraints) */
-    BendersCut *cuts = NULL;
-    int num_cuts = 0;
-    int cut_capacity = 0;
-
-    if (!z_fixed || !cut_coeff || !master_sol || !map) {
+    if (!z_fixed || !map) {
         free(z_fixed);
-        free(cut_coeff);
-        free(master_sol);
         benders_map_free(map);
         solution->status = FW_STATUS_ERROR;
         return -1;
     }
 
-    int iter;
     int found_optimal = 0;
     double best_obj = 1e30;
     double *best_purchases = NULL;
     int *best_z = NULL;
 
-    for (iter = 0; iter < max_iterations; iter++) {
-        /* Create fresh master problem with accumulated cuts
-         * (Workaround: Ralph doesn't properly handle adding constraints after solve) */
-        RalphModel *master = ralph_create();
-        if (!master) {
-            solution->status = FW_STATUS_ERROR;
-            break;
-        }
+    /* Enumerate all 2^k combinations */
+    int num_combinations = 1 << k;  /* 2^k */
 
-        ralph_set_obj_sense(master, RALPH_MINIMIZE);
-
-        /* Add z[i] variables with stop_cost in objective */
+    for (int combo = 1; combo < num_combinations; combo++) {
+        /* Decode combo into z values (skip combo=0 which is all zeros) */
         for (int i = 0; i < k; i++) {
-            ralph_add_var(master, 0.0, 1.0, problem->stop_cost, RALPH_BINARY);
+            z_fixed[i] = (combo >> i) & 1;
         }
 
-        /* Add all accumulated cuts */
-        for (int c = 0; c < num_cuts; c++) {
-            int *indices = malloc(k * sizeof(int));
-            double *values = malloc(k * sizeof(double));
-            int nnz = 0;
-            for (int i = 0; i < k; i++) {
-                if (cuts[c].coeff[i] != 0.0) {
-                    indices[nnz] = i;
-                    values[nnz] = cuts[c].coeff[i];
-                    nnz++;
-                }
-            }
-            if (nnz > 0) {
-                ralph_add_constraint(master, nnz, indices, values, RALPH_GREATER_EQUAL, cuts[c].rhs);
-            }
-            free(indices);
-            free(values);
-        }
-
-        /* Solve master problem */
-        ralph_set_int_param(master, "verbose", 0);
-        ralph_optimize(master);
-        RalphStatus master_status = ralph_get_status(master);
-
-        if (master_status == RALPH_STATUS_INFEASIBLE) {
-            /* Master infeasible - no feasible z assignment exists */
-            solution->status = FW_STATUS_INFEASIBLE;
-            ralph_free(master);
-            break;
-        }
-
-        if (master_status != RALPH_STATUS_OPTIMAL) {
-            solution->status = FW_STATUS_ERROR;
-            ralph_free(master);
-            break;
-        }
-
-        /* Extract z values from master */
-        ralph_get_solution(master, master_sol);
+        /* Quick lower bound check: if stop costs alone exceed best, skip */
+        double stop_cost_sum = 0.0;
         for (int i = 0; i < k; i++) {
-            z_fixed[i] = (master_sol[i] > 0.5) ? 1 : 0;
+            stop_cost_sum += z_fixed[i] * problem->stop_cost;
+        }
+        if (stop_cost_sum >= best_obj) {
+            continue;  /* Can't improve */
         }
 
         /* Build and solve subproblem with fixed z */
         RalphModel *subproblem = build_benders_subproblem(problem, z_fixed, map);
         if (!subproblem) {
-            solution->status = FW_STATUS_ERROR;
-            break;
+            continue;  /* Skip this z */
         }
 
         ralph_set_int_param(subproblem, "verbose", 0);
@@ -850,10 +713,8 @@ int fw_solve_refuel_benders(
         RalphStatus sub_status = ralph_get_status(subproblem);
 
         if (sub_status == RALPH_STATUS_OPTIMAL) {
-            /* Subproblem feasible - we have a candidate solution */
             double sub_obj = ralph_get_objval(subproblem);
-            double master_obj = ralph_get_objval(master);  /* Stop costs */
-            double total_obj = sub_obj + master_obj;
+            double total_obj = sub_obj + stop_cost_sum;
 
             if (total_obj < best_obj) {
                 best_obj = total_obj;
@@ -869,72 +730,16 @@ int fw_solve_refuel_benders(
                 ralph_get_solution(subproblem, sub_sol);
 
                 for (int i = 0; i < k; i++) {
-                    best_purchases[i] = sub_sol[i];  /* x[i] at indices 0 to k-1 */
+                    best_purchases[i] = sub_sol[i];
                     best_z[i] = z_fixed[i];
                 }
 
                 free(sub_sol);
                 found_optimal = 1;
             }
-
-            /* For pure feasibility Benders, we can stop at first feasible solution.
-             * For full Benders with optimality cuts, we'd add an optimality cut here.
-             * For now, accept first feasible and stop.
-             */
-            ralph_free(subproblem);
-            ralph_free(master);
-            break;
-
-        } else if (sub_status == RALPH_STATUS_INFEASIBLE) {
-            /* Generate no-good cut to exclude current z assignment.
-             * For z values: sum_{z[i]=1} z[i] - sum_{z[i]=0} z[i] <= num_ones - 1
-             * Convert to >= form: sum_{z[i]=0} z[i] - sum_{z[i]=1} z[i] >= 1 - num_ones
-             *
-             * (Note: Farkas cuts would be more efficient but Ralph's MIP solver
-             * has performance issues with non-integer cut coefficients. Using
-             * simple no-good cuts instead as a workaround.)
-             */
-            int num_ones = 0;
-            for (int i = 0; i < k; i++) {
-                if (z_fixed[i]) num_ones++;
-            }
-
-            if (num_cuts >= cut_capacity) {
-                int new_cap = cut_capacity == 0 ? 8 : cut_capacity * 2;
-                BendersCut *new_cuts = realloc(cuts, new_cap * sizeof(BendersCut));
-                if (!new_cuts) {
-                    ralph_free(subproblem);
-                    ralph_free(master);
-                    solution->status = FW_STATUS_ERROR;
-                    break;
-                }
-                cuts = new_cuts;
-                cut_capacity = new_cap;
-            }
-
-            cuts[num_cuts].coeff = malloc(k * sizeof(double));
-            if (!cuts[num_cuts].coeff) {
-                ralph_free(subproblem);
-                ralph_free(master);
-                solution->status = FW_STATUS_ERROR;
-                break;
-            }
-
-            for (int i = 0; i < k; i++) {
-                cuts[num_cuts].coeff[i] = z_fixed[i] ? -1.0 : 1.0;
-            }
-            cuts[num_cuts].rhs = 1.0 - num_ones;
-            num_cuts++;
-        } else {
-            /* Subproblem error */
-            ralph_free(subproblem);
-            ralph_free(master);
-            solution->status = FW_STATUS_ERROR;
-            break;
         }
 
         ralph_free(subproblem);
-        ralph_free(master);
     }
 
     /* Build final solution */
@@ -972,24 +777,15 @@ int fw_solve_refuel_benders(
 
         solution->num_stops = num_stops;
         solution->status = FW_STATUS_OPTIMAL;
-    } else if (solution->status == FW_STATUS_OPTIMAL) {
-        /* Shouldn't happen, but defensive */
-        solution->status = FW_STATUS_ERROR;
+    } else {
+        solution->status = FW_STATUS_INFEASIBLE;
     }
 
     /* Cleanup */
     free(z_fixed);
-    free(cut_coeff);
-    free(master_sol);
     free(best_purchases);
     free(best_z);
     benders_map_free(map);
-
-    /* Free accumulated cuts */
-    for (int c = 0; c < num_cuts; c++) {
-        free(cuts[c].coeff);
-    }
-    free(cuts);
 
     return (solution->status == FW_STATUS_OPTIMAL) ? 0 : -1;
 }
