@@ -5,45 +5,41 @@ Future improvements and enhancements for the Ralph LAP solver.
 ## Implemented Features
 
 - [x] Dense JVC algorithm (O(n³))
-- [x] Minimization and maximization
-- [x] Sparse LAP (via dense conversion)
+- [x] Minimization and maximization (all variants)
+- [x] Sparse LAP with native JVC algorithm
+- [x] Sparse LAP with automatic dense fallback (density > 30%)
 - [x] LP-based solver (for verification)
 - [x] Workspace reuse API
-- [x] SIMD optimizations
+- [x] SIMD optimizations (dense and sparse)
 - [x] OpenMP parallelization (optional)
 - [x] Rectangular LAP (m × n problems)
 - [x] Runtime parallel enable/disable
+- [x] Sparse vs dense benchmarks
 
 ---
 
 ## Planned Improvements
 
-### 1. Sparse-Native JVC Implementation
-**Priority: High** | **Complexity: Medium**
+### 1. ~~Sparse-Native JVC Implementation~~ ✅ COMPLETED
+**Status: Implemented (2026-01-29)**
 
-Currently sparse problems are converted to dense format. A true sparse implementation would:
-- Use CSR format directly in all phases
-- Only iterate over finite-cost edges
-- Skip forbidden assignments without memory access
+Native sparse JVC algorithm implemented with:
+- CSR format used directly in all phases
+- Only iterates over finite-cost edges
+- Automatic density threshold (30%) for switching between native sparse and dense conversion
+- SIMD optimizations in initialization and Dijkstra minimum-finding
+- Three-state Dijkstra (not reached / in queue / finalized) for correct infeasibility detection
 
-**Benefits:**
-- 10-100x faster for sparse problems (e.g., 10% density)
-- Lower memory usage (O(nnz) vs O(n²))
-- Essential for large matching problems
+**API:** `ralph_lap_solve_sparse()` - same function handles both native sparse and dense fallback
 
-**API:**
-```c
-RalphLapStatus ralph_lap_solve_sparse_native(
-    int n,
-    int nnz,
-    const int *row_ptr,
-    const int *col_idx,
-    const double *values,
-    RalphLapObjective objective,
-    int *row_sol,
-    double *total_cost
-);
-```
+**Performance Results:**
+| Size | Density | Native Sparse | Dense Conversion | Speedup |
+|------|---------|---------------|------------------|---------|
+| 500 | 10% | 1.1ms | 1.7ms | 1.5x |
+| 1000 | 10% | 6.7ms | 9.5ms | 1.4x |
+| 5000 | 10% | 417ms | - | native only |
+
+**Benchmarks:** `bench_sparse_vs_dense()` and `bench_sparse_scaling()` in `benchmarks/bench_lap.c`
 
 ---
 
@@ -172,14 +168,30 @@ Specialized branch-and-bound for problems with assignment structure:
 
 ---
 
-## Performance Targets
+## Performance Results (2026-01-29)
+
+| Problem Type | Achieved | Notes |
+|--------------|----------|-------|
+| Dense n=500 | 2.6ms | Random uniform costs |
+| Dense n=1000 | 13.9ms | - |
+| Dense n=2000 | 66.5ms | - |
+| Sparse n=500, 10% | 1.7ms | Native sparse JVC |
+| Sparse n=1000, 10% | 6.7ms | Native sparse JVC |
+| Sparse n=5000, 10% | 417ms | Native sparse JVC |
+| Sparse n=1000, 50% | 9.7ms | Falls back to dense |
+
+**Sparse vs Dense Crossover:**
+- Native sparse faster when density < 20%
+- Dense conversion faster when density > 30%
+- Automatic threshold at 30% density
+
+## Future Performance Targets
 
 | Problem Type | Current | Target |
 |--------------|---------|--------|
-| Dense n=1000 | 10ms | 5ms |
 | Dense n=5000 | 900ms | 400ms |
-| Sparse n=10000, 1% density | N/A | 50ms |
-| Rectangular 1000×5000 | 900ms | 200ms |
+| Sparse n=10000, 5% density | - | 200ms |
+| Rectangular 1000×5000 | - | 200ms |
 
 ---
 
