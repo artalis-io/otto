@@ -873,7 +873,217 @@ static void test_rect_maximize(void) {
 }
 
 /* ============================================================================
- * Test 24: Parallel setting
+ * Test 24: Sparse LAP - very sparse (native algorithm)
+ * ============================================================================ */
+static void test_sparse_native(void) {
+    printf("\n=== Test: Sparse LAP (Native Algorithm) ===\n");
+
+    /* Create a very sparse 10x10 problem (< 30% density to trigger native) */
+    int n = 10;
+    /* Each row has only 2-3 edges */
+    int row_ptr[] = {0, 2, 5, 7, 10, 12, 15, 17, 20, 22, 25};
+    int col_idx[] = {
+        0, 1,           /* Row 0: cols 0, 1 */
+        1, 2, 3,        /* Row 1: cols 1, 2, 3 */
+        2, 4,           /* Row 2: cols 2, 4 */
+        3, 5, 6,        /* Row 3: cols 3, 5, 6 */
+        4, 7,           /* Row 4: cols 4, 7 */
+        5, 6, 8,        /* Row 5: cols 5, 6, 8 */
+        6, 9,           /* Row 6: cols 6, 9 */
+        7, 8, 9,        /* Row 7: cols 7, 8, 9 */
+        8, 9,           /* Row 8: cols 8, 9 */
+        0, 5, 9         /* Row 9: cols 0, 5, 9 */
+    };
+    double values[] = {
+        1.0, 10.0,          /* Row 0 */
+        5.0, 2.0, 8.0,      /* Row 1 */
+        3.0, 7.0,           /* Row 2 */
+        4.0, 6.0, 9.0,      /* Row 3 */
+        2.0, 5.0,           /* Row 4 */
+        8.0, 1.0, 4.0,      /* Row 5 */
+        3.0, 6.0,           /* Row 6 */
+        7.0, 2.0, 5.0,      /* Row 7 */
+        4.0, 8.0,           /* Row 8 */
+        9.0, 3.0, 1.0       /* Row 9 */
+    };
+    int nnz = 25;
+
+    int row_sol[10], col_sol[10];
+    double total_cost;
+
+    RalphLapStatus status = ralph_lap_solve_sparse(n, nnz, row_ptr, col_idx, values,
+                                                    RALPH_LAP_MINIMIZE,
+                                                    row_sol, col_sol, &total_cost);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Sparse native solve succeeded");
+
+    /* Verify it's a valid permutation */
+    int used[10] = {0};
+    int valid = 1;
+    for (int i = 0; i < n; i++) {
+        if (row_sol[i] < 0 || row_sol[i] >= n || used[row_sol[i]]) {
+            valid = 0;
+            break;
+        }
+        used[row_sol[i]] = 1;
+    }
+    ASSERT(valid, "Valid permutation");
+
+    /* Verify all assignments use valid edges */
+    int all_valid_edges = 1;
+    for (int i = 0; i < n; i++) {
+        int j = row_sol[i];
+        int found = 0;
+        for (int k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+            if (col_idx[k] == j) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            all_valid_edges = 0;
+            break;
+        }
+    }
+    ASSERT(all_valid_edges, "All assignments use valid edges");
+
+    printf("  Assignment: ");
+    for (int i = 0; i < n; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("\n  Total cost: %.2f\n", total_cost);
+}
+
+/* ============================================================================
+ * Test 25: Sparse LAP - infeasible (no perfect matching)
+ * ============================================================================ */
+static void test_sparse_infeasible(void) {
+    printf("\n=== Test: Sparse LAP (Infeasible) ===\n");
+
+    /* 10x10 problem where no perfect matching exists (< 30% density for native sparse)
+     * Rows 0-4 can only go to columns 0-2 (5 rows competing for 3 columns)
+     * Rows 5-9 can go to columns 3-9
+     */
+    int n = 10;
+    int row_ptr[] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20};
+    int col_idx[] = {
+        0, 1,           /* Row 0: cols 0, 1 */
+        0, 2,           /* Row 1: cols 0, 2 */
+        1, 2,           /* Row 2: cols 1, 2 */
+        0, 1,           /* Row 3: cols 0, 1 */
+        1, 2,           /* Row 4: cols 1, 2 */
+        3, 4,           /* Row 5: cols 3, 4 */
+        5, 6,           /* Row 6: cols 5, 6 */
+        7, 8,           /* Row 7: cols 7, 8 */
+        8, 9,           /* Row 8: cols 8, 9 */
+        3, 9            /* Row 9: cols 3, 9 */
+    };
+    double values[] = {
+        1.0, 2.0,
+        3.0, 4.0,
+        5.0, 6.0,
+        7.0, 8.0,
+        9.0, 10.0,
+        1.0, 2.0,
+        3.0, 4.0,
+        5.0, 6.0,
+        7.0, 8.0,
+        9.0, 10.0
+    };
+    int nnz = 20;  /* 20/100 = 20% density - uses native sparse */
+
+    int row_sol[10];
+    RalphLapStatus status = ralph_lap_solve_sparse(n, nnz, row_ptr, col_idx, values,
+                                                    RALPH_LAP_MINIMIZE,
+                                                    row_sol, NULL, NULL);
+
+    ASSERT(status == RALPH_LAP_INFEASIBLE, "Correctly detected infeasible problem");
+}
+
+/* ============================================================================
+ * Test 26: Sparse vs Dense comparison
+ * ============================================================================ */
+static void test_sparse_vs_dense(void) {
+    printf("\n=== Test: Sparse vs Dense Comparison ===\n");
+
+    /* Create a sparse problem and solve both ways
+     * Key: Ensure a perfect matching exists by including diagonal edges */
+    int n = 20;
+    double *dense_cost = malloc(n * n * sizeof(double));
+
+    /* Initialize dense with infinity */
+    for (int i = 0; i < n * n; i++) {
+        dense_cost[i] = RALPH_LAP_INFINITY;
+    }
+
+    /* Create CSR with ~20% density but guaranteed perfect matching
+     * Each row i has edge to column i (diagonal) plus some random edges */
+    int max_nnz = n * 4;  /* Diagonal + up to 3 random per row */
+    int *row_ptr = malloc((n + 1) * sizeof(int));
+    int *col_idx = malloc(max_nnz * sizeof(int));
+    double *values = malloc(max_nnz * sizeof(double));
+
+    srand(12345);
+    int nnz = 0;
+    row_ptr[0] = 0;
+
+    for (int i = 0; i < n; i++) {
+        int cols_used[20] = {0};
+
+        /* Always include diagonal edge to guarantee perfect matching exists */
+        col_idx[nnz] = i;
+        values[nnz] = (rand() % 100) + 50;  /* Higher cost for diagonal */
+        dense_cost[i * n + i] = values[nnz];
+        cols_used[i] = 1;
+        nnz++;
+
+        /* Add 1-3 additional random edges */
+        int num_extra = 1 + (rand() % 3);
+        for (int e = 0; e < num_extra; e++) {
+            int j = rand() % n;
+            if (!cols_used[j]) {
+                cols_used[j] = 1;
+                col_idx[nnz] = j;
+                values[nnz] = (rand() % 100) + 1;  /* Lower cost for off-diagonal */
+                dense_cost[i * n + j] = values[nnz];
+                nnz++;
+            }
+        }
+        row_ptr[i + 1] = nnz;
+    }
+
+    /* Solve sparse */
+    int *sparse_sol = malloc(n * sizeof(int));
+    double sparse_cost;
+    RalphLapStatus sparse_status = ralph_lap_solve_sparse(n, nnz, row_ptr, col_idx, values,
+                                                           RALPH_LAP_MINIMIZE,
+                                                           sparse_sol, NULL, &sparse_cost);
+
+    /* Solve dense */
+    int *dense_sol = malloc(n * sizeof(int));
+    double dense_cost_val;
+    RalphLapStatus dense_status = ralph_lap_solve(n, dense_cost, RALPH_LAP_MINIMIZE,
+                                                   dense_sol, NULL, NULL, NULL, &dense_cost_val);
+
+    /* Both should succeed (perfect matching exists) */
+    ASSERT(sparse_status == RALPH_LAP_SUCCESS, "Sparse solver succeeded");
+    ASSERT(dense_status == RALPH_LAP_SUCCESS, "Dense solver succeeded");
+
+    if (sparse_status == RALPH_LAP_SUCCESS && dense_status == RALPH_LAP_SUCCESS) {
+        /* Costs should match */
+        ASSERT(fabs(sparse_cost - dense_cost_val) < TOLERANCE,
+               "Sparse and dense costs match");
+        printf("  Sparse cost: %.2f, Dense cost: %.2f\n", sparse_cost, dense_cost_val);
+    }
+
+    free(dense_cost);
+    free(row_ptr);
+    free(col_idx);
+    free(values);
+    free(sparse_sol);
+    free(dense_sol);
+}
+
+/* ============================================================================
+ * Test 27: Parallel setting
  * ============================================================================ */
 static void test_parallel_setting(void) {
     printf("\n=== Test: Parallel Setting ===\n");
@@ -986,6 +1196,9 @@ int main(void) {
     test_rect_more_jobs();
     test_rect_more_workers();
     test_rect_maximize();
+    test_sparse_native();
+    test_sparse_infeasible();
+    test_sparse_vs_dense();
     test_parallel_setting();
     test_workspace_repeated();
 

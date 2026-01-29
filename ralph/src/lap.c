@@ -1033,7 +1033,7 @@ RalphLapStatus ralph_lap_solve_rect(
 }
 
 /* ============================================================================
- * Sparse LAP Solver
+ * Sparse LAP Solver (Native Sparse JVC)
  * ============================================================================ */
 
 RalphLapStatus ralph_lap_solve_sparse(
@@ -1051,32 +1051,373 @@ RalphLapStatus ralph_lap_solve_sparse(
         return RALPH_LAP_INVALID_INPUT;
     }
 
-    /* Convert sparse to dense and use dense solver */
-    /* For truly sparse problems, a dedicated sparse JVC would be better */
-    double *cost = (double *)malloc(n * n * sizeof(double));
-    if (!cost) {
-        return RALPH_LAP_MEMORY_ERROR;
+    /* Handle trivial case */
+    if (n == 1) {
+        if (row_ptr[1] - row_ptr[0] == 0) {
+            return RALPH_LAP_INFEASIBLE;  /* No edges from row 0 */
+        }
+        row_sol[0] = col_idx[row_ptr[0]];
+        if (col_sol) col_sol[row_sol[0]] = 0;
+        if (total_cost) *total_cost = values[row_ptr[0]];
+        return RALPH_LAP_SUCCESS;
     }
 
-    /* Initialize with infinity */
-    for (int i = 0; i < n * n; i++) {
-        cost[i] = RALPH_LAP_INFINITY;
+    /* For very sparse problems (density < 30%), use native sparse algorithm.
+     * For denser problems, the dense algorithm is faster due to better cache access. */
+    double density = (double)nnz / ((double)n * n);
+    if (density > 0.3) {
+        /* Convert to dense - faster for denser problems */
+        double *cost = (double *)malloc(n * n * sizeof(double));
+        if (!cost) return RALPH_LAP_MEMORY_ERROR;
+
+        for (int i = 0; i < n * n; i++) cost[i] = RALPH_LAP_INFINITY;
+        for (int i = 0; i < n; i++) {
+            for (int k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+                int j = col_idx[k];
+                if (j >= 0 && j < n) cost[i * n + j] = values[k];
+            }
+        }
+
+        RalphLapStatus status = ralph_lap_solve(n, cost, objective, row_sol, col_sol,
+                                                 NULL, NULL, total_cost);
+        free(cost);
+        return status;
     }
 
-    /* Fill in finite costs from CSR */
-    for (int i = 0; i < n; i++) {
-        for (int k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
-            int j = col_idx[k];
-            if (j >= 0 && j < n) {
-                cost[i * n + j] = values[k];
+    /* ========================================================================
+     * Native Sparse JVC Algorithm
+     * ======================================================================== */
+
+    RalphLapStatus status = RALPH_LAP_SUCCESS;
+    int i, j, k;
+
+    /* Allocate working arrays */
+    double *work_values = NULL;  /* Possibly negated costs */
+    double *col_price = NULL;    /* Column dual variables */
+    double *dist = NULL;         /* Shortest path distances */
+    int *row_assign = NULL;      /* row_assign[i] = column assigned to row i */
+    int *col_assign = NULL;      /* col_assign[j] = row assigned to column j */
+    int *matches = NULL;         /* Number of times each row matches minimum */
+    int *free_rows = NULL;       /* List of unassigned rows */
+    int *pred = NULL;            /* Predecessor row in augmenting path */
+    int *in_queue = NULL;        /* Whether column is in priority queue */
+    int *in_free_list = NULL;    /* Track which rows are in free list */
+    int *scanned = NULL;         /* Scanned columns in Dijkstra */
+
+    work_values = (double *)malloc(nnz * sizeof(double));
+    col_price = (double *)calloc(n, sizeof(double));
+    dist = (double *)malloc(n * sizeof(double));
+    row_assign = (int *)malloc(n * sizeof(int));
+    col_assign = (int *)malloc(n * sizeof(int));
+    matches = (int *)calloc(n, sizeof(int));
+    free_rows = (int *)malloc(2 * n * sizeof(int));
+    pred = (int *)malloc(n * sizeof(int));
+    in_queue = (int *)calloc(n, sizeof(int));
+    in_free_list = (int *)calloc(n, sizeof(int));
+    scanned = (int *)malloc(n * sizeof(int));
+
+    if (!work_values || !col_price || !dist || !row_assign || !col_assign ||
+        !matches || !free_rows || !pred || !in_queue || !in_free_list || !scanned) {
+        status = RALPH_LAP_MEMORY_ERROR;
+        goto sparse_cleanup;
+    }
+
+    /* Initialize assignments */
+    for (i = 0; i < n; i++) {
+        row_assign[i] = RALPH_LAP_UNASSIGNED;
+        col_assign[i] = RALPH_LAP_UNASSIGNED;
+        dist[i] = RALPH_LAP_INFINITY;
+    }
+
+    /* Copy values, negate if maximizing */
+    if (objective == RALPH_LAP_MAXIMIZE) {
+        for (k = 0; k < nnz; k++) {
+            work_values[k] = -values[k];
+        }
+    } else {
+        memcpy(work_values, values, nnz * sizeof(double));
+    }
+
+    /* ========================================================================
+     * PHASE 1: Column Reduction (Sparse)
+     * For each column, find minimum cost among edges to that column.
+     * ======================================================================== */
+
+    /* For each row, find its minimum cost column */
+    for (i = 0; i < n; i++) {
+        double min_cost = RALPH_LAP_INFINITY;
+        int min_col = -1;
+
+        for (k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+            j = col_idx[k];
+            if (work_values[k] < min_cost) {
+                min_cost = work_values[k];
+                min_col = j;
+            }
+        }
+
+        if (min_col < 0) {
+            /* Row has no edges - infeasible */
+            status = RALPH_LAP_INFEASIBLE;
+            goto sparse_cleanup;
+        }
+
+        /* Update column price if this is the minimum seen */
+        if (min_cost < col_price[min_col] || col_assign[min_col] == RALPH_LAP_UNASSIGNED) {
+            if (col_price[min_col] == 0.0 || min_cost < col_price[min_col]) {
+                col_price[min_col] = min_cost;
+            }
+        }
+
+        matches[i]++;
+        if (col_assign[min_col] == RALPH_LAP_UNASSIGNED) {
+            row_assign[i] = min_col;
+            col_assign[min_col] = i;
+        }
+    }
+
+    /* ========================================================================
+     * PHASE 2: Reduction Transfer (Sparse)
+     * ======================================================================== */
+    int num_free = 0;
+
+    for (i = 0; i < n; i++) {
+        if (row_assign[i] == RALPH_LAP_UNASSIGNED) {
+            free_rows[num_free++] = i;
+            in_free_list[i] = 1;
+        } else if (matches[i] == 1) {
+            /* Row matched exactly once - transfer reduction */
+            int j1 = row_assign[i];
+            double min_reduced = RALPH_LAP_INFINITY;
+
+            for (k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+                j = col_idx[k];
+                if (j != j1) {
+                    double reduced = work_values[k] - col_price[j];
+                    if (reduced < min_reduced) {
+                        min_reduced = reduced;
+                    }
+                }
+            }
+
+            if (min_reduced < RALPH_LAP_INFINITY) {
+                col_price[j1] -= min_reduced;
             }
         }
     }
 
-    RalphLapStatus status = ralph_lap_solve(n, cost, objective, row_sol, col_sol,
-                                             NULL, NULL, total_cost);
+    /* ========================================================================
+     * PHASE 3: Augmenting Row Reduction (Sparse Auction)
+     * ======================================================================== */
+    for (int loop = 0; loop < 2 && num_free > 0; loop++) {
+        int k_free = 0;
+        int max_iter = n * n;
+        int iter = 0;
 
-    free(cost);
+        while (k_free < num_free && iter < max_iter) {
+            iter++;
+            i = free_rows[k_free++];
+
+            /* Find min and second-min reduced costs among this row's edges */
+            double u1 = RALPH_LAP_INFINITY, u2 = RALPH_LAP_INFINITY;
+            int j1 = -1, j2 = -1;
+
+            for (k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+                j = col_idx[k];
+                double reduced = work_values[k] - col_price[j];
+                if (reduced < u1) {
+                    u2 = u1; j2 = j1;
+                    u1 = reduced; j1 = j;
+                } else if (reduced < u2) {
+                    u2 = reduced; j2 = j;
+                }
+            }
+
+            if (j1 < 0) {
+                status = RALPH_LAP_INFEASIBLE;
+                goto sparse_cleanup;
+            }
+
+            /* Adjust column price */
+            if (u1 < u2 - RALPH_LAP_TOLERANCE) {
+                col_price[j1] = col_price[j1] - u2 + u1;
+            } else if (col_assign[j1] >= 0 && j2 >= 0 && col_assign[j2] < 0) {
+                j1 = j2;
+            }
+
+            /* Assign */
+            int prev_row = col_assign[j1];
+            if (prev_row >= 0) {
+                row_assign[prev_row] = RALPH_LAP_UNASSIGNED;
+            }
+            row_assign[i] = j1;
+            col_assign[j1] = i;
+
+            if (prev_row >= 0 && !in_free_list[prev_row]) {
+                in_free_list[prev_row] = 1;
+                if (loop == 1) {
+                    free_rows[--k_free] = prev_row;
+                } else {
+                    free_rows[num_free++] = prev_row;
+                }
+            }
+        }
+
+        /* Rebuild free list */
+        if (loop == 0) {
+            num_free = 0;
+            memset(in_free_list, 0, n * sizeof(int));
+            for (i = 0; i < n; i++) {
+                if (row_assign[i] == RALPH_LAP_UNASSIGNED) {
+                    free_rows[num_free++] = i;
+                    in_free_list[i] = 1;
+                }
+            }
+        }
+    }
+
+    /* Count remaining free rows */
+    num_free = 0;
+    for (i = 0; i < n; i++) {
+        if (row_assign[i] == RALPH_LAP_UNASSIGNED) {
+            free_rows[num_free++] = i;
+        }
+    }
+
+    /* ========================================================================
+     * PHASE 4: Sparse Dijkstra Augmentation
+     * ======================================================================== */
+    for (int f = 0; f < num_free; f++) {
+        int free_row = free_rows[f];
+
+        /* Initialize distances from free_row's edges */
+        for (j = 0; j < n; j++) {
+            dist[j] = RALPH_LAP_INFINITY;
+            pred[j] = -1;
+            in_queue[j] = 0;
+        }
+
+        for (k = row_ptr[free_row]; k < row_ptr[free_row + 1]; k++) {
+            j = col_idx[k];
+            dist[j] = work_values[k] - col_price[j];
+            pred[j] = free_row;
+            in_queue[j] = 1;
+        }
+
+        int end_col = -1;
+        double min_dist = 0.0;
+        int num_scanned = 0;
+
+        /* Dijkstra's algorithm
+         * in_queue states: 0 = not reached, 1 = in queue, 2 = finalized (scanned)
+         */
+        while (end_col < 0) {
+            /* Find minimum distance column among those in queue */
+            min_dist = RALPH_LAP_INFINITY;
+            int min_col = -1;
+
+            for (j = 0; j < n; j++) {
+                if (in_queue[j] == 1 && dist[j] < min_dist) {
+                    min_dist = dist[j];
+                    min_col = j;
+                }
+            }
+
+            if (min_col < 0) {
+                /* No more reachable columns - infeasible */
+                status = RALPH_LAP_INFEASIBLE;
+                goto sparse_cleanup;
+            }
+
+            /* Mark as finalized (scanned) */
+            in_queue[min_col] = 2;
+            scanned[num_scanned++] = min_col;
+
+            if (col_assign[min_col] == RALPH_LAP_UNASSIGNED) {
+                end_col = min_col;
+                break;
+            }
+
+            /* Relax edges from assigned row */
+            int assigned_row = col_assign[min_col];
+            double h = 0.0;
+
+            /* Find the edge cost from assigned_row to min_col */
+            for (k = row_ptr[assigned_row]; k < row_ptr[assigned_row + 1]; k++) {
+                if (col_idx[k] == min_col) {
+                    h = work_values[k] - col_price[min_col] - min_dist;
+                    break;
+                }
+            }
+
+            /* Relax all edges from assigned_row */
+            for (k = row_ptr[assigned_row]; k < row_ptr[assigned_row + 1]; k++) {
+                int jj = col_idx[k];
+                double new_dist = work_values[k] - col_price[jj] - h;
+
+                /* Only update if not yet finalized and distance improves */
+                if (new_dist < dist[jj] && in_queue[jj] != 2) {
+                    dist[jj] = new_dist;
+                    pred[jj] = assigned_row;
+                    in_queue[jj] = 1;  /* Add to queue (or keep in queue) */
+                }
+            }
+        }
+
+        /* Update column prices */
+        for (k = 0; k < num_scanned; k++) {
+            j = scanned[k];
+            col_price[j] += dist[j] - min_dist;
+        }
+
+        /* Trace back and flip assignments */
+        int cur_row;
+        do {
+            cur_row = pred[end_col];
+            col_assign[end_col] = cur_row;
+            int prev_col = row_assign[cur_row];
+            row_assign[cur_row] = end_col;
+            end_col = prev_col;
+        } while (cur_row != free_row);
+    }
+
+    /* ========================================================================
+     * Output results
+     * ======================================================================== */
+    memcpy(row_sol, row_assign, n * sizeof(int));
+
+    if (col_sol) {
+        memcpy(col_sol, col_assign, n * sizeof(int));
+    }
+
+    if (total_cost) {
+        double sum = 0.0;
+        for (i = 0; i < n; i++) {
+            j = row_assign[i];
+            /* Find the cost of edge (i, j) */
+            for (k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+                if (col_idx[k] == j) {
+                    sum += values[k];  /* Use original values, not negated */
+                    break;
+                }
+            }
+        }
+        *total_cost = sum;
+    }
+
+sparse_cleanup:
+    free(work_values);
+    free(col_price);
+    free(dist);
+    free(row_assign);
+    free(col_assign);
+    free(matches);
+    free(free_rows);
+    free(pred);
+    free(in_queue);
+    free(in_free_list);
+    free(scanned);
+
     return status;
 }
 
