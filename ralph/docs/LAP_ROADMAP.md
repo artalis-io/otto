@@ -16,6 +16,7 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] Runtime parallel enable/disable
 - [x] Sparse vs dense benchmarks
 - [x] Optional ε-scaling auction for tie-breaking
+- [x] Incremental updates / warm start
 
 ---
 
@@ -44,38 +45,49 @@ Native sparse JVC algorithm implemented with:
 
 ---
 
-### 2. Incremental Updates / Warm Start
-**Priority: Medium** | **Complexity: High**
+### 2. ~~Incremental Updates / Warm Start~~ ✅ COMPLETED
+**Status: Implemented (2026-01-29)**
 
-For applications that solve similar LAPs repeatedly (tracking, auction algorithms):
-- Reuse dual variables from previous solution
-- Update only affected parts when costs change
-- Support single-cell and batch updates
-
-**Benefits:**
-- Much faster for iterative applications
-- Essential for real-time tracking systems
+Warm start implementation for solving similar LAPs repeatedly:
+- Automatically saves dual variables (u, v) and solution in workspace
+- Reuses previous solution as starting point when costs change
+- Validates previous solution against new cost matrix
+- Falls back to cold start when warm start invalid or counterproductive
 
 **API:**
 ```c
-/* Initialize from previous solution */
-RalphLapStatus ralph_lap_warm_start(
-    RalphLapWorkspace *ws,
+/* Solve with automatic warm start (uses workspace state) */
+RalphLapStatus ralph_lap_solve_warm(
     int n,
-    const double *u,      /* Previous row duals */
-    const double *v       /* Previous column duals */
+    const double *cost,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
+    double *total_cost,
+    RalphLapWorkspace *ws,
+    int use_warm_start     /* 1 to try warm start, 0 for cold */
 );
 
-/* Update single cost and re-solve */
-RalphLapStatus ralph_lap_update_cost(
+/* Manual warm start initialization */
+RalphLapStatus ralph_lap_warm_init(
     RalphLapWorkspace *ws,
-    int row,
-    int col,
-    double new_cost,
-    int *row_sol,
-    double *total_cost
+    int n,
+    const int *row_sol,
+    const double *u,
+    const double *v
 );
 ```
+
+**Performance Results:**
+| Scenario | Speedup | Notes |
+|----------|---------|-------|
+| Identical problems | 6-10x | Best case - solution still valid |
+| 1% perturbation | ~2x | Minor cost changes |
+| 10% perturbation | ~0.6x | Overhead exceeds benefit |
+
+**Benchmarks:** `bench_warm_start()` in `benchmarks/bench_lap.c`
 
 ---
 

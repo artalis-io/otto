@@ -124,6 +124,83 @@ void ralph_lap_workspace_free(RalphLapWorkspace *ws);
 int ralph_lap_workspace_max_n(const RalphLapWorkspace *ws);
 
 /*
+ * Initialize warm start from previous dual variables.
+ *
+ * This stores the dual variables (u, v) and optionally the previous solution
+ * in the workspace. The next solve will use these as starting point, which
+ * can significantly speed up solving similar problems.
+ *
+ * Parameters:
+ *   ws      - Workspace to initialize
+ *   n       - Problem dimension
+ *   u       - Previous row dual variables (size n, can be NULL)
+ *   v       - Previous column dual variables (size n, required)
+ *   row_sol - Previous row solution (size n, can be NULL)
+ *   col_sol - Previous column solution (size n, can be NULL)
+ *
+ * Returns:
+ *   RALPH_LAP_SUCCESS on success, error code otherwise.
+ *
+ * Note: If row_sol and col_sol are provided, the solver can potentially
+ * repair the solution locally for small cost changes. If only v is provided,
+ * the solver skips Phase 1 but still runs Phase 2-4.
+ */
+RalphLapStatus ralph_lap_warm_start(
+    RalphLapWorkspace *ws,
+    int n,
+    const double *u,
+    const double *v,
+    const int *row_sol,
+    const int *col_sol
+);
+
+/*
+ * Clear warm start state from workspace.
+ *
+ * After calling this, the next solve will be a cold start (full solve).
+ */
+void ralph_lap_warm_start_clear(RalphLapWorkspace *ws);
+
+/*
+ * Check if workspace has valid warm start data.
+ *
+ * Returns:
+ *   1 if warm start is valid, 0 otherwise
+ */
+int ralph_lap_warm_start_valid(const RalphLapWorkspace *ws);
+
+/*
+ * Solve LAP with warm start using a pre-allocated workspace.
+ *
+ * If the workspace has valid warm start data (from ralph_lap_warm_start()),
+ * this function will use it to speed up the solve. Otherwise, it behaves
+ * identically to ralph_lap_solve_with_workspace().
+ *
+ * After solving, the workspace automatically saves the solution for potential
+ * warm start on the next call (unless save_for_warm_start is 0).
+ *
+ * Parameters:
+ *   n, cost, objective, row_sol, col_sol, u, v, total_cost - See ralph_lap_solve()
+ *   ws                 - Pre-allocated workspace (must have max_n >= n)
+ *   save_for_warm_start - If non-zero, save solution for next warm start
+ *
+ * Returns:
+ *   RALPH_LAP_SUCCESS on success, error code otherwise.
+ */
+RalphLapStatus ralph_lap_solve_warm(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
+    double *total_cost,
+    RalphLapWorkspace *ws,
+    int save_for_warm_start
+);
+
+/*
  * Solve LAP using a pre-allocated workspace.
  *
  * Identical to ralph_lap_solve() but uses provided workspace instead of
