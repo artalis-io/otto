@@ -10,6 +10,16 @@ test_fuelwise
 test_shared
 test_velo
 test_carta
+test_lap
+test_lap_dbg
+test_lap_debug
+
+# Benchmark binaries
+bench_lap
+bench_sizes
+bench_vs_glpk
+bench_mip
+compare_glpk
 
 # API server binaries
 fuelwise-api
