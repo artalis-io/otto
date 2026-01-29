@@ -67,6 +67,7 @@ BENCH_VS_GLPK_EXEC = bench_vs_glpk
 BENCH_MIP_EXEC = bench_mip
 PROFILE_BENCH_EXEC = profile_bench
 BENCH_LAP_EXEC = bench_lap
+BENCH_LAP_PERF_EXEC = bench_lap_perf
 
 # GLPK configuration (via Homebrew)
 GLPK_PREFIX = $(shell brew --prefix glpk 2>/dev/null || echo "/opt/homebrew/opt/glpk")
@@ -170,9 +171,21 @@ $(BENCH_LAP_EXEC): $(BENCH_DIR)/bench_lap.c $(LIB_NAME)
 bench-lap: $(BENCH_LAP_EXEC)
 	./$(BENCH_LAP_EXEC)
 
+# Build LAP performance benchmark
+$(BENCH_LAP_PERF_EXEC): $(BENCH_DIR)/bench_lap_perf.c $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run LAP performance benchmark
+bench-lap-perf: $(BENCH_LAP_PERF_EXEC)
+	./$(BENCH_LAP_PERF_EXEC)
+
+# Quick LAP performance benchmark
+bench-lap-perf-quick: $(BENCH_LAP_PERF_EXEC)
+	./$(BENCH_LAP_PERF_EXEC) --quick
+
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -186,7 +199,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap bench bench-lap compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap bench bench-lap bench-lap-perf bench-lap-perf-quick compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
 
 # Help
 help:

@@ -8,6 +8,11 @@
  * 2. Reduction Transfer: Improve prices for singly-assigned rows
  * 3. Augmenting Row Reduction: Auction-style bidding (run twice)
  * 4. Augmentation: Dijkstra-based shortest path for remaining rows
+ *
+ * Performance optimizations:
+ * - OpenMP SIMD for vectorized min-finding
+ * - Aligned memory allocations for SIMD
+ * - Parallel matrix operations
  */
 
 #include "lap.h"
@@ -16,6 +21,34 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+/* Memory alignment for SIMD (64 bytes = AVX-512 cache line) */
+#define LAP_ALIGNMENT 64
+
+/* Aligned allocation helpers */
+static void* lap_aligned_alloc(size_t size) {
+#ifdef _WIN32
+    return _aligned_malloc(size, LAP_ALIGNMENT);
+#else
+    void *ptr = NULL;
+    if (posix_memalign(&ptr, LAP_ALIGNMENT, size) != 0) {
+        return NULL;
+    }
+    return ptr;
+#endif
+}
+
+static void lap_aligned_free(void *ptr) {
+#ifdef _WIN32
+    _aligned_free(ptr);
+#else
+    free(ptr);
+#endif
+}
 
 /* ============================================================================
  * Internal helpers
@@ -82,15 +115,15 @@ RalphLapStatus ralph_lap_solve(
     RalphLapStatus status = RALPH_LAP_SUCCESS;
     int i, j, k;
 
-    /* Allocate memory */
-    work_cost = (double *)malloc(n * n * sizeof(double));
-    col_price = (double *)calloc(n, sizeof(double));
-    row_price = (double *)calloc(n, sizeof(double));
+    /* Allocate memory with alignment for SIMD */
+    work_cost = (double *)lap_aligned_alloc(n * n * sizeof(double));
+    col_price = (double *)lap_aligned_alloc(n * sizeof(double));
+    row_price = (double *)lap_aligned_alloc(n * sizeof(double));
+    dist = (double *)lap_aligned_alloc(n * sizeof(double));
     row_assign = (int *)malloc(n * sizeof(int));
     col_assign = (int *)malloc(n * sizeof(int));
     matches = (int *)calloc(n, sizeof(int));
     free_rows = (int *)malloc(2 * n * sizeof(int));  /* Extra space for auction phase */
-    dist = (double *)malloc(n * sizeof(double));
     pred = (int *)malloc(n * sizeof(int));
     col_list = (int *)malloc(n * sizeof(int));
     in_free_list = (int *)calloc(n, sizeof(int));
@@ -101,14 +134,19 @@ RalphLapStatus ralph_lap_solve(
         goto cleanup;
     }
 
+    /* Zero-initialize aligned arrays */
+    memset(col_price, 0, n * sizeof(double));
+    memset(row_price, 0, n * sizeof(double));
+
     /* Initialize assignments to unassigned */
     for (i = 0; i < n; i++) {
         row_assign[i] = RALPH_LAP_UNASSIGNED;
         col_assign[i] = RALPH_LAP_UNASSIGNED;
     }
 
-    /* Copy cost matrix, negate if maximizing */
+    /* Copy cost matrix, negate if maximizing (parallelized) */
     if (objective == RALPH_LAP_MAXIMIZE) {
+        #pragma omp parallel for simd if(n > 100)
         for (i = 0; i < n * n; i++) {
             work_cost[i] = -cost[i];
         }
@@ -120,20 +158,38 @@ RalphLapStatus ralph_lap_solve(
      * PHASE 1: Column Reduction
      * For each column, find minimum cost and use as column price.
      * Assign column to row with minimum cost if not already assigned.
+     *
+     * Cache-optimized: Process rows sequentially (row-major access),
+     * track minimum and min_row for each column.
      * ======================================================================== */
-    for (j = n - 1; j >= 0; j--) {  /* Reverse order gives better results */
-        double min_cost = work_cost[0 * n + j];
-        int min_row = 0;
 
-        for (i = 1; i < n; i++) {
-            double c = work_cost[i * n + j];
-            if (c < min_cost) {
-                min_cost = c;
-                min_row = i;
+    /* Temporary arrays to track min value and row per column */
+    int *col_min_row = pred;  /* Reuse pred array temporarily */
+
+    /* Initialize with first row */
+    #pragma omp simd
+    for (j = 0; j < n; j++) {
+        col_price[j] = work_cost[j];
+        col_min_row[j] = 0;
+    }
+
+    /* Process remaining rows with cache-friendly row-major access
+     * Note: Can't easily parallelize across rows due to col_price/col_min_row updates.
+     * Instead, for large n, we can parallelize the inner loop. */
+    for (i = 1; i < n; i++) {
+        const double *row_costs = &work_cost[i * n];
+        /* SIMD vectorization of the comparison/update */
+        for (j = 0; j < n; j++) {
+            if (row_costs[j] < col_price[j]) {
+                col_price[j] = row_costs[j];
+                col_min_row[j] = i;
             }
         }
+    }
 
-        col_price[j] = min_cost;
+    /* Now process columns in reverse order to assign (as before) */
+    for (j = n - 1; j >= 0; j--) {
+        int min_row = col_min_row[j];
         matches[min_row]++;
 
         if (matches[min_row] == 1) {
@@ -171,10 +227,12 @@ RalphLapStatus ralph_lap_solve(
             /* Row matched exactly once - transfer reduction */
             int j1 = row_assign[i];
             double min_reduced = DBL_MAX;
+            const double *row_costs = &work_cost[i * n];
 
+            /* Find minimum reduced cost for columns other than j1 */
             for (j = 0; j < n; j++) {
                 if (j != j1) {
-                    double reduced = work_cost[i * n + j] - col_price[j];
+                    double reduced = row_costs[j] - col_price[j];
                     if (reduced < min_reduced) {
                         min_reduced = reduced;
                     }
@@ -204,9 +262,11 @@ RalphLapStatus ralph_lap_solve(
             double u1 = DBL_MAX;  /* Minimum reduced cost */
             double u2 = DBL_MAX;  /* Second minimum */
             int j1 = -1, j2 = -1;
+            const double *row_costs = &work_cost[i * n];
 
+            /* Single pass to find both min and second-min */
             for (j = 0; j < n; j++) {
-                double reduced = work_cost[i * n + j] - col_price[j];
+                double reduced = row_costs[j] - col_price[j];
                 if (reduced < u1) {
                     u2 = u1;
                     j2 = j1;
@@ -292,9 +352,12 @@ RalphLapStatus ralph_lap_solve(
         int free_row = free_rows[f];
 
         /* Initialize column list and distances */
+        const double *row_costs = &work_cost[free_row * n];
+
+        #pragma omp simd
         for (j = 0; j < n; j++) {
             col_list[j] = j;
-            dist[j] = work_cost[free_row * n + j] - col_price[j];
+            dist[j] = row_costs[j] - col_price[j];
             pred[j] = free_row;
         }
 
@@ -404,6 +467,7 @@ RalphLapStatus ralph_lap_solve(
         }
         /* Negate if we were maximizing */
         if (objective == RALPH_LAP_MAXIMIZE) {
+            #pragma omp simd
             for (i = 0; i < n; i++) {
                 u[i] = -u[i];
             }
@@ -415,6 +479,7 @@ RalphLapStatus ralph_lap_solve(
         memcpy(v, col_price, n * sizeof(double));
         /* Negate if we were maximizing */
         if (objective == RALPH_LAP_MAXIMIZE) {
+            #pragma omp simd
             for (j = 0; j < n; j++) {
                 v[j] = -v[j];
             }
@@ -424,10 +489,11 @@ RalphLapStatus ralph_lap_solve(
     /* Compute total cost */
     if (total_cost) {
         double sum = 0.0;
+        #pragma omp simd reduction(+:sum)
         for (i = 0; i < n; i++) {
-            j = row_assign[i];
-            double c = COST(i, j);  /* Use original cost matrix */
-            if (!is_infinite(c)) {
+            int jj = row_assign[i];
+            double c = cost[i * n + jj];  /* Use original cost matrix */
+            if (c < RALPH_LAP_INFINITY * 0.5) {
                 sum += c;
             }
         }
@@ -435,14 +501,14 @@ RalphLapStatus ralph_lap_solve(
     }
 
 cleanup:
-    free(work_cost);
-    free(col_price);
-    free(row_price);
+    lap_aligned_free(work_cost);
+    lap_aligned_free(col_price);
+    lap_aligned_free(row_price);
+    lap_aligned_free(dist);
     free(row_assign);
     free(col_assign);
     free(matches);
     free(free_rows);
-    free(dist);
     free(pred);
     free(col_list);
     free(in_free_list);
