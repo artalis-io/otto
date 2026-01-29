@@ -68,6 +68,73 @@ void detect_lap_free(LAPSignature *sig);
 int solve_as_lap(const LAPSignature *sig, double *solution, double *obj_val);
 
 /* ============================================================================
+ * MIP LAP Detection and Solving
+ * ============================================================================ */
+
+/*
+ * MIP LAP signature - extended for use during branch-and-bound.
+ *
+ * Used when a MIP has LAP structure in its LP relaxation. The LAP solver
+ * can be used at each B&B node by modifying costs based on variable fixings.
+ */
+typedef struct {
+    LAPSignature base;        /* Base LAP signature */
+    int num_vars;             /* Total number of variables in MIP */
+    double *base_costs;       /* Original cost matrix (before modifications) */
+    void *lap_workspace;      /* Reusable LAP workspace */
+} MIPLAPSignature;
+
+/*
+ * Detect LAP structure in a MIP model.
+ *
+ * This is similar to detect_lap() but:
+ * - Works with models that have integer/binary variables
+ * - Allocates workspace for repeated solving during B&B
+ * - Stores base costs that can be modified per-node
+ *
+ * Parameters:
+ *   model - LP/MIP model to analyze
+ *   sig   - Output: MIP LAP signature (caller allocates struct)
+ *
+ * Returns:
+ *   1 if LAP structure detected, 0 otherwise.
+ */
+int detect_lap_mip(const LPModel *model, MIPLAPSignature *sig);
+
+/*
+ * Free memory allocated by detect_lap_mip().
+ */
+void detect_lap_mip_free(MIPLAPSignature *sig);
+
+/*
+ * Solve LAP relaxation at a B&B node.
+ *
+ * This solves the LP relaxation of the assignment problem given the current
+ * variable bounds (fixings from branching).
+ *
+ * Variable fixings are handled as:
+ * - x[i,j] fixed to 0: cost[i,j] = infinity (forbidden)
+ * - x[i,j] fixed to 1: all other costs in row i and col j = infinity
+ *
+ * Parameters:
+ *   sig       - MIP LAP signature from detect_lap_mip()
+ *   lb        - Current lower bounds for all variables
+ *   ub        - Current upper bounds for all variables
+ *   solution  - Output: variable values
+ *   obj_val   - Output: objective value
+ *
+ * Returns:
+ *   0 on success, -1 on infeasible/error.
+ */
+int solve_lap_at_node(
+    MIPLAPSignature *sig,
+    const double *lb,
+    const double *ub,
+    double *solution,
+    double *obj_val
+);
+
+/* ============================================================================
  * Runtime Configuration
  * ============================================================================ */
 

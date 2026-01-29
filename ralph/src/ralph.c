@@ -278,7 +278,7 @@ int ralph_optimize(RalphModel *model) {
 
     if (ralph_is_mip(model)) {
         /* MIP solve - use presolved model if available */
-        model->mip_solver = mip_create(solve_model);
+        model->mip_solver = mip_create(solve_model, model->detect_special);
         if (!model->mip_solver) {
             if (presolved) presolve_free(presolved);
             model->status = RALPH_STATUS_ERROR;

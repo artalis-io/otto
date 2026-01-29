@@ -341,3 +341,186 @@ int solve_as_lap(const LAPSignature *sig, double *solution, double *obj_val) {
     free(row_sol);
     return 0;
 }
+
+/* ============================================================================
+ * MIP LAP Detection and Solving
+ * ============================================================================ */
+
+/*
+ * Detect LAP structure in a MIP model.
+ *
+ * This reuses the LP detection but also:
+ * - Allocates a reusable LAP workspace
+ * - Stores a copy of the base costs for modification during B&B
+ */
+int detect_lap_mip(const LPModel *model, MIPLAPSignature *sig) {
+    if (!model || !sig) {
+        return 0;
+    }
+
+    /* Initialize */
+    memset(sig, 0, sizeof(MIPLAPSignature));
+
+    /* Use standard LAP detection */
+    if (!detect_lap(model, &sig->base)) {
+        return 0;
+    }
+
+    int n = sig->base.n;
+    sig->num_vars = model->num_vars;
+
+    /* Allocate base costs copy */
+    sig->base_costs = (double *)malloc(n * n * sizeof(double));
+    if (!sig->base_costs) {
+        detect_lap_free(&sig->base);
+        return 0;
+    }
+    memcpy(sig->base_costs, sig->base.costs, n * n * sizeof(double));
+
+    /* Create reusable LAP workspace */
+    sig->lap_workspace = ralph_lap_workspace_create(n);
+    if (!sig->lap_workspace) {
+        free(sig->base_costs);
+        detect_lap_free(&sig->base);
+        return 0;
+    }
+
+    return 1;
+}
+
+void detect_lap_mip_free(MIPLAPSignature *sig) {
+    if (!sig) return;
+
+    detect_lap_free(&sig->base);
+    free(sig->base_costs);
+    sig->base_costs = NULL;
+
+    if (sig->lap_workspace) {
+        ralph_lap_workspace_free((RalphLapWorkspace *)sig->lap_workspace);
+        sig->lap_workspace = NULL;
+    }
+
+    sig->num_vars = 0;
+}
+
+/*
+ * Solve LAP relaxation at a B&B node.
+ *
+ * Handles variable fixings from branching:
+ * - Fixed to 0 (lb=ub=0): set cost to infinity (forbidden)
+ * - Fixed to 1 (lb=ub=1): set all other costs in row/col to infinity
+ */
+int solve_lap_at_node(
+    MIPLAPSignature *sig,
+    const double *lb,
+    const double *ub,
+    double *solution,
+    double *obj_val
+) {
+    if (!sig || !sig->base.is_lap || !lb || !ub || !solution) {
+        return -1;
+    }
+
+    int n = sig->base.n;
+    int num_vars = sig->num_vars;
+    double *work_costs = sig->base.costs;  /* Reuse the costs array */
+    RalphLapWorkspace *ws = (RalphLapWorkspace *)sig->lap_workspace;
+
+    /* Reset costs to base values */
+    memcpy(work_costs, sig->base_costs, n * n * sizeof(double));
+
+    /* Track which rows and columns have forced assignments */
+    int *row_forced = (int *)calloc(n, sizeof(int));  /* row_forced[i] = col if forced, -1 otherwise */
+    int *col_forced = (int *)calloc(n, sizeof(int));  /* col_forced[j] = row if forced, -1 otherwise */
+
+    if (!row_forced || !col_forced) {
+        free(row_forced);
+        free(col_forced);
+        return -1;
+    }
+
+    for (int i = 0; i < n; i++) {
+        row_forced[i] = -1;
+        col_forced[i] = -1;
+    }
+
+    /* Process variable fixings */
+    for (int v = 0; v < num_vars; v++) {
+        int lap_row = sig->base.var_to_row[v];
+        int lap_col = sig->base.var_to_col[v];
+
+        /* Check if variable is fixed */
+        if (ub[v] < 0.5) {
+            /* Fixed to 0: forbid this assignment */
+            work_costs[lap_row * n + lap_col] = RALPH_LAP_INFINITY;
+        } else if (lb[v] > 0.5) {
+            /* Fixed to 1: this assignment is forced */
+            row_forced[lap_row] = lap_col;
+            col_forced[lap_col] = lap_row;
+        }
+    }
+
+    /* For forced assignments, forbid all other options in that row/column */
+    for (int i = 0; i < n; i++) {
+        if (row_forced[i] >= 0) {
+            int forced_col = row_forced[i];
+            /* Forbid all other columns in this row */
+            for (int j = 0; j < n; j++) {
+                if (j != forced_col) {
+                    work_costs[i * n + j] = RALPH_LAP_INFINITY;
+                }
+            }
+        }
+    }
+    for (int j = 0; j < n; j++) {
+        if (col_forced[j] >= 0) {
+            int forced_row = col_forced[j];
+            /* Forbid all other rows in this column */
+            for (int i = 0; i < n; i++) {
+                if (i != forced_row) {
+                    work_costs[i * n + j] = RALPH_LAP_INFINITY;
+                }
+            }
+        }
+    }
+
+    free(row_forced);
+    free(col_forced);
+
+    /* Solve LAP with modified costs */
+    int *row_sol = (int *)malloc(n * sizeof(int));
+    if (!row_sol) {
+        return -1;
+    }
+
+    double total_cost;
+    RalphLapObjective objective = (sig->base.obj_sense == 1) ?
+        RALPH_LAP_MINIMIZE : RALPH_LAP_MAXIMIZE;
+
+    RalphLapStatus status = ralph_lap_solve_with_workspace(
+        n, work_costs, objective, row_sol, NULL, NULL, NULL, &total_cost, ws);
+
+    if (status != RALPH_LAP_SUCCESS) {
+        free(row_sol);
+        return -1;  /* Infeasible - probably due to conflicting fixings */
+    }
+
+    /* Convert LAP solution to LP solution */
+    memset(solution, 0, num_vars * sizeof(double));
+
+    for (int v = 0; v < num_vars; v++) {
+        int lap_row = sig->base.var_to_row[v];
+        int lap_col = sig->base.var_to_col[v];
+
+        if (row_sol[lap_row] == lap_col) {
+            solution[v] = 1.0;
+        }
+    }
+
+    if (obj_val) {
+        *obj_val = total_cost;
+    }
+
+    free(row_sol);
+    return 0;
+}

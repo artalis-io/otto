@@ -19,7 +19,7 @@
  * MIP Solver Creation/Destruction
  * ============================================================================ */
 
-MIPSolver* mip_create(LPModel *model) {
+MIPSolver* mip_create(LPModel *model, int detect_special) {
     if (!model) return NULL;
 
     MIPSolver *solver = (MIPSolver*)calloc(1, sizeof(MIPSolver));
@@ -109,6 +109,27 @@ MIPSolver* mip_create(LPModel *model) {
 
     solver->status = RALPH_STATUS_UNKNOWN;
 
+    /* Try to detect LAP structure for specialized solving */
+    solver->use_lap_solver = 0;
+    solver->lap_sig = NULL;
+    solver->lap_nodes_solved = 0;
+    solver->simplex_nodes_solved = 0;
+
+    /* Only detect LAP if enabled (per-model flag AND global flag) */
+    if (detect_special && ralph_get_detect_lap()) {
+        MIPLAPSignature *lap_sig = (MIPLAPSignature *)malloc(sizeof(MIPLAPSignature));
+        if (lap_sig && detect_lap_mip(model, lap_sig)) {
+            solver->lap_sig = lap_sig;
+            solver->use_lap_solver = 1;
+            if (solver->verbose) {
+                printf("LAP structure detected: %dx%d assignment\n",
+                       lap_sig->base.n, lap_sig->base.n);
+            }
+        } else {
+            free(lap_sig);
+        }
+    }
+
     return solver;
 }
 
@@ -126,6 +147,13 @@ void mip_free(MIPSolver *solver) {
     free(solver->pseudo_count_up);
     node_queue_free(solver->node_queue);
     cut_pool_free(solver->cut_pool);
+
+    /* Free LAP signature if allocated */
+    if (solver->lap_sig) {
+        detect_lap_mip_free(solver->lap_sig);
+        free(solver->lap_sig);
+    }
+
     free(solver);
 }
 
@@ -408,7 +436,72 @@ static int restore_basis_from_node(SimplexSolver *lp, BBNode *node) {
  * Solve LP Relaxation at a Node
  * ============================================================================ */
 
+/* ============================================================================
+ * LAP-based LP Relaxation Solving
+ * ============================================================================ */
+
+/*
+ * Solve LP relaxation using LAP solver.
+ *
+ * Returns:
+ *   0 on success (solution in solver->lp_solver->solution, obj in obj_value)
+ *   -1 on infeasible or error
+ */
+static int solve_node_lp_as_lap(MIPSolver *solver, BBNode *node) {
+    if (!solver->use_lap_solver || !solver->lap_sig) {
+        return -1;  /* LAP solving not available */
+    }
+
+    LPModel *model = solver->original_model;
+    int num_vars = model->num_vars;
+
+    /* Allocate solution array if needed */
+    if (!solver->lp_solver) {
+        solver->lp_solver = simplex_create(solver->working_model);
+        if (!solver->lp_solver) return -1;
+        solver->lp_solver->scaling = 0;
+    }
+
+    SimplexSolver *lp = solver->lp_solver;
+
+    /* Ensure solution array exists */
+    if (!lp->solution) {
+        lp->solution = (double *)malloc(num_vars * sizeof(double));
+        if (!lp->solution) return -1;
+    }
+
+    /* Solve using LAP with current node bounds */
+    double obj_val;
+    int result = solve_lap_at_node(solver->lap_sig, node->lb, node->ub,
+                                    lp->solution, &obj_val);
+
+    if (result != 0) {
+        lp->status = RALPH_STATUS_INFEASIBLE;
+        return -1;
+    }
+
+    lp->obj_value = obj_val;
+    lp->status = RALPH_STATUS_OPTIMAL;
+    lp->iterations = 0;  /* LAP doesn't use simplex iterations */
+
+    solver->lap_nodes_solved++;
+    return 0;
+}
+
 static int solve_node_lp(MIPSolver *solver, BBNode *node) {
+    /* Try LAP solver first if available */
+    if (solver->use_lap_solver) {
+        int lap_result = solve_node_lp_as_lap(solver, node);
+        if (lap_result == 0) {
+            return 0;  /* Successfully solved with LAP */
+        }
+        /* LAP failed (infeasible) - this is a valid result for pruning */
+        if (solver->lp_solver && solver->lp_solver->status == RALPH_STATUS_INFEASIBLE) {
+            return -1;
+        }
+        /* Otherwise fall through to simplex */
+    }
+
     LPModel *model = solver->working_model;
 
     /* Create or reuse LP solver */
@@ -427,6 +520,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         model->ub[j] = node->ub[j];
     }
 
+    solver->simplex_nodes_solved++;
     int warm_start_success = 0;
 
     /* Try warm start from parent basis if available */
@@ -1061,6 +1155,14 @@ void mip_print_stats(const MIPSolver *solver) {
     printf("Max depth: %d\n", solver->max_depth);
     printf("Cuts generated: %d\n", solver->cuts_generated);
     printf("Solve time: %.3f seconds\n", solver->solve_time);
+
+    if (solver->use_lap_solver) {
+        printf("LAP solver: enabled (%dx%d assignment)\n",
+               solver->lap_sig ? solver->lap_sig->base.n : 0,
+               solver->lap_sig ? solver->lap_sig->base.n : 0);
+        printf("Nodes solved with LAP: %d\n", solver->lap_nodes_solved);
+        printf("Nodes solved with simplex: %d\n", solver->simplex_nodes_solved);
+    }
 
     if (solver->has_incumbent) {
         printf("Best objective: %.10f\n", solver->best_obj);
