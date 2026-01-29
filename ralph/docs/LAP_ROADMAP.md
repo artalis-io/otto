@@ -15,6 +15,7 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] Rectangular LAP (m × n problems)
 - [x] Runtime parallel enable/disable
 - [x] Sparse vs dense benchmarks
+- [x] Optional ε-scaling auction for tie-breaking
 
 ---
 
