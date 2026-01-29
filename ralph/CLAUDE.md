@@ -2,13 +2,14 @@
 
 ## Overview
 
-**Ralph** (**R**obust **A**I **L**inear **P**rogramming **H**elper) is a C library implementing LP and MIP solvers. It has zero external dependencies and is designed to be embedded in other projects.
+**Ralph** (**R**obust **A**I **L**inear **P**rogramming **H**elper) is a C library implementing LP, MIP, and LAP solvers. It has zero external dependencies and is designed to be embedded in other projects.
 
 ## Quick Start
 
 ```bash
 make          # Build libralph.a
-make test     # Run tests (43/43 should pass)
+make test     # Run tests (73/73 should pass)
+make test-lap # Run LAP tests (213/213 should pass)
 ```
 
 ## Key Files
@@ -16,10 +17,15 @@ make test     # Run tests (43/43 should pass)
 | File | Purpose |
 |------|---------|
 | `include/ralph.h` | Public API - start here |
+| `include/lap.h` | LAP solver API |
+| `include/detect.h` | Problem structure detection |
 | `src/simplex.c` | Primal simplex algorithm |
 | `src/lu.c` | LU factorization (critical) |
+| `src/lap.c` | JVC algorithm for LAP |
+| `src/detect.c` | LAP/network detection |
 | `src/branch_bound.c` | MIP solver |
-| `tests/test_main.c` | Test suite |
+| `tests/test_main.c` | LP/MIP test suite |
+| `tests/test_lap.c` | LAP test suite |
 
 ## Architecture
 
@@ -28,9 +34,20 @@ User API (ralph.c)
     ↓
 Model Building (model.c)
     ↓
-Simplex (simplex.c) ←→ LU (lu.c)
-    ↓
-MIP (mip.c) → Branch & Bound (branch_bound.c)
+┌─────────────────────────────────────────┐
+│         Problem Detection (detect.c)    │
+│    Detects LAP/network structure        │
+└─────────────────────────────────────────┘
+    ↓                    ↓
+┌─────────────┐    ┌─────────────┐
+│ LAP Solver  │    │   Simplex   │
+│  (lap.c)    │    │ (simplex.c) │
+│  O(n³) JVC  │    │     ↕       │
+└─────────────┘    │  LU (lu.c)  │
+                   └─────────────┘
+                         ↓
+              MIP (mip.c) → Branch & Bound
+              (uses LAP for assignment MIPs)
 ```
 
 ## Critical Invariants
@@ -39,6 +56,35 @@ MIP (mip.c) → Branch & Bound (branch_bound.c)
 2. **LU eta-file**: Updates must modify all components
 3. **Constraint normalization**: RHS must be non-negative
 4. **Big-M method**: Artificial variable cost is 1e8
+5. **LAP costs**: Row-major n×n matrix, use RALPH_LAP_INFINITY for forbidden
+
+## LAP Solver Features
+
+The LAP solver implements the Jonker-Volgenant-Castanon (JVC) algorithm:
+
+| Feature | API | Notes |
+|---------|-----|-------|
+| Dense LAP | `ralph_lap_solve()` | O(n³), SIMD optimized |
+| Sparse LAP | `ralph_lap_solve_sparse()` | CSR format, auto-fallback to dense |
+| Rectangular | `ralph_lap_solve_rect()` | m×n problems (m ≤ n) |
+| Warm start | `ralph_lap_solve_warm()` | Reuse dual variables |
+| Callbacks | `ralph_lap_solve_callback()` | O(n) memory for huge problems |
+| k-Best | `ralph_lap_solve_k_best()` | Murty's algorithm |
+| ε-scaling | `ralph_lap_set_epsilon_scaling()` | For degenerate problems |
+
+### Problem Detection
+
+Ralph can auto-detect LAP structure in LP/MIP models:
+
+```c
+// Enable detection for a specific model
+ralph_set_int_param(model, "detect_special", 1);
+
+// Global toggle (default: disabled)
+ralph_set_detect_lap(1);
+```
+
+When enabled, assignment problems formulated as LPs/MIPs are solved with JVC instead of simplex (86-633× faster for LP relaxations).
 
 ## Common Tasks
 
@@ -57,17 +103,39 @@ MIP (mip.c) → Branch & Bound (branch_bound.c)
 2. Verify constraint normalization in `tableau_create()`
 3. Create debug test in `tests/debug_*.c`
 
+### Working with LAP solver
+1. Dense: `ralph_lap_solve()` for n×n cost matrix
+2. Sparse: `ralph_lap_solve_sparse()` with CSR format
+3. k-best: `ralph_lap_solve_k_best()` for alternative solutions
+4. Integration: Enable `detect_special` param for auto LAP detection
+
+### Adding LAP features
+1. Edit `src/lap.c` for core algorithm changes
+2. Edit `src/detect.c` for detection/integration changes
+3. Add tests to `tests/test_lap.c`
+4. Run `make test-lap` to verify
+
 ## Testing
 
 ```bash
-# All tests
-./test_ralph
+# All LP/MIP tests (73 tests)
+make test
+
+# LAP tests only (213 tests)
+make test-lap
 
 # LP only (faster)
 ./test_ralph --skip-mip
 
 # Add new test
-# Edit tests/test_main.c, use ASSERT() macros
+# Edit tests/test_main.c for LP/MIP, tests/test_lap.c for LAP
+```
+
+## Benchmarks
+
+```bash
+make bench-lap        # LAP benchmarks (size scaling, sparse vs dense)
+make bench-lap mip    # LAP-based MIP benchmark
 ```
 
 ## Code Style
