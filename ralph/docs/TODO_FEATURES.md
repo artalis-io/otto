@@ -250,7 +250,9 @@ double lap_solve_sparse_csr(const SparseLAP *lap, int *row_sol, int *col_sol);
 - [x] **SIMD optimizations** (dense, sparse, warm start validation)
 - [x] **ε-scaling auction** for tie-breaking
 - [x] **Cost matrix callbacks** - O(n) memory (2026-01-29)
-- [ ] Integrate with problem detection (Section 3)
+- [x] **k-Best assignments** - Murty's algorithm (2026-01-29)
+- [x] **MIP integration** - LAP-based LP relaxation in B&B (2026-01-29)
+- [x] Integrate with problem detection (Section 3)
 
 ### Files Created
 
@@ -258,8 +260,10 @@ double lap_solve_sparse_csr(const SparseLAP *lap, int *row_sol, int *col_sol);
 |------|--------|
 | `include/lap.h` | ✅ Created - LAP solver API |
 | `src/lap.c` | ✅ Created - JVC implementation |
-| `tests/test_lap.c` | ✅ Created - 146 unit tests |
+| `tests/test_lap.c` | ✅ Created - 213 unit tests |
 | `benchmarks/bench_lap.c` | ✅ Created - LAP benchmarks |
+| `include/detect.h` | ✅ Extended - MIP LAP detection |
+| `src/detect.c` | ✅ Extended - MIP LAP solving |
 
 ### References
 
