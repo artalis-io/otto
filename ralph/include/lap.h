@@ -607,6 +607,207 @@ void ralph_lap_set_epsilon_factor(double factor);
  */
 double ralph_lap_get_epsilon_factor(void);
 
+/* ============================================================================
+ * Unified LAP API (Problem/Options/Result pattern)
+ * ============================================================================
+ *
+ * This API separates WHAT to solve (Problem) from HOW to solve it (Options).
+ * It supports all combinations of:
+ *   - Representations: dense, sparse, rectangular, callback
+ *   - Algorithms: standard, k-best, (future: bottleneck)
+ *   - Execution modes: cold start, warm start
+ *   - Constraints: forbidden assignments
+ *
+ * The legacy functions above are thin wrappers around ralph_lap_solve_ex().
+ */
+
+/* Cost representation type */
+typedef enum {
+    RALPH_LAP_COST_DENSE = 0,      /* Dense n×m matrix (row-major) */
+    RALPH_LAP_COST_SPARSE = 1,     /* CSR sparse format */
+    RALPH_LAP_COST_CALLBACK = 2    /* On-demand via callback */
+} RalphLapCostType;
+
+/* Algorithm selection */
+typedef enum {
+    RALPH_LAP_ALG_STANDARD = 0,    /* Single optimal assignment */
+    RALPH_LAP_ALG_K_BEST = 1,      /* k-best via Murty's algorithm */
+    RALPH_LAP_ALG_BOTTLENECK = 2   /* Minimax objective (future) */
+} RalphLapAlgorithm;
+
+/*
+ * Problem definition - describes WHAT to solve.
+ *
+ * Set exactly ONE of: dense, sparse, or callback cost representation.
+ * For rectangular problems, set n (rows) != m (columns).
+ */
+typedef struct {
+    /* Dimensions */
+    int n;                          /* Number of rows (workers/sources) */
+    int m;                          /* Number of columns (jobs/sinks) */
+                                    /* Square: n == m, Rectangular: n != m */
+
+    /* Cost representation - set exactly ONE */
+    RalphLapCostType cost_type;
+
+    /* Dense cost matrix (when cost_type == RALPH_LAP_COST_DENSE) */
+    const double *dense_cost;       /* Row-major n×m matrix */
+
+    /* Sparse CSR format (when cost_type == RALPH_LAP_COST_SPARSE) */
+    struct {
+        int nnz;                    /* Number of non-infinity entries */
+        const int *row_ptr;         /* Row pointers (size n+1) */
+        const int *col_idx;         /* Column indices (size nnz) */
+        const double *values;       /* Cost values (size nnz) */
+    } sparse;
+
+    /* Callback-based (when cost_type == RALPH_LAP_COST_CALLBACK) */
+    struct {
+        RalphLapCostFn fn;          /* Cost function callback */
+        void *user_data;            /* User context for callback */
+    } callback;
+
+    /* Objective */
+    RalphLapObjective objective;    /* RALPH_LAP_MINIMIZE or RALPH_LAP_MAXIMIZE */
+
+} RalphLapProblem;
+
+/*
+ * Solver options - describes HOW to solve.
+ *
+ * All fields have sensible defaults (use RALPH_LAP_OPTIONS_DEFAULT).
+ */
+typedef struct {
+    /* Algorithm selection */
+    RalphLapAlgorithm algorithm;    /* STANDARD, K_BEST, or BOTTLENECK */
+    int k;                          /* For k-best: number of solutions (default: 1) */
+
+    /* Warm start */
+    int warm_start;                 /* 1 = use workspace warm start data */
+    const int *hint_solution;       /* Optional initial solution hint (size n) */
+    const double *hint_u;           /* Optional initial row duals (size n) */
+    const double *hint_v;           /* Optional initial col duals (size m) */
+
+    /* Forbidden assignments (simple constraints) */
+    int num_forbidden;              /* Number of (row, col) pairs to forbid */
+    const int *forbidden_rows;      /* Row indices of forbidden pairs */
+    const int *forbidden_cols;      /* Column indices of forbidden pairs */
+
+    /* Performance tuning */
+    int epsilon_scaling;            /* 1 = enable ε-scaling auction */
+    double epsilon_factor;          /* ε reduction factor (default: 4.0) */
+    int parallel;                   /* 1 = enable OpenMP parallelism */
+
+} RalphLapOptions;
+
+/* Default options initializer */
+#define RALPH_LAP_OPTIONS_DEFAULT { \
+    .algorithm = RALPH_LAP_ALG_STANDARD, \
+    .k = 1, \
+    .warm_start = 0, \
+    .hint_solution = NULL, \
+    .hint_u = NULL, \
+    .hint_v = NULL, \
+    .num_forbidden = 0, \
+    .forbidden_rows = NULL, \
+    .forbidden_cols = NULL, \
+    .epsilon_scaling = 0, \
+    .epsilon_factor = 4.0, \
+    .parallel = 1 \
+}
+
+/*
+ * Result structure - describes WHAT we got.
+ *
+ * Caller allocates arrays; solver fills them in.
+ * For k-best, arrays must be sized for k solutions.
+ */
+typedef struct {
+    /* Status */
+    RalphLapStatus status;          /* Filled by solver */
+
+    /* Number of solutions found */
+    int num_found;                  /* 1 for standard, up to k for k-best */
+
+    /* Solutions - caller provides storage */
+    int *row_sol;                   /* [num_found × n] row->col assignments */
+    int *col_sol;                   /* [num_found × m] col->row inverse (optional) */
+    double *costs;                  /* [num_found] objective values */
+
+    /* Dual variables (optional, for warm start) */
+    double *u;                      /* [n] row dual variables */
+    double *v;                      /* [m] column dual variables */
+
+} RalphLapResult;
+
+/*
+ * Unified LAP solve function.
+ *
+ * This is the main entry point that handles all combinations of:
+ *   - Dense, sparse, rectangular, callback representations
+ *   - Standard, k-best algorithms
+ *   - Cold start, warm start execution
+ *   - Forbidden assignment constraints
+ *
+ * Parameters:
+ *   problem   - Problem definition (dimensions, costs, objective)
+ *   options   - Solver options (NULL for defaults)
+ *   result    - Output structure (caller allocates arrays based on problem size and k)
+ *   workspace - Reusable workspace (NULL to auto-allocate internally)
+ *
+ * Returns:
+ *   RALPH_LAP_SUCCESS on success, error code otherwise.
+ *   Result arrays are filled with solution data.
+ *
+ * Example - Dense k-best with warm start:
+ *
+ *   RalphLapProblem prob = {
+ *       .n = 100, .m = 100,
+ *       .cost_type = RALPH_LAP_COST_DENSE,
+ *       .dense_cost = my_cost_matrix,
+ *       .objective = RALPH_LAP_MINIMIZE
+ *   };
+ *
+ *   RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+ *   opts.algorithm = RALPH_LAP_ALG_K_BEST;
+ *   opts.k = 5;
+ *   opts.warm_start = 1;
+ *
+ *   int solutions[500];  // 5 solutions × 100 assignments
+ *   double costs[5];
+ *   RalphLapResult res = {.row_sol = solutions, .costs = costs};
+ *
+ *   ralph_lap_solve_ex(&prob, &opts, &res, workspace);
+ *
+ * Example - Sparse with forbidden assignments:
+ *
+ *   RalphLapProblem prob = {
+ *       .n = 1000, .m = 1000,
+ *       .cost_type = RALPH_LAP_COST_SPARSE,
+ *       .sparse = {nnz, row_ptr, col_idx, values},
+ *       .objective = RALPH_LAP_MINIMIZE
+ *   };
+ *
+ *   int forbidden_r[] = {0, 1, 2};
+ *   int forbidden_c[] = {0, 1, 2};
+ *   RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+ *   opts.num_forbidden = 3;
+ *   opts.forbidden_rows = forbidden_r;
+ *   opts.forbidden_cols = forbidden_c;
+ *
+ *   int row_sol[1000];
+ *   double cost;
+ *   RalphLapResult res = {.row_sol = row_sol, .costs = &cost};
+ *
+ *   ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+ */
+RalphLapStatus ralph_lap_solve_ex(
+    const RalphLapProblem *problem,
+    const RalphLapOptions *options,
+    RalphLapResult *result,
+    RalphLapWorkspace *workspace
+);
+
 #ifdef __cplusplus
 }
 #endif
