@@ -7,6 +7,20 @@ CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG
 INCLUDES = -I./include -I../ralph/include
 LDFLAGS = -lm
 
+# OpenMP support (required when linking against libralph.a which uses OpenMP)
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    # macOS with Homebrew libomp
+    OPENMP_CFLAGS = -Xclang -fopenmp
+    OPENMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
+else
+    # Linux - native GCC OpenMP
+    OPENMP_CFLAGS = -fopenmp
+    OPENMP_LDFLAGS = -fopenmp
+endif
+
+LDFLAGS += $(OPENMP_LDFLAGS)
+
 # Directories
 SRC_DIR = src
 INCLUDE_DIR = include
