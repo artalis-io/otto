@@ -26,15 +26,25 @@ subject to:  Σⱼ xᵢⱼ = 1    ∀i ∈ Workers  (each worker assigned exactl
              xᵢⱼ ∈ {0,1}
 ```
 
-### Current State
+### Current State ✅ IMPLEMENTED (2026-01-29)
 
-Ralph solves LAP as a general LP (which finds integral solutions due to total unimodularity) or as MIP. From benchmarks:
-- 100×20 LAP: 0.0001s (matches GLPK)
-- 400×40 LAP: 0.0005s (matches GLPK)
+Ralph now has a dedicated JVC (Jonker-Volgenant-Castanon) LAP solver with:
+- **Dense solver**: O(n³) JVC algorithm with SIMD optimizations
+- **Sparse solver**: Native sparse JVC for low-density problems (< 30%)
+- **Rectangular support**: m × n problems (m ≤ n)
+- **Warm start**: 2-10x speedup for similar consecutive problems
+- **ε-scaling auction**: Optional tie-breaking for degenerate problems
 
-While acceptable, specialized algorithms achieve O(n³) worst-case vs O(n²m) simplex iterations.
+**Performance (2026-01-29):**
+| Size | Dense | Sparse (10%) | Warm Start (identical) |
+|------|-------|--------------|------------------------|
+| n=500 | 1.5ms | 1.1ms | 0.3ms (5x) |
+| n=1000 | 10ms | 6.7ms | 1.5ms (7x) |
+| n=2000 | 42ms | - | 6ms (7x) |
 
-### Proposed Algorithm: Jonker-Volgenant-Castanon (JVC)
+**Test coverage:** 146 tests (100% passing)
+
+### Algorithm: Jonker-Volgenant-Castanon (JVC)
 
 The JVC algorithm is the fastest known method for dense LAP, with O(n³) worst-case but often O(n²) in practice.
 
@@ -226,26 +236,29 @@ double lap_solve_sparse_csr(const SparseLAP *lap, int *row_sol, int *col_sol);
 
 ### TODOs
 
-- [ ] Create `include/lap.h` with LAP solver API
-- [ ] Implement `lap_solve()` with JVC algorithm in `src/lap.c`
-- [ ] Implement column reduction phase
-- [ ] Implement augmenting path search with Dijkstra
-- [ ] Implement augmentation and dual update
-- [ ] Add rectangular assignment support `lap_solve_rect()`
-- [ ] Add sparse assignment support `lap_solve_sparse()`
-- [ ] Add heap-based Dijkstra option for large sparse problems
-- [ ] Create unit tests for LAP solver
-- [ ] Benchmark against simplex on LAP instances
+- [x] Create `include/lap.h` with LAP solver API
+- [x] Implement `lap_solve()` with JVC algorithm in `src/lap.c`
+- [x] Implement column reduction phase
+- [x] Implement augmenting path search with Dijkstra
+- [x] Implement augmentation and dual update
+- [x] Add rectangular assignment support `lap_solve_rect()`
+- [x] Add sparse assignment support `lap_solve_sparse()`
+- [x] Add heap-based Dijkstra option for large sparse problems
+- [x] Create unit tests for LAP solver
+- [x] Benchmark against simplex on LAP instances
+- [x] **Warm start / incremental updates** (2026-01-29)
+- [x] **SIMD optimizations** (dense, sparse, warm start validation)
+- [x] **ε-scaling auction** for tie-breaking
 - [ ] Integrate with problem detection (Section 3)
 
-### Files to Create/Modify
+### Files Created
 
-| File | Action |
+| File | Status |
 |------|--------|
-| `include/lap.h` | **Create** - LAP solver API |
-| `src/lap.c` | **Create** - JVC implementation |
-| `tests/test_lap.c` | **Create** - LAP unit tests |
-| `benchmarks/bench_lap.c` | **Create** - LAP benchmarks |
+| `include/lap.h` | ✅ Created - LAP solver API |
+| `src/lap.c` | ✅ Created - JVC implementation |
+| `tests/test_lap.c` | ✅ Created - 146 unit tests |
+| `benchmarks/bench_lap.c` | ✅ Created - LAP benchmarks |
 
 ### References
 
@@ -1909,10 +1922,10 @@ Recommended order of implementation:
    - Backend abstraction benefits all future development
    - HiGHS especially valuable (MIT license, excellent MIP)
 
-2. **Linear Assignment (LAP)** - High priority
-   - Self-contained module
-   - Clear O(n³) improvement over simplex
-   - Useful for many practical applications
+2. ~~**Linear Assignment (LAP)**~~ ✅ COMPLETED (2026-01-29)
+   - JVC algorithm with SIMD, sparse, rectangular, warm start
+   - 146 tests, full benchmarks
+   - See `include/lap.h`, `src/lap.c`
 
 3. **Problem Detection** - High priority
    - Foundation for automatic delegation
