@@ -10,9 +10,10 @@ This document outlines planned features at the project level, including new comp
 4. [Arbor - State-Space Search Engine](#4-arbor---state-space-search-engine)
 5. [Sigma - Fleet Plan Selection Engine](#5-sigma---fleet-plan-selection-engine)
 6. [Pulse - Execution Tracker and PTA Engine](#6-pulse---execution-tracker-and-pta-engine)
-7. [Distance and Duration Estimation](#7-distance-and-duration-estimation-cross-cutting)
-8. [Cost and Profit Calculations](#8-cost-and-profit-calculations-cross-cutting)
-9. [FuelWise Integration](#9-fuelwise-integration-refueling-in-search)
+7. [Nexus - External Data Integration Gateway](#7-nexus---external-data-integration-gateway)
+8. [Distance and Duration Estimation](#8-distance-and-duration-estimation-cross-cutting)
+9. [Cost and Profit Calculations](#9-cost-and-profit-calculations-cross-cutting)
+10. [FuelWise Integration](#10-fuelwise-integration-refueling-in-search)
 
 ---
 
@@ -1951,7 +1952,50 @@ typedef struct {
 
 ---
 
-## 7. Distance and Duration Estimation (Cross-Cutting)
+## 7. Nexus - External Data Integration Gateway
+
+**N**ormalized **Ex**ternal **U**nified **S**napshots
+
+### Overview
+
+Nexus is the data ingress gateway for OTTO, providing a stateless interface for receiving planning snapshots from external systems (TMS, ELD, LoadBoards). OTTO remains a pure computation engine - Nexus handles normalization and translation.
+
+**Key Design Principle**: OTTO is NOT a system of record. All state lives in customer systems. Nexus receives snapshots, OTTO computes optimal plans, and results are pushed back.
+
+### Full Documentation
+
+See **[docs/NEXUS.md](NEXUS.md)** for complete architecture specification including:
+
+- Core data structures (NxDriver, NxLoad, NxVehicle, etc.)
+- REST API design with example requests/responses
+- Adapter interface for TMS/ELD/LoadBoard integration
+- Module file structure
+
+### Quick Summary
+
+```
+External Systems                    OTTO Platform
+┌──────────────┐                   ┌──────────────────────────────────┐
+│     TMS      │───adapter───┐     │                                  │
+├──────────────┤             │     │  ┌────────┐    ┌─────────────┐  │
+│     ELD      │───adapter───┼────▶│  │ Nexus  │───▶│  Optimizer  │  │
+├──────────────┤             │     │  │Gateway │    │   Pipeline  │  │
+│  LoadBoard   │───adapter───┘     │  └────────┘    └─────────────┘  │
+└──────────────┘                   └──────────────────────────────────┘
+```
+
+### TODOs
+
+- [ ] Define NxDriver, NxLoad, NxVehicle, NxLocation structures
+- [ ] Define NxPlanningRequest and NxPlanningResponse
+- [ ] Implement adapter interface (TMS, ELD, LoadBoard)
+- [ ] Implement REST API endpoints
+- [ ] Create sample adapters for common TMS systems
+- [ ] Add webhook support for async results
+
+---
+
+## 8. Distance and Duration Estimation (Cross-Cutting)
 
 ### Overview
 
@@ -2023,7 +2067,7 @@ double duration = route.total_duration;
 
 ---
 
-## 8. Cost and Profit Calculations (Cross-Cutting)
+## 9. Cost and Profit Calculations (Cross-Cutting)
 
 ### Overview
 
@@ -2154,7 +2198,7 @@ This allows accurate fuel cost estimation for trucks that consume more fuel when
 
 ---
 
-## 9. FuelWise Integration (Refueling in Search)
+## 10. FuelWise Integration (Refueling in Search)
 
 ### Overview
 
@@ -2238,6 +2282,7 @@ Current and planned components:
 | `arbor/` | **Planned** | State-space search framework |
 | `sigma/` | **Planned** | Fleet-wide plan selection (set covering MIP) |
 | `pulse/` | **Planned** | Execution tracking and PTA computation |
+| `nexus/` | **Planned** | External data integration gateway (TMS/ELD/LoadBoard) |
 | `api/` | Active | REST API server |
 | `ui/` | Active | React frontend |
 
@@ -2249,4 +2294,5 @@ Current and planned components:
 4. **Pulse Core** - High priority (PTA computation needed everywhere)
 5. **Arbor Core** - Medium priority (enables advanced optimization)
 6. **Sigma Core** - Medium priority (fleet-wide optimization, depends on Arbor)
-7. **Component Integration** - High priority (HoSE + Tempo + Pulse + Arbor + Sigma + FuelWise)
+7. **Nexus Core** - Medium priority (data integration, enables real-world deployment)
+8. **Component Integration** - High priority (HoSE + Tempo + Pulse + Arbor + Sigma + Nexus + FuelWise)

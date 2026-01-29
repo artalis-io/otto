@@ -37,6 +37,7 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
+| Nexus | `nexus/` | **N**ormalized **Ex**ternal **U**nified **S**napshots - TMS/ELD/LoadBoard integration gateway |
 | HoSE | `hose/` | **H**ours **o**f **S**ervice **E**ngine - FMCSA/EC561 compliance |
 | Tempo | `tempo/` | **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator |
 | Arbor | `arbor/` | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
@@ -44,6 +45,7 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 | Pulse | `pulse/` | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
 
 See `docs/TODO_FEATURES.md` for detailed specifications of planned components.
+See `docs/NEXUS.md` for the data ingress architecture (TMS/ELD/LoadBoard integration).
 
 ### Applications
 
