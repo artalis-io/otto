@@ -337,3 +337,68 @@ void bench_phase1_parallel(int n, int trials);
 | n=1000 | 15ms | 9ms | 5ms | 3ms |
 | n=2000 | 72ms | 45ms | 25ms | 15ms |
 | n=5000 | - | - | 150ms | 80ms |
+
+---
+
+## Implementation Status
+
+### Phase A (Completed)
+- [x] Cache-optimized Phase 1 (row-major access pattern)
+- [x] Aligned memory allocations (64-byte for AVX-512)
+- [x] Parallel matrix copy with OpenMP SIMD
+- [x] SIMD pragmas in output computation
+
+**Results:**
+- n=500: 1.30ms (35% improvement from 2ms baseline)
+- n=2000: 39.2ms (46% improvement from 72ms baseline)
+
+### Phase B (Completed)
+- [x] Consolidated workspace allocation (single aligned malloc)
+- [x] `RalphLapWorkspace` struct for memory management
+- [x] `ralph_lap_workspace_create/free/max_n` API
+- [x] `ralph_lap_solve_with_workspace` for repeated solves
+- [x] Heap-based Dijkstra for Phase 4 (threshold n >= 3000)
+- [x] Binary heap with decrease-key operation
+
+**Results (2026-01-29):**
+- n=500: 1.56ms
+- n=1000: 10.6ms
+- n=2000: 44.5ms
+- n=5000: 876ms
+
+**Notes:**
+- Heap-based Dijkstra only beneficial for n >= 3000 due to higher constant factors
+- Linear scan version retained for smaller problems (better cache utilization)
+- Workspace reuse shows ~5% speedup for repeated solves of same size
+- Total test count: 81 tests (100% passing)
+
+### Phase C (Completed)
+- [x] Parallel column reduction with column-block processing
+- [x] SIMD-optimized reduced cost computation in auction phase
+- [x] Parallel Phase 2 reduction transfer
+- [x] Separate SIMD threshold (n >= 100) from parallel threshold (n >= 5000)
+
+**Implementation Details:**
+- Added `LAP_SIMD_THRESHOLD` (100) for SIMD optimizations
+- Added `LAP_PARALLEL_THRESHOLD` (5000) for OpenMP threading
+- Column-block processing in Phase 1 for cache-friendly parallel access
+- Pre-computed reduced costs with SIMD in Phase 3 auction
+- Parallel reduction transfer in Phase 2 (no race conditions)
+
+**Results (2026-01-29):**
+- n=200: 0.16ms (was 0.21ms, 24% improvement)
+- n=500: 1.51ms
+- n=1000: 9.58ms
+- n=2000: 41.7ms
+- n=5000: 901ms
+
+**Key Findings:**
+- SIMD provides consistent benefit for n >= 100
+- OpenMP threading only beneficial for very large problems (n >= 5000)
+- Thread overhead causes variance for medium problems - disabled for n < 5000
+- Total test count: 81 LAP tests + 65 Ralph tests (100% passing)
+
+### Phase D (Future)
+- [ ] ε-scaling auction for guaranteed convergence
+- [ ] Sparse-native JVC implementation
+- [ ] AVX-512 intrinsics for critical loops (if needed)

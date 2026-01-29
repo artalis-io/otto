@@ -649,6 +649,164 @@ static void test_status_string(void) {
 }
 
 /* ============================================================================
+ * Test 20: Workspace API
+ * ============================================================================ */
+static void test_workspace(void) {
+    printf("\n=== Test: Workspace API ===\n");
+
+    /* Create workspace for max n=100 */
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(100);
+    ASSERT(ws != NULL, "Workspace created");
+    ASSERT(ralph_lap_workspace_max_n(ws) == 100, "Workspace max_n is 100");
+
+    /* Solve same problem multiple times with workspace */
+    int n = 10;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol1 = malloc(n * sizeof(int));
+    int *row_sol2 = malloc(n * sizeof(int));
+    double cost1, cost2;
+
+    srand(999);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    RalphLapStatus s1 = ralph_lap_solve_with_workspace(n, cost, RALPH_LAP_MINIMIZE,
+                                                        row_sol1, NULL, NULL, NULL, &cost1, ws);
+    RalphLapStatus s2 = ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                                         row_sol2, NULL, NULL, NULL, &cost2);
+
+    ASSERT(s1 == RALPH_LAP_SUCCESS, "Workspace solve succeeded");
+    ASSERT(s2 == RALPH_LAP_SUCCESS, "Standard solve succeeded");
+    ASSERT(fabs(cost1 - cost2) < TOLERANCE, "Workspace and standard costs match");
+
+    int sols_match = 1;
+    for (int i = 0; i < n; i++) {
+        if (row_sol1[i] != row_sol2[i]) {
+            sols_match = 0;
+            break;
+        }
+    }
+    ASSERT(sols_match, "Workspace and standard solutions match");
+
+    /* Test workspace with smaller problems */
+    int n2 = 5;
+    double cost2_small[] = {
+        1, 2, 3, 4, 5,
+        5, 4, 3, 2, 1,
+        1, 1, 1, 1, 1,
+        9, 8, 7, 6, 5,
+        2, 4, 6, 8, 10
+    };
+    int row_sol3[5];
+    double cost3;
+
+    RalphLapStatus s3 = ralph_lap_solve_with_workspace(n2, cost2_small, RALPH_LAP_MINIMIZE,
+                                                        row_sol3, NULL, NULL, NULL, &cost3, ws);
+    ASSERT(s3 == RALPH_LAP_SUCCESS, "Smaller problem with same workspace succeeded");
+    ASSERT(ralph_lap_verify(n2, cost2_small, row_sol3, NULL), "Solution is valid permutation");
+
+    /* Test workspace capacity check */
+    int n_too_big = 150;
+    double *cost_big = calloc(n_too_big * n_too_big, sizeof(double));
+    int *row_sol_big = malloc(n_too_big * sizeof(int));
+    RalphLapStatus s4 = ralph_lap_solve_with_workspace(n_too_big, cost_big, RALPH_LAP_MINIMIZE,
+                                                        row_sol_big, NULL, NULL, NULL, NULL, ws);
+    ASSERT(s4 == RALPH_LAP_INVALID_INPUT, "Oversized problem rejected");
+
+    free(cost_big);
+    free(row_sol_big);
+    free(cost);
+    free(row_sol1);
+    free(row_sol2);
+    ralph_lap_workspace_free(ws);
+    printf("  Workspace freed successfully\n");
+}
+
+/* ============================================================================
+ * Test 21: Parallel setting
+ * ============================================================================ */
+static void test_parallel_setting(void) {
+    printf("\n=== Test: Parallel Setting ===\n");
+
+    /* Check default is enabled */
+    ASSERT(ralph_lap_get_parallel() == 1, "Parallel enabled by default");
+
+    /* Disable and verify */
+    ralph_lap_set_parallel(0);
+    ASSERT(ralph_lap_get_parallel() == 0, "Parallel disabled");
+
+    /* Solve a problem with parallel disabled */
+    int n = 50;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol = malloc(n * sizeof(int));
+    srand(777);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    double cost_val;
+    RalphLapStatus status = ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                                             row_sol, NULL, NULL, NULL, &cost_val);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Solve succeeded with parallel disabled");
+    ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "Solution valid");
+
+    /* Re-enable */
+    ralph_lap_set_parallel(1);
+    ASSERT(ralph_lap_get_parallel() == 1, "Parallel re-enabled");
+
+    free(cost);
+    free(row_sol);
+}
+
+/* ============================================================================
+ * Test 22: Repeated solves with workspace (performance)
+ * ============================================================================ */
+static void test_workspace_repeated(void) {
+    printf("\n=== Test: Workspace Repeated Solves ===\n");
+
+    int n = 50;
+    int num_solves = 20;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol = malloc(n * sizeof(int));
+
+    /* Time without workspace */
+    clock_t start1 = clock();
+    for (int s = 0; s < num_solves; s++) {
+        srand(2000 + s);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 1000) / 10.0;
+        }
+        ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
+    }
+    double time_no_ws = (double)(clock() - start1) / CLOCKS_PER_SEC;
+
+    /* Time with workspace */
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+    clock_t start2 = clock();
+    for (int s = 0; s < num_solves; s++) {
+        srand(2000 + s);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 1000) / 10.0;
+        }
+        ralph_lap_solve_with_workspace(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL, ws);
+    }
+    double time_ws = (double)(clock() - start2) / CLOCKS_PER_SEC;
+
+    ralph_lap_workspace_free(ws);
+
+    printf("  %d solves of %dx%d:\n", num_solves, n, n);
+    printf("    Without workspace: %.3f ms\n", time_no_ws * 1000);
+    printf("    With workspace:    %.3f ms\n", time_ws * 1000);
+    printf("    Speedup: %.2fx\n", time_no_ws / time_ws);
+
+    ASSERT(time_ws <= time_no_ws * 1.1, "Workspace is not slower than allocating each time");
+
+    free(cost);
+    free(row_sol);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -675,6 +833,9 @@ int main(void) {
     test_50x50();
     test_random_instances();
     test_status_string();
+    test_workspace();
+    test_parallel_setting();
+    test_workspace_repeated();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",
