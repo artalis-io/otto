@@ -3354,3 +3354,284 @@ const char* ralph_lap_status_string(RalphLapStatus status) {
         default:                       return "Unknown status";
     }
 }
+
+/* ============================================================================
+ * Unified LAP API Implementation
+ * ============================================================================ */
+
+/*
+ * Apply forbidden assignments by setting costs to infinity.
+ * Returns pointer to modified cost array (either original or workspace copy).
+ */
+static const double* apply_forbidden_dense(
+    const RalphLapProblem *prob,
+    const RalphLapOptions *opts,
+    RalphLapWorkspace *ws
+) {
+    if (opts->num_forbidden == 0) {
+        return prob->dense_cost;
+    }
+
+    /* Copy cost matrix to workspace and apply forbidden */
+    int nm = prob->n * prob->m;
+    memcpy(ws->work_cost, prob->dense_cost, nm * sizeof(double));
+
+    for (int f = 0; f < opts->num_forbidden; f++) {
+        int i = opts->forbidden_rows[f];
+        int j = opts->forbidden_cols[f];
+        if (i >= 0 && i < prob->n && j >= 0 && j < prob->m) {
+            ws->work_cost[i * prob->m + j] = RALPH_LAP_INFINITY;
+        }
+    }
+
+    return ws->work_cost;
+}
+
+/*
+ * Internal: solve standard (single solution) LAP with unified problem/options.
+ */
+static RalphLapStatus lap_solve_standard_unified(
+    const RalphLapProblem *prob,
+    const RalphLapOptions *opts,
+    RalphLapResult *result,
+    RalphLapWorkspace *ws
+) {
+    RalphLapStatus status;
+    double single_cost = 0;
+    double *cost_ptr = result->costs ? result->costs : &single_cost;
+
+    /* Apply algorithm-level settings */
+    int old_eps = lap_epsilon_scaling_enabled;
+    double old_factor = lap_epsilon_factor;
+    int old_parallel = lap_parallel_enabled;
+
+    if (opts) {
+        lap_epsilon_scaling_enabled = opts->epsilon_scaling;
+        if (opts->epsilon_factor > 1.0) lap_epsilon_factor = opts->epsilon_factor;
+        lap_parallel_enabled = opts->parallel;
+    }
+
+    /* Dispatch based on cost representation and dimensions */
+    switch (prob->cost_type) {
+        case RALPH_LAP_COST_DENSE:
+            if (prob->n == prob->m) {
+                /* Square dense LAP */
+                const double *cost = apply_forbidden_dense(prob, opts, ws);
+
+                if (opts && opts->warm_start && ws) {
+                    status = ralph_lap_solve_warm(
+                        prob->n, cost, prob->objective,
+                        result->row_sol, result->col_sol,
+                        result->u, result->v, cost_ptr,
+                        ws, 1
+                    );
+                } else if (ws) {
+                    status = ralph_lap_solve_with_workspace(
+                        prob->n, cost, prob->objective,
+                        result->row_sol, result->col_sol,
+                        result->u, result->v, cost_ptr,
+                        ws
+                    );
+                } else {
+                    status = ralph_lap_solve(
+                        prob->n, cost, prob->objective,
+                        result->row_sol, result->col_sol,
+                        result->u, result->v, cost_ptr
+                    );
+                }
+            } else {
+                /* Rectangular dense LAP */
+                /* Note: forbidden assignments for rect would need work_cost copy */
+                status = ralph_lap_solve_rect(
+                    prob->n, prob->m, prob->dense_cost, prob->objective,
+                    result->row_sol, result->col_sol, cost_ptr
+                );
+            }
+            break;
+
+        case RALPH_LAP_COST_SPARSE:
+            /* Sparse LAP - forbidden assignments already implicit in sparse format */
+            /* TODO: Add support for additional forbidden on top of sparse */
+            status = ralph_lap_solve_sparse(
+                prob->n, prob->sparse.nnz,
+                prob->sparse.row_ptr, prob->sparse.col_idx, prob->sparse.values,
+                prob->objective, result->row_sol, result->col_sol, cost_ptr
+            );
+            break;
+
+        case RALPH_LAP_COST_CALLBACK:
+            /* Callback-based LAP */
+            /* TODO: Add forbidden support via wrapper callback */
+            if (ws) {
+                status = ralph_lap_solve_callback_with_workspace(
+                    prob->n, prob->callback.fn, prob->callback.user_data,
+                    prob->objective, result->row_sol, result->col_sol,
+                    result->u, result->v, cost_ptr, ws
+                );
+            } else {
+                status = ralph_lap_solve_callback(
+                    prob->n, prob->callback.fn, prob->callback.user_data,
+                    prob->objective, result->row_sol, result->col_sol,
+                    result->u, result->v, cost_ptr
+                );
+            }
+            break;
+
+        default:
+            status = RALPH_LAP_INVALID_INPUT;
+            break;
+    }
+
+    /* Restore settings */
+    lap_epsilon_scaling_enabled = old_eps;
+    lap_epsilon_factor = old_factor;
+    lap_parallel_enabled = old_parallel;
+
+    if (status == RALPH_LAP_SUCCESS) {
+        result->num_found = 1;
+    }
+
+    return status;
+}
+
+/*
+ * Internal: solve k-best LAP with unified problem/options.
+ */
+static RalphLapStatus lap_solve_k_best_unified(
+    const RalphLapProblem *prob,
+    const RalphLapOptions *opts,
+    RalphLapResult *result,
+    RalphLapWorkspace *ws
+) {
+    /* Currently k-best only supports dense square */
+    if (prob->cost_type != RALPH_LAP_COST_DENSE) {
+        /* For non-dense, we could convert to dense first */
+        /* For now, return error - future enhancement */
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    if (prob->n != prob->m) {
+        /* Rectangular k-best not yet supported */
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    const double *cost = prob->dense_cost;
+
+    /* Apply forbidden assignments if any */
+    if (opts->num_forbidden > 0 && ws) {
+        cost = apply_forbidden_dense(prob, opts, ws);
+    }
+
+    /* Call existing k-best implementation */
+    if (ws) {
+        return ralph_lap_solve_k_best_with_workspace(
+            prob->n, cost, prob->objective, opts->k,
+            result->row_sol, result->costs, &result->num_found, ws
+        );
+    } else {
+        return ralph_lap_solve_k_best(
+            prob->n, cost, prob->objective, opts->k,
+            result->row_sol, result->costs, &result->num_found
+        );
+    }
+}
+
+/*
+ * Unified LAP solve function - main entry point.
+ */
+RalphLapStatus ralph_lap_solve_ex(
+    const RalphLapProblem *problem,
+    const RalphLapOptions *options,
+    RalphLapResult *result,
+    RalphLapWorkspace *workspace
+) {
+    /* Validate inputs */
+    if (!problem || !result) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    if (problem->n <= 0 || problem->m <= 0) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    if (!result->row_sol) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Validate cost representation */
+    switch (problem->cost_type) {
+        case RALPH_LAP_COST_DENSE:
+            if (!problem->dense_cost) return RALPH_LAP_INVALID_INPUT;
+            break;
+        case RALPH_LAP_COST_SPARSE:
+            if (!problem->sparse.row_ptr || !problem->sparse.col_idx ||
+                !problem->sparse.values) return RALPH_LAP_INVALID_INPUT;
+            break;
+        case RALPH_LAP_COST_CALLBACK:
+            if (!problem->callback.fn) return RALPH_LAP_INVALID_INPUT;
+            break;
+        default:
+            return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Use default options if not provided */
+    RalphLapOptions default_opts = RALPH_LAP_OPTIONS_DEFAULT;
+    const RalphLapOptions *opts = options ? options : &default_opts;
+
+    /* Handle workspace */
+    RalphLapWorkspace *ws = workspace;
+    int ws_allocated = 0;
+
+    int max_dim = (problem->n > problem->m) ? problem->n : problem->m;
+
+    if (!ws && (opts->warm_start || opts->num_forbidden > 0 ||
+                opts->algorithm == RALPH_LAP_ALG_K_BEST)) {
+        /* Need workspace for these features */
+        ws = ralph_lap_workspace_create(max_dim);
+        if (!ws) return RALPH_LAP_MEMORY_ERROR;
+        ws_allocated = 1;
+    }
+
+    if (ws && max_dim > ws->max_n) {
+        if (ws_allocated) ralph_lap_workspace_free(ws);
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Initialize result */
+    result->status = RALPH_LAP_SUCCESS;
+    result->num_found = 0;
+
+    /* Dispatch based on algorithm */
+    RalphLapStatus status;
+
+    switch (opts->algorithm) {
+        case RALPH_LAP_ALG_K_BEST:
+            if (opts->k <= 0) {
+                status = RALPH_LAP_INVALID_INPUT;
+            } else if (opts->k == 1) {
+                /* k=1 is just standard solve */
+                status = lap_solve_standard_unified(problem, opts, result, ws);
+            } else {
+                status = lap_solve_k_best_unified(problem, opts, result, ws);
+            }
+            break;
+
+        case RALPH_LAP_ALG_BOTTLENECK:
+            /* Not yet implemented */
+            status = RALPH_LAP_INVALID_INPUT;
+            break;
+
+        case RALPH_LAP_ALG_STANDARD:
+        default:
+            status = lap_solve_standard_unified(problem, opts, result, ws);
+            break;
+    }
+
+    result->status = status;
+
+    if (ws_allocated) {
+        ralph_lap_workspace_free(ws);
+    }
+
+    return status;
+}

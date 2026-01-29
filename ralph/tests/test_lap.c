@@ -2645,6 +2645,288 @@ static void test_k_best_single(void) {
 }
 
 /* ============================================================================
+ * Tests: Unified API (ralph_lap_solve_ex)
+ * ============================================================================ */
+
+void test_unified_basic(void) {
+    printf("\n=== Test: Unified API - Basic Dense ===\n");
+
+    double cost[9] = {
+        1, 10, 10,
+        10, 2, 10,
+        10, 10, 3
+    };
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    int row_sol[3];
+    double total_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &total_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, NULL, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Unified solve succeeded");
+    ASSERT(res.num_found == 1, "Found 1 solution");
+    ASSERT_NEAR(total_cost, 6.0, TOLERANCE, "Optimal cost is 6");
+    ASSERT(row_sol[0] == 0 && row_sol[1] == 1 && row_sol[2] == 2, "Diagonal assignment");
+}
+
+void test_unified_k_best(void) {
+    printf("\n=== Test: Unified API - k-Best ===\n");
+
+    double cost[9] = {
+        1, 2, 3,
+        4, 5, 6,
+        7, 8, 9
+    };
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_K_BEST;
+    opts.k = 3;
+
+    int solutions[9];
+    double costs[3];
+    RalphLapResult res = {
+        .row_sol = solutions,
+        .costs = costs
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Unified k-best succeeded");
+    ASSERT(res.num_found >= 3, "Found at least 3 solutions");
+    ASSERT(costs[0] <= costs[1] && costs[1] <= costs[2], "Costs in order");
+}
+
+void test_unified_forbidden(void) {
+    printf("\n=== Test: Unified API - Forbidden Assignments ===\n");
+
+    /* Without forbidden: optimal is diagonal (cost = 1+2+3 = 6) */
+    double cost[9] = {
+        1, 10, 10,
+        10, 2, 10,
+        10, 10, 3
+    };
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    /* Forbid diagonal assignments */
+    int forbidden_r[] = {0, 1, 2};
+    int forbidden_c[] = {0, 1, 2};
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_forbidden = 3;
+    opts.forbidden_rows = forbidden_r;
+    opts.forbidden_cols = forbidden_c;
+
+    int row_sol[3];
+    double total_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &total_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Unified with forbidden succeeded");
+    /* Diagonal forbidden, so cost must be > 6 */
+    ASSERT(total_cost > 6.0 + TOLERANCE, "Cost > 6 (diagonal forbidden)");
+    /* Verify no diagonal assignments */
+    int diagonal_used = (row_sol[0] == 0) || (row_sol[1] == 1) || (row_sol[2] == 2);
+    ASSERT(!diagonal_used, "No diagonal assignments used");
+}
+
+void test_unified_rectangular(void) {
+    printf("\n=== Test: Unified API - Rectangular ===\n");
+
+    /* 2 workers, 3 jobs */
+    double cost[6] = {
+        1, 5, 9,
+        4, 2, 8
+    };
+
+    RalphLapProblem prob = {
+        .n = 2, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    int row_sol[2];
+    double total_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &total_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, NULL, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Unified rect succeeded");
+    /* Optimal: worker 0 -> job 0 (cost 1), worker 1 -> job 1 (cost 2) = 3 */
+    ASSERT_NEAR(total_cost, 3.0, TOLERANCE, "Rect optimal cost is 3");
+}
+
+void test_unified_sparse(void) {
+    printf("\n=== Test: Unified API - Sparse ===\n");
+
+    /* 3x3 sparse with only some edges */
+    int row_ptr[] = {0, 2, 4, 6};
+    int col_idx[] = {0, 1, 1, 2, 0, 2};
+    double values[] = {1, 5, 2, 6, 3, 4};
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_SPARSE,
+        .sparse = {6, row_ptr, col_idx, values},
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    int row_sol[3];
+    double total_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &total_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, NULL, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Unified sparse succeeded");
+    /* Optimal: 0->0 (1), 1->1 (2), 2->2 (4) = 7 */
+    ASSERT_NEAR(total_cost, 7.0, TOLERANCE, "Sparse optimal cost is 7");
+}
+
+void test_unified_callback(void) {
+    printf("\n=== Test: Unified API - Callback ===\n");
+
+    /* Use dense matrix via callback */
+    double cost[9] = {
+        1, 10, 10,
+        10, 2, 10,
+        10, 10, 3
+    };
+
+    typedef struct { int n; const double *c; } CostCtx;
+    CostCtx ctx = {3, cost};
+
+    double callback_fn(int i, int j, void *ud) {
+        CostCtx *c = (CostCtx*)ud;
+        return c->c[i * c->n + j];
+    }
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_CALLBACK,
+        .callback = {callback_fn, &ctx},
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    int row_sol[3];
+    double total_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &total_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, NULL, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Unified callback succeeded");
+    ASSERT_NEAR(total_cost, 6.0, TOLERANCE, "Callback optimal cost is 6");
+}
+
+void test_unified_options_combination(void) {
+    printf("\n=== Test: Unified API - Options Combination ===\n");
+
+    double cost[16] = {
+        1, 5, 9, 13,
+        2, 6, 10, 14,
+        3, 7, 11, 15,
+        4, 8, 12, 16
+    };
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 4,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    /* Combine: k-best + epsilon scaling + parallel off */
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_K_BEST;
+    opts.k = 2;
+    opts.epsilon_scaling = 1;
+    opts.parallel = 0;
+
+    int solutions[8];
+    double costs[2];
+    RalphLapResult res = {
+        .row_sol = solutions,
+        .costs = costs
+    };
+
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(4);
+    ASSERT(ws != NULL, "Workspace created");
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, ws);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Combined options succeeded");
+    ASSERT(res.num_found >= 2, "Found at least 2 solutions");
+    ASSERT(costs[0] <= costs[1], "Costs in order");
+
+    ralph_lap_workspace_free(ws);
+}
+
+void test_unified_maximize(void) {
+    printf("\n=== Test: Unified API - Maximize ===\n");
+
+    double cost[9] = {
+        1, 2, 3,
+        4, 5, 6,
+        7, 8, 9
+    };
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MAXIMIZE
+    };
+
+    int row_sol[3];
+    double total_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &total_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, NULL, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Unified maximize succeeded");
+    /* Max: 0->2 (3), 1->1 (5), 2->0 (7) = 15, or other combo */
+    ASSERT(total_cost >= 15.0 - TOLERANCE, "Maximize cost >= 15");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -2707,6 +2989,16 @@ int main(void) {
     test_k_best_large();
     test_k_best_with_workspace();
     test_k_best_single();
+
+    /* Unified API tests */
+    test_unified_basic();
+    test_unified_k_best();
+    test_unified_forbidden();
+    test_unified_rectangular();
+    test_unified_sparse();
+    test_unified_callback();
+    test_unified_options_combination();
+    test_unified_maximize();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",
