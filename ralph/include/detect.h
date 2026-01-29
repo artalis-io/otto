@@ -77,7 +77,8 @@ int solve_as_lap(const LAPSignature *sig, double *solution, double *obj_val);
  * When enabled, ralph_optimize() will check if the problem has LAP
  * structure and use the specialized JVC solver if so.
  *
- * Default: enabled (1)
+ * Default: disabled (0) - for fair benchmarking against LP baseline
+ * Enable with: ralph_set_detect_lap(1) or ralph_set_int_param(model, "detect_special", 1)
  */
 void ralph_set_detect_lap(int enabled);
 int ralph_get_detect_lap(void);
