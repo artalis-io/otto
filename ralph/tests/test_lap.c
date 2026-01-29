@@ -1306,7 +1306,329 @@ static void test_epsilon_scaling(void) {
 }
 
 /* ============================================================================
- * Test 30: Epsilon scaling with maximization
+ * Test 30: Warm start basic functionality
+ * ============================================================================ */
+static void test_warm_start_basic(void) {
+    printf("\n=== Test: Warm Start Basic ===\n");
+
+    int n = 20;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol = malloc(n * sizeof(int));
+    int *col_sol = malloc(n * sizeof(int));
+    double *u = malloc(n * sizeof(double));
+    double *v = malloc(n * sizeof(double));
+
+    /* Create workspace */
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+    ASSERT(ws != NULL, "Workspace created");
+
+    /* Initially no warm start */
+    ASSERT(ralph_lap_warm_start_valid(ws) == 0, "No warm start initially");
+
+    /* Solve first problem - cold start, save for warm start */
+    srand(111);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    double cost1;
+    RalphLapStatus status = ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE,
+                                                  row_sol, col_sol, u, v, &cost1,
+                                                  ws, 1);  /* save_for_warm_start = 1 */
+    ASSERT(status == RALPH_LAP_SUCCESS, "First solve succeeded");
+    ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "First solution valid");
+
+    /* Now warm start should be valid */
+    ASSERT(ralph_lap_warm_start_valid(ws) == 1, "Warm start valid after first solve");
+
+    /* Solve same problem again with warm start */
+    double cost2;
+    int *row_sol2 = malloc(n * sizeof(int));
+    status = ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE,
+                                   row_sol2, NULL, NULL, NULL, &cost2,
+                                   ws, 1);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Warm start solve succeeded");
+    ASSERT_NEAR(cost1, cost2, TOLERANCE, "Costs match");
+
+    /* Solutions should match */
+    int match = 1;
+    for (int i = 0; i < n; i++) {
+        if (row_sol[i] != row_sol2[i]) {
+            match = 0;
+            break;
+        }
+    }
+    ASSERT(match, "Solutions match");
+
+    /* Clear warm start */
+    ralph_lap_warm_start_clear(ws);
+    ASSERT(ralph_lap_warm_start_valid(ws) == 0, "Warm start cleared");
+
+    free(cost);
+    free(row_sol);
+    free(row_sol2);
+    free(col_sol);
+    free(u);
+    free(v);
+    ralph_lap_workspace_free(ws);
+}
+
+/* ============================================================================
+ * Test 31: Warm start with similar problems
+ * ============================================================================ */
+static void test_warm_start_similar(void) {
+    printf("\n=== Test: Warm Start Similar Problems ===\n");
+
+    int n = 30;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol = malloc(n * sizeof(int));
+    double *u = malloc(n * sizeof(double));
+    double *v = malloc(n * sizeof(double));
+
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+
+    /* Solve initial problem */
+    srand(222);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    double cost1;
+    ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE,
+                          row_sol, NULL, u, v, &cost1, ws, 1);
+    ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "Initial solution valid");
+
+    /* Slightly perturb costs */
+    srand(333);
+    for (int i = 0; i < n * n / 10; i++) {
+        int idx = rand() % (n * n);
+        cost[idx] += (rand() % 10) - 5;  /* Small perturbation */
+    }
+
+    /* Solve with warm start */
+    double cost2;
+    ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE,
+                          row_sol, NULL, NULL, NULL, &cost2, ws, 1);
+    ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "Perturbed solution valid");
+
+    /* Compare with cold start to verify optimality */
+    double cost_cold;
+    int *row_sol_cold = malloc(n * sizeof(int));
+    ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                     row_sol_cold, NULL, NULL, NULL, &cost_cold);
+    ASSERT_NEAR(cost2, cost_cold, TOLERANCE, "Warm start finds optimal solution");
+
+    printf("  Initial cost: %.2f, Perturbed warm: %.2f, Cold: %.2f\n",
+           cost1, cost2, cost_cold);
+
+    free(cost);
+    free(row_sol);
+    free(row_sol_cold);
+    free(u);
+    free(v);
+    ralph_lap_workspace_free(ws);
+}
+
+/* ============================================================================
+ * Test 32: Warm start with different problems
+ * ============================================================================ */
+static void test_warm_start_different(void) {
+    printf("\n=== Test: Warm Start Different Problems ===\n");
+
+    int n = 25;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol = malloc(n * sizeof(int));
+
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+
+    /* Solve first problem */
+    srand(444);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    double cost1;
+    ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE,
+                          row_sol, NULL, NULL, NULL, &cost1, ws, 1);
+    ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "First solution valid");
+
+    /* Solve completely different problem */
+    srand(555);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 1000) + 1;
+    }
+
+    double cost2;
+    ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE,
+                          row_sol, NULL, NULL, NULL, &cost2, ws, 1);
+    ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "Second solution valid");
+
+    /* Compare with cold start */
+    double cost_cold;
+    int *row_sol_cold = malloc(n * sizeof(int));
+    ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                     row_sol_cold, NULL, NULL, NULL, &cost_cold);
+    ASSERT_NEAR(cost2, cost_cold, TOLERANCE, "Warm start finds optimal even for different problem");
+
+    free(cost);
+    free(row_sol);
+    free(row_sol_cold);
+    ralph_lap_workspace_free(ws);
+}
+
+/* ============================================================================
+ * Test 33: Warm start manual initialization
+ * ============================================================================ */
+static void test_warm_start_manual(void) {
+    printf("\n=== Test: Warm Start Manual Initialization ===\n");
+
+    int n = 15;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol = malloc(n * sizeof(int));
+    int *col_sol = malloc(n * sizeof(int));
+    double *u = malloc(n * sizeof(double));
+    double *v = malloc(n * sizeof(double));
+
+    /* Solve to get dual variables */
+    srand(666);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    double cost1;
+    ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                     row_sol, col_sol, u, v, &cost1);
+
+    /* Create new workspace and manually initialize warm start */
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+    RalphLapStatus status = ralph_lap_warm_start(ws, n, u, v, row_sol, col_sol);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Manual warm start succeeded");
+    ASSERT(ralph_lap_warm_start_valid(ws) == 1, "Warm start valid");
+
+    /* Solve with manual warm start */
+    double cost2;
+    int *row_sol2 = malloc(n * sizeof(int));
+    status = ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE,
+                                   row_sol2, NULL, NULL, NULL, &cost2, ws, 0);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Solve with manual warm start succeeded");
+    ASSERT_NEAR(cost1, cost2, TOLERANCE, "Costs match");
+
+    free(cost);
+    free(row_sol);
+    free(row_sol2);
+    free(col_sol);
+    free(u);
+    free(v);
+    ralph_lap_workspace_free(ws);
+}
+
+/* ============================================================================
+ * Test 34: Warm start with maximization
+ * ============================================================================ */
+static void test_warm_start_maximize(void) {
+    printf("\n=== Test: Warm Start Maximization ===\n");
+
+    int n = 20;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol = malloc(n * sizeof(int));
+
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+
+    /* Solve maximization problem */
+    srand(777);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    double cost1;
+    ralph_lap_solve_warm(n, cost, RALPH_LAP_MAXIMIZE,
+                          row_sol, NULL, NULL, NULL, &cost1, ws, 1);
+    ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "First max solution valid");
+
+    /* Solve again with warm start */
+    double cost2;
+    ralph_lap_solve_warm(n, cost, RALPH_LAP_MAXIMIZE,
+                          row_sol, NULL, NULL, NULL, &cost2, ws, 1);
+    ASSERT_NEAR(cost1, cost2, TOLERANCE, "Maximize costs match");
+
+    /* Verify against cold start */
+    double cost_cold;
+    int *row_sol_cold = malloc(n * sizeof(int));
+    ralph_lap_solve(n, cost, RALPH_LAP_MAXIMIZE,
+                     row_sol_cold, NULL, NULL, NULL, &cost_cold);
+    ASSERT_NEAR(cost2, cost_cold, TOLERANCE, "Warm start max matches cold start");
+
+    free(cost);
+    free(row_sol);
+    free(row_sol_cold);
+    ralph_lap_workspace_free(ws);
+}
+
+/* ============================================================================
+ * Test 35: Warm start performance comparison
+ * ============================================================================ */
+static void test_warm_start_performance(void) {
+    printf("\n=== Test: Warm Start Performance ===\n");
+
+    int n = 50;
+    int num_problems = 10;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol = malloc(n * sizeof(int));
+
+    /* Generate base problem */
+    srand(888);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+
+    /* Measure cold start time */
+    clock_t cold_start = clock();
+    for (int p = 0; p < num_problems; p++) {
+        /* Small perturbation */
+        for (int i = 0; i < 5; i++) {
+            int idx = rand() % (n * n);
+            cost[idx] = (rand() % 100) + 1;
+        }
+        ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
+    }
+    double cold_time = (double)(clock() - cold_start) / CLOCKS_PER_SEC * 1000;
+
+    /* Reset problem */
+    srand(888);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+    ralph_lap_warm_start_clear(ws);
+
+    /* Measure warm start time */
+    clock_t warm_start = clock();
+    for (int p = 0; p < num_problems; p++) {
+        /* Same perturbations */
+        for (int i = 0; i < 5; i++) {
+            int idx = rand() % (n * n);
+            cost[idx] = (rand() % 100) + 1;
+        }
+        ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL, ws, 1);
+    }
+    double warm_time = (double)(clock() - warm_start) / CLOCKS_PER_SEC * 1000;
+
+    printf("  %d problems of size %dx%d with small perturbations:\n", num_problems, n, n);
+    printf("    Cold start: %.3f ms total\n", cold_time);
+    printf("    Warm start: %.3f ms total\n", warm_time);
+    printf("    Ratio: %.2fx\n", cold_time / warm_time);
+
+    /* Warm start should not be significantly slower */
+    ASSERT(warm_time <= cold_time * 1.5, "Warm start not much slower than cold start");
+
+    free(cost);
+    free(row_sol);
+    ralph_lap_workspace_free(ws);
+}
+
+/* ============================================================================
+ * Test 36: Epsilon scaling with maximization
  * ============================================================================ */
 static void test_epsilon_scaling_maximize(void) {
     printf("\n=== Test: Epsilon Scaling Maximization ===\n");
@@ -1400,6 +1722,12 @@ int main(void) {
     test_workspace_repeated();
     test_epsilon_scaling();
     test_epsilon_scaling_maximize();
+    test_warm_start_basic();
+    test_warm_start_similar();
+    test_warm_start_different();
+    test_warm_start_manual();
+    test_warm_start_maximize();
+    test_warm_start_performance();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",

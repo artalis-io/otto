@@ -643,6 +643,201 @@ static void bench_epsilon_scaling(void) {
 }
 
 /* ============================================================================
+ * Warm start benchmark
+ * ============================================================================ */
+
+static void bench_warm_start(void) {
+    printf("\n╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  Warm Start Benchmark (Cold Start vs Warm Start)                          ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+    printf("  %6s  %10s  %10s  %10s  %8s\n",
+           "Size", "Cold (ms)", "Warm (ms)", "Speedup", "Status");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    int sizes[] = {50, 100, 200, 500};
+    int num_problems = 10;  /* Solve sequence of similar problems */
+
+    for (int s = 0; s < 4; s++) {
+        int n = sizes[s];
+        double *cost = malloc(n * n * sizeof(double));
+        int *row_sol = malloc(n * sizeof(int));
+
+        /* Generate base problem */
+        srand(42);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 1000) / 10.0;
+        }
+
+        RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+        double cold_total = 0, warm_total = 0;
+        double cold_cost = 0, warm_cost = 0;
+        int all_match = 1;
+
+        /* Cold start benchmark */
+        for (int p = 0; p < num_problems; p++) {
+            /* Small perturbation (10% of cells) */
+            for (int i = 0; i < n * n / 10; i++) {
+                int idx = rand() % (n * n);
+                cost[idx] = (rand() % 1000) / 10.0;
+            }
+
+            Timer timer;
+            timer_start(&timer);
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &cold_cost);
+            timer_stop(&timer);
+            cold_total += timer.elapsed_ms;
+        }
+
+        /* Reset for warm start benchmark */
+        srand(42);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 1000) / 10.0;
+        }
+        ralph_lap_warm_start_clear(ws);
+
+        /* Warm start benchmark */
+        for (int p = 0; p < num_problems; p++) {
+            /* Same perturbations */
+            for (int i = 0; i < n * n / 10; i++) {
+                int idx = rand() % (n * n);
+                cost[idx] = (rand() % 1000) / 10.0;
+            }
+
+            Timer timer;
+            timer_start(&timer);
+            ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &warm_cost, ws, 1);
+            timer_stop(&timer);
+            warm_total += timer.elapsed_ms;
+
+            /* Verify optimality against cold start for this specific problem */
+            double verify_cost;
+            int *verify_sol = malloc(n * sizeof(int));
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, verify_sol, NULL, NULL, NULL, &verify_cost);
+            if (fabs(warm_cost - verify_cost) > 1e-4) {
+                all_match = 0;
+            }
+            free(verify_sol);
+        }
+
+        double speedup = cold_total / warm_total;
+        const char *status = all_match ? "OK" : "MISMATCH";
+
+        printf("  %6d  %10.3f  %10.3f  %10.2fx  %8s\n",
+               n, cold_total / num_problems, warm_total / num_problems, speedup, status);
+
+        free(cost);
+        free(row_sol);
+        ralph_lap_workspace_free(ws);
+    }
+
+    /* Test with very similar problems (only 1% perturbation) */
+    printf("\n  Very similar problems (1%% perturbation):\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    for (int s = 0; s < 3; s++) {
+        int n = (s == 0) ? 100 : (s == 1) ? 200 : 500;
+        double *cost = malloc(n * n * sizeof(double));
+        int *row_sol = malloc(n * sizeof(int));
+
+        /* Generate base problem */
+        srand(123);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 1000) / 10.0;
+        }
+
+        RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+        double cold_total = 0, warm_total = 0;
+
+        /* Cold start */
+        for (int p = 0; p < num_problems; p++) {
+            /* 1% perturbation */
+            for (int i = 0; i < n * n / 100; i++) {
+                int idx = rand() % (n * n);
+                cost[idx] = (rand() % 1000) / 10.0;
+            }
+
+            Timer timer;
+            timer_start(&timer);
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
+            timer_stop(&timer);
+            cold_total += timer.elapsed_ms;
+        }
+
+        /* Reset */
+        srand(123);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 1000) / 10.0;
+        }
+        ralph_lap_warm_start_clear(ws);
+
+        /* Warm start */
+        for (int p = 0; p < num_problems; p++) {
+            for (int i = 0; i < n * n / 100; i++) {
+                int idx = rand() % (n * n);
+                cost[idx] = (rand() % 1000) / 10.0;
+            }
+
+            Timer timer;
+            timer_start(&timer);
+            ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL, ws, 1);
+            timer_stop(&timer);
+            warm_total += timer.elapsed_ms;
+        }
+
+        double speedup = cold_total / warm_total;
+
+        printf("  %6d  %10.3f  %10.3f  %10.2fx\n",
+               n, cold_total / num_problems, warm_total / num_problems, speedup);
+
+        free(cost);
+        free(row_sol);
+        ralph_lap_workspace_free(ws);
+    }
+
+    /* Test with identical problems (best case for warm start) */
+    printf("\n  Identical problems (best case for warm start):\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    for (int s = 0; s < 3; s++) {
+        int n = (s == 0) ? 100 : (s == 1) ? 200 : 500;
+        double *cost = malloc(n * n * sizeof(double));
+        int *row_sol = malloc(n * sizeof(int));
+
+        /* Generate fixed problem */
+        srand(456);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 1000) / 10.0;
+        }
+
+        RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+        Timer timer;
+
+        /* Cold start (single solve) */
+        timer_start(&timer);
+        ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
+        timer_stop(&timer);
+        double cold_time = timer.elapsed_ms;
+
+        /* Warm start (repeated solves) */
+        double warm_total = 0;
+        for (int p = 0; p < num_problems; p++) {
+            timer_start(&timer);
+            ralph_lap_solve_warm(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL, ws, 1);
+            timer_stop(&timer);
+            warm_total += timer.elapsed_ms;
+        }
+        double warm_avg = warm_total / num_problems;
+        double speedup = cold_time / warm_avg;
+
+        printf("  %6d  %10.3f  %10.3f  %10.2fx\n", n, cold_time, warm_avg, speedup);
+
+        free(cost);
+        free(row_sol);
+        ralph_lap_workspace_free(ws);
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -662,6 +857,7 @@ int main(int argc, char *argv[]) {
     int run_verify = run_all || (argc > 1 && strcmp(argv[1], "verify") == 0);
     int run_sparse = run_all || (argc > 1 && strcmp(argv[1], "sparse") == 0);
     int run_epsilon = run_all || (argc > 1 && strcmp(argv[1], "epsilon") == 0);
+    int run_warm = run_all || (argc > 1 && strcmp(argv[1], "warm") == 0);
 
     if (run_size) bench_size_scaling();
     if (run_types) bench_problem_types();
@@ -671,6 +867,7 @@ int main(int argc, char *argv[]) {
     }
     if (run_large) bench_large_problems();
     if (run_epsilon) bench_epsilon_scaling();
+    if (run_warm) bench_warm_start();
     if (run_verify) bench_correctness();
 
     printf("\n");

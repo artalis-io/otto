@@ -425,3 +425,42 @@ void bench_phase1_parallel(int n, int trials);
 - Total LAP tests: 123 (100% passing)
 - Total Ralph tests: 65 (100% passing)
 - Tests cover: dense, rectangular, sparse, minimization, maximization, infeasibility, epsilon scaling
+
+### Phase E: Warm Start (Completed)
+- [x] Automatic dual variable saving in workspace
+- [x] Warm start validation against new cost matrix
+- [x] Solution reuse when previous assignment still valid
+- [x] Fallback to cold start when warm start invalid
+- [x] Manual warm start initialization API
+- [x] Comprehensive test suite (6 test functions)
+- [x] Performance benchmarks
+
+**Implementation Details (2026-01-29):**
+- Workspace stores `warm_u`, `warm_v`, `warm_row_sol`, `warm_col_sol`
+- Dual variables saved internally (for possibly-negated cost matrix)
+- Validation checks: complementary slackness and non-negative reduced costs
+- Warm start skips Phase 1-3 when solution remains valid
+- Falls back to cold start when reduced costs negative or solution invalid
+
+**API:**
+- `ralph_lap_solve_warm()` - solve with automatic warm start
+- `ralph_lap_warm_init()` - manual warm start initialization
+
+**Performance Results:**
+| Scenario | n=30 Speedup | Notes |
+|----------|--------------|-------|
+| Identical problems | 6-10x | Solution still valid |
+| 1% perturbation | ~2x | Minor cost changes |
+| 10% perturbation | ~0.6x | Overhead exceeds benefit |
+
+**Key Findings:**
+- Warm start most beneficial when costs change minimally
+- For identical/very similar problems, provides significant speedup
+- For heavily perturbed problems, cold start overhead is lower
+- Critical fix: `num_free` variable scoping with goto labels
+- Critical fix: save internal dual variables (not transformed outputs)
+
+**Test Coverage:**
+- Total LAP tests: 146 (100% passing)
+- Total Ralph tests: 65 (100% passing)
+- New warm start tests: basic, similar, different, manual, maximize, performance

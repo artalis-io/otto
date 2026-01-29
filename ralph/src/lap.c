@@ -106,6 +106,14 @@ struct RalphLapWorkspace {
     /* Heap for Dijkstra (Phase 4) */
     int *heap;              /* Binary min-heap of column indices */
     int *heap_pos;          /* heap_pos[j] = position of column j in heap (-1 if not in heap) */
+
+    /* Warm start state */
+    int warm_start_valid;   /* 1 if warm start data is valid, 0 otherwise */
+    int warm_start_n;       /* Problem size for warm start */
+    double *warm_u;         /* Saved row duals for warm start */
+    double *warm_v;         /* Saved column duals for warm start */
+    int *warm_row_sol;      /* Saved row solution for warm start */
+    int *warm_col_sol;      /* Saved column solution for warm start */
 };
 
 /* ============================================================================
@@ -215,10 +223,16 @@ RalphLapWorkspace* ralph_lap_workspace_create(int max_n) {
     size_t in_free_list_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
     size_t heap_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
     size_t heap_pos_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    /* Warm start arrays */
+    size_t warm_u_size = ((n * sizeof(double) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t warm_v_size = ((n * sizeof(double) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t warm_row_sol_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t warm_col_sol_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
 
     ws->block_size = work_cost_size + col_price_size + row_price_size + dist_size +
                      row_assign_size + col_assign_size + matches_size + free_rows_size +
-                     pred_size + col_list_size + in_free_list_size + heap_size + heap_pos_size;
+                     pred_size + col_list_size + in_free_list_size + heap_size + heap_pos_size +
+                     warm_u_size + warm_v_size + warm_row_sol_size + warm_col_sol_size;
 
     /* Allocate single aligned block */
     ws->memory_block = lap_aligned_alloc(ws->block_size);
@@ -242,7 +256,24 @@ RalphLapWorkspace* ralph_lap_workspace_create(int max_n) {
     ws->col_list = (int *)ptr; ptr += col_list_size;
     ws->in_free_list = (int *)ptr; ptr += in_free_list_size;
     ws->heap = (int *)ptr; ptr += heap_size;
-    ws->heap_pos = (int *)ptr;
+    ws->heap_pos = (int *)ptr; ptr += heap_pos_size;
+    /* Warm start arrays */
+    ws->warm_u = (double *)ptr; ptr += warm_u_size;
+    ws->warm_v = (double *)ptr; ptr += warm_v_size;
+    ws->warm_row_sol = (int *)ptr; ptr += warm_row_sol_size;
+    ws->warm_col_sol = (int *)ptr;
+
+    /* Initialize warm start as invalid */
+    ws->warm_start_valid = 0;
+    ws->warm_start_n = 0;
+
+    /* Initialize warm start arrays to safe values */
+    memset(ws->warm_u, 0, n * sizeof(double));
+    memset(ws->warm_v, 0, n * sizeof(double));
+    for (size_t i = 0; i < n; i++) {
+        ws->warm_row_sol[i] = RALPH_LAP_UNASSIGNED;
+        ws->warm_col_sol[i] = RALPH_LAP_UNASSIGNED;
+    }
 
     return ws;
 }
@@ -256,6 +287,58 @@ void ralph_lap_workspace_free(RalphLapWorkspace *ws) {
 
 int ralph_lap_workspace_max_n(const RalphLapWorkspace *ws) {
     return ws ? ws->max_n : 0;
+}
+
+RalphLapStatus ralph_lap_warm_start(
+    RalphLapWorkspace *ws,
+    int n,
+    const double *u,
+    const double *v,
+    const int *row_sol,
+    const int *col_sol
+) {
+    if (!ws || n <= 0 || n > ws->max_n || !v) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Store dimension */
+    ws->warm_start_n = n;
+
+    /* Copy column duals (required) */
+    memcpy(ws->warm_v, v, n * sizeof(double));
+
+    /* Copy row duals if provided */
+    if (u) {
+        memcpy(ws->warm_u, u, n * sizeof(double));
+    } else {
+        memset(ws->warm_u, 0, n * sizeof(double));
+    }
+
+    /* Copy solution if provided */
+    if (row_sol && col_sol) {
+        memcpy(ws->warm_row_sol, row_sol, n * sizeof(int));
+        memcpy(ws->warm_col_sol, col_sol, n * sizeof(int));
+    } else {
+        /* Mark solution as invalid by setting to -1 */
+        for (int i = 0; i < n; i++) {
+            ws->warm_row_sol[i] = RALPH_LAP_UNASSIGNED;
+            ws->warm_col_sol[i] = RALPH_LAP_UNASSIGNED;
+        }
+    }
+
+    ws->warm_start_valid = 1;
+    return RALPH_LAP_SUCCESS;
+}
+
+void ralph_lap_warm_start_clear(RalphLapWorkspace *ws) {
+    if (ws) {
+        ws->warm_start_valid = 0;
+        ws->warm_start_n = 0;
+    }
+}
+
+int ralph_lap_warm_start_valid(const RalphLapWorkspace *ws) {
+    return ws ? ws->warm_start_valid : 0;
 }
 
 /* ============================================================================
@@ -944,6 +1027,520 @@ RalphLapStatus ralph_lap_solve_with_workspace(
     }
 
     return lap_solve_internal(n, cost, objective, row_sol, col_sol, u, v, total_cost, ws);
+}
+
+RalphLapStatus ralph_lap_solve_warm(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
+    double *total_cost,
+    RalphLapWorkspace *ws,
+    int save_for_warm_start
+) {
+    if (n <= 0 || cost == NULL || row_sol == NULL || ws == NULL) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    if (n > ws->max_n) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Handle trivial case */
+    if (n == 1) {
+        row_sol[0] = 0;
+        if (col_sol) col_sol[0] = 0;
+        if (u) u[0] = cost[0];
+        if (v) v[0] = 0.0;
+        if (total_cost) *total_cost = cost[0];
+        ws->warm_start_valid = 0;  /* No benefit to warm start for n=1 */
+        return RALPH_LAP_SUCCESS;
+    }
+
+    RalphLapStatus status;
+
+    /* Check if warm start is applicable */
+    int use_warm_start = ws->warm_start_valid && ws->warm_start_n == n;
+
+    if (use_warm_start) {
+        /* ================================================================
+         * WARM START SOLVE
+         *
+         * Use saved dual variables to initialize the solver.
+         * This skips most of Phase 1 work.
+         * ================================================================ */
+        int i, j, k;
+        int num_free = 0;  /* Declared here to be visible across goto labels */
+
+        double *work_cost = ws->work_cost;
+        double *col_price = ws->col_price;
+        double *row_price = ws->row_price;
+        double *dist = ws->dist;
+        int *row_assign = ws->row_assign;
+        int *col_assign = ws->col_assign;
+        int *matches = ws->matches;
+        int *free_rows = ws->free_rows;
+        int *pred = ws->pred;
+        int *col_list = ws->col_list;
+        int *in_free_list = ws->in_free_list;
+        int *heap = ws->heap;
+        int *heap_pos = ws->heap_pos;
+
+        int use_heap = (n >= LAP_HEAP_THRESHOLD);
+
+        /* Copy cost matrix, negate if maximizing */
+        if (objective == RALPH_LAP_MAXIMIZE) {
+            for (i = 0; i < n * n; i++) {
+                if (is_infinite(cost[i])) {
+                    work_cost[i] = RALPH_LAP_INFINITY;
+                } else {
+                    work_cost[i] = -cost[i];
+                }
+            }
+        } else {
+            memcpy(work_cost, cost, n * n * sizeof(double));
+        }
+
+        /* Initialize from warm start data */
+        memcpy(col_price, ws->warm_v, n * sizeof(double));
+        memset(row_price, 0, n * sizeof(double));
+        memset(matches, 0, n * sizeof(int));
+        memset(in_free_list, 0, n * sizeof(int));
+
+        /* Check if we can use the saved assignment */
+        int valid_assignment = 1;
+        for (i = 0; i < n && valid_assignment; i++) {
+            int j_saved = ws->warm_row_sol[i];
+            if (j_saved < 0 || j_saved >= n) {
+                valid_assignment = 0;
+            } else {
+                /* Check if the edge is still valid (not infinite cost) */
+                if (is_infinite(work_cost[i * n + j_saved])) {
+                    valid_assignment = 0;
+                }
+            }
+        }
+
+        if (valid_assignment) {
+            /* Use saved assignment, find rows that might need repair */
+            memcpy(row_assign, ws->warm_row_sol, n * sizeof(int));
+            memcpy(col_assign, ws->warm_col_sol, n * sizeof(int));
+
+            /* Check optimality for each row by comparing reduced costs */
+            num_free = 0;
+            for (i = 0; i < n; i++) {
+                int j_cur = row_assign[i];
+                double cur_reduced = work_cost[i * n + j_cur] - col_price[j_cur];
+
+                /* Find the minimum reduced cost for this row */
+                double min_reduced = DBL_MAX;
+                for (j = 0; j < n; j++) {
+                    double reduced = work_cost[i * n + j] - col_price[j];
+                    if (reduced < min_reduced) {
+                        min_reduced = reduced;
+                    }
+                }
+
+                /* If current assignment is not optimal, mark row as free */
+                if (cur_reduced > min_reduced + RALPH_LAP_TOLERANCE) {
+                    /* Unassign this row */
+                    col_assign[j_cur] = RALPH_LAP_UNASSIGNED;
+                    row_assign[i] = RALPH_LAP_UNASSIGNED;
+                    free_rows[num_free++] = i;
+                    in_free_list[i] = 1;
+                }
+            }
+
+            /* If few rows need repair, go directly to Phase 4 */
+            if (num_free > 0 && num_free <= n / 4) {
+                /* Skip to Phase 4 (Dijkstra augmentation) */
+                goto warm_phase4;
+            } else if (num_free > 0) {
+                /* Too many free rows, run Phase 3 first */
+                goto warm_phase3;
+            }
+            /* else: all rows optimal, skip to output */
+            goto warm_output;
+        }
+
+        /* No valid saved assignment - initialize from scratch but with warm prices */
+        for (i = 0; i < n; i++) {
+            row_assign[i] = RALPH_LAP_UNASSIGNED;
+            col_assign[i] = RALPH_LAP_UNASSIGNED;
+        }
+
+        /* Run a modified Phase 1 that uses warm prices as starting point */
+        /* Find minimum reduced cost for each column */
+        int *col_min_row = pred;
+        for (j = 0; j < n; j++) col_min_row[j] = -1;
+
+        #pragma omp simd
+        for (j = 0; j < n; j++) {
+            col_price[j] = ws->warm_v[j];  /* Use warm prices as base */
+        }
+
+        /* Find column minimums with warm prices */
+        for (i = 0; i < n; i++) {
+            const double *row_costs = &work_cost[i * n];
+            for (j = 0; j < n; j++) {
+                double reduced = row_costs[j] - col_price[j];
+                if (col_min_row[j] < 0 || reduced < -RALPH_LAP_TOLERANCE) {
+                    /* Update if this row has better reduced cost */
+                    if (col_min_row[j] < 0) {
+                        col_min_row[j] = i;
+                    } else {
+                        double prev_reduced = row_costs[col_min_row[j]] - col_price[j];
+                        if (reduced < prev_reduced - RALPH_LAP_TOLERANCE) {
+                            col_min_row[j] = i;
+                        }
+                    }
+                }
+            }
+        }
+
+        /* Re-run column reduction to get proper initial prices */
+        for (j = 0; j < n; j++) col_min_row[j] = -1;
+        memset(col_price, 0, n * sizeof(double));
+
+        /* Initialize with first row */
+        for (j = 0; j < n; j++) {
+            col_price[j] = work_cost[j];
+            col_min_row[j] = 0;
+        }
+
+        /* Find true column minimums */
+        for (i = 1; i < n; i++) {
+            const double *row_costs = &work_cost[i * n];
+            for (j = 0; j < n; j++) {
+                if (row_costs[j] < col_price[j]) {
+                    col_price[j] = row_costs[j];
+                    col_min_row[j] = i;
+                }
+            }
+        }
+
+        /* Assign based on column minimums */
+        for (j = n - 1; j >= 0; j--) {
+            int min_row = col_min_row[j];
+            if (min_row < 0) continue;
+            matches[min_row]++;
+            if (matches[min_row] == 1) {
+                row_assign[min_row] = j;
+                col_assign[j] = min_row;
+            } else {
+                int cur_col = row_assign[min_row];
+                if (cur_col >= 0 && col_price[j] < col_price[cur_col]) {
+                    col_assign[cur_col] = RALPH_LAP_UNASSIGNED;
+                    row_assign[min_row] = j;
+                    col_assign[j] = min_row;
+                } else {
+                    col_assign[j] = RALPH_LAP_UNASSIGNED;
+                }
+            }
+        }
+
+        /* Phase 2: Reduction transfer */
+        num_free = 0;
+        for (i = 0; i < n; i++) {
+            if (row_assign[i] == RALPH_LAP_UNASSIGNED) {
+                free_rows[num_free++] = i;
+                in_free_list[i] = 1;
+            } else if (matches[i] == 1) {
+                int j1 = row_assign[i];
+                double min_reduced = DBL_MAX;
+                const double *row_costs = &work_cost[i * n];
+                for (j = 0; j < n; j++) {
+                    if (j != j1) {
+                        double reduced = row_costs[j] - col_price[j];
+                        if (reduced < min_reduced) min_reduced = reduced;
+                    }
+                }
+                col_price[j1] -= min_reduced;
+            }
+        }
+
+    warm_phase3:
+        /* Phase 3: Auction */
+        for (int loop = 0; loop < 2 && num_free > 0; loop++) {
+            int k_free = 0;
+            int max_iter = n * n;
+            int iter = 0;
+
+            while (k_free < num_free && iter < max_iter) {
+                iter++;
+                i = free_rows[k_free++];
+
+                double u1 = DBL_MAX, u2 = DBL_MAX;
+                int j1 = -1, j2 = -1;
+                const double *row_costs = &work_cost[i * n];
+
+                for (j = 0; j < n; j++) {
+                    double reduced = row_costs[j] - col_price[j];
+                    if (reduced < u1) {
+                        u2 = u1; j2 = j1;
+                        u1 = reduced; j1 = j;
+                    } else if (reduced < u2) {
+                        u2 = reduced; j2 = j;
+                    }
+                }
+
+                if (j1 < 0) {
+                    status = RALPH_LAP_INFEASIBLE;
+                    goto warm_cleanup;
+                }
+
+                row_price[i] = u1;
+
+                if (u1 < u2 - RALPH_LAP_TOLERANCE) {
+                    col_price[j1] = col_price[j1] - u2 + u1;
+                } else if (col_assign[j1] >= 0 && j2 >= 0 && col_assign[j2] < 0) {
+                    j1 = j2;
+                }
+
+                int prev_row = col_assign[j1];
+                if (prev_row >= 0) {
+                    row_assign[prev_row] = RALPH_LAP_UNASSIGNED;
+                }
+                row_assign[i] = j1;
+                col_assign[j1] = i;
+
+                if (prev_row >= 0 && !in_free_list[prev_row]) {
+                    in_free_list[prev_row] = 1;
+                    if (loop == 1) {
+                        free_rows[--k_free] = prev_row;
+                    } else {
+                        free_rows[num_free++] = prev_row;
+                    }
+                }
+            }
+
+            if (loop == 0) {
+                num_free = 0;
+                memset(in_free_list, 0, n * sizeof(int));
+                for (i = 0; i < n; i++) {
+                    if (row_assign[i] == RALPH_LAP_UNASSIGNED) {
+                        free_rows[num_free++] = i;
+                        in_free_list[i] = 1;
+                    }
+                }
+            }
+        }
+
+        /* Count remaining free rows */
+        num_free = 0;
+        for (i = 0; i < n; i++) {
+            if (row_assign[i] == RALPH_LAP_UNASSIGNED) {
+                free_rows[num_free++] = i;
+            }
+        }
+
+    warm_phase4:
+        /* Phase 4: Dijkstra augmentation */
+        for (int f = 0; f < num_free; f++) {
+            int free_row = free_rows[f];
+            const double *row_costs = &work_cost[free_row * n];
+            int end_col = -1;
+            double min_dist = 0.0;
+
+            #pragma omp simd
+            for (j = 0; j < n; j++) {
+                dist[j] = row_costs[j] - col_price[j];
+                pred[j] = free_row;
+            }
+
+            if (use_heap) {
+                int heap_size = n;
+                for (j = 0; j < n; j++) {
+                    heap[j] = j;
+                    heap_pos[j] = j;
+                }
+                for (j = n / 2 - 1; j >= 0; j--) {
+                    heap_sift_down(heap, heap_pos, dist, j, n);
+                }
+
+                int num_scanned = 0;
+                while (heap_size > 0 && end_col < 0) {
+                    j = heap_pop(heap, heap_pos, dist, &heap_size);
+                    min_dist = dist[j];
+                    col_list[num_scanned++] = j;
+
+                    if (col_assign[j] == RALPH_LAP_UNASSIGNED) {
+                        end_col = j;
+                        break;
+                    }
+
+                    int assigned_row = col_assign[j];
+                    double h = work_cost[assigned_row * n + j] - col_price[j] - min_dist;
+                    const double *assigned_row_costs = &work_cost[assigned_row * n];
+
+                    for (k = 0; k < heap_size; k++) {
+                        int jj = heap[k];
+                        double new_dist = assigned_row_costs[jj] - col_price[jj] - h;
+                        if (new_dist < dist[jj]) {
+                            pred[jj] = assigned_row;
+                            dist[jj] = new_dist;
+                            heap_decrease_key(heap, heap_pos, dist, jj);
+                        }
+                    }
+                }
+
+                for (k = 0; k < num_scanned; k++) {
+                    j = col_list[k];
+                    col_price[j] += dist[j] - min_dist;
+                }
+            } else {
+                int low = 0, up = 0, last = -1;
+                for (j = 0; j < n; j++) col_list[j] = j;
+
+                while (end_col < 0) {
+                    if (up == low) {
+                        last = low - 1;
+                        min_dist = DBL_MAX;
+                        for (k = up; k < n; k++) {
+                            j = col_list[k];
+                            double d = dist[j];
+                            if (d <= min_dist) {
+                                if (d < min_dist) {
+                                    up = low;
+                                    min_dist = d;
+                                }
+                                col_list[k] = col_list[up];
+                                col_list[up] = j;
+                                up++;
+                            }
+                        }
+                        for (k = low; k < up; k++) {
+                            if (col_assign[col_list[k]] == RALPH_LAP_UNASSIGNED) {
+                                end_col = col_list[k];
+                                break;
+                            }
+                        }
+                    }
+
+                    if (end_col < 0) {
+                        j = col_list[low++];
+                        last++;
+                        int assigned_row = col_assign[j];
+                        double h = work_cost[assigned_row * n + j] - col_price[j] - min_dist;
+
+                        for (k = up; k < n; k++) {
+                            int jj = col_list[k];
+                            double new_dist = work_cost[assigned_row * n + jj] - col_price[jj] - h;
+                            if (new_dist < dist[jj]) {
+                                pred[jj] = assigned_row;
+                                dist[jj] = new_dist;
+                                if (approx_less_or_equal(new_dist, min_dist)) {
+                                    if (col_assign[jj] == RALPH_LAP_UNASSIGNED) {
+                                        end_col = jj;
+                                        break;
+                                    } else {
+                                        col_list[k] = col_list[up];
+                                        col_list[up] = jj;
+                                        up++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for (k = 0; k <= last; k++) {
+                    j = col_list[k];
+                    col_price[j] += dist[j] - min_dist;
+                }
+            }
+
+            /* Trace back and flip assignments */
+            int cur_row;
+            do {
+                cur_row = pred[end_col];
+                col_assign[end_col] = cur_row;
+                int prev_col = row_assign[cur_row];
+                row_assign[cur_row] = end_col;
+                end_col = prev_col;
+            } while (cur_row != free_row);
+        }
+
+    warm_output:
+        /* Output results */
+        memcpy(row_sol, row_assign, n * sizeof(int));
+
+        if (col_sol) {
+            memcpy(col_sol, col_assign, n * sizeof(int));
+        }
+
+        if (u) {
+            for (i = 0; i < n; i++) {
+                j = row_assign[i];
+                u[i] = work_cost[i * n + j] - col_price[j];
+            }
+            if (objective == RALPH_LAP_MAXIMIZE) {
+                for (i = 0; i < n; i++) u[i] = -u[i];
+            }
+        }
+
+        if (v) {
+            memcpy(v, col_price, n * sizeof(double));
+            if (objective == RALPH_LAP_MAXIMIZE) {
+                for (j = 0; j < n; j++) v[j] = -v[j];
+            }
+        }
+
+        if (total_cost) {
+            double sum = 0.0;
+            for (i = 0; i < n; i++) {
+                int jj = row_assign[i];
+                double c = cost[i * n + jj];
+                if (c < RALPH_LAP_INFINITY * 0.5) sum += c;
+            }
+            *total_cost = sum;
+        }
+
+        status = RALPH_LAP_SUCCESS;
+
+    warm_cleanup:
+        (void)heap;
+        (void)heap_pos;
+
+    } else {
+        /* No valid warm start - do full solve */
+        status = lap_solve_internal(n, cost, objective, row_sol, col_sol, u, v, total_cost, ws);
+    }
+
+    /* Save for next warm start if requested */
+    if (save_for_warm_start && status == RALPH_LAP_SUCCESS) {
+        /* Save INTERNAL dual variables (for the possibly-negated cost matrix).
+         * These can be directly used as starting values in the next warm start.
+         * Note: ws->work_cost contains the (possibly negated) costs after solve,
+         * and ws->col_price contains the internal column prices.
+         */
+        for (int i = 0; i < n; i++) {
+            int j = row_sol[i];
+            /* Compute internal u from complementary slackness: u[i] = c[i,j] - v[j] */
+            ws->warm_u[i] = ws->work_cost[i * n + j] - ws->col_price[j];
+        }
+        memcpy(ws->warm_v, ws->col_price, n * sizeof(double));
+
+        memcpy(ws->warm_row_sol, row_sol, n * sizeof(int));
+        if (col_sol) {
+            memcpy(ws->warm_col_sol, col_sol, n * sizeof(int));
+        } else {
+            /* Reconstruct col_sol */
+            for (int j = 0; j < n; j++) ws->warm_col_sol[j] = RALPH_LAP_UNASSIGNED;
+            for (int i = 0; i < n; i++) {
+                int j = row_sol[i];
+                if (j >= 0 && j < n) ws->warm_col_sol[j] = i;
+            }
+        }
+
+        ws->warm_start_n = n;
+        ws->warm_start_valid = 1;
+    }
+
+    return status;
 }
 
 /* ============================================================================
