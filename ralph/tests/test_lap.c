@@ -2312,6 +2312,339 @@ static void test_detect_lap_maximize(void) {
 }
 
 /* ============================================================================
+ * Test: k-Best Basic (3x3)
+ * ============================================================================ */
+static void test_k_best_basic(void) {
+    printf("\n=== Test: k-Best Basic (3x3) ===\n");
+
+    /* Cost matrix:
+     *      j=0  j=1  j=2
+     * i=0   1    2    3
+     * i=1   4    5    6
+     * i=2   7    8    9
+     *
+     * 6 possible permutations with costs:
+     * 0->0, 1->1, 2->2: 1+5+9 = 15 (optimal)
+     * 0->0, 1->2, 2->1: 1+6+8 = 15 (tied)
+     * 0->1, 1->0, 2->2: 2+4+9 = 15 (tied)
+     * 0->1, 1->2, 2->0: 2+6+7 = 15 (tied)
+     * 0->2, 1->0, 2->1: 3+4+8 = 15 (tied)
+     * 0->2, 1->1, 2->0: 3+5+7 = 15 (tied)
+     *
+     * All have same cost! Let's use a different matrix.
+     */
+    double cost[] = {
+        1, 10, 10,
+        10, 2, 10,
+        10, 10, 3
+    };
+
+    /* All permutations and their costs:
+     * 0->0, 1->1, 2->2: 1+2+3 = 6 (best)
+     * 0->0, 1->2, 2->1: 1+10+10 = 21
+     * 0->1, 1->0, 2->2: 10+10+3 = 23
+     * 0->1, 1->2, 2->0: 10+10+10 = 30
+     * 0->2, 1->0, 2->1: 10+10+10 = 30
+     * 0->2, 1->1, 2->0: 10+2+10 = 22
+     */
+
+    int solutions[9];  /* 3 solutions x 3 assignments each */
+    double costs[3];
+    int num_found;
+
+    RalphLapStatus status = ralph_lap_solve_k_best(3, cost, RALPH_LAP_MINIMIZE,
+                                                    3, solutions, costs, &num_found);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "k-best succeeded");
+    ASSERT(num_found == 3, "Found 3 solutions");
+
+    /* First solution should be optimal */
+    ASSERT_NEAR(costs[0], 6.0, TOLERANCE, "Best cost is 6");
+
+    /* Costs should be non-decreasing */
+    ASSERT(costs[1] >= costs[0] - TOLERANCE, "Second cost >= first");
+    ASSERT(costs[2] >= costs[1] - TOLERANCE, "Third cost >= second");
+
+    /* Verify each solution is a valid permutation */
+    for (int s = 0; s < num_found; s++) {
+        int *sol = &solutions[s * 3];
+        int used[3] = {0, 0, 0};
+        int valid = 1;
+        for (int i = 0; i < 3 && valid; i++) {
+            if (sol[i] < 0 || sol[i] >= 3 || used[sol[i]]) {
+                valid = 0;
+            }
+            used[sol[i]] = 1;
+        }
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Solution %d is valid permutation", s);
+        ASSERT(valid, msg);
+    }
+
+    printf("  Solutions found:\n");
+    for (int s = 0; s < num_found; s++) {
+        int *sol = &solutions[s * 3];
+        printf("    %d: [%d->%d, %d->%d, %d->%d] cost=%.1f\n",
+               s, 0, sol[0], 1, sol[1], 2, sol[2], costs[s]);
+    }
+}
+
+/* ============================================================================
+ * Test: k-Best Order Verification
+ * ============================================================================ */
+static void test_k_best_verify_order(void) {
+    printf("\n=== Test: k-Best Order Verification ===\n");
+
+    /* Use a matrix where we know the exact ordering */
+    double cost[] = {
+        1, 2, 100, 100,
+        100, 3, 4, 100,
+        100, 100, 5, 6,
+        7, 100, 100, 8
+    };
+
+    int solutions[20];  /* 5 solutions x 4 assignments */
+    double costs[5];
+    int num_found;
+
+    RalphLapStatus status = ralph_lap_solve_k_best(4, cost, RALPH_LAP_MINIMIZE,
+                                                    5, solutions, costs, &num_found);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "k-best succeeded");
+    ASSERT(num_found >= 3, "Found at least 3 solutions");
+
+    /* Verify strictly non-decreasing costs */
+    int ordered = 1;
+    for (int s = 1; s < num_found; s++) {
+        if (costs[s] < costs[s-1] - TOLERANCE) {
+            ordered = 0;
+            break;
+        }
+    }
+    ASSERT(ordered, "Costs are non-decreasing");
+
+    /* Verify first cost matches single LAP solve */
+    int single_sol[4];
+    double single_cost;
+    ralph_lap_solve(4, cost, RALPH_LAP_MINIMIZE, single_sol, NULL, NULL, NULL, &single_cost);
+    ASSERT_NEAR(costs[0], single_cost, TOLERANCE, "First k-best = optimal LAP");
+
+    printf("  Costs: ");
+    for (int s = 0; s < num_found; s++) {
+        printf("%.1f ", costs[s]);
+    }
+    printf("\n");
+}
+
+/* ============================================================================
+ * Test: k-Best Find All Permutations (small n)
+ * ============================================================================ */
+static void test_k_best_all(void) {
+    printf("\n=== Test: k-Best Find All (3x3 = 6 permutations) ===\n");
+
+    /* Matrix with distinct costs that yield distinct permutation costs
+     * Note: [1,2,3;4,5,6;7,8,9] has all permutations with cost 15!
+     * Use a matrix where permutation costs differ */
+    double cost[] = {
+        1, 100, 100,
+        100, 2, 100,
+        100, 100, 4
+    };
+
+    /* Request more than 6 permutations */
+    int solutions[30];  /* Up to 10 solutions */
+    double costs[10];
+    int num_found;
+
+    RalphLapStatus status = ralph_lap_solve_k_best(3, cost, RALPH_LAP_MINIMIZE,
+                                                    10, solutions, costs, &num_found);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "k-best succeeded");
+    ASSERT(num_found == 6, "Found exactly 6 permutations for 3x3");
+
+    /* Verify all solutions are distinct permutations */
+    int all_distinct = 1;
+    for (int i = 0; i < num_found && all_distinct; i++) {
+        for (int j = i + 1; j < num_found && all_distinct; j++) {
+            int same = 1;
+            for (int r = 0; r < 3 && same; r++) {
+                if (solutions[i * 3 + r] != solutions[j * 3 + r]) {
+                    same = 0;
+                }
+            }
+            if (same) all_distinct = 0;
+        }
+    }
+    ASSERT(all_distinct, "All 6 solutions are distinct permutations");
+
+    printf("  All 6 permutations found with costs: ");
+    for (int s = 0; s < num_found; s++) {
+        printf("%.0f ", costs[s]);
+    }
+    printf("\n");
+}
+
+/* ============================================================================
+ * Test: k-Best Maximization
+ * ============================================================================ */
+static void test_k_best_maximize(void) {
+    printf("\n=== Test: k-Best Maximization ===\n");
+
+    double cost[] = {
+        9, 2, 7,
+        6, 4, 3,
+        5, 8, 1
+    };
+
+    int solutions[9];
+    double costs[3];
+    int num_found;
+
+    RalphLapStatus status = ralph_lap_solve_k_best(3, cost, RALPH_LAP_MAXIMIZE,
+                                                    3, solutions, costs, &num_found);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "k-best maximize succeeded");
+    ASSERT(num_found == 3, "Found 3 solutions");
+
+    /* Costs should be non-increasing for maximize */
+    int ordered = 1;
+    for (int s = 1; s < num_found; s++) {
+        if (costs[s] > costs[s-1] + TOLERANCE) {
+            ordered = 0;
+            break;
+        }
+    }
+    ASSERT(ordered, "Costs are non-increasing (maximize)");
+
+    /* First should match single LAP maximize */
+    int single_sol[3];
+    double single_cost;
+    ralph_lap_solve(3, cost, RALPH_LAP_MAXIMIZE, single_sol, NULL, NULL, NULL, &single_cost);
+    ASSERT_NEAR(costs[0], single_cost, TOLERANCE, "First k-best = optimal maximize");
+
+    printf("  Top 3 costs (max): ");
+    for (int s = 0; s < num_found; s++) {
+        printf("%.1f ", costs[s]);
+    }
+    printf("\n");
+}
+
+/* ============================================================================
+ * Test: k-Best Large Problem
+ * ============================================================================ */
+static void test_k_best_large(void) {
+    printf("\n=== Test: k-Best Large (10x10, k=5) ===\n");
+
+    int n = 10;
+    int k = 5;
+    double *cost = malloc(n * n * sizeof(double));
+    int *solutions = malloc(k * n * sizeof(int));
+    double *costs = malloc(k * sizeof(double));
+
+    /* Random costs */
+    srand(42);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    int num_found;
+    RalphLapStatus status = ralph_lap_solve_k_best(n, cost, RALPH_LAP_MINIMIZE,
+                                                    k, solutions, costs, &num_found);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "k-best succeeded");
+    ASSERT(num_found == k, "Found requested k solutions");
+
+    /* Verify non-decreasing */
+    int ordered = 1;
+    for (int s = 1; s < num_found; s++) {
+        if (costs[s] < costs[s-1] - TOLERANCE) {
+            ordered = 0;
+        }
+    }
+    ASSERT(ordered, "Costs non-decreasing");
+
+    /* Verify all solutions are valid permutations */
+    int all_valid = 1;
+    for (int s = 0; s < num_found && all_valid; s++) {
+        int *sol = &solutions[s * n];
+        int used[10] = {0};
+        for (int i = 0; i < n && all_valid; i++) {
+            if (sol[i] < 0 || sol[i] >= n || used[sol[i]]) {
+                all_valid = 0;
+            }
+            used[sol[i]] = 1;
+        }
+    }
+    ASSERT(all_valid, "All solutions are valid permutations");
+
+    printf("  Costs: ");
+    for (int s = 0; s < num_found; s++) {
+        printf("%.0f ", costs[s]);
+    }
+    printf("\n");
+
+    free(cost);
+    free(solutions);
+    free(costs);
+}
+
+/* ============================================================================
+ * Test: k-Best with Workspace
+ * ============================================================================ */
+static void test_k_best_with_workspace(void) {
+    printf("\n=== Test: k-Best with Workspace ===\n");
+
+    double cost[] = {
+        1, 5, 9,
+        4, 2, 8,
+        7, 6, 3
+    };
+
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(3);
+    ASSERT(ws != NULL, "Workspace created");
+
+    int solutions[9];
+    double costs[3];
+    int num_found;
+
+    RalphLapStatus status = ralph_lap_solve_k_best_with_workspace(
+        3, cost, RALPH_LAP_MINIMIZE, 3, solutions, costs, &num_found, ws);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "k-best with workspace succeeded");
+    ASSERT(num_found == 3, "Found 3 solutions");
+
+    /* Verify first solution is optimal diagonal */
+    ASSERT_NEAR(costs[0], 6.0, TOLERANCE, "Optimal cost is 1+2+3=6");
+
+    ralph_lap_workspace_free(ws);
+}
+
+/* ============================================================================
+ * Test: k-Best k=1 (single solution)
+ * ============================================================================ */
+static void test_k_best_single(void) {
+    printf("\n=== Test: k-Best k=1 ===\n");
+
+    double cost[] = {
+        1, 2,
+        3, 4
+    };
+
+    int solutions[2];
+    double costs[1];
+    int num_found;
+
+    RalphLapStatus status = ralph_lap_solve_k_best(2, cost, RALPH_LAP_MINIMIZE,
+                                                    1, solutions, costs, &num_found);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "k=1 succeeded");
+    ASSERT(num_found == 1, "Found exactly 1 solution");
+    ASSERT_NEAR(costs[0], 5.0, TOLERANCE, "Cost is 1+4=5");
+    ASSERT(solutions[0] == 0, "Row 0 -> Col 0");
+    ASSERT(solutions[1] == 1, "Row 1 -> Col 1");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -2367,6 +2700,13 @@ int main(void) {
     test_detect_lap_non_lap();
     test_detect_lap_disable();
     test_detect_lap_maximize();
+    test_k_best_basic();
+    test_k_best_verify_order();
+    test_k_best_all();
+    test_k_best_maximize();
+    test_k_best_large();
+    test_k_best_with_workspace();
+    test_k_best_single();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",

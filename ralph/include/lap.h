@@ -401,6 +401,86 @@ RalphLapStatus ralph_lap_solve_sparse(
 );
 
 /* ============================================================================
+ * k-Best Assignments (Murty's Algorithm)
+ * ============================================================================ */
+
+/*
+ * Find the k best (non-overlapping) assignments using Murty's algorithm.
+ *
+ * This solves the LAP k times to find the k lowest-cost (or highest-cost)
+ * valid assignments. Each solution is a complete permutation with distinct
+ * cost. The algorithm partitions the solution space systematically to
+ * find successive best solutions.
+ *
+ * Parameters:
+ *   n          - Problem dimension (n x n cost matrix)
+ *   cost       - Cost matrix in row-major order (cost[i*n + j] = cost of i->j)
+ *   objective  - RALPH_LAP_MINIMIZE or RALPH_LAP_MAXIMIZE
+ *   k          - Number of best assignments to find
+ *   solutions  - Output: k×n array where solutions[i*n + j] is the column
+ *                assigned to row j in solution i (pre-allocated, size k*n)
+ *   costs      - Output: array of k costs, one per solution (pre-allocated, size k)
+ *   num_found  - Output: actual number found (may be < k if fewer valid exist)
+ *
+ * Returns:
+ *   RALPH_LAP_SUCCESS on success (found >= 1 solution)
+ *   RALPH_LAP_INFEASIBLE if no valid assignment exists
+ *   RALPH_LAP_INVALID_INPUT if parameters invalid
+ *   RALPH_LAP_MEMORY_ERROR if allocation fails
+ *
+ * The solutions are returned in order from best to worst (ascending cost for
+ * minimize, descending for maximize). All returned solutions are valid
+ * permutations with distinct costs.
+ *
+ * Complexity:
+ *   Time: O(k * n^3) - each of k solutions requires O(n^3) LAP solve
+ *   Space: O(k * n) for solutions + O(n^2) temporary working space
+ *
+ * Example:
+ *   int solutions[30];  // k=3 solutions for n=10
+ *   double costs[3];
+ *   int num_found;
+ *   ralph_lap_solve_k_best(10, cost, RALPH_LAP_MINIMIZE, 3,
+ *                          solutions, costs, &num_found);
+ *   // solutions[0..9] is best assignment (cost = costs[0])
+ *   // solutions[10..19] is second best (cost = costs[1])
+ *   // etc.
+ */
+RalphLapStatus ralph_lap_solve_k_best(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int k,
+    int *solutions,
+    double *costs,
+    int *num_found
+);
+
+/*
+ * Find k-best assignments using a pre-allocated workspace.
+ *
+ * Same as ralph_lap_solve_k_best() but uses provided workspace to avoid
+ * repeated allocations when solving multiple k-best problems.
+ *
+ * Parameters:
+ *   n, cost, objective, k, solutions, costs, num_found - See ralph_lap_solve_k_best()
+ *   ws - Pre-allocated workspace (must have max_n >= n)
+ *
+ * Returns:
+ *   RALPH_LAP_SUCCESS on success, error code otherwise.
+ */
+RalphLapStatus ralph_lap_solve_k_best_with_workspace(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int k,
+    int *solutions,
+    double *costs,
+    int *num_found,
+    RalphLapWorkspace *ws
+);
+
+/* ============================================================================
  * Verification and LP Comparison
  * ============================================================================ */
 

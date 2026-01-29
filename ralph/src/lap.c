@@ -2770,6 +2770,548 @@ RalphLapStatus ralph_lap_solve_callback_with_workspace(
 }
 
 /* ============================================================================
+ * k-Best Assignments (Murty's Algorithm)
+ * ============================================================================ */
+
+/*
+ * Murty's algorithm finds the k best solutions by systematically partitioning
+ * the solution space. Starting from the optimal solution, it creates subproblems
+ * by forbidding edges and maintaining a priority queue of candidate solutions.
+ */
+
+/* Node in Murty's priority queue */
+typedef struct MurtyNode {
+    double priority;       /* Heap ordering key (negated for maximize) */
+    double cost;           /* Actual solution cost to return */
+    int *row_sol;          /* Assignment: row_sol[i] = column for row i */
+    int num_excluded;      /* Number of excluded edges */
+    int *excluded_rows;    /* Row indices of excluded edges */
+    int *excluded_cols;    /* Column indices of excluded edges */
+    /* For warm start potential */
+    double *u;             /* Row dual variables from this solve */
+    double *v;             /* Column dual variables from this solve */
+} MurtyNode;
+
+/* Min-heap priority queue for Murty's algorithm */
+typedef struct MurtyQueue {
+    MurtyNode **nodes;     /* Array of pointers to nodes */
+    int size;              /* Current number of nodes */
+    int capacity;          /* Maximum capacity */
+} MurtyQueue;
+
+/* Create a Murty node */
+static MurtyNode* murty_node_create(int n, int max_excluded) {
+    MurtyNode *node = (MurtyNode *)malloc(sizeof(MurtyNode));
+    if (!node) return NULL;
+
+    node->row_sol = (int *)malloc(n * sizeof(int));
+    node->excluded_rows = (int *)malloc(max_excluded * sizeof(int));
+    node->excluded_cols = (int *)malloc(max_excluded * sizeof(int));
+    node->u = (double *)malloc(n * sizeof(double));
+    node->v = (double *)malloc(n * sizeof(double));
+
+    if (!node->row_sol || !node->excluded_rows || !node->excluded_cols ||
+        !node->u || !node->v) {
+        free(node->row_sol);
+        free(node->excluded_rows);
+        free(node->excluded_cols);
+        free(node->u);
+        free(node->v);
+        free(node);
+        return NULL;
+    }
+
+    node->priority = 0.0;
+    node->cost = 0.0;
+    node->num_excluded = 0;
+    return node;
+}
+
+/* Free a Murty node */
+static void murty_node_free(MurtyNode *node) {
+    if (node) {
+        free(node->row_sol);
+        free(node->excluded_rows);
+        free(node->excluded_cols);
+        free(node->u);
+        free(node->v);
+        free(node);
+    }
+}
+
+/* Create a Murty priority queue */
+static MurtyQueue* murty_queue_create(int capacity) {
+    MurtyQueue *queue = (MurtyQueue *)malloc(sizeof(MurtyQueue));
+    if (!queue) return NULL;
+
+    queue->nodes = (MurtyNode **)malloc(capacity * sizeof(MurtyNode *));
+    if (!queue->nodes) {
+        free(queue);
+        return NULL;
+    }
+
+    queue->size = 0;
+    queue->capacity = capacity;
+    return queue;
+}
+
+/* Free a Murty queue and all its nodes */
+static void murty_queue_free(MurtyQueue *queue) {
+    if (queue) {
+        for (int i = 0; i < queue->size; i++) {
+            murty_node_free(queue->nodes[i]);
+        }
+        free(queue->nodes);
+        free(queue);
+    }
+}
+
+/* Swap nodes in heap */
+static void murty_heap_swap(MurtyQueue *queue, int i, int j) {
+    MurtyNode *tmp = queue->nodes[i];
+    queue->nodes[i] = queue->nodes[j];
+    queue->nodes[j] = tmp;
+}
+
+/* Sift up in min-heap (uses priority, not cost) */
+static void murty_heap_sift_up(MurtyQueue *queue, int i) {
+    while (i > 0) {
+        int parent = (i - 1) / 2;
+        if (queue->nodes[i]->priority < queue->nodes[parent]->priority) {
+            murty_heap_swap(queue, i, parent);
+            i = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+/* Sift down in min-heap (uses priority, not cost) */
+static void murty_heap_sift_down(MurtyQueue *queue, int i) {
+    while (1) {
+        int smallest = i;
+        int left = 2 * i + 1;
+        int right = 2 * i + 2;
+
+        if (left < queue->size &&
+            queue->nodes[left]->priority < queue->nodes[smallest]->priority) {
+            smallest = left;
+        }
+        if (right < queue->size &&
+            queue->nodes[right]->priority < queue->nodes[smallest]->priority) {
+            smallest = right;
+        }
+
+        if (smallest != i) {
+            murty_heap_swap(queue, i, smallest);
+            i = smallest;
+        } else {
+            break;
+        }
+    }
+}
+
+/* Insert node into queue (takes ownership) */
+static int murty_queue_insert(MurtyQueue *queue, MurtyNode *node) {
+    if (queue->size >= queue->capacity) {
+        /* Expand capacity */
+        int new_capacity = queue->capacity * 2;
+        MurtyNode **new_nodes = (MurtyNode **)realloc(
+            queue->nodes, new_capacity * sizeof(MurtyNode *));
+        if (!new_nodes) return 0;
+        queue->nodes = new_nodes;
+        queue->capacity = new_capacity;
+    }
+
+    queue->nodes[queue->size] = node;
+    murty_heap_sift_up(queue, queue->size);
+    queue->size++;
+    return 1;
+}
+
+/* Extract minimum node from queue (transfers ownership) */
+static MurtyNode* murty_queue_extract_min(MurtyQueue *queue) {
+    if (queue->size == 0) return NULL;
+
+    MurtyNode *min_node = queue->nodes[0];
+    queue->size--;
+
+    if (queue->size > 0) {
+        queue->nodes[0] = queue->nodes[queue->size];
+        murty_heap_sift_down(queue, 0);
+    }
+
+    return min_node;
+}
+
+/* Check if queue is empty */
+static int murty_queue_is_empty(MurtyQueue *queue) {
+    return queue->size == 0;
+}
+
+/*
+ * Internal k-best solver using Murty's algorithm.
+ *
+ * Algorithm:
+ * 1. Solve base LAP to get optimal solution
+ * 2. For each edge (i, row_sol[i]) in solution, create child subproblem
+ *    that includes parent's exclusions + one new exclusion
+ * 3. Solve each subproblem and add to priority queue
+ * 4. Extract minimum from queue, add to results
+ * 5. Repeat step 2-4 until k solutions found
+ */
+static RalphLapStatus lap_solve_k_best_internal(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int k,
+    int *solutions,
+    double *costs,
+    int *num_found,
+    RalphLapWorkspace *ws
+) {
+    if (n <= 0 || cost == NULL || k <= 0 || solutions == NULL ||
+        costs == NULL || num_found == NULL) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    *num_found = 0;
+    RalphLapStatus status;
+
+    /* Working cost matrix for applying exclusions */
+    double *work_cost = (double *)malloc(n * n * sizeof(double));
+    if (!work_cost) {
+        return RALPH_LAP_MEMORY_ERROR;
+    }
+
+    /* Maximum possible exclusions per node:
+     * When fixing rows 0..i-1, we exclude (n-1) columns per row.
+     * Plus 1 for the forbidden edge in row i.
+     * Worst case: (n-1)*(n-1) + 1 = n² - 2n + 2 ≈ n² */
+    int max_excluded = n * n;
+
+    /* Create priority queue - initial capacity for typical usage */
+    MurtyQueue *queue = murty_queue_create(k * n);
+    if (!queue) {
+        free(work_cost);
+        return RALPH_LAP_MEMORY_ERROR;
+    }
+
+    /* Step 1: Solve base problem */
+    int *row_sol = (int *)malloc(n * sizeof(int));
+    int *col_sol = (int *)malloc(n * sizeof(int));
+    double *u = (double *)malloc(n * sizeof(double));
+    double *v = (double *)malloc(n * sizeof(double));
+    double total_cost;
+
+    if (!row_sol || !col_sol || !u || !v) {
+        free(row_sol);
+        free(col_sol);
+        free(u);
+        free(v);
+        free(work_cost);
+        murty_queue_free(queue);
+        return RALPH_LAP_MEMORY_ERROR;
+    }
+
+    status = ralph_lap_solve_with_workspace(n, cost, objective,
+                                            row_sol, col_sol, u, v, &total_cost, ws);
+    if (status != RALPH_LAP_SUCCESS) {
+        free(row_sol);
+        free(col_sol);
+        free(u);
+        free(v);
+        free(work_cost);
+        murty_queue_free(queue);
+        return status;
+    }
+
+    /* Store first solution */
+    memcpy(&solutions[0], row_sol, n * sizeof(int));
+    costs[0] = total_cost;
+    *num_found = 1;
+
+    if (k == 1) {
+        free(row_sol);
+        free(col_sol);
+        free(u);
+        free(v);
+        free(work_cost);
+        murty_queue_free(queue);
+        return RALPH_LAP_SUCCESS;
+    }
+
+    /* Step 2: Create initial partition from base solution */
+    /* For each row i, create subproblem excluding (i, row_sol[i])
+     * but requiring all previous assignments (0..i-1) */
+    for (int i = 0; i < n; i++) {
+        MurtyNode *node = murty_node_create(n, max_excluded);
+        if (!node) {
+            free(row_sol);
+            free(col_sol);
+            free(u);
+            free(v);
+            free(work_cost);
+            murty_queue_free(queue);
+            return RALPH_LAP_MEMORY_ERROR;
+        }
+
+        /* Copy exclusions: require rows 0..i-1 to match base solution,
+         * and forbid (i, row_sol[i]) */
+        node->num_excluded = 0;
+
+        /* For Murty's algorithm, we need cumulative exclusions:
+         * - Rows 0..i-1: fixed to their base solution assignments (exclude all other columns)
+         * - Row i: exclude the base solution column
+         * Implementing this efficiently: we exclude (i, row_sol[i])
+         * and additionally exclude all other options for rows 0..i-1 */
+
+        /* Actually, the standard Murty partition is:
+         * Subproblem i: fix rows 0..i-1 to base solution, forbid (i, base[i])
+         * This is equivalent to: exclude (j, c) for all j < i where c != base[j],
+         * plus exclude (i, base[i])
+         *
+         * More efficient approach: just store which edges to forbid */
+
+        /* For partition i: forbid (i, row_sol[i]) and require rows < i match */
+        /* We implement this by excluding:
+         * - (i, row_sol[i])
+         * - For each j < i: all columns except row_sol[j] */
+
+        /* Actually, the simplest correct implementation:
+         * Node i excludes (0, row_sol[0]), ..., (i-1, row_sol[i-1]) REQUIRE these
+         * and excludes (i, row_sol[i]) FORBID this
+         *
+         * The "require" can be implemented by excluding all OTHER columns for rows 0..i-1
+         */
+
+        /* Simple approach: for row j < i, exclude all cols except row_sol[j]
+         * For row i, exclude row_sol[i] */
+        for (int j = 0; j < i; j++) {
+            for (int c = 0; c < n; c++) {
+                if (c != row_sol[j]) {
+                    node->excluded_rows[node->num_excluded] = j;
+                    node->excluded_cols[node->num_excluded] = c;
+                    node->num_excluded++;
+                }
+            }
+        }
+        /* Forbid (i, row_sol[i]) */
+        node->excluded_rows[node->num_excluded] = i;
+        node->excluded_cols[node->num_excluded] = row_sol[i];
+        node->num_excluded++;
+
+        /* Apply exclusions to cost matrix */
+        memcpy(work_cost, cost, n * n * sizeof(double));
+        for (int e = 0; e < node->num_excluded; e++) {
+            int er = node->excluded_rows[e];
+            int ec = node->excluded_cols[e];
+            work_cost[er * n + ec] = RALPH_LAP_INFINITY;
+        }
+
+        /* Solve subproblem */
+        status = ralph_lap_solve_with_workspace(n, work_cost, objective,
+                                                node->row_sol, NULL,
+                                                node->u, node->v,
+                                                &node->cost, ws);
+
+        if (status == RALPH_LAP_SUCCESS) {
+            /* Verify solution uses only allowed edges */
+            int valid = 1;
+            for (int r = 0; r < n && valid; r++) {
+                int c = node->row_sol[r];
+                if (work_cost[r * n + c] >= RALPH_LAP_INFINITY * 0.5) {
+                    valid = 0;
+                }
+            }
+
+            if (valid) {
+                /* Set priority for heap ordering:
+                 * minimize: priority = cost (extract minimum)
+                 * maximize: priority = -cost (extract maximum) */
+                node->priority = (objective == RALPH_LAP_MAXIMIZE) ? -node->cost : node->cost;
+                murty_queue_insert(queue, node);
+            } else {
+                murty_node_free(node);
+            }
+        } else {
+            /* Infeasible subproblem - discard */
+            murty_node_free(node);
+        }
+    }
+
+    /* Step 3: Main loop - extract best and partition */
+    while (*num_found < k && !murty_queue_is_empty(queue)) {
+        MurtyNode *best = murty_queue_extract_min(queue);
+
+        /* Store this solution */
+        memcpy(&solutions[(*num_found) * n], best->row_sol, n * sizeof(int));
+        costs[*num_found] = best->cost;
+        (*num_found)++;
+
+        if (*num_found >= k) {
+            murty_node_free(best);
+            break;
+        }
+
+        /* Partition: create children from this solution
+         * Find the first "free" row (not fixed by parent's exclusions) */
+        int first_free_row = 0;
+
+        /* Determine which rows are "fixed" in best's exclusions */
+        /* A row is fixed if all but one column is excluded */
+        int *row_excluded_count = (int *)calloc(n, sizeof(int));
+        if (!row_excluded_count) {
+            murty_node_free(best);
+            break;
+        }
+
+        for (int e = 0; e < best->num_excluded; e++) {
+            row_excluded_count[best->excluded_rows[e]]++;
+        }
+
+        /* Row is fixed if it has n-1 exclusions (only one column allowed) */
+        for (int r = 0; r < n; r++) {
+            if (row_excluded_count[r] == n - 1) {
+                first_free_row = r + 1;
+            } else {
+                break;
+            }
+        }
+        free(row_excluded_count);
+
+        /* Create child nodes for rows >= first_free_row */
+        for (int i = first_free_row; i < n; i++) {
+            MurtyNode *child = murty_node_create(n, max_excluded);
+            if (!child) continue;
+
+            /* Copy parent's exclusions */
+            child->num_excluded = best->num_excluded;
+            memcpy(child->excluded_rows, best->excluded_rows,
+                   best->num_excluded * sizeof(int));
+            memcpy(child->excluded_cols, best->excluded_cols,
+                   best->num_excluded * sizeof(int));
+
+            /* Add exclusions to fix rows first_free_row..i-1 to best's solution */
+            for (int j = first_free_row; j < i; j++) {
+                for (int c = 0; c < n; c++) {
+                    if (c != best->row_sol[j]) {
+                        child->excluded_rows[child->num_excluded] = j;
+                        child->excluded_cols[child->num_excluded] = c;
+                        child->num_excluded++;
+                    }
+                }
+            }
+
+            /* Forbid (i, best->row_sol[i]) */
+            child->excluded_rows[child->num_excluded] = i;
+            child->excluded_cols[child->num_excluded] = best->row_sol[i];
+            child->num_excluded++;
+
+            /* Apply exclusions */
+            memcpy(work_cost, cost, n * n * sizeof(double));
+            for (int e = 0; e < child->num_excluded; e++) {
+                int er = child->excluded_rows[e];
+                int ec = child->excluded_cols[e];
+                work_cost[er * n + ec] = RALPH_LAP_INFINITY;
+            }
+
+            /* Solve */
+            status = ralph_lap_solve_with_workspace(n, work_cost, objective,
+                                                    child->row_sol, NULL,
+                                                    child->u, child->v,
+                                                    &child->cost, ws);
+
+            if (status == RALPH_LAP_SUCCESS) {
+                /* Verify solution doesn't use forbidden edges */
+                int valid = 1;
+                for (int r = 0; r < n && valid; r++) {
+                    int c = child->row_sol[r];
+                    if (work_cost[r * n + c] >= RALPH_LAP_INFINITY * 0.5) {
+                        valid = 0;
+                    }
+                }
+
+                if (valid) {
+                    /* Set priority for heap ordering:
+                     * minimize: priority = cost (extract minimum)
+                     * maximize: priority = -cost (extract maximum) */
+                    child->priority = (objective == RALPH_LAP_MAXIMIZE) ? -child->cost : child->cost;
+                    murty_queue_insert(queue, child);
+                } else {
+                    murty_node_free(child);
+                }
+            } else {
+                murty_node_free(child);
+            }
+        }
+
+        murty_node_free(best);
+    }
+
+    /* Cleanup */
+    free(row_sol);
+    free(col_sol);
+    free(u);
+    free(v);
+    free(work_cost);
+    murty_queue_free(queue);
+
+    return (*num_found > 0) ? RALPH_LAP_SUCCESS : RALPH_LAP_INFEASIBLE;
+}
+
+/* Public API: k-best with automatic workspace */
+RalphLapStatus ralph_lap_solve_k_best(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int k,
+    int *solutions,
+    double *costs,
+    int *num_found
+) {
+    if (n <= 0 || cost == NULL || k <= 0 || solutions == NULL ||
+        costs == NULL || num_found == NULL) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Create temporary workspace */
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+    if (!ws) {
+        return RALPH_LAP_MEMORY_ERROR;
+    }
+
+    RalphLapStatus status = lap_solve_k_best_internal(
+        n, cost, objective, k, solutions, costs, num_found, ws);
+
+    ralph_lap_workspace_free(ws);
+    return status;
+}
+
+/* Public API: k-best with provided workspace */
+RalphLapStatus ralph_lap_solve_k_best_with_workspace(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int k,
+    int *solutions,
+    double *costs,
+    int *num_found,
+    RalphLapWorkspace *ws
+) {
+    if (n <= 0 || cost == NULL || k <= 0 || solutions == NULL ||
+        costs == NULL || num_found == NULL || ws == NULL) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    if (n > ws->max_n) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    return lap_solve_k_best_internal(n, cost, objective, k, solutions, costs, num_found, ws);
+}
+
+/* ============================================================================
  * Runtime Configuration
  * ============================================================================ */
 

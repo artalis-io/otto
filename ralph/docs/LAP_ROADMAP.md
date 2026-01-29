@@ -19,6 +19,7 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] Incremental updates / warm start
 - [x] Cost matrix callbacks (O(n) memory)
 - [x] Presolve detection (auto-detect LAP in LPs)
+- [x] k-Best assignments (Murty's algorithm)
 
 ---
 
@@ -163,16 +164,14 @@ ralph_lap_set_epsilon_factor(4.0);     /* Set scaling factor (default: 4.0) */
 
 ---
 
-### 5. k-Best Assignments
-**Priority: Low** | **Complexity: High**
+### 5. ~~k-Best Assignments~~ ✅ COMPLETED
+**Status: Implemented (2026-01-29)**
 
-Find the k best (non-overlapping) assignments:
-- Uses Murty's algorithm
-- Returns ranked list of solutions
-
-**Benefits:**
-- Useful for multi-hypothesis tracking
-- Provides solution diversity
+Murty's algorithm implementation for finding k best assignments:
+- Systematic partitioning of solution space
+- Priority queue for ordered extraction of best solutions
+- Supports both minimization and maximization
+- Returns solutions in cost order (ascending for min, descending for max)
 
 **API:**
 ```c
@@ -185,7 +184,35 @@ RalphLapStatus ralph_lap_solve_k_best(
     double *costs,        /* k costs */
     int *num_found        /* Actual number found (may be < k) */
 );
+
+/* With workspace for repeated solves */
+RalphLapStatus ralph_lap_solve_k_best_with_workspace(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int k,
+    int *solutions,
+    double *costs,
+    int *num_found,
+    RalphLapWorkspace *ws
+);
 ```
+
+**Algorithm:**
+1. Solve base LAP to get optimal assignment
+2. Create partition nodes by fixing prefixes and forbidding one edge
+3. Use min-heap (max-heap for maximize) priority queue
+4. Extract best from queue, add to results, partition further
+5. Repeat until k solutions found or queue exhausted
+
+**Benefits:**
+- Multi-hypothesis tracking (radar, vision systems)
+- Solution diversity for robust planning
+- Finding alternative assignments for sensitivity analysis
+
+**Complexity:**
+- Time: O(k × n³) - each of k solutions requires O(n³) LAP solve
+- Space: O(k × n) for solutions + O(n²) for exclusion lists
 
 ---
 
