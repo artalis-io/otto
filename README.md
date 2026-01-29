@@ -25,6 +25,7 @@ A comprehensive trucking and logistics optimization platform, combining route pl
 | **Arbor** | `arbor/` | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
 | **Sigma** | `sigma/` | **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation |
 | **Pulse** | `pulse/` | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
+| **Nexus** | `nexus/` | **N**ormalized **Ex**ternal **U**nified **S**napshots - TMS/ELD/LoadBoard integration |
 
 ### Applications
 
@@ -155,6 +156,7 @@ otto/
 ├── arbor/              # [Planned] State-Space Search Engine
 ├── sigma/              # [Planned] Fleet Plan Selection Engine
 ├── pulse/              # [Planned] Execution Tracker / PTA Engine
+├── nexus/              # [Planned] External Data Integration Gateway
 ├── vendor/             # Third-party libraries
 │   ├── mongoose/       #   HTTP server
 │   ├── miniz/          #   zlib compression
@@ -360,3 +362,4 @@ Mark Farkas - 2025
 | **Arbor** | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
 | **Sigma** | **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation |
 | **Pulse** | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
+| **Nexus** | **N**ormalized **Ex**ternal **U**nified **S**napshots |
