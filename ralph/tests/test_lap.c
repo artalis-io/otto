@@ -1235,6 +1235,133 @@ static void test_workspace_repeated(void) {
 }
 
 /* ============================================================================
+ * Test 29: Epsilon scaling auction
+ * ============================================================================ */
+static void test_epsilon_scaling(void) {
+    printf("\n=== Test: Epsilon Scaling Auction ===\n");
+
+    /* Check default is disabled */
+    ASSERT(ralph_lap_get_epsilon_scaling() == 0, "Epsilon scaling disabled by default");
+    ASSERT(fabs(ralph_lap_get_epsilon_factor() - 4.0) < 0.01, "Default factor is 4.0");
+
+    /* Enable epsilon scaling */
+    ralph_lap_set_epsilon_scaling(1);
+    ASSERT(ralph_lap_get_epsilon_scaling() == 1, "Epsilon scaling enabled");
+
+    /* Set custom factor */
+    ralph_lap_set_epsilon_factor(2.0);
+    ASSERT(fabs(ralph_lap_get_epsilon_factor() - 2.0) < 0.01, "Factor set to 2.0");
+
+    /* Solve a problem with epsilon scaling */
+    int n = 50;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol = malloc(n * sizeof(int));
+    srand(888);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 100) + 1;
+    }
+
+    double cost_eps;
+    RalphLapStatus status = ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                                             row_sol, NULL, NULL, NULL, &cost_eps);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Solve succeeded with epsilon scaling");
+    ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "Solution valid");
+
+    /* Disable epsilon scaling and solve same problem */
+    ralph_lap_set_epsilon_scaling(0);
+    int *row_sol_std = malloc(n * sizeof(int));
+    double cost_std;
+    ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol_std, NULL, NULL, NULL, &cost_std);
+
+    /* Costs should match (both optimal) */
+    ASSERT(fabs(cost_eps - cost_std) < TOLERANCE, "Epsilon and standard costs match");
+    printf("  Epsilon: %.2f, Standard: %.2f\n", cost_eps, cost_std);
+
+    /* Test on problem with tied costs (where epsilon scaling helps) */
+    printf("  Testing on tied costs problem...\n");
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = 10.0;  /* All costs equal */
+    }
+    /* Add small perturbations on diagonal */
+    for (int i = 0; i < n; i++) {
+        cost[i * n + i] = 9.0 + 0.01 * i;
+    }
+
+    ralph_lap_set_epsilon_scaling(1);
+    status = ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &cost_eps);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Tied costs: epsilon scaling succeeded");
+    ASSERT(ralph_lap_verify(n, cost, row_sol, NULL), "Tied costs: solution valid");
+
+    ralph_lap_set_epsilon_scaling(0);
+    ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol_std, NULL, NULL, NULL, &cost_std);
+    ASSERT(fabs(cost_eps - cost_std) < TOLERANCE, "Tied costs: costs match");
+
+    /* Reset to defaults */
+    ralph_lap_set_epsilon_scaling(0);
+    ralph_lap_set_epsilon_factor(4.0);
+
+    free(cost);
+    free(row_sol);
+    free(row_sol_std);
+}
+
+/* ============================================================================
+ * Test 30: Epsilon scaling with maximization
+ * ============================================================================ */
+static void test_epsilon_scaling_maximize(void) {
+    printf("\n=== Test: Epsilon Scaling Maximization ===\n");
+
+    int n = 30;
+    double *cost = malloc(n * n * sizeof(double));
+    int *row_sol_eps = malloc(n * sizeof(int));
+    int *row_sol_std = malloc(n * sizeof(int));
+
+    /* Create problem with some forbidden edges */
+    srand(999);
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            if (rand() % 4 == 0) {
+                cost[i * n + j] = RALPH_LAP_INFINITY;
+            } else {
+                cost[i * n + j] = (rand() % 100) + 1;
+            }
+        }
+        /* Ensure at least one valid edge per row */
+        cost[i * n + (i % n)] = (rand() % 50) + 1;
+    }
+
+    double cost_eps, cost_std;
+
+    /* Solve with epsilon scaling */
+    ralph_lap_set_epsilon_scaling(1);
+    RalphLapStatus status = ralph_lap_solve(n, cost, RALPH_LAP_MAXIMIZE,
+                                             row_sol_eps, NULL, NULL, NULL, &cost_eps);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Maximize: epsilon scaling succeeded");
+    ASSERT(ralph_lap_verify(n, cost, row_sol_eps, NULL), "Maximize: solution valid");
+
+    /* Solve without epsilon scaling */
+    ralph_lap_set_epsilon_scaling(0);
+    ralph_lap_solve(n, cost, RALPH_LAP_MAXIMIZE, row_sol_std, NULL, NULL, NULL, &cost_std);
+
+    /* Costs should match */
+    ASSERT(fabs(cost_eps - cost_std) < TOLERANCE, "Maximize: costs match");
+    printf("  Epsilon: %.2f, Standard: %.2f\n", cost_eps, cost_std);
+
+    /* Verify no forbidden edges used */
+    int valid = 1;
+    for (int i = 0; i < n && valid; i++) {
+        if (cost[i * n + row_sol_eps[i]] >= RALPH_LAP_INFINITY * 0.5) {
+            valid = 0;
+        }
+    }
+    ASSERT(valid, "Maximize: no forbidden edges used");
+
+    free(cost);
+    free(row_sol_eps);
+    free(row_sol_std);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -1271,6 +1398,8 @@ int main(void) {
     test_sparse_vs_dense();
     test_parallel_setting();
     test_workspace_repeated();
+    test_epsilon_scaling();
+    test_epsilon_scaling_maximize();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",
