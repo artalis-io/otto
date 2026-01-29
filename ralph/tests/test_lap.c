@@ -13,6 +13,8 @@
 #include <math.h>
 #include <time.h>
 #include "lap.h"
+#include "detect.h"
+#include "ralph.h"
 
 #define TOLERANCE 1e-4
 
@@ -2016,6 +2018,300 @@ static void test_callback_performance(void) {
 }
 
 /* ============================================================================
+ * Test: LAP Detection - Basic Structure
+ * ============================================================================ */
+static void test_detect_lap_basic(void) {
+    printf("\n=== Test: LAP Detection - Basic Structure ===\n");
+
+    /*
+     * Build a 3x3 LAP as an LP model:
+     * Variables: x[0..8] for x[i,j] = x[i*3+j]
+     * Row constraints: x[0]+x[1]+x[2] = 1, x[3]+x[4]+x[5] = 1, x[6]+x[7]+x[8] = 1
+     * Col constraints: x[0]+x[3]+x[6] = 1, x[1]+x[4]+x[7] = 1, x[2]+x[5]+x[8] = 1
+     * Objective: sum c[i,j] * x[i,j]
+     */
+    int n = 3;
+    int num_vars = n * n;
+    int num_cons = 2 * n;
+
+    /* Create model manually */
+    LPModel model;
+    memset(&model, 0, sizeof(LPModel));
+    model.num_vars = num_vars;
+    model.num_cons = num_cons;
+    model.obj_sense = 1;  /* Minimize */
+
+    /* Objective: cost matrix */
+    double costs[9] = {4, 2, 8, 6, 3, 7, 1, 5, 9};
+    model.c = costs;
+
+    /* Variable bounds */
+    double lb[9] = {0,0,0,0,0,0,0,0,0};
+    double ub[9] = {1,1,1,1,1,1,1,1,1};
+    model.lb = lb;
+    model.ub = ub;
+
+    /* Constraint RHS and sense */
+    double b[6] = {1, 1, 1, 1, 1, 1};
+    char sense[6] = {'E', 'E', 'E', 'E', 'E', 'E'};
+    model.b = b;
+    model.sense = sense;
+
+    /* Build constraint matrix in CSC format
+     * Rows: 0-2 are row constraints, 3-5 are column constraints
+     * For variable v = i*3 + j: appears in row i and column j+3
+     */
+    SparseMatrix A;
+    A.nrows = num_cons;
+    A.ncols = num_vars;
+    A.nnz = 2 * num_vars;  /* Each variable appears in 2 constraints */
+
+    int colptr[10] = {0};
+    int rowidx[18];
+    double values[18];
+
+    int ptr = 0;
+    for (int v = 0; v < num_vars; v++) {
+        int row_i = v / n;
+        int col_j = v % n;
+        colptr[v] = ptr;
+        rowidx[ptr] = row_i;       /* Row constraint */
+        values[ptr] = 1.0;
+        ptr++;
+        rowidx[ptr] = col_j + n;   /* Column constraint */
+        values[ptr] = 1.0;
+        ptr++;
+    }
+    colptr[num_vars] = ptr;
+
+    A.colptr = colptr;
+    A.rowidx = rowidx;
+    A.values = values;
+    model.A = &A;
+
+    /* Detect LAP structure */
+    LAPSignature sig;
+    int detected = detect_lap(&model, &sig);
+
+    ASSERT(detected == 1, "LAP structure detected");
+    ASSERT(sig.is_lap == 1, "is_lap flag set");
+    ASSERT(sig.n == 3, "Problem size n=3");
+    ASSERT(sig.obj_sense == 1, "Minimize objective");
+
+    /* Check that costs were extracted correctly */
+    /* Note: the mapping may permute rows/columns, so we check total */
+    double total_extracted = 0;
+    for (int i = 0; i < 9; i++) {
+        total_extracted += sig.costs[i];
+    }
+    double total_original = 0;
+    for (int i = 0; i < 9; i++) {
+        total_original += costs[i];
+    }
+    ASSERT_NEAR(total_extracted, total_original, 0.001, "Costs preserved");
+
+    detect_lap_free(&sig);
+}
+
+/* ============================================================================
+ * Test: LAP Detection - Solve via Ralph
+ * ============================================================================ */
+static void test_detect_lap_solve(void) {
+    printf("\n=== Test: LAP Detection - Solve via Ralph ===\n");
+
+    /*
+     * Build a 3x3 LAP and solve via ralph_optimize()
+     * Cost matrix:
+     *   4  2  8
+     *   6  3  7
+     *   1  5  9
+     * Optimal: 0->1=2, 1->2=7, 2->0=1 = 10
+     */
+    RalphModel *model = ralph_create();
+
+    /* Add 9 variables */
+    double costs[9] = {4, 2, 8, 6, 3, 7, 1, 5, 9};
+    for (int i = 0; i < 9; i++) {
+        ralph_add_var(model, 0.0, 1.0, costs[i], RALPH_CONTINUOUS);
+    }
+
+    /* Row constraints */
+    int row0_vars[3] = {0, 1, 2};
+    double row0_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, row0_vars, row0_coefs, RALPH_EQUAL, 1.0);
+
+    int row1_vars[3] = {3, 4, 5};
+    double row1_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, row1_vars, row1_coefs, RALPH_EQUAL, 1.0);
+
+    int row2_vars[3] = {6, 7, 8};
+    double row2_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, row2_vars, row2_coefs, RALPH_EQUAL, 1.0);
+
+    /* Column constraints */
+    int col0_vars[3] = {0, 3, 6};
+    double col0_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, col0_vars, col0_coefs, RALPH_EQUAL, 1.0);
+
+    int col1_vars[3] = {1, 4, 7};
+    double col1_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, col1_vars, col1_coefs, RALPH_EQUAL, 1.0);
+
+    int col2_vars[3] = {2, 5, 8};
+    double col2_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, col2_vars, col2_coefs, RALPH_EQUAL, 1.0);
+
+    /* Solve */
+    ralph_optimize(model);
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Solve status OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, 10.0, 0.001, "Optimal value = 10");
+
+    /* Verify solution is integral and valid assignment */
+    double sol[9];
+    ralph_get_solution(model, sol);
+    int assignments[3] = {-1, -1, -1};
+    int num_ones = 0;
+    for (int i = 0; i < 9; i++) {
+        if (sol[i] > 0.5) {
+            num_ones++;
+            int row = i / 3;
+            int col = i % 3;
+            assignments[row] = col;
+        }
+    }
+    ASSERT(num_ones == 3, "Exactly 3 assignments");
+
+    /* Check no duplicate columns */
+    int col_used[3] = {0, 0, 0};
+    int valid = 1;
+    for (int i = 0; i < 3; i++) {
+        if (assignments[i] < 0 || col_used[assignments[i]]) {
+            valid = 0;
+            break;
+        }
+        col_used[assignments[i]] = 1;
+    }
+    ASSERT(valid, "Valid assignment (no duplicates)");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: LAP Detection - Non-LAP Problem
+ * ============================================================================ */
+static void test_detect_lap_non_lap(void) {
+    printf("\n=== Test: LAP Detection - Non-LAP Problem ===\n");
+
+    /*
+     * Build a non-LAP problem (simple LP):
+     * min x + y
+     * s.t. x + y >= 1
+     *      x, y >= 0
+     */
+    RalphModel *model = ralph_create();
+
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+
+    int vars[2] = {0, 1};
+    double coefs[2] = {1, 1};
+    ralph_add_constraint(model, 2, vars, coefs, RALPH_GREATER_EQUAL, 1.0);
+
+    /* Solve - should use regular simplex, not LAP */
+    ralph_optimize(model);
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Solve status OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, 1.0, 0.001, "Optimal value = 1");
+
+    ralph_free(model);
+    printf("  (Non-LAP problem solved via regular simplex)\n");
+}
+
+/* ============================================================================
+ * Test: LAP Detection - Disable/Enable
+ * ============================================================================ */
+static void test_detect_lap_disable(void) {
+    printf("\n=== Test: LAP Detection - Disable/Enable ===\n");
+
+    /* Check default is enabled */
+    int default_enabled = ralph_get_detect_lap();
+    ASSERT(default_enabled == 1, "LAP detection enabled by default");
+
+    /* Disable */
+    ralph_set_detect_lap(0);
+    ASSERT(ralph_get_detect_lap() == 0, "LAP detection disabled");
+
+    /* Re-enable */
+    ralph_set_detect_lap(1);
+    ASSERT(ralph_get_detect_lap() == 1, "LAP detection re-enabled");
+}
+
+/* ============================================================================
+ * Test: LAP Detection - Maximize
+ * ============================================================================ */
+static void test_detect_lap_maximize(void) {
+    printf("\n=== Test: LAP Detection - Maximize ===\n");
+
+    /*
+     * Build a 3x3 LAP (maximize) and solve via ralph_optimize()
+     * Cost matrix:
+     *   4  2  8
+     *   6  3  7
+     *   1  5  9
+     * Maximum: 0->2=8, 1->0=6, 2->1=5 = 19
+     */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+
+    /* Add 9 variables */
+    double costs[9] = {4, 2, 8, 6, 3, 7, 1, 5, 9};
+    for (int i = 0; i < 9; i++) {
+        ralph_add_var(model, 0.0, 1.0, costs[i], RALPH_CONTINUOUS);
+    }
+
+    /* Row constraints */
+    int row0_vars[3] = {0, 1, 2};
+    double row0_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, row0_vars, row0_coefs, RALPH_EQUAL, 1.0);
+
+    int row1_vars[3] = {3, 4, 5};
+    double row1_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, row1_vars, row1_coefs, RALPH_EQUAL, 1.0);
+
+    int row2_vars[3] = {6, 7, 8};
+    double row2_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, row2_vars, row2_coefs, RALPH_EQUAL, 1.0);
+
+    /* Column constraints */
+    int col0_vars[3] = {0, 3, 6};
+    double col0_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, col0_vars, col0_coefs, RALPH_EQUAL, 1.0);
+
+    int col1_vars[3] = {1, 4, 7};
+    double col1_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, col1_vars, col1_coefs, RALPH_EQUAL, 1.0);
+
+    int col2_vars[3] = {2, 5, 8};
+    double col2_coefs[3] = {1, 1, 1};
+    ralph_add_constraint(model, 3, col2_vars, col2_coefs, RALPH_EQUAL, 1.0);
+
+    /* Solve */
+    ralph_optimize(model);
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Solve status OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, 19.0, 0.001, "Optimal value = 19");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -2066,6 +2362,11 @@ int main(void) {
     test_callback_workspace();
     test_callback_forbidden();
     test_callback_performance();
+    test_detect_lap_basic();
+    test_detect_lap_solve();
+    test_detect_lap_non_lap();
+    test_detect_lap_disable();
+    test_detect_lap_maximize();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",

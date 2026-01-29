@@ -10,6 +10,7 @@
 #include "lp.h"
 #include "mip.h"
 #include "presolve.h"
+#include "detect.h"
 
 #define RALPH_VERSION "0.1.0"
 
@@ -35,6 +36,7 @@ struct RalphModel {
     int max_cut_rounds;
     int method;  /* 0=primal simplex, 1=dual simplex, 2=auto */
     int pricing; /* 0=Dantzig, 1=Steepest edge, 2=Devex (default), 3=Partial */
+    int detect_special; /* 1=detect LAP/network structure, 0=disable */
 
     /* Solution */
     RalphStatus status;
@@ -75,6 +77,7 @@ RalphModel* ralph_create(void) {
     model->max_cut_rounds = 0;  /* Disabled by default */
     model->method = 0;  /* Default: primal simplex */
     model->pricing = 2; /* Default: Devex */
+    model->detect_special = 1; /* Default: detect LAP/network structure */
 
     model->status = RALPH_STATUS_UNKNOWN;
 
@@ -231,6 +234,45 @@ int ralph_optimize(RalphModel *model) {
                        presolved->vars_removed, presolved->cons_removed,
                        presolved->bounds_tightened);
             }
+        }
+    }
+
+    /* Try LAP detection for pure LP (not MIP) */
+    if (!ralph_is_mip(model) && model->detect_special && ralph_get_detect_lap()) {
+        LAPSignature lap_sig;
+        if (detect_lap(solve_model, &lap_sig)) {
+            if (model->verbose) {
+                printf("Detected LAP structure: %dx%d assignment problem\n",
+                       lap_sig.n, lap_sig.n);
+            }
+
+            /* Solve as LAP */
+            model->solution = (double*)calloc(n_orig, sizeof(double));
+            if (model->solution) {
+                double lap_obj;
+                if (solve_as_lap(&lap_sig, model->solution, &lap_obj) == 0) {
+                    model->status = RALPH_STATUS_OPTIMAL;
+                    model->obj_value = lap_obj;
+                    model->iteration_count = 0;
+
+                    /* Postsolve if presolve was applied */
+                    if (presolved && presolved->reduced_model) {
+                        double *presolved_sol = model->solution;
+                        model->solution = (double*)calloc(n_orig, sizeof(double));
+                        if (model->solution) {
+                            postsolve(presolved, presolved_sol, model->solution);
+                        }
+                        free(presolved_sol);
+                    }
+
+                    detect_lap_free(&lap_sig);
+                    if (presolved) presolve_free(presolved);
+                    return 0;
+                }
+                free(model->solution);
+                model->solution = NULL;
+            }
+            detect_lap_free(&lap_sig);
         }
     }
 
@@ -464,6 +506,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (strcmp(name, "pricing") == 0 || strcmp(name, "Pricing") == 0) {
         /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial */
         model->pricing = value;
+    } else if (strcmp(name, "detect_special") == 0 || strcmp(name, "DetectSpecial") == 0) {
+        /* 1=detect LAP/network structure, 0=disable */
+        model->detect_special = value;
     } else {
         return -1;  /* Unknown parameter */
     }
