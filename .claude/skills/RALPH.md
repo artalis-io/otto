@@ -1,8 +1,13 @@
-# Ralph LP/MIP Solver - Usage Guide
+# Ralph LP/MIP/LAP Solver - Usage Guide
 
 ## Overview
 
-Ralph is a lightweight, zero-dependency LP/MIP solver written in C. It can be used standalone or compared against GLPK for validation and benchmarking.
+Ralph is a lightweight, zero-dependency LP/MIP/LAP solver written in C. It includes:
+- **LP Solver**: Primal/dual simplex with LU factorization
+- **MIP Solver**: Branch-and-bound with GMI cuts
+- **LAP Solver**: JVC algorithm (86-633× faster than simplex for assignments)
+
+It can be used standalone or compared against GLPK for validation and benchmarking.
 
 ## Quick Start
 
@@ -199,6 +204,124 @@ gcc -O3 -I./include myprogram.c -L. -lralph -lm -o myprogram
   - `"verbose"` - 0=silent, 1=summary, 2=detailed
   - `"max_iter"` - Maximum iterations
   - `"time_limit"` - Time limit in seconds
+  - `"detect_special"` - Enable LAP/network detection (0 or 1)
+
+---
+
+## LAP Solver (Linear Assignment Problem)
+
+The LAP solver uses the Jonker-Volgenant-Castanon (JVC) algorithm, which is 86-633× faster than simplex for assignment problems.
+
+### Basic LAP Example
+
+```c
+#include "lap.h"
+
+int main() {
+    // 3x3 cost matrix (row-major)
+    double cost[9] = {
+        1, 10, 10,
+        10, 2, 10,
+        10, 10, 3
+    };
+
+    int row_sol[3];  // row_sol[i] = column assigned to row i
+    double total_cost;
+
+    ralph_lap_solve(3, cost, RALPH_LAP_MINIMIZE,
+                    row_sol, NULL, NULL, NULL, &total_cost);
+
+    printf("Cost: %.2f\n", total_cost);  // 6.0 (diagonal)
+    printf("Assignment: 0->%d, 1->%d, 2->%d\n",
+           row_sol[0], row_sol[1], row_sol[2]);
+    return 0;
+}
+```
+
+### LAP API Reference
+
+| Function | Description |
+|----------|-------------|
+| `ralph_lap_solve()` | Dense n×n LAP |
+| `ralph_lap_solve_sparse()` | Sparse LAP (CSR format) |
+| `ralph_lap_solve_rect()` | Rectangular m×n LAP |
+| `ralph_lap_solve_warm()` | Warm start from previous solution |
+| `ralph_lap_solve_callback()` | On-demand cost computation (O(n) memory) |
+| `ralph_lap_solve_k_best()` | Find k best assignments (Murty's algorithm) |
+| `ralph_lap_solve_lp()` | Solve via LP (for verification) |
+
+### Advanced Features
+
+**Sparse LAP (CSR format):**
+```c
+int row_ptr[] = {0, 2, 4, 6};  // 3 rows
+int col_idx[] = {0, 1, 0, 2, 1, 2};
+double values[] = {1.0, 5.0, 3.0, 2.0, 4.0, 1.0};
+
+ralph_lap_solve_sparse(3, 6, row_ptr, col_idx, values,
+                       RALPH_LAP_MINIMIZE, row_sol, NULL, &cost);
+```
+
+**k-Best Assignments:**
+```c
+int solutions[3 * n];  // k=3 solutions
+double costs[3];
+int num_found;
+
+ralph_lap_solve_k_best(n, cost, RALPH_LAP_MINIMIZE, 3,
+                       solutions, costs, &num_found);
+```
+
+**Warm Start (for similar problems):**
+```c
+RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+
+// Solve first problem
+ralph_lap_solve_warm(n, cost1, RALPH_LAP_MINIMIZE,
+                     row_sol, NULL, NULL, NULL, &obj, ws, 0);
+
+// Solve similar problem with warm start
+ralph_lap_solve_warm(n, cost2, RALPH_LAP_MINIMIZE,
+                     row_sol, NULL, NULL, NULL, &obj, ws, 1);
+
+ralph_lap_workspace_free(ws);
+```
+
+**Callback-based (O(n) memory):**
+```c
+double my_cost(int i, int j, void *data) {
+    // Compute cost on-demand
+    return compute_distance(i, j, data);
+}
+
+ralph_lap_solve_callback(n, my_cost, user_data, RALPH_LAP_MINIMIZE,
+                         row_sol, NULL, NULL, NULL, &total_cost);
+```
+
+### LAP Integration with LP/MIP
+
+Assignment problems formulated as LPs/MIPs can be solved with JVC:
+
+```c
+// Create assignment MIP
+RalphModel *model = ralph_create();
+// ... add binary variables and assignment constraints ...
+
+// Enable LAP detection
+ralph_set_int_param(model, "detect_special", 1);
+
+// Solve - will use JVC internally
+ralph_optimize(model);
+```
+
+### LAP Performance
+
+| Size | JVC (ms) | LP Simplex (ms) | Speedup |
+|------|----------|-----------------|---------|
+| 10×10 | 0.001 | 0.095 | 86× |
+| 20×20 | 0.001 | 0.886 | 633× |
+| 100×100 | 0.044 | N/A | - |
+| 500×500 | 3.0 | N/A | - |
 
 ---
 
@@ -313,17 +436,18 @@ gcc -O3 -I./include \
 ### Unit Tests
 
 ```bash
-# Build and run all tests
+# Build and run LP/MIP tests
 make test
+# Expected: 73/73 passed
 
-# Expected output:
-# Test Summary: 59/59 passed (100.0%)
-# ✓ All tests passed!
+# Build and run LAP tests
+make test-lap
+# Expected: 213/213 passed
 ```
 
 ### Test Categories
 
-The test suite covers:
+**LP/MIP tests (73 tests):**
 - Simple LP problems (2-variable, equality, inequality constraints)
 - Diet problem (classic LP)
 - Infeasibility detection with Farkas certificates
@@ -333,7 +457,18 @@ The test suite covers:
 - Mixed integer programming
 - Facility location (MIP)
 - GMI cuts
+- LAP-based MIP (assignment problems)
 - API functions
+
+**LAP tests (213 tests):**
+- Dense JVC (minimize/maximize)
+- Sparse LAP (CSR format)
+- Rectangular LAP (m×n)
+- Warm start / incremental
+- Cost callbacks
+- k-Best assignments (Murty)
+- ε-scaling
+- Edge cases (infeasible, ties)
 
 ### Running Specific Tests
 
@@ -501,24 +636,34 @@ export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ```
 ralph/
 ├── include/
-│   ├── ralph.h          # Public API
+│   ├── ralph.h          # Public LP/MIP API
+│   ├── lap.h            # LAP solver API
+│   ├── detect.h         # Problem structure detection
 │   ├── lp.h             # Internal LP structures
 │   ├── mip.h            # MIP structures
 │   └── sparse.h         # Sparse matrix utilities
 ├── src/
 │   ├── ralph.c          # API implementation
+│   ├── lap.c            # JVC algorithm (LAP)
+│   ├── detect.c         # LAP/network detection
 │   ├── simplex.c        # Primal simplex
 │   ├── dual_simplex.c   # Dual simplex
 │   ├── lu.c             # LU factorization
 │   ├── branch_bound.c   # MIP solver
+│   ├── mip.c            # MIP with LAP integration
 │   └── cuts.c           # Cut generation (GMI)
 ├── tests/
-│   └── test_main.c      # Test suite
+│   ├── test_main.c      # LP/MIP test suite (73 tests)
+│   └── test_lap.c       # LAP test suite (213 tests)
 ├── benchmarks/
+│   ├── bench_lap.c      # LAP benchmarks
 │   ├── bench_sizes.c    # Size scaling (no GLPK)
 │   ├── compare_glpk.c   # Quick comparison
 │   ├── bench_vs_glpk.c  # Full LP benchmark
 │   └── bench_mip.c      # MIP benchmark
+├── docs/
+│   ├── LAP_ROADMAP.md   # LAP feature roadmap
+│   └── TODO_FEATURES.md # All planned features
 ├── Makefile
-└── SKILLS.md            # This file
+└── CLAUDE.md            # Developer instructions
 ```

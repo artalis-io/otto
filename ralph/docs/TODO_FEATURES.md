@@ -269,6 +269,32 @@ double lap_solve_sparse_csr(const SparseLAP *lap, int *row_sol, int *col_sol);
 
 - Jonker, R., & Volgenant, A. (1987). "A shortest augmenting path algorithm for dense and sparse linear assignment problems"
 - Castanon, D. A. (1991). "Efficient algorithms for finding the k best paths through a trellis"
+- Murty, K. G. (1968). "An algorithm for ranking all the assignments in order of increasing cost"
+
+### Future Improvements
+
+| Feature | Priority | Complexity | Logistics Use Case |
+|---------|----------|------------|-------------------|
+| **Batched LAP** | High | Medium | Multi-frame tracking, parallel route assignments |
+| **Bottleneck LAP** | Medium | Low | Load balancing (minimize worst driver workload) |
+| **Online/Streaming LAP** | Medium | Medium | Real-time dispatch as orders arrive/cancel |
+| **Constrained LAP** | High | Medium | Driver-vehicle assignment with shift/capacity limits |
+| **3D Assignment** | Low | High | Multi-depot, multi-period fleet scheduling |
+| **Auction Algorithm** | Low | Medium | Alternative solver for specific problem structures |
+| **Approximate LAP** | Medium | Low | Fast heuristics for very large fleets (1000+ vehicles) |
+| **GPU Acceleration** | Low | High | Massive-scale problems (n > 5000) |
+
+**Logistics Assessment:**
+
+1. **Batched LAP** - Solve driver-to-order assignments across multiple time windows simultaneously. High value for batch dispatch systems.
+
+2. **Bottleneck LAP** - Minimize the longest route/shift rather than total cost. Ensures fairness and regulatory compliance (no driver overworked).
+
+3. **Online LAP** - Critical for real-time dispatch. When a new order arrives or a driver becomes unavailable, update assignment incrementally rather than re-solving from scratch.
+
+4. **Constrained LAP** - Real assignments have side constraints: driver certifications, vehicle capacities, time windows, mutual exclusions. This generalizes pure LAP to handle practical restrictions.
+
+5. **3D Assignment** - Assign (driver, vehicle, shift) triples. Useful for multi-day planning where the same driver may use different vehicles on different days.
 
 ---
 
