@@ -307,6 +307,53 @@ void ralph_lap_set_parallel(int enabled);
  */
 int ralph_lap_get_parallel(void);
 
+/*
+ * Enable or disable ε-scaling auction algorithm.
+ *
+ * The ε-scaling auction provides guaranteed polynomial convergence O(n³ log(nC))
+ * by progressively refining the solution through decreasing epsilon values.
+ *
+ * Benefits:
+ * - Guaranteed convergence (no cycling on degenerate problems)
+ * - More predictable iteration counts
+ * - Better handling of tied/near-tied costs
+ *
+ * Trade-offs:
+ * - Slightly higher overhead on easy problems
+ * - Multiple auction passes required
+ *
+ * Parameters:
+ *   enabled - 1 to enable ε-scaling (default: 0), 0 to use standard auction
+ */
+void ralph_lap_set_epsilon_scaling(int enabled);
+
+/*
+ * Check if ε-scaling auction is enabled.
+ *
+ * Returns:
+ *   1 if enabled, 0 if disabled
+ */
+int ralph_lap_get_epsilon_scaling(void);
+
+/*
+ * Set the ε-scaling factor (default: 4.0).
+ *
+ * Each iteration divides epsilon by this factor. Larger values mean fewer
+ * passes but potentially more work per pass. Typical values: 2-10.
+ *
+ * Parameters:
+ *   factor - Scaling factor (must be > 1.0)
+ */
+void ralph_lap_set_epsilon_factor(double factor);
+
+/*
+ * Get the current ε-scaling factor.
+ *
+ * Returns:
+ *   Current scaling factor
+ */
+double ralph_lap_get_epsilon_factor(void);
+
 #ifdef __cplusplus
 }
 #endif

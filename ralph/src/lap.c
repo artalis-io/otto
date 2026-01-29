@@ -54,6 +54,10 @@
 /* Global setting for parallelization (1 = enabled, 0 = disabled) */
 static int lap_parallel_enabled = 1;
 
+/* Global settings for ε-scaling auction */
+static int lap_epsilon_scaling_enabled = 0;
+static double lap_epsilon_factor = 4.0;
+
 /* Aligned allocation helpers */
 static void* lap_aligned_alloc(size_t size) {
 #ifdef _WIN32
@@ -499,44 +503,60 @@ static RalphLapStatus lap_solve_internal(
 
     /* ========================================================================
      * PHASE 3: Augmenting Row Reduction (Auction Phase)
-     * Run twice for better convergence.
+     *
+     * Two modes:
+     * - Standard: Run twice for better convergence (original JVC)
+     * - ε-scaling: Add epsilon to price adjustments for guaranteed progress
      *
      * For large n, we pre-compute reduced costs into dist[] array, then
      * use SIMD to find minimum. This trades memory bandwidth for SIMD gains.
      * ======================================================================== */
     int use_simd_auction = use_simd;
 
+    /* Compute epsilon for ε-scaling mode */
+    double epsilon = 0.0;
+    if (lap_epsilon_scaling_enabled) {
+        /* Find cost range to set epsilon */
+        double max_cost = 0.0;
+        for (i = 0; i < n; i++) {
+            for (j = 0; j < n; j++) {
+                double c = work_cost[i * n + j];
+                if (c < RALPH_LAP_INFINITY * 0.5 && fabs(c) > max_cost) {
+                    max_cost = fabs(c);
+                }
+            }
+        }
+        /* Small epsilon: just enough to break ties without affecting optimality
+         * Use n² in denominator to make epsilon very small */
+        epsilon = (max_cost > 0) ? max_cost / ((double)n * n * lap_epsilon_factor) : 1.0 / ((double)n * n * lap_epsilon_factor);
+    }
+
     for (int loop = 0; loop < 2 && num_free > 0; loop++) {
         int k_free = 0;
-        int max_iter = n * n;  /* Limit iterations to prevent infinite loops */
+        int max_iter = n * n;
         int iter = 0;
 
         while (k_free < num_free && iter < max_iter) {
             iter++;
             i = free_rows[k_free++];
-            /* Note: Keep in_free_list[i] = 1 to prevent re-adding if displaced */
 
-            /* Find minimum and second-minimum reduced costs */
-            double u1 = DBL_MAX;  /* Minimum reduced cost */
-            double u2 = DBL_MAX;  /* Second minimum */
+            double u1 = DBL_MAX;
+            double u2 = DBL_MAX;
             int j1 = -1, j2 = -1;
             const double *row_costs = &work_cost[i * n];
 
             if (use_simd_auction) {
-                /* SIMD-friendly approach: compute all reduced costs first */
                 #pragma omp simd
                 for (j = 0; j < n; j++) {
                     dist[j] = row_costs[j] - col_price[j];
                 }
 
-                /* Find minimum using SIMD reduction */
                 double vmin = dist[0];
                 #pragma omp simd reduction(min:vmin)
                 for (j = 1; j < n; j++) {
                     if (dist[j] < vmin) vmin = dist[j];
                 }
 
-                /* Find index of minimum and second minimum */
                 for (j = 0; j < n; j++) {
                     double v = dist[j];
                     if (v <= vmin + RALPH_LAP_TOLERANCE && j1 < 0) {
@@ -548,7 +568,6 @@ static RalphLapStatus lap_solve_internal(
                     }
                 }
             } else {
-                /* Single pass to find both min and second-min (better for small n) */
                 for (j = 0; j < n; j++) {
                     double reduced = row_costs[j] - col_price[j];
                     if (reduced < u1) {
@@ -564,51 +583,45 @@ static RalphLapStatus lap_solve_internal(
             }
 
             if (j1 < 0) {
-                /* All costs are infinite - problem is infeasible */
                 status = RALPH_LAP_INFEASIBLE;
                 goto cleanup;
             }
 
-            /* Record row price (for potential dual output) */
             row_price[i] = u1;
 
-            /* If gap exists, reduce column price */
-            if (u1 < u2 - RALPH_LAP_TOLERANCE) {
+            /* Price adjustment with optional epsilon for tie-breaking */
+            if (u1 < u2 - RALPH_LAP_TOLERANCE - epsilon) {
                 col_price[j1] = col_price[j1] - u2 + u1;
             } else if (col_assign[j1] >= 0 && j2 >= 0 && col_assign[j2] < 0) {
-                /* No gap, j1 is assigned but j2 is free - use j2 */
+                /* j1 is assigned, j2 is free and within tolerance - use j2 */
                 j1 = j2;
+            } else if (lap_epsilon_scaling_enabled && col_assign[j1] >= 0) {
+                /* ε-scaling: adjust price even in near-tie case */
+                col_price[j1] = col_price[j1] - epsilon;
             }
-            /* Otherwise keep j1 - will displace current assignee */
 
-            /* If j1 is still invalid (shouldn't happen with proper input) */
             if (j1 < 0) {
                 status = RALPH_LAP_INFEASIBLE;
                 goto cleanup;
             }
 
-            /* Assign row i to column j1 */
             int prev_row = col_assign[j1];
             if (prev_row >= 0) {
-                row_assign[prev_row] = RALPH_LAP_UNASSIGNED;  /* Unassign displaced row */
+                row_assign[prev_row] = RALPH_LAP_UNASSIGNED;
             }
             row_assign[i] = j1;
             col_assign[j1] = i;
 
-            /* If j1 was previously assigned, that row becomes free */
             if (prev_row >= 0 && !in_free_list[prev_row]) {
                 in_free_list[prev_row] = 1;
                 if (loop == 1) {
-                    /* In second pass, don't add back - will be handled in Phase 4 */
                     free_rows[--k_free] = prev_row;
                 } else {
-                    /* In first pass, add to end of free list */
                     free_rows[num_free++] = prev_row;
                 }
             }
         }
 
-        /* Rebuild free list for next pass */
         if (loop == 0) {
             num_free = 0;
             memset(in_free_list, 0, n * sizeof(int));
@@ -1638,6 +1651,24 @@ void ralph_lap_set_parallel(int enabled) {
 
 int ralph_lap_get_parallel(void) {
     return lap_parallel_enabled;
+}
+
+void ralph_lap_set_epsilon_scaling(int enabled) {
+    lap_epsilon_scaling_enabled = enabled ? 1 : 0;
+}
+
+int ralph_lap_get_epsilon_scaling(void) {
+    return lap_epsilon_scaling_enabled;
+}
+
+void ralph_lap_set_epsilon_factor(double factor) {
+    if (factor > 1.0) {
+        lap_epsilon_factor = factor;
+    }
+}
+
+double ralph_lap_get_epsilon_factor(void) {
+    return lap_epsilon_factor;
 }
 
 /* ============================================================================

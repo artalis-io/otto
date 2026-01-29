@@ -535,6 +535,114 @@ static void bench_correctness(void) {
 }
 
 /* ============================================================================
+ * Epsilon scaling benchmark
+ * ============================================================================ */
+
+static void bench_epsilon_scaling(void) {
+    printf("\n╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  Epsilon Scaling Benchmark (Standard vs ε-Scaling Auction)                ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+    printf("  %6s  %10s  %10s  %10s  %8s  %8s\n",
+           "Size", "Std (ms)", "Eps (ms)", "Speedup", "Std Cost", "Eps Cost");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    int sizes[] = {100, 200, 500, 1000};
+    int num_trials = 5;
+
+    for (int s = 0; s < 4; s++) {
+        int n = sizes[s];
+        double *cost = malloc(n * n * sizeof(double));
+        int *row_sol = malloc(n * sizeof(int));
+
+        double time_std = 0, time_eps = 0;
+        double cost_std = 0, cost_eps = 0;
+
+        for (int t = 0; t < num_trials; t++) {
+            generate_random(n, cost, 5000 + s * 100 + t);
+
+            /* Standard mode */
+            ralph_lap_set_epsilon_scaling(0);
+            Timer timer;
+            timer_start(&timer);
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &cost_std);
+            timer_stop(&timer);
+            time_std += timer.elapsed_ms;
+
+            /* Epsilon scaling mode */
+            ralph_lap_set_epsilon_scaling(1);
+            timer_start(&timer);
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &cost_eps);
+            timer_stop(&timer);
+            time_eps += timer.elapsed_ms;
+        }
+
+        ralph_lap_set_epsilon_scaling(0);  /* Reset */
+
+        time_std /= num_trials;
+        time_eps /= num_trials;
+        double speedup = time_std / time_eps;
+        const char *match = (fabs(cost_std - cost_eps) < 0.01) ? "OK" : "DIFF";
+
+        printf("  %6d  %10.3f  %10.3f  %10.2fx  %8.2f  %8.2f  %s\n",
+               n, time_std, time_eps, speedup, cost_std, cost_eps, match);
+
+        free(cost);
+        free(row_sol);
+    }
+
+    /* Test on tied-cost problem (where epsilon helps) */
+    printf("\n  Tied-cost problem (all costs equal except small perturbations):\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    for (int s = 0; s < 3; s++) {
+        int n = (s == 0) ? 100 : (s == 1) ? 200 : 500;
+        double *cost = malloc(n * n * sizeof(double));
+        int *row_sol = malloc(n * sizeof(int));
+
+        /* All costs equal (degenerate) */
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = 100.0;
+        }
+        /* Small perturbations on diagonal */
+        for (int i = 0; i < n; i++) {
+            cost[i * n + i] = 99.0 + 0.001 * i;
+        }
+
+        double time_std = 0, time_eps = 0;
+        double cost_std = 0, cost_eps = 0;
+
+        for (int t = 0; t < num_trials; t++) {
+            /* Standard mode */
+            ralph_lap_set_epsilon_scaling(0);
+            Timer timer;
+            timer_start(&timer);
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &cost_std);
+            timer_stop(&timer);
+            time_std += timer.elapsed_ms;
+
+            /* Epsilon scaling mode */
+            ralph_lap_set_epsilon_scaling(1);
+            timer_start(&timer);
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &cost_eps);
+            timer_stop(&timer);
+            time_eps += timer.elapsed_ms;
+        }
+
+        ralph_lap_set_epsilon_scaling(0);
+
+        time_std /= num_trials;
+        time_eps /= num_trials;
+        double speedup = time_std / time_eps;
+
+        printf("  %6d  %10.3f  %10.3f  %10.2fx  %8.2f  %8.2f\n",
+               n, time_std, time_eps, speedup, cost_std, cost_eps);
+
+        free(cost);
+        free(row_sol);
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -553,6 +661,7 @@ int main(int argc, char *argv[]) {
     int run_large = run_all || (argc > 1 && strcmp(argv[1], "large") == 0);
     int run_verify = run_all || (argc > 1 && strcmp(argv[1], "verify") == 0);
     int run_sparse = run_all || (argc > 1 && strcmp(argv[1], "sparse") == 0);
+    int run_epsilon = run_all || (argc > 1 && strcmp(argv[1], "epsilon") == 0);
 
     if (run_size) bench_size_scaling();
     if (run_types) bench_problem_types();
@@ -561,6 +670,7 @@ int main(int argc, char *argv[]) {
         bench_sparse_scaling();
     }
     if (run_large) bench_large_problems();
+    if (run_epsilon) bench_epsilon_scaling();
     if (run_verify) bench_correctness();
 
     printf("\n");
