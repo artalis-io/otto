@@ -39,7 +39,8 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/cuts.c \
           $(SRC_DIR)/mip.c \
           $(SRC_DIR)/mps_reader.c \
-          $(SRC_DIR)/ralph.c
+          $(SRC_DIR)/ralph.c \
+          $(SRC_DIR)/lap.c
 
 OBJECTS = $(SOURCES:.c=.o)
 
@@ -54,6 +55,10 @@ TEST_EXEC = test_ralph
 EDGE_TEST_SOURCES = $(TEST_DIR)/test_edge_cases.c
 EDGE_TEST_EXEC = test_edge_cases
 
+# LAP tests
+LAP_TEST_SOURCES = $(TEST_DIR)/test_lap.c
+LAP_TEST_EXEC = test_lap
+
 # Benchmarks
 BENCH_DIR = benchmarks
 BENCH_SIZES_EXEC = bench_sizes
@@ -61,6 +66,7 @@ COMPARE_GLPK_EXEC = compare_glpk
 BENCH_VS_GLPK_EXEC = bench_vs_glpk
 BENCH_MIP_EXEC = bench_mip
 PROFILE_BENCH_EXEC = profile_bench
+BENCH_LAP_EXEC = bench_lap
 
 # GLPK configuration (via Homebrew)
 GLPK_PREFIX = $(shell brew --prefix glpk 2>/dev/null || echo "/opt/homebrew/opt/glpk")
@@ -99,6 +105,14 @@ $(EDGE_TEST_EXEC): $(EDGE_TEST_SOURCES) $(LIB_NAME)
 # Run edge case tests
 test-edge: $(EDGE_TEST_EXEC)
 	./$(EDGE_TEST_EXEC)
+
+# Build LAP tests
+$(LAP_TEST_EXEC): $(LAP_TEST_SOURCES) $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run LAP tests
+test-lap: $(LAP_TEST_EXEC)
+	./$(LAP_TEST_EXEC)
 
 # Build size scaling benchmark
 $(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME)
@@ -148,9 +162,17 @@ $(PROFILE_BENCH_EXEC): $(BENCH_DIR)/profile_bench.c $(LIB_NAME)
 profile-bench: $(PROFILE_BENCH_EXEC)
 	./$(PROFILE_BENCH_EXEC)
 
+# Build LAP benchmark
+$(BENCH_LAP_EXEC): $(BENCH_DIR)/bench_lap.c $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run LAP benchmark
+bench-lap: $(BENCH_LAP_EXEC)
+	./$(BENCH_LAP_EXEC)
+
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -164,7 +186,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge bench compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap bench bench-lap compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
 
 # Help
 help:
@@ -175,7 +197,9 @@ help:
 	@echo "  lib        - Build static library (libralph.a)"
 	@echo "  test       - Build and run tests"
 	@echo "  test-edge  - Run edge case tests"
+	@echo "  test-lap   - Run LAP (assignment problem) tests"
 	@echo "  bench      - Run size scaling benchmark"
+	@echo "  bench-lap  - Run LAP benchmark (JVC vs LP)"
 	@echo "  debug      - Build with debug symbols"
 	@echo "  clean      - Remove build artifacts"
 	@echo ""
