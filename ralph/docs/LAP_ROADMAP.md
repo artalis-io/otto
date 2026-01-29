@@ -208,8 +208,8 @@ void detect_lap_free(LAPSignature *sig);
 int solve_as_lap(const LAPSignature *sig, double *solution, double *obj_val);
 
 /* Runtime enable/disable */
-void ralph_set_detect_lap(int enabled);  /* Default: enabled */
-int ralph_get_detect_lap(void);
+void ralph_set_detect_lap(int enabled);    /* Global toggle (default: enabled) */
+ralph_set_int_param(model, "detect_special", 1);  /* Per-model (default: disabled) */
 ```
 
 **Detection criteria:**
@@ -219,9 +219,15 @@ int ralph_get_detect_lap(void);
 - All constraints equality with RHS = 1
 - Variables non-negative
 
+**Usage:**
+```c
+ralph_set_int_param(model, "detect_special", 1);  /* Enable for this model */
+ralph_optimize(model);  /* Will use JVC if LAP structure detected */
+```
+
 **Benefits:**
-- Transparent speedup: users formulating LAPs as LPs automatically get O(n³) JVC instead of O(n³) simplex iterations
-- No API changes needed - works with existing `ralph_optimize()` calls
+- Transparent speedup: LAPs formulated as LPs get O(n³) JVC instead of simplex
+- Disabled by default for fair benchmarking; enable per-model when desired
 
 ---
 
