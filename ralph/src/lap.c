@@ -930,6 +930,109 @@ RalphLapStatus ralph_lap_solve_with_workspace(
 }
 
 /* ============================================================================
+ * Rectangular LAP Solver
+ * ============================================================================ */
+
+RalphLapStatus ralph_lap_solve_rect(
+    int m,
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *total_cost
+) {
+    if (m <= 0 || n <= 0 || cost == NULL || row_sol == NULL) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Square case - delegate to standard solver */
+    if (m == n) {
+        return ralph_lap_solve(n, cost, objective, row_sol, col_sol,
+                               NULL, NULL, total_cost);
+    }
+
+    /* Determine padded dimension */
+    int k = (m > n) ? m : n;
+
+    /* Allocate padded cost matrix */
+    double *padded_cost = (double *)malloc(k * k * sizeof(double));
+    int *padded_row_sol = (int *)malloc(k * sizeof(int));
+    int *padded_col_sol = col_sol ? (int *)malloc(k * sizeof(int)) : NULL;
+
+    if (!padded_cost || !padded_row_sol || (col_sol && !padded_col_sol)) {
+        free(padded_cost);
+        free(padded_row_sol);
+        free(padded_col_sol);
+        return RALPH_LAP_MEMORY_ERROR;
+    }
+
+    /* Fill padded cost matrix
+     * - Original costs in top-left m x n block
+     * - Dummy costs (0) for padding to allow "unassigned" matches
+     */
+    for (int i = 0; i < k; i++) {
+        for (int j = 0; j < k; j++) {
+            if (i < m && j < n) {
+                /* Original cost */
+                padded_cost[i * k + j] = cost[i * n + j];
+            } else {
+                /* Dummy assignment - zero cost so it doesn't affect objective */
+                padded_cost[i * k + j] = 0.0;
+            }
+        }
+    }
+
+    /* Solve padded square problem */
+    RalphLapStatus status = ralph_lap_solve(k, padded_cost, objective,
+                                             padded_row_sol, padded_col_sol,
+                                             NULL, NULL, NULL);
+
+    if (status != RALPH_LAP_SUCCESS) {
+        free(padded_cost);
+        free(padded_row_sol);
+        free(padded_col_sol);
+        return status;
+    }
+
+    /* Extract solution for original dimensions */
+    /* row_sol[i] = assigned column, or -1 if assigned to dummy column */
+    for (int i = 0; i < m; i++) {
+        int j = padded_row_sol[i];
+        row_sol[i] = (j < n) ? j : RALPH_LAP_UNASSIGNED;
+    }
+
+    /* col_sol[j] = assigned row, or -1 if assigned to dummy row */
+    if (col_sol) {
+        for (int j = 0; j < n; j++) {
+            int i = padded_col_sol[j];
+            col_sol[j] = (i < m) ? i : RALPH_LAP_UNASSIGNED;
+        }
+    }
+
+    /* Compute total cost from actual assignments only */
+    if (total_cost) {
+        double sum = 0.0;
+        for (int i = 0; i < m; i++) {
+            int j = row_sol[i];
+            if (j >= 0 && j < n) {
+                double c = cost[i * n + j];
+                if (c < RALPH_LAP_INFINITY * 0.5) {
+                    sum += c;
+                }
+            }
+        }
+        *total_cost = sum;
+    }
+
+    free(padded_cost);
+    free(padded_row_sol);
+    free(padded_col_sol);
+
+    return RALPH_LAP_SUCCESS;
+}
+
+/* ============================================================================
  * Sparse LAP Solver
  * ============================================================================ */
 

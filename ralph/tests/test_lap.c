@@ -724,7 +724,156 @@ static void test_workspace(void) {
 }
 
 /* ============================================================================
- * Test 21: Parallel setting
+ * Test 21: Rectangular LAP (more jobs than workers)
+ * ============================================================================ */
+static void test_rect_more_jobs(void) {
+    printf("\n=== Test: Rectangular LAP (3 workers, 5 jobs) ===\n");
+
+    /* 3 workers, 5 jobs - 2 jobs will be unassigned */
+    int m = 3, n = 5;
+    double cost[] = {
+        10, 5, 13, 4, 8,   /* Worker 0 */
+        3, 7, 11, 6, 2,    /* Worker 1 */
+        15, 9, 1, 12, 14   /* Worker 2 */
+    };
+
+    int row_sol[3], col_sol[5];
+    double total_cost;
+
+    RalphLapStatus status = ralph_lap_solve_rect(m, n, cost, RALPH_LAP_MINIMIZE,
+                                                  row_sol, col_sol, &total_cost);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Rectangular solve succeeded");
+
+    /* All workers should be assigned */
+    int all_assigned = 1;
+    for (int i = 0; i < m; i++) {
+        if (row_sol[i] < 0 || row_sol[i] >= n) {
+            all_assigned = 0;
+            break;
+        }
+    }
+    ASSERT(all_assigned, "All workers assigned to valid jobs");
+
+    /* Check for valid permutation (no duplicate assignments) */
+    int used[5] = {0};
+    int valid = 1;
+    for (int i = 0; i < m; i++) {
+        if (used[row_sol[i]]) {
+            valid = 0;
+            break;
+        }
+        used[row_sol[i]] = 1;
+    }
+    ASSERT(valid, "No duplicate job assignments");
+
+    /* Exactly 2 jobs should be unassigned */
+    int unassigned_jobs = 0;
+    for (int j = 0; j < n; j++) {
+        if (col_sol[j] == RALPH_LAP_UNASSIGNED) {
+            unassigned_jobs++;
+        }
+    }
+    ASSERT(unassigned_jobs == 2, "Exactly 2 jobs unassigned");
+
+    printf("  Assignment: ");
+    for (int i = 0; i < m; i++) printf("W%d->J%d ", i, row_sol[i]);
+    printf("\n  Total cost: %.2f\n", total_cost);
+
+    /* Optimal should be: W0->J3(4), W1->J4(2), W2->J2(1) = 7 */
+    ASSERT(fabs(total_cost - 7.0) < TOLERANCE, "Optimal cost is 7");
+}
+
+/* ============================================================================
+ * Test 22: Rectangular LAP (more workers than jobs)
+ * ============================================================================ */
+static void test_rect_more_workers(void) {
+    printf("\n=== Test: Rectangular LAP (5 workers, 3 jobs) ===\n");
+
+    /* 5 workers, 3 jobs - 2 workers will be unassigned */
+    int m = 5, n = 3;
+    double cost[] = {
+        10, 5, 13,   /* Worker 0 */
+        3, 7, 11,    /* Worker 1 */
+        15, 9, 1,    /* Worker 2 */
+        4, 6, 12,    /* Worker 3 */
+        8, 2, 14     /* Worker 4 */
+    };
+
+    int row_sol[5], col_sol[3];
+    double total_cost;
+
+    RalphLapStatus status = ralph_lap_solve_rect(m, n, cost, RALPH_LAP_MINIMIZE,
+                                                  row_sol, col_sol, &total_cost);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Rectangular solve succeeded");
+
+    /* All jobs should be assigned */
+    int all_jobs_assigned = 1;
+    for (int j = 0; j < n; j++) {
+        if (col_sol[j] < 0 || col_sol[j] >= m) {
+            all_jobs_assigned = 0;
+            break;
+        }
+    }
+    ASSERT(all_jobs_assigned, "All jobs assigned to valid workers");
+
+    /* Exactly 2 workers should be unassigned */
+    int unassigned_workers = 0;
+    for (int i = 0; i < m; i++) {
+        if (row_sol[i] == RALPH_LAP_UNASSIGNED) {
+            unassigned_workers++;
+        }
+    }
+    ASSERT(unassigned_workers == 2, "Exactly 2 workers unassigned");
+
+    printf("  Assignment: ");
+    for (int i = 0; i < m; i++) {
+        if (row_sol[i] >= 0) {
+            printf("W%d->J%d ", i, row_sol[i]);
+        }
+    }
+    printf("\n  Unassigned workers: ");
+    for (int i = 0; i < m; i++) {
+        if (row_sol[i] < 0) printf("W%d ", i);
+    }
+    printf("\n  Total cost: %.2f\n", total_cost);
+
+    /* Optimal should be: W1->J0(3), W4->J1(2), W2->J2(1) = 6 */
+    ASSERT(fabs(total_cost - 6.0) < TOLERANCE, "Optimal cost is 6");
+}
+
+/* ============================================================================
+ * Test 23: Rectangular LAP maximization
+ * ============================================================================ */
+static void test_rect_maximize(void) {
+    printf("\n=== Test: Rectangular LAP Maximization ===\n");
+
+    /* 2 workers, 4 jobs - maximize */
+    int m = 2, n = 4;
+    double cost[] = {
+        10, 5, 8, 3,
+        7, 12, 4, 9
+    };
+
+    int row_sol[2];
+    double total_cost;
+
+    RalphLapStatus status = ralph_lap_solve_rect(m, n, cost, RALPH_LAP_MAXIMIZE,
+                                                  row_sol, NULL, &total_cost);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Maximize succeeded");
+    ASSERT(row_sol[0] != row_sol[1], "Different jobs assigned");
+
+    printf("  Assignment: W0->J%d, W1->J%d\n", row_sol[0], row_sol[1]);
+    printf("  Total cost: %.2f\n", total_cost);
+
+    /* Optimal should be: W0->J0(10), W1->J1(12) = 22 */
+    ASSERT(fabs(total_cost - 22.0) < TOLERANCE, "Optimal cost is 22");
+}
+
+/* ============================================================================
+ * Test 24: Parallel setting
  * ============================================================================ */
 static void test_parallel_setting(void) {
     printf("\n=== Test: Parallel Setting ===\n");
@@ -834,6 +983,9 @@ int main(void) {
     test_random_instances();
     test_status_string();
     test_workspace();
+    test_rect_more_jobs();
+    test_rect_more_workers();
+    test_rect_maximize();
     test_parallel_setting();
     test_workspace_repeated();
 

@@ -149,6 +149,42 @@ RalphLapStatus ralph_lap_solve_with_workspace(
 );
 
 /* ============================================================================
+ * Rectangular LAP Solver
+ * ============================================================================ */
+
+/*
+ * Solve rectangular Linear Assignment Problem (m workers, n jobs).
+ *
+ * Handles non-square assignment problems:
+ * - m < n: All workers assigned, some jobs unassigned
+ * - m > n: All jobs assigned, some workers unassigned
+ * - m == n: Equivalent to ralph_lap_solve()
+ *
+ * Parameters:
+ *   m          - Number of rows (workers)
+ *   n          - Number of columns (jobs)
+ *   cost       - Cost matrix in row-major order, size m x n
+ *   objective  - RALPH_LAP_MINIMIZE or RALPH_LAP_MAXIMIZE
+ *   row_sol    - Output: row_sol[i] = column assigned to row i, or -1 if unassigned
+ *   col_sol    - Output: col_sol[j] = row assigned to column j, or -1 if unassigned (can be NULL)
+ *   total_cost - Output: total assignment cost (can be NULL)
+ *
+ * Returns:
+ *   RALPH_LAP_SUCCESS on success, error code otherwise.
+ *
+ * Time complexity: O(max(m,n)^3)
+ */
+RalphLapStatus ralph_lap_solve_rect(
+    int m,
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *total_cost
+);
+
+/* ============================================================================
  * Sparse LAP Solver
  * ============================================================================ */
 
