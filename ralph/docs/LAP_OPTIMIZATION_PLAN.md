@@ -398,13 +398,13 @@ void bench_phase1_parallel(int n, int trials);
 - Thread overhead causes variance for medium problems - disabled for n < 5000
 - Test count at Phase C completion: 81 LAP tests + 65 Ralph tests
 
-### Phase D (Partially Completed)
+### Phase D (Completed)
 - [x] Sparse-native JVC implementation
 - [x] SIMD optimizations for sparse solver
 - [x] Sparse vs dense benchmarks
 - [x] Maximization support for all LAP variants (dense, rect, sparse)
 - [x] INFINITY handling fix for maximization with forbidden edges
-- [ ] ε-scaling auction for guaranteed convergence
+- [x] ε-scaling auction for tie-breaking convergence
 - [ ] AVX-512 intrinsics for critical loops (if needed)
 
 **Sparse Implementation Details (2026-01-29):**
@@ -413,7 +413,15 @@ void bench_phase1_parallel(int n, int trials);
 - SIMD pragmas in initialization loops and minimum-finding
 - Benchmarks: 1.2-1.6x speedup at low densities vs dense conversion
 
+**ε-Scaling Auction (2026-01-29):**
+- Optional feature enabled via `ralph_lap_set_epsilon_scaling(1)`
+- Adds small epsilon to Phase 3 price adjustments for tie-breaking
+- Epsilon = max_cost / (n² * factor) where factor defaults to 4.0
+- Helps convergence on degenerate problems with many tied costs
+- Does not affect optimality (Phase 4 Dijkstra still guarantees optimal)
+- API: `ralph_lap_set_epsilon_scaling()`, `ralph_lap_set_epsilon_factor()`
+
 **Test Coverage:**
-- Total LAP tests: 109 (100% passing)
+- Total LAP tests: 123 (100% passing)
 - Total Ralph tests: 65 (100% passing)
-- Tests cover: dense, rectangular, sparse, minimization, maximization, infeasibility
+- Tests cover: dense, rectangular, sparse, minimization, maximization, infeasibility, epsilon scaling
