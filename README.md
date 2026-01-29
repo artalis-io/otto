@@ -1,10 +1,12 @@
-# FuelWise Platform
+# OTTO
 
-**Intelligent Truck Refueling & Route Optimization**
+**O**ptimization for **T**rucking and **T**ransport **O**perations
 
-A complete platform for truck fleet optimization, combining route planning, fuel cost minimization, and custom map rendering. Built entirely in C with zero external dependencies, designed for native and WebAssembly deployment.
+A comprehensive trucking and logistics optimization platform, combining route planning, fuel cost minimization, Hours of Service compliance, fleet scheduling, and custom map rendering. Built entirely in C with zero external dependencies, designed for native and WebAssembly deployment.
 
 ## Platform Components
+
+### Core Engines (Active)
 
 | Component | Location | Description |
 |-----------|----------|-------------|
@@ -13,6 +15,21 @@ A complete platform for truck fleet optimization, combining route planning, fuel
 | [**Carta**](carta/) | `carta/` | Map tile generator (MVT vector tiles, PNG raster) |
 | [**FuelWise**](fuelwise/) | `fuelwise/` | Refueling optimization library |
 | [**Shared**](shared/) | `shared/` | Common geo utilities |
+
+### Planned Engines
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| **HoSE** | `hose/` | **H**ours **o**f **S**ervice **E**ngine - FMCSA/EC561 compliance |
+| **Tempo** | `tempo/` | **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator |
+| **Arbor** | `arbor/` | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
+| **Sigma** | `sigma/` | **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation |
+| **Pulse** | `pulse/` | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
+
+### Applications
+
+| Component | Location | Description |
+|-----------|----------|-------------|
 | FuelWise API | `fuelwise/api/` | REST API server for refueling optimization |
 | Route Server | `velo/api/` | REST API server for routing |
 | Tile Server | `carta/api/` | REST API server for map tiles |
@@ -26,12 +43,12 @@ A complete platform for truck fleet optimization, combining route planning, fuel
 
 ```bash
 # Full platform (UI + API)
-docker build -t fuelwise .
-docker run -p 80:80 -p 8080:8080 fuelwise
+docker build -t otto .
+docker run -p 80:80 -p 8080:8080 otto
 
 # API only
-docker build --target api-only -t fuelwise-api .
-docker run -p 8080:8080 fuelwise-api
+docker build --target api-only -t otto-api .
+docker run -p 8080:8080 otto-api
 
 # Multi-service with Docker Compose
 docker-compose up                       # Full platform
@@ -64,7 +81,7 @@ cd fuelwise/ui && npm install && npm run dev
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         FuelWise Platform                               │
+│                              OTTO Platform                              │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                   │
@@ -72,6 +89,15 @@ cd fuelwise/ui && npm install && npm run dev
 │  │  (Leaflet)  │   │  (Browser)  │   │ (mongoose)  │                   │
 │  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘                   │
 │         └─────────────────┼─────────────────┘                          │
+│                           │                                             │
+│  ┌────────────────────────┴────────────────────────────────────────┐   │
+│  │                 Fleet Optimization (Planned)                     │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐        │   │
+│  │  │   HoSE   │  │  Tempo   │  │  Arbor   │  │  Sigma   │  Pulse │   │
+│  │  │   HoS    │  │  Time    │  │  Search  │  │  Fleet   │  PTA   │   │
+│  │  │  Rules   │  │ Windows  │  │  Tree    │  │ Planning │  Track │   │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘        │   │
+│  └────────────────────────────────────────────────────────────────┘   │
 │                           │                                             │
 │  ┌────────────────────────┴────────────────────────────────────────┐   │
 │  │                         Domain Libraries                         │   │
@@ -103,7 +129,7 @@ cd fuelwise/ui && npm install && npm run dev
 ## Project Structure
 
 ```
-fuelwise-platform/
+otto/
 ├── ralph/              # LP/MIP Solver (libralph.a)
 │   ├── src/            #   Simplex, LU factorization, Branch & Bound
 │   ├── tests/          #   Solver tests + debug utilities
@@ -124,6 +150,11 @@ fuelwise-platform/
 │   ├── tests/          #   Domain tests + artifacts
 │   └── docs/           #   API documentation
 ├── shared/             # Shared Utilities (libshared.a)
+├── hose/               # [Planned] Hours of Service Engine
+├── tempo/              # [Planned] Business Rules Engine
+├── arbor/              # [Planned] State-Space Search Engine
+├── sigma/              # [Planned] Fleet Plan Selection Engine
+├── pulse/              # [Planned] Execution Tracker / PTA Engine
 ├── vendor/             # Third-party libraries
 │   ├── mongoose/       #   HTTP server
 │   ├── miniz/          #   zlib compression
@@ -315,6 +346,17 @@ Mark Farkas - 2025
 
 ---
 
-**Ralph** - **R**obust **A**I **L**inear **P**rogramming **H**elper
-**Velo** - **V**ery **E**fficient **L**ocation **O**ptimizer
-**Carta** - **C**ompact **A**gile **R**endering for **T**ile **A**rchives
+**OTTO** - **O**ptimization for **T**rucking and **T**ransport **O**perations
+
+### Component Backronyms
+
+| Component | Backronym |
+|-----------|-----------|
+| **Ralph** | **R**obust **A**I **L**inear **P**rogramming **H**elper |
+| **Velo** | **V**ery **E**fficient **L**ocation **O**ptimizer |
+| **Carta** | **C**ompact **A**gile **R**endering for **T**ile **A**rchives |
+| **HoSE** | **H**ours **o**f **S**ervice **E**ngine |
+| **Tempo** | **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator |
+| **Arbor** | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
+| **Sigma** | **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation |
+| **Pulse** | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
