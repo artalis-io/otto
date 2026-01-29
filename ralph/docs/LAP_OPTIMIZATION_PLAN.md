@@ -396,9 +396,24 @@ void bench_phase1_parallel(int n, int trials);
 - SIMD provides consistent benefit for n >= 100
 - OpenMP threading only beneficial for very large problems (n >= 5000)
 - Thread overhead causes variance for medium problems - disabled for n < 5000
-- Total test count: 81 LAP tests + 65 Ralph tests (100% passing)
+- Test count at Phase C completion: 81 LAP tests + 65 Ralph tests
 
-### Phase D (Future)
+### Phase D (Partially Completed)
+- [x] Sparse-native JVC implementation
+- [x] SIMD optimizations for sparse solver
+- [x] Sparse vs dense benchmarks
+- [x] Maximization support for all LAP variants (dense, rect, sparse)
+- [x] INFINITY handling fix for maximization with forbidden edges
 - [ ] ε-scaling auction for guaranteed convergence
-- [ ] Sparse-native JVC implementation
 - [ ] AVX-512 intrinsics for critical loops (if needed)
+
+**Sparse Implementation Details (2026-01-29):**
+- Native sparse JVC for density < 30%, dense fallback for higher density
+- Three-state Dijkstra (not reached/in queue/finalized) for correct infeasibility detection
+- SIMD pragmas in initialization loops and minimum-finding
+- Benchmarks: 1.2-1.6x speedup at low densities vs dense conversion
+
+**Test Coverage:**
+- Total LAP tests: 109 (100% passing)
+- Total Ralph tests: 65 (100% passing)
+- Tests cover: dense, rectangular, sparse, minimization, maximization, infeasibility
