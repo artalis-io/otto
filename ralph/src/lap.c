@@ -324,11 +324,15 @@ static RalphLapStatus lap_solve_internal(
         col_assign[i] = RALPH_LAP_UNASSIGNED;
     }
 
-    /* Copy cost matrix, negate if maximizing (parallelized) */
+    /* Copy cost matrix, negate if maximizing
+     * IMPORTANT: Preserve INFINITY values so forbidden edges stay forbidden */
     if (objective == RALPH_LAP_MAXIMIZE) {
-        #pragma omp parallel for simd if(n > 100)
         for (i = 0; i < n * n; i++) {
-            work_cost[i] = -cost[i];
+            if (is_infinite(cost[i])) {
+                work_cost[i] = RALPH_LAP_INFINITY;
+            } else {
+                work_cost[i] = -cost[i];
+            }
         }
     } else {
         memcpy(work_cost, cost, n * n * sizeof(double));
@@ -1122,15 +1126,17 @@ RalphLapStatus ralph_lap_solve_sparse(
         goto sparse_cleanup;
     }
 
-    /* Initialize assignments */
+    /* Initialize assignments (SIMD-friendly) */
+    #pragma omp simd
     for (i = 0; i < n; i++) {
         row_assign[i] = RALPH_LAP_UNASSIGNED;
         col_assign[i] = RALPH_LAP_UNASSIGNED;
         dist[i] = RALPH_LAP_INFINITY;
     }
 
-    /* Copy values, negate if maximizing */
+    /* Copy values, negate if maximizing (SIMD-friendly) */
     if (objective == RALPH_LAP_MAXIMIZE) {
+        #pragma omp simd
         for (k = 0; k < nnz; k++) {
             work_values[k] = -values[k];
         }
@@ -1146,6 +1152,7 @@ RalphLapStatus ralph_lap_solve_sparse(
 
     /* First pass: find minimum cost edge to each column and track which row */
     int *col_min_row = pred;  /* Reuse pred array: col_min_row[j] = row with min cost to j */
+    #pragma omp simd
     for (j = 0; j < n; j++) {
         col_min_row[j] = -1;
     }
@@ -1315,7 +1322,8 @@ RalphLapStatus ralph_lap_solve_sparse(
     for (int f = 0; f < num_free; f++) {
         int free_row = free_rows[f];
 
-        /* Initialize distances from free_row's edges */
+        /* Initialize distances from free_row's edges (SIMD-friendly) */
+        #pragma omp simd
         for (j = 0; j < n; j++) {
             dist[j] = RALPH_LAP_INFINITY;
             pred[j] = -1;
@@ -1337,14 +1345,23 @@ RalphLapStatus ralph_lap_solve_sparse(
          * in_queue states: 0 = not reached, 1 = in queue, 2 = finalized (scanned)
          */
         while (end_col < 0) {
-            /* Find minimum distance column among those in queue */
+            /* Find minimum distance column among those in queue
+             * Two-pass approach for SIMD: first find min, then find index */
             min_dist = RALPH_LAP_INFINITY;
             int min_col = -1;
 
+            /* Pass 1: Find minimum distance using SIMD reduction */
+            #pragma omp simd reduction(min:min_dist)
             for (j = 0; j < n; j++) {
-                if (in_queue[j] == 1 && dist[j] < min_dist) {
-                    min_dist = dist[j];
+                double d = (in_queue[j] == 1) ? dist[j] : RALPH_LAP_INFINITY;
+                if (d < min_dist) min_dist = d;
+            }
+
+            /* Pass 2: Find column with that minimum distance */
+            for (j = 0; j < n; j++) {
+                if (in_queue[j] == 1 && dist[j] <= min_dist + RALPH_LAP_TOLERANCE) {
                     min_col = j;
+                    break;
                 }
             }
 
@@ -1389,7 +1406,8 @@ RalphLapStatus ralph_lap_solve_sparse(
             }
         }
 
-        /* Update column prices */
+        /* Update column prices for scanned columns */
+        /* Note: Can't easily SIMD this due to indirect indexing via scanned[] */
         for (k = 0; k < num_scanned; k++) {
             j = scanned[k];
             col_price[j] += dist[j] - min_dist;

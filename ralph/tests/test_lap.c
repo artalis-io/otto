@@ -953,7 +953,76 @@ static void test_sparse_native(void) {
 }
 
 /* ============================================================================
- * Test 25: Sparse LAP - infeasible (no perfect matching)
+ * Test 25: Sparse LAP - maximization
+ * ============================================================================ */
+static void test_sparse_maximize(void) {
+    printf("\n=== Test: Sparse LAP (Maximization) ===\n");
+
+    /* Same sparse problem as test_sparse but with maximization */
+    int n = 4;
+    int row_ptr[] = {0, 2, 4, 6, 8};
+    int col_idx[] = {0, 1, 1, 2, 2, 3, 0, 3};
+    double values[] = {5, 3, 2, 4, 1, 6, 7, 2};
+
+    int row_sol[4];
+    double total_cost;
+
+    /* Solve with maximization */
+    RalphLapStatus status = ralph_lap_solve_sparse(n, 8, row_ptr, col_idx, values,
+                                                   RALPH_LAP_MAXIMIZE,
+                                                   row_sol, NULL, &total_cost);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Sparse maximize succeeded");
+
+    /* Verify assignment uses only allowed edges */
+    int valid = 1;
+    for (int i = 0; i < n && valid; i++) {
+        int j = row_sol[i];
+        int found = 0;
+        for (int k = row_ptr[i]; k < row_ptr[i+1]; k++) {
+            if (col_idx[k] == j) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) valid = 0;
+    }
+    ASSERT(valid, "Assignment uses only allowed edges");
+
+    /* Compute cost manually to verify */
+    double manual_cost = 0;
+    for (int i = 0; i < n; i++) {
+        int j = row_sol[i];
+        for (int k = row_ptr[i]; k < row_ptr[i+1]; k++) {
+            if (col_idx[k] == j) {
+                manual_cost += values[k];
+                break;
+            }
+        }
+    }
+    ASSERT_NEAR(total_cost, manual_cost, TOLERANCE, "Cost computed correctly");
+
+    /* Compare with dense maximization */
+    double dense_cost[16];
+    for (int i = 0; i < 16; i++) dense_cost[i] = -RALPH_LAP_INFINITY;  /* Use negative infinity for maximize */
+    for (int i = 0; i < n; i++) {
+        for (int k = row_ptr[i]; k < row_ptr[i+1]; k++) {
+            dense_cost[i * n + col_idx[k]] = values[k];
+        }
+    }
+
+    int dense_sol[4];
+    double dense_total;
+    ralph_lap_solve(n, dense_cost, RALPH_LAP_MAXIMIZE, dense_sol, NULL, NULL, NULL, &dense_total);
+
+    ASSERT_NEAR(total_cost, dense_total, TOLERANCE, "Sparse maximize matches dense maximize");
+
+    print_assignment(n, row_sol);
+    printf("  Total cost (max): %.2f\n", total_cost);
+}
+
+/* ============================================================================
+ * Test 26: Sparse LAP - infeasible (no perfect matching)
  * ============================================================================ */
 static void test_sparse_infeasible(void) {
     printf("\n=== Test: Sparse LAP (Infeasible) ===\n");
@@ -1197,6 +1266,7 @@ int main(void) {
     test_rect_more_workers();
     test_rect_maximize();
     test_sparse_native();
+    test_sparse_maximize();
     test_sparse_infeasible();
     test_sparse_vs_dense();
     test_parallel_setting();
