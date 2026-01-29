@@ -48,6 +48,9 @@ typedef enum {
     RALPH_LAP_MEMORY_ERROR = 3     /* Memory allocation failed */
 } RalphLapStatus;
 
+/* Forward declaration for workspace (opaque type) */
+typedef struct RalphLapWorkspace RalphLapWorkspace;
+
 /* Optimization direction */
 typedef enum {
     RALPH_LAP_MINIMIZE = 0,
@@ -90,6 +93,59 @@ RalphLapStatus ralph_lap_solve(
     double *u,
     double *v,
     double *total_cost
+);
+
+/* ============================================================================
+ * Workspace API (for repeated solves)
+ * ============================================================================ */
+
+/*
+ * Create a reusable workspace for LAP solving.
+ *
+ * The workspace pre-allocates all working arrays for problems up to max_n.
+ * This amortizes allocation overhead when solving multiple LAP instances.
+ *
+ * Parameters:
+ *   max_n - Maximum problem dimension this workspace can handle
+ *
+ * Returns:
+ *   Pointer to workspace, or NULL on allocation failure.
+ */
+RalphLapWorkspace* ralph_lap_workspace_create(int max_n);
+
+/*
+ * Free a workspace and all its memory.
+ */
+void ralph_lap_workspace_free(RalphLapWorkspace *ws);
+
+/*
+ * Get the maximum dimension this workspace supports.
+ */
+int ralph_lap_workspace_max_n(const RalphLapWorkspace *ws);
+
+/*
+ * Solve LAP using a pre-allocated workspace.
+ *
+ * Identical to ralph_lap_solve() but uses provided workspace instead of
+ * allocating new arrays. This is faster for repeated solves.
+ *
+ * Parameters:
+ *   n, cost, objective, row_sol, col_sol, u, v, total_cost - See ralph_lap_solve()
+ *   ws - Pre-allocated workspace (must have max_n >= n)
+ *
+ * Returns:
+ *   RALPH_LAP_SUCCESS on success, RALPH_LAP_INVALID_INPUT if n > ws->max_n.
+ */
+RalphLapStatus ralph_lap_solve_with_workspace(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
+    double *total_cost,
+    RalphLapWorkspace *ws
 );
 
 /* ============================================================================
@@ -184,6 +240,29 @@ RalphLapStatus ralph_lap_solve_lp(
  * Get status string for error reporting.
  */
 const char* ralph_lap_status_string(RalphLapStatus status);
+
+/* ============================================================================
+ * Runtime Configuration
+ * ============================================================================ */
+
+/*
+ * Enable or disable OpenMP parallelization.
+ *
+ * When disabled, the solver uses only sequential code (no threading).
+ * SIMD vectorization hints are still used but don't require OpenMP runtime.
+ *
+ * Parameters:
+ *   enabled - 1 to enable parallelization (default), 0 to disable
+ */
+void ralph_lap_set_parallel(int enabled);
+
+/*
+ * Check if parallelization is enabled.
+ *
+ * Returns:
+ *   1 if enabled, 0 if disabled
+ */
+int ralph_lap_get_parallel(void);
 
 #ifdef __cplusplus
 }

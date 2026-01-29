@@ -29,6 +29,31 @@
 /* Memory alignment for SIMD (64 bytes = AVX-512 cache line) */
 #define LAP_ALIGNMENT 64
 
+/* Heap threshold: use heap-based Dijkstra for n >= this value
+ * The linear scan version is faster for smaller n due to:
+ * - Lower constant factors
+ * - Better cache utilization
+ * - Simultaneous processing of columns at same distance
+ * Heap is only beneficial for very large problems (n > 3000)
+ */
+#define LAP_HEAP_THRESHOLD 3000
+
+/* SIMD threshold: use SIMD optimization for n >= this value */
+#define LAP_SIMD_THRESHOLD 100
+
+/* Parallel threshold: use OpenMP threading for n >= this value
+ * Set very high to avoid parallel overhead - SIMD provides most benefit.
+ * OpenMP thread parallelism only helps for very large problems where
+ * thread creation/synchronization costs are amortized.
+ */
+#define LAP_PARALLEL_THRESHOLD 5000
+
+/* Block size for cache-friendly column processing */
+#define LAP_BLOCK_SIZE 64
+
+/* Global setting for parallelization (1 = enabled, 0 = disabled) */
+static int lap_parallel_enabled = 1;
+
 /* Aligned allocation helpers */
 static void* lap_aligned_alloc(size_t size) {
 #ifdef _WIN32
@@ -48,6 +73,185 @@ static void lap_aligned_free(void *ptr) {
 #else
     free(ptr);
 #endif
+}
+
+/* ============================================================================
+ * Workspace Structure (consolidated allocation)
+ * ============================================================================ */
+
+struct RalphLapWorkspace {
+    int max_n;              /* Maximum problem size */
+
+    /* Memory block (single allocation) */
+    void *memory_block;
+    size_t block_size;
+
+    /* Working arrays (pointers into memory_block) */
+    double *work_cost;      /* n×n working cost matrix */
+    double *col_price;      /* Column dual variables (v) */
+    double *row_price;      /* Row dual variables (u) */
+    double *dist;           /* Shortest path distances */
+    int *row_assign;        /* row_assign[i] = column assigned to row i */
+    int *col_assign;        /* col_assign[j] = row assigned to column j */
+    int *matches;           /* Number of times each row matches minimum */
+    int *free_rows;         /* List of unassigned rows (2n capacity) */
+    int *pred;              /* Predecessor row in augmenting path */
+    int *col_list;          /* Columns partitioned by state */
+    int *in_free_list;      /* Track which rows are in free list */
+
+    /* Heap for Dijkstra (Phase 4) */
+    int *heap;              /* Binary min-heap of column indices */
+    int *heap_pos;          /* heap_pos[j] = position of column j in heap (-1 if not in heap) */
+};
+
+/* ============================================================================
+ * Binary Heap for Dijkstra
+ * ============================================================================ */
+
+/* Swap two elements in heap and update positions */
+static inline void heap_swap(int *heap, int *heap_pos, int i, int j) {
+    int ci = heap[i];
+    int cj = heap[j];
+    heap[i] = cj;
+    heap[j] = ci;
+    heap_pos[ci] = j;
+    heap_pos[cj] = i;
+}
+
+/* Sift up element at index i */
+static inline void heap_sift_up(int *heap, int *heap_pos, const double *dist, int i) {
+    while (i > 0) {
+        int parent = (i - 1) / 2;
+        if (dist[heap[i]] < dist[heap[parent]]) {
+            heap_swap(heap, heap_pos, i, parent);
+            i = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+/* Sift down element at index i with heap size n */
+static inline void heap_sift_down(int *heap, int *heap_pos, const double *dist, int i, int n) {
+    while (1) {
+        int smallest = i;
+        int left = 2 * i + 1;
+        int right = 2 * i + 2;
+
+        if (left < n && dist[heap[left]] < dist[heap[smallest]]) {
+            smallest = left;
+        }
+        if (right < n && dist[heap[right]] < dist[heap[smallest]]) {
+            smallest = right;
+        }
+
+        if (smallest != i) {
+            heap_swap(heap, heap_pos, i, smallest);
+            i = smallest;
+        } else {
+            break;
+        }
+    }
+}
+
+/* Extract minimum from heap */
+static inline int heap_pop(int *heap, int *heap_pos, const double *dist, int *heap_size) {
+    int min_col = heap[0];
+    heap_pos[min_col] = -1;
+    (*heap_size)--;
+
+    if (*heap_size > 0) {
+        heap[0] = heap[*heap_size];
+        heap_pos[heap[0]] = 0;
+        heap_sift_down(heap, heap_pos, dist, 0, *heap_size);
+    }
+
+    return min_col;
+}
+
+/* Decrease key (update distance) for column in heap */
+static inline void heap_decrease_key(int *heap, int *heap_pos, const double *dist, int col) {
+    int pos = heap_pos[col];
+    if (pos >= 0) {
+        heap_sift_up(heap, heap_pos, dist, pos);
+    }
+}
+
+/* ============================================================================
+ * Workspace Management
+ * ============================================================================ */
+
+RalphLapWorkspace* ralph_lap_workspace_create(int max_n) {
+    if (max_n <= 0) {
+        return NULL;
+    }
+
+    RalphLapWorkspace *ws = (RalphLapWorkspace *)malloc(sizeof(RalphLapWorkspace));
+    if (!ws) {
+        return NULL;
+    }
+
+    ws->max_n = max_n;
+
+    /* Calculate total memory needed with alignment padding */
+    size_t n = (size_t)max_n;
+    size_t n2 = n * n;
+
+    /* Calculate sizes with alignment for each array */
+    size_t work_cost_size = ((n2 * sizeof(double) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t col_price_size = ((n * sizeof(double) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t row_price_size = ((n * sizeof(double) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t dist_size = ((n * sizeof(double) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t row_assign_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t col_assign_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t matches_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t free_rows_size = ((2 * n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t pred_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t col_list_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t in_free_list_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t heap_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+    size_t heap_pos_size = ((n * sizeof(int) + LAP_ALIGNMENT - 1) / LAP_ALIGNMENT) * LAP_ALIGNMENT;
+
+    ws->block_size = work_cost_size + col_price_size + row_price_size + dist_size +
+                     row_assign_size + col_assign_size + matches_size + free_rows_size +
+                     pred_size + col_list_size + in_free_list_size + heap_size + heap_pos_size;
+
+    /* Allocate single aligned block */
+    ws->memory_block = lap_aligned_alloc(ws->block_size);
+    if (!ws->memory_block) {
+        free(ws);
+        return NULL;
+    }
+
+    /* Set up pointers into the block */
+    char *ptr = (char *)ws->memory_block;
+
+    ws->work_cost = (double *)ptr; ptr += work_cost_size;
+    ws->col_price = (double *)ptr; ptr += col_price_size;
+    ws->row_price = (double *)ptr; ptr += row_price_size;
+    ws->dist = (double *)ptr; ptr += dist_size;
+    ws->row_assign = (int *)ptr; ptr += row_assign_size;
+    ws->col_assign = (int *)ptr; ptr += col_assign_size;
+    ws->matches = (int *)ptr; ptr += matches_size;
+    ws->free_rows = (int *)ptr; ptr += free_rows_size;
+    ws->pred = (int *)ptr; ptr += pred_size;
+    ws->col_list = (int *)ptr; ptr += col_list_size;
+    ws->in_free_list = (int *)ptr; ptr += in_free_list_size;
+    ws->heap = (int *)ptr; ptr += heap_size;
+    ws->heap_pos = (int *)ptr;
+
+    return ws;
+}
+
+void ralph_lap_workspace_free(RalphLapWorkspace *ws) {
+    if (ws) {
+        lap_aligned_free(ws->memory_block);
+        free(ws);
+    }
+}
+
+int ralph_lap_workspace_max_n(const RalphLapWorkspace *ws) {
+    return ws ? ws->max_n : 0;
 }
 
 /* ============================================================================
@@ -72,10 +276,11 @@ static inline int approx_less_or_equal(double a, double b) {
 }
 
 /* ============================================================================
- * JVC Algorithm Implementation
+ * JVC Algorithm Implementation (Internal)
  * ============================================================================ */
 
-RalphLapStatus ralph_lap_solve(
+/* Internal solver that works with a workspace */
+static RalphLapStatus lap_solve_internal(
     int n,
     const double *cost,
     RalphLapObjective objective,
@@ -83,60 +288,35 @@ RalphLapStatus ralph_lap_solve(
     int *col_sol,
     double *u,
     double *v,
-    double *total_cost
+    double *total_cost,
+    RalphLapWorkspace *ws
 ) {
-    if (n <= 0 || cost == NULL || row_sol == NULL) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    /* Handle trivial case */
-    if (n == 1) {
-        row_sol[0] = 0;
-        if (col_sol) col_sol[0] = 0;
-        if (u) u[0] = COST(0, 0);
-        if (v) v[0] = 0.0;
-        if (total_cost) *total_cost = COST(0, 0);
-        return RALPH_LAP_SUCCESS;
-    }
-
-    /* Allocate working arrays */
-    double *work_cost = NULL;   /* Working cost matrix (possibly negated) */
-    double *col_price = NULL;   /* Column dual variables (v) */
-    double *row_price = NULL;   /* Row dual variables (u) */
-    int *row_assign = NULL;     /* row_assign[i] = column assigned to row i */
-    int *col_assign = NULL;     /* col_assign[j] = row assigned to column j */
-    int *matches = NULL;        /* Number of times each row matches minimum */
-    int *free_rows = NULL;      /* List of unassigned rows */
-    double *dist = NULL;        /* Shortest path distances */
-    int *pred = NULL;           /* Predecessor row in augmenting path */
-    int *col_list = NULL;       /* Columns partitioned by state */
-    int *in_free_list = NULL;   /* Track which rows are in free list */
-
-    RalphLapStatus status = RALPH_LAP_SUCCESS;
     int i, j, k;
+    RalphLapStatus status = RALPH_LAP_SUCCESS;
 
-    /* Allocate memory with alignment for SIMD */
-    work_cost = (double *)lap_aligned_alloc(n * n * sizeof(double));
-    col_price = (double *)lap_aligned_alloc(n * sizeof(double));
-    row_price = (double *)lap_aligned_alloc(n * sizeof(double));
-    dist = (double *)lap_aligned_alloc(n * sizeof(double));
-    row_assign = (int *)malloc(n * sizeof(int));
-    col_assign = (int *)malloc(n * sizeof(int));
-    matches = (int *)calloc(n, sizeof(int));
-    free_rows = (int *)malloc(2 * n * sizeof(int));  /* Extra space for auction phase */
-    pred = (int *)malloc(n * sizeof(int));
-    col_list = (int *)malloc(n * sizeof(int));
-    in_free_list = (int *)calloc(n, sizeof(int));
+    /* Get working arrays from workspace */
+    double *work_cost = ws->work_cost;
+    double *col_price = ws->col_price;
+    double *row_price = ws->row_price;
+    double *dist = ws->dist;
+    int *row_assign = ws->row_assign;
+    int *col_assign = ws->col_assign;
+    int *matches = ws->matches;
+    int *free_rows = ws->free_rows;
+    int *pred = ws->pred;
+    int *col_list = ws->col_list;
+    int *in_free_list = ws->in_free_list;
+    int *heap = ws->heap;
+    int *heap_pos = ws->heap_pos;
 
-    if (!work_cost || !col_price || !row_price || !row_assign || !col_assign ||
-        !matches || !free_rows || !dist || !pred || !col_list || !in_free_list) {
-        status = RALPH_LAP_MEMORY_ERROR;
-        goto cleanup;
-    }
+    /* Use heap for large problems */
+    int use_heap = (n >= LAP_HEAP_THRESHOLD);
 
-    /* Zero-initialize aligned arrays */
+    /* Zero-initialize arrays */
     memset(col_price, 0, n * sizeof(double));
     memset(row_price, 0, n * sizeof(double));
+    memset(matches, 0, n * sizeof(int));
+    memset(in_free_list, 0, n * sizeof(int));
 
     /* Initialize assignments to unassigned */
     for (i = 0; i < n; i++) {
@@ -159,35 +339,65 @@ RalphLapStatus ralph_lap_solve(
      * For each column, find minimum cost and use as column price.
      * Assign column to row with minimum cost if not already assigned.
      *
-     * Cache-optimized: Process rows sequentially (row-major access),
-     * track minimum and min_row for each column.
+     * Optimization strategies:
+     * - Small n: Row-major sequential scan (cache-friendly)
+     * - Large n: Parallel column blocks with OpenMP
      * ======================================================================== */
 
     /* Temporary arrays to track min value and row per column */
     int *col_min_row = pred;  /* Reuse pred array temporarily */
 
-    /* Initialize with first row */
-    #pragma omp simd
-    for (j = 0; j < n; j++) {
-        col_price[j] = work_cost[j];
-        col_min_row[j] = 0;
-    }
+    int use_parallel = lap_parallel_enabled && (n >= LAP_PARALLEL_THRESHOLD);
+    int use_simd = (n >= LAP_SIMD_THRESHOLD);
 
-    /* Process remaining rows with cache-friendly row-major access
-     * Note: Can't easily parallelize across rows due to col_price/col_min_row updates.
-     * Instead, for large n, we can parallelize the inner loop. */
-    for (i = 1; i < n; i++) {
-        const double *row_costs = &work_cost[i * n];
-        /* SIMD vectorization of the comparison/update */
+    if (use_parallel) {
+        /* Parallel version: process column blocks independently */
+        #pragma omp parallel
+        {
+            #pragma omp for schedule(static)
+            for (int jb = 0; jb < n; jb += LAP_BLOCK_SIZE) {
+                int j_end = (jb + LAP_BLOCK_SIZE < n) ? jb + LAP_BLOCK_SIZE : n;
+
+                /* Initialize block with first row */
+                for (int jj = jb; jj < j_end; jj++) {
+                    col_price[jj] = work_cost[jj];
+                    col_min_row[jj] = 0;
+                }
+
+                /* Process all rows for this column block */
+                for (int ii = 1; ii < n; ii++) {
+                    const double *row_costs = &work_cost[ii * n];
+                    for (int jj = jb; jj < j_end; jj++) {
+                        if (row_costs[jj] < col_price[jj]) {
+                            col_price[jj] = row_costs[jj];
+                            col_min_row[jj] = ii;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        /* Sequential version: row-major access (cache-friendly for small n) */
+        /* Initialize with first row */
+        #pragma omp simd
         for (j = 0; j < n; j++) {
-            if (row_costs[j] < col_price[j]) {
-                col_price[j] = row_costs[j];
-                col_min_row[j] = i;
+            col_price[j] = work_cost[j];
+            col_min_row[j] = 0;
+        }
+
+        /* Process remaining rows */
+        for (i = 1; i < n; i++) {
+            const double *row_costs = &work_cost[i * n];
+            for (j = 0; j < n; j++) {
+                if (row_costs[j] < col_price[j]) {
+                    col_price[j] = row_costs[j];
+                    col_min_row[j] = i;
+                }
             }
         }
     }
 
-    /* Now process columns in reverse order to assign (as before) */
+    /* Process columns in reverse order to assign (sequential - has dependencies) */
     for (j = n - 1; j >= 0; j--) {
         int min_row = col_min_row[j];
         matches[min_row]++;
@@ -215,39 +425,83 @@ RalphLapStatus ralph_lap_solve(
      * PHASE 2: Reduction Transfer
      * For rows matched exactly once, compute the gap to the second-best
      * column and use it to improve column prices.
+     *
+     * Parallelization: Each row's reduction computation is independent.
+     * Column price updates don't conflict (each singly-matched row has unique j1).
+     * Free list building done separately to avoid synchronization.
      * ======================================================================== */
     int num_free = 0;
 
-    for (i = 0; i < n; i++) {
-        if (matches[i] == 0) {
-            /* Row not matched - add to free list */
-            free_rows[num_free++] = i;
-            in_free_list[i] = 1;
-        } else if (matches[i] == 1) {
-            /* Row matched exactly once - transfer reduction */
-            int j1 = row_assign[i];
-            double min_reduced = DBL_MAX;
-            const double *row_costs = &work_cost[i * n];
+    if (use_parallel && n >= LAP_PARALLEL_THRESHOLD) {
+        /* Parallel version: compute reductions in parallel */
+        /* First, compute all reductions (no dependencies between rows) */
+        #pragma omp parallel for schedule(static)
+        for (int ii = 0; ii < n; ii++) {
+            if (matches[ii] == 1) {
+                int j1 = row_assign[ii];
+                double min_reduced = DBL_MAX;
+                const double *row_costs = &work_cost[ii * n];
 
-            /* Find minimum reduced cost for columns other than j1 */
-            for (j = 0; j < n; j++) {
-                if (j != j1) {
-                    double reduced = row_costs[j] - col_price[j];
-                    if (reduced < min_reduced) {
-                        min_reduced = reduced;
+                /* Find minimum reduced cost for columns other than j1 */
+                for (int jj = 0; jj < n; jj++) {
+                    if (jj != j1) {
+                        double reduced = row_costs[jj] - col_price[jj];
+                        if (reduced < min_reduced) {
+                            min_reduced = reduced;
+                        }
                     }
                 }
-            }
 
-            /* Reduce column price by the gap */
-            col_price[j1] -= min_reduced;
+                /* Each singly-matched row has unique j1, so no race */
+                col_price[j1] -= min_reduced;
+            }
+        }
+
+        /* Build free list sequentially (fast, just counting) */
+        for (i = 0; i < n; i++) {
+            if (matches[i] == 0) {
+                free_rows[num_free++] = i;
+                in_free_list[i] = 1;
+            }
+        }
+    } else {
+        /* Sequential version */
+        for (i = 0; i < n; i++) {
+            if (matches[i] == 0) {
+                /* Row not matched - add to free list */
+                free_rows[num_free++] = i;
+                in_free_list[i] = 1;
+            } else if (matches[i] == 1) {
+                /* Row matched exactly once - transfer reduction */
+                int j1 = row_assign[i];
+                double min_reduced = DBL_MAX;
+                const double *row_costs = &work_cost[i * n];
+
+                /* Find minimum reduced cost for columns other than j1 */
+                for (j = 0; j < n; j++) {
+                    if (j != j1) {
+                        double reduced = row_costs[j] - col_price[j];
+                        if (reduced < min_reduced) {
+                            min_reduced = reduced;
+                        }
+                    }
+                }
+
+                /* Reduce column price by the gap */
+                col_price[j1] -= min_reduced;
+            }
         }
     }
 
     /* ========================================================================
      * PHASE 3: Augmenting Row Reduction (Auction Phase)
      * Run twice for better convergence.
+     *
+     * For large n, we pre-compute reduced costs into dist[] array, then
+     * use SIMD to find minimum. This trades memory bandwidth for SIMD gains.
      * ======================================================================== */
+    int use_simd_auction = use_simd;
+
     for (int loop = 0; loop < 2 && num_free > 0; loop++) {
         int k_free = 0;
         int max_iter = n * n;  /* Limit iterations to prevent infinite loops */
@@ -264,17 +518,44 @@ RalphLapStatus ralph_lap_solve(
             int j1 = -1, j2 = -1;
             const double *row_costs = &work_cost[i * n];
 
-            /* Single pass to find both min and second-min */
-            for (j = 0; j < n; j++) {
-                double reduced = row_costs[j] - col_price[j];
-                if (reduced < u1) {
-                    u2 = u1;
-                    j2 = j1;
-                    u1 = reduced;
-                    j1 = j;
-                } else if (reduced < u2) {
-                    u2 = reduced;
-                    j2 = j;
+            if (use_simd_auction) {
+                /* SIMD-friendly approach: compute all reduced costs first */
+                #pragma omp simd
+                for (j = 0; j < n; j++) {
+                    dist[j] = row_costs[j] - col_price[j];
+                }
+
+                /* Find minimum using SIMD reduction */
+                double vmin = dist[0];
+                #pragma omp simd reduction(min:vmin)
+                for (j = 1; j < n; j++) {
+                    if (dist[j] < vmin) vmin = dist[j];
+                }
+
+                /* Find index of minimum and second minimum */
+                for (j = 0; j < n; j++) {
+                    double v = dist[j];
+                    if (v <= vmin + RALPH_LAP_TOLERANCE && j1 < 0) {
+                        u1 = v;
+                        j1 = j;
+                    } else if (v < u2) {
+                        u2 = v;
+                        j2 = j;
+                    }
+                }
+            } else {
+                /* Single pass to find both min and second-min (better for small n) */
+                for (j = 0; j < n; j++) {
+                    double reduced = row_costs[j] - col_price[j];
+                    if (reduced < u1) {
+                        u2 = u1;
+                        j2 = j1;
+                        u1 = reduced;
+                        j1 = j;
+                    } else if (reduced < u2) {
+                        u2 = reduced;
+                        j2 = j;
+                    }
                 }
             }
 
@@ -347,93 +628,156 @@ RalphLapStatus ralph_lap_solve(
     /* ========================================================================
      * PHASE 4: Augmentation (Dijkstra-based shortest path)
      * For each remaining unassigned row, find shortest augmenting path.
+     * Uses binary heap for O(n log n) per augmentation when n is large.
      * ======================================================================== */
     for (int f = 0; f < num_free; f++) {
         int free_row = free_rows[f];
-
-        /* Initialize column list and distances */
         const double *row_costs = &work_cost[free_row * n];
+        int end_col = -1;
+        double min_dist = 0.0;
 
+        /* Initialize distances and predecessors */
         #pragma omp simd
         for (j = 0; j < n; j++) {
-            col_list[j] = j;
             dist[j] = row_costs[j] - col_price[j];
             pred[j] = free_row;
         }
 
-        int low = 0;    /* Start of scanned columns with min distance */
-        int up = 0;     /* Start of columns not yet scanned */
-        int last = -1;  /* Last scanned column */
-        int end_col = -1;
-        double min_dist = 0.0;
+        if (use_heap) {
+            /* ============================================================
+             * HEAP-BASED DIJKSTRA (for large n)
+             * O(n log n) per augmentation
+             * ============================================================ */
+            int heap_size = n;
+            int num_scanned = 0;
 
-        /* Dijkstra's algorithm to find shortest path to unassigned column */
-        while (end_col < 0) {
-            /* Find minimum distance among unscanned columns */
-            if (up == low) {
-                last = low - 1;
-                min_dist = DBL_MAX;
-
-                for (k = up; k < n; k++) {
-                    j = col_list[k];
-                    double d = dist[j];
-                    if (d <= min_dist) {
-                        if (d < min_dist) {
-                            up = low;
-                            min_dist = d;
-                        }
-                        /* Add to current minimum set */
-                        col_list[k] = col_list[up];
-                        col_list[up] = j;
-                        up++;
-                    }
-                }
-
-                /* Check if any minimum column is unassigned */
-                for (k = low; k < up; k++) {
-                    if (col_assign[col_list[k]] == RALPH_LAP_UNASSIGNED) {
-                        end_col = col_list[k];
-                        break;
-                    }
-                }
+            /* Build initial heap */
+            for (j = 0; j < n; j++) {
+                heap[j] = j;
+                heap_pos[j] = j;
             }
 
-            if (end_col < 0) {
-                /* Relax edges from next minimum column */
-                j = col_list[low++];
-                last++;
+            /* Heapify (build min-heap) */
+            for (j = n / 2 - 1; j >= 0; j--) {
+                heap_sift_down(heap, heap_pos, dist, j, n);
+            }
+
+            /* Process columns in order of increasing distance */
+            while (heap_size > 0 && end_col < 0) {
+                /* Extract minimum */
+                j = heap_pop(heap, heap_pos, dist, &heap_size);
+                min_dist = dist[j];
+                col_list[num_scanned++] = j;
+
+                /* Check if this is an unassigned column */
+                if (col_assign[j] == RALPH_LAP_UNASSIGNED) {
+                    end_col = j;
+                    break;
+                }
+
+                /* Relax edges from assigned row */
                 int assigned_row = col_assign[j];
                 double h = work_cost[assigned_row * n + j] - col_price[j] - min_dist;
+                const double *assigned_row_costs = &work_cost[assigned_row * n];
 
-                for (k = up; k < n; k++) {
-                    int jj = col_list[k];
-                    double new_dist = work_cost[assigned_row * n + jj] - col_price[jj] - h;
+                for (k = 0; k < heap_size; k++) {
+                    int jj = heap[k];
+                    double new_dist = assigned_row_costs[jj] - col_price[jj] - h;
 
                     if (new_dist < dist[jj]) {
                         pred[jj] = assigned_row;
                         dist[jj] = new_dist;
+                        heap_decrease_key(heap, heap_pos, dist, jj);
+                    }
+                }
+            }
 
-                        if (approx_less_or_equal(new_dist, min_dist)) {
-                            /* Found at current minimum distance */
-                            if (col_assign[jj] == RALPH_LAP_UNASSIGNED) {
-                                end_col = jj;
-                                break;
-                            } else {
-                                /* Add to scan list */
-                                col_list[k] = col_list[up];
-                                col_list[up] = jj;
-                                up++;
+            /* Update column prices for all scanned columns */
+            for (k = 0; k < num_scanned; k++) {
+                j = col_list[k];
+                col_price[j] += dist[j] - min_dist;
+            }
+        } else {
+            /* ============================================================
+             * LINEAR SCAN DIJKSTRA (for small n)
+             * Lower constant factor for small problems
+             * ============================================================ */
+            int low = 0;    /* Start of scanned columns with min distance */
+            int up = 0;     /* Start of columns not yet scanned */
+            int last = -1;  /* Last scanned column */
+
+            /* Initialize column list */
+            for (j = 0; j < n; j++) {
+                col_list[j] = j;
+            }
+
+            while (end_col < 0) {
+                /* Find minimum distance among unscanned columns */
+                if (up == low) {
+                    last = low - 1;
+                    min_dist = DBL_MAX;
+
+                    for (k = up; k < n; k++) {
+                        j = col_list[k];
+                        double d = dist[j];
+                        if (d <= min_dist) {
+                            if (d < min_dist) {
+                                up = low;
+                                min_dist = d;
+                            }
+                            /* Add to current minimum set */
+                            col_list[k] = col_list[up];
+                            col_list[up] = j;
+                            up++;
+                        }
+                    }
+
+                    /* Check if any minimum column is unassigned */
+                    for (k = low; k < up; k++) {
+                        if (col_assign[col_list[k]] == RALPH_LAP_UNASSIGNED) {
+                            end_col = col_list[k];
+                            break;
+                        }
+                    }
+                }
+
+                if (end_col < 0) {
+                    /* Relax edges from next minimum column */
+                    j = col_list[low++];
+                    last++;
+                    int assigned_row = col_assign[j];
+                    double h = work_cost[assigned_row * n + j] - col_price[j] - min_dist;
+
+                    for (k = up; k < n; k++) {
+                        int jj = col_list[k];
+                        double new_dist = work_cost[assigned_row * n + jj] - col_price[jj] - h;
+
+                        if (new_dist < dist[jj]) {
+                            pred[jj] = assigned_row;
+                            dist[jj] = new_dist;
+
+                            if (approx_less_or_equal(new_dist, min_dist)) {
+                                /* Found at current minimum distance */
+                                if (col_assign[jj] == RALPH_LAP_UNASSIGNED) {
+                                    end_col = jj;
+                                    break;
+                                } else {
+                                    /* Add to scan list */
+                                    col_list[k] = col_list[up];
+                                    col_list[up] = jj;
+                                    up++;
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        /* Update column prices for all scanned columns */
-        for (k = 0; k <= last; k++) {
-            j = col_list[k];
-            col_price[j] += dist[j] - min_dist;
+            /* Update column prices for all scanned columns */
+            for (k = 0; k <= last; k++) {
+                j = col_list[k];
+                col_price[j] += dist[j] - min_dist;
+            }
         }
 
         /* Trace back and flip assignments along augmenting path */
@@ -501,19 +845,88 @@ RalphLapStatus ralph_lap_solve(
     }
 
 cleanup:
-    lap_aligned_free(work_cost);
-    lap_aligned_free(col_price);
-    lap_aligned_free(row_price);
-    lap_aligned_free(dist);
-    free(row_assign);
-    free(col_assign);
-    free(matches);
-    free(free_rows);
-    free(pred);
-    free(col_list);
-    free(in_free_list);
+    /* No memory to free - workspace manages all allocations */
+    (void)heap;      /* Suppress unused warning when not using heap */
+    (void)heap_pos;
 
     return status;
+}
+
+/* ============================================================================
+ * Public API Functions
+ * ============================================================================ */
+
+RalphLapStatus ralph_lap_solve(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
+    double *total_cost
+) {
+    if (n <= 0 || cost == NULL || row_sol == NULL) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Handle trivial case */
+    if (n == 1) {
+        row_sol[0] = 0;
+        if (col_sol) col_sol[0] = 0;
+        if (u) u[0] = cost[0];
+        if (v) v[0] = 0.0;
+        if (total_cost) *total_cost = cost[0];
+        return RALPH_LAP_SUCCESS;
+    }
+
+    /* Create temporary workspace */
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
+    if (!ws) {
+        return RALPH_LAP_MEMORY_ERROR;
+    }
+
+    /* Solve using workspace */
+    RalphLapStatus status = lap_solve_internal(n, cost, objective, row_sol,
+                                                col_sol, u, v, total_cost, ws);
+
+    /* Free temporary workspace */
+    ralph_lap_workspace_free(ws);
+
+    return status;
+}
+
+RalphLapStatus ralph_lap_solve_with_workspace(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    int *row_sol,
+    int *col_sol,
+    double *u,
+    double *v,
+    double *total_cost,
+    RalphLapWorkspace *ws
+) {
+    if (n <= 0 || cost == NULL || row_sol == NULL || ws == NULL) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Check workspace capacity */
+    if (n > ws->max_n) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Handle trivial case */
+    if (n == 1) {
+        row_sol[0] = 0;
+        if (col_sol) col_sol[0] = 0;
+        if (u) u[0] = cost[0];
+        if (v) v[0] = 0.0;
+        if (total_cost) *total_cost = cost[0];
+        return RALPH_LAP_SUCCESS;
+    }
+
+    return lap_solve_internal(n, cost, objective, row_sol, col_sol, u, v, total_cost, ws);
 }
 
 /* ============================================================================
@@ -726,6 +1139,18 @@ RalphLapStatus ralph_lap_solve_lp(
     free(x);
     ralph_free(model);
     return status;
+}
+
+/* ============================================================================
+ * Runtime Configuration
+ * ============================================================================ */
+
+void ralph_lap_set_parallel(int enabled) {
+    lap_parallel_enabled = enabled ? 1 : 0;
+}
+
+int ralph_lap_get_parallel(void) {
+    return lap_parallel_enabled;
 }
 
 /* ============================================================================
