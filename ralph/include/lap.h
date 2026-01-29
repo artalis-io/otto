@@ -192,7 +192,8 @@ RalphLapStatus ralph_lap_solve_rect(
  * Solve the sparse Linear Assignment Problem.
  *
  * For problems where many assignments are forbidden (infinite cost),
- * the sparse version can be more efficient.
+ * the sparse version is much more efficient than the dense solver.
+ * Uses a native sparse JVC algorithm that only iterates over finite-cost edges.
  *
  * Parameters:
  *   n           - Number of rows (= number of columns for square LAP)
@@ -207,6 +208,12 @@ RalphLapStatus ralph_lap_solve_rect(
  *
  * Returns:
  *   RALPH_LAP_SUCCESS on success, RALPH_LAP_INFEASIBLE if no valid assignment.
+ *
+ * Note: The problem is infeasible if any row has zero finite-cost edges,
+ * or if the bipartite graph has no perfect matching.
+ *
+ * Time complexity: O(n * nnz) average case, O(n² * nnz/n) = O(n * nnz) worst case
+ * Space complexity: O(n + nnz)
  */
 RalphLapStatus ralph_lap_solve_sparse(
     int n,
