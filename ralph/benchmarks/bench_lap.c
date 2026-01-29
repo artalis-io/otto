@@ -1,0 +1,355 @@
+/*
+ * bench_lap.c - Benchmarks for Linear Assignment Problem solver
+ *
+ * Compares JVC algorithm performance against LP solver on various
+ * problem sizes and structures.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <time.h>
+#include "lap.h"
+
+/* ============================================================================
+ * Timing utilities
+ * ============================================================================ */
+
+typedef struct {
+    clock_t start;
+    double elapsed_ms;
+} Timer;
+
+static void timer_start(Timer *t) {
+    t->start = clock();
+}
+
+static void timer_stop(Timer *t) {
+    t->elapsed_ms = (double)(clock() - t->start) / CLOCKS_PER_SEC * 1000.0;
+}
+
+/* ============================================================================
+ * Problem generators
+ * ============================================================================ */
+
+/* Uniform random costs */
+static void generate_random(int n, double *cost, int seed) {
+    srand(seed);
+    for (int i = 0; i < n * n; i++) {
+        cost[i] = (rand() % 10000) / 100.0;  /* 0.00 to 99.99 */
+    }
+}
+
+/* Sparse problem (many infinite costs) */
+static void generate_sparse(int n, double *cost, double density, int seed) {
+    srand(seed);
+    for (int i = 0; i < n * n; i++) {
+        if ((double)rand() / RAND_MAX < density) {
+            cost[i] = (rand() % 10000) / 100.0;
+        } else {
+            cost[i] = RALPH_LAP_INFINITY;
+        }
+    }
+    /* Ensure feasibility: add diagonal as fallback */
+    for (int i = 0; i < n; i++) {
+        if (cost[i * n + i] >= RALPH_LAP_INFINITY) {
+            cost[i * n + i] = (rand() % 10000) / 100.0;
+        }
+    }
+}
+
+/* Geometric distance (TSP-like) */
+static void generate_geometric(int n, double *cost, int seed) {
+    srand(seed);
+    double *x = malloc(n * sizeof(double));
+    double *y = malloc(n * sizeof(double));
+
+    for (int i = 0; i < n; i++) {
+        x[i] = (double)rand() / RAND_MAX * 100.0;
+        y[i] = (double)rand() / RAND_MAX * 100.0;
+    }
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            double dx = x[i] - x[j];
+            double dy = y[i] - y[j];
+            cost[i * n + j] = sqrt(dx * dx + dy * dy);
+        }
+    }
+
+    free(x);
+    free(y);
+}
+
+/* Structured problem (blocks with different cost ranges) */
+static void generate_structured(int n, double *cost, int seed) {
+    srand(seed);
+    int block_size = n / 4;
+    if (block_size < 1) block_size = 1;
+
+    for (int i = 0; i < n; i++) {
+        int block_i = i / block_size;
+        for (int j = 0; j < n; j++) {
+            int block_j = j / block_size;
+            double base = (block_i == block_j) ? 10.0 : 100.0;
+            cost[i * n + j] = base + (rand() % 100) / 10.0;
+        }
+    }
+}
+
+/* ============================================================================
+ * Benchmark runner
+ * ============================================================================ */
+
+typedef struct {
+    const char *name;
+    void (*generator)(int n, double *cost, int seed);
+    int use_density;      /* For sparse generator */
+    double density;
+} ProblemType;
+
+static void run_benchmark(const char *name, int n, double *cost, int warmup, int trials) {
+    int *row_sol = malloc(n * sizeof(int));
+    double jvc_cost, lp_cost;
+    Timer timer;
+
+    /* Warmup */
+    for (int i = 0; i < warmup; i++) {
+        ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, NULL);
+    }
+
+    /* JVC benchmark */
+    double jvc_total = 0.0;
+    for (int i = 0; i < trials; i++) {
+        timer_start(&timer);
+        ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &jvc_cost);
+        timer_stop(&timer);
+        jvc_total += timer.elapsed_ms;
+    }
+    double jvc_avg = jvc_total / trials;
+
+    /* LP benchmark (skip for large problems) */
+    double lp_avg = -1.0;
+    if (n <= 50) {  /* LP is too slow for larger problems */
+        double lp_total = 0.0;
+        for (int i = 0; i < trials; i++) {
+            timer_start(&timer);
+            ralph_lap_solve_lp(n, cost, RALPH_LAP_MINIMIZE, row_sol, &lp_cost);
+            timer_stop(&timer);
+            lp_total += timer.elapsed_ms;
+        }
+        lp_avg = lp_total / trials;
+    }
+
+    /* Print results */
+    if (lp_avg > 0) {
+        printf("  %-20s %6d  %10.3f  %10.3f  %10.1fx  %.2f vs %.2f\n",
+               name, n, jvc_avg, lp_avg, lp_avg / jvc_avg, jvc_cost, lp_cost);
+    } else {
+        printf("  %-20s %6d  %10.3f  %10s  %10s  %.2f\n",
+               name, n, jvc_avg, "N/A", "N/A", jvc_cost);
+    }
+
+    free(row_sol);
+}
+
+/* ============================================================================
+ * Size scaling benchmark
+ * ============================================================================ */
+
+static void bench_size_scaling(void) {
+    printf("\n╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  Size Scaling Benchmark (Random Costs)                                    ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+    printf("  %-20s %6s  %10s  %10s  %10s  %s\n",
+           "Problem", "Size", "JVC (ms)", "LP (ms)", "Speedup", "Cost Check");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    int sizes[] = {5, 10, 20, 30, 50, 75, 100, 150, 200, 300, 500};
+    int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
+
+    for (int s = 0; s < num_sizes; s++) {
+        int n = sizes[s];
+        double *cost = malloc(n * n * sizeof(double));
+        generate_random(n, cost, 42);
+
+        int trials = (n <= 50) ? 10 : (n <= 100) ? 5 : 3;
+        int warmup = (n <= 100) ? 2 : 1;
+
+        run_benchmark("Random", n, cost, warmup, trials);
+        free(cost);
+    }
+}
+
+/* ============================================================================
+ * Problem type comparison
+ * ============================================================================ */
+
+static void bench_problem_types(void) {
+    printf("\n╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  Problem Type Comparison (n=50)                                           ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+    printf("  %-20s %6s  %10s  %10s  %10s  %s\n",
+           "Type", "Size", "JVC (ms)", "LP (ms)", "Speedup", "Costs");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    int n = 50;
+    int trials = 10;
+    int warmup = 2;
+
+    /* Random */
+    {
+        double *cost = malloc(n * n * sizeof(double));
+        generate_random(n, cost, 123);
+        run_benchmark("Random", n, cost, warmup, trials);
+        free(cost);
+    }
+
+    /* Geometric */
+    {
+        double *cost = malloc(n * n * sizeof(double));
+        generate_geometric(n, cost, 123);
+        run_benchmark("Geometric", n, cost, warmup, trials);
+        free(cost);
+    }
+
+    /* Structured */
+    {
+        double *cost = malloc(n * n * sizeof(double));
+        generate_structured(n, cost, 123);
+        run_benchmark("Structured", n, cost, warmup, trials);
+        free(cost);
+    }
+
+    /* Sparse 50% */
+    {
+        double *cost = malloc(n * n * sizeof(double));
+        generate_sparse(n, cost, 0.5, 123);
+        run_benchmark("Sparse (50%)", n, cost, warmup, trials);
+        free(cost);
+    }
+
+    /* Sparse 20% */
+    {
+        double *cost = malloc(n * n * sizeof(double));
+        generate_sparse(n, cost, 0.2, 123);
+        run_benchmark("Sparse (20%)", n, cost, warmup, trials);
+        free(cost);
+    }
+}
+
+/* ============================================================================
+ * Large problem benchmark (JVC only)
+ * ============================================================================ */
+
+static void bench_large_problems(void) {
+    printf("\n╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  Large Problem Benchmark (JVC Only)                                       ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+    printf("  %-20s %6s  %12s  %12s\n", "Problem", "Size", "Time (ms)", "Cost");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    int sizes[] = {500, 750, 1000, 1500, 2000};
+    int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
+
+    for (int s = 0; s < num_sizes; s++) {
+        int n = sizes[s];
+        double *cost = malloc(n * n * sizeof(double));
+        int *row_sol = malloc(n * sizeof(int));
+        double total_cost;
+
+        generate_random(n, cost, 42);
+
+        Timer timer;
+        timer_start(&timer);
+        RalphLapStatus status = ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE,
+                                                row_sol, NULL, NULL, NULL, &total_cost);
+        timer_stop(&timer);
+
+        if (status == RALPH_LAP_SUCCESS) {
+            printf("  %-20s %6d  %12.2f  %12.2f\n",
+                   "Random", n, timer.elapsed_ms, total_cost);
+        } else {
+            printf("  %-20s %6d  %12s  %12s\n",
+                   "Random", n, "FAILED", "N/A");
+        }
+
+        free(cost);
+        free(row_sol);
+    }
+}
+
+/* ============================================================================
+ * Verification benchmark
+ * ============================================================================ */
+
+static void bench_correctness(void) {
+    printf("\n╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  Correctness Verification (JVC vs LP on multiple random instances)        ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+
+    int sizes[] = {10, 20, 30, 40};
+    int instances_per_size = 20;
+    int total = 0;
+    int passed = 0;
+
+    for (int s = 0; s < 4; s++) {
+        int n = sizes[s];
+        double *cost = malloc(n * n * sizeof(double));
+        int *jvc_sol = malloc(n * sizeof(int));
+        int *lp_sol = malloc(n * sizeof(int));
+        int size_passed = 0;
+
+        for (int inst = 0; inst < instances_per_size; inst++) {
+            generate_random(n, cost, 1000 + s * 100 + inst);
+
+            double jvc_cost, lp_cost;
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, jvc_sol, NULL, NULL, NULL, &jvc_cost);
+            ralph_lap_solve_lp(n, cost, RALPH_LAP_MINIMIZE, lp_sol, &lp_cost);
+
+            total++;
+            if (fabs(jvc_cost - lp_cost) < 1e-4) {
+                passed++;
+                size_passed++;
+            }
+        }
+
+        printf("  Size %3d: %2d/%2d instances matched\n", n, size_passed, instances_per_size);
+
+        free(cost);
+        free(jvc_sol);
+        free(lp_sol);
+    }
+
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+    printf("  Total: %d/%d (%.1f%%)\n", passed, total, 100.0 * passed / total);
+}
+
+/* ============================================================================
+ * Main
+ * ============================================================================ */
+
+int main(int argc, char *argv[]) {
+    printf("\n");
+    printf("╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║                                                                          ║\n");
+    printf("║   Ralph LAP Solver Benchmarks                                             ║\n");
+    printf("║   JVC (Jonker-Volgenant-Castanon) Algorithm                               ║\n");
+    printf("║                                                                          ║\n");
+    printf("╚══════════════════════════════════════════════════════════════════════════╝\n");
+
+    int run_all = (argc < 2);
+    int run_size = run_all || (argc > 1 && strcmp(argv[1], "size") == 0);
+    int run_types = run_all || (argc > 1 && strcmp(argv[1], "types") == 0);
+    int run_large = run_all || (argc > 1 && strcmp(argv[1], "large") == 0);
+    int run_verify = run_all || (argc > 1 && strcmp(argv[1], "verify") == 0);
+
+    if (run_size) bench_size_scaling();
+    if (run_types) bench_problem_types();
+    if (run_large) bench_large_problems();
+    if (run_verify) bench_correctness();
+
+    printf("\n");
+    return 0;
+}
