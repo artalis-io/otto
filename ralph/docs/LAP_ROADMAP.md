@@ -22,6 +22,9 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] k-Best assignments (Murty's algorithm)
 - [x] MIP with Assignment Subproblems (LAP-based LP relaxation)
 - [x] Unified API (Problem/Options/Result pattern)
+- [x] Bottleneck LAP (minimax/maximin assignment)
+- [x] Sparse + k-Best combination (via dense conversion)
+- [x] Callback + k-Best combination (via dense conversion)
 
 ---
 
@@ -389,7 +392,58 @@ RalphLapStatus ralph_lap_solve_ex(
 - Future-proof: add new options without new functions
 - Backward compatible: legacy functions unchanged
 
-**Tests:** 22 new tests for unified API (235 total LAP tests)
+**Supported Features via Unified API:**
+| Feature | How to Use |
+|---------|------------|
+| Dense LAP | `prob.cost_type = RALPH_LAP_COST_DENSE` |
+| Sparse LAP | `prob.cost_type = RALPH_LAP_COST_SPARSE` |
+| Callback LAP | `prob.cost_type = RALPH_LAP_COST_CALLBACK` |
+| Rectangular | `prob.n != prob.m` |
+| k-Best | `opts.algorithm = RALPH_LAP_ALG_K_BEST; opts.k = k` |
+| Bottleneck | `opts.algorithm = RALPH_LAP_ALG_BOTTLENECK` |
+| Warm Start | `opts.warm_start = 1` + provide workspace |
+| Forbidden | `opts.num_forbidden, opts.forbidden_rows, opts.forbidden_cols` |
+| ε-scaling | `opts.epsilon_scaling = 1` |
+| Parallel | `opts.parallel = 1` |
+
+**Tests:** 30+ tests for unified API (255 total LAP tests)
+
+---
+
+### 9. ~~Bottleneck LAP (Minimax/Maximin)~~ ✅ COMPLETED
+**Status: Implemented (2026-01-29)**
+
+Bottleneck assignment minimizes the maximum cost (minimax) or maximizes the minimum cost (maximin) rather than optimizing the sum.
+
+**Algorithm:**
+1. Collect all unique finite costs from the matrix
+2. Binary search on sorted costs to find optimal threshold
+3. For each threshold, check if perfect matching exists using only edges within threshold
+4. Return assignment achieving the optimal bottleneck value
+
+**API:**
+```c
+RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+opts.algorithm = RALPH_LAP_ALG_BOTTLENECK;
+
+/* For minimax (minimize worst assignment): */
+prob.objective = RALPH_LAP_MINIMIZE;
+
+/* For maximin (maximize best worst-case): */
+prob.objective = RALPH_LAP_MAXIMIZE;
+
+ralph_lap_solve_ex(&prob, &opts, &result, NULL);
+/* result.costs[0] contains the bottleneck value (max or min of assignment) */
+```
+
+**Complexity:**
+- Time: O(n² log n) for sorting + O(n³ log n) for binary search with matching checks
+- Space: O(n²) for cost array
+
+**Use Cases:**
+- Fair task distribution (minimize worst worker's load)
+- Robust planning (maximize minimum quality)
+- Deadline scheduling (minimize latest completion)
 
 ---
 

@@ -966,34 +966,18 @@ RalphLapStatus ralph_lap_solve(
     double *v,
     double *total_cost
 ) {
-    if (n <= 0 || cost == NULL || row_sol == NULL) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    /* Handle trivial case */
-    if (n == 1) {
-        row_sol[0] = 0;
-        if (col_sol) col_sol[0] = 0;
-        if (u) u[0] = cost[0];
-        if (v) v[0] = 0.0;
-        if (total_cost) *total_cost = cost[0];
-        return RALPH_LAP_SUCCESS;
-    }
-
-    /* Create temporary workspace */
-    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
-    if (!ws) {
-        return RALPH_LAP_MEMORY_ERROR;
-    }
-
-    /* Solve using workspace */
-    RalphLapStatus status = lap_solve_internal(n, cost, objective, row_sol,
-                                                col_sol, u, v, total_cost, ws);
-
-    /* Free temporary workspace */
-    ralph_lap_workspace_free(ws);
-
-    return status;
+    /* Wrapper around unified API */
+    RalphLapProblem prob = {
+        .n = n, .m = n,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = objective
+    };
+    RalphLapResult res = {
+        .row_sol = row_sol, .col_sol = col_sol,
+        .u = u, .v = v, .costs = total_cost
+    };
+    return ralph_lap_solve_ex(&prob, NULL, &res, NULL);
 }
 
 RalphLapStatus ralph_lap_solve_with_workspace(
@@ -1007,26 +991,18 @@ RalphLapStatus ralph_lap_solve_with_workspace(
     double *total_cost,
     RalphLapWorkspace *ws
 ) {
-    if (n <= 0 || cost == NULL || row_sol == NULL || ws == NULL) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    /* Check workspace capacity */
-    if (n > ws->max_n) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    /* Handle trivial case */
-    if (n == 1) {
-        row_sol[0] = 0;
-        if (col_sol) col_sol[0] = 0;
-        if (u) u[0] = cost[0];
-        if (v) v[0] = 0.0;
-        if (total_cost) *total_cost = cost[0];
-        return RALPH_LAP_SUCCESS;
-    }
-
-    return lap_solve_internal(n, cost, objective, row_sol, col_sol, u, v, total_cost, ws);
+    /* Wrapper around unified API */
+    RalphLapProblem prob = {
+        .n = n, .m = n,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = objective
+    };
+    RalphLapResult res = {
+        .row_sol = row_sol, .col_sol = col_sol,
+        .u = u, .v = v, .costs = total_cost
+    };
+    return ralph_lap_solve_ex(&prob, NULL, &res, ws);
 }
 
 RalphLapStatus ralph_lap_solve_warm(
@@ -1558,94 +1534,18 @@ RalphLapStatus ralph_lap_solve_rect(
     int *col_sol,
     double *total_cost
 ) {
-    if (m <= 0 || n <= 0 || cost == NULL || row_sol == NULL) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    /* Square case - delegate to standard solver */
-    if (m == n) {
-        return ralph_lap_solve(n, cost, objective, row_sol, col_sol,
-                               NULL, NULL, total_cost);
-    }
-
-    /* Determine padded dimension */
-    int k = (m > n) ? m : n;
-
-    /* Allocate padded cost matrix */
-    double *padded_cost = (double *)malloc(k * k * sizeof(double));
-    int *padded_row_sol = (int *)malloc(k * sizeof(int));
-    int *padded_col_sol = col_sol ? (int *)malloc(k * sizeof(int)) : NULL;
-
-    if (!padded_cost || !padded_row_sol || (col_sol && !padded_col_sol)) {
-        free(padded_cost);
-        free(padded_row_sol);
-        free(padded_col_sol);
-        return RALPH_LAP_MEMORY_ERROR;
-    }
-
-    /* Fill padded cost matrix
-     * - Original costs in top-left m x n block
-     * - Dummy costs (0) for padding to allow "unassigned" matches
-     */
-    for (int i = 0; i < k; i++) {
-        for (int j = 0; j < k; j++) {
-            if (i < m && j < n) {
-                /* Original cost */
-                padded_cost[i * k + j] = cost[i * n + j];
-            } else {
-                /* Dummy assignment - zero cost so it doesn't affect objective */
-                padded_cost[i * k + j] = 0.0;
-            }
-        }
-    }
-
-    /* Solve padded square problem */
-    RalphLapStatus status = ralph_lap_solve(k, padded_cost, objective,
-                                             padded_row_sol, padded_col_sol,
-                                             NULL, NULL, NULL);
-
-    if (status != RALPH_LAP_SUCCESS) {
-        free(padded_cost);
-        free(padded_row_sol);
-        free(padded_col_sol);
-        return status;
-    }
-
-    /* Extract solution for original dimensions */
-    /* row_sol[i] = assigned column, or -1 if assigned to dummy column */
-    for (int i = 0; i < m; i++) {
-        int j = padded_row_sol[i];
-        row_sol[i] = (j < n) ? j : RALPH_LAP_UNASSIGNED;
-    }
-
-    /* col_sol[j] = assigned row, or -1 if assigned to dummy row */
-    if (col_sol) {
-        for (int j = 0; j < n; j++) {
-            int i = padded_col_sol[j];
-            col_sol[j] = (i < m) ? i : RALPH_LAP_UNASSIGNED;
-        }
-    }
-
-    /* Compute total cost from actual assignments only */
-    if (total_cost) {
-        double sum = 0.0;
-        for (int i = 0; i < m; i++) {
-            int j = row_sol[i];
-            if (j >= 0 && j < n) {
-                double c = cost[i * n + j];
-                if (c < RALPH_LAP_INFINITY * 0.5) {
-                    sum += c;
-                }
-            }
-        }
-        *total_cost = sum;
-    }
-
-    free(padded_cost);
-    free(padded_row_sol);
-    free(padded_col_sol);
-
-    return RALPH_LAP_SUCCESS;
+    /* Wrapper around unified API - handles both square and rectangular */
+    RalphLapProblem prob = {
+        .n = m, .m = n,  /* n = num rows (workers), m = num cols (jobs) */
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = objective
+    };
+    RalphLapResult res = {
+        .row_sol = row_sol, .col_sol = col_sol,
+        .costs = total_cost
+    };
+    return ralph_lap_solve_ex(&prob, NULL, &res, NULL);
 }
 
 /* ============================================================================
@@ -2703,35 +2603,18 @@ RalphLapStatus ralph_lap_solve_callback(
     double *v,
     double *total_cost
 ) {
-    if (n <= 0 || cost_fn == NULL || row_sol == NULL) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    /* Handle trivial case */
-    if (n == 1) {
-        row_sol[0] = 0;
-        if (col_sol) col_sol[0] = 0;
-        double c = cost_fn(0, 0, user_data);
-        if (u) u[0] = c;
-        if (v) v[0] = 0.0;
-        if (total_cost) *total_cost = c;
-        return RALPH_LAP_SUCCESS;
-    }
-
-    /* Create temporary workspace */
-    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
-    if (!ws) {
-        return RALPH_LAP_MEMORY_ERROR;
-    }
-
-    /* Solve using workspace */
-    RalphLapStatus status = lap_solve_callback_internal(
-        n, cost_fn, user_data, objective, row_sol, col_sol, u, v, total_cost, ws);
-
-    /* Free temporary workspace */
-    ralph_lap_workspace_free(ws);
-
-    return status;
+    /* Wrapper around unified API */
+    RalphLapProblem prob = {
+        .n = n, .m = n,
+        .cost_type = RALPH_LAP_COST_CALLBACK,
+        .callback = {cost_fn, user_data},
+        .objective = objective
+    };
+    RalphLapResult res = {
+        .row_sol = row_sol, .col_sol = col_sol,
+        .u = u, .v = v, .costs = total_cost
+    };
+    return ralph_lap_solve_ex(&prob, NULL, &res, NULL);
 }
 
 RalphLapStatus ralph_lap_solve_callback_with_workspace(
@@ -2746,27 +2629,18 @@ RalphLapStatus ralph_lap_solve_callback_with_workspace(
     double *total_cost,
     RalphLapWorkspace *ws
 ) {
-    if (n <= 0 || cost_fn == NULL || row_sol == NULL || ws == NULL) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    if (n > ws->max_n) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    /* Handle trivial case */
-    if (n == 1) {
-        row_sol[0] = 0;
-        if (col_sol) col_sol[0] = 0;
-        double c = cost_fn(0, 0, user_data);
-        if (u) u[0] = c;
-        if (v) v[0] = 0.0;
-        if (total_cost) *total_cost = c;
-        return RALPH_LAP_SUCCESS;
-    }
-
-    return lap_solve_callback_internal(
-        n, cost_fn, user_data, objective, row_sol, col_sol, u, v, total_cost, ws);
+    /* Wrapper around unified API */
+    RalphLapProblem prob = {
+        .n = n, .m = n,
+        .cost_type = RALPH_LAP_COST_CALLBACK,
+        .callback = {cost_fn, user_data},
+        .objective = objective
+    };
+    RalphLapResult res = {
+        .row_sol = row_sol, .col_sol = col_sol,
+        .u = u, .v = v, .costs = total_cost
+    };
+    return ralph_lap_solve_ex(&prob, NULL, &res, ws);
 }
 
 /* ============================================================================
@@ -3270,21 +3144,22 @@ RalphLapStatus ralph_lap_solve_k_best(
     double *costs,
     int *num_found
 ) {
-    if (n <= 0 || cost == NULL || k <= 0 || solutions == NULL ||
-        costs == NULL || num_found == NULL) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    /* Create temporary workspace */
-    RalphLapWorkspace *ws = ralph_lap_workspace_create(n);
-    if (!ws) {
-        return RALPH_LAP_MEMORY_ERROR;
-    }
-
-    RalphLapStatus status = lap_solve_k_best_internal(
-        n, cost, objective, k, solutions, costs, num_found, ws);
-
-    ralph_lap_workspace_free(ws);
+    /* Wrapper around unified API */
+    RalphLapProblem prob = {
+        .n = n, .m = n,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = objective
+    };
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_K_BEST;
+    opts.k = k;
+    RalphLapResult res = {
+        .row_sol = solutions,
+        .costs = costs
+    };
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+    if (num_found) *num_found = res.num_found;
     return status;
 }
 
@@ -3299,16 +3174,23 @@ RalphLapStatus ralph_lap_solve_k_best_with_workspace(
     int *num_found,
     RalphLapWorkspace *ws
 ) {
-    if (n <= 0 || cost == NULL || k <= 0 || solutions == NULL ||
-        costs == NULL || num_found == NULL || ws == NULL) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    if (n > ws->max_n) {
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
-    return lap_solve_k_best_internal(n, cost, objective, k, solutions, costs, num_found, ws);
+    /* Wrapper around unified API */
+    RalphLapProblem prob = {
+        .n = n, .m = n,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = objective
+    };
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_K_BEST;
+    opts.k = k;
+    RalphLapResult res = {
+        .row_sol = solutions,
+        .costs = costs
+    };
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, ws);
+    if (num_found) *num_found = res.num_found;
+    return status;
 }
 
 /* ============================================================================
@@ -3368,7 +3250,7 @@ static const double* apply_forbidden_dense(
     const RalphLapOptions *opts,
     RalphLapWorkspace *ws
 ) {
-    if (opts->num_forbidden == 0) {
+    if (!opts || opts->num_forbidden == 0) {
         return prob->dense_cost;
     }
 
@@ -3415,64 +3297,145 @@ static RalphLapStatus lap_solve_standard_unified(
     switch (prob->cost_type) {
         case RALPH_LAP_COST_DENSE:
             if (prob->n == prob->m) {
-                /* Square dense LAP */
+                /* Square dense LAP - call internal directly */
                 const double *cost = apply_forbidden_dense(prob, opts, ws);
 
-                if (opts && opts->warm_start && ws) {
-                    status = ralph_lap_solve_warm(
-                        prob->n, cost, prob->objective,
-                        result->row_sol, result->col_sol,
-                        result->u, result->v, cost_ptr,
-                        ws, 1
-                    );
-                } else if (ws) {
-                    status = ralph_lap_solve_with_workspace(
-                        prob->n, cost, prob->objective,
-                        result->row_sol, result->col_sol,
-                        result->u, result->v, cost_ptr,
-                        ws
-                    );
+                /* Handle trivial case */
+                if (prob->n == 1) {
+                    result->row_sol[0] = 0;
+                    if (result->col_sol) result->col_sol[0] = 0;
+                    if (result->u) result->u[0] = cost[0];
+                    if (result->v) result->v[0] = 0.0;
+                    if (result->costs) result->costs[0] = cost[0];
+                    status = RALPH_LAP_SUCCESS;
                 } else {
-                    status = ralph_lap_solve(
-                        prob->n, cost, prob->objective,
-                        result->row_sol, result->col_sol,
-                        result->u, result->v, cost_ptr
-                    );
+                    /* Check if warm start is requested and applicable */
+                    if (opts && opts->warm_start && ws &&
+                        ws->warm_start_valid && ws->warm_start_n == prob->n) {
+                        /* Use warm start path */
+                        status = ralph_lap_solve_warm(
+                            prob->n, cost, prob->objective,
+                            result->row_sol, result->col_sol,
+                            result->u, result->v, cost_ptr, ws, 1
+                        );
+                    } else {
+                        /* Cold start - call internal function directly */
+                        status = lap_solve_internal(
+                            prob->n, cost, prob->objective,
+                            result->row_sol, result->col_sol,
+                            result->u, result->v, cost_ptr, ws
+                        );
+                    }
                 }
             } else {
-                /* Rectangular dense LAP */
-                /* Note: forbidden assignments for rect would need work_cost copy */
-                status = ralph_lap_solve_rect(
-                    prob->n, prob->m, prob->dense_cost, prob->objective,
-                    result->row_sol, result->col_sol, cost_ptr
-                );
+                /* Rectangular dense LAP - inline the padding logic */
+                int m = prob->n, n = prob->m;
+                const double *cost = prob->dense_cost;
+
+                /* Apply forbidden if needed */
+                if (opts && opts->num_forbidden > 0 && ws) {
+                    int mn = m * n;
+                    memcpy(ws->work_cost, cost, mn * sizeof(double));
+                    for (int f = 0; f < opts->num_forbidden; f++) {
+                        int i = opts->forbidden_rows[f];
+                        int j = opts->forbidden_cols[f];
+                        if (i >= 0 && i < m && j >= 0 && j < n) {
+                            ws->work_cost[i * n + j] = RALPH_LAP_INFINITY;
+                        }
+                    }
+                    cost = ws->work_cost;
+                }
+
+                /* Pad to square and solve */
+                int k = (m > n) ? m : n;
+                double *padded_cost = (double *)malloc(k * k * sizeof(double));
+                int *padded_row_sol = (int *)malloc(k * sizeof(int));
+
+                if (!padded_cost || !padded_row_sol) {
+                    free(padded_cost);
+                    free(padded_row_sol);
+                    status = RALPH_LAP_MEMORY_ERROR;
+                } else {
+                    /* Fill padded matrix */
+                    for (int i = 0; i < k; i++) {
+                        for (int j = 0; j < k; j++) {
+                            if (i < m && j < n) {
+                                padded_cost[i * k + j] = cost[i * n + j];
+                            } else {
+                                padded_cost[i * k + j] = 0.0;
+                            }
+                        }
+                    }
+
+                    /* Create temp workspace for padded problem */
+                    RalphLapWorkspace *temp_ws = ralph_lap_workspace_create(k);
+                    if (!temp_ws) {
+                        free(padded_cost);
+                        free(padded_row_sol);
+                        status = RALPH_LAP_MEMORY_ERROR;
+                    } else {
+                        status = lap_solve_internal(k, padded_cost, prob->objective,
+                                                    padded_row_sol, NULL, NULL, NULL,
+                                                    cost_ptr, temp_ws);
+
+                        if (status == RALPH_LAP_SUCCESS) {
+                            /* Extract results for original dimensions */
+                            for (int i = 0; i < m; i++) {
+                                int j = padded_row_sol[i];
+                                result->row_sol[i] = (j < n) ? j : -1;
+                            }
+                            if (result->col_sol) {
+                                for (int j = 0; j < n; j++) result->col_sol[j] = -1;
+                                for (int i = 0; i < m; i++) {
+                                    int j = result->row_sol[i];
+                                    if (j >= 0) result->col_sol[j] = i;
+                                }
+                            }
+                            /* Recalculate actual cost (excluding dummies) */
+                            if (cost_ptr) {
+                                double actual = 0;
+                                for (int i = 0; i < m; i++) {
+                                    int j = result->row_sol[i];
+                                    if (j >= 0) actual += prob->dense_cost[i * n + j];
+                                }
+                                *cost_ptr = actual;
+                            }
+                        }
+
+                        ralph_lap_workspace_free(temp_ws);
+                        free(padded_cost);
+                        free(padded_row_sol);
+                    }
+                }
             }
             break;
 
         case RALPH_LAP_COST_SPARSE:
-            /* Sparse LAP - forbidden assignments already implicit in sparse format */
-            /* TODO: Add support for additional forbidden on top of sparse */
+            /* Sparse LAP - call the sparse solver */
+            /* Note: ralph_lap_solve_sparse returns col_sol but not u/v */
             status = ralph_lap_solve_sparse(
                 prob->n, prob->sparse.nnz,
                 prob->sparse.row_ptr, prob->sparse.col_idx, prob->sparse.values,
                 prob->objective, result->row_sol, result->col_sol, cost_ptr
             );
+            /* u/v dual variables not available from sparse solver */
             break;
 
         case RALPH_LAP_COST_CALLBACK:
-            /* Callback-based LAP */
-            /* TODO: Add forbidden support via wrapper callback */
-            if (ws) {
-                status = ralph_lap_solve_callback_with_workspace(
+            /* Callback-based LAP - call internal directly */
+            if (prob->n == 1) {
+                result->row_sol[0] = 0;
+                if (result->col_sol) result->col_sol[0] = 0;
+                double c = prob->callback.fn(0, 0, prob->callback.user_data);
+                if (result->u) result->u[0] = c;
+                if (result->v) result->v[0] = 0.0;
+                if (result->costs) result->costs[0] = c;
+                status = RALPH_LAP_SUCCESS;
+            } else {
+                status = lap_solve_callback_internal(
                     prob->n, prob->callback.fn, prob->callback.user_data,
                     prob->objective, result->row_sol, result->col_sol,
                     result->u, result->v, cost_ptr, ws
-                );
-            } else {
-                status = ralph_lap_solve_callback(
-                    prob->n, prob->callback.fn, prob->callback.user_data,
-                    prob->objective, result->row_sol, result->col_sol,
-                    result->u, result->v, cost_ptr
                 );
             }
             break;
@@ -3503,37 +3466,274 @@ static RalphLapStatus lap_solve_k_best_unified(
     RalphLapResult *result,
     RalphLapWorkspace *ws
 ) {
-    /* Currently k-best only supports dense square */
-    if (prob->cost_type != RALPH_LAP_COST_DENSE) {
-        /* For non-dense, we could convert to dense first */
-        /* For now, return error - future enhancement */
-        return RALPH_LAP_INVALID_INPUT;
-    }
-
     if (prob->n != prob->m) {
         /* Rectangular k-best not yet supported */
         return RALPH_LAP_INVALID_INPUT;
     }
 
+    int n = prob->n;
+    const double *cost = NULL;
+    double *converted_cost = NULL;
+    RalphLapStatus status;
+
+    switch (prob->cost_type) {
+        case RALPH_LAP_COST_DENSE:
+            cost = prob->dense_cost;
+            break;
+
+        case RALPH_LAP_COST_SPARSE:
+            /* Convert sparse to dense for k-best */
+            converted_cost = (double *)malloc(n * n * sizeof(double));
+            if (!converted_cost) return RALPH_LAP_MEMORY_ERROR;
+
+            /* Initialize all to infinity */
+            for (int i = 0; i < n * n; i++) {
+                converted_cost[i] = RALPH_LAP_INFINITY;
+            }
+            /* Fill in sparse values */
+            for (int i = 0; i < n; i++) {
+                for (int k = prob->sparse.row_ptr[i]; k < prob->sparse.row_ptr[i + 1]; k++) {
+                    int j = prob->sparse.col_idx[k];
+                    if (j >= 0 && j < n) {
+                        converted_cost[i * n + j] = prob->sparse.values[k];
+                    }
+                }
+            }
+            cost = converted_cost;
+            break;
+
+        case RALPH_LAP_COST_CALLBACK:
+            /* Convert callback to dense for k-best */
+            converted_cost = (double *)malloc(n * n * sizeof(double));
+            if (!converted_cost) return RALPH_LAP_MEMORY_ERROR;
+
+            for (int i = 0; i < n; i++) {
+                for (int j = 0; j < n; j++) {
+                    converted_cost[i * n + j] = prob->callback.fn(i, j, prob->callback.user_data);
+                }
+            }
+            cost = converted_cost;
+            break;
+
+        default:
+            return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Apply forbidden assignments if any (use workspace if available) */
+    const double *final_cost = cost;
+    if (opts && opts->num_forbidden > 0) {
+        if (ws && ws->work_cost) {
+            memcpy(ws->work_cost, cost, n * n * sizeof(double));
+            for (int f = 0; f < opts->num_forbidden; f++) {
+                int i = opts->forbidden_rows[f];
+                int j = opts->forbidden_cols[f];
+                if (i >= 0 && i < n && j >= 0 && j < n) {
+                    ws->work_cost[i * n + j] = RALPH_LAP_INFINITY;
+                }
+            }
+            final_cost = ws->work_cost;
+        } else if (converted_cost) {
+            /* Apply directly to converted cost (we own it) */
+            for (int f = 0; f < opts->num_forbidden; f++) {
+                int i = opts->forbidden_rows[f];
+                int j = opts->forbidden_cols[f];
+                if (i >= 0 && i < n && j >= 0 && j < n) {
+                    converted_cost[i * n + j] = RALPH_LAP_INFINITY;
+                }
+            }
+        }
+    }
+
+    /* Call internal k-best implementation directly (avoid recursion via wrappers) */
+    status = lap_solve_k_best_internal(
+        n, final_cost, prob->objective, opts->k,
+        result->row_sol, result->costs, &result->num_found, ws
+    );
+
+    free(converted_cost);
+    return status;
+}
+
+/*
+ * Bottleneck LAP (minimax assignment)
+ *
+ * Finds assignment minimizing the maximum cost (or maximizing the minimum cost).
+ * Uses binary search on sorted costs to find the optimal threshold.
+ */
+
+/* Comparison function for qsort */
+static int compare_double(const void *a, const void *b) {
+    double da = *(const double *)a;
+    double db = *(const double *)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
+/*
+ * Check if a perfect matching exists using only edges with cost within threshold.
+ * Uses a modified LAP solve with costs set to infinity outside threshold.
+ */
+static int bottleneck_matching_exists(
+    int n,
+    const double *cost,
+    RalphLapObjective objective,
+    double threshold,
+    int *row_sol,
+    RalphLapWorkspace *ws
+) {
+    /* Create modified cost matrix in workspace */
+    double *work_cost = ws->work_cost;
+
+    if (objective == RALPH_LAP_MINIMIZE) {
+        /* For minimax: keep edges with cost <= threshold, forbid others */
+        for (int i = 0; i < n * n; i++) {
+            work_cost[i] = (cost[i] <= threshold + 1e-9) ? cost[i] : RALPH_LAP_INFINITY;
+        }
+    } else {
+        /* For maximin: keep edges with cost >= threshold, forbid others */
+        for (int i = 0; i < n * n; i++) {
+            work_cost[i] = (cost[i] >= threshold - 1e-9) ? -cost[i] : RALPH_LAP_INFINITY;
+        }
+    }
+
+    /* Try to find a matching */
+    double total;
+    RalphLapStatus status = lap_solve_internal(n, work_cost, RALPH_LAP_MINIMIZE,
+                                                row_sol, NULL, NULL, NULL, &total, ws);
+
+    if (status != RALPH_LAP_SUCCESS) return 0;
+
+    /* Check if matching uses only valid edges (no infinity) */
+    for (int i = 0; i < n; i++) {
+        int j = row_sol[i];
+        if (j < 0 || j >= n || work_cost[i * n + j] >= RALPH_LAP_INFINITY * 0.5) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static RalphLapStatus lap_solve_bottleneck_unified(
+    const RalphLapProblem *prob,
+    const RalphLapOptions *opts,
+    RalphLapResult *result,
+    RalphLapWorkspace *ws
+) {
+    /* Currently only supports dense square problems */
+    if (prob->cost_type != RALPH_LAP_COST_DENSE || prob->n != prob->m) {
+        return RALPH_LAP_INVALID_INPUT;
+    }
+
+    int n = prob->n;
     const double *cost = prob->dense_cost;
 
-    /* Apply forbidden assignments if any */
-    if (opts->num_forbidden > 0 && ws) {
+    /* Apply forbidden if needed */
+    if (opts && opts->num_forbidden > 0) {
         cost = apply_forbidden_dense(prob, opts, ws);
     }
 
-    /* Call existing k-best implementation */
-    if (ws) {
-        return ralph_lap_solve_k_best_with_workspace(
-            prob->n, cost, prob->objective, opts->k,
-            result->row_sol, result->costs, &result->num_found, ws
-        );
-    } else {
-        return ralph_lap_solve_k_best(
-            prob->n, cost, prob->objective, opts->k,
-            result->row_sol, result->costs, &result->num_found
-        );
+    /* Collect all finite costs */
+    double *sorted_costs = (double *)malloc(n * n * sizeof(double));
+    if (!sorted_costs) return RALPH_LAP_MEMORY_ERROR;
+
+    int num_costs = 0;
+    for (int i = 0; i < n * n; i++) {
+        if (cost[i] < RALPH_LAP_INFINITY * 0.5) {
+            sorted_costs[num_costs++] = cost[i];
+        }
     }
+
+    if (num_costs == 0) {
+        free(sorted_costs);
+        return RALPH_LAP_INFEASIBLE;
+    }
+
+    /* Sort costs */
+    qsort(sorted_costs, num_costs, sizeof(double), compare_double);
+
+    /* Remove duplicates for efficiency */
+    int unique_count = 1;
+    for (int i = 1; i < num_costs; i++) {
+        if (sorted_costs[i] > sorted_costs[unique_count - 1] + 1e-9) {
+            sorted_costs[unique_count++] = sorted_costs[i];
+        }
+    }
+    num_costs = unique_count;
+
+    /* Binary search for optimal threshold */
+    int left = 0, right = num_costs - 1;
+    int best_idx = -1;
+
+    /* For maximin: search in reverse (find maximum threshold with valid matching) */
+    if (prob->objective == RALPH_LAP_MAXIMIZE) {
+        /* First check if any matching exists at highest threshold */
+        if (!bottleneck_matching_exists(n, cost, prob->objective,
+                                        sorted_costs[0], result->row_sol, ws)) {
+            free(sorted_costs);
+            return RALPH_LAP_INFEASIBLE;
+        }
+
+        while (left <= right) {
+            int mid = left + (right - left) / 2;
+            double threshold = sorted_costs[num_costs - 1 - mid];  /* Search from max down */
+
+            if (bottleneck_matching_exists(n, cost, prob->objective,
+                                           threshold, result->row_sol, ws)) {
+                best_idx = num_costs - 1 - mid;
+                left = mid + 1;  /* Try higher minimum */
+            } else {
+                right = mid - 1;
+            }
+        }
+    } else {
+        /* Minimax: find minimum threshold with valid matching */
+        while (left <= right) {
+            int mid = left + (right - left) / 2;
+            double threshold = sorted_costs[mid];
+
+            if (bottleneck_matching_exists(n, cost, prob->objective,
+                                           threshold, result->row_sol, ws)) {
+                best_idx = mid;
+                right = mid - 1;  /* Try lower maximum */
+            } else {
+                left = mid + 1;
+            }
+        }
+    }
+
+    free(sorted_costs);
+
+    if (best_idx < 0) {
+        return RALPH_LAP_INFEASIBLE;
+    }
+
+    /* Compute bottleneck cost (max/min of assignment) */
+    if (result->costs) {
+        double bottleneck = (prob->objective == RALPH_LAP_MAXIMIZE) ? RALPH_LAP_INFINITY : 0;
+        for (int i = 0; i < n; i++) {
+            int j = result->row_sol[i];
+            double c = cost[i * n + j];
+            if (prob->objective == RALPH_LAP_MAXIMIZE) {
+                if (c < bottleneck) bottleneck = c;
+            } else {
+                if (c > bottleneck) bottleneck = c;
+            }
+        }
+        result->costs[0] = bottleneck;
+    }
+
+    /* Fill col_sol if requested */
+    if (result->col_sol) {
+        for (int j = 0; j < n; j++) result->col_sol[j] = -1;
+        for (int i = 0; i < n; i++) {
+            int j = result->row_sol[i];
+            if (j >= 0) result->col_sol[j] = i;
+        }
+    }
+
+    result->num_found = 1;
+    return RALPH_LAP_SUCCESS;
 }
 
 /*
@@ -3584,9 +3784,8 @@ RalphLapStatus ralph_lap_solve_ex(
 
     int max_dim = (problem->n > problem->m) ? problem->n : problem->m;
 
-    if (!ws && (opts->warm_start || opts->num_forbidden > 0 ||
-                opts->algorithm == RALPH_LAP_ALG_K_BEST)) {
-        /* Need workspace for these features */
+    if (!ws) {
+        /* Always need workspace for unified API (internal solver requires it) */
         ws = ralph_lap_workspace_create(max_dim);
         if (!ws) return RALPH_LAP_MEMORY_ERROR;
         ws_allocated = 1;
@@ -3617,8 +3816,7 @@ RalphLapStatus ralph_lap_solve_ex(
             break;
 
         case RALPH_LAP_ALG_BOTTLENECK:
-            /* Not yet implemented */
-            status = RALPH_LAP_INVALID_INPUT;
+            status = lap_solve_bottleneck_unified(problem, opts, result, ws);
             break;
 
         case RALPH_LAP_ALG_STANDARD:

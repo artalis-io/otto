@@ -2926,6 +2926,280 @@ void test_unified_maximize(void) {
     ASSERT(total_cost >= 15.0 - TOLERANCE, "Maximize cost >= 15");
 }
 
+void test_unified_sparse_k_best(void) {
+    printf("\n=== Test: Unified API - Sparse k-Best ===\n");
+
+    /* 3x3 sparse with only some edges */
+    int row_ptr[] = {0, 2, 4, 6};
+    int col_idx[] = {0, 1, 1, 2, 0, 2};
+    double values[] = {1, 5, 2, 6, 3, 4};
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_SPARSE,
+        .sparse = {6, row_ptr, col_idx, values},
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_K_BEST;
+    opts.k = 3;
+
+    int solutions[9];
+    double costs[3];
+    RalphLapResult res = {
+        .row_sol = solutions,
+        .costs = costs
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Sparse k-best succeeded");
+    ASSERT(res.num_found >= 1, "Found at least 1 solution");
+    /* Optimal: 0->0 (1), 1->1 (2), 2->2 (4) = 7 */
+    ASSERT_NEAR(costs[0], 7.0, TOLERANCE, "Best sparse cost is 7");
+    printf("  Found %d solutions, best cost: %.1f\n", res.num_found, costs[0]);
+}
+
+void test_unified_callback_k_best(void) {
+    printf("\n=== Test: Unified API - Callback k-Best ===\n");
+
+    double matrix[9] = {
+        1, 10, 10,
+        10, 2, 10,
+        10, 10, 3
+    };
+
+    typedef struct { int n; const double *c; } CostCtx;
+    CostCtx ctx = {3, matrix};
+
+    double callback_fn(int i, int j, void *ud) {
+        CostCtx *c = (CostCtx*)ud;
+        return c->c[i * c->n + j];
+    }
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_CALLBACK,
+        .callback = {callback_fn, &ctx},
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_K_BEST;
+    opts.k = 3;
+
+    int solutions[9];
+    double costs[3];
+    RalphLapResult res = {
+        .row_sol = solutions,
+        .costs = costs
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Callback k-best succeeded");
+    ASSERT(res.num_found >= 3, "Found at least 3 solutions");
+    /* Optimal: diagonal = 1+2+3 = 6 */
+    ASSERT_NEAR(costs[0], 6.0, TOLERANCE, "Best callback cost is 6");
+    ASSERT(costs[0] <= costs[1] && costs[1] <= costs[2], "Costs in order");
+    printf("  Costs: %.1f, %.1f, %.1f\n", costs[0], costs[1], costs[2]);
+}
+
+void test_unified_warm_start(void) {
+    printf("\n=== Test: Unified API - Warm Start ===\n");
+
+    double cost[9] = {
+        1, 10, 10,
+        10, 2, 10,
+        10, 10, 3
+    };
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    /* Create workspace for warm start */
+    RalphLapWorkspace *ws = ralph_lap_workspace_create(3);
+    ASSERT(ws != NULL, "Workspace created");
+
+    /* First solve - cold start */
+    int row_sol[3];
+    double total_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &total_cost
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.warm_start = 1;  /* Enable warm start (but first solve is cold) */
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, ws);
+    ASSERT(status == RALPH_LAP_SUCCESS, "First solve succeeded");
+    ASSERT_NEAR(total_cost, 6.0, TOLERANCE, "First cost is 6");
+
+    /* Workspace should now have warm start data from ralph_lap_solve_warm */
+    /* Note: unified API calls ralph_lap_solve_warm which saves state */
+
+    /* Second solve with same problem - should use warm start */
+    double cost2;
+    RalphLapResult res2 = {
+        .row_sol = row_sol,
+        .costs = &cost2
+    };
+
+    status = ralph_lap_solve_ex(&prob, &opts, &res2, ws);
+    ASSERT(status == RALPH_LAP_SUCCESS, "Warm start solve succeeded");
+    ASSERT_NEAR(cost2, 6.0, TOLERANCE, "Warm start cost is 6");
+
+    printf("  Cold start cost: %.1f, Warm start cost: %.1f\n", total_cost, cost2);
+
+    ralph_lap_workspace_free(ws);
+}
+
+void test_unified_bottleneck_basic(void) {
+    printf("\n=== Test: Unified API - Bottleneck LAP (Minimax) ===\n");
+
+    /* Cost matrix:
+     *     0   1   2
+     * 0 [ 1   8   3 ]
+     * 1 [ 4   2   6 ]
+     * 2 [ 7   5   9 ]
+     *
+     * Standard optimal: 0->0, 1->1, 2->2 = 1+2+9 = 12
+     * But max cost is 9
+     *
+     * Bottleneck optimal should minimize the maximum:
+     * Try 0->2, 1->1, 2->0 = 3+2+7, max=7 ✓
+     * Or 0->0, 1->1, 2->1 (invalid - 2 uses col 1)
+     * Best minimax = 7
+     */
+    double cost[9] = {
+        1, 8, 3,
+        4, 2, 6,
+        7, 5, 9
+    };
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_BOTTLENECK;
+
+    int row_sol[3];
+    double bottleneck_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &bottleneck_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Bottleneck solve succeeded");
+
+    /* Find actual maximum in assignment */
+    double actual_max = 0;
+    for (int i = 0; i < 3; i++) {
+        int j = row_sol[i];
+        if (cost[i * 3 + j] > actual_max) actual_max = cost[i * 3 + j];
+    }
+
+    printf("  Assignment: %d->%d, %d->%d, %d->%d\n",
+           0, row_sol[0], 1, row_sol[1], 2, row_sol[2]);
+    printf("  Bottleneck cost (max): %.1f\n", bottleneck_cost);
+    printf("  Computed max: %.1f\n", actual_max);
+
+    ASSERT_NEAR(bottleneck_cost, actual_max, TOLERANCE, "Returned cost matches actual max");
+    ASSERT(bottleneck_cost <= 7.0 + TOLERANCE, "Minimax <= 7 (optimal)");
+}
+
+void test_unified_bottleneck_maximin(void) {
+    printf("\n=== Test: Unified API - Bottleneck LAP (Maximin) ===\n");
+
+    /* Same matrix, maximize minimum */
+    double cost[9] = {
+        1, 8, 3,
+        4, 2, 6,
+        7, 5, 9
+    };
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MAXIMIZE  /* Maximin */
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_BOTTLENECK;
+
+    int row_sol[3];
+    double bottleneck_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &bottleneck_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Maximin solve succeeded");
+
+    /* Find actual minimum in assignment */
+    double actual_min = RALPH_LAP_INFINITY;
+    for (int i = 0; i < 3; i++) {
+        int j = row_sol[i];
+        if (cost[i * 3 + j] < actual_min) actual_min = cost[i * 3 + j];
+    }
+
+    printf("  Assignment: %d->%d, %d->%d, %d->%d\n",
+           0, row_sol[0], 1, row_sol[1], 2, row_sol[2]);
+    printf("  Bottleneck cost (min): %.1f\n", bottleneck_cost);
+    printf("  Computed min: %.1f\n", actual_min);
+
+    ASSERT_NEAR(bottleneck_cost, actual_min, TOLERANCE, "Returned cost matches actual min");
+}
+
+void test_unified_bottleneck_diagonal(void) {
+    printf("\n=== Test: Unified API - Bottleneck Diagonal ===\n");
+
+    /* Diagonal costs: 1, 2, 3 - all other infinity */
+    double cost[9] = {
+        1, RALPH_LAP_INFINITY, RALPH_LAP_INFINITY,
+        RALPH_LAP_INFINITY, 2, RALPH_LAP_INFINITY,
+        RALPH_LAP_INFINITY, RALPH_LAP_INFINITY, 3
+    };
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_BOTTLENECK;
+
+    int row_sol[3];
+    double bottleneck_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &bottleneck_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Diagonal bottleneck succeeded");
+    ASSERT(row_sol[0] == 0 && row_sol[1] == 1 && row_sol[2] == 2, "Diagonal assignment");
+    ASSERT_NEAR(bottleneck_cost, 3.0, TOLERANCE, "Minimax = 3 (largest diagonal)");
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -2999,6 +3273,12 @@ int main(void) {
     test_unified_callback();
     test_unified_options_combination();
     test_unified_maximize();
+    test_unified_sparse_k_best();
+    test_unified_callback_k_best();
+    test_unified_warm_start();
+    test_unified_bottleneck_basic();
+    test_unified_bottleneck_maximin();
+    test_unified_bottleneck_diagonal();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",
