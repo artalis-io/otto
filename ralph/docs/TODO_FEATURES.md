@@ -249,6 +249,7 @@ double lap_solve_sparse_csr(const SparseLAP *lap, int *row_sol, int *col_sol);
 - [x] **Warm start / incremental updates** (2026-01-29)
 - [x] **SIMD optimizations** (dense, sparse, warm start validation)
 - [x] **ε-scaling auction** for tie-breaking
+- [x] **Cost matrix callbacks** - O(n) memory (2026-01-29)
 - [ ] Integrate with problem detection (Section 3)
 
 ### Files Created
