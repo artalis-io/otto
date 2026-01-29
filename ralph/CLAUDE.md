@@ -103,9 +103,9 @@ ralph_lap_solve_ex(&prob, &opts, &res, workspace);
 | Dense | ✓ | ✓ | ✓ | ✓ |
 | Sparse | ✓ | ✓* | ✓ | ✓ |
 | Callback | ✓ | ✓* | - | - |
-| Rectangular | ✓ | - | - | - |
+| Rectangular | ✓ | ✓* | ✓ | - |
 
-*Sparse and callback k-best convert to dense internally.
+*Sparse, callback, and rectangular k-best convert to dense/square internally.
 
 ### Problem Detection
 
@@ -156,7 +156,7 @@ When enabled, assignment problems formulated as LPs/MIPs are solved with JVC ins
 # All LP/MIP tests (73 tests)
 make test
 
-# LAP tests only (255 tests)
+# LAP tests only (273 tests)
 make test-lap
 
 # LP only (faster)

@@ -3200,6 +3200,235 @@ void test_unified_bottleneck_diagonal(void) {
     ASSERT_NEAR(bottleneck_cost, 3.0, TOLERANCE, "Minimax = 3 (largest diagonal)");
 }
 
+void test_unified_bottleneck_rectangular(void) {
+    printf("\n=== Test: Unified API - Bottleneck Rectangular ===\n");
+
+    /* 2 workers, 4 jobs: assign 2 workers to minimize worst assignment */
+    /* Cost matrix (2x4):
+     *     j=0  j=1  j=2  j=3
+     * i=0:  5    3    8    2
+     * i=1:  7    4    1    6
+     *
+     * Possible assignments:
+     * (0->0, 1->1): max(5,4)=5  (0->0, 1->2): max(5,1)=5  (0->0, 1->3): max(5,6)=6
+     * (0->1, 1->0): max(3,7)=7  (0->1, 1->2): max(3,1)=3* (0->1, 1->3): max(3,6)=6
+     * (0->2, 1->0): max(8,7)=8  (0->2, 1->1): max(8,4)=8  (0->2, 1->3): max(8,6)=8
+     * (0->3, 1->0): max(2,7)=7  (0->3, 1->1): max(2,4)=4  (0->3, 1->2): max(2,1)=2*
+     *
+     * Optimal minimax: 0->3, 1->2 with max cost = 2
+     */
+    double cost[8] = {
+        5, 3, 8, 2,
+        7, 4, 1, 6
+    };
+
+    RalphLapProblem prob = {
+        .n = 2, .m = 4,  /* 2 workers, 4 jobs */
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_BOTTLENECK;
+
+    int row_sol[2];
+    double bottleneck_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &bottleneck_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    printf("  Assignment: 0->%d, 1->%d\n", row_sol[0], row_sol[1]);
+    printf("  Bottleneck cost: %.1f\n", bottleneck_cost);
+
+    /* Verify valid assignment */
+    ASSERT(status == RALPH_LAP_SUCCESS, "Rectangular bottleneck succeeded");
+    ASSERT(row_sol[0] != row_sol[1], "Workers assigned different jobs");
+    ASSERT(row_sol[0] >= 0 && row_sol[0] < 4, "Worker 0 assigned valid job");
+    ASSERT(row_sol[1] >= 0 && row_sol[1] < 4, "Worker 1 assigned valid job");
+
+    /* Verify optimal - max(cost[0][row_sol[0]], cost[1][row_sol[1]]) should be 2 */
+    double actual_max = cost[row_sol[0]] > cost[4 + row_sol[1]] ?
+                        cost[row_sol[0]] : cost[4 + row_sol[1]];
+    ASSERT_NEAR(bottleneck_cost, 2.0, TOLERANCE, "Optimal minimax = 2");
+    ASSERT_NEAR(actual_max, bottleneck_cost, TOLERANCE, "Computed max matches returned cost");
+}
+
+void test_unified_bottleneck_rect_maximin(void) {
+    printf("\n=== Test: Unified API - Bottleneck Rectangular Maximin ===\n");
+
+    /* 2 workers, 3 jobs: assign 2 workers to maximize worst (minimum) assignment */
+    /* Cost matrix (2x3):
+     *     j=0  j=1  j=2
+     * i=0:  5    3    8
+     * i=1:  7    4    1
+     *
+     * Possible assignments (looking for max of min):
+     * (0->0, 1->1): min(5,4)=4  (0->0, 1->2): min(5,1)=1  (0->1, 1->0): min(3,7)=3
+     * (0->1, 1->2): min(3,1)=1  (0->2, 1->0): min(8,7)=7* (0->2, 1->1): min(8,4)=4
+     *
+     * Optimal maximin: 0->2, 1->0 with min cost = 7
+     */
+    double cost[6] = {
+        5, 3, 8,
+        7, 4, 1
+    };
+
+    RalphLapProblem prob = {
+        .n = 2, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MAXIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_BOTTLENECK;
+
+    int row_sol[2];
+    double bottleneck_cost;
+    RalphLapResult res = {
+        .row_sol = row_sol,
+        .costs = &bottleneck_cost
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    printf("  Assignment: 0->%d, 1->%d\n", row_sol[0], row_sol[1]);
+    printf("  Bottleneck cost (min): %.1f\n", bottleneck_cost);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Rectangular maximin succeeded");
+
+    /* Verify optimal maximin = 7 */
+    double actual_min = cost[row_sol[0]] < cost[3 + row_sol[1]] ?
+                        cost[row_sol[0]] : cost[3 + row_sol[1]];
+    ASSERT_NEAR(bottleneck_cost, 7.0, TOLERANCE, "Optimal maximin = 7");
+    ASSERT_NEAR(actual_min, bottleneck_cost, TOLERANCE, "Computed min matches returned cost");
+}
+
+void test_unified_k_best_rectangular(void) {
+    printf("\n=== Test: Unified API - k-Best Rectangular ===\n");
+
+    /* 2 workers, 3 jobs: find 3 best assignments */
+    /* Cost matrix (2x3):
+     *     j=0  j=1  j=2
+     * i=0:  1    4    7
+     * i=1:  2    5    8
+     *
+     * Possible assignments (total cost):
+     * (0->0, 1->1): 1+5=6*  (0->0, 1->2): 1+8=9   (0->1, 1->0): 4+2=6*
+     * (0->1, 1->2): 4+8=12  (0->2, 1->0): 7+2=9   (0->2, 1->1): 7+5=12
+     *
+     * Best 3: cost=6 (two ways), cost=9 (two ways)
+     */
+    double cost[6] = {
+        1, 4, 7,
+        2, 5, 8
+    };
+
+    RalphLapProblem prob = {
+        .n = 2, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_K_BEST;
+    opts.k = 3;
+
+    int solutions[6];  /* 3 solutions x 2 workers */
+    double costs[3];
+    RalphLapResult res = {
+        .row_sol = solutions,
+        .costs = costs
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Rectangular k-best succeeded");
+    ASSERT(res.num_found >= 3, "Found at least 3 solutions");
+
+    printf("  Found %d solutions:\n", res.num_found);
+    for (int s = 0; s < res.num_found && s < 3; s++) {
+        printf("    Solution %d: 0->%d, 1->%d, cost=%.1f\n",
+               s, solutions[s * 2], solutions[s * 2 + 1], costs[s]);
+    }
+
+    /* Verify costs are non-decreasing */
+    int ordered = 1;
+    for (int s = 1; s < res.num_found && s < 3; s++) {
+        if (costs[s] < costs[s-1] - TOLERANCE) {
+            ordered = 0;
+            break;
+        }
+    }
+    ASSERT(ordered, "Solutions in non-decreasing cost order");
+
+    /* Verify first solution is optimal (cost = 6) */
+    ASSERT_NEAR(costs[0], 6.0, TOLERANCE, "Optimal cost = 6");
+
+    /* Verify solutions are valid (distinct column assignments) */
+    int valid = 1;
+    for (int s = 0; s < res.num_found && s < 3; s++) {
+        int j0 = solutions[s * 2], j1 = solutions[s * 2 + 1];
+        if (j0 == j1 || j0 < 0 || j0 >= 3 || j1 < 0 || j1 >= 3) {
+            valid = 0;
+            break;
+        }
+    }
+    ASSERT(valid, "All solutions have valid distinct assignments");
+}
+
+void test_unified_k_best_rect_maximize(void) {
+    printf("\n=== Test: Unified API - k-Best Rectangular Maximize ===\n");
+
+    /* 2 workers, 3 jobs: find 2 best (maximum) assignments */
+    double cost[6] = {
+        1, 4, 7,
+        2, 5, 8
+    };
+
+    RalphLapProblem prob = {
+        .n = 2, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MAXIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_LAP_ALG_K_BEST;
+    opts.k = 2;
+
+    int solutions[4];
+    double costs[2];
+    RalphLapResult res = {
+        .row_sol = solutions,
+        .costs = costs
+    };
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Rectangular k-best maximize succeeded");
+    ASSERT(res.num_found >= 2, "Found at least 2 solutions");
+
+    printf("  Found %d solutions:\n", res.num_found);
+    for (int s = 0; s < res.num_found && s < 2; s++) {
+        printf("    Solution %d: 0->%d, 1->%d, cost=%.1f\n",
+               s, solutions[s * 2], solutions[s * 2 + 1], costs[s]);
+    }
+
+    /* Best maximize: (0->2, 1->1) = 7+5=12 or (0->1, 1->2) = 4+8=12 */
+    ASSERT_NEAR(costs[0], 12.0, TOLERANCE, "Optimal max cost = 12");
+
+    /* Verify non-increasing for maximize */
+    if (res.num_found >= 2) {
+        ASSERT(costs[1] <= costs[0] + TOLERANCE, "Second best <= first (maximize)");
+    }
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -3279,6 +3508,10 @@ int main(void) {
     test_unified_bottleneck_basic();
     test_unified_bottleneck_maximin();
     test_unified_bottleneck_diagonal();
+    test_unified_bottleneck_rectangular();
+    test_unified_bottleneck_rect_maximin();
+    test_unified_k_best_rectangular();
+    test_unified_k_best_rect_maximize();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",
