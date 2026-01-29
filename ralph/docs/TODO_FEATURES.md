@@ -302,6 +302,66 @@ double lap_solve_sparse_csr(const SparseLAP *lap, int *row_sol, int *col_sol);
 
 ---
 
+### Constrained LAP Design (Planned)
+
+Extends basic LAP with side constraints that break total unimodularity:
+
+```
+Basic LAP:
+minimize    Σᵢⱼ cᵢⱼ xᵢⱼ
+subject to  Σⱼ xᵢⱼ = 1    ∀i  (each row assigned once)
+            Σᵢ xᵢⱼ = 1    ∀j  (each col assigned once)
+            xᵢⱼ ∈ {0,1}
+
+Constrained LAP adds:
+            Σᵢⱼ aᵢⱼᵏ xᵢⱼ ≤ bₖ   for k = 1,...,K  (side constraints)
+```
+
+**Constraint Types:**
+
+| Type | Example | Formulation |
+|------|---------|-------------|
+| Capacity | Driver i carries ≤ 100kg | Σⱼ wⱼ xᵢⱼ ≤ 100 |
+| Certification | Driver i certified for jobs J | xᵢⱼ = 0 for j ∉ J |
+| Cardinality | Driver handles ≤ 3 jobs | Σⱼ xᵢⱼ ≤ 3 |
+| Conflict | Jobs j,k can't be same driver | xᵢⱼ + xᵢₖ ≤ 1 ∀i |
+| Precedence | If driver i gets j, must get k | xᵢⱼ ≤ xᵢₖ |
+| Budget | Total cost ≤ B | Σᵢⱼ cᵢⱼ xᵢⱼ ≤ B |
+
+**Proposed API:**
+
+```c
+typedef struct {
+    int nnz;              /* Number of nonzero coefficients */
+    int *rows, *cols;     /* Indices of nonzeros */
+    double *coefs;        /* Coefficients aᵢⱼ */
+    int sense;            /* LE, GE, EQ */
+    double rhs;           /* Right-hand side */
+} RalphClapConstraint;
+
+typedef struct {
+    int n;
+    const double *cost;
+    RalphLapObjective objective;
+    int num_constraints;
+    RalphClapConstraint *constraints;
+} RalphClapProblem;
+
+RalphLapStatus ralph_clap_solve(const RalphClapProblem *prob, RalphClapResult *res);
+```
+
+**Algorithms:**
+
+1. **Lagrangian Relaxation** - Dualize side constraints, solve sequence of pure LAPs with modified costs. O(I × n³) where I = iterations. Best for few loose constraints.
+
+2. **Branch-and-Bound with LAP** - Use JVC for LP relaxation at each node, branch on constraint violations. Best for few tight constraints.
+
+3. **MIP Fallback** - Use Ralph's general MIP solver when specialized methods fail.
+
+**Files to create:** `include/clap.h`, `src/clap.c`, `tests/test_clap.c`
+
+---
+
 ## 2. Network Flow Solver
 
 ### Problem Definition
