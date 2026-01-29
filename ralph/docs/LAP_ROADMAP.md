@@ -21,6 +21,7 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] Presolve detection (auto-detect LAP in LPs)
 - [x] k-Best assignments (Murty's algorithm)
 - [x] MIP with Assignment Subproblems (LAP-based LP relaxation)
+- [x] Unified API (Problem/Options/Result pattern)
 
 ---
 
@@ -331,6 +332,64 @@ ralph_set_int_param(model, "detect_special", 1);  /* Enable LAP detection */
 | Dense n=5000 | 900ms | 400ms |
 | Sparse n=10000, 5% density | - | 200ms |
 | Rectangular 1000×5000 | - | 200ms |
+
+---
+
+---
+
+### 8. ~~Unified API (Problem/Options/Result Pattern)~~ ✅ COMPLETED
+**Status: Implemented (2026-01-29)**
+
+Unified API that separates WHAT to solve from HOW to solve it, enabling orthogonal feature composition without combinatorial API explosion.
+
+**Problem:** Old API had separate functions for each combination (dense, sparse, rect, callback × standard, k-best × cold, warm = 24+ functions)
+
+**Solution:** Single entry point with structured parameters:
+
+```c
+/* Problem definition - WHAT to solve */
+typedef struct {
+    int n, m;                       /* Dimensions (n×m, rectangular if n≠m) */
+    RalphLapCostType cost_type;     /* DENSE, SPARSE, or CALLBACK */
+    const double *dense_cost;       /* Dense costs (or sparse/callback) */
+    RalphLapObjective objective;    /* MINIMIZE or MAXIMIZE */
+} RalphLapProblem;
+
+/* Solver options - HOW to solve */
+typedef struct {
+    RalphLapAlgorithm algorithm;    /* STANDARD, K_BEST, BOTTLENECK */
+    int k;                          /* For k-best */
+    int warm_start;                 /* Use workspace warm start */
+    int num_forbidden;              /* Forbidden (i,j) pairs */
+    const int *forbidden_rows, *forbidden_cols;
+    int epsilon_scaling, parallel;  /* Tuning */
+} RalphLapOptions;
+
+/* Result structure */
+typedef struct {
+    RalphLapStatus status;
+    int num_found;
+    int *row_sol;                   /* [num_found × n] solutions */
+    double *costs;                  /* [num_found] costs */
+    double *u, *v;                  /* Dual variables */
+} RalphLapResult;
+
+/* Unified solve */
+RalphLapStatus ralph_lap_solve_ex(
+    const RalphLapProblem *problem,
+    const RalphLapOptions *options,  /* NULL for defaults */
+    RalphLapResult *result,
+    RalphLapWorkspace *workspace     /* NULL for auto-allocate */
+);
+```
+
+**Benefits:**
+- All combinations work: sparse + k-best, callback + forbidden, rect + warm start
+- Zero overhead: dispatches to same optimized internal functions
+- Future-proof: add new options without new functions
+- Backward compatible: legacy functions unchanged
+
+**Tests:** 22 new tests for unified API (235 total LAP tests)
 
 ---
 

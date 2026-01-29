@@ -298,6 +298,41 @@ ralph_lap_solve_callback(n, my_cost, user_data, RALPH_LAP_MINIMIZE,
                          row_sol, NULL, NULL, NULL, &total_cost);
 ```
 
+### Unified API (Recommended)
+
+The unified API supports all feature combinations with a single function:
+
+```c
+/* Problem: WHAT to solve */
+RalphLapProblem prob = {
+    .n = 100, .m = 100,
+    .cost_type = RALPH_LAP_COST_DENSE,  /* or SPARSE, CALLBACK */
+    .dense_cost = cost_matrix,
+    .objective = RALPH_LAP_MINIMIZE
+};
+
+/* Options: HOW to solve */
+RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+opts.algorithm = RALPH_LAP_ALG_K_BEST;  /* or STANDARD */
+opts.k = 5;
+opts.num_forbidden = 3;  /* Forbidden assignments */
+opts.forbidden_rows = (int[]){0, 1, 2};
+opts.forbidden_cols = (int[]){0, 1, 2};
+
+/* Result storage */
+int solutions[500];  /* 5 × 100 */
+double costs[5];
+RalphLapResult res = {.row_sol = solutions, .costs = costs};
+
+/* Solve */
+ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+```
+
+**Supported combinations:**
+- Representations: dense, sparse (CSR), rectangular, callback
+- Algorithms: standard, k-best
+- Features: forbidden assignments, warm start, epsilon scaling
+
 ### LAP Integration with LP/MIP
 
 Assignment problems formulated as LPs/MIPs can be solved with JVC:
