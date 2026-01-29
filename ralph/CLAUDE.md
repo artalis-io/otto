@@ -9,7 +9,7 @@
 ```bash
 make          # Build libralph.a
 make test     # Run tests (73/73 should pass)
-make test-lap # Run LAP tests (213/213 should pass)
+make test-lap # Run LAP tests (255/255 should pass)
 ```
 
 ## Key Files
@@ -70,7 +70,42 @@ The LAP solver implements the Jonker-Volgenant-Castanon (JVC) algorithm:
 | Warm start | `ralph_lap_solve_warm()` | Reuse dual variables |
 | Callbacks | `ralph_lap_solve_callback()` | O(n) memory for huge problems |
 | k-Best | `ralph_lap_solve_k_best()` | Murty's algorithm |
+| Bottleneck | `ralph_lap_solve_ex()` | Minimax/maximin assignment |
 | ε-scaling | `ralph_lap_set_epsilon_scaling()` | For degenerate problems |
+
+### Unified API (Recommended)
+
+The unified API supports all feature combinations through a single function:
+
+```c
+RalphLapProblem prob = {
+    .n = 100, .m = 100,
+    .cost_type = RALPH_LAP_COST_DENSE,  /* or SPARSE, CALLBACK */
+    .dense_cost = cost_matrix,
+    .objective = RALPH_LAP_MINIMIZE
+};
+
+RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+opts.algorithm = RALPH_LAP_ALG_K_BEST;  /* or STANDARD, BOTTLENECK */
+opts.k = 5;
+opts.warm_start = 1;
+
+int solutions[500];
+double costs[5];
+RalphLapResult res = {.row_sol = solutions, .costs = costs};
+
+ralph_lap_solve_ex(&prob, &opts, &res, workspace);
+```
+
+**Feature matrix via unified API:**
+| Cost Type | Standard | k-Best | Bottleneck | Warm Start |
+|-----------|----------|--------|------------|------------|
+| Dense | ✓ | ✓ | ✓ | ✓ |
+| Sparse | ✓ | ✓* | ✓ | ✓ |
+| Callback | ✓ | ✓* | - | - |
+| Rectangular | ✓ | - | - | - |
+
+*Sparse and callback k-best convert to dense internally.
 
 ### Problem Detection
 
@@ -121,7 +156,7 @@ When enabled, assignment problems formulated as LPs/MIPs are solved with JVC ins
 # All LP/MIP tests (73 tests)
 make test
 
-# LAP tests only (213 tests)
+# LAP tests only (255 tests)
 make test-lap
 
 # LP only (faster)

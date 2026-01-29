@@ -313,7 +313,7 @@ RalphLapProblem prob = {
 
 /* Options: HOW to solve */
 RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
-opts.algorithm = RALPH_LAP_ALG_K_BEST;  /* or STANDARD */
+opts.algorithm = RALPH_LAP_ALG_K_BEST;  /* or STANDARD, BOTTLENECK */
 opts.k = 5;
 opts.num_forbidden = 3;  /* Forbidden assignments */
 opts.forbidden_rows = (int[]){0, 1, 2};
@@ -330,8 +330,9 @@ ralph_lap_solve_ex(&prob, &opts, &res, NULL);
 
 **Supported combinations:**
 - Representations: dense, sparse (CSR), rectangular, callback
-- Algorithms: standard, k-best
+- Algorithms: standard, k-best, bottleneck (minimax/maximin)
 - Features: forbidden assignments, warm start, epsilon scaling
+- Sparse/callback + k-best supported via dense conversion
 
 ### LAP Integration with LP/MIP
 
@@ -477,7 +478,7 @@ make test
 
 # Build and run LAP tests
 make test-lap
-# Expected: 213/213 passed
+# Expected: 255/255 passed
 ```
 
 ### Test Categories
@@ -495,15 +496,17 @@ make test-lap
 - LAP-based MIP (assignment problems)
 - API functions
 
-**LAP tests (213 tests):**
+**LAP tests (255 tests):**
 - Dense JVC (minimize/maximize)
 - Sparse LAP (CSR format)
 - Rectangular LAP (m×n)
 - Warm start / incremental
 - Cost callbacks
 - k-Best assignments (Murty)
+- Bottleneck LAP (minimax/maximin)
 - ε-scaling
 - Edge cases (infeasible, ties)
+- Unified API combinations (sparse+k-best, etc.)
 
 ### Running Specific Tests
 

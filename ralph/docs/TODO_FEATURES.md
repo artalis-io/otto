@@ -42,7 +42,7 @@ Ralph now has a dedicated JVC (Jonker-Volgenant-Castanon) LAP solver with:
 | n=1000 | 10ms | 6.7ms | 1.5ms (7x) |
 | n=2000 | 42ms | - | 6ms (7x) |
 
-**Test coverage:** 146 tests (100% passing)
+**Test coverage:** 255 tests (100% passing)
 
 ### Algorithm: Jonker-Volgenant-Castanon (JVC)
 
@@ -252,6 +252,10 @@ double lap_solve_sparse_csr(const SparseLAP *lap, int *row_sol, int *col_sol);
 - [x] **Cost matrix callbacks** - O(n) memory (2026-01-29)
 - [x] **k-Best assignments** - Murty's algorithm (2026-01-29)
 - [x] **MIP integration** - LAP-based LP relaxation in B&B (2026-01-29)
+- [x] **Unified API** - Problem/Options/Result pattern (2026-01-29)
+- [x] **Bottleneck LAP** - Minimax/maximin assignment (2026-01-29)
+- [x] **Sparse + k-Best** - Via dense conversion (2026-01-29)
+- [x] **Callback + k-Best** - Via dense conversion (2026-01-29)
 - [x] Integrate with problem detection (Section 3)
 
 ### Files Created
@@ -260,7 +264,7 @@ double lap_solve_sparse_csr(const SparseLAP *lap, int *row_sol, int *col_sol);
 |------|--------|
 | `include/lap.h` | ✅ Created - LAP solver API |
 | `src/lap.c` | ✅ Created - JVC implementation |
-| `tests/test_lap.c` | ✅ Created - 213 unit tests |
+| `tests/test_lap.c` | ✅ Created - 255 unit tests |
 | `benchmarks/bench_lap.c` | ✅ Created - LAP benchmarks |
 | `include/detect.h` | ✅ Extended - MIP LAP detection |
 | `src/detect.c` | ✅ Extended - MIP LAP solving |
@@ -276,7 +280,7 @@ double lap_solve_sparse_csr(const SparseLAP *lap, int *row_sol, int *col_sol);
 | Feature | Priority | Complexity | Logistics Use Case |
 |---------|----------|------------|-------------------|
 | **Batched LAP** | High | Medium | Multi-frame tracking, parallel route assignments |
-| **Bottleneck LAP** | Medium | Low | Load balancing (minimize worst driver workload) |
+| ~~**Bottleneck LAP**~~ | ✅ DONE | Low | Load balancing (minimize worst driver workload) |
 | **Online/Streaming LAP** | Medium | Medium | Real-time dispatch as orders arrive/cancel |
 | **Constrained LAP** | High | Medium | Driver-vehicle assignment with shift/capacity limits |
 | **3D Assignment** | Low | High | Multi-depot, multi-period fleet scheduling |
