@@ -332,7 +332,8 @@ ralph_lap_solve_ex(&prob, &opts, &res, NULL);
 - Representations: dense, sparse (CSR), rectangular, callback
 - Algorithms: standard, k-best, bottleneck (minimax/maximin)
 - Features: forbidden assignments, warm start, epsilon scaling
-- Sparse/callback + k-best supported via dense conversion
+- Sparse/callback/rectangular + k-best supported via conversion
+- Rectangular + bottleneck supported
 
 ### LAP Integration with LP/MIP
 
@@ -478,7 +479,7 @@ make test
 
 # Build and run LAP tests
 make test-lap
-# Expected: 255/255 passed
+# Expected: 273/273 passed
 ```
 
 ### Test Categories
@@ -496,7 +497,7 @@ make test-lap
 - LAP-based MIP (assignment problems)
 - API functions
 
-**LAP tests (255 tests):**
+**LAP tests (273 tests):**
 - Dense JVC (minimize/maximize)
 - Sparse LAP (CSR format)
 - Rectangular LAP (m×n)

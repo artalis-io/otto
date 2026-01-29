@@ -42,7 +42,7 @@ Ralph now has a dedicated JVC (Jonker-Volgenant-Castanon) LAP solver with:
 | n=1000 | 10ms | 6.7ms | 1.5ms (7x) |
 | n=2000 | 42ms | - | 6ms (7x) |
 
-**Test coverage:** 255 tests (100% passing)
+**Test coverage:** 273 tests (100% passing)
 
 ### Algorithm: Jonker-Volgenant-Castanon (JVC)
 

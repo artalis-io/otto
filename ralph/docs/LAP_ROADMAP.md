@@ -25,6 +25,8 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] Bottleneck LAP (minimax/maximin assignment)
 - [x] Sparse + k-Best combination (via dense conversion)
 - [x] Callback + k-Best combination (via dense conversion)
+- [x] Rectangular + k-Best combination (via padding)
+- [x] Rectangular + Bottleneck combination
 
 ---
 
@@ -406,7 +408,7 @@ RalphLapStatus ralph_lap_solve_ex(
 | ε-scaling | `opts.epsilon_scaling = 1` |
 | Parallel | `opts.parallel = 1` |
 
-**Tests:** 30+ tests for unified API (255 total LAP tests)
+**Tests:** 30+ tests for unified API (273 total LAP tests)
 
 ---
 
