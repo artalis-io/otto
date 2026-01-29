@@ -15,7 +15,7 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] Rectangular LAP (m × n problems)
 - [x] Runtime parallel enable/disable
 - [x] Sparse vs dense benchmarks
-- [x] Optional ε-scaling auction for tie-breaking
+- [x] ε-scaling auction for tie-breaking
 - [x] Incremental updates / warm start
 - [x] Cost matrix callbacks (O(n) memory)
 - [x] Presolve detection (auto-detect LAP in LPs)
@@ -148,17 +148,18 @@ RalphLapStatus ralph_lap_solve_callback_with_workspace(
 
 ---
 
-### 4. ε-Scaling Auction Algorithm
-**Priority: Low** | **Complexity: High**
+### 4. ~~ε-Scaling Auction Algorithm~~ ✅ COMPLETED
+**Status: Implemented**
 
-Alternative algorithm with guaranteed polynomial convergence:
-- Start with large ε, refine progressively
-- More predictable iteration counts
-- Better for certain problem structures
+Optional ε-scaling for tie-breaking in degenerate problems:
+- Progressively refines solution through decreasing epsilon values
+- Configurable scaling factor
 
-**Benefits:**
-- Guaranteed O(n³ log(nC)) complexity
-- More robust on degenerate problems
+**API:**
+```c
+ralph_lap_set_epsilon_scaling(1);      /* Enable */
+ralph_lap_set_epsilon_factor(4.0);     /* Set scaling factor (default: 4.0) */
+```
 
 ---
 
