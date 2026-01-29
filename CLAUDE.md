@@ -1,8 +1,8 @@
-# Claude Code Instructions for FuelWise Platform
+# Claude Code Instructions for OTTO Platform
 
 ## Project Overview
 
-FuelWise is a truck fleet optimization platform written primarily in C with a TypeScript React frontend. It combines route planning, fuel cost optimization, and custom map rendering. All core libraries are zero-dependency and compile to WebAssembly.
+**OTTO** (**O**ptimization for **T**rucking and **T**ransport **O**perations) is a comprehensive trucking and logistics optimization platform written primarily in C with TypeScript React frontends. It combines route planning, fuel cost optimization, Hours of Service compliance, fleet scheduling, and custom map rendering. All core libraries are zero-dependency and compile to WebAssembly.
 
 ## Quick Start
 
@@ -15,10 +15,14 @@ make test
 
 # Start servers
 make run-fuelwise-api         # FuelWise API on :8080
+make run-velo-api             # Route server on :8082
+make run-carta-api            # Tile server on :8081
 make fuelwise-ui-dev          # FuelWise UI on :5173
 ```
 
 ## Component Summary
+
+### Active Components
 
 | Component | Location | Language | Purpose |
 |-----------|----------|----------|---------|
@@ -28,6 +32,23 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 | FuelWise | `fuelwise/` | C | Refueling domain logic |
 | Shared | `shared/` | C | Common geo utilities |
 | Vendor | `vendor/` | C | Third-party libs (see below) |
+
+### Planned Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| HoSE | `hose/` | **H**ours **o**f **S**ervice **E**ngine - FMCSA/EC561 compliance |
+| Tempo | `tempo/` | **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator |
+| Arbor | `arbor/` | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
+| Sigma | `sigma/` | **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation |
+| Pulse | `pulse/` | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
+
+See `docs/TODO_FEATURES.md` for detailed specifications of planned components.
+
+### Applications
+
+| Component | Location | Language | Purpose |
+|-----------|----------|----------|---------|
 | FuelWise API | `fuelwise/api/` | C | Refueling REST API |
 | Route Server | `velo/api/` | C | Routing REST API |
 | Tile Server | `carta/api/` | C | Tile server REST API |
@@ -174,6 +195,12 @@ make run-carta-api    # Show Carta tile server usage
 ┌─────────────────────────────────────────────────────────┐
 │  UI (React) / WASM (Browser) / API (mongoose)          │
 ├─────────────────────────────────────────────────────────┤
+│  Fleet Optimization [PLANNED]                           │
+│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌───────┐ │
+│  │  HoSE  │ │ Tempo  │ │ Arbor  │ │ Sigma  │ │ Pulse │ │
+│  │  HoS   │ │ Time   │ │ Search │ │ Fleet  │ │ PTA   │ │
+│  └────────┘ └────────┘ └────────┘ └────────┘ └───────┘ │
+├─────────────────────────────────────────────────────────┤
 │  Domain Libraries                                       │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐       │
 │  │  FuelWise   │ │    Velo     │ │   Carta     │       │
@@ -194,6 +221,7 @@ make run-carta-api    # Show Carta tile server usage
 ```
 
 See `docs/ARCHITECTURE.md` for detailed architecture documentation.
+See `docs/TODO_FEATURES.md` for planned component specifications.
 
 ## Vendor Libraries
 
@@ -292,6 +320,40 @@ Individual Dockerfiles:
 - `Dockerfile` - Main FuelWise image
 - `docker/Dockerfile.velo` - Standalone Velo route server
 - `docker/Dockerfile.carta` - Standalone Carta tile server
+
+## Planned Components Overview
+
+The following components are documented in detail in `docs/TODO_FEATURES.md`:
+
+### HoSE - Hours of Service Engine
+- FMCSA 4-clock model (8h break, 11h drive, 14h shift, 70h cycle)
+- EU EC/561 rules (4.5h drive, 9/10h daily, 56h weekly, 90h bi-weekly)
+- Transit + loading algorithm with break scheduling
+- Pattern-based acceleration for long-haul
+
+### Tempo - Business Rules Engine
+- Time window constraints (continuous, recurring, recurring without weekends)
+- Intermediate tasks (ITSKs) placement
+- Facility hours, blackout periods
+- Max transit constraints
+
+### Arbor - State-Space Search Engine
+- Generic state-space search framework
+- DFS with explicit stack, best-first, beam search
+- Composable pruning heuristics
+- Solution pool management
+
+### Sigma - Fleet Plan Selection Engine
+- Set covering/partitioning MIP formulation
+- Integrates with Ralph solver
+- Column generation for large-scale problems
+- Vehicle/driver assignment constraints
+
+### Pulse - Execution Tracker and PTA Engine
+- Forward simulation of plan execution
+- Predicted Time of Arrival (PTA) computation
+- Automatic break insertion using HoSE
+- Time window validation using Tempo
 
 ## Design Principles
 
