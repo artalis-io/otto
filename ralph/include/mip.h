@@ -6,6 +6,7 @@
 #define RALPH_MIP_H
 
 #include "lp.h"
+#include "detect.h"
 
 /* Default MIP parameters */
 #define RALPH_DEFAULT_NODE_LIMIT 1000000
@@ -153,10 +154,16 @@ typedef struct {
     int root_iterations;
     double solve_time;
 
+    /* LAP-based solving (for assignment MIPs) */
+    int use_lap_solver;          /* 1 if LAP structure detected and enabled */
+    MIPLAPSignature *lap_sig;    /* LAP signature for LP relaxations */
+    int lap_nodes_solved;        /* Number of nodes solved with LAP */
+    int simplex_nodes_solved;    /* Number of nodes solved with simplex */
+
 } MIPSolver;
 
 /* MIP solver functions */
-MIPSolver* mip_create(LPModel *model);
+MIPSolver* mip_create(LPModel *model, int detect_special);
 void mip_free(MIPSolver *solver);
 int mip_solve(MIPSolver *solver);
 

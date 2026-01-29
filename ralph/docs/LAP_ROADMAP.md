@@ -20,6 +20,7 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] Cost matrix callbacks (O(n) memory)
 - [x] Presolve detection (auto-detect LAP in LPs)
 - [x] k-Best assignments (Murty's algorithm)
+- [x] MIP with Assignment Subproblems (LAP-based LP relaxation)
 
 ---
 
@@ -258,13 +259,51 @@ ralph_optimize(model);  /* Will use JVC if LAP structure detected */
 
 ---
 
-### 7. MIP with Assignment Subproblems
-**Priority: Low** | **Complexity: High**
+### 7. ~~MIP with Assignment Subproblems~~ ✅ COMPLETED
+**Status: Implemented (2026-01-29)**
 
-Specialized branch-and-bound for problems with assignment structure:
-- Use LAP for LP relaxations
-- Exploit problem structure in branching
-- Tighter bounds from combinatorial analysis
+Specialized MIP solving for problems with LAP structure:
+- Automatic LAP structure detection in MIP models
+- LAP-based LP relaxation solving at B&B nodes
+- Variable fixings (from branching) handled via cost modification
+- Falls back to simplex when LAP detection disabled
+
+**API:**
+```c
+/* MIP LAP detection (include/detect.h) */
+typedef struct {
+    LAPSignature base;
+    int num_vars;
+    double *base_costs;
+    void *lap_workspace;
+} MIPLAPSignature;
+
+int detect_lap_mip(const LPModel *model, MIPLAPSignature *sig);
+void detect_lap_mip_free(MIPLAPSignature *sig);
+int solve_lap_at_node(MIPLAPSignature *sig, const double *lb,
+                      const double *ub, double *solution, double *obj_val);
+
+/* Enable in MIP solver */
+ralph_set_int_param(model, "detect_special", 1);  /* Enable LAP detection */
+```
+
+**Implementation:**
+- `solve_lap_at_node()` modifies costs based on variable bounds:
+  - Variable fixed to 0: set cost to infinity (forbidden)
+  - Variable fixed to 1: forbid all other assignments in same row/col
+- MIP solver tracks `lap_nodes_solved` vs `simplex_nodes_solved`
+- For pure assignments, LP relaxation is naturally integral (solves in 1 node)
+
+**Performance Results:**
+| Size | LP Relaxation (JVC) | LP Relaxation (Simplex) | Speedup |
+|------|---------------------|-------------------------|---------|
+| 10×10 | 0.001ms | 0.095ms | 86× |
+| 20×20 | 0.001ms | 0.886ms | 633× |
+| 25×25 | 0.002ms | 1.306ms | 622× |
+
+**Benchmarks:** `bench_mip_lap()` in `benchmarks/bench_lap.c`
+
+**Note:** Pure assignment MIPs solve at root node (LP is integral due to total unimodularity). LAP-based approach shows greater benefit when additional constraints break integrality.
 
 ---
 

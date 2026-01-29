@@ -915,6 +915,169 @@ void test_mip_strong_branching_regression(void) {
 }
 
 /* ============================================================================
+ * Test: LAP-based MIP - Pure Assignment Problem
+ *
+ * A pure assignment problem (3x3) formulated as MIP:
+ * min sum c[i,j] * x[i,j]
+ * s.t. sum_j x[i,j] = 1 for all i (each row assigned once)
+ *      sum_i x[i,j] = 1 for all j (each col assigned once)
+ *      x[i,j] binary
+ *
+ * This should be solved using the LAP solver for LP relaxations.
+ * ============================================================================ */
+void test_lap_mip_assignment(void) {
+    printf("\n=== Test: LAP-based MIP - Pure Assignment ===\n");
+
+    /* Cost matrix:
+     *      j=0  j=1  j=2
+     * i=0   1   10   10
+     * i=1  10    2   10
+     * i=2  10   10    3
+     *
+     * Optimal: diagonal assignment with cost 1+2+3 = 6
+     */
+    double costs[9] = {
+        1, 10, 10,
+        10, 2, 10,
+        10, 10, 3
+    };
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* Add 9 binary variables x[i,j] with objective costs */
+    for (int i = 0; i < 9; i++) {
+        ralph_add_var(model, 0.0, 1.0, costs[i], RALPH_BINARY);
+    }
+
+    /* Row constraints: sum_j x[i,j] = 1 for each row i */
+    for (int i = 0; i < 3; i++) {
+        int idx[3] = {i*3, i*3+1, i*3+2};
+        double val[3] = {1.0, 1.0, 1.0};
+        ralph_add_constraint(model, 3, idx, val, RALPH_EQUAL, 1.0);
+    }
+
+    /* Column constraints: sum_i x[i,j] = 1 for each column j */
+    for (int j = 0; j < 3; j++) {
+        int idx[3] = {j, 3+j, 6+j};
+        double val[3] = {1.0, 1.0, 1.0};
+        ralph_add_constraint(model, 3, idx, val, RALPH_EQUAL, 1.0);
+    }
+
+    /* Enable LAP detection for this model */
+    ralph_set_int_param(model, "detect_special", 1);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, 6.0, TOLERANCE, "Optimal cost is 6");
+
+    /* Verify solution is a valid assignment */
+    double sol[9];
+    ralph_get_solution(model, sol);
+
+    int valid = 1;
+    /* Check row sums */
+    for (int i = 0; i < 3 && valid; i++) {
+        double sum = sol[i*3] + sol[i*3+1] + sol[i*3+2];
+        if (fabs(sum - 1.0) > TOLERANCE) valid = 0;
+    }
+    /* Check col sums */
+    for (int j = 0; j < 3 && valid; j++) {
+        double sum = sol[j] + sol[3+j] + sol[6+j];
+        if (fabs(sum - 1.0) > TOLERANCE) valid = 0;
+    }
+    ASSERT(valid, "Solution is a valid assignment");
+
+    /* Verify all variables are binary */
+    int binary_ok = 1;
+    for (int i = 0; i < 9; i++) {
+        if (fabs(sol[i]) > TOLERANCE && fabs(sol[i] - 1.0) > TOLERANCE) {
+            binary_ok = 0;
+        }
+    }
+    ASSERT(binary_ok, "All variables are binary");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: LAP-based MIP - Larger Assignment Problem (5x5)
+ * ============================================================================ */
+void test_lap_mip_assignment_5x5(void) {
+    printf("\n=== Test: LAP-based MIP - 5x5 Assignment ===\n");
+
+    /* Random cost matrix */
+    double costs[25] = {
+        7, 2, 1, 9, 4,
+        9, 6, 9, 5, 5,
+        3, 8, 3, 1, 8,
+        7, 9, 4, 2, 2,
+        8, 4, 7, 4, 8
+    };
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* Add 25 binary variables */
+    for (int i = 0; i < 25; i++) {
+        ralph_add_var(model, 0.0, 1.0, costs[i], RALPH_BINARY);
+    }
+
+    /* Row constraints */
+    for (int i = 0; i < 5; i++) {
+        int idx[5] = {i*5, i*5+1, i*5+2, i*5+3, i*5+4};
+        double val[5] = {1, 1, 1, 1, 1};
+        ralph_add_constraint(model, 5, idx, val, RALPH_EQUAL, 1.0);
+    }
+
+    /* Column constraints */
+    for (int j = 0; j < 5; j++) {
+        int idx[5] = {j, 5+j, 10+j, 15+j, 20+j};
+        double val[5] = {1, 1, 1, 1, 1};
+        ralph_add_constraint(model, 5, idx, val, RALPH_EQUAL, 1.0);
+    }
+
+    ralph_set_int_param(model, "detect_special", 1);
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    /* Verify solution is a valid assignment */
+    double sol[25];
+    ralph_get_solution(model, sol);
+
+    int valid = 1;
+    for (int i = 0; i < 5 && valid; i++) {
+        double row_sum = 0;
+        for (int j = 0; j < 5; j++) row_sum += sol[i*5+j];
+        if (fabs(row_sum - 1.0) > TOLERANCE) valid = 0;
+    }
+    for (int j = 0; j < 5 && valid; j++) {
+        double col_sum = 0;
+        for (int i = 0; i < 5; i++) col_sum += sol[i*5+j];
+        if (fabs(col_sum - 1.0) > TOLERANCE) valid = 0;
+    }
+    ASSERT(valid, "Solution is valid 5x5 assignment");
+
+    /* Compute cost manually */
+    double manual_cost = 0;
+    for (int i = 0; i < 25; i++) {
+        if (sol[i] > 0.5) manual_cost += costs[i];
+    }
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, manual_cost, TOLERANCE, "Objective matches computed cost");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -945,6 +1108,10 @@ int main(int argc, char **argv) {
         /* Regression tests for MIP bugs */
         test_mip_bound_adjustment_regression();     /* Suboptimal solution bug */
         test_mip_strong_branching_regression();     /* Strong branching crash */
+
+        /* LAP-based MIP tests */
+        test_lap_mip_assignment();
+        test_lap_mip_assignment_5x5();
     } else {
         printf("\n=== MIP tests skipped ===\n");
     }

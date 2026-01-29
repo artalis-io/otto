@@ -11,6 +11,7 @@
 #include <math.h>
 #include <time.h>
 #include "lap.h"
+#include "ralph.h"
 
 /* ============================================================================
  * Timing utilities
@@ -903,6 +904,206 @@ static void bench_callback(void) {
 }
 
 /* ============================================================================
+ * Benchmark: MIP with LAP structure (LAP-based vs Simplex-based LP relaxation)
+ * ============================================================================ */
+
+/* Create an assignment MIP: min sum c[i,j]*x[i,j] s.t. assignment constraints */
+static RalphModel *create_assignment_mip(int n, const double *cost) {
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* Add n*n binary variables with costs */
+    for (int i = 0; i < n * n; i++) {
+        ralph_add_var(model, 0.0, 1.0, cost[i], RALPH_BINARY);
+    }
+
+    /* Row constraints: sum_j x[i,j] = 1 for each row i */
+    int *idx = malloc(n * sizeof(int));
+    double *val = malloc(n * sizeof(double));
+    for (int j = 0; j < n; j++) val[j] = 1.0;
+
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) idx[j] = i * n + j;
+        ralph_add_constraint(model, n, idx, val, RALPH_EQUAL, 1.0);
+    }
+
+    /* Column constraints: sum_i x[i,j] = 1 for each column j */
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i < n; i++) idx[i] = i * n + j;
+        ralph_add_constraint(model, n, idx, val, RALPH_EQUAL, 1.0);
+    }
+
+    free(idx);
+    free(val);
+    return model;
+}
+
+static void bench_mip_lap(void) {
+    printf("\n");
+    printf("╔══════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║  MIP with LAP Structure (LAP-based vs Simplex-based LP relaxation)       ║\n");
+    printf("╠══════════════════════════════════════════════════════════════════════════╣\n");
+
+    /* Part 1: Full MIP benchmark (both methods solve in 1 node for pure assignments) */
+    printf("\n  Part 1: Assignment MIP (both methods solve optimally at root - no branching)\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+    printf("    Size    LAP-MIP (ms)   Simplex-MIP (ms)   Status    Objective\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    int sizes[] = {5, 10, 15, 20, 25};
+    int num_sizes = sizeof(sizes) / sizeof(sizes[0]);
+    Timer timer;
+
+    for (int s = 0; s < num_sizes; s++) {
+        int n = sizes[s];
+        double *cost = malloc(n * n * sizeof(double));
+
+        /* Generate random cost matrix */
+        srand(42 + n);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 10000) / 100.0;
+        }
+
+        int trials = (n <= 15) ? 10 : 5;
+        double lap_total = 0, simplex_total = 0;
+        double lap_obj = 0, simplex_obj = 0;
+
+        /* Benchmark with LAP-based LP relaxation */
+        for (int t = 0; t < trials; t++) {
+            RalphModel *model = create_assignment_mip(n, cost);
+            ralph_set_int_param(model, "detect_special", 1);
+            ralph_set_int_param(model, "verbose", 0);
+
+            timer_start(&timer);
+            ralph_optimize(model);
+            timer_stop(&timer);
+
+            lap_total += timer.elapsed_ms;
+            lap_obj = ralph_get_objval(model);
+            ralph_free(model);
+        }
+
+        /* Benchmark with simplex-based LP relaxation */
+        for (int t = 0; t < trials; t++) {
+            RalphModel *model = create_assignment_mip(n, cost);
+            ralph_set_int_param(model, "detect_special", 0);
+            ralph_set_int_param(model, "verbose", 0);
+
+            timer_start(&timer);
+            ralph_optimize(model);
+            timer_stop(&timer);
+
+            simplex_total += timer.elapsed_ms;
+            simplex_obj = ralph_get_objval(model);
+            ralph_free(model);
+        }
+
+        double lap_avg = lap_total / trials;
+        double simplex_avg = simplex_total / trials;
+
+        const char *status = (fabs(lap_obj - simplex_obj) < 1e-4) ? "OK" : "DIFF";
+
+        printf("  %4dx%-4d   %10.3f       %10.3f        %s      %.2f\n",
+               n, n, lap_avg, simplex_avg, status, lap_obj);
+
+        free(cost);
+    }
+
+    /* Part 2: Pure LAP vs LP relaxation (solving the LP, not MIP) */
+    printf("\n  Part 2: LP Relaxation Only (JVC vs Simplex without MIP overhead)\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+    printf("    Size    JVC (ms)     LP-Simplex (ms)    Speedup    Objectives\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    /* Only test sizes where LP simplex works reliably (n <= 25) */
+    int lp_sizes[] = {5, 10, 15, 20, 25};
+    int num_lp_sizes = sizeof(lp_sizes) / sizeof(lp_sizes[0]);
+
+    for (int s = 0; s < num_lp_sizes; s++) {
+        int n = lp_sizes[s];
+        double *cost = malloc(n * n * sizeof(double));
+
+        srand(42 + n);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 10000) / 100.0;
+        }
+
+        int *row_sol = malloc(n * sizeof(int));
+        int trials = 10;
+        double jvc_total = 0, lp_total = 0;
+        double jvc_obj = 0, lp_obj = 0;
+
+        /* Benchmark JVC */
+        for (int t = 0; t < trials; t++) {
+            timer_start(&timer);
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &jvc_obj);
+            timer_stop(&timer);
+            jvc_total += timer.elapsed_ms;
+        }
+
+        /* Benchmark LP */
+        for (int t = 0; t < trials; t++) {
+            timer_start(&timer);
+            ralph_lap_solve_lp(n, cost, RALPH_LAP_MINIMIZE, row_sol, &lp_obj);
+            timer_stop(&timer);
+            lp_total += timer.elapsed_ms;
+        }
+
+        double jvc_avg = jvc_total / trials;
+        double lp_avg = lp_total / trials;
+        double speedup = lp_avg / jvc_avg;
+
+        const char *match = (fabs(jvc_obj - lp_obj) < 1e-4) ? "match" : "DIFF";
+
+        printf("  %4dx%-4d   %10.4f      %10.3f       %6.0fx   %.2f (%s)\n",
+               n, n, jvc_avg, lp_avg, speedup, jvc_obj, match);
+
+        free(cost);
+        free(row_sol);
+    }
+
+    /* Part 3: JVC scaling to larger sizes (where LP fails) */
+    printf("\n  Part 3: JVC Only (larger sizes where LP simplex has numerical issues)\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+    printf("    Size    JVC (ms)     Objective\n");
+    printf("  ────────────────────────────────────────────────────────────────────────\n");
+
+    int large_sizes[] = {50, 100, 200, 500};
+    int num_large = sizeof(large_sizes) / sizeof(large_sizes[0]);
+
+    for (int s = 0; s < num_large; s++) {
+        int n = large_sizes[s];
+        double *cost = malloc(n * n * sizeof(double));
+
+        srand(42 + n);
+        for (int i = 0; i < n * n; i++) {
+            cost[i] = (rand() % 10000) / 100.0;
+        }
+
+        int *row_sol = malloc(n * sizeof(int));
+        int trials = (n <= 200) ? 5 : 3;
+        double jvc_total = 0;
+        double jvc_obj = 0;
+
+        for (int t = 0; t < trials; t++) {
+            timer_start(&timer);
+            ralph_lap_solve(n, cost, RALPH_LAP_MINIMIZE, row_sol, NULL, NULL, NULL, &jvc_obj);
+            timer_stop(&timer);
+            jvc_total += timer.elapsed_ms;
+        }
+
+        printf("  %4dx%-4d   %10.3f     %.2f\n", n, n, jvc_total / trials, jvc_obj);
+
+        free(cost);
+        free(row_sol);
+    }
+
+    printf("\n  Note: Assignment LP relaxations are naturally integral (total unimodularity),\n");
+    printf("        so MIP solves in 1 node. LAP-based MIP shows benefit when there are\n");
+    printf("        additional constraints that break integrality.\n");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -924,6 +1125,7 @@ int main(int argc, char *argv[]) {
     int run_epsilon = run_all || (argc > 1 && strcmp(argv[1], "epsilon") == 0);
     int run_warm = run_all || (argc > 1 && strcmp(argv[1], "warm") == 0);
     int run_callback = run_all || (argc > 1 && strcmp(argv[1], "callback") == 0);
+    int run_mip = run_all || (argc > 1 && strcmp(argv[1], "mip") == 0);
 
     if (run_size) bench_size_scaling();
     if (run_types) bench_problem_types();
@@ -935,6 +1137,7 @@ int main(int argc, char *argv[]) {
     if (run_epsilon) bench_epsilon_scaling();
     if (run_warm) bench_warm_start();
     if (run_callback) bench_callback();
+    if (run_mip) bench_mip_lap();
     if (run_verify) bench_correctness();
 
     printf("\n");
