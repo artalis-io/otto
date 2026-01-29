@@ -18,6 +18,7 @@ Future improvements and enhancements for the Ralph LAP solver.
 - [x] Optional ε-scaling auction for tie-breaking
 - [x] Incremental updates / warm start
 - [x] Cost matrix callbacks (O(n) memory)
+- [x] Presolve detection (auto-detect LAP in LPs)
 
 ---
 
@@ -189,13 +190,37 @@ RalphLapStatus ralph_lap_solve_k_best(
 
 ## Ralph Solver Integration
 
-### 6. Presolve Detection
-**Priority: Medium** | **Complexity: Medium**
+### 6. ~~Presolve Detection~~ ✅ COMPLETED
+**Status: Implemented (2026-01-29)**
 
-Detect assignment structure in general LPs and use JVC:
-- Recognize totally unimodular constraint matrices
-- Identify pure assignment problems
-- Automatic algorithm selection
+Automatic LAP detection in general LP problems:
+- Detects assignment structure via bipartite graph coloring
+- Extracts cost matrix from LP objective coefficients
+- Automatically delegates to JVC solver when LAP structure detected
+- Supports both minimize and maximize objectives
+
+**API:**
+```c
+/* Detection API (include/detect.h) */
+int detect_lap(const LPModel *model, LAPSignature *sig);
+void detect_lap_free(LAPSignature *sig);
+int solve_as_lap(const LAPSignature *sig, double *solution, double *obj_val);
+
+/* Runtime enable/disable */
+void ralph_set_detect_lap(int enabled);  /* Default: enabled */
+int ralph_get_detect_lap(void);
+```
+
+**Detection criteria:**
+- 2n constraints (n row + n column)
+- n² variables
+- Each variable in exactly 2 constraints with coefficient +1
+- All constraints equality with RHS = 1
+- Variables non-negative
+
+**Benefits:**
+- Transparent speedup: users formulating LAPs as LPs automatically get O(n³) JVC instead of O(n³) simplex iterations
+- No API changes needed - works with existing `ralph_optimize()` calls
 
 ---
 

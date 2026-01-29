@@ -40,7 +40,8 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/mip.c \
           $(SRC_DIR)/mps_reader.c \
           $(SRC_DIR)/ralph.c \
-          $(SRC_DIR)/lap.c
+          $(SRC_DIR)/lap.c \
+          $(SRC_DIR)/detect.c
 
 OBJECTS = $(SOURCES:.c=.o)
 
