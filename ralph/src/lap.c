@@ -1141,38 +1141,63 @@ RalphLapStatus ralph_lap_solve_sparse(
     /* ========================================================================
      * PHASE 1: Column Reduction (Sparse)
      * For each column, find minimum cost among edges to that column.
+     * This matches the dense algorithm's Phase 1.
      * ======================================================================== */
 
-    /* For each row, find its minimum cost column */
+    /* First pass: find minimum cost edge to each column and track which row */
+    int *col_min_row = pred;  /* Reuse pred array: col_min_row[j] = row with min cost to j */
+    for (j = 0; j < n; j++) {
+        col_min_row[j] = -1;
+    }
+
+    /* Scan all edges to find column minimums */
     for (i = 0; i < n; i++) {
-        double min_cost = RALPH_LAP_INFINITY;
-        int min_col = -1;
-
-        for (k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
-            j = col_idx[k];
-            if (work_values[k] < min_cost) {
-                min_cost = work_values[k];
-                min_col = j;
-            }
-        }
-
-        if (min_col < 0) {
+        if (row_ptr[i + 1] == row_ptr[i]) {
             /* Row has no edges - infeasible */
             status = RALPH_LAP_INFEASIBLE;
             goto sparse_cleanup;
         }
 
-        /* Update column price if this is the minimum seen */
-        if (min_cost < col_price[min_col] || col_assign[min_col] == RALPH_LAP_UNASSIGNED) {
-            if (col_price[min_col] == 0.0 || min_cost < col_price[min_col]) {
-                col_price[min_col] = min_cost;
+        for (k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+            j = col_idx[k];
+            double cost = work_values[k];
+
+            if (col_min_row[j] < 0 || cost < col_price[j]) {
+                col_price[j] = cost;
+                col_min_row[j] = i;
             }
         }
+    }
 
-        matches[i]++;
-        if (col_assign[min_col] == RALPH_LAP_UNASSIGNED) {
-            row_assign[i] = min_col;
-            col_assign[min_col] = i;
+    /* Check that all columns are reachable */
+    for (j = 0; j < n; j++) {
+        if (col_min_row[j] < 0) {
+            /* Column has no incoming edges - infeasible */
+            status = RALPH_LAP_INFEASIBLE;
+            goto sparse_cleanup;
+        }
+    }
+
+    /* Process columns in reverse order (matching dense algorithm) */
+    for (j = n - 1; j >= 0; j--) {
+        int min_row = col_min_row[j];
+        matches[min_row]++;
+
+        if (matches[min_row] == 1) {
+            /* First time this row is matched - assign it */
+            row_assign[min_row] = j;
+            col_assign[j] = min_row;
+        } else {
+            /* Row already matched to another column - check if this is better */
+            int cur_col = row_assign[min_row];
+            if (cur_col >= 0 && col_price[j] < col_price[cur_col]) {
+                /* Reassign to this column */
+                col_assign[cur_col] = RALPH_LAP_UNASSIGNED;
+                row_assign[min_row] = j;
+                col_assign[j] = min_row;
+            } else {
+                col_assign[j] = RALPH_LAP_UNASSIGNED;
+            }
         }
     }
 
