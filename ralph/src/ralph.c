@@ -77,7 +77,7 @@ RalphModel* ralph_create(void) {
     model->max_cut_rounds = 0;  /* Disabled by default */
     model->method = 0;  /* Default: primal simplex */
     model->pricing = 2; /* Default: Devex */
-    model->detect_special = 1; /* Default: detect LAP/network structure */
+    model->detect_special = 0; /* Default: disabled for fair benchmarking */
 
     model->status = RALPH_STATUS_UNKNOWN;
 
