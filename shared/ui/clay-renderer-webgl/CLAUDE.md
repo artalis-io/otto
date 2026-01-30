@@ -37,35 +37,42 @@ Renders Clay's render commands using WebGL:
 | `font.js` | MSDFFont class - font loading and metrics |
 | `shaders.js` | GLSL shader sources |
 | `map-tiles.js` | TileCache, MapTileRenderer for slippy maps |
-| `text-input-overlay.js` | HTML overlay for text input (alternative) |
+| `render-loop.js` | Generic render loop with cursor rendering |
+| `wasm-loader.js` | WASM loading with export validation |
+| `text-cursor.js` | Text cursor rendering for focused inputs |
 | `index.js` | Module exports |
 | `fonts/` | MSDF font assets |
 
 ## Usage
 
 ```javascript
-import { ClayRenderer, MSDFFont, TileCache, MapTileRenderer } from './clay-renderer-webgl/index.js';
+import {
+    ClayRenderer, MSDFFont, createRenderLoop, loadWasm
+} from './clay-renderer-webgl/index.js';
 
-// Initialize
+// Initialize renderer
 const renderer = new ClayRenderer(canvas);
 renderer.resize();
 
-// Load font
+// Load resources
 const font = new MSDFFont();
-await font.load(renderer.gl, 'fonts/ui-font.json', 'fonts/ui-font.png');
+const [wasm] = await Promise.all([
+    loadWasm('build/app.wasm', ['app_init', 'app_frame', ...]),
+    font.load(renderer.gl, 'fonts/ui-font.json', 'fonts/ui-font.png')
+]);
 renderer.setFont(font);
 
-// Render loop
-function render() {
-    renderer.clear();
-    const proj = renderer.getProjectionMatrix();
+// Initialize app
+wasm.app_init(width, height);
 
-    // Render Clay commands from WASM
-    const count = wasm.map_frame(dt);
-    renderer.renderClayCommands(wasm, count, proj);
-
-    requestAnimationFrame(render);
-}
+// Create and start render loop
+const render = createRenderLoop(renderer, wasm, font, {
+    frameFunction: 'app_frame',
+    onRender: (proj) => {
+        // Domain-specific rendering (e.g., map tiles)
+    }
+});
+requestAnimationFrame(render);
 ```
 
 ## API
@@ -104,6 +111,32 @@ const cache = new TileCache(gl, maxSize);
 const tileRenderer = new MapTileRenderer(renderer, cache);
 
 tileRenderer.render(lat, lon, zoom, layerType, width, height, proj);
+```
+
+### createRenderLoop
+
+Creates a generic render loop that handles Clay UI rendering and text cursor.
+
+```javascript
+const render = createRenderLoop(renderer, wasm, font, {
+    frameFunction: 'app_frame',    // WASM frame function name
+    cmdPrefix: 'cc_clay_cmd_',     // Command accessor prefix
+    onRender: (proj, dt) => {},    // Domain-specific rendering callback
+    cursorFontSize: 12,            // Font size for cursor positioning
+    cursorPadding: 8               // Input padding for cursor positioning
+});
+requestAnimationFrame(render);
+```
+
+### loadWasm
+
+Loads a WASM module with export validation.
+
+```javascript
+const wasm = await loadWasm('build/app.wasm', [
+    'app_init', 'app_frame', 'app_resize',
+    'cc_focused_id', 'cc_key_down', 'cc_key_char'
+]);
 ```
 
 ## Shaders
