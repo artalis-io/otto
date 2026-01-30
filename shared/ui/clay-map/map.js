@@ -1,8 +1,8 @@
 /**
- * Clay Map Viewer - JavaScript Runtime
+ * Clay Map Viewer - JavaScript Runtime (Pure WASM)
  *
  * Handles:
- * - Emscripten module loading
+ * - Direct WASM module loading (no Emscripten JS glue)
  * - Map tile fetching and rendering
  * - Clay UI command rendering
  * - User input handling
@@ -23,8 +23,10 @@ const tileCache = new Map();
 const TILE_SIZE = 256;
 const MAX_CACHE_SIZE = 200;
 
-// Emscripten module
-let Module = null;
+// WASM module and memory
+let wasm = null;
+let memory = null;
+let HEAPU8 = null;
 
 // Canvas contexts
 let mapCanvas, mapCtx;
@@ -48,21 +50,24 @@ const CLAY_RENDER_COMMAND_TYPE_SCISSOR_END = 6;
 const CLAY_RENDER_COMMAND_TYPE_CUSTOM = 7;
 
 /**
- * Load Emscripten module
+ * Load pure WASM module (no Emscripten JS)
  */
 async function loadModule() {
-    return new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = 'build/map_ui.js';
-        script.onload = () => {
-            createMapModule().then(module => {
-                Module = module;
-                resolve(true);
-            }).catch(reject);
-        };
-        script.onerror = () => reject(new Error('Failed to load WASM module'));
-        document.head.appendChild(script);
-    });
+    // No imports needed - standalone WASM provides everything
+    const response = await fetch('build/map_ui.wasm');
+    const { instance } = await WebAssembly.instantiateStreaming(response, {});
+    wasm = instance.exports;
+
+    // Get memory from WASM exports
+    memory = wasm.memory;
+    HEAPU8 = new Uint8Array(memory.buffer);
+
+    // Call WASM initialization
+    if (wasm._initialize) {
+        wasm._initialize();
+    }
+
+    return true;
 }
 
 /**
@@ -157,10 +162,10 @@ function renderTiles() {
     const height = mapCanvas.height / (window.devicePixelRatio || 1);
 
     // Get map state from WASM
-    const lat = Module._map_get_lat();
-    const lon = Module._map_get_lon();
-    const zoom = Module._map_get_zoom();
-    const layerType = Module._map_get_layer();
+    const lat = wasm.map_get_lat();
+    const lon = wasm.map_get_lon();
+    const zoom = wasm.map_get_zoom();
+    const layerType = wasm.map_get_layer();
 
     // Clear canvas
     mapCtx.fillStyle = '#1a1a1a';
@@ -249,20 +254,25 @@ function renderUI() {
     // Clear UI canvas
     uiCtx.clearRect(0, 0, width, height);
 
+    // Update HEAPU8 in case memory grew
+    if (memory.buffer.byteLength !== HEAPU8.buffer.byteLength) {
+        HEAPU8 = new Uint8Array(memory.buffer);
+    }
+
     // Run Clay layout and get command count
-    const count = Module._map_frame();
+    const count = wasm.map_frame();
 
     for (let i = 0; i < count; i++) {
-        const cmdType = Module._map_cmd_type(i);
-        const x = Module._map_cmd_x(i);
-        const y = Module._map_cmd_y(i);
-        const w = Module._map_cmd_w(i);
-        const h = Module._map_cmd_h(i);
+        const cmdType = wasm.map_cmd_type(i);
+        const x = wasm.map_cmd_x(i);
+        const y = wasm.map_cmd_y(i);
+        const w = wasm.map_cmd_w(i);
+        const h = wasm.map_cmd_h(i);
 
         switch (cmdType) {
             case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
-                const color = Module._map_cmd_rect_color(i);
-                const radius = Module._map_cmd_rect_radius(i);
+                const color = wasm.map_cmd_rect_color(i);
+                const radius = wasm.map_cmd_rect_radius(i);
 
                 uiCtx.fillStyle = unpackColor(color);
 
@@ -276,15 +286,15 @@ function renderUI() {
             }
 
             case CLAY_RENDER_COMMAND_TYPE_TEXT: {
-                const strPtr = Module._map_cmd_text_str(i);
-                const strLen = Module._map_cmd_text_len(i);
-                const color = Module._map_cmd_text_color(i);
-                const fontSize = Module._map_cmd_text_size(i);
+                const strPtr = wasm.map_cmd_text_str(i);
+                const strLen = wasm.map_cmd_text_len(i);
+                const color = wasm.map_cmd_text_color(i);
+                const fontSize = wasm.map_cmd_text_size(i);
 
                 // Read string from WASM memory
                 let text = '';
                 for (let j = 0; j < strLen; j++) {
-                    text += String.fromCharCode(Module.HEAPU8[strPtr + j]);
+                    text += String.fromCharCode(HEAPU8[strPtr + j]);
                 }
 
                 uiCtx.fillStyle = unpackColor(color);
@@ -295,9 +305,9 @@ function renderUI() {
             }
 
             case CLAY_RENDER_COMMAND_TYPE_BORDER: {
-                const color = Module._map_cmd_border_color(i);
-                const radius = Module._map_cmd_border_radius(i);
-                const borderWidth = Module._map_cmd_border_width(i);
+                const color = wasm.map_cmd_border_color(i);
+                const radius = wasm.map_cmd_border_radius(i);
+                const borderWidth = wasm.map_cmd_border_width(i);
 
                 uiCtx.strokeStyle = unpackColor(color);
                 uiCtx.lineWidth = borderWidth || 1;
@@ -345,24 +355,24 @@ function setupEventHandlers() {
     // Mouse events
     mapCanvas.addEventListener('mousedown', (e) => {
         // Check if UI handled the click
-        if (Module._map_handle_click(e.clientX, e.clientY)) {
+        if (wasm.map_handle_click(e.clientX, e.clientY)) {
             return;
         }
 
         isDragging = true;
         mapCanvas.classList.add('dragging');
-        Module._map_pointer_down(e.clientX, e.clientY);
+        wasm.map_pointer_down(e.clientX, e.clientY);
     });
 
     window.addEventListener('mousemove', (e) => {
-        Module._map_pointer_move(e.clientX, e.clientY);
+        wasm.map_pointer_move(e.clientX, e.clientY);
     });
 
     window.addEventListener('mouseup', (e) => {
         if (isDragging) {
             isDragging = false;
             mapCanvas.classList.remove('dragging');
-            Module._map_pointer_up(e.clientX, e.clientY);
+            wasm.map_pointer_up(e.clientX, e.clientY);
         }
     });
 
@@ -370,7 +380,7 @@ function setupEventHandlers() {
     mapCanvas.addEventListener('wheel', (e) => {
         e.preventDefault();
         const delta = e.deltaY > 0 ? -1 : 1;
-        Module._map_scroll(delta, e.clientX, e.clientY);
+        wasm.map_scroll(delta, e.clientX, e.clientY);
     }, { passive: false });
 
     // Touch events
@@ -378,7 +388,7 @@ function setupEventHandlers() {
         if (e.touches.length === 1) {
             const touch = e.touches[0];
             isDragging = true;
-            Module._map_pointer_down(touch.clientX, touch.clientY);
+            wasm.map_pointer_down(touch.clientX, touch.clientY);
         }
     });
 
@@ -386,7 +396,7 @@ function setupEventHandlers() {
         if (e.touches.length === 1 && isDragging) {
             e.preventDefault();
             const touch = e.touches[0];
-            Module._map_pointer_move(touch.clientX, touch.clientY);
+            wasm.map_pointer_move(touch.clientX, touch.clientY);
         }
     }, { passive: false });
 
@@ -394,14 +404,14 @@ function setupEventHandlers() {
         if (isDragging) {
             isDragging = false;
             const touch = e.changedTouches[0];
-            Module._map_pointer_up(touch.clientX, touch.clientY);
+            wasm.map_pointer_up(touch.clientX, touch.clientY);
         }
     });
 
     // Resize handler
     window.addEventListener('resize', () => {
         const { width, height } = initCanvases();
-        Module._map_resize(width, height);
+        wasm.map_resize(width, height);
     });
 
     // Keyboard shortcuts
@@ -409,10 +419,10 @@ function setupEventHandlers() {
         switch (e.key) {
             case '+':
             case '=':
-                Module._map_scroll(1, 0, 0);
+                wasm.map_scroll(1, 0, 0);
                 break;
             case '-':
-                Module._map_scroll(-1, 0, 0);
+                wasm.map_scroll(-1, 0, 0);
                 break;
         }
     });
@@ -428,17 +438,18 @@ async function main() {
     const { width, height } = initCanvases();
 
     try {
-        // Load Emscripten module
+        // Load pure WASM module (no Emscripten JS)
         await loadModule();
     } catch (err) {
         loadingEl.querySelector('p').textContent = 'Failed to load WASM: ' + err.message;
+        console.error('WASM load error:', err);
         return;
     }
 
     // Initialize map
-    Module._map_init(width, height);
-    Module._map_set_center(47.4979, 19.0402);  // Budapest
-    Module._map_set_zoom(12);
+    wasm.map_init(width, height);
+    wasm.map_set_center(47.4979, 19.0402);  // Budapest
+    wasm.map_set_zoom(12);
 
     // Setup event handlers
     setupEventHandlers();
