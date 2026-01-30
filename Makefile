@@ -22,7 +22,7 @@
 .PHONY: ralph fuelwise velo carta shared
 .PHONY: fuelwise-api carta-api velo-api
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-types wasm-test
-.PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev
+.PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve
 .PHONY: run-fuelwise-api run-carta-api run-velo-api
 .PHONY: benchmark ci
 
@@ -138,6 +138,13 @@ carta-ui:
 carta-ui-dev:
 	cd carta/ui && npm run dev
 
+# Clay Map Viewer (WASM + Canvas, requires Emscripten)
+clay-map:
+	$(MAKE) -C shared/ui/clay-map
+
+clay-map-serve: clay-map
+	$(MAKE) -C shared/ui/clay-map serve
+
 # =============================================================================
 # Scripts
 # =============================================================================
@@ -198,6 +205,7 @@ clean:
 	-$(MAKE) -C carta/wasm clean 2>/dev/null || true
 	-$(MAKE) -C velo/api clean 2>/dev/null || true
 	-$(MAKE) -C velo/wasm clean 2>/dev/null || true
+	-$(MAKE) -C shared/ui/clay-map clean 2>/dev/null || true
 	-rm -f vendor/miniz/*.o 2>/dev/null || true
 
 clean-all: clean
@@ -241,6 +249,8 @@ help:
 	@echo "  fuelwise-ui-dev  - Run FuelWise UI dev server on :5173"
 	@echo "  carta-ui         - Build Carta Tile Viewer (carta/ui)"
 	@echo "  carta-ui-dev     - Run Carta UI dev server"
+	@echo "  clay-map         - Build Clay Map Viewer WASM (requires Emscripten)"
+	@echo "  clay-map-serve   - Build and serve Clay Map on :8000"
 	@echo ""
 	@echo "Scripts:"
 	@echo "  benchmark        - Run performance benchmarks"
