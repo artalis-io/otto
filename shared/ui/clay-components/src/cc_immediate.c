@@ -412,6 +412,7 @@ CcInputResult cc_input(
             g_cc.cursor_visible = true;
             g_cc.cursor_blink = 0.0f;
             result.focused = true;
+            is_focused = true;  /* Update for the rest of this call */
         }
         g_cc.clicked_id = id;
     }
