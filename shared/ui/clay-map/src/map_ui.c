@@ -21,6 +21,9 @@
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
 
+/* Use reusable text input component */
+#include "cc_text_input.h"
+
 /* ============================================================================
  * Map State
  * ============================================================================ */
@@ -53,27 +56,14 @@ static MapState g_map = {
     .dragging = false,
 };
 
-/* Text Input State */
-#define TEXT_INPUT_MAX_LEN 256
-
-typedef struct {
-    char text[TEXT_INPUT_MAX_LEN];
-    int length;
-    int cursor;
-    int selection_start;  /* -1 = no selection */
-    bool focused;
-    float cursor_blink;
-    bool cursor_visible;
-} TextInputState;
-
-/* UI State */
+/* UI State - uses CcTextInput from clay_components */
 typedef struct {
     bool show_controls;
     bool show_tile_info;
     int layer_type;       /* 0 = OSM, 1 = Carto Light, 2 = Stamen Terrain */
     char status_text[128];
     char tile_info_text[64];
-    TextInputState search_input;
+    CcTextInput search_input;
 } UIState;
 
 static UIState g_ui = {
@@ -82,15 +72,7 @@ static UIState g_ui = {
     .layer_type = 0,
     .status_text = "Ready",
     .tile_info_text = "",
-    .search_input = {
-        .text = "",
-        .length = 0,
-        .cursor = 0,
-        .selection_start = -1,
-        .focused = false,
-        .cursor_blink = 0.0f,
-        .cursor_visible = true,
-    },
+    /* search_input initialized in map_init() */
 };
 
 /* Clay memory arena - Clay_MinMemorySize() returns ~5MB with our config */
@@ -354,11 +336,11 @@ static void render_layer_panel(void) {
 static char g_coord_text[64];
 static char g_zoom_text[32];
 static char g_tile_text[48];
-static char g_search_display[TEXT_INPUT_MAX_LEN + 2];  /* Extra space for cursor */
+static char g_search_display[CC_TEXT_INPUT_MAX_LENGTH + 2];  /* Extra space for cursor */
 
-/* Render a text input field */
+/* Render a text input field using CcTextInput component */
 static void render_search_input(void) {
-    TextInputState *input = &g_ui.search_input;
+    CcTextInput *input = &g_ui.search_input;
 
     /* Prepare display text with cursor indicator for focused state */
     if (input->length == 0 && !input->focused) {
@@ -553,6 +535,9 @@ static void render_ui(void) {
 EXPORT void map_init(int width, int height) {
     g_map.width = width;
     g_map.height = height;
+
+    /* Initialize text input component */
+    cc_text_input_init(&g_ui.search_input);
 
     /* Initialize Clay */
     uint32_t min_mem = Clay_MinMemorySize();
@@ -846,114 +831,79 @@ EXPORT int map_cmd_border_width(int index) {
 
 /* ============================================================================
  * Text Input Exports - for JS keyboard handling
+ * Uses CcTextInput from clay_components
  * ============================================================================ */
 
 /**
  * Focus the search input
  */
 EXPORT void map_search_focus(void) {
-    g_ui.search_input.focused = true;
-    g_ui.search_input.cursor_visible = true;
-    g_ui.search_input.cursor_blink = 0.0f;
+    cc_text_input_focus(&g_ui.search_input);
 }
 
 /**
  * Blur the search input
  */
 EXPORT void map_search_blur(void) {
-    g_ui.search_input.focused = false;
-    g_ui.search_input.selection_start = -1;
+    cc_text_input_blur(&g_ui.search_input);
 }
 
 /**
  * Check if search input is focused
  */
 EXPORT int map_search_is_focused(void) {
-    return g_ui.search_input.focused ? 1 : 0;
+    return cc_text_input_is_focused(&g_ui.search_input) ? 1 : 0;
 }
 
 /**
  * Get search input text
  */
 EXPORT const char* map_search_get_text(void) {
-    return g_ui.search_input.text;
+    return cc_text_input_get_text(&g_ui.search_input);
 }
 
 /**
  * Get search input text length
  */
 EXPORT int map_search_get_length(void) {
-    return g_ui.search_input.length;
+    return cc_text_input_get_length(&g_ui.search_input);
 }
 
 /**
  * Get cursor position
  */
 EXPORT int map_search_get_cursor(void) {
-    return g_ui.search_input.cursor;
+    return cc_text_input_get_cursor(&g_ui.search_input);
 }
 
 /**
  * Get selection start (-1 if no selection)
  */
 EXPORT int map_search_get_selection(void) {
-    return g_ui.search_input.selection_start;
+    return cc_text_input_get_selection_start(&g_ui.search_input);
 }
 
 /**
  * Check if cursor should be visible (for blinking)
  */
 EXPORT int map_search_cursor_visible(void) {
-    return g_ui.search_input.cursor_visible ? 1 : 0;
+    return cc_text_input_cursor_visible(&g_ui.search_input) ? 1 : 0;
 }
 
 /**
  * Update cursor blink timer
  */
 EXPORT void map_search_update(float dt) {
-    if (!g_ui.search_input.focused) return;
-
-    g_ui.search_input.cursor_blink += dt;
-    if (g_ui.search_input.cursor_blink >= 0.5f) {
-        g_ui.search_input.cursor_blink = 0.0f;
-        g_ui.search_input.cursor_visible = !g_ui.search_input.cursor_visible;
-    }
+    cc_text_input_update(&g_ui.search_input, dt);
 }
 
 /**
  * Insert a character at cursor
  */
 EXPORT void map_search_insert_char(int char_code) {
-    TextInputState *input = &g_ui.search_input;
-    if (!input->focused) return;
-    if (char_code < 32 || char_code > 126) return;
-    if (input->length >= TEXT_INPUT_MAX_LEN - 1) return;
-
-    /* Delete selection if any */
-    if (input->selection_start >= 0 && input->selection_start != input->cursor) {
-        int start = input->selection_start < input->cursor ? input->selection_start : input->cursor;
-        int end = input->selection_start < input->cursor ? input->cursor : input->selection_start;
-        memmove(&input->text[start], &input->text[end], input->length - end + 1);
-        input->length -= (end - start);
-        input->cursor = start;
-        input->selection_start = -1;
-    }
-
-    /* Insert character */
-    memmove(&input->text[input->cursor + 1], &input->text[input->cursor],
-            input->length - input->cursor + 1);
-    input->text[input->cursor] = (char)char_code;
-    input->cursor++;
-    input->length++;
-
-    input->cursor_visible = true;
-    input->cursor_blink = 0.0f;
+    cc_text_input_key_char(&g_ui.search_input, (uint32_t)char_code);
 }
 
-/**
- * Handle special keys
- * Returns 1 if handled
- */
 /**
  * Get search input bounding box (for cursor rendering in JS)
  */
@@ -977,103 +927,10 @@ EXPORT float map_search_get_height(void) {
     return box.height;
 }
 
+/**
+ * Handle special keys
+ * Returns 1 if handled
+ */
 EXPORT int map_search_key_down(int key_code, int shift, int ctrl) {
-    TextInputState *input = &g_ui.search_input;
-    if (!input->focused) return 0;
-
-    input->cursor_visible = true;
-    input->cursor_blink = 0.0f;
-
-    int has_sel = input->selection_start >= 0 && input->selection_start != input->cursor;
-
-    switch (key_code) {
-        case 37:  /* Left arrow */
-            if (has_sel && !shift) {
-                input->cursor = input->selection_start < input->cursor
-                    ? input->selection_start : input->cursor;
-                input->selection_start = -1;
-            } else if (input->cursor > 0) {
-                if (shift && input->selection_start < 0) {
-                    input->selection_start = input->cursor;
-                }
-                input->cursor--;
-            }
-            if (!shift) input->selection_start = -1;
-            return 1;
-
-        case 39:  /* Right arrow */
-            if (has_sel && !shift) {
-                input->cursor = input->selection_start > input->cursor
-                    ? input->selection_start : input->cursor;
-                input->selection_start = -1;
-            } else if (input->cursor < input->length) {
-                if (shift && input->selection_start < 0) {
-                    input->selection_start = input->cursor;
-                }
-                input->cursor++;
-            }
-            if (!shift) input->selection_start = -1;
-            return 1;
-
-        case 36:  /* Home */
-            if (shift && input->selection_start < 0) {
-                input->selection_start = input->cursor;
-            }
-            input->cursor = 0;
-            if (!shift) input->selection_start = -1;
-            return 1;
-
-        case 35:  /* End */
-            if (shift && input->selection_start < 0) {
-                input->selection_start = input->cursor;
-            }
-            input->cursor = input->length;
-            if (!shift) input->selection_start = -1;
-            return 1;
-
-        case 8:   /* Backspace */
-            if (has_sel) {
-                int start = input->selection_start < input->cursor ? input->selection_start : input->cursor;
-                int end = input->selection_start < input->cursor ? input->cursor : input->selection_start;
-                memmove(&input->text[start], &input->text[end], input->length - end + 1);
-                input->length -= (end - start);
-                input->cursor = start;
-                input->selection_start = -1;
-            } else if (input->cursor > 0) {
-                memmove(&input->text[input->cursor - 1], &input->text[input->cursor],
-                        input->length - input->cursor + 1);
-                input->cursor--;
-                input->length--;
-            }
-            return 1;
-
-        case 46:  /* Delete */
-            if (has_sel) {
-                int start = input->selection_start < input->cursor ? input->selection_start : input->cursor;
-                int end = input->selection_start < input->cursor ? input->cursor : input->selection_start;
-                memmove(&input->text[start], &input->text[end], input->length - end + 1);
-                input->length -= (end - start);
-                input->cursor = start;
-                input->selection_start = -1;
-            } else if (input->cursor < input->length) {
-                memmove(&input->text[input->cursor], &input->text[input->cursor + 1],
-                        input->length - input->cursor);
-                input->length--;
-            }
-            return 1;
-
-        case 65:  /* A - select all with Ctrl */
-            if (ctrl) {
-                input->selection_start = 0;
-                input->cursor = input->length;
-                return 1;
-            }
-            break;
-
-        case 27:  /* Escape */
-            map_search_blur();
-            return 1;
-    }
-
-    return 0;
+    return cc_text_input_key_down(&g_ui.search_input, key_code, shift != 0, ctrl != 0) ? 1 : 0;
 }

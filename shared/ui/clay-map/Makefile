@@ -6,14 +6,14 @@ CC = emcc
 CFLAGS = -O3 -Wall -Wextra
 # Note: Not defining CLAY_WASM - using regular function pointers instead
 
-# Include paths
-INCLUDES = -I../../../vendor/clay
+# Include paths - Clay vendor + clay_components
+INCLUDES = -I../../../vendor/clay -I../clay-components/include
 
 # Don't use CLAY_WASM - we'll set measure function via Clay_SetMeasureTextFunction
 # This avoids needing JS imports for measureTextFunction/queryScrollOffsetFunction
 
-# Source files
-SOURCES = src/map_ui.c
+# Source files (includes clay_components for text input)
+SOURCES = src/map_ui.c ../clay-components/src/cc_text_input.c
 
 # Output
 BUILD_DIR = build
