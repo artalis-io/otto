@@ -32,11 +32,15 @@ typedef struct {
 } CcInputResult;
 
 typedef struct {
-    float width;           /* 0 = auto/grow */
-    float height;          /* 0 = auto */
+    float width;           /* Fixed width (0 = auto) */
+    float height;          /* Fixed height (0 = auto) */
     float font_size;
     float padding;
     float corner_radius;
+    /* Layout */
+    CcMargin margin;       /* Outer spacing */
+    CcAlign align;         /* Self-alignment within parent */
+    bool grow;             /* Grow to fill available width */
 } CcInputStyle;
 
 /* Default styles */

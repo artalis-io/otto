@@ -15,6 +15,54 @@ extern "C" {
 #endif
 
 /* ============================================================================
+ * Constants
+ * ============================================================================ */
+
+/* Timing constants */
+#define CC_CURSOR_BLINK_PERIOD  0.53f   /* Seconds per blink half-cycle */
+
+/* ============================================================================
+ * Layout Types (for component styles)
+ * ============================================================================ */
+
+typedef enum {
+    CC_ALIGN_AUTO,      /* Inherit from parent */
+    CC_ALIGN_START,     /* Top/Left */
+    CC_ALIGN_CENTER,    /* Center */
+    CC_ALIGN_END,       /* Bottom/Right */
+} CcAlign;
+
+typedef struct {
+    float top;
+    float bottom;
+    float left;
+    float right;
+} CcMargin;
+
+/* Text measurement fallback when no font metrics available */
+#define CC_MONOSPACE_WIDTH_RATIO 0.6f   /* char_width = fontSize * ratio */
+
+/* Default colors (RGBA 0-255) - use with Clay_Color{CC_COLOR_*} */
+#define CC_COLOR_BG_DEFAULT     50, 50, 50, 255
+#define CC_COLOR_BG_FOCUSED     60, 60, 60, 255
+#define CC_COLOR_BG_HOVER       70, 70, 70, 255
+#define CC_COLOR_BORDER         100, 100, 100, 255
+#define CC_COLOR_BORDER_FOCUSED 66, 133, 244, 255
+#define CC_COLOR_TEXT           255, 255, 255, 255
+#define CC_COLOR_TEXT_MUTED     120, 120, 120, 255
+#define CC_COLOR_PRIMARY        66, 133, 244, 255
+#define CC_COLOR_PRIMARY_HOVER  100, 160, 255, 255
+
+/* Button colors - Tailwind palette (RGBA) */
+#define CC_COLOR_BTN_BLUE       59, 130, 246, 255   /* Blue 500 */
+#define CC_COLOR_BTN_BLUE_HOVER 37, 99, 235, 255    /* Blue 600 */
+#define CC_COLOR_BTN_RED        239, 68, 68, 255    /* Red 500 */
+#define CC_COLOR_BTN_RED_HOVER  220, 38, 38, 255    /* Red 600 */
+#define CC_COLOR_BTN_GRAY       75, 85, 99, 255     /* Gray 600 */
+#define CC_COLOR_BTN_GRAY_HOVER 55, 65, 81, 255     /* Gray 700 */
+#define CC_COLOR_BTN_GHOST_HOVER 55, 65, 81, 128   /* Gray 700 @ 50% */
+
+/* ============================================================================
  * ID Generation
  * ============================================================================ */
 
@@ -51,6 +99,14 @@ bool cc_cursor_visible(void);
 
 /* Get focused element bounds (for cursor rendering) */
 bool cc_focused_bounds(float *x, float *y, float *w, float *h);
+float cc_focused_x(void);
+float cc_focused_y(void);
+float cc_focused_w(void);
+float cc_focused_h(void);
+
+/* Get focused input text (for cursor rendering) */
+const char* cc_focused_text(void);
+int cc_focused_text_len(void);
 
 /* ============================================================================
  * Input Routing (call from platform event handlers)
@@ -59,9 +115,6 @@ bool cc_focused_bounds(float *x, float *y, float *w, float *h);
 /* Route keyboard to focused element. Returns true if consumed. */
 bool cc_key_down(int key_code, bool shift, bool ctrl);
 bool cc_key_char(uint32_t char_code);
-
-/* Route click. Returns true if consumed by UI. */
-bool cc_click(float x, float y);
 
 /* Set pending click for this frame (call on mousedown before rendering) */
 void cc_set_pending_click(void);
@@ -101,11 +154,10 @@ static inline uint32_t cc_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
 #define CC_COLOR_BLUE_600    cc_color(37, 99, 235, 255)
 #define CC_COLOR_BLUE_700    cc_color(29, 78, 216, 255)
 
-/* Semantic colors */
-#define CC_COLOR_PRIMARY     CC_COLOR_BLUE_500
-#define CC_COLOR_PRIMARY_HOVER CC_COLOR_BLUE_600
-#define CC_COLOR_DANGER      CC_COLOR_RED_500
-#define CC_COLOR_SUCCESS     CC_COLOR_GREEN_500
+/* Semantic colors (uint32_t packed) */
+#define CC_COLOR_DANGER_U32  CC_COLOR_RED_500
+#define CC_COLOR_SUCCESS_U32 CC_COLOR_GREEN_500
+#define CC_COLOR_PRIMARY_U32 CC_COLOR_BLUE_500
 
 /* ============================================================================
  * Math Utilities
