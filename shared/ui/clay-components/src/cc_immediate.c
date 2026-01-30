@@ -96,7 +96,7 @@ void cc_init(void) {
 void cc_frame_begin(void) {
     g_cc.clicked_id = 0;
     g_cc.hovered_id = 0;
-    g_cc.pending_click = false;
+    /* Don't reset pending_click here - it's set by mousedown and consumed during render */
     g_cc.active_text = NULL;
     g_cc.active_len = NULL;
 }
@@ -107,6 +107,9 @@ void cc_set_pending_click(void) {
 }
 
 void cc_frame_end(float dt) {
+    /* Reset pending click after components have had a chance to check it */
+    g_cc.pending_click = false;
+
     /* Update cursor blink */
     if (g_cc.focused_id != 0) {
         g_cc.cursor_blink += dt;
