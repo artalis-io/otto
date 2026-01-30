@@ -1,0 +1,214 @@
+/**
+ * Clay Components - Map Widget Implementation
+ */
+
+#include "cc_map.h"
+#include "cc_internal.h"
+#include "clay.h"
+#include <math.h>
+
+/* ============================================================================
+ * Constants
+ * ============================================================================ */
+
+#define PI 3.14159265358979323846
+#define DEG_TO_RAD (PI / 180.0)
+#define RAD_TO_DEG (180.0 / PI)
+
+/* Meters per pixel at equator for zoom 0 */
+#define METERS_PER_PIXEL_Z0 156543.03392
+
+/* ============================================================================
+ * Default Style
+ * ============================================================================ */
+
+const CcMapStyle CC_MAP_STYLE_DEFAULT = {
+    .min_zoom = 0,
+    .max_zoom = 19,
+    .min_lat = -85.0,
+    .max_lat = 85.0,
+};
+
+/* ============================================================================
+ * Map Drag State
+ * ============================================================================ */
+
+/* Per-map drag state (keyed by ID) */
+typedef struct {
+    uint32_t id;
+    bool dragging;
+    float drag_start_x;
+    float drag_start_y;
+    double drag_start_lat;
+    double drag_start_lon;
+    float drag_last_x;
+    float drag_last_y;
+} CcMapDragState;
+
+/* Simple single-map drag state (for now) */
+static CcMapDragState g_map_drag = {0};
+
+/* ============================================================================
+ * Projection Utilities
+ * ============================================================================ */
+
+double cc_map_lon_to_tile_x(double lon, int zoom) {
+    return (lon + 180.0) / 360.0 * (double)(1 << zoom);
+}
+
+double cc_map_lat_to_tile_y(double lat, int zoom) {
+    double lat_rad = lat * DEG_TO_RAD;
+    return (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / PI) / 2.0 * (double)(1 << zoom);
+}
+
+double cc_map_tile_x_to_lon(double x, int zoom) {
+    return x / (double)(1 << zoom) * 360.0 - 180.0;
+}
+
+double cc_map_tile_y_to_lat(double y, int zoom) {
+    double n = PI - 2.0 * PI * y / (double)(1 << zoom);
+    return RAD_TO_DEG * atan(0.5 * (exp(n) - exp(-n)));
+}
+
+void cc_map_screen_to_geo_delta(
+    double lat, int zoom,
+    float dx, float dy,
+    double *dlat, double *dlon
+) {
+    /* Meters per pixel at current latitude and zoom */
+    double meters_per_pixel = METERS_PER_PIXEL_Z0 * cos(lat * DEG_TO_RAD) / (double)(1 << zoom);
+    
+    /* Convert to degrees (approximate) */
+    /* 111320 meters per degree longitude at equator */
+    /* 110540 meters per degree latitude (roughly constant) */
+    if (dlon) *dlon = (double)dx * meters_per_pixel / 111320.0;
+    if (dlat) *dlat = (double)dy * meters_per_pixel / 110540.0;
+}
+
+/* ============================================================================
+ * Component
+ * ============================================================================ */
+
+CcMapResult cc_map(
+    uint32_t id,
+    double *lat,
+    double *lon,
+    int *zoom,
+    float width,
+    float height,
+    const CcMapStyle *style
+) {
+    CcMapResult result = {0};
+    CcState *g = cc_get_state();
+    
+    if (!style) style = &CC_MAP_STYLE_DEFAULT;
+    
+    /* Build Clay element - uses custom render type for tile layer */
+    Clay_ElementId clay_id = (Clay_ElementId){.id = id, .stringId = {0}};
+    
+    CLAY(clay_id, {
+        .layout = {
+            .sizing = {
+                .width = CLAY_SIZING_FIXED(width),
+                .height = CLAY_SIZING_FIXED(height)
+            }
+        },
+        /* Use a dark background as fallback while tiles load */
+        .backgroundColor = (Clay_Color){20, 20, 20, 255}
+    }) {
+        /* Empty - tiles rendered by JS based on custom handling */
+    }
+    
+    /* Get element bounds for hit testing */
+    Clay_BoundingBox box = Clay_GetElementData(clay_id).boundingBox;
+    
+    /* Check if pointer is over the map */
+    bool is_hovered = Clay_PointerOver(clay_id);
+    
+    /* Initialize drag state for this map if needed */
+    if (g_map_drag.id != id) {
+        g_map_drag.id = id;
+        g_map_drag.dragging = false;
+    }
+    
+    /* Handle drag start */
+    if (is_hovered && g->pending_click && !g_map_drag.dragging) {
+        g_map_drag.dragging = true;
+        g_map_drag.drag_start_lat = *lat;
+        g_map_drag.drag_start_lon = *lon;
+        /* We need pointer position - get it from Clay */
+        /* Note: Clay tracks pointer internally, we'll use the delta approach */
+        g_map_drag.drag_last_x = box.x + width / 2;  /* Will be updated on move */
+        g_map_drag.drag_last_y = box.y + height / 2;
+        g->clicked_id = id;
+    }
+    
+    /* Handle drag end */
+    /* Note: We detect drag end when pointer is released */
+    /* This requires tracking pointer state which Clay does internally */
+    
+    /* For now, we'll handle panning through the exported functions */
+    /* The actual drag logic happens in map_pointer_move/up which we'll keep */
+    
+    /* Clamp values */
+    if (*lat > style->max_lat) *lat = style->max_lat;
+    if (*lat < style->min_lat) *lat = style->min_lat;
+    while (*lon > 180.0) *lon -= 360.0;
+    while (*lon < -180.0) *lon += 360.0;
+    if (*zoom < style->min_zoom) *zoom = style->min_zoom;
+    if (*zoom > style->max_zoom) *zoom = style->max_zoom;
+    
+    return result;
+}
+
+/* ============================================================================
+ * Drag Handling (called from platform layer)
+ * ============================================================================ */
+
+void cc_map_pointer_down(uint32_t id, double lat, double lon, float x, float y) {
+    g_map_drag.id = id;
+    g_map_drag.dragging = true;
+    g_map_drag.drag_start_lat = lat;
+    g_map_drag.drag_start_lon = lon;
+    g_map_drag.drag_start_x = x;
+    g_map_drag.drag_start_y = y;
+    g_map_drag.drag_last_x = x;
+    g_map_drag.drag_last_y = y;
+}
+
+bool cc_map_pointer_move(uint32_t id, int zoom, float x, float y, double *out_lat, double *out_lon) {
+    if (g_map_drag.id != id || !g_map_drag.dragging) {
+        return false;
+    }
+    
+    /* Calculate delta from drag start */
+    float dx = g_map_drag.drag_start_x - x;
+    float dy = y - g_map_drag.drag_start_y;  /* Y is inverted in screen coords */
+    
+    double dlat, dlon;
+    cc_map_screen_to_geo_delta(g_map_drag.drag_start_lat, zoom, dx, dy, &dlat, &dlon);
+    
+    *out_lat = g_map_drag.drag_start_lat + dlat;
+    *out_lon = g_map_drag.drag_start_lon + dlon;
+    
+    return true;
+}
+
+bool cc_map_pointer_up(uint32_t id) {
+    if (g_map_drag.id != id) return false;
+    
+    bool was_dragging = g_map_drag.dragging;
+    g_map_drag.dragging = false;
+    return was_dragging;
+}
+
+bool cc_map_is_dragging(uint32_t id) {
+    return g_map_drag.id == id && g_map_drag.dragging;
+}
+
+int cc_map_scroll(int current_zoom, int delta, int min_zoom, int max_zoom) {
+    int new_zoom = current_zoom + delta;
+    if (new_zoom < min_zoom) new_zoom = min_zoom;
+    if (new_zoom > max_zoom) new_zoom = max_zoom;
+    return new_zoom;
+}

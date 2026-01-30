@@ -25,36 +25,17 @@
 #include "cc_immediate.h"
 
 /* ============================================================================
- * Map State
+ * Map State (user owns these - cc_map just handles interaction)
  * ============================================================================ */
 
-typedef struct {
-    double lat;
-    double lon;
-    int zoom;
-    double view_lat;
-    double view_lon;
-    float view_zoom;
-    int width;
-    int height;
-    bool dragging;
-    float drag_start_x;
-    float drag_start_y;
-    double drag_start_lat;
-    double drag_start_lon;
-} MapState;
+static double g_map_lat = 47.4979;   /* Budapest */
+static double g_map_lon = 19.0402;
+static int g_map_zoom = 12;
+static int g_map_width = 800;
+static int g_map_height = 600;
 
-static MapState g_map = {
-    .lat = 47.4979,       /* Budapest */
-    .lon = 19.0402,
-    .zoom = 12,
-    .view_lat = 47.4979,
-    .view_lon = 19.0402,
-    .view_zoom = 12.0f,
-    .width = 800,
-    .height = 600,
-    .dragging = false,
-};
+/* Map component ID for drag handling */
+static uint32_t g_map_id = 0;
 
 /* UI State - you own the buffers! */
 typedef struct {
@@ -81,21 +62,7 @@ static UIState g_ui = {
 static uint8_t g_clay_memory[6 * 1024 * 1024];
 static bool g_clay_initialized = false;
 
-/* ============================================================================
- * Web Mercator Projection
- * ============================================================================ */
-
-#define PI 3.14159265358979323846
-#define DEG_TO_RAD (PI / 180.0)
-
-static double lon_to_tile_x(double lon, int zoom) {
-    return (lon + 180.0) / 360.0 * (1 << zoom);
-}
-
-static double lat_to_tile_y(double lat, int zoom) {
-    double lat_rad = lat * DEG_TO_RAD;
-    return (1.0 - log(tan(lat_rad) + 1.0/cos(lat_rad)) / PI) / 2.0 * (1 << zoom);
-}
+/* Web Mercator projection functions are in cc_map.h */
 
 /* ============================================================================
  * Clay Callbacks
@@ -157,18 +124,12 @@ static void render_zoom_controls(void) {
     }) {
         /* Zoom In */
         if (cc_button(CC_ID("zoom_in"), "+", NULL).clicked) {
-            if (g_map.zoom < 19) {
-                g_map.zoom++;
-                g_map.view_zoom = (float)g_map.zoom;
-            }
+            g_map_zoom = cc_map_scroll(g_map_zoom, 1, 0, 19);
         }
 
         /* Zoom Out */
         if (cc_button(CC_ID("zoom_out"), "-", NULL).clicked) {
-            if (g_map.zoom > 0) {
-                g_map.zoom--;
-                g_map.view_zoom = (float)g_map.zoom;
-            }
+            g_map_zoom = cc_map_scroll(g_map_zoom, -1, 0, 19);
         }
     }
 }
@@ -222,8 +183,8 @@ static void render_layer_panel(void) {
 }
 
 static void render_info_panel(void) {
-    snprintf(g_coord_text, sizeof(g_coord_text), "%.4f, %.4f", g_map.view_lat, g_map.view_lon);
-    snprintf(g_zoom_text, sizeof(g_zoom_text), "Zoom: %d", g_map.zoom);
+    snprintf(g_coord_text, sizeof(g_coord_text), "%.4f, %.4f", g_map_lat, g_map_lon);
+    snprintf(g_zoom_text, sizeof(g_zoom_text), "Zoom: %d", g_map_zoom);
 
     CLAY(CLAY_ID("InfoPanel"), {
         .floating = {
@@ -303,10 +264,10 @@ static void render_info_panel(void) {
 static void render_tile_info(void) {
     if (!g_ui.show_tile_info) return;
 
-    int tile_x = (int)lon_to_tile_x(g_map.view_lon, g_map.zoom);
-    int tile_y = (int)lat_to_tile_y(g_map.view_lat, g_map.zoom);
+    int tile_x = (int)cc_map_lon_to_tile_x(g_map_lon, g_map_zoom);
+    int tile_y = (int)cc_map_lat_to_tile_y(g_map_lat, g_map_zoom);
 
-    snprintf(g_tile_text, sizeof(g_tile_text), "%d/%d/%d", g_map.zoom, tile_x, tile_y);
+    snprintf(g_tile_text, sizeof(g_tile_text), "%d/%d/%d", g_map_zoom, tile_x, tile_y);
 
     CLAY(CLAY_ID("TileInfo"), {
         .floating = {
@@ -358,11 +319,17 @@ static void render_ui(void) {
     CLAY(CLAY_ID("Root"), {
         .layout = {
             .sizing = {
-                .width = CLAY_SIZING_FIXED((float)g_map.width),
-                .height = CLAY_SIZING_FIXED((float)g_map.height)
+                .width = CLAY_SIZING_FIXED((float)g_map_width),
+                .height = CLAY_SIZING_FIXED((float)g_map_height)
             }
         }
     }) {
+        /* Map component - handles pan/zoom interaction */
+        g_map_id = CC_ID("map");
+        cc_map(g_map_id, &g_map_lat, &g_map_lon, &g_map_zoom,
+               (float)g_map_width, (float)g_map_height, NULL);
+
+        /* UI overlays */
         render_info_panel();
         render_layer_panel();
         render_zoom_controls();
@@ -376,8 +343,9 @@ static void render_ui(void) {
  * ============================================================================ */
 
 EXPORT void map_init(int width, int height) {
-    g_map.width = width;
-    g_map.height = height;
+    g_map_width = width;
+    g_map_height = height;
+    g_map_id = CC_ID("map");
 
     /* Initialize immediate mode components */
     cc_init();
@@ -407,70 +375,61 @@ EXPORT void map_init(int width, int height) {
 }
 
 EXPORT void map_resize(int width, int height) {
-    g_map.width = width;
-    g_map.height = height;
+    g_map_width = width;
+    g_map_height = height;
     Clay_SetLayoutDimensions((Clay_Dimensions){(float)width, (float)height});
 }
 
 EXPORT void map_set_center(double lat, double lon) {
-    g_map.lat = lat;
-    g_map.lon = lon;
-    g_map.view_lat = lat;
-    g_map.view_lon = lon;
+    g_map_lat = lat;
+    g_map_lon = lon;
 }
 
 EXPORT void map_set_zoom(int zoom) {
-    if (zoom < 0) zoom = 0;
-    if (zoom > 19) zoom = 19;
-    g_map.zoom = zoom;
-    g_map.view_zoom = (float)zoom;
+    g_map_zoom = cc_map_scroll(zoom, 0, 0, 19);  /* Clamp to valid range */
 }
 
 /* Map state getters */
-EXPORT double map_get_lat(void) { return g_map.view_lat; }
-EXPORT double map_get_lon(void) { return g_map.view_lon; }
-EXPORT int map_get_zoom(void) { return g_map.zoom; }
+EXPORT double map_get_lat(void) { return g_map_lat; }
+EXPORT double map_get_lon(void) { return g_map_lon; }
+EXPORT int map_get_zoom(void) { return g_map_zoom; }
 EXPORT int map_get_layer(void) { return g_ui.layer_type; }
 
-/* Pointer handling */
+/* Pointer handling - delegates to cc_map component */
 EXPORT void map_pointer_move(float x, float y) {
-    Clay_SetPointerState((Clay_Vector2){x, y}, g_map.dragging);
+    bool dragging = cc_map_is_dragging(g_map_id);
+    Clay_SetPointerState((Clay_Vector2){x, y}, dragging);
 
-    if (g_map.dragging) {
-        double meters_per_pixel = 156543.03392 * cos(g_map.view_lat * DEG_TO_RAD) / (1 << g_map.zoom);
-        double dx = (g_map.drag_start_x - x) * meters_per_pixel / 111320.0;
-        double dy = (y - g_map.drag_start_y) * meters_per_pixel / 110540.0;
+    if (dragging) {
+        double new_lat, new_lon;
+        if (cc_map_pointer_move(g_map_id, g_map_zoom, x, y, &new_lat, &new_lon)) {
+            g_map_lat = new_lat;
+            g_map_lon = new_lon;
 
-        g_map.view_lon = g_map.drag_start_lon + dx;
-        g_map.view_lat = g_map.drag_start_lat + dy;
+            /* Clamp latitude */
+            if (g_map_lat > 85.0) g_map_lat = 85.0;
+            if (g_map_lat < -85.0) g_map_lat = -85.0;
 
-        if (g_map.view_lat > 85.0) g_map.view_lat = 85.0;
-        if (g_map.view_lat < -85.0) g_map.view_lat = -85.0;
-        while (g_map.view_lon > 180.0) g_map.view_lon -= 360.0;
-        while (g_map.view_lon < -180.0) g_map.view_lon += 360.0;
+            /* Wrap longitude */
+            while (g_map_lon > 180.0) g_map_lon -= 360.0;
+            while (g_map_lon < -180.0) g_map_lon += 360.0;
+        }
     }
 }
 
 EXPORT void map_pointer_down(float x, float y) {
-    g_map.dragging = true;
-    g_map.drag_start_x = x;
-    g_map.drag_start_y = y;
-    g_map.drag_start_lat = g_map.view_lat;
-    g_map.drag_start_lon = g_map.view_lon;
+    cc_map_pointer_down(g_map_id, g_map_lat, g_map_lon, x, y);
     Clay_SetPointerState((Clay_Vector2){x, y}, true);
 }
 
 EXPORT void map_pointer_up(float x, float y) {
-    g_map.dragging = false;
+    cc_map_pointer_up(g_map_id);
     Clay_SetPointerState((Clay_Vector2){x, y}, false);
-    g_map.lat = g_map.view_lat;
-    g_map.lon = g_map.view_lon;
 }
 
 EXPORT void map_scroll(float delta, float x, float y) {
     (void)x; (void)y;
-    int new_zoom = g_map.zoom + (delta > 0 ? 1 : -1);
-    map_set_zoom(new_zoom);
+    g_map_zoom = cc_map_scroll(g_map_zoom, delta > 0 ? 1 : -1, 0, 19);
 }
 
 /**

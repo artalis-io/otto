@@ -9,3 +9,4 @@
 #include "cc_common.c"
 #include "cc_input.c"
 #include "cc_button.c"
+#include "cc_map.c"
