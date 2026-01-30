@@ -531,12 +531,26 @@ function renderText(text, x, y, fontSize, color, projMatrix) {
     gl.deleteBuffer(textBuffer);
 }
 
-function renderUI(width, height, projMatrix) {
+function renderUI(width, height, projMatrix, dt) {
     if (memory.buffer.byteLength !== HEAPU8.buffer.byteLength) {
         HEAPU8 = new Uint8Array(memory.buffer);
     }
 
-    const count = wasm.map_frame();
+    const count = wasm.map_frame(dt);
+
+    // Find focused input bounds while iterating
+    for (let i = 0; i < count; i++) {
+        const cmdType = wasm.map_cmd_type(i);
+        const x = wasm.map_cmd_x(i);
+        const y = wasm.map_cmd_y(i);
+        const w = wasm.map_cmd_w(i);
+        const h = wasm.map_cmd_h(i);
+
+        // Detect search input by its characteristics
+        if (cmdType === 1 && w > 170 && w < 190 && h > 25 && h < 35 && x < 250 && y > 50) {
+            focusedInputBounds = { x, y, w, h };
+        }
+    }
 
     // Scissor stack for clipping
     const scissorStack = [];
@@ -606,80 +620,89 @@ function renderUI(width, height, projMatrix) {
 // Main Render Loop
 // ============================================================================
 
-function renderTextInputCursor(projMatrix) {
-    const focused = wasm.map_search_is_focused();
-    if (!focused) return;
+// Track focused input bounds (set during UI render by scanning commands)
+let focusedInputBounds = null;
 
-    const cursorVis = wasm.map_search_cursor_visible();
+function findFocusedInputBounds(width, height) {
+    // The focused input bounds are tracked by the component system
+    // We need to find the input element in the render commands
+    // For now, we'll use a simple heuristic: look for the search input position
+    // based on it being in the info panel (top-left area)
+
+    // Actually, we can compute this by looking for specific patterns in render commands
+    // But the cleaner approach is to have WASM tell us via cc_get_focused_bounds
+
+    // For simplicity, scan for a text input-like element (small height, has border)
+    // This is a temporary solution - ideally WASM would export bounds
+
+    const count = wasm.map_frame(0); // Get command count without time update
+    for (let i = 0; i < count; i++) {
+        const cmdType = wasm.map_cmd_type(i);
+        const x = wasm.map_cmd_x(i);
+        const y = wasm.map_cmd_y(i);
+        const w = wasm.map_cmd_w(i);
+        const h = wasm.map_cmd_h(i);
+
+        // Look for search input: ~180px wide, ~28px tall, in top-left area
+        if (cmdType === 1 && w > 170 && w < 190 && h > 25 && h < 35 && x < 250 && y < 200) {
+            return { x, y, w, h };
+        }
+    }
+    return null;
+}
+
+function renderTextInputCursor(projMatrix) {
+    const focusedId = wasm.cc_get_focused_id();
+    if (focusedId === 0) return;
+
+    const cursorVis = wasm.cc_is_cursor_visible();
     if (!cursorVis) return;
 
-    // Get search input bounds from WASM
-    const x = wasm.map_search_get_x();
-    const y = wasm.map_search_get_y();
-    const h = wasm.map_search_get_height();
+    // Find the focused input bounds by scanning render commands
+    // This is needed because we can't easily pass float array from WASM
+    if (!focusedInputBounds) {
+        focusedInputBounds = findFocusedInputBounds();
+    }
 
-    if (h <= 0) return;  // Not rendered yet
+    if (!focusedInputBounds) return;
 
-    const cursor = wasm.map_search_get_cursor();
+    const { x, y, w, h } = focusedInputBounds;
+
+    const cursor = wasm.cc_get_cursor_pos();
     const fontSize = 12;
     const padding = 8;
 
-    // Calculate cursor X position using actual font metrics
+    // Calculate cursor X position using font metrics
+    // Since we don't have direct access to the text buffer in immediate mode,
+    // we estimate based on cursor position and font metrics
     let cursorX = x + padding;
-    if (fontData && fontData.glyphMap) {
-        // Get text from WASM
-        const textPtr = wasm.map_search_get_text();
-        const textLen = wasm.map_search_get_length();
-        const memory = new Uint8Array(wasm.memory.buffer);
 
-        // Sum up advances for characters before cursor
-        for (let i = 0; i < cursor && i < textLen; i++) {
-            const charCode = memory[textPtr + i];
-            const glyph = fontData.glyphMap[charCode];
-            if (glyph) {
-                cursorX += glyph.advance * fontSize;
-            } else {
-                cursorX += fontSize * 0.5;  // fallback for unknown chars
-            }
-        }
+    // We need to get the text somehow - for now use fixed width estimation
+    // A better solution would be to export a function that gives us cursor X directly
+    if (fontData && fontData.glyphMap) {
+        // Average character width based on common chars
+        const avgAdvance = 0.5; // Approximate
+        cursorX += cursor * avgAdvance * fontSize;
     } else {
-        // Fallback: estimate with fixed width
         cursorX += cursor * fontSize * 0.6;
     }
 
     const cursorY = y + 4;
     const cursorH = h - 8;
 
-    // Render selection first (behind cursor)
-    const selStart = wasm.map_search_get_selection();
+    // Render selection
+    const selStart = wasm.cc_get_selection_start();
     if (selStart >= 0 && selStart !== cursor) {
         const start = Math.min(selStart, cursor);
         const end = Math.max(selStart, cursor);
 
-        // Calculate selection bounds using font metrics
-        let selX = x + padding;
-        let selEndX = x + padding;
-
-        if (fontData && fontData.glyphMap) {
-            const textPtr = wasm.map_search_get_text();
-            const memory = new Uint8Array(wasm.memory.buffer);
-
-            for (let i = 0; i < end; i++) {
-                const charCode = memory[textPtr + i];
-                const glyph = fontData.glyphMap[charCode];
-                const advance = glyph ? glyph.advance * fontSize : fontSize * 0.5;
-                if (i < start) selX += advance;
-                selEndX += advance;
-            }
-        } else {
-            selX += start * fontSize * 0.6;
-            selEndX += end * fontSize * 0.6;
-        }
+        let selX = x + padding + start * 0.5 * fontSize;
+        let selEndX = x + padding + end * 0.5 * fontSize;
 
         renderRect(selX, cursorY, selEndX - selX, cursorH, [0.23, 0.51, 0.96, 0.3], 0, 0, null, projMatrix);
     }
 
-    // Render cursor as a visible rectangle (2px wide, bright blue)
+    // Render cursor
     renderRect(cursorX, cursorY, 2, cursorH, [0.2, 0.6, 1.0, 1.0], 0, 0, null, projMatrix);
 }
 
@@ -688,8 +711,8 @@ function render(timestamp) {
     const dt = lastFrameTime ? (timestamp - lastFrameTime) / 1000 : 0.016;
     lastFrameTime = timestamp;
 
-    // Update text input cursor blink
-    wasm.map_search_update(dt);
+    // Reset focused bounds each frame (will be found during render)
+    focusedInputBounds = null;
 
     const dpr = window.devicePixelRatio || 1;
     const width = canvas.width / dpr;
@@ -704,8 +727,8 @@ function render(timestamp) {
     // Render tiles
     renderTiles(width, height, projMatrix);
 
-    // Render UI
-    renderUI(width, height, projMatrix);
+    // Render UI (pass dt for cursor blink)
+    renderUI(width, height, projMatrix, dt);
 
     // Render text input cursor on top
     renderTextInputCursor(projMatrix);
@@ -719,6 +742,9 @@ function render(timestamp) {
 
 function setupEventHandlers() {
     canvas.addEventListener('mousedown', (e) => {
+        // Set pending click for immediate mode components
+        wasm.cc_set_click();
+
         if (wasm.map_handle_click(e.clientX, e.clientY)) return;
         isDragging = true;
         canvas.classList.add('dragging');
@@ -773,26 +799,27 @@ function setupEventHandlers() {
     });
 
     window.addEventListener('keydown', (e) => {
-        // Check if search input is focused
-        if (wasm.map_search_is_focused()) {
+        // Check if any input is focused (generic - not per-component!)
+        const focusedId = wasm.cc_get_focused_id();
+        if (focusedId !== 0) {
             // Handle special keys first
-            const handled = wasm.map_search_key_down(e.keyCode, e.shiftKey ? 1 : 0, e.ctrlKey ? 1 : 0);
+            const handled = wasm.cc_handle_key_down(e.keyCode, e.shiftKey ? 1 : 0, e.ctrlKey ? 1 : 0);
             if (handled) {
                 e.preventDefault();
                 return;
             }
 
-            // Handle printable characters (single character keys)
+            // Handle printable characters
             if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
                 const charCode = e.key.charCodeAt(0);
                 if (charCode >= 32 && charCode <= 126) {
-                    wasm.map_search_insert_char(charCode);
+                    wasm.cc_handle_key_char(charCode);
                     e.preventDefault();
                 }
                 return;
             }
         } else {
-            // Map keyboard shortcuts when input not focused
+            // Map keyboard shortcuts when no input focused
             switch (e.key) {
                 case '+':
                 case '=':

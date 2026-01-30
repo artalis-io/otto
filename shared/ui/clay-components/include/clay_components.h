@@ -11,7 +11,10 @@
 /* Common utilities and colors */
 #include "cc_common.h"
 
-/* Individual components */
+/* Immediate mode API (recommended) */
+#include "cc_immediate.h"
+
+/* Retained mode components (legacy) */
 #include "cc_text_input.h"
 #include "cc_button.h"
 
