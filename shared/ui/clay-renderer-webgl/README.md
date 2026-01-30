@@ -13,22 +13,25 @@ WebGL renderer for [Clay](https://github.com/nicbarker/clay) UI applications.
 ## Quick Start
 
 ```javascript
-import { ClayRenderer, MSDFFont } from './clay-renderer-webgl/index.js';
+import {
+    ClayRenderer, MSDFFont, createRenderLoop, loadWasm
+} from './clay-renderer-webgl/index.js';
 
 const renderer = new ClayRenderer(canvas);
 renderer.resize();
 
 const font = new MSDFFont();
-await font.load(renderer.gl, 'fonts/ui-font.json', 'fonts/ui-font.png');
+const [wasm] = await Promise.all([
+    loadWasm('build/app.wasm', ['app_init', 'app_frame']),
+    font.load(renderer.gl, 'fonts/ui-font.json', 'fonts/ui-font.png')
+]);
 renderer.setFont(font);
+wasm.app_init(width, height);
 
-function render() {
-    renderer.clear();
-    const proj = renderer.getProjectionMatrix();
-    const count = wasm.render_frame(dt);
-    renderer.renderClayCommands(wasm, count, proj);
-    requestAnimationFrame(render);
-}
+const render = createRenderLoop(renderer, wasm, font, {
+    frameFunction: 'app_frame'
+});
+requestAnimationFrame(render);
 ```
 
 ## Exports
@@ -39,6 +42,9 @@ import {
     MSDFFont,          // Font loading
     TileCache,         // Map tile caching
     MapTileRenderer,   // Slippy map rendering
+    createRenderLoop,  // Generic render loop with cursor
+    loadWasm,          // WASM loading with validation
+    renderTextCursor,  // Text cursor rendering
 } from './clay-renderer-webgl/index.js';
 ```
 
@@ -48,6 +54,9 @@ import {
 - `font.js` - MSDF font handling
 - `shaders.js` - WebGL shaders
 - `map-tiles.js` - Tile cache and renderer
+- `render-loop.js` - Generic render loop
+- `wasm-loader.js` - WASM loading utility
+- `text-cursor.js` - Text cursor rendering
 - `fonts/` - Default UI font
 
 ## License

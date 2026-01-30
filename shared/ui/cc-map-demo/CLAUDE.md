@@ -18,15 +18,16 @@ This demo shows how to:
 ├─────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────┐│
 │  │                    map.js                           ││
-│  │  - Imports from clay-renderer-webgl                 ││
-│  │  - WASM loading and event handling                  ││
-│  │  - Orchestrates tile + UI rendering                 ││
+│  │  - Uses loadWasm, createRenderLoop                  ││
+│  │  - Event handling                                   ││
+│  │  - Tile rendering callback                          ││
 │  └──────────────────────┬──────────────────────────────┘│
 │                         │                               │
 │  ┌──────────────────────▼──────────────────────────────┐│
 │  │            clay-renderer-webgl                      ││
 │  │  - ClayRenderer (rects, text, textures)             ││
-│  │  - MSDFFont (crisp text at any size)                ││
+│  │  - createRenderLoop (generic render loop)           ││
+│  │  - loadWasm (WASM loading with validation)          ││
 │  │  - TileCache, MapTileRenderer (slippy tiles)        ││
 │  └──────────────────────┬──────────────────────────────┘│
 │                         │                               │
@@ -126,26 +127,42 @@ cc_map(g_app.map.component_id,
        (float)g_app.map.width, (float)g_app.map.height, NULL);
 ```
 
-### Tile Rendering
+### Render Loop
 
-JavaScript fetches map state from WASM and renders tiles:
-
-```javascript
-const lat = wasm.map_get_lat();
-const lon = wasm.map_get_lon();
-const zoom = wasm.map_get_zoom();
-
-tileRenderer.render(lat, lon, zoom, layerType, width, height, projMatrix);
-```
-
-### UI Rendering
-
-Clay computes layout, produces render commands, which are drawn by the renderer:
+The app uses `createRenderLoop` from clay-renderer-webgl with tile rendering as the `onRender` callback:
 
 ```javascript
-const count = wasm.map_frame(dt);
-renderer.renderClayCommands(wasm, count, projMatrix);
+import { createRenderLoop, loadWasm, ... } from '../clay-renderer-webgl/index.js';
+
+// Load WASM with required exports
+const [wasm] = await Promise.all([
+    loadWasm('build/map_ui.wasm', REQUIRED_EXPORTS),
+    font.load(...)
+]);
+
+// Create render loop with tile rendering callback
+const render = createRenderLoop(renderer, wasm, font, {
+    frameFunction: 'map_frame',
+    onRender: (projMatrix) => {
+        tileRenderer.render(
+            wasm.map_get_lat(),
+            wasm.map_get_lon(),
+            wasm.map_get_zoom(),
+            wasm.map_get_layer(),
+            renderer.width, renderer.height,
+            projMatrix
+        );
+    }
+});
+requestAnimationFrame(render);
 ```
+
+The render loop handles:
+- Delta time calculation
+- Clearing and projection matrix
+- Calling the domain-specific `onRender` callback (tiles)
+- Rendering Clay UI commands
+- Rendering text cursor for focused inputs
 
 ## UI Components
 
