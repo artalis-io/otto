@@ -22,4 +22,7 @@
 export { ClayRenderer } from './renderer.js';
 export { MSDFFont } from './font.js';
 export { TextInputOverlay } from './text-input-overlay.js';
+export { TileCache, MapTileRenderer } from './map-tiles.js';
+export { renderTextCursor } from './text-cursor.js';
+export { createTextureFromImage } from './utils.js';
 export * from './shaders.js';
