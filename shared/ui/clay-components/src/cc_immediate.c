@@ -487,6 +487,7 @@ CcButtonResult cc_button(
 
     Clay_ElementId clay_id = (Clay_ElementId){.id = id, .stringId = {0}};
 
+    /* Check hover using previous frame's data (standard immediate mode pattern) */
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 

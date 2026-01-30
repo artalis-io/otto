@@ -629,3 +629,20 @@ EXPORT void cc_do_blur(void) {
 EXPORT void cc_set_click(void) {
     cc_set_pending_click();
 }
+
+/* Get focused input text for cursor rendering */
+EXPORT const char* cc_get_focused_text(void) {
+    uint32_t focused = cc_focused_id();
+    if (focused == CC_ID("search")) {
+        return g_ui.search_text;
+    }
+    return "";
+}
+
+EXPORT int cc_get_focused_text_len(void) {
+    uint32_t focused = cc_focused_id();
+    if (focused == CC_ID("search")) {
+        return g_ui.search_len;
+    }
+    return 0;
+}
