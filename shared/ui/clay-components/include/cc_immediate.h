@@ -21,5 +21,6 @@
 /* Components */
 #include "cc_input.h"
 #include "cc_button.h"
+#include "cc_map.h"
 
 #endif /* CC_IMMEDIATE_H */
