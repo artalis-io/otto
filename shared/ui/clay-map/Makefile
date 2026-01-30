@@ -21,7 +21,7 @@ OUTPUT = $(BUILD_DIR)/map_ui.wasm
 
 # WASM export settings - standalone WASM, no JS glue
 WASM_FLAGS = -s STANDALONE_WASM=1
-WASM_FLAGS += -s EXPORTED_FUNCTIONS='["_map_init","_map_resize","_map_set_center","_map_set_zoom","_map_get_lat","_map_get_lon","_map_get_zoom","_map_get_layer","_map_pointer_move","_map_pointer_down","_map_pointer_up","_map_scroll","_map_handle_click","_map_frame","_map_cmd_type","_map_cmd_x","_map_cmd_y","_map_cmd_w","_map_cmd_h","_map_cmd_rect_color","_map_cmd_rect_radius","_map_cmd_text_str","_map_cmd_text_len","_map_cmd_text_color","_map_cmd_text_size","_map_cmd_border_color","_map_cmd_border_radius","_map_cmd_border_width"]'
+WASM_FLAGS += -s EXPORTED_FUNCTIONS='["_map_init","_map_resize","_map_set_center","_map_set_zoom","_map_get_lat","_map_get_lon","_map_get_zoom","_map_get_layer","_map_pointer_move","_map_pointer_down","_map_pointer_up","_map_scroll","_map_handle_click","_map_frame","_map_cmd_type","_map_cmd_x","_map_cmd_y","_map_cmd_w","_map_cmd_h","_map_cmd_rect_color","_map_cmd_rect_radius","_map_cmd_text_str","_map_cmd_text_len","_map_cmd_text_color","_map_cmd_text_size","_map_cmd_border_color","_map_cmd_border_radius","_map_cmd_border_width","_map_search_focus","_map_search_blur","_map_search_is_focused","_map_search_get_text","_map_search_get_length","_map_search_get_cursor","_map_search_get_selection","_map_search_cursor_visible","_map_search_update","_map_search_insert_char","_map_search_key_down","_map_search_get_x","_map_search_get_y","_map_search_get_width","_map_search_get_height"]'
 WASM_FLAGS += -s INITIAL_MEMORY=16777216
 WASM_FLAGS += -s ALLOW_MEMORY_GROWTH=1
 WASM_FLAGS += --no-entry

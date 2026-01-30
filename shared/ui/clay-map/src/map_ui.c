@@ -53,6 +53,19 @@ static MapState g_map = {
     .dragging = false,
 };
 
+/* Text Input State */
+#define TEXT_INPUT_MAX_LEN 256
+
+typedef struct {
+    char text[TEXT_INPUT_MAX_LEN];
+    int length;
+    int cursor;
+    int selection_start;  /* -1 = no selection */
+    bool focused;
+    float cursor_blink;
+    bool cursor_visible;
+} TextInputState;
+
 /* UI State */
 typedef struct {
     bool show_controls;
@@ -60,6 +73,7 @@ typedef struct {
     int layer_type;       /* 0 = OSM, 1 = Carto Light, 2 = Stamen Terrain */
     char status_text[128];
     char tile_info_text[64];
+    TextInputState search_input;
 } UIState;
 
 static UIState g_ui = {
@@ -68,10 +82,19 @@ static UIState g_ui = {
     .layer_type = 0,
     .status_text = "Ready",
     .tile_info_text = "",
+    .search_input = {
+        .text = "",
+        .length = 0,
+        .cursor = 0,
+        .selection_start = -1,
+        .focused = false,
+        .cursor_blink = 0.0f,
+        .cursor_visible = true,
+    },
 };
 
-/* Clay memory arena - Clay_MinMemorySize() typically returns ~2-3MB with defaults */
-static uint8_t g_clay_memory[3 * 1024 * 1024];  /* 3MB for Clay */
+/* Clay memory arena - Clay_MinMemorySize() returns ~5MB with our config */
+static uint8_t g_clay_memory[6 * 1024 * 1024];  /* 6MB for Clay */
 static bool g_clay_initialized = false;
 
 /* ============================================================================
@@ -232,7 +255,7 @@ static void render_zoom_controls(void) {
                 .element = CLAY_ATTACH_POINT_RIGHT_TOP,
                 .parent = CLAY_ATTACH_POINT_RIGHT_TOP
             },
-            .offset = {-16, 80}
+            .offset = {-16, 160}  /* Move down to avoid layer panel */
         },
         .layout = {
             .layoutDirection = CLAY_TOP_TO_BOTTOM,
@@ -331,6 +354,48 @@ static void render_layer_panel(void) {
 static char g_coord_text[64];
 static char g_zoom_text[32];
 static char g_tile_text[48];
+static char g_search_display[TEXT_INPUT_MAX_LEN + 2];  /* Extra space for cursor */
+
+/* Render a text input field */
+static void render_search_input(void) {
+    TextInputState *input = &g_ui.search_input;
+
+    /* Prepare display text with cursor indicator for focused state */
+    if (input->length == 0 && !input->focused) {
+        strcpy(g_search_display, "Search location...");
+    } else {
+        strncpy(g_search_display, input->text, sizeof(g_search_display) - 1);
+        g_search_display[input->length] = '\0';
+    }
+
+    Clay_Color bg = input->focused ? (Clay_Color){60, 60, 60, 255} : (Clay_Color){50, 50, 50, 255};
+    Clay_Color border = input->focused ? COLOR_ACCENT : COLOR_BORDER;
+    Clay_Color text_color = (input->length == 0 && !input->focused)
+        ? (Clay_Color){120, 120, 120, 255}
+        : COLOR_TEXT_LIGHT;
+
+    CLAY(CLAY_ID("SearchInput"), {
+        .layout = {
+            .sizing = {
+                .width = CLAY_SIZING_FIXED(180),
+                .height = CLAY_SIZING_FIXED(28)
+            },
+            .padding = { .left = 8, .right = 8, .top = 4, .bottom = 4 },
+            .childAlignment = { .y = CLAY_ALIGN_Y_CENTER }
+        },
+        .backgroundColor = bg,
+        .cornerRadius = CLAY_CORNER_RADIUS(4),
+        .border = {
+            .width = {1, 1, 1, 1},
+            .color = border
+        }
+    }) {
+        CLAY_TEXT(make_string(g_search_display), CLAY_TEXT_CONFIG({
+            .fontSize = 12,
+            .textColor = text_color
+        }));
+    }
+}
 
 /* Info panel showing coordinates */
 static void render_info_panel(void) {
@@ -390,6 +455,9 @@ static void render_info_panel(void) {
                 .textColor = COLOR_TEXT_LIGHT
             }));
         }
+
+        /* Search input */
+        render_search_input();
     }
 }
 
@@ -447,6 +515,10 @@ static void render_attribution(void) {
         }));
     }
 }
+
+/* Forward declarations for text input functions */
+EXPORT void map_search_focus(void);
+EXPORT void map_search_blur(void);
 
 /* ============================================================================
  * Main Render Function
@@ -613,6 +685,15 @@ EXPORT void map_scroll(float delta, float x, float y) {
 EXPORT int map_handle_click(float x, float y) {
     (void)x; (void)y;
 
+    /* Check search input */
+    if (Clay_PointerOver(CLAY_ID("SearchInput"))) {
+        map_search_focus();
+        return 1;
+    } else if (g_ui.search_input.focused) {
+        /* Click outside search input - blur it */
+        map_search_blur();
+    }
+
     /* Check zoom buttons */
     if (Clay_PointerOver(CLAY_ID("ZoomIn"))) {
         map_set_zoom(g_map.zoom + 1);
@@ -652,12 +733,27 @@ static Clay_RenderCommandArray g_commands;
  */
 EXPORT int map_frame(void) {
     if (!g_clay_initialized) {
-        return 0;
+        return -1;  /* Return -1 to indicate not initialized */
     }
     Clay_BeginLayout();
     render_ui();
     g_commands = Clay_EndLayout();
     return g_commands.length;
+}
+
+/* Debug: check if Clay is initialized */
+EXPORT int map_is_initialized(void) {
+    return g_clay_initialized ? 1 : 0;
+}
+
+/* Debug: get min memory size */
+EXPORT uint32_t map_debug_min_mem(void) {
+    return Clay_MinMemorySize();
+}
+
+/* Debug: get our memory size */
+EXPORT uint32_t map_debug_our_mem(void) {
+    return sizeof(g_clay_memory);
 }
 
 /**
@@ -746,4 +842,238 @@ EXPORT float map_cmd_border_radius(int index) {
 EXPORT int map_cmd_border_width(int index) {
     if (index < 0 || index >= g_commands.length) return 0;
     return g_commands.internalArray[index].renderData.border.width.left;
+}
+
+/* ============================================================================
+ * Text Input Exports - for JS keyboard handling
+ * ============================================================================ */
+
+/**
+ * Focus the search input
+ */
+EXPORT void map_search_focus(void) {
+    g_ui.search_input.focused = true;
+    g_ui.search_input.cursor_visible = true;
+    g_ui.search_input.cursor_blink = 0.0f;
+}
+
+/**
+ * Blur the search input
+ */
+EXPORT void map_search_blur(void) {
+    g_ui.search_input.focused = false;
+    g_ui.search_input.selection_start = -1;
+}
+
+/**
+ * Check if search input is focused
+ */
+EXPORT int map_search_is_focused(void) {
+    return g_ui.search_input.focused ? 1 : 0;
+}
+
+/**
+ * Get search input text
+ */
+EXPORT const char* map_search_get_text(void) {
+    return g_ui.search_input.text;
+}
+
+/**
+ * Get search input text length
+ */
+EXPORT int map_search_get_length(void) {
+    return g_ui.search_input.length;
+}
+
+/**
+ * Get cursor position
+ */
+EXPORT int map_search_get_cursor(void) {
+    return g_ui.search_input.cursor;
+}
+
+/**
+ * Get selection start (-1 if no selection)
+ */
+EXPORT int map_search_get_selection(void) {
+    return g_ui.search_input.selection_start;
+}
+
+/**
+ * Check if cursor should be visible (for blinking)
+ */
+EXPORT int map_search_cursor_visible(void) {
+    return g_ui.search_input.cursor_visible ? 1 : 0;
+}
+
+/**
+ * Update cursor blink timer
+ */
+EXPORT void map_search_update(float dt) {
+    if (!g_ui.search_input.focused) return;
+
+    g_ui.search_input.cursor_blink += dt;
+    if (g_ui.search_input.cursor_blink >= 0.5f) {
+        g_ui.search_input.cursor_blink = 0.0f;
+        g_ui.search_input.cursor_visible = !g_ui.search_input.cursor_visible;
+    }
+}
+
+/**
+ * Insert a character at cursor
+ */
+EXPORT void map_search_insert_char(int char_code) {
+    TextInputState *input = &g_ui.search_input;
+    if (!input->focused) return;
+    if (char_code < 32 || char_code > 126) return;
+    if (input->length >= TEXT_INPUT_MAX_LEN - 1) return;
+
+    /* Delete selection if any */
+    if (input->selection_start >= 0 && input->selection_start != input->cursor) {
+        int start = input->selection_start < input->cursor ? input->selection_start : input->cursor;
+        int end = input->selection_start < input->cursor ? input->cursor : input->selection_start;
+        memmove(&input->text[start], &input->text[end], input->length - end + 1);
+        input->length -= (end - start);
+        input->cursor = start;
+        input->selection_start = -1;
+    }
+
+    /* Insert character */
+    memmove(&input->text[input->cursor + 1], &input->text[input->cursor],
+            input->length - input->cursor + 1);
+    input->text[input->cursor] = (char)char_code;
+    input->cursor++;
+    input->length++;
+
+    input->cursor_visible = true;
+    input->cursor_blink = 0.0f;
+}
+
+/**
+ * Handle special keys
+ * Returns 1 if handled
+ */
+/**
+ * Get search input bounding box (for cursor rendering in JS)
+ */
+EXPORT float map_search_get_x(void) {
+    Clay_BoundingBox box = Clay_GetElementData(CLAY_ID("SearchInput")).boundingBox;
+    return box.x;
+}
+
+EXPORT float map_search_get_y(void) {
+    Clay_BoundingBox box = Clay_GetElementData(CLAY_ID("SearchInput")).boundingBox;
+    return box.y;
+}
+
+EXPORT float map_search_get_width(void) {
+    Clay_BoundingBox box = Clay_GetElementData(CLAY_ID("SearchInput")).boundingBox;
+    return box.width;
+}
+
+EXPORT float map_search_get_height(void) {
+    Clay_BoundingBox box = Clay_GetElementData(CLAY_ID("SearchInput")).boundingBox;
+    return box.height;
+}
+
+EXPORT int map_search_key_down(int key_code, int shift, int ctrl) {
+    TextInputState *input = &g_ui.search_input;
+    if (!input->focused) return 0;
+
+    input->cursor_visible = true;
+    input->cursor_blink = 0.0f;
+
+    int has_sel = input->selection_start >= 0 && input->selection_start != input->cursor;
+
+    switch (key_code) {
+        case 37:  /* Left arrow */
+            if (has_sel && !shift) {
+                input->cursor = input->selection_start < input->cursor
+                    ? input->selection_start : input->cursor;
+                input->selection_start = -1;
+            } else if (input->cursor > 0) {
+                if (shift && input->selection_start < 0) {
+                    input->selection_start = input->cursor;
+                }
+                input->cursor--;
+            }
+            if (!shift) input->selection_start = -1;
+            return 1;
+
+        case 39:  /* Right arrow */
+            if (has_sel && !shift) {
+                input->cursor = input->selection_start > input->cursor
+                    ? input->selection_start : input->cursor;
+                input->selection_start = -1;
+            } else if (input->cursor < input->length) {
+                if (shift && input->selection_start < 0) {
+                    input->selection_start = input->cursor;
+                }
+                input->cursor++;
+            }
+            if (!shift) input->selection_start = -1;
+            return 1;
+
+        case 36:  /* Home */
+            if (shift && input->selection_start < 0) {
+                input->selection_start = input->cursor;
+            }
+            input->cursor = 0;
+            if (!shift) input->selection_start = -1;
+            return 1;
+
+        case 35:  /* End */
+            if (shift && input->selection_start < 0) {
+                input->selection_start = input->cursor;
+            }
+            input->cursor = input->length;
+            if (!shift) input->selection_start = -1;
+            return 1;
+
+        case 8:   /* Backspace */
+            if (has_sel) {
+                int start = input->selection_start < input->cursor ? input->selection_start : input->cursor;
+                int end = input->selection_start < input->cursor ? input->cursor : input->selection_start;
+                memmove(&input->text[start], &input->text[end], input->length - end + 1);
+                input->length -= (end - start);
+                input->cursor = start;
+                input->selection_start = -1;
+            } else if (input->cursor > 0) {
+                memmove(&input->text[input->cursor - 1], &input->text[input->cursor],
+                        input->length - input->cursor + 1);
+                input->cursor--;
+                input->length--;
+            }
+            return 1;
+
+        case 46:  /* Delete */
+            if (has_sel) {
+                int start = input->selection_start < input->cursor ? input->selection_start : input->cursor;
+                int end = input->selection_start < input->cursor ? input->cursor : input->selection_start;
+                memmove(&input->text[start], &input->text[end], input->length - end + 1);
+                input->length -= (end - start);
+                input->cursor = start;
+                input->selection_start = -1;
+            } else if (input->cursor < input->length) {
+                memmove(&input->text[input->cursor], &input->text[input->cursor + 1],
+                        input->length - input->cursor);
+                input->length--;
+            }
+            return 1;
+
+        case 65:  /* A - select all with Ctrl */
+            if (ctrl) {
+                input->selection_start = 0;
+                input->cursor = input->length;
+                return 1;
+            }
+            break;
+
+        case 27:  /* Escape */
+            map_search_blur();
+            return 1;
+    }
+
+    return 0;
 }
