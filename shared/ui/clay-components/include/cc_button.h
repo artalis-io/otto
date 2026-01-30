@@ -41,6 +41,12 @@ typedef struct {
     float padding_x;
     float padding_y;
     float corner_radius;
+    /* Layout */
+    float width;        /* Fixed width (0 = auto) */
+    float height;       /* Fixed height (0 = auto) */
+    CcMargin margin;    /* Outer spacing */
+    CcAlign align;      /* Self-alignment within parent */
+    bool grow;          /* Grow to fill available width */
 } CcButtonStyle;
 
 /* Default style */

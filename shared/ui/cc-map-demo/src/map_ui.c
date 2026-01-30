@@ -127,8 +127,9 @@ static void render_layer_panel(void) {
     }) {
         CLAY_TEXT(CLAY_STRING("Layers"), CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
 
-        const CcButtonStyle sel = {CC_BTN_PRIMARY, 14, 8, 8, 4};
-        const CcButtonStyle def = {CC_BTN_DEFAULT, 14, 8, 8, 4};
+        /* Fixed width buttons for consistent alignment */
+        const CcButtonStyle sel = {CC_BTN_PRIMARY, 14, 8, 8, 4, 70};
+        const CcButtonStyle def = {CC_BTN_DEFAULT, 14, 8, 8, 4, 70};
 
         if (cc_button(CC_ID("layer_osm"), "OSM", g_app.panels.layer_type == 0 ? &sel : &def).clicked)
             g_app.panels.layer_type = 0;
