@@ -672,18 +672,37 @@ function renderTextInputCursor(projMatrix) {
     const fontSize = 12;
     const padding = 8;
 
-    // Calculate cursor X position using font metrics
-    // Since we don't have direct access to the text buffer in immediate mode,
-    // we estimate based on cursor position and font metrics
+    // Get actual text from WASM to measure properly
+    const textPtr = wasm.cc_get_focused_text();
+    const textLen = wasm.cc_get_focused_text_len();
+
+    // Read text from WASM memory
+    let focusedText = '';
+    if (textPtr && textLen > 0) {
+        if (memory.buffer.byteLength !== HEAPU8.buffer.byteLength) {
+            HEAPU8 = new Uint8Array(memory.buffer);
+        }
+        for (let j = 0; j < textLen; j++) {
+            focusedText += String.fromCharCode(HEAPU8[textPtr + j]);
+        }
+    }
+
+    // Calculate cursor X position using actual font metrics
     let cursorX = x + padding;
 
-    // We need to get the text somehow - for now use fixed width estimation
-    // A better solution would be to export a function that gives us cursor X directly
-    if (fontData && fontData.glyphMap) {
-        // Average character width based on common chars
-        const avgAdvance = 0.5; // Approximate
-        cursorX += cursor * avgAdvance * fontSize;
-    } else {
+    if (fontData && fontData.glyphMap && cursor > 0) {
+        // Measure width of text up to cursor position
+        for (let i = 0; i < Math.min(cursor, focusedText.length); i++) {
+            const charCode = focusedText.charCodeAt(i);
+            const glyph = fontData.glyphMap[charCode];
+            if (glyph) {
+                cursorX += glyph.advance * fontSize;
+            } else {
+                cursorX += fontSize * 0.5;  // Unknown char fallback
+            }
+        }
+    } else if (cursor > 0) {
+        // Fallback without font data
         cursorX += cursor * fontSize * 0.6;
     }
 
@@ -696,8 +715,24 @@ function renderTextInputCursor(projMatrix) {
         const start = Math.min(selStart, cursor);
         const end = Math.max(selStart, cursor);
 
-        let selX = x + padding + start * 0.5 * fontSize;
-        let selEndX = x + padding + end * 0.5 * fontSize;
+        // Calculate selection bounds using actual font metrics
+        let selX = x + padding;
+        let selEndX = x + padding;
+
+        if (fontData && fontData.glyphMap) {
+            for (let i = 0; i < Math.min(end, focusedText.length); i++) {
+                const charCode = focusedText.charCodeAt(i);
+                const glyph = fontData.glyphMap[charCode];
+                const advance = glyph ? glyph.advance * fontSize : fontSize * 0.5;
+                if (i < start) {
+                    selX += advance;
+                }
+                selEndX += advance;
+            }
+        } else {
+            selX += start * fontSize * 0.6;
+            selEndX += end * fontSize * 0.6;
+        }
 
         renderRect(selX, cursorY, selEndX - selX, cursorH, [0.23, 0.51, 0.96, 0.3], 0, 0, null, projMatrix);
     }

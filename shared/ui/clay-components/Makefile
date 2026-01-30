@@ -5,7 +5,7 @@
 
 CC = gcc
 CFLAGS = -O2 -Wall -Wextra -std=c99
-INCLUDES = -Iinclude -I../../vendor/clay
+INCLUDES = -Iinclude -I../../../vendor/clay
 
 EMCC = emcc
 WASM_CFLAGS = -O3 -Wall -Wextra
@@ -41,6 +41,11 @@ $(BUILD_DIR)/cc_immediate.wasm.o: src/cc_immediate.c $(HEADERS) | $(BUILD_DIR)
 clean:
 	rm -rf $(BUILD_DIR)
 
-# Test the library compiles
-test: lib
-	@echo "Library built successfully"
+# Run component tests
+test: $(BUILD_DIR)/test_immediate
+	@echo "Running immediate mode tests..."
+	@./$(BUILD_DIR)/test_immediate
+
+$(BUILD_DIR)/test_immediate: tests/test_immediate.c src/cc_immediate.c $(HEADERS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) tests/test_immediate.c src/cc_immediate.c -o $@ -lm
+	@echo "Built: $@"
