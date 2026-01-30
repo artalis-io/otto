@@ -61,3 +61,4 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
+shared/ui/clay-map/build/
