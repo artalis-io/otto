@@ -72,32 +72,4 @@ export class TextInputOverlay {
             );
         }
     }
-
-    /**
-     * Helper to get text input state from WASM exports
-     */
-    static getStateFromWasm(wasm, memory) {
-        const textPtr = wasm.map_search_get_text();
-        const textLen = wasm.map_search_get_length();
-
-        let text = '';
-        const memView = new Uint8Array(memory.buffer);
-        for (let i = 0; i < textLen; i++) {
-            text += String.fromCharCode(memView[textPtr + i]);
-        }
-
-        return {
-            x: wasm.map_search_get_x(),
-            y: wasm.map_search_get_y(),
-            width: wasm.map_search_get_width(),
-            height: wasm.map_search_get_height(),
-            cursor: wasm.map_search_get_cursor(),
-            selectionStart: wasm.map_search_get_selection(),
-            cursorVisible: wasm.map_search_cursor_visible() === 1,
-            focused: wasm.map_search_is_focused() === 1,
-            text,
-            fontSize: 12,  // Should match the C code
-            padding: 8,    // Should match the C code
-        };
-    }
 }

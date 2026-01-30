@@ -18,6 +18,9 @@
 /* Core utilities, ID generation, focus management */
 #include "cc_common.h"
 
+/* Clay integration (init, lifecycle, render command accessors) */
+#include "cc_clay.h"
+
 /* Components */
 #include "cc_input.h"
 #include "cc_button.h"

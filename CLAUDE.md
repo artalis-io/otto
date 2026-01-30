@@ -235,6 +235,43 @@ Each vendor library has its own CLAUDE.md with API documentation:
 | **mongoose** | `vendor/mongoose/` | [`vendor/mongoose/CLAUDE.md`](vendor/mongoose/CLAUDE.md) | Embedded HTTP/WebSocket server |
 | **clay** | `vendor/clay/` | [`vendor/clay/CLAUDE.md`](vendor/clay/CLAUDE.md) | High-performance 2D UI layout |
 
+## UI System (Clay + Immediate Mode)
+
+The platform uses a hybrid UI architecture: **Clay** for declarative layout + **immediate mode components** for interaction.
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **clay-components** | `shared/ui/clay-components/` | Immediate mode components (button, input, map) |
+| **clay-renderer-webgl** | `shared/ui/clay-renderer-webgl/` | WebGL renderer for browsers |
+| **cc-map-demo** | `shared/ui/cc-map-demo/` | Example map viewer application |
+
+### Architecture
+
+```
+Application: if (cc_button(...).clicked) { ... }
+     │
+clay-components: Immediate mode API, focus/click handling
+     │
+Clay: Declarative layout, render commands
+     │
+Renderer: WebGL (browser), SDL/raylib (native) [planned]
+```
+
+### Key Files
+
+- `shared/ui/clay-components/include/cc_common.h` - Core API
+- `shared/ui/clay-components/src/cc_common.c` - State, keyboard handling
+- `shared/ui/clay-renderer-webgl/renderer.js` - WebGL renderer
+
+See `.claude/skills/clay-ui-architecture.md` for detailed architecture documentation.
+
+### Future Renderers
+
+Planned native backends:
+- `clay-renderer-sdl/` - SDL2 for desktop/mobile
+- `clay-renderer-raylib/` - raylib for games
+- `clay-renderer-sokol/` - Sokol for minimal deps
+
 ## Critical Code Sections
 
 ### Ralph: LU Factorization (`ralph/src/lu.c`)
@@ -286,6 +323,164 @@ make test
 3. **Carta**: Coordinate order is (lon, lat) in MVT
 4. **FuelWise**: Stations must be sorted by distance_from_start
 5. **Memory**: Free all allocated structures (solutions, routes, contexts)
+
+## C Memory Safety Guidelines
+
+OTTO is written in C, which requires discipline to avoid memory vulnerabilities. Follow these patterns rigorously.
+
+### Arena Allocation (Preferred)
+
+Most OTTO modules use arena allocators - allocate in bulk, free in bulk:
+
+```c
+/* Good: Arena allocation */
+Arena arena = arena_create(buffer, size);
+Node *nodes = arena_alloc(&arena, n * sizeof(Node));
+Edge *edges = arena_alloc(&arena, m * sizeof(Edge));
+/* ... use nodes and edges ... */
+arena_reset(&arena);  /* Free everything at once */
+```
+
+**Benefits:** No double-free, no dangling pointers, no fragmentation, cache-friendly.
+
+**Used in:** Ralph solver, Velo routing, Carta tile generation.
+
+### Ownership Rules
+
+When arena allocation isn't suitable:
+
+```c
+/* Rule: _create() implies _destroy() */
+Graph *g = graph_create();
+/* ... */
+graph_destroy(g);
+g = NULL;  /* Prevent use-after-free */
+
+/* Rule: Document ownership in function names */
+Solution *solver_solve(Problem *p);    /* Returns owned pointer - caller frees */
+void process_data(const Data *d);      /* Borrows pointer - caller retains ownership */
+```
+
+### Buffer Safety
+
+```c
+/* NEVER use unbounded string operations */
+strcpy(dest, src);                    /* NO - buffer overflow */
+sprintf(buf, "%s: %d", name, val);    /* NO - buffer overflow */
+
+/* ALWAYS use bounded versions */
+strncpy(dest, src, sizeof(dest) - 1);
+dest[sizeof(dest) - 1] = '\0';
+
+snprintf(buf, sizeof(buf), "%s: %d", name, val);  /* Truncates safely */
+
+/* ALWAYS validate array indices */
+if (index < 0 || index >= count) {
+    return ERROR_OUT_OF_BOUNDS;
+}
+```
+
+### Integer Overflow
+
+```c
+/* DANGEROUS: Multiplication can overflow */
+void *p = malloc(count * element_size);  /* Integer overflow possible! */
+
+/* SAFE: Check before multiply */
+if (count > SIZE_MAX / element_size) {
+    return NULL;  /* Would overflow */
+}
+void *p = malloc(count * element_size);
+
+/* SAFE: calloc checks internally */
+void *p = calloc(count, element_size);
+```
+
+### Initialization
+
+```c
+/* DANGEROUS: Uninitialized data */
+Config cfg;
+use_config(&cfg);  /* Garbage values! */
+
+/* SAFE: Zero-initialize */
+Config cfg = {0};
+
+/* SAFE: Designated initializers */
+Config cfg = {
+    .timeout_ms = 5000,
+    .retries = 3,
+};
+```
+
+### Post-Free Hygiene
+
+```c
+/* Pattern: NULL immediately after free */
+void resource_destroy(Resource **r) {
+    if (r && *r) {
+        free((*r)->data);
+        free(*r);
+        *r = NULL;  /* Prevent double-free and use-after-free */
+    }
+}
+```
+
+### Defensive Macros
+
+```c
+/* Helper macros used in OTTO */
+#define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
+
+#define SAFE_FREE(p) do { free(p); (p) = NULL; } while(0)
+
+#define CHECK_NULL(p) do { \
+    if ((p) == NULL) return ERROR_NULL; \
+} while(0)
+
+#define CHECK_BOUNDS(i, n) do { \
+    if ((i) < 0 || (size_t)(i) >= (n)) return ERROR_BOUNDS; \
+} while(0)
+```
+
+### When Reviewing C Code
+
+Check for these issues:
+
+| Issue | What to Look For |
+|-------|------------------|
+| **Buffer overflow** | `strcpy`, `sprintf`, `gets`, unbounded loops |
+| **Integer overflow** | `malloc(a * b)` without overflow check |
+| **Use-after-free** | Pointer used after `free()` call |
+| **Double-free** | `free()` called twice on same pointer |
+| **Null deref** | Pointer used without NULL check |
+| **Uninitialized** | Variables used before assignment |
+| **Memory leak** | `malloc` without corresponding `free` |
+
+### Build Flags
+
+Use these flags in development:
+
+```bash
+# Warnings (CI should use -Werror)
+CFLAGS += -Wall -Wextra -Wconversion -Wshadow -Wformat=2
+
+# Debug builds: AddressSanitizer + UndefinedBehaviorSanitizer
+CFLAGS += -fsanitize=address,undefined -g
+
+# Test with Valgrind
+valgrind --leak-check=full --track-origins=yes ./test_runner
+```
+
+### WASM Defense-in-Depth
+
+Even buggy C code is partially contained in WASM:
+- Linear memory is bounds-checked
+- Cannot access host memory
+- Stack overflow traps instead of corrupting memory
+- No arbitrary code execution
+
+This doesn't excuse bugs, but limits blast radius.
 
 ## Scripts
 

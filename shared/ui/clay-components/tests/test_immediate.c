@@ -171,6 +171,19 @@ static void test_key_down_escape(void) {
     PASS();
 }
 
+static void test_key_down_invalid_codes(void) {
+    TEST(key_down_invalid_codes);
+
+    cc_init();
+
+    /* Invalid key codes should be rejected */
+    ASSERT(!cc_key_down(-1, false, false), "Negative key code should be rejected");
+    ASSERT(!cc_key_down(1000, false, false), "Key code > 512 should be rejected");
+    ASSERT(!cc_key_down(999999, false, false), "Very large key code should be rejected");
+
+    PASS();
+}
+
 /* ============================================================================
  * Cursor Blink Tests
  * ============================================================================ */
@@ -439,6 +452,172 @@ static void test_input_focus_on_click(void) {
     PASS();
 }
 
+static void test_input_validation(void) {
+    TEST(input_validation);
+
+    init_clay();
+    cc_init();
+
+    char text[64] = "hello";
+    int len = 5;
+
+    cc_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        /* Test with corrupted length (too large) */
+        int bad_len = 100;  /* Larger than max_len */
+        char bad_text[64] = "test";
+        cc_input(CC_ID("bad_input"), bad_text, &bad_len, 64, NULL, NULL);
+        ASSERT(bad_len <= 63, "Length should be clamped to max_len-1");
+
+        /* Test with negative length */
+        int neg_len = -5;
+        char neg_text[64] = "";
+        cc_input(CC_ID("neg_input"), neg_text, &neg_len, 64, NULL, NULL);
+        ASSERT(neg_len == 0, "Negative length should be clamped to 0");
+
+        /* Normal case should work */
+        CcInputResult r = cc_input(CC_ID("good_input"), text, &len, 64, NULL, NULL);
+        ASSERT(len == 5, "Normal length should be unchanged");
+        (void)r;
+    }
+
+    Clay_EndLayout();
+    cc_frame_end(0.016f);
+
+    PASS();
+}
+
+/* ============================================================================
+ * Map Component Tests
+ * ============================================================================ */
+
+static void test_map_result_init(void) {
+    TEST(map_result_init);
+
+    CcMapResult r = {0};
+
+    ASSERT(!r.panned, "panned should be false");
+    ASSERT(!r.zoomed, "zoomed should be false");
+    ASSERT(!r.clicked, "clicked should be false");
+    ASSERT(r.click_lat == 0.0, "click_lat should be 0");
+    ASSERT(r.click_lon == 0.0, "click_lon should be 0");
+
+    PASS();
+}
+
+static void test_map_projection_lon_to_tile(void) {
+    TEST(map_projection_lon_to_tile);
+
+    /* At zoom 0, entire world is one tile */
+    double x0 = cc_map_lon_to_tile_x(0.0, 0);
+    ASSERT(x0 >= 0.49 && x0 <= 0.51, "lon=0 at z=0 should be ~0.5");
+
+    /* At zoom 1, world is 2x2 tiles */
+    double x1_west = cc_map_lon_to_tile_x(-180.0, 1);
+    double x1_east = cc_map_lon_to_tile_x(180.0, 1);
+    ASSERT(x1_west >= -0.01 && x1_west <= 0.01, "lon=-180 at z=1 should be ~0");
+    ASSERT(x1_east >= 1.99 && x1_east <= 2.01, "lon=180 at z=1 should be ~2");
+
+    PASS();
+}
+
+static void test_map_projection_lat_to_tile(void) {
+    TEST(map_projection_lat_to_tile);
+
+    /* At zoom 0, equator is at y=0.5 */
+    double y0 = cc_map_lat_to_tile_y(0.0, 0);
+    ASSERT(y0 >= 0.49 && y0 <= 0.51, "lat=0 at z=0 should be ~0.5");
+
+    /* Extreme latitudes should be clamped and not produce NaN */
+    double y_north = cc_map_lat_to_tile_y(90.0, 1);
+    double y_south = cc_map_lat_to_tile_y(-90.0, 1);
+    ASSERT(y_north == y_north, "North pole should not produce NaN");  /* NaN != NaN */
+    ASSERT(y_south == y_south, "South pole should not produce NaN");
+
+    PASS();
+}
+
+static void test_map_projection_roundtrip(void) {
+    TEST(map_projection_roundtrip);
+
+    /* lon -> tile_x -> lon should be consistent */
+    double orig_lon = 19.0402;  /* Budapest */
+    double tile_x = cc_map_lon_to_tile_x(orig_lon, 12);
+    double recovered_lon = cc_map_tile_x_to_lon(tile_x, 12);
+    ASSERT(recovered_lon > orig_lon - 0.001 && recovered_lon < orig_lon + 0.001,
+           "Longitude roundtrip should match");
+
+    /* lat -> tile_y -> lat should be consistent */
+    double orig_lat = 47.4979;  /* Budapest */
+    double tile_y = cc_map_lat_to_tile_y(orig_lat, 12);
+    double recovered_lat = cc_map_tile_y_to_lat(tile_y, 12);
+    ASSERT(recovered_lat > orig_lat - 0.001 && recovered_lat < orig_lat + 0.001,
+           "Latitude roundtrip should match");
+
+    PASS();
+}
+
+static void test_map_scroll(void) {
+    TEST(map_scroll);
+
+    /* Normal zoom in */
+    ASSERT(cc_map_scroll(10, 1, 0, 19) == 11, "Zoom in should increase");
+
+    /* Normal zoom out */
+    ASSERT(cc_map_scroll(10, -1, 0, 19) == 9, "Zoom out should decrease");
+
+    /* Clamp at max */
+    ASSERT(cc_map_scroll(19, 1, 0, 19) == 19, "Should clamp at max");
+
+    /* Clamp at min */
+    ASSERT(cc_map_scroll(0, -1, 0, 19) == 0, "Should clamp at min");
+
+    /* Custom range */
+    ASSERT(cc_map_scroll(5, 1, 5, 10) == 6, "Should work with custom range");
+    ASSERT(cc_map_scroll(5, -1, 5, 10) == 5, "Should clamp at custom min");
+
+    PASS();
+}
+
+static void test_map_pointer_handling(void) {
+    TEST(map_pointer_handling);
+
+    uint32_t map_id = CC_ID("test_map");
+
+    /* Initially not dragging */
+    ASSERT(!cc_map_is_dragging(map_id), "Should not be dragging initially");
+
+    /* Start drag */
+    cc_map_pointer_down(map_id, 47.4979, 19.0402, 400.0f, 300.0f);
+    ASSERT(cc_map_is_dragging(map_id), "Should be dragging after pointer_down");
+
+    /* Move pointer */
+    double new_lat, new_lon;
+    bool moved = cc_map_pointer_move(map_id, 12, 420.0f, 310.0f, &new_lat, &new_lon);
+    ASSERT(moved, "pointer_move should return true when dragging");
+
+    /* End drag with minimal movement - should detect as click */
+    cc_map_pointer_up(map_id, 401.0f, 301.0f);  /* Only 1-2 pixels moved */
+    ASSERT(!cc_map_is_dragging(map_id), "Should not be dragging after pointer_up");
+
+    PASS();
+}
+
+static void test_map_default_style(void) {
+    TEST(map_default_style);
+
+    ASSERT(CC_MAP_STYLE_DEFAULT.min_zoom == 0, "Default min_zoom should be 0");
+    ASSERT(CC_MAP_STYLE_DEFAULT.max_zoom == 19, "Default max_zoom should be 19");
+    ASSERT(CC_MAP_STYLE_DEFAULT.min_lat < 0, "Default min_lat should be negative");
+    ASSERT(CC_MAP_STYLE_DEFAULT.max_lat > 0, "Default max_lat should be positive");
+
+    PASS();
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -460,6 +639,7 @@ int main(void) {
     test_key_char_not_focused();
     test_key_char_focused();
     test_key_down_escape();
+    test_key_down_invalid_codes();
 
     printf("\nCursor Blink Tests:\n");
     test_cursor_blink();
@@ -477,6 +657,16 @@ int main(void) {
     test_button_renders();
     test_multiple_inputs();
     test_input_focus_on_click();
+    test_input_validation();
+
+    printf("\nMap Component Tests:\n");
+    test_map_result_init();
+    test_map_projection_lon_to_tile();
+    test_map_projection_lat_to_tile();
+    test_map_projection_roundtrip();
+    test_map_scroll();
+    test_map_pointer_handling();
+    test_map_default_style();
 
     printf("\n======================================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);
