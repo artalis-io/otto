@@ -1,13 +1,16 @@
-# Clay Components Library
+# Clay Components Library - Immediate Mode
+#
+# Thin immediate mode components on top of Clay layout.
+# Include cc_immediate.c in your WASM build directly.
 
 CC = gcc
 CFLAGS = -O2 -Wall -Wextra -std=c99
-INCLUDES = -Iinclude
+INCLUDES = -Iinclude -I../../vendor/clay
 
 EMCC = emcc
 WASM_CFLAGS = -O3 -Wall -Wextra
 
-SOURCES = src/cc_text_input.c src/cc_button.c
+SOURCES = src/cc_immediate.c
 HEADERS = $(wildcard include/*.h)
 
 BUILD_DIR = build
@@ -22,23 +25,17 @@ lib: $(BUILD_DIR)/libclay_components.a
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(BUILD_DIR)/cc_text_input.o: src/cc_text_input.c $(HEADERS) | $(BUILD_DIR)
+$(BUILD_DIR)/cc_immediate.o: src/cc_immediate.c $(HEADERS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(BUILD_DIR)/cc_button.o: src/cc_button.c $(HEADERS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
-
-$(BUILD_DIR)/libclay_components.a: $(BUILD_DIR)/cc_text_input.o $(BUILD_DIR)/cc_button.o
+$(BUILD_DIR)/libclay_components.a: $(BUILD_DIR)/cc_immediate.o
 	ar rcs $@ $^
 	@echo "Built: $@"
 
 # WASM objects for inclusion in WASM builds
-wasm: $(BUILD_DIR)/cc_text_input.wasm.o $(BUILD_DIR)/cc_button.wasm.o
+wasm: $(BUILD_DIR)/cc_immediate.wasm.o
 
-$(BUILD_DIR)/cc_text_input.wasm.o: src/cc_text_input.c $(HEADERS) | $(BUILD_DIR)
-	$(EMCC) $(WASM_CFLAGS) $(INCLUDES) -c $< -o $@
-
-$(BUILD_DIR)/cc_button.wasm.o: src/cc_button.c $(HEADERS) | $(BUILD_DIR)
+$(BUILD_DIR)/cc_immediate.wasm.o: src/cc_immediate.c $(HEADERS) | $(BUILD_DIR)
 	$(EMCC) $(WASM_CFLAGS) $(INCLUDES) -c $< -o $@
 
 clean:
