@@ -2,6 +2,8 @@
  * Clay WebGL Renderer - MSDF Font Loader
  */
 
+import { createTextureFromImage } from './utils.js';
+
 export class MSDFFont {
     constructor() {
         this.texture = null;
@@ -14,21 +16,29 @@ export class MSDFFont {
         const img = new Image();
         await new Promise((resolve, reject) => {
             img.onload = resolve;
-            img.onerror = reject;
+            img.onerror = () => reject(new Error(`Failed to load font texture: ${pngUrl}`));
             img.src = pngUrl;
         });
 
-        this.texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, this.texture);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        this.texture = createTextureFromImage(gl, img);
 
         // Load font metrics
         const resp = await fetch(jsonUrl);
+        if (!resp.ok) {
+            throw new Error(`Failed to load font metrics: ${jsonUrl} (${resp.status})`);
+        }
         this.data = await resp.json();
+
+        // Validate font data structure
+        if (!this.data) {
+            throw new Error('Invalid font data: empty response');
+        }
+        if (!this.data.glyphs || !Array.isArray(this.data.glyphs)) {
+            throw new Error('Invalid font data: missing glyphs array');
+        }
+        if (!this.data.atlas) {
+            throw new Error('Invalid font data: missing atlas info');
+        }
 
         // Build glyph lookup
         this.glyphMap = {};
@@ -59,34 +69,24 @@ export class MSDFFont {
     }
 
     /**
-     * Measure text width using font metrics
-     */
-    measureText(text, fontSize) {
-        let width = 0;
-        for (let i = 0; i < text.length; i++) {
-            const glyph = this.glyphMap[text.charCodeAt(i)];
-            if (glyph) {
-                width += glyph.advance * fontSize;
-            } else {
-                width += fontSize * 0.5;  // fallback
-            }
-        }
-        return width;
-    }
-
-    /**
-     * Get cursor X position for a given character index
+     * Get cursor/text X position for a given character index.
+     * Core text measurement function used by both measureText and cursor positioning.
      */
     getCursorX(text, cursorIndex, fontSize) {
         let x = 0;
-        for (let i = 0; i < cursorIndex && i < text.length; i++) {
+        const limit = Math.min(cursorIndex, text.length);
+        for (let i = 0; i < limit; i++) {
             const glyph = this.glyphMap[text.charCodeAt(i)];
-            if (glyph) {
-                x += glyph.advance * fontSize;
-            } else {
-                x += fontSize * 0.5;
-            }
+            x += glyph ? glyph.advance * fontSize : fontSize * 0.5;
         }
         return x;
+    }
+
+    /**
+     * Measure total text width using font metrics.
+     * Convenience wrapper around getCursorX.
+     */
+    measureText(text, fontSize) {
+        return this.getCursorX(text, text.length, fontSize);
     }
 }

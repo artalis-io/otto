@@ -88,30 +88,53 @@ export class ClayRenderer {
             throw new Error('WebGL not supported');
         }
 
-        this.gl.getExtension('OES_standard_derivatives');
+        // Context loss handling
+        this.contextLost = false;
+        canvas.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            this.contextLost = true;
+            console.warn('WebGL context lost');
+        });
+        canvas.addEventListener('webglcontextrestored', () => {
+            this.contextLost = false;
+            console.log('WebGL context restored');
+            this._initResources();
+        });
 
-        // Create shaders
-        this.tileShader = createProgram(this.gl, TILE_VS, TILE_FS);
-        this.rectShader = createProgram(this.gl, RECT_VS, RECT_FS);
-        this.textShader = createProgram(this.gl, TEXT_VS, TEXT_FS);
-
-        // Create quad buffer
-        this.quadBuffer = this.gl.createBuffer();
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.quadBuffer);
-        this.gl.bufferData(this.gl.ARRAY_BUFFER, new Float32Array([
-            0, 0, 0, 0,
-            1, 0, 1, 0,
-            0, 1, 0, 1,
-            1, 1, 1, 1,
-        ]), this.gl.STATIC_DRAW);
-
-        // State
-        this.gl.enable(this.gl.BLEND);
-        this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+        this._initResources();
 
         this.font = null;
         this.width = canvas.width;
         this.height = canvas.height;
+    }
+
+    _initResources() {
+        const gl = this.gl;
+
+        gl.getExtension('OES_standard_derivatives');
+
+        // Create shaders
+        this.tileShader = createProgram(gl, TILE_VS, TILE_FS);
+        this.rectShader = createProgram(gl, RECT_VS, RECT_FS);
+        this.textShader = createProgram(gl, TEXT_VS, TEXT_FS);
+
+        // Create quad buffer
+        this.quadBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+            0, 0, 0, 0,
+            1, 0, 1, 0,
+            0, 1, 0, 1,
+            1, 1, 1, 1,
+        ]), gl.STATIC_DRAW);
+
+        // State
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    }
+
+    isContextLost() {
+        return this.contextLost;
     }
 
     setFont(font) {
@@ -135,6 +158,7 @@ export class ClayRenderer {
     }
 
     clear(r = 0.1, g = 0.1, b = 0.1) {
+        if (this.contextLost) return;
         this.gl.clearColor(r, g, b, 1.0);
         this.gl.clear(this.gl.COLOR_BUFFER_BIT);
     }
@@ -147,6 +171,7 @@ export class ClayRenderer {
      * Render a textured quad (for tiles, images)
      */
     renderTexture(texture, x, y, w, h, projMatrix) {
+        if (this.contextLost) return;
         const gl = this.gl;
 
         gl.useProgram(this.tileShader.program);
@@ -164,12 +189,16 @@ export class ClayRenderer {
         gl.uniform4f(this.tileShader.uniforms.u_rect, x, y, w, h);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        gl.disableVertexAttribArray(this.tileShader.attribs.a_pos);
+        gl.disableVertexAttribArray(this.tileShader.attribs.a_uv);
     }
 
     /**
      * Render a rectangle (solid color, optional rounded corners)
      */
     renderRect(x, y, w, h, color, radius = 0, borderWidth = 0, borderColor = null, projMatrix) {
+        if (this.contextLost) return;
         const gl = this.gl;
 
         gl.useProgram(this.rectShader.program);
@@ -178,8 +207,6 @@ export class ClayRenderer {
         gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
         gl.enableVertexAttribArray(this.rectShader.attribs.a_pos);
         gl.vertexAttribPointer(this.rectShader.attribs.a_pos, 2, gl.FLOAT, false, 16, 0);
-        gl.disableVertexAttribArray(1);
-        gl.disableVertexAttribArray(2);
 
         gl.uniform4f(this.rectShader.uniforms.u_rect, x, y, w, h);
         gl.uniform4fv(this.rectShader.uniforms.u_color, color);
@@ -188,12 +215,15 @@ export class ClayRenderer {
         gl.uniform4fv(this.rectShader.uniforms.u_borderColor, borderColor || [0, 0, 0, 0]);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        gl.disableVertexAttribArray(this.rectShader.attribs.a_pos);
     }
 
     /**
      * Render text using MSDF font
      */
     renderText(text, x, y, fontSize, color, projMatrix) {
+        if (this.contextLost) return;
         if (!this.font || !this.font.texture) return;
 
         const gl = this.gl;
@@ -264,37 +294,63 @@ export class ClayRenderer {
 
         gl.drawArrays(gl.TRIANGLES, 0, vertices.length / 4);
 
+        gl.disableVertexAttribArray(this.textShader.attribs.a_pos);
+        gl.disableVertexAttribArray(this.textShader.attribs.a_uv);
         gl.deleteBuffer(textBuffer);
     }
 
     /**
      * Render Clay render commands from WASM
+     *
+     * @param {Object} wasm - WASM exports
+     * @param {number} commandCount - Number of render commands
+     * @param {Float32Array} projMatrix - Projection matrix
+     * @param {string} prefix - Function prefix (default: 'map_cmd_', alt: 'cc_clay_cmd_')
      */
-    renderClayCommands(wasm, commandCount, projMatrix) {
+    renderClayCommands(wasm, commandCount, projMatrix, prefix = 'map_cmd_') {
+        if (this.contextLost) return;
         const gl = this.gl;
         const memory = new Uint8Array(wasm.memory.buffer);
         const scissorStack = [];
 
+        // Get accessor functions based on prefix
+        const cmd = {
+            type: wasm[prefix + 'type'],
+            x: wasm[prefix + 'x'],
+            y: wasm[prefix + 'y'],
+            w: wasm[prefix + 'w'],
+            h: wasm[prefix + 'h'],
+            rect_color: wasm[prefix + 'rect_color'],
+            rect_radius: wasm[prefix + 'rect_radius'],
+            text_str: wasm[prefix + 'text_str'],
+            text_len: wasm[prefix + 'text_len'],
+            text_color: wasm[prefix + 'text_color'],
+            text_size: wasm[prefix + 'text_size'],
+            border_color: wasm[prefix + 'border_color'],
+            border_radius: wasm[prefix + 'border_radius'],
+            border_width: wasm[prefix + 'border_width'],
+        };
+
         for (let i = 0; i < commandCount; i++) {
-            const cmdType = wasm.map_cmd_type(i);
-            const x = wasm.map_cmd_x(i);
-            const y = wasm.map_cmd_y(i);
-            const w = wasm.map_cmd_w(i);
-            const h = wasm.map_cmd_h(i);
+            const cmdType = cmd.type(i);
+            const x = cmd.x(i);
+            const y = cmd.y(i);
+            const w = cmd.w(i);
+            const h = cmd.h(i);
 
             switch (cmdType) {
                 case CLAY_CMD_RECTANGLE: {
-                    const color = unpackColor(wasm.map_cmd_rect_color(i));
-                    const radius = wasm.map_cmd_rect_radius(i);
+                    const color = unpackColor(cmd.rect_color(i));
+                    const radius = cmd.rect_radius(i);
                     this.renderRect(x, y, w, h, color, radius, 0, null, projMatrix);
                     break;
                 }
 
                 case CLAY_CMD_TEXT: {
-                    const strPtr = wasm.map_cmd_text_str(i);
-                    const strLen = wasm.map_cmd_text_len(i);
-                    const color = unpackColor(wasm.map_cmd_text_color(i));
-                    const fontSize = wasm.map_cmd_text_size(i);
+                    const strPtr = cmd.text_str(i);
+                    const strLen = cmd.text_len(i);
+                    const color = unpackColor(cmd.text_color(i));
+                    const fontSize = cmd.text_size(i);
 
                     let text = '';
                     for (let j = 0; j < strLen; j++) {
@@ -306,9 +362,9 @@ export class ClayRenderer {
                 }
 
                 case CLAY_CMD_BORDER: {
-                    const color = unpackColor(wasm.map_cmd_border_color(i));
-                    const radius = wasm.map_cmd_border_radius(i);
-                    const borderWidth = wasm.map_cmd_border_width(i);
+                    const color = unpackColor(cmd.border_color(i));
+                    const radius = cmd.border_radius(i);
+                    const borderWidth = cmd.border_width(i);
                     this.renderRect(x, y, w, h, [0, 0, 0, 0], radius, borderWidth, color, projMatrix);
                     break;
                 }
@@ -322,6 +378,11 @@ export class ClayRenderer {
                 }
 
                 case CLAY_CMD_SCISSOR_END: {
+                    if (scissorStack.length === 0) {
+                        // Underflow - mismatched scissor commands, just disable
+                        gl.disable(gl.SCISSOR_TEST);
+                        break;
+                    }
                     scissorStack.pop();
                     if (scissorStack.length === 0) {
                         gl.disable(gl.SCISSOR_TEST);

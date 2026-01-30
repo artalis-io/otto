@@ -15,8 +15,25 @@
 #define DEG_TO_RAD (PI / 180.0)
 #define RAD_TO_DEG (180.0 / PI)
 
+/* Web Mercator latitude limits - beyond this, projection math breaks down */
+#define MAX_LATITUDE 85.051129
+
 /* Meters per pixel at equator for zoom 0 */
 #define METERS_PER_PIXEL_Z0 156543.03392
+
+/* Clamp latitude to valid Web Mercator range */
+static double clamp_latitude(double lat) {
+    if (lat > MAX_LATITUDE) return MAX_LATITUDE;
+    if (lat < -MAX_LATITUDE) return -MAX_LATITUDE;
+    return lat;
+}
+
+/* Clamp zoom to valid range (0-30 to avoid overflow in 1 << zoom) */
+static int clamp_zoom(int zoom) {
+    if (zoom < 0) return 0;
+    if (zoom > 30) return 30;
+    return zoom;
+}
 
 /* ============================================================================
  * Default Style
@@ -33,6 +50,9 @@ const CcMapStyle CC_MAP_STYLE_DEFAULT = {
  * Map Drag State
  * ============================================================================ */
 
+/* Click detection threshold in pixels */
+#define CLICK_THRESHOLD 5.0f
+
 /* Per-map drag state (keyed by ID) */
 typedef struct {
     uint32_t id;
@@ -41,11 +61,21 @@ typedef struct {
     float drag_start_y;
     double drag_start_lat;
     double drag_start_lon;
-    float drag_last_x;
-    float drag_last_y;
+    /* Click detection - set by pointer_up, consumed by cc_map */
+    bool pending_click;
+    float click_x;
+    float click_y;
+    /* Change tracking for panned/zoomed result fields */
+    double prev_lat;
+    double prev_lon;
+    int prev_zoom;
+    bool state_initialized;
 } CcMapDragState;
 
-/* Simple single-map drag state (for now) */
+/* Global drag state - LIMITATION: only one map supported at a time.
+ * The ID check in cc_map_pointer_move() ensures correct behavior if
+ * cc_map() is called with different IDs, but drag state is shared.
+ * Future: use a hash table for multiple map support if needed. */
 static CcMapDragState g_map_drag = {0};
 
 /* ============================================================================
@@ -53,19 +83,24 @@ static CcMapDragState g_map_drag = {0};
  * ============================================================================ */
 
 double cc_map_lon_to_tile_x(double lon, int zoom) {
+    zoom = clamp_zoom(zoom);
     return (lon + 180.0) / 360.0 * (double)(1 << zoom);
 }
 
 double cc_map_lat_to_tile_y(double lat, int zoom) {
+    lat = clamp_latitude(lat);
+    zoom = clamp_zoom(zoom);
     double lat_rad = lat * DEG_TO_RAD;
     return (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / PI) / 2.0 * (double)(1 << zoom);
 }
 
 double cc_map_tile_x_to_lon(double x, int zoom) {
+    zoom = clamp_zoom(zoom);
     return x / (double)(1 << zoom) * 360.0 - 180.0;
 }
 
 double cc_map_tile_y_to_lat(double y, int zoom) {
+    zoom = clamp_zoom(zoom);
     double n = PI - 2.0 * PI * y / (double)(1 << zoom);
     return RAD_TO_DEG * atan(0.5 * (exp(n) - exp(-n)));
 }
@@ -75,6 +110,8 @@ void cc_map_screen_to_geo_delta(
     float dx, float dy,
     double *dlat, double *dlon
 ) {
+    lat = clamp_latitude(lat);
+    zoom = clamp_zoom(zoom);
     /* Meters per pixel at current latitude and zoom */
     double meters_per_pixel = METERS_PER_PIXEL_Z0 * cos(lat * DEG_TO_RAD) / (double)(1 << zoom);
     
@@ -113,10 +150,10 @@ CcMapResult cc_map(
                 .height = CLAY_SIZING_FIXED(height)
             }
         },
-        /* Use a dark background as fallback while tiles load */
-        .backgroundColor = (Clay_Color){20, 20, 20, 255}
+        /* Transparent - tiles are rendered separately by the platform layer */
+        .backgroundColor = (Clay_Color){0, 0, 0, 0}
     }) {
-        /* Empty - tiles rendered by JS based on custom handling */
+        /* Empty - tiles rendered by platform (JS/native) based on lat/lon/zoom */
     }
     
     /* Get element bounds for hit testing */
@@ -131,33 +168,53 @@ CcMapResult cc_map(
         g_map_drag.dragging = false;
     }
     
-    /* Handle drag start */
+    /* Handle drag start - actual drag tracking done via cc_map_pointer_down() */
     if (is_hovered && g->pending_click && !g_map_drag.dragging) {
-        g_map_drag.dragging = true;
-        g_map_drag.drag_start_lat = *lat;
-        g_map_drag.drag_start_lon = *lon;
-        /* We need pointer position - get it from Clay */
-        /* Note: Clay tracks pointer internally, we'll use the delta approach */
-        g_map_drag.drag_last_x = box.x + width / 2;  /* Will be updated on move */
-        g_map_drag.drag_last_y = box.y + height / 2;
         g->clicked_id = id;
     }
     
-    /* Handle drag end */
-    /* Note: We detect drag end when pointer is released */
-    /* This requires tracking pointer state which Clay does internally */
-    
-    /* For now, we'll handle panning through the exported functions */
-    /* The actual drag logic happens in map_pointer_move/up which we'll keep */
-    
+    /* Check for pending click from pointer_up */
+    if (g_map_drag.id == id && g_map_drag.pending_click) {
+        g_map_drag.pending_click = false;
+        result.clicked = true;
+
+        /* Convert click screen position to lat/lon */
+        float click_offset_x = g_map_drag.click_x - (box.x + width / 2.0f);
+        float click_offset_y = g_map_drag.click_y - (box.y + height / 2.0f);
+
+        double dlat, dlon;
+        cc_map_screen_to_geo_delta(*lat, *zoom, click_offset_x, -click_offset_y, &dlat, &dlon);
+
+        result.click_lat = *lat + dlat;
+        result.click_lon = *lon + dlon;
+    }
+
+    /* Detect panned/zoomed by comparing to previous state */
+    if (g_map_drag.id == id && g_map_drag.state_initialized) {
+        if (*lat != g_map_drag.prev_lat || *lon != g_map_drag.prev_lon) {
+            result.panned = true;
+        }
+        if (*zoom != g_map_drag.prev_zoom) {
+            result.zoomed = true;
+        }
+    }
+
     /* Clamp values */
     if (*lat > style->max_lat) *lat = style->max_lat;
     if (*lat < style->min_lat) *lat = style->min_lat;
-    while (*lon > 180.0) *lon -= 360.0;
-    while (*lon < -180.0) *lon += 360.0;
+    /* Use fmod for O(1) longitude wrapping instead of while loop */
+    *lon = fmod(*lon + 180.0, 360.0);
+    if (*lon < 0) *lon += 360.0;
+    *lon -= 180.0;
     if (*zoom < style->min_zoom) *zoom = style->min_zoom;
     if (*zoom > style->max_zoom) *zoom = style->max_zoom;
-    
+
+    /* Update previous state for next frame's panned/zoomed detection */
+    g_map_drag.prev_lat = *lat;
+    g_map_drag.prev_lon = *lon;
+    g_map_drag.prev_zoom = *zoom;
+    g_map_drag.state_initialized = true;
+
     return result;
 }
 
@@ -172,8 +229,7 @@ void cc_map_pointer_down(uint32_t id, double lat, double lon, float x, float y) 
     g_map_drag.drag_start_lon = lon;
     g_map_drag.drag_start_x = x;
     g_map_drag.drag_start_y = y;
-    g_map_drag.drag_last_x = x;
-    g_map_drag.drag_last_y = y;
+    g_map_drag.pending_click = false;
 }
 
 bool cc_map_pointer_move(uint32_t id, int zoom, float x, float y, double *out_lat, double *out_lon) {
@@ -194,11 +250,26 @@ bool cc_map_pointer_move(uint32_t id, int zoom, float x, float y, double *out_la
     return true;
 }
 
-bool cc_map_pointer_up(uint32_t id) {
+bool cc_map_pointer_up(uint32_t id, float x, float y) {
     if (g_map_drag.id != id) return false;
-    
+
     bool was_dragging = g_map_drag.dragging;
     g_map_drag.dragging = false;
+
+    /* Detect click vs drag based on movement distance */
+    if (was_dragging) {
+        float dx = x - g_map_drag.drag_start_x;
+        float dy = y - g_map_drag.drag_start_y;
+        float dist = sqrtf(dx * dx + dy * dy);
+
+        if (dist < CLICK_THRESHOLD) {
+            /* This was a click, not a drag */
+            g_map_drag.pending_click = true;
+            g_map_drag.click_x = x;
+            g_map_drag.click_y = y;
+        }
+    }
+
     return was_dragging;
 }
 

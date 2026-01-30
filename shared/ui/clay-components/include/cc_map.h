@@ -4,6 +4,11 @@
  * Immediate mode slippy map component.
  * You own the map state (lat, lon, zoom), the component handles interaction.
  *
+ * LIMITATION: Currently supports only a single map instance per application.
+ * The drag state is stored globally, so multiple cc_map() calls will share
+ * drag state. A future version may support multiple maps via a hash table
+ * or user-provided state pointer.
+ *
  * Usage:
  *   static double lat = 47.4979, lon = 19.0402;
  *   static int zoom = 12;
@@ -108,8 +113,8 @@ void cc_map_pointer_down(uint32_t id, double lat, double lon, float x, float y);
 /* Update drag position - returns true if dragging, updates out_lat/out_lon */
 bool cc_map_pointer_move(uint32_t id, int zoom, float x, float y, double *out_lat, double *out_lon);
 
-/* End drag - returns true if was dragging */
-bool cc_map_pointer_up(uint32_t id);
+/* End drag - returns true if was dragging. If movement < threshold, registers as click. */
+bool cc_map_pointer_up(uint32_t id, float x, float y);
 
 /* Check if map is currently being dragged */
 bool cc_map_is_dragging(uint32_t id);
