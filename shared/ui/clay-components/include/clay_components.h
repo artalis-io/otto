@@ -1,8 +1,8 @@
 /**
- * Clay UI Components
+ * Clay UI Components - Immediate Mode
  *
- * Aggregated include for all Clay components.
- * You can include this file for convenience, or include individual components.
+ * Thin immediate mode components on top of Clay layout.
+ * You own the state, components are just functions that return events.
  */
 
 #ifndef CLAY_COMPONENTS_H
@@ -11,11 +11,7 @@
 /* Common utilities and colors */
 #include "cc_common.h"
 
-/* Immediate mode API (recommended) */
+/* Immediate mode API */
 #include "cc_immediate.h"
-
-/* Retained mode components (legacy) */
-#include "cc_text_input.h"
-#include "cc_button.h"
 
 #endif /* CLAY_COMPONENTS_H */
