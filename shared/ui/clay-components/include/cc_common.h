@@ -1,7 +1,7 @@
 /**
  * Clay Components - Common Utilities
  *
- * Shared types, colors, and utility functions for all components.
+ * Core API, ID generation, focus management, and shared utilities.
  */
 
 #ifndef CC_COMMON_H
@@ -13,6 +13,58 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* ============================================================================
+ * ID Generation
+ * ============================================================================ */
+
+/* Generate unique ID from string using FNV-1a hash */
+uint32_t cc_hash_id(const char *str);
+
+/* Convenience macro for component IDs */
+#define CC_ID(name) cc_hash_id(name)
+
+/* ============================================================================
+ * Core API
+ * ============================================================================ */
+
+/* Initialize component system (call once at startup) */
+void cc_init(void);
+
+/* Frame lifecycle - call at start/end of each frame */
+void cc_frame_begin(void);
+void cc_frame_end(float dt);
+
+/* ============================================================================
+ * Focus Management
+ * ============================================================================ */
+
+/* Get/set focused element ID (0 = none focused) */
+uint32_t cc_focused_id(void);
+void cc_focus(uint32_t id);
+void cc_blur(void);
+
+/* Cursor state for focused text input */
+int cc_cursor_pos(void);
+int cc_selection_start(void);  /* -1 if no selection */
+bool cc_cursor_visible(void);
+
+/* Get focused element bounds (for cursor rendering) */
+bool cc_focused_bounds(float *x, float *y, float *w, float *h);
+
+/* ============================================================================
+ * Input Routing (call from platform event handlers)
+ * ============================================================================ */
+
+/* Route keyboard to focused element. Returns true if consumed. */
+bool cc_key_down(int key_code, bool shift, bool ctrl);
+bool cc_key_char(uint32_t char_code);
+
+/* Route click. Returns true if consumed by UI. */
+bool cc_click(float x, float y);
+
+/* Set pending click for this frame (call on mousedown before rendering) */
+void cc_set_pending_click(void);
 
 /* ============================================================================
  * Color Utilities
