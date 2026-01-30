@@ -479,19 +479,21 @@ EXPORT void map_scroll(float delta, float x, float y) {
 EXPORT int map_handle_click(float x, float y) {
     (void)x; (void)y;
 
+    /* Check if clicking on any UI element */
+    bool on_ui = Clay_PointerOver(CLAY_ID("InfoPanel")) ||
+                 Clay_PointerOver(CLAY_ID("LayerPanel")) ||
+                 Clay_PointerOver(CLAY_ID("ZoomControls")) ||
+                 Clay_PointerOver(CLAY_ID("TileInfo")) ||
+                 Clay_PointerOver(CLAY_ID("Attribution"));
+
     /* Check if clicking outside focused element to blur */
     uint32_t focused = cc_focused_id();
-    if (focused != 0) {
-        float fx, fy, fw, fh;
-        if (cc_focused_bounds(&fx, &fy, &fw, &fh)) {
-            if (x < fx || x > fx + fw || y < fy || y > fy + fh) {
-                cc_blur();
-            }
-        }
+    if (focused != 0 && !on_ui) {
+        cc_blur();
     }
 
-    /* UI click handling happens in component render via Clay_PointerOver */
-    return 0;
+    /* Return 1 if click should be consumed by UI (prevents map drag) */
+    return on_ui ? 1 : 0;
 }
 
 /* ============================================================================
