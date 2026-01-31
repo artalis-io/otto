@@ -4,6 +4,7 @@
 
 #include "cc_input.h"
 #include "cc_internal.h"
+#include "cc_clay.h"
 #include "clay.h"
 #include <string.h>
 
@@ -167,20 +168,29 @@ CcInputResult cc_input(
         g->hovered_id = id;
     }
 
-    /* Handle click to focus */
+    /* Handle click to focus and/or position cursor */
     if (is_hovered && g->pending_click) {
+        /* Get bounding box for cursor calculation */
+        Clay_BoundingBox box = Clay_GetElementData(clay_id).boundingBox;
+
         if (!is_focused) {
-            /* Focusing - set cursor at end via widget state */
+            /* First click - focus the input */
             g->focused_id = id;
-            CcWidgetState *w = cc_widget_state(id);
-            if (w) {
-                w->cursor = *len;  /* Cursor at end */
-                w->selection_start = -1;
-                w->cursor_visible = true;
-                w->cursor_blink = 0.0f;
-            }
             result.focused = true;
-            is_focused = true;  /* Update for the rest of this call */
+            is_focused = true;
+        }
+
+        /* Calculate cursor position from click X */
+        CcWidgetState *w = cc_widget_state(id);
+        if (w) {
+            float click_x = cc_pointer_x();
+            float text_start_x = box.x + style->padding;
+            float x_offset = click_x - text_start_x;
+
+            w->cursor = cc_clay_x_to_cursor(text, *len, x_offset, style->font_size);
+            w->selection_start = -1;
+            w->cursor_visible = true;
+            w->cursor_blink = 0.0f;
         }
         g->clicked_id = id;
     }

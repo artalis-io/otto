@@ -264,6 +264,8 @@ CC_CLAY_EXPORT int cc_clay_cmd_border_width(int index) {
 
 CC_CLAY_EXPORT void cc_clay_set_pointer(float x, float y, bool is_down) {
     Clay_SetPointerState((Clay_Vector2){x, y}, is_down);
+    /* Also store in component state for click-to-position */
+    cc_set_pointer(x, y);
 }
 
 CC_CLAY_EXPORT bool cc_clay_pointer_over(const char *element_id) {
@@ -296,4 +298,31 @@ CC_CLAY_EXPORT void cc_clay_set_glyph_advances(const float *advances, int count)
 
 CC_CLAY_EXPORT bool cc_clay_has_font_metrics(void) {
     return g_clay.has_font_metrics;
+}
+
+/**
+ * Calculate cursor position from X offset within text.
+ * Returns the character index closest to the given X position.
+ */
+CC_CLAY_EXPORT int cc_clay_x_to_cursor(const char *text, int len, float x_offset, float font_size) {
+    if (!text || len <= 0 || x_offset <= 0) return 0;
+
+    float x = 0;
+    for (int i = 0; i < len; i++) {
+        int c = (unsigned char)text[i];
+        float advance;
+        if (g_clay.has_font_metrics && c < CC_GLYPH_TABLE_SIZE && g_clay.glyph_advances[c] > 0) {
+            advance = g_clay.glyph_advances[c] * font_size;
+        } else {
+            advance = g_clay.char_width_ratio * font_size;
+        }
+
+        /* Check if click is closer to this char or the next */
+        if (x + advance / 2 > x_offset) {
+            return i;
+        }
+        x += advance;
+    }
+
+    return len;  /* Click was past end of text */
 }

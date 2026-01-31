@@ -52,6 +52,9 @@ typedef struct {
     bool pending_click;         /* Click event pending this frame */
     bool pending_enter;         /* Enter key pressed this frame (for button activation) */
 
+    /* Pointer position (set by cc_set_pointer) */
+    float pointer_x, pointer_y;
+
     /* Focused element bounds (set during render) */
     float focused_x, focused_y, focused_w, focused_h;
 
