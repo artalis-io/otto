@@ -75,7 +75,7 @@ CcWidgetState* cc_widget_state(uint32_t id) {
 }
 
 /* ============================================================================
- * ID Generation (Dear ImGui-style ID Stack)
+ * ID Generation
  * ============================================================================ */
 
 uint32_t cc_hash_id(const char *str) {
@@ -86,39 +86,6 @@ uint32_t cc_hash_id(const char *str) {
         hash *= 16777619u;
     }
     return hash ? hash : 1; /* Never return 0 */
-}
-
-static uint32_t cc_hash_combine(uint32_t seed, uint32_t value) {
-    /* Combine two hashes (FNV-style) */
-    seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    return seed ? seed : 1;
-}
-
-CC_EXPORT void cc_push_id(int int_id) {
-    if (g_cc.id_stack_depth >= CC_ID_STACK_SIZE) return;
-    g_cc.id_stack[g_cc.id_stack_depth++] = (uint32_t)int_id;
-}
-
-void cc_push_id_str(const char *str_id) {
-    if (g_cc.id_stack_depth >= CC_ID_STACK_SIZE) return;
-    g_cc.id_stack[g_cc.id_stack_depth++] = cc_hash_id(str_id);
-}
-
-CC_EXPORT void cc_pop_id(void) {
-    if (g_cc.id_stack_depth > 0) {
-        g_cc.id_stack_depth--;
-    }
-}
-
-uint32_t cc_get_id(const char *str) {
-    uint32_t id = cc_hash_id(str);
-
-    /* Combine with ID stack */
-    for (int i = 0; i < g_cc.id_stack_depth; i++) {
-        id = cc_hash_combine(id, g_cc.id_stack[i]);
-    }
-
-    return id;
 }
 
 /* ============================================================================
@@ -139,9 +106,6 @@ void cc_frame_begin(void) {
 
     /* Reset focusable registry for this frame */
     g_cc.focusable_count = 0;
-
-    /* Reset ID stack each frame (safety) */
-    g_cc.id_stack_depth = 0;
 }
 
 void cc_frame_end(float dt) {
@@ -173,14 +137,13 @@ CC_EXPORT uint32_t cc_focused_id(void) {
 void cc_focus(uint32_t id) {
     if (g_cc.focused_id != id) {
         g_cc.focused_id = id;
-        /* Reset cursor state for newly focused widget */
+        /* Reset blink timer (but preserve cursor position from widget state) */
         if (id != 0) {
             CcWidgetState *w = cc_widget_state(id);
             if (w) {
-                w->cursor = 0;
-                w->selection_start = -1;
                 w->cursor_visible = true;
                 w->cursor_blink = 0.0f;
+                /* Don't reset cursor/selection - widget state preserves these */
             }
         }
     }
