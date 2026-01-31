@@ -8,14 +8,9 @@
 #include "ct_mvt.h"
 #include "ct_tile.h"
 #include "ct_pbf.h"
+#include "sh_protobuf.h"
 #include <stdlib.h>
 #include <string.h>
-
-/* Forward declarations */
-int ct_pb_write_varint(uint8_t *buf, size_t capacity, uint64_t value);
-int ct_pb_write_svarint(uint8_t *buf, size_t capacity, int64_t value);
-int ct_pb_write_tag(uint8_t *buf, size_t capacity, uint32_t field, uint32_t wire);
-int ct_pb_write_string(uint8_t *buf, size_t capacity, const char *str, size_t len);
 
 /* MVT field numbers */
 #define MVT_TILE_LAYERS         3
@@ -91,7 +86,7 @@ void ct_mvt_encoder_init(CTMVTEncoder *enc, uint8_t *buffer, size_t capacity)
 static void enc_write_varint(CTMVTEncoder *enc, uint64_t value)
 {
     if (enc->error) return;
-    int n = ct_pb_write_varint(enc->buffer + enc->offset,
+    int n = sh_pb_write_varint(enc->buffer + enc->offset,
                                enc->capacity - enc->offset, value);
     if (n <= 0) {
         enc->error = 1;

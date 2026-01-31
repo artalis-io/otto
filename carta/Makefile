@@ -9,15 +9,18 @@ CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
 LDFLAGS = -lm
 
 # Include paths
-INCLUDES = -Iinclude -I../vendor/miniz
+INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz
 
 # Vendor path
 VENDOR_DIR = ../vendor/miniz
 
+# Shared library path
+SHARED_DIR = ../shared
+
 # Debug build
 DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
 
-# Source files
+# Source files (removed ct_protobuf.c and ct_inflate.c - now in shared)
 CORE_SRCS = src/carta.c \
             src/ct_tile.c \
             src/ct_pbf.c \
@@ -25,14 +28,11 @@ CORE_SRCS = src/carta.c \
             src/ct_render.c \
             src/ct_png.c \
             src/ct_style.c \
-            src/ct_protobuf.c \
-            src/ct_inflate.c \
             src/ct_lod.c \
             src/ct_simplify.c
 
-MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
-             $(VENDOR_DIR)/miniz_tdef.c \
-             $(VENDOR_DIR)/miniz_tinfl.c
+# miniz is now linked via shared library
+MINIZ_SRCS =
 
 # Object files
 CORE_OBJS = $(CORE_SRCS:.c=.o)
@@ -62,23 +62,24 @@ all: lib $(TEST_BIN)
 # Build library
 lib: $(LIB)
 
-$(LIB): $(ALL_OBJS)
-	ar rcs $@ $^
+$(LIB): $(ALL_OBJS) $(SHARED_DIR)/libshared.a
+	ar rcs $@ $(ALL_OBJS)
 
 # Compile rules
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(VENDOR_DIR)/%.o: $(VENDOR_DIR)/%.c
-	$(CC) $(CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
+# Build shared library first
+$(SHARED_DIR)/libshared.a:
+	$(MAKE) -C $(SHARED_DIR) lib
 
 # Test binary
-$(TEST_BIN): tests/test_carta.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta $(LDFLAGS) -o $@
+$(TEST_BIN): tests/test_carta.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
 # CLI tool
-$(CLI_BIN): src/cli.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta $(LDFLAGS) -o $@
+$(CLI_BIN): src/cli.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
 cli: $(CLI_BIN)
 
@@ -87,8 +88,8 @@ test: $(TEST_BIN)
 	./$(TEST_BIN)
 
 # Benchmarks
-$(BENCH_BIN): benchmarks/bench_carta.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta $(LDFLAGS) -o $@
+$(BENCH_BIN): benchmarks/bench_carta.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
 bench: $(BENCH_BIN)
 	./$(BENCH_BIN)
@@ -103,7 +104,7 @@ wasm:
 
 # Clean
 clean:
-	rm -f $(CORE_OBJS) $(MINIZ_OBJS) $(LIB)
+	rm -f $(CORE_OBJS) $(LIB)
 	rm -f $(TEST_BIN) $(CLI_BIN) $(BENCH_BIN)
 	rm -f $(WASM_OUT) carta.wasm
 

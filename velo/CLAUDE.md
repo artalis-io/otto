@@ -27,16 +27,20 @@ velo/
 ├── src/              # Implementation
 │   ├── vl_geo.c      # Haversine, coordinates
 │   ├── vl_heap.c     # Binary min-heap
-│   ├── vl_protobuf.c # Protobuf decoder
-│   ├── vl_inflate.c  # Zlib wrapper
-│   ├── vl_pbf.c      # PBF file parsing
+│   ├── vl_bucket_heap.c # Bucket-based priority queue
+│   ├── vl_pbf.c      # PBF file parsing (uses shared library)
 │   ├── vl_graph.c    # Graph construction
 │   ├── vl_route.c    # Routing algorithms
+│   ├── vl_landmarks.c # ALT algorithm
 │   └── velo.c        # Main API
-├── ../vendor/        # Shared third-party (miniz)
+├── api/              # Route server REST API
+├── ../shared/        # Shared library (protobuf, inflate, PBF parsing)
+├── ../vendor/        # Third-party (miniz)
 ├── tests/            # Test suite
 └── benchmarks/       # Performance tests
 ```
+
+**Note:** Protobuf decoding and zlib decompression are provided by the shared library (`sh_protobuf.h`, `sh_inflate.h`, `sh_pbf.h`).
 
 ## Key Files
 
@@ -171,5 +175,6 @@ vl_landmarks_free(lm);
 ## Dependencies
 
 - **External**: None
-- **Vendored**: ../vendor/miniz (public domain zlib, shared with carta)
+- **Shared**: ../shared (protobuf, inflate, PBF parsing, geo utilities)
+- **Vendored**: ../vendor/miniz (public domain zlib, used via shared library)
 - **Standard Library**: stdio, stdlib, string, math

@@ -203,6 +203,7 @@ MIT License - see LICENSE file.
 
 ## See Also
 
-- [velo](../velo/) - OSM routing engine (shares PBF parsing)
+- [velo](../velo/) - OSM routing engine
+- [shared](../shared/) - Shared protobuf/inflate/PBF parsing library (used by both velo and carta)
 - [fuelwise](../fuelwise/) - Refueling optimization
 - [Mapbox Vector Tile Spec](https://github.com/mapbox/vector-tile-spec)

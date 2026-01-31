@@ -16,10 +16,13 @@ CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(OPENMP_FLAGS) $(SIMD_FLAGS)
 LDFLAGS = -lm -fopenmp
 
 # Include paths
-INCLUDES = -Iinclude -I../vendor/miniz
+INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz
 
 # Vendor path
 VENDOR_DIR = ../vendor/miniz
+
+# Shared library path
+SHARED_DIR = ../shared
 
 # Debug build (no OpenMP for easier debugging)
 DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
@@ -33,21 +36,18 @@ ifdef LOWMEM
 CFLAGS += -DVL_LANDMARKS_NO_TRANSPOSE
 endif
 
-# Source files
+# Source files (removed vl_protobuf.c and vl_inflate.c - now in shared)
 CORE_SRCS = src/vl_geo.c \
             src/vl_heap.c \
             src/vl_bucket_heap.c \
-            src/vl_protobuf.c \
-            src/vl_inflate.c \
             src/vl_pbf.c \
             src/vl_graph.c \
             src/vl_route.c \
             src/vl_landmarks.c \
             src/velo.c
 
-MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
-             $(VENDOR_DIR)/miniz_tdef.c \
-             $(VENDOR_DIR)/miniz_tinfl.c
+# miniz is now linked via shared library
+MINIZ_SRCS =
 
 # Object files
 CORE_OBJS = $(CORE_SRCS:.c=.o)
@@ -76,37 +76,38 @@ all: lib $(TEST_BIN)
 # Build library
 lib: $(LIB)
 
-$(LIB): $(ALL_OBJS)
-	ar rcs $@ $^
+$(LIB): $(ALL_OBJS) $(SHARED_DIR)/libshared.a
+	ar rcs $@ $(ALL_OBJS)
 
 # Compile rules
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-$(VENDOR_DIR)/%.o: $(VENDOR_DIR)/%.c
-	$(CC) $(CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
+# Build shared library first
+$(SHARED_DIR)/libshared.a:
+	$(MAKE) -C $(SHARED_DIR) lib
 
 # Test binary
-$(TEST_BIN): tests/test_velo.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo $(LDFLAGS) -o $@
+$(TEST_BIN): tests/test_velo.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
 # Run tests
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
 # OSRM comparison test
-$(TEST_OSRM): tests/test_osrm_comparison.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo $(LDFLAGS) -o $@
+$(TEST_OSRM): tests/test_osrm_comparison.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
 test-osrm: $(TEST_OSRM)
 	@echo "Run: ./$(TEST_OSRM) <graph.vlg> [osrm_host:port]"
 
 # Benchmarks
-$(BENCH_ROUTING): benchmarks/bench_routing.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo $(LDFLAGS) -o $@
+$(BENCH_ROUTING): benchmarks/bench_routing.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
-$(BENCH_PBF): benchmarks/bench_pbf.c $(LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo $(LDFLAGS) -o $@
+$(BENCH_PBF): benchmarks/bench_pbf.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
 bench: $(BENCH_ROUTING) $(BENCH_PBF)
 	./$(BENCH_ROUTING)
@@ -121,7 +122,7 @@ wasm:
 
 # Clean
 clean:
-	rm -f $(CORE_OBJS) $(MINIZ_OBJS) $(LIB)
+	rm -f $(CORE_OBJS) $(LIB)
 	rm -f $(TEST_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF)
 	rm -f $(WASM_OUT) velo.wasm
 
@@ -129,9 +130,7 @@ clean:
 src/velo.o: include/velo.h include/vl_types.h include/vl_pbf.h include/vl_graph.h include/vl_route.h
 src/vl_geo.o: include/vl_types.h
 src/vl_heap.o: include/vl_types.h
-src/vl_protobuf.o: include/vl_types.h
-src/vl_inflate.o: include/vl_types.h $(VENDOR_DIR)/miniz.h $(VENDOR_DIR)/miniz_tinfl.h
-src/vl_pbf.o: include/vl_types.h
+src/vl_pbf.o: include/vl_types.h $(SHARED_DIR)/include/sh_protobuf.h $(SHARED_DIR)/include/sh_inflate.h $(SHARED_DIR)/include/sh_pbf.h
 src/vl_graph.o: include/vl_types.h
 src/vl_route.o: include/vl_types.h
 

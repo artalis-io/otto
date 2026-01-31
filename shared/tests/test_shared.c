@@ -273,6 +273,309 @@ TEST(tile_bounds_z1)
 }
 
 /* ============================================================================
+ * Protobuf Tests
+ * ============================================================================ */
+
+TEST(pb_varint_small)
+{
+    uint8_t buf[10];
+    uint64_t value;
+
+    /* Encode and decode small value (1 byte) */
+    int n = sh_pb_write_varint(buf, sizeof(buf), 127);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(buf[0], 127);
+
+    int m = sh_pb_read_varint(buf, n, &value);
+    ASSERT_EQ(m, 1);
+    ASSERT_EQ(value, 127);
+}
+
+TEST(pb_varint_300)
+{
+    uint8_t buf[10];
+    uint64_t value;
+
+    /* Encode and decode 300 (2 bytes) */
+    int n = sh_pb_write_varint(buf, sizeof(buf), 300);
+    ASSERT_EQ(n, 2);
+
+    int m = sh_pb_read_varint(buf, n, &value);
+    ASSERT_EQ(m, 2);
+    ASSERT_EQ(value, 300);
+}
+
+TEST(pb_varint_large)
+{
+    uint8_t buf[10];
+    uint64_t value;
+
+    /* Encode and decode large value */
+    uint64_t large = 0x123456789ABCDEF0ULL;
+    int n = sh_pb_write_varint(buf, sizeof(buf), large);
+    ASSERT(n > 0);
+
+    int m = sh_pb_read_varint(buf, n, &value);
+    ASSERT_EQ(m, n);
+    ASSERT_EQ(value, large);
+}
+
+TEST(pb_svarint_positive)
+{
+    uint8_t buf[10];
+    int64_t value;
+
+    /* Encode and decode positive signed varint */
+    int n = sh_pb_write_svarint(buf, sizeof(buf), 100);
+    ASSERT(n > 0);
+
+    int m = sh_pb_read_svarint(buf, n, &value);
+    ASSERT_EQ(m, n);
+    ASSERT_EQ(value, 100);
+}
+
+TEST(pb_svarint_negative)
+{
+    uint8_t buf[10];
+    int64_t value;
+
+    /* Encode and decode negative signed varint */
+    int n = sh_pb_write_svarint(buf, sizeof(buf), -100);
+    ASSERT(n > 0);
+
+    int m = sh_pb_read_svarint(buf, n, &value);
+    ASSERT_EQ(m, n);
+    ASSERT_EQ(value, -100);
+}
+
+TEST(pb_svarint_edge)
+{
+    uint8_t buf[10];
+    int64_t value;
+
+    /* Edge case: -1 (zigzag encodes to 1) */
+    int n = sh_pb_write_svarint(buf, sizeof(buf), -1);
+    ASSERT_EQ(n, 1);
+
+    int m = sh_pb_read_svarint(buf, n, &value);
+    ASSERT_EQ(value, -1);
+}
+
+TEST(pb_tag_roundtrip)
+{
+    uint8_t buf[10];
+    uint32_t field, wire;
+
+    /* Write and read field 15 with wire type 2 (length-delimited) */
+    int n = sh_pb_write_tag(buf, sizeof(buf), 15, SH_PB_WIRE_LENGTH_DELIM);
+    ASSERT(n > 0);
+
+    int m = sh_pb_read_tag(buf, n, &field, &wire);
+    ASSERT_EQ(m, n);
+    ASSERT_EQ(field, 15);
+    ASSERT_EQ(wire, SH_PB_WIRE_LENGTH_DELIM);
+}
+
+TEST(pb_fixed32_roundtrip)
+{
+    uint8_t buf[4];
+    uint32_t value;
+
+    int n = sh_pb_write_fixed32(buf, sizeof(buf), 0xDEADBEEF);
+    ASSERT_EQ(n, 4);
+
+    int m = sh_pb_read_fixed32(buf, n, &value);
+    ASSERT_EQ(m, 4);
+    ASSERT_EQ(value, 0xDEADBEEF);
+}
+
+TEST(pb_fixed64_roundtrip)
+{
+    uint8_t buf[8];
+    uint64_t value;
+
+    int n = sh_pb_write_fixed64(buf, sizeof(buf), 0xDEADBEEFCAFEBABEULL);
+    ASSERT_EQ(n, 8);
+
+    int m = sh_pb_read_fixed64(buf, n, &value);
+    ASSERT_EQ(m, 8);
+    ASSERT_EQ(value, 0xDEADBEEFCAFEBABEULL);
+}
+
+TEST(pb_packed_svarint)
+{
+    /* Create packed array: [-1, 0, 1, 100, -100] */
+    uint8_t buf[32];
+    int pos = 0;
+    pos += sh_pb_write_svarint(buf + pos, sizeof(buf) - pos, -1);
+    pos += sh_pb_write_svarint(buf + pos, sizeof(buf) - pos, 0);
+    pos += sh_pb_write_svarint(buf + pos, sizeof(buf) - pos, 1);
+    pos += sh_pb_write_svarint(buf + pos, sizeof(buf) - pos, 100);
+    pos += sh_pb_write_svarint(buf + pos, sizeof(buf) - pos, -100);
+
+    int64_t out[10];
+    size_t count = sh_pb_read_packed_svarint_array(buf, pos, out, 10);
+    ASSERT_EQ(count, 5);
+    ASSERT_EQ(out[0], -1);
+    ASSERT_EQ(out[1], 0);
+    ASSERT_EQ(out[2], 1);
+    ASSERT_EQ(out[3], 100);
+    ASSERT_EQ(out[4], -100);
+}
+
+TEST(pb_delta_decode)
+{
+    int64_t arr[] = {100, 5, 10, -3, 7};
+    sh_pb_delta_decode_i64(arr, 5);
+
+    /* After delta decode: 100, 105, 115, 112, 119 */
+    ASSERT_EQ(arr[0], 100);
+    ASSERT_EQ(arr[1], 105);
+    ASSERT_EQ(arr[2], 115);
+    ASSERT_EQ(arr[3], 112);
+    ASSERT_EQ(arr[4], 119);
+}
+
+TEST(pb_skip_field_varint)
+{
+    uint8_t buf[] = {0xAC, 0x02};  /* 300 as varint */
+    int n = sh_pb_skip_field(buf, sizeof(buf), SH_PB_WIRE_VARINT);
+    ASSERT_EQ(n, 2);
+}
+
+TEST(pb_skip_field_fixed)
+{
+    uint8_t buf[8] = {0};
+    ASSERT_EQ(sh_pb_skip_field(buf, 8, SH_PB_WIRE_FIXED32), 4);
+    ASSERT_EQ(sh_pb_skip_field(buf, 8, SH_PB_WIRE_FIXED64), 8);
+}
+
+/* ============================================================================
+ * Inflate/Deflate Tests
+ * ============================================================================ */
+
+TEST(inflate_deflate_roundtrip)
+{
+    const char *text = "Hello, World! This is a test of zlib compression.";
+    size_t text_len = strlen(text);
+
+    /* Compress */
+    uint8_t compressed[256];
+    size_t compressed_len;
+    SHStatus status = sh_deflate((const uint8_t *)text, text_len,
+                                 compressed, sizeof(compressed),
+                                 &compressed_len, 6);
+    ASSERT_EQ(status, SH_OK);
+    ASSERT(compressed_len > 0);
+    ASSERT(compressed_len < text_len + 20);  /* Some overhead OK */
+
+    /* Decompress */
+    uint8_t decompressed[256];
+    size_t decompressed_len;
+    status = sh_inflate(compressed, compressed_len,
+                        decompressed, sizeof(decompressed),
+                        &decompressed_len);
+    ASSERT_EQ(status, SH_OK);
+    ASSERT_EQ(decompressed_len, text_len);
+    ASSERT(memcmp(decompressed, text, text_len) == 0);
+}
+
+TEST(inflate_alloc)
+{
+    const char *text = "Testing sh_inflate_alloc function.";
+    size_t text_len = strlen(text);
+
+    /* Compress */
+    uint8_t compressed[256];
+    size_t compressed_len;
+    SHStatus status = sh_deflate((const uint8_t *)text, text_len,
+                                 compressed, sizeof(compressed),
+                                 &compressed_len, 6);
+    ASSERT_EQ(status, SH_OK);
+
+    /* Decompress with alloc */
+    size_t actual_len;
+    uint8_t *decompressed = sh_inflate_alloc(compressed, compressed_len,
+                                             text_len, &actual_len);
+    ASSERT(decompressed != NULL);
+    ASSERT_EQ(actual_len, text_len);
+    ASSERT(memcmp(decompressed, text, text_len) == 0);
+    free(decompressed);
+}
+
+/* ============================================================================
+ * String Table Tests
+ * ============================================================================ */
+
+TEST(string_table_basic)
+{
+    SHStringTable st;
+    sh_string_table_init(&st);
+
+    ASSERT_EQ(st.count, 0);
+
+    /* Add some strings */
+    SHStatus status = sh_string_table_add(&st, (const uint8_t *)"hello", 5);
+    ASSERT_EQ(status, SH_OK);
+
+    status = sh_string_table_add(&st, (const uint8_t *)"world", 5);
+    ASSERT_EQ(status, SH_OK);
+
+    status = sh_string_table_add(&st, (const uint8_t *)"", 0);  /* Empty string */
+    ASSERT_EQ(status, SH_OK);
+
+    ASSERT_EQ(st.count, 3);
+
+    /* Get strings */
+    ASSERT(strcmp(sh_string_table_get(&st, 0), "hello") == 0);
+    ASSERT(strcmp(sh_string_table_get(&st, 1), "world") == 0);
+    ASSERT(strcmp(sh_string_table_get(&st, 2), "") == 0);
+
+    /* Out of bounds returns empty string */
+    ASSERT(strcmp(sh_string_table_get(&st, 999), "") == 0);
+
+    sh_string_table_free(&st);
+    ASSERT_EQ(st.count, 0);
+}
+
+TEST(string_table_large)
+{
+    SHStringTable st;
+    sh_string_table_init(&st);
+
+    /* Add many strings to trigger reallocation */
+    for (int i = 0; i < 1000; i++) {
+        char buf[32];
+        int len = snprintf(buf, sizeof(buf), "string%d", i);
+        SHStatus status = sh_string_table_add(&st, (const uint8_t *)buf, len);
+        ASSERT_EQ(status, SH_OK);
+    }
+
+    ASSERT_EQ(st.count, 1000);
+
+    /* Verify some */
+    ASSERT(strcmp(sh_string_table_get(&st, 0), "string0") == 0);
+    ASSERT(strcmp(sh_string_table_get(&st, 500), "string500") == 0);
+    ASSERT(strcmp(sh_string_table_get(&st, 999), "string999") == 0);
+
+    sh_string_table_free(&st);
+}
+
+/* ============================================================================
+ * Block Header Tests
+ * ============================================================================ */
+
+TEST(block_header_init)
+{
+    SHBlockHeader header;
+    sh_block_header_init(&header);
+
+    ASSERT_EQ(header.granularity, 100);
+    ASSERT_EQ(header.lat_offset, 0);
+    ASSERT_EQ(header.lon_offset, 0);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -312,6 +615,32 @@ int main(void)
     RUN_TEST(latlon_to_tile_budapest);
     RUN_TEST(tile_bounds_z0);
     RUN_TEST(tile_bounds_z1);
+
+    printf("\nProtobuf:\n");
+    RUN_TEST(pb_varint_small);
+    RUN_TEST(pb_varint_300);
+    RUN_TEST(pb_varint_large);
+    RUN_TEST(pb_svarint_positive);
+    RUN_TEST(pb_svarint_negative);
+    RUN_TEST(pb_svarint_edge);
+    RUN_TEST(pb_tag_roundtrip);
+    RUN_TEST(pb_fixed32_roundtrip);
+    RUN_TEST(pb_fixed64_roundtrip);
+    RUN_TEST(pb_packed_svarint);
+    RUN_TEST(pb_delta_decode);
+    RUN_TEST(pb_skip_field_varint);
+    RUN_TEST(pb_skip_field_fixed);
+
+    printf("\nInflate/Deflate:\n");
+    RUN_TEST(inflate_deflate_roundtrip);
+    RUN_TEST(inflate_alloc);
+
+    printf("\nString Table:\n");
+    RUN_TEST(string_table_basic);
+    RUN_TEST(string_table_large);
+
+    printf("\nPBF Block Header:\n");
+    RUN_TEST(block_header_init);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

@@ -43,16 +43,18 @@ velo/
 ├── src/              # Implementation
 │   ├── vl_geo.c      # Haversine, coordinates
 │   ├── vl_heap.c     # Binary min-heap
-│   ├── vl_protobuf.c # Protobuf decoder
-│   ├── vl_inflate.c  # Zlib wrapper
-│   ├── vl_pbf.c      # PBF file parsing
+│   ├── vl_bucket_heap.c # Bucket-based priority queue
+│   ├── vl_pbf.c      # PBF file parsing (uses shared/sh_protobuf, sh_inflate, sh_pbf)
 │   ├── vl_graph.c    # Graph construction
 │   ├── vl_route.c    # Routing algorithms
+│   ├── vl_landmarks.c # ALT algorithm
 │   └── velo.c        # Main API
 ├── api/              # Route server REST API
 ├── tests/            # Test suite
 └── benchmarks/       # Performance tests
 ```
+
+**Note:** Protobuf decoding and zlib decompression are provided by the shared library (`sh_protobuf.h`, `sh_inflate.h`, `sh_pbf.h`).
 
 ## Using Velo in Your Code
 

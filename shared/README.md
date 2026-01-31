@@ -1,6 +1,6 @@
 # Shared Library
 
-Common utilities for the FuelWise platform, used by velo and carta modules.
+Common utilities for the OTTO platform, used by velo and carta modules.
 
 ## Features
 
@@ -8,6 +8,9 @@ Common utilities for the FuelWise platform, used by velo and carta modules.
 - **Coordinate types**: Floating-point and fixed-point (OSM compatible)
 - **Bounding box operations**: Intersection, union, containment
 - **Web Mercator projection**: Lat/lon to tile coordinates
+- **Protobuf encoding/decoding**: Varints, signed varints, tags, packed arrays
+- **Zlib compression**: Inflate/deflate via miniz
+- **PBF parsing**: OSM PBF blob parsing, string tables
 
 ## Building
 
@@ -74,6 +77,38 @@ SHBBox bbox = sh_tile_bounds(14, tx, ty);
 | `sh_latlon_to_tile(lat, lon, z, &x, &y)` | Get tile coordinates |
 | `sh_tile_bounds(z, x, y)` | Get tile bounding box |
 
+### Protobuf Functions
+
+| Function | Description |
+|----------|-------------|
+| `sh_pb_read_varint(buf, len, &value)` | Read unsigned varint |
+| `sh_pb_read_svarint(buf, len, &value)` | Read signed varint (zigzag) |
+| `sh_pb_read_tag(buf, len, &field, &wire)` | Read protobuf tag |
+| `sh_pb_skip_field(buf, len, wire)` | Skip unknown field |
+| `sh_pb_write_varint(buf, cap, value)` | Write unsigned varint |
+| `sh_pb_write_svarint(buf, cap, value)` | Write signed varint |
+| `sh_pb_delta_decode_i64(arr, count)` | Delta decode array in-place |
+
+### Inflate/Deflate Functions
+
+| Function | Description |
+|----------|-------------|
+| `sh_inflate(src, src_len, dst, dst_len, &actual)` | Decompress zlib data |
+| `sh_inflate_raw(src, src_len, dst, dst_len, &actual)` | Decompress raw DEFLATE |
+| `sh_inflate_alloc(src, src_len, expected, &actual)` | Decompress with allocation |
+| `sh_deflate(src, src_len, dst, cap, &actual, level)` | Compress to zlib format |
+
+### PBF Parsing Functions
+
+| Function | Description |
+|----------|-------------|
+| `sh_string_table_init(st)` | Initialize string table |
+| `sh_string_table_add(st, data, len)` | Add string to table |
+| `sh_string_table_get(st, idx)` | Get string by index |
+| `sh_string_table_free(st)` | Free string table |
+| `sh_pbf_parse_blob_header(data, len, ...)` | Parse PBF blob header |
+| `sh_pbf_decompress_blob(data, len, &blob)` | Decompress PBF blob |
+
 ## Dependencies
 
-None - this is a zero-dependency library.
+- **Vendored**: ../vendor/miniz (for zlib compression)
