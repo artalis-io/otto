@@ -144,6 +144,43 @@ export class MapTileRenderer {
                 }
             }
         }
+
+        // Prefetch tiles at next zoom level if animating (zooming in)
+        // When zoomFraction > 0, we're between tileZoom and tileZoom+1
+        if (zoomFraction > 0.01) {
+            this.prefetchTiles(lat, lon, tileZoom + 1, layerType, width, height);
+        }
+    }
+
+    /**
+     * Prefetch tiles at a given zoom level (triggers cache loading without rendering)
+     */
+    prefetchTiles(lat, lon, zoom, layerType, width, height) {
+        const centerTileX = this.lonToTileX(lon, zoom);
+        const centerTileY = this.latToTileY(lat, zoom);
+
+        // Prefetch tiles that will be visible at target zoom
+        const tilesX = Math.ceil(width / this.baseTileSize) + 2;
+        const tilesY = Math.ceil(height / this.baseTileSize) + 2;
+
+        const startTileX = Math.floor(centerTileX - tilesX / 2);
+        const startTileY = Math.floor(centerTileY - tilesY / 2);
+
+        const maxTile = Math.pow(2, zoom);
+
+        for (let dy = 0; dy < tilesY; dy++) {
+            for (let dx = 0; dx < tilesX; dx++) {
+                const tileX = startTileX + dx;
+                const tileY = startTileY + dy;
+
+                if (tileY < 0 || tileY >= maxTile) continue;
+
+                const wrappedTileX = ((tileX % maxTile) + maxTile) % maxTile;
+
+                // Just request the tile - this triggers cache loading
+                this.tileCache.getTile(zoom, wrappedTileX, tileY, layerType);
+            }
+        }
     }
 
     lonToTileX(lon, zoom) {
