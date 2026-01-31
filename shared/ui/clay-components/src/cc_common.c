@@ -104,6 +104,12 @@ void cc_frame_begin(void) {
     g_cc.active_text = NULL;
     g_cc.active_len = NULL;
 
+    /* Clear focused bounds - components will set these if they have an active text buffer */
+    g_cc.focused_x = 0;
+    g_cc.focused_y = 0;
+    g_cc.focused_w = 0;
+    g_cc.focused_h = 0;
+
     /* Reset focusable registry for this frame */
     g_cc.focusable_count = 0;
 }
