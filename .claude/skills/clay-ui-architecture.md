@@ -230,90 +230,217 @@ shared/ui/
 vendor/clay/                   # Clay library (single header)
 ```
 
-## Why This Approach?
+## Assessment
 
-### Pros
+### Strengths
 
-1. **Separation of concerns** - Layout vs interaction cleanly separated
-2. **Familiar patterns** - Immediate mode is intuitive for game/UI devs
-3. **Efficient** - Clay's layout is microsecond-fast
-4. **Portable** - C code compiles to WASM and native
-5. **Composable** - Components nest naturally in Clay blocks
-6. **Minimal state** - No complex state management needed
+| Aspect | Assessment |
+|--------|------------|
+| **Separation of concerns** | Excellent. Layout → Components → Rendering are cleanly decoupled. |
+| **WASM-first** | Solid. ~140KB WASM for a full map viewer with UI is impressive. |
+| **Renderer-agnostic** | Good foundation. Same C code could target SDL, raylib, framebuffer. |
+| **Zero dependencies** | Pure C with no allocations in hot paths. Embedded-friendly. |
+| **Immediate mode API** | Clean. `if (cc_button(...).clicked)` is intuitive. |
+| **Memory model** | Predictable. Fixed arena, no dynamic allocation during render. |
+| **Layered architecture** | Clean separation allows swapping renderers or adding components independently. |
 
-### Cons
+### Known Limitations
 
-1. **Two systems to understand** - Clay + immediate mode concepts
-2. **Global state** - Single focused element (fine for most UIs)
-3. **Frame delay** - Hover state is from previous frame (standard in imgui)
+**1. Text Measurement is Approximate**
+```c
+float char_width = config->fontSize * g_clay.char_width_ratio;  // 0.6
+```
+Works for monospace fonts. Proportional fonts will have layout inaccuracies.
+
+**Solutions:**
+- Provide real font metrics from JS/native back to WASM
+- Use monospace fonts only
+- Build a font metrics table into WASM at compile time
+
+**2. Single Map Instance**
+```c
+static CcMapDragState g_map_drag = {0};  // Only one map supported
+```
+The drag state is global. Multiple maps would interfere.
+
+**Solution:** Use a hash table keyed by component ID for multi-instance support.
+
+**3. WASM Boundary Overhead**
+```javascript
+for (let i = 0; i < commandCount; i++) {
+    cmd.type(i);  // WASM call
+    cmd.x(i);     // WASM call
+    cmd.y(i);     // WASM call
+    // ~10 calls per command
+}
+```
+Many small WASM calls add overhead.
+
+**Solution:** Bulk accessor returning typed array view into WASM memory.
+
+**4. No Animation System**
+Transitions, easing, and animated state changes require manual implementation.
+
+**5. Limited Component Set**
+Currently: button, input, map. Missing common widgets.
+
+**6. No Accessibility**
+No keyboard navigation between elements, no screen reader support.
+
+### Platform Suitability
+
+**Web Applications:**
+- ✅ Excellent for specialized widgets (map viewer, data visualization)
+- ✅ Small WASM footprint, fast rendering
+- ⚠️ Not a replacement for React/Vue for full dashboards
+- ⚠️ CSS would be more familiar to web developers
+
+**Recommended:** Embed Clay components where you need pixel-perfect control, use React/Vue for forms, tables, settings.
+
+**Embedded Systems:**
+- ✅ Small footprint, pure C, predictable memory
+- ✅ Same codebase as web version
+- ✅ Efficient layout algorithm
+- ⚠️ Needs renderer implementation (SDL, framebuffer, OpenGL ES)
+- ⚠️ Font handling needs adaptation
+
+**Recommended:** Ideal for in-cab displays, industrial HMIs, or any system needing cross-platform C UI.
 
 ### Comparison
 
-| Approach | Layout | Interaction | State |
-|----------|--------|-------------|-------|
-| React | Virtual DOM | Event handlers | Component state |
-| Dear ImGui | Immediate | Immediate | Minimal |
-| **Clay + cc_*** | **Declarative** | **Immediate** | **Minimal** |
-| Qt | Widget tree | Signals/slots | Widget state |
+| Approach | Layout | Interaction | State | Portability |
+|----------|--------|-------------|-------|-------------|
+| React | Virtual DOM | Event handlers | Component state | Web only |
+| Dear ImGui | Immediate | Immediate | Minimal | C++, many backends |
+| **Clay + cc_*** | **Declarative** | **Immediate** | **Minimal** | **C, any backend** |
+| Qt | Widget tree | Signals/slots | Widget state | C++, heavy runtime |
+| LVGL | Object tree | Callbacks | Widget state | C, embedded focus |
 
-## Future Improvements
+### Verdict
 
-### Additional Renderers
+**Is this a solid foundation?** Yes.
 
-The architecture supports multiple backends:
+**Is it production-ready?** Not yet. Needs:
+1. Real font metrics (critical for non-monospace)
+2. More components (checkbox, dropdown, slider)
+3. Keyboard navigation between focusables
+4. At least one native renderer to prove cross-platform
 
-```
-clay-renderer-webgl/     # Browser (current)
-clay-renderer-sdl/       # SDL2 for desktop/mobile
-clay-renderer-raylib/    # raylib for games
-clay-renderer-sokol/     # Sokol for minimal deps
-clay-renderer-terminal/  # TUI rendering
-```
+**Best use:** Specialized rendering (maps, charts, custom visualizations) where you need the same C code on web and embedded.
 
-Each renderer implements:
-- Rectangle drawing (solid, rounded, borders)
-- Text rendering (with font metrics callback)
-- Texture/image rendering
-- Scissor/clipping
+---
 
-### Additional Components
+## Roadmap
 
+### Phase 1: Core Stability (Current)
+- [x] Clay integration with immediate mode wrapper
+- [x] Button, input, map components
+- [x] WebGL renderer with MSDF text
+- [x] Generic render loop and WASM utilities
+- [ ] Real font metrics (measure text accurately)
+- [ ] Fix single-instance limitations
+
+### Phase 2: Component Library
+- [ ] Checkbox component
+- [ ] Radio button component
+- [ ] Dropdown/select component
+- [ ] Slider component
+- [ ] Tabs component
+- [ ] Modal/dialog component
+- [ ] Tooltip component
+
+### Phase 3: Cross-Platform
+- [ ] SDL2 renderer (desktop/embedded Linux)
+- [ ] Native font loading
+- [ ] Touch gesture support
+- [ ] High-DPI handling
+
+### Phase 4: Polish
+- [ ] Keyboard navigation (Tab/Shift+Tab)
+- [ ] Focus indicators
+- [ ] Animation/transition system
+- [ ] Theming system
+- [ ] Accessibility hints
+
+---
+
+## Implementation Notes
+
+### Adding a New Component
+
+1. Create header `include/cc_<name>.h` with types and API
+2. Create source `src/cc_<name>.c` with implementation
+3. Add include to `cc_immediate.h`
+4. Add source include to `cc_immediate.c`
+5. Add tests to `tests/test_immediate.c`
+
+Component pattern:
 ```c
-// Planned components
-cc_checkbox(id, &checked, "Label");
-cc_radio(id, &selected, options, count);
-cc_slider(id, &value, min, max);
-cc_dropdown(id, &selected, options, count);
-cc_tabs(id, &active, tabs, count);
-cc_modal(id, &open, title);
-cc_tooltip(id, text);
+typedef struct {
+    bool changed;
+    bool clicked;
+    // ... result fields
+} CcFooResult;
+
+typedef struct {
+    float width, height;
+    CcMargin margin;
+    CcAlign align;
+    // ... style fields
+} CcFooStyle;
+
+CcFooResult cc_foo(uint32_t id, /* state pointers */, const CcFooStyle *style);
 ```
 
-### Theming System
+### Adding a New Renderer
 
+Implement these operations:
+1. **Rectangle** - Solid color, rounded corners, optional border
+2. **Text** - String at position with font size and color
+3. **Texture** - Image/tile quad
+4. **Scissor** - Push/pop clipping regions
+
+Process Clay render commands:
 ```c
-// Define theme
-CcTheme dark_theme = {
-    .colors = {
-        .primary = {59, 130, 246, 255},
-        .background = {30, 30, 30, 255},
-        .text = {255, 255, 255, 255},
-        ...
-    },
-    .spacing = { .xs = 4, .sm = 8, .md = 16, ... },
-    .radii = { .sm = 2, .md = 4, .lg = 8 },
-};
-
-// Apply globally
-cc_set_theme(&dark_theme);
+for (int i = 0; i < commands.length; i++) {
+    Clay_RenderCommand *cmd = &commands.internalArray[i];
+    switch (cmd->commandType) {
+        case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: /* ... */ break;
+        case CLAY_RENDER_COMMAND_TYPE_TEXT: /* ... */ break;
+        case CLAY_RENDER_COMMAND_TYPE_BORDER: /* ... */ break;
+        case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: /* ... */ break;
+        case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END: /* ... */ break;
+    }
+}
 ```
 
-### Accessibility
+### Font Metrics Integration
 
-- Keyboard navigation between components
-- Screen reader hints via custom render commands
-- High contrast theme support
-- Focus indicators
+To support proportional fonts accurately:
+
+**Option A: JS-side measurement (web)**
+```javascript
+// Measure in JS, call back to WASM
+function measureText(text, fontSize) {
+    ctx.font = `${fontSize}px ${fontFamily}`;
+    return ctx.measureText(text).width;
+}
+// Register callback with Clay
+```
+
+**Option B: Embedded font metrics (native/WASM)**
+```c
+// Build glyph width table into binary
+static const float GLYPH_WIDTHS[128] = { /* generated */ };
+
+Clay_Dimensions measure_text(Clay_StringSlice text, ...) {
+    float width = 0;
+    for (int i = 0; i < text.length; i++) {
+        width += GLYPH_WIDTHS[(int)text.chars[i]] * scale;
+    }
+    return (Clay_Dimensions){width, fontSize};
+}
+```
 
 ## Usage Example
 
