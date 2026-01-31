@@ -49,18 +49,24 @@ export function createRenderLoop(renderer, wasm, font, options = {}) {
             renderer.renderClayCommands(wasm, count, projMatrix, cmdPrefix);
         }
 
-        // Render text cursor for focused input
+        // Render text cursor for focused text input (not buttons)
         if (wasm.cc_focused_id && wasm.cc_focused_id() !== 0) {
-            const inputBounds = {
-                x: wasm.cc_focused_x(),
-                y: wasm.cc_focused_y(),
-                w: wasm.cc_focused_w(),
-                h: wasm.cc_focused_h()
-            };
-            renderTextCursor(renderer, wasm, font, projMatrix, inputBounds, {
-                fontSize: cursorFontSize,
-                padding: cursorPadding
-            });
+            // Only render cursor if there's an active text buffer (text input, not button)
+            const textLen = wasm.cc_focused_text_len ? wasm.cc_focused_text_len() : 0;
+            const hasActiveText = textLen >= 0 && wasm.cc_focused_text && wasm.cc_focused_w() > 0;
+
+            if (hasActiveText) {
+                const inputBounds = {
+                    x: wasm.cc_focused_x(),
+                    y: wasm.cc_focused_y(),
+                    w: wasm.cc_focused_w(),
+                    h: wasm.cc_focused_h()
+                };
+                renderTextCursor(renderer, wasm, font, projMatrix, inputBounds, {
+                    fontSize: cursorFontSize,
+                    padding: cursorPadding
+                });
+            }
         }
 
         requestAnimationFrame(render);
