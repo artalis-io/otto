@@ -44,12 +44,12 @@ cc_button(CC_ID("submit"), "Submit", NULL);
 cc_input(CC_ID("search"), text, &len, max, "Search...", NULL);
 ```
 
-**Design decision:** ClayShards uses simple string hashing instead of Dear ImGui-style ID stacks. This is intentional for embedded/memory-constrained environments where:
+**Design decision:** ClayShards uses explicit string-hash IDs rather than implicit ID stacks. This prioritizes:
 
-* UI layouts are typically fixed
-* Dynamic component loops are rare
-* Simplicity is valued over flexibility
-* Memory footprint must be predictable
+* **Debuggability**: IDs are visible in code, not computed implicitly
+* **Deterministic identity**: same string → same ID, always
+* **No implicit state**: no stack bugs, no push/pop mismatches
+* **Predictable memory**: fixed hash table, no per-frame allocations
 
 For dynamic content, construct unique string names:
 ```c
@@ -60,7 +60,7 @@ for (int i = 0; i < 3; i++) {
 }
 ```
 
-**Constraint:** IDs must be unique per component. Duplicate IDs will share widget state (cursor, scroll, etc.), which is usually incorrect.
+**Constraint:** IDs must be unique per component. Duplicate IDs will share widget state (cursor, scroll, etc.), which is usually incorrect. In debug builds, ClayShards may detect duplicate IDs and emit diagnostics.
 
 Stable identity enables:
 
@@ -93,8 +93,14 @@ The render command array is the contract:
 
 * UI and layout produce render commands
 * Renderer backends consume render commands
+* ClayShards does **not** manage rendering state (no global GL state assumptions)
+* Backends are responsible for translating render commands to GPU/display calls
 
 This separation is what makes "render into anything" real.
+
+### 7) Determinism
+
+Given identical inputs and state, ClayShards produces identical layout and render commands. This is essential for embedded/web parity and testability.
 
 ---
 
@@ -122,7 +128,7 @@ Clay is the layout engine.
 
 ### Widget state store
 
-Widgets maintain internal state in a **hash table keyed by stable ID** (256 slots).
+Widgets maintain internal state in a **fixed-size hash table keyed by stable ID**. Capacity is configurable at compile time (`CC_WIDGET_STORE_SIZE`) to preserve deterministic memory usage.
 
 This includes:
 
@@ -152,10 +158,11 @@ ClayShards uses a **linear focus model**:
 * Shift+Tab cycles backward
 * Focus wraps at boundaries
 * Focusable elements register each frame during render
+* **Focus order is defined by widget registration order** (call order during frame)
 
 This model is:
 
-* Stable under callsite-hash IDs
+* Stable under string-hash IDs
 * Compatible with immediate mode
 * Consistent across mouse/touch/keyboard
 * Deterministic under full redraw
