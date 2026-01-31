@@ -1,64 +1,58 @@
-# Clay Components
+# ClayShards
 
-Immediate mode UI components for the [Clay](https://github.com/nicbarker/clay) layout library.
+**Immediate-mode UI components in C11. Built on Clay layout. Render anywhere.**
 
-## Features
-
-- **Immediate mode API** - Simple call-and-check pattern
-- **Built on Clay** - Leverages Clay's fast layout engine
-- **Zero dependencies** - Pure C, compiles to WASM
-- **Components**: Button, Text Input, Map (pan/zoom)
-
-## Quick Start
+Write your UI once in C, run it on WASM/WebGL, embedded displays, or any target that consumes render commands. The same code runs across targets.
 
 ```c
 #include "cc_immediate.h"
 
-static char name[64];
-static int name_len = 0;
+static char search_text[256] = "";
+static int search_len = 0;
 
-void render(void) {
-    CLAY(CLAY_ID("Form"), {...}) {
-        // Text input
-        cc_input(CC_ID("name"), name, &name_len, sizeof(name), "Name...", NULL);
+void render_ui(float dt) {
+    cc_frame_begin();
+    Clay_BeginLayout();
 
-        // Button
-        if (cc_button(CC_ID("submit"), "Submit", NULL).clicked) {
-            printf("Hello, %s!\n", name);
+    CLAY(CLAY_ID("App"), CLAY_LAYOUT(.padding = {16, 16, 16, 16})) {
+        // Text input - you own the buffer, ClayShards owns cursor/selection
+        CcInputResult input = cc_input(
+            CC_ID("search"),
+            search_text, &search_len, sizeof(search_text),
+            "Search...", NULL
+        );
+
+        if (cc_button(CC_ID("go"), "Search", NULL).clicked || input.submitted) {
+            do_search(search_text);
         }
     }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cc_frame_end(dt);
+
+    render_commands(commands);  // Your renderer: WebGL, SDL, raylib, etc.
 }
 ```
 
-## How It Works
+**Key ideas:**
+- **`CC_ID("name")`** → stable identity via string hash (no ID stacks)
+- **You own business state** (buffers, values, domain data)
+- **ClayShards owns UI mechanics** (cursor, focus, blink, selection)
+- **Same code, any target** — web and embedded from one codebase
 
-Components are called inside Clay layout blocks:
+See [MANIFESTO.md](MANIFESTO.md) for design principles.
+See [DESIGN.md](DESIGN.md) for architecture.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for adding widgets.
 
-1. Component internally builds Clay elements (becomes children)
-2. Uses Clay's hover detection from previous frame
-3. Returns result struct with interaction flags
-4. You check flags and react immediately
-
-```c
-CcButtonResult r = cc_button(CC_ID("btn"), "Click", NULL);
-if (r.clicked) {
-    // Handle click
-}
-if (r.hovered) {
-    // Show tooltip
-}
-```
-
-## Building
-
-```bash
-make          # Build static library
-make test     # Run tests
-```
-
-For WASM, include `src/cc_immediate.c` in your build.
+---
 
 ## Components
+
+| Component | Description |
+|-----------|-------------|
+| `cc_button` | Clickable button with hover/focus/keyboard support |
+| `cc_input` | Text input with cursor, selection, clipboard (Ctrl+C/V/X) |
+| `cc_map` | Slippy map pan/zoom interaction |
 
 ### cc_button
 
@@ -92,6 +86,19 @@ if (r.clicked) {
 }
 ```
 
+---
+
+## Building
+
+```bash
+make          # Build static library
+make test     # Run 37 tests
+```
+
+For WASM, include `src/cc_immediate.c` in your Emscripten build.
+
+---
+
 ## License
 
-MIT - Part of the OTTO platform
+MIT
