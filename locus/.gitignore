@@ -1,0 +1,18 @@
+# Build artifacts
+*.o
+*.a
+liblocus.a
+test_locus
+bench_locus
+
+# API server
+api/locus-geocode-server
+api/build/
+
+# WASM
+wasm/*.js
+wasm/*.wasm
+wasm/node_modules/
+
+# Binary index files
+*.lcix
