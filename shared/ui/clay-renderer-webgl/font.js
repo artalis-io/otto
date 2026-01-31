@@ -89,4 +89,29 @@ export class MSDFFont {
     measureText(text, fontSize) {
         return this.getCursorX(text, text.length, fontSize);
     }
+
+    /**
+     * Transfer font metrics to WASM for accurate text measurement in Clay layout.
+     * Call this after loading font and WASM module.
+     *
+     * @param {Object} wasm - WASM exports (must have cc_clay_set_glyph_advance)
+     * @returns {number} Number of glyphs transferred
+     */
+    transferMetricsToWasm(wasm) {
+        if (!wasm.cc_clay_set_glyph_advance) {
+            console.warn('WASM missing cc_clay_set_glyph_advance export');
+            return 0;
+        }
+
+        let count = 0;
+        for (const glyph of this.data.glyphs) {
+            if (glyph.unicode < 256 && glyph.advance !== undefined) {
+                wasm.cc_clay_set_glyph_advance(glyph.unicode, glyph.advance);
+                count++;
+            }
+        }
+
+        console.log(`Transferred ${count} glyph metrics to WASM`);
+        return count;
+    }
 }
