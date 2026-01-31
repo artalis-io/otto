@@ -344,6 +344,336 @@ TEST(pbf_file_not_found)
 }
 
 /* ============================================================================
+ * Normalization Tests
+ * ============================================================================ */
+
+TEST(normalize_lowercase)
+{
+    char buf[64];
+
+    strcpy(buf, "BUDAPEST");
+    lc_lowercase(buf);
+    ASSERT_STR_EQ(buf, "budapest");
+
+    strcpy(buf, "New York");
+    lc_lowercase(buf);
+    ASSERT_STR_EQ(buf, "new york");
+
+    strcpy(buf, "ABC123");
+    lc_lowercase(buf);
+    ASSERT_STR_EQ(buf, "abc123");
+}
+
+TEST(normalize_diacritics)
+{
+    char *result;
+
+    result = lc_remove_diacritics("Zürich");
+    ASSERT(result != NULL);
+    ASSERT_STR_EQ(result, "Zurich");
+    free(result);
+
+    result = lc_remove_diacritics("Kraków");
+    ASSERT(result != NULL);
+    ASSERT_STR_EQ(result, "Krakow");
+    free(result);
+
+    result = lc_remove_diacritics("São Paulo");
+    ASSERT(result != NULL);
+    ASSERT_STR_EQ(result, "Sao Paulo");
+    free(result);
+
+    result = lc_remove_diacritics("Müller");
+    ASSERT(result != NULL);
+    ASSERT_STR_EQ(result, "Muller");
+    free(result);
+}
+
+TEST(normalize_whitespace)
+{
+    char buf[64];
+
+    strcpy(buf, "  New   York  ");
+    lc_normalize_whitespace(buf);
+    ASSERT_STR_EQ(buf, "New York");
+
+    strcpy(buf, "Hello\t\nWorld");
+    lc_normalize_whitespace(buf);
+    ASSERT_STR_EQ(buf, "Hello World");
+
+    strcpy(buf, "   ");
+    lc_normalize_whitespace(buf);
+    ASSERT_STR_EQ(buf, "");
+}
+
+TEST(normalize_full)
+{
+    char *result;
+
+    result = lc_normalize("BUDAPEST");
+    ASSERT(result != NULL);
+    ASSERT_STR_EQ(result, "budapest");
+    free(result);
+
+    result = lc_normalize("  New   York  ");
+    ASSERT(result != NULL);
+    ASSERT_STR_EQ(result, "new york");
+    free(result);
+}
+
+TEST(normalize_mixed)
+{
+    char *result;
+
+    result = lc_normalize("Café Müller!");
+    ASSERT(result != NULL);
+    ASSERT_STR_EQ(result, "cafe muller");
+    free(result);
+
+    result = lc_normalize("ÉLYSÉE-PALACE");
+    ASSERT(result != NULL);
+    ASSERT_STR_EQ(result, "elysee palace");
+    free(result);
+}
+
+/* ============================================================================
+ * Trie Tests
+ * ============================================================================ */
+
+TEST(trie_create)
+{
+    LCTrie *trie = lc_trie_create();
+    ASSERT(trie != NULL);
+    ASSERT_EQ(lc_trie_node_count(trie), 1);
+    ASSERT_EQ(lc_trie_entry_count(trie), 0);
+    lc_trie_free(trie);
+}
+
+TEST(trie_insert)
+{
+    LCTrie *trie = lc_trie_create();
+    ASSERT(trie != NULL);
+
+    ASSERT_EQ(lc_trie_insert(trie, "budapest", 1), LC_OK);
+    ASSERT_EQ(lc_trie_insert(trie, "budaors", 2), LC_OK);
+    ASSERT_EQ(lc_trie_insert(trie, "vienna", 3), LC_OK);
+
+    ASSERT_EQ(lc_trie_entry_count(trie), 3);
+    ASSERT(lc_trie_node_count(trie) > 1);
+
+    lc_trie_free(trie);
+}
+
+TEST(trie_search_prefix)
+{
+    LCTrie *trie = lc_trie_create();
+    ASSERT(trie != NULL);
+
+    lc_trie_insert(trie, "budapest", 1);
+    lc_trie_insert(trie, "budaors", 2);
+    lc_trie_insert(trie, "budafok", 3);
+    lc_trie_insert(trie, "vienna", 4);
+
+    uint32_t results[10];
+
+    /* Search "buda" should find all three */
+    size_t count = lc_trie_search_prefix(trie, "buda", 10, results);
+    ASSERT_EQ(count, 3);
+
+    /* Search "budap" should find only budapest */
+    count = lc_trie_search_prefix(trie, "budap", 10, results);
+    ASSERT_EQ(count, 1);
+    ASSERT_EQ(results[0], 1);
+
+    /* Search "vie" should find vienna */
+    count = lc_trie_search_prefix(trie, "vie", 10, results);
+    ASSERT_EQ(count, 1);
+    ASSERT_EQ(results[0], 4);
+
+    /* Search "xyz" should find nothing */
+    count = lc_trie_search_prefix(trie, "xyz", 10, results);
+    ASSERT_EQ(count, 0);
+
+    lc_trie_free(trie);
+}
+
+TEST(trie_search_exact)
+{
+    LCTrie *trie = lc_trie_create();
+    ASSERT(trie != NULL);
+
+    lc_trie_insert(trie, "budapest", 1);
+    lc_trie_insert(trie, "buda", 2);  /* Prefix of budapest */
+
+    uint32_t results[10];
+
+    /* Exact match for "buda" */
+    size_t count = lc_trie_search_exact(trie, "buda", 10, results);
+    ASSERT_EQ(count, 1);
+    ASSERT_EQ(results[0], 2);
+
+    /* Exact match for "budapest" */
+    count = lc_trie_search_exact(trie, "budapest", 10, results);
+    ASSERT_EQ(count, 1);
+    ASSERT_EQ(results[0], 1);
+
+    /* No exact match for "budap" */
+    count = lc_trie_search_exact(trie, "budap", 10, results);
+    ASSERT_EQ(count, 0);
+
+    lc_trie_free(trie);
+}
+
+TEST(trie_char_mapping)
+{
+    /* Test character mapping */
+    ASSERT_EQ(lc_trie_char_index('a'), 0);
+    ASSERT_EQ(lc_trie_char_index('z'), 25);
+    ASSERT_EQ(lc_trie_char_index('0'), 26);
+    ASSERT_EQ(lc_trie_char_index('9'), 35);
+    ASSERT_EQ(lc_trie_char_index(' '), 36);
+    ASSERT_EQ(lc_trie_char_index('!'), -1);
+
+    /* Test reverse mapping */
+    ASSERT_EQ(lc_trie_index_char(0), 'a');
+    ASSERT_EQ(lc_trie_index_char(25), 'z');
+    ASSERT_EQ(lc_trie_index_char(26), '0');
+    ASSERT_EQ(lc_trie_index_char(36), ' ');
+}
+
+/* ============================================================================
+ * N-gram Tests
+ * ============================================================================ */
+
+TEST(ngram_generate)
+{
+    char ngrams[10][4];
+
+    size_t count = lc_ngram_generate("budapest", ngrams, 10);
+    ASSERT_EQ(count, 6);  /* bud, uda, dap, ape, pes, est */
+    ASSERT_STR_EQ(ngrams[0], "bud");
+    ASSERT_STR_EQ(ngrams[1], "uda");
+    ASSERT_STR_EQ(ngrams[5], "est");
+}
+
+TEST(ngram_similarity)
+{
+    float sim;
+
+    /* Identical strings */
+    sim = lc_ngram_similarity("budapest", "budapest");
+    ASSERT(sim > 0.99f);
+
+    /* Similar strings (typo) - Jaccard is 3/9 = 0.333 */
+    sim = lc_ngram_similarity("budapest", "budapset");
+    ASSERT(sim > 0.3f);
+
+    /* More similar strings (prefix match) */
+    sim = lc_ngram_similarity("budapest", "budapesti");
+    ASSERT(sim > 0.7f);
+
+    /* Different strings */
+    sim = lc_ngram_similarity("budapest", "vienna");
+    ASSERT(sim < 0.1f);
+}
+
+TEST(ngram_index)
+{
+    LCNgramIndex *idx = lc_ngram_create();
+    ASSERT(idx != NULL);
+
+    ASSERT_EQ(lc_ngram_index_name(idx, "budapest", 1), LC_OK);
+    ASSERT_EQ(lc_ngram_index_name(idx, "budapset", 2), LC_OK);  /* Typo */
+    ASSERT_EQ(lc_ngram_index_name(idx, "vienna", 3), LC_OK);
+
+    lc_ngram_build(idx);
+
+    LCFuzzyMatch results[10];
+    size_t count = lc_ngram_search(idx, "budapest", 0.5f, 10, results);
+    ASSERT(count >= 1);
+    ASSERT_EQ(results[0].entity_id, 1);  /* Exact match first */
+
+    lc_ngram_free(idx);
+}
+
+/* ============================================================================
+ * Spatial Tests
+ * ============================================================================ */
+
+TEST(grid_create)
+{
+    SHBBox bounds = {.min_lat = 47.0, .max_lat = 48.0, .min_lon = 19.0, .max_lon = 20.0};
+    LCSpatialGrid *grid = lc_grid_create(bounds, 0.1);
+    ASSERT(grid != NULL);
+    ASSERT_EQ(lc_grid_cell_count(grid), 100);  /* 10x10 */
+    lc_grid_free(grid);
+}
+
+TEST(grid_insert)
+{
+    SHBBox bounds = {.min_lat = 47.0, .max_lat = 48.0, .min_lon = 19.0, .max_lon = 20.0};
+    LCSpatialGrid *grid = lc_grid_create(bounds, 0.1);
+    ASSERT(grid != NULL);
+
+    SHCoord coord = {.lat = 47.5, .lon = 19.5};
+    ASSERT_EQ(lc_grid_insert(grid, coord, 1), LC_OK);
+    ASSERT_EQ(lc_grid_insert(grid, coord, 2), LC_OK);
+    ASSERT_EQ(lc_grid_entry_count(grid), 2);
+
+    lc_grid_free(grid);
+}
+
+TEST(grid_query_point)
+{
+    SHBBox bounds = {.min_lat = 47.0, .max_lat = 48.0, .min_lon = 19.0, .max_lon = 20.0};
+    LCSpatialGrid *grid = lc_grid_create(bounds, 0.1);
+    ASSERT(grid != NULL);
+
+    SHCoord c1 = {.lat = 47.5, .lon = 19.5};
+    SHCoord c2 = {.lat = 47.2, .lon = 19.2};
+
+    lc_grid_insert(grid, c1, 1);
+    lc_grid_insert(grid, c1, 2);
+    lc_grid_insert(grid, c2, 3);
+
+    uint32_t results[10];
+    size_t count = lc_grid_query_point(grid, c1, 10, results);
+    ASSERT_EQ(count, 2);
+
+    count = lc_grid_query_point(grid, c2, 10, results);
+    ASSERT_EQ(count, 1);
+    ASSERT_EQ(results[0], 3);
+
+    lc_grid_free(grid);
+}
+
+TEST(grid_query_radius)
+{
+    SHBBox bounds = {.min_lat = 47.0, .max_lat = 48.0, .min_lon = 19.0, .max_lon = 20.0};
+    LCSpatialGrid *grid = lc_grid_create(bounds, 0.1);
+    ASSERT(grid != NULL);
+
+    /* Insert entities ~10km apart */
+    SHCoord c1 = {.lat = 47.5, .lon = 19.5};
+    SHCoord c2 = {.lat = 47.6, .lon = 19.5};  /* ~11km north */
+
+    lc_grid_insert(grid, c1, 1);
+    lc_grid_insert(grid, c2, 2);
+
+    uint32_t results[10];
+
+    /* 5km radius should find only one */
+    size_t count = lc_grid_query_radius(grid, c1, 5000, 10, results);
+    ASSERT_EQ(count, 1);
+
+    /* 15km radius should find both */
+    count = lc_grid_query_radius(grid, c1, 15000, 10, results);
+    ASSERT_EQ(count, 2);
+
+    lc_grid_free(grid);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -395,6 +725,31 @@ int main(void)
     RUN_TEST(pbf_default_options);
     RUN_TEST(pbf_stats_empty);
     RUN_TEST(pbf_file_not_found);
+
+    printf("\nNormalization:\n");
+    RUN_TEST(normalize_lowercase);
+    RUN_TEST(normalize_diacritics);
+    RUN_TEST(normalize_whitespace);
+    RUN_TEST(normalize_full);
+    RUN_TEST(normalize_mixed);
+
+    printf("\nTrie:\n");
+    RUN_TEST(trie_create);
+    RUN_TEST(trie_insert);
+    RUN_TEST(trie_search_prefix);
+    RUN_TEST(trie_search_exact);
+    RUN_TEST(trie_char_mapping);
+
+    printf("\nN-gram:\n");
+    RUN_TEST(ngram_generate);
+    RUN_TEST(ngram_similarity);
+    RUN_TEST(ngram_index);
+
+    printf("\nSpatial:\n");
+    RUN_TEST(grid_create);
+    RUN_TEST(grid_insert);
+    RUN_TEST(grid_query_point);
+    RUN_TEST(grid_query_radius);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 

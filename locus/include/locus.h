@@ -21,6 +21,10 @@
 
 #include "lc_types.h"
 #include "lc_pbf.h"
+#include "lc_normalize.h"
+#include "lc_trie.h"
+#include "lc_ngram.h"
+#include "lc_spatial.h"
 
 /* ============================================================================
  * Version
