@@ -32,9 +32,14 @@ export function setupKeyboardHandler(wasm, options = {}) {
     function handleKeyDown(e) {
         // Tab navigation works globally (even with no focus)
         if (e.key === 'Tab') {
+            const beforeId = wasm.cc_focused_id();
+            const beforeCursor = wasm.cc_cursor_pos();
             if (wasm.cc_key_down(e.keyCode, e.shiftKey ? 1 : 0, e.ctrlKey ? 1 : 0)) {
                 e.preventDefault();
             }
+            const afterId = wasm.cc_focused_id();
+            const afterCursor = wasm.cc_cursor_pos();
+            console.log(`Tab: focus ${beforeId}->${afterId}, cursor ${beforeCursor}->${afterCursor}`);
             return;
         }
 

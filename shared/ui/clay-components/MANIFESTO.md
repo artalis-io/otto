@@ -35,14 +35,23 @@ Components answer *"what is it, how does it behave, what does it do?"*
 
 ### 3) Stable identity via string hash
 
-Every component has a stable ID derived from a **string hash** using FNV-1a.
+Every component has a stable ID derived from a **string hash** (FNV-1a).
 
 ```c
+#define CC_ID(name) cc_hash_id(name)
+
 cc_button(CC_ID("submit"), "Submit", NULL);
 cc_input(CC_ID("search"), text, &len, max, "Search...", NULL);
 ```
 
-For dynamic content, use unique string names:
+**Design decision:** ClayShards uses simple string hashing instead of Dear ImGui-style ID stacks. This is intentional for embedded/memory-constrained environments where:
+
+* UI layouts are typically fixed
+* Dynamic component loops are rare
+* Simplicity is valued over flexibility
+* Memory footprint must be predictable
+
+For dynamic content, construct unique string names:
 ```c
 char id[32];
 for (int i = 0; i < 3; i++) {
@@ -51,9 +60,11 @@ for (int i = 0; i < 3; i++) {
 }
 ```
 
+**Constraint:** IDs must be unique per component. Duplicate IDs will share widget state (cursor, scroll, etc.), which is usually incorrect.
+
 Stable identity enables:
 
-* persistent widget state
+* persistent widget state (cursor position, scroll offset)
 * deterministic input routing
 * consistent interaction semantics across targets
 
@@ -111,16 +122,27 @@ Clay is the layout engine.
 
 ### Widget state store
 
-Widgets maintain internal state in a **hash table keyed by stable ID**.
+Widgets maintain internal state in a **hash table keyed by stable ID** (256 slots).
 
 This includes:
 
-* Text input: cursor position, selection range
-* Scroll containers: scroll offset
+* Text input: cursor position, selection range, blink state
+* Scroll containers: scroll offset (x, y)
 * Collapsibles: open/closed state
 * Any per-widget persistent UI state
 
-State is accessed via `cc_get_state(id)` and persists across frames.
+State persists across frames and focus changes. Components access state internally via `cc_widget_state(id)`.
+
+```c
+typedef struct {
+    uint32_t id;            /* Widget ID (0 = empty slot) */
+    int cursor;             /* Text cursor position */
+    int selection_start;    /* Selection anchor (-1 = none) */
+    float scroll_x, scroll_y;
+    bool open;
+    /* ... */
+} CcWidgetState;
+```
 
 ### Focus model: linear navigation
 
