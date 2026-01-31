@@ -170,12 +170,15 @@ CcInputResult cc_input(
     /* Handle click to focus */
     if (is_hovered && g->pending_click) {
         if (!is_focused) {
-            /* Focusing */
+            /* Focusing - set cursor at end via widget state */
             g->focused_id = id;
-            g->cursor = *len;  /* Cursor at end */
-            g->selection_start = -1;
-            g->cursor_visible = true;
-            g->cursor_blink = 0.0f;
+            CcWidgetState *w = cc_widget_state(id);
+            if (w) {
+                w->cursor = *len;  /* Cursor at end */
+                w->selection_start = -1;
+                w->cursor_visible = true;
+                w->cursor_blink = 0.0f;
+            }
             result.focused = true;
             is_focused = true;  /* Update for the rest of this call */
         }
@@ -196,10 +199,13 @@ CcInputResult cc_input(
         g->active_len = len;
         g->active_max_len = max_len;
 
-        /* Clamp cursor to valid range */
-        g->cursor = cc_clamp_i(g->cursor, 0, *len);
-        if (g->selection_start >= 0) {
-            g->selection_start = cc_clamp_i(g->selection_start, 0, *len);
+        /* Clamp cursor to valid range (uses widget state store) */
+        CcWidgetState *w = cc_widget_state(id);
+        if (w) {
+            w->cursor = cc_clamp_i(w->cursor, 0, *len);
+            if (w->selection_start >= 0) {
+                w->selection_start = cc_clamp_i(w->selection_start, 0, *len);
+            }
         }
     }
 

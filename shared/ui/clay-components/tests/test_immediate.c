@@ -13,6 +13,7 @@
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
 #include "cc_immediate.h"
+#include "../src/cc_internal.h"  /* For CcState, cc_get_state, cc_widget_state */
 
 /* Test counters */
 static int tests_run = 0;
@@ -826,6 +827,195 @@ static void test_focusable_reset_each_frame(void) {
 }
 
 /* ============================================================================
+ * Widget State Store Tests
+ * ============================================================================ */
+
+static void test_widget_state_persistence(void) {
+    TEST(widget_state_persistence);
+
+    cc_init();
+
+    /* Get state for widget, modify it */
+    uint32_t id = CC_ID("test_widget");
+    cc_focus(id);
+
+    /* Simulate typing - need active_text buffer */
+    char text[64] = "hello";
+    int len = 5;
+    CcState *g = cc_get_state();
+    g->active_text = text;
+    g->active_len = &len;
+    g->active_max_len = 64;
+
+    /* Type a character */
+    cc_key_char('!');
+    ASSERT(len == 6, "Should have typed a character");
+
+    int cursor_after = cc_cursor_pos();
+    ASSERT(cursor_after == 1, "Cursor should be at 1");
+
+    /* Focus something else, then come back */
+    cc_focus(CC_ID("other_widget"));
+    cc_focus(id);
+
+    /* Cursor should be reset when refocusing (by design) */
+    /* This is the ImGui behavior - focus resets cursor */
+    int cursor_refocus = cc_cursor_pos();
+    ASSERT(cursor_refocus == 0, "Cursor resets on refocus");
+
+    PASS();
+}
+
+static void test_widget_state_isolation(void) {
+    TEST(widget_state_isolation);
+
+    cc_init();
+
+    uint32_t id1 = CC_ID("widget1");
+    uint32_t id2 = CC_ID("widget2");
+
+    /* Different IDs should get different state */
+    ASSERT(id1 != id2, "IDs should be different");
+
+    /* Focus widget1, set some state */
+    cc_focus(id1);
+    ASSERT(cc_focused_id() == id1, "Widget1 should be focused");
+
+    /* Focus widget2 */
+    cc_focus(id2);
+    ASSERT(cc_focused_id() == id2, "Widget2 should be focused");
+
+    PASS();
+}
+
+/* ============================================================================
+ * ID Stack Tests
+ * ============================================================================ */
+
+static void test_id_stack_basic(void) {
+    TEST(id_stack_basic);
+
+    cc_init();
+    cc_frame_begin();
+
+    /* Same string without stack = same ID */
+    uint32_t id1 = CC_ID("button");
+    uint32_t id2 = CC_ID("button");
+    ASSERT(id1 == id2, "Same string should produce same ID");
+
+    /* Push an integer ID */
+    cc_push_id(1);
+    uint32_t id3 = CC_ID("button");
+    ASSERT(id3 != id1, "ID should change with stack");
+
+    /* Different stack value = different ID */
+    cc_pop_id();
+    cc_push_id(2);
+    uint32_t id4 = CC_ID("button");
+    ASSERT(id4 != id1, "Different stack value should produce different ID");
+    ASSERT(id4 != id3, "Different stack values should produce different IDs");
+
+    cc_pop_id();
+
+    PASS();
+}
+
+static void test_id_stack_nested(void) {
+    TEST(id_stack_nested);
+
+    cc_init();
+    cc_frame_begin();
+
+    uint32_t base = CC_ID("item");
+
+    cc_push_id(0);
+    uint32_t level1 = CC_ID("item");
+    ASSERT(level1 != base, "Level 1 should differ from base");
+
+    cc_push_id(0);
+    uint32_t level2 = CC_ID("item");
+    ASSERT(level2 != level1, "Level 2 should differ from level 1");
+    ASSERT(level2 != base, "Level 2 should differ from base");
+
+    cc_pop_id();
+    uint32_t back_to_1 = CC_ID("item");
+    ASSERT(back_to_1 == level1, "Should be back to level 1");
+
+    cc_pop_id();
+    uint32_t back_to_base = CC_ID("item");
+    ASSERT(back_to_base == base, "Should be back to base");
+
+    PASS();
+}
+
+static void test_id_stack_loop_pattern(void) {
+    TEST(id_stack_loop_pattern);
+
+    cc_init();
+    cc_frame_begin();
+
+    /* Simulate the loop pattern from Dear ImGui */
+    uint32_t ids[3];
+    for (int i = 0; i < 3; i++) {
+        cc_push_id(i);
+        ids[i] = CC_ID("button");
+        cc_pop_id();
+    }
+
+    /* All IDs should be unique */
+    ASSERT(ids[0] != ids[1], "Loop IDs should be unique (0 vs 1)");
+    ASSERT(ids[1] != ids[2], "Loop IDs should be unique (1 vs 2)");
+    ASSERT(ids[0] != ids[2], "Loop IDs should be unique (0 vs 2)");
+
+    PASS();
+}
+
+static void test_id_stack_reset_each_frame(void) {
+    TEST(id_stack_reset_each_frame);
+
+    cc_init();
+
+    /* Frame 1: push some IDs */
+    cc_frame_begin();
+    cc_push_id(1);
+    cc_push_id(2);
+    /* Don't pop - stack should reset on next frame */
+    cc_frame_end(0.016f);
+
+    /* Frame 2: stack should be empty */
+    cc_frame_begin();
+    uint32_t id = CC_ID("test");
+    uint32_t expected = cc_hash_id("test");  /* No stack contribution */
+    ASSERT(id == expected, "Stack should reset each frame");
+
+    PASS();
+}
+
+static void test_id_push_string(void) {
+    TEST(id_push_string);
+
+    cc_init();
+    cc_frame_begin();
+
+    uint32_t base = CC_ID("item");
+
+    cc_push_id_str("context_a");
+    uint32_t with_a = CC_ID("item");
+
+    cc_pop_id();
+    cc_push_id_str("context_b");
+    uint32_t with_b = CC_ID("item");
+
+    ASSERT(with_a != base, "String push should change ID");
+    ASSERT(with_b != base, "String push should change ID");
+    ASSERT(with_a != with_b, "Different strings should produce different IDs");
+
+    cc_pop_id();
+
+    PASS();
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -886,6 +1076,17 @@ int main(void) {
     test_tab_key_handling();
     test_tab_empty_focusables();
     test_focusable_reset_each_frame();
+
+    printf("\nWidget State Store Tests:\n");
+    test_widget_state_persistence();
+    test_widget_state_isolation();
+
+    printf("\nID Stack Tests:\n");
+    test_id_stack_basic();
+    test_id_stack_nested();
+    test_id_stack_loop_pattern();
+    test_id_stack_reset_each_frame();
+    test_id_push_string();
 
     printf("\n======================================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

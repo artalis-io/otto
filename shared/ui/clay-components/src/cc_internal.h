@@ -11,6 +11,34 @@
 #include "cc_common.h"
 
 /* ============================================================================
+ * Widget State Store
+ * ============================================================================ */
+
+#define CC_WIDGET_STORE_SIZE 256  /* Hash table size (power of 2) */
+#define CC_ID_STACK_SIZE 32       /* Max nesting depth for ID stack */
+
+/**
+ * Per-widget persistent state.
+ * Stored in hash table keyed by widget ID.
+ */
+typedef struct {
+    uint32_t id;                /* Widget ID (0 = empty slot) */
+
+    /* Text input state */
+    int cursor;                 /* Cursor position */
+    int selection_start;        /* Selection anchor (-1 = no selection) */
+    float cursor_blink;         /* Blink timer */
+    bool cursor_visible;        /* Current blink state */
+
+    /* Scroll state (for future scroll containers) */
+    float scroll_x;
+    float scroll_y;
+
+    /* Generic state */
+    bool open;                  /* For collapsibles, dropdowns, etc. */
+} CcWidgetState;
+
+/* ============================================================================
  * Global State Structure
  * ============================================================================ */
 
@@ -18,12 +46,6 @@
 
 typedef struct {
     uint32_t focused_id;        /* Currently focused element (0 = none) */
-
-    /* Text input state for focused element */
-    int cursor;                 /* Cursor position */
-    int selection_start;        /* Selection anchor (-1 = no selection) */
-    float cursor_blink;         /* Blink timer */
-    bool cursor_visible;        /* Current blink state */
 
     /* Current frame state */
     uint32_t clicked_id;        /* Element clicked this frame */
@@ -42,10 +64,20 @@ typedef struct {
     /* Tab navigation: focusable elements registered this frame */
     uint32_t focusables[CC_MAX_FOCUSABLES];
     int focusable_count;
+
+    /* Widget state store (hash table) */
+    CcWidgetState widgets[CC_WIDGET_STORE_SIZE];
+
+    /* ID stack for stable identity in loops */
+    uint32_t id_stack[CC_ID_STACK_SIZE];
+    int id_stack_depth;
 } CcState;
 
 /* Get pointer to global state (defined in cc_common.c) */
 CcState* cc_get_state(void);
+
+/* Get or create widget state for given ID */
+CcWidgetState* cc_widget_state(uint32_t id);
 
 /* Shared utilities are in cc_common.h: cc_min_i, cc_max_i, cc_clamp_i, etc. */
 
