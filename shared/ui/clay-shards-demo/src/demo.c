@@ -102,17 +102,23 @@ static const struct {
 
 static void render_zoom_controls(void) {
     /* Square buttons for zoom +/-
-     * text_offset_y pushes text down to visually center glyphs,
-     * since font metrics position based on baseline, not visual center */
-    const CsButtonStyle zoom_btn = {
+     * Each glyph needs different offset due to different vertical bounds:
+     * "+" spans -0.078 to 0.703, "-" spans 0.14 to 0.39 */
+    const CsButtonStyle zoom_plus = {
         .variant = CS_BTN_DEFAULT,
         .font_size = 18,
-        .padding_x = 0,
-        .padding_y = 0,
         .corner_radius = 4,
         .width = 36,
         .height = 36,
-        .text_offset_y = 3
+        .text_offset_y = -2
+    };
+    const CsButtonStyle zoom_minus = {
+        .variant = CS_BTN_DEFAULT,
+        .font_size = 18,
+        .corner_radius = 4,
+        .width = 36,
+        .height = 36,
+        .text_offset_y = -5
     };
 
     CLAY(CLAY_ID("ZoomControls"), {
@@ -123,10 +129,10 @@ static void render_zoom_controls(void) {
         },
         .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 2 }
     }) {
-        if (cs_button(CS_ID("zoom_in"), "+", &zoom_btn).clicked) {
+        if (cs_button(CS_ID("zoom_in"), "+", &zoom_plus).clicked) {
             g_app.map.zoom = cs_map_scroll(g_app.map.zoom, 1, 0, 19);
         }
-        if (cs_button(CS_ID("zoom_out"), "-", &zoom_btn).clicked) {
+        if (cs_button(CS_ID("zoom_out"), "-", &zoom_minus).clicked) {
             g_app.map.zoom = cs_map_scroll(g_app.map.zoom, -1, 0, 19);
         }
     }
@@ -174,7 +180,7 @@ static void render_info_panel(void) {
         .cornerRadius = CLAY_CORNER_RADIUS(8),
         .border = { .width = {1, 1, 1, 1}, .color = THEME.border }
     }) {
-        CLAY_TEXT(CLAY_STRING("Clay Map Viewer"), CLAY_TEXT_CONFIG({ .fontSize = 16, .textColor = THEME.text }));
+        CLAY_TEXT(CLAY_STRING("ClayShards Map"), CLAY_TEXT_CONFIG({ .fontSize = 16, .textColor = THEME.text }));
 
         CLAY(CLAY_ID("CoordRow"), { .layout = { .layoutDirection = CLAY_LEFT_TO_RIGHT, .childGap = 8 } }) {
             CLAY_TEXT(CLAY_STRING("Center:"), CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
@@ -204,7 +210,10 @@ static void render_tile_info(void) {
             .attachPoints = { .element = CLAY_ATTACH_POINT_LEFT_BOTTOM, .parent = CLAY_ATTACH_POINT_LEFT_BOTTOM },
             .offset = {16, -16}
         },
-        .layout = { .padding = CLAY_PADDING_ALL(8) },
+        .layout = {
+            .padding = CLAY_PADDING_ALL(8),
+            .childAlignment = { .y = CLAY_ALIGN_Y_CENTER }
+        },
         .backgroundColor = THEME.bg_overlay,
         .cornerRadius = CLAY_CORNER_RADIUS(4)
     }) {
@@ -277,6 +286,7 @@ EXPORT void map_set_zoom(int zoom) {
 EXPORT double map_get_lat(void) { return g_app.map.lat; }
 EXPORT double map_get_lon(void) { return g_app.map.lon; }
 EXPORT int map_get_zoom(void) { return g_app.map.zoom; }
+EXPORT double map_get_visual_zoom(void) { return cs_map_get_visual_zoom(g_app.map.component_id); }
 EXPORT int map_get_layer(void) { return g_app.panels.layer_type; }
 
 /* ============================================================================
@@ -337,6 +347,9 @@ EXPORT int map_handle_click(float x, float y) {
 
 EXPORT int map_frame(float dt) {
     if (!cs_clay_is_initialized()) return -1;
+
+    /* Update smooth zoom animation */
+    cs_map_update_zoom_animation(g_app.map.component_id, g_app.map.zoom, dt);
 
     cs_clay_begin_frame();
     render_ui();

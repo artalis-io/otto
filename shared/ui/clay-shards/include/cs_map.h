@@ -122,6 +122,19 @@ bool cs_map_is_dragging(uint32_t id);
 /* Handle scroll/zoom - returns clamped new zoom level */
 int cs_map_scroll(int current_zoom, int delta, int min_zoom, int max_zoom);
 
+/* ============================================================================
+ * Smooth Zoom Animation
+ * ============================================================================ */
+
+/* Update zoom animation (call each frame with delta time) */
+void cs_map_update_zoom_animation(uint32_t id, int target_zoom, float dt);
+
+/* Get current visual zoom (float for smooth animation) */
+double cs_map_get_visual_zoom(uint32_t id);
+
+/* Check if zoom animation is in progress */
+bool cs_map_is_zoom_animating(uint32_t id);
+
 #ifdef __cplusplus
 }
 #endif

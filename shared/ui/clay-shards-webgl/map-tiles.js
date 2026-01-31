@@ -85,39 +85,60 @@ export class MapTileRenderer {
     constructor(renderer, tileCache) {
         this.renderer = renderer;
         this.tileCache = tileCache;
-        this.tileSize = 256;
+        this.baseTileSize = 256;
     }
 
-    render(lat, lon, zoom, layerType, width, height, projMatrix) {
-        const centerTileX = this.lonToTileX(lon, zoom);
-        const centerTileY = this.latToTileY(lat, zoom);
+    /**
+     * Render map tiles with smooth zoom support
+     * @param {number} lat - Center latitude
+     * @param {number} lon - Center longitude
+     * @param {number} visualZoom - Visual zoom level (can be fractional for smooth animation)
+     * @param {number} layerType - Tile layer type
+     * @param {number} width - Viewport width
+     * @param {number} height - Viewport height
+     * @param {Float32Array} projMatrix - Projection matrix
+     */
+    render(lat, lon, visualZoom, layerType, width, height, projMatrix) {
+        // Use floor of visual zoom for tile fetching
+        const tileZoom = Math.floor(visualZoom);
+        // Scale factor for smooth zoom (1.0 at integer zoom, up to 2.0 approaching next level)
+        const zoomFraction = visualZoom - tileZoom;
+        const scale = Math.pow(2, zoomFraction);
+        const tileSize = this.baseTileSize * scale;
 
-        const tilesX = Math.ceil(width / this.tileSize) + 2;
-        const tilesY = Math.ceil(height / this.tileSize) + 2;
+        // Calculate center tile position at the tile zoom level
+        const centerTileX = this.lonToTileX(lon, tileZoom);
+        const centerTileY = this.latToTileY(lat, tileZoom);
+
+        // How many tiles needed to cover the viewport (accounting for scale)
+        const tilesX = Math.ceil(width / tileSize) + 2;
+        const tilesY = Math.ceil(height / tileSize) + 2;
 
         const startTileX = Math.floor(centerTileX - tilesX / 2);
         const startTileY = Math.floor(centerTileY - tilesY / 2);
+
+        const maxTile = Math.pow(2, tileZoom);
 
         for (let dy = 0; dy < tilesY; dy++) {
             for (let dx = 0; dx < tilesX; dx++) {
                 const tileX = startTileX + dx;
                 const tileY = startTileY + dy;
 
-                const maxTile = Math.pow(2, zoom);
                 if (tileY < 0 || tileY >= maxTile) continue;
 
                 const wrappedTileX = ((tileX % maxTile) + maxTile) % maxTile;
 
-                const screenX = width / 2 + (tileX - centerTileX) * this.tileSize;
-                const screenY = height / 2 + (tileY - centerTileY) * this.tileSize;
+                // Screen position with scaled tile size
+                const screenX = width / 2 + (tileX - centerTileX) * tileSize;
+                const screenY = height / 2 + (tileY - centerTileY) * tileSize;
 
-                const tile = this.tileCache.getTile(zoom, wrappedTileX, tileY, layerType);
+                const tile = this.tileCache.getTile(tileZoom, wrappedTileX, tileY, layerType);
 
                 if (tile.loaded && tile.texture) {
                     this.renderer.renderTexture(
                         tile.texture,
                         screenX, screenY,
-                        this.tileSize, this.tileSize,
+                        tileSize, tileSize,
                         projMatrix
                     );
                 }
