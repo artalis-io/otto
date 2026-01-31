@@ -54,11 +54,122 @@
 #define PBF_RELATION_TYPES              10
 
 /* ============================================================================
+ * Node Coordinate Cache (Hash Table)
+ *
+ * OSM ways only store node ID references, not coordinates. To compute
+ * centroids for streets, we cache all node coordinates during parsing.
+ * ============================================================================ */
+
+typedef struct {
+    int64_t id;         /* Node ID (0 = empty slot) */
+    int32_t lat_fixed;  /* Latitude as fixed point (1e-7 degrees) */
+    int32_t lon_fixed;  /* Longitude as fixed point (1e-7 degrees) */
+} LCNodeEntry;
+
+typedef struct {
+    LCNodeEntry *entries;
+    size_t capacity;
+    size_t count;
+} LCNodeCache;
+
+static LCNodeCache *node_cache_create(size_t initial_capacity)
+{
+    LCNodeCache *cache = calloc(1, sizeof(LCNodeCache));
+    if (!cache) return NULL;
+
+    /* Round up to power of 2 for efficient modulo */
+    size_t cap = 1;
+    while (cap < initial_capacity) cap *= 2;
+
+    cache->entries = calloc(cap, sizeof(LCNodeEntry));
+    if (!cache->entries) {
+        free(cache);
+        return NULL;
+    }
+    cache->capacity = cap;
+    cache->count = 0;
+    return cache;
+}
+
+static void node_cache_free(LCNodeCache *cache)
+{
+    if (cache) {
+        free(cache->entries);
+        free(cache);
+    }
+}
+
+/* FNV-1a hash for node IDs */
+static size_t node_hash(int64_t id, size_t capacity)
+{
+    uint64_t h = 14695981039346656037ULL;
+    h ^= (uint64_t)id;
+    h *= 1099511628211ULL;
+    return (size_t)(h & (capacity - 1));  /* capacity is power of 2 */
+}
+
+static int node_cache_insert(LCNodeCache *cache, int64_t id, double lat, double lon)
+{
+    /* Grow if load factor > 0.7 */
+    if (cache->count * 10 > cache->capacity * 7) {
+        size_t new_cap = cache->capacity * 2;
+        LCNodeEntry *new_entries = calloc(new_cap, sizeof(LCNodeEntry));
+        if (!new_entries) return 0;
+
+        /* Rehash all entries */
+        for (size_t i = 0; i < cache->capacity; i++) {
+            if (cache->entries[i].id != 0) {
+                size_t idx = node_hash(cache->entries[i].id, new_cap);
+                while (new_entries[idx].id != 0) {
+                    idx = (idx + 1) & (new_cap - 1);
+                }
+                new_entries[idx] = cache->entries[i];
+            }
+        }
+        free(cache->entries);
+        cache->entries = new_entries;
+        cache->capacity = new_cap;
+    }
+
+    /* Insert with linear probing */
+    size_t idx = node_hash(id, cache->capacity);
+    while (cache->entries[idx].id != 0) {
+        if (cache->entries[idx].id == id) return 1;  /* Already exists */
+        idx = (idx + 1) & (cache->capacity - 1);
+    }
+
+    cache->entries[idx].id = id;
+    cache->entries[idx].lat_fixed = (int32_t)(lat * 1e7);
+    cache->entries[idx].lon_fixed = (int32_t)(lon * 1e7);
+    cache->count++;
+    return 1;
+}
+
+static int node_cache_lookup(const LCNodeCache *cache, int64_t id, double *lat, double *lon)
+{
+    if (!cache || cache->count == 0) return 0;
+
+    size_t idx = node_hash(id, cache->capacity);
+    size_t start = idx;
+    while (cache->entries[idx].id != 0) {
+        if (cache->entries[idx].id == id) {
+            *lat = cache->entries[idx].lat_fixed * 1e-7;
+            *lon = cache->entries[idx].lon_fixed * 1e-7;
+            return 1;
+        }
+        idx = (idx + 1) & (cache->capacity - 1);
+        if (idx == start) break;  /* Full circle */
+    }
+    return 0;
+}
+
+/* ============================================================================
  * Context Structure
  * ============================================================================ */
 
 struct LCPBFContext {
     LCEntityStore *entities;
+    LCNodeCache *node_cache;
     SHBBox bounds;
     LCPBFStats stats;
     LCPBFOptions opts;
@@ -186,6 +297,15 @@ LCPBFContext *lc_pbf_context_create(void)
         return NULL;
     }
 
+    /* Create node cache for way coordinate lookups
+     * Initial size of 1M entries, will grow as needed */
+    ctx->node_cache = node_cache_create(1024 * 1024);
+    if (!ctx->node_cache) {
+        lc_entity_store_free(ctx->entities);
+        free(ctx);
+        return NULL;
+    }
+
     sh_bbox_init(&ctx->bounds);
     lc_pbf_default_options(&ctx->opts);
 
@@ -196,6 +316,7 @@ void lc_pbf_context_free(LCPBFContext *ctx)
 {
     if (!ctx) return;
     lc_entity_store_free(ctx->entities);
+    node_cache_free(ctx->node_cache);
     free(ctx);
 }
 
@@ -508,6 +629,9 @@ static void parse_dense_nodes(LCPBFContext *ctx, const uint8_t *data, size_t len
         double lat = (hdr->lat_offset + (lats[i] * hdr->granularity)) * 1e-9;
         double lon = (hdr->lon_offset + (lons[i] * hdr->granularity)) * 1e-9;
 
+        /* Cache ALL node coordinates for way centroid calculation */
+        node_cache_insert(ctx->node_cache, ids[i], lat, lon);
+
         /* Collect tags for this node (keys_vals uses unsigned string table indices) */
         uint64_t node_keys[64], node_vals[64];
         size_t tag_count = 0;
@@ -544,7 +668,7 @@ static void parse_dense_nodes(LCPBFContext *ctx, const uint8_t *data, size_t len
 static void parse_way(LCPBFContext *ctx, const uint8_t *data, size_t len,
                       const SHStringTable *st, const SHBlockHeader *hdr)
 {
-    (void)hdr;  /* Ways need node coords - we'll just use centroid=0,0 for now */
+    (void)hdr;
 
     const uint8_t *ptr = data;
     const uint8_t *end = data + len;
@@ -553,36 +677,84 @@ static void parse_way(LCPBFContext *ctx, const uint8_t *data, size_t len,
     uint64_t keys[256], vals[256];  /* Unsigned - string table indices */
     size_t key_count = 0, val_count = 0;
 
-    while (ptr < end) {
+    /* Node refs for centroid calculation */
+    int64_t *refs = NULL;
+    size_t ref_count = 0;
+
+    /* First pass: get sizes */
+    const uint8_t *p = ptr;
+    while (p < end) {
         uint32_t field, wire;
-        int n = sh_pb_read_tag(ptr, end - ptr, &field, &wire);
+        int n = sh_pb_read_tag(p, end - p, &field, &wire);
         if (n <= 0) break;
-        ptr += n;
+        p += n;
+
+        if (wire == SH_PB_WIRE_LENGTH_DELIM) {
+            uint64_t field_len;
+            n = sh_pb_read_varint(p, end - p, &field_len);
+            if (n <= 0) break;
+            p += n;
+            if (field == PBF_WAY_REFS) {
+                ref_count = sh_pb_count_packed_varint(p, field_len);
+            }
+            p += field_len;
+        } else if (wire == SH_PB_WIRE_VARINT) {
+            uint64_t v;
+            n = sh_pb_read_varint(p, end - p, &v);
+            if (n <= 0) break;
+            p += n;
+        } else {
+            n = sh_pb_skip_field(p, end - p, wire);
+            if (n <= 0) break;
+            p += n;
+        }
+    }
+
+    /* Allocate refs array if needed */
+    if (ref_count > 0) {
+        refs = malloc(ref_count * sizeof(int64_t));
+    }
+
+    /* Second pass: read data */
+    p = ptr;
+    while (p < end) {
+        uint32_t field, wire;
+        int n = sh_pb_read_tag(p, end - p, &field, &wire);
+        if (n <= 0) break;
+        p += n;
 
         if (field == PBF_WAY_ID && wire == SH_PB_WIRE_VARINT) {
             uint64_t v;
-            n = sh_pb_read_varint(ptr, end - ptr, &v);
+            n = sh_pb_read_varint(p, end - p, &v);
             if (n <= 0) break;
-            ptr += n;
+            p += n;
             way_id = v;
         } else if (field == PBF_WAY_KEYS && wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t field_len;
-            n = sh_pb_read_varint(ptr, end - ptr, &field_len);
+            n = sh_pb_read_varint(p, end - p, &field_len);
             if (n <= 0) break;
-            ptr += n;
-            key_count = sh_pb_read_packed_varint_array(ptr, field_len, keys, 256);
-            ptr += field_len;
+            p += n;
+            key_count = sh_pb_read_packed_varint_array(p, field_len, keys, 256);
+            p += field_len;
         } else if (field == PBF_WAY_VALS && wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t field_len;
-            n = sh_pb_read_varint(ptr, end - ptr, &field_len);
+            n = sh_pb_read_varint(p, end - p, &field_len);
             if (n <= 0) break;
-            ptr += n;
-            val_count = sh_pb_read_packed_varint_array(ptr, field_len, vals, 256);
-            ptr += field_len;
+            p += n;
+            val_count = sh_pb_read_packed_varint_array(p, field_len, vals, 256);
+            p += field_len;
+        } else if (field == PBF_WAY_REFS && wire == SH_PB_WIRE_LENGTH_DELIM && refs) {
+            uint64_t field_len;
+            n = sh_pb_read_varint(p, end - p, &field_len);
+            if (n <= 0) break;
+            p += n;
+            sh_pb_read_packed_svarint_array(p, field_len, refs, ref_count);
+            sh_pb_delta_decode_i64(refs, ref_count);  /* Refs are delta-encoded */
+            p += field_len;
         } else {
-            n = sh_pb_skip_field(ptr, end - ptr, wire);
+            n = sh_pb_skip_field(p, end - p, wire);
             if (n <= 0) break;
-            ptr += n;
+            p += n;
         }
     }
 
@@ -592,13 +764,38 @@ static void parse_way(LCPBFContext *ctx, const uint8_t *data, size_t len,
         ParsedTags tags;
         parse_tags(st, keys, vals, key_count, &tags);
 
-        /* For ways, we need coordinates from node refs - skip for now,
-           would need a node cache. Just record with 0,0 coordinates. */
-        /* TODO: Build node coordinate cache for ways */
-        if (tags.name || (tags.addr_housenumber && tags.addr_street)) {
-            add_entity_from_tags(ctx, way_id, LC_ENTITY_WAY, &tags, 0.0, 0.0);
+        /* Compute centroid from node refs */
+        double lat = 0.0, lon = 0.0;
+        int found_coords = 0;
+
+        if (refs && ref_count > 0 && ctx->node_cache) {
+            double sum_lat = 0.0, sum_lon = 0.0;
+            size_t coord_count = 0;
+
+            for (size_t i = 0; i < ref_count; i++) {
+                double node_lat, node_lon;
+                if (node_cache_lookup(ctx->node_cache, refs[i], &node_lat, &node_lon)) {
+                    sum_lat += node_lat;
+                    sum_lon += node_lon;
+                    coord_count++;
+                }
+            }
+
+            if (coord_count > 0) {
+                lat = sum_lat / coord_count;
+                lon = sum_lon / coord_count;
+                found_coords = 1;
+            }
         }
+
+        if (tags.name || (tags.addr_housenumber && tags.addr_street)) {
+            add_entity_from_tags(ctx, way_id, LC_ENTITY_WAY, &tags, lat, lon);
+        }
+
+        (void)found_coords;  /* Suppress unused warning */
     }
+
+    free(refs);
 }
 
 /* ============================================================================
