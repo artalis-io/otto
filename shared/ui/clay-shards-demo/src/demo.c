@@ -101,7 +101,9 @@ static const struct {
  * ============================================================================ */
 
 static void render_zoom_controls(void) {
-    /* Square buttons for zoom +/- */
+    /* Square buttons for zoom +/-
+     * text_offset_y pushes text down to visually center glyphs,
+     * since font metrics position based on baseline, not visual center */
     const CsButtonStyle zoom_btn = {
         .variant = CS_BTN_DEFAULT,
         .font_size = 18,
@@ -109,7 +111,8 @@ static void render_zoom_controls(void) {
         .padding_y = 0,
         .corner_radius = 4,
         .width = 36,
-        .height = 36
+        .height = 36,
+        .text_offset_y = 3
     };
 
     CLAY(CLAY_ID("ZoomControls"), {

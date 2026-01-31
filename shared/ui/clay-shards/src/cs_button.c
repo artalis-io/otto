@@ -118,6 +118,15 @@ CsButtonResult cs_button(
                       style->margin.left > 0 || style->margin.right > 0;
     bool has_align = style->align != CS_ALIGN_AUTO;
 
+    /* Text offset for icon buttons (positive = down) */
+    bool has_text_offset = (style->text_offset_y != 0.0f);
+    uint16_t text_pad_top = 0, text_pad_bottom = 0;
+    if (style->text_offset_y > 0) {
+        text_pad_top = (uint16_t)style->text_offset_y;
+    } else if (style->text_offset_y < 0) {
+        text_pad_bottom = (uint16_t)(-style->text_offset_y);
+    }
+
     if (has_margin || has_align) {
         /* With wrapper for margin/alignment */
         Clay_ElementId wrapper_id = (Clay_ElementId){.id = id + 0x10000, .stringId = {0}};
@@ -139,21 +148,47 @@ CsButtonResult cs_button(
             }
         }) {
             CLAY(clay_id, btn_config) {
+                if (has_text_offset) {
+                    Clay_ElementId text_wrapper_id = (Clay_ElementId){.id = id + 0x20000, .stringId = {0}};
+                    CLAY(text_wrapper_id, {
+                        .layout = { .padding = { .top = text_pad_top, .bottom = text_pad_bottom } }
+                    }) {
+                        Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
+                        CLAY_TEXT(label_str, CLAY_TEXT_CONFIG({
+                            .fontSize = (uint16_t)style->font_size,
+                            .textColor = text_color
+                        }));
+                    }
+                } else {
+                    Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
+                    CLAY_TEXT(label_str, CLAY_TEXT_CONFIG({
+                        .fontSize = (uint16_t)style->font_size,
+                        .textColor = text_color
+                    }));
+                }
+            }
+        }
+    } else {
+        /* No wrapper needed */
+        CLAY(clay_id, btn_config) {
+            if (has_text_offset) {
+                Clay_ElementId text_wrapper_id = (Clay_ElementId){.id = id + 0x20000, .stringId = {0}};
+                CLAY(text_wrapper_id, {
+                    .layout = { .padding = { .top = text_pad_top, .bottom = text_pad_bottom } }
+                }) {
+                    Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
+                    CLAY_TEXT(label_str, CLAY_TEXT_CONFIG({
+                        .fontSize = (uint16_t)style->font_size,
+                        .textColor = text_color
+                    }));
+                }
+            } else {
                 Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
                 CLAY_TEXT(label_str, CLAY_TEXT_CONFIG({
                     .fontSize = (uint16_t)style->font_size,
                     .textColor = text_color
                 }));
             }
-        }
-    } else {
-        /* No wrapper needed */
-        CLAY(clay_id, btn_config) {
-            Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
-            CLAY_TEXT(label_str, CLAY_TEXT_CONFIG({
-                .fontSize = (uint16_t)style->font_size,
-                .textColor = text_color
-            }));
         }
     }
 
