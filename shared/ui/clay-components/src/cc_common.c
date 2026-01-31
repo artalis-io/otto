@@ -6,7 +6,8 @@
  * WASM exports (add to Makefile EXPORTED_FUNCTIONS):
  *   "_cc_focused_id","_cc_cursor_pos","_cc_selection_start","_cc_cursor_visible",
  *   "_cc_focused_bounds","_cc_focused_text","_cc_focused_text_len",
- *   "_cc_key_down","_cc_key_char","_cc_blur","_cc_set_pending_click"
+ *   "_cc_key_down","_cc_key_char","_cc_blur","_cc_set_pending_click",
+ *   "_cc_push_id","_cc_pop_id"
  */
 
 #include "cc_internal.h"
@@ -25,10 +26,6 @@
 
 static CcState g_cc = {
     .focused_id = 0,
-    .cursor = 0,
-    .selection_start = -1,
-    .cursor_blink = 0.0f,
-    .cursor_visible = true,
     .pending_click = false,
 };
 
@@ -38,7 +35,47 @@ CcState* cc_get_state(void) {
 }
 
 /* ============================================================================
- * ID Generation
+ * Widget State Store (Hash Table)
+ * ============================================================================ */
+
+/**
+ * Get or create widget state for given ID.
+ * Uses open-addressed hash table with linear probing.
+ */
+CcWidgetState* cc_widget_state(uint32_t id) {
+    if (id == 0) return NULL;
+
+    uint32_t mask = CC_WIDGET_STORE_SIZE - 1;
+    uint32_t slot = id & mask;
+
+    /* Linear probe to find existing or empty slot */
+    for (int i = 0; i < CC_WIDGET_STORE_SIZE; i++) {
+        uint32_t idx = (slot + i) & mask;
+        CcWidgetState *w = &g_cc.widgets[idx];
+
+        if (w->id == id) {
+            return w;  /* Found existing */
+        }
+        if (w->id == 0) {
+            /* Empty slot - initialize and return */
+            w->id = id;
+            w->cursor = 0;
+            w->selection_start = -1;
+            w->cursor_blink = 0.0f;
+            w->cursor_visible = true;
+            w->scroll_x = 0.0f;
+            w->scroll_y = 0.0f;
+            w->open = false;
+            return w;
+        }
+    }
+
+    /* Table full - return first slot as fallback (shouldn't happen with 256 slots) */
+    return &g_cc.widgets[slot & mask];
+}
+
+/* ============================================================================
+ * ID Generation (Dear ImGui-style ID Stack)
  * ============================================================================ */
 
 uint32_t cc_hash_id(const char *str) {
@@ -51,14 +88,45 @@ uint32_t cc_hash_id(const char *str) {
     return hash ? hash : 1; /* Never return 0 */
 }
 
+static uint32_t cc_hash_combine(uint32_t seed, uint32_t value) {
+    /* Combine two hashes (FNV-style) */
+    seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    return seed ? seed : 1;
+}
+
+CC_EXPORT void cc_push_id(int int_id) {
+    if (g_cc.id_stack_depth >= CC_ID_STACK_SIZE) return;
+    g_cc.id_stack[g_cc.id_stack_depth++] = (uint32_t)int_id;
+}
+
+void cc_push_id_str(const char *str_id) {
+    if (g_cc.id_stack_depth >= CC_ID_STACK_SIZE) return;
+    g_cc.id_stack[g_cc.id_stack_depth++] = cc_hash_id(str_id);
+}
+
+CC_EXPORT void cc_pop_id(void) {
+    if (g_cc.id_stack_depth > 0) {
+        g_cc.id_stack_depth--;
+    }
+}
+
+uint32_t cc_get_id(const char *str) {
+    uint32_t id = cc_hash_id(str);
+
+    /* Combine with ID stack */
+    for (int i = 0; i < g_cc.id_stack_depth; i++) {
+        id = cc_hash_combine(id, g_cc.id_stack[i]);
+    }
+
+    return id;
+}
+
 /* ============================================================================
  * Core API
  * ============================================================================ */
 
 void cc_init(void) {
     memset(&g_cc, 0, sizeof(g_cc));
-    g_cc.selection_start = -1;
-    g_cc.cursor_visible = true;
 }
 
 void cc_frame_begin(void) {
@@ -71,6 +139,9 @@ void cc_frame_begin(void) {
 
     /* Reset focusable registry for this frame */
     g_cc.focusable_count = 0;
+
+    /* Reset ID stack each frame (safety) */
+    g_cc.id_stack_depth = 0;
 }
 
 void cc_frame_end(float dt) {
@@ -78,12 +149,15 @@ void cc_frame_end(float dt) {
     g_cc.pending_click = false;
     g_cc.pending_enter = false;
 
-    /* Update cursor blink */
+    /* Update cursor blink for focused widget */
     if (g_cc.focused_id != 0) {
-        g_cc.cursor_blink += dt;
-        if (g_cc.cursor_blink >= CC_CURSOR_BLINK_PERIOD) {
-            g_cc.cursor_blink = 0.0f;
-            g_cc.cursor_visible = !g_cc.cursor_visible;
+        CcWidgetState *w = cc_widget_state(g_cc.focused_id);
+        if (w) {
+            w->cursor_blink += dt;
+            if (w->cursor_blink >= CC_CURSOR_BLINK_PERIOD) {
+                w->cursor_blink = 0.0f;
+                w->cursor_visible = !w->cursor_visible;
+            }
         }
     }
 }
@@ -99,28 +173,39 @@ CC_EXPORT uint32_t cc_focused_id(void) {
 void cc_focus(uint32_t id) {
     if (g_cc.focused_id != id) {
         g_cc.focused_id = id;
-        g_cc.cursor = 0;
-        g_cc.selection_start = -1;
-        g_cc.cursor_visible = true;
-        g_cc.cursor_blink = 0.0f;
+        /* Reset cursor state for newly focused widget */
+        if (id != 0) {
+            CcWidgetState *w = cc_widget_state(id);
+            if (w) {
+                w->cursor = 0;
+                w->selection_start = -1;
+                w->cursor_visible = true;
+                w->cursor_blink = 0.0f;
+            }
+        }
     }
 }
 
 CC_EXPORT void cc_blur(void) {
     g_cc.focused_id = 0;
-    g_cc.selection_start = -1;
 }
 
 CC_EXPORT int cc_cursor_pos(void) {
-    return g_cc.cursor;
+    if (g_cc.focused_id == 0) return 0;
+    CcWidgetState *w = cc_widget_state(g_cc.focused_id);
+    return w ? w->cursor : 0;
 }
 
 CC_EXPORT int cc_selection_start(void) {
-    return g_cc.selection_start;
+    if (g_cc.focused_id == 0) return -1;
+    CcWidgetState *w = cc_widget_state(g_cc.focused_id);
+    return w ? w->selection_start : -1;
 }
 
 CC_EXPORT bool cc_cursor_visible(void) {
-    return g_cc.cursor_visible;
+    if (g_cc.focused_id == 0) return true;
+    CcWidgetState *w = cc_widget_state(g_cc.focused_id);
+    return w ? w->cursor_visible : true;
 }
 
 CC_EXPORT bool cc_focused_bounds(float *x, float *y, float *w, float *h) {
@@ -152,28 +237,28 @@ CC_EXPORT int cc_focused_text_len(void) {
  * Input Routing
  * ============================================================================ */
 
-static bool has_selection(void) {
-    return g_cc.selection_start >= 0 && g_cc.selection_start != g_cc.cursor;
+static bool has_selection(CcWidgetState *w) {
+    return w && w->selection_start >= 0 && w->selection_start != w->cursor;
 }
 
-static void delete_selection(char *text, int *len) {
-    if (!has_selection()) return;
+static void delete_selection(CcWidgetState *w, char *text, int *len) {
+    if (!has_selection(w)) return;
 
-    int start = cc_min_i(g_cc.cursor, g_cc.selection_start);
-    int end = cc_max_i(g_cc.cursor, g_cc.selection_start);
+    int start = cc_min_i(w->cursor, w->selection_start);
+    int end = cc_max_i(w->cursor, w->selection_start);
 
     /* Clamp to valid range to prevent underflow */
     if (start < 0) start = 0;
     if (end > *len) end = *len;
     if (start >= end) {
-        g_cc.selection_start = -1;
+        w->selection_start = -1;
         return;
     }
 
     memmove(&text[start], &text[end], *len - end + 1);
     *len -= (end - start);
-    g_cc.cursor = start;
-    g_cc.selection_start = -1;
+    w->cursor = start;
+    w->selection_start = -1;
 }
 
 CC_EXPORT bool cc_key_char(uint32_t char_code) {
@@ -182,19 +267,22 @@ CC_EXPORT bool cc_key_char(uint32_t char_code) {
     if (char_code < 32 || char_code > 126) return false;
     if (*g_cc.active_len >= g_cc.active_max_len - 1) return false;
 
+    CcWidgetState *w = cc_widget_state(g_cc.focused_id);
+    if (!w) return false;
+
     char *text = g_cc.active_text;
     int *len = g_cc.active_len;
 
-    delete_selection(text, len);
+    delete_selection(w, text, len);
 
     /* Insert character */
-    memmove(&text[g_cc.cursor + 1], &text[g_cc.cursor], *len - g_cc.cursor + 1);
-    text[g_cc.cursor] = (char)char_code;
-    g_cc.cursor++;
+    memmove(&text[w->cursor + 1], &text[w->cursor], *len - w->cursor + 1);
+    text[w->cursor] = (char)char_code;
+    w->cursor++;
     (*len)++;
 
-    g_cc.cursor_visible = true;
-    g_cc.cursor_blink = 0.0f;
+    w->cursor_visible = true;
+    w->cursor_blink = 0.0f;
 
     return true;
 }
@@ -225,65 +313,68 @@ CC_EXPORT bool cc_key_down(int key_code, bool shift, bool ctrl) {
     if (g_cc.focused_id == 0) return false;
     if (!g_cc.active_text || !g_cc.active_len) return false;
 
+    CcWidgetState *w = cc_widget_state(g_cc.focused_id);
+    if (!w) return false;
+
     char *text = g_cc.active_text;
     int *len = g_cc.active_len;
-    bool sel = has_selection();
+    bool sel = has_selection(w);
 
-    g_cc.cursor_visible = true;
-    g_cc.cursor_blink = 0.0f;
+    w->cursor_visible = true;
+    w->cursor_blink = 0.0f;
 
     switch (key_code) {
         case 37: /* Left */
             if (ctrl) {
-                while (g_cc.cursor > 0 && text[g_cc.cursor - 1] == ' ') g_cc.cursor--;
-                while (g_cc.cursor > 0 && text[g_cc.cursor - 1] != ' ') g_cc.cursor--;
+                while (w->cursor > 0 && text[w->cursor - 1] == ' ') w->cursor--;
+                while (w->cursor > 0 && text[w->cursor - 1] != ' ') w->cursor--;
             } else if (sel && !shift) {
-                g_cc.cursor = cc_min_i(g_cc.cursor, g_cc.selection_start);
-            } else if (g_cc.cursor > 0) {
-                g_cc.cursor--;
+                w->cursor = cc_min_i(w->cursor, w->selection_start);
+            } else if (w->cursor > 0) {
+                w->cursor--;
             }
-            if (!shift) g_cc.selection_start = -1;
-            else if (g_cc.selection_start < 0) g_cc.selection_start = g_cc.cursor + 1;
+            if (!shift) w->selection_start = -1;
+            else if (w->selection_start < 0) w->selection_start = w->cursor + 1;
             return true;
 
         case 39: /* Right */
             if (ctrl) {
-                while (g_cc.cursor < *len && text[g_cc.cursor] != ' ') g_cc.cursor++;
-                while (g_cc.cursor < *len && text[g_cc.cursor] == ' ') g_cc.cursor++;
+                while (w->cursor < *len && text[w->cursor] != ' ') w->cursor++;
+                while (w->cursor < *len && text[w->cursor] == ' ') w->cursor++;
             } else if (sel && !shift) {
-                g_cc.cursor = cc_max_i(g_cc.cursor, g_cc.selection_start);
-            } else if (g_cc.cursor < *len) {
-                g_cc.cursor++;
+                w->cursor = cc_max_i(w->cursor, w->selection_start);
+            } else if (w->cursor < *len) {
+                w->cursor++;
             }
-            if (!shift) g_cc.selection_start = -1;
-            else if (g_cc.selection_start < 0) g_cc.selection_start = g_cc.cursor - 1;
+            if (!shift) w->selection_start = -1;
+            else if (w->selection_start < 0) w->selection_start = w->cursor - 1;
             return true;
 
         case 36: /* Home */
-            if (shift && g_cc.selection_start < 0) g_cc.selection_start = g_cc.cursor;
-            g_cc.cursor = 0;
-            if (!shift) g_cc.selection_start = -1;
+            if (shift && w->selection_start < 0) w->selection_start = w->cursor;
+            w->cursor = 0;
+            if (!shift) w->selection_start = -1;
             return true;
 
         case 35: /* End */
-            if (shift && g_cc.selection_start < 0) g_cc.selection_start = g_cc.cursor;
-            g_cc.cursor = *len;
-            if (!shift) g_cc.selection_start = -1;
+            if (shift && w->selection_start < 0) w->selection_start = w->cursor;
+            w->cursor = *len;
+            if (!shift) w->selection_start = -1;
             return true;
 
         case 8: /* Backspace */
             if (sel) {
-                delete_selection(text, len);
-            } else if (g_cc.cursor > 0) {
+                delete_selection(w, text, len);
+            } else if (w->cursor > 0) {
                 if (ctrl) {
-                    int start = g_cc.cursor;
-                    while (g_cc.cursor > 0 && text[g_cc.cursor - 1] == ' ') g_cc.cursor--;
-                    while (g_cc.cursor > 0 && text[g_cc.cursor - 1] != ' ') g_cc.cursor--;
-                    memmove(&text[g_cc.cursor], &text[start], *len - start + 1);
-                    *len -= (start - g_cc.cursor);
+                    int start = w->cursor;
+                    while (w->cursor > 0 && text[w->cursor - 1] == ' ') w->cursor--;
+                    while (w->cursor > 0 && text[w->cursor - 1] != ' ') w->cursor--;
+                    memmove(&text[w->cursor], &text[start], *len - start + 1);
+                    *len -= (start - w->cursor);
                 } else {
-                    memmove(&text[g_cc.cursor - 1], &text[g_cc.cursor], *len - g_cc.cursor + 1);
-                    g_cc.cursor--;
+                    memmove(&text[w->cursor - 1], &text[w->cursor], *len - w->cursor + 1);
+                    w->cursor--;
                     (*len)--;
                 }
             }
@@ -291,16 +382,16 @@ CC_EXPORT bool cc_key_down(int key_code, bool shift, bool ctrl) {
 
         case 46: /* Delete */
             if (sel) {
-                delete_selection(text, len);
-            } else if (g_cc.cursor < *len) {
+                delete_selection(w, text, len);
+            } else if (w->cursor < *len) {
                 if (ctrl) {
-                    int end = g_cc.cursor;
+                    int end = w->cursor;
                     while (end < *len && text[end] == ' ') end++;
                     while (end < *len && text[end] != ' ') end++;
-                    memmove(&text[g_cc.cursor], &text[end], *len - end + 1);
-                    *len -= (end - g_cc.cursor);
+                    memmove(&text[w->cursor], &text[end], *len - end + 1);
+                    *len -= (end - w->cursor);
                 } else {
-                    memmove(&text[g_cc.cursor], &text[g_cc.cursor + 1], *len - g_cc.cursor);
+                    memmove(&text[w->cursor], &text[w->cursor + 1], *len - w->cursor);
                     (*len)--;
                 }
             }
@@ -308,8 +399,8 @@ CC_EXPORT bool cc_key_down(int key_code, bool shift, bool ctrl) {
 
         case 65: /* A - select all */
             if (ctrl) {
-                g_cc.selection_start = 0;
-                g_cc.cursor = *len;
+                w->selection_start = 0;
+                w->cursor = *len;
                 return true;
             }
             break;

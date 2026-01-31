@@ -63,14 +63,22 @@ typedef struct {
 #define CC_COLOR_BTN_GHOST_HOVER 55, 65, 81, 128   /* Gray 700 @ 50% */
 
 /* ============================================================================
- * ID Generation
+ * ID Generation (Dear ImGui-style ID stack)
  * ============================================================================ */
 
 /* Generate unique ID from string using FNV-1a hash */
 uint32_t cc_hash_id(const char *str);
 
-/* Convenience macro for component IDs */
-#define CC_ID(name) cc_hash_id(name)
+/* Push/pop ID stack for unique IDs in loops and dynamic content */
+void cc_push_id(int int_id);
+void cc_push_id_str(const char *str_id);
+void cc_pop_id(void);
+
+/* Get ID combining current stack with string (use CC_ID macro instead) */
+uint32_t cc_get_id(const char *str);
+
+/* Convenience macro for component IDs - incorporates ID stack */
+#define CC_ID(name) cc_get_id(name)
 
 /* ============================================================================
  * Core API
