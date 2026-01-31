@@ -47,6 +47,8 @@ typedef struct {
     CsMargin margin;    /* Outer spacing */
     CsAlign align;      /* Self-alignment within parent */
     bool grow;          /* Grow to fill available width */
+    /* Fine-tuning for icon buttons */
+    float text_offset_y; /* Vertical offset for text (positive = down) */
 } CsButtonStyle;
 
 /* Default style */
