@@ -8,6 +8,9 @@
 #include "ct_pbf.h"
 #include "ct_tile.h"
 #include "ct_lod.h"
+#include "sh_protobuf.h"
+#include "sh_inflate.h"
+#include "sh_pbf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,105 +23,7 @@
 #include <unistd.h>
 #endif
 
-/* Forward declarations */
-int ct_pb_read_varint(const uint8_t *buf, size_t len, uint64_t *value);
-int ct_pb_read_svarint(const uint8_t *buf, size_t len, int64_t *value);
-int ct_pb_read_tag(const uint8_t *buf, size_t len, uint32_t *field, uint32_t *wire);
-int ct_pb_skip_field(const uint8_t *buf, size_t len, uint32_t wire_type);
-int ct_pb_read_fixed32(const uint8_t *buf, size_t len, uint32_t *value);
-size_t ct_pb_read_packed_svarint_array(const uint8_t *buf, size_t len,
-                                       int64_t *out, size_t out_capacity);
-void ct_pb_delta_decode_i64(int64_t *arr, size_t count);
-CTStatus ct_inflate(const uint8_t *src, size_t src_len,
-                    uint8_t *dst, size_t dst_len, size_t *actual_len);
-
-/* ============================================================================
- * PBF Field Numbers
- * ============================================================================ */
-
-/* BlobHeader */
-#define PBF_BLOBHEADER_TYPE     1
-#define PBF_BLOBHEADER_DATASIZE 3
-
-/* Blob */
-#define PBF_BLOB_RAW            1
-#define PBF_BLOB_RAW_SIZE       2
-#define PBF_BLOB_ZLIB_DATA      3
-
-/* PrimitiveBlock */
-#define PBF_PRIMBLOCK_STRINGTABLE   1
-#define PBF_PRIMBLOCK_PRIMITIVEGROUP 2
-#define PBF_PRIMBLOCK_GRANULARITY   17
-#define PBF_PRIMBLOCK_LAT_OFFSET    19
-#define PBF_PRIMBLOCK_LON_OFFSET    20
-
-/* StringTable */
-#define PBF_STRINGTABLE_S       1
-
-/* PrimitiveGroup */
-#define PBF_PRIMGROUP_DENSE     2
-#define PBF_PRIMGROUP_WAYS      3
-
-/* DenseNodes */
-#define PBF_DENSE_ID            1
-#define PBF_DENSE_LAT           8
-#define PBF_DENSE_LON           9
-
-/* Way */
-#define PBF_WAY_ID              1
-#define PBF_WAY_KEYS            2
-#define PBF_WAY_VALS            3
-#define PBF_WAY_REFS            8
-
-/* ============================================================================
- * String Table
- * ============================================================================ */
-
-typedef struct {
-    char **strings;
-    size_t count;
-    size_t capacity;
-} CTStringTable;
-
-static void string_table_init(CTStringTable *st)
-{
-    st->strings = NULL;
-    st->count = 0;
-    st->capacity = 0;
-}
-
-static void string_table_free(CTStringTable *st)
-{
-    for (size_t i = 0; i < st->count; i++) {
-        free(st->strings[i]);
-    }
-    free(st->strings);
-    string_table_init(st);
-}
-
-static CTStatus string_table_add(CTStringTable *st, const uint8_t *data, size_t len)
-{
-    if (st->count >= st->capacity) {
-        size_t new_cap = st->capacity ? st->capacity * 2 : 256;
-        char **new_strings = realloc(st->strings, new_cap * sizeof(char *));
-        if (!new_strings) return CT_ERROR_OUT_OF_MEMORY;
-        st->strings = new_strings;
-        st->capacity = new_cap;
-    }
-
-    char *s = malloc(len + 1);
-    if (!s) return CT_ERROR_OUT_OF_MEMORY;
-    memcpy(s, data, len);
-    s[len] = '\0';
-    st->strings[st->count++] = s;
-    return CT_OK;
-}
-
-static const char *string_table_get(const CTStringTable *st, size_t idx)
-{
-    if (idx >= st->count) return "";
-    return st->strings[idx];
-}
+/* PBF field numbers - use shared definitions from sh_pbf.h */
 
 /* ============================================================================
  * Feature Classification
@@ -159,7 +64,7 @@ static int classify_highway(const char *value)
     return CT_ROAD_OTHER;
 }
 
-static CTOSMFeatureClass classify_tags(const CTStringTable *st,
+static CTOSMFeatureClass classify_tags(const SHStringTable *st,
                                        const uint32_t *keys, const uint32_t *vals,
                                        int num_tags, int *feature_type, int *is_area)
 {
@@ -167,8 +72,8 @@ static CTOSMFeatureClass classify_tags(const CTStringTable *st,
     *is_area = 0;
 
     for (int i = 0; i < num_tags; i++) {
-        const char *key = string_table_get(st, keys[i]);
-        const char *val = string_table_get(st, vals[i]);
+        const char *key = sh_string_table_get(st, keys[i]);
+        const char *val = sh_string_table_get(st, vals[i]);
 
         if (strcmp(key, "highway") == 0) {
             *feature_type = classify_highway(val);
@@ -317,32 +222,10 @@ void ct_pbf_context_free(CTPBFContext *ctx)
  * ============================================================================ */
 
 static CTStatus parse_string_table(const uint8_t *data, size_t len,
-                                   CTStringTable *st)
+                                   SHStringTable *st)
 {
-    size_t pos = 0;
-
-    while (pos < len) {
-        uint32_t field, wire;
-        int n = ct_pb_read_tag(data + pos, len - pos, &field, &wire);
-        if (n < 0) return CT_ERROR_PARSE_ERROR;
-        pos += n;
-
-        if (field == PBF_STRINGTABLE_S && wire == 2) {
-            uint64_t slen;
-            n = ct_pb_read_varint(data + pos, len - pos, &slen);
-            if (n < 0) return CT_ERROR_PARSE_ERROR;
-            pos += n;
-
-            CTStatus status = string_table_add(st, data + pos, (size_t)slen);
-            if (status != CT_OK) return status;
-            pos += slen;
-        } else {
-            n = ct_pb_skip_field(data + pos, len - pos, wire);
-            if (n < 0) return CT_ERROR_PARSE_ERROR;
-            pos += n;
-        }
-    }
-
+    SHStatus status = sh_string_table_parse(st, data, len);
+    if (status != SH_OK) return CT_ERROR_PARSE_ERROR;
     return CT_OK;
 }
 
@@ -365,38 +248,38 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
 
     while (pos < len) {
         uint32_t field, wire;
-        int n = ct_pb_read_tag(data + pos, len - pos, &field, &wire);
-        if (n < 0) goto error;
+        int n = sh_pb_read_tag(data + pos, len - pos, &field, &wire);
+        if (n == 0) goto error;
         pos += n;
 
-        if (wire == 2) {
+        if (wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t packed_len;
-            n = ct_pb_read_varint(data + pos, len - pos, &packed_len);
-            if (n < 0) goto error;
+            n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
+            if (n == 0) goto error;
             pos += n;
 
-            if (field == PBF_DENSE_ID) {
-                id_count = ct_pb_read_packed_svarint_array(data + pos, packed_len,
+            if (field == SH_PBF_DENSE_ID) {
+                id_count = sh_pb_read_packed_svarint_array(data + pos, packed_len,
                                                           ids, max_nodes);
-            } else if (field == PBF_DENSE_LAT) {
-                lat_count = ct_pb_read_packed_svarint_array(data + pos, packed_len,
+            } else if (field == SH_PBF_DENSE_LAT) {
+                lat_count = sh_pb_read_packed_svarint_array(data + pos, packed_len,
                                                            lats, max_nodes);
-            } else if (field == PBF_DENSE_LON) {
-                lon_count = ct_pb_read_packed_svarint_array(data + pos, packed_len,
+            } else if (field == SH_PBF_DENSE_LON) {
+                lon_count = sh_pb_read_packed_svarint_array(data + pos, packed_len,
                                                            lons, max_nodes);
             }
             pos += packed_len;
         } else {
-            n = ct_pb_skip_field(data + pos, len - pos, wire);
-            if (n < 0) goto error;
+            n = sh_pb_skip_field(data + pos, len - pos, wire);
+            if (n == 0) goto error;
             pos += n;
         }
     }
 
     /* Delta decode */
-    ct_pb_delta_decode_i64(ids, id_count);
-    ct_pb_delta_decode_i64(lats, lat_count);
-    ct_pb_delta_decode_i64(lons, lon_count);
+    sh_pb_delta_decode_i64(ids, id_count);
+    sh_pb_delta_decode_i64(lats, lat_count);
+    sh_pb_delta_decode_i64(lons, lon_count);
 
     /* Store nodes */
     size_t count = id_count;
@@ -443,7 +326,7 @@ error:
 }
 
 static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
-                          const CTStringTable *st)
+                          const SHStringTable *st)
 {
     int64_t id = 0;
     uint32_t *keys = NULL, *vals = NULL;
@@ -462,61 +345,61 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
 
     while (pos < len) {
         uint32_t field, wire;
-        int n = ct_pb_read_tag(data + pos, len - pos, &field, &wire);
-        if (n < 0) goto skip_way;
+        int n = sh_pb_read_tag(data + pos, len - pos, &field, &wire);
+        if (n == 0) goto skip_way;
         pos += n;
 
-        if (field == PBF_WAY_ID && wire == 0) {
+        if (field == SH_PBF_WAY_ID && wire == SH_PB_WIRE_VARINT) {
             uint64_t val;
-            n = ct_pb_read_varint(data + pos, len - pos, &val);
-            if (n < 0) goto skip_way;
+            n = sh_pb_read_varint(data + pos, len - pos, &val);
+            if (n == 0) goto skip_way;
             id = (int64_t)val;
             pos += n;
-        } else if (field == PBF_WAY_KEYS && wire == 2) {
+        } else if (field == SH_PBF_WAY_KEYS && wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t packed_len;
-            n = ct_pb_read_varint(data + pos, len - pos, &packed_len);
-            if (n < 0) goto skip_way;
+            n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
+            if (n == 0) goto skip_way;
             pos += n;
 
             const uint8_t *p = data + pos;
             size_t ppos = 0;
             while (ppos < packed_len && key_count < 256) {
                 uint64_t v;
-                int k = ct_pb_read_varint(p + ppos, packed_len - ppos, &v);
-                if (k < 0) break;
+                int k = sh_pb_read_varint(p + ppos, packed_len - ppos, &v);
+                if (k == 0) break;
                 keys[key_count++] = (uint32_t)v;
                 ppos += k;
             }
             pos += packed_len;
-        } else if (field == PBF_WAY_VALS && wire == 2) {
+        } else if (field == SH_PBF_WAY_VALS && wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t packed_len;
-            n = ct_pb_read_varint(data + pos, len - pos, &packed_len);
-            if (n < 0) goto skip_way;
+            n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
+            if (n == 0) goto skip_way;
             pos += n;
 
             const uint8_t *p = data + pos;
             size_t ppos = 0;
             while (ppos < packed_len && val_count < 256) {
                 uint64_t v;
-                int k = ct_pb_read_varint(p + ppos, packed_len - ppos, &v);
-                if (k < 0) break;
+                int k = sh_pb_read_varint(p + ppos, packed_len - ppos, &v);
+                if (k == 0) break;
                 vals[val_count++] = (uint32_t)v;
                 ppos += k;
             }
             pos += packed_len;
-        } else if (field == PBF_WAY_REFS && wire == 2) {
+        } else if (field == SH_PBF_WAY_REFS && wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t packed_len;
-            n = ct_pb_read_varint(data + pos, len - pos, &packed_len);
-            if (n < 0) goto skip_way;
+            n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
+            if (n == 0) goto skip_way;
             pos += n;
 
-            ref_count = ct_pb_read_packed_svarint_array(data + pos, packed_len,
+            ref_count = sh_pb_read_packed_svarint_array(data + pos, packed_len,
                                                         refs, max_refs);
-            ct_pb_delta_decode_i64(refs, ref_count);
+            sh_pb_delta_decode_i64(refs, ref_count);
             pos += packed_len;
         } else {
-            n = ct_pb_skip_field(data + pos, len - pos, wire);
-            if (n < 0) goto skip_way;
+            n = sh_pb_skip_field(data + pos, len - pos, wire);
+            if (n == 0) goto skip_way;
             pos += n;
         }
     }
@@ -609,35 +492,35 @@ skip_way:
 }
 
 static CTStatus parse_primitive_group(CTPBFContext *ctx, const uint8_t *data, size_t len,
-                                      const CTStringTable *st,
+                                      const SHStringTable *st,
                                       int32_t granularity, int64_t lat_offset, int64_t lon_offset)
 {
     size_t pos = 0;
 
     while (pos < len) {
         uint32_t field, wire;
-        int n = ct_pb_read_tag(data + pos, len - pos, &field, &wire);
-        if (n < 0) return CT_ERROR_PARSE_ERROR;
+        int n = sh_pb_read_tag(data + pos, len - pos, &field, &wire);
+        if (n == 0) return CT_ERROR_PARSE_ERROR;
         pos += n;
 
-        if (wire == 2) {
+        if (wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t msg_len;
-            n = ct_pb_read_varint(data + pos, len - pos, &msg_len);
-            if (n < 0) return CT_ERROR_PARSE_ERROR;
+            n = sh_pb_read_varint(data + pos, len - pos, &msg_len);
+            if (n == 0) return CT_ERROR_PARSE_ERROR;
             pos += n;
 
-            if (field == PBF_PRIMGROUP_DENSE) {
+            if (field == SH_PBF_PRIMGROUP_DENSE) {
                 CTStatus status = parse_dense_nodes(ctx, data + pos, msg_len,
                                                     granularity, lat_offset, lon_offset);
                 if (status != CT_OK) return status;
-            } else if (field == PBF_PRIMGROUP_WAYS) {
+            } else if (field == SH_PBF_PRIMGROUP_WAYS) {
                 CTStatus status = parse_way(ctx, data + pos, msg_len, st);
                 if (status != CT_OK) return status;
             }
             pos += msg_len;
         } else {
-            n = ct_pb_skip_field(data + pos, len - pos, wire);
-            if (n < 0) return CT_ERROR_PARSE_ERROR;
+            n = sh_pb_skip_field(data + pos, len - pos, wire);
+            if (n == 0) return CT_ERROR_PARSE_ERROR;
             pos += n;
         }
     }
@@ -647,8 +530,8 @@ static CTStatus parse_primitive_group(CTPBFContext *ctx, const uint8_t *data, si
 
 static CTStatus parse_primitive_block(CTPBFContext *ctx, const uint8_t *data, size_t len)
 {
-    CTStringTable st;
-    string_table_init(&st);
+    SHStringTable st;
+    sh_string_table_init(&st);
 
     int32_t granularity = 100;
     int64_t lat_offset = 0;
@@ -658,59 +541,59 @@ static CTStatus parse_primitive_block(CTPBFContext *ctx, const uint8_t *data, si
     size_t pos = 0;
     while (pos < len) {
         uint32_t field, wire;
-        int n = ct_pb_read_tag(data + pos, len - pos, &field, &wire);
-        if (n < 0) {
-            string_table_free(&st);
+        int n = sh_pb_read_tag(data + pos, len - pos, &field, &wire);
+        if (n == 0) {
+            sh_string_table_free(&st);
             return CT_ERROR_PARSE_ERROR;
         }
         pos += n;
 
-        if (field == PBF_PRIMBLOCK_STRINGTABLE && wire == 2) {
+        if (field == SH_PBF_PRIMBLOCK_STRINGTABLE && wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t msg_len;
-            n = ct_pb_read_varint(data + pos, len - pos, &msg_len);
-            if (n < 0) {
-                string_table_free(&st);
+            n = sh_pb_read_varint(data + pos, len - pos, &msg_len);
+            if (n == 0) {
+                sh_string_table_free(&st);
                 return CT_ERROR_PARSE_ERROR;
             }
             pos += n;
 
             CTStatus status = parse_string_table(data + pos, msg_len, &st);
             if (status != CT_OK) {
-                string_table_free(&st);
+                sh_string_table_free(&st);
                 return status;
             }
             pos += msg_len;
-        } else if (field == PBF_PRIMBLOCK_GRANULARITY && wire == 0) {
+        } else if (field == SH_PBF_PRIMBLOCK_GRANULARITY && wire == SH_PB_WIRE_VARINT) {
             uint64_t val;
-            n = ct_pb_read_varint(data + pos, len - pos, &val);
-            if (n < 0) {
-                string_table_free(&st);
+            n = sh_pb_read_varint(data + pos, len - pos, &val);
+            if (n == 0) {
+                sh_string_table_free(&st);
                 return CT_ERROR_PARSE_ERROR;
             }
             granularity = (int32_t)val;
             pos += n;
-        } else if (field == PBF_PRIMBLOCK_LAT_OFFSET && wire == 0) {
+        } else if (field == SH_PBF_PRIMBLOCK_LAT_OFFSET && wire == SH_PB_WIRE_VARINT) {
             int64_t val;
-            n = ct_pb_read_svarint(data + pos, len - pos, &val);
-            if (n < 0) {
-                string_table_free(&st);
+            n = sh_pb_read_svarint(data + pos, len - pos, &val);
+            if (n == 0) {
+                sh_string_table_free(&st);
                 return CT_ERROR_PARSE_ERROR;
             }
             lat_offset = val;
             pos += n;
-        } else if (field == PBF_PRIMBLOCK_LON_OFFSET && wire == 0) {
+        } else if (field == SH_PBF_PRIMBLOCK_LON_OFFSET && wire == SH_PB_WIRE_VARINT) {
             int64_t val;
-            n = ct_pb_read_svarint(data + pos, len - pos, &val);
-            if (n < 0) {
-                string_table_free(&st);
+            n = sh_pb_read_svarint(data + pos, len - pos, &val);
+            if (n == 0) {
+                sh_string_table_free(&st);
                 return CT_ERROR_PARSE_ERROR;
             }
             lon_offset = val;
             pos += n;
         } else {
-            n = ct_pb_skip_field(data + pos, len - pos, wire);
-            if (n < 0) {
-                string_table_free(&st);
+            n = sh_pb_skip_field(data + pos, len - pos, wire);
+            if (n == 0) {
+                sh_string_table_free(&st);
                 return CT_ERROR_PARSE_ERROR;
             }
             pos += n;
@@ -721,18 +604,18 @@ static CTStatus parse_primitive_block(CTPBFContext *ctx, const uint8_t *data, si
     pos = 0;
     while (pos < len) {
         uint32_t field, wire;
-        int n = ct_pb_read_tag(data + pos, len - pos, &field, &wire);
-        if (n < 0) {
-            string_table_free(&st);
+        int n = sh_pb_read_tag(data + pos, len - pos, &field, &wire);
+        if (n == 0) {
+            sh_string_table_free(&st);
             return CT_ERROR_PARSE_ERROR;
         }
         pos += n;
 
-        if (field == PBF_PRIMBLOCK_PRIMITIVEGROUP && wire == 2) {
+        if (field == SH_PBF_PRIMBLOCK_PRIMITIVEGROUP && wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t msg_len;
-            n = ct_pb_read_varint(data + pos, len - pos, &msg_len);
-            if (n < 0) {
-                string_table_free(&st);
+            n = sh_pb_read_varint(data + pos, len - pos, &msg_len);
+            if (n == 0) {
+                sh_string_table_free(&st);
                 return CT_ERROR_PARSE_ERROR;
             }
             pos += n;
@@ -740,88 +623,35 @@ static CTStatus parse_primitive_block(CTPBFContext *ctx, const uint8_t *data, si
             CTStatus status = parse_primitive_group(ctx, data + pos, msg_len, &st,
                                                     granularity, lat_offset, lon_offset);
             if (status != CT_OK) {
-                string_table_free(&st);
+                sh_string_table_free(&st);
                 return status;
             }
             pos += msg_len;
         } else {
-            n = ct_pb_skip_field(data + pos, len - pos, wire);
-            if (n < 0) {
-                string_table_free(&st);
+            n = sh_pb_skip_field(data + pos, len - pos, wire);
+            if (n == 0) {
+                sh_string_table_free(&st);
                 return CT_ERROR_PARSE_ERROR;
             }
             pos += n;
         }
     }
 
-    string_table_free(&st);
+    sh_string_table_free(&st);
     return CT_OK;
 }
 
 static CTStatus parse_blob(CTPBFContext *ctx, const uint8_t *data, size_t len)
 {
-    const uint8_t *raw_data = NULL;
-    size_t raw_size = 0;
-    const uint8_t *zlib_data = NULL;
-    size_t zlib_size = 0;
-    uint8_t *decompressed = NULL;
-
-    size_t pos = 0;
-    while (pos < len) {
-        uint32_t field, wire;
-        int n = ct_pb_read_tag(data + pos, len - pos, &field, &wire);
-        if (n < 0) return CT_ERROR_PARSE_ERROR;
-        pos += n;
-
-        if (field == PBF_BLOB_RAW && wire == 2) {
-            uint64_t msg_len;
-            n = ct_pb_read_varint(data + pos, len - pos, &msg_len);
-            if (n < 0) return CT_ERROR_PARSE_ERROR;
-            pos += n;
-            raw_data = data + pos;
-            raw_size = msg_len;
-            pos += msg_len;
-        } else if (field == PBF_BLOB_RAW_SIZE && wire == 0) {
-            uint64_t val;
-            n = ct_pb_read_varint(data + pos, len - pos, &val);
-            if (n < 0) return CT_ERROR_PARSE_ERROR;
-            raw_size = val;
-            pos += n;
-        } else if (field == PBF_BLOB_ZLIB_DATA && wire == 2) {
-            uint64_t msg_len;
-            n = ct_pb_read_varint(data + pos, len - pos, &msg_len);
-            if (n < 0) return CT_ERROR_PARSE_ERROR;
-            pos += n;
-            zlib_data = data + pos;
-            zlib_size = msg_len;
-            pos += msg_len;
-        } else {
-            n = ct_pb_skip_field(data + pos, len - pos, wire);
-            if (n < 0) return CT_ERROR_PARSE_ERROR;
-            pos += n;
-        }
+    SHPBFBlob blob;
+    SHStatus sh_status = sh_pbf_decompress_blob(data, len, &blob);
+    if (sh_status != SH_OK) {
+        return CT_ERROR_PARSE_ERROR;
     }
 
-    if (zlib_data && raw_size > 0) {
-        decompressed = malloc(raw_size);
-        if (!decompressed) return CT_ERROR_OUT_OF_MEMORY;
-
-        size_t actual_size;
-        CTStatus status = ct_inflate(zlib_data, zlib_size,
-                                     decompressed, raw_size, &actual_size);
-        if (status != CT_OK) {
-            free(decompressed);
-            return status;
-        }
-
-        status = parse_primitive_block(ctx, decompressed, actual_size);
-        free(decompressed);
-        return status;
-    } else if (raw_data) {
-        return parse_primitive_block(ctx, raw_data, raw_size);
-    }
-
-    return CT_OK;
+    CTStatus status = parse_primitive_block(ctx, blob.data, blob.len);
+    sh_pbf_blob_free(&blob);
+    return status;
 }
 
 CTStatus ct_pbf_parse_memory(CTPBFContext *ctx, const uint8_t *data, size_t size)
@@ -839,39 +669,14 @@ CTStatus ct_pbf_parse_memory(CTPBFContext *ctx, const uint8_t *data, size_t size
 
         if (pos + header_len > size) return CT_ERROR_PARSE_ERROR;
 
-        /* Parse blob header */
+        /* Parse blob header using shared function */
         char type[32] = "";
         uint32_t data_size = 0;
-
-        size_t hpos = 0;
-        while (hpos < header_len) {
-            uint32_t field, wire;
-            int n = ct_pb_read_tag(data + pos + hpos, header_len - hpos, &field, &wire);
-            if (n < 0) return CT_ERROR_PARSE_ERROR;
-            hpos += n;
-
-            if (field == PBF_BLOBHEADER_TYPE && wire == 2) {
-                uint64_t slen;
-                n = ct_pb_read_varint(data + pos + hpos, header_len - hpos, &slen);
-                if (n < 0) return CT_ERROR_PARSE_ERROR;
-                hpos += n;
-                if (slen < sizeof(type)) {
-                    memcpy(type, data + pos + hpos, slen);
-                    type[slen] = '\0';
-                }
-                hpos += slen;
-            } else if (field == PBF_BLOBHEADER_DATASIZE && wire == 0) {
-                uint64_t val;
-                n = ct_pb_read_varint(data + pos + hpos, header_len - hpos, &val);
-                if (n < 0) return CT_ERROR_PARSE_ERROR;
-                data_size = (uint32_t)val;
-                hpos += n;
-            } else {
-                n = ct_pb_skip_field(data + pos + hpos, header_len - hpos, wire);
-                if (n < 0) return CT_ERROR_PARSE_ERROR;
-                hpos += n;
-            }
-        }
+        size_t consumed;
+        SHStatus sh_status = sh_pbf_parse_blob_header(data + pos, header_len,
+                                                       type, sizeof(type),
+                                                       &data_size, &consumed);
+        if (sh_status != SH_OK) return CT_ERROR_PARSE_ERROR;
         pos += header_len;
 
         if (pos + data_size > size) return CT_ERROR_PARSE_ERROR;

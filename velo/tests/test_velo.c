@@ -185,20 +185,16 @@ TEST(heap_contains)
 }
 
 /* ============================================================================
- * Protobuf Tests
+ * Protobuf Tests (using shared library)
  * ============================================================================ */
 
-/* Forward declarations */
-int vl_pb_read_varint(const uint8_t *buf, size_t len, uint64_t *value);
-int vl_pb_read_svarint(const uint8_t *buf, size_t len, int64_t *value);
-int vl_pb_read_tag(const uint8_t *buf, size_t len, uint32_t *field, uint32_t *wire);
-void vl_pb_delta_decode_i64(int64_t *arr, size_t count);
+#include "sh_protobuf.h"
 
 TEST(pb_varint_small)
 {
     uint8_t buf[] = {0x01};
     uint64_t value;
-    int n = vl_pb_read_varint(buf, sizeof(buf), &value);
+    int n = sh_pb_read_varint(buf, sizeof(buf), &value);
     ASSERT_EQ(n, 1);
     ASSERT_EQ(value, 1);
 }
@@ -208,7 +204,7 @@ TEST(pb_varint_300)
     /* 300 = 0xAC 0x02 */
     uint8_t buf[] = {0xAC, 0x02};
     uint64_t value;
-    int n = vl_pb_read_varint(buf, sizeof(buf), &value);
+    int n = sh_pb_read_varint(buf, sizeof(buf), &value);
     ASSERT_EQ(n, 2);
     ASSERT_EQ(value, 300);
 }
@@ -218,7 +214,7 @@ TEST(pb_varint_large)
     /* 150 = 0x96 0x01 */
     uint8_t buf[] = {0x96, 0x01};
     uint64_t value;
-    int n = vl_pb_read_varint(buf, sizeof(buf), &value);
+    int n = sh_pb_read_varint(buf, sizeof(buf), &value);
     ASSERT_EQ(n, 2);
     ASSERT_EQ(value, 150);
 }
@@ -228,7 +224,7 @@ TEST(pb_svarint_positive)
     /* zigzag(1) = 2 */
     uint8_t buf[] = {0x02};
     int64_t value;
-    int n = vl_pb_read_svarint(buf, sizeof(buf), &value);
+    int n = sh_pb_read_svarint(buf, sizeof(buf), &value);
     ASSERT_EQ(n, 1);
     ASSERT_EQ(value, 1);
 }
@@ -238,7 +234,7 @@ TEST(pb_svarint_negative)
     /* zigzag(-1) = 1 */
     uint8_t buf[] = {0x01};
     int64_t value;
-    int n = vl_pb_read_svarint(buf, sizeof(buf), &value);
+    int n = sh_pb_read_svarint(buf, sizeof(buf), &value);
     ASSERT_EQ(n, 1);
     ASSERT_EQ(value, -1);
 }
@@ -248,7 +244,7 @@ TEST(pb_svarint_larger)
     /* zigzag(-2) = 3 */
     uint8_t buf[] = {0x03};
     int64_t value;
-    int n = vl_pb_read_svarint(buf, sizeof(buf), &value);
+    int n = sh_pb_read_svarint(buf, sizeof(buf), &value);
     ASSERT_EQ(n, 1);
     ASSERT_EQ(value, -2);
 }
@@ -258,7 +254,7 @@ TEST(pb_tag)
     /* Field 1, wire type 0 (varint) = 0x08 */
     uint8_t buf[] = {0x08};
     uint32_t field, wire;
-    int n = vl_pb_read_tag(buf, sizeof(buf), &field, &wire);
+    int n = sh_pb_read_tag(buf, sizeof(buf), &field, &wire);
     ASSERT_EQ(n, 1);
     ASSERT_EQ(field, 1);
     ASSERT_EQ(wire, 0);
@@ -269,7 +265,7 @@ TEST(pb_tag_field2_string)
     /* Field 2, wire type 2 (length-delimited) = 0x12 */
     uint8_t buf[] = {0x12};
     uint32_t field, wire;
-    int n = vl_pb_read_tag(buf, sizeof(buf), &field, &wire);
+    int n = sh_pb_read_tag(buf, sizeof(buf), &field, &wire);
     ASSERT_EQ(n, 1);
     ASSERT_EQ(field, 2);
     ASSERT_EQ(wire, 2);
@@ -278,7 +274,7 @@ TEST(pb_tag_field2_string)
 TEST(pb_delta_decode)
 {
     int64_t arr[] = {10, 5, -3, 7};
-    vl_pb_delta_decode_i64(arr, 4);
+    sh_pb_delta_decode_i64(arr, 4);
     ASSERT_EQ(arr[0], 10);
     ASSERT_EQ(arr[1], 15);
     ASSERT_EQ(arr[2], 12);

@@ -27,16 +27,22 @@ carta/
 │   └── ct_png.h      # PNG encoding
 ├── src/              # Implementation
 │   ├── carta.c       # Main API
-│   ├── ct_pbf.c      # PBF parsing
+│   ├── ct_pbf.c      # PBF parsing (uses shared library)
 │   ├── ct_tile.c     # Coordinate transforms
-│   ├── ct_mvt.c      # MVT protobuf
+│   ├── ct_mvt.c      # MVT protobuf (uses shared sh_pb_write_*)
 │   ├── ct_render.c   # Software renderer
-│   ├── ct_png.c      # PNG encoder
-│   └── ct_style.c    # Styling
-├── ../vendor/        # Shared third-party (miniz)
+│   ├── ct_png.c      # PNG encoder (uses shared sh_deflate)
+│   ├── ct_style.c    # Styling
+│   ├── ct_lod.c      # Level-of-detail filtering
+│   └── ct_simplify.c # Geometry simplification
+├── api/              # Tile server REST API
+├── ../shared/        # Shared library (protobuf, inflate, PBF parsing)
+├── ../vendor/        # Third-party (miniz)
 ├── tests/            # Test suite
 └── benchmarks/       # Performance tests
 ```
+
+**Note:** Protobuf encoding/decoding and zlib compression are provided by the shared library (`sh_protobuf.h`, `sh_inflate.h`, `sh_pbf.h`).
 
 ## Key Files
 
@@ -159,7 +165,8 @@ ct_tile_clear(&tile);
 ## Dependencies
 
 - **External**: None
-- **Vendored**: ../vendor/miniz (public domain zlib, shared with velo)
+- **Shared**: ../shared (protobuf, inflate, PBF parsing, geo utilities)
+- **Vendored**: ../vendor/miniz (public domain zlib, used via shared library)
 - **Standard Library**: stdio, stdlib, string, math
 
 ## Performance Notes

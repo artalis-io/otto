@@ -17,6 +17,9 @@
  */
 
 #include "vl_types.h"
+#include "sh_protobuf.h"
+#include "sh_inflate.h"
+#include "sh_pbf.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,110 +32,7 @@
 #include <unistd.h>
 #endif
 
-/* Forward declarations for protobuf functions */
-int vl_pb_read_varint(const uint8_t *buf, size_t len, uint64_t *value);
-int vl_pb_read_svarint(const uint8_t *buf, size_t len, int64_t *value);
-int vl_pb_read_tag(const uint8_t *buf, size_t len, uint32_t *field, uint32_t *wire);
-int vl_pb_skip_field(const uint8_t *buf, size_t len, uint32_t wire_type);
-int vl_pb_read_fixed32(const uint8_t *buf, size_t len, uint32_t *value);
-size_t vl_pb_read_packed_svarint_array(const uint8_t *buf, size_t len,
-                                       int64_t *out, size_t out_capacity);
-void vl_pb_delta_decode_i64(int64_t *arr, size_t count);
-
-/* Forward declaration for inflate */
-VLStatus vl_inflate(const uint8_t *src, size_t src_len,
-                    uint8_t *dst, size_t dst_len, size_t *actual_len);
-
-/* ============================================================================
- * PBF Field Numbers (from fileformat.proto and osmformat.proto)
- * ============================================================================ */
-
-/* BlobHeader */
-#define PBF_BLOBHEADER_TYPE     1
-#define PBF_BLOBHEADER_DATASIZE 3
-
-/* Blob */
-#define PBF_BLOB_RAW            1
-#define PBF_BLOB_RAW_SIZE       2
-#define PBF_BLOB_ZLIB_DATA      3
-
-/* PrimitiveBlock */
-#define PBF_PRIMBLOCK_STRINGTABLE   1
-#define PBF_PRIMBLOCK_PRIMITIVEGROUP 2
-#define PBF_PRIMBLOCK_GRANULARITY   17
-#define PBF_PRIMBLOCK_LAT_OFFSET    19
-#define PBF_PRIMBLOCK_LON_OFFSET    20
-
-/* StringTable */
-#define PBF_STRINGTABLE_S       1
-
-/* PrimitiveGroup */
-#define PBF_PRIMGROUP_NODES     1
-#define PBF_PRIMGROUP_DENSE     2
-#define PBF_PRIMGROUP_WAYS      3
-#define PBF_PRIMGROUP_RELATIONS 4
-
-/* DenseNodes */
-#define PBF_DENSE_ID            1
-#define PBF_DENSE_LAT           8
-#define PBF_DENSE_LON           9
-#define PBF_DENSE_KEYS_VALS     10
-
-/* Way */
-#define PBF_WAY_ID              1
-#define PBF_WAY_KEYS            2
-#define PBF_WAY_VALS            3
-#define PBF_WAY_REFS            8
-
-/* ============================================================================
- * String Table
- * ============================================================================ */
-
-typedef struct {
-    char **strings;
-    size_t count;
-    size_t capacity;
-} VLStringTable;
-
-static void string_table_init(VLStringTable *st)
-{
-    st->strings = NULL;
-    st->count = 0;
-    st->capacity = 0;
-}
-
-static void string_table_free(VLStringTable *st)
-{
-    for (size_t i = 0; i < st->count; i++) {
-        free(st->strings[i]);
-    }
-    free(st->strings);
-    string_table_init(st);
-}
-
-static VLStatus string_table_add(VLStringTable *st, const uint8_t *data, size_t len)
-{
-    if (st->count >= st->capacity) {
-        size_t new_cap = st->capacity ? st->capacity * 2 : 256;
-        char **new_strings = realloc(st->strings, new_cap * sizeof(char *));
-        if (!new_strings) return VL_ERROR_OUT_OF_MEMORY;
-        st->strings = new_strings;
-        st->capacity = new_cap;
-    }
-
-    char *s = malloc(len + 1);
-    if (!s) return VL_ERROR_OUT_OF_MEMORY;
-    memcpy(s, data, len);
-    s[len] = '\0';
-    st->strings[st->count++] = s;
-    return VL_OK;
-}
-
-static const char *string_table_get(const VLStringTable *st, size_t idx)
-{
-    if (idx >= st->count) return "";
-    return st->strings[idx];
-}
+/* PBF field numbers - use shared definitions from sh_pbf.h */
 
 /* ============================================================================
  * Highway Type Detection
@@ -260,33 +160,33 @@ static VLStatus parse_dense_nodes(VLPBFContext *ctx, const uint8_t *data, size_t
     /* First pass: find packed arrays */
     while (offset < len) {
         uint32_t field, wire;
-        int n = vl_pb_read_tag(data + offset, len - offset, &field, &wire);
+        int n = sh_pb_read_tag(data + offset, len - offset, &field, &wire);
         if (n == 0) break;
         offset += n;
 
-        if (wire == 2) {  /* Length-delimited */
+        if (wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t field_len;
-            n = vl_pb_read_varint(data + offset, len - offset, &field_len);
+            n = sh_pb_read_varint(data + offset, len - offset, &field_len);
             if (n == 0) break;
             offset += n;
 
             switch (field) {
-            case PBF_DENSE_ID:
+            case SH_PBF_DENSE_ID:
                 id_data = data + offset;
                 id_len = (size_t)field_len;
                 break;
-            case PBF_DENSE_LAT:
+            case SH_PBF_DENSE_LAT:
                 lat_data = data + offset;
                 lat_len = (size_t)field_len;
                 break;
-            case PBF_DENSE_LON:
+            case SH_PBF_DENSE_LON:
                 lon_data = data + offset;
                 lon_len = (size_t)field_len;
                 break;
             }
             offset += (size_t)field_len;
         } else {
-            n = vl_pb_skip_field(data + offset, len - offset, wire);
+            n = sh_pb_skip_field(data + offset, len - offset, wire);
             if (n == 0) break;
             offset += n;
         }
@@ -297,15 +197,7 @@ static VLStatus parse_dense_nodes(VLPBFContext *ctx, const uint8_t *data, size_t
     }
 
     /* Count nodes (use ID array length) */
-    count = 0;
-    size_t tmp_off = 0;
-    while (tmp_off < id_len) {
-        int64_t dummy;
-        int n = vl_pb_read_svarint(id_data + tmp_off, id_len - tmp_off, &dummy);
-        if (n == 0) break;
-        tmp_off += n;
-        count++;
-    }
+    count = sh_pb_count_packed_varint(id_data, id_len);
 
     if (count == 0) return VL_OK;
 
@@ -320,14 +212,14 @@ static VLStatus parse_dense_nodes(VLPBFContext *ctx, const uint8_t *data, size_t
     }
 
     /* Read packed arrays */
-    vl_pb_read_packed_svarint_array(id_data, id_len, ids, count);
-    vl_pb_read_packed_svarint_array(lat_data, lat_len, lats, count);
-    vl_pb_read_packed_svarint_array(lon_data, lon_len, lons, count);
+    sh_pb_read_packed_svarint_array(id_data, id_len, ids, count);
+    sh_pb_read_packed_svarint_array(lat_data, lat_len, lats, count);
+    sh_pb_read_packed_svarint_array(lon_data, lon_len, lons, count);
 
     /* Delta decode */
-    vl_pb_delta_decode_i64(ids, count);
-    vl_pb_delta_decode_i64(lats, count);
-    vl_pb_delta_decode_i64(lons, count);
+    sh_pb_delta_decode_i64(ids, count);
+    sh_pb_delta_decode_i64(lats, count);
+    sh_pb_delta_decode_i64(lons, count);
 
     /* Convert and add nodes */
     for (size_t i = 0; i < count; i++) {
@@ -349,7 +241,7 @@ cleanup:
  * ============================================================================ */
 
 static VLStatus parse_way(VLPBFContext *ctx, const uint8_t *data, size_t len,
-                          const VLStringTable *st)
+                          const SHStringTable *st)
 {
     VLOSMWay way = {0};
     const uint8_t *keys_data = NULL, *vals_data = NULL, *refs_data = NULL;
@@ -358,39 +250,39 @@ static VLStatus parse_way(VLPBFContext *ctx, const uint8_t *data, size_t len,
     size_t offset = 0;
     while (offset < len) {
         uint32_t field, wire;
-        int n = vl_pb_read_tag(data + offset, len - offset, &field, &wire);
+        int n = sh_pb_read_tag(data + offset, len - offset, &field, &wire);
         if (n == 0) break;
         offset += n;
 
-        if (field == PBF_WAY_ID && wire == 0) {
+        if (field == SH_PBF_WAY_ID && wire == SH_PB_WIRE_VARINT) {
             uint64_t id;
-            n = vl_pb_read_varint(data + offset, len - offset, &id);
+            n = sh_pb_read_varint(data + offset, len - offset, &id);
             if (n == 0) break;
             way.id = (int64_t)id;
             offset += n;
-        } else if (wire == 2) {
+        } else if (wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t field_len;
-            n = vl_pb_read_varint(data + offset, len - offset, &field_len);
+            n = sh_pb_read_varint(data + offset, len - offset, &field_len);
             if (n == 0) break;
             offset += n;
 
             switch (field) {
-            case PBF_WAY_KEYS:
+            case SH_PBF_WAY_KEYS:
                 keys_data = data + offset;
                 keys_len = (size_t)field_len;
                 break;
-            case PBF_WAY_VALS:
+            case SH_PBF_WAY_VALS:
                 vals_data = data + offset;
                 vals_len = (size_t)field_len;
                 break;
-            case PBF_WAY_REFS:
+            case SH_PBF_WAY_REFS:
                 refs_data = data + offset;
                 refs_len = (size_t)field_len;
                 break;
             }
             offset += (size_t)field_len;
         } else {
-            n = vl_pb_skip_field(data + offset, len - offset, wire);
+            n = sh_pb_skip_field(data + offset, len - offset, wire);
             if (n == 0) break;
             offset += n;
         }
@@ -403,14 +295,14 @@ static VLStatus parse_way(VLPBFContext *ctx, const uint8_t *data, size_t len,
         size_t ki = 0, vi = 0;
         while (ki < keys_len && vi < vals_len) {
             uint64_t key_idx, val_idx;
-            int nk = vl_pb_read_varint(keys_data + ki, keys_len - ki, &key_idx);
-            int nv = vl_pb_read_varint(vals_data + vi, vals_len - vi, &val_idx);
+            int nk = sh_pb_read_varint(keys_data + ki, keys_len - ki, &key_idx);
+            int nv = sh_pb_read_varint(vals_data + vi, vals_len - vi, &val_idx);
             if (nk == 0 || nv == 0) break;
             ki += nk;
             vi += nv;
 
-            const char *key = string_table_get(st, (size_t)key_idx);
-            const char *val = string_table_get(st, (size_t)val_idx);
+            const char *key = sh_string_table_get(st, (size_t)key_idx);
+            const char *val = sh_string_table_get(st, (size_t)val_idx);
 
             if (strcmp(key, "highway") == 0) {
                 way.highway_type = highway_type_from_string(val);
@@ -463,22 +355,14 @@ static VLStatus parse_way(VLPBFContext *ctx, const uint8_t *data, size_t len,
     /* Parse node references */
     if (refs_data) {
         /* Count references */
-        size_t count = 0;
-        size_t tmp_off = 0;
-        while (tmp_off < refs_len) {
-            int64_t dummy;
-            int n = vl_pb_read_svarint(refs_data + tmp_off, refs_len - tmp_off, &dummy);
-            if (n == 0) break;
-            tmp_off += n;
-            count++;
-        }
+        size_t count = sh_pb_count_packed_varint(refs_data, refs_len);
 
         if (count >= 2) {  /* Need at least 2 nodes for an edge */
             way.node_refs = malloc(count * sizeof(int64_t));
             if (!way.node_refs) return VL_ERROR_OUT_OF_MEMORY;
 
-            vl_pb_read_packed_svarint_array(refs_data, refs_len, way.node_refs, count);
-            vl_pb_delta_decode_i64(way.node_refs, count);
+            sh_pb_read_packed_svarint_array(refs_data, refs_len, way.node_refs, count);
+            sh_pb_delta_decode_i64(way.node_refs, count);
 
             way.num_refs = (int)count;
             ctx->highway_ways_kept++;
@@ -495,36 +379,36 @@ static VLStatus parse_way(VLPBFContext *ctx, const uint8_t *data, size_t len,
  * ============================================================================ */
 
 static VLStatus parse_primitive_group(VLPBFContext *ctx, const uint8_t *data, size_t len,
-                                      const VLStringTable *st, int32_t granularity,
+                                      const SHStringTable *st, int32_t granularity,
                                       int64_t lat_offset, int64_t lon_offset)
 {
     size_t offset = 0;
     while (offset < len) {
         uint32_t field, wire;
-        int n = vl_pb_read_tag(data + offset, len - offset, &field, &wire);
+        int n = sh_pb_read_tag(data + offset, len - offset, &field, &wire);
         if (n == 0) break;
         offset += n;
 
-        if (wire == 2) {
+        if (wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t field_len;
-            n = vl_pb_read_varint(data + offset, len - offset, &field_len);
+            n = sh_pb_read_varint(data + offset, len - offset, &field_len);
             if (n == 0) break;
             offset += n;
 
             VLStatus status = VL_OK;
             switch (field) {
-            case PBF_PRIMGROUP_DENSE:
+            case SH_PBF_PRIMGROUP_DENSE:
                 status = parse_dense_nodes(ctx, data + offset, (size_t)field_len,
                                            granularity, lat_offset, lon_offset);
                 break;
-            case PBF_PRIMGROUP_WAYS:
+            case SH_PBF_PRIMGROUP_WAYS:
                 status = parse_way(ctx, data + offset, (size_t)field_len, st);
                 break;
             }
             if (status != VL_OK) return status;
             offset += (size_t)field_len;
         } else {
-            n = vl_pb_skip_field(data + offset, len - offset, wire);
+            n = sh_pb_skip_field(data + offset, len - offset, wire);
             if (n == 0) break;
             offset += n;
         }
@@ -538,8 +422,8 @@ static VLStatus parse_primitive_group(VLPBFContext *ctx, const uint8_t *data, si
 
 static VLStatus parse_primitive_block(VLPBFContext *ctx, const uint8_t *data, size_t len)
 {
-    VLStringTable st;
-    string_table_init(&st);
+    SHStringTable st;
+    sh_string_table_init(&st);
 
     int32_t granularity = 100;
     int64_t lat_offset = 0;
@@ -559,62 +443,42 @@ static VLStatus parse_primitive_block(VLPBFContext *ctx, const uint8_t *data, si
 
     while (offset < len) {
         uint32_t field, wire;
-        int n = vl_pb_read_tag(data + offset, len - offset, &field, &wire);
+        int n = sh_pb_read_tag(data + offset, len - offset, &field, &wire);
         if (n == 0) break;
         offset += n;
 
-        if (field == PBF_PRIMBLOCK_GRANULARITY && wire == 0) {
+        if (field == SH_PBF_PRIMBLOCK_GRANULARITY && wire == SH_PB_WIRE_VARINT) {
             uint64_t val;
-            n = vl_pb_read_varint(data + offset, len - offset, &val);
+            n = sh_pb_read_varint(data + offset, len - offset, &val);
             if (n == 0) break;
             granularity = (int32_t)val;
             offset += n;
-        } else if (field == PBF_PRIMBLOCK_LAT_OFFSET && wire == 0) {
+        } else if (field == SH_PBF_PRIMBLOCK_LAT_OFFSET && wire == SH_PB_WIRE_VARINT) {
             int64_t val;
-            n = vl_pb_read_svarint(data + offset, len - offset, &val);
+            n = sh_pb_read_svarint(data + offset, len - offset, &val);
             if (n == 0) break;
             lat_offset = val;
             offset += n;
-        } else if (field == PBF_PRIMBLOCK_LON_OFFSET && wire == 0) {
+        } else if (field == SH_PBF_PRIMBLOCK_LON_OFFSET && wire == SH_PB_WIRE_VARINT) {
             int64_t val;
-            n = vl_pb_read_svarint(data + offset, len - offset, &val);
+            n = sh_pb_read_svarint(data + offset, len - offset, &val);
             if (n == 0) break;
             lon_offset = val;
             offset += n;
-        } else if (wire == 2) {
+        } else if (wire == SH_PB_WIRE_LENGTH_DELIM) {
             uint64_t field_len;
-            n = vl_pb_read_varint(data + offset, len - offset, &field_len);
+            n = sh_pb_read_varint(data + offset, len - offset, &field_len);
             if (n == 0) break;
             offset += n;
 
-            if (field == PBF_PRIMBLOCK_STRINGTABLE) {
-                /* Parse string table */
-                size_t st_off = 0;
-                while (st_off < (size_t)field_len) {
-                    uint32_t sf, sw;
-                    int sn = vl_pb_read_tag(data + offset + st_off,
-                                            (size_t)field_len - st_off, &sf, &sw);
-                    if (sn == 0) break;
-                    st_off += sn;
-
-                    if (sf == PBF_STRINGTABLE_S && sw == 2) {
-                        uint64_t slen;
-                        sn = vl_pb_read_varint(data + offset + st_off,
-                                               (size_t)field_len - st_off, &slen);
-                        if (sn == 0) break;
-                        st_off += sn;
-
-                        status = string_table_add(&st, data + offset + st_off, (size_t)slen);
-                        if (status != VL_OK) goto cleanup;
-                        st_off += (size_t)slen;
-                    } else {
-                        sn = vl_pb_skip_field(data + offset + st_off,
-                                              (size_t)field_len - st_off, sw);
-                        if (sn == 0) break;
-                        st_off += sn;
-                    }
+            if (field == SH_PBF_PRIMBLOCK_STRINGTABLE) {
+                /* Parse string table using shared function */
+                SHStatus sh_status = sh_string_table_parse(&st, data + offset, (size_t)field_len);
+                if (sh_status != SH_OK) {
+                    status = VL_ERROR_OUT_OF_MEMORY;
+                    goto cleanup;
                 }
-            } else if (field == PBF_PRIMBLOCK_PRIMITIVEGROUP) {
+            } else if (field == SH_PBF_PRIMBLOCK_PRIMITIVEGROUP) {
                 /* Store group reference for later parsing */
                 if (num_groups >= groups_cap) {
                     size_t new_cap = groups_cap ? groups_cap * 2 : 16;
@@ -633,7 +497,7 @@ static VLStatus parse_primitive_block(VLPBFContext *ctx, const uint8_t *data, si
 
             offset += (size_t)field_len;
         } else {
-            n = vl_pb_skip_field(data + offset, len - offset, wire);
+            n = sh_pb_skip_field(data + offset, len - offset, wire);
             if (n == 0) break;
             offset += n;
         }
@@ -648,7 +512,7 @@ static VLStatus parse_primitive_block(VLPBFContext *ctx, const uint8_t *data, si
 
 cleanup:
     free(groups);
-    string_table_free(&st);
+    sh_string_table_free(&st);
     return status;
 }
 
@@ -658,77 +522,18 @@ cleanup:
 
 static VLStatus parse_blob(VLPBFContext *ctx, const uint8_t *data, size_t len, int is_header)
 {
-    const uint8_t *raw_data = NULL;
-    size_t raw_len = 0;
-    const uint8_t *zlib_data = NULL;
-    size_t zlib_len = 0;
-    size_t raw_size = 0;
-
-    size_t offset = 0;
-    while (offset < len) {
-        uint32_t field, wire;
-        int n = vl_pb_read_tag(data + offset, len - offset, &field, &wire);
-        if (n == 0) break;
-        offset += n;
-
-        if (field == PBF_BLOB_RAW_SIZE && wire == 0) {
-            uint64_t val;
-            n = vl_pb_read_varint(data + offset, len - offset, &val);
-            if (n == 0) break;
-            raw_size = (size_t)val;
-            offset += n;
-        } else if (wire == 2) {
-            uint64_t field_len;
-            n = vl_pb_read_varint(data + offset, len - offset, &field_len);
-            if (n == 0) break;
-            offset += n;
-
-            if (field == PBF_BLOB_RAW) {
-                raw_data = data + offset;
-                raw_len = (size_t)field_len;
-            } else if (field == PBF_BLOB_ZLIB_DATA) {
-                zlib_data = data + offset;
-                zlib_len = (size_t)field_len;
-            }
-            offset += (size_t)field_len;
-        } else {
-            n = vl_pb_skip_field(data + offset, len - offset, wire);
-            if (n == 0) break;
-            offset += n;
-        }
-    }
-
-    /* Get decompressed data */
-    uint8_t *block_data = NULL;
-    size_t block_len = 0;
-    int should_free = 0;
-
-    if (raw_data) {
-        block_data = (uint8_t *)raw_data;
-        block_len = raw_len;
-    } else if (zlib_data && raw_size > 0) {
-        block_data = malloc(raw_size);
-        if (!block_data) return VL_ERROR_OUT_OF_MEMORY;
-        should_free = 1;
-
-        VLStatus status = vl_inflate(zlib_data, zlib_len, block_data, raw_size, &block_len);
-        if (status != VL_OK) {
-            free(block_data);
-            return status;
-        }
-    } else {
+    SHPBFBlob blob;
+    SHStatus sh_status = sh_pbf_decompress_blob(data, len, &blob);
+    if (sh_status != SH_OK) {
         return VL_ERROR_PARSE_ERROR;
     }
 
     VLStatus status = VL_OK;
     if (!is_header) {
-        status = parse_primitive_block(ctx, block_data, block_len);
+        status = parse_primitive_block(ctx, blob.data, blob.len);
     }
 
-    if (should_free) {
-        free(block_data);
-    }
-
+    sh_pbf_blob_free(&blob);
     return status;
 }
 
@@ -757,42 +562,17 @@ VLStatus vl_pbf_parse(VLPBFContext *ctx, const uint8_t *data, size_t len)
 
         if (offset + header_size > len) break;
 
-        /* Parse BlobHeader */
-        const uint8_t *header_data = data + offset;
-        offset += header_size;
-
+        /* Parse BlobHeader using shared function */
         char type[32] = {0};
         uint32_t datasize = 0;
-
-        size_t h_off = 0;
-        while (h_off < header_size) {
-            uint32_t field, wire;
-            int n = vl_pb_read_tag(header_data + h_off, header_size - h_off, &field, &wire);
-            if (n == 0) break;
-            h_off += n;
-
-            if (field == PBF_BLOBHEADER_TYPE && wire == 2) {
-                uint64_t slen;
-                n = vl_pb_read_varint(header_data + h_off, header_size - h_off, &slen);
-                if (n == 0) break;
-                h_off += n;
-                if (slen < sizeof(type)) {
-                    memcpy(type, header_data + h_off, (size_t)slen);
-                    type[slen] = '\0';
-                }
-                h_off += (size_t)slen;
-            } else if (field == PBF_BLOBHEADER_DATASIZE && wire == 0) {
-                uint64_t val;
-                n = vl_pb_read_varint(header_data + h_off, header_size - h_off, &val);
-                if (n == 0) break;
-                datasize = (uint32_t)val;
-                h_off += n;
-            } else {
-                n = vl_pb_skip_field(header_data + h_off, header_size - h_off, wire);
-                if (n == 0) break;
-                h_off += n;
-            }
+        size_t consumed;
+        SHStatus sh_status = sh_pbf_parse_blob_header(data + offset, header_size,
+                                                       type, sizeof(type),
+                                                       &datasize, &consumed);
+        if (sh_status != SH_OK) {
+            return VL_ERROR_PARSE_ERROR;
         }
+        offset += header_size;
 
         if (datasize == 0 || offset + datasize > len) break;
 

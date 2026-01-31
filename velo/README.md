@@ -278,6 +278,12 @@ make wasm
 
 MIT License - see LICENSE file.
 
+## See Also
+
+- [carta](../carta/) - Map tile generator
+- [shared](../shared/) - Shared protobuf/inflate/PBF parsing library (used by both velo and carta)
+- [fuelwise](../fuelwise/) - Refueling optimization
+
 ## Acknowledgments
 
 - miniz: Public domain zlib implementation by Rich Geldreich

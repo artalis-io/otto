@@ -30,7 +30,7 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 | Velo | `velo/` | C | OSM routing engine |
 | Carta | `carta/` | C | Map tile generator (MVT/PNG) |
 | FuelWise | `fuelwise/` | C | Refueling domain logic |
-| Shared | `shared/` | C | Common geo utilities |
+| Shared | `shared/` | C | Common geo utilities, protobuf, zlib |
 | Vendor | `vendor/` | C | Third-party libs (see below) |
 
 ### Planned Components
@@ -87,6 +87,14 @@ See `docs/NEXUS.md` for the data ingress architecture (TMS/ELD/LoadBoard integra
 - `shared/include/shared.h` - Shared API
 - `shared/include/sh_geo.h` - Coordinate types and functions
 - `shared/src/sh_geo.c` - Haversine, Web Mercator
+
+### Working on PBF/Protobuf parsing (shared):
+- `shared/include/sh_protobuf.h` - Protobuf read/write primitives
+- `shared/include/sh_inflate.h` - Zlib compress/decompress
+- `shared/include/sh_pbf.h` - PBF blob parsing, string tables
+- `shared/src/sh_protobuf.c` - Varint, svarint, tags, packed arrays
+- `shared/src/sh_inflate.c` - miniz wrapper for inflate/deflate
+- `shared/src/sh_pbf.c` - Blob header parsing, decompression
 
 ### Working on FuelWise API:
 - `fuelwise/api/src/main.c` - HTTP handlers
@@ -212,8 +220,9 @@ make run-carta-api    # Show Carta tile server usage
 │  ┌──────┴───────┐       └───────┬───────┘               │
 │  │    Ralph     │        ┌──────┴──────┐                │
 │  │  LP/MIP      │        │   shared    │                │
-│  │  Solver      │        │  (geo,proj) │                │
-│  └──────────────┘        └──────┬──────┘                │
+│  │  Solver      │        │ geo,protobuf│                │
+│  └──────────────┘        │ inflate,pbf │                │
+│                          └──────┬──────┘                │
 │                                 │                       │
 │                          ┌──────┴──────┐                │
 │                          │   vendor    │                │
@@ -298,11 +307,11 @@ Geometry encoding:
 
 ```bash
 make test
-# Expected: ~190 tests pass across all modules
-# - ralph: 65 tests
-# - fuelwise: 32 tests
-# - shared: 23 tests
-# - velo: 39 tests
+# Expected: ~227 tests pass across all modules
+# - ralph: 73 tests
+# - fuelwise: 33 tests
+# - shared: 41 tests
+# - velo: 47 tests
 # - carta: 33 tests
 ```
 

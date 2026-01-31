@@ -8,13 +8,9 @@
 #include "ct_render.h"
 #include "ct_tile.h"
 #include "ct_pbf.h"
+#include "sh_inflate.h"
 #include <stdlib.h>
 #include <string.h>
-
-/* Forward declaration */
-CTStatus ct_deflate(const uint8_t *src, size_t src_len,
-                    uint8_t *dst, size_t dst_capacity, size_t *actual_len,
-                    int level);
 
 /* PNG chunk types */
 #define PNG_CHUNK_IHDR 0x49484452  /* IHDR */
@@ -195,12 +191,12 @@ size_t ct_encode_png_ex(const uint8_t *pixels, int width, int height,
 
     /* Add zlib header manually (miniz compress2 adds it) */
     size_t compressed_size;
-    CTStatus status = ct_deflate(filtered, filtered_size,
-                                 compressed, deflate_capacity, &compressed_size,
-                                 compression_level);
+    SHStatus sh_status = sh_deflate(filtered, filtered_size,
+                                    compressed, deflate_capacity, &compressed_size,
+                                    compression_level);
     free(filtered);
 
-    if (status != CT_OK) {
+    if (sh_status != SH_OK) {
         free(compressed);
         return 0;
     }

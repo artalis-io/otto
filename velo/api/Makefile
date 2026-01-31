@@ -4,10 +4,13 @@ CC = gcc
 CFLAGS = -Wall -Wextra -O2 -std=c11 -D_POSIX_C_SOURCE=200809L
 
 # Include paths
-INCLUDES = -I../include -I../../vendor/mongoose -I../../vendor/miniz -Isrc
+INCLUDES = -I../include -I../../shared/include -I../../vendor/mongoose -I../../vendor/miniz -Isrc
+
+# Shared library path
+SHARED_DIR = ../../shared
 
 # Library paths
-LDFLAGS = -L.. -lvelo -lm -lpthread -fopenmp
+LDFLAGS = -L.. -lvelo -L$(SHARED_DIR) -lshared -lm -lpthread -fopenmp
 
 # Source files
 SRCS = src/main.c src/polyline.c
@@ -24,6 +27,7 @@ all: deps $(TARGET)
 
 deps:
 	$(MAKE) -C ..
+	$(MAKE) -C $(SHARED_DIR)
 	@if [ ! -f $(MONGOOSE_OBJ) ]; then \
 		$(CC) -c ../../vendor/mongoose/mongoose.c -o $(MONGOOSE_OBJ); \
 	fi
