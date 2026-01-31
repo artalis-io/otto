@@ -64,6 +64,8 @@ for (int i = 0; i < 3; i++) {
 
 Hash collisions are theoretically possible with FNV-1a; debug builds may optionally store original ID strings for collision detection.
 
+IDs should be stable across builds; avoid dynamic/random strings.
+
 Stable identity enables:
 
 * persistent widget state (cursor position, scroll offset)
@@ -89,7 +91,7 @@ Partial redraw is not a requirement for correctness. It may exist later as an op
 
 ### 6) Rendering uses Clay's render commands
 
-ClayShards participates in Clay's layout tree and produces Clay render commands.
+ClayShards builds Clay layout nodes each frame and produces Clay render commands.
 
 The render command array is the contract:
 
@@ -216,6 +218,7 @@ ClayShards does not require:
 
 If you build your UI with ClayShards:
 
+* **The same UI code runs across targets.**
 * Your UI will run in **WASM/WebGL** and **embedded** without rewriting.
 * Your business logic remains in **C**.
 * Your UI remains **simple to reason about** because it is immediate mode.
