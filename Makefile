@@ -87,6 +87,10 @@ carta-api: carta shared
 velo-api: velo
 	$(MAKE) -C velo/api
 
+# Locus geocoding server (depends on Locus)
+locus-api: locus
+	$(MAKE) -C locus/api
+
 # Run servers
 run-fuelwise-api: fuelwise-api
 	$(MAKE) -C fuelwise/api run
