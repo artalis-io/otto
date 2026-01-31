@@ -119,6 +119,13 @@ bool cc_key_char(uint32_t char_code);
 /* Set pending click for this frame (call on mousedown before rendering) */
 void cc_set_pending_click(void);
 
+/* Set pointer position (called automatically by cc_clay_set_pointer) */
+void cc_set_pointer(float x, float y);
+
+/* Get pointer position */
+float cc_pointer_x(void);
+float cc_pointer_y(void);
+
 /* ============================================================================
  * Tab Navigation
  * ============================================================================ */

@@ -389,6 +389,19 @@ CC_EXPORT void cc_set_pending_click(void) {
     g_cc.pending_click = true;
 }
 
+CC_EXPORT void cc_set_pointer(float x, float y) {
+    g_cc.pointer_x = x;
+    g_cc.pointer_y = y;
+}
+
+CC_EXPORT float cc_pointer_x(void) {
+    return g_cc.pointer_x;
+}
+
+CC_EXPORT float cc_pointer_y(void) {
+    return g_cc.pointer_y;
+}
+
 /* ============================================================================
  * Tab Navigation
  * ============================================================================ */

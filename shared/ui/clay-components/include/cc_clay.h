@@ -122,6 +122,11 @@ void cc_clay_set_glyph_advances(const float *advances, int count);
 /* Check if font metrics have been loaded */
 bool cc_clay_has_font_metrics(void);
 
+/* Calculate cursor position from X offset within text.
+ * x_offset is relative to start of text, font_size in pixels.
+ * Returns character index closest to x_offset. */
+int cc_clay_x_to_cursor(const char *text, int len, float x_offset, float font_size);
+
 #ifdef __cplusplus
 }
 #endif
