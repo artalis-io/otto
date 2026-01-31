@@ -22,7 +22,7 @@
 .PHONY: all lib clean test help
 .PHONY: ralph fuelwise velo carta locus shared
 .PHONY: fuelwise-api carta-api velo-api
-.PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-types wasm-test
+.PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve
 .PHONY: run-fuelwise-api run-carta-api run-velo-api
 .PHONY: benchmark ci
@@ -103,12 +103,16 @@ run-velo-api: velo-api
 	@echo "Usage: ./velo/api/velo-route-server <pbf-file>"
 	@echo "Example: ./velo/api/velo-route-server data/hungary-latest.osm.pbf"
 
+run-locus-api: locus-api
+	@echo "Usage: ./locus/api/locus-geocoder <pbf-file>"
+	@echo "Example: ./locus/api/locus-geocoder data/monaco-latest.osm.pbf"
+
 # =============================================================================
 # WebAssembly Builds (requires Emscripten)
 # =============================================================================
 
 # Build all WASM modules
-wasm: wasm-fuelwise wasm-velo wasm-carta
+wasm: wasm-fuelwise wasm-velo wasm-carta wasm-locus
 
 # Individual WASM builds
 wasm-fuelwise: fuelwise
@@ -120,17 +124,22 @@ wasm-velo: velo
 wasm-carta: carta
 	$(MAKE) -C carta/wasm
 
+wasm-locus: locus
+	$(MAKE) -C locus/wasm
+
 # Generate TypeScript declarations for all WASM modules
 wasm-types:
 	$(MAKE) -C fuelwise/wasm types
 	$(MAKE) -C velo/wasm types
 	$(MAKE) -C carta/wasm types
+	$(MAKE) -C locus/wasm types
 
 # Test WASM builds
 wasm-test: wasm
 	$(MAKE) -C fuelwise/wasm test
 	$(MAKE) -C velo/wasm test
 	$(MAKE) -C carta/wasm test
+	$(MAKE) -C locus/wasm test
 
 # =============================================================================
 # UI (requires Node.js)
