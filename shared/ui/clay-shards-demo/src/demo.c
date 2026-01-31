@@ -101,6 +101,17 @@ static const struct {
  * ============================================================================ */
 
 static void render_zoom_controls(void) {
+    /* Square buttons for zoom +/- */
+    const CsButtonStyle zoom_btn = {
+        .variant = CS_BTN_DEFAULT,
+        .font_size = 18,
+        .padding_x = 0,
+        .padding_y = 0,
+        .corner_radius = 4,
+        .width = 36,
+        .height = 36
+    };
+
     CLAY(CLAY_ID("ZoomControls"), {
         .floating = {
             .attachTo = CLAY_ATTACH_TO_ROOT,
@@ -109,10 +120,10 @@ static void render_zoom_controls(void) {
         },
         .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 2 }
     }) {
-        if (cs_button(CS_ID("zoom_in"), "+", NULL).clicked) {
+        if (cs_button(CS_ID("zoom_in"), "+", &zoom_btn).clicked) {
             g_app.map.zoom = cs_map_scroll(g_app.map.zoom, 1, 0, 19);
         }
-        if (cs_button(CS_ID("zoom_out"), "-", NULL).clicked) {
+        if (cs_button(CS_ID("zoom_out"), "-", &zoom_btn).clicked) {
             g_app.map.zoom = cs_map_scroll(g_app.map.zoom, -1, 0, 19);
         }
     }
