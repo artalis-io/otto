@@ -37,6 +37,11 @@ CcButtonResult cc_button(
 
     if (!style) style = &CC_BUTTON_STYLE_DEFAULT;
 
+    /* Register for tab navigation */
+    cc_register_focusable(id);
+
+    bool is_focused = (g->focused_id == id);
+
     /* Colors based on variant */
     Clay_Color bg, bg_hover, text_color;
 
@@ -102,6 +107,12 @@ CcButtonResult cc_button(
         .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius)
     };
 
+    /* Add focus ring if focused */
+    if (is_focused) {
+        btn_config.border.color = (Clay_Color){CC_COLOR_BORDER_FOCUSED};
+        btn_config.border.width = (Clay_BorderWidth){2, 2, 2, 2, 0};
+    }
+
     /* Check if we need a wrapper for margin/alignment */
     bool has_margin = style->margin.top > 0 || style->margin.bottom > 0 ||
                       style->margin.left > 0 || style->margin.right > 0;
@@ -146,15 +157,25 @@ CcButtonResult cc_button(
         }
     }
 
-    /* Check click */
+    /* Check click (mouse) */
     if (is_hovered && g->pending_click) {
         result.clicked = true;
         g->clicked_id = id;
+    }
 
-        /* Blur any focused input when clicking a button */
-        if (g->focused_id != 0) {
-            g->focused_id = 0;
-        }
+    /* Check keyboard activation (Enter key when focused) */
+    if (is_focused && g->pending_enter) {
+        result.clicked = true;
+        g->clicked_id = id;
+        g->pending_enter = false;  /* Consume the event */
+    }
+
+    /* Track if we have focus for keyboard navigation */
+    if (is_focused) {
+        /* Mark as non-text element so cc_key_down knows Enter means "activate" */
+        g->active_text = NULL;
+        g->active_len = NULL;
+        g->active_max_len = 0;
     }
 
     return result;
