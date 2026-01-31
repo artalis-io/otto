@@ -22,9 +22,6 @@ export function renderTextCursor(renderer, wasm, font, projMatrix, inputBounds, 
     const focusedId = wasm.cc_focused_id();
     if (focusedId === 0) return;
 
-    const cursorVisible = wasm.cc_cursor_visible();
-    if (!cursorVisible) return;
-
     if (!inputBounds) return;
 
     const {
@@ -48,7 +45,7 @@ export function renderTextCursor(renderer, wasm, font, projMatrix, inputBounds, 
     const cursorY = y + 4;
     const cursorH = h - 8;
 
-    // Render selection if exists
+    // Render selection if exists (always visible, doesn't blink)
     if (selStart >= 0 && selStart !== cursor) {
         const start = Math.min(selStart, cursor);
         const end = Math.max(selStart, cursor);
@@ -63,12 +60,15 @@ export function renderTextCursor(renderer, wasm, font, projMatrix, inputBounds, 
         );
     }
 
-    // Render cursor
-    renderer.renderRect(
-        cursorX, cursorY,
-        cursorWidth, cursorH,
-        cursorColor, 0, 0, null, projMatrix
-    );
+    // Render cursor (blinks)
+    const cursorVisible = wasm.cc_cursor_visible();
+    if (cursorVisible) {
+        renderer.renderRect(
+            cursorX, cursorY,
+            cursorWidth, cursorH,
+            cursorColor, 0, 0, null, projMatrix
+        );
+    }
 }
 
 /**
