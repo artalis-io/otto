@@ -19,7 +19,8 @@ import {
     TileCache,
     MapTileRenderer,
     createRenderLoop,
-    loadWasm
+    loadWasm,
+    setupKeyboardHandler
 } from '../clay-renderer-webgl/index.js';
 
 /* ============================================================================
@@ -110,32 +111,9 @@ function setupEvents(canvas) {
         wasm.map_resize(width, height);
     });
 
-    // Keyboard (route to focused component or handle globally)
-    window.addEventListener('keydown', (e) => {
-        // Tab navigation works globally (even with no focus)
-        if (e.key === 'Tab') {
-            if (wasm.cc_key_down(e.keyCode, e.shiftKey ? 1 : 0, e.ctrlKey ? 1 : 0)) {
-                e.preventDefault();
-            }
-            return;
-        }
-
-        if (wasm.cc_focused_id() !== 0) {
-            // Route to focused input
-            if (wasm.cc_key_down(e.keyCode, e.shiftKey ? 1 : 0, e.ctrlKey ? 1 : 0)) {
-                e.preventDefault();
-                return;
-            }
-            // Character input
-            if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-                const code = e.key.charCodeAt(0);
-                if (code >= 32 && code <= 126) {
-                    wasm.cc_key_char(code);
-                    e.preventDefault();
-                }
-            }
-        } else {
-            // Global shortcuts
+    // Keyboard handling (generic routing + app-specific shortcuts)
+    setupKeyboardHandler(wasm, {
+        onGlobalShortcut: (e) => {
             if (e.key === '+' || e.key === '=') wasm.map_scroll(1, 0, 0);
             if (e.key === '-') wasm.map_scroll(-1, 0, 0);
         }

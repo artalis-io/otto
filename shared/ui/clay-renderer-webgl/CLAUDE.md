@@ -39,6 +39,7 @@ Renders Clay's render commands using WebGL:
 | `map-tiles.js` | TileCache, MapTileRenderer for slippy maps |
 | `render-loop.js` | Generic render loop with cursor rendering |
 | `wasm-loader.js` | WASM loading with export validation |
+| `keyboard.js` | Keyboard event routing for Clay components |
 | `text-cursor.js` | Text cursor rendering for focused inputs |
 | `index.js` | Module exports |
 | `fonts/` | MSDF font assets |
@@ -112,6 +113,27 @@ const tileRenderer = new MapTileRenderer(renderer, cache);
 
 tileRenderer.render(lat, lon, zoom, layerType, width, height, proj);
 ```
+
+### setupKeyboardHandler
+
+Sets up keyboard event routing for Clay components. Handles Tab navigation,
+focus routing, and character input automatically.
+
+```javascript
+import { setupKeyboardHandler } from './clay-renderer-webgl/index.js';
+
+const cleanup = setupKeyboardHandler(wasm, {
+    onGlobalShortcut: (e) => {
+        // App-specific shortcuts when nothing is focused
+        if (e.key === '+') wasm.map_scroll(1, 0, 0);
+        if (e.key === '-') wasm.map_scroll(-1, 0, 0);
+    }
+});
+
+// Call cleanup() to remove the event listener
+```
+
+Required WASM exports: `cc_key_down`, `cc_key_char`, `cc_focused_id`
 
 ### createRenderLoop
 
