@@ -1,13 +1,18 @@
 /**
- * Clay Map UI - Map Viewer Demo
+ * ClayShards Demo - Map Viewer Application
  *
- * This file contains ONLY domain-specific code:
+ * Demonstrates ClayShards immediate-mode UI components:
+ *   - cs_map: Pan/zoom map interaction
+ *   - cs_input: Text input with cursor/selection
+ *   - cs_button: Clickable buttons with variants
+ *
+ * This file contains domain-specific code:
  *   - Application state (map position, UI settings)
  *   - UI layout (panels, buttons, inputs)
  *   - Domain-specific exports (map getters, pointer handling)
  *
- * Generic Clay boilerplate is in cs_clay.c (clay-components).
- * Generic text cursor rendering is in text-cursor.js (clay-renderer-webgl).
+ * Generic Clay integration is in cs_clay.c (clay-shards).
+ * Generic text cursor rendering is in text-cursor.js (clay-shards-webgl).
  */
 
 #include <stdint.h>

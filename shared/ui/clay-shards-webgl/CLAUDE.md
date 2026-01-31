@@ -1,6 +1,6 @@
-# Clay Renderer - WebGL
+# ClayShards WebGL
 
-WebGL renderer for Clay UI applications in the browser.
+WebGL renderer for ClayShards and Clay UI applications in the browser.
 
 ## Overview
 

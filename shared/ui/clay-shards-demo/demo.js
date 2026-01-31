@@ -1,10 +1,10 @@
 /**
- * Map Viewer Demo - Minimal Application Entry Point
+ * ClayShards Demo - Application Entry Point
  *
- * This file contains ONLY domain-specific code:
- *   - Required WASM exports list
- *   - Map tile rendering callback
- *   - Application-specific event wiring
+ * Demonstrates ClayShards immediate-mode UI components with a map viewer:
+ *   - cs_map: Pan/zoom map interaction
+ *   - cs_input: Text input with cursor/selection
+ *   - cs_button: Clickable buttons with variants
  *
  * Generic functionality is imported from clay-shards-webgl:
  *   - ClayRenderer, MSDFFont (rendering)
@@ -140,7 +140,7 @@ async function main() {
 
         // Load resources
         [wasm] = await Promise.all([
-            loadWasm('build/map_ui.wasm', REQUIRED_EXPORTS),
+            loadWasm('build/demo.wasm', REQUIRED_EXPORTS),
             font.load(renderer.gl,
                 '../clay-shards-webgl/fonts/ui-font.json',
                 '../clay-shards-webgl/fonts/ui-font.png')

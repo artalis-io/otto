@@ -1,14 +1,14 @@
-# cs_map Demo
+# ClayShards Demo
 
-A demonstration of the `cs_map` immediate mode map component with the `clay-shards-webgl` library.
+A demonstration of ClayShards immediate-mode UI components with the clay-shards-webgl renderer.
 
 ## Overview
 
 This demo shows how to:
-1. Use the `cs_map` component from `clay-shards` for map interaction
-2. Render Clay UI using `clay-shards-webgl`
+1. Use ClayShards components (`cs_map`, `cs_input`, `cs_button`) for UI
+2. Render Clay UI using clay-shards-webgl
 3. Load and display slippy map tiles
-4. Handle user input (pan, zoom, click)
+4. Handle user input (pan, zoom, click, keyboard)
 
 ## Architecture
 
@@ -17,24 +17,24 @@ This demo shows how to:
 │                      Browser                            │
 ├─────────────────────────────────────────────────────────┤
 │  ┌─────────────────────────────────────────────────────┐│
-│  │                    map.js                           ││
+│  │                    demo.js                          ││
 │  │  - Uses loadWasm, createRenderLoop                  ││
-│  │  - Event handling                                   ││
+│  │  - Event handling (mouse, touch, keyboard)          ││
 │  │  - Tile rendering callback                          ││
 │  └──────────────────────┬──────────────────────────────┘│
 │                         │                               │
 │  ┌──────────────────────▼──────────────────────────────┐│
-│  │            clay-shards-webgl                      ││
+│  │              clay-shards-webgl                      ││
 │  │  - ClayRenderer (rects, text, textures)             ││
 │  │  - createRenderLoop (generic render loop)           ││
-│  │  - loadWasm (WASM loading with validation)          ││
+│  │  - setupKeyboardHandler (Tab, clipboard)            ││
 │  │  - TileCache, MapTileRenderer (slippy tiles)        ││
 │  └──────────────────────┬──────────────────────────────┘│
 │                         │                               │
 │  ┌──────────────────────▼──────────────────────────────┐│
-│  │               map_ui.wasm                           ││
+│  │               demo.wasm                             ││
 │  │  - Clay UI layout                                   ││
-│  │  - cs_map component (pan/zoom/click handling)       ││
+│  │  - cs_map component (pan/zoom/click)                ││
 │  │  - cs_input, cs_button components                   ││
 │  └─────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────┘
@@ -44,8 +44,8 @@ This demo shows how to:
 
 | File | Purpose |
 |------|---------|
-| `src/map_ui.c` | WASM source - Clay UI layout with cs_map component |
-| `map.js` | JavaScript entry point - uses clay-shards-webgl |
+| `src/demo.c` | WASM source - Clay UI layout with ClayShards components |
+| `demo.js` | JavaScript entry point - uses clay-shards-webgl |
 | `index.html` | HTML shell with canvas |
 | `Makefile` | Emscripten build configuration |
 
@@ -70,10 +70,9 @@ make serve
 
 ### State Management Pattern
 
-All application state is contained in a single `AppState` structure, using C11 compound literals:
+All application state is contained in a single `AppState` structure:
 
 ```c
-/* Logical groupings as sub-structs */
 typedef struct {
     double lat, lon;
     int zoom, width, height;
@@ -85,35 +84,15 @@ typedef struct {
     int layer_type;
 } UIPanels;
 
-/* Root application state */
 typedef struct {
     MapState map;
     UIPanels panels;
-    UIText text;
-    TextBuffers scratch;
-    ClayState clay;
+    // ...
 } AppState;
 
-/* Single global with compound literal initialization */
 static AppState g_app = {
     .map = { .lat = 47.4979, .lon = 19.0402, .zoom = 12 },
     .panels = { .show_tile_info = true },
-};
-```
-
-### Theme Constants
-
-Colors use typed compound literal constants instead of macros:
-
-```c
-static const struct {
-    Clay_Color bg_dark;
-    Clay_Color text_light;
-    Clay_Color border;
-} THEME = {
-    .bg_dark    = {40, 40, 40, 230},
-    .text_light = {255, 255, 255, 255},
-    .border     = {100, 100, 100, 255},
 };
 ```
 
@@ -129,18 +108,11 @@ cs_map(g_app.map.component_id,
 
 ### Render Loop
 
-The app uses `createRenderLoop` from clay-shards-webgl with tile rendering as the `onRender` callback:
+The app uses `createRenderLoop` from clay-shards-webgl:
 
 ```javascript
 import { createRenderLoop, loadWasm, ... } from '../clay-shards-webgl/index.js';
 
-// Load WASM with required exports
-const [wasm] = await Promise.all([
-    loadWasm('build/map_ui.wasm', REQUIRED_EXPORTS),
-    font.load(...)
-]);
-
-// Create render loop with tile rendering callback
 const render = createRenderLoop(renderer, wasm, font, {
     frameFunction: 'map_frame',
     onRender: (projMatrix) => {
@@ -160,9 +132,9 @@ requestAnimationFrame(render);
 The render loop handles:
 - Delta time calculation
 - Clearing and projection matrix
-- Calling the domain-specific `onRender` callback (tiles)
-- Rendering Clay UI commands
-- Rendering text cursor for focused inputs
+- Domain-specific rendering (tiles)
+- Clay UI command rendering
+- Text cursor for focused inputs
 
 ## UI Components
 
@@ -176,7 +148,9 @@ The render loop handles:
 
 - **Drag**: Pan the map
 - **Scroll/Wheel**: Zoom in/out
+- **Tab**: Navigate between focusable elements
 - **+/-**: Zoom buttons or keyboard
+- **Ctrl+C/V/X**: Clipboard in text inputs
 - **Layer buttons**: Switch tile source
 
 ## Related

@@ -1,17 +1,17 @@
-# Clay Components
+# ClayShards
 
-Immediate mode UI components built on top of Clay layout engine.
+Immediate-mode UI components in C11, built on Clay layout, render anywhere.
 
 ## Architecture
 
-This library provides **immediate mode interaction** on top of **Clay's declarative layout**:
+ClayShards provides **immediate mode interaction** on top of **Clay's declarative layout**:
 
 ```
 ┌─────────────────────────────────────────┐
 │         Application Code                │
 │  if (cs_button(...).clicked) { ... }    │
 ├─────────────────────────────────────────┤
-│         clay-shards                 │
+│            ClayShards                   │
 │  • Immediate mode API                   │
 │  • Focus/hover/click handling           │
 │  • Internally builds Clay elements      │
@@ -38,7 +38,7 @@ CLAY(CLAY_ID("Panel"), {...}) {
 | Component | Header | Description |
 |-----------|--------|-------------|
 | `cs_button` | `cs_button.h` | Clickable button with variants |
-| `cs_input` | `cs_input.h` | Text input with cursor/selection |
+| `cs_input` | `cs_input.h` | Text input with cursor/selection/clipboard |
 | `cs_map` | `cs_map.h` | Slippy map pan/zoom interaction |
 
 ## API
@@ -62,6 +62,11 @@ void cs_blur(void);
 bool cs_key_down(int key_code, bool shift, bool ctrl);
 bool cs_key_char(uint32_t char_code);
 void cs_set_pending_click(void);
+
+// Tab navigation
+void cs_register_focusable(uint32_t id);
+bool cs_focus_next(void);
+bool cs_focus_prev(void);
 
 // Cursor state (for rendering)
 int cs_cursor_pos(void);
@@ -130,11 +135,11 @@ CsMapResult cs_map(
 static char search[256];
 static int search_len = 0;
 
-void render(void) {
+void render(float dt) {
     cs_frame_begin();
     Clay_BeginLayout();
 
-    CLAY(CLAY_ID("App"), {...}) {
+    CLAY(CLAY_ID("App"), CLAY_LAYOUT(.padding = {16, 16, 16, 16})) {
         // Button
         if (cs_button(CS_ID("click_me"), "Click Me", NULL).clicked) {
             printf("Clicked!\n");
@@ -153,7 +158,7 @@ void render(void) {
     Clay_RenderCommandArray commands = Clay_EndLayout();
     cs_frame_end(dt);
 
-    // Render commands...
+    // Render commands via your backend...
 }
 ```
 
@@ -164,7 +169,8 @@ When building for WASM, these functions are exported (via `EMSCRIPTEN_KEEPALIVE`
 ```
 cs_focused_id, cs_cursor_pos, cs_selection_start, cs_cursor_visible,
 cs_focused_bounds, cs_focused_text, cs_focused_text_len,
-cs_key_down, cs_key_char, cs_blur, cs_set_pending_click
+cs_key_down, cs_key_char, cs_blur, cs_set_pending_click,
+cs_register_focusable, cs_focus_next, cs_focus_prev
 ```
 
 Add to your Makefile's `EXPORTED_FUNCTIONS`.
@@ -173,7 +179,7 @@ Add to your Makefile's `EXPORTED_FUNCTIONS`.
 
 ```bash
 make          # Build static library
-make test     # Run tests
+make test     # Run 37 tests
 make clean    # Clean build
 ```
 
@@ -184,6 +190,7 @@ For WASM builds, include `src/cs_immediate.c` directly in your sources.
 ```
 include/
 ├── cs_common.h      # Core API, focus, input routing
+├── cs_clay.h        # Clay integration helpers
 ├── cs_button.h      # Button component
 ├── cs_input.h       # Text input component
 ├── cs_map.h         # Map interaction component
@@ -191,6 +198,7 @@ include/
 
 src/
 ├── cs_common.c      # State management, keyboard handling
+├── cs_clay.c        # Clay initialization, render command accessors
 ├── cs_button.c      # Button implementation
 ├── cs_input.c       # Text input implementation
 ├── cs_map.c         # Map pan/zoom implementation
@@ -200,7 +208,9 @@ src/
 
 ## Related
 
+- [MANIFESTO.md](MANIFESTO.md) - Design principles
+- [DESIGN.md](DESIGN.md) - Architecture details
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Adding widgets
+- [clay-shards-webgl](../clay-shards-webgl/) - WebGL renderer
+- [clay-shards-demo](../clay-shards-demo/) - Example application
 - [Clay Layout Library](../../../vendor/clay/CLAUDE.md)
-- [clay-shards-webgl](../clay-shards-webgl/)
-- [clay-shards-demo](../clay-shards-demo/)
-- [Architecture Guide](../../../.claude/skills/clay-ui-architecture.md)

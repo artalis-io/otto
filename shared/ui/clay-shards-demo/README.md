@@ -58,8 +58,8 @@ make serve
 
 | File | Description |
 |------|-------------|
-| `src/map_ui.c` | C source with Clay UI and cs_map component |
-| `map.js` | JavaScript entry point (imports from clay-shards-webgl) |
+| `src/demo.c` | C source with Clay UI and ClayShards components |
+| `demo.js` | JavaScript entry point (imports from clay-shards-webgl) |
 | `index.html` | HTML shell with canvas |
 | `Makefile` | Emscripten build configuration |
 

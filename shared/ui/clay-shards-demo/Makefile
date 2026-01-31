@@ -13,12 +13,12 @@ INCLUDES = -I../../../vendor/clay -I../clay-shards/include
 # This avoids needing JS imports for measureTextFunction/queryScrollOffsetFunction
 
 # Source files (includes immediate mode components)
-SOURCES = src/map_ui.c \
+SOURCES = src/demo.c \
           ../clay-shards/src/cs_immediate.c
 
 # Output
 BUILD_DIR = build
-OUTPUT = $(BUILD_DIR)/map_ui.wasm
+OUTPUT = $(BUILD_DIR)/demo.wasm
 
 # WASM export settings - standalone WASM, no JS glue
 WASM_FLAGS = -s STANDALONE_WASM=1
@@ -60,7 +60,7 @@ $(BUILD_DIR):
 $(OUTPUT): $(SOURCES) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) $(WASM_FLAGS) $(SOURCES) -o $@
 	@echo "Built: $@"
-	@ls -lh $(BUILD_DIR)/map_ui.*
+	@ls -lh $(BUILD_DIR)/demo.*
 
 # Development server
 serve: all
