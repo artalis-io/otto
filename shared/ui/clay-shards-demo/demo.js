@@ -39,7 +39,7 @@ let isDragging = false;
 
 const REQUIRED_EXPORTS = [
     'map_init', 'map_frame', 'map_resize',
-    'map_get_lat', 'map_get_lon', 'map_get_zoom', 'map_get_layer',
+    'map_get_lat', 'map_get_lon', 'map_get_zoom', 'map_get_visual_zoom', 'map_get_layer',
     'map_pointer_down', 'map_pointer_move', 'map_pointer_up', 'map_scroll',
     'map_handle_click',
     'cs_set_pending_click', 'cs_focused_id', 'cs_key_down', 'cs_key_char',
@@ -166,7 +166,7 @@ async function main() {
                 tileRenderer.render(
                     wasm.map_get_lat(),
                     wasm.map_get_lon(),
-                    wasm.map_get_zoom(),
+                    wasm.map_get_visual_zoom(),  // Use visual zoom for smooth animation
                     wasm.map_get_layer(),
                     renderer.width,
                     renderer.height,

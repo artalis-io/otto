@@ -53,6 +53,9 @@ const CsMapStyle CC_MAP_STYLE_DEFAULT = {
 /* Click detection threshold in pixels */
 #define CLICK_THRESHOLD 5.0f
 
+/* Zoom animation easing factor (higher = faster) */
+#define ZOOM_EASE_FACTOR 10.0f
+
 /* Per-map drag state (keyed by ID) */
 typedef struct {
     uint32_t id;
@@ -70,6 +73,9 @@ typedef struct {
     double prev_lon;
     int prev_zoom;
     bool state_initialized;
+    /* Smooth zoom animation */
+    double visual_zoom;
+    bool visual_zoom_initialized;
 } CcMapDragState;
 
 /* Global drag state - LIMITATION: only one map supported at a time.
@@ -282,4 +288,52 @@ int cs_map_scroll(int current_zoom, int delta, int min_zoom, int max_zoom) {
     if (new_zoom < min_zoom) new_zoom = min_zoom;
     if (new_zoom > max_zoom) new_zoom = max_zoom;
     return new_zoom;
+}
+
+/* ============================================================================
+ * Smooth Zoom Animation
+ * ============================================================================ */
+
+void cs_map_update_zoom_animation(uint32_t id, int target_zoom, float dt) {
+    if (g_map_drag.id != id) return;
+
+    /* Initialize visual zoom if needed */
+    if (!g_map_drag.visual_zoom_initialized) {
+        g_map_drag.visual_zoom = (double)target_zoom;
+        g_map_drag.visual_zoom_initialized = true;
+        return;
+    }
+
+    /* Exponential easing toward target */
+    double target = (double)target_zoom;
+    double diff = target - g_map_drag.visual_zoom;
+
+    /* Snap if very close */
+    if (fabs(diff) < 0.001) {
+        g_map_drag.visual_zoom = target;
+    } else {
+        /* Ease toward target: visual += diff * factor * dt */
+        g_map_drag.visual_zoom += diff * ZOOM_EASE_FACTOR * (double)dt;
+
+        /* Prevent overshooting */
+        if ((diff > 0 && g_map_drag.visual_zoom > target) ||
+            (diff < 0 && g_map_drag.visual_zoom < target)) {
+            g_map_drag.visual_zoom = target;
+        }
+    }
+}
+
+double cs_map_get_visual_zoom(uint32_t id) {
+    if (g_map_drag.id != id || !g_map_drag.visual_zoom_initialized) {
+        return 0.0;
+    }
+    return g_map_drag.visual_zoom;
+}
+
+bool cs_map_is_zoom_animating(uint32_t id) {
+    if (g_map_drag.id != id || !g_map_drag.visual_zoom_initialized) {
+        return false;
+    }
+    double diff = (double)g_map_drag.prev_zoom - g_map_drag.visual_zoom;
+    return fabs(diff) > 0.001;
 }

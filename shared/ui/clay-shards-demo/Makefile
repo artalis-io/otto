@@ -29,7 +29,7 @@ WASM_FLAGS = -s STANDALONE_WASM=1
 #   cs_*       - Immediate mode components (clay-shards)
 WASM_FLAGS += -s EXPORTED_FUNCTIONS='[\
   "_map_init","_map_resize","_map_set_center","_map_set_zoom",\
-  "_map_get_lat","_map_get_lon","_map_get_zoom","_map_get_layer",\
+  "_map_get_lat","_map_get_lon","_map_get_zoom","_map_get_visual_zoom","_map_get_layer",\
   "_map_pointer_move","_map_pointer_down","_map_pointer_up","_map_scroll",\
   "_map_handle_click","_map_frame",\
   "_cs_clay_is_initialized","_cs_clay_get_error",\
