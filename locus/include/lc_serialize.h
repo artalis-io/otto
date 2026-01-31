@@ -55,6 +55,44 @@ int lc_is_binary_index(const char *path);
  */
 uint32_t lc_binary_version(const char *path);
 
+/* ============================================================================
+ * mmap'd Index Search (for v3 indexes)
+ * ============================================================================ */
+
+/*
+ * Search mmap'd trie for exact match.
+ * Returns number of results written to results array.
+ */
+size_t lc_mmap_trie_search_exact(void *mmap_ctx, const char *name,
+                                  size_t max_results, uint32_t *results);
+
+/*
+ * Search mmap'd trie for prefix match.
+ * Returns number of results written to results array.
+ */
+size_t lc_mmap_trie_search_prefix(void *mmap_ctx, const char *prefix,
+                                   size_t max_results, uint32_t *results);
+
+/*
+ * Query mmap'd grid for entities near a point.
+ * Returns entity IDs in the grid cell containing coord.
+ */
+size_t lc_mmap_grid_query_point(void *mmap_ctx, SHCoord coord,
+                                 size_t max_results, uint32_t *results);
+
+/*
+ * Find nearest entities to a coordinate (for reverse geocoding).
+ * Returns number of results, sorted by distance ascending.
+ */
+size_t lc_mmap_grid_find_nearest(void *mmap_ctx, const LCEntityStore *store,
+                                  SHCoord coord, size_t max_results,
+                                  LCNearestResult *results);
+
+/*
+ * Check if index was loaded via mmap (v3 format).
+ */
+int lc_index_is_mmap(const LCIndex *index);
+
 #ifdef __cplusplus
 }
 #endif
