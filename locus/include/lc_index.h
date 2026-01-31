@@ -33,6 +33,8 @@ typedef struct {
     SHBBox bounds;              /* Geographic bounds */
     uint32_t num_entities;      /* Total entities */
     size_t memory_used;         /* Total memory usage */
+
+    void *mmap_ctx;             /* mmap context (if loaded via mmap) */
 } LCIndex;
 
 /* ============================================================================
