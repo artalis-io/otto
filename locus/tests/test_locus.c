@@ -674,6 +674,161 @@ TEST(grid_query_radius)
 }
 
 /* ============================================================================
+ * Index Tests
+ * ============================================================================ */
+
+TEST(index_create)
+{
+    LCIndex *index = lc_index_create();
+    ASSERT(index != NULL);
+    ASSERT_EQ(lc_index_entity_count(index), 0);
+    lc_index_free(index);
+}
+
+TEST(index_build)
+{
+    LCIndex *index = lc_index_create();
+    ASSERT(index != NULL);
+
+    /* Create a small entity store */
+    LCEntityStore *store = lc_entity_store_create(10);
+    ASSERT(store != NULL);
+
+    LCEntity e1 = {0};
+    e1.osm_id = 1;
+    e1.fclass = LC_CLASS_CITY;
+    e1.name = lc_entity_store_intern(store, "Budapest", 0);
+    e1.population = 1750000;
+    e1.centroid.lat = 47.497912;
+    e1.centroid.lon = 19.040235;
+    lc_entity_store_add(store, &e1);
+
+    LCEntity e2 = {0};
+    e2.osm_id = 2;
+    e2.fclass = LC_CLASS_CITY;
+    e2.name = lc_entity_store_intern(store, "Vienna", 0);
+    e2.population = 1900000;
+    e2.centroid.lat = 48.208174;
+    e2.centroid.lon = 16.373819;
+    lc_entity_store_add(store, &e2);
+
+    LCStatus status = lc_index_build(index, store);
+    ASSERT_EQ(status, LC_OK);
+    ASSERT_EQ(lc_index_entity_count(index), 2);
+
+    lc_index_free(index);
+}
+
+TEST(search_exact)
+{
+    LCIndex *index = lc_index_create();
+    LCEntityStore *store = lc_entity_store_create(10);
+
+    LCEntity e1 = {0};
+    e1.osm_id = 1;
+    e1.fclass = LC_CLASS_CITY;
+    e1.name = lc_entity_store_intern(store, "Budapest", 0);
+    e1.population = 1750000;
+    e1.centroid.lat = 47.497912;
+    e1.centroid.lon = 19.040235;
+    lc_entity_store_add(store, &e1);
+
+    lc_index_build(index, store);
+
+    LCSearchResult result;
+    LCStatus status = lc_search(index, "Budapest", NULL, &result);
+    ASSERT_EQ(status, LC_OK);
+    ASSERT(result.num_results >= 1);
+
+    const LCEntity *found = lc_search_get_entity(index, &result.matches[0]);
+    ASSERT(found != NULL);
+    ASSERT_STR_EQ(found->name, "Budapest");
+
+    lc_search_result_free(&result);
+    lc_index_free(index);
+}
+
+TEST(search_prefix)
+{
+    LCIndex *index = lc_index_create();
+    LCEntityStore *store = lc_entity_store_create(10);
+
+    LCEntity e1 = {0};
+    e1.name = lc_entity_store_intern(store, "Budapest", 0);
+    e1.fclass = LC_CLASS_CITY;
+    lc_entity_store_add(store, &e1);
+
+    LCEntity e2 = {0};
+    e2.name = lc_entity_store_intern(store, "Budaors", 0);
+    e2.fclass = LC_CLASS_TOWN;
+    lc_entity_store_add(store, &e2);
+
+    lc_index_build(index, store);
+
+    LCSearchResult result;
+    lc_search(index, "Buda", NULL, &result);
+    ASSERT_EQ(result.num_results, 2);
+
+    lc_search_result_free(&result);
+    lc_index_free(index);
+}
+
+TEST(autocomplete)
+{
+    LCIndex *index = lc_index_create();
+    LCEntityStore *store = lc_entity_store_create(10);
+
+    LCEntity e1 = {0};
+    e1.name = lc_entity_store_intern(store, "Budapest", 0);
+    e1.fclass = LC_CLASS_CITY;
+    e1.population = 1750000;
+    lc_entity_store_add(store, &e1);
+
+    LCEntity e2 = {0};
+    e2.name = lc_entity_store_intern(store, "Berlin", 0);
+    e2.fclass = LC_CLASS_CITY;
+    e2.population = 3600000;
+    lc_entity_store_add(store, &e2);
+
+    lc_index_build(index, store);
+
+    LCSearchResult result;
+    lc_autocomplete(index, "Bu", 5, &result);
+    ASSERT_EQ(result.num_results, 1);
+
+    const LCEntity *found = lc_search_get_entity(index, &result.matches[0]);
+    ASSERT_STR_EQ(found->name, "Budapest");
+
+    lc_search_result_free(&result);
+    lc_index_free(index);
+}
+
+TEST(reverse_basic)
+{
+    LCIndex *index = lc_index_create();
+    LCEntityStore *store = lc_entity_store_create(10);
+
+    LCEntity e1 = {0};
+    e1.name = lc_entity_store_intern(store, "Main Street", 0);
+    e1.fclass = LC_CLASS_STREET;
+    e1.centroid.lat = 47.5;
+    e1.centroid.lon = 19.5;
+    lc_entity_store_add(store, &e1);
+
+    lc_index_build(index, store);
+
+    SHCoord coord = {.lat = 47.5001, .lon = 19.5001};  /* Very close to street */
+    LCReverseResult result;
+    LCStatus status = lc_reverse(index, coord, NULL, &result);
+    ASSERT_EQ(status, LC_OK);
+    ASSERT(result.street != NULL);
+    ASSERT_STR_EQ(result.street->name, "Main Street");
+
+    lc_reverse_result_free(&result);
+    lc_index_free(index);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -750,6 +905,14 @@ int main(void)
     RUN_TEST(grid_insert);
     RUN_TEST(grid_query_point);
     RUN_TEST(grid_query_radius);
+
+    printf("\nIndex:\n");
+    RUN_TEST(index_create);
+    RUN_TEST(index_build);
+    RUN_TEST(search_exact);
+    RUN_TEST(search_prefix);
+    RUN_TEST(autocomplete);
+    RUN_TEST(reverse_basic);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 
