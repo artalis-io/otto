@@ -7,6 +7,7 @@
 #include "lc_index.h"
 #include "lc_pbf.h"
 #include "lc_normalize.h"
+#include "lc_serialize.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -14,12 +15,12 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-/* mmap context structure (defined in lc_serialize.c) */
+/* Minimal mmap context for cleanup (first 3 fields same as LCMmapContextV3) */
 typedef struct {
     void *map_base;
     size_t map_size;
     int fd;
-} LCMmapContext;
+} LCMmapContextBase;
 
 /* ============================================================================
  * Index Management
@@ -50,7 +51,7 @@ void lc_index_free(LCIndex *index)
 
     /* Handle mmap'd index specially */
     if (index->mmap_ctx) {
-        LCMmapContext *ctx = (LCMmapContext *)index->mmap_ctx;
+        LCMmapContextBase *ctx = (LCMmapContextBase *)index->mmap_ctx;
 
         /* Free alt_names arrays (these are allocated, not mmap'd) */
         if (index->entities) {
@@ -333,7 +334,12 @@ LCStatus lc_search(const LCIndex *index, const char *query,
 
     /* Step 1: Exact match search */
     uint32_t exact_results[64];
-    size_t exact_count = lc_trie_search_exact(index->trie, normalized, 64, exact_results);
+    size_t exact_count;
+    if (index->mmap_ctx) {
+        exact_count = lc_mmap_trie_search_exact(index->mmap_ctx, normalized, 64, exact_results);
+    } else {
+        exact_count = lc_trie_search_exact(index->trie, normalized, 64, exact_results);
+    }
 
     for (size_t i = 0; i < exact_count && count < capacity; i++) {
         uint32_t eid = exact_results[i];
@@ -351,7 +357,12 @@ LCStatus lc_search(const LCIndex *index, const char *query,
     /* Step 2: Prefix search (if exact didn't find enough) */
     if (count < (size_t)opts->limit) {
         uint32_t prefix_results[128];
-        size_t prefix_count = lc_trie_search_prefix(index->trie, normalized, 128, prefix_results);
+        size_t prefix_count;
+        if (index->mmap_ctx) {
+            prefix_count = lc_mmap_trie_search_prefix(index->mmap_ctx, normalized, 128, prefix_results);
+        } else {
+            prefix_count = lc_trie_search_prefix(index->trie, normalized, 128, prefix_results);
+        }
 
         for (size_t i = 0; i < prefix_count && count < capacity; i++) {
             uint32_t eid = prefix_results[i];
@@ -475,14 +486,25 @@ LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
         opts = &default_opts;
     }
 
-    if (!index->grid || !index->entities) {
+    if (!index->entities) {
+        return LC_OK;  /* No entity store */
+    }
+
+    /* Check for spatial index (regular or mmap'd) */
+    if (!index->grid && !index->mmap_ctx) {
         return LC_OK;  /* No spatial index */
     }
 
     /* Find nearest entities */
     LCNearestResult nearest[32];
-    size_t nearest_count = lc_grid_find_nearest(index->grid, index->entities,
-                                                 coord, 32, nearest);
+    size_t nearest_count;
+    if (index->mmap_ctx) {
+        nearest_count = lc_mmap_grid_find_nearest(index->mmap_ctx, index->entities,
+                                                   coord, 32, nearest);
+    } else {
+        nearest_count = lc_grid_find_nearest(index->grid, index->entities,
+                                              coord, 32, nearest);
+    }
 
     if (nearest_count == 0) return LC_OK;
 
