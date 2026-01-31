@@ -191,15 +191,11 @@ LCEntityStore *lc_entity_store_create(uint32_t initial_capacity)
     store->capacity = initial_capacity;
     store->count = 0;
 
-    /* Allocate string pool */
-    store->string_pool_size = INITIAL_STRING_POOL_SIZE;
-    store->string_pool = malloc(store->string_pool_size);
-    if (!store->string_pool) {
-        free(store->entities);
-        free(store);
-        return NULL;
-    }
-    store->string_pool_used = 0;
+    /* Note: We use individual allocations for strings instead of a pool.
+     * This avoids pointer invalidation issues when the pool is reallocated. */
+    store->string_pool = NULL;
+    store->string_pool_size = 0;
+    store->string_pool_used = 0;  /* Used for memory tracking only */
 
     return store;
 }
@@ -208,62 +204,29 @@ void lc_entity_store_free(LCEntityStore *store)
 {
     if (!store) return;
 
-    /* Free individual entity strings that aren't in the pool */
+    /* Free all entity strings (individually allocated) */
     for (uint32_t i = 0; i < store->count; i++) {
         LCEntity *e = &store->entities[i];
-        /* Only free strings not in the pool */
-        if (e->name && (e->name < store->string_pool ||
-                        e->name >= store->string_pool + store->string_pool_size)) {
-            free(e->name);
-        }
+        free(e->name);
         if (e->alt_names) {
             for (int j = 0; j < e->num_alt_names; j++) {
-                if (e->alt_names[j] &&
-                    (e->alt_names[j] < store->string_pool ||
-                     e->alt_names[j] >= store->string_pool + store->string_pool_size)) {
-                    free(e->alt_names[j]);
-                }
+                free(e->alt_names[j]);
             }
             free(e->alt_names);
         }
-        if (e->poi_type &&
-            (e->poi_type < store->string_pool ||
-             e->poi_type >= store->string_pool + store->string_pool_size)) {
-            free(e->poi_type);
-        }
+        free(e->poi_type);
+
         /* Address strings */
         LCAddress *a = &e->address;
-        if (a->housenumber && (a->housenumber < store->string_pool ||
-                               a->housenumber >= store->string_pool + store->string_pool_size)) {
-            free(a->housenumber);
-        }
-        if (a->street && (a->street < store->string_pool ||
-                          a->street >= store->string_pool + store->string_pool_size)) {
-            free(a->street);
-        }
-        if (a->city && (a->city < store->string_pool ||
-                        a->city >= store->string_pool + store->string_pool_size)) {
-            free(a->city);
-        }
-        if (a->postcode && (a->postcode < store->string_pool ||
-                            a->postcode >= store->string_pool + store->string_pool_size)) {
-            free(a->postcode);
-        }
-        if (a->state && (a->state < store->string_pool ||
-                         a->state >= store->string_pool + store->string_pool_size)) {
-            free(a->state);
-        }
-        if (a->country && (a->country < store->string_pool ||
-                           a->country >= store->string_pool + store->string_pool_size)) {
-            free(a->country);
-        }
-        if (a->country_code && (a->country_code < store->string_pool ||
-                                a->country_code >= store->string_pool + store->string_pool_size)) {
-            free(a->country_code);
-        }
+        free(a->housenumber);
+        free(a->street);
+        free(a->city);
+        free(a->postcode);
+        free(a->state);
+        free(a->country);
+        free(a->country_code);
     }
 
-    free(store->string_pool);
     free(store->entities);
     free(store);
 }
@@ -300,32 +263,19 @@ char *lc_entity_store_intern(LCEntityStore *store, const char *str, size_t len)
     if (!store || !str) return NULL;
     if (len == 0) len = strlen(str);
 
-    /* Check if we need to grow the pool */
-    size_t needed = len + 1;
-    if (store->string_pool_used + needed > store->string_pool_size) {
-        size_t new_size = store->string_pool_size * 2;
-        while (store->string_pool_used + needed > new_size) {
-            new_size *= 2;
-        }
-        char *new_pool = realloc(store->string_pool, new_size);
-        if (!new_pool) {
-            /* Fall back to regular allocation */
-            char *copy = malloc(len + 1);
-            if (copy) {
-                memcpy(copy, str, len);
-                copy[len] = '\0';
-            }
-            return copy;
-        }
-        store->string_pool = new_pool;
-        store->string_pool_size = new_size;
+    /*
+     * IMPORTANT: We cannot use a contiguous string pool with realloc because
+     * when the pool is moved to a new address, all existing string pointers
+     * that point into the old pool become dangling pointers.
+     *
+     * Instead, we use individual allocations for each string. This is slightly
+     * less memory-efficient but avoids the dangling pointer problem.
+     */
+    char *copy = malloc(len + 1);
+    if (copy) {
+        memcpy(copy, str, len);
+        copy[len] = '\0';
+        store->string_pool_used += len + 1;  /* Track memory usage */
     }
-
-    /* Copy into pool */
-    char *dest = store->string_pool + store->string_pool_used;
-    memcpy(dest, str, len);
-    dest[len] = '\0';
-    store->string_pool_used += needed;
-
-    return dest;
+    return copy;
 }

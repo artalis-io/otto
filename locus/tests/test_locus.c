@@ -286,11 +286,11 @@ TEST(entity_store_intern)
     ASSERT_STR_EQ(s1, "Hello");
     ASSERT_STR_EQ(s2, "World");
 
-    /* Both should be in the string pool */
-    ASSERT(s1 >= store->string_pool);
-    ASSERT(s1 < store->string_pool + store->string_pool_size);
-    ASSERT(s2 >= store->string_pool);
-    ASSERT(s2 < store->string_pool + store->string_pool_size);
+    /* Strings are separately allocated, not in a contiguous pool */
+    ASSERT(s1 != s2);
+
+    /* Memory usage should be tracked */
+    ASSERT(store->string_pool_used >= 12);  /* "Hello" + "World" + null terminators */
 
     lc_entity_store_free(store);
 }
