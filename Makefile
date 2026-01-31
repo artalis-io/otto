@@ -13,13 +13,14 @@
 #     api/        - Carta Tile Server
 #     ui/         - Tile Viewer React Application
 #     wasm/       - WebAssembly build
+#   locus/        - OSM Geocoding Library (liblocus.a)
 #   shared/       - Shared Utilities (libshared.a)
 #   vendor/       - Third-party libraries (mongoose, miniz)
 #   scripts/      - Utility scripts (download-osm, benchmark, ci)
 #   docs/         - Architecture documentation
 
 .PHONY: all lib clean test help
-.PHONY: ralph fuelwise velo carta shared
+.PHONY: ralph fuelwise velo carta locus shared
 .PHONY: fuelwise-api carta-api velo-api
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-types wasm-test
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve
@@ -31,7 +32,7 @@
 # =============================================================================
 
 # Build all libraries
-all: ralph fuelwise shared velo carta
+all: ralph fuelwise shared velo carta locus
 
 # Build libraries only (no tests)
 lib:
@@ -40,6 +41,7 @@ lib:
 	$(MAKE) -C shared lib
 	$(MAKE) -C velo lib
 	$(MAKE) -C carta lib
+	$(MAKE) -C locus lib
 
 # =============================================================================
 # Core Libraries
@@ -64,6 +66,10 @@ velo:
 # Carta tile generator (uses shared vendor/miniz)
 carta:
 	$(MAKE) -C carta all
+
+# Locus geocoding library (uses shared vendor/miniz)
+locus: shared
+	$(MAKE) -C locus all
 
 # =============================================================================
 # API Servers
@@ -160,7 +166,7 @@ ci:
 # =============================================================================
 
 # Run all tests
-test: test-ralph test-fuelwise test-shared test-velo test-carta
+test: test-ralph test-fuelwise test-shared test-velo test-carta test-locus
 
 test-ralph:
 	$(MAKE) -C ralph test
@@ -176,6 +182,9 @@ test-velo: velo
 
 test-carta: carta
 	$(MAKE) -C carta test
+
+test-locus: locus
+	$(MAKE) -C locus test
 
 test-fuelwise-api: fuelwise-api
 	$(MAKE) -C fuelwise/api test
@@ -199,6 +208,7 @@ clean:
 	$(MAKE) -C shared clean
 	$(MAKE) -C velo clean
 	$(MAKE) -C carta clean
+	$(MAKE) -C locus clean
 	-$(MAKE) -C fuelwise/api clean 2>/dev/null || true
 	-$(MAKE) -C fuelwise/wasm clean 2>/dev/null || true
 	-$(MAKE) -C carta/api clean 2>/dev/null || true
@@ -227,6 +237,7 @@ help:
 	@echo "  shared           - Build shared utilities library"
 	@echo "  velo             - Build Velo routing engine"
 	@echo "  carta            - Build Carta tile generator"
+	@echo "  locus            - Build Locus geocoding library"
 	@echo ""
 	@echo "API Servers:"
 	@echo "  fuelwise-api     - Build FuelWise REST API (fuelwise/api)"
@@ -257,12 +268,13 @@ help:
 	@echo "  ci               - Run CI pipeline"
 	@echo ""
 	@echo "Testing:"
-	@echo "  test             - Run all library tests (~190)"
-	@echo "  test-ralph       - Run Ralph tests (65)"
-	@echo "  test-fuelwise    - Run FuelWise tests (32)"
-	@echo "  test-shared      - Run Shared tests (23)"
-	@echo "  test-velo        - Run Velo tests (39)"
+	@echo "  test             - Run all library tests (~256)"
+	@echo "  test-ralph       - Run Ralph tests (73)"
+	@echo "  test-fuelwise    - Run FuelWise tests (33)"
+	@echo "  test-shared      - Run Shared tests (41)"
+	@echo "  test-velo        - Run Velo tests (47)"
 	@echo "  test-carta       - Run Carta tests (33)"
+	@echo "  test-locus       - Run Locus tests (29)"
 	@echo "  test-api         - Test all API endpoints (requires OSM data)"
 	@echo "  test-fuelwise-api- Test FuelWise API endpoints"
 	@echo "  test-velo-api    - Test Velo route API endpoints"
