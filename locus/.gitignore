@@ -16,3 +16,6 @@ wasm/node_modules/
 
 # Binary index files
 *.lcix
+locus-geocoder
+search
+search_debug
