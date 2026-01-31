@@ -20,7 +20,11 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
 # Source files
 CORE_SRCS = src/locus.c \
             src/lc_types.c \
-            src/lc_pbf.c
+            src/lc_pbf.c \
+            src/lc_normalize.c \
+            src/lc_trie.c \
+            src/lc_ngram.c \
+            src/lc_spatial.c
 
 # Object files
 CORE_OBJS = $(CORE_SRCS:.c=.o)
