@@ -42,7 +42,8 @@ WASM_FLAGS += -s EXPORTED_FUNCTIONS='[\
   "_cc_focused_text","_cc_focused_text_len",\
   "_cc_focused_x","_cc_focused_y","_cc_focused_w","_cc_focused_h",\
   "_cc_key_down","_cc_key_char","_cc_blur","_cc_set_pending_click",\
-  "_cc_clay_set_glyph_advance","_cc_clay_has_font_metrics"\
+  "_cc_clay_set_glyph_advance","_cc_clay_has_font_metrics",\
+  "_cc_register_focusable","_cc_focus_next","_cc_focus_prev","_cc_focusable_count"\
 ]'
 WASM_FLAGS += -s INITIAL_MEMORY=16777216
 WASM_FLAGS += -s ALLOW_MEMORY_GROWTH=1

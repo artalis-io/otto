@@ -112,6 +112,14 @@ function setupEvents(canvas) {
 
     // Keyboard (route to focused component or handle globally)
     window.addEventListener('keydown', (e) => {
+        // Tab navigation works globally (even with no focus)
+        if (e.key === 'Tab') {
+            if (wasm.cc_key_down(e.keyCode, e.shiftKey ? 1 : 0, e.ctrlKey ? 1 : 0)) {
+                e.preventDefault();
+            }
+            return;
+        }
+
         if (wasm.cc_focused_id() !== 0) {
             // Route to focused input
             if (wasm.cc_key_down(e.keyCode, e.shiftKey ? 1 : 0, e.ctrlKey ? 1 : 0)) {

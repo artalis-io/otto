@@ -14,6 +14,8 @@
  * Global State Structure
  * ============================================================================ */
 
+#define CC_MAX_FOCUSABLES 64  /* Max focusable elements per frame */
+
 typedef struct {
     uint32_t focused_id;        /* Currently focused element (0 = none) */
 
@@ -27,6 +29,7 @@ typedef struct {
     uint32_t clicked_id;        /* Element clicked this frame */
     uint32_t hovered_id;        /* Element hovered this frame */
     bool pending_click;         /* Click event pending this frame */
+    bool pending_enter;         /* Enter key pressed this frame (for button activation) */
 
     /* Focused element bounds (set during render) */
     float focused_x, focused_y, focused_w, focused_h;
@@ -35,6 +38,10 @@ typedef struct {
     char *active_text;
     int *active_len;
     int active_max_len;
+
+    /* Tab navigation: focusable elements registered this frame */
+    uint32_t focusables[CC_MAX_FOCUSABLES];
+    int focusable_count;
 } CcState;
 
 /* Get pointer to global state (defined in cc_common.c) */

@@ -65,13 +65,18 @@ void cc_frame_begin(void) {
     g_cc.clicked_id = 0;
     g_cc.hovered_id = 0;
     /* Don't reset pending_click - it's set by mousedown and consumed during render */
+    /* Don't reset pending_enter - it's set by keydown and consumed during render */
     g_cc.active_text = NULL;
     g_cc.active_len = NULL;
+
+    /* Reset focusable registry for this frame */
+    g_cc.focusable_count = 0;
 }
 
 void cc_frame_end(float dt) {
-    /* Reset pending click after components have had a chance to check it */
+    /* Reset pending click/enter after components have had a chance to check it */
     g_cc.pending_click = false;
+    g_cc.pending_enter = false;
 
     /* Update cursor blink */
     if (g_cc.focused_id != 0) {
@@ -198,6 +203,25 @@ CC_EXPORT bool cc_key_down(int key_code, bool shift, bool ctrl) {
     /* Validate key code range (standard keyboard codes 0-255, extended up to 512) */
     if (key_code < 0 || key_code > 512) return false;
 
+    /* Tab navigation works globally (even with no focus) */
+    if (key_code == 9) { /* Tab */
+        if (shift) {
+            return cc_focus_prev();
+        } else {
+            return cc_focus_next();
+        }
+    }
+
+    /* Enter key on focused button triggers click */
+    if (key_code == 13 && g_cc.focused_id != 0) { /* Enter */
+        /* If we have a focused element but no active text buffer,
+         * it's a button - set pending_enter for it to detect */
+        if (!g_cc.active_text || !g_cc.active_len) {
+            g_cc.pending_enter = true;
+            return true;
+        }
+    }
+
     if (g_cc.focused_id == 0) return false;
     if (!g_cc.active_text || !g_cc.active_len) return false;
 
@@ -303,4 +327,76 @@ CC_EXPORT bool cc_key_down(int key_code, bool shift, bool ctrl) {
 
 CC_EXPORT void cc_set_pending_click(void) {
     g_cc.pending_click = true;
+}
+
+/* ============================================================================
+ * Tab Navigation
+ * ============================================================================ */
+
+CC_EXPORT void cc_register_focusable(uint32_t id) {
+    if (id == 0) return;
+    if (g_cc.focusable_count >= CC_MAX_FOCUSABLES) return;
+
+    /* Avoid duplicates */
+    for (int i = 0; i < g_cc.focusable_count; i++) {
+        if (g_cc.focusables[i] == id) return;
+    }
+
+    g_cc.focusables[g_cc.focusable_count++] = id;
+}
+
+CC_EXPORT bool cc_focus_next(void) {
+    if (g_cc.focusable_count == 0) return false;
+
+    /* Find current focused element index */
+    int current_idx = -1;
+    for (int i = 0; i < g_cc.focusable_count; i++) {
+        if (g_cc.focusables[i] == g_cc.focused_id) {
+            current_idx = i;
+            break;
+        }
+    }
+
+    /* Move to next (or first if nothing focused) */
+    int next_idx = (current_idx + 1) % g_cc.focusable_count;
+    uint32_t next_id = g_cc.focusables[next_idx];
+
+    if (next_id != g_cc.focused_id) {
+        cc_focus(next_id);
+        return true;
+    }
+    return false;
+}
+
+CC_EXPORT bool cc_focus_prev(void) {
+    if (g_cc.focusable_count == 0) return false;
+
+    /* Find current focused element index */
+    int current_idx = -1;
+    for (int i = 0; i < g_cc.focusable_count; i++) {
+        if (g_cc.focusables[i] == g_cc.focused_id) {
+            current_idx = i;
+            break;
+        }
+    }
+
+    /* Move to previous (or last if nothing focused) */
+    int prev_idx;
+    if (current_idx <= 0) {
+        prev_idx = g_cc.focusable_count - 1;
+    } else {
+        prev_idx = current_idx - 1;
+    }
+
+    uint32_t prev_id = g_cc.focusables[prev_idx];
+
+    if (prev_id != g_cc.focused_id) {
+        cc_focus(prev_id);
+        return true;
+    }
+    return false;
+}
+
+CC_EXPORT int cc_focusable_count(void) {
+    return g_cc.focusable_count;
 }

@@ -120,6 +120,20 @@ bool cc_key_char(uint32_t char_code);
 void cc_set_pending_click(void);
 
 /* ============================================================================
+ * Tab Navigation
+ * ============================================================================ */
+
+/* Register a focusable element (called by components during frame) */
+void cc_register_focusable(uint32_t id);
+
+/* Focus next/previous element in tab order. Returns true if focus changed. */
+bool cc_focus_next(void);
+bool cc_focus_prev(void);
+
+/* Get count of registered focusable elements (for testing/debugging) */
+int cc_focusable_count(void);
+
+/* ============================================================================
  * Color Utilities
  * ============================================================================ */
 

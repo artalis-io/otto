@@ -56,6 +56,9 @@ CcInputResult cc_input(
 
     if (!style) style = &CC_INPUT_STYLE_DEFAULT;
 
+    /* Register for tab navigation */
+    cc_register_focusable(id);
+
     bool is_focused = (g->focused_id == id);
 
     /* Display text */

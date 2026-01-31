@@ -141,9 +141,6 @@ static void test_key_char_focused(void) {
 
     cc_init();
 
-    char text[256] = "";
-    int len = 0;
-
     /* Simulate focusing by setting internal state */
     cc_focus(1);
 
@@ -619,6 +616,216 @@ static void test_map_default_style(void) {
 }
 
 /* ============================================================================
+ * Font Metrics Tests
+ * ============================================================================ */
+
+/* Note: Font metrics require cc_clay.h which isn't included in this test.
+ * These tests verify the text measurement callback mechanism works. */
+
+static void test_text_measurement_callback(void) {
+    TEST(text_measurement_callback);
+
+    init_clay();
+    cc_init();
+
+    /* The measure_text callback is set in init_clay() */
+    /* Verify it produces consistent results */
+    Clay_StringSlice text = { .chars = "Hello", .length = 5 };
+    Clay_TextElementConfig config = { .fontSize = 16 };
+
+    Clay_Dimensions d1 = measure_text(text, &config, NULL);
+    Clay_Dimensions d2 = measure_text(text, &config, NULL);
+
+    ASSERT(d1.width == d2.width, "Text measurement should be consistent");
+    ASSERT(d1.height == d2.height, "Text height should be consistent");
+    ASSERT(d1.width > 0, "Text should have positive width");
+    ASSERT(d1.height > 0, "Text should have positive height");
+
+    /* Different text lengths should have different widths */
+    Clay_StringSlice short_text = { .chars = "Hi", .length = 2 };
+    Clay_Dimensions d_short = measure_text(short_text, &config, NULL);
+    ASSERT(d_short.width < d1.width, "Shorter text should be narrower");
+
+    PASS();
+}
+
+static void test_text_measurement_font_size(void) {
+    TEST(text_measurement_font_size);
+
+    init_clay();
+
+    Clay_StringSlice text = { .chars = "Test", .length = 4 };
+    Clay_TextElementConfig config_small = { .fontSize = 12 };
+    Clay_TextElementConfig config_large = { .fontSize = 24 };
+
+    Clay_Dimensions d_small = measure_text(text, &config_small, NULL);
+    Clay_Dimensions d_large = measure_text(text, &config_large, NULL);
+
+    ASSERT(d_large.width > d_small.width, "Larger font should be wider");
+    ASSERT(d_large.height > d_small.height, "Larger font should be taller");
+
+    /* Height should match font size (in our simple callback) */
+    ASSERT(d_small.height == 12, "Height should equal font size");
+    ASSERT(d_large.height == 24, "Height should equal font size");
+
+    PASS();
+}
+
+/* ============================================================================
+ * Tab Navigation Tests
+ * ============================================================================ */
+
+static void test_tab_navigation_register(void) {
+    TEST(tab_navigation_register);
+
+    cc_init();
+    cc_frame_begin();
+
+    /* Register some focusable elements */
+    cc_register_focusable(100);
+    cc_register_focusable(200);
+    cc_register_focusable(300);
+
+    ASSERT(cc_focusable_count() == 3, "Should have 3 focusables");
+
+    /* Duplicate registration should be ignored */
+    cc_register_focusable(100);
+    ASSERT(cc_focusable_count() == 3, "Duplicates should be ignored");
+
+    /* Zero ID should be ignored */
+    cc_register_focusable(0);
+    ASSERT(cc_focusable_count() == 3, "Zero ID should be ignored");
+
+    PASS();
+}
+
+static void test_tab_navigation_focus_next(void) {
+    TEST(tab_navigation_focus_next);
+
+    cc_init();
+    cc_frame_begin();
+
+    cc_register_focusable(100);
+    cc_register_focusable(200);
+    cc_register_focusable(300);
+
+    /* Initially nothing focused */
+    ASSERT(cc_focused_id() == 0, "Initially unfocused");
+
+    /* Tab to first element */
+    bool changed = cc_focus_next();
+    ASSERT(changed, "Focus should change");
+    ASSERT(cc_focused_id() == 100, "Should focus first element");
+
+    /* Tab to second */
+    cc_focus_next();
+    ASSERT(cc_focused_id() == 200, "Should focus second element");
+
+    /* Tab to third */
+    cc_focus_next();
+    ASSERT(cc_focused_id() == 300, "Should focus third element");
+
+    /* Tab wraps to first */
+    cc_focus_next();
+    ASSERT(cc_focused_id() == 100, "Should wrap to first element");
+
+    PASS();
+}
+
+static void test_tab_navigation_focus_prev(void) {
+    TEST(tab_navigation_focus_prev);
+
+    cc_init();
+    cc_frame_begin();
+
+    cc_register_focusable(100);
+    cc_register_focusable(200);
+    cc_register_focusable(300);
+
+    /* Start with nothing focused - Shift+Tab goes to last */
+    cc_focus_prev();
+    ASSERT(cc_focused_id() == 300, "Shift+Tab from nothing should go to last");
+
+    /* Shift+Tab to previous */
+    cc_focus_prev();
+    ASSERT(cc_focused_id() == 200, "Should focus previous element");
+
+    cc_focus_prev();
+    ASSERT(cc_focused_id() == 100, "Should focus first element");
+
+    /* Wrap to last */
+    cc_focus_prev();
+    ASSERT(cc_focused_id() == 300, "Should wrap to last element");
+
+    PASS();
+}
+
+static void test_tab_key_handling(void) {
+    TEST(tab_key_handling);
+
+    cc_init();
+    cc_frame_begin();
+
+    cc_register_focusable(100);
+    cc_register_focusable(200);
+
+    /* Tab key (code 9) should focus next */
+    bool handled = cc_key_down(9, false, false);  /* Tab */
+    ASSERT(handled, "Tab should be handled");
+    ASSERT(cc_focused_id() == 100, "Tab should focus first element");
+
+    /* Another Tab */
+    cc_key_down(9, false, false);
+    ASSERT(cc_focused_id() == 200, "Tab should focus second element");
+
+    /* Shift+Tab */
+    cc_key_down(9, true, false);  /* Shift+Tab */
+    ASSERT(cc_focused_id() == 100, "Shift+Tab should focus previous");
+
+    PASS();
+}
+
+static void test_tab_empty_focusables(void) {
+    TEST(tab_empty_focusables);
+
+    cc_init();
+    cc_frame_begin();
+    /* No focusables registered */
+
+    bool changed = cc_focus_next();
+    ASSERT(!changed, "Should not change focus with no focusables");
+    ASSERT(cc_focused_id() == 0, "Should remain unfocused");
+
+    changed = cc_focus_prev();
+    ASSERT(!changed, "Should not change focus with no focusables");
+
+    PASS();
+}
+
+static void test_focusable_reset_each_frame(void) {
+    TEST(focusable_reset_each_frame);
+
+    cc_init();
+
+    /* Frame 1: register elements */
+    cc_frame_begin();
+    cc_register_focusable(100);
+    cc_register_focusable(200);
+    ASSERT(cc_focusable_count() == 2, "Should have 2 focusables");
+    cc_frame_end(0.016f);
+
+    /* Frame 2: focusables should be reset */
+    cc_frame_begin();
+    ASSERT(cc_focusable_count() == 0, "Focusables should reset each frame");
+
+    /* Register different elements */
+    cc_register_focusable(300);
+    ASSERT(cc_focusable_count() == 1, "Should have 1 new focusable");
+
+    PASS();
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -667,6 +874,18 @@ int main(void) {
     test_map_scroll();
     test_map_pointer_handling();
     test_map_default_style();
+
+    printf("\nFont Metrics Tests:\n");
+    test_text_measurement_callback();
+    test_text_measurement_font_size();
+
+    printf("\nTab Navigation Tests:\n");
+    test_tab_navigation_register();
+    test_tab_navigation_focus_next();
+    test_tab_navigation_focus_prev();
+    test_tab_key_handling();
+    test_tab_empty_focusables();
+    test_focusable_reset_each_frame();
 
     printf("\n======================================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);
