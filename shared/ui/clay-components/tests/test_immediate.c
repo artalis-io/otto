@@ -826,6 +826,84 @@ static void test_focusable_reset_each_frame(void) {
     PASS();
 }
 
+static void test_tab_preserves_cursor_across_focus(void) {
+    TEST(tab_preserves_cursor_across_focus);
+
+    cc_init();
+
+    uint32_t input_id = CC_ID("search_input");
+    uint32_t btn1_id = CC_ID("button1");
+    uint32_t btn2_id = CC_ID("button2");
+
+    char text[64] = "";
+    int len = 0;
+    CcState *g = cc_get_state();
+
+    /* Frame 1: Register focusables, focus input, type text */
+    cc_frame_begin();
+    cc_register_focusable(input_id);
+    cc_register_focusable(btn1_id);
+    cc_register_focusable(btn2_id);
+
+    /* Focus the input */
+    cc_focus(input_id);
+
+    /* Set up active buffer (simulating what cc_input does) */
+    g->active_text = text;
+    g->active_len = &len;
+    g->active_max_len = 64;
+
+    /* Type "hello" */
+    cc_key_char('h');
+    cc_key_char('e');
+    cc_key_char('l');
+    cc_key_char('l');
+    cc_key_char('o');
+
+    ASSERT(len == 5, "Should have typed 5 chars");
+    int cursor_after_typing = cc_cursor_pos();
+    ASSERT(cursor_after_typing == 5, "Cursor should be at 5");
+
+    cc_frame_end(0.016f);
+
+    /* Frame 2: Tab to button1 */
+    cc_frame_begin();
+    cc_register_focusable(input_id);
+    cc_register_focusable(btn1_id);
+    cc_register_focusable(btn2_id);
+
+    /* Clear active buffer (input not focused this frame) */
+    g->active_text = NULL;
+    g->active_len = NULL;
+
+    cc_key_down(9, false, false);  /* Tab */
+    ASSERT(cc_focused_id() == btn1_id, "Should focus button1");
+
+    cc_frame_end(0.016f);
+
+    /* Frame 3: Shift+Tab back to input */
+    cc_frame_begin();
+    cc_register_focusable(input_id);
+    cc_register_focusable(btn1_id);
+    cc_register_focusable(btn2_id);
+
+    cc_key_down(9, true, false);  /* Shift+Tab */
+    ASSERT(cc_focused_id() == input_id, "Should focus input again");
+
+    /* Set active buffer again (simulating cc_input focus) */
+    g->active_text = text;
+    g->active_len = &len;
+    g->active_max_len = 64;
+
+    /* Check cursor position - should be preserved! */
+    int cursor_after_tab = cc_cursor_pos();
+    ASSERT(cursor_after_tab == 5, "Cursor should still be at 5 after Tab round-trip");
+
+    cc_frame_end(0.016f);
+
+    PASS();
+}
+
 /* ============================================================================
  * Widget State Store Tests
  * ============================================================================ */
@@ -858,10 +936,10 @@ static void test_widget_state_persistence(void) {
     cc_focus(CC_ID("other_widget"));
     cc_focus(id);
 
-    /* Cursor should be reset when refocusing (by design) */
-    /* This is the ImGui behavior - focus resets cursor */
+    /* Cursor position should be preserved in widget state */
+    /* This is the ClayShards behavior - widget state persists */
     int cursor_refocus = cc_cursor_pos();
-    ASSERT(cursor_refocus == 0, "Cursor resets on refocus");
+    ASSERT(cursor_refocus == 1, "Cursor persists on refocus");
 
     PASS();
 }
@@ -884,133 +962,6 @@ static void test_widget_state_isolation(void) {
     /* Focus widget2 */
     cc_focus(id2);
     ASSERT(cc_focused_id() == id2, "Widget2 should be focused");
-
-    PASS();
-}
-
-/* ============================================================================
- * ID Stack Tests
- * ============================================================================ */
-
-static void test_id_stack_basic(void) {
-    TEST(id_stack_basic);
-
-    cc_init();
-    cc_frame_begin();
-
-    /* Same string without stack = same ID */
-    uint32_t id1 = CC_ID("button");
-    uint32_t id2 = CC_ID("button");
-    ASSERT(id1 == id2, "Same string should produce same ID");
-
-    /* Push an integer ID */
-    cc_push_id(1);
-    uint32_t id3 = CC_ID("button");
-    ASSERT(id3 != id1, "ID should change with stack");
-
-    /* Different stack value = different ID */
-    cc_pop_id();
-    cc_push_id(2);
-    uint32_t id4 = CC_ID("button");
-    ASSERT(id4 != id1, "Different stack value should produce different ID");
-    ASSERT(id4 != id3, "Different stack values should produce different IDs");
-
-    cc_pop_id();
-
-    PASS();
-}
-
-static void test_id_stack_nested(void) {
-    TEST(id_stack_nested);
-
-    cc_init();
-    cc_frame_begin();
-
-    uint32_t base = CC_ID("item");
-
-    cc_push_id(0);
-    uint32_t level1 = CC_ID("item");
-    ASSERT(level1 != base, "Level 1 should differ from base");
-
-    cc_push_id(0);
-    uint32_t level2 = CC_ID("item");
-    ASSERT(level2 != level1, "Level 2 should differ from level 1");
-    ASSERT(level2 != base, "Level 2 should differ from base");
-
-    cc_pop_id();
-    uint32_t back_to_1 = CC_ID("item");
-    ASSERT(back_to_1 == level1, "Should be back to level 1");
-
-    cc_pop_id();
-    uint32_t back_to_base = CC_ID("item");
-    ASSERT(back_to_base == base, "Should be back to base");
-
-    PASS();
-}
-
-static void test_id_stack_loop_pattern(void) {
-    TEST(id_stack_loop_pattern);
-
-    cc_init();
-    cc_frame_begin();
-
-    /* Simulate the loop pattern from Dear ImGui */
-    uint32_t ids[3];
-    for (int i = 0; i < 3; i++) {
-        cc_push_id(i);
-        ids[i] = CC_ID("button");
-        cc_pop_id();
-    }
-
-    /* All IDs should be unique */
-    ASSERT(ids[0] != ids[1], "Loop IDs should be unique (0 vs 1)");
-    ASSERT(ids[1] != ids[2], "Loop IDs should be unique (1 vs 2)");
-    ASSERT(ids[0] != ids[2], "Loop IDs should be unique (0 vs 2)");
-
-    PASS();
-}
-
-static void test_id_stack_reset_each_frame(void) {
-    TEST(id_stack_reset_each_frame);
-
-    cc_init();
-
-    /* Frame 1: push some IDs */
-    cc_frame_begin();
-    cc_push_id(1);
-    cc_push_id(2);
-    /* Don't pop - stack should reset on next frame */
-    cc_frame_end(0.016f);
-
-    /* Frame 2: stack should be empty */
-    cc_frame_begin();
-    uint32_t id = CC_ID("test");
-    uint32_t expected = cc_hash_id("test");  /* No stack contribution */
-    ASSERT(id == expected, "Stack should reset each frame");
-
-    PASS();
-}
-
-static void test_id_push_string(void) {
-    TEST(id_push_string);
-
-    cc_init();
-    cc_frame_begin();
-
-    uint32_t base = CC_ID("item");
-
-    cc_push_id_str("context_a");
-    uint32_t with_a = CC_ID("item");
-
-    cc_pop_id();
-    cc_push_id_str("context_b");
-    uint32_t with_b = CC_ID("item");
-
-    ASSERT(with_a != base, "String push should change ID");
-    ASSERT(with_b != base, "String push should change ID");
-    ASSERT(with_a != with_b, "Different strings should produce different IDs");
-
-    cc_pop_id();
 
     PASS();
 }
@@ -1076,17 +1027,11 @@ int main(void) {
     test_tab_key_handling();
     test_tab_empty_focusables();
     test_focusable_reset_each_frame();
+    test_tab_preserves_cursor_across_focus();
 
     printf("\nWidget State Store Tests:\n");
     test_widget_state_persistence();
     test_widget_state_isolation();
-
-    printf("\nID Stack Tests:\n");
-    test_id_stack_basic();
-    test_id_stack_nested();
-    test_id_stack_loop_pattern();
-    test_id_stack_reset_each_frame();
-    test_id_push_string();
 
     printf("\n======================================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

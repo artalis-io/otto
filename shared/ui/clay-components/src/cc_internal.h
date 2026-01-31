@@ -15,7 +15,6 @@
  * ============================================================================ */
 
 #define CC_WIDGET_STORE_SIZE 256  /* Hash table size (power of 2) */
-#define CC_ID_STACK_SIZE 32       /* Max nesting depth for ID stack */
 
 /**
  * Per-widget persistent state.
@@ -67,10 +66,6 @@ typedef struct {
 
     /* Widget state store (hash table) */
     CcWidgetState widgets[CC_WIDGET_STORE_SIZE];
-
-    /* ID stack for stable identity in loops */
-    uint32_t id_stack[CC_ID_STACK_SIZE];
-    int id_stack_depth;
 } CcState;
 
 /* Get pointer to global state (defined in cc_common.c) */

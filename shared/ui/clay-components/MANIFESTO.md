@@ -33,15 +33,21 @@ ClayShards combines:
 Layout answers *"where and how big?"*
 Components answer *"what is it, how does it behave, what does it do?"*
 
-### 3) Stable identity via ID stack
+### 3) Stable identity via string hash
 
-Every component has a stable ID derived from a **string hash combined with an ID stack** (Dear ImGui model).
+Every component has a stable ID derived from a **string hash** using FNV-1a.
 
 ```c
+cc_button(CC_ID("submit"), "Submit", NULL);
+cc_input(CC_ID("search"), text, &len, max, "Search...", NULL);
+```
+
+For dynamic content, use unique string names:
+```c
+char id[32];
 for (int i = 0; i < 3; i++) {
-    cc_push_id(i);
-    cc_button(CC_ID("item"), "Item", NULL);  // Unique ID per iteration
-    cc_pop_id();
+    snprintf(id, sizeof(id), "item_%d", i);
+    cc_button(CC_ID(id), labels[i], NULL);
 }
 ```
 
