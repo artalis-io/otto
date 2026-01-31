@@ -2,8 +2,31 @@
  * Clay Renderer - Keyboard Handling
  *
  * Generic keyboard event routing for Clay UI components.
- * Handles Tab navigation, focus routing, and character input.
+ * Handles Tab navigation, focus routing, clipboard, and character input.
  */
+
+/**
+ * Get selected text from WASM text input
+ */
+function getSelectedText(wasm) {
+    const cursor = wasm.cc_cursor_pos();
+    const selStart = wasm.cc_selection_start();
+    if (selStart < 0 || selStart === cursor) return null;
+
+    const start = Math.min(cursor, selStart);
+    const end = Math.max(cursor, selStart);
+
+    const ptr = wasm.cc_focused_text();
+    const len = wasm.cc_focused_text_len();
+    if (!ptr || len <= 0) return null;
+
+    const memory = new Uint8Array(wasm.memory.buffer);
+    let text = '';
+    for (let i = start; i < end && i < len; i++) {
+        text += String.fromCharCode(memory[ptr + i]);
+    }
+    return text;
+}
 
 /**
  * Sets up keyboard event handling for Clay components.
@@ -39,6 +62,12 @@ export function setupKeyboardHandler(wasm, options = {}) {
         }
 
         if (wasm.cc_focused_id() !== 0) {
+            // Clipboard operations (Ctrl+C, Ctrl+V, Ctrl+X)
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'v' || e.key === 'x')) {
+                handleClipboard(e, wasm);
+                return;
+            }
+
             // Route to focused component
             if (wasm.cc_key_down(e.keyCode, e.shiftKey ? 1 : 0, e.ctrlKey ? 1 : 0)) {
                 e.preventDefault();
@@ -57,6 +86,40 @@ export function setupKeyboardHandler(wasm, options = {}) {
             // Global shortcuts (app-specific)
             if (onGlobalShortcut) {
                 onGlobalShortcut(e);
+            }
+        }
+    }
+
+    async function handleClipboard(e, wasm) {
+        e.preventDefault();
+
+        if (e.key === 'c' || e.key === 'x') {
+            // Copy or Cut
+            const selectedText = getSelectedText(wasm);
+            if (selectedText) {
+                try {
+                    await navigator.clipboard.writeText(selectedText);
+                } catch (err) {
+                    console.warn('Clipboard write failed:', err);
+                }
+
+                // For cut, delete the selection
+                if (e.key === 'x') {
+                    wasm.cc_key_down(8, 0, 0); // Backspace deletes selection
+                }
+            }
+        } else if (e.key === 'v') {
+            // Paste
+            try {
+                const text = await navigator.clipboard.readText();
+                for (const char of text) {
+                    const code = char.charCodeAt(0);
+                    if (code >= 32 && code <= 126) {
+                        wasm.cc_key_char(code);
+                    }
+                }
+            } catch (err) {
+                console.warn('Clipboard read failed:', err);
             }
         }
     }
