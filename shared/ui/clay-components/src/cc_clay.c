@@ -22,6 +22,7 @@
  * ============================================================================ */
 
 #define CC_CLAY_DEFAULT_MEMORY_SIZE (8 * 1024 * 1024)
+#define CC_GLYPH_TABLE_SIZE 256  /* ASCII + extended */
 
 typedef struct {
     uint8_t internal_memory[CC_CLAY_DEFAULT_MEMORY_SIZE];
@@ -29,12 +30,17 @@ typedef struct {
     float char_width_ratio;
     char error_message[256];
     Clay_RenderCommandArray commands;
+
+    /* Font metrics - glyph advances (normalized: 1.0 = em size) */
+    float glyph_advances[CC_GLYPH_TABLE_SIZE];
+    bool has_font_metrics;
 } CcClayState;
 
 static CcClayState g_clay = {
     .initialized = false,
     .char_width_ratio = 0.6f,
     .error_message = "",
+    .has_font_metrics = false,
 };
 
 /* ============================================================================
@@ -47,11 +53,28 @@ static Clay_Dimensions cc_clay_measure_text(
     void *userData
 ) {
     (void)userData;
-    float char_width = config->fontSize * g_clay.char_width_ratio;
-    float char_height = config->fontSize;
+    float font_size = config->fontSize;
+    float width = 0;
+
+    if (g_clay.has_font_metrics) {
+        /* Use real glyph advances */
+        for (int i = 0; i < text.length; i++) {
+            int c = (unsigned char)text.chars[i];
+            if (c < CC_GLYPH_TABLE_SIZE && g_clay.glyph_advances[c] > 0) {
+                width += g_clay.glyph_advances[c] * font_size;
+            } else {
+                /* Fallback for unknown glyphs */
+                width += g_clay.char_width_ratio * font_size;
+            }
+        }
+    } else {
+        /* Fallback: fixed ratio (monospace approximation) */
+        width = text.length * g_clay.char_width_ratio * font_size;
+    }
+
     return (Clay_Dimensions){
-        .width = text.length * char_width,
-        .height = char_height
+        .width = width,
+        .height = font_size
     };
 }
 
@@ -248,4 +271,29 @@ CC_CLAY_EXPORT bool cc_clay_pointer_over(const char *element_id) {
     uint32_t hash = cc_hash_id(element_id);
     Clay_ElementId id = { .id = hash, .stringId = { .chars = element_id, .length = (int)strlen(element_id) } };
     return Clay_PointerOver(id);
+}
+
+/* ============================================================================
+ * Font Metrics
+ * ============================================================================ */
+
+CC_CLAY_EXPORT void cc_clay_set_glyph_advance(int unicode, float advance) {
+    if (unicode >= 0 && unicode < CC_GLYPH_TABLE_SIZE) {
+        g_clay.glyph_advances[unicode] = advance;
+        g_clay.has_font_metrics = true;
+    }
+}
+
+CC_CLAY_EXPORT void cc_clay_set_glyph_advances(const float *advances, int count) {
+    if (!advances || count <= 0) return;
+
+    int limit = count < CC_GLYPH_TABLE_SIZE ? count : CC_GLYPH_TABLE_SIZE;
+    for (int i = 0; i < limit; i++) {
+        g_clay.glyph_advances[i] = advances[i];
+    }
+    g_clay.has_font_metrics = true;
+}
+
+CC_CLAY_EXPORT bool cc_clay_has_font_metrics(void) {
+    return g_clay.has_font_metrics;
 }

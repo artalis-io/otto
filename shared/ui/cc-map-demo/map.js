@@ -162,6 +162,9 @@ async function main() {
 
         renderer.setFont(font);
 
+        // Transfer font metrics to WASM for accurate text layout
+        font.transferMetricsToWasm(wasm);
+
         // Initialize app
         wasm.map_init(width, height);
         wasm.map_set_center(47.4979, 19.0402);

@@ -104,6 +104,24 @@ void cc_clay_set_pointer(float x, float y, bool is_down);
 /* Check if pointer is over a Clay element by string ID */
 bool cc_clay_pointer_over(const char *element_id);
 
+/* ============================================================================
+ * Font Metrics
+ *
+ * Call these from JS after loading font to enable accurate text measurement.
+ * ============================================================================ */
+
+/* Set glyph advance width (normalized: 1.0 = em size).
+ * Call once per glyph after font loads. */
+void cc_clay_set_glyph_advance(int unicode, float advance);
+
+/* Set all glyphs at once from a buffer.
+ * advances[i] = advance for unicode i, for i in [0, count).
+ * More efficient than individual calls. */
+void cc_clay_set_glyph_advances(const float *advances, int count);
+
+/* Check if font metrics have been loaded */
+bool cc_clay_has_font_metrics(void);
+
 #ifdef __cplusplus
 }
 #endif
