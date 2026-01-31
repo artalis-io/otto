@@ -45,11 +45,11 @@ CcState* cc_get_state(void) {
 CcWidgetState* cc_widget_state(uint32_t id) {
     if (id == 0) return NULL;
 
-    uint32_t mask = CC_WIDGET_STORE_SIZE - 1;
+    uint32_t mask = CC_WIDGET_STATE_CAPACITY - 1;
     uint32_t slot = id & mask;
 
     /* Linear probe to find existing or empty slot */
-    for (int i = 0; i < CC_WIDGET_STORE_SIZE; i++) {
+    for (int i = 0; i < CC_WIDGET_STATE_CAPACITY; i++) {
         uint32_t idx = (slot + i) & mask;
         CcWidgetState *w = &g_cc.widgets[idx];
 

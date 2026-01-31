@@ -62,6 +62,8 @@ for (int i = 0; i < 3; i++) {
 
 **Constraint:** IDs must be unique per component. Duplicate IDs will share widget state (cursor, scroll, etc.), which is usually incorrect. In debug builds, ClayShards may detect duplicate IDs and emit diagnostics.
 
+Hash collisions are theoretically possible with FNV-1a; debug builds may optionally store original ID strings for collision detection.
+
 Stable identity enables:
 
 * persistent widget state (cursor position, scroll offset)
@@ -100,7 +102,7 @@ This separation is what makes "render into anything" real.
 
 ### 7) Determinism
 
-Given identical inputs and state, ClayShards produces identical layout and render commands. This is essential for embedded/web parity and testability.
+Given identical inputs, state, and backend behavior, ClayShards produces identical layout and render commands. This is essential for embedded/web parity and testability.
 
 ---
 
@@ -128,7 +130,7 @@ Clay is the layout engine.
 
 ### Widget state store
 
-Widgets maintain internal state in a **fixed-size hash table keyed by stable ID**. Capacity is configurable at compile time (`CC_WIDGET_STORE_SIZE`) to preserve deterministic memory usage.
+Widgets maintain internal state in a **fixed-size hash table keyed by stable ID**. Capacity is configurable at compile time (`CC_WIDGET_STATE_CAPACITY`) to preserve deterministic memory usage.
 
 This includes:
 

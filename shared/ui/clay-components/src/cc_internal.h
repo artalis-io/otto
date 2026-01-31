@@ -14,7 +14,7 @@
  * Widget State Store
  * ============================================================================ */
 
-#define CC_WIDGET_STORE_SIZE 256  /* Hash table size (power of 2) */
+#define CC_WIDGET_STATE_CAPACITY 256  /* Hash table size (power of 2) */
 
 /**
  * Per-widget persistent state.
@@ -68,7 +68,7 @@ typedef struct {
     int focusable_count;
 
     /* Widget state store (hash table) */
-    CcWidgetState widgets[CC_WIDGET_STORE_SIZE];
+    CcWidgetState widgets[CC_WIDGET_STATE_CAPACITY];
 } CcState;
 
 /* Get pointer to global state (defined in cc_common.c) */
