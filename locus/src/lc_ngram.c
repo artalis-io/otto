@@ -2,11 +2,15 @@
  * lc_ngram.c - N-gram Index for Fuzzy Matching
  *
  * Implements trigram-based fuzzy string matching using Jaccard similarity.
+ * Uses O(1) hit counting with a pre-allocated count array for fast search.
  */
 
 #include "lc_ngram.h"
 #include <stdlib.h>
 #include <string.h>
+
+/* Maximum entities to process per n-gram (skip overly common trigrams) */
+#define LC_NGRAM_MAX_POSTING_SIZE 50000
 
 /* ============================================================================
  * N-gram Generation
@@ -130,6 +134,11 @@ LCStatus lc_ngram_index_name(LCNgramIndex *idx, const char *name, uint32_t entit
 {
     if (!idx || !name) return LC_ERROR_INVALID_PARAM;
 
+    /* Track max entity ID for hit buffer sizing */
+    if (entity_id >= idx->max_entity_id) {
+        idx->max_entity_id = entity_id + 1;
+    }
+
     char ngrams[64][LC_NGRAM_SIZE + 1];
     size_t count = lc_ngram_generate(name, ngrams, 64);
 
@@ -191,88 +200,91 @@ static int fuzzy_compare(const void *a, const void *b)
     return 0;
 }
 
+/*
+ * Fast fuzzy search using O(1) hit counting.
+ *
+ * Instead of tracking hits in a dynamic array with O(n) lookup,
+ * we use a pre-allocated count array indexed by entity_id.
+ * This gives O(1) increment per hit and O(n) final scan.
+ */
 size_t lc_ngram_search(const LCNgramIndex *idx, const char *query,
                        float threshold, size_t max_results, LCFuzzyMatch *results)
 {
     if (!idx || !query || !results || max_results == 0) return 0;
+    if (idx->max_entity_id == 0) return 0;
 
     /* Generate query n-grams */
     char query_ngrams[64][LC_NGRAM_SIZE + 1];
     size_t query_ngram_count = lc_ngram_generate(query, query_ngrams, 64);
     if (query_ngram_count == 0) return 0;
 
-    /* Track entity hit counts */
-    typedef struct {
-        uint32_t entity_id;
-        uint32_t hits;
-    } EntityHit;
+    /* Allocate hit count array - O(1) per entity lookup */
+    uint16_t *hit_counts = calloc(idx->max_entity_id, sizeof(uint16_t));
+    if (!hit_counts) return 0;
 
-    EntityHit *hits = NULL;
-    size_t hits_count = 0;
-    size_t hits_capacity = 256;
-    hits = malloc(hits_capacity * sizeof(EntityHit));
-    if (!hits) return 0;
-
-    /* Count hits for each entity */
+    /* Count hits for each entity - O(total_posting_list_size) */
+    size_t total_hits = 0;
     for (size_t i = 0; i < query_ngram_count; i++) {
         const LCNgramEntry *entry = find_entry(idx, query_ngrams[i]);
         if (!entry) continue;
 
+        /* Skip overly common n-grams (low discriminative value) */
+        if (entry->count > LC_NGRAM_MAX_POSTING_SIZE) continue;
+
         for (uint32_t j = 0; j < entry->count; j++) {
             uint32_t eid = entry->entity_ids[j];
-
-            /* Find or add entity in hits */
-            int found = -1;
-            for (size_t k = 0; k < hits_count; k++) {
-                if (hits[k].entity_id == eid) {
-                    found = (int)k;
-                    break;
-                }
-            }
-
-            if (found >= 0) {
-                hits[found].hits++;
-            } else {
-                if (hits_count >= hits_capacity) {
-                    hits_capacity *= 2;
-                    EntityHit *new_hits = realloc(hits, hits_capacity * sizeof(EntityHit));
-                    if (!new_hits) {
-                        free(hits);
-                        return 0;
-                    }
-                    hits = new_hits;
-                }
-                hits[hits_count].entity_id = eid;
-                hits[hits_count].hits = 1;
-                hits_count++;
+            if (eid < idx->max_entity_id) {
+                hit_counts[eid]++;
+                total_hits++;
             }
         }
     }
 
-    /* Calculate Jaccard similarity and filter by threshold */
+    /* Early exit if no hits */
+    if (total_hits == 0) {
+        free(hit_counts);
+        return 0;
+    }
+
+    /* Calculate minimum hits needed based on threshold */
+    uint16_t min_hits = (uint16_t)(threshold * query_ngram_count);
+    if (min_hits == 0) min_hits = 1;
+
+    /* Collect results that meet threshold - O(max_entity_id) */
     size_t result_count = 0;
-    for (size_t i = 0; i < hits_count && result_count < max_results; i++) {
-        /* Jaccard = intersection / union
-         * We approximate: intersection = hits, union ≈ query_ngrams + entity_ngrams - hits
-         * Since we don't store entity ngram counts, we use a simplified score:
-         * score = hits / query_ngram_count (what fraction of query matches)
-         */
-        float score = (float)hits[i].hits / (float)query_ngram_count;
 
-        if (score >= threshold) {
-            results[result_count].entity_id = hits[i].entity_id;
-            results[result_count].score = score;
-            result_count++;
+    /* Use a simple approach: collect up to max_results * 4, then sort and trim */
+    size_t collect_limit = max_results * 4;
+    if (collect_limit > 1024) collect_limit = 1024;
+
+    LCFuzzyMatch *candidates = malloc(collect_limit * sizeof(LCFuzzyMatch));
+    if (!candidates) {
+        free(hit_counts);
+        return 0;
+    }
+
+    size_t candidate_count = 0;
+    for (uint32_t eid = 0; eid < idx->max_entity_id && candidate_count < collect_limit; eid++) {
+        if (hit_counts[eid] >= min_hits) {
+            float score = (float)hit_counts[eid] / (float)query_ngram_count;
+            candidates[candidate_count].entity_id = eid;
+            candidates[candidate_count].score = score;
+            candidate_count++;
         }
     }
 
-    free(hits);
+    free(hit_counts);
 
     /* Sort by score descending */
-    if (result_count > 1) {
-        qsort(results, result_count, sizeof(LCFuzzyMatch), fuzzy_compare);
+    if (candidate_count > 1) {
+        qsort(candidates, candidate_count, sizeof(LCFuzzyMatch), fuzzy_compare);
     }
 
+    /* Copy top results */
+    result_count = candidate_count < max_results ? candidate_count : max_results;
+    memcpy(results, candidates, result_count * sizeof(LCFuzzyMatch));
+
+    free(candidates);
     return result_count;
 }
 

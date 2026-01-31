@@ -26,6 +26,7 @@
 #include "lc_ngram.h"
 #include "lc_spatial.h"
 #include "lc_index.h"
+#include "lc_serialize.h"
 
 /* ============================================================================
  * Version

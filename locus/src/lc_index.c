@@ -11,6 +11,15 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+/* mmap context structure (defined in lc_serialize.c) */
+typedef struct {
+    void *map_base;
+    size_t map_size;
+    int fd;
+} LCMmapContext;
 
 /* ============================================================================
  * Index Management
@@ -39,7 +48,32 @@ void lc_index_free(LCIndex *index)
 {
     if (!index) return;
 
-    lc_entity_store_free(index->entities);
+    /* Handle mmap'd index specially */
+    if (index->mmap_ctx) {
+        LCMmapContext *ctx = (LCMmapContext *)index->mmap_ctx;
+
+        /* Free alt_names arrays (these are allocated, not mmap'd) */
+        if (index->entities) {
+            for (uint32_t i = 0; i < index->entities->count; i++) {
+                free(index->entities->entities[i].alt_names);
+            }
+            free(index->entities->entities);
+            free(index->entities);
+        }
+
+        /* Unmap and close */
+        if (ctx->map_base && ctx->map_base != MAP_FAILED) {
+            munmap(ctx->map_base, ctx->map_size);
+        }
+        if (ctx->fd >= 0) {
+            close(ctx->fd);
+        }
+        free(ctx);
+    } else {
+        /* Regular free */
+        lc_entity_store_free(index->entities);
+    }
+
     lc_trie_free(index->trie);
     lc_ngram_free(index->ngrams);
     lc_grid_free(index->grid);

@@ -41,6 +41,7 @@ typedef struct {
     LCNgramEntry *entries;      /* Sorted by ngram for binary search */
     uint32_t num_entries;
     uint32_t capacity;
+    uint32_t max_entity_id;     /* For allocating hit buffer */
     size_t memory_used;
 } LCNgramIndex;
 
