@@ -3,6 +3,9 @@
  *
  * Renders polylines and markers on top of map tiles.
  * Reads overlay data from WASM and projects geo coordinates to screen.
+ *
+ * Multi-instance support: All render methods take mapId to identify which
+ * map's overlays to render. Each map has independent overlay state.
  */
 
 const CS_OVERLAY_NONE = 0;
@@ -131,8 +134,9 @@ export class MapOverlayRenderer {
     }
 
     /**
-     * Render all overlays
+     * Render all overlays for a specific map
      * @param {Object} wasm - WASM exports
+     * @param {number} mapId - Map component ID
      * @param {number} lat - Map center latitude
      * @param {number} lon - Map center longitude
      * @param {number} zoom - Visual zoom level
@@ -140,40 +144,52 @@ export class MapOverlayRenderer {
      * @param {number} height - Viewport height
      * @param {Float32Array} projMatrix - Projection matrix
      */
-    render(wasm, lat, lon, zoom, width, height, projMatrix) {
-        const count = wasm.cs_map_overlay_count();
+    render(wasm, mapId, lat, lon, zoom, width, height, projMatrix) {
+        const count = wasm.cs_map_overlay_count(mapId);
         if (count === 0) return;
 
+        // Get interaction state for visual feedback
+        const hoveredId = wasm.cs_map_get_hovered_overlay(mapId);
+        const draggingId = wasm.cs_map_get_dragging_overlay(mapId);
+
         for (let i = 0; i < count; i++) {
-            const type = wasm.cs_map_overlay_type(i);
+            const type = wasm.cs_map_overlay_type(mapId, i);
+            const overlayId = wasm.cs_map_overlay_id(mapId, i);
+            const isHovered = overlayId === hoveredId && overlayId !== 0;
+            const isDragging = overlayId === draggingId && overlayId !== 0;
 
             if (type === CS_OVERLAY_POLYLINE) {
-                this._renderPolyline(wasm, i, lat, lon, zoom, width, height, projMatrix);
+                this._renderPolyline(wasm, mapId, i, isHovered, lat, lon, zoom, width, height, projMatrix);
             } else if (type === CS_OVERLAY_MARKER) {
-                this._renderMarker(wasm, i, lat, lon, zoom, width, height, projMatrix);
+                this._renderMarker(wasm, mapId, i, isHovered, isDragging, lat, lon, zoom, width, height, projMatrix);
             }
         }
     }
 
-    _renderPolyline(wasm, index, lat, lon, zoom, width, height, projMatrix) {
+    _renderPolyline(wasm, mapId, index, isHovered, lat, lon, zoom, width, height, projMatrix) {
         const gl = this.gl;
-        const pointCount = wasm.cs_map_overlay_polyline_count(index);
+        const pointCount = wasm.cs_map_overlay_polyline_count(mapId, index);
         if (pointCount < 2) return;
 
         // Get style
         const color = [
-            wasm.cs_map_overlay_polyline_color_r(index),
-            wasm.cs_map_overlay_polyline_color_g(index),
-            wasm.cs_map_overlay_polyline_color_b(index),
-            wasm.cs_map_overlay_polyline_color_a(index)
+            wasm.cs_map_overlay_polyline_color_r(mapId, index),
+            wasm.cs_map_overlay_polyline_color_g(mapId, index),
+            wasm.cs_map_overlay_polyline_color_b(mapId, index),
+            wasm.cs_map_overlay_polyline_color_a(mapId, index)
         ];
-        const lineWidth = wasm.cs_map_overlay_polyline_width(index);
+        let lineWidth = wasm.cs_map_overlay_polyline_width(mapId, index);
+
+        // Visual feedback for hover
+        if (isHovered) {
+            lineWidth *= 1.2;  // Slightly wider on hover
+        }
 
         // Project points to screen coordinates
         const screenPoints = [];
         for (let i = 0; i < pointCount; i++) {
-            const pLat = wasm.cs_map_overlay_polyline_lat(index, i);
-            const pLon = wasm.cs_map_overlay_polyline_lon(index, i);
+            const pLat = wasm.cs_map_overlay_polyline_lat(mapId, index, i);
+            const pLon = wasm.cs_map_overlay_polyline_lon(mapId, index, i);
             const [x, y] = this._geoToScreen(pLat, pLon, lat, lon, zoom, width, height);
             screenPoints.push(x, y);
         }
@@ -198,28 +214,35 @@ export class MapOverlayRenderer {
         gl.disableVertexAttribArray(this.lineShader.attribs.a_pos);
     }
 
-    _renderMarker(wasm, index, lat, lon, zoom, width, height, projMatrix) {
+    _renderMarker(wasm, mapId, index, isHovered, isDragging, lat, lon, zoom, width, height, projMatrix) {
         const gl = this.gl;
 
-        const mLat = wasm.cs_map_overlay_marker_lat(index);
-        const mLon = wasm.cs_map_overlay_marker_lon(index);
-        const radius = wasm.cs_map_overlay_marker_radius(index);
+        const mLat = wasm.cs_map_overlay_marker_lat(mapId, index);
+        const mLon = wasm.cs_map_overlay_marker_lon(mapId, index);
+        let radius = wasm.cs_map_overlay_marker_radius(mapId, index);
 
         const color = [
-            wasm.cs_map_overlay_marker_color_r(index),
-            wasm.cs_map_overlay_marker_color_g(index),
-            wasm.cs_map_overlay_marker_color_b(index),
-            wasm.cs_map_overlay_marker_color_a(index)
+            wasm.cs_map_overlay_marker_color_r(mapId, index),
+            wasm.cs_map_overlay_marker_color_g(mapId, index),
+            wasm.cs_map_overlay_marker_color_b(mapId, index),
+            wasm.cs_map_overlay_marker_color_a(mapId, index)
         ];
 
         const borderColor = [
-            wasm.cs_map_overlay_marker_border_r(index),
-            wasm.cs_map_overlay_marker_border_g(index),
-            wasm.cs_map_overlay_marker_border_b(index),
-            wasm.cs_map_overlay_marker_border_a(index)
+            wasm.cs_map_overlay_marker_border_r(mapId, index),
+            wasm.cs_map_overlay_marker_border_g(mapId, index),
+            wasm.cs_map_overlay_marker_border_b(mapId, index),
+            wasm.cs_map_overlay_marker_border_a(mapId, index)
         ];
 
-        const borderWidth = wasm.cs_map_overlay_marker_border_width(index);
+        const borderWidth = wasm.cs_map_overlay_marker_border_width(mapId, index);
+
+        // Visual feedback for hover and drag
+        if (isDragging) {
+            radius *= 1.2;  // Larger when dragging
+        } else if (isHovered) {
+            radius *= 1.1;  // Slightly larger on hover
+        }
 
         // Project to screen
         const [x, y] = this._geoToScreen(mLat, mLon, lat, lon, zoom, width, height);

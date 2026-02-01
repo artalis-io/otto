@@ -65,7 +65,23 @@ typedef struct {
     double duration_s;
     bool loading;
     bool error;
+    /* Drag-to-reroute debouncing */
+    float reroute_cooldown;      /* Time until next reroute allowed (seconds) */
+    bool dragging_marker;        /* Currently dragging a route marker */
 } RouteState;
+
+/* Minimum time between route requests during drag (seconds) */
+#define DRAG_REROUTE_INTERVAL 0.4f
+
+/* Max zoom per layer (layer_type: 0=Carta, 1=OSM) */
+#define LAYER_CARTA 0
+#define LAYER_OSM   1
+#define MAX_ZOOM_CARTA 18
+#define MAX_ZOOM_OSM   19
+
+static int get_max_zoom(int layer_type) {
+    return (layer_type == LAYER_CARTA) ? MAX_ZOOM_CARTA : MAX_ZOOM_OSM;
+}
 
 typedef struct {
     char search[256];
@@ -156,10 +172,10 @@ static void render_zoom_controls(void) {
         .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 2 }
     }) {
         if (cs_button(CS_ID("zoom_in"), "+", &zoom_plus).clicked) {
-            g_app.map.zoom = cs_map_scroll(g_app.map.zoom, 1, 0, 19);
+            g_app.map.zoom = cs_map_scroll(g_app.map.zoom, 1, 0, get_max_zoom(g_app.panels.layer_type));
         }
         if (cs_button(CS_ID("zoom_out"), "-", &zoom_minus).clicked) {
-            g_app.map.zoom = cs_map_scroll(g_app.map.zoom, -1, 0, 19);
+            g_app.map.zoom = cs_map_scroll(g_app.map.zoom, -1, 0, get_max_zoom(g_app.panels.layer_type));
         }
     }
 }
@@ -182,10 +198,15 @@ static void render_layer_panel(void) {
         const CsButtonStyle sel = {CS_BTN_PRIMARY, 14, 8, 8, 4, 70};
         const CsButtonStyle def = {CS_BTN_DEFAULT, 14, 8, 8, 4, 70};
 
-        if (cs_button(CS_ID("layer_carta"), "Carta", g_app.panels.layer_type == 0 ? &sel : &def).clicked)
-            g_app.panels.layer_type = 0;
-        if (cs_button(CS_ID("layer_osm"), "OSM", g_app.panels.layer_type == 1 ? &sel : &def).clicked)
-            g_app.panels.layer_type = 1;
+        if (cs_button(CS_ID("layer_carta"), "Carta", g_app.panels.layer_type == LAYER_CARTA ? &sel : &def).clicked) {
+            g_app.panels.layer_type = LAYER_CARTA;
+            /* Clamp zoom to Carta's max if needed */
+            if (g_app.map.zoom > MAX_ZOOM_CARTA) {
+                g_app.map.zoom = MAX_ZOOM_CARTA;
+            }
+        }
+        if (cs_button(CS_ID("layer_osm"), "OSM", g_app.panels.layer_type == LAYER_OSM ? &sel : &def).clicked)
+            g_app.panels.layer_type = LAYER_OSM;
     }
 }
 
@@ -395,7 +416,7 @@ static void render_ui(void) {
         .layout = { .sizing = { CLAY_SIZING_FIXED((float)g_app.map.width), CLAY_SIZING_FIXED((float)g_app.map.height) } }
     }) {
         /* Map with overlays - using begin/end pattern */
-        cs_map_begin(g_app.map.component_id, &g_app.map.lat, &g_app.map.lon, &g_app.map.zoom,
+        CsMapResult map_result = cs_map_begin(g_app.map.component_id, &g_app.map.lat, &g_app.map.lon, &g_app.map.zoom,
                      (float)g_app.map.width, (float)g_app.map.height, NULL);
 
         /* Route polyline (only if we have route geometry) */
@@ -406,27 +427,95 @@ static void render_ui(void) {
             });
         }
 
-        /* Start marker (green) */
+        /* Determine marker positions - use drag position during active drag */
+        double start_lat = g_app.route.start.lat;
+        double start_lon = g_app.route.start.lon;
+        double end_lat = g_app.route.end.lat;
+        double end_lon = g_app.route.end.lon;
+
+        /* During active drag, use the drag position for the dragged marker */
+        if (map_result.dragged_marker_id == CS_ID("start")) {
+            start_lat = map_result.dragged_marker_lat;
+            start_lon = map_result.dragged_marker_lon;
+        } else if (map_result.dragged_marker_id == CS_ID("end")) {
+            end_lat = map_result.dragged_marker_lat;
+            end_lon = map_result.dragged_marker_lon;
+        }
+
+        /* Start marker (green, draggable) */
         if (g_app.route.has_start) {
-            cs_marker(CS_ID("start"), g_app.route.start.lat, g_app.route.start.lon, &(CsMarkerStyle){
+            cs_marker(CS_ID("start"), start_lat, start_lon, &(CsMarkerStyle){
                 .color = {0.2f, 0.8f, 0.3f, 1.0f},
                 .radius = 12.0f,
                 .border_color = {1.0f, 1.0f, 1.0f, 1.0f},
                 .border_width = 3.0f,
+                .draggable = true,
             });
         }
 
-        /* End marker (red) */
+        /* End marker (red, draggable) */
         if (g_app.route.has_end) {
-            cs_marker(CS_ID("end"), g_app.route.end.lat, g_app.route.end.lon, &(CsMarkerStyle){
+            cs_marker(CS_ID("end"), end_lat, end_lon, &(CsMarkerStyle){
                 .color = {0.9f, 0.2f, 0.2f, 1.0f},
                 .radius = 12.0f,
                 .border_color = {1.0f, 1.0f, 1.0f, 1.0f},
                 .border_width = 3.0f,
+                .draggable = true,
             });
         }
 
         cs_map_end();
+
+        /* Track active marker drag state */
+        bool is_dragging_route_marker = (map_result.dragged_marker_id == CS_ID("start") ||
+                                         map_result.dragged_marker_id == CS_ID("end"));
+
+        /* Handle marker drag completion - update app-owned state and re-route */
+        if (map_result.drag_ended && map_result.dragged_marker_id != 0) {
+            if (map_result.dragged_marker_id == CS_ID("start")) {
+                /* Update start position from drag result */
+                g_app.route.start.lat = map_result.dragged_marker_lat;
+                g_app.route.start.lon = map_result.dragged_marker_lon;
+            } else if (map_result.dragged_marker_id == CS_ID("end")) {
+                /* Update end position from drag result */
+                g_app.route.end.lat = map_result.dragged_marker_lat;
+                g_app.route.end.lon = map_result.dragged_marker_lon;
+            }
+
+            /* Trigger final re-route on drag end */
+            if (g_app.route.has_start && g_app.route.has_end) {
+                g_app.route.loading = true;
+                g_app.route.error = false;
+                g_app.route.point_count = 0;
+                cs_provider_route(g_app.route.start, g_app.route.end);
+            }
+            g_app.route.dragging_marker = false;
+            g_app.route.reroute_cooldown = 0;
+        }
+        /* Handle debounced route updates during drag */
+        else if (is_dragging_route_marker && g_app.route.has_start && g_app.route.has_end) {
+            g_app.route.dragging_marker = true;
+
+            /* Request intermediate route when cooldown expires */
+            if (g_app.route.reroute_cooldown <= 0 && !g_app.route.loading) {
+                /* Use current drag positions for the route request */
+                CsGeoPoint from = g_app.route.start;
+                CsGeoPoint to = g_app.route.end;
+
+                if (map_result.dragged_marker_id == CS_ID("start")) {
+                    from.lat = map_result.dragged_marker_lat;
+                    from.lon = map_result.dragged_marker_lon;
+                } else if (map_result.dragged_marker_id == CS_ID("end")) {
+                    to.lat = map_result.dragged_marker_lat;
+                    to.lon = map_result.dragged_marker_lon;
+                }
+
+                g_app.route.loading = true;
+                g_app.route.error = false;
+                cs_provider_route(from, to);
+                g_app.route.reroute_cooldown = DRAG_REROUTE_INTERVAL;
+            }
+        }
 
         /* UI overlays */
         render_info_panel();
@@ -463,7 +552,7 @@ EXPORT void map_set_center(double lat, double lon) {
 }
 
 EXPORT void map_set_zoom(int zoom) {
-    g_app.map.zoom = cs_map_scroll(zoom, 0, 0, 19);
+    g_app.map.zoom = cs_map_scroll(zoom, 0, 0, get_max_zoom(g_app.panels.layer_type));
 }
 
 EXPORT double map_get_lat(void) { return g_app.map.lat; }
@@ -471,30 +560,48 @@ EXPORT double map_get_lon(void) { return g_app.map.lon; }
 EXPORT int map_get_zoom(void) { return g_app.map.zoom; }
 EXPORT double map_get_visual_zoom(void) { return cs_map_get_visual_zoom(g_app.map.component_id); }
 EXPORT int map_get_layer(void) { return g_app.panels.layer_type; }
+EXPORT uint32_t map_get_component_id(void) { return g_app.map.component_id; }
+EXPORT int map_get_width(void) { return g_app.map.width; }
+EXPORT int map_get_height(void) { return g_app.map.height; }
+
+/* Debug exports for route markers */
+EXPORT int map_debug_has_start(void) { return g_app.route.has_start ? 1 : 0; }
+EXPORT double map_debug_start_lat(void) { return g_app.route.start.lat; }
+EXPORT double map_debug_start_lon(void) { return g_app.route.start.lon; }
 
 /* ============================================================================
  * Domain Exports - Pointer Handling
  * ============================================================================ */
 
 EXPORT void map_pointer_move(float x, float y) {
-    bool dragging = cs_map_is_dragging(g_app.map.component_id);
+    bool dragging_map = cs_map_is_dragging(g_app.map.component_id);
+    bool dragging_marker = cs_map_is_dragging_marker(g_app.map.component_id);
+    bool dragging = dragging_map || dragging_marker;
     cs_clay_set_pointer(x, y, dragging);
 
     if (dragging) {
         double new_lat, new_lon;
-        if (cs_map_pointer_move(g_app.map.component_id, g_app.map.zoom, x, y, &new_lat, &new_lon)) {
-            g_app.map.lat = new_lat;
-            g_app.map.lon = new_lon;
-            if (g_app.map.lat > 85.0) g_app.map.lat = 85.0;
-            if (g_app.map.lat < -85.0) g_app.map.lat = -85.0;
-            while (g_app.map.lon > 180.0) g_app.map.lon -= 360.0;
-            while (g_app.map.lon < -180.0) g_app.map.lon += 360.0;
+        double visual_zoom = cs_map_get_visual_zoom(g_app.map.component_id);
+        if (cs_map_pointer_move(g_app.map.component_id, visual_zoom, x, y,
+                                (float)g_app.map.width, (float)g_app.map.height,
+                                &new_lat, &new_lon)) {
+            /* Only update map position if dragging map (not marker) */
+            if (dragging_map) {
+                g_app.map.lat = new_lat;
+                g_app.map.lon = new_lon;
+                if (g_app.map.lat > 85.0) g_app.map.lat = 85.0;
+                if (g_app.map.lat < -85.0) g_app.map.lat = -85.0;
+                while (g_app.map.lon > 180.0) g_app.map.lon -= 360.0;
+                while (g_app.map.lon < -180.0) g_app.map.lon += 360.0;
+            }
         }
     }
 }
 
 EXPORT void map_pointer_down(float x, float y) {
-    cs_map_pointer_down(g_app.map.component_id, g_app.map.lat, g_app.map.lon, x, y);
+    double visual_zoom = cs_map_get_visual_zoom(g_app.map.component_id);
+    cs_map_pointer_down(g_app.map.component_id, g_app.map.lat, g_app.map.lon, x, y,
+                        (float)g_app.map.width, (float)g_app.map.height, visual_zoom);
     cs_clay_set_pointer(x, y, true);
 }
 
@@ -505,7 +612,7 @@ EXPORT void map_pointer_up(float x, float y) {
 
 EXPORT void map_scroll(float delta, float x, float y) {
     (void)x; (void)y;
-    g_app.map.zoom = cs_map_scroll(g_app.map.zoom, delta > 0 ? 1 : -1, 0, 19);
+    g_app.map.zoom = cs_map_scroll(g_app.map.zoom, delta > 0 ? 1 : -1, 0, get_max_zoom(g_app.panels.layer_type));
 }
 
 EXPORT int map_handle_click(float x, float y) {
@@ -523,11 +630,13 @@ EXPORT int map_handle_click(float x, float y) {
     /* Handle map click for routing */
     if (!on_ui && !g_app.route.loading) {
         /* Convert screen coords to geo coords using delta from center
+         * Use visual_zoom for consistency with overlay/tile rendering
          * Note: negate Y because screen Y increases downward but latitude increases upward */
         float cx = (float)g_app.map.width / 2.0f;
         float cy = (float)g_app.map.height / 2.0f;
+        double visual_zoom = cs_map_get_visual_zoom(g_app.map.component_id);
         double dlat, dlon;
-        cs_map_screen_to_geo_delta(g_app.map.lat, g_app.map.zoom, x - cx, -(y - cy), &dlat, &dlon);
+        cs_map_screen_to_geo_delta(g_app.map.lat, visual_zoom, x - cx, -(y - cy), &dlat, &dlon);
         double click_lat = g_app.map.lat + dlat;
         double click_lon = g_app.map.lon + dlon;
 
@@ -537,6 +646,7 @@ EXPORT int map_handle_click(float x, float y) {
             g_app.route.start.lon = click_lon;
             g_app.route.has_start = true;
             g_app.route.error = false;
+            /* Debug: marker placed - will be printed via WASM debug export */
         } else if (!g_app.route.has_end) {
             /* Set end point and request route */
             g_app.route.end.lat = click_lat;
@@ -595,6 +705,11 @@ EXPORT int map_frame(float dt) {
 
     /* Check for route completion */
     update_route_state();
+
+    /* Decrement reroute cooldown */
+    if (g_app.route.reroute_cooldown > 0) {
+        g_app.route.reroute_cooldown -= dt;
+    }
 
     cs_clay_begin_frame();
     render_ui();

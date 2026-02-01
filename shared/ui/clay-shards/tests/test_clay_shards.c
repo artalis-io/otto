@@ -13,6 +13,7 @@
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
 #include "cs_immediate.h"
+#include "cs_map.h"
 #include "../src/cs_internal.h"  /* For CsState, cs_get_state, cs_widget_state */
 
 /* Test counters */
@@ -589,13 +590,13 @@ static void test_map_pointer_handling(void) {
     /* Initially not dragging */
     ASSERT(!cs_map_is_dragging(map_id), "Should not be dragging initially");
 
-    /* Start drag */
-    cs_map_pointer_down(map_id, 47.4979, 19.0402, 400.0f, 300.0f);
+    /* Start drag - new signature with map dimensions and zoom */
+    cs_map_pointer_down(map_id, 47.4979, 19.0402, 400.0f, 300.0f, 800.0f, 600.0f, 12);
     ASSERT(cs_map_is_dragging(map_id), "Should be dragging after pointer_down");
 
     /* Move pointer */
     double new_lat, new_lon;
-    bool moved = cs_map_pointer_move(map_id, 12, 420.0f, 310.0f, &new_lat, &new_lon);
+    bool moved = cs_map_pointer_move(map_id, 12, 420.0f, 310.0f, 800.0f, 600.0f, &new_lat, &new_lon);
     ASSERT(moved, "pointer_move should return true when dragging");
 
     /* End drag with minimal movement - should detect as click */
@@ -612,6 +613,282 @@ static void test_map_default_style(void) {
     ASSERT(CS_MAP_STYLE_DEFAULT.max_zoom == 19, "Default max_zoom should be 19");
     ASSERT(CS_MAP_STYLE_DEFAULT.min_lat < 0, "Default min_lat should be negative");
     ASSERT(CS_MAP_STYLE_DEFAULT.max_lat > 0, "Default max_lat should be positive");
+
+    PASS();
+}
+
+/* ============================================================================
+ * Multi-Map Independence Tests
+ * ============================================================================ */
+
+static void test_multiple_maps_independent_state(void) {
+    TEST(multiple_maps_independent_state);
+
+    uint32_t map1 = CS_ID("map1");
+    uint32_t map2 = CS_ID("map2");
+
+    /* Verify IDs are different */
+    ASSERT(map1 != map2, "Map IDs should be different");
+
+    /* Start drag on map1 */
+    cs_map_pointer_down(map1, 47.0, 19.0, 100.0f, 100.0f, 800.0f, 600.0f, 12);
+    ASSERT(cs_map_is_dragging(map1), "map1 should be dragging");
+    ASSERT(!cs_map_is_dragging(map2), "map2 should NOT be dragging");
+
+    /* Start drag on map2 */
+    cs_map_pointer_down(map2, 48.0, 20.0, 200.0f, 200.0f, 800.0f, 600.0f, 12);
+    ASSERT(cs_map_is_dragging(map1), "map1 should still be dragging");
+    ASSERT(cs_map_is_dragging(map2), "map2 should now be dragging");
+
+    /* Stop map1 drag */
+    cs_map_pointer_up(map1, 120.0f, 120.0f);
+    ASSERT(!cs_map_is_dragging(map1), "map1 should stop dragging");
+    ASSERT(cs_map_is_dragging(map2), "map2 should still be dragging");
+
+    /* Stop map2 drag */
+    cs_map_pointer_up(map2, 220.0f, 220.0f);
+    ASSERT(!cs_map_is_dragging(map2), "map2 should stop dragging");
+
+    PASS();
+}
+
+static void test_per_map_overlays(void) {
+    TEST(per_map_overlays);
+
+    init_clay();
+    cs_init();
+
+    uint32_t map1 = CS_ID("overlay_map1");
+    uint32_t map2 = CS_ID("overlay_map2");
+
+    double lat1 = 47.0, lon1 = 19.0;
+    double lat2 = 48.0, lon2 = 20.0;
+    int zoom1 = 12, zoom2 = 10;
+
+    /* Frame with overlays on map1 */
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        /* Map1 with 2 markers */
+        cs_map_begin(map1, &lat1, &lon1, &zoom1, 400, 300, NULL);
+        cs_marker(CS_ID("m1a"), 47.0, 19.0, NULL);
+        cs_marker(CS_ID("m1b"), 47.1, 19.1, NULL);
+        cs_map_end();
+
+        /* Map2 with 1 marker */
+        cs_map_begin(map2, &lat2, &lon2, &zoom2, 400, 300, NULL);
+        cs_marker(CS_ID("m2a"), 48.0, 20.0, NULL);
+        cs_map_end();
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    /* Verify overlay counts */
+    ASSERT(cs_map_overlay_count(map1) == 2, "map1 should have 2 overlays");
+    ASSERT(cs_map_overlay_count(map2) == 1, "map2 should have 1 overlay");
+
+    /* Verify overlay IDs are correct for each map */
+    ASSERT(cs_map_overlay_id(map1, 0) == CS_ID("m1a"), "map1 overlay 0 should be m1a");
+    ASSERT(cs_map_overlay_id(map1, 1) == CS_ID("m1b"), "map1 overlay 1 should be m1b");
+    ASSERT(cs_map_overlay_id(map2, 0) == CS_ID("m2a"), "map2 overlay 0 should be m2a");
+
+    PASS();
+}
+
+static void test_marker_hit_test(void) {
+    TEST(marker_hit_test);
+
+    init_clay();
+    cs_init();
+
+    uint32_t map_id = CS_ID("hit_test_map");
+    double lat = 47.0, lon = 19.0;
+    int zoom = 12;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        cs_map_begin(map_id, &lat, &lon, &zoom, 800, 600, NULL);
+        /* Marker at center with radius 10 */
+        cs_marker(CS_ID("center_marker"), 47.0, 19.0, &(CsMarkerStyle){
+            .color = {1, 0, 0, 1}, .radius = 10.0f, .border_color = {1, 1, 1, 1}, .border_width = 2
+        });
+        cs_map_end();
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    /* Hit test at center (400, 300) - should hit the marker */
+    uint32_t hit_center = cs_map_hit_test(map_id, 400.0f, 300.0f, 47.0, 19.0, 12, 800.0f, 600.0f);
+    ASSERT(hit_center == CS_ID("center_marker"), "Should hit marker at center");
+
+    /* Hit test slightly off center but within radius */
+    uint32_t hit_near = cs_map_hit_test(map_id, 405.0f, 305.0f, 47.0, 19.0, 12, 800.0f, 600.0f);
+    ASSERT(hit_near == CS_ID("center_marker"), "Should hit marker near center");
+
+    /* Hit test far from marker - should miss */
+    uint32_t hit_far = cs_map_hit_test(map_id, 100.0f, 100.0f, 47.0, 19.0, 12, 800.0f, 600.0f);
+    ASSERT(hit_far == 0, "Should miss marker when far away");
+
+    PASS();
+}
+
+static void test_polyline_hit_test(void) {
+    TEST(polyline_hit_test);
+
+    init_clay();
+    cs_init();
+
+    uint32_t map_id = CS_ID("polyline_hit_map");
+    double lat = 47.0, lon = 19.0;
+    int zoom = 12;
+
+    /* Create a horizontal polyline through the center */
+    CsGeoPoint points[] = {
+        {47.0, 18.9},  /* Left of center */
+        {47.0, 19.1}   /* Right of center */
+    };
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        cs_map_begin(map_id, &lat, &lon, &zoom, 800, 600, NULL);
+        cs_polyline(CS_ID("test_line"), points, 2, &(CsPolylineStyle){
+            .color = {0, 0, 1, 1}, .width = 6.0f
+        });
+        cs_map_end();
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    /* Hit test on the line (center, y=300) - should hit */
+    uint32_t hit_on = cs_map_hit_test(map_id, 400.0f, 300.0f, 47.0, 19.0, 12, 800.0f, 600.0f);
+    ASSERT(hit_on == CS_ID("test_line"), "Should hit polyline at center");
+
+    /* Hit test slightly above (still within width/2 + tolerance) */
+    uint32_t hit_near = cs_map_hit_test(map_id, 400.0f, 295.0f, 47.0, 19.0, 12, 800.0f, 600.0f);
+    ASSERT(hit_near == CS_ID("test_line"), "Should hit polyline slightly off");
+
+    /* Hit test far from line - should miss */
+    uint32_t hit_far = cs_map_hit_test(map_id, 400.0f, 100.0f, 47.0, 19.0, 12, 800.0f, 600.0f);
+    ASSERT(hit_far == 0, "Should miss polyline when far");
+
+    PASS();
+}
+
+static void test_draggable_marker(void) {
+    TEST(draggable_marker);
+
+    init_clay();
+    cs_init();
+
+    uint32_t map_id = CS_ID("drag_marker_map");
+    double lat = 47.0, lon = 19.0;
+    int zoom = 12;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        cs_map_begin(map_id, &lat, &lon, &zoom, 800, 600, NULL);
+        /* Draggable marker at center */
+        cs_marker(CS_ID("drag_marker"), 47.0, 19.0, &(CsMarkerStyle){
+            .color = {1, 0, 0, 1}, .radius = 10.0f, .border_color = {1, 1, 1, 1},
+            .border_width = 2, .draggable = true
+        });
+        cs_map_end();
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    /* Verify marker is draggable */
+    ASSERT(cs_map_overlay_marker_draggable(map_id, 0) == true, "Marker should be draggable");
+
+    /* Click on marker - should start marker drag, not map drag */
+    cs_map_pointer_down(map_id, 47.0, 19.0, 400.0f, 300.0f, 800.0f, 600.0f, 12);
+    ASSERT(!cs_map_is_dragging(map_id), "Should NOT be dragging map");
+    ASSERT(cs_map_is_dragging_marker(map_id), "Should be dragging marker");
+
+    /* Get dragging overlay ID */
+    uint32_t dragging = cs_map_get_dragging_overlay(map_id);
+    ASSERT(dragging == CS_ID("drag_marker"), "Should be dragging the marker");
+
+    /* End drag */
+    cs_map_pointer_up(map_id, 420.0f, 320.0f);
+    ASSERT(!cs_map_is_dragging_marker(map_id), "Should not be dragging marker after up");
+
+    PASS();
+}
+
+static void test_non_draggable_marker_falls_through(void) {
+    TEST(non_draggable_marker_falls_through);
+
+    init_clay();
+    cs_init();
+
+    uint32_t map_id = CS_ID("nondrag_map");
+    double lat = 47.0, lon = 19.0;
+    int zoom = 12;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        cs_map_begin(map_id, &lat, &lon, &zoom, 800, 600, NULL);
+        /* Non-draggable marker at center (default draggable=false) */
+        cs_marker(CS_ID("static_marker"), 47.0, 19.0, NULL);
+        cs_map_end();
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    /* Verify marker is NOT draggable */
+    ASSERT(cs_map_overlay_marker_draggable(map_id, 0) == false, "Marker should NOT be draggable");
+
+    /* Click on marker - should fall through to map drag */
+    cs_map_pointer_down(map_id, 47.0, 19.0, 400.0f, 300.0f, 800.0f, 600.0f, 12);
+    ASSERT(cs_map_is_dragging(map_id), "Should be dragging map");
+    ASSERT(!cs_map_is_dragging_marker(map_id), "Should NOT be dragging marker");
+
+    /* End drag */
+    cs_map_pointer_up(map_id, 420.0f, 320.0f);
+
+    PASS();
+}
+
+static void test_hovered_overlay_state(void) {
+    TEST(hovered_overlay_state);
+
+    uint32_t map_id = CS_ID("hover_map");
+
+    /* Initially no hovered overlay */
+    ASSERT(cs_map_get_hovered_overlay(map_id) == 0, "Initially no hovered overlay");
+
+    /* Set hovered overlay */
+    cs_map_set_hovered_overlay(map_id, CS_ID("some_overlay"));
+    ASSERT(cs_map_get_hovered_overlay(map_id) == CS_ID("some_overlay"), "Hovered should be set");
+
+    /* Clear hovered overlay */
+    cs_map_set_hovered_overlay(map_id, 0);
+    ASSERT(cs_map_get_hovered_overlay(map_id) == 0, "Hovered should be cleared");
 
     PASS();
 }
@@ -1015,6 +1292,15 @@ int main(void) {
     test_map_scroll();
     test_map_pointer_handling();
     test_map_default_style();
+
+    printf("\nMulti-Map and Hit Testing Tests:\n");
+    test_multiple_maps_independent_state();
+    test_per_map_overlays();
+    test_marker_hit_test();
+    test_polyline_hit_test();
+    test_draggable_marker();
+    test_non_draggable_marker_falls_through();
+    test_hovered_overlay_state();
 
     printf("\nFont Metrics Tests:\n");
     test_text_measurement_callback();

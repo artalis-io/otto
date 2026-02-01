@@ -31,8 +31,10 @@ WASM_FLAGS = -s STANDALONE_WASM=1
 WASM_FLAGS += -s EXPORTED_FUNCTIONS='[\
   "_map_init","_map_resize","_map_set_center","_map_set_zoom",\
   "_map_get_lat","_map_get_lon","_map_get_zoom","_map_get_visual_zoom","_map_get_layer",\
+  "_map_get_component_id","_map_get_width","_map_get_height",\
   "_map_pointer_move","_map_pointer_down","_map_pointer_up","_map_scroll",\
   "_map_handle_click","_map_frame",\
+  "_map_debug_has_start","_map_debug_start_lat","_map_debug_start_lon",\
   "_cs_clay_is_initialized","_cs_clay_get_error",\
   "_cs_clay_cmd_count","_cs_clay_cmd_type",\
   "_cs_clay_cmd_x","_cs_clay_cmd_y","_cs_clay_cmd_w","_cs_clay_cmd_h",\
@@ -55,8 +57,9 @@ WASM_FLAGS += -s EXPORTED_FUNCTIONS='[\
   "_cs_map_overlay_marker_color_b","_cs_map_overlay_marker_color_a",\
   "_cs_map_overlay_marker_border_r","_cs_map_overlay_marker_border_g",\
   "_cs_map_overlay_marker_border_b","_cs_map_overlay_marker_border_a",\
-  "_cs_map_overlay_marker_border_width",\
-  "_cs_map_set_hovered_overlay","_cs_map_set_clicked_overlay",\
+  "_cs_map_overlay_marker_border_width","_cs_map_overlay_marker_draggable",\
+  "_cs_map_hit_test","_cs_map_set_hovered_overlay","_cs_map_set_clicked_overlay",\
+  "_cs_map_get_hovered_overlay","_cs_map_get_dragging_overlay",\
   "_cs_provider_tile_url","_cs_provider_has_direct_tiles",\
   "_cs_provider_route","_cs_provider_route_status","_cs_provider_route_ready",\
   "_cs_provider_route_count","_cs_provider_route_point","_cs_provider_route_clear",\
