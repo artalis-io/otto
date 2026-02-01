@@ -552,3 +552,9 @@ locus/
 6. **M6**: API server working (Phase 11)
 7. **M7**: WASM build (Phase 12)
 8. **M8**: Documentation complete (Phase 13)
+
+---
+
+## Known Issues / Future Improvements
+
+- [ ] **Street + house number search**: The search currently finds streets but doesn't filter by house number. Need to parse "street number" queries and match against `addr:housenumber` + `addr:street` fields. The underlying geocoding infrastructure is solid - just needs query parsing improvements.
