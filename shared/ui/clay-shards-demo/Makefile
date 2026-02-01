@@ -12,9 +12,10 @@ INCLUDES = -I../../../vendor/clay -I../clay-shards/include
 # Don't use CLAY_WASM - we'll set measure function via Clay_SetMeasureTextFunction
 # This avoids needing JS imports for measureTextFunction/queryScrollOffsetFunction
 
-# Source files (includes immediate mode components)
+# Source files (includes immediate mode components and provider)
 SOURCES = src/demo.c \
-          ../clay-shards/src/cs_immediate.c
+          ../clay-shards/src/cs_immediate.c \
+          ../clay-shards/src/cs_map_provider.c
 
 # Output
 BUILD_DIR = build
@@ -55,7 +56,29 @@ WASM_FLAGS += -s EXPORTED_FUNCTIONS='[\
   "_cs_map_overlay_marker_border_r","_cs_map_overlay_marker_border_g",\
   "_cs_map_overlay_marker_border_b","_cs_map_overlay_marker_border_a",\
   "_cs_map_overlay_marker_border_width",\
-  "_cs_map_set_hovered_overlay","_cs_map_set_clicked_overlay"\
+  "_cs_map_set_hovered_overlay","_cs_map_set_clicked_overlay",\
+  "_cs_provider_tile_url","_cs_provider_has_direct_tiles",\
+  "_cs_provider_route","_cs_provider_route_status","_cs_provider_route_ready",\
+  "_cs_provider_route_count","_cs_provider_route_point","_cs_provider_route_clear",\
+  "_cs_provider_route_is_pending","_cs_provider_route_from_lat","_cs_provider_route_from_lon",\
+  "_cs_provider_route_to_lat","_cs_provider_route_to_lon","_cs_provider_route_mark_fetching",\
+  "_cs_provider_route_server","_cs_provider_route_distance","_cs_provider_route_duration",\
+  "_cs_provider_route_point_lat","_cs_provider_route_point_lon",\
+  "_cs_provider_search","_cs_provider_search_near","_cs_provider_search_status",\
+  "_cs_provider_search_ready","_cs_provider_search_count","_cs_provider_search_clear",\
+  "_cs_provider_search_is_pending","_cs_provider_search_query","_cs_provider_search_has_bias",\
+  "_cs_provider_search_bias_lat","_cs_provider_search_bias_lon","_cs_provider_search_mark_fetching",\
+  "_cs_provider_geocode_server","_cs_provider_set_search_result","_cs_provider_on_search_complete",\
+  "_cs_provider_on_search_error","_cs_provider_search_result_lat","_cs_provider_search_result_lon",\
+  "_cs_provider_search_result_name","_cs_provider_search_result_type","_cs_provider_search_result_score",\
+  "_cs_provider_reverse","_cs_provider_reverse_status","_cs_provider_reverse_ready",\
+  "_cs_provider_reverse_clear","_cs_provider_reverse_is_pending","_cs_provider_reverse_lat",\
+  "_cs_provider_reverse_lon","_cs_provider_reverse_mark_fetching",\
+  "_cs_provider_on_reverse_complete","_cs_provider_on_reverse_error",\
+  "_cs_provider_reverse_name","_cs_provider_reverse_street","_cs_provider_reverse_city","_cs_provider_reverse_country",\
+  "_cs_provider_on_route_complete","_cs_provider_on_route_error",\
+  "_cs_provider_set_tile_server","_cs_provider_set_route_server","_cs_provider_set_geocode_server",\
+  "_cs_provider_type","_malloc","_free"\
 ]'
 WASM_FLAGS += -s INITIAL_MEMORY=16777216
 WASM_FLAGS += -s ALLOW_MEMORY_GROWTH=1

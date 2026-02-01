@@ -181,14 +181,34 @@ void cs_map_screen_to_geo_delta(
 ) {
     lat = clamp_latitude(lat);
     zoom = clamp_zoom(zoom);
-    /* Meters per pixel at current latitude and zoom */
-    double meters_per_pixel = METERS_PER_PIXEL_Z0 * cos(lat * DEG_TO_RAD) / (double)(1 << zoom);
-    
-    /* Convert to degrees (approximate) */
-    /* 111320 meters per degree longitude at equator */
-    /* 110540 meters per degree latitude (roughly constant) */
-    if (dlon) *dlon = (double)dx * meters_per_pixel / 111320.0;
-    if (dlat) *dlat = (double)dy * meters_per_pixel / 110540.0;
+
+    /* Use proper Web Mercator projection (matches JS renderer)
+     * Screen coordinates are in pixels where 1 tile = 256 pixels
+     * Tile coordinates are fractions of the world at the given zoom level */
+
+    double scale = 256.0 * (double)(1 << zoom);  /* Total pixels at zoom level */
+
+    /* dx in pixels -> dlon in degrees */
+    if (dlon) {
+        /* Each pixel represents (360 / scale) degrees longitude */
+        *dlon = (double)dx * 360.0 / scale;
+    }
+
+    /* dy in pixels -> dlat in degrees (requires Mercator inverse) */
+    if (dlat) {
+        /* First get current tile Y (in pixels from top of world) */
+        double lat_rad = lat * DEG_TO_RAD;
+        double center_y = (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / PI) / 2.0 * scale;
+
+        /* Add screen delta to get new tile Y */
+        double new_y = center_y - (double)dy;  /* Subtract because screen Y is inverted vs Mercator */
+
+        /* Convert new tile Y back to latitude */
+        double n = PI - 2.0 * PI * new_y / scale;
+        double new_lat = RAD_TO_DEG * atan(0.5 * (exp(n) - exp(-n)));
+
+        *dlat = new_lat - lat;
+    }
 }
 
 /* ============================================================================
