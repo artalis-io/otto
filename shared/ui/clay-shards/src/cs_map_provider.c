@@ -309,6 +309,17 @@ EXPORT const char* cs_provider_type(void) {
     return "api";
 }
 
+EXPORT void cs_provider_cleanup(void) {
+    /* Free route buffer */
+    if (g_route_points) {
+        free(g_route_points);
+        g_route_points = NULL;
+        g_route_capacity = 0;
+        g_route_result.points = NULL;
+        g_route_result.count = 0;
+    }
+}
+
 /* ============================================================================
  * Callbacks from JS
  * ============================================================================ */

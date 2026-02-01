@@ -1206,3 +1206,40 @@ EXPORT uint32_t cs_map_get_dragging_overlay(uint32_t map_id) {
     if (!ms || !ms->dragging_marker) return 0;
     return ms->dragging_overlay_id;
 }
+
+/* ============================================================================
+ * Cleanup
+ * ============================================================================ */
+
+void cs_map_destroy(uint32_t id) {
+    if (id == 0) return;
+
+    uint32_t slot = id % CS_MAP_STATE_CAPACITY;
+    for (int i = 0; i < CS_MAP_STATE_CAPACITY; i++) {
+        uint32_t idx = (slot + i) % CS_MAP_STATE_CAPACITY;
+        if (g_map_states[idx].map_id == id) {
+            /* Free polyline buffer */
+            if (g_map_states[idx].polyline_points) {
+                free(g_map_states[idx].polyline_points);
+            }
+            /* Clear the slot */
+            memset(&g_map_states[idx], 0, sizeof(CsMapState));
+            return;
+        }
+        if (g_map_states[idx].map_id == 0) {
+            return;  /* Not found */
+        }
+    }
+}
+
+void cs_map_cleanup(void) {
+    for (int i = 0; i < CS_MAP_STATE_CAPACITY; i++) {
+        if (g_map_states[i].map_id != 0) {
+            if (g_map_states[i].polyline_points) {
+                free(g_map_states[i].polyline_points);
+            }
+            memset(&g_map_states[i], 0, sizeof(CsMapState));
+        }
+    }
+    g_active_map = NULL;
+}
