@@ -98,8 +98,8 @@ cd fuelwise/ui && npm install && npm run dev
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                   │
-│  │  React UI   │   │    WASM     │   │  REST APIs  │   Applications    │
-│  │  (Leaflet)  │   │  (Browser)  │   │ (mongoose)  │                   │
+│  │  React +    │   │    WASM     │   │  REST APIs  │   Applications    │
+│  │ ClayShards  │   │  (Browser)  │   │ (mongoose)  │                   │
 │  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘                   │
 │         └─────────────────┼─────────────────┘                          │
 │                           │                                             │
