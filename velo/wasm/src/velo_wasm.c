@@ -109,12 +109,14 @@ WasmRoute* wasm_route(VLGraph* graph,
     VLCoord from = {from_lat, from_lon};
     VLCoord to = {to_lat, to_lon};
 
-    VLRouteOptions opts = vl_default_options();
+    VLRouteOptions opts;
+    vl_default_options(&opts);
     opts.profile = (VLProfile)profile;
     opts.weight = (mode == 1) ? VL_WEIGHT_DISTANCE : VL_WEIGHT_DURATION;
-    opts.include_geometry = 1;
+    opts.geometry = 1;
 
     VLRoute route;
+    memset(&route, 0, sizeof(route));
     VLStatus status = vl_route_coords(graph, from, to, &opts, &route);
 
     result->status = status;
@@ -122,13 +124,13 @@ WasmRoute* wasm_route(VLGraph* graph,
     if (status == VL_OK) {
         result->distance_m = route.distance_m;
         result->duration_s = route.duration_s;
-        result->node_count = route.coord_count;
+        result->node_count = route.num_coords;
 
         // Copy coordinates
-        if (route.coord_count > 0 && route.coords) {
-            result->coords = malloc(route.coord_count * 2 * sizeof(double));
+        if (route.num_coords > 0 && route.coords) {
+            result->coords = malloc(route.num_coords * 2 * sizeof(double));
             if (result->coords) {
-                for (uint32_t i = 0; i < route.coord_count; i++) {
+                for (int i = 0; i < route.num_coords; i++) {
                     result->coords[i * 2] = route.coords[i].lat;
                     result->coords[i * 2 + 1] = route.coords[i].lon;
                 }

@@ -14,7 +14,16 @@ export async function loadWasm(path, requiredExports = []) {
     if (!response.ok) {
         throw new Error(`Failed to load WASM: ${response.status} ${response.statusText}`);
     }
-    const { instance } = await WebAssembly.instantiateStreaming(response, {});
+
+    // Provide imports required by Emscripten standalone WASM
+    const imports = {
+        env: {
+            // Called when memory grows (required with ALLOW_MEMORY_GROWTH)
+            emscripten_notify_memory_growth: () => {}
+        }
+    };
+
+    const { instance } = await WebAssembly.instantiateStreaming(response, imports);
     const wasm = instance.exports;
 
     for (const fn of requiredExports) {

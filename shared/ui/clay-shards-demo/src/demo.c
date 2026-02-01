@@ -30,6 +30,7 @@
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
 #include "cs_immediate.h"
+#include "cs_map_provider.h"
 
 /* ============================================================================
  * Application State
@@ -51,6 +52,21 @@ typedef struct {
     int layer_type;
 } UIPanels;
 
+/* Route state for click-to-route */
+typedef struct {
+    bool has_start;
+    bool has_end;
+    CsGeoPoint start;
+    CsGeoPoint end;
+    /* Route geometry from provider */
+    CsGeoPoint points[CS_PROVIDER_MAX_ROUTE_POINTS];
+    int point_count;
+    double distance_m;
+    double duration_s;
+    bool loading;
+    bool error;
+} RouteState;
+
 typedef struct {
     char search[256];
     int search_len;
@@ -61,6 +77,7 @@ typedef struct {
     char coord[64];
     char zoom[32];
     char tile[48];
+    char route_info[64];
 } Scratch;
 
 typedef struct {
@@ -68,6 +85,7 @@ typedef struct {
     UIPanels panels;
     UIText text;
     Scratch scratch;
+    RouteState route;
 } AppState;
 
 static AppState g_app = {
@@ -238,15 +256,89 @@ static void render_attribution(void) {
     }
 }
 
-/* Sample route data - Budapest landmarks */
-static const CsGeoPoint g_sample_route[] = {
-    {47.4979, 19.0402},  /* Buda Castle */
-    {47.5007, 19.0348},  /* Chain Bridge */
-    {47.5025, 19.0419},  /* St. Stephen's Basilica */
-    {47.4983, 19.0408},  /* Hungarian Parliament */
-    {47.4925, 19.0513},  /* Great Market Hall */
-};
-#define SAMPLE_ROUTE_LEN (sizeof(g_sample_route) / sizeof(g_sample_route[0]))
+/* Helper to format distance */
+static void format_distance(char *buf, size_t size, double meters) {
+    if (meters >= 1000.0) {
+        snprintf(buf, size, "%.1f km", meters / 1000.0);
+    } else {
+        snprintf(buf, size, "%.0f m", meters);
+    }
+}
+
+/* Helper to format duration */
+static void format_duration(char *buf, size_t size, double seconds) {
+    int mins = (int)(seconds / 60.0);
+    if (mins >= 60) {
+        int hours = mins / 60;
+        mins = mins % 60;
+        snprintf(buf, size, "%dh %dm", hours, mins);
+    } else {
+        snprintf(buf, size, "%d min", mins);
+    }
+}
+
+static void render_route_panel(void) {
+    const CsButtonStyle clear_btn = {
+        .variant = CS_BTN_DEFAULT,
+        .font_size = 12,
+        .corner_radius = 4,
+        .padding_x = 8,
+        .padding_y = 4,
+    };
+
+    CLAY(CLAY_ID("RoutePanel"), {
+        .floating = {
+            .attachTo = CLAY_ATTACH_TO_ROOT,
+            .attachPoints = { .element = CLAY_ATTACH_POINT_LEFT_BOTTOM, .parent = CLAY_ATTACH_POINT_LEFT_BOTTOM },
+            .offset = {16, -60}
+        },
+        .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .padding = CLAY_PADDING_ALL(10), .childGap = 6 },
+        .backgroundColor = THEME.bg_panel,
+        .cornerRadius = CLAY_CORNER_RADIUS(8),
+        .border = { .width = {1, 1, 1, 1}, .color = THEME.border }
+    }) {
+        if (g_app.route.loading) {
+            CLAY_TEXT(CLAY_STRING("Calculating route..."),
+                      CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
+        } else if (g_app.route.error) {
+            CLAY_TEXT(CLAY_STRING("Route not found"),
+                      CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = (Clay_Color){255, 100, 100, 255} }));
+            if (cs_button(CS_ID("clear_route"), "Clear", &clear_btn).clicked) {
+                g_app.route.has_start = false;
+                g_app.route.has_end = false;
+                g_app.route.point_count = 0;
+                g_app.route.error = false;
+            }
+        } else if (g_app.route.point_count > 0) {
+            /* Show route info */
+            char dist_buf[32], time_buf[32];
+            format_distance(dist_buf, sizeof(dist_buf), g_app.route.distance_m);
+            format_duration(time_buf, sizeof(time_buf), g_app.route.duration_s);
+            snprintf(g_app.scratch.route_info, sizeof(g_app.scratch.route_info),
+                     "%s - %s", dist_buf, time_buf);
+
+            CLAY_TEXT(((Clay_String){ .chars = g_app.scratch.route_info,
+                                       .length = (int)strlen(g_app.scratch.route_info) }),
+                      CLAY_TEXT_CONFIG({ .fontSize = 14, .textColor = THEME.text }));
+
+            if (cs_button(CS_ID("clear_route"), "Clear Route", &clear_btn).clicked) {
+                g_app.route.has_start = false;
+                g_app.route.has_end = false;
+                g_app.route.point_count = 0;
+                cs_provider_route_clear();
+            }
+        } else if (!g_app.route.has_start) {
+            CLAY_TEXT(CLAY_STRING("Click map to set start"),
+                      CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
+        } else if (!g_app.route.has_end) {
+            CLAY_TEXT(CLAY_STRING("Click map to set end"),
+                      CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
+            if (cs_button(CS_ID("clear_route"), "Cancel", &clear_btn).clicked) {
+                g_app.route.has_start = false;
+            }
+        }
+    }
+}
 
 static void render_ui(void) {
     CLAY(CLAY_ID("Root"), {
@@ -256,26 +348,33 @@ static void render_ui(void) {
         cs_map_begin(g_app.map.component_id, &g_app.map.lat, &g_app.map.lon, &g_app.map.zoom,
                      (float)g_app.map.width, (float)g_app.map.height, NULL);
 
-        /* Route polyline */
-        cs_polyline(CS_ID("route"), g_sample_route, SAMPLE_ROUTE_LEN, &(CsPolylineStyle){
-            .color = {0.2f, 0.5f, 1.0f, 0.9f},
-            .width = 4.0f,
-        });
+        /* Route polyline (only if we have route geometry) */
+        if (g_app.route.point_count > 1) {
+            cs_polyline(CS_ID("route"), g_app.route.points, g_app.route.point_count, &(CsPolylineStyle){
+                .color = {0.2f, 0.5f, 1.0f, 0.9f},
+                .width = 5.0f,
+            });
+        }
 
-        /* Markers at start and end */
-        cs_marker(CS_ID("start"), g_sample_route[0].lat, g_sample_route[0].lon, &(CsMarkerStyle){
-            .color = {0.2f, 0.8f, 0.3f, 1.0f},
-            .radius = 10.0f,
-            .border_color = {1.0f, 1.0f, 1.0f, 1.0f},
-            .border_width = 2.0f,
-        });
+        /* Start marker (green) */
+        if (g_app.route.has_start) {
+            cs_marker(CS_ID("start"), g_app.route.start.lat, g_app.route.start.lon, &(CsMarkerStyle){
+                .color = {0.2f, 0.8f, 0.3f, 1.0f},
+                .radius = 12.0f,
+                .border_color = {1.0f, 1.0f, 1.0f, 1.0f},
+                .border_width = 3.0f,
+            });
+        }
 
-        cs_marker(CS_ID("end"), g_sample_route[SAMPLE_ROUTE_LEN-1].lat, g_sample_route[SAMPLE_ROUTE_LEN-1].lon, &(CsMarkerStyle){
-            .color = {0.9f, 0.2f, 0.2f, 1.0f},
-            .radius = 10.0f,
-            .border_color = {1.0f, 1.0f, 1.0f, 1.0f},
-            .border_width = 2.0f,
-        });
+        /* End marker (red) */
+        if (g_app.route.has_end) {
+            cs_marker(CS_ID("end"), g_app.route.end.lat, g_app.route.end.lon, &(CsMarkerStyle){
+                .color = {0.9f, 0.2f, 0.2f, 1.0f},
+                .radius = 12.0f,
+                .border_color = {1.0f, 1.0f, 1.0f, 1.0f},
+                .border_width = 3.0f,
+            });
+        }
 
         cs_map_end();
 
@@ -284,6 +383,7 @@ static void render_ui(void) {
         render_layer_panel();
         render_zoom_controls();
         render_tile_info();
+        render_route_panel();
         render_attribution();
     }
 }
@@ -359,16 +459,46 @@ EXPORT void map_scroll(float delta, float x, float y) {
 }
 
 EXPORT int map_handle_click(float x, float y) {
-    (void)x; (void)y;
-
     bool on_ui = cs_clay_pointer_over("InfoPanel") ||
                  cs_clay_pointer_over("LayerPanel") ||
                  cs_clay_pointer_over("ZoomControls") ||
                  cs_clay_pointer_over("TileInfo") ||
+                 cs_clay_pointer_over("RoutePanel") ||
                  cs_clay_pointer_over("Attribution");
 
     if (cs_focused_id() != 0 && !on_ui) {
         cs_blur();
+    }
+
+    /* Handle map click for routing */
+    if (!on_ui && !g_app.route.loading) {
+        /* Convert screen coords to geo coords using delta from center
+         * Note: negate Y because screen Y increases downward but latitude increases upward */
+        float cx = (float)g_app.map.width / 2.0f;
+        float cy = (float)g_app.map.height / 2.0f;
+        double dlat, dlon;
+        cs_map_screen_to_geo_delta(g_app.map.lat, g_app.map.zoom, x - cx, -(y - cy), &dlat, &dlon);
+        double click_lat = g_app.map.lat + dlat;
+        double click_lon = g_app.map.lon + dlon;
+
+        if (!g_app.route.has_start) {
+            /* Set start point */
+            g_app.route.start.lat = click_lat;
+            g_app.route.start.lon = click_lon;
+            g_app.route.has_start = true;
+            g_app.route.error = false;
+        } else if (!g_app.route.has_end) {
+            /* Set end point and request route */
+            g_app.route.end.lat = click_lat;
+            g_app.route.end.lon = click_lon;
+            g_app.route.has_end = true;
+            g_app.route.loading = true;
+            g_app.route.error = false;
+            g_app.route.point_count = 0;
+
+            /* Request route from provider */
+            cs_provider_route(g_app.route.start, g_app.route.end);
+        }
     }
 
     return on_ui ? 1 : 0;
@@ -378,11 +508,43 @@ EXPORT int map_handle_click(float x, float y) {
  * Domain Export - Frame
  * ============================================================================ */
 
+/* Check for route completion from provider */
+static void update_route_state(void) {
+    if (!g_app.route.loading) return;
+
+    if (cs_provider_route_ready()) {
+        const CsRouteResult *result = cs_provider_route_result();
+
+        if (result->error) {
+            g_app.route.error = true;
+            g_app.route.loading = false;
+            g_app.route.point_count = 0;
+        } else {
+            /* Copy route geometry */
+            int count = result->count;
+            if (count > CS_PROVIDER_MAX_ROUTE_POINTS) {
+                count = CS_PROVIDER_MAX_ROUTE_POINTS;
+            }
+            for (int i = 0; i < count; i++) {
+                g_app.route.points[i] = result->points[i];
+            }
+            g_app.route.point_count = count;
+            g_app.route.distance_m = result->distance_m;
+            g_app.route.duration_s = result->duration_s;
+            g_app.route.loading = false;
+            g_app.route.error = false;
+        }
+    }
+}
+
 EXPORT int map_frame(float dt) {
     if (!cs_clay_is_initialized()) return -1;
 
     /* Update smooth zoom animation */
     cs_map_update_zoom_animation(g_app.map.component_id, g_app.map.zoom, dt);
+
+    /* Check for route completion */
+    update_route_state();
 
     cs_clay_begin_frame();
     render_ui();

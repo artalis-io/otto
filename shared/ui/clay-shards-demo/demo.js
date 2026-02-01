@@ -24,6 +24,8 @@ import {
     setupKeyboardHandler
 } from '../clay-shards-webgl/index.js';
 
+import { MapProvider } from '../clay-shards-webgl/map-provider.js';
+
 /* ============================================================================
  * Application State
  * ============================================================================ */
@@ -33,6 +35,7 @@ let renderer = null;
 let font = null;
 let tileRenderer = null;
 let overlayRenderer = null;
+let mapProvider = null;
 let isDragging = false;
 
 /* ============================================================================
@@ -58,7 +61,21 @@ const REQUIRED_EXPORTS = [
     'cs_map_overlay_marker_color_b', 'cs_map_overlay_marker_color_a',
     'cs_map_overlay_marker_border_r', 'cs_map_overlay_marker_border_g',
     'cs_map_overlay_marker_border_b', 'cs_map_overlay_marker_border_a',
-    'cs_map_overlay_marker_border_width'
+    'cs_map_overlay_marker_border_width',
+    // Provider exports
+    'cs_provider_route_is_pending', 'cs_provider_route_mark_fetching',
+    'cs_provider_route_from_lat', 'cs_provider_route_from_lon',
+    'cs_provider_route_to_lat', 'cs_provider_route_to_lon',
+    'cs_provider_route_server', 'cs_provider_on_route_complete', 'cs_provider_on_route_error',
+    'cs_provider_search_is_pending', 'cs_provider_search_mark_fetching',
+    'cs_provider_search_query', 'cs_provider_search_has_bias',
+    'cs_provider_search_bias_lat', 'cs_provider_search_bias_lon',
+    'cs_provider_geocode_server', 'cs_provider_set_search_result',
+    'cs_provider_on_search_complete', 'cs_provider_on_search_error',
+    'cs_provider_reverse_is_pending', 'cs_provider_reverse_mark_fetching',
+    'cs_provider_reverse_lat', 'cs_provider_reverse_lon',
+    'cs_provider_on_reverse_complete', 'cs_provider_on_reverse_error',
+    'malloc', 'free'
 ];
 
 /* ============================================================================
@@ -168,8 +185,13 @@ async function main() {
 
         // Initialize app
         wasm.map_init(width, height);
-        wasm.map_set_center(47.4979, 19.0402);
-        wasm.map_set_zoom(12);
+        // Monaco center (for testing with monaco data)
+        wasm.map_set_center(43.7384, 7.4246);
+        wasm.map_set_zoom(14);
+
+        // Initialize provider for API integration (routing, geocoding)
+        mapProvider = new MapProvider(wasm);
+        mapProvider.start();
 
         setupEvents(canvas);
         loading.classList.add('hidden');
