@@ -558,3 +558,170 @@ curl http://localhost:8084/api/v1/jobs/fg_abc123/result
 - **pthreads**: Thread pool for dispatcher (standard POSIX)
 
 No external services required. Everything runs in a single process with SQLite for persistence.
+
+## Distributed Deployment
+
+The single-node design scales horizontally with minimal changes. The architecture cleanly separates concerns (API, queue, workers), making distribution straightforward.
+
+### Level 1: Remote Workers
+
+Keep single broker, but workers connect over the network instead of being spawned locally:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Forge Broker                           │
+│  - SQLite for job persistence                             │
+│  - REST API for job submission                            │
+│  - WebSocket for worker connections                       │
+└──────────────────────────────────────────────────────────┘
+              │              │              │
+              │ WebSocket    │ WebSocket    │ WebSocket
+              ▼              ▼              ▼
+        ┌──────────┐   ┌──────────┐   ┌──────────┐
+        │ Worker 1 │   │ Worker 2 │   │ Worker 3 │
+        │ (local)  │   │ (remote) │   │ (k8s pod)│
+        └──────────┘   └──────────┘   └──────────┘
+```
+
+**Worker WebSocket Protocol:**
+
+```json
+// Worker → Broker
+{"type": "register", "job_types": ["solve_lp", "solve_mip"], "capacity": 4}
+{"type": "heartbeat"}
+{"type": "progress", "job_id": "fg_abc", "progress": 0.5, "message": "..."}
+{"type": "result", "job_id": "fg_abc", "result": {...}}
+{"type": "error", "job_id": "fg_abc", "error": "..."}
+
+// Broker → Worker
+{"type": "job", "job_id": "fg_abc", "type": "solve_lp", "payload": {...}}
+{"type": "cancel", "job_id": "fg_abc"}
+```
+
+**Characteristics:**
+- No new dependencies (SQLite still works)
+- Workers can run anywhere with network access
+- Single broker is coordination point
+- Good for small-to-medium deployments
+
+### Level 2: Horizontal Broker Scaling (Redis)
+
+Replace SQLite with Redis for multiple stateless API servers:
+
+```
+                    Load Balancer
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+     ┌─────────┐     ┌─────────┐     ┌─────────┐
+     │ Forge   │     │ Forge   │     │ Forge   │
+     │ API 1   │     │ API 2   │     │ API 3   │
+     └────┬────┘     └────┬────┘     └────┬────┘
+          │               │               │
+          └───────────────┼───────────────┘
+                          ▼
+                   ┌─────────────┐
+                   │    Redis    │
+                   │  (cluster)  │
+                   └──────┬──────┘
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+     ┌─────────┐     ┌─────────┐     ┌─────────┐
+     │ Worker  │     │ Worker  │     │ Worker  │
+     │ Pool 1  │     │ Pool 2  │     │ Pool 3  │
+     └─────────┘     └─────────┘     └─────────┘
+```
+
+**Redis Data Model:**
+
+```redis
+# Job queue (list per job type)
+LPUSH   forge:queue:solve_lp  job_id
+BRPOP   forge:queue:solve_lp  timeout
+
+# Job state (hash per job)
+HSET    forge:job:fg_abc  status running  progress 0.5  payload "..."
+HGETALL forge:job:fg_abc
+
+# Progress streaming (pub/sub)
+PUBLISH   forge:progress:fg_abc  '{"progress": 0.5, "message": "..."}'
+SUBSCRIBE forge:progress:fg_abc
+
+# Worker registry (sorted set by heartbeat timestamp)
+ZADD           forge:workers  timestamp  worker_id
+ZRANGEBYSCORE  forge:workers  -inf  (now-30s)   # Find dead workers
+```
+
+**Characteristics:**
+- Stateless API servers (horizontal scaling)
+- Redis handles coordination and pub/sub
+- Workers pull jobs directly from Redis
+- Automatic failover with Redis Sentinel/Cluster
+
+### Level 3: Kubernetes Native
+
+Full cloud-native deployment with autoscaling:
+
+```yaml
+# Worker deployment with HPA based on queue depth
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forge-worker-ralph
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+      - name: worker
+        image: otto/forge-worker:latest
+        args: ["--job-types", "solve_lp,solve_mip", "--broker", "redis://forge-redis:6379"]
+        resources:
+          requests: { cpu: "1", memory: "2Gi" }
+          limits:   { cpu: "2", memory: "4Gi" }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: forge-worker-ralph-hpa
+spec:
+  scaleTargetRef:
+    kind: Deployment
+    name: forge-worker-ralph
+  minReplicas: 1
+  maxReplicas: 20
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: redis_list_length
+        selector:
+          matchLabels:
+            queue: forge:queue:solve_lp
+      target:
+        type: AverageValue
+        averageValue: 5   # Scale up when >5 queued jobs per worker
+```
+
+### Scaling Comparison
+
+| Aspect | Single Node | Remote Workers | Redis + K8s |
+|--------|-------------|----------------|-------------|
+| **Broker scaling** | 1 | 1 | Horizontal |
+| **Worker scaling** | Local only | Manual | Autoscale |
+| **Dependencies** | SQLite | SQLite | Redis |
+| **Fault tolerance** | None | Worker restart | Full HA |
+| **Complexity** | Low | Low | Medium |
+| **Best for** | Dev/small | Medium | Production |
+
+### Migration Path
+
+The design supports incremental scaling:
+
+1. **Start simple** - Single node with local workers (SQLite)
+2. **Add remote workers** - Same broker, workers on other machines (WebSocket)
+3. **Add Redis** - Swap storage backend, enable horizontal API scaling
+4. **Add K8s** - Autoscaling, health checks, rolling updates
+
+Each level is a superset of the previous. The consumer protocol (stdin/stdout) remains unchanged regardless of deployment model - workers don't care how they're scheduled.
