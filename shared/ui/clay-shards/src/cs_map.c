@@ -138,6 +138,9 @@ typedef struct {
     int polyline_point_count;
     int polyline_point_capacity;
 
+    /* Current zoom for this frame (used for zoom-aware simplification) */
+    double current_zoom;
+
     /* Interaction state */
     uint32_t hovered_overlay_id;
     uint32_t clicked_overlay_id;
@@ -908,6 +911,9 @@ CsMapResult cs_map_begin(
         ms->overlay_count = 0;
         ms->polyline_point_count = 0;
 
+        /* Store current zoom for zoom-aware simplification */
+        ms->current_zoom = ms->visual_zoom_initialized ? ms->visual_zoom : (double)*zoom;
+
         /* Set active map for overlay functions */
         g_active_map = ms;
     }
@@ -918,6 +924,25 @@ CsMapResult cs_map_begin(
 
 void cs_map_end(void) {
     g_active_map = NULL;
+}
+
+/**
+ * Calculate zoom-dependent epsilon for Douglas-Peucker simplification.
+ * At high zoom (18+): very small epsilon = full detail
+ * At low zoom (0): larger epsilon = aggressive simplification
+ *
+ * Base epsilon ~0.00001 degrees at zoom 18 (~1m at equator)
+ * Doubles for each zoom level decrease
+ */
+static double zoom_to_epsilon(double zoom) {
+    const double BASE_EPSILON = 0.00001;  /* ~1m at zoom 18 */
+    const double MAX_ZOOM = 18.0;
+
+    if (zoom >= MAX_ZOOM) return BASE_EPSILON;
+    if (zoom < 0) zoom = 0;
+
+    /* Epsilon doubles for each zoom level below 18 */
+    return BASE_EPSILON * pow(2.0, MAX_ZOOM - zoom);
 }
 
 void cs_polyline(
@@ -932,48 +957,34 @@ void cs_polyline(
 
     if (!style) style = &CS_POLYLINE_STYLE_DEFAULT;
 
-    int needed = g_active_map->polyline_point_count + count;
+    /* Calculate zoom-dependent epsilon */
+    double epsilon = zoom_to_epsilon(g_active_map->current_zoom);
 
-    /* Try to ensure we have enough capacity */
-    if (!ensure_polyline_capacity(g_active_map, needed)) {
-        /* Buffer is at max capacity and still not enough - simplify the input */
-        int available = g_active_map->polyline_point_capacity - g_active_map->polyline_point_count;
-        if (available <= 2) {
-            /* No space at all, skip this polyline */
-            return;
-        }
+    /* Simplify based on zoom level */
+    int max_points = CS_MAP_POLYLINE_MAX_CAPACITY - g_active_map->polyline_point_count;
+    if (max_points <= 2) return;
 
-        /* Simplify to fit available space */
-        int point_start = g_active_map->polyline_point_count;
-        int simplified_count = simplify_polyline(
-            points, count,
-            CS_MAP_SIMPLIFY_EPSILON,
-            &g_active_map->polyline_points[point_start],
-            available
-        );
-
-        g_active_map->polyline_point_count += simplified_count;
-
-        CsOverlay *overlay = &g_active_map->overlays[g_active_map->overlay_count++];
-        overlay->type = CS_OVERLAY_POLYLINE;
-        overlay->id = id;
-        overlay->polyline.point_start = point_start;
-        overlay->polyline.point_count = simplified_count;
-        overlay->polyline.style = *style;
-        return;
+    /* Ensure we have buffer space */
+    if (!ensure_polyline_capacity(g_active_map, g_active_map->polyline_point_count + max_points)) {
+        max_points = g_active_map->polyline_point_capacity - g_active_map->polyline_point_count;
+        if (max_points <= 2) return;
     }
 
-    /* Normal case: copy all points */
     int point_start = g_active_map->polyline_point_count;
-    for (int i = 0; i < count; i++) {
-        g_active_map->polyline_points[g_active_map->polyline_point_count++] = points[i];
-    }
+    int simplified_count = simplify_polyline(
+        points, count,
+        epsilon,
+        &g_active_map->polyline_points[point_start],
+        max_points
+    );
+
+    g_active_map->polyline_point_count += simplified_count;
 
     CsOverlay *overlay = &g_active_map->overlays[g_active_map->overlay_count++];
     overlay->type = CS_OVERLAY_POLYLINE;
     overlay->id = id;
     overlay->polyline.point_start = point_start;
-    overlay->polyline.point_count = count;
+    overlay->polyline.point_count = simplified_count;
     overlay->polyline.style = *style;
 }
 
