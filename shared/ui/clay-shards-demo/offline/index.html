@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClayShards Offline Map Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+        }
+        #map-canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #map-canvas.dragging {
+            cursor: grabbing;
+        }
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: #1a1a2e;
+            color: #fff;
+            z-index: 1000;
+            transition: opacity 0.3s;
+        }
+        #loading.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #loading h1 {
+            margin-bottom: 20px;
+            font-weight: 300;
+        }
+        #loading p {
+            color: #888;
+        }
+        #loading .progress {
+            width: 300px;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            margin-top: 20px;
+            overflow: hidden;
+        }
+        #loading .progress-bar {
+            height: 100%;
+            background: #4a90d9;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid #333;
+            border-top-color: #4a90d9;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">
+        <div class="spinner"></div>
+        <h1>ClayShards Offline Demo</h1>
+        <p id="loading-status">Loading WASM modules...</p>
+        <div class="progress">
+            <div class="progress-bar" id="progress-bar"></div>
+        </div>
+    </div>
+    <canvas id="map-canvas"></canvas>
+    <script type="module" src="demo-offline.js"></script>
+</body>
+</html>
