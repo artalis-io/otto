@@ -10,6 +10,9 @@ This document outlines planned features for the Velo routing engine with detaile
 4. [Transit Node Routing](#4-transit-node-routing)
 5. [Contraction Hierarchies](#5-contraction-hierarchies)
 6. [Hub Labeling](#6-hub-labeling)
+7. [Toll Cost Computation](#7-toll-cost-computation)
+8. [Isochrones / Reachability](#8-isochrones--reachability)
+9. [Travel Time Adjustments](#9-travel-time-adjustments)
 
 ---
 
@@ -960,5 +963,358 @@ Alternative to CH with simpler query algorithm. Precompute label sets for each n
    - Only implement if native sub-ms queries required
 
 6. **Hub Labeling** - Low priority
+   - Alternative to CH
+   - Very high memory cost
+
+---
+
+## 7. Toll Cost Computation
+
+### Overview
+
+Compute toll costs for a route. This affects optimization decisions when cost matters (e.g., FuelWise, Arbor search).
+
+### Data Sources
+
+| Source | Coverage | Format |
+|--------|----------|--------|
+| **OSM toll=yes tags** | Partial | Free, in PBF |
+| **HERE Toll Cost API** | Global | Commercial API |
+| **TollGuru API** | Global | Commercial API |
+| **Static toll tables** | Regional | Manual maintenance |
+
+### Architecture Options
+
+**Option A: Edge Cost Layer**
+- Add `toll_cost` field to edges during graph construction
+- Parse OSM `toll=yes`, `toll:hgv=yes` tags
+- Approximate cost based on road class and vehicle type
+- Pro: Fast (no external calls), works offline
+- Con: Inaccurate (no real toll amounts)
+
+**Option B: Post-Route Calculation**
+- After routing, walk the path and sum toll costs
+- Use toll database/API to look up costs by road segment
+- Pro: Accurate costs
+- Con: Doesn't affect route choice
+
+**Option C: Toll-Aware Routing**
+- Add toll as a weight component: `total_cost = α*time + β*distance + γ*toll`
+- Requires toll data per edge
+- Pro: Can route to minimize toll
+- Con: Requires comprehensive toll data
+
+### Data Structure
+
+```c
+typedef struct {
+    double toll_cost;       // Currency units (e.g., cents)
+    uint8_t toll_class;     // 0=none, 1=toll road, 2=bridge, 3=tunnel, 4=congestion zone
+    uint8_t vehicle_class;  // Toll varies by vehicle type
+} VLTollInfo;
+
+typedef struct {
+    double total_toll;          // Sum of all tolls
+    int num_toll_segments;
+    struct {
+        double cost;
+        char name[64];          // Toll road/bridge name
+        uint8_t toll_class;
+    } *segments;
+} VLTollResult;
+
+/**
+ * Compute toll cost for a route
+ */
+int vl_route_toll(const VLGraph *graph, const VLRoute *route,
+                  VLVehicleClass vehicle, VLTollResult *result);
+```
+
+### TODOs
+
+**Phase 1: OSM Toll Tags**
+- [ ] Parse `toll=yes`, `toll:hgv=yes`, `toll:motorcar=yes` tags in PBF
+- [ ] Store toll flag per edge
+- [ ] Implement basic toll detection in route results
+
+**Phase 2: Toll Database**
+- [ ] Design toll rate table format (JSON or binary)
+- [ ] Create toll database for major toll roads (manual)
+- [ ] Implement toll cost lookup by OSM way ID
+
+**Phase 3: Toll-Aware Routing (Optional)**
+- [ ] Add toll cost to edge weight calculation
+- [ ] Implement multi-objective routing (time vs toll tradeoff)
+- [ ] Add `opts.avoid_tolls` flag
+
+**Phase 4: External API Integration (Optional)**
+- [ ] Implement TollGuru API client
+- [ ] Implement HERE Toll Cost API client
+- [ ] Cache responses to reduce API calls
+
+---
+
+## 8. Isochrones / Reachability
+
+### Overview
+
+Given a starting point and a time/distance budget, compute the reachable area. Useful for:
+- "Find all fuel stations within 2 hours"
+- "What area can a driver reach before HoS limit?"
+- Service area visualization
+
+### Algorithm
+
+**Basic approach:**
+1. Run Dijkstra from origin with cost limit
+2. Collect all visited nodes within budget
+3. Compute convex hull or alpha shape of reachable nodes
+4. Return as polygon
+
+**Optimizations:**
+- Early termination when all frontier nodes exceed budget
+- Spatial binning for faster polygon construction
+- Multiple isochrones in one pass (10min, 20min, 30min bands)
+
+### Data Structure
+
+```c
+typedef struct {
+    double lat, lon;
+} VLPoint;
+
+typedef struct {
+    VLPoint *points;
+    int num_points;
+    int is_hole;            // For donut-shaped isochrones
+} VLRing;
+
+typedef struct {
+    VLRing *rings;          // First ring is outer, rest are holes
+    int num_rings;
+} VLPolygon;
+
+typedef struct {
+    VLPolygon *polygons;    // Multiple polygons for disconnected areas
+    int num_polygons;
+    double budget_used;     // Actual max distance/time reached
+} VLIsochrone;
+
+typedef enum {
+    VL_ISOCHRONE_TIME,      // Budget in seconds
+    VL_ISOCHRONE_DISTANCE,  // Budget in meters
+} VLIsochroneMode;
+
+/**
+ * Compute isochrone (reachable area) from origin
+ */
+int vl_isochrone(const VLGraph *graph, VLCoord origin,
+                 double budget, VLIsochroneMode mode,
+                 const VLRouteOptions *opts, VLIsochrone *result);
+
+/**
+ * Compute multiple isochrone bands in one pass
+ * budgets[] = {600, 1200, 1800} for 10/20/30 minute bands
+ */
+int vl_isochrone_bands(const VLGraph *graph, VLCoord origin,
+                       const double *budgets, int num_bands,
+                       VLIsochroneMode mode,
+                       const VLRouteOptions *opts, VLIsochrone *results);
+
+/**
+ * Free isochrone result
+ */
+void vl_isochrone_free(VLIsochrone *isochrone);
+```
+
+### Polygon Construction
+
+**Convex Hull**: Simple but overestimates (includes unreachable areas)
+
+**Alpha Shape**: More accurate but complex
+- Delaunay triangulation of reachable nodes
+- Remove triangles with circumradius > α
+- Extract boundary edges
+
+**Grid-based**: Fast approximation
+- Overlay regular grid on bounding box
+- Mark cells containing reachable nodes
+- Trace boundary of marked cells
+
+### TODOs
+
+**Phase 1: Basic Isochrone**
+- [ ] Implement budget-limited Dijkstra
+- [ ] Collect reachable node coordinates
+- [ ] Implement convex hull algorithm
+- [ ] Return polygon in VLIsochrone structure
+
+**Phase 2: Improved Polygons**
+- [ ] Implement alpha shape for concave boundaries
+- [ ] Handle disconnected reachable areas (multiple polygons)
+- [ ] Handle holes (unreachable areas within reachable region)
+
+**Phase 3: Multi-Band Isochrones**
+- [ ] Compute multiple bands in single Dijkstra pass
+- [ ] Return nested polygons for visualization
+
+**Phase 4: API Integration**
+- [ ] Add `/api/v1/isochrone` endpoint to velo-api
+- [ ] Return GeoJSON polygon
+- [ ] Support time and distance modes
+
+---
+
+## 9. Travel Time Adjustments
+
+### Overview
+
+Adjust base travel times for real-world conditions:
+- **Traffic patterns**: Rush hour, day-of-week variations
+- **Weather impact**: Rain/snow slow travel
+- **Seasonal**: Winter speed limits, road closures
+
+### Architecture
+
+**Option A: Time-Dependent Edge Weights**
+- Store multiple travel times per edge (by time-of-day, day-of-week)
+- Query with departure time
+- Most accurate, high memory cost
+
+**Option B: Global Speed Factors**
+- Apply multiplier to all travel times based on conditions
+- `adjusted_time = base_time * traffic_factor * weather_factor`
+- Simple, low memory, less accurate
+
+**Option C: Corridor-Based Adjustments**
+- Define speed factors for road classes or geographic corridors
+- Urban highways: 0.7x during rush hour
+- Reasonable accuracy with moderate complexity
+
+### Data Structure
+
+```c
+typedef struct {
+    float factors[24];      // Hourly speed factors (1.0 = free flow)
+} VLDailyProfile;
+
+typedef struct {
+    VLDailyProfile weekday;
+    VLDailyProfile saturday;
+    VLDailyProfile sunday;
+} VLWeeklyProfile;
+
+typedef struct {
+    /* Time-of-day adjustments */
+    VLWeeklyProfile *road_class_profiles;  // Per road class
+    int num_road_classes;
+
+    /* Weather adjustments */
+    float rain_factor;      // e.g., 0.85 (15% slower)
+    float snow_factor;      // e.g., 0.6 (40% slower)
+    float ice_factor;       // e.g., 0.4 (60% slower)
+    float fog_factor;       // e.g., 0.7 (30% slower)
+
+    /* Current conditions (set by user) */
+    uint8_t current_weather;    // VL_WEATHER_CLEAR, RAIN, SNOW, etc.
+} VLTravelTimeAdjustment;
+
+typedef enum {
+    VL_WEATHER_CLEAR = 0,
+    VL_WEATHER_RAIN,
+    VL_WEATHER_SNOW,
+    VL_WEATHER_ICE,
+    VL_WEATHER_FOG,
+} VLWeather;
+
+/**
+ * Set travel time adjustments for routing
+ */
+void vl_set_time_adjustment(VLGraph *graph, const VLTravelTimeAdjustment *adj);
+
+/**
+ * Get adjusted travel time for an edge
+ */
+double vl_edge_adjusted_time(const VLGraph *graph, uint32_t edge_idx,
+                              time_t departure_time);
+```
+
+### Historical Traffic Profiles
+
+Typical traffic profile (speed as % of free-flow):
+
+| Hour | Weekday | Weekend |
+|------|---------|---------|
+| 0-5  | 100%    | 100%    |
+| 6-7  | 80%     | 95%     |
+| 7-9  | 60%     | 90%     |
+| 9-11 | 85%     | 85%     |
+| 11-13| 80%     | 80%     |
+| 13-16| 85%     | 85%     |
+| 16-18| 55%     | 85%     |
+| 18-20| 75%     | 90%     |
+| 20-24| 95%     | 95%     |
+
+### TODOs
+
+**Phase 1: Global Speed Factors**
+- [ ] Add `speed_factor` to VLRouteOptions
+- [ ] Apply factor during edge time calculation
+- [ ] Document typical factors for conditions
+
+**Phase 2: Time-of-Day Profiles**
+- [ ] Define VLDailyProfile and VLWeeklyProfile structures
+- [ ] Create default profiles for road classes (highway, urban, rural)
+- [ ] Implement time-dependent edge weight lookup
+- [ ] Add `departure_time` to VLRouteOptions
+
+**Phase 3: Road-Class Specific Adjustments**
+- [ ] Apply different profiles to different road classes
+- [ ] Parse OSM highway tags for road classification
+- [ ] Benchmark memory/accuracy tradeoff
+
+**Phase 4: Weather Integration**
+- [ ] Define weather factor presets
+- [ ] Allow runtime weather condition setting
+- [ ] Consider integrating with external weather API (via Nexus)
+
+---
+
+## Implementation Priority
+
+1. **External Backends (OSRM, PTV)** - High priority
+   - Enables production-grade performance immediately
+   - Low risk (wraps proven engines)
+   - OSRM especially valuable (open source, Docker-ready)
+
+2. **Arc Flags** - High priority
+   - Best effort/reward ratio for native engine
+   - Expected: ~15ms queries
+
+3. **Isochrones** - High priority
+   - Directly useful for "find within range" queries
+   - Builds on existing Dijkstra infrastructure
+
+4. **Toll Cost Computation** - Medium priority
+   - Important for cost-aware routing
+   - Start with OSM toll tags, extend later
+
+5. **Travel Time Adjustments** - Medium priority
+   - Improves ETA accuracy
+   - Start with global factors, add profiles later
+
+6. **Reach Pruning** - Medium priority
+   - Combines well with Arc Flags
+   - Expected: ~8-12ms queries
+
+7. **Transit Node Routing** - Medium priority
+   - Excellent for long routes
+   - Higher memory cost
+
+8. **Contraction Hierarchies** - Low priority (deferred)
+   - Use OSRM backend instead
+   - Only implement if native sub-ms queries required
+
+9. **Hub Labeling** - Low priority
    - Alternative to CH
    - Very high memory cost
