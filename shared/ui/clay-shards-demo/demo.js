@@ -87,6 +87,8 @@ const REQUIRED_EXPORTS = [
     'cs_map_hit_test', 'cs_map_set_hovered_overlay', 'cs_map_get_hovered_overlay',
     'cs_map_get_dragging_overlay',
     // Provider exports
+    'cs_provider_set_route_profile', 'cs_provider_get_route_profile',
+    'cs_provider_set_route_mode', 'cs_provider_get_route_mode',
     'cs_provider_route_is_pending', 'cs_provider_route_mark_fetching',
     'cs_provider_route_from_lat', 'cs_provider_route_from_lon',
     'cs_provider_route_to_lat', 'cs_provider_route_to_lon',

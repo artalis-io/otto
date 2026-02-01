@@ -61,11 +61,13 @@ WASM_FLAGS += -s EXPORTED_FUNCTIONS='[\
   "_cs_map_hit_test","_cs_map_set_hovered_overlay","_cs_map_set_clicked_overlay",\
   "_cs_map_get_hovered_overlay","_cs_map_get_dragging_overlay",\
   "_cs_provider_tile_url","_cs_provider_has_direct_tiles",\
+  "_cs_provider_set_route_profile","_cs_provider_get_route_profile",\
+  "_cs_provider_set_route_mode","_cs_provider_get_route_mode",\
   "_cs_provider_route","_cs_provider_route_status","_cs_provider_route_ready",\
   "_cs_provider_route_count","_cs_provider_route_point","_cs_provider_route_clear",\
   "_cs_provider_route_is_pending","_cs_provider_route_from_lat","_cs_provider_route_from_lon",\
   "_cs_provider_route_to_lat","_cs_provider_route_to_lon","_cs_provider_route_mark_fetching",\
-  "_cs_provider_route_server","_cs_provider_route_distance","_cs_provider_route_duration",\
+  "_cs_provider_route_server","_cs_provider_route_distance","_cs_provider_route_duration","_cs_provider_route_calc_time",\
   "_cs_provider_route_point_lat","_cs_provider_route_point_lon",\
   "_cs_provider_search","_cs_provider_search_near","_cs_provider_search_status",\
   "_cs_provider_search_ready","_cs_provider_search_count","_cs_provider_search_clear",\
