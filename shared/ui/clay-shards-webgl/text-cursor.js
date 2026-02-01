@@ -82,11 +82,9 @@ function getWasmString(wasm, ptr, len) {
     // Bounds check: ensure we don't read past WASM memory
     if (ptr + len > memory.length) return '';
 
-    let str = '';
-    for (let i = 0; i < len; i++) {
-        str += String.fromCharCode(memory[ptr + i]);
-    }
-    return str;
+    // Decode UTF-8 text from WASM memory
+    const bytes = new Uint8Array(wasm.memory.buffer, ptr, len);
+    return new TextDecoder('utf-8').decode(bytes);
 }
 
 /**

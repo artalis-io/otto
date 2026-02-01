@@ -144,8 +144,6 @@ export class MapOverlayRenderer {
         const count = wasm.cs_map_overlay_count();
         if (count === 0) return;
 
-        console.log(`Rendering ${count} overlays at center ${lat.toFixed(5)}, ${lon.toFixed(5)} zoom ${zoom}`);
-
         for (let i = 0; i < count; i++) {
             const type = wasm.cs_map_overlay_type(i);
 
@@ -225,8 +223,6 @@ export class MapOverlayRenderer {
 
         // Project to screen
         const [x, y] = this._geoToScreen(mLat, mLon, lat, lon, zoom, width, height);
-
-        console.log(`Marker ${index}: geo(${mLat.toFixed(5)}, ${mLon.toFixed(5)}) -> screen(${x.toFixed(1)}, ${y.toFixed(1)})`);
 
         // Render circle
         gl.useProgram(this.circleShader.program);

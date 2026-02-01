@@ -20,12 +20,11 @@ function getSelectedText(wasm) {
     const len = wasm.cs_focused_text_len();
     if (!ptr || len <= 0) return null;
 
-    const memory = new Uint8Array(wasm.memory.buffer);
-    let text = '';
-    for (let i = start; i < end && i < len; i++) {
-        text += String.fromCharCode(memory[ptr + i]);
-    }
-    return text;
+    // Decode UTF-8 text slice from WASM memory
+    const sliceLen = Math.min(end, len) - start;
+    if (sliceLen <= 0) return null;
+    const bytes = new Uint8Array(wasm.memory.buffer, ptr + start, sliceLen);
+    return new TextDecoder('utf-8').decode(bytes);
 }
 
 /**

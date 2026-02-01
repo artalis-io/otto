@@ -21,10 +21,30 @@ import {
     MapOverlayRenderer,
     createRenderLoop,
     loadWasm,
-    setupKeyboardHandler
+    setupKeyboardHandler,
+    setCartaServerUrl
 } from '../clay-shards-webgl/index.js';
 
 import { MapProvider } from '../clay-shards-webgl/map-provider.js';
+
+/* ============================================================================
+ * Server Configuration
+ * ============================================================================ */
+
+const CARTA_SERVER = 'http://localhost:8081';  // Tile server
+const VELO_SERVER = 'http://localhost:8082';   // Route server
+const LOCUS_SERVER = 'http://localhost:8083';  // Geocoding server
+
+/**
+ * Allocate a string in WASM memory
+ */
+function _allocString(wasm, str) {
+    const bytes = new TextEncoder().encode(str + '\0');
+    const ptr = wasm.malloc(bytes.length);
+    const memory = new Uint8Array(wasm.memory.buffer);
+    memory.set(bytes, ptr);
+    return ptr;
+}
 
 /* ============================================================================
  * Application State
@@ -183,11 +203,18 @@ async function main() {
         // Transfer font metrics to WASM for accurate text layout
         font.transferMetricsToWasm(wasm);
 
+        // Configure servers
+        setCartaServerUrl(CARTA_SERVER);
+
         // Initialize app
         wasm.map_init(width, height);
-        // Monaco center (for testing with monaco data)
-        wasm.map_set_center(43.7384, 7.4246);
-        wasm.map_set_zoom(14);
+        // Budapest center (Hungary data)
+        wasm.map_set_center(47.4979, 19.0402);
+        wasm.map_set_zoom(12);
+
+        // Configure provider servers
+        wasm.cs_provider_set_route_server(_allocString(wasm, VELO_SERVER));
+        wasm.cs_provider_set_geocode_server(_allocString(wasm, LOCUS_SERVER));
 
         // Initialize provider for API integration (routing, geocoding)
         mapProvider = new MapProvider(wasm);

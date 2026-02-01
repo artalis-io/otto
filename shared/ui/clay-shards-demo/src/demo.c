@@ -72,6 +72,12 @@ typedef struct {
     int search_len;
 } UIText;
 
+typedef struct {
+    char prev_query[256];       /* Track changes */
+    int prev_len;
+    bool show_results;          /* Show dropdown */
+} SearchState;
+
 /* Scratch buffers for formatted strings */
 typedef struct {
     char coord[64];
@@ -86,12 +92,14 @@ typedef struct {
     UIText text;
     Scratch scratch;
     RouteState route;
+    SearchState search;
 } AppState;
 
 static AppState g_app = {
     .map = { .lat = 47.4979, .lon = 19.0402, .zoom = 12, .width = 800, .height = 600 },
     .panels = { .show_tile_info = true, .layer_type = 0 },
     .text = { .search = "", .search_len = 0 },
+    .search = { .prev_query = "", .prev_len = 0, .show_results = false },
 };
 
 /* ============================================================================
@@ -174,12 +182,10 @@ static void render_layer_panel(void) {
         const CsButtonStyle sel = {CS_BTN_PRIMARY, 14, 8, 8, 4, 70};
         const CsButtonStyle def = {CS_BTN_DEFAULT, 14, 8, 8, 4, 70};
 
-        if (cs_button(CS_ID("layer_osm"), "OSM", g_app.panels.layer_type == 0 ? &sel : &def).clicked)
+        if (cs_button(CS_ID("layer_carta"), "Carta", g_app.panels.layer_type == 0 ? &sel : &def).clicked)
             g_app.panels.layer_type = 0;
-        if (cs_button(CS_ID("layer_carto"), "Carto", g_app.panels.layer_type == 1 ? &sel : &def).clicked)
+        if (cs_button(CS_ID("layer_osm"), "OSM", g_app.panels.layer_type == 1 ? &sel : &def).clicked)
             g_app.panels.layer_type = 1;
-        if (cs_button(CS_ID("layer_terrain"), "Terrain", g_app.panels.layer_type == 2 ? &sel : &def).clicked)
-            g_app.panels.layer_type = 2;
     }
 }
 
@@ -209,9 +215,53 @@ static void render_info_panel(void) {
         CLAY_TEXT(((Clay_String){ .chars = g_app.scratch.zoom, .length = (int)strlen(g_app.scratch.zoom) }),
                   CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
 
-        const CsInputStyle input_style = { .width = 180, .height = 28, .font_size = 12, .padding = 8, .corner_radius = 4 };
-        cs_input(CS_ID("search"), g_app.text.search, &g_app.text.search_len,
+        const CsInputStyle input_style = { .width = 200, .height = 28, .font_size = 12, .padding = 8, .corner_radius = 4 };
+        CsInputResult search_result = cs_input(CS_ID("search"), g_app.text.search, &g_app.text.search_len,
                  sizeof(g_app.text.search), "Search location...", &input_style);
+
+        /* Detect search text changes - trigger new search */
+        bool query_changed = (g_app.text.search_len != g_app.search.prev_len ||
+                              strcmp(g_app.text.search, g_app.search.prev_query) != 0);
+        if (query_changed && g_app.text.search_len >= 2) {
+            /* Search with bias toward current map center */
+            cs_provider_search_near(g_app.text.search, g_app.map.lat, g_app.map.lon);
+            strncpy(g_app.search.prev_query, g_app.text.search, sizeof(g_app.search.prev_query) - 1);
+            g_app.search.prev_len = g_app.text.search_len;
+            g_app.search.show_results = true;
+        }
+
+        /* Show search results dropdown */
+        int result_count = cs_provider_search_count();
+        if (g_app.search.show_results && result_count > 0 && g_app.text.search_len >= 2) {
+            CLAY(CLAY_ID("SearchResults"), {
+                .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 2 },
+            }) {
+                for (int i = 0; i < result_count && i < 5; i++) {
+                    const CsSearchResult *r = cs_provider_search_result(i);
+                    if (!r) continue;
+
+                    /* Create button for each result */
+                    char result_id[32];
+                    snprintf(result_id, sizeof(result_id), "result_%d", i);
+                    const CsButtonStyle result_style = { CS_BTN_DEFAULT, 11, 6, 4, 2, 200 };
+
+                    if (cs_button(cs_hash_id(result_id), r->name, &result_style).clicked) {
+                        /* Navigate to result location */
+                        g_app.map.lat = r->lat;
+                        g_app.map.lon = r->lon;
+                        g_app.map.zoom = 16; /* Zoom in */
+                        g_app.search.show_results = false;
+                        g_app.text.search_len = 0;
+                        g_app.text.search[0] = '\0';
+                    }
+                }
+            }
+        }
+
+        /* Hide results when input loses focus or is cleared */
+        if (search_result.blurred || g_app.text.search_len < 2) {
+            g_app.search.show_results = false;
+        }
     }
 }
 
