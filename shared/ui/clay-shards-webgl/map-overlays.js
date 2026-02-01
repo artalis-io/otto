@@ -265,36 +265,89 @@ export class MapOverlayRenderer {
     }
 
     /**
-     * Generate thick line geometry as triangle strip
+     * Generate thick line geometry as triangle strip with proper miter joins
      */
     _generateThickLine(points, width) {
+        const numPoints = points.length / 2;
+        if (numPoints < 2) return [];
+
         const vertices = [];
         const halfWidth = width / 2;
+        const miterLimit = 3.0; // Limit miter length to avoid spikes at sharp angles
 
-        for (let i = 0; i < points.length - 2; i += 2) {
-            const x1 = points[i];
-            const y1 = points[i + 1];
-            const x2 = points[i + 2];
-            const y2 = points[i + 3];
+        for (let i = 0; i < numPoints; i++) {
+            const x = points[i * 2];
+            const y = points[i * 2 + 1];
 
-            // Direction and perpendicular
-            const dx = x2 - x1;
-            const dy = y2 - y1;
-            const len = Math.sqrt(dx * dx + dy * dy);
-            if (len < 0.001) continue;
-
-            const nx = -dy / len * halfWidth;
-            const ny = dx / len * halfWidth;
+            let nx, ny; // Normal (perpendicular) at this vertex
 
             if (i === 0) {
-                // First segment start
-                vertices.push(x1 + nx, y1 + ny);
-                vertices.push(x1 - nx, y1 - ny);
+                // First point: use perpendicular to first segment
+                const dx = points[2] - points[0];
+                const dy = points[3] - points[1];
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len < 0.001) continue;
+                nx = -dy / len;
+                ny = dx / len;
+            } else if (i === numPoints - 1) {
+                // Last point: use perpendicular to last segment
+                const dx = points[i * 2] - points[(i - 1) * 2];
+                const dy = points[i * 2 + 1] - points[(i - 1) * 2 + 1];
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len < 0.001) continue;
+                nx = -dy / len;
+                ny = dx / len;
+            } else {
+                // Middle point: compute miter join
+                // Direction of incoming segment
+                const dx1 = x - points[(i - 1) * 2];
+                const dy1 = y - points[(i - 1) * 2 + 1];
+                const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+
+                // Direction of outgoing segment
+                const dx2 = points[(i + 1) * 2] - x;
+                const dy2 = points[(i + 1) * 2 + 1] - y;
+                const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+
+                if (len1 < 0.001 || len2 < 0.001) continue;
+
+                // Normalize directions
+                const ux1 = dx1 / len1, uy1 = dy1 / len1;
+                const ux2 = dx2 / len2, uy2 = dy2 / len2;
+
+                // Perpendiculars (normals) to each segment
+                const nx1 = -uy1, ny1 = ux1;
+                const nx2 = -uy2, ny2 = ux2;
+
+                // Miter direction: average of the two normals
+                let mx = nx1 + nx2;
+                let my = ny1 + ny2;
+                const mlen = Math.sqrt(mx * mx + my * my);
+
+                if (mlen < 0.001) {
+                    // Segments are parallel, use either normal
+                    nx = nx1;
+                    ny = ny1;
+                } else {
+                    mx /= mlen;
+                    my /= mlen;
+
+                    // Miter length: 1 / dot(miter, normal)
+                    // This ensures the line width is correct at the join
+                    const dot = mx * nx1 + my * ny1;
+                    let miterLen = 1.0 / Math.max(dot, 0.1); // Prevent division by zero
+
+                    // Clamp miter length to avoid spikes at sharp angles
+                    miterLen = Math.min(miterLen, miterLimit);
+
+                    nx = mx * miterLen;
+                    ny = my * miterLen;
+                }
             }
 
-            // Segment end
-            vertices.push(x2 + nx, y2 + ny);
-            vertices.push(x2 - nx, y2 - ny);
+            // Add two vertices: offset in both directions from the line
+            vertices.push(x + nx * halfWidth, y + ny * halfWidth);
+            vertices.push(x - nx * halfWidth, y - ny * halfWidth);
         }
 
         return vertices;
