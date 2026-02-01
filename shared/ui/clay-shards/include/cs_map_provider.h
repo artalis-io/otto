@@ -250,6 +250,11 @@ void cs_provider_set_geocode_server(const char *url);  /* Default: http://localh
  */
 const char* cs_provider_type(void);  /* "api" or "wasm" */
 
+/**
+ * Cleanup provider resources (free dynamic buffers)
+ */
+void cs_provider_cleanup(void);
+
 /* ============================================================================
  * Provider Callbacks (set by JS layer for async operations)
  * ============================================================================ */

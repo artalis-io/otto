@@ -341,6 +341,21 @@ double cs_map_get_visual_zoom(uint32_t id);
 /* Check if zoom animation is in progress */
 bool cs_map_is_zoom_animating(uint32_t id);
 
+/* ============================================================================
+ * Cleanup
+ * ============================================================================ */
+
+/**
+ * Free all map state resources (polyline buffers, etc.)
+ * Call on application shutdown for proper cleanup.
+ */
+void cs_map_cleanup(void);
+
+/**
+ * Free resources for a specific map
+ */
+void cs_map_destroy(uint32_t id);
+
 #ifdef __cplusplus
 }
 #endif
