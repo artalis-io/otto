@@ -118,14 +118,14 @@ typedef struct StringEntry {
     const char *str;
     uint32_t offset;
     uint32_t hash;
-    struct StringEntry *next;
+    int32_t next;  /* Index into entries array, -1 = end */
 } StringEntry;
 
 typedef struct {
     char *data;
     size_t size;
     size_t capacity;
-    StringEntry *buckets[HASH_TABLE_SIZE];
+    int32_t buckets[HASH_TABLE_SIZE];  /* Index into entries, -1 = empty */
     StringEntry *entries;
     size_t entry_count;
     size_t entry_capacity;
@@ -142,6 +142,9 @@ static uint32_t hash_string(const char *str) {
 
 static void pool_init(StringPool *pool) {
     memset(pool, 0, sizeof(StringPool));
+    for (int i = 0; i < HASH_TABLE_SIZE; i++) {
+        pool->buckets[i] = -1;
+    }
     pool->entry_capacity = 4096;
     pool->entries = malloc(pool->entry_capacity * sizeof(StringEntry));
 }
@@ -159,7 +162,8 @@ static uint32_t pool_add(StringPool *pool, const char *str) {
     uint32_t hash = hash_string(str);
     uint32_t bucket = hash % HASH_TABLE_SIZE;
 
-    for (StringEntry *e = pool->buckets[bucket]; e; e = e->next) {
+    for (int32_t idx = pool->buckets[bucket]; idx >= 0; idx = pool->entries[idx].next) {
+        StringEntry *e = &pool->entries[idx];
         if (e->hash == hash && strcmp(e->str, str) == 0) {
             pool->dedup_hits++;
             return e->offset;
@@ -184,16 +188,20 @@ static uint32_t pool_add(StringPool *pool, const char *str) {
 
     /* Add to hash table */
     if (pool->entry_count >= pool->entry_capacity) {
+        size_t old_capacity = pool->entry_capacity;
         pool->entry_capacity *= 2;
         pool->entries = realloc(pool->entries, pool->entry_capacity * sizeof(StringEntry));
+        /* Update str pointers - they point into pool->data which may have moved */
+        /* Actually pool->data is separate, only entries moved. str pointers are still valid */
     }
 
-    StringEntry *entry = &pool->entries[pool->entry_count++];
+    int32_t new_idx = (int32_t)pool->entry_count++;
+    StringEntry *entry = &pool->entries[new_idx];
     entry->str = pool->data + offset;  /* Point to pool copy */
     entry->offset = offset;
     entry->hash = hash;
     entry->next = pool->buckets[bucket];
-    pool->buckets[bucket] = entry;
+    pool->buckets[bucket] = new_idx;
 
     return offset;
 }
