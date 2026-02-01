@@ -1,0 +1,3 @@
+# OSM data files - download separately
+*.osm.pbf
+*.vlg
