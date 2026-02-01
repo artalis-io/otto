@@ -52,6 +52,13 @@ typedef struct {
     int layer_type;
 } UIPanels;
 
+/* Which endpoint we're reverse geocoding */
+typedef enum {
+    REVERSE_NONE = 0,
+    REVERSE_START,
+    REVERSE_END
+} ReversePending;
+
 /* Route state for click-to-route */
 typedef struct {
     bool has_start;
@@ -72,6 +79,12 @@ typedef struct {
     /* Cached display values (prevent flicker during recalculation) */
     char cached_info[96];        /* Cached formatted string */
     bool has_cached_info;
+    /* Reverse geocoded addresses */
+    char start_address[128];
+    char end_address[128];
+    ReversePending reverse_pending;
+    bool start_needs_geocode;    /* Start marker moved, needs new address */
+    bool end_needs_geocode;      /* End marker moved, needs new address */
 } RouteState;
 
 /* Minimum time between route requests during drag (seconds) */
@@ -467,11 +480,33 @@ static void render_route_panel(void) {
                                        .length = (int)strlen(g_app.route.cached_info) }),
                       CLAY_TEXT_CONFIG({ .fontSize = 14, .textColor = THEME.text }));
 
+            /* Display addresses if available */
+            if (g_app.route.start_address[0] != '\0') {
+                CLAY(CLAY_ID("FromAddr"), { .layout = { .childGap = 4 } }) {
+                    CLAY_TEXT(CLAY_STRING("From:"),
+                              CLAY_TEXT_CONFIG({ .fontSize = 11, .textColor = THEME.text_muted }));
+                    CLAY_TEXT(((Clay_String){ .chars = g_app.route.start_address,
+                                               .length = (int)strlen(g_app.route.start_address) }),
+                              CLAY_TEXT_CONFIG({ .fontSize = 11, .textColor = THEME.text }));
+                }
+            }
+            if (g_app.route.end_address[0] != '\0') {
+                CLAY(CLAY_ID("ToAddr"), { .layout = { .childGap = 4 } }) {
+                    CLAY_TEXT(CLAY_STRING("To:"),
+                              CLAY_TEXT_CONFIG({ .fontSize = 11, .textColor = THEME.text_muted }));
+                    CLAY_TEXT(((Clay_String){ .chars = g_app.route.end_address,
+                                               .length = (int)strlen(g_app.route.end_address) }),
+                              CLAY_TEXT_CONFIG({ .fontSize = 11, .textColor = THEME.text }));
+                }
+            }
+
             if (cs_button(CS_ID("clear_route"), "Clear Route", &clear_btn).clicked) {
                 g_app.route.has_start = false;
                 g_app.route.has_end = false;
                 g_app.route.point_count = 0; g_app.route.points = NULL;
                 g_app.route.has_cached_info = false;
+                g_app.route.start_address[0] = '\0';
+                g_app.route.end_address[0] = '\0';
                 cs_provider_route_clear();
             }
         } else if (!g_app.route.has_start) {
@@ -552,10 +587,16 @@ static void render_ui(void) {
                 /* Update start position from drag result */
                 g_app.route.start.lat = map_result.dragged_marker_lat;
                 g_app.route.start.lon = map_result.dragged_marker_lon;
+                /* Mark for re-geocoding */
+                g_app.route.start_address[0] = '\0';
+                g_app.route.start_needs_geocode = true;
             } else if (map_result.dragged_marker_id == CS_ID("end")) {
                 /* Update end position from drag result */
                 g_app.route.end.lat = map_result.dragged_marker_lat;
                 g_app.route.end.lon = map_result.dragged_marker_lon;
+                /* Mark for re-geocoding */
+                g_app.route.end_address[0] = '\0';
+                g_app.route.end_needs_geocode = true;
             }
 
             /* Trigger final re-route on drag end */
@@ -722,7 +763,14 @@ EXPORT int map_handle_click(float x, float y) {
             g_app.route.start.lon = click_lon;
             g_app.route.has_start = true;
             g_app.route.error = false;
-            /* Debug: marker placed - will be printed via WASM debug export */
+            g_app.route.start_address[0] = '\0';
+            /* Request reverse geocode for start */
+            g_app.route.start_needs_geocode = true;
+            if (g_app.route.reverse_pending == REVERSE_NONE) {
+                cs_provider_reverse(click_lat, click_lon);
+                g_app.route.reverse_pending = REVERSE_START;
+                g_app.route.start_needs_geocode = false;
+            }
         } else if (!g_app.route.has_end) {
             /* Set end point and request route */
             g_app.route.end.lat = click_lat;
@@ -731,6 +779,14 @@ EXPORT int map_handle_click(float x, float y) {
             g_app.route.loading = true;
             g_app.route.error = false;
             g_app.route.point_count = 0; g_app.route.points = NULL;
+            g_app.route.end_address[0] = '\0';
+            /* Request reverse geocode for end */
+            g_app.route.end_needs_geocode = true;
+            if (g_app.route.reverse_pending == REVERSE_NONE) {
+                cs_provider_reverse(click_lat, click_lon);
+                g_app.route.reverse_pending = REVERSE_END;
+                g_app.route.end_needs_geocode = false;
+            }
 
             /* Request route from provider */
             cs_provider_route(g_app.route.start, g_app.route.end);
@@ -769,6 +825,62 @@ static void update_route_state(void) {
     }
 }
 
+/* Format address from reverse geocode result */
+static void format_address(char *buf, size_t size, const CsReverseResult *r) {
+    if (r->street[0] && r->city[0]) {
+        snprintf(buf, size, "%s, %s", r->street, r->city);
+    } else if (r->name[0]) {
+        snprintf(buf, size, "%s", r->name);
+    } else if (r->city[0]) {
+        snprintf(buf, size, "%s", r->city);
+    } else {
+        buf[0] = '\0';
+    }
+}
+
+/* Check for reverse geocode completion from provider */
+static void update_reverse_geocode_state(void) {
+    if (g_app.route.reverse_pending == REVERSE_NONE) {
+        /* Check if there's a pending geocode request to start */
+        if (g_app.route.start_needs_geocode && g_app.route.has_start) {
+            cs_provider_reverse(g_app.route.start.lat, g_app.route.start.lon);
+            g_app.route.reverse_pending = REVERSE_START;
+            g_app.route.start_needs_geocode = false;
+        } else if (g_app.route.end_needs_geocode && g_app.route.has_end) {
+            cs_provider_reverse(g_app.route.end.lat, g_app.route.end.lon);
+            g_app.route.reverse_pending = REVERSE_END;
+            g_app.route.end_needs_geocode = false;
+        }
+        return;
+    }
+
+    if (!cs_provider_reverse_ready()) return;
+
+    const CsReverseResult *result = cs_provider_reverse_result();
+
+    if (!result->error) {
+        if (g_app.route.reverse_pending == REVERSE_START) {
+            format_address(g_app.route.start_address, sizeof(g_app.route.start_address), result);
+        } else if (g_app.route.reverse_pending == REVERSE_END) {
+            format_address(g_app.route.end_address, sizeof(g_app.route.end_address), result);
+        }
+    }
+
+    cs_provider_reverse_clear();
+    g_app.route.reverse_pending = REVERSE_NONE;
+
+    /* Check if there's another pending request */
+    if (g_app.route.start_needs_geocode && g_app.route.has_start) {
+        cs_provider_reverse(g_app.route.start.lat, g_app.route.start.lon);
+        g_app.route.reverse_pending = REVERSE_START;
+        g_app.route.start_needs_geocode = false;
+    } else if (g_app.route.end_needs_geocode && g_app.route.has_end) {
+        cs_provider_reverse(g_app.route.end.lat, g_app.route.end.lon);
+        g_app.route.reverse_pending = REVERSE_END;
+        g_app.route.end_needs_geocode = false;
+    }
+}
+
 EXPORT int map_frame(float dt) {
     if (!cs_clay_is_initialized()) return -1;
 
@@ -777,6 +889,9 @@ EXPORT int map_frame(float dt) {
 
     /* Check for route completion */
     update_route_state();
+
+    /* Check for reverse geocode completion */
+    update_reverse_geocode_state();
 
     /* Decrement reroute cooldown */
     if (g_app.route.reroute_cooldown > 0) {
