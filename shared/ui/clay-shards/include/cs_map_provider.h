@@ -37,7 +37,7 @@ extern "C" {
  * ============================================================================ */
 
 #ifndef CS_PROVIDER_MAX_ROUTE_POINTS
-#define CS_PROVIDER_MAX_ROUTE_POINTS 4096
+#define CS_PROVIDER_MAX_ROUTE_POINTS 4096  /* Simplification applied when exceeded */
 #endif
 
 #ifndef CS_PROVIDER_MAX_SEARCH_RESULTS
