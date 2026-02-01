@@ -238,13 +238,46 @@ static void render_attribution(void) {
     }
 }
 
+/* Sample route data - Budapest landmarks */
+static const CsGeoPoint g_sample_route[] = {
+    {47.4979, 19.0402},  /* Buda Castle */
+    {47.5007, 19.0348},  /* Chain Bridge */
+    {47.5025, 19.0419},  /* St. Stephen's Basilica */
+    {47.4983, 19.0408},  /* Hungarian Parliament */
+    {47.4925, 19.0513},  /* Great Market Hall */
+};
+#define SAMPLE_ROUTE_LEN (sizeof(g_sample_route) / sizeof(g_sample_route[0]))
+
 static void render_ui(void) {
     CLAY(CLAY_ID("Root"), {
         .layout = { .sizing = { CLAY_SIZING_FIXED((float)g_app.map.width), CLAY_SIZING_FIXED((float)g_app.map.height) } }
     }) {
-        /* Map component - ID set once in map_init() */
-        cs_map(g_app.map.component_id, &g_app.map.lat, &g_app.map.lon, &g_app.map.zoom,
-               (float)g_app.map.width, (float)g_app.map.height, NULL);
+        /* Map with overlays - using begin/end pattern */
+        cs_map_begin(g_app.map.component_id, &g_app.map.lat, &g_app.map.lon, &g_app.map.zoom,
+                     (float)g_app.map.width, (float)g_app.map.height, NULL);
+
+        /* Route polyline */
+        cs_polyline(CS_ID("route"), g_sample_route, SAMPLE_ROUTE_LEN, &(CsPolylineStyle){
+            .color = {0.2f, 0.5f, 1.0f, 0.9f},
+            .width = 4.0f,
+        });
+
+        /* Markers at start and end */
+        cs_marker(CS_ID("start"), g_sample_route[0].lat, g_sample_route[0].lon, &(CsMarkerStyle){
+            .color = {0.2f, 0.8f, 0.3f, 1.0f},
+            .radius = 10.0f,
+            .border_color = {1.0f, 1.0f, 1.0f, 1.0f},
+            .border_width = 2.0f,
+        });
+
+        cs_marker(CS_ID("end"), g_sample_route[SAMPLE_ROUTE_LEN-1].lat, g_sample_route[SAMPLE_ROUTE_LEN-1].lon, &(CsMarkerStyle){
+            .color = {0.9f, 0.2f, 0.2f, 1.0f},
+            .radius = 10.0f,
+            .border_color = {1.0f, 1.0f, 1.0f, 1.0f},
+            .border_width = 2.0f,
+        });
+
+        cs_map_end();
 
         /* UI overlays */
         render_info_panel();

@@ -23,6 +23,7 @@ export { ClayRenderer } from './renderer.js';
 export { MSDFFont } from './font.js';
 export { TextInputOverlay } from './text-input-overlay.js';
 export { TileCache, MapTileRenderer } from './map-tiles.js';
+export { MapOverlayRenderer } from './map-overlays.js';
 export { renderTextCursor } from './text-cursor.js';
 export { createRenderLoop } from './render-loop.js';
 export { loadWasm } from './wasm-loader.js';

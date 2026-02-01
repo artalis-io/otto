@@ -86,10 +86,16 @@ export class MapTileRenderer {
         this.renderer = renderer;
         this.tileCache = tileCache;
         this.baseTileSize = 256;
+
+        // Transition state for smooth zoom level changes
+        this.lastTileZoom = null;
+        this.transitionProgress = 1.0;  // 1.0 = fully transitioned, no crossfade
+        this.transitionStartTime = null;
+        this.transitionDuration = 400;  // ms for crossfade
     }
 
     /**
-     * Render map tiles with smooth zoom support
+     * Render map tiles with smooth zoom and crossfade transitions
      * @param {number} lat - Center latitude
      * @param {number} lon - Center longitude
      * @param {number} visualZoom - Visual zoom level (can be fractional for smooth animation)
@@ -99,25 +105,71 @@ export class MapTileRenderer {
      * @param {Float32Array} projMatrix - Projection matrix
      */
     render(lat, lon, visualZoom, layerType, width, height, projMatrix) {
-        // Use floor of visual zoom for tile fetching
         const tileZoom = Math.floor(visualZoom);
-        // Scale factor for smooth zoom (1.0 at integer zoom, up to 2.0 approaching next level)
+
+        // Detect zoom level change - start crossfade transition
+        if (this.lastTileZoom !== null && tileZoom !== this.lastTileZoom) {
+            this.transitionProgress = 0;
+            this.transitionStartTime = performance.now();
+        }
+
+        // Update transition progress
+        if (this.transitionProgress < 1) {
+            const elapsed = performance.now() - this.transitionStartTime;
+            this.transitionProgress = Math.min(1, elapsed / this.transitionDuration);
+        }
+
+        // During transition: old tiles as backdrop (full opacity), new tiles fade in on top
+        if (this.transitionProgress < 1 && this.lastTileZoom !== null) {
+            // Old tiles: full opacity backdrop (scaled to current visual zoom)
+            const oldScale = Math.pow(2, visualZoom - this.lastTileZoom);
+            this.renderTilesAtZoom(
+                lat, lon, this.lastTileZoom, oldScale,
+                layerType, width, height, projMatrix, 1.0
+            );
+
+            // New tiles: fade in on top
+            const newAlpha = this.easeOutQuad(this.transitionProgress);
+            const newScale = Math.pow(2, visualZoom - tileZoom);
+            this.renderTilesAtZoom(
+                lat, lon, tileZoom, newScale,
+                layerType, width, height, projMatrix, newAlpha
+            );
+        } else {
+            // No transition: just render current zoom level
+            const scale = Math.pow(2, visualZoom - tileZoom);
+            this.renderTilesAtZoom(
+                lat, lon, tileZoom, scale,
+                layerType, width, height, projMatrix, 1.0
+            );
+        }
+
+        // Prefetch tiles at next zoom level when approaching it
         const zoomFraction = visualZoom - tileZoom;
-        const scale = Math.pow(2, zoomFraction);
+        if (zoomFraction > 0.3) {
+            this.prefetchTiles(lat, lon, tileZoom + 1, layerType, width, height);
+        }
+
+        // Update last zoom for next frame
+        this.lastTileZoom = tileZoom;
+    }
+
+    /**
+     * Render tiles at a specific zoom level with given scale and alpha
+     */
+    renderTilesAtZoom(lat, lon, zoom, scale, layerType, width, height, projMatrix, alpha) {
         const tileSize = this.baseTileSize * scale;
 
-        // Calculate center tile position at the tile zoom level
-        const centerTileX = this.lonToTileX(lon, tileZoom);
-        const centerTileY = this.latToTileY(lat, tileZoom);
+        const centerTileX = this.lonToTileX(lon, zoom);
+        const centerTileY = this.latToTileY(lat, zoom);
 
-        // How many tiles needed to cover the viewport (accounting for scale)
         const tilesX = Math.ceil(width / tileSize) + 2;
         const tilesY = Math.ceil(height / tileSize) + 2;
 
         const startTileX = Math.floor(centerTileX - tilesX / 2);
         const startTileY = Math.floor(centerTileY - tilesY / 2);
 
-        const maxTile = Math.pow(2, tileZoom);
+        const maxTile = Math.pow(2, zoom);
 
         for (let dy = 0; dy < tilesY; dy++) {
             for (let dx = 0; dx < tilesX; dx++) {
@@ -128,27 +180,21 @@ export class MapTileRenderer {
 
                 const wrappedTileX = ((tileX % maxTile) + maxTile) % maxTile;
 
-                // Screen position with scaled tile size
                 const screenX = width / 2 + (tileX - centerTileX) * tileSize;
                 const screenY = height / 2 + (tileY - centerTileY) * tileSize;
 
-                const tile = this.tileCache.getTile(tileZoom, wrappedTileX, tileY, layerType);
+                const tile = this.tileCache.getTile(zoom, wrappedTileX, tileY, layerType);
 
                 if (tile.loaded && tile.texture) {
                     this.renderer.renderTexture(
                         tile.texture,
                         screenX, screenY,
                         tileSize, tileSize,
-                        projMatrix
+                        projMatrix,
+                        alpha
                     );
                 }
             }
-        }
-
-        // Prefetch tiles at next zoom level if animating (zooming in)
-        // When zoomFraction > 0, we're between tileZoom and tileZoom+1
-        if (zoomFraction > 0.01) {
-            this.prefetchTiles(lat, lon, tileZoom + 1, layerType, width, height);
         }
     }
 
@@ -159,7 +205,6 @@ export class MapTileRenderer {
         const centerTileX = this.lonToTileX(lon, zoom);
         const centerTileY = this.latToTileY(lat, zoom);
 
-        // Prefetch tiles that will be visible at target zoom
         const tilesX = Math.ceil(width / this.baseTileSize) + 2;
         const tilesY = Math.ceil(height / this.baseTileSize) + 2;
 
@@ -176,11 +221,16 @@ export class MapTileRenderer {
                 if (tileY < 0 || tileY >= maxTile) continue;
 
                 const wrappedTileX = ((tileX % maxTile) + maxTile) % maxTile;
-
-                // Just request the tile - this triggers cache loading
                 this.tileCache.getTile(zoom, wrappedTileX, tileY, layerType);
             }
         }
+    }
+
+    /**
+     * Easing function for smooth transitions
+     */
+    easeOutQuad(t) {
+        return t * (2 - t);
     }
 
     lonToTileX(lon, zoom) {

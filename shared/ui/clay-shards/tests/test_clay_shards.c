@@ -608,10 +608,10 @@ static void test_map_pointer_handling(void) {
 static void test_map_default_style(void) {
     TEST(map_default_style);
 
-    ASSERT(CC_MAP_STYLE_DEFAULT.min_zoom == 0, "Default min_zoom should be 0");
-    ASSERT(CC_MAP_STYLE_DEFAULT.max_zoom == 19, "Default max_zoom should be 19");
-    ASSERT(CC_MAP_STYLE_DEFAULT.min_lat < 0, "Default min_lat should be negative");
-    ASSERT(CC_MAP_STYLE_DEFAULT.max_lat > 0, "Default max_lat should be positive");
+    ASSERT(CS_MAP_STYLE_DEFAULT.min_zoom == 0, "Default min_zoom should be 0");
+    ASSERT(CS_MAP_STYLE_DEFAULT.max_zoom == 19, "Default max_zoom should be 19");
+    ASSERT(CS_MAP_STYLE_DEFAULT.min_lat < 0, "Default min_lat should be negative");
+    ASSERT(CS_MAP_STYLE_DEFAULT.max_lat > 0, "Default max_lat should be positive");
 
     PASS();
 }
