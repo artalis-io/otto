@@ -69,7 +69,15 @@ export class MapProvider {
         const toLon = wasm.cs_provider_route_to_lon();
         const server = this._getString(wasm.cs_provider_route_server());
 
-        const url = `${server}/api/v1/route?from=${fromLat},${fromLon}&to=${toLat},${toLon}&geometry=true`;
+        // Get profile and mode from WASM
+        const profileNum = wasm.cs_provider_get_route_profile();
+        const modeNum = wasm.cs_provider_get_route_mode();
+        const profile = profileNum === 1 ? 'truck' : 'car';
+        const mode = modeNum === 1 ? 'shortest' : 'fastest';
+
+        const url = `${server}/api/v1/route?from=${fromLat},${fromLon}&to=${toLat},${toLon}&profile=${profile}&mode=${mode}&geometry=true`;
+
+        const startTime = performance.now();
 
         try {
             const response = await fetch(url);
@@ -78,6 +86,7 @@ export class MapProvider {
             }
 
             const data = await response.json();
+            const calcTimeMs = performance.now() - startTime;
 
             if (data.error) {
                 this._reportRouteError(data.error);
@@ -105,7 +114,8 @@ export class MapProvider {
             wasm.cs_provider_on_route_complete(
                 latsPtr, lonsPtr, coords.length,
                 route.distance || 0,
-                route.duration || 0
+                route.duration || 0,
+                calcTimeMs
             );
 
             // Free temporary arrays

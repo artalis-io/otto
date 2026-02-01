@@ -43,6 +43,10 @@ static CsGeoPoint g_route_from;
 static CsGeoPoint g_route_to;
 static bool g_route_pending = false;
 
+/* Route options */
+static CsRouteProfile g_route_profile = CS_PROFILE_CAR;
+static CsRouteMode g_route_mode = CS_MODE_FASTEST;
+
 /* Search state */
 static CsSearchResult g_search_results_data[CS_PROVIDER_MAX_SEARCH_RESULTS];
 static CsSearchResults g_search_results = {
@@ -93,6 +97,22 @@ EXPORT bool cs_provider_has_direct_tiles(void) {
 /* ============================================================================
  * Routing Provider
  * ============================================================================ */
+
+EXPORT void cs_provider_set_route_profile(CsRouteProfile profile) {
+    g_route_profile = profile;
+}
+
+EXPORT CsRouteProfile cs_provider_get_route_profile(void) {
+    return g_route_profile;
+}
+
+EXPORT void cs_provider_set_route_mode(CsRouteMode mode) {
+    g_route_mode = mode;
+}
+
+EXPORT CsRouteMode cs_provider_get_route_mode(void) {
+    return g_route_mode;
+}
 
 EXPORT void cs_provider_route(CsGeoPoint from, CsGeoPoint to) {
     g_route_from = from;
@@ -326,7 +346,7 @@ EXPORT void cs_provider_cleanup(void) {
 
 EXPORT void cs_provider_on_route_complete(
     const double *lats, const double *lons, int count,
-    double distance_m, double duration_s
+    double distance_m, double duration_s, double calc_time_ms
 ) {
     /* Grow buffer if needed */
     if (count > g_route_capacity) {
@@ -360,6 +380,7 @@ EXPORT void cs_provider_on_route_complete(
     g_route_result.count = count;
     g_route_result.distance_m = distance_m;
     g_route_result.duration_s = duration_s;
+    g_route_result.calc_time_ms = calc_time_ms;
     g_route_result.ready = true;
     g_route_result.error = false;
     g_route_status = CS_PROVIDER_READY;
@@ -444,6 +465,10 @@ EXPORT double cs_provider_route_distance(void) {
 
 EXPORT double cs_provider_route_duration(void) {
     return g_route_result.duration_s;
+}
+
+EXPORT double cs_provider_route_calc_time(void) {
+    return g_route_result.calc_time_ms;
 }
 
 EXPORT double cs_provider_route_point_lat(int index) {

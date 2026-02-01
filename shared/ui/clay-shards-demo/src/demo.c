@@ -63,11 +63,15 @@ typedef struct {
     int point_count;
     double distance_m;
     double duration_s;
+    double calc_time_ms;        /* Server calculation time */
     bool loading;
     bool error;
     /* Drag-to-reroute debouncing */
     float reroute_cooldown;      /* Time until next reroute allowed (seconds) */
     bool dragging_marker;        /* Currently dragging a route marker */
+    /* Cached display values (prevent flicker during recalculation) */
+    char cached_info[96];        /* Cached formatted string */
+    bool has_cached_info;
 } RouteState;
 
 /* Minimum time between route requests during drag (seconds) */
@@ -349,6 +353,20 @@ static void format_duration(char *buf, size_t size, double seconds) {
 }
 
 static void render_route_panel(void) {
+    const CsButtonStyle small_btn = {
+        .variant = CS_BTN_DEFAULT,
+        .font_size = 11,
+        .corner_radius = 4,
+        .padding_x = 6,
+        .padding_y = 3,
+    };
+    const CsButtonStyle small_btn_active = {
+        .variant = CS_BTN_PRIMARY,
+        .font_size = 11,
+        .corner_radius = 4,
+        .padding_x = 6,
+        .padding_y = 3,
+    };
     const CsButtonStyle clear_btn = {
         .variant = CS_BTN_DEFAULT,
         .font_size = 12,
@@ -368,9 +386,64 @@ static void render_route_panel(void) {
         .cornerRadius = CLAY_CORNER_RADIUS(8),
         .border = { .width = {1, 1, 1, 1}, .color = THEME.border }
     }) {
+        /* Profile/mode selectors row */
+        CLAY(CLAY_ID("RouteOptions"), {
+            .layout = { .childGap = 4 }
+        }) {
+            /* Profile selector: Car / Truck */
+            CsRouteProfile profile = cs_provider_get_route_profile();
+            if (cs_button(CS_ID("profile_car"), "Car",
+                          profile == CS_PROFILE_CAR ? &small_btn_active : &small_btn).clicked) {
+                cs_provider_set_route_profile(CS_PROFILE_CAR);
+                /* Trigger reroute if we have both endpoints */
+                if (g_app.route.has_start && g_app.route.has_end) {
+                    cs_provider_route(g_app.route.start, g_app.route.end);
+                    g_app.route.loading = true;
+                }
+            }
+            if (cs_button(CS_ID("profile_truck"), "Truck",
+                          profile == CS_PROFILE_TRUCK ? &small_btn_active : &small_btn).clicked) {
+                cs_provider_set_route_profile(CS_PROFILE_TRUCK);
+                if (g_app.route.has_start && g_app.route.has_end) {
+                    cs_provider_route(g_app.route.start, g_app.route.end);
+                    g_app.route.loading = true;
+                }
+            }
+
+            /* Spacer */
+            CLAY(CLAY_ID("RouteSpacer"), { .layout = { .sizing = { CLAY_SIZING_FIXED(8), CLAY_SIZING_FIXED(1) } } }) {}
+
+            /* Mode selector: Fastest / Shortest */
+            CsRouteMode mode = cs_provider_get_route_mode();
+            if (cs_button(CS_ID("mode_fastest"), "Fastest",
+                          mode == CS_MODE_FASTEST ? &small_btn_active : &small_btn).clicked) {
+                cs_provider_set_route_mode(CS_MODE_FASTEST);
+                if (g_app.route.has_start && g_app.route.has_end) {
+                    cs_provider_route(g_app.route.start, g_app.route.end);
+                    g_app.route.loading = true;
+                }
+            }
+            if (cs_button(CS_ID("mode_shortest"), "Shortest",
+                          mode == CS_MODE_SHORTEST ? &small_btn_active : &small_btn).clicked) {
+                cs_provider_set_route_mode(CS_MODE_SHORTEST);
+                if (g_app.route.has_start && g_app.route.has_end) {
+                    cs_provider_route(g_app.route.start, g_app.route.end);
+                    g_app.route.loading = true;
+                }
+            }
+        }
+
+        /* Route status/info */
         if (g_app.route.loading) {
-            CLAY_TEXT(CLAY_STRING("Calculating route..."),
-                      CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
+            /* Show cached info during recalculation to prevent flicker */
+            if (g_app.route.has_cached_info) {
+                CLAY_TEXT(((Clay_String){ .chars = g_app.route.cached_info,
+                                           .length = (int)strlen(g_app.route.cached_info) }),
+                          CLAY_TEXT_CONFIG({ .fontSize = 14, .textColor = THEME.text_muted }));
+            } else {
+                CLAY_TEXT(CLAY_STRING("Calculating route..."),
+                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
+            }
         } else if (g_app.route.error) {
             CLAY_TEXT(CLAY_STRING("Route not found"),
                       CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = (Clay_Color){255, 100, 100, 255} }));
@@ -379,23 +452,26 @@ static void render_route_panel(void) {
                 g_app.route.has_end = false;
                 g_app.route.point_count = 0; g_app.route.points = NULL;
                 g_app.route.error = false;
+                g_app.route.has_cached_info = false;
             }
         } else if (g_app.route.point_count > 0) {
-            /* Show route info */
+            /* Format and cache route info */
             char dist_buf[32], time_buf[32];
             format_distance(dist_buf, sizeof(dist_buf), g_app.route.distance_m);
             format_duration(time_buf, sizeof(time_buf), g_app.route.duration_s);
-            snprintf(g_app.scratch.route_info, sizeof(g_app.scratch.route_info),
-                     "%s - %s", dist_buf, time_buf);
+            snprintf(g_app.route.cached_info, sizeof(g_app.route.cached_info),
+                     "%s - %s (%.0fms)", dist_buf, time_buf, g_app.route.calc_time_ms);
+            g_app.route.has_cached_info = true;
 
-            CLAY_TEXT(((Clay_String){ .chars = g_app.scratch.route_info,
-                                       .length = (int)strlen(g_app.scratch.route_info) }),
+            CLAY_TEXT(((Clay_String){ .chars = g_app.route.cached_info,
+                                       .length = (int)strlen(g_app.route.cached_info) }),
                       CLAY_TEXT_CONFIG({ .fontSize = 14, .textColor = THEME.text }));
 
             if (cs_button(CS_ID("clear_route"), "Clear Route", &clear_btn).clicked) {
                 g_app.route.has_start = false;
                 g_app.route.has_end = false;
                 g_app.route.point_count = 0; g_app.route.points = NULL;
+                g_app.route.has_cached_info = false;
                 cs_provider_route_clear();
             }
         } else if (!g_app.route.has_start) {
@@ -686,6 +762,7 @@ static void update_route_state(void) {
             g_app.route.point_count = result->count;
             g_app.route.distance_m = result->distance_m;
             g_app.route.duration_s = result->duration_s;
+            g_app.route.calc_time_ms = result->calc_time_ms;
             g_app.route.loading = false;
             g_app.route.error = false;
         }

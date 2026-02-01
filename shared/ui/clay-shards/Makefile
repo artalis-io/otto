@@ -46,6 +46,7 @@ test: $(BUILD_DIR)/test_clay_shards
 	@echo "Running ClayShards tests..."
 	@./$(BUILD_DIR)/test_clay_shards
 
+# Note: cs_immediate.c is an amalgamation file that includes cs_map.c, so we only compile cs_immediate.c
 $(BUILD_DIR)/test_clay_shards: tests/test_clay_shards.c src/cs_immediate.c $(HEADERS) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) tests/test_clay_shards.c src/cs_immediate.c -o $@ -lm
 	@echo "Built: $@"

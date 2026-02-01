@@ -55,12 +55,25 @@ typedef struct {
     float score;        /* Relevance score 0-1 */
 } CsSearchResult;
 
+/* Route profile */
+typedef enum {
+    CS_PROFILE_CAR = 0,
+    CS_PROFILE_TRUCK = 1
+} CsRouteProfile;
+
+/* Route optimization mode */
+typedef enum {
+    CS_MODE_FASTEST = 0,
+    CS_MODE_SHORTEST = 1
+} CsRouteMode;
+
 /* Route result */
 typedef struct {
     CsGeoPoint *points;
     int count;
     double distance_m;      /* Total distance in meters */
     double duration_s;      /* Estimated duration in seconds */
+    double calc_time_ms;    /* Server calculation time in ms */
     bool ready;
     bool error;
     char error_msg[128];
@@ -118,6 +131,26 @@ bool cs_provider_has_direct_tiles(void);
 /* ============================================================================
  * Routing Provider
  * ============================================================================ */
+
+/**
+ * Set route profile (car, truck) - affects next route request
+ */
+void cs_provider_set_route_profile(CsRouteProfile profile);
+
+/**
+ * Get current route profile
+ */
+CsRouteProfile cs_provider_get_route_profile(void);
+
+/**
+ * Set route mode (fastest, shortest) - affects next route request
+ */
+void cs_provider_set_route_mode(CsRouteMode mode);
+
+/**
+ * Get current route mode
+ */
+CsRouteMode cs_provider_get_route_mode(void);
 
 /**
  * Request a route (async)
@@ -260,11 +293,16 @@ void cs_provider_cleanup(void);
  * ============================================================================ */
 
 /**
+ * Get route calculation time (round-trip time in ms)
+ */
+double cs_provider_route_calc_time(void);
+
+/**
  * Called by JS when route fetch completes
  */
 void cs_provider_on_route_complete(
     const double *lats, const double *lons, int count,
-    double distance_m, double duration_s
+    double distance_m, double duration_s, double calc_time_ms
 );
 
 void cs_provider_on_route_error(const char *message);
