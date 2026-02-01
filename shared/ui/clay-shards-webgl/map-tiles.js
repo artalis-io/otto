@@ -4,7 +4,12 @@
  * Handles fetching and caching map tiles from various providers.
  */
 
+// Default tile server base URL (can be overridden)
+let cartaServerUrl = 'http://localhost:8081';
+
 const TILE_SERVERS = [
+    // Carta (local tile server)
+    (z, x, y) => `${cartaServerUrl}/tiles/${z}/${x}/${y}.png`,
     // OSM Standard
     (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
     // Carto Light
@@ -12,6 +17,14 @@ const TILE_SERVERS = [
     // Stamen Terrain (Stadia)
     (z, x, y) => `https://tiles.stadiamaps.com/tiles/stamen_terrain/${z}/${x}/${y}.png`,
 ];
+
+/**
+ * Configure the Carta tile server URL
+ * @param {string} url - Base URL for the Carta tile server
+ */
+export function setCartaServerUrl(url) {
+    cartaServerUrl = url;
+}
 
 export class TileCache {
     constructor(gl, maxSize = 200) {

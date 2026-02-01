@@ -360,10 +360,9 @@ export class ClayRenderer {
                     const color = unpackColor(cmd.text_color(i));
                     const fontSize = cmd.text_size(i);
 
-                    let text = '';
-                    for (let j = 0; j < strLen; j++) {
-                        text += String.fromCharCode(memory[strPtr + j]);
-                    }
+                    // Decode UTF-8 text from WASM memory
+                    const bytes = new Uint8Array(memory.buffer, strPtr, strLen);
+                    const text = new TextDecoder('utf-8').decode(bytes);
 
                     this.renderText(text, x, y, fontSize, color, projMatrix);
                     break;

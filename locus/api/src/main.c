@@ -14,6 +14,13 @@
 #include <time.h>
 
 /* ============================================================================
+ * CORS Headers
+ * ============================================================================ */
+
+#define CORS_HEADERS "Access-Control-Allow-Origin: *\r\n"
+#define JSON_CORS_HEADERS "Content-Type: application/json\r\n" CORS_HEADERS
+
+/* ============================================================================
  * Global State
  * ============================================================================ */
 
@@ -46,21 +53,21 @@ static void json_escape(const char *s, char *buf, size_t size) {
  * ============================================================================ */
 
 static void handle_health(struct mg_connection *c) {
-    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+    mg_http_reply(c, 200, JSON_CORS_HEADERS,
                   "{\"status\":\"ok\",\"service\":\"locus\",\"version\":\"%s\"}\n",
                   lc_version());
 }
 
 static void handle_stats(struct mg_connection *c) {
     if (!g_index) {
-        mg_http_reply(c, 503, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 503, JSON_CORS_HEADERS,
                       "{\"error\":\"Index not loaded\"}\n");
         return;
     }
 
     SHBBox bounds = lc_index_bounds(g_index);
 
-    mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+    mg_http_reply(c, 200, JSON_CORS_HEADERS,
                   "{\n"
                   "  \"entities\": %u,\n"
                   "  \"memory_mb\": %.2f,\n"
@@ -79,7 +86,7 @@ static void handle_stats(struct mg_connection *c) {
 
 static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
     if (!g_index) {
-        mg_http_reply(c, 503, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 503, JSON_CORS_HEADERS,
                       "{\"error\":\"Index not loaded\"}\n");
         return;
     }
@@ -101,7 +108,7 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
     }
 
     if (strlen(query) == 0) {
-        mg_http_reply(c, 400, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 400, JSON_CORS_HEADERS,
                       "{\"error\":\"Missing 'q' parameter\"}\n");
         return;
     }
@@ -120,7 +127,7 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
     double took_ms = (double)(end - start) * 1000.0 / CLOCKS_PER_SEC;
 
     if (status != LC_OK) {
-        mg_http_reply(c, 500, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 500, JSON_CORS_HEADERS,
                       "{\"error\":\"Search failed: %s\"}\n", lc_status_string(status));
         return;
     }
@@ -129,7 +136,7 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
     char *json = malloc(64 * 1024);  /* 64KB buffer */
     if (!json) {
         lc_search_result_free(&result);
-        mg_http_reply(c, 500, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 500, JSON_CORS_HEADERS,
                       "{\"error\":\"Out of memory\"}\n");
         return;
     }
@@ -182,13 +189,13 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
 
     lc_search_result_free(&result);
 
-    mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", json);
+    mg_http_reply(c, 200, JSON_CORS_HEADERS, "%s", json);
     free(json);
 }
 
 static void handle_autocomplete(struct mg_connection *c, struct mg_http_message *hm) {
     if (!g_index) {
-        mg_http_reply(c, 503, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 503, JSON_CORS_HEADERS,
                       "{\"error\":\"Index not loaded\"}\n");
         return;
     }
@@ -209,7 +216,7 @@ static void handle_autocomplete(struct mg_connection *c, struct mg_http_message 
     }
 
     if (strlen(query) == 0) {
-        mg_http_reply(c, 400, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 400, JSON_CORS_HEADERS,
                       "{\"error\":\"Missing 'q' parameter\"}\n");
         return;
     }
@@ -225,7 +232,7 @@ static void handle_autocomplete(struct mg_connection *c, struct mg_http_message 
     char *json = malloc(16 * 1024);
     if (!json) {
         lc_search_result_free(&result);
-        mg_http_reply(c, 500, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 500, JSON_CORS_HEADERS,
                       "{\"error\":\"Out of memory\"}\n");
         return;
     }
@@ -249,13 +256,13 @@ static void handle_autocomplete(struct mg_connection *c, struct mg_http_message 
 
     lc_search_result_free(&result);
 
-    mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", json);
+    mg_http_reply(c, 200, JSON_CORS_HEADERS, "%s", json);
     free(json);
 }
 
 static void handle_reverse(struct mg_connection *c, struct mg_http_message *hm) {
     if (!g_index) {
-        mg_http_reply(c, 503, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 503, JSON_CORS_HEADERS,
                       "{\"error\":\"Index not loaded\"}\n");
         return;
     }
@@ -276,7 +283,7 @@ static void handle_reverse(struct mg_connection *c, struct mg_http_message *hm) 
     }
 
     if (strlen(lat_str) == 0 || strlen(lon_str) == 0) {
-        mg_http_reply(c, 400, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 400, JSON_CORS_HEADERS,
                       "{\"error\":\"Missing 'lat' or 'lon' parameter\"}\n");
         return;
     }
@@ -289,7 +296,7 @@ static void handle_reverse(struct mg_connection *c, struct mg_http_message *hm) 
     LCStatus status = lc_reverse(g_index, coord, NULL, &result);
 
     if (status != LC_OK) {
-        mg_http_reply(c, 500, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 500, JSON_CORS_HEADERS,
                       "{\"error\":\"Reverse geocoding failed\"}\n");
         return;
     }
@@ -303,7 +310,7 @@ static void handle_reverse(struct mg_connection *c, struct mg_http_message *hm) 
     char *json = malloc(4 * 1024);
     if (!json) {
         lc_reverse_result_free(&result);
-        mg_http_reply(c, 500, "Content-Type: application/json\r\n",
+        mg_http_reply(c, 500, JSON_CORS_HEADERS,
                       "{\"error\":\"Out of memory\"}\n");
         return;
     }
@@ -334,7 +341,7 @@ static void handle_reverse(struct mg_connection *c, struct mg_http_message *hm) 
 
     lc_reverse_result_free(&result);
 
-    mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", json);
+    mg_http_reply(c, 200, JSON_CORS_HEADERS, "%s", json);
     free(json);
 }
 
@@ -368,7 +375,7 @@ static void handle_request(struct mg_connection *c, int ev, void *ev_data) {
         } else if (mg_match(hm->uri, mg_str("/api/v1/reverse"), NULL)) {
             handle_reverse(c, hm);
         } else {
-            mg_http_reply(c, 404, "Content-Type: application/json\r\n",
+            mg_http_reply(c, 404, JSON_CORS_HEADERS,
                           "{\"error\":\"Not found\"}\n");
         }
     }

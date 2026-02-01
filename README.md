@@ -13,13 +13,15 @@ A comprehensive trucking and logistics optimization platform, combining route pl
 | [**Ralph**](ralph/) | `ralph/` | Zero-dependency LP/MIP solver (Revised Simplex, Branch & Bound) |
 | [**Velo**](velo/) | `velo/` | OSM routing engine (Dijkstra, A*, bidirectional, landmarks) |
 | [**Carta**](carta/) | `carta/` | Map tile generator (MVT vector tiles, PNG raster) |
+| [**Locus**](locus/) | `locus/` | OSM geocoding engine (forward search, autocomplete, reverse lookup) |
 | [**FuelWise**](fuelwise/) | `fuelwise/` | Refueling optimization library |
-| [**Shared**](shared/) | `shared/` | Common geo utilities |
+| [**Shared**](shared/) | `shared/` | Common geo utilities, protobuf, zlib |
 
 ### Planned Engines
 
 | Component | Location | Description |
 |-----------|----------|-------------|
+| **Forge** | `forge/` | **F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution - async job queue |
 | **HoSE** | `hose/` | **H**ours **o**f **S**ervice **E**ngine - FMCSA/EC561 compliance |
 | **Tempo** | `tempo/` | **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator |
 | **Arbor** | `arbor/` | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
@@ -34,9 +36,19 @@ A comprehensive trucking and logistics optimization platform, combining route pl
 | FuelWise API | `fuelwise/api/` | REST API server for refueling optimization |
 | Route Server | `velo/api/` | REST API server for routing |
 | Tile Server | `carta/api/` | REST API server for map tiles |
+| Geocoding Server | `locus/api/` | REST API server for geocoding |
 | FuelWise UI | `fuelwise/ui/` | React application with map interface |
 | Carta UI | `carta/ui/` | Tile viewer React application |
 | FuelWise WASM | `fuelwise/wasm/` | WebAssembly builds for browser deployment |
+| Locus WASM | `locus/wasm/` | Geocoding WebAssembly for browser |
+
+### UI System
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| [**ClayShards**](shared/ui/clay-shards/) | `shared/ui/clay-shards/` | Immediate mode UI components (button, input, map) |
+| [**ClayShards WebGL**](shared/ui/clay-shards-webgl/) | `shared/ui/clay-shards-webgl/` | WebGL renderer for browsers |
+| [**ClayShards Demo**](shared/ui/clay-shards-demo/) | `shared/ui/clay-shards-demo/` | Example map viewer application |
 
 ## Quick Start
 
@@ -102,11 +114,11 @@ cd fuelwise/ui && npm install && npm run dev
 │                           │                                             │
 │  ┌────────────────────────┴────────────────────────────────────────┐   │
 │  │                         Domain Libraries                         │   │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │   │
-│  │  │   FuelWise   │  │     Velo     │  │    Carta     │           │   │
-│  │  │   Refueling  │  │   Routing    │  │  Map Tiles   │           │   │
-│  │  │ Optimization │  │   Engine     │  │  Generator   │           │   │
-│  │  └──────┬───────┘  └──────────────┘  └──────────────┘           │   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────┐│   │
+│  │  │   FuelWise   │  │     Velo     │  │    Carta     │  │Locus ││   │
+│  │  │   Refueling  │  │   Routing    │  │  Map Tiles   │  │Geo-  ││   │
+│  │  │ Optimization │  │   Engine     │  │  Generator   │  │code  ││   │
+│  │  └──────┬───────┘  └──────────────┘  └──────────────┘  └──────┘│   │
 │  └─────────┼───────────────────────────────────────────────────────┘   │
 │            │                                                            │
 │  ┌─────────┴───────────────────────────────────────────────────────┐   │
@@ -150,7 +162,16 @@ otto/
 │   ├── examples/       #   Usage examples
 │   ├── tests/          #   Domain tests + artifacts
 │   └── docs/           #   API documentation
+├── locus/              # Geocoding Engine (liblocus.a)
+│   ├── src/            #   Trie, ngram, spatial index
+│   ├── api/            #   Geocoding REST API
+│   └── wasm/           #   WebAssembly build
 ├── shared/             # Shared Utilities (libshared.a)
+│   └── ui/             #   UI System
+│       ├── clay-shards/        # Immediate mode components
+│       ├── clay-shards-webgl/  # WebGL renderer
+│       └── clay-shards-demo/   # Demo map viewer
+├── forge/              # [Planned] Async Job Queue
 ├── hose/               # [Planned] Hours of Service Engine
 ├── tempo/              # [Planned] Business Rules Engine
 ├── arbor/              # [Planned] State-Space Search Engine
@@ -198,6 +219,16 @@ otto/
 | GET | `/tiles/{z}/{x}/{y}.mvt` | Vector tile (MVT) |
 | GET | `/tiles.json` | TileJSON metadata |
 
+### Locus Geocoding Server (:8083)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/health` | Health check |
+| GET | `/api/v1/stats` | Index statistics |
+| GET | `/api/v1/search` | Forward geocoding (text to coordinates) |
+| GET | `/api/v1/autocomplete` | Prefix-based autocomplete |
+| GET | `/api/v1/reverse` | Reverse geocoding (coordinates to address) |
+
 ### Example
 
 ```bash
@@ -220,6 +251,11 @@ curl 'http://localhost:8082/api/v1/route?from=47.5,19.0&to=46.2,20.1&profile=car
 
 # Map tile
 curl 'http://localhost:8081/tiles/14/9058/5729.png' > tile.png
+
+# Geocoding
+curl 'http://localhost:8083/api/v1/search?q=Budapest'
+curl 'http://localhost:8083/api/v1/autocomplete?q=Buda'
+curl 'http://localhost:8083/api/v1/reverse?lat=47.5&lon=19.0'
 ```
 
 ## Build Commands
@@ -233,17 +269,20 @@ make fuelwise         # Refueling library
 make shared           # Shared utilities
 make velo             # Routing engine
 make carta            # Tile generator
+make locus            # Geocoding engine
 
 # API Servers
 make fuelwise-api     # FuelWise API (fuelwise/api)
 make velo-api         # Velo route server (velo/api)
 make carta-api        # Carta tile server (carta/api)
+make locus-api        # Locus geocoding server (locus/api)
 
 # WebAssembly (requires Emscripten)
 make wasm             # Build all WASM modules
 make wasm-fuelwise    # FuelWise WASM only
 make wasm-velo        # Velo WASM only
 make wasm-carta       # Carta WASM only
+make wasm-locus       # Locus WASM only
 make wasm-types       # Generate TypeScript declarations
 make wasm-test        # Test WASM builds
 
@@ -254,16 +293,18 @@ make carta-ui         # Build Carta Tile Viewer
 make carta-ui-dev     # Run Carta UI dev server
 
 # Testing
-make test             # All library tests (~190)
-make test-ralph       # Ralph tests (65)
-make test-fuelwise    # FuelWise tests (32)
-make test-shared      # Shared tests (23)
-make test-velo        # Velo tests (39)
+make test             # All library tests (~279)
+make test-ralph       # Ralph tests (73)
+make test-fuelwise    # FuelWise tests (33)
+make test-shared      # Shared tests (41)
+make test-velo        # Velo tests (47)
 make test-carta       # Carta tests (33)
+make test-locus       # Locus tests (52)
 make test-api         # All API endpoint tests (requires OSM data)
 make test-fuelwise-api# FuelWise API tests
 make test-velo-api    # Velo API tests
 make test-carta-api   # Carta API tests
+make test-locus-api   # Locus API tests
 
 # Scripts
 make benchmark        # Run performance benchmarks
@@ -271,8 +312,9 @@ make ci               # Run CI pipeline
 
 # Run servers
 make run-fuelwise-api # Start FuelWise API on :8080
-make run-carta-api    # Show Carta tile server usage
 make run-velo-api     # Show Velo route server usage
+make run-carta-api    # Show Carta tile server usage
+make run-locus-api    # Show Locus geocoding server usage
 ```
 
 ## Scripts
@@ -310,6 +352,9 @@ make run-velo-api     # Show Velo route server usage
 | PNG tile (512x512) | ~75ms | Carta rasterizer |
 | Refuel optimization | <100ms | FuelWise LP |
 | PBF parse (Hungary) | ~10s | 300MB, 35M nodes |
+| Forward geocoding | <20µs | Locus trie + ngram |
+| Autocomplete | <20µs | Locus prefix search |
+| Reverse geocoding | <30µs | Locus spatial index |
 
 ## Documentation
 
@@ -318,6 +363,7 @@ make run-velo-api     # Show Velo route server usage
 - [Ralph Solver](ralph/CLAUDE.md) - LP/MIP optimization
 - [Velo Routing](velo/CLAUDE.md) - OSM routing engine
 - [Carta Tiles](carta/CLAUDE.md) - Map tile generation
+- [Locus Geocoding](locus/CLAUDE.md) - OSM geocoding engine
 - [FuelWise Library](fuelwise/CLAUDE.md) - Refueling domain
 
 ### API Servers
@@ -325,6 +371,12 @@ make run-velo-api     # Show Velo route server usage
 - [FuelWise API Reference](fuelwise/docs/API.md) - Endpoint documentation
 - [Velo Route Server](velo/api/CLAUDE.md) - Routing REST API
 - [Carta Tile Server](carta/api/CLAUDE.md) - Tile server REST API
+- [Locus Geocoding Server](locus/api/CLAUDE.md) - Geocoding REST API
+
+### UI System
+- [ClayShards](shared/ui/clay-shards/CLAUDE.md) - Immediate mode UI components
+- [ClayShards WebGL](shared/ui/clay-shards-webgl/) - WebGL renderer
+- [ClayShards Demo](shared/ui/clay-shards-demo/CLAUDE.md) - Example map viewer
 
 ### Vendor Libraries
 - [Miniz](vendor/miniz/CLAUDE.md) - zlib-compatible compression
@@ -885,6 +937,8 @@ Mark Farkas - 2025
 | **Ralph** | **R**obust **A**I **L**inear **P**rogramming **H**elper |
 | **Velo** | **V**ery **E**fficient **L**ocation **O**ptimizer |
 | **Carta** | **C**ompact **A**gile **R**endering for **T**ile **A**rchives |
+| **Locus** | **L**ocation **O**riented **C**oordinate **U**nification **S**ystem |
+| **Forge** | **F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution |
 | **HoSE** | **H**ours **o**f **S**ervice **E**ngine |
 | **Tempo** | **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator |
 | **Arbor** | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
