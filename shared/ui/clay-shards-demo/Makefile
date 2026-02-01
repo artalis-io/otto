@@ -43,7 +43,19 @@ WASM_FLAGS += -s EXPORTED_FUNCTIONS='[\
   "_cs_focused_x","_cs_focused_y","_cs_focused_w","_cs_focused_h",\
   "_cs_key_down","_cs_key_char","_cs_blur","_cs_set_pending_click",\
   "_cs_clay_set_glyph_advance","_cs_clay_has_font_metrics",\
-  "_cs_register_focusable","_cs_focus_next","_cs_focus_prev","_cs_focusable_count"\
+  "_cs_register_focusable","_cs_focus_next","_cs_focus_prev","_cs_focusable_count",\
+  "_cs_map_overlay_count","_cs_map_overlay_type","_cs_map_overlay_id",\
+  "_cs_map_overlay_polyline_count","_cs_map_overlay_polyline_lat","_cs_map_overlay_polyline_lon",\
+  "_cs_map_overlay_polyline_color_r","_cs_map_overlay_polyline_color_g",\
+  "_cs_map_overlay_polyline_color_b","_cs_map_overlay_polyline_color_a",\
+  "_cs_map_overlay_polyline_width",\
+  "_cs_map_overlay_marker_lat","_cs_map_overlay_marker_lon","_cs_map_overlay_marker_radius",\
+  "_cs_map_overlay_marker_color_r","_cs_map_overlay_marker_color_g",\
+  "_cs_map_overlay_marker_color_b","_cs_map_overlay_marker_color_a",\
+  "_cs_map_overlay_marker_border_r","_cs_map_overlay_marker_border_g",\
+  "_cs_map_overlay_marker_border_b","_cs_map_overlay_marker_border_a",\
+  "_cs_map_overlay_marker_border_width",\
+  "_cs_map_set_hovered_overlay","_cs_map_set_clicked_overlay"\
 ]'
 WASM_FLAGS += -s INITIAL_MEMORY=16777216
 WASM_FLAGS += -s ALLOW_MEMORY_GROWTH=1

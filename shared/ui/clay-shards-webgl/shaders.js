@@ -18,9 +18,11 @@ export const TILE_VS = `
 export const TILE_FS = `
     precision mediump float;
     uniform sampler2D u_tex;
+    uniform float u_alpha;
     varying vec2 v_uv;
     void main() {
-        gl_FragColor = texture2D(u_tex, v_uv);
+        vec4 color = texture2D(u_tex, v_uv);
+        gl_FragColor = vec4(color.rgb, color.a * u_alpha);
     }
 `;
 

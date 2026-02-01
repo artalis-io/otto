@@ -169,8 +169,15 @@ export class ClayRenderer {
 
     /**
      * Render a textured quad (for tiles, images)
+     * @param {WebGLTexture} texture - The texture to render
+     * @param {number} x - X position
+     * @param {number} y - Y position
+     * @param {number} w - Width
+     * @param {number} h - Height
+     * @param {Float32Array} projMatrix - Projection matrix
+     * @param {number} alpha - Opacity (0.0 to 1.0, default 1.0)
      */
-    renderTexture(texture, x, y, w, h, projMatrix) {
+    renderTexture(texture, x, y, w, h, projMatrix, alpha = 1.0) {
         if (this.contextLost) return;
         const gl = this.gl;
 
@@ -187,6 +194,7 @@ export class ClayRenderer {
         gl.bindTexture(gl.TEXTURE_2D, texture);
         gl.uniform1i(this.tileShader.uniforms.u_tex, 0);
         gl.uniform4f(this.tileShader.uniforms.u_rect, x, y, w, h);
+        gl.uniform1f(this.tileShader.uniforms.u_alpha, alpha);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 

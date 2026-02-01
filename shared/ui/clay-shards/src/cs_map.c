@@ -6,6 +6,14 @@
 #include "cs_internal.h"
 #include "clay.h"
 #include <math.h>
+#include <string.h>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#define EXPORT EMSCRIPTEN_KEEPALIVE
+#else
+#define EXPORT
+#endif
 
 /* ============================================================================
  * Constants
@@ -36,15 +44,70 @@ static int clamp_zoom(int zoom) {
 }
 
 /* ============================================================================
- * Default Style
+ * Default Styles
  * ============================================================================ */
 
-const CsMapStyle CC_MAP_STYLE_DEFAULT = {
+const CsMapStyle CS_MAP_STYLE_DEFAULT = {
     .min_zoom = 0,
     .max_zoom = 19,
     .min_lat = -85.0,
     .max_lat = 85.0,
 };
+
+const CsPolylineStyle CS_POLYLINE_STYLE_DEFAULT = {
+    .color = {0.2f, 0.5f, 1.0f, 1.0f},  /* Blue */
+    .width = 3.0f,
+    .dashed = false,
+    .dash_length = 10.0f,
+    .gap_length = 5.0f,
+};
+
+const CsMarkerStyle CS_MARKER_STYLE_DEFAULT = {
+    .color = {1.0f, 0.3f, 0.3f, 1.0f},  /* Red */
+    .radius = 8.0f,
+    .border_color = {1.0f, 1.0f, 1.0f, 1.0f},  /* White */
+    .border_width = 2.0f,
+};
+
+/* ============================================================================
+ * Overlay Storage
+ * ============================================================================ */
+
+typedef struct {
+    int type;                       /* CS_OVERLAY_POLYLINE or CS_OVERLAY_MARKER */
+    uint32_t id;
+    union {
+        struct {
+            int point_start;        /* Index into g_polyline_points */
+            int point_count;
+            CsPolylineStyle style;
+        } polyline;
+        struct {
+            double lat, lon;
+            CsMarkerStyle style;
+        } marker;
+    };
+} CsOverlay;
+
+/* Global overlay storage */
+static CsOverlay g_overlays[CS_MAP_MAX_OVERLAYS];
+static int g_overlay_count = 0;
+
+static CsGeoPoint g_polyline_points[CS_MAP_MAX_POLYLINE_POINTS];
+static int g_polyline_point_count = 0;
+
+/* Map context state */
+static bool g_map_context_active = false;
+static uint32_t g_map_context_id = 0;
+static double *g_map_context_lat = NULL;
+static double *g_map_context_lon = NULL;
+static int *g_map_context_zoom = NULL;
+static float g_map_context_width = 0;
+static float g_map_context_height = 0;
+
+/* Interaction state (set by JS renderer after hit testing) */
+static uint32_t g_hovered_overlay_id = 0;
+static uint32_t g_clicked_overlay_id = 0;
 
 /* ============================================================================
  * Map Drag State
@@ -144,7 +207,7 @@ CsMapResult cs_map(
     CsMapResult result = {0};
     CsState *g = cs_get_state();
     
-    if (!style) style = &CC_MAP_STYLE_DEFAULT;
+    if (!style) style = &CS_MAP_STYLE_DEFAULT;
     
     /* Build Clay element - uses custom render type for tile layer */
     Clay_ElementId clay_id = (Clay_ElementId){.id = id, .stringId = {0}};
@@ -336,4 +399,244 @@ bool cs_map_is_zoom_animating(uint32_t id) {
     }
     double diff = (double)g_map_drag.prev_zoom - g_map_drag.visual_zoom;
     return fabs(diff) > 0.001;
+}
+
+/* ============================================================================
+ * Map with Overlays (begin/end pattern)
+ * ============================================================================ */
+
+CsMapResult cs_map_begin(
+    uint32_t id,
+    double *lat,
+    double *lon,
+    int *zoom,
+    float width,
+    float height,
+    const CsMapStyle *style
+) {
+    /* Reset overlay state for new frame */
+    g_overlay_count = 0;
+    g_polyline_point_count = 0;
+    g_hovered_overlay_id = 0;
+    g_clicked_overlay_id = 0;
+
+    /* Store context for overlay functions */
+    g_map_context_active = true;
+    g_map_context_id = id;
+    g_map_context_lat = lat;
+    g_map_context_lon = lon;
+    g_map_context_zoom = zoom;
+    g_map_context_width = width;
+    g_map_context_height = height;
+
+    /* Call base cs_map for layout and interaction */
+    return cs_map(id, lat, lon, zoom, width, height, style);
+}
+
+void cs_map_end(void) {
+    g_map_context_active = false;
+}
+
+void cs_polyline(
+    uint32_t id,
+    const CsGeoPoint *points,
+    int count,
+    const CsPolylineStyle *style
+) {
+    if (!g_map_context_active) return;
+    if (g_overlay_count >= CS_MAP_MAX_OVERLAYS) return;
+    if (count <= 0) return;
+
+    /* Check if we have room for points */
+    if (g_polyline_point_count + count > CS_MAP_MAX_POLYLINE_POINTS) return;
+
+    if (!style) style = &CS_POLYLINE_STYLE_DEFAULT;
+
+    /* Copy points to global buffer */
+    int point_start = g_polyline_point_count;
+    for (int i = 0; i < count; i++) {
+        g_polyline_points[g_polyline_point_count++] = points[i];
+    }
+
+    /* Add overlay */
+    CsOverlay *overlay = &g_overlays[g_overlay_count++];
+    overlay->type = CS_OVERLAY_POLYLINE;
+    overlay->id = id;
+    overlay->polyline.point_start = point_start;
+    overlay->polyline.point_count = count;
+    overlay->polyline.style = *style;
+}
+
+void cs_marker(
+    uint32_t id,
+    double lat,
+    double lon,
+    const CsMarkerStyle *style
+) {
+    if (!g_map_context_active) return;
+    if (g_overlay_count >= CS_MAP_MAX_OVERLAYS) return;
+
+    if (!style) style = &CS_MARKER_STYLE_DEFAULT;
+
+    CsOverlay *overlay = &g_overlays[g_overlay_count++];
+    overlay->type = CS_OVERLAY_MARKER;
+    overlay->id = id;
+    overlay->marker.lat = lat;
+    overlay->marker.lon = lon;
+    overlay->marker.style = *style;
+}
+
+/* ============================================================================
+ * Overlay Accessors (for JS renderer)
+ * ============================================================================ */
+
+EXPORT int cs_map_overlay_count(void) {
+    return g_overlay_count;
+}
+
+EXPORT int cs_map_overlay_type(int index) {
+    if (index < 0 || index >= g_overlay_count) return CS_OVERLAY_NONE;
+    return g_overlays[index].type;
+}
+
+EXPORT uint32_t cs_map_overlay_id(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    return g_overlays[index].id;
+}
+
+/* Polyline accessors */
+EXPORT int cs_map_overlay_polyline_count(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_POLYLINE) return 0;
+    return g_overlays[index].polyline.point_count;
+}
+
+EXPORT double cs_map_overlay_polyline_lat(int index, int point_index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_POLYLINE) return 0;
+    int start = g_overlays[index].polyline.point_start;
+    int count = g_overlays[index].polyline.point_count;
+    if (point_index < 0 || point_index >= count) return 0;
+    return g_polyline_points[start + point_index].lat;
+}
+
+EXPORT double cs_map_overlay_polyline_lon(int index, int point_index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_POLYLINE) return 0;
+    int start = g_overlays[index].polyline.point_start;
+    int count = g_overlays[index].polyline.point_count;
+    if (point_index < 0 || point_index >= count) return 0;
+    return g_polyline_points[start + point_index].lon;
+}
+
+EXPORT float cs_map_overlay_polyline_color_r(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_POLYLINE) return 0;
+    return g_overlays[index].polyline.style.color.r;
+}
+
+EXPORT float cs_map_overlay_polyline_color_g(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_POLYLINE) return 0;
+    return g_overlays[index].polyline.style.color.g;
+}
+
+EXPORT float cs_map_overlay_polyline_color_b(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_POLYLINE) return 0;
+    return g_overlays[index].polyline.style.color.b;
+}
+
+EXPORT float cs_map_overlay_polyline_color_a(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_POLYLINE) return 0;
+    return g_overlays[index].polyline.style.color.a;
+}
+
+EXPORT float cs_map_overlay_polyline_width(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_POLYLINE) return 0;
+    return g_overlays[index].polyline.style.width;
+}
+
+/* Marker accessors */
+EXPORT double cs_map_overlay_marker_lat(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.lat;
+}
+
+EXPORT double cs_map_overlay_marker_lon(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.lon;
+}
+
+EXPORT float cs_map_overlay_marker_radius(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.radius;
+}
+
+EXPORT float cs_map_overlay_marker_color_r(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.color.r;
+}
+
+EXPORT float cs_map_overlay_marker_color_g(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.color.g;
+}
+
+EXPORT float cs_map_overlay_marker_color_b(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.color.b;
+}
+
+EXPORT float cs_map_overlay_marker_color_a(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.color.a;
+}
+
+EXPORT float cs_map_overlay_marker_border_r(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.border_color.r;
+}
+
+EXPORT float cs_map_overlay_marker_border_g(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.border_color.g;
+}
+
+EXPORT float cs_map_overlay_marker_border_b(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.border_color.b;
+}
+
+EXPORT float cs_map_overlay_marker_border_a(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.border_color.a;
+}
+
+EXPORT float cs_map_overlay_marker_border_width(int index) {
+    if (index < 0 || index >= g_overlay_count) return 0;
+    if (g_overlays[index].type != CS_OVERLAY_MARKER) return 0;
+    return g_overlays[index].marker.style.border_width;
+}
+
+/* Interaction setters (called from JS after hit testing) */
+EXPORT void cs_map_set_hovered_overlay(uint32_t id) {
+    g_hovered_overlay_id = id;
+}
+
+EXPORT void cs_map_set_clicked_overlay(uint32_t id) {
+    g_clicked_overlay_id = id;
 }

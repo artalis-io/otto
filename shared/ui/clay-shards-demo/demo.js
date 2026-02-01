@@ -18,6 +18,7 @@ import {
     MSDFFont,
     TileCache,
     MapTileRenderer,
+    MapOverlayRenderer,
     createRenderLoop,
     loadWasm,
     setupKeyboardHandler
@@ -31,6 +32,7 @@ let wasm = null;
 let renderer = null;
 let font = null;
 let tileRenderer = null;
+let overlayRenderer = null;
 let isDragging = false;
 
 /* ============================================================================
@@ -44,7 +46,19 @@ const REQUIRED_EXPORTS = [
     'map_handle_click',
     'cs_set_pending_click', 'cs_focused_id', 'cs_key_down', 'cs_key_char',
     'cs_focused_x', 'cs_focused_y', 'cs_focused_w', 'cs_focused_h',
-    'cs_clay_cmd_type', 'cs_clay_cmd_x', 'cs_clay_cmd_y', 'cs_clay_cmd_w', 'cs_clay_cmd_h'
+    'cs_clay_cmd_type', 'cs_clay_cmd_x', 'cs_clay_cmd_y', 'cs_clay_cmd_w', 'cs_clay_cmd_h',
+    // Overlay accessors
+    'cs_map_overlay_count', 'cs_map_overlay_type', 'cs_map_overlay_id',
+    'cs_map_overlay_polyline_count', 'cs_map_overlay_polyline_lat', 'cs_map_overlay_polyline_lon',
+    'cs_map_overlay_polyline_color_r', 'cs_map_overlay_polyline_color_g',
+    'cs_map_overlay_polyline_color_b', 'cs_map_overlay_polyline_color_a',
+    'cs_map_overlay_polyline_width',
+    'cs_map_overlay_marker_lat', 'cs_map_overlay_marker_lon', 'cs_map_overlay_marker_radius',
+    'cs_map_overlay_marker_color_r', 'cs_map_overlay_marker_color_g',
+    'cs_map_overlay_marker_color_b', 'cs_map_overlay_marker_color_a',
+    'cs_map_overlay_marker_border_r', 'cs_map_overlay_marker_border_g',
+    'cs_map_overlay_marker_border_b', 'cs_map_overlay_marker_border_a',
+    'cs_map_overlay_marker_border_width'
 ];
 
 /* ============================================================================
@@ -133,10 +147,11 @@ async function main() {
         renderer = new ClayRenderer(canvas);
         const { width, height } = renderer.resize();
 
-        // Initialize font and tiles
+        // Initialize font, tiles, and overlays
         font = new MSDFFont();
         const tileCache = new TileCache(renderer.gl);
         tileRenderer = new MapTileRenderer(renderer, tileCache);
+        overlayRenderer = new MapOverlayRenderer(renderer);
 
         // Load resources
         [wasm] = await Promise.all([
@@ -163,11 +178,23 @@ async function main() {
         const render = createRenderLoop(renderer, wasm, font, {
             frameFunction: 'map_frame',
             onRender: (projMatrix) => {
+                const lat = wasm.map_get_lat();
+                const lon = wasm.map_get_lon();
+                const visualZoom = wasm.map_get_visual_zoom();
+
+                // Render tiles first
                 tileRenderer.render(
-                    wasm.map_get_lat(),
-                    wasm.map_get_lon(),
-                    wasm.map_get_visual_zoom(),  // Use visual zoom for smooth animation
+                    lat, lon, visualZoom,
                     wasm.map_get_layer(),
+                    renderer.width,
+                    renderer.height,
+                    projMatrix
+                );
+
+                // Render overlays on top of tiles
+                overlayRenderer.render(
+                    wasm,
+                    lat, lon, visualZoom,
                     renderer.width,
                     renderer.height,
                     projMatrix
