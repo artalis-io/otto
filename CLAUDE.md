@@ -278,22 +278,22 @@ Each vendor library has its own CLAUDE.md with API documentation:
 | **mongoose** | `vendor/mongoose/` | [`vendor/mongoose/CLAUDE.md`](vendor/mongoose/CLAUDE.md) | Embedded HTTP/WebSocket server |
 | **clay** | `vendor/clay/` | [`vendor/clay/CLAUDE.md`](vendor/clay/CLAUDE.md) | High-performance 2D UI layout |
 
-## UI System (Clay + Immediate Mode)
+## UI System (ClayShards + Immediate Mode)
 
-The platform uses a hybrid UI architecture: **Clay** for declarative layout + **immediate mode components** for interaction.
+The platform uses a hybrid UI architecture: **Clay** for declarative layout + **ClayShards** immediate mode components for interaction.
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **clay-components** | `shared/ui/clay-components/` | Immediate mode components (button, input, map) |
-| **clay-renderer-webgl** | `shared/ui/clay-renderer-webgl/` | WebGL renderer for browsers |
-| **cc-map-demo** | `shared/ui/cc-map-demo/` | Example map viewer application |
+| **clay-shards** | `shared/ui/clay-shards/` | Immediate mode components (button, input, map) |
+| **clay-shards-webgl** | `shared/ui/clay-shards-webgl/` | WebGL renderer for browsers |
+| **clay-shards-demo** | `shared/ui/clay-shards-demo/` | Example map viewer application |
 
 ### Architecture
 
 ```
-Application: if (cc_button(...).clicked) { ... }
+Application: if (cs_button(...).clicked) { ... }
      │
-clay-components: Immediate mode API, focus/click handling
+ClayShards: Immediate mode API, focus/click handling
      │
 Clay: Declarative layout, render commands
      │
@@ -302,18 +302,18 @@ Renderer: WebGL (browser), SDL/raylib (native) [planned]
 
 ### Key Files
 
-- `shared/ui/clay-components/include/cc_common.h` - Core API
-- `shared/ui/clay-components/src/cc_common.c` - State, keyboard handling
-- `shared/ui/clay-renderer-webgl/renderer.js` - WebGL renderer
+- `shared/ui/clay-shards/include/cs_common.h` - Core API
+- `shared/ui/clay-shards/src/cs_common.c` - State, keyboard handling
+- `shared/ui/clay-shards-webgl/renderer.js` - WebGL renderer
 
-See `.claude/skills/clay-ui-architecture.md` for detailed architecture documentation.
+See `shared/ui/clay-shards/CLAUDE.md` for detailed API documentation.
 
 ### Future Renderers
 
 Planned native backends:
-- `clay-renderer-sdl/` - SDL2 for desktop/mobile
-- `clay-renderer-raylib/` - raylib for games
-- `clay-renderer-sokol/` - Sokol for minimal deps
+- `clay-shards-sdl/` - SDL2 for desktop/mobile
+- `clay-shards-raylib/` - raylib for games
+- `clay-shards-sokol/` - Sokol for minimal deps
 
 ## Critical Code Sections
 
