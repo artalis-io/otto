@@ -1,8 +1,8 @@
-# Clay UI Architecture
+# ClayShards UI Architecture
 
 ## Overview
 
-The OTTO platform uses a hybrid UI architecture combining **Clay** (declarative layout) with **immediate mode components** (interaction handling). This provides the best of both worlds: efficient layout computation with intuitive interaction code.
+The OTTO platform uses a hybrid UI architecture combining **Clay** (declarative layout) with **ClayShards** immediate mode components (interaction handling). This provides the best of both worlds: efficient layout computation with intuitive interaction code.
 
 ## Architecture
 
@@ -11,14 +11,14 @@ The OTTO platform uses a hybrid UI architecture combining **Clay** (declarative 
 │                     Application Code                        │
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │  CLAY(CLAY_ID("Panel"), {...}) {                      │  │
-│  │      if (cc_button(CC_ID("btn"), "Click").clicked) {  │  │
+│  │      if (cs_button(CS_ID("btn"), "Click").clicked) {  │  │
 │  │          do_something();                              │  │
 │  │      }                                                │  │
-│  │      cc_input(CC_ID("search"), buf, &len, ...);       │  │
+│  │      cs_input(CS_ID("search"), buf, &len, ...);       │  │
 │  │  }                                                    │  │
 │  └───────────────────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────────────────┤
-│                   clay-components (cc_*)                    │
+│                   ClayShards (cs_*)                         │
 │  • Immediate mode API (call function, check result)         │
 │  • Manages interaction state (focus, hover, click)          │
 │  • Internally builds Clay elements                          │
@@ -29,7 +29,7 @@ The OTTO platform uses a hybrid UI architecture combining **Clay** (declarative 
 │  • Produces render commands                                 │
 ├─────────────────────────────────────────────────────────────┤
 │                        Renderers                            │
-│  • clay-renderer-webgl (browser)                            │
+│  • clay-shards-webgl (browser)                              │
 │  • Future: SDL, raylib, Sokol, native                       │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -58,9 +58,9 @@ CLAY(CLAY_ID("Panel"), {
 }
 ```
 
-### 2. cc_* = Interaction Wrappers (Immediate Mode)
+### 2. cs_* = Interaction Wrappers (Immediate Mode)
 
-Components handle user interaction:
+ClayShards components handle user interaction:
 - Focus management
 - Keyboard input routing
 - Click/hover detection
@@ -68,7 +68,7 @@ Components handle user interaction:
 
 ```c
 // Immediate mode pattern: call, check result, react
-CcButtonResult r = cc_button(CC_ID("submit"), "Submit", NULL);
+CsButtonResult r = cs_button(CS_ID("submit"), "Submit", NULL);
 if (r.clicked) {
     submit_form();
 }
@@ -76,10 +76,10 @@ if (r.clicked) {
 
 ### 3. Components Build Clay Elements Internally
 
-Inside `cc_button()`:
+Inside `cs_button()`:
 
 ```c
-CcButtonResult cc_button(uint32_t id, const char *label, ...) {
+CsButtonResult cs_button(uint32_t id, const char *label, ...) {
     // Check hover using Clay's data from previous frame
     bool is_hovered = Clay_PointerOver(clay_id);
 
@@ -102,7 +102,7 @@ CcButtonResult cc_button(uint32_t id, const char *label, ...) {
 ### 4. IDs Bridge Both Systems
 
 Same hash function, compatible IDs:
-- `CC_ID("name")` for components
+- `CS_ID("name")` for ClayShards components
 - `CLAY_ID("name")` for Clay elements
 - Components construct `Clay_ElementId` from their ID
 
@@ -110,13 +110,13 @@ Same hash function, compatible IDs:
 
 ```
 Frame N:
-  1. cc_frame_begin()           - Reset per-frame state
+  1. cs_frame_begin()           - Reset per-frame state
   2. Clay_BeginLayout()         - Start layout pass
   3. render_ui()                - Build element tree
      ├── CLAY() blocks          - Declare structure
-     └── cc_*() calls           - Add interactive elements
+     └── cs_*() calls           - Add interactive elements
   4. Clay_EndLayout()           - Compute layout, get commands
-  5. cc_frame_end(dt)           - Update cursor blink, etc.
+  5. cs_frame_end(dt)           - Update cursor blink, etc.
   6. Renderer draws commands    - WebGL, SDL, etc.
 
 Frame N+1:
@@ -126,7 +126,7 @@ Frame N+1:
 
 ## Component State
 
-Global state in `cc_common.c`:
+Global state in `cs_common.c`:
 - `focused_id` - Currently focused element
 - `cursor`, `selection_start` - Text input cursor state
 - `active_text`, `active_len` - Focused input's buffer
@@ -201,30 +201,30 @@ This replaces preprocessor macros with typed, named constants.
 
 ```
 shared/ui/
-├── clay-components/           # Immediate mode components (C)
+├── clay-shards/               # Immediate mode components (C)
 │   ├── include/
-│   │   ├── cc_common.h        # Core API, focus, input routing
-│   │   ├── cc_input.h         # Text input component
-│   │   ├── cc_button.h        # Button component
-│   │   ├── cc_map.h           # Map component
-│   │   └── cc_immediate.h     # Convenience header
+│   │   ├── cs_common.h        # Core API, focus, input routing
+│   │   ├── cs_input.h         # Text input component
+│   │   ├── cs_button.h        # Button component
+│   │   ├── cs_map.h           # Map component
+│   │   └── cs_immediate.h     # Convenience header
 │   └── src/
-│       ├── cc_common.c        # State, ID hashing, keyboard handling
-│       ├── cc_input.c         # Text input implementation
-│       ├── cc_button.c        # Button implementation
-│       ├── cc_map.c           # Map interaction (pan/zoom)
-│       └── cc_immediate.c     # Includes all components
+│       ├── cs_common.c        # State, ID hashing, keyboard handling
+│       ├── cs_input.c         # Text input implementation
+│       ├── cs_button.c        # Button implementation
+│       ├── cs_map.c           # Map interaction (pan/zoom)
+│       └── cs_immediate.c     # Includes all components
 │
-├── clay-renderer-webgl/       # Browser renderer (JS)
+├── clay-shards-webgl/         # Browser renderer (JS)
 │   ├── renderer.js            # ClayRenderer class
 │   ├── font.js                # MSDF font loading
 │   ├── shaders.js             # WebGL shaders
 │   ├── map-tiles.js           # Slippy map tile rendering
 │   └── fonts/                 # Font assets
 │
-├── cc-map-demo/               # Example application
-│   ├── src/map_ui.c           # WASM source
-│   ├── map.js                 # JS entry point
+├── clay-shards-demo/          # Example application
+│   ├── src/demo.c             # WASM source
+│   ├── demo.js                # JS entry point
 │   └── index.html             # HTML shell
 │
 vendor/clay/                   # Clay library (single header)
@@ -240,7 +240,7 @@ vendor/clay/                   # Clay library (single header)
 | **WASM-first** | Solid. ~140KB WASM for a full map viewer with UI is impressive. |
 | **Renderer-agnostic** | Good foundation. Same C code could target SDL, raylib, framebuffer. |
 | **Zero dependencies** | Pure C with no allocations in hot paths. Embedded-friendly. |
-| **Immediate mode API** | Clean. `if (cc_button(...).clicked)` is intuitive. |
+| **Immediate mode API** | Clean. `if (cs_button(...).clicked)` is intuitive. |
 | **Memory model** | Predictable. Fixed arena, no dynamic allocation during render. |
 | **Layered architecture** | Clean separation allows swapping renderers or adding components independently. |
 
@@ -259,7 +259,7 @@ Works for monospace fonts. Proportional fonts will have layout inaccuracies.
 
 **2. Single Map Instance**
 ```c
-static CcMapDragState g_map_drag = {0};  // Only one map supported
+static CsMapDragState g_map_drag = {0};  // Only one map supported
 ```
 The drag state is global. Multiple maps would interfere.
 
@@ -290,19 +290,19 @@ No keyboard navigation between elements, no screen reader support.
 ### Platform Suitability
 
 **Web Applications:**
-- ✅ Excellent for specialized widgets (map viewer, data visualization)
-- ✅ Small WASM footprint, fast rendering
-- ⚠️ Not a replacement for React/Vue for full dashboards
-- ⚠️ CSS would be more familiar to web developers
+- Excellent for specialized widgets (map viewer, data visualization)
+- Small WASM footprint, fast rendering
+- Not a replacement for React/Vue for full dashboards
+- CSS would be more familiar to web developers
 
-**Recommended:** Embed Clay components where you need pixel-perfect control, use React/Vue for forms, tables, settings.
+**Recommended:** Embed ClayShards components where you need pixel-perfect control, use React/Vue for forms, tables, settings.
 
 **Embedded Systems:**
-- ✅ Small footprint, pure C, predictable memory
-- ✅ Same codebase as web version
-- ✅ Efficient layout algorithm
-- ⚠️ Needs renderer implementation (SDL, framebuffer, OpenGL ES)
-- ⚠️ Font handling needs adaptation
+- Small footprint, pure C, predictable memory
+- Same codebase as web version
+- Efficient layout algorithm
+- Needs renderer implementation (SDL, framebuffer, OpenGL ES)
+- Font handling needs adaptation
 
 **Recommended:** Ideal for in-cab displays, industrial HMIs, or any system needing cross-platform C UI.
 
@@ -312,7 +312,7 @@ No keyboard navigation between elements, no screen reader support.
 |----------|--------|-------------|-------|-------------|
 | React | Virtual DOM | Event handlers | Component state | Web only |
 | Dear ImGui | Immediate | Immediate | Minimal | C++, many backends |
-| **Clay + cc_*** | **Declarative** | **Immediate** | **Minimal** | **C, any backend** |
+| **Clay + cs_*** | **Declarative** | **Immediate** | **Minimal** | **C, any backend** |
 | Qt | Widget tree | Signals/slots | Widget state | C++, heavy runtime |
 | LVGL | Object tree | Callbacks | Widget state | C, embedded focus |
 
@@ -368,11 +368,11 @@ No keyboard navigation between elements, no screen reader support.
 
 ### Adding a New Component
 
-1. Create header `include/cc_<name>.h` with types and API
-2. Create source `src/cc_<name>.c` with implementation
-3. Add include to `cc_immediate.h`
-4. Add source include to `cc_immediate.c`
-5. Add tests to `tests/test_immediate.c`
+1. Create header `include/cs_<name>.h` with types and API
+2. Create source `src/cs_<name>.c` with implementation
+3. Add include to `cs_immediate.h`
+4. Add source include to `cs_immediate.c`
+5. Add tests to `tests/test_clay_shards.c`
 
 Component pattern:
 ```c
@@ -380,16 +380,16 @@ typedef struct {
     bool changed;
     bool clicked;
     // ... result fields
-} CcFooResult;
+} CsFooResult;
 
 typedef struct {
     float width, height;
-    CcMargin margin;
-    CcAlign align;
+    CsMargin margin;
+    CsAlign align;
     // ... style fields
-} CcFooStyle;
+} CsFooStyle;
 
-CcFooResult cc_foo(uint32_t id, /* state pointers */, const CcFooStyle *style);
+CsFooResult cs_foo(uint32_t id, /* state pointers */, const CsFooStyle *style);
 ```
 
 ### Adding a New Renderer
@@ -445,7 +445,7 @@ Clay_Dimensions measure_text(Clay_StringSlice text, ...) {
 ## Usage Example
 
 ```c
-#include "cc_immediate.h"
+#include "cs_immediate.h"
 #include "clay.h"
 
 static char search_buf[256];
@@ -458,15 +458,15 @@ void render_ui(void) {
     }) {
         // Header with tabs
         CLAY(CLAY_ID("Header"), {...}) {
-            if (cc_button(CC_ID("tab_home"), "Home", NULL).clicked)
+            if (cs_button(CS_ID("tab_home"), "Home", NULL).clicked)
                 selected_tab = 0;
-            if (cc_button(CC_ID("tab_settings"), "Settings", NULL).clicked)
+            if (cs_button(CS_ID("tab_settings"), "Settings", NULL).clicked)
                 selected_tab = 1;
         }
 
         // Search bar
-        CcInputResult r = cc_input(
-            CC_ID("search"),
+        CsInputResult r = cs_input(
+            CS_ID("search"),
             search_buf, &search_len, sizeof(search_buf),
             "Search...", NULL
         );
@@ -484,12 +484,12 @@ void render_ui(void) {
 ## Building
 
 ```bash
-# Build clay-components library
-cd shared/ui/clay-components
+# Build clay-shards library
+cd shared/ui/clay-shards
 make
 
 # Build demo (requires Emscripten)
-cd shared/ui/cc-map-demo
+cd shared/ui/clay-shards-demo
 make
 make serve  # http://localhost:8000
 ```
@@ -497,6 +497,6 @@ make serve  # http://localhost:8000
 ## Related Documentation
 
 - [Clay Library](../../../vendor/clay/CLAUDE.md)
-- [clay-components](../clay-components/CLAUDE.md)
-- [clay-renderer-webgl](../clay-renderer-webgl/CLAUDE.md)
-- [cc-map-demo](../cc-map-demo/CLAUDE.md)
+- [clay-shards](../../shared/ui/clay-shards/CLAUDE.md)
+- [clay-shards-webgl](../../shared/ui/clay-shards-webgl/CLAUDE.md)
+- [clay-shards-demo](../../shared/ui/clay-shards-demo/CLAUDE.md)

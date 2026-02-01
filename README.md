@@ -355,8 +355,8 @@ Compound literals are central to OTTO's API design. They enable:
 
 ```c
 /* Inline configuration - no separate variable declaration */
-cc_button(CC_ID("save"), "Save", &(CcButtonStyle){
-    .variant = CC_BTN_PRIMARY,
+cs_button(CS_ID("save"), "Save", &(CsButtonStyle){
+    .variant = CS_BTN_PRIMARY,
     .font_size = 14,
     .corner_radius = 4
 });
@@ -602,7 +602,7 @@ Components follow the immediate mode pattern:
 
 ```c
 /* Call the component, check the result, react */
-CcButtonResult r = cc_button(CC_ID("save"), "Save", &style);
+CsButtonResult r = cs_button(CS_ID("save"), "Save", &style);
 if (r.clicked) {
     save_document();
 }
@@ -621,7 +621,7 @@ OTTO's UI combines two paradigms:
 | Layer | Style | Purpose |
 |-------|-------|---------|
 | **Clay** | Declarative | Layout computation (flexbox-like) |
-| **cc_*** | Immediate mode | Interaction handling |
+| **cs_*** | Immediate mode | Interaction handling (ClayShards) |
 
 ```c
 /* Declarative layout wraps immediate mode interaction */
@@ -630,7 +630,7 @@ CLAY(CLAY_ID("Panel"), {
     .backgroundColor = THEME.bg_dark,
 }) {
     /* Immediate mode component inside declarative container */
-    if (cc_button(CC_ID("btn"), "Click", NULL).clicked) {
+    if (cs_button(CS_ID("btn"), "Click", NULL).clicked) {
         handle_click();
     }
 }
@@ -647,11 +647,11 @@ The renderer-agnostic design supports multiple backends:
 
 | Backend | Target | Status |
 |---------|--------|--------|
-| `clay-renderer-webgl` | Browsers | Active |
-| `clay-renderer-sdl` | Desktop/Mobile | Planned |
-| `clay-renderer-raylib` | Games | Planned |
-| `clay-renderer-sokol` | Minimal deps | Planned |
-| `clay-renderer-terminal` | TUI | Planned |
+| `clay-shards-webgl` | Browsers | Active |
+| `clay-shards-sdl` | Desktop/Mobile | Planned |
+| `clay-shards-raylib` | Games | Planned |
+| `clay-shards-sokol` | Minimal deps | Planned |
+| `clay-shards-terminal` | TUI | Planned |
 
 Each renderer implements:
 - Rectangle drawing (solid, rounded, borders)
