@@ -38,7 +38,7 @@ extern "C" {
 #endif
 
 #ifndef CS_MAP_MAX_POLYLINE_POINTS
-#define CS_MAP_MAX_POLYLINE_POINTS 1024
+#define CS_MAP_MAX_POLYLINE_POINTS 8192  /* Must be >= route provider max */
 #endif
 
 #ifndef CS_MAP_STATE_CAPACITY
