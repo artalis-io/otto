@@ -15,7 +15,8 @@
  *   cs_marker(CS_ID("start"), 47.5, 19.0, &marker_style);
  *   cs_map_end();
  *
- * LIMITATION: Currently supports only a single map instance per application.
+ * Multi-instance: Supports up to CS_MAP_STATE_CAPACITY (16) independent maps.
+ * Each map has its own overlays, drag state, and interaction tracking.
  */
 
 #ifndef CS_MAP_H
@@ -38,6 +39,10 @@ extern "C" {
 
 #ifndef CS_MAP_MAX_POLYLINE_POINTS
 #define CS_MAP_MAX_POLYLINE_POINTS 1024
+#endif
+
+#ifndef CS_MAP_STATE_CAPACITY
+#define CS_MAP_STATE_CAPACITY 16
 #endif
 
 /* ============================================================================
@@ -70,6 +75,7 @@ typedef struct {
     float radius;           /* Marker radius in pixels (default: 8.0) */
     CsColor border_color;   /* Border color (default: white) */
     float border_width;     /* Border width in pixels (default: 2.0) */
+    bool draggable;         /* Allow drag interaction (default: false) */
 } CsMarkerStyle;
 
 /* Default styles */
@@ -88,6 +94,11 @@ typedef struct {
     double click_lon;       /* If clicked, longitude */
     uint32_t hovered_id;    /* ID of hovered overlay (0 if none) */
     uint32_t clicked_id;    /* ID of clicked overlay (0 if none) */
+    /* Marker drag support */
+    uint32_t dragged_marker_id;  /* Marker being dragged (0 if none) */
+    double dragged_marker_lat;   /* Current drag position latitude */
+    double dragged_marker_lon;   /* Current drag position longitude */
+    bool drag_ended;             /* True on frame when drag completes */
 } CsMapResult;
 
 typedef struct {
@@ -186,44 +197,75 @@ void cs_marker(
 #define CS_OVERLAY_POLYLINE 1
 #define CS_OVERLAY_MARKER   2
 
-/* Get number of overlays in current frame */
-int cs_map_overlay_count(void);
+/* Get number of overlays for a map */
+int cs_map_overlay_count(uint32_t map_id);
 
 /* Get overlay type by index */
-int cs_map_overlay_type(int index);
+int cs_map_overlay_type(uint32_t map_id, int index);
 
 /* Get overlay ID by index */
-uint32_t cs_map_overlay_id(int index);
+uint32_t cs_map_overlay_id(uint32_t map_id, int index);
 
 /* Polyline accessors */
-int cs_map_overlay_polyline_count(int index);
-double cs_map_overlay_polyline_lat(int index, int point_index);
-double cs_map_overlay_polyline_lon(int index, int point_index);
-float cs_map_overlay_polyline_color_r(int index);
-float cs_map_overlay_polyline_color_g(int index);
-float cs_map_overlay_polyline_color_b(int index);
-float cs_map_overlay_polyline_color_a(int index);
-float cs_map_overlay_polyline_width(int index);
+int cs_map_overlay_polyline_count(uint32_t map_id, int index);
+double cs_map_overlay_polyline_lat(uint32_t map_id, int index, int point_index);
+double cs_map_overlay_polyline_lon(uint32_t map_id, int index, int point_index);
+float cs_map_overlay_polyline_color_r(uint32_t map_id, int index);
+float cs_map_overlay_polyline_color_g(uint32_t map_id, int index);
+float cs_map_overlay_polyline_color_b(uint32_t map_id, int index);
+float cs_map_overlay_polyline_color_a(uint32_t map_id, int index);
+float cs_map_overlay_polyline_width(uint32_t map_id, int index);
 
 /* Marker accessors */
-double cs_map_overlay_marker_lat(int index);
-double cs_map_overlay_marker_lon(int index);
-float cs_map_overlay_marker_radius(int index);
-float cs_map_overlay_marker_color_r(int index);
-float cs_map_overlay_marker_color_g(int index);
-float cs_map_overlay_marker_color_b(int index);
-float cs_map_overlay_marker_color_a(int index);
-float cs_map_overlay_marker_border_r(int index);
-float cs_map_overlay_marker_border_g(int index);
-float cs_map_overlay_marker_border_b(int index);
-float cs_map_overlay_marker_border_a(int index);
-float cs_map_overlay_marker_border_width(int index);
+double cs_map_overlay_marker_lat(uint32_t map_id, int index);
+double cs_map_overlay_marker_lon(uint32_t map_id, int index);
+float cs_map_overlay_marker_radius(uint32_t map_id, int index);
+float cs_map_overlay_marker_color_r(uint32_t map_id, int index);
+float cs_map_overlay_marker_color_g(uint32_t map_id, int index);
+float cs_map_overlay_marker_color_b(uint32_t map_id, int index);
+float cs_map_overlay_marker_color_a(uint32_t map_id, int index);
+float cs_map_overlay_marker_border_r(uint32_t map_id, int index);
+float cs_map_overlay_marker_border_g(uint32_t map_id, int index);
+float cs_map_overlay_marker_border_b(uint32_t map_id, int index);
+float cs_map_overlay_marker_border_a(uint32_t map_id, int index);
+float cs_map_overlay_marker_border_width(uint32_t map_id, int index);
+bool cs_map_overlay_marker_draggable(uint32_t map_id, int index);
 
-/* Set hovered overlay (called from JS after hit testing) */
-void cs_map_set_hovered_overlay(uint32_t id);
+/* Set hovered overlay for a map (called from JS after hit testing) */
+void cs_map_set_hovered_overlay(uint32_t map_id, uint32_t overlay_id);
 
-/* Set clicked overlay (called from JS after hit testing) */
-void cs_map_set_clicked_overlay(uint32_t id);
+/* Set clicked overlay for a map (called from JS after hit testing) */
+void cs_map_set_clicked_overlay(uint32_t map_id, uint32_t overlay_id);
+
+/* Get hovered overlay for a map */
+uint32_t cs_map_get_hovered_overlay(uint32_t map_id);
+
+/* Get currently dragging overlay for a map */
+uint32_t cs_map_get_dragging_overlay(uint32_t map_id);
+
+/* ============================================================================
+ * Hit Testing (for renderers to call from JS)
+ * ============================================================================ */
+
+/**
+ * Hit test overlays at a screen position
+ *
+ * @param map_id      Map component ID
+ * @param px, py      Screen position in pixels
+ * @param center_lat  Current map center latitude
+ * @param center_lon  Current map center longitude
+ * @param zoom        Current zoom level
+ * @param map_width   Map viewport width
+ * @param map_height  Map viewport height
+ * @return            Overlay ID at position, or 0 if none
+ */
+uint32_t cs_map_hit_test(
+    uint32_t map_id,
+    float px, float py,
+    double center_lat, double center_lon,
+    double zoom,  /* visual zoom (float) for smooth animation consistency */
+    float map_width, float map_height
+);
 
 /* ============================================================================
  * Projection Utilities (useful for renderers)
@@ -243,7 +285,7 @@ double cs_map_tile_y_to_lat(double y, int zoom);
 
 /* Convert screen offset to lat/lon delta */
 void cs_map_screen_to_geo_delta(
-    double lat, int zoom,
+    double lat, double zoom,  /* visual zoom (float) for smooth animation consistency */
     float dx, float dy,
     double *dlat, double *dlon
 );
@@ -252,17 +294,26 @@ void cs_map_screen_to_geo_delta(
  * Drag/Scroll Handling (call from platform layer)
  * ============================================================================ */
 
-/* Start drag at given screen position */
-void cs_map_pointer_down(uint32_t id, double lat, double lon, float x, float y);
+/**
+ * Start drag at given screen position
+ * Checks for draggable markers first; if none hit, starts map pan.
+ */
+void cs_map_pointer_down(uint32_t id, double lat, double lon, float x, float y,
+                         float map_width, float map_height, double zoom);
 
 /* Update drag position - returns true if dragging, updates out_lat/out_lon */
-bool cs_map_pointer_move(uint32_t id, int zoom, float x, float y, double *out_lat, double *out_lon);
+bool cs_map_pointer_move(uint32_t id, double zoom, float x, float y,
+                         float map_width, float map_height,
+                         double *out_lat, double *out_lon);
 
 /* End drag - returns true if was dragging. If movement < threshold, registers as click. */
 bool cs_map_pointer_up(uint32_t id, float x, float y);
 
-/* Check if map is currently being dragged */
+/* Check if map is currently being dragged (not marker) */
 bool cs_map_is_dragging(uint32_t id);
+
+/* Check if a marker is currently being dragged */
+bool cs_map_is_dragging_marker(uint32_t id);
 
 /* Handle scroll/zoom - returns clamped new zoom level */
 int cs_map_scroll(int current_zoom, int delta, int min_zoom, int max_zoom);

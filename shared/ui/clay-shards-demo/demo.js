@@ -65,12 +65,13 @@ let isDragging = false;
 const REQUIRED_EXPORTS = [
     'map_init', 'map_frame', 'map_resize',
     'map_get_lat', 'map_get_lon', 'map_get_zoom', 'map_get_visual_zoom', 'map_get_layer',
+    'map_get_component_id', 'map_get_width', 'map_get_height',
     'map_pointer_down', 'map_pointer_move', 'map_pointer_up', 'map_scroll',
     'map_handle_click',
     'cs_set_pending_click', 'cs_focused_id', 'cs_key_down', 'cs_key_char',
     'cs_focused_x', 'cs_focused_y', 'cs_focused_w', 'cs_focused_h',
     'cs_clay_cmd_type', 'cs_clay_cmd_x', 'cs_clay_cmd_y', 'cs_clay_cmd_w', 'cs_clay_cmd_h',
-    // Overlay accessors
+    // Overlay accessors (multi-instance: take map_id as first parameter)
     'cs_map_overlay_count', 'cs_map_overlay_type', 'cs_map_overlay_id',
     'cs_map_overlay_polyline_count', 'cs_map_overlay_polyline_lat', 'cs_map_overlay_polyline_lon',
     'cs_map_overlay_polyline_color_r', 'cs_map_overlay_polyline_color_g',
@@ -81,7 +82,10 @@ const REQUIRED_EXPORTS = [
     'cs_map_overlay_marker_color_b', 'cs_map_overlay_marker_color_a',
     'cs_map_overlay_marker_border_r', 'cs_map_overlay_marker_border_g',
     'cs_map_overlay_marker_border_b', 'cs_map_overlay_marker_border_a',
-    'cs_map_overlay_marker_border_width',
+    'cs_map_overlay_marker_border_width', 'cs_map_overlay_marker_draggable',
+    // Hit testing and interaction state
+    'cs_map_hit_test', 'cs_map_set_hovered_overlay', 'cs_map_get_hovered_overlay',
+    'cs_map_get_dragging_overlay',
     // Provider exports
     'cs_provider_route_is_pending', 'cs_provider_route_mark_fetching',
     'cs_provider_route_from_lat', 'cs_provider_route_from_lon',
@@ -105,38 +109,76 @@ const REQUIRED_EXPORTS = [
 function setupEvents(canvas) {
     // Mouse events
     canvas.addEventListener('mousedown', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
         wasm.cs_set_pending_click();
-        if (wasm.map_handle_click(e.clientX, e.clientY)) return;
+        if (wasm.map_handle_click(x, y)) return;
         isDragging = true;
         canvas.classList.add('dragging');
-        wasm.map_pointer_down(e.clientX, e.clientY);
+        wasm.map_pointer_down(x, y);
     });
 
     window.addEventListener('mousemove', (e) => {
-        wasm.map_pointer_move(e.clientX, e.clientY);
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        wasm.map_pointer_move(x, y);
+
+        // Hit testing for cursor feedback (only when not dragging)
+        // Use visual_zoom (not integer zoom) for consistency with overlay rendering
+        if (!isDragging) {
+            const mapId = wasm.map_get_component_id();
+            const hit = wasm.cs_map_hit_test(
+                mapId, x, y,
+                wasm.map_get_lat(), wasm.map_get_lon(), wasm.map_get_visual_zoom(),
+                wasm.map_get_width(), wasm.map_get_height()
+            );
+            wasm.cs_map_set_hovered_overlay(mapId, hit);
+
+            // Update cursor based on hit state
+            if (hit !== 0) {
+                canvas.style.cursor = 'pointer';
+            } else {
+                canvas.style.cursor = 'grab';
+            }
+        } else {
+            // While dragging, show grabbing cursor
+            canvas.style.cursor = 'grabbing';
+        }
     });
 
     window.addEventListener('mouseup', (e) => {
         if (isDragging) {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
             isDragging = false;
             canvas.classList.remove('dragging');
-            wasm.map_pointer_up(e.clientX, e.clientY);
+            wasm.map_pointer_up(x, y);
+            canvas.style.cursor = 'grab';
         }
     });
 
     canvas.addEventListener('wheel', (e) => {
         e.preventDefault();
-        wasm.map_scroll(e.deltaY > 0 ? -1 : 1, e.clientX, e.clientY);
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        wasm.map_scroll(e.deltaY > 0 ? -1 : 1, x, y);
     }, { passive: false });
 
     // Touch events - mirror mouse event handling for consistency
     canvas.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
             const t = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            const x = t.clientX - rect.left;
+            const y = t.clientY - rect.top;
             wasm.cs_set_pending_click();
-            if (wasm.map_handle_click(t.clientX, t.clientY)) return;
+            if (wasm.map_handle_click(x, y)) return;
             isDragging = true;
-            wasm.map_pointer_down(t.clientX, t.clientY);
+            wasm.map_pointer_down(x, y);
         }
     }, { passive: true });
 
@@ -144,7 +186,10 @@ function setupEvents(canvas) {
         if (e.touches.length === 1 && isDragging) {
             e.preventDefault();
             const t = e.touches[0];
-            wasm.map_pointer_move(t.clientX, t.clientY);
+            const rect = canvas.getBoundingClientRect();
+            const x = t.clientX - rect.left;
+            const y = t.clientY - rect.top;
+            wasm.map_pointer_move(x, y);
         }
     }, { passive: false });
 
@@ -152,7 +197,10 @@ function setupEvents(canvas) {
         if (isDragging && e.changedTouches.length > 0) {
             isDragging = false;
             const t = e.changedTouches[0];
-            wasm.map_pointer_up(t.clientX, t.clientY);
+            const rect = canvas.getBoundingClientRect();
+            const x = t.clientX - rect.left;
+            const y = t.clientY - rect.top;
+            wasm.map_pointer_up(x, y);
         }
     });
 
@@ -230,6 +278,7 @@ async function main() {
                 const lat = wasm.map_get_lat();
                 const lon = wasm.map_get_lon();
                 const visualZoom = wasm.map_get_visual_zoom();
+                const mapId = wasm.map_get_component_id();
 
                 // Render tiles first
                 tileRenderer.render(
@@ -240,9 +289,10 @@ async function main() {
                     projMatrix
                 );
 
-                // Render overlays on top of tiles
+                // Render overlays on top of tiles (pass mapId for multi-instance support)
                 overlayRenderer.render(
                     wasm,
+                    mapId,
                     lat, lon, visualZoom,
                     renderer.width,
                     renderer.height,
