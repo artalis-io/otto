@@ -37,8 +37,18 @@ extern "C" {
 #define CS_MAP_MAX_OVERLAYS 64
 #endif
 
-#ifndef CS_MAP_MAX_POLYLINE_POINTS
-#define CS_MAP_MAX_POLYLINE_POINTS 8192  /* Must be >= route provider max */
+/* Dynamic polyline buffer configuration */
+#ifndef CS_MAP_POLYLINE_INITIAL_CAPACITY
+#define CS_MAP_POLYLINE_INITIAL_CAPACITY 256
+#endif
+
+#ifndef CS_MAP_POLYLINE_MAX_CAPACITY
+#define CS_MAP_POLYLINE_MAX_CAPACITY 4096
+#endif
+
+/* Simplification epsilon in degrees (roughly 100m at equator) */
+#ifndef CS_MAP_SIMPLIFY_EPSILON
+#define CS_MAP_SIMPLIFY_EPSILON 0.001
 #endif
 
 #ifndef CS_MAP_STATE_CAPACITY

@@ -9,6 +9,7 @@
 #include "cs_internal.h"
 #include "clay.h"
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef __EMSCRIPTEN__
@@ -131,8 +132,11 @@ typedef struct {
     /* Per-map overlays */
     CsOverlay overlays[CS_MAP_MAX_OVERLAYS];
     int overlay_count;
-    CsGeoPoint polyline_points[CS_MAP_MAX_POLYLINE_POINTS];
+
+    /* Dynamic polyline point buffer */
+    CsGeoPoint *polyline_points;
     int polyline_point_count;
+    int polyline_point_capacity;
 
     /* Interaction state */
     uint32_t hovered_overlay_id;
@@ -174,6 +178,241 @@ static CsMapState* cs_map_get_state(uint32_t id) {
         }
     }
     return NULL;  /* Table full */
+}
+
+/* ============================================================================
+ * Dynamic Polyline Buffer Management
+ * ============================================================================ */
+
+/**
+ * Ensure polyline buffer has at least 'needed' capacity.
+ * Returns true on success, false on allocation failure.
+ */
+static bool ensure_polyline_capacity(CsMapState *ms, int needed) {
+    if (ms->polyline_point_capacity >= needed) {
+        return true;
+    }
+
+    /* Calculate new capacity (double until we reach needed or max) */
+    int new_capacity = ms->polyline_point_capacity;
+    if (new_capacity == 0) {
+        new_capacity = CS_MAP_POLYLINE_INITIAL_CAPACITY;
+    }
+    while (new_capacity < needed && new_capacity < CS_MAP_POLYLINE_MAX_CAPACITY) {
+        new_capacity *= 2;
+    }
+
+    /* Cap at max */
+    if (new_capacity > CS_MAP_POLYLINE_MAX_CAPACITY) {
+        new_capacity = CS_MAP_POLYLINE_MAX_CAPACITY;
+    }
+
+    /* If still not enough after hitting max, return false (caller should simplify) */
+    if (new_capacity < needed) {
+        return false;
+    }
+
+    /* Reallocate */
+    CsGeoPoint *new_buffer = (CsGeoPoint *)realloc(
+        ms->polyline_points,
+        (size_t)new_capacity * sizeof(CsGeoPoint)
+    );
+    if (!new_buffer) {
+        return false;
+    }
+
+    ms->polyline_points = new_buffer;
+    ms->polyline_point_capacity = new_capacity;
+    return true;
+}
+
+/* ============================================================================
+ * Douglas-Peucker Polyline Simplification
+ * ============================================================================ */
+
+/**
+ * Calculate perpendicular distance from point to line segment.
+ * Uses geographic coordinates directly (works for small areas).
+ */
+static double perpendicular_distance(
+    double px, double py,
+    double x1, double y1,
+    double x2, double y2
+) {
+    double dx = x2 - x1;
+    double dy = y2 - y1;
+    double len_sq = dx * dx + dy * dy;
+
+    if (len_sq < 1e-12) {
+        /* Line is a point */
+        dx = px - x1;
+        dy = py - y1;
+        return sqrt(dx * dx + dy * dy);
+    }
+
+    /* Project point onto line */
+    double t = ((px - x1) * dx + (py - y1) * dy) / len_sq;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    double proj_x = x1 + t * dx;
+    double proj_y = y1 + t * dy;
+
+    dx = px - proj_x;
+    dy = py - proj_y;
+    return sqrt(dx * dx + dy * dy);
+}
+
+/**
+ * Douglas-Peucker recursive implementation.
+ * Marks points to keep in the 'keep' array.
+ */
+static void douglas_peucker_recursive(
+    const CsGeoPoint *points,
+    int start, int end,
+    double epsilon,
+    bool *keep
+) {
+    if (end <= start + 1) {
+        return;
+    }
+
+    /* Find point with maximum distance from line */
+    double max_dist = 0.0;
+    int max_idx = start;
+
+    double x1 = points[start].lon;
+    double y1 = points[start].lat;
+    double x2 = points[end].lon;
+    double y2 = points[end].lat;
+
+    for (int i = start + 1; i < end; i++) {
+        double dist = perpendicular_distance(
+            points[i].lon, points[i].lat,
+            x1, y1, x2, y2
+        );
+        if (dist > max_dist) {
+            max_dist = dist;
+            max_idx = i;
+        }
+    }
+
+    /* If max distance exceeds epsilon, recursively simplify */
+    if (max_dist > epsilon) {
+        keep[max_idx] = true;
+        douglas_peucker_recursive(points, start, max_idx, epsilon, keep);
+        douglas_peucker_recursive(points, max_idx, end, epsilon, keep);
+    }
+}
+
+/**
+ * Count how many points Douglas-Peucker would keep with given epsilon.
+ */
+static int count_kept_points(const CsGeoPoint *points, int count, double epsilon) {
+    if (count <= 2) return count;
+
+    bool *keep = (bool *)calloc((size_t)count, sizeof(bool));
+    if (!keep) return 2;
+
+    keep[0] = true;
+    keep[count - 1] = true;
+    douglas_peucker_recursive(points, 0, count - 1, epsilon, keep);
+
+    int kept = 0;
+    for (int i = 0; i < count; i++) {
+        if (keep[i]) kept++;
+    }
+    free(keep);
+    return kept;
+}
+
+/**
+ * Simplify a polyline using Douglas-Peucker algorithm with adaptive epsilon.
+ * Automatically increases epsilon until output fits within capacity.
+ * Returns the number of points in the simplified output.
+ *
+ * @param points      Input points
+ * @param count       Number of input points
+ * @param epsilon     Initial tolerance in degrees
+ * @param out         Output buffer (can be same as input for in-place)
+ * @param out_capacity Maximum output points
+ */
+static int simplify_polyline(
+    const CsGeoPoint *points,
+    int count,
+    double epsilon,
+    CsGeoPoint *out,
+    int out_capacity
+) {
+    if (count <= 2) {
+        /* Nothing to simplify */
+        int n = (count < out_capacity) ? count : out_capacity;
+        if (out != points) {
+            for (int i = 0; i < n; i++) {
+                out[i] = points[i];
+            }
+        }
+        return n;
+    }
+
+    if (out_capacity < 2) {
+        out[0] = points[0];
+        return 1;
+    }
+
+    /* Adaptive epsilon: increase until we fit within capacity */
+    double current_epsilon = epsilon;
+    int kept = count_kept_points(points, count, current_epsilon);
+
+    /* Double epsilon until we fit (max 20 iterations to prevent infinite loop) */
+    for (int iter = 0; iter < 20 && kept > out_capacity; iter++) {
+        current_epsilon *= 2.0;
+        kept = count_kept_points(points, count, current_epsilon);
+    }
+
+    /* If still too many, use uniform sampling as last resort */
+    if (kept > out_capacity) {
+        /* Sample evenly, always including first and last */
+        out[0] = points[0];
+        out[out_capacity - 1] = points[count - 1];
+
+        if (out_capacity > 2) {
+            double step = (double)(count - 1) / (double)(out_capacity - 1);
+            for (int i = 1; i < out_capacity - 1; i++) {
+                int idx = (int)(i * step);
+                if (idx >= count) idx = count - 1;
+                out[i] = points[idx];
+            }
+        }
+        return out_capacity;
+    }
+
+    /* Allocate keep flags for final pass */
+    bool *keep = (bool *)calloc((size_t)count, sizeof(bool));
+    if (!keep) {
+        /* Fallback: just copy first/last */
+        out[0] = points[0];
+        out[1] = points[count - 1];
+        return 2;
+    }
+
+    /* Always keep first and last */
+    keep[0] = true;
+    keep[count - 1] = true;
+
+    /* Run Douglas-Peucker with adaptive epsilon */
+    douglas_peucker_recursive(points, 0, count - 1, current_epsilon, keep);
+
+    /* Copy kept points to output */
+    int out_count = 0;
+    for (int i = 0; i < count && out_count < out_capacity; i++) {
+        if (keep[i]) {
+            out[out_count++] = points[i];
+        }
+    }
+
+    free(keep);
+    return out_count;
 }
 
 /* ============================================================================
@@ -691,10 +930,40 @@ void cs_polyline(
     if (g_active_map->overlay_count >= CS_MAP_MAX_OVERLAYS) return;
     if (count <= 0) return;
 
-    if (g_active_map->polyline_point_count + count > CS_MAP_MAX_POLYLINE_POINTS) return;
-
     if (!style) style = &CS_POLYLINE_STYLE_DEFAULT;
 
+    int needed = g_active_map->polyline_point_count + count;
+
+    /* Try to ensure we have enough capacity */
+    if (!ensure_polyline_capacity(g_active_map, needed)) {
+        /* Buffer is at max capacity and still not enough - simplify the input */
+        int available = g_active_map->polyline_point_capacity - g_active_map->polyline_point_count;
+        if (available <= 2) {
+            /* No space at all, skip this polyline */
+            return;
+        }
+
+        /* Simplify to fit available space */
+        int point_start = g_active_map->polyline_point_count;
+        int simplified_count = simplify_polyline(
+            points, count,
+            CS_MAP_SIMPLIFY_EPSILON,
+            &g_active_map->polyline_points[point_start],
+            available
+        );
+
+        g_active_map->polyline_point_count += simplified_count;
+
+        CsOverlay *overlay = &g_active_map->overlays[g_active_map->overlay_count++];
+        overlay->type = CS_OVERLAY_POLYLINE;
+        overlay->id = id;
+        overlay->polyline.point_start = point_start;
+        overlay->polyline.point_count = simplified_count;
+        overlay->polyline.style = *style;
+        return;
+    }
+
+    /* Normal case: copy all points */
     int point_start = g_active_map->polyline_point_count;
     for (int i = 0; i < count; i++) {
         g_active_map->polyline_points[g_active_map->polyline_point_count++] = points[i];

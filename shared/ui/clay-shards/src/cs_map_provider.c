@@ -6,6 +6,8 @@
  */
 
 #include "cs_map_provider.h"
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -307,6 +309,165 @@ EXPORT const char* cs_provider_type(void) {
 }
 
 /* ============================================================================
+ * Douglas-Peucker Polyline Simplification (for route compression)
+ * ============================================================================ */
+
+/* Initial epsilon for simplification (roughly 100m at equator) */
+#define SIMPLIFY_EPSILON_INITIAL 0.001
+
+/* Perpendicular distance from point to line segment */
+static double perp_distance(
+    double px, double py,
+    double x1, double y1,
+    double x2, double y2
+) {
+    double dx = x2 - x1;
+    double dy = y2 - y1;
+    double len_sq = dx * dx + dy * dy;
+
+    if (len_sq < 1e-12) {
+        dx = px - x1;
+        dy = py - y1;
+        return sqrt(dx * dx + dy * dy);
+    }
+
+    double t = ((px - x1) * dx + (py - y1) * dy) / len_sq;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    double proj_x = x1 + t * dx;
+    double proj_y = y1 + t * dy;
+    dx = px - proj_x;
+    dy = py - proj_y;
+    return sqrt(dx * dx + dy * dy);
+}
+
+/* Recursive Douglas-Peucker */
+static void dp_recursive(
+    const double *lats, const double *lons,
+    int start, int end,
+    double epsilon,
+    bool *keep
+) {
+    if (end <= start + 1) return;
+
+    double max_dist = 0.0;
+    int max_idx = start;
+
+    for (int i = start + 1; i < end; i++) {
+        double dist = perp_distance(
+            lons[i], lats[i],
+            lons[start], lats[start],
+            lons[end], lats[end]
+        );
+        if (dist > max_dist) {
+            max_dist = dist;
+            max_idx = i;
+        }
+    }
+
+    if (max_dist > epsilon) {
+        keep[max_idx] = true;
+        dp_recursive(lats, lons, start, max_idx, epsilon, keep);
+        dp_recursive(lats, lons, max_idx, end, epsilon, keep);
+    }
+}
+
+/* Count points that would be kept with given epsilon */
+static int count_simplified(const double *lats, const double *lons, int count, double epsilon) {
+    if (count <= 2) return count;
+
+    bool *keep = (bool *)calloc((size_t)count, sizeof(bool));
+    if (!keep) return 2;
+
+    keep[0] = true;
+    keep[count - 1] = true;
+    dp_recursive(lats, lons, 0, count - 1, epsilon, keep);
+
+    int kept = 0;
+    for (int i = 0; i < count; i++) {
+        if (keep[i]) kept++;
+    }
+    free(keep);
+    return kept;
+}
+
+/* Simplify route with adaptive epsilon to fit in max_out points */
+static int simplify_route(
+    const double *lats, const double *lons, int count,
+    CsGeoPoint *out, int max_out
+) {
+    if (count <= max_out) {
+        /* No simplification needed */
+        for (int i = 0; i < count; i++) {
+            out[i].lat = lats[i];
+            out[i].lon = lons[i];
+        }
+        return count;
+    }
+
+    if (max_out < 2) {
+        out[0].lat = lats[0];
+        out[0].lon = lons[0];
+        return 1;
+    }
+
+    /* Adaptive epsilon: increase until we fit */
+    double epsilon = SIMPLIFY_EPSILON_INITIAL;
+    int kept = count_simplified(lats, lons, count, epsilon);
+
+    for (int iter = 0; iter < 20 && kept > max_out; iter++) {
+        epsilon *= 2.0;
+        kept = count_simplified(lats, lons, count, epsilon);
+    }
+
+    /* If still too many, use uniform sampling */
+    if (kept > max_out) {
+        out[0].lat = lats[0];
+        out[0].lon = lons[0];
+        out[max_out - 1].lat = lats[count - 1];
+        out[max_out - 1].lon = lons[count - 1];
+
+        if (max_out > 2) {
+            double step = (double)(count - 1) / (double)(max_out - 1);
+            for (int i = 1; i < max_out - 1; i++) {
+                int idx = (int)(i * step);
+                if (idx >= count) idx = count - 1;
+                out[i].lat = lats[idx];
+                out[i].lon = lons[idx];
+            }
+        }
+        return max_out;
+    }
+
+    /* Final pass: collect kept points */
+    bool *keep = (bool *)calloc((size_t)count, sizeof(bool));
+    if (!keep) {
+        out[0].lat = lats[0];
+        out[0].lon = lons[0];
+        out[1].lat = lats[count - 1];
+        out[1].lon = lons[count - 1];
+        return 2;
+    }
+
+    keep[0] = true;
+    keep[count - 1] = true;
+    dp_recursive(lats, lons, 0, count - 1, epsilon, keep);
+
+    int out_count = 0;
+    for (int i = 0; i < count && out_count < max_out; i++) {
+        if (keep[i]) {
+            out[out_count].lat = lats[i];
+            out[out_count].lon = lons[i];
+            out_count++;
+        }
+    }
+
+    free(keep);
+    return out_count;
+}
+
+/* ============================================================================
  * Callbacks from JS
  * ============================================================================ */
 
@@ -314,12 +475,13 @@ EXPORT void cs_provider_on_route_complete(
     const double *lats, const double *lons, int count,
     double distance_m, double duration_s
 ) {
-    int to_copy = count < CS_PROVIDER_MAX_ROUTE_POINTS ? count : CS_PROVIDER_MAX_ROUTE_POINTS;
-    for (int i = 0; i < to_copy; i++) {
-        g_route_points[i].lat = lats[i];
-        g_route_points[i].lon = lons[i];
-    }
-    g_route_result.count = to_copy;
+    /* Simplify if needed to fit in buffer */
+    int result_count = simplify_route(
+        lats, lons, count,
+        g_route_points, CS_PROVIDER_MAX_ROUTE_POINTS
+    );
+
+    g_route_result.count = result_count;
     g_route_result.distance_m = distance_m;
     g_route_result.duration_s = duration_s;
     g_route_result.ready = true;
