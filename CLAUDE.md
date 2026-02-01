@@ -29,6 +29,7 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 | Ralph | `ralph/` | C | LP/MIP solver engine |
 | Velo | `velo/` | C | OSM routing engine |
 | Carta | `carta/` | C | Map tile generator (MVT/PNG) |
+| Locus | `locus/` | C | OSM geocoding engine |
 | FuelWise | `fuelwise/` | C | Refueling domain logic |
 | Shared | `shared/` | C | Common geo utilities, protobuf, zlib |
 | Vendor | `vendor/` | C | Third-party libs (see below) |
@@ -37,6 +38,7 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
+| Forge | `forge/` | **F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution - async job queue |
 | Nexus | `nexus/` | **N**ormalized **Ex**ternal **U**nified **S**napshots - TMS/ELD/LoadBoard integration gateway |
 | HoSE | `hose/` | **H**ours **o**f **S**ervice **E**ngine - FMCSA/EC561 compliance |
 | Tempo | `tempo/` | **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator |
@@ -46,6 +48,7 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 
 See `docs/TODO_FEATURES.md` for detailed specifications of planned components.
 See `docs/NEXUS.md` for the data ingress architecture (TMS/ELD/LoadBoard integration).
+See `docs/FORGE.md` for the async job queue architecture.
 
 ### Applications
 
@@ -54,7 +57,9 @@ See `docs/NEXUS.md` for the data ingress architecture (TMS/ELD/LoadBoard integra
 | FuelWise API | `fuelwise/api/` | C | Refueling REST API |
 | Route Server | `velo/api/` | C | Routing REST API |
 | Tile Server | `carta/api/` | C | Tile server REST API |
+| Geocoding Server | `locus/api/` | C | Geocoding REST API |
 | FuelWise WASM | `fuelwise/wasm/` | C+JS | Browser builds |
+| Locus WASM | `locus/wasm/` | C+JS | Geocoding browser builds |
 | FuelWise UI | `fuelwise/ui/` | TypeScript | React frontend |
 | Carta UI | `carta/ui/` | TypeScript | Tile viewer |
 
@@ -77,6 +82,14 @@ See `docs/NEXUS.md` for the data ingress architecture (TMS/ELD/LoadBoard integra
 - `carta/src/ct_mvt.c` - MVT encoding
 - `carta/src/ct_render.c` - PNG rasterization
 - `carta/src/ct_tile.c` - Web Mercator math
+
+### Working on geocoding:
+- `locus/include/locus.h` - Geocoding API
+- `locus/src/lc_pbf.c` - OSM PBF parsing for places/POIs
+- `locus/src/lc_trie.c` - Prefix trie for autocomplete
+- `locus/src/lc_ngram.c` - Trigram index for fuzzy search
+- `locus/src/lc_spatial.c` - Grid-based reverse geocoding
+- `locus/src/lc_index.c` - Main search index
 
 ### Working on refueling:
 - `fuelwise/include/fuelwise.h` - Library API
@@ -128,17 +141,20 @@ make fuelwise         # Refueling library
 make shared           # Shared geo utilities
 make velo             # Routing engine
 make carta            # Tile generator
+make locus            # Geocoding engine
 
 # API Servers
 make fuelwise-api     # FuelWise REST API (fuelwise/api)
 make velo-api         # Velo route server (velo/api)
 make carta-api        # Carta tile server (carta/api)
+make locus-api        # Locus geocoding server (locus/api)
 
 # WebAssembly (requires Emscripten)
 make wasm             # Build all WASM modules
 make wasm-fuelwise    # FuelWise WASM only
 make wasm-velo        # Velo WASM only
 make wasm-carta       # Carta WASM only
+make wasm-locus       # Locus WASM only
 make wasm-types       # Generate TypeScript declarations
 make wasm-test        # Test WASM builds
 
@@ -155,10 +171,12 @@ make test-fuelwise    # 32 tests
 make test-shared      # 23 tests
 make test-velo        # 39 tests
 make test-carta       # 33 tests
+make test-locus       # 52 tests
 make test-api         # All API tests (requires OSM data)
 make test-fuelwise-api# FuelWise API tests
 make test-velo-api    # Velo API tests
 make test-carta-api   # Carta API tests
+make test-locus-api   # Locus API tests
 
 # Scripts
 make benchmark        # Run performance benchmarks
@@ -168,6 +186,7 @@ make ci               # Run CI pipeline
 make run-fuelwise-api # Start FuelWise API on :8080
 make run-velo-api     # Show Velo route server usage
 make run-carta-api    # Show Carta tile server usage
+make run-locus-api    # Show Locus geocoding server usage
 ```
 
 ## API Endpoints
@@ -199,37 +218,52 @@ make run-carta-api    # Show Carta tile server usage
 | `/tiles/{z}/{x}/{y}.mvt` | GET | Vector tile (MVT) |
 | `/tiles.json` | GET | TileJSON metadata |
 
+### Locus Geocoding Server (:8083)
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/health` | GET | Health check |
+| `/api/v1/stats` | GET | Index statistics |
+| `/api/v1/search` | GET | Forward geocoding (text to coordinates) |
+| `/api/v1/autocomplete` | GET | Prefix-based autocomplete |
+| `/api/v1/reverse` | GET | Reverse geocoding (coordinates to address) |
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  UI (React) / WASM (Browser) / API (mongoose)          │
-├─────────────────────────────────────────────────────────┤
-│  Fleet Optimization [PLANNED]                           │
-│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌───────┐ │
-│  │  HoSE  │ │ Tempo  │ │ Arbor  │ │ Sigma  │ │ Pulse │ │
-│  │  HoS   │ │ Time   │ │ Search │ │ Fleet  │ │ PTA   │ │
-│  └────────┘ └────────┘ └────────┘ └────────┘ └───────┘ │
-├─────────────────────────────────────────────────────────┤
-│  Domain Libraries                                       │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐       │
-│  │  FuelWise   │ │    Velo     │ │   Carta     │       │
-│  │  Refueling  │ │   Routing   │ │   Tiles     │       │
-│  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘       │
-│         │               │               │               │
-│  ┌──────┴───────┐       └───────┬───────┘               │
-│  │    Ralph     │        ┌──────┴──────┐                │
-│  │  LP/MIP      │        │   shared    │                │
-│  │  Solver      │        │ geo,protobuf│                │
-│  └──────────────┘        │ inflate,pbf │                │
-│                          └──────┬──────┘                │
-│                                 │                       │
-│                          ┌──────┴──────┐                │
-│                          │   vendor    │                │
-│                          │  (miniz)    │                │
-│                          └─────────────┘                │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  UI (React) / WASM (Browser) / API (mongoose)                    │
+├──────────────────────────────────────────────────────────────────┤
+│  Fleet Optimization [PLANNED]                                     │
+│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌───────┐           │
+│  │  HoSE  │ │ Tempo  │ │ Arbor  │ │ Sigma  │ │ Pulse │           │
+│  │  HoS   │ │ Time   │ │ Search │ │ Fleet  │ │ PTA   │           │
+│  └────────┘ └────────┘ └────────┘ └────────┘ └───────┘           │
+├──────────────────────────────────────────────────────────────────┤
+│  Domain Libraries                                                 │
+│  ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐         │
+│  │ FuelWise  │ │   Velo    │ │  Carta    │ │  Locus    │         │
+│  │ Refueling │ │  Routing  │ │  Tiles    │ │ Geocoding │         │
+│  └─────┬─────┘ └─────┬─────┘ └─────┬─────┘ └─────┬─────┘         │
+│        │             │             │             │                │
+│  ┌─────┴─────┐       └──────┬──────┴─────────────┘                │
+│  │   Ralph   │        ┌─────┴─────┐                               │
+│  │  LP/MIP   │        │  shared   │                               │
+│  │  Solver   │        │geo,protobuf                               │
+│  └───────────┘        │inflate,pbf│                               │
+│                       └─────┬─────┘                               │
+│                             │                                     │
+│                       ┌─────┴─────┐                               │
+│                       │  vendor   │                               │
+│                       │  (miniz)  │                               │
+│                       └───────────┘                               │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+The GIS trifecta (**Velo**, **Carta**, **Locus**) provides complete geographic functionality:
+- **Velo**: Routing (A* search, turn-by-turn navigation)
+- **Carta**: Map tiles (vector MVT, raster PNG)
+- **Locus**: Geocoding (forward search, autocomplete, reverse lookup)
 
 See `docs/ARCHITECTURE.md` for detailed architecture documentation.
 See `docs/TODO_FEATURES.md` for planned component specifications.
@@ -307,12 +341,13 @@ Geometry encoding:
 
 ```bash
 make test
-# Expected: ~227 tests pass across all modules
+# Expected: ~279 tests pass across all modules
 # - ralph: 73 tests
 # - fuelwise: 33 tests
 # - shared: 41 tests
 # - velo: 47 tests
 # - carta: 33 tests
+# - locus: 52 tests
 ```
 
 ## Performance Targets
@@ -324,14 +359,18 @@ make test
 | PNG tile (512x512) | < 100ms |
 | Refuel optimization | < 100ms |
 | PBF parse (300MB) | < 15s |
+| Forward geocoding | < 20µs |
+| Autocomplete | < 20µs |
+| Reverse geocoding | < 30µs |
 
 ## Common Pitfalls
 
 1. **Ralph**: RHS must be non-negative for constraints
 2. **Velo**: Bidirectional search needs consistent heuristic
 3. **Carta**: Coordinate order is (lon, lat) in MVT
-4. **FuelWise**: Stations must be sorted by distance_from_start
-5. **Memory**: Free all allocated structures (solutions, routes, contexts)
+4. **Locus**: All text queries must be UTF-8 encoded
+5. **FuelWise**: Stations must be sorted by distance_from_start
+6. **Memory**: Free all allocated structures (solutions, routes, contexts)
 
 ## C Memory Safety Guidelines
 

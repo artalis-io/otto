@@ -19,14 +19,14 @@ FuelWise is a truck refueling optimization platform built on a layered architect
 │                             ▼                                                │
 │                      Domain Libraries                                        │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                │   │
-│  │  │   FuelWise   │  │     Velo     │  │    Carta     │                │   │
-│  │  │   Refueling  │  │   Routing    │  │  Map Tiles   │                │   │
-│  │  │ Optimization │  │   Engine     │  │  Generator   │                │   │
-│  │  │              │  │              │  │              │                │   │
-│  │  │ libfuelwise.a│  │  libvelo.a   │  │ libcarta.a   │                │   │
-│  │  └──────┬───────┘  └──────────────┘  └──────────────┘                │   │
-│  └─────────┼────────────────────────────────────────────────────────────┘   │
+│  │  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐        │   │
+│  │  │  FuelWise  │ │    Velo    │ │   Carta    │ │   Locus    │        │   │
+│  │  │ Refueling  │ │  Routing   │ │ Map Tiles  │ │ Geocoding  │        │   │
+│  │  │Optimization│ │  Engine    │ │ Generator  │ │  Engine    │        │   │
+│  │  │            │ │            │ │            │ │            │        │   │
+│  │  │libfuelwise │ │ libvelo.a  │ │libcarta.a  │ │liblocus.a  │        │   │
+│  │  └─────┬──────┘ └────────────┘ └────────────┘ └────────────┘        │   │
+│  └────────┼─────────────────────────────────────────────────────────────┘   │
 │            │                                                                 │
 ├────────────┼─────────────────────────────────────────────────────────────────┤
 │            ▼                                                                 │
@@ -87,14 +87,29 @@ fuelwise-platform/
 │   ├── ui/             #   Tile Viewer React Application
 │   └── wasm/           #   WebAssembly build
 │
+├── locus/              # Geocoding Engine (liblocus.a)
+│   ├── include/        #   Public headers (locus.h, lc_*.h)
+│   ├── src/            #   Trie, n-gram, spatial index, PBF parsing
+│   ├── tests/          #   52 tests
+│   ├── api/            #   Locus Geocoding Server REST API
+│   ├── tools/          #   CLI search utilities
+│   └── wasm/           #   WebAssembly build
+│
 ├── shared/             # Shared utilities (libshared.a)
 │   ├── include/        #   Common headers
 │   ├── src/            #   Geo utilities, protobuf helpers
 │   └── tests/          #   23 tests
 │
+├── forge/              # Async Job Queue [PLANNED]
+│   ├── include/        #   Public headers
+│   ├── src/            #   Broker, dispatcher, SQLite persistence
+│   ├── api/            #   REST + WebSocket server (:8084)
+│   └── consumers/      #   Built-in job consumers
+│
 ├── vendor/             # Third-party code (vendored)
 │   ├── miniz/          #   Public domain zlib implementation
 │   ├── mongoose/       #   Embedded HTTP server
+│   ├── sqlite/         #   Embedded SQL database [PLANNED]
 │   └── clay/           #   UI layout library (future)
 │
 ├── scripts/            # Utility scripts
@@ -136,17 +151,17 @@ fuelwise-platform/
              │            │            │
              └────────────┼────────────┘
                           │
-    ┌─────────────────────┼─────────────────────┐
-    │                     │                     │
-    ▼                     ▼                     ▼
-┌─────────┐         ┌──────────┐         ┌──────────┐
-│FuelWise │         │   Velo   │         │  Carta   │
-│Refueling│         │ Routing  │         │  Tiles   │
-└────┬────┘         └────┬─────┘         └────┬─────┘
-     │                   │                    │
-     │                   └────────┬───────────┘
-     │                            │
-     ▼                            ▼
+    ┌──────────────────┼──────────────────┬──────────────────┐
+    │                  │                  │                  │
+    ▼                  ▼                  ▼                  ▼
+┌─────────┐      ┌──────────┐      ┌──────────┐      ┌──────────┐
+│FuelWise │      │   Velo   │      │  Carta   │      │  Locus   │
+│Refueling│      │ Routing  │      │  Tiles   │      │ Geocoding│
+└────┬────┘      └────┬─────┘      └────┬─────┘      └────┬─────┘
+     │                │                 │                 │
+     │                └─────────┬───────┴─────────────────┘
+     │                          │
+     ▼                          ▼
 ┌─────────┐              ┌──────────────┐
 │  Ralph  │              │    shared    │
 │ Solver  │              │ (geo, proto) │
@@ -207,6 +222,28 @@ Map tile generation:
 - Web Mercator projection
 - Software rasterization with anti-aliasing
 
+### Locus - Geocoding Engine
+**Location:** `locus/`
+**Library:** `liblocus.a`
+**Dependencies:** `libshared.a`, `vendor/miniz`
+
+**L**ocation **O**riented **C**oordinate **U**nification **S**ystem - geocoding for OSM data:
+- Forward geocoding (text search → coordinates)
+- Autocomplete (prefix-based type-ahead suggestions)
+- Reverse geocoding (coordinates → nearest address/place)
+- Fuzzy matching using trigram similarity
+- Binary index format (.lcix) for fast loading
+
+Data structures:
+- **Prefix Trie**: O(m) lookup for autocomplete (m = query length)
+- **Trigram Index**: Jaccard similarity for fuzzy matching
+- **Spatial Grid**: Cell-based geographic index for reverse geocoding
+
+The GIS trifecta (**Velo**, **Carta**, **Locus**) provides complete geographic functionality:
+- **Velo**: Routing (A* search, turn-by-turn navigation)
+- **Carta**: Map tiles (vector MVT, raster PNG)
+- **Locus**: Geocoding (forward search, autocomplete, reverse lookup)
+
 ### Shared - Common Utilities
 **Location:** `shared/`
 **Library:** `libshared.a`
@@ -224,7 +261,26 @@ Common code used by velo and carta:
 Vendored libraries (each has its own `CLAUDE.md` with API documentation):
 - **miniz**: Public domain zlib implementation for DEFLATE compression ([vendor/miniz/CLAUDE.md](../vendor/miniz/CLAUDE.md))
 - **mongoose**: Embedded HTTP server library ([vendor/mongoose/CLAUDE.md](../vendor/mongoose/CLAUDE.md))
+- **sqlite**: Embedded SQL database (planned, for Forge job persistence)
 - **clay**: High-performance 2D UI layout library ([vendor/clay/CLAUDE.md](../vendor/clay/CLAUDE.md))
+
+### Forge - Async Job Queue [PLANNED]
+**Location:** `forge/`
+**Dependencies:** `vendor/sqlite`, `vendor/mongoose`
+
+Generic job broker for long-running async tasks. See [FORGE.md](FORGE.md) for full specification.
+
+- Job submission with polling and WebSocket streaming
+- SQLite persistence for durability
+- Spawns consumer processes for each job type
+- Language-agnostic consumer protocol (stdin/stdout/stderr)
+
+Consumers are standalone executables registered by job type:
+- `fg-ralph`: LP/MIP solving
+- `fg-fuelwise`: Refueling optimization
+- `fg-velo`: Batch routing
+- `fg-locus`: Batch geocoding
+- `fg-carta`: Tile generation
 
 ## Data Flow
 
@@ -295,6 +351,34 @@ Route Request → API/WASM → Velo
                     Return Route Path
 ```
 
+### Geocoding Flow
+```
+Search Request → API/WASM → Locus
+                              │
+                              ▼
+                    Load Index from PBF/.lcix
+                       (lc_pbf.c / lc_serialize.c)
+                              │
+                              ▼
+                    Build Search Index
+                      (lc_index.c)
+                              │
+                    ┌─────────┴─────────┐
+                    │                   │
+                    ▼                   ▼
+             Forward Search      Reverse Geocode
+             (lc_trie.c)        (lc_spatial.c)
+                    │                   │
+                    ▼                   │
+             Fuzzy Fallback             │
+             (lc_ngram.c)               │
+                    │                   │
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                    Return Results
+```
+
 ## Build System
 
 ### Top-Level Targets
@@ -310,9 +394,11 @@ make clean            # Clean all build artifacts
 make fuelwise-api     # Build FuelWise REST API (fuelwise/api)
 make velo-api         # Build Velo route server (velo/api)
 make carta-api        # Build Carta tile server (carta/api)
+make locus-api        # Build Locus geocoding server (locus/api)
 make run-fuelwise-api # Run FuelWise API on :8080
 make run-velo-api     # Show Velo route server usage
 make run-carta-api    # Show Carta tile server usage
+make run-locus-api    # Show Locus geocoding server usage
 ```
 
 ### WebAssembly Targets
@@ -321,6 +407,7 @@ make wasm             # Build all WASM modules
 make wasm-fuelwise    # Build FuelWise WASM
 make wasm-velo        # Build Velo WASM
 make wasm-carta       # Build Carta WASM
+make wasm-locus       # Build Locus WASM
 make wasm-types       # Generate TypeScript declarations
 make wasm-test        # Test WASM builds
 ```
@@ -331,6 +418,7 @@ make ralph        # Build libralph.a
 make fuelwise     # Build libfuelwise.a (depends on ralph)
 make velo         # Build libvelo.a (depends on shared, vendor)
 make carta        # Build libcarta.a (depends on shared, vendor)
+make locus        # Build liblocus.a (depends on shared, vendor)
 make shared       # Build libshared.a
 ```
 
@@ -340,11 +428,13 @@ make test-ralph       # 65 tests
 make test-fuelwise    # 32 tests
 make test-velo        # 39 tests
 make test-carta       # 33 tests
+make test-locus       # 52 tests
 make test-shared      # 23 tests
 make test-api         # All API endpoint tests (requires OSM data)
 make test-fuelwise-api# FuelWise API tests
 make test-velo-api    # Velo API tests
 make test-carta-api   # Carta API tests
+make test-locus-api   # Locus API tests
 ```
 
 ## Design Principles
@@ -364,6 +454,9 @@ make test-carta-api   # Carta API tests
 | PNG tile (512x512) | ~75ms | Carta rasterizer |
 | Refuel optimization | <100ms | FuelWise LP |
 | PBF parse (Hungary) | ~10s | 300MB, 35M nodes |
+| Forward geocoding | <20µs | Locus trie + trigram |
+| Autocomplete | <20µs | Locus prefix trie |
+| Reverse geocoding | <30µs | Locus spatial grid |
 
 ## WASM Considerations
 

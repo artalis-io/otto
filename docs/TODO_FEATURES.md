@@ -11,9 +11,10 @@ This document outlines planned features at the project level, including new comp
 5. [Sigma - Fleet Plan Selection Engine](#5-sigma---fleet-plan-selection-engine)
 6. [Pulse - Execution Tracker and PTA Engine](#6-pulse---execution-tracker-and-pta-engine)
 7. [Nexus - External Data Integration Gateway](#7-nexus---external-data-integration-gateway)
-8. [Distance and Duration Estimation](#8-distance-and-duration-estimation-cross-cutting)
-9. [Cost and Profit Calculations](#9-cost-and-profit-calculations-cross-cutting)
-10. [FuelWise Integration](#10-fuelwise-integration-refueling-in-search)
+8. [Forge - Async Job Queue](#8-forge---async-job-queue)
+9. [Distance and Duration Estimation](#9-distance-and-duration-estimation-cross-cutting)
+10. [Cost and Profit Calculations](#10-cost-and-profit-calculations-cross-cutting)
+11. [FuelWise Integration](#11-fuelwise-integration-refueling-in-search)
 
 ---
 
@@ -35,6 +36,7 @@ The project is currently named "ralph" (after the LP solver component), but the 
 | `arbor/` | **Planned**: State-space search framework |
 | `sigma/` | **Planned**: Fleet-wide plan selection (set covering MIP) |
 | `pulse/` | **Planned**: Execution tracking and PTA computation |
+| `forge/` | **Planned**: Async job queue and worker orchestration |
 
 ### Problem
 
@@ -1995,7 +1997,123 @@ External Systems                    OTTO Platform
 
 ---
 
-## 8. Distance and Duration Estimation (Cross-Cutting)
+## 8. Forge - Async Job Queue
+
+**F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution
+
+### Overview
+
+Forge is a generic job broker for running long-running async tasks like optimization, batch geocoding, and index building. It provides job submission, polling, WebSocket streaming, and webhook callbacks. Jobs are persisted in SQLite and executed by registered consumer processes.
+
+**Key Design Principle**: Forge is a dumb pipe. It doesn't know about LP solvers or geocoding - it just spawns processes and captures their output. Consumers are standalone executables that follow a simple stdin/stdout protocol.
+
+### Full Documentation
+
+See **[docs/FORGE.md](FORGE.md)** for complete architecture specification including:
+
+- Consumer protocol (stdin/stdout/stderr)
+- REST API design with example requests/responses
+- SQLite schema for job persistence
+- Consumer registration via config file
+
+### Quick Summary
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        Forge Broker                          │
+│  1. Receive job (type="solve_lp", payload={...})             │
+│  2. Look up consumer for "solve_lp"                          │
+│  3. Spawn: ./consumers/solve_lp                              │
+│  4. Write payload to stdin                                   │
+│  5. Read progress from stderr                                │
+│  6. Read result from stdout                                  │
+│  7. Capture exit code                                        │
+└──────────────────────────────────────────────────────────────┘
+                           │
+                           │ spawn
+                           ▼
+                 ┌─────────────────┐
+                 │    Consumer     │
+                 │                 │
+                 │ stdin  ← JSON payload
+                 │ stderr → PROGRESS 0.5 message...
+                 │ stdout → JSON result
+                 │ exit   → 0=success, 1=failure
+                 └─────────────────┘
+```
+
+### Consumer Protocol
+
+A consumer is any executable that follows this contract:
+
+**stdin**: JSON payload (the job parameters)
+**stdout**: JSON result (captured when process exits)
+**stderr**: Progress updates in simple format:
+```
+PROGRESS 0.0 Starting...
+PROGRESS 0.25 Loading data...
+PROGRESS 0.5 Solving...
+PROGRESS 1.0 Done
+LOG Some debug info
+WARN Something suspicious
+ERROR Something bad (but continuing)
+```
+**exit code**: 0 = success, non-zero = failure
+
+### REST API
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v1/jobs` | POST | Submit job, get ID |
+| `/api/v1/jobs/:id` | GET | Get job status |
+| `/api/v1/jobs/:id/result` | GET | Get job result |
+| `/api/v1/jobs/:id` | DELETE | Cancel job |
+| `/api/v1/jobs/:id/stream` | WS | Stream progress |
+| `/api/v1/consumers` | GET | List registered consumers |
+
+### Dependencies
+
+- **SQLite**: Embedded, vendored (public domain) - job persistence
+- **mongoose**: Already have it for HTTP/WebSocket
+- **pthreads**: Standard on POSIX, available on Windows
+
+### TODOs
+
+**Phase 1: Core Infrastructure**
+- [ ] Define job and consumer data structures
+- [ ] Implement SQLite persistence layer
+- [ ] Implement consumer registry (config file or directory convention)
+- [ ] Implement job lifecycle (pending → running → completed/failed)
+
+**Phase 2: Process Management**
+- [ ] Implement process spawning (fork/exec on POSIX)
+- [ ] Implement stdin/stdout/stderr pipe management
+- [ ] Implement progress parsing from stderr
+- [ ] Implement timeout handling and job cancellation
+- [ ] Implement max_concurrent limits per consumer type
+
+**Phase 3: REST API**
+- [ ] Implement job submission endpoint
+- [ ] Implement job status/result endpoints
+- [ ] Implement job cancellation endpoint
+- [ ] Implement WebSocket streaming for progress
+
+**Phase 4: Built-in Consumers**
+- [ ] Create fg-ralph consumer (LP/MIP solving)
+- [ ] Create fg-fuelwise consumer (refueling optimization)
+- [ ] Create fg-locus consumer (batch geocoding)
+- [ ] Create fg-velo consumer (batch routing)
+- [ ] Create consumer helper library (optional)
+
+**Phase 5: Advanced Features**
+- [ ] Implement webhook callbacks for job completion
+- [ ] Implement job TTL and auto-cleanup
+- [ ] Implement job priority queue
+- [ ] Add comprehensive job statistics
+
+---
+
+## 9. Distance and Duration Estimation (Cross-Cutting)
 
 ### Overview
 
@@ -2067,7 +2185,7 @@ double duration = route.total_duration;
 
 ---
 
-## 9. Cost and Profit Calculations (Cross-Cutting)
+## 10. Cost and Profit Calculations (Cross-Cutting)
 
 ### Overview
 
@@ -2198,7 +2316,7 @@ This allows accurate fuel cost estimation for trucks that consume more fuel when
 
 ---
 
-## 10. FuelWise Integration (Refueling in Search)
+## 11. FuelWise Integration (Refueling in Search)
 
 ### Overview
 
@@ -2283,16 +2401,18 @@ Current and planned components:
 | `sigma/` | **Planned** | Fleet-wide plan selection (set covering MIP) |
 | `pulse/` | **Planned** | Execution tracking and PTA computation |
 | `nexus/` | **Planned** | External data integration gateway (TMS/ELD/LoadBoard) |
+| `forge/` | **Planned** | Async job queue and worker orchestration |
 | `api/` | Active | REST API server |
 | `ui/` | Active | React frontend |
 
 ## Implementation Priority
 
 1. **Project Renaming to OTTO** - Low priority (cosmetic, do when convenient)
-2. **HoSE Core** - High priority (essential for realistic trucking optimization)
-3. **Tempo Core** - High priority (time windows needed for realistic planning)
-4. **Pulse Core** - High priority (PTA computation needed everywhere)
-5. **Arbor Core** - Medium priority (enables advanced optimization)
-6. **Sigma Core** - Medium priority (fleet-wide optimization, depends on Arbor)
-7. **Nexus Core** - Medium priority (data integration, enables real-world deployment)
-8. **Component Integration** - High priority (HoSE + Tempo + Pulse + Arbor + Sigma + Nexus + FuelWise)
+2. **Forge Core** - High priority (enables async job execution for all modules)
+3. **HoSE Core** - High priority (essential for realistic trucking optimization)
+4. **Tempo Core** - High priority (time windows needed for realistic planning)
+5. **Pulse Core** - High priority (PTA computation needed everywhere)
+6. **Arbor Core** - Medium priority (enables advanced optimization)
+7. **Sigma Core** - Medium priority (fleet-wide optimization, depends on Arbor)
+8. **Nexus Core** - Medium priority (data integration, enables real-world deployment)
+9. **Component Integration** - High priority (Forge + HoSE + Tempo + Pulse + Arbor + Sigma + Nexus + FuelWise)
