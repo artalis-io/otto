@@ -36,9 +36,7 @@ extern "C" {
  * Configuration
  * ============================================================================ */
 
-#ifndef CS_PROVIDER_MAX_ROUTE_POINTS
-#define CS_PROVIDER_MAX_ROUTE_POINTS 4096  /* Simplification applied when exceeded */
-#endif
+/* Route points are stored dynamically - no hard limit */
 
 #ifndef CS_PROVIDER_MAX_SEARCH_RESULTS
 #define CS_PROVIDER_MAX_SEARCH_RESULTS 10

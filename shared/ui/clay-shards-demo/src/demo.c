@@ -58,8 +58,8 @@ typedef struct {
     bool has_end;
     CsGeoPoint start;
     CsGeoPoint end;
-    /* Route geometry from provider */
-    CsGeoPoint points[CS_PROVIDER_MAX_ROUTE_POINTS];
+    /* Route geometry - pointer to provider's buffer (no copy needed) */
+    const CsGeoPoint *points;
     int point_count;
     double distance_m;
     double duration_s;
@@ -377,7 +377,7 @@ static void render_route_panel(void) {
             if (cs_button(CS_ID("clear_route"), "Clear", &clear_btn).clicked) {
                 g_app.route.has_start = false;
                 g_app.route.has_end = false;
-                g_app.route.point_count = 0;
+                g_app.route.point_count = 0; g_app.route.points = NULL;
                 g_app.route.error = false;
             }
         } else if (g_app.route.point_count > 0) {
@@ -395,7 +395,7 @@ static void render_route_panel(void) {
             if (cs_button(CS_ID("clear_route"), "Clear Route", &clear_btn).clicked) {
                 g_app.route.has_start = false;
                 g_app.route.has_end = false;
-                g_app.route.point_count = 0;
+                g_app.route.point_count = 0; g_app.route.points = NULL;
                 cs_provider_route_clear();
             }
         } else if (!g_app.route.has_start) {
@@ -486,7 +486,7 @@ static void render_ui(void) {
             if (g_app.route.has_start && g_app.route.has_end) {
                 g_app.route.loading = true;
                 g_app.route.error = false;
-                g_app.route.point_count = 0;
+                g_app.route.point_count = 0; g_app.route.points = NULL;
                 cs_provider_route(g_app.route.start, g_app.route.end);
             }
             g_app.route.dragging_marker = false;
@@ -654,7 +654,7 @@ EXPORT int map_handle_click(float x, float y) {
             g_app.route.has_end = true;
             g_app.route.loading = true;
             g_app.route.error = false;
-            g_app.route.point_count = 0;
+            g_app.route.point_count = 0; g_app.route.points = NULL;
 
             /* Request route from provider */
             cs_provider_route(g_app.route.start, g_app.route.end);
@@ -678,17 +678,12 @@ static void update_route_state(void) {
         if (result->error) {
             g_app.route.error = true;
             g_app.route.loading = false;
-            g_app.route.point_count = 0;
+            g_app.route.point_count = 0; g_app.route.points = NULL;
+            g_app.route.points = NULL;
         } else {
-            /* Copy route geometry */
-            int count = result->count;
-            if (count > CS_PROVIDER_MAX_ROUTE_POINTS) {
-                count = CS_PROVIDER_MAX_ROUTE_POINTS;
-            }
-            for (int i = 0; i < count; i++) {
-                g_app.route.points[i] = result->points[i];
-            }
-            g_app.route.point_count = count;
+            /* Use provider's buffer directly (no copy) */
+            g_app.route.points = result->points;
+            g_app.route.point_count = result->count;
             g_app.route.distance_m = result->distance_m;
             g_app.route.duration_s = result->duration_s;
             g_app.route.loading = false;
