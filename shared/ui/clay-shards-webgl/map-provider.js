@@ -213,9 +213,11 @@ export class MapProvider {
                 return;
             }
 
-            const namePtr = this._allocString(data.name || '');
+            // Locus API returns: display_name, place, street
+            // Map to our fields: name, street, city, country
+            const namePtr = this._allocString(data.display_name || data.name || '');
             const streetPtr = this._allocString(data.street || '');
-            const cityPtr = this._allocString(data.city || '');
+            const cityPtr = this._allocString(data.place || data.city || '');
             const countryPtr = this._allocString(data.country || '');
 
             wasm.cs_provider_on_reverse_complete(namePtr, streetPtr, cityPtr, countryPtr);
