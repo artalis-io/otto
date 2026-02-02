@@ -26,7 +26,8 @@ CORE_SRCS = src/locus.c \
             src/lc_ngram.c \
             src/lc_spatial.c \
             src/lc_index.c \
-            src/lc_serialize.c
+            src/lc_serialize.c \
+            src/lc_query.c
 
 # Object files
 CORE_OBJS = $(CORE_SRCS:.c=.o)

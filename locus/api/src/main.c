@@ -6,6 +6,7 @@
  */
 
 #include "locus.h"
+#include "lc_serialize.h"
 #include "mongoose.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -417,7 +418,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Load index */
+    /* Build index from PBF
+     * TODO: Add caching with geometry support in serialization format */
+    clock_t load_start = clock();
+
     fprintf(stderr, "locus-api: Loading %s...\n", pbf_file);
     g_index = lc_index_create();
     if (!g_index) {
@@ -432,9 +436,13 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    fprintf(stderr, "locus-api: Loaded %u entities (%.1f MB)\n",
+    clock_t load_end = clock();
+    double load_time = (double)(load_end - load_start) / CLOCKS_PER_SEC;
+
+    fprintf(stderr, "locus-api: Loaded %u entities (%.1f MB) in %.1fs\n",
             lc_index_entity_count(g_index),
-            (double)lc_index_memory_usage(g_index) / (1024.0 * 1024.0));
+            (double)lc_index_memory_usage(g_index) / (1024.0 * 1024.0),
+            load_time);
 
     /* Setup signal handlers */
     signal(SIGINT, signal_handler);

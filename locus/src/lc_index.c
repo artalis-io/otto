@@ -8,6 +8,7 @@
 #include "lc_pbf.h"
 #include "lc_normalize.h"
 #include "lc_serialize.h"
+#include "lc_query.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -139,9 +140,45 @@ LCStatus lc_index_build(LCIndex *index, LCEntityStore *store)
             }
         }
 
+        /* Index ADDRESS entities by their street name */
+        if (e->fclass == LC_CLASS_ADDRESS && e->address.street && e->address.street[0]) {
+            char *normalized = lc_normalize(e->address.street);
+            if (normalized) {
+                lc_trie_insert(index->trie, normalized, i);
+                lc_ngram_index_name(index->ngrams, normalized, i);
+                free(normalized);
+            }
+        }
+
         /* Index in spatial grid */
-        if (index->grid && (e->centroid.lat != 0 || e->centroid.lon != 0)) {
-            lc_grid_insert(index->grid, e->centroid, i);
+        if (index->grid) {
+            if (e->centroid.lat != 0 || e->centroid.lon != 0) {
+                lc_grid_insert(index->grid, e->centroid, i);
+            }
+
+            /* For streets with geometry, index sampled geometry points.
+             * This ensures streets are found when query is anywhere along the street.
+             * We ensure enough points are indexed so that any location along the
+             * street is within ~200m of an indexed point. */
+            if (e->fclass == LC_CLASS_STREET && e->geometry && e->geometry->count > 1) {
+                uint32_t count = e->geometry->count;
+
+                if (count <= 10) {
+                    /* Short streets: index all points */
+                    for (uint32_t j = 0; j < count; j++) {
+                        lc_grid_insert(index->grid, e->geometry->points[j], i);
+                    }
+                } else {
+                    /* Longer streets: index every Nth point to get ~10 indexed points */
+                    uint32_t step = count / 10;
+                    if (step < 2) step = 2;
+                    for (uint32_t j = 0; j < count; j += step) {
+                        lc_grid_insert(index->grid, e->geometry->points[j], i);
+                    }
+                    /* Always include the last point */
+                    lc_grid_insert(index->grid, e->geometry->points[count - 1], i);
+                }
+            }
         }
     }
 
@@ -300,6 +337,16 @@ static int match_compare(const void *a, const void *b)
     return 0;
 }
 
+/**
+ * Check if entity's house number matches the query house number.
+ * Handles exact match and common variations (e.g., "5" matches "5", "5/A" matches "5/A")
+ */
+static int housenumber_matches(const LCEntity *e, const char *query_number)
+{
+    if (!query_number || !e->address.housenumber) return 0;
+    return strcasecmp(e->address.housenumber, query_number) == 0;
+}
+
 LCStatus lc_search(const LCIndex *index, const char *query,
                    const LCSearchOptions *opts, LCSearchResult *result)
 {
@@ -315,10 +362,16 @@ LCStatus lc_search(const LCIndex *index, const char *query,
         opts = &default_opts;
     }
 
+    /* Parse query to extract street name and house number */
+    LCParsedQuery parsed = {0};
+    int has_address_query = lc_parse_address_query(query, &parsed);
+    const char *search_term = has_address_query ? parsed.street : query;
+
     /* Normalize query */
-    char *normalized = lc_normalize(query);
+    char *normalized = lc_normalize(search_term);
     if (!normalized || !normalized[0]) {
         free(normalized);
+        lc_parsed_query_free(&parsed);
         return LC_OK;
     }
 
@@ -327,6 +380,7 @@ LCStatus lc_search(const LCIndex *index, const char *query,
     LCSearchMatch *matches = calloc(capacity, sizeof(LCSearchMatch));
     if (!matches) {
         free(normalized);
+        lc_parsed_query_free(&parsed);
         return LC_ERROR_OUT_OF_MEMORY;
     }
 
@@ -419,6 +473,24 @@ LCStatus lc_search(const LCIndex *index, const char *query,
         }
     }
 
+    /* If query has house number, boost matching ADDRESS entities */
+    if (parsed.has_housenumber && parsed.housenumber) {
+        for (size_t i = 0; i < count; i++) {
+            uint32_t eid = matches[i].entity_id;
+            const LCEntity *e = &index->entities->entities[eid];
+
+            if (e->fclass == LC_CLASS_ADDRESS) {
+                if (housenumber_matches(e, parsed.housenumber)) {
+                    /* Significant boost for exact address match */
+                    matches[i].score += 0.5;
+                } else {
+                    /* Demote addresses with wrong house number */
+                    matches[i].score -= 0.3;
+                }
+            }
+        }
+    }
+
     /* Sort by score */
     if (count > 1) {
         qsort(matches, count, sizeof(LCSearchMatch), match_compare);
@@ -433,6 +505,7 @@ LCStatus lc_search(const LCIndex *index, const char *query,
     result->query_time_ms = (double)(end - start) * 1000.0 / CLOCKS_PER_SEC;
 
     free(normalized);
+    lc_parsed_query_free(&parsed);
     return LC_OK;
 }
 

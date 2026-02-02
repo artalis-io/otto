@@ -140,6 +140,50 @@ LCStatus lc_address_copy(LCAddress *dst, const LCAddress *src)
 }
 
 /* ============================================================================
+ * LineString Functions
+ * ============================================================================ */
+
+LCLineString *lc_linestring_create(uint32_t capacity)
+{
+    LCLineString *line = calloc(1, sizeof(LCLineString));
+    if (!line) return NULL;
+
+    if (capacity > 0) {
+        line->points = calloc(capacity, sizeof(SHCoord));
+        if (!line->points) {
+            free(line);
+            return NULL;
+        }
+    }
+    line->count = 0;
+    return line;
+}
+
+void lc_linestring_free(LCLineString *line)
+{
+    if (!line) return;
+    free(line->points);
+    free(line);
+}
+
+int lc_linestring_add_point(LCLineString *line, SHCoord coord)
+{
+    if (!line) return 0;
+
+    /* Grow if needed (start with 8, double each time) */
+    uint32_t capacity = line->points ? line->count : 0;
+    if (line->count >= capacity) {
+        uint32_t new_cap = capacity == 0 ? 8 : capacity * 2;
+        SHCoord *new_points = realloc(line->points, new_cap * sizeof(SHCoord));
+        if (!new_points) return 0;
+        line->points = new_points;
+    }
+
+    line->points[line->count++] = coord;
+    return 1;
+}
+
+/* ============================================================================
  * Entity Functions
  * ============================================================================ */
 
@@ -164,6 +208,7 @@ void lc_entity_free(LCEntity *entity)
         free(entity->alt_names);
     }
     free(entity->poi_type);
+    lc_linestring_free(entity->geometry);
     lc_address_free(&entity->address);
 
     memset(entity, 0, sizeof(LCEntity));
@@ -215,6 +260,7 @@ void lc_entity_store_free(LCEntityStore *store)
             free(e->alt_names);
         }
         free(e->poi_type);
+        lc_linestring_free(e->geometry);
 
         /* Address strings */
         LCAddress *a = &e->address;

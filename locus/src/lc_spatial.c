@@ -205,13 +205,16 @@ size_t lc_grid_find_nearest(const LCSpatialGrid *grid, const LCEntityStore *stor
 {
     if (!grid || !store || !results || max_results == 0) return 0;
 
-    /* Start with nearby cells, expand if needed */
-    double search_radius = 1000.0;  /* Start with 1km */
-    uint32_t candidates[256];
+    /* Start with a small radius and expand if needed.
+     * We use a larger buffer (1024) to ensure we get enough candidates
+     * from nearby cells before they get displaced by entities from farther cells. */
+    double search_radius = 200.0;  /* Start with 200m */
+    uint32_t candidates[1024];
     size_t num_candidates = 0;
 
+    /* Expand radius until we have at least max_results candidates */
     while (num_candidates < max_results && search_radius < 100000.0) {
-        num_candidates = lc_grid_query_radius(grid, coord, search_radius, 256, candidates);
+        num_candidates = lc_grid_query_radius(grid, coord, search_radius, 1024, candidates);
         search_radius *= 2;
     }
 
@@ -226,7 +229,9 @@ size_t lc_grid_find_nearest(const LCSpatialGrid *grid, const LCEntityStore *stor
         if (candidates[i] >= store->count) continue;
 
         const LCEntity *entity = &store->entities[candidates[i]];
-        double dist = sh_haversine(coord, entity->centroid);
+
+        /* Use geometry-aware distance calculation */
+        double dist = lc_point_to_entity_distance(coord, entity);
 
         temp[valid_count].entity_id = candidates[i];
         temp[valid_count].distance_m = dist;
@@ -259,4 +264,94 @@ size_t lc_grid_memory_usage(const LCSpatialGrid *grid)
 int lc_grid_cell_count(const LCSpatialGrid *grid)
 {
     return grid ? grid->grid_width * grid->grid_height : 0;
+}
+
+/* ============================================================================
+ * Point-to-Line Distance Functions
+ * ============================================================================ */
+
+/*
+ * Project a point onto a line segment and compute distance.
+ *
+ * The algorithm:
+ * 1. Compute the projection parameter t = dot(P-A, B-A) / |B-A|^2
+ * 2. Clamp t to [0, 1] to stay on the segment
+ * 3. The closest point on segment is A + t*(B-A)
+ * 4. Return haversine distance from P to that closest point
+ *
+ * We work in degrees since the segments are typically short (< 1km),
+ * and use haversine for the final distance calculation.
+ */
+double lc_point_to_segment_distance(SHCoord point, SHCoord seg_a, SHCoord seg_b)
+{
+    /* Handle degenerate segment (points are the same) */
+    double dx = seg_b.lon - seg_a.lon;
+    double dy = seg_b.lat - seg_a.lat;
+    double seg_len_sq = dx * dx + dy * dy;
+
+    if (seg_len_sq < 1e-14) {
+        /* Segment is a point, just return distance to that point */
+        return sh_haversine(point, seg_a);
+    }
+
+    /* Compute projection parameter t */
+    double px = point.lon - seg_a.lon;
+    double py = point.lat - seg_a.lat;
+    double t = (px * dx + py * dy) / seg_len_sq;
+
+    /* Clamp t to [0, 1] */
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    /* Find closest point on segment */
+    SHCoord closest;
+    closest.lon = seg_a.lon + t * dx;
+    closest.lat = seg_a.lat + t * dy;
+
+    /* Return haversine distance to closest point */
+    return sh_haversine(point, closest);
+}
+
+double lc_point_to_linestring_distance(SHCoord point, const LCLineString *line)
+{
+    if (!line || !line->points || line->count < 1) {
+        return -1.0;
+    }
+
+    if (line->count == 1) {
+        /* Single point, just return distance to it */
+        return sh_haversine(point, line->points[0]);
+    }
+
+    /* Find minimum distance to any segment */
+    double min_dist = lc_point_to_segment_distance(point,
+                                                    line->points[0],
+                                                    line->points[1]);
+
+    for (uint32_t i = 1; i < line->count - 1; i++) {
+        double dist = lc_point_to_segment_distance(point,
+                                                    line->points[i],
+                                                    line->points[i + 1]);
+        if (dist < min_dist) {
+            min_dist = dist;
+        }
+    }
+
+    return min_dist;
+}
+
+double lc_point_to_entity_distance(SHCoord point, const LCEntity *entity)
+{
+    if (!entity) return -1.0;
+
+    /* For streets with geometry, use line distance */
+    if (entity->fclass == LC_CLASS_STREET && entity->geometry) {
+        double line_dist = lc_point_to_linestring_distance(point, entity->geometry);
+        if (line_dist >= 0) {
+            return line_dist;
+        }
+    }
+
+    /* Fall back to centroid distance */
+    return sh_haversine(point, entity->centroid);
 }

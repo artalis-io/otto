@@ -106,6 +106,42 @@ uint32_t lc_grid_entry_count(const LCSpatialGrid *grid);
 size_t lc_grid_memory_usage(const LCSpatialGrid *grid);
 int lc_grid_cell_count(const LCSpatialGrid *grid);
 
+/* ============================================================================
+ * Point-to-Line Distance Functions
+ * ============================================================================ */
+
+/*
+ * Calculate minimum distance (in meters) from a point to a line segment.
+ * Uses haversine-based calculation for geographic accuracy.
+ *
+ * @param point   The query point
+ * @param seg_a   First endpoint of the segment
+ * @param seg_b   Second endpoint of the segment
+ * @return        Distance in meters
+ */
+double lc_point_to_segment_distance(SHCoord point, SHCoord seg_a, SHCoord seg_b);
+
+/*
+ * Calculate minimum distance (in meters) from a point to a linestring.
+ * Returns the minimum distance to any segment in the linestring.
+ *
+ * @param point   The query point
+ * @param line    The linestring (array of points)
+ * @return        Distance in meters, or -1 if line is NULL or empty
+ */
+double lc_point_to_linestring_distance(SHCoord point, const LCLineString *line);
+
+/*
+ * Calculate distance from point to an entity, using geometry if available.
+ * For streets with geometry, uses point-to-line distance.
+ * For other entities, uses haversine to centroid.
+ *
+ * @param point   The query point
+ * @param entity  The entity
+ * @return        Distance in meters
+ */
+double lc_point_to_entity_distance(SHCoord point, const LCEntity *entity);
+
 #ifdef __cplusplus
 }
 #endif

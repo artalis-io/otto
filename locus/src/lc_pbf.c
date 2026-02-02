@@ -408,9 +408,10 @@ static char *dup_string(LCEntityStore *store, const char *s)
     return lc_entity_store_intern(store, s, strlen(s));
 }
 
-static void add_entity_from_tags(LCPBFContext *ctx, uint64_t osm_id,
-                                 LCEntityType type, const ParsedTags *tags,
-                                 double lat, double lon)
+static void add_entity_from_tags_with_geometry(LCPBFContext *ctx, uint64_t osm_id,
+                                                LCEntityType type, const ParsedTags *tags,
+                                                double lat, double lon,
+                                                LCLineString *geometry)
 {
     /* Skip if no name and not an address */
     if (!tags->name && !tags->addr_housenumber) return;
@@ -473,6 +474,11 @@ static void add_entity_from_tags(LCPBFContext *ctx, uint64_t osm_id,
     /* Copy name */
     entity.name = dup_string(ctx->entities, tags->name);
 
+    /* Attach geometry for streets */
+    if (entity.fclass == LC_CLASS_STREET && geometry) {
+        entity.geometry = geometry;
+    }
+
     /* Alternative names */
     int alt_count = 0;
     if (tags->name_en && tags->name && strcmp(tags->name_en, tags->name) != 0) alt_count++;
@@ -522,6 +528,13 @@ static void add_entity_from_tags(LCPBFContext *ctx, uint64_t osm_id,
 
     /* Add to store */
     lc_entity_store_add(ctx->entities, &entity);
+}
+
+static void add_entity_from_tags(LCPBFContext *ctx, uint64_t osm_id,
+                                 LCEntityType type, const ParsedTags *tags,
+                                 double lat, double lon)
+{
+    add_entity_from_tags_with_geometry(ctx, osm_id, type, tags, lat, lon, NULL);
 }
 
 /* ============================================================================
@@ -764,13 +777,19 @@ static void parse_way(LCPBFContext *ctx, const uint8_t *data, size_t len,
         ParsedTags tags;
         parse_tags(st, keys, vals, key_count, &tags);
 
-        /* Compute centroid from node refs */
+        /* Compute centroid from node refs and optionally build geometry */
         double lat = 0.0, lon = 0.0;
-        int found_coords = 0;
+        LCLineString *geometry = NULL;
+        int is_street = (tags.highway && lc_highway_is_named(tags.highway) && tags.name);
 
         if (refs && ref_count > 0 && ctx->node_cache) {
             double sum_lat = 0.0, sum_lon = 0.0;
             size_t coord_count = 0;
+
+            /* For streets, also build the geometry */
+            if (is_street) {
+                geometry = lc_linestring_create((uint32_t)ref_count);
+            }
 
             for (size_t i = 0; i < ref_count; i++) {
                 double node_lat, node_lon;
@@ -778,21 +797,28 @@ static void parse_way(LCPBFContext *ctx, const uint8_t *data, size_t len,
                     sum_lat += node_lat;
                     sum_lon += node_lon;
                     coord_count++;
+
+                    /* Add point to geometry if building one */
+                    if (geometry) {
+                        SHCoord pt = { .lat = node_lat, .lon = node_lon };
+                        lc_linestring_add_point(geometry, pt);
+                    }
                 }
             }
 
             if (coord_count > 0) {
                 lat = sum_lat / coord_count;
                 lon = sum_lon / coord_count;
-                found_coords = 1;
             }
         }
 
         if (tags.name || (tags.addr_housenumber && tags.addr_street)) {
-            add_entity_from_tags(ctx, way_id, LC_ENTITY_WAY, &tags, lat, lon);
+            add_entity_from_tags_with_geometry(ctx, way_id, LC_ENTITY_WAY, &tags,
+                                                lat, lon, geometry);
+        } else {
+            /* Entity not added, free the geometry */
+            lc_linestring_free(geometry);
         }
-
-        (void)found_coords;  /* Suppress unused warning */
     }
 
     free(refs);
