@@ -27,6 +27,7 @@ CORE_SRCS = src/carta.c \
             src/ct_mvt.c \
             src/ct_render.c \
             src/ct_png.c \
+            src/ct_ascii.c \
             src/ct_style.c \
             src/ct_lod.c \
             src/ct_simplify.c \
@@ -122,6 +123,7 @@ src/ct_style.o: include/ct_types.h
 src/ct_lod.o: include/ct_types.h include/ct_lod.h
 src/ct_simplify.o: include/ct_types.h include/ct_simplify.h
 src/ct_rtree.o: include/ct_types.h include/ct_rtree.h
+src/ct_ascii.o: include/ct_types.h include/ct_ascii.h
 
 # Help
 help:
