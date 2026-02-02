@@ -19,7 +19,7 @@ extern "C" {
 
 /* File format magic and version */
 #define LC_BINARY_MAGIC    0x4C4F4355  /* "LOCU" */
-#define LC_BINARY_VERSION  2           /* v2: mmap-friendly format */
+#define LC_BINARY_VERSION  4           /* v4: zero-copy with geometry/ngrams */
 
 /* ============================================================================
  * Serialization API
@@ -56,7 +56,7 @@ int lc_is_binary_index(const char *path);
 uint32_t lc_binary_version(const char *path);
 
 /* ============================================================================
- * mmap'd Index Search (for v3 indexes)
+ * mmap'd Index Search (for v3/v4 indexes)
  * ============================================================================ */
 
 /*
