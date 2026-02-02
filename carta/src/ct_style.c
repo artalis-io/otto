@@ -28,15 +28,18 @@ void ct_default_style(CTStyle *style)
     style->road_outline_colors[CT_ROAD_SERVICE]     = CT_RGB(180, 180, 180);
     style->road_outline_colors[CT_ROAD_OTHER]       = CT_RGB(150, 150, 150);
 
-    /* Road widths at z=14 */
-    style->road_widths[CT_ROAD_MOTORWAY]    = 8.0f;
-    style->road_widths[CT_ROAD_TRUNK]       = 7.0f;
-    style->road_widths[CT_ROAD_PRIMARY]     = 6.0f;
-    style->road_widths[CT_ROAD_SECONDARY]   = 5.0f;
-    style->road_widths[CT_ROAD_TERTIARY]    = 4.0f;
-    style->road_widths[CT_ROAD_RESIDENTIAL] = 3.0f;
-    style->road_widths[CT_ROAD_SERVICE]     = 2.0f;
-    style->road_widths[CT_ROAD_OTHER]       = 1.5f;
+    /* Road widths at key zoom levels (OSM Carto-style)
+     * Format: { z10, z14, z18 }
+     * Widths are linearly interpolated between these points.
+     */
+    style->road_widths[CT_ROAD_MOTORWAY]    = (CTRoadWidth){ 2.0f, 4.0f, 8.0f };
+    style->road_widths[CT_ROAD_TRUNK]       = (CTRoadWidth){ 1.5f, 3.5f, 7.0f };
+    style->road_widths[CT_ROAD_PRIMARY]     = (CTRoadWidth){ 1.0f, 3.0f, 6.0f };
+    style->road_widths[CT_ROAD_SECONDARY]   = (CTRoadWidth){ 0.8f, 2.5f, 5.0f };
+    style->road_widths[CT_ROAD_TERTIARY]    = (CTRoadWidth){ 0.6f, 2.0f, 4.0f };
+    style->road_widths[CT_ROAD_RESIDENTIAL] = (CTRoadWidth){ 0.4f, 1.5f, 3.0f };
+    style->road_widths[CT_ROAD_SERVICE]     = (CTRoadWidth){ 0.3f, 1.0f, 2.0f };
+    style->road_widths[CT_ROAD_OTHER]       = (CTRoadWidth){ 0.3f, 1.0f, 2.0f };
 
     /* Area colors */
     style->water_color           = CT_RGB(170, 211, 223);  /* Light blue */
@@ -66,6 +69,44 @@ float ct_scale_width(float base_width, int zoom, int ref_zoom)
     /* Apply some minimum */
     float width = base_width * scale;
     if (width < 1.0f) width = 1.0f;
+
+    return width;
+}
+
+/*
+ * Get road width at a specific zoom level.
+ * Uses linear interpolation between z10, z14, and z18 reference points.
+ */
+float ct_road_width_at_zoom(const CTRoadWidth *rw, int zoom)
+{
+    if (zoom <= 10) return rw->z10;
+    if (zoom >= 18) return rw->z18;
+
+    /* Linear interpolation between key points */
+    if (zoom <= 14) {
+        /* Interpolate between z10 and z14 */
+        float t = (float)(zoom - 10) / 4.0f;
+        return rw->z10 + t * (rw->z14 - rw->z10);
+    } else {
+        /* Interpolate between z14 and z18 */
+        float t = (float)(zoom - 14) / 4.0f;
+        return rw->z14 + t * (rw->z18 - rw->z14);
+    }
+}
+
+/*
+ * Get width for a road type at a specific zoom level.
+ */
+float ct_style_road_width(const CTStyle *style, CTRoadType road_type, int zoom)
+{
+    if (road_type < 0 || road_type >= CT_ROAD_TYPE_COUNT) {
+        return 1.0f;  /* Fallback */
+    }
+
+    float width = ct_road_width_at_zoom(&style->road_widths[road_type], zoom);
+
+    /* Ensure minimum visibility */
+    if (width < 0.5f) width = 0.5f;
 
     return width;
 }

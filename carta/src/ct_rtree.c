@@ -49,36 +49,6 @@ static uint32_t xy_to_hilbert(uint32_t x, uint32_t y, int order)
     return d;
 }
 
-/*
- * Compute Hilbert index for a way's centroid.
- */
-static uint32_t way_hilbert_index(const CTOSMWay *way, const CTBBox *data_bbox)
-{
-    /* Compute centroid */
-    double cx = 0, cy = 0;
-    for (int i = 0; i < way->num_coords; i++) {
-        cx += way->coords[i].lon;
-        cy += way->coords[i].lat;
-    }
-    cx /= way->num_coords;
-    cy /= way->num_coords;
-
-    /* Normalize to [0, HILBERT_N) */
-    double lon_range = data_bbox->max_lon - data_bbox->min_lon;
-    double lat_range = data_bbox->max_lat - data_bbox->min_lat;
-
-    if (lon_range < 1e-9) lon_range = 1e-9;
-    if (lat_range < 1e-9) lat_range = 1e-9;
-
-    uint32_t hx = (uint32_t)(((cx - data_bbox->min_lon) / lon_range) * (HILBERT_N - 1));
-    uint32_t hy = (uint32_t)(((cy - data_bbox->min_lat) / lat_range) * (HILBERT_N - 1));
-
-    if (hx >= HILBERT_N) hx = HILBERT_N - 1;
-    if (hy >= HILBERT_N) hy = HILBERT_N - 1;
-
-    return xy_to_hilbert(hx, hy, HILBERT_ORDER);
-}
-
 /* ============================================================================
  * Bounding Box Utilities
  * ============================================================================ */
@@ -139,195 +109,28 @@ static int compare_hilbert(const void *a, const void *b)
 }
 
 /* ============================================================================
- * Node Allocation
- * ============================================================================ */
-
-static CTRTreeNode *alloc_node(void)
-{
-    CTRTreeNode *node = calloc(1, sizeof(CTRTreeNode));
-    return node;
-}
-
-static void free_node(CTRTreeNode *node)
-{
-    if (!node) return;
-
-    if (!node->is_leaf) {
-        for (int i = 0; i < node->count; i++) {
-            free_node(node->children[i]);
-        }
-    }
-    free(node);
-}
-
-/* ============================================================================
- * Sort-Tile-Recursive Packing
+ * Packed R-Tree Structure
  * ============================================================================
  *
- * Build tree bottom-up:
- * 1. Sort entries by Hilbert index
- * 2. Group into leaves of size NODE_CAPACITY
- * 3. Recursively build parent level from leaf bboxes
+ * Instead of individual node allocations, we use flat arrays:
+ * - One array for leaf level (way indices + bboxes)
+ * - One array for each internal level (child indices + bboxes)
+ *
+ * This is much faster to build and more cache-friendly for queries.
+ * CTPackedNode is defined in ct_types.h
  */
 
-static CTRTreeNode *build_level(CTSortEntry *entries, size_t count, int is_leaf)
-{
-    if (count == 0) return NULL;
-
-    /* Single node needed */
-    if (count <= CT_RTREE_NODE_CAPACITY) {
-        CTRTreeNode *node = alloc_node();
-        if (!node) return NULL;
-
-        node->is_leaf = is_leaf;
-        node->count = (int)count;
-        node->bbox = entries[0].bbox;
-
-        for (size_t i = 0; i < count; i++) {
-            if (is_leaf) {
-                node->way_indices[i] = entries[i].index;
-            }
-            if (i > 0) {
-                node->bbox = bbox_union(node->bbox, entries[i].bbox);
-            }
-        }
-
-        return node;
-    }
-
-    /* Multiple nodes needed - create leaves and recurse */
-    size_t num_nodes = (count + CT_RTREE_NODE_CAPACITY - 1) / CT_RTREE_NODE_CAPACITY;
-    CTSortEntry *parent_entries = malloc(num_nodes * sizeof(CTSortEntry));
-    CTRTreeNode **children = malloc(num_nodes * sizeof(CTRTreeNode *));
-
-    if (!parent_entries || !children) {
-        free(parent_entries);
-        free(children);
-        return NULL;
-    }
-
-    /* Create leaf/internal nodes */
-    for (size_t i = 0; i < num_nodes; i++) {
-        size_t start = i * CT_RTREE_NODE_CAPACITY;
-        size_t end = start + CT_RTREE_NODE_CAPACITY;
-        if (end > count) end = count;
-        size_t node_count = end - start;
-
-        CTRTreeNode *node = alloc_node();
-        if (!node) {
-            for (size_t j = 0; j < i; j++) free_node(children[j]);
-            free(parent_entries);
-            free(children);
-            return NULL;
-        }
-
-        node->is_leaf = is_leaf;
-        node->count = (int)node_count;
-        node->bbox = entries[start].bbox;
-
-        for (size_t j = 0; j < node_count; j++) {
-            if (is_leaf) {
-                node->way_indices[j] = entries[start + j].index;
-            }
-            if (j > 0) {
-                node->bbox = bbox_union(node->bbox, entries[start + j].bbox);
-            }
-        }
-
-        children[i] = node;
-        parent_entries[i].index = (uint32_t)i;
-        parent_entries[i].bbox = node->bbox;
-
-        /* Compute Hilbert for parent (use centroid of bbox) */
-        double cx = (node->bbox.min_lon + node->bbox.max_lon) / 2;
-        double cy = (node->bbox.min_lat + node->bbox.max_lat) / 2;
-
-        /* Normalize - use first entry's bbox as reference for now */
-        CTBBox ref = entries[0].bbox;
-        for (size_t j = 1; j < count; j++) {
-            ref = bbox_union(ref, entries[j].bbox);
-        }
-
-        double lon_range = ref.max_lon - ref.min_lon;
-        double lat_range = ref.max_lat - ref.min_lat;
-        if (lon_range < 1e-9) lon_range = 1e-9;
-        if (lat_range < 1e-9) lat_range = 1e-9;
-
-        uint32_t hx = (uint32_t)(((cx - ref.min_lon) / lon_range) * (HILBERT_N - 1));
-        uint32_t hy = (uint32_t)(((cy - ref.min_lat) / lat_range) * (HILBERT_N - 1));
-        if (hx >= HILBERT_N) hx = HILBERT_N - 1;
-        if (hy >= HILBERT_N) hy = HILBERT_N - 1;
-
-        parent_entries[i].hilbert = xy_to_hilbert(hx, hy, HILBERT_ORDER);
-    }
-
-    /* Sort parent entries by Hilbert index */
-    qsort(parent_entries, num_nodes, sizeof(CTSortEntry), compare_hilbert);
-
-    /* Reorder children array to match sorted order */
-    CTRTreeNode **sorted_children = malloc(num_nodes * sizeof(CTRTreeNode *));
-    if (!sorted_children) {
-        for (size_t i = 0; i < num_nodes; i++) free_node(children[i]);
-        free(parent_entries);
-        free(children);
-        return NULL;
-    }
-
-    for (size_t i = 0; i < num_nodes; i++) {
-        sorted_children[i] = children[parent_entries[i].index];
-        parent_entries[i].index = (uint32_t)i;  /* Update for recursive call */
-    }
-    free(children);
-
-    /* Recursively build parent level */
-    CTRTreeNode *parent = build_level(parent_entries, num_nodes, 0);
-
-    /* Attach children to parent nodes */
-    if (parent) {
-        /* Walk tree and attach sorted_children */
-        /* For simple case (single parent node), attach directly */
-        if (num_nodes <= CT_RTREE_NODE_CAPACITY) {
-            for (size_t i = 0; i < num_nodes; i++) {
-                parent->children[i] = sorted_children[i];
-            }
-        } else {
-            /* Multiple parent nodes - need to walk and attach */
-            /* This is handled by the recursive structure */
-            size_t child_idx = 0;
-            CTRTreeNode *stack[64];
-            int stack_depth = 0;
-            stack[stack_depth++] = parent;
-
-            while (stack_depth > 0) {
-                CTRTreeNode *node = stack[--stack_depth];
-                if (node->is_leaf) {
-                    /* This is actually an internal node at the level above leaves */
-                    /* Attach children */
-                    for (int i = 0; i < node->count && child_idx < num_nodes; i++) {
-                        node->children[i] = sorted_children[child_idx++];
-                    }
-                    node->is_leaf = 0;  /* It's now internal */
-                } else {
-                    /* Add children to stack in reverse order */
-                    for (int i = node->count - 1; i >= 0; i--) {
-                        if (node->children[i]) {
-                            stack[stack_depth++] = node->children[i];
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    free(parent_entries);
-    free(sorted_children);
-
-    return parent;
-}
-
 /* ============================================================================
- * Public API
- * ============================================================================ */
+ * Sort-Tile-Recursive Bulk Loading
+ * ============================================================================
+ *
+ * Algorithm:
+ * 1. Compute Hilbert index and bbox for each way
+ * 2. Sort by Hilbert index
+ * 3. Build leaf level: group into nodes of NODE_CAPACITY
+ * 4. Build each internal level from the previous level
+ * 5. Repeat until we have a single root node
+ */
 
 CTRTree *ct_rtree_build(const CTOSMWay *ways, size_t num_ways, CTBBox data_bbox)
 {
@@ -336,32 +139,132 @@ CTRTree *ct_rtree_build(const CTOSMWay *ways, size_t num_ways, CTBBox data_bbox)
     CTRTree *tree = calloc(1, sizeof(CTRTree));
     if (!tree) return NULL;
 
-    /* Create sort entries with Hilbert indices */
+    /* Step 1: Compute Hilbert indices and bboxes */
     CTSortEntry *entries = malloc(num_ways * sizeof(CTSortEntry));
     if (!entries) {
         free(tree);
         return NULL;
     }
 
+    double lon_range = data_bbox.max_lon - data_bbox.min_lon;
+    double lat_range = data_bbox.max_lat - data_bbox.min_lat;
+    if (lon_range < 1e-9) lon_range = 1e-9;
+    if (lat_range < 1e-9) lat_range = 1e-9;
+
     for (size_t i = 0; i < num_ways; i++) {
         entries[i].index = (uint32_t)i;
-        entries[i].hilbert = way_hilbert_index(&ways[i], &data_bbox);
         entries[i].bbox = way_bbox(&ways[i]);
+
+        /* Compute centroid and Hilbert index */
+        double cx = (entries[i].bbox.min_lon + entries[i].bbox.max_lon) / 2;
+        double cy = (entries[i].bbox.min_lat + entries[i].bbox.max_lat) / 2;
+
+        uint32_t hx = (uint32_t)(((cx - data_bbox.min_lon) / lon_range) * (HILBERT_N - 1));
+        uint32_t hy = (uint32_t)(((cy - data_bbox.min_lat) / lat_range) * (HILBERT_N - 1));
+        if (hx >= HILBERT_N) hx = HILBERT_N - 1;
+        if (hy >= HILBERT_N) hy = HILBERT_N - 1;
+
+        entries[i].hilbert = xy_to_hilbert(hx, hy, HILBERT_ORDER);
     }
 
-    /* Sort by Hilbert index */
+    /* Step 2: Sort by Hilbert index */
     qsort(entries, num_ways, sizeof(CTSortEntry), compare_hilbert);
 
-    /* Build tree bottom-up */
-    tree->root = build_level(entries, num_ways, 1);
-    tree->num_entries = num_ways;
+    /* Step 3: Calculate tree structure sizes */
+    size_t num_leaves = (num_ways + CT_RTREE_NODE_CAPACITY - 1) / CT_RTREE_NODE_CAPACITY;
 
-    free(entries);
+    /* Count nodes at each level */
+    size_t level_sizes[32];
+    int num_levels = 0;
+    size_t n = num_leaves;
+    while (n > 0) {
+        level_sizes[num_levels++] = n;
+        if (n == 1) break;
+        n = (n + CT_RTREE_NODE_CAPACITY - 1) / CT_RTREE_NODE_CAPACITY;
+    }
 
-    if (!tree->root) {
+    /* Total nodes needed */
+    size_t total_nodes = 0;
+    for (int i = 0; i < num_levels; i++) {
+        total_nodes += level_sizes[i];
+    }
+
+    /* Allocate all nodes at once */
+    CTPackedNode *nodes = calloc(total_nodes, sizeof(CTPackedNode));
+    uint32_t *leaf_indices = malloc(num_ways * sizeof(uint32_t));
+    if (!nodes || !leaf_indices) {
+        free(entries);
+        free(nodes);
+        free(leaf_indices);
         free(tree);
         return NULL;
     }
+
+    /* Step 4: Build leaf level */
+    size_t node_idx = 0;
+    size_t entry_idx = 0;
+
+    for (size_t i = 0; i < num_leaves; i++) {
+        CTPackedNode *node = &nodes[node_idx++];
+        node->is_leaf = 1;
+        node->first_child = (uint32_t)entry_idx;
+
+        /* Compute how many entries in this leaf */
+        size_t remaining = num_ways - entry_idx;
+        size_t count = remaining < CT_RTREE_NODE_CAPACITY ? remaining : CT_RTREE_NODE_CAPACITY;
+        node->num_children = (uint16_t)count;
+
+        /* Copy indices and compute bbox */
+        node->bbox = entries[entry_idx].bbox;
+        leaf_indices[entry_idx] = entries[entry_idx].index;
+
+        for (size_t j = 1; j < count; j++) {
+            leaf_indices[entry_idx + j] = entries[entry_idx + j].index;
+            node->bbox = bbox_union(node->bbox, entries[entry_idx + j].bbox);
+        }
+
+        entry_idx += count;
+    }
+
+    /* Step 5: Build internal levels */
+    size_t prev_level_start = 0;
+    size_t prev_level_count = num_leaves;
+
+    for (int level = 1; level < num_levels; level++) {
+        size_t this_level_count = level_sizes[level];
+        size_t child_idx = 0;
+
+        for (size_t i = 0; i < this_level_count; i++) {
+            CTPackedNode *node = &nodes[node_idx++];
+            node->is_leaf = 0;
+            node->first_child = (uint32_t)(prev_level_start + child_idx);
+
+            /* Compute how many children in this node */
+            size_t remaining = prev_level_count - child_idx;
+            size_t count = remaining < CT_RTREE_NODE_CAPACITY ? remaining : CT_RTREE_NODE_CAPACITY;
+            node->num_children = (uint16_t)count;
+
+            /* Compute bbox from children */
+            node->bbox = nodes[prev_level_start + child_idx].bbox;
+            for (size_t j = 1; j < count; j++) {
+                node->bbox = bbox_union(node->bbox, nodes[prev_level_start + child_idx + j].bbox);
+            }
+
+            child_idx += count;
+        }
+
+        prev_level_start += prev_level_count;
+        prev_level_count = this_level_count;
+    }
+
+    /* Store in tree structure */
+    tree->nodes = nodes;
+    tree->leaf_indices = leaf_indices;
+    tree->num_nodes = total_nodes;
+    tree->num_entries = num_ways;
+    tree->root_idx = total_nodes - 1;  /* Root is the last node */
+
+    free(entries);
 
     return tree;
 }
@@ -369,7 +272,8 @@ CTRTree *ct_rtree_build(const CTOSMWay *ways, size_t num_ways, CTBBox data_bbox)
 void ct_rtree_free(CTRTree *tree)
 {
     if (!tree) return;
-    free_node(tree->root);
+    free(tree->nodes);
+    free(tree->leaf_indices);
     free(tree);
 }
 
@@ -377,23 +281,25 @@ void ct_rtree_free(CTRTree *tree)
  * Query
  * ============================================================================ */
 
-static void query_node(const CTRTreeNode *node, CTBBox bbox,
-                       uint32_t *results, size_t *count, size_t max_results)
+static void query_node_packed(const CTRTree *tree, uint32_t node_idx, CTBBox bbox,
+                              uint32_t *results, size_t *count, size_t max_results)
 {
-    if (!node || *count >= max_results) return;
+    if (*count >= max_results) return;
+
+    const CTPackedNode *node = &tree->nodes[node_idx];
 
     /* Check if node bbox intersects query bbox */
     if (!bbox_intersects(node->bbox, bbox)) return;
 
     if (node->is_leaf) {
-        /* Add all entries (they already passed parent bbox test) */
-        for (int i = 0; i < node->count && *count < max_results; i++) {
-            results[(*count)++] = node->way_indices[i];
+        /* Add all entries from this leaf */
+        for (uint16_t i = 0; i < node->num_children && *count < max_results; i++) {
+            results[(*count)++] = tree->leaf_indices[node->first_child + i];
         }
     } else {
         /* Recurse into children */
-        for (int i = 0; i < node->count; i++) {
-            query_node(node->children[i], bbox, results, count, max_results);
+        for (uint16_t i = 0; i < node->num_children; i++) {
+            query_node_packed(tree, node->first_child + i, bbox, results, count, max_results);
         }
     }
 }
@@ -401,10 +307,10 @@ static void query_node(const CTRTreeNode *node, CTBBox bbox,
 size_t ct_rtree_query(const CTRTree *tree, CTBBox bbox,
                       uint32_t *results, size_t max_results)
 {
-    if (!tree || !tree->root || !results) return 0;
+    if (!tree || !tree->nodes || !results) return 0;
 
     size_t count = 0;
-    query_node(tree->root, bbox, results, &count, max_results);
+    query_node_packed(tree, tree->root_idx, bbox, results, &count, max_results);
     return count;
 }
 
@@ -412,33 +318,43 @@ size_t ct_rtree_query(const CTRTree *tree, CTBBox bbox,
  * Statistics
  * ============================================================================ */
 
-static void count_nodes(const CTRTreeNode *node, size_t *num_nodes,
-                        size_t *max_depth, size_t depth, size_t *total_entries)
-{
-    if (!node) return;
-
-    (*num_nodes)++;
-    if (depth > *max_depth) *max_depth = depth;
-
-    if (node->is_leaf) {
-        *total_entries += node->count;
-    } else {
-        for (int i = 0; i < node->count; i++) {
-            count_nodes(node->children[i], num_nodes, max_depth, depth + 1, total_entries);
-        }
-    }
-}
-
 void ct_rtree_stats(const CTRTree *tree, size_t *num_nodes, size_t *height,
                     size_t *total_entries)
 {
-    size_t nodes = 0, max_depth = 0, entries = 0;
-
-    if (tree && tree->root) {
-        count_nodes(tree->root, &nodes, &max_depth, 0, &entries);
+    if (!tree) {
+        if (num_nodes) *num_nodes = 0;
+        if (height) *height = 0;
+        if (total_entries) *total_entries = 0;
+        return;
     }
 
-    if (num_nodes) *num_nodes = nodes;
-    if (height) *height = max_depth + 1;
-    if (total_entries) *total_entries = entries;
+    if (num_nodes) *num_nodes = tree->num_nodes;
+    if (total_entries) *total_entries = tree->num_entries;
+
+    /* Calculate height by walking from root */
+    if (height) {
+        size_t h = 0;
+        uint32_t idx = tree->root_idx;
+        while (idx < tree->num_nodes) {
+            h++;
+            if (tree->nodes[idx].is_leaf) break;
+            idx = tree->nodes[idx].first_child;
+        }
+        *height = h;
+    }
+}
+
+/* ============================================================================
+ * Legacy API Compatibility
+ * ============================================================================
+ *
+ * The old API used CTRTreeNode pointers. We provide a shim for ct_pbf.c
+ */
+
+/* For legacy code that checks tree->root */
+CTRTreeNode *ct_rtree_get_root(const CTRTree *tree)
+{
+    (void)tree;
+    /* Return non-NULL to indicate tree is valid */
+    return (CTRTreeNode *)(tree ? (void *)1 : NULL);
 }

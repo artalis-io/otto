@@ -513,7 +513,8 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     if (road_type < 0 || road_type >= CT_ROAD_TYPE_COUNT) {
                         road_type = CT_ROAD_OTHER;
                     }
-                    float width = ctx->style.road_widths[road_type] * scale;
+                    /* Use zoom-adaptive road width */
+                    float width = ct_style_road_width(&ctx->style, road_type, tile->coord.z);
                     ct_render_polyline_cased(ctx, scaled, f->num_points,
                                              ctx->style.road_colors[road_type],
                                              ctx->style.road_outline_colors[road_type],

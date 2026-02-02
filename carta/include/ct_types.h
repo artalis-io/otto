@@ -179,11 +179,21 @@ typedef uint32_t CTColor;
 #define CT_COLOR_B(c) (((c) >> 8) & 0xFF)
 #define CT_COLOR_A(c) ((c) & 0xFF)
 
+/*
+ * Road width specification at key zoom levels.
+ * Widths are linearly interpolated between these points.
+ */
+typedef struct {
+    float z10;  /* Width at zoom 10 */
+    float z14;  /* Width at zoom 14 */
+    float z18;  /* Width at zoom 18 */
+} CTRoadWidth;
+
 typedef struct {
     /* Road styling by type */
     CTColor road_colors[CT_ROAD_TYPE_COUNT];
     CTColor road_outline_colors[CT_ROAD_TYPE_COUNT];
-    float road_widths[CT_ROAD_TYPE_COUNT];      /* Width in pixels at z=14 */
+    CTRoadWidth road_widths[CT_ROAD_TYPE_COUNT];  /* Width in pixels at key zoom levels */
 
     /* Area colors */
     CTColor water_color;
@@ -262,9 +272,21 @@ typedef struct {
 /* R-Tree node for spatial indexing */
 typedef struct CTRTreeNode CTRTreeNode;
 
+/* Packed R-Tree node (flat array storage for efficiency) */
 typedef struct {
-    CTRTreeNode *root;
-    size_t num_entries;
+    CTBBox bbox;
+    uint32_t first_child;  /* Index of first child in next level, or index into leaf_indices */
+    uint16_t num_children; /* Number of children */
+    uint16_t is_leaf;      /* 1 if children are way indices, 0 if node indices */
+} CTPackedNode;
+
+typedef struct {
+    /* Packed array storage (efficient format) */
+    CTPackedNode *nodes;          /* Flat array of all nodes */
+    uint32_t *leaf_indices;       /* Way indices for leaf nodes */
+    size_t num_nodes;             /* Total number of nodes */
+    size_t num_entries;           /* Total number of way entries */
+    uint32_t root_idx;            /* Index of root node */
 } CTRTree;
 
 /* PBF parsing context */

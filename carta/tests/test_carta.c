@@ -252,7 +252,9 @@ TEST(default_style)
 
     ASSERT(CT_COLOR_A(style.water_color) == 255);
     ASSERT(CT_COLOR_A(style.land_color) == 255);
-    ASSERT(style.road_widths[CT_ROAD_MOTORWAY] > 0);
+    /* Check road widths at z14 reference point */
+    ASSERT(style.road_widths[CT_ROAD_MOTORWAY].z14 > 0);
+    ASSERT(style.road_widths[CT_ROAD_MOTORWAY].z10 < style.road_widths[CT_ROAD_MOTORWAY].z18);
     ASSERT_EQ(style.reference_zoom, 14);
     return 1;
 }
@@ -269,6 +271,32 @@ TEST(scale_width)
 
     /* Lower zoom = narrower */
     ASSERT(ct_scale_width(base, 13, 14) < base);
+    return 1;
+}
+
+TEST(road_width_at_zoom)
+{
+    CTRoadWidth rw = { .z10 = 2.0f, .z14 = 4.0f, .z18 = 8.0f };
+
+    /* At key points */
+    ASSERT_NEAR(ct_road_width_at_zoom(&rw, 10), 2.0f, 0.01);
+    ASSERT_NEAR(ct_road_width_at_zoom(&rw, 14), 4.0f, 0.01);
+    ASSERT_NEAR(ct_road_width_at_zoom(&rw, 18), 8.0f, 0.01);
+
+    /* Interpolation between z10 and z14 */
+    float mid12 = ct_road_width_at_zoom(&rw, 12);
+    ASSERT(mid12 > 2.0f && mid12 < 4.0f);
+
+    /* Interpolation between z14 and z18 */
+    float mid16 = ct_road_width_at_zoom(&rw, 16);
+    ASSERT(mid16 > 4.0f && mid16 < 8.0f);
+
+    /* Below z10 clamps to z10 width */
+    ASSERT_NEAR(ct_road_width_at_zoom(&rw, 5), 2.0f, 0.01);
+
+    /* Above z18 clamps to z18 width */
+    ASSERT_NEAR(ct_road_width_at_zoom(&rw, 20), 8.0f, 0.01);
+
     return 1;
 }
 
@@ -545,6 +573,7 @@ int main(void)
     printf("\nStyling:\n");
     run_test_default_style();
     run_test_scale_width();
+    run_test_road_width_at_zoom();
 
     printf("\nRendering:\n");
     run_test_render_create();

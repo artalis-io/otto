@@ -118,12 +118,12 @@ echo ""
 echo "Starting servers..."
 
 # Carta tile server (port 8081)
-./carta/api/carta-server "$PBF_FILE" >/dev/null 2>&1 &
+./carta/api/carta-tile-server -p 8081 "$PBF_FILE" >/dev/null 2>&1 &
 CARTA_PID=$!
 echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID]"
 
 # Velo route server (port 8082)
-./velo/api/velo-server "$PBF_FILE" >/dev/null 2>&1 &
+./velo/api/velo-route-server -p 8082 "$PBF_FILE" >/dev/null 2>&1 &
 VELO_PID=$!
 echo "  Started: Velo (http://localhost:8082) [PID: $VELO_PID]"
 

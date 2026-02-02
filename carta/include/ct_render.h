@@ -181,6 +181,27 @@ void ct_render_set_style(CTRenderContext *ctx, const CTStyle *style);
  */
 float ct_scale_width(float base_width, int zoom, int ref_zoom);
 
+/*
+ * Get road width at a specific zoom level.
+ * Uses linear interpolation between z10, z14, and z18 reference points.
+ *
+ * @param rw   Road width specification
+ * @param zoom Zoom level
+ * @return Width in pixels at the given zoom level
+ */
+float ct_road_width_at_zoom(const CTRoadWidth *rw, int zoom);
+
+/*
+ * Get width for a road type at a specific zoom level.
+ * Convenience function that looks up the road width spec from the style.
+ *
+ * @param style     Style configuration
+ * @param road_type Road type (motorway, trunk, etc.)
+ * @param zoom      Zoom level
+ * @return Width in pixels
+ */
+float ct_style_road_width(const CTStyle *style, CTRoadType road_type, int zoom);
+
 /* ============================================================================
  * Pixel Access
  * ============================================================================ */

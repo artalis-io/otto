@@ -80,15 +80,15 @@ CTStatus ct_lod_add_rule(CTLODConfig *config,
  * ============================================================================ */
 
 /*
- * Load default LOD configuration.
+ * Load default LOD configuration (OSM Carto-style rules).
  *
- * Default rules:
- *   Roads:     Motorway z5+, Trunk z7+, Primary z9+, Secondary z11+,
- *              Tertiary z13+, Residential z14+, Service z16+
- *   Buildings: z14+
- *   Water:     Large water z5+, Rivers z8+, Streams z12+
- *   Railways:  Main z8+, Other z12+
- *   Landuse:   Large areas z10+, Small areas z14+
+ * Default rules follow OpenStreetMap's progressive disclosure:
+ *   Roads:     Motorway z5+, Trunk z6+, Primary z8+, Secondary z10+,
+ *              Tertiary z12+, Residential z14+, Service/Other z15+
+ *   Buildings: Large (>5000m²) z13+, Medium (>500m²) z14+, All z15+
+ *   Water:     Large (>100km²) z4+, Medium (>1km²) z8+, Small z12+, Streams z14+
+ *   Railways:  Main (>10km) z8+, All z12+
+ *   Landuse:   Large (>10km²) z8+, Parks (>1km²) z10+, All z14+
  */
 void ct_lod_default(CTLODConfig *config);
 
