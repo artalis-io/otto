@@ -33,6 +33,10 @@ CTRenderContext *ct_render_create(int width, int height)
         return NULL;
     }
 
+    /* Pre-allocate scaling buffer to avoid per-feature malloc */
+    ctx->scale_buffer_capacity = 8192;  /* 8K points handles most features */
+    ctx->scale_buffer = malloc(ctx->scale_buffer_capacity * sizeof(CTTilePoint));
+
     ct_default_style(&ctx->style);
     return ctx;
 }
@@ -41,6 +45,7 @@ void ct_render_free(CTRenderContext *ctx)
 {
     if (!ctx) return;
     free(ctx->pixels);
+    free(ctx->scale_buffer);
     free(ctx);
 }
 
@@ -360,15 +365,15 @@ void ct_render_polygon(CTRenderContext *ctx,
             }
         }
 
-        /* Sort active edges by x */
-        for (int i = 0; i < num_active - 1; i++) {
-            for (int j = i + 1; j < num_active; j++) {
-                if (active[j].x < active[i].x) {
-                    CTEdge t = active[i];
-                    active[i] = active[j];
-                    active[j] = t;
-                }
+        /* Sort active edges by x using insertion sort (O(n) for nearly-sorted) */
+        for (int i = 1; i < num_active; i++) {
+            CTEdge key = active[i];
+            int j = i - 1;
+            while (j >= 0 && active[j].x > key.x) {
+                active[j + 1] = active[j];
+                j--;
             }
+            active[j + 1] = key;
         }
 
         /* Fill between pairs of edges */
@@ -453,6 +458,28 @@ void ct_render_circle(CTRenderContext *ctx,
  * Tile Rendering
  * ============================================================================ */
 
+/*
+ * Get scaling buffer from render context, growing if needed.
+ * Avoids per-feature malloc/free overhead.
+ */
+static CTTilePoint *get_scale_buffer(CTRenderContext *ctx, size_t needed)
+{
+    if (needed > ctx->scale_buffer_capacity) {
+        /* Grow buffer - double or use needed size, whichever is larger */
+        size_t new_capacity = ctx->scale_buffer_capacity * 2;
+        if (new_capacity < needed) new_capacity = needed;
+
+        CTTilePoint *new_buf = realloc(ctx->scale_buffer,
+                                        new_capacity * sizeof(CTTilePoint));
+        if (new_buf) {
+            ctx->scale_buffer = new_buf;
+            ctx->scale_buffer_capacity = new_capacity;
+        }
+        /* If realloc fails, continue with existing buffer if large enough */
+    }
+    return ctx->scale_buffer;
+}
+
 void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
 {
     ct_render_clear(ctx);
@@ -476,8 +503,8 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
             const CTFeature *f = &tile->features[i];
             if (f->layer != target_layer) continue;
 
-            /* Scale points to render size */
-            CTTilePoint *scaled = malloc(f->num_points * sizeof(CTTilePoint));
+            /* Get pre-allocated buffer instead of malloc */
+            CTTilePoint *scaled = get_scale_buffer(ctx, f->num_points);
             if (!scaled) continue;
 
             for (int j = 0; j < f->num_points; j++) {
@@ -532,7 +559,7 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     break;
             }
 
-            free(scaled);
+            /* No free needed - buffer is reused */
         }
     }
 }
