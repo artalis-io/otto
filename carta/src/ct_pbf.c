@@ -873,26 +873,14 @@ CTStatus ct_pbf_get_bbox_features(const CTPBFContext *ctx, CTBBox bbox,
 
         size_t num_candidates = ct_rtree_query(ctx->rtree, bbox, candidates, max_candidates);
 
-        /* Convert candidates to features */
+        /* Convert candidates to features - R-Tree already filtered by bbox */
         for (size_t i = 0; i < num_candidates; i++) {
             uint32_t way_idx = candidates[i];
             if (way_idx >= ctx->num_ways) continue;
 
             const CTOSMWay *way = &ctx->ways[way_idx];
 
-            /* Fine-grained intersection check (R-Tree uses bboxes) */
-            int intersects = 0;
-            for (int j = 0; j < way->num_coords; j++) {
-                if (way->coords[j].lat >= bbox.min_lat &&
-                    way->coords[j].lat <= bbox.max_lat &&
-                    way->coords[j].lon >= bbox.min_lon &&
-                    way->coords[j].lon <= bbox.max_lon) {
-                    intersects = 1;
-                    break;
-                }
-            }
-            if (!intersects) continue;
-
+            /* Trust R-Tree bbox filter - skip redundant per-point checks */
             CTStatus status = add_way_as_feature(way, features, count, &capacity);
             if (status != CT_OK) {
                 free(candidates);
@@ -1031,26 +1019,14 @@ CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord
 
         size_t num_candidates = ct_rtree_query(ctx->rtree, bbox, candidates, max_candidates);
 
-        /* Convert candidates to features with LOD filtering */
+        /* Convert candidates to features with LOD filtering - R-Tree already filtered by bbox */
         for (size_t i = 0; i < num_candidates; i++) {
             uint32_t way_idx = candidates[i];
             if (way_idx >= ctx->num_ways) continue;
 
             const CTOSMWay *way = &ctx->ways[way_idx];
 
-            /* Fine-grained intersection check */
-            int intersects = 0;
-            for (int j = 0; j < way->num_coords; j++) {
-                if (way->coords[j].lat >= bbox.min_lat &&
-                    way->coords[j].lat <= bbox.max_lat &&
-                    way->coords[j].lon >= bbox.min_lon &&
-                    way->coords[j].lon <= bbox.max_lon) {
-                    intersects = 1;
-                    break;
-                }
-            }
-            if (!intersects) continue;
-
+            /* Trust R-Tree bbox filter - skip redundant per-point checks */
             CTStatus status = add_way_with_lod(way, lod, zoom, features, count, &capacity);
             if (status != CT_OK) {
                 free(candidates);

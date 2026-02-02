@@ -225,6 +225,10 @@ typedef struct {
     int height;
     int stride;              /* Bytes per row (usually width * 4) */
     CTStyle style;
+
+    /* Pre-allocated buffers for rendering (avoids per-feature malloc) */
+    CTTilePoint *scale_buffer;      /* Reusable point scaling buffer */
+    size_t scale_buffer_capacity;   /* Capacity in points */
 } CTRenderContext;
 
 /* ============================================================================
