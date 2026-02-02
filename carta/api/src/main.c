@@ -1,16 +1,24 @@
 /*
  * Carta Tile Server
  *
- * A lightweight tile server that serves vector (MVT) and raster (PNG) tiles
- * from OSM PBF files using carta and mongoose.
+ * A lightweight tile server that serves vector (MVT), raster (PNG), and
+ * ASCII art tiles from OSM PBF files using carta and mongoose.
  *
  * Endpoints:
  *   GET /                         - Tile viewer (served from static dir)
  *   GET /tiles/{z}/{x}/{y}.mvt    - Vector tile (MVT)
  *   GET /tiles/{z}/{x}/{y}.png    - Raster tile (PNG)
+ *   GET /tiles/{z}/{x}/{y}.txt    - ASCII art tile
  *   GET /tiles.json               - TileJSON metadata
  *   GET /api/v1/health            - Health check
  *   GET /api/v1/stats             - PBF statistics
+ *
+ * ASCII tile query parameters:
+ *   width=80     - Output width in characters (20-400)
+ *   height=0     - Output height in characters (0=auto from aspect)
+ *   charset=     - simple, extended (default), blocks, braille
+ *   invert=0     - 1 for light background terminals
+ *   color=0      - 1 for ANSI 256-color output
  */
 
 #include <stdio.h>
@@ -380,6 +388,114 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
     free(buffer);
 }
 
+/* Parse query string for a parameter, returns default if not found */
+static int get_query_int(struct mg_str query, const char *name, int default_val) {
+    char buf[32];
+    if (mg_http_get_var(&query, name, buf, sizeof(buf)) > 0) {
+        return atoi(buf);
+    }
+    return default_val;
+}
+
+/* GET /tiles/{z}/{x}/{y}.txt or .ascii */
+static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *hm,
+                              int z, int x, int y) {
+    if (!s_pbf_ctx) {
+        send_error(c, 503, "PBF not loaded");
+        return;
+    }
+
+    if (z < s_config.min_zoom || z > s_config.max_zoom) {
+        send_error(c, 400, "Zoom out of range");
+        return;
+    }
+
+    int max_coord = 1 << z;
+    if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
+        send_error(c, 400, "Tile coordinates out of range");
+        return;
+    }
+
+    /* Parse query parameters for ASCII options */
+    CTAsciiOptions ascii_opts;
+    ct_ascii_default_options(&ascii_opts);
+
+    ascii_opts.width = get_query_int(hm->query, "width", 80);
+    ascii_opts.height = get_query_int(hm->query, "height", 0);  /* 0 = auto */
+    ascii_opts.invert = get_query_int(hm->query, "invert", 0);
+    ascii_opts.color = get_query_int(hm->query, "color", 0);
+
+    /* Parse charset: simple, extended, blocks, braille */
+    char charset_buf[16];
+    if (mg_http_get_var(&hm->query, "charset", charset_buf, sizeof(charset_buf)) > 0) {
+        if (strcmp(charset_buf, "simple") == 0) {
+            ascii_opts.charset = CT_ASCII_SIMPLE;
+        } else if (strcmp(charset_buf, "extended") == 0) {
+            ascii_opts.charset = CT_ASCII_EXTENDED;
+        } else if (strcmp(charset_buf, "blocks") == 0) {
+            ascii_opts.charset = CT_ASCII_BLOCKS;
+        } else if (strcmp(charset_buf, "braille") == 0) {
+            ascii_opts.charset = CT_ASCII_BRAILLE;
+        }
+    }
+
+    /* Clamp dimensions to reasonable range */
+    if (ascii_opts.width < 20) ascii_opts.width = 20;
+    if (ascii_opts.width > 400) ascii_opts.width = 400;
+    if (ascii_opts.height > 200) ascii_opts.height = 200;
+
+    /* First render the tile to pixels */
+    int tile_size = 512;  /* Use 512 for better detail */
+
+    CTTileCoord coord = {z, x, y};
+
+    /* Create render context */
+    CTRenderContext *render_ctx = ct_render_create(tile_size, tile_size);
+    if (!render_ctx) {
+        send_error(c, 500, "Render context creation failed");
+        return;
+    }
+
+    ct_render_clear(render_ctx);
+
+    /* Render from PBF context */
+    ct_render_from_pbf(render_ctx, s_pbf_ctx, coord);
+
+    /* Get pixel buffer */
+    const uint8_t *pixels = ct_render_pixels(render_ctx);
+
+    /* Allocate ASCII buffer */
+    size_t ascii_size = ct_ascii_buffer_size(ascii_opts.width,
+                                             ascii_opts.height > 0 ? ascii_opts.height : ascii_opts.width / 2,
+                                             ascii_opts.charset, ascii_opts.color);
+    char *ascii_buf = malloc(ascii_size);
+    if (!ascii_buf) {
+        ct_render_free(render_ctx);
+        send_error(c, 500, "ASCII buffer allocation failed");
+        return;
+    }
+
+    /* Render to ASCII */
+    size_t ascii_len = ct_render_ascii(pixels, tile_size, tile_size,
+                                       &ascii_opts, ascii_buf, ascii_size);
+
+    /* Send response */
+    mg_printf(c,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n"
+        "Content-Length: %lu\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Cache-Control: public, max-age=86400\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        (unsigned long)ascii_len);
+    mg_send(c, ascii_buf, ascii_len);
+
+    /* Cleanup */
+    free(ascii_buf);
+    ct_render_free(render_ctx);
+}
+
 /* GET /tiles/{z}/{x}/{y}.png */
 static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
     if (!s_pbf_ctx) {
@@ -516,8 +632,10 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
                     handle_mvt_tile(c, z, x, y);
                 } else if (strcmp(ext, "png") == 0) {
                     handle_png_tile(c, z, x, y);
+                } else if (strcmp(ext, "txt") == 0 || strcmp(ext, "ascii") == 0) {
+                    handle_ascii_tile(c, hm, z, x, y);
                 } else {
-                    send_error(c, 400, "Unknown tile format. Use .mvt or .png");
+                    send_error(c, 400, "Unknown tile format. Use .mvt, .png, .txt, or .ascii");
                 }
             } else {
                 send_error(c, 400, "Invalid tile URL format");
@@ -699,8 +817,15 @@ int main(int argc, char *argv[]) {
     printf("  GET  /tiles.json             - TileJSON metadata\n");
     printf("  GET  /tiles/{z}/{x}/{y}.png  - Raster tile\n");
     printf("  GET  /tiles/{z}/{x}/{y}.mvt  - Vector tile\n");
+    printf("  GET  /tiles/{z}/{x}/{y}.txt  - ASCII art tile\n");
     printf("  GET  /api/v1/health          - Health check\n");
     printf("  GET  /api/v1/stats           - PBF statistics\n");
+    printf("\nASCII tile options (query params):\n");
+    printf("  width=80     - Output width in chars (20-400)\n");
+    printf("  height=0     - Output height in chars (0=auto)\n");
+    printf("  charset=     - simple, extended (default), blocks, braille\n");
+    printf("  invert=0     - 1 for light background\n");
+    printf("  color=0      - 1 for ANSI color codes\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
     /* Event loop */

@@ -612,6 +612,166 @@ TEST(pbf_stats_empty)
 }
 
 /* ============================================================================
+ * ASCII Rendering Tests
+ * ============================================================================ */
+
+TEST(ascii_default_options)
+{
+    CTAsciiOptions opts;
+    ct_ascii_default_options(&opts);
+
+    ASSERT_EQ(opts.width, 80);
+    ASSERT_EQ(opts.height, 0);  /* Auto */
+    ASSERT_EQ(opts.charset, CT_ASCII_EXTENDED);
+    ASSERT_EQ(opts.invert, 0);
+    ASSERT_EQ(opts.color, 0);
+    return 1;
+}
+
+TEST(ascii_buffer_size)
+{
+    /* Simple charset: 1 byte per char */
+    size_t simple_size = ct_ascii_buffer_size(80, 40, CT_ASCII_SIMPLE, 0);
+    ASSERT(simple_size >= 80 * 40);
+
+    /* With color: needs room for ANSI codes */
+    size_t color_size = ct_ascii_buffer_size(80, 40, CT_ASCII_SIMPLE, 1);
+    ASSERT(color_size > simple_size);
+
+    /* Blocks charset: up to 4 bytes per char (UTF-8) */
+    size_t blocks_size = ct_ascii_buffer_size(80, 40, CT_ASCII_BLOCKS, 0);
+    ASSERT(blocks_size >= simple_size);
+
+    return 1;
+}
+
+TEST(ascii_render_solid_image)
+{
+    /* Create a solid gray image */
+    int width = 64, height = 64;
+    uint8_t *pixels = malloc(width * height * 4);
+
+    for (int i = 0; i < width * height; i++) {
+        pixels[i * 4 + 0] = 128;  /* R */
+        pixels[i * 4 + 1] = 128;  /* G */
+        pixels[i * 4 + 2] = 128;  /* B */
+        pixels[i * 4 + 3] = 255;  /* A */
+    }
+
+    CTAsciiOptions opts;
+    ct_ascii_default_options(&opts);
+    opts.width = 16;
+    opts.height = 8;
+    opts.charset = CT_ASCII_SIMPLE;
+
+    size_t buf_size = ct_ascii_buffer_size(opts.width, opts.height, opts.charset, 0);
+    char *buf = malloc(buf_size);
+
+    size_t len = ct_render_ascii(pixels, width, height, &opts, buf, buf_size);
+
+    /* Should produce output */
+    ASSERT(len > 0);
+
+    /* Should have 8 lines (8 newlines) */
+    int newlines = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (buf[i] == '\n') newlines++;
+    }
+    ASSERT_EQ(newlines, 8);
+
+    /* All characters should be the same (solid color) */
+    char first_char = buf[0];
+    ASSERT(first_char != '\n');  /* First char is not newline */
+
+    free(pixels);
+    free(buf);
+    return 1;
+}
+
+TEST(ascii_render_gradient)
+{
+    /* Create a horizontal gradient from black to white */
+    int width = 256, height = 64;
+    uint8_t *pixels = malloc(width * height * 4);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int idx = (y * width + x) * 4;
+            uint8_t val = (uint8_t)x;  /* 0-255 gradient */
+            pixels[idx + 0] = val;
+            pixels[idx + 1] = val;
+            pixels[idx + 2] = val;
+            pixels[idx + 3] = 255;
+        }
+    }
+
+    CTAsciiOptions opts;
+    ct_ascii_default_options(&opts);
+    opts.width = 32;
+    opts.height = 8;
+    opts.charset = CT_ASCII_SIMPLE;
+
+    size_t buf_size = ct_ascii_buffer_size(opts.width, opts.height, opts.charset, 0);
+    char *buf = malloc(buf_size);
+
+    size_t len = ct_render_ascii(pixels, width, height, &opts, buf, buf_size);
+    ASSERT(len > 0);
+
+    /* First character should be dark (space or .) */
+    /* Last character before newline should be bright (@ or #) */
+    char first = buf[0];
+    char last = buf[opts.width - 1];
+
+    /* In simple charset " .:-=+*#%@", space is darkest, @ is brightest */
+    ASSERT(first == ' ' || first == '.');
+    ASSERT(last == '@' || last == '%' || last == '#');
+
+    free(pixels);
+    free(buf);
+    return 1;
+}
+
+TEST(ascii_invert_mode)
+{
+    /* Create a white image */
+    int width = 64, height = 64;
+    uint8_t *pixels = malloc(width * height * 4);
+
+    for (int i = 0; i < width * height; i++) {
+        pixels[i * 4 + 0] = 255;
+        pixels[i * 4 + 1] = 255;
+        pixels[i * 4 + 2] = 255;
+        pixels[i * 4 + 3] = 255;
+    }
+
+    CTAsciiOptions opts;
+    ct_ascii_default_options(&opts);
+    opts.width = 8;
+    opts.height = 4;
+    opts.charset = CT_ASCII_SIMPLE;
+
+    size_t buf_size = ct_ascii_buffer_size(opts.width, opts.height, opts.charset, 0);
+    char *normal_buf = malloc(buf_size);
+    char *invert_buf = malloc(buf_size);
+
+    /* Normal: white = bright = @ */
+    opts.invert = 0;
+    ct_render_ascii(pixels, width, height, &opts, normal_buf, buf_size);
+
+    /* Inverted: white = dark = space */
+    opts.invert = 1;
+    ct_render_ascii(pixels, width, height, &opts, invert_buf, buf_size);
+
+    /* Characters should be different */
+    ASSERT(normal_buf[0] != invert_buf[0]);
+
+    free(pixels);
+    free(normal_buf);
+    free(invert_buf);
+    return 1;
+}
+
+/* ============================================================================
  * Geometry Tests
  * ============================================================================ */
 
@@ -706,6 +866,13 @@ int main(void)
     printf("\nPBF Context:\n");
     run_test_pbf_context_create();
     run_test_pbf_stats_empty();
+
+    printf("\nASCII Rendering:\n");
+    run_test_ascii_default_options();
+    run_test_ascii_buffer_size();
+    run_test_ascii_render_solid_image();
+    run_test_ascii_render_gradient();
+    run_test_ascii_invert_mode();
 
     printf("\nGeometry:\n");
     run_test_simplify_short_line();
