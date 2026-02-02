@@ -8,6 +8,7 @@
 #include "ct_pbf.h"
 #include "ct_tile.h"
 #include "ct_lod.h"
+#include "ct_rtree.h"
 #include "sh_protobuf.h"
 #include "sh_inflate.h"
 #include "sh_pbf.h"
@@ -212,7 +213,7 @@ void ct_pbf_context_free(CTPBFContext *ctx)
     }
     free(ctx->ways);
 
-    /* TODO: free rtree */
+    ct_rtree_free(ctx->rtree);
 
     free(ctx);
 }
@@ -746,8 +747,20 @@ CTStatus ct_pbf_parse_file(CTPBFContext *ctx, const char *filename)
 
 CTStatus ct_pbf_build_index(CTPBFContext *ctx)
 {
-    /* TODO: Build R-tree for fast spatial queries */
-    /* For now, we'll do brute-force queries */
+    if (!ctx || ctx->num_ways == 0) return CT_OK;
+
+    /* Free existing index if any */
+    if (ctx->rtree) {
+        ct_rtree_free(ctx->rtree);
+        ctx->rtree = NULL;
+    }
+
+    /* Build R-Tree from ways */
+    ctx->rtree = ct_rtree_build(ctx->ways, ctx->num_ways, ctx->bbox);
+    if (!ctx->rtree) {
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+
     return CT_OK;
 }
 
@@ -777,6 +790,45 @@ CTStatus ct_pbf_get_tile_features(const CTPBFContext *ctx, CTTileCoord tile,
     return ct_pbf_get_bbox_features(ctx, bbox, features, count);
 }
 
+/*
+ * Helper to add a single way as a feature to the output array.
+ */
+static CTStatus add_way_as_feature(const CTOSMWay *way, CTFeature **features,
+                                   size_t *count, size_t *capacity)
+{
+    /* Expand array if needed */
+    if (*count >= *capacity) {
+        *capacity *= 2;
+        CTFeature *new_features = realloc(*features, *capacity * sizeof(CTFeature));
+        if (!new_features) {
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+        *features = new_features;
+    }
+
+    /* Create feature */
+    CTFeature *f = &(*features)[*count];
+    memset(f, 0, sizeof(CTFeature));
+
+    f->type = way->is_area ? CT_GEOM_POLYGON : CT_GEOM_LINESTRING;
+    f->layer = layer_from_osm_class(way->feature_class);
+    f->feature_type = way->feature_type;
+
+    /* Allocate and copy coordinates */
+    f->points = malloc(way->num_coords * sizeof(CTTilePoint));
+    if (!f->points) return CT_OK;  /* Skip this feature but continue */
+
+    f->num_points = way->num_coords;
+    for (int j = 0; j < way->num_coords; j++) {
+        /* Store as fixed-point for now, let caller convert to tile coords */
+        f->points[j].x = (int32_t)(way->coords[j].lon * 1e7);
+        f->points[j].y = (int32_t)(way->coords[j].lat * 1e7);
+    }
+
+    (*count)++;
+    return CT_OK;
+}
+
 CTStatus ct_pbf_get_bbox_features(const CTPBFContext *ctx, CTBBox bbox,
                                   CTFeature **features, size_t *count)
 {
@@ -788,7 +840,54 @@ CTStatus ct_pbf_get_bbox_features(const CTPBFContext *ctx, CTBBox bbox,
     if (!*features) return CT_ERROR_OUT_OF_MEMORY;
     *count = 0;
 
-    /* Iterate through ways and check bbox intersection */
+    /* Use R-Tree if available (O(log n) query) */
+    if (ctx->rtree) {
+        /* Query R-Tree for candidate ways */
+        size_t max_candidates = ctx->num_ways;
+        uint32_t *candidates = malloc(max_candidates * sizeof(uint32_t));
+        if (!candidates) {
+            free(*features);
+            *features = NULL;
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+
+        size_t num_candidates = ct_rtree_query(ctx->rtree, bbox, candidates, max_candidates);
+
+        /* Convert candidates to features */
+        for (size_t i = 0; i < num_candidates; i++) {
+            uint32_t way_idx = candidates[i];
+            if (way_idx >= ctx->num_ways) continue;
+
+            const CTOSMWay *way = &ctx->ways[way_idx];
+
+            /* Fine-grained intersection check (R-Tree uses bboxes) */
+            int intersects = 0;
+            for (int j = 0; j < way->num_coords; j++) {
+                if (way->coords[j].lat >= bbox.min_lat &&
+                    way->coords[j].lat <= bbox.max_lat &&
+                    way->coords[j].lon >= bbox.min_lon &&
+                    way->coords[j].lon <= bbox.max_lon) {
+                    intersects = 1;
+                    break;
+                }
+            }
+            if (!intersects) continue;
+
+            CTStatus status = add_way_as_feature(way, features, count, &capacity);
+            if (status != CT_OK) {
+                free(candidates);
+                free(*features);
+                *features = NULL;
+                *count = 0;
+                return status;
+            }
+        }
+
+        free(candidates);
+        return CT_OK;
+    }
+
+    /* Fallback: linear scan (O(n)) */
     for (size_t i = 0; i < ctx->num_ways; i++) {
         const CTOSMWay *way = &ctx->ways[i];
 
@@ -806,40 +905,13 @@ CTStatus ct_pbf_get_bbox_features(const CTPBFContext *ctx, CTBBox bbox,
 
         if (!intersects) continue;
 
-        /* Expand array if needed */
-        if (*count >= capacity) {
-            capacity *= 2;
-            CTFeature *new_features = realloc(*features, capacity * sizeof(CTFeature));
-            if (!new_features) {
-                free(*features);
-                *features = NULL;
-                *count = 0;
-                return CT_ERROR_OUT_OF_MEMORY;
-            }
-            *features = new_features;
+        CTStatus status = add_way_as_feature(way, features, count, &capacity);
+        if (status != CT_OK) {
+            free(*features);
+            *features = NULL;
+            *count = 0;
+            return status;
         }
-
-        /* Create feature */
-        CTFeature *f = &(*features)[*count];
-        memset(f, 0, sizeof(CTFeature));
-
-        f->type = way->is_area ? CT_GEOM_POLYGON : CT_GEOM_LINESTRING;
-        f->layer = layer_from_osm_class(way->feature_class);
-        f->feature_type = way->feature_type;
-
-        /* Convert coordinates to tile space */
-        /* This will be done by the caller (tile generator) for now */
-        f->points = malloc(way->num_coords * sizeof(CTTilePoint));
-        if (!f->points) continue;
-
-        f->num_points = way->num_coords;
-        for (int j = 0; j < way->num_coords; j++) {
-            /* Store as fixed-point for now, let caller convert to tile coords */
-            f->points[j].x = (int32_t)(way->coords[j].lon * 1e7);
-            f->points[j].y = (int32_t)(way->coords[j].lat * 1e7);
-        }
-
-        (*count)++;
     }
 
     return CT_OK;
@@ -865,6 +937,52 @@ void ct_pbf_stats(const CTPBFContext *ctx,
  * LOD-Aware Feature Extraction
  * ============================================================================ */
 
+/*
+ * Helper to add a way with LOD filtering.
+ */
+static CTStatus add_way_with_lod(const CTOSMWay *way, const struct CTLODConfig *lod,
+                                 int zoom, CTFeature **features,
+                                 size_t *count, size_t *capacity)
+{
+    /* LOD filter: check if visible at this zoom level */
+    CTLayer layer = layer_from_osm_class(way->feature_class);
+    if (!ct_lod_is_visible(lod, layer, way->feature_type,
+                           zoom, way->area_sqm, way->length_m)) {
+        return CT_OK;  /* Skip but not an error */
+    }
+
+    /* Expand array if needed */
+    if (*count >= *capacity) {
+        *capacity *= 2;
+        CTFeature *new_features = realloc(*features, *capacity * sizeof(CTFeature));
+        if (!new_features) {
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+        *features = new_features;
+    }
+
+    /* Create feature */
+    CTFeature *f = &(*features)[*count];
+    memset(f, 0, sizeof(CTFeature));
+
+    f->type = way->is_area ? CT_GEOM_POLYGON : CT_GEOM_LINESTRING;
+    f->layer = layer;
+    f->feature_type = way->feature_type;
+
+    /* Allocate and copy coordinates */
+    f->points = malloc(way->num_coords * sizeof(CTTilePoint));
+    if (!f->points) return CT_OK;  /* Skip this feature but continue */
+
+    f->num_points = way->num_coords;
+    for (int j = 0; j < way->num_coords; j++) {
+        f->points[j].x = (int32_t)(way->coords[j].lon * 1e7);
+        f->points[j].y = (int32_t)(way->coords[j].lat * 1e7);
+    }
+
+    (*count)++;
+    return CT_OK;
+}
+
 CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord,
                                       const struct CTLODConfig *lod,
                                       CTFeature **features, size_t *count)
@@ -880,18 +998,58 @@ CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord
     if (!*features) return CT_ERROR_OUT_OF_MEMORY;
     *count = 0;
 
-    /* Iterate through ways and check bbox intersection + LOD visibility */
+    /* Use R-Tree if available (O(log n) query) */
+    if (ctx->rtree) {
+        /* Query R-Tree for candidate ways */
+        size_t max_candidates = ctx->num_ways;
+        uint32_t *candidates = malloc(max_candidates * sizeof(uint32_t));
+        if (!candidates) {
+            free(*features);
+            *features = NULL;
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+
+        size_t num_candidates = ct_rtree_query(ctx->rtree, bbox, candidates, max_candidates);
+
+        /* Convert candidates to features with LOD filtering */
+        for (size_t i = 0; i < num_candidates; i++) {
+            uint32_t way_idx = candidates[i];
+            if (way_idx >= ctx->num_ways) continue;
+
+            const CTOSMWay *way = &ctx->ways[way_idx];
+
+            /* Fine-grained intersection check */
+            int intersects = 0;
+            for (int j = 0; j < way->num_coords; j++) {
+                if (way->coords[j].lat >= bbox.min_lat &&
+                    way->coords[j].lat <= bbox.max_lat &&
+                    way->coords[j].lon >= bbox.min_lon &&
+                    way->coords[j].lon <= bbox.max_lon) {
+                    intersects = 1;
+                    break;
+                }
+            }
+            if (!intersects) continue;
+
+            CTStatus status = add_way_with_lod(way, lod, zoom, features, count, &capacity);
+            if (status != CT_OK) {
+                free(candidates);
+                free(*features);
+                *features = NULL;
+                *count = 0;
+                return status;
+            }
+        }
+
+        free(candidates);
+        return CT_OK;
+    }
+
+    /* Fallback: linear scan (O(n)) */
     for (size_t i = 0; i < ctx->num_ways; i++) {
         const CTOSMWay *way = &ctx->ways[i];
 
-        /* LOD filter: check if visible at this zoom level */
-        CTLayer layer = layer_from_osm_class(way->feature_class);
-        if (!ct_lod_is_visible(lod, layer, way->feature_type,
-                               zoom, way->area_sqm, way->length_m)) {
-            continue;
-        }
-
-        /* Quick bbox check */
+        /* Quick bbox check first */
         int intersects = 0;
         for (int j = 0; j < way->num_coords; j++) {
             if (way->coords[j].lat >= bbox.min_lat &&
@@ -902,42 +1060,15 @@ CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord
                 break;
             }
         }
-
         if (!intersects) continue;
 
-        /* Expand array if needed */
-        if (*count >= capacity) {
-            capacity *= 2;
-            CTFeature *new_features = realloc(*features, capacity * sizeof(CTFeature));
-            if (!new_features) {
-                free(*features);
-                *features = NULL;
-                *count = 0;
-                return CT_ERROR_OUT_OF_MEMORY;
-            }
-            *features = new_features;
+        CTStatus status = add_way_with_lod(way, lod, zoom, features, count, &capacity);
+        if (status != CT_OK) {
+            free(*features);
+            *features = NULL;
+            *count = 0;
+            return status;
         }
-
-        /* Create feature */
-        CTFeature *f = &(*features)[*count];
-        memset(f, 0, sizeof(CTFeature));
-
-        f->type = way->is_area ? CT_GEOM_POLYGON : CT_GEOM_LINESTRING;
-        f->layer = layer;
-        f->feature_type = way->feature_type;
-
-        /* Convert coordinates to tile space */
-        f->points = malloc(way->num_coords * sizeof(CTTilePoint));
-        if (!f->points) continue;
-
-        f->num_points = way->num_coords;
-        for (int j = 0; j < way->num_coords; j++) {
-            /* Store as fixed-point for now, let caller convert to tile coords */
-            f->points[j].x = (int32_t)(way->coords[j].lon * 1e7);
-            f->points[j].y = (int32_t)(way->coords[j].lat * 1e7);
-        }
-
-        (*count)++;
     }
 
     return CT_OK;
