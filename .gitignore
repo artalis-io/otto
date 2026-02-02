@@ -65,3 +65,4 @@ coverage/
 # Clay UI build artifacts
 shared/ui/clay-components/build/
 shared/ui/cc-map-demo/build/
+data/index/
