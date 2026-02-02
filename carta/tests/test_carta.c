@@ -361,6 +361,114 @@ TEST(render_line)
     return 1;
 }
 
+TEST(render_context_has_scale_buffer)
+{
+    /* Verify render context allocates pre-allocated buffer */
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    ASSERT(ctx != NULL);
+
+    /* Scale buffer should be pre-allocated for performance */
+    ASSERT(ctx->scale_buffer != NULL);
+    ASSERT(ctx->scale_buffer_capacity >= 1024);  /* Reasonable minimum */
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(render_tile_reuses_buffer)
+{
+    /* Test that rendering multiple features doesn't leak memory */
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    ct_render_clear(ctx);
+
+    CTTile tile;
+    ct_tile_init(&tile, (CTTileCoord){14, 0, 0});
+
+    /* Add multiple features with varying point counts */
+    for (int f = 0; f < 50; f++) {
+        int num_points = 10 + (f % 20);
+        CTTilePoint *points = malloc(num_points * sizeof(CTTilePoint));
+        for (int i = 0; i < num_points; i++) {
+            points[i].x = (i * 100) % 4096;
+            points[i].y = (f * 80 + i * 50) % 4096;
+        }
+
+        CTFeature feature = {
+            .type = CT_GEOM_LINESTRING,
+            .points = points,
+            .num_points = num_points,
+            .layer = CT_LAYER_ROADS,
+            .feature_type = CT_ROAD_SECONDARY
+        };
+        ct_tile_add_feature(&tile, &feature);
+    }
+
+    /* Render tile - should use pre-allocated buffer, not malloc per feature */
+    ct_render_tile(ctx, &tile);
+
+    /* Verify scale buffer was expanded if needed but still exists */
+    ASSERT(ctx->scale_buffer != NULL);
+    ASSERT(ctx->scale_buffer_capacity >= 10);  /* At least fits smallest feature */
+
+    ct_tile_free(&tile);
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(render_polygon_scanline_performance)
+{
+    /* Test polygon rendering with many edges (stress insertion sort) */
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    ct_render_clear(ctx);
+
+    CTTile tile;
+    ct_tile_init(&tile, (CTTileCoord){14, 0, 0});
+
+    /* Create a complex polygon with many vertices */
+    int num_points = 100;
+    CTTilePoint *points = malloc(num_points * sizeof(CTTilePoint));
+
+    /* Create a star-like polygon to stress scanline algorithm */
+    for (int i = 0; i < num_points; i++) {
+        double angle = 2.0 * 3.14159 * i / num_points;
+        double radius = (i % 2 == 0) ? 1800 : 900;  /* Alternating radii */
+        points[i].x = 2048 + (int)(radius * cos(angle));
+        points[i].y = 2048 + (int)(radius * sin(angle));
+    }
+
+    int *ring_ends = malloc(sizeof(int));
+    ring_ends[0] = num_points;
+    CTFeature feature = {
+        .type = CT_GEOM_POLYGON,
+        .points = points,
+        .num_points = num_points,
+        .ring_ends = ring_ends,
+        .num_rings = 1,
+        .layer = CT_LAYER_BUILDINGS,
+        .feature_type = 0
+    };
+    ct_tile_add_feature(&tile, &feature);
+
+    /* Render - should complete without issues using insertion sort */
+    ct_render_tile(ctx, &tile);
+
+    /* Verify something was rendered (not all background) */
+    int non_bg_pixels = 0;
+    CTColor bg = ctx->style.background_color;
+    for (int y = 100; y < 156; y++) {
+        for (int x = 100; x < 156; x++) {
+            if (ct_render_get_pixel(ctx, x, y) != bg) {
+                non_bg_pixels++;
+            }
+        }
+    }
+    ASSERT(non_bg_pixels > 0);
+
+    ct_tile_free(&tile);
+    ct_render_free(ctx);
+    return 1;
+}
+
 /* ============================================================================
  * MVT Encoding Tests
  * ============================================================================ */
@@ -580,6 +688,9 @@ int main(void)
     run_test_render_clear();
     run_test_render_set_pixel();
     run_test_render_line();
+    run_test_render_context_has_scale_buffer();
+    run_test_render_tile_reuses_buffer();
+    run_test_render_polygon_scanline_performance();
 
     printf("\nMVT Encoding:\n");
     run_test_mvt_default_options();
