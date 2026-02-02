@@ -729,7 +729,7 @@ LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
         opts = &default_opts;
     }
 
-    /* v4 zero-copy path - no entity store, no grid, everything from mmap_idx */
+    /* v4 zero-copy path - allocate temporary entities from mmap data */
     if (index->mmap_idx) {
         const LCMmapIndex *idx = index->mmap_idx;
 
@@ -740,13 +740,63 @@ LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
 
         result->distance_m = nearest[0].distance_m;
 
-        /* For v4, we can't return LCEntity* since we don't have an entity store.
-         * The result pointers will be NULL, but callers can use entity_id
-         * from nearest results with mmap accessors. For backwards compatibility,
-         * we just note this limitation - a proper fix would change the API. */
+        /* Allocate and populate entities from mmap data */
+        for (size_t i = 0; i < nearest_count; i++) {
+            uint32_t eid = nearest[i].entity_id;
+            if (eid >= idx->header->entity_count) continue;
 
-        /* TODO: Extend LCReverseResult to include entity_ids for v4 compatibility */
+            LCFeatureClass fclass = lc_mmap_entity_fclass(idx, eid);
 
+            /* Allocate entity on demand based on class */
+            LCEntity **target = NULL;
+            switch (fclass) {
+                case LC_CLASS_STREET:
+                    if (!result->street) target = &result->street;
+                    break;
+                case LC_CLASS_ADDRESS:
+                    if (!result->address) target = &result->address;
+                    break;
+                case LC_CLASS_POI:
+                    if (opts->include_poi && !result->poi) target = &result->poi;
+                    break;
+                case LC_CLASS_CITY:
+                case LC_CLASS_TOWN:
+                case LC_CLASS_VILLAGE:
+                case LC_CLASS_SUBURB:
+                case LC_CLASS_NEIGHBOURHOOD:
+                    if (!result->place) target = &result->place;
+                    break;
+                default:
+                    break;
+            }
+
+            if (target) {
+                LCEntity *e = calloc(1, sizeof(LCEntity));
+                if (!e) continue;
+
+                e->osm_id = lc_mmap_entity_osm_id(idx, eid);
+                e->type = lc_mmap_entity_type(idx, eid);
+                e->fclass = fclass;
+                e->centroid = lc_mmap_entity_centroid(idx, eid);
+
+                /* Copy strings (they point into mmap, need to strdup for safety) */
+                const char *name = lc_mmap_entity_name(idx, eid);
+                if (name) e->name = strdup(name);
+
+                const char *street = lc_mmap_entity_street(idx, eid);
+                if (street) e->address.street = strdup(street);
+
+                const char *housenumber = lc_mmap_entity_housenumber(idx, eid);
+                if (housenumber) e->address.housenumber = strdup(housenumber);
+
+                const char *city = lc_mmap_entity_city(idx, eid);
+                if (city) e->address.city = strdup(city);
+
+                *target = e;
+            }
+        }
+
+        result->_owns_entities = 1;  /* Mark that entities are allocated */
         return LC_OK;
     }
 
@@ -814,9 +864,31 @@ LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
     return LC_OK;
 }
 
+/* Helper to free an owned entity */
+static void free_owned_entity(LCEntity *e) {
+    if (!e) return;
+    free((void *)e->name);
+    free((void *)e->address.housenumber);
+    free((void *)e->address.street);
+    free((void *)e->address.city);
+    free((void *)e->address.postcode);
+    free((void *)e->address.state);
+    free((void *)e->address.country);
+    free(e);
+}
+
 void lc_reverse_result_free(LCReverseResult *result)
 {
     if (!result) return;
+
+    /* Free allocated entities if owned (v4 mmap path) */
+    if (result->_owns_entities) {
+        free_owned_entity(result->place);
+        free_owned_entity(result->street);
+        free_owned_entity(result->address);
+        free_owned_entity(result->poi);
+    }
+
     free(result->hierarchy);
     memset(result, 0, sizeof(LCReverseResult));
 }
