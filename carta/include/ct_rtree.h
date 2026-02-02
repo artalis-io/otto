@@ -3,6 +3,11 @@
  *
  * Packed Hilbert R-Tree for O(log n) spatial queries.
  * Built once after PBF parsing, used for all tile generation.
+ *
+ * Uses flat array storage instead of pointer-based trees for:
+ * - O(n log n) build time (true STR algorithm)
+ * - Cache-friendly queries
+ * - Simple memory management (single allocation)
  */
 
 #ifndef CT_RTREE_H
@@ -22,18 +27,29 @@ extern "C" {
 #define CT_RTREE_MIN_ENTRIES   4    /* Min children per node (except root) */
 
 /* ============================================================================
- * R-Tree Node Structure
+ * R-Tree Node Structure (Legacy - for compatibility)
  * ============================================================================ */
 
 struct CTRTreeNode {
-    CTBBox bbox;                    /* Bounding box of this node and all children */
-    int is_leaf;                    /* 1 if leaf node, 0 if internal */
-    int count;                      /* Number of children/entries */
+    CTBBox bbox;
+    int is_leaf;
+    int count;
     union {
-        struct CTRTreeNode *children[CT_RTREE_NODE_CAPACITY];  /* Internal: child nodes */
-        uint32_t way_indices[CT_RTREE_NODE_CAPACITY];          /* Leaf: indices into ways array */
+        struct CTRTreeNode *children[CT_RTREE_NODE_CAPACITY];
+        uint32_t way_indices[CT_RTREE_NODE_CAPACITY];
     };
 };
+
+/* ============================================================================
+ * Packed R-Tree Structure
+ * ============================================================================
+ *
+ * New efficient structure using flat arrays.
+ * CTRTree is defined in ct_types.h - we add the packed node arrays here.
+ */
+
+/* Internal packed node - defined in ct_rtree.c */
+struct CTPackedNode;
 
 /* ============================================================================
  * R-Tree API
@@ -72,6 +88,11 @@ size_t ct_rtree_query(const CTRTree *tree, CTBBox bbox,
  */
 void ct_rtree_stats(const CTRTree *tree, size_t *num_nodes, size_t *height,
                     size_t *total_entries);
+
+/*
+ * Legacy compatibility - returns non-NULL if tree is valid.
+ */
+CTRTreeNode *ct_rtree_get_root(const CTRTree *tree);
 
 #ifdef __cplusplus
 }

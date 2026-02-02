@@ -65,33 +65,54 @@ void ct_lod_default(CTLODConfig *config)
 {
     ct_lod_free(config);
 
-    /* Roads by type */
+    /*
+     * OSM Carto-style LOD rules for progressive disclosure
+     */
+
+    /* Roads - following OSM Carto zoom levels */
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 5, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 7, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 9, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 11, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 13, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 6, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 8, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 10, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 12, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 14, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 16, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 15, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 15, -1, 0, 0);
 
-    /* Buildings: only at street level */
-    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 14, -1, 0, 0);
+    /* Buildings - size-based visibility
+     * Large buildings (>5000m²) at z13
+     * Medium buildings (>500m²) at z14
+     * All buildings at z15
+     */
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 13, -1, 5000, 0);
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 14, -1, 500, 0);
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 15, -1, 0, 0);
 
-    /* Water: large bodies early, small streams late */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 5, -1, 1000000, 0);  /* > 1 km^2 */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 8, -1, 10000, 0);    /* > 0.01 km^2 */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 12, -1, 0, 0);       /* All water */
+    /* Water - progressive disclosure by size
+     * Large lakes (>100km²) at z4
+     * Medium water (>1km²) at z8
+     * Small water at z12
+     * Streams at z14
+     */
+    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 4, -1, 100000000, 0);  /* > 100 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 8, -1, 1000000, 0);    /* > 1 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 12, -1, 10000, 0);     /* > 0.01 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 14, -1, 0, 0);         /* All water */
 
-    /* Railways */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 8, -1, 0, 10000); /* Main lines > 10km */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 12, -1, 0, 0);    /* All railways */
+    /* Railways - main lines visible early */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 8, -1, 0, 10000);   /* > 10km */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 12, -1, 0, 0);      /* All railways */
 
-    /* Landuse: large areas early */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, -1, 10, -1, 10000000, 0); /* > 10 km^2 */
+    /* Landuse - large areas visible early
+     * Very large (>10km²) at z8
+     * Parks (>1km²) at z10
+     * All landuse at z14
+     */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, -1, 8, -1, 10000000, 0);  /* > 10 km² */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, -1, 10, -1, 1000000, 0);  /* > 1 km² */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, -1, 14, -1, 0, 0);        /* All landuse */
 
-    /* Boundaries: country-level early */
+    /* Boundaries - country-level visible early */
     ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, -1, 4, -1, 0, 0);
 }
 
@@ -99,20 +120,36 @@ void ct_lod_detailed(CTLODConfig *config)
 {
     ct_lod_free(config);
 
-    /* Show features at lower zoom levels than default */
+    /*
+     * Detailed preset - shows more features at lower zoom levels
+     * Useful for detailed area maps
+     */
+
+    /* Roads - 1 zoom earlier than OSM Carto */
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 4, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 5, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 7, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 9, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 11, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 13, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 15, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 14, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 14, -1, 0, 0);
 
-    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 13, -1, 0, 0);
+    /* Buildings - visible earlier, with size filtering */
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 12, -1, 5000, 0);
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 13, -1, 500, 0);
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 14, -1, 0, 0);
+
+    /* Water - all visible early */
     ct_lod_add_rule(config, CT_LAYER_WATER, -1, 4, -1, 0, 0);
+
+    /* Railways - visible early */
     ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 6, -1, 0, 0);
+
+    /* Landuse - visible early */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, -1, 8, -1, 0, 0);
+
+    /* Boundaries - very early */
     ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, -1, 3, -1, 0, 0);
 }
 
@@ -120,21 +157,41 @@ void ct_lod_minimal(CTLODConfig *config)
 {
     ct_lod_free(config);
 
-    /* Show features only at higher zoom levels */
+    /*
+     * Minimal preset - fewer features, optimized for overview maps
+     * Shows features 1-2 zoom levels later than OSM Carto
+     */
+
+    /* Roads - 1 zoom later than OSM Carto */
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 6, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 8, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 10, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 12, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 14, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 7, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 9, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 11, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 13, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 15, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 17, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 16, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 16, -1, 0, 0);
 
-    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 15, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 6, -1, 500000, 0);
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 10, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 10, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, -1, 12, -1, 0, 0);
+    /* Buildings - only large buildings, later visibility */
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 14, -1, 5000, 0);
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 15, -1, 500, 0);
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 16, -1, 0, 0);
+
+    /* Water - only large bodies early */
+    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 6, -1, 100000000, 0);  /* > 100 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 10, -1, 1000000, 0);   /* > 1 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 14, -1, 0, 0);         /* All water */
+
+    /* Railways - later visibility */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 10, -1, 0, 10000);  /* > 10km */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 14, -1, 0, 0);      /* All railways */
+
+    /* Landuse - only large areas */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, -1, 10, -1, 10000000, 0); /* > 10 km² */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, -1, 12, -1, 1000000, 0);  /* > 1 km² */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, -1, 15, -1, 0, 0);        /* All landuse */
+
+    /* Boundaries */
     ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, -1, 5, -1, 0, 0);
 }
 

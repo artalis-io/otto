@@ -21,6 +21,7 @@
 #include <ctype.h>
 #include "mongoose.h"
 #include "carta.h"
+#include "ct_cache.h"
 
 /* ============================================================================
  * Configuration
@@ -63,6 +64,8 @@ static TileServerConfig s_config = {
 static int s_signo = 0;
 static CTPBFContext *s_pbf_ctx = NULL;
 static CTLODConfig s_lod_config = {0};
+static CTTileCache *s_png_cache = NULL;
+static CTTileCache *s_mvt_cache = NULL;
 
 static void signal_handler(int signo) {
     s_signo = signo;
@@ -335,6 +338,16 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
+    /* Check cache first */
+    if (s_mvt_cache) {
+        const uint8_t *cached_data;
+        size_t cached_size;
+        if (ct_cache_get(s_mvt_cache, z, x, y, &cached_data, &cached_size)) {
+            send_tile(c, "application/vnd.mapbox-vector-tile", cached_data, cached_size);
+            return;
+        }
+    }
+
     /* Allocate buffer for MVT */
     size_t capacity = 512 * 1024;  /* 512KB should be enough for most tiles */
     uint8_t *buffer = malloc(capacity);
@@ -357,6 +370,11 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
+    /* Cache the result */
+    if (s_mvt_cache) {
+        ct_cache_put(s_mvt_cache, z, x, y, buffer, size);
+    }
+
     send_tile(c, "application/vnd.mapbox-vector-tile", buffer, size);
     free(buffer);
 }
@@ -377,6 +395,16 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
         send_error(c, 400, "Tile coordinates out of range");
         return;
+    }
+
+    /* Check cache first */
+    if (s_png_cache) {
+        const uint8_t *cached_data;
+        size_t cached_size;
+        if (ct_cache_get(s_png_cache, z, x, y, &cached_data, &cached_size)) {
+            send_tile(c, "image/png", cached_data, cached_size);
+            return;
+        }
     }
 
     /* Allocate buffer for PNG */
@@ -404,6 +432,11 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         send_error(c, 500, "Tile generation failed");
         free(buffer);
         return;
+    }
+
+    /* Cache the result */
+    if (s_png_cache) {
+        ct_cache_put(s_png_cache, z, x, y, buffer, size);
     }
 
     send_tile(c, "image/png", buffer, size);
@@ -614,6 +647,15 @@ int main(int argc, char *argv[]) {
             break;
     }
 
+    /* Initialize tile caches (256MB each by default) */
+    s_png_cache = ct_cache_create(256);
+    s_mvt_cache = ct_cache_create(256);
+    if (s_png_cache && s_mvt_cache) {
+        printf("Cache: 256MB PNG + 256MB MVT (512MB total)\n");
+    } else {
+        printf("Cache: disabled (allocation failed)\n");
+    }
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -652,7 +694,31 @@ int main(int argc, char *argv[]) {
     }
 
     printf("\nShutting down...\n");
+
+    /* Print cache stats */
+    if (s_png_cache || s_mvt_cache) {
+        size_t entries, bytes;
+        uint64_t hits, misses;
+
+        if (s_png_cache) {
+            ct_cache_stats(s_png_cache, &entries, &bytes, &hits, &misses);
+            printf("PNG cache: %zu entries, %.1f MB, %lu hits, %lu misses (%.1f%% hit rate)\n",
+                   entries, (double)bytes / (1024*1024),
+                   (unsigned long)hits, (unsigned long)misses,
+                   (hits + misses) > 0 ? (100.0 * hits / (hits + misses)) : 0.0);
+        }
+        if (s_mvt_cache) {
+            ct_cache_stats(s_mvt_cache, &entries, &bytes, &hits, &misses);
+            printf("MVT cache: %zu entries, %.1f MB, %lu hits, %lu misses (%.1f%% hit rate)\n",
+                   entries, (double)bytes / (1024*1024),
+                   (unsigned long)hits, (unsigned long)misses,
+                   (hits + misses) > 0 ? (100.0 * hits / (hits + misses)) : 0.0);
+        }
+    }
+
     mg_mgr_free(&mgr);
+    ct_cache_free(s_png_cache);
+    ct_cache_free(s_mvt_cache);
     ct_lod_free(&s_lod_config);
     ct_free_pbf_context(s_pbf_ctx);
 

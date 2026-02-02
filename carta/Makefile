@@ -30,7 +30,8 @@ CORE_SRCS = src/carta.c \
             src/ct_style.c \
             src/ct_lod.c \
             src/ct_simplify.c \
-            src/ct_rtree.c
+            src/ct_rtree.c \
+            src/ct_cache.c
 
 # miniz is now linked via shared library
 MINIZ_SRCS =
