@@ -7,6 +7,7 @@
 
 #include "locus.h"
 #include "lc_serialize.h"
+#include "lc_mmap.h"
 #include "mongoose.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -154,17 +155,41 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
                           escaped_query, result.total_matches, took_ms);
 
     for (size_t i = 0; i < result.num_results; i++) {
-        const LCEntity *e = lc_search_get_entity(g_index, &result.matches[i]);
-        if (!e) continue;
-
+        uint32_t eid = result.matches[i].entity_id;
         char escaped_name[512] = "";
-        if (e->name) {
-            json_escape(e->name, escaped_name, sizeof(escaped_name));
-        }
-
         const char *osm_type = "node";
-        if (e->type == LC_ENTITY_WAY) osm_type = "way";
-        else if (e->type == LC_ENTITY_RELATION) osm_type = "relation";
+        uint64_t osm_id = 0;
+        const char *fclass_str = "unknown";
+        double lat = 0, lon = 0;
+
+        if (g_index->mmap_idx) {
+            /* v4 mmap path */
+            const char *name = lc_mmap_entity_name(g_index->mmap_idx, eid);
+            if (name) json_escape(name, escaped_name, sizeof(escaped_name));
+
+            LCEntityType type = lc_mmap_entity_type(g_index->mmap_idx, eid);
+            if (type == LC_ENTITY_WAY) osm_type = "way";
+            else if (type == LC_ENTITY_RELATION) osm_type = "relation";
+
+            osm_id = lc_mmap_entity_osm_id(g_index->mmap_idx, eid);
+            fclass_str = lc_class_string(lc_mmap_entity_fclass(g_index->mmap_idx, eid));
+            SHCoord c = lc_mmap_entity_centroid(g_index->mmap_idx, eid);
+            lat = c.lat;
+            lon = c.lon;
+        } else {
+            /* Entity store path */
+            const LCEntity *e = lc_search_get_entity(g_index, &result.matches[i]);
+            if (!e) continue;
+
+            if (e->name) json_escape(e->name, escaped_name, sizeof(escaped_name));
+            if (e->type == LC_ENTITY_WAY) osm_type = "way";
+            else if (e->type == LC_ENTITY_RELATION) osm_type = "relation";
+
+            osm_id = e->osm_id;
+            fclass_str = lc_class_string(e->fclass);
+            lat = e->centroid.lat;
+            lon = e->centroid.lon;
+        }
 
         offset += snprintf(json + offset, 64 * 1024 - offset,
                           "%s\n    {\n"
@@ -177,12 +202,12 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
                           "      \"score\": %.4f\n"
                           "    }",
                           i > 0 ? "," : "",
-                          (unsigned long)e->osm_id,
+                          (unsigned long)osm_id,
                           osm_type,
                           escaped_name,
-                          lc_class_string(e->fclass),
-                          e->centroid.lat,
-                          e->centroid.lon,
+                          fclass_str,
+                          lat,
+                          lon,
                           result.matches[i].score);
     }
 
@@ -241,11 +266,19 @@ static void handle_autocomplete(struct mg_connection *c, struct mg_http_message 
     int offset = snprintf(json, 16 * 1024, "[\n");
 
     for (size_t i = 0; i < result.num_results; i++) {
-        const LCEntity *e = lc_search_get_entity(g_index, &result.matches[i]);
-        if (!e || !e->name) continue;
+        const char *name = NULL;
+
+        if (g_index->mmap_idx) {
+            name = lc_mmap_entity_name(g_index->mmap_idx, result.matches[i].entity_id);
+        } else {
+            const LCEntity *e = lc_search_get_entity(g_index, &result.matches[i]);
+            if (e) name = e->name;
+        }
+
+        if (!name) continue;
 
         char escaped[512];
-        json_escape(e->name, escaped, sizeof(escaped));
+        json_escape(name, escaped, sizeof(escaped));
 
         offset += snprintf(json + offset, 16 * 1024 - offset,
                           "%s  \"%s\"",
@@ -387,17 +420,21 @@ static void handle_request(struct mg_connection *c, int ev, void *ev_data) {
  * ============================================================================ */
 
 static void print_usage(const char *prog) {
-    fprintf(stderr, "Usage: %s [options] <pbf-file>\n", prog);
+    fprintf(stderr, "Usage: %s [options] <pbf-or-idx-file>\n", prog);
     fprintf(stderr, "\nOptions:\n");
     fprintf(stderr, "  -p, --port PORT   Listen port (default: 8083)\n");
+    fprintf(stderr, "  -s, --save PATH   Save index to binary file after building\n");
     fprintf(stderr, "  -h, --help        Show this help\n");
-    fprintf(stderr, "\nExample:\n");
-    fprintf(stderr, "  %s -p 8083 data/monaco-latest.osm.pbf\n", prog);
+    fprintf(stderr, "\nExamples:\n");
+    fprintf(stderr, "  %s data/monaco-latest.osm.pbf              # Build from PBF\n", prog);
+    fprintf(stderr, "  %s -s monaco.idx data/monaco-latest.osm.pbf  # Build and save\n", prog);
+    fprintf(stderr, "  %s monaco.idx                              # Load from binary\n", prog);
 }
 
 int main(int argc, char *argv[]) {
     int port = 8083;
-    const char *pbf_file = NULL;
+    const char *input_file = NULL;
+    const char *save_path = NULL;
 
     /* Parse arguments */
     for (int i = 1; i < argc; i++) {
@@ -405,41 +442,66 @@ int main(int argc, char *argv[]) {
             if (i + 1 < argc) {
                 port = atoi(argv[++i]);
             }
+        } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--save") == 0) {
+            if (i + 1 < argc) {
+                save_path = argv[++i];
+            }
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
         } else if (argv[i][0] != '-') {
-            pbf_file = argv[i];
+            input_file = argv[i];
         }
     }
 
-    if (!pbf_file) {
+    if (!input_file) {
         print_usage(argv[0]);
         return 1;
     }
 
-    /* Build index from PBF
-     * TODO: Add caching with geometry support in serialization format */
     clock_t load_start = clock();
 
-    fprintf(stderr, "locus-api: Loading %s...\n", pbf_file);
-    g_index = lc_index_create();
-    if (!g_index) {
-        fprintf(stderr, "locus-api: Failed to create index\n");
-        return 1;
-    }
+    /* Check if input is a binary index or PBF */
+    if (lc_is_binary_index(input_file)) {
+        /* Load via mmap (v4 zero-copy) */
+        fprintf(stderr, "locus-api: Loading binary index %s...\n", input_file);
+        g_index = lc_index_mmap(input_file);
+        if (!g_index) {
+            fprintf(stderr, "locus-api: Failed to load binary index\n");
+            return 1;
+        }
+    } else {
+        /* Build from PBF */
+        fprintf(stderr, "locus-api: Building index from %s...\n", input_file);
+        g_index = lc_index_create();
+        if (!g_index) {
+            fprintf(stderr, "locus-api: Failed to create index\n");
+            return 1;
+        }
 
-    LCStatus status = lc_index_build_from_pbf(g_index, pbf_file, NULL);
-    if (status != LC_OK) {
-        fprintf(stderr, "locus-api: Failed to load PBF: %s\n", lc_status_string(status));
-        lc_index_free(g_index);
-        return 1;
+        LCStatus status = lc_index_build_from_pbf(g_index, input_file, NULL);
+        if (status != LC_OK) {
+            fprintf(stderr, "locus-api: Failed to load PBF: %s\n", lc_status_string(status));
+            lc_index_free(g_index);
+            return 1;
+        }
+
+        /* Save if requested */
+        if (save_path) {
+            fprintf(stderr, "locus-api: Saving to %s...\n", save_path);
+            status = lc_index_save(g_index, save_path);
+            if (status != LC_OK) {
+                fprintf(stderr, "locus-api: Failed to save index: %s\n", lc_status_string(status));
+            } else {
+                fprintf(stderr, "locus-api: Saved binary index\n");
+            }
+        }
     }
 
     clock_t load_end = clock();
     double load_time = (double)(load_end - load_start) / CLOCKS_PER_SEC;
 
-    fprintf(stderr, "locus-api: Loaded %u entities (%.1f MB) in %.1fs\n",
+    fprintf(stderr, "locus-api: Loaded %u entities (%.1f MB) in %.3fs\n",
             lc_index_entity_count(g_index),
             (double)lc_index_memory_usage(g_index) / (1024.0 * 1024.0),
             load_time);
