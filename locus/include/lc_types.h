@@ -87,6 +87,15 @@ typedef struct {
 } LCAddress;
 
 /* ============================================================================
+ * Street Geometry (LineString)
+ * ============================================================================ */
+
+typedef struct {
+    SHCoord *points;        /* Array of coordinates along the street */
+    uint32_t count;         /* Number of points */
+} LCLineString;
+
+/* ============================================================================
  * Geocodable Entity
  * ============================================================================ */
 
@@ -103,6 +112,9 @@ typedef struct {
     /* Location */
     SHCoord centroid;       /* Representative point */
     SHBBox bbox;            /* Bounding box (for areas) */
+
+    /* Street geometry (for LC_CLASS_STREET only) */
+    LCLineString *geometry; /* Line geometry for distance calculations */
 
     /* Metadata */
     int8_t admin_level;     /* 0-10, 0 if not a boundary */
@@ -177,6 +189,19 @@ void lc_address_free(LCAddress *addr);
 
 /* Copy address (allocates new strings) */
 LCStatus lc_address_copy(LCAddress *dst, const LCAddress *src);
+
+/* ============================================================================
+ * LineString Functions
+ * ============================================================================ */
+
+/* Create a linestring with given capacity */
+LCLineString *lc_linestring_create(uint32_t capacity);
+
+/* Free linestring */
+void lc_linestring_free(LCLineString *line);
+
+/* Add a point to linestring */
+int lc_linestring_add_point(LCLineString *line, SHCoord coord);
 
 /* ============================================================================
  * Entity Functions

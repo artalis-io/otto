@@ -3,6 +3,7 @@
  */
 
 #include "locus.h"
+#include "lc_query.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -292,6 +293,9 @@ TEST(entity_store_intern)
     /* Memory usage should be tracked */
     ASSERT(store->string_pool_used >= 12);  /* "Hello" + "World" + null terminators */
 
+    /* Free orphaned strings - normally these would be stored in entities */
+    free(s1);
+    free(s2);
     lc_entity_store_free(store);
 }
 
@@ -674,6 +678,180 @@ TEST(grid_query_radius)
 }
 
 /* ============================================================================
+ * LineString Tests
+ * ============================================================================ */
+
+TEST(linestring_create)
+{
+    LCLineString *line = lc_linestring_create(4);
+    ASSERT(line != NULL);
+    ASSERT_EQ(line->count, 0);
+
+    lc_linestring_free(line);
+}
+
+TEST(linestring_add_points)
+{
+    LCLineString *line = lc_linestring_create(0);  /* Start with no capacity */
+    ASSERT(line != NULL);
+
+    SHCoord p1 = {.lat = 47.0, .lon = 19.0};
+    SHCoord p2 = {.lat = 47.1, .lon = 19.1};
+    SHCoord p3 = {.lat = 47.2, .lon = 19.2};
+
+    ASSERT(lc_linestring_add_point(line, p1));
+    ASSERT(lc_linestring_add_point(line, p2));
+    ASSERT(lc_linestring_add_point(line, p3));
+
+    ASSERT_EQ(line->count, 3);
+    ASSERT(fabs(line->points[0].lat - 47.0) < 0.001);
+    ASSERT(fabs(line->points[1].lat - 47.1) < 0.001);
+    ASSERT(fabs(line->points[2].lat - 47.2) < 0.001);
+
+    lc_linestring_free(line);
+}
+
+/* ============================================================================
+ * Point-to-Line Distance Tests
+ * ============================================================================ */
+
+TEST(point_to_segment_on_endpoint)
+{
+    /* Point is exactly on segment start */
+    SHCoord point = {.lat = 47.0, .lon = 19.0};
+    SHCoord seg_a = {.lat = 47.0, .lon = 19.0};
+    SHCoord seg_b = {.lat = 47.1, .lon = 19.1};
+
+    double dist = lc_point_to_segment_distance(point, seg_a, seg_b);
+    ASSERT(dist < 1.0);  /* Should be ~0 meters */
+}
+
+TEST(point_to_segment_perpendicular)
+{
+    /* Point perpendicular to segment middle */
+    /* Segment goes from (47.0, 19.0) to (47.0, 19.2) - horizontal line */
+    SHCoord seg_a = {.lat = 47.0, .lon = 19.0};
+    SHCoord seg_b = {.lat = 47.0, .lon = 19.2};
+
+    /* Point is 0.01 degrees north of segment midpoint */
+    SHCoord point = {.lat = 47.01, .lon = 19.1};
+
+    double dist = lc_point_to_segment_distance(point, seg_a, seg_b);
+    /* 0.01 degrees latitude is about 1.1 km */
+    ASSERT(dist > 1000);
+    ASSERT(dist < 1200);
+}
+
+TEST(point_to_segment_off_endpoint)
+{
+    /* Point closest to segment endpoint (not projected onto segment) */
+    SHCoord seg_a = {.lat = 47.0, .lon = 19.0};
+    SHCoord seg_b = {.lat = 47.0, .lon = 19.1};
+
+    /* Point is past the end of the segment */
+    SHCoord point = {.lat = 47.0, .lon = 19.2};
+
+    double dist = lc_point_to_segment_distance(point, seg_a, seg_b);
+    /* Should be distance from point to seg_b (0.1 degrees longitude ~= 7.4 km) */
+    ASSERT(dist > 7000);
+    ASSERT(dist < 8000);
+}
+
+TEST(point_to_linestring_simple)
+{
+    LCLineString *line = lc_linestring_create(4);
+    ASSERT(line != NULL);
+
+    /* Create an L-shaped linestring */
+    SHCoord p1 = {.lat = 47.0, .lon = 19.0};
+    SHCoord p2 = {.lat = 47.0, .lon = 19.1};
+    SHCoord p3 = {.lat = 47.1, .lon = 19.1};
+
+    lc_linestring_add_point(line, p1);
+    lc_linestring_add_point(line, p2);
+    lc_linestring_add_point(line, p3);
+
+    /* Point on the corner */
+    SHCoord query = {.lat = 47.0, .lon = 19.1};
+    double dist = lc_point_to_linestring_distance(query, line);
+    ASSERT(dist < 1.0);  /* Should be ~0 */
+
+    /* Point between first two points */
+    SHCoord query2 = {.lat = 47.0, .lon = 19.05};
+    dist = lc_point_to_linestring_distance(query2, line);
+    ASSERT(dist < 1.0);  /* Should be ~0 (on the line) */
+
+    lc_linestring_free(line);
+}
+
+TEST(point_to_entity_with_geometry)
+{
+    LCEntity entity;
+    lc_entity_init(&entity);
+    entity.fclass = LC_CLASS_STREET;
+    entity.centroid.lat = 47.05;  /* Centroid in the middle */
+    entity.centroid.lon = 19.05;
+
+    /* Create a street geometry */
+    LCLineString *line = lc_linestring_create(2);
+    SHCoord p1 = {.lat = 47.0, .lon = 19.0};
+    SHCoord p2 = {.lat = 47.1, .lon = 19.1};
+    lc_linestring_add_point(line, p1);
+    lc_linestring_add_point(line, p2);
+    entity.geometry = line;
+
+    /* Point near the start of the street (far from centroid) */
+    SHCoord query = {.lat = 47.0, .lon = 19.0};
+    double dist = lc_point_to_entity_distance(query, &entity);
+    ASSERT(dist < 10.0);  /* Very close to street start */
+
+    /* Point near the centroid but not on the line */
+    SHCoord query2 = {.lat = 47.05, .lon = 19.0};  /* West of the line */
+    double dist2 = lc_point_to_entity_distance(query2, &entity);
+    /* Should be closer to line than to centroid would be */
+    ASSERT(dist2 < 4000);  /* Should be ~3.7 km (perpendicular to diagonal line) */
+
+    lc_linestring_free(line);
+    entity.geometry = NULL;  /* Prevent double free */
+}
+
+TEST(reverse_with_street_geometry)
+{
+    LCIndex *index = lc_index_create();
+    LCEntityStore *store = lc_entity_store_create(10);
+
+    /* Add a street with geometry going from (47.0, 19.0) to (47.0, 19.1) */
+    LCEntity street = {0};
+    street.name = lc_entity_store_intern(store, "Test Street", 0);
+    street.fclass = LC_CLASS_STREET;
+    street.centroid.lat = 47.0;
+    street.centroid.lon = 19.05;  /* Centroid at midpoint */
+
+    /* Create geometry */
+    LCLineString *geometry = lc_linestring_create(2);
+    SHCoord p1 = {.lat = 47.0, .lon = 19.0};
+    SHCoord p2 = {.lat = 47.0, .lon = 19.1};
+    lc_linestring_add_point(geometry, p1);
+    lc_linestring_add_point(geometry, p2);
+    street.geometry = geometry;
+
+    lc_entity_store_add(store, &street);
+    lc_index_build(index, store);
+
+    /* Query a point on the street start (far from centroid) */
+    SHCoord query = {.lat = 47.0, .lon = 19.0};
+    LCReverseResult result;
+    LCStatus status = lc_reverse(index, query, NULL, &result);
+    ASSERT_EQ(status, LC_OK);
+    ASSERT(result.street != NULL);
+    ASSERT_STR_EQ(result.street->name, "Test Street");
+    ASSERT(result.distance_m < 10.0);  /* Should be very close using line distance */
+
+    lc_reverse_result_free(&result);
+    lc_index_free(index);
+}
+
+/* ============================================================================
  * Index Tests
  * ============================================================================ */
 
@@ -829,6 +1007,209 @@ TEST(reverse_basic)
 }
 
 /* ============================================================================
+ * Query Parser Tests
+ * ============================================================================ */
+
+TEST(query_parse_european_style)
+{
+    /* European style: "Street Name 123" */
+    LCParsedQuery pq;
+
+    ASSERT(lc_parse_address_query("Edvi Illés út 7", &pq));
+    ASSERT(pq.has_housenumber);
+    ASSERT_STR_EQ(pq.street, "Edvi Illés út");
+    ASSERT_STR_EQ(pq.housenumber, "7");
+    lc_parsed_query_free(&pq);
+
+    ASSERT(lc_parse_address_query("Kossuth tér 5/A", &pq));
+    ASSERT(pq.has_housenumber);
+    ASSERT_STR_EQ(pq.street, "Kossuth tér");
+    ASSERT_STR_EQ(pq.housenumber, "5/A");
+    lc_parsed_query_free(&pq);
+
+    ASSERT(lc_parse_address_query("Váci utca 12-14", &pq));
+    ASSERT(pq.has_housenumber);
+    ASSERT_STR_EQ(pq.street, "Váci utca");
+    ASSERT_STR_EQ(pq.housenumber, "12-14");
+    lc_parsed_query_free(&pq);
+}
+
+TEST(query_parse_us_style)
+{
+    /* US style: "123 Street Name" */
+    LCParsedQuery pq;
+
+    ASSERT(lc_parse_address_query("123 Main Street", &pq));
+    ASSERT(pq.has_housenumber);
+    ASSERT_STR_EQ(pq.street, "Main Street");
+    ASSERT_STR_EQ(pq.housenumber, "123");
+    lc_parsed_query_free(&pq);
+
+    ASSERT(lc_parse_address_query("42 Oak Avenue", &pq));
+    ASSERT(pq.has_housenumber);
+    ASSERT_STR_EQ(pq.street, "Oak Avenue");
+    ASSERT_STR_EQ(pq.housenumber, "42");
+    lc_parsed_query_free(&pq);
+}
+
+TEST(query_parse_no_number)
+{
+    /* No house number - entire query is street name */
+    LCParsedQuery pq;
+
+    ASSERT(lc_parse_address_query("Budapest", &pq));
+    ASSERT(!pq.has_housenumber);
+    ASSERT_STR_EQ(pq.street, "Budapest");
+    ASSERT(pq.housenumber == NULL);
+    lc_parsed_query_free(&pq);
+
+    ASSERT(lc_parse_address_query("Andrássy út", &pq));
+    ASSERT(!pq.has_housenumber);
+    ASSERT_STR_EQ(pq.street, "Andrássy út");
+    lc_parsed_query_free(&pq);
+}
+
+TEST(query_parse_whitespace)
+{
+    /* Handle extra whitespace */
+    LCParsedQuery pq;
+
+    ASSERT(lc_parse_address_query("  Váci utca  15  ", &pq));
+    ASSERT(pq.has_housenumber);
+    ASSERT_STR_EQ(pq.street, "Váci utca");
+    ASSERT_STR_EQ(pq.housenumber, "15");
+    lc_parsed_query_free(&pq);
+}
+
+TEST(query_is_housenumber)
+{
+    /* Valid house numbers */
+    ASSERT(lc_is_housenumber("7"));
+    ASSERT(lc_is_housenumber("123"));
+    ASSERT(lc_is_housenumber("5/A"));
+    ASSERT(lc_is_housenumber("12-14"));
+    ASSERT(lc_is_housenumber("3B"));
+    ASSERT(lc_is_housenumber("42/1"));
+
+    /* Invalid house numbers */
+    ASSERT(!lc_is_housenumber(""));
+    ASSERT(!lc_is_housenumber("ABC"));
+    ASSERT(!lc_is_housenumber("utca"));
+    ASSERT(!lc_is_housenumber("/5"));
+    ASSERT(!lc_is_housenumber("-12"));
+}
+
+TEST(query_parse_edge_cases)
+{
+    LCParsedQuery pq;
+
+    /* Empty query */
+    ASSERT(!lc_parse_address_query("", &pq));
+    ASSERT(!lc_parse_address_query("   ", &pq));
+
+    /* NULL query */
+    ASSERT(!lc_parse_address_query(NULL, &pq));
+
+    /* Single word that's a number (treat as street) */
+    ASSERT(lc_parse_address_query("123", &pq));
+    /* This is ambiguous - could be just a number. Current behavior: no house number extracted */
+    lc_parsed_query_free(&pq);
+}
+
+/* ============================================================================
+ * Address Search Tests
+ * ============================================================================ */
+
+TEST(search_address_with_housenumber)
+{
+    LCIndex *index = lc_index_create();
+    LCEntityStore *store = lc_entity_store_create(10);
+
+    /* Add a street */
+    LCEntity street = {0};
+    street.name = lc_entity_store_intern(store, "Váci utca", 0);
+    street.fclass = LC_CLASS_STREET;
+    street.centroid.lat = 47.5;
+    street.centroid.lon = 19.05;
+    lc_entity_store_add(store, &street);
+
+    /* Add an address on that street */
+    LCEntity addr1 = {0};
+    addr1.fclass = LC_CLASS_ADDRESS;
+    addr1.address.street = lc_entity_store_intern(store, "Váci utca", 0);
+    addr1.address.housenumber = lc_entity_store_intern(store, "15", 0);
+    addr1.centroid.lat = 47.501;
+    addr1.centroid.lon = 19.051;
+    lc_entity_store_add(store, &addr1);
+
+    /* Add another address with different number */
+    LCEntity addr2 = {0};
+    addr2.fclass = LC_CLASS_ADDRESS;
+    addr2.address.street = lc_entity_store_intern(store, "Váci utca", 0);
+    addr2.address.housenumber = lc_entity_store_intern(store, "20", 0);
+    addr2.centroid.lat = 47.502;
+    addr2.centroid.lon = 19.052;
+    lc_entity_store_add(store, &addr2);
+
+    lc_index_build(index, store);
+
+    /* Search for "Váci utca 15" - should find address with housenumber 15 first */
+    LCSearchResult result;
+    LCStatus status = lc_search(index, "Váci utca 15", NULL, &result);
+    ASSERT_EQ(status, LC_OK);
+    ASSERT(result.num_results >= 1);
+
+    /* First result should be the address with housenumber 15 */
+    const LCEntity *first = &index->entities->entities[result.matches[0].entity_id];
+    ASSERT_EQ(first->fclass, LC_CLASS_ADDRESS);
+    ASSERT_STR_EQ(first->address.housenumber, "15");
+
+    lc_search_result_free(&result);
+
+    /* Search for "Váci utca 20" - should find address with housenumber 20 first */
+    status = lc_search(index, "Váci utca 20", NULL, &result);
+    ASSERT_EQ(status, LC_OK);
+    ASSERT(result.num_results >= 1);
+
+    first = &index->entities->entities[result.matches[0].entity_id];
+    ASSERT_EQ(first->fclass, LC_CLASS_ADDRESS);
+    ASSERT_STR_EQ(first->address.housenumber, "20");
+
+    lc_search_result_free(&result);
+    lc_index_free(index);
+}
+
+TEST(search_address_street_only)
+{
+    LCIndex *index = lc_index_create();
+    LCEntityStore *store = lc_entity_store_create(10);
+
+    /* Add a street */
+    LCEntity street = {0};
+    street.name = lc_entity_store_intern(store, "Andrássy út", 0);
+    street.fclass = LC_CLASS_STREET;
+    street.centroid.lat = 47.5;
+    street.centroid.lon = 19.05;
+    lc_entity_store_add(store, &street);
+
+    lc_index_build(index, store);
+
+    /* Search for street only (no house number) */
+    LCSearchResult result;
+    LCStatus status = lc_search(index, "Andrássy út", NULL, &result);
+    ASSERT_EQ(status, LC_OK);
+    ASSERT(result.num_results >= 1);
+
+    /* Should find the street */
+    const LCEntity *first = &index->entities->entities[result.matches[0].entity_id];
+    ASSERT_EQ(first->fclass, LC_CLASS_STREET);
+    ASSERT_STR_EQ(first->name, "Andrássy út");
+
+    lc_search_result_free(&result);
+    lc_index_free(index);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -906,6 +1287,18 @@ int main(void)
     RUN_TEST(grid_query_point);
     RUN_TEST(grid_query_radius);
 
+    printf("\nLineString:\n");
+    RUN_TEST(linestring_create);
+    RUN_TEST(linestring_add_points);
+
+    printf("\nPoint-to-Line Distance:\n");
+    RUN_TEST(point_to_segment_on_endpoint);
+    RUN_TEST(point_to_segment_perpendicular);
+    RUN_TEST(point_to_segment_off_endpoint);
+    RUN_TEST(point_to_linestring_simple);
+    RUN_TEST(point_to_entity_with_geometry);
+    RUN_TEST(reverse_with_street_geometry);
+
     printf("\nIndex:\n");
     RUN_TEST(index_create);
     RUN_TEST(index_build);
@@ -913,6 +1306,18 @@ int main(void)
     RUN_TEST(search_prefix);
     RUN_TEST(autocomplete);
     RUN_TEST(reverse_basic);
+
+    printf("\nQuery Parser:\n");
+    RUN_TEST(query_parse_european_style);
+    RUN_TEST(query_parse_us_style);
+    RUN_TEST(query_parse_no_number);
+    RUN_TEST(query_parse_whitespace);
+    RUN_TEST(query_is_housenumber);
+    RUN_TEST(query_parse_edge_cases);
+
+    printf("\nAddress Search:\n");
+    RUN_TEST(search_address_with_housenumber);
+    RUN_TEST(search_address_street_only);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 
