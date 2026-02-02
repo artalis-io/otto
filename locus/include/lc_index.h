@@ -16,6 +16,9 @@
 #include "lc_pbf.h"
 #include "sh_geo.h"
 
+/* Forward declaration for mmap index */
+typedef struct LCMmapIndex LCMmapIndex;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,16 +28,17 @@ extern "C" {
  * ============================================================================ */
 
 typedef struct {
-    LCEntityStore *entities;    /* Entity data */
+    LCEntityStore *entities;    /* Entity data (NULL for v4 mmap) */
     LCTrie *trie;               /* Text prefix index */
-    LCNgramIndex *ngrams;       /* Fuzzy text index */
+    LCNgramIndex *ngrams;       /* Fuzzy text index (NULL for v4 mmap) */
     LCSpatialGrid *grid;        /* Spatial index */
 
     SHBBox bounds;              /* Geographic bounds */
     uint32_t num_entities;      /* Total entities */
     size_t memory_used;         /* Total memory usage */
 
-    void *mmap_ctx;             /* mmap context (if loaded via mmap) */
+    void *mmap_ctx;             /* mmap context for v3 (deprecated) */
+    LCMmapIndex *mmap_idx;      /* Zero-copy mmap index for v4 */
 } LCIndex;
 
 /* ============================================================================

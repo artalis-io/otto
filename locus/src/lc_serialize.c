@@ -1,11 +1,11 @@
 /*
  * lc_serialize.c - Binary Index Serialization with mmap Support
  *
- * Binary format v3 (full serialization):
+ * Binary format v4 (zero-copy with geometry/ngrams):
  *
- * [Header] (64 bytes)
+ * [Header v4] (80 bytes)
  *   magic: u32 (0x4C4F4355 = "LOCU")
- *   version: u32 (3)
+ *   version: u32 (4)
  *   entity_count: u32
  *   string_pool_size: u32
  *   trie_node_count: u32
@@ -14,8 +14,12 @@
  *   grid_height: u32
  *   bounds: 4 x f64 (min_lat, min_lon, max_lat, max_lon)
  *   grid_cell_size: f64
+ *   ngram_entry_count: u32
+ *   ngram_entity_count: u32
+ *   geometry_count: u32
+ *   geometry_point_count: u32
  *
- * [Section Offsets] (32 bytes)
+ * [Section Offsets v4] (96 bytes)
  *   entities_offset: u64
  *   alt_names_offset: u64
  *   string_pool_offset: u64
@@ -23,17 +27,26 @@
  *   trie_entities_offset: u64
  *   grid_cells_offset: u64
  *   grid_entities_offset: u64
+ *   ngram_entries_offset: u64
+ *   ngram_entities_offset: u64
+ *   geometry_offsets_offset: u64
+ *   geometry_points_offset: u64
  *
- * [Entity Records] - 64 bytes each, fixed layout
+ * [Entity Records] - 72 bytes each (v4 includes geometry_offset)
  * [Alt Name Offsets] - u32 array
  * [String Pool] - deduplicated, null-terminated strings
  * [Trie Nodes] - flattened trie structure
  * [Trie Entity IDs] - entity IDs for trie nodes
  * [Grid Cell Offsets] - offset into grid entities for each cell
  * [Grid Entity IDs] - entity IDs for grid cells
+ * [N-gram Entries] - sorted trigram entries
+ * [N-gram Entity IDs] - entity IDs for n-gram entries
+ * [Geometry Offsets] - entity_id + point_offset + point_count
+ * [Geometry Points] - int32 lat_e7, lon_e7 pairs
  */
 
 #include "lc_serialize.h"
+#include "lc_mmap.h"
 #include "lc_normalize.h"
 #include "lc_spatial.h"
 #include <stdio.h>
@@ -43,12 +56,13 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <math.h>
 
 #define NULL_OFFSET 0xFFFFFFFF
 #define LC_BINARY_VERSION_V3 3
 
 /* ============================================================================
- * Binary Format Structures
+ * Binary Format Structures (v3 - for backwards compatibility)
  * ============================================================================ */
 
 typedef struct __attribute__((packed)) {
@@ -77,7 +91,7 @@ typedef struct __attribute__((packed)) {
     uint64_t grid_cells_offset;
     uint64_t grid_entities_offset;
     uint64_t _padding;  /* Align to 64 bytes */
-} LCSectionOffsets;
+} LCSectionOffsetsV3;
 
 typedef struct __attribute__((packed)) {
     uint64_t osm_id;
@@ -98,7 +112,7 @@ typedef struct __attribute__((packed)) {
     uint32_t state_offset;
     uint32_t country_offset;
     uint32_t country_code_offset;
-} LCBinaryEntity;
+} LCBinaryEntityV3;
 
 /* Serialized trie node - fixed 160 bytes */
 typedef struct __attribute__((packed)) {
@@ -188,11 +202,8 @@ static uint32_t pool_add(StringPool *pool, const char *str) {
 
     /* Add to hash table */
     if (pool->entry_count >= pool->entry_capacity) {
-        size_t old_capacity = pool->entry_capacity;
         pool->entry_capacity *= 2;
         pool->entries = realloc(pool->entries, pool->entry_capacity * sizeof(StringEntry));
-        /* Update str pointers - they point into pool->data which may have moved */
-        /* Actually pool->data is separate, only entries moved. str pointers are still valid */
     }
 
     int32_t new_idx = (int32_t)pool->entry_count++;
@@ -372,7 +383,131 @@ static void serialize_grid(const LCSpatialGrid *grid, GridSerializer *gs) {
 }
 
 /* ============================================================================
- * Save Index (v3 format)
+ * N-gram Serialization (v4)
+ * ============================================================================ */
+
+typedef struct {
+    LCBinaryNgramEntry *entries;
+    uint32_t *entity_ids;
+    uint32_t entry_count;
+    uint32_t entity_count;
+    uint32_t entry_capacity;
+    uint32_t entity_capacity;
+} NgramSerializer;
+
+static void ngram_serializer_init(NgramSerializer *ns) {
+    ns->entry_capacity = 4096;
+    ns->entries = malloc(ns->entry_capacity * sizeof(LCBinaryNgramEntry));
+    ns->entity_capacity = 16384;
+    ns->entity_ids = malloc(ns->entity_capacity * sizeof(uint32_t));
+    ns->entry_count = 0;
+    ns->entity_count = 0;
+}
+
+static void ngram_serializer_free(NgramSerializer *ns) {
+    free(ns->entries);
+    free(ns->entity_ids);
+}
+
+static void serialize_ngram(const LCNgramIndex *ngram, NgramSerializer *ns) {
+    if (!ngram || ngram->num_entries == 0) return;
+
+    for (uint32_t i = 0; i < ngram->num_entries; i++) {
+        const LCNgramEntry *e = &ngram->entries[i];
+
+        /* Grow entries array if needed */
+        if (ns->entry_count >= ns->entry_capacity) {
+            ns->entry_capacity *= 2;
+            ns->entries = realloc(ns->entries, ns->entry_capacity * sizeof(LCBinaryNgramEntry));
+        }
+
+        /* Grow entity IDs array if needed */
+        if (ns->entity_count + e->count > ns->entity_capacity) {
+            while (ns->entity_count + e->count > ns->entity_capacity) {
+                ns->entity_capacity *= 2;
+            }
+            ns->entity_ids = realloc(ns->entity_ids, ns->entity_capacity * sizeof(uint32_t));
+        }
+
+        /* Pack trigram into 24-bit value */
+        LCBinaryNgramEntry *be = &ns->entries[ns->entry_count++];
+        be->trigram = lc_pack_trigram(e->ngram);
+        be->entity_offset = ns->entity_count;
+        be->entity_count = (uint16_t)(e->count > 65535 ? 65535 : e->count);
+        be->_padding = 0;
+
+        /* Copy entity IDs */
+        uint32_t copy_count = e->count > 65535 ? 65535 : e->count;
+        memcpy(ns->entity_ids + ns->entity_count, e->entity_ids, copy_count * sizeof(uint32_t));
+        ns->entity_count += copy_count;
+    }
+}
+
+/* ============================================================================
+ * Geometry Serialization (v4)
+ * ============================================================================ */
+
+typedef struct {
+    LCBinaryGeometry *offsets;
+    LCBinaryPoint *points;
+    uint32_t offset_count;
+    uint32_t point_count;
+    uint32_t offset_capacity;
+    uint32_t point_capacity;
+} GeometrySerializer;
+
+static void geometry_serializer_init(GeometrySerializer *gs) {
+    gs->offset_capacity = 4096;
+    gs->offsets = malloc(gs->offset_capacity * sizeof(LCBinaryGeometry));
+    gs->point_capacity = 32768;
+    gs->points = malloc(gs->point_capacity * sizeof(LCBinaryPoint));
+    gs->offset_count = 0;
+    gs->point_count = 0;
+}
+
+static void geometry_serializer_free(GeometrySerializer *gs) {
+    free(gs->offsets);
+    free(gs->points);
+}
+
+/* Returns geometry index for the entity, or NULL_OFFSET if no geometry */
+static uint32_t serialize_entity_geometry(const LCEntity *e, uint32_t entity_id, GeometrySerializer *gs) {
+    if (!e->geometry || e->geometry->count < 2) {
+        return NULL_OFFSET;
+    }
+
+    /* Grow offsets array if needed */
+    if (gs->offset_count >= gs->offset_capacity) {
+        gs->offset_capacity *= 2;
+        gs->offsets = realloc(gs->offsets, gs->offset_capacity * sizeof(LCBinaryGeometry));
+    }
+
+    /* Grow points array if needed */
+    if (gs->point_count + e->geometry->count > gs->point_capacity) {
+        while (gs->point_count + e->geometry->count > gs->point_capacity) {
+            gs->point_capacity *= 2;
+        }
+        gs->points = realloc(gs->points, gs->point_capacity * sizeof(LCBinaryPoint));
+    }
+
+    uint32_t geom_idx = gs->offset_count++;
+    LCBinaryGeometry *geom = &gs->offsets[geom_idx];
+    geom->entity_id = entity_id;
+    geom->point_offset = gs->point_count;
+    geom->point_count = e->geometry->count;
+
+    /* Convert and copy points */
+    for (uint32_t i = 0; i < e->geometry->count; i++) {
+        LCBinaryPoint *pt = &gs->points[gs->point_count++];
+        pt->lat_e7 = (int32_t)(e->geometry->points[i].lat * 1e7);
+        pt->lon_e7 = (int32_t)(e->geometry->points[i].lon * 1e7);
+    }
+
+    return geom_idx;
+}
+
+/* ============================================================================
+ * Save Index (v4 format)
  * ============================================================================ */
 
 LCStatus lc_index_save(const LCIndex *index, const char *path)
@@ -390,7 +525,13 @@ LCStatus lc_index_save(const LCIndex *index, const char *path)
     TrieSerializer ts;
     trie_serializer_init(&ts);
 
-    GridSerializer gs = {0};
+    GridSerializer grid_s = {0};
+
+    NgramSerializer ns;
+    ngram_serializer_init(&ns);
+
+    GeometrySerializer geom_s;
+    geometry_serializer_init(&geom_s);
 
     /* Count total alt names */
     uint32_t total_alt_names = 0;
@@ -405,15 +546,15 @@ LCStatus lc_index_save(const LCIndex *index, const char *path)
         if (!alt_name_offsets) goto error;
     }
 
-    LCBinaryEntity *records = NULL;
-    records = malloc(index->num_entities * sizeof(LCBinaryEntity));
+    LCBinaryEntityV4 *records = NULL;
+    records = malloc(index->num_entities * sizeof(LCBinaryEntityV4));
     if (!records) goto error;
 
     /* Build entity records with deduplicated strings */
     uint32_t alt_name_idx = 0;
     for (uint32_t i = 0; i < index->num_entities; i++) {
         const LCEntity *e = &index->entities->entities[i];
-        LCBinaryEntity *r = &records[i];
+        LCBinaryEntityV4 *r = &records[i];
 
         r->osm_id = e->osm_id;
         r->type = (uint8_t)e->type;
@@ -435,6 +576,9 @@ LCStatus lc_index_save(const LCIndex *index, const char *path)
         r->country_offset = pool_add(&pool, e->address.country);
         r->country_code_offset = pool_add(&pool, e->address.country_code);
 
+        /* Geometry */
+        r->geometry_offset = serialize_entity_geometry(e, i, &geom_s);
+
         /* Alt names */
         r->alt_names_offset = alt_name_idx;
         for (uint16_t j = 0; j < e->num_alt_names && j < 255; j++) {
@@ -448,14 +592,19 @@ LCStatus lc_index_save(const LCIndex *index, const char *path)
     }
 
     /* Serialize grid */
-    serialize_grid(index->grid, &gs);
+    serialize_grid(index->grid, &grid_s);
+
+    /* Serialize n-grams */
+    if (index->ngrams) {
+        serialize_ngram(index->ngrams, &ns);
+    }
 
     /* Calculate offsets */
-    uint64_t offset = sizeof(LCBinaryHeaderV3) + sizeof(LCSectionOffsets);
+    uint64_t offset = sizeof(LCBinaryHeaderV4) + sizeof(LCSectionOffsetsV4);
 
-    LCSectionOffsets sections;
+    LCSectionOffsetsV4 sections = {0};
     sections.entities_offset = offset;
-    offset += index->num_entities * sizeof(LCBinaryEntity);
+    offset += index->num_entities * sizeof(LCBinaryEntityV4);
 
     sections.alt_names_offset = offset;
     offset += total_alt_names * sizeof(uint32_t);
@@ -470,15 +619,26 @@ LCStatus lc_index_save(const LCIndex *index, const char *path)
     offset += ts.entity_count * sizeof(uint32_t);
 
     sections.grid_cells_offset = offset;
-    offset += (gs.cell_count + 1) * sizeof(uint32_t);
+    offset += (grid_s.cell_count + 1) * sizeof(uint32_t);
 
     sections.grid_entities_offset = offset;
-    sections._padding = 0;
+    offset += grid_s.entity_count * sizeof(uint32_t);
+
+    sections.ngram_entries_offset = offset;
+    offset += ns.entry_count * sizeof(LCBinaryNgramEntry);
+
+    sections.ngram_entities_offset = offset;
+    offset += ns.entity_count * sizeof(uint32_t);
+
+    sections.geometry_offsets_offset = offset;
+    offset += geom_s.offset_count * sizeof(LCBinaryGeometry);
+
+    sections.geometry_points_offset = offset;
 
     /* Write header */
-    LCBinaryHeaderV3 header = {
+    LCBinaryHeaderV4 header = {
         .magic = LC_BINARY_MAGIC,
-        .version = LC_BINARY_VERSION_V3,
+        .version = LC_BINARY_VERSION_V4,
         .entity_count = index->num_entities,
         .string_pool_size = (uint32_t)pool.size,
         .trie_node_count = ts.node_count,
@@ -490,27 +650,36 @@ LCStatus lc_index_save(const LCIndex *index, const char *path)
         .max_lat = index->bounds.max_lat,
         .max_lon = index->bounds.max_lon,
         .grid_cell_size = index->grid ? index->grid->cell_size_lat : LC_GRID_DEFAULT_CELL_SIZE,
-        ._padding = {0, 0}
+        .ngram_entry_count = ns.entry_count,
+        .ngram_entity_count = ns.entity_count,
+        .geometry_count = geom_s.offset_count,
+        .geometry_point_count = geom_s.point_count,
     };
 
     /* Write everything */
     if (fwrite(&header, sizeof(header), 1, f) != 1) goto error;
     if (fwrite(&sections, sizeof(sections), 1, f) != 1) goto error;
-    if (fwrite(records, sizeof(LCBinaryEntity), index->num_entities, f) != index->num_entities) goto error;
+    if (fwrite(records, sizeof(LCBinaryEntityV4), index->num_entities, f) != index->num_entities) goto error;
     if (total_alt_names > 0 && fwrite(alt_name_offsets, sizeof(uint32_t), total_alt_names, f) != total_alt_names) goto error;
     if (pool.size > 0 && fwrite(pool.data, 1, pool.size, f) != pool.size) goto error;
     if (ts.node_count > 0 && fwrite(ts.nodes, sizeof(LCBinaryTrieNode), ts.node_count, f) != ts.node_count) goto error;
     if (ts.entity_count > 0 && fwrite(ts.entity_ids, sizeof(uint32_t), ts.entity_count, f) != ts.entity_count) goto error;
-    if (gs.cell_count > 0 && fwrite(gs.cell_offsets, sizeof(uint32_t), gs.cell_count + 1, f) != gs.cell_count + 1) goto error;
-    if (gs.entity_count > 0 && fwrite(gs.entity_ids, sizeof(uint32_t), gs.entity_count, f) != gs.entity_count) goto error;
+    if (grid_s.cell_count > 0 && fwrite(grid_s.cell_offsets, sizeof(uint32_t), grid_s.cell_count + 1, f) != grid_s.cell_count + 1) goto error;
+    if (grid_s.entity_count > 0 && fwrite(grid_s.entity_ids, sizeof(uint32_t), grid_s.entity_count, f) != grid_s.entity_count) goto error;
+    if (ns.entry_count > 0 && fwrite(ns.entries, sizeof(LCBinaryNgramEntry), ns.entry_count, f) != ns.entry_count) goto error;
+    if (ns.entity_count > 0 && fwrite(ns.entity_ids, sizeof(uint32_t), ns.entity_count, f) != ns.entity_count) goto error;
+    if (geom_s.offset_count > 0 && fwrite(geom_s.offsets, sizeof(LCBinaryGeometry), geom_s.offset_count, f) != geom_s.offset_count) goto error;
+    if (geom_s.point_count > 0 && fwrite(geom_s.points, sizeof(LCBinaryPoint), geom_s.point_count, f) != geom_s.point_count) goto error;
 
     /* Cleanup */
     free(records);
     free(alt_name_offsets);
     pool_free(&pool);
     trie_serializer_free(&ts);
-    free(gs.cell_offsets);
-    free(gs.entity_ids);
+    free(grid_s.cell_offsets);
+    free(grid_s.entity_ids);
+    ngram_serializer_free(&ns);
+    geometry_serializer_free(&geom_s);
     fclose(f);
     return LC_OK;
 
@@ -519,8 +688,10 @@ error:
     free(alt_name_offsets);
     pool_free(&pool);
     trie_serializer_free(&ts);
-    free(gs.cell_offsets);
-    free(gs.entity_ids);
+    free(grid_s.cell_offsets);
+    free(grid_s.entity_ids);
+    ngram_serializer_free(&ns);
+    geometry_serializer_free(&geom_s);
     fclose(f);
     return LC_ERROR_INTERNAL;
 }
@@ -652,7 +823,7 @@ static size_t mmap_grid_query_point(const MmapGrid *mg, SHCoord coord,
 }
 
 /* ============================================================================
- * mmap Context
+ * mmap Context for v3 (backwards compatibility)
  * ============================================================================ */
 
 typedef struct {
@@ -664,53 +835,76 @@ typedef struct {
 } LCMmapContextV3;
 
 /* ============================================================================
- * Load Index via mmap (v3)
+ * Load Index via mmap (v4 - zero-copy)
  * ============================================================================ */
 
-LCIndex *lc_index_mmap(const char *path)
+static LCIndex *lc_index_mmap_v4(const char *path, void *map, size_t file_size, int fd)
 {
-    if (!path) return NULL;
+    const LCBinaryHeaderV4 *header = (const LCBinaryHeaderV4 *)map;
+    const LCSectionOffsetsV4 *sections = (const LCSectionOffsetsV4 *)((char *)map + sizeof(LCBinaryHeaderV4));
 
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return NULL;
-
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        close(fd);
-        return NULL;
-    }
-
-    size_t file_size = (size_t)st.st_size;
-    void *map = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (map == MAP_FAILED) {
-        close(fd);
-        return NULL;
-    }
-
-    madvise(map, file_size, MADV_SEQUENTIAL);
-
-    /* Check magic and version */
-    const uint32_t *magic_ptr = (const uint32_t *)map;
-    if (*magic_ptr != LC_BINARY_MAGIC) {
+    /* Allocate mmap index */
+    LCMmapIndex *mmap_idx = calloc(1, sizeof(LCMmapIndex));
+    if (!mmap_idx) {
         munmap(map, file_size);
         close(fd);
         return NULL;
     }
 
-    uint32_t version = magic_ptr[1];
+    mmap_idx->map_base = map;
+    mmap_idx->map_size = file_size;
+    mmap_idx->fd = fd;
+    mmap_idx->header = header;
 
-    /* Handle older versions */
-    if (version < LC_BINARY_VERSION_V3) {
+    /* Set up direct pointers into mmap'd memory */
+    mmap_idx->entities = (const LCBinaryEntityV4 *)((char *)map + sections->entities_offset);
+    mmap_idx->alt_name_offsets = (const uint32_t *)((char *)map + sections->alt_names_offset);
+    mmap_idx->string_pool = (const char *)map + sections->string_pool_offset;
+    mmap_idx->trie_nodes = (const LCBinaryTrieNodeV4 *)((char *)map + sections->trie_nodes_offset);
+    mmap_idx->trie_entity_ids = (const uint32_t *)((char *)map + sections->trie_entities_offset);
+    mmap_idx->grid_cell_offsets = (const uint32_t *)((char *)map + sections->grid_cells_offset);
+    mmap_idx->grid_entity_ids = (const uint32_t *)((char *)map + sections->grid_entities_offset);
+    mmap_idx->ngram_entries = (const LCBinaryNgramEntry *)((char *)map + sections->ngram_entries_offset);
+    mmap_idx->ngram_entity_ids = (const uint32_t *)((char *)map + sections->ngram_entities_offset);
+    mmap_idx->geometry_offsets = (const LCBinaryGeometry *)((char *)map + sections->geometry_offsets_offset);
+    mmap_idx->geometry_points = (const LCBinaryPoint *)((char *)map + sections->geometry_points_offset);
+
+    /* Create index - NO entity store, NO n-gram index, true zero-copy! */
+    LCIndex *index = calloc(1, sizeof(LCIndex));
+    if (!index) {
+        free(mmap_idx);
         munmap(map, file_size);
         close(fd);
-        return lc_index_load(path);  /* Fall back to v1/v2 loader */
+        return NULL;
     }
 
+    index->mmap_idx = mmap_idx;
+    index->entities = NULL;  /* No entity store - use mmap accessors */
+    index->trie = NULL;
+    index->ngrams = NULL;    /* No n-gram index - use mmap'd n-grams */
+    index->grid = NULL;
+    index->mmap_ctx = NULL;  /* v3 context not used */
+
+    index->num_entities = header->entity_count;
+    index->bounds.min_lat = header->min_lat;
+    index->bounds.min_lon = header->min_lon;
+    index->bounds.max_lat = header->max_lat;
+    index->bounds.max_lon = header->max_lon;
+
+    return index;
+}
+
+/* ============================================================================
+ * Load Index via mmap (v3 - with entity store repopulation)
+ * ============================================================================ */
+
+static LCIndex *lc_index_mmap_v3(const char *path, void *map, size_t file_size, int fd)
+{
     const LCBinaryHeaderV3 *header = (const LCBinaryHeaderV3 *)map;
-    const LCSectionOffsets *sections = (const LCSectionOffsets *)((char *)map + sizeof(LCBinaryHeaderV3));
+    const LCSectionOffsetsV3 *sections = (const LCSectionOffsetsV3 *)((char *)map + sizeof(LCBinaryHeaderV3));
 
     /* Get pointers into mapped memory */
-    const LCBinaryEntity *records = (const LCBinaryEntity *)((char *)map + sections->entities_offset);
+    const LCBinaryEntityV3 *records = (const LCBinaryEntityV3 *)((char *)map + sections->entities_offset);
     const uint32_t *alt_name_offsets = (const uint32_t *)((char *)map + sections->alt_names_offset);
     const char *string_pool = (const char *)map + sections->string_pool_offset;
     const LCBinaryTrieNode *trie_nodes = (const LCBinaryTrieNode *)((char *)map + sections->trie_nodes_offset);
@@ -735,7 +929,7 @@ LCIndex *lc_index_mmap(const char *path)
 
     /* Populate entities */
     for (uint32_t i = 0; i < header->entity_count; i++) {
-        const LCBinaryEntity *r = &records[i];
+        const LCBinaryEntityV3 *r = &records[i];
         LCEntity *e = &store->entities[i];
 
         e->osm_id = r->osm_id;
@@ -806,30 +1000,30 @@ LCIndex *lc_index_mmap(const char *path)
     index->bounds.max_lat = header->max_lat;
     index->bounds.max_lon = header->max_lon;
     index->mmap_ctx = ctx;
+    index->mmap_idx = NULL;
 
     /* Trie and grid are accessed via mmap context, not these pointers */
     index->trie = NULL;
     index->grid = NULL;
 
-    /* Create n-gram index (needs to be rebuilt - not serialized) */
+    /* Create n-gram index (needs to be rebuilt - not serialized in v3) */
     index->ngrams = lc_ngram_create();
     if (!index->ngrams) goto error_index;
 
-    /* Index entities in n-gram */
+    /* Index entities in n-gram - use stack buffer for speed */
+    char norm_buf[512];
     for (uint32_t i = 0; i < store->count; i++) {
         const LCEntity *e = &store->entities[i];
         if (e->name && e->name[0]) {
-            char *normalized = lc_normalize(e->name);
-            if (normalized) {
-                lc_ngram_index_name(index->ngrams, normalized, i);
-                free(normalized);
+            size_t len = lc_normalize_to(e->name, norm_buf, sizeof(norm_buf));
+            if (len > 0 && len < sizeof(norm_buf)) {
+                lc_ngram_index_name(index->ngrams, norm_buf, i);
             }
             for (uint16_t j = 0; j < e->num_alt_names; j++) {
                 if (e->alt_names[j]) {
-                    normalized = lc_normalize(e->alt_names[j]);
-                    if (normalized) {
-                        lc_ngram_index_name(index->ngrams, normalized, i);
-                        free(normalized);
+                    len = lc_normalize_to(e->alt_names[j], norm_buf, sizeof(norm_buf));
+                    if (len > 0 && len < sizeof(norm_buf)) {
+                        lc_ngram_index_name(index->ngrams, norm_buf, i);
                     }
                 }
             }
@@ -853,6 +1047,55 @@ error:
     munmap(map, file_size);
     close(fd);
     return NULL;
+}
+
+/* ============================================================================
+ * Load Index via mmap (dispatcher)
+ * ============================================================================ */
+
+LCIndex *lc_index_mmap(const char *path)
+{
+    if (!path) return NULL;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return NULL;
+
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        close(fd);
+        return NULL;
+    }
+
+    size_t file_size = (size_t)st.st_size;
+    void *map = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) {
+        close(fd);
+        return NULL;
+    }
+
+    madvise(map, file_size, MADV_SEQUENTIAL);
+
+    /* Check magic and version */
+    const uint32_t *magic_ptr = (const uint32_t *)map;
+    if (*magic_ptr != LC_BINARY_MAGIC) {
+        munmap(map, file_size);
+        close(fd);
+        return NULL;
+    }
+
+    uint32_t version = magic_ptr[1];
+
+    /* Handle by version */
+    if (version >= LC_BINARY_VERSION_V4) {
+        return lc_index_mmap_v4(path, map, file_size, fd);
+    } else if (version >= LC_BINARY_VERSION_V3) {
+        return lc_index_mmap_v3(path, map, file_size, fd);
+    } else {
+        /* v1/v2 - fall back to old loader */
+        munmap(map, file_size);
+        close(fd);
+        return lc_index_load(path);
+    }
 }
 
 /* ============================================================================
@@ -1019,7 +1262,7 @@ uint32_t lc_binary_version(const char *path)
 }
 
 /* ============================================================================
- * Public mmap'd Index Search Functions
+ * Public mmap'd Index Search Functions (v3 compatibility)
  * ============================================================================ */
 
 size_t lc_mmap_trie_search_exact(void *mmap_ctx, const char *name,
@@ -1096,9 +1339,9 @@ size_t lc_mmap_grid_find_nearest(void *mmap_ctx, const LCEntityStore *store,
                 uint32_t eid = mg->entity_ids[i];
                 if (eid >= store->count) continue;
 
-                /* Calculate distance */
+                /* Calculate distance using geometry if available */
                 const LCEntity *e = &store->entities[eid];
-                double dist = sh_haversine(coord, e->centroid);
+                double dist = lc_point_to_entity_distance(coord, e);
 
                 /* Add to candidates */
                 if (candidate_count >= candidate_capacity) {
@@ -1137,5 +1380,253 @@ size_t lc_mmap_grid_find_nearest(void *mmap_ctx, const LCEntityStore *store,
 
 int lc_index_is_mmap(const LCIndex *index)
 {
-    return index && index->mmap_ctx != NULL;
+    return index && (index->mmap_ctx != NULL || index->mmap_idx != NULL);
+}
+
+/* ============================================================================
+ * v4 mmap'd Search Functions
+ * ============================================================================ */
+
+/* Trie search on v4 mmap'd index */
+size_t lc_mmap_v4_trie_search_exact(const LCMmapIndex *idx, const char *name,
+                                     size_t max_results, uint32_t *results)
+{
+    if (!idx || !name || !results || idx->header->trie_node_count == 0) return 0;
+
+    MmapTrie mt = {
+        .nodes = (const LCBinaryTrieNode *)idx->trie_nodes,
+        .entity_ids = idx->trie_entity_ids,
+        .node_count = idx->header->trie_node_count
+    };
+    return mmap_trie_search_exact(&mt, name, max_results, results);
+}
+
+size_t lc_mmap_v4_trie_search_prefix(const LCMmapIndex *idx, const char *prefix,
+                                      size_t max_results, uint32_t *results)
+{
+    if (!idx || !results || idx->header->trie_node_count == 0) return 0;
+
+    MmapTrie mt = {
+        .nodes = (const LCBinaryTrieNode *)idx->trie_nodes,
+        .entity_ids = idx->trie_entity_ids,
+        .node_count = idx->header->trie_node_count
+    };
+    return mmap_trie_search_prefix(&mt, prefix, max_results, results);
+}
+
+/* N-gram search on v4 mmap'd index using binary search */
+static int ngram_compare(const void *key, const void *entry) {
+    uint32_t trigram = *(const uint32_t *)key;
+    const LCBinaryNgramEntry *e = (const LCBinaryNgramEntry *)entry;
+    if (trigram < e->trigram) return -1;
+    if (trigram > e->trigram) return 1;
+    return 0;
+}
+
+size_t lc_mmap_v4_ngram_search(const LCMmapIndex *idx, const char *query,
+                                float threshold, size_t max_results, LCFuzzyMatch *results)
+{
+    if (!idx || !query || !results || idx->header->ngram_entry_count == 0) return 0;
+
+    /* Generate trigrams from query */
+    char trigrams[128][4];
+    size_t num_trigrams = lc_ngram_generate(query, trigrams, 128);
+    if (num_trigrams == 0) return 0;
+
+    /* Count hits per entity */
+    uint32_t *hit_counts = calloc(idx->header->entity_count, sizeof(uint32_t));
+    if (!hit_counts) return 0;
+
+    /* Look up each trigram using binary search */
+    for (size_t i = 0; i < num_trigrams; i++) {
+        uint32_t packed = lc_pack_trigram(trigrams[i]);
+        const LCBinaryNgramEntry *entry = bsearch(&packed, idx->ngram_entries,
+            idx->header->ngram_entry_count, sizeof(LCBinaryNgramEntry), ngram_compare);
+
+        if (entry) {
+            for (uint16_t j = 0; j < entry->entity_count; j++) {
+                uint32_t eid = idx->ngram_entity_ids[entry->entity_offset + j];
+                if (eid < idx->header->entity_count) {
+                    hit_counts[eid]++;
+                }
+            }
+        }
+    }
+
+    /* Build results for entities meeting threshold */
+    size_t count = 0;
+    for (uint32_t eid = 0; eid < idx->header->entity_count && count < max_results; eid++) {
+        if (hit_counts[eid] > 0) {
+            float score = (float)hit_counts[eid] / (float)num_trigrams;
+            if (score >= threshold) {
+                results[count].entity_id = eid;
+                results[count].score = score;
+                count++;
+            }
+        }
+    }
+
+    free(hit_counts);
+
+    /* Sort by score descending */
+    if (count > 1) {
+        for (size_t i = 0; i < count - 1; i++) {
+            for (size_t j = i + 1; j < count; j++) {
+                if (results[j].score > results[i].score) {
+                    LCFuzzyMatch tmp = results[i];
+                    results[i] = results[j];
+                    results[j] = tmp;
+                }
+            }
+        }
+    }
+
+    return count;
+}
+
+/* Grid find nearest on v4 mmap'd index with geometry support */
+size_t lc_mmap_v4_grid_find_nearest(const LCMmapIndex *idx, SHCoord coord,
+                                     size_t max_results, LCNearestResult *results)
+{
+    if (!idx || !results || max_results == 0) return 0;
+    if (idx->header->grid_width == 0 || idx->header->grid_height == 0) return 0;
+
+    const LCBinaryHeaderV4 *h = idx->header;
+    double cell_size = h->grid_cell_size;
+    SHBBox bounds = { .min_lat = h->min_lat, .min_lon = h->min_lon,
+                      .max_lat = h->max_lat, .max_lon = h->max_lon };
+
+    /* Calculate cell index */
+    int center_col = (int)((coord.lon - bounds.min_lon) / cell_size);
+    int center_row = (int)((coord.lat - bounds.min_lat) / cell_size);
+
+    /* Collect candidates from neighboring cells */
+    size_t candidate_capacity = 256;
+    LCNearestResult *candidates = malloc(candidate_capacity * sizeof(LCNearestResult));
+    if (!candidates) return 0;
+
+    size_t candidate_count = 0;
+
+    for (int dr = -1; dr <= 1; dr++) {
+        for (int dc = -1; dc <= 1; dc++) {
+            int row = center_row + dr;
+            int col = center_col + dc;
+
+            if (col < 0 || col >= (int)h->grid_width ||
+                row < 0 || row >= (int)h->grid_height) {
+                continue;
+            }
+
+            uint32_t cell_idx = (uint32_t)(row * h->grid_width + col);
+            uint32_t start = idx->grid_cell_offsets[cell_idx];
+            uint32_t end = idx->grid_cell_offsets[cell_idx + 1];
+
+            for (uint32_t i = start; i < end; i++) {
+                uint32_t eid = idx->grid_entity_ids[i];
+                if (eid >= h->entity_count) continue;
+
+                /* Calculate distance using mmap'd geometry if available */
+                double dist = lc_mmap_point_to_entity_distance(idx, eid, coord);
+
+                /* Add to candidates */
+                if (candidate_count >= candidate_capacity) {
+                    candidate_capacity *= 2;
+                    LCNearestResult *new_candidates = realloc(candidates,
+                        candidate_capacity * sizeof(LCNearestResult));
+                    if (!new_candidates) {
+                        free(candidates);
+                        return 0;
+                    }
+                    candidates = new_candidates;
+                }
+
+                candidates[candidate_count].entity_id = eid;
+                candidates[candidate_count].distance_m = dist;
+                candidate_count++;
+            }
+        }
+    }
+
+    if (candidate_count == 0) {
+        free(candidates);
+        return 0;
+    }
+
+    /* Sort by distance */
+    qsort(candidates, candidate_count, sizeof(LCNearestResult), nearest_compare);
+
+    /* Copy top results */
+    size_t result_count = candidate_count < max_results ? candidate_count : max_results;
+    memcpy(results, candidates, result_count * sizeof(LCNearestResult));
+
+    free(candidates);
+    return result_count;
+}
+
+/* ============================================================================
+ * Geometry Distance for mmap'd v4 index
+ * ============================================================================ */
+
+/* Point-to-segment distance using mmap'd geometry */
+static double mmap_point_to_segment_distance(SHCoord point, SHCoord seg_a, SHCoord seg_b)
+{
+    double dx = seg_b.lon - seg_a.lon;
+    double dy = seg_b.lat - seg_a.lat;
+    double seg_len_sq = dx * dx + dy * dy;
+
+    if (seg_len_sq < 1e-14) {
+        return sh_haversine(point, seg_a);
+    }
+
+    double px = point.lon - seg_a.lon;
+    double py = point.lat - seg_a.lat;
+    double t = (px * dx + py * dy) / seg_len_sq;
+
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    SHCoord closest = {
+        .lat = seg_a.lat + t * dy,
+        .lon = seg_a.lon + t * dx
+    };
+
+    return sh_haversine(point, closest);
+}
+
+double lc_mmap_point_to_entity_distance(const LCMmapIndex *idx, uint32_t entity_idx, SHCoord point)
+{
+    if (!idx || entity_idx >= idx->header->entity_count) return -1.0;
+
+    const LCBinaryEntityV4 *e = &idx->entities[entity_idx];
+
+    /* For streets with geometry, use line distance */
+    if (e->fclass == LC_CLASS_STREET && e->geometry_offset != LC_MMAP_NULL_OFFSET) {
+        const LCBinaryGeometry *geom = &idx->geometry_offsets[e->geometry_offset];
+
+        if (geom->point_count < 2) {
+            /* Fall back to centroid */
+            SHCoord centroid = { .lat = e->lat, .lon = e->lon };
+            return sh_haversine(point, centroid);
+        }
+
+        /* Find minimum distance to any segment */
+        SHCoord p0 = lc_mmap_geometry_point(idx, entity_idx, 0);
+        SHCoord p1 = lc_mmap_geometry_point(idx, entity_idx, 1);
+        double min_dist = mmap_point_to_segment_distance(point, p0, p1);
+
+        for (uint32_t i = 1; i < geom->point_count - 1; i++) {
+            p0 = lc_mmap_geometry_point(idx, entity_idx, i);
+            p1 = lc_mmap_geometry_point(idx, entity_idx, i + 1);
+            double dist = mmap_point_to_segment_distance(point, p0, p1);
+            if (dist < min_dist) {
+                min_dist = dist;
+            }
+        }
+
+        return min_dist;
+    }
+
+    /* Fall back to centroid distance */
+    SHCoord centroid = { .lat = e->lat, .lon = e->lon };
+    return sh_haversine(point, centroid);
 }

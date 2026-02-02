@@ -5,6 +5,7 @@
  */
 
 #include "lc_index.h"
+#include "lc_mmap.h"
 #include "lc_pbf.h"
 #include "lc_normalize.h"
 #include "lc_serialize.h"
@@ -22,6 +23,16 @@ typedef struct {
     size_t map_size;
     int fd;
 } LCMmapContextBase;
+
+/* Forward declarations for v4 mmap search functions */
+size_t lc_mmap_v4_trie_search_exact(const LCMmapIndex *idx, const char *name,
+                                     size_t max_results, uint32_t *results);
+size_t lc_mmap_v4_trie_search_prefix(const LCMmapIndex *idx, const char *prefix,
+                                      size_t max_results, uint32_t *results);
+size_t lc_mmap_v4_ngram_search(const LCMmapIndex *idx, const char *query,
+                                float threshold, size_t max_results, LCFuzzyMatch *results);
+size_t lc_mmap_v4_grid_find_nearest(const LCMmapIndex *idx, SHCoord coord,
+                                     size_t max_results, LCNearestResult *results);
 
 /* ============================================================================
  * Index Management
@@ -50,7 +61,25 @@ void lc_index_free(LCIndex *index)
 {
     if (!index) return;
 
-    /* Handle mmap'd index specially */
+    /* Handle v4 mmap'd index */
+    if (index->mmap_idx) {
+        LCMmapIndex *mmap_idx = index->mmap_idx;
+
+        /* Unmap and close */
+        if (mmap_idx->map_base && mmap_idx->map_base != MAP_FAILED) {
+            munmap(mmap_idx->map_base, mmap_idx->map_size);
+        }
+        if (mmap_idx->fd >= 0) {
+            close(mmap_idx->fd);
+        }
+        free(mmap_idx);
+
+        /* v4 has no allocated entity store, trie, ngrams, or grid */
+        free(index);
+        return;
+    }
+
+    /* Handle v3 mmap'd index */
     if (index->mmap_ctx) {
         LCMmapContextBase *ctx = (LCMmapContextBase *)index->mmap_ctx;
 
@@ -114,27 +143,26 @@ LCStatus lc_index_build(LCIndex *index, LCEntityStore *store)
         index->grid = lc_grid_create(index->bounds, LC_GRID_DEFAULT_CELL_SIZE);
     }
 
-    /* Index each entity */
+    /* Index each entity - use stack buffer to avoid malloc overhead */
+    char norm_buf[512];
     for (uint32_t i = 0; i < store->count; i++) {
         const LCEntity *e = &store->entities[i];
 
         /* Index name in trie and n-gram */
         if (e->name && e->name[0]) {
-            char *normalized = lc_normalize(e->name);
-            if (normalized) {
-                lc_trie_insert(index->trie, normalized, i);
-                lc_ngram_index_name(index->ngrams, normalized, i);
-                free(normalized);
+            size_t len = lc_normalize_to(e->name, norm_buf, sizeof(norm_buf));
+            if (len > 0 && len < sizeof(norm_buf)) {
+                lc_trie_insert(index->trie, norm_buf, i);
+                lc_ngram_index_name(index->ngrams, norm_buf, i);
             }
 
             /* Index alternative names */
             for (uint16_t j = 0; j < e->num_alt_names; j++) {
                 if (e->alt_names[j]) {
-                    normalized = lc_normalize(e->alt_names[j]);
-                    if (normalized) {
-                        lc_trie_insert(index->trie, normalized, i);
-                        lc_ngram_index_name(index->ngrams, normalized, i);
-                        free(normalized);
+                    len = lc_normalize_to(e->alt_names[j], norm_buf, sizeof(norm_buf));
+                    if (len > 0 && len < sizeof(norm_buf)) {
+                        lc_trie_insert(index->trie, norm_buf, i);
+                        lc_ngram_index_name(index->ngrams, norm_buf, i);
                     }
                 }
             }
@@ -142,11 +170,10 @@ LCStatus lc_index_build(LCIndex *index, LCEntityStore *store)
 
         /* Index ADDRESS entities by their street name */
         if (e->fclass == LC_CLASS_ADDRESS && e->address.street && e->address.street[0]) {
-            char *normalized = lc_normalize(e->address.street);
-            if (normalized) {
-                lc_trie_insert(index->trie, normalized, i);
-                lc_ngram_index_name(index->ngrams, normalized, i);
-                free(normalized);
+            size_t len = lc_normalize_to(e->address.street, norm_buf, sizeof(norm_buf));
+            if (len > 0 && len < sizeof(norm_buf)) {
+                lc_trie_insert(index->trie, norm_buf, i);
+                lc_ngram_index_name(index->ngrams, norm_buf, i);
             }
         }
 
@@ -303,6 +330,56 @@ static double compute_score(const LCEntity *entity, double match_score)
     return score;
 }
 
+/* v4 mmap version of compute_score */
+static double compute_score_v4(const LCMmapIndex *idx, uint32_t eid, double match_score)
+{
+    double score = match_score;
+    score += score_importance(lc_mmap_entity_fclass(idx, eid));
+    score += score_population(lc_mmap_entity_population(idx, eid));
+
+    /* Slight penalty for long names */
+    const char *name = lc_mmap_entity_name(idx, eid);
+    if (name) {
+        size_t len = strlen(name);
+        score -= 0.002 * (double)len;
+    }
+
+    return score;
+}
+
+/* v4 mmap version of match_filter */
+static int match_filter_v4(const LCMmapIndex *idx, uint32_t eid, LCFeatureClass *filter)
+{
+    if (!filter) return 1;
+
+    LCFeatureClass fclass = lc_mmap_entity_fclass(idx, eid);
+    for (int i = 0; filter[i] != LC_CLASS_UNKNOWN; i++) {
+        if (fclass == filter[i]) return 1;
+    }
+    return 0;
+}
+
+/* v4 mmap version of in_bounds */
+static int in_bounds_v4(const LCMmapIndex *idx, uint32_t eid, SHBBox *bounds)
+{
+    if (!bounds) return 1;
+
+    SHCoord centroid = lc_mmap_entity_centroid(idx, eid);
+    return (centroid.lat >= bounds->min_lat &&
+            centroid.lat <= bounds->max_lat &&
+            centroid.lon >= bounds->min_lon &&
+            centroid.lon <= bounds->max_lon);
+}
+
+/* v4 mmap version of housenumber_matches */
+static int housenumber_matches_v4(const LCMmapIndex *idx, uint32_t eid, const char *query_number)
+{
+    if (!query_number) return 0;
+    const char *hn = lc_mmap_entity_housenumber(idx, eid);
+    if (!hn) return 0;
+    return strcasecmp(hn, query_number) == 0;
+}
+
 /* ============================================================================
  * Forward Search
  * ============================================================================ */
@@ -386,106 +463,194 @@ LCStatus lc_search(const LCIndex *index, const char *query,
 
     size_t count = 0;
 
-    /* Step 1: Exact match search */
-    uint32_t exact_results[64];
-    size_t exact_count;
-    if (index->mmap_ctx) {
-        exact_count = lc_mmap_trie_search_exact(index->mmap_ctx, normalized, 64, exact_results);
+    /* Check if we're using v4 zero-copy mmap */
+    if (index->mmap_idx) {
+        const LCMmapIndex *idx = index->mmap_idx;
+
+        /* Step 1: Exact match search */
+        uint32_t exact_results[64];
+        size_t exact_count = lc_mmap_v4_trie_search_exact(idx, normalized, 64, exact_results);
+
+        for (size_t i = 0; i < exact_count && count < capacity; i++) {
+            uint32_t eid = exact_results[i];
+            if (eid >= index->num_entities) continue;
+            if (!match_filter_v4(idx, eid, opts->filter)) continue;
+            if (!in_bounds_v4(idx, eid, opts->bounds)) continue;
+
+            matches[count].entity_id = eid;
+            matches[count].score = compute_score_v4(idx, eid, SCORE_EXACT_MATCH);
+            count++;
+        }
+
+        /* Step 2: Prefix search (if exact didn't find enough) */
+        if (count < (size_t)opts->limit) {
+            uint32_t prefix_results[128];
+            size_t prefix_count = lc_mmap_v4_trie_search_prefix(idx, normalized, 128, prefix_results);
+
+            for (size_t i = 0; i < prefix_count && count < capacity; i++) {
+                uint32_t eid = prefix_results[i];
+                if (eid >= index->num_entities) continue;
+
+                /* Check for duplicates */
+                int found = 0;
+                for (size_t j = 0; j < count; j++) {
+                    if (matches[j].entity_id == eid) { found = 1; break; }
+                }
+                if (found) continue;
+
+                if (!match_filter_v4(idx, eid, opts->filter)) continue;
+                if (!in_bounds_v4(idx, eid, opts->bounds)) continue;
+
+                matches[count].entity_id = eid;
+                matches[count].score = compute_score_v4(idx, eid, SCORE_PREFIX_MATCH);
+                count++;
+            }
+        }
+
+        /* Step 3: Fuzzy search using mmap'd n-grams */
+        if (opts->fuzzy && count < (size_t)opts->limit) {
+            LCFuzzyMatch fuzzy_results[128];
+            size_t fuzzy_count = lc_mmap_v4_ngram_search(idx, normalized,
+                                                          opts->fuzzy_threshold, 128, fuzzy_results);
+
+            for (size_t i = 0; i < fuzzy_count && count < capacity; i++) {
+                uint32_t eid = fuzzy_results[i].entity_id;
+                if (eid >= index->num_entities) continue;
+
+                /* Check for duplicates */
+                int found = 0;
+                for (size_t j = 0; j < count; j++) {
+                    if (matches[j].entity_id == eid) { found = 1; break; }
+                }
+                if (found) continue;
+
+                if (!match_filter_v4(idx, eid, opts->filter)) continue;
+                if (!in_bounds_v4(idx, eid, opts->bounds)) continue;
+
+                double fuzzy_score = SCORE_FUZZY_BASE + 0.3 * fuzzy_results[i].score;
+                matches[count].entity_id = eid;
+                matches[count].score = compute_score_v4(idx, eid, fuzzy_score);
+                count++;
+            }
+        }
+
+        /* If query has house number, boost matching ADDRESS entities */
+        if (parsed.has_housenumber && parsed.housenumber) {
+            for (size_t i = 0; i < count; i++) {
+                uint32_t eid = matches[i].entity_id;
+                if (lc_mmap_entity_fclass(idx, eid) == LC_CLASS_ADDRESS) {
+                    if (housenumber_matches_v4(idx, eid, parsed.housenumber)) {
+                        matches[i].score += 0.5;
+                    } else {
+                        matches[i].score -= 0.3;
+                    }
+                }
+            }
+        }
     } else {
-        exact_count = lc_trie_search_exact(index->trie, normalized, 64, exact_results);
-    }
+        /* v3 or regular index path */
 
-    for (size_t i = 0; i < exact_count && count < capacity; i++) {
-        uint32_t eid = exact_results[i];
-        if (eid >= index->num_entities) continue;
-
-        const LCEntity *e = &index->entities->entities[eid];
-        if (!match_filter(e, opts->filter)) continue;
-        if (!in_bounds(e, opts->bounds)) continue;
-
-        matches[count].entity_id = eid;
-        matches[count].score = compute_score(e, SCORE_EXACT_MATCH);
-        count++;
-    }
-
-    /* Step 2: Prefix search (if exact didn't find enough) */
-    if (count < (size_t)opts->limit) {
-        uint32_t prefix_results[128];
-        size_t prefix_count;
+        /* Step 1: Exact match search */
+        uint32_t exact_results[64];
+        size_t exact_count;
         if (index->mmap_ctx) {
-            prefix_count = lc_mmap_trie_search_prefix(index->mmap_ctx, normalized, 128, prefix_results);
+            exact_count = lc_mmap_trie_search_exact(index->mmap_ctx, normalized, 64, exact_results);
         } else {
-            prefix_count = lc_trie_search_prefix(index->trie, normalized, 128, prefix_results);
+            exact_count = lc_trie_search_exact(index->trie, normalized, 64, exact_results);
         }
 
-        for (size_t i = 0; i < prefix_count && count < capacity; i++) {
-            uint32_t eid = prefix_results[i];
+        for (size_t i = 0; i < exact_count && count < capacity; i++) {
+            uint32_t eid = exact_results[i];
             if (eid >= index->num_entities) continue;
-
-            /* Check for duplicates */
-            int found = 0;
-            for (size_t j = 0; j < count; j++) {
-                if (matches[j].entity_id == eid) {
-                    found = 1;
-                    break;
-                }
-            }
-            if (found) continue;
 
             const LCEntity *e = &index->entities->entities[eid];
             if (!match_filter(e, opts->filter)) continue;
             if (!in_bounds(e, opts->bounds)) continue;
 
             matches[count].entity_id = eid;
-            matches[count].score = compute_score(e, SCORE_PREFIX_MATCH);
+            matches[count].score = compute_score(e, SCORE_EXACT_MATCH);
             count++;
         }
-    }
 
-    /* Step 3: Fuzzy search (if enabled and still need more) */
-    if (opts->fuzzy && count < (size_t)opts->limit) {
-        LCFuzzyMatch fuzzy_results[128];
-        size_t fuzzy_count = lc_ngram_search(index->ngrams, normalized,
-                                             opts->fuzzy_threshold, 128, fuzzy_results);
-
-        for (size_t i = 0; i < fuzzy_count && count < capacity; i++) {
-            uint32_t eid = fuzzy_results[i].entity_id;
-            if (eid >= index->num_entities) continue;
-
-            /* Check for duplicates */
-            int found = 0;
-            for (size_t j = 0; j < count; j++) {
-                if (matches[j].entity_id == eid) {
-                    found = 1;
-                    break;
-                }
+        /* Step 2: Prefix search (if exact didn't find enough) */
+        if (count < (size_t)opts->limit) {
+            uint32_t prefix_results[128];
+            size_t prefix_count;
+            if (index->mmap_ctx) {
+                prefix_count = lc_mmap_trie_search_prefix(index->mmap_ctx, normalized, 128, prefix_results);
+            } else {
+                prefix_count = lc_trie_search_prefix(index->trie, normalized, 128, prefix_results);
             }
-            if (found) continue;
 
-            const LCEntity *e = &index->entities->entities[eid];
-            if (!match_filter(e, opts->filter)) continue;
-            if (!in_bounds(e, opts->bounds)) continue;
+            for (size_t i = 0; i < prefix_count && count < capacity; i++) {
+                uint32_t eid = prefix_results[i];
+                if (eid >= index->num_entities) continue;
 
-            double fuzzy_score = SCORE_FUZZY_BASE + 0.3 * fuzzy_results[i].score;
-            matches[count].entity_id = eid;
-            matches[count].score = compute_score(e, fuzzy_score);
-            count++;
+                /* Check for duplicates */
+                int found = 0;
+                for (size_t j = 0; j < count; j++) {
+                    if (matches[j].entity_id == eid) {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (found) continue;
+
+                const LCEntity *e = &index->entities->entities[eid];
+                if (!match_filter(e, opts->filter)) continue;
+                if (!in_bounds(e, opts->bounds)) continue;
+
+                matches[count].entity_id = eid;
+                matches[count].score = compute_score(e, SCORE_PREFIX_MATCH);
+                count++;
+            }
         }
-    }
 
-    /* If query has house number, boost matching ADDRESS entities */
-    if (parsed.has_housenumber && parsed.housenumber) {
-        for (size_t i = 0; i < count; i++) {
-            uint32_t eid = matches[i].entity_id;
-            const LCEntity *e = &index->entities->entities[eid];
+        /* Step 3: Fuzzy search (if enabled and still need more) */
+        if (opts->fuzzy && count < (size_t)opts->limit && index->ngrams) {
+            LCFuzzyMatch fuzzy_results[128];
+            size_t fuzzy_count = lc_ngram_search(index->ngrams, normalized,
+                                                 opts->fuzzy_threshold, 128, fuzzy_results);
 
-            if (e->fclass == LC_CLASS_ADDRESS) {
-                if (housenumber_matches(e, parsed.housenumber)) {
-                    /* Significant boost for exact address match */
-                    matches[i].score += 0.5;
-                } else {
-                    /* Demote addresses with wrong house number */
-                    matches[i].score -= 0.3;
+            for (size_t i = 0; i < fuzzy_count && count < capacity; i++) {
+                uint32_t eid = fuzzy_results[i].entity_id;
+                if (eid >= index->num_entities) continue;
+
+                /* Check for duplicates */
+                int found = 0;
+                for (size_t j = 0; j < count; j++) {
+                    if (matches[j].entity_id == eid) {
+                        found = 1;
+                        break;
+                    }
+                }
+                if (found) continue;
+
+                const LCEntity *e = &index->entities->entities[eid];
+                if (!match_filter(e, opts->filter)) continue;
+                if (!in_bounds(e, opts->bounds)) continue;
+
+                double fuzzy_score = SCORE_FUZZY_BASE + 0.3 * fuzzy_results[i].score;
+                matches[count].entity_id = eid;
+                matches[count].score = compute_score(e, fuzzy_score);
+                count++;
+            }
+        }
+
+        /* If query has house number, boost matching ADDRESS entities */
+        if (parsed.has_housenumber && parsed.housenumber && index->entities) {
+            for (size_t i = 0; i < count; i++) {
+                uint32_t eid = matches[i].entity_id;
+                const LCEntity *e = &index->entities->entities[eid];
+
+                if (e->fclass == LC_CLASS_ADDRESS) {
+                    if (housenumber_matches(e, parsed.housenumber)) {
+                        /* Significant boost for exact address match */
+                        matches[i].score += 0.5;
+                    } else {
+                        /* Demote addresses with wrong house number */
+                        matches[i].score -= 0.3;
+                    }
                 }
             }
         }
@@ -529,7 +694,12 @@ void lc_search_result_free(LCSearchResult *result)
 
 const LCEntity *lc_search_get_entity(const LCIndex *index, const LCSearchMatch *match)
 {
-    if (!index || !match || !index->entities) return NULL;
+    if (!index || !match) return NULL;
+
+    /* v4 zero-copy path has no entity store - use mmap accessors instead */
+    if (index->mmap_idx) return NULL;
+
+    if (!index->entities) return NULL;
     if (match->entity_id >= index->num_entities) return NULL;
     return &index->entities->entities[match->entity_id];
 }
@@ -559,6 +729,28 @@ LCStatus lc_reverse(const LCIndex *index, SHCoord coord,
         opts = &default_opts;
     }
 
+    /* v4 zero-copy path - no entity store, no grid, everything from mmap_idx */
+    if (index->mmap_idx) {
+        const LCMmapIndex *idx = index->mmap_idx;
+
+        LCNearestResult nearest[32];
+        size_t nearest_count = lc_mmap_v4_grid_find_nearest(idx, coord, 32, nearest);
+
+        if (nearest_count == 0) return LC_OK;
+
+        result->distance_m = nearest[0].distance_m;
+
+        /* For v4, we can't return LCEntity* since we don't have an entity store.
+         * The result pointers will be NULL, but callers can use entity_id
+         * from nearest results with mmap accessors. For backwards compatibility,
+         * we just note this limitation - a proper fix would change the API. */
+
+        /* TODO: Extend LCReverseResult to include entity_ids for v4 compatibility */
+
+        return LC_OK;
+    }
+
+    /* v3 and regular path */
     if (!index->entities) {
         return LC_OK;  /* No entity store */
     }
