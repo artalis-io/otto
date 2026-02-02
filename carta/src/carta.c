@@ -50,6 +50,12 @@ CTPBFContext *ct_load_pbf(const char *filename)
 {
     if (!filename) return NULL;
 
+    /* Check if it's a binary index file (fast path) */
+    if (ct_is_binary_index(filename)) {
+        return ct_index_mmap(filename);
+    }
+
+    /* Parse PBF file (slow path) */
     CTPBFContext *ctx = ct_pbf_context_create();
     if (!ctx) return NULL;
 
