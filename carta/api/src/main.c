@@ -39,6 +39,7 @@ typedef struct {
     char pbf_path[512];
     char static_dir[512];
     char listen_addr[64];
+    char save_index_path[512];  /* Path to save binary index */
     int port;
     int min_zoom;
     int max_zoom;
@@ -549,6 +550,7 @@ static void print_usage(const char *prog) {
     printf("  --tile-size N        PNG tile size (default: 512)\n");
     printf("  --lod PRESET         LOD filtering: none, default, detailed, minimal\n");
     printf("  --no-lod             Disable LOD filtering (same as --lod none)\n");
+    printf("  -S, --save-index FILE  Save binary index for fast loading\n");
     printf("  --help               Show this help\n");
     printf("\n");
     printf("Environment variables:\n");
@@ -594,6 +596,8 @@ int main(int argc, char *argv[]) {
             if (++i < argc) s_config.lod_preset = parse_lod_preset(argv[i]);
         } else if (strcmp(argv[i], "--no-lod") == 0) {
             s_config.lod_preset = LOD_NONE;
+        } else if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--save-index") == 0) {
+            if (++i < argc) strncpy(s_config.save_index_path, argv[i], sizeof(s_config.save_index_path) - 1);
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -625,6 +629,17 @@ int main(int argc, char *argv[]) {
     printf("Loaded: %zu nodes, %zu ways, %zu features indexed\n", nodes, ways, features);
     printf("Bounds: [%.4f, %.4f] to [%.4f, %.4f]\n",
            bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat);
+
+    /* Save index if requested */
+    if (s_config.save_index_path[0] != '\0') {
+        printf("Saving index to: %s\n", s_config.save_index_path);
+        CTStatus save_status = ct_index_save(s_pbf_ctx, s_config.save_index_path);
+        if (save_status == CT_OK) {
+            printf("Index saved successfully.\n");
+        } else {
+            fprintf(stderr, "Warning: Failed to save index: %s\n", ct_status_string(save_status));
+        }
+    }
 
     /* Initialize LOD config based on preset */
     ct_lod_init(&s_lod_config);

@@ -207,13 +207,33 @@ void ct_pbf_context_free(CTPBFContext *ctx)
     free(ctx->node_map.keys);
     free(ctx->node_map.values);
 
-    for (size_t i = 0; i < ctx->num_ways; i++) {
-        free(ctx->ways[i].coords);
-        free(ctx->ways[i].name);
-    }
-    free(ctx->ways);
+    if (ctx->mmap_base) {
+        /* mmap'd context - ways point into allocated block, names are strdup'd */
+        for (size_t i = 0; i < ctx->num_ways; i++) {
+            free(ctx->ways[i].name);
+        }
+        free(ctx->ways);
+        free(ctx->mmap_coords);
 
-    ct_rtree_free(ctx->rtree);
+        /* R-Tree nodes point into mmap, just free the struct */
+        if (ctx->rtree && !ctx->rtree_is_mmap) {
+            ct_rtree_free(ctx->rtree);
+        } else if (ctx->rtree) {
+            free(ctx->rtree);
+        }
+
+        /* Unmap the file */
+        munmap(ctx->mmap_base, ctx->mmap_size);
+    } else {
+        /* Normal context - free everything */
+        for (size_t i = 0; i < ctx->num_ways; i++) {
+            free(ctx->ways[i].coords);
+            free(ctx->ways[i].name);
+        }
+        free(ctx->ways);
+
+        ct_rtree_free(ctx->rtree);
+    }
 
     free(ctx);
 }

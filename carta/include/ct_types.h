@@ -322,6 +322,12 @@ typedef struct {
     size_t total_nodes_parsed;
     size_t total_ways_parsed;
     size_t features_kept;
+
+    /* mmap support (for binary index loading) */
+    void *mmap_base;          /* mmap'd file base, NULL if not mmap'd */
+    size_t mmap_size;         /* mmap'd file size */
+    void *mmap_coords;        /* Allocated coordinate block (for mmap'd ways) */
+    int rtree_is_mmap;        /* 1 if R-Tree points into mmap */
 } CTPBFContext;
 
 /* ============================================================================

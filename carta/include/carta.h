@@ -18,6 +18,7 @@
 #include "ct_png.h"
 #include "ct_lod.h"
 #include "ct_simplify.h"
+#include "ct_serialize.h"
 
 #ifdef __cplusplus
 extern "C" {
