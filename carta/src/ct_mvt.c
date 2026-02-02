@@ -8,6 +8,7 @@
 #include "ct_mvt.h"
 #include "ct_tile.h"
 #include "ct_pbf.h"
+#include "ct_simplify.h"
 #include "sh_protobuf.h"
 #include <stdlib.h>
 #include <string.h>
@@ -442,8 +443,9 @@ size_t ct_generate_mvt(const CTPBFContext *ctx, CTTileCoord coord,
             f->points[j].y = py;
         }
 
-        /* TODO: Clip geometry to tile bounds */
-        /* TODO: Simplify geometry based on tolerance */
+        /* Note: Clipping and simplification temporarily disabled for debugging.
+         * TODO: Fix ct_clip_polygon edge winding order
+         */
 
         ct_tile_add_feature(&tile, f);
     }
