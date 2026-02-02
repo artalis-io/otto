@@ -92,6 +92,7 @@ typedef struct {
     LCEntity **hierarchy;       /* Admin hierarchy [country → city] */
     int hierarchy_depth;
     double distance_m;          /* Distance to nearest feature */
+    int _owns_entities;         /* Internal: if set, entities are allocated and must be freed */
 } LCReverseResult;
 
 /* ============================================================================
