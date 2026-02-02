@@ -827,10 +827,13 @@ static void update_route_state(void) {
 
 /* Format address from reverse geocode result */
 static void format_address(char *buf, size_t size, const CsReverseResult *r) {
-    if (r->street[0] && r->city[0]) {
-        snprintf(buf, size, "%s, %s", r->street, r->city);
-    } else if (r->name[0]) {
+    /* Prefer display_name (stored in name field) as it's already formatted */
+    if (r->name[0]) {
         snprintf(buf, size, "%s", r->name);
+    } else if (r->street[0] && r->city[0]) {
+        snprintf(buf, size, "%s, %s", r->street, r->city);
+    } else if (r->street[0]) {
+        snprintf(buf, size, "%s", r->street);
     } else if (r->city[0]) {
         snprintf(buf, size, "%s", r->city);
     } else {
