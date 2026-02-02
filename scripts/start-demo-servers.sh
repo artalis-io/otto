@@ -78,9 +78,43 @@ echo ""
 
 # Define index files
 LOCUS_IDX="$INDEX_DIR/$REGION-locus.idx"
+CARTA_IDX="$INDEX_DIR/$REGION-carta.idx"
 
-# Check for Locus index file
+# Check for index files
 echo "Checking index files..."
+
+# Check for Carta index
+if [ -f "$CARTA_IDX" ]; then
+    echo -e "  ${GREEN}Found: $CARTA_IDX${NC}"
+else
+    echo -e "  ${YELLOW}Building Carta index (this may take a while)...${NC}"
+    ./carta/api/carta-tile-server --save-index "$CARTA_IDX" "$PBF_FILE" >/dev/null 2>&1 &
+    CARTA_BUILD_PID=$!
+
+    echo -n "  "
+    while [ ! -f "$CARTA_IDX" ]; do
+        if ! kill -0 $CARTA_BUILD_PID 2>/dev/null; then
+            echo ""
+            echo -e "  ${RED}Carta build failed${NC}"
+            break
+        fi
+        printf "."
+        sleep 5
+    done
+
+    if [ -f "$CARTA_IDX" ]; then
+        echo ""
+        echo -e "  ${GREEN}Built: $CARTA_IDX${NC}"
+        kill $CARTA_BUILD_PID 2>/dev/null || true
+        sleep 1
+    else
+        echo ""
+        echo -e "  ${YELLOW}Carta index not created, using PBF directly${NC}"
+        CARTA_IDX=""
+    fi
+fi
+
+# Check for Locus index
 if [ -f "$LOCUS_IDX" ]; then
     echo -e "  ${GREEN}Found: $LOCUS_IDX${NC}"
 else
@@ -117,10 +151,16 @@ echo ""
 # Start servers in background
 echo "Starting servers..."
 
-# Carta tile server (port 8081)
-./carta/api/carta-tile-server -p 8081 "$PBF_FILE" >/dev/null 2>&1 &
-CARTA_PID=$!
-echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID]"
+# Carta tile server (port 8081) - use index if available
+if [ -n "$CARTA_IDX" ] && [ -f "$CARTA_IDX" ]; then
+    ./carta/api/carta-tile-server -p 8081 "$CARTA_IDX" >/dev/null 2>&1 &
+    CARTA_PID=$!
+    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - using binary index"
+else
+    ./carta/api/carta-tile-server -p 8081 "$PBF_FILE" >/dev/null 2>&1 &
+    CARTA_PID=$!
+    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - loading from PBF..."
+fi
 
 # Velo route server (port 8082)
 ./velo/api/velo-route-server -p 8082 "$PBF_FILE" >/dev/null 2>&1 &
