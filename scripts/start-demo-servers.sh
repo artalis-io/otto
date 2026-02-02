@@ -139,11 +139,12 @@ else
 fi
 
 # Start demo HTTP server (port 8000)
-cd shared/ui/clay-shards-demo
+# Serve from shared/ui so that relative imports work (demo imports ../clay-shards-webgl)
+cd shared/ui
 python3 -m http.server 8000 >/dev/null 2>&1 &
 DEMO_PID=$!
-cd ../../..
-echo "  Started: Demo (http://localhost:8000) [PID: $DEMO_PID]"
+cd ../..
+echo "  Started: Demo (http://localhost:8000/clay-shards-demo/) [PID: $DEMO_PID]"
 
 echo ""
 echo "Waiting for servers to be ready..."
@@ -173,7 +174,7 @@ wait_for_server "Locus" "http://localhost:8083/api/v1/health" 300
 echo ""
 echo -e "${GREEN}=== All servers running ===${NC}"
 echo ""
-echo "  Demo:     http://localhost:8000"
+echo "  Demo:     http://localhost:8000/clay-shards-demo/"
 echo "  Carta:    http://localhost:8081"
 echo "  Velo:     http://localhost:8082"
 echo "  Locus:    http://localhost:8083"
