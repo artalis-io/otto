@@ -36,7 +36,7 @@ OBJS = $(BUILD_DIR)/main.o
 # Target
 TARGET = carta-tile-server
 
-.PHONY: all clean debug deps run
+.PHONY: all clean debug deps run test test-threading test-threading-quick
 
 all: deps $(TARGET)
 
@@ -82,6 +82,14 @@ install: $(TARGET)
 # Docker build
 docker:
 	docker build -t carta-tile-server .
+
+# Threading stress test
+test-threading: $(TARGET)
+	@./test_threading.sh --threads 4 --clients 16 --requests 200
+
+# Quick threading smoke test
+test-threading-quick: $(TARGET)
+	@./test_threading.sh --threads 2 --clients 8 --requests 50
 
 # Test the API endpoints
 test: $(TARGET)

@@ -425,7 +425,7 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
     }
 
     /* Generate MVT tile directly */
-    size_t capacity = 512 * 1024;
+    size_t capacity = 2 * 1024 * 1024;  /* 2MB - increased from 512KB for dense tiles */
     uint8_t *buffer = malloc(capacity);
     if (!buffer) {
         send_error(c, 500, "Memory allocation failed");

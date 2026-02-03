@@ -87,6 +87,10 @@ void ct_mvt_encoder_init(CTMVTEncoder *enc, uint8_t *buffer, size_t capacity)
 static void enc_write_varint(CTMVTEncoder *enc, uint64_t value)
 {
     if (enc->error) return;
+    if (enc->offset >= enc->capacity) {
+        enc->error = 1;
+        return;
+    }
     int n = sh_pb_write_varint(enc->buffer + enc->offset,
                                enc->capacity - enc->offset, value);
     if (n <= 0) {
@@ -119,6 +123,18 @@ static void enc_write_bytes(CTMVTEncoder *enc, const uint8_t *data, size_t len)
     enc->offset += len;
 }
 
+/* Reserve space in the buffer without writing. Returns 1 on success, 0 on error. */
+static int enc_reserve(CTMVTEncoder *enc, size_t len)
+{
+    if (enc->error) return 0;
+    if (enc->offset + len > enc->capacity) {
+        enc->error = 1;
+        return 0;
+    }
+    enc->offset += len;
+    return 1;
+}
+
 static void enc_write_string(CTMVTEncoder *enc, const char *str)
 {
     size_t len = strlen(str);
@@ -132,13 +148,18 @@ static void enc_write_string(CTMVTEncoder *enc, const char *str)
 
 static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
 {
+    /* Defensive check: skip features with no points */
+    if (!feature->points || feature->num_points == 0) {
+        return;
+    }
+
     /* Encode geometry as packed uint32 array */
     size_t geom_start = enc->offset;
 
     /* Skip length prefix for now */
     enc_write_tag(enc, MVT_FEATURE_GEOMETRY, 2);  /* length-delimited */
     size_t len_pos = enc->offset;
-    enc->offset += 5;  /* Reserve space for length (up to 5 bytes) */
+    if (!enc_reserve(enc, 5)) return;  /* Reserve space for length (up to 5 bytes) */
 
     size_t cmd_start = enc->offset;
 
@@ -239,7 +260,7 @@ static void encode_feature(CTMVTEncoder *enc, const CTFeature *feature, uint64_t
 
     /* Skip length for now */
     size_t len_pos = enc->offset;
-    enc->offset += 5;
+    if (!enc_reserve(enc, 5)) return;
 
     size_t content_start = enc->offset;
 
@@ -282,7 +303,7 @@ static void encode_layer(CTMVTEncoder *enc, const char *name, int extent,
     enc_write_tag(enc, MVT_TILE_LAYERS, 2);
 
     size_t len_pos = enc->offset;
-    enc->offset += 5;
+    if (!enc_reserve(enc, 5)) return;
 
     size_t content_start = enc->offset;
 

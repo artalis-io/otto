@@ -1399,6 +1399,11 @@ static CTStatus add_way_as_feature(const CTOSMWay *way, CTFeature **features,
         return CT_OK;
     }
 
+    /* Skip ways with no coordinates (prevents crash in MVT encoder) */
+    if (way->num_coords == 0) {
+        return CT_OK;
+    }
+
     /* Expand array if needed */
     if (*count >= *capacity) {
         *capacity *= 2;
@@ -1646,6 +1651,11 @@ static CTStatus add_way_with_lod(const CTOSMWay *way, const struct CTLODConfig *
                                  int zoom, CTFeature **features,
                                  size_t *count, size_t *capacity)
 {
+    /* Skip ways with no coordinates (prevents crash in MVT encoder) */
+    if (way->num_coords == 0) {
+        return CT_OK;
+    }
+
     /* LOD filter: check if visible at this zoom level */
     CTLayer layer = layer_from_osm_class(way->feature_class);
     if (!ct_lod_is_visible(lod, layer, way->feature_type,
