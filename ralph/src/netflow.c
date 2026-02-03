@@ -970,6 +970,90 @@ static RalphNetflowStatus setup_initial_solution(
 }
 
 /* ============================================================================
+ * Warm Start Solution Setup
+ *
+ * Reuses the basis (tree structure) from a previous solve to skip Phase 1.
+ * Requires: same graph structure (arcs), same supply/demand.
+ * Supports: different costs (potentials are recomputed).
+ * ============================================================================ */
+
+static RalphNetflowStatus setup_warm_start_solution(
+    RalphNetflowWorkspace *ws,
+    const RalphNetflowProblem *problem,
+    double cost_multiplier
+) {
+    int num_nodes = problem->num_nodes;
+    int num_arcs = problem->num_arcs;
+    int root = num_nodes;
+
+    /* Copy and transform problem data (costs may have changed) */
+    for (int a = 0; a < num_arcs; a++) {
+        ws->aug_tail[a] = problem->tail[a];
+        ws->aug_head[a] = problem->head[a];
+        ws->aug_cost[a] = problem->cost[a] * cost_multiplier;
+        ws->aug_capacity[a] = problem->capacity ? problem->capacity[a] : RALPH_NETFLOW_INFINITY;
+        ws->aug_lower[a] = problem->lower ? problem->lower[a] : 0.0;
+        /* flow[] and state[] are preserved from previous solve */
+    }
+
+    /* Create artificial arcs (needed for algorithm structure) */
+    /* These should all be non-basic with zero flow in a warm start from feasible solution */
+    for (int i = 0; i < num_nodes; i++) {
+        int a = num_arcs + i;
+        double sup = problem->supply[i];
+
+        if (sup >= -RALPH_NETFLOW_TOLERANCE) {
+            /* Supply >= 0: arc i -> root */
+            ws->aug_tail[a] = i;
+            ws->aug_head[a] = root;
+        } else {
+            /* Supply < 0 (demand): arc root -> i */
+            ws->aug_tail[a] = root;
+            ws->aug_head[a] = i;
+        }
+        ws->aug_cost[a] = RALPH_NETFLOW_BIG_M;
+        ws->aug_capacity[a] = RALPH_NETFLOW_INFINITY;
+        ws->aug_lower[a] = 0.0;
+        /* flow[a] should be 0 from previous feasible solution */
+        /* state[a] preserved from previous solve (may be BASIC in degenerate case) */
+    }
+
+    /* Reconstruct tree root */
+    ws->parent[root] = -1;
+    ws->pred_arc[root] = -1;
+    ws->depth[root] = 0;
+
+    /* Recalculate depth for all nodes using iterative propagation
+     * (parent[] and pred_arc[] are preserved from previous solve) */
+    memset(ws->mark, 0, ((size_t)num_nodes + 1) * sizeof(int));
+    ws->mark[root] = 1;
+
+    int remaining = num_nodes;
+    while (remaining > 0) {
+        int updated = 0;
+        for (int i = 0; i < num_nodes; i++) {
+            if (ws->mark[i]) continue;
+            int p = ws->parent[i];
+            if (p >= 0 && ws->mark[p]) {
+                ws->depth[i] = ws->depth[p] + 1;
+                ws->mark[i] = 1;
+                updated++;
+            }
+        }
+        if (updated == 0) break;
+        remaining -= updated;
+    }
+
+    /* Rebuild thread order (simple linear order, not optimized) */
+    build_thread_order(ws, num_nodes);
+
+    /* Recompute potentials for new costs */
+    recalculate_potentials(ws, num_nodes);
+
+    return RALPH_NETFLOW_OPTIMAL;
+}
+
+/* ============================================================================
  * Main Solver
  * ============================================================================ */
 
@@ -985,8 +1069,14 @@ static RalphNetflowStatus netflow_solve_internal(
 
     double cost_multiplier = (problem->objective == RALPH_NETFLOW_MAXIMIZE) ? -1.0 : 1.0;
 
-    /* Initialize (warm start support planned for future) */
-    RalphNetflowStatus status = setup_initial_solution(ws, problem, cost_multiplier);
+    /* Initialize: use warm start if requested and valid, otherwise cold start */
+    RalphNetflowStatus status;
+    if (options->warm_start &&
+        ralph_netflow_warm_start_valid(ws, num_nodes, num_arcs)) {
+        status = setup_warm_start_solution(ws, problem, cost_multiplier);
+    } else {
+        status = setup_initial_solution(ws, problem, cost_multiplier);
+    }
     if (status != RALPH_NETFLOW_OPTIMAL) {
         result->status = status;
         return status;

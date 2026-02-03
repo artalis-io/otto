@@ -160,7 +160,13 @@ typedef struct {
     RalphNetflowAlgorithm algorithm;  /* STANDARD, K_BEST, BOTTLENECK */
     int k;                            /* For k-best: number of solutions (default: 1) */
 
-    /* Warm start control */
+    /* Warm start control
+     * When warm_start=1 and workspace has valid warm start data:
+     * - Skips Phase 1 (artificial arc initialization)
+     * - Reuses basis (tree structure) from previous solve
+     * - Recomputes potentials for new costs
+     * - Significantly faster when only costs change (same supply/demand)
+     */
     int warm_start;                   /* 1 = use workspace warm start data if valid */
     int save_warm_start;              /* 1 = save solution for next warm start (default: 1) */
 
