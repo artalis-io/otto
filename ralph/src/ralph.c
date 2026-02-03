@@ -276,6 +276,50 @@ int ralph_optimize(RalphModel *model) {
         }
     }
 
+    /* Try network detection for pure LP (not MIP) */
+    if (!ralph_is_mip(model) && model->detect_special && ralph_get_detect_network()) {
+        NetworkSignature net_sig;
+        if (detect_network(solve_model, &net_sig)) {
+            if (model->verbose) {
+                RalphNetworkType type = detect_network_type(&net_sig);
+                const char *type_str = "general";
+                if (type == RALPH_NETWORK_ASSIGNMENT) type_str = "assignment";
+                else if (type == RALPH_NETWORK_TRANSPORTATION) type_str = "transportation";
+                else if (type == RALPH_NETWORK_SHORTEST_PATH) type_str = "shortest path";
+                printf("Detected network structure: %d nodes, %d arcs (%s)\n",
+                       net_sig.num_nodes, net_sig.num_arcs, type_str);
+            }
+
+            /* Solve as network flow */
+            model->solution = (double*)calloc(n_orig, sizeof(double));
+            if (model->solution) {
+                double net_obj;
+                if (solve_as_network(&net_sig, model->solution, &net_obj) == 0) {
+                    model->status = RALPH_STATUS_OPTIMAL;
+                    model->obj_value = net_obj;
+                    model->iteration_count = 0;
+
+                    /* Postsolve if presolve was applied */
+                    if (presolved && presolved->reduced_model) {
+                        double *presolved_sol = model->solution;
+                        model->solution = (double*)calloc(n_orig, sizeof(double));
+                        if (model->solution) {
+                            postsolve(presolved, presolved_sol, model->solution);
+                        }
+                        free(presolved_sol);
+                    }
+
+                    detect_network_free(&net_sig);
+                    if (presolved) presolve_free(presolved);
+                    return 0;
+                }
+                free(model->solution);
+                model->solution = NULL;
+            }
+            detect_network_free(&net_sig);
+        }
+    }
+
     if (ralph_is_mip(model)) {
         /* MIP solve - use presolved model if available */
         model->mip_solver = mip_create(solve_model, model->detect_special);

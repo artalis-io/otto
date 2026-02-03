@@ -135,8 +135,149 @@ int solve_lap_at_node(
 );
 
 /* ============================================================================
+ * Network Flow Detection
+ * ============================================================================ */
+
+/*
+ * Network flow signature - extracted from LP model.
+ *
+ * A problem has network flow structure if:
+ * - Each variable appears in exactly 2 constraints
+ * - Coefficients are +1 in one constraint (tail/outflow) and -1 in other (head/inflow)
+ * - This forms a node-arc incidence matrix
+ *
+ * The network is:
+ *   min  sum_a cost[a] * flow[a]
+ *   s.t. sum_{a: tail[a]=i} flow[a] - sum_{a: head[a]=i} flow[a] = supply[i]  for all i
+ *        lower[a] <= flow[a] <= upper[a]                                       for all a
+ */
+typedef struct {
+    int is_network;         /* 1 if network structure detected */
+    int num_nodes;          /* Number of nodes */
+    int num_arcs;           /* Number of arcs (= num_vars in LP) */
+
+    /* Arc data extracted from LP */
+    int *tail;              /* tail[a] = source node of arc a */
+    int *head;              /* head[a] = destination node of arc a */
+    double *cost;           /* cost[a] = objective coefficient */
+    double *capacity;       /* capacity[a] = upper bound on flow */
+    double *lower;          /* lower[a] = lower bound on flow */
+    double *supply;         /* supply[i] = RHS of node i's constraint (demand if negative) */
+
+    /* Mapping from LP to network */
+    int *var_to_arc;        /* var_to_arc[v] = arc index for variable v */
+    int *con_to_node;       /* con_to_node[c] = node index for constraint c */
+
+    int obj_sense;          /* 1=minimize, -1=maximize */
+} NetworkSignature;
+
+/*
+ * Network flow type - detected special cases.
+ */
+typedef enum {
+    RALPH_NETWORK_GENERAL = 0,      /* General minimum cost flow */
+    RALPH_NETWORK_TRANSPORTATION,   /* Bipartite: sources -> sinks only */
+    RALPH_NETWORK_ASSIGNMENT,       /* Transportation with unit supply/demand */
+    RALPH_NETWORK_SHORTEST_PATH,    /* Single source/sink, unit flow */
+    RALPH_NETWORK_MAX_FLOW          /* Max flow structure */
+} RalphNetworkType;
+
+/*
+ * Detect network flow structure in an LP model.
+ *
+ * Parameters:
+ *   model - LP model to analyze
+ *   sig   - Output: network signature (caller allocates struct)
+ *
+ * Returns:
+ *   1 if network structure detected, 0 otherwise.
+ *   If 1, sig arrays are allocated and must be freed with detect_network_free().
+ */
+int detect_network(const LPModel *model, NetworkSignature *sig);
+
+/*
+ * Free memory allocated by detect_network().
+ */
+void detect_network_free(NetworkSignature *sig);
+
+/*
+ * Detect the specific type of network flow problem.
+ *
+ * Parameters:
+ *   sig - Network signature from detect_network()
+ *
+ * Returns:
+ *   Network type (GENERAL, TRANSPORTATION, ASSIGNMENT, etc.)
+ */
+RalphNetworkType detect_network_type(const NetworkSignature *sig);
+
+/*
+ * Solve network flow using detected structure.
+ *
+ * Parameters:
+ *   sig      - Network signature from detect_network()
+ *   solution - Output: variable values (size = num_arcs)
+ *   obj_val  - Output: objective value
+ *
+ * Returns:
+ *   0 on success, -1 on infeasible, -2 on error.
+ */
+int solve_as_network(const NetworkSignature *sig, double *solution, double *obj_val);
+
+/* ============================================================================
+ * MIP Network Detection
+ * ============================================================================ */
+
+/*
+ * MIP Network signature - extended for use during branch-and-bound.
+ */
+typedef struct {
+    NetworkSignature base;    /* Base network signature */
+    int num_vars;             /* Total number of variables in MIP */
+    double *base_cost;        /* Original costs (before modifications) */
+    double *base_capacity;    /* Original capacities */
+    double *base_lower;       /* Original lower bounds */
+    double *base_supply;      /* Original supplies */
+    void *netflow_workspace;  /* Reusable network simplex workspace */
+} MIPNetworkSignature;
+
+/*
+ * Detect network structure in a MIP model.
+ */
+int detect_network_mip(const LPModel *model, MIPNetworkSignature *sig);
+
+/*
+ * Free memory allocated by detect_network_mip().
+ */
+void detect_network_mip_free(MIPNetworkSignature *sig);
+
+/*
+ * Solve network relaxation at a B&B node.
+ *
+ * Handles variable fixings:
+ *   - x[a] fixed to 0: capacity[a] = 0
+ *   - x[a] fixed to value: lower[a] = upper[a] = value
+ */
+int solve_network_at_node(
+    MIPNetworkSignature *sig,
+    const double *lb,
+    const double *ub,
+    double *solution,
+    double *obj_val
+);
+
+/* ============================================================================
  * Runtime Configuration
  * ============================================================================ */
+
+/*
+ * Enable or disable automatic network detection.
+ *
+ * When enabled, ralph_optimize() will check if the problem has network
+ * structure and use the specialized network simplex solver if so.
+ */
+void ralph_set_detect_network(int enabled);
+int ralph_get_detect_network(void);
 
 /*
  * Enable or disable automatic LAP detection.

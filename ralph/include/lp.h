@@ -262,6 +262,7 @@ void lp_model_free(LPModel *model);
 int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type);
 int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
                             const double *values, char sense, double rhs);
+int lp_model_finalize(LPModel *model);
 LPModel* lp_model_copy(const LPModel *model);
 
 /* LU factorization functions */
