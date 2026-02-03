@@ -96,6 +96,20 @@ typedef enum {
     RALPH_NETFLOW_AT_UPPER = 2          /* Non-basic at upper bound */
 } RalphNetflowArcState;
 
+/* Algorithm selection */
+typedef enum {
+    RALPH_NETFLOW_ALG_STANDARD = 0,     /* Single optimal flow */
+    RALPH_NETFLOW_ALG_K_BEST = 1,       /* k-best via partitioning (future) */
+    RALPH_NETFLOW_ALG_BOTTLENECK = 2    /* Minimax objective (future) */
+} RalphNetflowAlgorithm;
+
+/* Pricing rule selection */
+typedef enum {
+    RALPH_NETFLOW_PRICING_CANDIDATE = 0, /* Candidate list (default, fast) */
+    RALPH_NETFLOW_PRICING_FIRST = 1,     /* First eligible (simple) */
+    RALPH_NETFLOW_PRICING_BEST = 2       /* Most violated (more pivots but better) */
+} RalphNetflowPricing;
+
 /* Forward declaration for workspace (opaque type) */
 typedef struct RalphNetflowWorkspace RalphNetflowWorkspace;
 
@@ -134,17 +148,44 @@ typedef struct {
 
 /*
  * Solver options for controlling algorithm behavior.
+ *
+ * Orthogonal concepts are combined through flags rather than separate functions:
+ * - Algorithm: standard / k-best / bottleneck
+ * - Execution: cold start / warm start
+ * - Pricing: candidate list / first eligible / best
+ * - Scaling: none / cost scaling
  */
 typedef struct {
-    int64_t max_iterations;         /* Maximum pivots (0 = unlimited) */
-    int pricing_rule;               /* 0 = candidate list (default), 1 = first eligible */
-    int verbosity;                  /* 0 = silent, 1 = summary, 2 = iteration log */
+    /* Algorithm selection */
+    RalphNetflowAlgorithm algorithm;  /* STANDARD, K_BEST, BOTTLENECK */
+    int k;                            /* For k-best: number of solutions (default: 1) */
+
+    /* Warm start control */
+    int warm_start;                   /* 1 = use workspace warm start data if valid */
+    int save_warm_start;              /* 1 = save solution for next warm start (default: 1) */
+
+    /* Pricing strategy */
+    RalphNetflowPricing pricing;      /* Pricing rule selection */
+
+    /* Cost scaling (for degeneracy handling) */
+    int cost_scaling;                 /* 1 = enable epsilon cost scaling */
+    double epsilon_factor;            /* Cost scaling reduction factor (default: 4.0) */
+
+    /* Limits and output */
+    int64_t max_iterations;           /* Maximum pivots (0 = auto based on problem size) */
+    int verbosity;                    /* 0 = silent, 1 = summary, 2 = iteration log */
 } RalphNetflowOptions;
 
 /* Default options initializer */
 #define RALPH_NETFLOW_OPTIONS_DEFAULT { \
+    .algorithm = RALPH_NETFLOW_ALG_STANDARD, \
+    .k = 1, \
+    .warm_start = 0, \
+    .save_warm_start = 1, \
+    .pricing = RALPH_NETFLOW_PRICING_CANDIDATE, \
+    .cost_scaling = 0, \
+    .epsilon_factor = 4.0, \
     .max_iterations = RALPH_NETFLOW_DEFAULT_MAX_ITER, \
-    .pricing_rule = 0, \
     .verbosity = 0 \
 }
 
@@ -155,15 +196,26 @@ typedef struct {
 /*
  * Result structure filled by the solver.
  *
- * Caller provides storage for flow array (size num_arcs).
- * Optionally provide storage for dual variables (potentials).
+ * Caller provides storage for flow array (size num_arcs for standard,
+ * k * num_arcs for k-best).
+ *
+ * For warm start support, provide potential and arc_state arrays to receive
+ * the dual solution that can be used to warm start subsequent solves.
  */
 typedef struct {
     RalphNetflowStatus status;      /* Solver status */
-    double objective;               /* Optimal objective value */
 
-    double *flow;                   /* Arc flows (caller allocates, size num_arcs) */
-    double *potential;              /* Node potentials (optional, size num_nodes) */
+    /* Primary solution */
+    double objective;               /* Optimal objective value (first solution) */
+    double *flow;                   /* Arc flows: [num_arcs] or [num_found × num_arcs] for k-best */
+
+    /* For k-best (optional) */
+    int num_found;                  /* Number of solutions found (1 for standard, up to k for k-best) */
+    double *objectives;             /* All objective values: [num_found] (NULL for single solution) */
+
+    /* Dual variables for warm start (optional) */
+    double *potential;              /* Node potentials: [num_nodes] */
+    int *arc_state;                 /* Arc states: [num_arcs] (LOWER/BASIC/UPPER) */
 
     /* Statistics */
     int64_t iterations;             /* Number of pivots performed */
@@ -216,6 +268,60 @@ int ralph_netflow_workspace_max_nodes(const RalphNetflowWorkspace *ws);
  * Get the maximum number of arcs this workspace supports.
  */
 int ralph_netflow_workspace_max_arcs(const RalphNetflowWorkspace *ws);
+
+/* ============================================================================
+ * Warm Start API
+ * ============================================================================ */
+
+/*
+ * Initialize warm start data in workspace from a previous solution.
+ *
+ * Stores the basis (tree structure) and dual variables so the next solve
+ * can skip Phase 1 and continue optimization from this point.
+ *
+ * Use cases:
+ * - Re-optimization after small cost changes
+ * - Sensitivity analysis (varying parameters)
+ * - Branch-and-bound (modifying bounds between nodes)
+ *
+ * Parameters:
+ *   ws         - Workspace to store warm start data
+ *   num_nodes  - Number of nodes in the solution
+ *   num_arcs   - Number of arcs in the solution
+ *   potential  - Node potentials (size num_nodes, required)
+ *   flow       - Arc flows (size num_arcs, optional but recommended)
+ *   arc_state  - Arc states (size num_arcs, optional but recommended)
+ *
+ * Returns:
+ *   RALPH_NETFLOW_OPTIMAL on success, error code otherwise.
+ *
+ * Note: Warm start is invalidated if problem structure changes (different
+ * nodes/arcs). Cost and bound changes are handled automatically.
+ */
+RalphNetflowStatus ralph_netflow_warm_start(
+    RalphNetflowWorkspace *ws,
+    int num_nodes,
+    int num_arcs,
+    const double *potential,
+    const double *flow,
+    const int *arc_state
+);
+
+/*
+ * Clear warm start data from workspace.
+ *
+ * After calling this, the next solve will be a cold start (full solve
+ * with artificial arcs in Phase 1).
+ */
+void ralph_netflow_warm_start_clear(RalphNetflowWorkspace *ws);
+
+/*
+ * Check if workspace has valid warm start data.
+ *
+ * Returns:
+ *   1 if workspace has valid warm start for the given dimensions, 0 otherwise.
+ */
+int ralph_netflow_warm_start_valid(const RalphNetflowWorkspace *ws, int num_nodes, int num_arcs);
 
 /* ============================================================================
  * Main Solver API
