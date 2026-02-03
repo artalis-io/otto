@@ -8,7 +8,7 @@
  *
  *   const renderer = new ClayRenderer(canvas);
  *   const font = new MSDFFont();
- *   await font.load(renderer.gl, 'fonts/ui-font.json', 'fonts/ui-font.png');
+ *   await font.load(renderer.gl, '../../fonts/ui-font.json', '../../fonts/ui-font.png');
  *   renderer.setFont(font);
  *
  *   function render() {

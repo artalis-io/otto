@@ -150,8 +150,8 @@ async function main() {
         [wasm] = await Promise.all([
             loadWasm('../build/demo.wasm', REQUIRED_EXPORTS),
             font.load(renderer.gl,
-                '../../clay-shards-webgl/fonts/ui-font.json',
-                '../../clay-shards-webgl/fonts/ui-font.png')
+                '../../../fonts/ui-font.json',
+                '../../../fonts/ui-font.png')
         ]);
 
         renderer.setFont(font);

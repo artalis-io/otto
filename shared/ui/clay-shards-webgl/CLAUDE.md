@@ -42,7 +42,7 @@ Renders Clay's render commands using WebGL:
 | `keyboard.js` | Keyboard event routing for Clay components |
 | `text-cursor.js` | Text cursor rendering for focused inputs |
 | `index.js` | Module exports |
-| `fonts/` | MSDF font assets |
+| `../../fonts/` | MSDF font assets (shared location) |
 
 ## Usage
 
@@ -59,7 +59,7 @@ renderer.resize();
 const font = new MSDFFont();
 const [wasm] = await Promise.all([
     loadWasm('build/app.wasm', ['app_init', 'app_frame', ...]),
-    font.load(renderer.gl, 'fonts/ui-font.json', 'fonts/ui-font.png')
+    font.load(renderer.gl, '../../fonts/ui-font.json', '../../fonts/ui-font.png')
 ]);
 renderer.setFont(font);
 

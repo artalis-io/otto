@@ -23,7 +23,7 @@ renderer.resize();
 const font = new MSDFFont();
 const [wasm] = await Promise.all([
     loadWasm('build/app.wasm', ['app_init', 'app_frame']),
-    font.load(renderer.gl, 'fonts/ui-font.json', 'fonts/ui-font.png')
+    font.load(renderer.gl, '../../fonts/ui-font.json', '../../fonts/ui-font.png')
 ]);
 renderer.setFont(font);
 wasm.app_init(width, height);
@@ -57,7 +57,7 @@ import {
 - `render-loop.js` - Generic render loop
 - `wasm-loader.js` - WASM loading utility
 - `text-cursor.js` - Text cursor rendering
-- `fonts/` - Default UI font
+- `../../fonts/` - Default UI font (shared location)
 
 ## License
 
