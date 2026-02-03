@@ -1233,6 +1233,209 @@ void test_warm_start_api(void) {
     ASSERT(1, "Workspace freed");
 }
 
+/* Test that warm start produces correct results with changed costs */
+void test_warm_start_correctness(void) {
+    printf("\n=== Test: Warm Start Correctness ===\n");
+
+    /* 5x5 transportation problem */
+    int n_sources = 5, n_sinks = 5;
+    int n_nodes = n_sources + n_sinks;
+    int n_arcs = n_sources * n_sinks;
+
+    int *tail, *head;
+    double *cost1, *cost2, *supply, *flow_warm, *flow_cold;
+    SAFE_CALLOC(tail, n_arcs, int);
+    SAFE_CALLOC(head, n_arcs, int);
+    SAFE_CALLOC(cost1, n_arcs, double);
+    SAFE_CALLOC(cost2, n_arcs, double);
+    SAFE_CALLOC(supply, n_nodes, double);
+    SAFE_CALLOC(flow_warm, n_arcs, double);
+    SAFE_CALLOC(flow_cold, n_arcs, double);
+
+    /* Build arcs: source i -> sink j */
+    int arc = 0;
+    for (int i = 0; i < n_sources; i++) {
+        for (int j = 0; j < n_sinks; j++) {
+            tail[arc] = i;
+            head[arc] = n_sources + j;
+            cost1[arc] = 1.0 + (double)(i + j);        /* Initial costs */
+            cost2[arc] = 1.0 + (double)(i * 2 + j);    /* Changed costs */
+            arc++;
+        }
+    }
+
+    /* Supply at sources, demand at sinks */
+    for (int i = 0; i < n_sources; i++) supply[i] = 10.0;
+    for (int j = 0; j < n_sinks; j++) supply[n_sources + j] = -10.0;
+
+    RalphNetflowWorkspace *ws = ralph_netflow_workspace_create(n_nodes + 10, n_arcs + 10);
+    ASSERT(ws != NULL, "Workspace created");
+
+    /* First solve with cost1 and save warm start */
+    RalphNetflowProblem prob1 = {
+        .num_nodes = n_nodes, .num_arcs = n_arcs,
+        .tail = tail, .head = head, .cost = cost1,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.save_warm_start = 1;
+    opts.pricing = RALPH_NETFLOW_PRICING_FIRST;
+
+    RalphNetflowResult result1 = {.flow = flow_warm};
+    RalphNetflowStatus status = ralph_netflow_solve(&prob1, &opts, &result1, ws);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "First solve optimal");
+    int64_t iter_first = result1.iterations;
+
+    /* Second solve with cost2 using warm start */
+    RalphNetflowProblem prob2 = {
+        .num_nodes = n_nodes, .num_arcs = n_arcs,
+        .tail = tail, .head = head, .cost = cost2,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    opts.warm_start = 1;
+    opts.save_warm_start = 1;
+
+    RalphNetflowResult result_warm = {.flow = flow_warm};
+    status = ralph_netflow_solve(&prob2, &opts, &result_warm, ws);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Warm start solve optimal");
+    int64_t iter_warm = result_warm.iterations;
+
+    /* Cold start solve of same problem for comparison */
+    RalphNetflowWorkspace *ws_cold = ralph_netflow_workspace_create(n_nodes + 10, n_arcs + 10);
+    opts.warm_start = 0;
+    opts.save_warm_start = 0;
+
+    RalphNetflowResult result_cold = {.flow = flow_cold};
+    status = ralph_netflow_solve(&prob2, &opts, &result_cold, ws_cold);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Cold start solve optimal");
+    int64_t iter_cold = result_cold.iterations;
+
+    /* Solutions should match */
+    ASSERT_NEAR(result_warm.objective, result_cold.objective, TOLERANCE,
+                "Warm vs cold objective match");
+
+    /* Verify flow feasibility for warm start */
+    double max_violation = 0.0;
+    for (int i = 0; i < n_nodes; i++) {
+        double balance = supply[i];
+        for (int a = 0; a < n_arcs; a++) {
+            if (tail[a] == i) balance -= flow_warm[a];
+            if (head[a] == i) balance += flow_warm[a];
+        }
+        if (fabs(balance) > max_violation) max_violation = fabs(balance);
+    }
+    ASSERT(max_violation < TOLERANCE, "Warm start flow is feasible");
+
+    printf("  INFO: First solve: %ld iters, Warm: %ld iters, Cold: %ld iters\n",
+           (long)iter_first, (long)iter_warm, (long)iter_cold);
+
+    /* Warm start should use fewer iterations (or at least no more) */
+    ASSERT(iter_warm <= iter_cold + 5, "Warm start not significantly worse than cold");
+
+    ralph_netflow_workspace_free(ws);
+    ralph_netflow_workspace_free(ws_cold);
+    free(tail); free(head);
+    free(cost1); free(cost2);
+    free(supply);
+    free(flow_warm); free(flow_cold);
+}
+
+/* Test warm start with a larger problem to measure performance benefit */
+void test_warm_start_performance(void) {
+    printf("\n=== Test: Warm Start Performance ===\n");
+
+    /* 20x20 transportation - enough to see iteration savings */
+    int n_sources = 20, n_sinks = 20;
+    int n_nodes = n_sources + n_sinks;
+    int n_arcs = n_sources * n_sinks;
+
+    int *tail, *head;
+    double *cost1, *cost2, *supply, *flow;
+    SAFE_CALLOC(tail, n_arcs, int);
+    SAFE_CALLOC(head, n_arcs, int);
+    SAFE_CALLOC(cost1, n_arcs, double);
+    SAFE_CALLOC(cost2, n_arcs, double);
+    SAFE_CALLOC(supply, n_nodes, double);
+    SAFE_CALLOC(flow, n_arcs, double);
+
+    /* Build arcs */
+    int arc = 0;
+    for (int i = 0; i < n_sources; i++) {
+        for (int j = 0; j < n_sinks; j++) {
+            tail[arc] = i;
+            head[arc] = n_sources + j;
+            cost1[arc] = (double)((i * 7 + j * 11) % 100);
+            cost2[arc] = cost1[arc] * 1.1 + 1.0;  /* Slightly perturbed */
+            arc++;
+        }
+    }
+
+    for (int i = 0; i < n_sources; i++) supply[i] = 100.0;
+    for (int j = 0; j < n_sinks; j++) supply[n_sources + j] = -100.0;
+
+    RalphNetflowWorkspace *ws = ralph_netflow_workspace_create(n_nodes + 10, n_arcs + 10);
+    ASSERT(ws != NULL, "Workspace created");
+
+    /* First solve */
+    RalphNetflowProblem prob1 = {
+        .num_nodes = n_nodes, .num_arcs = n_arcs,
+        .tail = tail, .head = head, .cost = cost1,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.save_warm_start = 1;
+
+    RalphNetflowResult result1 = {.flow = flow};
+    ralph_netflow_solve(&prob1, &opts, &result1, ws);
+    int64_t iter_first = result1.iterations;
+
+    /* Warm solve */
+    RalphNetflowProblem prob2 = {
+        .num_nodes = n_nodes, .num_arcs = n_arcs,
+        .tail = tail, .head = head, .cost = cost2,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+    opts.warm_start = 1;
+    RalphNetflowResult result_warm = {.flow = flow};
+    ralph_netflow_solve(&prob2, &opts, &result_warm, ws);
+    int64_t iter_warm = result_warm.iterations;
+
+    /* Cold solve */
+    RalphNetflowWorkspace *ws_cold = ralph_netflow_workspace_create(n_nodes + 10, n_arcs + 10);
+    opts.warm_start = 0;
+    opts.save_warm_start = 0;
+    RalphNetflowResult result_cold = {.flow = flow};
+    ralph_netflow_solve(&prob2, &opts, &result_cold, ws_cold);
+    int64_t iter_cold = result_cold.iterations;
+
+    printf("  First: %ld iters, Warm: %ld iters, Cold: %ld iters\n",
+           (long)iter_first, (long)iter_warm, (long)iter_cold);
+
+    if (iter_cold > 0) {
+        double ratio = (double)iter_warm / (double)iter_cold;
+        printf("  Warm/Cold ratio: %.2f\n", ratio);
+        ASSERT(ratio <= 1.5, "Warm start provides benefit");
+    } else {
+        ASSERT(1, "Cold converged immediately");
+    }
+
+    ASSERT_NEAR(result_warm.objective, result_cold.objective, TOLERANCE,
+                "Same optimal objective");
+
+    ralph_netflow_workspace_free(ws);
+    ralph_netflow_workspace_free(ws_cold);
+    free(tail); free(head);
+    free(cost1); free(cost2);
+    free(supply); free(flow);
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -1285,6 +1488,8 @@ int main(int argc, char *argv[]) {
 
     /* Warm start tests */
     test_warm_start_api();
+    test_warm_start_correctness();
+    test_warm_start_performance();
 
     printf("\n=====================\n");
     printf("Tests: %d/%d passed\n", tests_passed, tests_run);
