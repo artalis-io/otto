@@ -130,6 +130,22 @@ void ct_render_polygon(CTRenderContext *ctx,
                        CTColor color);
 
 /*
+ * Fill a multipolygon with multiple rings (outer boundary + holes).
+ * Uses even-odd fill rule: holes are properly excluded.
+ *
+ * @param ctx        Render context
+ * @param points     Array of all points from all rings
+ * @param num_points Total number of points
+ * @param ring_ends  Array of ring end indices (exclusive)
+ * @param num_rings  Number of rings
+ * @param color      Fill color
+ */
+void ct_render_multipolygon(CTRenderContext *ctx,
+                            const CTTilePoint *points, int num_points,
+                            const int *ring_ends, int num_rings,
+                            CTColor color);
+
+/*
  * Draw a polygon outline.
  */
 void ct_render_polygon_outline(CTRenderContext *ctx,

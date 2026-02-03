@@ -290,6 +290,56 @@ typedef struct {
     float length_m;          /* Estimated length (for lines) */
 } CTOSMWay;
 
+/* ============================================================================
+ * OSM Relations and Multipolygons
+ * ============================================================================ */
+
+/* Relation member types */
+typedef enum {
+    CT_MEMBER_NODE = 0,
+    CT_MEMBER_WAY = 1,
+    CT_MEMBER_RELATION = 2
+} CTMemberType;
+
+/* Single relation member */
+typedef struct {
+    int64_t ref;             /* Member ID (node/way/relation) */
+    CTMemberType type;       /* Member type */
+    uint32_t role_idx;       /* Role string index (0 = empty role) */
+} CTRelationMember;
+
+/* Parsed OSM relation */
+typedef struct {
+    int64_t id;
+    CTRelationMember *members;
+    int num_members;
+
+    CTOSMFeatureClass feature_class;
+    int feature_type;        /* Subtype within class */
+    char *name;              /* Optional name */
+
+    int is_multipolygon;     /* 1 if type=multipolygon */
+} CTOSMRelation;
+
+/* Ring in an assembled multipolygon */
+typedef struct {
+    CTCoord *coords;
+    int num_coords;
+    int is_outer;            /* 1 = outer ring, 0 = inner (hole) */
+} CTMultipolygonRing;
+
+/* Assembled multipolygon (from relation + member ways) */
+typedef struct {
+    CTMultipolygonRing *rings;
+    int num_rings;
+    CTBBox bbox;
+    float area_sqm;
+
+    CTOSMFeatureClass feature_class;
+    int feature_type;
+    char *name;
+} CTAssembledMultipolygon;
+
 /* R-Tree node for spatial indexing */
 typedef struct CTRTreeNode CTRTreeNode;
 
@@ -333,7 +383,33 @@ typedef struct {
     size_t num_ways;
     size_t ways_capacity;
 
-    /* Spatial index for fast tile queries */
+    /* Way ID to index lookup (for relation member resolution) */
+    struct {
+        int64_t *keys;
+        uint32_t *values;
+        size_t capacity;
+        size_t count;
+    } way_map;
+
+    /* Parsed relations */
+    CTOSMRelation *relations;
+    size_t num_relations;
+    size_t relations_capacity;
+
+    /* Role strings from relations (shared pool) */
+    char **role_strings;
+    size_t num_role_strings;
+    size_t role_strings_capacity;
+
+    /* Assembled multipolygons */
+    CTAssembledMultipolygon *multipolygons;
+    size_t num_multipolygons;
+    size_t multipolygons_capacity;
+
+    /* R-Tree for multipolygons */
+    CTRTree *mp_rtree;
+
+    /* Spatial index for fast tile queries (ways) */
     CTRTree *rtree;
 
     /* Bounding box of loaded data */
@@ -342,7 +418,9 @@ typedef struct {
     /* Statistics */
     size_t total_nodes_parsed;
     size_t total_ways_parsed;
+    size_t total_relations_parsed;
     size_t features_kept;
+    size_t multipolygons_assembled;
 
     /* mmap support (for binary index loading) */
     void *mmap_base;          /* mmap'd file base, NULL if not mmap'd */

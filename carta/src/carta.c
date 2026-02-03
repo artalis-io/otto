@@ -65,8 +65,15 @@ CTPBFContext *ct_load_pbf(const char *filename)
         return NULL;
     }
 
-    /* Build spatial index */
+    /* Build spatial index for ways */
     status = ct_pbf_build_index(ctx);
+    if (status != CT_OK) {
+        ct_pbf_context_free(ctx);
+        return NULL;
+    }
+
+    /* Assemble multipolygon relations into renderable geometries */
+    status = ct_assemble_multipolygons(ctx);
     if (status != CT_OK) {
         ct_pbf_context_free(ctx);
         return NULL;
@@ -88,8 +95,15 @@ CTPBFContext *ct_load_pbf_memory(const uint8_t *data, size_t size)
         return NULL;
     }
 
-    /* Build spatial index */
+    /* Build spatial index for ways */
     status = ct_pbf_build_index(ctx);
+    if (status != CT_OK) {
+        ct_pbf_context_free(ctx);
+        return NULL;
+    }
+
+    /* Assemble multipolygon relations into renderable geometries */
+    status = ct_assemble_multipolygons(ctx);
     if (status != CT_OK) {
         ct_pbf_context_free(ctx);
         return NULL;

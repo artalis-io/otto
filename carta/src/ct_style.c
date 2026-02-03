@@ -42,18 +42,19 @@ void ct_default_style(CTStyle *style)
     style->road_widths[CT_ROAD_OTHER]       = (CTRoadWidth){ 0.3f, 1.0f, 2.0f };
 
     /* Waterway widths by type (data-driven, not zoom-dependent)
-     * Based on typical real-world widths:
-     * - Rivers (Danube, Rhine): 200-1000m -> thick line
-     * - Canals: 10-50m -> medium line
-     * - Streams: 2-10m -> thin line
-     * - Drains/ditches: 1-3m -> very thin
+     *
+     * NOTE: Major rivers (Danube, Rhine) are typically mapped as POLYGONS
+     * using natural=water or waterway=riverbank - those render as filled areas.
+     * The waterway=river tag is just the centerline reference, rendered thin.
+     *
+     * Only small waterways (streams, canals, ditches) are rendered as lines.
      */
-    style->waterway_widths[CT_WATERWAY_RIVER]  = 6.0f;   /* Major rivers */
-    style->waterway_widths[CT_WATERWAY_CANAL]  = 3.0f;   /* Navigable canals */
-    style->waterway_widths[CT_WATERWAY_STREAM] = 1.5f;   /* Small streams */
-    style->waterway_widths[CT_WATERWAY_DRAIN]  = 1.0f;   /* Drainage */
-    style->waterway_widths[CT_WATERWAY_DITCH]  = 0.8f;   /* Ditches */
-    style->waterway_widths[CT_WATERWAY_OTHER]  = 1.5f;   /* Default */
+    style->waterway_widths[CT_WATERWAY_RIVER]  = 1.5f;   /* Centerline only - actual shape is polygon */
+    style->waterway_widths[CT_WATERWAY_CANAL]  = 2.5f;   /* Navigable canals */
+    style->waterway_widths[CT_WATERWAY_STREAM] = 1.2f;   /* Small streams */
+    style->waterway_widths[CT_WATERWAY_DRAIN]  = 0.8f;   /* Drainage */
+    style->waterway_widths[CT_WATERWAY_DITCH]  = 0.6f;   /* Ditches */
+    style->waterway_widths[CT_WATERWAY_OTHER]  = 1.0f;   /* Default */
 
     /* Area colors */
     style->water_color           = CT_RGB(170, 211, 223);  /* Light blue */

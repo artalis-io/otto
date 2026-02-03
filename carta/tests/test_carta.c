@@ -305,21 +305,19 @@ TEST(waterway_width)
     CTStyle style;
     ct_default_style(&style);
 
-    /* Rivers should be widest */
+    /* River centerline (actual river shape is polygon from natural=water) */
     float river_width = ct_style_waterway_width(&style, CT_WATERWAY_RIVER);
-    ASSERT(river_width >= 5.0f);
+    ASSERT(river_width >= 1.0f && river_width <= 2.0f);
 
-    /* Canals medium */
+    /* Canals should be wider than streams */
     float canal_width = ct_style_waterway_width(&style, CT_WATERWAY_CANAL);
-    ASSERT(canal_width > 2.0f && canal_width < river_width);
-
-    /* Streams thinner than canals */
     float stream_width = ct_style_waterway_width(&style, CT_WATERWAY_STREAM);
-    ASSERT(stream_width > 1.0f && stream_width < canal_width);
+    ASSERT(canal_width > stream_width);
 
     /* Ditches thinnest */
     float ditch_width = ct_style_waterway_width(&style, CT_WATERWAY_DITCH);
     ASSERT(ditch_width < stream_width);
+    ASSERT(ditch_width >= 0.5f);  /* Minimum visibility */
 
     /* Invalid type returns fallback */
     float invalid_width = ct_style_waterway_width(&style, -1);
@@ -497,6 +495,41 @@ TEST(render_polygon_scanline_performance)
     return 1;
 }
 
+TEST(render_multipolygon_with_hole)
+{
+    /* Test multipolygon rendering with an outer ring and inner hole */
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    ct_render_clear(ctx);
+
+    /* Create a square with a smaller square hole inside */
+    /* Outer ring: large square (4 points + closing point) */
+    /* Inner ring: small square hole (4 points + closing point) */
+    CTTilePoint points[10] = {
+        /* Outer ring (CCW) */
+        {50, 50}, {200, 50}, {200, 200}, {50, 200}, {50, 50},
+        /* Inner ring (CW - hole) */
+        {100, 100}, {100, 150}, {150, 150}, {150, 100}, {100, 100}
+    };
+    int ring_ends[2] = {5, 10};
+
+    ct_render_multipolygon(ctx, points, 10, ring_ends, 2,
+                           CT_RGB(255, 0, 0));
+
+    /* Verify outer area is filled (corner should be red) */
+    CTColor outer_pixel = ct_render_get_pixel(ctx, 60, 60);
+    ASSERT_EQ(CT_COLOR_R(outer_pixel), 255);
+    ASSERT_EQ(CT_COLOR_G(outer_pixel), 0);
+    ASSERT_EQ(CT_COLOR_B(outer_pixel), 0);
+
+    /* Verify hole area is NOT filled (center should be background) */
+    CTColor hole_pixel = ct_render_get_pixel(ctx, 125, 125);
+    CTColor bg = ctx->style.background_color;
+    ASSERT_EQ(hole_pixel, bg);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
 /* ============================================================================
  * MVT Encoding Tests
  * ============================================================================ */
@@ -636,6 +669,117 @@ TEST(pbf_stats_empty)
     ASSERT_EQ(features, 0);
 
     ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(pbf_context_relations_initialized)
+{
+    CTPBFContext *ctx = ct_pbf_context_create();
+
+    /* Relation-related fields should be initialized to 0/NULL */
+    ASSERT(ctx->relations == NULL);
+    ASSERT_EQ(ctx->num_relations, 0);
+    ASSERT_EQ(ctx->relations_capacity, 0);
+
+    ASSERT(ctx->role_strings == NULL);
+    ASSERT_EQ(ctx->num_role_strings, 0);
+    ASSERT_EQ(ctx->role_strings_capacity, 0);
+
+    ASSERT(ctx->multipolygons == NULL);
+    ASSERT_EQ(ctx->num_multipolygons, 0);
+    ASSERT_EQ(ctx->multipolygons_capacity, 0);
+
+    ASSERT(ctx->mp_rtree == NULL);
+    ASSERT_EQ(ctx->total_relations_parsed, 0);
+    ASSERT_EQ(ctx->multipolygons_assembled, 0);
+
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(pbf_way_map_initialized)
+{
+    CTPBFContext *ctx = ct_pbf_context_create();
+
+    /* way_map should be initialized to NULL/0 */
+    ASSERT(ctx->way_map.keys == NULL);
+    ASSERT(ctx->way_map.values == NULL);
+    ASSERT_EQ(ctx->way_map.capacity, 0);
+    ASSERT_EQ(ctx->way_map.count, 0);
+
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(pbf_relation_member_types)
+{
+    /* Verify member type enum values match OSM PBF spec */
+    ASSERT_EQ(CT_MEMBER_NODE, 0);
+    ASSERT_EQ(CT_MEMBER_WAY, 1);
+    ASSERT_EQ(CT_MEMBER_RELATION, 2);
+    return 1;
+}
+
+/* ============================================================================
+ * Multipolygon Assembly Tests
+ * ============================================================================ */
+
+TEST(multipolygon_assemble_empty)
+{
+    /* Assembling multipolygons on empty context should succeed */
+    CTPBFContext *ctx = ct_pbf_context_create();
+    CTStatus status = ct_assemble_multipolygons(ctx);
+    ASSERT_EQ(status, CT_OK);
+    ASSERT_EQ(ctx->num_multipolygons, 0);
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(multipolygon_get_role_string_empty)
+{
+    CTPBFContext *ctx = ct_pbf_context_create();
+
+    /* Role index 0 should return empty string */
+    const char *role = ct_get_role_string(ctx, 0);
+    ASSERT(role != NULL);
+    ASSERT_EQ(strlen(role), 0);
+
+    /* Out of bounds index should return empty string */
+    role = ct_get_role_string(ctx, 999);
+    ASSERT(role != NULL);
+    ASSERT_EQ(strlen(role), 0);
+
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(multipolygon_ring_structure)
+{
+    /* Verify CTMultipolygonRing structure */
+    CTMultipolygonRing ring;
+    memset(&ring, 0, sizeof(ring));
+
+    ring.coords = NULL;
+    ring.num_coords = 0;
+    ring.is_outer = 1;
+
+    ASSERT_EQ(ring.is_outer, 1);
+    return 1;
+}
+
+TEST(multipolygon_assembled_structure)
+{
+    /* Verify CTAssembledMultipolygon structure */
+    CTAssembledMultipolygon mp;
+    memset(&mp, 0, sizeof(mp));
+
+    mp.rings = NULL;
+    mp.num_rings = 0;
+    mp.feature_class = CT_OSM_WATER;
+    mp.feature_type = 0;
+    mp.name = NULL;
+
+    ASSERT_EQ(mp.feature_class, CT_OSM_WATER);
     return 1;
 }
 
@@ -880,6 +1024,7 @@ int main(void)
     run_test_render_context_has_scale_buffer();
     run_test_render_tile_reuses_buffer();
     run_test_render_polygon_scanline_performance();
+    run_test_render_multipolygon_with_hole();
 
     printf("\nMVT Encoding:\n");
     run_test_mvt_default_options();
@@ -895,6 +1040,15 @@ int main(void)
     printf("\nPBF Context:\n");
     run_test_pbf_context_create();
     run_test_pbf_stats_empty();
+    run_test_pbf_context_relations_initialized();
+    run_test_pbf_way_map_initialized();
+    run_test_pbf_relation_member_types();
+
+    printf("\nMultipolygon Assembly:\n");
+    run_test_multipolygon_assemble_empty();
+    run_test_multipolygon_get_role_string_empty();
+    run_test_multipolygon_ring_structure();
+    run_test_multipolygon_assembled_structure();
 
     printf("\nASCII Rendering:\n");
     run_test_ascii_default_options();
