@@ -128,6 +128,37 @@ typedef enum {
 } CTWaterwayType;
 
 /* ============================================================================
+ * Landuse Types (for LOD filtering)
+ * ============================================================================ */
+
+typedef enum {
+    CT_LANDUSE_FOREST = 0,   /* natural=wood, landuse=forest */
+    CT_LANDUSE_PARK,         /* leisure=park, nature_reserve */
+    CT_LANDUSE_RESIDENTIAL,  /* landuse=residential */
+    CT_LANDUSE_COMMERCIAL,   /* landuse=commercial, retail */
+    CT_LANDUSE_INDUSTRIAL,   /* landuse=industrial */
+    CT_LANDUSE_FARMLAND,     /* landuse=farmland, meadow, farmyard */
+    CT_LANDUSE_GRASS,        /* landuse=grass, village_green */
+    CT_LANDUSE_CEMETERY,     /* landuse=cemetery */
+    CT_LANDUSE_MILITARY,     /* landuse=military */
+    CT_LANDUSE_OTHER,        /* Other landuse */
+    CT_LANDUSE_TYPE_COUNT
+} CTLanduseType;
+
+/* ============================================================================
+ * Boundary Admin Levels
+ * ============================================================================ */
+
+typedef enum {
+    CT_BOUNDARY_COUNTRY = 2,  /* admin_level=2 (countries) */
+    CT_BOUNDARY_STATE = 4,    /* admin_level=4 (states/provinces) */
+    CT_BOUNDARY_COUNTY = 6,   /* admin_level=6 (counties/districts) */
+    CT_BOUNDARY_CITY = 8,     /* admin_level=8 (cities/municipalities) */
+    CT_BOUNDARY_SUBURB = 10,  /* admin_level=10 (suburbs/neighborhoods) */
+    CT_BOUNDARY_OTHER = 99    /* Other or unspecified */
+} CTBoundaryLevel;
+
+/* ============================================================================
  * Feature Geometry Types
  * ============================================================================ */
 
