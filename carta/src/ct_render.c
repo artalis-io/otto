@@ -7,6 +7,8 @@
 #include "ct_pbf.h"
 #include "ct_lod.h"
 #include "ct_simplify.h"
+#include "ct_label.h"
+#include "sh_font.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -977,4 +979,249 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
     /* Cleanup */
     free(features);
     ct_tile_free(&tile);
+}
+
+/* ============================================================================
+ * Text Rendering
+ * ============================================================================ */
+
+/*
+ * Get MSDF coverage with adjustable threshold.
+ * threshold < 0.5: expand glyph (for halo)
+ * threshold = 0.5: normal
+ * threshold > 0.5: shrink glyph
+ */
+static float msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
+                                      float local_x, float local_y,
+                                      float font_size, float threshold)
+{
+    if (!font || !glyph || font_size <= 0.0f) {
+        return 0.0f;
+    }
+
+    /* Map local coordinates [0,1] to atlas coordinates */
+    float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
+    float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
+
+    uint8_t dist_byte = sh_font_sample_msdf(font, (int)atlas_x, (int)atlas_y);
+
+    /* Convert to signed distance [-1, 1] range */
+    float dist = (dist_byte - 128.0f) / 128.0f;
+
+    /* Adjust distance by threshold offset.
+     * threshold=0.5 means edge at dist=0
+     * threshold=0.3 means edge at dist=-0.2 (expands glyph for halo)
+     */
+    float offset = (0.5f - threshold) * 2.0f;
+    dist += offset;
+
+    /* Scale by font size and distance range for proper anti-aliasing */
+    float screen_px_range = font->distance_range * (font_size / font->em_size);
+    if (screen_px_range < 1.0f) screen_px_range = 1.0f;
+
+    /* Apply smoothstep for anti-aliasing */
+    float edge = 0.5f / screen_px_range;
+    float coverage = (dist + edge) / (2.0f * edge);
+
+    /* Clamp to [0, 1] */
+    if (coverage < 0.0f) coverage = 0.0f;
+    if (coverage > 1.0f) coverage = 1.0f;
+
+    return coverage;
+}
+
+void ct_render_glyph(CTRenderContext *ctx,
+                     const SHGlyph *glyph,
+                     int x, int y,
+                     const SHFont *font, float font_size,
+                     CTColor color, float threshold)
+{
+    if (!ctx || !glyph || !font || font_size <= 0.0f) {
+        return;
+    }
+
+    /* Calculate glyph dimensions in screen pixels */
+    float glyph_width = (glyph->plane.right - glyph->plane.left) * font_size;
+    float glyph_height = (glyph->plane.top - glyph->plane.bottom) * font_size;
+
+    if (glyph_width <= 0.0f || glyph_height <= 0.0f) {
+        return;
+    }
+
+    int px_width = (int)ceilf(glyph_width);
+    int px_height = (int)ceilf(glyph_height);
+
+    /* Early bounds check */
+    if (x + px_width < 0 || x >= ctx->width ||
+        y + px_height < 0 || y >= ctx->height) {
+        return;
+    }
+
+    uint8_t sr = CT_COLOR_R(color);
+    uint8_t sg = CT_COLOR_G(color);
+    uint8_t sb = CT_COLOR_B(color);
+    uint8_t base_alpha = CT_COLOR_A(color);
+
+    /* Sample each pixel in the glyph bounding box */
+    for (int py = 0; py < px_height; py++) {
+        int screen_y = y + py;
+        if (screen_y < 0 || screen_y >= ctx->height) continue;
+
+        for (int px = 0; px < px_width; px++) {
+            int screen_x = x + px;
+            if (screen_x < 0 || screen_x >= ctx->width) continue;
+
+            /* Map screen pixel to local glyph coordinates [0, 1] */
+            float local_x = ((float)px + 0.5f) / glyph_width;
+            float local_y = ((float)py + 0.5f) / glyph_height;
+
+            /* Get MSDF coverage with threshold */
+            float coverage = msdf_coverage_threshold(font, glyph, local_x, local_y,
+                                                      font_size, threshold);
+
+            if (coverage <= 0.0f) continue;
+
+            /* Apply coverage to alpha */
+            uint8_t alpha = (uint8_t)(base_alpha * coverage);
+            if (alpha == 0) continue;
+
+            /* Blend pixel */
+            CTColor pixel_color = CT_RGBA(sr, sg, sb, alpha);
+            ct_render_blend_pixel(ctx, screen_x, screen_y, pixel_color);
+        }
+    }
+}
+
+void ct_render_text(CTRenderContext *ctx,
+                    const char *text, int x, int y,
+                    const SHFont *font, float font_size,
+                    CTColor color)
+{
+    if (!ctx || !text || !font || font_size <= 0.0f) {
+        return;
+    }
+
+    float cursor_x = (float)x;
+    float baseline_y = (float)y + sh_font_ascent(font, font_size);
+    const char *p = text;
+
+    while (*p) {
+        uint32_t codepoint;
+        int len = sh_utf8_decode(p, &codepoint);
+        if (len == 0 || codepoint == 0) break;
+        p += len;
+
+        const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
+        if (!glyph) {
+            cursor_x += 0.5f * font_size;  /* Default advance */
+            continue;
+        }
+
+        /* Calculate glyph position */
+        float glyph_x = cursor_x + glyph->plane.left * font_size;
+        float glyph_y = baseline_y - glyph->plane.top * font_size;
+
+        /* Render glyph (threshold 0.5 = normal) */
+        ct_render_glyph(ctx, glyph, (int)glyph_x, (int)glyph_y,
+                        font, font_size, color, 0.5f);
+
+        cursor_x += glyph->advance * font_size;
+    }
+}
+
+void ct_render_text_halo(CTRenderContext *ctx,
+                         const char *text, int x, int y,
+                         const SHFont *font, float font_size,
+                         CTColor fill_color, CTColor halo_color,
+                         float halo_width)
+{
+    if (!ctx || !text || !font || font_size <= 0.0f) {
+        return;
+    }
+
+    /* Calculate halo threshold.
+     * halo_width determines how much to expand the glyph.
+     * Each pixel of halo corresponds to ~0.05 threshold reduction.
+     */
+    float halo_threshold = 0.5f - (halo_width * 0.08f);
+    if (halo_threshold < 0.1f) halo_threshold = 0.1f;
+
+    /* First pass: render halo (expanded glyph) */
+    float cursor_x = (float)x;
+    float baseline_y = (float)y + sh_font_ascent(font, font_size);
+    const char *p = text;
+
+    while (*p) {
+        uint32_t codepoint;
+        int len = sh_utf8_decode(p, &codepoint);
+        if (len == 0 || codepoint == 0) break;
+        p += len;
+
+        const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
+        if (!glyph) {
+            cursor_x += 0.5f * font_size;
+            continue;
+        }
+
+        float glyph_x = cursor_x + glyph->plane.left * font_size;
+        float glyph_y = baseline_y - glyph->plane.top * font_size;
+
+        /* Render halo (lower threshold = expanded) */
+        ct_render_glyph(ctx, glyph, (int)glyph_x, (int)glyph_y,
+                        font, font_size, halo_color, halo_threshold);
+
+        cursor_x += glyph->advance * font_size;
+    }
+
+    /* Second pass: render fill on top */
+    cursor_x = (float)x;
+    p = text;
+
+    while (*p) {
+        uint32_t codepoint;
+        int len = sh_utf8_decode(p, &codepoint);
+        if (len == 0 || codepoint == 0) break;
+        p += len;
+
+        const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
+        if (!glyph) {
+            cursor_x += 0.5f * font_size;
+            continue;
+        }
+
+        float glyph_x = cursor_x + glyph->plane.left * font_size;
+        float glyph_y = baseline_y - glyph->plane.top * font_size;
+
+        /* Render fill (normal threshold) */
+        ct_render_glyph(ctx, glyph, (int)glyph_x, (int)glyph_y,
+                        font, font_size, fill_color, 0.5f);
+
+        cursor_x += glyph->advance * font_size;
+    }
+}
+
+int ct_render_labels(CTRenderContext *ctx,
+                     const CTLabelPlacer *placer,
+                     const SHFont *font,
+                     CTColor fill_color, CTColor halo_color,
+                     float halo_width)
+{
+    if (!ctx || !placer || !font) {
+        return 0;
+    }
+
+    int rendered = 0;
+
+    for (size_t i = 0; i < placer->num_placements; i++) {
+        const CTLabelPlacement *p = &placer->placements[i];
+        if (!p->point || !p->point->name) continue;
+
+        /* Render text with halo at the placement position */
+        ct_render_text_halo(ctx, p->point->name, p->x, p->y,
+                            font, p->font_size,
+                            fill_color, halo_color, halo_width);
+        rendered++;
+    }
+
+    return rendered;
 }

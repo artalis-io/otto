@@ -1722,6 +1722,130 @@ TEST(label_anchor_types)
 }
 
 /* ============================================================================
+ * Text Rendering Tests
+ * ============================================================================ */
+
+TEST(text_render_null_safety)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    const SHFont *font = sh_font_get_default();
+
+    /* All should handle NULL gracefully */
+    ct_render_text(NULL, "test", 10, 10, font, 12.0f, CT_RGB(0, 0, 0));
+    ct_render_text(ctx, NULL, 10, 10, font, 12.0f, CT_RGB(0, 0, 0));
+    ct_render_text(ctx, "test", 10, 10, NULL, 12.0f, CT_RGB(0, 0, 0));
+    ct_render_text(ctx, "test", 10, 10, font, 0.0f, CT_RGB(0, 0, 0));
+    ct_render_text(ctx, "test", 10, 10, font, -1.0f, CT_RGB(0, 0, 0));
+
+    ct_render_text_halo(NULL, "test", 10, 10, font, 12.0f,
+                        CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+    ct_render_text_halo(ctx, NULL, 10, 10, font, 12.0f,
+                        CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(text_render_with_font)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    const SHFont *font = sh_font_get_default();
+
+    if (!font) {
+        /* Skip if no font embedded */
+        ct_render_free(ctx);
+        return 1;
+    }
+
+    ct_render_clear(ctx);
+
+    /* Render some text */
+    ct_render_text(ctx, "Hello", 10, 10, font, 16.0f, CT_RGB(0, 0, 0));
+
+    /* Should have drawn some pixels */
+    /* We just verify no crash occurs */
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(text_render_halo)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    const SHFont *font = sh_font_get_default();
+
+    if (!font) {
+        ct_render_free(ctx);
+        return 1;
+    }
+
+    ct_render_clear(ctx);
+
+    /* Render text with halo */
+    ct_render_text_halo(ctx, "Test", 50, 50, font, 14.0f,
+                        CT_RGB(0, 0, 0),       /* Black fill */
+                        CT_RGB(255, 255, 255), /* White halo */
+                        1.5f);                 /* 1.5px halo */
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(text_render_labels_null_safety)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    const SHFont *font = sh_font_get_default();
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+
+    /* All should handle NULL gracefully */
+    ASSERT_EQ(ct_render_labels(NULL, placer, font,
+                               CT_RGB(0,0,0), CT_RGB(255,255,255), 1.0f), 0);
+    ASSERT_EQ(ct_render_labels(ctx, NULL, font,
+                               CT_RGB(0,0,0), CT_RGB(255,255,255), 1.0f), 0);
+    ASSERT_EQ(ct_render_labels(ctx, placer, NULL,
+                               CT_RGB(0,0,0), CT_RGB(255,255,255), 1.0f), 0);
+
+    ct_label_placer_free(placer);
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(text_render_labels_empty_placer)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    const SHFont *font = sh_font_get_default();
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+
+    /* Empty placer should render 0 labels */
+    int rendered = ct_render_labels(ctx, placer, font,
+                                    CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+    ASSERT_EQ(rendered, 0);
+
+    ct_label_placer_free(placer);
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(text_glyph_render_null_safety)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    const SHFont *font = sh_font_get_default();
+
+    /* NULL glyph should be handled */
+    ct_render_glyph(ctx, NULL, 10, 10, font, 12.0f, CT_RGB(0, 0, 0), 0.5f);
+    ct_render_glyph(NULL, NULL, 10, 10, font, 12.0f, CT_RGB(0, 0, 0), 0.5f);
+
+    if (font) {
+        const SHGlyph *glyph = sh_font_get_glyph(font, 'A');
+        ct_render_glyph(ctx, glyph, 10, 10, NULL, 12.0f, CT_RGB(0, 0, 0), 0.5f);
+        ct_render_glyph(ctx, glyph, 10, 10, font, 0.0f, CT_RGB(0, 0, 0), 0.5f);
+    }
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1851,6 +1975,14 @@ int main(void)
     run_test_label_configuration();
     run_test_label_placer_null_safety();
     run_test_label_anchor_types();
+
+    printf("\nText Rendering:\n");
+    run_test_text_render_null_safety();
+    run_test_text_render_with_font();
+    run_test_text_render_halo();
+    run_test_text_render_labels_null_safety();
+    run_test_text_render_labels_empty_placer();
+    run_test_text_glyph_render_null_safety();
 
     printf("\n=== Results: %d/%d tests passed ===\n\n",
            tests_passed, tests_run);
