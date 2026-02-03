@@ -47,6 +47,10 @@ WASM_FLAGS += -s EXPORTED_FUNCTIONS='[\
   "_cs_key_down","_cs_key_char","_cs_blur","_cs_set_pending_click",\
   "_cs_clay_set_glyph_advance","_cs_clay_has_font_metrics",\
   "_cs_register_focusable","_cs_focus_next","_cs_focus_prev","_cs_focusable_count",\
+  "_cs_set_scroll_delta","_cs_scroll_container_hovered","_cs_scroll_set_position",\
+  "_scrollbar_start_drag","_scrollbar_move","_scrollbar_end_drag","_scrollbar_is_dragging",\
+  "_scrollbar_hit_test_xy","_scrollbar_content_height","_scrollbar_view_height","_scrollbar_track_height","_scrollbar_scroll_id",\
+  "_scrollbar_debug_visible","_scrollbar_debug_x","_scrollbar_debug_y","_scrollbar_debug_w","_scrollbar_debug_h",\
   "_cs_map_overlay_count","_cs_map_overlay_type","_cs_map_overlay_id",\
   "_cs_map_overlay_polyline_count","_cs_map_overlay_polyline_lat","_cs_map_overlay_polyline_lon",\
   "_cs_map_overlay_polyline_color_r","_cs_map_overlay_polyline_color_g",\

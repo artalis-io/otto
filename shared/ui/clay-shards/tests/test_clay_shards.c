@@ -2292,6 +2292,19 @@ static void test_scroll_info_not_found(void) {
     PASS();
 }
 
+static void test_scroll_set_position_not_found(void) {
+    TEST(scroll_set_position_not_found);
+
+    cs_init();
+
+    /* Try to set position on non-existent scroll container */
+    bool result = cs_scroll_set_position(CS_ID("nonexistent"), 0, 100);
+
+    ASSERT(result == false, "Should return false for non-existent container");
+
+    PASS();
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -2416,6 +2429,7 @@ int main(void) {
     test_scroll_delta_accumulation();
     test_scroll_container_hovered_flag();
     test_scroll_info_not_found();
+    test_scroll_set_position_not_found();
 
     printf("\n======================================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

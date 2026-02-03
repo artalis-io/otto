@@ -117,6 +117,37 @@ CsScrollInfo cs_scroll_info(uint32_t id) {
 }
 
 /* ============================================================================
+ * Scroll Position Control
+ * ============================================================================ */
+
+CS_EXPORT bool cs_scroll_set_position(uint32_t id, float scroll_x, float scroll_y) {
+    Clay_ElementId clay_id = (Clay_ElementId){.id = id, .stringId = {0}};
+    Clay_ScrollContainerData data = Clay_GetScrollContainerData(clay_id);
+
+    if (!data.found || !data.scrollPosition) {
+        return false;
+    }
+
+    /* Clamp to valid range */
+    float max_scroll_x = data.contentDimensions.width - data.scrollContainerDimensions.width;
+    float max_scroll_y = data.contentDimensions.height - data.scrollContainerDimensions.height;
+
+    if (max_scroll_x < 0) max_scroll_x = 0;
+    if (max_scroll_y < 0) max_scroll_y = 0;
+
+    if (scroll_x < 0) scroll_x = 0;
+    if (scroll_x > max_scroll_x) scroll_x = max_scroll_x;
+    if (scroll_y < 0) scroll_y = 0;
+    if (scroll_y > max_scroll_y) scroll_y = max_scroll_y;
+
+    /* Clay uses negative values for scroll offset */
+    data.scrollPosition->x = -scroll_x;
+    data.scrollPosition->y = -scroll_y;
+
+    return true;
+}
+
+/* ============================================================================
  * Scroll Container Macro Support
  * ============================================================================ */
 
