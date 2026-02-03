@@ -2,7 +2,7 @@
 
 ## Overview
 
-**Ralph** (**R**obust **A**I **L**inear **P**rogramming **H**elper) is a C library implementing LP, MIP, and LAP solvers. It has zero external dependencies and is designed to be embedded in other projects.
+**Ralph** (**R**obust **A**I **L**inear **P**rogramming **H**elper) is a C library implementing LP, MIP, LAP, and Network Flow solvers. It has zero external dependencies and is designed to be embedded in other projects.
 
 ## Quick Start
 
@@ -10,6 +10,7 @@
 make          # Build libralph.a
 make test     # Run tests (73/73 should pass)
 make test-lap # Run LAP tests (255/255 should pass)
+make test-netflow # Run Network Flow tests (100/100 should pass)
 ```
 
 ## Key Files
@@ -18,14 +19,17 @@ make test-lap # Run LAP tests (255/255 should pass)
 |------|---------|
 | `include/ralph.h` | Public API - start here |
 | `include/lap.h` | LAP solver API |
+| `include/netflow.h` | Network Flow solver API |
 | `include/detect.h` | Problem structure detection |
 | `src/simplex.c` | Primal simplex algorithm |
 | `src/lu.c` | LU factorization (critical) |
 | `src/lap.c` | JVC algorithm for LAP |
+| `src/netflow.c` | Network simplex algorithm |
 | `src/detect.c` | LAP/network detection |
 | `src/branch_bound.c` | MIP solver |
 | `tests/test_main.c` | LP/MIP test suite |
 | `tests/test_lap.c` | LAP test suite |
+| `tests/test_netflow.c` | Network Flow test suite |
 
 ## Architecture
 
@@ -38,16 +42,16 @@ Model Building (model.c)
 │         Problem Detection (detect.c)    │
 │    Detects LAP/network structure        │
 └─────────────────────────────────────────┘
-    ↓                    ↓
-┌─────────────┐    ┌─────────────┐
-│ LAP Solver  │    │   Simplex   │
-│  (lap.c)    │    │ (simplex.c) │
-│  O(n³) JVC  │    │     ↕       │
-└─────────────┘    │  LU (lu.c)  │
-                   └─────────────┘
-                         ↓
-              MIP (mip.c) → Branch & Bound
-              (uses LAP for assignment MIPs)
+    ↓              ↓                ↓
+┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+│ LAP Solver  │ │  Network    │ │   Simplex   │
+│  (lap.c)    │ │  Simplex    │ │ (simplex.c) │
+│  O(n³) JVC  │ │ (netflow.c) │ │     ↕       │
+└─────────────┘ └─────────────┘ │  LU (lu.c)  │
+                                └─────────────┘
+                                      ↓
+                           MIP (mip.c) → Branch & Bound
+                           (uses LAP for assignment MIPs)
 ```
 
 ## Critical Invariants
@@ -121,6 +125,67 @@ ralph_set_detect_lap(1);
 
 When enabled, assignment problems formulated as LPs/MIPs are solved with JVC instead of simplex (86-633× faster for LP relaxations).
 
+## Network Flow Solver Features
+
+The network flow solver implements the network simplex algorithm for Minimum Cost Network Flow (MCNF) problems:
+
+| Feature | API | Notes |
+|---------|-----|-------|
+| Standard MCNF | `ralph_netflow_solve()` | Candidate list pricing |
+| Warm start | `options.warm_start = 1` | Reuse basis from previous solve |
+| Pricing rules | `options.pricing` | CANDIDATE, FIRST, BEST |
+| Workspace reuse | `ralph_netflow_workspace_*()` | Amortize allocations |
+
+### Basic Usage
+
+```c
+int tail[] = {0, 1};
+int head[] = {1, 2};
+double cost[] = {1.0, 2.0};
+double supply[] = {5.0, 0.0, -5.0};  /* Negative = demand */
+
+RalphNetflowProblem prob = {
+    .num_nodes = 3, .num_arcs = 2,
+    .tail = tail, .head = head, .cost = cost,
+    .capacity = NULL,  /* NULL = infinite */
+    .lower = NULL,     /* NULL = zero */
+    .supply = supply,
+    .objective = RALPH_NETFLOW_MINIMIZE
+};
+
+RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+double flow[2];
+RalphNetflowResult result = {.flow = flow};
+
+ralph_netflow_solve(&prob, &opts, &result, NULL);
+/* result.objective = 15.0, flow = {5.0, 5.0} */
+```
+
+### Warm Start for Re-optimization
+
+```c
+RalphNetflowWorkspace *ws = ralph_netflow_workspace_create(100, 500);
+RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+opts.save_warm_start = 1;  /* Save basis after solve */
+
+/* First solve */
+ralph_netflow_solve(&prob1, &opts, &result, ws);
+
+/* Second solve with changed costs - uses warm start automatically */
+opts.warm_start = 1;
+ralph_netflow_solve(&prob2, &opts, &result, ws);  /* Much faster */
+
+ralph_netflow_workspace_free(ws);
+```
+
+### Problem Detection
+
+Network flow structure is auto-detected in LP models when enabled:
+
+```c
+ralph_set_int_param(model, "detect_special", 1);
+```
+
 ## Common Tasks
 
 ### Adding a new pricing strategy
@@ -150,20 +215,37 @@ When enabled, assignment problems formulated as LPs/MIPs are solved with JVC ins
 3. Add tests to `tests/test_lap.c`
 4. Run `make test-lap` to verify
 
+### Working with Network Flow solver
+1. Basic: `ralph_netflow_solve()` with Problem/Options/Result structs
+2. Warm start: Set `opts.save_warm_start = 1`, then `opts.warm_start = 1`
+3. Workspace reuse: Create once, solve multiple problems
+4. Integration: Enable `detect_special` param for auto network detection
+
+### Adding Network Flow features
+1. Edit `src/netflow.c` for algorithm changes
+2. Follow unified API pattern (Options struct for orthogonal features)
+3. Add tests to `tests/test_netflow.c`
+4. Run `make test-netflow` to verify
+
 ## Testing
 
 ```bash
 # All LP/MIP tests (73 tests)
 make test
 
-# LAP tests only (273 tests)
+# LAP tests only (255 tests)
 make test-lap
+
+# Network Flow tests (100 tests)
+make test-netflow
 
 # LP only (faster)
 ./test_ralph --skip-mip
 
 # Add new test
-# Edit tests/test_main.c for LP/MIP, tests/test_lap.c for LAP
+# Edit tests/test_main.c for LP/MIP
+# Edit tests/test_lap.c for LAP
+# Edit tests/test_netflow.c for Network Flow
 ```
 
 ## Benchmarks
@@ -171,6 +253,7 @@ make test-lap
 ```bash
 make bench-lap        # LAP benchmarks (size scaling, sparse vs dense)
 make bench-lap mip    # LAP-based MIP benchmark
+# make bench-netflow  # Network Flow benchmarks (TODO)
 ```
 
 ## Code Style
@@ -183,9 +266,15 @@ make bench-lap mip    # LAP-based MIP benchmark
 ## Numerical Tolerances
 
 ```c
+/* General */
 #define TOLERANCE 1e-9      // General numerical tolerance
 #define PIVOT_TOL 1e-10     // Minimum pivot value
 #define BIG_M 1e8           // Artificial variable cost
+
+/* Network Flow */
+#define RALPH_NETFLOW_TOLERANCE 1e-9   // Flow/cost tolerance
+#define RALPH_NETFLOW_BIG_M 1e12       // Artificial arc cost
+#define RALPH_NETFLOW_INFINITY 1e15    // Infinite capacity
 ```
 
 ## Memory Management
