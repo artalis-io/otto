@@ -94,6 +94,17 @@ void ct_rtree_stats(const CTRTree *tree, size_t *num_nodes, size_t *height,
  */
 CTRTreeNode *ct_rtree_get_root(const CTRTree *tree);
 
+/*
+ * Build R-Tree from multipolygon bboxes.
+ * Similar to ct_rtree_build but for multipolygons.
+ *
+ * @param bboxes     Array of bounding boxes (one per multipolygon)
+ * @param num_items  Number of items
+ * @param data_bbox  Bounding box of all data (for Hilbert normalization)
+ * @return           Allocated R-Tree, or NULL on failure
+ */
+CTRTree *ct_rtree_build_from_bboxes(const CTBBox *bboxes, size_t num_items, CTBBox data_bbox);
+
 #ifdef __cplusplus
 }
 #endif

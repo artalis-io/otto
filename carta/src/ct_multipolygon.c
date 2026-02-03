@@ -485,13 +485,27 @@ CTStatus ct_build_multipolygon_rtree(CTPBFContext *ctx)
     if (!ctx) return CT_ERROR_INVALID_ARGUMENT;
     if (ctx->num_multipolygons == 0) return CT_OK;
 
-    /* Build R-Tree for multipolygons - use similar approach to way R-Tree */
-    /* For now, we'll use the existing ct_rtree functions with multipolygon bboxes */
+    /* Free existing R-Tree if any */
+    if (ctx->mp_rtree) {
+        ct_rtree_free(ctx->mp_rtree);
+        ctx->mp_rtree = NULL;
+    }
 
-    /* The R-Tree expects CTOSMWay entries, so we need to create wrapper structure */
-    /* or extend ct_rtree.c to support multipolygons. */
-    /* For the initial implementation, we'll skip this and do linear scan */
-    /* TODO: Implement proper R-Tree for multipolygons */
+    /* Extract bboxes from multipolygons */
+    CTBBox *bboxes = malloc(ctx->num_multipolygons * sizeof(CTBBox));
+    if (!bboxes) return CT_ERROR_OUT_OF_MEMORY;
+
+    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+        bboxes[i] = ctx->multipolygons[i].bbox;
+    }
+
+    /* Build R-Tree from bboxes */
+    ctx->mp_rtree = ct_rtree_build_from_bboxes(bboxes, ctx->num_multipolygons, ctx->bbox);
+    free(bboxes);
+
+    if (!ctx->mp_rtree && ctx->num_multipolygons > 0) {
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
 
     return CT_OK;
 }
