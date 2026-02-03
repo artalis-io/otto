@@ -352,6 +352,84 @@ TEST(msdf_coverage)
     return 1;
 }
 
+TEST(msdf_sample_bilinear)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font || !font->atlas_data) {
+        return 1;  /* Skip if no font */
+    }
+
+    /* Sample at valid coordinates */
+    float dist = sh_font_sample_msdf_bilinear(font, 50.5f, 50.5f);
+    ASSERT(dist >= 0.0f && dist <= 1.0f);
+
+    /* Sample at edges should be clamped */
+    dist = sh_font_sample_msdf_bilinear(font, -10.0f, -10.0f);
+    ASSERT(dist >= 0.0f && dist <= 1.0f);
+
+    dist = sh_font_sample_msdf_bilinear(font, (float)font->atlas_width + 100.0f, 50.0f);
+    ASSERT(dist >= 0.0f && dist <= 1.0f);
+
+    /* NULL font returns 0 */
+    ASSERT_FLOAT_EQ(sh_font_sample_msdf_bilinear(NULL, 50.0f, 50.0f), 0.0f, 0.001f);
+
+    return 1;
+}
+
+TEST(msdf_coverage_bilinear)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) {
+        return 1;  /* Skip if no font */
+    }
+
+    const SHGlyph *glyph = sh_font_get_glyph(font, 'A');
+    if (!glyph) {
+        return 1;  /* Skip if no glyph */
+    }
+
+    /* Coverage should be in [0, 1] */
+    float coverage = sh_font_msdf_coverage_bilinear(font, glyph, 0.5f, 0.5f, 32.0f);
+    ASSERT(coverage >= 0.0f && coverage <= 1.0f);
+
+    /* NULL handling */
+    ASSERT_FLOAT_EQ(sh_font_msdf_coverage_bilinear(NULL, glyph, 0.5f, 0.5f, 32.0f), 0.0f, 0.001f);
+    ASSERT_FLOAT_EQ(sh_font_msdf_coverage_bilinear(font, NULL, 0.5f, 0.5f, 32.0f), 0.0f, 0.001f);
+    ASSERT_FLOAT_EQ(sh_font_msdf_coverage_bilinear(font, glyph, 0.5f, 0.5f, 0.0f), 0.0f, 0.001f);
+    ASSERT_FLOAT_EQ(sh_font_msdf_coverage_bilinear(font, glyph, 0.5f, 0.5f, -1.0f), 0.0f, 0.001f);
+
+    return 1;
+}
+
+TEST(msdf_coverage_threshold)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) {
+        return 1;  /* Skip if no font */
+    }
+
+    const SHGlyph *glyph = sh_font_get_glyph(font, 'A');
+    if (!glyph) {
+        return 1;  /* Skip if no glyph */
+    }
+
+    /* Coverage should be in [0, 1] */
+    float coverage = sh_font_msdf_coverage_threshold(font, glyph, 0.5f, 0.5f, 32.0f, 0.5f);
+    ASSERT(coverage >= 0.0f && coverage <= 1.0f);
+
+    /* Lower threshold should give more coverage (expanded glyph) */
+    float coverage_normal = sh_font_msdf_coverage_threshold(font, glyph, 0.5f, 0.5f, 32.0f, 0.5f);
+    float coverage_halo = sh_font_msdf_coverage_threshold(font, glyph, 0.5f, 0.5f, 32.0f, 0.3f);
+    /* Halo coverage should be >= normal coverage */
+    ASSERT(coverage_halo >= coverage_normal - 0.001f);
+
+    /* NULL handling */
+    ASSERT_FLOAT_EQ(sh_font_msdf_coverage_threshold(NULL, glyph, 0.5f, 0.5f, 32.0f, 0.5f), 0.0f, 0.001f);
+    ASSERT_FLOAT_EQ(sh_font_msdf_coverage_threshold(font, NULL, 0.5f, 0.5f, 32.0f, 0.5f), 0.0f, 0.001f);
+
+    return 1;
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -389,6 +467,9 @@ int main(void)
     printf("\nMSDF Sampling:\n");
     RUN_TEST(msdf_sample_bounds);
     RUN_TEST(msdf_coverage);
+    RUN_TEST(msdf_sample_bilinear);
+    RUN_TEST(msdf_coverage_bilinear);
+    RUN_TEST(msdf_coverage_threshold);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 
