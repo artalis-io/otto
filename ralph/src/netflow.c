@@ -1225,14 +1225,16 @@ static RalphNetflowStatus netflow_solve_internal(
 }
 
 /* ============================================================================
- * Public API
+ * Unified API Implementation
  * ============================================================================ */
 
-RalphNetflowStatus ralph_netflow_solve(
+/*
+ * Internal validation helper.
+ * Returns RALPH_NETFLOW_OPTIMAL if valid, error code otherwise.
+ */
+static RalphNetflowStatus validate_problem(
     const RalphNetflowProblem *problem,
-    const RalphNetflowOptions *options,
-    RalphNetflowResult *result,
-    RalphNetflowWorkspace *workspace
+    RalphNetflowResult *result
 ) {
     if (!problem || !result) {
         if (result) result->status = RALPH_NETFLOW_INVALID_INPUT;
@@ -1315,13 +1317,29 @@ RalphNetflowStatus ralph_netflow_solve(
         return RALPH_NETFLOW_INFEASIBLE;
     }
 
-    /* Default options */
-    RalphNetflowOptions default_opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
-    if (!options) {
-        options = &default_opts;
+    return RALPH_NETFLOW_OPTIMAL;
+}
+
+/*
+ * Unified API - main entry point with algorithm dispatch.
+ */
+RalphNetflowStatus ralph_netflow_solve_ex(
+    const RalphNetflowProblem *problem,
+    const RalphNetflowOptions *options,
+    RalphNetflowResult *result,
+    RalphNetflowWorkspace *workspace
+) {
+    /* Validate inputs */
+    RalphNetflowStatus status = validate_problem(problem, result);
+    if (status != RALPH_NETFLOW_OPTIMAL) {
+        return status;
     }
 
-    /* Workspace */
+    /* Default options */
+    RalphNetflowOptions default_opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    const RalphNetflowOptions *opts = options ? options : &default_opts;
+
+    /* Workspace management */
     RalphNetflowWorkspace *ws = workspace;
     int allocated_ws = 0;
 
@@ -1339,13 +1357,54 @@ RalphNetflowStatus ralph_netflow_solve(
         }
     }
 
-    RalphNetflowStatus status = netflow_solve_internal(problem, options, result, ws);
+    /* Initialize result */
+    result->status = RALPH_NETFLOW_OPTIMAL;
+    result->num_found = 0;
+
+    /* Dispatch based on algorithm */
+    switch (opts->algorithm) {
+        case RALPH_NETFLOW_ALG_K_BEST:
+            if (opts->k <= 0) {
+                status = RALPH_NETFLOW_INVALID_INPUT;
+            } else if (opts->k == 1) {
+                /* k=1 is just standard solve */
+                status = netflow_solve_internal(problem, opts, result, ws);
+            } else {
+                /* k-best: not yet implemented */
+                status = RALPH_NETFLOW_INVALID_INPUT;  /* TODO: implement k-best */
+            }
+            break;
+
+        case RALPH_NETFLOW_ALG_BOTTLENECK:
+            /* Bottleneck: not yet implemented */
+            status = RALPH_NETFLOW_INVALID_INPUT;  /* TODO: implement bottleneck */
+            break;
+
+        case RALPH_NETFLOW_ALG_STANDARD:
+        default:
+            status = netflow_solve_internal(problem, opts, result, ws);
+            break;
+    }
+
+    result->status = status;
 
     if (allocated_ws) {
         ralph_netflow_workspace_free(ws);
     }
 
     return status;
+}
+
+/*
+ * Original API - wrapper around unified API.
+ */
+RalphNetflowStatus ralph_netflow_solve(
+    const RalphNetflowProblem *problem,
+    const RalphNetflowOptions *options,
+    RalphNetflowResult *result,
+    RalphNetflowWorkspace *workspace
+) {
+    return ralph_netflow_solve_ex(problem, options, result, workspace);
 }
 
 RalphNetflowStatus ralph_mcnf_solve(

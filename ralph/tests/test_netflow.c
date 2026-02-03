@@ -1436,6 +1436,71 @@ void test_warm_start_performance(void) {
     free(supply); free(flow);
 }
 
+/* Test the unified API (ralph_netflow_solve_ex) */
+void test_unified_api(void) {
+    printf("\n=== Test: Unified API ===\n");
+
+    /* Simple problem */
+    int tail[] = {0, 1};
+    int head[] = {1, 2};
+    double cost[] = {1.0, 2.0};
+    double supply[] = {5.0, 0.0, -5.0};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 3, .num_arcs = 2,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    double flow[2];
+    RalphNetflowResult result = {.flow = flow};
+
+    /* Test 1: STANDARD algorithm via solve_ex */
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_NETFLOW_ALG_STANDARD;
+
+    RalphNetflowStatus status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "STANDARD algorithm optimal");
+    ASSERT_NEAR(result.objective, 15.0, TOLERANCE, "STANDARD objective correct");
+
+    /* Test 2: K_BEST with k=1 should behave like STANDARD */
+    opts.algorithm = RALPH_NETFLOW_ALG_K_BEST;
+    opts.k = 1;
+    result.objective = 0.0;
+
+    status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "K_BEST k=1 optimal");
+    ASSERT_NEAR(result.objective, 15.0, TOLERANCE, "K_BEST k=1 objective correct");
+
+    /* Test 3: K_BEST with k>1 returns INVALID_INPUT (not yet implemented) */
+    opts.k = 3;
+    status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+    ASSERT(status == RALPH_NETFLOW_INVALID_INPUT, "K_BEST k>1 returns INVALID_INPUT (not implemented)");
+
+    /* Test 4: BOTTLENECK returns INVALID_INPUT (not yet implemented) */
+    opts.algorithm = RALPH_NETFLOW_ALG_BOTTLENECK;
+    status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+    ASSERT(status == RALPH_NETFLOW_INVALID_INPUT, "BOTTLENECK returns INVALID_INPUT (not implemented)");
+
+    /* Test 5: K_BEST with k<=0 returns INVALID_INPUT */
+    opts.algorithm = RALPH_NETFLOW_ALG_K_BEST;
+    opts.k = 0;
+    status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+    ASSERT(status == RALPH_NETFLOW_INVALID_INPUT, "K_BEST k=0 returns INVALID_INPUT");
+
+    /* Test 6: Default algorithm via NULL options */
+    status = ralph_netflow_solve_ex(&prob, NULL, &result, NULL);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "NULL options uses default STANDARD");
+    ASSERT_NEAR(result.objective, 15.0, TOLERANCE, "NULL options objective correct");
+
+    /* Test 7: solve() and solve_ex() produce same result */
+    RalphNetflowResult result2 = {.flow = flow};
+    RalphNetflowStatus status2 = ralph_netflow_solve(&prob, NULL, &result2, NULL);
+    ASSERT(status == status2, "solve() and solve_ex() same status");
+    ASSERT_NEAR(result.objective, result2.objective, TOLERANCE, "solve() and solve_ex() same objective");
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -1490,6 +1555,9 @@ int main(int argc, char *argv[]) {
     test_warm_start_api();
     test_warm_start_correctness();
     test_warm_start_performance();
+
+    /* Unified API tests */
+    test_unified_api();
 
     printf("\n=====================\n");
     printf("Tests: %d/%d passed\n", tests_passed, tests_run);

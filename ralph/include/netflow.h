@@ -384,6 +384,39 @@ RalphNetflowStatus ralph_netflow_solve(
     RalphNetflowWorkspace *workspace
 );
 
+/*
+ * Unified network flow solver - extended API.
+ *
+ * This is the main entry point supporting all algorithm variants:
+ * - RALPH_NETFLOW_ALG_STANDARD: Single optimal flow (default)
+ * - RALPH_NETFLOW_ALG_K_BEST: Find k best distinct flows
+ * - RALPH_NETFLOW_ALG_BOTTLENECK: Minimize maximum arc cost used
+ *
+ * Features controlled via options:
+ * - Algorithm selection via options->algorithm
+ * - Warm start via options->warm_start
+ * - Pricing strategy via options->pricing
+ *
+ * The basic ralph_netflow_solve() is equivalent to:
+ *   ralph_netflow_solve_ex(problem, options, result, workspace)
+ * with algorithm = STANDARD.
+ *
+ * Parameters:
+ *   problem   - Problem definition
+ *   options   - Solver options (NULL for defaults)
+ *   result    - Output structure
+ *   workspace - Reusable workspace (NULL to auto-allocate)
+ *
+ * Returns:
+ *   RALPH_NETFLOW_OPTIMAL on success, error code otherwise.
+ */
+RalphNetflowStatus ralph_netflow_solve_ex(
+    const RalphNetflowProblem *problem,
+    const RalphNetflowOptions *options,
+    RalphNetflowResult *result,
+    RalphNetflowWorkspace *workspace
+);
+
 /* ============================================================================
  * Convenience Wrapper
  * ============================================================================ */
