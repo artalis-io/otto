@@ -523,8 +523,14 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                         ct_render_polygon(ctx, scaled, f->num_points,
                                           ctx->style.water_color);
                     } else {
+                        /* Use data-driven width based on waterway type */
+                        int waterway_type = f->feature_type;
+                        if (waterway_type < 0 || waterway_type >= CT_WATERWAY_TYPE_COUNT) {
+                            waterway_type = CT_WATERWAY_OTHER;
+                        }
+                        float width = ct_style_waterway_width(&ctx->style, waterway_type);
                         ct_render_polyline(ctx, scaled, f->num_points,
-                                           ctx->style.water_color, 2.0f);
+                                           ctx->style.water_color, width);
                     }
                     break;
 
