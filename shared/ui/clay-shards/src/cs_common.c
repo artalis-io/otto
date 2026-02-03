@@ -12,6 +12,7 @@
 
 #include "cs_internal.h"
 #include <string.h>
+#include <stdlib.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -21,10 +22,73 @@
 #endif
 
 /* ============================================================================
- * Global State
+ * Custom Allocator
  * ============================================================================ */
 
-static CsState g_cc = {
+/* Default allocator wrappers */
+static void* default_alloc(size_t size, void *user_data) {
+    (void)user_data;
+    return malloc(size);
+}
+
+static void* default_realloc(void *ptr, size_t size, void *user_data) {
+    (void)user_data;
+    return realloc(ptr, size);
+}
+
+static void default_free(void *ptr, void *user_data) {
+    (void)user_data;
+    free(ptr);
+}
+
+static const CsAllocator g_default_allocator = {
+    .alloc = default_alloc,
+    .realloc = default_realloc,
+    .free = default_free,
+    .user_data = NULL
+};
+
+/* Thread-local allocator (NULL means use default) */
+static CS_THREAD_LOCAL const CsAllocator *g_allocator = NULL;
+
+void cs_set_allocator(const CsAllocator *allocator) {
+    g_allocator = allocator;
+}
+
+const CsAllocator* cs_get_allocator(void) {
+    return g_allocator ? g_allocator : &g_default_allocator;
+}
+
+/* Internal allocation helpers */
+void* cs_alloc(size_t size) {
+    const CsAllocator *a = cs_get_allocator();
+    void *ptr = a->alloc(size, a->user_data);
+    if (!ptr && size > 0) {
+        cs_record_error(CS_ERR_ALLOC_FAILED);
+    }
+    return ptr;
+}
+
+void* cs_realloc(void *ptr, size_t size) {
+    const CsAllocator *a = cs_get_allocator();
+    void *new_ptr = a->realloc(ptr, size, a->user_data);
+    if (!new_ptr && size > 0) {
+        cs_record_error(CS_ERR_ALLOC_FAILED);
+    }
+    return new_ptr;
+}
+
+void cs_free(void *ptr) {
+    if (!ptr) return;
+    const CsAllocator *a = cs_get_allocator();
+    a->free(ptr, a->user_data);
+}
+
+/* ============================================================================
+ * Global State (Thread-Local)
+ * ============================================================================ */
+
+static CS_THREAD_LOCAL CsState g_cc = {
     .focused_id = 0,
     .pending_click = false,
 };
@@ -70,8 +134,8 @@ CsWidgetState* cs_widget_state(uint32_t id) {
         }
     }
 
-    /* Table full - return first slot as fallback (shouldn't happen with 256 slots) */
-    return &g_cc.widgets[slot & mask];
+    /* Table full - return NULL to signal error (shouldn't happen with 256 slots) */
+    return NULL;
 }
 
 /* ============================================================================
@@ -472,4 +536,29 @@ CS_EXPORT bool cs_focus_prev(void) {
 
 CS_EXPORT int cs_focusable_count(void) {
     return g_cc.focusable_count;
+}
+
+/* ============================================================================
+ * Error Tracking (Thread-Local)
+ * ============================================================================ */
+
+static CS_THREAD_LOCAL CsErrorCode g_last_error = CS_ERR_NONE;
+static CS_THREAD_LOCAL int g_error_count = 0;
+
+void cs_record_error(CsErrorCode code) {
+    g_last_error = code;
+    g_error_count++;
+}
+
+CS_EXPORT CsErrorCode cs_get_last_error(void) {
+    return g_last_error;
+}
+
+CS_EXPORT int cs_get_error_count(void) {
+    return g_error_count;
+}
+
+CS_EXPORT void cs_clear_errors(void) {
+    g_last_error = CS_ERR_NONE;
+    g_error_count = 0;
 }

@@ -3,9 +3,21 @@
  *
  * Multi-instance architecture: Each map has its own state stored in a
  * hash table keyed by map_id. Supports up to CS_MAP_STATE_CAPACITY maps.
+ *
+ * This file contains:
+ * - State management and hash table
+ * - Buffer management
+ * - Hit testing
+ * - Core component and interaction
+ * - Overlay management
+ * - Accessors for JS renderer
+ *
+ * See also:
+ * - cs_map_projection.c - Web Mercator projection utilities
+ * - cs_map_simplify.c - Douglas-Peucker polyline simplification
  */
 
-#include "cs_map.h"
+#include "cs_map_internal.h"
 #include "cs_internal.h"
 #include "clay.h"
 #include <math.h>
@@ -18,40 +30,6 @@
 #else
 #define EXPORT
 #endif
-
-/* ============================================================================
- * Constants
- * ============================================================================ */
-
-#define PI 3.14159265358979323846
-#define DEG_TO_RAD (PI / 180.0)
-#define RAD_TO_DEG (180.0 / PI)
-
-/* Web Mercator latitude limits - beyond this, projection math breaks down */
-#define MAX_LATITUDE 85.051129
-
-/* Click detection threshold in pixels */
-#define CLICK_THRESHOLD 5.0f
-
-/* Hit test tolerance in pixels (added to object bounds) */
-#define HIT_TEST_TOLERANCE 4.0f
-
-/* Zoom animation easing factor (higher = faster) */
-#define ZOOM_EASE_FACTOR 10.0f
-
-/* Clamp latitude to valid Web Mercator range */
-static double clamp_latitude(double lat) {
-    if (lat > MAX_LATITUDE) return MAX_LATITUDE;
-    if (lat < -MAX_LATITUDE) return -MAX_LATITUDE;
-    return lat;
-}
-
-/* Clamp zoom to valid range (0-30 to avoid overflow in 1 << zoom) */
-static int clamp_zoom(int zoom) {
-    if (zoom < 0) return 0;
-    if (zoom > 30) return 30;
-    return zoom;
-}
 
 /* ============================================================================
  * Default Styles
@@ -81,90 +59,16 @@ const CsMarkerStyle CS_MARKER_STYLE_DEFAULT = {
 };
 
 /* ============================================================================
- * Overlay Storage Structure
+ * State Management (Thread-Local)
  * ============================================================================ */
 
-typedef struct {
-    int type;                       /* CS_OVERLAY_POLYLINE or CS_OVERLAY_MARKER */
-    uint32_t id;
-    union {
-        struct {
-            int point_start;        /* Index into polyline_points */
-            int point_count;
-            CsPolylineStyle style;
-        } polyline;
-        struct {
-            double lat, lon;
-            CsMarkerStyle style;
-        } marker;
-    };
-} CsOverlay;
-
-/* ============================================================================
- * Per-Map State Structure
- * ============================================================================ */
-
-typedef struct {
-    uint32_t map_id;  /* 0 = empty slot */
-
-    /* Drag state */
-    bool dragging_map;
-    bool dragging_marker;
-    uint32_t dragging_overlay_id;
-    float drag_start_x, drag_start_y;
-    double drag_start_lat, drag_start_lon;
-    /* For marker drag: original marker position */
-    double marker_drag_start_lat, marker_drag_start_lon;
-
-    /* Click detection */
-    bool pending_click;
-    float click_x, click_y;
-
-    /* State tracking for panned/zoomed detection */
-    double prev_lat, prev_lon;
-    int prev_zoom;
-    bool state_initialized;
-
-    /* Smooth zoom animation */
-    double visual_zoom;
-    bool visual_zoom_initialized;
-
-    /* Per-map overlays */
-    CsOverlay overlays[CS_MAP_MAX_OVERLAYS];
-    int overlay_count;
-
-    /* Dynamic polyline point buffer */
-    CsGeoPoint *polyline_points;
-    int polyline_point_count;
-    int polyline_point_capacity;
-
-    /* Current zoom for this frame (used for zoom-aware simplification) */
-    double current_zoom;
-
-    /* Interaction state */
-    uint32_t hovered_overlay_id;
-    uint32_t clicked_overlay_id;
-
-    /* Drag ended this frame (for result) */
-    bool drag_ended_this_frame;
-    double drag_end_lat, drag_end_lon;
-} CsMapState;
-
-/* Hash table for per-map state */
-static CsMapState g_map_states[CS_MAP_STATE_CAPACITY];
+/* Hash table for per-map state - each thread has its own maps */
+static CS_THREAD_LOCAL CsMapState g_map_states[CS_MAP_STATE_CAPACITY];
 
 /* Current active map in begin/end context */
-static CsMapState *g_active_map = NULL;
+static CS_THREAD_LOCAL CsMapState *g_active_map = NULL;
 
-/* ============================================================================
- * Hash Table Operations
- * ============================================================================ */
-
-/**
- * Get or create state for a map ID using linear probing.
- * Returns NULL if table is full.
- */
-static CsMapState* cs_map_get_state(uint32_t id) {
+CsMapState* cs_map_get_state(uint32_t id) {
     if (id == 0) return NULL;
 
     uint32_t slot = id % CS_MAP_STATE_CAPACITY;
@@ -180,18 +84,23 @@ static CsMapState* cs_map_get_state(uint32_t id) {
             return &g_map_states[idx];
         }
     }
+    cs_record_error(CS_ERR_CAPACITY_EXCEEDED);
     return NULL;  /* Table full */
+}
+
+CsMapState* cs_map_get_active(void) {
+    return g_active_map;
+}
+
+void cs_map_set_active(CsMapState *ms) {
+    g_active_map = ms;
 }
 
 /* ============================================================================
  * Dynamic Polyline Buffer Management
  * ============================================================================ */
 
-/**
- * Ensure polyline buffer has at least 'needed' capacity.
- * Returns true on success, false on allocation failure.
- */
-static bool ensure_polyline_capacity(CsMapState *ms, int needed) {
+bool cs_map_ensure_polyline_capacity(CsMapState *ms, int needed) {
     if (ms->polyline_point_capacity >= needed) {
         return true;
     }
@@ -210,292 +119,25 @@ static bool ensure_polyline_capacity(CsMapState *ms, int needed) {
         new_capacity = CS_MAP_POLYLINE_MAX_CAPACITY;
     }
 
-    /* If still not enough after hitting max, return false (caller should simplify) */
+    /* If still not enough after hitting max, return false */
     if (new_capacity < needed) {
+        cs_record_error(CS_ERR_CAPACITY_EXCEEDED);
         return false;
     }
 
-    /* Reallocate */
-    CsGeoPoint *new_buffer = (CsGeoPoint *)realloc(
+    /* Reallocate using custom allocator */
+    CsGeoPoint *new_buffer = (CsGeoPoint *)cs_realloc(
         ms->polyline_points,
         (size_t)new_capacity * sizeof(CsGeoPoint)
     );
     if (!new_buffer) {
+        /* cs_realloc already records the error */
         return false;
     }
 
     ms->polyline_points = new_buffer;
     ms->polyline_point_capacity = new_capacity;
     return true;
-}
-
-/* ============================================================================
- * Douglas-Peucker Polyline Simplification
- * ============================================================================ */
-
-/**
- * Calculate perpendicular distance from point to line segment.
- * Uses geographic coordinates directly (works for small areas).
- */
-static double perpendicular_distance(
-    double px, double py,
-    double x1, double y1,
-    double x2, double y2
-) {
-    double dx = x2 - x1;
-    double dy = y2 - y1;
-    double len_sq = dx * dx + dy * dy;
-
-    if (len_sq < 1e-12) {
-        /* Line is a point */
-        dx = px - x1;
-        dy = py - y1;
-        return sqrt(dx * dx + dy * dy);
-    }
-
-    /* Project point onto line */
-    double t = ((px - x1) * dx + (py - y1) * dy) / len_sq;
-    if (t < 0.0) t = 0.0;
-    if (t > 1.0) t = 1.0;
-
-    double proj_x = x1 + t * dx;
-    double proj_y = y1 + t * dy;
-
-    dx = px - proj_x;
-    dy = py - proj_y;
-    return sqrt(dx * dx + dy * dy);
-}
-
-/**
- * Douglas-Peucker recursive implementation.
- * Marks points to keep in the 'keep' array.
- */
-static void douglas_peucker_recursive(
-    const CsGeoPoint *points,
-    int start, int end,
-    double epsilon,
-    bool *keep
-) {
-    if (end <= start + 1) {
-        return;
-    }
-
-    /* Find point with maximum distance from line */
-    double max_dist = 0.0;
-    int max_idx = start;
-
-    double x1 = points[start].lon;
-    double y1 = points[start].lat;
-    double x2 = points[end].lon;
-    double y2 = points[end].lat;
-
-    for (int i = start + 1; i < end; i++) {
-        double dist = perpendicular_distance(
-            points[i].lon, points[i].lat,
-            x1, y1, x2, y2
-        );
-        if (dist > max_dist) {
-            max_dist = dist;
-            max_idx = i;
-        }
-    }
-
-    /* If max distance exceeds epsilon, recursively simplify */
-    if (max_dist > epsilon) {
-        keep[max_idx] = true;
-        douglas_peucker_recursive(points, start, max_idx, epsilon, keep);
-        douglas_peucker_recursive(points, max_idx, end, epsilon, keep);
-    }
-}
-
-/**
- * Count how many points Douglas-Peucker would keep with given epsilon.
- */
-static int count_kept_points(const CsGeoPoint *points, int count, double epsilon) {
-    if (count <= 2) return count;
-
-    bool *keep = (bool *)calloc((size_t)count, sizeof(bool));
-    if (!keep) return 2;
-
-    keep[0] = true;
-    keep[count - 1] = true;
-    douglas_peucker_recursive(points, 0, count - 1, epsilon, keep);
-
-    int kept = 0;
-    for (int i = 0; i < count; i++) {
-        if (keep[i]) kept++;
-    }
-    free(keep);
-    return kept;
-}
-
-/**
- * Simplify a polyline using Douglas-Peucker algorithm with adaptive epsilon.
- * Automatically increases epsilon until output fits within capacity.
- * Returns the number of points in the simplified output.
- *
- * @param points      Input points
- * @param count       Number of input points
- * @param epsilon     Initial tolerance in degrees
- * @param out         Output buffer (can be same as input for in-place)
- * @param out_capacity Maximum output points
- */
-static int simplify_polyline(
-    const CsGeoPoint *points,
-    int count,
-    double epsilon,
-    CsGeoPoint *out,
-    int out_capacity
-) {
-    if (count <= 2) {
-        /* Nothing to simplify */
-        int n = (count < out_capacity) ? count : out_capacity;
-        if (out != points) {
-            for (int i = 0; i < n; i++) {
-                out[i] = points[i];
-            }
-        }
-        return n;
-    }
-
-    if (out_capacity < 2) {
-        out[0] = points[0];
-        return 1;
-    }
-
-    /* Adaptive epsilon: increase until we fit within capacity */
-    double current_epsilon = epsilon;
-    int kept = count_kept_points(points, count, current_epsilon);
-
-    /* Double epsilon until we fit (max 20 iterations to prevent infinite loop) */
-    for (int iter = 0; iter < 20 && kept > out_capacity; iter++) {
-        current_epsilon *= 2.0;
-        kept = count_kept_points(points, count, current_epsilon);
-    }
-
-    /* If still too many, use uniform sampling as last resort */
-    if (kept > out_capacity) {
-        /* Sample evenly, always including first and last */
-        out[0] = points[0];
-        out[out_capacity - 1] = points[count - 1];
-
-        if (out_capacity > 2) {
-            double step = (double)(count - 1) / (double)(out_capacity - 1);
-            for (int i = 1; i < out_capacity - 1; i++) {
-                int idx = (int)(i * step);
-                if (idx >= count) idx = count - 1;
-                out[i] = points[idx];
-            }
-        }
-        return out_capacity;
-    }
-
-    /* Allocate keep flags for final pass */
-    bool *keep = (bool *)calloc((size_t)count, sizeof(bool));
-    if (!keep) {
-        /* Fallback: just copy first/last */
-        out[0] = points[0];
-        out[1] = points[count - 1];
-        return 2;
-    }
-
-    /* Always keep first and last */
-    keep[0] = true;
-    keep[count - 1] = true;
-
-    /* Run Douglas-Peucker with adaptive epsilon */
-    douglas_peucker_recursive(points, 0, count - 1, current_epsilon, keep);
-
-    /* Copy kept points to output */
-    int out_count = 0;
-    for (int i = 0; i < count && out_count < out_capacity; i++) {
-        if (keep[i]) {
-            out[out_count++] = points[i];
-        }
-    }
-
-    free(keep);
-    return out_count;
-}
-
-/* ============================================================================
- * Projection Utilities
- * ============================================================================ */
-
-double cs_map_lon_to_tile_x(double lon, int zoom) {
-    zoom = clamp_zoom(zoom);
-    return (lon + 180.0) / 360.0 * (double)(1 << zoom);
-}
-
-double cs_map_lat_to_tile_y(double lat, int zoom) {
-    lat = clamp_latitude(lat);
-    zoom = clamp_zoom(zoom);
-    double lat_rad = lat * DEG_TO_RAD;
-    return (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / PI) / 2.0 * (double)(1 << zoom);
-}
-
-double cs_map_tile_x_to_lon(double x, int zoom) {
-    zoom = clamp_zoom(zoom);
-    return x / (double)(1 << zoom) * 360.0 - 180.0;
-}
-
-double cs_map_tile_y_to_lat(double y, int zoom) {
-    zoom = clamp_zoom(zoom);
-    double n = PI - 2.0 * PI * y / (double)(1 << zoom);
-    return RAD_TO_DEG * atan(0.5 * (exp(n) - exp(-n)));
-}
-
-void cs_map_screen_to_geo_delta(
-    double lat, double zoom,  /* visual zoom (float) for smooth animation consistency */
-    float dx, float dy,
-    double *dlat, double *dlon
-) {
-    lat = clamp_latitude(lat);
-    if (zoom < 0) zoom = 0;
-    if (zoom > 22) zoom = 22;
-
-    double scale = 256.0 * pow(2.0, zoom);
-
-    if (dlon) {
-        *dlon = (double)dx * 360.0 / scale;
-    }
-
-    if (dlat) {
-        double lat_rad = lat * DEG_TO_RAD;
-        double center_y = (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / PI) / 2.0 * scale;
-        double new_y = center_y - (double)dy;
-        double n = PI - 2.0 * PI * new_y / scale;
-        double new_lat = RAD_TO_DEG * atan(0.5 * (exp(n) - exp(-n)));
-        *dlat = new_lat - lat;
-    }
-}
-
-/* ============================================================================
- * Geo to Screen Projection (for hit testing)
- * ============================================================================ */
-
-static void geo_to_screen(
-    double lat, double lon,
-    double center_lat, double center_lon,
-    double zoom,  /* visual zoom (float) for smooth animation consistency */
-    float map_width, float map_height,
-    float *out_x, float *out_y
-) {
-    double scale = 256.0 * pow(2.0, zoom);
-
-    /* Center in world coordinates */
-    double center_x = (center_lon + 180.0) / 360.0 * scale;
-    double center_lat_rad = center_lat * DEG_TO_RAD;
-    double center_y = (1.0 - log(tan(center_lat_rad) + 1.0 / cos(center_lat_rad)) / PI) / 2.0 * scale;
-
-    /* Point in world coordinates */
-    double px = (lon + 180.0) / 360.0 * scale;
-    double lat_rad = lat * DEG_TO_RAD;
-    double py = (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / PI) / 2.0 * scale;
-
-    /* Convert to screen coordinates */
-    *out_x = (float)(map_width / 2.0 + (px - center_x));
-    *out_y = (float)(map_height / 2.0 + (py - center_y));
 }
 
 /* ============================================================================
@@ -536,7 +178,7 @@ EXPORT uint32_t cs_map_hit_test(
     uint32_t map_id,
     float px, float py,
     double center_lat, double center_lon,
-    double zoom,  /* visual zoom (float) for smooth animation consistency */
+    double zoom,
     float map_width, float map_height
 ) {
     CsMapState *ms = cs_map_get_state(map_id);
@@ -548,7 +190,7 @@ EXPORT uint32_t cs_map_hit_test(
 
         if (o->type == CS_OVERLAY_MARKER) {
             float mx, my;
-            geo_to_screen(o->marker.lat, o->marker.lon,
+            cs_map_geo_to_screen(o->marker.lat, o->marker.lon,
                          center_lat, center_lon, zoom,
                          map_width, map_height, &mx, &my);
 
@@ -569,13 +211,13 @@ EXPORT uint32_t cs_map_hit_test(
 
             for (int j = 0; j < count - 1; j++) {
                 float x1, y1, x2, y2;
-                geo_to_screen(
+                cs_map_geo_to_screen(
                     ms->polyline_points[start + j].lat,
                     ms->polyline_points[start + j].lon,
                     center_lat, center_lon, zoom,
                     map_width, map_height, &x1, &y1
                 );
-                geo_to_screen(
+                cs_map_geo_to_screen(
                     ms->polyline_points[start + j + 1].lat,
                     ms->polyline_points[start + j + 1].lon,
                     center_lat, center_lon, zoom,
@@ -594,7 +236,7 @@ EXPORT uint32_t cs_map_hit_test(
 }
 
 /* ============================================================================
- * Component
+ * Core Component
  * ============================================================================ */
 
 CsMapResult cs_map(
@@ -926,9 +568,6 @@ void cs_map_end(void) {
  * Calculate zoom-dependent epsilon for Douglas-Peucker simplification.
  * At high zoom (18+): very small epsilon = full detail
  * At low zoom (0): larger epsilon = aggressive simplification
- *
- * Base epsilon ~0.00001 degrees at zoom 18 (~1m at equator)
- * Doubles for each zoom level decrease
  */
 static double zoom_to_epsilon(double zoom) {
     const double BASE_EPSILON = 0.00001;  /* ~1m at zoom 18 */
@@ -961,13 +600,13 @@ void cs_polyline(
     if (max_points <= 2) return;
 
     /* Ensure we have buffer space */
-    if (!ensure_polyline_capacity(g_active_map, g_active_map->polyline_point_count + max_points)) {
+    if (!cs_map_ensure_polyline_capacity(g_active_map, g_active_map->polyline_point_count + max_points)) {
         max_points = g_active_map->polyline_point_capacity - g_active_map->polyline_point_count;
         if (max_points <= 2) return;
     }
 
     int point_start = g_active_map->polyline_point_count;
-    int simplified_count = simplify_polyline(
+    int simplified_count = cs_map_simplify_polyline(
         points, count,
         epsilon,
         &g_active_map->polyline_points[point_start],
@@ -1214,9 +853,9 @@ void cs_map_destroy(uint32_t id) {
     for (int i = 0; i < CS_MAP_STATE_CAPACITY; i++) {
         uint32_t idx = (slot + i) % CS_MAP_STATE_CAPACITY;
         if (g_map_states[idx].map_id == id) {
-            /* Free polyline buffer */
+            /* Free polyline buffer using custom allocator */
             if (g_map_states[idx].polyline_points) {
-                free(g_map_states[idx].polyline_points);
+                cs_free(g_map_states[idx].polyline_points);
             }
             /* Clear the slot */
             memset(&g_map_states[idx], 0, sizeof(CsMapState));
@@ -1231,8 +870,9 @@ void cs_map_destroy(uint32_t id) {
 void cs_map_cleanup(void) {
     for (int i = 0; i < CS_MAP_STATE_CAPACITY; i++) {
         if (g_map_states[i].map_id != 0) {
+            /* Free polyline buffer using custom allocator */
             if (g_map_states[i].polyline_points) {
-                free(g_map_states[i].polyline_points);
+                cs_free(g_map_states[i].polyline_points);
             }
             memset(&g_map_states[i], 0, sizeof(CsMapState));
         }

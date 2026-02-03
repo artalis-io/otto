@@ -11,6 +11,37 @@
 #include "cs_common.h"
 
 /* ============================================================================
+ * Thread-Local Storage
+ * ============================================================================ */
+
+/* Cross-platform thread-local storage macro.
+ * Each thread gets its own copy of UI state for thread safety. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+    /* C11 with threads support */
+    #define CS_THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+    /* GCC/Clang extension */
+    #define CS_THREAD_LOCAL __thread
+#elif defined(_MSC_VER)
+    /* MSVC */
+    #define CS_THREAD_LOCAL __declspec(thread)
+#else
+    /* No TLS support - single-threaded only */
+    #define CS_THREAD_LOCAL
+    #define CS_NO_TLS 1
+#endif
+
+/* ============================================================================
+ * Internal Constants
+ * ============================================================================ */
+
+/* ID offsets for internal wrapper elements to avoid collisions with user IDs.
+ * When a component needs internal sub-elements (margin wrapper, text wrapper),
+ * it adds these offsets to the user-provided ID. */
+#define CS_ID_OFFSET_WRAPPER      0x10000  /* Margin/alignment wrapper */
+#define CS_ID_OFFSET_TEXT_WRAPPER 0x20000  /* Text offset wrapper */
+
+/* ============================================================================
  * Widget State Store
  * ============================================================================ */
 
@@ -78,5 +109,37 @@ CsState* cs_get_state(void);
 CsWidgetState* cs_widget_state(uint32_t id);
 
 /* Shared utilities are in cs_common.h: cs_min_i, cs_max_i, cs_clamp_i, etc. */
+
+/* ============================================================================
+ * Internal Allocation Helpers
+ * ============================================================================ */
+
+/* Use these instead of malloc/realloc/free to support custom allocators */
+void* cs_alloc(size_t size);
+void* cs_realloc(void *ptr, size_t size);
+void  cs_free(void *ptr);
+
+/* ============================================================================
+ * Error Tracking (for debugging silent failures)
+ * ============================================================================ */
+
+/* Error codes for internal failures */
+typedef enum {
+    CS_ERR_NONE = 0,
+    CS_ERR_ALLOC_FAILED,        /* Memory allocation failed */
+    CS_ERR_CAPACITY_EXCEEDED,   /* Hash table or buffer full */
+} CsErrorCode;
+
+/* Record an internal error (thread-local in future) */
+void cs_record_error(CsErrorCode code);
+
+/* Get and clear the last error code */
+CsErrorCode cs_get_last_error(void);
+
+/* Get count of errors since last clear */
+int cs_get_error_count(void);
+
+/* Clear error state */
+void cs_clear_errors(void);
 
 #endif /* CS_INTERNAL_H */

@@ -46,7 +46,7 @@ CLAY(CLAY_ID("Panel"), {...}) {
 ### Core (`cs_common.h`)
 
 ```c
-// Initialize (call once)
+// Initialize (call once per thread if multi-threaded)
 void cs_init(void);
 
 // Frame lifecycle
@@ -74,6 +74,26 @@ int cs_selection_start(void);
 bool cs_cursor_visible(void);
 const char* cs_focused_text(void);
 int cs_focused_text_len(void);
+
+// Custom allocator (optional, call before cs_init)
+typedef void* (*CsAllocFn)(size_t size, void *user_data);
+typedef void* (*CsReallocFn)(void *ptr, size_t size, void *user_data);
+typedef void  (*CsFreeFn)(void *ptr, void *user_data);
+
+typedef struct {
+    CsAllocFn alloc;
+    CsReallocFn realloc;
+    CsFreeFn free;
+    void *user_data;
+} CsAllocator;
+
+void cs_set_allocator(const CsAllocator *allocator);
+const CsAllocator* cs_get_allocator(void);
+
+// Error tracking
+CsErrorCode cs_get_last_error(void);
+int cs_get_error_count(void);
+void cs_clear_errors(void);
 ```
 
 ### Button (`cs_button.h`)
@@ -179,7 +199,7 @@ Add to your Makefile's `EXPORTED_FUNCTIONS`.
 
 ```bash
 make          # Build static library
-make test     # Run 37 tests
+make test     # Run 52 tests
 make clean    # Clean build
 ```
 
@@ -189,21 +209,55 @@ For WASM builds, include `src/cs_immediate.c` directly in your sources.
 
 ```
 include/
-├── cs_common.h      # Core API, focus, input routing
-├── cs_clay.h        # Clay integration helpers
-├── cs_button.h      # Button component
-├── cs_input.h       # Text input component
-├── cs_map.h         # Map interaction component
-└── cs_immediate.h   # Convenience header (includes all)
+├── cs_common.h           # Core API, focus, input routing, allocator
+├── cs_clay.h             # Clay integration helpers
+├── cs_button.h           # Button component
+├── cs_input.h            # Text input component
+├── cs_map.h              # Map interaction component
+└── cs_immediate.h        # Convenience header (includes all)
 
 src/
-├── cs_common.c      # State management, keyboard handling
-├── cs_clay.c        # Clay initialization, render command accessors
-├── cs_button.c      # Button implementation
-├── cs_input.c       # Text input implementation
-├── cs_map.c         # Map pan/zoom implementation
-├── cs_immediate.c   # Includes all .c files
-└── cs_internal.h    # Internal state structure
+├── cs_common.c           # State management, keyboard handling, allocator
+├── cs_clay.c             # Clay initialization, render command accessors
+├── cs_button.c           # Button implementation
+├── cs_input.c            # Text input implementation
+├── cs_map.c              # Map pan/zoom, overlays, hit testing
+├── cs_map_projection.c   # Web Mercator projection utilities
+├── cs_map_simplify.c     # Douglas-Peucker polyline simplification
+├── cs_immediate.c        # Amalgamation (includes all .c files)
+├── cs_internal.h         # Internal state, TLS macros, error codes
+└── cs_map_internal.h     # Map-specific internal types
+```
+
+## Thread Safety
+
+ClayShards uses thread-local storage for all global state:
+- Each thread gets isolated UI state (focus, widget state, errors)
+- Call `cs_init()` once per thread
+- Custom allocators are per-thread
+
+Cross-platform TLS support:
+- C11: `_Thread_local`
+- GCC/Clang: `__thread`
+- MSVC: `__declspec(thread)`
+
+## Custom Allocators
+
+Replace malloc/realloc/free with your own functions (arena allocators, debug allocators):
+
+```c
+void* my_alloc(size_t size, void *ctx) { return arena_alloc(ctx, size); }
+void* my_realloc(void *p, size_t size, void *ctx) { /* ... */ }
+void  my_free(void *p, void *ctx) { /* no-op for arena */ }
+
+CsAllocator arena = {
+    .alloc = my_alloc,
+    .realloc = my_realloc,
+    .free = my_free,
+    .user_data = &my_arena
+};
+cs_set_allocator(&arena);
+cs_init();
 ```
 
 ## Related

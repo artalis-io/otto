@@ -302,11 +302,21 @@ Renderer: WebGL (browser), SDL/raylib (native) [planned]
 
 ### Key Files
 
-- `shared/ui/clay-shards/include/cs_common.h` - Core API
-- `shared/ui/clay-shards/src/cs_common.c` - State, keyboard handling
+- `shared/ui/clay-shards/include/cs_common.h` - Core API, allocator
+- `shared/ui/clay-shards/src/cs_common.c` - State, keyboard handling, TLS
+- `shared/ui/clay-shards/src/cs_map.c` - Map pan/zoom, overlays
+- `shared/ui/clay-shards/src/cs_map_projection.c` - Web Mercator utilities
+- `shared/ui/clay-shards/src/cs_map_simplify.c` - Douglas-Peucker (iterative)
 - `shared/ui/clay-shards-webgl/renderer.js` - WebGL renderer
 
 See `shared/ui/clay-shards/CLAUDE.md` for detailed API documentation.
+
+### Features
+
+- **Thread-local storage**: Each thread gets isolated UI state
+- **Custom allocators**: Plug in arena allocators or debug allocators
+- **Error tracking**: `cs_get_last_error()`, `cs_get_error_count()`
+- **52 unit tests** covering edge cases and stress conditions
 
 ### Future Renderers
 

@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>  /* size_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -73,10 +74,36 @@ uint32_t cs_hash_id(const char *str);
 #define CS_ID(name) cs_hash_id(name)
 
 /* ============================================================================
+ * Custom Allocator Support
+ * ============================================================================ */
+
+/* Function pointers for custom memory allocation.
+ * Allows integration with arena allocators or debugging allocators. */
+typedef void* (*CsAllocFn)(size_t size, void *user_data);
+typedef void* (*CsReallocFn)(void *ptr, size_t size, void *user_data);
+typedef void  (*CsFreeFn)(void *ptr, void *user_data);
+
+/* Allocator configuration.
+ * Set all three functions, or set all to NULL for default (malloc/realloc/free). */
+typedef struct {
+    CsAllocFn alloc;
+    CsReallocFn realloc;
+    CsFreeFn free;
+    void *user_data;  /* Passed to alloc/realloc/free functions */
+} CsAllocator;
+
+/* Set custom allocator (call before cs_init, or pass NULL for defaults).
+ * Thread-safe: each thread can have its own allocator. */
+void cs_set_allocator(const CsAllocator *allocator);
+
+/* Get current allocator (returns internal default if none set) */
+const CsAllocator* cs_get_allocator(void);
+
+/* ============================================================================
  * Core API
  * ============================================================================ */
 
-/* Initialize component system (call once at startup) */
+/* Initialize component system (call once at startup, or once per thread if multi-threaded) */
 void cs_init(void);
 
 /* Frame lifecycle - call at start/end of each frame */
