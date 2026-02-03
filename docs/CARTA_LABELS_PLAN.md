@@ -95,105 +95,78 @@ Labels compete for space. Priority determines which labels win:
 
 ## Phase 2: Font System
 
-### 2.1 MSDF Font Format
+### 2.1 MSDF Font Library (shared/)
 
-Reuse the MSDF (Multi-channel Signed Distance Field) font system from `shared/fonts/`.
-MSDF fonts render crisp at any size and scale well.
+**The MSDF font library is already implemented in `shared/`.** Carta will link against this
+library for text measurement and MSDF sampling.
 
-**Existing assets:**
+**Existing implementation:**
+- `shared/include/sh_font.h` - Font API
+- `shared/src/sh_font.c` - Implementation (UTF-8, glyph lookup, text measurement, MSDF)
+- `shared/src/sh_font_data.c` - Embedded font data (163 glyphs, 332x332 atlas)
+- `shared/fonts/generate_font_data.py` - Build-time font generator
+
+**Font assets:**
 - `shared/fonts/ui-font.json` - Glyph metrics
 - `shared/fonts/ui-font.png` - MSDF atlas texture
 
-**File:** `carta/include/ct_font.h`
+### 2.2 Using the Shared Font Library
+
+Carta links against `libshared.a` which includes the font library:
 
 ```c
-/* Glyph metrics (matches MSDF JSON format) */
-typedef struct {
-    int unicode;             /* Unicode codepoint */
-    float advance;           /* Horizontal advance (normalized) */
-    struct {
-        float left, bottom, right, top;  /* Plane bounds (normalized) */
-    } planeBounds;
-    struct {
-        float left, bottom, right, top;  /* Atlas bounds (pixels) */
-    } atlasBounds;
-} CTGlyph;
+#include "sh_font.h"
 
-/* MSDF Font definition */
-typedef struct {
-    CTGlyph *glyphs;         /* Glyph table */
-    int glyph_count;
-    int atlas_width;         /* Atlas texture dimensions */
-    int atlas_height;
-    float distance_range;    /* MSDF distance range */
-    float em_size;           /* Font size used to generate atlas */
-    uint8_t *atlas_data;     /* MSDF atlas (RGBA) */
+/* Get the embedded font */
+const SHFont *font = sh_font_get_default();
 
-    /* Quick lookup for ASCII */
-    CTGlyph *ascii_table[128];
-} CTMSDFFont;
-
-/* Load font from JSON + PNG files */
-CTStatus ct_font_load(CTMSDFFont *font, const char *json_path, const char *png_path);
-
-/* Load font from embedded data (for WASM/static builds) */
-CTStatus ct_font_load_embedded(CTMSDFFont *font,
-                                const char *json_data, size_t json_len,
-                                const uint8_t *png_data, size_t png_len);
-
-void ct_font_free(CTMSDFFont *font);
-```
-
-### 2.2 Font Data Embedding
-
-For static builds, embed the MSDF font data directly:
-
-```bash
-# Convert font assets to C arrays
-xxd -i shared/ui/clay-shards-webgl/fonts/ui-font.json > carta/src/ct_font_data.c
-xxd -i shared/ui/clay-shards-webgl/fonts/ui-font.png >> carta/src/ct_font_data.c
-```
-
-Or use a build script that includes the font JSON/PNG at compile time.
-
-### 2.3 Text Measurement
-
-**File:** `carta/src/ct_font.c`
-
-```c
 /* Get glyph for character */
-const CTGlyph *ct_font_get_glyph(const CTMSDFFont *font, int unicode);
+const SHGlyph *g = sh_font_get_glyph(font, 'A');
 
 /* Measure text width at given font size */
-float ct_font_text_width(const CTMSDFFont *font, const char *text, float font_size);
+float width = sh_font_text_width(font, "Hello", 16.0f);
 
 /* Measure text with character limit */
-float ct_font_text_width_n(const CTMSDFFont *font, const char *text,
-                           int max_chars, float font_size);
+float w5 = sh_font_text_width_n(font, "Hello World", 5, 16.0f);
 
 /* Get line height for font size */
-float ct_font_line_height(const CTMSDFFont *font, float font_size);
+float lh = sh_font_line_height(font, 16.0f);
+
+/* UTF-8 decoding */
+uint32_t codepoint;
+int bytes = sh_utf8_decode("é", &codepoint);  /* Returns 2, codepoint=0x00E9 */
 ```
 
-### 2.4 MSDF Rendering
+### 2.3 MSDF Sampling for Software Rendering
 
-MSDF rendering uses a special shader that samples the distance field:
+The shared library provides MSDF sampling for software rasterization:
 
 ```c
-/* For PNG tiles: software MSDF rendering */
-void ct_render_msdf_glyph(CTRenderContext *ctx,
-                          const CTMSDFFont *font,
-                          const CTGlyph *glyph,
-                          int x, int y,
-                          float font_size,
-                          CTColor color);
+/* Sample MSDF atlas at pixel coordinates */
+uint8_t dist = sh_font_sample_msdf(font, x, y);
+
+/* Check if point is inside glyph */
+int inside = sh_font_msdf_inside(font, glyph, local_x, local_y);
+
+/* Get anti-aliased coverage [0.0, 1.0] */
+float coverage = sh_font_msdf_coverage(font, glyph, local_x, local_y, font_size);
 ```
 
-The MSDF algorithm:
+The MSDF algorithm (implemented in `sh_font.c`):
 1. Sample R, G, B channels from atlas
 2. Take median of the three values
-3. Compare to threshold (0.5) for inside/outside
-4. Apply anti-aliasing based on distance from edge
+3. Convert to signed distance [-1, 1]
+4. Apply smoothstep for anti-aliasing based on font size
+
+### 2.4 Regenerating Font Data
+
+To regenerate the embedded font data from new assets:
+
+```bash
+cd shared && make generate-font-data
+```
+
+This runs `fonts/generate_font_data.py` which converts JSON + PNG to `src/sh_font_data.c`.
 
 ## Phase 3: Label Placement
 
@@ -461,9 +434,9 @@ Label placement can be parallelized per tile since each tile has independent col
 
 ### Milestone 1: Basic Point Labels (MVP)
 1. Parse place nodes from PBF
-2. Implement bitmap font system
+2. ~~Implement font system~~ ✓ Done - MSDF font library in `shared/`
 3. Basic point label placement (single anchor)
-4. Text rendering with halo
+4. Text rendering with halo (use `sh_font_msdf_coverage()`)
 5. Simple collision detection
 
 **Deliverable:** City/town names appear on PNG tiles
@@ -503,25 +476,29 @@ Label placement can be parallelized per tile since each tile has independent col
 ```
 carta/
 ├── include/
-│   ├── ct_font.h          # MSDF font structures and API
 │   ├── ct_label.h         # Label placement API
 │   └── ct_collision.h     # Collision detection API
 ├── src/
-│   ├── ct_font.c          # MSDF font loading and measurement
-│   ├── ct_font_data.c     # Embedded font data (generated)
-│   ├── ct_font_msdf.c     # MSDF rendering algorithm
 │   ├── ct_label.c         # Label placement algorithms
 │   ├── ct_label_point.c   # Point label placement
 │   ├── ct_label_line.c    # Line label placement
 │   ├── ct_label_area.c    # Area label placement
 │   └── ct_collision.c     # Collision detection
 shared/
+├── include/
+│   └── sh_font.h          # MSDF font API (used by carta)
+├── src/
+│   ├── sh_font.c          # Font implementation (UTF-8, measurement, MSDF)
+│   └── sh_font_data.c     # Embedded font data (generated)
 ├── fonts/
 │   ├── CLAUDE.md          # Font documentation
 │   ├── ui-font.json       # MSDF glyph metrics
-│   └── ui-font.png        # MSDF atlas texture
+│   ├── ui-font.png        # MSDF atlas texture
+│   └── generate_font_data.py  # Build-time font generator
+├── tests/
+│   └── test_font.c        # 20 font unit tests
 └── ui/clay-shards-webgl/
-    └── font.js            # Reference MSDF implementation (JS)
+    └── font.js            # WebGL MSDF renderer (JS)
 ```
 
 ## Memory Budget
@@ -553,11 +530,15 @@ Total: < 25 KB per tile (negligible)
 
 ## Dependencies
 
-- **MSDF Font:** Reuses `shared/ui/clay-shards-webgl/fonts/ui-font.*`
-- **PNG decoding:** Uses existing `shared/` library (for loading atlas texture)
-- **JSON parsing:** Simple parser for font metrics (or embed as C struct)
+- **MSDF Font Library:** `shared/` library (`sh_font.h`, `sh_font.c`) - already implemented
+  - 163 glyphs, 332x332 atlas (440KB embedded)
+  - UTF-8 decoding with error handling
+  - O(1) ASCII lookup, binary search for Unicode
+  - Text measurement and MSDF sampling
+  - 20 unit tests
+- **Font Assets:** `shared/fonts/ui-font.json` + `ui-font.png`
 - Uses existing carta infrastructure (tile coords, rendering, MVT encoding)
-- Font atlas is embedded at build time for WASM/static builds
+- No runtime file loading - font atlas embedded at compile time
 
 ## Questions to Resolve
 
