@@ -34,6 +34,11 @@
 
 /* PBF field numbers - use shared definitions from sh_pbf.h */
 
+/* Maximum sizes to prevent unbounded memory growth from malformed PBF files */
+#define VL_PBF_MAX_NODES     500000000  /* 500M nodes max (~12GB memory) */
+#define VL_PBF_MAX_WAYS       50000000  /* 50M ways max */
+#define VL_PBF_MAX_WAY_NODES      8192  /* Max nodes per way */
+
 /* ============================================================================
  * Highway Type Detection
  * ============================================================================ */
@@ -106,8 +111,12 @@ void vl_pbf_context_free(VLPBFContext *ctx)
 
 static VLStatus add_node(VLPBFContext *ctx, int64_t id, double lat, double lon)
 {
+    if (ctx->num_nodes >= VL_PBF_MAX_NODES) {
+        return VL_ERROR_OUT_OF_MEMORY;  /* Exceeded max node limit */
+    }
     if (ctx->num_nodes >= ctx->nodes_capacity) {
         size_t new_cap = ctx->nodes_capacity ? ctx->nodes_capacity * 2 : 65536;
+        if (new_cap > VL_PBF_MAX_NODES) new_cap = VL_PBF_MAX_NODES;
         VLOSMNode *new_nodes = realloc(ctx->nodes, new_cap * sizeof(VLOSMNode));
         if (!new_nodes) return VL_ERROR_OUT_OF_MEMORY;
         ctx->nodes = new_nodes;
@@ -125,8 +134,12 @@ static VLStatus add_node(VLPBFContext *ctx, int64_t id, double lat, double lon)
 
 static VLStatus add_way(VLPBFContext *ctx, VLOSMWay *way)
 {
+    if (ctx->num_ways >= VL_PBF_MAX_WAYS) {
+        return VL_ERROR_OUT_OF_MEMORY;  /* Exceeded max way limit */
+    }
     if (ctx->num_ways >= ctx->ways_capacity) {
         size_t new_cap = ctx->ways_capacity ? ctx->ways_capacity * 2 : 8192;
+        if (new_cap > VL_PBF_MAX_WAYS) new_cap = VL_PBF_MAX_WAYS;
         VLOSMWay *new_ways = realloc(ctx->ways, new_cap * sizeof(VLOSMWay));
         if (!new_ways) return VL_ERROR_OUT_OF_MEMORY;
         ctx->ways = new_ways;
@@ -314,7 +327,8 @@ static VLStatus parse_way(VLPBFContext *ctx, const uint8_t *data, size_t len,
                     way.oneway = -1;
                 }
             } else if (strcmp(key, "maxspeed") == 0) {
-                way.max_speed = atoi(val);
+                long speed = strtol(val, NULL, 10);
+                way.max_speed = (speed > 0 && speed <= 500) ? (int)speed : 0;
             } else if (strcmp(key, "access") == 0) {
                 /* General access restriction */
                 if (strcmp(val, "no") == 0 || strcmp(val, "private") == 0) {
