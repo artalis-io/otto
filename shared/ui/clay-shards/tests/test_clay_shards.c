@@ -15,6 +15,7 @@
 #include "clay.h"
 #include "cs_immediate.h"
 #include "cs_map.h"
+#include "cs_map_provider.h"
 #include "../src/cs_internal.h"  /* For CsState, cs_get_state, cs_widget_state */
 
 /* Test counters */
@@ -1538,6 +1539,37 @@ static void test_tls_state_isolation(void) {
 }
 
 /* ============================================================================
+ * Map Provider Tests
+ * ============================================================================ */
+
+static void test_tile_layer_raster(void) {
+    TEST(tile_layer_raster);
+
+    cs_provider_set_tile_server("http://tiles.example.com");
+
+    const char *url = cs_provider_tile_url(12, 2234, 1456, CS_TILE_LAYER_RASTER);
+    ASSERT(url != NULL, "URL should not be NULL");
+    ASSERT(strstr(url, ".png") != NULL, "Raster layer should use .png extension");
+    ASSERT(strstr(url, "tiles.example.com") != NULL, "URL should contain server");
+    ASSERT(strstr(url, "/12/2234/1456") != NULL, "URL should contain z/x/y");
+
+    PASS();
+}
+
+static void test_tile_layer_vector(void) {
+    TEST(tile_layer_vector);
+
+    cs_provider_set_tile_server("http://tiles.example.com");
+
+    const char *url = cs_provider_tile_url(10, 500, 300, CS_TILE_LAYER_VECTOR);
+    ASSERT(url != NULL, "URL should not be NULL");
+    ASSERT(strstr(url, ".mvt") != NULL, "Vector layer should use .mvt extension");
+    ASSERT(strstr(url, "/10/500/300") != NULL, "URL should contain z/x/y");
+
+    PASS();
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1627,6 +1659,10 @@ int main(void) {
 
     printf("\nThread-Local Storage Tests:\n");
     test_tls_state_isolation();
+
+    printf("\nMap Provider Tests:\n");
+    test_tile_layer_raster();
+    test_tile_layer_vector();
 
     printf("\n======================================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

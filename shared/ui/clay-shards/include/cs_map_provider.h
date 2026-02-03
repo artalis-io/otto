@@ -110,6 +110,12 @@ typedef enum {
  * Tile Provider
  * ============================================================================ */
 
+/* Tile layer types */
+typedef enum {
+    CS_TILE_LAYER_RASTER = 0,   /* PNG raster tiles (default) */
+    CS_TILE_LAYER_VECTOR = 1,   /* MVT vector tiles */
+} CsTileLayer;
+
 /**
  * Get tile URL for the current provider
  * For API provider: returns server URL
@@ -118,7 +124,7 @@ typedef enum {
  * @param z Zoom level
  * @param x Tile X
  * @param y Tile Y
- * @param layer Layer type (0=standard, 1=satellite, etc.)
+ * @param layer Tile layer type (CS_TILE_LAYER_RASTER or CS_TILE_LAYER_VECTOR)
  * @return URL string (static buffer, valid until next call)
  */
 const char* cs_provider_tile_url(int z, int x, int y, int layer);

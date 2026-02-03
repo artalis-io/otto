@@ -199,7 +199,7 @@ Add to your Makefile's `EXPORTED_FUNCTIONS`.
 
 ```bash
 make          # Build static library
-make test     # Run 52 tests
+make test     # Run 55 tests
 make clean    # Clean build
 ```
 
