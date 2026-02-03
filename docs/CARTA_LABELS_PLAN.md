@@ -432,44 +432,158 @@ Label placement can be parallelized per tile since each tile has independent col
 
 ## Implementation Order
 
-### Milestone 1: Basic Point Labels (MVP)
-1. Parse place nodes from PBF
-2. ~~Implement font system~~ ✓ Done - MSDF font library in `shared/`
-3. Basic point label placement (single anchor)
-4. Text rendering with halo (use `sh_font_msdf_coverage()`)
-5. Simple collision detection
+### Milestone 1: Basic Point Labels (MVP) ✓ COMPLETE
 
-**Deliverable:** City/town names appear on PNG tiles
+| Task | Status | Files |
+|------|--------|-------|
+| Parse place nodes from PBF | ✓ | `ct_pbf.c` - `parse_dense_nodes()`, `classify_place()` |
+| Collision detection system | ✓ | `ct_collision.h`, `ct_collision.c` |
+| Label placement with multi-anchor | ✓ | `ct_label.h`, `ct_label.c` |
+| Text rendering with halo | ✓ | `ct_render.c` - `ct_render_text_halo()` |
+| MSDF font library | ✓ | `shared/` - bilinear sampling, threshold coverage |
 
-### Milestone 2: Road Labels
-1. Line label placement algorithm
-2. Text-along-path rendering
-3. Road name extraction
-4. Label repetition along long roads
+**Implementation details:**
+- Grid-based collision (1 bit per 8x8 cell, 128 bytes for 256x256 tile)
+- 9 anchor positions tried in order: right, corners, cardinal, center
+- Priority sorting by place type, population, stable ID
+- Font size scaled by place type (country 1.4x, city 1.2x, hamlet 0.9x)
+- Bilinear MSDF sampling with smoothstep anti-aliasing
+- Threshold-based coverage for halo expansion
+
+**Tests:** 95 carta tests, 23 font tests
+
+**Deliverable:** City/town names appear on PNG tiles ✓
+
+---
+
+### Milestone 2: Road Labels (NEXT)
+
+**Goal:** Road names rendered along the path geometry
+
+| Task | Status | Description |
+|------|--------|-------------|
+| Line label placement | TODO | Find suitable segments, check curvature |
+| Text-along-path rendering | TODO | `ct_render_text_path()` with per-glyph rotation |
+| Road name extraction | PARTIAL | Names parsed, need consistent tile access |
+| Label repetition | TODO | Repeat every ~200px on long roads |
+
+**Key algorithm - Line label placement:**
+1. Measure text width at target font size
+2. Walk the path finding candidate segments:
+   - Length >= text width + padding
+   - Max angle between adjacent segments < 30°
+   - Prefer segments closer to horizontal
+3. Score candidates by: length, straightness, centrality
+4. Check collision for text bounding boxes along path
+5. Flip text if path goes right-to-left (always read left-to-right)
+
+**Key algorithm - Text-along-path rendering:**
+1. For each character in text:
+   - Calculate cumulative advance along path
+   - Find position on path at that distance
+   - Calculate tangent angle at that point
+   - Render glyph rotated to match tangent
+2. Apply halo by rendering expanded glyphs first
+
+**Data structure:**
+```c
+typedef struct {
+    CTTilePoint *path;       /* Smoothed path for text to follow */
+    int path_len;
+    float start_offset;      /* Where along path to start text */
+    int is_flipped;          /* 1 if flipped to read left-to-right */
+} CTLineLabelPlacement;
+
+/* Find best position along a line for label */
+CTLineLabelPlacement *ct_label_place_line(
+    CTLabelPlacer *placer,
+    const char *text,
+    const CTTilePoint *points,
+    int num_points,
+    const SHFont *font,
+    float font_size
+);
+
+/* Draw text along a curved path */
+void ct_render_text_path(CTRenderContext *ctx,
+                         const char *text,
+                         const CTTilePoint *path,
+                         int path_len,
+                         float start_offset,
+                         int is_flipped,
+                         const SHFont *font,
+                         float font_size,
+                         CTColor fill_color,
+                         CTColor halo_color,
+                         float halo_width);
+```
+
+**Constants:**
+```c
+#define LINE_LABEL_MIN_LENGTH   50.0f   /* Min segment length in pixels */
+#define LINE_LABEL_MAX_ANGLE    30.0f   /* Max angle between segments (degrees) */
+#define LINE_LABEL_REPEAT_GAP   200.0f  /* Gap between repeated labels */
+#define LINE_LABEL_PADDING      10.0f   /* Padding at segment ends */
+```
 
 **Deliverable:** Road names on PNG tiles
 
+---
+
 ### Milestone 3: Area Labels
-1. Pole of inaccessibility algorithm
-2. Area label placement
-3. Water body names
-4. Forest/park names
+
+### Milestone 3: Area Labels
+
+**Goal:** Lake, park, and forest names centered in polygons
+
+| Task | Status | Description |
+|------|--------|-------------|
+| Pole of inaccessibility | TODO | Find point furthest from polygon edges |
+| Area label placement | TODO | Place text at visual center |
+| Water body names | TODO | Lakes, reservoirs |
+| Forest/park names | TODO | Natural areas |
+
+**Algorithm - Pole of inaccessibility:**
+- Iterative grid search to find point maximally distant from all edges
+- Faster than true geometric solution, good enough for labels
 
 **Deliverable:** Lake and park names on PNG tiles
 
+---
+
 ### Milestone 4: MVT Labels
-1. Labels layer in MVT output
-2. Properties encoding
-3. MapLibre style configuration
+
+**Goal:** Labels in vector tiles for client-side rendering
+
+| Task | Status | Description |
+|------|--------|-------------|
+| Labels layer encoding | TODO | Add `labels` layer to MVT output |
+| Properties encoding | TODO | name, class, rank, anchor |
+| MapLibre style | TODO | Example style configuration |
+
+**MVT label properties:**
+- `name`: Display text
+- `class`: Feature class (city, road, water, etc.)
+- `rank`: Priority for client-side filtering
+- `anchor`: Preferred anchor direction
 
 **Deliverable:** Labels in vector tiles for client-side rendering
 
+---
+
 ### Milestone 5: Polish
-1. Multi-anchor point placement
-2. Label priority tuning
-3. Zoom-dependent font sizes
-4. Performance optimization
-5. Unicode/UTF-8 support for international names
+
+**Goal:** Production-quality labels
+
+| Task | Status | Description |
+|------|--------|-------------|
+| Multi-anchor point placement | ✓ | Done in Milestone 1 (9 anchors) |
+| Label priority tuning | PARTIAL | Basic priority, needs refinement |
+| Zoom-dependent font sizes | ✓ | Done in Milestone 1 |
+| Performance optimization | TODO | Caching, early filtering |
+| International names | TODO | Full Unicode support, RTL text |
+
+**Deliverable:** Production-ready label system
 
 ## File Structure
 
