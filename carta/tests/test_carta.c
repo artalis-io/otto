@@ -637,6 +637,117 @@ TEST(pbf_stats_empty)
     return 1;
 }
 
+TEST(pbf_context_relations_initialized)
+{
+    CTPBFContext *ctx = ct_pbf_context_create();
+
+    /* Relation-related fields should be initialized to 0/NULL */
+    ASSERT(ctx->relations == NULL);
+    ASSERT_EQ(ctx->num_relations, 0);
+    ASSERT_EQ(ctx->relations_capacity, 0);
+
+    ASSERT(ctx->role_strings == NULL);
+    ASSERT_EQ(ctx->num_role_strings, 0);
+    ASSERT_EQ(ctx->role_strings_capacity, 0);
+
+    ASSERT(ctx->multipolygons == NULL);
+    ASSERT_EQ(ctx->num_multipolygons, 0);
+    ASSERT_EQ(ctx->multipolygons_capacity, 0);
+
+    ASSERT(ctx->mp_rtree == NULL);
+    ASSERT_EQ(ctx->total_relations_parsed, 0);
+    ASSERT_EQ(ctx->multipolygons_assembled, 0);
+
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(pbf_way_map_initialized)
+{
+    CTPBFContext *ctx = ct_pbf_context_create();
+
+    /* way_map should be initialized to NULL/0 */
+    ASSERT(ctx->way_map.keys == NULL);
+    ASSERT(ctx->way_map.values == NULL);
+    ASSERT_EQ(ctx->way_map.capacity, 0);
+    ASSERT_EQ(ctx->way_map.count, 0);
+
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(pbf_relation_member_types)
+{
+    /* Verify member type enum values match OSM PBF spec */
+    ASSERT_EQ(CT_MEMBER_NODE, 0);
+    ASSERT_EQ(CT_MEMBER_WAY, 1);
+    ASSERT_EQ(CT_MEMBER_RELATION, 2);
+    return 1;
+}
+
+/* ============================================================================
+ * Multipolygon Assembly Tests
+ * ============================================================================ */
+
+TEST(multipolygon_assemble_empty)
+{
+    /* Assembling multipolygons on empty context should succeed */
+    CTPBFContext *ctx = ct_pbf_context_create();
+    CTStatus status = ct_assemble_multipolygons(ctx);
+    ASSERT_EQ(status, CT_OK);
+    ASSERT_EQ(ctx->num_multipolygons, 0);
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(multipolygon_get_role_string_empty)
+{
+    CTPBFContext *ctx = ct_pbf_context_create();
+
+    /* Role index 0 should return empty string */
+    const char *role = ct_get_role_string(ctx, 0);
+    ASSERT(role != NULL);
+    ASSERT_EQ(strlen(role), 0);
+
+    /* Out of bounds index should return empty string */
+    role = ct_get_role_string(ctx, 999);
+    ASSERT(role != NULL);
+    ASSERT_EQ(strlen(role), 0);
+
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(multipolygon_ring_structure)
+{
+    /* Verify CTMultipolygonRing structure */
+    CTMultipolygonRing ring;
+    memset(&ring, 0, sizeof(ring));
+
+    ring.coords = NULL;
+    ring.num_coords = 0;
+    ring.is_outer = 1;
+
+    ASSERT_EQ(ring.is_outer, 1);
+    return 1;
+}
+
+TEST(multipolygon_assembled_structure)
+{
+    /* Verify CTAssembledMultipolygon structure */
+    CTAssembledMultipolygon mp;
+    memset(&mp, 0, sizeof(mp));
+
+    mp.rings = NULL;
+    mp.num_rings = 0;
+    mp.feature_class = CT_OSM_WATER;
+    mp.feature_type = 0;
+    mp.name = NULL;
+
+    ASSERT_EQ(mp.feature_class, CT_OSM_WATER);
+    return 1;
+}
+
 /* ============================================================================
  * ASCII Rendering Tests
  * ============================================================================ */
@@ -893,6 +1004,15 @@ int main(void)
     printf("\nPBF Context:\n");
     run_test_pbf_context_create();
     run_test_pbf_stats_empty();
+    run_test_pbf_context_relations_initialized();
+    run_test_pbf_way_map_initialized();
+    run_test_pbf_relation_member_types();
+
+    printf("\nMultipolygon Assembly:\n");
+    run_test_multipolygon_assemble_empty();
+    run_test_multipolygon_get_role_string_empty();
+    run_test_multipolygon_ring_structure();
+    run_test_multipolygon_assembled_structure();
 
     printf("\nASCII Rendering:\n");
     run_test_ascii_default_options();
