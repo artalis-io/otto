@@ -206,15 +206,18 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
             return CT_OSM_HIGHWAY;
         }
         if (strcmp(key, "waterway") == 0) {
-            *feature_type = classify_waterway(val);
-            /* riverbank is always an area (polygon) */
+            /* riverbank is always an area (polygon) - use water body type */
             if (strcmp(val, "riverbank") == 0) {
+                *feature_type = CT_WATER_RIVERBANK;
                 *is_area = 1;
+            } else {
+                *feature_type = classify_waterway(val);
             }
             return CT_OSM_WATERWAY;
         }
         if (strcmp(key, "natural") == 0) {
             if (strcmp(val, "water") == 0) {
+                *feature_type = CT_WATER_BODY;  /* Distinct from linear waterways */
                 *is_area = 1;
                 return CT_OSM_WATER;
             }
@@ -1091,33 +1094,23 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
         if (strcmp(key, "natural") == 0) {
             if (strcmp(val, "water") == 0) {
                 feature_class = CT_OSM_WATER;
-                feature_type = 0;
+                feature_type = CT_WATER_BODY;  /* Water body polygon */
             } else if (strcmp(val, "wood") == 0 || strcmp(val, "forest") == 0) {
                 feature_class = CT_OSM_NATURAL;
-                feature_type = 0;
+                feature_type = CT_LANDUSE_FOREST;
             }
         } else if (strcmp(key, "landuse") == 0) {
             feature_class = CT_OSM_LANDUSE;
-            if (strcmp(val, "forest") == 0) {
-                feature_type = 0;
-            } else if (strcmp(val, "residential") == 0) {
-                feature_type = 1;
-            } else if (strcmp(val, "industrial") == 0) {
-                feature_type = 2;
-            }
+            feature_type = classify_landuse(val);
         } else if (strcmp(key, "water") == 0) {
             feature_class = CT_OSM_WATER;
-            if (strcmp(val, "river") == 0) {
-                feature_type = 0;
-            } else if (strcmp(val, "lake") == 0) {
-                feature_type = 1;
-            } else if (strcmp(val, "reservoir") == 0) {
-                feature_type = 2;
-            }
+            feature_type = CT_WATER_BODY;  /* All water=* tags are polygons */
         } else if (strcmp(key, "waterway") == 0) {
             feature_class = CT_OSM_WATERWAY;
-            if (strcmp(val, "river") == 0 || strcmp(val, "riverbank") == 0) {
-                feature_type = CT_WATERWAY_RIVER;
+            if (strcmp(val, "riverbank") == 0) {
+                feature_type = CT_WATER_RIVERBANK;  /* Riverbank polygon */
+            } else {
+                feature_type = classify_waterway(val);
             }
         }
     }
