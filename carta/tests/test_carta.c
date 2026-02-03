@@ -1446,6 +1446,91 @@ TEST(collision_null_safety)
 }
 
 /* ============================================================================
+ * Labeled Points Tests
+ * ============================================================================ */
+
+TEST(labeled_points_empty_context)
+{
+    CTPBFContext *ctx = ct_pbf_context_create();
+    ASSERT(ctx != NULL);
+
+    /* Empty context should have no labeled points */
+    ASSERT_EQ(ct_pbf_get_label_count(ctx), 0);
+
+    /* Query should succeed with zero results */
+    CTTileCoord coord = {10, 512, 512};
+    const CTLabeledPoint **points = NULL;
+    size_t count = 0;
+    CTStatus status = ct_pbf_get_tile_labels(ctx, coord, &points, &count);
+    ASSERT_EQ(status, CT_OK);
+    ASSERT_EQ(count, 0);
+    ASSERT(points == NULL);
+
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(labeled_points_null_safety)
+{
+    /* NULL context */
+    ASSERT_EQ(ct_pbf_get_label_count(NULL), 0);
+
+    const CTLabeledPoint **points = NULL;
+    size_t count = 0;
+    CTTileCoord coord = {10, 0, 0};
+    CTStatus status = ct_pbf_get_tile_labels(NULL, coord, &points, &count);
+    ASSERT_EQ(status, CT_ERROR_INVALID_ARGUMENT);
+
+    /* NULL output params */
+    CTPBFContext *ctx = ct_pbf_context_create();
+    status = ct_pbf_get_tile_labels(ctx, coord, NULL, &count);
+    ASSERT_EQ(status, CT_ERROR_INVALID_ARGUMENT);
+    status = ct_pbf_get_tile_labels(ctx, coord, &points, NULL);
+    ASSERT_EQ(status, CT_ERROR_INVALID_ARGUMENT);
+
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(place_type_classification)
+{
+    /* Test place type enum values exist and are distinct */
+    ASSERT(CT_PLACE_UNKNOWN != CT_PLACE_CITY);
+    ASSERT(CT_PLACE_CITY != CT_PLACE_TOWN);
+    ASSERT(CT_PLACE_TOWN != CT_PLACE_VILLAGE);
+    ASSERT(CT_PLACE_VILLAGE != CT_PLACE_HAMLET);
+    ASSERT(CT_PLACE_PEAK != CT_PLACE_UNKNOWN);
+
+    /* Test enum count is correct */
+    ASSERT(CT_PLACE_TYPE_COUNT > CT_PLACE_PEAK);
+
+    return 1;
+}
+
+TEST(labeled_point_structure)
+{
+    /* Test CTLabeledPoint fields exist */
+    CTLabeledPoint pt;
+    pt.id = 12345;
+    pt.coord.lat = 47.5;
+    pt.coord.lon = 19.0;
+    pt.type = CT_PLACE_CITY;
+    pt.name = NULL;
+    pt.population = 1700000;
+    pt.min_zoom = 6;
+    pt.priority = 90;
+
+    ASSERT_EQ(pt.id, 12345);
+    ASSERT_NEAR(pt.coord.lat, 47.5, 0.001);
+    ASSERT_EQ(pt.type, CT_PLACE_CITY);
+    ASSERT_EQ(pt.population, 1700000);
+    ASSERT_EQ(pt.min_zoom, 6);
+    ASSERT_EQ(pt.priority, 90);
+
+    return 1;
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1558,6 +1643,12 @@ int main(void)
     run_test_collision_partial_outside();
     run_test_collision_occupancy();
     run_test_collision_null_safety();
+
+    printf("\nLabeled Points:\n");
+    run_test_labeled_points_empty_context();
+    run_test_labeled_points_null_safety();
+    run_test_place_type_classification();
+    run_test_labeled_point_structure();
 
     printf("\n=== Results: %d/%d tests passed ===\n\n",
            tests_passed, tests_run);

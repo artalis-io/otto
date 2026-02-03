@@ -163,6 +163,115 @@ static int classify_leisure(const char *value)
     return CT_LANDUSE_OTHER;
 }
 
+/* ============================================================================
+ * Place Classification (for labeled points)
+ * ============================================================================ */
+
+/*
+ * Classify a place=* tag value and return min_zoom and priority.
+ */
+static CTPlaceType classify_place(const char *value, int *min_zoom, int *priority)
+{
+    if (strcmp(value, "country") == 0) {
+        *min_zoom = 2; *priority = 100;
+        return CT_PLACE_COUNTRY;
+    }
+    if (strcmp(value, "state") == 0) {
+        *min_zoom = 4; *priority = 95;
+        return CT_PLACE_STATE;
+    }
+    if (strcmp(value, "city") == 0) {
+        *min_zoom = 6; *priority = 90;
+        return CT_PLACE_CITY;
+    }
+    if (strcmp(value, "town") == 0) {
+        *min_zoom = 9; *priority = 70;
+        return CT_PLACE_TOWN;
+    }
+    if (strcmp(value, "village") == 0) {
+        *min_zoom = 11; *priority = 50;
+        return CT_PLACE_VILLAGE;
+    }
+    if (strcmp(value, "hamlet") == 0) {
+        *min_zoom = 13; *priority = 30;
+        return CT_PLACE_HAMLET;
+    }
+    if (strcmp(value, "suburb") == 0) {
+        *min_zoom = 12; *priority = 40;
+        return CT_PLACE_SUBURB;
+    }
+    if (strcmp(value, "neighbourhood") == 0 ||
+        strcmp(value, "neighborhood") == 0) {
+        *min_zoom = 14; *priority = 25;
+        return CT_PLACE_NEIGHBOURHOOD;
+    }
+    if (strcmp(value, "locality") == 0) {
+        *min_zoom = 14; *priority = 20;
+        return CT_PLACE_LOCALITY;
+    }
+    if (strcmp(value, "island") == 0 ||
+        strcmp(value, "islet") == 0) {
+        *min_zoom = 8; *priority = 60;
+        return CT_PLACE_ISLAND;
+    }
+    *min_zoom = 14; *priority = 10;
+    return CT_PLACE_UNKNOWN;
+}
+
+/*
+ * Add a labeled point to the context.
+ */
+static CTStatus add_labeled_point(CTPBFContext *ctx, int64_t id,
+                                  double lat, double lon,
+                                  CTPlaceType type, const char *name,
+                                  int population, int min_zoom, int priority)
+{
+    if (!name || name[0] == '\0') {
+        return CT_OK;  /* Skip unnamed places */
+    }
+
+    /* Grow array if needed */
+    if (ctx->num_labeled_points >= ctx->labeled_points_capacity) {
+        size_t new_cap = ctx->labeled_points_capacity ? ctx->labeled_points_capacity * 2 : 1024;
+        CTLabeledPoint *new_pts = realloc(ctx->labeled_points, new_cap * sizeof(CTLabeledPoint));
+        if (!new_pts) return CT_ERROR_OUT_OF_MEMORY;
+        ctx->labeled_points = new_pts;
+        ctx->labeled_points_capacity = new_cap;
+    }
+
+    CTLabeledPoint *pt = &ctx->labeled_points[ctx->num_labeled_points++];
+    pt->id = id;
+    pt->coord.lat = lat;
+    pt->coord.lon = lon;
+    pt->type = type;
+    pt->name = strdup(name);
+    if (!pt->name) {
+        ctx->num_labeled_points--;
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+    pt->population = population;
+    pt->min_zoom = min_zoom;
+    pt->priority = priority;
+
+    /* Adjust priority based on population */
+    if (population > 1000000) {
+        pt->priority += 15;
+        if (pt->min_zoom > 5) pt->min_zoom = 5;
+    } else if (population > 500000) {
+        pt->priority += 10;
+        if (pt->min_zoom > 6) pt->min_zoom = 6;
+    } else if (population > 100000) {
+        pt->priority += 5;
+        if (pt->min_zoom > 7) pt->min_zoom = 7;
+    } else if (population > 50000) {
+        pt->priority += 3;
+    } else if (population > 10000) {
+        pt->priority += 1;
+    }
+
+    return CT_OK;
+}
+
 static CTOSMFeatureClass classify_tags(const SHStringTable *st,
                                        const uint32_t *keys, const uint32_t *vals,
                                        int num_tags, int *feature_type, int *is_area)
@@ -656,6 +765,12 @@ void ct_pbf_context_free(CTPBFContext *ctx)
     /* Free multipolygon R-Tree */
     ct_rtree_free(ctx->mp_rtree);
 
+    /* Free labeled points */
+    for (size_t i = 0; i < ctx->num_labeled_points; i++) {
+        free(ctx->labeled_points[i].name);
+    }
+    free(ctx->labeled_points);
+
     free(ctx);
 }
 
@@ -672,19 +787,23 @@ static CTStatus parse_string_table(const uint8_t *data, size_t len,
 }
 
 static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t len,
+                                  const SHStringTable *st,
                                   int32_t granularity, int64_t lat_offset, int64_t lon_offset)
 {
     int64_t *ids = NULL, *lats = NULL, *lons = NULL;
-    size_t id_count = 0, lat_count = 0, lon_count = 0;
+    uint64_t *keys_vals = NULL;
+    size_t id_count = 0, lat_count = 0, lon_count = 0, kv_count = 0;
     size_t pos = 0;
 
     /* Temporary arrays for delta-encoded values */
     size_t max_nodes = 1000000;
+    size_t max_kv = 10000000;  /* keys_vals can be large */
     ids = malloc(max_nodes * sizeof(int64_t));
     lats = malloc(max_nodes * sizeof(int64_t));
     lons = malloc(max_nodes * sizeof(int64_t));
-    if (!ids || !lats || !lons) {
-        free(ids); free(lats); free(lons);
+    keys_vals = malloc(max_kv * sizeof(uint64_t));
+    if (!ids || !lats || !lons || !keys_vals) {
+        free(ids); free(lats); free(lons); free(keys_vals);
         return CT_ERROR_OUT_OF_MEMORY;
     }
 
@@ -709,6 +828,10 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
             } else if (field == SH_PBF_DENSE_LON) {
                 lon_count = sh_pb_read_packed_svarint_array(data + pos, packed_len,
                                                            lons, max_nodes);
+            } else if (field == SH_PBF_DENSE_KEYS_VALS) {
+                /* Read keys_vals as unsigned varints */
+                kv_count = sh_pb_read_packed_varint_array(data + pos, packed_len,
+                                                         keys_vals, max_kv);
             }
             pos += packed_len;
         } else {
@@ -743,6 +866,9 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
         ctx->nodes.capacity = new_cap;
     }
 
+    /* Process nodes and extract labeled points from tags */
+    size_t kv_pos = 0;  /* Position in keys_vals array */
+
     for (size_t i = 0; i < count; i++) {
         double lat = (lat_offset + lats[i] * granularity) * 1e-9;
         double lon = (lon_offset + lons[i] * granularity) * 1e-9;
@@ -752,18 +878,68 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
         ctx->nodes.coords[idx].lat = lat;
         ctx->nodes.coords[idx].lon = lon;
 
-        /* Note: bbox is updated when features are kept, not for all nodes */
-
         node_map_insert(ctx, ids[i], (uint32_t)idx);
+
+        /* Process tags for this node (if keys_vals available) */
+        if (kv_pos < kv_count) {
+            CTPlaceType place_type = CT_PLACE_UNKNOWN;
+            const char *name = NULL;
+            int population = 0;
+            int min_zoom = 14;
+            int priority = 10;
+            int is_peak = 0;
+
+            /* Parse key=value pairs until we hit 0 (separator) */
+            while (kv_pos < kv_count && keys_vals[kv_pos] != 0) {
+                uint32_t key_idx = keys_vals[kv_pos++];
+                if (kv_pos >= kv_count) break;
+                uint32_t val_idx = keys_vals[kv_pos++];
+
+                const char *key = sh_string_table_get(st, key_idx);
+                const char *val = sh_string_table_get(st, val_idx);
+
+                if (strcmp(key, "place") == 0) {
+                    place_type = classify_place(val, &min_zoom, &priority);
+                } else if (strcmp(key, "name") == 0) {
+                    name = val;
+                } else if (strcmp(key, "population") == 0) {
+                    population = atoi(val);
+                } else if (strcmp(key, "natural") == 0 && strcmp(val, "peak") == 0) {
+                    is_peak = 1;
+                }
+            }
+
+            /* Skip the 0 separator */
+            if (kv_pos < kv_count && keys_vals[kv_pos] == 0) {
+                kv_pos++;
+            }
+
+            /* Handle natural=peak as a place type */
+            if (is_peak && place_type == CT_PLACE_UNKNOWN) {
+                place_type = CT_PLACE_PEAK;
+                min_zoom = 12;
+                priority = 35;
+            }
+
+            /* Add labeled point if it has a place type and name */
+            if (place_type != CT_PLACE_UNKNOWN && name) {
+                CTStatus status = add_labeled_point(ctx, ids[i], lat, lon,
+                                                    place_type, name,
+                                                    population, min_zoom, priority);
+                if (status != CT_OK) {
+                    /* Non-fatal: just skip this point */
+                }
+            }
+        }
     }
 
     ctx->total_nodes_parsed += count;
 
-    free(ids); free(lats); free(lons);
+    free(ids); free(lats); free(lons); free(keys_vals);
     return CT_OK;
 
 error:
-    free(ids); free(lats); free(lons);
+    free(ids); free(lats); free(lons); free(keys_vals);
     return CT_ERROR_PARSE_ERROR;
 }
 
@@ -1192,7 +1368,7 @@ static CTStatus parse_primitive_group(CTPBFContext *ctx, const uint8_t *data, si
             pos += n;
 
             if (field == SH_PBF_PRIMGROUP_DENSE) {
-                CTStatus status = parse_dense_nodes(ctx, data + pos, msg_len,
+                CTStatus status = parse_dense_nodes(ctx, data + pos, msg_len, st,
                                                     granularity, lat_offset, lon_offset);
                 if (status != CT_OK) return status;
             } else if (field == SH_PBF_PRIMGROUP_WAYS) {
@@ -1870,4 +2046,82 @@ CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord
     }
 
     return CT_OK;
+}
+
+/* ============================================================================
+ * Labeled Points API
+ * ============================================================================ */
+
+CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
+                                const CTLabeledPoint ***points, size_t *count)
+{
+    if (!ctx || !points || !count) {
+        if (points) *points = NULL;
+        if (count) *count = 0;
+        return CT_ERROR_INVALID_ARGUMENT;
+    }
+
+    *points = NULL;
+    *count = 0;
+
+    if (ctx->num_labeled_points == 0) {
+        return CT_OK;
+    }
+
+    /* Get tile bounding box with buffer for labels near edges */
+    CTBBox bbox = ct_tile_bounds(coord);
+
+    /* Add small buffer (~500m at equator) for labels near tile edges */
+    double buffer = 0.005;  /* ~500m at equator */
+    bbox.min_lat -= buffer;
+    bbox.max_lat += buffer;
+    bbox.min_lon -= buffer;
+    bbox.max_lon += buffer;
+
+    /* Allocate result array (worst case: all points) */
+    const CTLabeledPoint **result = malloc(ctx->num_labeled_points * sizeof(CTLabeledPoint *));
+    if (!result) {
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+
+    size_t result_count = 0;
+
+    /* Linear scan - could use spatial index if we have many points */
+    for (size_t i = 0; i < ctx->num_labeled_points; i++) {
+        const CTLabeledPoint *pt = &ctx->labeled_points[i];
+
+        /* Filter by zoom level */
+        if (coord.z < pt->min_zoom) {
+            continue;
+        }
+
+        /* Filter by bounding box */
+        if (pt->coord.lat < bbox.min_lat || pt->coord.lat > bbox.max_lat ||
+            pt->coord.lon < bbox.min_lon || pt->coord.lon > bbox.max_lon) {
+            continue;
+        }
+
+        result[result_count++] = pt;
+    }
+
+    /* Shrink array to actual size */
+    if (result_count == 0) {
+        free(result);
+        *points = NULL;
+        *count = 0;
+    } else if (result_count < ctx->num_labeled_points) {
+        const CTLabeledPoint **shrunk = realloc(result, result_count * sizeof(CTLabeledPoint *));
+        *points = shrunk ? shrunk : result;
+        *count = result_count;
+    } else {
+        *points = result;
+        *count = result_count;
+    }
+
+    return CT_OK;
+}
+
+size_t ct_pbf_get_label_count(const CTPBFContext *ctx)
+{
+    return ctx ? ctx->num_labeled_points : 0;
 }

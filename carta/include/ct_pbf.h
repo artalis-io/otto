@@ -110,6 +110,30 @@ CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord
                                       CTFeature **features, size_t *count);
 
 /* ============================================================================
+ * Labeled Points (for map labels)
+ * ============================================================================ */
+
+/*
+ * Get labeled points (cities, towns, etc.) that intersect a tile.
+ *
+ * @param ctx       Parsing context
+ * @param coord     Tile coordinates (includes zoom level for filtering)
+ * @param points    Output: array of pointers to labeled points (caller frees array, not contents)
+ * @param count     Output: number of points
+ * @return CT_OK on success
+ *
+ * Note: The returned pointers reference data owned by ctx. Do not free the
+ * CTLabeledPoint structures themselves, only the array.
+ */
+CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
+                                const CTLabeledPoint ***points, size_t *count);
+
+/*
+ * Get the number of labeled points parsed.
+ */
+size_t ct_pbf_get_label_count(const CTPBFContext *ctx);
+
+/* ============================================================================
  * Statistics
  * ============================================================================ */
 
