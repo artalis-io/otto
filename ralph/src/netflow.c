@@ -104,8 +104,26 @@ size_t ralph_netflow_workspace_size(int max_nodes, int max_arcs) {
         return 0;
     }
 
+    /* Check against maximum bounds (DoS protection) */
+    if (max_nodes > RALPH_NETFLOW_MAX_NODES || max_arcs > RALPH_NETFLOW_MAX_ARCS) {
+        return 0;
+    }
+
+    /* Check for overflow: max_arcs + max_nodes */
+    if ((size_t)max_arcs > SIZE_MAX - (size_t)max_nodes) {
+        return 0;
+    }
+
     size_t n = (size_t)max_nodes + 1;       /* +1 for artificial root */
     size_t m = (size_t)max_arcs + (size_t)max_nodes;  /* +num_nodes artificial arcs */
+
+    /* Check for overflow in array size calculations */
+    if (m > SIZE_MAX / sizeof(double)) {
+        return 0;
+    }
+    if (n > SIZE_MAX / sizeof(double)) {
+        return 0;
+    }
 
     /* Problem data */
     size_t aug_tail_size = align_size(m * sizeof(int));
@@ -149,6 +167,17 @@ RalphNetflowWorkspace* ralph_netflow_workspace_create(int max_nodes, int max_arc
         return NULL;
     }
 
+    /* Check against maximum bounds (DoS protection) */
+    if (max_nodes > RALPH_NETFLOW_MAX_NODES || max_arcs > RALPH_NETFLOW_MAX_ARCS) {
+        return NULL;
+    }
+
+    /* Get required size (includes overflow checks) */
+    size_t block_size = ralph_netflow_workspace_size(max_nodes, max_arcs);
+    if (block_size == 0) {
+        return NULL;  /* Overflow or invalid input */
+    }
+
     RalphNetflowWorkspace *ws = (RalphNetflowWorkspace *)malloc(sizeof(RalphNetflowWorkspace));
     if (!ws) {
         return NULL;
@@ -157,7 +186,7 @@ RalphNetflowWorkspace* ralph_netflow_workspace_create(int max_nodes, int max_arc
     ws->max_nodes = max_nodes;
     ws->max_arcs = max_arcs;
 
-    ws->block_size = ralph_netflow_workspace_size(max_nodes, max_arcs);
+    ws->block_size = block_size;
     ws->memory_block = netflow_aligned_alloc(ws->block_size);
     if (!ws->memory_block) {
         free(ws);
@@ -240,7 +269,12 @@ const char* ralph_netflow_status_string(RalphNetflowStatus status) {
 
 /* Check for infinity */
 static inline int is_infinite(double val) {
-    return val >= RALPH_NETFLOW_INFINITY * 0.5;
+    return val >= RALPH_NETFLOW_INFINITY * RALPH_NETFLOW_INF_THRESHOLD;
+}
+
+/* Check for invalid floating point values */
+static inline int is_valid_double(double val) {
+    return !isnan(val) && !isinf(val);
 }
 
 /* Tolerance-based comparisons */
@@ -345,8 +379,6 @@ static int find_cycle(
         len++;
     }
 
-    int u_path_len = len;  /* Remember where u-path ends */
-
     /* Path from v to LCA (we'll reverse it to get LCA->v) */
     int v_start = len;
     for (int node = v; node != lca_node; node = ws->parent[node]) {
@@ -379,8 +411,6 @@ static int find_cycle(
         ws->cycle_arcs[j] = tmp_arc;
         ws->cycle_dir[j] = tmp_dir;
     }
-
-    (void)u_path_len;  /* Unused but kept for clarity */
 
     return len;
 }
@@ -549,22 +579,36 @@ static void update_tree(
     ws->parent[subtree_root] = prev_node;
     ws->pred_arc[subtree_root] = prev_arc;
 
-    /* Recalculate depths for moved subtree */
-    /* Use BFS/DFS from new_child */
+    /* Recalculate depths for moved subtree
+     *
+     * Note: Without maintaining children pointers, we use an iterative approach
+     * that is O(n * subtree_height) in worst case. For most practical networks,
+     * the tree is relatively balanced and this is efficient. A fully O(n)
+     * solution would require maintaining bidirectional tree links.
+     */
     ws->depth[new_child] = ws->depth[new_parent] + 1;
 
-    /* Simple depth recalculation: iterate over all nodes in subtree */
-    int changed = 1;
-    while (changed) {
-        changed = 0;
+    /* Mark nodes that have been updated */
+    memset(ws->mark, 0, ((size_t)num_nodes + 1) * sizeof(int));
+    ws->mark[new_child] = 1;
+    ws->mark[root] = 1;  /* Root never changes */
+
+    /* Propagate depth updates through the subtree */
+    int remaining = num_nodes;  /* Upper bound on unprocessed nodes */
+    while (remaining > 0) {
+        int updated = 0;
         for (int i = 0; i <= num_nodes; i++) {
-            if (i == root) continue;
+            if (ws->mark[i]) continue;  /* Already processed */
             int p = ws->parent[i];
-            if (p >= 0 && ws->depth[i] != ws->depth[p] + 1) {
+            if (p >= 0 && ws->mark[p]) {
+                /* Parent is processed, so we can update this node */
                 ws->depth[i] = ws->depth[p] + 1;
-                changed = 1;
+                ws->mark[i] = 1;
+                updated++;
             }
         }
+        if (updated == 0) break;  /* No progress = all reachable nodes done */
+        remaining -= updated;
     }
 
     /* Update arc states */
@@ -777,7 +821,11 @@ static RalphNetflowStatus setup_initial_solution(
     }
 
     /* Compute residual supply (after accounting for lower bounds) */
-    double *residual = (double *)malloc((num_nodes + 1) * sizeof(double));
+    /* Check for overflow before allocation */
+    if ((size_t)num_nodes > (SIZE_MAX / sizeof(double)) - 1) {
+        return RALPH_NETFLOW_OUT_OF_MEMORY;
+    }
+    double *residual = (double *)malloc(((size_t)num_nodes + 1) * sizeof(double));
     if (!residual) return RALPH_NETFLOW_OUT_OF_MEMORY;
 
     for (int i = 0; i < num_nodes; i++) {
@@ -886,8 +934,8 @@ static RalphNetflowStatus netflow_solve_internal(
     /* Iteration limit */
     int64_t max_iter = options->max_iterations;
     if (max_iter <= 0) {
-        max_iter = (int64_t)num_nodes * (int64_t)num_arcs_total * 10;
-        if (max_iter < 100000) max_iter = 100000;
+        max_iter = (int64_t)num_nodes * (int64_t)num_arcs_total * RALPH_NETFLOW_ITER_MULTIPLIER;
+        if (max_iter < RALPH_NETFLOW_MIN_ITERATIONS) max_iter = RALPH_NETFLOW_MIN_ITERATIONS;
     }
 
     /* Main loop */
@@ -1028,10 +1076,46 @@ RalphNetflowStatus ralph_netflow_solve(
         return RALPH_NETFLOW_INVALID_INPUT;
     }
 
-    /* Validate arc endpoints */
+    /* Validate arc endpoints and data */
     for (int a = 0; a < problem->num_arcs; a++) {
         if (problem->tail[a] < 0 || problem->tail[a] >= problem->num_nodes ||
             problem->head[a] < 0 || problem->head[a] >= problem->num_nodes) {
+            result->status = RALPH_NETFLOW_INVALID_INPUT;
+            return RALPH_NETFLOW_INVALID_INPUT;
+        }
+
+        /* Check for NaN/Inf in costs */
+        if (!is_valid_double(problem->cost[a])) {
+            result->status = RALPH_NETFLOW_INVALID_INPUT;
+            return RALPH_NETFLOW_INVALID_INPUT;
+        }
+
+        /* Validate capacity and lower bounds */
+        if (problem->capacity) {
+            if (!is_valid_double(problem->capacity[a]) || problem->capacity[a] < 0) {
+                result->status = RALPH_NETFLOW_INVALID_INPUT;
+                return RALPH_NETFLOW_INVALID_INPUT;
+            }
+        }
+        if (problem->lower) {
+            if (!is_valid_double(problem->lower[a]) || problem->lower[a] < 0) {
+                result->status = RALPH_NETFLOW_INVALID_INPUT;
+                return RALPH_NETFLOW_INVALID_INPUT;
+            }
+        }
+
+        /* Check capacity >= lower */
+        if (problem->capacity && problem->lower) {
+            if (problem->capacity[a] < problem->lower[a] - RALPH_NETFLOW_TOLERANCE) {
+                result->status = RALPH_NETFLOW_INVALID_INPUT;
+                return RALPH_NETFLOW_INVALID_INPUT;
+            }
+        }
+    }
+
+    /* Validate supply values */
+    for (int i = 0; i < problem->num_nodes; i++) {
+        if (!is_valid_double(problem->supply[i])) {
             result->status = RALPH_NETFLOW_INVALID_INPUT;
             return RALPH_NETFLOW_INVALID_INPUT;
         }
@@ -1216,5 +1300,5 @@ int ralph_netflow_check_optimality(
         *max_violation = max_viol;
     }
 
-    return max_viol <= RALPH_NETFLOW_TOLERANCE * 10;
+    return max_viol <= RALPH_NETFLOW_TOLERANCE * RALPH_NETFLOW_OPT_TOL_MULTIPLIER;
 }

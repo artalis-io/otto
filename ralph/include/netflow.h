@@ -55,6 +55,20 @@ extern "C" {
 #define RALPH_NETFLOW_LIST_FACTOR 10      /* list_size = num_arcs / factor */
 #define RALPH_NETFLOW_REBUILD_FACTOR 3    /* rebuild every list_size * factor pivots */
 
+/* Maximum problem size (for DoS protection) */
+#define RALPH_NETFLOW_MAX_NODES 10000000
+#define RALPH_NETFLOW_MAX_ARCS  100000000
+
+/* Iteration limit multiplier when using heuristic */
+#define RALPH_NETFLOW_ITER_MULTIPLIER 10
+#define RALPH_NETFLOW_MIN_ITERATIONS 100000
+
+/* Infinity threshold factor (value >= INFINITY * factor is considered infinite) */
+#define RALPH_NETFLOW_INF_THRESHOLD 0.5
+
+/* Optimality check tolerance multiplier */
+#define RALPH_NETFLOW_OPT_TOL_MULTIPLIER 10
+
 /* ============================================================================
  * Types
  * ============================================================================ */

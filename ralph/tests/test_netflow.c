@@ -41,6 +41,15 @@ static int tests_passed = 0;
     } \
 } while(0)
 
+/* Safe allocation macro - uses calloc to prevent overflow and zero-initializes */
+#define SAFE_CALLOC(ptr, count, type) do { \
+    (ptr) = (type *)calloc((count), sizeof(type)); \
+    if (!(ptr)) { \
+        printf("  SKIP: Memory allocation failed\n"); \
+        return; \
+    } \
+} while(0)
+
 /* ============================================================================
  * Test 1: Simple 3-node network
  * ============================================================================ */
@@ -582,11 +591,13 @@ static void test_transportation_10x10(void) {
     int num_nodes = m + n;
     int num_arcs = m * n;
 
-    int *tail = malloc(num_arcs * sizeof(int));
-    int *head = malloc(num_arcs * sizeof(int));
-    double *cost = malloc(num_arcs * sizeof(double));
-    double *supply = malloc(num_nodes * sizeof(double));
-    double *flow = malloc(num_arcs * sizeof(double));
+    int *tail, *head;
+    double *cost, *supply, *flow;
+    SAFE_CALLOC(tail, num_arcs, int);
+    SAFE_CALLOC(head, num_arcs, int);
+    SAFE_CALLOC(cost, num_arcs, double);
+    SAFE_CALLOC(supply, num_nodes, double);
+    SAFE_CALLOC(flow, num_arcs, double);
 
     /* Build bipartite graph */
     srand(42);
@@ -648,11 +659,13 @@ static void test_transportation_100x100(void) {
     int num_nodes = m + n;
     int num_arcs = m * n;
 
-    int *tail = malloc(num_arcs * sizeof(int));
-    int *head = malloc(num_arcs * sizeof(int));
-    double *cost = malloc(num_arcs * sizeof(double));
-    double *supply = malloc(num_nodes * sizeof(double));
-    double *flow = malloc(num_arcs * sizeof(double));
+    int *tail, *head;
+    double *cost, *supply, *flow;
+    SAFE_CALLOC(tail, num_arcs, int);
+    SAFE_CALLOC(head, num_arcs, int);
+    SAFE_CALLOC(cost, num_arcs, double);
+    SAFE_CALLOC(supply, num_nodes, double);
+    SAFE_CALLOC(flow, num_arcs, double);
 
     /* Build bipartite graph */
     srand(123);
@@ -714,11 +727,13 @@ static void test_sparse_network_1k(void) {
     int num_nodes = 1000;
     int num_arcs = 5000;  /* Sparse: ~5 arcs per node on average */
 
-    int *tail = malloc(num_arcs * sizeof(int));
-    int *head = malloc(num_arcs * sizeof(int));
-    double *cost = malloc(num_arcs * sizeof(double));
-    double *supply = malloc(num_nodes * sizeof(double));
-    double *flow = malloc(num_arcs * sizeof(double));
+    int *tail, *head;
+    double *cost, *supply, *flow;
+    SAFE_CALLOC(tail, num_arcs, int);
+    SAFE_CALLOC(head, num_arcs, int);
+    SAFE_CALLOC(cost, num_arcs, double);
+    SAFE_CALLOC(supply, num_nodes, double);
+    SAFE_CALLOC(flow, num_arcs, double);
 
     /* Build sparse random graph */
     srand(456);
@@ -778,11 +793,13 @@ static void test_chain_network(void) {
     int num_nodes = 100;
     int num_arcs = num_nodes - 1;
 
-    int *tail = malloc(num_arcs * sizeof(int));
-    int *head = malloc(num_arcs * sizeof(int));
-    double *cost = malloc(num_arcs * sizeof(double));
-    double *supply = malloc(num_nodes * sizeof(double));
-    double *flow = malloc(num_arcs * sizeof(double));
+    int *tail, *head;
+    double *cost, *supply, *flow;
+    SAFE_CALLOC(tail, num_arcs, int);
+    SAFE_CALLOC(head, num_arcs, int);
+    SAFE_CALLOC(cost, num_arcs, double);
+    SAFE_CALLOC(supply, num_nodes, double);
+    SAFE_CALLOC(flow, num_arcs, double);
 
     for (int a = 0; a < num_arcs; a++) {
         tail[a] = a;
@@ -790,8 +807,7 @@ static void test_chain_network(void) {
         cost[a] = 1.0;
     }
 
-    /* Supply at start, demand at end */
-    memset(supply, 0, num_nodes * sizeof(double));
+    /* Supply at start, demand at end (already zero from calloc) */
     supply[0] = 10.0;
     supply[num_nodes - 1] = -10.0;
 
@@ -999,11 +1015,13 @@ static void test_flow_conservation(void) {
     int num_nodes = 20;
     int num_arcs = 60;
 
-    int *tail = malloc(num_arcs * sizeof(int));
-    int *head = malloc(num_arcs * sizeof(int));
-    double *cost = malloc(num_arcs * sizeof(double));
-    double *supply = malloc(num_nodes * sizeof(double));
-    double *flow = malloc(num_arcs * sizeof(double));
+    int *tail, *head;
+    double *cost, *supply, *flow;
+    SAFE_CALLOC(tail, num_arcs, int);
+    SAFE_CALLOC(head, num_arcs, int);
+    SAFE_CALLOC(cost, num_arcs, double);
+    SAFE_CALLOC(supply, num_nodes, double);
+    SAFE_CALLOC(flow, num_arcs, double);
 
     /* Build random graph */
     srand(789);
@@ -1016,8 +1034,7 @@ static void test_flow_conservation(void) {
         cost[a] = (rand() % 10) + 1;
     }
 
-    /* Balanced supply/demand */
-    memset(supply, 0, num_nodes * sizeof(double));
+    /* Balanced supply/demand (already zero from calloc) */
     supply[0] = 50.0;
     supply[num_nodes - 1] = -50.0;
 
