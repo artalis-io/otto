@@ -57,6 +57,7 @@ let tileRenderer = null;
 let overlayRenderer = null;
 let mapProvider = null;
 let isDragging = false;
+let isDraggingScrollbar = false;
 
 /* ============================================================================
  * Required WASM Exports
@@ -69,6 +70,11 @@ const REQUIRED_EXPORTS = [
     'map_pointer_down', 'map_pointer_move', 'map_pointer_up', 'map_scroll',
     'map_handle_click',
     'cs_set_pending_click', 'cs_focused_id', 'cs_key_down', 'cs_key_char',
+    'cs_set_scroll_delta', 'cs_scroll_container_hovered', 'cs_scroll_set_position',
+    'cs_clay_pointer_over',
+    'scrollbar_start_drag', 'scrollbar_move', 'scrollbar_end_drag', 'scrollbar_is_dragging',
+    'scrollbar_hit_test_xy', 'scrollbar_content_height', 'scrollbar_view_height', 'scrollbar_track_height', 'scrollbar_scroll_id',
+    'scrollbar_debug_visible', 'scrollbar_debug_x', 'scrollbar_debug_y', 'scrollbar_debug_w', 'scrollbar_debug_h',
     'cs_focused_x', 'cs_focused_y', 'cs_focused_w', 'cs_focused_h',
     'cs_clay_cmd_type', 'cs_clay_cmd_x', 'cs_clay_cmd_y', 'cs_clay_cmd_w', 'cs_clay_cmd_h',
     // Overlay accessors (multi-instance: take map_id as first parameter)
@@ -114,6 +120,20 @@ function setupEvents(canvas) {
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
+
+        // Check if clicking on scrollbar track
+        if (wasm.scrollbar_hit_test_xy(x, y)) {
+            isDraggingScrollbar = true;
+            wasm.scrollbar_start_drag(
+                wasm.scrollbar_scroll_id(), y,
+                wasm.scrollbar_track_height(),
+                wasm.scrollbar_content_height(),
+                wasm.scrollbar_view_height()
+            );
+            canvas.style.cursor = 'grabbing';
+            return;  // Don't propagate to map
+        }
+
         wasm.cs_set_pending_click();
         if (wasm.map_handle_click(x, y)) return;
         isDragging = true;
@@ -125,6 +145,13 @@ function setupEvents(canvas) {
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
+
+        // Handle scrollbar drag
+        if (isDraggingScrollbar) {
+            wasm.scrollbar_move(y);
+            return;
+        }
+
         wasm.map_pointer_move(x, y);
 
         // Hit testing for cursor feedback (only when not dragging)
@@ -138,8 +165,10 @@ function setupEvents(canvas) {
             );
             wasm.cs_map_set_hovered_overlay(mapId, hit);
 
-            // Update cursor based on hit state
-            if (hit !== 0) {
+            // Update cursor based on hit state - check scrollbar first
+            if (wasm.scrollbar_hit_test_xy(x, y)) {
+                canvas.style.cursor = 'pointer';
+            } else if (hit !== 0) {
                 canvas.style.cursor = 'pointer';
             } else {
                 canvas.style.cursor = 'grab';
@@ -151,6 +180,14 @@ function setupEvents(canvas) {
     });
 
     window.addEventListener('mouseup', (e) => {
+        // Handle scrollbar drag end
+        if (isDraggingScrollbar) {
+            isDraggingScrollbar = false;
+            wasm.scrollbar_end_drag();
+            canvas.style.cursor = 'grab';
+            return;
+        }
+
         if (isDragging) {
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left;
@@ -167,7 +204,13 @@ function setupEvents(canvas) {
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
-        wasm.map_scroll(e.deltaY > 0 ? -1 : 1, x, y);
+
+        // Route to scroll containers if one is hovered, otherwise zoom the map
+        if (wasm.cs_scroll_container_hovered()) {
+            wasm.cs_set_scroll_delta(e.deltaY);
+        } else {
+            wasm.map_scroll(e.deltaY > 0 ? -1 : 1, x, y);
+        }
     }, { passive: false });
 
     // Touch events - mirror mouse event handling for consistency

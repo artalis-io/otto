@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -62,6 +63,15 @@ typedef enum {
     REVERSE_END
 } ReversePending;
 
+/* Mock turn-by-turn instruction (placeholder until Velo provides real instructions) */
+#define MAX_INSTRUCTIONS 32
+#define INSTRUCTION_TEXT_LEN 64
+
+typedef struct {
+    char text[INSTRUCTION_TEXT_LEN];
+    double distance_m;           /* Distance for this segment */
+} RouteInstruction;
+
 /* Route state for click-to-route */
 typedef struct {
     bool has_start;
@@ -88,6 +98,9 @@ typedef struct {
     ReversePending reverse_pending;
     bool start_needs_geocode;    /* Start marker moved, needs new address */
     bool end_needs_geocode;      /* End marker moved, needs new address */
+    /* Mock turn-by-turn instructions */
+    RouteInstruction instructions[MAX_INSTRUCTIONS];
+    int instruction_count;
 } RouteState;
 
 /* Minimum time between route requests during drag (seconds) */
@@ -122,6 +135,20 @@ typedef struct {
     char route_info[64];
 } Scratch;
 
+/* Scrollbar drag state */
+typedef struct {
+    bool dragging;              /* Currently dragging scrollbar thumb */
+    uint32_t scroll_id;         /* ID of scroll container being dragged */
+    float drag_start_y;         /* Mouse Y when drag started */
+    float scroll_start_y;       /* Scroll position when drag started */
+    float track_height;         /* Height of scrollbar track */
+    float content_height;       /* Total content height */
+    float view_height;          /* Visible view height */
+    /* Track bounds for hit testing (set during render) */
+    float track_x, track_y, track_w, track_h;
+    bool track_visible;         /* Whether scrollbar is currently visible */
+} ScrollbarDrag;
+
 typedef struct {
     MapState map;
     UIPanels panels;
@@ -129,6 +156,7 @@ typedef struct {
     Scratch scratch;
     RouteState route;
     SearchState search;
+    ScrollbarDrag scrollbar;
     bool attribution_clicked;  /* Set when attribution link is clicked */
 } AppState;
 
@@ -405,6 +433,133 @@ static void format_duration(char *buf, size_t size, double seconds) {
     }
 }
 
+/* Calculate bearing between two points (degrees, 0 = north, clockwise) */
+static double calc_bearing(double lat1, double lon1, double lat2, double lon2) {
+    double dlon = (lon2 - lon1) * 0.0174533;  /* deg to rad */
+    double lat1_rad = lat1 * 0.0174533;
+    double lat2_rad = lat2 * 0.0174533;
+
+    double x = sin(dlon) * cos(lat2_rad);
+    double y = cos(lat1_rad) * sin(lat2_rad) - sin(lat1_rad) * cos(lat2_rad) * cos(dlon);
+
+    double bearing = atan2(x, y) * 57.2958;  /* rad to deg */
+    if (bearing < 0) bearing += 360.0;
+    return bearing;
+}
+
+/* Haversine distance in meters */
+static double calc_distance(double lat1, double lon1, double lat2, double lon2) {
+    double dlat = (lat2 - lat1) * 0.0174533;
+    double dlon = (lon2 - lon1) * 0.0174533;
+    double lat1_rad = lat1 * 0.0174533;
+    double lat2_rad = lat2 * 0.0174533;
+
+    double a = sin(dlat/2) * sin(dlat/2) +
+               cos(lat1_rad) * cos(lat2_rad) * sin(dlon/2) * sin(dlon/2);
+    double c = 2 * atan2(sqrt(a), sqrt(1-a));
+    return 6371000.0 * c;  /* Earth radius in meters */
+}
+
+/* Generate mock turn-by-turn instructions from route geometry */
+static void generate_mock_instructions(RouteState *route) {
+    route->instruction_count = 0;
+
+    if (route->point_count < 2) return;
+
+    const CsGeoPoint *pts = route->points;
+    int n = route->point_count;
+    int idx = 0;
+
+    /* Start instruction */
+    if (idx < MAX_INSTRUCTIONS) {
+        snprintf(route->instructions[idx].text, INSTRUCTION_TEXT_LEN,
+                 "Depart from origin");
+        route->instructions[idx].distance_m = 0;
+        idx++;
+    }
+
+    /* Process route - sample more frequently for more instructions */
+    int step = n > 200 ? n / 25 : (n > 50 ? 2 : 1);
+    double prev_bearing = -1;
+    double accumulated_dist = 0;
+    double last_instruction_dist = 0;
+
+    for (int i = 1; i < n && idx < MAX_INSTRUCTIONS - 1; i += step) {
+        int prev_i = (i - step >= 0) ? i - step : 0;
+
+        /* Calculate distance for this segment */
+        double seg_dist = 0;
+        for (int j = prev_i; j < i && j < n - 1; j++) {
+            seg_dist += calc_distance(pts[j].lat, pts[j].lon, pts[j+1].lat, pts[j+1].lon);
+        }
+        accumulated_dist += seg_dist;
+
+        /* Calculate bearing */
+        double bearing = calc_bearing(pts[prev_i].lat, pts[prev_i].lon, pts[i].lat, pts[i].lon);
+
+        /* Determine turn type based on bearing change */
+        if (prev_bearing >= 0) {
+            double turn = bearing - prev_bearing;
+            if (turn > 180) turn -= 360;
+            if (turn < -180) turn += 360;
+
+            const char *turn_type = NULL;
+            if (turn > 70) turn_type = "Sharp right";
+            else if (turn < -70) turn_type = "Sharp left";
+            else if (turn > 35) turn_type = "Turn right";
+            else if (turn < -35) turn_type = "Turn left";
+            else if (turn > 15) turn_type = "Bear right";
+            else if (turn < -15) turn_type = "Bear left";
+
+            /* Add turn instruction if significant turn and enough distance */
+            if (turn_type && accumulated_dist > 50) {
+                char dist_str[32];
+                format_distance(dist_str, sizeof(dist_str), accumulated_dist);
+                snprintf(route->instructions[idx].text, INSTRUCTION_TEXT_LEN,
+                         "%s in %s", turn_type, dist_str);
+                route->instructions[idx].distance_m = accumulated_dist;
+                idx++;
+                last_instruction_dist = 0;
+                accumulated_dist = 0;
+            }
+            /* Add "Continue straight" for long straight sections */
+            else if (accumulated_dist > 500 && last_instruction_dist > 400) {
+                char dist_str[32];
+                format_distance(dist_str, sizeof(dist_str), accumulated_dist);
+                snprintf(route->instructions[idx].text, INSTRUCTION_TEXT_LEN,
+                         "Continue straight for %s", dist_str);
+                route->instructions[idx].distance_m = accumulated_dist;
+                idx++;
+                last_instruction_dist = 0;
+                accumulated_dist = 0;
+            }
+        }
+
+        last_instruction_dist += seg_dist;
+        prev_bearing = bearing;
+    }
+
+    /* Continue instruction for remaining distance */
+    if (accumulated_dist > 30 && idx < MAX_INSTRUCTIONS - 1) {
+        char dist_str[32];
+        format_distance(dist_str, sizeof(dist_str), accumulated_dist);
+        snprintf(route->instructions[idx].text, INSTRUCTION_TEXT_LEN,
+                 "Continue for %s", dist_str);
+        route->instructions[idx].distance_m = accumulated_dist;
+        idx++;
+    }
+
+    /* Arrival instruction */
+    if (idx < MAX_INSTRUCTIONS) {
+        snprintf(route->instructions[idx].text, INSTRUCTION_TEXT_LEN,
+                 "Arrive at destination");
+        route->instructions[idx].distance_m = 0;
+        idx++;
+    }
+
+    route->instruction_count = idx;
+}
+
 /* Route profile options for dropdown */
 static const char *ROUTE_PROFILES[] = {"Car", "Truck"};
 
@@ -520,6 +675,7 @@ static void render_route_panel(void) {
                 g_app.route.point_count = 0; g_app.route.points = NULL;
                 g_app.route.error = false;
                 g_app.route.has_cached_info = false;
+                g_app.route.instruction_count = 0;
             }
         } else if (has_route || g_app.route.loading) {
             /* Route info - always show cached info during loading to prevent flicker */
@@ -564,6 +720,74 @@ static void render_route_panel(void) {
                 }
             }
 
+            /* Scrollable turn-by-turn instructions panel */
+            if (g_app.route.instruction_count > 0 && !g_app.route.loading) {
+                CLAY(CLAY_ID("InstructionsDivider"), {
+                    .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1) } },
+                    .backgroundColor = THEME.border
+                }) {}
+
+                CLAY_TEXT(CLAY_STRING("Turn-by-turn"),
+                          CLAY_TEXT_CONFIG({ .fontSize = 11, .textColor = THEME.text_muted }));
+
+                /* Container for scroll content + scrollbar */
+                CLAY(CLAY_ID("InstructionsContainer"), {
+                    .layout = { .layoutDirection = CLAY_LEFT_TO_RIGHT, .childGap = 4 }
+                }) {
+                    const CsScrollStyle scroll_style = {
+                        .width = 200,
+                        .vertical = true,
+                        .corner_radius = 4,
+                    };
+                    CS_SCROLL(CS_ID("instructions"), 120.0f, &scroll_style) {
+                        CLAY(CLAY_ID("InstructionsList"), {
+                            .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 4, .padding = CLAY_PADDING_ALL(4) }
+                        }) {
+                            for (int i = 0; i < g_app.route.instruction_count; i++) {
+                                CLAY_TEXT(((Clay_String){
+                                    .chars = g_app.route.instructions[i].text,
+                                    .length = (int)strlen(g_app.route.instructions[i].text)
+                                }), CLAY_TEXT_CONFIG({ .fontSize = 11, .textColor = THEME.text }));
+                            }
+                        }
+                    }
+
+                    /* Custom scrollbar */
+                    CsScrollInfo scroll_info = cs_scroll_info(CS_ID("instructions"));
+                    if (scroll_info.found && scroll_info.content_height > scroll_info.view_height) {
+                        float track_height = 120.0f;
+                        float content_ratio = scroll_info.view_height / scroll_info.content_height;
+                        float thumb_height = track_height * content_ratio;
+                        if (thumb_height < 20.0f) thumb_height = 20.0f;  /* Minimum thumb size */
+
+                        float max_scroll = scroll_info.content_height - scroll_info.view_height;
+                        float scroll_ratio = (max_scroll > 0) ? (scroll_info.scroll_y / max_scroll) : 0;
+                        float thumb_offset = scroll_ratio * (track_height - thumb_height);
+
+                        /* Scrollbar track */
+                        CLAY(CLAY_ID("ScrollTrack"), {
+                            .layout = { .sizing = { CLAY_SIZING_FIXED(6), CLAY_SIZING_FIXED(track_height) } },
+                            .backgroundColor = (Clay_Color){60, 60, 60, 200},
+                            .cornerRadius = CLAY_CORNER_RADIUS(3)
+                        }) {
+                            /* Scrollbar thumb */
+                            CLAY(CLAY_ID("ScrollThumb"), {
+                                .floating = {
+                                    .attachTo = CLAY_ATTACH_TO_PARENT,
+                                    .attachPoints = { .element = CLAY_ATTACH_POINT_LEFT_TOP, .parent = CLAY_ATTACH_POINT_LEFT_TOP },
+                                    .offset = {0, thumb_offset}
+                                },
+                                .layout = { .sizing = { CLAY_SIZING_FIXED(6), CLAY_SIZING_FIXED(thumb_height) } },
+                                .backgroundColor = scroll_info.hovered
+                                    ? (Clay_Color){150, 150, 150, 255}
+                                    : (Clay_Color){100, 100, 100, 255},
+                                .cornerRadius = CLAY_CORNER_RADIUS(3)
+                            }) {}
+                        }
+                    }
+                }
+            }
+
             if (cs_button(CS_ID("clear_route"), "Clear Route", &clear_btn).clicked) {
                 g_app.route.has_start = false;
                 g_app.route.has_end = false;
@@ -571,6 +795,7 @@ static void render_route_panel(void) {
                 g_app.route.has_cached_info = false;
                 g_app.route.start_address[0] = '\0';
                 g_app.route.end_address[0] = '\0';
+                g_app.route.instruction_count = 0;
                 cs_provider_route_clear();
             }
         } else if (!g_app.route.has_start) {
@@ -815,6 +1040,117 @@ EXPORT void map_pointer_up(float x, float y) {
     cs_clay_set_pointer(x, y, false);
 }
 
+/* ============================================================================
+ * Domain Exports - Scrollbar Drag Handling
+ * ============================================================================ */
+
+EXPORT void scrollbar_start_drag(uint32_t scroll_id, float mouse_y,
+                                  float track_height, float content_height, float view_height) {
+    CsScrollInfo info = cs_scroll_info(scroll_id);
+    g_app.scrollbar.dragging = true;
+    g_app.scrollbar.scroll_id = scroll_id;
+    g_app.scrollbar.drag_start_y = mouse_y;
+    g_app.scrollbar.scroll_start_y = info.found ? info.scroll_y : 0;
+    g_app.scrollbar.track_height = track_height;
+    g_app.scrollbar.content_height = content_height;
+    g_app.scrollbar.view_height = view_height;
+}
+
+EXPORT void scrollbar_move(float mouse_y) {
+    if (!g_app.scrollbar.dragging) return;
+
+    float delta_y = mouse_y - g_app.scrollbar.drag_start_y;
+
+    /* Convert pixel delta to scroll delta */
+    float max_scroll = g_app.scrollbar.content_height - g_app.scrollbar.view_height;
+    if (max_scroll <= 0) return;
+
+    float content_ratio = g_app.scrollbar.view_height / g_app.scrollbar.content_height;
+    float thumb_height = g_app.scrollbar.track_height * content_ratio;
+    if (thumb_height < 20.0f) thumb_height = 20.0f;
+
+    float track_range = g_app.scrollbar.track_height - thumb_height;
+    if (track_range <= 0) return;
+
+    float scroll_per_pixel = max_scroll / track_range;
+    float new_scroll_y = g_app.scrollbar.scroll_start_y + (delta_y * scroll_per_pixel);
+
+    cs_scroll_set_position(g_app.scrollbar.scroll_id, 0, new_scroll_y);
+}
+
+EXPORT void scrollbar_end_drag(void) {
+    g_app.scrollbar.dragging = false;
+    g_app.scrollbar.scroll_id = 0;
+}
+
+EXPORT int scrollbar_is_dragging(void) {
+    return g_app.scrollbar.dragging ? 1 : 0;
+}
+
+/* Check if click coordinates are over the scrollbar track
+ * Uses stored bounds from last render frame */
+EXPORT int scrollbar_hit_test_xy(float x, float y) {
+    if (!g_app.scrollbar.track_visible) return 0;
+
+    /* Manual bounds check */
+    if (x >= g_app.scrollbar.track_x &&
+        x <= g_app.scrollbar.track_x + g_app.scrollbar.track_w &&
+        y >= g_app.scrollbar.track_y &&
+        y <= g_app.scrollbar.track_y + g_app.scrollbar.track_h) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Debug exports for scrollbar bounds */
+EXPORT int scrollbar_debug_visible(void) { return g_app.scrollbar.track_visible ? 1 : 0; }
+EXPORT float scrollbar_debug_x(void) { return g_app.scrollbar.track_x; }
+EXPORT float scrollbar_debug_y(void) { return g_app.scrollbar.track_y; }
+EXPORT float scrollbar_debug_w(void) { return g_app.scrollbar.track_w; }
+EXPORT float scrollbar_debug_h(void) { return g_app.scrollbar.track_h; }
+
+EXPORT float scrollbar_content_height(void) { return g_app.scrollbar.content_height; }
+EXPORT float scrollbar_view_height(void) { return g_app.scrollbar.view_height; }
+EXPORT float scrollbar_track_height(void) { return g_app.scrollbar.track_height; }
+EXPORT uint32_t scrollbar_scroll_id(void) { return CS_ID("instructions"); }
+
+/* Update scrollbar bounds from render commands - call after layout */
+static void update_scrollbar_bounds(void) {
+    g_app.scrollbar.track_visible = false;
+
+    /* Get scroll info for dimensions */
+    CsScrollInfo info = cs_scroll_info(CS_ID("instructions"));
+    if (!info.found || info.content_height <= info.view_height) {
+        return;  /* No scrollbar needed */
+    }
+
+    /* Store scroll dimensions */
+    g_app.scrollbar.content_height = info.content_height;
+    g_app.scrollbar.view_height = info.view_height;
+    g_app.scrollbar.track_height = 120.0f;  /* Must match render code */
+
+    /* Find ScrollTrack in render commands */
+    uint32_t track_id = CLAY_ID("ScrollTrack").id;
+    int cmd_count = cs_clay_cmd_count();
+
+    for (int i = 0; i < cmd_count; i++) {
+        if (cs_clay_cmd_type(i) == 1) {  /* CLAY_RENDER_COMMAND_TYPE_RECTANGLE */
+            /* Find scrollbar track by size heuristics: 6px wide, 120px tall */
+            float w = cs_clay_cmd_w(i);
+            float h = cs_clay_cmd_h(i);
+
+            if (w >= 5.0f && w <= 8.0f && h >= 118.0f && h <= 122.0f) {
+                g_app.scrollbar.track_x = cs_clay_cmd_x(i);
+                g_app.scrollbar.track_y = cs_clay_cmd_y(i);
+                g_app.scrollbar.track_w = w;
+                g_app.scrollbar.track_h = h;
+                g_app.scrollbar.track_visible = true;
+                break;
+            }
+        }
+    }
+}
+
 EXPORT void map_scroll(float delta, float x, float y) {
     (void)x; (void)y;
     /* Don't zoom map if scrolling over UI */
@@ -904,6 +1240,7 @@ static void update_route_state(void) {
             g_app.route.loading = false;
             g_app.route.point_count = 0; g_app.route.points = NULL;
             g_app.route.points = NULL;
+            g_app.route.instruction_count = 0;
         } else {
             /* Use provider's buffer directly (no copy) */
             g_app.route.points = result->points;
@@ -913,6 +1250,9 @@ static void update_route_state(void) {
             g_app.route.calc_time_ms = result->calc_time_ms;
             g_app.route.loading = false;
             g_app.route.error = false;
+
+            /* Generate mock turn-by-turn instructions */
+            generate_mock_instructions(&g_app.route);
         }
     }
 }
@@ -994,7 +1334,15 @@ EXPORT int map_frame(float dt) {
         g_app.route.reroute_cooldown -= dt;
     }
 
+    /* Update scroll containers with wheel delta */
+    cs_update_scroll_containers(dt);
+
     cs_clay_begin_frame();
     render_ui();
-    return cs_clay_end_frame(dt);
+    int result = cs_clay_end_frame(dt);
+
+    /* Update scrollbar bounds after layout for hit testing */
+    update_scrollbar_bounds();
+
+    return result;
 }

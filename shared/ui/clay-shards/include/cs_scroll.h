@@ -109,6 +109,19 @@ bool cs_scroll_container_hovered(void);
  */
 void cs_update_scroll_containers(float dt);
 
+/**
+ * Set scroll position directly.
+ *
+ * Useful for implementing custom scrollbar drag or programmatic scrolling.
+ * Position is automatically clamped to valid range.
+ *
+ * @param id Widget ID of scroll container
+ * @param scroll_x Horizontal scroll position (0 = left edge)
+ * @param scroll_y Vertical scroll position (0 = top)
+ * @return true if position was set, false if container not found
+ */
+bool cs_scroll_set_position(uint32_t id, float scroll_x, float scroll_y);
+
 /* Internal functions for macro */
 CsScrollContext cs_scroll_begin_internal(uint32_t id, float height, const CsScrollStyle *style);
 void cs_scroll_end_internal(CsScrollContext *ctx);
