@@ -3796,18 +3796,6 @@ static int bottleneck_matching_exists_rect(
     return valid;
 }
 
-/* Square wrapper for backward compatibility */
-static int bottleneck_matching_exists(
-    int n,
-    const double *cost,
-    RalphLapObjective objective,
-    double threshold,
-    int *row_sol,
-    RalphLapWorkspace *ws
-) {
-    return bottleneck_matching_exists_rect(n, n, cost, objective, threshold, row_sol, ws);
-}
-
 static RalphLapStatus lap_solve_bottleneck_unified(
     const RalphLapProblem *prob,
     const RalphLapOptions *opts,

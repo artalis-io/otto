@@ -812,6 +812,8 @@ static int is_knapsack_constraint(LPModel *model, int row, const int *is_integer
 static Cut* generate_single_cover_cut(LPModel *model, int row, double rhs,
                                       int *vars, double *coefs, int num_vars,
                                       const double *x) {
+    (void)model;  /* Available for future use (e.g., constraint tightening) */
+    (void)row;    /* Available for future use (e.g., row-specific logic) */
     /* Compute coefficient sum and create sorted list by LP value (descending) */
     double coef_sum = 0.0;
     for (int i = 0; i < num_vars; i++) {
@@ -900,7 +902,6 @@ int generate_cover_cuts(MIPSolver *solver, CutPool *pool) {
     if (!solver || !solver->lp_solver || !solver->lp_solver->solution) return 0;
 
     LPModel *model = solver->original_model;
-    SimplexTableau *tab = solver->lp_solver->tableau;
     const double *x = solver->lp_solver->solution;
     int n = model->num_vars;
     int m = model->num_cons;
