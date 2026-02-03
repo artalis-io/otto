@@ -95,9 +95,12 @@ is_valid_index() {
 }
 
 # Check for index files
+# NOTE: Carta and Locus indexes are INDEPENDENT - each is checked separately.
+# Deleting one index will NOT cause the other to be rebuilt.
 echo "Checking index files..."
 
 # Check for Carta index (minimum 1MB for valid index)
+# This block is independent of Locus index status
 if is_valid_index "$CARTA_IDX" 1048576; then
     CARTA_SIZE=$(stat -c%s "$CARTA_IDX" 2>/dev/null)
     echo -e "  ${GREEN}Found: $CARTA_IDX ($(numfmt --to=iec-i --suffix=B $CARTA_SIZE 2>/dev/null || echo "${CARTA_SIZE} bytes"))${NC}"
@@ -152,6 +155,7 @@ else
 fi
 
 # Check for Locus index (minimum 100KB for valid index)
+# This block is independent of Carta index status
 if is_valid_index "$LOCUS_IDX" 102400; then
     LOCUS_SIZE=$(stat -c%s "$LOCUS_IDX" 2>/dev/null)
     echo -e "  ${GREEN}Found: $LOCUS_IDX ($(numfmt --to=iec-i --suffix=B $LOCUS_SIZE 2>/dev/null || echo "${LOCUS_SIZE} bytes"))${NC}"

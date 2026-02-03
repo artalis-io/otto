@@ -97,12 +97,12 @@ Labels compete for space. Priority determines which labels win:
 
 ### 2.1 MSDF Font Format
 
-Reuse the MSDF (Multi-channel Signed Distance Field) font system from `shared/ui/clay-shards-webgl/`.
+Reuse the MSDF (Multi-channel Signed Distance Field) font system from `shared/fonts/`.
 MSDF fonts render crisp at any size and scale well.
 
 **Existing assets:**
-- `shared/ui/clay-shards-webgl/fonts/ui-font.json` - Glyph metrics
-- `shared/ui/clay-shards-webgl/fonts/ui-font.png` - MSDF atlas texture
+- `shared/fonts/ui-font.json` - Glyph metrics
+- `shared/fonts/ui-font.png` - MSDF atlas texture
 
 **File:** `carta/include/ct_font.h`
 
@@ -515,11 +515,13 @@ carta/
 │   ├── ct_label_line.c    # Line label placement
 │   ├── ct_label_area.c    # Area label placement
 │   └── ct_collision.c     # Collision detection
-shared/ui/clay-shards-webgl/
+shared/
 ├── fonts/
-│   ├── ui-font.json       # MSDF glyph metrics (reused)
-│   └── ui-font.png        # MSDF atlas texture (reused)
-└── font.js                # Reference MSDF implementation
+│   ├── CLAUDE.md          # Font documentation
+│   ├── ui-font.json       # MSDF glyph metrics
+│   └── ui-font.png        # MSDF atlas texture
+└── ui/clay-shards-webgl/
+    └── font.js            # Reference MSDF implementation (JS)
 ```
 
 ## Memory Budget
