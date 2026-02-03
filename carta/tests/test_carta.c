@@ -1083,13 +1083,13 @@ TEST(lod_default_preset)
     /* Should have many rules */
     ASSERT(config.num_rules > 20);
 
-    /* Check motorway rule */
+    /* Check motorway rule - visible at z6+ */
     int motorway_visible = ct_lod_is_visible(&config, CT_LAYER_ROADS,
-                                              CT_ROAD_MOTORWAY, 5, 0, 0);
+                                              CT_ROAD_MOTORWAY, 6, 0, 0);
     ASSERT_EQ(motorway_visible, 1);
 
     int motorway_hidden = ct_lod_is_visible(&config, CT_LAYER_ROADS,
-                                             CT_ROAD_MOTORWAY, 4, 0, 0);
+                                             CT_ROAD_MOTORWAY, 5, 0, 0);
     ASSERT_EQ(motorway_hidden, 0);
 
     ct_lod_free(&config);
@@ -1102,23 +1102,23 @@ TEST(lod_landuse_types)
     ct_lod_init(&config);
     ct_lod_default(&config);
 
-    /* Forest at z6 with large area */
+    /* Forest at z8 with very large area (>50km²) */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST,
-                                 6, 15000000, 0), 1);  /* 15km² visible at z6 */
+                                 8, 60000000, 0), 1);  /* 60km² visible at z8 */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST,
-                                 6, 5000000, 0), 0);   /* 5km² hidden at z6 */
+                                 8, 10000000, 0), 0);  /* 10km² hidden at z8 */
 
-    /* Park at z10 */
+    /* Park at z11 with large area (>1km²) */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK,
-                                 10, 2000000, 0), 1);  /* 2km² visible at z10 */
+                                 11, 2000000, 0), 1);  /* 2km² visible at z11 */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK,
-                                 9, 2000000, 0), 0);   /* z9 hidden */
+                                 10, 2000000, 0), 0);  /* z10 hidden */
 
-    /* Residential at z11 */
+    /* Residential at z13 */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL,
-                                 11, 0, 0), 1);
+                                 13, 0, 0), 1);
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL,
-                                 10, 0, 0), 0);
+                                 12, 0, 0), 0);
 
     ct_lod_free(&config);
     return 1;
@@ -1158,12 +1158,12 @@ TEST(lod_size_filtering)
     ct_lod_init(&config);
     ct_lod_default(&config);
 
-    /* Large building visible at z13 */
+    /* Large building (>2000m²) visible at z14 */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BUILDINGS, -1,
-                                 13, 6000, 0), 1);  /* 6000m² */
-    /* Small building hidden at z13 */
+                                 14, 3000, 0), 1);  /* 3000m² */
+    /* Small building hidden at z14 */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BUILDINGS, -1,
-                                 13, 100, 0), 0);   /* 100m² */
+                                 14, 100, 0), 0);   /* 100m² */
     /* All buildings visible at z15 */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BUILDINGS, -1,
                                  15, 100, 0), 1);
@@ -1209,27 +1209,27 @@ TEST(lod_waterway_types)
     ct_lod_init(&config);
     ct_lod_default(&config);
 
-    /* Long river (>50km) visible at z6 */
+    /* Very long river (>100km) visible at z8 */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_RIVER,
-                                 6, 0, 60000), 1);  /* 60km river */
-    /* Short river hidden at z6 */
+                                 8, 0, 150000), 1);  /* 150km river */
+    /* Shorter river hidden at z8 */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_RIVER,
-                                 6, 0, 10000), 0);  /* 10km river */
+                                 8, 0, 50000), 0);   /* 50km river */
     /* All rivers visible at z12 */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_RIVER,
                                  12, 0, 100), 1);
 
-    /* Streams visible at z13+ */
+    /* Streams visible at z14+ */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_STREAM,
-                                 13, 0, 0), 1);
+                                 14, 0, 0), 1);
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_STREAM,
-                                 12, 0, 0), 0);
+                                 13, 0, 0), 0);
 
-    /* Canals visible at z10+ */
+    /* Canals visible at z12+ */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_CANAL,
-                                 10, 0, 0), 1);
+                                 12, 0, 0), 1);
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_CANAL,
-                                 9, 0, 0), 0);
+                                 11, 0, 0), 0);
 
     ct_lod_free(&config);
     return 1;
