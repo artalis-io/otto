@@ -63,6 +63,15 @@ extern "C" {
 #define SH_PBF_WAY_VALS            3
 #define SH_PBF_WAY_REFS            8
 
+/* Relation */
+#define SH_PBF_RELATION_ID         1
+#define SH_PBF_RELATION_KEYS       2
+#define SH_PBF_RELATION_VALS       3
+#define SH_PBF_RELATION_INFO       4
+#define SH_PBF_RELATION_ROLES_SID  8   /* Role string indices (packed) */
+#define SH_PBF_RELATION_MEMIDS     9   /* Delta-encoded member IDs (packed) */
+#define SH_PBF_RELATION_TYPES     10   /* Member types: 0=node, 1=way, 2=relation (packed) */
+
 /* ============================================================================
  * String Table
  *

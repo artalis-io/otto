@@ -20,6 +20,7 @@
 #include "ct_lod.h"
 #include "ct_simplify.h"
 #include "ct_serialize.h"
+#include "ct_multipolygon.h"
 
 #ifdef __cplusplus
 extern "C" {
