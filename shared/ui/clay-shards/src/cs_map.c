@@ -23,6 +23,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>  /* For SIZE_MAX */
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -122,6 +123,12 @@ bool cs_map_ensure_polyline_capacity(CsMapState *ms, int needed) {
     /* If still not enough after hitting max, return false */
     if (new_capacity < needed) {
         cs_record_error(CS_ERR_CAPACITY_EXCEEDED);
+        return false;
+    }
+
+    /* Check for integer overflow before allocation (defensive - capacity is bounded) */
+    if ((size_t)new_capacity > SIZE_MAX / sizeof(CsGeoPoint)) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
         return false;
     }
 

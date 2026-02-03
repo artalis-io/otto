@@ -2,6 +2,15 @@
  * cs_clay.c - Generic Clay Integration Implementation
  *
  * Provides reusable Clay boilerplate so applications don't duplicate it.
+ *
+ * Thread Safety Note:
+ * This module is NOT thread-safe by design. The Clay library uses internal
+ * global state for layout computation, so multi-threaded UI rendering is not
+ * supported. Each process should have a single Clay context, typically on
+ * the main/UI thread. The CsClayState contains an 8MB internal memory buffer,
+ * making per-thread copies impractical even if Clay supported it.
+ *
+ * For multi-threaded applications: perform all UI work on a dedicated thread.
  */
 
 #include "cs_clay.h"

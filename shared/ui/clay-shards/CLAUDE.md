@@ -231,7 +231,7 @@ src/
 
 ## Thread Safety
 
-ClayShards uses thread-local storage for all global state:
+ClayShards component state uses thread-local storage:
 - Each thread gets isolated UI state (focus, widget state, errors)
 - Call `cs_init()` once per thread
 - Custom allocators are per-thread
@@ -240,6 +240,10 @@ Cross-platform TLS support:
 - C11: `_Thread_local`
 - GCC/Clang: `__thread`
 - MSVC: `__declspec(thread)`
+
+**Clay Integration Limitation:** The `cs_clay.c` module (Clay wrapper) is NOT thread-safe.
+Clay itself uses internal global state for layout computation. For multi-threaded apps,
+perform all Clay/UI work on a single dedicated thread.
 
 ## Custom Allocators
 
