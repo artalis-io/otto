@@ -399,6 +399,132 @@ void ct_render_polygon(CTRenderContext *ctx,
     free(active);
 }
 
+/*
+ * Render a multipolygon with multiple rings (outer + holes).
+ * Uses even-odd fill rule: all ring edges are included, and the
+ * algorithm will properly exclude hole areas.
+ */
+void ct_render_multipolygon(CTRenderContext *ctx,
+                            const CTTilePoint *points, int num_points,
+                            const int *ring_ends, int num_rings,
+                            CTColor color)
+{
+    if (num_points < 3 || num_rings < 1) return;
+
+    /* Find bounding box across all points */
+    int min_y = points[0].y, max_y = points[0].y;
+    for (int i = 1; i < num_points; i++) {
+        if (points[i].y < min_y) min_y = points[i].y;
+        if (points[i].y > max_y) max_y = points[i].y;
+    }
+
+    if (min_y >= ctx->height || max_y < 0) return;
+    if (min_y < 0) min_y = 0;
+    if (max_y >= ctx->height) max_y = ctx->height - 1;
+
+    /* Build edge table from all rings */
+    CTEdge *edges = malloc(num_points * sizeof(CTEdge));
+    if (!edges) return;
+    int num_edges = 0;
+
+    /* Process each ring */
+    int ring_start = 0;
+    for (int r = 0; r < num_rings; r++) {
+        int ring_end = ring_ends[r];
+        int ring_points = ring_end - ring_start;
+        if (ring_points < 3) {
+            ring_start = ring_end;
+            continue;
+        }
+
+        for (int i = ring_start; i < ring_end; i++) {
+            int j = ring_start + ((i - ring_start + 1) % ring_points);
+            int y0 = points[i].y, y1 = points[j].y;
+            int x0 = points[i].x, x1 = points[j].x;
+
+            if (y0 == y1) continue;  /* Skip horizontal edges */
+
+            if (y0 > y1) {
+                int t = y0; y0 = y1; y1 = t;
+                t = x0; x0 = x1; x1 = t;
+            }
+
+            edges[num_edges].y_min = y0;
+            edges[num_edges].y_max = y1;
+            edges[num_edges].x = (float)x0;
+            edges[num_edges].dx = (float)(x1 - x0) / (float)(y1 - y0);
+            num_edges++;
+        }
+
+        ring_start = ring_end;
+    }
+
+    if (num_edges < 2) {
+        free(edges);
+        return;
+    }
+
+    qsort(edges, num_edges, sizeof(CTEdge), compare_edges);
+
+    /* Active edge table */
+    CTEdge *active = malloc(num_edges * sizeof(CTEdge));
+    if (!active) {
+        free(edges);
+        return;
+    }
+    int num_active = 0;
+    int edge_idx = 0;
+
+    /* Scanline fill using even-odd rule (handles holes naturally) */
+    for (int y = min_y; y <= max_y; y++) {
+        /* Add edges starting at this scanline */
+        while (edge_idx < num_edges && edges[edge_idx].y_min <= y) {
+            active[num_active++] = edges[edge_idx++];
+        }
+
+        /* Remove edges ending at this scanline */
+        for (int i = 0; i < num_active; ) {
+            if (active[i].y_max <= y) {
+                active[i] = active[--num_active];
+            } else {
+                i++;
+            }
+        }
+
+        /* Sort active edges by x using insertion sort (O(n) for nearly-sorted) */
+        for (int i = 1; i < num_active; i++) {
+            CTEdge key = active[i];
+            int j = i - 1;
+            while (j >= 0 && active[j].x > key.x) {
+                active[j + 1] = active[j];
+                j--;
+            }
+            active[j + 1] = key;
+        }
+
+        /* Fill between pairs of edges (even-odd rule) */
+        for (int i = 0; i + 1 < num_active; i += 2) {
+            int x_start = (int)(active[i].x + 0.5f);
+            int x_end = (int)(active[i + 1].x + 0.5f);
+
+            if (x_start < 0) x_start = 0;
+            if (x_end >= ctx->width) x_end = ctx->width - 1;
+
+            for (int x = x_start; x <= x_end; x++) {
+                ct_render_blend_pixel(ctx, x, y, color);
+            }
+        }
+
+        /* Update x for next scanline */
+        for (int i = 0; i < num_active; i++) {
+            active[i].x += active[i].dx;
+        }
+    }
+
+    free(edges);
+    free(active);
+}
+
 void ct_render_polygon_outline(CTRenderContext *ctx,
                                const CTTilePoint *points, int num_points,
                                CTColor color, float width)
@@ -514,14 +640,26 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
 
             switch (f->layer) {
                 case CT_LAYER_LANDUSE:
-                    ct_render_polygon(ctx, scaled, f->num_points,
-                                      ctx->style.grass_color);
+                    if (f->num_rings > 1 && f->ring_ends) {
+                        ct_render_multipolygon(ctx, scaled, f->num_points,
+                                               f->ring_ends, f->num_rings,
+                                               ctx->style.grass_color);
+                    } else {
+                        ct_render_polygon(ctx, scaled, f->num_points,
+                                          ctx->style.grass_color);
+                    }
                     break;
 
                 case CT_LAYER_WATER:
                     if (f->type == CT_GEOM_POLYGON) {
-                        ct_render_polygon(ctx, scaled, f->num_points,
-                                          ctx->style.water_color);
+                        if (f->num_rings > 1 && f->ring_ends) {
+                            ct_render_multipolygon(ctx, scaled, f->num_points,
+                                                   f->ring_ends, f->num_rings,
+                                                   ctx->style.water_color);
+                        } else {
+                            ct_render_polygon(ctx, scaled, f->num_points,
+                                              ctx->style.water_color);
+                        }
                     } else {
                         /* Use data-driven width based on waterway type */
                         int waterway_type = f->feature_type;
@@ -535,10 +673,16 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     break;
 
                 case CT_LAYER_BUILDINGS:
-                    ct_render_polygon_filled(ctx, scaled, f->num_points,
-                                             ctx->style.building_color,
-                                             ctx->style.building_outline_color,
-                                             1.0f);
+                    if (f->num_rings > 1 && f->ring_ends) {
+                        ct_render_multipolygon(ctx, scaled, f->num_points,
+                                               f->ring_ends, f->num_rings,
+                                               ctx->style.building_color);
+                    } else {
+                        ct_render_polygon_filled(ctx, scaled, f->num_points,
+                                                 ctx->style.building_color,
+                                                 ctx->style.building_outline_color,
+                                                 1.0f);
+                    }
                     break;
 
                 case CT_LAYER_ROADS: {

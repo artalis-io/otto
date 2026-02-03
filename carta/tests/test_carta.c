@@ -495,6 +495,41 @@ TEST(render_polygon_scanline_performance)
     return 1;
 }
 
+TEST(render_multipolygon_with_hole)
+{
+    /* Test multipolygon rendering with an outer ring and inner hole */
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    ct_render_clear(ctx);
+
+    /* Create a square with a smaller square hole inside */
+    /* Outer ring: large square (4 points + closing point) */
+    /* Inner ring: small square hole (4 points + closing point) */
+    CTTilePoint points[10] = {
+        /* Outer ring (CCW) */
+        {50, 50}, {200, 50}, {200, 200}, {50, 200}, {50, 50},
+        /* Inner ring (CW - hole) */
+        {100, 100}, {100, 150}, {150, 150}, {150, 100}, {100, 100}
+    };
+    int ring_ends[2] = {5, 10};
+
+    ct_render_multipolygon(ctx, points, 10, ring_ends, 2,
+                           CT_RGB(255, 0, 0));
+
+    /* Verify outer area is filled (corner should be red) */
+    CTColor outer_pixel = ct_render_get_pixel(ctx, 60, 60);
+    ASSERT_EQ(CT_COLOR_R(outer_pixel), 255);
+    ASSERT_EQ(CT_COLOR_G(outer_pixel), 0);
+    ASSERT_EQ(CT_COLOR_B(outer_pixel), 0);
+
+    /* Verify hole area is NOT filled (center should be background) */
+    CTColor hole_pixel = ct_render_get_pixel(ctx, 125, 125);
+    CTColor bg = ctx->style.background_color;
+    ASSERT_EQ(hole_pixel, bg);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
 /* ============================================================================
  * MVT Encoding Tests
  * ============================================================================ */
@@ -989,6 +1024,7 @@ int main(void)
     run_test_render_context_has_scale_buffer();
     run_test_render_tile_reuses_buffer();
     run_test_render_polygon_scanline_performance();
+    run_test_render_multipolygon_with_hole();
 
     printf("\nMVT Encoding:\n");
     run_test_mvt_default_options();
