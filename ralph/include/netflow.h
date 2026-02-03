@@ -1,0 +1,369 @@
+/*
+ * netflow.h - Network Simplex Solver for Minimum Cost Network Flow
+ *
+ * Implements the network simplex algorithm for solving Minimum Cost
+ * Network Flow (MCNF) problems. Network simplex exploits the special
+ * structure of network constraints for O(nm) per-iteration complexity
+ * vs O(n^2 m) for general simplex.
+ *
+ * The MCNF problem:
+ *   min  sum_{(i,j) in A} c_{ij} * x_{ij}
+ *   s.t. sum_{j} x_{ij} - sum_{j} x_{ji} = b_i  for all nodes i
+ *        l_{ij} <= x_{ij} <= u_{ij}            for all arcs (i,j)
+ *
+ * Where:
+ *   - A is the set of arcs
+ *   - c_{ij} is the cost per unit flow on arc (i,j)
+ *   - x_{ij} is the flow on arc (i,j)
+ *   - b_i is the supply at node i (negative = demand)
+ *   - l_{ij}, u_{ij} are lower and upper bounds on arc flow
+ *
+ * Reference:
+ * R.K. Ahuja, T.L. Magnanti, J.B. Orlin, "Network Flows: Theory,
+ * Algorithms, and Applications," Prentice Hall, 1993.
+ */
+
+#ifndef NETFLOW_H
+#define NETFLOW_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ============================================================================
+ * Constants
+ * ============================================================================ */
+
+/* Infinity constant for unbounded capacity */
+#define RALPH_NETFLOW_INFINITY 1e30
+
+/* Numerical tolerance for comparisons */
+#define RALPH_NETFLOW_TOLERANCE 1e-9
+
+/* Big-M cost for artificial arcs */
+#define RALPH_NETFLOW_BIG_M 1e12
+
+/* Default maximum iterations (0 = unlimited, use heuristic) */
+#define RALPH_NETFLOW_DEFAULT_MAX_ITER 0
+
+/* Candidate list parameters */
+#define RALPH_NETFLOW_MIN_LIST_SIZE 50
+#define RALPH_NETFLOW_MAX_LIST_SIZE 500
+#define RALPH_NETFLOW_LIST_FACTOR 10      /* list_size = num_arcs / factor */
+#define RALPH_NETFLOW_REBUILD_FACTOR 3    /* rebuild every list_size * factor pivots */
+
+/* ============================================================================
+ * Types
+ * ============================================================================ */
+
+/* Result status codes */
+typedef enum {
+    RALPH_NETFLOW_OPTIMAL = 0,          /* Optimal solution found */
+    RALPH_NETFLOW_INFEASIBLE = 1,       /* No feasible flow exists */
+    RALPH_NETFLOW_UNBOUNDED = 2,        /* Unbounded (negative cost cycle with infinite capacity) */
+    RALPH_NETFLOW_MAX_ITERATIONS = 3,   /* Iteration limit reached */
+    RALPH_NETFLOW_INVALID_INPUT = 4,    /* Invalid input parameters */
+    RALPH_NETFLOW_OUT_OF_MEMORY = 5     /* Memory allocation failed */
+} RalphNetflowStatus;
+
+/* Optimization direction */
+typedef enum {
+    RALPH_NETFLOW_MINIMIZE = 0,
+    RALPH_NETFLOW_MAXIMIZE = 1
+} RalphNetflowObjective;
+
+/* Arc state in basis */
+typedef enum {
+    RALPH_NETFLOW_AT_LOWER = 0,         /* Non-basic at lower bound */
+    RALPH_NETFLOW_BASIC = 1,            /* Basic (in spanning tree) */
+    RALPH_NETFLOW_AT_UPPER = 2          /* Non-basic at upper bound */
+} RalphNetflowArcState;
+
+/* Forward declaration for workspace (opaque type) */
+typedef struct RalphNetflowWorkspace RalphNetflowWorkspace;
+
+/* ============================================================================
+ * Problem Definition
+ * ============================================================================ */
+
+/*
+ * Network flow problem specification (forward star representation).
+ *
+ * The network is defined by:
+ *   - num_nodes nodes numbered 0 to num_nodes-1
+ *   - num_arcs arcs numbered 0 to num_arcs-1
+ *   - Each arc a has tail[a] -> head[a] with cost[a], capacity[a], lower[a]
+ *   - Each node i has supply[i] (negative = demand)
+ *
+ * Feasibility requires: sum(supply) = 0 (total supply equals total demand)
+ */
+typedef struct {
+    int num_nodes;                  /* Number of nodes */
+    int num_arcs;                   /* Number of arcs */
+
+    const int *tail;                /* Source node of each arc (size num_arcs) */
+    const int *head;                /* Destination node of each arc (size num_arcs) */
+    const double *cost;             /* Cost per unit flow (size num_arcs) */
+    const double *capacity;         /* Upper bound (size num_arcs, NULL = infinite) */
+    const double *lower;            /* Lower bound (size num_arcs, NULL = zero) */
+    const double *supply;           /* Node supply/demand (size num_nodes) */
+
+    RalphNetflowObjective objective; /* MINIMIZE or MAXIMIZE */
+} RalphNetflowProblem;
+
+/* ============================================================================
+ * Solver Options
+ * ============================================================================ */
+
+/*
+ * Solver options for controlling algorithm behavior.
+ */
+typedef struct {
+    int64_t max_iterations;         /* Maximum pivots (0 = unlimited) */
+    int pricing_rule;               /* 0 = candidate list (default), 1 = first eligible */
+    int verbosity;                  /* 0 = silent, 1 = summary, 2 = iteration log */
+} RalphNetflowOptions;
+
+/* Default options initializer */
+#define RALPH_NETFLOW_OPTIONS_DEFAULT { \
+    .max_iterations = RALPH_NETFLOW_DEFAULT_MAX_ITER, \
+    .pricing_rule = 0, \
+    .verbosity = 0 \
+}
+
+/* ============================================================================
+ * Result Structure
+ * ============================================================================ */
+
+/*
+ * Result structure filled by the solver.
+ *
+ * Caller provides storage for flow array (size num_arcs).
+ * Optionally provide storage for dual variables (potentials).
+ */
+typedef struct {
+    RalphNetflowStatus status;      /* Solver status */
+    double objective;               /* Optimal objective value */
+
+    double *flow;                   /* Arc flows (caller allocates, size num_arcs) */
+    double *potential;              /* Node potentials (optional, size num_nodes) */
+
+    /* Statistics */
+    int64_t iterations;             /* Number of pivots performed */
+    int64_t degenerate_pivots;      /* Number of degenerate pivots (zero flow change) */
+} RalphNetflowResult;
+
+/* ============================================================================
+ * Workspace Management
+ * ============================================================================ */
+
+/*
+ * Create a reusable workspace for network simplex solving.
+ *
+ * The workspace pre-allocates all working arrays for networks up to
+ * max_nodes nodes and max_arcs arcs. This amortizes allocation overhead
+ * when solving multiple network flow instances.
+ *
+ * Parameters:
+ *   max_nodes - Maximum number of nodes this workspace can handle
+ *   max_arcs  - Maximum number of arcs this workspace can handle
+ *
+ * Returns:
+ *   Pointer to workspace, or NULL on allocation failure.
+ */
+RalphNetflowWorkspace* ralph_netflow_workspace_create(int max_nodes, int max_arcs);
+
+/*
+ * Free a workspace and all its memory.
+ */
+void ralph_netflow_workspace_free(RalphNetflowWorkspace *ws);
+
+/*
+ * Get workspace memory requirements in bytes.
+ *
+ * Parameters:
+ *   max_nodes - Maximum number of nodes
+ *   max_arcs  - Maximum number of arcs
+ *
+ * Returns:
+ *   Total bytes required for workspace, or 0 if invalid.
+ */
+size_t ralph_netflow_workspace_size(int max_nodes, int max_arcs);
+
+/*
+ * Get the maximum number of nodes this workspace supports.
+ */
+int ralph_netflow_workspace_max_nodes(const RalphNetflowWorkspace *ws);
+
+/*
+ * Get the maximum number of arcs this workspace supports.
+ */
+int ralph_netflow_workspace_max_arcs(const RalphNetflowWorkspace *ws);
+
+/* ============================================================================
+ * Main Solver API
+ * ============================================================================ */
+
+/*
+ * Solve a minimum cost network flow problem using network simplex.
+ *
+ * Parameters:
+ *   problem   - Problem definition (nodes, arcs, costs, supplies)
+ *   options   - Solver options (NULL for defaults)
+ *   result    - Output structure (caller allocates flow array)
+ *   workspace - Reusable workspace (NULL to auto-allocate internally)
+ *
+ * Returns:
+ *   RALPH_NETFLOW_OPTIMAL on success, error code otherwise.
+ *
+ * The algorithm:
+ * 1. Phase 1: Find initial basic feasible solution using artificial arcs
+ * 2. Phase 2: Network simplex iterations until optimal or limit reached
+ *
+ * Optimality conditions (for minimization):
+ *   - Flow conservation: inflow - outflow = supply at each node
+ *   - Capacity: lower <= flow <= upper for each arc
+ *   - Reduced cost: rc[a] = cost[a] - potential[tail[a]] + potential[head[a]]
+ *     - Basic arcs: can have any reduced cost
+ *     - At lower bound: rc >= 0
+ *     - At upper bound: rc <= 0
+ *
+ * Example:
+ *   // Simple 3-node network: source -> intermediate -> sink
+ *   int tail[] = {0, 1};
+ *   int head[] = {1, 2};
+ *   double cost[] = {1.0, 2.0};
+ *   double cap[] = {10.0, 10.0};
+ *   double supply[] = {5.0, 0.0, -5.0};  // Source supplies 5, sink demands 5
+ *
+ *   RalphNetflowProblem prob = {
+ *       .num_nodes = 3, .num_arcs = 2,
+ *       .tail = tail, .head = head,
+ *       .cost = cost, .capacity = cap, .supply = supply,
+ *       .objective = RALPH_NETFLOW_MINIMIZE
+ *   };
+ *
+ *   double flow[2];
+ *   RalphNetflowResult res = {.flow = flow};
+ *   ralph_netflow_solve(&prob, NULL, &res, NULL);
+ *   // flow[0] = 5.0, flow[1] = 5.0, objective = 15.0
+ */
+RalphNetflowStatus ralph_netflow_solve(
+    const RalphNetflowProblem *problem,
+    const RalphNetflowOptions *options,
+    RalphNetflowResult *result,
+    RalphNetflowWorkspace *workspace
+);
+
+/* ============================================================================
+ * Convenience Wrapper
+ * ============================================================================ */
+
+/*
+ * Simplified interface for common MCNF problems.
+ *
+ * This is a convenience wrapper around ralph_netflow_solve() for users who
+ * don't need advanced options or workspace management.
+ *
+ * Parameters:
+ *   num_nodes - Number of nodes in the network
+ *   num_arcs  - Number of arcs in the network
+ *   tail      - Source node of each arc (size num_arcs)
+ *   head      - Destination node of each arc (size num_arcs)
+ *   cost      - Cost per unit flow (size num_arcs)
+ *   capacity  - Upper bound on flow (size num_arcs, NULL = infinite)
+ *   supply    - Node supply/demand (size num_nodes, negative = demand)
+ *   flow      - Output: optimal flow on each arc (size num_arcs)
+ *   objective - Output: optimal objective value (can be NULL)
+ *
+ * Returns:
+ *   RALPH_NETFLOW_OPTIMAL on success, error code otherwise.
+ *
+ * Example - Transportation problem (2 sources, 3 sinks):
+ *   // Sources: 0 (supply 10), 1 (supply 15)
+ *   // Sinks: 2 (demand 8), 3 (demand 7), 4 (demand 10)
+ *   int tail[] = {0, 0, 0, 1, 1, 1};
+ *   int head[] = {2, 3, 4, 2, 3, 4};
+ *   double cost[] = {2, 4, 5, 3, 1, 8};
+ *   double supply[] = {10, 15, -8, -7, -10};
+ *
+ *   double flow[6];
+ *   double obj;
+ *   ralph_mcnf_solve(5, 6, tail, head, cost, NULL, supply, flow, &obj);
+ */
+RalphNetflowStatus ralph_mcnf_solve(
+    int num_nodes,
+    int num_arcs,
+    const int *tail,
+    const int *head,
+    const double *cost,
+    const double *capacity,
+    const double *supply,
+    double *flow,
+    double *objective
+);
+
+/* ============================================================================
+ * Utility Functions
+ * ============================================================================ */
+
+/*
+ * Get human-readable string for status code.
+ */
+const char* ralph_netflow_status_string(RalphNetflowStatus status);
+
+/*
+ * Verify a flow solution for feasibility and compute objective.
+ *
+ * Checks:
+ *   - Flow conservation at each node
+ *   - Capacity bounds on each arc
+ *
+ * Parameters:
+ *   problem      - Problem definition
+ *   flow         - Flow values to verify (size num_arcs)
+ *   objective    - Output: computed objective (can be NULL)
+ *   max_violation - Output: maximum constraint violation (can be NULL)
+ *
+ * Returns:
+ *   1 if feasible (violations within tolerance), 0 otherwise.
+ */
+int ralph_netflow_verify(
+    const RalphNetflowProblem *problem,
+    const double *flow,
+    double *objective,
+    double *max_violation
+);
+
+/*
+ * Check reduced cost optimality conditions.
+ *
+ * For a solution to be optimal:
+ *   - If flow < capacity: reduced cost >= 0 (for minimization)
+ *   - If flow > lower: reduced cost <= 0 (for minimization)
+ *   - Basic arcs (lower < flow < capacity): reduced cost = 0
+ *
+ * Parameters:
+ *   problem       - Problem definition
+ *   flow          - Flow values (size num_arcs)
+ *   potential     - Node potentials (size num_nodes)
+ *   max_violation - Output: maximum reduced cost violation (can be NULL)
+ *
+ * Returns:
+ *   1 if optimality conditions satisfied, 0 otherwise.
+ */
+int ralph_netflow_check_optimality(
+    const RalphNetflowProblem *problem,
+    const double *flow,
+    const double *potential,
+    double *max_violation
+);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* NETFLOW_H */

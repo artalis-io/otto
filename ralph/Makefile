@@ -41,7 +41,8 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/mps_reader.c \
           $(SRC_DIR)/ralph.c \
           $(SRC_DIR)/lap.c \
-          $(SRC_DIR)/detect.c
+          $(SRC_DIR)/detect.c \
+          $(SRC_DIR)/netflow.c
 
 OBJECTS = $(SOURCES:.c=.o)
 
@@ -59,6 +60,10 @@ EDGE_TEST_EXEC = test_edge_cases
 # LAP tests
 LAP_TEST_SOURCES = $(TEST_DIR)/test_lap.c
 LAP_TEST_EXEC = test_lap
+
+# Network flow tests
+NETFLOW_TEST_SOURCES = $(TEST_DIR)/test_netflow.c
+NETFLOW_TEST_EXEC = test_netflow
 
 # Benchmarks
 BENCH_DIR = benchmarks
@@ -115,6 +120,14 @@ $(LAP_TEST_EXEC): $(LAP_TEST_SOURCES) $(LIB_NAME)
 # Run LAP tests
 test-lap: $(LAP_TEST_EXEC)
 	./$(LAP_TEST_EXEC)
+
+# Build network flow tests
+$(NETFLOW_TEST_EXEC): $(NETFLOW_TEST_SOURCES) $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run network flow tests
+test-netflow: $(NETFLOW_TEST_EXEC)
+	./$(NETFLOW_TEST_EXEC)
 
 # Build size scaling benchmark
 $(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME)
@@ -186,7 +199,7 @@ bench-lap-perf-quick: $(BENCH_LAP_PERF_EXEC)
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -200,7 +213,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap bench bench-lap bench-lap-perf bench-lap-perf-quick compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow bench bench-lap bench-lap-perf bench-lap-perf-quick compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
 
 # Help
 help:
@@ -212,6 +225,7 @@ help:
 	@echo "  test       - Build and run tests"
 	@echo "  test-edge  - Run edge case tests"
 	@echo "  test-lap   - Run LAP (assignment problem) tests"
+	@echo "  test-netflow - Run network flow tests"
 	@echo "  bench      - Run size scaling benchmark"
 	@echo "  bench-lap  - Run LAP benchmark (JVC vs LP)"
 	@echo "  debug      - Build with debug symbols"
