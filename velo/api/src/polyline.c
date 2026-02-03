@@ -5,6 +5,7 @@
 #include "polyline.h"
 #include <math.h>
 #include <string.h>
+#include <stdint.h>
 
 /*
  * Encode a single value using the Google Polyline algorithm.
@@ -125,5 +126,8 @@ size_t polyline_max_encoded_size(size_t count) {
      * Two values per point = 12 chars max per point.
      * Add 1 for null terminator.
      */
+    if (count > (SIZE_MAX - 1) / 12) {
+        return SIZE_MAX;  /* Overflow protection - caller should check */
+    }
     return count * 12 + 1;
 }

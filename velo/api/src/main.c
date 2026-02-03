@@ -453,8 +453,12 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
         size_t max_len = polyline_max_encoded_size(route.num_coords);
         polyline = malloc(max_len);
         if (polyline) {
-            /* Convert VLCoord array to double array */
-            double *coords = malloc(route.num_coords * 2 * sizeof(double));
+            /* Convert VLCoord array to double array (check for overflow first) */
+            double *coords = NULL;
+            if ((size_t)route.num_coords <= SIZE_MAX / (2 * sizeof(double))) {
+                size_t coord_size = (size_t)route.num_coords * 2 * sizeof(double);
+                coords = malloc(coord_size);
+            }
             if (coords) {
                 for (int i = 0; i < route.num_coords; i++) {
                     coords[i * 2] = route.coords[i].lat;
@@ -489,7 +493,8 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
 
     const char *mode_str = weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest";
 
-    int n = snprintf(response, resp_capacity,
+    size_t n = 0;
+    int written = snprintf(response, resp_capacity,
         "{\n"
         "  \"status\": \"ok\",\n"
         "  \"route\": {\n"
@@ -505,26 +510,31 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
         mode_str,
         from_lat, from_lon,
         to_lat, to_lon);
+    if (written > 0) n = (size_t)written;
 
-    if (polyline) {
+    if (polyline && n < resp_capacity) {
         char *escaped = json_escape_polyline(polyline);
         if (escaped) {
-            n += snprintf(response + n, resp_capacity - n,
+            written = snprintf(response + n, resp_capacity - n,
                 ",\n    \"geometry\": \"%s\"",
                 escaped);
+            if (written > 0) n += (size_t)written;
             free(escaped);
         }
     }
 
-    n += snprintf(response + n, resp_capacity - n,
-        "\n  },\n"
-        "  \"meta\": {\n"
-        "    \"nodes_explored\": %u,\n"
-        "    \"search_time_ms\": %.2f\n"
-        "  }\n"
-        "}\n",
-        route.nodes_explored,
-        route.search_time_ms);
+    if (n < resp_capacity) {
+        written = snprintf(response + n, resp_capacity - n,
+            "\n  },\n"
+            "  \"meta\": {\n"
+            "    \"nodes_explored\": %u,\n"
+            "    \"search_time_ms\": %.2f\n"
+            "  }\n"
+            "}\n",
+            route.nodes_explored,
+            route.search_time_ms);
+        if (written > 0) n += (size_t)written;
+    }
 
     send_json(c, 200, response);
 
