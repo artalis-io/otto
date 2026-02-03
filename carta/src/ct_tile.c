@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <pthread.h>
 
 /* ============================================================================
  * Web Mercator Projection
@@ -88,21 +89,23 @@ void ct_latlon_to_tile_pixel(double lat, double lon, CTTileCoord tile,
 #define MERCATOR_LAT_RANGE (MERCATOR_LAT_MAX - MERCATOR_LAT_MIN)
 
 static double mercator_lut[MERCATOR_LUT_SIZE];
-static int mercator_lut_initialized = 0;
+static pthread_once_t mercator_lut_once = PTHREAD_ONCE_INIT;
 
 /*
- * Initialize the Mercator lookup table (thread-safe via double-check).
+ * Initialize the Mercator lookup table (thread-safe via pthread_once).
  */
-static void mercator_lut_init(void)
+static void mercator_lut_init_impl(void)
 {
-    if (mercator_lut_initialized) return;
-
     for (int i = 0; i < MERCATOR_LUT_SIZE; i++) {
         double lat = MERCATOR_LAT_MIN + (i + 0.5) * MERCATOR_LAT_RANGE / MERCATOR_LUT_SIZE;
         double lat_rad = lat * CT_PI / 180.0;
         mercator_lut[i] = log(tan(lat_rad) + 1.0 / cos(lat_rad));
     }
-    mercator_lut_initialized = 1;
+}
+
+static void mercator_lut_init(void)
+{
+    pthread_once(&mercator_lut_once, mercator_lut_init_impl);
 }
 
 /*
