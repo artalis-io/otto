@@ -64,6 +64,7 @@ Options:
   -h, --host HOST      Host (default: 0.0.0.0)
   -s, --static DIR     Static files directory
   -c, --config FILE    Config file
+  -t, --threads N      Worker threads (default: auto-detect CPU count)
   --min-zoom N         Min zoom (default: 0)
   --max-zoom N         Max zoom (default: 18)
   --tile-size N        PNG size (default: 512)
@@ -80,6 +81,7 @@ TILE_MIN_ZOOM=0
 TILE_MAX_ZOOM=18
 TILE_SIZE=512
 TILE_NAME="My Tiles"
+CARTA_THREADS=8              # Worker threads (0 = auto-detect CPU count)
 ```
 
 ### Config File
@@ -182,6 +184,8 @@ make docker   # Build Docker image
 - First tile requests may be slow (spatial index warm-up)
 - PNG tiles are CPU-bound (~50-100ms per tile)
 - MVT tiles are faster (~10-30ms per tile)
+- Multi-threading enabled by default (auto-detects CPU count)
+- Worker threads use thread-local render contexts for parallel tile generation
 - Use nginx/CDN caching for production
 
 ## Common Issues

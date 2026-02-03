@@ -27,6 +27,8 @@
 #include <strings.h>  /* For strcasecmp */
 #include <signal.h>
 #include <ctype.h>
+#include <unistd.h>   /* For sleep, sysconf */
+#include <pthread.h>
 #include "mongoose.h"
 #include "carta.h"
 #include "ct_cache.h"
@@ -54,6 +56,7 @@ typedef struct {
     int tile_size;
     char name[128];
     LODPreset lod_preset;  /* LOD filtering preset */
+    int num_threads;       /* Worker threads (0 = auto-detect) */
 } TileServerConfig;
 
 /* Default configuration */
@@ -66,15 +69,58 @@ static TileServerConfig s_config = {
     .max_zoom = 18,
     .tile_size = 512,
     .name = "Carta Tile Server",
-    .lod_preset = LOD_NONE  /* LOD disabled by default until rules are improved */
+    .lod_preset = LOD_NONE,  /* LOD disabled by default until rules are improved */
+    .num_threads = 0         /* 0 = auto-detect CPU count */
 };
 
 /* Global state */
-static int s_signo = 0;
+static volatile sig_atomic_t s_signo = 0;
 static CTPBFContext *s_pbf_ctx = NULL;
 static CTLODConfig s_lod_config = {0};
 static CTTileCache *s_png_cache = NULL;
 static CTTileCache *s_mvt_cache = NULL;
+
+/* Cache mutex for thread-safe access */
+static pthread_mutex_t s_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Worker thread state */
+typedef struct {
+    int id;
+    pthread_t thread;
+    struct mg_mgr mgr;
+} WorkerThread;
+
+static WorkerThread *s_workers = NULL;
+static int s_num_workers = 0;
+static char s_listen_url[128] = "";
+
+/* Forward declaration */
+static void ev_handler(struct mg_connection *c, int ev, void *ev_data);
+
+/* Worker thread function - runs its own mongoose event loop */
+static void *worker_thread_fn(void *arg) {
+    WorkerThread *w = (WorkerThread *)arg;
+
+    /* Initialize mongoose manager for this thread */
+    mg_mgr_init(&w->mgr);
+
+    /* Listen with SO_REUSEPORT for load balancing across threads */
+    struct mg_connection *c = mg_http_listen(&w->mgr, s_listen_url, ev_handler, NULL);
+    if (c == NULL) {
+        fprintf(stderr, "Worker %d: Cannot listen on %s\n", w->id, s_listen_url);
+        return NULL;
+    }
+
+    /* Event loop - render contexts are created lazily via thread-local storage */
+    while (s_signo == 0) {
+        mg_mgr_poll(&w->mgr, 100);
+    }
+
+    mg_mgr_free(&w->mgr);
+
+    /* Thread-local render context is freed by pthread_key destructor */
+    return NULL;
+}
 
 static void signal_handler(int signo) {
     s_signo = signo;
@@ -124,10 +170,13 @@ static int load_config_file(const char *filename, TileServerConfig *cfg) {
 
         if (strcmp(key, "pbf_path") == 0 || strcmp(key, "pbf") == 0) {
             strncpy(cfg->pbf_path, value, sizeof(cfg->pbf_path) - 1);
+            cfg->pbf_path[sizeof(cfg->pbf_path) - 1] = '\0';
         } else if (strcmp(key, "static_dir") == 0 || strcmp(key, "static") == 0) {
             strncpy(cfg->static_dir, value, sizeof(cfg->static_dir) - 1);
+            cfg->static_dir[sizeof(cfg->static_dir) - 1] = '\0';
         } else if (strcmp(key, "listen") == 0 || strcmp(key, "host") == 0) {
             strncpy(cfg->listen_addr, value, sizeof(cfg->listen_addr) - 1);
+            cfg->listen_addr[sizeof(cfg->listen_addr) - 1] = '\0';
         } else if (strcmp(key, "port") == 0) {
             cfg->port = atoi(value);
         } else if (strcmp(key, "min_zoom") == 0) {
@@ -138,6 +187,7 @@ static int load_config_file(const char *filename, TileServerConfig *cfg) {
             cfg->tile_size = atoi(value);
         } else if (strcmp(key, "name") == 0) {
             strncpy(cfg->name, value, sizeof(cfg->name) - 1);
+            cfg->name[sizeof(cfg->name) - 1] = '\0';
         } else if (strcmp(key, "lod") == 0) {
             cfg->lod_preset = parse_lod_preset(value);
         }
@@ -172,15 +222,18 @@ static void load_config_env(TileServerConfig *cfg) {
 
     if ((val = getenv("TILE_PBF_PATH")) || (val = getenv("PBF_PATH"))) {
         strncpy(cfg->pbf_path, val, sizeof(cfg->pbf_path) - 1);
+        cfg->pbf_path[sizeof(cfg->pbf_path) - 1] = '\0';
     }
     if ((val = getenv("TILE_STATIC_DIR")) || (val = getenv("STATIC_DIR"))) {
         strncpy(cfg->static_dir, val, sizeof(cfg->static_dir) - 1);
+        cfg->static_dir[sizeof(cfg->static_dir) - 1] = '\0';
     }
     if ((val = getenv("TILE_PORT")) || (val = getenv("PORT"))) {
         cfg->port = atoi(val);
     }
     if ((val = getenv("TILE_HOST")) || (val = getenv("HOST"))) {
         strncpy(cfg->listen_addr, val, sizeof(cfg->listen_addr) - 1);
+        cfg->listen_addr[sizeof(cfg->listen_addr) - 1] = '\0';
     }
     if ((val = getenv("TILE_MIN_ZOOM"))) {
         cfg->min_zoom = atoi(val);
@@ -193,9 +246,13 @@ static void load_config_env(TileServerConfig *cfg) {
     }
     if ((val = getenv("TILE_NAME"))) {
         strncpy(cfg->name, val, sizeof(cfg->name) - 1);
+        cfg->name[sizeof(cfg->name) - 1] = '\0';
     }
     if ((val = getenv("TILE_LOD"))) {
         cfg->lod_preset = parse_lod_preset(val);
+    }
+    if ((val = getenv("CARTA_THREADS"))) {
+        cfg->num_threads = atoi(val);
     }
 }
 
@@ -336,29 +393,39 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
-    if (z < s_config.min_zoom || z > s_config.max_zoom) {
+    if (z < s_config.min_zoom || z > s_config.max_zoom || z > 30) {
         send_error(c, 400, "Zoom out of range");
         return;
     }
 
-    int max_coord = 1 << z;
+    int max_coord = 1 << z;  /* Safe: z <= 30 */
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
         send_error(c, 400, "Tile coordinates out of range");
         return;
     }
 
-    /* Check cache first */
+    /* Check cache first (thread-safe) */
     if (s_mvt_cache) {
         const uint8_t *cached_data;
         size_t cached_size;
-        if (ct_cache_get(s_mvt_cache, z, x, y, &cached_data, &cached_size)) {
-            send_tile(c, "application/vnd.mapbox-vector-tile", cached_data, cached_size);
-            return;
+        pthread_mutex_lock(&s_cache_mutex);
+        int hit = ct_cache_get(s_mvt_cache, z, x, y, &cached_data, &cached_size);
+        if (hit) {
+            /* Copy data before unlocking - cache data may be evicted */
+            uint8_t *copy = malloc(cached_size);
+            if (copy) {
+                memcpy(copy, cached_data, cached_size);
+                pthread_mutex_unlock(&s_cache_mutex);
+                send_tile(c, "application/vnd.mapbox-vector-tile", copy, cached_size);
+                free(copy);
+                return;
+            }
         }
+        pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    /* Allocate buffer for MVT */
-    size_t capacity = 512 * 1024;  /* 512KB should be enough for most tiles */
+    /* Generate MVT tile directly */
+    size_t capacity = 512 * 1024;
     uint8_t *buffer = malloc(capacity);
     if (!buffer) {
         send_error(c, 500, "Memory allocation failed");
@@ -372,16 +439,17 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
     size_t size = ct_generate_mvt(s_pbf_ctx, coord, &opts, buffer, capacity);
 
     if (size == 0) {
-        /* Empty tile - send minimal valid MVT */
         free(buffer);
-        static const uint8_t empty_mvt[] = {0x1a, 0x00};  /* Empty layer */
+        static const uint8_t empty_mvt[] = {0x1a, 0x00};
         send_tile(c, "application/vnd.mapbox-vector-tile", empty_mvt, 0);
         return;
     }
 
-    /* Cache the result */
+    /* Cache the result (thread-safe) */
     if (s_mvt_cache) {
+        pthread_mutex_lock(&s_cache_mutex);
         ct_cache_put(s_mvt_cache, z, x, y, buffer, size);
+        pthread_mutex_unlock(&s_cache_mutex);
     }
 
     send_tile(c, "application/vnd.mapbox-vector-tile", buffer, size);
@@ -405,12 +473,12 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
         return;
     }
 
-    if (z < s_config.min_zoom || z > s_config.max_zoom) {
+    if (z < s_config.min_zoom || z > s_config.max_zoom || z > 30) {
         send_error(c, 400, "Zoom out of range");
         return;
     }
 
-    int max_coord = 1 << z;
+    int max_coord = 1 << z;  /* Safe: z <= 30 */
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
         send_error(c, 400, "Tile coordinates out of range");
         return;
@@ -496,6 +564,32 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
     ct_render_free(render_ctx);
 }
 
+/* Thread-local key for render context */
+static pthread_key_t s_render_ctx_key;
+static pthread_once_t s_render_ctx_key_once = PTHREAD_ONCE_INIT;
+
+static void render_ctx_destructor(void *ptr) {
+    if (ptr) ct_render_free((CTRenderContext *)ptr);
+}
+
+static void create_render_ctx_key(void) {
+    pthread_key_create(&s_render_ctx_key, render_ctx_destructor);
+}
+
+/* Get or create thread-local render context */
+static CTRenderContext *get_thread_render_ctx(int tile_size) {
+    pthread_once(&s_render_ctx_key_once, create_render_ctx_key);
+
+    CTRenderContext *ctx = pthread_getspecific(s_render_ctx_key);
+    if (!ctx) {
+        ctx = ct_render_create(tile_size, tile_size);
+        if (ctx) {
+            pthread_setspecific(s_render_ctx_key, ctx);
+        }
+    }
+    return ctx;
+}
+
 /* GET /tiles/{z}/{x}/{y}.png */
 static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
     if (!s_pbf_ctx) {
@@ -503,28 +597,55 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
-    if (z < s_config.min_zoom || z > s_config.max_zoom) {
+    if (z < s_config.min_zoom || z > s_config.max_zoom || z > 30) {
         send_error(c, 400, "Zoom out of range");
         return;
     }
 
-    int max_coord = 1 << z;
+    int max_coord = 1 << z;  /* Safe: z <= 30 */
     if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) {
         send_error(c, 400, "Tile coordinates out of range");
         return;
     }
 
-    /* Check cache first */
+    /* Check cache first (thread-safe) */
     if (s_png_cache) {
         const uint8_t *cached_data;
         size_t cached_size;
-        if (ct_cache_get(s_png_cache, z, x, y, &cached_data, &cached_size)) {
-            send_tile(c, "image/png", cached_data, cached_size);
-            return;
+        pthread_mutex_lock(&s_cache_mutex);
+        int hit = ct_cache_get(s_png_cache, z, x, y, &cached_data, &cached_size);
+        if (hit) {
+            /* Copy data before unlocking - cache data may be evicted */
+            uint8_t *copy = malloc(cached_size);
+            if (copy) {
+                memcpy(copy, cached_data, cached_size);
+                pthread_mutex_unlock(&s_cache_mutex);
+                send_tile(c, "image/png", copy, cached_size);
+                free(copy);
+                return;
+            }
         }
+        pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    /* Allocate buffer for PNG */
+    CTTileCoord coord = {z, x, y};
+
+    /* Use thread-local render context for efficiency */
+    CTRenderContext *render = get_thread_render_ctx(s_config.tile_size);
+    if (!render) {
+        send_error(c, 500, "Render context creation failed");
+        return;
+    }
+
+    /* Render tile */
+    ct_render_clear(render);
+    if (s_config.lod_preset != LOD_NONE) {
+        ct_render_from_pbf_lod(render, s_pbf_ctx, coord, &s_lod_config);
+    } else {
+        ct_render_from_pbf(render, s_pbf_ctx, coord);
+    }
+
+    /* Encode to PNG */
     size_t capacity = ct_png_max_size(s_config.tile_size, s_config.tile_size);
     uint8_t *buffer = malloc(capacity);
     if (!buffer) {
@@ -532,18 +653,13 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
-    CTTileCoord coord = {z, x, y};
     CTPNGOptions opts;
     ct_png_default_options(&opts);
     opts.tile_size = s_config.tile_size;
 
-    /* Use LOD-enabled generation if LOD is configured */
-    size_t size;
-    if (s_config.lod_preset != LOD_NONE) {
-        size = ct_generate_png_lod(s_pbf_ctx, coord, NULL, &s_lod_config, &opts, buffer, capacity);
-    } else {
-        size = ct_generate_png(s_pbf_ctx, coord, NULL, &opts, buffer, capacity);
-    }
+    size_t size = ct_encode_png(ct_render_pixels(render),
+                                s_config.tile_size, s_config.tile_size,
+                                &opts, buffer, capacity);
 
     if (size == 0) {
         send_error(c, 500, "Tile generation failed");
@@ -551,9 +667,11 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
-    /* Cache the result */
+    /* Cache the result (thread-safe) */
     if (s_png_cache) {
+        pthread_mutex_lock(&s_cache_mutex);
         ct_cache_put(s_png_cache, z, x, y, buffer, size);
+        pthread_mutex_unlock(&s_cache_mutex);
     }
 
     send_tile(c, "image/png", buffer, size);
@@ -663,6 +781,7 @@ static void print_usage(const char *prog) {
     printf("  -h, --host HOST      Host to bind to (default: 0.0.0.0)\n");
     printf("  -s, --static DIR     Static files directory (default: ./static)\n");
     printf("  -c, --config FILE    Configuration file (YAML format)\n");
+    printf("  -t, --threads N      Worker threads (default: auto-detect CPU count)\n");
     printf("  --min-zoom N         Minimum zoom level (default: 0)\n");
     printf("  --max-zoom N         Maximum zoom level (default: 18)\n");
     printf("  --tile-size N        PNG tile size (default: 512)\n");
@@ -680,9 +799,11 @@ static void print_usage(const char *prog) {
     printf("  TILE_MAX_ZOOM               Maximum zoom\n");
     printf("  TILE_SIZE                   PNG tile size\n");
     printf("  TILE_LOD                    LOD preset (default, detailed, minimal, none)\n");
+    printf("  CARTA_THREADS               Worker thread count (0 = auto)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s -p 8081 hungary-latest.osm.pbf\n", prog);
+    printf("  %s --threads 8 hungary-latest.osm.pbf\n", prog);
     printf("  %s --no-lod hungary-latest.osm.pbf\n", prog);
 }
 
@@ -695,9 +816,15 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) {
             if (++i < argc) s_config.port = atoi(argv[i]);
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--host") == 0) {
-            if (++i < argc) strncpy(s_config.listen_addr, argv[i], sizeof(s_config.listen_addr) - 1);
+            if (++i < argc) {
+                strncpy(s_config.listen_addr, argv[i], sizeof(s_config.listen_addr) - 1);
+                s_config.listen_addr[sizeof(s_config.listen_addr) - 1] = '\0';
+            }
         } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--static") == 0) {
-            if (++i < argc) strncpy(s_config.static_dir, argv[i], sizeof(s_config.static_dir) - 1);
+            if (++i < argc) {
+                strncpy(s_config.static_dir, argv[i], sizeof(s_config.static_dir) - 1);
+                s_config.static_dir[sizeof(s_config.static_dir) - 1] = '\0';
+            }
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--config") == 0) {
             if (++i < argc) {
                 if (load_config_file(argv[i], &s_config) != 0) {
@@ -710,18 +837,24 @@ int main(int argc, char *argv[]) {
             if (++i < argc) s_config.max_zoom = atoi(argv[i]);
         } else if (strcmp(argv[i], "--tile-size") == 0) {
             if (++i < argc) s_config.tile_size = atoi(argv[i]);
+        } else if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--threads") == 0) {
+            if (++i < argc) s_config.num_threads = atoi(argv[i]);
         } else if (strcmp(argv[i], "--lod") == 0) {
             if (++i < argc) s_config.lod_preset = parse_lod_preset(argv[i]);
         } else if (strcmp(argv[i], "--no-lod") == 0) {
             s_config.lod_preset = LOD_NONE;
         } else if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--save-index") == 0) {
-            if (++i < argc) strncpy(s_config.save_index_path, argv[i], sizeof(s_config.save_index_path) - 1);
+            if (++i < argc) {
+                strncpy(s_config.save_index_path, argv[i], sizeof(s_config.save_index_path) - 1);
+                s_config.save_index_path[sizeof(s_config.save_index_path) - 1] = '\0';
+            }
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
         } else if (argv[i][0] != '-') {
             /* Positional argument - PBF file */
             strncpy(s_config.pbf_path, argv[i], sizeof(s_config.pbf_path) - 1);
+            s_config.pbf_path[sizeof(s_config.pbf_path) - 1] = '\0';
         }
     }
 
@@ -793,25 +926,28 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    /* Initialize mongoose */
-    struct mg_mgr mgr;
-    mg_mgr_init(&mgr);
-
-    /* Build listen address */
-    char listen_url[128];
-    snprintf(listen_url, sizeof(listen_url), "http://%s:%d",
+    /* Build listen address (stored globally for worker threads) */
+    snprintf(s_listen_url, sizeof(s_listen_url), "http://%s:%d",
              s_config.listen_addr, s_config.port);
-
-    /* Start listening */
-    struct mg_connection *c = mg_http_listen(&mgr, listen_url, ev_handler, NULL);
-    if (c == NULL) {
-        fprintf(stderr, "Error: Cannot listen on %s\n", listen_url);
-        ct_free_pbf_context(s_pbf_ctx);
-        return 1;
-    }
 
     printf("\nCarta Tile Server v%s\n", ct_version());
     printf("Listening on http://%s:%d\n", s_config.listen_addr, s_config.port);
+
+    /* Determine number of worker threads */
+    int num_threads = s_config.num_threads;
+    if (num_threads <= 0) {
+#ifdef _SC_NPROCESSORS_ONLN
+        long n = sysconf(_SC_NPROCESSORS_ONLN);
+        num_threads = (n > 0) ? (int)n : 4;
+#else
+        num_threads = 4;
+#endif
+    }
+    if (num_threads > 64) num_threads = 64;
+
+    printf("Workers: %d HTTP handler thread%s\n", num_threads,
+           num_threads == 1 ? "" : "s");
+
     printf("\nEndpoints:\n");
     printf("  GET  /                       - Static files / tile viewer\n");
     printf("  GET  /tiles.json             - TileJSON metadata\n");
@@ -820,20 +956,44 @@ int main(int argc, char *argv[]) {
     printf("  GET  /tiles/{z}/{x}/{y}.txt  - ASCII art tile\n");
     printf("  GET  /api/v1/health          - Health check\n");
     printf("  GET  /api/v1/stats           - PBF statistics\n");
-    printf("\nASCII tile options (query params):\n");
-    printf("  width=80     - Output width in chars (20-400)\n");
-    printf("  height=0     - Output height in chars (0=auto)\n");
-    printf("  charset=     - simple, extended (default), blocks, braille\n");
-    printf("  invert=0     - 1 for light background\n");
-    printf("  color=0      - 1 for ANSI color codes\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
-    /* Event loop */
+    /* Allocate worker threads */
+    s_num_workers = num_threads;
+    s_workers = calloc(num_threads, sizeof(WorkerThread));
+    if (!s_workers) {
+        fprintf(stderr, "Error: Failed to allocate worker threads\n");
+        ct_cache_free(s_png_cache);
+        ct_cache_free(s_mvt_cache);
+        ct_lod_free(&s_lod_config);
+        ct_free_pbf_context(s_pbf_ctx);
+        return 1;
+    }
+
+    /* Start worker threads */
+    int threads_created = 0;
+    for (int i = 0; i < num_threads; i++) {
+        s_workers[i].id = i;
+        s_workers[i].thread = 0;  /* Mark as not created */
+        if (pthread_create(&s_workers[i].thread, NULL, worker_thread_fn, &s_workers[i]) != 0) {
+            fprintf(stderr, "Error: Failed to create worker thread %d\n", i);
+            s_signo = 1;  /* Signal other threads to stop */
+            break;
+        }
+        threads_created++;
+    }
+
+    /* Wait for shutdown signal */
     while (s_signo == 0) {
-        mg_mgr_poll(&mgr, 1000);
+        sleep(1);
     }
 
     printf("\nShutting down...\n");
+
+    /* Wait for all successfully created worker threads */
+    for (int i = 0; i < threads_created; i++) {
+        pthread_join(s_workers[i].thread, NULL);
+    }
 
     /* Print cache stats */
     if (s_png_cache || s_mvt_cache) {
@@ -856,11 +1016,12 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    mg_mgr_free(&mgr);
+    free(s_workers);
     ct_cache_free(s_png_cache);
     ct_cache_free(s_mvt_cache);
     ct_lod_free(&s_lod_config);
     ct_free_pbf_context(s_pbf_ctx);
+    pthread_mutex_destroy(&s_cache_mutex);
 
     return 0;
 }
