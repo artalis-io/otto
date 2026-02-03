@@ -41,8 +41,9 @@ CLAY(CLAY_ID("Panel"), {...}) {
 | `cs_input` | `cs_input.h` | Text input with cursor/selection/clipboard |
 | `cs_checkbox` | `cs_checkbox.h` | Boolean toggle with checkmark |
 | `cs_toggle` | `cs_toggle.h` | On/off switch with sliding knob |
-| `cs_slider` | `cs_slider.h` | Value slider with drag support |
-| `cs_dropdown` | `cs_dropdown.h` | Selection dropdown/select box |
+| `cs_slider` | `cs_slider.h` | Value slider with drag/keyboard support |
+| `cs_dropdown` | `cs_dropdown.h` | Selection dropdown with keyboard navigation |
+| `cs_scroll` | `cs_scroll.h` | Scrollable content container |
 | `cs_map` | `cs_map.h` | Slippy map pan/zoom interaction |
 
 ## API
@@ -149,6 +150,33 @@ CsMapResult cs_map(
 );
 ```
 
+### Scroll (`cs_scroll.h`)
+
+```c
+// Scroll container macro - content goes inside the block
+CS_SCROLL(CS_ID("list"), 300.0f, NULL) {
+    // Scrollable content here
+    for (int i = 0; i < 100; i++) {
+        render_item(i);
+    }
+}
+
+// Query scroll state after the block
+CsScrollInfo info = cs_scroll_info(CS_ID("list"));
+if (info.at_bottom) {
+    load_more_items();
+}
+
+// Wheel event routing (call from wheel handler)
+void cs_set_scroll_delta(float delta_y);
+
+// Check if scroll container is hovered (for event routing)
+bool cs_scroll_container_hovered(void);
+
+// Update scroll containers (call during frame, enables momentum scrolling)
+void cs_update_scroll_containers(float dt);
+```
+
 ## Usage
 
 ```c
@@ -203,7 +231,7 @@ Add to your Makefile's `EXPORTED_FUNCTIONS`.
 
 ```bash
 make          # Build static library
-make test     # Run 79 tests
+make test     # Run 83 tests
 make clean    # Clean build
 ```
 
@@ -221,6 +249,7 @@ include/
 ├── cs_toggle.h           # Toggle switch component
 ├── cs_slider.h           # Slider component
 ├── cs_dropdown.h         # Dropdown/select component
+├── cs_scroll.h           # Scroll container component
 ├── cs_map.h              # Map interaction component
 └── cs_immediate.h        # Convenience header (includes all)
 
@@ -233,6 +262,7 @@ src/
 ├── cs_toggle.c           # Toggle switch implementation
 ├── cs_slider.c           # Slider implementation
 ├── cs_dropdown.c         # Dropdown/select implementation
+├── cs_scroll.c           # Scroll container implementation
 ├── cs_map.c              # Map pan/zoom, overlays, hit testing
 ├── cs_map_projection.c   # Web Mercator projection utilities
 ├── cs_map_simplify.c     # Douglas-Peucker polyline simplification
