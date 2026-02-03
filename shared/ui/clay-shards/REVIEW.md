@@ -104,7 +104,7 @@ C (clay-shards) → Clay commands → JS (clay-shards-webgl) → WebGL
 | Requirement | Status | Evidence |
 |-------------|--------|----------|
 | Same inputs → same output | ✅ | No random state, fixed hash tables |
-| Testable | ✅ | 52 unit tests pass deterministically |
+| Testable | ✅ | 55 unit tests pass deterministically |
 
 ---
 
@@ -294,4 +294,4 @@ Minor deviations from pure immediate-mode or pure render-command models are prag
 3. **Debuggability** — Explicit IDs, visible state, deterministic behavior
 4. **Flexibility** — Render backend is swappable (WebGL today, SDL/raylib tomorrow)
 
-The codebase is well-structured, tested (52 tests), thread-safe, and ready for production use.
+The codebase is well-structured, tested (55 tests), thread-safe, and ready for production use.

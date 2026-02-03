@@ -15,9 +15,9 @@
  * Constants
  * ============================================================================ */
 
-#define PI 3.14159265358979323846
-#define DEG_TO_RAD (PI / 180.0)
-#define RAD_TO_DEG (180.0 / PI)
+#define CS_PI 3.14159265358979323846
+#define DEG_TO_RAD (CS_PI / 180.0)
+#define RAD_TO_DEG (180.0 / CS_PI)
 
 /* Web Mercator latitude limits - beyond this, projection math breaks down */
 #define MAX_LATITUDE 85.051129

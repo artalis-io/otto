@@ -5,7 +5,7 @@ A demonstration of ClayShards immediate-mode UI components with the clay-shards-
 ## Overview
 
 This demo shows how to:
-1. Use ClayShards components (`cs_map`, `cs_input`, `cs_button`) for UI
+1. Use ClayShards components (`cs_map`, `cs_input`, `cs_button`, `cs_checkbox`, `cs_toggle`, `cs_slider`, `cs_dropdown`) for UI
 2. Render Clay UI using clay-shards-webgl
 3. Load and display slippy map tiles
 4. Handle user input (pan, zoom, click, keyboard)
@@ -35,7 +35,8 @@ This demo shows how to:
 │  │               demo.wasm                             ││
 │  │  - Clay UI layout                                   ││
 │  │  - cs_map component (pan/zoom/click)                ││
-│  │  - cs_input, cs_button components                   ││
+│  │  - cs_input, cs_button, cs_checkbox                 ││
+│  │  - cs_toggle, cs_slider, cs_dropdown                ││
 │  └─────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────┘
 ```
@@ -62,7 +63,7 @@ make serve
 
 ## Dependencies
 
-- **clay-shards**: `cs_map`, `cs_input`, `cs_button` components
+- **clay-shards**: `cs_map`, `cs_input`, `cs_button`, `cs_checkbox`, `cs_toggle`, `cs_slider`, `cs_dropdown` components
 - **clay-shards-webgl**: WebGL renderer, MSDF fonts, tile rendering
 - **Clay**: UI layout library (vendor)
 
@@ -80,8 +81,11 @@ typedef struct {
 } MapState;
 
 typedef struct {
-    bool show_controls, show_tile_info;
-    int layer_type;
+    bool show_tile_info;     // Checkbox: display tile z/x/y
+    bool smooth_zoom;        // Toggle: smooth zoom animation
+    int layer_type;          // Layer buttons: 0=Carta, 1=OSM
+    float route_line_width;  // Slider: route polyline width
+    int route_profile_idx;   // Dropdown: 0=Car, 1=Truck
 } UIPanels;
 
 typedef struct {
@@ -92,7 +96,7 @@ typedef struct {
 
 static AppState g_app = {
     .map = { .lat = 47.4979, .lon = 19.0402, .zoom = 12 },
-    .panels = { .show_tile_info = true },
+    .panels = { .show_tile_info = true, .smooth_zoom = true, .route_line_width = 5.0f },
 };
 ```
 
@@ -139,10 +143,20 @@ The render loop handles:
 ## UI Components
 
 - **Info Panel** (top-left): Coordinates, zoom, search input
-- **Layer Selector** (top-right): OSM, Carto, Terrain
+- **Layer Panel** (top-right): Layer buttons (Carta/OSM), tile info checkbox, smooth zoom toggle
 - **Zoom Controls** (right): + and - buttons
-- **Tile Info** (bottom-left): Current tile z/x/y
+- **Route Panel** (bottom-left): Profile dropdown (Car/Truck), mode buttons, line width slider, route info
+- **Tile Info** (bottom-left, toggleable): Current tile z/x/y
 - **Attribution** (bottom-right): OSM credit
+
+### Widget Examples
+
+| Widget | Location | Function |
+|--------|----------|----------|
+| `cs_checkbox` | Layer Panel | Toggle tile info display |
+| `cs_toggle` | Layer Panel | Enable/disable smooth zoom animation |
+| `cs_slider` | Route Panel | Adjust route line width (1-10px) |
+| `cs_dropdown` | Route Panel | Select route profile (Car/Truck) |
 
 ## Controls
 

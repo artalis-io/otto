@@ -38,8 +38,37 @@
 /* ID offsets for internal wrapper elements to avoid collisions with user IDs.
  * When a component needs internal sub-elements (margin wrapper, text wrapper),
  * it adds these offsets to the user-provided ID. */
-#define CS_ID_OFFSET_WRAPPER      0x10000  /* Margin/alignment wrapper */
-#define CS_ID_OFFSET_TEXT_WRAPPER 0x20000  /* Text offset wrapper */
+#define CS_ID_OFFSET_WRAPPER        0x10000  /* Margin/alignment wrapper */
+#define CS_ID_OFFSET_TEXT_WRAPPER   0x20000  /* Text offset wrapper */
+#define CS_ID_OFFSET_SLIDER_FILL    0x30000  /* Slider fill track */
+#define CS_ID_OFFSET_DROPDOWN_ARROW 0x40000  /* Dropdown arrow indicator */
+#define CS_ID_OFFSET_DROPDOWN_LIST  0x50000  /* Dropdown floating list */
+#define CS_ID_OFFSET_DROPDOWN_ITEM  0x60000  /* Dropdown list items (+ index) */
+
+/* ============================================================================
+ * Helper Macros for Code Deduplication
+ * ============================================================================ */
+
+/**
+ * Check if a CsMargin has any non-zero values.
+ * Used by components to determine if wrapper element is needed.
+ */
+static inline bool cs_has_margin(CsMargin m) {
+    return m.top > 0 || m.bottom > 0 || m.left > 0 || m.right > 0;
+}
+
+/**
+ * Mark the current focused element as a non-text element.
+ * Call this at the end of button/checkbox/toggle/dropdown/slider components
+ * so keyboard navigation knows Enter means "activate" not "submit text".
+ */
+#define CS_MARK_NON_TEXT_IF_FOCUSED(state, focused) do { \
+    if (focused) { \
+        (state)->active_text = NULL; \
+        (state)->active_len = NULL; \
+        (state)->active_max_len = 0; \
+    } \
+} while(0)
 
 /* ============================================================================
  * Widget State Store
@@ -85,6 +114,8 @@ typedef struct {
 
     /* Pointer position (set by cs_set_pointer) */
     float pointer_x, pointer_y;
+    bool pointer_down;          /* Pointer is currently pressed */
+    uint32_t dragging_id;       /* Element currently being dragged (0 = none) */
 
     /* Focused element bounds (set during render) */
     float focused_x, focused_y, focused_w, focused_h;

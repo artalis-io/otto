@@ -148,6 +148,12 @@ void cs_set_pending_click(void);
 
 /* Set pointer position (called automatically by cs_clay_set_pointer) */
 void cs_set_pointer(float x, float y);
+void cs_set_pointer_down(bool down);
+bool cs_is_pointer_down(void);
+
+/* Drag tracking (for sliders, etc.) */
+uint32_t cs_get_dragging_id(void);
+void cs_set_dragging_id(uint32_t id);
 
 /* Get pointer position */
 float cs_pointer_x(void);

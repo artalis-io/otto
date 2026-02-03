@@ -15,6 +15,10 @@
 #include "cs_common.c"
 #include "cs_input.c"
 #include "cs_button.c"
+#include "cs_checkbox.c"
+#include "cs_toggle.c"
+#include "cs_slider.c"
+#include "cs_dropdown.c"
 
 /* Map component split into multiple files */
 #include "cs_map_projection.c"

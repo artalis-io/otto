@@ -1,0 +1,308 @@
+/**
+ * Clay Components - Dropdown Implementation
+ */
+
+#include "cs_dropdown.h"
+#include "cs_internal.h"
+#include "clay.h"
+#include <string.h>
+
+/* ============================================================================
+ * Default Style
+ * ============================================================================ */
+
+const CsDropdownStyle CS_DROPDOWN_STYLE_DEFAULT = {
+    .width = 200.0f,
+    .height = 32.0f,
+    .font_size = 14.0f,
+    .corner_radius = 4.0f,
+    .gap = 4.0f,
+    .max_height = 200.0f,
+};
+
+/* ============================================================================
+ * State Management
+ * ============================================================================ */
+
+/* Track which dropdown is currently open (only one at a time) */
+static CS_THREAD_LOCAL uint32_t tls_open_dropdown_id = 0;
+
+bool cs_dropdown_is_open(uint32_t id) {
+    return tls_open_dropdown_id == id && id != 0;
+}
+
+void cs_dropdown_close(uint32_t id) {
+    if (tls_open_dropdown_id == id) {
+        tls_open_dropdown_id = 0;
+    }
+}
+
+void cs_dropdown_close_all(void) {
+    tls_open_dropdown_id = 0;
+}
+
+/* ============================================================================
+ * Component
+ * ============================================================================ */
+
+CsDropdownResult cs_dropdown(
+    uint32_t id,
+    int *selected,
+    const char *const *options,
+    int count,
+    const CsDropdownStyle *style
+) {
+    CsDropdownResult result = {0};
+
+    /* Validate required parameters */
+    if (!selected || !options || count <= 0) {
+        return result;
+    }
+
+    /* Clamp selected to valid range */
+    if (*selected < 0) *selected = 0;
+    if (*selected >= count) *selected = count - 1;
+
+    CsState *g = cs_get_state();
+
+    if (!style) style = &CS_DROPDOWN_STYLE_DEFAULT;
+
+    /* Register for tab navigation */
+    cs_register_focusable(id);
+
+    bool is_focused = (g->focused_id == id);
+    bool is_open = cs_dropdown_is_open(id);
+    int current_selected = *selected;
+
+    result.selected = current_selected;
+
+    /* Clay element ID for the button */
+    Clay_ElementId clay_id = (Clay_ElementId){.id = id, .stringId = {0}};
+
+    /* Check hover using previous frame's data */
+    bool is_hovered = Clay_PointerOver(clay_id);
+    result.hovered = is_hovered;
+
+    /* Colors */
+    Clay_Color bg_color = is_hovered
+        ? (Clay_Color){CS_COLOR_BG_HOVER}
+        : (Clay_Color){CS_COLOR_BG_DEFAULT};
+    Clay_Color text_color = (Clay_Color){CS_COLOR_TEXT};
+    Clay_Color border_color = is_focused
+        ? (Clay_Color){CS_COLOR_BORDER_FOCUSED}
+        : (Clay_Color){CS_COLOR_BORDER};
+    Clay_Color list_bg = (Clay_Color){CS_COLOR_BG_DEFAULT};
+    Clay_Color item_hover_bg = (Clay_Color){CS_COLOR_BG_HOVER};
+
+    /* Build margin */
+    bool has_margin = cs_has_margin(style->margin);
+
+    /* Container for dropdown (button + list) */
+    Clay_ElementId container_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_WRAPPER, .stringId = {0}};
+
+    Clay_ElementDeclaration container_config = {
+        .layout = {
+            .sizing = {
+                .width = style->width > 0 ? CLAY_SIZING_FIXED(style->width) : CLAY_SIZING_FIT(0),
+                .height = CLAY_SIZING_FIT(0)
+            },
+            .layoutDirection = CLAY_TOP_TO_BOTTOM,
+            .padding = has_margin ? (Clay_Padding){
+                .left = (uint16_t)style->margin.left,
+                .right = (uint16_t)style->margin.right,
+                .top = (uint16_t)style->margin.top,
+                .bottom = (uint16_t)style->margin.bottom
+            } : (Clay_Padding){0}
+        }
+    };
+
+    CLAY(container_id, container_config) {
+        /* Dropdown button */
+        Clay_ElementDeclaration button_config = {
+            .layout = {
+                .sizing = {
+                    .width = CLAY_SIZING_GROW(0),
+                    .height = CLAY_SIZING_FIXED(style->height)
+                },
+                .padding = {8, 8, 8, 8},
+                .childAlignment = { .y = CLAY_ALIGN_Y_CENTER },
+                .layoutDirection = CLAY_LEFT_TO_RIGHT,
+                .childGap = 8
+            },
+            .backgroundColor = bg_color,
+            .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius),
+            .border = {
+                .color = border_color,
+                .width = {1, 1, 1, 1, 0}
+            }
+        };
+
+        CLAY(clay_id, button_config) {
+            /* Current selection text */
+            const char *label = options[current_selected];
+            Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
+
+            /* Text container takes remaining space */
+            Clay_ElementId text_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_TEXT_WRAPPER, .stringId = {0}};
+            CLAY(text_id, {
+                .layout = {
+                    .sizing = { .width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_FIT(0) }
+                }
+            }) {
+                CLAY_TEXT(label_str, CLAY_TEXT_CONFIG({
+                    .fontSize = (uint16_t)style->font_size,
+                    .textColor = text_color
+                }));
+            }
+
+            /* Arrow indicator */
+            Clay_ElementId arrow_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_DROPDOWN_ARROW, .stringId = {0}};
+            const char *arrow = is_open ? "\xE2\x96\xB2" : "\xE2\x96\xBC";  /* Unicode triangles */
+            Clay_String arrow_str = {.chars = arrow, .length = 3};
+            CLAY(arrow_id, {
+                .layout = {
+                    .sizing = { .width = CLAY_SIZING_FIT(0), .height = CLAY_SIZING_FIT(0) }
+                }
+            }) {
+                CLAY_TEXT(arrow_str, CLAY_TEXT_CONFIG({
+                    .fontSize = (uint16_t)(style->font_size * 0.7f),
+                    .textColor = text_color
+                }));
+            }
+
+            /* Dropdown list - FLOATING to overlay on top of other content */
+            if (is_open) {
+                Clay_ElementId list_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_DROPDOWN_LIST, .stringId = {0}};
+
+                /* Calculate list width - match button width */
+                float list_width = style->width > 0 ? style->width : 120.0f;
+
+                Clay_ElementDeclaration list_config = {
+                    .floating = {
+                        .attachTo = CLAY_ATTACH_TO_PARENT,
+                        .attachPoints = {
+                            .element = CLAY_ATTACH_POINT_LEFT_TOP,
+                            .parent = CLAY_ATTACH_POINT_LEFT_BOTTOM
+                        },
+                        .offset = {0, 2},  /* Small gap below button */
+                        .zIndex = 1000     /* Ensure it's on top */
+                    },
+                    .layout = {
+                        .sizing = {
+                            .width = CLAY_SIZING_FIXED(list_width),
+                            .height = style->max_height > 0
+                                ? CLAY_SIZING_FIT((float)style->max_height)
+                                : CLAY_SIZING_FIT(0)
+                        },
+                        .layoutDirection = CLAY_TOP_TO_BOTTOM,
+                        .padding = {4, 4, 4, 4}
+                    },
+                    .backgroundColor = list_bg,
+                    .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius),
+                    .border = {
+                        .color = border_color,
+                        .width = {1, 1, 1, 1, 0}
+                    }
+                };
+
+                CLAY(list_id, list_config) {
+                    for (int i = 0; i < count; i++) {
+                        Clay_ElementId item_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_DROPDOWN_ITEM + (uint32_t)i, .stringId = {0}};
+                        bool item_hovered = Clay_PointerOver(item_id);
+                        bool item_selected = (i == current_selected);
+
+                        Clay_Color item_bg = item_hovered ? item_hover_bg
+                                           : item_selected ? (Clay_Color){CS_COLOR_BTN_BLUE}
+                                           : (Clay_Color){0, 0, 0, 0};
+
+                        CLAY(item_id, {
+                            .layout = {
+                                .sizing = {
+                                    .width = CLAY_SIZING_GROW(0),
+                                    .height = CLAY_SIZING_FIXED(style->height - 4)
+                                },
+                                .padding = {8, 8, 4, 4},
+                                .childAlignment = { .y = CLAY_ALIGN_Y_CENTER }
+                            },
+                            .backgroundColor = item_bg,
+                            .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius - 2)
+                        }) {
+                            const char *opt_label = options[i];
+                            Clay_String opt_str = {.chars = opt_label, .length = (int)strlen(opt_label)};
+                            CLAY_TEXT(opt_str, CLAY_TEXT_CONFIG({
+                                .fontSize = (uint16_t)style->font_size,
+                                .textColor = text_color
+                            }));
+                        }
+
+                        /* Check for item click */
+                        if (item_hovered && g->pending_click) {
+                            if (i != current_selected) {
+                                *selected = i;
+                                result.changed = true;
+                                result.selected = i;
+                            }
+                            /* Close after selection */
+                            tls_open_dropdown_id = 0;
+                            result.closed = true;
+                            g->clicked_id = item_id.id;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Handle button click to toggle open/close */
+    if (is_hovered && g->pending_click && !result.closed) {
+        if (is_open) {
+            tls_open_dropdown_id = 0;
+            result.closed = true;
+        } else {
+            /* Close any other open dropdown first */
+            tls_open_dropdown_id = id;
+            result.opened = true;
+        }
+        g->clicked_id = id;
+    }
+
+    /* Handle keyboard when focused */
+    if (is_focused) {
+        /* Enter/Space toggles open state */
+        if (g->pending_enter) {
+            if (is_open) {
+                tls_open_dropdown_id = 0;
+                result.closed = true;
+            } else {
+                tls_open_dropdown_id = id;
+                result.opened = true;
+            }
+        }
+
+        /* Note: Escape key and arrow key navigation would require
+         * additional key state tracking in CsState. For now, dropdowns
+         * can be closed by clicking elsewhere or pressing Enter again. */
+    }
+
+    /* Close dropdown if clicked elsewhere (not on button or list) */
+    if (is_open && g->pending_click && !is_hovered && !result.closed) {
+        /* Check if click was on any list item */
+        bool clicked_on_list = false;
+        for (int i = 0; i < count; i++) {
+            Clay_ElementId item_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_DROPDOWN_ITEM + (uint32_t)i, .stringId = {0}};
+            if (Clay_PointerOver(item_id)) {
+                clicked_on_list = true;
+                break;
+            }
+        }
+        if (!clicked_on_list) {
+            tls_open_dropdown_id = 0;
+            result.closed = true;
+        }
+    }
+
+    /* Mark as non-text element for keyboard navigation */
+    CS_MARK_NON_TEXT_IF_FOCUSED(g, is_focused);
+
+    return result;
+}

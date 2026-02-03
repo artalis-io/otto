@@ -24,6 +24,10 @@
 /* Components */
 #include "cs_input.h"
 #include "cs_button.h"
+#include "cs_checkbox.h"
+#include "cs_toggle.h"
+#include "cs_slider.h"
+#include "cs_dropdown.h"
 #include "cs_map.h"
 
 #endif /* CS_IMMEDIATE_H */

@@ -49,7 +49,10 @@ typedef struct {
 
 typedef struct {
     bool show_tile_info;
+    bool smooth_zoom;
     int layer_type;
+    float route_line_width;
+    int route_profile_idx;  /* 0=Car, 1=Truck */
 } UIPanels;
 
 /* Which endpoint we're reverse geocoding */
@@ -126,11 +129,12 @@ typedef struct {
     Scratch scratch;
     RouteState route;
     SearchState search;
+    bool attribution_clicked;  /* Set when attribution link is clicked */
 } AppState;
 
 static AppState g_app = {
     .map = { .lat = 47.4979, .lon = 19.0402, .zoom = 12, .width = 800, .height = 600 },
-    .panels = { .show_tile_info = true, .layer_type = 0 },
+    .panels = { .show_tile_info = true, .smooth_zoom = true, .layer_type = 0, .route_line_width = 5.0f, .route_profile_idx = 0 },
     .text = { .search = "", .search_len = 0 },
     .search = { .prev_query = "", .prev_len = 0, .show_results = false },
 };
@@ -159,71 +163,85 @@ static const struct {
  * UI Layout - Domain Specific
  * ============================================================================ */
 
-static void render_zoom_controls(void) {
-    /* Square buttons for zoom +/-
-     * Each glyph needs different offset due to different vertical bounds:
-     * "+" spans -0.078 to 0.703, "-" spans 0.14 to 0.39 */
-    const CsButtonStyle zoom_plus = {
-        .variant = CS_BTN_DEFAULT,
-        .font_size = 18,
-        .corner_radius = 4,
-        .width = 36,
-        .height = 36,
-        .text_offset_y = -2
-    };
-    const CsButtonStyle zoom_minus = {
-        .variant = CS_BTN_DEFAULT,
-        .font_size = 18,
-        .corner_radius = 4,
-        .width = 36,
-        .height = 36,
-        .text_offset_y = -5
-    };
-
-    CLAY(CLAY_ID("ZoomControls"), {
-        .floating = {
-            .attachTo = CLAY_ATTACH_TO_ROOT,
-            .attachPoints = { .element = CLAY_ATTACH_POINT_RIGHT_TOP, .parent = CLAY_ATTACH_POINT_RIGHT_TOP },
-            .offset = {-16, 160}
-        },
-        .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 2 }
-    }) {
-        if (cs_button(CS_ID("zoom_in"), "+", &zoom_plus).clicked) {
-            g_app.map.zoom = cs_map_scroll(g_app.map.zoom, 1, 0, get_max_zoom(g_app.panels.layer_type));
-        }
-        if (cs_button(CS_ID("zoom_out"), "-", &zoom_minus).clicked) {
-            g_app.map.zoom = cs_map_scroll(g_app.map.zoom, -1, 0, get_max_zoom(g_app.panels.layer_type));
-        }
-    }
-}
-
 static void render_layer_panel(void) {
+    /* Single floating container for layers, settings, and zoom controls */
     CLAY(CLAY_ID("LayerPanel"), {
         .floating = {
             .attachTo = CLAY_ATTACH_TO_ROOT,
             .attachPoints = { .element = CLAY_ATTACH_POINT_RIGHT_TOP, .parent = CLAY_ATTACH_POINT_RIGHT_TOP },
             .offset = {-16, 16}
         },
-        .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .padding = CLAY_PADDING_ALL(8), .childGap = 4 },
+        .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .padding = CLAY_PADDING_ALL(8), .childGap = 6 },
         .backgroundColor = THEME.bg_panel,
         .cornerRadius = CLAY_CORNER_RADIUS(8),
         .border = { .width = {1, 1, 1, 1}, .color = THEME.border }
     }) {
         CLAY_TEXT(CLAY_STRING("Layers"), CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
 
-        /* Fixed width buttons for consistent alignment */
-        const CsButtonStyle sel = {CS_BTN_PRIMARY, 14, 8, 8, 4, 70};
-        const CsButtonStyle def = {CS_BTN_DEFAULT, 14, 8, 8, 4, 70};
+        /* Layer buttons in same row */
+        CLAY(CLAY_ID("LayerButtons"), {
+            .layout = { .layoutDirection = CLAY_LEFT_TO_RIGHT, .childGap = 4 }
+        }) {
+            const CsButtonStyle sel = {CS_BTN_PRIMARY, 14, 8, 8, 4, 70};
+            const CsButtonStyle def = {CS_BTN_DEFAULT, 14, 8, 8, 4, 70};
 
-        if (cs_button(CS_ID("layer_carta"), "Carta", g_app.panels.layer_type == LAYER_CARTA ? &sel : &def).clicked) {
-            g_app.panels.layer_type = LAYER_CARTA;
-            /* Clamp zoom to Carta's max if needed */
-            if (g_app.map.zoom > MAX_ZOOM_CARTA) {
-                g_app.map.zoom = MAX_ZOOM_CARTA;
+            if (cs_button(CS_ID("layer_carta"), "Carta", g_app.panels.layer_type == LAYER_CARTA ? &sel : &def).clicked) {
+                g_app.panels.layer_type = LAYER_CARTA;
+                /* Clamp zoom to Carta's max if needed */
+                if (g_app.map.zoom > MAX_ZOOM_CARTA) {
+                    g_app.map.zoom = MAX_ZOOM_CARTA;
+                }
+            }
+            if (cs_button(CS_ID("layer_osm"), "OSM", g_app.panels.layer_type == LAYER_OSM ? &sel : &def).clicked)
+                g_app.panels.layer_type = LAYER_OSM;
+        }
+
+        /* Divider */
+        CLAY(CLAY_ID("LayerDivider"), {
+            .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1) } },
+            .backgroundColor = THEME.border
+        }) {}
+
+        CLAY_TEXT(CLAY_STRING("Settings"), CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
+
+        /* Checkbox and toggle in same row */
+        CLAY(CLAY_ID("SettingsRow"), {
+            .layout = { .layoutDirection = CLAY_LEFT_TO_RIGHT, .childGap = 12, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } }
+        }) {
+            const CsCheckboxStyle check_style = { .size = 16, .font_size = 11, .corner_radius = 3, .gap = 6 };
+            cs_checkbox(CS_ID("show_tile_info"), &g_app.panels.show_tile_info, "Tile info", &check_style);
+
+            const CsToggleStyle toggle_style = { .width = 36, .height = 18, .font_size = 11, .gap = 6 };
+            cs_toggle(CS_ID("smooth_zoom"), &g_app.panels.smooth_zoom, "Smooth", &toggle_style);
+        }
+
+        /* Divider before zoom */
+        CLAY(CLAY_ID("ZoomDivider"), {
+            .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1) } },
+            .backgroundColor = THEME.border
+        }) {}
+
+        /* Zoom controls */
+        CLAY_TEXT(CLAY_STRING("Zoom"), CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
+
+        CLAY(CLAY_ID("ZoomButtons"), {
+            .layout = { .layoutDirection = CLAY_LEFT_TO_RIGHT, .childGap = 4 }
+        }) {
+            const CsButtonStyle zoom_btn = {
+                .variant = CS_BTN_DEFAULT,
+                .font_size = 16,
+                .corner_radius = 4,
+                .width = 32,
+                .height = 32,
+                .text_offset_y = -2
+            };
+            if (cs_button(CS_ID("zoom_out"), "-", &zoom_btn).clicked) {
+                g_app.map.zoom = cs_map_scroll(g_app.map.zoom, -1, 0, get_max_zoom(g_app.panels.layer_type));
+            }
+            if (cs_button(CS_ID("zoom_in"), "+", &zoom_btn).clicked) {
+                g_app.map.zoom = cs_map_scroll(g_app.map.zoom, 1, 0, get_max_zoom(g_app.panels.layer_type));
             }
         }
-        if (cs_button(CS_ID("layer_osm"), "OSM", g_app.panels.layer_type == LAYER_OSM ? &sel : &def).clicked)
-            g_app.panels.layer_type = LAYER_OSM;
     }
 }
 
@@ -329,6 +347,14 @@ static void render_tile_info(void) {
 }
 
 static void render_attribution(void) {
+    /* Check hover state from previous frame */
+    bool attr_hovered = cs_clay_pointer_over("Attribution");
+
+    /* Link colors: blue when hovered, dark gray otherwise */
+    Clay_Color link_color = attr_hovered
+        ? (Clay_Color){0, 102, 204, 255}    /* Blue on hover */
+        : (Clay_Color){64, 64, 64, 255};    /* Dark gray */
+
     CLAY(CLAY_ID("Attribution"), {
         .floating = {
             .attachTo = CLAY_ATTACH_TO_ROOT,
@@ -336,12 +362,26 @@ static void render_attribution(void) {
             .offset = {-8, -8}
         },
         .layout = { .padding = CLAY_PADDING_ALL(4) },
-        .backgroundColor = (Clay_Color){255, 255, 255, 200},
+        .backgroundColor = (Clay_Color){255, 255, 255, 220},
         .cornerRadius = CLAY_CORNER_RADIUS(2)
     }) {
-        CLAY_TEXT(CLAY_STRING("OpenStreetMap contributors"),
-                  CLAY_TEXT_CONFIG({ .fontSize = 10, .textColor = THEME.text_dark }));
+        /* Text with underline on hover */
+        CLAY(CLAY_ID("AttrLinkWrapper"), {
+            .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 2 }
+        }) {
+            /* Use ASCII (c) since MSDF font may not have copyright symbol */
+            CLAY_TEXT(CLAY_STRING("(c) OpenStreetMap contributors"),
+                      CLAY_TEXT_CONFIG({ .fontSize = 10, .textColor = link_color }));
+
+            /* Underline - always present to maintain size, transparent when not hovered */
+            CLAY(CLAY_ID("AttrUnderline"), {
+                .layout = { .sizing = { .width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_FIXED(1) } },
+                .backgroundColor = attr_hovered ? link_color : (Clay_Color){0, 0, 0, 0}
+            }) {}
+        }
     }
+
+    /* Note: Click handling is done in map_handle_click via is_pointer_over_ui */
 }
 
 /* Helper to format distance */
@@ -364,6 +404,9 @@ static void format_duration(char *buf, size_t size, double seconds) {
         snprintf(buf, size, "%d min", mins);
     }
 }
+
+/* Route profile options for dropdown */
+static const char *ROUTE_PROFILES[] = {"Car", "Truck"};
 
 static void render_route_panel(void) {
     const CsButtonStyle small_btn = {
@@ -388,35 +431,41 @@ static void render_route_panel(void) {
         .padding_y = 4,
     };
 
+    /* Move route panel closer to bottom when tile info is hidden */
+    float route_panel_offset_y = g_app.panels.show_tile_info ? -60.0f : -16.0f;
+
     CLAY(CLAY_ID("RoutePanel"), {
         .floating = {
             .attachTo = CLAY_ATTACH_TO_ROOT,
             .attachPoints = { .element = CLAY_ATTACH_POINT_LEFT_BOTTOM, .parent = CLAY_ATTACH_POINT_LEFT_BOTTOM },
-            .offset = {16, -60}
+            .offset = {16, route_panel_offset_y}
         },
         .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .padding = CLAY_PADDING_ALL(10), .childGap = 6 },
         .backgroundColor = THEME.bg_panel,
         .cornerRadius = CLAY_CORNER_RADIUS(8),
         .border = { .width = {1, 1, 1, 1}, .color = THEME.border }
     }) {
-        /* Profile/mode selectors row */
+        /* Profile dropdown and mode selectors row */
         CLAY(CLAY_ID("RouteOptions"), {
-            .layout = { .childGap = 4 }
+            .layout = { .childGap = 4, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } }
         }) {
-            /* Profile selector: Car / Truck */
-            CsRouteProfile profile = cs_provider_get_route_profile();
-            if (cs_button(CS_ID("profile_car"), "Car",
-                          profile == CS_PROFILE_CAR ? &small_btn_active : &small_btn).clicked) {
-                cs_provider_set_route_profile(CS_PROFILE_CAR);
+            /* Profile selector dropdown: Car / Truck */
+            const CsDropdownStyle profile_dd_style = {
+                .width = 80,
+                .height = 26,
+                .font_size = 11,
+                .corner_radius = 4,
+            };
+            CsDropdownResult profile_result = cs_dropdown(
+                CS_ID("profile_dropdown"),
+                &g_app.panels.route_profile_idx,
+                ROUTE_PROFILES, 2,
+                &profile_dd_style
+            );
+            if (profile_result.changed) {
+                /* Update provider profile */
+                cs_provider_set_route_profile(g_app.panels.route_profile_idx == 0 ? CS_PROFILE_CAR : CS_PROFILE_TRUCK);
                 /* Trigger reroute if we have both endpoints */
-                if (g_app.route.has_start && g_app.route.has_end) {
-                    cs_provider_route(g_app.route.start, g_app.route.end);
-                    g_app.route.loading = true;
-                }
-            }
-            if (cs_button(CS_ID("profile_truck"), "Truck",
-                          profile == CS_PROFILE_TRUCK ? &small_btn_active : &small_btn).clicked) {
-                cs_provider_set_route_profile(CS_PROFILE_TRUCK);
                 if (g_app.route.has_start && g_app.route.has_end) {
                     cs_provider_route(g_app.route.start, g_app.route.end);
                     g_app.route.loading = true;
@@ -446,18 +495,23 @@ static void render_route_panel(void) {
             }
         }
 
-        /* Route status/info */
-        if (g_app.route.loading) {
-            /* Show cached info during recalculation to prevent flicker */
-            if (g_app.route.has_cached_info) {
-                CLAY_TEXT(((Clay_String){ .chars = g_app.route.cached_info,
-                                           .length = (int)strlen(g_app.route.cached_info) }),
-                          CLAY_TEXT_CONFIG({ .fontSize = 14, .textColor = THEME.text_muted }));
-            } else {
-                CLAY_TEXT(CLAY_STRING("Calculating route..."),
-                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
-            }
-        } else if (g_app.route.error) {
+        /* Route line width slider */
+        const CsSliderStyle line_width_style = {
+            .width = 120,
+            .height = 6,
+            .thumb_size = 14,
+            .font_size = 11,
+            .corner_radius = 3,
+            .step = 1.0f,
+            .show_value = true,
+        };
+        cs_slider(CS_ID("line_width"), &g_app.panels.route_line_width, 1.0f, 10.0f, "Width", &line_width_style);
+
+        /* Route status/info - use consistent structure to prevent flicker */
+        bool has_route = g_app.route.point_count > 0 || g_app.route.has_cached_info;
+
+        if (g_app.route.error) {
+            /* Error state */
             CLAY_TEXT(CLAY_STRING("Route not found"),
                       CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = (Clay_Color){255, 100, 100, 255} }));
             if (cs_button(CS_ID("clear_route"), "Clear", &clear_btn).clicked) {
@@ -467,22 +521,32 @@ static void render_route_panel(void) {
                 g_app.route.error = false;
                 g_app.route.has_cached_info = false;
             }
-        } else if (g_app.route.point_count > 0) {
-            /* Format and cache route info */
-            char dist_buf[32], time_buf[32];
-            format_distance(dist_buf, sizeof(dist_buf), g_app.route.distance_m);
-            format_duration(time_buf, sizeof(time_buf), g_app.route.duration_s);
-            snprintf(g_app.route.cached_info, sizeof(g_app.route.cached_info),
-                     "%s - %s (%.0fms)", dist_buf, time_buf, g_app.route.calc_time_ms);
-            g_app.route.has_cached_info = true;
+        } else if (has_route || g_app.route.loading) {
+            /* Route info - always show cached info during loading to prevent flicker */
+            if (g_app.route.point_count > 0 && !g_app.route.loading) {
+                /* Update cache with new data */
+                char dist_buf[32], time_buf[32];
+                format_distance(dist_buf, sizeof(dist_buf), g_app.route.distance_m);
+                format_duration(time_buf, sizeof(time_buf), g_app.route.duration_s);
+                snprintf(g_app.route.cached_info, sizeof(g_app.route.cached_info),
+                         "%s - %s (%.0fms)", dist_buf, time_buf, g_app.route.calc_time_ms);
+                g_app.route.has_cached_info = true;
+            }
 
-            CLAY_TEXT(((Clay_String){ .chars = g_app.route.cached_info,
-                                       .length = (int)strlen(g_app.route.cached_info) }),
-                      CLAY_TEXT_CONFIG({ .fontSize = 14, .textColor = THEME.text }));
+            /* Show route info (cached or current) */
+            if (g_app.route.has_cached_info) {
+                Clay_Color info_color = g_app.route.loading ? THEME.text_muted : THEME.text;
+                CLAY_TEXT(((Clay_String){ .chars = g_app.route.cached_info,
+                                           .length = (int)strlen(g_app.route.cached_info) }),
+                          CLAY_TEXT_CONFIG({ .fontSize = 14, .textColor = info_color }));
+            } else {
+                CLAY_TEXT(CLAY_STRING("Calculating route..."),
+                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
+            }
 
-            /* Display addresses if available */
-            if (g_app.route.start_address[0] != '\0') {
-                CLAY(CLAY_ID("FromAddr"), { .layout = { .childGap = 4 } }) {
+            /* Always show address rows (empty if no address yet) - prevents height changes */
+            CLAY(CLAY_ID("FromAddr"), { .layout = { .childGap = 4, .sizing = { .height = CLAY_SIZING_FIXED(16) } } }) {
+                if (g_app.route.start_address[0] != '\0') {
                     CLAY_TEXT(CLAY_STRING("From:"),
                               CLAY_TEXT_CONFIG({ .fontSize = 11, .textColor = THEME.text_muted }));
                     CLAY_TEXT(((Clay_String){ .chars = g_app.route.start_address,
@@ -490,8 +554,8 @@ static void render_route_panel(void) {
                               CLAY_TEXT_CONFIG({ .fontSize = 11, .textColor = THEME.text }));
                 }
             }
-            if (g_app.route.end_address[0] != '\0') {
-                CLAY(CLAY_ID("ToAddr"), { .layout = { .childGap = 4 } }) {
+            CLAY(CLAY_ID("ToAddr"), { .layout = { .childGap = 4, .sizing = { .height = CLAY_SIZING_FIXED(16) } } }) {
+                if (g_app.route.end_address[0] != '\0') {
                     CLAY_TEXT(CLAY_STRING("To:"),
                               CLAY_TEXT_CONFIG({ .fontSize = 11, .textColor = THEME.text_muted }));
                     CLAY_TEXT(((Clay_String){ .chars = g_app.route.end_address,
@@ -534,7 +598,7 @@ static void render_ui(void) {
         if (g_app.route.point_count > 1) {
             cs_polyline(CS_ID("route"), g_app.route.points, g_app.route.point_count, &(CsPolylineStyle){
                 .color = {0.2f, 0.5f, 1.0f, 0.9f},
-                .width = 5.0f,
+                .width = g_app.panels.route_line_width,
             });
         }
 
@@ -637,7 +701,6 @@ static void render_ui(void) {
         /* UI overlays */
         render_info_panel();
         render_layer_panel();
-        render_zoom_controls();
         render_tile_info();
         render_route_panel();
         render_attribution();
@@ -680,6 +743,16 @@ EXPORT int map_get_layer(void) { return g_app.panels.layer_type; }
 EXPORT uint32_t map_get_component_id(void) { return g_app.map.component_id; }
 EXPORT int map_get_width(void) { return g_app.map.width; }
 EXPORT int map_get_height(void) { return g_app.map.height; }
+EXPORT int map_get_show_tile_info(void) { return g_app.panels.show_tile_info ? 1 : 0; }
+
+/* Attribution link - returns true once when clicked, then clears */
+EXPORT int map_get_attribution_clicked(void) {
+    if (g_app.attribution_clicked) {
+        g_app.attribution_clicked = false;
+        return 1;
+    }
+    return 0;
+}
 
 /* Debug exports for route markers */
 EXPORT int map_debug_has_start(void) { return g_app.route.has_start ? 1 : 0; }
@@ -689,6 +762,15 @@ EXPORT double map_debug_start_lon(void) { return g_app.route.start.lon; }
 /* ============================================================================
  * Domain Exports - Pointer Handling
  * ============================================================================ */
+
+/* Check if pointer is over any UI panel (not the map) */
+static bool is_pointer_over_ui(void) {
+    return cs_clay_pointer_over("InfoPanel") ||
+           cs_clay_pointer_over("LayerPanel") ||
+           cs_clay_pointer_over("TileInfo") ||
+           cs_clay_pointer_over("RoutePanel") ||
+           cs_clay_pointer_over("Attribution");
+}
 
 EXPORT void map_pointer_move(float x, float y) {
     bool dragging_map = cs_map_is_dragging(g_app.map.component_id);
@@ -716,6 +798,12 @@ EXPORT void map_pointer_move(float x, float y) {
 }
 
 EXPORT void map_pointer_down(float x, float y) {
+    /* Don't start map drag if clicking on UI */
+    if (is_pointer_over_ui()) {
+        cs_set_pending_click();
+        return;
+    }
+
     double visual_zoom = cs_map_get_visual_zoom(g_app.map.component_id);
     cs_map_pointer_down(g_app.map.component_id, g_app.map.lat, g_app.map.lon, x, y,
                         (float)g_app.map.width, (float)g_app.map.height, visual_zoom);
@@ -729,16 +817,20 @@ EXPORT void map_pointer_up(float x, float y) {
 
 EXPORT void map_scroll(float delta, float x, float y) {
     (void)x; (void)y;
+    /* Don't zoom map if scrolling over UI */
+    if (is_pointer_over_ui()) return;
+
     g_app.map.zoom = cs_map_scroll(g_app.map.zoom, delta > 0 ? 1 : -1, 0, get_max_zoom(g_app.panels.layer_type));
 }
 
 EXPORT int map_handle_click(float x, float y) {
-    bool on_ui = cs_clay_pointer_over("InfoPanel") ||
-                 cs_clay_pointer_over("LayerPanel") ||
-                 cs_clay_pointer_over("ZoomControls") ||
-                 cs_clay_pointer_over("TileInfo") ||
-                 cs_clay_pointer_over("RoutePanel") ||
-                 cs_clay_pointer_over("Attribution");
+    bool on_ui = is_pointer_over_ui();
+
+    /* Check if attribution link was clicked */
+    if (cs_clay_pointer_over("Attribution")) {
+        g_app.attribution_clicked = true;
+        return 1;  /* Handled - don't propagate to map */
+    }
 
     if (cs_focused_id() != 0 && !on_ui) {
         cs_blur();
@@ -887,8 +979,9 @@ static void update_reverse_geocode_state(void) {
 EXPORT int map_frame(float dt) {
     if (!cs_clay_is_initialized()) return -1;
 
-    /* Update smooth zoom animation */
-    cs_map_update_zoom_animation(g_app.map.component_id, g_app.map.zoom, dt);
+    /* Update zoom animation - use large dt to snap instantly when smooth zoom is disabled */
+    float zoom_dt = g_app.panels.smooth_zoom ? dt : 100.0f;
+    cs_map_update_zoom_animation(g_app.map.component_id, g_app.map.zoom, zoom_dt);
 
     /* Check for route completion */
     update_route_state();

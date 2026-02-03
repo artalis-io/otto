@@ -273,16 +273,17 @@ CS_CLAY_EXPORT int cs_clay_cmd_border_width(int index) {
 
 CS_CLAY_EXPORT void cs_clay_set_pointer(float x, float y, bool is_down) {
     Clay_SetPointerState((Clay_Vector2){x, y}, is_down);
-    /* Also store in component state for click-to-position */
+    /* Also store in component state for click-to-position and drag tracking */
     cs_set_pointer(x, y);
+    cs_set_pointer_down(is_down);
 }
 
 CS_CLAY_EXPORT bool cs_clay_pointer_over(const char *element_id) {
     if (!element_id) return false;
 
-    /* Use consistent FNV-1a hash matching cs_hash_id() / CS_ID() */
-    uint32_t hash = cs_hash_id(element_id);
-    Clay_ElementId id = { .id = hash, .stringId = { .chars = element_id, .length = (int)strlen(element_id) } };
+    /* Use Clay's hash function to match CLAY_ID() */
+    Clay_String str = { .chars = element_id, .length = (int)strlen(element_id) };
+    Clay_ElementId id = Clay__HashString(str, 0);
     return Clay_PointerOver(id);
 }
 

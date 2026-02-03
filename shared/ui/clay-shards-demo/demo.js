@@ -65,7 +65,7 @@ let isDragging = false;
 const REQUIRED_EXPORTS = [
     'map_init', 'map_frame', 'map_resize',
     'map_get_lat', 'map_get_lon', 'map_get_zoom', 'map_get_visual_zoom', 'map_get_layer',
-    'map_get_component_id', 'map_get_width', 'map_get_height',
+    'map_get_component_id', 'map_get_width', 'map_get_height', 'map_get_show_tile_info', 'map_get_attribution_clicked',
     'map_pointer_down', 'map_pointer_move', 'map_pointer_up', 'map_scroll',
     'map_handle_click',
     'cs_set_pending_click', 'cs_focused_id', 'cs_key_down', 'cs_key_char',
@@ -300,6 +300,11 @@ async function main() {
                     renderer.height,
                     projMatrix
                 );
+
+                // Check if attribution link was clicked
+                if (wasm.map_get_attribution_clicked()) {
+                    window.open('https://www.openstreetmap.org/copyright', '_blank');
+                }
             },
             cursorFontSize: 12,
             cursorPadding: 8

@@ -6,10 +6,12 @@
  */
 
 #include "cs_map_provider.h"
+#include "cs_internal.h"  /* For cs_realloc, cs_free, cs_record_error */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>  /* For SIZE_MAX */
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -330,9 +332,9 @@ EXPORT const char* cs_provider_type(void) {
 }
 
 EXPORT void cs_provider_cleanup(void) {
-    /* Free route buffer */
+    /* Free route buffer using custom allocator */
     if (g_route_points) {
-        free(g_route_points);
+        cs_free(g_route_points);
         g_route_points = NULL;
         g_route_capacity = 0;
         g_route_result.points = NULL;
@@ -348,9 +350,18 @@ EXPORT void cs_provider_on_route_complete(
     const double *lats, const double *lons, int count,
     double distance_m, double duration_s, double calc_time_ms
 ) {
+    /* Validate count to prevent integer overflow */
+    if (count < 0 || (size_t)count > SIZE_MAX / sizeof(CsGeoPoint)) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
+        g_route_result.error = true;
+        g_route_result.ready = true;
+        g_route_status = CS_PROVIDER_ERROR;
+        return;
+    }
+
     /* Grow buffer if needed */
     if (count > g_route_capacity) {
-        CsGeoPoint *new_buf = (CsGeoPoint *)realloc(
+        CsGeoPoint *new_buf = (CsGeoPoint *)cs_realloc(
             g_route_points,
             (size_t)count * sizeof(CsGeoPoint)
         );
