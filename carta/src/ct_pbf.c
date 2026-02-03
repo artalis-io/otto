@@ -1421,6 +1421,8 @@ static CTStatus add_way_as_feature(const CTOSMWay *way, CTFeature **features,
     f->type = way->is_area ? CT_GEOM_POLYGON : CT_GEOM_LINESTRING;
     f->layer = layer_from_osm_class(way->feature_class);
     f->feature_type = way->feature_type;
+    f->area_sqm = way->area_sqm;
+    f->length_m = way->length_m;
 
     /* Allocate and copy coordinates */
     f->points = malloc(way->num_coords * sizeof(CTTilePoint));
@@ -1471,6 +1473,8 @@ static CTStatus add_multipolygon_as_feature(const CTAssembledMultipolygon *mp,
     f->type = CT_GEOM_POLYGON;
     f->layer = layer_from_osm_class(mp->feature_class);
     f->feature_type = mp->feature_type;
+    f->area_sqm = mp->area_sqm;
+    f->length_m = 0;  /* Multipolygons don't have length */
 
     /* Allocate points and ring_ends */
     f->points = malloc(total_points * sizeof(CTTilePoint));

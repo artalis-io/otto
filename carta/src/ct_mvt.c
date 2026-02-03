@@ -9,6 +9,7 @@
 #include "ct_tile.h"
 #include "ct_pbf.h"
 #include "ct_simplify.h"
+#include "ct_lod.h"
 #include "sh_protobuf.h"
 #include <stdlib.h>
 #include <string.h>
@@ -418,6 +419,7 @@ size_t ct_encode_mvt(const CTTile *tile, const CTMVTOptions *opts,
 
 size_t ct_generate_mvt(const CTPBFContext *ctx, CTTileCoord coord,
                        const CTMVTOptions *opts,
+                       const CTLODConfig *lod,
                        uint8_t *buffer, size_t capacity)
 {
     if (!ctx || !buffer) return 0;
@@ -455,8 +457,18 @@ size_t ct_generate_mvt(const CTPBFContext *ctx, CTTileCoord coord,
     CTTile tile;
     ct_tile_init(&tile, coord);
 
+    int zoom = coord.z;
+
     for (size_t i = 0; i < raw_count; i++) {
         CTFeature *f = &raw_features[i];
+
+        /* LOD filtering: skip features not visible at this zoom level */
+        if (lod && !ct_lod_is_visible(lod, f->layer, f->feature_type,
+                                       zoom, f->area_sqm, f->length_m)) {
+            free(f->points);
+            f->points = NULL;
+            continue;
+        }
 
         /* Fast batch coordinate transformation */
         ct_batch_transform_points(coord, opts->extent, f->points, f->num_points);

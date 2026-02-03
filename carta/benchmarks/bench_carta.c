@@ -214,7 +214,7 @@ static void bench_pbf_loading(const char *filename)
     start = get_time_ms();
 
     for (int i = 0; i < mvt_iters; i++) {
-        size_t size = ct_generate_mvt(ctx, test_tile, NULL, mvt_buf, 1024 * 1024);
+        size_t size = ct_generate_mvt(ctx, test_tile, NULL, NULL, mvt_buf, 1024 * 1024);
         (void)size;
     }
 
