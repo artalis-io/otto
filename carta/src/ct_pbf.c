@@ -93,6 +93,76 @@ static int classify_waterway(const char *value)
     return CT_WATERWAY_OTHER;
 }
 
+static int classify_landuse(const char *value)
+{
+    /* Forests and woods */
+    if (strcmp(value, "forest") == 0) {
+        return CT_LANDUSE_FOREST;
+    }
+    /* Residential areas */
+    if (strcmp(value, "residential") == 0) {
+        return CT_LANDUSE_RESIDENTIAL;
+    }
+    /* Commercial and retail */
+    if (strcmp(value, "commercial") == 0 ||
+        strcmp(value, "retail") == 0) {
+        return CT_LANDUSE_COMMERCIAL;
+    }
+    /* Industrial */
+    if (strcmp(value, "industrial") == 0) {
+        return CT_LANDUSE_INDUSTRIAL;
+    }
+    /* Farmland and agricultural */
+    if (strcmp(value, "farmland") == 0 ||
+        strcmp(value, "meadow") == 0 ||
+        strcmp(value, "farmyard") == 0 ||
+        strcmp(value, "orchard") == 0 ||
+        strcmp(value, "vineyard") == 0) {
+        return CT_LANDUSE_FARMLAND;
+    }
+    /* Grass and village greens */
+    if (strcmp(value, "grass") == 0 ||
+        strcmp(value, "village_green") == 0 ||
+        strcmp(value, "recreation_ground") == 0) {
+        return CT_LANDUSE_GRASS;
+    }
+    /* Cemeteries */
+    if (strcmp(value, "cemetery") == 0) {
+        return CT_LANDUSE_CEMETERY;
+    }
+    /* Military */
+    if (strcmp(value, "military") == 0) {
+        return CT_LANDUSE_MILITARY;
+    }
+    return CT_LANDUSE_OTHER;
+}
+
+static int classify_natural(const char *value)
+{
+    /* Woods (natural=wood) treated as forest */
+    if (strcmp(value, "wood") == 0) {
+        return CT_LANDUSE_FOREST;
+    }
+    /* Grassland */
+    if (strcmp(value, "grassland") == 0 ||
+        strcmp(value, "heath") == 0 ||
+        strcmp(value, "scrub") == 0) {
+        return CT_LANDUSE_GRASS;
+    }
+    return CT_LANDUSE_OTHER;
+}
+
+static int classify_leisure(const char *value)
+{
+    /* Parks and nature reserves */
+    if (strcmp(value, "park") == 0 ||
+        strcmp(value, "nature_reserve") == 0 ||
+        strcmp(value, "garden") == 0) {
+        return CT_LANDUSE_PARK;
+    }
+    return CT_LANDUSE_OTHER;
+}
+
 static CTOSMFeatureClass classify_tags(const SHStringTable *st,
                                        const uint32_t *keys, const uint32_t *vals,
                                        int num_tags, int *feature_type, int *is_area)
@@ -100,13 +170,29 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
     *feature_type = 0;
     *is_area = 0;
 
-    /* First pass: check for area=yes which affects other tags */
+    /* Track admin_level for boundary classification */
+    int admin_level = CT_BOUNDARY_OTHER;
+    int has_boundary = 0;
+
+    /* First pass: check for area=yes and admin_level */
     for (int i = 0; i < num_tags; i++) {
         const char *key = sh_string_table_get(st, keys[i]);
         const char *val = sh_string_table_get(st, vals[i]);
         if (strcmp(key, "area") == 0 && strcmp(val, "yes") == 0) {
             *is_area = 1;
-            break;
+        }
+        if (strcmp(key, "admin_level") == 0) {
+            int level = atoi(val);
+            /* Bucket to defined LOD levels (2, 4, 6, 8, 10) */
+            if (level <= 2) admin_level = CT_BOUNDARY_COUNTRY;
+            else if (level <= 4) admin_level = CT_BOUNDARY_STATE;
+            else if (level <= 6) admin_level = CT_BOUNDARY_COUNTY;
+            else if (level <= 8) admin_level = CT_BOUNDARY_CITY;
+            else if (level <= 10) admin_level = CT_BOUNDARY_SUBURB;
+            else admin_level = CT_BOUNDARY_OTHER;
+        }
+        if (strcmp(key, "boundary") == 0 && strcmp(val, "administrative") == 0) {
+            has_boundary = 1;
         }
     }
 
@@ -132,6 +218,9 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
                 *is_area = 1;
                 return CT_OSM_WATER;
             }
+            /* Woods and grassland go to landuse layer */
+            *feature_type = classify_natural(val);
+            *is_area = 1;
             return CT_OSM_NATURAL;
         }
         if (strcmp(key, "building") == 0) {
@@ -139,12 +228,24 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
             return CT_OSM_BUILDING;
         }
         if (strcmp(key, "landuse") == 0) {
+            *feature_type = classify_landuse(val);
             *is_area = 1;
             return CT_OSM_LANDUSE;
+        }
+        if (strcmp(key, "leisure") == 0) {
+            *feature_type = classify_leisure(val);
+            *is_area = 1;
+            return CT_OSM_LANDUSE;  /* Parks go to landuse layer */
         }
         if (strcmp(key, "railway") == 0) {
             return CT_OSM_RAILWAY;
         }
+    }
+
+    /* Handle administrative boundaries */
+    if (has_boundary) {
+        *feature_type = admin_level;
+        return CT_OSM_BOUNDARY;
     }
 
     return CT_OSM_UNKNOWN;
