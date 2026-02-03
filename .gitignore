@@ -10,9 +10,11 @@ test_fuelwise
 test_shared
 test_velo
 test_carta
+test_font
 test_lap
 test_lap_dbg
 test_lap_debug
+test_locus
 
 # Benchmark binaries
 bench_lap
