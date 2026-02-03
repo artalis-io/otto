@@ -8,6 +8,8 @@
 #define CT_RENDER_H
 
 #include "ct_types.h"
+#include "ct_label.h"
+#include "sh_font.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -228,6 +230,79 @@ float ct_style_road_width(const CTStyle *style, CTRoadType road_type, int zoom);
  * @return Width in pixels
  */
 float ct_style_waterway_width(const CTStyle *style, CTWaterwayType waterway_type);
+
+/* ============================================================================
+ * Text Rendering
+ * ============================================================================ */
+
+/*
+ * Render text at a position.
+ *
+ * @param ctx       Render context
+ * @param text      UTF-8 text to render
+ * @param x, y      Top-left position in pixels
+ * @param font      MSDF font
+ * @param font_size Font size in pixels
+ * @param color     Text color
+ */
+void ct_render_text(CTRenderContext *ctx,
+                    const char *text, int x, int y,
+                    const SHFont *font, float font_size,
+                    CTColor color);
+
+/*
+ * Render text with halo (outline).
+ * Renders halo first (darker outline), then fill on top.
+ *
+ * @param ctx         Render context
+ * @param text        UTF-8 text to render
+ * @param x, y        Top-left position in pixels
+ * @param font        MSDF font
+ * @param font_size   Font size in pixels
+ * @param fill_color  Text fill color
+ * @param halo_color  Halo (outline) color
+ * @param halo_width  Halo width in pixels (typically 1-2)
+ */
+void ct_render_text_halo(CTRenderContext *ctx,
+                         const char *text, int x, int y,
+                         const SHFont *font, float font_size,
+                         CTColor fill_color, CTColor halo_color,
+                         float halo_width);
+
+/*
+ * Render a single glyph at a position.
+ * Used internally by text rendering functions.
+ *
+ * @param ctx       Render context
+ * @param glyph     Glyph to render (SHGlyph pointer)
+ * @param x, y      Top-left position of glyph bounding box
+ * @param font      MSDF font
+ * @param font_size Font size in pixels
+ * @param color     Glyph color
+ * @param threshold MSDF threshold (0.5 = normal, lower = expanded/halo)
+ */
+void ct_render_glyph(CTRenderContext *ctx,
+                     const SHGlyph *glyph,
+                     int x, int y,
+                     const SHFont *font, float font_size,
+                     CTColor color, float threshold);
+
+/*
+ * Render all placed labels from a label placer.
+ *
+ * @param ctx         Render context
+ * @param placer      Label placer with placed labels
+ * @param font        MSDF font
+ * @param fill_color  Text fill color
+ * @param halo_color  Halo color
+ * @param halo_width  Halo width in pixels
+ * @return            Number of labels rendered
+ */
+int ct_render_labels(CTRenderContext *ctx,
+                     const CTLabelPlacer *placer,
+                     const SHFont *font,
+                     CTColor fill_color, CTColor halo_color,
+                     float halo_width);
 
 /* ============================================================================
  * Pixel Access
