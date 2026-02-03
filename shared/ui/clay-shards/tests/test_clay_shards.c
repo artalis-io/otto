@@ -2220,6 +2220,79 @@ static void test_tile_layer_vector(void) {
 }
 
 /* ============================================================================
+ * Scroll Container Tests
+ * ============================================================================ */
+
+static void test_scroll_default_style(void) {
+    TEST(scroll_default_style);
+
+    ASSERT(CS_SCROLL_STYLE_DEFAULT.vertical == true, "Vertical scroll should be enabled by default");
+    ASSERT(CS_SCROLL_STYLE_DEFAULT.horizontal == false, "Horizontal scroll should be disabled by default");
+    ASSERT(CS_SCROLL_STYLE_DEFAULT.width == 0.0f, "Width 0 should mean grow to fill");
+
+    PASS();
+}
+
+static void test_scroll_delta_accumulation(void) {
+    TEST(scroll_delta_accumulation);
+
+    cs_init();
+    CsState *g = cs_get_state();
+
+    /* Initially zero */
+    ASSERT(g->scroll_delta_x == 0.0f, "Initial scroll_delta_x should be 0");
+    ASSERT(g->scroll_delta_y == 0.0f, "Initial scroll_delta_y should be 0");
+
+    /* Accumulate deltas */
+    cs_set_scroll_delta(10.0f);
+    ASSERT(g->scroll_delta_y == 10.0f, "scroll_delta_y should be 10");
+
+    cs_set_scroll_delta(5.0f);
+    ASSERT(g->scroll_delta_y == 15.0f, "scroll_delta_y should accumulate to 15");
+
+    cs_set_scroll_delta_xy(3.0f, 2.0f);
+    ASSERT(g->scroll_delta_x == 3.0f, "scroll_delta_x should be 3");
+    ASSERT(g->scroll_delta_y == 17.0f, "scroll_delta_y should accumulate to 17");
+
+    PASS();
+}
+
+static void test_scroll_container_hovered_flag(void) {
+    TEST(scroll_container_hovered_flag);
+
+    cs_init();
+    CsState *g = cs_get_state();
+
+    /* Initially false */
+    ASSERT(g->scroll_container_hovered == false, "Initially no scroll container hovered");
+    ASSERT(cs_scroll_container_hovered() == false, "API should return false");
+
+    /* Set via frame begin reset */
+    g->scroll_container_hovered = true;
+    ASSERT(cs_scroll_container_hovered() == true, "API should return true when set");
+
+    cs_frame_begin();
+    ASSERT(g->scroll_container_hovered == false, "frame_begin should reset hovered flag");
+
+    PASS();
+}
+
+static void test_scroll_info_not_found(void) {
+    TEST(scroll_info_not_found);
+
+    cs_init();
+
+    /* Query non-existent scroll container */
+    CsScrollInfo info = cs_scroll_info(CS_ID("nonexistent"));
+
+    ASSERT(info.found == false, "Should not find non-existent container");
+    ASSERT(info.at_top == true, "at_top should be true for not found");
+    ASSERT(info.at_bottom == true, "at_bottom should be true for not found");
+
+    PASS();
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -2337,6 +2410,12 @@ int main(void) {
     printf("\nMap Provider Tests:\n");
     test_tile_layer_raster();
     test_tile_layer_vector();
+
+    printf("\nScroll Container Tests:\n");
+    test_scroll_default_style();
+    test_scroll_delta_accumulation();
+    test_scroll_container_hovered_flag();
+    test_scroll_info_not_found();
 
     printf("\n======================================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

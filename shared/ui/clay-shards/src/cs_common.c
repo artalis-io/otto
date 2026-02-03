@@ -179,6 +179,9 @@ void cs_frame_begin(void) {
 
     /* Reset focusable registry for this frame */
     tls_state.focusable_count = 0;
+
+    /* Reset scroll container hover flag - set during render if any is hovered */
+    tls_state.scroll_container_hovered = false;
 }
 
 void cs_frame_end(float dt) {

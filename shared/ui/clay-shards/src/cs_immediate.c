@@ -19,6 +19,7 @@
 #include "cs_toggle.c"
 #include "cs_slider.c"
 #include "cs_dropdown.c"
+#include "cs_scroll.c"
 
 /* Map component split into multiple files */
 #include "cs_map_projection.c"
