@@ -177,6 +177,7 @@ int sh_font_msdf_inside(const SHFont *font, const SHGlyph *glyph,
 
 /*
  * Get coverage (alpha) for anti-aliased MSDF rendering.
+ * Uses nearest-neighbor sampling.
  *
  * @param font      Font with atlas data
  * @param glyph     Glyph to sample
@@ -187,6 +188,47 @@ int sh_font_msdf_inside(const SHFont *font, const SHGlyph *glyph,
  */
 float sh_font_msdf_coverage(const SHFont *font, const SHGlyph *glyph,
                             float local_x, float local_y, float font_size);
+
+/*
+ * Get coverage with bilinear sampling for higher quality.
+ * Smoother results than sh_font_msdf_coverage, especially at larger sizes.
+ *
+ * @param font      Font with atlas data
+ * @param glyph     Glyph to sample
+ * @param local_x   X position within glyph bounds [0, 1]
+ * @param local_y   Y position within glyph bounds [0, 1]
+ * @param font_size Font size (affects edge sharpness)
+ * @return          Coverage value [0.0, 1.0]
+ */
+float sh_font_msdf_coverage_bilinear(const SHFont *font, const SHGlyph *glyph,
+                                      float local_x, float local_y, float font_size);
+
+/*
+ * Get coverage with adjustable threshold for halo/outline effects.
+ * Uses bilinear sampling and smoothstep for high quality.
+ *
+ * @param font      Font with atlas data
+ * @param glyph     Glyph to sample
+ * @param local_x   X position within glyph bounds [0, 1]
+ * @param local_y   Y position within glyph bounds [0, 1]
+ * @param font_size Font size (affects edge sharpness)
+ * @param threshold Edge threshold (0.5 = normal, lower = expanded for halo)
+ * @return          Coverage value [0.0, 1.0]
+ */
+float sh_font_msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
+                                       float local_x, float local_y,
+                                       float font_size, float threshold);
+
+/*
+ * Sample MSDF atlas with bilinear interpolation.
+ * Returns the median of RGB channels as a normalized float [0, 1].
+ *
+ * @param font    Font with atlas data
+ * @param atlas_x Atlas X coordinate (can be fractional)
+ * @param atlas_y Atlas Y coordinate (can be fractional)
+ * @return        Signed distance value [0.0, 1.0] (0.5 = edge)
+ */
+float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atlas_y);
 
 #ifdef __cplusplus
 }
