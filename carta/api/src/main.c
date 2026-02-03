@@ -69,7 +69,7 @@ static TileServerConfig s_config = {
     .max_zoom = 18,
     .tile_size = 512,
     .name = "Carta Tile Server",
-    .lod_preset = LOD_NONE,  /* LOD disabled by default until rules are improved */
+    .lod_preset = LOD_DEFAULT,  /* OSM-style zoom-dependent filtering */
     .num_threads = 0         /* 0 = auto-detect CPU count */
 };
 
