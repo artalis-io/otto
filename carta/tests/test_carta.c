@@ -3,6 +3,7 @@
  */
 
 #include "carta.h"
+#include "ct_collision.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1236,6 +1237,215 @@ TEST(lod_waterway_types)
 }
 
 /* ============================================================================
+ * Collision Detection Tests
+ * ============================================================================ */
+
+TEST(collision_create)
+{
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 8);
+    ASSERT(grid != NULL);
+    ASSERT_EQ(grid->tile_width, 256);
+    ASSERT_EQ(grid->tile_height, 256);
+    ASSERT_EQ(grid->cell_size, 8);
+    ASSERT_EQ(grid->grid_width, 32);
+    ASSERT_EQ(grid->grid_height, 32);
+    ASSERT_EQ(grid->num_placements, 0);
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_create_invalid)
+{
+    ASSERT(ct_collision_create(0, 256, 8) == NULL);
+    ASSERT(ct_collision_create(256, 0, 8) == NULL);
+    ASSERT(ct_collision_create(256, 256, 0) == NULL);
+    ASSERT(ct_collision_create(-1, 256, 8) == NULL);
+    return 1;
+}
+
+TEST(collision_empty_no_collision)
+{
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 8);
+    ASSERT(grid != NULL);
+
+    /* Empty grid should have no collisions */
+    ASSERT_EQ(ct_collision_test(grid, 10, 10, 50, 20), 0);
+    ASSERT_EQ(ct_collision_test(grid, 0, 0, 256, 256), 0);
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_mark_and_test)
+{
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 8);
+    ASSERT(grid != NULL);
+
+    /* Mark a region */
+    ct_collision_mark(grid, 100, 100, 50, 30);
+
+    /* Test overlapping region - should collide */
+    ASSERT_EQ(ct_collision_test(grid, 100, 100, 10, 10), 1);
+    ASSERT_EQ(ct_collision_test(grid, 120, 110, 20, 20), 1);
+    ASSERT_EQ(ct_collision_test(grid, 90, 90, 20, 20), 1);  /* Partial overlap */
+
+    /* Test non-overlapping regions - should not collide */
+    ASSERT_EQ(ct_collision_test(grid, 0, 0, 50, 50), 0);
+    ASSERT_EQ(ct_collision_test(grid, 160, 100, 50, 30), 0);
+    ASSERT_EQ(ct_collision_test(grid, 100, 140, 50, 30), 0);
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_place_success)
+{
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 8);
+    ASSERT(grid != NULL);
+
+    /* First placement should succeed */
+    ASSERT_EQ(ct_collision_place(grid, 50, 50, 40, 20), 1);
+    ASSERT_EQ(ct_collision_get_count(grid), 1);
+
+    /* Non-overlapping placement should succeed */
+    ASSERT_EQ(ct_collision_place(grid, 150, 150, 40, 20), 1);
+    ASSERT_EQ(ct_collision_get_count(grid), 2);
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_place_fail)
+{
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 8);
+    ASSERT(grid != NULL);
+
+    /* First placement */
+    ASSERT_EQ(ct_collision_place(grid, 50, 50, 40, 20), 1);
+
+    /* Overlapping placement should fail */
+    ASSERT_EQ(ct_collision_place(grid, 60, 55, 30, 15), 0);
+    ASSERT_EQ(ct_collision_get_count(grid), 1);  /* Count unchanged */
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_place_padded)
+{
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 8);
+    ASSERT(grid != NULL);
+
+    /* Place with padding: rect (100,100,20,10) with 5px x-padding, 3px y-padding
+     * Marks area: (95, 97) to (124, 112) inclusive
+     * With 8px cells: cells x=11-15, y=12-14 are marked
+     */
+    ASSERT_EQ(ct_collision_place_padded(grid, 100, 100, 20, 10, 5, 3), 1);
+
+    /* Test just outside the padded area (cell 16 starts at pixel 128) */
+    ASSERT_EQ(ct_collision_test(grid, 128, 100, 20, 10), 0);  /* Just outside */
+
+    /* Test overlapping the padded area */
+    ASSERT_EQ(ct_collision_test(grid, 120, 100, 20, 10), 1);  /* Overlaps padded area */
+
+    /* Test without padding where original rect would have allowed adjacent placement */
+    ct_collision_reset(grid);
+    ct_collision_mark(grid, 100, 100, 20, 10);  /* No padding: marks x=12-14, y=12-13 */
+    ASSERT_EQ(ct_collision_test(grid, 120, 100, 20, 10), 0);  /* Adjacent without padding = OK */
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_reset)
+{
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 8);
+    ASSERT(grid != NULL);
+
+    /* Place some rectangles */
+    ct_collision_place(grid, 50, 50, 40, 20);
+    ct_collision_place(grid, 150, 150, 40, 20);
+    ASSERT_EQ(ct_collision_get_count(grid), 2);
+    ASSERT(ct_collision_get_occupancy(grid) > 0.0f);
+
+    /* Reset */
+    ct_collision_reset(grid);
+    ASSERT_EQ(ct_collision_get_count(grid), 0);
+    ASSERT_NEAR(ct_collision_get_occupancy(grid), 0.0f, 0.001f);
+
+    /* Should be able to place in previously occupied area */
+    ASSERT_EQ(ct_collision_place(grid, 50, 50, 40, 20), 1);
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_outside_tile)
+{
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 8);
+    ASSERT(grid != NULL);
+
+    /* Rectangles completely outside should not collide */
+    ASSERT_EQ(ct_collision_test(grid, -100, 50, 50, 50), 0);
+    ASSERT_EQ(ct_collision_test(grid, 300, 50, 50, 50), 0);
+    ASSERT_EQ(ct_collision_test(grid, 50, -100, 50, 50), 0);
+    ASSERT_EQ(ct_collision_test(grid, 50, 300, 50, 50), 0);
+
+    /* Marking outside should be safe (no crash) */
+    ct_collision_mark(grid, -100, -100, 50, 50);
+    ct_collision_mark(grid, 300, 300, 50, 50);
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_partial_outside)
+{
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 8);
+    ASSERT(grid != NULL);
+
+    /* Mark rectangle partially outside left edge */
+    ct_collision_mark(grid, -20, 100, 50, 30);
+
+    /* Test collision with the visible portion */
+    ASSERT_EQ(ct_collision_test(grid, 0, 100, 20, 20), 1);
+    ASSERT_EQ(ct_collision_test(grid, 50, 100, 20, 20), 0);
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_occupancy)
+{
+    CTCollisionGrid *grid = ct_collision_create(64, 64, 8);
+    ASSERT(grid != NULL);
+    /* 64/8 = 8x8 = 64 cells */
+
+    ASSERT_NEAR(ct_collision_get_occupancy(grid), 0.0f, 0.001f);
+
+    /* Mark quarter of the tile */
+    ct_collision_mark(grid, 0, 0, 32, 32);
+    /* 4x4 = 16 cells out of 64 = 0.25 */
+    ASSERT_NEAR(ct_collision_get_occupancy(grid), 0.25f, 0.01f);
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(collision_null_safety)
+{
+    /* All functions should handle NULL gracefully */
+    ASSERT_EQ(ct_collision_test(NULL, 0, 0, 10, 10), 0);
+    ct_collision_mark(NULL, 0, 0, 10, 10);  /* Should not crash */
+    ASSERT_EQ(ct_collision_place(NULL, 0, 0, 10, 10), 0);
+    ct_collision_reset(NULL);  /* Should not crash */
+    ct_collision_free(NULL);   /* Should not crash */
+    ASSERT_EQ(ct_collision_get_count(NULL), 0);
+    ASSERT_NEAR(ct_collision_get_occupancy(NULL), 0.0f, 0.001f);
+    return 1;
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1334,6 +1544,20 @@ int main(void)
     run_test_lod_estimate_area();
     run_test_lod_estimate_length();
     run_test_lod_waterway_types();
+
+    printf("\nCollision Detection:\n");
+    run_test_collision_create();
+    run_test_collision_create_invalid();
+    run_test_collision_empty_no_collision();
+    run_test_collision_mark_and_test();
+    run_test_collision_place_success();
+    run_test_collision_place_fail();
+    run_test_collision_place_padded();
+    run_test_collision_reset();
+    run_test_collision_outside_tile();
+    run_test_collision_partial_outside();
+    run_test_collision_occupancy();
+    run_test_collision_null_safety();
 
     printf("\n=== Results: %d/%d tests passed ===\n\n",
            tests_passed, tests_run);
