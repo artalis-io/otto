@@ -211,8 +211,8 @@
             border-radius: 6px;
             padding: 24px;
             overflow-x: auto;
-            font-size: 12px;
-            line-height: 1.4;
+            font-size: 13px;
+            line-height: 1.3;
         }
 
         .ascii-art pre {
@@ -468,26 +468,43 @@
             <h2 class="section-title">Architecture</h2>
             <div class="ascii-art">
 <pre>
-┌─────────────────────────────────────────────────────────────────┐
-│  UI (React + ClayShards)  │  WASM (Browser)  │  REST APIs       │
-├─────────────────────────────────────────────────────────────────┤
-│  Fleet Optimization (Planned)                                   │
-│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐        │
-│  │  HoSE  │ │ Tempo  │ │ Arbor  │ │ Sigma  │ │ Pulse  │        │
-│  │  HoS   │ │ Time   │ │ Search │ │ Fleet  │ │  PTA   │        │
-│  └────────┘ └────────┘ └────────┘ └────────┘ └────────┘        │
-├─────────────────────────────────────────────────────────────────┤
-│  Domain Libraries                                                │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
-│  │ FuelWise │ │   Velo   │ │  Carta   │ │  Locus   │           │
-│  │ Refueling│ │ Routing  │ │  Tiles   │ │ Geocode  │           │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘           │
-│       │            └──────┬─────┴────────────┘                  │
-│  ┌────┴────┐        ┌─────┴─────┐                               │
-│  │  Ralph  │        │  Shared   │                               │
-│  │ LP/MIP  │        │ geo, pbf  │                               │
-│  └─────────┘        └───────────┘                               │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│                                             │
+│     UI: React + ClayShards + WASM + APIs    │
+│                                             │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│                                             │
+│ Fleet: HoSE + Tempo + Arbor + Sigma + Pulse │  ◄── planned
+│                                             │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│                                             │
+│   Domain: FuelWise + Velo + Carta + Locus   │
+│                                             │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│                                             │
+│             Core: Ralph + Shared            │
+│                                             │
+└──────────────────────┬──────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────┐
+│                                             │
+│       Vendor: miniz + mongoose + Clay       │
+│                                             │
+└─────────────────────────────────────────────┘
+
+Dependencies:
+  FuelWise ──► Ralph (LP solver)
+  FuelWise ──► Velo (routing)
+  Velo, Carta, Locus ──► Shared (geo, protobuf)
+  Shared ──► miniz (compression)
+  ClayShards ──► Clay (layout)
+  APIs ──► mongoose (HTTP)
 </pre>
             </div>
         </section>
