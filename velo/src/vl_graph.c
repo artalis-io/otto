@@ -298,12 +298,14 @@ VLStatus vl_graph_build_from_pbf(VLGraphBuilder *builder, const VLPBFContext *ct
 
             if (prev_idx != VL_INVALID_NODE) {
                 double dist_m = vl_haversine(prev_coord, curr_coord);
-                uint32_t dist_mm = (uint32_t)(dist_m * 1000.0);
+                double dist_mm_d = dist_m * 1000.0;
+                uint32_t dist_mm = (dist_mm_d > UINT32_MAX) ? UINT32_MAX : (uint32_t)dist_mm_d;
 
                 int speed_kmh = way->max_speed > 0 ? way->max_speed :
                                 vl_default_speed(way->highway_type);
                 double time_s = vl_travel_time(dist_m, speed_kmh);
-                uint16_t duration_ds = (uint16_t)(time_s * 10.0);
+                double duration_ds_d = time_s * 10.0;
+                uint16_t duration_ds = (duration_ds_d > UINT16_MAX) ? UINT16_MAX : (uint16_t)duration_ds_d;
                 if (duration_ds == 0 && dist_mm > 0) duration_ds = 1;
 
                 uint16_t flags = (uint16_t)way->highway_type;
@@ -1021,7 +1023,7 @@ VLStatus vl_graph_unpack_path(const VLGraph *graph,
 
         /* Find the edge */
         uint32_t edge_idx = find_edge(graph, from, to);
-        if (edge_idx != UINT32_MAX) {
+        if (edge_idx != UINT32_MAX && edge_idx < graph->num_edges) {
             uint32_t start = cont->edge_intermediate_offset[edge_idx];
             uint32_t end = cont->edge_intermediate_offset[edge_idx + 1];
             total_nodes += (end - start);
@@ -1045,7 +1047,7 @@ VLStatus vl_graph_unpack_path(const VLGraph *graph,
             uint32_t to = node_indices[i + 1];
             uint32_t edge_idx = find_edge(graph, node, to);
 
-            if (edge_idx != UINT32_MAX) {
+            if (edge_idx != UINT32_MAX && edge_idx < graph->num_edges) {
                 uint32_t start = cont->edge_intermediate_offset[edge_idx];
                 uint32_t end = cont->edge_intermediate_offset[edge_idx + 1];
 

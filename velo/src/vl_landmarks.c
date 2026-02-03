@@ -300,6 +300,12 @@ VLLandmarks *vl_landmarks_create(const VLGraph *graph, int num_landmarks)
     }
 
     /* Allocate distance arrays (for shortest path routing) */
+    /* Check for integer overflow before allocation */
+    if ((size_t)graph->num_nodes > SIZE_MAX / (num_landmarks * sizeof(double))) {
+        free(lm->landmark_nodes);
+        free(lm);
+        return NULL;
+    }
     size_t dist_size = (size_t)graph->num_nodes * num_landmarks * sizeof(double);
     lm->dist_to_landmark = malloc(dist_size);
     lm->dist_from_landmark = malloc(dist_size);
