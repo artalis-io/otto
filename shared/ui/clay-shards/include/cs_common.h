@@ -166,6 +166,88 @@ float cs_pointer_y(void);
 /* Register a focusable element (called by components during frame) */
 void cs_register_focusable(uint32_t id);
 
+/* ============================================================================
+ * Hit Testing & Z-Order
+ * ============================================================================ */
+
+/* Z-index levels for layering */
+#define CS_Z_BASE      0     /* Normal components */
+#define CS_Z_DROPDOWN  100   /* Dropdown menus */
+#define CS_Z_MODAL     200   /* Modal dialogs */
+#define CS_Z_TOOLTIP   300   /* Tooltips */
+
+/**
+ * Hit zone identifies which part of a component was hit.
+ */
+typedef enum {
+    CS_HIT_NONE = 0,    /* No hit */
+    CS_HIT_BODY,        /* Main component body (button, checkbox box, etc.) */
+    CS_HIT_ITEM,        /* List item (dropdown item, with item_index) */
+    CS_HIT_THUMB,       /* Slider/scrollbar thumb */
+    CS_HIT_TRACK,       /* Slider/scrollbar track */
+} CsHitZone;
+
+/**
+ * Result of hit testing at a point.
+ */
+typedef struct {
+    uint32_t id;        /* Component ID (0 if no hit) */
+    CsHitZone zone;     /* Which part was hit */
+    int16_t item_index; /* Item index for CS_HIT_ITEM (-1 otherwise) */
+    int16_t z_index;    /* Z-index of the hit target */
+} CsHitResult;
+
+/**
+ * Register a hit target for the current frame.
+ * Called by components during render to register clickable areas.
+ * Uses previous frame's bounds from Clay_GetElementData().
+ *
+ * @param id Component ID
+ * @param zone Which part of the component this target represents
+ * @param item_index Item index for list items (-1 for non-list targets)
+ * @param x Bounding box x
+ * @param y Bounding box y
+ * @param w Bounding box width
+ * @param h Bounding box height
+ */
+void cs_register_hit_target(uint32_t id, CsHitZone zone, int16_t item_index,
+                            float x, float y, float w, float h);
+
+/**
+ * Push a z-index level onto the stack.
+ * All hit targets registered until the matching pop will use this z-index.
+ *
+ * @param z_index Z-index level (use CS_Z_* constants)
+ */
+void cs_push_z_index(int16_t z_index);
+
+/**
+ * Pop the current z-index level from the stack.
+ */
+void cs_pop_z_index(void);
+
+/**
+ * Get the current z-index level.
+ * @return Current z-index (CS_Z_BASE if stack is empty)
+ */
+int16_t cs_get_current_z_index(void);
+
+/**
+ * Perform hit testing at the given coordinates.
+ * Returns the topmost (highest z-index) component at that point.
+ *
+ * @param x Screen x coordinate
+ * @param y Screen y coordinate
+ * @return Hit result (id=0 if no hit)
+ */
+CsHitResult cs_hit_test(float x, float y);
+
+/**
+ * Get the number of registered hit targets (for testing/debugging).
+ * @return Number of hit targets registered this frame
+ */
+int cs_hit_target_count(void);
+
 /* Focus next/previous element in tab order. Returns true if focus changed. */
 bool cs_focus_next(void);
 bool cs_focus_prev(void);

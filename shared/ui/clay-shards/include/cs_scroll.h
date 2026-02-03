@@ -127,6 +127,36 @@ CsScrollContext cs_scroll_begin_internal(uint32_t id, float height, const CsScro
 void cs_scroll_end_internal(CsScrollContext *ctx);
 
 /**
+ * Register a scrollbar track hit target.
+ *
+ * Call this after rendering a custom scrollbar track to enable unified
+ * hit testing via cs_hit_test(). The hit target will be associated with
+ * the scroll container's ID.
+ *
+ * @param scroll_id ID of the scroll container
+ * @param x Track bounding box x
+ * @param y Track bounding box y
+ * @param w Track bounding box width
+ * @param h Track bounding box height
+ */
+void cs_scroll_register_track(uint32_t scroll_id, float x, float y, float w, float h);
+
+/**
+ * Register a scrollbar thumb hit target.
+ *
+ * Call this after rendering a custom scrollbar thumb to enable unified
+ * hit testing via cs_hit_test(). The hit target will be associated with
+ * the scroll container's ID.
+ *
+ * @param scroll_id ID of the scroll container
+ * @param x Thumb bounding box x
+ * @param y Thumb bounding box y
+ * @param w Thumb bounding box width
+ * @param h Thumb bounding box height
+ */
+void cs_scroll_register_thumb(uint32_t scroll_id, float x, float y, float w, float h);
+
+/**
  * Scroll container macro.
  *
  * Creates a scrollable container with the specified height.

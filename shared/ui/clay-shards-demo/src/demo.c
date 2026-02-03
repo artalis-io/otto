@@ -784,6 +784,25 @@ static void render_route_panel(void) {
                                 .cornerRadius = CLAY_CORNER_RADIUS(3)
                             }) {}
                         }
+
+                        /* Register hit targets for unified hit testing (uses previous frame's bounds) */
+                        uint32_t scroll_id = CS_ID("instructions");
+                        Clay_BoundingBox track_box = Clay_GetElementData(CLAY_ID("ScrollTrack")).boundingBox;
+                        Clay_BoundingBox thumb_box = Clay_GetElementData(CLAY_ID("ScrollThumb")).boundingBox;
+                        cs_scroll_register_track(scroll_id, track_box.x, track_box.y, track_box.width, track_box.height);
+                        cs_scroll_register_thumb(scroll_id, thumb_box.x, thumb_box.y, thumb_box.width, thumb_box.height);
+
+                        /* Store dimensions for drag handling */
+                        g_app.scrollbar.track_visible = true;
+                        g_app.scrollbar.content_height = scroll_info.content_height;
+                        g_app.scrollbar.view_height = scroll_info.view_height;
+                        g_app.scrollbar.track_height = track_height;
+                        g_app.scrollbar.track_x = track_box.x;
+                        g_app.scrollbar.track_y = track_box.y;
+                        g_app.scrollbar.track_w = track_box.width;
+                        g_app.scrollbar.track_h = track_box.height;
+                    } else {
+                        g_app.scrollbar.track_visible = false;
                     }
                 }
             }
@@ -1087,16 +1106,15 @@ EXPORT int scrollbar_is_dragging(void) {
     return g_app.scrollbar.dragging ? 1 : 0;
 }
 
-/* Check if click coordinates are over the scrollbar track
- * Uses stored bounds from last render frame */
+/* Check if click coordinates are over the scrollbar track or thumb
+ * Uses unified hit testing system */
 EXPORT int scrollbar_hit_test_xy(float x, float y) {
     if (!g_app.scrollbar.track_visible) return 0;
 
-    /* Manual bounds check */
-    if (x >= g_app.scrollbar.track_x &&
-        x <= g_app.scrollbar.track_x + g_app.scrollbar.track_w &&
-        y >= g_app.scrollbar.track_y &&
-        y <= g_app.scrollbar.track_y + g_app.scrollbar.track_h) {
+    /* Use unified hit testing */
+    CsHitResult hit = cs_hit_test(x, y);
+    if (hit.id == CS_ID("instructions") &&
+        (hit.zone == CS_HIT_TRACK || hit.zone == CS_HIT_THUMB)) {
         return 1;
     }
     return 0;
@@ -1114,41 +1132,12 @@ EXPORT float scrollbar_view_height(void) { return g_app.scrollbar.view_height; }
 EXPORT float scrollbar_track_height(void) { return g_app.scrollbar.track_height; }
 EXPORT uint32_t scrollbar_scroll_id(void) { return CS_ID("instructions"); }
 
-/* Update scrollbar bounds from render commands - call after layout */
+/* Update scrollbar bounds - now handled inline during rendering.
+ * This function is kept for backwards compatibility but is a no-op.
+ * Scrollbar bounds and hit targets are registered during render_route_panel(). */
 static void update_scrollbar_bounds(void) {
-    g_app.scrollbar.track_visible = false;
-
-    /* Get scroll info for dimensions */
-    CsScrollInfo info = cs_scroll_info(CS_ID("instructions"));
-    if (!info.found || info.content_height <= info.view_height) {
-        return;  /* No scrollbar needed */
-    }
-
-    /* Store scroll dimensions */
-    g_app.scrollbar.content_height = info.content_height;
-    g_app.scrollbar.view_height = info.view_height;
-    g_app.scrollbar.track_height = 120.0f;  /* Must match render code */
-
-    /* Find ScrollTrack in render commands */
-    uint32_t track_id = CLAY_ID("ScrollTrack").id;
-    int cmd_count = cs_clay_cmd_count();
-
-    for (int i = 0; i < cmd_count; i++) {
-        if (cs_clay_cmd_type(i) == 1) {  /* CLAY_RENDER_COMMAND_TYPE_RECTANGLE */
-            /* Find scrollbar track by size heuristics: 6px wide, 120px tall */
-            float w = cs_clay_cmd_w(i);
-            float h = cs_clay_cmd_h(i);
-
-            if (w >= 5.0f && w <= 8.0f && h >= 118.0f && h <= 122.0f) {
-                g_app.scrollbar.track_x = cs_clay_cmd_x(i);
-                g_app.scrollbar.track_y = cs_clay_cmd_y(i);
-                g_app.scrollbar.track_w = w;
-                g_app.scrollbar.track_h = h;
-                g_app.scrollbar.track_visible = true;
-                break;
-            }
-        }
-    }
+    /* Bounds are now updated inline during rendering */
+    (void)0;
 }
 
 EXPORT void map_scroll(float delta, float x, float y) {

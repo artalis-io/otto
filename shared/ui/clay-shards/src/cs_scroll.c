@@ -223,8 +223,23 @@ void cs_scroll_end_internal(CsScrollContext *ctx) {
     /* Close the Clay element */
     Clay__CloseElement();
 
+    /* Register hit target for the scroll body (uses previous frame's bounds) */
+    Clay_ElementId clay_id = (Clay_ElementId){.id = ctx->id, .stringId = {0}};
+    Clay_BoundingBox box = Clay_GetElementData(clay_id).boundingBox;
+    cs_register_hit_target(ctx->id, CS_HIT_BODY, -1, box.x, box.y, box.width, box.height);
+
     /* Clear active scroll container */
     g->active_scroll_id = 0;
+}
 
-    (void)ctx;  /* Currently unused, but available for future state */
+/* ============================================================================
+ * Scrollbar Hit Target Registration
+ * ============================================================================ */
+
+void cs_scroll_register_track(uint32_t scroll_id, float x, float y, float w, float h) {
+    cs_register_hit_target(scroll_id, CS_HIT_TRACK, -1, x, y, w, h);
+}
+
+void cs_scroll_register_thumb(uint32_t scroll_id, float x, float y, float w, float h) {
+    cs_register_hit_target(scroll_id, CS_HIT_THUMB, -1, x, y, w, h);
 }

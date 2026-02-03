@@ -182,6 +182,10 @@ void cs_frame_begin(void) {
 
     /* Reset scroll container hover flag - set during render if any is hovered */
     tls_state.scroll_container_hovered = false;
+
+    /* Reset hit testing state for this frame */
+    tls_state.hit_target_count = 0;
+    tls_state.z_stack_depth = 0;
 }
 
 void cs_frame_end(float dt) {
@@ -614,4 +618,77 @@ CS_EXPORT int cs_get_error_count(void) {
 CS_EXPORT void cs_clear_errors(void) {
     tls_last_error = CS_ERR_NONE;
     tls_error_count = 0;
+}
+
+/* ============================================================================
+ * Hit Testing & Z-Order
+ * ============================================================================ */
+
+CS_EXPORT void cs_register_hit_target(uint32_t id, CsHitZone zone, int16_t item_index,
+                                      float x, float y, float w, float h) {
+    if (tls_state.hit_target_count >= CS_MAX_HIT_TARGETS) {
+        cs_record_error(CS_ERR_CAPACITY_EXCEEDED);
+        return;
+    }
+
+    CsHitTarget *target = &tls_state.hit_targets[tls_state.hit_target_count++];
+    target->id = id;
+    target->zone = zone;
+    target->item_index = item_index;
+    target->z_index = cs_get_current_z_index();
+    target->x = x;
+    target->y = y;
+    target->w = w;
+    target->h = h;
+}
+
+CS_EXPORT void cs_push_z_index(int16_t z_index) {
+    if (tls_state.z_stack_depth >= CS_MAX_Z_STACK) {
+        cs_record_error(CS_ERR_CAPACITY_EXCEEDED);
+        return;
+    }
+    tls_state.z_stack[tls_state.z_stack_depth++] = z_index;
+}
+
+CS_EXPORT void cs_pop_z_index(void) {
+    if (tls_state.z_stack_depth > 0) {
+        tls_state.z_stack_depth--;
+    }
+}
+
+CS_EXPORT int16_t cs_get_current_z_index(void) {
+    if (tls_state.z_stack_depth == 0) {
+        return CS_Z_BASE;
+    }
+    return tls_state.z_stack[tls_state.z_stack_depth - 1];
+}
+
+CS_EXPORT CsHitResult cs_hit_test(float x, float y) {
+    CsHitResult result = {0};
+    result.item_index = -1;
+
+    int16_t best_z = -1;
+
+    for (int i = 0; i < tls_state.hit_target_count; i++) {
+        CsHitTarget *t = &tls_state.hit_targets[i];
+
+        /* Check if point is inside bounding box */
+        if (x >= t->x && x < t->x + t->w &&
+            y >= t->y && y < t->y + t->h) {
+            /* Higher z-index wins, or later registration at same z-index */
+            if (t->z_index >= best_z) {
+                best_z = t->z_index;
+                result.id = t->id;
+                result.zone = t->zone;
+                result.item_index = t->item_index;
+                result.z_index = t->z_index;
+            }
+        }
+    }
+
+    return result;
+}
+
+CS_EXPORT int cs_hit_target_count(void) {
+    return tls_state.hit_target_count;
 }
