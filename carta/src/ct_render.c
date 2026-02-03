@@ -57,11 +57,21 @@ void ct_render_clear(CTRenderContext *ctx)
     uint8_t b = CT_COLOR_B(bg);
     uint8_t a = CT_COLOR_A(bg);
 
-    for (int i = 0; i < ctx->width * ctx->height; i++) {
-        ctx->pixels[i * 4 + 0] = r;
-        ctx->pixels[i * 4 + 1] = g;
-        ctx->pixels[i * 4 + 2] = b;
-        ctx->pixels[i * 4 + 3] = a;
+    int num_pixels = ctx->width * ctx->height;
+
+    /* Fast path: if all components are the same, use memset */
+    if (r == g && g == b && b == a) {
+        memset(ctx->pixels, r, (size_t)num_pixels * 4);
+        return;
+    }
+
+    /* Otherwise use 32-bit writes instead of 4 separate byte writes */
+    uint32_t rgba = ((uint32_t)a << 24) | ((uint32_t)b << 16) |
+                    ((uint32_t)g << 8) | (uint32_t)r;
+    uint32_t *pixels32 = (uint32_t *)ctx->pixels;
+
+    for (int i = 0; i < num_pixels; i++) {
+        pixels32[i] = rgba;
     }
 }
 
