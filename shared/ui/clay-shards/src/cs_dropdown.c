@@ -279,9 +279,35 @@ CsDropdownResult cs_dropdown(
             }
         }
 
-        /* Note: Escape key and arrow key navigation would require
-         * additional key state tracking in CsState. For now, dropdowns
-         * can be closed by clicking elsewhere or pressing Enter again. */
+        /* Escape closes dropdown */
+        if (g->pending_escape && is_open) {
+            tls_open_dropdown_id = 0;
+            result.closed = true;
+        }
+
+        /* Arrow keys navigate selection */
+        if (g->pending_arrow_up) {
+            if (!is_open) {
+                /* Open dropdown when pressing arrow on closed dropdown */
+                tls_open_dropdown_id = id;
+                result.opened = true;
+            } else if (current_selected > 0) {
+                *selected = current_selected - 1;
+                result.changed = true;
+                result.selected = *selected;
+            }
+        }
+        if (g->pending_arrow_down) {
+            if (!is_open) {
+                /* Open dropdown when pressing arrow on closed dropdown */
+                tls_open_dropdown_id = id;
+                result.opened = true;
+            } else if (current_selected < count - 1) {
+                *selected = current_selected + 1;
+                result.changed = true;
+                result.selected = *selected;
+            }
+        }
     }
 
     /* Close dropdown if clicked elsewhere (not on button or list) */
