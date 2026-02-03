@@ -148,6 +148,59 @@ void ct_render_blend_pixel(CTRenderContext *ctx, int x, int y, CTColor color)
     ctx->pixels[offset + 3] = out_a;
 }
 
+/*
+ * Fast horizontal span fill - does bounds checking once, not per pixel.
+ * Used by scanline polygon fill for significant speedup.
+ */
+static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTColor color)
+{
+    /* Bounds check y once */
+    if (y < 0 || y >= ctx->height) return;
+
+    /* Clip x range to buffer */
+    if (x_start < 0) x_start = 0;
+    if (x_end >= ctx->width) x_end = ctx->width - 1;
+    if (x_start > x_end) return;
+
+    uint8_t sr = CT_COLOR_R(color);
+    uint8_t sg = CT_COLOR_G(color);
+    uint8_t sb = CT_COLOR_B(color);
+    uint8_t sa = CT_COLOR_A(color);
+
+    uint8_t *row = ctx->pixels + y * ctx->width * 4;
+
+    /* Fast path: opaque color - direct 32-bit writes */
+    if (sa == 255) {
+        uint32_t rgba = ((uint32_t)255 << 24) | ((uint32_t)sb << 16) |
+                        ((uint32_t)sg << 8) | (uint32_t)sr;
+        uint32_t *row32 = (uint32_t *)row;
+        for (int x = x_start; x <= x_end; x++) {
+            row32[x] = rgba;
+        }
+        return;
+    }
+
+    /* Transparent - nothing to do */
+    if (sa == 0) return;
+
+    /* Alpha blending - must process each pixel */
+    for (int x = x_start; x <= x_end; x++) {
+        int offset = x * 4;
+        uint8_t dr = row[offset + 0];
+        uint8_t dg = row[offset + 1];
+        uint8_t db = row[offset + 2];
+        uint8_t da = row[offset + 3];
+
+        uint16_t out_a = sa + (da * (255 - sa)) / 255;
+        if (out_a == 0) continue;
+
+        row[offset + 0] = (sr * sa + dr * da * (255 - sa) / 255) / out_a;
+        row[offset + 1] = (sg * sa + dg * da * (255 - sa) / 255) / out_a;
+        row[offset + 2] = (sb * sa + db * da * (255 - sa) / 255) / out_a;
+        row[offset + 3] = out_a;
+    }
+}
+
 /* ============================================================================
  * Line Drawing (Xiaolin Wu's Anti-aliased Line)
  * ============================================================================ */
@@ -386,17 +439,11 @@ void ct_render_polygon(CTRenderContext *ctx,
             active[j + 1] = key;
         }
 
-        /* Fill between pairs of edges */
+        /* Fill between pairs of edges using fast span fill */
         for (int i = 0; i + 1 < num_active; i += 2) {
             int x_start = (int)(active[i].x + 0.5f);
             int x_end = (int)(active[i + 1].x + 0.5f);
-
-            if (x_start < 0) x_start = 0;
-            if (x_end >= ctx->width) x_end = ctx->width - 1;
-
-            for (int x = x_start; x <= x_end; x++) {
-                ct_render_blend_pixel(ctx, x, y, color);
-            }
+            fill_span(ctx, y, x_start, x_end, color);
         }
 
         /* Update x for next scanline */
@@ -512,17 +559,11 @@ void ct_render_multipolygon(CTRenderContext *ctx,
             active[j + 1] = key;
         }
 
-        /* Fill between pairs of edges (even-odd rule) */
+        /* Fill between pairs of edges (even-odd rule) using fast span fill */
         for (int i = 0; i + 1 < num_active; i += 2) {
             int x_start = (int)(active[i].x + 0.5f);
             int x_end = (int)(active[i + 1].x + 0.5f);
-
-            if (x_start < 0) x_start = 0;
-            if (x_end >= ctx->width) x_end = ctx->width - 1;
-
-            for (int x = x_start; x <= x_end; x++) {
-                ct_render_blend_pixel(ctx, x, y, color);
-            }
+            fill_span(ctx, y, x_start, x_end, color);
         }
 
         /* Update x for next scanline */
