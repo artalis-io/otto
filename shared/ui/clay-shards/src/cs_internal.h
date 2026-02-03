@@ -116,6 +116,8 @@ typedef struct {
     bool pending_arrow_down;    /* Down arrow pressed (for dropdown navigation) */
     bool pending_arrow_left;    /* Left arrow pressed (for slider decrement) */
     bool pending_arrow_right;   /* Right arrow pressed (for slider increment) */
+    bool pending_home;          /* Home key pressed (for slider jump to min) */
+    bool pending_end;           /* End key pressed (for slider jump to max) */
 
     /* Pointer position (set by cs_set_pointer) */
     float pointer_x, pointer_y;
