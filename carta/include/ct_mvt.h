@@ -10,6 +10,9 @@
 
 #include "ct_types.h"
 
+/* Forward declaration for LOD config */
+struct CTLODConfig;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,12 +45,14 @@ size_t ct_encode_mvt(const CTTile *tile, const CTMVTOptions *opts,
  * @param ctx      PBF context with parsed data
  * @param coord    Tile coordinates
  * @param opts     Encoding options (NULL for defaults)
+ * @param lod      LOD config for zoom-based filtering (NULL = no filtering)
  * @param buffer   Output buffer
  * @param capacity Buffer capacity in bytes
  * @return Number of bytes written, or 0 on error
  */
 size_t ct_generate_mvt(const CTPBFContext *ctx, CTTileCoord coord,
                        const CTMVTOptions *opts,
+                       const struct CTLODConfig *lod,
                        uint8_t *buffer, size_t capacity);
 
 /* ============================================================================

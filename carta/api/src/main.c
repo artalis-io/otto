@@ -436,7 +436,9 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
     CTMVTOptions opts;
     ct_mvt_default_options(&opts);
 
-    size_t size = ct_generate_mvt(s_pbf_ctx, coord, &opts, buffer, capacity);
+    /* Apply LOD filtering if enabled */
+    const CTLODConfig *lod = (s_config.lod_preset != LOD_NONE) ? &s_lod_config : NULL;
+    size_t size = ct_generate_mvt(s_pbf_ctx, coord, &opts, lod, buffer, capacity);
 
     if (size == 0) {
         free(buffer);

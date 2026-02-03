@@ -115,7 +115,7 @@ size_t wasm_generate_mvt(CTPBFContext* ctx,
 
     CTTileCoord coord = {(uint8_t)z, (uint32_t)x, (uint32_t)y};
 
-    return ct_generate_mvt(ctx, coord, NULL, buffer, capacity);
+    return ct_generate_mvt(ctx, coord, NULL, NULL, buffer, capacity);
 }
 
 /**

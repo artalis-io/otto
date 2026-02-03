@@ -174,7 +174,7 @@ void ct_generate_tiles(const CTPBFContext *ctx, const CTBBox *bbox,
             size_t size;
 
             if (vector) {
-                size = ct_generate_mvt(ctx, tiles[i], &mvt_opts,
+                size = ct_generate_mvt(ctx, tiles[i], &mvt_opts, NULL,
                                        buffer, buffer_size);
             } else {
                 size = ct_generate_png(ctx, tiles[i], &style, &png_opts,

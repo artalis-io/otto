@@ -155,6 +155,10 @@ typedef struct {
     CTLayer layer;
     int feature_type;        /* Layer-specific subtype (e.g., road type) */
 
+    /* Size metrics for LOD filtering */
+    float area_sqm;          /* Estimated area in m² (for polygons) */
+    float length_m;          /* Estimated length in m (for lines) */
+
     /* Properties (key-value pairs) */
     char **prop_keys;
     char **prop_values;

@@ -107,7 +107,7 @@ int main(int argc, char *argv[])
     /* Also generate MVT for comparison */
     printf("\nGenerating MVT tile...\n");
     start = get_time();
-    size_t mvt_size = ct_generate_mvt(ctx, tile, NULL, buffer, capacity);
+    size_t mvt_size = ct_generate_mvt(ctx, tile, NULL, NULL, buffer, capacity);
     double mvt_time = get_time() - start;
 
     if (mvt_size > 0) {
