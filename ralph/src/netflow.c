@@ -120,9 +120,12 @@ size_t ralph_netflow_workspace_size(int max_nodes, int max_arcs) {
         return 0;
     }
 
-    /* Check for overflow: max_arcs + max_nodes */
-    if ((size_t)max_arcs > SIZE_MAX - (size_t)max_nodes) {
-        return 0;
+    /* Check for overflow: max_arcs + max_nodes + 1 (for artificial root) */
+    if ((size_t)max_nodes > SIZE_MAX - 1) {
+        return 0;  /* max_nodes + 1 would overflow */
+    }
+    if ((size_t)max_arcs > SIZE_MAX - (size_t)max_nodes - 1) {
+        return 0;  /* max_arcs + max_nodes would overflow */
     }
 
     size_t n = (size_t)max_nodes + 1;       /* +1 for artificial root */
@@ -662,7 +665,7 @@ static void update_tree(
     int prev_node = new_parent;
     int prev_arc = entering_arc;
 
-    while (current != subtree_root) {
+    while (current != subtree_root && current >= 0) {
         int next_node = ws->parent[current];
         int next_arc = ws->pred_arc[current];
 

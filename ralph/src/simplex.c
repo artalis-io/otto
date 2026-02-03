@@ -503,10 +503,12 @@ SimplexTableau* tableau_create(LPModel *model) {
 
         /* Get the diagonal coefficient of the basic variable (column of bv in row i) */
         double col_coeff = 0.0;
-        for (int p = tab->A_ext->colptr[bv]; p < tab->A_ext->colptr[bv + 1]; p++) {
-            if (tab->A_ext->rowidx[p] == i) {
-                col_coeff = tab->A_ext->values[p];
-                break;
+        if (bv >= 0 && bv < tab->A_ext->ncols) {
+            for (int p = tab->A_ext->colptr[bv]; p < tab->A_ext->colptr[bv + 1]; p++) {
+                if (tab->A_ext->rowidx[p] == i) {
+                    col_coeff = tab->A_ext->values[p];
+                    break;
+                }
             }
         }
 
@@ -1410,6 +1412,9 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     }
 
     /* Update LU factorization */
+    if (!tab->A_ext || entering < 0 || entering >= tab->A_ext->ncols) {
+        return -1;  /* Invalid state */
+    }
     sparse_get_column(tab->A_ext, entering, tab->work1);
     if (lu_update(tab->lu, leaving_pos, tab->work1) != 0) {
         /* Update failed, refactorize */

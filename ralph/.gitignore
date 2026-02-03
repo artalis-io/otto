@@ -15,6 +15,7 @@ bench_mip
 bench_vs_glpk
 bench_lap
 bench_lap_perf
+bench_netflow
 compare_glpk
 profile_bench
 
