@@ -114,6 +114,20 @@ typedef enum {
 } CTRoadType;
 
 /* ============================================================================
+ * Waterway Types (for styling)
+ * ============================================================================ */
+
+typedef enum {
+    CT_WATERWAY_RIVER = 0,   /* Major rivers (Danube, Rhine, etc.) */
+    CT_WATERWAY_CANAL,       /* Navigable canals */
+    CT_WATERWAY_STREAM,      /* Small streams */
+    CT_WATERWAY_DRAIN,       /* Drainage ditches */
+    CT_WATERWAY_DITCH,       /* Small ditches */
+    CT_WATERWAY_OTHER,       /* Other waterways */
+    CT_WATERWAY_TYPE_COUNT
+} CTWaterwayType;
+
+/* ============================================================================
  * Feature Geometry Types
  * ============================================================================ */
 
@@ -194,6 +208,9 @@ typedef struct {
     CTColor road_colors[CT_ROAD_TYPE_COUNT];
     CTColor road_outline_colors[CT_ROAD_TYPE_COUNT];
     CTRoadWidth road_widths[CT_ROAD_TYPE_COUNT];  /* Width in pixels at key zoom levels */
+
+    /* Waterway styling by type - data-driven widths based on waterway class */
+    float waterway_widths[CT_WATERWAY_TYPE_COUNT];  /* Width in pixels */
 
     /* Area colors */
     CTColor water_color;

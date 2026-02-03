@@ -300,6 +300,32 @@ TEST(road_width_at_zoom)
     return 1;
 }
 
+TEST(waterway_width)
+{
+    CTStyle style;
+    ct_default_style(&style);
+
+    /* River centerline (actual river shape is polygon from natural=water) */
+    float river_width = ct_style_waterway_width(&style, CT_WATERWAY_RIVER);
+    ASSERT(river_width >= 1.0f && river_width <= 2.0f);
+
+    /* Canals should be wider than streams */
+    float canal_width = ct_style_waterway_width(&style, CT_WATERWAY_CANAL);
+    float stream_width = ct_style_waterway_width(&style, CT_WATERWAY_STREAM);
+    ASSERT(canal_width > stream_width);
+
+    /* Ditches thinnest */
+    float ditch_width = ct_style_waterway_width(&style, CT_WATERWAY_DITCH);
+    ASSERT(ditch_width < stream_width);
+    ASSERT(ditch_width >= 0.5f);  /* Minimum visibility */
+
+    /* Invalid type returns fallback */
+    float invalid_width = ct_style_waterway_width(&style, -1);
+    ASSERT(invalid_width >= 0.5f);
+
+    return 1;
+}
+
 /* ============================================================================
  * Render Context Tests
  * ============================================================================ */
@@ -842,6 +868,7 @@ int main(void)
     run_test_default_style();
     run_test_scale_width();
     run_test_road_width_at_zoom();
+    run_test_waterway_width();
 
     printf("\nRendering:\n");
     run_test_render_create();
