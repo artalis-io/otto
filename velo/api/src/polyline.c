@@ -90,6 +90,7 @@ size_t polyline_decode(const char *encoded, int precision,
         int b;
         do {
             if (pos >= len) return 0;
+            if (shift > 30) return 0;  /* Prevent overflow from malformed input */
             b = encoded[pos++] - 63;
             result |= (b & 0x1F) << shift;
             shift += 5;
@@ -102,6 +103,7 @@ size_t polyline_decode(const char *encoded, int precision,
         shift = 0;
         do {
             if (pos >= len) return 0;
+            if (shift > 30) return 0;  /* Prevent overflow from malformed input */
             b = encoded[pos++] - 63;
             result |= (b & 0x1F) << shift;
             shift += 5;
