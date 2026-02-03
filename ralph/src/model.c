@@ -83,29 +83,31 @@ void lp_model_free(LPModel *model) {
     if (!model) return;
 
     sparse_free(model->A);
-    free(model->c);
-    free(model->b);
-    free(model->sense);
-    free(model->lb);
-    free(model->ub);
-    free(model->var_type);
+    model->A = NULL;
+    SAFE_FREE(model->c);
+    SAFE_FREE(model->b);
+    SAFE_FREE(model->sense);
+    SAFE_FREE(model->lb);
+    SAFE_FREE(model->ub);
+    SAFE_FREE(model->var_type);
 
     if (model->var_names) {
         for (int i = 0; i < model->num_vars; i++) {
-            free(model->var_names[i]);
+            SAFE_FREE(model->var_names[i]);
         }
-        free(model->var_names);
+        SAFE_FREE(model->var_names);
     }
 
     if (model->con_names) {
         for (int i = 0; i < model->num_cons; i++) {
-            free(model->con_names[i]);
+            SAFE_FREE(model->con_names[i]);
         }
-        free(model->con_names);
+        SAFE_FREE(model->con_names);
     }
 
-    free(model->name);
+    SAFE_FREE(model->name);
     build_state_free(model->build_state);
+    model->build_state = NULL;
     free(model);
 }
 

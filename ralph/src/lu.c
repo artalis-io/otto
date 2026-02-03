@@ -172,54 +172,54 @@ LUFactorization* lu_create(int m) {
 void lu_free(LUFactorization *lu) {
     if (!lu) return;
 
-    free(lu->L_colptr);
-    free(lu->L_rowidx);
-    free(lu->L_values);
-    free(lu->U_colptr);
-    free(lu->U_rowidx);
-    free(lu->U_values);
-    free(lu->U_diag);
-    free(lu->perm);
-    free(lu->perm_inv);
-    free(lu->col_perm);
-    free(lu->col_perm_inv);
-    free(lu->eta_col);
+    SAFE_FREE(lu->L_colptr);
+    SAFE_FREE(lu->L_rowidx);
+    SAFE_FREE(lu->L_values);
+    SAFE_FREE(lu->U_colptr);
+    SAFE_FREE(lu->U_rowidx);
+    SAFE_FREE(lu->U_values);
+    SAFE_FREE(lu->U_diag);
+    SAFE_FREE(lu->perm);
+    SAFE_FREE(lu->perm_inv);
+    SAFE_FREE(lu->col_perm);
+    SAFE_FREE(lu->col_perm_inv);
+    SAFE_FREE(lu->eta_col);
 
     if (lu->eta_indices) {
         for (int i = 0; i < lu->eta_capacity; i++) {
-            free(lu->eta_indices[i]);
+            SAFE_FREE(lu->eta_indices[i]);
         }
-        free(lu->eta_indices);
+        SAFE_FREE(lu->eta_indices);
     }
     if (lu->eta_values) {
         for (int i = 0; i < lu->eta_capacity; i++) {
-            free(lu->eta_values[i]);
+            SAFE_FREE(lu->eta_values[i]);
         }
-        free(lu->eta_values);
+        SAFE_FREE(lu->eta_values);
     }
-    free(lu->eta_nnz);
+    SAFE_FREE(lu->eta_nnz);
 
     /* Free Forrest-Tomlin structures */
-    free(lu->ft_col_order);
-    free(lu->ft_col_order_inv);
-    free(lu->ft_spike_col);
-    free(lu->ft_spike_diag);
-    free(lu->ft_spike_nnz);
-    free(lu->ft_spike_start);
-    free(lu->ft_compact_matrix);
+    SAFE_FREE(lu->ft_col_order);
+    SAFE_FREE(lu->ft_col_order_inv);
+    SAFE_FREE(lu->ft_spike_col);
+    SAFE_FREE(lu->ft_spike_diag);
+    SAFE_FREE(lu->ft_spike_nnz);
+    SAFE_FREE(lu->ft_spike_start);
+    SAFE_FREE(lu->ft_compact_matrix);
 
     /* Free contiguous spike pool (single allocation for all spike data) */
-    free(lu->spike_pool_idx);
-    free(lu->spike_pool_val);
+    SAFE_FREE(lu->spike_pool_idx);
+    SAFE_FREE(lu->spike_pool_val);
 
     /* Free hyper-sparse workspace */
-    free(lu->hs_work1);
-    free(lu->hs_work2);
-    free(lu->hs_marked);
-    free(lu->hs_idx);
-    free(lu->hs_val);
-    free(lu->hs_stack);
-    free(lu->perm_work);
+    SAFE_FREE(lu->hs_work1);
+    SAFE_FREE(lu->hs_work2);
+    SAFE_FREE(lu->hs_marked);
+    SAFE_FREE(lu->hs_idx);
+    SAFE_FREE(lu->hs_val);
+    SAFE_FREE(lu->hs_stack);
+    SAFE_FREE(lu->perm_work);
 
     free(lu);
 }

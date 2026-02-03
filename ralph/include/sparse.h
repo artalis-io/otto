@@ -8,6 +8,12 @@
 #define RALPH_SPARSE_H
 
 #include <stddef.h>
+#include <stdlib.h>
+
+/* Safe free macro - NULLs pointer after freeing to prevent double-free */
+#ifndef SAFE_FREE
+#define SAFE_FREE(p) do { free(p); (p) = NULL; } while(0)
+#endif
 
 /* Compressed Sparse Column matrix */
 typedef struct {

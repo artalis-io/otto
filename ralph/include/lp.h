@@ -15,6 +15,9 @@
 #define RALPH_ZERO_TOL 1e-12
 #define RALPH_INT_TOL 1e-5
 
+/* Safe free macro - NULLs pointer after freeing to prevent double-free */
+#define SAFE_FREE(p) do { free(p); (p) = NULL; } while(0)
+
 /* Default parameter values */
 #define RALPH_DEFAULT_MAX_ITER 1000000
 #define RALPH_DEFAULT_TIME_LIMIT 3600.0
