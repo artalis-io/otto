@@ -1635,3 +1635,106 @@ VLStatus vl_graph_reorder_hilbert(VLGraph *graph)
 
     return VL_OK;
 }
+
+/* ============================================================================
+ * Graph Validation
+ * ============================================================================ */
+
+VLStatus vl_graph_validate(const VLGraph *graph, int *out_errors)
+{
+    if (!graph) {
+        if (out_errors) *out_errors = 1;
+        return VL_ERROR_INVALID_ARGUMENT;
+    }
+
+    int errors = 0;
+
+    /* Check basic structure */
+    if (graph->num_nodes == 0) {
+        fprintf(stderr, "velo: validation error: graph has no nodes\n");
+        errors++;
+    }
+    if (graph->num_edges == 0 && graph->num_nodes > 1) {
+        fprintf(stderr, "velo: validation error: graph has no edges\n");
+        errors++;
+    }
+    if (!graph->nodes || !graph->edges) {
+        fprintf(stderr, "velo: validation error: null node/edge arrays\n");
+        errors++;
+        if (out_errors) *out_errors = errors;
+        return VL_ERROR_INVALID_ARGUMENT;
+    }
+
+    /* Validate edges */
+    uint32_t saturated_distances = 0;
+    uint32_t saturated_durations = 0;
+    uint32_t zero_distances = 0;
+    uint32_t invalid_targets = 0;
+
+    for (uint32_t i = 0; i < graph->num_edges; i++) {
+        const VLEdge *edge = &graph->edges[i];
+
+        /* Check target is valid */
+        if (edge->target >= graph->num_nodes) {
+            invalid_targets++;
+        }
+
+        /* Check for saturated values (may indicate overflow during construction) */
+        if (edge->distance == UINT32_MAX) {
+            saturated_distances++;
+        }
+        if (edge->duration == UINT16_MAX) {
+            saturated_durations++;
+        }
+
+        /* Check for zero distance (suspicious unless self-loop) */
+        if (edge->distance == 0) {
+            zero_distances++;
+        }
+    }
+
+    if (invalid_targets > 0) {
+        fprintf(stderr, "velo: validation error: %u edges have invalid targets\n", invalid_targets);
+        errors++;
+    }
+
+    /* Warn about saturated values (not errors, but suspicious) */
+    if (saturated_distances > 0) {
+        fprintf(stderr, "velo: validation warning: %u edges have saturated distance (UINT32_MAX)\n",
+                saturated_distances);
+    }
+    if (saturated_durations > 0) {
+        fprintf(stderr, "velo: validation warning: %u edges have saturated duration (UINT16_MAX)\n",
+                saturated_durations);
+    }
+
+    /* Validate node edge_start/edge_count consistency */
+    uint32_t expected_offset = 0;
+    for (uint32_t i = 0; i < graph->num_nodes; i++) {
+        const VLNode *node = &graph->nodes[i];
+
+        if (node->edge_start != expected_offset) {
+            fprintf(stderr, "velo: validation error: node %u edge_start mismatch (expected %u, got %u)\n",
+                    i, expected_offset, node->edge_start);
+            errors++;
+            break;  /* Stop after first error to avoid flood */
+        }
+
+        if (node->edge_start + node->edge_count > graph->num_edges) {
+            fprintf(stderr, "velo: validation error: node %u edges exceed array bounds\n", i);
+            errors++;
+            break;
+        }
+
+        expected_offset += node->edge_count;
+    }
+
+    if (expected_offset != graph->num_edges) {
+        fprintf(stderr, "velo: validation error: total edge count mismatch (sum=%u, num_edges=%u)\n",
+                expected_offset, graph->num_edges);
+        errors++;
+    }
+
+    if (out_errors) *out_errors = errors;
+    return errors == 0 ? VL_OK : VL_ERROR_INVALID_ARGUMENT;
+}

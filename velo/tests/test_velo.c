@@ -1221,6 +1221,221 @@ TEST(shortest_vs_fastest_bidir_dijkstra)
 }
 
 /* ============================================================================
+ * Performance Regression Tests
+ * ============================================================================ */
+
+/*
+ * Create a larger graph for performance testing.
+ * Grid pattern: 10x10 = 100 nodes with edges to neighbors.
+ */
+static VLGraph *create_perf_test_graph(void)
+{
+    const int GRID_SIZE = 10;
+    const int NUM_NODES = GRID_SIZE * GRID_SIZE;
+
+    VLGraph *graph = calloc(1, sizeof(VLGraph));
+    if (!graph) return NULL;
+
+    graph->num_nodes = NUM_NODES;
+    graph->nodes = calloc(NUM_NODES, sizeof(VLNode));
+    if (!graph->nodes) {
+        free(graph);
+        return NULL;
+    }
+
+    /* Set coordinates in a grid */
+    for (int y = 0; y < GRID_SIZE; y++) {
+        for (int x = 0; x < GRID_SIZE; x++) {
+            int i = y * GRID_SIZE + x;
+            graph->nodes[i].coord.lat = (int32_t)((47.0 + y * 0.01) * 1e7);
+            graph->nodes[i].coord.lon = (int32_t)((19.0 + x * 0.01) * 1e7);
+            graph->nodes[i].osm_id = i + 1;
+        }
+    }
+
+    /* Count edges: each node connects to up to 4 neighbors */
+    int total_edges = 0;
+    for (int y = 0; y < GRID_SIZE; y++) {
+        for (int x = 0; x < GRID_SIZE; x++) {
+            if (x < GRID_SIZE - 1) total_edges++;  /* right */
+            if (x > 0) total_edges++;              /* left */
+            if (y < GRID_SIZE - 1) total_edges++;  /* down */
+            if (y > 0) total_edges++;              /* up */
+        }
+    }
+
+    graph->num_edges = total_edges;
+    graph->edges = calloc(total_edges, sizeof(VLEdge));
+    if (!graph->edges) {
+        free(graph->nodes);
+        free(graph);
+        return NULL;
+    }
+
+    /* Build edges */
+    int edge_idx = 0;
+    for (int y = 0; y < GRID_SIZE; y++) {
+        for (int x = 0; x < GRID_SIZE; x++) {
+            int i = y * GRID_SIZE + x;
+            graph->nodes[i].edge_start = edge_idx;
+            graph->nodes[i].edge_count = 0;
+
+            /* Right neighbor */
+            if (x < GRID_SIZE - 1) {
+                graph->edges[edge_idx].target = i + 1;
+                graph->edges[edge_idx].distance = 1000000;  /* 1km */
+                graph->edges[edge_idx].duration = 360;      /* 36 seconds at 100km/h */
+                graph->edges[edge_idx].flags = VL_EDGE_SECONDARY;
+                edge_idx++;
+                graph->nodes[i].edge_count++;
+            }
+            /* Left neighbor */
+            if (x > 0) {
+                graph->edges[edge_idx].target = i - 1;
+                graph->edges[edge_idx].distance = 1000000;
+                graph->edges[edge_idx].duration = 360;
+                graph->edges[edge_idx].flags = VL_EDGE_SECONDARY;
+                edge_idx++;
+                graph->nodes[i].edge_count++;
+            }
+            /* Down neighbor */
+            if (y < GRID_SIZE - 1) {
+                graph->edges[edge_idx].target = i + GRID_SIZE;
+                graph->edges[edge_idx].distance = 1000000;
+                graph->edges[edge_idx].duration = 360;
+                graph->edges[edge_idx].flags = VL_EDGE_SECONDARY;
+                edge_idx++;
+                graph->nodes[i].edge_count++;
+            }
+            /* Up neighbor */
+            if (y > 0) {
+                graph->edges[edge_idx].target = i - GRID_SIZE;
+                graph->edges[edge_idx].distance = 1000000;
+                graph->edges[edge_idx].duration = 360;
+                graph->edges[edge_idx].flags = VL_EDGE_SECONDARY;
+                edge_idx++;
+                graph->nodes[i].edge_count++;
+            }
+        }
+    }
+
+    graph->owns_memory = 1;
+
+    /* Build reverse index for bidirectional search */
+    vl_graph_build_reverse_index(graph);
+
+    return graph;
+}
+
+TEST(perf_astar_explores_fewer_nodes_than_dijkstra)
+{
+    VLGraph *graph = create_perf_test_graph();
+    ASSERT(graph != NULL);
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.weight = VL_WEIGHT_DISTANCE;
+    opts.profile = VL_PROFILE_CAR;
+    opts.include_geometry = 0;
+
+    VLRoute dijkstra_route, astar_route;
+
+    /* Route from corner to opposite corner (0,0) to (9,9) = node 0 to node 99 */
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    VLStatus status = vl_route(graph, 0, 99, &opts, &dijkstra_route);
+    ASSERT_EQ(status, VL_OK);
+
+    opts.algorithm = VL_ALGORITHM_ASTAR;
+    status = vl_route(graph, 0, 99, &opts, &astar_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* A* should explore fewer or equal nodes than Dijkstra */
+    ASSERT_LE(astar_route.nodes_explored, dijkstra_route.nodes_explored);
+
+    /* Both should find the same optimal distance */
+    ASSERT_NEAR(astar_route.distance_m, dijkstra_route.distance_m, 1.0);
+
+    vl_free_route(&dijkstra_route);
+    vl_free_route(&astar_route);
+    vl_graph_free(graph);
+}
+
+TEST(perf_bidir_explores_fewer_nodes_than_unidir)
+{
+    VLGraph *graph = create_perf_test_graph();
+    ASSERT(graph != NULL);
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.weight = VL_WEIGHT_DISTANCE;
+    opts.profile = VL_PROFILE_CAR;
+    opts.include_geometry = 0;
+
+    VLRoute unidir_route, bidir_route;
+
+    /* Route across the grid */
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;
+    VLStatus status = vl_route(graph, 0, 99, &opts, &unidir_route);
+    ASSERT_EQ(status, VL_OK);
+
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA_BIDIR;
+    status = vl_route(graph, 0, 99, &opts, &bidir_route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* Bidirectional should explore fewer nodes */
+    ASSERT_LT(bidir_route.nodes_explored, unidir_route.nodes_explored);
+
+    /* Both should find the same optimal distance */
+    ASSERT_NEAR(bidir_route.distance_m, unidir_route.distance_m, 1.0);
+
+    vl_free_route(&unidir_route);
+    vl_free_route(&bidir_route);
+    vl_graph_free(graph);
+}
+
+TEST(perf_search_time_is_recorded)
+{
+    VLGraph *graph = create_perf_test_graph();
+    ASSERT(graph != NULL);
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_ASTAR;
+    opts.weight = VL_WEIGHT_DISTANCE;
+
+    VLRoute route;
+    VLStatus status = vl_route(graph, 0, 99, &opts, &route);
+    ASSERT_EQ(status, VL_OK);
+
+    /* Search time should be recorded and positive */
+    ASSERT_GE(route.search_time_ms, 0.0);
+
+    /* Nodes explored should be recorded and positive */
+    ASSERT_GT(route.nodes_explored, 0u);
+
+    vl_free_route(&route);
+    vl_graph_free(graph);
+}
+
+TEST(graph_validation_detects_issues)
+{
+    /* Create a valid graph first */
+    VLGraph *graph = create_perf_test_graph();
+    ASSERT(graph != NULL);
+
+    int errors = 0;
+    VLStatus status = vl_graph_validate(graph, &errors);
+    ASSERT_EQ(status, VL_OK);
+    ASSERT_EQ(errors, 0);
+
+    vl_graph_free(graph);
+
+    /* Test NULL graph */
+    status = vl_graph_validate(NULL, &errors);
+    ASSERT_EQ(status, VL_ERROR_INVALID_ARGUMENT);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1298,6 +1513,13 @@ int main(void)
     RUN_TEST(shortest_always_shorter_or_equal);
     RUN_TEST(shortest_vs_fastest_with_astar);
     RUN_TEST(shortest_vs_fastest_bidir_dijkstra);
+    printf("\n");
+
+    printf("Performance Regression Tests:\n");
+    RUN_TEST(perf_astar_explores_fewer_nodes_than_dijkstra);
+    RUN_TEST(perf_bidir_explores_fewer_nodes_than_unidir);
+    RUN_TEST(perf_search_time_is_recorded);
+    RUN_TEST(graph_validation_detects_issues);
     printf("\n");
 
     printf("================\n");
