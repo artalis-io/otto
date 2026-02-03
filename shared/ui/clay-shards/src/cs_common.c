@@ -135,6 +135,7 @@ CsWidgetState* cs_widget_state(uint32_t id) {
     }
 
     /* Table full - return NULL to signal error (shouldn't happen with 256 slots) */
+    cs_record_error(CS_ERR_CAPACITY_EXCEEDED);
     return NULL;
 }
 
@@ -143,6 +144,8 @@ CsWidgetState* cs_widget_state(uint32_t id) {
  * ============================================================================ */
 
 uint32_t cs_hash_id(const char *str) {
+    if (!str) return 1;  /* Return valid ID for NULL input */
+
     /* FNV-1a hash */
     uint32_t hash = 2166136261u;
     while (*str) {
