@@ -18,7 +18,7 @@ extern "C" {
 
 /* File format magic and version */
 #define CT_BINARY_MAGIC    0x43525441  /* "CRTA" */
-#define CT_BINARY_VERSION  1
+#define CT_BINARY_VERSION  2  /* v2: Added area_sqm, length_m for LOD filtering */
 
 /* ============================================================================
  * Serialization API
