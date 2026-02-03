@@ -313,4 +313,4 @@ cs_init();
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Adding widgets
 - [clay-shards-webgl](../clay-shards-webgl/) - WebGL renderer
 - [clay-shards-demo](../clay-shards-demo/) - Example application
-- [Clay Layout Library](../../../vendor/clay/CLAUDE.md)
+- [Clay Layout Library](../../vendor/clay/CLAUDE.md)

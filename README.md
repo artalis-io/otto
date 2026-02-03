@@ -15,6 +15,7 @@ A comprehensive trucking and logistics optimization platform, combining route pl
 | [**Carta**](carta/) | `carta/` | Map tile generator (MVT vector tiles, PNG raster) |
 | [**Locus**](locus/) | `locus/` | OSM geocoding engine (forward search, autocomplete, reverse lookup) |
 | [**FuelWise**](fuelwise/) | `fuelwise/` | Refueling optimization library |
+| [**ClayShards**](clayshards/) | `clayshards/` | Immediate mode UI components, WebGL renderer, fonts |
 | [**Shared**](shared/) | `shared/` | Common geo utilities, protobuf, zlib |
 
 ### Planned Engines
@@ -46,15 +47,16 @@ A comprehensive trucking and logistics optimization platform, combining route pl
 
 | Component | Location | Description |
 |-----------|----------|-------------|
-| [**ClayShards**](shared/ui/clay-shards/) | `shared/ui/clay-shards/` | Immediate mode UI components (button, input, map) |
-| [**ClayShards WebGL**](shared/ui/clay-shards-webgl/) | `shared/ui/clay-shards-webgl/` | WebGL renderer for browsers |
-| [**ClayShards Demo**](shared/ui/clay-shards-demo/) | `shared/ui/clay-shards-demo/` | Example map viewer application |
+| [**ClayShards**](clayshards/clay-shards/) | `clayshards/clay-shards/` | Immediate mode UI components (button, input, map) |
+| [**ClayShards WebGL**](clayshards/clay-shards-webgl/) | `clayshards/clay-shards-webgl/` | WebGL renderer for browsers |
+| [**ClayShards Demo**](clayshards/clay-shards-demo/) | `clayshards/clay-shards-demo/` | Example map viewer application |
+| [**Fonts**](clayshards/fonts/) | `clayshards/fonts/` | MSDF font assets for UI rendering |
 
 **ClayShards Features:**
 - Thread-local storage for multi-threaded applications
 - Custom allocator support (arena allocators, debug allocators)
 - Error tracking API for diagnosing silent failures
-- 52 unit tests with edge case coverage
+- 84 unit tests with edge case coverage
 
 ## Quick Start
 
@@ -172,11 +174,12 @@ otto/
 │   ├── src/            #   Trie, ngram, spatial index
 │   ├── api/            #   Geocoding REST API
 │   └── wasm/           #   WebAssembly build
+├── clayshards/         # UI System
+│   ├── clay-shards/    #   Immediate mode components (C)
+│   ├── clay-shards-webgl/  # WebGL renderer (JS)
+│   ├── clay-shards-demo/   # Demo map viewer
+│   └── fonts/          #   MSDF font assets
 ├── shared/             # Shared Utilities (libshared.a)
-│   └── ui/             #   UI System
-│       ├── clay-shards/        # Immediate mode components
-│       ├── clay-shards-webgl/  # WebGL renderer
-│       └── clay-shards-demo/   # Demo map viewer
 ├── forge/              # [Planned] Async Job Queue
 ├── hose/               # [Planned] Hours of Service Engine
 ├── tempo/              # [Planned] Business Rules Engine
@@ -380,9 +383,10 @@ make run-locus-api    # Show Locus geocoding server usage
 - [Locus Geocoding Server](locus/api/CLAUDE.md) - Geocoding REST API
 
 ### UI System
-- [ClayShards](shared/ui/clay-shards/CLAUDE.md) - Immediate mode UI components
-- [ClayShards WebGL](shared/ui/clay-shards-webgl/) - WebGL renderer
-- [ClayShards Demo](shared/ui/clay-shards-demo/CLAUDE.md) - Example map viewer
+- [ClayShards](clayshards/clay-shards/CLAUDE.md) - Immediate mode UI components
+- [ClayShards WebGL](clayshards/clay-shards-webgl/CLAUDE.md) - WebGL renderer
+- [ClayShards Demo](clayshards/clay-shards-demo/CLAUDE.md) - Example map viewer
+- [Fonts](clayshards/fonts/CLAUDE.md) - MSDF font assets
 
 ### Vendor Libraries
 - [Miniz](vendor/miniz/CLAUDE.md) - zlib-compatible compression

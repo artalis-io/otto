@@ -159,10 +159,10 @@ carta-ui-dev:
 
 # Clay Map Viewer (WASM + Canvas, requires Emscripten)
 clay-map:
-	$(MAKE) -C shared/ui/clay-map
+	$(MAKE) -C clayshards/clay-shards-demo
 
 clay-map-serve: clay-map
-	$(MAKE) -C shared/ui/clay-map serve
+	$(MAKE) -C clayshards/clay-shards-demo serve
 
 # =============================================================================
 # Scripts
@@ -228,7 +228,7 @@ clean:
 	-$(MAKE) -C carta/wasm clean 2>/dev/null || true
 	-$(MAKE) -C velo/api clean 2>/dev/null || true
 	-$(MAKE) -C velo/wasm clean 2>/dev/null || true
-	-$(MAKE) -C shared/ui/clay-map clean 2>/dev/null || true
+	-$(MAKE) -C clayshards/clay-shards-demo clean 2>/dev/null || true
 	-rm -f vendor/miniz/*.o 2>/dev/null || true
 
 clean-all: clean

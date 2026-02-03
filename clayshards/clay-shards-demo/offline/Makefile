@@ -6,7 +6,7 @@ CC = emcc
 CFLAGS = -O3 -Wall -Wextra
 
 # Paths
-ROOT = ../../../..
+ROOT = ../../..
 CLAY_SHARDS = ../../clay-shards
 VELO = $(ROOT)/velo
 LOCUS = $(ROOT)/locus

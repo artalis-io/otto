@@ -53,10 +53,10 @@ The PNG atlas contains glyphs packed in a grid. Each glyph's position and metric
 ### JavaScript (WebGL)
 
 ```javascript
-import { MSDFFont } from '../ui/clay-shards-webgl/font.js';
+import { MSDFFont } from '../clay-shards-webgl/font.js';
 
 const font = new MSDFFont();
-await font.load(gl, 'shared/fonts/ui-font.json', 'shared/fonts/ui-font.png');
+await font.load(gl, 'clayshards/fonts/ui-font.json', 'clayshards/fonts/ui-font.png');
 
 // Measure text
 const width = font.measureText('Hello', 16);
@@ -71,7 +71,7 @@ const glyph = font.getGlyph(65); // 'A'
 #include "ct_font.h"
 
 CTMSDFFont font;
-ct_font_load(&font, "shared/fonts/ui-font.json", "shared/fonts/ui-font.png");
+ct_font_load(&font, "clayshards/fonts/ui-font.json", "clayshards/fonts/ui-font.png");
 
 // Measure text
 float width = ct_font_text_width(&font, "Hello", 16.0f);
@@ -109,6 +109,6 @@ For CJK or other scripts, additional font atlases would be needed.
 
 ## Related
 
-- [clay-shards-webgl](../ui/clay-shards-webgl/) - WebGL renderer using these fonts
+- [clay-shards-webgl](../clay-shards-webgl/) - WebGL renderer using these fonts
 - [carta](../../carta/) - Map tile generator (labels planned)
 - [CARTA_LABELS_PLAN.md](../../docs/CARTA_LABELS_PLAN.md) - Label implementation plan

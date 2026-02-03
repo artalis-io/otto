@@ -31,6 +31,7 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 | Carta | `carta/` | C | Map tile generator (MVT/PNG) |
 | Locus | `locus/` | C | OSM geocoding engine |
 | FuelWise | `fuelwise/` | C | Refueling domain logic |
+| ClayShards | `clayshards/` | C+JS | Immediate mode UI components, WebGL renderer |
 | Shared | `shared/` | C | Common geo utilities, protobuf, zlib |
 | Vendor | `vendor/` | C | Third-party libs (see below) |
 
@@ -284,9 +285,10 @@ The platform uses a hybrid UI architecture: **Clay** for declarative layout + **
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **clay-shards** | `shared/ui/clay-shards/` | Immediate mode components (button, input, map) |
-| **clay-shards-webgl** | `shared/ui/clay-shards-webgl/` | WebGL renderer for browsers |
-| **clay-shards-demo** | `shared/ui/clay-shards-demo/` | Example map viewer application |
+| **clay-shards** | `clayshards/clay-shards/` | Immediate mode components (button, input, map) |
+| **clay-shards-webgl** | `clayshards/clay-shards-webgl/` | WebGL renderer for browsers |
+| **clay-shards-demo** | `clayshards/clay-shards-demo/` | Example map viewer application |
+| **fonts** | `clayshards/fonts/` | MSDF font assets for UI rendering |
 
 ### Architecture
 
@@ -302,14 +304,14 @@ Renderer: WebGL (browser), SDL/raylib (native) [planned]
 
 ### Key Files
 
-- `shared/ui/clay-shards/include/cs_common.h` - Core API, allocator
-- `shared/ui/clay-shards/src/cs_common.c` - State, keyboard handling, TLS
-- `shared/ui/clay-shards/src/cs_map.c` - Map pan/zoom, overlays
-- `shared/ui/clay-shards/src/cs_map_projection.c` - Web Mercator utilities
-- `shared/ui/clay-shards/src/cs_map_simplify.c` - Douglas-Peucker (iterative)
-- `shared/ui/clay-shards-webgl/renderer.js` - WebGL renderer
+- `clayshards/clay-shards/include/cs_common.h` - Core API, allocator
+- `clayshards/clay-shards/src/cs_common.c` - State, keyboard handling, TLS
+- `clayshards/clay-shards/src/cs_map.c` - Map pan/zoom, overlays
+- `clayshards/clay-shards/src/cs_map_projection.c` - Web Mercator utilities
+- `clayshards/clay-shards/src/cs_map_simplify.c` - Douglas-Peucker (iterative)
+- `clayshards/clay-shards-webgl/renderer.js` - WebGL renderer
 
-See `shared/ui/clay-shards/CLAUDE.md` for detailed API documentation.
+See `clayshards/clay-shards/CLAUDE.md` for detailed API documentation.
 
 ### Features
 
