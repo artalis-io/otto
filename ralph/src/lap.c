@@ -232,6 +232,12 @@ RalphLapWorkspace* ralph_lap_workspace_create(int max_n) {
 
     /* Calculate total memory needed with alignment padding */
     size_t n = (size_t)max_n;
+
+    /* Check for overflow before n*n calculation */
+    if (lap_check_size_overflow(n, sizeof(double)) != 0) {
+        free(ws);
+        return NULL;
+    }
     size_t n2 = n * n;
 
     /* Calculate sizes with alignment for each array */

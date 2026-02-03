@@ -94,15 +94,17 @@ int detect_lap(const LPModel *model, LAPSignature *sig) {
     }
 
     /* Count appearances of each variable in constraints */
+    /* Use calloc for zero-initialization; var_con1/var_con2 initialized to -1 below */
     int *var_count = (int *)calloc(num_vars, sizeof(int));
-    int *var_con1 = (int *)malloc(num_vars * sizeof(int));  /* First constraint */
-    int *var_con2 = (int *)malloc(num_vars * sizeof(int));  /* Second constraint */
+    int *var_con1 = (int *)calloc(num_vars, sizeof(int));  /* First constraint */
+    int *var_con2 = (int *)calloc(num_vars, sizeof(int));  /* Second constraint */
 
     if (!var_count || !var_con1 || !var_con2) {
         free(var_count); free(var_con1); free(var_con2);
         return 0;
     }
 
+    /* Initialize to -1 (unassigned) */
     for (int j = 0; j < num_vars; j++) {
         var_con1[j] = -1;
         var_con2[j] = -1;

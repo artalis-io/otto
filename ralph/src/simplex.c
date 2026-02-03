@@ -990,6 +990,7 @@ int pricing_devex(SimplexTableau *tab, int *entering) {
 
 /* Check if variable j is eligible for entering */
 static inline int is_entering_eligible(SimplexTableau *tab, int j, double *rc_out) {
+    if (j < 0 || j >= tab->n) return 0;  /* Bounds check */
     if (tab->var_status[j] == RALPH_BASIC) return 0;
 
     /* Use lazy RC computation - computes on demand if not already cached */
