@@ -800,108 +800,6 @@ static int set_val(SparseLUWork *work, int col, int row, double val) {
     return 0;
 }
 
-/* Efficient row update using scatter-gather pattern
- * Updates row i by subtracting mult * pivot_row
- * This is O(nnz_row + nnz_pivot_row) instead of O(nnz_row * nnz_pivot_row)
- */
-static void update_row_scatter_gather(SparseLUWork *work, int i, int pivot_row,
-                                       double mult, int pivot_col) {
-    double *dense = work->work_dense;
-    int *marker = work->work_marker;
-    int m = work->m;
-
-    /* Step 1: Scatter row i to dense array */
-    int *nz_cols = (int*)alloca(m * sizeof(int));  /* Stack allocation for speed */
-    int nnz = 0;
-
-    for (SparseEntry *re = work->rows[i]; re; re = re->next) {
-        int j = re->idx;
-        if (!work->col_done[j]) {
-            dense[j] = re->val;
-            marker[j] = 1;
-            nz_cols[nnz++] = j;
-        }
-    }
-
-    /* Step 2: Update using pivot row entries */
-    for (SparseEntry *pe = work->rows[pivot_row]; pe; pe = pe->next) {
-        int j = pe->idx;
-        if (work->col_done[j]) continue;
-
-        double delta = mult * pe->val;
-        dense[j] -= delta;
-
-        if (!marker[j]) {
-            /* New fill-in */
-            marker[j] = 1;
-            nz_cols[nnz++] = j;
-        }
-    }
-
-    /* Step 3: Gather back - update sparse row and column structures */
-    /* First, remove old row entries from column lists */
-    for (SparseEntry *re = work->rows[i]; re; re = re->next) {
-        int j = re->idx;
-        if (!work->col_done[j]) {
-            /* Remove from column j */
-            SparseEntry **pp = &work->cols[j];
-            while (*pp && (*pp)->idx != i) {
-                pp = &(*pp)->next;
-            }
-            if (*pp && (*pp)->idx == i) {
-                *pp = (*pp)->next;
-                work->col_nnz[j]--;
-            }
-        }
-    }
-
-    /* Clear old row list */
-    work->rows[i] = NULL;
-    work->row_nnz[i] = 0;
-
-    /* Rebuild row from dense values */
-    for (int k = 0; k < nnz; k++) {
-        int j = nz_cols[k];
-        double val = dense[j];
-
-        /* Clear dense array and marker for next use */
-        dense[j] = 0.0;
-        marker[j] = 0;
-
-        if (fabs(val) < RALPH_ZERO_TOL) continue;  /* Skip zeros */
-
-        /* Add to column list */
-        SparseEntry *col_entry = alloc_entry(work);
-        if (!col_entry) continue;
-        col_entry->idx = i;
-        col_entry->val = val;
-
-        /* Insert in sorted order into column */
-        SparseEntry **pp = &work->cols[j];
-        while (*pp && (*pp)->idx < i) {
-            pp = &(*pp)->next;
-        }
-        col_entry->next = *pp;
-        *pp = col_entry;
-        work->col_nnz[j]++;
-
-        /* Add to row list */
-        SparseEntry *row_entry = alloc_entry(work);
-        if (!row_entry) continue;
-        row_entry->idx = j;
-        row_entry->val = val;
-
-        /* Insert in sorted order into row */
-        SparseEntry **rp = &work->rows[i];
-        while (*rp && (*rp)->idx < j) {
-            rp = &(*rp)->next;
-        }
-        row_entry->next = *rp;
-        *rp = row_entry;
-        work->row_nnz[i]++;
-    }
-}
-
 /* ============================================================================
  * Markowitz Pivot Selection
  * ============================================================================ */
@@ -953,6 +851,7 @@ static int find_singleton_pivot(SparseLUWork *work, int *pivot_row, int *pivot_c
 
 /* Select pivot using Markowitz criterion with threshold pivoting */
 static int select_pivot(SparseLUWork *work, int step, int *pivot_row, int *pivot_col) {
+    (void)step;  /* Reserved for future use (e.g., step-dependent threshold) */
     int m = work->m;
 
     /* First try to find a singleton - these cause no fill-in */
@@ -1180,10 +1079,21 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                         if (fabs(val) < RALPH_ZERO_TOL) continue;
 
                         if (U_nnz >= U_cap) {
-                            U_cap *= 2;
-                            U_i = (int*)realloc(U_i, U_cap * sizeof(int));
-                            U_j = (int*)realloc(U_j, U_cap * sizeof(int));
-                            U_v = (double*)realloc(U_v, U_cap * sizeof(double));
+                            int new_cap = U_cap * 2;
+                            int *tmp_i = (int*)realloc(U_i, new_cap * sizeof(int));
+                            int *tmp_j = (int*)realloc(U_j, new_cap * sizeof(int));
+                            double *tmp_v = (double*)realloc(U_v, new_cap * sizeof(double));
+                            if (!tmp_i || !tmp_j || !tmp_v) {
+                                free(tmp_i ? tmp_i : U_i);
+                                free(tmp_j ? tmp_j : U_j);
+                                free(tmp_v ? tmp_v : U_v);
+                                free(L_i); free(L_j); free(L_v);
+                                sparse_work_free(work);
+                                free(col_order);
+                                return -1;
+                            }
+                            U_i = tmp_i; U_j = tmp_j; U_v = tmp_v;
+                            U_cap = new_cap;
                         }
                         U_i[U_nnz] = step;
                         U_j[U_nnz] = j;
@@ -1193,10 +1103,21 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
 
                     /* Store L diagonal (always 1) */
                     if (L_nnz >= L_cap) {
-                        L_cap *= 2;
-                        L_i = (int*)realloc(L_i, L_cap * sizeof(int));
-                        L_j = (int*)realloc(L_j, L_cap * sizeof(int));
-                        L_v = (double*)realloc(L_v, L_cap * sizeof(double));
+                        int new_cap = L_cap * 2;
+                        int *tmp_i = (int*)realloc(L_i, new_cap * sizeof(int));
+                        int *tmp_j = (int*)realloc(L_j, new_cap * sizeof(int));
+                        double *tmp_v = (double*)realloc(L_v, new_cap * sizeof(double));
+                        if (!tmp_i || !tmp_j || !tmp_v) {
+                            free(tmp_i ? tmp_i : L_i);
+                            free(tmp_j ? tmp_j : L_j);
+                            free(tmp_v ? tmp_v : L_v);
+                            free(U_i); free(U_j); free(U_v);
+                            sparse_work_free(work);
+                            free(col_order);
+                            return -1;
+                        }
+                        L_i = tmp_i; L_j = tmp_j; L_v = tmp_v;
+                        L_cap = new_cap;
                     }
                     L_i[L_nnz] = pivot_row;
                     L_j[L_nnz] = step;
@@ -1256,16 +1177,21 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
 
             /* Ensure capacity */
             if (U_nnz >= U_cap) {
-                U_cap *= 2;
-                U_i = (int*)realloc(U_i, U_cap * sizeof(int));
-                U_j = (int*)realloc(U_j, U_cap * sizeof(int));
-                U_v = (double*)realloc(U_v, U_cap * sizeof(double));
-                if (!U_i || !U_j || !U_v) {
+                int new_cap = U_cap * 2;
+                int *tmp_i = (int*)realloc(U_i, new_cap * sizeof(int));
+                int *tmp_j = (int*)realloc(U_j, new_cap * sizeof(int));
+                double *tmp_v = (double*)realloc(U_v, new_cap * sizeof(double));
+                if (!tmp_i || !tmp_j || !tmp_v) {
+                    free(tmp_i ? tmp_i : U_i);
+                    free(tmp_j ? tmp_j : U_j);
+                    free(tmp_v ? tmp_v : U_v);
                     free(L_i); free(L_j); free(L_v);
-                    free(U_i); free(U_j); free(U_v);
                     sparse_work_free(work);
+                    free(col_order);
                     return -1;
                 }
+                U_i = tmp_i; U_j = tmp_j; U_v = tmp_v;
+                U_cap = new_cap;
             }
 
             U_i[U_nnz] = step;  /* Row in factored matrix */
@@ -1277,10 +1203,21 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         /* Store L entries (multipliers) and eliminate */
         /* L diagonal is 1 (implicit) */
         if (L_nnz >= L_cap) {
-            L_cap *= 2;
-            L_i = (int*)realloc(L_i, L_cap * sizeof(int));
-            L_j = (int*)realloc(L_j, L_cap * sizeof(int));
-            L_v = (double*)realloc(L_v, L_cap * sizeof(double));
+            int new_cap = L_cap * 2;
+            int *tmp_i = (int*)realloc(L_i, new_cap * sizeof(int));
+            int *tmp_j = (int*)realloc(L_j, new_cap * sizeof(int));
+            double *tmp_v = (double*)realloc(L_v, new_cap * sizeof(double));
+            if (!tmp_i || !tmp_j || !tmp_v) {
+                free(tmp_i ? tmp_i : L_i);
+                free(tmp_j ? tmp_j : L_j);
+                free(tmp_v ? tmp_v : L_v);
+                free(U_i); free(U_j); free(U_v);
+                sparse_work_free(work);
+                free(col_order);
+                return -1;
+            }
+            L_i = tmp_i; L_j = tmp_j; L_v = tmp_v;
+            L_cap = new_cap;
         }
         L_i[L_nnz] = pivot_row;  /* Original row (must match off-diagonal entries) */
         L_j[L_nnz] = step;
@@ -1296,10 +1233,21 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
 
             /* Store L entry */
             if (L_nnz >= L_cap) {
-                L_cap *= 2;
-                L_i = (int*)realloc(L_i, L_cap * sizeof(int));
-                L_j = (int*)realloc(L_j, L_cap * sizeof(int));
-                L_v = (double*)realloc(L_v, L_cap * sizeof(double));
+                int new_cap = L_cap * 2;
+                int *tmp_i = (int*)realloc(L_i, new_cap * sizeof(int));
+                int *tmp_j = (int*)realloc(L_j, new_cap * sizeof(int));
+                double *tmp_v = (double*)realloc(L_v, new_cap * sizeof(double));
+                if (!tmp_i || !tmp_j || !tmp_v) {
+                    free(tmp_i ? tmp_i : L_i);
+                    free(tmp_j ? tmp_j : L_j);
+                    free(tmp_v ? tmp_v : L_v);
+                    free(U_i); free(U_j); free(U_v);
+                    sparse_work_free(work);
+                    free(col_order);
+                    return -1;
+                }
+                L_i = tmp_i; L_j = tmp_j; L_v = tmp_v;
+                L_cap = new_cap;
             }
             L_i[L_nnz] = i;  /* Original row */
             L_j[L_nnz] = step;  /* Elimination step (column in L) */
@@ -1483,8 +1431,12 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
  * - 50% structural → ~8x speedup (k=0.5m gives 0.125m³ vs m³)
  */
 
+/* Forward declaration for cleanup function */
+typedef struct LPBasisStructure LPBasisStructure;
+static void free_lp_basis_structure(LPBasisStructure *lp);
+
 /* Analysis result for LP basis structure */
-typedef struct {
+struct LPBasisStructure {
     int *identity_cols;     /* Indices of identity columns in B */
     int *identity_rows;     /* Row where each identity col has its 1 */
     double *identity_vals;  /* Value (±1) at each identity position */
@@ -1504,7 +1456,7 @@ typedef struct {
     double *B21_val;        /* Value */
     int B21_nnz;            /* Number of cross-term entries */
     int B21_cap;            /* Capacity */
-} LPBasisStructure;
+};
 
 static LPBasisStructure* analyze_lp_basis(const SparseMatrix *B) {
     int m = B->nrows;
@@ -1596,10 +1548,22 @@ static LPBasisStructure* analyze_lp_basis(const SparseMatrix *B) {
             if (lp->row_is_identity[row] && fabs(val) > RALPH_ZERO_TOL) {
                 /* This is a cross-term: structural col jj has entry in identity row */
                 if (lp->B21_nnz >= lp->B21_cap) {
-                    lp->B21_cap *= 2;
-                    lp->B21_col = (int*)realloc(lp->B21_col, lp->B21_cap * sizeof(int));
-                    lp->B21_row = (int*)realloc(lp->B21_row, lp->B21_cap * sizeof(int));
-                    lp->B21_val = (double*)realloc(lp->B21_val, lp->B21_cap * sizeof(double));
+                    int new_cap = lp->B21_cap * 2;
+                    int *tmp_col = (int*)realloc(lp->B21_col, new_cap * sizeof(int));
+                    int *tmp_row = (int*)realloc(lp->B21_row, new_cap * sizeof(int));
+                    double *tmp_val = (double*)realloc(lp->B21_val, new_cap * sizeof(double));
+                    if (!tmp_col || !tmp_row || !tmp_val) {
+                        /* On failure, keep valid pointers where possible */
+                        if (tmp_col) lp->B21_col = tmp_col;
+                        if (tmp_row) lp->B21_row = tmp_row;
+                        if (tmp_val) lp->B21_val = tmp_val;
+                        free_lp_basis_structure(lp);
+                        return NULL;
+                    }
+                    lp->B21_col = tmp_col;
+                    lp->B21_row = tmp_row;
+                    lp->B21_val = tmp_val;
+                    lp->B21_cap = new_cap;
                 }
                 lp->B21_col[lp->B21_nnz] = jj;  /* Structural column index (0..k-1) */
                 lp->B21_row[lp->B21_nnz] = lp->id_to_step[row];  /* Step index (k..m-1) */
@@ -1959,10 +1923,24 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
                     if (fabs(y_vec[col]) > RALPH_ZERO_TOL) {
                         /* Ensure capacity */
                         if (L_nnz >= L_cap) {
-                            L_cap *= 2;
-                            L_row_arr = (int*)realloc(L_row_arr, L_cap * sizeof(int));
-                            L_col_arr = (int*)realloc(L_col_arr, L_cap * sizeof(int));
-                            L_val_arr = (double*)realloc(L_val_arr, L_cap * sizeof(double));
+                            int new_cap = L_cap * 2;
+                            int *tmp_row = (int*)realloc(L_row_arr, new_cap * sizeof(int));
+                            int *tmp_col = (int*)realloc(L_col_arr, new_cap * sizeof(int));
+                            double *tmp_val = (double*)realloc(L_val_arr, new_cap * sizeof(double));
+                            if (!tmp_row || !tmp_col || !tmp_val) {
+                                free(tmp_row ? tmp_row : L_row_arr);
+                                free(tmp_col ? tmp_col : L_col_arr);
+                                free(tmp_val ? tmp_val : L_val_arr);
+                                free(U_row_arr); free(U_col_arr); free(U_val_arr);
+                                free(A_sub); free(sub_perm); free(sub_perm_inv);
+                                free(b_vec); free(y_vec); free(has_entry);
+                                free_lp_basis_structure(lp);
+                                return -1;
+                            }
+                            L_row_arr = tmp_row;
+                            L_col_arr = tmp_col;
+                            L_val_arr = tmp_val;
+                            L_cap = new_cap;
                         }
                         L_row_arr[L_nnz] = row_step;
                         L_col_arr[L_nnz] = col;

@@ -575,6 +575,8 @@ void tableau_free(SimplexTableau *tab) {
     free(tab->tau_work);
     free(tab->se_weights);
     free(tab->perturb_backup);
+    free(tab->primal_saved_lb);
+    free(tab->primal_saved_ub);
     free(tab->aux_row);
     free(tab->aux_coef);
     free(tab->partial_candidates);
@@ -585,49 +587,6 @@ void tableau_free(SimplexTableau *tab) {
 /* ============================================================================
  * Basis Management
  * ============================================================================ */
-
-/* Initialize a crash basis (slack variables basic) */
-static int initialize_slack_basis(SimplexTableau *tab) {
-    int m = tab->m;
-    int n = tab->n;
-    int num_struct = tab->model->num_vars;
-
-    /* Put slacks in basis first */
-    int basis_idx = 0;
-    int nonbasis_idx = 0;
-
-    for (int j = 0; j < n; j++) {
-        tab->basis_pos[j] = -1;
-    }
-
-    /* Slacks are basic */
-    for (int j = num_struct; j < n && basis_idx < m; j++) {
-        tab->basis[basis_idx] = j;
-        tab->var_status[j] = RALPH_BASIC;
-        tab->basis_pos[j] = basis_idx;
-        basis_idx++;
-    }
-
-    /* Structural variables are non-basic */
-    for (int j = 0; j < num_struct; j++) {
-        if (tab->lb_ext[j] > -RALPH_INFINITY/2) {
-            tab->var_status[j] = RALPH_NONBASIC_LOWER;
-            tab->x[j] = tab->lb_ext[j];
-        } else if (tab->ub_ext[j] < RALPH_INFINITY/2) {
-            tab->var_status[j] = RALPH_NONBASIC_UPPER;
-            tab->x[j] = tab->ub_ext[j];
-        } else {
-            tab->var_status[j] = RALPH_NONBASIC_FREE;
-            tab->x[j] = 0.0;
-        }
-        tab->nonbasis[nonbasis_idx++] = j;
-    }
-
-    /* Need to add artificial variables for equality constraints */
-    /* For now, use Big-M or two-phase if slack basis insufficient */
-
-    return 0;
-}
 
 /* Build basis matrix from current basis */
 static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
@@ -1654,9 +1613,6 @@ static int simplex_phase1(SimplexSolver *solver) {
     }
 
     /* Need to run Phase 1 with artificial variables */
-    /* For simplicity, use Big-M method */
-    double BIG_M = 1e8;
-
     /* Add artificial variables for rows with negative RHS */
     /* or use dual simplex to restore feasibility */
 
@@ -1773,27 +1729,27 @@ static int simplex_phase1(SimplexSolver *solver) {
 #define PRIMAL_PERTURB_BASE 1e-6
 #define PRIMAL_PERTURB_MULT 7
 
-static double *saved_lb = NULL;
-static double *saved_ub = NULL;
-static int perturb_n = 0;
-
 static void primal_apply_perturbation(SimplexTableau *tab) {
     int n = tab->n;
 
+    /* Free any existing perturbation state */
+    free(tab->primal_saved_lb);
+    free(tab->primal_saved_ub);
+
     /* Save original bounds */
-    saved_lb = (double*)malloc(n * sizeof(double));
-    saved_ub = (double*)malloc(n * sizeof(double));
-    if (!saved_lb || !saved_ub) {
-        free(saved_lb);
-        free(saved_ub);
-        saved_lb = saved_ub = NULL;
+    tab->primal_saved_lb = (double*)malloc(n * sizeof(double));
+    tab->primal_saved_ub = (double*)malloc(n * sizeof(double));
+    if (!tab->primal_saved_lb || !tab->primal_saved_ub) {
+        free(tab->primal_saved_lb);
+        free(tab->primal_saved_ub);
+        tab->primal_saved_lb = tab->primal_saved_ub = NULL;
+        tab->primal_perturb_active = 0;
         return;
     }
-    perturb_n = n;
 
     for (int j = 0; j < n; j++) {
-        saved_lb[j] = tab->lb_ext[j];
-        saved_ub[j] = tab->ub_ext[j];
+        tab->primal_saved_lb[j] = tab->lb_ext[j];
+        tab->primal_saved_ub[j] = tab->ub_ext[j];
     }
 
     /* Apply perturbations */
@@ -1813,21 +1769,25 @@ static void primal_apply_perturbation(SimplexTableau *tab) {
             tab->ub_ext[j] += eps;
         }
     }
+
+    tab->primal_perturb_active = 1;
 }
 
 static void primal_remove_perturbation(SimplexTableau *tab) {
-    if (!saved_lb || !saved_ub || perturb_n != tab->n) return;
+    if (!tab->primal_perturb_active || !tab->primal_saved_lb || !tab->primal_saved_ub) {
+        return;
+    }
 
     /* Restore original bounds */
     for (int j = 0; j < tab->n; j++) {
-        tab->lb_ext[j] = saved_lb[j];
-        tab->ub_ext[j] = saved_ub[j];
+        tab->lb_ext[j] = tab->primal_saved_lb[j];
+        tab->ub_ext[j] = tab->primal_saved_ub[j];
     }
 
-    free(saved_lb);
-    free(saved_ub);
-    saved_lb = saved_ub = NULL;
-    perturb_n = 0;
+    free(tab->primal_saved_lb);
+    free(tab->primal_saved_ub);
+    tab->primal_saved_lb = tab->primal_saved_ub = NULL;
+    tab->primal_perturb_active = 0;
 }
 
 /* Phase 2: Optimize */
