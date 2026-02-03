@@ -3,12 +3,19 @@
 *.a
 test_ralph
 test_edge_cases
+test_lap
+test_lap_dbg
+test_lap_debug
+test_netflow
 bench_sizes
 bench_quick
 bench_ralph
 bench_mip
 bench_vs_glpk
+bench_lap
+bench_lap_perf
 compare_glpk
+profile_bench
 
 # Profiling
 gmon.out
