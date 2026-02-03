@@ -35,7 +35,8 @@ CORE_SRCS = src/carta.c \
             src/ct_cache.c \
             src/ct_serialize.c \
             src/ct_multipolygon.c \
-            src/ct_collision.c
+            src/ct_collision.c \
+            src/ct_label.c
 
 # miniz is now linked via shared library
 MINIZ_SRCS =
@@ -128,6 +129,7 @@ src/ct_rtree.o: include/ct_types.h include/ct_rtree.h
 src/ct_ascii.o: include/ct_types.h include/ct_ascii.h
 src/ct_multipolygon.o: include/ct_types.h include/ct_multipolygon.h include/ct_rtree.h
 src/ct_collision.o: include/ct_types.h include/ct_collision.h
+src/ct_label.o: include/ct_types.h include/ct_label.h include/ct_collision.h include/ct_pbf.h
 
 # Help
 help:

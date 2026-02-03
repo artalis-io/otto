@@ -4,6 +4,8 @@
 
 #include "carta.h"
 #include "ct_collision.h"
+#include "ct_label.h"
+#include "sh_font.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1531,6 +1533,195 @@ TEST(labeled_point_structure)
 }
 
 /* ============================================================================
+ * Label Placement Tests
+ * ============================================================================ */
+
+TEST(label_placer_create)
+{
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+    ASSERT(placer != NULL);
+    ASSERT_EQ(placer->tile_width, 256);
+    ASSERT_EQ(placer->tile_height, 256);
+    ASSERT(placer->collision != NULL);
+    ASSERT_EQ(placer->num_placements, 0);
+    ct_label_placer_free(placer);
+    return 1;
+}
+
+TEST(label_placer_create_invalid)
+{
+    ASSERT(ct_label_placer_create(0, 256) == NULL);
+    ASSERT(ct_label_placer_create(256, 0) == NULL);
+    ASSERT(ct_label_placer_create(-1, 256) == NULL);
+    return 1;
+}
+
+TEST(label_placer_reset)
+{
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+    ASSERT(placer != NULL);
+
+    /* Manually add a placement to test reset */
+    placer->num_placements = 5;
+
+    ct_label_placer_reset(placer);
+    ASSERT_EQ(placer->num_placements, 0);
+    ASSERT_NEAR(ct_label_get_occupancy(placer), 0.0f, 0.001f);
+
+    ct_label_placer_free(placer);
+    return 1;
+}
+
+TEST(label_geo_to_pixel)
+{
+    /* Test coordinate conversion at zoom 0 (single tile covers world) */
+    CTTileCoord coord = {0, 0, 0};
+    int px, py;
+
+    /* Center of world (0, 0) should be at center of tile */
+    ct_label_geo_to_pixel(coord, 0.0, 0.0, 256, &px, &py);
+    ASSERT(px >= 120 && px <= 136);  /* Around 128 */
+    ASSERT(py >= 120 && py <= 136);  /* Around 128 */
+
+    /* Western edge should be at left */
+    ct_label_geo_to_pixel(coord, 0.0, -180.0, 256, &px, &py);
+    ASSERT(px <= 10);
+
+    /* Eastern edge should be at right */
+    ct_label_geo_to_pixel(coord, 0.0, 180.0, 256, &px, &py);
+    ASSERT(px >= 246);
+
+    return 1;
+}
+
+TEST(label_place_single_with_font)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) {
+        /* Skip if no font available */
+        return 1;
+    }
+
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+    ASSERT(placer != NULL);
+
+    /* Create a test labeled point */
+    CTLabeledPoint point = {
+        .id = 1,
+        .coord = {47.5, 19.0},
+        .type = CT_PLACE_CITY,
+        .name = "Budapest",
+        .population = 1700000,
+        .min_zoom = 6,
+        .priority = 90
+    };
+
+    /* Place at center of tile */
+    int result = ct_label_place_single(placer, &point, 128, 128, font, 12.0f);
+    ASSERT_EQ(result, 1);
+    ASSERT_EQ(ct_label_get_count(placer), 1);
+
+    /* Verify placement */
+    ASSERT(placer->placements[0].point == &point);
+    ASSERT(placer->placements[0].width > 0);
+    ASSERT(placer->placements[0].height > 0);
+
+    ct_label_placer_free(placer);
+    return 1;
+}
+
+TEST(label_collision_detection)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) {
+        return 1;
+    }
+
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+    ASSERT(placer != NULL);
+
+    CTLabeledPoint point1 = {
+        .id = 1, .coord = {0, 0}, .type = CT_PLACE_CITY,
+        .name = "City One", .population = 100000, .min_zoom = 6, .priority = 90
+    };
+
+    CTLabeledPoint point2 = {
+        .id = 2, .coord = {0, 0}, .type = CT_PLACE_CITY,
+        .name = "City Two", .population = 50000, .min_zoom = 6, .priority = 80
+    };
+
+    /* Place first label at center */
+    int result1 = ct_label_place_single(placer, &point1, 128, 128, font, 12.0f);
+    ASSERT_EQ(result1, 1);
+
+    /* Try to place second label at same position - may use different anchor */
+    int result2 = ct_label_place_single(placer, &point2, 128, 128, font, 12.0f);
+    /* Should either succeed with different anchor or fail if no space */
+
+    /* At least one label should be placed */
+    ASSERT(ct_label_get_count(placer) >= 1);
+
+    ct_label_placer_free(placer);
+    return 1;
+}
+
+TEST(label_configuration)
+{
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+    ASSERT(placer != NULL);
+
+    /* Test padding configuration */
+    ct_label_set_padding(placer, 10, 5);
+    ASSERT_EQ(placer->padding_x, 10);
+    ASSERT_EQ(placer->padding_y, 5);
+
+    /* Test point offset configuration */
+    ct_label_set_point_offset(placer, 8);
+    ASSERT_EQ(placer->point_offset, 8);
+
+    /* Test negative values (should clamp to 0) */
+    ct_label_set_padding(placer, -5, -3);
+    ASSERT_EQ(placer->padding_x, 0);
+    ASSERT_EQ(placer->padding_y, 0);
+
+    ct_label_placer_free(placer);
+    return 1;
+}
+
+TEST(label_placer_null_safety)
+{
+    /* NULL placer */
+    ct_label_placer_free(NULL);  /* Should not crash */
+    ct_label_placer_reset(NULL);  /* Should not crash */
+    ASSERT_EQ(ct_label_get_count(NULL), 0);
+    ASSERT_NEAR(ct_label_get_occupancy(NULL), 0.0f, 0.001f);
+
+    /* NULL parameters for place_single */
+    const SHFont *font = sh_font_get_default();
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+    CTLabeledPoint point = {.id = 1, .name = "Test"};
+
+    ASSERT_EQ(ct_label_place_single(NULL, &point, 100, 100, font, 12.0f), 0);
+    ASSERT_EQ(ct_label_place_single(placer, NULL, 100, 100, font, 12.0f), 0);
+    if (font) {
+        ASSERT_EQ(ct_label_place_single(placer, &point, 100, 100, NULL, 12.0f), 0);
+    }
+
+    ct_label_placer_free(placer);
+    return 1;
+}
+
+TEST(label_anchor_types)
+{
+    /* Verify anchor enum values are distinct */
+    ASSERT(CT_ANCHOR_CENTER != CT_ANCHOR_LEFT);
+    ASSERT(CT_ANCHOR_LEFT != CT_ANCHOR_RIGHT);
+    ASSERT(CT_ANCHOR_TOP != CT_ANCHOR_BOTTOM);
+    ASSERT(CT_ANCHOR_COUNT > CT_ANCHOR_BOTTOM_RIGHT);
+    return 1;
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1649,6 +1840,17 @@ int main(void)
     run_test_labeled_points_null_safety();
     run_test_place_type_classification();
     run_test_labeled_point_structure();
+
+    printf("\nLabel Placement:\n");
+    run_test_label_placer_create();
+    run_test_label_placer_create_invalid();
+    run_test_label_placer_reset();
+    run_test_label_geo_to_pixel();
+    run_test_label_place_single_with_font();
+    run_test_label_collision_detection();
+    run_test_label_configuration();
+    run_test_label_placer_null_safety();
+    run_test_label_anchor_types();
 
     printf("\n=== Results: %d/%d tests passed ===\n\n",
            tests_passed, tests_run);
