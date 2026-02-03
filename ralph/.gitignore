@@ -7,6 +7,7 @@ test_lap
 test_lap_dbg
 test_lap_debug
 test_netflow
+test_detect
 bench_sizes
 bench_quick
 bench_ralph

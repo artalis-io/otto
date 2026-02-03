@@ -65,6 +65,10 @@ LAP_TEST_EXEC = test_lap
 NETFLOW_TEST_SOURCES = $(TEST_DIR)/test_netflow.c
 NETFLOW_TEST_EXEC = test_netflow
 
+# Network detection tests
+DETECT_TEST_SOURCES = $(TEST_DIR)/test_detect.c
+DETECT_TEST_EXEC = test_detect
+
 # Benchmarks
 BENCH_DIR = benchmarks
 BENCH_SIZES_EXEC = bench_sizes
@@ -128,6 +132,14 @@ $(NETFLOW_TEST_EXEC): $(NETFLOW_TEST_SOURCES) $(LIB_NAME)
 # Run network flow tests
 test-netflow: $(NETFLOW_TEST_EXEC)
 	./$(NETFLOW_TEST_EXEC)
+
+# Build network detection tests
+$(DETECT_TEST_EXEC): $(DETECT_TEST_SOURCES) $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run network detection tests
+test-detect: $(DETECT_TEST_EXEC)
+	./$(DETECT_TEST_EXEC)
 
 # Build size scaling benchmark
 $(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME)
@@ -199,7 +211,7 @@ bench-lap-perf-quick: $(BENCH_LAP_PERF_EXEC)
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -213,7 +225,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow bench bench-lap bench-lap-perf bench-lap-perf-quick compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect bench bench-lap bench-lap-perf bench-lap-perf-quick compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
 
 # Help
 help:
@@ -226,6 +238,7 @@ help:
 	@echo "  test-edge  - Run edge case tests"
 	@echo "  test-lap   - Run LAP (assignment problem) tests"
 	@echo "  test-netflow - Run network flow tests"
+	@echo "  test-detect - Run network detection tests"
 	@echo "  bench      - Run size scaling benchmark"
 	@echo "  bench-lap  - Run LAP benchmark (JVC vs LP)"
 	@echo "  debug      - Build with debug symbols"
