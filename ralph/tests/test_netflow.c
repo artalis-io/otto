@@ -1473,10 +1473,18 @@ void test_unified_api(void) {
     ASSERT(status == RALPH_NETFLOW_OPTIMAL, "K_BEST k=1 optimal");
     ASSERT_NEAR(result.objective, 15.0, TOLERANCE, "K_BEST k=1 objective correct");
 
-    /* Test 3: K_BEST with k>1 returns INVALID_INPUT (not yet implemented) */
+    /* Test 3: K_BEST with k>1 now uses flow decomposition */
+    RalphNetflowPath paths3[3];
+    result.paths = paths3;
     opts.k = 3;
     status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
-    ASSERT(status == RALPH_NETFLOW_INVALID_INPUT, "K_BEST k>1 returns INVALID_INPUT (not implemented)");
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "K_BEST k>1 optimal");
+    ASSERT(result.num_found > 0, "K_BEST k>1 found paths");
+    /* Clean up paths */
+    for (int i = 0; i < result.num_found; i++) {
+        ralph_netflow_path_free(&paths3[i]);
+    }
+    result.paths = NULL;
 
     /* Test 4: BOTTLENECK returns INVALID_INPUT (not yet implemented) */
     opts.algorithm = RALPH_NETFLOW_ALG_BOTTLENECK;
@@ -1499,6 +1507,123 @@ void test_unified_api(void) {
     RalphNetflowStatus status2 = ralph_netflow_solve(&prob, NULL, &result2, NULL);
     ASSERT(status == status2, "solve() and solve_ex() same status");
     ASSERT_NEAR(result.objective, result2.objective, TOLERANCE, "solve() and solve_ex() same objective");
+}
+
+/* Test flow decomposition into paths */
+void test_flow_decomposition(void) {
+    printf("\n=== Test: Flow Decomposition ===\n");
+
+    /* Transportation problem: 2 sources, 2 sinks
+     *   Source 0 (supply 10) --cost 1--> Sink 2 (demand 6)
+     *   Source 0 (supply 10) --cost 3--> Sink 3 (demand 4)
+     *   Source 1 (supply 0)  --cost 2--> Sink 2 (demand 6)
+     *   Source 1 (supply 0)  --cost 1--> Sink 3 (demand 4)
+     *
+     * Optimal: 0->2: 6, 0->3: 4, total cost = 6*1 + 4*3 = 18
+     */
+    int tail[] = {0, 0};
+    int head[] = {1, 2};
+    double cost[] = {1.0, 3.0};
+    double supply[] = {10.0, -6.0, -4.0};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 3, .num_arcs = 2,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    double flow[2];
+    RalphNetflowResult result = {.flow = flow};
+    RalphNetflowStatus status = ralph_netflow_solve(&prob, NULL, &result, NULL);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Solve optimal");
+
+    /* Decompose into paths */
+    RalphNetflowPath paths[5];
+    int num_paths = 0;
+    status = ralph_netflow_decompose(&prob, flow, 5, paths, &num_paths);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Decomposition succeeded");
+    ASSERT(num_paths == 2, "Found 2 paths");
+
+    /* Paths should be sorted by unit cost */
+    if (num_paths >= 2) {
+        ASSERT(paths[0].unit_cost <= paths[1].unit_cost, "Paths sorted by unit cost");
+    }
+
+    /* Verify path properties */
+    double total_path_flow = 0.0;
+    double total_path_cost = 0.0;
+    for (int i = 0; i < num_paths; i++) {
+        ASSERT(paths[i].num_arcs > 0, "Path has arcs");
+        ASSERT(paths[i].flow > 0, "Path has positive flow");
+        total_path_flow += paths[i].flow;
+        total_path_cost += paths[i].cost;
+        printf("  Path %d: source=%d, sink=%d, flow=%.1f, unit_cost=%.1f, cost=%.1f\n",
+               i, paths[i].source, paths[i].sink, paths[i].flow,
+               paths[i].unit_cost, paths[i].cost);
+    }
+
+    ASSERT_NEAR(total_path_cost, result.objective, TOLERANCE, "Path costs sum to objective");
+
+    /* Free paths */
+    for (int i = 0; i < num_paths; i++) {
+        ralph_netflow_path_free(&paths[i]);
+    }
+}
+
+/* Test k-best via unified API */
+void test_k_best_decomposition(void) {
+    printf("\n=== Test: K-Best Flow Decomposition ===\n");
+
+    /* 3x3 transportation */
+    int tail[] = {0, 0, 0, 1, 1, 1, 2, 2, 2};
+    int head[] = {3, 4, 5, 3, 4, 5, 3, 4, 5};
+    double cost[] = {1, 2, 3, 4, 1, 2, 3, 4, 1};
+    double supply[] = {10, 10, 10, -10, -10, -10};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 6, .num_arcs = 9,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    /* Solve with k-best to get path decomposition */
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_NETFLOW_ALG_K_BEST;
+    opts.k = 5;
+
+    double flow[9];
+    RalphNetflowPath paths[5];
+    double objectives[5];
+    RalphNetflowResult result = {
+        .flow = flow,
+        .paths = paths,
+        .objectives = objectives
+    };
+
+    RalphNetflowStatus status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "K-best solve optimal");
+    ASSERT(result.num_found > 0, "Found at least one path");
+    ASSERT(result.num_found <= 5, "Found at most k paths");
+
+    printf("  Found %d paths:\n", result.num_found);
+    for (int i = 0; i < result.num_found; i++) {
+        printf("    Path %d: %d arcs, flow=%.1f, cost=%.1f\n",
+               i, paths[i].num_arcs, paths[i].flow, paths[i].cost);
+        ASSERT_NEAR(objectives[i], paths[i].cost, TOLERANCE, "Objectives match path costs");
+    }
+
+    /* Verify paths are sorted by unit cost */
+    for (int i = 1; i < result.num_found; i++) {
+        ASSERT(paths[i-1].unit_cost <= paths[i].unit_cost + TOLERANCE,
+               "Paths sorted by unit cost");
+    }
+
+    /* Free paths */
+    for (int i = 0; i < result.num_found; i++) {
+        ralph_netflow_path_free(&paths[i]);
+    }
 }
 
 /* ============================================================================
@@ -1558,6 +1683,10 @@ int main(int argc, char *argv[]) {
 
     /* Unified API tests */
     test_unified_api();
+
+    /* Flow decomposition tests */
+    test_flow_decomposition();
+    test_k_best_decomposition();
 
     printf("\n=====================\n");
     printf("Tests: %d/%d passed\n", tests_passed, tests_run);
