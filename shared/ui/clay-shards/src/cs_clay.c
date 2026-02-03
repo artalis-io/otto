@@ -269,6 +269,8 @@ CS_CLAY_EXPORT void cs_clay_set_pointer(float x, float y, bool is_down) {
 }
 
 CS_CLAY_EXPORT bool cs_clay_pointer_over(const char *element_id) {
+    if (!element_id) return false;
+
     /* Use consistent FNV-1a hash matching cs_hash_id() / CS_ID() */
     uint32_t hash = cs_hash_id(element_id);
     Clay_ElementId id = { .id = hash, .stringId = { .chars = element_id, .length = (int)strlen(element_id) } };

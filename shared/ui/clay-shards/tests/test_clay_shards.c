@@ -76,6 +76,20 @@ static void test_hash_id_consistency(void) {
     PASS();
 }
 
+static void test_hash_id_null_safe(void) {
+    TEST(hash_id_null_safe);
+
+    /* NULL input should not crash and should return valid ID */
+    uint32_t id = cs_hash_id(NULL);
+    ASSERT(id != 0, "NULL should return non-zero ID");
+
+    /* Empty string should work */
+    uint32_t empty_id = cs_hash_id("");
+    ASSERT(empty_id != 0, "Empty string should return non-zero ID");
+
+    PASS();
+}
+
 /* ============================================================================
  * Focus Management Tests
  * ============================================================================ */
@@ -1534,6 +1548,7 @@ int main(void) {
     printf("Hash ID Tests:\n");
     test_hash_id_unique();
     test_hash_id_consistency();
+    test_hash_id_null_safe();
 
     printf("\nFocus Management Tests:\n");
     test_focus_init();
