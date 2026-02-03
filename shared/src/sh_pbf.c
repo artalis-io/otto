@@ -91,13 +91,13 @@ SHStatus sh_pbf_parse_blob_header(const uint8_t *data, size_t len,
                                   char *type_out, size_t type_capacity,
                                   uint32_t *datasize_out, size_t *consumed)
 {
-    if (!data || !type_out || !datasize_out || !consumed) {
+    if (!data || !type_out || !datasize_out) {
         return SH_ERROR_INVALID_PARAM;
     }
 
     type_out[0] = '\0';
     *datasize_out = 0;
-    *consumed = len;
+    if (consumed) *consumed = len;
 
     size_t pos = 0;
     while (pos < len) {
