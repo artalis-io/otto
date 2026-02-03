@@ -24,6 +24,7 @@
 #include <signal.h>
 #include <ctype.h>
 #include <math.h>
+#include <stdint.h>
 #include "mongoose.h"
 #include "velo.h"
 #include "polyline.h"
@@ -67,9 +68,9 @@ static void signal_handler(int signo) {
 static char *trim(char *str) {
     while (isspace((unsigned char)*str)) str++;
     if (*str == 0) return str;
-    char *end = str + strlen(str) - 1;
-    while (end > str && isspace((unsigned char)*end)) end--;
-    end[1] = '\0';
+    char *end = str + strlen(str);
+    while (end > str && isspace((unsigned char)*(end - 1))) end--;
+    *end = '\0';
     return str;
 }
 
@@ -99,8 +100,10 @@ static int load_config_file(const char *filename, RouteServerConfig *cfg) {
 
         if (strcmp(key, "graph_path") == 0 || strcmp(key, "graph") == 0) {
             strncpy(cfg->graph_path, value, sizeof(cfg->graph_path) - 1);
+            cfg->graph_path[sizeof(cfg->graph_path) - 1] = '\0';
         } else if (strcmp(key, "listen") == 0 || strcmp(key, "host") == 0) {
             strncpy(cfg->listen_addr, value, sizeof(cfg->listen_addr) - 1);
+            cfg->listen_addr[sizeof(cfg->listen_addr) - 1] = '\0';
         } else if (strcmp(key, "port") == 0) {
             cfg->port = atoi(value);
         } else if (strcmp(key, "landmarks") == 0) {
@@ -109,6 +112,7 @@ static int load_config_file(const char *filename, RouteServerConfig *cfg) {
             cfg->landmark_count = atoi(value);
         } else if (strcmp(key, "name") == 0) {
             strncpy(cfg->name, value, sizeof(cfg->name) - 1);
+            cfg->name[sizeof(cfg->name) - 1] = '\0';
         }
     }
 
@@ -121,12 +125,14 @@ static void load_config_env(RouteServerConfig *cfg) {
 
     if ((val = getenv("ROUTE_GRAPH_PATH")) || (val = getenv("GRAPH_PATH"))) {
         strncpy(cfg->graph_path, val, sizeof(cfg->graph_path) - 1);
+        cfg->graph_path[sizeof(cfg->graph_path) - 1] = '\0';
     }
     if ((val = getenv("ROUTE_PORT")) || (val = getenv("PORT"))) {
         cfg->port = atoi(val);
     }
     if ((val = getenv("ROUTE_HOST")) || (val = getenv("HOST"))) {
         strncpy(cfg->listen_addr, val, sizeof(cfg->listen_addr) - 1);
+        cfg->listen_addr[sizeof(cfg->listen_addr) - 1] = '\0';
     }
     if ((val = getenv("ROUTE_LANDMARKS"))) {
         cfg->use_landmarks = atoi(val);
@@ -165,7 +171,8 @@ static char *json_escape_polyline(const char *polyline) {
         if (polyline[i] == '\\') backslashes++;
     }
 
-    /* Allocate escaped string */
+    /* Allocate escaped string (check for overflow) */
+    if (len > SIZE_MAX - backslashes - 1) return NULL;
     char *escaped = malloc(len + backslashes + 1);
     if (!escaped) return NULL;
 
@@ -199,6 +206,8 @@ static int parse_coord(struct mg_str str, double *lat, double *lon) {
     *lat = atof(buf);
     *lon = atof(comma + 1);
 
+    /* Reject inf/NaN from malformed input like "1e1000" */
+    if (!isfinite(*lat) || !isfinite(*lon)) return -1;
     if (*lat < -90 || *lat > 90 || *lon < -180 || *lon > 180) return -1;
     return 0;
 }
