@@ -9,8 +9,8 @@
 ```bash
 make          # Build libralph.a
 make test     # Run tests (73/73 should pass)
-make test-lap # Run LAP tests (255/255 should pass)
-make test-netflow # Run Network Flow tests (100/100 should pass)
+make test-lap # Run LAP tests (273/273 should pass)
+make test-netflow # Run Network Flow tests (153/153 should pass)
 ```
 
 ## Key Files
@@ -113,17 +113,20 @@ ralph_lap_solve_ex(&prob, &opts, &res, workspace);
 
 ### Problem Detection
 
-Ralph can auto-detect LAP structure in LP/MIP models:
+Ralph auto-detects LAP and network flow structure in LP/MIP models:
 
 ```c
 // Enable detection for a specific model
 ralph_set_int_param(model, "detect_special", 1);
 
-// Global toggle (default: disabled)
-ralph_set_detect_lap(1);
+// Global toggles (both enabled by default)
+ralph_set_detect_lap(1);       // LAP detection
+ralph_set_detect_network(1);   // Network flow detection
 ```
 
-When enabled, assignment problems formulated as LPs/MIPs are solved with JVC instead of simplex (86-633× faster for LP relaxations).
+When enabled:
+- Assignment problems are solved with JVC instead of simplex (86-633× faster)
+- Network flow problems are solved with network simplex (5-10× faster)
 
 ## Network Flow Solver Features
 
@@ -217,11 +220,17 @@ ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
 
 ### Problem Detection
 
-Network flow structure is auto-detected in LP models when enabled:
+Network flow structure is auto-detected in LP models (enabled by default):
 
 ```c
+// Per-model detection (required)
 ralph_set_int_param(model, "detect_special", 1);
+
+// Global toggle (enabled by default)
+ralph_set_detect_network(1);
 ```
+
+Detects: SHORTEST_PATH, ASSIGNMENT, TRANSPORTATION, and GENERAL network problems. Assignment problems are delegated to the LAP solver for optimal performance.
 
 ## Common Tasks
 
@@ -270,10 +279,10 @@ ralph_set_int_param(model, "detect_special", 1);
 # All LP/MIP tests (73 tests)
 make test
 
-# LAP tests only (255 tests)
+# LAP tests only (273 tests)
 make test-lap
 
-# Network Flow tests (100 tests)
+# Network Flow tests (153 tests)
 make test-netflow
 
 # LP only (faster)
@@ -290,7 +299,7 @@ make test-netflow
 ```bash
 make bench-lap        # LAP benchmarks (size scaling, sparse vs dense)
 make bench-lap mip    # LAP-based MIP benchmark
-# make bench-netflow  # Network Flow benchmarks (TODO)
+make bench-netflow    # Network Flow benchmarks (size, warm start, bottleneck)
 ```
 
 ## Code Style

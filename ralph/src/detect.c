@@ -545,8 +545,8 @@ int solve_lap_at_node(
 
 #include "netflow.h"
 
-/* Global setting for network detection */
-static int network_detection_enabled = 0;
+/* Global setting for network detection (enabled by default like LAP) */
+static int network_detection_enabled = 1;
 
 void ralph_set_detect_network(int enabled) {
     network_detection_enabled = enabled ? 1 : 0;
