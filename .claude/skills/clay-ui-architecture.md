@@ -200,7 +200,7 @@ This replaces preprocessor macros with typed, named constants.
 ## Directory Structure
 
 ```
-shared/ui/
+clayshards/
 ├── clay-shards/               # Immediate mode components (C)
 │   ├── include/
 │   │   ├── cs_common.h        # Core API, focus, input routing
@@ -219,14 +219,17 @@ shared/ui/
 │   ├── renderer.js            # ClayRenderer class
 │   ├── font.js                # MSDF font loading
 │   ├── shaders.js             # WebGL shaders
-│   ├── map-tiles.js           # Slippy map tile rendering
-│   └── fonts/                 # Font assets
+│   └── map-tiles.js           # Slippy map tile rendering
 │
 ├── clay-shards-demo/          # Example application
 │   ├── src/demo.c             # WASM source
 │   ├── demo.js                # JS entry point
 │   └── index.html             # HTML shell
 │
+└── fonts/                     # MSDF font assets
+    ├── ui-font.json           # Font metrics
+    └── ui-font.png            # Font atlas
+
 vendor/clay/                   # Clay library (single header)
 ```
 
@@ -485,18 +488,18 @@ void render_ui(void) {
 
 ```bash
 # Build clay-shards library
-cd shared/ui/clay-shards
+cd clayshards/clay-shards
 make
 
 # Build demo (requires Emscripten)
-cd shared/ui/clay-shards-demo
+cd clayshards/clay-shards-demo
 make
 make serve  # http://localhost:8000
 ```
 
 ## Related Documentation
 
-- [Clay Library](../../../vendor/clay/CLAUDE.md)
-- [clay-shards](../../shared/ui/clay-shards/CLAUDE.md)
-- [clay-shards-webgl](../../shared/ui/clay-shards-webgl/CLAUDE.md)
-- [clay-shards-demo](../../shared/ui/clay-shards-demo/CLAUDE.md)
+- [Clay Library](../../vendor/clay/CLAUDE.md)
+- [clay-shards](../../clayshards/clay-shards/CLAUDE.md)
+- [clay-shards-webgl](../../clayshards/clay-shards-webgl/CLAUDE.md)
+- [clay-shards-demo](../../clayshards/clay-shards-demo/CLAUDE.md)

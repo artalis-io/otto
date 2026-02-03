@@ -7,7 +7,7 @@ CFLAGS = -O3 -Wall -Wextra
 # Note: Not defining CLAY_WASM - using regular function pointers instead
 
 # Include paths - Clay vendor + ClayShards
-INCLUDES = -I../../../vendor/clay -I../clay-shards/include
+INCLUDES = -I../../vendor/clay -I../clay-shards/include
 
 # Don't use CLAY_WASM - we'll set measure function via Clay_SetMeasureTextFunction
 # This avoids needing JS imports for measureTextFunction/queryScrollOffsetFunction

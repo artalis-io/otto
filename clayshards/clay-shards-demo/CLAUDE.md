@@ -171,4 +171,4 @@ The render loop handles:
 
 - [clay-shards](../clay-shards/) - Immediate mode UI components
 - [clay-shards-webgl](../clay-shards-webgl/) - WebGL renderer library
-- [Clay](../../../vendor/clay/) - UI layout library
+- [Clay](../../vendor/clay/) - UI layout library

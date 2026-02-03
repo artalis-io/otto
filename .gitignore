@@ -65,8 +65,6 @@ coverage/
 *.temp
 
 # Clay UI build artifacts
-shared/ui/clay-components/build/
-shared/ui/cc-map-demo/build/
+clayshards/clay-shards/build/test_clay_shards
 data/index/
-shared/ui/clay-shards/build/test_clay_shards
 locus/test_locus_asan
