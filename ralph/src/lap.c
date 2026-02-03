@@ -61,6 +61,23 @@ static int lap_parallel_enabled = 1;           /* Default parallelization settin
 static int lap_epsilon_scaling_enabled = 0;    /* Default ε-scaling setting */
 static double lap_epsilon_factor = 4.0;        /* Default ε reduction factor */
 
+/* Integer overflow check for n*n*sizeof(type) allocations.
+ * Returns 0 if safe, -1 if would overflow.
+ * Checks: n*n fits in size_t, and n*n*elem_size fits in size_t.
+ */
+static int lap_check_size_overflow(size_t n, size_t elem_size) {
+    /* Check n*n overflow */
+    if (n > 0 && n > SIZE_MAX / n) {
+        return -1;  /* n*n would overflow */
+    }
+    size_t n_squared = n * n;
+    /* Check n*n*elem_size overflow */
+    if (elem_size > 0 && n_squared > SIZE_MAX / elem_size) {
+        return -1;  /* n*n*elem_size would overflow */
+    }
+    return 0;  /* Safe */
+}
+
 /* Aligned allocation helpers */
 static void* lap_aligned_alloc(size_t size) {
 #ifdef _WIN32
@@ -1596,6 +1613,9 @@ RalphLapStatus ralph_lap_solve_sparse(
     double density = (double)nnz / ((double)n * n);
     if (density > 0.3) {
         /* Convert to dense - faster for denser problems */
+        if (lap_check_size_overflow(n, sizeof(double)) != 0) {
+            return RALPH_LAP_MEMORY_ERROR;  /* n*n would overflow */
+        }
         double *cost = (double *)malloc(n * n * sizeof(double));
         if (!cost) return RALPH_LAP_MEMORY_ERROR;
 
@@ -2046,6 +2066,11 @@ RalphLapStatus ralph_lap_solve_lp(
 ) {
     if (n <= 0 || cost == NULL || row_sol == NULL) {
         return RALPH_LAP_INVALID_INPUT;
+    }
+
+    /* Check for integer overflow in n*n calculations */
+    if (lap_check_size_overflow(n, sizeof(double)) != 0) {
+        return RALPH_LAP_MEMORY_ERROR;
     }
 
     /* Create LP model:
@@ -2862,6 +2887,11 @@ static RalphLapStatus lap_solve_k_best_internal(
         return RALPH_LAP_INVALID_INPUT;
     }
 
+    /* Check for integer overflow in n*n calculations */
+    if (lap_check_size_overflow(n, sizeof(double)) != 0) {
+        return RALPH_LAP_MEMORY_ERROR;
+    }
+
     *num_found = 0;
     RalphLapStatus status;
 
@@ -3357,6 +3387,13 @@ static RalphLapStatus lap_solve_standard_unified(
 
                 /* Pad to square and solve */
                 int k = (m > n) ? m : n;
+
+                /* Check for overflow in k*k allocation */
+                if (lap_check_size_overflow(k, sizeof(double)) != 0) {
+                    status = RALPH_LAP_MEMORY_ERROR;
+                    break;
+                }
+
                 double *padded_cost = (double *)malloc(k * k * sizeof(double));
                 int *padded_row_sol = (int *)malloc(k * sizeof(int));
 
@@ -3534,6 +3571,11 @@ static RalphLapStatus lap_solve_k_best_unified(
     /* For rectangular, pad to square k×k */
     const double *final_cost = cost;
     if (is_rect) {
+        /* Check for overflow in k*k allocation */
+        if (lap_check_size_overflow(k, sizeof(double)) != 0) {
+            free(converted_cost);
+            return RALPH_LAP_MEMORY_ERROR;
+        }
         padded_cost = (double *)malloc(k * k * sizeof(double));
         if (!padded_cost) {
             free(converted_cost);
