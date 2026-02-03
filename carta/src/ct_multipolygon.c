@@ -95,7 +95,9 @@ const char *ct_get_role_string(const CTPBFContext *ctx, uint32_t role_idx)
 {
     if (!ctx || role_idx == 0) return "";
     if (role_idx - 1 >= ctx->num_role_strings) return "";
-    return ctx->role_strings[role_idx - 1];
+    /* role_strings[0] is NULL (placeholder for empty role) */
+    const char *role = ctx->role_strings[role_idx - 1];
+    return role ? role : "";
 }
 
 /* ============================================================================
