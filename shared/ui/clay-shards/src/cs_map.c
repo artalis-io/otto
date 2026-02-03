@@ -748,13 +748,9 @@ void cs_map_pointer_down(uint32_t id, double lat, double lon, float x, float y,
 bool cs_map_pointer_move(uint32_t id, double zoom, float x, float y,
                          float map_width, float map_height,
                          double *out_lat, double *out_lon) {
-    (void)map_width; (void)map_height;  /* Used by geo_to_screen, not needed here */
+    (void)map_width; (void)map_height;
     CsMapState *ms = cs_map_get_state(id);
     if (!ms) return false;
-
-    /* These parameters are reserved for future use (e.g., constraining marker drag) */
-    (void)map_width;
-    (void)map_height;
 
     if (ms->dragging_marker) {
         /* Update marker position based on drag */
