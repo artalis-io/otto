@@ -117,11 +117,15 @@ static int find_or_add_column(MPSParser *parser, const char *name) {
 
         /* Expand bounds and obj arrays */
         double *new_lb = (double*)realloc(parser->lb, new_cap * sizeof(double));
-        double *new_ub = (double*)realloc(parser->ub, new_cap * sizeof(double));
-        double *new_obj = (double*)realloc(parser->obj, new_cap * sizeof(double));
-        if (!new_lb || !new_ub || !new_obj) return -1;
+        if (!new_lb) return -1;
         parser->lb = new_lb;
+
+        double *new_ub = (double*)realloc(parser->ub, new_cap * sizeof(double));
+        if (!new_ub) return -1;
         parser->ub = new_ub;
+
+        double *new_obj = (double*)realloc(parser->obj, new_cap * sizeof(double));
+        if (!new_obj) return -1;
         parser->obj = new_obj;
     }
 
@@ -147,6 +151,7 @@ static int find_or_add_column(MPSParser *parser, const char *name) {
 static int parse_name(MPSParser *parser) {
     char *name = trim(parser->line + 4);  /* Skip "NAME" */
     strncpy(parser->name, name, MAX_NAME - 1);
+    parser->name[MAX_NAME - 1] = '\0';  /* Ensure null termination */
     return 0;
 }
 
@@ -175,10 +180,13 @@ static int parse_rows_line(MPSParser *parser, const char *line) {
     if (parser->num_rows >= parser->row_capacity) {
         int new_cap = parser->row_capacity * 2;
         MPSRow *new_rows = (MPSRow*)realloc(parser->rows, new_cap * sizeof(MPSRow));
-        double *new_rhs = (double*)realloc(parser->rhs, new_cap * sizeof(double));
-        if (!new_rows || !new_rhs) return -1;
+        if (!new_rows) return -1;
         parser->rows = new_rows;
+
+        double *new_rhs = (double*)realloc(parser->rhs, new_cap * sizeof(double));
+        if (!new_rhs) return -1;
         parser->rhs = new_rhs;
+
         parser->row_capacity = new_cap;
     }
 
