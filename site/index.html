@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OTTO - Optimization for Trucking and Transport Operations</title>
+    <meta name="description" content="Zero-dependency logistics optimization platform. Route planning, fuel optimization, fleet scheduling, and custom map rendering. Built in C, runs everywhere.">
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e5e5e5;
+            --text-muted: #888;
+            --accent: #3b82f6;
+            --accent-dim: #1e40af;
+            --border: #2a2a2a;
+            --success: #22c55e;
+            --warning: #eab308;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Monaco, Consolas, monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            font-size: 15px;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Header */
+        header {
+            padding: 48px 0 32px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .logo {
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            color: var(--text);
+        }
+
+        .logo span {
+            color: var(--accent);
+        }
+
+        .tagline {
+            margin-top: 8px;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .expand {
+            margin-top: 4px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        /* Hero */
+        .hero {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .hero h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .hero p {
+            color: var(--text-muted);
+            max-width: 700px;
+        }
+
+        .badges {
+            margin-top: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .badge.green { border-color: var(--success); color: var(--success); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.yellow { border-color: var(--warning); color: var(--warning); }
+
+        /* Components Grid */
+        .components {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .card:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .card-name {
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .card-lang {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+            color: var(--text-muted);
+        }
+
+        .card-desc {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+
+        .card-meta {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        /* Architecture */
+        .architecture {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .ascii-art {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 24px;
+            overflow-x: auto;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .ascii-art pre {
+            margin: 0;
+            color: var(--text-muted);
+        }
+
+        /* Features */
+        .features {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 24px;
+        }
+
+        .feature {
+            padding: 16px;
+        }
+
+        .feature-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .feature-desc {
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        /* Performance */
+        .performance {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        td:last-child {
+            color: var(--success);
+            font-weight: 500;
+        }
+
+        /* Quick Start */
+        .quickstart {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .code-block {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+            overflow-x: auto;
+        }
+
+        .code-block pre {
+            margin: 0;
+            font-size: 13px;
+        }
+
+        .code-block .comment {
+            color: var(--text-muted);
+        }
+
+        .code-block .command {
+            color: var(--success);
+        }
+
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 16px;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .logo { font-size: 24px; }
+            .hero h1 { font-size: 18px; }
+            .ascii-art { font-size: 10px; padding: 16px; }
+            .footer-links { flex-direction: column; gap: 8px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo"><span>O</span>TTO</div>
+            <div class="expand"><strong>O</strong>ptimization for <strong>T</strong>rucking and <strong>T</strong>ransport <strong>O</strong>perations</div>
+            <div class="tagline">Zero-dependency logistics optimization. Built in C, runs everywhere.</div>
+        </header>
+
+        <section class="hero">
+            <h1>A complete trucking optimization platform</h1>
+            <p>
+                Route planning, fuel cost minimization, Hours of Service compliance, fleet scheduling,
+                and custom map rendering. All core libraries compile to WebAssembly with no external dependencies.
+            </p>
+            <div class="badges">
+                <span class="badge green">279+ tests</span>
+                <span class="badge blue">WASM-first</span>
+                <span class="badge yellow">Zero dependencies</span>
+                <span class="badge">C11</span>
+                <span class="badge">MIT License</span>
+            </div>
+        </section>
+
+        <section class="components">
+            <h2 class="section-title">Core Engines</h2>
+            <div class="grid">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-name">Ralph</span>
+                        <span class="card-lang">C</span>
+                    </div>
+                    <div class="card-desc">LP/MIP solver engine. Revised Simplex with LU factorization, Branch & Bound, Gomory cuts.</div>
+                    <div class="card-meta">73 tests &middot; &lt;100ms for 1000 vars</div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-name">Velo</span>
+                        <span class="card-lang">C</span>
+                    </div>
+                    <div class="card-desc">OSM routing engine. Dijkstra, A*, bidirectional search, landmark preprocessing.</div>
+                    <div class="card-meta">47 tests &middot; &lt;100ms country-scale</div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-name">Carta</span>
+                        <span class="card-lang">C</span>
+                    </div>
+                    <div class="card-desc">Map tile generator. Vector tiles (MVT) and raster tiles (PNG) from OSM PBF.</div>
+                    <div class="card-meta">33 tests &middot; ~75ms per 512x512 tile</div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-name">Locus</span>
+                        <span class="card-lang">C</span>
+                    </div>
+                    <div class="card-desc">OSM geocoding engine. Forward search, autocomplete, reverse lookup with trie + trigram index.</div>
+                    <div class="card-meta">52 tests &middot; &lt;20&mu;s per query</div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-name">FuelWise</span>
+                        <span class="card-lang">C</span>
+                    </div>
+                    <div class="card-desc">Refueling optimization. LP formulation for minimum-cost fuel stops along a route.</div>
+                    <div class="card-meta">33 tests &middot; Uses Ralph solver</div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-name">ClayShards</span>
+                        <span class="card-lang">C + JS</span>
+                    </div>
+                    <div class="card-desc">Immediate-mode UI components. WebGL renderer, MSDF fonts, map widgets.</div>
+                    <div class="card-meta">84 tests &middot; ~140KB WASM</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="architecture">
+            <h2 class="section-title">Architecture</h2>
+            <div class="ascii-art">
+<pre>
+┌─────────────────────────────────────────────────────────────────┐
+│  UI (React + ClayShards)  │  WASM (Browser)  │  REST APIs       │
+├─────────────────────────────────────────────────────────────────┤
+│  Fleet Optimization (Planned)                                   │
+│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐        │
+│  │  HoSE  │ │ Tempo  │ │ Arbor  │ │ Sigma  │ │ Pulse  │        │
+│  │  HoS   │ │ Time   │ │ Search │ │ Fleet  │ │  PTA   │        │
+│  └────────┘ └────────┘ └────────┘ └────────┘ └────────┘        │
+├─────────────────────────────────────────────────────────────────┤
+│  Domain Libraries                                                │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
+│  │ FuelWise │ │   Velo   │ │  Carta   │ │  Locus   │           │
+│  │ Refueling│ │ Routing  │ │  Tiles   │ │ Geocode  │           │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘           │
+│       │            └──────┬─────┴────────────┘                  │
+│  ┌────┴────┐        ┌─────┴─────┐                               │
+│  │  Ralph  │        │  Shared   │                               │
+│  │ LP/MIP  │        │ geo, pbf  │                               │
+│  └─────────┘        └───────────┘                               │
+└─────────────────────────────────────────────────────────────────┘
+</pre>
+            </div>
+        </section>
+
+        <section class="features">
+            <h2 class="section-title">Design Principles</h2>
+            <div class="feature-grid">
+                <div class="feature">
+                    <div class="feature-title">Zero Dependencies</div>
+                    <div class="feature-desc">Core libraries use only standard C. No package managers, no supply chain risk.</div>
+                </div>
+                <div class="feature">
+                    <div class="feature-title">WASM-First</div>
+                    <div class="feature-desc">All engines compile to WebAssembly. Same code runs in browsers and on servers.</div>
+                </div>
+                <div class="feature">
+                    <div class="feature-title">Layered Architecture</div>
+                    <div class="feature-desc">Solver &rarr; Domain &rarr; API &rarr; UI. Each layer has a clean C API.</div>
+                </div>
+                <div class="feature">
+                    <div class="feature-title">Arena Allocation</div>
+                    <div class="feature-desc">Bulk allocate, bulk free. No fragmentation, no leaks, cache-friendly.</div>
+                </div>
+                <div class="feature">
+                    <div class="feature-title">Compound Literals</div>
+                    <div class="feature-desc">C11 features for inline configuration. Self-documenting, type-safe APIs.</div>
+                </div>
+                <div class="feature">
+                    <div class="feature-title">Portable</div>
+                    <div class="feature-desc">Linux, macOS, Windows, browsers. Same codebase everywhere.</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="performance">
+            <h2 class="section-title">Performance</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Operation</th>
+                        <th>Target</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>LP solve (1000 variables)</td><td>&lt;100ms</td></tr>
+                    <tr><td>Route calculation (country-scale)</td><td>&lt;100ms</td></tr>
+                    <tr><td>PNG tile generation (512&times;512)</td><td>~75ms</td></tr>
+                    <tr><td>Forward geocoding</td><td>&lt;20&mu;s</td></tr>
+                    <tr><td>Autocomplete query</td><td>&lt;20&mu;s</td></tr>
+                    <tr><td>Reverse geocoding</td><td>&lt;30&mu;s</td></tr>
+                    <tr><td>PBF parse (300MB Hungary)</td><td>~10s</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section class="quickstart">
+            <h2 class="section-title">Quick Start</h2>
+            <div class="code-block">
+<pre><span class="comment"># Build all libraries</span>
+<span class="command">make all</span>
+
+<span class="comment"># Run all tests (279+)</span>
+<span class="command">make test</span>
+
+<span class="comment"># Start servers</span>
+<span class="command">make run-fuelwise-api</span>   <span class="comment"># :8080</span>
+<span class="command">make run-velo-api</span>       <span class="comment"># :8082</span>
+<span class="command">make run-carta-api</span>      <span class="comment"># :8081</span>
+<span class="command">make run-locus-api</span>      <span class="comment"># :8083</span>
+
+<span class="comment"># Build for WebAssembly</span>
+<span class="command">make wasm</span></pre>
+            </div>
+        </section>
+
+        <footer>
+            <div class="footer-links">
+                <a href="../README.md">Documentation</a>
+                <a href="../docs/ARCHITECTURE.md">Architecture</a>
+                <a href="../LICENSE">MIT License</a>
+            </div>
+            <div>&copy; 2025 Mark Farkas</div>
+        </footer>
+    </div>
+</body>
+</html>
