@@ -72,7 +72,7 @@ echo -e "  ${GREEN}Built: Carta, Velo, Locus${NC}"
 
 # Build WASM demo
 echo "Building WASM demo..."
-make -C shared/ui/clay-shards-demo >/dev/null 2>&1
+make -C clayshards/clay-shards-demo >/dev/null 2>&1
 echo -e "  ${GREEN}Built: ClayShards demo${NC}"
 echo ""
 
@@ -244,11 +244,11 @@ else
 fi
 
 # Start demo HTTP server (port 8000)
-# Serve from shared/ui so that relative imports work (demo imports ../clay-shards-webgl)
-cd shared/ui
+# Serve from clayshards so that relative imports work (demo imports ../clay-shards-webgl)
+cd clayshards
 python3 -m http.server 8000 >/dev/null 2>&1 &
 DEMO_PID=$!
-cd ../..
+cd ..
 echo "  Started: Demo (http://localhost:8000/clay-shards-demo/) [PID: $DEMO_PID]"
 
 echo ""
