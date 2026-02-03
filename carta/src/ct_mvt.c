@@ -461,9 +461,78 @@ size_t ct_generate_mvt(const CTPBFContext *ctx, CTTileCoord coord,
         /* Fast batch coordinate transformation */
         ct_batch_transform_points(coord, opts->extent, f->points, f->num_points);
 
-        /* Note: Clipping and simplification temporarily disabled for debugging.
-         * TODO: Fix ct_clip_polygon edge winding order
-         */
+        /* Clip geometry to tile bounds */
+        CTTilePoint *clipped = NULL;
+        int clipped_count = 0;
+
+        if (f->type == CT_GEOM_POLYGON) {
+            ct_clip_polygon(f->points, f->num_points,
+                           opts->extent, opts->buffer,
+                           &clipped, &clipped_count);
+            /* Skip degenerate polygons (need at least 3 points) */
+            if (clipped_count < 3) {
+                free(clipped);
+                free(f->points);
+                f->points = NULL;
+                continue;
+            }
+        } else if (f->type == CT_GEOM_LINESTRING) {
+            int *segments = NULL;
+            int seg_count = 0;
+            ct_clip_linestring(f->points, f->num_points,
+                              opts->extent, opts->buffer,
+                              &clipped, &clipped_count,
+                              &segments, &seg_count);
+            free(segments);  /* We only use first segment for now */
+            /* Skip degenerate linestrings */
+            if (clipped_count < 2) {
+                free(clipped);
+                free(f->points);
+                f->points = NULL;
+                continue;
+            }
+        } else {
+            /* Points: just check if within bounds */
+            if (f->num_points > 0 &&
+                f->points[0].x >= -opts->buffer &&
+                f->points[0].x <= opts->extent + opts->buffer &&
+                f->points[0].y >= -opts->buffer &&
+                f->points[0].y <= opts->extent + opts->buffer) {
+                /* Point is in bounds, keep original */
+                clipped = f->points;
+                clipped_count = f->num_points;
+                f->points = NULL;  /* Transfer ownership */
+            } else {
+                free(f->points);
+                f->points = NULL;
+                continue;
+            }
+        }
+
+        /* Replace original points with clipped version */
+        if (f->points != clipped) {
+            free(f->points);
+        }
+        f->points = clipped;
+        f->num_points = clipped_count;
+
+        /* Simplify geometry if enabled */
+        if (opts->simplify && f->num_points > 2) {
+            float tolerance = (float)opts->tolerance;
+            if (f->type == CT_GEOM_POLYGON) {
+                ct_simplify_poly_inplace(f->points, &f->num_points, tolerance);
+            } else if (f->type == CT_GEOM_LINESTRING) {
+                ct_simplify_line_inplace(f->points, &f->num_points, tolerance);
+            }
+        }
+
+        /* Skip if simplification made geometry degenerate */
+        if ((f->type == CT_GEOM_POLYGON && f->num_points < 3) ||
+            (f->type == CT_GEOM_LINESTRING && f->num_points < 2)) {
+            free(f->points);
+            f->points = NULL;
+            continue;
+        }
 
         ct_tile_add_feature(&tile, f);
     }
