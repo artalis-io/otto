@@ -271,6 +271,15 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
     const CTSectionOffsets *offsets = (const CTSectionOffsets *)((char *)map + sizeof(CTBinaryHeader));
 
+    /* Validate file size - must contain all sections */
+    size_t min_size = offsets->coords_offset + header->total_coords * sizeof(CTBinaryCoord);
+    if ((size_t)st.st_size < min_size) {
+        fprintf(stderr, "Error: Index file truncated (size %ld, need %zu)\n",
+                (long)st.st_size, min_size);
+        munmap(map, st.st_size);
+        return NULL;
+    }
+
     /* Create context */
     CTPBFContext *ctx = calloc(1, sizeof(CTPBFContext));
     if (!ctx) {
@@ -305,6 +314,12 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
     /* Allocate all coordinates in one block for cache efficiency */
     CTCoord *all_coords = malloc(header->total_coords * sizeof(CTCoord));
+    if (!all_coords) {
+        free(ctx->ways);
+        free(ctx);
+        munmap(map, st.st_size);
+        return NULL;
+    }
     size_t coord_idx = 0;
 
     for (size_t i = 0; i < header->num_ways; i++) {
