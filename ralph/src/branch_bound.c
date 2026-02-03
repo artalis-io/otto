@@ -707,6 +707,7 @@ int heuristic_rounding(MIPSolver *solver, const double *lp_solution, double *int
  * ============================================================================ */
 
 void mip_print_node_info(const MIPSolver *solver, const BBNode *node) {
+    (void)solver;  /* Reserved for future use (e.g., printing solver state) */
     printf("Node %d: depth=%d, bound=%.4f, status=%d\n",
            node->id, node->depth, node->lp_bound, node->lp_status);
 }

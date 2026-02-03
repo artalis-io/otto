@@ -191,8 +191,7 @@ static int parse_rows_line(MPSParser *parser, const char *line) {
     }
 
     int idx = parser->num_rows;
-    strncpy(parser->rows[idx].name, name, MAX_NAME - 1);
-    parser->rows[idx].name[MAX_NAME - 1] = '\0';
+    snprintf(parser->rows[idx].name, MAX_NAME, "%s", name);
     parser->rows[idx].type = type;
     parser->rows[idx].index = idx;
     parser->rhs[idx] = 0.0;
@@ -473,12 +472,7 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
         }
     }
 
-    /* Build LPModel from parsed data */
-    LPModel *lp = (LPModel*)model;  /* RalphModel is typedef'd to RalphModelInternal */
-
-    /* This requires access to internal model structure */
-    /* For now, we'll add variables and constraints through the public API */
-
+    /* Build model using public API */
     /* Set objective sense */
     ralph_set_obj_sense(model, parser->obj_sense == 1 ? RALPH_MINIMIZE : RALPH_MAXIMIZE);
 
