@@ -603,9 +603,13 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     CTOSMFeatureClass feature_class = classify_tags(st, keys, vals, num_tags,
                                                     &feature_type, &is_area);
 
-    if (feature_class == CT_OSM_UNKNOWN) {
-        goto skip_way;
-    }
+    /*
+     * NOTE: We store ALL ways, even unclassified ones (CT_OSM_UNKNOWN).
+     * This is necessary because multipolygon relations reference member ways
+     * that often have no tags - the tags are on the relation itself.
+     * Unclassified ways won't be rendered directly but will be available
+     * for multipolygon assembly via way_map lookup.
+     */
 
     /* Resolve node references to coordinates */
     CTCoord *coords = malloc(ref_count * sizeof(CTCoord));
@@ -676,7 +680,10 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
         if (coords[i].lon > ctx->bbox.max_lon) ctx->bbox.max_lon = coords[i].lon;
     }
 
-    ctx->features_kept++;
+    /* Only count classified features (unclassified are kept for relation assembly) */
+    if (feature_class != CT_OSM_UNKNOWN) {
+        ctx->features_kept++;
+    }
 
 skip_way:
     free(refs);
@@ -1231,6 +1238,11 @@ CTStatus ct_pbf_get_tile_features(const CTPBFContext *ctx, CTTileCoord tile,
 static CTStatus add_way_as_feature(const CTOSMWay *way, CTFeature **features,
                                    size_t *count, size_t *capacity)
 {
+    /* Skip unclassified ways (kept only for relation assembly) */
+    if (way->feature_class == CT_OSM_UNKNOWN) {
+        return CT_OK;
+    }
+
     /* Expand array if needed */
     if (*count >= *capacity) {
         *capacity *= 2;
