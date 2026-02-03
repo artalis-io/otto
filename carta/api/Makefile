@@ -12,7 +12,8 @@ VENDOR_DIR = ../../vendor
 SHARED_DIR = ../../shared
 
 # Include paths
-INCLUDES = -I$(CARTA_DIR)/include \
+INCLUDES = -I$(SRC_DIR) \
+           -I$(CARTA_DIR)/include \
            -I$(SHARED_DIR)/include \
            -I$(VENDOR_DIR)/mongoose \
            -I$(VENDOR_DIR)/miniz
@@ -20,7 +21,7 @@ INCLUDES = -I$(CARTA_DIR)/include \
 # Libraries
 LIBS = -L$(CARTA_DIR) -lcarta \
        -L$(SHARED_DIR) -lshared \
-       -lm
+       -lm -lpthread
 
 # Mongoose and miniz objects
 VENDOR_OBJS = $(VENDOR_DIR)/mongoose/mongoose.o \

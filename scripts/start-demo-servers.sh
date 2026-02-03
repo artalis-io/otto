@@ -152,14 +152,15 @@ echo ""
 echo "Starting servers..."
 
 # Carta tile server (port 8081) - use index if available
+# Use 8 worker threads for parallel tile generation
 if [ -n "$CARTA_IDX" ] && [ -f "$CARTA_IDX" ]; then
-    ./carta/api/carta-tile-server -p 8081 "$CARTA_IDX" >/dev/null 2>&1 &
+    ./carta/api/carta-tile-server -p 8081 -t 8 "$CARTA_IDX" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - using binary index"
+    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - using binary index, 8 threads"
 else
-    ./carta/api/carta-tile-server -p 8081 "$PBF_FILE" >/dev/null 2>&1 &
+    ./carta/api/carta-tile-server -p 8081 -t 8 "$PBF_FILE" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - loading from PBF..."
+    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - loading from PBF, 8 threads"
 fi
 
 # Velo route server (port 8082)
