@@ -84,9 +84,9 @@ static char g_tile_url_buffer[512];
  * ============================================================================ */
 
 EXPORT const char* cs_provider_tile_url(int z, int x, int y, int layer) {
-    (void)layer; /* TODO: support different layers */
+    const char *ext = (layer == CS_TILE_LAYER_VECTOR) ? "mvt" : "png";
     snprintf(g_tile_url_buffer, sizeof(g_tile_url_buffer),
-             "%s/tiles/%d/%d/%d.png", g_tile_server, z, x, y);
+             "%s/tiles/%d/%d/%d.%s", g_tile_server, z, x, y, ext);
     return g_tile_url_buffer;
 }
 
