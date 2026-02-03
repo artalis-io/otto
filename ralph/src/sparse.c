@@ -285,6 +285,7 @@ void sparse_matvec_transpose_add(const SparseMatrix *A, const double *x, double 
  * ============================================================================ */
 
 void sparse_get_column(const SparseMatrix *A, int col, double *dense) {
+    if (!A || !dense || col < 0 || col >= A->ncols) return;
     vec_set_zero(dense, A->nrows);
     for (int p = A->colptr[col]; p < A->colptr[col + 1]; p++) {
         dense[A->rowidx[p]] = A->values[p];
@@ -292,11 +293,18 @@ void sparse_get_column(const SparseMatrix *A, int col, double *dense) {
 }
 
 int sparse_get_column_nnz(const SparseMatrix *A, int col) {
+    if (!A || col < 0 || col >= A->ncols) return 0;
     return A->colptr[col + 1] - A->colptr[col];
 }
 
 void sparse_get_column_sparse(const SparseMatrix *A, int col,
                               int *nnz, const int **rowidx, const double **values) {
+    if (!A || col < 0 || col >= A->ncols || !nnz || !rowidx || !values) {
+        if (nnz) *nnz = 0;
+        if (rowidx) *rowidx = NULL;
+        if (values) *values = NULL;
+        return;
+    }
     int start = A->colptr[col];
     *nnz = A->colptr[col + 1] - start;
     *rowidx = &A->rowidx[start];
@@ -304,12 +312,14 @@ void sparse_get_column_sparse(const SparseMatrix *A, int col,
 }
 
 void sparse_axpy_column(const SparseMatrix *A, int col, double alpha, double *y) {
+    if (!A || !y || col < 0 || col >= A->ncols) return;
     for (int p = A->colptr[col]; p < A->colptr[col + 1]; p++) {
         y[A->rowidx[p]] += alpha * A->values[p];
     }
 }
 
 double sparse_dot_column(const SparseMatrix *A, int col, const double *y) {
+    if (!A || !y || col < 0 || col >= A->ncols) return 0.0;
     double result = 0.0;
     int start = A->colptr[col];
     int end = A->colptr[col + 1];
@@ -329,6 +339,7 @@ double sparse_dot_column(const SparseMatrix *A, int col, const double *y) {
  * ============================================================================ */
 
 double sparse_get_element(const SparseMatrix *A, int row, int col) {
+    if (!A || row < 0 || row >= A->nrows || col < 0 || col >= A->ncols) return 0.0;
     for (int p = A->colptr[col]; p < A->colptr[col + 1]; p++) {
         if (A->rowidx[p] == row) return A->values[p];
         if (A->rowidx[p] > row) break;  /* Assuming sorted rows */
@@ -337,6 +348,7 @@ double sparse_get_element(const SparseMatrix *A, int row, int col) {
 }
 
 void sparse_get_row(const SparseMatrix *A, int row, double *dense) {
+    if (!A || !dense || row < 0 || row >= A->nrows) return;
     vec_set_zero(dense, A->ncols);
     for (int j = 0; j < A->ncols; j++) {
         for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
@@ -354,6 +366,13 @@ void sparse_get_row(const SparseMatrix *A, int row, double *dense) {
  * ============================================================================ */
 
 SparseMatrix* sparse_get_columns(const SparseMatrix *A, int ncols, const int *col_indices) {
+    if (!A || ncols <= 0 || !col_indices) return NULL;
+
+    /* Validate all column indices before proceeding */
+    for (int k = 0; k < ncols; k++) {
+        if (col_indices[k] < 0 || col_indices[k] >= A->ncols) return NULL;
+    }
+
     /* Count non-zeros */
     int nnz = 0;
     for (int k = 0; k < ncols; k++) {
@@ -381,6 +400,13 @@ SparseMatrix* sparse_get_columns(const SparseMatrix *A, int ncols, const int *co
 }
 
 SparseMatrix* sparse_get_rows(const SparseMatrix *A, int nrows, const int *row_indices) {
+    if (!A || nrows <= 0 || !row_indices) return NULL;
+
+    /* Validate all row indices before proceeding */
+    for (int k = 0; k < nrows; k++) {
+        if (row_indices[k] < 0 || row_indices[k] >= A->nrows) return NULL;
+    }
+
     /* Create row mapping */
     int *row_map = (int*)malloc(A->nrows * sizeof(int));
     if (!row_map) return NULL;
