@@ -124,7 +124,11 @@ typedef enum {
     CT_WATERWAY_DRAIN,       /* Drainage ditches */
     CT_WATERWAY_DITCH,       /* Small ditches */
     CT_WATERWAY_OTHER,       /* Other waterways */
-    CT_WATERWAY_TYPE_COUNT
+    CT_WATERWAY_TYPE_COUNT,
+
+    /* Water body types (distinct from linear waterways) */
+    CT_WATER_BODY = 100,     /* Lakes, reservoirs, ponds (polygons) */
+    CT_WATER_RIVERBANK       /* Riverbank polygons */
 } CTWaterwayType;
 
 /* ============================================================================

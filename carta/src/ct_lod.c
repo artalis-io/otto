@@ -85,16 +85,23 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 14, -1, 2000, 0);  /* Large buildings */
     ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 15, -1, 0, 0);     /* All buildings */
 
-    /* Water areas (lakes, reservoirs) - by size
+    /* Water bodies (lakes, reservoirs, ponds) - by size
      * OSM Carto: large water early, small water later
+     * CT_WATER_BODY = 100 to distinguish from linear waterways
      */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 5, -1, 100000000, 0);  /* > 100 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 8, -1, 10000000, 0);   /* > 10 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 10, -1, 1000000, 0);   /* > 1 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 12, -1, 100000, 0);    /* > 0.1 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 14, -1, 0, 0);         /* All water areas */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 4, -1, 100000000, 0);  /* > 100 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 6, -1, 10000000, 0);   /* > 10 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 8, -1, 1000000, 0);    /* > 1 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 10, -1, 100000, 0);    /* > 0.1 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 12, -1, 10000, 0);     /* > 0.01 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 14, -1, 0, 0);         /* All water bodies */
 
-    /* Waterways (linear features) - by type and length
+    /* Riverbank polygons - similar to water bodies */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 6, -1, 1000000, 0);   /* > 1 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 8, -1, 100000, 0);    /* > 0.1 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 10, -1, 0, 0);        /* All riverbanks */
+
+    /* Linear waterways - by type and length
      * OSM Carto: major rivers early, streams very late
      */
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 8, -1, 0, 100000);  /* >100km */
@@ -170,7 +177,14 @@ void ct_lod_detailed(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 14, -1, 0, 0);
 
     /* Water - all visible early */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 4, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 4, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 4, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 6, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_CANAL, 8, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_STREAM, 10, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DRAIN, 12, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DITCH, 12, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_OTHER, 10, -1, 0, 0);
 
     /* Railways - visible early */
     ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 6, -1, 0, 0);
@@ -206,10 +220,20 @@ void ct_lod_minimal(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 15, -1, 500, 0);
     ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 16, -1, 0, 0);
 
-    /* Water - only large bodies early */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 6, -1, 100000000, 0);  /* > 100 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 10, -1, 1000000, 0);   /* > 1 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, -1, 14, -1, 0, 0);         /* All water */
+    /* Water bodies - only large ones early */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 6, -1, 100000000, 0);  /* > 100 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 10, -1, 1000000, 0);   /* > 1 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 14, -1, 0, 0);         /* All water bodies */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 8, -1, 0, 0);     /* Riverbanks at z8 */
+
+    /* Linear waterways */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 10, -1, 0, 50000); /* >50km rivers */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 14, -1, 0, 0);     /* All rivers */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_CANAL, 14, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_STREAM, 16, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DRAIN, 18, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DITCH, 18, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_OTHER, 16, -1, 0, 0);
 
     /* Railways - later visibility */
     ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 10, -1, 0, 10000);  /* > 10km */
