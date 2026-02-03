@@ -78,6 +78,7 @@ BENCH_MIP_EXEC = bench_mip
 PROFILE_BENCH_EXEC = profile_bench
 BENCH_LAP_EXEC = bench_lap
 BENCH_LAP_PERF_EXEC = bench_lap_perf
+BENCH_NETFLOW_EXEC = bench_netflow
 
 # GLPK configuration (via Homebrew)
 GLPK_PREFIX = $(shell brew --prefix glpk 2>/dev/null || echo "/opt/homebrew/opt/glpk")
@@ -209,9 +210,17 @@ bench-lap-perf: $(BENCH_LAP_PERF_EXEC)
 bench-lap-perf-quick: $(BENCH_LAP_PERF_EXEC)
 	./$(BENCH_LAP_PERF_EXEC) --quick
 
+# Build network flow benchmark
+$(BENCH_NETFLOW_EXEC): $(BENCH_DIR)/bench_netflow.c $(LIB_NAME)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+
+# Run network flow benchmark
+bench-netflow: $(BENCH_NETFLOW_EXEC)
+	./$(BENCH_NETFLOW_EXEC)
+
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -225,7 +234,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect bench bench-lap bench-lap-perf bench-lap-perf-quick compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
 
 # Help
 help:
@@ -241,6 +250,7 @@ help:
 	@echo "  test-detect - Run network detection tests"
 	@echo "  bench      - Run size scaling benchmark"
 	@echo "  bench-lap  - Run LAP benchmark (JVC vs LP)"
+	@echo "  bench-netflow - Run network flow benchmark"
 	@echo "  debug      - Build with debug symbols"
 	@echo "  clean      - Remove build artifacts"
 	@echo ""
