@@ -515,9 +515,11 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
         for (int i = 0; i < input_count; i++) {
             CTTilePoint curr = input[i];
 
-            /* Check if points are inside edge */
-            int prev_inside = (x2 - x1) * (prev.y - y1) - (y2 - y1) * (prev.x - x1) >= 0;
-            int curr_inside = (x2 - x1) * (curr.y - y1) - (y2 - y1) * (curr.x - x1) >= 0;
+            /* Check if points are inside edge.
+             * Cross product is negative when point is to the right of edge direction.
+             * Since edges go CCW, interior of rectangle is on the right (cross <= 0). */
+            int prev_inside = (x2 - x1) * (prev.y - y1) - (y2 - y1) * (prev.x - x1) <= 0;
+            int curr_inside = (x2 - x1) * (curr.y - y1) - (y2 - y1) * (curr.x - x1) <= 0;
 
             if (curr_inside) {
                 if (!prev_inside) {

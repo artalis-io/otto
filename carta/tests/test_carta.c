@@ -976,6 +976,73 @@ TEST(simplify_preserves_endpoints)
     return 1;
 }
 
+TEST(clip_polygon_inside)
+{
+    /* Polygon fully inside clip region - should be unchanged */
+    CTTilePoint points[] = {{100, 100}, {200, 100}, {200, 200}, {100, 200}};
+    CTTilePoint *out;
+    int out_count;
+
+    ct_clip_polygon(points, 4, 4096, 0, &out, &out_count);
+
+    ASSERT_EQ(out_count, 4);
+    free(out);
+    return 1;
+}
+
+TEST(clip_polygon_partial)
+{
+    /* Polygon crossing left edge - should be clipped */
+    CTTilePoint points[] = {{-100, 100}, {100, 100}, {100, 200}, {-100, 200}};
+    CTTilePoint *out;
+    int out_count;
+
+    ct_clip_polygon(points, 4, 4096, 0, &out, &out_count);
+
+    /* Should produce a 4-point polygon clipped at x=0 */
+    ASSERT(out_count >= 3);
+    /* All output points should be within bounds */
+    for (int i = 0; i < out_count; i++) {
+        ASSERT(out[i].x >= 0);
+        ASSERT(out[i].x <= 4096);
+    }
+    free(out);
+    return 1;
+}
+
+TEST(clip_polygon_outside)
+{
+    /* Polygon fully outside clip region - should be empty */
+    CTTilePoint points[] = {{-200, -200}, {-100, -200}, {-100, -100}, {-200, -100}};
+    CTTilePoint *out;
+    int out_count;
+
+    ct_clip_polygon(points, 4, 4096, 0, &out, &out_count);
+
+    ASSERT_EQ(out_count, 0);
+    free(out);
+    return 1;
+}
+
+TEST(clip_linestring_crossing)
+{
+    /* Line crossing tile boundary */
+    CTTilePoint points[] = {{-100, 500}, {500, 500}};
+    CTTilePoint *out;
+    int out_count;
+    int *segments;
+    int seg_count;
+
+    ct_clip_linestring(points, 2, 4096, 0, &out, &out_count, &segments, &seg_count);
+
+    ASSERT(out_count >= 2);
+    /* First point should be clipped to x=0 */
+    ASSERT(out[0].x >= 0);
+    free(out);
+    free(segments);
+    return 1;
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -1060,6 +1127,10 @@ int main(void)
     printf("\nGeometry:\n");
     run_test_simplify_short_line();
     run_test_simplify_preserves_endpoints();
+    run_test_clip_polygon_inside();
+    run_test_clip_polygon_partial();
+    run_test_clip_polygon_outside();
+    run_test_clip_linestring_crossing();
 
     printf("\n=== Results: %d/%d tests passed ===\n\n",
            tests_passed, tests_run);
