@@ -184,6 +184,7 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
  * ============================================================================ */
 
 static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, double theta) {
+    (void)theta;  /* Step size already computed in caller */
     int leaving_var = tab->basis[leaving];
 
     /* Compute entering column in basis representation using sparse solve */
@@ -609,9 +610,6 @@ int dual_simplex_reoptimize(SimplexSolver *solver, int var, double new_lb, doubl
     SimplexTableau *tab = solver->tableau;
 
     /* Update bounds */
-    double old_lb = tab->lb_ext[var];
-    double old_ub = tab->ub_ext[var];
-
     tab->lb_ext[var] = new_lb;
     tab->ub_ext[var] = new_ub;
 

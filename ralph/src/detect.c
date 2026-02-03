@@ -13,6 +13,14 @@
 
 #define TOLERANCE 1e-9
 
+/* Integer overflow check for n*n*sizeof(type) allocations */
+static int detect_check_size_overflow(size_t n, size_t elem_size) {
+    if (n > 0 && n > SIZE_MAX / n) return -1;
+    size_t n_squared = n * n;
+    if (elem_size > 0 && n_squared > SIZE_MAX / elem_size) return -1;
+    return 0;
+}
+
 /* Global setting for LAP detection */
 static int lap_detection_enabled = 1;
 
@@ -368,6 +376,12 @@ int detect_lap_mip(const LPModel *model, MIPLAPSignature *sig) {
 
     int n = sig->base.n;
     sig->num_vars = model->num_vars;
+
+    /* Check for overflow in n*n allocation */
+    if (detect_check_size_overflow(n, sizeof(double)) != 0) {
+        detect_lap_free(&sig->base);
+        return 0;
+    }
 
     /* Allocate base costs copy */
     sig->base_costs = (double *)malloc(n * n * sizeof(double));

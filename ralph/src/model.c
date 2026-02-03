@@ -14,6 +14,52 @@
 #define INITIAL_NNZ_CAPACITY 512
 
 /* ============================================================================
+ * Constraint Entry (for incremental building)
+ * ============================================================================ */
+
+typedef struct {
+    int nnz;
+    int capacity;
+    int *indices;
+    double *values;
+    char sense;
+    double rhs;
+} ConstraintEntry;
+
+/* ============================================================================
+ * Build State Definition (per-model, thread-safe)
+ * ============================================================================ */
+
+struct LPModelBuildState {
+    ConstraintEntry **constraints;
+    int con_count;
+    int con_capacity;
+};
+
+/* Free build state and all its contents */
+static void build_state_free(LPModelBuildState *bs) {
+    if (!bs) return;
+
+    if (bs->constraints) {
+        for (int i = 0; i < bs->con_count; i++) {
+            if (bs->constraints[i]) {
+                free(bs->constraints[i]->indices);
+                free(bs->constraints[i]->values);
+                free(bs->constraints[i]);
+            }
+        }
+        free(bs->constraints);
+    }
+    free(bs);
+}
+
+/* Create a new build state */
+static LPModelBuildState* build_state_create(void) {
+    LPModelBuildState *bs = (LPModelBuildState*)calloc(1, sizeof(LPModelBuildState));
+    return bs;
+}
+
+/* ============================================================================
  * LP Model Creation/Destruction
  * ============================================================================ */
 
@@ -28,6 +74,7 @@ LPModel* lp_model_create(void) {
     model->obj_offset = 0.0;
     model->num_integers = 0;
     model->num_binary = 0;
+    model->build_state = NULL;
 
     return model;
 }
@@ -58,69 +105,13 @@ void lp_model_free(LPModel *model) {
     }
 
     free(model->name);
+    build_state_free(model->build_state);
     free(model);
-}
-
-/* ============================================================================
- * Model Building (using triplet format for incremental building)
- * ============================================================================ */
-
-/* Internal structure for building model incrementally */
-typedef struct {
-    int var_capacity;
-    int con_capacity;
-    SparseTriplets *triplets;
-} ModelBuilder;
-
-static ModelBuilder* builder_create(void) {
-    ModelBuilder *builder = (ModelBuilder*)calloc(1, sizeof(ModelBuilder));
-    if (!builder) return NULL;
-
-    builder->var_capacity = INITIAL_VAR_CAPACITY;
-    builder->con_capacity = INITIAL_CON_CAPACITY;
-    builder->triplets = triplets_create(INITIAL_CON_CAPACITY, INITIAL_VAR_CAPACITY,
-                                        INITIAL_NNZ_CAPACITY);
-
-    if (!builder->triplets) {
-        free(builder);
-        return NULL;
-    }
-
-    return builder;
 }
 
 /* ============================================================================
  * Model Building via Public API
  * ============================================================================ */
-
-/* We use a simpler approach: store constraints in a list first, then build matrix */
-
-typedef struct {
-    int nnz;
-    int capacity;
-    int *indices;
-    double *values;
-    char sense;
-    double rhs;
-} ConstraintEntry;
-
-typedef struct {
-    int num_vars;
-    int var_capacity;
-    double *c;
-    double *lb;
-    double *ub;
-    char *var_type;
-
-    int num_cons;
-    int con_capacity;
-    ConstraintEntry **constraints;
-
-    int obj_sense;
-    double obj_offset;
-} ModelBuildState;
-
-/* Thread-local or per-model build state - we'll attach to model via A pointer being NULL */
 
 int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type) {
     if (!model) return -1;
@@ -128,19 +119,21 @@ int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type
     int idx = model->num_vars;
     int new_capacity = model->num_vars + 1;
 
-    /* Reallocate arrays */
+    /* Reallocate arrays one at a time to handle partial failures safely */
     double *new_c = (double*)realloc(model->c, new_capacity * sizeof(double));
-    double *new_lb = (double*)realloc(model->lb, new_capacity * sizeof(double));
-    double *new_ub = (double*)realloc(model->ub, new_capacity * sizeof(double));
-    char *new_type = (char*)realloc(model->var_type, new_capacity * sizeof(char));
-
-    if (!new_c || !new_lb || !new_ub || !new_type) {
-        return -1;
-    }
-
+    if (!new_c) return -1;
     model->c = new_c;
+
+    double *new_lb = (double*)realloc(model->lb, new_capacity * sizeof(double));
+    if (!new_lb) return -1;
     model->lb = new_lb;
+
+    double *new_ub = (double*)realloc(model->ub, new_capacity * sizeof(double));
+    if (!new_ub) return -1;
     model->ub = new_ub;
+
+    char *new_type = (char*)realloc(model->var_type, new_capacity * sizeof(char));
+    if (!new_type) return -1;
     model->var_type = new_type;
 
     model->c[idx] = obj;
@@ -157,44 +150,39 @@ int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type
     return idx;
 }
 
-/* Temporary storage for constraints during model building */
-static ConstraintEntry** temp_constraints = NULL;
-static int temp_con_count = 0;
-static int temp_con_capacity = 0;
-static LPModel* temp_model = NULL;
-
-/* Rebuild temporary constraint storage from a finalized model's sparse matrix.
+/* Rebuild build state from a finalized model's sparse matrix.
  * This is called when adding constraints after the model has been solved. */
-static int rebuild_temp_storage(LPModel *model) {
+static int rebuild_build_state(LPModel *model) {
     if (!model || !model->A) return -1;
 
     int m = model->num_cons;
     int n = model->num_vars;
     SparseMatrix *A = model->A;
 
-    /* Free old temp storage */
-    if (temp_constraints) {
-        for (int i = 0; i < temp_con_count; i++) {
-            if (temp_constraints[i]) {
-                free(temp_constraints[i]->indices);
-                free(temp_constraints[i]->values);
-                free(temp_constraints[i]);
-            }
-        }
-        free(temp_constraints);
+    /* Free old build state */
+    build_state_free(model->build_state);
+    model->build_state = NULL;
+
+    /* Create new build state */
+    LPModelBuildState *bs = build_state_create();
+    if (!bs) return -1;
+
+    /* Allocate constraint array */
+    bs->constraints = (ConstraintEntry**)calloc(m + 64, sizeof(ConstraintEntry*));
+    if (!bs->constraints) {
+        build_state_free(bs);
+        return -1;
     }
 
-    /* Allocate new temp storage */
-    temp_constraints = (ConstraintEntry**)calloc(m + 64, sizeof(ConstraintEntry*));
-    if (!temp_constraints) return -1;
-
-    temp_con_count = m;
-    temp_con_capacity = m + 64;
-    temp_model = model;
+    bs->con_count = m;
+    bs->con_capacity = m + 64;
 
     /* Count non-zeros per row */
     int *row_nnz = (int*)calloc(m, sizeof(int));
-    if (!row_nnz) return -1;
+    if (!row_nnz) {
+        build_state_free(bs);
+        return -1;
+    }
 
     for (int j = 0; j < n; j++) {
         for (int p = A->colptr[j]; p < A->colptr[j+1]; p++) {
@@ -207,6 +195,7 @@ static int rebuild_temp_storage(LPModel *model) {
         ConstraintEntry *entry = (ConstraintEntry*)malloc(sizeof(ConstraintEntry));
         if (!entry) {
             free(row_nnz);
+            build_state_free(bs);
             return -1;
         }
 
@@ -217,15 +206,16 @@ static int rebuild_temp_storage(LPModel *model) {
         entry->sense = model->sense[i];
         entry->rhs = model->b[i];
 
-        if (!entry->indices || !entry->values) {
+        if ((row_nnz[i] > 0) && (!entry->indices || !entry->values)) {
             free(entry->indices);
             free(entry->values);
             free(entry);
             free(row_nnz);
+            build_state_free(bs);
             return -1;
         }
 
-        temp_constraints[i] = entry;
+        bs->constraints[i] = entry;
     }
 
     /* Fill in constraint entries from sparse matrix (CSC -> row format) */
@@ -233,7 +223,7 @@ static int rebuild_temp_storage(LPModel *model) {
         for (int p = A->colptr[j]; p < A->colptr[j+1]; p++) {
             int i = A->rowidx[p];
             double v = A->values[p];
-            ConstraintEntry *entry = temp_constraints[i];
+            ConstraintEntry *entry = bs->constraints[i];
             entry->indices[entry->nnz] = j;
             entry->values[entry->nnz] = v;
             entry->nnz++;
@@ -246,6 +236,7 @@ static int rebuild_temp_storage(LPModel *model) {
     sparse_free(model->A);
     model->A = NULL;
 
+    model->build_state = bs;
     return 0;
 }
 
@@ -253,41 +244,30 @@ int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
                             const double *values, char sense, double rhs) {
     if (!model) return -1;
 
-    /* If model was already finalized, rebuild temp storage from A
+    /* If model was already finalized, rebuild build state from A
      * so we can add the new constraint. */
     if (model->A != NULL) {
-        if (rebuild_temp_storage(model) != 0) {
+        if (rebuild_build_state(model) != 0) {
             return -1;
         }
     }
 
-    /* Initialize temporary storage if needed */
-    if (temp_model != model) {
-        /* Free old temp storage */
-        if (temp_constraints) {
-            for (int i = 0; i < temp_con_count; i++) {
-                if (temp_constraints[i]) {
-                    free(temp_constraints[i]->indices);
-                    free(temp_constraints[i]->values);
-                    free(temp_constraints[i]);
-                }
-            }
-            free(temp_constraints);
-        }
-        temp_constraints = NULL;
-        temp_con_count = 0;
-        temp_con_capacity = 0;
-        temp_model = model;
+    /* Initialize build state if needed */
+    if (!model->build_state) {
+        model->build_state = build_state_create();
+        if (!model->build_state) return -1;
     }
 
+    LPModelBuildState *bs = model->build_state;
+
     /* Expand if needed */
-    if (temp_con_count >= temp_con_capacity) {
-        int new_cap = temp_con_capacity == 0 ? 64 : temp_con_capacity * 2;
-        ConstraintEntry **new_cons = (ConstraintEntry**)realloc(temp_constraints,
+    if (bs->con_count >= bs->con_capacity) {
+        int new_cap = bs->con_capacity == 0 ? 64 : bs->con_capacity * 2;
+        ConstraintEntry **new_cons = (ConstraintEntry**)realloc(bs->constraints,
                                                                  new_cap * sizeof(ConstraintEntry*));
         if (!new_cons) return -1;
-        temp_constraints = new_cons;
-        temp_con_capacity = new_cap;
+        bs->constraints = new_cons;
+        bs->con_capacity = new_cap;
     }
 
     /* Create new constraint entry */
@@ -301,34 +281,37 @@ int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
     entry->sense = sense;
     entry->rhs = rhs;
 
-    if (!entry->indices || !entry->values) {
+    if ((nnz > 0) && (!entry->indices || !entry->values)) {
         free(entry->indices);
         free(entry->values);
         free(entry);
         return -1;
     }
 
-    memcpy(entry->indices, indices, nnz * sizeof(int));
-    memcpy(entry->values, values, nnz * sizeof(double));
+    if (nnz > 0) {
+        memcpy(entry->indices, indices, nnz * sizeof(int));
+        memcpy(entry->values, values, nnz * sizeof(double));
+    }
 
-    temp_constraints[temp_con_count] = entry;
+    bs->constraints[bs->con_count] = entry;
 
     /* Update model's RHS and sense arrays */
     int idx = model->num_cons;
     int new_capacity = model->num_cons + 1;
 
     double *new_b = (double*)realloc(model->b, new_capacity * sizeof(double));
-    char *new_sense = (char*)realloc(model->sense, new_capacity * sizeof(char));
-
-    if (!new_b || !new_sense) return -1;
-
+    if (!new_b) return -1;
     model->b = new_b;
+
+    char *new_sense = (char*)realloc(model->sense, new_capacity * sizeof(char));
+    if (!new_sense) return -1;
     model->sense = new_sense;
+
     model->b[idx] = rhs;
     model->sense[idx] = sense;
 
     model->num_cons++;
-    temp_con_count++;
+    bs->con_count++;
 
     return idx;
 }
@@ -337,24 +320,28 @@ int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
 int lp_model_finalize(LPModel *model) {
     if (!model || model->A) return 0;  /* Already finalized or error */
 
-    if (temp_model != model || temp_con_count == 0) {
+    LPModelBuildState *bs = model->build_state;
+
+    if (!bs || bs->con_count == 0) {
         /* No constraints added, create empty matrix */
         model->A = sparse_create(model->num_cons, model->num_vars, 0);
+        build_state_free(model->build_state);
+        model->build_state = NULL;
         return model->A ? 0 : -1;
     }
 
     /* Count total non-zeros */
     int total_nnz = 0;
-    for (int i = 0; i < temp_con_count; i++) {
-        total_nnz += temp_constraints[i]->nnz;
+    for (int i = 0; i < bs->con_count; i++) {
+        total_nnz += bs->constraints[i]->nnz;
     }
 
     /* Build using triplet format */
     SparseTriplets *trips = triplets_create(model->num_cons, model->num_vars, total_nnz);
     if (!trips) return -1;
 
-    for (int i = 0; i < temp_con_count; i++) {
-        ConstraintEntry *entry = temp_constraints[i];
+    for (int i = 0; i < bs->con_count; i++) {
+        ConstraintEntry *entry = bs->constraints[i];
         for (int k = 0; k < entry->nnz; k++) {
             triplets_add(trips, i, entry->indices[k], entry->values[k]);
         }
@@ -367,17 +354,9 @@ int lp_model_finalize(LPModel *model) {
 
     model->num_elements = model->A->nnz;
 
-    /* Free temporary storage */
-    for (int i = 0; i < temp_con_count; i++) {
-        free(temp_constraints[i]->indices);
-        free(temp_constraints[i]->values);
-        free(temp_constraints[i]);
-    }
-    free(temp_constraints);
-    temp_constraints = NULL;
-    temp_con_count = 0;
-    temp_con_capacity = 0;
-    temp_model = NULL;
+    /* Free build state */
+    build_state_free(model->build_state);
+    model->build_state = NULL;
 
     return 0;
 }
@@ -435,6 +414,8 @@ LPModel* lp_model_copy(const LPModel *src) {
     if (src->name) {
         dst->name = strdup(src->name);
     }
+
+    /* Note: build_state is not copied - copy results in finalized model */
 
     return dst;
 

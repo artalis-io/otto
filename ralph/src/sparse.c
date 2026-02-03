@@ -150,32 +150,20 @@ int triplets_add(SparseTriplets *trips, int row, int col, double val) {
     return 0;
 }
 
-/* Comparison function for sorting triplets by column, then row */
-static int triplet_compare(const void *a, const void *b, void *arg) {
-    const int *indices = (const int*)arg;
-    const int *pa = (const int*)a;
-    const int *pb = (const int*)b;
-    int idx_a = *pa;
-    int idx_b = *pb;
+/* Sort key for triplet sorting (thread-safe approach) */
+typedef struct {
+    int col;
+    int row;
+    int orig_idx;
+} TripletSortKey;
 
-    SparseTriplets *trips = (SparseTriplets*)((char*)indices - offsetof(SparseTriplets, row));
-
-    if (trips->col[idx_a] != trips->col[idx_b]) {
-        return trips->col[idx_a] - trips->col[idx_b];
+static int triplet_key_cmp(const void *a, const void *b) {
+    const TripletSortKey *ka = (const TripletSortKey*)a;
+    const TripletSortKey *kb = (const TripletSortKey*)b;
+    if (ka->col != kb->col) {
+        return ka->col - kb->col;
     }
-    return trips->row[idx_a] - trips->row[idx_b];
-}
-
-/* Global pointer for qsort comparison (thread-unsafe but sufficient for now) */
-static SparseTriplets *g_trips_for_sort = NULL;
-
-static int triplet_cmp(const void *a, const void *b) {
-    int idx1 = *(const int*)a;
-    int idx2 = *(const int*)b;
-    if (g_trips_for_sort->col[idx1] != g_trips_for_sort->col[idx2]) {
-        return g_trips_for_sort->col[idx1] - g_trips_for_sort->col[idx2];
-    }
-    return g_trips_for_sort->row[idx1] - g_trips_for_sort->row[idx2];
+    return ka->row - kb->row;
 }
 
 SparseMatrix* triplets_to_csc(SparseTriplets *trips) {
@@ -183,26 +171,29 @@ SparseMatrix* triplets_to_csc(SparseTriplets *trips) {
         return sparse_create(trips ? trips->nrows : 0, trips ? trips->ncols : 0, 0);
     }
 
-    /* Create index array and sort using qsort (O(n log n)) */
-    int *perm = (int*)malloc(trips->nnz * sizeof(int));
-    if (!perm) return NULL;
+    /* Create sort key array with embedded (col, row, idx) - thread-safe */
+    TripletSortKey *keys = (TripletSortKey*)malloc(trips->nnz * sizeof(TripletSortKey));
+    if (!keys) return NULL;
 
-    for (int i = 0; i < trips->nnz; i++) perm[i] = i;
+    for (int i = 0; i < trips->nnz; i++) {
+        keys[i].col = trips->col[i];
+        keys[i].row = trips->row[i];
+        keys[i].orig_idx = i;
+    }
 
-    g_trips_for_sort = trips;
-    qsort(perm, trips->nnz, sizeof(int), triplet_cmp);
-    g_trips_for_sort = NULL;
+    /* Sort keys by (col, row) - no global state needed */
+    qsort(keys, trips->nnz, sizeof(TripletSortKey), triplet_key_cmp);
 
     SparseMatrix *mat = sparse_create(trips->nrows, trips->ncols, trips->nnz);
     if (!mat) {
-        free(perm);
+        free(keys);
         return NULL;
     }
 
     /* Build CSC format */
     int *col_counts = (int*)calloc(trips->ncols, sizeof(int));
     if (!col_counts) {
-        free(perm);
+        free(keys);
         sparse_free(mat);
         return NULL;
     }
@@ -218,18 +209,17 @@ SparseMatrix* triplets_to_csc(SparseTriplets *trips) {
         mat->colptr[j + 1] = mat->colptr[j] + col_counts[j];
     }
 
-    /* Fill in values (using sorted order) */
+    /* Fill in values (using sorted order from keys) */
     int idx = 0;
-    int prev_col = -1;
     for (int k = 0; k < trips->nnz; k++) {
-        int i = perm[k];
-        mat->rowidx[idx] = trips->row[i];
-        mat->values[idx] = trips->val[i];
+        int orig = keys[k].orig_idx;
+        mat->rowidx[idx] = trips->row[orig];
+        mat->values[idx] = trips->val[orig];
         idx++;
     }
     mat->nnz = trips->nnz;
 
-    free(perm);
+    free(keys);
     free(col_counts);
 
     return mat;

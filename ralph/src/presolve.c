@@ -229,10 +229,7 @@ int presolve_remove_empty_cols(PresolveContext *ctx) {
     for (int j = 0; j < model->num_vars; j++) {
         if (ctx->col_deleted[j]) continue;
 
-        /* Check if column is empty */
-        int nnz = model->A->colptr[j + 1] - model->A->colptr[j];
-
-        /* Also check if all rows containing this column are deleted */
+        /* Check if column is empty (all rows containing it are deleted) */
         int active_nnz = 0;
         for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
             if (!ctx->row_deleted[model->A->rowidx[p]]) {
