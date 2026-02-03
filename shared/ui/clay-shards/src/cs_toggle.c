@@ -33,7 +33,10 @@ CsToggleResult cs_toggle(
     CsToggleResult result = {0};
 
     /* Validate required parameter */
-    if (!on) return result;
+    if (!on) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
+        return result;
+    }
 
     CsState *g = cs_get_state();
 

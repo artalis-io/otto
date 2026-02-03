@@ -58,10 +58,14 @@ CsSliderResult cs_slider(
     CsSliderResult result = {0};
 
     /* Validate required parameter */
-    if (!value) return result;
+    if (!value) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
+        return result;
+    }
 
     /* Validate range */
     if (max <= min) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
         result.value = *value;
         return result;
     }

@@ -31,7 +31,10 @@ CsButtonResult cs_button(
     CsButtonResult result = {0};
 
     /* Validate required parameter */
-    if (!label) return result;
+    if (!label) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
+        return result;
+    }
 
     CsState *g = cs_get_state();
 
