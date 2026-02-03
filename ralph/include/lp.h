@@ -30,6 +30,9 @@ typedef enum {
     RALPH_FIXED = 4
 } VarStatus;
 
+/* Forward declaration for build state (opaque) */
+typedef struct LPModelBuildState LPModelBuildState;
+
 /* LP model internal representation */
 typedef struct {
     /* Problem dimensions */
@@ -62,6 +65,9 @@ typedef struct {
     char **var_names;
     char **con_names;
     char *name;             /* Problem name */
+
+    /* Build state for incremental constraint building (thread-safe) */
+    LPModelBuildState *build_state;
 
 } LPModel;
 
@@ -182,6 +188,11 @@ typedef struct {
 
     /* Bound perturbation backup (for dual simplex anti-cycling) */
     double *perturb_backup; /* Original upper bounds before perturbation */
+
+    /* Primal bound perturbation state (for primal simplex anti-cycling) */
+    double *primal_saved_lb;    /* Saved lower bounds before perturbation */
+    double *primal_saved_ub;    /* Saved upper bounds before perturbation */
+    int primal_perturb_active;  /* 1 if perturbation is currently active */
 
     /* Partial pricing state */
     int partial_price_pos;  /* Starting position for next partial price scan */
