@@ -51,12 +51,15 @@
 /* Block size for cache-friendly column processing */
 #define LAP_BLOCK_SIZE 64
 
-/* Global setting for parallelization (1 = enabled, 0 = disabled) */
-static int lap_parallel_enabled = 1;
-
-/* Global settings for ε-scaling auction */
-static int lap_epsilon_scaling_enabled = 0;
-static double lap_epsilon_factor = 4.0;
+/*
+ * Default configuration settings.
+ * These are copied to workspace cfg_* fields on creation.
+ * The actual algorithm uses per-workspace config for thread safety.
+ * Options passed to solve functions can override workspace config.
+ */
+static int lap_parallel_enabled = 1;           /* Default parallelization setting */
+static int lap_epsilon_scaling_enabled = 0;    /* Default ε-scaling setting */
+static double lap_epsilon_factor = 4.0;        /* Default ε reduction factor */
 
 /* Aligned allocation helpers */
 static void* lap_aligned_alloc(size_t size) {
@@ -114,6 +117,11 @@ struct RalphLapWorkspace {
     double *warm_v;         /* Saved column duals for warm start */
     int *warm_row_sol;      /* Saved row solution for warm start */
     int *warm_col_sol;      /* Saved column solution for warm start */
+
+    /* Per-solve configuration (thread-safe - set before each solve) */
+    int cfg_parallel;           /* Enable OpenMP parallelization */
+    int cfg_epsilon_scaling;    /* Enable ε-scaling auction */
+    double cfg_epsilon_factor;  /* ε reduction factor */
 };
 
 /* ============================================================================
@@ -274,6 +282,11 @@ RalphLapWorkspace* ralph_lap_workspace_create(int max_n) {
         ws->warm_row_sol[i] = RALPH_LAP_UNASSIGNED;
         ws->warm_col_sol[i] = RALPH_LAP_UNASSIGNED;
     }
+
+    /* Initialize config with defaults (will be overwritten per-solve) */
+    ws->cfg_parallel = lap_parallel_enabled;
+    ws->cfg_epsilon_scaling = lap_epsilon_scaling_enabled;
+    ws->cfg_epsilon_factor = lap_epsilon_factor;
 
     return ws;
 }
@@ -438,7 +451,7 @@ static RalphLapStatus lap_solve_internal(
     /* Temporary arrays to track min value and row per column */
     int *col_min_row = pred;  /* Reuse pred array temporarily */
 
-    int use_parallel = lap_parallel_enabled && (n >= LAP_PARALLEL_THRESHOLD);
+    int use_parallel = ws->cfg_parallel && (n >= LAP_PARALLEL_THRESHOLD);
     int use_simd = (n >= LAP_SIMD_THRESHOLD);
 
     if (use_parallel) {
@@ -598,7 +611,7 @@ static RalphLapStatus lap_solve_internal(
 
     /* Compute epsilon for ε-scaling mode */
     double epsilon = 0.0;
-    if (lap_epsilon_scaling_enabled) {
+    if (ws->cfg_epsilon_scaling) {
         /* Find cost range to set epsilon */
         double max_cost = 0.0;
         for (i = 0; i < n; i++) {
@@ -611,7 +624,7 @@ static RalphLapStatus lap_solve_internal(
         }
         /* Small epsilon: just enough to break ties without affecting optimality
          * Use n² in denominator to make epsilon very small */
-        epsilon = (max_cost > 0) ? max_cost / ((double)n * n * lap_epsilon_factor) : 1.0 / ((double)n * n * lap_epsilon_factor);
+        epsilon = (max_cost > 0) ? max_cost / ((double)n * n * ws->cfg_epsilon_factor) : 1.0 / ((double)n * n * ws->cfg_epsilon_factor);
     }
 
     for (int loop = 0; loop < 2 && num_free > 0; loop++) {
@@ -678,7 +691,7 @@ static RalphLapStatus lap_solve_internal(
             } else if (col_assign[j1] >= 0 && j2 >= 0 && col_assign[j2] < 0) {
                 /* j1 is assigned, j2 is free and within tolerance - use j2 */
                 j1 = j2;
-            } else if (lap_epsilon_scaling_enabled && col_assign[j1] >= 0) {
+            } else if (ws->cfg_epsilon_scaling && col_assign[j1] >= 0) {
                 /* ε-scaling: adjust price even in near-tie case */
                 col_price[j1] = col_price[j1] - epsilon;
             }
@@ -2286,7 +2299,7 @@ static RalphLapStatus lap_solve_callback_internal(
      * PHASE 3: Augmenting Row Reduction (Auction Phase)
      * ======================================================================== */
     double epsilon = 0.0;
-    if (lap_epsilon_scaling_enabled) {
+    if (ws->cfg_epsilon_scaling) {
         /* Find max cost for epsilon initialization */
         double max_cost = 0.0;
         for (i = 0; i < n && i < 100; i++) {  /* Sample first 100 rows */
@@ -2297,13 +2310,13 @@ static RalphLapStatus lap_solve_callback_internal(
                 }
             }
         }
-        epsilon = max_cost / ((double)n * n * lap_epsilon_factor);
+        epsilon = max_cost / ((double)n * n * ws->cfg_epsilon_factor);
         if (epsilon < RALPH_LAP_TOLERANCE) {
             epsilon = RALPH_LAP_TOLERANCE;
         }
     }
 
-    int num_passes = lap_epsilon_scaling_enabled ? 4 : 2;
+    int num_passes = ws->cfg_epsilon_scaling ? 4 : 2;
 
     for (int pass = 0; pass < num_passes && num_free > 0; pass++) {
         int next_free = 0;
@@ -2362,8 +2375,8 @@ static RalphLapStatus lap_solve_callback_internal(
         num_free = next_free;
 
         /* Reduce epsilon for next pass */
-        if (lap_epsilon_scaling_enabled) {
-            epsilon /= lap_epsilon_factor;
+        if (ws->cfg_epsilon_scaling) {
+            epsilon /= ws->cfg_epsilon_factor;
             if (epsilon < RALPH_LAP_TOLERANCE) {
                 epsilon = 0.0;
             }
@@ -3282,15 +3295,11 @@ static RalphLapStatus lap_solve_standard_unified(
     double single_cost = 0;
     double *cost_ptr = result->costs ? result->costs : &single_cost;
 
-    /* Apply algorithm-level settings */
-    int old_eps = lap_epsilon_scaling_enabled;
-    double old_factor = lap_epsilon_factor;
-    int old_parallel = lap_parallel_enabled;
-
+    /* Apply algorithm-level settings to workspace (thread-safe) */
     if (opts) {
-        lap_epsilon_scaling_enabled = opts->epsilon_scaling;
-        if (opts->epsilon_factor > 1.0) lap_epsilon_factor = opts->epsilon_factor;
-        lap_parallel_enabled = opts->parallel;
+        ws->cfg_epsilon_scaling = opts->epsilon_scaling;
+        if (opts->epsilon_factor > 1.0) ws->cfg_epsilon_factor = opts->epsilon_factor;
+        ws->cfg_parallel = opts->parallel;
     }
 
     /* Dispatch based on cost representation and dimensions */
@@ -3444,11 +3453,6 @@ static RalphLapStatus lap_solve_standard_unified(
             status = RALPH_LAP_INVALID_INPUT;
             break;
     }
-
-    /* Restore settings */
-    lap_epsilon_scaling_enabled = old_eps;
-    lap_epsilon_factor = old_factor;
-    lap_parallel_enabled = old_parallel;
 
     if (status == RALPH_LAP_SUCCESS) {
         result->num_found = 1;
