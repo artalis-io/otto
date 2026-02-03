@@ -132,6 +132,24 @@ VLStatus vl_graph_unpack_path(const VLGraph *graph,
 VLStatus vl_graph_reorder_hilbert(VLGraph *graph);
 
 /* ============================================================================
+ * Graph Validation
+ * ============================================================================ */
+
+/*
+ * Validate graph integrity and edge weights.
+ * Checks:
+ *   - All edge targets are within valid node range
+ *   - Edge weights are reasonable (not 0 for non-self-loops, not saturated)
+ *   - Node edge_start/edge_count are consistent
+ *
+ * graph: graph to validate
+ * out_errors: (out) number of errors found
+ *
+ * Returns VL_OK if valid, VL_ERROR_INVALID_ARGUMENT if issues found.
+ */
+VLStatus vl_graph_validate(const VLGraph *graph, int *out_errors);
+
+/* ============================================================================
  * Graph Memory Management
  * ============================================================================ */
 
