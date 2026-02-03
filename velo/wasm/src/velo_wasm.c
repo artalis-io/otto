@@ -6,6 +6,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "velo.h"
 
 #ifdef __EMSCRIPTEN__
@@ -126,13 +127,15 @@ WasmRoute* wasm_route(VLGraph* graph,
         result->duration_s = route.duration_s;
         result->node_count = route.num_coords;
 
-        // Copy coordinates
+        // Copy coordinates (with overflow check)
         if (route.num_coords > 0 && route.coords) {
-            result->coords = malloc(route.num_coords * 2 * sizeof(double));
-            if (result->coords) {
-                for (int i = 0; i < route.num_coords; i++) {
-                    result->coords[i * 2] = route.coords[i].lat;
-                    result->coords[i * 2 + 1] = route.coords[i].lon;
+            if (route.num_coords <= SIZE_MAX / (2 * sizeof(double))) {
+                result->coords = malloc((size_t)route.num_coords * 2 * sizeof(double));
+                if (result->coords) {
+                    for (int i = 0; i < route.num_coords; i++) {
+                        result->coords[i * 2] = route.coords[i].lat;
+                        result->coords[i * 2 + 1] = route.coords[i].lon;
+                    }
                 }
             }
         }
@@ -175,7 +178,10 @@ WASM_EXPORT
 uint32_t wasm_route_get_coords(const WasmRoute* route, double* coords) {
     if (!route || !route->coords || !coords) return 0;
 
-    memcpy(coords, route->coords, route->node_count * 2 * sizeof(double));
+    /* Check for overflow before memcpy */
+    if (route->node_count > SIZE_MAX / (2 * sizeof(double))) return 0;
+    size_t size = (size_t)route->node_count * 2 * sizeof(double);
+    memcpy(coords, route->coords, size);
     return route->node_count;
 }
 
