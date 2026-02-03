@@ -39,6 +39,10 @@ CLAY(CLAY_ID("Panel"), {...}) {
 |-----------|--------|-------------|
 | `cs_button` | `cs_button.h` | Clickable button with variants |
 | `cs_input` | `cs_input.h` | Text input with cursor/selection/clipboard |
+| `cs_checkbox` | `cs_checkbox.h` | Boolean toggle with checkmark |
+| `cs_toggle` | `cs_toggle.h` | On/off switch with sliding knob |
+| `cs_slider` | `cs_slider.h` | Value slider with drag support |
+| `cs_dropdown` | `cs_dropdown.h` | Selection dropdown/select box |
 | `cs_map` | `cs_map.h` | Slippy map pan/zoom interaction |
 
 ## API
@@ -199,7 +203,7 @@ Add to your Makefile's `EXPORTED_FUNCTIONS`.
 
 ```bash
 make          # Build static library
-make test     # Run 55 tests
+make test     # Run 79 tests
 make clean    # Clean build
 ```
 
@@ -213,6 +217,10 @@ include/
 ├── cs_clay.h             # Clay integration helpers
 ├── cs_button.h           # Button component
 ├── cs_input.h            # Text input component
+├── cs_checkbox.h         # Checkbox component
+├── cs_toggle.h           # Toggle switch component
+├── cs_slider.h           # Slider component
+├── cs_dropdown.h         # Dropdown/select component
 ├── cs_map.h              # Map interaction component
 └── cs_immediate.h        # Convenience header (includes all)
 
@@ -221,6 +229,10 @@ src/
 ├── cs_clay.c             # Clay initialization, render command accessors
 ├── cs_button.c           # Button implementation
 ├── cs_input.c            # Text input implementation
+├── cs_checkbox.c         # Checkbox implementation
+├── cs_toggle.c           # Toggle switch implementation
+├── cs_slider.c           # Slider implementation
+├── cs_dropdown.c         # Dropdown/select implementation
 ├── cs_map.c              # Map pan/zoom, overlays, hit testing
 ├── cs_map_projection.c   # Web Mercator projection utilities
 ├── cs_map_simplify.c     # Douglas-Peucker polyline simplification

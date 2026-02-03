@@ -114,8 +114,7 @@ CsButtonResult cs_button(
     }
 
     /* Check if we need a wrapper for margin/alignment */
-    bool has_margin = style->margin.top > 0 || style->margin.bottom > 0 ||
-                      style->margin.left > 0 || style->margin.right > 0;
+    bool has_margin = cs_has_margin(style->margin);
     bool has_align = style->align != CS_ALIGN_AUTO;
 
     /* Text offset for icon buttons (positive = down) */
@@ -205,13 +204,8 @@ CsButtonResult cs_button(
         g->pending_enter = false;  /* Consume the event */
     }
 
-    /* Track if we have focus for keyboard navigation */
-    if (is_focused) {
-        /* Mark as non-text element so cs_key_down knows Enter means "activate" */
-        g->active_text = NULL;
-        g->active_len = NULL;
-        g->active_max_len = 0;
-    }
+    /* Mark as non-text element so cs_key_down knows Enter means "activate" */
+    CS_MARK_NON_TEXT_IF_FOCUSED(g, is_focused);
 
     return result;
 }

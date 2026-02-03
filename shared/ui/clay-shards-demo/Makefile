@@ -31,7 +31,7 @@ WASM_FLAGS = -s STANDALONE_WASM=1
 WASM_FLAGS += -s EXPORTED_FUNCTIONS='[\
   "_map_init","_map_resize","_map_set_center","_map_set_zoom",\
   "_map_get_lat","_map_get_lon","_map_get_zoom","_map_get_visual_zoom","_map_get_layer",\
-  "_map_get_component_id","_map_get_width","_map_get_height",\
+  "_map_get_component_id","_map_get_width","_map_get_height","_map_get_show_tile_info","_map_get_attribution_clicked",\
   "_map_pointer_move","_map_pointer_down","_map_pointer_up","_map_scroll",\
   "_map_handle_click","_map_frame",\
   "_map_debug_has_start","_map_debug_start_lat","_map_debug_start_lon",\

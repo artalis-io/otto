@@ -49,14 +49,14 @@ static const CsAllocator g_default_allocator = {
 };
 
 /* Thread-local allocator (NULL means use default) */
-static CS_THREAD_LOCAL const CsAllocator *g_allocator = NULL;
+static CS_THREAD_LOCAL const CsAllocator *tls_allocator = NULL;
 
 void cs_set_allocator(const CsAllocator *allocator) {
-    g_allocator = allocator;
+    tls_allocator = allocator;
 }
 
 const CsAllocator* cs_get_allocator(void) {
-    return g_allocator ? g_allocator : &g_default_allocator;
+    return tls_allocator ? tls_allocator : &g_default_allocator;
 }
 
 /* Internal allocation helpers */
@@ -88,14 +88,14 @@ void cs_free(void *ptr) {
  * Global State (Thread-Local)
  * ============================================================================ */
 
-static CS_THREAD_LOCAL CsState g_cc = {
+static CS_THREAD_LOCAL CsState tls_state = {
     .focused_id = 0,
     .pending_click = false,
 };
 
 /* Components need access to global state */
 CsState* cs_get_state(void) {
-    return &g_cc;
+    return &tls_state;
 }
 
 /* ============================================================================
@@ -115,7 +115,7 @@ CsWidgetState* cs_widget_state(uint32_t id) {
     /* Linear probe to find existing or empty slot */
     for (int i = 0; i < CS_WIDGET_STATE_CAPACITY; i++) {
         uint32_t idx = (slot + i) & mask;
-        CsWidgetState *w = &g_cc.widgets[idx];
+        CsWidgetState *w = &tls_state.widgets[idx];
 
         if (w->id == id) {
             return w;  /* Found existing */
@@ -160,35 +160,35 @@ uint32_t cs_hash_id(const char *str) {
  * ============================================================================ */
 
 void cs_init(void) {
-    memset(&g_cc, 0, sizeof(g_cc));
+    memset(&tls_state, 0, sizeof(tls_state));
 }
 
 void cs_frame_begin(void) {
-    g_cc.clicked_id = 0;
-    g_cc.hovered_id = 0;
+    tls_state.clicked_id = 0;
+    tls_state.hovered_id = 0;
     /* Don't reset pending_click - it's set by mousedown and consumed during render */
     /* Don't reset pending_enter - it's set by keydown and consumed during render */
-    g_cc.active_text = NULL;
-    g_cc.active_len = NULL;
+    tls_state.active_text = NULL;
+    tls_state.active_len = NULL;
 
     /* Clear focused bounds - components will set these if they have an active text buffer */
-    g_cc.focused_x = 0;
-    g_cc.focused_y = 0;
-    g_cc.focused_w = 0;
-    g_cc.focused_h = 0;
+    tls_state.focused_x = 0;
+    tls_state.focused_y = 0;
+    tls_state.focused_w = 0;
+    tls_state.focused_h = 0;
 
     /* Reset focusable registry for this frame */
-    g_cc.focusable_count = 0;
+    tls_state.focusable_count = 0;
 }
 
 void cs_frame_end(float dt) {
     /* Reset pending click/enter after components have had a chance to check it */
-    g_cc.pending_click = false;
-    g_cc.pending_enter = false;
+    tls_state.pending_click = false;
+    tls_state.pending_enter = false;
 
     /* Update cursor blink for focused widget */
-    if (g_cc.focused_id != 0) {
-        CsWidgetState *w = cs_widget_state(g_cc.focused_id);
+    if (tls_state.focused_id != 0) {
+        CsWidgetState *w = cs_widget_state(tls_state.focused_id);
         if (w) {
             w->cursor_blink += dt;
             if (w->cursor_blink >= CS_CURSOR_BLINK_PERIOD) {
@@ -204,12 +204,12 @@ void cs_frame_end(float dt) {
  * ============================================================================ */
 
 CS_EXPORT uint32_t cs_focused_id(void) {
-    return g_cc.focused_id;
+    return tls_state.focused_id;
 }
 
 void cs_focus(uint32_t id) {
-    if (g_cc.focused_id != id) {
-        g_cc.focused_id = id;
+    if (tls_state.focused_id != id) {
+        tls_state.focused_id = id;
         /* Reset blink timer (but preserve cursor position from widget state) */
         if (id != 0) {
             CsWidgetState *w = cs_widget_state(id);
@@ -223,50 +223,50 @@ void cs_focus(uint32_t id) {
 }
 
 CS_EXPORT void cs_blur(void) {
-    g_cc.focused_id = 0;
+    tls_state.focused_id = 0;
 }
 
 CS_EXPORT int cs_cursor_pos(void) {
-    if (g_cc.focused_id == 0) return 0;
-    CsWidgetState *w = cs_widget_state(g_cc.focused_id);
+    if (tls_state.focused_id == 0) return 0;
+    CsWidgetState *w = cs_widget_state(tls_state.focused_id);
     return w ? w->cursor : 0;
 }
 
 CS_EXPORT int cs_selection_start(void) {
-    if (g_cc.focused_id == 0) return -1;
-    CsWidgetState *w = cs_widget_state(g_cc.focused_id);
+    if (tls_state.focused_id == 0) return -1;
+    CsWidgetState *w = cs_widget_state(tls_state.focused_id);
     return w ? w->selection_start : -1;
 }
 
 CS_EXPORT bool cs_cursor_visible(void) {
-    if (g_cc.focused_id == 0) return true;
-    CsWidgetState *w = cs_widget_state(g_cc.focused_id);
+    if (tls_state.focused_id == 0) return true;
+    CsWidgetState *w = cs_widget_state(tls_state.focused_id);
     return w ? w->cursor_visible : true;
 }
 
 CS_EXPORT bool cs_focused_bounds(float *x, float *y, float *w, float *h) {
-    if (g_cc.focused_id == 0) return false;
-    if (x) *x = g_cc.focused_x;
-    if (y) *y = g_cc.focused_y;
-    if (w) *w = g_cc.focused_w;
-    if (h) *h = g_cc.focused_h;
+    if (tls_state.focused_id == 0) return false;
+    if (x) *x = tls_state.focused_x;
+    if (y) *y = tls_state.focused_y;
+    if (w) *w = tls_state.focused_w;
+    if (h) *h = tls_state.focused_h;
     return true;
 }
 
 /* Simple getters for WASM (no pointer params) */
-CS_EXPORT float cs_focused_x(void) { return g_cc.focused_x; }
-CS_EXPORT float cs_focused_y(void) { return g_cc.focused_y; }
-CS_EXPORT float cs_focused_w(void) { return g_cc.focused_w; }
-CS_EXPORT float cs_focused_h(void) { return g_cc.focused_h; }
+CS_EXPORT float cs_focused_x(void) { return tls_state.focused_x; }
+CS_EXPORT float cs_focused_y(void) { return tls_state.focused_y; }
+CS_EXPORT float cs_focused_w(void) { return tls_state.focused_w; }
+CS_EXPORT float cs_focused_h(void) { return tls_state.focused_h; }
 
 CS_EXPORT const char* cs_focused_text(void) {
-    if (g_cc.focused_id == 0 || !g_cc.active_text) return "";
-    return g_cc.active_text;
+    if (tls_state.focused_id == 0 || !tls_state.active_text) return "";
+    return tls_state.active_text;
 }
 
 CS_EXPORT int cs_focused_text_len(void) {
-    if (g_cc.focused_id == 0 || !g_cc.active_len) return 0;
-    return *g_cc.active_len;
+    if (tls_state.focused_id == 0 || !tls_state.active_len) return 0;
+    return *tls_state.active_len;
 }
 
 /* ============================================================================
@@ -298,16 +298,16 @@ static void delete_selection(CsWidgetState *w, char *text, int *len) {
 }
 
 CS_EXPORT bool cs_key_char(uint32_t char_code) {
-    if (g_cc.focused_id == 0) return false;
-    if (!g_cc.active_text || !g_cc.active_len) return false;
+    if (tls_state.focused_id == 0) return false;
+    if (!tls_state.active_text || !tls_state.active_len) return false;
     if (char_code < 32 || char_code > 126) return false;
-    if (*g_cc.active_len >= g_cc.active_max_len - 1) return false;
+    if (*tls_state.active_len >= tls_state.active_max_len - 1) return false;
 
-    CsWidgetState *w = cs_widget_state(g_cc.focused_id);
+    CsWidgetState *w = cs_widget_state(tls_state.focused_id);
     if (!w) return false;
 
-    char *text = g_cc.active_text;
-    int *len = g_cc.active_len;
+    char *text = tls_state.active_text;
+    int *len = tls_state.active_len;
 
     delete_selection(w, text, len);
 
@@ -337,23 +337,23 @@ CS_EXPORT bool cs_key_down(int key_code, bool shift, bool ctrl) {
     }
 
     /* Enter key on focused button triggers click */
-    if (key_code == 13 && g_cc.focused_id != 0) { /* Enter */
+    if (key_code == 13 && tls_state.focused_id != 0) { /* Enter */
         /* If we have a focused element but no active text buffer,
          * it's a button - set pending_enter for it to detect */
-        if (!g_cc.active_text || !g_cc.active_len) {
-            g_cc.pending_enter = true;
+        if (!tls_state.active_text || !tls_state.active_len) {
+            tls_state.pending_enter = true;
             return true;
         }
     }
 
-    if (g_cc.focused_id == 0) return false;
-    if (!g_cc.active_text || !g_cc.active_len) return false;
+    if (tls_state.focused_id == 0) return false;
+    if (!tls_state.active_text || !tls_state.active_len) return false;
 
-    CsWidgetState *w = cs_widget_state(g_cc.focused_id);
+    CsWidgetState *w = cs_widget_state(tls_state.focused_id);
     if (!w) return false;
 
-    char *text = g_cc.active_text;
-    int *len = g_cc.active_len;
+    char *text = tls_state.active_text;
+    int *len = tls_state.active_len;
     bool sel = has_selection(w);
 
     w->cursor_visible = true;
@@ -453,20 +453,40 @@ CS_EXPORT bool cs_key_down(int key_code, bool shift, bool ctrl) {
 }
 
 CS_EXPORT void cs_set_pending_click(void) {
-    g_cc.pending_click = true;
+    tls_state.pending_click = true;
 }
 
 CS_EXPORT void cs_set_pointer(float x, float y) {
-    g_cc.pointer_x = x;
-    g_cc.pointer_y = y;
+    tls_state.pointer_x = x;
+    tls_state.pointer_y = y;
+}
+
+CS_EXPORT void cs_set_pointer_down(bool down) {
+    tls_state.pointer_down = down;
+    /* Clear dragging when pointer is released */
+    if (!down) {
+        tls_state.dragging_id = 0;
+    }
+}
+
+CS_EXPORT bool cs_is_pointer_down(void) {
+    return tls_state.pointer_down;
+}
+
+CS_EXPORT uint32_t cs_get_dragging_id(void) {
+    return tls_state.dragging_id;
+}
+
+CS_EXPORT void cs_set_dragging_id(uint32_t id) {
+    tls_state.dragging_id = id;
 }
 
 CS_EXPORT float cs_pointer_x(void) {
-    return g_cc.pointer_x;
+    return tls_state.pointer_x;
 }
 
 CS_EXPORT float cs_pointer_y(void) {
-    return g_cc.pointer_y;
+    return tls_state.pointer_y;
 }
 
 /* ============================================================================
@@ -475,33 +495,33 @@ CS_EXPORT float cs_pointer_y(void) {
 
 CS_EXPORT void cs_register_focusable(uint32_t id) {
     if (id == 0) return;
-    if (g_cc.focusable_count >= CS_MAX_FOCUSABLES) return;
+    if (tls_state.focusable_count >= CS_MAX_FOCUSABLES) return;
 
     /* Avoid duplicates */
-    for (int i = 0; i < g_cc.focusable_count; i++) {
-        if (g_cc.focusables[i] == id) return;
+    for (int i = 0; i < tls_state.focusable_count; i++) {
+        if (tls_state.focusables[i] == id) return;
     }
 
-    g_cc.focusables[g_cc.focusable_count++] = id;
+    tls_state.focusables[tls_state.focusable_count++] = id;
 }
 
 CS_EXPORT bool cs_focus_next(void) {
-    if (g_cc.focusable_count == 0) return false;
+    if (tls_state.focusable_count == 0) return false;
 
     /* Find current focused element index */
     int current_idx = -1;
-    for (int i = 0; i < g_cc.focusable_count; i++) {
-        if (g_cc.focusables[i] == g_cc.focused_id) {
+    for (int i = 0; i < tls_state.focusable_count; i++) {
+        if (tls_state.focusables[i] == tls_state.focused_id) {
             current_idx = i;
             break;
         }
     }
 
     /* Move to next (or first if nothing focused) */
-    int next_idx = (current_idx + 1) % g_cc.focusable_count;
-    uint32_t next_id = g_cc.focusables[next_idx];
+    int next_idx = (current_idx + 1) % tls_state.focusable_count;
+    uint32_t next_id = tls_state.focusables[next_idx];
 
-    if (next_id != g_cc.focused_id) {
+    if (next_id != tls_state.focused_id) {
         cs_focus(next_id);
         return true;
     }
@@ -509,12 +529,12 @@ CS_EXPORT bool cs_focus_next(void) {
 }
 
 CS_EXPORT bool cs_focus_prev(void) {
-    if (g_cc.focusable_count == 0) return false;
+    if (tls_state.focusable_count == 0) return false;
 
     /* Find current focused element index */
     int current_idx = -1;
-    for (int i = 0; i < g_cc.focusable_count; i++) {
-        if (g_cc.focusables[i] == g_cc.focused_id) {
+    for (int i = 0; i < tls_state.focusable_count; i++) {
+        if (tls_state.focusables[i] == tls_state.focused_id) {
             current_idx = i;
             break;
         }
@@ -523,14 +543,14 @@ CS_EXPORT bool cs_focus_prev(void) {
     /* Move to previous (or last if nothing focused) */
     int prev_idx;
     if (current_idx <= 0) {
-        prev_idx = g_cc.focusable_count - 1;
+        prev_idx = tls_state.focusable_count - 1;
     } else {
         prev_idx = current_idx - 1;
     }
 
-    uint32_t prev_id = g_cc.focusables[prev_idx];
+    uint32_t prev_id = tls_state.focusables[prev_idx];
 
-    if (prev_id != g_cc.focused_id) {
+    if (prev_id != tls_state.focused_id) {
         cs_focus(prev_id);
         return true;
     }
@@ -538,30 +558,30 @@ CS_EXPORT bool cs_focus_prev(void) {
 }
 
 CS_EXPORT int cs_focusable_count(void) {
-    return g_cc.focusable_count;
+    return tls_state.focusable_count;
 }
 
 /* ============================================================================
  * Error Tracking (Thread-Local)
  * ============================================================================ */
 
-static CS_THREAD_LOCAL CsErrorCode g_last_error = CS_ERR_NONE;
-static CS_THREAD_LOCAL int g_error_count = 0;
+static CS_THREAD_LOCAL CsErrorCode tls_last_error = CS_ERR_NONE;
+static CS_THREAD_LOCAL int tls_error_count = 0;
 
 void cs_record_error(CsErrorCode code) {
-    g_last_error = code;
-    g_error_count++;
+    tls_last_error = code;
+    tls_error_count++;
 }
 
 CS_EXPORT CsErrorCode cs_get_last_error(void) {
-    return g_last_error;
+    return tls_last_error;
 }
 
 CS_EXPORT int cs_get_error_count(void) {
-    return g_error_count;
+    return tls_error_count;
 }
 
 CS_EXPORT void cs_clear_errors(void) {
-    g_last_error = CS_ERR_NONE;
-    g_error_count = 0;
+    tls_last_error = CS_ERR_NONE;
+    tls_error_count = 0;
 }

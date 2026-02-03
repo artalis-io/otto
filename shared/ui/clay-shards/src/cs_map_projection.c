@@ -43,7 +43,7 @@ EXPORT double cs_map_lat_to_tile_y(double lat, int zoom) {
     lat = cs_map_clamp_latitude(lat);
     zoom = cs_map_clamp_zoom(zoom);
     double lat_rad = lat * DEG_TO_RAD;
-    return (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / PI) / 2.0 * (double)(1 << zoom);
+    return (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / CS_PI) / 2.0 * (double)(1 << zoom);
 }
 
 EXPORT double cs_map_tile_x_to_lon(double x, int zoom) {
@@ -53,7 +53,7 @@ EXPORT double cs_map_tile_x_to_lon(double x, int zoom) {
 
 EXPORT double cs_map_tile_y_to_lat(double y, int zoom) {
     zoom = cs_map_clamp_zoom(zoom);
-    double n = PI - 2.0 * PI * y / (double)(1 << zoom);
+    double n = CS_PI - 2.0 * CS_PI * y / (double)(1 << zoom);
     return RAD_TO_DEG * atan(0.5 * (exp(n) - exp(-n)));
 }
 
@@ -78,9 +78,9 @@ EXPORT void cs_map_screen_to_geo_delta(
 
     if (dlat) {
         double lat_rad = lat * DEG_TO_RAD;
-        double center_y = (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / PI) / 2.0 * scale;
+        double center_y = (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / CS_PI) / 2.0 * scale;
         double new_y = center_y - (double)dy;
-        double n = PI - 2.0 * PI * new_y / scale;
+        double n = CS_PI - 2.0 * CS_PI * new_y / scale;
         double new_lat = RAD_TO_DEG * atan(0.5 * (exp(n) - exp(-n)));
         *dlat = new_lat - lat;
     }
@@ -98,12 +98,12 @@ void cs_map_geo_to_screen(
     /* Center in world coordinates */
     double center_x = (center_lon + 180.0) / 360.0 * scale;
     double center_lat_rad = center_lat * DEG_TO_RAD;
-    double center_y = (1.0 - log(tan(center_lat_rad) + 1.0 / cos(center_lat_rad)) / PI) / 2.0 * scale;
+    double center_y = (1.0 - log(tan(center_lat_rad) + 1.0 / cos(center_lat_rad)) / CS_PI) / 2.0 * scale;
 
     /* Point in world coordinates */
     double px = (lon + 180.0) / 360.0 * scale;
     double lat_rad = lat * DEG_TO_RAD;
-    double py = (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / PI) / 2.0 * scale;
+    double py = (1.0 - log(tan(lat_rad) + 1.0 / cos(lat_rad)) / CS_PI) / 2.0 * scale;
 
     /* Convert to screen coordinates */
     *out_x = (float)(map_width / 2.0 + (px - center_x));

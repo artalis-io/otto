@@ -64,10 +64,10 @@ const CsMarkerStyle CS_MARKER_STYLE_DEFAULT = {
  * ============================================================================ */
 
 /* Hash table for per-map state - each thread has its own maps */
-static CS_THREAD_LOCAL CsMapState g_map_states[CS_MAP_STATE_CAPACITY];
+static CS_THREAD_LOCAL CsMapState tls_map_states[CS_MAP_STATE_CAPACITY];
 
 /* Current active map in begin/end context */
-static CS_THREAD_LOCAL CsMapState *g_active_map = NULL;
+static CS_THREAD_LOCAL CsMapState *tls_active_map = NULL;
 
 CsMapState* cs_map_get_state(uint32_t id) {
     if (id == 0) return NULL;
@@ -75,14 +75,14 @@ CsMapState* cs_map_get_state(uint32_t id) {
     uint32_t slot = id % CS_MAP_STATE_CAPACITY;
     for (int i = 0; i < CS_MAP_STATE_CAPACITY; i++) {
         uint32_t idx = (slot + i) % CS_MAP_STATE_CAPACITY;
-        if (g_map_states[idx].map_id == id) {
-            return &g_map_states[idx];
+        if (tls_map_states[idx].map_id == id) {
+            return &tls_map_states[idx];
         }
-        if (g_map_states[idx].map_id == 0) {
+        if (tls_map_states[idx].map_id == 0) {
             /* Empty slot - initialize it */
-            memset(&g_map_states[idx], 0, sizeof(CsMapState));
-            g_map_states[idx].map_id = id;
-            return &g_map_states[idx];
+            memset(&tls_map_states[idx], 0, sizeof(CsMapState));
+            tls_map_states[idx].map_id = id;
+            return &tls_map_states[idx];
         }
     }
     cs_record_error(CS_ERR_CAPACITY_EXCEEDED);
@@ -90,11 +90,11 @@ CsMapState* cs_map_get_state(uint32_t id) {
 }
 
 CsMapState* cs_map_get_active(void) {
-    return g_active_map;
+    return tls_active_map;
 }
 
 void cs_map_set_active(CsMapState *ms) {
-    g_active_map = ms;
+    tls_active_map = ms;
 }
 
 /* ============================================================================
@@ -336,9 +336,11 @@ CsMapResult cs_map(
     /* Clamp values */
     if (*lat > style->max_lat) *lat = style->max_lat;
     if (*lat < style->min_lat) *lat = style->min_lat;
-    *lon = fmod(*lon + 180.0, 360.0);
-    if (*lon < 0) *lon += 360.0;
-    *lon -= 180.0;
+
+    /* Normalize longitude to [-180, 180) - cleaner than shift/unshift approach */
+    *lon = fmod(*lon, 360.0);
+    if (*lon > 180.0) *lon -= 360.0;
+    else if (*lon <= -180.0) *lon += 360.0;
     if (*zoom < style->min_zoom) *zoom = style->min_zoom;
     if (*zoom > style->max_zoom) *zoom = style->max_zoom;
 
@@ -560,7 +562,7 @@ CsMapResult cs_map_begin(
         ms->current_zoom = ms->visual_zoom_initialized ? ms->visual_zoom : (double)*zoom;
 
         /* Set active map for overlay functions */
-        g_active_map = ms;
+        tls_active_map = ms;
     }
 
     /* Call base cs_map for layout and interaction */
@@ -568,7 +570,7 @@ CsMapResult cs_map_begin(
 }
 
 void cs_map_end(void) {
-    g_active_map = NULL;
+    tls_active_map = NULL;
 }
 
 /**
@@ -593,36 +595,36 @@ void cs_polyline(
     int count,
     const CsPolylineStyle *style
 ) {
-    if (!g_active_map) return;
-    if (g_active_map->overlay_count >= CS_MAP_MAX_OVERLAYS) return;
+    if (!tls_active_map) return;
+    if (tls_active_map->overlay_count >= CS_MAP_MAX_OVERLAYS) return;
     if (count <= 0) return;
 
     if (!style) style = &CS_POLYLINE_STYLE_DEFAULT;
 
     /* Calculate zoom-dependent epsilon */
-    double epsilon = zoom_to_epsilon(g_active_map->current_zoom);
+    double epsilon = zoom_to_epsilon(tls_active_map->current_zoom);
 
     /* Simplify based on zoom level */
-    int max_points = CS_MAP_POLYLINE_MAX_CAPACITY - g_active_map->polyline_point_count;
+    int max_points = CS_MAP_POLYLINE_MAX_CAPACITY - tls_active_map->polyline_point_count;
     if (max_points <= 2) return;
 
     /* Ensure we have buffer space */
-    if (!cs_map_ensure_polyline_capacity(g_active_map, g_active_map->polyline_point_count + max_points)) {
-        max_points = g_active_map->polyline_point_capacity - g_active_map->polyline_point_count;
+    if (!cs_map_ensure_polyline_capacity(tls_active_map, tls_active_map->polyline_point_count + max_points)) {
+        max_points = tls_active_map->polyline_point_capacity - tls_active_map->polyline_point_count;
         if (max_points <= 2) return;
     }
 
-    int point_start = g_active_map->polyline_point_count;
+    int point_start = tls_active_map->polyline_point_count;
     int simplified_count = cs_map_simplify_polyline(
         points, count,
         epsilon,
-        &g_active_map->polyline_points[point_start],
+        &tls_active_map->polyline_points[point_start],
         max_points
     );
 
-    g_active_map->polyline_point_count += simplified_count;
+    tls_active_map->polyline_point_count += simplified_count;
 
-    CsOverlay *overlay = &g_active_map->overlays[g_active_map->overlay_count++];
+    CsOverlay *overlay = &tls_active_map->overlays[tls_active_map->overlay_count++];
     overlay->type = CS_OVERLAY_POLYLINE;
     overlay->id = id;
     overlay->polyline.point_start = point_start;
@@ -636,12 +638,12 @@ void cs_marker(
     double lon,
     const CsMarkerStyle *style
 ) {
-    if (!g_active_map) return;
-    if (g_active_map->overlay_count >= CS_MAP_MAX_OVERLAYS) return;
+    if (!tls_active_map) return;
+    if (tls_active_map->overlay_count >= CS_MAP_MAX_OVERLAYS) return;
 
     if (!style) style = &CS_MARKER_STYLE_DEFAULT;
 
-    CsOverlay *overlay = &g_active_map->overlays[g_active_map->overlay_count++];
+    CsOverlay *overlay = &tls_active_map->overlays[tls_active_map->overlay_count++];
     overlay->type = CS_OVERLAY_MARKER;
     overlay->id = id;
     overlay->marker.lat = lat;
@@ -859,16 +861,16 @@ void cs_map_destroy(uint32_t id) {
     uint32_t slot = id % CS_MAP_STATE_CAPACITY;
     for (int i = 0; i < CS_MAP_STATE_CAPACITY; i++) {
         uint32_t idx = (slot + i) % CS_MAP_STATE_CAPACITY;
-        if (g_map_states[idx].map_id == id) {
+        if (tls_map_states[idx].map_id == id) {
             /* Free polyline buffer using custom allocator */
-            if (g_map_states[idx].polyline_points) {
-                cs_free(g_map_states[idx].polyline_points);
+            if (tls_map_states[idx].polyline_points) {
+                cs_free(tls_map_states[idx].polyline_points);
             }
             /* Clear the slot */
-            memset(&g_map_states[idx], 0, sizeof(CsMapState));
+            memset(&tls_map_states[idx], 0, sizeof(CsMapState));
             return;
         }
-        if (g_map_states[idx].map_id == 0) {
+        if (tls_map_states[idx].map_id == 0) {
             return;  /* Not found */
         }
     }
@@ -876,13 +878,13 @@ void cs_map_destroy(uint32_t id) {
 
 void cs_map_cleanup(void) {
     for (int i = 0; i < CS_MAP_STATE_CAPACITY; i++) {
-        if (g_map_states[i].map_id != 0) {
+        if (tls_map_states[i].map_id != 0) {
             /* Free polyline buffer using custom allocator */
-            if (g_map_states[i].polyline_points) {
-                cs_free(g_map_states[i].polyline_points);
+            if (tls_map_states[i].polyline_points) {
+                cs_free(tls_map_states[i].polyline_points);
             }
-            memset(&g_map_states[i], 0, sizeof(CsMapState));
+            memset(&tls_map_states[i], 0, sizeof(CsMapState));
         }
     }
-    g_active_map = NULL;
+    tls_active_map = NULL;
 }

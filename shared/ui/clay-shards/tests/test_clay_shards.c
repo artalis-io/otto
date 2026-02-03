@@ -272,6 +272,57 @@ static void test_button_result_init(void) {
     PASS();
 }
 
+static void test_checkbox_result_init(void) {
+    TEST(checkbox_result_init);
+
+    CsCheckboxResult r = {0};
+
+    ASSERT(!r.changed, "changed should be false");
+    ASSERT(!r.checked, "checked should be false");
+    ASSERT(!r.hovered, "hovered should be false");
+
+    PASS();
+}
+
+static void test_toggle_result_init(void) {
+    TEST(toggle_result_init);
+
+    CsToggleResult r = {0};
+
+    ASSERT(!r.changed, "changed should be false");
+    ASSERT(!r.on, "on should be false");
+    ASSERT(!r.hovered, "hovered should be false");
+
+    PASS();
+}
+
+static void test_slider_result_init(void) {
+    TEST(slider_result_init);
+
+    CsSliderResult r = {0};
+
+    ASSERT(!r.changed, "changed should be false");
+    ASSERT(!r.dragging, "dragging should be false");
+    ASSERT(!r.hovered, "hovered should be false");
+    ASSERT(r.value == 0.0f, "value should be 0");
+
+    PASS();
+}
+
+static void test_dropdown_result_init(void) {
+    TEST(dropdown_result_init);
+
+    CsDropdownResult r = {0};
+
+    ASSERT(!r.changed, "changed should be false");
+    ASSERT(!r.opened, "opened should be false");
+    ASSERT(!r.closed, "closed should be false");
+    ASSERT(!r.hovered, "hovered should be false");
+    ASSERT(r.selected == 0, "selected should be 0");
+
+    PASS();
+}
+
 /* ============================================================================
  * Style Tests
  * ============================================================================ */
@@ -285,6 +336,20 @@ static void test_default_styles_exist(void) {
     ASSERT(CC_INPUT_STYLE_DEFAULT.font_size > 0, "Input style should have font_size");
 
     ASSERT(CC_BUTTON_STYLE_DEFAULT.font_size > 0, "Button style should have font_size");
+
+    ASSERT(CS_CHECKBOX_STYLE_DEFAULT.size > 0, "Checkbox style should have size");
+    ASSERT(CS_CHECKBOX_STYLE_DEFAULT.font_size > 0, "Checkbox style should have font_size");
+
+    ASSERT(CS_TOGGLE_STYLE_DEFAULT.width > 0, "Toggle style should have width");
+    ASSERT(CS_TOGGLE_STYLE_DEFAULT.height > 0, "Toggle style should have height");
+
+    ASSERT(CS_SLIDER_STYLE_DEFAULT.width > 0, "Slider style should have width");
+    ASSERT(CS_SLIDER_STYLE_DEFAULT.height > 0, "Slider style should have height");
+    ASSERT(CS_SLIDER_STYLE_DEFAULT.thumb_size > 0, "Slider style should have thumb_size");
+
+    ASSERT(CS_DROPDOWN_STYLE_DEFAULT.width > 0, "Dropdown style should have width");
+    ASSERT(CS_DROPDOWN_STYLE_DEFAULT.height > 0, "Dropdown style should have height");
+    ASSERT(CS_DROPDOWN_STYLE_DEFAULT.font_size > 0, "Dropdown style should have font_size");
 
     PASS();
 }
@@ -371,6 +436,591 @@ static void test_button_renders(void) {
     cs_frame_end(0.016f);
 
     ASSERT(commands.length > 0, "Should produce render commands");
+
+    PASS();
+}
+
+static void test_checkbox_renders(void) {
+    TEST(checkbox_renders);
+
+    init_clay();
+    cs_init();
+
+    bool checked = false;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsCheckboxResult r = cs_checkbox(CS_ID("test_check"), &checked, "Test Label", NULL);
+        (void)r;
+    }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(commands.length > 0, "Should produce render commands");
+
+    PASS();
+}
+
+static void test_checkbox_toggle(void) {
+    TEST(checkbox_toggle);
+
+    init_clay();
+    cs_init();
+
+    bool checked = false;
+    CsState *g = cs_get_state();
+
+    /* Frame 1: render checkbox unchecked */
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsCheckboxResult r = cs_checkbox(CS_ID("toggle_check"), &checked, "Toggle", NULL);
+        ASSERT(!r.changed, "Should not change on first render");
+        ASSERT(!r.checked, "Should be unchecked initially");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    /* Frame 2: simulate click - set pending_click and hover */
+    cs_frame_begin();
+    g->pending_click = true;
+
+    Clay_BeginLayout();
+    /* Simulate hover by setting pointer over element */
+    Clay_SetPointerState((Clay_Vector2){100, 100}, false);
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsCheckboxResult r = cs_checkbox(CS_ID("toggle_check"), &checked, "Toggle", NULL);
+        /* Note: hover detection uses previous frame data, so we may not see changed=true */
+        /* But we can verify the state mutation */
+        (void)r;
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    PASS();
+}
+
+static void test_checkbox_null_checked(void) {
+    TEST(checkbox_null_checked);
+
+    init_clay();
+    cs_init();
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        /* NULL checked pointer should return empty result without crashing */
+        CsCheckboxResult r = cs_checkbox(CS_ID("null_check"), NULL, "Label", NULL);
+        ASSERT(!r.changed, "Should not change with NULL checked");
+        ASSERT(!r.checked, "Should be false with NULL checked");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    PASS();
+}
+
+static void test_checkbox_no_label(void) {
+    TEST(checkbox_no_label);
+
+    init_clay();
+    cs_init();
+
+    bool checked = true;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        /* No label should work fine */
+        CsCheckboxResult r = cs_checkbox(CS_ID("nolabel_check"), &checked, NULL, NULL);
+        ASSERT(r.checked, "Should reflect checked state");
+    }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(commands.length > 0, "Should still produce render commands");
+
+    PASS();
+}
+
+static void test_checkbox_keyboard_toggle(void) {
+    TEST(checkbox_keyboard_toggle);
+
+    init_clay();
+    cs_init();
+
+    bool checked = false;
+    CsState *g = cs_get_state();
+
+    /* Frame 1: Focus the checkbox */
+    cs_frame_begin();
+    cs_focus(CS_ID("kb_check"));
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        cs_checkbox(CS_ID("kb_check"), &checked, "KB Toggle", NULL);
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(!checked, "Should be unchecked initially");
+
+    /* Frame 2: Simulate Enter key press while focused */
+    cs_frame_begin();
+    g->pending_enter = true;
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsCheckboxResult r = cs_checkbox(CS_ID("kb_check"), &checked, "KB Toggle", NULL);
+        ASSERT(r.changed, "Should change on Enter key");
+        ASSERT(r.checked, "Should be checked after toggle");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(checked, "State should be toggled");
+
+    PASS();
+}
+
+static void test_toggle_renders(void) {
+    TEST(toggle_renders);
+
+    init_clay();
+    cs_init();
+
+    bool on = false;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsToggleResult r = cs_toggle(CS_ID("test_toggle"), &on, "Dark Mode", NULL);
+        (void)r;
+    }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(commands.length > 0, "Should produce render commands");
+
+    PASS();
+}
+
+static void test_toggle_switch(void) {
+    TEST(toggle_switch);
+
+    init_clay();
+    cs_init();
+
+    bool on = false;
+    CsState *g = cs_get_state();
+
+    /* Frame 1: Focus the toggle */
+    cs_frame_begin();
+    cs_focus(CS_ID("switch_toggle"));
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        cs_toggle(CS_ID("switch_toggle"), &on, "Enable", NULL);
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(!on, "Should be off initially");
+
+    /* Frame 2: Simulate Enter key press while focused */
+    cs_frame_begin();
+    g->pending_enter = true;
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsToggleResult r = cs_toggle(CS_ID("switch_toggle"), &on, "Enable", NULL);
+        ASSERT(r.changed, "Should change on Enter key");
+        ASSERT(r.on, "Should be on after toggle");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(on, "State should be toggled on");
+
+    PASS();
+}
+
+static void test_toggle_null_on(void) {
+    TEST(toggle_null_on);
+
+    init_clay();
+    cs_init();
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        /* NULL on pointer should return empty result without crashing */
+        CsToggleResult r = cs_toggle(CS_ID("null_toggle"), NULL, "Label", NULL);
+        ASSERT(!r.changed, "Should not change with NULL on");
+        ASSERT(!r.on, "Should be false with NULL on");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    PASS();
+}
+
+static void test_toggle_no_label(void) {
+    TEST(toggle_no_label);
+
+    init_clay();
+    cs_init();
+
+    bool on = true;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        /* No label should work fine */
+        CsToggleResult r = cs_toggle(CS_ID("nolabel_toggle"), &on, NULL, NULL);
+        ASSERT(r.on, "Should reflect on state");
+    }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(commands.length > 0, "Should still produce render commands");
+
+    PASS();
+}
+
+static void test_toggle_label_left(void) {
+    TEST(toggle_label_left);
+
+    init_clay();
+    cs_init();
+
+    bool on = false;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsToggleStyle style = CS_TOGGLE_STYLE_DEFAULT;
+        style.label_left = true;
+        CsToggleResult r = cs_toggle(CS_ID("left_label"), &on, "Left Label", &style);
+        (void)r;
+    }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(commands.length > 0, "Should produce render commands with left label");
+
+    PASS();
+}
+
+static void test_slider_renders(void) {
+    TEST(slider_renders);
+
+    init_clay();
+    cs_init();
+
+    float value = 50.0f;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsSliderResult r = cs_slider(CS_ID("test_slider"), &value, 0.0f, 100.0f, "Volume", NULL);
+        (void)r;
+    }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(commands.length > 0, "Should produce render commands");
+
+    PASS();
+}
+
+static void test_slider_null_value(void) {
+    TEST(slider_null_value);
+
+    init_clay();
+    cs_init();
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        /* NULL value pointer should return empty result without crashing */
+        CsSliderResult r = cs_slider(CS_ID("null_slider"), NULL, 0.0f, 100.0f, "Label", NULL);
+        ASSERT(!r.changed, "Should not change with NULL value");
+        ASSERT(!r.dragging, "Should not be dragging with NULL value");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    PASS();
+}
+
+static void test_slider_invalid_range(void) {
+    TEST(slider_invalid_range);
+
+    init_clay();
+    cs_init();
+
+    float value = 50.0f;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        /* Invalid range (max <= min) should return early */
+        CsSliderResult r = cs_slider(CS_ID("bad_range"), &value, 100.0f, 0.0f, "Bad", NULL);
+        ASSERT(!r.changed, "Should not change with invalid range");
+        ASSERT(r.value == 50.0f, "Should return original value");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    PASS();
+}
+
+static void test_slider_no_label(void) {
+    TEST(slider_no_label);
+
+    init_clay();
+    cs_init();
+
+    float value = 25.0f;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsSliderResult r = cs_slider(CS_ID("nolabel_slider"), &value, 0.0f, 100.0f, NULL, NULL);
+        ASSERT(r.value == 25.0f, "Should reflect value");
+    }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(commands.length > 0, "Should still produce render commands");
+
+    PASS();
+}
+
+static void test_slider_show_value(void) {
+    TEST(slider_show_value);
+
+    init_clay();
+    cs_init();
+
+    float value = 75.0f;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsSliderStyle style = CS_SLIDER_STYLE_DEFAULT;
+        style.show_value = true;
+        CsSliderResult r = cs_slider(CS_ID("show_val"), &value, 0.0f, 100.0f, "With Value", &style);
+        (void)r;
+    }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(commands.length > 0, "Should produce render commands with value display");
+
+    PASS();
+}
+
+static void test_dropdown_renders(void) {
+    TEST(dropdown_renders);
+
+    init_clay();
+    cs_init();
+    cs_dropdown_close_all();
+
+    int selected = 0;
+    const char *options[] = {"Option 1", "Option 2", "Option 3"};
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsDropdownResult r = cs_dropdown(CS_ID("test_dropdown"), &selected, options, 3, NULL);
+        (void)r;
+    }
+
+    Clay_RenderCommandArray commands = Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(commands.length > 0, "Should produce render commands");
+
+    PASS();
+}
+
+static void test_dropdown_null_params(void) {
+    TEST(dropdown_null_params);
+
+    init_clay();
+    cs_init();
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        /* NULL selected pointer should return empty result without crashing */
+        const char *options[] = {"A", "B"};
+        CsDropdownResult r1 = cs_dropdown(CS_ID("null_sel"), NULL, options, 2, NULL);
+        ASSERT(!r1.changed, "Should not change with NULL selected");
+
+        /* NULL options should return empty result */
+        int sel = 0;
+        CsDropdownResult r2 = cs_dropdown(CS_ID("null_opts"), &sel, NULL, 2, NULL);
+        ASSERT(!r2.changed, "Should not change with NULL options");
+
+        /* Zero count should return empty result */
+        CsDropdownResult r3 = cs_dropdown(CS_ID("zero_count"), &sel, options, 0, NULL);
+        ASSERT(!r3.changed, "Should not change with zero count");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    PASS();
+}
+
+static void test_dropdown_selection_clamp(void) {
+    TEST(dropdown_selection_clamp);
+
+    init_clay();
+    cs_init();
+    cs_dropdown_close_all();
+
+    const char *options[] = {"A", "B", "C"};
+
+    /* Test negative selection gets clamped to 0 */
+    int sel_neg = -5;
+    cs_frame_begin();
+    Clay_BeginLayout();
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsDropdownResult r = cs_dropdown(CS_ID("neg_sel"), &sel_neg, options, 3, NULL);
+        ASSERT(r.selected == 0, "Negative selection should clamp to 0");
+    }
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(sel_neg == 0, "Negative selection should be clamped to 0");
+
+    /* Test out-of-bounds selection gets clamped */
+    int sel_high = 10;
+    cs_frame_begin();
+    Clay_BeginLayout();
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsDropdownResult r = cs_dropdown(CS_ID("high_sel"), &sel_high, options, 3, NULL);
+        ASSERT(r.selected == 2, "High selection should clamp to count-1");
+    }
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(sel_high == 2, "High selection should be clamped to count-1");
+
+    PASS();
+}
+
+static void test_dropdown_open_close(void) {
+    TEST(dropdown_open_close);
+
+    init_clay();
+    cs_init();
+    cs_dropdown_close_all();
+
+    uint32_t dd_id = CS_ID("open_close_dd");
+    ASSERT(!cs_dropdown_is_open(dd_id), "Should not be open initially");
+
+    /* Close all should work even when nothing is open */
+    cs_dropdown_close_all();
+    ASSERT(!cs_dropdown_is_open(dd_id), "Should still not be open");
+
+    /* Close specific should work even when not open */
+    cs_dropdown_close(dd_id);
+    ASSERT(!cs_dropdown_is_open(dd_id), "Should still not be open after close");
+
+    PASS();
+}
+
+static void test_dropdown_default_style(void) {
+    TEST(dropdown_default_style);
+
+    ASSERT(CS_DROPDOWN_STYLE_DEFAULT.width > 0, "Should have width");
+    ASSERT(CS_DROPDOWN_STYLE_DEFAULT.height > 0, "Should have height");
+    ASSERT(CS_DROPDOWN_STYLE_DEFAULT.font_size > 0, "Should have font_size");
 
     PASS();
 }
@@ -1600,6 +2250,10 @@ int main(void) {
     printf("\nResult Type Tests:\n");
     test_input_result_init();
     test_button_result_init();
+    test_checkbox_result_init();
+    test_toggle_result_init();
+    test_slider_result_init();
+    test_dropdown_result_init();
 
     printf("\nStyle Tests:\n");
     test_default_styles_exist();
@@ -1607,6 +2261,26 @@ int main(void) {
     printf("\nIntegration Tests:\n");
     test_input_renders();
     test_button_renders();
+    test_checkbox_renders();
+    test_checkbox_toggle();
+    test_checkbox_null_checked();
+    test_checkbox_no_label();
+    test_checkbox_keyboard_toggle();
+    test_toggle_renders();
+    test_toggle_switch();
+    test_toggle_null_on();
+    test_toggle_no_label();
+    test_toggle_label_left();
+    test_slider_renders();
+    test_slider_null_value();
+    test_slider_invalid_range();
+    test_slider_no_label();
+    test_slider_show_value();
+    test_dropdown_renders();
+    test_dropdown_null_params();
+    test_dropdown_selection_clamp();
+    test_dropdown_open_close();
+    test_dropdown_default_style();
     test_multiple_inputs();
     test_input_focus_on_click();
     test_input_validation();

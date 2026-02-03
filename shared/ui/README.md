@@ -71,7 +71,7 @@ cs_init();
 
 ```bash
 cd clay-shards && make       # Build library
-cd clay-shards && make test  # Run 52 tests
+cd clay-shards && make test  # Run 55 tests
 ```
 
 ## Documentation
