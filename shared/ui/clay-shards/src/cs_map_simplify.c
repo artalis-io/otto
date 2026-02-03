@@ -8,6 +8,7 @@
 #include "cs_internal.h"  /* For cs_record_error, cs_alloc, cs_free */
 #include <math.h>
 #include <string.h>  /* For memset */
+#include <stdint.h>  /* For SIZE_MAX */
 
 /* ============================================================================
  * Perpendicular Distance Calculation
@@ -124,6 +125,12 @@ static void douglas_peucker_iterative(
 static int count_kept_points(const CsGeoPoint *points, int count, double epsilon) {
     if (count <= 2) return count;
 
+    /* Check for integer overflow before allocation */
+    if (count < 0 || (size_t)count > SIZE_MAX / sizeof(bool)) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
+        return 2;
+    }
+
     bool *keep = (bool *)cs_alloc((size_t)count * sizeof(bool));
     if (!keep) {
         /* cs_alloc already records the error */
@@ -209,6 +216,14 @@ int cs_map_simplify_polyline(
     }
 
     /* Allocate keep flags for final pass using custom allocator */
+    /* Overflow check already done above in count_kept_points, but verify */
+    if (count < 0 || (size_t)count > SIZE_MAX / sizeof(bool)) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
+        out[0] = points[0];
+        out[1] = points[count > 1 ? count - 1 : 0];
+        return count > 1 ? 2 : 1;
+    }
+
     bool *keep = (bool *)cs_alloc((size_t)count * sizeof(bool));
     if (!keep) {
         /* Fallback: just copy first/last (error already recorded) */

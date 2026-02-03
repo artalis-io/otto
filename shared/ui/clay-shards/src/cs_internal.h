@@ -128,6 +128,7 @@ typedef enum {
     CS_ERR_NONE = 0,
     CS_ERR_ALLOC_FAILED,        /* Memory allocation failed */
     CS_ERR_CAPACITY_EXCEEDED,   /* Hash table or buffer full */
+    CS_ERR_INVALID_ARGUMENT,    /* Invalid argument (negative count, overflow) */
 } CsErrorCode;
 
 /* Record an internal error (thread-local in future) */
