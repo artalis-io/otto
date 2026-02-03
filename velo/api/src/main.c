@@ -25,6 +25,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdint.h>
+#include <limits.h>
 #include "mongoose.h"
 #include "velo.h"
 #include "polyline.h"
@@ -74,6 +75,20 @@ static char *trim(char *str) {
     return str;
 }
 
+/*
+ * Safe integer parsing with error detection.
+ * Returns 1 on success, 0 on failure (invalid input or out of range).
+ */
+static int safe_parse_int(const char *str, int *out) {
+    if (!str || !*str) return 0;
+    char *endptr;
+    long val = strtol(str, &endptr, 10);
+    if (endptr == str || *endptr != '\0') return 0;
+    if (val < INT_MIN || val > INT_MAX) return 0;
+    *out = (int)val;
+    return 1;
+}
+
 static int load_config_file(const char *filename, RouteServerConfig *cfg) {
     FILE *f = fopen(filename, "r");
     if (!f) return -1;
@@ -105,11 +120,11 @@ static int load_config_file(const char *filename, RouteServerConfig *cfg) {
             strncpy(cfg->listen_addr, value, sizeof(cfg->listen_addr) - 1);
             cfg->listen_addr[sizeof(cfg->listen_addr) - 1] = '\0';
         } else if (strcmp(key, "port") == 0) {
-            cfg->port = atoi(value);
+            safe_parse_int(value, &cfg->port);
         } else if (strcmp(key, "landmarks") == 0) {
-            cfg->use_landmarks = atoi(value);
+            safe_parse_int(value, &cfg->use_landmarks);
         } else if (strcmp(key, "landmark_count") == 0) {
-            cfg->landmark_count = atoi(value);
+            safe_parse_int(value, &cfg->landmark_count);
         } else if (strcmp(key, "name") == 0) {
             strncpy(cfg->name, value, sizeof(cfg->name) - 1);
             cfg->name[sizeof(cfg->name) - 1] = '\0';
@@ -128,17 +143,17 @@ static void load_config_env(RouteServerConfig *cfg) {
         cfg->graph_path[sizeof(cfg->graph_path) - 1] = '\0';
     }
     if ((val = getenv("ROUTE_PORT")) || (val = getenv("PORT"))) {
-        cfg->port = atoi(val);
+        safe_parse_int(val, &cfg->port);
     }
     if ((val = getenv("ROUTE_HOST")) || (val = getenv("HOST"))) {
         strncpy(cfg->listen_addr, val, sizeof(cfg->listen_addr) - 1);
         cfg->listen_addr[sizeof(cfg->listen_addr) - 1] = '\0';
     }
     if ((val = getenv("ROUTE_LANDMARKS"))) {
-        cfg->use_landmarks = atoi(val);
+        safe_parse_int(val, &cfg->use_landmarks);
     }
     if ((val = getenv("ROUTE_LANDMARK_COUNT"))) {
-        cfg->landmark_count = atoi(val);
+        safe_parse_int(val, &cfg->landmark_count);
     }
 }
 
@@ -613,7 +628,7 @@ int main(int argc, char *argv[]) {
     /* Parse command line arguments */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) {
-            if (++i < argc) s_config.port = atoi(argv[i]);
+            if (++i < argc) safe_parse_int(argv[i], &s_config.port);
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--host") == 0) {
             if (++i < argc) strncpy(s_config.listen_addr, argv[i], sizeof(s_config.listen_addr) - 1);
         } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--config") == 0) {
@@ -626,7 +641,7 @@ int main(int argc, char *argv[]) {
             s_config.use_landmarks = 0;
         } else if (strcmp(argv[i], "--landmarks") == 0) {
             if (++i < argc) {
-                s_config.landmark_count = atoi(argv[i]);
+                safe_parse_int(argv[i], &s_config.landmark_count);
                 s_config.use_landmarks = 1;
             }
         } else if (strcmp(argv[i], "--help") == 0) {

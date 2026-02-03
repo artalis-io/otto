@@ -166,6 +166,11 @@ void vl_graph_builder_free(VLGraphBuilder *builder)
 static uint32_t get_or_create_node(VLGraphBuilder *builder, int64_t osm_id,
                                    double lat, double lon)
 {
+    /* Validate coordinates to prevent overflow in fixed-point conversion */
+    if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
+        return VL_INVALID_NODE;
+    }
+
     uint32_t idx = node_map_lookup(&builder->node_map, osm_id);
     if (idx != VL_INVALID_NODE) {
         return idx;
