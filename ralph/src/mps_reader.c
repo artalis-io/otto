@@ -8,13 +8,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <ctype.h>
 #include <math.h>
 #include "lp.h"
 #include "ralph.h"
 
-#define MAX_LINE 1024
+#define MAX_LINE 4096
 #define MAX_NAME 256
+#define MAX_ERROR 512
 
 /* MPS sections */
 typedef enum {
@@ -77,16 +79,70 @@ typedef struct {
     /* Objective coefficients */
     double *obj;
 
+    /* Section tracking for validation */
+    int has_rows;
+    int has_columns;
+    int has_endata;
+
+    /* Error reporting */
+    char error[MAX_ERROR];
+    int error_line;
+
 } MPSParser;
 
 /* ============================================================================
  * Helper Functions
  * ============================================================================ */
 
+/* Set parser error with line number */
+static void set_error(MPSParser *parser, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(parser->error, MAX_ERROR, fmt, args);
+    va_end(args);
+    parser->error_line = parser->line_num;
+}
+
+/* Read a line, detecting truncation. Returns:
+ *  1 = success
+ *  0 = EOF
+ * -1 = line too long (truncated)
+ * -2 = read error
+ */
+static int read_line(MPSParser *parser) {
+    if (!fgets(parser->line, MAX_LINE, parser->file)) {
+        if (feof(parser->file)) return 0;
+        set_error(parser, "read error");
+        return -2;
+    }
+    parser->line_num++;
+
+    size_t len = strlen(parser->line);
+
+    /* Check for line truncation: no newline and buffer is full */
+    if (len > 0 && parser->line[len - 1] != '\n' && len == MAX_LINE - 1) {
+        /* Line was truncated - consume rest of line */
+        int ch;
+        while ((ch = fgetc(parser->file)) != EOF && ch != '\n')
+            ;
+        set_error(parser, "line %d exceeds maximum length (%d chars)",
+                  parser->line_num, MAX_LINE - 1);
+        return -1;
+    }
+
+    /* Remove trailing newline/carriage return */
+    while (len > 0 && (parser->line[len - 1] == '\n' || parser->line[len - 1] == '\r')) {
+        parser->line[--len] = '\0';
+    }
+
+    return 1;
+}
+
 static char* trim(char *str) {
-    while (isspace(*str)) str++;
+    while (isspace((unsigned char)*str)) str++;
+    if (*str == '\0') return str;
     char *end = str + strlen(str) - 1;
-    while (end > str && isspace(*end)) *end-- = '\0';
+    while (end > str && isspace((unsigned char)*end)) *end-- = '\0';
     return str;
 }
 
@@ -171,20 +227,35 @@ static int parse_rows_line(MPSParser *parser, const char *line) {
     char name[MAX_NAME];
 
     if (sscanf(line, " %c %255s", &type, name) < 2) {
+        set_error(parser, "line %d: invalid ROWS format, expected 'TYPE NAME'",
+                  parser->line_num);
         return -1;
     }
 
-    type = toupper(type);
+    type = (char)toupper((unsigned char)type);
+
+    /* Validate row type */
+    if (type != 'N' && type != 'L' && type != 'G' && type != 'E') {
+        set_error(parser, "line %d: invalid row type '%c', expected N/L/G/E",
+                  parser->line_num, type);
+        return -1;
+    }
 
     /* Expand if needed */
     if (parser->num_rows >= parser->row_capacity) {
         int new_cap = parser->row_capacity * 2;
         MPSRow *new_rows = (MPSRow*)realloc(parser->rows, new_cap * sizeof(MPSRow));
-        if (!new_rows) return -1;
+        if (!new_rows) {
+            set_error(parser, "line %d: memory allocation failed", parser->line_num);
+            return -1;
+        }
         parser->rows = new_rows;
 
         double *new_rhs = (double*)realloc(parser->rhs, new_cap * sizeof(double));
-        if (!new_rhs) return -1;
+        if (!new_rhs) {
+            set_error(parser, "line %d: memory allocation failed", parser->line_num);
+            return -1;
+        }
         parser->rhs = new_rhs;
 
         parser->row_capacity = new_cap;
@@ -208,12 +279,16 @@ static int parse_columns_line(MPSParser *parser, const char *line) {
     /* Format: COLNAME  ROWNAME  VALUE  [ROWNAME  VALUE] */
     char col_name[MAX_NAME];
     char row_name1[MAX_NAME], row_name2[MAX_NAME];
-    double val1, val2;
+    double val1 = 0.0, val2 = 0.0;
 
     int n = sscanf(line, " %255s %255s %lf %255s %lf",
                    col_name, row_name1, &val1, row_name2, &val2);
 
-    if (n < 3) return -1;
+    if (n < 3) {
+        set_error(parser, "line %d: invalid COLUMNS format, expected 'COL ROW VAL'",
+                  parser->line_num);
+        return -1;
+    }
 
     /* Check for MARKER for integer variables */
     if (strcmp(row_name1, "'MARKER'") == 0) {
@@ -227,7 +302,11 @@ static int parse_columns_line(MPSParser *parser, const char *line) {
     }
 
     int col_idx = find_or_add_column(parser, col_name);
-    if (col_idx < 0) return -1;
+    if (col_idx < 0) {
+        set_error(parser, "line %d: memory allocation failed for column '%s'",
+                  parser->line_num, col_name);
+        return -1;
+    }
 
     /* First coefficient */
     int row_idx = find_row(parser, row_name1);
@@ -238,6 +317,7 @@ static int parse_columns_line(MPSParser *parser, const char *line) {
             triplets_add(parser->matrix, row_idx, col_idx, val1);
         }
     }
+    /* Note: unknown row names are silently ignored (common in some MPS files) */
 
     /* Optional second coefficient */
     if (n >= 5) {
@@ -258,12 +338,16 @@ static int parse_rhs_line(MPSParser *parser, const char *line) {
     /* Format: RHSNAME  ROWNAME  VALUE  [ROWNAME  VALUE] */
     char rhs_name[MAX_NAME];
     char row_name1[MAX_NAME], row_name2[MAX_NAME];
-    double val1, val2;
+    double val1 = 0.0, val2 = 0.0;
 
     int n = sscanf(line, " %255s %255s %lf %255s %lf",
                    rhs_name, row_name1, &val1, row_name2, &val2);
 
-    if (n < 3) return -1;
+    if (n < 3) {
+        set_error(parser, "line %d: invalid RHS format, expected 'NAME ROW VAL'",
+                  parser->line_num);
+        return -1;
+    }
 
     int row_idx = find_row(parser, row_name1);
     if (row_idx >= 0 && row_idx != parser->obj_row) {
@@ -289,17 +373,37 @@ static int parse_bounds_line(MPSParser *parser, const char *line) {
 
     int n = sscanf(line, " %7s %255s %255s %lf", type, bnd_name, col_name, &val);
 
-    if (n < 3) return -1;
+    if (n < 3) {
+        set_error(parser, "line %d: invalid BOUNDS format, expected 'TYPE NAME COL [VAL]'",
+                  parser->line_num);
+        return -1;
+    }
 
     int col_idx = find_or_add_column(parser, col_name);
-    if (col_idx < 0) return -1;
+    if (col_idx < 0) {
+        set_error(parser, "line %d: memory allocation failed for column '%s'",
+                  parser->line_num, col_name);
+        return -1;
+    }
 
     /* Process bound type */
     if (strcmp(type, "LO") == 0) {
+        if (n < 4) {
+            set_error(parser, "line %d: LO bound requires a value", parser->line_num);
+            return -1;
+        }
         parser->lb[col_idx] = val;
     } else if (strcmp(type, "UP") == 0) {
+        if (n < 4) {
+            set_error(parser, "line %d: UP bound requires a value", parser->line_num);
+            return -1;
+        }
         parser->ub[col_idx] = val;
     } else if (strcmp(type, "FX") == 0) {
+        if (n < 4) {
+            set_error(parser, "line %d: FX bound requires a value", parser->line_num);
+            return -1;
+        }
         parser->lb[col_idx] = val;
         parser->ub[col_idx] = val;
     } else if (strcmp(type, "FR") == 0) {
@@ -315,11 +419,22 @@ static int parse_bounds_line(MPSParser *parser, const char *line) {
         parser->ub[col_idx] = 1.0;
         parser->columns[col_idx].type = 'B';
     } else if (strcmp(type, "LI") == 0) {
+        if (n < 4) {
+            set_error(parser, "line %d: LI bound requires a value", parser->line_num);
+            return -1;
+        }
         parser->lb[col_idx] = val;
         parser->columns[col_idx].type = 'I';
     } else if (strcmp(type, "UI") == 0) {
+        if (n < 4) {
+            set_error(parser, "line %d: UI bound requires a value", parser->line_num);
+            return -1;
+        }
         parser->ub[col_idx] = val;
         parser->columns[col_idx].type = 'I';
+    } else {
+        set_error(parser, "line %d: unknown bound type '%s'", parser->line_num, type);
+        return -1;
     }
 
     return 0;
@@ -397,55 +512,53 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
 
     MPSSection section = SECTION_NONE;
     int in_integer = 0;
+    int status;
+    int parse_error = 0;
 
-    while (fgets(parser->line, MAX_LINE, parser->file)) {
-        parser->line_num++;
-
-        /* Remove newline */
-        char *nl = strchr(parser->line, '\n');
-        if (nl) *nl = '\0';
-        nl = strchr(parser->line, '\r');
-        if (nl) *nl = '\0';
-
+    while ((status = read_line(parser)) > 0) {
         /* Skip empty lines and comments */
         char *trimmed = trim(parser->line);
         if (trimmed[0] == '\0' || trimmed[0] == '*') continue;
 
-        /* Check for section headers */
-        if (strncmp(trimmed, "NAME", 4) == 0) {
+        /* Check for section headers (must start at column 1 or after whitespace) */
+        if (strncmp(trimmed, "NAME", 4) == 0 && (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
             section = SECTION_NAME;
             parse_name(parser);
             continue;
         } else if (strncmp(trimmed, "OBJSENSE", 8) == 0) {
             section = SECTION_OBJSENSE;
             continue;
-        } else if (strncmp(trimmed, "ROWS", 4) == 0) {
+        } else if (strncmp(trimmed, "ROWS", 4) == 0 && (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
             section = SECTION_ROWS;
+            parser->has_rows = 1;
             continue;
-        } else if (strncmp(trimmed, "COLUMNS", 7) == 0) {
+        } else if (strncmp(trimmed, "COLUMNS", 7) == 0 && (trimmed[7] == '\0' || isspace((unsigned char)trimmed[7]))) {
             section = SECTION_COLUMNS;
+            parser->has_columns = 1;
             continue;
-        } else if (strncmp(trimmed, "RHS", 3) == 0) {
+        } else if (strncmp(trimmed, "RHS", 3) == 0 && (trimmed[3] == '\0' || isspace((unsigned char)trimmed[3]))) {
             section = SECTION_RHS;
             continue;
-        } else if (strncmp(trimmed, "RANGES", 6) == 0) {
+        } else if (strncmp(trimmed, "RANGES", 6) == 0 && (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
             section = SECTION_RANGES;
             continue;
-        } else if (strncmp(trimmed, "BOUNDS", 6) == 0) {
+        } else if (strncmp(trimmed, "BOUNDS", 6) == 0 && (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
             section = SECTION_BOUNDS;
             continue;
         } else if (strncmp(trimmed, "ENDATA", 6) == 0) {
             section = SECTION_END;
+            parser->has_endata = 1;
             break;
         }
 
         /* Process line based on current section */
+        int result = 0;
         switch (section) {
             case SECTION_OBJSENSE:
                 parse_objsense(parser, trimmed);
                 break;
             case SECTION_ROWS:
-                parse_rows_line(parser, trimmed);
+                result = parse_rows_line(parser, trimmed);
                 break;
             case SECTION_COLUMNS:
                 /* Check for integer marker */
@@ -454,22 +567,59 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
                 } else if (strstr(trimmed, "'MARKER'") && strstr(trimmed, "'INTEND'")) {
                     in_integer = 0;
                 } else {
-                    parse_columns_line(parser, trimmed);
+                    result = parse_columns_line(parser, trimmed);
                     /* Mark column as integer if in integer section */
-                    if (in_integer && parser->num_cols > 0) {
+                    if (result == 0 && in_integer && parser->num_cols > 0) {
                         parser->columns[parser->num_cols - 1].type = 'I';
                     }
                 }
                 break;
             case SECTION_RHS:
-                parse_rhs_line(parser, trimmed);
+                result = parse_rhs_line(parser, trimmed);
                 break;
             case SECTION_BOUNDS:
-                parse_bounds_line(parser, trimmed);
+                result = parse_bounds_line(parser, trimmed);
                 break;
             default:
                 break;
         }
+
+        if (result < 0) {
+            parse_error = 1;
+            break;
+        }
+    }
+
+    /* Check for read errors */
+    if (status < 0) {
+        parse_error = 1;
+    }
+
+    /* Validate required sections */
+    if (!parse_error && !parser->has_rows) {
+        set_error(parser, "missing required ROWS section");
+        parse_error = 1;
+    }
+    if (!parse_error && !parser->has_columns) {
+        set_error(parser, "missing required COLUMNS section");
+        parse_error = 1;
+    }
+    if (!parse_error && !parser->has_endata) {
+        set_error(parser, "missing ENDATA marker (file may be truncated)");
+        parse_error = 1;
+    }
+    if (!parse_error && parser->obj_row < 0) {
+        set_error(parser, "no objective row (type N) found in ROWS section");
+        parse_error = 1;
+    }
+
+    /* Print error message if there was an error */
+    if (parse_error) {
+        if (parser->error[0] != '\0') {
+            fprintf(stderr, "MPS parse error: %s\n", parser->error);
+        }
+        mps_parser_free(parser);
+        return -1;
     }
 
     /* Build model using public API */
