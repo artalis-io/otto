@@ -116,6 +116,8 @@ static VLStatus add_node(VLPBFContext *ctx, int64_t id, double lat, double lon)
     }
     if (ctx->num_nodes >= ctx->nodes_capacity) {
         size_t new_cap = ctx->nodes_capacity ? ctx->nodes_capacity * 2 : 65536;
+        /* Overflow check: ensure doubling didn't wrap */
+        if (new_cap <= ctx->nodes_capacity) new_cap = VL_PBF_MAX_NODES;
         if (new_cap > VL_PBF_MAX_NODES) new_cap = VL_PBF_MAX_NODES;
         VLOSMNode *new_nodes = realloc(ctx->nodes, new_cap * sizeof(VLOSMNode));
         if (!new_nodes) return VL_ERROR_OUT_OF_MEMORY;
@@ -139,6 +141,8 @@ static VLStatus add_way(VLPBFContext *ctx, VLOSMWay *way)
     }
     if (ctx->num_ways >= ctx->ways_capacity) {
         size_t new_cap = ctx->ways_capacity ? ctx->ways_capacity * 2 : 8192;
+        /* Overflow check: ensure doubling didn't wrap */
+        if (new_cap <= ctx->ways_capacity) new_cap = VL_PBF_MAX_WAYS;
         if (new_cap > VL_PBF_MAX_WAYS) new_cap = VL_PBF_MAX_WAYS;
         VLOSMWay *new_ways = realloc(ctx->ways, new_cap * sizeof(VLOSMWay));
         if (!new_ways) return VL_ERROR_OUT_OF_MEMORY;
@@ -371,7 +375,8 @@ static VLStatus parse_way(VLPBFContext *ctx, const uint8_t *data, size_t len,
         /* Count references */
         size_t count = sh_pb_count_packed_varint(refs_data, refs_len);
 
-        if (count >= 2) {  /* Need at least 2 nodes for an edge */
+        /* Validate count fits in int and doesn't exceed max */
+        if (count >= 2 && count <= VL_PBF_MAX_WAY_NODES) {
             way.node_refs = malloc(count * sizeof(int64_t));
             if (!way.node_refs) return VL_ERROR_OUT_OF_MEMORY;
 

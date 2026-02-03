@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -235,7 +236,7 @@ static VLStatus reconstruct_path(const VLGraph *graph, const uint32_t *parent,
                                  uint32_t source, uint32_t target,
                                  VLRoute *route, int include_geometry)
 {
-    int path_len = 0;
+    size_t path_len = 0;
     uint32_t node = target;
     while (node != source && node != VL_INVALID_NODE) {
         path_len++;
@@ -246,11 +247,16 @@ static VLStatus reconstruct_path(const VLGraph *graph, const uint32_t *parent,
     }
     path_len++;
 
+    /* Check for overflow before assigning to int */
+    if (path_len > (size_t)INT_MAX) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
     route->node_indices = malloc(path_len * sizeof(uint32_t));
     if (!route->node_indices) {
         return VL_ERROR_OUT_OF_MEMORY;
     }
-    route->num_nodes = path_len;
+    route->num_nodes = (int)path_len;
 
     if (include_geometry) {
         route->coords = malloc(path_len * sizeof(VLCoord));
@@ -259,7 +265,7 @@ static VLStatus reconstruct_path(const VLGraph *graph, const uint32_t *parent,
             route->node_indices = NULL;
             return VL_ERROR_OUT_OF_MEMORY;
         }
-        route->num_coords = path_len;
+        route->num_coords = (int)path_len;
     }
 
     node = target;
@@ -283,7 +289,7 @@ static VLStatus reconstruct_bidir_path(const VLGraph *graph,
                                        uint32_t meeting_node,
                                        VLRoute *route, int include_geometry)
 {
-    int fwd_len = 0;
+    size_t fwd_len = 0;
     uint32_t node = meeting_node;
     while (node != source && node != VL_INVALID_NODE) {
         fwd_len++;
@@ -294,7 +300,7 @@ static VLStatus reconstruct_bidir_path(const VLGraph *graph,
     }
     fwd_len++;
 
-    int bwd_len = 0;
+    size_t bwd_len = 0;
     node = meeting_node;
     if (parent_bwd[node] != VL_INVALID_NODE) {
         node = parent_bwd[node];
@@ -308,13 +314,18 @@ static VLStatus reconstruct_bidir_path(const VLGraph *graph,
         bwd_len++;
     }
 
-    int path_len = fwd_len + bwd_len;
+    size_t path_len = fwd_len + bwd_len;
+
+    /* Check for overflow before assigning to int */
+    if (path_len > (size_t)INT_MAX) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
 
     route->node_indices = malloc(path_len * sizeof(uint32_t));
     if (!route->node_indices) {
         return VL_ERROR_OUT_OF_MEMORY;
     }
-    route->num_nodes = path_len;
+    route->num_nodes = (int)path_len;
 
     if (include_geometry) {
         route->coords = malloc(path_len * sizeof(VLCoord));
@@ -323,23 +334,24 @@ static VLStatus reconstruct_bidir_path(const VLGraph *graph,
             route->node_indices = NULL;
             return VL_ERROR_OUT_OF_MEMORY;
         }
-        route->num_coords = path_len;
+        route->num_coords = (int)path_len;
     }
 
     node = meeting_node;
-    for (int i = fwd_len - 1; i >= 0; i--) {
-        route->node_indices[i] = node;
+    for (size_t i = fwd_len; i > 0; i--) {
+        size_t idx = i - 1;
+        route->node_indices[idx] = node;
         if (include_geometry) {
-            route->coords[i] = VL_FIXED_TO_COORD(graph->nodes[node].coord);
+            route->coords[idx] = VL_FIXED_TO_COORD(graph->nodes[node].coord);
         }
-        if (i > 0) {
+        if (idx > 0) {
             node = parent_fwd[node];
         }
     }
 
     if (bwd_len > 0) {
         node = parent_bwd[meeting_node];
-        for (int i = 0; i < bwd_len; i++) {
+        for (size_t i = 0; i < bwd_len; i++) {
             route->node_indices[fwd_len + i] = node;
             if (include_geometry) {
                 route->coords[fwd_len + i] = VL_FIXED_TO_COORD(graph->nodes[node].coord);
