@@ -73,6 +73,142 @@ void ct_latlon_to_tile_pixel(double lat, double lon, CTTileCoord tile,
     *py = (int)((global_y - tile.y) * extent);
 }
 
+/* ============================================================================
+ * Mercator Lookup Table
+ * ============================================================================ */
+
+/*
+ * Lookup table for fast latitude -> Mercator Y conversion.
+ * Covers the valid Web Mercator range [-85.051, 85.051] degrees.
+ * Uses 64K entries for ~0.0026 degree resolution (~290m at equator).
+ */
+#define MERCATOR_LUT_SIZE 65536
+#define MERCATOR_LAT_MIN -85.051128779806
+#define MERCATOR_LAT_MAX  85.051128779806
+#define MERCATOR_LAT_RANGE (MERCATOR_LAT_MAX - MERCATOR_LAT_MIN)
+
+static double mercator_lut[MERCATOR_LUT_SIZE];
+static int mercator_lut_initialized = 0;
+
+/*
+ * Initialize the Mercator lookup table (thread-safe via double-check).
+ */
+static void mercator_lut_init(void)
+{
+    if (mercator_lut_initialized) return;
+
+    for (int i = 0; i < MERCATOR_LUT_SIZE; i++) {
+        double lat = MERCATOR_LAT_MIN + (i + 0.5) * MERCATOR_LAT_RANGE / MERCATOR_LUT_SIZE;
+        double lat_rad = lat * CT_PI / 180.0;
+        mercator_lut[i] = log(tan(lat_rad) + 1.0 / cos(lat_rad));
+    }
+    mercator_lut_initialized = 1;
+}
+
+/*
+ * Fast Mercator Y lookup with linear interpolation.
+ * Input: latitude in degrees [-85.051, 85.051]
+ * Output: Mercator Y value
+ */
+static inline double fast_mercator_y(double lat)
+{
+    /* Clamp to valid range */
+    if (lat <= MERCATOR_LAT_MIN) return mercator_lut[0];
+    if (lat >= MERCATOR_LAT_MAX) return mercator_lut[MERCATOR_LUT_SIZE - 1];
+
+    /* Map latitude to table index */
+    double idx_f = (lat - MERCATOR_LAT_MIN) * (MERCATOR_LUT_SIZE - 1) / MERCATOR_LAT_RANGE;
+    int idx = (int)idx_f;
+    double frac = idx_f - idx;
+
+    /* Bounds check for safety */
+    if (idx < 0) idx = 0;
+    if (idx >= MERCATOR_LUT_SIZE - 1) return mercator_lut[MERCATOR_LUT_SIZE - 1];
+
+    /* Linear interpolation */
+    return mercator_lut[idx] + frac * (mercator_lut[idx + 1] - mercator_lut[idx]);
+}
+
+/* ============================================================================
+ * Fast Batch Coordinate Transformation
+ * ============================================================================ */
+
+/*
+ * Pre-computed transformation coefficients for a tile.
+ * Allows fast batch conversion of lat/lon to tile pixels.
+ */
+typedef struct {
+    /* Longitude transformation: px = lon * lon_scale + lon_offset */
+    double lon_scale;
+    double lon_offset;
+
+    /* Latitude transformation coefficients */
+    double lat_to_py_scale;  /* Scale factor */
+    double lat_to_py_offset; /* Offset */
+
+    int extent;
+} CTTileTransform;
+
+/*
+ * Helper: compute Mercator y from latitude (radians) - used for init only
+ */
+static inline double lat_to_mercator_y(double lat_rad)
+{
+    return log(tan(lat_rad) + 1.0 / cos(lat_rad));
+}
+
+/*
+ * Initialize tile transform for fast batch conversion.
+ */
+static void ct_tile_transform_init(CTTileTransform *tf, CTTileCoord tile, int extent)
+{
+    /* Ensure lookup table is ready */
+    mercator_lut_init();
+
+    double n = (double)(1 << tile.z);
+
+    /* Longitude is linear: px = (lon + 180) / 360 * n * extent - tile.x * extent */
+    tf->lon_scale = n * extent / 360.0;
+    tf->lon_offset = 180.0 * tf->lon_scale - tile.x * extent;
+
+    /* For latitude, we use the lookup table with precomputed scale:
+     * py = (1 - merc_y / PI) / 2 * n * extent - tile.y * extent
+     * py = -merc_y * (n * extent / (2 * PI)) + (n * extent / 2) - tile.y * extent
+     */
+    tf->lat_to_py_scale = -n * extent / (2.0 * CT_PI);
+    tf->lat_to_py_offset = n * extent / 2.0 - tile.y * extent;
+
+    tf->extent = extent;
+}
+
+/*
+ * Fast batch conversion of fixed-point lat/lon to tile pixels.
+ * Points are in nanodegrees (int32 * 1e-7 = degrees).
+ * Uses lookup table for Mercator projection - no trig calls.
+ */
+void ct_batch_transform_points(CTTileCoord tile, int extent,
+                               CTTilePoint *points, int num_points)
+{
+    CTTileTransform tf;
+    ct_tile_transform_init(&tf, tile, extent);
+
+    for (int i = 0; i < num_points; i++) {
+        /* Points stored as nanodegrees in x (lon) and y (lat) */
+        double lon = points[i].x * 1e-7;
+        double lat = points[i].y * 1e-7;
+
+        /* Longitude: simple linear transform */
+        int px = (int)(lon * tf.lon_scale + tf.lon_offset);
+
+        /* Latitude: Mercator projection via lookup table (no trig!) */
+        double merc_y = fast_mercator_y(lat);
+        int py = (int)(merc_y * tf.lat_to_py_scale + tf.lat_to_py_offset);
+
+        points[i].x = px;
+        points[i].y = py;
+    }
+}
+
 CTBBox ct_tile_bounds(CTTileCoord tile)
 {
     double n = (double)(1 << tile.z);

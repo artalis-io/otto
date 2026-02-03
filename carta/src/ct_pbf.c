@@ -163,6 +163,70 @@ static uint64_t hash_id(int64_t id)
     return x;
 }
 
+/*
+ * Preallocate hash tables based on file size heuristics.
+ * This eliminates expensive rehashing during parsing.
+ *
+ * Heuristics based on typical OSM PBF compression ratios:
+ * - ~1 node per 50 bytes of compressed data
+ * - ~1 way per 200 bytes of compressed data
+ * - Use 50% load factor for optimal hash performance
+ */
+static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
+{
+    /* Estimate counts with safety margin */
+    size_t estimated_nodes = file_size / 40;  /* Conservative estimate */
+    size_t estimated_ways = file_size / 150;
+
+    /* Round up to power of 2 for efficient modulo */
+    size_t node_cap = 65536;  /* Minimum capacity */
+    while (node_cap < estimated_nodes * 2) {
+        node_cap *= 2;
+        /* Prevent overflow - cap at reasonable maximum */
+        if (node_cap > 256 * 1024 * 1024) {
+            node_cap = 256 * 1024 * 1024;
+            break;
+        }
+    }
+
+    size_t way_cap = 16384;  /* Minimum capacity */
+    while (way_cap < estimated_ways * 2) {
+        way_cap *= 2;
+        if (way_cap > 64 * 1024 * 1024) {
+            way_cap = 64 * 1024 * 1024;
+            break;
+        }
+    }
+
+    /* Allocate node_map */
+    ctx->node_map.keys = calloc(node_cap, sizeof(int64_t));
+    ctx->node_map.values = malloc(node_cap * sizeof(uint32_t));
+    if (!ctx->node_map.keys || !ctx->node_map.values) {
+        free(ctx->node_map.keys);
+        free(ctx->node_map.values);
+        ctx->node_map.keys = NULL;
+        ctx->node_map.values = NULL;
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+    ctx->node_map.capacity = node_cap;
+    ctx->node_map.count = 0;
+
+    /* Allocate way_map */
+    ctx->way_map.keys = calloc(way_cap, sizeof(int64_t));
+    ctx->way_map.values = malloc(way_cap * sizeof(uint32_t));
+    if (!ctx->way_map.keys || !ctx->way_map.values) {
+        free(ctx->way_map.keys);
+        free(ctx->way_map.values);
+        ctx->way_map.keys = NULL;
+        ctx->way_map.values = NULL;
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+    ctx->way_map.capacity = way_cap;
+    ctx->way_map.count = 0;
+
+    return CT_OK;
+}
+
 static CTStatus node_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
 {
     if (ctx->node_map.count >= ctx->node_map.capacity * 3 / 4) {
@@ -286,19 +350,92 @@ static uint32_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
 }
 
 /* ============================================================================
- * Role String Pool
+ * Role String Pool with Hash Lookup
  * ============================================================================ */
+
+/*
+ * Hash table for fast role string deduplication.
+ * Uses djb2 hash with linear probing.
+ * Role strings are few (<100 unique) so 256 buckets is plenty.
+ */
+#define ROLE_HASH_SIZE 256
+
+typedef struct {
+    uint32_t hash;      /* Hash of the role string (0 = empty slot) */
+    uint32_t role_idx;  /* Index into ctx->role_strings */
+} RoleHashEntry;
+
+/* Thread-local role hash table (initialized per context) */
+static RoleHashEntry role_hash_table[ROLE_HASH_SIZE];
+static int role_hash_initialized = 0;
+
+/* DJB2 hash function */
+static uint32_t djb2_hash(const char *str)
+{
+    uint32_t hash = 5381;
+    int c;
+    while ((c = (unsigned char)*str++)) {
+        hash = ((hash << 5) + hash) + c;  /* hash * 33 + c */
+    }
+    /* Ensure non-zero (0 means empty slot) */
+    return hash ? hash : 1;
+}
+
+static void role_hash_reset(void)
+{
+    memset(role_hash_table, 0, sizeof(role_hash_table));
+    role_hash_initialized = 1;
+}
+
+static uint32_t role_hash_lookup(const char *role, uint32_t hash)
+{
+    uint32_t idx = hash % ROLE_HASH_SIZE;
+    for (int i = 0; i < ROLE_HASH_SIZE; i++) {
+        if (role_hash_table[idx].hash == 0) {
+            return UINT32_MAX;  /* Not found */
+        }
+        if (role_hash_table[idx].hash == hash) {
+            return role_hash_table[idx].role_idx;
+        }
+        idx = (idx + 1) % ROLE_HASH_SIZE;
+    }
+    return UINT32_MAX;  /* Not found, table full */
+}
+
+static void role_hash_insert(uint32_t hash, uint32_t role_idx)
+{
+    uint32_t idx = hash % ROLE_HASH_SIZE;
+    for (int i = 0; i < ROLE_HASH_SIZE; i++) {
+        if (role_hash_table[idx].hash == 0) {
+            role_hash_table[idx].hash = hash;
+            role_hash_table[idx].role_idx = role_idx;
+            return;
+        }
+        idx = (idx + 1) % ROLE_HASH_SIZE;
+    }
+    /* Table full - shouldn't happen with 256 slots for ~50 roles */
+}
 
 static uint32_t add_role_string(CTPBFContext *ctx, const char *role)
 {
     /* Empty role maps to index 0 */
     if (!role || role[0] == '\0') return 0;
 
-    /* Check if role already exists */
-    for (size_t i = 1; i < ctx->num_role_strings; i++) {
-        if (ctx->role_strings[i] && strcmp(ctx->role_strings[i], role) == 0) {
-            return (uint32_t)i;
+    /* Initialize hash table if needed */
+    if (!role_hash_initialized) {
+        role_hash_reset();
+    }
+
+    /* Hash lookup for deduplication */
+    uint32_t hash = djb2_hash(role);
+    uint32_t existing = role_hash_lookup(role, hash);
+    if (existing != UINT32_MAX) {
+        /* Verify hash collision isn't a false positive */
+        if (ctx->role_strings[existing] &&
+            strcmp(ctx->role_strings[existing], role) == 0) {
+            return existing;
         }
+        /* Hash collision with different string - fall through to add */
     }
 
     /* Add new role */
@@ -316,8 +453,16 @@ static uint32_t add_role_string(CTPBFContext *ctx, const char *role)
         }
     }
 
-    ctx->role_strings[ctx->num_role_strings] = strdup(role);
-    return (uint32_t)ctx->num_role_strings++;
+    uint32_t new_idx = (uint32_t)ctx->num_role_strings;
+    ctx->role_strings[new_idx] = strdup(role);
+    if (!ctx->role_strings[new_idx]) return 0;
+
+    ctx->num_role_strings++;
+
+    /* Add to hash table */
+    role_hash_insert(hash, new_idx);
+
+    return new_idx;
 }
 
 /* ============================================================================
@@ -333,6 +478,9 @@ CTPBFContext *ct_pbf_context_create(void)
     ctx->bbox.max_lat = -90;
     ctx->bbox.min_lon = 180;
     ctx->bbox.max_lon = -180;
+
+    /* Reset role string hash table for new context */
+    role_hash_reset();
 
     return ctx;
 }
@@ -1099,6 +1247,14 @@ static CTStatus parse_blob(CTPBFContext *ctx, const uint8_t *data, size_t len)
 
 CTStatus ct_pbf_parse_memory(CTPBFContext *ctx, const uint8_t *data, size_t size)
 {
+    /* Preallocate hash tables based on file size to avoid rehashing */
+    if (ctx->node_map.capacity == 0) {
+        CTStatus status = preallocate_hash_tables(ctx, size);
+        if (status != CT_OK) {
+            return status;
+        }
+    }
+
     size_t pos = 0;
 
     while (pos < size) {

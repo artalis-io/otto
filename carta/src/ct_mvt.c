@@ -338,10 +338,21 @@ size_t ct_encode_mvt(const CTTile *tile, const CTMVTOptions *opts,
     CTMVTEncoder enc;
     ct_mvt_encoder_init(&enc, buffer, capacity);
 
-    /* Group features by layer */
+    if (tile->num_features == 0) {
+        return enc.offset;
+    }
+
+    /*
+     * Single allocation for all layer features instead of per-layer mallocs.
+     * This reduces malloc overhead from O(CT_LAYER_COUNT) to O(1).
+     */
+    CTFeature *all_features = malloc(tile->num_features * sizeof(CTFeature));
+    if (!all_features) return 0;
+
+    /* Pointers into the single allocation for each layer */
     CTFeature *layer_features[CT_LAYER_COUNT];
     size_t layer_counts[CT_LAYER_COUNT];
-    memset(layer_features, 0, sizeof(layer_features));
+    size_t layer_offsets[CT_LAYER_COUNT];
     memset(layer_counts, 0, sizeof(layer_counts));
 
     /* Count features per layer */
@@ -352,19 +363,16 @@ size_t ct_encode_mvt(const CTTile *tile, const CTMVTOptions *opts,
         }
     }
 
-    /* Allocate per-layer arrays */
+    /* Compute offsets into the single allocation */
+    size_t offset = 0;
     for (int l = 0; l < CT_LAYER_COUNT; l++) {
-        if (layer_counts[l] > 0) {
-            layer_features[l] = malloc(layer_counts[l] * sizeof(CTFeature));
-            if (!layer_features[l]) {
-                for (int j = 0; j < l; j++) free(layer_features[j]);
-                return 0;
-            }
-            layer_counts[l] = 0;  /* Reset for filling */
-        }
+        layer_offsets[l] = offset;
+        layer_features[l] = (layer_counts[l] > 0) ? &all_features[offset] : NULL;
+        offset += layer_counts[l];
+        layer_counts[l] = 0;  /* Reset for filling */
     }
 
-    /* Copy features to layer arrays */
+    /* Copy features to layer regions */
     for (size_t i = 0; i < tile->num_features; i++) {
         CTLayer layer = tile->features[i].layer;
         if (layer < CT_LAYER_COUNT && layer_features[layer]) {
@@ -380,10 +388,8 @@ size_t ct_encode_mvt(const CTTile *tile, const CTMVTOptions *opts,
         }
     }
 
-    /* Free layer arrays */
-    for (int l = 0; l < CT_LAYER_COUNT; l++) {
-        free(layer_features[l]);
-    }
+    /* Single free instead of per-layer frees */
+    free(all_features);
 
     if (enc.error) return 0;
     return enc.offset;
@@ -431,17 +437,8 @@ size_t ct_generate_mvt(const CTPBFContext *ctx, CTTileCoord coord,
     for (size_t i = 0; i < raw_count; i++) {
         CTFeature *f = &raw_features[i];
 
-        /* Convert fixed-point coords (lon*1e7, lat*1e7) to tile coords */
-        for (int j = 0; j < f->num_points; j++) {
-            double lon = f->points[j].x * 1e-7;
-            double lat = f->points[j].y * 1e-7;
-
-            int px, py;
-            ct_latlon_to_tile_pixel(lat, lon, coord, opts->extent, &px, &py);
-
-            f->points[j].x = px;
-            f->points[j].y = py;
-        }
+        /* Fast batch coordinate transformation */
+        ct_batch_transform_points(coord, opts->extent, f->points, f->num_points);
 
         /* Note: Clipping and simplification temporarily disabled for debugging.
          * TODO: Fix ct_clip_polygon edge winding order

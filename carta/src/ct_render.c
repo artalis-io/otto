@@ -11,6 +11,15 @@
 #include <string.h>
 #include <math.h>
 
+/* SIMD support detection */
+#if defined(__AVX2__)
+    #include <immintrin.h>
+    #define CT_HAVE_AVX2 1
+#elif defined(__SSE2__)
+    #include <emmintrin.h>
+    #define CT_HAVE_SSE2 1
+#endif
+
 /* Minimum feature size in pixels for render-time filtering */
 #define MIN_FEATURE_PIXELS 2.0f
 
@@ -65,12 +74,28 @@ void ct_render_clear(CTRenderContext *ctx)
         return;
     }
 
-    /* Otherwise use 32-bit writes instead of 4 separate byte writes */
+    /* Use SIMD for non-uniform colors */
     uint32_t rgba = ((uint32_t)a << 24) | ((uint32_t)b << 16) |
                     ((uint32_t)g << 8) | (uint32_t)r;
     uint32_t *pixels32 = (uint32_t *)ctx->pixels;
+    int i = 0;
 
-    for (int i = 0; i < num_pixels; i++) {
+#if defined(CT_HAVE_AVX2)
+    /* AVX2: clear 8 pixels at a time */
+    __m256i rgba_vec = _mm256_set1_epi32((int)rgba);
+    for (; i + 7 < num_pixels; i += 8) {
+        _mm256_storeu_si256((__m256i *)&pixels32[i], rgba_vec);
+    }
+#elif defined(CT_HAVE_SSE2)
+    /* SSE2: clear 4 pixels at a time */
+    __m128i rgba_vec = _mm_set1_epi32((int)rgba);
+    for (; i + 3 < num_pixels; i += 4) {
+        _mm_storeu_si128((__m128i *)&pixels32[i], rgba_vec);
+    }
+#endif
+
+    /* Scalar remainder */
+    for (; i < num_pixels; i++) {
         pixels32[i] = rgba;
     }
 }
@@ -150,7 +175,7 @@ void ct_render_blend_pixel(CTRenderContext *ctx, int x, int y, CTColor color)
 
 /*
  * Fast horizontal span fill - does bounds checking once, not per pixel.
- * Used by scanline polygon fill for significant speedup.
+ * Uses SIMD when available for maximum throughput.
  */
 static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTColor color)
 {
@@ -169,12 +194,33 @@ static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTCol
 
     uint8_t *row = ctx->pixels + y * ctx->width * 4;
 
-    /* Fast path: opaque color - direct 32-bit writes */
+    /* Fast path: opaque color - use SIMD when available */
     if (sa == 255) {
         uint32_t rgba = ((uint32_t)255 << 24) | ((uint32_t)sb << 16) |
                         ((uint32_t)sg << 8) | (uint32_t)sr;
         uint32_t *row32 = (uint32_t *)row;
-        for (int x = x_start; x <= x_end; x++) {
+        int x = x_start;
+        int count = x_end - x_start + 1;
+
+#if defined(CT_HAVE_AVX2)
+        /* AVX2: write 8 pixels (32 bytes) at a time */
+        if (count >= 8) {
+            __m256i rgba_vec = _mm256_set1_epi32((int)rgba);
+            for (; x + 7 <= x_end; x += 8) {
+                _mm256_storeu_si256((__m256i *)&row32[x], rgba_vec);
+            }
+        }
+#elif defined(CT_HAVE_SSE2)
+        /* SSE2: write 4 pixels (16 bytes) at a time */
+        if (count >= 4) {
+            __m128i rgba_vec = _mm_set1_epi32((int)rgba);
+            for (; x + 3 <= x_end; x += 4) {
+                _mm_storeu_si128((__m128i *)&row32[x], rgba_vec);
+            }
+        }
+#endif
+        /* Scalar remainder */
+        for (; x <= x_end; x++) {
             row32[x] = rgba;
         }
         return;
@@ -183,7 +229,18 @@ static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTCol
     /* Transparent - nothing to do */
     if (sa == 0) return;
 
-    /* Alpha blending - must process each pixel */
+    /*
+     * Alpha blending using fast integer approximation.
+     * Formula: out = (src * sa + dst * inv_sa + 128) >> 8
+     * This approximates division by 255 with good accuracy.
+     */
+    uint16_t inv_sa = 255 - sa;
+
+    /* Pre-multiply source by alpha */
+    uint16_t sr_sa = sr * sa;
+    uint16_t sg_sa = sg * sa;
+    uint16_t sb_sa = sb * sa;
+
     for (int x = x_start; x <= x_end; x++) {
         int offset = x * 4;
         uint8_t dr = row[offset + 0];
@@ -191,13 +248,14 @@ static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTCol
         uint8_t db = row[offset + 2];
         uint8_t da = row[offset + 3];
 
-        uint16_t out_a = sa + (da * (255 - sa)) / 255;
-        if (out_a == 0) continue;
+        /* Fast approximate blend: (src*sa + dst*inv_sa + 128) >> 8 */
+        row[offset + 0] = (uint8_t)((sr_sa + dr * inv_sa + 128) >> 8);
+        row[offset + 1] = (uint8_t)((sg_sa + dg * inv_sa + 128) >> 8);
+        row[offset + 2] = (uint8_t)((sb_sa + db * inv_sa + 128) >> 8);
 
-        row[offset + 0] = (sr * sa + dr * da * (255 - sa) / 255) / out_a;
-        row[offset + 1] = (sg * sa + dg * da * (255 - sa) / 255) / out_a;
-        row[offset + 2] = (sb * sa + db * da * (255 - sa) / 255) / out_a;
-        row[offset + 3] = out_a;
+        /* Output alpha: sa + da * (1 - sa) */
+        uint16_t out_a = sa + ((da * inv_sa + 128) >> 8);
+        row[offset + 3] = (uint8_t)(out_a > 255 ? 255 : out_a);
     }
 }
 
@@ -428,15 +486,25 @@ void ct_render_polygon(CTRenderContext *ctx,
             }
         }
 
-        /* Sort active edges by x using insertion sort (O(n) for nearly-sorted) */
+        /* Sort active edges by x using insertion sort (O(n) for nearly-sorted).
+         * Early exit if already sorted - common when edges don't cross. */
+        int needs_sort = 0;
         for (int i = 1; i < num_active; i++) {
-            CTEdge key = active[i];
-            int j = i - 1;
-            while (j >= 0 && active[j].x > key.x) {
-                active[j + 1] = active[j];
-                j--;
+            if (active[i].x < active[i - 1].x) {
+                needs_sort = 1;
+                break;
             }
-            active[j + 1] = key;
+        }
+        if (needs_sort) {
+            for (int i = 1; i < num_active; i++) {
+                CTEdge key = active[i];
+                int j = i - 1;
+                while (j >= 0 && active[j].x > key.x) {
+                    active[j + 1] = active[j];
+                    j--;
+                }
+                active[j + 1] = key;
+            }
         }
 
         /* Fill between pairs of edges using fast span fill */
@@ -548,15 +616,25 @@ void ct_render_multipolygon(CTRenderContext *ctx,
             }
         }
 
-        /* Sort active edges by x using insertion sort (O(n) for nearly-sorted) */
+        /* Sort active edges by x using insertion sort (O(n) for nearly-sorted).
+         * Early exit if already sorted - common when edges don't cross. */
+        int needs_sort = 0;
         for (int i = 1; i < num_active; i++) {
-            CTEdge key = active[i];
-            int j = i - 1;
-            while (j >= 0 && active[j].x > key.x) {
-                active[j + 1] = active[j];
-                j--;
+            if (active[i].x < active[i - 1].x) {
+                needs_sort = 1;
+                break;
             }
-            active[j + 1] = key;
+        }
+        if (needs_sort) {
+            for (int i = 1; i < num_active; i++) {
+                CTEdge key = active[i];
+                int j = i - 1;
+                while (j >= 0 && active[j].x > key.x) {
+                    active[j + 1] = active[j];
+                    j--;
+                }
+                active[j + 1] = key;
+            }
         }
 
         /* Fill between pairs of edges (even-odd rule) using fast span fill */
@@ -834,17 +912,8 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
     for (size_t i = 0; i < count; i++) {
         CTFeature *f = &features[i];
 
-        /* Convert from fixed-point lat/lon to tile pixel coords */
-        for (int j = 0; j < f->num_points; j++) {
-            double lon = f->points[j].x * 1e-7;
-            double lat = f->points[j].y * 1e-7;
-
-            int px, py;
-            ct_latlon_to_tile_pixel(lat, lon, coord, CT_MVT_EXTENT, &px, &py);
-
-            f->points[j].x = px;
-            f->points[j].y = py;
-        }
+        /* Fast batch coordinate transformation */
+        ct_batch_transform_points(coord, CT_MVT_EXTENT, f->points, f->num_points);
 
         ct_tile_add_feature(&tile, f);
     }
@@ -880,17 +949,8 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
     for (size_t i = 0; i < count; i++) {
         CTFeature *f = &features[i];
 
-        /* Convert from fixed-point lat/lon to tile pixel coords */
-        for (int j = 0; j < f->num_points; j++) {
-            double lon = f->points[j].x * 1e-7;
-            double lat = f->points[j].y * 1e-7;
-
-            int px, py;
-            ct_latlon_to_tile_pixel(lat, lon, coord, CT_MVT_EXTENT, &px, &py);
-
-            f->points[j].x = px;
-            f->points[j].y = py;
-        }
+        /* Fast batch coordinate transformation */
+        ct_batch_transform_points(coord, CT_MVT_EXTENT, f->points, f->num_points);
 
         /* Apply geometry simplification */
         if (f->num_points > 4) {
