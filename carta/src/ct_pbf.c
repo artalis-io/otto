@@ -65,6 +65,34 @@ static int classify_highway(const char *value)
     return CT_ROAD_OTHER;
 }
 
+static int classify_waterway(const char *value)
+{
+    /* Major rivers - Danube, Rhine, etc. */
+    if (strcmp(value, "river") == 0 ||
+        strcmp(value, "riverbank") == 0) {
+        return CT_WATERWAY_RIVER;
+    }
+    /* Navigable canals */
+    if (strcmp(value, "canal") == 0) {
+        return CT_WATERWAY_CANAL;
+    }
+    /* Small streams */
+    if (strcmp(value, "stream") == 0 ||
+        strcmp(value, "brook") == 0 ||
+        strcmp(value, "creek") == 0) {
+        return CT_WATERWAY_STREAM;
+    }
+    /* Drainage */
+    if (strcmp(value, "drain") == 0) {
+        return CT_WATERWAY_DRAIN;
+    }
+    /* Ditches */
+    if (strcmp(value, "ditch") == 0) {
+        return CT_WATERWAY_DITCH;
+    }
+    return CT_WATERWAY_OTHER;
+}
+
 static CTOSMFeatureClass classify_tags(const SHStringTable *st,
                                        const uint32_t *keys, const uint32_t *vals,
                                        int num_tags, int *feature_type, int *is_area)
@@ -72,6 +100,17 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
     *feature_type = 0;
     *is_area = 0;
 
+    /* First pass: check for area=yes which affects other tags */
+    for (int i = 0; i < num_tags; i++) {
+        const char *key = sh_string_table_get(st, keys[i]);
+        const char *val = sh_string_table_get(st, vals[i]);
+        if (strcmp(key, "area") == 0 && strcmp(val, "yes") == 0) {
+            *is_area = 1;
+            break;
+        }
+    }
+
+    /* Second pass: classify feature */
     for (int i = 0; i < num_tags; i++) {
         const char *key = sh_string_table_get(st, keys[i]);
         const char *val = sh_string_table_get(st, vals[i]);
@@ -81,6 +120,11 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
             return CT_OSM_HIGHWAY;
         }
         if (strcmp(key, "waterway") == 0) {
+            *feature_type = classify_waterway(val);
+            /* riverbank is always an area (polygon) */
+            if (strcmp(val, "riverbank") == 0) {
+                *is_area = 1;
+            }
             return CT_OSM_WATERWAY;
         }
         if (strcmp(key, "natural") == 0) {
@@ -100,9 +144,6 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
         }
         if (strcmp(key, "railway") == 0) {
             return CT_OSM_RAILWAY;
-        }
-        if (strcmp(key, "area") == 0 && strcmp(val, "yes") == 0) {
-            *is_area = 1;
         }
     }
 
