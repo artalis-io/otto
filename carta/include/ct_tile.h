@@ -45,6 +45,19 @@ void ct_latlon_to_tile_pixel(double lat, double lon, CTTileCoord tile,
                              int extent, int *px, int *py);
 
 /*
+ * Fast batch conversion of fixed-point lat/lon to tile pixels.
+ * Converts points in-place from nanodegrees to tile pixel coordinates.
+ * Much faster than calling ct_latlon_to_tile_pixel() in a loop.
+ *
+ * @param tile       Tile coordinates
+ * @param extent     Pixel extent
+ * @param points     Array of points (x=lon*1e7, y=lat*1e7 on input, pixels on output)
+ * @param num_points Number of points to transform
+ */
+void ct_batch_transform_points(CTTileCoord tile, int extent,
+                               CTTilePoint *points, int num_points);
+
+/*
  * Get geographic bounds of a tile.
  *
  * @param tile Tile coordinates

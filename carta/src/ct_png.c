@@ -12,6 +12,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* SIMD support detection */
+#if defined(__SSE2__) && !defined(__EMSCRIPTEN__)
+    #include <emmintrin.h>
+    #define CT_PNG_HAVE_SSE2 1
+#endif
+
 /* PNG chunk types */
 #define PNG_CHUNK_IHDR 0x49484452  /* IHDR */
 #define PNG_CHUNK_IDAT 0x49444154  /* IDAT */
@@ -60,7 +66,9 @@ static uint32_t crc32(const uint8_t *data, size_t len)
 void ct_png_default_options(CTPNGOptions *opts)
 {
     opts->tile_size = 256;
-    opts->compression_level = 6;
+    /* Use lower compression for faster encoding (level 2 is ~3x faster than 6,
+     * with ~15-20% larger output - good tradeoff for tile serving) */
+    opts->compression_level = 2;
 }
 
 /* ============================================================================
@@ -158,26 +166,68 @@ size_t ct_encode_png_ex(const uint8_t *pixels, int width, int height,
         filtered[row_offset] = (uint8_t)filter_type;
 
         const uint8_t *src_row = pixels + y * row_bytes;
+        uint8_t *dst_row = filtered + row_offset + 1;
 
         if (filter_type == 0) {
             /* None filter */
-            memcpy(filtered + row_offset + 1, src_row, row_bytes);
+            memcpy(dst_row, src_row, row_bytes);
         } else if (filter_type == 1) {
-            /* Sub filter */
-            for (size_t x = 0; x < row_bytes; x++) {
-                uint8_t left = (x >= 4) ? src_row[x - 4] : 0;
-                filtered[row_offset + 1 + x] = src_row[x] - left;
+            /* Sub filter: out[x] = in[x] - in[x-4] */
+            /* First 4 bytes have no left neighbor */
+            for (size_t x = 0; x < 4 && x < row_bytes; x++) {
+                dst_row[x] = src_row[x];
             }
+
+#if defined(CT_PNG_HAVE_SSE2)
+            /* SSE2: process 16 bytes at a time (4 pixels) */
+            size_t x = 4;
+            for (; x + 15 < row_bytes; x += 16) {
+                __m128i curr = _mm_loadu_si128((const __m128i *)(src_row + x));
+                __m128i left = _mm_loadu_si128((const __m128i *)(src_row + x - 4));
+                __m128i sub = _mm_sub_epi8(curr, left);
+                _mm_storeu_si128((__m128i *)(dst_row + x), sub);
+            }
+            /* Scalar remainder */
+            for (; x < row_bytes; x++) {
+                dst_row[x] = src_row[x] - src_row[x - 4];
+            }
+#else
+            /* Scalar fallback */
+            for (size_t x = 4; x < row_bytes; x++) {
+                dst_row[x] = src_row[x] - src_row[x - 4];
+            }
+#endif
         } else if (filter_type == 2) {
-            /* Up filter */
+            /* Up filter: out[x] = in[x] - prev[x] */
             const uint8_t *prev_row = (y > 0) ? (pixels + (y - 1) * row_bytes) : NULL;
-            for (size_t x = 0; x < row_bytes; x++) {
-                uint8_t up = prev_row ? prev_row[x] : 0;
-                filtered[row_offset + 1 + x] = src_row[x] - up;
+
+            if (!prev_row) {
+                /* First row: no previous, just copy */
+                memcpy(dst_row, src_row, row_bytes);
+            } else {
+#if defined(CT_PNG_HAVE_SSE2)
+                /* SSE2: process 16 bytes at a time */
+                size_t x = 0;
+                for (; x + 15 < row_bytes; x += 16) {
+                    __m128i curr = _mm_loadu_si128((const __m128i *)(src_row + x));
+                    __m128i up = _mm_loadu_si128((const __m128i *)(prev_row + x));
+                    __m128i sub = _mm_sub_epi8(curr, up);
+                    _mm_storeu_si128((__m128i *)(dst_row + x), sub);
+                }
+                /* Scalar remainder */
+                for (; x < row_bytes; x++) {
+                    dst_row[x] = src_row[x] - prev_row[x];
+                }
+#else
+                /* Scalar fallback */
+                for (size_t x = 0; x < row_bytes; x++) {
+                    dst_row[x] = src_row[x] - prev_row[x];
+                }
+#endif
             }
         } else {
             /* Default to None */
-            memcpy(filtered + row_offset + 1, src_row, row_bytes);
+            memcpy(dst_row, src_row, row_bytes);
         }
     }
 
@@ -212,6 +262,52 @@ size_t ct_encode_png_ex(const uint8_t *pixels, int width, int height,
     return offset;
 }
 
+/* ============================================================================
+ * Render Context Cache
+ * ============================================================================ */
+
+/*
+ * Simple render context cache for common tile sizes.
+ * Avoids malloc/free overhead for repeated tile generation.
+ * Note: Not thread-safe - use separate contexts per thread in MT code.
+ */
+#define CT_CACHE_SIZE_256 0
+#define CT_CACHE_SIZE_512 1
+#define CT_CACHE_COUNT 2
+
+static CTRenderContext *render_cache[CT_CACHE_COUNT] = {NULL, NULL};
+
+static CTRenderContext *acquire_render_context(int tile_size)
+{
+    int cache_idx = -1;
+    if (tile_size == 256) cache_idx = CT_CACHE_SIZE_256;
+    else if (tile_size == 512) cache_idx = CT_CACHE_SIZE_512;
+
+    if (cache_idx >= 0 && render_cache[cache_idx]) {
+        CTRenderContext *ctx = render_cache[cache_idx];
+        render_cache[cache_idx] = NULL;
+        return ctx;
+    }
+
+    return ct_render_create(tile_size, tile_size);
+}
+
+static void release_render_context(CTRenderContext *ctx, int tile_size)
+{
+    if (!ctx) return;
+
+    int cache_idx = -1;
+    if (tile_size == 256) cache_idx = CT_CACHE_SIZE_256;
+    else if (tile_size == 512) cache_idx = CT_CACHE_SIZE_512;
+
+    if (cache_idx >= 0 && !render_cache[cache_idx]) {
+        render_cache[cache_idx] = ctx;
+        return;
+    }
+
+    ct_render_free(ctx);
+}
+
 size_t ct_generate_png(const CTPBFContext *ctx, CTTileCoord coord,
                        const CTStyle *style, const CTPNGOptions *opts,
                        uint8_t *buffer, size_t capacity)
@@ -224,8 +320,8 @@ size_t ct_generate_png(const CTPBFContext *ctx, CTTileCoord coord,
 
     int tile_size = opts->tile_size;
 
-    /* Create render context */
-    CTRenderContext *render = ct_render_create(tile_size, tile_size);
+    /* Acquire render context from cache or create new */
+    CTRenderContext *render = acquire_render_context(tile_size);
     if (!render) return 0;
 
     if (style) {
@@ -240,7 +336,8 @@ size_t ct_generate_png(const CTPBFContext *ctx, CTTileCoord coord,
                                     tile_size, tile_size, opts,
                                     buffer, capacity);
 
-    ct_render_free(render);
+    /* Return context to cache */
+    release_render_context(render, tile_size);
     return png_size;
 }
 
@@ -257,8 +354,8 @@ size_t ct_generate_png_lod(const CTPBFContext *ctx, CTTileCoord coord,
 
     int tile_size = opts->tile_size;
 
-    /* Create render context */
-    CTRenderContext *render = ct_render_create(tile_size, tile_size);
+    /* Acquire render context from cache or create new */
+    CTRenderContext *render = acquire_render_context(tile_size);
     if (!render) return 0;
 
     if (style) {
@@ -273,6 +370,7 @@ size_t ct_generate_png_lod(const CTPBFContext *ctx, CTTileCoord coord,
                                     tile_size, tile_size, opts,
                                     buffer, capacity);
 
-    ct_render_free(render);
+    /* Return context to cache */
+    release_render_context(render, tile_size);
     return png_size;
 }
