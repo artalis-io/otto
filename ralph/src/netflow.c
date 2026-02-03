@@ -775,11 +775,16 @@ static void rebuild_candidate_list(
  * Find entering arc using candidate list pricing.
  * Returns arc index, or -1 if optimal.
  */
+/*
+ * Find entering arc from candidate list with epsilon-optimal pricing.
+ * Only returns arcs with |reduced_cost| > epsilon.
+ */
 static int find_entering_arc_candidate_list(
     RalphNetflowWorkspace *ws,
-    int *entering_dir
+    int *entering_dir,
+    double epsilon
 ) {
-    double best_violation = 0;
+    double best_violation = epsilon;  /* Only accept violations > epsilon */
     int best_arc = -1;
     int best_dir = 0;
 
@@ -796,14 +801,19 @@ static int find_entering_arc_candidate_list(
         double violation = 0;
         int dir = 0;
 
-        if (ws->state[a] == RALPH_NETFLOW_AT_LOWER && approx_negative(rc)) {
+        if (ws->state[a] == RALPH_NETFLOW_AT_LOWER && rc < -epsilon) {
             violation = -rc;
             dir = +1;
-        } else if (ws->state[a] == RALPH_NETFLOW_AT_UPPER && approx_positive(rc)) {
+        } else if (ws->state[a] == RALPH_NETFLOW_AT_UPPER && rc > epsilon) {
             violation = rc;
             dir = -1;
         } else {
-            ws->candidates[i] = ws->candidates[--ws->num_candidates];
+            /* Arc is epsilon-optimal, remove from candidates */
+            if (fabs(rc) <= epsilon) {
+                ws->candidates[i] = ws->candidates[--ws->num_candidates];
+                continue;
+            }
+            i++;
             continue;
         }
 
@@ -826,22 +836,27 @@ static int find_entering_arc_candidate_list(
 /*
  * Find entering arc using first eligible rule.
  */
+/*
+ * Find first eligible entering arc with epsilon-optimal pricing.
+ * Only returns arcs with |reduced_cost| > epsilon.
+ */
 static int find_entering_arc_first_eligible(
     RalphNetflowWorkspace *ws,
     int num_arcs_total,
-    int *entering_dir
+    int *entering_dir,
+    double epsilon
 ) {
     for (int a = ws->next_arc; a < num_arcs_total; a++) {
         if (ws->state[a] == RALPH_NETFLOW_BASIC) continue;
 
         double rc = reduced_cost(ws, a);
 
-        if (ws->state[a] == RALPH_NETFLOW_AT_LOWER && approx_negative(rc)) {
+        if (ws->state[a] == RALPH_NETFLOW_AT_LOWER && rc < -epsilon) {
             *entering_dir = +1;
             ws->next_arc = a + 1;
             return a;
         }
-        if (ws->state[a] == RALPH_NETFLOW_AT_UPPER && approx_positive(rc)) {
+        if (ws->state[a] == RALPH_NETFLOW_AT_UPPER && rc > epsilon) {
             *entering_dir = -1;
             ws->next_arc = a + 1;
             return a;
@@ -853,12 +868,12 @@ static int find_entering_arc_first_eligible(
 
         double rc = reduced_cost(ws, a);
 
-        if (ws->state[a] == RALPH_NETFLOW_AT_LOWER && approx_negative(rc)) {
+        if (ws->state[a] == RALPH_NETFLOW_AT_LOWER && rc < -epsilon) {
             *entering_dir = +1;
             ws->next_arc = a + 1;
             return a;
         }
-        if (ws->state[a] == RALPH_NETFLOW_AT_UPPER && approx_positive(rc)) {
+        if (ws->state[a] == RALPH_NETFLOW_AT_UPPER && rc > epsilon) {
             *entering_dir = -1;
             ws->next_arc = a + 1;
             return a;
@@ -1100,12 +1115,36 @@ static RalphNetflowStatus netflow_solve_internal(
         if (max_iter < RALPH_NETFLOW_MIN_ITERATIONS) max_iter = RALPH_NETFLOW_MIN_ITERATIONS;
     }
 
-    /* Main loop */
+    /* Epsilon scaling setup */
+    double epsilon = 0.0;  /* No scaling by default */
+    double epsilon_factor = options->epsilon_factor;
+    if (epsilon_factor <= 1.0) epsilon_factor = 4.0;  /* Default factor */
+
+    if (options->cost_scaling) {
+        /* Compute initial epsilon based on maximum cost */
+        double max_cost = 0.0;
+        for (int a = 0; a < num_arcs; a++) {
+            double c = fabs(ws->aug_cost[a]);
+            if (c > max_cost && c < RALPH_NETFLOW_BIG_M * 0.5) {
+                max_cost = c;
+            }
+        }
+        /* Start with epsilon = max_cost, will reduce by factor each phase */
+        epsilon = max_cost;
+        if (epsilon < RALPH_NETFLOW_TOLERANCE) {
+            epsilon = 0.0;  /* All costs are zero, no scaling needed */
+        }
+    }
+
+    /* Main loop with epsilon scaling */
     ws->total_pivots = 0;
     ws->degenerate_pivots = 0;
 
+    int epsilon_phases = 0;
+    const int max_epsilon_phases = 20;  /* Safety limit */
+
     while (ws->total_pivots < max_iter) {
-        /* Find entering arc */
+        /* Find entering arc with epsilon-optimal pricing */
         int entering_dir;
         int entering_arc;
 
@@ -1113,18 +1152,32 @@ static RalphNetflowStatus netflow_solve_internal(
             if (ws->num_candidates == 0 || ws->pivots_since_rebuild >= rebuild_freq) {
                 rebuild_candidate_list(ws, num_arcs_total, list_size);
             }
-            entering_arc = find_entering_arc_candidate_list(ws, &entering_dir);
+            entering_arc = find_entering_arc_candidate_list(ws, &entering_dir, epsilon);
 
             if (entering_arc < 0 && ws->pivots_since_rebuild > 0) {
                 rebuild_candidate_list(ws, num_arcs_total, list_size);
-                entering_arc = find_entering_arc_candidate_list(ws, &entering_dir);
+                entering_arc = find_entering_arc_candidate_list(ws, &entering_dir, epsilon);
             }
         } else {
-            entering_arc = find_entering_arc_first_eligible(ws, num_arcs_total, &entering_dir);
+            entering_arc = find_entering_arc_first_eligible(ws, num_arcs_total, &entering_dir, epsilon);
         }
 
         if (entering_arc < 0) {
-            /* Optimal */
+            /* Epsilon-optimal - check if we need to reduce epsilon */
+            if (epsilon > RALPH_NETFLOW_TOLERANCE && epsilon_phases < max_epsilon_phases) {
+                epsilon /= epsilon_factor;
+                if (epsilon < RALPH_NETFLOW_TOLERANCE) {
+                    epsilon = 0.0;
+                }
+                epsilon_phases++;
+                /* Rebuild candidate list for new epsilon */
+                if (use_candidate_list) {
+                    rebuild_candidate_list(ws, num_arcs_total, list_size);
+                }
+                ws->next_arc = 0;  /* Reset for first-eligible */
+                continue;
+            }
+            /* Truly optimal */
             break;
         }
 
@@ -1220,6 +1273,200 @@ static RalphNetflowStatus netflow_solve_internal(
     result->iterations = ws->total_pivots;
     result->degenerate_pivots = ws->degenerate_pivots;
     result->status = RALPH_NETFLOW_OPTIMAL;
+
+    return RALPH_NETFLOW_OPTIMAL;
+}
+
+/* ============================================================================
+ * Bottleneck Network Flow
+ *
+ * Minimizes the maximum arc cost used in the flow (minimax objective).
+ * Uses binary search over arc costs with feasibility checks.
+ * ============================================================================ */
+
+/* Compare doubles for qsort */
+static int compare_doubles(const void *a, const void *b) {
+    double da = *(const double *)a;
+    double db = *(const double *)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
+/*
+ * Check if a feasible flow exists using only arcs with cost <= threshold.
+ * Returns 1 if feasible, 0 otherwise. Also returns the flow if feasible.
+ */
+static int bottleneck_feasibility_check(
+    const RalphNetflowProblem *problem,
+    double threshold,
+    double *flow_out,
+    RalphNetflowWorkspace *ws
+) {
+    int num_nodes = problem->num_nodes;
+    int num_arcs = problem->num_arcs;
+
+    /* Create modified capacity array: zero capacity for arcs above threshold */
+    double *modified_cap = (double *)malloc(num_arcs * sizeof(double));
+    if (!modified_cap) return 0;
+
+    for (int a = 0; a < num_arcs; a++) {
+        if (problem->cost[a] <= threshold + RALPH_NETFLOW_TOLERANCE) {
+            /* Arc is allowed - use original capacity */
+            modified_cap[a] = problem->capacity ? problem->capacity[a] : RALPH_NETFLOW_INFINITY;
+        } else {
+            /* Arc cost exceeds threshold - disable it */
+            modified_cap[a] = 0.0;
+        }
+    }
+
+    /* Create modified problem */
+    RalphNetflowProblem mod_problem = {
+        .num_nodes = num_nodes,
+        .num_arcs = num_arcs,
+        .tail = problem->tail,
+        .head = problem->head,
+        .cost = problem->cost,  /* Costs don't matter for feasibility */
+        .capacity = modified_cap,
+        .lower = problem->lower,
+        .supply = problem->supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    /* Solve with default options */
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    RalphNetflowResult result = {.flow = flow_out};
+
+    RalphNetflowStatus status = netflow_solve_internal(&mod_problem, &opts, &result, ws);
+
+    free(modified_cap);
+
+    return (status == RALPH_NETFLOW_OPTIMAL);
+}
+
+/*
+ * Solve bottleneck network flow: minimize the maximum arc cost used.
+ *
+ * Algorithm:
+ * 1. Extract and sort unique arc costs
+ * 2. Binary search on threshold
+ * 3. For each threshold, check if feasible flow exists using only arcs with cost <= threshold
+ * 4. Return minimum threshold that allows feasible flow
+ */
+static RalphNetflowStatus solve_bottleneck_internal(
+    const RalphNetflowProblem *problem,
+    const RalphNetflowOptions *options,
+    RalphNetflowResult *result,
+    RalphNetflowWorkspace *ws
+) {
+    (void)options;  /* Unused for now */
+
+    int num_nodes = problem->num_nodes;
+    int num_arcs = problem->num_arcs;
+
+    if (num_arcs == 0) {
+        /* No arcs - check if any flow is needed */
+        int needs_flow = 0;
+        for (int i = 0; i < num_nodes; i++) {
+            if (fabs(problem->supply[i]) > RALPH_NETFLOW_TOLERANCE) {
+                needs_flow = 1;
+                break;
+            }
+        }
+
+        if (needs_flow) {
+            /* Supply/demand exists but no arcs to route it */
+            result->status = RALPH_NETFLOW_INFEASIBLE;
+            return RALPH_NETFLOW_INFEASIBLE;
+        }
+
+        /* No flow needed - trivially optimal */
+        result->objective = 0.0;
+        result->num_found = 1;
+        result->status = RALPH_NETFLOW_OPTIMAL;
+        result->iterations = 0;
+        result->degenerate_pivots = 0;
+        return RALPH_NETFLOW_OPTIMAL;
+    }
+
+    /* Extract arc costs and sort them */
+    double *costs = (double *)malloc(num_arcs * sizeof(double));
+    if (!costs) {
+        result->status = RALPH_NETFLOW_OUT_OF_MEMORY;
+        return RALPH_NETFLOW_OUT_OF_MEMORY;
+    }
+
+    for (int a = 0; a < num_arcs; a++) {
+        costs[a] = problem->cost[a];
+    }
+    qsort(costs, num_arcs, sizeof(double), compare_doubles);
+
+    /* Remove duplicates to get unique thresholds */
+    int num_unique = 1;
+    for (int i = 1; i < num_arcs; i++) {
+        if (costs[i] > costs[num_unique - 1] + RALPH_NETFLOW_TOLERANCE) {
+            costs[num_unique++] = costs[i];
+        }
+    }
+
+    /* Binary search for minimum threshold */
+    int lo = 0;
+    int hi = num_unique - 1;
+    int best = -1;
+
+    /* Allocate temp flow array for feasibility checks */
+    double *temp_flow = (double *)malloc(num_arcs * sizeof(double));
+    if (!temp_flow) {
+        free(costs);
+        result->status = RALPH_NETFLOW_OUT_OF_MEMORY;
+        return RALPH_NETFLOW_OUT_OF_MEMORY;
+    }
+
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        double threshold = costs[mid];
+
+        if (bottleneck_feasibility_check(problem, threshold, temp_flow, ws)) {
+            /* Feasible with this threshold - try lower */
+            best = mid;
+            /* Copy the feasible flow to result */
+            memcpy(result->flow, temp_flow, num_arcs * sizeof(double));
+            hi = mid - 1;
+        } else {
+            /* Not feasible - need higher threshold */
+            lo = mid + 1;
+        }
+    }
+
+    free(temp_flow);
+    free(costs);
+
+    if (best < 0) {
+        /* No feasible flow exists */
+        result->status = RALPH_NETFLOW_INFEASIBLE;
+        return RALPH_NETFLOW_INFEASIBLE;
+    }
+
+    /* Return the bottleneck cost (maximum arc cost used) */
+    /* Verify by finding the actual maximum cost used */
+    double actual_max_cost = 0.0;
+    for (int a = 0; a < num_arcs; a++) {
+        if (result->flow[a] > RALPH_NETFLOW_TOLERANCE) {
+            if (problem->cost[a] > actual_max_cost) {
+                actual_max_cost = problem->cost[a];
+            }
+        }
+    }
+
+    result->objective = actual_max_cost;
+    result->num_found = 1;
+    result->status = RALPH_NETFLOW_OPTIMAL;
+    result->iterations = 0;  /* Not tracked for bottleneck */
+    result->degenerate_pivots = 0;
+
+    if (result->objectives) {
+        result->objectives[0] = actual_max_cost;
+    }
 
     return RALPH_NETFLOW_OPTIMAL;
 }
@@ -1390,8 +1637,7 @@ RalphNetflowStatus ralph_netflow_solve_ex(
             break;
 
         case RALPH_NETFLOW_ALG_BOTTLENECK:
-            /* Bottleneck: not yet implemented */
-            status = RALPH_NETFLOW_INVALID_INPUT;  /* TODO: implement bottleneck */
+            status = solve_bottleneck_internal(problem, opts, result, ws);
             break;
 
         case RALPH_NETFLOW_ALG_STANDARD:

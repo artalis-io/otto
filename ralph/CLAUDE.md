@@ -132,7 +132,11 @@ The network flow solver implements the network simplex algorithm for Minimum Cos
 | Feature | API | Notes |
 |---------|-----|-------|
 | Standard MCNF | `ralph_netflow_solve()` | Candidate list pricing |
+| Unified API | `ralph_netflow_solve_ex()` | Supports all algorithm variants |
+| Flow decomposition | `ralph_netflow_decompose()` | Decompose flow into paths |
+| Bottleneck | `algorithm = BOTTLENECK` | Minimize max arc cost used |
 | Warm start | `options.warm_start = 1` | Reuse basis from previous solve |
+| Cost scaling | `options.cost_scaling = 1` | Epsilon scaling for degeneracy |
 | Pricing rules | `options.pricing` | CANDIDATE, FIRST, BEST |
 | Workspace reuse | `ralph_netflow_workspace_*()` | Amortize allocations |
 
@@ -176,6 +180,39 @@ opts.warm_start = 1;
 ralph_netflow_solve(&prob2, &opts, &result, ws);  /* Much faster */
 
 ralph_netflow_workspace_free(ws);
+```
+
+### Unified API (Extended Features)
+
+The unified API supports multiple algorithm variants via `ralph_netflow_solve_ex()`:
+
+```c
+RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+
+/* Flow decomposition: get k best paths */
+opts.algorithm = RALPH_NETFLOW_ALG_K_BEST;
+opts.k = 5;
+
+RalphNetflowPath paths[5];
+double objectives[5];
+RalphNetflowResult result = {
+    .flow = flow,
+    .paths = paths,
+    .objectives = objectives
+};
+ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+/* result.num_found = number of paths, paths sorted by unit_cost */
+
+/* Bottleneck: minimize maximum arc cost used */
+opts.algorithm = RALPH_NETFLOW_ALG_BOTTLENECK;
+ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+/* result.objective = bottleneck cost (max arc cost used) */
+
+/* Cost scaling for degenerate problems */
+opts.algorithm = RALPH_NETFLOW_ALG_STANDARD;
+opts.cost_scaling = 1;
+opts.epsilon_factor = 4.0;  /* Reduction factor per phase */
+ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
 ```
 
 ### Problem Detection
