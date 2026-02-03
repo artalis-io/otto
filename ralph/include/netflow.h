@@ -196,6 +196,30 @@ typedef struct {
 }
 
 /* ============================================================================
+ * Path Structure (for flow decomposition)
+ * ============================================================================ */
+
+/*
+ * A path in a flow decomposition.
+ *
+ * Any feasible network flow can be decomposed into at most m (num_arcs) paths
+ * from sources to sinks, plus cycles. For acyclic networks, the decomposition
+ * is unique up to path ordering.
+ *
+ * Use case: Given an optimal shipment plan (flow), decompose it into individual
+ * routes that trucks/shipments would follow.
+ */
+typedef struct {
+    int *arcs;              /* Arc indices in path order (source to sink) */
+    int num_arcs;           /* Number of arcs in this path */
+    int source;             /* Source node (supply > 0) */
+    int sink;               /* Sink node (supply < 0) */
+    double flow;            /* Flow amount on this path */
+    double cost;            /* Total cost = sum(cost[a]) * flow */
+    double unit_cost;       /* Cost per unit flow = sum(cost[a]) */
+} RalphNetflowPath;
+
+/* ============================================================================
  * Result Structure
  * ============================================================================ */
 
@@ -215,9 +239,10 @@ typedef struct {
     double objective;               /* Optimal objective value (first solution) */
     double *flow;                   /* Arc flows: [num_arcs] or [num_found × num_arcs] for k-best */
 
-    /* For k-best (optional) */
-    int num_found;                  /* Number of solutions found (1 for standard, up to k for k-best) */
-    double *objectives;             /* All objective values: [num_found] (NULL for single solution) */
+    /* For k-best (flow decomposition) */
+    int num_found;                  /* Number of paths found (1 for standard, up to k for k-best) */
+    double *objectives;             /* Path costs: [num_found] (NULL to skip) */
+    RalphNetflowPath *paths;        /* Path details: [num_found] (NULL to skip, caller allocates) */
 
     /* Dual variables for warm start (optional) */
     double *potential;              /* Node potentials: [num_nodes] */
@@ -464,6 +489,58 @@ RalphNetflowStatus ralph_mcnf_solve(
     double *flow,
     double *objective
 );
+
+/* ============================================================================
+ * Flow Decomposition
+ * ============================================================================ */
+
+/*
+ * Decompose a flow into source-to-sink paths.
+ *
+ * Any feasible network flow can be decomposed into at most m paths from
+ * sources (supply > 0) to sinks (supply < 0). This is useful for logistics
+ * applications where you want to know the actual routes, not just arc flows.
+ *
+ * Parameters:
+ *   problem    - Original problem definition (for topology and costs)
+ *   flow       - Flow values on each arc (from ralph_netflow_solve)
+ *   max_paths  - Maximum number of paths to return (0 = all paths)
+ *   paths      - Output: array of paths (caller allocates array of max_paths)
+ *   num_paths  - Output: actual number of paths found
+ *
+ * Returns:
+ *   RALPH_NETFLOW_OPTIMAL on success, error code otherwise.
+ *
+ * Memory:
+ *   Caller allocates the paths array. This function allocates paths[i].arcs
+ *   for each path found. Caller must free these with ralph_netflow_path_free().
+ *
+ * Sorting:
+ *   Paths are returned sorted by unit_cost (ascending for minimize problems).
+ *   The first path is the cheapest route per unit of goods shipped.
+ *
+ * Example:
+ *   RalphNetflowPath paths[10];
+ *   int num_paths;
+ *   ralph_netflow_decompose(&prob, flow, 10, paths, &num_paths);
+ *   for (int i = 0; i < num_paths; i++) {
+ *       printf("Path %d: %d arcs, flow=%.1f, cost=%.1f\n",
+ *              i, paths[i].num_arcs, paths[i].flow, paths[i].cost);
+ *       ralph_netflow_path_free(&paths[i]);
+ *   }
+ */
+RalphNetflowStatus ralph_netflow_decompose(
+    const RalphNetflowProblem *problem,
+    const double *flow,
+    int max_paths,
+    RalphNetflowPath *paths,
+    int *num_paths
+);
+
+/*
+ * Free memory allocated for a path's arc array.
+ */
+void ralph_netflow_path_free(RalphNetflowPath *path);
 
 /* ============================================================================
  * Utility Functions

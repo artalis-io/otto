@@ -1366,12 +1366,26 @@ RalphNetflowStatus ralph_netflow_solve_ex(
         case RALPH_NETFLOW_ALG_K_BEST:
             if (opts->k <= 0) {
                 status = RALPH_NETFLOW_INVALID_INPUT;
-            } else if (opts->k == 1) {
-                /* k=1 is just standard solve */
-                status = netflow_solve_internal(problem, opts, result, ws);
             } else {
-                /* k-best: not yet implemented */
-                status = RALPH_NETFLOW_INVALID_INPUT;  /* TODO: implement k-best */
+                /* Solve standard problem first */
+                status = netflow_solve_internal(problem, opts, result, ws);
+                if (status == RALPH_NETFLOW_OPTIMAL && opts->k > 1) {
+                    /* Decompose flow into up to k paths */
+                    if (result->paths) {
+                        int num_paths = 0;
+                        RalphNetflowStatus decomp_status = ralph_netflow_decompose(
+                            problem, result->flow, opts->k, result->paths, &num_paths);
+                        if (decomp_status == RALPH_NETFLOW_OPTIMAL) {
+                            result->num_found = num_paths;
+                            /* Fill objectives array if provided */
+                            if (result->objectives) {
+                                for (int i = 0; i < num_paths; i++) {
+                                    result->objectives[i] = result->paths[i].cost;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             break;
 
@@ -1544,4 +1558,225 @@ int ralph_netflow_check_optimality(
     }
 
     return max_viol <= RALPH_NETFLOW_TOLERANCE * RALPH_NETFLOW_OPT_TOL_MULTIPLIER;
+}
+
+/* ============================================================================
+ * Flow Decomposition
+ * ============================================================================ */
+
+void ralph_netflow_path_free(RalphNetflowPath *path) {
+    if (path && path->arcs) {
+        free(path->arcs);
+        path->arcs = NULL;
+        path->num_arcs = 0;
+    }
+}
+
+/* Compare paths by unit cost for sorting */
+static int compare_paths_by_unit_cost(const void *a, const void *b) {
+    const RalphNetflowPath *pa = (const RalphNetflowPath *)a;
+    const RalphNetflowPath *pb = (const RalphNetflowPath *)b;
+    if (pa->unit_cost < pb->unit_cost) return -1;
+    if (pa->unit_cost > pb->unit_cost) return 1;
+    return 0;
+}
+
+RalphNetflowStatus ralph_netflow_decompose(
+    const RalphNetflowProblem *problem,
+    const double *flow,
+    int max_paths,
+    RalphNetflowPath *paths,
+    int *num_paths
+) {
+    if (!problem || !flow || !paths || !num_paths) {
+        return RALPH_NETFLOW_INVALID_INPUT;
+    }
+
+    int num_nodes = problem->num_nodes;
+    int num_arcs = problem->num_arcs;
+    *num_paths = 0;
+
+    if (num_arcs == 0) {
+        return RALPH_NETFLOW_OPTIMAL;
+    }
+
+    /* Allocate working arrays */
+    double *residual_flow = (double *)malloc(num_arcs * sizeof(double));
+    double *residual_supply = (double *)malloc(num_nodes * sizeof(double));
+    int *path_arcs = (int *)malloc(num_nodes * sizeof(int));  /* Max path length */
+    int *visited = (int *)calloc(num_nodes, sizeof(int));
+
+    if (!residual_flow || !residual_supply || !path_arcs || !visited) {
+        free(residual_flow);
+        free(residual_supply);
+        free(path_arcs);
+        free(visited);
+        return RALPH_NETFLOW_OUT_OF_MEMORY;
+    }
+
+    /* Initialize residuals */
+    memcpy(residual_flow, flow, num_arcs * sizeof(double));
+    memcpy(residual_supply, problem->supply, num_nodes * sizeof(double));
+
+    /* Build adjacency list: for each node, list of outgoing arcs */
+    int *arc_start = (int *)malloc((num_nodes + 1) * sizeof(int));
+    int *arc_list = (int *)malloc(num_arcs * sizeof(int));
+
+    if (!arc_start || !arc_list) {
+        free(residual_flow);
+        free(residual_supply);
+        free(path_arcs);
+        free(visited);
+        free(arc_start);
+        free(arc_list);
+        return RALPH_NETFLOW_OUT_OF_MEMORY;
+    }
+
+    /* Count outgoing arcs per node */
+    memset(arc_start, 0, (num_nodes + 1) * sizeof(int));
+    for (int a = 0; a < num_arcs; a++) {
+        arc_start[problem->tail[a] + 1]++;
+    }
+    for (int i = 1; i <= num_nodes; i++) {
+        arc_start[i] += arc_start[i - 1];
+    }
+
+    /* Fill arc list */
+    int *arc_pos = (int *)malloc(num_nodes * sizeof(int));
+    if (!arc_pos) {
+        free(residual_flow);
+        free(residual_supply);
+        free(path_arcs);
+        free(visited);
+        free(arc_start);
+        free(arc_list);
+        return RALPH_NETFLOW_OUT_OF_MEMORY;
+    }
+    memcpy(arc_pos, arc_start, num_nodes * sizeof(int));
+
+    for (int a = 0; a < num_arcs; a++) {
+        int tail = problem->tail[a];
+        arc_list[arc_pos[tail]++] = a;
+    }
+    free(arc_pos);
+
+    /* Decompose flow into paths */
+    int path_count = 0;
+    int max_path_count = (max_paths > 0) ? max_paths : num_arcs;  /* Upper bound */
+
+    while (path_count < max_path_count) {
+        /* Find a source with positive residual supply */
+        int source = -1;
+        for (int i = 0; i < num_nodes; i++) {
+            if (residual_supply[i] > RALPH_NETFLOW_TOLERANCE) {
+                source = i;
+                break;
+            }
+        }
+        if (source < 0) break;  /* No more flow to decompose */
+
+        /* DFS to find path from source to sink */
+        memset(visited, 0, num_nodes * sizeof(int));
+        int path_len = 0;
+        int current = source;
+        double min_flow = residual_supply[source];
+        visited[current] = 1;
+
+        while (residual_supply[current] >= -RALPH_NETFLOW_TOLERANCE) {
+            /* Current is not a sink, find outgoing arc with positive flow */
+            int found_arc = -1;
+            for (int idx = arc_start[current]; idx < arc_start[current + 1]; idx++) {
+                int a = arc_list[idx];
+                if (residual_flow[a] > RALPH_NETFLOW_TOLERANCE) {
+                    int next = problem->head[a];
+                    if (!visited[next]) {
+                        found_arc = a;
+                        break;
+                    }
+                }
+            }
+
+            if (found_arc < 0) {
+                /* No outgoing arc found - this shouldn't happen for valid flow */
+                break;
+            }
+
+            path_arcs[path_len++] = found_arc;
+            if (residual_flow[found_arc] < min_flow) {
+                min_flow = residual_flow[found_arc];
+            }
+
+            current = problem->head[found_arc];
+            visited[current] = 1;
+
+            /* Check if reached a sink */
+            if (residual_supply[current] < -RALPH_NETFLOW_TOLERANCE) {
+                if (-residual_supply[current] < min_flow) {
+                    min_flow = -residual_supply[current];
+                }
+                break;
+            }
+        }
+
+        if (path_len == 0 || min_flow <= RALPH_NETFLOW_TOLERANCE) {
+            /* No valid path found, stop */
+            break;
+        }
+
+        /* Record the path */
+        RalphNetflowPath *p = &paths[path_count];
+        p->arcs = (int *)malloc(path_len * sizeof(int));
+        if (!p->arcs) {
+            /* Clean up previously allocated paths */
+            for (int i = 0; i < path_count; i++) {
+                ralph_netflow_path_free(&paths[i]);
+            }
+            free(residual_flow);
+            free(residual_supply);
+            free(path_arcs);
+            free(visited);
+            free(arc_start);
+            free(arc_list);
+            return RALPH_NETFLOW_OUT_OF_MEMORY;
+        }
+
+        memcpy(p->arcs, path_arcs, path_len * sizeof(int));
+        p->num_arcs = path_len;
+        p->source = source;
+        p->sink = current;
+        p->flow = min_flow;
+
+        /* Calculate path cost */
+        double unit_cost = 0.0;
+        for (int i = 0; i < path_len; i++) {
+            unit_cost += problem->cost[p->arcs[i]];
+        }
+        p->unit_cost = unit_cost;
+        p->cost = unit_cost * min_flow;
+
+        /* Update residuals */
+        residual_supply[source] -= min_flow;
+        residual_supply[current] += min_flow;
+        for (int i = 0; i < path_len; i++) {
+            residual_flow[p->arcs[i]] -= min_flow;
+        }
+
+        path_count++;
+    }
+
+    /* Sort paths by unit cost */
+    if (path_count > 1) {
+        qsort(paths, path_count, sizeof(RalphNetflowPath), compare_paths_by_unit_cost);
+    }
+
+    *num_paths = path_count;
+
+    free(residual_flow);
+    free(residual_supply);
+    free(path_arcs);
+    free(visited);
+    free(arc_start);
+    free(arc_list);
+
+    return RALPH_NETFLOW_OPTIMAL;
 }
