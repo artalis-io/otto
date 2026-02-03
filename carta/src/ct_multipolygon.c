@@ -229,28 +229,33 @@ static CTCoord *build_ring(WaySegment *segments, int num_segments,
  * Multipolygon Assembly
  * ============================================================================ */
 
+/* Hash function - must match hash_id() in ct_pbf.c */
+static uint64_t hash_id(int64_t id)
+{
+    uint64_t x = (uint64_t)id;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    x = x ^ (x >> 31);
+    return x;
+}
+
 /* Lookup way by ID using way_map */
 static const CTOSMWay *lookup_way(const CTPBFContext *ctx, int64_t id)
 {
     if (!ctx->way_map.keys || ctx->way_map.count == 0) return NULL;
 
-    /* Linear probe hash lookup */
     size_t cap = ctx->way_map.capacity;
-    uint64_t hash = (uint64_t)id * 2654435761ULL;
-    size_t idx = hash % cap;
+    uint64_t h = hash_id(id) % cap;
 
-    for (size_t i = 0; i < cap; i++) {
-        size_t probe = (idx + i) % cap;
-        if (ctx->way_map.keys[probe] == id) {
-            uint32_t way_idx = ctx->way_map.values[probe];
+    while (ctx->way_map.keys[h] != 0) {
+        if (ctx->way_map.keys[h] == id) {
+            uint32_t way_idx = ctx->way_map.values[h];
             if (way_idx < ctx->num_ways) {
                 return &ctx->ways[way_idx];
             }
             return NULL;
         }
-        if (ctx->way_map.keys[probe] == 0) {
-            return NULL;  /* Empty slot = not found */
-        }
+        h = (h + 1) % cap;
     }
     return NULL;
 }

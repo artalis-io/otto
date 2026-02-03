@@ -136,11 +136,21 @@ CTRTree *ct_rtree_build(const CTOSMWay *ways, size_t num_ways, CTBBox data_bbox)
 {
     if (!ways || num_ways == 0) return NULL;
 
+    /* Count classified ways (skip CT_OSM_UNKNOWN - those are geometry-only for relations) */
+    size_t classified_count = 0;
+    for (size_t i = 0; i < num_ways; i++) {
+        if (ways[i].feature_class != CT_OSM_UNKNOWN) {
+            classified_count++;
+        }
+    }
+
+    if (classified_count == 0) return NULL;
+
     CTRTree *tree = calloc(1, sizeof(CTRTree));
     if (!tree) return NULL;
 
-    /* Step 1: Compute Hilbert indices and bboxes */
-    CTSortEntry *entries = malloc(num_ways * sizeof(CTSortEntry));
+    /* Step 1: Compute Hilbert indices and bboxes for classified ways only */
+    CTSortEntry *entries = malloc(classified_count * sizeof(CTSortEntry));
     if (!entries) {
         free(tree);
         return NULL;
@@ -151,21 +161,28 @@ CTRTree *ct_rtree_build(const CTOSMWay *ways, size_t num_ways, CTBBox data_bbox)
     if (lon_range < 1e-9) lon_range = 1e-9;
     if (lat_range < 1e-9) lat_range = 1e-9;
 
+    size_t e_idx = 0;
     for (size_t i = 0; i < num_ways; i++) {
-        entries[i].index = (uint32_t)i;
-        entries[i].bbox = way_bbox(&ways[i]);
+        /* Skip unclassified ways (geometry-only, kept for multipolygon assembly) */
+        if (ways[i].feature_class == CT_OSM_UNKNOWN) continue;
+
+        entries[e_idx].index = (uint32_t)i;
+        entries[e_idx].bbox = way_bbox(&ways[i]);
 
         /* Compute centroid and Hilbert index */
-        double cx = (entries[i].bbox.min_lon + entries[i].bbox.max_lon) / 2;
-        double cy = (entries[i].bbox.min_lat + entries[i].bbox.max_lat) / 2;
+        double cx = (entries[e_idx].bbox.min_lon + entries[e_idx].bbox.max_lon) / 2;
+        double cy = (entries[e_idx].bbox.min_lat + entries[e_idx].bbox.max_lat) / 2;
 
         uint32_t hx = (uint32_t)(((cx - data_bbox.min_lon) / lon_range) * (HILBERT_N - 1));
         uint32_t hy = (uint32_t)(((cy - data_bbox.min_lat) / lat_range) * (HILBERT_N - 1));
         if (hx >= HILBERT_N) hx = HILBERT_N - 1;
         if (hy >= HILBERT_N) hy = HILBERT_N - 1;
 
-        entries[i].hilbert = xy_to_hilbert(hx, hy, HILBERT_ORDER);
+        entries[e_idx].hilbert = xy_to_hilbert(hx, hy, HILBERT_ORDER);
+        e_idx++;
     }
+
+    num_ways = classified_count;  /* Use filtered count for tree building */
 
     /* Step 2: Sort by Hilbert index */
     qsort(entries, num_ways, sizeof(CTSortEntry), compare_hilbert);
