@@ -103,8 +103,28 @@ else
     done
 
     if [ -f "$CARTA_IDX" ]; then
+        # Wait for file size to stabilize (write complete)
         echo ""
-        echo -e "  ${GREEN}Built: $CARTA_IDX${NC}"
+        echo -n "  Writing"
+        PREV_SIZE=0
+        STABLE_COUNT=0
+        while [ $STABLE_COUNT -lt 3 ]; do
+            if ! kill -0 $CARTA_BUILD_PID 2>/dev/null; then
+                # Process exited - file should be complete
+                break
+            fi
+            CURR_SIZE=$(stat -c%s "$CARTA_IDX" 2>/dev/null || echo "0")
+            if [ "$CURR_SIZE" = "$PREV_SIZE" ]; then
+                STABLE_COUNT=$((STABLE_COUNT + 1))
+            else
+                STABLE_COUNT=0
+                PREV_SIZE=$CURR_SIZE
+            fi
+            printf "."
+            sleep 2
+        done
+        echo ""
+        echo -e "  ${GREEN}Built: $CARTA_IDX ($(numfmt --to=iec-i --suffix=B $CURR_SIZE 2>/dev/null || echo "${CURR_SIZE} bytes"))${NC}"
         kill $CARTA_BUILD_PID 2>/dev/null || true
         sleep 1
     else
@@ -135,10 +155,29 @@ else
         sleep 5
     done
 
-    # Index file created - kill the build server
+    # Index file created - wait for write to complete
     if [ -f "$LOCUS_IDX" ]; then
         echo ""
-        echo -e "  ${GREEN}Built: $LOCUS_IDX${NC}"
+        echo -n "  Writing"
+        PREV_SIZE=0
+        STABLE_COUNT=0
+        while [ $STABLE_COUNT -lt 3 ]; do
+            if ! kill -0 $LOCUS_BUILD_PID 2>/dev/null; then
+                # Process exited - file should be complete
+                break
+            fi
+            CURR_SIZE=$(stat -c%s "$LOCUS_IDX" 2>/dev/null || echo "0")
+            if [ "$CURR_SIZE" = "$PREV_SIZE" ]; then
+                STABLE_COUNT=$((STABLE_COUNT + 1))
+            else
+                STABLE_COUNT=0
+                PREV_SIZE=$CURR_SIZE
+            fi
+            printf "."
+            sleep 2
+        done
+        echo ""
+        echo -e "  ${GREEN}Built: $LOCUS_IDX ($(numfmt --to=iec-i --suffix=B $CURR_SIZE 2>/dev/null || echo "${CURR_SIZE} bytes"))${NC}"
         kill $LOCUS_BUILD_PID 2>/dev/null || true
         sleep 1
     else
