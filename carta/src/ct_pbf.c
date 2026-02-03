@@ -223,6 +223,104 @@ static uint32_t node_map_lookup(const CTPBFContext *ctx, int64_t id)
 }
 
 /* ============================================================================
+ * Way Map (Hash Table for relation member resolution)
+ * ============================================================================ */
+
+static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
+{
+    if (ctx->way_map.count >= ctx->way_map.capacity * 3 / 4) {
+        size_t new_cap = ctx->way_map.capacity ? ctx->way_map.capacity * 2 : 16384;
+        int64_t *new_keys = calloc(new_cap, sizeof(int64_t));
+        uint32_t *new_vals = malloc(new_cap * sizeof(uint32_t));
+        if (!new_keys || !new_vals) {
+            free(new_keys);
+            free(new_vals);
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+
+        /* Rehash */
+        for (size_t i = 0; i < ctx->way_map.capacity; i++) {
+            if (ctx->way_map.keys[i] != 0) {
+                uint64_t h = hash_id(ctx->way_map.keys[i]) % new_cap;
+                while (new_keys[h] != 0) {
+                    h = (h + 1) % new_cap;
+                }
+                new_keys[h] = ctx->way_map.keys[i];
+                new_vals[h] = ctx->way_map.values[i];
+            }
+        }
+
+        free(ctx->way_map.keys);
+        free(ctx->way_map.values);
+        ctx->way_map.keys = new_keys;
+        ctx->way_map.values = new_vals;
+        ctx->way_map.capacity = new_cap;
+    }
+
+    uint64_t h = hash_id(id) % ctx->way_map.capacity;
+    while (ctx->way_map.keys[h] != 0) {
+        h = (h + 1) % ctx->way_map.capacity;
+    }
+    ctx->way_map.keys[h] = id;
+    ctx->way_map.values[h] = index;
+    ctx->way_map.count++;
+    return CT_OK;
+}
+
+static uint32_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
+{
+    if (ctx->way_map.capacity == 0) return UINT32_MAX;
+
+    uint64_t h = hash_id(id) % ctx->way_map.capacity;
+    size_t start = h;
+
+    while (ctx->way_map.keys[h] != 0) {
+        if (ctx->way_map.keys[h] == id) {
+            return ctx->way_map.values[h];
+        }
+        h = (h + 1) % ctx->way_map.capacity;
+        if (h == start) break;
+    }
+
+    return UINT32_MAX;
+}
+
+/* ============================================================================
+ * Role String Pool
+ * ============================================================================ */
+
+static uint32_t add_role_string(CTPBFContext *ctx, const char *role)
+{
+    /* Empty role maps to index 0 */
+    if (!role || role[0] == '\0') return 0;
+
+    /* Check if role already exists */
+    for (size_t i = 1; i < ctx->num_role_strings; i++) {
+        if (ctx->role_strings[i] && strcmp(ctx->role_strings[i], role) == 0) {
+            return (uint32_t)i;
+        }
+    }
+
+    /* Add new role */
+    if (ctx->num_role_strings >= ctx->role_strings_capacity) {
+        size_t new_cap = ctx->role_strings_capacity ? ctx->role_strings_capacity * 2 : 64;
+        char **new_strs = realloc(ctx->role_strings, new_cap * sizeof(char *));
+        if (!new_strs) return 0;
+        ctx->role_strings = new_strs;
+        ctx->role_strings_capacity = new_cap;
+
+        /* Initialize first entry as empty string if needed */
+        if (ctx->num_role_strings == 0) {
+            ctx->role_strings[0] = NULL;  /* Index 0 = empty role */
+            ctx->num_role_strings = 1;
+        }
+    }
+
+    ctx->role_strings[ctx->num_role_strings] = strdup(role);
+    return (uint32_t)ctx->num_role_strings++;
+}
+
+/* ============================================================================
  * Context Management
  * ============================================================================ */
 
@@ -247,6 +345,10 @@ void ct_pbf_context_free(CTPBFContext *ctx)
     free(ctx->nodes.coords);
     free(ctx->node_map.keys);
     free(ctx->node_map.values);
+
+    /* Free way_map */
+    free(ctx->way_map.keys);
+    free(ctx->way_map.values);
 
     if (ctx->mmap_base) {
         /* mmap'd context - ways point into allocated block, names are strdup'd */
@@ -275,6 +377,32 @@ void ct_pbf_context_free(CTPBFContext *ctx)
 
         ct_rtree_free(ctx->rtree);
     }
+
+    /* Free relations */
+    for (size_t i = 0; i < ctx->num_relations; i++) {
+        free(ctx->relations[i].members);
+        free(ctx->relations[i].name);
+    }
+    free(ctx->relations);
+
+    /* Free role strings */
+    for (size_t i = 0; i < ctx->num_role_strings; i++) {
+        free(ctx->role_strings[i]);
+    }
+    free(ctx->role_strings);
+
+    /* Free assembled multipolygons */
+    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+        for (int r = 0; r < ctx->multipolygons[i].num_rings; r++) {
+            free(ctx->multipolygons[i].rings[r].coords);
+        }
+        free(ctx->multipolygons[i].rings);
+        free(ctx->multipolygons[i].name);
+    }
+    free(ctx->multipolygons);
+
+    /* Free multipolygon R-Tree */
+    ct_rtree_free(ctx->mp_rtree);
 
     free(ctx);
 }
@@ -515,6 +643,7 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
         ctx->ways_capacity = new_cap;
     }
 
+    uint32_t way_idx = (uint32_t)ctx->num_ways;
     CTOSMWay *way = &ctx->ways[ctx->num_ways++];
     way->id = id;
     way->coords = coords;
@@ -523,6 +652,9 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     way->feature_type = feature_type;
     way->is_area = is_area;
     way->name = NULL;
+
+    /* Register in way_map for relation member lookup */
+    way_map_insert(ctx, id, way_idx);
 
     /* Calculate area/length for LOD filtering */
     if (is_area) {
@@ -553,6 +685,245 @@ skip_way:
     return CT_OK;
 }
 
+/*
+ * Parse a Relation message.
+ * Extracts member IDs, types, roles for multipolygon assembly.
+ */
+static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t len,
+                               const SHStringTable *st)
+{
+    int64_t id = 0;
+    uint32_t *keys = NULL, *vals = NULL;
+    uint32_t *role_sids = NULL;
+    int64_t *memids = NULL;
+    uint32_t *types = NULL;
+    size_t key_count = 0, val_count = 0;
+    size_t role_count = 0, memid_count = 0, type_count = 0;
+    size_t pos = 0;
+
+    size_t max_members = 10000;
+    memids = malloc(max_members * sizeof(int64_t));
+    role_sids = malloc(max_members * sizeof(uint32_t));
+    types = malloc(max_members * sizeof(uint32_t));
+    keys = malloc(256 * sizeof(uint32_t));
+    vals = malloc(256 * sizeof(uint32_t));
+    if (!memids || !role_sids || !types || !keys || !vals) {
+        free(memids); free(role_sids); free(types); free(keys); free(vals);
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+
+    while (pos < len) {
+        uint32_t field, wire;
+        int n = sh_pb_read_tag(data + pos, len - pos, &field, &wire);
+        if (n == 0) goto skip_relation;
+        pos += n;
+
+        if (field == SH_PBF_RELATION_ID && wire == SH_PB_WIRE_VARINT) {
+            uint64_t val;
+            n = sh_pb_read_varint(data + pos, len - pos, &val);
+            if (n == 0) goto skip_relation;
+            id = (int64_t)val;
+            pos += n;
+        } else if (field == SH_PBF_RELATION_KEYS && wire == SH_PB_WIRE_LENGTH_DELIM) {
+            uint64_t packed_len;
+            n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
+            if (n == 0) goto skip_relation;
+            pos += n;
+
+            const uint8_t *p = data + pos;
+            size_t ppos = 0;
+            while (ppos < packed_len && key_count < 256) {
+                uint64_t v;
+                int k = sh_pb_read_varint(p + ppos, packed_len - ppos, &v);
+                if (k == 0) break;
+                keys[key_count++] = (uint32_t)v;
+                ppos += k;
+            }
+            pos += packed_len;
+        } else if (field == SH_PBF_RELATION_VALS && wire == SH_PB_WIRE_LENGTH_DELIM) {
+            uint64_t packed_len;
+            n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
+            if (n == 0) goto skip_relation;
+            pos += n;
+
+            const uint8_t *p = data + pos;
+            size_t ppos = 0;
+            while (ppos < packed_len && val_count < 256) {
+                uint64_t v;
+                int k = sh_pb_read_varint(p + ppos, packed_len - ppos, &v);
+                if (k == 0) break;
+                vals[val_count++] = (uint32_t)v;
+                ppos += k;
+            }
+            pos += packed_len;
+        } else if (field == SH_PBF_RELATION_ROLES_SID && wire == SH_PB_WIRE_LENGTH_DELIM) {
+            uint64_t packed_len;
+            n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
+            if (n == 0) goto skip_relation;
+            pos += n;
+
+            const uint8_t *p = data + pos;
+            size_t ppos = 0;
+            while (ppos < packed_len && role_count < max_members) {
+                uint64_t v;
+                int k = sh_pb_read_varint(p + ppos, packed_len - ppos, &v);
+                if (k == 0) break;
+                role_sids[role_count++] = (uint32_t)v;
+                ppos += k;
+            }
+            pos += packed_len;
+        } else if (field == SH_PBF_RELATION_MEMIDS && wire == SH_PB_WIRE_LENGTH_DELIM) {
+            uint64_t packed_len;
+            n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
+            if (n == 0) goto skip_relation;
+            pos += n;
+
+            memid_count = sh_pb_read_packed_svarint_array(data + pos, packed_len,
+                                                          memids, max_members);
+            sh_pb_delta_decode_i64(memids, memid_count);
+            pos += packed_len;
+        } else if (field == SH_PBF_RELATION_TYPES && wire == SH_PB_WIRE_LENGTH_DELIM) {
+            uint64_t packed_len;
+            n = sh_pb_read_varint(data + pos, len - pos, &packed_len);
+            if (n == 0) goto skip_relation;
+            pos += n;
+
+            const uint8_t *p = data + pos;
+            size_t ppos = 0;
+            while (ppos < packed_len && type_count < max_members) {
+                uint64_t v;
+                int k = sh_pb_read_varint(p + ppos, packed_len - ppos, &v);
+                if (k == 0) break;
+                types[type_count++] = (uint32_t)v;
+                ppos += k;
+            }
+            pos += packed_len;
+        } else {
+            n = sh_pb_skip_field(data + pos, len - pos, wire);
+            if (n == 0) goto skip_relation;
+            pos += n;
+        }
+    }
+
+    ctx->total_relations_parsed++;
+
+    /* Check if this is a multipolygon relation */
+    int is_multipolygon = 0;
+    int num_tags = (int)(key_count < val_count ? key_count : val_count);
+    CTOSMFeatureClass feature_class = CT_OSM_UNKNOWN;
+    int feature_type = 0;
+
+    for (int i = 0; i < num_tags; i++) {
+        const char *key = sh_string_table_get(st, keys[i]);
+        const char *val = sh_string_table_get(st, vals[i]);
+
+        if (strcmp(key, "type") == 0 && strcmp(val, "multipolygon") == 0) {
+            is_multipolygon = 1;
+        }
+    }
+
+    /* Only keep multipolygon relations for now */
+    if (!is_multipolygon) {
+        goto skip_relation;
+    }
+
+    /* Classify the relation based on tags (water, landuse, etc.) */
+    for (int i = 0; i < num_tags; i++) {
+        const char *key = sh_string_table_get(st, keys[i]);
+        const char *val = sh_string_table_get(st, vals[i]);
+
+        if (strcmp(key, "natural") == 0) {
+            if (strcmp(val, "water") == 0) {
+                feature_class = CT_OSM_WATER;
+                feature_type = 0;
+            } else if (strcmp(val, "wood") == 0 || strcmp(val, "forest") == 0) {
+                feature_class = CT_OSM_NATURAL;
+                feature_type = 0;
+            }
+        } else if (strcmp(key, "landuse") == 0) {
+            feature_class = CT_OSM_LANDUSE;
+            if (strcmp(val, "forest") == 0) {
+                feature_type = 0;
+            } else if (strcmp(val, "residential") == 0) {
+                feature_type = 1;
+            } else if (strcmp(val, "industrial") == 0) {
+                feature_type = 2;
+            }
+        } else if (strcmp(key, "water") == 0) {
+            feature_class = CT_OSM_WATER;
+            if (strcmp(val, "river") == 0) {
+                feature_type = 0;
+            } else if (strcmp(val, "lake") == 0) {
+                feature_type = 1;
+            } else if (strcmp(val, "reservoir") == 0) {
+                feature_type = 2;
+            }
+        } else if (strcmp(key, "waterway") == 0) {
+            feature_class = CT_OSM_WATERWAY;
+            if (strcmp(val, "river") == 0 || strcmp(val, "riverbank") == 0) {
+                feature_type = CT_WATERWAY_RIVER;
+            }
+        }
+    }
+
+    /* Skip relations without useful classification */
+    if (feature_class == CT_OSM_UNKNOWN) {
+        goto skip_relation;
+    }
+
+    /* Store the relation */
+    if (ctx->num_relations >= ctx->relations_capacity) {
+        size_t new_cap = ctx->relations_capacity ? ctx->relations_capacity * 2 : 100;
+        CTOSMRelation *new_rels = realloc(ctx->relations, new_cap * sizeof(CTOSMRelation));
+        if (!new_rels) goto skip_relation;
+        ctx->relations = new_rels;
+        ctx->relations_capacity = new_cap;
+    }
+
+    /* Build member list */
+    size_t num_members = memid_count;
+    if (role_count < num_members) num_members = role_count;
+    if (type_count < num_members) num_members = type_count;
+
+    CTRelationMember *members = malloc(num_members * sizeof(CTRelationMember));
+    if (!members) goto skip_relation;
+
+    for (size_t i = 0; i < num_members; i++) {
+        members[i].ref = memids[i];
+        members[i].type = (CTMemberType)types[i];
+
+        /* Store role string index in our pool */
+        const char *role_str = sh_string_table_get(st, role_sids[i]);
+        members[i].role_idx = add_role_string(ctx, role_str);
+    }
+
+    CTOSMRelation *rel = &ctx->relations[ctx->num_relations++];
+    rel->id = id;
+    rel->members = members;
+    rel->num_members = (int)num_members;
+    rel->feature_class = feature_class;
+    rel->feature_type = feature_type;
+    rel->is_multipolygon = is_multipolygon;
+    rel->name = NULL;
+
+    /* Extract name if present */
+    for (int i = 0; i < num_tags; i++) {
+        const char *key = sh_string_table_get(st, keys[i]);
+        if (strcmp(key, "name") == 0) {
+            rel->name = strdup(sh_string_table_get(st, vals[i]));
+            break;
+        }
+    }
+
+skip_relation:
+    free(memids);
+    free(role_sids);
+    free(types);
+    free(keys);
+    free(vals);
+    return CT_OK;
+}
+
 static CTStatus parse_primitive_group(CTPBFContext *ctx, const uint8_t *data, size_t len,
                                       const SHStringTable *st,
                                       int32_t granularity, int64_t lat_offset, int64_t lon_offset)
@@ -577,6 +948,9 @@ static CTStatus parse_primitive_group(CTPBFContext *ctx, const uint8_t *data, si
                 if (status != CT_OK) return status;
             } else if (field == SH_PBF_PRIMGROUP_WAYS) {
                 CTStatus status = parse_way(ctx, data + pos, msg_len, st);
+                if (status != CT_OK) return status;
+            } else if (field == SH_PBF_PRIMGROUP_RELATIONS) {
+                CTStatus status = parse_relation(ctx, data + pos, msg_len, st);
                 if (status != CT_OK) return status;
             }
             pos += msg_len;
@@ -890,6 +1264,72 @@ static CTStatus add_way_as_feature(const CTOSMWay *way, CTFeature **features,
     return CT_OK;
 }
 
+/*
+ * Helper to add a multipolygon as a feature with multiple rings.
+ */
+static CTStatus add_multipolygon_as_feature(const CTAssembledMultipolygon *mp,
+                                            CTFeature **features,
+                                            size_t *count, size_t *capacity)
+{
+    if (mp->num_rings == 0) return CT_OK;
+
+    /* Expand array if needed */
+    if (*count >= *capacity) {
+        *capacity *= 2;
+        CTFeature *new_features = realloc(*features, *capacity * sizeof(CTFeature));
+        if (!new_features) {
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+        *features = new_features;
+    }
+
+    /* Count total points across all rings */
+    int total_points = 0;
+    for (int r = 0; r < mp->num_rings; r++) {
+        total_points += mp->rings[r].num_coords;
+    }
+
+    if (total_points == 0) return CT_OK;
+
+    /* Create feature */
+    CTFeature *f = &(*features)[*count];
+    memset(f, 0, sizeof(CTFeature));
+
+    f->type = CT_GEOM_POLYGON;
+    f->layer = layer_from_osm_class(mp->feature_class);
+    f->feature_type = mp->feature_type;
+
+    /* Allocate points and ring_ends */
+    f->points = malloc(total_points * sizeof(CTTilePoint));
+    f->ring_ends = malloc(mp->num_rings * sizeof(int));
+    if (!f->points || !f->ring_ends) {
+        free(f->points);
+        free(f->ring_ends);
+        f->points = NULL;
+        f->ring_ends = NULL;
+        return CT_OK;  /* Skip this feature but continue */
+    }
+
+    /* Copy all ring coordinates and track ring boundaries */
+    int point_idx = 0;
+    for (int r = 0; r < mp->num_rings; r++) {
+        const CTMultipolygonRing *ring = &mp->rings[r];
+        for (int j = 0; j < ring->num_coords; j++) {
+            /* Store as fixed-point for now, let caller convert to tile coords */
+            f->points[point_idx].x = (int32_t)(ring->coords[j].lon * 1e7);
+            f->points[point_idx].y = (int32_t)(ring->coords[j].lat * 1e7);
+            point_idx++;
+        }
+        f->ring_ends[r] = point_idx;  /* End index (exclusive) of this ring */
+    }
+
+    f->num_points = total_points;
+    f->num_rings = mp->num_rings;
+
+    (*count)++;
+    return CT_OK;
+}
+
 CTStatus ct_pbf_get_bbox_features(const CTPBFContext *ctx, CTBBox bbox,
                                   CTFeature **features, size_t *count)
 {
@@ -933,28 +1373,48 @@ CTStatus ct_pbf_get_bbox_features(const CTPBFContext *ctx, CTBBox bbox,
         }
 
         free(candidates);
-        return CT_OK;
-    }
+    } else {
+        /* Fallback: linear scan (O(n)) for ways */
+        for (size_t i = 0; i < ctx->num_ways; i++) {
+            const CTOSMWay *way = &ctx->ways[i];
 
-    /* Fallback: linear scan (O(n)) */
-    for (size_t i = 0; i < ctx->num_ways; i++) {
-        const CTOSMWay *way = &ctx->ways[i];
+            /* Quick bbox check */
+            int intersects = 0;
+            for (int j = 0; j < way->num_coords; j++) {
+                if (way->coords[j].lat >= bbox.min_lat &&
+                    way->coords[j].lat <= bbox.max_lat &&
+                    way->coords[j].lon >= bbox.min_lon &&
+                    way->coords[j].lon <= bbox.max_lon) {
+                    intersects = 1;
+                    break;
+                }
+            }
 
-        /* Quick bbox check */
-        int intersects = 0;
-        for (int j = 0; j < way->num_coords; j++) {
-            if (way->coords[j].lat >= bbox.min_lat &&
-                way->coords[j].lat <= bbox.max_lat &&
-                way->coords[j].lon >= bbox.min_lon &&
-                way->coords[j].lon <= bbox.max_lon) {
-                intersects = 1;
-                break;
+            if (!intersects) continue;
+
+            CTStatus status = add_way_as_feature(way, features, count, &capacity);
+            if (status != CT_OK) {
+                free(*features);
+                *features = NULL;
+                *count = 0;
+                return status;
             }
         }
+    }
 
-        if (!intersects) continue;
+    /* Add multipolygon features (linear scan for now, TODO: use mp_rtree) */
+    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+        const CTAssembledMultipolygon *mp = &ctx->multipolygons[i];
 
-        CTStatus status = add_way_as_feature(way, features, count, &capacity);
+        /* Quick bbox check */
+        if (mp->bbox.max_lat < bbox.min_lat ||
+            mp->bbox.min_lat > bbox.max_lat ||
+            mp->bbox.max_lon < bbox.min_lon ||
+            mp->bbox.min_lon > bbox.max_lon) {
+            continue;  /* No intersection */
+        }
+
+        CTStatus status = add_multipolygon_as_feature(mp, features, count, &capacity);
         if (status != CT_OK) {
             free(*features);
             *features = NULL;
