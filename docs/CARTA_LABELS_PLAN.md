@@ -95,67 +95,105 @@ Labels compete for space. Priority determines which labels win:
 
 ## Phase 2: Font System
 
-### 2.1 Bitmap Font Format
+### 2.1 MSDF Font Format
 
-Use a simple bitmap font embedded in the binary (no external dependencies).
+Reuse the MSDF (Multi-channel Signed Distance Field) font system from `shared/ui/clay-shards-webgl/`.
+MSDF fonts render crisp at any size and scale well.
+
+**Existing assets:**
+- `shared/ui/clay-shards-webgl/fonts/ui-font.json` - Glyph metrics
+- `shared/ui/clay-shards-webgl/fonts/ui-font.png` - MSDF atlas texture
 
 **File:** `carta/include/ct_font.h`
 
 ```c
-/* Glyph metrics */
+/* Glyph metrics (matches MSDF JSON format) */
 typedef struct {
-    uint8_t width;           /* Glyph width in pixels */
-    uint8_t height;          /* Glyph height in pixels */
-    int8_t bearing_x;        /* Horizontal bearing */
-    int8_t bearing_y;        /* Vertical bearing (baseline offset) */
-    uint8_t advance;         /* Horizontal advance to next glyph */
-    uint16_t bitmap_offset;  /* Offset into bitmap data */
+    int unicode;             /* Unicode codepoint */
+    float advance;           /* Horizontal advance (normalized) */
+    struct {
+        float left, bottom, right, top;  /* Plane bounds (normalized) */
+    } planeBounds;
+    struct {
+        float left, bottom, right, top;  /* Atlas bounds (pixels) */
+    } atlasBounds;
 } CTGlyph;
 
-/* Font definition */
+/* MSDF Font definition */
 typedef struct {
-    const CTGlyph *glyphs;   /* Glyph table (ASCII 32-126 minimum) */
-    const uint8_t *bitmap;   /* Packed 1-bit bitmap data */
+    CTGlyph *glyphs;         /* Glyph table */
     int glyph_count;
-    int line_height;         /* Pixels between baselines */
-    int ascent;              /* Pixels above baseline */
-    int descent;             /* Pixels below baseline */
-} CTFont;
+    int atlas_width;         /* Atlas texture dimensions */
+    int atlas_height;
+    float distance_range;    /* MSDF distance range */
+    float em_size;           /* Font size used to generate atlas */
+    uint8_t *atlas_data;     /* MSDF atlas (RGBA) */
 
-/* Built-in fonts */
-extern const CTFont ct_font_regular_12;  /* 12px regular */
-extern const CTFont ct_font_bold_12;     /* 12px bold */
-extern const CTFont ct_font_regular_10;  /* 10px for small labels */
+    /* Quick lookup for ASCII */
+    CTGlyph *ascii_table[128];
+} CTMSDFFont;
+
+/* Load font from JSON + PNG files */
+CTStatus ct_font_load(CTMSDFFont *font, const char *json_path, const char *png_path);
+
+/* Load font from embedded data (for WASM/static builds) */
+CTStatus ct_font_load_embedded(CTMSDFFont *font,
+                                const char *json_data, size_t json_len,
+                                const uint8_t *png_data, size_t png_len);
+
+void ct_font_free(CTMSDFFont *font);
 ```
 
-### 2.2 Font Generation
+### 2.2 Font Data Embedding
 
-Generate bitmap fonts from TTF using a build-time tool:
+For static builds, embed the MSDF font data directly:
 
 ```bash
-# Build-time font generation (one-time)
-python scripts/generate_bitmap_font.py \
-    --input fonts/NotoSans-Regular.ttf \
-    --size 12 \
-    --output carta/src/ct_font_regular_12.c
+# Convert font assets to C arrays
+xxd -i shared/ui/clay-shards-webgl/fonts/ui-font.json > carta/src/ct_font_data.c
+xxd -i shared/ui/clay-shards-webgl/fonts/ui-font.png >> carta/src/ct_font_data.c
 ```
 
-Output is a C file with static const arrays for the glyph table and bitmap data.
+Or use a build script that includes the font JSON/PNG at compile time.
 
 ### 2.3 Text Measurement
 
 **File:** `carta/src/ct_font.c`
 
 ```c
-/* Measure text width in pixels */
-int ct_font_text_width(const CTFont *font, const char *text);
+/* Get glyph for character */
+const CTGlyph *ct_font_get_glyph(const CTMSDFFont *font, int unicode);
+
+/* Measure text width at given font size */
+float ct_font_text_width(const CTMSDFFont *font, const char *text, float font_size);
 
 /* Measure text with character limit */
-int ct_font_text_width_n(const CTFont *font, const char *text, int max_chars);
+float ct_font_text_width_n(const CTMSDFFont *font, const char *text,
+                           int max_chars, float font_size);
 
-/* Get line height */
-int ct_font_line_height(const CTFont *font);
+/* Get line height for font size */
+float ct_font_line_height(const CTMSDFFont *font, float font_size);
 ```
+
+### 2.4 MSDF Rendering
+
+MSDF rendering uses a special shader that samples the distance field:
+
+```c
+/* For PNG tiles: software MSDF rendering */
+void ct_render_msdf_glyph(CTRenderContext *ctx,
+                          const CTMSDFFont *font,
+                          const CTGlyph *glyph,
+                          int x, int y,
+                          float font_size,
+                          CTColor color);
+```
+
+The MSDF algorithm:
+1. Sample R, G, B channels from atlas
+2. Take median of the three values
+3. Compare to threshold (0.5) for inside/outside
+4. Apply anti-aliasing based on distance from edge
 
 ## Phase 3: Label Placement
 
@@ -465,20 +503,23 @@ Label placement can be parallelized per tile since each tile has independent col
 ```
 carta/
 ├── include/
-│   ├── ct_font.h          # Font structures and API
+│   ├── ct_font.h          # MSDF font structures and API
 │   ├── ct_label.h         # Label placement API
 │   └── ct_collision.h     # Collision detection API
 ├── src/
-│   ├── ct_font.c          # Font measurement
-│   ├── ct_font_regular_12.c  # Generated bitmap font data
-│   ├── ct_font_bold_12.c     # Generated bitmap font data
+│   ├── ct_font.c          # MSDF font loading and measurement
+│   ├── ct_font_data.c     # Embedded font data (generated)
+│   ├── ct_font_msdf.c     # MSDF rendering algorithm
 │   ├── ct_label.c         # Label placement algorithms
 │   ├── ct_label_point.c   # Point label placement
 │   ├── ct_label_line.c    # Line label placement
 │   ├── ct_label_area.c    # Area label placement
 │   └── ct_collision.c     # Collision detection
-└── fonts/
-    └── generate_font.py   # Font generation script
+shared/ui/clay-shards-webgl/
+├── fonts/
+│   ├── ui-font.json       # MSDF glyph metrics (reused)
+│   └── ui-font.png        # MSDF atlas texture (reused)
+└── font.js                # Reference MSDF implementation
 ```
 
 ## Memory Budget
@@ -510,13 +551,16 @@ Total: < 25 KB per tile (negligible)
 
 ## Dependencies
 
-- **None external** - all code is self-contained
+- **MSDF Font:** Reuses `shared/ui/clay-shards-webgl/fonts/ui-font.*`
+- **PNG decoding:** Uses existing `shared/` library (for loading atlas texture)
+- **JSON parsing:** Simple parser for font metrics (or embed as C struct)
 - Uses existing carta infrastructure (tile coords, rendering, MVT encoding)
-- Bitmap fonts are generated at build time and compiled in
+- Font atlas is embedded at build time for WASM/static builds
 
 ## Questions to Resolve
 
-1. **Font licensing:** Which fonts can be embedded? (Noto Sans is Apache 2.0)
-2. **Script support:** Latin-only initially? Add CJK/Arabic later?
+1. **Font coverage:** Current ui-font covers Latin + common symbols. Need CJK/Arabic?
+2. **Multiple fonts:** Need bold/italic variants? Different sizes?
 3. **Abbreviations:** Should "Street" → "St", "Avenue" → "Ave"?
 4. **Localization:** Support `name:en`, `name:de` variants?
+5. **Font generation:** Use msdf-atlas-gen or similar if new fonts needed

@@ -80,13 +80,30 @@ echo ""
 LOCUS_IDX="$INDEX_DIR/$REGION-locus.idx"
 CARTA_IDX="$INDEX_DIR/$REGION-carta.idx"
 
+# Helper: check if index file is valid (exists and non-empty)
+# Minimum size: 1KB to catch truncated files
+is_valid_index() {
+    local file="$1"
+    local min_size="${2:-1024}"  # Default 1KB minimum
+    if [ -f "$file" ]; then
+        local size=$(stat -c%s "$file" 2>/dev/null || echo "0")
+        if [ "$size" -ge "$min_size" ]; then
+            return 0  # Valid
+        fi
+    fi
+    return 1  # Invalid or missing
+}
+
 # Check for index files
 echo "Checking index files..."
 
-# Check for Carta index
-if [ -f "$CARTA_IDX" ]; then
-    echo -e "  ${GREEN}Found: $CARTA_IDX${NC}"
+# Check for Carta index (minimum 1MB for valid index)
+if is_valid_index "$CARTA_IDX" 1048576; then
+    CARTA_SIZE=$(stat -c%s "$CARTA_IDX" 2>/dev/null)
+    echo -e "  ${GREEN}Found: $CARTA_IDX ($(numfmt --to=iec-i --suffix=B $CARTA_SIZE 2>/dev/null || echo "${CARTA_SIZE} bytes"))${NC}"
 else
+    # Remove invalid/truncated file if it exists
+    [ -f "$CARTA_IDX" ] && rm -f "$CARTA_IDX"
     echo -e "  ${YELLOW}Building Carta index (this may take a while)...${NC}"
     ./carta/api/carta-tile-server --lod default --save-index "$CARTA_IDX" "$PBF_FILE" >/dev/null 2>&1 &
     CARTA_BUILD_PID=$!
@@ -134,10 +151,13 @@ else
     fi
 fi
 
-# Check for Locus index
-if [ -f "$LOCUS_IDX" ]; then
-    echo -e "  ${GREEN}Found: $LOCUS_IDX${NC}"
+# Check for Locus index (minimum 100KB for valid index)
+if is_valid_index "$LOCUS_IDX" 102400; then
+    LOCUS_SIZE=$(stat -c%s "$LOCUS_IDX" 2>/dev/null)
+    echo -e "  ${GREEN}Found: $LOCUS_IDX ($(numfmt --to=iec-i --suffix=B $LOCUS_SIZE 2>/dev/null || echo "${LOCUS_SIZE} bytes"))${NC}"
 else
+    # Remove invalid/truncated file if it exists
+    [ -f "$LOCUS_IDX" ] && rm -f "$LOCUS_IDX"
     echo -e "  ${YELLOW}Building Locus index (this may take a while)...${NC}"
     # Build index and save it - runs in background
     ./locus/api/locus-geocoder -s "$LOCUS_IDX" "$PBF_FILE" >/dev/null 2>&1 &
