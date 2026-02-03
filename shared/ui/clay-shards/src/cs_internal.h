@@ -111,6 +111,11 @@ typedef struct {
     uint32_t hovered_id;        /* Element hovered this frame */
     bool pending_click;         /* Click event pending this frame */
     bool pending_enter;         /* Enter key pressed this frame (for button activation) */
+    bool pending_escape;        /* Escape key pressed this frame (for closing dropdowns) */
+    bool pending_arrow_up;      /* Up arrow pressed (for dropdown navigation) */
+    bool pending_arrow_down;    /* Down arrow pressed (for dropdown navigation) */
+    bool pending_arrow_left;    /* Left arrow pressed (for slider decrement) */
+    bool pending_arrow_right;   /* Right arrow pressed (for slider increment) */
 
     /* Pointer position (set by cs_set_pointer) */
     float pointer_x, pointer_y;

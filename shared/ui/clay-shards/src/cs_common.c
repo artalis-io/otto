@@ -182,9 +182,14 @@ void cs_frame_begin(void) {
 }
 
 void cs_frame_end(float dt) {
-    /* Reset pending click/enter after components have had a chance to check it */
+    /* Reset pending input events after components have had a chance to check them */
     tls_state.pending_click = false;
     tls_state.pending_enter = false;
+    tls_state.pending_escape = false;
+    tls_state.pending_arrow_up = false;
+    tls_state.pending_arrow_down = false;
+    tls_state.pending_arrow_left = false;
+    tls_state.pending_arrow_right = false;
 
     /* Update cursor blink for focused widget */
     if (tls_state.focused_id != 0) {
@@ -336,13 +341,27 @@ CS_EXPORT bool cs_key_down(int key_code, bool shift, bool ctrl) {
         }
     }
 
-    /* Enter key on focused button triggers click */
-    if (key_code == 13 && tls_state.focused_id != 0) { /* Enter */
-        /* If we have a focused element but no active text buffer,
-         * it's a button - set pending_enter for it to detect */
-        if (!tls_state.active_text || !tls_state.active_len) {
-            tls_state.pending_enter = true;
-            return true;
+    /* Non-text focused element: handle Enter, Escape, and arrow keys */
+    if (tls_state.focused_id != 0 && (!tls_state.active_text || !tls_state.active_len)) {
+        switch (key_code) {
+            case 13: /* Enter */
+                tls_state.pending_enter = true;
+                return true;
+            case 27: /* Escape */
+                tls_state.pending_escape = true;
+                return true;
+            case 37: /* Left arrow */
+                tls_state.pending_arrow_left = true;
+                return true;
+            case 38: /* Up arrow */
+                tls_state.pending_arrow_up = true;
+                return true;
+            case 39: /* Right arrow */
+                tls_state.pending_arrow_right = true;
+                return true;
+            case 40: /* Down arrow */
+                tls_state.pending_arrow_down = true;
+                return true;
         }
     }
 
