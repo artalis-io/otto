@@ -483,14 +483,18 @@ static MPSParser* mps_parser_create(void) {
 static void mps_parser_free(MPSParser *parser) {
     if (!parser) return;
 
-    if (parser->file) fclose(parser->file);
-    free(parser->rows);
-    free(parser->columns);
-    free(parser->rhs);
-    free(parser->lb);
-    free(parser->ub);
-    free(parser->obj);
+    if (parser->file) {
+        fclose(parser->file);
+        parser->file = NULL;
+    }
+    SAFE_FREE(parser->rows);
+    SAFE_FREE(parser->columns);
+    SAFE_FREE(parser->rhs);
+    SAFE_FREE(parser->lb);
+    SAFE_FREE(parser->ub);
+    SAFE_FREE(parser->obj);
     triplets_free(parser->matrix);
+    parser->matrix = NULL;
     free(parser);
 }
 

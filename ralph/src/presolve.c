@@ -984,17 +984,18 @@ void presolve_free(PresolveResult *result) {
     if (!result) return;
 
     lp_model_free(result->reduced_model);
-    free(result->fixed_vars);
-    free(result->fixed_values);
-    free(result->removed_cons);
-    free(result->var_map);
-    free(result->con_map);
-    free(result->var_map_inv);
-    free(result->con_map_inv);
-    free(result->orig_var_types);
-    free(result->bound_change_vars);
-    free(result->old_lb);
-    free(result->old_ub);
+    result->reduced_model = NULL;
+    SAFE_FREE(result->fixed_vars);
+    SAFE_FREE(result->fixed_values);
+    SAFE_FREE(result->removed_cons);
+    SAFE_FREE(result->var_map);
+    SAFE_FREE(result->con_map);
+    SAFE_FREE(result->var_map_inv);
+    SAFE_FREE(result->con_map_inv);
+    SAFE_FREE(result->orig_var_types);
+    SAFE_FREE(result->bound_change_vars);
+    SAFE_FREE(result->old_lb);
+    SAFE_FREE(result->old_ub);
     free(result);
 }
 

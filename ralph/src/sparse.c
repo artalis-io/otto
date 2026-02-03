@@ -82,9 +82,9 @@ SparseMatrix* sparse_copy(const SparseMatrix *src) {
 
 void sparse_free(SparseMatrix *mat) {
     if (mat) {
-        free(mat->colptr);
-        free(mat->rowidx);
-        free(mat->values);
+        SAFE_FREE(mat->colptr);
+        SAFE_FREE(mat->rowidx);
+        SAFE_FREE(mat->values);
         free(mat);
     }
 }
@@ -116,9 +116,9 @@ SparseTriplets* triplets_create(int nrows, int ncols, int nnz_estimate) {
 
 void triplets_free(SparseTriplets *trips) {
     if (trips) {
-        free(trips->row);
-        free(trips->col);
-        free(trips->val);
+        SAFE_FREE(trips->row);
+        SAFE_FREE(trips->col);
+        SAFE_FREE(trips->val);
         free(trips);
     }
 }
