@@ -109,57 +109,6 @@ static void select_landmarks_farthest(const VLGraph *graph, int num_landmarks,
     free(min_to_landmark);
 }
 
-/*
- * Select landmarks at corners of the bounding box.
- */
-static void select_landmarks_planar(const VLGraph *graph, int num_landmarks,
-                                     uint32_t *landmarks)
-{
-    /* Define target locations at corners and edges of bounding box */
-    double lat_min = graph->bbox_min.lat;
-    double lat_max = graph->bbox_max.lat;
-    double lon_min = graph->bbox_min.lon;
-    double lon_max = graph->bbox_max.lon;
-    double lat_mid = (lat_min + lat_max) / 2;
-    double lon_mid = (lon_min + lon_max) / 2;
-
-    VLCoord targets[16] = {
-        {lat_min, lon_min},  /* SW corner */
-        {lat_max, lon_min},  /* NW corner */
-        {lat_max, lon_max},  /* NE corner */
-        {lat_min, lon_max},  /* SE corner */
-        {lat_mid, lon_min},  /* W edge */
-        {lat_mid, lon_max},  /* E edge */
-        {lat_min, lon_mid},  /* S edge */
-        {lat_max, lon_mid},  /* N edge */
-        {lat_min + (lat_max - lat_min) * 0.25, lon_min + (lon_max - lon_min) * 0.25},
-        {lat_min + (lat_max - lat_min) * 0.75, lon_min + (lon_max - lon_min) * 0.25},
-        {lat_min + (lat_max - lat_min) * 0.25, lon_min + (lon_max - lon_min) * 0.75},
-        {lat_min + (lat_max - lat_min) * 0.75, lon_min + (lon_max - lon_min) * 0.75},
-        {lat_mid, lon_mid},  /* Center */
-        {lat_min + (lat_max - lat_min) * 0.33, lon_mid},
-        {lat_min + (lat_max - lat_min) * 0.67, lon_mid},
-        {lat_mid, lon_min + (lon_max - lon_min) * 0.33},
-    };
-
-    /* Find nearest node to each target location */
-    for (int k = 0; k < num_landmarks && k < 16; k++) {
-        double min_dist = 1e18;
-        uint32_t nearest = 0;
-
-        for (uint32_t i = 0; i < graph->num_nodes; i++) {
-            VLCoord c = VL_FIXED_TO_COORD(graph->nodes[i].coord);
-            double d = vl_haversine(c, targets[k]);
-            if (d < min_dist) {
-                min_dist = d;
-                nearest = i;
-            }
-        }
-
-        landmarks[k] = nearest;
-    }
-}
-
 /* ============================================================================
  * Heap-based Dijkstra for Landmark Distance Computation
  * ============================================================================ */

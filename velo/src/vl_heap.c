@@ -72,7 +72,6 @@ static void sift_down(VLHeap *heap, size_t i)
         }
         if (fc + 3 < heap->size && heap->entries[fc + 3].priority < smallest_pri) {
             smallest = fc + 3;
-            /* smallest_pri = heap->entries[fc + 3].priority; */
         }
 
         if (smallest == i) break;

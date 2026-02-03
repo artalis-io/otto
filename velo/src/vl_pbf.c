@@ -565,10 +565,9 @@ VLStatus vl_pbf_parse(VLPBFContext *ctx, const uint8_t *data, size_t len)
         /* Parse BlobHeader using shared function */
         char type[32] = {0};
         uint32_t datasize = 0;
-        size_t consumed;
         SHStatus sh_status = sh_pbf_parse_blob_header(data + offset, header_size,
                                                        type, sizeof(type),
-                                                       &datasize, &consumed);
+                                                       &datasize, NULL);
         if (sh_status != SH_OK) {
             return VL_ERROR_PARSE_ERROR;
         }
