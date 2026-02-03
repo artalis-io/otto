@@ -305,6 +305,173 @@
             color: var(--success);
         }
 
+        /* Mission */
+        .mission {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .mission-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 32px;
+        }
+
+        .mission-text {
+            color: var(--text-muted);
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        .mission-text p {
+            margin-bottom: 16px;
+        }
+
+        .mission-stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+
+        .stat {
+            padding: 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* License */
+        .license {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .license-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+        }
+
+        .license-column {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 24px;
+        }
+
+        .license-type {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .license-type.open {
+            color: var(--success);
+        }
+
+        .license-type.proprietary {
+            color: var(--accent);
+        }
+
+        .license-desc {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+
+        .license-list {
+            list-style: none;
+            font-size: 13px;
+        }
+
+        .license-list li {
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+
+        .license-list li:last-child {
+            border-bottom: none;
+        }
+
+        /* For Fleets CTA */
+        .for-fleets {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .cta-box {
+            background: linear-gradient(135deg, var(--accent-dim) 0%, #1e3a5f 100%);
+            border: 1px solid var(--accent);
+            border-radius: 8px;
+            padding: 32px;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 24px;
+            align-items: center;
+        }
+
+        @media (max-width: 600px) {
+            .cta-box {
+                grid-template-columns: 1fr;
+                text-align: center;
+            }
+        }
+
+        .cta-content h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .cta-content p {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+
+        .cta-features {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .cta-features span::before {
+            content: "✓ ";
+            color: var(--success);
+        }
+
+        .cta-button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: var(--accent);
+            color: white;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 14px;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+
+        .cta-button:hover {
+            background: #2563eb;
+            text-decoration: none;
+        }
+
         /* Footer */
         footer {
             padding: 32px 0;
@@ -347,6 +514,48 @@
                 <span class="badge yellow">Zero dependencies</span>
                 <span class="badge">C11</span>
                 <span class="badge">MIT License</span>
+            </div>
+        </section>
+
+        <section class="mission">
+            <h2 class="section-title">Why OTTO</h2>
+            <div class="mission-content">
+                <div class="mission-text">
+                    <p>
+                        Trucking fleets in the US and EU face a brutal equation: thin margins,
+                        volatile fuel costs, complex Hours of Service regulations, and pressure
+                        to reduce environmental impact. Most fleets run far below optimal utilization.
+                    </p>
+                    <p>
+                        OTTO exists to change that. By combining route optimization, fuel cost
+                        minimization, HoS-compliant scheduling, and real-time fleet planning,
+                        OTTO enables fleets to hit 2,000&ndash;3,000 loaded miles per week with
+                        70&ndash;80% contract-to-spot ratios.
+                    </p>
+                    <p>
+                        Superior utilization means fewer empty miles, lower fuel consumption per
+                        ton-mile, reduced emissions, and better margins. What's good for business
+                        is good for the planet.
+                    </p>
+                </div>
+                <div class="mission-stats">
+                    <div class="stat">
+                        <div class="stat-value">+25%</div>
+                        <div class="stat-label">Fleet utilization target</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">&minus;15%</div>
+                        <div class="stat-label">Fuel cost reduction</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">100%</div>
+                        <div class="stat-label">HoS compliance</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">&lt;100ms</div>
+                        <div class="stat-label">Optimization latency</div>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -581,6 +790,63 @@ Dependencies:
 
 <span class="comment"># Build for WebAssembly</span>
 <span class="command">make wasm</span></pre>
+            </div>
+        </section>
+
+        <section class="license">
+            <h2 class="section-title">License Model</h2>
+            <div class="license-content">
+                <div class="license-column">
+                    <h3 class="license-type open">Open Source (MIT)</h3>
+                    <p class="license-desc">
+                        Core engines are MIT licensed. Use them freely, contribute back,
+                        audit the code. No vendor lock-in.
+                    </p>
+                    <ul class="license-list">
+                        <li>Ralph &ndash; LP/MIP solver</li>
+                        <li>Velo &ndash; Routing engine</li>
+                        <li>Carta &ndash; Tile generator</li>
+                        <li>Locus &ndash; Geocoding</li>
+                        <li>FuelWise &ndash; Refueling optimization</li>
+                        <li>ClayShards &ndash; UI components</li>
+                        <li>Shared &ndash; Geo utilities</li>
+                        <li>HoSE, Tempo, Arbor, Sigma, Pulse</li>
+                    </ul>
+                </div>
+                <div class="license-column">
+                    <h3 class="license-type proprietary">Commercial</h3>
+                    <p class="license-desc">
+                        Integration layer and managed platform require a commercial license
+                        or subscription.
+                    </p>
+                    <ul class="license-list">
+                        <li>Nexus &ndash; TMS/ELD/LoadBoard connectors</li>
+                        <li>Managed hosting &ndash; Fully operated platform</li>
+                        <li>Priority support &ndash; SLAs and dedicated help</li>
+                        <li>Custom development &ndash; Fleet-specific tuning</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section class="for-fleets">
+            <h2 class="section-title">For Fleets</h2>
+            <div class="cta-box">
+                <div class="cta-content">
+                    <h3>Don't want to run your own infrastructure?</h3>
+                    <p>
+                        We offer managed OTTO deployments with TMS/ELD integration,
+                        dedicated support, and guaranteed SLAs. Focus on moving freight,
+                        not managing servers.
+                    </p>
+                    <div class="cta-features">
+                        <span>Hosted platform</span>
+                        <span>TMS/ELD integration</span>
+                        <span>24/7 support</span>
+                        <span>Custom tuning</span>
+                    </div>
+                </div>
+                <a href="mailto:mark@artalis.io" class="cta-button">Get in Touch</a>
             </div>
         </section>
 
