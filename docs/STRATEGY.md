@@ -468,5 +468,149 @@ The business model is proven (Red Hat, HashiCorp, GitLab). The market timing is 
 
 ---
 
-*Document version: 1.0*
+## 11. Technical Moat: Zero-Dependency Foundation
+
+### 11.1 Why Build From Scratch
+
+OTTO's foundational components (Ralph, Velo, Carta, Locus) are built from scratch in C with zero external dependencies. This is a deliberate strategic choice, not NIH syndrome.
+
+**The dependency problem in logistics software:**
+
+| Commercial Component | Issues |
+|---------------------|--------|
+| Google Maps Platform | Per-request pricing, no offline, API dependency |
+| HERE Routing | Enterprise licensing, server-side only |
+| PTV xRoute | Heavy Java stack, expensive, no WASM |
+| OSRM | C++ complexity, hard to embed, GPL licensing |
+| Mapbox | Freemium pricing cliff, vendor dependency |
+| Commercial LP solvers | Seat licensing (CPLEX: €15k+/year), no WASM |
+
+**What zero-dependency gives us:**
+
+| Advantage | Business Impact |
+|-----------|-----------------|
+| MIT licensing | No contamination, clean IP for acquisition |
+| WASM compilation | Runs in browser, edge, embedded—anywhere |
+| No per-request costs | Predictable pricing for customers |
+| Offline capability | Works in truck stops, rural areas, spotty connectivity |
+| Single binary deployment | ~500KB WASM vs multi-GB commercial stacks |
+| Full control | Optimize for trucking, not generic use cases |
+| No vendor risk | Google/HERE can't deprecate our routing |
+
+### 11.2 The Abstraction Layer Strategy
+
+The foundational components are designed as **swappable backends**:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Planning Layer                        │
+│         (HoSE, Tempo, Arbor, Sigma, Pulse)              │
+└─────────────────────┬───────────────────────────────────┘
+                      │
+          ┌───────────┴───────────┐
+          ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐
+│  OTTO Default   │     │   Commercial    │
+│   (included)    │     │   (optional)    │
+├─────────────────┤     ├─────────────────┤
+│ Velo (routing)  │ ◄─► │ PTV xRoute      │
+│ Carta (tiles)   │ ◄─► │ Mapbox/HERE     │
+│ Locus (geocode) │ ◄─► │ Google/HERE     │
+│ Ralph (solver)  │ ◄─► │ Gurobi/CPLEX    │
+└─────────────────┘     └─────────────────┘
+```
+
+**Default path:** OTTO ships with everything needed. Single WASM binary, works out of the box.
+
+**Enterprise path:** Some clients have existing PTV or HERE contracts. Rather than rip-and-replace, OTTO can integrate their preferred backend through Nexus adapters.
+
+**Revenue implication:**
+
+| Scenario | Revenue Model |
+|----------|---------------|
+| Client uses OTTO defaults | Base subscription |
+| Client wants PTV integration | Integration fee + connector maintenance |
+| Client wants Gurobi for MIP | Consulting + they pay Gurobi licensing |
+| Hybrid (OTTO + commercial) | Premium tier |
+
+### 11.3 WASM as Deployment Superpower
+
+The entire OTTO stack compiles to WebAssembly:
+
+| Deployment Target | Use Case |
+|-------------------|----------|
+| Browser | Dispatcher web app, try-before-buy demos |
+| Edge/CDN | Low-latency planning at Cloudflare Workers |
+| Embedded | In-cab tablet, offline planning |
+| Server | Traditional API deployment |
+| Mobile (via wasm) | Driver apps with offline capability |
+
+**What competitors can't do:**
+
+- Google Maps: Server-side only, requires internet
+- PTV xRoute: Heavy Java runtime, no browser deployment
+- CPLEX/Gurobi: Seat licensing, no WASM, no browser
+- OSRM: C++ compilation complexity, no clean WASM story
+
+**The demo advantage:**
+
+A prospect can run OTTO in their browser with their own data before any sales call. No sandbox environment, no trial license keys, no "let me check with legal." This dramatically shortens the sales cycle.
+
+### 11.4 Size Comparison
+
+| Solution | Deployment Size | Browser? | Offline? |
+|----------|-----------------|----------|----------|
+| OTTO (full stack) | ~2MB WASM | Yes | Yes |
+| OSRM (routing only) | ~50MB + data | No | Requires server |
+| PTV xRoute | GB+ Java stack | No | No |
+| Google Maps SDK | N/A (API) | Partial | No |
+
+A complete logistics optimization stack that fits in a QR code's worth of bandwidth.
+
+### 11.5 The "Good Enough" Strategy
+
+OTTO's components don't need to beat commercial alternatives on every metric. They need to be:
+
+| Metric | Requirement | Rationale |
+|--------|-------------|-----------|
+| Correctness | 100% | Must match commercial accuracy |
+| Performance | 80-90% of commercial | Good enough for 95% of use cases |
+| Coverage | Trucking-focused | Don't need pedestrian routing |
+| Cost | €0 marginal | Unlimited usage included |
+
+**Example - Routing:**
+
+- PTV xRoute: Sub-meter accuracy, every road attribute, €€€
+- Velo: Meter accuracy, truck-relevant roads, free
+
+For planning "which fuel stops on I-80 from Chicago to Denver," Velo is indistinguishable from PTV. For "exact arrival time at a specific loading dock," maybe PTV matters. Most planning decisions don't need sub-meter precision.
+
+### 11.6 Commercial Integration as Upsell
+
+The abstraction layer creates a natural upsell path:
+
+**Land:** "Here's OTTO with built-in routing, geocoding, and optimization. Try it free."
+
+**Expand:** "Your compliance team wants PTV-certified routing for regulatory reasons? We can integrate that—here's the connector pricing."
+
+**Expand further:** "You need Gurobi for complex MIP problems beyond Ralph's scale? We'll integrate it and you handle the Gurobi license."
+
+This positions OTTO as the platform, not just a point solution. Commercial components become plugins, not replacements.
+
+### 11.7 Competitive Moat Summary
+
+| Moat | Description |
+|------|-------------|
+| **Zero-dependency** | No licensing landmines, no vendor risk, clean IP |
+| **WASM-first** | Deployment flexibility competitors can't match |
+| **Abstraction layer** | Embrace commercial alternatives instead of fighting them |
+| **Cost structure** | No per-request fees, predictable pricing |
+| **Offline capability** | Works where competitors require connectivity |
+| **Try-before-buy** | Browser demos without sales friction |
+
+The foundational components aren't just "we built routing." They're strategic infrastructure that enables a business model and deployment story that commercial alternatives structurally cannot match.
+
+---
+
+*Document version: 1.1*
 *Last updated: February 2026*
