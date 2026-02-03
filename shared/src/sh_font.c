@@ -1,0 +1,353 @@
+/*
+ * sh_font.c - MSDF Font Implementation
+ *
+ * Provides text measurement and MSDF sampling for map label rendering.
+ * Font data is embedded at build time via sh_font_data.c.
+ */
+
+#include "sh_font.h"
+#include <string.h>
+#include <math.h>
+
+/* ============================================================================
+ * External Font Data (generated at build time)
+ * ============================================================================ */
+
+/* Defined in sh_font_data.c (generated) */
+extern const SHFont sh_font_ui;
+
+/* ============================================================================
+ * Font Access
+ * ============================================================================ */
+
+const SHFont *sh_font_get_default(void)
+{
+    /* Return embedded font if available */
+    if (sh_font_ui.glyph_count > 0) {
+        return &sh_font_ui;
+    }
+    return NULL;
+}
+
+/* ============================================================================
+ * Glyph Lookup
+ * ============================================================================ */
+
+const SHGlyph *sh_font_get_glyph(const SHFont *font, uint32_t codepoint)
+{
+    if (!font || !font->glyphs) {
+        return NULL;
+    }
+
+    /* Fast path for ASCII */
+    if (codepoint < 128 && font->ascii[codepoint]) {
+        return font->ascii[codepoint];
+    }
+
+    /* Binary search for non-ASCII (glyphs sorted by unicode) */
+    int lo = 0;
+    int hi = font->glyph_count - 1;
+
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        uint32_t mid_cp = font->glyphs[mid].unicode;
+
+        if (mid_cp == codepoint) {
+            return &font->glyphs[mid];
+        } else if (mid_cp < codepoint) {
+            lo = mid + 1;
+        } else {
+            hi = mid - 1;
+        }
+    }
+
+    return NULL;
+}
+
+float sh_font_get_advance(const SHFont *font, uint32_t codepoint)
+{
+    const SHGlyph *g = sh_font_get_glyph(font, codepoint);
+    if (g) {
+        return g->advance;
+    }
+
+    /* Default advance for missing glyphs (roughly half em-width) */
+    return 0.5f;
+}
+
+/* ============================================================================
+ * UTF-8 Decoding
+ * ============================================================================ */
+
+/*
+ * UTF-8 byte sequence lengths based on leading byte.
+ * 0 = invalid leading byte.
+ */
+static const uint8_t utf8_lengths[256] = {
+    /* 0x00-0x7F: ASCII (1 byte) */
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    /* 0x80-0xBF: continuation bytes (invalid as leading) */
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    /* 0xC0-0xDF: 2-byte sequences */
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    /* 0xE0-0xEF: 3-byte sequences */
+    3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,
+    /* 0xF0-0xF7: 4-byte sequences */
+    4,4,4,4,4,4,4,4,
+    /* 0xF8-0xFF: invalid */
+    0,0,0,0,0,0,0,0
+};
+
+/* Unicode replacement character for invalid sequences */
+#define REPLACEMENT_CHAR 0xFFFD
+
+int sh_utf8_decode(const char *str, uint32_t *codepoint)
+{
+    if (!str || !codepoint) {
+        if (codepoint) *codepoint = REPLACEMENT_CHAR;
+        return 1;
+    }
+
+    const uint8_t *s = (const uint8_t *)str;
+    uint8_t lead = s[0];
+
+    /* Handle NULL terminator */
+    if (lead == 0) {
+        *codepoint = 0;
+        return 0;
+    }
+
+    int len = utf8_lengths[lead];
+
+    if (len == 0) {
+        /* Invalid leading byte */
+        *codepoint = REPLACEMENT_CHAR;
+        return 1;
+    }
+
+    if (len == 1) {
+        /* ASCII */
+        *codepoint = lead;
+        return 1;
+    }
+
+    /* Multi-byte sequence */
+    uint32_t cp = 0;
+
+    switch (len) {
+        case 2:
+            /* Check for valid continuation byte */
+            if ((s[1] & 0xC0) != 0x80) {
+                *codepoint = REPLACEMENT_CHAR;
+                return 1;
+            }
+            cp = ((lead & 0x1F) << 6) | (s[1] & 0x3F);
+            /* Reject overlong encoding */
+            if (cp < 0x80) {
+                *codepoint = REPLACEMENT_CHAR;
+                return 1;
+            }
+            break;
+
+        case 3:
+            if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80) {
+                *codepoint = REPLACEMENT_CHAR;
+                return 1;
+            }
+            cp = ((lead & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+            /* Reject overlong and surrogate range */
+            if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF)) {
+                *codepoint = REPLACEMENT_CHAR;
+                return 1;
+            }
+            break;
+
+        case 4:
+            if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 ||
+                (s[3] & 0xC0) != 0x80) {
+                *codepoint = REPLACEMENT_CHAR;
+                return 1;
+            }
+            cp = ((lead & 0x07) << 18) | ((s[1] & 0x3F) << 12) |
+                 ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+            /* Reject overlong and out-of-range */
+            if (cp < 0x10000 || cp > 0x10FFFF) {
+                *codepoint = REPLACEMENT_CHAR;
+                return 1;
+            }
+            break;
+
+        default:
+            *codepoint = REPLACEMENT_CHAR;
+            return 1;
+    }
+
+    *codepoint = cp;
+    return len;
+}
+
+int sh_utf8_strlen(const char *str)
+{
+    if (!str) return 0;
+
+    int count = 0;
+    const char *p = str;
+
+    while (*p) {
+        uint32_t cp;
+        int len = sh_utf8_decode(p, &cp);
+        if (len == 0) break;
+        p += len;
+        count++;
+    }
+
+    return count;
+}
+
+/* ============================================================================
+ * Text Measurement
+ * ============================================================================ */
+
+float sh_font_text_width(const SHFont *font, const char *text, float font_size)
+{
+    return sh_font_text_width_n(font, text, -1, font_size);
+}
+
+float sh_font_text_width_n(const SHFont *font, const char *text,
+                           int max_chars, float font_size)
+{
+    if (!font || !text || font_size <= 0.0f) {
+        return 0.0f;
+    }
+
+    float width = 0.0f;
+    const char *p = text;
+    int chars = 0;
+
+    while (*p && (max_chars < 0 || chars < max_chars)) {
+        uint32_t cp;
+        int len = sh_utf8_decode(p, &cp);
+        if (len == 0 || cp == 0) break;
+
+        width += sh_font_get_advance(font, cp);
+        p += len;
+        chars++;
+    }
+
+    return width * font_size;
+}
+
+float sh_font_line_height(const SHFont *font, float font_size)
+{
+    (void)font;  /* Currently fixed ratio */
+    return font_size * 1.2f;
+}
+
+float sh_font_ascent(const SHFont *font, float font_size)
+{
+    (void)font;
+    return font_size * 0.8f;  /* Typical ascent ratio */
+}
+
+float sh_font_descent(const SHFont *font, float font_size)
+{
+    (void)font;
+    return font_size * 0.2f;  /* Typical descent ratio */
+}
+
+/* ============================================================================
+ * MSDF Sampling
+ * ============================================================================ */
+
+/*
+ * Get median of three values (used for MSDF).
+ */
+static inline uint8_t median3(uint8_t a, uint8_t b, uint8_t c)
+{
+    if (a > b) { uint8_t t = a; a = b; b = t; }
+    if (b > c) { uint8_t t = b; b = c; c = t; }
+    if (a > b) { uint8_t t = a; a = b; b = t; }
+    return b;
+}
+
+uint8_t sh_font_sample_msdf(const SHFont *font, int x, int y)
+{
+    if (!font || !font->atlas_data) {
+        return 0;
+    }
+
+    /* Bounds check */
+    if (x < 0 || x >= font->atlas_width ||
+        y < 0 || y >= font->atlas_height) {
+        return 0;
+    }
+
+    /* Atlas is RGBA, row-major */
+    size_t idx = ((size_t)y * (size_t)font->atlas_width + (size_t)x) * 4;
+
+    /* Safety check for atlas bounds */
+    if (idx + 2 >= font->atlas_data_size) {
+        return 0;
+    }
+
+    uint8_t r = font->atlas_data[idx + 0];
+    uint8_t g = font->atlas_data[idx + 1];
+    uint8_t b = font->atlas_data[idx + 2];
+
+    return median3(r, g, b);
+}
+
+int sh_font_msdf_inside(const SHFont *font, const SHGlyph *glyph,
+                        float local_x, float local_y)
+{
+    if (!font || !glyph) {
+        return 0;
+    }
+
+    /* Map local coordinates [0,1] to atlas coordinates */
+    float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
+    float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
+
+    uint8_t dist = sh_font_sample_msdf(font, (int)atlas_x, (int)atlas_y);
+
+    /* MSDF: 128 is the edge, >128 is inside */
+    return dist >= 128;
+}
+
+float sh_font_msdf_coverage(const SHFont *font, const SHGlyph *glyph,
+                            float local_x, float local_y, float font_size)
+{
+    if (!font || !glyph || font_size <= 0.0f) {
+        return 0.0f;
+    }
+
+    /* Map local coordinates [0,1] to atlas coordinates */
+    float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
+    float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
+
+    uint8_t dist_byte = sh_font_sample_msdf(font, (int)atlas_x, (int)atlas_y);
+
+    /* Convert to signed distance [-1, 1] range */
+    float dist = (dist_byte - 128.0f) / 128.0f;
+
+    /* Scale by font size and distance range for proper anti-aliasing.
+     * Larger fonts = sharper edges, smaller fonts = more blur.
+     * The distance_range tells us how many pixels the SDF spans.
+     */
+    float screen_px_range = font->distance_range * (font_size / font->em_size);
+    if (screen_px_range < 1.0f) screen_px_range = 1.0f;
+
+    /* Apply smoothstep for anti-aliasing */
+    float edge = 0.5f / screen_px_range;
+    float coverage = (dist + edge) / (2.0f * edge);
+
+    /* Clamp to [0, 1] */
+    if (coverage < 0.0f) coverage = 0.0f;
+    if (coverage > 1.0f) coverage = 1.0f;
+
+    return coverage;
+}
