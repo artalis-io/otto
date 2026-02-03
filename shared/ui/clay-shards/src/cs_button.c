@@ -191,6 +191,10 @@ CsButtonResult cs_button(
         }
     }
 
+    /* Register hit target for click detection (uses previous frame's bounds) */
+    Clay_BoundingBox box = Clay_GetElementData(clay_id).boundingBox;
+    cs_register_hit_target(id, CS_HIT_BODY, -1, box.x, box.y, box.width, box.height);
+
     /* Check click (mouse) */
     if (is_hovered && g->pending_click) {
         result.clicked = true;

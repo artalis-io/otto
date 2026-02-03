@@ -74,6 +74,25 @@ static inline bool cs_has_margin(CsMargin m) {
 } while(0)
 
 /* ============================================================================
+ * Hit Testing
+ * ============================================================================ */
+
+#define CS_MAX_HIT_TARGETS 128  /* Max hit targets per frame */
+#define CS_MAX_Z_STACK     16   /* Max z-index stack depth */
+
+/**
+ * Internal hit target record.
+ * Registered by components during render for click detection.
+ */
+typedef struct {
+    uint32_t id;        /* Component ID */
+    CsHitZone zone;     /* Which part of the component */
+    int16_t item_index; /* Item index for list items (-1 otherwise) */
+    int16_t z_index;    /* Z-index for layering */
+    float x, y, w, h;   /* Bounding box */
+} CsHitTarget;
+
+/* ============================================================================
  * Widget State Store
  * ============================================================================ */
 
@@ -147,6 +166,12 @@ typedef struct {
     float scroll_delta_y;       /* Accumulated scroll delta this frame */
     uint32_t active_scroll_id;  /* Currently open scroll container (between begin/end) */
     bool scroll_container_hovered; /* Any scroll container is hovered this frame */
+
+    /* Hit testing state */
+    CsHitTarget hit_targets[CS_MAX_HIT_TARGETS];
+    int hit_target_count;
+    int16_t z_stack[CS_MAX_Z_STACK];
+    int z_stack_depth;
 } CsState;
 
 /* Get pointer to global state (defined in cs_common.c) */

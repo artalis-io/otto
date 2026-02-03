@@ -198,6 +198,14 @@ CsSliderResult cs_slider(
     Clay_ElementId track_container_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_WRAPPER, .stringId = {0}};
     Clay_BoundingBox track_box = Clay_GetElementData(track_container_id).boundingBox;
 
+    /* Register hit targets for click detection (uses previous frame's bounds) */
+    cs_register_hit_target(id, CS_HIT_TRACK, -1, track_box.x, track_box.y, track_box.width, track_box.height);
+
+    /* Calculate thumb bounds and register thumb hit target */
+    float thumb_x = track_box.x + thumb_offset;
+    float thumb_y = track_box.y + (track_box.height - style->thumb_size) / 2.0f;
+    cs_register_hit_target(id, CS_HIT_THUMB, -1, thumb_x, thumb_y, style->thumb_size, style->thumb_size);
+
     /* Handle drag start */
     if (is_hovered && g->pointer_down && !is_dragging && g->dragging_id == 0) {
         g->dragging_id = id;

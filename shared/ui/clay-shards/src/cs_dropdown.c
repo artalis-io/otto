@@ -253,6 +253,21 @@ CsDropdownResult cs_dropdown(
         }
     }
 
+    /* Register hit targets for click detection (uses previous frame's bounds) */
+    /* Items are registered at dropdown z-level so they win over the button */
+    if (is_open) {
+        cs_push_z_index(CS_Z_DROPDOWN);
+        for (int i = 0; i < count; i++) {
+            Clay_ElementId item_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_DROPDOWN_ITEM + (uint32_t)i, .stringId = {0}};
+            Clay_BoundingBox item_box = Clay_GetElementData(item_id).boundingBox;
+            cs_register_hit_target(id, CS_HIT_ITEM, (int16_t)i, item_box.x, item_box.y, item_box.width, item_box.height);
+        }
+        cs_pop_z_index();
+    }
+    /* Button registered at base z-level */
+    Clay_BoundingBox button_box = Clay_GetElementData(clay_id).boundingBox;
+    cs_register_hit_target(id, CS_HIT_BODY, -1, button_box.x, button_box.y, button_box.width, button_box.height);
+
     /* Handle button click to toggle open/close */
     if (is_hovered && g->pending_click && !result.closed) {
         if (is_open) {
