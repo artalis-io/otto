@@ -1486,10 +1486,11 @@ void test_unified_api(void) {
     }
     result.paths = NULL;
 
-    /* Test 4: BOTTLENECK returns INVALID_INPUT (not yet implemented) */
+    /* Test 4: BOTTLENECK minimizes max arc cost */
     opts.algorithm = RALPH_NETFLOW_ALG_BOTTLENECK;
     status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
-    ASSERT(status == RALPH_NETFLOW_INVALID_INPUT, "BOTTLENECK returns INVALID_INPUT (not implemented)");
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "BOTTLENECK returns OPTIMAL");
+    ASSERT(result.objective <= 2.0 + TOLERANCE, "BOTTLENECK objective is max cost used (<=2)");
 
     /* Test 5: K_BEST with k<=0 returns INVALID_INPUT */
     opts.algorithm = RALPH_NETFLOW_ALG_K_BEST;
@@ -1626,6 +1627,332 @@ void test_k_best_decomposition(void) {
     }
 }
 
+/* Test cost scaling for degenerate problems */
+void test_cost_scaling(void) {
+    printf("\n=== Test: Cost Scaling ===\n");
+
+    /* Create a highly degenerate problem: many arcs with same cost */
+    int n_sources = 5, n_sinks = 5;
+    int n_nodes = n_sources + n_sinks;
+    int n_arcs = n_sources * n_sinks;
+
+    int *tail, *head;
+    double *cost, *supply, *flow;
+    SAFE_CALLOC(tail, n_arcs, int);
+    SAFE_CALLOC(head, n_arcs, int);
+    SAFE_CALLOC(cost, n_arcs, double);
+    SAFE_CALLOC(supply, n_nodes, double);
+    SAFE_CALLOC(flow, n_arcs, double);
+
+    /* Build arcs - all with same cost (degenerate) */
+    int arc = 0;
+    for (int i = 0; i < n_sources; i++) {
+        for (int j = 0; j < n_sinks; j++) {
+            tail[arc] = i;
+            head[arc] = n_sources + j;
+            cost[arc] = 1.0;  /* All same cost - highly degenerate */
+            arc++;
+        }
+    }
+
+    for (int i = 0; i < n_sources; i++) supply[i] = 10.0;
+    for (int j = 0; j < n_sinks; j++) supply[n_sources + j] = -10.0;
+
+    RalphNetflowProblem prob = {
+        .num_nodes = n_nodes, .num_arcs = n_arcs,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    /* Solve without cost scaling */
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.cost_scaling = 0;
+
+    RalphNetflowResult result1 = {.flow = flow};
+    RalphNetflowStatus status = ralph_netflow_solve(&prob, &opts, &result1, NULL);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "No scaling: optimal");
+    int64_t iters_no_scaling = result1.iterations;
+    int64_t degen_no_scaling = result1.degenerate_pivots;
+
+    /* Solve with cost scaling */
+    opts.cost_scaling = 1;
+    opts.epsilon_factor = 4.0;
+
+    RalphNetflowResult result2 = {.flow = flow};
+    status = ralph_netflow_solve(&prob, &opts, &result2, NULL);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "With scaling: optimal");
+    int64_t iters_scaling = result2.iterations;
+    int64_t degen_scaling = result2.degenerate_pivots;
+
+    /* Both should give same objective */
+    ASSERT_NEAR(result1.objective, result2.objective, TOLERANCE, "Same objective");
+
+    printf("  No scaling: %ld iters, %ld degenerate\n",
+           (long)iters_no_scaling, (long)degen_no_scaling);
+    printf("  With scaling: %ld iters, %ld degenerate\n",
+           (long)iters_scaling, (long)degen_scaling);
+
+    /* Verify solution is feasible */
+    double max_viol = 0.0;
+    int valid = ralph_netflow_verify(&prob, flow, NULL, &max_viol);
+    ASSERT(valid, "Solution is feasible");
+
+    free(tail); free(head);
+    free(cost); free(supply); free(flow);
+}
+
+/* Test cost scaling with varying costs */
+void test_cost_scaling_varied(void) {
+    printf("\n=== Test: Cost Scaling (Varied Costs) ===\n");
+
+    /* Transportation with varied costs */
+    int tail[] = {0, 0, 0, 1, 1, 1};
+    int head[] = {2, 3, 4, 2, 3, 4};
+    double cost[] = {100, 200, 300, 150, 50, 250};
+    double supply[] = {30, 20, -15, -20, -15};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 5, .num_arcs = 6,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    double flow[6];
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+
+    /* Without scaling */
+    opts.cost_scaling = 0;
+    RalphNetflowResult result1 = {.flow = flow};
+    RalphNetflowStatus status = ralph_netflow_solve(&prob, &opts, &result1, NULL);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "No scaling: optimal");
+
+    /* With scaling */
+    opts.cost_scaling = 1;
+    RalphNetflowResult result2 = {.flow = flow};
+    status = ralph_netflow_solve(&prob, &opts, &result2, NULL);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "With scaling: optimal");
+
+    /* Same objective */
+    ASSERT_NEAR(result1.objective, result2.objective, TOLERANCE, "Same objective value");
+    printf("  Objective: %.1f\n", result2.objective);
+}
+
+/* ============================================================================
+ * Bottleneck Network Flow Tests
+ * ============================================================================ */
+
+/* Test basic bottleneck: minimize max arc cost used */
+void test_bottleneck_basic(void) {
+    printf("\n=== Test: Bottleneck Basic ===\n");
+
+    /*
+     * Network with 3 paths from 0 to 3:
+     * Path 1: 0 -> 1 -> 3 (costs 1, 10)  max = 10
+     * Path 2: 0 -> 2 -> 3 (costs 5, 5)   max = 5
+     * Path 3: 0 -> 3 direct (cost 8)      max = 8
+     *
+     * Supply: [10, 0, 0, -10]
+     *
+     * For MCNF: would use cheapest total cost
+     * For Bottleneck: minimize maximum single arc cost
+     * Answer: Use path 2 (0->2->3), max cost = 5
+     */
+    int tail[] = {0, 1, 0, 2, 0};
+    int head[] = {1, 3, 2, 3, 3};
+    double cost[] = {1.0, 10.0, 5.0, 5.0, 8.0};
+    double cap[] = {10.0, 10.0, 10.0, 10.0, 10.0};
+    double supply[] = {10.0, 0.0, 0.0, -10.0};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 4, .num_arcs = 5,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = cap, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    double flow[5];
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_NETFLOW_ALG_BOTTLENECK;
+
+    RalphNetflowResult result = {.flow = flow};
+    RalphNetflowStatus status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Status is OPTIMAL");
+    ASSERT_NEAR(result.objective, 5.0, TOLERANCE, "Bottleneck cost is 5");
+
+    /* Verify flow uses only arcs with cost <= 5 */
+    for (int a = 0; a < 5; a++) {
+        if (flow[a] > TOLERANCE) {
+            ASSERT(cost[a] <= 5.0 + TOLERANCE, "Flow only on arcs with cost <= 5");
+        }
+    }
+
+    /* Verify feasibility */
+    double max_viol;
+    int feasible = ralph_netflow_verify(&prob, flow, NULL, &max_viol);
+    ASSERT(feasible, "Solution is feasible");
+}
+
+/* Test bottleneck with capacity constraints */
+void test_bottleneck_capacity(void) {
+    printf("\n=== Test: Bottleneck with Capacity ===\n");
+
+    /*
+     * Network where cheap path has limited capacity, forcing use of more expensive arc.
+     *
+     * 0 ---(cost=1, cap=5)---> 1 ---(cost=2, cap=inf)---> 2
+     * 0 ---(cost=3, cap=inf)---> 2
+     *
+     * Supply: [10, 0, -10]
+     *
+     * Path via 1: can only carry 5, max cost = 2
+     * Remaining 5 must go direct: max cost = 3
+     *
+     * Bottleneck = 3 (must use direct arc for full flow)
+     */
+    int tail[] = {0, 1, 0};
+    int head[] = {1, 2, 2};
+    double cost[] = {1.0, 2.0, 3.0};
+    double cap[] = {5.0, RALPH_NETFLOW_INFINITY, RALPH_NETFLOW_INFINITY};
+    double supply[] = {10.0, 0.0, -10.0};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 3, .num_arcs = 3,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = cap, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    double flow[3];
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_NETFLOW_ALG_BOTTLENECK;
+
+    RalphNetflowResult result = {.flow = flow};
+    RalphNetflowStatus status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Status is OPTIMAL");
+    ASSERT_NEAR(result.objective, 3.0, TOLERANCE, "Bottleneck cost is 3");
+
+    /* Verify feasibility */
+    double max_viol;
+    int feasible = ralph_netflow_verify(&prob, flow, NULL, &max_viol);
+    ASSERT(feasible, "Solution is feasible");
+}
+
+/* Test bottleneck infeasible */
+void test_bottleneck_infeasible(void) {
+    printf("\n=== Test: Bottleneck Infeasible ===\n");
+
+    /*
+     * No path from source to sink
+     * 0 (supply 5)
+     * 1 (demand 5)
+     * No arcs!
+     */
+    double supply[] = {5.0, -5.0};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 2, .num_arcs = 0,
+        .tail = NULL, .head = NULL, .cost = NULL,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_NETFLOW_ALG_BOTTLENECK;
+
+    RalphNetflowResult result = {.flow = NULL};
+    RalphNetflowStatus status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+
+    ASSERT(status == RALPH_NETFLOW_INFEASIBLE, "Status is INFEASIBLE");
+}
+
+/* Test bottleneck with zero supply (trivial case) */
+void test_bottleneck_trivial(void) {
+    printf("\n=== Test: Bottleneck Trivial ===\n");
+
+    /*
+     * Zero supply/demand - trivially feasible with zero flow
+     */
+    int tail[] = {0, 1};
+    int head[] = {1, 2};
+    double cost[] = {5.0, 10.0};
+    double supply[] = {0.0, 0.0, 0.0};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 3, .num_arcs = 2,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    double flow[2];
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_NETFLOW_ALG_BOTTLENECK;
+
+    RalphNetflowResult result = {.flow = flow};
+    RalphNetflowStatus status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Status is OPTIMAL");
+    ASSERT_NEAR(result.objective, 0.0, TOLERANCE, "Bottleneck cost is 0 (no flow needed)");
+}
+
+/* Test bottleneck transportation problem */
+void test_bottleneck_transportation(void) {
+    printf("\n=== Test: Bottleneck Transportation ===\n");
+
+    /*
+     * 2x2 transportation where we want to minimize max transport cost
+     *
+     * Sources: 0 (10), 1 (10)
+     * Sinks: 2 (-10), 3 (-10)
+     *
+     * Costs:
+     *        S2   S3
+     * S0     1    4
+     * S1     3    2
+     *
+     * Bottleneck solution should minimize max cost used.
+     * Optimal: 0->2 (10), 1->3 (10) with max cost = max(1,2) = 2
+     * Or: 0->2 (10), 1->3 (10) using costs 1 and 2, bottleneck = 2
+     */
+    int tail[] = {0, 0, 1, 1};
+    int head[] = {2, 3, 2, 3};
+    double cost[] = {1.0, 4.0, 3.0, 2.0};
+    double supply[] = {10.0, 10.0, -10.0, -10.0};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 4, .num_arcs = 4,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    double flow[4];
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.algorithm = RALPH_NETFLOW_ALG_BOTTLENECK;
+
+    RalphNetflowResult result = {.flow = flow};
+    RalphNetflowStatus status = ralph_netflow_solve_ex(&prob, &opts, &result, NULL);
+
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Status is OPTIMAL");
+    ASSERT_NEAR(result.objective, 2.0, TOLERANCE, "Bottleneck cost is 2");
+
+    /* Verify no arc with cost > 2 is used */
+    for (int a = 0; a < 4; a++) {
+        if (flow[a] > TOLERANCE) {
+            ASSERT(cost[a] <= 2.0 + TOLERANCE, "No expensive arcs used");
+        }
+    }
+
+    /* Verify feasibility */
+    double max_viol;
+    int feasible = ralph_netflow_verify(&prob, flow, NULL, &max_viol);
+    ASSERT(feasible, "Solution is feasible");
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -1687,6 +2014,17 @@ int main(int argc, char *argv[]) {
     /* Flow decomposition tests */
     test_flow_decomposition();
     test_k_best_decomposition();
+
+    /* Cost scaling tests */
+    test_cost_scaling();
+    test_cost_scaling_varied();
+
+    /* Bottleneck network flow tests */
+    test_bottleneck_basic();
+    test_bottleneck_capacity();
+    test_bottleneck_infeasible();
+    test_bottleneck_trivial();
+    test_bottleneck_transportation();
 
     printf("\n=====================\n");
     printf("Tests: %d/%d passed\n", tests_passed, tests_run);
