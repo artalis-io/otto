@@ -375,3 +375,143 @@ CTRTreeNode *ct_rtree_get_root(const CTRTree *tree)
     /* Return non-NULL to indicate tree is valid */
     return (CTRTreeNode *)(tree ? (void *)1 : NULL);
 }
+
+/* ============================================================================
+ * Build R-Tree from Bounding Boxes
+ * ============================================================================
+ *
+ * Generic R-Tree builder that works with any array of bboxes.
+ * Used for multipolygons and other non-way spatial data.
+ */
+
+CTRTree *ct_rtree_build_from_bboxes(const CTBBox *bboxes, size_t num_items, CTBBox data_bbox)
+{
+    if (!bboxes || num_items == 0) return NULL;
+
+    CTRTree *tree = calloc(1, sizeof(CTRTree));
+    if (!tree) return NULL;
+
+    /* Step 1: Compute Hilbert indices */
+    CTSortEntry *entries = malloc(num_items * sizeof(CTSortEntry));
+    if (!entries) {
+        free(tree);
+        return NULL;
+    }
+
+    double lon_range = data_bbox.max_lon - data_bbox.min_lon;
+    double lat_range = data_bbox.max_lat - data_bbox.min_lat;
+    if (lon_range < 1e-9) lon_range = 1e-9;
+    if (lat_range < 1e-9) lat_range = 1e-9;
+
+    for (size_t i = 0; i < num_items; i++) {
+        entries[i].index = (uint32_t)i;
+        entries[i].bbox = bboxes[i];
+
+        double cx = (bboxes[i].min_lon + bboxes[i].max_lon) / 2;
+        double cy = (bboxes[i].min_lat + bboxes[i].max_lat) / 2;
+
+        uint32_t hx = (uint32_t)(((cx - data_bbox.min_lon) / lon_range) * (HILBERT_N - 1));
+        uint32_t hy = (uint32_t)(((cy - data_bbox.min_lat) / lat_range) * (HILBERT_N - 1));
+        if (hx >= HILBERT_N) hx = HILBERT_N - 1;
+        if (hy >= HILBERT_N) hy = HILBERT_N - 1;
+
+        entries[i].hilbert = xy_to_hilbert(hx, hy, HILBERT_ORDER);
+    }
+
+    /* Step 2: Sort by Hilbert index */
+    qsort(entries, num_items, sizeof(CTSortEntry), compare_hilbert);
+
+    /* Step 3: Calculate tree structure sizes */
+    size_t num_leaves = (num_items + CT_RTREE_NODE_CAPACITY - 1) / CT_RTREE_NODE_CAPACITY;
+
+    size_t level_sizes[32];
+    int num_levels = 0;
+    size_t n = num_leaves;
+    while (n > 0) {
+        level_sizes[num_levels++] = n;
+        if (n == 1) break;
+        n = (n + CT_RTREE_NODE_CAPACITY - 1) / CT_RTREE_NODE_CAPACITY;
+    }
+
+    size_t total_nodes = 0;
+    for (int i = 0; i < num_levels; i++) {
+        total_nodes += level_sizes[i];
+    }
+
+    CTPackedNode *nodes = calloc(total_nodes, sizeof(CTPackedNode));
+    uint32_t *leaf_indices = malloc(num_items * sizeof(uint32_t));
+    if (!nodes || !leaf_indices) {
+        free(entries);
+        free(nodes);
+        free(leaf_indices);
+        free(tree);
+        return NULL;
+    }
+
+    /* Step 4: Build leaf level */
+    size_t node_idx = 0;
+    size_t entry_idx = 0;
+
+    for (size_t i = 0; i < num_leaves; i++) {
+        CTPackedNode *node = &nodes[node_idx++];
+        node->is_leaf = 1;
+        node->first_child = (uint32_t)entry_idx;
+
+        size_t remaining = num_items - entry_idx;
+        size_t count = remaining < CT_RTREE_NODE_CAPACITY ? remaining : CT_RTREE_NODE_CAPACITY;
+        node->num_children = (uint16_t)count;
+
+        CTBBox bb = entries[entry_idx].bbox;
+        leaf_indices[entry_idx] = entries[entry_idx].index;
+
+        for (size_t j = 1; j < count; j++) {
+            leaf_indices[entry_idx + j] = entries[entry_idx + j].index;
+            bb = bbox_union(bb, entries[entry_idx + j].bbox);
+        }
+
+        node->bbox = bb;
+        entry_idx += count;
+    }
+
+    /* Step 5: Build internal levels */
+    size_t prev_level_start = 0;
+    size_t prev_level_count = num_leaves;
+
+    for (int level = 1; level < num_levels; level++) {
+        size_t level_count = level_sizes[level];
+        size_t level_start = node_idx;
+        size_t child_idx = prev_level_start;
+
+        for (size_t i = 0; i < level_count; i++) {
+            CTPackedNode *node = &nodes[node_idx++];
+            node->is_leaf = 0;
+            node->first_child = (uint32_t)child_idx;
+
+            size_t children_remaining = prev_level_count - (child_idx - prev_level_start);
+            size_t count = children_remaining < CT_RTREE_NODE_CAPACITY ?
+                          children_remaining : CT_RTREE_NODE_CAPACITY;
+            node->num_children = (uint16_t)count;
+
+            CTBBox bb = nodes[child_idx].bbox;
+            for (size_t j = 1; j < count; j++) {
+                bb = bbox_union(bb, nodes[child_idx + j].bbox);
+            }
+
+            node->bbox = bb;
+            child_idx += count;
+        }
+
+        prev_level_start = level_start;
+        prev_level_count = level_count;
+    }
+
+    tree->nodes = nodes;
+    tree->leaf_indices = leaf_indices;
+    tree->num_nodes = total_nodes;
+    tree->num_entries = num_items;
+    tree->root_idx = total_nodes - 1;
+
+    free(entries);
+
+    return tree;
+}

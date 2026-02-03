@@ -1414,24 +1414,49 @@ CTStatus ct_pbf_get_bbox_features(const CTPBFContext *ctx, CTBBox bbox,
         }
     }
 
-    /* Add multipolygon features (linear scan for now, TODO: use mp_rtree) */
-    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
-        const CTAssembledMultipolygon *mp = &ctx->multipolygons[i];
+    /* Add multipolygon features */
+    if (ctx->mp_rtree) {
+        /* Use R-Tree for fast multipolygon lookup */
+        size_t max_mp = ctx->num_multipolygons;
+        uint32_t *mp_candidates = malloc(max_mp * sizeof(uint32_t));
+        if (mp_candidates) {
+            size_t num_mp = ct_rtree_query(ctx->mp_rtree, bbox, mp_candidates, max_mp);
+            for (size_t i = 0; i < num_mp; i++) {
+                uint32_t mp_idx = mp_candidates[i];
+                if (mp_idx >= ctx->num_multipolygons) continue;
 
-        /* Quick bbox check */
-        if (mp->bbox.max_lat < bbox.min_lat ||
-            mp->bbox.min_lat > bbox.max_lat ||
-            mp->bbox.max_lon < bbox.min_lon ||
-            mp->bbox.min_lon > bbox.max_lon) {
-            continue;  /* No intersection */
+                const CTAssembledMultipolygon *mp = &ctx->multipolygons[mp_idx];
+                CTStatus status = add_multipolygon_as_feature(mp, features, count, &capacity);
+                if (status != CT_OK) {
+                    free(mp_candidates);
+                    free(*features);
+                    *features = NULL;
+                    *count = 0;
+                    return status;
+                }
+            }
+            free(mp_candidates);
         }
+    } else {
+        /* Fallback: linear scan */
+        for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+            const CTAssembledMultipolygon *mp = &ctx->multipolygons[i];
 
-        CTStatus status = add_multipolygon_as_feature(mp, features, count, &capacity);
-        if (status != CT_OK) {
-            free(*features);
-            *features = NULL;
-            *count = 0;
-            return status;
+            /* Quick bbox check */
+            if (mp->bbox.max_lat < bbox.min_lat ||
+                mp->bbox.min_lat > bbox.max_lat ||
+                mp->bbox.max_lon < bbox.min_lon ||
+                mp->bbox.min_lon > bbox.max_lon) {
+                continue;
+            }
+
+            CTStatus status = add_multipolygon_as_feature(mp, features, count, &capacity);
+            if (status != CT_OK) {
+                free(*features);
+                *features = NULL;
+                *count = 0;
+                return status;
+            }
         }
     }
 
