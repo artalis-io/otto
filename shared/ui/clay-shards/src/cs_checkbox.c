@@ -32,7 +32,10 @@ CsCheckboxResult cs_checkbox(
     CsCheckboxResult result = {0};
 
     /* Validate required parameter */
-    if (!checked) return result;
+    if (!checked) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
+        return result;
+    }
 
     CsState *g = cs_get_state();
 

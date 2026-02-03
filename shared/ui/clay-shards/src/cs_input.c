@@ -45,7 +45,8 @@ CsInputResult cs_input(
 
     /* Validate inputs */
     if (!text || !len || max_len <= 0) {
-        return result;  /* Return empty result for invalid inputs */
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
+        return result;
     }
 
     /* Sanitize length - clamp if corrupted */

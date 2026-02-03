@@ -24,7 +24,21 @@ const CsDropdownStyle CS_DROPDOWN_STYLE_DEFAULT = {
  * State Management
  * ============================================================================ */
 
-/* Track which dropdown is currently open (only one at a time) */
+/*
+ * ARCHITECTURE: Single-open dropdown design.
+ *
+ * Only one dropdown can be open at a time per thread. Opening a new dropdown
+ * automatically closes any previously open dropdown. This is a deliberate
+ * design choice for simplicity - most UIs only need one dropdown open at once.
+ *
+ * Limitations:
+ *   - Nested/hierarchical dropdown menus are not supported
+ *   - Opening dropdown B while dropdown A is open will close A
+ *   - Multi-level menus require alternative UI patterns (e.g., tree view)
+ *
+ * If hierarchical dropdowns are needed in the future, this could be refactored
+ * to use a stack of open dropdown IDs instead of a single ID.
+ */
 static CS_THREAD_LOCAL uint32_t tls_open_dropdown_id = 0;
 
 bool cs_dropdown_is_open(uint32_t id) {
@@ -56,6 +70,7 @@ CsDropdownResult cs_dropdown(
 
     /* Validate required parameters */
     if (!selected || !options || count <= 0) {
+        cs_record_error(CS_ERR_INVALID_ARGUMENT);
         return result;
     }
 
