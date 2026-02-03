@@ -45,11 +45,9 @@ export class WasmMapProvider {
             this.locus = Locus;
             this.carta = Carta;
 
-            console.log('WASM modules loaded');
             return true;
         } catch (err) {
             this.loadError = err.message;
-            console.error('Failed to load WASM modules:', err);
             return false;
         }
     }
@@ -61,7 +59,6 @@ export class WasmMapProvider {
     async loadVeloGraph(url) {
         if (!this.velo) throw new Error('Velo module not initialized');
 
-        console.log('Loading Velo graph from:', url);
         const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -78,10 +75,6 @@ export class WasmMapProvider {
             throw new Error('Failed to load Velo graph');
         }
 
-        const nodeCount = this.velo._wasm_graph_node_count(this.veloGraph);
-        const edgeCount = this.velo._wasm_graph_edge_count(this.veloGraph);
-        console.log(`Velo graph loaded: ${nodeCount} nodes, ${edgeCount} edges`);
-
         return true;
     }
 
@@ -92,7 +85,6 @@ export class WasmMapProvider {
     async loadLocusIndex(url) {
         if (!this.locus) throw new Error('Locus module not initialized');
 
-        console.log('Loading Locus index from:', url);
         const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -114,9 +106,6 @@ export class WasmMapProvider {
             throw new Error(`Failed to load Locus index: status ${status}`);
         }
 
-        const entityCount = this.locus._wasm_index_entity_count(this.locusIndex);
-        console.log(`Locus index loaded: ${entityCount} entities`);
-
         return true;
     }
 
@@ -127,7 +116,6 @@ export class WasmMapProvider {
     async loadCartaContext(url) {
         if (!this.carta) throw new Error('Carta module not initialized');
 
-        console.log('Loading Carta context from:', url);
         const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
@@ -143,10 +131,6 @@ export class WasmMapProvider {
         if (!this.cartaContext) {
             throw new Error('Failed to load Carta context');
         }
-
-        const nodeCount = this.carta._wasm_context_node_count(this.cartaContext);
-        const wayCount = this.carta._wasm_context_way_count(this.cartaContext);
-        console.log(`Carta context loaded: ${nodeCount} nodes, ${wayCount} ways`);
 
         return true;
     }

@@ -111,7 +111,6 @@ export class MSDFFont {
             }
         }
 
-        console.log(`Transferred ${count} glyph metrics to WASM`);
         return count;
     }
 }

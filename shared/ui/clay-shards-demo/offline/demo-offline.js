@@ -191,11 +191,8 @@ async function main() {
             // Create provider bridge for routing
             providerBridge = new WasmProviderBridge(wasm, wasmProvider);
             providerBridge.start();
-
-            console.log('Offline provider ready!');
         } catch (err) {
-            console.warn('Offline provider not available:', err.message);
-            console.log('Falling back to online mode (click-to-route requires running Velo API)');
+            // Offline provider not available - fall back to online mode
         }
 
         setProgress(95);
