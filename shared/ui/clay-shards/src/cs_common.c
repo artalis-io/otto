@@ -190,6 +190,8 @@ void cs_frame_end(float dt) {
     tls_state.pending_arrow_down = false;
     tls_state.pending_arrow_left = false;
     tls_state.pending_arrow_right = false;
+    tls_state.pending_home = false;
+    tls_state.pending_end = false;
 
     /* Update cursor blink for focused widget */
     if (tls_state.focused_id != 0) {
@@ -341,7 +343,7 @@ CS_EXPORT bool cs_key_down(int key_code, bool shift, bool ctrl) {
         }
     }
 
-    /* Non-text focused element: handle Enter, Escape, and arrow keys */
+    /* Non-text focused element: handle Enter, Escape, arrow keys, Home/End */
     if (tls_state.focused_id != 0 && (!tls_state.active_text || !tls_state.active_len)) {
         switch (key_code) {
             case 13: /* Enter */
@@ -349,6 +351,12 @@ CS_EXPORT bool cs_key_down(int key_code, bool shift, bool ctrl) {
                 return true;
             case 27: /* Escape */
                 tls_state.pending_escape = true;
+                return true;
+            case 35: /* End */
+                tls_state.pending_end = true;
+                return true;
+            case 36: /* Home */
+                tls_state.pending_home = true;
                 return true;
             case 37: /* Left arrow */
                 tls_state.pending_arrow_left = true;

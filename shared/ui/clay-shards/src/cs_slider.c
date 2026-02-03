@@ -237,16 +237,24 @@ CsSliderResult cs_slider(
         g->clicked_id = id;
     }
 
-    /* Handle keyboard - arrow keys when focused */
+    /* Handle keyboard when focused */
     if (is_focused) {
-        float step_size = style->step > 0.0f ? style->step : (max - min) / 20.0f;
         float new_value = current_value;
 
-        if (g->pending_arrow_left || g->pending_arrow_down) {
+        /* Home/End: jump to min/max */
+        if (g->pending_home) {
+            new_value = min;
+        } else if (g->pending_end) {
+            new_value = max;
+        }
+        /* Arrow keys: increment/decrement by step */
+        else if (g->pending_arrow_left || g->pending_arrow_down) {
+            float step_size = style->step > 0.0f ? style->step : (max - min) / 20.0f;
             new_value = current_value - step_size;
             new_value = snap_to_step(new_value, min, max, style->step);
             new_value = clamp_f(new_value, min, max);
         } else if (g->pending_arrow_right || g->pending_arrow_up) {
+            float step_size = style->step > 0.0f ? style->step : (max - min) / 20.0f;
             new_value = current_value + step_size;
             new_value = snap_to_step(new_value, min, max, style->step);
             new_value = clamp_f(new_value, min, max);
