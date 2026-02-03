@@ -5,6 +5,7 @@
  * - Artificial arc method for Phase 1 (initial BFS)
  * - Candidate list pricing (Mulvey's method)
  * - Threaded tree representation for O(subtree) updates
+ * - SIMD-optimized data operations via OpenMP SIMD
  */
 
 #include "netflow.h"
@@ -12,6 +13,10 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 /* Memory alignment for cache efficiency */
 #define NETFLOW_ALIGNMENT 64
@@ -86,6 +91,7 @@ struct RalphNetflowWorkspace {
 
     /* Candidate list for pricing */
     int *candidates;            /* Candidate arcs [max_arcs + max_nodes] */
+    double *reduced_costs;      /* SIMD buffer for batch reduced cost computation */
     int num_candidates;
     int next_arc;               /* For round-robin scanning */
     int64_t pivots_since_rebuild;
@@ -157,14 +163,15 @@ size_t ralph_netflow_workspace_size(int max_nodes, int max_arcs) {
     size_t cycle_dir_size = align_size(n * sizeof(int));
     size_t mark_size = align_size(n * sizeof(int));
 
-    /* Candidate list */
+    /* Candidate list and SIMD buffer */
     size_t candidates_size = align_size(m * sizeof(int));
+    size_t reduced_costs_size = align_size(m * sizeof(double));
 
     return aug_tail_size + aug_head_size + aug_cost_size + aug_capacity_size +
            aug_lower_size + flow_size + state_size + potential_size +
            parent_size + pred_arc_size + depth_size + thread_size + subtree_size +
            cycle_nodes_size + cycle_arcs_size + cycle_dir_size + mark_size +
-           candidates_size;
+           candidates_size + reduced_costs_size;
 }
 
 RalphNetflowWorkspace* ralph_netflow_workspace_create(int max_nodes, int max_arcs) {
@@ -226,7 +233,8 @@ RalphNetflowWorkspace* ralph_netflow_workspace_create(int max_nodes, int max_arc
     ws->cycle_dir = (int *)ptr;       ptr += align_size(n * sizeof(int));
     ws->mark = (int *)ptr;            ptr += align_size(n * sizeof(int));
 
-    ws->candidates = (int *)ptr;
+    ws->candidates = (int *)ptr;      ptr += align_size(m * sizeof(int));
+    ws->reduced_costs = (double *)ptr;
 
     ws->num_candidates = 0;
     ws->next_arc = 0;
@@ -374,6 +382,25 @@ static inline double reduced_cost(const RalphNetflowWorkspace *ws, int arc) {
     int t = ws->aug_tail[arc];
     int h = ws->aug_head[arc];
     return ws->aug_cost[arc] - ws->potential[t] + ws->potential[h];
+}
+
+/*
+ * Batch compute reduced costs for all arcs using SIMD.
+ * Uses OpenMP SIMD for vectorization where supported.
+ * The restrict qualifiers promise no aliasing to the compiler.
+ */
+static void compute_reduced_costs_simd(
+    const double * restrict cost,
+    const double * restrict potential,
+    const int * restrict tail,
+    const int * restrict head,
+    double * restrict rc,
+    int num_arcs
+) {
+    #pragma omp simd
+    for (int a = 0; a < num_arcs; a++) {
+        rc[a] = cost[a] - potential[tail[a]] + potential[head[a]];
+    }
 }
 
 /*
@@ -739,6 +766,7 @@ static void recalculate_potentials(RalphNetflowWorkspace *ws, int num_nodes) {
 
 /*
  * Rebuild candidate list by scanning all non-basic arcs.
+ * Uses SIMD-optimized batch computation for large problems.
  */
 static void rebuild_candidate_list(
     RalphNetflowWorkspace *ws,
@@ -747,22 +775,54 @@ static void rebuild_candidate_list(
 ) {
     ws->num_candidates = 0;
 
-    for (int a = 0; a < num_arcs_total; a++) {
-        if (ws->state[a] == RALPH_NETFLOW_BASIC) continue;
+    /* Use restrict pointers for aliasing hints */
+    const int * restrict state = ws->state;
 
-        double rc = reduced_cost(ws, a);
+    /* For large problems, use SIMD batch computation */
+    if (num_arcs_total >= 5000) {
+        compute_reduced_costs_simd(
+            ws->aug_cost, ws->potential,
+            ws->aug_tail, ws->aug_head,
+            ws->reduced_costs, num_arcs_total
+        );
 
-        int eligible = 0;
-        if (ws->state[a] == RALPH_NETFLOW_AT_LOWER && approx_negative(rc)) {
-            eligible = 1;
-        } else if (ws->state[a] == RALPH_NETFLOW_AT_UPPER && approx_positive(rc)) {
-            eligible = 1;
+        const double * restrict rc = ws->reduced_costs;
+        for (int a = 0; a < num_arcs_total; a++) {
+            if (state[a] == RALPH_NETFLOW_BASIC) continue;
+
+            int eligible = 0;
+            if (state[a] == RALPH_NETFLOW_AT_LOWER && rc[a] < -RALPH_NETFLOW_TOLERANCE) {
+                eligible = 1;
+            } else if (state[a] == RALPH_NETFLOW_AT_UPPER && rc[a] > RALPH_NETFLOW_TOLERANCE) {
+                eligible = 1;
+            }
+
+            if (eligible) {
+                ws->candidates[ws->num_candidates++] = a;
+                if (ws->num_candidates >= list_size) {
+                    break;
+                }
+            }
         }
+    } else {
+        /* For smaller problems, compute on-the-fly to avoid extra memory traffic */
+        for (int a = 0; a < num_arcs_total; a++) {
+            if (state[a] == RALPH_NETFLOW_BASIC) continue;
 
-        if (eligible) {
-            ws->candidates[ws->num_candidates++] = a;
-            if (ws->num_candidates >= list_size) {
-                break;
+            double rc = reduced_cost(ws, a);
+
+            int eligible = 0;
+            if (state[a] == RALPH_NETFLOW_AT_LOWER && approx_negative(rc)) {
+                eligible = 1;
+            } else if (state[a] == RALPH_NETFLOW_AT_UPPER && approx_positive(rc)) {
+                eligible = 1;
+            }
+
+            if (eligible) {
+                ws->candidates[ws->num_candidates++] = a;
+                if (ws->num_candidates >= list_size) {
+                    break;
+                }
             }
         }
     }
@@ -896,15 +956,68 @@ static RalphNetflowStatus setup_initial_solution(
     int num_arcs = problem->num_arcs;
     int root = num_nodes;
 
-    /* Copy and transform problem data */
+    /* Copy problem data with SIMD-friendly separated loops */
+    const int * restrict p_tail = problem->tail;
+    const int * restrict p_head = problem->head;
+    const double * restrict p_cost = problem->cost;
+    int * restrict aug_tail = ws->aug_tail;
+    int * restrict aug_head = ws->aug_head;
+    double * restrict aug_cost = ws->aug_cost;
+    double * restrict aug_capacity = ws->aug_capacity;
+    double * restrict aug_lower = ws->aug_lower;
+    double * restrict flow = ws->flow;
+    int * restrict state = ws->state;
+
+    /* Copy tail/head arrays (SIMD-friendly) */
+    #pragma omp simd
     for (int a = 0; a < num_arcs; a++) {
-        ws->aug_tail[a] = problem->tail[a];
-        ws->aug_head[a] = problem->head[a];
-        ws->aug_cost[a] = problem->cost[a] * cost_multiplier;
-        ws->aug_capacity[a] = problem->capacity ? problem->capacity[a] : RALPH_NETFLOW_INFINITY;
-        ws->aug_lower[a] = problem->lower ? problem->lower[a] : 0.0;
-        ws->flow[a] = ws->aug_lower[a];
-        ws->state[a] = RALPH_NETFLOW_AT_LOWER;
+        aug_tail[a] = p_tail[a];
+    }
+    #pragma omp simd
+    for (int a = 0; a < num_arcs; a++) {
+        aug_head[a] = p_head[a];
+    }
+
+    /* Scale costs (SIMD-friendly) */
+    #pragma omp simd
+    for (int a = 0; a < num_arcs; a++) {
+        aug_cost[a] = p_cost[a] * cost_multiplier;
+    }
+
+    /* Copy capacity */
+    if (problem->capacity) {
+        const double * restrict p_cap = problem->capacity;
+        #pragma omp simd
+        for (int a = 0; a < num_arcs; a++) {
+            aug_capacity[a] = p_cap[a];
+        }
+    } else {
+        #pragma omp simd
+        for (int a = 0; a < num_arcs; a++) {
+            aug_capacity[a] = RALPH_NETFLOW_INFINITY;
+        }
+    }
+
+    /* Copy lower bounds and initialize flow */
+    if (problem->lower) {
+        const double * restrict p_lower = problem->lower;
+        #pragma omp simd
+        for (int a = 0; a < num_arcs; a++) {
+            aug_lower[a] = p_lower[a];
+            flow[a] = p_lower[a];
+        }
+    } else {
+        #pragma omp simd
+        for (int a = 0; a < num_arcs; a++) {
+            aug_lower[a] = 0.0;
+            flow[a] = 0.0;
+        }
+    }
+
+    /* Initialize arc states */
+    #pragma omp simd
+    for (int a = 0; a < num_arcs; a++) {
+        state[a] = RALPH_NETFLOW_AT_LOWER;
     }
 
     /* Compute residual supply (after accounting for lower bounds) */
@@ -915,8 +1028,10 @@ static RalphNetflowStatus setup_initial_solution(
     double *residual = (double *)malloc(((size_t)num_nodes + 1) * sizeof(double));
     if (!residual) return RALPH_NETFLOW_OUT_OF_MEMORY;
 
+    const double * restrict p_supply = problem->supply;
+    #pragma omp simd
     for (int i = 0; i < num_nodes; i++) {
-        residual[i] = problem->supply[i];
+        residual[i] = p_supply[i];
     }
 
     for (int a = 0; a < num_arcs; a++) {
