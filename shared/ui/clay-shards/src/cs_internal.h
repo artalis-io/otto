@@ -44,6 +44,9 @@
 #define CS_ID_OFFSET_DROPDOWN_ARROW 0x40000  /* Dropdown arrow indicator */
 #define CS_ID_OFFSET_DROPDOWN_LIST  0x50000  /* Dropdown floating list */
 #define CS_ID_OFFSET_DROPDOWN_ITEM  0x60000  /* Dropdown list items (+ index) */
+#define CS_ID_OFFSET_SCROLL_CONTENT 0x70000  /* Scroll container inner content */
+#define CS_ID_OFFSET_SCROLL_TRACK   0x80000  /* Scrollbar track */
+#define CS_ID_OFFSET_SCROLL_THUMB   0x90000  /* Scrollbar thumb */
 
 /* ============================================================================
  * Helper Macros for Code Deduplication
@@ -138,6 +141,12 @@ typedef struct {
 
     /* Widget state store (hash table) */
     CsWidgetState widgets[CS_WIDGET_STATE_CAPACITY];
+
+    /* Scroll container state */
+    float scroll_delta_x;       /* Accumulated scroll delta this frame */
+    float scroll_delta_y;       /* Accumulated scroll delta this frame */
+    uint32_t active_scroll_id;  /* Currently open scroll container (between begin/end) */
+    bool scroll_container_hovered; /* Any scroll container is hovered this frame */
 } CsState;
 
 /* Get pointer to global state (defined in cs_common.c) */
