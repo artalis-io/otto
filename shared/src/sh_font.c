@@ -351,3 +351,168 @@ float sh_font_msdf_coverage(const SHFont *font, const SHGlyph *glyph,
 
     return coverage;
 }
+
+/* ============================================================================
+ * Bilinear Sampling and High-Quality Coverage
+ * ============================================================================ */
+
+/*
+ * Clamp float to range [a, b].
+ */
+static inline float clampf(float x, float a, float b)
+{
+    return x < a ? a : (x > b ? b : x);
+}
+
+/*
+ * Linear interpolation.
+ */
+static inline float lerpf(float a, float b, float t)
+{
+    return a + (b - a) * t;
+}
+
+/*
+ * Smoothstep for anti-aliased edges.
+ * Returns smooth interpolation between 0 and 1.
+ */
+static inline float smoothstepf(float edge0, float edge1, float x)
+{
+    float t = clampf((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+/*
+ * Median of three floats (for MSDF).
+ */
+static inline float median3f(float a, float b, float c)
+{
+    float max_ab = a > b ? a : b;
+    float min_ab = a < b ? a : b;
+    float max_bc = b > c ? b : c;
+    float min_max = max_ab < c ? max_ab : c;
+    return min_ab > max_bc ? min_ab : (min_max > max_bc ? max_bc : min_max);
+}
+
+float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atlas_y)
+{
+    if (!font || !font->atlas_data) {
+        return 0.0f;
+    }
+
+    /* Clamp to atlas bounds */
+    float x = clampf(atlas_x, 0.0f, (float)(font->atlas_width - 1));
+    float y = clampf(atlas_y, 0.0f, (float)(font->atlas_height - 1));
+
+    /* Get integer coordinates and fractional parts */
+    int x0 = (int)x;
+    int y0 = (int)y;
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+
+    /* Clamp to bounds */
+    if (x1 >= font->atlas_width) x1 = font->atlas_width - 1;
+    if (y1 >= font->atlas_height) y1 = font->atlas_height - 1;
+
+    float tx = x - (float)x0;
+    float ty = y - (float)y0;
+
+    /* Sample four corners (RGBA atlas, we need RGB for MSDF) */
+    size_t idx00 = ((size_t)y0 * (size_t)font->atlas_width + (size_t)x0) * 4;
+    size_t idx10 = ((size_t)y0 * (size_t)font->atlas_width + (size_t)x1) * 4;
+    size_t idx01 = ((size_t)y1 * (size_t)font->atlas_width + (size_t)x0) * 4;
+    size_t idx11 = ((size_t)y1 * (size_t)font->atlas_width + (size_t)x1) * 4;
+
+    /* Bounds check */
+    if (idx11 + 2 >= font->atlas_data_size) {
+        return 0.0f;
+    }
+
+    /* Convert to float [0, 1] and compute median for each corner */
+    const float inv255 = 1.0f / 255.0f;
+
+    float r00 = font->atlas_data[idx00 + 0] * inv255;
+    float g00 = font->atlas_data[idx00 + 1] * inv255;
+    float b00 = font->atlas_data[idx00 + 2] * inv255;
+    float m00 = median3f(r00, g00, b00);
+
+    float r10 = font->atlas_data[idx10 + 0] * inv255;
+    float g10 = font->atlas_data[idx10 + 1] * inv255;
+    float b10 = font->atlas_data[idx10 + 2] * inv255;
+    float m10 = median3f(r10, g10, b10);
+
+    float r01 = font->atlas_data[idx01 + 0] * inv255;
+    float g01 = font->atlas_data[idx01 + 1] * inv255;
+    float b01 = font->atlas_data[idx01 + 2] * inv255;
+    float m01 = median3f(r01, g01, b01);
+
+    float r11 = font->atlas_data[idx11 + 0] * inv255;
+    float g11 = font->atlas_data[idx11 + 1] * inv255;
+    float b11 = font->atlas_data[idx11 + 2] * inv255;
+    float m11 = median3f(r11, g11, b11);
+
+    /* Bilinear interpolation */
+    float m0 = lerpf(m00, m10, tx);
+    float m1 = lerpf(m01, m11, tx);
+    return lerpf(m0, m1, ty);
+}
+
+float sh_font_msdf_coverage_bilinear(const SHFont *font, const SHGlyph *glyph,
+                                      float local_x, float local_y, float font_size)
+{
+    if (!font || !glyph || font_size <= 0.0f) {
+        return 0.0f;
+    }
+
+    /* Map local coordinates [0,1] to atlas coordinates */
+    float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
+    float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
+
+    /* Sample with bilinear interpolation */
+    float dist_norm = sh_font_sample_msdf_bilinear(font, atlas_x, atlas_y);
+
+    /* Convert from [0, 1] to signed distance [-1, 1] (0.5 = edge) */
+    float dist = (dist_norm - 0.5f) * 2.0f;
+
+    /* Calculate screen pixel range for anti-aliasing */
+    float screen_px_range = font->distance_range * (font_size / font->em_size);
+    if (screen_px_range < 1.0f) screen_px_range = 1.0f;
+
+    /* Smoothing width in distance units */
+    float smoothing = 0.5f / screen_px_range;
+
+    /* Apply smoothstep for anti-aliased coverage */
+    return smoothstepf(-smoothing, smoothing, dist);
+}
+
+float sh_font_msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
+                                       float local_x, float local_y,
+                                       float font_size, float threshold)
+{
+    if (!font || !glyph || font_size <= 0.0f) {
+        return 0.0f;
+    }
+
+    /* Map local coordinates [0,1] to atlas coordinates */
+    float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
+    float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
+
+    /* Sample with bilinear interpolation */
+    float dist_norm = sh_font_sample_msdf_bilinear(font, atlas_x, atlas_y);
+
+    /* Convert from [0, 1] to signed distance [-1, 1]
+     * Adjust by threshold: threshold=0.5 means edge at 0.5 (normal)
+     * threshold=0.3 means edge at 0.3 (expands glyph for halo)
+     */
+    float dist = (dist_norm - threshold) * 2.0f;
+
+    /* Calculate screen pixel range for anti-aliasing */
+    float screen_px_range = font->distance_range * (font_size / font->em_size);
+    if (screen_px_range < 1.0f) screen_px_range = 1.0f;
+
+    /* Smoothing width in distance units */
+    float smoothing = 0.5f / screen_px_range;
+
+    /* Apply smoothstep for anti-aliased coverage */
+    return smoothstepf(-smoothing, smoothing, dist);
+}
