@@ -163,6 +163,37 @@ typedef enum {
 } CTBoundaryLevel;
 
 /* ============================================================================
+ * Place Types (for label rendering)
+ * ============================================================================ */
+
+typedef enum {
+    CT_PLACE_UNKNOWN = 0,
+    CT_PLACE_COUNTRY,        /* place=country (z2+) */
+    CT_PLACE_STATE,          /* place=state (z4+) */
+    CT_PLACE_CITY,           /* place=city (z6+) */
+    CT_PLACE_TOWN,           /* place=town (z9+) */
+    CT_PLACE_VILLAGE,        /* place=village (z11+) */
+    CT_PLACE_HAMLET,         /* place=hamlet (z13+) */
+    CT_PLACE_SUBURB,         /* place=suburb (z12+) */
+    CT_PLACE_NEIGHBOURHOOD,  /* place=neighbourhood (z14+) */
+    CT_PLACE_LOCALITY,       /* place=locality (z14+) */
+    CT_PLACE_ISLAND,         /* place=island (z8+) */
+    CT_PLACE_PEAK,           /* natural=peak (z12+) */
+    CT_PLACE_TYPE_COUNT
+} CTPlaceType;
+
+/* Labeled point (city, town, peak, etc.) for map labels */
+typedef struct {
+    int64_t id;              /* OSM node ID */
+    CTCoord coord;           /* Geographic position */
+    CTPlaceType type;        /* Place classification */
+    char *name;              /* Display name (UTF-8) */
+    int population;          /* Population (0 if unknown) */
+    int min_zoom;            /* Minimum zoom level for display */
+    int priority;            /* Label priority (higher = more important) */
+} CTLabeledPoint;
+
+/* ============================================================================
  * Feature Geometry Types
  * ============================================================================ */
 
@@ -450,6 +481,11 @@ typedef struct {
 
     /* Spatial index for fast tile queries (ways) */
     CTRTree *rtree;
+
+    /* Labeled points (cities, towns, peaks, etc.) */
+    CTLabeledPoint *labeled_points;
+    size_t num_labeled_points;
+    size_t labeled_points_capacity;
 
     /* Bounding box of loaded data */
     CTBBox bbox;
