@@ -571,20 +571,34 @@ void ct_render_circle(CTRenderContext *ctx,
         return;
     }
 
+    /* Use squared distances to avoid sqrt for most pixels */
+    float radius_sq = radius * radius;
+    float inner_radius = radius - 1.0f;
+    float inner_sq = inner_radius * inner_radius;
+
     for (int y = -r; y <= r; y++) {
         for (int x = -r; x <= r; x++) {
-            float dist = sqrtf((float)(x * x + y * y));
-            if (dist <= radius) {
-                float alpha = 1.0f;
-                if (dist > radius - 1.0f) {
-                    alpha = radius - dist;
-                }
-                if (alpha > 0) {
-                    uint8_t a = (uint8_t)(CT_COLOR_A(color) * alpha);
-                    CTColor c = CT_RGBA(CT_COLOR_R(color), CT_COLOR_G(color),
-                                        CT_COLOR_B(color), a);
-                    ct_render_blend_pixel(ctx, cx + x, cy + y, c);
-                }
+            float dist_sq = (float)(x * x + y * y);
+
+            /* Outside circle - skip entirely */
+            if (dist_sq > radius_sq) {
+                continue;
+            }
+
+            /* Inside inner region - full opacity, no sqrt needed */
+            if (dist_sq <= inner_sq) {
+                ct_render_blend_pixel(ctx, cx + x, cy + y, color);
+                continue;
+            }
+
+            /* Edge region - need sqrt for anti-aliasing */
+            float dist = sqrtf(dist_sq);
+            float alpha = radius - dist;
+            if (alpha > 0) {
+                uint8_t a = (uint8_t)(CT_COLOR_A(color) * alpha);
+                CTColor c = CT_RGBA(CT_COLOR_R(color), CT_COLOR_G(color),
+                                    CT_COLOR_B(color), a);
+                ct_render_blend_pixel(ctx, cx + x, cy + y, c);
             }
         }
     }
