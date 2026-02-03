@@ -50,6 +50,12 @@ A comprehensive trucking and logistics optimization platform, combining route pl
 | [**ClayShards WebGL**](shared/ui/clay-shards-webgl/) | `shared/ui/clay-shards-webgl/` | WebGL renderer for browsers |
 | [**ClayShards Demo**](shared/ui/clay-shards-demo/) | `shared/ui/clay-shards-demo/` | Example map viewer application |
 
+**ClayShards Features:**
+- Thread-local storage for multi-threaded applications
+- Custom allocator support (arena allocators, debug allocators)
+- Error tracking API for diagnosing silent failures
+- 52 unit tests with edge case coverage
+
 ## Quick Start
 
 ### Using Docker
@@ -692,6 +698,12 @@ CLAY(CLAY_ID("Panel"), {
 - Clay handles complex layout efficiently
 - Immediate mode is intuitive for interactions
 - Best of both worlds without the downsides
+
+**ClayShards internals:**
+- Thread-local storage (`CS_THREAD_LOCAL`) for multi-threaded use
+- Custom allocator support via `cs_set_allocator()` for arena/pool allocators
+- Error tracking for diagnosing capacity exceeded or allocation failures
+- Iterative Douglas-Peucker for stack-safe polyline simplification
 
 ### Future Renderer Backends
 

@@ -15,6 +15,10 @@
 #include "cs_common.c"
 #include "cs_input.c"
 #include "cs_button.c"
+
+/* Map component split into multiple files */
+#include "cs_map_projection.c"
+#include "cs_map_simplify.c"
 #include "cs_map.c"
 
 /* Clay integration (requires clay.h already included) */

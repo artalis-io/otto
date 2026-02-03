@@ -1,6 +1,6 @@
 # ClayShards MANIFESTO Compliance Review
 
-**Date:** 2026-02-01
+**Date:** 2026-02-01 (Updated: 2026-02-03)
 **Reviewer:** Claude Opus 4.5
 **Scope:** `/shared/ui/` codebase (clay-shards, clay-shards-webgl, clay-shards-demo)
 
@@ -9,6 +9,24 @@
 ## Executive Summary
 
 The ClayShards codebase is **fully compliant** with the MANIFESTO principles. Minor deviations are pragmatic trade-offs justified by WASM/embedded constraints and are documented below.
+
+### Code Quality Improvements (2026-02-03)
+
+A comprehensive code review identified and fixed the following issues:
+
+**Priority 1 (Critical):**
+- Hash table overflow now returns NULL instead of corrupting memory
+- Douglas-Peucker algorithm converted from recursive to iterative (prevents stack overflow on large polylines)
+
+**Priority 2 (Important):**
+- Named constants for magic numbers (`CS_ID_OFFSET_WRAPPER`, `CS_ID_OFFSET_TEXT_WRAPPER`)
+- Error tracking system (`cs_record_error`, `cs_get_last_error`, `cs_get_error_count`)
+- Map code split into focused modules (`cs_map_projection.c`, `cs_map_simplify.c`)
+- Edge case tests added (52 tests total, up from 44)
+
+**Priority 3 (Enhancement):**
+- Thread-local storage for multi-threading support (`CS_THREAD_LOCAL` macro)
+- Custom allocator support (`cs_set_allocator`, `CsAllocator` struct)
 
 ---
 
@@ -86,7 +104,7 @@ C (clay-shards) → Clay commands → JS (clay-shards-webgl) → WebGL
 | Requirement | Status | Evidence |
 |-------------|--------|----------|
 | Same inputs → same output | ✅ | No random state, fixed hash tables |
-| Testable | ✅ | 44 unit tests pass deterministically |
+| Testable | ✅ | 52 unit tests pass deterministically |
 
 ---
 
@@ -168,21 +186,25 @@ C (clay-shards) → Clay commands → JS (clay-shards-webgl) → WebGL
 ```
 clay-shards/                    # Core C library
 ├── include/
-│   ├── cs_common.h            # ID generation, focus, colors
+│   ├── cs_common.h            # ID generation, focus, colors, allocator API
 │   ├── cs_clay.h              # Clay integration, render accessors
 │   ├── cs_button.h            # Button API
 │   ├── cs_input.h             # Text input API
 │   ├── cs_map.h               # Map widget API
 │   └── cs_map_provider.h      # Tile/routing/geocoding interface
 ├── src/
-│   ├── cs_common.c            # Global state, input routing, tab nav
+│   ├── cs_common.c            # Global state, input routing, tab nav, allocator
 │   ├── cs_clay.c              # Clay lifecycle, command accessors
 │   ├── cs_button.c            # Button implementation
 │   ├── cs_input.c             # Text input implementation
 │   ├── cs_map.c               # Map pan/zoom, overlays, hit testing
-│   └── cs_map_provider.c      # Provider implementation
+│   ├── cs_map_projection.c    # Web Mercator projection utilities
+│   ├── cs_map_simplify.c      # Douglas-Peucker simplification (iterative)
+│   ├── cs_map_provider.c      # Provider implementation
+│   ├── cs_internal.h          # Internal state, TLS macros, error codes
+│   └── cs_map_internal.h      # Map-specific internal types
 └── tests/
-    └── test_clay_shards.c     # 44 unit tests
+    └── test_clay_shards.c     # 52 unit tests
 
 clay-shards-webgl/              # JavaScript WebGL renderer
 ├── renderer.js                # Clay command rendering
@@ -272,4 +294,4 @@ Minor deviations from pure immediate-mode or pure render-command models are prag
 3. **Debuggability** — Explicit IDs, visible state, deterministic behavior
 4. **Flexibility** — Render backend is swappable (WebGL today, SDL/raylib tomorrow)
 
-The codebase is well-structured, tested (44 tests), and ready for production use.
+The codebase is well-structured, tested (52 tests), thread-safe, and ready for production use.

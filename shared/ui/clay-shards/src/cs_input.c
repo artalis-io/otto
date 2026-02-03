@@ -120,7 +120,7 @@ CsInputResult cs_input(
 
     if (has_margin || has_align) {
         /* With wrapper for margin/alignment */
-        Clay_ElementId wrapper_id = (Clay_ElementId){.id = id + 0x10000, .stringId = {0}};
+        Clay_ElementId wrapper_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_WRAPPER, .stringId = {0}};
         Clay_ChildAlignment child_align = {0};
         if (style->align == CS_ALIGN_START)  child_align.x = CLAY_ALIGN_X_LEFT;
         if (style->align == CS_ALIGN_CENTER) child_align.x = CLAY_ALIGN_X_CENTER;

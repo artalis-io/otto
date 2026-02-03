@@ -129,7 +129,7 @@ CsButtonResult cs_button(
 
     if (has_margin || has_align) {
         /* With wrapper for margin/alignment */
-        Clay_ElementId wrapper_id = (Clay_ElementId){.id = id + 0x10000, .stringId = {0}};
+        Clay_ElementId wrapper_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_WRAPPER, .stringId = {0}};
         Clay_ChildAlignment child_align = {0};
         if (style->align == CS_ALIGN_START)  child_align.x = CLAY_ALIGN_X_LEFT;
         if (style->align == CS_ALIGN_CENTER) child_align.x = CLAY_ALIGN_X_CENTER;
@@ -149,7 +149,7 @@ CsButtonResult cs_button(
         }) {
             CLAY(clay_id, btn_config) {
                 if (has_text_offset) {
-                    Clay_ElementId text_wrapper_id = (Clay_ElementId){.id = id + 0x20000, .stringId = {0}};
+                    Clay_ElementId text_wrapper_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_TEXT_WRAPPER, .stringId = {0}};
                     CLAY(text_wrapper_id, {
                         .layout = { .padding = { .top = text_pad_top, .bottom = text_pad_bottom } }
                     }) {
@@ -172,7 +172,7 @@ CsButtonResult cs_button(
         /* No wrapper needed */
         CLAY(clay_id, btn_config) {
             if (has_text_offset) {
-                Clay_ElementId text_wrapper_id = (Clay_ElementId){.id = id + 0x20000, .stringId = {0}};
+                Clay_ElementId text_wrapper_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_TEXT_WRAPPER, .stringId = {0}};
                 CLAY(text_wrapper_id, {
                     .layout = { .padding = { .top = text_pad_top, .bottom = text_pad_bottom } }
                 }) {

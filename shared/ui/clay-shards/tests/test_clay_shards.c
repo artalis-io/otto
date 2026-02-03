@@ -6,6 +6,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>  /* For malloc/free in custom allocator test */
 #include <string.h>
 #include <assert.h>
 
@@ -1244,6 +1245,285 @@ static void test_widget_state_isolation(void) {
 }
 
 /* ============================================================================
+ * Error Tracking Tests
+ * ============================================================================ */
+
+static void test_error_tracking_init(void) {
+    TEST(error_tracking_init);
+
+    cs_init();
+    cs_clear_errors();
+
+    ASSERT(cs_get_last_error() == CS_ERR_NONE, "No error initially");
+    ASSERT(cs_get_error_count() == 0, "Error count should be 0");
+
+    PASS();
+}
+
+static void test_error_tracking_record(void) {
+    TEST(error_tracking_record);
+
+    cs_init();
+    cs_clear_errors();
+
+    /* Record an error */
+    cs_record_error(CS_ERR_ALLOC_FAILED);
+    ASSERT(cs_get_last_error() == CS_ERR_ALLOC_FAILED, "Error should be recorded");
+    ASSERT(cs_get_error_count() == 1, "Error count should be 1");
+
+    /* Record another error */
+    cs_record_error(CS_ERR_CAPACITY_EXCEEDED);
+    ASSERT(cs_get_last_error() == CS_ERR_CAPACITY_EXCEEDED, "Last error updated");
+    ASSERT(cs_get_error_count() == 2, "Error count should be 2");
+
+    /* Clear errors */
+    cs_clear_errors();
+    ASSERT(cs_get_last_error() == CS_ERR_NONE, "Error should be cleared");
+    ASSERT(cs_get_error_count() == 0, "Error count should be 0");
+
+    PASS();
+}
+
+static void test_widget_state_stress(void) {
+    TEST(widget_state_stress);
+
+    cs_init();
+
+    /* Fill most of the widget state hash table (capacity = 256) */
+    for (int i = 1; i <= 200; i++) {
+        uint32_t id = 1000 + i;  /* Different IDs */
+        CsWidgetState *w = cs_widget_state(id);
+        ASSERT(w != NULL, "Should get widget state");
+        ASSERT(w->id == id, "Widget ID should match");
+    }
+
+    /* All should still be retrievable */
+    for (int i = 1; i <= 200; i++) {
+        uint32_t id = 1000 + i;
+        CsWidgetState *w = cs_widget_state(id);
+        ASSERT(w != NULL, "Should still retrieve widget state");
+        ASSERT(w->id == id, "Widget ID should still match");
+    }
+
+    PASS();
+}
+
+static void test_map_state_table_full(void) {
+    TEST(map_state_table_full);
+
+    init_clay();
+    cs_init();
+    cs_map_cleanup();
+    cs_clear_errors();
+
+    double lat = 47.0, lon = 19.0;
+    int zoom = 10;
+
+    /* Fill the map state table (capacity = 16) by creating maps */
+    /* Note: cs_map_begin initializes map state internally */
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        for (int i = 1; i <= CS_MAP_STATE_CAPACITY; i++) {
+            uint32_t id = 5000 + i;
+            cs_map(id, &lat, &lon, &zoom, 100, 100, NULL);
+        }
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    /* Now the table should be full. Try to create one more. */
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root2"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        uint32_t extra_id = 5000 + CS_MAP_STATE_CAPACITY + 1;
+        CsMapResult r = cs_map(extra_id, &lat, &lon, &zoom, 100, 100, NULL);
+        /* When table is full, cs_map returns empty result */
+        (void)r;
+        ASSERT(cs_get_last_error() == CS_ERR_CAPACITY_EXCEEDED, "Should record capacity exceeded");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    /* Cleanup */
+    cs_map_cleanup();
+    cs_clear_errors();
+
+    PASS();
+}
+
+/* ============================================================================
+ * Custom Allocator Tests
+ * ============================================================================ */
+
+/* Tracking allocator for testing */
+static int g_alloc_count = 0;
+static int g_free_count = 0;
+static size_t g_total_allocated = 0;
+
+static void* tracking_alloc(size_t size, void *user_data) {
+    (void)user_data;
+    g_alloc_count++;
+    g_total_allocated += size;
+    return malloc(size);
+}
+
+static void* tracking_realloc(void *ptr, size_t size, void *user_data) {
+    (void)user_data;
+    /* Note: doesn't track old size, but good enough for testing */
+    return realloc(ptr, size);
+}
+
+static void tracking_free(void *ptr, void *user_data) {
+    (void)user_data;
+    if (ptr) g_free_count++;
+    free(ptr);
+}
+
+static void test_custom_allocator_set(void) {
+    TEST(custom_allocator_set);
+
+    /* Reset tracking */
+    g_alloc_count = 0;
+    g_free_count = 0;
+    g_total_allocated = 0;
+
+    /* Set custom allocator */
+    CsAllocator tracking = {
+        .alloc = tracking_alloc,
+        .realloc = tracking_realloc,
+        .free = tracking_free,
+        .user_data = NULL
+    };
+    cs_set_allocator(&tracking);
+
+    const CsAllocator *current = cs_get_allocator();
+    ASSERT(current->alloc == tracking_alloc, "Allocator should be set");
+    ASSERT(current->free == tracking_free, "Free should be set");
+
+    /* Reset to default */
+    cs_set_allocator(NULL);
+
+    PASS();
+}
+
+static void test_custom_allocator_used(void) {
+    TEST(custom_allocator_used);
+
+    /* Reset tracking */
+    g_alloc_count = 0;
+    g_free_count = 0;
+    g_total_allocated = 0;
+
+    /* Set custom allocator */
+    CsAllocator tracking = {
+        .alloc = tracking_alloc,
+        .realloc = tracking_realloc,
+        .free = tracking_free,
+        .user_data = NULL
+    };
+    cs_set_allocator(&tracking);
+
+    init_clay();
+    cs_init();
+    cs_map_cleanup();
+
+    /* Create a map with a polyline - this triggers allocation */
+    uint32_t map_id = CS_ID("alloc_test_map");
+    double lat = 47.0, lon = 19.0;
+    int zoom = 10;
+
+    CsGeoPoint points[] = {
+        {47.0, 19.0}, {47.1, 19.1}, {47.2, 19.2}, {47.3, 19.3}
+    };
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        cs_map_begin(map_id, &lat, &lon, &zoom, 800, 600, NULL);
+        cs_polyline(CS_ID("test_route"), points, 4, NULL);
+        cs_map_end();
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    /* Should have used our allocator for polyline buffer */
+    ASSERT(g_alloc_count > 0, "Custom allocator should be called");
+
+    /* Cleanup should use our free */
+    int alloc_before_cleanup = g_alloc_count;
+    cs_map_destroy(map_id);
+    ASSERT(g_free_count > 0, "Custom free should be called on cleanup");
+
+    /* Reset to default allocator */
+    cs_set_allocator(NULL);
+    cs_map_cleanup();
+
+    (void)alloc_before_cleanup;  /* Suppress unused warning */
+
+    PASS();
+}
+
+static void test_default_allocator(void) {
+    TEST(default_allocator);
+
+    /* Ensure default allocator works */
+    cs_set_allocator(NULL);
+
+    const CsAllocator *a = cs_get_allocator();
+    ASSERT(a != NULL, "Should have default allocator");
+    ASSERT(a->alloc != NULL, "Default alloc should exist");
+    ASSERT(a->realloc != NULL, "Default realloc should exist");
+    ASSERT(a->free != NULL, "Default free should exist");
+
+    /* Test that default allocator works */
+    void *ptr = cs_alloc(100);
+    ASSERT(ptr != NULL, "Default alloc should work");
+    cs_free(ptr);
+
+    PASS();
+}
+
+/* ============================================================================
+ * Thread-Local Storage Tests
+ * ============================================================================ */
+
+static void test_tls_state_isolation(void) {
+    TEST(tls_state_isolation);
+
+    /* In single-threaded test, just verify state is properly isolated per cs_init() */
+    cs_init();
+    cs_focus(123);
+    ASSERT(cs_focused_id() == 123, "Focus should be set");
+
+    /* Re-init should reset state */
+    cs_init();
+    ASSERT(cs_focused_id() == 0, "Focus should be reset after cs_init");
+
+    /* Error tracking should also be isolated */
+    cs_clear_errors();
+    cs_record_error(CS_ERR_ALLOC_FAILED);
+    ASSERT(cs_get_error_count() == 1, "Should have 1 error");
+
+    cs_clear_errors();
+    ASSERT(cs_get_error_count() == 0, "Errors should be cleared");
+
+    PASS();
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1318,6 +1598,20 @@ int main(void) {
     printf("\nWidget State Store Tests:\n");
     test_widget_state_persistence();
     test_widget_state_isolation();
+
+    printf("\nError Tracking Tests:\n");
+    test_error_tracking_init();
+    test_error_tracking_record();
+    test_widget_state_stress();
+    test_map_state_table_full();
+
+    printf("\nCustom Allocator Tests:\n");
+    test_custom_allocator_set();
+    test_custom_allocator_used();
+    test_default_allocator();
+
+    printf("\nThread-Local Storage Tests:\n");
+    test_tls_state_isolation();
 
     printf("\n======================================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);
