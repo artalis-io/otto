@@ -983,52 +983,10 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
 
 /* ============================================================================
  * Text Rendering
+ *
+ * Uses shared MSDF sampling functions from sh_font.h for high-quality
+ * text rendering with bilinear interpolation and smoothstep anti-aliasing.
  * ============================================================================ */
-
-/*
- * Get MSDF coverage with adjustable threshold.
- * threshold < 0.5: expand glyph (for halo)
- * threshold = 0.5: normal
- * threshold > 0.5: shrink glyph
- */
-static float msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
-                                      float local_x, float local_y,
-                                      float font_size, float threshold)
-{
-    if (!font || !glyph || font_size <= 0.0f) {
-        return 0.0f;
-    }
-
-    /* Map local coordinates [0,1] to atlas coordinates */
-    float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
-    float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
-
-    uint8_t dist_byte = sh_font_sample_msdf(font, (int)atlas_x, (int)atlas_y);
-
-    /* Convert to signed distance [-1, 1] range */
-    float dist = (dist_byte - 128.0f) / 128.0f;
-
-    /* Adjust distance by threshold offset.
-     * threshold=0.5 means edge at dist=0
-     * threshold=0.3 means edge at dist=-0.2 (expands glyph for halo)
-     */
-    float offset = (0.5f - threshold) * 2.0f;
-    dist += offset;
-
-    /* Scale by font size and distance range for proper anti-aliasing */
-    float screen_px_range = font->distance_range * (font_size / font->em_size);
-    if (screen_px_range < 1.0f) screen_px_range = 1.0f;
-
-    /* Apply smoothstep for anti-aliasing */
-    float edge = 0.5f / screen_px_range;
-    float coverage = (dist + edge) / (2.0f * edge);
-
-    /* Clamp to [0, 1] */
-    if (coverage < 0.0f) coverage = 0.0f;
-    if (coverage > 1.0f) coverage = 1.0f;
-
-    return coverage;
-}
 
 void ct_render_glyph(CTRenderContext *ctx,
                      const SHGlyph *glyph,
@@ -1075,9 +1033,9 @@ void ct_render_glyph(CTRenderContext *ctx,
             float local_x = ((float)px + 0.5f) / glyph_width;
             float local_y = ((float)py + 0.5f) / glyph_height;
 
-            /* Get MSDF coverage with threshold */
-            float coverage = msdf_coverage_threshold(font, glyph, local_x, local_y,
-                                                      font_size, threshold);
+            /* Get MSDF coverage with threshold (uses bilinear sampling) */
+            float coverage = sh_font_msdf_coverage_threshold(font, glyph, local_x, local_y,
+                                                              font_size, threshold);
 
             if (coverage <= 0.0f) continue;
 
