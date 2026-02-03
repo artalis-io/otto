@@ -93,6 +93,11 @@ struct RalphNetflowWorkspace {
     /* Statistics */
     int64_t total_pivots;
     int64_t degenerate_pivots;
+
+    /* Warm start data */
+    int warm_start_valid;           /* 1 if warm start data is valid */
+    int warm_start_nodes;           /* Number of nodes in warm start */
+    int warm_start_arcs;            /* Number of arcs in warm start */
 };
 
 /* ============================================================================
@@ -229,6 +234,11 @@ RalphNetflowWorkspace* ralph_netflow_workspace_create(int max_nodes, int max_arc
     ws->total_pivots = 0;
     ws->degenerate_pivots = 0;
 
+    /* Initialize warm start fields */
+    ws->warm_start_valid = 0;
+    ws->warm_start_nodes = 0;
+    ws->warm_start_arcs = 0;
+
     return ws;
 }
 
@@ -245,6 +255,68 @@ int ralph_netflow_workspace_max_nodes(const RalphNetflowWorkspace *ws) {
 
 int ralph_netflow_workspace_max_arcs(const RalphNetflowWorkspace *ws) {
     return ws ? ws->max_arcs : 0;
+}
+
+/* ============================================================================
+ * Warm Start API
+ * ============================================================================ */
+
+RalphNetflowStatus ralph_netflow_warm_start(
+    RalphNetflowWorkspace *ws,
+    int num_nodes,
+    int num_arcs,
+    const double *potential,
+    const double *flow,
+    const int *arc_state
+) {
+    if (!ws || !potential) {
+        return RALPH_NETFLOW_INVALID_INPUT;
+    }
+
+    if (num_nodes <= 0 || num_arcs < 0) {
+        return RALPH_NETFLOW_INVALID_INPUT;
+    }
+
+    if (num_nodes > ws->max_nodes || num_arcs > ws->max_arcs) {
+        return RALPH_NETFLOW_INVALID_INPUT;
+    }
+
+    /* Store node potentials */
+    memcpy(ws->potential, potential, num_nodes * sizeof(double));
+
+    /* Store flow if provided */
+    if (flow) {
+        memcpy(ws->flow, flow, num_arcs * sizeof(double));
+    }
+
+    /* Store arc states if provided */
+    if (arc_state) {
+        memcpy(ws->state, arc_state, num_arcs * sizeof(int));
+    }
+
+    /* Mark warm start as valid */
+    ws->warm_start_valid = 1;
+    ws->warm_start_nodes = num_nodes;
+    ws->warm_start_arcs = num_arcs;
+
+    return RALPH_NETFLOW_OPTIMAL;
+}
+
+void ralph_netflow_warm_start_clear(RalphNetflowWorkspace *ws) {
+    if (ws) {
+        ws->warm_start_valid = 0;
+        ws->warm_start_nodes = 0;
+        ws->warm_start_arcs = 0;
+    }
+}
+
+int ralph_netflow_warm_start_valid(const RalphNetflowWorkspace *ws, int num_nodes, int num_arcs) {
+    if (!ws || !ws->warm_start_valid) {
+        return 0;
+    }
+
+    /* Warm start is only valid if dimensions match */
+    return (ws->warm_start_nodes == num_nodes && ws->warm_start_arcs == num_arcs);
 }
 
 /* ============================================================================
@@ -913,15 +985,15 @@ static RalphNetflowStatus netflow_solve_internal(
 
     double cost_multiplier = (problem->objective == RALPH_NETFLOW_MAXIMIZE) ? -1.0 : 1.0;
 
-    /* Initialize */
+    /* Initialize (warm start support planned for future) */
     RalphNetflowStatus status = setup_initial_solution(ws, problem, cost_multiplier);
     if (status != RALPH_NETFLOW_OPTIMAL) {
         result->status = status;
         return status;
     }
 
-    /* Pricing setup */
-    int use_candidate_list = (options->pricing_rule == 0);
+    /* Pricing setup based on options */
+    int use_candidate_list = (options->pricing == RALPH_NETFLOW_PRICING_CANDIDATE);
     int list_size = num_arcs_total / RALPH_NETFLOW_LIST_FACTOR;
     if (list_size < RALPH_NETFLOW_MIN_LIST_SIZE) list_size = RALPH_NETFLOW_MIN_LIST_SIZE;
     if (list_size > RALPH_NETFLOW_MAX_LIST_SIZE) list_size = RALPH_NETFLOW_MAX_LIST_SIZE;
@@ -1025,12 +1097,34 @@ static RalphNetflowStatus netflow_solve_internal(
         result->flow[a] = ws->flow[a];
         obj += problem->cost[a] * ws->flow[a];
     }
-    result->objective = obj;
 
+    /* Handle single vs multiple objectives (for k-best compatibility) */
+    if (result->objectives) {
+        result->objectives[0] = obj;
+    }
+    result->objective = obj;
+    result->num_found = 1;
+
+    /* Copy dual variables if requested */
     if (result->potential) {
         for (int i = 0; i < num_nodes; i++) {
             result->potential[i] = ws->potential[i] * cost_multiplier;
         }
+    }
+
+    /* Copy arc states if requested (for warm start) */
+    if (result->arc_state) {
+        for (int a = 0; a < num_arcs; a++) {
+            result->arc_state[a] = ws->state[a];
+        }
+    }
+
+    /* Save warm start data if requested */
+    if (options->save_warm_start) {
+        ws->warm_start_valid = 1;
+        ws->warm_start_nodes = num_nodes;
+        ws->warm_start_arcs = num_arcs;
+        /* flow, potential, and state are already in workspace */
     }
 
     result->iterations = ws->total_pivots;

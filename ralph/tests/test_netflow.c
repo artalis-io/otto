@@ -1089,7 +1089,7 @@ static void test_first_eligible_pricing(void) {
     };
 
     RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
-    opts.pricing_rule = 1;  /* First eligible */
+    opts.pricing = RALPH_NETFLOW_PRICING_FIRST;  /* First eligible */
 
     double flow[4];
     RalphNetflowResult result = {.flow = flow, .potential = NULL};
@@ -1155,6 +1155,85 @@ static void test_invalid_input(void) {
 }
 
 /* ============================================================================
+ * Test: Warm Start API
+ * ============================================================================ */
+void test_warm_start_api(void) {
+    printf("\n=== Test: Warm Start API ===\n");
+
+    /* Create workspace */
+    RalphNetflowWorkspace *ws = ralph_netflow_workspace_create(10, 20);
+    ASSERT(ws != NULL, "Workspace created");
+
+    /* Initially no valid warm start */
+    ASSERT(ralph_netflow_warm_start_valid(ws, 3, 2) == 0, "No warm start initially");
+
+    /* Solve a problem with save_warm_start enabled */
+    int tail[] = {0, 1};
+    int head[] = {1, 2};
+    double cost[] = {1.0, 2.0};
+    double supply[] = {5.0, 0.0, -5.0};
+
+    RalphNetflowProblem prob = {
+        .num_nodes = 3, .num_arcs = 2,
+        .tail = tail, .head = head, .cost = cost,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    RalphNetflowOptions opts = RALPH_NETFLOW_OPTIONS_DEFAULT;
+    opts.save_warm_start = 1;
+
+    double flow[2];
+    double potential[3];
+    int arc_state[2];
+    RalphNetflowResult result = {
+        .flow = flow,
+        .potential = potential,
+        .arc_state = arc_state
+    };
+
+    RalphNetflowStatus status = ralph_netflow_solve(&prob, &opts, &result, ws);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "First solve optimal");
+    ASSERT_NEAR(result.objective, 15.0, TOLERANCE, "First objective = 15");
+
+    /* Check warm start is now valid */
+    ASSERT(ralph_netflow_warm_start_valid(ws, 3, 2) == 1, "Warm start valid after solve");
+
+    /* Solve again with slightly different costs (warm start available but not yet used) */
+    double cost2[] = {1.5, 2.0};  /* Slightly increase first arc cost */
+    RalphNetflowProblem prob2 = {
+        .num_nodes = 3, .num_arcs = 2,
+        .tail = tail, .head = head, .cost = cost2,
+        .capacity = NULL, .lower = NULL, .supply = supply,
+        .objective = RALPH_NETFLOW_MINIMIZE
+    };
+
+    opts.warm_start = 1;  /* Request warm start (placeholder - full warm start coming later) */
+
+    double flow2[2];
+    RalphNetflowResult result2 = {.flow = flow2};
+    status = ralph_netflow_solve(&prob2, &opts, &result2, ws);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Second solve optimal");
+    ASSERT_NEAR(result2.objective, 17.5, TOLERANCE, "Second objective = 17.5");
+
+    /* Clear warm start */
+    ralph_netflow_warm_start_clear(ws);
+    ASSERT(ralph_netflow_warm_start_valid(ws, 3, 2) == 0, "Warm start cleared");
+
+    /* Manual warm start */
+    status = ralph_netflow_warm_start(ws, 3, 2, potential, flow, arc_state);
+    ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Manual warm start succeeded");
+    ASSERT(ralph_netflow_warm_start_valid(ws, 3, 2) == 1, "Manual warm start valid");
+
+    /* Wrong dimensions should be invalid */
+    ASSERT(ralph_netflow_warm_start_valid(ws, 4, 2) == 0, "Wrong nodes invalid");
+    ASSERT(ralph_netflow_warm_start_valid(ws, 3, 3) == 0, "Wrong arcs invalid");
+
+    ralph_netflow_workspace_free(ws);
+    ASSERT(1, "Workspace freed");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char *argv[]) {
@@ -1203,6 +1282,9 @@ int main(int argc, char *argv[]) {
     /* Utility tests */
     test_status_string();
     test_invalid_input();
+
+    /* Warm start tests */
+    test_warm_start_api();
 
     printf("\n=====================\n");
     printf("Tests: %d/%d passed\n", tests_passed, tests_run);
