@@ -88,7 +88,7 @@ if [ -f "$CARTA_IDX" ]; then
     echo -e "  ${GREEN}Found: $CARTA_IDX${NC}"
 else
     echo -e "  ${YELLOW}Building Carta index (this may take a while)...${NC}"
-    ./carta/api/carta-tile-server --save-index "$CARTA_IDX" "$PBF_FILE" >/dev/null 2>&1 &
+    ./carta/api/carta-tile-server --lod default --save-index "$CARTA_IDX" "$PBF_FILE" >/dev/null 2>&1 &
     CARTA_BUILD_PID=$!
 
     echo -n "  "
@@ -153,14 +153,15 @@ echo "Starting servers..."
 
 # Carta tile server (port 8081) - use index if available
 # Use 8 worker threads for parallel tile generation
+# LOD filtering enabled (OSM Carto-style zoom-dependent feature visibility)
 if [ -n "$CARTA_IDX" ] && [ -f "$CARTA_IDX" ]; then
-    ./carta/api/carta-tile-server -p 8081 -t 8 "$CARTA_IDX" >/dev/null 2>&1 &
+    ./carta/api/carta-tile-server -p 8081 -t 8 --lod default "$CARTA_IDX" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - using binary index, 8 threads"
+    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - index, 8 threads, LOD enabled"
 else
-    ./carta/api/carta-tile-server -p 8081 -t 8 "$PBF_FILE" >/dev/null 2>&1 &
+    ./carta/api/carta-tile-server -p 8081 -t 8 --lod default "$PBF_FILE" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - loading from PBF, 8 threads"
+    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - PBF, 8 threads, LOD enabled"
 fi
 
 # Velo route server (port 8082)
