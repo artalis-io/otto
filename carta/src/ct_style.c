@@ -69,6 +69,10 @@ void ct_default_style(CTStyle *style)
     style->railway_color = CT_RGB(120, 120, 120);
     style->railway_width = 2.0f;
 
+    /* Boundaries (admin borders) - purple/magenta dashed line */
+    style->boundary_color = CT_RGBA(170, 80, 170, 200);  /* Semi-transparent purple */
+    style->boundary_width = 1.5f;
+
     /* Background */
     style->background_color = CT_RGB(242, 239, 233);  /* Same as land */
 

@@ -18,7 +18,7 @@ extern "C" {
 
 /* File format magic and version */
 #define CT_BINARY_MAGIC    0x43525441  /* "CRTA" */
-#define CT_BINARY_VERSION  3  /* v3: Added labeled points for map labels */
+#define CT_BINARY_VERSION  4  /* v4: Added multipolygon relations (lakes, forests) */
 
 /* ============================================================================
  * Serialization API

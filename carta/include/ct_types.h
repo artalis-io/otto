@@ -294,6 +294,10 @@ typedef struct {
     CTColor railway_color;
     float railway_width;
 
+    /* Boundaries (admin borders) */
+    CTColor boundary_color;
+    float boundary_width;
+
     /* Background */
     CTColor background_color;
 
@@ -531,7 +535,10 @@ typedef struct {
     void *mmap_base;          /* mmap'd file base, NULL if not mmap'd */
     size_t mmap_size;         /* mmap'd file size */
     void *mmap_coords;        /* Allocated coordinate block (for mmap'd ways) */
+    void *mmap_mp_coords;     /* Allocated coordinate block (for mmap'd multipolygons) */
+    void *mmap_mp_rings;      /* Allocated ring block (for mmap'd multipolygons) */
     int rtree_is_mmap;        /* 1 if R-Tree points into mmap */
+    int mp_rtree_is_mmap;     /* 1 if multipolygon R-Tree points into mmap */
 
     /* Arena for parsing temporaries (reset after each PrimitiveBlock) */
     SHArena *parse_arena;

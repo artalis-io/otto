@@ -66,90 +66,83 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_free(config);
 
     /*
-     * OSM Carto-matched LOD rules - tighter filtering to match openstreetmap.org
+     * Balanced LOD rules - shows features earlier than OSM Carto for better
+     * visibility at low zoom levels. Good for trucking/logistics use cases.
      */
 
-    /* Roads - matched to OSM Carto zoom levels
-     * https://github.com/gravitystorm/openstreetmap-carto
-     */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 6, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 7, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 9, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 11, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 12, -1, 0, 0);
+    /* Roads - show major roads 2 zoom levels earlier than OSM Carto */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 4, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 5, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 7, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 9, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 11, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 13, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 14, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 15, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 14, -1, 0, 0);
 
-    /* Buildings - OSM Carto shows at z13+ for large, z14+ for all */
-    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 14, -1, 2000, 0);  /* Large buildings */
-    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 15, -1, 0, 0);     /* All buildings */
+    /* Buildings - visible at z13+ for large, z14+ for all */
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 13, -1, 2000, 0);  /* Large buildings */
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 14, -1, 0, 0);     /* All buildings */
 
-    /* Water bodies (lakes, reservoirs, ponds) - by size
-     * OSM Carto: large water early, small water later
+    /* Water bodies (lakes, reservoirs, ponds) - show earlier
+     * Major lakes like Balaton (~600 km²) visible from z2
      * CT_WATER_BODY = 100 to distinguish from linear waterways
      */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 4, -1, 100000000, 0);  /* > 100 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 6, -1, 10000000, 0);   /* > 10 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 8, -1, 1000000, 0);    /* > 1 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 10, -1, 100000, 0);    /* > 0.1 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 12, -1, 10000, 0);     /* > 0.01 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 14, -1, 0, 0);         /* All water bodies */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 2, -1, 100000000, 0);  /* > 100 km² at z2 */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 4, -1, 10000000, 0);   /* > 10 km² at z4 */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 6, -1, 1000000, 0);    /* > 1 km² at z6 */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 8, -1, 100000, 0);     /* > 0.1 km² at z8 */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 10, -1, 10000, 0);     /* > 0.01 km² at z10 */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_BODY, 12, -1, 0, 0);         /* All water bodies */
 
-    /* Riverbank polygons - similar to water bodies */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 6, -1, 1000000, 0);   /* > 1 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 8, -1, 100000, 0);    /* > 0.1 km² */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 10, -1, 0, 0);        /* All riverbanks */
+    /* Riverbank polygons - show earlier */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 4, -1, 1000000, 0);   /* > 1 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 6, -1, 100000, 0);    /* > 0.1 km² */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 8, -1, 0, 0);         /* All riverbanks */
 
-    /* Linear waterways - by type and length
-     * OSM Carto: major rivers early, streams very late
-     */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 8, -1, 0, 100000);  /* >100km */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 10, -1, 0, 20000);  /* >20km */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 12, -1, 0, 0);      /* All rivers */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_CANAL, 12, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_STREAM, 14, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DRAIN, 16, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DITCH, 16, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_OTHER, 15, -1, 0, 0);
+    /* Linear waterways - show rivers earlier */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 6, -1, 0, 100000);  /* >100km at z6 */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 8, -1, 0, 20000);   /* >20km at z8 */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 10, -1, 0, 0);      /* All rivers at z10 */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_CANAL, 10, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_STREAM, 13, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DRAIN, 15, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DITCH, 15, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_OTHER, 14, -1, 0, 0);
 
-    /* Railways - OSM Carto shows at z8+ for major lines */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 9, -1, 0, 50000);   /* > 50km */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 12, -1, 0, 0);      /* All railways */
+    /* Railways - show major lines earlier */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 7, -1, 0, 50000);   /* > 50km at z7 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 10, -1, 0, 0);      /* All railways at z10 */
 
-    /* Landuse - OSM Carto is conservative with landuse
-     * Large areas appear early, small areas very late
-     */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 8, -1, 50000000, 0);   /* >50km² */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 10, -1, 5000000, 0);   /* >5km² */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 12, -1, 500000, 0);    /* >0.5km² */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 14, -1, 0, 0);         /* All */
+    /* Landuse - show large areas earlier */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 6, -1, 50000000, 0);   /* >50km² at z6 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 8, -1, 5000000, 0);    /* >5km² at z8 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 10, -1, 500000, 0);    /* >0.5km² at z10 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 12, -1, 0, 0);         /* All at z12 */
 
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 11, -1, 1000000, 0);     /* >1km² */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 13, -1, 100000, 0);      /* >0.1km² */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 15, -1, 0, 0);           /* All */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 9, -1, 1000000, 0);      /* >1km² at z9 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 11, -1, 100000, 0);      /* >0.1km² at z11 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 13, -1, 0, 0);           /* All at z13 */
 
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL, 13, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_COMMERCIAL, 13, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_INDUSTRIAL, 12, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_MILITARY, 11, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL, 12, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_COMMERCIAL, 12, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_INDUSTRIAL, 11, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_MILITARY, 10, -1, 0, 0);
 
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 10, -1, 10000000, 0);  /* >10km² */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 13, -1, 0, 0);         /* All */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 8, -1, 10000000, 0);   /* >10km² at z8 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 11, -1, 0, 0);         /* All at z11 */
 
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_GRASS, 14, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_CEMETERY, 15, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_OTHER, 15, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_GRASS, 13, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_CEMETERY, 14, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_OTHER, 14, -1, 0, 0);
 
-    /* Boundaries - by admin level
-     * OSM Carto: country borders early, local boundaries late
-     */
+    /* Boundaries - by admin level */
     ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTRY, 2, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_STATE, 4, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTY, 7, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_CITY, 10, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_SUBURB, 13, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_OTHER, 10, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTY, 6, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_CITY, 9, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_SUBURB, 12, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_OTHER, 9, -1, 0, 0);
 }
 
 void ct_lod_detailed(CTLODConfig *config)

@@ -983,18 +983,37 @@ void ct_pbf_context_free(CTPBFContext *ctx)
     SAFE_FREE(ctx->role_strings);
 
     /* Free assembled multipolygons */
-    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
-        for (int r = 0; r < ctx->multipolygons[i].num_rings; r++) {
-            SAFE_FREE(ctx->multipolygons[i].rings[r].coords);
+    if (ctx->mmap_mp_coords || ctx->mmap_mp_rings) {
+        /* mmap'd context - coords and rings are in bulk-allocated blocks */
+        for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+            SAFE_FREE(ctx->multipolygons[i].name);
         }
-        SAFE_FREE(ctx->multipolygons[i].rings);
-        SAFE_FREE(ctx->multipolygons[i].name);
-    }
-    SAFE_FREE(ctx->multipolygons);
+        SAFE_FREE(ctx->multipolygons);
+        SAFE_FREE(ctx->mmap_mp_coords);
+        SAFE_FREE(ctx->mmap_mp_rings);
 
-    /* Free multipolygon R-Tree */
-    ct_rtree_free(ctx->mp_rtree);
-    ctx->mp_rtree = NULL;
+        /* Free multipolygon R-Tree (may point into mmap) */
+        if (ctx->mp_rtree && !ctx->mp_rtree_is_mmap) {
+            ct_rtree_free(ctx->mp_rtree);
+        } else if (ctx->mp_rtree) {
+            free(ctx->mp_rtree);
+        }
+        ctx->mp_rtree = NULL;
+    } else {
+        /* Normal context - free everything individually */
+        for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+            for (int r = 0; r < ctx->multipolygons[i].num_rings; r++) {
+                SAFE_FREE(ctx->multipolygons[i].rings[r].coords);
+            }
+            SAFE_FREE(ctx->multipolygons[i].rings);
+            SAFE_FREE(ctx->multipolygons[i].name);
+        }
+        SAFE_FREE(ctx->multipolygons);
+
+        /* Free multipolygon R-Tree */
+        ct_rtree_free(ctx->mp_rtree);
+        ctx->mp_rtree = NULL;
+    }
 
     /* Free labeled points */
     for (size_t i = 0; i < ctx->num_labeled_points; i++) {
