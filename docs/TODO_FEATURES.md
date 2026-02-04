@@ -17,6 +17,7 @@ This document outlines planned features at the project level, including new comp
 11. [FuelWise Integration](#11-fuelwise-integration-refueling-in-search)
 12. [Quota - Rate Quoting Engine](#12-quota---rate-quoting-engine)
 13. [Atlas - Network Design Engine](#13-atlas---network-design-engine)
+14. [Velo Enhancements](#14-velo-enhancements)
 
 ---
 
@@ -2564,6 +2565,139 @@ CapacityRecommendation *at_plan_capacity(
 - [ ] Seasonal pattern recognition
 - [ ] Rate adjustment recommendations
 - [ ] Network visualization API
+
+---
+
+## 14. Velo Enhancements
+
+Planned improvements to the Velo routing engine.
+
+### Turn-by-Turn Navigation
+
+Generate human-readable driving instructions from route geometry.
+
+**Features:**
+- Road name extraction from OSM way tags
+- Maneuver detection (turn left, turn right, continue, merge, exit)
+- Distance-to-next-maneuver
+- Voice instruction text generation
+- Support for multiple languages (i18n)
+
+**Data Model:**
+```c
+typedef struct {
+    double lat, lon;           /* Maneuver location */
+    double distance_m;         /* Distance to this maneuver from previous */
+    double duration_s;         /* Time to this maneuver from previous */
+    VLManeuverType type;       /* TURN_LEFT, TURN_RIGHT, CONTINUE, etc. */
+    int exit_number;           /* For roundabouts/exits */
+    char road_name[128];       /* Name of road to turn onto */
+    char instruction[256];     /* Human-readable instruction */
+} VLManeuver;
+
+typedef struct {
+    VLManeuver *maneuvers;
+    size_t maneuver_count;
+    double total_distance_m;
+    double total_duration_s;
+} VLTurnByTurn;
+```
+
+**API:**
+```c
+int vl_route_turn_by_turn(VLGraph *graph, VLRoute *route, VLTurnByTurn *out);
+void vl_turn_by_turn_free(VLTurnByTurn *tbt);
+```
+
+### Distance/Duration Matrix Calculation
+
+Compute many-to-many distance and duration matrices efficiently.
+
+**Use Cases:**
+- Fleet dispatch (assign N drivers to M loads)
+- Clustering for route optimization
+- Service area analysis
+
+**API:**
+```c
+typedef struct {
+    double *distances;         /* [sources * targets] matrix, row-major */
+    double *durations;         /* [sources * targets] matrix, row-major */
+    size_t num_sources;
+    size_t num_targets;
+} VLMatrix;
+
+int vl_compute_matrix(
+    VLGraph *graph,
+    const VLCoord *sources, size_t num_sources,
+    const VLCoord *targets, size_t num_targets,
+    VLRouteOptions *opts,
+    VLMatrix *out
+);
+
+void vl_matrix_free(VLMatrix *matrix);
+```
+
+**Optimization Strategies:**
+- Shared Dijkstra from each source (compute all targets in one search)
+- Contraction Hierarchies for O(1) lookups after preprocessing
+- Early termination when all targets found
+- Parallel computation across sources
+
+### ALT Algorithm Speedup
+
+The ALT (A* with Landmarks and Triangle inequality) algorithm currently computes landmarks at server startup. This adds 4-8 seconds to startup time for country-scale graphs.
+
+**Current State:**
+- Landmarks computed via `vl_landmarks_create()` at startup
+- 32 landmarks × 4 Dijkstra runs (to/from × distance/time) = 128 Dijkstra runs
+- Landmarks are **NOT** stored in the `.vlg` binary index file
+- Must recompute on every server restart
+
+**Optimization Options:**
+
+| Option | Startup Time | Index Size | Implementation |
+|--------|--------------|------------|----------------|
+| Current (compute at startup) | 4-8s | Unchanged | Already implemented |
+| Persist landmarks to .vlg | <1s | +50-100MB | Extend vl_graph_save/load |
+| Separate landmark file | <1s | Separate file | New vl_landmarks_save/load |
+| Lazy landmark computation | ~0s | Unchanged | Compute on first long route |
+
+**Recommended: Persist landmarks to .vlg index**
+
+Extend the binary graph format to include pre-computed landmarks:
+```c
+/* In vl_graph_save(): */
+// ... existing graph data ...
+// Landmarks section (optional, version 2+)
+write_u32(num_landmarks);
+write_u32(num_nodes);
+for (int l = 0; l < num_landmarks; l++) {
+    write_u32(landmark_node_id[l]);
+    write_doubles(dist_to_landmark[l], num_nodes);
+    write_doubles(dist_from_landmark[l], num_nodes);
+    write_doubles(time_to_landmark[l], num_nodes);
+    write_doubles(time_from_landmark[l], num_nodes);
+}
+```
+
+**Benefits:**
+- Instant startup (<1s) with full ALT performance
+- One-time precomputation during index build
+- Consistent with Carta's approach (pre-build index offline, mmap in production)
+
+### TODOs
+
+- [ ] Turn-by-turn: Extract road names from OSM way tags
+- [ ] Turn-by-turn: Implement maneuver detection algorithm
+- [ ] Turn-by-turn: Generate instruction text
+- [ ] Matrix: Implement single-source multi-target Dijkstra
+- [ ] Matrix: Add parallel computation across sources
+- [ ] Matrix: Consider Contraction Hierarchies for large matrices
+- [ ] ALT: Extend .vlg format to include landmark arrays
+- [ ] ALT: Update vl_graph_save() to persist landmarks
+- [ ] ALT: Update vl_graph_mmap() to load landmarks
+- [ ] ALT: Add --with-landmarks flag to graph build tool
 
 ---
 
