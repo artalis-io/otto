@@ -193,6 +193,7 @@ async function main() {
             providerBridge.start();
         } catch (err) {
             // Offline provider not available - fall back to online mode
+            console.warn('Offline provider initialization failed, using online mode:', err.message);
         }
 
         setProgress(95);

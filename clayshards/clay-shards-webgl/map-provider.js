@@ -3,13 +3,59 @@
  *
  * Polls WASM for pending requests and makes fetch calls to API servers.
  * Routes responses back to WASM callbacks.
+ *
+ * Uses resilient-fetch for automatic retry with circuit breaker protection.
  */
 
+import { createResilientFetch, CircuitBreaker } from '../../shared/js/index.js';
+
 export class MapProvider {
-    constructor(wasm) {
+    /**
+     * Create a MapProvider.
+     *
+     * @param {Object} wasm WASM module instance
+     * @param {Object} options Configuration options
+     * @param {number} options.timeoutMs Request timeout (default: 30000)
+     * @param {number} options.maxRetries Maximum retry attempts (default: 3)
+     * @param {number} options.circuitFailureThreshold Failures before circuit opens (default: 5)
+     */
+    constructor(wasm, {
+        timeoutMs = 30000,
+        maxRetries = 3,
+        circuitFailureThreshold = 5
+    } = {}) {
         this.wasm = wasm;
         this.polling = false;
         this.pollInterval = null;
+
+        // Create resilient fetch clients for each API
+        this._routeClient = createResilientFetch({
+            circuit: new CircuitBreaker({ failureThreshold: circuitFailureThreshold }),
+            timeoutMs,
+            maxRetries
+        });
+
+        this._geocodeClient = createResilientFetch({
+            circuit: new CircuitBreaker({ failureThreshold: circuitFailureThreshold }),
+            timeoutMs,
+            maxRetries
+        });
+    }
+
+    /**
+     * Get route client circuit breaker state.
+     * @returns {string} Circuit state
+     */
+    getRouteCircuitState() {
+        return this._routeClient.circuit.getState();
+    }
+
+    /**
+     * Get geocode client circuit breaker state.
+     * @returns {string} Circuit state
+     */
+    getGeocodeCircuitState() {
+        return this._geocodeClient.circuit.getState();
     }
 
     /**
@@ -75,16 +121,12 @@ export class MapProvider {
         const profile = profileNum === 1 ? 'truck' : 'car';
         const mode = modeNum === 1 ? 'shortest' : 'fastest';
 
-        const url = `${server}/api/v1/route?from=${fromLat},${fromLon}&to=${toLat},${toLon}&profile=${profile}&mode=${mode}&geometry=true`;
+        const url = `${server}/api/v1/route?from=${encodeURIComponent(`${fromLat},${fromLon}`)}&to=${encodeURIComponent(`${toLat},${toLon}`)}&profile=${encodeURIComponent(profile)}&mode=${encodeURIComponent(mode)}&geometry=true`;
 
         const startTime = performance.now();
 
         try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
+            const response = await this._routeClient.fetch(url);
             const data = await response.json();
             const calcTimeMs = performance.now() - startTime;
 
@@ -123,7 +165,10 @@ export class MapProvider {
             wasm.free(lonsPtr);
 
         } catch (err) {
-            this._reportRouteError(err.message);
+            const message = err.isCircuitOpen
+                ? 'Route service unavailable (circuit breaker open)'
+                : err.message;
+            this._reportRouteError(message);
         }
     }
 
@@ -147,11 +192,7 @@ export class MapProvider {
         }
 
         try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
+            const response = await this._geocodeClient.fetch(url);
             const data = await response.json();
 
             if (data.error) {
@@ -182,7 +223,10 @@ export class MapProvider {
             wasm.cs_provider_on_search_complete(count);
 
         } catch (err) {
-            this._reportSearchError(err.message);
+            const message = err.isCircuitOpen
+                ? 'Geocode service unavailable (circuit breaker open)'
+                : err.message;
+            this._reportSearchError(message);
         }
     }
 
@@ -198,14 +242,10 @@ export class MapProvider {
         const lon = wasm.cs_provider_reverse_lon();
         const server = this._getString(wasm.cs_provider_geocode_server());
 
-        const url = `${server}/api/v1/reverse?lat=${lat}&lon=${lon}`;
+        const url = `${server}/api/v1/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
 
         try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
+            const response = await this._geocodeClient.fetch(url);
             const data = await response.json();
 
             if (data.error) {
@@ -228,7 +268,10 @@ export class MapProvider {
             wasm.free(countryPtr);
 
         } catch (err) {
-            this._reportReverseError(err.message);
+            const message = err.isCircuitOpen
+                ? 'Geocode service unavailable (circuit breaker open)'
+                : err.message;
+            this._reportReverseError(message);
         }
     }
 
@@ -265,8 +308,11 @@ export class MapProvider {
     _getString(ptr) {
         if (!ptr) return '';
         const memory = new Uint8Array(this.wasm.memory.buffer);
+        const maxLen = memory.length;
         let end = ptr;
-        while (memory[end] !== 0) end++;
+        // Bounds check: don't read past WASM memory
+        while (end < maxLen && memory[end] !== 0) end++;
+        if (end >= maxLen) return '';  // Unterminated string
         const bytes = memory.slice(ptr, end);
         return new TextDecoder().decode(bytes);
     }
@@ -286,9 +332,11 @@ export class MapProvider {
 
     /**
      * Allocate a Float64Array in WASM memory
+     * Note: View is created AFTER malloc to handle potential memory growth
      */
     _allocDoubleArray(arr) {
         const ptr = this.wasm.malloc(arr.length * 8);
+        // Get fresh buffer reference after malloc (may have triggered memory growth)
         const view = new Float64Array(this.wasm.memory.buffer, ptr, arr.length);
         view.set(arr);
         return ptr;

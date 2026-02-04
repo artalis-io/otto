@@ -31,3 +31,14 @@ export { loadWasm } from './wasm-loader.js';
 export { setupKeyboardHandler } from './keyboard.js';
 export { createTextureFromImage } from './utils.js';
 export * from './shaders.js';
+
+// Re-export resilience utilities from shared/js
+export {
+    CircuitBreaker,
+    CircuitState,
+    createBackoff,
+    calculateBackoff,
+    createResilientFetch,
+    ResilientFetchError,
+    isRetryableStatus
+} from '../../shared/js/index.js';
