@@ -7,6 +7,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "fw_route.h"
 #include "fw_geo.h"
 
@@ -108,8 +109,11 @@ int fw_filter_stations(
         return 0;  /* Empty result is not an error */
     }
 
-    /* Allocate temporary array for all stations */
-    FWSnappedStation *temp = malloc(num_stations * sizeof(FWSnappedStation));
+    /* Allocate temporary array for all stations - check for overflow */
+    if (num_stations < 0 || (size_t)num_stations > SIZE_MAX / sizeof(FWSnappedStation)) {
+        return -1;
+    }
+    FWSnappedStation *temp = malloc((size_t)num_stations * sizeof(FWSnappedStation));
     if (!temp) return -1;
 
     int count = 0;
@@ -195,8 +199,12 @@ int fw_filter_stations_two_step(
         return 0;
     }
 
-    /* Create array of filtered stations */
-    FWStation *filtered_stations = malloc(filtered_count * sizeof(FWStation));
+    /* Create array of filtered stations - check for overflow */
+    if (filtered_count > (int)(SIZE_MAX / sizeof(FWStation))) {
+        free(filter_mask);
+        return -1;
+    }
+    FWStation *filtered_stations = malloc((size_t)filtered_count * sizeof(FWStation));
     if (!filtered_stations) {
         free(filter_mask);
         return -1;
@@ -229,7 +237,14 @@ int fw_filter_stations_two_step(
     }
 
     /* Collect results - allow multiple occurrences */
-    int capacity = filtered_count * 4;
+    /* Check for overflow: filtered_count * 4 and then * sizeof */
+    if (filtered_count > (int)(SIZE_MAX / 4 / sizeof(FWSnappedStation))) {
+        free(last_along_dist);
+        free(subsampled.points);
+        free(filtered_stations);
+        return -1;
+    }
+    size_t capacity = (size_t)filtered_count * 4;
     FWSnappedStation *collected = malloc(capacity * sizeof(FWSnappedStation));
     if (!collected) {
         free(last_along_dist);
@@ -268,13 +283,17 @@ int fw_filter_stations_two_step(
 
                     last_along_dist[st] = current_along;
 
-                    /* Grow array if needed */
-                    if (collected_count >= capacity) {
-                        capacity *= 2;
+                    /* Grow array if needed - check for overflow before doubling */
+                    if ((size_t)collected_count >= capacity) {
+                        if (capacity > SIZE_MAX / 2 / sizeof(FWSnappedStation)) {
+                            break;  /* Would overflow */
+                        }
+                        size_t new_capacity = capacity * 2;
                         FWSnappedStation *new_collected = realloc(collected,
-                            capacity * sizeof(FWSnappedStation));
-                        if (!new_collected) break;
+                            new_capacity * sizeof(FWSnappedStation));
+                        if (!new_collected) break;  /* Keep using existing buffer */
                         collected = new_collected;
+                        capacity = new_capacity;
                     }
 
                     collected[collected_count].station_id = filtered_stations[st].id;
@@ -304,14 +323,16 @@ int fw_filter_stations_two_step(
 
     /* Apply sequential deduplication if requested */
     if (config->dedup_strategy == FW_DEDUP_NONE) {
-        FWSnappedStation *shrunk = realloc(collected, collected_count * sizeof(FWSnappedStation));
+        /* Safe: collected_count <= capacity which was overflow-checked */
+        FWSnappedStation *shrunk = realloc(collected, (size_t)collected_count * sizeof(FWSnappedStation));
         *result = shrunk ? shrunk : collected;
         *result_count = collected_count;
         return 0;
     }
 
     /* Deduplicate consecutive same-ID entries within max_dedup_distance */
-    FWSnappedStation *deduped = malloc(collected_count * sizeof(FWSnappedStation));
+    /* Safe: collected_count <= capacity which was overflow-checked */
+    FWSnappedStation *deduped = malloc((size_t)collected_count * sizeof(FWSnappedStation));
     if (!deduped) {
         *result = collected;
         *result_count = collected_count;
@@ -390,7 +411,17 @@ void fw_deduplicate_stations(
     FWDedupStrategy strategy,
     double max_dedup_distance)
 {
-    if (!stations || !count || *count < 2 || strategy == FW_DEDUP_NONE) {
+    /* Validate parameters - early return for invalid inputs */
+    if (!stations || !count || *count < 2) {
+        return;
+    }
+
+    /* Validate enum is in valid range */
+    if (strategy < FW_DEDUP_NONE || strategy > FW_DEDUP_CLOSEST) {
+        return;  /* Invalid strategy - treat as no-op */
+    }
+
+    if (strategy == FW_DEDUP_NONE) {
         return;
     }
 

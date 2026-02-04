@@ -451,8 +451,17 @@ static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
         return;
     }
 
-    /* Build response */
-    int buf_size = 2048 + problem.num_stations * 128;
+    /* Build response - use conservative buffer sizing with overflow check */
+    size_t per_station = 256;  /* Conservative estimate per station entry */
+    size_t base_size = 2048;
+    if (problem.num_stations < 0 ||
+        (size_t)problem.num_stations > (SIZE_MAX - base_size) / per_station) {
+        send_error(c, 500, "Too many stations for response buffer");
+        fw_free_solution(&solution);
+        free_problem(&problem);
+        return;
+    }
+    size_t buf_size = base_size + (size_t)problem.num_stations * per_station;
     char *response = malloc(buf_size);
     if (!response) {
         send_error(c, 500, "Memory allocation failed");
@@ -461,8 +470,8 @@ static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
         return;
     }
 
-    int pos = 0;
-    pos += snprintf(response + pos, buf_size - pos,
+    size_t pos = 0;
+    int n = snprintf(response + pos, buf_size - pos,
         "{\n"
         "  \"status\": \"%s\",\n"
         "  \"num_stops\": %d,\n"
@@ -475,13 +484,17 @@ static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
         solution.total_cost,
         solution.gross_cost,
         solution.remaining_fuel);
+    if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
 
     int first = 1;
     for (int i = 0; i < problem.num_stations; i++) {
         if (solution.purchases[i] > 0.001) {
-            if (!first) pos += snprintf(response + pos, buf_size - pos, ",");
+            if (!first) {
+                n = snprintf(response + pos, buf_size - pos, ",");
+                if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+            }
             first = 0;
-            pos += snprintf(response + pos, buf_size - pos,
+            n = snprintf(response + pos, buf_size - pos,
                 "\n    {"
                 "\"station_id\": %d, "
                 "\"gallons\": %.2f, "
@@ -490,10 +503,12 @@ static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
                 problem.stations[i].station_id,
                 solution.purchases[i],
                 solution.purchases[i] * problem.stations[i].price_per_gallon);
+            if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
         }
     }
 
-    pos += snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    n = snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    (void)n;  /* Final snprintf - truncation here is fine, buffer is null-terminated */
 
     send_json(c, response);
 
@@ -554,8 +569,16 @@ static void handle_filter(struct mg_connection *c, struct mg_http_message *hm) {
         return;
     }
 
-    /* Build response */
-    int buf_size = 1024 + filtered_count * 256;
+    /* Build response - use conservative buffer sizing with overflow check */
+    size_t per_station = 256;  /* Conservative estimate per station entry */
+    size_t base_size = 1024;
+    if (filtered_count < 0 ||
+        (size_t)filtered_count > (SIZE_MAX - base_size) / per_station) {
+        fw_free_snapped_stations(filtered);
+        send_error(c, 500, "Too many stations for response buffer");
+        return;
+    }
+    size_t buf_size = base_size + (size_t)filtered_count * per_station;
     char *response = malloc(buf_size);
     if (!response) {
         fw_free_snapped_stations(filtered);
@@ -563,16 +586,20 @@ static void handle_filter(struct mg_connection *c, struct mg_http_message *hm) {
         return;
     }
 
-    int pos = 0;
-    pos += snprintf(response + pos, buf_size - pos,
+    size_t pos = 0;
+    int n = snprintf(response + pos, buf_size - pos,
         "{\n"
         "  \"count\": %d,\n"
         "  \"stations\": [",
         filtered_count);
+    if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
 
     for (int i = 0; i < filtered_count; i++) {
-        if (i > 0) pos += snprintf(response + pos, buf_size - pos, ",");
-        pos += snprintf(response + pos, buf_size - pos,
+        if (i > 0) {
+            n = snprintf(response + pos, buf_size - pos, ",");
+            if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+        }
+        n = snprintf(response + pos, buf_size - pos,
             "\n    {"
             "\"station_id\": %d, "
             "\"distance_from_start\": %.2f, "
@@ -586,9 +613,11 @@ static void handle_filter(struct mg_connection *c, struct mg_http_message *hm) {
             filtered[i].price_per_gallon,
             filtered[i].snap_point.lat,
             filtered[i].snap_point.lon);
+        if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
     }
 
-    pos += snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    n = snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    (void)n;  /* Final snprintf - truncation here is fine, buffer is null-terminated */
 
     send_json(c, response);
 
@@ -736,18 +765,29 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
         return;
     }
 
-    /* Build response */
-    int buf_size = 2048 + filtered_count * 256;
+    /* Build response - use conservative buffer sizing with overflow check */
+    size_t per_station = 256;  /* Conservative estimate per station entry */
+    size_t base_size = 2048;
+    if (filtered_count < 0 ||
+        (size_t)filtered_count > (SIZE_MAX - base_size) / per_station) {
+        fw_free_snapped_stations(filtered);
+        fw_free_solution(&solution);
+        free(segments);
+        send_error(c, 500, "Too many stations for response buffer");
+        return;
+    }
+    size_t buf_size = base_size + (size_t)filtered_count * per_station;
     char *response = malloc(buf_size);
     if (!response) {
         fw_free_snapped_stations(filtered);
         fw_free_solution(&solution);
+        free(segments);
         send_error(c, 500, "Memory allocation failed");
         return;
     }
 
-    int pos = 0;
-    pos += snprintf(response + pos, buf_size - pos,
+    size_t pos = 0;
+    int n = snprintf(response + pos, buf_size - pos,
         "{\n"
         "  \"status\": \"%s\",\n"
         "  \"route_distance\": %.2f,\n"
@@ -764,13 +804,17 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
         solution.total_cost,
         solution.gross_cost,
         solution.remaining_fuel);
+    if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
 
     int first = 1;
     for (int i = 0; i < filtered_count; i++) {
         if (solution.purchases[i] > 0.001) {
-            if (!first) pos += snprintf(response + pos, buf_size - pos, ",");
+            if (!first) {
+                n = snprintf(response + pos, buf_size - pos, ",");
+                if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+            }
             first = 0;
-            pos += snprintf(response + pos, buf_size - pos,
+            n = snprintf(response + pos, buf_size - pos,
                 "\n    {"
                 "\"station_id\": %d, "
                 "\"distance_from_start\": %.2f, "
@@ -781,10 +825,12 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
                 filtered[i].distance_from_start,
                 solution.purchases[i],
                 solution.purchases[i] * filtered[i].price_per_gallon);
+            if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
         }
     }
 
-    pos += snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    n = snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    (void)n;  /* Final snprintf - truncation here is fine, buffer is null-terminated */
 
     send_json(c, response);
 
