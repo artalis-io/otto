@@ -132,6 +132,13 @@ int fw_solve_refuel_lp(
         int nnz = 1 + i;
         int *indices = malloc(nnz * sizeof(int));
         double *values = malloc(nnz * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
 
         indices[0] = y_start + i;
         values[0] = 1.0;
@@ -172,6 +179,13 @@ int fw_solve_refuel_lp(
     {
         int *indices = malloc(k * sizeof(int));
         double *values = malloc(k * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
 
         for (int i = 0; i < k; i++) {
             indices[i] = x_start + i;
@@ -327,6 +341,13 @@ int fw_solve_refuel_milp(
         int nnz = 1 + i;
         int *indices = malloc(nnz * sizeof(int));
         double *values = malloc(nnz * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
 
         indices[0] = y_start + i;
         values[0] = 1.0;
@@ -385,6 +406,13 @@ int fw_solve_refuel_milp(
     {
         int *indices = malloc(k * sizeof(int));
         double *values = malloc(k * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
 
         for (int i = 0; i < k; i++) {
             indices[i] = x_start + i;
@@ -580,6 +608,12 @@ static RalphModel* build_benders_subproblem(
         int nnz = 1 + i;
         int *indices = malloc(nnz * sizeof(int));
         double *values = malloc(nnz * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            ralph_free(model);
+            return NULL;
+        }
 
         indices[0] = y_start + i;
         values[0] = 1.0;
@@ -655,6 +689,12 @@ static RalphModel* build_benders_subproblem(
     {
         int *indices = malloc(k * sizeof(int));
         double *values = malloc(k * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            ralph_free(model);
+            return NULL;
+        }
 
         for (int i = 0; i < k; i++) {
             indices[i] = x_start + i;

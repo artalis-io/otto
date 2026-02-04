@@ -95,28 +95,28 @@ int fw_filter_stations_two_step(
 void fw_free_snapped_stations(FWSnappedStation *stations);
 
 /*
- * Free a filter result structure.
+ * FW_FUTURE_API: Free a filter result structure.
  *
  * Parameters:
  *   result - Result to free (can be NULL)
  */
-void fw_free_filter_result(FWFilterResult *result);
+FW_FUTURE_API void fw_free_filter_result(FWFilterResult *result);
 
 /* ============================================================================
  * Utility Functions
  * ============================================================================ */
 
 /*
- * Sort snapped stations by distance from start.
+ * FW_FUTURE_API: Sort snapped stations by distance from start.
  *
  * Parameters:
  *   stations - Array of snapped stations
  *   count    - Number of stations
  */
-void fw_sort_stations_by_distance(FWSnappedStation *stations, int count);
+FW_FUTURE_API void fw_sort_stations_by_distance(FWSnappedStation *stations, int count);
 
 /*
- * Remove duplicate stations from a sorted array.
+ * FW_FUTURE_API: Remove duplicate stations from a sorted array.
  *
  * Parameters:
  *   stations - Array of snapped stations (must be sorted)
@@ -124,7 +124,7 @@ void fw_sort_stations_by_distance(FWSnappedStation *stations, int count);
  *   strategy - Deduplication strategy
  *   max_dedup_distance - Max distance to consider stations as duplicates
  */
-void fw_deduplicate_stations(
+FW_FUTURE_API void fw_deduplicate_stations(
     FWSnappedStation *stations,
     int *count,
     FWDedupStrategy strategy,

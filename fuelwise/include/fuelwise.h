@@ -131,28 +131,32 @@ char* fw_solution_to_json(const FWRefuelSolution *solution);
 char* fw_response_to_json(const FWOptimizeResponse *response);
 
 /*
- * Parse a refueling problem from JSON.
+ * FW_FUTURE_API: Parse a refueling problem from JSON.
+ *
+ * NOTE: Not yet implemented - returns -1. Use API server for JSON parsing.
  *
  * Parameters:
  *   json    - JSON string
  *   problem - Output: parsed problem (caller must free stations array)
  *
  * Returns:
- *   0 on success, -1 on error
+ *   0 on success, -1 on error (currently always returns -1)
  */
-int fw_problem_from_json(const char *json, FWRefuelProblem *problem);
+FW_FUTURE_API int fw_problem_from_json(const char *json, FWRefuelProblem *problem);
 
 /*
- * Parse an optimization request from JSON.
+ * FW_FUTURE_API: Parse an optimization request from JSON.
+ *
+ * NOTE: Not yet implemented - returns -1. Use API server for JSON parsing.
  *
  * Parameters:
  *   json    - JSON string
  *   request - Output: parsed request (caller must free allocated arrays)
  *
  * Returns:
- *   0 on success, -1 on error
+ *   0 on success, -1 on error (currently always returns -1)
  */
-int fw_request_from_json(const char *json, FWOptimizeRequest *request);
+FW_FUTURE_API int fw_request_from_json(const char *json, FWOptimizeRequest *request);
 
 /*
  * Free a JSON string returned by serialization functions.

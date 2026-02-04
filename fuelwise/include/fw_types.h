@@ -13,6 +13,17 @@ extern "C" {
 #endif
 
 /* ============================================================================
+ * API Annotations
+ * ============================================================================ */
+
+/*
+ * FW_FUTURE_API - Marks functions reserved for future use.
+ * These are part of the public API but not yet used by the library,
+ * WASM bindings, or API server. They may be used by external code.
+ */
+#define FW_FUTURE_API  /* Reserved for future use */
+
+/* ============================================================================
  * Constants
  * ============================================================================ */
 

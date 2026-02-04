@@ -252,7 +252,8 @@ char* fw_solution_to_json(const FWRefuelSolution *solution)
         "  \"num_stops\": %d,\n"
         "  \"total_cost\": %.2f,\n"
         "  \"gross_cost\": %.2f,\n"
-        "  \"remaining_fuel\": %.2f",
+        "  \"remaining_fuel\": %.2f\n"
+        "}\n",
         fw_status_string(solution->status),
         (int)solution->status,
         solution->num_stops,
@@ -261,22 +262,11 @@ char* fw_solution_to_json(const FWRefuelSolution *solution)
         solution->remaining_fuel
     );
 
-    /* Add purchases array if available */
-    if (solution->purchases && solution->num_stops > 0) {
-        /* Expand buffer for purchases */
-        buf_size += 256;
-        char *new_json = realloc(json, buf_size);
-        if (!new_json) {
-            free(json);
-            return NULL;
-        }
-        json = new_json;
-
-        pos += snprintf(json + pos, buf_size - pos, ",\n  \"purchases\": [");
-        /* Note: We don't have num_stations here, would need to add to solution struct */
-    }
-
-    pos += snprintf(json + pos, buf_size - pos, "\n}\n");
+    /*
+     * Note: The purchases array is not serialized here because FWRefuelSolution
+     * does not store num_stations. Use fw_response_to_json() for full details
+     * including per-station purchases.
+     */
 
     return json;
 }
