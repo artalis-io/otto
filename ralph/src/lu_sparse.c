@@ -35,6 +35,9 @@ typedef struct {
     int n;          /* dimension */
 } AMDWorkspace;
 
+/* Forward declaration for cleanup helper */
+static void amd_workspace_free(AMDWorkspace *amd);
+
 static AMDWorkspace* amd_workspace_create(int n) {
     AMDWorkspace *amd = (AMDWorkspace*)malloc(sizeof(AMDWorkspace));
     if (!amd) return NULL;
@@ -46,11 +49,7 @@ static AMDWorkspace* amd_workspace_create(int n) {
     amd->degree = (int*)malloc(n * sizeof(int));
 
     if (!amd->head || !amd->next || !amd->prev || !amd->degree) {
-        free(amd->head);
-        free(amd->next);
-        free(amd->prev);
-        free(amd->degree);
-        free(amd);
+        amd_workspace_free(amd);
         return NULL;
     }
 

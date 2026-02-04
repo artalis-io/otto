@@ -17,6 +17,9 @@
 #include <omp.h>
 #endif
 
+/* Refactorize when spike pool exceeds this percentage of capacity */
+#define RALPH_SPIKE_POOL_WARN_PCT 85
+
 /* Forward declarations for reach computation (used by sparse solves) */
 static void compute_reach_L(const LUFactorization *lu,
                             int nnz_rhs, const int *rhs_idx,
@@ -1766,10 +1769,10 @@ int lu_needs_refactorization(const LUFactorization *lu) {
     /* Refactorize early if condition has degraded significantly */
     if (lu->growth_factor > 1e6) return 1;
 
-    /* Refactorize early if spike pool is nearly full (>85% capacity)
+    /* Refactorize early if spike pool is nearly full
      * This prevents update failures when spike density is higher than expected */
     if (lu->use_ft_updates && lu->spike_pool_capacity > 0) {
-        if (lu->spike_pool_used > lu->spike_pool_capacity * 85 / 100) return 1;
+        if (lu->spike_pool_used > lu->spike_pool_capacity * RALPH_SPIKE_POOL_WARN_PCT / 100) return 1;
     }
 
     return 0;
