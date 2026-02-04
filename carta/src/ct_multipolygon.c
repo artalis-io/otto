@@ -308,7 +308,8 @@ static CTStatus assemble_one_multipolygon(CTPBFContext *ctx,
         if (!way || way->num_coords < 2) continue;
 
         const char *role = ct_get_role_string(ctx, rel->members[i].role_idx);
-        int is_outer = (strcmp(role, "outer") == 0 || strlen(role) == 0);
+        /* Role strings are short (e.g., "outer", "inner") - cap at 64 bytes */
+        int is_outer = (strcmp(role, "outer") == 0 || strnlen(role, 64) == 0);
         int is_inner = (strcmp(role, "inner") == 0);
 
         if (is_outer) {

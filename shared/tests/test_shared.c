@@ -759,6 +759,217 @@ TEST(pool_grow)
 }
 
 /* ============================================================================
+ * Rate Limiter Tests
+ * ============================================================================ */
+
+TEST(ratelimit_create_free)
+{
+    ShRateLimiter *limiter = sh_ratelimit_create(10.0, 100.0, 64);
+    ASSERT(limiter != NULL);
+    sh_ratelimit_free(limiter);
+}
+
+TEST(ratelimit_create_invalid_params)
+{
+    /* Zero/negative RPS should fail */
+    ASSERT(sh_ratelimit_create(0.0, 100.0, 64) == NULL);
+    ASSERT(sh_ratelimit_create(-1.0, 100.0, 64) == NULL);
+
+    /* Zero/negative burst should fail */
+    ASSERT(sh_ratelimit_create(10.0, 0.0, 64) == NULL);
+    ASSERT(sh_ratelimit_create(10.0, -1.0, 64) == NULL);
+}
+
+TEST(ratelimit_free_null_safe)
+{
+    /* Should not crash */
+    sh_ratelimit_free(NULL);
+}
+
+TEST(ratelimit_check_allows_within_burst)
+{
+    /* 10 RPS, burst of 5 - should allow 5 immediate requests */
+    ShRateLimiter *limiter = sh_ratelimit_create(10.0, 5.0, 64);
+    ASSERT(limiter != NULL);
+
+    ShRateLimitAddr addr;
+    sh_ratelimit_addr_ipv4(&addr, 0x01020304);  /* 1.2.3.4 */
+
+    /* First 5 requests should be allowed */
+    for (int i = 0; i < 5; i++) {
+        ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+    }
+
+    sh_ratelimit_free(limiter);
+}
+
+TEST(ratelimit_check_denies_over_burst)
+{
+    /* Very low RPS (0.001) so refill is negligible during test, burst of 3 */
+    ShRateLimiter *limiter = sh_ratelimit_create(0.001, 3.0, 64);
+    ASSERT(limiter != NULL);
+
+    ShRateLimitAddr addr;
+    sh_ratelimit_addr_ipv4(&addr, 0x01020304);
+
+    /* First 3 requests allowed (uses up the burst) */
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+
+    /* 4th request denied (no tokens left, refill is negligible) */
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 0);
+
+    sh_ratelimit_free(limiter);
+}
+
+TEST(ratelimit_different_ips_independent)
+{
+    /* Each IP gets its own bucket - use low RPS to avoid refill during test */
+    ShRateLimiter *limiter = sh_ratelimit_create(0.001, 2.0, 64);
+    ASSERT(limiter != NULL);
+
+    ShRateLimitAddr addr1, addr2;
+    sh_ratelimit_addr_ipv4(&addr1, 0x01020304);  /* 1.2.3.4 */
+    sh_ratelimit_addr_ipv4(&addr2, 0x05060708);  /* 5.6.7.8 */
+
+    /* Exhaust addr1's bucket */
+    ASSERT(sh_ratelimit_check(limiter, &addr1) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr1) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr1) == 0);
+
+    /* addr2 should still have full bucket */
+    ASSERT(sh_ratelimit_check(limiter, &addr2) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr2) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr2) == 0);
+
+    sh_ratelimit_free(limiter);
+}
+
+TEST(ratelimit_ipv6_support)
+{
+    /* Use low RPS to avoid refill during test */
+    ShRateLimiter *limiter = sh_ratelimit_create(0.001, 3.0, 64);
+    ASSERT(limiter != NULL);
+
+    ShRateLimitAddr addr;
+    sh_ratelimit_addr_ipv6(&addr, 0x20010db800000000ULL, 0x0000000000000001ULL);
+
+    /* Should work the same as IPv4 */
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 0);
+
+    sh_ratelimit_free(limiter);
+}
+
+TEST(ratelimit_ipv4_ipv6_different_buckets)
+{
+    /* IPv4 and IPv6 addresses should have separate buckets - low RPS */
+    ShRateLimiter *limiter = sh_ratelimit_create(0.001, 2.0, 64);
+    ASSERT(limiter != NULL);
+
+    ShRateLimitAddr addr4, addr6;
+    sh_ratelimit_addr_ipv4(&addr4, 0x01020304);
+    sh_ratelimit_addr_ipv6(&addr6, 0x0000000001020304ULL, 0);  /* Same bits as IPv4 but different type */
+
+    /* Exhaust IPv4 bucket */
+    ASSERT(sh_ratelimit_check(limiter, &addr4) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr4) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr4) == 0);
+
+    /* IPv6 should still have full bucket */
+    ASSERT(sh_ratelimit_check(limiter, &addr6) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr6) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr6) == 0);
+
+    sh_ratelimit_free(limiter);
+}
+
+TEST(ratelimit_stats)
+{
+    /* Low RPS to avoid refill during test */
+    ShRateLimiter *limiter = sh_ratelimit_create(0.001, 2.0, 64);
+    ASSERT(limiter != NULL);
+
+    ShRateLimitAddr addr;
+    sh_ratelimit_addr_ipv4(&addr, 0x01020304);
+
+    /* Make some requests */
+    sh_ratelimit_check(limiter, &addr);  /* allowed */
+    sh_ratelimit_check(limiter, &addr);  /* allowed */
+    sh_ratelimit_check(limiter, &addr);  /* denied */
+    sh_ratelimit_check(limiter, &addr);  /* denied */
+
+    ShRateLimitStats stats;
+    sh_ratelimit_stats(limiter, &stats);
+
+    ASSERT_EQ(stats.requests_allowed, 2);
+    ASSERT_EQ(stats.requests_denied, 2);
+    ASSERT_EQ(stats.active_entries, 1);
+    ASSERT_EQ(stats.table_capacity, 64);
+
+    sh_ratelimit_free(limiter);
+}
+
+TEST(ratelimit_reset)
+{
+    /* Low RPS to avoid refill during test */
+    ShRateLimiter *limiter = sh_ratelimit_create(0.001, 2.0, 64);
+    ASSERT(limiter != NULL);
+
+    ShRateLimitAddr addr;
+    sh_ratelimit_addr_ipv4(&addr, 0x01020304);
+
+    /* Exhaust bucket */
+    sh_ratelimit_check(limiter, &addr);
+    sh_ratelimit_check(limiter, &addr);
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 0);
+
+    /* Reset clears all entries */
+    sh_ratelimit_reset(limiter);
+
+    /* Should have full bucket again */
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+    ASSERT(sh_ratelimit_check(limiter, &addr) == 0);
+
+    sh_ratelimit_free(limiter);
+}
+
+TEST(ratelimit_zero_addr_allowed)
+{
+    /* Zero address (0.0.0.0) should always be allowed - it's invalid */
+    ShRateLimiter *limiter = sh_ratelimit_create(10.0, 1.0, 64);
+    ASSERT(limiter != NULL);
+
+    ShRateLimitAddr addr;
+    sh_ratelimit_addr_ipv4(&addr, 0);
+
+    /* Even with burst of 1, should always be allowed */
+    for (int i = 0; i < 10; i++) {
+        ASSERT(sh_ratelimit_check(limiter, &addr) == 1);
+    }
+
+    sh_ratelimit_free(limiter);
+}
+
+TEST(ratelimit_null_safe)
+{
+    ShRateLimitAddr addr;
+    sh_ratelimit_addr_ipv4(&addr, 0x01020304);
+
+    /* Should not crash, return allowed */
+    ASSERT(sh_ratelimit_check(NULL, &addr) == 1);
+    ASSERT(sh_ratelimit_check(NULL, NULL) == 1);
+
+    /* Stats with NULL should not crash */
+    sh_ratelimit_stats(NULL, NULL);
+    sh_ratelimit_reset(NULL);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -840,6 +1051,20 @@ int main(void)
     RUN_TEST(pool_reset);
     RUN_TEST(pool_overflow_returns_invalid);
     RUN_TEST(pool_grow);
+
+    printf("\nRate Limiter:\n");
+    RUN_TEST(ratelimit_create_free);
+    RUN_TEST(ratelimit_create_invalid_params);
+    RUN_TEST(ratelimit_free_null_safe);
+    RUN_TEST(ratelimit_check_allows_within_burst);
+    RUN_TEST(ratelimit_check_denies_over_burst);
+    RUN_TEST(ratelimit_different_ips_independent);
+    RUN_TEST(ratelimit_ipv6_support);
+    RUN_TEST(ratelimit_ipv4_ipv6_different_buckets);
+    RUN_TEST(ratelimit_stats);
+    RUN_TEST(ratelimit_reset);
+    RUN_TEST(ratelimit_zero_addr_allowed);
+    RUN_TEST(ratelimit_null_safe);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

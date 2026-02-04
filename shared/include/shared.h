@@ -23,6 +23,7 @@
 #include "sh_pbf.h"
 #include "sh_arena.h"
 #include "sh_pool.h"
+#include "sh_ratelimit.h"
 
 /* Library version */
 #define SHARED_VERSION_MAJOR 1
