@@ -23,8 +23,8 @@
  * Algorithms, and Applications," Prentice Hall, 1993.
  */
 
-#ifndef NETFLOW_H
-#define NETFLOW_H
+#ifndef RALPH_NETFLOW_H
+#define RALPH_NETFLOW_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -602,4 +602,4 @@ int ralph_netflow_check_optimality(
 }
 #endif
 
-#endif /* NETFLOW_H */
+#endif /* RALPH_NETFLOW_H */

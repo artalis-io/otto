@@ -39,14 +39,14 @@ typedef struct {
 static void amd_workspace_free(AMDWorkspace *amd);
 
 static AMDWorkspace* amd_workspace_create(int n) {
-    AMDWorkspace *amd = (AMDWorkspace*)malloc(sizeof(AMDWorkspace));
+    AMDWorkspace *amd = (AMDWorkspace*)calloc(1, sizeof(AMDWorkspace));
     if (!amd) return NULL;
 
     amd->n = n;
-    amd->head = (int*)malloc((n + 1) * sizeof(int));
-    amd->next = (int*)malloc(n * sizeof(int));
-    amd->prev = (int*)malloc(n * sizeof(int));
-    amd->degree = (int*)malloc(n * sizeof(int));
+    amd->head = (int*)calloc((n + 1), sizeof(int));
+    amd->next = (int*)calloc(n, sizeof(int));
+    amd->prev = (int*)calloc(n, sizeof(int));
+    amd->degree = (int*)calloc(n, sizeof(int));
 
     if (!amd->head || !amd->next || !amd->prev || !amd->degree) {
         amd_workspace_free(amd);
@@ -128,9 +128,9 @@ static int* compute_col_ordering(const SparseMatrix *B) {
     int n = B->ncols;
     int m = B->nrows;
 
-    int *perm = (int*)malloc(n * sizeof(int));
+    int *perm = (int*)calloc(n, sizeof(int));
     int *eliminated = (int*)calloc(n, sizeof(int));
-    int *marker = (int*)malloc(n * sizeof(int));  /* For counting unique neighbors */
+    int *marker = (int*)calloc(n, sizeof(int));  /* For counting unique neighbors */
 
     if (!perm || !eliminated || !marker) {
         free(perm);
@@ -143,7 +143,7 @@ static int* compute_col_ordering(const SparseMatrix *B) {
 
     /* Build row-to-column adjacency */
     int *row_ptr = (int*)calloc(m + 1, sizeof(int));
-    int *row_cols = (int*)malloc(B->nnz * sizeof(int));
+    int *row_cols = (int*)calloc(B->nnz, sizeof(int));
     int *row_len = (int*)calloc(m, sizeof(int));  /* Current active length of each row */
 
     if (!row_ptr || !row_cols || !row_len) {
@@ -199,11 +199,11 @@ static int* compute_col_ordering(const SparseMatrix *B) {
      * col_element[j] = most recent element containing column j, or -1
      * This is used for element absorption detection.
      */
-    int *col_element = (int*)malloc(n * sizeof(int));
+    int *col_element = (int*)calloc(n, sizeof(int));
 
     /* For each element, track its member columns as a simple list */
-    int *element_head = (int*)malloc(n * sizeof(int));
-    int *element_next = (int*)malloc(n * sizeof(int));
+    int *element_head = (int*)calloc(n, sizeof(int));
+    int *element_next = (int*)calloc(n, sizeof(int));
 
     if (!col_element || !element_head || !element_next) {
         free(perm);
@@ -257,7 +257,7 @@ static int* compute_col_ordering(const SparseMatrix *B) {
     }
 
     /* Workspace for tracking adjacent columns */
-    int *adj_cols = (int*)malloc(n * sizeof(int));
+    int *adj_cols = (int*)calloc(n, sizeof(int));
     if (!adj_cols) {
         amd_workspace_free(amd);
         free(perm);
@@ -427,12 +427,12 @@ static int* compute_col_ordering(const SparseMatrix *B) {
  */
 static int* compute_lp_column_ordering(const SparseMatrix *B) {
     int n = B->ncols;
-    int *perm = (int*)malloc(n * sizeof(int));
+    int *perm = (int*)calloc(n, sizeof(int));
     if (!perm) return NULL;
 
     /* Classify columns: identity (singleton ±1) vs structural */
     int *is_identity = (int*)calloc(n, sizeof(int));
-    int *col_counts = (int*)malloc(n * sizeof(int));
+    int *col_counts = (int*)calloc(n, sizeof(int));
 
     if (!is_identity || !col_counts) {
         free(perm);
@@ -458,7 +458,7 @@ static int* compute_lp_column_ordering(const SparseMatrix *B) {
     }
 
     /* Sort structural columns by column count (insertion sort for simplicity) */
-    int *structural = (int*)malloc(n * sizeof(int));
+    int *structural = (int*)calloc(n, sizeof(int));
     int num_structural = 0;
 
     if (!structural) {
@@ -560,7 +560,7 @@ static SparseLUWork* sparse_work_create(int m, int nnz_estimate) {
     }
 
     /* Allocate first chunk */
-    work->chunks[0] = (SparseEntry*)malloc(work->chunk_size * sizeof(SparseEntry));
+    work->chunks[0] = (SparseEntry*)calloc(work->chunk_size, sizeof(SparseEntry));
     if (!work->chunks[0]) {
         free(work->chunks);
         free(work);
@@ -574,10 +574,10 @@ static SparseLUWork* sparse_work_create(int m, int nnz_estimate) {
     work->rows = (SparseEntry**)calloc(m, sizeof(SparseEntry*));
     work->col_nnz = (int*)calloc(m, sizeof(int));
     work->row_nnz = (int*)calloc(m, sizeof(int));
-    work->col_perm = (int*)malloc(m * sizeof(int));
-    work->row_perm = (int*)malloc(m * sizeof(int));
-    work->col_perm_inv = (int*)malloc(m * sizeof(int));
-    work->row_perm_inv = (int*)malloc(m * sizeof(int));
+    work->col_perm = (int*)calloc(m, sizeof(int));
+    work->row_perm = (int*)calloc(m, sizeof(int));
+    work->col_perm_inv = (int*)calloc(m, sizeof(int));
+    work->row_perm_inv = (int*)calloc(m, sizeof(int));
     work->col_done = (int*)calloc(m, sizeof(int));
     work->row_done = (int*)calloc(m, sizeof(int));
     work->work_dense = (double*)calloc(m, sizeof(double));
@@ -658,8 +658,8 @@ static SparseEntry* alloc_entry(SparseLUWork *work) {
             }
 
             /* Allocate new chunk */
-            work->chunks[work->num_chunks] = (SparseEntry*)malloc(
-                                                work->chunk_size * sizeof(SparseEntry));
+            work->chunks[work->num_chunks] = (SparseEntry*)calloc(
+                                                work->chunk_size, sizeof(SparseEntry));
             if (!work->chunks[work->num_chunks]) return NULL;
             work->num_chunks++;
         }
@@ -991,7 +991,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
 
     if (!col_order) {
         /* Fallback to natural order */
-        col_order = (int*)malloc(m * sizeof(int));
+        col_order = (int*)calloc(m, sizeof(int));
         if (!col_order) return -1;
         for (int j = 0; j < m; j++) col_order[j] = j;
     }
@@ -1020,12 +1020,12 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     /* Arrays to store L and U entries during factorization */
     int L_cap = B->nnz + m;
     int U_cap = B->nnz + m;
-    int *L_i = (int*)malloc(L_cap * sizeof(int));
-    int *L_j = (int*)malloc(L_cap * sizeof(int));
-    double *L_v = (double*)malloc(L_cap * sizeof(double));
-    int *U_i = (int*)malloc(U_cap * sizeof(int));
-    int *U_j = (int*)malloc(U_cap * sizeof(int));
-    double *U_v = (double*)malloc(U_cap * sizeof(double));
+    int *L_i = (int*)calloc(L_cap, sizeof(int));
+    int *L_j = (int*)calloc(L_cap, sizeof(int));
+    double *L_v = (double*)calloc(L_cap, sizeof(double));
+    int *U_i = (int*)calloc(U_cap, sizeof(int));
+    int *U_j = (int*)calloc(U_cap, sizeof(int));
+    double *U_v = (double*)calloc(U_cap, sizeof(double));
     int L_nnz = 0, U_nnz = 0;
 
     if (!L_i || !L_j || !L_v || !U_i || !U_j || !U_v) {
@@ -1284,12 +1284,12 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     free(lu->U_values);
 
     /* Allocate CSC arrays */
-    lu->L_colptr = (int*)malloc((m + 1) * sizeof(int));
-    lu->L_rowidx = (int*)malloc(L_nnz * sizeof(int));
-    lu->L_values = (double*)malloc(L_nnz * sizeof(double));
-    lu->U_colptr = (int*)malloc((m + 1) * sizeof(int));
-    lu->U_rowidx = (int*)malloc(U_nnz * sizeof(int));
-    lu->U_values = (double*)malloc(U_nnz * sizeof(double));
+    lu->L_colptr = (int*)calloc((m + 1), sizeof(int));
+    lu->L_rowidx = (int*)calloc(L_nnz, sizeof(int));
+    lu->L_values = (double*)calloc(L_nnz, sizeof(double));
+    lu->U_colptr = (int*)calloc((m + 1), sizeof(int));
+    lu->U_rowidx = (int*)calloc(U_nnz, sizeof(int));
+    lu->U_values = (double*)calloc(U_nnz, sizeof(double));
 
     if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
         !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
@@ -1463,20 +1463,20 @@ static LPBasisStructure* analyze_lp_basis(const SparseMatrix *B) {
     LPBasisStructure *lp = (LPBasisStructure*)calloc(1, sizeof(LPBasisStructure));
     if (!lp) return NULL;
 
-    lp->identity_cols = (int*)malloc(m * sizeof(int));
-    lp->identity_rows = (int*)malloc(m * sizeof(int));
-    lp->identity_vals = (double*)malloc(m * sizeof(double));
-    lp->structural_cols = (int*)malloc(m * sizeof(int));
+    lp->identity_cols = (int*)calloc(m, sizeof(int));
+    lp->identity_rows = (int*)calloc(m, sizeof(int));
+    lp->identity_vals = (double*)calloc(m, sizeof(double));
+    lp->structural_cols = (int*)calloc(m, sizeof(int));
     lp->row_is_identity = (int*)calloc(m, sizeof(int));
-    lp->row_to_sub = (int*)malloc(m * sizeof(int));
-    lp->sub_to_row = (int*)malloc(m * sizeof(int));
-    lp->id_to_step = (int*)malloc(m * sizeof(int));
+    lp->row_to_sub = (int*)calloc(m, sizeof(int));
+    lp->sub_to_row = (int*)calloc(m, sizeof(int));
+    lp->id_to_step = (int*)calloc(m, sizeof(int));
 
     /* Initial capacity for cross-terms */
     lp->B21_cap = B->nnz / 4 + 16;
-    lp->B21_col = (int*)malloc(lp->B21_cap * sizeof(int));
-    lp->B21_row = (int*)malloc(lp->B21_cap * sizeof(int));
-    lp->B21_val = (double*)malloc(lp->B21_cap * sizeof(double));
+    lp->B21_col = (int*)calloc(lp->B21_cap, sizeof(int));
+    lp->B21_row = (int*)calloc(lp->B21_cap, sizeof(int));
+    lp->B21_val = (double*)calloc(lp->B21_cap, sizeof(double));
     lp->B21_nnz = 0;
 
     if (!lp->identity_cols || !lp->identity_rows || !lp->identity_vals ||
@@ -1634,12 +1634,12 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         free(lu->L_colptr); free(lu->L_rowidx); free(lu->L_values);
         free(lu->U_colptr); free(lu->U_rowidx); free(lu->U_values);
 
-        lu->L_colptr = (int*)malloc((m + 1) * sizeof(int));
-        lu->L_rowidx = (int*)malloc(m * sizeof(int));
-        lu->L_values = (double*)malloc(m * sizeof(double));
-        lu->U_colptr = (int*)malloc((m + 1) * sizeof(int));
-        lu->U_rowidx = (int*)malloc(m * sizeof(int));
-        lu->U_values = (double*)malloc(m * sizeof(double));
+        lu->L_colptr = (int*)calloc((m + 1), sizeof(int));
+        lu->L_rowidx = (int*)calloc(m, sizeof(int));
+        lu->L_values = (double*)calloc(m, sizeof(double));
+        lu->U_colptr = (int*)calloc((m + 1), sizeof(int));
+        lu->U_rowidx = (int*)calloc(m, sizeof(int));
+        lu->U_values = (double*)calloc(m, sizeof(double));
 
         /* Build identity L and U using column order from identity analysis */
         for (int step = 0; step < m; step++) {
@@ -1693,8 +1693,8 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     /* Extract k×k structural submatrix */
     /* A_sub[ii + jj*k] = B[sub_to_row[ii], structural_cols[jj]] */
     double *A_sub = (double*)calloc((size_t)k * k, sizeof(double));
-    int *sub_perm = (int*)malloc(k * sizeof(int));        /* Row permutation within submatrix */
-    int *sub_perm_inv = (int*)malloc(k * sizeof(int));
+    int *sub_perm = (int*)calloc(k, sizeof(int));        /* Row permutation within submatrix */
+    int *sub_perm_inv = (int*)calloc(k, sizeof(int));
 
     if (!A_sub || !sub_perm || !sub_perm_inv) {
         free(A_sub); free(sub_perm); free(sub_perm_inv);
@@ -1799,12 +1799,12 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     int L_cap = k * k + (m - k) + m;
     int U_cap = k * k + (m - k) + B->nnz;
 
-    int *L_row_arr = (int*)malloc(L_cap * sizeof(int));
-    int *L_col_arr = (int*)malloc(L_cap * sizeof(int));
-    double *L_val_arr = (double*)malloc(L_cap * sizeof(double));
-    int *U_row_arr = (int*)malloc(U_cap * sizeof(int));
-    int *U_col_arr = (int*)malloc(U_cap * sizeof(int));
-    double *U_val_arr = (double*)malloc(U_cap * sizeof(double));
+    int *L_row_arr = (int*)calloc(L_cap, sizeof(int));
+    int *L_col_arr = (int*)calloc(L_cap, sizeof(int));
+    double *L_val_arr = (double*)calloc(L_cap, sizeof(double));
+    int *U_row_arr = (int*)calloc(U_cap, sizeof(int));
+    int *U_col_arr = (int*)calloc(U_cap, sizeof(int));
+    double *U_val_arr = (double*)calloc(U_cap, sizeof(double));
 
     if (!L_row_arr || !L_col_arr || !L_val_arr ||
         !U_row_arr || !U_col_arr || !U_val_arr) {
@@ -1985,8 +1985,8 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
     /* Convert L from COO to CSC */
     lu->L_colptr = (int*)calloc(m + 1, sizeof(int));
-    lu->L_rowidx = (int*)malloc(L_nnz * sizeof(int));
-    lu->L_values = (double*)malloc(L_nnz * sizeof(double));
+    lu->L_rowidx = (int*)calloc(L_nnz, sizeof(int));
+    lu->L_values = (double*)calloc(L_nnz, sizeof(double));
 
     for (int i = 0; i < L_nnz; i++) {
         lu->L_colptr[L_col_arr[i] + 1]++;
@@ -2007,8 +2007,8 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
     /* Convert U from COO to CSC */
     lu->U_colptr = (int*)calloc(m + 1, sizeof(int));
-    lu->U_rowidx = (int*)malloc(U_nnz * sizeof(int));
-    lu->U_values = (double*)malloc(U_nnz * sizeof(double));
+    lu->U_rowidx = (int*)calloc(U_nnz, sizeof(int));
+    lu->U_values = (double*)calloc(U_nnz, sizeof(double));
 
     for (int i = 0; i < U_nnz; i++) {
         lu->U_colptr[U_col_arr[i] + 1]++;

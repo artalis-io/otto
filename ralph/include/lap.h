@@ -13,8 +13,8 @@
  * Dense and Sparse Linear Assignment Problems," Computing 38, 325-340, 1987
  */
 
-#ifndef LAP_H
-#define LAP_H
+#ifndef RALPH_LAP_H
+#define RALPH_LAP_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -812,4 +812,4 @@ RalphLapStatus ralph_lap_solve_ex(
 }
 #endif
 
-#endif /* LAP_H */
+#endif /* RALPH_LAP_H */

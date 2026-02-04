@@ -223,7 +223,7 @@ RalphLapWorkspace* ralph_lap_workspace_create(int max_n) {
         return NULL;
     }
 
-    RalphLapWorkspace *ws = (RalphLapWorkspace *)malloc(sizeof(RalphLapWorkspace));
+    RalphLapWorkspace *ws = (RalphLapWorkspace *)calloc(1, sizeof(RalphLapWorkspace));
     if (!ws) {
         return NULL;
     }
@@ -1622,7 +1622,7 @@ RalphLapStatus ralph_lap_solve_sparse(
         if (lap_check_size_overflow(n, sizeof(double)) != 0) {
             return RALPH_LAP_MEMORY_ERROR;  /* n*n would overflow */
         }
-        double *cost = (double *)malloc(n * n * sizeof(double));
+        double *cost = (double *)calloc((size_t)n * n, sizeof(double));
         if (!cost) return RALPH_LAP_MEMORY_ERROR;
 
         for (int i = 0; i < n * n; i++) cost[i] = RALPH_LAP_INFINITY;
@@ -1659,17 +1659,17 @@ RalphLapStatus ralph_lap_solve_sparse(
     int *in_free_list = NULL;    /* Track which rows are in free list */
     int *scanned = NULL;         /* Scanned columns in Dijkstra */
 
-    work_values = (double *)malloc(nnz * sizeof(double));
+    work_values = (double *)calloc(nnz, sizeof(double));
     col_price = (double *)calloc(n, sizeof(double));
-    dist = (double *)malloc(n * sizeof(double));
-    row_assign = (int *)malloc(n * sizeof(int));
-    col_assign = (int *)malloc(n * sizeof(int));
+    dist = (double *)calloc(n, sizeof(double));
+    row_assign = (int *)calloc(n, sizeof(int));
+    col_assign = (int *)calloc(n, sizeof(int));
     matches = (int *)calloc(n, sizeof(int));
-    free_rows = (int *)malloc(2 * n * sizeof(int));
-    pred = (int *)malloc(n * sizeof(int));
+    free_rows = (int *)calloc(2 * n, sizeof(int));
+    pred = (int *)calloc(n, sizeof(int));
     in_queue = (int *)calloc(n, sizeof(int));
     in_free_list = (int *)calloc(n, sizeof(int));
-    scanned = (int *)malloc(n * sizeof(int));
+    scanned = (int *)calloc(n, sizeof(int));
 
     if (!work_values || !col_price || !dist || !row_assign || !col_assign ||
         !matches || !free_rows || !pred || !in_queue || !in_free_list || !scanned) {
@@ -2112,8 +2112,8 @@ RalphLapStatus ralph_lap_solve_lp(
     }
 
     /* Constraint arrays */
-    int *indices = (int *)malloc(n * sizeof(int));
-    double *values = (double *)malloc(n * sizeof(double));
+    int *indices = (int *)calloc(n, sizeof(int));
+    double *values = (double *)calloc(n, sizeof(double));
     if (!indices || !values) {
         free(indices);
         free(values);
@@ -2153,7 +2153,7 @@ RalphLapStatus ralph_lap_solve_lp(
     }
 
     /* Extract solution */
-    double *x = (double *)malloc(n * n * sizeof(double));
+    double *x = (double *)calloc((size_t)n * n, sizeof(double));
     if (!x) {
         ralph_free(model);
         return RALPH_LAP_MEMORY_ERROR;
@@ -2719,14 +2719,14 @@ typedef struct MurtyQueue {
 
 /* Create a Murty node */
 static MurtyNode* murty_node_create(int n, int max_excluded) {
-    MurtyNode *node = (MurtyNode *)malloc(sizeof(MurtyNode));
+    MurtyNode *node = (MurtyNode *)calloc(1, sizeof(MurtyNode));
     if (!node) return NULL;
 
-    node->row_sol = (int *)malloc(n * sizeof(int));
-    node->excluded_rows = (int *)malloc(max_excluded * sizeof(int));
-    node->excluded_cols = (int *)malloc(max_excluded * sizeof(int));
-    node->u = (double *)malloc(n * sizeof(double));
-    node->v = (double *)malloc(n * sizeof(double));
+    node->row_sol = (int *)calloc(n, sizeof(int));
+    node->excluded_rows = (int *)calloc(max_excluded, sizeof(int));
+    node->excluded_cols = (int *)calloc(max_excluded, sizeof(int));
+    node->u = (double *)calloc(n, sizeof(double));
+    node->v = (double *)calloc(n, sizeof(double));
 
     if (!node->row_sol || !node->excluded_rows || !node->excluded_cols ||
         !node->u || !node->v) {
@@ -2759,10 +2759,10 @@ static void murty_node_free(MurtyNode *node) {
 
 /* Create a Murty priority queue */
 static MurtyQueue* murty_queue_create(int capacity) {
-    MurtyQueue *queue = (MurtyQueue *)malloc(sizeof(MurtyQueue));
+    MurtyQueue *queue = (MurtyQueue *)calloc(1, sizeof(MurtyQueue));
     if (!queue) return NULL;
 
-    queue->nodes = (MurtyNode **)malloc(capacity * sizeof(MurtyNode *));
+    queue->nodes = (MurtyNode **)calloc(capacity, sizeof(MurtyNode *));
     if (!queue->nodes) {
         free(queue);
         return NULL;
@@ -2902,7 +2902,7 @@ static RalphLapStatus lap_solve_k_best_internal(
     RalphLapStatus status;
 
     /* Working cost matrix for applying exclusions */
-    double *work_cost = (double *)malloc(n * n * sizeof(double));
+    double *work_cost = (double *)calloc((size_t)n * n, sizeof(double));
     if (!work_cost) {
         return RALPH_LAP_MEMORY_ERROR;
     }
@@ -2921,10 +2921,10 @@ static RalphLapStatus lap_solve_k_best_internal(
     }
 
     /* Step 1: Solve base problem */
-    int *row_sol = (int *)malloc(n * sizeof(int));
-    int *col_sol = (int *)malloc(n * sizeof(int));
-    double *u = (double *)malloc(n * sizeof(double));
-    double *v = (double *)malloc(n * sizeof(double));
+    int *row_sol = (int *)calloc(n, sizeof(int));
+    int *col_sol = (int *)calloc(n, sizeof(int));
+    double *u = (double *)calloc(n, sizeof(double));
+    double *v = (double *)calloc(n, sizeof(double));
     double total_cost;
 
     if (!row_sol || !col_sol || !u || !v) {
@@ -3400,8 +3400,8 @@ static RalphLapStatus lap_solve_standard_unified(
                     break;
                 }
 
-                double *padded_cost = (double *)malloc(k * k * sizeof(double));
-                int *padded_row_sol = (int *)malloc(k * sizeof(int));
+                double *padded_cost = (double *)calloc((size_t)k * k, sizeof(double));
+                int *padded_row_sol = (int *)calloc(k, sizeof(int));
 
                 if (!padded_cost || !padded_row_sol) {
                     free(padded_cost);
@@ -3538,7 +3538,7 @@ static RalphLapStatus lap_solve_k_best_unified(
 
         case RALPH_LAP_COST_SPARSE:
             /* Convert sparse to dense for k-best */
-            converted_cost = (double *)malloc(m * n * sizeof(double));
+            converted_cost = (double *)calloc((size_t)m * n, sizeof(double));
             if (!converted_cost) return RALPH_LAP_MEMORY_ERROR;
 
             /* Initialize all to infinity */
@@ -3559,7 +3559,7 @@ static RalphLapStatus lap_solve_k_best_unified(
 
         case RALPH_LAP_COST_CALLBACK:
             /* Convert callback to dense for k-best */
-            converted_cost = (double *)malloc(m * n * sizeof(double));
+            converted_cost = (double *)calloc((size_t)m * n, sizeof(double));
             if (!converted_cost) return RALPH_LAP_MEMORY_ERROR;
 
             for (int i = 0; i < m; i++) {
@@ -3582,7 +3582,7 @@ static RalphLapStatus lap_solve_k_best_unified(
             free(converted_cost);
             return RALPH_LAP_MEMORY_ERROR;
         }
-        padded_cost = (double *)malloc(k * k * sizeof(double));
+        padded_cost = (double *)calloc((size_t)k * k, sizeof(double));
         if (!padded_cost) {
             free(converted_cost);
             return RALPH_LAP_MEMORY_ERROR;
@@ -3645,8 +3645,8 @@ static RalphLapStatus lap_solve_k_best_unified(
     if (is_rect) {
         /* Allocate for padded k×k solutions - may find fewer valid solutions */
         int max_solutions = opts->k * 2;  /* Over-allocate to find enough valid ones */
-        padded_solutions = (int *)malloc(max_solutions * k * sizeof(int));
-        padded_costs = (double *)malloc(max_solutions * sizeof(double));
+        padded_solutions = (int *)calloc((size_t)max_solutions * k, sizeof(int));
+        padded_costs = (double *)calloc(max_solutions, sizeof(double));
         if (!padded_solutions || !padded_costs) {
             free(padded_solutions);
             free(padded_costs);
@@ -3769,7 +3769,7 @@ static int bottleneck_matching_exists_rect(
     }
 
     /* Try to find a matching on padded square */
-    int *padded_sol = (int *)malloc(k * sizeof(int));
+    int *padded_sol = (int *)calloc(k, sizeof(int));
     if (!padded_sol) return 0;
 
     double total;
@@ -3841,7 +3841,7 @@ static RalphLapStatus lap_solve_bottleneck_unified(
     }
 
     /* Collect all finite costs from m×n matrix */
-    double *sorted_costs = (double *)malloc(m * n * sizeof(double));
+    double *sorted_costs = (double *)calloc((size_t)m * n, sizeof(double));
     if (!sorted_costs) return RALPH_LAP_MEMORY_ERROR;
 
     int num_costs = 0;

@@ -193,7 +193,7 @@ RalphNetflowWorkspace* ralph_netflow_workspace_create(int max_nodes, int max_arc
         return NULL;  /* Overflow or invalid input */
     }
 
-    RalphNetflowWorkspace *ws = (RalphNetflowWorkspace *)malloc(sizeof(RalphNetflowWorkspace));
+    RalphNetflowWorkspace *ws = (RalphNetflowWorkspace *)calloc(1, sizeof(RalphNetflowWorkspace));
     if (!ws) {
         return NULL;
     }
@@ -1028,7 +1028,7 @@ static RalphNetflowStatus setup_initial_solution(
     if ((size_t)num_nodes > (SIZE_MAX / sizeof(double)) - 1) {
         return RALPH_NETFLOW_OUT_OF_MEMORY;
     }
-    double *residual = (double *)malloc(((size_t)num_nodes + 1) * sizeof(double));
+    double *residual = (double *)calloc(((size_t)num_nodes + 1), sizeof(double));
     if (!residual) return RALPH_NETFLOW_OUT_OF_MEMORY;
 
     const double * restrict p_supply = problem->supply;
@@ -1425,7 +1425,7 @@ static int bottleneck_feasibility_check(
     int num_arcs = problem->num_arcs;
 
     /* Create modified capacity array: zero capacity for arcs above threshold */
-    double *modified_cap = (double *)malloc(num_arcs * sizeof(double));
+    double *modified_cap = (double *)calloc(num_arcs, sizeof(double));
     if (!modified_cap) return 0;
 
     for (int a = 0; a < num_arcs; a++) {
@@ -1508,7 +1508,7 @@ static RalphNetflowStatus solve_bottleneck_internal(
     }
 
     /* Extract arc costs and sort them */
-    double *costs = (double *)malloc(num_arcs * sizeof(double));
+    double *costs = (double *)calloc(num_arcs, sizeof(double));
     if (!costs) {
         result->status = RALPH_NETFLOW_OUT_OF_MEMORY;
         return RALPH_NETFLOW_OUT_OF_MEMORY;
@@ -1533,7 +1533,7 @@ static RalphNetflowStatus solve_bottleneck_internal(
     int best = -1;
 
     /* Allocate temp flow array for feasibility checks */
-    double *temp_flow = (double *)malloc(num_arcs * sizeof(double));
+    double *temp_flow = (double *)calloc(num_arcs, sizeof(double));
     if (!temp_flow) {
         free(costs);
         result->status = RALPH_NETFLOW_OUT_OF_MEMORY;
@@ -1965,9 +1965,9 @@ RalphNetflowStatus ralph_netflow_decompose(
     }
 
     /* Allocate working arrays */
-    double *residual_flow = (double *)malloc(num_arcs * sizeof(double));
-    double *residual_supply = (double *)malloc(num_nodes * sizeof(double));
-    int *path_arcs = (int *)malloc(num_nodes * sizeof(int));  /* Max path length */
+    double *residual_flow = (double *)calloc(num_arcs, sizeof(double));
+    double *residual_supply = (double *)calloc(num_nodes, sizeof(double));
+    int *path_arcs = (int *)calloc(num_nodes, sizeof(int));  /* Max path length */
     int *visited = (int *)calloc(num_nodes, sizeof(int));
 
     if (!residual_flow || !residual_supply || !path_arcs || !visited) {
@@ -1983,8 +1983,8 @@ RalphNetflowStatus ralph_netflow_decompose(
     memcpy(residual_supply, problem->supply, num_nodes * sizeof(double));
 
     /* Build adjacency list: for each node, list of outgoing arcs */
-    int *arc_start = (int *)malloc((num_nodes + 1) * sizeof(int));
-    int *arc_list = (int *)malloc(num_arcs * sizeof(int));
+    int *arc_start = (int *)calloc((num_nodes + 1), sizeof(int));
+    int *arc_list = (int *)calloc(num_arcs, sizeof(int));
 
     if (!arc_start || !arc_list) {
         free(residual_flow);
@@ -2006,7 +2006,7 @@ RalphNetflowStatus ralph_netflow_decompose(
     }
 
     /* Fill arc list */
-    int *arc_pos = (int *)malloc(num_nodes * sizeof(int));
+    int *arc_pos = (int *)calloc(num_nodes, sizeof(int));
     if (!arc_pos) {
         free(residual_flow);
         free(residual_supply);
@@ -2089,7 +2089,7 @@ RalphNetflowStatus ralph_netflow_decompose(
 
         /* Record the path */
         RalphNetflowPath *p = &paths[path_count];
-        p->arcs = (int *)malloc(path_len * sizeof(int));
+        p->arcs = (int *)calloc(path_len, sizeof(int));
         if (!p->arcs) {
             /* Clean up previously allocated paths */
             for (int i = 0; i < path_count; i++) {

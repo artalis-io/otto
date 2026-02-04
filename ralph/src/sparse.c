@@ -17,7 +17,7 @@
  * ============================================================================ */
 
 SparseMatrix* sparse_create(int nrows, int ncols, int nnz_estimate) {
-    SparseMatrix *mat = (SparseMatrix*)malloc(sizeof(SparseMatrix));
+    SparseMatrix *mat = (SparseMatrix*)calloc(1, sizeof(SparseMatrix));
     if (!mat) return NULL;
 
     mat->nrows = nrows;
@@ -26,8 +26,8 @@ SparseMatrix* sparse_create(int nrows, int ncols, int nnz_estimate) {
     mat->capacity = nnz_estimate > 0 ? nnz_estimate : 1;
 
     mat->colptr = (int*)calloc(ncols + 1, sizeof(int));
-    mat->rowidx = (int*)malloc(mat->capacity * sizeof(int));
-    mat->values = (double*)malloc(mat->capacity * sizeof(double));
+    mat->rowidx = (int*)calloc(mat->capacity, sizeof(int));
+    mat->values = (double*)calloc(mat->capacity, sizeof(double));
 
     if (!mat->colptr || !mat->rowidx || !mat->values) {
         sparse_free(mat);
@@ -94,7 +94,7 @@ void sparse_free(SparseMatrix *mat) {
  * ============================================================================ */
 
 SparseTriplets* triplets_create(int nrows, int ncols, int nnz_estimate) {
-    SparseTriplets *trips = (SparseTriplets*)malloc(sizeof(SparseTriplets));
+    SparseTriplets *trips = (SparseTriplets*)calloc(1, sizeof(SparseTriplets));
     if (!trips) return NULL;
 
     trips->nrows = nrows;
@@ -102,9 +102,9 @@ SparseTriplets* triplets_create(int nrows, int ncols, int nnz_estimate) {
     trips->nnz = 0;
     trips->capacity = nnz_estimate > 0 ? nnz_estimate : 64;
 
-    trips->row = (int*)malloc(trips->capacity * sizeof(int));
-    trips->col = (int*)malloc(trips->capacity * sizeof(int));
-    trips->val = (double*)malloc(trips->capacity * sizeof(double));
+    trips->row = (int*)calloc(trips->capacity, sizeof(int));
+    trips->col = (int*)calloc(trips->capacity, sizeof(int));
+    trips->val = (double*)calloc(trips->capacity, sizeof(double));
 
     if (!trips->row || !trips->col || !trips->val) {
         triplets_free(trips);
@@ -172,7 +172,7 @@ SparseMatrix* triplets_to_csc(SparseTriplets *trips) {
     }
 
     /* Create sort key array with embedded (col, row, idx) - thread-safe */
-    TripletSortKey *keys = (TripletSortKey*)malloc(trips->nnz * sizeof(TripletSortKey));
+    TripletSortKey *keys = (TripletSortKey*)calloc(trips->nnz, sizeof(TripletSortKey));
     if (!keys) return NULL;
 
     for (int i = 0; i < trips->nnz; i++) {
@@ -414,7 +414,7 @@ SparseMatrix* sparse_get_rows(const SparseMatrix *A, int nrows, const int *row_i
     }
 
     /* Create row mapping */
-    int *row_map = (int*)malloc(A->nrows * sizeof(int));
+    int *row_map = (int*)calloc(A->nrows, sizeof(int));
     if (!row_map) return NULL;
 
     for (int i = 0; i < A->nrows; i++) row_map[i] = -1;
@@ -499,11 +499,11 @@ double sparse_norm_1(const SparseMatrix *A) {
  * ============================================================================ */
 
 DenseVector* vec_create(int size) {
-    DenseVector *vec = (DenseVector*)malloc(sizeof(DenseVector));
+    DenseVector *vec = (DenseVector*)calloc(1, sizeof(DenseVector));
     if (!vec) return NULL;
 
     vec->size = size;
-    vec->data = (double*)malloc(size * sizeof(double));
+    vec->data = (double*)calloc(size, sizeof(double));
     if (!vec->data) {
         free(vec);
         return NULL;

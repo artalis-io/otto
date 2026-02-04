@@ -24,7 +24,7 @@ CutPool* cut_pool_create(int capacity) {
     pool->capacity = capacity > 0 ? capacity : 256;
     pool->count = 0;
 
-    pool->cuts = (Cut**)malloc(pool->capacity * sizeof(Cut*));
+    pool->cuts = (Cut**)calloc(pool->capacity, sizeof(Cut*));
     if (!pool->cuts) {
         free(pool);
         return NULL;
@@ -50,8 +50,8 @@ Cut* cut_create(int max_nnz) {
     cut->capacity = max_nnz > 0 ? max_nnz : 64;
     cut->nnz = 0;
 
-    cut->indices = (int*)malloc(cut->capacity * sizeof(int));
-    cut->values = (double*)malloc(cut->capacity * sizeof(double));
+    cut->indices = (int*)calloc(cut->capacity, sizeof(int));
+    cut->values = (double*)calloc(cut->capacity, sizeof(double));
 
     if (!cut->indices || !cut->values) {
         cut_free(cut);
@@ -824,7 +824,7 @@ static Cut* generate_single_cover_cut(LPModel *model, int row, double rhs,
     if (coef_sum <= rhs + RALPH_ZERO_TOL) return NULL;
 
     /* Sort variables by LP value (descending) - simple bubble sort for small sets */
-    int *order = (int*)malloc(num_vars * sizeof(int));
+    int *order = (int*)calloc(num_vars, sizeof(int));
     for (int i = 0; i < num_vars; i++) order[i] = i;
 
     for (int i = 0; i < num_vars - 1; i++) {
@@ -911,8 +911,8 @@ int generate_cover_cuts(MIPSolver *solver, CutPool *pool) {
     if (model->num_binary == 0) return 0;
 
     /* Allocate working arrays */
-    double *coefs = (double*)malloc(n * sizeof(double));
-    int *vars = (int*)malloc(n * sizeof(int));
+    double *coefs = (double*)calloc(n, sizeof(double));
+    int *vars = (int*)calloc(n, sizeof(int));
     if (!coefs || !vars) {
         free(coefs);
         free(vars);

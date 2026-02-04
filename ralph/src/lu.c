@@ -98,8 +98,8 @@ LUFactorization* lu_create(int m) {
 
     /* eta_indices and eta_values are arrays of pointers - allocated separately
      * because their contents are dynamically allocated during updates */
-    lu->eta_indices = (int**)malloc(max_upd * sizeof(int*));
-    lu->eta_values = (double**)malloc(max_upd * sizeof(double*));
+    lu->eta_indices = (int**)calloc(max_upd, sizeof(int*));
+    lu->eta_values = (double**)calloc(max_upd, sizeof(double*));
 
     if (!lu->eta_indices || !lu->eta_values) {
         lu_free(lu);
@@ -166,8 +166,8 @@ LUFactorization* lu_create(int m) {
         }
         lu->spike_pool_capacity = (int)pool_size;
     }
-    lu->spike_pool_idx = (int*)malloc(lu->spike_pool_capacity * sizeof(int));
-    lu->spike_pool_val = (double*)malloc(lu->spike_pool_capacity * sizeof(double));
+    lu->spike_pool_idx = (int*)calloc(lu->spike_pool_capacity, sizeof(int));
+    lu->spike_pool_val = (double*)calloc(lu->spike_pool_capacity, sizeof(double));
     lu->spike_pool_used = 0;
 
     if (!lu->spike_pool_idx || !lu->spike_pool_val) {
@@ -189,7 +189,7 @@ LUFactorization* lu_create(int m) {
 
     /* Pre-allocate dense workspace for fallback factorization (m×m matrix)
      * Allocated separately due to large size O(m²) */
-    lu->dense_work = (double*)malloc((size_t)m * (size_t)m * sizeof(double));
+    lu->dense_work = (double*)calloc((size_t)m * (size_t)m, sizeof(double));
 
     if (!lu->dense_work) {
         lu_free(lu);
@@ -391,12 +391,12 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     free(lu->U_values);
 
     /* Allocate new storage */
-    lu->L_colptr = (int*)malloc((m + 1) * sizeof(int));
-    lu->L_rowidx = (int*)malloc(nnz_L * sizeof(int));
-    lu->L_values = (double*)malloc(nnz_L * sizeof(double));
-    lu->U_colptr = (int*)malloc((m + 1) * sizeof(int));
-    lu->U_rowidx = (int*)malloc(nnz_U * sizeof(int));
-    lu->U_values = (double*)malloc(nnz_U * sizeof(double));
+    lu->L_colptr = (int*)calloc((m + 1), sizeof(int));
+    lu->L_rowidx = (int*)calloc(nnz_L, sizeof(int));
+    lu->L_values = (double*)calloc(nnz_L, sizeof(double));
+    lu->U_colptr = (int*)calloc((m + 1), sizeof(int));
+    lu->U_rowidx = (int*)calloc(nnz_U, sizeof(int));
+    lu->U_values = (double*)calloc(nnz_U, sizeof(double));
 
     if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
         !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
@@ -1437,7 +1437,7 @@ static void compact_ft_spikes(LUFactorization *lu, int start, int end) {
 
     /* Allocate compact matrix if needed (stored row-major for cache efficiency) */
     if (!lu->ft_compact_matrix) {
-        lu->ft_compact_matrix = (double*)malloc(m * m * sizeof(double));
+        lu->ft_compact_matrix = (double*)calloc((size_t)m * m, sizeof(double));
         if (!lu->ft_compact_matrix) return;
     }
 
@@ -1719,8 +1719,8 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     } else {
         /* Store as eta-file update (includes diagonal) - still uses malloc */
         int total_nnz = off_diag_nnz + 1;  /* +1 for diagonal */
-        int *indices = (int*)malloc(total_nnz * sizeof(int));
-        double *values = (double*)malloc(total_nnz * sizeof(double));
+        int *indices = (int*)calloc(total_nnz, sizeof(int));
+        double *values = (double*)calloc(total_nnz, sizeof(double));
         if (!indices || !values) {
             free(indices);
             free(values);

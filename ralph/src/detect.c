@@ -157,7 +157,7 @@ int detect_lap(const LPModel *model, LAPSignature *sig) {
      * Strategy: Build a bipartite graph of constraints and check it's bipartite.
      * Use BFS/DFS to 2-color the constraint graph.
      */
-    int *con_color = (int *)malloc(m * sizeof(int));  /* -1=unvisited, 0=row, 1=col */
+    int *con_color = (int *)calloc(m, sizeof(int));  /* -1=unvisited, 0=row, 1=col */
     if (!con_color) {
         free(var_con1); free(var_con2);
         return 0;
@@ -168,7 +168,7 @@ int detect_lap(const LPModel *model, LAPSignature *sig) {
     }
 
     /* BFS to 2-color */
-    int *queue = (int *)malloc(m * sizeof(int));
+    int *queue = (int *)calloc(m, sizeof(int));
     if (!queue) {
         free(var_con1); free(var_con2); free(con_color);
         return 0;
@@ -223,8 +223,8 @@ int detect_lap(const LPModel *model, LAPSignature *sig) {
      * row_map[con] = LAP row index (0..n-1) if con_color[con]==0
      * col_map[con] = LAP col index (0..n-1) if con_color[con]==1
      */
-    int *row_map = (int *)malloc(m * sizeof(int));
-    int *col_map = (int *)malloc(m * sizeof(int));
+    int *row_map = (int *)calloc(m, sizeof(int));
+    int *col_map = (int *)calloc(m, sizeof(int));
     if (!row_map || !col_map) {
         free(var_con1); free(var_con2); free(con_color);
         free(row_map); free(col_map);
@@ -246,8 +246,8 @@ int detect_lap(const LPModel *model, LAPSignature *sig) {
      * costs[row_map[r]][col_map[c]] = objective coefficient of v
      */
     double *costs = (double *)calloc(n * n, sizeof(double));
-    int *var_to_row = (int *)malloc(num_vars * sizeof(int));
-    int *var_to_col = (int *)malloc(num_vars * sizeof(int));
+    int *var_to_row = (int *)calloc(num_vars, sizeof(int));
+    int *var_to_col = (int *)calloc(num_vars, sizeof(int));
 
     if (!costs || !var_to_row || !var_to_col) {
         free(var_con1); free(var_con2); free(con_color);
@@ -315,7 +315,7 @@ int solve_as_lap(const LAPSignature *sig, double *solution, double *obj_val) {
     int num_vars = n * n;
 
     /* Solve using JVC */
-    int *row_sol = (int *)malloc(n * sizeof(int));
+    int *row_sol = (int *)calloc(n, sizeof(int));
     if (!row_sol) {
         return -1;
     }
@@ -386,7 +386,7 @@ int detect_lap_mip(const LPModel *model, MIPLAPSignature *sig) {
     }
 
     /* Allocate base costs copy */
-    sig->base_costs = (double *)malloc(n * n * sizeof(double));
+    sig->base_costs = (double *)calloc((size_t)n * n, sizeof(double));
     if (!sig->base_costs) {
         detect_lap_free(&sig->base);
         return 0;
@@ -504,7 +504,7 @@ int solve_lap_at_node(
     free(col_forced);
 
     /* Solve LAP with modified costs */
-    int *row_sol = (int *)malloc(n * sizeof(int));
+    int *row_sol = (int *)calloc(n, sizeof(int));
     if (!row_sol) {
         return -1;
     }
@@ -596,10 +596,10 @@ int detect_network(const LPModel *model, NetworkSignature *sig) {
      * and has coefficients +1 and -1.
      */
     int *var_count = (int *)calloc(num_vars, sizeof(int));
-    int *var_con1 = (int *)malloc(num_vars * sizeof(int));
-    int *var_con2 = (int *)malloc(num_vars * sizeof(int));
-    double *var_coef1 = (double *)malloc(num_vars * sizeof(double));
-    double *var_coef2 = (double *)malloc(num_vars * sizeof(double));
+    int *var_con1 = (int *)calloc(num_vars, sizeof(int));
+    int *var_con2 = (int *)calloc(num_vars, sizeof(int));
+    double *var_coef1 = (double *)calloc(num_vars, sizeof(double));
+    double *var_coef2 = (double *)calloc(num_vars, sizeof(double));
 
     if (!var_count || !var_con1 || !var_con2 || !var_coef1 || !var_coef2) {
         free(var_count); free(var_con1); free(var_con2);
@@ -672,14 +672,14 @@ int detect_network(const LPModel *model, NetworkSignature *sig) {
     int num_arcs = num_vars;
 
     /* Allocate network data */
-    sig->tail = (int *)malloc(num_arcs * sizeof(int));
-    sig->head = (int *)malloc(num_arcs * sizeof(int));
-    sig->cost = (double *)malloc(num_arcs * sizeof(double));
-    sig->capacity = (double *)malloc(num_arcs * sizeof(double));
-    sig->lower = (double *)malloc(num_arcs * sizeof(double));
-    sig->supply = (double *)malloc(num_nodes * sizeof(double));
-    sig->var_to_arc = (int *)malloc(num_vars * sizeof(int));
-    sig->con_to_node = (int *)malloc(num_cons * sizeof(int));
+    sig->tail = (int *)calloc(num_arcs, sizeof(int));
+    sig->head = (int *)calloc(num_arcs, sizeof(int));
+    sig->cost = (double *)calloc(num_arcs, sizeof(double));
+    sig->capacity = (double *)calloc(num_arcs, sizeof(double));
+    sig->lower = (double *)calloc(num_arcs, sizeof(double));
+    sig->supply = (double *)calloc(num_nodes, sizeof(double));
+    sig->var_to_arc = (int *)calloc(num_vars, sizeof(int));
+    sig->con_to_node = (int *)calloc(num_cons, sizeof(int));
 
     if (!sig->tail || !sig->head || !sig->cost || !sig->capacity ||
         !sig->lower || !sig->supply || !sig->var_to_arc || !sig->con_to_node) {
@@ -901,10 +901,10 @@ static int solve_assignment_as_lap(const NetworkSignature *sig, double *solution
     int n = n_sources;
 
     /* Map nodes to LAP indices */
-    int *source_map = (int *)malloc(num_nodes * sizeof(int));  /* node -> source index */
-    int *sink_map = (int *)malloc(num_nodes * sizeof(int));    /* node -> sink index */
-    int *source_nodes = (int *)malloc(n * sizeof(int));        /* source index -> node */
-    int *sink_nodes = (int *)malloc(n * sizeof(int));          /* sink index -> node */
+    int *source_map = (int *)calloc(num_nodes, sizeof(int));  /* node -> source index */
+    int *sink_map = (int *)calloc(num_nodes, sizeof(int));    /* node -> sink index */
+    int *source_nodes = (int *)calloc(n, sizeof(int));        /* source index -> node */
+    int *sink_nodes = (int *)calloc(n, sizeof(int));          /* sink index -> node */
 
     if (!source_map || !sink_map || !source_nodes || !sink_nodes) {
         free(source_map); free(sink_map); free(source_nodes); free(sink_nodes);
@@ -927,8 +927,8 @@ static int solve_assignment_as_lap(const NetworkSignature *sig, double *solution
     }
 
     /* Build cost matrix for LAP */
-    double *lap_cost = (double *)malloc(n * n * sizeof(double));
-    int *arc_matrix = (int *)malloc(n * n * sizeof(int));  /* arc_matrix[i*n+j] = arc index */
+    double *lap_cost = (double *)calloc((size_t)n * n, sizeof(double));
+    int *arc_matrix = (int *)calloc((size_t)n * n, sizeof(int));  /* arc_matrix[i*n+j] = arc index */
 
     if (!lap_cost || !arc_matrix) {
         free(source_map); free(sink_map); free(source_nodes); free(sink_nodes);
@@ -956,7 +956,7 @@ static int solve_assignment_as_lap(const NetworkSignature *sig, double *solution
     }
 
     /* Solve LAP */
-    int *row_sol = (int *)malloc(n * sizeof(int));
+    int *row_sol = (int *)calloc(n, sizeof(int));
     if (!row_sol) {
         free(source_map); free(sink_map); free(source_nodes); free(sink_nodes);
         free(lap_cost); free(arc_matrix);
@@ -1054,10 +1054,10 @@ int detect_network_mip(const LPModel *model, MIPNetworkSignature *sig) {
     sig->num_vars = model->num_vars;
 
     /* Allocate base copies */
-    sig->base_cost = (double *)malloc(num_arcs * sizeof(double));
-    sig->base_capacity = (double *)malloc(num_arcs * sizeof(double));
-    sig->base_lower = (double *)malloc(num_arcs * sizeof(double));
-    sig->base_supply = (double *)malloc(num_nodes * sizeof(double));
+    sig->base_cost = (double *)calloc(num_arcs, sizeof(double));
+    sig->base_capacity = (double *)calloc(num_arcs, sizeof(double));
+    sig->base_lower = (double *)calloc(num_arcs, sizeof(double));
+    sig->base_supply = (double *)calloc(num_nodes, sizeof(double));
 
     if (!sig->base_cost || !sig->base_capacity || !sig->base_lower || !sig->base_supply) {
         detect_network_mip_free(sig);
