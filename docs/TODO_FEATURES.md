@@ -18,6 +18,7 @@ This document outlines planned features at the project level, including new comp
 12. [Quota - Rate Quoting Engine](#12-quota---rate-quoting-engine)
 13. [Atlas - Network Design Engine](#13-atlas---network-design-engine)
 14. [Velo Enhancements](#14-velo-enhancements)
+15. [Carta Enhancements](#15-carta-enhancements)
 
 ---
 
@@ -2698,6 +2699,134 @@ for (int l = 0; l < num_landmarks; l++) {
 - [ ] ALT: Update vl_graph_save() to persist landmarks
 - [ ] ALT: Update vl_graph_mmap() to load landmarks
 - [ ] ALT: Add --with-landmarks flag to graph build tool
+
+---
+
+## 15. Carta Enhancements
+
+Planned improvements to the Carta map tile generator.
+
+### Text Rendering for Labels
+
+Add text rendering capability for road names, place labels, route annotations, and custom overlays.
+
+**Current State:**
+- Carta renders geometry (lines, polygons, points) to PNG tiles
+- No text rendering - road names, city labels, POI names are not displayed
+- MVT tiles include name properties but PNG tiles don't render them
+
+**Features Needed:**
+- Road name labels along polylines (curved text following road geometry)
+- Place labels (cities, towns, villages) with collision detection
+- POI labels (fuel stations, rest stops)
+- Route overlay labels (distance markers, turn instructions)
+- Custom text overlays via API
+
+**Technical Challenges:**
+
+| Challenge | Solution |
+|-----------|----------|
+| Font rendering | Bitmap fonts or SDF (Signed Distance Field) fonts |
+| Text along path | Sample points along polyline, compute tangent angles |
+| Label collision | R-tree of placed labels, skip if overlaps |
+| Multi-tile labels | Labels near tile edges need cross-tile coordination |
+| Zoom-dependent sizing | Scale font size with zoom level |
+| i18n / Unicode | UTF-8 support, RTL languages |
+
+**Proposed Architecture:**
+
+```c
+/* Font loading */
+typedef struct CTFont CTFont;
+CTFont *ct_font_load(const char *path);      /* Load .ttf or bitmap font */
+CTFont *ct_font_load_sdf(const char *path);  /* Load SDF font atlas */
+void ct_font_free(CTFont *font);
+
+/* Text rendering primitives */
+typedef struct {
+    const char *text;          /* UTF-8 text */
+    double x, y;               /* Position (tile coordinates) */
+    double size;               /* Font size in pixels */
+    uint32_t color;            /* RGBA color */
+    CTTextAlign align;         /* LEFT, CENTER, RIGHT */
+} CTTextLabel;
+
+typedef struct {
+    const char *text;          /* UTF-8 text */
+    const double *coords;      /* Polyline coordinates */
+    size_t coord_count;
+    double size;
+    uint32_t color;
+    double offset;             /* Perpendicular offset from line */
+} CTTextAlongPath;
+
+/* Render functions */
+int ct_render_text(CTRenderContext *ctx, const CTTextLabel *label);
+int ct_render_text_along_path(CTRenderContext *ctx, const CTTextAlongPath *text);
+
+/* Label placement with collision detection */
+typedef struct CTLabelPlacer CTLabelPlacer;
+CTLabelPlacer *ct_label_placer_create(int tile_width, int tile_height);
+int ct_label_place(CTLabelPlacer *placer, const CTTextLabel *label);  /* Returns 0 if collision */
+void ct_label_placer_free(CTLabelPlacer *placer);
+```
+
+**Implementation Phases:**
+
+1. **Phase 1: Point Labels**
+   - Bitmap font rendering at fixed positions
+   - Simple collision detection (axis-aligned bounding boxes)
+   - Place labels, city names
+
+2. **Phase 2: Road Labels**
+   - Text along polyline paths
+   - Curved text following road geometry
+   - Label spacing and repetition for long roads
+
+3. **Phase 3: Advanced Features**
+   - SDF fonts for crisp scaling
+   - Halo/outline effects for readability
+   - Priority-based label placement
+   - Cross-tile label coordination
+
+### Route Overlay Rendering
+
+Render route polylines and annotations as tile overlays.
+
+**Use Cases:**
+- Highlight planned route on map
+- Show turn-by-turn navigation path
+- Display multiple route alternatives
+- Fuel stop markers along route
+
+**API:**
+```c
+typedef struct {
+    const double *coords;      /* lon/lat pairs */
+    size_t coord_count;
+    uint32_t stroke_color;     /* Line color */
+    uint32_t fill_color;       /* For route corridor/buffer */
+    double stroke_width;       /* Line width in pixels */
+    double buffer_radius;      /* Optional corridor width */
+    int draw_arrows;           /* Direction arrows */
+    int draw_distance_markers; /* Distance labels every N km */
+} CTRouteOverlay;
+
+int ct_render_route_overlay(CTRenderContext *ctx, const CTRouteOverlay *route);
+```
+
+### TODOs
+
+- [ ] Text: Implement bitmap font loader
+- [ ] Text: Add basic text rendering at point locations
+- [ ] Text: Implement label collision detection (R-tree)
+- [ ] Text: Add text-along-path for road names
+- [ ] Text: Evaluate SDF fonts for better scaling
+- [ ] Text: Handle Unicode/UTF-8 properly
+- [ ] Route: Implement polyline overlay rendering
+- [ ] Route: Add direction arrows along route
+- [ ] Route: Add distance marker labels
+- [ ] Route: Support route corridor/buffer rendering
 
 ---
 
