@@ -1,0 +1,12 @@
+{
+    "name": "@otto/shared-js",
+    "version": "0.1.0",
+    "description": "Shared JavaScript utilities for OTTO platform",
+    "type": "module",
+    "exports": {
+        ".": "./index.js",
+        "./circuit-breaker": "./circuit-breaker.js",
+        "./backoff": "./backoff.js",
+        "./resilient-fetch": "./resilient-fetch.js"
+    }
+}

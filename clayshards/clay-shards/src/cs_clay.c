@@ -226,8 +226,9 @@ CS_CLAY_EXPORT float cs_clay_cmd_rect_radius(int index) {
 }
 
 CS_CLAY_EXPORT const char *cs_clay_cmd_text_str(int index) {
-    return CMD_VALID(index)
-        ? CMD_AT(index).renderData.text.stringContents.chars : "";
+    if (!CMD_VALID(index)) return "";
+    const char *str = CMD_AT(index).renderData.text.stringContents.chars;
+    return str ? str : "";
 }
 
 CS_CLAY_EXPORT int cs_clay_cmd_text_len(int index) {

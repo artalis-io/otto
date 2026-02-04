@@ -405,9 +405,11 @@ export class WasmProviderBridge {
 
         // Pass result to WASM
         const count = result.geometry.length;
+        // Allocate both arrays first (either malloc may trigger memory growth)
         const latsPtr = wasm.malloc(count * 8);
         const lonsPtr = wasm.malloc(count * 8);
 
+        // Create views AFTER all mallocs to ensure buffer is stable
         const lats = new Float64Array(wasm.memory.buffer, latsPtr, count);
         const lons = new Float64Array(wasm.memory.buffer, lonsPtr, count);
 

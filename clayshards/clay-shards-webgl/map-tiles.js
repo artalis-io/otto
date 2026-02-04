@@ -21,9 +21,23 @@ const TILE_SERVERS = [
 /**
  * Configure the Carta tile server URL
  * @param {string} url - Base URL for the Carta tile server
+ * @throws {Error} If URL is invalid or uses unsupported protocol
  */
 export function setCartaServerUrl(url) {
-    cartaServerUrl = url;
+    // Validate URL format and protocol
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch {
+        throw new Error(`Invalid tile server URL: ${url}`);
+    }
+
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error(`Unsupported protocol: ${parsed.protocol} (use http or https)`);
+    }
+
+    // Remove trailing slash for consistent URL construction
+    cartaServerUrl = url.replace(/\/+$/, '');
 }
 
 export class TileCache {
