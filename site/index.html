@@ -1374,7 +1374,11 @@ Dependencies:
                 </div>
                 <div class="feature">
                     <div class="feature-title">Secure by Design</div>
-                    <div class="feature-desc">No strcpy/sprintf, bounded buffers only. Arenas and memory pools prevent use-after-free. Overflow checks on all allocations. WASM sandbox limits blast radius.</div>
+                    <div class="feature-desc">No strcpy/sprintf, bounded buffers only. Arenas prevent use-after-free. Overflow checks on all allocations. WASM sandbox limits blast radius. APIs include rate limiting and backpressure.</div>
+                </div>
+                <div class="feature">
+                    <div class="feature-title">Production-Hardened APIs</div>
+                    <div class="feature-desc">Rate limiting per IP, bounded work queues, timeout handling. APIs respond gracefully under load&mdash;429 for rate limits, 503 for overload, 504 for timeouts. Adaptive capacity auto-tunes from measured response times.</div>
                 </div>
                 <div class="feature">
                     <div class="feature-title">Not a TMS</div>
@@ -1498,11 +1502,12 @@ Dependencies:
                 <div class="why-c-safety">
                     <h3>Memory Safety via Discipline</h3>
                     <ul>
-                        <li><strong>Arenas &amp; pools</strong> &mdash; bulk alloc, bulk free, fixed-size pools, no use-after-free</li>
-                        <li><strong>Bounded buffers</strong> &mdash; no strcpy/sprintf, snprintf everywhere</li>
-                        <li><strong>WASM sandbox</strong> &mdash; even bugs can't escape the sandbox</li>
+                        <li><strong>Arenas &amp; pools</strong> &mdash; bulk alloc, bulk free, no use-after-free, cache-friendly</li>
+                        <li><strong>Bounded buffers</strong> &mdash; snprintf everywhere, explicit null termination after strncpy</li>
+                        <li><strong>Overflow protection</strong> &mdash; calloc for safe allocation, bounds checks on all indices</li>
+                        <li><strong>WASM sandbox</strong> &mdash; linear memory is bounds-checked, bugs can't escape</li>
                         <li><strong>Sanitizers</strong> &mdash; ASan + UBSan in all development builds</li>
-                        <li><strong>279+ tests</strong> &mdash; edge cases and stress conditions covered</li>
+                        <li><strong>279+ tests</strong> &mdash; edge cases, error paths, and stress conditions</li>
                     </ul>
                 </div>
             </div>
