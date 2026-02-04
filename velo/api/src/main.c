@@ -313,13 +313,15 @@ static void process_route_request(RouteWorkItem *item) {
         if (from_node == VL_INVALID_NODE) {
             item->status = VL_ERROR_NODE_NOT_FOUND;
             strncpy(item->error_msg, "Could not find road near origin",
-                    sizeof(item->error_msg));
+                    sizeof(item->error_msg) - 1);
+            item->error_msg[sizeof(item->error_msg) - 1] = '\0';
             return;
         }
         if (to_node == VL_INVALID_NODE) {
             item->status = VL_ERROR_NODE_NOT_FOUND;
             strncpy(item->error_msg, "Could not find road near destination",
-                    sizeof(item->error_msg));
+                    sizeof(item->error_msg) - 1);
+            item->error_msg[sizeof(item->error_msg) - 1] = '\0';
             return;
         }
 
@@ -333,16 +335,17 @@ static void process_route_request(RouteWorkItem *item) {
     if (item->status != VL_OK) {
         switch (item->status) {
             case VL_ERROR_NO_ROUTE:
-                strncpy(item->error_msg, "No route found", sizeof(item->error_msg));
+                strncpy(item->error_msg, "No route found", sizeof(item->error_msg) - 1);
                 break;
             case VL_ERROR_NODE_NOT_FOUND:
                 strncpy(item->error_msg, "Could not find road near coordinate",
-                        sizeof(item->error_msg));
+                        sizeof(item->error_msg) - 1);
                 break;
             default:
-                strncpy(item->error_msg, "Routing failed", sizeof(item->error_msg));
+                strncpy(item->error_msg, "Routing failed", sizeof(item->error_msg) - 1);
                 break;
         }
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
     }
 }
 
@@ -365,7 +368,8 @@ static void *route_worker_fn(void *arg) {
         /* Check if request has expired */
         if (sh_workqueue_item_expired(s_work_queue, queue_item)) {
             item->status = VL_ERROR_INTERNAL;  /* Timeout */
-            strncpy(item->error_msg, "Request timeout", sizeof(item->error_msg));
+            strncpy(item->error_msg, "Request timeout", sizeof(item->error_msg) - 1);
+            item->error_msg[sizeof(item->error_msg) - 1] = '\0';
             route_work_item_complete(item);
             sh_workqueue_item_free(queue_item);
             continue;

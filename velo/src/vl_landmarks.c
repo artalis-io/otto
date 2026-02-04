@@ -28,6 +28,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdint.h>
+#include <limits.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -70,6 +72,9 @@ static void select_landmarks_farthest(const VLGraph *graph, int num_landmarks,
         }
     }
     landmarks[0] = first_landmark;
+
+    /* Integer overflow check */
+    if (num_nodes > SIZE_MAX / sizeof(double)) return;
 
     /* Track minimum distance to any landmark for each node */
     double *min_to_landmark = malloc(num_nodes * sizeof(double));
@@ -241,8 +246,14 @@ VLLandmarks *vl_landmarks_create(const VLGraph *graph, int num_landmarks)
     lm->num_landmarks = num_landmarks;
     lm->num_nodes = graph->num_nodes;
 
+    /* Integer overflow check for landmark_nodes allocation */
+    if (num_landmarks < 0 || (size_t)num_landmarks > SIZE_MAX / sizeof(uint32_t)) {
+        free(lm);
+        return NULL;
+    }
+
     /* Allocate landmark node array */
-    lm->landmark_nodes = malloc(num_landmarks * sizeof(uint32_t));
+    lm->landmark_nodes = malloc((size_t)num_landmarks * sizeof(uint32_t));
     if (!lm->landmark_nodes) {
         free(lm);
         return NULL;

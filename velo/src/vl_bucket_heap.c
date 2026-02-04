@@ -15,6 +15,8 @@
 #include "vl_types.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <limits.h>
 
 /* Bucket width in kilometers (same units as our distances) */
 #define BUCKET_WIDTH_KM 0.1  /* 100 meters */
@@ -90,6 +92,14 @@ VLBucketHeap *vl_bucket_heap_create(uint32_t num_nodes)
     heap->num_buckets = NUM_BUCKETS;
     heap->buckets = calloc(NUM_BUCKETS, sizeof(VLBucketNode *));
     if (!heap->buckets) {
+        free(heap);
+        return NULL;
+    }
+
+    /* Integer overflow checks */
+    if (num_nodes > SIZE_MAX / sizeof(double) ||
+        num_nodes > SIZE_MAX / sizeof(int)) {
+        free(heap->buckets);
         free(heap);
         return NULL;
     }
