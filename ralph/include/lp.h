@@ -21,6 +21,9 @@
 /* Safe free macro - NULLs pointer after freeing to prevent double-free */
 #define SAFE_FREE(p) do { free(p); (p) = NULL; } while(0)
 
+/* Arena allocator alignment (8 bytes for double/pointer) */
+#define RALPH_ARENA_ALIGN 8
+
 /* ============================================================================
  * Arena Allocator
  *
@@ -57,8 +60,8 @@ static inline RalphArena* ralph_arena_create(size_t capacity) {
 static inline void* ralph_arena_alloc(RalphArena *arena, size_t size) {
     if (!arena || !arena->buffer) return NULL;
 
-    /* Align to 8 bytes for double/pointer alignment */
-    size = (size + 7) & ~(size_t)7;
+    /* Align to RALPH_ARENA_ALIGN bytes for double/pointer alignment */
+    size = (size + RALPH_ARENA_ALIGN - 1) & ~(size_t)(RALPH_ARENA_ALIGN - 1);
 
     if (arena->used + size > arena->capacity) {
         return NULL;  /* Out of space */

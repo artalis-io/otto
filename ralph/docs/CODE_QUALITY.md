@@ -371,6 +371,7 @@ IMPLEMENTED (2026-02-04)
 | Issue | Severity | Status |
 |-------|----------|--------|
 | Integer overflow in spike pool | HIGH | FIXED |
+| Integer overflow in node pool | MEDIUM | FIXED |
 | Missing triplet bounds check | MEDIUM | FIXED |
 | Malloc in simplex hot path | MEDIUM | FIXED |
 | Magic numbers | LOW | FIXED |

@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
+#include <stdint.h>
 #include "mip.h"
 
 /* ============================================================================
@@ -322,6 +323,13 @@ BBNodePool* bb_node_pool_create(int capacity, int num_vars) {
     if (!pool->nodes) {
         free(pool);
         return NULL;
+    }
+
+    /* Check for overflow before allocation */
+    if ((size_t)capacity > SIZE_MAX / (size_t)num_vars / sizeof(double)) {
+        free(pool->nodes);
+        free(pool);
+        return NULL;  /* Would overflow */
     }
 
     /* Allocate contiguous lb/ub arrays for all nodes */
