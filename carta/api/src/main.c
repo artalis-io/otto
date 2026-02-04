@@ -29,10 +29,12 @@
 #include <ctype.h>
 #include <unistd.h>   /* For sleep, sysconf */
 #include <pthread.h>
+#include <sys/time.h> /* For gettimeofday */
+#include <errno.h>    /* For ETIMEDOUT */
 #include "mongoose.h"
 #include "carta.h"
 #include "ct_cache.h"
-#include "shared.h"   /* For sh_ratelimit */
+#include "shared.h"   /* For sh_ratelimit, sh_workqueue */
 
 /* ============================================================================
  * Configuration
@@ -62,6 +64,11 @@ typedef struct {
     int rate_limit_enabled;   /* 1 = enabled, 0 = disabled */
     double rate_limit_rps;    /* Tokens refilled per second */
     double rate_limit_burst;  /* Maximum burst capacity */
+    /* Work queue configuration */
+    int work_queue_enabled;      /* 1 = enabled, 0 = disabled */
+    size_t work_queue_depth;     /* Max pending requests */
+    double work_queue_timeout;   /* Request timeout in seconds */
+    int render_workers;          /* Number of render worker threads (0 = auto) */
 } TileServerConfig;
 
 /* Default configuration */
@@ -78,7 +85,11 @@ static TileServerConfig s_config = {
     .num_threads = 0,        /* 0 = auto-detect CPU count */
     .rate_limit_enabled = 1, /* Enabled by default */
     .rate_limit_rps = 10.0,  /* 10 requests per second */
-    .rate_limit_burst = 100.0 /* Burst capacity of 100 */
+    .rate_limit_burst = 100.0, /* Burst capacity of 100 */
+    .work_queue_enabled = 1,   /* Enabled by default */
+    .work_queue_depth = 256,   /* Max 256 pending requests */
+    .work_queue_timeout = 5.0, /* 5 second timeout */
+    .render_workers = 0        /* 0 = auto-detect CPU count */
 };
 
 /* Global state */
@@ -93,6 +104,46 @@ static pthread_mutex_t s_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Rate limiter instance (uses shared library) */
 static ShRateLimiter *s_rate_limiter = NULL;
+
+/* Work queue instance (uses shared library) */
+static ShWorkQueue *s_work_queue = NULL;
+
+/* Render work item - passed through the work queue */
+typedef enum {
+    RENDER_TYPE_PNG,
+    RENDER_TYPE_MVT,
+    RENDER_TYPE_ASCII
+} RenderType;
+
+typedef struct {
+    /* Request info */
+    RenderType type;
+    int z, x, y;
+
+    /* ASCII-specific options */
+    CTAsciiOptions ascii_opts;
+
+    /* Response buffer (set by render worker) */
+    uint8_t *response_data;
+    size_t response_size;
+    int status_code;        /* HTTP status code */
+    char content_type[64];
+    char error_msg[128];
+
+    /* Completion signaling */
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int completed;
+} RenderWorkItem;
+
+/* Render worker thread state */
+typedef struct {
+    int id;
+    pthread_t thread;
+} RenderWorker;
+
+static RenderWorker *s_render_workers = NULL;
+static int s_num_render_workers = 0;
 
 /* Worker thread state */
 typedef struct {
@@ -120,8 +171,9 @@ static void pbf_progress_callback(const char *phase, size_t current,
     }
 }
 
-/* Forward declaration */
+/* Forward declarations */
 static void ev_handler(struct mg_connection *c, int ev, void *ev_data);
+static CTRenderContext *get_thread_render_ctx(int tile_size);
 
 /* Worker thread function - runs its own mongoose event loop */
 static void *worker_thread_fn(void *arg) {
@@ -150,6 +202,325 @@ static void *worker_thread_fn(void *arg) {
 
 static void signal_handler(int signo) {
     s_signo = signo;
+}
+
+/* ============================================================================
+ * Render Work Queue Functions
+ * ============================================================================ */
+
+/* Create a render work item (allocated by caller, initialized here) */
+static void render_work_item_init(RenderWorkItem *item, RenderType type,
+                                  int z, int x, int y)
+{
+    memset(item, 0, sizeof(*item));
+    item->type = type;
+    item->z = z;
+    item->x = x;
+    item->y = y;
+    item->status_code = 500;  /* Default to error */
+    item->completed = 0;
+    pthread_mutex_init(&item->mutex, NULL);
+    pthread_cond_init(&item->cond, NULL);
+}
+
+/* Clean up a render work item */
+static void render_work_item_cleanup(RenderWorkItem *item)
+{
+    pthread_mutex_destroy(&item->mutex);
+    pthread_cond_destroy(&item->cond);
+    free(item->response_data);
+    item->response_data = NULL;
+}
+
+/* Wait for render work item completion with timeout */
+static int render_work_item_wait(RenderWorkItem *item, double timeout_sec)
+{
+    struct timespec abstime;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    abstime.tv_sec = tv.tv_sec + (time_t)timeout_sec;
+    abstime.tv_nsec = tv.tv_usec * 1000 +
+                      (long)((timeout_sec - (time_t)timeout_sec) * 1e9);
+    if (abstime.tv_nsec >= 1000000000L) {
+        abstime.tv_sec++;
+        abstime.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&item->mutex);
+    while (!item->completed) {
+        int rc = pthread_cond_timedwait(&item->cond, &item->mutex, &abstime);
+        if (rc == ETIMEDOUT) {
+            pthread_mutex_unlock(&item->mutex);
+            return 0;  /* Timeout */
+        }
+    }
+    pthread_mutex_unlock(&item->mutex);
+    return 1;  /* Completed */
+}
+
+/* Signal that render work item is completed */
+static void render_work_item_complete(RenderWorkItem *item)
+{
+    pthread_mutex_lock(&item->mutex);
+    item->completed = 1;
+    pthread_cond_signal(&item->cond);
+    pthread_mutex_unlock(&item->mutex);
+}
+
+/* Process a PNG tile render request */
+static void process_png_render(RenderWorkItem *item)
+{
+    int z = item->z, x = item->x, y = item->y;
+
+    /* Check cache first */
+    if (s_png_cache) {
+        const uint8_t *cached_data;
+        size_t cached_size;
+        pthread_mutex_lock(&s_cache_mutex);
+        int hit = ct_cache_get(s_png_cache, z, x, y, &cached_data, &cached_size);
+        if (hit) {
+            item->response_data = malloc(cached_size);
+            if (item->response_data) {
+                memcpy(item->response_data, cached_data, cached_size);
+                item->response_size = cached_size;
+                item->status_code = 200;
+                strncpy(item->content_type, "image/png", sizeof(item->content_type));
+            }
+            pthread_mutex_unlock(&s_cache_mutex);
+            if (item->response_data) return;
+        }
+        pthread_mutex_unlock(&s_cache_mutex);
+    }
+
+    /* Use thread-local render context */
+    CTRenderContext *render = get_thread_render_ctx(s_config.tile_size);
+    if (!render) {
+        item->status_code = 500;
+        strncpy(item->error_msg, "Render context creation failed",
+                sizeof(item->error_msg));
+        return;
+    }
+
+    /* Render tile */
+    CTTileCoord coord = {z, x, y};
+    ct_render_clear(render);
+    if (s_config.lod_preset != LOD_NONE) {
+        ct_render_from_pbf_lod(render, s_pbf_ctx, coord, &s_lod_config);
+    } else {
+        ct_render_from_pbf(render, s_pbf_ctx, coord);
+    }
+
+    /* Encode to PNG */
+    size_t capacity = ct_png_max_size(s_config.tile_size, s_config.tile_size);
+    item->response_data = malloc(capacity);
+    if (!item->response_data) {
+        item->status_code = 500;
+        strncpy(item->error_msg, "Memory allocation failed",
+                sizeof(item->error_msg));
+        return;
+    }
+
+    CTPNGOptions opts;
+    ct_png_default_options(&opts);
+    opts.tile_size = s_config.tile_size;
+
+    size_t size = ct_encode_png(ct_render_pixels(render),
+                                s_config.tile_size, s_config.tile_size,
+                                &opts, item->response_data, capacity);
+
+    if (size == 0) {
+        free(item->response_data);
+        item->response_data = NULL;
+        item->status_code = 500;
+        strncpy(item->error_msg, "Tile generation failed",
+                sizeof(item->error_msg));
+        return;
+    }
+
+    item->response_size = size;
+    item->status_code = 200;
+    strncpy(item->content_type, "image/png", sizeof(item->content_type));
+
+    /* Cache the result */
+    if (s_png_cache) {
+        pthread_mutex_lock(&s_cache_mutex);
+        ct_cache_put(s_png_cache, z, x, y, item->response_data, size);
+        pthread_mutex_unlock(&s_cache_mutex);
+    }
+}
+
+/* Process an MVT tile render request */
+static void process_mvt_render(RenderWorkItem *item)
+{
+    int z = item->z, x = item->x, y = item->y;
+
+    /* Check cache first */
+    if (s_mvt_cache) {
+        const uint8_t *cached_data;
+        size_t cached_size;
+        pthread_mutex_lock(&s_cache_mutex);
+        int hit = ct_cache_get(s_mvt_cache, z, x, y, &cached_data, &cached_size);
+        if (hit) {
+            item->response_data = malloc(cached_size);
+            if (item->response_data) {
+                memcpy(item->response_data, cached_data, cached_size);
+                item->response_size = cached_size;
+                item->status_code = 200;
+                strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
+                        sizeof(item->content_type));
+            }
+            pthread_mutex_unlock(&s_cache_mutex);
+            if (item->response_data) return;
+        }
+        pthread_mutex_unlock(&s_cache_mutex);
+    }
+
+    /* Generate MVT tile */
+    size_t capacity = 2 * 1024 * 1024;  /* 2MB */
+    item->response_data = malloc(capacity);
+    if (!item->response_data) {
+        item->status_code = 500;
+        strncpy(item->error_msg, "Memory allocation failed",
+                sizeof(item->error_msg));
+        return;
+    }
+
+    CTTileCoord coord = {z, x, y};
+    CTMVTOptions opts;
+    ct_mvt_default_options(&opts);
+
+    const CTLODConfig *lod = (s_config.lod_preset != LOD_NONE) ? &s_lod_config : NULL;
+    size_t size = ct_generate_mvt(s_pbf_ctx, coord, &opts, lod,
+                                  item->response_data, capacity);
+
+    if (size == 0) {
+        /* Empty tile */
+        free(item->response_data);
+        item->response_data = malloc(2);
+        if (item->response_data) {
+            item->response_data[0] = 0x1a;
+            item->response_data[1] = 0x00;
+            item->response_size = 0;  /* Empty MVT */
+        }
+        item->status_code = 200;
+        strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
+                sizeof(item->content_type));
+        return;
+    }
+
+    item->response_size = size;
+    item->status_code = 200;
+    strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
+            sizeof(item->content_type));
+
+    /* Cache the result */
+    if (s_mvt_cache) {
+        pthread_mutex_lock(&s_cache_mutex);
+        ct_cache_put(s_mvt_cache, z, x, y, item->response_data, size);
+        pthread_mutex_unlock(&s_cache_mutex);
+    }
+}
+
+/* Process an ASCII tile render request */
+static void process_ascii_render(RenderWorkItem *item)
+{
+    int z = item->z, x = item->x, y = item->y;
+
+    /* Create render context for this tile */
+    int tile_size = 512;
+    CTRenderContext *render_ctx = ct_render_create(tile_size, tile_size);
+    if (!render_ctx) {
+        item->status_code = 500;
+        strncpy(item->error_msg, "Render context creation failed",
+                sizeof(item->error_msg));
+        return;
+    }
+
+    ct_render_clear(render_ctx);
+
+    /* Render from PBF */
+    CTTileCoord coord = {z, x, y};
+    ct_render_from_pbf(render_ctx, s_pbf_ctx, coord);
+
+    /* Get pixel buffer */
+    const uint8_t *pixels = ct_render_pixels(render_ctx);
+
+    /* Allocate ASCII buffer */
+    CTAsciiOptions *ascii_opts = &item->ascii_opts;
+    size_t ascii_size = ct_ascii_buffer_size(
+        ascii_opts->width,
+        ascii_opts->height > 0 ? ascii_opts->height : ascii_opts->width / 2,
+        ascii_opts->charset, ascii_opts->color);
+
+    item->response_data = malloc(ascii_size);
+    if (!item->response_data) {
+        ct_render_free(render_ctx);
+        item->status_code = 500;
+        strncpy(item->error_msg, "ASCII buffer allocation failed",
+                sizeof(item->error_msg));
+        return;
+    }
+
+    /* Render to ASCII */
+    size_t ascii_len = ct_render_ascii(pixels, tile_size, tile_size,
+                                       ascii_opts, (char *)item->response_data,
+                                       ascii_size);
+
+    ct_render_free(render_ctx);
+
+    item->response_size = ascii_len;
+    item->status_code = 200;
+    strncpy(item->content_type, "text/plain; charset=utf-8",
+            sizeof(item->content_type));
+}
+
+/* Render worker thread function */
+static void *render_worker_fn(void *arg)
+{
+    RenderWorker *w = (RenderWorker *)arg;
+    (void)w;  /* Worker ID for debugging if needed */
+
+    while (s_signo == 0) {
+        /* Pop work item with timeout (100ms to check for shutdown) */
+        ShWorkItem *queue_item = sh_workqueue_pop_timeout(s_work_queue, 100);
+        if (!queue_item) continue;
+
+        RenderWorkItem *item = (RenderWorkItem *)queue_item->user_ctx;
+        if (!item) {
+            sh_workqueue_item_free(queue_item);
+            continue;
+        }
+
+        /* Check if request has expired */
+        if (sh_workqueue_item_expired(s_work_queue, queue_item)) {
+            item->status_code = 504;  /* Gateway Timeout */
+            strncpy(item->error_msg, "Request timeout",
+                    sizeof(item->error_msg));
+            render_work_item_complete(item);
+            sh_workqueue_item_free(queue_item);
+            continue;
+        }
+
+        /* Process based on type */
+        switch (item->type) {
+            case RENDER_TYPE_PNG:
+                process_png_render(item);
+                break;
+            case RENDER_TYPE_MVT:
+                process_mvt_render(item);
+                break;
+            case RENDER_TYPE_ASCII:
+                process_ascii_render(item);
+                break;
+        }
+
+        /* Signal completion */
+        render_work_item_complete(item);
+        sh_workqueue_item_free(queue_item);
+    }
+
+    return NULL;
 }
 
 /* ============================================================================
@@ -292,6 +663,21 @@ static void load_config_env(TileServerConfig *cfg) {
         cfg->rate_limit_burst = atof(val);
         if (cfg->rate_limit_burst <= 0) cfg->rate_limit_burst = 100.0;
     }
+    /* Work queue configuration */
+    if ((val = getenv("CARTA_WORK_QUEUE_ENABLED"))) {
+        cfg->work_queue_enabled = (atoi(val) != 0);
+    }
+    if ((val = getenv("CARTA_WORK_QUEUE_DEPTH"))) {
+        cfg->work_queue_depth = (size_t)atol(val);
+        if (cfg->work_queue_depth < 1) cfg->work_queue_depth = 256;
+    }
+    if ((val = getenv("CARTA_WORK_QUEUE_TIMEOUT"))) {
+        cfg->work_queue_timeout = atof(val);
+        if (cfg->work_queue_timeout <= 0) cfg->work_queue_timeout = 5.0;
+    }
+    if ((val = getenv("CARTA_RENDER_WORKERS"))) {
+        cfg->render_workers = atoi(val);
+    }
 }
 
 /* ============================================================================
@@ -357,22 +743,70 @@ static void handle_stats(struct mg_connection *c) {
     CTBBox bbox;
     ct_pbf_stats(s_pbf_ctx, &nodes, &ways, &features, &bbox);
 
-    char response[1024];
+    /* Get work queue stats */
+    ShWorkQueueStats wq_stats = {0};
+    if (s_work_queue) {
+        sh_workqueue_stats(s_work_queue, &wq_stats);
+    }
+
+    /* Get rate limiter stats */
+    ShRateLimitStats rl_stats = {0};
+    if (s_rate_limiter) {
+        sh_ratelimit_stats(s_rate_limiter, &rl_stats);
+    }
+
+    /* Get cache stats */
+    size_t png_entries = 0, png_bytes = 0;
+    uint64_t png_hits = 0, png_misses = 0;
+    size_t mvt_entries = 0, mvt_bytes = 0;
+    uint64_t mvt_hits = 0, mvt_misses = 0;
+
+    if (s_png_cache) {
+        ct_cache_stats(s_png_cache, &png_entries, &png_bytes, &png_hits, &png_misses);
+    }
+    if (s_mvt_cache) {
+        ct_cache_stats(s_mvt_cache, &mvt_entries, &mvt_bytes, &mvt_hits, &mvt_misses);
+    }
+
+    char response[2048];
     snprintf(response, sizeof(response),
         "{\n"
-        "  \"pbf_path\": \"%s\",\n"
-        "  \"total_nodes\": %zu,\n"
-        "  \"total_ways\": %zu,\n"
-        "  \"features_indexed\": %zu,\n"
-        "  \"bbox\": {\n"
-        "    \"min_lat\": %.6f,\n"
-        "    \"min_lon\": %.6f,\n"
-        "    \"max_lat\": %.6f,\n"
-        "    \"max_lon\": %.6f\n"
+        "  \"pbf\": {\n"
+        "    \"path\": \"%s\",\n"
+        "    \"nodes\": %zu,\n"
+        "    \"ways\": %zu,\n"
+        "    \"features\": %zu,\n"
+        "    \"bbox\": [%.6f, %.6f, %.6f, %.6f]\n"
+        "  },\n"
+        "  \"work_queue\": {\n"
+        "    \"enabled\": %s,\n"
+        "    \"depth\": %zu,\n"
+        "    \"capacity\": %zu,\n"
+        "    \"pushed\": %lu,\n"
+        "    \"popped\": %lu,\n"
+        "    \"dropped\": %lu,\n"
+        "    \"expired\": %lu\n"
+        "  },\n"
+        "  \"rate_limit\": {\n"
+        "    \"enabled\": %s,\n"
+        "    \"allowed\": %lu,\n"
+        "    \"denied\": %lu\n"
+        "  },\n"
+        "  \"cache\": {\n"
+        "    \"png\": {\"entries\": %zu, \"bytes\": %zu, \"hits\": %lu, \"misses\": %lu},\n"
+        "    \"mvt\": {\"entries\": %zu, \"bytes\": %zu, \"hits\": %lu, \"misses\": %lu}\n"
         "  }\n"
         "}\n",
         s_config.pbf_path, nodes, ways, features,
-        bbox.min_lat, bbox.min_lon, bbox.max_lat, bbox.max_lon);
+        bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
+        s_work_queue ? "true" : "false",
+        wq_stats.current_depth, wq_stats.max_capacity,
+        (unsigned long)wq_stats.total_pushed, (unsigned long)wq_stats.total_popped,
+        (unsigned long)wq_stats.total_dropped, (unsigned long)wq_stats.total_expired,
+        s_rate_limiter ? "true" : "false",
+        (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied,
+        png_entries, png_bytes, (unsigned long)png_hits, (unsigned long)png_misses,
+        mvt_entries, mvt_bytes, (unsigned long)mvt_hits, (unsigned long)mvt_misses);
     send_json(c, 200, response);
 }
 
@@ -424,6 +858,70 @@ static void handle_tilejson(struct mg_connection *c, struct mg_http_message *hm)
     send_json(c, 200, response);
 }
 
+/* Submit render work via work queue and send response */
+static int submit_render_work(struct mg_connection *c, RenderWorkItem *item)
+{
+    /* Create queue item */
+    ShWorkItem queue_item = {
+        .data = NULL,       /* No data to transfer, item is on caller's stack */
+        .data_len = 0,
+        .user_ctx = item    /* Pass render item as context */
+    };
+
+    /* Try to push to queue */
+    double pressure;
+    if (!sh_workqueue_try_push(s_work_queue, &queue_item, &pressure)) {
+        /* Queue is full - backpressure */
+        mg_http_reply(c, 503,
+            "Content-Type: text/plain\r\n"
+            "Retry-After: 1\r\n"
+            "Access-Control-Allow-Origin: *\r\n",
+            "Server busy, try again later\n");
+        return 0;
+    }
+
+    /* Wait for completion with timeout */
+    double timeout = s_config.work_queue_timeout;
+    if (!render_work_item_wait(item, timeout)) {
+        /* Timeout - request took too long */
+        mg_http_reply(c, 504,
+            "Content-Type: text/plain\r\n"
+            "Access-Control-Allow-Origin: *\r\n",
+            "Request timeout\n");
+        return 0;
+    }
+
+    /* Send response based on result */
+    if (item->status_code == 200) {
+        if (item->response_data && item->response_size > 0) {
+            send_tile(c, item->content_type, item->response_data,
+                      item->response_size);
+        } else {
+            /* Empty tile */
+            static const uint8_t empty_mvt[] = {0x1a, 0x00};
+            if (strcmp(item->content_type, "application/vnd.mapbox-vector-tile") == 0) {
+                send_tile(c, item->content_type, empty_mvt, 0);
+            } else if (strcmp(item->content_type, "text/plain; charset=utf-8") == 0) {
+                mg_http_reply(c, 200,
+                    "Content-Type: text/plain; charset=utf-8\r\n"
+                    "Access-Control-Allow-Origin: *\r\n",
+                    "");
+            } else {
+                send_tile(c, item->content_type, NULL, 0);
+            }
+        }
+    } else if (item->status_code == 504) {
+        mg_http_reply(c, 504,
+            "Content-Type: text/plain\r\n"
+            "Access-Control-Allow-Origin: *\r\n",
+            "%s\n", item->error_msg);
+    } else {
+        send_error(c, item->status_code, item->error_msg);
+    }
+
+    return 1;
+}
+
 /* GET /tiles/{z}/{x}/{y}.mvt */
 static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
     if (!s_pbf_ctx) {
@@ -442,7 +940,7 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
-    /* Check cache first (thread-safe) */
+    /* Check cache first (thread-safe) - before queueing */
     if (s_mvt_cache) {
         const uint8_t *cached_data;
         size_t cached_size;
@@ -462,8 +960,17 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    /* Generate MVT tile directly */
-    size_t capacity = 2 * 1024 * 1024;  /* 2MB - increased from 512KB for dense tiles */
+    /* Use work queue if enabled */
+    if (s_work_queue) {
+        RenderWorkItem item;
+        render_work_item_init(&item, RENDER_TYPE_MVT, z, x, y);
+        submit_render_work(c, &item);
+        render_work_item_cleanup(&item);
+        return;
+    }
+
+    /* Fallback: direct rendering (work queue disabled) */
+    size_t capacity = 2 * 1024 * 1024;  /* 2MB */
     uint8_t *buffer = malloc(capacity);
     if (!buffer) {
         send_error(c, 500, "Memory allocation failed");
@@ -474,7 +981,6 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
     CTMVTOptions opts;
     ct_mvt_default_options(&opts);
 
-    /* Apply LOD filtering if enabled */
     const CTLODConfig *lod = (s_config.lod_preset != LOD_NONE) ? &s_lod_config : NULL;
     size_t size = ct_generate_mvt(s_pbf_ctx, coord, &opts, lod, buffer, capacity);
 
@@ -485,7 +991,6 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
-    /* Cache the result (thread-safe) */
     if (s_mvt_cache) {
         pthread_mutex_lock(&s_cache_mutex);
         ct_cache_put(s_mvt_cache, z, x, y, buffer, size);
@@ -552,12 +1057,20 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
     if (ascii_opts.width > 400) ascii_opts.width = 400;
     if (ascii_opts.height > 200) ascii_opts.height = 200;
 
-    /* First render the tile to pixels */
-    int tile_size = 512;  /* Use 512 for better detail */
+    /* Use work queue if enabled */
+    if (s_work_queue) {
+        RenderWorkItem item;
+        render_work_item_init(&item, RENDER_TYPE_ASCII, z, x, y);
+        item.ascii_opts = ascii_opts;  /* Copy parsed options */
+        submit_render_work(c, &item);
+        render_work_item_cleanup(&item);
+        return;
+    }
 
+    /* Fallback: direct rendering (work queue disabled) */
+    int tile_size = 512;
     CTTileCoord coord = {z, x, y};
 
-    /* Create render context */
     CTRenderContext *render_ctx = ct_render_create(tile_size, tile_size);
     if (!render_ctx) {
         send_error(c, 500, "Render context creation failed");
@@ -565,14 +1078,10 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
     }
 
     ct_render_clear(render_ctx);
-
-    /* Render from PBF context */
     ct_render_from_pbf(render_ctx, s_pbf_ctx, coord);
 
-    /* Get pixel buffer */
     const uint8_t *pixels = ct_render_pixels(render_ctx);
 
-    /* Allocate ASCII buffer */
     size_t ascii_size = ct_ascii_buffer_size(ascii_opts.width,
                                              ascii_opts.height > 0 ? ascii_opts.height : ascii_opts.width / 2,
                                              ascii_opts.charset, ascii_opts.color);
@@ -583,11 +1092,9 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
         return;
     }
 
-    /* Render to ASCII */
     size_t ascii_len = ct_render_ascii(pixels, tile_size, tile_size,
                                        &ascii_opts, ascii_buf, ascii_size);
 
-    /* Send response */
     mg_printf(c,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/plain; charset=utf-8\r\n"
@@ -599,7 +1106,6 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
         (unsigned long)ascii_len);
     mg_send(c, ascii_buf, ascii_len);
 
-    /* Cleanup */
     free(ascii_buf);
     ct_render_free(render_ctx);
 }
@@ -648,14 +1154,13 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
-    /* Check cache first (thread-safe) */
+    /* Check cache first (thread-safe) - before queueing */
     if (s_png_cache) {
         const uint8_t *cached_data;
         size_t cached_size;
         pthread_mutex_lock(&s_cache_mutex);
         int hit = ct_cache_get(s_png_cache, z, x, y, &cached_data, &cached_size);
         if (hit) {
-            /* Copy data before unlocking - cache data may be evicted */
             uint8_t *copy = malloc(cached_size);
             if (copy) {
                 memcpy(copy, cached_data, cached_size);
@@ -668,16 +1173,23 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    CTTileCoord coord = {z, x, y};
+    /* Use work queue if enabled */
+    if (s_work_queue) {
+        RenderWorkItem item;
+        render_work_item_init(&item, RENDER_TYPE_PNG, z, x, y);
+        submit_render_work(c, &item);
+        render_work_item_cleanup(&item);
+        return;
+    }
 
-    /* Use thread-local render context for efficiency */
+    /* Fallback: direct rendering (work queue disabled) */
+    CTTileCoord coord = {z, x, y};
     CTRenderContext *render = get_thread_render_ctx(s_config.tile_size);
     if (!render) {
         send_error(c, 500, "Render context creation failed");
         return;
     }
 
-    /* Render tile */
     ct_render_clear(render);
     if (s_config.lod_preset != LOD_NONE) {
         ct_render_from_pbf_lod(render, s_pbf_ctx, coord, &s_lod_config);
@@ -685,7 +1197,6 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         ct_render_from_pbf(render, s_pbf_ctx, coord);
     }
 
-    /* Encode to PNG */
     size_t capacity = ct_png_max_size(s_config.tile_size, s_config.tile_size);
     uint8_t *buffer = malloc(capacity);
     if (!buffer) {
@@ -707,7 +1218,6 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
-    /* Cache the result (thread-safe) */
     if (s_png_cache) {
         pthread_mutex_lock(&s_cache_mutex);
         ct_cache_put(s_png_cache, z, x, y, buffer, size);
@@ -862,6 +1372,10 @@ static void print_usage(const char *prog) {
     printf("  CARTA_RATE_LIMIT_ENABLED    Enable rate limiting (default: 1)\n");
     printf("  CARTA_RATE_LIMIT_RPS        Requests per second (default: 10)\n");
     printf("  CARTA_RATE_LIMIT_BURST      Burst capacity (default: 100)\n");
+    printf("  CARTA_WORK_QUEUE_ENABLED    Enable work queue (default: 1)\n");
+    printf("  CARTA_WORK_QUEUE_DEPTH      Max pending requests (default: 256)\n");
+    printf("  CARTA_WORK_QUEUE_TIMEOUT    Request timeout in seconds (default: 5)\n");
+    printf("  CARTA_RENDER_WORKERS        Render worker count (0 = auto)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s -p 8081 hungary-latest.osm.pbf\n", prog);
@@ -1018,6 +1532,51 @@ int main(int argc, char *argv[]) {
         printf("Rate limit: disabled\n");
     }
 
+    /* Initialize work queue and render workers */
+    if (s_config.work_queue_enabled) {
+        s_work_queue = sh_workqueue_create(s_config.work_queue_depth,
+                                           s_config.work_queue_timeout);
+        if (s_work_queue) {
+            /* Determine number of render workers */
+            int num_render_workers = s_config.render_workers;
+            if (num_render_workers <= 0) {
+#ifdef _SC_NPROCESSORS_ONLN
+                long n = sysconf(_SC_NPROCESSORS_ONLN);
+                num_render_workers = (n > 0) ? (int)n : 4;
+#else
+                num_render_workers = 4;
+#endif
+            }
+            if (num_render_workers > 64) num_render_workers = 64;
+
+            /* Allocate render workers */
+            s_render_workers = calloc(num_render_workers, sizeof(RenderWorker));
+            if (s_render_workers) {
+                s_num_render_workers = num_render_workers;
+                for (int i = 0; i < num_render_workers; i++) {
+                    s_render_workers[i].id = i;
+                    if (pthread_create(&s_render_workers[i].thread, NULL,
+                                       render_worker_fn, &s_render_workers[i]) != 0) {
+                        fprintf(stderr, "Error: Failed to create render worker %d\n", i);
+                        s_num_render_workers = i;
+                        break;
+                    }
+                }
+                printf("Work queue: depth %zu, timeout %.1fs, %d render workers\n",
+                       s_config.work_queue_depth, s_config.work_queue_timeout,
+                       s_num_render_workers);
+            } else {
+                fprintf(stderr, "Warning: Failed to allocate render workers\n");
+                sh_workqueue_free(s_work_queue);
+                s_work_queue = NULL;
+            }
+        } else {
+            fprintf(stderr, "Warning: Failed to create work queue\n");
+        }
+    } else {
+        printf("Work queue: disabled\n");
+    }
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -1059,6 +1618,15 @@ int main(int argc, char *argv[]) {
     s_workers = calloc(num_threads, sizeof(WorkerThread));
     if (!s_workers) {
         fprintf(stderr, "Error: Failed to allocate worker threads\n");
+        /* Cleanup work queue and render workers */
+        if (s_work_queue) {
+            sh_workqueue_shutdown(s_work_queue);
+            for (int i = 0; i < s_num_render_workers; i++) {
+                pthread_join(s_render_workers[i].thread, NULL);
+            }
+            free(s_render_workers);
+            sh_workqueue_free(s_work_queue);
+        }
         sh_ratelimit_free(s_rate_limiter);
         ct_cache_free(s_png_cache);
         ct_cache_free(s_mvt_cache);
@@ -1087,9 +1655,26 @@ int main(int argc, char *argv[]) {
 
     printf("\nShutting down...\n");
 
-    /* Wait for all successfully created worker threads */
+    /* Wait for all successfully created HTTP worker threads */
     for (int i = 0; i < threads_created; i++) {
         pthread_join(s_workers[i].thread, NULL);
+    }
+
+    /* Shutdown work queue and wait for render workers */
+    if (s_work_queue) {
+        sh_workqueue_shutdown(s_work_queue);
+        for (int i = 0; i < s_num_render_workers; i++) {
+            pthread_join(s_render_workers[i].thread, NULL);
+        }
+
+        /* Print work queue stats */
+        ShWorkQueueStats wq_stats;
+        sh_workqueue_stats(s_work_queue, &wq_stats);
+        printf("Work queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
+               (unsigned long)wq_stats.total_pushed,
+               (unsigned long)wq_stats.total_popped,
+               (unsigned long)wq_stats.total_dropped,
+               (unsigned long)wq_stats.total_expired);
     }
 
     /* Print cache stats */
@@ -1114,6 +1699,8 @@ int main(int argc, char *argv[]) {
     }
 
     free(s_workers);
+    free(s_render_workers);
+    sh_workqueue_free(s_work_queue);
     sh_ratelimit_free(s_rate_limiter);
     ct_cache_free(s_png_cache);
     ct_cache_free(s_mvt_cache);
