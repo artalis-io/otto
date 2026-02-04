@@ -32,13 +32,20 @@ typedef void (*CTPBFProgressCallback)(const char *phase, size_t current,
 /*
  * Configuration for PBF parsing.
  * All fields have sensible defaults if set to 0.
+ *
+ * Memory management:
+ * - Hash maps (node_map, way_map) grow automatically as needed
+ * - Coordinate pool grows automatically when full
+ * - Arena is reset after each PrimitiveBlock (fixed size)
+ * - Memory limit prevents OOM on malicious/huge inputs
  */
 typedef struct {
-    /* Memory limits (0 = use defaults) */
-    size_t max_node_capacity;    /* Default: 256M, env: CARTA_MAX_NODES */
-    size_t max_way_capacity;     /* Default: 64M,  env: CARTA_MAX_WAYS */
-    size_t max_coord_capacity;   /* Default: 256M, env: CARTA_MAX_COORDS */
-    size_t arena_size;           /* Default: 128M, env: CARTA_ARENA_SIZE */
+    /* Initial estimates (0 = auto-calculate from file size) */
+    size_t initial_coord_capacity; /* Initial coord pool size, env: CARTA_INITIAL_COORDS */
+    size_t arena_size;             /* Parse arena size, env: CARTA_ARENA_SIZE */
+
+    /* Memory limit (0 = unlimited, env: CARTA_MEMORY_LIMIT) */
+    size_t memory_limit;           /* Max total memory usage in bytes */
 
     /* Progress reporting */
     CTPBFProgressCallback progress_callback;

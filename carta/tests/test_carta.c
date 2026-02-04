@@ -723,6 +723,30 @@ TEST(pbf_relation_member_types)
     return 1;
 }
 
+TEST(pbf_memory_limit_config)
+{
+    /* Test that memory limit configuration is properly stored */
+    CTPBFConfig config;
+    ct_pbf_config_init(&config);
+
+    /* Default should be 0 (unlimited) */
+    ASSERT_EQ(config.memory_limit, 0);
+
+    /* Set a limit and create context */
+    config.memory_limit = 1024 * 1024;  /* 1MB */
+    CTPBFContext *ctx = ct_pbf_context_create_with_config(&config);
+    ASSERT(ctx != NULL);
+
+    /* Verify config is stored */
+    ASSERT_EQ(ctx->config.memory_limit, 1024 * 1024);
+
+    /* Memory tracking should be initialized */
+    ASSERT(ctx->memory_used > 0);  /* At least context size */
+
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
 /* ============================================================================
  * Multipolygon Assembly Tests
  * ============================================================================ */
@@ -1912,6 +1936,7 @@ int main(void)
     run_test_pbf_context_relations_initialized();
     run_test_pbf_way_map_initialized();
     run_test_pbf_relation_member_types();
+    run_test_pbf_memory_limit_config();
 
     printf("\nMultipolygon Assembly:\n");
     run_test_multipolygon_assemble_empty();

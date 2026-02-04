@@ -166,6 +166,48 @@ void ct_default_style(CTStyle *style);
 | MVT tile (z14) | ~5ms | Single tile |
 | PNG tile (z14) | ~30ms | 256x256 |
 
+## Memory Management
+
+Carta uses growable data structures that scale with input size:
+
+| Region | PBF Size | Peak RAM |
+|--------|----------|----------|
+| Monaco | 700 KB | ~50 MB |
+| Hungary | 294 MB | ~3-4 GB |
+| Germany | 3.5 GB | ~35-50 GB |
+
+### Configuration
+
+```bash
+# Set memory limit (prevents OOM, fails gracefully)
+export CARTA_MEMORY_LIMIT=4G
+
+# Initial coordinate pool size (0 = auto)
+export CARTA_INITIAL_COORDS=100M
+
+# Parse arena size
+export CARTA_ARENA_SIZE=128M
+```
+
+### Programmatic Configuration
+
+```c
+CTPBFConfig config;
+ct_pbf_config_init(&config);
+config.memory_limit = 4ULL * 1024 * 1024 * 1024;  // 4GB limit
+
+CTPBFContext *ctx = ct_pbf_context_create_with_config(&config);
+```
+
+## Known Limitations
+
+| Limitation | Value | Notes |
+|------------|-------|-------|
+| Max nodes | ~4 billion | `uint32_t` index |
+| Max zoom level | 30 | Overflow prevention |
+| Max tiles per query | 10 million | DoS protection |
+| RAM requirement | ~10-15x PBF size | Peak during parsing |
+
 ## Integration with FuelWise
 
 Carta can provide custom map tiles for the FuelWise UI:
