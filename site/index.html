@@ -523,6 +523,20 @@
             font-size: 12px;
         }
 
+        .subsection-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            margin-top: 32px;
+            margin-bottom: 8px;
+        }
+
+        .scales-intro {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
         /* Why C */
         .why-c {
             padding: 48px 0;
@@ -1166,6 +1180,31 @@ Dependencies:
                         <strong>Commercial alternatives</strong>
                         <span>GB+ runtime + your data, server-only</span>
                     </div>
+                </div>
+            </div>
+
+            <h3 class="subsection-title">Scales With You</h3>
+            <p class="scales-intro">Same codebase from laptop to enterprise. Only the deployment changes.</p>
+            <div class="deployment-grid">
+                <div class="deployment-target">
+                    <div class="deployment-icon">💻</div>
+                    <div class="deployment-name">Local</div>
+                    <div class="deployment-desc">Single process, in-memory queue</div>
+                </div>
+                <div class="deployment-target">
+                    <div class="deployment-icon">🏪</div>
+                    <div class="deployment-name">Small Business</div>
+                    <div class="deployment-desc">Redis-backed job queue</div>
+                </div>
+                <div class="deployment-target">
+                    <div class="deployment-icon">🏢</div>
+                    <div class="deployment-name">Enterprise</div>
+                    <div class="deployment-desc">Kubernetes, horizontal scaling</div>
+                </div>
+                <div class="deployment-target">
+                    <div class="deployment-icon">☁️</div>
+                    <div class="deployment-name">Managed</div>
+                    <div class="deployment-desc">We run it, you use it</div>
                 </div>
             </div>
         </section>
