@@ -1,5 +1,7 @@
 # Velo Route Server - Claude Instructions
 
+> **Quick Reference:** Use `/api-servers velo` for CLI args, env vars, and startup commands.
+
 ## Overview
 
 HTTP routing API server built on velo. Provides route planning between coordinates with vehicle profiles, optimization modes, and Google Polyline encoded geometry.

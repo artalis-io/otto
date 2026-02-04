@@ -1,5 +1,7 @@
 # Carta Tile Server - Claude Instructions
 
+> **Quick Reference:** Use `/api-servers carta` for CLI args, env vars, and startup commands.
+
 ## Overview
 
 A Leaflet/Google Maps compatible tile server that serves vector (MVT) and raster (PNG) tiles from OSM PBF files using the carta library.

@@ -1,5 +1,7 @@
 # Locus API Server - Claude Instructions
 
+> **Quick Reference:** Use `/api-servers locus` for CLI args, env vars, and startup commands.
+
 ## Overview
 
 The Locus API server provides RESTful geocoding endpoints using the Locus library. It runs on port 8083 by default and uses mongoose for HTTP handling.
