@@ -33,7 +33,7 @@
 #include "mongoose.h"
 #include "velo.h"
 #include "polyline.h"
-#include "shared.h"   /* For sh_ratelimit, sh_workqueue */
+#include "shared.h"   /* For sh_ratelimit, sh_workqueue, sh_cors, sh_capacity */
 
 /* ============================================================================
  * Configuration
@@ -55,6 +55,15 @@ typedef struct {
     size_t work_queue_depth;     /* Max pending requests */
     double work_queue_timeout;   /* Request timeout in seconds */
     int route_workers;           /* Number of route worker threads (0 = auto) */
+    /* CORS configuration */
+    char cors_origins[512];      /* Comma-separated allowed origins (empty = allow all) */
+    /* Adaptive capacity configuration */
+    int adaptive_enabled;        /* 1 = enabled, 0 = disabled */
+    double target_utilization;   /* Target utilization (0.0-1.0) */
+    double client_timeout_ms;    /* Client timeout in milliseconds */
+    int burst_requests;          /* Requests in initial burst (for sizing) */
+    size_t adaptive_window;      /* Sample window size for percentiles */
+    double adaptive_interval;    /* Recalculation interval (requests) */
 } RouteServerConfig;
 
 /* Default configuration */
@@ -71,7 +80,16 @@ static RouteServerConfig s_config = {
     .work_queue_enabled = 1,  /* Enabled by default */
     .work_queue_depth = 128,  /* Max 128 pending requests */
     .work_queue_timeout = 10.0, /* 10 second timeout (routing can be slow) */
-    .route_workers = 0        /* 0 = auto-detect CPU count */
+    .route_workers = 0,       /* 0 = auto-detect CPU count */
+    /* CORS: empty = allow all origins (*) */
+    .cors_origins = "",
+    /* Adaptive capacity: disabled by default */
+    .adaptive_enabled = 0,
+    .target_utilization = 0.7,
+    .client_timeout_ms = 10000.0,
+    .burst_requests = 10,
+    .adaptive_window = 1000,
+    .adaptive_interval = 1000
 };
 
 /* Global state */
@@ -84,6 +102,12 @@ static ShRateLimiter *s_rate_limiter = NULL;
 
 /* Work queue instance (uses shared library) */
 static ShWorkQueue *s_work_queue = NULL;
+
+/* CORS configuration (uses shared library) */
+static ShCorsConfig s_cors_config;
+
+/* Adaptive capacity tracker (uses shared library) */
+static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 
 /* Route work item - passed through the work queue */
 typedef struct {
@@ -238,6 +262,37 @@ static void load_config_env(RouteServerConfig *cfg) {
     if ((val = getenv("VELO_ROUTE_WORKERS"))) {
         cfg->route_workers = atoi(val);
     }
+    /* CORS configuration */
+    if ((val = getenv("VELO_CORS_ORIGINS"))) {
+        strncpy(cfg->cors_origins, val, sizeof(cfg->cors_origins) - 1);
+        cfg->cors_origins[sizeof(cfg->cors_origins) - 1] = '\0';
+    }
+    /* Adaptive capacity configuration */
+    if ((val = getenv("VELO_ADAPTIVE_ENABLED"))) {
+        cfg->adaptive_enabled = (atoi(val) != 0);
+    }
+    if ((val = getenv("VELO_TARGET_UTILIZATION"))) {
+        cfg->target_utilization = atof(val);
+        if (cfg->target_utilization <= 0 || cfg->target_utilization > 1.0) {
+            cfg->target_utilization = 0.7;
+        }
+    }
+    if ((val = getenv("VELO_CLIENT_TIMEOUT"))) {
+        cfg->client_timeout_ms = atof(val);
+        if (cfg->client_timeout_ms <= 0) cfg->client_timeout_ms = 10000.0;
+    }
+    if ((val = getenv("VELO_BURST_REQUESTS"))) {
+        cfg->burst_requests = atoi(val);
+        if (cfg->burst_requests < 1) cfg->burst_requests = 10;
+    }
+    if ((val = getenv("VELO_ADAPTIVE_WINDOW"))) {
+        cfg->adaptive_window = (size_t)atol(val);
+        if (cfg->adaptive_window < 10) cfg->adaptive_window = 1000;
+    }
+    if ((val = getenv("VELO_ADAPTIVE_INTERVAL"))) {
+        cfg->adaptive_interval = atof(val);
+        if (cfg->adaptive_interval < 1) cfg->adaptive_interval = 1000;
+    }
 }
 
 /* ============================================================================
@@ -375,8 +430,32 @@ static void *route_worker_fn(void *arg) {
             continue;
         }
 
+        /* Track timing for adaptive capacity */
+        struct timeval route_start, route_end;
+        gettimeofday(&route_start, NULL);
+
         /* Process the route request */
         process_route_request(item);
+
+        /* Record response time for adaptive capacity */
+        gettimeofday(&route_end, NULL);
+        double route_ms = (route_end.tv_sec - route_start.tv_sec) * 1000.0 +
+                          (route_end.tv_usec - route_start.tv_usec) / 1000.0;
+
+        if (s_adaptive_tracker) {
+            sh_adaptive_record(s_adaptive_tracker, route_ms);
+
+            /* Check if rate limiter should be updated */
+            ShCapacityParams new_params;
+            if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
+                /* Update rate limiter with new parameters */
+                if (s_rate_limiter) {
+                    sh_ratelimit_update_rate(s_rate_limiter,
+                                             new_params.rate_limit_rps,
+                                             new_params.rate_limit_burst);
+                }
+            }
+        }
 
         /* Signal completion */
         route_work_item_complete(item);
@@ -390,18 +469,31 @@ static void *route_worker_fn(void *arg) {
  * HTTP Response Helpers
  * ============================================================================ */
 
+static void send_json_with_cors(struct mg_connection *c, int status,
+                                 const char *json, const char *origin) {
+    char cors_hdrs[512];
+    sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
+    char headers[600];
+    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_hdrs);
+    mg_http_reply(c, status, headers, "%s", json);
+}
+
+static void send_error_with_cors(struct mg_connection *c, int status,
+                                  const char *message, const char *origin) {
+    char cors_hdrs[512];
+    sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
+    char headers[600];
+    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_hdrs);
+    mg_http_reply(c, status, headers, "{\"error\": \"%s\"}\n", message);
+}
+
+/* Compatibility wrappers for simple calls (uses wildcard origin) */
 static void send_json(struct mg_connection *c, int status, const char *json) {
-    mg_http_reply(c, status,
-        "Content-Type: application/json\r\n"
-        "Access-Control-Allow-Origin: *\r\n",
-        "%s", json);
+    send_json_with_cors(c, status, json, NULL);
 }
 
 static void send_error(struct mg_connection *c, int status, const char *message) {
-    mg_http_reply(c, status,
-        "Content-Type: application/json\r\n"
-        "Access-Control-Allow-Origin: *\r\n",
-        "{\"error\": \"%s\"}\n", message);
+    send_error_with_cors(c, status, message, NULL);
 }
 
 /* Escape backslashes in polyline for JSON output */
@@ -528,8 +620,17 @@ static void handle_stats(struct mg_connection *c) {
         sh_ratelimit_stats(s_rate_limiter, &rl_stats);
     }
 
-    char response[4096];
-    snprintf(response, sizeof(response),
+    /* Get adaptive capacity stats */
+    ShAdaptiveStats adaptive_stats = {0};
+    ShCapacityParams adaptive_params = {0};
+    int has_adaptive_params = 0;
+    if (s_adaptive_tracker) {
+        sh_adaptive_stats(s_adaptive_tracker, &adaptive_stats);
+        has_adaptive_params = sh_adaptive_get_params(s_adaptive_tracker, &adaptive_params);
+    }
+
+    char response[6144];
+    int n = snprintf(response, sizeof(response),
         "{\n"
         "  \"graph_path\": \"%s\",\n"
         "  \"num_nodes\": %u,\n"
@@ -557,8 +658,11 @@ static void handle_stats(struct mg_connection *c) {
         "    \"burst\": %.0f,\n"
         "    \"allowed\": %lu,\n"
         "    \"denied\": %lu\n"
-        "  }\n"
-        "}\n",
+        "  },\n"
+        "  \"adaptive\": {\n"
+        "    \"enabled\": %s,\n"
+        "    \"sample_count\": %lu,\n"
+        "    \"recalc_count\": %lu",
         s_config.graph_path,
         s_graph->num_nodes,
         s_graph->num_edges,
@@ -574,7 +678,35 @@ static void handle_stats(struct mg_connection *c) {
         (unsigned long)wq_stats.total_dropped, (unsigned long)wq_stats.total_expired,
         s_rate_limiter ? "true" : "false",
         s_config.rate_limit_rps, s_config.rate_limit_burst,
-        (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied);
+        (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied,
+        s_adaptive_tracker ? "true" : "false",
+        (unsigned long)adaptive_stats.sample_count, (unsigned long)adaptive_stats.recalc_count);
+
+    /* Add percentile stats if we have samples */
+    if (s_adaptive_tracker && adaptive_stats.sample_count > 0 && n > 0 && (size_t)n < sizeof(response)) {
+        n += snprintf(response + n, sizeof(response) - (size_t)n,
+            ",\n    \"p50_ms\": %.2f,\n"
+            "    \"p90_ms\": %.2f,\n"
+            "    \"p99_ms\": %.2f,\n"
+            "    \"avg_ms\": %.2f,\n"
+            "    \"ema_ms\": %.2f",
+            adaptive_stats.p50_ms, adaptive_stats.p90_ms, adaptive_stats.p99_ms,
+            adaptive_stats.avg_ms, adaptive_stats.ema_ms);
+    }
+
+    /* Add calculated params if available */
+    if (has_adaptive_params && n > 0 && (size_t)n < sizeof(response)) {
+        n += snprintf(response + n, sizeof(response) - (size_t)n,
+            ",\n    \"calc_rps\": %.2f,\n"
+            "    \"calc_burst\": %.0f",
+            adaptive_params.rate_limit_rps, adaptive_params.rate_limit_burst);
+    }
+
+    /* Close adaptive section and response */
+    if (n > 0 && (size_t)n < sizeof(response)) {
+        snprintf(response + n, sizeof(response) - (size_t)n, "\n  }\n}\n");
+    }
+
     send_json(c, 200, response);
 }
 
@@ -582,6 +714,14 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
     if (!s_graph) {
         send_error(c, 503, "Graph not loaded");
         return;
+    }
+
+    /* Extract Origin header for CORS */
+    struct mg_str *origin_hdr = mg_http_get_header(hm, "Origin");
+    char origin[256] = "";
+    if (origin_hdr && origin_hdr->len > 0 && origin_hdr->len < sizeof(origin)) {
+        memcpy(origin, origin_hdr->buf, origin_hdr->len);
+        origin[origin_hdr->len] = '\0';
     }
 
     /* Parse parameters */
@@ -706,21 +846,25 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
         double pressure;
         if (!sh_workqueue_try_push(s_work_queue, &queue_item, &pressure)) {
             route_work_item_cleanup(&item);
-            mg_http_reply(c, 503,
-                "Content-Type: text/plain\r\n"
-                "Retry-After: 1\r\n"
-                "Access-Control-Allow-Origin: *\r\n",
-                "Server busy, try again later\n");
+            char cors_hdrs[512];
+            sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
+            char headers[600];
+            snprintf(headers, sizeof(headers),
+                     "Content-Type: text/plain\r\n"
+                     "Retry-After: 1\r\n%s", cors_hdrs);
+            mg_http_reply(c, 503, headers, "Server busy, try again later\n");
             return;
         }
 
         /* Wait for completion with timeout */
         if (!route_work_item_wait(&item, s_config.work_queue_timeout)) {
             route_work_item_cleanup(&item);
-            mg_http_reply(c, 504,
-                "Content-Type: text/plain\r\n"
-                "Access-Control-Allow-Origin: *\r\n",
-                "Request timeout\n");
+            char cors_hdrs[512];
+            sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
+            char headers[600];
+            snprintf(headers, sizeof(headers),
+                     "Content-Type: text/plain\r\n%s", cors_hdrs);
+            mg_http_reply(c, 504, headers, "Request timeout\n");
             return;
         }
 
@@ -883,6 +1027,14 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
+        /* Extract Origin header for CORS */
+        struct mg_str *origin_hdr = mg_http_get_header(hm, "Origin");
+        char origin[256] = "";
+        if (origin_hdr && origin_hdr->len > 0 && origin_hdr->len < sizeof(origin)) {
+            memcpy(origin, origin_hdr->buf, origin_hdr->len);
+            origin[origin_hdr->len] = '\0';
+        }
+
         /* Rate limiting check (supports both IPv4 and IPv6) */
         if (s_rate_limiter) {
             ShRateLimitAddr client_addr;
@@ -893,23 +1045,22 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
                 sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
             }
             if (!sh_ratelimit_check(s_rate_limiter, &client_addr)) {
-                mg_http_reply(c, 429,
-                    "Content-Type: text/plain\r\n"
-                    "Retry-After: 1\r\n"
-                    "Access-Control-Allow-Origin: *\r\n",
-                    "Rate limit exceeded\n");
+                char cors_hdrs[512];
+                sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
+                char headers[600];
+                snprintf(headers, sizeof(headers),
+                         "Content-Type: text/plain\r\n"
+                         "Retry-After: 1\r\n%s", cors_hdrs);
+                mg_http_reply(c, 429, headers, "Rate limit exceeded\n");
                 return;
             }
         }
 
         /* CORS preflight */
         if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
-            mg_http_reply(c, 204,
-                "Access-Control-Allow-Origin: *\r\n"
-                "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-                "Access-Control-Allow-Headers: *\r\n"
-                "Access-Control-Max-Age: 86400\r\n",
-                "");
+            char cors_hdrs[512];
+            sh_cors_preflight_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
+            mg_http_reply(c, 204, cors_hdrs, "");
             return;
         }
 
@@ -951,13 +1102,28 @@ static void print_usage(const char *prog) {
     printf("  ROUTE_HOST               Server host\n");
     printf("  ROUTE_LANDMARKS          Enable landmarks (0/1)\n");
     printf("  ROUTE_LANDMARK_COUNT     Number of landmarks\n");
+    printf("\n");
+    printf("  Rate limiting:\n");
     printf("  VELO_RATE_LIMIT_ENABLED  Enable rate limiting (default: 1)\n");
     printf("  VELO_RATE_LIMIT_RPS      Requests per second (default: 10)\n");
     printf("  VELO_RATE_LIMIT_BURST    Burst capacity (default: 50)\n");
+    printf("\n");
+    printf("  Work queue:\n");
     printf("  VELO_WORK_QUEUE_ENABLED  Enable work queue (default: 1)\n");
     printf("  VELO_WORK_QUEUE_DEPTH    Max pending requests (default: 128)\n");
     printf("  VELO_WORK_QUEUE_TIMEOUT  Request timeout in seconds (default: 10)\n");
     printf("  VELO_ROUTE_WORKERS       Route worker count (0 = auto)\n");
+    printf("\n");
+    printf("  CORS:\n");
+    printf("  VELO_CORS_ORIGINS        Comma-separated allowed origins (empty = allow all)\n");
+    printf("\n");
+    printf("  Adaptive capacity:\n");
+    printf("  VELO_ADAPTIVE_ENABLED    Enable adaptive capacity (default: 0)\n");
+    printf("  VELO_TARGET_UTILIZATION  Target utilization 0.0-1.0 (default: 0.7)\n");
+    printf("  VELO_CLIENT_TIMEOUT      Client timeout in ms (default: 10000)\n");
+    printf("  VELO_BURST_REQUESTS      Requests in initial burst (default: 10)\n");
+    printf("  VELO_ADAPTIVE_WINDOW     Sample window size (default: 1000)\n");
+    printf("  VELO_ADAPTIVE_INTERVAL   Recalculation interval (default: 1000)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s -p 8082 hungary-latest.osm.pbf\n", prog);
@@ -1106,6 +1272,40 @@ int main(int argc, char *argv[]) {
         printf("Work queue: disabled\n");
     }
 
+    /* Initialize CORS configuration */
+    sh_cors_init(&s_cors_config);
+    sh_cors_set_methods(&s_cors_config, "GET, POST, OPTIONS");
+    sh_cors_set_headers(&s_cors_config, "Content-Type, Authorization");
+    if (s_config.cors_origins[0] != '\0') {
+        int added = sh_cors_parse_origins(&s_cors_config, s_config.cors_origins);
+        printf("CORS: %d allowed origin%s\n", added, added == 1 ? "" : "s");
+    } else {
+        printf("CORS: allowing all origins (*)\n");
+    }
+
+    /* Initialize adaptive capacity tracker */
+    if (s_config.adaptive_enabled) {
+        ShAdaptiveConfig adaptive_cfg;
+        sh_adaptive_config_init(&adaptive_cfg);
+        adaptive_cfg.num_workers = s_num_route_workers > 0 ? s_num_route_workers : 4;
+        adaptive_cfg.target_utilization = s_config.target_utilization;
+        adaptive_cfg.client_timeout_ms = s_config.client_timeout_ms;
+        adaptive_cfg.burst_tiles = s_config.burst_requests;
+        adaptive_cfg.window_size = s_config.adaptive_window;
+        adaptive_cfg.recalc_interval = s_config.adaptive_interval;
+
+        s_adaptive_tracker = sh_adaptive_create(&adaptive_cfg);
+        if (s_adaptive_tracker) {
+            printf("Adaptive capacity: enabled (window=%zu, interval=%.0f, util=%.0f%%)\n",
+                   s_config.adaptive_window, s_config.adaptive_interval,
+                   s_config.target_utilization * 100.0);
+        } else {
+            fprintf(stderr, "Warning: Failed to create adaptive tracker\n");
+        }
+    } else {
+        printf("Adaptive capacity: disabled\n");
+    }
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -1132,7 +1332,9 @@ int main(int argc, char *argv[]) {
             free(s_route_workers);
             sh_workqueue_free(s_work_queue);
         }
+        sh_adaptive_free(s_adaptive_tracker);
         sh_ratelimit_free(s_rate_limiter);
+        if (s_landmarks) vl_landmarks_free(s_landmarks);
         vl_graph_free(s_graph);
         return 1;
     }
@@ -1179,6 +1381,7 @@ int main(int argc, char *argv[]) {
     mg_mgr_free(&mgr);
     free(s_route_workers);
     sh_workqueue_free(s_work_queue);
+    sh_adaptive_free(s_adaptive_tracker);
     sh_ratelimit_free(s_rate_limiter);
     if (s_landmarks) vl_landmarks_free(s_landmarks);
     vl_graph_free(s_graph);
