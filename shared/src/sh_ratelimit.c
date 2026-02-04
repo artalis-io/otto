@@ -263,3 +263,14 @@ void sh_ratelimit_reset(ShRateLimiter *limiter)
     limiter->active_entries = 0;
     pthread_mutex_unlock(&limiter->mutex);
 }
+
+void sh_ratelimit_update_rate(ShRateLimiter *limiter, double rps, double burst)
+{
+    if (!limiter) return;
+    if (rps <= 0 || burst <= 0) return;
+
+    pthread_mutex_lock(&limiter->mutex);
+    limiter->rps = rps;
+    limiter->burst = burst;
+    pthread_mutex_unlock(&limiter->mutex);
+}

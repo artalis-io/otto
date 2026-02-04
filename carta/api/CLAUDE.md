@@ -91,6 +91,10 @@ Options:
   --max-zoom N          Max zoom (default: 18)
   --tile-size N         PNG size (default: 512)
   --lod none|default    LOD filtering preset
+  --adaptive            Enable adaptive capacity (auto-tune rate limits)
+  --utilization N       Target utilization 0.0-1.0 (default: 0.7)
+  --client-timeout N    Client timeout in ms (default: 10000)
+  --burst-tiles N       Tiles in initial view for burst sizing (default: 25)
 ```
 
 **Note:** The server auto-detects file format. Use `.osm.pbf` for development, `.idx` for production.
@@ -98,6 +102,7 @@ Options:
 ### Environment Variables
 
 ```bash
+# Basic configuration
 TILE_PBF_PATH=/data/map.osm.pbf
 TILE_PORT=8081
 TILE_HOST=0.0.0.0
@@ -106,7 +111,26 @@ TILE_MIN_ZOOM=0
 TILE_MAX_ZOOM=18
 TILE_SIZE=512
 TILE_NAME="My Tiles"
-CARTA_THREADS=8              # Worker threads (0 = auto-detect CPU count)
+CARTA_THREADS=8               # Worker threads (0 = auto-detect)
+
+# Rate limiting
+CARTA_RATE_LIMIT_ENABLED=1    # Enable rate limiting (default: 1)
+CARTA_RATE_LIMIT_RPS=10       # Requests per second per IP (default: 10)
+CARTA_RATE_LIMIT_BURST=100    # Burst capacity (default: 100)
+
+# Work queue (backpressure)
+CARTA_WORK_QUEUE_ENABLED=1    # Enable work queue (default: 1)
+CARTA_WORK_QUEUE_DEPTH=256    # Max pending requests (default: 256)
+CARTA_WORK_QUEUE_TIMEOUT=5    # Request timeout in seconds (default: 5)
+CARTA_RENDER_WORKERS=8        # Render worker threads (0 = auto)
+
+# Adaptive capacity (self-tuning based on measured response times)
+CARTA_ADAPTIVE_ENABLED=0      # Enable adaptive capacity (default: 0)
+CARTA_TARGET_UTILIZATION=0.7  # Target utilization 0.0-1.0 (default: 0.7)
+CARTA_CLIENT_TIMEOUT=10000    # Client timeout in ms (default: 10000)
+CARTA_BURST_TILES=25          # Tiles in initial view (default: 25)
+CARTA_ADAPTIVE_WINDOW=1000    # Sample window for percentiles (default: 1000)
+CARTA_ADAPTIVE_INTERVAL=1000  # Recalc interval in requests (default: 1000)
 ```
 
 ### Config File
