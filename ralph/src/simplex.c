@@ -212,6 +212,109 @@ static void restore_model(SimplexSolver *solver) {
  * Simplex Tableau Creation
  * ============================================================================ */
 
+/* Allocate all tableau arrays using arena allocator.
+ * Returns 0 on success, -1 on failure.
+ * Caller is responsible for calling tableau_free on failure. */
+static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars) {
+    int n = tab->n;
+    int m = tab->m;
+
+    /* Calculate total memory needed for arena (with 8-byte alignment padding).
+     * Each allocation rounds up to 8 bytes, so add ~7 bytes padding per alloc.
+     * We have 21 arrays, so add 21*8 = 168 bytes padding margin. */
+    size_t arena_size =
+        /* double arrays: c_ext, lb_ext, ub_ext (n each) */
+        3 * (size_t)n * sizeof(double) +
+        /* double arrays: x, rc, se_weights, work3 (n each) */
+        4 * (size_t)n * sizeof(double) +
+        /* double arrays: y, work1, work2, rhs, pivot_row, tau_work (m each) */
+        6 * (size_t)m * sizeof(double) +
+        /* double arrays: cb_sparse_val, aux_coef */
+        (size_t)m * sizeof(double) + (size_t)num_aux_vars * sizeof(double) +
+        /* int arrays: basis, basis_pos (m and n) */
+        (size_t)m * sizeof(int) + (size_t)n * sizeof(int) +
+        /* int arrays: nonbasis, var_status (n-m and n) */
+        (size_t)(n - m) * sizeof(int) + (size_t)n * sizeof(VarStatus) +
+        /* int arrays: cb_sparse_idx, aux_row, partial_candidates */
+        (size_t)m * sizeof(int) + (size_t)num_aux_vars * sizeof(int) + 100 * sizeof(int) +
+        /* Alignment padding (21 allocations * 8 bytes) */
+        168;
+
+    /* Create arena */
+    tab->arena = ralph_arena_create(arena_size);
+    if (!tab->arena) {
+        return -1;
+    }
+
+    /* Allocate all arrays from arena (calloc zeros memory) */
+    tab->c_ext = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+    tab->lb_ext = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+    tab->ub_ext = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+
+    tab->basis = (int*)ralph_arena_alloc(tab->arena, m * sizeof(int));
+    tab->nonbasis = (int*)ralph_arena_alloc(tab->arena, (n - m) * sizeof(int));
+    tab->var_status = (VarStatus*)ralph_arena_alloc(tab->arena, n * sizeof(VarStatus));
+    tab->basis_pos = (int*)ralph_arena_alloc(tab->arena, n * sizeof(int));
+
+    tab->x = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+    tab->y = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
+    tab->rc = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+
+    tab->work1 = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
+    tab->work2 = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
+    tab->work3 = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+    tab->rhs = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
+    tab->pivot_row = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
+    tab->tau_work = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
+
+    tab->se_weights = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+
+    /* Pre-allocated sparse workspace for reduced cost computation */
+    tab->cb_sparse_idx = (int*)ralph_arena_alloc(tab->arena, m * sizeof(int));
+    tab->cb_sparse_val = (double*)ralph_arena_alloc(tab->arena, m * sizeof(double));
+
+    /* Auxiliary variable mapping for cut generation */
+    tab->aux_row = (int*)ralph_arena_alloc(tab->arena, num_aux_vars * sizeof(int));
+    tab->aux_coef = (double*)ralph_arena_alloc(tab->arena, num_aux_vars * sizeof(double));
+
+    /* Partial pricing candidate list (hot set) */
+    tab->partial_cand_capacity = 100;
+    tab->partial_candidates = (int*)ralph_arena_alloc(tab->arena, tab->partial_cand_capacity * sizeof(int));
+    tab->partial_cand_count = 0;
+
+    /* Single check for all allocations */
+    if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
+        !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
+        !tab->x || !tab->y || !tab->rc ||
+        !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs ||
+        !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
+        !tab->cb_sparse_idx || !tab->cb_sparse_val ||
+        !tab->aux_row || !tab->aux_coef || !tab->partial_candidates) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Initialize steepest edge / Devex weights.
+ * For initial basis (typically slack identity), B^{-1} = I, so:
+ *   gamma_j = ||B^{-1} * a_j||^2 = ||a_j||^2 */
+static void tableau_init_weights(SimplexTableau *tab) {
+    for (int j = 0; j < tab->n; j++) {
+        double col_norm_sq = 0.0;
+        for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+            col_norm_sq += tab->A_ext->values[p] * tab->A_ext->values[p];
+        }
+        tab->se_weights[j] = (col_norm_sq > 1.0) ? col_norm_sq : 1.0;
+    }
+    tab->use_steepest_edge = 1;
+    tab->pricing_strategy = 2;  /* Default to Devex */
+    tab->devex_refcount = 0;
+
+    /* Initialize lazy reduced cost computation flags */
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+}
+
 SimplexTableau* tableau_create(LPModel *model) {
     if (!model) return NULL;
 
@@ -272,49 +375,8 @@ SimplexTableau* tableau_create(LPModel *model) {
     tab->n = model->num_vars + num_aux_vars;
     tab->num_aux = num_aux_vars;
 
-    /* Allocate extended arrays */
-    tab->c_ext = (double*)calloc(tab->n, sizeof(double));
-    tab->lb_ext = (double*)calloc(tab->n, sizeof(double));
-    tab->ub_ext = (double*)calloc(tab->n, sizeof(double));
-
-    tab->basis = (int*)malloc(tab->m * sizeof(int));
-    tab->nonbasis = (int*)malloc((tab->n - tab->m) * sizeof(int));
-    tab->var_status = (VarStatus*)malloc(tab->n * sizeof(VarStatus));
-    tab->basis_pos = (int*)malloc(tab->n * sizeof(int));
-
-    tab->x = (double*)calloc(tab->n, sizeof(double));
-    tab->y = (double*)calloc(tab->m, sizeof(double));
-    tab->rc = (double*)calloc(tab->n, sizeof(double));
-
-    tab->work1 = (double*)calloc(tab->m, sizeof(double));
-    tab->work2 = (double*)calloc(tab->m, sizeof(double));
-    tab->work3 = (double*)calloc(tab->n, sizeof(double));
-    tab->rhs = (double*)calloc(tab->m, sizeof(double));
-    tab->pivot_row = (double*)calloc(tab->m, sizeof(double));
-    tab->tau_work = (double*)calloc(tab->m, sizeof(double));
-
-    tab->se_weights = (double*)calloc(tab->n, sizeof(double));
-
-    /* Pre-allocated sparse workspace for reduced cost computation */
-    tab->cb_sparse_idx = (int*)malloc(tab->m * sizeof(int));
-    tab->cb_sparse_val = (double*)malloc(tab->m * sizeof(double));
-
-    /* Auxiliary variable mapping for cut generation */
-    tab->aux_row = (int*)malloc(num_aux_vars * sizeof(int));
-    tab->aux_coef = (double*)malloc(num_aux_vars * sizeof(double));
-
-    /* Partial pricing candidate list (hot set) */
-    tab->partial_cand_capacity = 100;  /* Fixed size hot set */
-    tab->partial_candidates = (int*)malloc(tab->partial_cand_capacity * sizeof(int));
-    tab->partial_cand_count = 0;
-
-    if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
-        !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
-        !tab->x || !tab->y || !tab->rc ||
-        !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs ||
-        !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
-        !tab->cb_sparse_idx || !tab->cb_sparse_val ||
-        !tab->aux_row || !tab->aux_coef || !tab->partial_candidates) {
+    /* Allocate all tableau arrays */
+    if (tableau_alloc_arrays(tab, num_aux_vars) != 0) {
         free(norm_sense);
         free(norm_sign);
         tableau_free(tab);
@@ -525,24 +587,8 @@ SimplexTableau* tableau_create(LPModel *model) {
         }
     }
 
-    /* Initialize steepest edge / Devex weights
-     * For initial basis (typically slack identity), B^{-1} = I, so:
-     *   gamma_j = ||B^{-1} * a_j||^2 = ||a_j||^2
-     */
-    for (int j = 0; j < tab->n; j++) {
-        double col_norm_sq = 0.0;
-        for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
-            col_norm_sq += tab->A_ext->values[p] * tab->A_ext->values[p];
-        }
-        tab->se_weights[j] = (col_norm_sq > 1.0) ? col_norm_sq : 1.0;
-    }
-    tab->use_steepest_edge = 1;
-    tab->pricing_strategy = 2;  /* Default to Devex */
-    tab->devex_refcount = 0;
-
-    /* Initialize lazy reduced cost computation flags */
-    tab->duals_valid = 0;
-    tab->rc_all_valid = 0;
+    /* Initialize steepest edge / Devex weights and pricing flags */
+    tableau_init_weights(tab);
 
     /* Create LU factorization */
     tab->lu = lu_create(tab->m);
@@ -563,35 +609,47 @@ SimplexTableau* tableau_create(LPModel *model) {
 void tableau_free(SimplexTableau *tab) {
     if (!tab) return;
 
+    /* Free sparse matrix (not in arena) */
     sparse_free(tab->A_ext);
     tab->A_ext = NULL;
-    SAFE_FREE(tab->c_ext);
-    SAFE_FREE(tab->lb_ext);
-    SAFE_FREE(tab->ub_ext);
-    SAFE_FREE(tab->basis);
-    SAFE_FREE(tab->nonbasis);
-    SAFE_FREE(tab->var_status);
-    SAFE_FREE(tab->basis_pos);
-    SAFE_FREE(tab->x);
-    SAFE_FREE(tab->y);
-    SAFE_FREE(tab->rc);
-    SAFE_FREE(tab->work1);
-    SAFE_FREE(tab->work2);
-    SAFE_FREE(tab->work3);
-    SAFE_FREE(tab->rhs);
-    SAFE_FREE(tab->pivot_row);
-    SAFE_FREE(tab->tau_work);
-    SAFE_FREE(tab->se_weights);
-    SAFE_FREE(tab->cb_sparse_idx);
-    SAFE_FREE(tab->cb_sparse_val);
+
+    /* Free arena (frees all workspace arrays in one call) */
+    ralph_arena_free(tab->arena);
+    tab->arena = NULL;
+
+    /* NULL out arena-allocated pointers (already freed, just for safety) */
+    tab->c_ext = NULL;
+    tab->lb_ext = NULL;
+    tab->ub_ext = NULL;
+    tab->basis = NULL;
+    tab->nonbasis = NULL;
+    tab->var_status = NULL;
+    tab->basis_pos = NULL;
+    tab->x = NULL;
+    tab->y = NULL;
+    tab->rc = NULL;
+    tab->work1 = NULL;
+    tab->work2 = NULL;
+    tab->work3 = NULL;
+    tab->rhs = NULL;
+    tab->pivot_row = NULL;
+    tab->tau_work = NULL;
+    tab->se_weights = NULL;
+    tab->cb_sparse_idx = NULL;
+    tab->cb_sparse_val = NULL;
+    tab->aux_row = NULL;
+    tab->aux_coef = NULL;
+    tab->partial_candidates = NULL;
+
+    /* Free perturbation backups (allocated separately during anti-cycling) */
     SAFE_FREE(tab->perturb_backup);
     SAFE_FREE(tab->primal_saved_lb);
     SAFE_FREE(tab->primal_saved_ub);
-    SAFE_FREE(tab->aux_row);
-    SAFE_FREE(tab->aux_coef);
-    SAFE_FREE(tab->partial_candidates);
+
+    /* Free LU factorization (not in arena) */
     lu_free(tab->lu);
     tab->lu = NULL;
+
     free(tab);
 }
 

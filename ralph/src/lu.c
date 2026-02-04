@@ -170,7 +170,12 @@ LUFactorization* lu_create(int m) {
     lu->hs_stack = (int*)malloc(m * sizeof(int));
     lu->perm_work = (double*)malloc(m * sizeof(double));
 
-    if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx || !lu->hs_val || !lu->hs_stack || !lu->perm_work) {
+    /* Pre-allocate dense workspace for fallback factorization (m×m matrix)
+     * Avoids O(m²) allocation in hot path when sparse factorization fails */
+    lu->dense_work = (double*)malloc((size_t)m * (size_t)m * sizeof(double));
+
+    if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx ||
+        !lu->hs_val || !lu->hs_stack || !lu->perm_work || !lu->dense_work) {
         lu_free(lu);
         return NULL;
     }
@@ -229,6 +234,7 @@ void lu_free(LUFactorization *lu) {
     SAFE_FREE(lu->hs_val);
     SAFE_FREE(lu->hs_stack);
     SAFE_FREE(lu->perm_work);
+    SAFE_FREE(lu->dense_work);
 
     free(lu);
 }
@@ -266,9 +272,12 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
 
     int m = lu->m;
 
-    /* Convert sparse matrix to dense for factorization */
-    double *A = (double*)calloc(m * m, sizeof(double));
+    /* Use pre-allocated dense workspace (m×m matrix) */
+    double *A = lu->dense_work;
     if (!A) return -1;
+
+    /* Zero the workspace */
+    memset(A, 0, (size_t)m * (size_t)m * sizeof(double));
 
     /* Fill dense matrix from sparse (column-major order) */
     for (int j = 0; j < m; j++) {
@@ -298,7 +307,6 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
 
         /* Check for singular matrix */
         if (max_val < RALPH_PIVOT_TOL) {
-            free(A);
             return -1;  /* Singular or near-singular */
         }
 
@@ -364,7 +372,6 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
 
     if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
         !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
-        free(A);
         return -1;
     }
 
@@ -455,7 +462,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     }
     lu->growth_factor = 1.0;
 
-    free(A);
+    /* Note: A is pre-allocated lu->dense_work, no free needed */
     return 0;
 }
 
