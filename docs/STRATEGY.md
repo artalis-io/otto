@@ -1248,5 +1248,133 @@ Girteka isn't just a customer—they're a **design partner** for enterprise feat
 
 ---
 
-*Document version: 1.4*
+## 15. Commodity vs Differentiation: Where Value Lives
+
+### 15.1 The Algorithm Fallacy
+
+A common misconception: "If the algorithms are textbook, anyone can build this."
+
+**What's actually commoditized:**
+
+| Layer | Commoditized? | Examples |
+|-------|---------------|----------|
+| Algorithms | Yes | Simplex, A*, CP-SAT, Branch & Bound |
+| Solver implementations | Partially | OR-Tools, Gurobi, CPLEX exist |
+| Routing/mapping APIs | Yes | PTV, HERE, Google, Mapbox |
+
+**What's NOT commoditized:**
+
+| Layer | Why It's Defensible |
+|-------|---------------------|
+| Solver + Domain + Judgment | Knowing WHICH constraints matter for FTL |
+| Domain engines (HoSE, Tempo, etc.) | FTL-specific rules encoded in code |
+| Integration knowledge (Nexus) | TMS/ELD API quirks, edge cases, maintenance |
+| UX accessibility (Iris) | Making optimization usable by dispatchers |
+| Deployment flexibility (Forge) | Same code: laptop → K8s → managed |
+| Implementation choices | Zero-dep, WASM-first, <100ms latency |
+
+### 15.2 The Judgment Layer
+
+**Algorithms are textbook. Judgment is not.**
+
+Anyone can implement Simplex. But knowing:
+- Which HoS edge cases actually occur in EU operations
+- When to relax a constraint vs when it's sacred
+- What "optimal" solutions dispatchers will reject
+- Which TMS API returns timestamps in wrong timezone
+- How to handle a driver who always takes breaks at specific truck stops
+
+This is **years of domain experience encoded in code**. It's why Girteka can't just "vibecode" their way to OTTO—they'd spend 3 years rediscovering what you already know.
+
+### 15.3 The Value Stack
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DIFFERENTIATION LAYER                        │
+│         (This is where OTTO's value lives)                      │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                     Judgment Layer                          ││
+│  │  "Which constraints matter, what dispatchers actually need" ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                                                                 │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌──────────────┐ │
+│  │   Iris    │  │   Nexus   │  │   Forge   │  │   Domain     │ │
+│  │    UX     │  │Integration│  │  Deploy   │  │   Engines    │ │
+│  │ "Speak to │  │ "Connect  │  │ "Same code│  │HoSE/Tempo/   │ │
+│  │  OTTO"    │  │  to TMS"  │  │ everywhere│  │Arbor/Sigma   │ │
+│  └───────────┘  └───────────┘  └───────────┘  └──────────────┘ │
+├─────────────────────────────────────────────────────────────────┤
+│                 IMPLEMENTATION LAYER                            │
+│         (Defensible through zero-dep/WASM story)                │
+│                                                                 │
+│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌──────────────┐ │
+│  │   Ralph   │  │   Velo    │  │   Carta   │  │    Locus     │ │
+│  │  LP/MIP   │  │  Routing  │  │   Tiles   │  │   Geocode    │ │
+│  │  Solver   │  │  Engine   │  │ Generator │  │    Engine    │ │
+│  └───────────┘  └───────────┘  └───────────┘  └──────────────┘ │
+│                                                                 │
+│  Swappable for: Gurobi, PTV, Mapbox, Google if customer wants   │
+├─────────────────────────────────────────────────────────────────┤
+│                    ALGORITHM LAYER                              │
+│         (Commoditized - textbook knowledge)                     │
+│                                                                 │
+│  Simplex, LU factorization, A*, Dijkstra, Branch & Bound,      │
+│  CP-SAT, Web Mercator projection, Protobuf encoding...          │
+│                                                                 │
+│  Anyone can implement these. The algorithms are not the moat.   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 15.4 Competitor Analysis Through This Lens
+
+| Competitor | Algorithm Layer | Implementation | Domain/Judgment | UX/Integration/Deploy |
+|------------|-----------------|----------------|-----------------|----------------------|
+| **OR-Tools** | ✓ Excellent | ✓ Good | ✗ Generic | ✗ None |
+| **Gurobi/CPLEX** | ✓ Excellent | ✓ Excellent | ✗ Generic | ✗ None |
+| **PTV** | ✓ Good | ✓ Good | △ Some logistics | ✗ Legacy |
+| **Samsara** | ✗ None | ✗ None | △ Telematics only | △ Has data, no planning |
+| **In-house** | △ Could build | △ Could build | ✗ 3 years to learn | ✗ Would need to build |
+| **OTTO** | ✓ Good enough | ✓ Zero-dep/WASM | ✓ FTL-specific | ✓ Iris/Nexus/Forge |
+
+**Key insight:** OR-Tools has better algorithms. Gurobi has better solver performance. But neither has FTL domain knowledge, dispatcher UX, TMS integration, or deployment flexibility.
+
+### 15.5 The "Good Enough" Principle
+
+OTTO's solvers don't need to beat OR-Tools on benchmarks. They need to:
+
+| Requirement | Why It's Sufficient |
+|-------------|---------------------|
+| Solve FTL-scale problems in <100ms | Domain problems are well-sized |
+| Handle the constraints that matter | Domain judgment selects constraints |
+| Run in WASM/zero-dep | Deployment story beats raw performance |
+| Be auditable | Enterprise clients can read C |
+
+**The trade:** 90% of OR-Tools performance + zero-dep + WASM + domain engines > 100% OR-Tools performance with no domain layer.
+
+### 15.6 Implication for Roadmap
+
+**Build deep, not wide:**
+
+| Priority | Component | Rationale |
+|----------|-----------|-----------|
+| 1 | Domain engines (HoSE, Tempo, etc.) | Core FTL differentiation |
+| 2 | Nexus connectors | Integration moat |
+| 3 | Iris | UX accessibility |
+| 4 | Forge/Apex | Deployment/scaling |
+| 5 | Better algorithms | Only if domain needs it |
+
+Don't optimize Ralph to beat Gurobi. Optimize HoSE to handle every EC 561 edge case.
+
+### 15.7 Messaging Refinement
+
+**Old (algorithm-focused):**
+> "OTTO has LP solvers, routing engines, and map tile generators."
+
+**New (value-focused):**
+> "OTTO makes fleet optimization accessible (Iris), integrated with your systems (Nexus), and deployable anywhere (Forge)—with years of FTL domain judgment built in. The algorithms are table stakes. The domain knowledge is the moat."
+
+---
+
+*Document version: 1.5*
 *Last updated: February 2026*
