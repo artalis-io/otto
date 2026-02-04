@@ -176,6 +176,12 @@ SparseMatrix* triplets_to_csc(SparseTriplets *trips) {
     if (!keys) return NULL;
 
     for (int i = 0; i < trips->nnz; i++) {
+        /* Validate indices to prevent out-of-bounds access in col_counts */
+        if (trips->row[i] < 0 || trips->row[i] >= trips->nrows ||
+            trips->col[i] < 0 || trips->col[i] >= trips->ncols) {
+            free(keys);
+            return NULL;  /* Invalid index */
+        }
         keys[i].col = trips->col[i];
         keys[i].row = trips->row[i];
         keys[i].orig_idx = i;

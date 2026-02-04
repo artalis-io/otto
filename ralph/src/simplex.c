@@ -295,6 +295,10 @@ SimplexTableau* tableau_create(LPModel *model) {
 
     tab->se_weights = (double*)calloc(tab->n, sizeof(double));
 
+    /* Pre-allocated sparse workspace for reduced cost computation */
+    tab->cb_sparse_idx = (int*)malloc(tab->m * sizeof(int));
+    tab->cb_sparse_val = (double*)malloc(tab->m * sizeof(double));
+
     /* Auxiliary variable mapping for cut generation */
     tab->aux_row = (int*)malloc(num_aux_vars * sizeof(int));
     tab->aux_coef = (double*)malloc(num_aux_vars * sizeof(double));
@@ -309,6 +313,7 @@ SimplexTableau* tableau_create(LPModel *model) {
         !tab->x || !tab->y || !tab->rc ||
         !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs ||
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
+        !tab->cb_sparse_idx || !tab->cb_sparse_val ||
         !tab->aux_row || !tab->aux_coef || !tab->partial_candidates) {
         free(norm_sense);
         free(norm_sign);
@@ -409,7 +414,7 @@ SimplexTableau* tableau_create(LPModel *model) {
 
             /* Artificial variable */
             triplets_add(trips, i, artificial_idx, 1.0);
-            tab->c_ext[artificial_idx] = 1e8;  /* Big-M cost */
+            tab->c_ext[artificial_idx] = RALPH_BIG_M;  /* Big-M cost */
             tab->lb_ext[artificial_idx] = 0.0;
             tab->ub_ext[artificial_idx] = RALPH_INFINITY;
 
@@ -432,7 +437,7 @@ SimplexTableau* tableau_create(LPModel *model) {
         } else {
             /* = : add artificial with coef +1 (basic) */
             triplets_add(trips, i, aux_idx, 1.0);
-            tab->c_ext[aux_idx] = 1e8;  /* Big-M cost */
+            tab->c_ext[aux_idx] = RALPH_BIG_M;  /* Big-M cost */
             tab->lb_ext[aux_idx] = 0.0;
             tab->ub_ext[aux_idx] = RALPH_INFINITY;
             basic_var_for_row[i] = aux_idx;
@@ -577,6 +582,8 @@ void tableau_free(SimplexTableau *tab) {
     SAFE_FREE(tab->pivot_row);
     SAFE_FREE(tab->tau_work);
     SAFE_FREE(tab->se_weights);
+    SAFE_FREE(tab->cb_sparse_idx);
+    SAFE_FREE(tab->cb_sparse_val);
     SAFE_FREE(tab->perturb_backup);
     SAFE_FREE(tab->primal_saved_lb);
     SAFE_FREE(tab->primal_saved_ub);
@@ -711,31 +718,17 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
 
     /* If c_B is sparse (less than 10% non-zeros), use sparse BTRAN */
     if (nnz_cb < tab->m / 10) {
-        int *cb_idx = (int*)malloc(nnz_cb * sizeof(int));
-        double *cb_val = (double*)malloc(nnz_cb * sizeof(double));
-        if (cb_idx && cb_val) {
-            int p = 0;
-            for (int k = 0; k < tab->m; k++) {
-                double c = tab->c_ext[tab->basis[k]];
-                if (fabs(c) > RALPH_ZERO_TOL) {
-                    cb_idx[p] = k;
-                    cb_val[p] = c;
-                    p++;
-                }
+        /* Use pre-allocated workspace (size m) for sparse indices/values */
+        int p = 0;
+        for (int k = 0; k < tab->m; k++) {
+            double c = tab->c_ext[tab->basis[k]];
+            if (fabs(c) > RALPH_ZERO_TOL) {
+                tab->cb_sparse_idx[p] = k;
+                tab->cb_sparse_val[p] = c;
+                p++;
             }
-            lu_solve_transpose_sparse(tab->lu, nnz_cb, cb_idx, cb_val, tab->y);
-            free(cb_idx);
-            free(cb_val);
-        } else {
-            free(cb_idx);
-            free(cb_val);
-            /* Fallback to dense */
-            vec_set_zero(tab->work1, tab->m);
-            for (int k = 0; k < tab->m; k++) {
-                tab->work1[k] = tab->c_ext[tab->basis[k]];
-            }
-            lu_solve_transpose(tab->lu, tab->work1, tab->y);
         }
+        lu_solve_transpose_sparse(tab->lu, nnz_cb, tab->cb_sparse_idx, tab->cb_sparse_val, tab->y);
     } else {
         /* Dense BTRAN */
         vec_set_zero(tab->work1, tab->m);
@@ -783,31 +776,17 @@ int tableau_compute_duals(SimplexTableau *tab) {
 
     /* If c_B is sparse (less than 10% non-zeros), use sparse BTRAN */
     if (nnz_cb < tab->m / 10) {
-        int *cb_idx = (int*)malloc(nnz_cb * sizeof(int));
-        double *cb_val = (double*)malloc(nnz_cb * sizeof(double));
-        if (cb_idx && cb_val) {
-            int p = 0;
-            for (int k = 0; k < tab->m; k++) {
-                double c = tab->c_ext[tab->basis[k]];
-                if (fabs(c) > RALPH_ZERO_TOL) {
-                    cb_idx[p] = k;
-                    cb_val[p] = c;
-                    p++;
-                }
+        /* Use pre-allocated workspace (size m) for sparse indices/values */
+        int p = 0;
+        for (int k = 0; k < tab->m; k++) {
+            double c = tab->c_ext[tab->basis[k]];
+            if (fabs(c) > RALPH_ZERO_TOL) {
+                tab->cb_sparse_idx[p] = k;
+                tab->cb_sparse_val[p] = c;
+                p++;
             }
-            lu_solve_transpose_sparse(tab->lu, nnz_cb, cb_idx, cb_val, tab->y);
-            free(cb_idx);
-            free(cb_val);
-        } else {
-            free(cb_idx);
-            free(cb_val);
-            /* Fallback to dense */
-            vec_set_zero(tab->work1, tab->m);
-            for (int k = 0; k < tab->m; k++) {
-                tab->work1[k] = tab->c_ext[tab->basis[k]];
-            }
-            lu_solve_transpose(tab->lu, tab->work1, tab->y);
         }
+        lu_solve_transpose_sparse(tab->lu, nnz_cb, tab->cb_sparse_idx, tab->cb_sparse_val, tab->y);
     } else {
         /* Dense BTRAN */
         vec_set_zero(tab->work1, tab->m);

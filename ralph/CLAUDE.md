@@ -327,4 +327,73 @@ make bench-netflow    # Network Flow benchmarks (size, warm start, bottleneck)
 
 - Models freed with `ralph_free()`
 - Internal allocations use standard malloc/free
-- No memory pools or custom allocators
+- Use `SAFE_FREE(p)` macro to NULL pointer after freeing
+- Pre-allocate workspaces in hot paths (avoid malloc in loops)
+
+## Code Quality Documentation
+
+See `docs/CODE_QUALITY.md` for:
+- Known issues and their status
+- Security considerations
+- Performance optimization opportunities
+- Arena allocator recommendation
+
+## Critical Code Sections
+
+### LU Factorization (`src/lu.c`)
+Most sensitive - bugs cause wrong solutions:
+- `lu_factorize()` - Initial factorization
+- `lu_solve()` - Solve Bx = b
+- `lu_update()` - Basis change update
+
+### Simplex Tableau (`src/simplex.c`)
+- `tableau_create()` - Extended problem setup with slacks/artificials
+- `simplex_pivot()` - Basis change operation
+- `pricing_*()` - Variable selection strategies
+
+### Sparse Matrix (`src/sparse.c`)
+- `triplets_to_csc()` - Validate indices before conversion
+- Column operations must check bounds
+
+## Coding Practices
+
+### Safe Memory Patterns
+```c
+/* Always use SAFE_FREE to prevent double-free */
+SAFE_FREE(p);  /* Sets p = NULL after free */
+
+/* Check realloc return before assignment */
+double *new_p = realloc(p, size);
+if (!new_p) return -1;
+p = new_p;
+
+/* Validate array indices before access */
+if (idx < 0 || idx >= count) return ERROR;
+```
+
+### Integer Overflow Prevention
+```c
+/* Use size_t for allocation sizes */
+size_t pool_size = (size_t)a * (size_t)b;
+if (pool_size > INT_MAX) pool_size = INT_MAX;
+
+/* Or use calloc which checks internally */
+void *p = calloc(count, element_size);
+```
+
+### Bounds Validation
+```c
+/* Always validate external indices */
+if (row < 0 || row >= nrows || col < 0 || col >= ncols) {
+    return NULL;  /* or appropriate error */
+}
+```
+
+### Constants Over Magic Numbers
+```c
+/* Good - use defined constants */
+tab->c_ext[j] = RALPH_BIG_M;
+
+/* Bad - magic numbers */
+tab->c_ext[j] = 1e8;
+```
