@@ -107,6 +107,14 @@ See `docs/STRATEGY.md` for business strategy and technical positioning.
 - `shared/include/sh_geo.h` - Coordinate types and functions
 - `shared/src/sh_geo.c` - Haversine, Web Mercator
 
+### Working on rate limiting / capacity planning (shared):
+- `shared/include/sh_ratelimit.h` - Token bucket rate limiter (IPv4/IPv6)
+- `shared/include/sh_workqueue.h` - Bounded thread-safe work queue
+- `shared/include/sh_capacity.h` - Queuing theory capacity planning
+- `shared/src/sh_ratelimit.c` - Rate limiter implementation
+- `shared/src/sh_workqueue.c` - Work queue implementation
+- `shared/src/sh_capacity.c` - M/M/c queue calculations
+
 ### Working on PBF/Protobuf parsing (shared):
 - `shared/include/sh_protobuf.h` - Protobuf read/write primitives
 - `shared/include/sh_inflate.h` - Zlib compress/decompress
@@ -171,10 +179,10 @@ make carta-ui         # Build Carta Tile Viewer
 make carta-ui-dev     # Run Carta UI dev server
 
 # Testing
-make test             # All library tests (~190 tests)
+make test             # All library tests (~280 tests)
 make test-ralph       # 65 tests
 make test-fuelwise    # 32 tests
-make test-shared      # 23 tests
+make test-shared      # 86 tests
 make test-velo        # 39 tests
 make test-carta       # 33 tests
 make test-locus       # 52 tests
@@ -362,10 +370,10 @@ Geometry encoding:
 
 ```bash
 make test
-# Expected: ~279 tests pass across all modules
+# Expected: ~340 tests pass across all modules
 # - ralph: 73 tests
 # - fuelwise: 33 tests
-# - shared: 41 tests
+# - shared: 86 tests
 # - velo: 47 tests
 # - carta: 33 tests
 # - locus: 52 tests

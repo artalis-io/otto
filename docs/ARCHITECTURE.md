@@ -97,8 +97,8 @@ fuelwise-platform/
 │
 ├── shared/             # Shared utilities (libshared.a)
 │   ├── include/        #   Common headers
-│   ├── src/            #   Geo utilities, protobuf helpers
-│   └── tests/          #   23 tests
+│   ├── src/            #   Geo utilities, protobuf, rate limiting, capacity
+│   └── tests/          #   86 tests
 │
 ├── forge/              # Async Job Queue [PLANNED]
 │   ├── include/        #   Public headers
@@ -249,10 +249,13 @@ The GIS trifecta (**Velo**, **Carta**, **Locus**) provides complete geographic f
 **Library:** `libshared.a`
 **Dependencies:** None
 
-Common code used by velo and carta:
+Common code used by velo, carta, and API servers:
 - Haversine distance calculation
-- Coordinate projections
+- Coordinate projections (Web Mercator)
 - Protobuf varint encoding/decoding
+- Rate limiting (token bucket, IPv4/IPv6)
+- Work queue (bounded, thread-safe)
+- Capacity planning (queuing theory)
 
 ### Vendor - Third-party Code
 **Location:** `vendor/`
@@ -408,7 +411,7 @@ Search Request → API/WASM → Locus
 ```makefile
 make all              # Build all libraries (ralph, fuelwise, velo, carta, shared)
 make lib              # Build libraries only (no tests)
-make test             # Run all tests (~192 tests)
+make test             # Run all tests (~280 tests)
 make clean            # Clean all build artifacts
 ```
 
@@ -452,7 +455,7 @@ make test-fuelwise    # 32 tests
 make test-velo        # 39 tests
 make test-carta       # 33 tests
 make test-locus       # 52 tests
-make test-shared      # 23 tests
+make test-shared      # 86 tests
 make test-api         # All API endpoint tests (requires OSM data)
 make test-fuelwise-api# FuelWise API tests
 make test-velo-api    # Velo API tests
@@ -471,6 +474,123 @@ make test-locus-api   # Locus API tests
    - EV: Range constraints, charging station routing, battery state-of-charge modeling
    - AV: Different cost structures, modified/eliminated HoS constraints, mixed fleet optimization
    - Vehicle type is a first-class parameter in HoSE, Velo, and FuelWise
+7. **Defense in Depth**: Production-ready with multiple protective layers
+
+## Production Hardening
+
+API servers (Carta, Velo, Locus) implement defense-in-depth with three protective layers:
+
+### Rate Limiting (sh_ratelimit.h)
+
+Token bucket rate limiter at the IP level:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    HTTP Request Flow                        │
+├─────────────────────────────────────────────────────────────┤
+│  Client Request                                             │
+│        │                                                    │
+│        ▼                                                    │
+│  ┌───────────────┐                                         │
+│  │ Rate Limiter  │ ←─ Per-IP token bucket                  │
+│  │ (sh_ratelimit)│                                         │
+│  └───────┬───────┘                                         │
+│          │ Allowed?                                        │
+│          ├── No  → HTTP 429 Too Many Requests              │
+│          │                                                  │
+│          ▼ Yes                                             │
+│  ┌───────────────┐                                         │
+│  │  Work Queue   │ ←─ Bounded buffer                       │
+│  │(sh_workqueue) │                                         │
+│  └───────┬───────┘                                         │
+│          │ Space?                                          │
+│          ├── No  → HTTP 503 Service Unavailable            │
+│          │                                                  │
+│          ▼ Yes                                             │
+│  ┌───────────────┐                                         │
+│  │Render Workers │ ←─ Thread pool                          │
+│  │  (N threads)  │                                         │
+│  └───────┬───────┘                                         │
+│          │ Timeout?                                        │
+│          ├── Yes → HTTP 504 Gateway Timeout                │
+│          │                                                  │
+│          ▼ No                                              │
+│     HTTP 200 + Response                                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Configuration:**
+- `rate_limit_rps`: Requests per second per IP (token refill rate)
+- `rate_limit_burst`: Maximum burst capacity (initial tokens)
+- Supports IPv4 and IPv6 addresses
+- Thread-safe with fine-grained locking
+
+### Work Queue (sh_workqueue.h)
+
+Bounded producer-consumer queue for backpressure:
+
+- **Queue depth**: Maximum pending requests
+- **Timeout**: Request expiration (stale requests rejected)
+- Decouples HTTP handlers from CPU-intensive rendering
+- Provides load shedding under pressure
+
+**Stats exposed via `/api/v1/stats`:**
+```json
+{
+  "work_queue": {
+    "enabled": true,
+    "depth": 42,
+    "capacity": 100,
+    "pushed": 12345,
+    "popped": 12300,
+    "dropped": 5,
+    "expired": 2
+  }
+}
+```
+
+### Capacity Planning (sh_capacity.h)
+
+Queuing theory utilities for optimal configuration:
+
+```c
+ShCapacityParams params;
+sh_capacity_calculate(&params, &(ShCapacityInput){
+    .avg_response_ms = 75,        // Measured average response time
+    .num_workers = 8,             // Number of worker threads
+    .target_utilization = 0.7,    // 70% utilization target
+    .client_timeout_ms = 10000,   // Client gives up after 10s
+    .burst_tiles = 25             // Tiles in initial map view
+});
+// params now contains recommended rate_limit_rps, burst, queue_depth, timeout
+```
+
+**Key formulas (M/M/c queue model):**
+- Service rate: μ = 1000 / avg_response_ms (requests/sec/worker)
+- Max throughput: c × μ × target_utilization
+- Queue depth: sized to drain within client timeout
+- Burst capacity: accommodates initial map view load
+
+**Configuration validation:**
+```c
+int warnings = sh_capacity_validate(
+    current_queue_depth, current_timeout, current_rate_limit,
+    measured_response_ms, num_workers,
+    warning_buf, sizeof(warning_buf)
+);
+// Returns 0 if configuration is sane, >0 with warning messages
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CARTA_RATE_LIMIT_RPS` | 10.0 | Token refill rate per IP |
+| `CARTA_RATE_LIMIT_BURST` | 100.0 | Initial/max tokens per IP |
+| `CARTA_WORK_QUEUE_ENABLED` | 1 | Enable work queue (0 = sync) |
+| `CARTA_WORK_QUEUE_DEPTH` | 100 | Max pending requests |
+| `CARTA_WORK_QUEUE_TIMEOUT` | 10.0 | Request timeout (seconds) |
+| `CARTA_RENDER_WORKERS` | auto | Render thread pool size |
 
 ## Performance Targets
 
