@@ -253,14 +253,33 @@ int ct_tiles_for_bbox(CTBBox bbox, int zoom, CTTileCoord **tiles)
     ct_latlon_to_tile(bbox.max_lat, bbox.min_lon, zoom, &min_x, &min_y);
     ct_latlon_to_tile(bbox.min_lat, bbox.max_lon, zoom, &max_x, &max_y);
 
-    int num_x = max_x - min_x + 1;
-    int num_y = max_y - min_y + 1;
-    int total = num_x * num_y;
+    /* Use size_t to avoid integer overflow on large bboxes at high zoom */
+    size_t num_x = (size_t)(max_x - min_x + 1);
+    size_t num_y = (size_t)(max_y - min_y + 1);
+
+    /* Check for multiplication overflow */
+    if (num_x > 0 && num_y > SIZE_MAX / num_x) {
+        *tiles = NULL;
+        return 0;  /* Would overflow */
+    }
+    size_t total = num_x * num_y;
+
+    /* Check for allocation size overflow */
+    if (total > SIZE_MAX / sizeof(CTTileCoord)) {
+        *tiles = NULL;
+        return 0;  /* Would overflow */
+    }
+
+    /* Sanity limit: 10 million tiles max to prevent accidental DoS */
+    if (total > 10000000) {
+        *tiles = NULL;
+        return 0;
+    }
 
     *tiles = malloc(total * sizeof(CTTileCoord));
     if (!*tiles) return 0;
 
-    int idx = 0;
+    size_t idx = 0;
     for (int y = min_y; y <= max_y; y++) {
         for (int x = min_x; x <= max_x; x++) {
             (*tiles)[idx].z = zoom;
@@ -270,7 +289,7 @@ int ct_tiles_for_bbox(CTBBox bbox, int zoom, CTTileCoord **tiles)
         }
     }
 
-    return total;
+    return (int)total;
 }
 
 CTTileCoord ct_tile_parent(CTTileCoord tile)

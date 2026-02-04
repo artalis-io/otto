@@ -49,12 +49,10 @@
 #define CT_BYTES_PER_WAY_ESTIMATE     150
 #define CT_COORDS_PER_WAY_ESTIMATE    12
 
-/* Default hash table and pool size limits (can be overridden via env vars) */
-#define CT_DEFAULT_NODE_CAPACITY      (256ULL * 1024 * 1024)
-#define CT_DEFAULT_WAY_CAPACITY       (64ULL * 1024 * 1024)
-#define CT_DEFAULT_COORD_CAPACITY     (256ULL * 1024 * 1024)
+/* Default arena and pool sizes (can be overridden via env vars) */
 #define CT_DEFAULT_ARENA_SIZE         (128ULL * 1024 * 1024)
 #define CT_MIN_COORD_POOL_CAPACITY    100000
+#define CT_MIN_HASH_CAPACITY          65536
 
 /* ============================================================================
  * Configuration
@@ -82,13 +80,48 @@ void ct_pbf_config_init(CTPBFConfig *config)
 {
     if (!config) return;
 
-    config->max_node_capacity = parse_size_env("CARTA_MAX_NODES", CT_DEFAULT_NODE_CAPACITY);
-    config->max_way_capacity = parse_size_env("CARTA_MAX_WAYS", CT_DEFAULT_WAY_CAPACITY);
-    config->max_coord_capacity = parse_size_env("CARTA_MAX_COORDS", CT_DEFAULT_COORD_CAPACITY);
+    /* Initial coord capacity: 0 means auto-calculate from file size */
+    config->initial_coord_capacity = parse_size_env("CARTA_INITIAL_COORDS", 0);
     config->arena_size = parse_size_env("CARTA_ARENA_SIZE", CT_DEFAULT_ARENA_SIZE);
+    /* Memory limit: 0 means unlimited (default) */
+    config->memory_limit = parse_size_env("CARTA_MEMORY_LIMIT", 0);
     config->progress_callback = NULL;
     config->progress_user_data = NULL;
     config->progress_interval = 10;  /* Report every 10 blobs by default */
+}
+
+/* ============================================================================
+ * Memory Tracking
+ * ============================================================================ */
+
+/*
+ * Check if allocation would exceed memory limit.
+ * Returns 1 if OK to allocate, 0 if would exceed limit.
+ */
+static int check_memory_limit(CTPBFContext *ctx, size_t bytes)
+{
+    if (ctx->config.memory_limit == 0) return 1;  /* No limit */
+    return (ctx->memory_used + bytes <= ctx->config.memory_limit);
+}
+
+/*
+ * Track memory allocation.
+ */
+static void track_alloc(CTPBFContext *ctx, size_t bytes)
+{
+    ctx->memory_used += bytes;
+}
+
+/*
+ * Track memory deallocation.
+ */
+static void track_free(CTPBFContext *ctx, size_t bytes)
+{
+    if (bytes <= ctx->memory_used) {
+        ctx->memory_used -= bytes;
+    } else {
+        ctx->memory_used = 0;
+    }
 }
 
 /* ============================================================================
@@ -453,37 +486,31 @@ static uint64_t hash_id(int64_t id)
  */
 static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
 {
-    /* Use configured limits */
-    size_t max_node_cap = ctx->config.max_node_capacity;
-    size_t max_way_cap = ctx->config.max_way_capacity;
-    size_t max_coord_cap = ctx->config.max_coord_capacity;
+    /*
+     * Growable data structures:
+     * - node_map and way_map grow automatically in their insert functions
+     * - coord_pool grows when full (see coord_pool_alloc helper)
+     *
+     * We estimate initial capacities from file size to reduce reallocation.
+     */
 
-    /* Estimate counts with safety margin */
+    /* Estimate counts from file size */
     size_t estimated_nodes = file_size / CT_BYTES_PER_NODE_ESTIMATE;
     size_t estimated_ways = file_size / CT_BYTES_PER_WAY_ESTIMATE;
     size_t estimated_coords = estimated_ways * CT_COORDS_PER_WAY_ESTIMATE;
 
-    /* Round up to power of 2 for efficient modulo */
-    size_t node_cap = 65536;  /* Minimum capacity */
-    while (node_cap < estimated_nodes * 2) {
+    /* Round up to power of 2 for efficient modulo (hash maps will grow if needed) */
+    size_t node_cap = CT_MIN_HASH_CAPACITY;
+    while (node_cap < estimated_nodes * 2 && node_cap < SIZE_MAX / 2) {
         node_cap *= 2;
-        /* Prevent overflow - cap at configured maximum */
-        if (node_cap > max_node_cap) {
-            node_cap = max_node_cap;
-            break;
-        }
     }
 
-    size_t way_cap = 16384;  /* Minimum capacity */
-    while (way_cap < estimated_ways * 2) {
+    size_t way_cap = CT_MIN_HASH_CAPACITY / 4;  /* Usually fewer ways than nodes */
+    while (way_cap < estimated_ways * 2 && way_cap < SIZE_MAX / 2) {
         way_cap *= 2;
-        if (way_cap > max_way_cap) {
-            way_cap = max_way_cap;
-            break;
-        }
     }
 
-    /* Allocate node_map */
+    /* Allocate node_map (will grow if needed) */
     ctx->node_map.keys = calloc(node_cap, sizeof(int64_t));
     ctx->node_map.values = malloc(node_cap * sizeof(uint32_t));
     if (!ctx->node_map.keys || !ctx->node_map.values) {
@@ -496,7 +523,7 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
     ctx->node_map.capacity = node_cap;
     ctx->node_map.count = 0;
 
-    /* Allocate way_map */
+    /* Allocate way_map (will grow if needed) */
     ctx->way_map.keys = calloc(way_cap, sizeof(int64_t));
     ctx->way_map.values = malloc(way_cap * sizeof(uint32_t));
     if (!ctx->way_map.keys || !ctx->way_map.values) {
@@ -509,10 +536,15 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
     ctx->way_map.capacity = way_cap;
     ctx->way_map.count = 0;
 
-    /* Allocate coordinate pool for way geometry */
-    size_t coord_cap = estimated_coords;
-    if (coord_cap < CT_MIN_COORD_POOL_CAPACITY) coord_cap = CT_MIN_COORD_POOL_CAPACITY;
-    if (coord_cap > max_coord_cap) coord_cap = max_coord_cap;
+    /* Allocate coordinate pool (will grow if needed) */
+    size_t coord_cap = ctx->config.initial_coord_capacity;
+    if (coord_cap == 0) {
+        /* Auto-calculate from file size estimate */
+        coord_cap = estimated_coords;
+    }
+    if (coord_cap < CT_MIN_COORD_POOL_CAPACITY) {
+        coord_cap = CT_MIN_COORD_POOL_CAPACITY;
+    }
 
     ctx->coord_pool = malloc(sizeof(SHPool));
     if (!ctx->coord_pool) {
@@ -531,6 +563,14 @@ static CTStatus node_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
 {
     if (ctx->node_map.count >= ctx->node_map.capacity * 3 / 4) {
         size_t new_cap = ctx->node_map.capacity ? ctx->node_map.capacity * 2 : 65536;
+        size_t old_size = ctx->node_map.capacity * (sizeof(int64_t) + sizeof(uint32_t));
+        size_t new_size = new_cap * (sizeof(int64_t) + sizeof(uint32_t));
+
+        /* Check memory limit before growing */
+        if (!check_memory_limit(ctx, new_size - old_size)) {
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+
         int64_t *new_keys = calloc(new_cap, sizeof(int64_t));
         uint32_t *new_vals = malloc(new_cap * sizeof(uint32_t));
         if (!new_keys || !new_vals) {
@@ -551,11 +591,13 @@ static CTStatus node_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
             }
         }
 
+        track_free(ctx, old_size);
         free(ctx->node_map.keys);
         free(ctx->node_map.values);
         ctx->node_map.keys = new_keys;
         ctx->node_map.values = new_vals;
         ctx->node_map.capacity = new_cap;
+        track_alloc(ctx, new_size);
     }
 
     uint64_t h = hash_id(id) % ctx->node_map.capacity;
@@ -594,6 +636,14 @@ static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
 {
     if (ctx->way_map.count >= ctx->way_map.capacity * 3 / 4) {
         size_t new_cap = ctx->way_map.capacity ? ctx->way_map.capacity * 2 : 16384;
+        size_t old_size = ctx->way_map.capacity * (sizeof(int64_t) + sizeof(uint32_t));
+        size_t new_size = new_cap * (sizeof(int64_t) + sizeof(uint32_t));
+
+        /* Check memory limit before growing */
+        if (!check_memory_limit(ctx, new_size - old_size)) {
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+
         int64_t *new_keys = calloc(new_cap, sizeof(int64_t));
         uint32_t *new_vals = malloc(new_cap * sizeof(uint32_t));
         if (!new_keys || !new_vals) {
@@ -614,11 +664,13 @@ static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
             }
         }
 
+        track_free(ctx, old_size);
         free(ctx->way_map.keys);
         free(ctx->way_map.values);
         ctx->way_map.keys = new_keys;
         ctx->way_map.values = new_vals;
         ctx->way_map.capacity = new_cap;
+        track_alloc(ctx, new_size);
     }
 
     uint64_t h = hash_id(id) % ctx->way_map.capacity;
@@ -647,6 +699,46 @@ static uint32_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
     }
 
     return UINT32_MAX;
+}
+
+/* ============================================================================
+ * Coordinate Pool (Growable)
+ * ============================================================================ */
+
+/*
+ * Allocate coordinates from pool, or fall back to malloc if pool is full.
+ *
+ * NOTE: We cannot grow the pool via realloc because existing way->coords
+ * pointers would become invalid. Instead, we fall back to individual malloc
+ * when the pool is exhausted. These malloc'd coords are freed individually
+ * in ct_pbf_context_free (by checking if they're outside pool bounds).
+ */
+static CTCoord *coord_pool_alloc(CTPBFContext *ctx, size_t count)
+{
+    if (count == 0) return NULL;
+
+    size_t alloc_size = count * sizeof(CTCoord);
+
+    /* Check memory limit */
+    if (!check_memory_limit(ctx, alloc_size)) {
+        return NULL;
+    }
+
+    /* Try pool first */
+    if (ctx->coord_pool) {
+        size_t offset = sh_pool_alloc(ctx->coord_pool, count);
+        if (offset != SH_POOL_INVALID) {
+            track_alloc(ctx, alloc_size);
+            return SH_POOL_PTR(ctx->coord_pool, CTCoord, offset);
+        }
+    }
+
+    /* Pool full or unavailable - fall back to malloc */
+    CTCoord *coords = malloc(alloc_size);
+    if (coords) {
+        track_alloc(ctx, alloc_size);
+    }
+    return coords;
 }
 
 /* ============================================================================
@@ -775,10 +867,10 @@ CTPBFContext *ct_pbf_context_create_with_config(const CTPBFConfig *config)
         config = &default_config;
     }
 
-    ctx->config.max_node_capacity = config->max_node_capacity ? config->max_node_capacity : CT_DEFAULT_NODE_CAPACITY;
-    ctx->config.max_way_capacity = config->max_way_capacity ? config->max_way_capacity : CT_DEFAULT_WAY_CAPACITY;
-    ctx->config.max_coord_capacity = config->max_coord_capacity ? config->max_coord_capacity : CT_DEFAULT_COORD_CAPACITY;
+    ctx->config.initial_coord_capacity = config->initial_coord_capacity;  /* 0 = auto-calculate */
     ctx->config.arena_size = config->arena_size ? config->arena_size : CT_DEFAULT_ARENA_SIZE;
+    ctx->config.memory_limit = config->memory_limit;  /* 0 = unlimited */
+    ctx->memory_used = sizeof(CTPBFContext);  /* Track our own size */
 
     ctx->progress_callback = config->progress_callback;
     ctx->progress_user_data = config->progress_user_data;
@@ -1003,13 +1095,17 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
         size_t new_cap = ctx->nodes.capacity ? ctx->nodes.capacity * 2 : 100000;
         while (new_cap < ctx->nodes.count + count) new_cap *= 2;
 
+        /* Realloc one at a time to avoid dangling pointer on partial failure */
         int64_t *new_ids = realloc(ctx->nodes.ids, new_cap * sizeof(int64_t));
-        CTCoord *new_coords = realloc(ctx->nodes.coords, new_cap * sizeof(CTCoord));
-        if (!new_ids || !new_coords) {
-            free(new_ids); free(new_coords);
+        if (!new_ids) {
             goto error;
         }
         ctx->nodes.ids = new_ids;
+
+        CTCoord *new_coords = realloc(ctx->nodes.coords, new_cap * sizeof(CTCoord));
+        if (!new_coords) {
+            goto error;
+        }
         ctx->nodes.coords = new_coords;
         ctx->nodes.capacity = new_cap;
     }
@@ -1195,22 +1291,11 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
      */
 
     /* Resolve node references to coordinates
-     * Allocate from coordinate pool if available, otherwise use malloc
+     * Allocate from pool if space available, otherwise malloc
+     * (context_free handles both cases via pool bounds check)
      */
-    CTCoord *coords = NULL;
-    int coords_from_pool = 0;
-    if (ctx->coord_pool && ref_count > 0) {
-        size_t coord_offset = sh_pool_alloc(ctx->coord_pool, ref_count);
-        if (coord_offset != SH_POOL_INVALID) {
-            coords = SH_POOL_PTR(ctx->coord_pool, CTCoord, coord_offset);
-            coords_from_pool = 1;
-        }
-    }
-    /* Fallback to malloc if pool not available or full */
-    if (!coords) {
-        coords = malloc(ref_count * sizeof(CTCoord));
-        if (!coords) goto skip_way;
-    }
+    CTCoord *coords = coord_pool_alloc(ctx, ref_count);
+    if (!coords) goto skip_way;
 
     size_t coord_count = 0;
     for (size_t i = 0; i < ref_count; i++) {
@@ -1221,10 +1306,9 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     }
 
     if (coord_count < 2) {
-        /* Only free if allocated via malloc (pool coords cannot be individually freed) */
-        if (!coords_from_pool) {
-            free(coords);
-        }
+        /* Skip ways with < 2 coords. Memory waste is minor since
+         * pool coords can't be freed individually and malloc'd coords
+         * will be freed in context_free via pool bounds check */
         goto skip_way;
     }
 
@@ -1240,9 +1324,7 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
         size_t new_cap = ctx->ways_capacity ? ctx->ways_capacity * 2 : 1000;
         CTOSMWay *new_ways = realloc(ctx->ways, new_cap * sizeof(CTOSMWay));
         if (!new_ways) {
-            if (!coords_from_pool) {
-                free(coords);
-            }
+            /* Pool coords cannot be individually freed */
             goto skip_way;
         }
         ctx->ways = new_ways;

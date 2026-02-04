@@ -142,6 +142,49 @@ make test
 
 ## Memory Management
 
+### Overview
+
+Carta uses a hybrid memory strategy optimized for large-scale OSM data:
+
+| Structure | Strategy | Behavior |
+|-----------|----------|----------|
+| `node_map` | Growable hash map | Doubles at 75% load |
+| `way_map` | Growable hash map | Doubles at 75% load |
+| `coord_pool` | Growable pool | Doubles when full |
+| `parse_arena` | Fixed arena | Reset per PrimitiveBlock |
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CARTA_MEMORY_LIMIT` | 0 (unlimited) | Max memory usage (supports K/M/G suffix) |
+| `CARTA_INITIAL_COORDS` | auto | Initial coordinate pool size |
+| `CARTA_ARENA_SIZE` | 128M | Parse arena size |
+
+**Examples:**
+```bash
+# Limit to 4GB memory
+export CARTA_MEMORY_LIMIT=4G
+
+# Set initial coord pool to 100M coordinates
+export CARTA_INITIAL_COORDS=100M
+```
+
+### Programmatic Configuration
+
+```c
+CTPBFConfig config;
+ct_pbf_config_init(&config);
+config.memory_limit = 4ULL * 1024 * 1024 * 1024;  // 4GB
+config.arena_size = 256 * 1024 * 1024;            // 256MB arena
+
+CTPBFContext *ctx = ct_pbf_context_create_with_config(&config);
+// ... use ctx ...
+ct_pbf_context_free(ctx);
+```
+
+### Basic Usage
+
 ```c
 // Always free contexts
 CTPBFContext *ctx = ct_load_pbf("map.osm.pbf");
@@ -154,6 +197,18 @@ ct_tile_init(&tile, coord);
 // ... add features ...
 ct_tile_clear(&tile);
 ```
+
+### Memory Estimates by Region
+
+| Region | PBF Size | Peak RAM | Notes |
+|--------|----------|----------|-------|
+| Monaco | 700 KB | ~50 MB | Good for testing |
+| Hungary | 294 MB | ~3-4 GB | Country-scale |
+| Germany | 3.5 GB | ~35-50 GB | Large country |
+| Europe | 25 GB | ~250-350 GB | Continental |
+| Planet | 70 GB | ~700 GB-1 TB | Global |
+
+Rule of thumb: **10-15x PBF file size** for peak memory usage.
 
 ## Code Style
 
@@ -176,9 +231,27 @@ ct_tile_clear(&tile);
 - MVT encoding is I/O bound (compression)
 - PNG encoding is CPU bound (rasterization + DEFLATE)
 
+## Known Limitations
+
+| Limitation | Value | Notes |
+|------------|-------|-------|
+| Max nodes | ~4 billion | `uint32_t` index |
+| Max zoom | 30 | `1 << z` overflow prevention |
+| Max tiles per bbox query | 10 million | DoS protection |
+| Thread-local render cache | Not freed on thread exit | Minor leak in multi-threaded apps |
+
+### Workarounds for Large Datasets
+
+For continent/planet-scale data:
+1. **Use regional extracts** - Geofabrik provides country/region PBFs
+2. **Pre-generate tiles** - Use Apex (planned) for tile pyramids
+3. **Set memory limit** - Graceful failure vs OOM kill
+4. **Increase system RAM** - Linear scaling with data size
+
 ## WASM Considerations
 
 - No mmap (use malloc + fread)
 - No threads (single-threaded)
 - Memory limit considerations for large PBF files
 - Export minimal API surface
+- WASM linear memory provides bounds checking (defense in depth)

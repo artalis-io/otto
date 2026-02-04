@@ -440,13 +440,15 @@ typedef void (*CTPBFProgressFn)(const char *phase, size_t current,
 
 /* PBF parsing context */
 typedef struct {
-    /* Configuration (memory limits) */
+    /* Configuration (initial estimates - all structures grow as needed) */
     struct {
-        size_t max_node_capacity;   /* Max entries in node_map */
-        size_t max_way_capacity;    /* Max entries in way_map */
-        size_t max_coord_capacity;  /* Max coords in coord_pool */
-        size_t arena_size;          /* Size of parse_arena */
+        size_t initial_coord_capacity;  /* Initial coord pool capacity */
+        size_t arena_size;              /* Size of parse_arena */
+        size_t memory_limit;            /* Max total memory (0 = unlimited) */
     } config;
+
+    /* Memory tracking */
+    size_t memory_used;             /* Current total memory usage */
 
     /* Progress reporting */
     CTPBFProgressFn progress_callback;

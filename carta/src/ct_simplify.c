@@ -41,37 +41,78 @@ static float perpendicular_distance(int px, int py,
 }
 
 /*
- * Recursive Douglas-Peucker simplification.
+ * Stack frame for iterative Douglas-Peucker.
+ */
+typedef struct {
+    int start;
+    int end;
+} DPFrame;
+
+/*
+ * Iterative Douglas-Peucker simplification.
  *
+ * Uses explicit stack to avoid stack overflow on long linestrings.
  * Marks points to keep in the 'keep' array.
  */
-static void dp_recursive(const CTTilePoint *points, int start, int end,
-                         float tolerance, int *keep)
+static void dp_iterative(const CTTilePoint *points, int start, int end,
+                         float tolerance, int *keep, int n)
 {
     if (end <= start + 1) return;
 
-    /* Find point with maximum distance from line segment */
-    float max_dist = 0;
-    int max_idx = start;
+    /* Allocate stack - worst case is n/2 frames */
+    int stack_cap = (n / 2) + 2;
+    DPFrame *stack = malloc(stack_cap * sizeof(DPFrame));
+    if (!stack) return;  /* Fail gracefully - no simplification */
 
-    for (int i = start + 1; i < end; i++) {
-        float dist = perpendicular_distance(
-            points[i].x, points[i].y,
-            points[start].x, points[start].y,
-            points[end].x, points[end].y
-        );
-        if (dist > max_dist) {
-            max_dist = dist;
-            max_idx = i;
+    int stack_size = 0;
+
+    /* Push initial frame */
+    stack[stack_size].start = start;
+    stack[stack_size].end = end;
+    stack_size++;
+
+    while (stack_size > 0) {
+        /* Pop frame */
+        stack_size--;
+        int s = stack[stack_size].start;
+        int e = stack[stack_size].end;
+
+        if (e <= s + 1) continue;
+
+        /* Find point with maximum distance from line segment */
+        float max_dist = 0;
+        int max_idx = s;
+
+        for (int i = s + 1; i < e; i++) {
+            float dist = perpendicular_distance(
+                points[i].x, points[i].y,
+                points[s].x, points[s].y,
+                points[e].x, points[e].y
+            );
+            if (dist > max_dist) {
+                max_dist = dist;
+                max_idx = i;
+            }
+        }
+
+        /* If max distance exceeds tolerance, keep the point and process subsegments */
+        if (max_dist > tolerance) {
+            keep[max_idx] = 1;
+
+            /* Push both subsegments (order doesn't matter for correctness) */
+            if (stack_size + 2 <= stack_cap) {
+                stack[stack_size].start = s;
+                stack[stack_size].end = max_idx;
+                stack_size++;
+
+                stack[stack_size].start = max_idx;
+                stack[stack_size].end = e;
+                stack_size++;
+            }
         }
     }
 
-    /* If max distance exceeds tolerance, keep the point and recurse */
-    if (max_dist > tolerance) {
-        keep[max_idx] = 1;
-        dp_recursive(points, start, max_idx, tolerance, keep);
-        dp_recursive(points, max_idx, end, tolerance, keep);
-    }
+    free(stack);
 }
 
 void ct_simplify_line_inplace(CTTilePoint *points, int *num_points, float tolerance)
@@ -87,8 +128,8 @@ void ct_simplify_line_inplace(CTTilePoint *points, int *num_points, float tolera
     keep[0] = 1;
     keep[n - 1] = 1;
 
-    /* Run Douglas-Peucker */
-    dp_recursive(points, 0, n - 1, tolerance, keep);
+    /* Run Douglas-Peucker (iterative to avoid stack overflow) */
+    dp_iterative(points, 0, n - 1, tolerance, keep, n);
 
     /* Compact the array */
     int write_idx = 0;
@@ -147,7 +188,7 @@ void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolera
 
     /* Simplify first half: anchor to anchor2 */
     if (anchor2 > anchor) {
-        dp_recursive(points, anchor, anchor2, tolerance, keep);
+        dp_iterative(points, anchor, anchor2, tolerance, keep, n);
     } else {
         /* Wrap-around case: need to handle separately */
         CTTilePoint *temp = malloc((n - anchor + anchor2 + 1) * sizeof(CTTilePoint));
@@ -160,7 +201,7 @@ void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolera
             if (temp_keep) {
                 temp_keep[0] = 1;
                 temp_keep[temp_n - 1] = 1;
-                dp_recursive(temp, 0, temp_n - 1, tolerance, temp_keep);
+                dp_iterative(temp, 0, temp_n - 1, tolerance, temp_keep, temp_n);
 
                 /* Map back to original indices */
                 int idx = anchor;
@@ -176,7 +217,7 @@ void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolera
 
     /* Simplify second half: anchor2 to anchor */
     if (anchor > anchor2) {
-        dp_recursive(points, anchor2, anchor, tolerance, keep);
+        dp_iterative(points, anchor2, anchor, tolerance, keep, n);
     } else {
         /* Wrap-around case */
         CTTilePoint *temp = malloc((n - anchor2 + anchor + 1) * sizeof(CTTilePoint));
@@ -189,7 +230,7 @@ void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolera
             if (temp_keep) {
                 temp_keep[0] = 1;
                 temp_keep[temp_n - 1] = 1;
-                dp_recursive(temp, 0, temp_n - 1, tolerance, temp_keep);
+                dp_iterative(temp, 0, temp_n - 1, tolerance, temp_keep, temp_n);
 
                 int idx = anchor2;
                 for (int i = 0; i < temp_n; i++) {
@@ -246,31 +287,64 @@ static double perpendicular_distance_geo(double px, double py,
     return sqrt(dx * dx + dy * dy);
 }
 
-static void dp_recursive_geo(const CTCoord *coords, int start, int end,
-                             double tolerance, int *keep)
+/*
+ * Iterative Douglas-Peucker for geographic coordinates.
+ */
+static void dp_iterative_geo(const CTCoord *coords, int start, int end,
+                             double tolerance, int *keep, int n)
 {
     if (end <= start + 1) return;
 
-    double max_dist = 0;
-    int max_idx = start;
+    /* Allocate stack - worst case is n/2 frames */
+    int stack_cap = (n / 2) + 2;
+    DPFrame *stack = malloc(stack_cap * sizeof(DPFrame));
+    if (!stack) return;
 
-    for (int i = start + 1; i < end; i++) {
-        double dist = perpendicular_distance_geo(
-            coords[i].lon, coords[i].lat,
-            coords[start].lon, coords[start].lat,
-            coords[end].lon, coords[end].lat
-        );
-        if (dist > max_dist) {
-            max_dist = dist;
-            max_idx = i;
+    int stack_size = 0;
+
+    /* Push initial frame */
+    stack[stack_size].start = start;
+    stack[stack_size].end = end;
+    stack_size++;
+
+    while (stack_size > 0) {
+        stack_size--;
+        int s = stack[stack_size].start;
+        int e = stack[stack_size].end;
+
+        if (e <= s + 1) continue;
+
+        double max_dist = 0;
+        int max_idx = s;
+
+        for (int i = s + 1; i < e; i++) {
+            double dist = perpendicular_distance_geo(
+                coords[i].lon, coords[i].lat,
+                coords[s].lon, coords[s].lat,
+                coords[e].lon, coords[e].lat
+            );
+            if (dist > max_dist) {
+                max_dist = dist;
+                max_idx = i;
+            }
+        }
+
+        if (max_dist > tolerance) {
+            keep[max_idx] = 1;
+
+            if (stack_size + 2 <= stack_cap) {
+                stack[stack_size].start = s;
+                stack[stack_size].end = max_idx;
+                stack_size++;
+
+                stack[stack_size].start = max_idx;
+                stack[stack_size].end = e;
+                stack_size++;
+            }
         }
     }
 
-    if (max_dist > tolerance) {
-        keep[max_idx] = 1;
-        dp_recursive_geo(coords, start, max_idx, tolerance, keep);
-        dp_recursive_geo(coords, max_idx, end, tolerance, keep);
-    }
+    free(stack);
 }
 
 void ct_simplify_coords_inplace(CTCoord *coords, int *num_coords, double tolerance)
@@ -284,7 +358,7 @@ void ct_simplify_coords_inplace(CTCoord *coords, int *num_coords, double toleran
     keep[0] = 1;
     keep[n - 1] = 1;
 
-    dp_recursive_geo(coords, 0, n - 1, tolerance, keep);
+    dp_iterative_geo(coords, 0, n - 1, tolerance, keep, n);
 
     int write_idx = 0;
     for (int i = 0; i < n; i++) {
