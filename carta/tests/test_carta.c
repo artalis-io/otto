@@ -1680,6 +1680,7 @@ TEST(label_collision_detection)
 
     /* Try to place second label at same position - may use different anchor */
     int result2 = ct_label_place_single(placer, &point2, 128, 128, font, 12.0f);
+    (void)result2;  /* Result intentionally unused - just testing placement */
     /* Should either succeed with different anchor or fail if no space */
 
     /* At least one label should be placed */

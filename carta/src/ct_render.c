@@ -217,10 +217,10 @@ static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTCol
                         ((uint32_t)sg << 8) | (uint32_t)sr;
         uint32_t *row32 = (uint32_t *)row;
         int x = x_start;
-        int count = x_end - x_start + 1;
 
 #if defined(CT_HAVE_AVX2)
         /* AVX2: write 8 pixels (32 bytes) at a time */
+        int count = x_end - x_start + 1;
         if (count >= 8) {
             __m256i rgba_vec = _mm256_set1_epi32((int)rgba);
             for (; x + 7 <= x_end; x += 8) {
@@ -229,6 +229,7 @@ static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTCol
         }
 #elif defined(CT_HAVE_SSE2)
         /* SSE2: write 4 pixels (16 bytes) at a time */
+        int count = x_end - x_start + 1;
         if (count >= 4) {
             __m128i rgba_vec = _mm_set1_epi32((int)rgba);
             for (; x + 3 <= x_end; x += 4) {

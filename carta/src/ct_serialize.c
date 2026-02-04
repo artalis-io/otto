@@ -113,6 +113,10 @@ typedef struct __attribute__((packed)) {
  * String Pool
  * ============================================================================ */
 
+/* String pool constants */
+#define STRING_POOL_INITIAL_CAPACITY  (1024 * 1024)   /* 1MB initial */
+#define STRING_POOL_MAX_STRING_LEN    (64 * 1024)     /* 64KB max string */
+
 typedef struct {
     char *data;
     size_t size;
@@ -120,23 +124,33 @@ typedef struct {
 } StringPool;
 
 static void string_pool_init(StringPool *pool) {
-    pool->data = malloc(1024 * 1024);  /* 1MB initial */
+    pool->data = malloc(STRING_POOL_INITIAL_CAPACITY);
     pool->size = 1;  /* Reserve 0 for NULL strings - offset 0 means empty string */
-    pool->capacity = 1024 * 1024;
+    pool->capacity = STRING_POOL_INITIAL_CAPACITY;
     pool->data[0] = '\0';
 }
 
 static uint32_t string_pool_add(StringPool *pool, const char *str) {
     if (!str || !str[0]) return 0;  /* Empty string at offset 0 */
 
-    size_t len = strlen(str) + 1;
+    /* Bounded strlen to prevent reading past buffer on malformed input */
+    size_t len = 0;
+    while (len < STRING_POOL_MAX_STRING_LEN && str[len] != '\0') {
+        len++;
+    }
+    if (len >= STRING_POOL_MAX_STRING_LEN) {
+        len = STRING_POOL_MAX_STRING_LEN - 1;  /* Truncate */
+    }
+    len++;  /* Include null terminator */
+
     if (pool->size + len > pool->capacity) {
         pool->capacity *= 2;
         pool->data = realloc(pool->data, pool->capacity);
     }
 
     uint32_t offset = (uint32_t)pool->size;
-    memcpy(pool->data + pool->size, str, len);
+    memcpy(pool->data + pool->size, str, len - 1);
+    pool->data[pool->size + len - 1] = '\0';  /* Ensure null termination */
     pool->size += len;
     return offset;
 }
