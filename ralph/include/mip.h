@@ -177,7 +177,7 @@ typedef struct {
 } MIPSolver;
 
 /* MIP solver functions */
-MIPSolver* mip_create(LPModel *model, int detect_special);
+MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity);
 void mip_free(MIPSolver *solver);
 int mip_solve(MIPSolver *solver);
 

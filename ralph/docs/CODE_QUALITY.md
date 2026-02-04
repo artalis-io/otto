@@ -337,6 +337,21 @@ void bb_node_pool_return(BBNodePool *pool, BBNode *node);
 - **Reduced fragmentation**: Single allocation for all node data
 - **Safe fallback**: `bb_node_pool_return()` handles non-pool nodes gracefully
 
+### Configuration
+
+Pool capacity is configurable via the `node_pool_capacity` parameter:
+
+```c
+ralph_set_int_param(model, "node_pool_capacity", 4096);  /* Large MIPs */
+ralph_set_int_param(model, "node_pool_capacity", 256);   /* Memory-constrained */
+```
+
+| Value | Use Case |
+|-------|----------|
+| 256 | Embedded/memory-constrained systems |
+| 1024 | Default - suitable for most problems |
+| 4096+ | Large MIPs with weak LP relaxations |
+
 ### Status
 
 IMPLEMENTED (2026-02-04)
@@ -345,7 +360,9 @@ IMPLEMENTED (2026-02-04)
 - Added `BBNodePool` struct to `include/mip.h`
 - Implemented pool functions in `src/branch_bound.c`
 - Integrated pool into `MIPSolver` (created in `mip_create()`, freed in `mip_free()`)
+- Pool capacity configurable via `node_pool_capacity` parameter (default 1024)
 - Pool is optional - NULL pool falls back to individual allocations
+- Automatic fallback to malloc when pool exhausted
 
 ---
 
