@@ -40,6 +40,16 @@ extern "C" {
 CTPBFContext *ct_load_pbf(const char *filename);
 
 /*
+ * Load OSM data from a PBF file with custom configuration.
+ * Use this to set memory limits or progress callbacks for large files.
+ *
+ * @param filename Path to .osm.pbf file
+ * @param config   Configuration (NULL = use defaults from env vars)
+ * @return Context for tile generation, or NULL on error
+ */
+CTPBFContext *ct_load_pbf_with_config(const char *filename, const CTPBFConfig *config);
+
+/*
  * Load OSM data from memory.
  * For WASM usage where file I/O is not available.
  *

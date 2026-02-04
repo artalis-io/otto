@@ -94,6 +94,21 @@ static WorkerThread *s_workers = NULL;
 static int s_num_workers = 0;
 static char s_listen_url[128] = "";
 
+/* Progress callback for PBF loading */
+static void pbf_progress_callback(const char *phase, size_t current,
+                                   size_t total, void *user_data)
+{
+    (void)user_data;
+    if (total > 0) {
+        int pct = (int)(100 * current / total);
+        printf("\r%s: %d%% (%zu / %zu bytes)", phase, pct, current, total);
+        fflush(stdout);
+    } else {
+        printf("\r%s: %zu", phase, current);
+        fflush(stdout);
+    }
+}
+
 /* Forward declaration */
 static void ev_handler(struct mg_connection *c, int ev, void *ev_data);
 
@@ -867,13 +882,21 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Load PBF file */
+    /* Load PBF file with progress reporting */
     printf("Loading PBF: %s\n", s_config.pbf_path);
-    s_pbf_ctx = ct_load_pbf(s_config.pbf_path);
+
+    /* Configure loading with progress callback */
+    CTPBFConfig pbf_config;
+    ct_pbf_config_init(&pbf_config);
+    pbf_config.progress_callback = pbf_progress_callback;
+    pbf_config.progress_interval = 50;  /* Report every 50 blobs */
+
+    s_pbf_ctx = ct_load_pbf_with_config(s_config.pbf_path, &pbf_config);
     if (!s_pbf_ctx) {
         fprintf(stderr, "Error: Failed to load PBF file: %s\n", s_config.pbf_path);
         return 1;
     }
+    printf("\n");  /* Newline after progress */
 
     /* Print stats */
     size_t nodes, ways, features;
