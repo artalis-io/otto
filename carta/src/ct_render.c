@@ -12,6 +12,7 @@
 #include "shared.h"
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <math.h>
 
 /* SIMD support detection */
@@ -38,13 +39,25 @@ typedef struct {
 
 CTRenderContext *ct_render_create(int width, int height)
 {
+    /* Validate dimensions */
+    if (width <= 0 || height <= 0) return NULL;
+
+    /* Check for integer overflow: width * height * 4 */
+    if (width > INT_MAX / 4 || height > INT_MAX / width) {
+        return NULL;  /* Would overflow */
+    }
+    size_t pixel_size = (size_t)width * (size_t)height * 4;
+    if (pixel_size > SIZE_MAX) {
+        return NULL;  /* Would overflow */
+    }
+
     CTRenderContext *ctx = malloc(sizeof(CTRenderContext));
     if (!ctx) return NULL;
 
     ctx->width = width;
     ctx->height = height;
     ctx->stride = width * 4;  /* RGBA */
-    ctx->pixels = calloc(width * height * 4, 1);
+    ctx->pixels = calloc(pixel_size, 1);
 
     if (!ctx->pixels) {
         free(ctx);

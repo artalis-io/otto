@@ -66,12 +66,25 @@ CTTileCache *ct_cache_create(size_t max_mb)
 
     /* Default to 256MB if not specified */
     if (max_mb == 0) max_mb = CT_CACHE_DEFAULT_MB;
+
+    /* Check for integer overflow before multiplication */
+    if (max_mb > SIZE_MAX / (1024 * 1024)) {
+        free(cache);
+        return NULL;  /* Would overflow */
+    }
     cache->max_bytes = max_mb * 1024 * 1024;
 
     /* Size hash table for reasonable load factor */
     /* Assume average tile ~10KB, so max_mb * 100 entries roughly */
-    cache->num_buckets = (max_mb * 100) | 1;  /* Make odd for better hashing */
-    if (cache->num_buckets < 1009) cache->num_buckets = 1009;  /* Minimum */
+    /* Check for overflow and cap at reasonable maximum */
+    size_t num_buckets;
+    if (max_mb > SIZE_MAX / 100) {
+        num_buckets = 1000003;  /* Cap at ~1M buckets */
+    } else {
+        num_buckets = (max_mb * 100) | 1;  /* Make odd for better hashing */
+    }
+    if (num_buckets < 1009) num_buckets = 1009;  /* Minimum */
+    cache->num_buckets = num_buckets;
 
     cache->buckets = calloc(cache->num_buckets, sizeof(CTCacheEntry *));
     if (!cache->buckets) {
