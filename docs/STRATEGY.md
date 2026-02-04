@@ -403,12 +403,12 @@ Fleets using Nexogen's planning system (now Trimble) face:
 
 ### 7.2 Positioning Statement
 
-**For** mid-to-large trucking fleets
-**Who** need planning optimization without vendor lock-in
+**For** trucking operations of any size—from one-truck owner-operators to 10,000+ truck mega-fleets
+**Who** need optimization that works for their scale and budget
 **OTTO is** an open-source logistics platform
-**That** provides enterprise-grade route planning, HoS compliance, and fleet scheduling
-**Unlike** closed-source vendors like Trimble
-**OTTO** gives you full code ownership, transparent algorithms, and the freedom to self-host or migrate at any time.
+**That** provides driver-centric decision support for small operators AND fleet-level optimization for enterprises
+**Unlike** closed-source vendors who price out small operators and lock in large ones
+**OTTO** gives everyone access to the same algorithms: free in the browser for a family operation, managed platform for enterprises, and full code ownership for anyone who wants it.
 
 ---
 
