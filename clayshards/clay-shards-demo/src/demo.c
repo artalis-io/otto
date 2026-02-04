@@ -310,6 +310,7 @@ static void render_info_panel(void) {
             /* Search with bias toward current map center */
             cs_provider_search_near(g_app.text.search, g_app.map.lat, g_app.map.lon);
             strncpy(g_app.search.prev_query, g_app.text.search, sizeof(g_app.search.prev_query) - 1);
+            g_app.search.prev_query[sizeof(g_app.search.prev_query) - 1] = '\0';
             g_app.search.prev_len = g_app.text.search_len;
             g_app.search.show_results = true;
         }

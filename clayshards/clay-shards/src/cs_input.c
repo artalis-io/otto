@@ -68,7 +68,7 @@ CsInputResult cs_input(
         ? placeholder
         : text;
     int display_len = (*len == 0 && !is_focused && placeholder)
-        ? (int)strlen(placeholder)
+        ? (int)strnlen(placeholder, CS_MAX_LABEL_LEN)
         : *len;
 
     /* Colors - using constants from cs_common.h */

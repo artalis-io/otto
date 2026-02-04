@@ -26,14 +26,25 @@
     /* MSVC */
     #define CS_THREAD_LOCAL __declspec(thread)
 #else
-    /* No TLS support - single-threaded only */
+    /* No TLS support - single-threaded only.
+     * WARNING: ClayShards will NOT be thread-safe in this configuration.
+     * All UI calls must happen on a single thread. */
     #define CS_THREAD_LOCAL
     #define CS_NO_TLS 1
+    #if defined(__GNUC__) || defined(__clang__)
+        #warning "ClayShards: No TLS support - UI state is not thread-safe"
+    #elif defined(_MSC_VER)
+        #pragma message("ClayShards: No TLS support - UI state is not thread-safe")
+    #endif
 #endif
 
 /* ============================================================================
  * Internal Constants
  * ============================================================================ */
+
+/* Maximum length for UI label strings (defense-in-depth against unterminated strings).
+ * This is a safety limit - most labels are much shorter. */
+#define CS_MAX_LABEL_LEN 4096
 
 /* ID offsets for internal wrapper elements to avoid collisions with user IDs.
  * When a component needs internal sub-elements (margin wrapper, text wrapper),

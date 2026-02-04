@@ -155,7 +155,7 @@ CsDropdownResult cs_dropdown(
         CLAY(clay_id, button_config) {
             /* Current selection text */
             const char *label = options[current_selected];
-            Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
+            Clay_String label_str = {.chars = label, .length = (int)strnlen(label, CS_MAX_LABEL_LEN)};
 
             /* Text container takes remaining space */
             Clay_ElementId text_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_TEXT_WRAPPER, .stringId = {0}};
@@ -243,7 +243,7 @@ CsDropdownResult cs_dropdown(
                             .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius - 2)
                         }) {
                             const char *opt_label = options[i];
-                            Clay_String opt_str = {.chars = opt_label, .length = (int)strlen(opt_label)};
+                            Clay_String opt_str = {.chars = opt_label, .length = (int)strnlen(opt_label, CS_MAX_LABEL_LEN)};
                             CLAY_TEXT(opt_str, CLAY_TEXT_CONFIG({
                                 .fontSize = (uint16_t)style->font_size,
                                 .textColor = text_color

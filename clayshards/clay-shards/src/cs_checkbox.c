@@ -118,7 +118,7 @@ CsCheckboxResult cs_checkbox(
 
         /* Optional label */
         if (label && label[0] != '\0') {
-            Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
+            Clay_String label_str = {.chars = label, .length = (int)strnlen(label, CS_MAX_LABEL_LEN)};
             CLAY_TEXT(label_str, CLAY_TEXT_CONFIG({
                 .fontSize = (uint16_t)style->font_size,
                 .textColor = label_color

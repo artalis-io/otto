@@ -90,7 +90,7 @@ CsToggleResult cs_toggle(
     CLAY(clay_id, row_config) {
         /* Label on left if configured */
         if (has_label && style->label_left) {
-            Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
+            Clay_String label_str = {.chars = label, .length = (int)strnlen(label, CS_MAX_LABEL_LEN)};
             CLAY_TEXT(label_str, CLAY_TEXT_CONFIG({
                 .fontSize = (uint16_t)style->font_size,
                 .textColor = label_color
@@ -144,7 +144,7 @@ CsToggleResult cs_toggle(
 
         /* Label on right (default) */
         if (has_label && !style->label_left) {
-            Clay_String label_str = {.chars = label, .length = (int)strlen(label)};
+            Clay_String label_str = {.chars = label, .length = (int)strnlen(label, CS_MAX_LABEL_LEN)};
             CLAY_TEXT(label_str, CLAY_TEXT_CONFIG({
                 .fontSize = (uint16_t)style->font_size,
                 .textColor = label_color
