@@ -14,6 +14,7 @@
 #define RALPH_PIVOT_TOL 1e-6  /* Increased for numerical stability */
 #define RALPH_ZERO_TOL 1e-12
 #define RALPH_INT_TOL 1e-5
+#define RALPH_BIG_M 1e8       /* Artificial variable cost for Big-M method */
 
 /* Safe free macro - NULLs pointer after freeing to prevent double-free */
 #define SAFE_FREE(p) do { free(p); (p) = NULL; } while(0)
@@ -217,6 +218,10 @@ typedef struct {
     /* Statistics */
     int iterations;
     int phase;              /* 1 or 2 */
+
+    /* Pre-allocated sparse workspace for reduced cost computation */
+    int *cb_sparse_idx;     /* Sparse indices for c_B (size m) */
+    double *cb_sparse_val;  /* Sparse values for c_B (size m) */
 
 } SimplexTableau;
 

@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <limits.h>
 #include "lp.h"
 
 #ifdef _OPENMP
@@ -123,8 +124,16 @@ LUFactorization* lu_create(int m) {
     /* Contiguous spike pool - single allocation for all spike data
      * Estimate: each spike has ~m/2 non-zeros on average (higher than m/4
      * initially expected due to fill-in as basis changes), max_updates spikes.
-     * Pool size = max_updates * m / 2 (with margin for safety) */
-    lu->spike_pool_capacity = lu->max_updates * (m / 2 + 20);
+     * Pool size = max_updates * m / 2 (with margin for safety)
+     * Use size_t to prevent integer overflow on large problems. */
+    {
+        size_t pool_size = (size_t)lu->max_updates * ((size_t)m / 2 + 20);
+        /* Cap to INT_MAX to prevent overflow when used as int index */
+        if (pool_size > (size_t)INT_MAX) {
+            pool_size = (size_t)INT_MAX;
+        }
+        lu->spike_pool_capacity = (int)pool_size;
+    }
     lu->spike_pool_idx = (int*)malloc(lu->spike_pool_capacity * sizeof(int));
     lu->spike_pool_val = (double*)malloc(lu->spike_pool_capacity * sizeof(double));
     lu->spike_pool_used = 0;
