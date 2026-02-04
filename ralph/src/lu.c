@@ -44,20 +44,40 @@ LUFactorization* lu_create(int m) {
      * Optimal balance: around 150-200 updates for large problems.
      * Rule: m/5 for small, m/10 for medium, ~150 for large (capped). */
     lu->max_updates = (m < 100) ? 50 : (m < 500) ? m/5 : 200;
+    int max_upd = lu->max_updates;
 
-    /* Allocate permutation arrays */
-    lu->perm = (int*)malloc(m * sizeof(int));
-    lu->perm_inv = (int*)malloc(m * sizeof(int));
-    lu->col_perm = (int*)malloc(m * sizeof(int));
-    lu->col_perm_inv = (int*)malloc(m * sizeof(int));
+    /* Calculate arena size for fixed-size arrays (with 8-byte alignment padding).
+     * Arena contains: permutation arrays, FT column order, spike metadata,
+     * eta metadata, and hyper-sparse workspace arrays.
+     * 20 arrays total, add 20*8=160 bytes for alignment padding. */
+    size_t arena_size =
+        /* int arrays of size m: perm, perm_inv, col_perm, col_perm_inv,
+         * ft_col_order, ft_col_order_inv, hs_marked, hs_idx, hs_stack (9 arrays) */
+        9 * (size_t)m * sizeof(int) +
+        /* double arrays of size m: U_diag, hs_work1, hs_work2, hs_val, perm_work (5 arrays) */
+        5 * (size_t)m * sizeof(double) +
+        /* int arrays of size max_updates: eta_col, eta_nnz,
+         * ft_spike_col, ft_spike_nnz, ft_spike_start (5 arrays) */
+        5 * (size_t)max_upd * sizeof(int) +
+        /* double array of size max_updates: ft_spike_diag (1 array) */
+        (size_t)max_upd * sizeof(double) +
+        /* Alignment padding */
+        160;
 
-    /* U diagonal cache for fast access during solve */
-    lu->U_diag = (double*)malloc(m * sizeof(double));
-
-    if (!lu->perm || !lu->perm_inv || !lu->col_perm || !lu->col_perm_inv || !lu->U_diag) {
+    lu->arena = ralph_arena_create(arena_size);
+    if (!lu->arena) {
         lu_free(lu);
         return NULL;
     }
+
+    /* Allocate permutation arrays from arena */
+    lu->perm = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
+    lu->perm_inv = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
+    lu->col_perm = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
+    lu->col_perm_inv = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
+
+    /* U diagonal cache from arena */
+    lu->U_diag = (double*)ralph_arena_alloc(lu->arena, m * sizeof(double));
 
     /* Initialize to identity permutation */
     for (int i = 0; i < m; i++) {
@@ -67,68 +87,77 @@ LUFactorization* lu_create(int m) {
         lu->col_perm_inv[i] = i;
     }
 
-    /* Eta file for updates (sparse storage) */
-    lu->eta_capacity = lu->max_updates;
+    /* Eta file metadata from arena (but eta_indices/values arrays allocated separately) */
+    lu->eta_capacity = max_upd;
     lu->num_eta = 0;
-    lu->eta_col = (int*)malloc(lu->eta_capacity * sizeof(int));
-    lu->eta_indices = (int**)malloc(lu->eta_capacity * sizeof(int*));
-    lu->eta_values = (double**)malloc(lu->eta_capacity * sizeof(double*));
-    lu->eta_nnz = (int*)malloc(lu->eta_capacity * sizeof(int));
+    lu->eta_col = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->eta_nnz = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
 
-    if (!lu->eta_col || !lu->eta_indices || !lu->eta_values || !lu->eta_nnz) {
+    /* eta_indices and eta_values are arrays of pointers - allocated separately
+     * because their contents are dynamically allocated during updates */
+    lu->eta_indices = (int**)malloc(max_upd * sizeof(int*));
+    lu->eta_values = (double**)malloc(max_upd * sizeof(double*));
+
+    if (!lu->eta_indices || !lu->eta_values) {
         lu_free(lu);
         return NULL;
     }
 
-    for (int i = 0; i < lu->eta_capacity; i++) {
+    for (int i = 0; i < max_upd; i++) {
         lu->eta_indices[i] = NULL;
         lu->eta_values[i] = NULL;
         lu->eta_nnz[i] = 0;
     }
 
-    /* Forrest-Tomlin update structures */
-    lu->use_ft_updates = 1;  /* Enable FT updates */
+    /* Forrest-Tomlin update structures from arena */
+    lu->use_ft_updates = 1;
     lu->ft_num_updates = 0;
-    lu->ft_col_order = (int*)malloc(m * sizeof(int));
-    lu->ft_col_order_inv = (int*)malloc(m * sizeof(int));
-
-    if (!lu->ft_col_order || !lu->ft_col_order_inv) {
-        lu_free(lu);
-        return NULL;
-    }
+    lu->ft_col_order = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ft_col_order_inv = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
 
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;
     }
 
-    /* Spike storage for FT updates - contiguous layout for cache efficiency */
-    lu->ft_spike_capacity = lu->max_updates;
-    lu->ft_spike_col = (int*)malloc(lu->ft_spike_capacity * sizeof(int));
-    lu->ft_spike_diag = (double*)malloc(lu->ft_spike_capacity * sizeof(double));
-    lu->ft_spike_nnz = (int*)malloc(lu->ft_spike_capacity * sizeof(int));
-    lu->ft_spike_start = (int*)malloc(lu->ft_spike_capacity * sizeof(int));
+    /* Spike metadata from arena */
+    lu->ft_spike_capacity = max_upd;
+    lu->ft_spike_col = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->ft_spike_diag = (double*)ralph_arena_alloc(lu->arena, max_upd * sizeof(double));
+    lu->ft_spike_nnz = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->ft_spike_start = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
 
-    if (!lu->ft_spike_col || !lu->ft_spike_diag || !lu->ft_spike_nnz ||
-        !lu->ft_spike_start) {
-        lu_free(lu);
-        return NULL;
-    }
-
-    for (int i = 0; i < lu->ft_spike_capacity; i++) {
+    for (int i = 0; i < max_upd; i++) {
         lu->ft_spike_nnz[i] = 0;
         lu->ft_spike_diag[i] = 0.0;
         lu->ft_spike_start[i] = 0;
     }
 
-    /* Contiguous spike pool - single allocation for all spike data
-     * Estimate: each spike has ~m/2 non-zeros on average (higher than m/4
-     * initially expected due to fill-in as basis changes), max_updates spikes.
-     * Pool size = max_updates * m / 2 (with margin for safety)
+    /* Hyper-sparse workspace from arena */
+    lu->hs_work1 = (double*)ralph_arena_calloc(lu->arena, m, sizeof(double));
+    lu->hs_work2 = (double*)ralph_arena_calloc(lu->arena, m, sizeof(double));
+    lu->hs_marked = (int*)ralph_arena_calloc(lu->arena, m, sizeof(int));
+    lu->hs_idx = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
+    lu->hs_val = (double*)ralph_arena_alloc(lu->arena, m * sizeof(double));
+    lu->hs_stack = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
+    lu->perm_work = (double*)ralph_arena_alloc(lu->arena, m * sizeof(double));
+
+    /* Single check for all arena allocations */
+    if (!lu->perm || !lu->perm_inv || !lu->col_perm || !lu->col_perm_inv ||
+        !lu->U_diag || !lu->eta_col || !lu->eta_nnz ||
+        !lu->ft_col_order || !lu->ft_col_order_inv ||
+        !lu->ft_spike_col || !lu->ft_spike_diag || !lu->ft_spike_nnz || !lu->ft_spike_start ||
+        !lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked ||
+        !lu->hs_idx || !lu->hs_val || !lu->hs_stack || !lu->perm_work) {
+        lu_free(lu);
+        return NULL;
+    }
+
+    /* Contiguous spike pool - allocated separately (large, variable size)
+     * Estimate: each spike has ~m/2 non-zeros on average.
      * Use size_t to prevent integer overflow on large problems. */
     {
-        size_t pool_size = (size_t)lu->max_updates * ((size_t)m / 2 + 20);
-        /* Cap to INT_MAX to prevent overflow when used as int index */
+        size_t pool_size = (size_t)max_upd * ((size_t)m / 2 + 20);
         if (pool_size > (size_t)INT_MAX) {
             pool_size = (size_t)INT_MAX;
         }
@@ -143,16 +172,10 @@ LUFactorization* lu_create(int m) {
         return NULL;
     }
 
-    /* Spike compaction settings - 200 is a good balance:
-     * - Compaction is O(m²) but only done once per interval
-     * - Applying compacted matrix is O(m²) per solve
-     * - Applying N individual spikes is O(N * avg_nnz) per solve
-     * For m=250 with ~5-10 nnz per spike: 200 spikes takes ~1000-2000 ops
-     * but compacted matrix takes 62,500 ops per solve.
-     * So keep compaction for when spikes accumulate significantly. */
-    lu->ft_compact_interval = 300;  /* Compact after 300 spikes */
+    /* Spike compaction settings */
+    lu->ft_compact_interval = 300;
     lu->ft_num_compacted = 0;
-    lu->ft_compact_matrix = NULL;   /* Allocated lazily if needed */
+    lu->ft_compact_matrix = NULL;  /* Allocated lazily if needed */
     lu->ft_compact_valid = 0;
 
     /* Initialize condition number tracking */
@@ -161,21 +184,11 @@ LUFactorization* lu_create(int m) {
     lu->cond_estimate = 1.0;
     lu->growth_factor = 1.0;
 
-    /* Pre-allocate workspace for hyper-sparse operations */
-    lu->hs_work1 = (double*)calloc(m, sizeof(double));
-    lu->hs_work2 = (double*)calloc(m, sizeof(double));
-    lu->hs_marked = (int*)calloc(m, sizeof(int));
-    lu->hs_idx = (int*)malloc(m * sizeof(int));
-    lu->hs_val = (double*)malloc(m * sizeof(double));
-    lu->hs_stack = (int*)malloc(m * sizeof(int));
-    lu->perm_work = (double*)malloc(m * sizeof(double));
-
     /* Pre-allocate dense workspace for fallback factorization (m×m matrix)
-     * Avoids O(m²) allocation in hot path when sparse factorization fails */
+     * Allocated separately due to large size O(m²) */
     lu->dense_work = (double*)malloc((size_t)m * (size_t)m * sizeof(double));
 
-    if (!lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked || !lu->hs_idx ||
-        !lu->hs_val || !lu->hs_stack || !lu->perm_work || !lu->dense_work) {
+    if (!lu->dense_work) {
         lu_free(lu);
         return NULL;
     }
@@ -186,19 +199,15 @@ LUFactorization* lu_create(int m) {
 void lu_free(LUFactorization *lu) {
     if (!lu) return;
 
+    /* Free L/U storage (allocated during factorization, not in arena) */
     SAFE_FREE(lu->L_colptr);
     SAFE_FREE(lu->L_rowidx);
     SAFE_FREE(lu->L_values);
     SAFE_FREE(lu->U_colptr);
     SAFE_FREE(lu->U_rowidx);
     SAFE_FREE(lu->U_values);
-    SAFE_FREE(lu->U_diag);
-    SAFE_FREE(lu->perm);
-    SAFE_FREE(lu->perm_inv);
-    SAFE_FREE(lu->col_perm);
-    SAFE_FREE(lu->col_perm_inv);
-    SAFE_FREE(lu->eta_col);
 
+    /* Free eta file contents (dynamically allocated during updates) */
     if (lu->eta_indices) {
         for (int i = 0; i < lu->eta_capacity; i++) {
             SAFE_FREE(lu->eta_indices[i]);
@@ -211,30 +220,46 @@ void lu_free(LUFactorization *lu) {
         }
         SAFE_FREE(lu->eta_values);
     }
-    SAFE_FREE(lu->eta_nnz);
 
-    /* Free Forrest-Tomlin structures */
-    SAFE_FREE(lu->ft_col_order);
-    SAFE_FREE(lu->ft_col_order_inv);
-    SAFE_FREE(lu->ft_spike_col);
-    SAFE_FREE(lu->ft_spike_diag);
-    SAFE_FREE(lu->ft_spike_nnz);
-    SAFE_FREE(lu->ft_spike_start);
+    /* Free compact matrix (allocated lazily, not in arena) */
     SAFE_FREE(lu->ft_compact_matrix);
 
-    /* Free contiguous spike pool (single allocation for all spike data) */
+    /* Free spike pool (large variable-size arrays, not in arena) */
     SAFE_FREE(lu->spike_pool_idx);
     SAFE_FREE(lu->spike_pool_val);
 
-    /* Free hyper-sparse workspace */
-    SAFE_FREE(lu->hs_work1);
-    SAFE_FREE(lu->hs_work2);
-    SAFE_FREE(lu->hs_marked);
-    SAFE_FREE(lu->hs_idx);
-    SAFE_FREE(lu->hs_val);
-    SAFE_FREE(lu->hs_stack);
-    SAFE_FREE(lu->perm_work);
+    /* Free dense workspace (O(m²), not in arena) */
     SAFE_FREE(lu->dense_work);
+
+    /* Free arena (frees all fixed-size arrays in one call:
+     * perm, perm_inv, col_perm, col_perm_inv, U_diag,
+     * eta_col, eta_nnz, ft_col_order, ft_col_order_inv,
+     * ft_spike_col, ft_spike_diag, ft_spike_nnz, ft_spike_start,
+     * hs_work1, hs_work2, hs_marked, hs_idx, hs_val, hs_stack, perm_work) */
+    ralph_arena_free(lu->arena);
+    lu->arena = NULL;
+
+    /* NULL out arena-allocated pointers for safety */
+    lu->perm = NULL;
+    lu->perm_inv = NULL;
+    lu->col_perm = NULL;
+    lu->col_perm_inv = NULL;
+    lu->U_diag = NULL;
+    lu->eta_col = NULL;
+    lu->eta_nnz = NULL;
+    lu->ft_col_order = NULL;
+    lu->ft_col_order_inv = NULL;
+    lu->ft_spike_col = NULL;
+    lu->ft_spike_diag = NULL;
+    lu->ft_spike_nnz = NULL;
+    lu->ft_spike_start = NULL;
+    lu->hs_work1 = NULL;
+    lu->hs_work2 = NULL;
+    lu->hs_marked = NULL;
+    lu->hs_idx = NULL;
+    lu->hs_val = NULL;
+    lu->hs_stack = NULL;
+    lu->perm_work = NULL;
 
     free(lu);
 }

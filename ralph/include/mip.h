@@ -93,6 +93,19 @@ typedef struct BBNode {
 
 } BBNode;
 
+/* Node pool for efficient allocation/deallocation of B&B nodes.
+ * Pre-allocates a block of nodes to reduce malloc overhead in deep trees. */
+typedef struct {
+    int capacity;           /* Total nodes in pool */
+    int num_vars;           /* Size of lb/ub arrays per node */
+    BBNode *nodes;          /* Pre-allocated node structures */
+    double *lb_pool;        /* Contiguous lb arrays for all nodes */
+    double *ub_pool;        /* Contiguous ub arrays for all nodes */
+    int *free_list;         /* Stack of free node indices */
+    int free_count;         /* Number of free nodes */
+    int nodes_allocated;    /* High-water mark for stats */
+} BBNodePool;
+
 /* Node queue (priority queue) */
 typedef struct {
     int capacity;
@@ -121,6 +134,7 @@ typedef struct {
 
     /* Node management */
     NodeQueue *node_queue;
+    BBNodePool *node_pool;  /* Memory pool for node allocation */
     int node_count;
     int nodes_explored;
     int max_depth;
@@ -170,15 +184,24 @@ int mip_solve(MIPSolver *solver);
 /* Node management */
 NodeQueue* node_queue_create(int capacity, NodeSelectStrategy strategy, int obj_sense);
 void node_queue_free(NodeQueue *queue);
+void node_queue_free_with_pool(NodeQueue *queue, BBNodePool *pool);
 int node_queue_push(NodeQueue *queue, BBNode *node);
 BBNode* node_queue_pop(NodeQueue *queue);
 int node_queue_is_empty(const NodeQueue *queue);
 void node_queue_update_bound(NodeQueue *queue, double cutoff);
+void node_queue_update_bound_with_pool(NodeQueue *queue, double cutoff, BBNodePool *pool);
 double node_queue_best_bound(const NodeQueue *queue);
 
 BBNode* bb_node_create(int num_vars);
 void bb_node_free(BBNode *node);
 BBNode* bb_node_copy(const BBNode *node, int num_vars);
+
+/* Node pool for efficient allocation */
+BBNodePool* bb_node_pool_create(int capacity, int num_vars);
+void bb_node_pool_free(BBNodePool *pool);
+BBNode* bb_node_pool_get(BBNodePool *pool);
+void bb_node_pool_return(BBNodePool *pool, BBNode *node);
+BBNode* bb_node_pool_copy(BBNodePool *pool, const BBNode *src, int num_vars);
 
 /* Branching */
 int select_branch_variable(MIPSolver *solver, const double *solution, int *branch_var);
