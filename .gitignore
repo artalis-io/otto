@@ -69,3 +69,6 @@ clayshards/clay-shards/build/test_clay_shards
 data/index/
 locus/test_locus_asan
 docs/FOUNDER_EQUITY.md
+
+# Generated documents
+OTTO_Strategy.pdf
