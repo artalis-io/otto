@@ -272,7 +272,295 @@ const API_KEY = 'sk-live-abc123';  // Exposed in browser!
 // Or use public keys only (rate-limited, domain-restricted)
 ```
 
-### 4. Input Handling Security (Medium)
+### 4. API Client Resilience (High)
+
+When making HTTP requests to APIs (routing, geocoding, tile servers), handle backpressure and failures gracefully.
+
+| Issue | Pattern to Find | Severity |
+|-------|-----------------|----------|
+| No retry logic | Single `fetch()` without retry | High |
+| No backoff | Immediate retry on failure | High |
+| Missing status checks | Not handling 429/503/504 | High |
+| No circuit breaker | Hammering failing service | Medium |
+| Infinite retries | Retry loop without max attempts | High |
+| No timeout | `fetch()` without AbortController | Medium |
+| Thundering herd | All clients retry at same time | Medium |
+
+**HTTP Status Code Handling:**
+
+```javascript
+// Status codes that indicate backpressure
+const BACKPRESSURE_CODES = new Set([429, 503, 504, 502]);
+const RETRY_CODES = new Set([429, 500, 502, 503, 504]);
+
+function classifyResponse(response) {
+    if (response.ok) return 'success';
+    if (response.status === 429) return 'rate_limited';
+    if (response.status === 503) return 'overloaded';
+    if (response.status === 504) return 'timeout';
+    if (response.status >= 500) return 'server_error';
+    return 'client_error';  // 4xx - don't retry
+}
+```
+
+**Exponential Backoff with Jitter:**
+
+```javascript
+// Configurable retry settings
+const DEFAULT_RETRY_CONFIG = {
+    baseDelayMs: 100,       // Initial delay
+    maxDelayMs: 30000,      // Maximum delay cap
+    maxRetries: 5,          // Maximum attempts
+    jitterFactor: 0.2,      // Randomization (0.0-1.0)
+};
+
+function calculateBackoff(attempt, config = DEFAULT_RETRY_CONFIG) {
+    // Exponential: base * 2^attempt
+    let delay = config.baseDelayMs * Math.pow(2, attempt);
+    delay = Math.min(delay, config.maxDelayMs);
+
+    // Add jitter to prevent thundering herd
+    const jitter = config.jitterFactor;
+    const factor = 1 - jitter + Math.random() * 2 * jitter;
+
+    return Math.floor(delay * factor);
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+```
+
+**Fetch with Retry and Backoff:**
+
+```javascript
+async function fetchWithRetry(url, options = {}, retryConfig = DEFAULT_RETRY_CONFIG) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), options.timeout || 30000);
+
+    let lastError;
+
+    for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
+        try {
+            const response = await fetch(url, {
+                ...options,
+                signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+
+            // Check for backpressure
+            if (response.status === 429) {
+                const retryAfter = response.headers.get('Retry-After');
+                const delay = retryAfter
+                    ? parseInt(retryAfter, 10) * 1000
+                    : calculateBackoff(attempt, retryConfig);
+
+                if (attempt < retryConfig.maxRetries) {
+                    await sleep(delay);
+                    continue;
+                }
+            }
+
+            // Retry on server errors
+            if (RETRY_CODES.has(response.status) && attempt < retryConfig.maxRetries) {
+                await sleep(calculateBackoff(attempt, retryConfig));
+                continue;
+            }
+
+            return response;
+
+        } catch (err) {
+            clearTimeout(timeoutId);
+            lastError = err;
+
+            if (err.name === 'AbortError') {
+                throw new Error(`Request timeout: ${url}`);
+            }
+
+            // Network error - retry with backoff
+            if (attempt < retryConfig.maxRetries) {
+                await sleep(calculateBackoff(attempt, retryConfig));
+                continue;
+            }
+        }
+    }
+
+    throw lastError || new Error(`Max retries exceeded: ${url}`);
+}
+```
+
+**Circuit Breaker Pattern:**
+
+```javascript
+class CircuitBreaker {
+    constructor(options = {}) {
+        this.failureThreshold = options.failureThreshold || 5;
+        this.successThreshold = options.successThreshold || 3;
+        this.openDurationMs = options.openDurationMs || 30000;
+
+        this.state = 'closed';  // 'closed' | 'open' | 'half-open'
+        this.failureCount = 0;
+        this.successCount = 0;
+        this.lastFailureTime = 0;
+    }
+
+    async execute(fn) {
+        if (!this.allowRequest()) {
+            throw new Error('Circuit breaker is open');
+        }
+
+        try {
+            const result = await fn();
+            this.recordSuccess();
+            return result;
+        } catch (err) {
+            this.recordFailure();
+            throw err;
+        }
+    }
+
+    allowRequest() {
+        if (this.state === 'closed') return true;
+
+        if (this.state === 'open') {
+            const now = Date.now();
+            if (now - this.lastFailureTime > this.openDurationMs) {
+                this.state = 'half-open';
+                this.successCount = 0;
+                return true;
+            }
+            return false;  // Fail fast
+        }
+
+        return true;  // half-open: allow test request
+    }
+
+    recordSuccess() {
+        this.failureCount = 0;
+
+        if (this.state === 'half-open') {
+            this.successCount++;
+            if (this.successCount >= this.successThreshold) {
+                this.state = 'closed';
+            }
+        }
+    }
+
+    recordFailure() {
+        this.failureCount++;
+        this.lastFailureTime = Date.now();
+
+        if (this.state === 'half-open') {
+            this.state = 'open';
+        } else if (this.failureCount >= this.failureThreshold) {
+            this.state = 'open';
+        }
+    }
+
+    getState() {
+        return {
+            state: this.state,
+            failureCount: this.failureCount,
+            successCount: this.successCount,
+        };
+    }
+}
+
+// Usage
+const routingCircuit = new CircuitBreaker({
+    failureThreshold: 5,
+    openDurationMs: 30000,
+});
+
+async function getRoute(from, to) {
+    return routingCircuit.execute(async () => {
+        const response = await fetchWithRetry(`/api/v1/route?from=${from}&to=${to}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+    });
+}
+```
+
+**CORS Handling (Client-Side):**
+
+```javascript
+// GOOD: Handle CORS errors gracefully
+async function fetchCrossOrigin(url, options = {}) {
+    try {
+        const response = await fetch(url, {
+            ...options,
+            mode: 'cors',  // Explicit CORS mode
+            credentials: options.credentials || 'omit',
+        });
+        return response;
+    } catch (err) {
+        // CORS errors throw TypeError with no useful message
+        if (err instanceof TypeError && err.message === 'Failed to fetch') {
+            throw new Error(`CORS error or network failure for: ${url}`);
+        }
+        throw err;
+    }
+}
+
+// For tile servers that may not support CORS
+function loadTileImage(url) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';  // Request CORS
+
+        img.onload = () => resolve(img);
+        img.onerror = () => {
+            // Fallback: try without CORS (won't work for WebGL textures)
+            console.warn(`CORS failed for tile: ${url}`);
+            reject(new Error(`Failed to load tile: ${url}`));
+        };
+
+        img.src = url;
+    });
+}
+```
+
+**Configuration via Options:**
+
+```javascript
+// Allow configuration of resilience settings
+const API_CONFIG = {
+    routing: {
+        baseUrl: '/api/v1',
+        retry: { maxRetries: 3, baseDelayMs: 200 },
+        circuit: { failureThreshold: 5, openDurationMs: 60000 },
+        timeout: 10000,
+    },
+    tiles: {
+        baseUrl: 'https://tiles.example.com',
+        retry: { maxRetries: 2, baseDelayMs: 100 },
+        circuit: { failureThreshold: 10, openDurationMs: 30000 },
+        timeout: 5000,
+    },
+    geocoding: {
+        baseUrl: '/api/v1',
+        retry: { maxRetries: 2, baseDelayMs: 100 },
+        circuit: { failureThreshold: 5, openDurationMs: 30000 },
+        timeout: 5000,
+    },
+};
+```
+
+**API Client Audit Checklist:**
+
+| Check | Severity | Description |
+|-------|----------|-------------|
+| 429 handling | High | Backs off on rate limit, respects Retry-After |
+| 503/504 handling | High | Retries with exponential backoff |
+| Circuit breaker | High | Fails fast when API is unhealthy |
+| Max retries | High | Bounded retry count, not infinite |
+| Backoff jitter | Medium | Randomized delays prevent thundering herd |
+| Request timeout | Medium | AbortController with reasonable timeout |
+| CORS handling | Medium | Graceful error for CORS failures |
+| Configurable | Low | Retry/circuit/timeout settings exposed |
+
+### 5. Input Handling Security (Medium)
 
 | Issue | Pattern to Find | Severity |
 |-------|-----------------|----------|
@@ -326,7 +614,7 @@ class Renderer {
 }
 ```
 
-### 5. Async/Promise Error Handling (Medium)
+### 6. Async/Promise Error Handling (Medium)
 
 | Issue | Pattern to Find | Severity |
 |-------|-----------------|----------|
@@ -373,7 +661,7 @@ fetch(url)
     });
 ```
 
-### 6. Data Validation (Medium)
+### 7. Data Validation (Medium)
 
 | Issue | Pattern to Find | Severity |
 |-------|-----------------|----------|
@@ -447,7 +735,7 @@ function calculateZoom(width, bounds) {
 }
 ```
 
-### 7. Performance Patterns (Low)
+### 8. Performance Patterns (Low)
 
 | Issue | Pattern to Find | Severity |
 |-------|-----------------|----------|
@@ -508,7 +796,7 @@ function render(timestamp) {
 }
 ```
 
-### 8. OTTO-Specific Patterns
+### 9. OTTO-Specific Patterns
 
 #### Naming Conventions
 
@@ -550,7 +838,7 @@ function validateWasmExports(wasm) {
 }
 ```
 
-### 9. Test Coverage Checklist
+### 10. Test Coverage Checklist
 
 Check test file for:
 - [ ] WASM memory boundary edge cases
@@ -676,7 +964,15 @@ Before marking a module as "audited":
 - [ ] All user input in URLs encoded with `encodeURIComponent`
 - [ ] No hardcoded API keys
 - [ ] HTTPS used for external resources
-- [ ] CORS handled properly
+- [ ] CORS errors handled gracefully
+
+**API Client Resilience:**
+- [ ] HTTP 429/503/504 handled with backoff
+- [ ] Exponential backoff with jitter implemented
+- [ ] Circuit breaker for failing services
+- [ ] Maximum retry count bounded
+- [ ] Request timeouts via AbortController
+- [ ] Retry/circuit settings configurable
 
 **Error Handling:**
 - [ ] All async functions have error handling
