@@ -9,6 +9,7 @@
 #include <string.h>
 #include "sparse.h"
 #include "ralph.h"
+#include "shared.h"
 
 /* Tolerances */
 #define RALPH_FEAS_TOL 1e-6
@@ -18,14 +19,10 @@
 #define RALPH_INT_TOL 1e-5
 #define RALPH_BIG_M 1e8       /* Artificial variable cost for Big-M method */
 
-/* Safe free macro - NULLs pointer after freeing to prevent double-free */
-#define SAFE_FREE(p) do { free(p); (p) = NULL; } while(0)
-
-/* Arena allocator alignment (8 bytes for double/pointer) */
-#define RALPH_ARENA_ALIGN 8
+/* NOTE: SAFE_FREE macro is provided by shared.h */
 
 /* ============================================================================
- * Arena Allocator
+ * Arena Allocator (Provided by shared library)
  *
  * Simple bump allocator for allocating many arrays with the same lifetime.
  * Benefits:
@@ -33,75 +30,9 @@
  * - No fragmentation from repeated alloc/free cycles
  * - Simpler error handling (one check, not 20)
  * - Cache-friendly contiguous memory layout
+ *
+ * See shared/include/sh_arena.h for API: sh_arena_create/alloc/calloc/reset/free
  * ============================================================================ */
-
-typedef struct {
-    char *buffer;       /* Pre-allocated memory block */
-    size_t capacity;    /* Total size of buffer */
-    size_t used;        /* Currently used bytes */
-} RalphArena;
-
-/* Create arena with given capacity. Returns NULL on failure. */
-static inline RalphArena* ralph_arena_create(size_t capacity) {
-    RalphArena *arena = (RalphArena*)malloc(sizeof(RalphArena));
-    if (!arena) return NULL;
-
-    arena->buffer = (char*)malloc(capacity);
-    if (!arena->buffer) {
-        free(arena);
-        return NULL;
-    }
-    arena->capacity = capacity;
-    arena->used = 0;
-    return arena;
-}
-
-/* Allocate from arena with 8-byte alignment. Returns NULL if out of space. */
-static inline void* ralph_arena_alloc(RalphArena *arena, size_t size) {
-    if (!arena || !arena->buffer) return NULL;
-
-    /* Align to RALPH_ARENA_ALIGN bytes for double/pointer alignment */
-    size = (size + RALPH_ARENA_ALIGN - 1) & ~(size_t)(RALPH_ARENA_ALIGN - 1);
-
-    if (arena->used + size > arena->capacity) {
-        return NULL;  /* Out of space */
-    }
-
-    void *ptr = arena->buffer + arena->used;
-    arena->used += size;
-    return ptr;
-}
-
-/* Allocate and zero-initialize from arena. */
-static inline void* ralph_arena_calloc(RalphArena *arena, size_t count, size_t size) {
-    size_t total = count * size;
-    void *ptr = ralph_arena_alloc(arena, total);
-    if (ptr) {
-        memset(ptr, 0, total);
-    }
-    return ptr;
-}
-
-/* Reset arena for reuse (doesn't free memory, just resets position). */
-static inline void ralph_arena_reset(RalphArena *arena) {
-    if (arena) {
-        arena->used = 0;
-    }
-}
-
-/* Free arena and all memory. */
-static inline void ralph_arena_free(RalphArena *arena) {
-    if (arena) {
-        free(arena->buffer);
-        free(arena);
-    }
-}
-
-/* Get remaining capacity in arena. */
-static inline size_t ralph_arena_remaining(const RalphArena *arena) {
-    if (!arena) return 0;
-    return arena->capacity - arena->used;
-}
 
 /* Default parameter values */
 #define RALPH_DEFAULT_MAX_ITER 1000000
@@ -235,7 +166,7 @@ typedef struct {
     double *dense_work;     /* Reused across factorizations to avoid O(m²) alloc */
 
     /* Arena allocator for fixed-size arrays (reduces ~20 mallocs to 1) */
-    RalphArena *arena;
+    SHArena *arena;
 } LUFactorization;
 
 /* Simplex tableau representation */
@@ -314,7 +245,7 @@ typedef struct {
     double *cb_sparse_val;  /* Sparse values for c_B (size m) */
 
     /* Arena allocator for workspace arrays (reduces 20+ mallocs to 1) */
-    RalphArena *arena;
+    SHArena *arena;
 
 } SimplexTableau;
 

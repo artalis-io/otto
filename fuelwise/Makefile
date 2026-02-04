@@ -4,8 +4,12 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math
 CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG
-INCLUDES = -I./include -I../ralph/include
+INCLUDES = -I./include -I../ralph/include -I../shared/include
 LDFLAGS = -lm
+
+# Shared library (required by Ralph)
+SHARED_DIR = ../shared
+SHARED_LIB = $(SHARED_DIR)/libshared.a
 
 # OpenMP support (required when linking against libralph.a which uses OpenMP)
 UNAME_S := $(shell uname -s)
@@ -46,13 +50,17 @@ TEST_SOURCES = $(TEST_DIR)/test_fuelwise.c
 TEST_EXEC = test_fuelwise
 
 # Default target
-all: ralph lib $(TEST_EXEC)
+all: shared ralph lib $(TEST_EXEC)
 
 # Build library only
 lib: $(LIB_NAME)
 
-# Build Ralph first
-ralph:
+# Build shared library first
+shared:
+	$(MAKE) -C $(SHARED_DIR) lib
+
+# Build Ralph (depends on shared)
+ralph: shared
 	$(MAKE) -C $(RALPH_DIR) lib
 
 $(LIB_NAME): $(OBJECTS)
@@ -63,8 +71,8 @@ $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Build test executable
-$(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME) $(RALPH_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lfuelwise -L$(RALPH_DIR) -lralph $(LDFLAGS) -o $@
+$(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME) $(RALPH_LIB) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lfuelwise -L$(RALPH_DIR) -lralph -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
 # Debug build
 debug: CFLAGS = $(CFLAGS_DEBUG)
@@ -94,7 +102,7 @@ uninstall:
 	rm -rf /usr/local/include/fuelwise
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean clean-all debug test wasm install uninstall ralph help
+.PHONY: all lib clean clean-all debug test wasm install uninstall ralph shared help
 
 # Build WASM (delegates to wasm/ subdirectory)
 wasm:

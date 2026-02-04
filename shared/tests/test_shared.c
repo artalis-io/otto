@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdint.h>
 
 /* ============================================================================
  * Test Framework
@@ -576,6 +577,188 @@ TEST(block_header_init)
 }
 
 /* ============================================================================
+ * Arena Allocator Tests
+ * ============================================================================ */
+
+TEST(arena_create_free)
+{
+    SHArena *arena = sh_arena_create(1024);
+    ASSERT(arena != NULL);
+    ASSERT_EQ(sh_arena_remaining(arena), 1024);
+    ASSERT_EQ(sh_arena_used(arena), 0);
+    sh_arena_free(arena);
+}
+
+TEST(arena_alloc_basic)
+{
+    SHArena *arena = sh_arena_create(1024);
+    ASSERT(arena != NULL);
+
+    void *p1 = sh_arena_alloc(arena, 100);
+    ASSERT(p1 != NULL);
+    ASSERT(sh_arena_used(arena) >= 100);  /* May be aligned */
+
+    void *p2 = sh_arena_alloc(arena, 200);
+    ASSERT(p2 != NULL);
+    ASSERT(p2 != p1);
+
+    sh_arena_free(arena);
+}
+
+TEST(arena_calloc_zeroed)
+{
+    SHArena *arena = sh_arena_create(1024);
+    int *arr = sh_arena_calloc(arena, 10, sizeof(int));
+    ASSERT(arr != NULL);
+
+    /* Verify zero-initialized */
+    for (int i = 0; i < 10; i++) {
+        ASSERT_EQ(arr[i], 0);
+    }
+    sh_arena_free(arena);
+}
+
+TEST(arena_reset)
+{
+    SHArena *arena = sh_arena_create(1024);
+
+    sh_arena_alloc(arena, 500);
+    ASSERT(sh_arena_used(arena) >= 500);
+
+    sh_arena_reset(arena);
+    ASSERT_EQ(sh_arena_used(arena), 0);
+    ASSERT_EQ(sh_arena_remaining(arena), 1024);
+
+    /* Can allocate again after reset */
+    void *p = sh_arena_alloc(arena, 100);
+    ASSERT(p != NULL);
+
+    sh_arena_free(arena);
+}
+
+TEST(arena_overflow_returns_null)
+{
+    SHArena *arena = sh_arena_create(100);
+
+    void *p1 = sh_arena_alloc(arena, 50);
+    ASSERT(p1 != NULL);
+
+    /* This should fail - not enough space (accounting for alignment) */
+    void *p2 = sh_arena_alloc(arena, 100);
+    ASSERT(p2 == NULL);
+
+    sh_arena_free(arena);
+}
+
+TEST(arena_alignment)
+{
+    SHArena *arena = sh_arena_create(1024);
+
+    /* Allocate odd size, next alloc should still be aligned */
+    sh_arena_alloc(arena, 1);
+    void *p = sh_arena_alloc(arena, 8);
+
+    /* Check 8-byte alignment */
+    ASSERT(((uintptr_t)p % 8) == 0);
+
+    sh_arena_free(arena);
+}
+
+/* ============================================================================
+ * Memory Pool Tests
+ * ============================================================================ */
+
+TEST(pool_init_free)
+{
+    SHPool pool;
+    int result = sh_pool_init(&pool, sizeof(int), 100);
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(sh_pool_remaining(&pool), 100);
+    ASSERT_EQ(sh_pool_used(&pool), 0);
+    sh_pool_free(&pool);
+}
+
+TEST(pool_alloc_basic)
+{
+    SHPool pool;
+    sh_pool_init(&pool, sizeof(double), 100);
+
+    size_t offset = sh_pool_alloc(&pool, 10);
+    ASSERT(offset != SH_POOL_INVALID);
+    ASSERT_EQ(offset, 0);
+    ASSERT_EQ(sh_pool_used(&pool), 10);
+
+    size_t offset2 = sh_pool_alloc(&pool, 5);
+    ASSERT(offset2 != SH_POOL_INVALID);
+    ASSERT_EQ(offset2, 10);
+
+    sh_pool_free(&pool);
+}
+
+TEST(pool_ptr_access)
+{
+    SHPool pool;
+    sh_pool_init(&pool, sizeof(int), 100);
+
+    size_t offset = sh_pool_alloc(&pool, 5);
+    int *arr = SH_POOL_PTR(&pool, int, offset);
+    ASSERT(arr != NULL);
+
+    /* Write and read back */
+    arr[0] = 42;
+    arr[4] = 99;
+    ASSERT_EQ(SH_POOL_AT(&pool, int, offset, 0), 42);
+    ASSERT_EQ(SH_POOL_AT(&pool, int, offset, 4), 99);
+
+    sh_pool_free(&pool);
+}
+
+TEST(pool_reset)
+{
+    SHPool pool;
+    sh_pool_init(&pool, sizeof(int), 100);
+
+    sh_pool_alloc(&pool, 50);
+    ASSERT_EQ(sh_pool_used(&pool), 50);
+
+    sh_pool_reset(&pool);
+    ASSERT_EQ(sh_pool_used(&pool), 0);
+    ASSERT_EQ(sh_pool_remaining(&pool), 100);
+
+    sh_pool_free(&pool);
+}
+
+TEST(pool_overflow_returns_invalid)
+{
+    SHPool pool;
+    sh_pool_init(&pool, sizeof(int), 10);
+
+    size_t offset = sh_pool_alloc(&pool, 5);
+    ASSERT(offset != SH_POOL_INVALID);
+
+    /* Should fail - not enough space */
+    size_t offset2 = sh_pool_alloc(&pool, 10);
+    ASSERT_EQ(offset2, SH_POOL_INVALID);
+
+    sh_pool_free(&pool);
+}
+
+TEST(pool_grow)
+{
+    SHPool pool;
+    sh_pool_init(&pool, sizeof(int), 10);
+
+    sh_pool_alloc(&pool, 8);
+
+    /* Grow pool */
+    int result = sh_pool_grow(&pool, 2.0);
+    ASSERT_EQ(result, 0);
+    ASSERT(sh_pool_remaining(&pool) >= 10);  /* At least 10 more available */
+
+    sh_pool_free(&pool);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -641,6 +824,22 @@ int main(void)
 
     printf("\nPBF Block Header:\n");
     RUN_TEST(block_header_init);
+
+    printf("\nArena Allocator:\n");
+    RUN_TEST(arena_create_free);
+    RUN_TEST(arena_alloc_basic);
+    RUN_TEST(arena_calloc_zeroed);
+    RUN_TEST(arena_reset);
+    RUN_TEST(arena_overflow_returns_null);
+    RUN_TEST(arena_alignment);
+
+    printf("\nMemory Pool:\n");
+    RUN_TEST(pool_init_free);
+    RUN_TEST(pool_alloc_basic);
+    RUN_TEST(pool_ptr_access);
+    RUN_TEST(pool_reset);
+    RUN_TEST(pool_overflow_returns_invalid);
+    RUN_TEST(pool_grow);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

@@ -20,7 +20,9 @@ SRCS = src/sh_geo.c \
        src/sh_inflate.c \
        src/sh_pbf.c \
        src/sh_font.c \
-       src/sh_font_data.c
+       src/sh_font_data.c \
+       src/sh_arena.c \
+       src/sh_pool.c
 
 MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
              $(VENDOR_DIR)/miniz_tdef.c \
@@ -91,6 +93,8 @@ src/sh_inflate.o: include/sh_inflate.h $(VENDOR_DIR)/miniz.h $(VENDOR_DIR)/miniz
 src/sh_pbf.o: include/sh_pbf.h include/sh_protobuf.h include/sh_inflate.h
 src/sh_font.o: include/sh_font.h
 src/sh_font_data.o: include/sh_font.h
+src/sh_arena.o: include/sh_arena.h
+src/sh_pool.o: include/sh_pool.h
 
 # Help
 help:

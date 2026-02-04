@@ -19,7 +19,8 @@ else
 endif
 
 CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG
-INCLUDES = -I./include
+INCLUDES = -I./include -I../shared/include
+SHARED_LIB = ../shared/libshared.a
 LDFLAGS = -lm $(OMP_LDFLAGS)
 
 # Directories
@@ -86,10 +87,14 @@ GLPK_INCLUDES = -I$(GLPK_PREFIX)/include
 GLPK_LIBS = -L$(GLPK_PREFIX)/lib -lglpk
 
 # Default target
-all: lib $(TEST_EXEC)
+all: $(SHARED_LIB) lib $(TEST_EXEC)
 
 # Build library only
-lib: $(LIB_NAME)
+lib: $(SHARED_LIB) $(LIB_NAME)
+
+# Build shared library (dependency)
+$(SHARED_LIB):
+	$(MAKE) -C ../shared lib
 
 $(LIB_NAME): $(OBJECTS)
 	ar rcs $@ $^
@@ -99,8 +104,8 @@ $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Build test executable
-$(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Debug build
 debug: CFLAGS = $(CFLAGS_DEBUG)
@@ -111,56 +116,56 @@ test: $(TEST_EXEC)
 	./$(TEST_EXEC)
 
 # Build edge case tests
-$(EDGE_TEST_EXEC): $(EDGE_TEST_SOURCES) $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(EDGE_TEST_EXEC): $(EDGE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run edge case tests
 test-edge: $(EDGE_TEST_EXEC)
 	./$(EDGE_TEST_EXEC)
 
 # Build LAP tests
-$(LAP_TEST_EXEC): $(LAP_TEST_SOURCES) $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(LAP_TEST_EXEC): $(LAP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LAP tests
 test-lap: $(LAP_TEST_EXEC)
 	./$(LAP_TEST_EXEC)
 
 # Build network flow tests
-$(NETFLOW_TEST_EXEC): $(NETFLOW_TEST_SOURCES) $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(NETFLOW_TEST_EXEC): $(NETFLOW_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run network flow tests
 test-netflow: $(NETFLOW_TEST_EXEC)
 	./$(NETFLOW_TEST_EXEC)
 
 # Build network detection tests
-$(DETECT_TEST_EXEC): $(DETECT_TEST_SOURCES) $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(DETECT_TEST_EXEC): $(DETECT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run network detection tests
 test-detect: $(DETECT_TEST_EXEC)
 	./$(DETECT_TEST_EXEC)
 
 # Build size scaling benchmark
-$(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run size scaling benchmark
 bench: $(BENCH_SIZES_EXEC)
 	./$(BENCH_SIZES_EXEC)
 
 # Build GLPK comparison benchmark (old version)
-$(COMPARE_GLPK_EXEC): $(BENCH_DIR)/compare_glpk.c $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(COMPARE_GLPK_EXEC): $(BENCH_DIR)/compare_glpk.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run GLPK comparison (requires glpsol to be installed)
 compare-glpk: $(COMPARE_GLPK_EXEC)
 	./$(COMPARE_GLPK_EXEC)
 
 # Build Ralph vs GLPK benchmark (direct library comparison)
-$(BENCH_VS_GLPK_EXEC): $(BENCH_DIR)/bench_vs_glpk.c $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< -L. -lralph $(GLPK_LIBS) $(LDFLAGS) -o $@
+$(BENCH_VS_GLPK_EXEC): $(BENCH_DIR)/bench_vs_glpk.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< -L. -lralph -L../shared -lshared $(GLPK_LIBS) $(LDFLAGS) -o $@
 
 # Run Ralph vs GLPK benchmark
 bench-glpk: $(BENCH_VS_GLPK_EXEC)
@@ -171,8 +176,8 @@ bench-glpk-quick: $(BENCH_VS_GLPK_EXEC)
 	./$(BENCH_VS_GLPK_EXEC) --quick
 
 # Build MIP benchmark
-$(BENCH_MIP_EXEC): $(BENCH_DIR)/bench_mip.c $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< -L. -lralph $(GLPK_LIBS) $(LDFLAGS) -o $@
+$(BENCH_MIP_EXEC): $(BENCH_DIR)/bench_mip.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< -L. -lralph -L../shared -lshared $(GLPK_LIBS) $(LDFLAGS) -o $@
 
 # Run MIP benchmark
 bench-mip: $(BENCH_MIP_EXEC)
@@ -183,24 +188,24 @@ bench-mip-quick: $(BENCH_MIP_EXEC)
 	./$(BENCH_MIP_EXEC) --quick
 
 # Build profile benchmark
-$(PROFILE_BENCH_EXEC): $(BENCH_DIR)/profile_bench.c $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(PROFILE_BENCH_EXEC): $(BENCH_DIR)/profile_bench.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run profile benchmark
 profile-bench: $(PROFILE_BENCH_EXEC)
 	./$(PROFILE_BENCH_EXEC)
 
 # Build LAP benchmark
-$(BENCH_LAP_EXEC): $(BENCH_DIR)/bench_lap.c $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(BENCH_LAP_EXEC): $(BENCH_DIR)/bench_lap.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LAP benchmark
 bench-lap: $(BENCH_LAP_EXEC)
 	./$(BENCH_LAP_EXEC)
 
 # Build LAP performance benchmark
-$(BENCH_LAP_PERF_EXEC): $(BENCH_DIR)/bench_lap_perf.c $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(BENCH_LAP_PERF_EXEC): $(BENCH_DIR)/bench_lap_perf.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LAP performance benchmark
 bench-lap-perf: $(BENCH_LAP_PERF_EXEC)
@@ -211,8 +216,8 @@ bench-lap-perf-quick: $(BENCH_LAP_PERF_EXEC)
 	./$(BENCH_LAP_PERF_EXEC) --quick
 
 # Build network flow benchmark
-$(BENCH_NETFLOW_EXEC): $(BENCH_DIR)/bench_netflow.c $(LIB_NAME)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph $(LDFLAGS) -o $@
+$(BENCH_NETFLOW_EXEC): $(BENCH_DIR)/bench_netflow.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run network flow benchmark
 bench-netflow: $(BENCH_NETFLOW_EXEC)

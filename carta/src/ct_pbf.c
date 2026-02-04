@@ -9,9 +9,11 @@
 #include "ct_tile.h"
 #include "ct_lod.h"
 #include "ct_rtree.h"
+#include "shared.h"
 #include "sh_protobuf.h"
 #include "sh_inflate.h"
 #include "sh_pbf.h"
+#include "sh_pool.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +27,31 @@
 #endif
 
 /* PBF field numbers - use shared definitions from sh_pbf.h */
+
+/* ============================================================================
+ * Parsing Constants
+ * ============================================================================ */
+
+/* Maximum elements in dense node parsing (per PrimitiveBlock) */
+#define CT_MAX_DENSE_NODES       1000000
+#define CT_MAX_KEYS_VALS         10000000
+
+/* Maximum way node references */
+#define CT_MAX_WAY_REFS          10000
+
+/* Maximum relation members */
+#define CT_MAX_RELATION_MEMBERS  10000
+
+/* File size heuristics for hash table preallocation */
+#define CT_BYTES_PER_NODE_ESTIMATE    40
+#define CT_BYTES_PER_WAY_ESTIMATE     150
+#define CT_COORDS_PER_WAY_ESTIMATE    12
+
+/* Hash table and pool size limits */
+#define CT_MAX_NODE_MAP_CAPACITY      (256 * 1024 * 1024)
+#define CT_MAX_WAY_MAP_CAPACITY       (64 * 1024 * 1024)
+#define CT_MAX_COORD_POOL_CAPACITY    (256 * 1024 * 1024)
+#define CT_MIN_COORD_POOL_CAPACITY    100000
 
 /* ============================================================================
  * Feature Classification
@@ -377,27 +404,29 @@ static uint64_t hash_id(int64_t id)
 }
 
 /*
- * Preallocate hash tables based on file size heuristics.
- * This eliminates expensive rehashing during parsing.
+ * Preallocate hash tables and coordinate pool based on file size heuristics.
+ * This eliminates expensive rehashing and reallocation during parsing.
  *
  * Heuristics based on typical OSM PBF compression ratios:
  * - ~1 node per 50 bytes of compressed data
  * - ~1 way per 200 bytes of compressed data
+ * - ~10 coordinates per way (average)
  * - Use 50% load factor for optimal hash performance
  */
 static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
 {
     /* Estimate counts with safety margin */
-    size_t estimated_nodes = file_size / 40;  /* Conservative estimate */
-    size_t estimated_ways = file_size / 150;
+    size_t estimated_nodes = file_size / CT_BYTES_PER_NODE_ESTIMATE;
+    size_t estimated_ways = file_size / CT_BYTES_PER_WAY_ESTIMATE;
+    size_t estimated_coords = estimated_ways * CT_COORDS_PER_WAY_ESTIMATE;
 
     /* Round up to power of 2 for efficient modulo */
     size_t node_cap = 65536;  /* Minimum capacity */
     while (node_cap < estimated_nodes * 2) {
         node_cap *= 2;
         /* Prevent overflow - cap at reasonable maximum */
-        if (node_cap > 256 * 1024 * 1024) {
-            node_cap = 256 * 1024 * 1024;
+        if (node_cap > CT_MAX_NODE_MAP_CAPACITY) {
+            node_cap = CT_MAX_NODE_MAP_CAPACITY;
             break;
         }
     }
@@ -405,8 +434,8 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
     size_t way_cap = 16384;  /* Minimum capacity */
     while (way_cap < estimated_ways * 2) {
         way_cap *= 2;
-        if (way_cap > 64 * 1024 * 1024) {
-            way_cap = 64 * 1024 * 1024;
+        if (way_cap > CT_MAX_WAY_MAP_CAPACITY) {
+            way_cap = CT_MAX_WAY_MAP_CAPACITY;
             break;
         }
     }
@@ -436,6 +465,21 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
     }
     ctx->way_map.capacity = way_cap;
     ctx->way_map.count = 0;
+
+    /* Allocate coordinate pool for way geometry */
+    size_t coord_cap = estimated_coords;
+    if (coord_cap < CT_MIN_COORD_POOL_CAPACITY) coord_cap = CT_MIN_COORD_POOL_CAPACITY;
+    if (coord_cap > CT_MAX_COORD_POOL_CAPACITY) coord_cap = CT_MAX_COORD_POOL_CAPACITY;
+
+    ctx->coord_pool = malloc(sizeof(SHPool));
+    if (!ctx->coord_pool) {
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+    if (sh_pool_init(ctx->coord_pool, sizeof(CTCoord), coord_cap) != 0) {
+        free(ctx->coord_pool);
+        ctx->coord_pool = NULL;
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
 
     return CT_OK;
 }
@@ -570,17 +614,11 @@ static uint32_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
  * Hash table for fast role string deduplication.
  * Uses djb2 hash with linear probing.
  * Role strings are few (<100 unique) so 256 buckets is plenty.
+ *
+ * THREAD SAFETY: Hash table is stored in CTPBFContext (not global static)
+ * so each parsing context is independent.
  */
 #define ROLE_HASH_SIZE 256
-
-typedef struct {
-    uint32_t hash;      /* Hash of the role string (0 = empty slot) */
-    uint32_t role_idx;  /* Index into ctx->role_strings */
-} RoleHashEntry;
-
-/* Thread-local role hash table (initialized per context) */
-static RoleHashEntry role_hash_table[ROLE_HASH_SIZE];
-static int role_hash_initialized = 0;
 
 /* DJB2 hash function */
 static uint32_t djb2_hash(const char *str)
@@ -594,34 +632,34 @@ static uint32_t djb2_hash(const char *str)
     return hash ? hash : 1;
 }
 
-static void role_hash_reset(void)
+static void role_hash_reset(CTPBFContext *ctx)
 {
-    memset(role_hash_table, 0, sizeof(role_hash_table));
-    role_hash_initialized = 1;
+    memset(ctx->role_hash, 0, sizeof(ctx->role_hash));
+    ctx->role_hash_initialized = 1;
 }
 
-static uint32_t role_hash_lookup(const char *role, uint32_t hash)
+static uint32_t role_hash_lookup(const CTPBFContext *ctx, const char *role, uint32_t hash)
 {
     uint32_t idx = hash % ROLE_HASH_SIZE;
     for (int i = 0; i < ROLE_HASH_SIZE; i++) {
-        if (role_hash_table[idx].hash == 0) {
+        if (ctx->role_hash[idx].hash == 0) {
             return UINT32_MAX;  /* Not found */
         }
-        if (role_hash_table[idx].hash == hash) {
-            return role_hash_table[idx].role_idx;
+        if (ctx->role_hash[idx].hash == hash) {
+            return ctx->role_hash[idx].role_idx;
         }
         idx = (idx + 1) % ROLE_HASH_SIZE;
     }
     return UINT32_MAX;  /* Not found, table full */
 }
 
-static void role_hash_insert(uint32_t hash, uint32_t role_idx)
+static void role_hash_insert(CTPBFContext *ctx, uint32_t hash, uint32_t role_idx)
 {
     uint32_t idx = hash % ROLE_HASH_SIZE;
     for (int i = 0; i < ROLE_HASH_SIZE; i++) {
-        if (role_hash_table[idx].hash == 0) {
-            role_hash_table[idx].hash = hash;
-            role_hash_table[idx].role_idx = role_idx;
+        if (ctx->role_hash[idx].hash == 0) {
+            ctx->role_hash[idx].hash = hash;
+            ctx->role_hash[idx].role_idx = role_idx;
             return;
         }
         idx = (idx + 1) % ROLE_HASH_SIZE;
@@ -635,13 +673,13 @@ static uint32_t add_role_string(CTPBFContext *ctx, const char *role)
     if (!role || role[0] == '\0') return 0;
 
     /* Initialize hash table if needed */
-    if (!role_hash_initialized) {
-        role_hash_reset();
+    if (!ctx->role_hash_initialized) {
+        role_hash_reset(ctx);
     }
 
     /* Hash lookup for deduplication */
     uint32_t hash = djb2_hash(role);
-    uint32_t existing = role_hash_lookup(role, hash);
+    uint32_t existing = role_hash_lookup(ctx, role, hash);
     if (existing != UINT32_MAX) {
         /* Verify hash collision isn't a false positive */
         if (ctx->role_strings[existing] &&
@@ -673,7 +711,7 @@ static uint32_t add_role_string(CTPBFContext *ctx, const char *role)
     ctx->num_role_strings++;
 
     /* Add to hash table */
-    role_hash_insert(hash, new_idx);
+    role_hash_insert(ctx, hash, new_idx);
 
     return new_idx;
 }
@@ -692,8 +730,25 @@ CTPBFContext *ct_pbf_context_create(void)
     ctx->bbox.min_lon = 180;
     ctx->bbox.max_lon = -180;
 
-    /* Reset role string hash table for new context */
-    role_hash_reset();
+    /* Initialize role string hash table for this context */
+    role_hash_reset(ctx);
+
+    /* Create arena for parsing temporaries (~100MB for large PBF blocks)
+     * Size breakdown:
+     * - Dense nodes: ids (8MB) + lats (8MB) + lons (8MB) + keys_vals (80MB) = 104MB
+     * - Way refs: 80KB (10K refs)
+     * - Relation members: 120KB (10K members)
+     * Round up to 128MB for safety margin.
+     */
+    ctx->parse_arena = sh_arena_create(128 * 1024 * 1024);
+    if (!ctx->parse_arena) {
+        free(ctx);
+        return NULL;
+    }
+
+    /* Coordinate pool starts NULL; will be allocated in ct_pbf_parse_memory()
+     * based on file size heuristics for optimal preallocation */
+    ctx->coord_pool = NULL;
 
     return ctx;
 }
@@ -702,74 +757,110 @@ void ct_pbf_context_free(CTPBFContext *ctx)
 {
     if (!ctx) return;
 
-    free(ctx->nodes.ids);
-    free(ctx->nodes.coords);
-    free(ctx->node_map.keys);
-    free(ctx->node_map.values);
+    SAFE_FREE(ctx->nodes.ids);
+    SAFE_FREE(ctx->nodes.coords);
+    SAFE_FREE(ctx->node_map.keys);
+    SAFE_FREE(ctx->node_map.values);
 
     /* Free way_map */
-    free(ctx->way_map.keys);
-    free(ctx->way_map.values);
+    SAFE_FREE(ctx->way_map.keys);
+    SAFE_FREE(ctx->way_map.values);
 
     if (ctx->mmap_base) {
         /* mmap'd context - ways point into allocated block, names are strdup'd */
         for (size_t i = 0; i < ctx->num_ways; i++) {
-            free(ctx->ways[i].name);
+            SAFE_FREE(ctx->ways[i].name);
         }
-        free(ctx->ways);
-        free(ctx->mmap_coords);
+        SAFE_FREE(ctx->ways);
+        SAFE_FREE(ctx->mmap_coords);
 
         /* R-Tree nodes point into mmap, just free the struct */
         if (ctx->rtree && !ctx->rtree_is_mmap) {
             ct_rtree_free(ctx->rtree);
+            ctx->rtree = NULL;
         } else if (ctx->rtree) {
             free(ctx->rtree);
+            ctx->rtree = NULL;
         }
 
         /* Unmap the file */
         munmap(ctx->mmap_base, ctx->mmap_size);
+        ctx->mmap_base = NULL;
     } else {
         /* Normal context - free everything */
-        for (size_t i = 0; i < ctx->num_ways; i++) {
-            free(ctx->ways[i].coords);
-            free(ctx->ways[i].name);
+        /* Determine pool boundaries for checking if coords are pool-allocated */
+        char *pool_start = NULL;
+        char *pool_end = NULL;
+        if (ctx->coord_pool && ctx->coord_pool->data) {
+            pool_start = (char *)ctx->coord_pool->data;
+            pool_end = pool_start + (ctx->coord_pool->capacity * ctx->coord_pool->elem_size);
         }
-        free(ctx->ways);
+
+        for (size_t i = 0; i < ctx->num_ways; i++) {
+            /* Only free coords if they're NOT in the coordinate pool */
+            if (ctx->ways[i].coords) {
+                char *coord_ptr = (char *)ctx->ways[i].coords;
+                int in_pool = (pool_start && coord_ptr >= pool_start && coord_ptr < pool_end);
+                if (!in_pool) {
+                    free(ctx->ways[i].coords);
+                }
+                ctx->ways[i].coords = NULL;
+            }
+            SAFE_FREE(ctx->ways[i].name);
+        }
+        SAFE_FREE(ctx->ways);
 
         ct_rtree_free(ctx->rtree);
+        ctx->rtree = NULL;
     }
 
     /* Free relations */
     for (size_t i = 0; i < ctx->num_relations; i++) {
-        free(ctx->relations[i].members);
-        free(ctx->relations[i].name);
+        SAFE_FREE(ctx->relations[i].members);
+        SAFE_FREE(ctx->relations[i].name);
     }
-    free(ctx->relations);
+    SAFE_FREE(ctx->relations);
 
     /* Free role strings */
     for (size_t i = 0; i < ctx->num_role_strings; i++) {
-        free(ctx->role_strings[i]);
+        SAFE_FREE(ctx->role_strings[i]);
     }
-    free(ctx->role_strings);
+    SAFE_FREE(ctx->role_strings);
 
     /* Free assembled multipolygons */
     for (size_t i = 0; i < ctx->num_multipolygons; i++) {
         for (int r = 0; r < ctx->multipolygons[i].num_rings; r++) {
-            free(ctx->multipolygons[i].rings[r].coords);
+            SAFE_FREE(ctx->multipolygons[i].rings[r].coords);
         }
-        free(ctx->multipolygons[i].rings);
-        free(ctx->multipolygons[i].name);
+        SAFE_FREE(ctx->multipolygons[i].rings);
+        SAFE_FREE(ctx->multipolygons[i].name);
     }
-    free(ctx->multipolygons);
+    SAFE_FREE(ctx->multipolygons);
 
     /* Free multipolygon R-Tree */
     ct_rtree_free(ctx->mp_rtree);
+    ctx->mp_rtree = NULL;
 
     /* Free labeled points */
     for (size_t i = 0; i < ctx->num_labeled_points; i++) {
-        free(ctx->labeled_points[i].name);
+        SAFE_FREE(ctx->labeled_points[i].name);
     }
-    free(ctx->labeled_points);
+    SAFE_FREE(ctx->labeled_points);
+
+    /* Free parsing arena */
+    sh_arena_free(ctx->parse_arena);
+    ctx->parse_arena = NULL;
+
+    /* Free coordinate pool */
+    if (ctx->coord_pool) {
+        sh_pool_free(ctx->coord_pool);
+        free(ctx->coord_pool);
+        ctx->coord_pool = NULL;
+    }
+
+    /* Free multipolygon assembly scratch buffers */
+    SAFE_FREE(ctx->mp_scratch.outer_segs);
+    SAFE_FREE(ctx->mp_scratch.inner_segs);
 
     free(ctx);
 }
@@ -795,15 +886,14 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
     size_t id_count = 0, lat_count = 0, lon_count = 0, kv_count = 0;
     size_t pos = 0;
 
-    /* Temporary arrays for delta-encoded values */
-    size_t max_nodes = 1000000;
-    size_t max_kv = 10000000;  /* keys_vals can be large */
-    ids = malloc(max_nodes * sizeof(int64_t));
-    lats = malloc(max_nodes * sizeof(int64_t));
-    lons = malloc(max_nodes * sizeof(int64_t));
-    keys_vals = malloc(max_kv * sizeof(uint64_t));
+    /* Temporary arrays for delta-encoded values (allocated from parsing arena) */
+    size_t max_nodes = CT_MAX_DENSE_NODES;
+    size_t max_kv = CT_MAX_KEYS_VALS;
+    ids = sh_arena_alloc(ctx->parse_arena, max_nodes * sizeof(int64_t));
+    lats = sh_arena_alloc(ctx->parse_arena, max_nodes * sizeof(int64_t));
+    lons = sh_arena_alloc(ctx->parse_arena, max_nodes * sizeof(int64_t));
+    keys_vals = sh_arena_alloc(ctx->parse_arena, max_kv * sizeof(uint64_t));
     if (!ids || !lats || !lons || !keys_vals) {
-        free(ids); free(lats); free(lons); free(keys_vals);
         return CT_ERROR_OUT_OF_MEMORY;
     }
 
@@ -935,11 +1025,11 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
 
     ctx->total_nodes_parsed += count;
 
-    free(ids); free(lats); free(lons); free(keys_vals);
+    /* No free needed - arena is reset after PrimitiveBlock */
     return CT_OK;
 
 error:
-    free(ids); free(lats); free(lons); free(keys_vals);
+    /* No free needed - arena is reset after PrimitiveBlock */
     return CT_ERROR_PARSE_ERROR;
 }
 
@@ -952,12 +1042,12 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     size_t key_count = 0, val_count = 0, ref_count = 0;
     size_t pos = 0;
 
-    size_t max_refs = 10000;
-    refs = malloc(max_refs * sizeof(int64_t));
-    keys = malloc(256 * sizeof(uint32_t));
-    vals = malloc(256 * sizeof(uint32_t));
+    /* Allocate temporaries from parsing arena */
+    size_t max_refs = CT_MAX_WAY_REFS;
+    refs = sh_arena_alloc(ctx->parse_arena, max_refs * sizeof(int64_t));
+    keys = sh_arena_alloc(ctx->parse_arena, 256 * sizeof(uint32_t));
+    vals = sh_arena_alloc(ctx->parse_arena, 256 * sizeof(uint32_t));
     if (!refs || !keys || !vals) {
-        free(refs); free(keys); free(vals);
         return CT_ERROR_OUT_OF_MEMORY;
     }
 
@@ -1039,9 +1129,23 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
      * the R-Tree spatial index (filtered in ct_rtree_build).
      */
 
-    /* Resolve node references to coordinates */
-    CTCoord *coords = malloc(ref_count * sizeof(CTCoord));
-    if (!coords) goto skip_way;
+    /* Resolve node references to coordinates
+     * Allocate from coordinate pool if available, otherwise use malloc
+     */
+    CTCoord *coords = NULL;
+    int coords_from_pool = 0;
+    if (ctx->coord_pool && ref_count > 0) {
+        size_t coord_offset = sh_pool_alloc(ctx->coord_pool, ref_count);
+        if (coord_offset != SH_POOL_INVALID) {
+            coords = SH_POOL_PTR(ctx->coord_pool, CTCoord, coord_offset);
+            coords_from_pool = 1;
+        }
+    }
+    /* Fallback to malloc if pool not available or full */
+    if (!coords) {
+        coords = malloc(ref_count * sizeof(CTCoord));
+        if (!coords) goto skip_way;
+    }
 
     size_t coord_count = 0;
     for (size_t i = 0; i < ref_count; i++) {
@@ -1052,7 +1156,10 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     }
 
     if (coord_count < 2) {
-        free(coords);
+        /* Only free if allocated via malloc (pool coords cannot be individually freed) */
+        if (!coords_from_pool) {
+            free(coords);
+        }
         goto skip_way;
     }
 
@@ -1068,7 +1175,9 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
         size_t new_cap = ctx->ways_capacity ? ctx->ways_capacity * 2 : 1000;
         CTOSMWay *new_ways = realloc(ctx->ways, new_cap * sizeof(CTOSMWay));
         if (!new_ways) {
-            free(coords);
+            if (!coords_from_pool) {
+                free(coords);
+            }
             goto skip_way;
         }
         ctx->ways = new_ways;
@@ -1114,9 +1223,7 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     }
 
 skip_way:
-    free(refs);
-    free(keys);
-    free(vals);
+    /* No free needed - arena is reset after PrimitiveBlock */
     return CT_OK;
 }
 
@@ -1136,14 +1243,14 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
     size_t role_count = 0, memid_count = 0, type_count = 0;
     size_t pos = 0;
 
-    size_t max_members = 10000;
-    memids = malloc(max_members * sizeof(int64_t));
-    role_sids = malloc(max_members * sizeof(uint32_t));
-    types = malloc(max_members * sizeof(uint32_t));
-    keys = malloc(256 * sizeof(uint32_t));
-    vals = malloc(256 * sizeof(uint32_t));
+    /* Allocate temporaries from parsing arena */
+    size_t max_members = CT_MAX_RELATION_MEMBERS;
+    memids = sh_arena_alloc(ctx->parse_arena, max_members * sizeof(int64_t));
+    role_sids = sh_arena_alloc(ctx->parse_arena, max_members * sizeof(uint32_t));
+    types = sh_arena_alloc(ctx->parse_arena, max_members * sizeof(uint32_t));
+    keys = sh_arena_alloc(ctx->parse_arena, 256 * sizeof(uint32_t));
+    vals = sh_arena_alloc(ctx->parse_arena, 256 * sizeof(uint32_t));
     if (!memids || !role_sids || !types || !keys || !vals) {
-        free(memids); free(role_sids); free(types); free(keys); free(vals);
         return CT_ERROR_OUT_OF_MEMORY;
     }
 
@@ -1341,11 +1448,7 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
     }
 
 skip_relation:
-    free(memids);
-    free(role_sids);
-    free(types);
-    free(keys);
-    free(vals);
+    /* No free needed - arena is reset after PrimitiveBlock */
     return CT_OK;
 }
 
@@ -1511,6 +1614,10 @@ static CTStatus parse_blob(CTPBFContext *ctx, const uint8_t *data, size_t len)
     }
 
     CTStatus status = parse_primitive_block(ctx, blob.data, blob.len);
+
+    /* Reset parsing arena after each PrimitiveBlock (temporaries no longer needed) */
+    sh_arena_reset(ctx->parse_arena);
+
     sh_pbf_blob_free(&blob);
     return status;
 }

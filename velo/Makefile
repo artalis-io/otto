@@ -9,14 +9,27 @@ CC ?= gcc
 # -march=native: Optimize for current CPU (AVX/AVX2/etc)
 # -ftree-vectorize: Auto-vectorization
 # -ffast-math: Allow aggressive FP optimizations (safe for our use)
-OPENMP_FLAGS = -fopenmp -fopenmp-simd
 SIMD_FLAGS = -march=native -ftree-vectorize -ffast-math
 
+# Platform-specific OpenMP detection
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    # macOS with Homebrew libomp
+    OPENMP_FLAGS = -Xclang -fopenmp
+    OPENMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
+    OPENMP_INCLUDES = -I/opt/homebrew/opt/libomp/include
+else
+    # Linux - native GCC OpenMP
+    OPENMP_FLAGS = -fopenmp -fopenmp-simd
+    OPENMP_LDFLAGS = -fopenmp
+    OPENMP_INCLUDES =
+endif
+
 CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(OPENMP_FLAGS) $(SIMD_FLAGS)
-LDFLAGS = -lm -fopenmp
+LDFLAGS = -lm $(OPENMP_LDFLAGS)
 
 # Include paths
-INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz
+INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz $(OPENMP_INCLUDES)
 
 # Vendor path
 VENDOR_DIR = ../vendor/miniz
@@ -28,7 +41,12 @@ SHARED_DIR = ../shared
 DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
 
 # Non-OpenMP build for compatibility
-NOMP_CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
+# Use: make NOMP=1 all
+ifdef NOMP
+CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
+LDFLAGS = -lm
+OPENMP_INCLUDES =
+endif
 
 # Low-memory build: disable transposed landmark layout (saves 50% landmark memory)
 # Use: make LOWMEM=1 all

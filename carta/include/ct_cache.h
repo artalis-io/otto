@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -96,10 +97,10 @@ void ct_cache_free(CTTileCache *cache);
  * @param z, x, y Tile coordinates
  * @param data    Output: pointer to cached data (NOT owned by caller)
  * @param size    Output: size of cached data
- * @return        1 if found (cache hit), 0 if not found (cache miss)
+ * @return        true if found (cache hit), false if not found (cache miss)
  */
-int ct_cache_get(CTTileCache *cache, int z, int x, int y,
-                 const uint8_t **data, size_t *size);
+bool ct_cache_get(CTTileCache *cache, int z, int x, int y,
+                  const uint8_t **data, size_t *size);
 
 /*
  * Store a tile in the cache.
@@ -111,10 +112,10 @@ int ct_cache_get(CTTileCache *cache, int z, int x, int y,
  * @param z, x, y Tile coordinates
  * @param data    Tile data to cache (will be copied)
  * @param size    Size of tile data
- * @return        1 on success, 0 on failure
+ * @return        true on success, false on failure
  */
-int ct_cache_put(CTTileCache *cache, int z, int x, int y,
-                 const uint8_t *data, size_t size);
+bool ct_cache_put(CTTileCache *cache, int z, int x, int y,
+                  const uint8_t *data, size_t size);
 
 /*
  * Clear all entries from the cache.

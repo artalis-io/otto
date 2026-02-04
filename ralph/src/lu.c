@@ -67,20 +67,20 @@ LUFactorization* lu_create(int m) {
         /* Alignment padding */
         160;
 
-    lu->arena = ralph_arena_create(arena_size);
+    lu->arena = sh_arena_create(arena_size);
     if (!lu->arena) {
         lu_free(lu);
         return NULL;
     }
 
     /* Allocate permutation arrays from arena */
-    lu->perm = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
-    lu->perm_inv = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
-    lu->col_perm = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
-    lu->col_perm_inv = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
+    lu->perm = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->perm_inv = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->col_perm = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->col_perm_inv = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
 
     /* U diagonal cache from arena */
-    lu->U_diag = (double*)ralph_arena_alloc(lu->arena, m * sizeof(double));
+    lu->U_diag = (double*)sh_arena_alloc(lu->arena, m * sizeof(double));
 
     /* Initialize to identity permutation */
     for (int i = 0; i < m; i++) {
@@ -93,8 +93,8 @@ LUFactorization* lu_create(int m) {
     /* Eta file metadata from arena (but eta_indices/values arrays allocated separately) */
     lu->eta_capacity = max_upd;
     lu->num_eta = 0;
-    lu->eta_col = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
-    lu->eta_nnz = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->eta_col = (int*)sh_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->eta_nnz = (int*)sh_arena_alloc(lu->arena, max_upd * sizeof(int));
 
     /* eta_indices and eta_values are arrays of pointers - allocated separately
      * because their contents are dynamically allocated during updates */
@@ -115,8 +115,8 @@ LUFactorization* lu_create(int m) {
     /* Forrest-Tomlin update structures from arena */
     lu->use_ft_updates = 1;
     lu->ft_num_updates = 0;
-    lu->ft_col_order = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
-    lu->ft_col_order_inv = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ft_col_order = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ft_col_order_inv = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
 
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
@@ -125,10 +125,10 @@ LUFactorization* lu_create(int m) {
 
     /* Spike metadata from arena */
     lu->ft_spike_capacity = max_upd;
-    lu->ft_spike_col = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
-    lu->ft_spike_diag = (double*)ralph_arena_alloc(lu->arena, max_upd * sizeof(double));
-    lu->ft_spike_nnz = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
-    lu->ft_spike_start = (int*)ralph_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->ft_spike_col = (int*)sh_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->ft_spike_diag = (double*)sh_arena_alloc(lu->arena, max_upd * sizeof(double));
+    lu->ft_spike_nnz = (int*)sh_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->ft_spike_start = (int*)sh_arena_alloc(lu->arena, max_upd * sizeof(int));
 
     for (int i = 0; i < max_upd; i++) {
         lu->ft_spike_nnz[i] = 0;
@@ -137,13 +137,13 @@ LUFactorization* lu_create(int m) {
     }
 
     /* Hyper-sparse workspace from arena */
-    lu->hs_work1 = (double*)ralph_arena_calloc(lu->arena, m, sizeof(double));
-    lu->hs_work2 = (double*)ralph_arena_calloc(lu->arena, m, sizeof(double));
-    lu->hs_marked = (int*)ralph_arena_calloc(lu->arena, m, sizeof(int));
-    lu->hs_idx = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
-    lu->hs_val = (double*)ralph_arena_alloc(lu->arena, m * sizeof(double));
-    lu->hs_stack = (int*)ralph_arena_alloc(lu->arena, m * sizeof(int));
-    lu->perm_work = (double*)ralph_arena_alloc(lu->arena, m * sizeof(double));
+    lu->hs_work1 = (double*)sh_arena_calloc(lu->arena, m, sizeof(double));
+    lu->hs_work2 = (double*)sh_arena_calloc(lu->arena, m, sizeof(double));
+    lu->hs_marked = (int*)sh_arena_calloc(lu->arena, m, sizeof(int));
+    lu->hs_idx = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->hs_val = (double*)sh_arena_alloc(lu->arena, m * sizeof(double));
+    lu->hs_stack = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->perm_work = (double*)sh_arena_alloc(lu->arena, m * sizeof(double));
 
     /* Single check for all arena allocations */
     if (!lu->perm || !lu->perm_inv || !lu->col_perm || !lu->col_perm_inv ||
@@ -239,7 +239,7 @@ void lu_free(LUFactorization *lu) {
      * eta_col, eta_nnz, ft_col_order, ft_col_order_inv,
      * ft_spike_col, ft_spike_diag, ft_spike_nnz, ft_spike_start,
      * hs_work1, hs_work2, hs_marked, hs_idx, hs_val, hs_stack, perm_work) */
-    ralph_arena_free(lu->arena);
+    sh_arena_free(lu->arena);
     lu->arena = NULL;
 
     /* NULL out arena-allocated pointers for safety */

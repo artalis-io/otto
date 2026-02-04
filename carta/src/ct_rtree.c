@@ -6,6 +6,7 @@
  */
 
 #include "ct_rtree.h"
+#include "shared.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -289,8 +290,8 @@ CTRTree *ct_rtree_build(const CTOSMWay *ways, size_t num_ways, CTBBox data_bbox)
 void ct_rtree_free(CTRTree *tree)
 {
     if (!tree) return;
-    free(tree->nodes);
-    free(tree->leaf_indices);
+    SAFE_FREE(tree->nodes);
+    SAFE_FREE(tree->leaf_indices);
     free(tree);
 }
 

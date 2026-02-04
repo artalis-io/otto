@@ -20,11 +20,19 @@ extern "C" {
 
 /*
  * Create a new PBF parsing context.
+ *
+ * OWNERSHIP: Caller owns the returned context and must call
+ * ct_pbf_context_free() when done.
+ *
+ * @return New context, or NULL on allocation failure
  */
 CTPBFContext *ct_pbf_context_create(void);
 
 /*
  * Free a PBF parsing context and all associated data.
+ * Safe to call with NULL (no-op).
+ *
+ * @param ctx Context to free (may be NULL)
  */
 void ct_pbf_context_free(CTPBFContext *ctx);
 
@@ -68,9 +76,14 @@ CTStatus ct_pbf_build_index(CTPBFContext *ctx);
 /*
  * Get all features that intersect a tile.
  *
+ * OWNERSHIP: Caller owns the returned *features array and each feature's
+ * internal arrays (points, ring_ends). Free with:
+ *   for (i = 0; i < count; i++) { free(features[i].points); }
+ *   free(features);
+ *
  * @param ctx      Parsing context with spatial index
  * @param tile     Tile coordinates
- * @param features Output feature array (caller frees)
+ * @param features Output feature array (caller owns)
  * @param count    Output feature count
  * @return CT_OK on success
  */
@@ -80,9 +93,14 @@ CTStatus ct_pbf_get_tile_features(const CTPBFContext *ctx, CTTileCoord tile,
 /*
  * Get all features that intersect a bounding box.
  *
+ * OWNERSHIP: Caller owns the returned *features array and each feature's
+ * internal arrays (points, ring_ends). Free with:
+ *   for (i = 0; i < count; i++) { free(features[i].points); }
+ *   free(features);
+ *
  * @param ctx      Parsing context with spatial index
  * @param bbox     Geographic bounds
- * @param features Output feature array (caller frees)
+ * @param features Output feature array (caller owns)
  * @param count    Output feature count
  * @return CT_OK on success
  */
@@ -98,10 +116,13 @@ struct CTLODConfig;
  * Features are filtered based on the LOD configuration and zoom level.
  * This is the recommended function for tile generation.
  *
+ * OWNERSHIP: Caller owns the returned *features array and each feature's
+ * internal arrays (points, ring_ends). See ct_pbf_get_tile_features().
+ *
  * @param ctx      Parsing context with spatial index
  * @param coord    Tile coordinates (includes zoom level)
  * @param lod      LOD configuration (NULL = no filtering)
- * @param features Output feature array (caller frees)
+ * @param features Output feature array (caller owns)
  * @param count    Output feature count
  * @return CT_OK on success
  */
