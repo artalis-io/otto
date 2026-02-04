@@ -124,9 +124,9 @@ double *A = (double*)calloc(m * m, sizeof(double));  /* O(m^2) space */
 
 This fallback path allocates O(m^2) memory. For large m, this is expensive.
 
-**Status:** Open
+**Status:** FIXED (2026-02-04)
 
-**Recommendation:** Pre-allocate this in LUFactorization for reuse if dense factorization is expected, or document that this path should be avoided.
+**Fix:** Pre-allocated `dense_work` field in `LUFactorization` struct. The m×m matrix is allocated once in `lu_create()` and reused across all factorizations.
 
 ---
 
@@ -174,12 +174,11 @@ Should use `RALPH_BIG_M` constant.
 
 **Problem:** Function is 340+ lines, doing multiple distinct operations.
 
-**Status:** Open
+**Status:** FIXED (2026-02-04)
 
-**Recommendation:** Split into:
-- `tableau_create_normalize_constraints()`
-- `tableau_create_add_aux_vars()`
-- `tableau_create_init_basis()`
+**Fix:** Extracted helper functions:
+- `tableau_alloc_arrays()` - allocates all workspace arrays via arena
+- `tableau_init_weights()` - initializes steepest edge/Devex weights
 
 ---
 
@@ -286,7 +285,13 @@ static inline void ralph_arena_reset(RalphArena *a) {
 
 ### Status
 
-Open - Recommended for future work.
+IMPLEMENTED (2026-02-04)
+
+**Implementation:**
+- Added `RalphArena` struct to `include/lp.h` with inline functions
+- Modified `tableau_alloc_arrays()` to allocate from arena
+- Modified `tableau_free()` to free arena in single call
+- Reduced 21 allocations to 1 per tableau creation
 
 ---
 
@@ -298,6 +303,6 @@ Open - Recommended for future work.
 | Missing triplet bounds check | MEDIUM | FIXED |
 | Malloc in simplex hot path | MEDIUM | FIXED |
 | Magic numbers | LOW | FIXED |
-| Dense LU fallback allocation | LOW | Open |
-| Long functions | LOW | Open |
-| Arena allocator | Enhancement | Open |
+| Dense LU fallback allocation | LOW | FIXED |
+| Long functions | LOW | FIXED |
+| Arena allocator | Enhancement | IMPLEMENTED |
