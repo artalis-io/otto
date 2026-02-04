@@ -1,5 +1,7 @@
 # Claude Code Instructions for FuelWise API
 
+> **Quick Reference:** Use `/api-servers fuelwise` for CLI args, env vars, and startup commands.
+
 ## Overview
 
 The FuelWise API is a lightweight REST server built with mongoose (embedded HTTP library). It exposes the FuelWise optimization library via JSON endpoints with production-grade features including rate limiting, work queue for CPU-intensive operations, and configurable through CLI args and environment variables.
