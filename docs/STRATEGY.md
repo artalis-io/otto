@@ -2,9 +2,11 @@
 
 ## Executive Summary
 
-OTTO is an open-source logistics optimization platform targeting mid-to-large trucking fleets in the EU and US. The business model combines open-source core engines with proprietary integrations and managed services, addressing a market gap left by closed-source vendors who create lock-in risk for enterprise customers.
+OTTO is an open-source logistics optimization platform serving the entire trucking market—from one-truck owner-operators to 10,000+ truck mega-fleets. The business model combines open-source core engines with proprietary integrations and managed services, addressing a market gap left by closed-source vendors who create lock-in risk for enterprise customers and price out small operators entirely.
 
-**Key thesis:** Large fleets like Girteka and Waberer's experienced vendor lock-in when Nexogen was acquired by Trimble in 2022. They want planning technology without dependency on a single vendor's roadmap. Open source provides that insurance while managed services provide the convenience.
+**Key thesis:** Enterprise fleets like Girteka and Waberer's experienced vendor lock-in when Nexogen was acquired by Trimble in 2022. Meanwhile, the 350,000+ owner-operators and small "mom and pop" trucking companies in the US alone have never had access to enterprise-grade optimization—they run on spreadsheets, paper logs, and guesswork. Open source changes both equations: enterprises get insurance against vendor lock-in, and small operators get access to technology they could never afford.
+
+**The driver-centric gap:** Large fleet optimization vendors (Optym, Optimal Dynamics) build for fleet-level KPIs—total miles, asset utilization, cost per mile across the network. Their optimization answers "how do I move 10,000 loads with 2,000 trucks?" This is the wrong question for an owner-operator or a 10-truck family business. They need driver-centric optimization: "I'm in Tulsa with an empty trailer—what's my best next move?" OTTO serves both: fleet-level assignment (Sigma) for enterprises AND driver-level decision support for small operators. The algorithms are the same; the interface and questions are different.
 
 ---
 
@@ -761,7 +763,39 @@ OTTO's open source model enables serving the entire trucking market, from one-tr
 | Enterprise | 500-5000 trucks | ~2,000 | Full TMS suite, planning tools | €250-500k/year |
 | Mega-fleets | 5000+ trucks | ~200 | Custom solutions, consultants | €500k-2M/year |
 
-### 13.2 Why Owner-Operators Matter
+### 13.2 The Mom & Pop Reality
+
+Small trucking companies—family operations with 2-10 trucks—are the backbone of American and European freight. They haul the loads that mega-fleets don't want: short-haul regional, specialized equipment, last-mile from distribution centers.
+
+**What they're working with today:**
+
+| Tool | Reality |
+|------|---------|
+| Route planning | Google Maps or gut feel |
+| Fuel optimization | "I always stop at the TA in Joplin" |
+| HoS tracking | Paper logs or basic ELD with no planning |
+| Load selection | "My buddy called, he's got a load" |
+| Back-office | Spouse doing QuickBooks at the kitchen table |
+
+**Why enterprise software doesn't serve them:**
+
+- Trimble: €100k+ annual contracts, requires IT staff to implement
+- Samsara: $30/truck/month for telematics, but no planning
+- PTV: Enterprise sales process, won't return calls for 5 trucks
+- Descartes: Suite software, need the whole platform or nothing
+
+**What OTTO offers:**
+
+- Free tier runs entirely in browser—no install, no IT staff
+- Same algorithms Girteka uses, accessible to a family operation
+- $29-49/month for premium features—lunch money compared to €100k contracts
+- WASM runs on the same tablet mounted in the cab
+
+**The democratization thesis:**
+
+A 5-truck family operation should have the same optimization technology as a 5,000-truck mega-fleet. The math is the same. The algorithms are the same. The only reason they don't is that traditional vendors can't make money at $49/month per customer. Open source can.
+
+### 13.3 Why Owner-Operators Matter
 
 **The conventional wisdom:** "Focus on enterprise, ignore the long tail."
 
@@ -795,7 +829,7 @@ An owner-operator would rationally pay $50-100/month for tools that deliver thes
 | **Mission credibility** | "Optimization for everyone" isn't just marketing—it's demonstrable |
 | **Acquirer value** | 50,000 users + 50 enterprise clients > 50 enterprise clients alone |
 
-### 13.3 Product Tiers for Owner-Operators
+### 13.4 Product Tiers for Owner-Operators
 
 #### Free Tier (MIT, self-hosted or basic cloud)
 
@@ -826,7 +860,7 @@ An owner-operator would rationally pay $50-100/month for tools that deliver thes
 
 **Goal:** Serious owner-operators who want full solution
 
-### 13.4 Go-to-Market for Owner-Operators
+### 13.5 Go-to-Market for Owner-Operators
 
 **Channel strategy:**
 
@@ -846,7 +880,7 @@ An owner-operator would rationally pay $50-100/month for tools that deliver thes
 3. **Share routes** — "Send this route to your buddy" = viral loop
 4. **Upgrade prompts** — "Save this route? Create free account" → "Want alerts? $29/month"
 
-### 13.5 Sequencing: Enterprise First, Then Expand
+### 13.6 Sequencing: Enterprise First, Then Expand
 
 **Phase 1 (Year 1-2): Enterprise focus**
 - Land 5-10 enterprise customers (€2-4M ARR)
@@ -866,7 +900,7 @@ An owner-operator would rationally pay $50-100/month for tools that deliver thes
 - Mid-market emerges as natural upgrade path
 - Two flywheels: B2B logos + B2C community
 
-### 13.6 Unit Economics by Segment
+### 13.7 Unit Economics by Segment
 
 | Segment | CAC | ACV | LTV | LTV:CAC |
 |---------|-----|-----|-----|---------|
@@ -878,7 +912,7 @@ An owner-operator would rationally pay $50-100/month for tools that deliver thes
 
 The owner-operator tier isn't a profit center—it's a community-building and marketing investment that pays off through upgrades and ecosystem effects.
 
-### 13.7 The Mission Alignment
+### 13.8 The Mission Alignment
 
 From the landing page:
 
@@ -892,7 +926,7 @@ Serving owner-operators isn't charity. It's:
 
 **The strategic question:** Can Trimble offer a free tier to owner-operators? Can Samsara? Their business models don't support it. Open source does.
 
-### 13.8 Risks and Mitigations
+### 13.9 Risks and Mitigations
 
 | Risk | Mitigation |
 |------|------------|
