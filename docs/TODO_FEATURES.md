@@ -15,6 +15,8 @@ This document outlines planned features at the project level, including new comp
 9. [Distance and Duration Estimation](#9-distance-and-duration-estimation-cross-cutting)
 10. [Cost and Profit Calculations](#10-cost-and-profit-calculations-cross-cutting)
 11. [FuelWise Integration](#11-fuelwise-integration-refueling-in-search)
+12. [Quota - Rate Quoting Engine](#12-quota---rate-quoting-engine)
+13. [Atlas - Network Design Engine](#13-atlas---network-design-engine)
 
 ---
 
@@ -37,6 +39,8 @@ The project is currently named "ralph" (after the LP solver component), but the 
 | `sigma/` | **Planned**: Fleet-wide plan selection (set covering MIP) |
 | `pulse/` | **Planned**: Execution tracking and PTA computation |
 | `forge/` | **Planned**: Async job queue and worker orchestration |
+| `quota/` | **Planned**: Rate quoting and pricing engine |
+| `atlas/` | **Planned**: Network design and lane balancing |
 
 ### Problem
 
@@ -2384,6 +2388,185 @@ Already supported in FuelWise. Weight-dependent consumption:
 
 ---
 
+## 12. Quota - Rate Quoting Engine
+
+### Overview
+
+**QUOTA** (**Q**uote **U**nderwriting and **T**ariff **O**ptimization **A**lgorithm) generates spot and contract pricing for outbound freight.
+
+### Core Problem
+
+Carriers need to quote rates quickly and accurately:
+- **Spot quotes**: Immediate pricing for one-off loads
+- **Contract rates**: Competitive RFP responses for committed lanes
+- **Margin optimization**: Balance win rate vs profitability
+
+### Cost Components
+
+```c
+typedef struct {
+    double fuel_cost;          /* From FuelWise optimization */
+    double driver_cost;        /* Pay per mile, per hour, per day */
+    double toll_cost;          /* From Velo routing */
+    double deadhead_cost;      /* Empty repositioning miles */
+    double maintenance_cost;   /* Per-mile vehicle wear */
+    double insurance_cost;     /* Per-mile insurance allocation */
+    double overhead_cost;      /* Fixed cost allocation */
+} QuoteCostBreakdown;
+```
+
+### Rate Generation
+
+```c
+typedef struct {
+    QuoteCostBreakdown costs;
+    double target_margin;      /* Desired profit margin (0.15 = 15%) */
+    double market_rate;        /* Reference market rate for lane */
+    double confidence;         /* How confident in market rate (0-1) */
+    double win_probability;    /* Estimated probability of winning at this rate */
+} QuoteRequest;
+
+typedef struct {
+    double floor_rate;         /* Minimum acceptable (cost + minimum margin) */
+    double recommended_rate;   /* Balanced margin and win probability */
+    double ceiling_rate;       /* Maximum competitive rate */
+    QuoteCostBreakdown breakdown;
+} QuoteResult;
+
+QuoteResult qt_generate_quote(const QuoteRequest *request);
+```
+
+### Market Intelligence Integration
+
+Quota can incorporate external market data:
+- DAT spot rates
+- Greenscreens benchmarks
+- Historical lane rates
+- Seasonal adjustments
+
+### TODOs
+
+- [ ] Define cost model API
+- [ ] Implement base cost calculator
+- [ ] Add margin optimization logic
+- [ ] Integrate with Velo for toll/distance
+- [ ] Integrate with FuelWise for fuel costs
+- [ ] Add market rate adjustment factors
+- [ ] Historical rate analysis
+- [ ] Contract vs spot pricing strategies
+
+---
+
+## 13. Atlas - Network Design Engine
+
+### Overview
+
+**ATLAS** (**A**llocation and **T**actical **L**ane **A**nalysis **S**ystem) provides network-level planning for lane balancing and capacity management.
+
+### Core Problem
+
+Fleet networks become imbalanced over time:
+- **Headhaul/backhaul imbalance**: Too much freight going one direction
+- **Deadhead accumulation**: Trucks repositioning empty
+- **Capacity mismatch**: Wrong trucks in wrong places
+- **Network smoothing**: New loads don't fit existing flow
+
+### Key Distinction
+
+Atlas operates at the **network level**, not the **truck level**:
+- Does NOT assign specific trucks to specific loads
+- Plans optimal lane flow and capacity allocation
+- Guides which loads to accept/reject
+- Identifies network imbalances before they become problems
+
+### Lane Balancing Model
+
+```c
+typedef struct {
+    uint32_t origin_region;
+    uint32_t destination_region;
+    double volume_forecast;    /* Expected loads per week */
+    double current_capacity;   /* Available trucks per week */
+    double rate_per_mile;      /* Average lane rate */
+} LaneFlow;
+
+typedef struct {
+    LaneFlow *lanes;
+    size_t lane_count;
+    double imbalance_penalty;  /* Cost of imbalanced flow */
+    double deadhead_cost_per_mile;
+} NetworkState;
+
+typedef struct {
+    uint32_t region_id;
+    double capacity_surplus;   /* Positive = excess trucks, negative = shortage */
+    double recommended_rate_adjustment;  /* % rate change to balance */
+} RegionBalance;
+
+typedef struct {
+    RegionBalance *regions;
+    size_t region_count;
+    double total_deadhead_forecast;
+    double network_efficiency_score;  /* 0-1, 1 = perfectly balanced */
+} NetworkAnalysis;
+
+NetworkAnalysis at_analyze_network(const NetworkState *state);
+```
+
+### Tender Acceptance Scoring
+
+When a new load is tendered, Atlas scores network fit:
+
+```c
+typedef struct {
+    uint32_t origin_region;
+    uint32_t destination_region;
+    double load_volume;        /* Truckloads */
+    double offered_rate;
+} TenderRequest;
+
+typedef struct {
+    double network_fit_score;  /* 0-1, how well it fits network */
+    double rate_vs_market;     /* Offered rate vs market (1.0 = at market) */
+    double capacity_impact;    /* Effect on regional balance */
+    bool accept_recommended;
+    char *reasoning;           /* Human-readable explanation */
+} TenderScore;
+
+TenderScore at_score_tender(const NetworkState *state, const TenderRequest *tender);
+```
+
+### Capacity Planning
+
+```c
+typedef struct {
+    uint32_t region_id;
+    double trucks_needed;      /* Additional trucks needed */
+    double trucks_excess;      /* Trucks that could be relocated */
+    uint32_t *relocate_to;     /* Recommended destination regions */
+    size_t relocate_count;
+} CapacityRecommendation;
+
+CapacityRecommendation *at_plan_capacity(
+    const NetworkState *state,
+    size_t *recommendation_count
+);
+```
+
+### TODOs
+
+- [ ] Define region/lane data structures
+- [ ] Implement flow balance calculator
+- [ ] Add headhaul/backhaul ratio metrics
+- [ ] Tender acceptance scoring
+- [ ] Capacity planning recommendations
+- [ ] Integration with historical load data
+- [ ] Seasonal pattern recognition
+- [ ] Rate adjustment recommendations
+- [ ] Network visualization API
+
+---
+
 ## Component Summary
 
 Current and planned components:
@@ -2402,6 +2585,8 @@ Current and planned components:
 | `pulse/` | **Planned** | Execution tracking and PTA computation |
 | `nexus/` | **Planned** | External data integration gateway (TMS/ELD/LoadBoard) |
 | `forge/` | **Planned** | Async job queue and worker orchestration |
+| `quota/` | **Planned** | Rate quoting and pricing engine |
+| `atlas/` | **Planned** | Network design and lane balancing |
 | `api/` | Active | REST API server |
 | `ui/` | Active | React frontend |
 
@@ -2415,4 +2600,6 @@ Current and planned components:
 6. **Arbor Core** - Medium priority (enables advanced optimization)
 7. **Sigma Core** - Medium priority (fleet-wide optimization, depends on Arbor)
 8. **Nexus Core** - Medium priority (data integration, enables real-world deployment)
-9. **Component Integration** - High priority (Forge + HoSE + Tempo + Pulse + Arbor + Sigma + Nexus + FuelWise)
+9. **Quota Core** - Medium priority (pricing/quoting, revenue generation)
+10. **Atlas Core** - Medium priority (network design, lane balancing)
+11. **Component Integration** - High priority (all modules working together)
