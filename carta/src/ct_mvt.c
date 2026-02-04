@@ -12,6 +12,7 @@
 #include "ct_lod.h"
 #include "sh_protobuf.h"
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 /* MVT field numbers */
@@ -369,6 +370,10 @@ size_t ct_encode_mvt(const CTTile *tile, const CTMVTOptions *opts,
      * Single allocation for all layer features instead of per-layer mallocs.
      * This reduces malloc overhead from O(CT_LAYER_COUNT) to O(1).
      */
+    /* Check for integer overflow before malloc */
+    if (tile->num_features > SIZE_MAX / sizeof(CTFeature)) {
+        return 0;  /* Would overflow */
+    }
     CTFeature *all_features = malloc(tile->num_features * sizeof(CTFeature));
     if (!all_features) return 0;
 

@@ -12,6 +12,8 @@
 
 #include "ct_collision.h"
 #include <stdlib.h>
+#include <stdint.h>
+#include <limits.h>
 #include <string.h>
 
 /* ============================================================================
@@ -93,6 +95,12 @@ CTCollisionGrid *ct_collision_create(int tile_width, int tile_height, int cell_s
     grid->grid_width = (tile_width + cell_size - 1) / cell_size;
     grid->grid_height = (tile_height + cell_size - 1) / cell_size;
     grid->num_placements = 0;
+
+    /* Check for integer overflow before multiplication */
+    if (grid->grid_width > INT_MAX / grid->grid_height) {
+        free(grid);
+        return NULL;  /* Would overflow */
+    }
 
     /* Allocate bitmap (1 bit per cell, rounded up to bytes) */
     int total_cells = grid->grid_width * grid->grid_height;

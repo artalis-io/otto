@@ -10,6 +10,7 @@
 #include "ct_pbf.h"
 #include "sh_inflate.h"
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <pthread.h>
 
@@ -105,9 +106,22 @@ static size_t write_chunk(uint8_t *buf, uint32_t type,
 
 size_t ct_png_max_size(int width, int height)
 {
+    /* Reject invalid dimensions */
+    if (width <= 0 || height <= 0) return 0;
+
+    /* Check for integer overflow before multiplication */
+    /* raw_size = height * (width * 4 + 1) */
+    size_t row_size = (size_t)width * 4 + 1;
+    if ((size_t)width > (SIZE_MAX - 1) / 4) {
+        return SIZE_MAX;  /* Overflow in row_size calculation */
+    }
+    if ((size_t)height > SIZE_MAX / row_size) {
+        return SIZE_MAX;  /* Overflow in raw_size calculation */
+    }
+
     /* Worst case: uncompressed PNG */
     /* Each row has 1 filter byte + width * 4 (RGBA) */
-    size_t raw_size = (size_t)height * ((size_t)width * 4 + 1);
+    size_t raw_size = (size_t)height * row_size;
 
     /* DEFLATE worst case: input + 5 bytes per 16KB block + header */
     size_t deflate_overhead = (raw_size / 16384 + 1) * 5 + 6;
