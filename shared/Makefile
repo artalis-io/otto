@@ -26,7 +26,11 @@ SRCS = src/sh_geo.c \
        src/sh_ratelimit.c \
        src/sh_workqueue.c \
        src/sh_capacity.c \
-       src/sh_args.c
+       src/sh_args.c \
+       src/sh_circuit.c \
+       src/sh_backoff.c \
+       src/sh_retry.c \
+       src/sh_cors.c
 
 MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
              $(VENDOR_DIR)/miniz_tdef.c \
@@ -103,6 +107,10 @@ src/sh_ratelimit.o: include/sh_ratelimit.h
 src/sh_workqueue.o: include/sh_workqueue.h
 src/sh_capacity.o: include/sh_capacity.h
 src/sh_args.o: include/sh_args.h
+src/sh_circuit.o: include/sh_circuit.h
+src/sh_backoff.o: include/sh_backoff.h
+src/sh_retry.o: include/sh_retry.h include/sh_circuit.h include/sh_backoff.h
+src/sh_cors.o: include/sh_cors.h
 
 # Help
 help:
