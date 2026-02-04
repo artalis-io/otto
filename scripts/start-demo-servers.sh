@@ -1,7 +1,7 @@
 #!/bin/bash
 # Start all demo servers for ClayShards map demo
 #
-# Ports:
+# Default ports (will find alternatives if occupied):
 #   8081 - Carta (tile server)
 #   8082 - Velo (route server)
 #   8083 - Locus (geocoding server)
@@ -24,6 +24,46 @@ NC='\033[0m' # No Color
 # Index directory
 INDEX_DIR="data/index"
 mkdir -p "$INDEX_DIR"
+
+# Find an available port starting from preferred port, avoiding already-claimed ports
+# Usage: find_available_port PREFERRED_PORT [EXCLUDE_PORT1 EXCLUDE_PORT2 ...]
+# Returns: Available port number (may be higher than preferred if occupied)
+find_available_port() {
+    local port=$1
+    shift
+    local exclude="$*"
+    local max_attempts=20
+    local attempt=0
+
+    while [ $attempt -lt $max_attempts ]; do
+        # Check if port is in use by system
+        local in_use=0
+        if lsof -i ":$port" >/dev/null 2>&1; then
+            in_use=1
+        fi
+
+        # Check if port is in our exclude list
+        if [ $in_use -eq 0 ]; then
+            for ex in $exclude; do
+                if [ "$port" = "$ex" ]; then
+                    in_use=1
+                    break
+                fi
+            done
+        fi
+
+        if [ $in_use -eq 0 ]; then
+            echo $port
+            return 0
+        fi
+        port=$((port + 1))
+        attempt=$((attempt + 1))
+    done
+
+    # Failed to find available port
+    echo ""
+    return 1
+}
 
 # Determine PBF file and region name
 if [ -n "$1" ]; then
@@ -79,6 +119,7 @@ echo ""
 # Define index files
 LOCUS_IDX="$INDEX_DIR/$REGION-locus.idx"
 CARTA_IDX="$INDEX_DIR/$REGION-carta.idx"
+VELO_IDX="$INDEX_DIR/$REGION-velo.vlg"
 
 # Cross-platform file size helper (works on macOS and Linux)
 get_file_size() {
@@ -220,53 +261,106 @@ else
         echo -e "  ${YELLOW}Index not created, using PBF directly${NC}"
     fi
 fi
+
+# Check for Velo index (minimum 1MB for valid graph)
+# This block is independent of other index status
+if is_valid_index "$VELO_IDX" 1048576; then
+    VELO_SIZE=$(get_file_size "$VELO_IDX")
+    echo -e "  ${GREEN}Found: $VELO_IDX ($(numfmt --to=iec-i --suffix=B $VELO_SIZE 2>/dev/null || echo "${VELO_SIZE} bytes"))${NC}"
+else
+    # Remove invalid/truncated file if it exists
+    [ -f "$VELO_IDX" ] && rm -f "$VELO_IDX"
+    echo -e "  ${YELLOW}Building Velo index (this may take a while)...${NC}"
+    # Build index and save it - runs synchronously (exits after saving)
+    ./velo/api/velo-route-server --no-landmarks --save-index "$VELO_IDX" "$PBF_FILE" 2>&1 | while read line; do
+        printf "."
+    done
+    echo ""
+    if is_valid_index "$VELO_IDX" 1048576; then
+        VELO_SIZE=$(get_file_size "$VELO_IDX")
+        echo -e "  ${GREEN}Built: $VELO_IDX ($(numfmt --to=iec-i --suffix=B $VELO_SIZE 2>/dev/null || echo "${VELO_SIZE} bytes"))${NC}"
+    else
+        echo -e "  ${YELLOW}Velo index not created, using PBF directly${NC}"
+        VELO_IDX=""
+    fi
+fi
+echo ""
+
+# Find available ports (will try alternatives if preferred ports are occupied)
+# Each call passes already-claimed ports to avoid collisions
+echo "Finding available ports..."
+CARTA_PORT=$(find_available_port 8081)
+VELO_PORT=$(find_available_port 8082 $CARTA_PORT)
+LOCUS_PORT=$(find_available_port 8083 $CARTA_PORT $VELO_PORT)
+DEMO_PORT=$(find_available_port 8000 $CARTA_PORT $VELO_PORT $LOCUS_PORT)
+
+if [ -z "$CARTA_PORT" ] || [ -z "$VELO_PORT" ] || [ -z "$LOCUS_PORT" ] || [ -z "$DEMO_PORT" ]; then
+    echo -e "${RED}Error: Could not find available ports${NC}"
+    exit 1
+fi
+
+if [ "$CARTA_PORT" != "8081" ] || [ "$VELO_PORT" != "8082" ] || [ "$LOCUS_PORT" != "8083" ]; then
+    echo -e "  ${YELLOW}Note: Using non-default ports (some were occupied)${NC}"
+fi
 echo ""
 
 # Start servers in background
 echo "Starting servers..."
 
-# Carta tile server (port 8081) - use index if available
-# Use 8 worker threads for parallel tile generation
-# LOD filtering enabled (OSM Carto-style zoom-dependent feature visibility)
-# Demo mode: higher rate limits (50 RPS, 200 burst) for smoother local experience
-# NOTE: Rate limit args must come before Carta-specific args like --lod
+# Carta tile server - use index if available
+# 8 worker threads, LOD filtering, higher rate limits for demo
 if [ -n "$CARTA_IDX" ] && [ -f "$CARTA_IDX" ]; then
-    ./carta/api/carta-tile-server -p 8081 -t 8 \
+    ./carta/api/carta-tile-server -p "$CARTA_PORT" -t 8 \
         --rate-limit-rps 50 --rate-limit-burst 200 \
         --lod default "$CARTA_IDX" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - index, 8 threads, 50 RPS"
+    echo "  Started: Carta (http://localhost:$CARTA_PORT) [PID: $CARTA_PID] - index"
 else
-    ./carta/api/carta-tile-server -p 8081 -t 8 \
+    ./carta/api/carta-tile-server -p "$CARTA_PORT" -t 8 \
         --rate-limit-rps 50 --rate-limit-burst 200 \
         --lod default "$PBF_FILE" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - PBF, 8 threads, 50 RPS"
+    echo "  Started: Carta (http://localhost:$CARTA_PORT) [PID: $CARTA_PID] - PBF"
 fi
 
-# Velo route server (port 8082)
-./velo/api/velo-route-server -p 8082 "$PBF_FILE" >/dev/null 2>&1 &
-VELO_PID=$!
-echo "  Started: Velo (http://localhost:8082) [PID: $VELO_PID]"
-
-# Locus geocoding server (port 8083) - use index if available
-if [ -f "$LOCUS_IDX" ]; then
-    ./locus/api/locus-geocoder "$LOCUS_IDX" >/dev/null 2>&1 &
-    LOCUS_PID=$!
-    echo "  Started: Locus (http://localhost:8083) [PID: $LOCUS_PID] - using binary index"
+# Velo route server - use index if available
+# Using --no-landmarks for faster startup (routing still works, just slightly slower)
+if [ -n "$VELO_IDX" ] && [ -f "$VELO_IDX" ]; then
+    ./velo/api/velo-route-server -p "$VELO_PORT" --no-landmarks "$VELO_IDX" >/dev/null 2>&1 &
+    VELO_PID=$!
+    echo "  Started: Velo (http://localhost:$VELO_PORT) [PID: $VELO_PID] - index"
 else
-    ./locus/api/locus-geocoder "$PBF_FILE" >/dev/null 2>&1 &
-    LOCUS_PID=$!
-    echo "  Started: Locus (http://localhost:8083) [PID: $LOCUS_PID] - building from PBF..."
+    ./velo/api/velo-route-server -p "$VELO_PORT" --no-landmarks "$PBF_FILE" >/dev/null 2>&1 &
+    VELO_PID=$!
+    echo "  Started: Velo (http://localhost:$VELO_PORT) [PID: $VELO_PID] - PBF"
 fi
 
-# Start demo HTTP server (port 8000)
-# Serve from project root so that relative imports work:
-# - Demo at clayshards/clay-shards-demo/ imports ../clay-shards-webgl (works)
-# - WebGL imports ../../shared/js/ for resilience utilities (works from root)
-python3 -m http.server 8000 >/dev/null 2>&1 &
+# Locus geocoding server - use index if available
+if [ -f "$LOCUS_IDX" ]; then
+    ./locus/api/locus-geocoder -p "$LOCUS_PORT" "$LOCUS_IDX" >/dev/null 2>&1 &
+    LOCUS_PID=$!
+    echo "  Started: Locus (http://localhost:$LOCUS_PORT) [PID: $LOCUS_PID] - index"
+else
+    ./locus/api/locus-geocoder -p "$LOCUS_PORT" "$PBF_FILE" >/dev/null 2>&1 &
+    LOCUS_PID=$!
+    echo "  Started: Locus (http://localhost:$LOCUS_PORT) [PID: $LOCUS_PID] - PBF"
+fi
+
+# Generate demo config file with actual server URLs
+CONFIG_FILE="demo-config.json"
+cat > "$CONFIG_FILE" << EOF
+{
+  "carta": "http://localhost:$CARTA_PORT",
+  "velo": "http://localhost:$VELO_PORT",
+  "locus": "http://localhost:$LOCUS_PORT"
+}
+EOF
+echo "  Generated: $CONFIG_FILE"
+
+# Start demo HTTP server - serves from project root
+python3 -m http.server "$DEMO_PORT" >/dev/null 2>&1 &
 DEMO_PID=$!
-echo "  Started: Demo (http://localhost:8000/clayshards/clay-shards-demo/) [PID: $DEMO_PID]"
+echo "  Started: Demo (http://localhost:$DEMO_PORT/clayshards/clay-shards-demo/) [PID: $DEMO_PID]"
 
 echo ""
 echo "Waiting for servers to be ready..."
@@ -289,16 +383,16 @@ wait_for_server() {
 }
 
 # Wait for servers (Carta and Velo should be quick, Locus may take longer if building from PBF)
-wait_for_server "Carta" "http://localhost:8081/api/v1/health" 30
-wait_for_server "Velo" "http://localhost:8082/api/v1/health" 60
-wait_for_server "Locus" "http://localhost:8083/api/v1/health" 300
+wait_for_server "Carta" "http://localhost:$CARTA_PORT/api/v1/health" 30
+wait_for_server "Velo" "http://localhost:$VELO_PORT/api/v1/health" 120
+wait_for_server "Locus" "http://localhost:$LOCUS_PORT/api/v1/health" 300
 
 echo ""
 echo -e "${GREEN}=== All servers running ===${NC}"
 echo ""
-echo "  Demo:     http://localhost:8000/clayshards/clay-shards-demo/"
-echo "  Carta:    http://localhost:8081"
-echo "  Velo:     http://localhost:8082"
-echo "  Locus:    http://localhost:8083"
+echo "  Demo:     http://localhost:$DEMO_PORT/clayshards/clay-shards-demo/"
+echo "  Carta:    http://localhost:$CARTA_PORT"
+echo "  Velo:     http://localhost:$VELO_PORT"
+echo "  Locus:    http://localhost:$LOCUS_PORT"
 echo ""
 echo "Run './scripts/stop-demo-servers.sh' to stop all servers."
