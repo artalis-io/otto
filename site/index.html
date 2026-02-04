@@ -1344,8 +1344,8 @@ Dependencies:
                     <div class="feature-desc">Solver &rarr; Domain &rarr; API &rarr; UI. Each layer has a clean C API.</div>
                 </div>
                 <div class="feature">
-                    <div class="feature-title">Arena Allocation</div>
-                    <div class="feature-desc">Bulk allocate, bulk free. No fragmentation, no leaks, cache-friendly.</div>
+                    <div class="feature-title">Arenas &amp; Memory Pools</div>
+                    <div class="feature-desc">Bulk allocate, bulk free. Memory pools for fixed-size objects. No fragmentation, no leaks, cache-friendly.</div>
                 </div>
                 <div class="feature">
                     <div class="feature-title">Compound Literals</div>
@@ -1357,7 +1357,7 @@ Dependencies:
                 </div>
                 <div class="feature">
                     <div class="feature-title">Secure by Design</div>
-                    <div class="feature-desc">No strcpy/sprintf, bounded buffers only. Arena allocators prevent use-after-free. Overflow checks on all allocations. WASM sandbox limits blast radius.</div>
+                    <div class="feature-desc">No strcpy/sprintf, bounded buffers only. Arenas and memory pools prevent use-after-free. Overflow checks on all allocations. WASM sandbox limits blast radius.</div>
                 </div>
                 <div class="feature">
                     <div class="feature-title">Not a TMS</div>
@@ -1477,7 +1477,7 @@ Dependencies:
                 <div class="why-c-safety">
                     <h3>Memory Safety via Discipline</h3>
                     <ul>
-                        <li><strong>Arena allocation</strong> &mdash; bulk alloc, bulk free, no use-after-free</li>
+                        <li><strong>Arenas &amp; pools</strong> &mdash; bulk alloc, bulk free, fixed-size pools, no use-after-free</li>
                         <li><strong>Bounded buffers</strong> &mdash; no strcpy/sprintf, snprintf everywhere</li>
                         <li><strong>WASM sandbox</strong> &mdash; even bugs can't escape the sandbox</li>
                         <li><strong>Sanitizers</strong> &mdash; ASan + UBSan in all development builds</li>
