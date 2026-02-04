@@ -29,11 +29,41 @@ import { MapProvider } from '../clay-shards-webgl/map-provider.js';
 
 /* ============================================================================
  * Server Configuration
- * ============================================================================ */
+ * ============================================================================
+ *
+ * Servers can be configured via URL parameters:
+ *   ?carta=8081         - Use port 8081 on localhost
+ *   ?velo=8082          - Use port 8082 on localhost
+ *   ?locus=8083         - Use port 8083 on localhost
+ *   ?carta=http://...   - Use full URL
+ *
+ * Example: demo.html?carta=8081&velo=8082&locus=8083
+ */
 
-const CARTA_SERVER = 'http://localhost:8081';  // Tile server
-const VELO_SERVER = 'http://localhost:8082';   // Route server
-const LOCUS_SERVER = 'http://localhost:8083';  // Geocoding server
+function getServerConfig() {
+    const params = new URLSearchParams(window.location.search);
+
+    const parseServer = (key, defaultPort) => {
+        const value = params.get(key);
+        if (!value) return `http://localhost:${defaultPort}`;
+
+        // If it's just a number, treat as localhost port
+        if (/^\d+$/.test(value)) {
+            return `http://localhost:${value}`;
+        }
+
+        // Otherwise use as full URL
+        return value;
+    };
+
+    return {
+        carta: parseServer('carta', 8081),
+        velo: parseServer('velo', 8082),
+        locus: parseServer('locus', 8083)
+    };
+}
+
+const SERVER_CONFIG = getServerConfig();
 
 /**
  * Allocate a string in WASM memory
@@ -297,7 +327,7 @@ async function main() {
         font.transferMetricsToWasm(wasm);
 
         // Configure servers
-        setCartaServerUrl(CARTA_SERVER);
+        setCartaServerUrl(SERVER_CONFIG.carta);
 
         // Initialize app
         wasm.map_init(width, height);
@@ -305,9 +335,10 @@ async function main() {
         wasm.map_set_center(47.4979, 19.0402);
         wasm.map_set_zoom(12);
 
-        // Configure provider servers
-        wasm.cs_provider_set_route_server(_allocString(wasm, VELO_SERVER));
-        wasm.cs_provider_set_geocode_server(_allocString(wasm, LOCUS_SERVER));
+        // Configure provider servers (configurable via URL params)
+        wasm.cs_provider_set_route_server(_allocString(wasm, SERVER_CONFIG.velo));
+        wasm.cs_provider_set_geocode_server(_allocString(wasm, SERVER_CONFIG.locus));
+        console.log('Server config:', SERVER_CONFIG);
 
         // Initialize provider for API integration (routing, geocoding)
         mapProvider = new MapProvider(wasm);
