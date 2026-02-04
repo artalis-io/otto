@@ -9,6 +9,9 @@
  * - Zlib compression/decompression
  * - OSM PBF parsing utilities
  * - Arena and pool memory allocators
+ * - Rate limiting and work queue management
+ * - API client resilience (circuit breaker, backoff, retry)
+ * - CORS header utilities
  */
 
 #ifndef SHARED_H
@@ -27,6 +30,10 @@
 #include "sh_workqueue.h"
 #include "sh_capacity.h"
 #include "sh_args.h"
+#include "sh_circuit.h"
+#include "sh_backoff.h"
+#include "sh_retry.h"
+#include "sh_cors.h"
 
 /* Library version */
 #define SHARED_VERSION_MAJOR 1
