@@ -537,6 +537,78 @@
             margin-bottom: 20px;
         }
 
+        /* AI Ready */
+        .ai-ready {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .ai-ready-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 32px;
+        }
+
+        .ai-example {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .ai-example-prompt {
+            font-size: 13px;
+            color: var(--accent);
+            font-style: italic;
+            margin-bottom: 16px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .ai-example-diagram {
+            font-size: 12px;
+            line-height: 1.4;
+            color: var(--text-muted);
+            overflow-x: auto;
+        }
+
+        .ai-example-diagram pre {
+            margin: 0;
+        }
+
+        .ai-insight {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .ai-insight p {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            line-height: 1.7;
+        }
+
+        .ai-insight .highlight {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .ai-features {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 8px;
+        }
+
+        .ai-feature {
+            font-size: 12px;
+            color: var(--text-muted);
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
         /* Why C */
         .why-c {
             padding: 48px 0;
@@ -1321,6 +1393,48 @@ Dependencies:
             </div>
         </section>
 
+        <section class="ai-ready">
+            <h2 class="section-title">AI-Ready</h2>
+            <div class="ai-ready-content">
+                <div class="ai-example">
+                    <div class="ai-example-prompt">
+                        "Find the cheapest route for truck 47 to deliver in Prague by Thursday, he's got 6 hours left on his clock"
+                    </div>
+                    <div class="ai-example-diagram">
+<pre>                    ┌─────────────────┐
+                    │   LLM Agent     │
+                    │ (intent → API)  │
+                    └────────┬────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        ▼                    ▼                    ▼
+   ┌─────────┐         ┌─────────┐         ┌─────────┐
+   │  HoSE   │         │  Velo   │         │FuelWise │
+   │(6h left)│         │ (route) │         │ (cost)  │
+   └─────────┘         └─────────┘         └─────────┘</pre>
+                    </div>
+                </div>
+                <div class="ai-insight">
+                    <p>
+                        <span class="highlight">LLM is the UX layer. OTTO engines are the truth layer.</span>
+                        The AI doesn't hallucinate routes&mdash;it translates natural language into API calls
+                        and explains results in human terms.
+                    </p>
+                    <p>
+                        Dispatchers speak, OTTO optimizes, LLM explains. No training required.
+                    </p>
+                    <div class="ai-features">
+                        <div class="ai-feature">Natural language queries</div>
+                        <div class="ai-feature">What-if scenarios</div>
+                        <div class="ai-feature">Plan explainability</div>
+                        <div class="ai-feature">Multi-language support</div>
+                        <div class="ai-feature">Voice interface ready</div>
+                        <div class="ai-feature">Document extraction</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="performance">
             <h2 class="section-title">Performance</h2>
             <table>
@@ -1483,7 +1597,7 @@ Dependencies:
                 <a href="../docs/ARCHITECTURE.md">Architecture</a>
                 <a href="../LICENSE">MIT License</a>
             </div>
-            <div>&copy; 2025 Mark Farkas, artalis</div>
+            <div>&copy; 2025 Mark Farkas, artalis.io</div>
         </footer>
     </div>
 </body>
