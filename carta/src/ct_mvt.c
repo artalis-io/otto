@@ -136,9 +136,12 @@ static int enc_reserve(CTMVTEncoder *enc, size_t len)
     return 1;
 }
 
+/* Maximum layer name length for MVT encoding */
+#define MVT_MAX_STRING_LEN 256
+
 static void enc_write_string(CTMVTEncoder *enc, const char *str)
 {
-    size_t len = strlen(str);
+    size_t len = strnlen(str, MVT_MAX_STRING_LEN);
     enc_write_varint(enc, len);
     enc_write_bytes(enc, (const uint8_t *)str, len);
 }

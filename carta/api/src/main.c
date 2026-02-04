@@ -32,6 +32,7 @@
 #include "mongoose.h"
 #include "carta.h"
 #include "ct_cache.h"
+#include "shared.h"   /* For sh_ratelimit */
 
 /* ============================================================================
  * Configuration
@@ -57,6 +58,10 @@ typedef struct {
     char name[128];
     LODPreset lod_preset;  /* LOD filtering preset */
     int num_threads;       /* Worker threads (0 = auto-detect) */
+    /* Rate limiting configuration */
+    int rate_limit_enabled;   /* 1 = enabled, 0 = disabled */
+    double rate_limit_rps;    /* Tokens refilled per second */
+    double rate_limit_burst;  /* Maximum burst capacity */
 } TileServerConfig;
 
 /* Default configuration */
@@ -70,7 +75,10 @@ static TileServerConfig s_config = {
     .tile_size = 512,
     .name = "Carta Tile Server",
     .lod_preset = LOD_DEFAULT,  /* OSM-style zoom-dependent filtering */
-    .num_threads = 0         /* 0 = auto-detect CPU count */
+    .num_threads = 0,        /* 0 = auto-detect CPU count */
+    .rate_limit_enabled = 1, /* Enabled by default */
+    .rate_limit_rps = 10.0,  /* 10 requests per second */
+    .rate_limit_burst = 100.0 /* Burst capacity of 100 */
 };
 
 /* Global state */
@@ -82,6 +90,9 @@ static CTTileCache *s_mvt_cache = NULL;
 
 /* Cache mutex for thread-safe access */
 static pthread_mutex_t s_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Rate limiter instance (uses shared library) */
+static ShRateLimiter *s_rate_limiter = NULL;
 
 /* Worker thread state */
 typedef struct {
@@ -268,6 +279,18 @@ static void load_config_env(TileServerConfig *cfg) {
     }
     if ((val = getenv("CARTA_THREADS"))) {
         cfg->num_threads = atoi(val);
+    }
+    /* Rate limiting configuration */
+    if ((val = getenv("CARTA_RATE_LIMIT_ENABLED"))) {
+        cfg->rate_limit_enabled = (atoi(val) != 0);
+    }
+    if ((val = getenv("CARTA_RATE_LIMIT_RPS"))) {
+        cfg->rate_limit_rps = atof(val);
+        if (cfg->rate_limit_rps <= 0) cfg->rate_limit_rps = 10.0;
+    }
+    if ((val = getenv("CARTA_RATE_LIMIT_BURST"))) {
+        cfg->rate_limit_burst = atof(val);
+        if (cfg->rate_limit_burst <= 0) cfg->rate_limit_burst = 100.0;
     }
 }
 
@@ -740,6 +763,25 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
+        /* Rate limiting check (supports both IPv4 and IPv6) */
+        if (s_rate_limiter) {
+            ShRateLimitAddr client_addr;
+            if (c->rem.is_ip6) {
+                sh_ratelimit_addr_ipv6(&client_addr,
+                                       c->rem.addr.ip6[0], c->rem.addr.ip6[1]);
+            } else {
+                sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
+            }
+            if (!sh_ratelimit_check(s_rate_limiter, &client_addr)) {
+                mg_http_reply(c, 429,
+                    "Content-Type: text/plain\r\n"
+                    "Retry-After: 1\r\n"
+                    "Access-Control-Allow-Origin: *\r\n",
+                    "Rate limit exceeded\n");
+                return;
+            }
+        }
+
         /* CORS preflight */
         if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
             mg_http_reply(c, 204,
@@ -817,6 +859,9 @@ static void print_usage(const char *prog) {
     printf("  TILE_SIZE                   PNG tile size\n");
     printf("  TILE_LOD                    LOD preset (default, detailed, minimal, none)\n");
     printf("  CARTA_THREADS               Worker thread count (0 = auto)\n");
+    printf("  CARTA_RATE_LIMIT_ENABLED    Enable rate limiting (default: 1)\n");
+    printf("  CARTA_RATE_LIMIT_RPS        Requests per second (default: 10)\n");
+    printf("  CARTA_RATE_LIMIT_BURST      Burst capacity (default: 100)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s -p 8081 hungary-latest.osm.pbf\n", prog);
@@ -959,6 +1004,20 @@ int main(int argc, char *argv[]) {
         printf("Cache: disabled (allocation failed)\n");
     }
 
+    /* Initialize rate limiter (uses shared library) */
+    if (s_config.rate_limit_enabled) {
+        s_rate_limiter = sh_ratelimit_create(s_config.rate_limit_rps,
+                                             s_config.rate_limit_burst, 4096);
+        if (s_rate_limiter) {
+            printf("Rate limit: %.0f RPS, burst %.0f (IPv4 + IPv6)\n",
+                   s_config.rate_limit_rps, s_config.rate_limit_burst);
+        } else {
+            fprintf(stderr, "Warning: Failed to create rate limiter\n");
+        }
+    } else {
+        printf("Rate limit: disabled\n");
+    }
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -1000,6 +1059,7 @@ int main(int argc, char *argv[]) {
     s_workers = calloc(num_threads, sizeof(WorkerThread));
     if (!s_workers) {
         fprintf(stderr, "Error: Failed to allocate worker threads\n");
+        sh_ratelimit_free(s_rate_limiter);
         ct_cache_free(s_png_cache);
         ct_cache_free(s_mvt_cache);
         ct_lod_free(&s_lod_config);
@@ -1054,6 +1114,7 @@ int main(int argc, char *argv[]) {
     }
 
     free(s_workers);
+    sh_ratelimit_free(s_rate_limiter);
     ct_cache_free(s_png_cache);
     ct_cache_free(s_mvt_cache);
     ct_lod_free(&s_lod_config);

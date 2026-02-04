@@ -61,7 +61,7 @@ BENCH_BIN = bench_carta
 # WASM output
 WASM_OUT = carta.js
 
-.PHONY: all clean test bench lib debug wasm cli
+.PHONY: all clean test bench lib debug wasm cli fuzz
 
 # Default target
 all: lib $(TEST_BIN)
@@ -109,10 +109,35 @@ debug: clean all
 wasm:
 	$(MAKE) -C wasm
 
+# Fuzzing build (requires clang with libFuzzer)
+FUZZ_BIN = fuzz_pbf
+FUZZ_CC = clang
+FUZZ_CFLAGS = -fsanitize=fuzzer,address,undefined -g -O1 -std=c11 -D_GNU_SOURCE
+FUZZ_SRCS = tests/fuzz/fuzz_pbf.c
+
+# Build fuzz target (requires rebuilt library with sanitizers)
+fuzz: fuzz-lib $(FUZZ_BIN)
+
+# Rebuild library with sanitizers for fuzzing
+fuzz-lib:
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) -c $(CORE_SRCS)
+	ar rcs libcarta_fuzz.a $(CORE_OBJS)
+	$(MAKE) -C $(SHARED_DIR) CC=$(FUZZ_CC) CFLAGS="$(FUZZ_CFLAGS)" clean lib
+
+$(FUZZ_BIN): $(FUZZ_SRCS) fuzz-lib
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) $(FUZZ_SRCS) \
+		-L. -lcarta_fuzz -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+	@echo ""
+	@echo "Fuzzer built successfully. Run with:"
+	@echo "  ./$(FUZZ_BIN) tests/fuzz/corpus/ -max_len=1000000"
+	@echo ""
+	@echo "Or run a quick smoke test:"
+	@echo "  ./$(FUZZ_BIN) tests/fuzz/corpus/ -max_len=100000 -max_total_time=60"
+
 # Clean
 clean:
-	rm -f $(CORE_OBJS) $(LIB)
-	rm -f $(TEST_BIN) $(CLI_BIN) $(BENCH_BIN)
+	rm -f $(CORE_OBJS) $(LIB) libcarta_fuzz.a
+	rm -f $(TEST_BIN) $(CLI_BIN) $(BENCH_BIN) $(FUZZ_BIN)
 	rm -f $(WASM_OUT) carta.wasm
 
 # Dependencies
@@ -143,6 +168,7 @@ help:
 	@echo "  cli      - Build command-line tool"
 	@echo "  debug    - Build with debug symbols"
 	@echo "  wasm     - Build WebAssembly (requires Emscripten)"
+	@echo "  fuzz     - Build fuzzer (requires clang with libFuzzer)"
 	@echo "  clean    - Remove build artifacts"
 	@echo ""
 	@echo "Examples:"
