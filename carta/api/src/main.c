@@ -882,21 +882,33 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Load PBF file with progress reporting */
-    printf("Loading PBF: %s\n", s_config.pbf_path);
+    /* Load data file - auto-detect binary index vs PBF */
+    if (ct_is_binary_index(s_config.pbf_path)) {
+        /* Fast path: load pre-built binary index via mmap */
+        printf("Loading binary index: %s\n", s_config.pbf_path);
+        s_pbf_ctx = ct_index_mmap(s_config.pbf_path);
+        if (!s_pbf_ctx) {
+            fprintf(stderr, "Error: Failed to load binary index: %s\n", s_config.pbf_path);
+            return 1;
+        }
+        printf("Index loaded via mmap (fast startup)\n");
+    } else {
+        /* Slow path: parse PBF and build index from scratch */
+        printf("Loading PBF: %s\n", s_config.pbf_path);
 
-    /* Configure loading with progress callback */
-    CTPBFConfig pbf_config;
-    ct_pbf_config_init(&pbf_config);
-    pbf_config.progress_callback = pbf_progress_callback;
-    pbf_config.progress_interval = 50;  /* Report every 50 blobs */
+        /* Configure loading with progress callback */
+        CTPBFConfig pbf_config;
+        ct_pbf_config_init(&pbf_config);
+        pbf_config.progress_callback = pbf_progress_callback;
+        pbf_config.progress_interval = 50;  /* Report every 50 blobs */
 
-    s_pbf_ctx = ct_load_pbf_with_config(s_config.pbf_path, &pbf_config);
-    if (!s_pbf_ctx) {
-        fprintf(stderr, "Error: Failed to load PBF file: %s\n", s_config.pbf_path);
-        return 1;
+        s_pbf_ctx = ct_load_pbf_with_config(s_config.pbf_path, &pbf_config);
+        if (!s_pbf_ctx) {
+            fprintf(stderr, "Error: Failed to load PBF file: %s\n", s_config.pbf_path);
+            return 1;
+        }
+        printf("\n");  /* Newline after progress */
     }
-    printf("\n");  /* Newline after progress */
 
     /* Print stats */
     size_t nodes, ways, features;

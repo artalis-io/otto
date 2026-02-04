@@ -483,7 +483,13 @@ static inline int mg_mkdir(const char *path, mode_t mode) {
 #define _DARWIN_UNLIMITED_SELECT 1  // No limit on file descriptors
 
 #if defined(__APPLE__)
+// macOS: Define _DARWIN_C_SOURCE to expose ip_mreq, IP_ADD_MEMBERSHIP,
+// clock_gettime_nsec_np, CLOCK_UPTIME_RAW
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
 #include <mach/mach_time.h>
+#include <alloca.h>  // For alloca()
 #endif
 
 #if !defined(MG_ENABLE_EPOLL) && defined(__linux__)

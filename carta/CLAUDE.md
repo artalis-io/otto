@@ -210,6 +210,90 @@ ct_tile_clear(&tile);
 
 Rule of thumb: **10-15x PBF file size** for peak memory usage.
 
+## Production Deployment
+
+### Binary Index Files
+
+For production, pre-build a binary index from the PBF file. The tile server auto-detects the file format and uses mmap for instant startup.
+
+**Why use binary index?**
+
+| Aspect | PBF File | Binary Index |
+|--------|----------|--------------|
+| Startup time | 10-60s (parse + index) | <1s (mmap) |
+| Memory pattern | Peak during parsing | Steady-state only |
+| R-tree | Built at startup | Pre-built, mmap'd |
+| Coordinates | Double precision | Fixed-point (7 decimals) |
+| File size | Compressed | ~2x PBF size |
+
+### Production Workflow
+
+```bash
+# Step 1: Build binary index (one-time, offline)
+./carta-tile-server --save-index /data/map.idx /data/map.osm.pbf
+
+# Step 2: Run tile server from index (production)
+./carta-tile-server /data/map.idx
+```
+
+### Index File Contents
+
+The binary index (`.idx`) contains everything needed for tile serving:
+
+| Section | Contents | Pre-computed |
+|---------|----------|--------------|
+| Ways | ID, coordinates, class, type, name | Yes |
+| R-Tree | Hilbert-packed spatial index | Yes |
+| Labeled Points | Cities, towns with names/population | Yes |
+| LOD Metadata | area_sqm, length_m, min_zoom | Yes |
+| String Pool | Deduplicated feature names | Yes |
+
+### What's NOT Pre-computed
+
+| Item | Reason |
+|------|--------|
+| Simplified geometries | 19x storage (one per zoom level) |
+| Per-tile geometry clips | Millions of tiles = explosion |
+| Rendered PNG tiles | Use Apex (planned) for tile pyramids |
+| Delta-encoded coords per zoom | Computed on-the-fly, fast |
+
+### Index Size Estimates
+
+| Region | PBF Size | Index Size | Ratio |
+|--------|----------|------------|-------|
+| Monaco | 700 KB | 640 KB | 0.9x |
+| Hungary | 294 MB | ~500 MB | 1.7x |
+| Germany | 3.5 GB | ~6 GB | 1.7x |
+| Planet | 70 GB | ~120 GB | 1.7x |
+
+The index is larger than PBF because PBF uses aggressive compression while the index prioritizes mmap-ability and query speed.
+
+### Docker Production Setup
+
+```dockerfile
+# Build index at image build time
+FROM carta AS builder
+COPY map.osm.pbf /tmp/
+RUN carta-tile-server --save-index /data/map.idx /tmp/map.osm.pbf
+
+# Runtime image uses only the index
+FROM carta
+COPY --from=builder /data/map.idx /data/
+CMD ["carta-tile-server", "/data/map.idx"]
+```
+
+### Tile Server Options
+
+```bash
+./carta-tile-server [options] <pbf-or-index-file>
+
+Options:
+  -S, --save-index PATH   Save binary index to PATH after loading
+  -p, --port PORT         Listen port (default: 8081)
+  -t, --threads N         Worker threads (default: auto)
+  --lod none|default      LOD filtering preset
+```
+
 ## Code Style
 
 - 4-space indentation
@@ -235,10 +319,10 @@ Rule of thumb: **10-15x PBF file size** for peak memory usage.
 
 | Limitation | Value | Notes |
 |------------|-------|-------|
-| Max nodes | ~4 billion | `uint32_t` index |
+| Max nodes | ~18 quintillion | `size_t` index (64-bit) |
 | Max zoom | 30 | `1 << z` overflow prevention |
 | Max tiles per bbox query | 10 million | DoS protection |
-| Thread-local render cache | Not freed on thread exit | Minor leak in multi-threaded apps |
+| Thread-local render cache | Auto-freed on thread exit | pthread_key destructor handles cleanup |
 
 ### Workarounds for Large Datasets
 
