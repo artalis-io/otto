@@ -32,9 +32,11 @@
  * Parsing Constants
  * ============================================================================ */
 
-/* Maximum elements in dense node parsing (per PrimitiveBlock) */
-#define CT_MAX_DENSE_NODES       1000000
-#define CT_MAX_KEYS_VALS         10000000
+/* Maximum elements in dense node parsing (per PrimitiveBlock)
+ * OSM PBF spec: PrimitiveBlocks typically have ~8000 entities, but DenseNodes
+ * can pack more. We use 100K as a safe upper bound (12x typical max). */
+#define CT_MAX_DENSE_NODES       100000
+#define CT_MAX_KEYS_VALS         500000
 
 /* Maximum way node references */
 #define CT_MAX_WAY_REFS          10000
@@ -1033,23 +1035,30 @@ error:
     return CT_ERROR_PARSE_ERROR;
 }
 
+/* Shared parsing buffers - allocated once per primitive group from the arena.
+ * This avoids arena exhaustion when parsing many ways/relations while remaining
+ * thread-safe (each context has its own arena). */
+typedef struct {
+    int64_t way_refs[CT_MAX_WAY_REFS];
+    uint32_t way_keys[256];
+    uint32_t way_vals[256];
+    int64_t relation_memids[CT_MAX_RELATION_MEMBERS];
+    uint32_t relation_role_sids[CT_MAX_RELATION_MEMBERS];
+    uint32_t relation_types[CT_MAX_RELATION_MEMBERS];
+    uint32_t relation_keys[256];
+    uint32_t relation_vals[256];
+} CTParseBuffers;
+
 static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
-                          const SHStringTable *st)
+                          const SHStringTable *st, CTParseBuffers *bufs)
 {
     int64_t id = 0;
-    uint32_t *keys = NULL, *vals = NULL;
-    int64_t *refs = NULL;
+    int64_t *refs = bufs->way_refs;
+    uint32_t *keys = bufs->way_keys;
+    uint32_t *vals = bufs->way_vals;
     size_t key_count = 0, val_count = 0, ref_count = 0;
     size_t pos = 0;
-
-    /* Allocate temporaries from parsing arena */
     size_t max_refs = CT_MAX_WAY_REFS;
-    refs = sh_arena_alloc(ctx->parse_arena, max_refs * sizeof(int64_t));
-    keys = sh_arena_alloc(ctx->parse_arena, 256 * sizeof(uint32_t));
-    vals = sh_arena_alloc(ctx->parse_arena, 256 * sizeof(uint32_t));
-    if (!refs || !keys || !vals) {
-        return CT_ERROR_OUT_OF_MEMORY;
-    }
 
     while (pos < len) {
         uint32_t field, wire;
@@ -1232,27 +1241,18 @@ skip_way:
  * Extracts member IDs, types, roles for multipolygon assembly.
  */
 static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t len,
-                               const SHStringTable *st)
+                               const SHStringTable *st, CTParseBuffers *bufs)
 {
     int64_t id = 0;
-    uint32_t *keys = NULL, *vals = NULL;
-    uint32_t *role_sids = NULL;
-    int64_t *memids = NULL;
-    uint32_t *types = NULL;
+    int64_t *memids = bufs->relation_memids;
+    uint32_t *role_sids = bufs->relation_role_sids;
+    uint32_t *types = bufs->relation_types;
+    uint32_t *keys = bufs->relation_keys;
+    uint32_t *vals = bufs->relation_vals;
     size_t key_count = 0, val_count = 0;
     size_t role_count = 0, memid_count = 0, type_count = 0;
     size_t pos = 0;
-
-    /* Allocate temporaries from parsing arena */
     size_t max_members = CT_MAX_RELATION_MEMBERS;
-    memids = sh_arena_alloc(ctx->parse_arena, max_members * sizeof(int64_t));
-    role_sids = sh_arena_alloc(ctx->parse_arena, max_members * sizeof(uint32_t));
-    types = sh_arena_alloc(ctx->parse_arena, max_members * sizeof(uint32_t));
-    keys = sh_arena_alloc(ctx->parse_arena, 256 * sizeof(uint32_t));
-    vals = sh_arena_alloc(ctx->parse_arena, 256 * sizeof(uint32_t));
-    if (!memids || !role_sids || !types || !keys || !vals) {
-        return CT_ERROR_OUT_OF_MEMORY;
-    }
 
     while (pos < len) {
         uint32_t field, wire;
@@ -1454,7 +1454,8 @@ skip_relation:
 
 static CTStatus parse_primitive_group(CTPBFContext *ctx, const uint8_t *data, size_t len,
                                       const SHStringTable *st,
-                                      int32_t granularity, int64_t lat_offset, int64_t lon_offset)
+                                      int32_t granularity, int64_t lat_offset, int64_t lon_offset,
+                                      CTParseBuffers *bufs)
 {
     size_t pos = 0;
 
@@ -1475,10 +1476,10 @@ static CTStatus parse_primitive_group(CTPBFContext *ctx, const uint8_t *data, si
                                                     granularity, lat_offset, lon_offset);
                 if (status != CT_OK) return status;
             } else if (field == SH_PBF_PRIMGROUP_WAYS) {
-                CTStatus status = parse_way(ctx, data + pos, msg_len, st);
+                CTStatus status = parse_way(ctx, data + pos, msg_len, st, bufs);
                 if (status != CT_OK) return status;
             } else if (field == SH_PBF_PRIMGROUP_RELATIONS) {
-                CTStatus status = parse_relation(ctx, data + pos, msg_len, st);
+                CTStatus status = parse_relation(ctx, data + pos, msg_len, st, bufs);
                 if (status != CT_OK) return status;
             }
             pos += msg_len;
@@ -1494,6 +1495,12 @@ static CTStatus parse_primitive_group(CTPBFContext *ctx, const uint8_t *data, si
 
 static CTStatus parse_primitive_block(CTPBFContext *ctx, const uint8_t *data, size_t len)
 {
+    /* Allocate shared parsing buffers from arena - reused for all ways/relations in this block */
+    CTParseBuffers *bufs = sh_arena_alloc(ctx->parse_arena, sizeof(CTParseBuffers));
+    if (!bufs) {
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+
     SHStringTable st;
     sh_string_table_init(&st);
 
@@ -1585,7 +1592,7 @@ static CTStatus parse_primitive_block(CTPBFContext *ctx, const uint8_t *data, si
             pos += n;
 
             CTStatus status = parse_primitive_group(ctx, data + pos, msg_len, &st,
-                                                    granularity, lat_offset, lon_offset);
+                                                    granularity, lat_offset, lon_offset, bufs);
             if (status != CT_OK) {
                 sh_string_table_free(&st);
                 return status;
