@@ -26,6 +26,7 @@
 #include "sh_ratelimit.h"
 #include "sh_workqueue.h"
 #include "sh_capacity.h"
+#include "sh_args.h"
 
 /* Library version */
 #define SHARED_VERSION_MAJOR 1
