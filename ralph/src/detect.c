@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdatomic.h>
 #include "detect.h"
 #include "lap.h"
 
@@ -21,15 +22,15 @@ static int detect_check_size_overflow(size_t n, size_t elem_size) {
     return 0;
 }
 
-/* Global setting for LAP detection */
-static int lap_detection_enabled = 1;
+/* Global setting for LAP detection (thread-safe via atomic) */
+static atomic_int lap_detection_enabled = 1;
 
 void ralph_set_detect_lap(int enabled) {
-    lap_detection_enabled = enabled ? 1 : 0;
+    atomic_store(&lap_detection_enabled, enabled ? 1 : 0);
 }
 
 int ralph_get_detect_lap(void) {
-    return lap_detection_enabled;
+    return atomic_load(&lap_detection_enabled);
 }
 
 /* ============================================================================
@@ -245,7 +246,15 @@ int detect_lap(const LPModel *model, LAPSignature *sig) {
      * For variable v connecting row constraint r and col constraint c:
      * costs[row_map[r]][col_map[c]] = objective coefficient of v
      */
-    double *costs = (double *)calloc(n * n, sizeof(double));
+
+    /* Check for integer overflow in n*n allocation */
+    if (detect_check_size_overflow((size_t)n, sizeof(double)) != 0) {
+        free(var_con1); free(var_con2); free(con_color);
+        free(row_map); free(col_map);
+        return 0;
+    }
+
+    double *costs = (double *)calloc((size_t)n * n, sizeof(double));
     int *var_to_row = (int *)calloc(num_vars, sizeof(int));
     int *var_to_col = (int *)calloc(num_vars, sizeof(int));
 
@@ -547,15 +556,15 @@ int solve_lap_at_node(
 
 #include "netflow.h"
 
-/* Global setting for network detection (enabled by default like LAP) */
-static int network_detection_enabled = 1;
+/* Global setting for network detection (thread-safe via atomic) */
+static atomic_int network_detection_enabled = 1;
 
 void ralph_set_detect_network(int enabled) {
-    network_detection_enabled = enabled ? 1 : 0;
+    atomic_store(&network_detection_enabled, enabled ? 1 : 0);
 }
 
 int ralph_get_detect_network(void) {
-    return network_detection_enabled;
+    return atomic_load(&network_detection_enabled);
 }
 
 /* Forward declarations for static helper functions */

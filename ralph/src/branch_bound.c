@@ -266,6 +266,12 @@ void bb_node_free(BBNode *node) {
 
 BBNode* bb_node_copy(const BBNode *src, int num_vars) {
     if (!src) return NULL;
+    if (num_vars < 0) return NULL;
+
+    /* Check for integer overflow in memcpy size calculation */
+    if ((size_t)num_vars > SIZE_MAX / sizeof(double)) {
+        return NULL;
+    }
 
     BBNode *dst = bb_node_create(num_vars);
     if (!dst) return NULL;
@@ -280,8 +286,8 @@ BBNode* bb_node_copy(const BBNode *src, int num_vars) {
     dst->lp_status = src->lp_status;
     dst->estimate = src->estimate;
 
-    memcpy(dst->lb, src->lb, num_vars * sizeof(double));
-    memcpy(dst->ub, src->ub, num_vars * sizeof(double));
+    memcpy(dst->lb, src->lb, (size_t)num_vars * sizeof(double));
+    memcpy(dst->ub, src->ub, (size_t)num_vars * sizeof(double));
 
     /* Copy basis information for warm starting */
     if (src->basis && src->var_status && src->basis_size > 0 && src->var_status_size > 0) {
