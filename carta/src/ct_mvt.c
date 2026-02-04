@@ -103,8 +103,8 @@ static void enc_write_varint(CTMVTEncoder *enc, uint64_t value)
 
 static void enc_write_svarint(CTMVTEncoder *enc, int64_t value)
 {
-    /* Zigzag encode */
-    uint64_t uval = (uint64_t)((value << 1) ^ (value >> 63));
+    /* Zigzag encode: cast to unsigned before left shift to avoid UB */
+    uint64_t uval = ((uint64_t)value << 1) ^ (uint64_t)(value >> 63);
     enc_write_varint(enc, uval);
 }
 

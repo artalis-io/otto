@@ -11,6 +11,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* Forward declarations for shared memory structures */
+typedef struct SHArena SHArena;
+typedef struct SHPool SHPool;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -241,11 +245,6 @@ typedef struct {
     CTFeature *features;
     size_t num_features;
     size_t features_capacity;
-
-    /* Memory pool for point arrays */
-    CTTilePoint *point_pool;
-    size_t point_pool_size;
-    size_t point_pool_capacity;
 } CTTile;
 
 /* ============================================================================
@@ -316,6 +315,11 @@ typedef struct {
     /* Pre-allocated buffers for rendering (avoids per-feature malloc) */
     CTTilePoint *scale_buffer;      /* Reusable point scaling buffer */
     size_t scale_buffer_capacity;   /* Capacity in points */
+
+    /* Pre-allocated edge buffers for polygon fill (avoids per-polygon malloc) */
+    void *edge_buffer;              /* Edge table scratch space */
+    void *active_buffer;            /* Active edge table scratch space */
+    size_t edge_buffer_capacity;    /* Capacity in edges */
 } CTRenderContext;
 
 /* ============================================================================
@@ -471,6 +475,13 @@ typedef struct {
     size_t num_role_strings;
     size_t role_strings_capacity;
 
+    /* Role string hash table for deduplication (thread-safe: per-context) */
+    struct {
+        uint32_t hash;      /* Hash of the role string (0 = empty slot) */
+        uint32_t role_idx;  /* Index into role_strings */
+    } role_hash[256];
+    int role_hash_initialized;
+
     /* Assembled multipolygons */
     CTAssembledMultipolygon *multipolygons;
     size_t num_multipolygons;
@@ -502,6 +513,20 @@ typedef struct {
     size_t mmap_size;         /* mmap'd file size */
     void *mmap_coords;        /* Allocated coordinate block (for mmap'd ways) */
     int rtree_is_mmap;        /* 1 if R-Tree points into mmap */
+
+    /* Arena for parsing temporaries (reset after each PrimitiveBlock) */
+    SHArena *parse_arena;
+
+    /* Coordinate pool for way geometry (eliminates per-way malloc) */
+    SHPool *coord_pool;
+
+    /* Scratch buffers for multipolygon assembly (eliminates per-relation malloc) */
+    struct {
+        void *outer_segs;           /* WaySegment scratch for outer members */
+        void *inner_segs;           /* WaySegment scratch for inner members */
+        size_t outer_capacity;      /* Capacity in WaySegments */
+        size_t inner_capacity;      /* Capacity in WaySegments */
+    } mp_scratch;
 } CTPBFContext;
 
 /* ============================================================================

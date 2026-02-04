@@ -6,8 +6,10 @@
  */
 
 #include "ct_cache.h"
+#include "shared.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 /* ============================================================================
  * Hash Function
@@ -49,7 +51,7 @@ static CTCacheEntry *entry_create(uint64_t key, const uint8_t *data, size_t size
 static void entry_free(CTCacheEntry *entry)
 {
     if (!entry) return;
-    free(entry->data);
+    SAFE_FREE(entry->data);
     free(entry);
 }
 
@@ -102,10 +104,10 @@ void ct_cache_free(CTTileCache *cache)
  * Lookup
  * ============================================================================ */
 
-int ct_cache_get(CTTileCache *cache, int z, int x, int y,
-                 const uint8_t **data, size_t *size)
+bool ct_cache_get(CTTileCache *cache, int z, int x, int y,
+                  const uint8_t **data, size_t *size)
 {
-    if (!cache || z < 0 || z >= CT_CACHE_MAX_ZOOM) return 0;
+    if (!cache || z < 0 || z >= CT_CACHE_MAX_ZOOM) return false;
 
     uint64_t key = CT_CACHE_KEY(z, x, y);
     uint64_t bucket = hash_key(key) % cache->num_buckets;
@@ -118,14 +120,14 @@ int ct_cache_get(CTTileCache *cache, int z, int x, int y,
             cache->hits++;
             *data = entry->data;
             *size = entry->size;
-            return 1;
+            return true;
         }
         entry = entry->next;
     }
 
     /* Cache miss */
     cache->misses++;
-    return 0;
+    return false;
 }
 
 /* ============================================================================
@@ -181,14 +183,14 @@ static size_t evict_lru(CTTileCache *cache)
  * Store
  * ============================================================================ */
 
-int ct_cache_put(CTTileCache *cache, int z, int x, int y,
-                 const uint8_t *data, size_t size)
+bool ct_cache_put(CTTileCache *cache, int z, int x, int y,
+                  const uint8_t *data, size_t size)
 {
-    if (!cache || !data || size == 0) return 0;
-    if (z < 0 || z >= CT_CACHE_MAX_ZOOM) return 0;
+    if (!cache || !data || size == 0) return false;
+    if (z < 0 || z >= CT_CACHE_MAX_ZOOM) return false;
 
     /* Don't cache if single tile exceeds budget */
-    if (size > cache->max_bytes / 2) return 0;
+    if (size > cache->max_bytes / 2) return false;
 
     uint64_t key = CT_CACHE_KEY(z, x, y);
     uint64_t bucket = hash_key(key) % cache->num_buckets;
@@ -199,7 +201,7 @@ int ct_cache_put(CTTileCache *cache, int z, int x, int y,
         if (entry->key == key) {
             /* Already cached, update access time */
             entry->last_access = ++cache->clock;
-            return 1;
+            return true;
         }
         entry = entry->next;
     }
@@ -208,13 +210,13 @@ int ct_cache_put(CTTileCache *cache, int z, int x, int y,
     while (cache->total_bytes + size > cache->max_bytes) {
         if (evict_lru(cache) == 0) {
             /* Can't evict anything */
-            return 0;
+            return false;
         }
     }
 
     /* Create new entry */
     entry = entry_create(key, data, size);
-    if (!entry) return 0;
+    if (!entry) return false;
 
     entry->last_access = ++cache->clock;
 
@@ -228,7 +230,7 @@ int ct_cache_put(CTTileCache *cache, int z, int x, int y,
     cache->total_entries++;
     cache->total_bytes += size;
 
-    return 1;
+    return true;
 }
 
 /* ============================================================================

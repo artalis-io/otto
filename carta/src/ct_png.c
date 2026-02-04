@@ -11,6 +11,7 @@
 #include "sh_inflate.h"
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 /* SIMD support detection */
 #if defined(__SSE2__) && !defined(__EMSCRIPTEN__)
@@ -31,8 +32,11 @@ static const uint8_t PNG_SIGNATURE[8] = {137, 80, 78, 71, 13, 10, 26, 10};
  * ============================================================================ */
 
 static uint32_t crc32_table[256];
-static int crc32_table_computed = 0;
+static pthread_once_t crc32_table_once = PTHREAD_ONCE_INIT;
 
+/*
+ * Initialize CRC32 lookup table (thread-safe via pthread_once).
+ */
 static void make_crc32_table(void)
 {
     for (int n = 0; n < 256; n++) {
@@ -45,12 +49,11 @@ static void make_crc32_table(void)
         }
         crc32_table[n] = c;
     }
-    crc32_table_computed = 1;
 }
 
 static uint32_t crc32(const uint8_t *data, size_t len)
 {
-    if (!crc32_table_computed) make_crc32_table();
+    pthread_once(&crc32_table_once, make_crc32_table);
 
     uint32_t c = 0xffffffff;
     for (size_t i = 0; i < len; i++) {
@@ -267,15 +270,20 @@ size_t ct_encode_png_ex(const uint8_t *pixels, int width, int height,
  * ============================================================================ */
 
 /*
- * Simple render context cache for common tile sizes.
+ * Thread-local render context cache for common tile sizes.
  * Avoids malloc/free overhead for repeated tile generation.
- * Note: Not thread-safe - use separate contexts per thread in MT code.
+ * Each thread maintains its own cache via __thread storage.
+ *
+ * NOTE: Thread-local storage means cached contexts are not freed when threads
+ * exit. For long-running server processes, this is typically not an issue as
+ * worker threads are reused. For short-lived threads, call ct_render_free()
+ * explicitly if needed.
  */
 #define CT_CACHE_SIZE_256 0
 #define CT_CACHE_SIZE_512 1
 #define CT_CACHE_COUNT 2
 
-static CTRenderContext *render_cache[CT_CACHE_COUNT] = {NULL, NULL};
+static __thread CTRenderContext *render_cache[CT_CACHE_COUNT] = {NULL, NULL};
 
 static CTRenderContext *acquire_render_context(int tile_size)
 {

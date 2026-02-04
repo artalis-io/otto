@@ -4,6 +4,7 @@
 
 #include "ct_multipolygon.h"
 #include "ct_rtree.h"
+#include "shared.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -94,7 +95,8 @@ static float estimate_area_sqm(const CTCoord *coords, int count)
 const char *ct_get_role_string(const CTPBFContext *ctx, uint32_t role_idx)
 {
     if (!ctx || role_idx == 0) return "";
-    if (role_idx - 1 >= ctx->num_role_strings) return "";
+    /* Check bounds without subtraction to avoid uint32_t wrap-around */
+    if (role_idx > ctx->num_role_strings) return "";
     /* role_strings[0] is NULL (placeholder for empty role) */
     const char *role = ctx->role_strings[role_idx - 1];
     return role ? role : "";
@@ -262,6 +264,31 @@ static const CTOSMWay *lookup_way(const CTPBFContext *ctx, int64_t id)
     return NULL;
 }
 
+/* Initial capacity for WaySegment scratch buffers */
+#define MP_SCRATCH_INITIAL_CAPACITY 64
+
+/*
+ * Ensure scratch buffer has enough capacity, growing if needed.
+ * Returns 0 on allocation failure, 1 on success.
+ */
+static int ensure_scratch_capacity(void **buffer, size_t *capacity,
+                                   size_t needed, size_t elem_size)
+{
+    if (needed <= *capacity) return 1;
+
+    size_t new_cap = *capacity ? *capacity : MP_SCRATCH_INITIAL_CAPACITY;
+    while (new_cap < needed) {
+        new_cap *= 2;
+    }
+
+    void *new_buf = realloc(*buffer, new_cap * elem_size);
+    if (!new_buf) return 0;
+
+    *buffer = new_buf;
+    *capacity = new_cap;
+    return 1;
+}
+
 /*
  * Assemble a single multipolygon from a relation.
  */
@@ -269,11 +296,10 @@ static CTStatus assemble_one_multipolygon(CTPBFContext *ctx,
                                           const CTOSMRelation *rel,
                                           CTAssembledMultipolygon *mp)
 {
-    /* Collect way members by role */
-    WaySegment *outer_segs = NULL;
-    WaySegment *inner_segs = NULL;
+    /* Use pre-allocated scratch buffers from context (eliminates per-relation malloc) */
+    WaySegment *outer_segs = (WaySegment *)ctx->mp_scratch.outer_segs;
+    WaySegment *inner_segs = (WaySegment *)ctx->mp_scratch.inner_segs;
     int num_outer = 0, num_inner = 0;
-    int outer_cap = 0, inner_cap = 0;
 
     for (int i = 0; i < rel->num_members; i++) {
         if (rel->members[i].type != CT_MEMBER_WAY) continue;
@@ -286,25 +312,25 @@ static CTStatus assemble_one_multipolygon(CTPBFContext *ctx,
         int is_inner = (strcmp(role, "inner") == 0);
 
         if (is_outer) {
-            if (num_outer >= outer_cap) {
-                int new_cap = outer_cap ? outer_cap * 2 : 16;
-                WaySegment *new_segs = realloc(outer_segs, new_cap * sizeof(WaySegment));
-                if (!new_segs) goto error;
-                outer_segs = new_segs;
-                outer_cap = new_cap;
+            /* Grow scratch buffer if needed */
+            if (!ensure_scratch_capacity(&ctx->mp_scratch.outer_segs,
+                                         &ctx->mp_scratch.outer_capacity,
+                                         (size_t)(num_outer + 1), sizeof(WaySegment))) {
+                return CT_ERROR_OUT_OF_MEMORY;
             }
+            outer_segs = (WaySegment *)ctx->mp_scratch.outer_segs;
             outer_segs[num_outer].way = way;
             outer_segs[num_outer].reversed = 0;
             outer_segs[num_outer].used = 0;
             num_outer++;
         } else if (is_inner) {
-            if (num_inner >= inner_cap) {
-                int new_cap = inner_cap ? inner_cap * 2 : 16;
-                WaySegment *new_segs = realloc(inner_segs, new_cap * sizeof(WaySegment));
-                if (!new_segs) goto error;
-                inner_segs = new_segs;
-                inner_cap = new_cap;
+            /* Grow scratch buffer if needed */
+            if (!ensure_scratch_capacity(&ctx->mp_scratch.inner_segs,
+                                         &ctx->mp_scratch.inner_capacity,
+                                         (size_t)(num_inner + 1), sizeof(WaySegment))) {
+                return CT_ERROR_OUT_OF_MEMORY;
             }
+            inner_segs = (WaySegment *)ctx->mp_scratch.inner_segs;
             inner_segs[num_inner].way = way;
             inner_segs[num_inner].reversed = 0;
             inner_segs[num_inner].used = 0;
@@ -313,9 +339,7 @@ static CTStatus assemble_one_multipolygon(CTPBFContext *ctx,
     }
 
     if (num_outer == 0) {
-        /* No outer rings - skip this relation */
-        free(outer_segs);
-        free(inner_segs);
+        /* No outer rings - skip this relation (scratch buffers persist for next relation) */
         return CT_OK;
     }
 
@@ -402,8 +426,7 @@ static CTStatus assemble_one_multipolygon(CTPBFContext *ctx,
         ring_count++;
     }
 
-    free(outer_segs);
-    free(inner_segs);
+    /* Scratch buffers persist in context for reuse - don't free here */
 
     if (ring_count == 0) {
         free(rings);
@@ -441,9 +464,7 @@ error_rings:
         free(rings[i].coords);
     }
     free(rings);
-error:
-    free(outer_segs);
-    free(inner_segs);
+    /* Scratch buffers persist in context - don't free on error */
     return CT_ERROR_OUT_OF_MEMORY;
 }
 

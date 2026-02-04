@@ -241,45 +241,45 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars) {
         168;
 
     /* Create arena */
-    tab->arena = ralph_arena_create(arena_size);
+    tab->arena = sh_arena_create(arena_size);
     if (!tab->arena) {
         return -1;
     }
 
     /* Allocate all arrays from arena (calloc zeros memory) */
-    tab->c_ext = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
-    tab->lb_ext = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
-    tab->ub_ext = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+    tab->c_ext = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
+    tab->lb_ext = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
+    tab->ub_ext = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
 
-    tab->basis = (int*)ralph_arena_alloc(tab->arena, m * sizeof(int));
-    tab->nonbasis = (int*)ralph_arena_alloc(tab->arena, (n - m) * sizeof(int));
-    tab->var_status = (VarStatus*)ralph_arena_alloc(tab->arena, n * sizeof(VarStatus));
-    tab->basis_pos = (int*)ralph_arena_alloc(tab->arena, n * sizeof(int));
+    tab->basis = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
+    tab->nonbasis = (int*)sh_arena_alloc(tab->arena, (n - m) * sizeof(int));
+    tab->var_status = (VarStatus*)sh_arena_alloc(tab->arena, n * sizeof(VarStatus));
+    tab->basis_pos = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
 
-    tab->x = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
-    tab->y = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
-    tab->rc = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+    tab->x = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
+    tab->y = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
+    tab->rc = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
 
-    tab->work1 = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
-    tab->work2 = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
-    tab->work3 = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
-    tab->rhs = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
-    tab->pivot_row = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
-    tab->tau_work = (double*)ralph_arena_calloc(tab->arena, m, sizeof(double));
+    tab->work1 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
+    tab->work2 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
+    tab->work3 = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
+    tab->rhs = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
+    tab->pivot_row = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
+    tab->tau_work = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
 
-    tab->se_weights = (double*)ralph_arena_calloc(tab->arena, n, sizeof(double));
+    tab->se_weights = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
 
     /* Pre-allocated sparse workspace for reduced cost computation */
-    tab->cb_sparse_idx = (int*)ralph_arena_alloc(tab->arena, m * sizeof(int));
-    tab->cb_sparse_val = (double*)ralph_arena_alloc(tab->arena, m * sizeof(double));
+    tab->cb_sparse_idx = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
+    tab->cb_sparse_val = (double*)sh_arena_alloc(tab->arena, m * sizeof(double));
 
     /* Auxiliary variable mapping for cut generation */
-    tab->aux_row = (int*)ralph_arena_alloc(tab->arena, num_aux_vars * sizeof(int));
-    tab->aux_coef = (double*)ralph_arena_alloc(tab->arena, num_aux_vars * sizeof(double));
+    tab->aux_row = (int*)sh_arena_alloc(tab->arena, num_aux_vars * sizeof(int));
+    tab->aux_coef = (double*)sh_arena_alloc(tab->arena, num_aux_vars * sizeof(double));
 
     /* Partial pricing candidate list (hot set) */
     tab->partial_cand_capacity = 100;
-    tab->partial_candidates = (int*)ralph_arena_alloc(tab->arena, tab->partial_cand_capacity * sizeof(int));
+    tab->partial_candidates = (int*)sh_arena_alloc(tab->arena, tab->partial_cand_capacity * sizeof(int));
     tab->partial_cand_count = 0;
 
     /* Single check for all allocations */
@@ -614,7 +614,7 @@ void tableau_free(SimplexTableau *tab) {
     tab->A_ext = NULL;
 
     /* Free arena (frees all workspace arrays in one call) */
-    ralph_arena_free(tab->arena);
+    sh_arena_free(tab->arena);
     tab->arena = NULL;
 
     /* NULL out arena-allocated pointers (already freed, just for safety) */

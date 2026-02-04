@@ -3,6 +3,7 @@
  */
 
 #include "ct_tile.h"
+#include "shared.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -333,26 +334,24 @@ void ct_tile_clear(CTTile *tile)
 {
     /* Free feature point arrays */
     for (size_t i = 0; i < tile->num_features; i++) {
-        free(tile->features[i].points);
-        free(tile->features[i].ring_ends);
+        SAFE_FREE(tile->features[i].points);
+        SAFE_FREE(tile->features[i].ring_ends);
         if (tile->features[i].prop_keys) {
             for (int j = 0; j < tile->features[i].num_props; j++) {
-                free(tile->features[i].prop_keys[j]);
-                free(tile->features[i].prop_values[j]);
+                SAFE_FREE(tile->features[i].prop_keys[j]);
+                SAFE_FREE(tile->features[i].prop_values[j]);
             }
-            free(tile->features[i].prop_keys);
-            free(tile->features[i].prop_values);
+            SAFE_FREE(tile->features[i].prop_keys);
+            SAFE_FREE(tile->features[i].prop_values);
         }
     }
     tile->num_features = 0;
-    tile->point_pool_size = 0;
 }
 
 void ct_tile_free(CTTile *tile)
 {
     ct_tile_clear(tile);
-    free(tile->features);
-    free(tile->point_pool);
+    SAFE_FREE(tile->features);
     memset(tile, 0, sizeof(CTTile));
 }
 
@@ -425,16 +424,24 @@ void ct_clip_linestring(const CTTilePoint *points, int num_points,
                 int x, y;
 
                 if (code_out & OUTCODE_TOP) {
-                    x = x0 + (x1 - x0) * (max - y0) / (y1 - y0);
+                    int dy = y1 - y0;
+                    if (dy == 0) break;  /* Degenerate: horizontal line at edge */
+                    x = x0 + (x1 - x0) * (max - y0) / dy;
                     y = max;
                 } else if (code_out & OUTCODE_BOTTOM) {
-                    x = x0 + (x1 - x0) * (min - y0) / (y1 - y0);
+                    int dy = y1 - y0;
+                    if (dy == 0) break;  /* Degenerate: horizontal line at edge */
+                    x = x0 + (x1 - x0) * (min - y0) / dy;
                     y = min;
                 } else if (code_out & OUTCODE_RIGHT) {
-                    y = y0 + (y1 - y0) * (max - x0) / (x1 - x0);
+                    int dx = x1 - x0;
+                    if (dx == 0) break;  /* Degenerate: vertical line at edge */
+                    y = y0 + (y1 - y0) * (max - x0) / dx;
                     x = max;
                 } else {
-                    y = y0 + (y1 - y0) * (min - x0) / (x1 - x0);
+                    int dx = x1 - x0;
+                    if (dx == 0) break;  /* Degenerate: vertical line at edge */
+                    y = y0 + (y1 - y0) * (min - x0) / dx;
                     x = min;
                 }
 
@@ -524,20 +531,24 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
             if (curr_inside) {
                 if (!prev_inside) {
                     /* Compute intersection */
-                    double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) /
-                               ((double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y));
-                    output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
-                    output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
-                    output_count++;
+                    double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
+                    if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
+                        double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
+                        output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
+                        output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
+                        output_count++;
+                    }
                 }
                 output[output_count++] = curr;
             } else if (prev_inside) {
                 /* Compute intersection */
-                double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) /
-                           ((double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y));
-                output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
-                output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
-                output_count++;
+                double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
+                if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
+                    double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
+                    output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
+                    output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
+                    output_count++;
+                }
             }
 
             prev = curr;

@@ -9,6 +9,7 @@
 #include "ct_simplify.h"
 #include "ct_label.h"
 #include "sh_font.h"
+#include "shared.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -24,6 +25,12 @@
 
 /* Minimum feature size in pixels for render-time filtering */
 #define MIN_FEATURE_PIXELS 2.0f
+
+/* Edge structure for scanline polygon fill (defined here for buffer preallocation) */
+typedef struct {
+    int y_min, y_max;
+    float x, dx;
+} CTEdge;
 
 /* ============================================================================
  * Render Context Management
@@ -48,6 +55,12 @@ CTRenderContext *ct_render_create(int width, int height)
     ctx->scale_buffer_capacity = 8192;  /* 8K points handles most features */
     ctx->scale_buffer = malloc(ctx->scale_buffer_capacity * sizeof(CTTilePoint));
 
+    /* Pre-allocate edge buffers for polygon fill (avoids per-polygon malloc)
+     * 8K edges handles most polygons; will fall back to malloc for larger ones */
+    ctx->edge_buffer_capacity = 8192;
+    ctx->edge_buffer = malloc(ctx->edge_buffer_capacity * sizeof(CTEdge));
+    ctx->active_buffer = malloc(ctx->edge_buffer_capacity * sizeof(CTEdge));
+
     ct_default_style(&ctx->style);
     return ctx;
 }
@@ -55,8 +68,10 @@ CTRenderContext *ct_render_create(int width, int height)
 void ct_render_free(CTRenderContext *ctx)
 {
     if (!ctx) return;
-    free(ctx->pixels);
-    free(ctx->scale_buffer);
+    SAFE_FREE(ctx->pixels);
+    SAFE_FREE(ctx->scale_buffer);
+    SAFE_FREE(ctx->edge_buffer);
+    SAFE_FREE(ctx->active_buffer);
     free(ctx);
 }
 
@@ -407,10 +422,7 @@ void ct_render_polyline_cased(CTRenderContext *ctx,
  * Polygon Filling (Scanline Algorithm)
  * ============================================================================ */
 
-typedef struct {
-    int y_min, y_max;
-    float x, dx;
-} CTEdge;
+/* CTEdge defined at top of file for buffer preallocation */
 
 static int compare_edges(const void *a, const void *b)
 {
@@ -437,9 +449,26 @@ void ct_render_polygon(CTRenderContext *ctx,
     if (min_y < 0) min_y = 0;
     if (max_y >= ctx->height) max_y = ctx->height - 1;
 
+    /* Use pre-allocated buffers if polygon fits, otherwise malloc */
+    CTEdge *edges;
+    CTEdge *active;
+    int edges_allocated = 0;
+
+    if ((size_t)num_points <= ctx->edge_buffer_capacity && ctx->edge_buffer) {
+        edges = (CTEdge *)ctx->edge_buffer;
+        active = (CTEdge *)ctx->active_buffer;
+    } else {
+        edges = malloc(num_points * sizeof(CTEdge));
+        if (!edges) return;
+        active = malloc(num_points * sizeof(CTEdge));
+        if (!active) {
+            free(edges);
+            return;
+        }
+        edges_allocated = 1;
+    }
+
     /* Build edge table */
-    CTEdge *edges = malloc(num_points * sizeof(CTEdge));
-    if (!edges) return;
     int num_edges = 0;
 
     for (int i = 0; i < num_points; i++) {
@@ -464,11 +493,6 @@ void ct_render_polygon(CTRenderContext *ctx,
     qsort(edges, num_edges, sizeof(CTEdge), compare_edges);
 
     /* Active edge table */
-    CTEdge *active = malloc(num_edges * sizeof(CTEdge));
-    if (!active) {
-        free(edges);
-        return;
-    }
     int num_active = 0;
     int edge_idx = 0;
 
@@ -522,8 +546,11 @@ void ct_render_polygon(CTRenderContext *ctx,
         }
     }
 
-    free(edges);
-    free(active);
+    /* Only free if we allocated (not using pre-allocated buffers) */
+    if (edges_allocated) {
+        free(edges);
+        free(active);
+    }
 }
 
 /*
@@ -549,9 +576,26 @@ void ct_render_multipolygon(CTRenderContext *ctx,
     if (min_y < 0) min_y = 0;
     if (max_y >= ctx->height) max_y = ctx->height - 1;
 
+    /* Use pre-allocated buffers if polygon fits, otherwise malloc */
+    CTEdge *edges;
+    CTEdge *active;
+    int edges_allocated = 0;
+
+    if ((size_t)num_points <= ctx->edge_buffer_capacity && ctx->edge_buffer) {
+        edges = (CTEdge *)ctx->edge_buffer;
+        active = (CTEdge *)ctx->active_buffer;
+    } else {
+        edges = malloc(num_points * sizeof(CTEdge));
+        if (!edges) return;
+        active = malloc(num_points * sizeof(CTEdge));
+        if (!active) {
+            free(edges);
+            return;
+        }
+        edges_allocated = 1;
+    }
+
     /* Build edge table from all rings */
-    CTEdge *edges = malloc(num_points * sizeof(CTEdge));
-    if (!edges) return;
     int num_edges = 0;
 
     /* Process each ring */
@@ -587,18 +631,16 @@ void ct_render_multipolygon(CTRenderContext *ctx,
     }
 
     if (num_edges < 2) {
-        free(edges);
+        if (edges_allocated) {
+            free(edges);
+            free(active);
+        }
         return;
     }
 
     qsort(edges, num_edges, sizeof(CTEdge), compare_edges);
 
-    /* Active edge table */
-    CTEdge *active = malloc(num_edges * sizeof(CTEdge));
-    if (!active) {
-        free(edges);
-        return;
-    }
+    /* Active edge table already allocated above */
     int num_active = 0;
     int edge_idx = 0;
 
@@ -652,8 +694,11 @@ void ct_render_multipolygon(CTRenderContext *ctx,
         }
     }
 
-    free(edges);
-    free(active);
+    /* Only free if we allocated (not using pre-allocated buffers) */
+    if (edges_allocated) {
+        free(edges);
+        free(active);
+    }
 }
 
 void ct_render_polygon_outline(CTRenderContext *ctx,

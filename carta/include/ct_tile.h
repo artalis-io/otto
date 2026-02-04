@@ -81,10 +81,12 @@ void ct_tile_to_latlon(CTTileCoord tile, double *lat, double *lon);
 /*
  * Get all tiles that intersect a bounding box at a zoom level.
  *
+ * OWNERSHIP: Caller must free() the returned *tiles array.
+ *
  * @param bbox   Geographic bounds to cover
  * @param zoom   Zoom level
- * @param tiles  Output array of tile coordinates (caller frees)
- * @return Number of tiles
+ * @param tiles  Output array of tile coordinates (caller owns, must free)
+ * @return Number of tiles, or 0 on error
  */
 int ct_tiles_for_bbox(CTBBox bbox, int zoom, CTTileCoord **tiles);
 
@@ -135,22 +137,40 @@ void ct_mercator_to_latlon(double x, double y, double *lat, double *lon);
 
 /*
  * Initialize a tile structure.
+ * Must call ct_tile_free() when done to release memory.
  */
 void ct_tile_init(CTTile *tile, CTTileCoord coord);
 
 /*
  * Add a feature to a tile.
- * The tile takes ownership of the feature's point array.
+ *
+ * OWNERSHIP: The tile takes ownership of the following pointers via shallow copy:
+ *   - feature->points      (CTTilePoint array)
+ *   - feature->ring_ends   (int array, for polygons with holes)
+ *   - feature->prop_keys   (char* array)
+ *   - feature->prop_values (char* array)
+ *
+ * After this call:
+ *   - The caller must NOT free these pointers
+ *   - The caller must NOT use the feature struct (it was copied)
+ *   - ct_tile_free() will free all owned memory
+ *
+ * @param tile    Target tile (must be initialized)
+ * @param feature Feature to add (shallow copied, ownership transferred)
+ * @return CT_OK on success, CT_ERROR_OUT_OF_MEMORY if allocation fails
  */
 CTStatus ct_tile_add_feature(CTTile *tile, const CTFeature *feature);
 
 /*
- * Clear all features from a tile (but keep allocated memory).
+ * Clear all features from a tile.
+ * Frees all feature memory (points, ring_ends, properties) but keeps
+ * the tile's feature array allocated for reuse.
  */
 void ct_tile_clear(CTTile *tile);
 
 /*
  * Free all memory associated with a tile.
+ * After this call, the tile struct is zeroed and safe to reinitialize.
  */
 void ct_tile_free(CTTile *tile);
 
@@ -162,13 +182,15 @@ void ct_tile_free(CTTile *tile);
  * Clip a linestring to tile bounds.
  * Returns clipped segments (may be multiple if line exits and re-enters).
  *
- * @param points     Input points (in tile coordinates)
+ * OWNERSHIP: Caller must free() both *out and *segments arrays.
+ *
+ * @param points     Input points (in tile coordinates, borrowed)
  * @param num_points Number of input points
  * @param extent     Tile extent (points outside 0..extent are clipped)
  * @param buffer     Buffer around tile (allow some overshoot)
- * @param out        Output clipped points
+ * @param out        Output clipped points (caller owns, must free)
  * @param out_count  Output point count
- * @param segments   Output segment end indices (for multi-part result)
+ * @param segments   Output segment end indices (caller owns, must free)
  * @param seg_count  Output segment count
  */
 void ct_clip_linestring(const CTTilePoint *points, int num_points,
@@ -177,8 +199,16 @@ void ct_clip_linestring(const CTTilePoint *points, int num_points,
                         int **segments, int *seg_count);
 
 /*
- * Clip a polygon to tile bounds.
- * Uses Sutherland-Hodgman algorithm.
+ * Clip a polygon to tile bounds using Sutherland-Hodgman algorithm.
+ *
+ * OWNERSHIP: Caller must free() the *out array.
+ *
+ * @param points     Input points (in tile coordinates, borrowed)
+ * @param num_points Number of input points
+ * @param extent     Tile extent
+ * @param buffer     Buffer around tile
+ * @param out        Output clipped points (caller owns, must free)
+ * @param out_count  Output point count
  */
 void ct_clip_polygon(const CTTilePoint *points, int num_points,
                      int extent, int buffer,
@@ -187,10 +217,12 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
 /*
  * Simplify a linestring using Douglas-Peucker algorithm.
  *
- * @param points     Input points
+ * OWNERSHIP: Caller must free() the *out array.
+ *
+ * @param points     Input points (borrowed)
  * @param num_points Number of input points
  * @param tolerance  Simplification tolerance (in tile units)
- * @param out        Output simplified points
+ * @param out        Output simplified points (caller owns, must free)
  * @param out_count  Output point count
  */
 void ct_simplify_linestring(const CTTilePoint *points, int num_points,
