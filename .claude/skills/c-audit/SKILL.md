@@ -596,7 +596,193 @@ sh_adaptive_stats(s_adaptive_tracker, &adaptive_stats);
 
 **Reference Implementation:** See `carta/api/src/main.c` for complete example.
 
-### 10. Static/Global Variables and Thread Safety
+### 10. API Client Resilience (HTTP Clients)
+
+When OTTO components act as HTTP **clients** (e.g., calling external APIs, tile servers, routing services), they must handle backpressure gracefully.
+
+#### HTTP Status Code Handling
+
+| Status | Meaning | Client Action |
+|--------|---------|---------------|
+| 429 | Rate limited | Back off, respect `Retry-After` header |
+| 503 | Service unavailable | Back off, retry with exponential delay |
+| 504 | Gateway timeout | Retry once, then fail |
+| 502 | Bad gateway | Retry with backoff |
+| 5xx | Server error | Retry with backoff, circuit breaker |
+
+```c
+typedef enum {
+    HTTP_RETRY_NONE = 0,      // Don't retry (4xx client errors)
+    HTTP_RETRY_IMMEDIATE,     // Retry once immediately (timeout)
+    HTTP_RETRY_BACKOFF,       // Exponential backoff (5xx, 429)
+    HTTP_RETRY_CIRCUIT_OPEN   // Circuit breaker tripped, fail fast
+} HttpRetryAction;
+
+HttpRetryAction classify_http_status(int status) {
+    if (status >= 200 && status < 300) return HTTP_RETRY_NONE;  // Success
+    if (status == 429) return HTTP_RETRY_BACKOFF;  // Rate limited
+    if (status == 503) return HTTP_RETRY_BACKOFF;  // Overloaded
+    if (status == 504) return HTTP_RETRY_IMMEDIATE;  // Timeout
+    if (status >= 500) return HTTP_RETRY_BACKOFF;  // Server error
+    return HTTP_RETRY_NONE;  // Client error (4xx) - don't retry
+}
+```
+
+#### Exponential Backoff with Jitter
+
+```c
+typedef struct {
+    uint32_t base_delay_ms;      // Initial delay (e.g., 100ms)
+    uint32_t max_delay_ms;       // Maximum delay cap (e.g., 30000ms)
+    uint32_t max_retries;        // Maximum retry attempts (e.g., 5)
+    double jitter_factor;        // Randomization (0.0-1.0, e.g., 0.2)
+} RetryConfig;
+
+// Default configuration
+static const RetryConfig RETRY_CONFIG_DEFAULT = {
+    .base_delay_ms = 100,
+    .max_delay_ms = 30000,
+    .max_retries = 5,
+    .jitter_factor = 0.2
+};
+
+uint32_t calculate_backoff(const RetryConfig *cfg, uint32_t attempt) {
+    // Exponential: base * 2^attempt
+    uint32_t delay = cfg->base_delay_ms * (1u << attempt);
+    if (delay > cfg->max_delay_ms) {
+        delay = cfg->max_delay_ms;
+    }
+
+    // Add jitter: delay * (1 - jitter + random * 2 * jitter)
+    double jitter = cfg->jitter_factor;
+    double random = (double)rand() / RAND_MAX;
+    double factor = 1.0 - jitter + random * 2.0 * jitter;
+
+    return (uint32_t)(delay * factor);
+}
+```
+
+#### Circuit Breaker Pattern
+
+```c
+typedef enum {
+    CIRCUIT_CLOSED,      // Normal operation, requests flow through
+    CIRCUIT_OPEN,        // Failing fast, rejecting requests
+    CIRCUIT_HALF_OPEN    // Testing if service recovered
+} CircuitState;
+
+typedef struct {
+    CircuitState state;
+    uint32_t failure_count;
+    uint32_t success_count;
+    uint64_t last_failure_time_ms;
+    uint64_t open_duration_ms;      // How long to stay open (e.g., 30000ms)
+    uint32_t failure_threshold;     // Failures before opening (e.g., 5)
+    uint32_t success_threshold;     // Successes to close from half-open (e.g., 3)
+    pthread_mutex_t mutex;
+} CircuitBreaker;
+
+// Configuration via environment variables
+// <PREFIX>_CIRCUIT_FAILURE_THRESHOLD=5
+// <PREFIX>_CIRCUIT_OPEN_DURATION_MS=30000
+// <PREFIX>_CIRCUIT_SUCCESS_THRESHOLD=3
+
+bool circuit_breaker_allow(CircuitBreaker *cb) {
+    pthread_mutex_lock(&cb->mutex);
+
+    uint64_t now = get_time_ms();
+
+    switch (cb->state) {
+        case CIRCUIT_CLOSED:
+            pthread_mutex_unlock(&cb->mutex);
+            return true;
+
+        case CIRCUIT_OPEN:
+            if (now - cb->last_failure_time_ms > cb->open_duration_ms) {
+                cb->state = CIRCUIT_HALF_OPEN;
+                cb->success_count = 0;
+                pthread_mutex_unlock(&cb->mutex);
+                return true;  // Allow one request through
+            }
+            pthread_mutex_unlock(&cb->mutex);
+            return false;  // Fail fast
+
+        case CIRCUIT_HALF_OPEN:
+            pthread_mutex_unlock(&cb->mutex);
+            return true;  // Testing recovery
+    }
+    pthread_mutex_unlock(&cb->mutex);
+    return false;
+}
+
+void circuit_breaker_record_success(CircuitBreaker *cb) {
+    pthread_mutex_lock(&cb->mutex);
+    cb->failure_count = 0;
+
+    if (cb->state == CIRCUIT_HALF_OPEN) {
+        cb->success_count++;
+        if (cb->success_count >= cb->success_threshold) {
+            cb->state = CIRCUIT_CLOSED;
+        }
+    }
+    pthread_mutex_unlock(&cb->mutex);
+}
+
+void circuit_breaker_record_failure(CircuitBreaker *cb) {
+    pthread_mutex_lock(&cb->mutex);
+    cb->failure_count++;
+    cb->last_failure_time_ms = get_time_ms();
+
+    if (cb->state == CIRCUIT_HALF_OPEN) {
+        cb->state = CIRCUIT_OPEN;
+    } else if (cb->failure_count >= cb->failure_threshold) {
+        cb->state = CIRCUIT_OPEN;
+    }
+    pthread_mutex_unlock(&cb->mutex);
+}
+```
+
+#### CORS Handling (Server-Side)
+
+```c
+// Standard CORS headers for API responses
+static void add_cors_headers(struct mg_connection *c, struct mg_http_message *hm) {
+    // Check Origin header for allowed origins (configurable)
+    struct mg_str origin = mg_http_get_header(hm, "Origin");
+    const char *allowed_origin = "*";  // Or validate against allowlist
+
+    mg_printf(c,
+        "Access-Control-Allow-Origin: %s\r\n"
+        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+        "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+        "Access-Control-Max-Age: 86400\r\n",
+        allowed_origin);
+}
+
+// Handle OPTIONS preflight
+if (mg_strcmp(hm->method, mg_str("OPTIONS")) == 0) {
+    mg_printf(c, "HTTP/1.1 204 No Content\r\n");
+    add_cors_headers(c, hm);
+    mg_printf(c, "\r\n");
+    return;
+}
+```
+
+#### API Client Audit Checklist
+
+| Check | Severity | Description |
+|-------|----------|-------------|
+| 429 handling | High | Respects rate limit, backs off |
+| 503/504 handling | High | Retries with backoff, not immediately |
+| Circuit breaker | High | Fails fast when downstream is unhealthy |
+| Retry limits | High | Maximum retries configured, not infinite |
+| Backoff jitter | Medium | Randomized delays prevent thundering herd |
+| Retry-After header | Medium | Respects server-specified delay |
+| Timeout configuration | Medium | Reasonable timeouts, not infinite |
+| CORS preflight | Medium | OPTIONS handled correctly |
+| Configurable | Low | Retry/circuit settings via env vars |
+
+### 11. Static/Global Variables and Thread Safety
 
 #### Rule: No Static/Global State in Libraries
 
@@ -738,7 +924,7 @@ For **API servers**:
 - [ ] Shutdown flag uses `volatile sig_atomic_t`
 - [ ] Uses thread-safe shared library APIs (`sh_ratelimit`, `sh_workqueue`)
 
-### 11. Memory Management Tradeoffs and Limitations
+### 12. Memory Management Tradeoffs and Limitations
 
 Choosing a memory strategy affects API usability, problem size limits, and performance. This section documents real-world tradeoffs to help you choose wisely.
 
@@ -1197,6 +1383,15 @@ Before marking a module as "hardened":
 - [ ] Proper HTTP status codes (429, 503, 504)
 - [ ] Stats endpoint exposes limiter/queue health
 - [ ] Graceful shutdown sequence
+- [ ] CORS headers on all responses (including OPTIONS preflight)
+
+**API Client Resilience (HTTP clients):**
+- [ ] HTTP 429/503/504 handled with backoff
+- [ ] Exponential backoff with jitter implemented
+- [ ] Circuit breaker for failing downstream services
+- [ ] Maximum retry count bounded (not infinite)
+- [ ] Retry-After header respected when present
+- [ ] Retry/circuit/timeout settings configurable via env vars
 
 **Static/Global and Thread Safety:**
 - [ ] **Libraries**: No static/global mutable state (use context structs)
