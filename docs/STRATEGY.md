@@ -612,5 +612,140 @@ The foundational components aren't just "we built routing." They're strategic in
 
 ---
 
-*Document version: 1.1*
+## 12. Strategic Positioning: Build vs Employment
+
+### 12.1 The Acquirer-as-Employer Dynamic
+
+Large logistics software companies (Trimble, Samsara, Descartes) face a build-vs-buy decision for planning capabilities. Often, they approach domain experts with employment offers rather than acquisition offers.
+
+**The typical offer:**
+- Senior/Principal engineer role
+- €150-250k/year salary
+- Equity in large public company
+- Build planning capabilities internally
+
+**Why they make this offer:**
+- Cheaper upfront than acquisition
+- Control over roadmap and IP
+- Integrates with existing organization
+- No negotiation over valuation
+
+### 12.2 Why Employment is Suboptimal (For Both Parties)
+
+**For the individual:**
+
+| Factor | Employment | Building OTTO |
+|--------|------------|---------------|
+| 5-year earnings | €750k-1.25M | €0-500k salary + €10-30M+ exit |
+| Ownership | 0% of outcome | 60-100% of outcome |
+| Autonomy | Build what they prioritize | Build what market needs |
+| Leverage | One person's output | Team + community + ecosystem |
+| Exit options | Quit and start over | Acquisition, IPO, or keep running |
+
+**For the acquirer:**
+
+| Factor | Hire Expert | Acquire OTTO |
+|--------|-------------|--------------|
+| What they get | One person, key-person risk | Team + code + customers + brand |
+| Time to value | 2-3 years to build | Immediate |
+| Market validation | None (internal project) | Proven with paying customers |
+| Risk | Expert leaves, back to zero | Integrated product, multiple contributors |
+| Cost | €1-2M over 5 years | €30-80M one-time |
+
+The acquisition is more expensive but dramatically de-risked.
+
+### 12.3 The Counter-Positioning Conversation
+
+When approached with employment offers, reframe the conversation:
+
+**Their framing:** "Come build planning for us."
+
+**Reframe to:** "In 3 years, you'll either compete with OTTO or acquire it. Which is better for you?"
+
+**Specific talking points:**
+
+1. **Validation:** "Your offer proves planning is strategic for you. That's the market I'm building for."
+
+2. **Leverage:** "One hire gives you one person's output. Acquiring OTTO gives you an ecosystem—code, customers, community, and me."
+
+3. **De-risking:** "If you hire me and I leave in 3 years, you have code but no judgment layer. If you acquire OTTO, you have a team and a proven product."
+
+4. **Optionality:** "Let's talk again in 18-24 months. By then I'll have customers, revenue, and a valuation. We can discuss acquisition, partnership, or you being a customer."
+
+### 12.4 Case Study: Trimble
+
+**Context:**
+- Trimble acquired Nexogen (2022), gaining planning technology
+- Key domain expertise (founding team) potentially not retained or departed
+- Trimble recognizes the need for planning capability
+- Employment offer extended to rebuild/enhance planning
+
+**The strategic response:**
+
+| Option | Outcome for Trimble | Outcome for Founder |
+|--------|--------------------|--------------------|
+| Accept job | One expert, €1M/5yr cost, key-person risk | €1M salary, no ownership |
+| Decline, build OTTO | Wait 3 years, acquire for €50M, get everything | €15-25M exit (founder share) |
+| Decline, OTTO fails | Hire someone else | €0, time lost |
+
+**Expected value calculation:**
+
+Assuming 50% chance OTTO succeeds to acquisition-ready state:
+- Employment: 100% × €1M = €1M expected value
+- Build OTTO: 50% × €20M = €10M expected value
+
+Even at conservative success odds, building is higher expected value.
+
+**The conversation to have:**
+
+> "I appreciate the offer. Trimble clearly values planning—that validates what I'm building. I'm going to spend the next 2-3 years building OTTO as open source. I'll have customers, revenue, and a platform.
+>
+> At that point, we should talk again. Acquiring OTTO will cost more than hiring me today, but you'll get a market-validated product, a team, and an ecosystem—not just one engineer.
+>
+> In the meantime, if Trimble wants to be an early design partner or customer, I'm open to that conversation."
+
+This approach:
+- Declines without burning bridges
+- Positions future acquisition as win-win
+- Opens door for near-term partnership
+- Demonstrates confidence in the vision
+
+### 12.5 Negotiating Leverage Over Time
+
+The longer OTTO operates successfully, the stronger the negotiating position:
+
+| Milestone | Leverage Change |
+|-----------|-----------------|
+| Working prototype | "It's real, not vaporware" |
+| First paying customer | "Market validation" |
+| €500k ARR | "This is a business" |
+| €2M ARR | "Acquisition is cheaper than competing" |
+| €5M ARR | "Multiple acquirers interested" |
+| €10M ARR | "We might not need to sell" |
+
+Each milestone increases valuation and decreases acquirer leverage.
+
+### 12.6 The "Hefty Offer" Decision Framework
+
+When evaluating employment offers against building:
+
+**Take the job if:**
+- You don't believe in the market
+- You need immediate stable income
+- You've tried building and failed
+- The equity is genuinely significant (early-stage company, not public)
+- You're burned out and want to be an employee
+
+**Build instead if:**
+- You have domain conviction (you know this works)
+- You can survive 2-3 years of low/no salary
+- You have relationships with potential customers
+- The acquirer is offering salary, not meaningful equity
+- You want ownership, not just income
+
+**The conviction test:** If you believe OTTO will work, the math always favors building. The employment offer is "sell your optionality for guaranteed income." Only do that if you don't believe in your own optionality.
+
+---
+
+*Document version: 1.2*
 *Last updated: February 2026*
