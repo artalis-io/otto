@@ -359,6 +359,236 @@
             margin-top: 4px;
         }
 
+        /* No Lock-In */
+        .no-lockin {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .lockin-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        .lockin-problem, .lockin-solution {
+            padding: 24px;
+            border-radius: 6px;
+        }
+
+        .lockin-problem {
+            background: linear-gradient(135deg, #1a0a0a 0%, #0a0a0a 100%);
+            border: 1px solid #3a1a1a;
+        }
+
+        .lockin-solution {
+            background: linear-gradient(135deg, #0a1a0a 0%, #0a0a0a 100%);
+            border: 1px solid #1a3a1a;
+        }
+
+        .lockin-problem h3 {
+            color: #ef4444;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .lockin-solution h3 {
+            color: var(--success);
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .lockin-list {
+            list-style: none;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .lockin-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .lockin-list li:last-child {
+            border-bottom: none;
+        }
+
+        .lockin-problem .lockin-list li::before {
+            content: "✗ ";
+            color: #ef4444;
+        }
+
+        .lockin-solution .lockin-list li::before {
+            content: "✓ ";
+            color: var(--success);
+        }
+
+        .lockin-quote {
+            background: var(--bg-secondary);
+            border-left: 3px solid var(--accent);
+            padding: 20px 24px;
+            font-size: 15px;
+            color: var(--text);
+            font-style: italic;
+            border-radius: 0 6px 6px 0;
+        }
+
+        /* Runs Everywhere */
+        .runs-everywhere {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .deployment-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .deployment-target {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .deployment-target:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .deployment-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+
+        .deployment-name {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 4px;
+        }
+
+        .deployment-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .size-comparison {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .size-item {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+
+        .size-bar {
+            height: 8px;
+            border-radius: 4px;
+            background: var(--accent);
+        }
+
+        .size-item.otto .size-bar {
+            width: 20px;
+            background: var(--success);
+        }
+
+        .size-item.commercial .size-bar {
+            width: 100px;
+            background: var(--text-muted);
+        }
+
+        .size-label {
+            font-size: 13px;
+        }
+
+        .size-label strong {
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .size-label span {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* For Partners */
+        .for-partners {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .partner-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .partner-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 24px;
+        }
+
+        .partner-card:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .partner-type {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent);
+            margin-bottom: 8px;
+        }
+
+        .partner-card h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .partner-card p {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+
+        .partner-exchange {
+            font-size: 12px;
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        .partner-exchange .gives, .partner-exchange .gets {
+            margin-bottom: 8px;
+        }
+
+        .partner-exchange .gives:last-child, .partner-exchange .gets:last-child {
+            margin-bottom: 0;
+        }
+
+        .partner-exchange strong {
+            color: var(--text);
+        }
+
+        .partner-exchange span {
+            color: var(--text-muted);
+        }
+
         /* License */
         .license {
             padding: 48px 0;
@@ -572,6 +802,35 @@
             </div>
         </section>
 
+        <section class="no-lockin">
+            <h2 class="section-title">No Lock-In</h2>
+            <div class="lockin-grid">
+                <div class="lockin-problem">
+                    <h3>The Vendor Risk</h3>
+                    <ul class="lockin-list">
+                        <li>Vendor gets acquired, roadmap shifts to new owner's priorities</li>
+                        <li>Support team restructured, your contacts disappear</li>
+                        <li>Pricing "aligns with portfolio strategy"</li>
+                        <li>Product gets folded into a suite you don't need</li>
+                        <li>Years of integration work held hostage</li>
+                    </ul>
+                </div>
+                <div class="lockin-solution">
+                    <h3>The OTTO Answer</h3>
+                    <ul class="lockin-list">
+                        <li>Code is MIT licensed&mdash;fork it, own it forever</li>
+                        <li>Self-host at current capability, no permission needed</li>
+                        <li>Hire anyone to maintain your fork</li>
+                        <li>Roadmap diverges? Extend it yourself</li>
+                        <li>Audit the algorithms, verify the logic</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="lockin-quote">
+                "Pay for convenience, not captivity. OTTO is yours whether you stay with us or not."
+            </div>
+        </section>
+
         <section class="components">
             <h2 class="section-title">Core Engines</h2>
             <div class="grid">
@@ -765,6 +1024,58 @@ Dependencies:
             </div>
         </section>
 
+        <section class="runs-everywhere">
+            <h2 class="section-title">Runs Everywhere</h2>
+            <div class="deployment-grid">
+                <div class="deployment-target">
+                    <div class="deployment-icon">🌐</div>
+                    <div class="deployment-name">Browser</div>
+                    <div class="deployment-desc">Try before you buy, no install</div>
+                </div>
+                <div class="deployment-target">
+                    <div class="deployment-icon">🖥️</div>
+                    <div class="deployment-name">Server</div>
+                    <div class="deployment-desc">Traditional API deployment</div>
+                </div>
+                <div class="deployment-target">
+                    <div class="deployment-icon">⚡</div>
+                    <div class="deployment-name">Edge</div>
+                    <div class="deployment-desc">Cloudflare Workers, CDN</div>
+                </div>
+                <div class="deployment-target">
+                    <div class="deployment-icon">📱</div>
+                    <div class="deployment-name">Mobile</div>
+                    <div class="deployment-desc">In-app via WASM</div>
+                </div>
+                <div class="deployment-target">
+                    <div class="deployment-icon">🚚</div>
+                    <div class="deployment-name">In-Cab</div>
+                    <div class="deployment-desc">Offline tablet, no connectivity needed</div>
+                </div>
+                <div class="deployment-target">
+                    <div class="deployment-icon">🔌</div>
+                    <div class="deployment-name">Embedded</div>
+                    <div class="deployment-desc">IoT, telematics devices</div>
+                </div>
+            </div>
+            <div class="size-comparison">
+                <div class="size-item otto">
+                    <div class="size-bar"></div>
+                    <div class="size-label">
+                        <strong>OTTO (full stack)</strong>
+                        <span>~2 MB WASM</span>
+                    </div>
+                </div>
+                <div class="size-item commercial">
+                    <div class="size-bar"></div>
+                    <div class="size-label">
+                        <strong>Commercial alternatives</strong>
+                        <span>GB+ runtime, server-only, online-only</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="performance">
             <h2 class="section-title">Performance</h2>
             <table>
@@ -860,6 +1171,64 @@ Dependencies:
                     </div>
                 </div>
                 <a href="mailto:mark@artalis.io" class="cta-button">Get in Touch</a>
+            </div>
+        </section>
+
+        <section class="for-partners">
+            <h2 class="section-title">For Partners</h2>
+            <div class="partner-grid">
+                <div class="partner-card">
+                    <div class="partner-type">Data Partners</div>
+                    <h3>Fuel Cards &amp; Payments</h3>
+                    <p>
+                        Your fuel price data plus our optimization algorithms equals
+                        customer stickiness. Every optimized route drives transactions
+                        through your network.
+                    </p>
+                    <div class="partner-exchange">
+                        <div class="gives"><strong>You provide:</strong> <span>Real-time fuel prices, station network</span></div>
+                        <div class="gets"><strong>You get:</strong> <span>Differentiation, transaction volume, retention</span></div>
+                    </div>
+                </div>
+                <div class="partner-card">
+                    <div class="partner-type">OEM Partners</div>
+                    <h3>Truck Manufacturers</h3>
+                    <p>
+                        Bundle OTTO with your telematics platform. "Buy our trucks,
+                        get optimization included." Turn vehicle sales into recurring
+                        software revenue.
+                    </p>
+                    <div class="partner-exchange">
+                        <div class="gives"><strong>You provide:</strong> <span>Distribution, telematics data, R&amp;D</span></div>
+                        <div class="gets"><strong>You get:</strong> <span>Differentiation, sustainability metrics, loyalty</span></div>
+                    </div>
+                </div>
+                <div class="partner-card">
+                    <div class="partner-type">Broker Partners</div>
+                    <h3>Digital Freight Platforms</h3>
+                    <p>
+                        Make your carriers more efficient and they'll stay loyal.
+                        "Haul for us, get free planning tools." Better carrier
+                        economics means tighter rates are possible.
+                    </p>
+                    <div class="partner-exchange">
+                        <div class="gives"><strong>You provide:</strong> <span>Carrier network, distribution, volume</span></div>
+                        <div class="gets"><strong>You get:</strong> <span>Carrier retention, capacity visibility, margin</span></div>
+                    </div>
+                </div>
+                <div class="partner-card">
+                    <div class="partner-type">Technology Partners</div>
+                    <h3>TMS &amp; ELD Providers</h3>
+                    <p>
+                        Add planning to your platform without building it.
+                        OTTO integrates via clean APIs. Resell to your customer
+                        base or bundle with your offering.
+                    </p>
+                    <div class="partner-exchange">
+                        <div class="gives"><strong>You provide:</strong> <span>Sales channel, customer relationships</span></div>
+                        <div class="gets"><strong>You get:</strong> <span>Planning capability, upsell opportunity</span></div>
+                    </div>
+                </div>
             </div>
         </section>
 
