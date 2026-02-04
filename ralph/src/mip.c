@@ -19,8 +19,9 @@
  * MIP Solver Creation/Destruction
  * ============================================================================ */
 
-MIPSolver* mip_create(LPModel *model, int detect_special) {
+MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     if (!model) return NULL;
+    if (pool_capacity <= 0) pool_capacity = 1024;  /* Default */
 
     MIPSolver *solver = (MIPSolver*)calloc(1, sizeof(MIPSolver));
     if (!solver) return NULL;
@@ -101,9 +102,9 @@ MIPSolver* mip_create(LPModel *model, int detect_special) {
     }
 
     /* Create node pool for efficient B&B node allocation
-     * Initial capacity: 1024 nodes, can grow as needed
-     * Benefits: reduces malloc overhead, improves cache locality */
-    solver->node_pool = bb_node_pool_create(1024, model->num_vars);
+     * Benefits: reduces malloc overhead, improves cache locality
+     * Falls back to malloc when pool is exhausted */
+    solver->node_pool = bb_node_pool_create(pool_capacity, model->num_vars);
     /* Note: pool is optional - NULL pool falls back to individual allocs */
 
     /* Create cut pool */
@@ -1164,6 +1165,18 @@ void mip_print_stats(const MIPSolver *solver) {
     printf("Max depth: %d\n", solver->max_depth);
     printf("Cuts generated: %d\n", solver->cuts_generated);
     printf("Solve time: %.3f seconds\n", solver->solve_time);
+
+    /* Node pool statistics */
+    if (solver->node_pool) {
+        BBNodePool *pool = solver->node_pool;
+        int in_use = pool->capacity - pool->free_count;
+        printf("Node pool: %d/%d capacity, peak %d (%.1f%% utilized)\n",
+               in_use, pool->capacity, pool->nodes_allocated,
+               100.0 * pool->nodes_allocated / pool->capacity);
+        if (pool->nodes_allocated >= pool->capacity) {
+            printf("  WARNING: Pool exhausted - fell back to malloc\n");
+        }
+    }
 
     if (solver->use_lap_solver) {
         printf("LAP solver: enabled (%dx%d assignment)\n",

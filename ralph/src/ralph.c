@@ -37,6 +37,7 @@ struct RalphModel {
     int method;  /* 0=primal simplex, 1=dual simplex, 2=auto */
     int pricing; /* 0=Dantzig, 1=Steepest edge, 2=Devex (default), 3=Partial */
     int detect_special; /* 1=detect LAP/network structure, 0=disable */
+    int node_pool_capacity; /* Pre-allocated B&B node pool size (default 1024) */
 
     /* Solution */
     RalphStatus status;
@@ -78,6 +79,7 @@ RalphModel* ralph_create(void) {
     model->method = 0;  /* Default: primal simplex */
     model->pricing = 2; /* Default: Devex */
     model->detect_special = 0; /* Default: disabled for fair benchmarking */
+    model->node_pool_capacity = 1024; /* Default B&B node pool size */
 
     model->status = RALPH_STATUS_UNKNOWN;
 
@@ -322,7 +324,7 @@ int ralph_optimize(RalphModel *model) {
 
     if (ralph_is_mip(model)) {
         /* MIP solve - use presolved model if available */
-        model->mip_solver = mip_create(solve_model, model->detect_special);
+        model->mip_solver = mip_create(solve_model, model->detect_special, model->node_pool_capacity);
         if (!model->mip_solver) {
             if (presolved) presolve_free(presolved);
             model->status = RALPH_STATUS_ERROR;
@@ -553,6 +555,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (strcmp(name, "detect_special") == 0 || strcmp(name, "DetectSpecial") == 0) {
         /* 1=detect LAP/network structure, 0=disable */
         model->detect_special = value;
+    } else if (strcmp(name, "node_pool_capacity") == 0 || strcmp(name, "PoolCapacity") == 0) {
+        /* Pre-allocated B&B node pool size (0 = use default 1024) */
+        model->node_pool_capacity = value > 0 ? value : 1024;
     } else {
         return -1;  /* Unknown parameter */
     }
@@ -589,6 +594,8 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
         *value = model->max_cut_rounds;
     } else if (strcmp(name, "method") == 0) {
         *value = model->method;
+    } else if (strcmp(name, "node_pool_capacity") == 0) {
+        *value = model->node_pool_capacity;
     } else {
         return -1;
     }
