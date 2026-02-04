@@ -747,5 +747,162 @@ When evaluating employment offers against building:
 
 ---
 
-*Document version: 1.2*
+## 13. Market Segmentation: Enterprise to Owner-Operator
+
+### 13.1 The Full Market Spectrum
+
+OTTO's open source model enables serving the entire trucking market, from one-truck owner-operators to 10,000+ truck mega-fleets.
+
+| Segment | Fleet Size | Count (US) | Current Tools | Budget |
+|---------|------------|------------|---------------|--------|
+| Owner-operators | 1-5 trucks | ~350,000 | Spreadsheets, paper, basic apps | $0-100/month |
+| Small fleets | 5-50 trucks | ~100,000 | Basic TMS, spreadsheets | $500-2k/month |
+| Mid-market | 50-500 trucks | ~15,000 | TMS, some optimization | €50-100k/year |
+| Enterprise | 500-5000 trucks | ~2,000 | Full TMS suite, planning tools | €250-500k/year |
+| Mega-fleets | 5000+ trucks | ~200 | Custom solutions, consultants | €500k-2M/year |
+
+### 13.2 Why Owner-Operators Matter
+
+**The conventional wisdom:** "Focus on enterprise, ignore the long tail."
+
+**The open source counterargument:** The long tail builds the ecosystem that makes enterprise sales easier.
+
+#### Economic value for owner-operators
+
+A single-truck owner-operator:
+- Runs ~100,000 miles/year
+- At 6 MPG, burns ~17,000 gallons
+- At $4/gallon = $68,000/year in fuel
+
+| Optimization | Savings | Annual Value |
+|--------------|---------|--------------|
+| 5% fuel cost reduction | $0.20/gallon | $3,400 |
+| 10% fewer deadhead miles | 10,000 miles | $6,600 in fuel + wear |
+| One avoided HoS violation | $16,000 fine | $16,000 |
+| Better load selection | 5% more/mile | $8,000+ |
+
+An owner-operator would rationally pay $50-100/month for tools that deliver these savings. They currently don't have access to enterprise-grade optimization.
+
+#### Strategic value for OTTO
+
+| Value | Explanation |
+|-------|-------------|
+| **Community scale** | 10,000 owner-ops = massive feedback loop, bug reports, edge cases |
+| **Marketing flywheel** | Truckers talk at truck stops. Word of mouth is real. |
+| **GitHub presence** | Large user base = stars, contributions, visibility |
+| **Funnel** | Owner-ops become small fleets. Small fleets become mid-market. |
+| **Data moat** | Aggregate (anonymized) fuel prices, route patterns, market intelligence |
+| **Mission credibility** | "Optimization for everyone" isn't just marketing—it's demonstrable |
+| **Acquirer value** | 50,000 users + 50 enterprise clients > 50 enterprise clients alone |
+
+### 13.3 Product Tiers for Owner-Operators
+
+#### Free Tier (MIT, self-hosted or basic cloud)
+
+- Fuel price optimization (cheapest stops on route)
+- Basic route planning
+- HoS calculator and countdown
+- WASM runs entirely in browser—no account required
+
+**Goal:** Adoption, community, brand awareness
+
+#### Pro Tier ($29/month)
+
+- Saved routes and preferences
+- Fuel price alerts and trends
+- Load profitability calculator
+- Multi-stop optimization
+- Cloud sync across devices
+
+**Goal:** Convert engaged free users, cover infrastructure costs
+
+#### Premium Tier ($49/month)
+
+- IFTA fuel tax reporting
+- Integration with load boards (DAT, Truckstop)
+- Maintenance scheduling
+- Basic ELD integration
+- Priority community support
+
+**Goal:** Serious owner-operators who want full solution
+
+### 13.4 Go-to-Market for Owner-Operators
+
+**Channel strategy:**
+
+| Channel | Approach |
+|---------|----------|
+| Truck stops | QR codes, flyers: "Free fuel optimizer—scan and save" |
+| YouTube | Trucker influencers, how-to content |
+| Facebook groups | Trucker communities, organic engagement |
+| Load board partnerships | DAT, Truckstop co-marketing |
+| Trucking schools | Teach new drivers with OTTO |
+| Word of mouth | Product so good they tell other drivers |
+
+**Product-led growth mechanics:**
+
+1. **Zero friction start** — Browser-based, no install, no signup required for basic features
+2. **Value before registration** — Show fuel savings before asking for email
+3. **Share routes** — "Send this route to your buddy" = viral loop
+4. **Upgrade prompts** — "Save this route? Create free account" → "Want alerts? $29/month"
+
+### 13.5 Sequencing: Enterprise First, Then Expand
+
+**Phase 1 (Year 1-2): Enterprise focus**
+- Land 5-10 enterprise customers (€2-4M ARR)
+- Prove the platform at scale
+- Build Nexus connector library
+- Establish credibility with logos
+
+**Phase 2 (Year 2-3): Launch owner-operator tier**
+- Release polished free tier
+- Product-led growth motion
+- Community building (Discord, forums)
+- Content marketing for truckers
+
+**Phase 3 (Year 3+): Full-spectrum operation**
+- Enterprise revenue subsidizes free tier
+- Owner-op community provides feedback and reach
+- Mid-market emerges as natural upgrade path
+- Two flywheels: B2B logos + B2C community
+
+### 13.6 Unit Economics by Segment
+
+| Segment | CAC | ACV | LTV | LTV:CAC |
+|---------|-----|-----|-----|---------|
+| Owner-op (free) | ~$0 | $0 | $0 (but community value) | N/A |
+| Owner-op (pro) | ~$20 (content/ads) | $350/year | $700 (2 years) | 35:1 |
+| Small fleet | ~$2,000 | $12,000/year | $36,000 | 18:1 |
+| Mid-market | ~$15,000 | $75,000/year | $225,000 | 15:1 |
+| Enterprise | ~$50,000 | $400,000/year | $1,600,000 | 32:1 |
+
+The owner-operator tier isn't a profit center—it's a community-building and marketing investment that pays off through upgrades and ecosystem effects.
+
+### 13.7 The Mission Alignment
+
+From the landing page:
+
+> "We believe logistics optimization shouldn't be locked behind enterprise contracts. OTTO's core engines are open source—auditable, forkable, and free to use. Whether you're a one-truck owner-operator or a 500-truck fleet, the same technology is available to everyone."
+
+Serving owner-operators isn't charity. It's:
+- Proof the mission is real
+- A community that compounds
+- A funnel that upgrades
+- A moat that competitors can't easily replicate
+
+**The strategic question:** Can Trimble offer a free tier to owner-operators? Can Samsara? Their business models don't support it. Open source does.
+
+### 13.8 Risks and Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Support burden from free users | Community support only; paid tiers get priority |
+| Distraction from enterprise sales | Separate teams; owner-op tier is product-led, not sales-led |
+| Different product requirements | Mobile-first PWA for owner-ops; desktop app for enterprise |
+| Free users never convert | That's fine—they're still marketing and community |
+| Infrastructure costs for free tier | WASM runs client-side; minimal server costs |
+
+---
+
+*Document version: 1.3*
 *Last updated: February 2026*
