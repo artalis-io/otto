@@ -5,13 +5,60 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OTTO - Optimization for Trucking and Transport Operations</title>
     <meta name="description" content="Zero-dependency logistics optimization platform. Route planning, fuel optimization, fleet scheduling, and custom map rendering. Built in C, runs everywhere.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="OTTO - Trucking Optimization Platform">
+    <meta property="og:description" content="Zero-dependency logistics optimization. Route planning, fuel cost minimization, HoS compliance, fleet scheduling. Built in C, runs everywhere.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="OTTO - Trucking Optimization Platform">
+    <meta name="twitter:description" content="Zero-dependency logistics optimization. Route planning, fuel cost minimization, HoS compliance, fleet scheduling. Built in C, runs everywhere.">
+
+    <!-- Favicon (inline SVG - the O from OTTO) -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "OTTO",
+        "alternateName": "Optimization for Trucking and Transport Operations",
+        "description": "Zero-dependency logistics optimization platform. Route planning, fuel optimization, fleet scheduling, and custom map rendering.",
+        "url": "https://ottofleet.io/",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS, Windows)",
+        "license": "https://opensource.org/licenses/MIT",
+        "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD",
+            "description": "Open source core engines (MIT License)"
+        },
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
     <style>
         :root {
             --bg: #0a0a0a;
             --bg-secondary: #141414;
             --bg-tertiary: #1a1a1a;
             --text: #e5e5e5;
-            --text-muted: #888;
+            --text-muted: #9ca3af;
             --accent: #3b82f6;
             --accent-dim: #1e40af;
             --border: #2a2a2a;
@@ -902,6 +949,22 @@
             margin-bottom: 16px;
         }
 
+        /* Skip to content (accessibility) */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 0;
+            background: var(--accent);
+            color: white;
+            padding: 8px 16px;
+            z-index: 100;
+            text-decoration: none;
+        }
+
+        .skip-link:focus {
+            top: 0;
+        }
+
         /* Responsive */
         @media (max-width: 600px) {
             .logo { font-size: 24px; }
@@ -912,6 +975,7 @@
     </style>
 </head>
 <body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
     <div class="container">
         <header>
             <div class="logo"><span>O</span>TTO</div>
@@ -919,6 +983,7 @@
             <div class="tagline">Zero-dependency logistics optimization. Built in C, runs everywhere.</div>
         </header>
 
+        <main id="main-content">
         <section class="hero">
             <h1>A complete trucking optimization platform</h1>
             <p>
@@ -1545,7 +1610,7 @@ Dependencies:
                         <span>Custom tuning</span>
                     </div>
                 </div>
-                <a href="mailto:mark@artalis.io" class="cta-button">Get in Touch</a>
+                <a href="&#109;&#97;&#105;&#108;&#116;&#111;&#58;&#109;&#97;&#114;&#107;&#64;&#97;&#114;&#116;&#97;&#108;&#105;&#115;&#46;&#105;&#111;" class="cta-button">Get in Touch</a>
             </div>
         </section>
 
@@ -1606,14 +1671,16 @@ Dependencies:
                 </div>
             </div>
         </section>
+        </main>
 
         <footer>
-            <div class="footer-links">
-                <a href="../README.md">Documentation</a>
-                <a href="../docs/ARCHITECTURE.md">Architecture</a>
-                <a href="../LICENSE">MIT License</a>
-            </div>
-            <div>&copy; 2025 Mark Farkas, artalis.io</div>
+            <nav class="footer-links" aria-label="Footer navigation">
+                <a href="https://github.com/ottofleet/otto#readme">Documentation</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/docs/ARCHITECTURE.md">Architecture</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/LICENSE">MIT License</a>
+                <a href="https://github.com/ottofleet/otto">GitHub</a>
+            </nav>
+            <div>&copy; 2026 Mark Farkas. Built by <a href="https://artalis.io">Artalis</a>.</div>
         </footer>
     </div>
 </body>
