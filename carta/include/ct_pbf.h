@@ -15,11 +15,50 @@ extern "C" {
 #endif
 
 /* ============================================================================
+ * Configuration
+ * ============================================================================ */
+
+/*
+ * Progress callback for long-running operations.
+ *
+ * @param phase     Current phase ("parsing", "indexing", etc.)
+ * @param current   Current progress value
+ * @param total     Total expected value (0 if unknown)
+ * @param user_data User-provided context pointer
+ */
+typedef void (*CTPBFProgressCallback)(const char *phase, size_t current,
+                                       size_t total, void *user_data);
+
+/*
+ * Configuration for PBF parsing.
+ * All fields have sensible defaults if set to 0.
+ */
+typedef struct {
+    /* Memory limits (0 = use defaults) */
+    size_t max_node_capacity;    /* Default: 256M, env: CARTA_MAX_NODES */
+    size_t max_way_capacity;     /* Default: 64M,  env: CARTA_MAX_WAYS */
+    size_t max_coord_capacity;   /* Default: 256M, env: CARTA_MAX_COORDS */
+    size_t arena_size;           /* Default: 128M, env: CARTA_ARENA_SIZE */
+
+    /* Progress reporting */
+    CTPBFProgressCallback progress_callback;
+    void *progress_user_data;
+    size_t progress_interval;    /* Report every N blobs (0 = every blob) */
+} CTPBFConfig;
+
+/*
+ * Initialize config with defaults.
+ * Reads from environment variables if set.
+ */
+void ct_pbf_config_init(CTPBFConfig *config);
+
+/* ============================================================================
  * PBF Context Management
  * ============================================================================ */
 
 /*
- * Create a new PBF parsing context.
+ * Create a new PBF parsing context with default configuration.
+ * Reads memory limits from environment variables if set.
  *
  * OWNERSHIP: Caller owns the returned context and must call
  * ct_pbf_context_free() when done.
@@ -27,6 +66,17 @@ extern "C" {
  * @return New context, or NULL on allocation failure
  */
 CTPBFContext *ct_pbf_context_create(void);
+
+/*
+ * Create a new PBF parsing context with custom configuration.
+ *
+ * OWNERSHIP: Caller owns the returned context and must call
+ * ct_pbf_context_free() when done.
+ *
+ * @param config Configuration (NULL = use defaults)
+ * @return New context, or NULL on allocation failure
+ */
+CTPBFContext *ct_pbf_context_create_with_config(const CTPBFConfig *config);
 
 /*
  * Free a PBF parsing context and all associated data.

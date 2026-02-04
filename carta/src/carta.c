@@ -46,7 +46,7 @@ const char *ct_status_string(CTStatus status)
  * High-Level Loading
  * ============================================================================ */
 
-CTPBFContext *ct_load_pbf(const char *filename)
+CTPBFContext *ct_load_pbf_with_config(const char *filename, const CTPBFConfig *config)
 {
     if (!filename) return NULL;
 
@@ -56,7 +56,7 @@ CTPBFContext *ct_load_pbf(const char *filename)
     }
 
     /* Parse PBF file (slow path) */
-    CTPBFContext *ctx = ct_pbf_context_create();
+    CTPBFContext *ctx = ct_pbf_context_create_with_config(config);
     if (!ctx) return NULL;
 
     CTStatus status = ct_pbf_parse_file(ctx, filename);
@@ -87,6 +87,11 @@ CTPBFContext *ct_load_pbf(const char *filename)
     }
 
     return ctx;
+}
+
+CTPBFContext *ct_load_pbf(const char *filename)
+{
+    return ct_load_pbf_with_config(filename, NULL);
 }
 
 CTPBFContext *ct_load_pbf_memory(const uint8_t *data, size_t size)

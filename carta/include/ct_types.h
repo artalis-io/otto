@@ -434,8 +434,25 @@ typedef struct {
     uint32_t root_idx;            /* Index of root node */
 } CTRTree;
 
+/* Progress callback for long-running operations */
+typedef void (*CTPBFProgressFn)(const char *phase, size_t current,
+                                 size_t total, void *user_data);
+
 /* PBF parsing context */
 typedef struct {
+    /* Configuration (memory limits) */
+    struct {
+        size_t max_node_capacity;   /* Max entries in node_map */
+        size_t max_way_capacity;    /* Max entries in way_map */
+        size_t max_coord_capacity;  /* Max coords in coord_pool */
+        size_t arena_size;          /* Size of parse_arena */
+    } config;
+
+    /* Progress reporting */
+    CTPBFProgressFn progress_callback;
+    void *progress_user_data;
+    size_t progress_interval;       /* Report every N blobs */
+
     /* Node storage (for resolving way references) */
     struct {
         int64_t *ids;

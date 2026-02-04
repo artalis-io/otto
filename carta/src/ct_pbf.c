@@ -49,11 +49,47 @@
 #define CT_BYTES_PER_WAY_ESTIMATE     150
 #define CT_COORDS_PER_WAY_ESTIMATE    12
 
-/* Hash table and pool size limits */
-#define CT_MAX_NODE_MAP_CAPACITY      (256 * 1024 * 1024)
-#define CT_MAX_WAY_MAP_CAPACITY       (64 * 1024 * 1024)
-#define CT_MAX_COORD_POOL_CAPACITY    (256 * 1024 * 1024)
+/* Default hash table and pool size limits (can be overridden via env vars) */
+#define CT_DEFAULT_NODE_CAPACITY      (256ULL * 1024 * 1024)
+#define CT_DEFAULT_WAY_CAPACITY       (64ULL * 1024 * 1024)
+#define CT_DEFAULT_COORD_CAPACITY     (256ULL * 1024 * 1024)
+#define CT_DEFAULT_ARENA_SIZE         (128ULL * 1024 * 1024)
 #define CT_MIN_COORD_POOL_CAPACITY    100000
+
+/* ============================================================================
+ * Configuration
+ * ============================================================================ */
+
+static size_t parse_size_env(const char *name, size_t default_val)
+{
+    const char *val = getenv(name);
+    if (!val) return default_val;
+
+    char *end;
+    unsigned long long n = strtoull(val, &end, 10);
+    if (end == val) return default_val;
+
+    /* Support K, M, G suffixes */
+    switch (*end) {
+        case 'k': case 'K': n *= 1024; break;
+        case 'm': case 'M': n *= 1024 * 1024; break;
+        case 'g': case 'G': n *= 1024ULL * 1024 * 1024; break;
+    }
+    return (size_t)n;
+}
+
+void ct_pbf_config_init(CTPBFConfig *config)
+{
+    if (!config) return;
+
+    config->max_node_capacity = parse_size_env("CARTA_MAX_NODES", CT_DEFAULT_NODE_CAPACITY);
+    config->max_way_capacity = parse_size_env("CARTA_MAX_WAYS", CT_DEFAULT_WAY_CAPACITY);
+    config->max_coord_capacity = parse_size_env("CARTA_MAX_COORDS", CT_DEFAULT_COORD_CAPACITY);
+    config->arena_size = parse_size_env("CARTA_ARENA_SIZE", CT_DEFAULT_ARENA_SIZE);
+    config->progress_callback = NULL;
+    config->progress_user_data = NULL;
+    config->progress_interval = 10;  /* Report every 10 blobs by default */
+}
 
 /* ============================================================================
  * Feature Classification
@@ -417,6 +453,11 @@ static uint64_t hash_id(int64_t id)
  */
 static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
 {
+    /* Use configured limits */
+    size_t max_node_cap = ctx->config.max_node_capacity;
+    size_t max_way_cap = ctx->config.max_way_capacity;
+    size_t max_coord_cap = ctx->config.max_coord_capacity;
+
     /* Estimate counts with safety margin */
     size_t estimated_nodes = file_size / CT_BYTES_PER_NODE_ESTIMATE;
     size_t estimated_ways = file_size / CT_BYTES_PER_WAY_ESTIMATE;
@@ -426,9 +467,9 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
     size_t node_cap = 65536;  /* Minimum capacity */
     while (node_cap < estimated_nodes * 2) {
         node_cap *= 2;
-        /* Prevent overflow - cap at reasonable maximum */
-        if (node_cap > CT_MAX_NODE_MAP_CAPACITY) {
-            node_cap = CT_MAX_NODE_MAP_CAPACITY;
+        /* Prevent overflow - cap at configured maximum */
+        if (node_cap > max_node_cap) {
+            node_cap = max_node_cap;
             break;
         }
     }
@@ -436,8 +477,8 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
     size_t way_cap = 16384;  /* Minimum capacity */
     while (way_cap < estimated_ways * 2) {
         way_cap *= 2;
-        if (way_cap > CT_MAX_WAY_MAP_CAPACITY) {
-            way_cap = CT_MAX_WAY_MAP_CAPACITY;
+        if (way_cap > max_way_cap) {
+            way_cap = max_way_cap;
             break;
         }
     }
@@ -471,7 +512,7 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
     /* Allocate coordinate pool for way geometry */
     size_t coord_cap = estimated_coords;
     if (coord_cap < CT_MIN_COORD_POOL_CAPACITY) coord_cap = CT_MIN_COORD_POOL_CAPACITY;
-    if (coord_cap > CT_MAX_COORD_POOL_CAPACITY) coord_cap = CT_MAX_COORD_POOL_CAPACITY;
+    if (coord_cap > max_coord_cap) coord_cap = max_coord_cap;
 
     ctx->coord_pool = malloc(sizeof(SHPool));
     if (!ctx->coord_pool) {
@@ -722,10 +763,26 @@ static uint32_t add_role_string(CTPBFContext *ctx, const char *role)
  * Context Management
  * ============================================================================ */
 
-CTPBFContext *ct_pbf_context_create(void)
+CTPBFContext *ct_pbf_context_create_with_config(const CTPBFConfig *config)
 {
     CTPBFContext *ctx = calloc(1, sizeof(CTPBFContext));
     if (!ctx) return NULL;
+
+    /* Apply configuration (use defaults if not specified) */
+    CTPBFConfig default_config;
+    if (!config) {
+        ct_pbf_config_init(&default_config);
+        config = &default_config;
+    }
+
+    ctx->config.max_node_capacity = config->max_node_capacity ? config->max_node_capacity : CT_DEFAULT_NODE_CAPACITY;
+    ctx->config.max_way_capacity = config->max_way_capacity ? config->max_way_capacity : CT_DEFAULT_WAY_CAPACITY;
+    ctx->config.max_coord_capacity = config->max_coord_capacity ? config->max_coord_capacity : CT_DEFAULT_COORD_CAPACITY;
+    ctx->config.arena_size = config->arena_size ? config->arena_size : CT_DEFAULT_ARENA_SIZE;
+
+    ctx->progress_callback = config->progress_callback;
+    ctx->progress_user_data = config->progress_user_data;
+    ctx->progress_interval = config->progress_interval ? config->progress_interval : 10;
 
     ctx->bbox.min_lat = 90;
     ctx->bbox.max_lat = -90;
@@ -735,14 +792,8 @@ CTPBFContext *ct_pbf_context_create(void)
     /* Initialize role string hash table for this context */
     role_hash_reset(ctx);
 
-    /* Create arena for parsing temporaries (~100MB for large PBF blocks)
-     * Size breakdown:
-     * - Dense nodes: ids (8MB) + lats (8MB) + lons (8MB) + keys_vals (80MB) = 104MB
-     * - Way refs: 80KB (10K refs)
-     * - Relation members: 120KB (10K members)
-     * Round up to 128MB for safety margin.
-     */
-    ctx->parse_arena = sh_arena_create(128 * 1024 * 1024);
+    /* Create arena for parsing temporaries */
+    ctx->parse_arena = sh_arena_create(ctx->config.arena_size);
     if (!ctx->parse_arena) {
         free(ctx);
         return NULL;
@@ -753,6 +804,11 @@ CTPBFContext *ct_pbf_context_create(void)
     ctx->coord_pool = NULL;
 
     return ctx;
+}
+
+CTPBFContext *ct_pbf_context_create(void)
+{
+    return ct_pbf_context_create_with_config(NULL);
 }
 
 void ct_pbf_context_free(CTPBFContext *ctx)
@@ -1629,8 +1685,20 @@ static CTStatus parse_blob(CTPBFContext *ctx, const uint8_t *data, size_t len)
     return status;
 }
 
+/* Helper to report progress */
+static void report_progress(CTPBFContext *ctx, const char *phase,
+                            size_t current, size_t total)
+{
+    if (ctx->progress_callback) {
+        ctx->progress_callback(phase, current, total, ctx->progress_user_data);
+    }
+}
+
 CTStatus ct_pbf_parse_memory(CTPBFContext *ctx, const uint8_t *data, size_t size)
 {
+    /* Report start */
+    report_progress(ctx, "parsing", 0, size);
+
     /* Preallocate hash tables based on file size to avoid rehashing */
     if (ctx->node_map.capacity == 0) {
         CTStatus status = preallocate_hash_tables(ctx, size);
@@ -1640,6 +1708,8 @@ CTStatus ct_pbf_parse_memory(CTPBFContext *ctx, const uint8_t *data, size_t size
     }
 
     size_t pos = 0;
+    size_t blob_count = 0;
+    size_t interval = ctx->progress_interval ? ctx->progress_interval : 10;
 
     while (pos < size) {
         /* Read blob header length (4 bytes big-endian) */
@@ -1668,10 +1738,19 @@ CTStatus ct_pbf_parse_memory(CTPBFContext *ctx, const uint8_t *data, size_t size
         if (strcmp(type, "OSMData") == 0) {
             CTStatus status = parse_blob(ctx, data + pos, data_size);
             if (status != CT_OK) return status;
+            blob_count++;
+
+            /* Report progress periodically */
+            if (blob_count % interval == 0) {
+                report_progress(ctx, "parsing", pos, size);
+            }
         }
 
         pos += data_size;
     }
+
+    /* Report completion */
+    report_progress(ctx, "parsing", size, size);
 
     return CT_OK;
 }
@@ -1731,6 +1810,8 @@ CTStatus ct_pbf_build_index(CTPBFContext *ctx)
 {
     if (!ctx || ctx->num_ways == 0) return CT_OK;
 
+    report_progress(ctx, "indexing", 0, ctx->num_ways);
+
     /* Free existing index if any */
     if (ctx->rtree) {
         ct_rtree_free(ctx->rtree);
@@ -1742,6 +1823,8 @@ CTStatus ct_pbf_build_index(CTPBFContext *ctx)
     if (!ctx->rtree) {
         return CT_ERROR_OUT_OF_MEMORY;
     }
+
+    report_progress(ctx, "indexing", ctx->num_ways, ctx->num_ways);
 
     return CT_OK;
 }
