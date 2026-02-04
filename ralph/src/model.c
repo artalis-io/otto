@@ -194,7 +194,7 @@ static int rebuild_build_state(LPModel *model) {
 
     /* Create constraint entries */
     for (int i = 0; i < m; i++) {
-        ConstraintEntry *entry = (ConstraintEntry*)malloc(sizeof(ConstraintEntry));
+        ConstraintEntry *entry = (ConstraintEntry*)calloc(1, sizeof(ConstraintEntry));
         if (!entry) {
             free(row_nnz);
             build_state_free(bs);
@@ -203,8 +203,8 @@ static int rebuild_build_state(LPModel *model) {
 
         entry->nnz = 0;
         entry->capacity = row_nnz[i];
-        entry->indices = (int*)malloc(row_nnz[i] * sizeof(int));
-        entry->values = (double*)malloc(row_nnz[i] * sizeof(double));
+        entry->indices = (int*)calloc(row_nnz[i], sizeof(int));
+        entry->values = (double*)calloc(row_nnz[i], sizeof(double));
         entry->sense = model->sense[i];
         entry->rhs = model->b[i];
 
@@ -273,13 +273,13 @@ int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
     }
 
     /* Create new constraint entry */
-    ConstraintEntry *entry = (ConstraintEntry*)malloc(sizeof(ConstraintEntry));
+    ConstraintEntry *entry = (ConstraintEntry*)calloc(1, sizeof(ConstraintEntry));
     if (!entry) return -1;
 
     entry->nnz = nnz;
     entry->capacity = nnz;
-    entry->indices = (int*)malloc(nnz * sizeof(int));
-    entry->values = (double*)malloc(nnz * sizeof(double));
+    entry->indices = (int*)calloc(nnz, sizeof(int));
+    entry->values = (double*)calloc(nnz, sizeof(double));
     entry->sense = sense;
     entry->rhs = rhs;
 
@@ -389,10 +389,10 @@ LPModel* lp_model_copy(const LPModel *src) {
 
     /* Copy vectors */
     if (src->num_vars > 0) {
-        dst->c = (double*)malloc(src->num_vars * sizeof(double));
-        dst->lb = (double*)malloc(src->num_vars * sizeof(double));
-        dst->ub = (double*)malloc(src->num_vars * sizeof(double));
-        dst->var_type = (char*)malloc(src->num_vars * sizeof(char));
+        dst->c = (double*)calloc(src->num_vars, sizeof(double));
+        dst->lb = (double*)calloc(src->num_vars, sizeof(double));
+        dst->ub = (double*)calloc(src->num_vars, sizeof(double));
+        dst->var_type = (char*)calloc(src->num_vars, sizeof(char));
 
         if (!dst->c || !dst->lb || !dst->ub || !dst->var_type) goto error;
 
@@ -403,8 +403,8 @@ LPModel* lp_model_copy(const LPModel *src) {
     }
 
     if (src->num_cons > 0) {
-        dst->b = (double*)malloc(src->num_cons * sizeof(double));
-        dst->sense = (char*)malloc(src->num_cons * sizeof(char));
+        dst->b = (double*)calloc(src->num_cons, sizeof(double));
+        dst->sense = (char*)calloc(src->num_cons, sizeof(char));
 
         if (!dst->b || !dst->sense) goto error;
 

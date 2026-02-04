@@ -40,8 +40,8 @@ static int apply_scaling(SimplexSolver *solver) {
     SparseMatrix *A = model->A;
 
     /* Allocate scaling factors */
-    solver->row_scale = (double*)malloc(m * sizeof(double));
-    solver->col_scale = (double*)malloc(n * sizeof(double));
+    solver->row_scale = (double*)calloc(m, sizeof(double));
+    solver->col_scale = (double*)calloc(n, sizeof(double));
     if (!solver->row_scale || !solver->col_scale) {
         free(solver->row_scale);
         free(solver->col_scale);
@@ -336,8 +336,8 @@ SimplexTableau* tableau_create(LPModel *model) {
      * - >= : 1 surplus + 1 artificial (artificial basic)
      * - =  : 1 artificial (artificial basic)
      */
-    char *norm_sense = (char*)malloc(model->num_cons);
-    double *norm_sign = (double*)malloc(model->num_cons * sizeof(double));
+    char *norm_sense = (char*)calloc(model->num_cons, sizeof(char));
+    double *norm_sign = (double*)calloc(model->num_cons, sizeof(double));
     if (!norm_sense || !norm_sign) {
         free(norm_sense);
         free(norm_sign);
@@ -410,7 +410,7 @@ SimplexTableau* tableau_create(LPModel *model) {
     }
 
     /* Track which auxiliary variable is basic for each row */
-    int *basic_var_for_row = (int*)malloc(model->num_cons * sizeof(int));
+    int *basic_var_for_row = (int*)calloc(model->num_cons, sizeof(int));
     if (!basic_var_for_row) {
         free(norm_sense);
         free(norm_sign);
@@ -693,7 +693,7 @@ int tableau_compute_solution(SimplexTableau *tab) {
     }
 
     /* Save original RHS for iterative refinement */
-    double *orig_rhs = (double*)malloc(tab->m * sizeof(double));
+    double *orig_rhs = (double*)calloc(tab->m, sizeof(double));
     if (orig_rhs) {
         vec_copy_data(orig_rhs, tab->work1, tab->m);
     }
@@ -1611,7 +1611,7 @@ static void extract_farkas_ray(SimplexSolver *solver) {
 
     /* Allocate if needed */
     if (!solver->farkas_ray) {
-        solver->farkas_ray = (double*)malloc(m * sizeof(double));
+        solver->farkas_ray = (double*)calloc(m, sizeof(double));
     }
     if (!solver->farkas_ray) {
         solver->farkas_valid = 0;
@@ -1782,8 +1782,8 @@ static void primal_apply_perturbation(SimplexTableau *tab) {
     free(tab->primal_saved_ub);
 
     /* Save original bounds */
-    tab->primal_saved_lb = (double*)malloc(n * sizeof(double));
-    tab->primal_saved_ub = (double*)malloc(n * sizeof(double));
+    tab->primal_saved_lb = (double*)calloc(n, sizeof(double));
+    tab->primal_saved_ub = (double*)calloc(n, sizeof(double));
     if (!tab->primal_saved_lb || !tab->primal_saved_ub) {
         free(tab->primal_saved_lb);
         free(tab->primal_saved_ub);
@@ -2148,9 +2148,9 @@ int simplex_solve(SimplexSolver *solver) {
 
     /* Copy solution */
     if (solver->status == RALPH_STATUS_OPTIMAL) {
-        solver->solution = (double*)malloc(solver->model->num_vars * sizeof(double));
-        solver->dual_solution = (double*)malloc(solver->model->num_cons * sizeof(double));
-        solver->reduced_costs = (double*)malloc(solver->model->num_vars * sizeof(double));
+        solver->solution = (double*)calloc(solver->model->num_vars, sizeof(double));
+        solver->dual_solution = (double*)calloc(solver->model->num_cons, sizeof(double));
+        solver->reduced_costs = (double*)calloc(solver->model->num_vars, sizeof(double));
 
         if (solver->solution && solver->dual_solution && solver->reduced_costs) {
             for (int j = 0; j < solver->model->num_vars; j++) {

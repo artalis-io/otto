@@ -533,29 +533,32 @@ int ralph_get_iterations(const RalphModel *model) {
  * Parameters
  * ============================================================================ */
 
+/* Helper macro for safe string comparison with literals */
+#define STREQ(s, lit) (strncmp((s), (lit), sizeof(lit)) == 0)
+
 int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     if (!model || !name) return -1;
 
-    if (strcmp(name, "max_iterations") == 0 || strcmp(name, "IterationLimit") == 0) {
+    if (STREQ(name, "max_iterations") || STREQ(name, "IterationLimit")) {
         model->max_iterations = value;
-    } else if (strcmp(name, "presolve") == 0 || strcmp(name, "Presolve") == 0) {
+    } else if (STREQ(name, "presolve") || STREQ(name, "Presolve")) {
         model->presolve = value;
-    } else if (strcmp(name, "verbose") == 0 || strcmp(name, "OutputFlag") == 0) {
+    } else if (STREQ(name, "verbose") || STREQ(name, "OutputFlag")) {
         model->verbose = value;
-    } else if (strcmp(name, "max_nodes") == 0 || strcmp(name, "NodeLimit") == 0) {
+    } else if (STREQ(name, "max_nodes") || STREQ(name, "NodeLimit")) {
         model->max_nodes = value;
-    } else if (strcmp(name, "max_cut_rounds") == 0 || strcmp(name, "CutRounds") == 0) {
+    } else if (STREQ(name, "max_cut_rounds") || STREQ(name, "CutRounds")) {
         model->max_cut_rounds = value;
-    } else if (strcmp(name, "method") == 0 || strcmp(name, "Method") == 0) {
+    } else if (STREQ(name, "method") || STREQ(name, "Method")) {
         /* 0=primal simplex, 1=dual simplex, 2=auto */
         model->method = value;
-    } else if (strcmp(name, "pricing") == 0 || strcmp(name, "Pricing") == 0) {
+    } else if (STREQ(name, "pricing") || STREQ(name, "Pricing")) {
         /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial */
         model->pricing = value;
-    } else if (strcmp(name, "detect_special") == 0 || strcmp(name, "DetectSpecial") == 0) {
+    } else if (STREQ(name, "detect_special") || STREQ(name, "DetectSpecial")) {
         /* 1=detect LAP/network structure, 0=disable */
         model->detect_special = value;
-    } else if (strcmp(name, "node_pool_capacity") == 0 || strcmp(name, "PoolCapacity") == 0) {
+    } else if (STREQ(name, "node_pool_capacity") || STREQ(name, "PoolCapacity")) {
         /* Pre-allocated B&B node pool size (0 = use default 1024) */
         model->node_pool_capacity = value > 0 ? value : 1024;
     } else {
@@ -568,9 +571,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
 int ralph_set_dbl_param(RalphModel *model, const char *name, double value) {
     if (!model || !name) return -1;
 
-    if (strcmp(name, "time_limit") == 0 || strcmp(name, "TimeLimit") == 0) {
+    if (STREQ(name, "time_limit") || STREQ(name, "TimeLimit")) {
         model->time_limit = value;
-    } else if (strcmp(name, "mip_gap") == 0 || strcmp(name, "MIPGap") == 0) {
+    } else if (STREQ(name, "mip_gap") || STREQ(name, "MIPGap")) {
         model->mip_gap = value;
     } else {
         return -1;  /* Unknown parameter */
@@ -582,19 +585,19 @@ int ralph_set_dbl_param(RalphModel *model, const char *name, double value) {
 int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
     if (!model || !name || !value) return -1;
 
-    if (strcmp(name, "max_iterations") == 0) {
+    if (STREQ(name, "max_iterations")) {
         *value = model->max_iterations;
-    } else if (strcmp(name, "presolve") == 0) {
+    } else if (STREQ(name, "presolve")) {
         *value = model->presolve;
-    } else if (strcmp(name, "verbose") == 0) {
+    } else if (STREQ(name, "verbose")) {
         *value = model->verbose;
-    } else if (strcmp(name, "max_nodes") == 0) {
+    } else if (STREQ(name, "max_nodes")) {
         *value = model->max_nodes;
-    } else if (strcmp(name, "max_cut_rounds") == 0) {
+    } else if (STREQ(name, "max_cut_rounds")) {
         *value = model->max_cut_rounds;
-    } else if (strcmp(name, "method") == 0) {
+    } else if (STREQ(name, "method")) {
         *value = model->method;
-    } else if (strcmp(name, "node_pool_capacity") == 0) {
+    } else if (STREQ(name, "node_pool_capacity")) {
         *value = model->node_pool_capacity;
     } else {
         return -1;
@@ -606,9 +609,9 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
 int ralph_get_dbl_param(const RalphModel *model, const char *name, double *value) {
     if (!model || !name || !value) return -1;
 
-    if (strcmp(name, "time_limit") == 0) {
+    if (STREQ(name, "time_limit")) {
         *value = model->time_limit;
-    } else if (strcmp(name, "mip_gap") == 0) {
+    } else if (STREQ(name, "mip_gap")) {
         *value = model->mip_gap;
     } else {
         return -1;

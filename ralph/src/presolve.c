@@ -48,8 +48,8 @@ static PresolveContext* presolve_context_create(LPModel *model) {
     /* Allocate working arrays */
     ctx->row_deleted = (int*)calloc(model->num_cons, sizeof(int));
     ctx->col_deleted = (int*)calloc(model->num_vars, sizeof(int));
-    ctx->row_lb = (double*)malloc(model->num_cons * sizeof(double));
-    ctx->row_ub = (double*)malloc(model->num_cons * sizeof(double));
+    ctx->row_lb = (double*)calloc(model->num_cons, sizeof(double));
+    ctx->row_ub = (double*)calloc(model->num_cons, sizeof(double));
 
     if (!ctx->row_deleted || !ctx->col_deleted || !ctx->row_lb || !ctx->row_ub) {
         lp_model_free(ctx->working);
@@ -84,7 +84,7 @@ void presolve_compute_implied_bounds(PresolveContext *ctx) {
     int n = model->num_vars;
 
     /* Allocate dense row buffer once */
-    double *row = (double*)malloc(n * sizeof(double));
+    double *row = (double*)calloc(n, sizeof(double));
     if (!row) return;
 
     for (int i = 0; i < model->num_cons; i++) {
@@ -177,7 +177,7 @@ int presolve_remove_empty_rows(PresolveContext *ctx) {
     int n = model->num_vars;
 
     /* Allocate dense row buffer once */
-    double *row = (double*)malloc(n * sizeof(double));
+    double *row = (double*)calloc(n, sizeof(double));
     if (!row) return 0;
 
     for (int i = 0; i < model->num_cons; i++) {
@@ -286,7 +286,7 @@ int presolve_singleton_rows(PresolveContext *ctx) {
     int n = model->num_vars;
 
     /* Allocate dense row buffer once */
-    double *row = (double*)malloc(n * sizeof(double));
+    double *row = (double*)calloc(n, sizeof(double));
     if (!row) return 0;
 
     for (int i = 0; i < model->num_cons; i++) {
@@ -351,7 +351,7 @@ int presolve_singleton_cols(PresolveContext *ctx) {
     int n = model->num_vars;
 
     /* Allocate dense row buffer once */
-    double *row = (double*)malloc(n * sizeof(double));
+    double *row = (double*)calloc(n, sizeof(double));
     if (!row) return 0;
 
     for (int j = 0; j < n; j++) {
@@ -453,7 +453,7 @@ int presolve_forcing_constraints(PresolveContext *ctx) {
     presolve_compute_implied_bounds(ctx);
 
     /* Allocate dense row buffer for forcing constraint handling */
-    double *row = (double*)malloc(n * sizeof(double));
+    double *row = (double*)calloc(n, sizeof(double));
     if (!row) return 0;
 
     for (int i = 0; i < model->num_cons; i++) {
@@ -521,7 +521,7 @@ int presolve_bound_tightening(PresolveContext *ctx) {
     int n = model->num_vars;
 
     /* Allocate dense row buffer once */
-    double *row = (double*)malloc(n * sizeof(double));
+    double *row = (double*)calloc(n, sizeof(double));
     if (!row) return 0;
 
     for (int i = 0; i < model->num_cons; i++) {
@@ -646,11 +646,11 @@ int presolve_probing(PresolveContext *ctx) {
     int count = 0;
 
     /* Allocate working arrays for implied bounds */
-    double *implied_lb0 = (double*)malloc(n * sizeof(double));
-    double *implied_ub0 = (double*)malloc(n * sizeof(double));
-    double *implied_lb1 = (double*)malloc(n * sizeof(double));
-    double *implied_ub1 = (double*)malloc(n * sizeof(double));
-    double *row = (double*)malloc(n * sizeof(double));
+    double *implied_lb0 = (double*)calloc(n, sizeof(double));
+    double *implied_ub0 = (double*)calloc(n, sizeof(double));
+    double *implied_lb1 = (double*)calloc(n, sizeof(double));
+    double *implied_ub1 = (double*)calloc(n, sizeof(double));
+    double *row = (double*)calloc(n, sizeof(double));
 
     if (!implied_lb0 || !implied_ub0 || !implied_lb1 || !implied_ub1 || !row) {
         free(implied_lb0);
@@ -916,7 +916,7 @@ PresolveResult* presolve(LPModel *model) {
 
     /* Preserve original variable types for MIP */
     result->num_orig_vars = model->num_vars;
-    result->orig_var_types = (char*)malloc(model->num_vars * sizeof(char));
+    result->orig_var_types = (char*)calloc(model->num_vars, sizeof(char));
     if (result->orig_var_types) {
         memcpy(result->orig_var_types, model->var_type, model->num_vars * sizeof(char));
     }
@@ -947,10 +947,10 @@ PresolveResult* presolve(LPModel *model) {
     }
 
     /* Build mappings */
-    result->var_map = (int*)malloc(model->num_vars * sizeof(int));
-    result->con_map = (int*)malloc(model->num_cons * sizeof(int));
-    result->var_map_inv = (int*)malloc(model->num_vars * sizeof(int));
-    result->con_map_inv = (int*)malloc(model->num_cons * sizeof(int));
+    result->var_map = (int*)calloc(model->num_vars, sizeof(int));
+    result->con_map = (int*)calloc(model->num_cons, sizeof(int));
+    result->var_map_inv = (int*)calloc(model->num_vars, sizeof(int));
+    result->con_map_inv = (int*)calloc(model->num_cons, sizeof(int));
 
     if (result->var_map && result->con_map) {
         int new_var = 0;

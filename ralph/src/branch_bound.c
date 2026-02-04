@@ -28,7 +28,7 @@ NodeQueue* node_queue_create(int capacity, NodeSelectStrategy strategy, int obj_
     queue->strategy = strategy;
     queue->obj_sense = obj_sense;
 
-    queue->nodes = (BBNode**)malloc(queue->capacity * sizeof(BBNode*));
+    queue->nodes = (BBNode**)calloc(queue->capacity, sizeof(BBNode*));
     if (!queue->nodes) {
         free(queue);
         return NULL;
@@ -236,8 +236,8 @@ BBNode* bb_node_create(int num_vars) {
     BBNode *node = (BBNode*)calloc(1, sizeof(BBNode));
     if (!node) return NULL;
 
-    node->lb = (double*)malloc(num_vars * sizeof(double));
-    node->ub = (double*)malloc(num_vars * sizeof(double));
+    node->lb = (double*)calloc(num_vars, sizeof(double));
+    node->ub = (double*)calloc(num_vars, sizeof(double));
 
     if (!node->lb || !node->ub) {
         bb_node_free(node);
@@ -285,8 +285,8 @@ BBNode* bb_node_copy(const BBNode *src, int num_vars) {
 
     /* Copy basis information for warm starting */
     if (src->basis && src->var_status && src->basis_size > 0 && src->var_status_size > 0) {
-        dst->basis = (int*)malloc(src->basis_size * sizeof(int));
-        dst->var_status = (VarStatus*)malloc(src->var_status_size * sizeof(VarStatus));
+        dst->basis = (int*)calloc(src->basis_size, sizeof(int));
+        dst->var_status = (VarStatus*)calloc(src->var_status_size, sizeof(VarStatus));
         if (dst->basis && dst->var_status) {
             memcpy(dst->basis, src->basis, src->basis_size * sizeof(int));
             memcpy(dst->var_status, src->var_status, src->var_status_size * sizeof(VarStatus));
@@ -334,8 +334,8 @@ BBNodePool* bb_node_pool_create(int capacity, int num_vars) {
 
     /* Allocate contiguous lb/ub arrays for all nodes */
     size_t array_size = (size_t)capacity * (size_t)num_vars;
-    pool->lb_pool = (double*)malloc(array_size * sizeof(double));
-    pool->ub_pool = (double*)malloc(array_size * sizeof(double));
+    pool->lb_pool = (double*)calloc(array_size, sizeof(double));
+    pool->ub_pool = (double*)calloc(array_size, sizeof(double));
     if (!pool->lb_pool || !pool->ub_pool) {
         free(pool->lb_pool);
         free(pool->ub_pool);
@@ -345,7 +345,7 @@ BBNodePool* bb_node_pool_create(int capacity, int num_vars) {
     }
 
     /* Allocate free list (stack of available indices) */
-    pool->free_list = (int*)malloc(capacity * sizeof(int));
+    pool->free_list = (int*)calloc(capacity, sizeof(int));
     if (!pool->free_list) {
         free(pool->lb_pool);
         free(pool->ub_pool);
@@ -470,8 +470,8 @@ BBNode* bb_node_pool_copy(BBNodePool *pool, const BBNode *src, int num_vars) {
 
     /* Copy basis information for warm starting */
     if (src->basis && src->var_status && src->basis_size > 0 && src->var_status_size > 0) {
-        dst->basis = (int*)malloc(src->basis_size * sizeof(int));
-        dst->var_status = (VarStatus*)malloc(src->var_status_size * sizeof(VarStatus));
+        dst->basis = (int*)calloc(src->basis_size, sizeof(int));
+        dst->var_status = (VarStatus*)calloc(src->var_status_size, sizeof(VarStatus));
         if (dst->basis && dst->var_status) {
             memcpy(dst->basis, src->basis, src->basis_size * sizeof(int));
             memcpy(dst->var_status, src->var_status, src->var_status_size * sizeof(VarStatus));
@@ -571,8 +571,8 @@ int strong_branch(MIPSolver *solver, int var, double val,
     /* Save original basis for restoration */
     int m = tab->m;
     int n = tab->n;
-    int *save_basis = (int*)malloc(m * sizeof(int));
-    int *save_var_status = (int*)malloc(n * sizeof(int));
+    int *save_basis = (int*)calloc(m, sizeof(int));
+    int *save_var_status = (int*)calloc(n, sizeof(int));
     if (!save_basis || !save_var_status) {
         free(save_basis);
         free(save_var_status);
@@ -866,7 +866,7 @@ int heuristic_rounding(MIPSolver *solver, const double *lp_solution, double *int
 
     /* Check constraint feasibility (Ax sense b) */
     if (model->A && model->num_cons > 0) {
-        double *ax = (double*)malloc(model->num_cons * sizeof(double));
+        double *ax = (double*)calloc(model->num_cons, sizeof(double));
         if (ax) {
             sparse_matvec(model->A, int_solution, ax);
 

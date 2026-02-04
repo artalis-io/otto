@@ -42,7 +42,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
         }
     }
 
-    solver->integer_vars = (int*)malloc(solver->num_integers * sizeof(int));
+    solver->integer_vars = (int*)calloc(solver->num_integers, sizeof(int));
     solver->is_integer = (int*)calloc(model->num_vars, sizeof(int));
 
     if (!solver->integer_vars || !solver->is_integer) {
@@ -61,12 +61,12 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     /* Initialize best solution tracking */
     solver->best_bound = (model->obj_sense == 1) ? -RALPH_INFINITY : RALPH_INFINITY;
     solver->best_obj = (model->obj_sense == 1) ? RALPH_INFINITY : -RALPH_INFINITY;
-    solver->best_solution = (double*)malloc(model->num_vars * sizeof(double));
+    solver->best_solution = (double*)calloc(model->num_vars, sizeof(double));
     solver->has_incumbent = 0;
 
     /* Initialize pseudo-costs */
-    solver->pseudo_cost_down = (double*)malloc(model->num_vars * sizeof(double));
-    solver->pseudo_cost_up = (double*)malloc(model->num_vars * sizeof(double));
+    solver->pseudo_cost_down = (double*)calloc(model->num_vars, sizeof(double));
+    solver->pseudo_cost_up = (double*)calloc(model->num_vars, sizeof(double));
     solver->pseudo_count_down = (int*)calloc(model->num_vars, sizeof(int));
     solver->pseudo_count_up = (int*)calloc(model->num_vars, sizeof(int));
 
@@ -124,7 +124,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
 
     /* Only detect LAP if enabled (per-model flag AND global flag) */
     if (detect_special && ralph_get_detect_lap()) {
-        MIPLAPSignature *lap_sig = (MIPLAPSignature *)malloc(sizeof(MIPLAPSignature));
+        MIPLAPSignature *lap_sig = (MIPLAPSignature *)calloc(1, sizeof(MIPLAPSignature));
         if (lap_sig && detect_lap_mip(model, lap_sig)) {
             solver->lap_sig = lap_sig;
             solver->use_lap_solver = 1;
@@ -218,8 +218,8 @@ static int diving_heuristic(MIPSolver *solver) {
     }
 
     /* Save original bounds */
-    double *orig_lb = (double*)malloc(num_vars * sizeof(double));
-    double *orig_ub = (double*)malloc(num_vars * sizeof(double));
+    double *orig_lb = (double*)calloc(num_vars, sizeof(double));
+    double *orig_ub = (double*)calloc(num_vars, sizeof(double));
     if (!orig_lb || !orig_ub) {
         free(orig_lb);
         free(orig_ub);
@@ -233,8 +233,8 @@ static int diving_heuristic(MIPSolver *solver) {
     double *orig_tab_lb = NULL;
     double *orig_tab_ub = NULL;
     if (tab) {
-        orig_tab_lb = (double*)malloc(tab->n * sizeof(double));
-        orig_tab_ub = (double*)malloc(tab->n * sizeof(double));
+        orig_tab_lb = (double*)calloc(tab->n, sizeof(double));
+        orig_tab_ub = (double*)calloc(tab->n, sizeof(double));
         if (orig_tab_lb && orig_tab_ub) {
             memcpy(orig_tab_lb, tab->lb_ext, tab->n * sizeof(double));
             memcpy(orig_tab_ub, tab->ub_ext, tab->n * sizeof(double));
@@ -242,7 +242,7 @@ static int diving_heuristic(MIPSolver *solver) {
     }
 
     /* Work with copy of solution */
-    double *sol = (double*)malloc(num_vars * sizeof(double));
+    double *sol = (double*)calloc(num_vars, sizeof(double));
     if (!sol) {
         free(orig_lb);
         free(orig_ub);
@@ -392,12 +392,12 @@ static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars) {
     /* Allocate basis arrays if needed */
     if (!node->basis || node->basis_size < m) {
         free(node->basis);
-        node->basis = (int*)malloc(m * sizeof(int));
+        node->basis = (int*)calloc(m, sizeof(int));
         node->basis_size = m;
     }
     if (!node->var_status || node->var_status_size < n) {
         free(node->var_status);
-        node->var_status = (VarStatus*)malloc(n * sizeof(VarStatus));
+        node->var_status = (VarStatus*)calloc(n, sizeof(VarStatus));
         node->var_status_size = n;
     }
 
@@ -474,7 +474,7 @@ static int solve_node_lp_as_lap(MIPSolver *solver, BBNode *node) {
 
     /* Ensure solution array exists */
     if (!lp->solution) {
-        lp->solution = (double *)malloc(num_vars * sizeof(double));
+        lp->solution = (double *)calloc(num_vars, sizeof(double));
         if (!lp->solution) return -1;
     }
 
@@ -736,7 +736,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     }
 
     /* Try rounding heuristic */
-    double *rounded_sol = (double*)malloc(model->num_vars * sizeof(double));
+    double *rounded_sol = (double*)calloc(model->num_vars, sizeof(double));
     if (rounded_sol) {
         if (heuristic_rounding(solver, lp_sol, rounded_sol) == 0) {
             /* Check if rounded solution is feasible and compute objective */
@@ -752,7 +752,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     /* If no incumbent yet at root, try greedy heuristic: round ALL binary variables UP to 1.
      * For problems like facility location, this guarantees feasibility (expensive but valid). */
     if (!solver->has_incumbent && node->depth == 0) {
-        double *greedy_sol = (double*)malloc(model->num_vars * sizeof(double));
+        double *greedy_sol = (double*)calloc(model->num_vars, sizeof(double));
         if (greedy_sol) {
             memcpy(greedy_sol, lp_sol, model->num_vars * sizeof(double));
 

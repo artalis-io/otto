@@ -46,7 +46,7 @@ static void extract_farkas_ray_dual(SimplexSolver *solver) {
 
     /* Allocate if needed */
     if (!solver->farkas_ray) {
-        solver->farkas_ray = (double*)malloc(m * sizeof(double));
+        solver->farkas_ray = (double*)calloc(m, sizeof(double));
     }
     if (!solver->farkas_ray) {
         solver->farkas_valid = 0;
@@ -442,7 +442,7 @@ int dual_simplex_solve(SimplexSolver *solver) {
             /* Copy solution to solver */
             int n_orig = solver->model->num_vars;
             if (!solver->solution) {
-                solver->solution = (double*)malloc(n_orig * sizeof(double));
+                solver->solution = (double*)calloc(n_orig, sizeof(double));
             }
             if (solver->solution) {
                 for (int j = 0; j < n_orig; j++) {
@@ -714,7 +714,7 @@ static int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
 static void apply_bound_perturbation(SimplexTableau *tab) {
     /* Allocate backup storage if needed */
     if (!tab->perturb_backup) {
-        tab->perturb_backup = (double*)malloc(tab->n * sizeof(double));
+        tab->perturb_backup = (double*)calloc(tab->n, sizeof(double));
         if (!tab->perturb_backup) return;
     }
 
@@ -848,7 +848,7 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
         /* Copy solution */
         int n_orig = solver->model->num_vars;
         if (!solver->solution) {
-            solver->solution = (double*)malloc(n_orig * sizeof(double));
+            solver->solution = (double*)calloc(n_orig, sizeof(double));
         }
         if (solver->solution) {
             for (int j = 0; j < n_orig; j++) {
@@ -906,7 +906,7 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
             /* Copy solution */
             int n_orig = solver->model->num_vars;
             if (!solver->solution) {
-                solver->solution = (double*)malloc(n_orig * sizeof(double));
+                solver->solution = (double*)calloc(n_orig, sizeof(double));
             }
             if (solver->solution) {
                 for (int j = 0; j < n_orig; j++) {

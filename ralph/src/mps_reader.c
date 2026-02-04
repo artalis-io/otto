@@ -117,7 +117,7 @@ static int read_line(MPSParser *parser) {
     }
     parser->line_num++;
 
-    size_t len = strlen(parser->line);
+    size_t len = strnlen(parser->line, MAX_LINE);
 
     /* Check for line truncation: no newline and buffer is full */
     if (len > 0 && parser->line[len - 1] != '\n' && len == MAX_LINE - 1) {
@@ -141,7 +141,7 @@ static int read_line(MPSParser *parser) {
 static char* trim(char *str) {
     while (isspace((unsigned char)*str)) str++;
     if (*str == '\0') return str;
-    char *end = str + strlen(str) - 1;
+    char *end = str + strnlen(str, MAX_LINE) - 1;
     while (end > str && isspace((unsigned char)*end)) *end-- = '\0';
     return str;
 }
@@ -455,11 +455,11 @@ static MPSParser* mps_parser_create(void) {
     parser->row_capacity = 128;
     parser->col_capacity = 128;
 
-    parser->rows = (MPSRow*)malloc(parser->row_capacity * sizeof(MPSRow));
-    parser->columns = (MPSColumn*)malloc(parser->col_capacity * sizeof(MPSColumn));
+    parser->rows = (MPSRow*)calloc(parser->row_capacity, sizeof(MPSRow));
+    parser->columns = (MPSColumn*)calloc(parser->col_capacity, sizeof(MPSColumn));
     parser->rhs = (double*)calloc(parser->row_capacity, sizeof(double));
-    parser->lb = (double*)malloc(parser->col_capacity * sizeof(double));
-    parser->ub = (double*)malloc(parser->col_capacity * sizeof(double));
+    parser->lb = (double*)calloc(parser->col_capacity, sizeof(double));
+    parser->ub = (double*)calloc(parser->col_capacity, sizeof(double));
     parser->obj = (double*)calloc(parser->col_capacity, sizeof(double));
     parser->matrix = triplets_create(parser->row_capacity, parser->col_capacity, 1024);
 
@@ -644,7 +644,7 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
     if (A) {
         /* Add each constraint */
         double *row_coefs = (double*)calloc(parser->num_cols, sizeof(double));
-        int *row_indices = (int*)malloc(parser->num_cols * sizeof(int));
+        int *row_indices = (int*)calloc(parser->num_cols, sizeof(int));
 
         for (int i = 0; i < parser->num_rows; i++) {
             if (i == parser->obj_row) continue;  /* Skip objective row */
