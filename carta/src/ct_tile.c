@@ -154,14 +154,6 @@ typedef struct {
 } CTTileTransform;
 
 /*
- * Helper: compute Mercator y from latitude (radians) - used for init only
- */
-static inline double lat_to_mercator_y(double lat_rad)
-{
-    return log(tan(lat_rad) + 1.0 / cos(lat_rad));
-}
-
-/*
  * Initialize tile transform for fast batch conversion.
  */
 static void ct_tile_transform_init(CTTileTransform *tf, CTTileCoord tile, int extent)

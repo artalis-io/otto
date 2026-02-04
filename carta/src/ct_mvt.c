@@ -155,7 +155,6 @@ static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
     }
 
     /* Encode geometry as packed uint32 array */
-    size_t geom_start = enc->offset;
 
     /* Skip length prefix for now */
     enc_write_tag(enc, MVT_FEATURE_GEOMETRY, 2);  /* length-delimited */
@@ -256,7 +255,6 @@ static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
 static void encode_feature(CTMVTEncoder *enc, const CTFeature *feature, uint64_t id)
 {
     /* Start feature message */
-    size_t feature_start = enc->offset;
     enc_write_tag(enc, MVT_LAYER_FEATURES, 2);
 
     /* Skip length for now */

@@ -683,6 +683,10 @@ static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, size_t index)
     return CT_OK;
 }
 
+/*
+ * Lookup way by OSM ID. Reserved for future multipolygon relation handling.
+ */
+__attribute__((unused))
 static size_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
 {
     if (ctx->way_map.capacity == 0) return SIZE_MAX;
@@ -775,6 +779,7 @@ static void role_hash_reset(CTPBFContext *ctx)
 
 static uint32_t role_hash_lookup(const CTPBFContext *ctx, const char *role, uint32_t hash)
 {
+    (void)role;  /* Hash is pre-computed, role string only for debugging */
     uint32_t idx = hash % ROLE_HASH_SIZE;
     for (int i = 0; i < ROLE_HASH_SIZE; i++) {
         if (ctx->role_hash[idx].hash == 0) {
