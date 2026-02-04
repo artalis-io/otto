@@ -1610,7 +1610,7 @@ Dependencies:
                         <span>Custom tuning</span>
                     </div>
                 </div>
-                <a href="&#109;&#97;&#105;&#108;&#116;&#111;&#58;&#109;&#97;&#114;&#107;&#64;&#97;&#114;&#116;&#97;&#108;&#105;&#115;&#46;&#105;&#111;" class="cta-button">Get in Touch</a>
+                <a href="#" class="cta-button" data-contact="true">Get in Touch</a>
             </div>
         </section>
 
@@ -1683,5 +1683,18 @@ Dependencies:
             <div>&copy; 2026 Mark Farkas. Built by <a href="https://artalis.io">Artalis</a>.</div>
         </footer>
     </div>
+
+    <!-- Email obfuscation - assembled at runtime to prevent scraping -->
+    <script>
+    (function() {
+        var u = 'mark';
+        var d = ['artalis', 'io'].join('.');
+        var e = u + '@' + d;
+        var links = document.querySelectorAll('[data-contact]');
+        for (var i = 0; i < links.length; i++) {
+            links[i].href = 'mailto:' + e;
+        }
+    })();
+    </script>
 </body>
 </html>
