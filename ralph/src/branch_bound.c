@@ -37,10 +37,14 @@ NodeQueue* node_queue_create(int capacity, NodeSelectStrategy strategy, int obj_
 }
 
 void node_queue_free(NodeQueue *queue) {
+    node_queue_free_with_pool(queue, NULL);
+}
+
+void node_queue_free_with_pool(NodeQueue *queue, BBNodePool *pool) {
     if (!queue) return;
 
     for (int i = 0; i < queue->size; i++) {
-        bb_node_free(queue->nodes[i]);
+        bb_node_pool_return(pool, queue->nodes[i]);
     }
     free(queue->nodes);
     free(queue);
@@ -171,6 +175,10 @@ int node_queue_is_empty(const NodeQueue *queue) {
 
 /* Remove nodes with bound worse than cutoff */
 void node_queue_update_bound(NodeQueue *queue, double cutoff) {
+    node_queue_update_bound_with_pool(queue, cutoff, NULL);
+}
+
+void node_queue_update_bound_with_pool(NodeQueue *queue, double cutoff, BBNodePool *pool) {
     if (!queue) return;
 
     int write_idx = 0;
@@ -185,7 +193,7 @@ void node_queue_update_bound(NodeQueue *queue, double cutoff) {
         }
 
         if (prune) {
-            bb_node_free(node);
+            bb_node_pool_return(pool, node);
         } else {
             queue->nodes[write_idx++] = node;
         }
@@ -259,6 +267,184 @@ BBNode* bb_node_copy(const BBNode *src, int num_vars) {
     if (!src) return NULL;
 
     BBNode *dst = bb_node_create(num_vars);
+    if (!dst) return NULL;
+
+    dst->id = src->id;
+    dst->depth = src->depth;
+    dst->parent_id = src->parent_id;
+    dst->branch_dir = src->branch_dir;
+    dst->branch_var = src->branch_var;
+    dst->branch_val = src->branch_val;
+    dst->lp_bound = src->lp_bound;
+    dst->lp_status = src->lp_status;
+    dst->estimate = src->estimate;
+
+    memcpy(dst->lb, src->lb, num_vars * sizeof(double));
+    memcpy(dst->ub, src->ub, num_vars * sizeof(double));
+
+    /* Copy basis information for warm starting */
+    if (src->basis && src->var_status && src->basis_size > 0 && src->var_status_size > 0) {
+        dst->basis = (int*)malloc(src->basis_size * sizeof(int));
+        dst->var_status = (VarStatus*)malloc(src->var_status_size * sizeof(VarStatus));
+        if (dst->basis && dst->var_status) {
+            memcpy(dst->basis, src->basis, src->basis_size * sizeof(int));
+            memcpy(dst->var_status, src->var_status, src->var_status_size * sizeof(VarStatus));
+            dst->basis_size = src->basis_size;
+            dst->var_status_size = src->var_status_size;
+        }
+    }
+
+    return dst;
+}
+
+/* ============================================================================
+ * BBNode Memory Pool
+ *
+ * Pre-allocates a block of nodes to reduce malloc overhead in deep B&B trees.
+ * Benefits:
+ * - Single allocation instead of per-node mallocs
+ * - Contiguous memory for better cache behavior
+ * - O(1) allocation/deallocation (stack-based free list)
+ * - Reduces memory fragmentation in long-running MIP solves
+ * ============================================================================ */
+
+BBNodePool* bb_node_pool_create(int capacity, int num_vars) {
+    if (capacity <= 0 || num_vars <= 0) return NULL;
+
+    BBNodePool *pool = (BBNodePool*)calloc(1, sizeof(BBNodePool));
+    if (!pool) return NULL;
+
+    pool->capacity = capacity;
+    pool->num_vars = num_vars;
+
+    /* Allocate node structures in single block */
+    pool->nodes = (BBNode*)calloc(capacity, sizeof(BBNode));
+    if (!pool->nodes) {
+        free(pool);
+        return NULL;
+    }
+
+    /* Allocate contiguous lb/ub arrays for all nodes */
+    size_t array_size = (size_t)capacity * (size_t)num_vars;
+    pool->lb_pool = (double*)malloc(array_size * sizeof(double));
+    pool->ub_pool = (double*)malloc(array_size * sizeof(double));
+    if (!pool->lb_pool || !pool->ub_pool) {
+        free(pool->lb_pool);
+        free(pool->ub_pool);
+        free(pool->nodes);
+        free(pool);
+        return NULL;
+    }
+
+    /* Allocate free list (stack of available indices) */
+    pool->free_list = (int*)malloc(capacity * sizeof(int));
+    if (!pool->free_list) {
+        free(pool->lb_pool);
+        free(pool->ub_pool);
+        free(pool->nodes);
+        free(pool);
+        return NULL;
+    }
+
+    /* Initialize: all nodes are free, point lb/ub into pools */
+    for (int i = 0; i < capacity; i++) {
+        pool->nodes[i].lb = pool->lb_pool + (size_t)i * num_vars;
+        pool->nodes[i].ub = pool->ub_pool + (size_t)i * num_vars;
+        pool->nodes[i].id = -1;  /* Mark as unused */
+        pool->nodes[i].basis = NULL;
+        pool->nodes[i].var_status = NULL;
+        pool->free_list[i] = capacity - 1 - i;  /* Stack: top = 0 */
+    }
+    pool->free_count = capacity;
+    pool->nodes_allocated = 0;
+
+    return pool;
+}
+
+void bb_node_pool_free(BBNodePool *pool) {
+    if (!pool) return;
+
+    /* Free any basis/var_status arrays allocated on nodes */
+    for (int i = 0; i < pool->capacity; i++) {
+        free(pool->nodes[i].basis);
+        free(pool->nodes[i].var_status);
+    }
+
+    free(pool->lb_pool);
+    free(pool->ub_pool);
+    free(pool->free_list);
+    free(pool->nodes);
+    free(pool);
+}
+
+BBNode* bb_node_pool_get(BBNodePool *pool) {
+    if (!pool) return NULL;
+
+    /* If pool exhausted, fall back to regular allocation */
+    if (pool->free_count == 0) {
+        return bb_node_create(pool->num_vars);
+    }
+
+    /* Pop from free list */
+    int idx = pool->free_list[--pool->free_count];
+    BBNode *node = &pool->nodes[idx];
+
+    /* Initialize node (lb/ub already point to pool arrays) */
+    node->id = -1;
+    node->depth = 0;
+    node->parent_id = -1;
+    node->branch_var = -1;
+    node->branch_val = 0.0;
+    node->branch_dir = BRANCH_DOWN;
+    node->lp_bound = -RALPH_INFINITY;
+    node->lp_status = 0;
+    node->lp_iterations = 0;
+    node->estimate = -RALPH_INFINITY;
+    /* basis/var_status may have data from previous use - leave for caller */
+
+    /* Track high-water mark */
+    int in_use = pool->capacity - pool->free_count;
+    if (in_use > pool->nodes_allocated) {
+        pool->nodes_allocated = in_use;
+    }
+
+    return node;
+}
+
+void bb_node_pool_return(BBNodePool *pool, BBNode *node) {
+    if (!node) return;
+
+    /* If no pool, use regular free */
+    if (!pool) {
+        bb_node_free(node);
+        return;
+    }
+
+    /* Verify node belongs to this pool */
+    ptrdiff_t offset = node - pool->nodes;
+    if (offset < 0 || offset >= pool->capacity) {
+        /* Node not from this pool - fall back to regular free */
+        bb_node_free(node);
+        return;
+    }
+
+    /* Free basis info (not pooled - varies per node) */
+    free(node->basis);
+    free(node->var_status);
+    node->basis = NULL;
+    node->var_status = NULL;
+    node->basis_size = 0;
+    node->var_status_size = 0;
+
+    /* Push to free list */
+    pool->free_list[pool->free_count++] = (int)offset;
+}
+
+/* Copy a node using pool if available, falling back to regular allocation */
+BBNode* bb_node_pool_copy(BBNodePool *pool, const BBNode *src, int num_vars) {
+    if (!src) return NULL;
+
+    BBNode *dst = pool ? bb_node_pool_get(pool) : bb_node_create(num_vars);
     if (!dst) return NULL;
 
     dst->id = src->id;
@@ -588,8 +774,8 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
     int num_vars = solver->original_model->num_vars;
     double val = solver->lp_solver->solution[branch_var];
 
-    /* Create down child (x <= floor(val)) */
-    *child_down = bb_node_copy(parent, num_vars);
+    /* Create down child (x <= floor(val)) using pool if available */
+    *child_down = bb_node_pool_copy(solver->node_pool, parent, num_vars);
     if (*child_down) {
         (*child_down)->depth = parent->depth + 1;
         (*child_down)->parent_id = parent->id;
@@ -600,8 +786,8 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
         (*child_down)->estimate = estimate_branch_obj(solver, branch_var, val, BRANCH_DOWN);
     }
 
-    /* Create up child (x >= ceil(val)) */
-    *child_up = bb_node_copy(parent, num_vars);
+    /* Create up child (x >= ceil(val)) using pool if available */
+    *child_up = bb_node_pool_copy(solver->node_pool, parent, num_vars);
     if (*child_up) {
         (*child_up)->depth = parent->depth + 1;
         (*child_up)->parent_id = parent->id;

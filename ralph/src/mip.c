@@ -100,6 +100,12 @@ MIPSolver* mip_create(LPModel *model, int detect_special) {
         return NULL;
     }
 
+    /* Create node pool for efficient B&B node allocation
+     * Initial capacity: 1024 nodes, can grow as needed
+     * Benefits: reduces malloc overhead, improves cache locality */
+    solver->node_pool = bb_node_pool_create(1024, model->num_vars);
+    /* Note: pool is optional - NULL pool falls back to individual allocs */
+
     /* Create cut pool */
     solver->cut_pool = cut_pool_create(1024);
     if (!solver->cut_pool) {
@@ -145,7 +151,8 @@ void mip_free(MIPSolver *solver) {
     free(solver->pseudo_cost_up);
     free(solver->pseudo_count_down);
     free(solver->pseudo_count_up);
-    node_queue_free(solver->node_queue);
+    node_queue_free_with_pool(solver->node_queue, solver->node_pool);
+    bb_node_pool_free(solver->node_pool);
     cut_pool_free(solver->cut_pool);
 
     /* Free LAP signature if allocated */
@@ -820,8 +827,10 @@ static int process_node(MIPSolver *solver, BBNode *node) {
 static int solve_root_node(MIPSolver *solver) {
     LPModel *model = solver->original_model;
 
-    /* Create root node */
-    BBNode *root = bb_node_create(model->num_vars);
+    /* Create root node using pool if available, falls back to regular alloc */
+    BBNode *root = solver->node_pool ?
+                   bb_node_pool_get(solver->node_pool) :
+                   bb_node_create(model->num_vars);
     if (!root) return -1;
 
     root->id = 0;
@@ -836,7 +845,7 @@ static int solve_root_node(MIPSolver *solver) {
     /* Solve initial LP relaxation */
     solver->lp_solver = simplex_create(solver->working_model);
     if (!solver->lp_solver) {
-        bb_node_free(root);
+        bb_node_pool_return(solver->node_pool, root);
         return -1;
     }
 
@@ -848,7 +857,7 @@ static int solve_root_node(MIPSolver *solver) {
 
     if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL) {
         solver->status = solver->lp_solver->status;
-        bb_node_free(root);
+        bb_node_pool_return(solver->node_pool, root);
         return 0;
     }
 
@@ -867,7 +876,7 @@ static int solve_root_node(MIPSolver *solver) {
     if (check_integer_feasibility(solver, solver->lp_solver->solution)) {
         update_incumbent(solver, solver->lp_solver->solution, solver->lp_solver->obj_value);
         solver->status = RALPH_STATUS_OPTIMAL;
-        bb_node_free(root);
+        bb_node_pool_return(solver->node_pool, root);
         return 0;
     }
 
@@ -884,7 +893,7 @@ static int solve_root_node(MIPSolver *solver) {
         double gap = fabs(solver->best_obj - solver->root_bound);
         if (gap < solver->abs_mip_gap) {
             solver->status = RALPH_STATUS_OPTIMAL;
-            bb_node_free(root);
+            bb_node_pool_return(solver->node_pool, root);
             return 0;
         }
     }
@@ -944,7 +953,7 @@ static int solve_root_node(MIPSolver *solver) {
             simplex_free(solver->lp_solver);
             solver->lp_solver = simplex_create(solver->working_model);
             if (!solver->lp_solver) {
-                bb_node_free(root);
+                bb_node_pool_return(solver->node_pool, root);
                 return -1;
             }
 
@@ -957,7 +966,7 @@ static int solve_root_node(MIPSolver *solver) {
             if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL) {
                 /* LP became infeasible with cuts - shouldn't happen */
                 solver->status = solver->lp_solver->status;
-                bb_node_free(root);
+                bb_node_pool_return(solver->node_pool, root);
                 return 0;
             }
 
@@ -992,7 +1001,7 @@ static int solve_root_node(MIPSolver *solver) {
                 update_incumbent(solver, solver->lp_solver->solution, solver->lp_solver->obj_value);
                 solver->status = RALPH_STATUS_OPTIMAL;
                 cut_pool_clear(solver->cut_pool);
-                bb_node_free(root);
+                bb_node_pool_return(solver->node_pool, root);
                 return 0;
             }
 
@@ -1105,7 +1114,7 @@ int mip_solve(MIPSolver *solver) {
         /* Prune nodes by bound and update best_bound from remaining open nodes */
         if (solver->has_incumbent) {
             int queue_size_before = solver->node_queue->size;
-            node_queue_update_bound(solver->node_queue, solver->cutoff);
+            node_queue_update_bound_with_pool(solver->node_queue, solver->cutoff, solver->node_pool);
             if (solver->verbose && solver->node_queue->size < queue_size_before) {
                 printf("[mip_solve] Pruned %d nodes by bound (cutoff=%.4f)\n",
                        queue_size_before - solver->node_queue->size, solver->cutoff);
@@ -1125,7 +1134,7 @@ int mip_solve(MIPSolver *solver) {
                    (fabs(solver->best_obj) + 1e-10));
         }
 
-        bb_node_free(node);
+        bb_node_pool_return(solver->node_pool, node);
     }
 
     /* Set final status */

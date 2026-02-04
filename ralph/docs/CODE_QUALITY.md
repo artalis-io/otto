@@ -295,6 +295,60 @@ IMPLEMENTED (2026-02-04)
 
 ---
 
+## BBNode Memory Pool
+
+### Problem
+
+MIP Branch-and-Bound creates many BBNode structures, each with malloc'd lb/ub arrays. In deep trees this causes:
+- Thousands of small allocations per solve
+- Memory fragmentation over time
+- Poor cache locality due to scattered node data
+
+### Solution
+
+Added `BBNodePool` to pre-allocate nodes with contiguous lb/ub arrays:
+
+```c
+typedef struct {
+    int capacity;           /* Total nodes in pool */
+    int num_vars;           /* Size of lb/ub arrays per node */
+    BBNode *nodes;          /* Pre-allocated node structures */
+    double *lb_pool;        /* Contiguous lb arrays for all nodes */
+    double *ub_pool;        /* Contiguous ub arrays for all nodes */
+    int *free_list;         /* Stack of free node indices */
+    int free_count;         /* Number of free nodes */
+    int nodes_allocated;    /* High-water mark for stats */
+} BBNodePool;
+```
+
+### API
+
+```c
+BBNodePool* bb_node_pool_create(int capacity, int num_vars);
+void bb_node_pool_free(BBNodePool *pool);
+BBNode* bb_node_pool_get(BBNodePool *pool);
+void bb_node_pool_return(BBNodePool *pool, BBNode *node);
+```
+
+### Benefits
+
+- **O(1) allocation/deallocation**: Stack-based free list
+- **Contiguous memory**: Better cache behavior for lb/ub arrays
+- **Reduced fragmentation**: Single allocation for all node data
+- **Safe fallback**: `bb_node_pool_return()` handles non-pool nodes gracefully
+
+### Status
+
+IMPLEMENTED (2026-02-04)
+
+**Implementation:**
+- Added `BBNodePool` struct to `include/mip.h`
+- Implemented pool functions in `src/branch_bound.c`
+- Integrated pool into `MIPSolver` (created in `mip_create()`, freed in `mip_free()`)
+- Pool is optional - NULL pool falls back to individual allocations
+
+---
+
 ## Summary
 
 | Issue | Severity | Status |
@@ -305,4 +359,6 @@ IMPLEMENTED (2026-02-04)
 | Magic numbers | LOW | FIXED |
 | Dense LU fallback allocation | LOW | FIXED |
 | Long functions | LOW | FIXED |
-| Arena allocator | Enhancement | IMPLEMENTED |
+| Arena allocator (SimplexTableau) | Enhancement | IMPLEMENTED |
+| Arena allocator (LUFactorization) | Enhancement | IMPLEMENTED |
+| BBNode memory pool | Enhancement | IMPLEMENTED |

@@ -230,6 +230,9 @@ typedef struct {
 
     /* Pre-allocated workspace for dense LU fallback (m×m matrix, column-major) */
     double *dense_work;     /* Reused across factorizations to avoid O(m²) alloc */
+
+    /* Arena allocator for fixed-size arrays (reduces ~20 mallocs to 1) */
+    RalphArena *arena;
 } LUFactorization;
 
 /* Simplex tableau representation */
