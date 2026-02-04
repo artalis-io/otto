@@ -13,6 +13,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdint.h>
+#include <limits.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -178,6 +180,10 @@ static uint32_t get_or_create_node(VLGraphBuilder *builder, int64_t osm_id,
 
     if (builder->num_nodes >= builder->nodes_capacity) {
         size_t new_cap = builder->nodes_capacity * 2;
+        /* Integer overflow check for allocation size */
+        if (new_cap > SIZE_MAX / sizeof(VLNode)) {
+            return VL_INVALID_NODE;
+        }
         VLNode *new_nodes = realloc(builder->nodes, new_cap * sizeof(VLNode));
         if (!new_nodes) return VL_INVALID_NODE;
         builder->nodes = new_nodes;
@@ -205,6 +211,10 @@ static VLStatus add_temp_edge(VLGraphBuilder *builder, uint32_t source, uint32_t
 {
     if (builder->num_temp_edges >= builder->temp_edges_capacity) {
         size_t new_cap = builder->temp_edges_capacity * 2;
+        /* Integer overflow check for allocation size */
+        if (new_cap > SIZE_MAX / sizeof(VLTempEdge)) {
+            return VL_ERROR_OUT_OF_MEMORY;
+        }
         VLTempEdge *new_edges = realloc(builder->temp_edges, new_cap * sizeof(VLTempEdge));
         if (!new_edges) return VL_ERROR_OUT_OF_MEMORY;
         builder->temp_edges = new_edges;
@@ -1206,6 +1216,13 @@ VLGraph *vl_graph_mmap(const char *filename)
     }
 
     size_t len = (size_t)st.st_size;
+
+    /* Validate file is large enough to contain the header */
+    if (len < sizeof(VLBinaryHeader)) {
+        close(fd);
+        return NULL;
+    }
+
     void *data = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
 
@@ -1213,6 +1230,37 @@ VLGraph *vl_graph_mmap(const char *filename)
 
     VLBinaryHeader *header = data;
     if (header->magic != VL_BINARY_MAGIC) {
+        munmap(data, len);
+        return NULL;
+    }
+
+    /* Validate file contains enough data for declared nodes and edges.
+     * This prevents reading beyond the mmap'd region from a truncated
+     * or malformed file. */
+    size_t nodes_size = (size_t)header->num_nodes * sizeof(VLNode);
+    size_t edges_size = (size_t)header->num_edges * sizeof(VLEdge);
+
+    /* Check for integer overflow in size calculations */
+    if (header->num_nodes > SIZE_MAX / sizeof(VLNode) ||
+        header->num_edges > SIZE_MAX / sizeof(VLEdge)) {
+        munmap(data, len);
+        return NULL;
+    }
+
+    /* Check that file is large enough for header + nodes + edges */
+    size_t required_size = sizeof(VLBinaryHeader);
+    if (nodes_size > SIZE_MAX - required_size) {
+        munmap(data, len);
+        return NULL;
+    }
+    required_size += nodes_size;
+    if (edges_size > SIZE_MAX - required_size) {
+        munmap(data, len);
+        return NULL;
+    }
+    required_size += edges_size;
+
+    if (len < required_size) {
         munmap(data, len);
         return NULL;
     }
@@ -1231,7 +1279,7 @@ VLGraph *vl_graph_mmap(const char *filename)
     graph->bbox_max.lon = header->bbox_max_lon;
 
     graph->nodes = (VLNode *)((uint8_t *)data + sizeof(VLBinaryHeader));
-    graph->edges = (VLEdge *)((uint8_t *)graph->nodes + graph->num_nodes * sizeof(VLNode));
+    graph->edges = (VLEdge *)((uint8_t *)graph->nodes + nodes_size);
 
     graph->owns_memory = 0;
 

@@ -26,9 +26,14 @@
 #include <math.h>
 #include <stdint.h>
 #include <limits.h>
+#include <pthread.h>
+#include <sys/time.h>
+#include <errno.h>
+#include <unistd.h>
 #include "mongoose.h"
 #include "velo.h"
 #include "polyline.h"
+#include "shared.h"   /* For sh_ratelimit, sh_workqueue */
 
 /* ============================================================================
  * Configuration
@@ -41,6 +46,15 @@ typedef struct {
     int use_landmarks;
     int landmark_count;
     char name[128];
+    /* Rate limiting configuration */
+    int rate_limit_enabled;   /* 1 = enabled, 0 = disabled */
+    double rate_limit_rps;    /* Tokens refilled per second */
+    double rate_limit_burst;  /* Maximum burst capacity */
+    /* Work queue configuration */
+    int work_queue_enabled;      /* 1 = enabled, 0 = disabled */
+    size_t work_queue_depth;     /* Max pending requests */
+    double work_queue_timeout;   /* Request timeout in seconds */
+    int route_workers;           /* Number of route worker threads (0 = auto) */
 } RouteServerConfig;
 
 /* Default configuration */
@@ -50,13 +64,55 @@ static RouteServerConfig s_config = {
     .port = 8082,
     .use_landmarks = 1,
     .landmark_count = 32,
-    .name = "Velo Route Server"
+    .name = "Velo Route Server",
+    .rate_limit_enabled = 1,  /* Enabled by default */
+    .rate_limit_rps = 10.0,   /* 10 requests per second */
+    .rate_limit_burst = 50.0, /* Burst capacity of 50 */
+    .work_queue_enabled = 1,  /* Enabled by default */
+    .work_queue_depth = 128,  /* Max 128 pending requests */
+    .work_queue_timeout = 10.0, /* 10 second timeout (routing can be slow) */
+    .route_workers = 0        /* 0 = auto-detect CPU count */
 };
 
 /* Global state */
-static int s_signo = 0;
+static volatile sig_atomic_t s_signo = 0;
 static VLGraph *s_graph = NULL;
 static VLLandmarks *s_landmarks = NULL;
+
+/* Rate limiter instance (uses shared library) */
+static ShRateLimiter *s_rate_limiter = NULL;
+
+/* Work queue instance (uses shared library) */
+static ShWorkQueue *s_work_queue = NULL;
+
+/* Route work item - passed through the work queue */
+typedef struct {
+    /* Request parameters */
+    double from_lat, from_lon;
+    double to_lat, to_lon;
+    VLProfile profile;
+    VLWeightType weight;
+    int include_geometry;
+
+    /* Response (set by worker) */
+    VLRoute route;
+    VLStatus status;
+    int completed;
+    char error_msg[128];
+
+    /* Completion signaling */
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+} RouteWorkItem;
+
+/* Route worker thread state */
+typedef struct {
+    int id;
+    pthread_t thread;
+} RouteWorker;
+
+static RouteWorker *s_route_workers = NULL;
+static int s_num_route_workers = 0;
 
 static void signal_handler(int signo) {
     s_signo = signo;
@@ -155,6 +211,175 @@ static void load_config_env(RouteServerConfig *cfg) {
     if ((val = getenv("ROUTE_LANDMARK_COUNT"))) {
         safe_parse_int(val, &cfg->landmark_count);
     }
+    /* Rate limiting configuration */
+    if ((val = getenv("VELO_RATE_LIMIT_ENABLED"))) {
+        cfg->rate_limit_enabled = (atoi(val) != 0);
+    }
+    if ((val = getenv("VELO_RATE_LIMIT_RPS"))) {
+        cfg->rate_limit_rps = atof(val);
+        if (cfg->rate_limit_rps <= 0) cfg->rate_limit_rps = 10.0;
+    }
+    if ((val = getenv("VELO_RATE_LIMIT_BURST"))) {
+        cfg->rate_limit_burst = atof(val);
+        if (cfg->rate_limit_burst <= 0) cfg->rate_limit_burst = 50.0;
+    }
+    /* Work queue configuration */
+    if ((val = getenv("VELO_WORK_QUEUE_ENABLED"))) {
+        cfg->work_queue_enabled = (atoi(val) != 0);
+    }
+    if ((val = getenv("VELO_WORK_QUEUE_DEPTH"))) {
+        cfg->work_queue_depth = (size_t)atol(val);
+        if (cfg->work_queue_depth < 1) cfg->work_queue_depth = 128;
+    }
+    if ((val = getenv("VELO_WORK_QUEUE_TIMEOUT"))) {
+        cfg->work_queue_timeout = atof(val);
+        if (cfg->work_queue_timeout <= 0) cfg->work_queue_timeout = 10.0;
+    }
+    if ((val = getenv("VELO_ROUTE_WORKERS"))) {
+        cfg->route_workers = atoi(val);
+    }
+}
+
+/* ============================================================================
+ * Route Work Queue Functions
+ * ============================================================================ */
+
+/* Initialize a route work item */
+static void route_work_item_init(RouteWorkItem *item) {
+    memset(item, 0, sizeof(*item));
+    item->completed = 0;
+    item->status = VL_ERROR_INVALID_ARGUMENT;
+    pthread_mutex_init(&item->mutex, NULL);
+    pthread_cond_init(&item->cond, NULL);
+}
+
+/* Clean up a route work item */
+static void route_work_item_cleanup(RouteWorkItem *item) {
+    pthread_mutex_destroy(&item->mutex);
+    pthread_cond_destroy(&item->cond);
+    vl_free_route(&item->route);
+}
+
+/* Wait for route work item completion with timeout */
+static int route_work_item_wait(RouteWorkItem *item, double timeout_sec) {
+    struct timespec abstime;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+
+    abstime.tv_sec = tv.tv_sec + (time_t)timeout_sec;
+    abstime.tv_nsec = tv.tv_usec * 1000 +
+                      (long)((timeout_sec - (time_t)timeout_sec) * 1e9);
+    if (abstime.tv_nsec >= 1000000000L) {
+        abstime.tv_sec++;
+        abstime.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&item->mutex);
+    while (!item->completed) {
+        int rc = pthread_cond_timedwait(&item->cond, &item->mutex, &abstime);
+        if (rc == ETIMEDOUT) {
+            pthread_mutex_unlock(&item->mutex);
+            return 0;  /* Timeout */
+        }
+    }
+    pthread_mutex_unlock(&item->mutex);
+    return 1;  /* Completed */
+}
+
+/* Signal that route work item is completed */
+static void route_work_item_complete(RouteWorkItem *item) {
+    pthread_mutex_lock(&item->mutex);
+    item->completed = 1;
+    pthread_cond_signal(&item->cond);
+    pthread_mutex_unlock(&item->mutex);
+}
+
+/* Process a single route request */
+static void process_route_request(RouteWorkItem *item) {
+    VLRouteOptions opts = {0};
+    opts.algorithm = VL_ALGORITHM_ASTAR_BIDIR;
+    opts.weight = item->weight;
+    opts.profile = item->profile;
+    opts.include_geometry = item->include_geometry;
+
+    VLCoord from = {item->from_lat, item->from_lon};
+    VLCoord to = {item->to_lat, item->to_lon};
+
+    if (s_landmarks) {
+        /* Use landmarks for faster routing */
+        uint32_t from_node = vl_graph_nearest_node_grid(s_graph, from);
+        uint32_t to_node = vl_graph_nearest_node_grid(s_graph, to);
+
+        if (from_node == VL_INVALID_NODE) {
+            item->status = VL_ERROR_NODE_NOT_FOUND;
+            strncpy(item->error_msg, "Could not find road near origin",
+                    sizeof(item->error_msg));
+            return;
+        }
+        if (to_node == VL_INVALID_NODE) {
+            item->status = VL_ERROR_NODE_NOT_FOUND;
+            strncpy(item->error_msg, "Could not find road near destination",
+                    sizeof(item->error_msg));
+            return;
+        }
+
+        item->status = vl_route_astar_landmarks_bidir(s_graph, s_landmarks,
+                                                       from_node, to_node,
+                                                       &opts, &item->route);
+    } else {
+        item->status = vl_route_coords(s_graph, from, to, &opts, &item->route);
+    }
+
+    if (item->status != VL_OK) {
+        switch (item->status) {
+            case VL_ERROR_NO_ROUTE:
+                strncpy(item->error_msg, "No route found", sizeof(item->error_msg));
+                break;
+            case VL_ERROR_NODE_NOT_FOUND:
+                strncpy(item->error_msg, "Could not find road near coordinate",
+                        sizeof(item->error_msg));
+                break;
+            default:
+                strncpy(item->error_msg, "Routing failed", sizeof(item->error_msg));
+                break;
+        }
+    }
+}
+
+/* Route worker thread function */
+static void *route_worker_fn(void *arg) {
+    RouteWorker *w = (RouteWorker *)arg;
+    (void)w;  /* Worker ID for debugging if needed */
+
+    while (s_signo == 0) {
+        /* Pop work item with timeout (100ms to check for shutdown) */
+        ShWorkItem *queue_item = sh_workqueue_pop_timeout(s_work_queue, 100);
+        if (!queue_item) continue;
+
+        RouteWorkItem *item = (RouteWorkItem *)queue_item->user_ctx;
+        if (!item) {
+            sh_workqueue_item_free(queue_item);
+            continue;
+        }
+
+        /* Check if request has expired */
+        if (sh_workqueue_item_expired(s_work_queue, queue_item)) {
+            item->status = VL_ERROR_INTERNAL;  /* Timeout */
+            strncpy(item->error_msg, "Request timeout", sizeof(item->error_msg));
+            route_work_item_complete(item);
+            sh_workqueue_item_free(queue_item);
+            continue;
+        }
+
+        /* Process the route request */
+        process_route_request(item);
+
+        /* Signal completion */
+        route_work_item_complete(item);
+        sh_workqueue_item_free(queue_item);
+    }
+
+    return NULL;
 }
 
 /* ============================================================================
@@ -287,7 +512,19 @@ static void handle_stats(struct mg_connection *c) {
         return;
     }
 
-    char response[2048];
+    /* Get work queue stats */
+    ShWorkQueueStats wq_stats = {0};
+    if (s_work_queue) {
+        sh_workqueue_stats(s_work_queue, &wq_stats);
+    }
+
+    /* Get rate limiter stats */
+    ShRateLimitStats rl_stats = {0};
+    if (s_rate_limiter) {
+        sh_ratelimit_stats(s_rate_limiter, &rl_stats);
+    }
+
+    char response[4096];
     snprintf(response, sizeof(response),
         "{\n"
         "  \"graph_path\": \"%s\",\n"
@@ -300,6 +537,22 @@ static void handle_stats(struct mg_connection *c) {
         "    \"min_lon\": %.6f,\n"
         "    \"max_lat\": %.6f,\n"
         "    \"max_lon\": %.6f\n"
+        "  },\n"
+        "  \"work_queue\": {\n"
+        "    \"enabled\": %s,\n"
+        "    \"depth\": %zu,\n"
+        "    \"capacity\": %zu,\n"
+        "    \"pushed\": %lu,\n"
+        "    \"popped\": %lu,\n"
+        "    \"dropped\": %lu,\n"
+        "    \"expired\": %lu\n"
+        "  },\n"
+        "  \"rate_limit\": {\n"
+        "    \"enabled\": %s,\n"
+        "    \"rps\": %.1f,\n"
+        "    \"burst\": %.0f,\n"
+        "    \"allowed\": %lu,\n"
+        "    \"denied\": %lu\n"
         "  }\n"
         "}\n",
         s_config.graph_path,
@@ -310,7 +563,14 @@ static void handle_stats(struct mg_connection *c) {
         s_graph->bbox_min.lat,
         s_graph->bbox_min.lon,
         s_graph->bbox_max.lat,
-        s_graph->bbox_max.lon);
+        s_graph->bbox_max.lon,
+        s_work_queue ? "true" : "false",
+        wq_stats.current_depth, wq_stats.max_capacity,
+        (unsigned long)wq_stats.total_pushed, (unsigned long)wq_stats.total_popped,
+        (unsigned long)wq_stats.total_dropped, (unsigned long)wq_stats.total_expired,
+        s_rate_limiter ? "true" : "false",
+        s_config.rate_limit_rps, s_config.rate_limit_burst,
+        (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied);
     send_json(c, 200, response);
 }
 
@@ -416,50 +676,103 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
         return;
     }
 
-    /* Set up route options */
-    VLRouteOptions opts = {0};
-    opts.algorithm = VL_ALGORITHM_ASTAR_BIDIR;
-    opts.weight = weight;
-    opts.profile = profile;
-    opts.include_geometry = include_geometry;
-
-    /* Calculate route */
-    VLCoord from = {from_lat, from_lon};
-    VLCoord to = {to_lat, to_lon};
-
     VLRoute route;
     VLStatus status;
 
-    if (s_landmarks) {
-        /* Use landmarks for faster routing - need to find nearest nodes first */
-        uint32_t from_node = vl_graph_nearest_node_grid(s_graph, from);
-        uint32_t to_node = vl_graph_nearest_node_grid(s_graph, to);
+    /* Use work queue if enabled */
+    if (s_work_queue) {
+        RouteWorkItem item;
+        route_work_item_init(&item);
+        item.from_lat = from_lat;
+        item.from_lon = from_lon;
+        item.to_lat = to_lat;
+        item.to_lon = to_lon;
+        item.profile = profile;
+        item.weight = weight;
+        item.include_geometry = include_geometry;
 
-        if (from_node == VL_INVALID_NODE) {
-            send_error(c, 400, "Could not find road near origin");
+        /* Create queue item */
+        ShWorkItem queue_item = {
+            .data = NULL,
+            .data_len = 0,
+            .user_ctx = &item
+        };
+
+        /* Try to push to queue */
+        double pressure;
+        if (!sh_workqueue_try_push(s_work_queue, &queue_item, &pressure)) {
+            route_work_item_cleanup(&item);
+            mg_http_reply(c, 503,
+                "Content-Type: text/plain\r\n"
+                "Retry-After: 1\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "Server busy, try again later\n");
             return;
         }
-        if (to_node == VL_INVALID_NODE) {
-            send_error(c, 400, "Could not find road near destination");
+
+        /* Wait for completion with timeout */
+        if (!route_work_item_wait(&item, s_config.work_queue_timeout)) {
+            route_work_item_cleanup(&item);
+            mg_http_reply(c, 504,
+                "Content-Type: text/plain\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "Request timeout\n");
             return;
         }
 
-        status = vl_route_astar_landmarks_bidir(s_graph, s_landmarks, from_node, to_node, &opts, &route);
+        status = item.status;
+        if (status != VL_OK) {
+            send_error(c, 404, item.error_msg);
+            route_work_item_cleanup(&item);
+            return;
+        }
+
+        /* Move route from item to local variable */
+        route = item.route;
+        memset(&item.route, 0, sizeof(item.route));  /* Prevent double-free */
+        route_work_item_cleanup(&item);
     } else {
-        /* Use vl_route_coords which handles nearest-node lookup internally */
-        status = vl_route_coords(s_graph, from, to, &opts, &route);
-    }
+        /* Direct routing (work queue disabled) */
+        VLRouteOptions opts = {0};
+        opts.algorithm = VL_ALGORITHM_ASTAR_BIDIR;
+        opts.weight = weight;
+        opts.profile = profile;
+        opts.include_geometry = include_geometry;
 
-    if (status != VL_OK) {
-        const char *msg = "Routing failed";
-        switch (status) {
-            case VL_ERROR_NO_ROUTE: msg = "No route found"; break;
-            case VL_ERROR_NODE_NOT_FOUND: msg = "Could not find road near coordinate"; break;
-            case VL_ERROR_INVALID_ARGUMENT: msg = "Invalid argument"; break;
-            default: break;
+        VLCoord from = {from_lat, from_lon};
+        VLCoord to = {to_lat, to_lon};
+
+        if (s_landmarks) {
+            /* Use landmarks for faster routing - need to find nearest nodes first */
+            uint32_t from_node = vl_graph_nearest_node_grid(s_graph, from);
+            uint32_t to_node = vl_graph_nearest_node_grid(s_graph, to);
+
+            if (from_node == VL_INVALID_NODE) {
+                send_error(c, 400, "Could not find road near origin");
+                return;
+            }
+            if (to_node == VL_INVALID_NODE) {
+                send_error(c, 400, "Could not find road near destination");
+                return;
+            }
+
+            status = vl_route_astar_landmarks_bidir(s_graph, s_landmarks, from_node, to_node, &opts, &route);
+        } else {
+            /* Use vl_route_coords which handles nearest-node lookup internally */
+            status = vl_route_coords(s_graph, from, to, &opts, &route);
         }
-        send_error(c, 404, msg);
-        return;
+
+        if (status != VL_OK) {
+            const char *msg = "Routing failed";
+            switch (status) {
+                case VL_ERROR_NO_ROUTE: msg = "No route found"; break;
+                case VL_ERROR_NODE_NOT_FOUND: msg = "Could not find road near coordinate"; break;
+                case VL_ERROR_INVALID_ARGUMENT: msg = "Invalid argument"; break;
+                default: break;
+            }
+            send_error(c, 404, msg);
+            return;
+        }
     }
 
     /* Encode polyline if geometry requested */
@@ -566,6 +879,25 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
+        /* Rate limiting check (supports both IPv4 and IPv6) */
+        if (s_rate_limiter) {
+            ShRateLimitAddr client_addr;
+            if (c->rem.is_ip6) {
+                sh_ratelimit_addr_ipv6(&client_addr,
+                                       c->rem.addr.ip6[0], c->rem.addr.ip6[1]);
+            } else {
+                sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
+            }
+            if (!sh_ratelimit_check(s_rate_limiter, &client_addr)) {
+                mg_http_reply(c, 429,
+                    "Content-Type: text/plain\r\n"
+                    "Retry-After: 1\r\n"
+                    "Access-Control-Allow-Origin: *\r\n",
+                    "Rate limit exceeded\n");
+                return;
+            }
+        }
+
         /* CORS preflight */
         if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
             mg_http_reply(c, 204,
@@ -610,11 +942,18 @@ static void print_usage(const char *prog) {
     printf("  - Velo binary graph (.vlg)\n");
     printf("\n");
     printf("Environment variables:\n");
-    printf("  ROUTE_GRAPH_PATH     Path to graph file\n");
-    printf("  ROUTE_PORT           Server port\n");
-    printf("  ROUTE_HOST           Server host\n");
-    printf("  ROUTE_LANDMARKS      Enable landmarks (0/1)\n");
-    printf("  ROUTE_LANDMARK_COUNT Number of landmarks\n");
+    printf("  ROUTE_GRAPH_PATH         Path to graph file\n");
+    printf("  ROUTE_PORT               Server port\n");
+    printf("  ROUTE_HOST               Server host\n");
+    printf("  ROUTE_LANDMARKS          Enable landmarks (0/1)\n");
+    printf("  ROUTE_LANDMARK_COUNT     Number of landmarks\n");
+    printf("  VELO_RATE_LIMIT_ENABLED  Enable rate limiting (default: 1)\n");
+    printf("  VELO_RATE_LIMIT_RPS      Requests per second (default: 10)\n");
+    printf("  VELO_RATE_LIMIT_BURST    Burst capacity (default: 50)\n");
+    printf("  VELO_WORK_QUEUE_ENABLED  Enable work queue (default: 1)\n");
+    printf("  VELO_WORK_QUEUE_DEPTH    Max pending requests (default: 128)\n");
+    printf("  VELO_WORK_QUEUE_TIMEOUT  Request timeout in seconds (default: 10)\n");
+    printf("  VELO_ROUTE_WORKERS       Route worker count (0 = auto)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s -p 8082 hungary-latest.osm.pbf\n", prog);
@@ -704,6 +1043,65 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    /* Initialize rate limiter (uses shared library) */
+    if (s_config.rate_limit_enabled) {
+        s_rate_limiter = sh_ratelimit_create(s_config.rate_limit_rps,
+                                             s_config.rate_limit_burst, 4096);
+        if (s_rate_limiter) {
+            printf("Rate limit: %.0f RPS, burst %.0f (IPv4 + IPv6)\n",
+                   s_config.rate_limit_rps, s_config.rate_limit_burst);
+        } else {
+            fprintf(stderr, "Warning: Failed to create rate limiter\n");
+        }
+    } else {
+        printf("Rate limit: disabled\n");
+    }
+
+    /* Initialize work queue and route workers */
+    if (s_config.work_queue_enabled) {
+        s_work_queue = sh_workqueue_create(s_config.work_queue_depth,
+                                           s_config.work_queue_timeout);
+        if (s_work_queue) {
+            /* Determine number of route workers */
+            int num_route_workers = s_config.route_workers;
+            if (num_route_workers <= 0) {
+#ifdef _SC_NPROCESSORS_ONLN
+                long n = sysconf(_SC_NPROCESSORS_ONLN);
+                num_route_workers = (n > 0) ? (int)n : 4;
+#else
+                num_route_workers = 4;
+#endif
+            }
+            if (num_route_workers > 64) num_route_workers = 64;
+
+            /* Allocate route workers */
+            s_route_workers = calloc(num_route_workers, sizeof(RouteWorker));
+            if (s_route_workers) {
+                s_num_route_workers = num_route_workers;
+                for (int i = 0; i < num_route_workers; i++) {
+                    s_route_workers[i].id = i;
+                    if (pthread_create(&s_route_workers[i].thread, NULL,
+                                       route_worker_fn, &s_route_workers[i]) != 0) {
+                        fprintf(stderr, "Error: Failed to create route worker %d\n", i);
+                        s_num_route_workers = i;
+                        break;
+                    }
+                }
+                printf("Work queue: depth %zu, timeout %.1fs, %d route workers\n",
+                       s_config.work_queue_depth, s_config.work_queue_timeout,
+                       s_num_route_workers);
+            } else {
+                fprintf(stderr, "Warning: Failed to allocate route workers\n");
+                sh_workqueue_free(s_work_queue);
+                s_work_queue = NULL;
+            }
+        } else {
+            fprintf(stderr, "Warning: Failed to create work queue\n");
+        }
+    } else {
+        printf("Work queue: disabled\n");
+    }
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -721,6 +1119,16 @@ int main(int argc, char *argv[]) {
     struct mg_connection *c = mg_http_listen(&mgr, listen_url, ev_handler, NULL);
     if (c == NULL) {
         fprintf(stderr, "Error: Cannot listen on %s\n", listen_url);
+        /* Cleanup work queue */
+        if (s_work_queue) {
+            sh_workqueue_shutdown(s_work_queue);
+            for (int i = 0; i < s_num_route_workers; i++) {
+                pthread_join(s_route_workers[i].thread, NULL);
+            }
+            free(s_route_workers);
+            sh_workqueue_free(s_work_queue);
+        }
+        sh_ratelimit_free(s_rate_limiter);
         vl_graph_free(s_graph);
         return 1;
     }
@@ -746,7 +1154,28 @@ int main(int argc, char *argv[]) {
     }
 
     printf("\nShutting down...\n");
+
+    /* Shutdown work queue and wait for route workers */
+    if (s_work_queue) {
+        sh_workqueue_shutdown(s_work_queue);
+        for (int i = 0; i < s_num_route_workers; i++) {
+            pthread_join(s_route_workers[i].thread, NULL);
+        }
+
+        /* Print work queue stats */
+        ShWorkQueueStats wq_stats;
+        sh_workqueue_stats(s_work_queue, &wq_stats);
+        printf("Work queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
+               (unsigned long)wq_stats.total_pushed,
+               (unsigned long)wq_stats.total_popped,
+               (unsigned long)wq_stats.total_dropped,
+               (unsigned long)wq_stats.total_expired);
+    }
+
     mg_mgr_free(&mgr);
+    free(s_route_workers);
+    sh_workqueue_free(s_work_queue);
+    sh_ratelimit_free(s_rate_limiter);
     if (s_landmarks) vl_landmarks_free(s_landmarks);
     vl_graph_free(s_graph);
 

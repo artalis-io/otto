@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
 
 #ifndef _WIN32
 #include <sys/mman.h>
@@ -119,6 +120,10 @@ static VLStatus add_node(VLPBFContext *ctx, int64_t id, double lat, double lon)
         /* Overflow check: ensure doubling didn't wrap */
         if (new_cap <= ctx->nodes_capacity) new_cap = VL_PBF_MAX_NODES;
         if (new_cap > VL_PBF_MAX_NODES) new_cap = VL_PBF_MAX_NODES;
+        /* Integer overflow check for allocation size */
+        if (new_cap > SIZE_MAX / sizeof(VLOSMNode)) {
+            return VL_ERROR_OUT_OF_MEMORY;
+        }
         VLOSMNode *new_nodes = realloc(ctx->nodes, new_cap * sizeof(VLOSMNode));
         if (!new_nodes) return VL_ERROR_OUT_OF_MEMORY;
         ctx->nodes = new_nodes;
@@ -144,6 +149,10 @@ static VLStatus add_way(VLPBFContext *ctx, VLOSMWay *way)
         /* Overflow check: ensure doubling didn't wrap */
         if (new_cap <= ctx->ways_capacity) new_cap = VL_PBF_MAX_WAYS;
         if (new_cap > VL_PBF_MAX_WAYS) new_cap = VL_PBF_MAX_WAYS;
+        /* Integer overflow check for allocation size */
+        if (new_cap > SIZE_MAX / sizeof(VLOSMWay)) {
+            return VL_ERROR_OUT_OF_MEMORY;
+        }
         VLOSMWay *new_ways = realloc(ctx->ways, new_cap * sizeof(VLOSMWay));
         if (!new_ways) return VL_ERROR_OUT_OF_MEMORY;
         ctx->ways = new_ways;
@@ -501,6 +510,11 @@ static VLStatus parse_primitive_block(VLPBFContext *ctx, const uint8_t *data, si
                 /* Store group reference for later parsing */
                 if (num_groups >= groups_cap) {
                     size_t new_cap = groups_cap ? groups_cap * 2 : 16;
+                    /* Integer overflow check for allocation size */
+                    if (new_cap > SIZE_MAX / sizeof(GroupRef)) {
+                        status = VL_ERROR_OUT_OF_MEMORY;
+                        goto cleanup;
+                    }
                     GroupRef *new_groups = realloc(groups, new_cap * sizeof(GroupRef));
                     if (!new_groups) {
                         status = VL_ERROR_OUT_OF_MEMORY;

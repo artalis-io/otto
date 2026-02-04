@@ -1,11 +1,11 @@
 /*
  * ct_serialize.c - Binary Index Serialization with mmap Support
  *
- * Binary format v2:
+ * Binary format v4:
  *
- * [Header] (72 bytes)
+ * [Header] (96 bytes)
  *   magic: u32 (0x43525441 = "CRTA")
- *   version: u32 (2)
+ *   version: u32 (4)
  *   num_ways: u32
  *   total_coords: u32
  *   string_pool_size: u32
@@ -13,16 +13,27 @@
  *   rtree_num_entries: u32
  *   rtree_root_idx: u32
  *   num_labeled_points: u32
+ *   num_multipolygons: u32
+ *   total_mp_rings: u32
+ *   total_mp_coords: u32
+ *   mp_rtree_num_nodes: u32
+ *   mp_rtree_num_entries: u32
+ *   mp_rtree_root_idx: u32
  *   _reserved: u32
  *   bbox: 4 x f64 (min_lat, min_lon, max_lat, max_lon)
  *
- * [Section Offsets] (56 bytes)
+ * [Section Offsets] (96 bytes)
  *   ways_offset: u64
  *   coords_offset: u64
  *   string_pool_offset: u64
  *   rtree_nodes_offset: u64
  *   rtree_leaf_indices_offset: u64
  *   labeled_points_offset: u64
+ *   multipolygons_offset: u64
+ *   mp_rings_offset: u64
+ *   mp_coords_offset: u64
+ *   mp_rtree_nodes_offset: u64
+ *   mp_rtree_leaf_indices_offset: u64
  *   _padding: u64
  *
  * [Way Records] - 32 bytes each
@@ -31,6 +42,11 @@
  * [R-Tree Nodes] - CTPackedNode array
  * [R-Tree Leaf Indices] - u32 array
  * [Labeled Points] - 32 bytes each
+ * [Multipolygons] - 40 bytes each
+ * [Multipolygon Rings] - 12 bytes each
+ * [Multipolygon Coordinates] - 8 bytes each
+ * [Multipolygon R-Tree Nodes] - CTPackedNode array
+ * [Multipolygon R-Tree Leaf Indices] - u32 array
  */
 
 #include "ct_serialize.h"
@@ -58,6 +74,12 @@ typedef struct __attribute__((packed)) {
     uint32_t rtree_num_entries;
     uint32_t rtree_root_idx;
     uint32_t num_labeled_points;
+    uint32_t num_multipolygons;
+    uint32_t total_mp_rings;
+    uint32_t total_mp_coords;
+    uint32_t mp_rtree_num_nodes;
+    uint32_t mp_rtree_num_entries;
+    uint32_t mp_rtree_root_idx;
     uint32_t _reserved;
     double min_lat;
     double min_lon;
@@ -72,6 +94,11 @@ typedef struct __attribute__((packed)) {
     uint64_t rtree_nodes_offset;
     uint64_t rtree_leaf_indices_offset;
     uint64_t labeled_points_offset;
+    uint64_t multipolygons_offset;
+    uint64_t mp_rings_offset;
+    uint64_t mp_coords_offset;
+    uint64_t mp_rtree_nodes_offset;
+    uint64_t mp_rtree_leaf_indices_offset;
     uint64_t _padding;
 } CTSectionOffsets;
 
@@ -108,6 +135,29 @@ typedef struct __attribute__((packed)) {
     uint8_t priority;
     uint8_t _padding;
 } CTBinaryLabeledPoint;
+
+/* Multipolygon record - 40 bytes */
+typedef struct __attribute__((packed)) {
+    uint32_t ring_offset;      /* Offset into rings array */
+    uint16_t num_rings;
+    uint8_t feature_class;
+    uint8_t feature_type;
+    uint32_t name_offset;      /* Offset into string pool */
+    float area_sqm;
+    float min_lat;
+    float min_lon;
+    float max_lat;
+    float max_lon;
+    uint32_t _padding;
+} CTBinaryMultipolygon;
+
+/* Multipolygon ring - 12 bytes */
+typedef struct __attribute__((packed)) {
+    uint32_t coord_offset;     /* Offset into mp_coords array */
+    uint32_t num_coords;
+    uint8_t is_outer;
+    uint8_t _padding[3];
+} CTBinaryRing;
 
 /* ============================================================================
  * String Pool
@@ -173,19 +223,37 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
     StringPool strings;
     string_pool_init(&strings);
 
-    /* Count total coordinates */
+    /* Count total coordinates for ways */
     size_t total_coords = 0;
     for (size_t i = 0; i < ctx->num_ways; i++) {
         total_coords += ctx->ways[i].num_coords;
     }
 
-    /* Calculate offsets */
+    /* Count total rings and coordinates for multipolygons */
+    size_t total_mp_rings = 0;
+    size_t total_mp_coords = 0;
+    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+        total_mp_rings += ctx->multipolygons[i].num_rings;
+        for (int r = 0; r < ctx->multipolygons[i].num_rings; r++) {
+            total_mp_coords += ctx->multipolygons[i].rings[r].num_coords;
+        }
+    }
+
+    /* Calculate sizes */
     size_t header_size = sizeof(CTBinaryHeader) + sizeof(CTSectionOffsets);
     size_t ways_size = ctx->num_ways * sizeof(CTBinaryWay);
     size_t coords_size = total_coords * sizeof(CTBinaryCoord);
+    size_t labeled_points_size = ctx->num_labeled_points * sizeof(CTBinaryLabeledPoint);
+    size_t multipolygons_size = ctx->num_multipolygons * sizeof(CTBinaryMultipolygon);
+    size_t mp_rings_size = total_mp_rings * sizeof(CTBinaryRing);
+    size_t mp_coords_size = total_mp_coords * sizeof(CTBinaryCoord);
 
     /* First pass: build string pool to get its size */
     uint32_t *name_offsets = malloc(ctx->num_ways * sizeof(uint32_t));
+    if (!name_offsets && ctx->num_ways > 0) {
+        string_pool_free(&strings);
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
     for (size_t i = 0; i < ctx->num_ways; i++) {
         name_offsets[i] = string_pool_add(&strings, ctx->ways[i].name);
     }
@@ -194,14 +262,36 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
     uint32_t *label_name_offsets = NULL;
     if (ctx->num_labeled_points > 0) {
         label_name_offsets = malloc(ctx->num_labeled_points * sizeof(uint32_t));
+        if (!label_name_offsets) {
+            free(name_offsets);
+            string_pool_free(&strings);
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
         for (size_t i = 0; i < ctx->num_labeled_points; i++) {
             label_name_offsets[i] = string_pool_add(&strings, ctx->labeled_points[i].name);
+        }
+    }
+
+    /* Add multipolygon names to string pool */
+    uint32_t *mp_name_offsets = NULL;
+    if (ctx->num_multipolygons > 0) {
+        mp_name_offsets = malloc(ctx->num_multipolygons * sizeof(uint32_t));
+        if (!mp_name_offsets) {
+            free(name_offsets);
+            free(label_name_offsets);
+            string_pool_free(&strings);
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+        for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+            mp_name_offsets[i] = string_pool_add(&strings, ctx->multipolygons[i].name);
         }
     }
 
     size_t string_pool_size = strings.size;
     size_t rtree_nodes_size = ctx->rtree ? ctx->rtree->num_nodes * sizeof(CTPackedNode) : 0;
     size_t rtree_leaf_size = ctx->rtree ? ctx->rtree->num_entries * sizeof(uint32_t) : 0;
+    size_t mp_rtree_nodes_size = ctx->mp_rtree ? ctx->mp_rtree->num_nodes * sizeof(CTPackedNode) : 0;
+    size_t mp_rtree_leaf_size = ctx->mp_rtree ? ctx->mp_rtree->num_entries * sizeof(uint32_t) : 0;
 
     /* Write header */
     CTBinaryHeader header = {
@@ -214,6 +304,12 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         .rtree_num_entries = ctx->rtree ? (uint32_t)ctx->rtree->num_entries : 0,
         .rtree_root_idx = ctx->rtree ? ctx->rtree->root_idx : 0,
         .num_labeled_points = (uint32_t)ctx->num_labeled_points,
+        .num_multipolygons = (uint32_t)ctx->num_multipolygons,
+        .total_mp_rings = (uint32_t)total_mp_rings,
+        .total_mp_coords = (uint32_t)total_mp_coords,
+        .mp_rtree_num_nodes = ctx->mp_rtree ? (uint32_t)ctx->mp_rtree->num_nodes : 0,
+        .mp_rtree_num_entries = ctx->mp_rtree ? (uint32_t)ctx->mp_rtree->num_entries : 0,
+        .mp_rtree_root_idx = ctx->mp_rtree ? ctx->mp_rtree->root_idx : 0,
         ._reserved = 0,
         .min_lat = ctx->bbox.min_lat,
         .min_lon = ctx->bbox.min_lon,
@@ -222,14 +318,33 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
     };
     fwrite(&header, sizeof(header), 1, f);
 
+    /* Calculate cumulative offsets */
+    size_t offset = header_size;
+    size_t ways_offset = offset; offset += ways_size;
+    size_t coords_offset = offset; offset += coords_size;
+    size_t string_pool_offset = offset; offset += string_pool_size;
+    size_t rtree_nodes_offset = offset; offset += rtree_nodes_size;
+    size_t rtree_leaf_offset = offset; offset += rtree_leaf_size;
+    size_t labeled_points_offset = offset; offset += labeled_points_size;
+    size_t multipolygons_offset = offset; offset += multipolygons_size;
+    size_t mp_rings_offset = offset; offset += mp_rings_size;
+    size_t mp_coords_offset = offset; offset += mp_coords_size;
+    size_t mp_rtree_nodes_offset = offset; offset += mp_rtree_nodes_size;
+    size_t mp_rtree_leaf_offset = offset;
+
     /* Write section offsets */
     CTSectionOffsets offsets = {
-        .ways_offset = header_size,
-        .coords_offset = header_size + ways_size,
-        .string_pool_offset = header_size + ways_size + coords_size,
-        .rtree_nodes_offset = header_size + ways_size + coords_size + string_pool_size,
-        .rtree_leaf_indices_offset = header_size + ways_size + coords_size + string_pool_size + rtree_nodes_size,
-        .labeled_points_offset = header_size + ways_size + coords_size + string_pool_size + rtree_nodes_size + rtree_leaf_size,
+        .ways_offset = ways_offset,
+        .coords_offset = coords_offset,
+        .string_pool_offset = string_pool_offset,
+        .rtree_nodes_offset = rtree_nodes_offset,
+        .rtree_leaf_indices_offset = rtree_leaf_offset,
+        .labeled_points_offset = labeled_points_offset,
+        .multipolygons_offset = multipolygons_offset,
+        .mp_rings_offset = mp_rings_offset,
+        .mp_coords_offset = mp_coords_offset,
+        .mp_rtree_nodes_offset = mp_rtree_nodes_offset,
+        .mp_rtree_leaf_indices_offset = mp_rtree_leaf_offset,
         ._padding = 0
     };
     fwrite(&offsets, sizeof(offsets), 1, f);
@@ -255,7 +370,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         coord_offset += way->num_coords;
     }
 
-    /* Write coordinates */
+    /* Write way coordinates */
     for (size_t i = 0; i < ctx->num_ways; i++) {
         const CTOSMWay *way = &ctx->ways[i];
         for (int j = 0; j < way->num_coords; j++) {
@@ -297,8 +412,72 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         fwrite(&blp, sizeof(blp), 1, f);
     }
 
+    /* Write multipolygons */
+    size_t ring_offset = 0;
+    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+        const CTAssembledMultipolygon *mp = &ctx->multipolygons[i];
+        CTBinaryMultipolygon bmp = {
+            .ring_offset = (uint32_t)ring_offset,
+            .num_rings = (uint16_t)mp->num_rings,
+            .feature_class = (uint8_t)mp->feature_class,
+            .feature_type = (uint8_t)mp->feature_type,
+            .name_offset = mp_name_offsets ? mp_name_offsets[i] : 0,
+            .area_sqm = mp->area_sqm,
+            .min_lat = (float)mp->bbox.min_lat,
+            .min_lon = (float)mp->bbox.min_lon,
+            .max_lat = (float)mp->bbox.max_lat,
+            .max_lon = (float)mp->bbox.max_lon,
+            ._padding = 0
+        };
+        fwrite(&bmp, sizeof(bmp), 1, f);
+        ring_offset += mp->num_rings;
+    }
+
+    /* Write multipolygon rings */
+    size_t mp_coord_offset = 0;
+    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+        const CTAssembledMultipolygon *mp = &ctx->multipolygons[i];
+        for (int r = 0; r < mp->num_rings; r++) {
+            const CTMultipolygonRing *ring = &mp->rings[r];
+            CTBinaryRing bring = {
+                .coord_offset = (uint32_t)mp_coord_offset,
+                .num_coords = (uint32_t)ring->num_coords,
+                .is_outer = (uint8_t)ring->is_outer,
+                ._padding = {0, 0, 0}
+            };
+            fwrite(&bring, sizeof(bring), 1, f);
+            mp_coord_offset += ring->num_coords;
+        }
+    }
+
+    /* Write multipolygon coordinates */
+    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+        const CTAssembledMultipolygon *mp = &ctx->multipolygons[i];
+        for (int r = 0; r < mp->num_rings; r++) {
+            const CTMultipolygonRing *ring = &mp->rings[r];
+            for (int j = 0; j < ring->num_coords; j++) {
+                CTBinaryCoord coord = {
+                    .lat_e7 = (int32_t)(ring->coords[j].lat * 1e7),
+                    .lon_e7 = (int32_t)(ring->coords[j].lon * 1e7)
+                };
+                fwrite(&coord, sizeof(coord), 1, f);
+            }
+        }
+    }
+
+    /* Write Multipolygon R-Tree nodes */
+    if (ctx->mp_rtree && ctx->mp_rtree->nodes) {
+        fwrite(ctx->mp_rtree->nodes, sizeof(CTPackedNode), ctx->mp_rtree->num_nodes, f);
+    }
+
+    /* Write Multipolygon R-Tree leaf indices */
+    if (ctx->mp_rtree && ctx->mp_rtree->leaf_indices) {
+        fwrite(ctx->mp_rtree->leaf_indices, sizeof(uint32_t), ctx->mp_rtree->num_entries, f);
+    }
+
     free(name_offsets);
     free(label_name_offsets);
+    free(mp_name_offsets);
     string_pool_free(&strings);
     fclose(f);
 
@@ -328,7 +507,15 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
     /* Validate header */
     const CTBinaryHeader *header = (const CTBinaryHeader *)map;
-    if (header->magic != CT_BINARY_MAGIC || header->version != CT_BINARY_VERSION) {
+    if (header->magic != CT_BINARY_MAGIC) {
+        munmap(map, st.st_size);
+        return NULL;
+    }
+
+    /* Support both v3 (no multipolygons) and v4 (with multipolygons) */
+    if (header->version != CT_BINARY_VERSION && header->version != 3) {
+        fprintf(stderr, "Error: Unsupported index version %u (expected %d or 3)\n",
+                header->version, CT_BINARY_VERSION);
         munmap(map, st.st_size);
         return NULL;
     }
@@ -357,8 +544,8 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
     /* Set stats for reporting (from header) */
     ctx->features_kept = header->num_ways;
-    ctx->total_ways_parsed = header->num_ways;  /* We don't track original counts in index */
-    ctx->total_nodes_parsed = header->total_coords;  /* Approximate */
+    ctx->total_ways_parsed = header->num_ways;
+    ctx->total_nodes_parsed = header->total_coords;
 
     /* Set bbox */
     ctx->bbox.min_lat = header->min_lat;
@@ -473,6 +660,110 @@ CTPBFContext *ct_index_mmap(const char *path) {
                 lp->name = strdup(string_pool + blp->name_offset);
             } else {
                 lp->name = NULL;
+            }
+        }
+    }
+
+    /* Reconstruct multipolygons (v4+ only) */
+    if (header->version >= 4 && header->num_multipolygons > 0) {
+        const CTBinaryMultipolygon *binary_mps =
+            (const CTBinaryMultipolygon *)((char *)map + offsets->multipolygons_offset);
+        const CTBinaryRing *binary_rings =
+            (const CTBinaryRing *)((char *)map + offsets->mp_rings_offset);
+        const CTBinaryCoord *binary_mp_coords =
+            (const CTBinaryCoord *)((char *)map + offsets->mp_coords_offset);
+
+        ctx->num_multipolygons = header->num_multipolygons;
+        ctx->multipolygons_capacity = header->num_multipolygons;
+        ctx->multipolygons = malloc(header->num_multipolygons * sizeof(CTAssembledMultipolygon));
+
+        if (!ctx->multipolygons) {
+            /* Continue without multipolygons rather than fail completely */
+            ctx->num_multipolygons = 0;
+        } else {
+            /* Allocate all multipolygon coordinates in one block */
+            CTCoord *all_mp_coords = malloc(header->total_mp_coords * sizeof(CTCoord));
+            if (!all_mp_coords) {
+                free(ctx->multipolygons);
+                ctx->multipolygons = NULL;
+                ctx->num_multipolygons = 0;
+            } else {
+                /* Store for cleanup */
+                ctx->mmap_mp_coords = all_mp_coords;
+
+                /* Allocate all rings in one block */
+                CTMultipolygonRing *all_rings = malloc(header->total_mp_rings * sizeof(CTMultipolygonRing));
+                if (!all_rings) {
+                    free(all_mp_coords);
+                    free(ctx->multipolygons);
+                    ctx->multipolygons = NULL;
+                    ctx->num_multipolygons = 0;
+                    ctx->mmap_mp_coords = NULL;
+                } else {
+                    ctx->mmap_mp_rings = all_rings;
+
+                    size_t ring_idx = 0;
+                    size_t mp_coord_idx = 0;
+
+                    for (size_t i = 0; i < header->num_multipolygons; i++) {
+                        const CTBinaryMultipolygon *bmp = &binary_mps[i];
+                        CTAssembledMultipolygon *mp = &ctx->multipolygons[i];
+
+                        mp->num_rings = bmp->num_rings;
+                        mp->feature_class = (CTOSMFeatureClass)bmp->feature_class;
+                        mp->feature_type = bmp->feature_type;
+                        mp->area_sqm = bmp->area_sqm;
+                        mp->bbox.min_lat = bmp->min_lat;
+                        mp->bbox.min_lon = bmp->min_lon;
+                        mp->bbox.max_lat = bmp->max_lat;
+                        mp->bbox.max_lon = bmp->max_lon;
+
+                        /* Name from string pool */
+                        if (bmp->name_offset > 0 && bmp->name_offset < header->string_pool_size) {
+                            mp->name = strdup(string_pool + bmp->name_offset);
+                        } else {
+                            mp->name = NULL;
+                        }
+
+                        /* Point to pre-allocated rings */
+                        mp->rings = &all_rings[ring_idx];
+
+                        /* Reconstruct rings */
+                        for (int r = 0; r < bmp->num_rings; r++) {
+                            const CTBinaryRing *bring = &binary_rings[bmp->ring_offset + r];
+                            CTMultipolygonRing *ring = &mp->rings[r];
+
+                            ring->num_coords = bring->num_coords;
+                            ring->is_outer = bring->is_outer;
+
+                            /* Point to pre-allocated coords */
+                            ring->coords = &all_mp_coords[mp_coord_idx];
+
+                            /* Convert coordinates */
+                            for (uint32_t j = 0; j < bring->num_coords; j++) {
+                                const CTBinaryCoord *bc = &binary_mp_coords[bring->coord_offset + j];
+                                ring->coords[j].lat = bc->lat_e7 * 1e-7;
+                                ring->coords[j].lon = bc->lon_e7 * 1e-7;
+                            }
+                            mp_coord_idx += bring->num_coords;
+                        }
+                        ring_idx += bmp->num_rings;
+                    }
+
+                    /* Reconstruct multipolygon R-Tree */
+                    if (header->mp_rtree_num_nodes > 0) {
+                        ctx->mp_rtree = calloc(1, sizeof(CTRTree));
+                        ctx->mp_rtree->num_nodes = header->mp_rtree_num_nodes;
+                        ctx->mp_rtree->num_entries = header->mp_rtree_num_entries;
+                        ctx->mp_rtree->root_idx = header->mp_rtree_root_idx;
+
+                        /* Point directly to mmap'd arrays */
+                        ctx->mp_rtree->nodes = (CTPackedNode *)((char *)map + offsets->mp_rtree_nodes_offset);
+                        ctx->mp_rtree->leaf_indices = (uint32_t *)((char *)map + offsets->mp_rtree_leaf_indices_offset);
+
+                        ctx->mp_rtree_is_mmap = 1;
+                    }
+                }
             }
         }
     }

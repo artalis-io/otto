@@ -9,6 +9,7 @@
 #include "sh_pbf.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 /* ============================================================================
  * String Table
@@ -33,7 +34,16 @@ void sh_string_table_free(SHStringTable *st)
 SHStatus sh_string_table_add(SHStringTable *st, const uint8_t *data, size_t len)
 {
     if (st->count >= st->capacity) {
+        /* Check for overflow before doubling capacity */
+        if (st->capacity > SIZE_MAX / 2) {
+            return SH_ERROR_OUT_OF_MEMORY;  /* Would overflow */
+        }
         size_t new_cap = st->capacity ? st->capacity * 2 : 256;
+
+        /* Check for overflow in allocation size */
+        if (new_cap > SIZE_MAX / sizeof(char *)) {
+            return SH_ERROR_OUT_OF_MEMORY;  /* Would overflow */
+        }
         char **new_strings = realloc(st->strings, new_cap * sizeof(char *));
         if (!new_strings) return SH_ERROR_OUT_OF_MEMORY;
         st->strings = new_strings;
@@ -70,9 +80,14 @@ SHStatus sh_string_table_parse(SHStringTable *st, const uint8_t *data, size_t le
             if (n == 0) return SH_ERROR_INVALID_PARAM;
             pos += n;
 
+            /* Bounds check: ensure slen fits in size_t and doesn't exceed remaining buffer */
+            if (slen > (uint64_t)SIZE_MAX || slen > len - pos) {
+                return SH_ERROR_INVALID_PARAM;
+            }
+
             SHStatus status = sh_string_table_add(st, data + pos, (size_t)slen);
             if (status != SH_OK) return status;
-            pos += slen;
+            pos += (size_t)slen;
         } else {
             n = sh_pb_skip_field(data + pos, len - pos, wire);
             if (n == 0) return SH_ERROR_INVALID_PARAM;
@@ -112,15 +127,24 @@ SHStatus sh_pbf_parse_blob_header(const uint8_t *data, size_t len,
             if (n == 0) break;
             pos += n;
 
+            /* Bounds check: ensure slen fits in size_t and doesn't exceed remaining buffer */
+            if (slen > (uint64_t)SIZE_MAX || slen > len - pos) {
+                return SH_ERROR_INVALID_PARAM;
+            }
+
             if (slen < type_capacity) {
                 memcpy(type_out, data + pos, (size_t)slen);
-                type_out[slen] = '\0';
+                type_out[(size_t)slen] = '\0';
             }
             pos += (size_t)slen;
         } else if (field == SH_PBF_BLOBHEADER_DATASIZE && wire == SH_PB_WIRE_VARINT) {
             uint64_t val;
             n = sh_pb_read_varint(data + pos, len - pos, &val);
             if (n == 0) break;
+            /* Validate value fits in uint32 before casting */
+            if (val > UINT32_MAX) {
+                return SH_ERROR_INVALID_PARAM;
+            }
             *datasize_out = (uint32_t)val;
             pos += n;
         } else {

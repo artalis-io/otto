@@ -9,8 +9,18 @@ INCLUDES = -I../include -I../../shared/include -I../../vendor/mongoose -I../../v
 # Shared library path
 SHARED_DIR = ../../shared
 
+# Platform-specific OpenMP linking
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    # macOS with Homebrew libomp
+    OPENMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
+else
+    # Linux - native GCC OpenMP
+    OPENMP_LDFLAGS = -fopenmp
+endif
+
 # Library paths
-LDFLAGS = -L.. -lvelo -L$(SHARED_DIR) -lshared -lm -lpthread -fopenmp
+LDFLAGS = -L.. -lvelo -L$(SHARED_DIR) -lshared -lm -lpthread $(OPENMP_LDFLAGS)
 
 # Source files
 SRCS = src/main.c src/polyline.c

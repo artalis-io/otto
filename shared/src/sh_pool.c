@@ -10,7 +10,8 @@ int sh_pool_init(SHPool *pool, size_t elem_size, size_t capacity)
 {
     if (!pool || elem_size == 0) return -1;
 
-    pool->data = malloc(elem_size * capacity);
+    /* Use calloc for overflow-safe allocation (checks elem_size * capacity internally) */
+    pool->data = calloc(capacity, elem_size);
     if (!pool->data && capacity > 0) return -1;
 
     pool->elem_size = elem_size;
@@ -84,6 +85,11 @@ int sh_pool_ensure_capacity(SHPool *pool, size_t min_capacity)
 {
     if (!pool) return -1;
     if (pool->capacity >= min_capacity) return 0;
+
+    /* Check for integer overflow before realloc */
+    if (pool->elem_size > 0 && min_capacity > SIZE_MAX / pool->elem_size) {
+        return -1;  /* Would overflow */
+    }
 
     void *new_data = realloc(pool->data, pool->elem_size * min_capacity);
     if (!new_data) return -1;
