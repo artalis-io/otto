@@ -86,16 +86,19 @@ export class MapProvider {
 
         // Check for pending route request
         if (this.wasm.cs_provider_route_is_pending()) {
+            console.log('[MapProvider] Route request pending, fetching...');
             this._fetchRoute();
         }
 
         // Check for pending search request
         if (this.wasm.cs_provider_search_is_pending()) {
+            console.log('[MapProvider] Search request pending, fetching...');
             this._fetchSearch();
         }
 
         // Check for pending reverse geocode request
         if (this.wasm.cs_provider_reverse_is_pending()) {
+            console.log('[MapProvider] Reverse geocode request pending, fetching...');
             this._fetchReverse();
         }
     }
@@ -115,22 +118,30 @@ export class MapProvider {
         const toLon = wasm.cs_provider_route_to_lon();
         const server = this._getString(wasm.cs_provider_route_server());
 
+        console.log('[MapProvider] Route server URL:', server);
+        console.log('[MapProvider] Route from:', fromLat, fromLon, 'to:', toLat, toLon);
+
         // Get profile and mode from WASM
         const profileNum = wasm.cs_provider_get_route_profile();
         const modeNum = wasm.cs_provider_get_route_mode();
         const profile = profileNum === 1 ? 'truck' : 'car';
         const mode = modeNum === 1 ? 'shortest' : 'fastest';
 
-        const url = `${server}/api/v1/route?from=${encodeURIComponent(`${fromLat},${fromLon}`)}&to=${encodeURIComponent(`${toLat},${toLon}`)}&profile=${encodeURIComponent(profile)}&mode=${encodeURIComponent(mode)}&geometry=true`;
+        // Don't URL-encode lat,lon - they're just numbers and Velo expects literal commas
+        const url = `${server}/api/v1/route?from=${fromLat},${fromLon}&to=${toLat},${toLon}&profile=${profile}&mode=${mode}&geometry=true`;
 
+        console.log('[MapProvider] Fetching route:', url);
         const startTime = performance.now();
 
         try {
             const response = await this._routeClient.fetch(url);
+            console.log('[MapProvider] Route response status:', response.status);
             const data = await response.json();
+            console.log('[MapProvider] Route response data:', data);
             const calcTimeMs = performance.now() - startTime;
 
             if (data.error) {
+                console.error('[MapProvider] Route error from server:', data.error);
                 this._reportRouteError(data.error);
                 return;
             }
@@ -165,6 +176,7 @@ export class MapProvider {
             wasm.free(lonsPtr);
 
         } catch (err) {
+            console.error('[MapProvider] Route fetch error:', err);
             const message = err.isCircuitOpen
                 ? 'Route service unavailable (circuit breaker open)'
                 : err.message;

@@ -41,6 +41,7 @@
 
 typedef struct {
     char graph_path[512];
+    char save_index_path[512];  /* Path to save binary index (empty = don't save) */
     char listen_addr[64];
     int port;
     int use_landmarks;
@@ -69,6 +70,7 @@ typedef struct {
 /* Default configuration */
 static RouteServerConfig s_config = {
     .graph_path = "",
+    .save_index_path = "",
     .listen_addr = "0.0.0.0",
     .port = 8082,
     .use_landmarks = 1,
@@ -1090,11 +1092,12 @@ static void print_usage(const char *prog) {
     printf("  -c, --config FILE    Configuration file (YAML format)\n");
     printf("  --no-landmarks       Disable ALT landmarks\n");
     printf("  --landmarks N        Number of landmarks (default: 32)\n");
+    printf("  --save-index FILE    Save binary index to FILE (for faster future startup)\n");
     printf("  --help               Show this help\n");
     printf("\n");
     printf("Graph file can be:\n");
     printf("  - OSM PBF file (.osm.pbf)\n");
-    printf("  - Velo binary graph (.vlg)\n");
+    printf("  - Velo binary graph (.vlg) - much faster to load\n");
     printf("\n");
     printf("Environment variables:\n");
     printf("  ROUTE_GRAPH_PATH         Path to graph file\n");
@@ -1153,6 +1156,11 @@ int main(int argc, char *argv[]) {
                 safe_parse_int(argv[i], &s_config.landmark_count);
                 s_config.use_landmarks = 1;
             }
+        } else if (strcmp(argv[i], "--save-index") == 0 || strcmp(argv[i], "-s") == 0) {
+            if (++i < argc) {
+                strncpy(s_config.save_index_path, argv[i], sizeof(s_config.save_index_path) - 1);
+                s_config.save_index_path[sizeof(s_config.save_index_path) - 1] = '\0';
+            }
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -1200,6 +1208,20 @@ int main(int argc, char *argv[]) {
     if (!s_graph->rev_edges) {
         printf("Building reverse index...\n");
         vl_graph_build_reverse_index(s_graph);
+    }
+
+    /* Save binary index if requested */
+    if (s_config.save_index_path[0] != '\0') {
+        printf("Saving binary index to: %s\n", s_config.save_index_path);
+        VLStatus save_status = vl_save_binary(s_graph, s_config.save_index_path);
+        if (save_status == VL_OK) {
+            printf("Index saved successfully\n");
+            /* Exit after saving - this is typically a pre-build step */
+            vl_graph_free(s_graph);
+            return 0;
+        } else {
+            fprintf(stderr, "Warning: Failed to save index\n");
+        }
     }
 
     /* Create landmarks for ALT heuristic */
