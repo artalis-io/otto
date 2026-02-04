@@ -240,6 +240,33 @@ clean-all: clean
 	-cd carta/ui && rm -rf node_modules dist 2>/dev/null || true
 
 # =============================================================================
+# Documentation
+# =============================================================================
+
+# Generate PDF from strategy document (for sharing with partners)
+strategy-pdf:
+	@echo "Generating OTTO_Strategy.pdf..."
+	@pandoc docs/STRATEGY_PUBLIC.md \
+		-o OTTO_Strategy.pdf \
+		--pdf-engine=xelatex \
+		-V geometry:margin=1in \
+		-V fontsize=11pt \
+		-V colorlinks=true \
+		-V linkcolor=blue \
+		-V urlcolor=blue \
+		-V toccolor=black \
+		--toc \
+		--toc-depth=2 \
+		-V toc-title="Table of Contents" \
+		--highlight-style=tango \
+		-V mainfont="DejaVu Sans" \
+		-V monofont="DejaVu Sans Mono" \
+		--metadata title="OTTO Strategy Document" \
+		--metadata author="Artalis" \
+		--metadata date="$(shell date +%Y-%m-%d)"
+	@echo "Created: OTTO_Strategy.pdf"
+
+# =============================================================================
 # Help
 # =============================================================================
 
