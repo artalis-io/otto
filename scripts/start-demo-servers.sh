@@ -228,14 +228,20 @@ echo "Starting servers..."
 # Carta tile server (port 8081) - use index if available
 # Use 8 worker threads for parallel tile generation
 # LOD filtering enabled (OSM Carto-style zoom-dependent feature visibility)
+# Demo mode: higher rate limits (50 RPS, 200 burst) for smoother local experience
+# NOTE: Rate limit args must come before Carta-specific args like --lod
 if [ -n "$CARTA_IDX" ] && [ -f "$CARTA_IDX" ]; then
-    ./carta/api/carta-tile-server -p 8081 -t 8 --lod default "$CARTA_IDX" >/dev/null 2>&1 &
+    ./carta/api/carta-tile-server -p 8081 -t 8 \
+        --rate-limit-rps 50 --rate-limit-burst 200 \
+        --lod default "$CARTA_IDX" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - index, 8 threads, LOD enabled"
+    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - index, 8 threads, 50 RPS"
 else
-    ./carta/api/carta-tile-server -p 8081 -t 8 --lod default "$PBF_FILE" >/dev/null 2>&1 &
+    ./carta/api/carta-tile-server -p 8081 -t 8 \
+        --rate-limit-rps 50 --rate-limit-burst 200 \
+        --lod default "$PBF_FILE" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - PBF, 8 threads, LOD enabled"
+    echo "  Started: Carta (http://localhost:8081) [PID: $CARTA_PID] - PBF, 8 threads, 50 RPS"
 fi
 
 # Velo route server (port 8082)

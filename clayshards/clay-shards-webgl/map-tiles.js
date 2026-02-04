@@ -2,6 +2,7 @@
  * Clay Map - Tile Loading Module
  *
  * Handles fetching and caching map tiles from various providers.
+ * Includes retry logic with exponential backoff for rate-limited (429) requests.
  */
 
 // Default tile server base URL (can be overridden)
@@ -40,29 +41,166 @@ export function setCartaServerUrl(url) {
     cartaServerUrl = url.replace(/\/+$/, '');
 }
 
+/**
+ * Parse Retry-After header value.
+ * @param {string|null} value Header value
+ * @returns {number} Milliseconds to wait, or 0 if not parseable
+ */
+function parseRetryAfter(value) {
+    if (!value) return 0;
+
+    // Try parsing as seconds
+    const seconds = parseInt(value, 10);
+    if (!isNaN(seconds) && seconds > 0) {
+        return seconds * 1000;
+    }
+
+    // Try parsing as HTTP date
+    const date = Date.parse(value);
+    if (!isNaN(date)) {
+        return Math.max(0, date - Date.now());
+    }
+
+    return 0;
+}
+
 export class TileCache {
-    constructor(gl, maxSize = 200) {
+    /**
+     * Create a tile cache.
+     * @param {WebGLRenderingContext} gl WebGL context
+     * @param {number} maxSize Maximum cached tiles (default: 200)
+     * @param {Object} retryOptions Retry configuration
+     */
+    constructor(gl, maxSize = 200, {
+        maxRetries = 3,
+        baseDelayMs = 500,
+        maxDelayMs = 5000,
+        jitter = 0.3
+    } = {}) {
         this.gl = gl;
         this.maxSize = maxSize;
         this.cache = new Map();
+
+        // Retry configuration
+        this.maxRetries = maxRetries;
+        this.baseDelayMs = baseDelayMs;
+        this.maxDelayMs = maxDelayMs;
+        this.jitter = jitter;
+
+        // Retry queue: tiles waiting to be retried
+        this.retryQueue = new Map();  // key -> { attempts, nextRetryTime }
+        this.retryTimerId = null;
+
+        // Start retry processor
+        this._startRetryProcessor();
     }
 
+    /**
+     * Get or fetch a tile.
+     */
     getTile(z, x, y, layerType) {
         const key = `${layerType}/${z}/${x}/${y}`;
 
         if (this.cache.has(key)) {
-            return this.cache.get(key);
+            const tile = this.cache.get(key);
+            // If tile had error and is in retry queue, return it anyway (shows placeholder)
+            // The retry processor will update it when successful
+            return tile;
         }
 
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-
         const tileData = {
-            img,
+            img: null,
             loaded: false,
             error: false,
-            texture: null
+            texture: null,
+            z, x, y, layerType  // Store for retry
         };
+
+        this.cache.set(key, tileData);
+        this._fetchTile(key, tileData);
+
+        // Evict old tiles
+        this._evictIfNeeded();
+
+        return tileData;
+    }
+
+    /**
+     * Fetch a tile with retry support.
+     */
+    async _fetchTile(key, tileData) {
+        const { z, x, y, layerType } = tileData;
+        const serverIndex = (layerType >= 0 && layerType < TILE_SERVERS.length) ? layerType : 0;
+        const url = TILE_SERVERS[serverIndex](z, x, y);
+
+        // Use fetch for local Carta server (layerType 0) to handle 429 properly
+        // Use Image for external servers (they handle their own rate limiting)
+        if (layerType === 0) {
+            await this._fetchWithRetry(key, tileData, url);
+        } else {
+            this._fetchWithImage(tileData, url);
+        }
+    }
+
+    /**
+     * Fetch tile using fetch() API with 429 retry support.
+     */
+    async _fetchWithRetry(key, tileData, url) {
+        try {
+            const response = await fetch(url);
+
+            if (response.ok) {
+                // Success - create texture from blob
+                const blob = await response.blob();
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+
+                img.onload = () => {
+                    tileData.loaded = true;
+                    tileData.error = false;
+                    tileData.img = img;
+                    tileData.texture = this.gl.createTexture();
+                    this.gl.bindTexture(this.gl.TEXTURE_2D, tileData.texture);
+                    this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, img);
+                    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+                    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
+                    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+                    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+
+                    // Remove from retry queue if it was there
+                    this.retryQueue.delete(key);
+                };
+
+                img.onerror = () => {
+                    tileData.error = true;
+                };
+
+                img.src = URL.createObjectURL(blob);
+                return;
+            }
+
+            // Handle rate limiting (429) and server errors (5xx)
+            if (response.status === 429 || response.status >= 500) {
+                this._scheduleRetry(key, tileData, response.headers.get('Retry-After'));
+                return;
+            }
+
+            // Other errors (4xx) - don't retry
+            tileData.error = true;
+
+        } catch (err) {
+            // Network error - schedule retry
+            this._scheduleRetry(key, tileData, null);
+        }
+    }
+
+    /**
+     * Fetch tile using Image (for external tile servers).
+     */
+    _fetchWithImage(tileData, url) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        tileData.img = img;
 
         img.onload = () => {
             tileData.loaded = true;
@@ -79,13 +217,74 @@ export class TileCache {
             tileData.error = true;
         };
 
-        // Validate layerType and fallback to OSM if invalid
-        const serverIndex = (layerType >= 0 && layerType < TILE_SERVERS.length) ? layerType : 0;
-        img.src = TILE_SERVERS[serverIndex](z, x, y);
+        img.src = url;
+    }
 
-        this.cache.set(key, tileData);
+    /**
+     * Schedule a tile for retry.
+     */
+    _scheduleRetry(key, tileData, retryAfterHeader) {
+        const existing = this.retryQueue.get(key);
+        const attempts = existing ? existing.attempts + 1 : 1;
 
-        // Evict old tiles
+        if (attempts > this.maxRetries) {
+            // Give up after max retries
+            tileData.error = true;
+            this.retryQueue.delete(key);
+            return;
+        }
+
+        // Calculate delay with exponential backoff + jitter
+        let delay = Math.min(
+            this.baseDelayMs * Math.pow(2, attempts - 1),
+            this.maxDelayMs
+        );
+
+        // Add jitter to prevent thundering herd
+        const jitterAmount = delay * this.jitter * (Math.random() * 2 - 1);
+        delay = Math.max(100, delay + jitterAmount);
+
+        // Honor Retry-After header if present and reasonable
+        const retryAfterMs = parseRetryAfter(retryAfterHeader);
+        if (retryAfterMs > 0 && retryAfterMs < 60000) {
+            delay = Math.max(delay, retryAfterMs);
+        }
+
+        const nextRetryTime = Date.now() + delay;
+
+        this.retryQueue.set(key, {
+            tileData,
+            attempts,
+            nextRetryTime
+        });
+    }
+
+    /**
+     * Start the retry processor.
+     */
+    _startRetryProcessor() {
+        // Process retry queue every 500ms
+        this.retryTimerId = setInterval(() => this._processRetryQueue(), 500);
+    }
+
+    /**
+     * Process pending retries.
+     */
+    _processRetryQueue() {
+        const now = Date.now();
+
+        for (const [key, entry] of this.retryQueue) {
+            if (now >= entry.nextRetryTime) {
+                // Time to retry
+                this._fetchTile(key, entry.tileData);
+            }
+        }
+    }
+
+    /**
+     * Evict oldest tile if cache is full.
+     */
+    _evictIfNeeded() {
         if (this.cache.size > this.maxSize) {
             const iter = this.cache.keys();
             const first = iter.next();
@@ -94,17 +293,31 @@ export class TileCache {
                 const old = this.cache.get(firstKey);
                 if (old && old.texture) this.gl.deleteTexture(old.texture);
                 this.cache.delete(firstKey);
+                this.retryQueue.delete(firstKey);
             }
         }
-
-        return tileData;
     }
 
+    /**
+     * Clear all cached tiles.
+     */
     clear() {
         for (const tile of this.cache.values()) {
             if (tile.texture) this.gl.deleteTexture(tile.texture);
         }
         this.cache.clear();
+        this.retryQueue.clear();
+    }
+
+    /**
+     * Stop the retry processor.
+     */
+    destroy() {
+        if (this.retryTimerId) {
+            clearInterval(this.retryTimerId);
+            this.retryTimerId = null;
+        }
+        this.clear();
     }
 }
 
