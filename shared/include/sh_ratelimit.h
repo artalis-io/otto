@@ -141,6 +141,16 @@ void sh_ratelimit_stats(ShRateLimiter *limiter, ShRateLimitStats *stats);
  */
 void sh_ratelimit_reset(ShRateLimiter *limiter);
 
+/*
+ * Update rate limit parameters (for adaptive capacity).
+ * Thread-safe. Affects new token refills but doesn't reset existing buckets.
+ *
+ * @param limiter   Rate limiter instance
+ * @param rps       New tokens per second (must be > 0)
+ * @param burst     New burst capacity (must be > 0)
+ */
+void sh_ratelimit_update_rate(ShRateLimiter *limiter, double rps, double burst);
+
 #ifdef __cplusplus
 }
 #endif

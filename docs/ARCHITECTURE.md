@@ -455,7 +455,7 @@ make test-fuelwise    # 32 tests
 make test-velo        # 39 tests
 make test-carta       # 33 tests
 make test-locus       # 52 tests
-make test-shared      # 86 tests
+make test-shared      # 103 tests
 make test-api         # All API endpoint tests (requires OSM data)
 make test-fuelwise-api# FuelWise API tests
 make test-velo-api    # Velo API tests

@@ -110,10 +110,12 @@ See `docs/STRATEGY.md` for business strategy and technical positioning.
 ### Working on rate limiting / capacity planning (shared):
 - `shared/include/sh_ratelimit.h` - Token bucket rate limiter (IPv4/IPv6)
 - `shared/include/sh_workqueue.h` - Bounded thread-safe work queue
-- `shared/include/sh_capacity.h` - Queuing theory capacity planning
+- `shared/include/sh_capacity.h` - Queuing theory capacity planning + adaptive tracker
+- `shared/include/sh_args.h` - Common API server argument parsing
 - `shared/src/sh_ratelimit.c` - Rate limiter implementation
 - `shared/src/sh_workqueue.c` - Work queue implementation
-- `shared/src/sh_capacity.c` - M/M/c queue calculations
+- `shared/src/sh_capacity.c` - M/M/c queue calculations + adaptive tracker
+- `shared/src/sh_args.c` - Argument parsing (CLI + env vars)
 
 ### Working on PBF/Protobuf parsing (shared):
 - `shared/include/sh_protobuf.h` - Protobuf read/write primitives
@@ -370,10 +372,10 @@ Geometry encoding:
 
 ```bash
 make test
-# Expected: ~340 tests pass across all modules
+# Expected: ~360 tests pass across all modules
 # - ralph: 73 tests
 # - fuelwise: 33 tests
-# - shared: 86 tests
+# - shared: 103 tests (including adaptive capacity, args parsing)
 # - velo: 47 tests
 # - carta: 33 tests
 # - locus: 52 tests

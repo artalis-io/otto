@@ -69,6 +69,13 @@ typedef struct {
     size_t work_queue_depth;     /* Max pending requests */
     double work_queue_timeout;   /* Request timeout in seconds */
     int render_workers;          /* Number of render worker threads (0 = auto) */
+    /* Adaptive capacity configuration */
+    int adaptive_enabled;        /* 1 = enabled, 0 = disabled */
+    double target_utilization;   /* Target utilization (0.0-1.0) */
+    double client_timeout_ms;    /* Client timeout in milliseconds */
+    int burst_tiles;             /* Tiles in initial map view */
+    size_t adaptive_window;      /* Sample window for percentiles */
+    double adaptive_interval;    /* Recalculation interval (requests) */
 } TileServerConfig;
 
 /* Default configuration */
@@ -89,7 +96,14 @@ static TileServerConfig s_config = {
     .work_queue_enabled = 1,   /* Enabled by default */
     .work_queue_depth = 256,   /* Max 256 pending requests */
     .work_queue_timeout = 5.0, /* 5 second timeout */
-    .render_workers = 0        /* 0 = auto-detect CPU count */
+    .render_workers = 0,       /* 0 = auto-detect CPU count */
+    /* Adaptive capacity defaults */
+    .adaptive_enabled = 0,     /* Disabled by default */
+    .target_utilization = 0.7, /* 70% target */
+    .client_timeout_ms = 10000.0,
+    .burst_tiles = 25,
+    .adaptive_window = 1000,
+    .adaptive_interval = 1000
 };
 
 /* Global state */
@@ -107,6 +121,9 @@ static ShRateLimiter *s_rate_limiter = NULL;
 
 /* Work queue instance (uses shared library) */
 static ShWorkQueue *s_work_queue = NULL;
+
+/* Adaptive capacity tracker (uses shared library) */
+static ShAdaptiveTracker *s_adaptive_tracker = NULL;
 
 /* Render work item - passed through the work queue */
 typedef enum {
@@ -502,6 +519,10 @@ static void *render_worker_fn(void *arg)
             continue;
         }
 
+        /* Measure render time for adaptive capacity */
+        struct timeval render_start, render_end;
+        gettimeofday(&render_start, NULL);
+
         /* Process based on type */
         switch (item->type) {
             case RENDER_TYPE_PNG:
@@ -513,6 +534,26 @@ static void *render_worker_fn(void *arg)
             case RENDER_TYPE_ASCII:
                 process_ascii_render(item);
                 break;
+        }
+
+        /* Record response time for adaptive capacity */
+        gettimeofday(&render_end, NULL);
+        double render_ms = (render_end.tv_sec - render_start.tv_sec) * 1000.0 +
+                           (render_end.tv_usec - render_start.tv_usec) / 1000.0;
+
+        if (s_adaptive_tracker) {
+            sh_adaptive_record(s_adaptive_tracker, render_ms);
+
+            /* Check if rate limiter should be updated */
+            ShCapacityParams new_params;
+            if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
+                /* Update rate limiter with new parameters */
+                if (s_rate_limiter) {
+                    sh_ratelimit_update_rate(s_rate_limiter,
+                                             new_params.rate_limit_rps,
+                                             new_params.rate_limit_burst);
+                }
+            }
         }
 
         /* Signal completion */
@@ -678,6 +719,32 @@ static void load_config_env(TileServerConfig *cfg) {
     if ((val = getenv("CARTA_RENDER_WORKERS"))) {
         cfg->render_workers = atoi(val);
     }
+    /* Adaptive capacity configuration */
+    if ((val = getenv("CARTA_ADAPTIVE_ENABLED"))) {
+        cfg->adaptive_enabled = (atoi(val) != 0);
+    }
+    if ((val = getenv("CARTA_TARGET_UTILIZATION"))) {
+        cfg->target_utilization = atof(val);
+        if (cfg->target_utilization <= 0 || cfg->target_utilization > 1.0) {
+            cfg->target_utilization = 0.7;
+        }
+    }
+    if ((val = getenv("CARTA_CLIENT_TIMEOUT"))) {
+        cfg->client_timeout_ms = atof(val);
+        if (cfg->client_timeout_ms <= 0) cfg->client_timeout_ms = 10000.0;
+    }
+    if ((val = getenv("CARTA_BURST_TILES"))) {
+        cfg->burst_tiles = atoi(val);
+        if (cfg->burst_tiles <= 0) cfg->burst_tiles = 25;
+    }
+    if ((val = getenv("CARTA_ADAPTIVE_WINDOW"))) {
+        cfg->adaptive_window = (size_t)atol(val);
+        if (cfg->adaptive_window < 100) cfg->adaptive_window = 1000;
+    }
+    if ((val = getenv("CARTA_ADAPTIVE_INTERVAL"))) {
+        cfg->adaptive_interval = atof(val);
+        if (cfg->adaptive_interval <= 0) cfg->adaptive_interval = 1000;
+    }
 }
 
 /* ============================================================================
@@ -768,7 +835,16 @@ static void handle_stats(struct mg_connection *c) {
         ct_cache_stats(s_mvt_cache, &mvt_entries, &mvt_bytes, &mvt_hits, &mvt_misses);
     }
 
-    char response[2048];
+    /* Get adaptive capacity stats */
+    ShAdaptiveStats adaptive_stats = {0};
+    ShCapacityParams adaptive_params = {0};
+    int has_adaptive_params = 0;
+    if (s_adaptive_tracker) {
+        sh_adaptive_stats(s_adaptive_tracker, &adaptive_stats);
+        has_adaptive_params = sh_adaptive_get_params(s_adaptive_tracker, &adaptive_params);
+    }
+
+    char response[4096];
     snprintf(response, sizeof(response),
         "{\n"
         "  \"pbf\": {\n"
@@ -789,8 +865,17 @@ static void handle_stats(struct mg_connection *c) {
         "  },\n"
         "  \"rate_limit\": {\n"
         "    \"enabled\": %s,\n"
+        "    \"rps\": %.1f,\n"
+        "    \"burst\": %.0f,\n"
         "    \"allowed\": %lu,\n"
         "    \"denied\": %lu\n"
+        "  },\n"
+        "  \"adaptive\": {\n"
+        "    \"enabled\": %s,\n"
+        "    \"samples\": %lu,\n"
+        "    \"recalculations\": %lu,\n"
+        "    \"response_ms\": {\"p50\": %.1f, \"p90\": %.1f, \"p99\": %.1f, \"avg\": %.1f, \"ema\": %.1f},\n"
+        "    \"current\": {\"rate_limit_rps\": %.1f, \"queue_depth\": %zu, \"throughput_rps\": %.1f}\n"
         "  },\n"
         "  \"cache\": {\n"
         "    \"png\": {\"entries\": %zu, \"bytes\": %zu, \"hits\": %lu, \"misses\": %lu},\n"
@@ -804,7 +889,15 @@ static void handle_stats(struct mg_connection *c) {
         (unsigned long)wq_stats.total_pushed, (unsigned long)wq_stats.total_popped,
         (unsigned long)wq_stats.total_dropped, (unsigned long)wq_stats.total_expired,
         s_rate_limiter ? "true" : "false",
+        s_config.rate_limit_rps, s_config.rate_limit_burst,
         (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied,
+        s_adaptive_tracker ? "true" : "false",
+        (unsigned long)adaptive_stats.sample_count, (unsigned long)adaptive_stats.recalc_count,
+        adaptive_stats.p50_ms, adaptive_stats.p90_ms, adaptive_stats.p99_ms,
+        adaptive_stats.avg_ms, adaptive_stats.ema_ms,
+        has_adaptive_params ? adaptive_params.rate_limit_rps : 0.0,
+        has_adaptive_params ? adaptive_params.queue_depth : 0,
+        has_adaptive_params ? adaptive_params.max_throughput_rps : 0.0,
         png_entries, png_bytes, (unsigned long)png_hits, (unsigned long)png_misses,
         mvt_entries, mvt_bytes, (unsigned long)mvt_hits, (unsigned long)mvt_misses);
     send_json(c, 200, response);
@@ -1376,6 +1469,12 @@ static void print_usage(const char *prog) {
     printf("  CARTA_WORK_QUEUE_DEPTH      Max pending requests (default: 256)\n");
     printf("  CARTA_WORK_QUEUE_TIMEOUT    Request timeout in seconds (default: 5)\n");
     printf("  CARTA_RENDER_WORKERS        Render worker count (0 = auto)\n");
+    printf("  CARTA_ADAPTIVE_ENABLED      Enable adaptive capacity (default: 0)\n");
+    printf("  CARTA_TARGET_UTILIZATION    Target utilization 0.0-1.0 (default: 0.7)\n");
+    printf("  CARTA_CLIENT_TIMEOUT        Client timeout in ms (default: 10000)\n");
+    printf("  CARTA_BURST_TILES           Tiles in initial view (default: 25)\n");
+    printf("  CARTA_ADAPTIVE_WINDOW       Sample window size (default: 1000)\n");
+    printf("  CARTA_ADAPTIVE_INTERVAL     Recalc interval in requests (default: 1000)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s -p 8081 hungary-latest.osm.pbf\n", prog);
@@ -1424,6 +1523,19 @@ int main(int argc, char *argv[]) {
                 strncpy(s_config.save_index_path, argv[i], sizeof(s_config.save_index_path) - 1);
                 s_config.save_index_path[sizeof(s_config.save_index_path) - 1] = '\0';
             }
+        } else if (strcmp(argv[i], "--adaptive") == 0) {
+            s_config.adaptive_enabled = 1;
+        } else if (strcmp(argv[i], "--utilization") == 0) {
+            if (++i < argc) {
+                s_config.target_utilization = atof(argv[i]);
+                if (s_config.target_utilization <= 0 || s_config.target_utilization > 1.0) {
+                    s_config.target_utilization = 0.7;
+                }
+            }
+        } else if (strcmp(argv[i], "--client-timeout") == 0) {
+            if (++i < argc) s_config.client_timeout_ms = atof(argv[i]);
+        } else if (strcmp(argv[i], "--burst-tiles") == 0) {
+            if (++i < argc) s_config.burst_tiles = atoi(argv[i]);
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -1577,6 +1689,29 @@ int main(int argc, char *argv[]) {
         printf("Work queue: disabled\n");
     }
 
+    /* Initialize adaptive capacity tracker */
+    if (s_config.adaptive_enabled) {
+        ShAdaptiveConfig adaptive_cfg;
+        sh_adaptive_config_init(&adaptive_cfg);
+        adaptive_cfg.num_workers = s_num_render_workers > 0 ? s_num_render_workers : 4;
+        adaptive_cfg.target_utilization = s_config.target_utilization;
+        adaptive_cfg.client_timeout_ms = s_config.client_timeout_ms;
+        adaptive_cfg.burst_tiles = s_config.burst_tiles;
+        adaptive_cfg.window_size = s_config.adaptive_window;
+        adaptive_cfg.recalc_interval = s_config.adaptive_interval;
+
+        s_adaptive_tracker = sh_adaptive_create(&adaptive_cfg);
+        if (s_adaptive_tracker) {
+            printf("Adaptive capacity: enabled (window=%zu, interval=%.0f, util=%.0f%%)\n",
+                   s_config.adaptive_window, s_config.adaptive_interval,
+                   s_config.target_utilization * 100.0);
+        } else {
+            fprintf(stderr, "Warning: Failed to create adaptive tracker\n");
+        }
+    } else {
+        printf("Adaptive capacity: disabled\n");
+    }
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -1628,6 +1763,7 @@ int main(int argc, char *argv[]) {
             sh_workqueue_free(s_work_queue);
         }
         sh_ratelimit_free(s_rate_limiter);
+        sh_adaptive_free(s_adaptive_tracker);
         ct_cache_free(s_png_cache);
         ct_cache_free(s_mvt_cache);
         ct_lod_free(&s_lod_config);
@@ -1702,6 +1838,7 @@ int main(int argc, char *argv[]) {
     free(s_render_workers);
     sh_workqueue_free(s_work_queue);
     sh_ratelimit_free(s_rate_limiter);
+    sh_adaptive_free(s_adaptive_tracker);
     ct_cache_free(s_png_cache);
     ct_cache_free(s_mvt_cache);
     ct_lod_free(&s_lod_config);
