@@ -80,13 +80,24 @@ echo ""
 LOCUS_IDX="$INDEX_DIR/$REGION-locus.idx"
 CARTA_IDX="$INDEX_DIR/$REGION-carta.idx"
 
+# Cross-platform file size helper (works on macOS and Linux)
+get_file_size() {
+    local file="$1"
+    if [ -f "$file" ]; then
+        # Try GNU stat first (Linux), then BSD stat (macOS)
+        stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "0"
+    else
+        echo "0"
+    fi
+}
+
 # Helper: check if index file is valid (exists and non-empty)
 # Minimum size: 1KB to catch truncated files
 is_valid_index() {
     local file="$1"
     local min_size="${2:-1024}"  # Default 1KB minimum
     if [ -f "$file" ]; then
-        local size=$(stat -c%s "$file" 2>/dev/null || echo "0")
+        local size=$(get_file_size "$file")
         if [ "$size" -ge "$min_size" ]; then
             return 0  # Valid
         fi
@@ -102,7 +113,7 @@ echo "Checking index files..."
 # Check for Carta index (minimum 1MB for valid index)
 # This block is independent of Locus index status
 if is_valid_index "$CARTA_IDX" 1048576; then
-    CARTA_SIZE=$(stat -c%s "$CARTA_IDX" 2>/dev/null)
+    CARTA_SIZE=$(get_file_size "$CARTA_IDX")
     echo -e "  ${GREEN}Found: $CARTA_IDX ($(numfmt --to=iec-i --suffix=B $CARTA_SIZE 2>/dev/null || echo "${CARTA_SIZE} bytes"))${NC}"
 else
     # Remove invalid/truncated file if it exists
@@ -133,7 +144,7 @@ else
                 # Process exited - file should be complete
                 break
             fi
-            CURR_SIZE=$(stat -c%s "$CARTA_IDX" 2>/dev/null || echo "0")
+            CURR_SIZE=$(get_file_size "$CARTA_IDX")
             if [ "$CURR_SIZE" = "$PREV_SIZE" ]; then
                 STABLE_COUNT=$((STABLE_COUNT + 1))
             else
@@ -157,7 +168,7 @@ fi
 # Check for Locus index (minimum 100KB for valid index)
 # This block is independent of Carta index status
 if is_valid_index "$LOCUS_IDX" 102400; then
-    LOCUS_SIZE=$(stat -c%s "$LOCUS_IDX" 2>/dev/null)
+    LOCUS_SIZE=$(get_file_size "$LOCUS_IDX")
     echo -e "  ${GREEN}Found: $LOCUS_IDX ($(numfmt --to=iec-i --suffix=B $LOCUS_SIZE 2>/dev/null || echo "${LOCUS_SIZE} bytes"))${NC}"
 else
     # Remove invalid/truncated file if it exists
@@ -190,7 +201,7 @@ else
                 # Process exited - file should be complete
                 break
             fi
-            CURR_SIZE=$(stat -c%s "$LOCUS_IDX" 2>/dev/null || echo "0")
+            CURR_SIZE=$(get_file_size "$LOCUS_IDX")
             if [ "$CURR_SIZE" = "$PREV_SIZE" ]; then
                 STABLE_COUNT=$((STABLE_COUNT + 1))
             else
@@ -244,12 +255,12 @@ else
 fi
 
 # Start demo HTTP server (port 8000)
-# Serve from clayshards so that relative imports work (demo imports ../clay-shards-webgl)
-cd clayshards
+# Serve from project root so that relative imports work:
+# - Demo at clayshards/clay-shards-demo/ imports ../clay-shards-webgl (works)
+# - WebGL imports ../../shared/js/ for resilience utilities (works from root)
 python3 -m http.server 8000 >/dev/null 2>&1 &
 DEMO_PID=$!
-cd ..
-echo "  Started: Demo (http://localhost:8000/clay-shards-demo/) [PID: $DEMO_PID]"
+echo "  Started: Demo (http://localhost:8000/clayshards/clay-shards-demo/) [PID: $DEMO_PID]"
 
 echo ""
 echo "Waiting for servers to be ready..."
@@ -279,7 +290,7 @@ wait_for_server "Locus" "http://localhost:8083/api/v1/health" 300
 echo ""
 echo -e "${GREEN}=== All servers running ===${NC}"
 echo ""
-echo "  Demo:     http://localhost:8000/clay-shards-demo/"
+echo "  Demo:     http://localhost:8000/clayshards/clay-shards-demo/"
 echo "  Carta:    http://localhost:8081"
 echo "  Velo:     http://localhost:8082"
 echo "  Locus:    http://localhost:8083"
