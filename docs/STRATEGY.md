@@ -904,5 +904,349 @@ Serving owner-operators isn't charity. It's:
 
 ---
 
-*Document version: 1.3*
+## 14. Strategic Partnerships
+
+OTTO's open architecture creates partnership opportunities across the logistics value chain. The strategy is to become embedded infrastructure that multiple players depend on, increasing both value and defensibility.
+
+### 14.1 Partnership Thesis
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     LOGISTICS VALUE CHAIN                        │
+│                                                                  │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐     │
+│  │   OEMs   │   │ Payments │   │ Brokers  │   │  Fleets  │     │
+│  │ Daimler  │   │   WEX    │   │ Sennder  │   │ Girteka  │     │
+│  │  Volvo   │   │          │   │          │   │ Waberer's│     │
+│  └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘     │
+│       │              │              │              │            │
+│       └──────────────┴──────────────┴──────────────┘            │
+│                              │                                   │
+│                              ▼                                   │
+│                    ┌──────────────────┐                         │
+│                    │       OTTO       │                         │
+│                    │   (open source   │                         │
+│                    │   infrastructure)│                         │
+│                    └──────────────────┘                         │
+│                              │                                   │
+│                              ▼                                   │
+│                    ┌──────────────────┐                         │
+│                    │     Trimble      │                         │
+│                    │ (TMS ecosystem)  │                         │
+│                    └──────────────────┘                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**The strategic position:** OTTO becomes the planning layer that everyone integrates with, regardless of their position in the value chain.
+
+### 14.2 WEX (Fleet Payments)
+
+**Company profile:**
+- Fleet payment solutions: fuel cards, maintenance, tolls
+- ~500,000+ commercial fleet customers
+- Real-time fuel pricing data across station network
+- Serves enterprise fleets AND owner-operators
+
+**Partnership value exchange:**
+
+| WEX Provides | OTTO Provides |
+|--------------|---------------|
+| Real-time fuel prices | Route optimization algorithms |
+| Station network data | Customer stickiness tool |
+| Distribution (500k fleets) | Differentiation vs Comdata/Shell |
+| API access | Transaction volume to WEX network |
+
+**Integration concept:**
+
+```
+Driver: "Route me from Chicago to Denver"
+
+OTTO: "Optimal route: I-80
+       Recommended fuel stops:
+       ★ WEX Station, North Platte, NE - $3.42/gal (save $47 vs next option)
+       ★ WEX Station, Cheyenne, WY - $3.38/gal (save $31 vs next option)
+
+       Total trip savings: $78 by using WEX stations"
+```
+
+**Engagement path:**
+
+| Phase | Engagement | Outcome |
+|-------|------------|---------|
+| 1 | Data partnership | WEX provides fuel price API |
+| 2 | Integration | OTTO prioritizes WEX stations in recommendations |
+| 3 | Co-marketing | WEX promotes OTTO to fleet customers |
+| 4 | Strategic investment | WEX invests $2-5M for preferred partnership |
+| 5 | Acquisition option | WEX acquires OTTO to own the optimization layer |
+
+**Pitch to WEX:**
+
+> "Your fuel card is a commodity. Optimization makes it sticky. When a driver's planning tool tells them 'stop at this WEX station to save $47,' they don't switch to Comdata. We turn your data into customer retention."
+
+### 14.3 Daimler Truck (OEM)
+
+**Company profile:**
+- Largest truck manufacturer globally (Freightliner, Western Star, Mercedes-Benz Trucks)
+- Detroit Connect telematics platform
+- Fleetboard fleet management (EU)
+- Strategic push into recurring software revenue
+
+**Partnership value exchange:**
+
+| Daimler Provides | OTTO Provides |
+|------------------|---------------|
+| OEM distribution (new truck sales) | Differentiation vs Volvo/PACCAR |
+| Telematics data (fuel consumption, location) | Value-add for Detroit Connect |
+| R&D partnership resources | Optimization for Daimler powertrains |
+| Global reach | Reduced fuel costs = sustainability story |
+
+**Integration concept:**
+
+```
+"Your new Freightliner Cascadia comes with OTTO planning.
+
+ Optimized for your Detroit DD15 engine's actual fuel curve.
+ Connected to your Detroit Connect telematics.
+ Recommended routes and fuel stops that save 8-12% on fuel."
+```
+
+**Strategic fit:**
+
+- Daimler wants recurring revenue beyond truck sales
+- Fuel efficiency is a key purchasing criterion
+- Sustainability reporting requires optimization data
+- OTTO embedded in trucks = competitive advantage vs Volvo/PACCAR
+
+**Engagement path:**
+
+| Phase | Engagement | Outcome |
+|-------|------------|---------|
+| 1 | Technical evaluation | Daimler engineering assesses OTTO |
+| 2 | Pilot | 100 fleet customers get OTTO via Detroit Connect |
+| 3 | Integration partnership | OTTO bundled with Detroit Connect subscription |
+| 4 | Co-development | Optimize specifically for Detroit powertrain efficiency curves |
+| 5 | Strategic investment or acquisition | Daimler brings OTTO in-house |
+
+### 14.4 Volvo Trucks (OEM)
+
+**Company profile:**
+- Second-largest truck manufacturer
+- Volvo Connect telematics platform
+- Strong sustainability brand and commitments
+- Nordic headquarters, strong EU presence
+
+**Partnership value exchange:**
+
+| Volvo Provides | OTTO Provides |
+|----------------|---------------|
+| OEM distribution | Fuel efficiency as selling point |
+| Volvo Connect integration | Concrete sustainability metrics |
+| Sustainability credibility | Route optimization = reduced emissions |
+| EU market access | Nordic engineering reputation alignment |
+
+**Strategic fit:**
+
+- Volvo's brand is built on safety AND sustainability
+- "Volvo trucks with OTTO planning reduce fleet emissions by X%"
+- Aligns with EU Green Deal and emissions regulations
+- Differentiates from Daimler on the sustainability axis
+
+**Pitch to Volvo:**
+
+> "You sell safe, efficient trucks. We make them measurably more efficient. Let's quantify: 'Volvo + OTTO = 12% lower fuel consumption, 12% lower CO2.' That's a marketing story and a regulatory compliance story."
+
+### 14.5 Trimble (TMS Ecosystem)
+
+**Company profile:**
+- Major transportation management software provider
+- Acquired Nexogen (2022) for planning capabilities
+- TMW, PeopleNet, ALK (CoPilot) in portfolio
+- Enterprise focus, strong North American presence
+
+**Relationship complexity:**
+
+Trimble is simultaneously:
+- A potential acquirer (already expressed interest via job offer)
+- A competitor (they have planning via Nexogen acquisition)
+- A potential partner (integration with their TMS ecosystem)
+
+**Partnership angle (before acquisition):**
+
+| Trimble Provides | OTTO Provides |
+|------------------|---------------|
+| TMS distribution (TMW, etc.) | Modern planning engine |
+| Sales channel | Open source credibility |
+| Enterprise credibility | Nimble development velocity |
+| Integration support | Fresh approach vs legacy Nexogen code |
+
+**Why Trimble might partner before acquiring:**
+
+1. **Lower risk** — See OTTO work with their customers before committing to acquisition
+2. **Faster** — Integration is quicker than internal development
+3. **Validation** — Customer feedback validates acquisition thesis
+4. **Option value** — Partnership converts to acquisition if successful
+
+**Engagement path:**
+
+| Phase | Engagement | Outcome |
+|-------|------------|---------|
+| 1 | Technical discussion | "Here's what OTTO does, here's the API" |
+| 2 | Design partnership | 2-3 Trimble customers pilot OTTO |
+| 3 | Integration certification | OTTO certified for TMW integration |
+| 4 | Reseller agreement | Trimble sells OTTO to their base |
+| 5 | Acquisition | Trimble buys OTTO (€30-80M based on traction) |
+
+**Pitch to Trimble:**
+
+> "You bought Nexogen for planning. I built Nexogen's planning. OTTO is the next generation—open source, WASM-native, zero-dependency. Let's run a pilot with 3 TMW customers. If it works, we talk acquisition. If not, you've lost nothing."
+
+### 14.6 Sennder (Digital Freight)
+
+**Company profile:**
+- Leading European digital freight forwarder
+- €1B+ raised, acquired Uber Freight EU
+- Asset-light broker model
+- Tech-forward, acquisitive
+
+**Partnership value exchange:**
+
+| Sennder Provides | OTTO Provides |
+|------------------|---------------|
+| Carrier network access | Carrier loyalty tool |
+| Distribution to carriers | Optimization = better capacity for Sennder |
+| Investment capital | More efficient carriers = tighter rates possible |
+| EU market presence | Tech differentiation vs other brokers |
+
+**Strategic fit:**
+
+Sennder's carriers are mostly small-to-mid fleets and owner-operators. These are exactly the underserved segments OTTO targets.
+
+**Integration concept:**
+
+```
+"Haul for Sennder → Get free OTTO planning
+
+ We help our carriers run more efficiently:
+ - Optimized routes between Sennder loads
+ - Fuel cost minimization
+ - HoS compliance built-in
+
+ More efficient carriers = more capacity for us."
+```
+
+**Why this works for Sennder:**
+
+- Carrier retention (switching to Convoy means losing OTTO)
+- Better carrier economics = they accept tighter rates
+- Differentiation vs other digital brokers
+- Data on carrier behavior and capacity
+
+**Engagement path:**
+
+| Phase | Engagement | Outcome |
+|-------|------------|---------|
+| 1 | Pilot | 50 Sennder carriers get OTTO free |
+| 2 | Measure | Track utilization, deadhead, retention |
+| 3 | Rollout | Offer to all Sennder carriers |
+| 4 | Co-marketing | "Haul for Sennder, optimize with OTTO" |
+| 5 | Investment or acquisition | Sennder brings OTTO in-house |
+
+### 14.7 Girteka (Strategic Fleet Customer)
+
+**Company profile:**
+- Largest European trucking fleet (~10,000+ trucks)
+- Lithuanian HQ, pan-European operations
+- Used Nexogen planning (now Trimble)
+- Sophisticated operations team
+
+**Partnership value exchange:**
+
+| Girteka Provides | OTTO Provides |
+|------------------|---------------|
+| Anchor customer credibility | Planning without Trimble lock-in |
+| Design partner feedback | EU regulatory expertise (EC 561) |
+| Reference for other fleets | Customization for mega-fleet scale |
+| Enterprise contract (€300-500k/year) | Long-term roadmap influence |
+
+**Why Girteka specifically:**
+
+1. **Relationship** — They know the OTTO team from Nexogen days
+2. **Pain** — They're stuck with Trimble post-acquisition, uncertain roadmap
+3. **Scale** — Proving OTTO works at 10,000 trucks proves it works anywhere
+4. **Logo** — "Girteka uses OTTO" closes deals across EU
+
+**Strategic role:**
+
+Girteka isn't just a customer—they're a **design partner** for enterprise features:
+
+- What does HoSE need to handle EC 561 edge cases?
+- What Tempo constraints matter for cross-border operations?
+- What scale does Sigma need for 10,000-truck assignment?
+- What TMS integrations are critical (they probably use SAP)?
+
+**Engagement path:**
+
+| Phase | Engagement | Outcome |
+|-------|------------|---------|
+| 1 | Conversation | "I'm building the next generation. Want to shape it?" |
+| 2 | Design partnership | Monthly feedback sessions, early access |
+| 3 | Pilot | 500 trucks run parallel OTTO vs Trimble |
+| 4 | Migration | Full cutover to OTTO |
+| 5 | Case study | Public reference for EU market |
+
+**Pitch to Girteka:**
+
+> "You know what happened with Nexogen. Trimble bought it, and now you're waiting to see if they care about EU operations. I'm building OTTO—open source, so you're never locked in again. Be my design partner. Shape the roadmap. If it works, you get planning that nobody can take away from you."
+
+### 14.8 Partnership Prioritization Matrix
+
+| Partner | Strategic Value | Ease of Engagement | Timing |
+|---------|-----------------|-------------------|--------|
+| Girteka | ★★★★★ | ★★★★☆ | Now (design partner) |
+| WEX | ★★★★☆ | ★★★☆☆ | Prototype ready |
+| Sennder | ★★★★☆ | ★★★☆☆ | After first enterprise customer |
+| Trimble | ★★★★★ | ★★☆☆☆ | After 3-5 customers (leverage) |
+| Daimler | ★★★★☆ | ★★☆☆☆ | After proven at scale |
+| Volvo | ★★★★☆ | ★★☆☆☆ | After proven at scale |
+
+**Recommended sequence:**
+
+1. **Girteka** — Now. Design partner, anchor customer, EU credibility.
+2. **WEX** — With working prototype. Data partnership, distribution potential.
+3. **Sennder** — After first paying customer. Carrier network distribution.
+4. **Trimble** — After 3-5 customers. Negotiate from strength, not need.
+5. **OEMs (Daimler/Volvo)** — After proven at scale. They move slow; need proof.
+
+### 14.9 Partnership Negotiation Principles
+
+**From a position of strength:**
+
+| Principle | Application |
+|-----------|-------------|
+| **Open source is leverage** | "We don't need you. The code is free. Partnership is about acceleration, not survival." |
+| **Multiple options** | Always have 2-3 partnership conversations active. Never be desperate. |
+| **Revenue before partnership** | Having paying customers means you're not asking for validation, you're offering access. |
+| **Protect the core** | Never make the open source engines proprietary for a partner. That's the trust foundation. |
+| **Commercial layer is negotiable** | Nexus connectors, white-labeling, co-branding—all on the table for the right deal. |
+
+**What to trade:**
+
+| OTTO Gives | OTTO Gets |
+|------------|-----------|
+| Preferred integration / optimization | Data access (WEX fuel prices) |
+| White-label option | Distribution (OEM bundling) |
+| Custom development priority | Design partner feedback |
+| Roadmap influence | Anchor customer commitment |
+| Co-marketing rights | Investment or revenue guarantee |
+
+**What to protect:**
+
+- Core engines stay MIT licensed, always
+- No exclusivity on the open source layer
+- OTTO brand on the planning engine (co-branding OK, not erasure)
+- Right to serve competitors (non-exclusive partnerships)
+
+---
+
+*Document version: 1.4*
 *Last updated: February 2026*
