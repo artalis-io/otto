@@ -600,6 +600,55 @@ sh_adaptive_stats(s_adaptive_tracker, &adaptive_stats);
 
 When OTTO components act as HTTP **clients** (e.g., calling external APIs, tile servers, routing services), they must handle backpressure gracefully.
 
+**Shared Library APIs (Preferred):**
+
+OTTO provides production-ready implementations in `shared/`:
+- `sh_circuit.h` - Thread-safe circuit breaker
+- `sh_backoff.h` - Exponential backoff with jitter
+- `sh_retry.h` - HTTP retry logic combining circuit + backoff
+- `sh_cors.h` - CORS header generation utilities
+
+```c
+#include "sh_circuit.h"
+#include "sh_backoff.h"
+#include "sh_retry.h"
+#include "sh_cors.h"
+
+// Example: Using the retry API
+ShCircuitBreaker *circuit = sh_circuit_create(NULL);  // Uses defaults
+ShRetryContext ctx;
+sh_retry_init(&ctx, circuit, NULL);  // Uses defaults
+
+while (sh_retry_should_attempt(&ctx)) {
+    int status = make_http_request();
+    double delay = sh_retry_after_response(&ctx, status, get_retry_after_header());
+
+    if (!sh_retry_should_continue(&ctx)) {
+        break;  // Success or non-retryable error
+    }
+
+    usleep((useconds_t)(delay * 1000));  // Wait before retry
+}
+
+sh_circuit_free(circuit);
+```
+
+Configuration via environment variables (using `sh_args.h`):
+```
+{PREFIX}_CIRCUIT_ENABLED=1
+{PREFIX}_CIRCUIT_FAILURE_THRESHOLD=5
+{PREFIX}_CIRCUIT_SUCCESS_THRESHOLD=2
+{PREFIX}_CIRCUIT_OPEN_MS=30000
+{PREFIX}_RETRY_MAX_ATTEMPTS=3
+{PREFIX}_RETRY_BASE_DELAY_MS=100
+{PREFIX}_RETRY_MAX_DELAY_MS=10000
+{PREFIX}_RETRY_JITTER_FACTOR=0.5
+{PREFIX}_CORS_ORIGINS=https://app.example.com
+{PREFIX}_CORS_CREDENTIALS=0
+```
+
+**Implementation details follow for understanding the patterns (prefer using shared/ APIs):**
+
 #### HTTP Status Code Handling
 
 | Status | Meaning | Client Action |
@@ -743,6 +792,42 @@ void circuit_breaker_record_failure(CircuitBreaker *cb) {
 ```
 
 #### CORS Handling (Server-Side)
+
+**Using sh_cors.h (Preferred):**
+
+```c
+#include "sh_cors.h"
+
+// Initialize CORS config (in server init)
+ShCorsConfig cors;
+sh_cors_init(&cors);
+sh_cors_parse_origins(&cors, getenv("CARTA_CORS_ORIGINS"));  // "https://app.example.com,https://other.com"
+cors.allow_credentials = atoi(getenv("CARTA_CORS_CREDENTIALS") ?: "0");
+
+// In request handler
+static void handle_request(struct mg_connection *c, struct mg_http_message *hm) {
+    struct mg_str origin_hdr = mg_http_get_header(hm, "Origin");
+    char origin[256] = "";
+    if (origin_hdr.buf) {
+        snprintf(origin, sizeof(origin), "%.*s", (int)origin_hdr.len, origin_hdr.buf);
+    }
+
+    // Handle OPTIONS preflight
+    if (mg_strcmp(hm->method, mg_str("OPTIONS")) == 0) {
+        char cors_headers[512];
+        int len = sh_cors_preflight_headers(&cors, origin, cors_headers, sizeof(cors_headers));
+        mg_printf(c, "HTTP/1.1 204 No Content\r\n%s\r\n", cors_headers);
+        return;
+    }
+
+    // Regular response with CORS headers
+    char cors_headers[256];
+    sh_cors_headers(&cors, origin, cors_headers, sizeof(cors_headers));
+    mg_printf(c, "HTTP/1.1 200 OK\r\n%sContent-Type: application/json\r\n\r\n", cors_headers);
+}
+```
+
+**Manual implementation (for reference):**
 
 ```c
 // Standard CORS headers for API responses
@@ -1386,12 +1471,14 @@ Before marking a module as "hardened":
 - [ ] CORS headers on all responses (including OPTIONS preflight)
 
 **API Client Resilience (HTTP clients):**
-- [ ] HTTP 429/503/504 handled with backoff
-- [ ] Exponential backoff with jitter implemented
-- [ ] Circuit breaker for failing downstream services
+- [ ] Uses `sh_retry.h` or equivalent for HTTP retry logic
+- [ ] Uses `sh_circuit.h` for circuit breaker protection
+- [ ] Uses `sh_backoff.h` for exponential backoff with jitter
+- [ ] HTTP 429/503/504 handled with backoff (via `sh_retry_is_retryable_status()`)
 - [ ] Maximum retry count bounded (not infinite)
 - [ ] Retry-After header respected when present
-- [ ] Retry/circuit/timeout settings configurable via env vars
+- [ ] Circuit breaker settings configurable via env vars (`{PREFIX}_CIRCUIT_*`)
+- [ ] Uses `sh_cors.h` for CORS header generation (server-side)
 
 **Static/Global and Thread Safety:**
 - [ ] **Libraries**: No static/global mutable state (use context structs)

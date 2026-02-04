@@ -3,6 +3,10 @@
  */
 
 #include "shared.h"
+#include "sh_circuit.h"
+#include "sh_backoff.h"
+#include "sh_retry.h"
+#include "sh_cors.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1693,6 +1697,509 @@ TEST(args_prefix)
 }
 
 /* ============================================================================
+ * Circuit Breaker Tests
+ * ============================================================================ */
+
+TEST(circuit_create_free)
+{
+    ShCircuitBreaker *cb = sh_circuit_create(NULL);
+    ASSERT(cb != NULL);
+    sh_circuit_free(cb);
+}
+
+TEST(circuit_create_with_config)
+{
+    ShCircuitConfig config = {
+        .failure_threshold = 3,
+        .success_threshold = 1,
+        .open_duration_ms = 5000.0
+    };
+    ShCircuitBreaker *cb = sh_circuit_create(&config);
+    ASSERT(cb != NULL);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_CLOSED);
+    sh_circuit_free(cb);
+}
+
+TEST(circuit_free_null_safe)
+{
+    sh_circuit_free(NULL);  /* Should not crash */
+}
+
+TEST(circuit_allow_closed)
+{
+    ShCircuitBreaker *cb = sh_circuit_create(NULL);
+    ASSERT(cb != NULL);
+
+    /* Closed circuit always allows */
+    for (int i = 0; i < 10; i++) {
+        ASSERT_EQ(sh_circuit_allow(cb), 1);
+    }
+
+    sh_circuit_free(cb);
+}
+
+TEST(circuit_opens_on_failures)
+{
+    ShCircuitConfig config = { .failure_threshold = 3, .success_threshold = 2, .open_duration_ms = 100000.0 };
+    ShCircuitBreaker *cb = sh_circuit_create(&config);
+    ASSERT(cb != NULL);
+
+    /* Record 3 failures - should trip circuit */
+    sh_circuit_record(cb, 0);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_CLOSED);
+    sh_circuit_record(cb, 0);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_CLOSED);
+    sh_circuit_record(cb, 0);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_OPEN);
+
+    /* Now allow should return 0 */
+    ASSERT_EQ(sh_circuit_allow(cb), 0);
+
+    sh_circuit_free(cb);
+}
+
+TEST(circuit_success_resets_failures)
+{
+    ShCircuitConfig config = { .failure_threshold = 3, .success_threshold = 2, .open_duration_ms = 100000.0 };
+    ShCircuitBreaker *cb = sh_circuit_create(&config);
+    ASSERT(cb != NULL);
+
+    /* 2 failures, then success - should reset */
+    sh_circuit_record(cb, 0);
+    sh_circuit_record(cb, 0);
+    sh_circuit_record(cb, 1);  /* Success resets counter */
+    sh_circuit_record(cb, 0);  /* This is now failure #1 */
+    sh_circuit_record(cb, 0);  /* Failure #2 */
+
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_CLOSED);
+
+    sh_circuit_free(cb);
+}
+
+TEST(circuit_half_open_recovers)
+{
+    ShCircuitConfig config = { .failure_threshold = 2, .success_threshold = 2, .open_duration_ms = 1.0 }; /* 1ms */
+    ShCircuitBreaker *cb = sh_circuit_create(&config);
+    ASSERT(cb != NULL);
+
+    /* Trip the circuit */
+    sh_circuit_record(cb, 0);
+    sh_circuit_record(cb, 0);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_OPEN);
+
+    /* Wait for open duration */
+    struct timespec ts = { 0, 5000000 };  /* 5ms */
+    nanosleep(&ts, NULL);
+
+    /* Allow should transition to half-open */
+    ASSERT_EQ(sh_circuit_allow(cb), 1);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_HALF_OPEN);
+
+    /* Record successes to close */
+    sh_circuit_record(cb, 1);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_HALF_OPEN);
+    sh_circuit_record(cb, 1);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_CLOSED);
+
+    sh_circuit_free(cb);
+}
+
+TEST(circuit_half_open_failure_reopens)
+{
+    ShCircuitConfig config = { .failure_threshold = 2, .success_threshold = 2, .open_duration_ms = 1.0 };
+    ShCircuitBreaker *cb = sh_circuit_create(&config);
+    ASSERT(cb != NULL);
+
+    /* Trip the circuit */
+    sh_circuit_record(cb, 0);
+    sh_circuit_record(cb, 0);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_OPEN);
+
+    /* Wait and transition to half-open */
+    struct timespec ts = { 0, 5000000 };
+    nanosleep(&ts, NULL);
+    sh_circuit_allow(cb);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_HALF_OPEN);
+
+    /* Failure should reopen */
+    sh_circuit_record(cb, 0);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_OPEN);
+
+    sh_circuit_free(cb);
+}
+
+TEST(circuit_stats)
+{
+    ShCircuitBreaker *cb = sh_circuit_create(NULL);
+    ASSERT(cb != NULL);
+
+    sh_circuit_allow(cb);
+    sh_circuit_allow(cb);
+    sh_circuit_record(cb, 1);
+    sh_circuit_record(cb, 0);
+
+    ShCircuitStats stats;
+    sh_circuit_stats(cb, &stats);
+
+    ASSERT_EQ(stats.total_requests, 2);
+    ASSERT_EQ(stats.total_failures, 1);
+    ASSERT_EQ(stats.state, SH_CIRCUIT_CLOSED);
+
+    sh_circuit_free(cb);
+}
+
+TEST(circuit_reset)
+{
+    ShCircuitConfig config = { .failure_threshold = 2, .success_threshold = 2, .open_duration_ms = 100000.0 };
+    ShCircuitBreaker *cb = sh_circuit_create(&config);
+    ASSERT(cb != NULL);
+
+    /* Trip the circuit */
+    sh_circuit_record(cb, 0);
+    sh_circuit_record(cb, 0);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_OPEN);
+
+    /* Reset should return to closed */
+    sh_circuit_reset(cb);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_CLOSED);
+    ASSERT_EQ(sh_circuit_allow(cb), 1);
+
+    sh_circuit_free(cb);
+}
+
+/* ============================================================================
+ * Backoff Tests
+ * ============================================================================ */
+
+TEST(backoff_init)
+{
+    ShBackoff backoff;
+    sh_backoff_init(&backoff, NULL);
+
+    ASSERT_EQ(sh_backoff_attempt(&backoff), 0);
+    ASSERT_EQ(sh_backoff_has_retries(&backoff), 1);
+}
+
+TEST(backoff_init_with_config)
+{
+    ShBackoffConfig config = { .base_delay_ms = 200.0, .max_delay_ms = 5000.0, .max_retries = 3, .jitter_factor = 0.0 };
+    ShBackoff backoff;
+    sh_backoff_init(&backoff, &config);
+
+    ASSERT_EQ(sh_backoff_has_retries(&backoff), 1);
+}
+
+TEST(backoff_exponential)
+{
+    ShBackoffConfig config = { .base_delay_ms = 100.0, .max_delay_ms = 10000.0, .max_retries = 5, .jitter_factor = 0.0 };
+    ShBackoff backoff;
+    sh_backoff_init(&backoff, &config);
+
+    /* Without jitter: 100, 200, 400, 800, 1600 */
+    double d0 = sh_backoff_next(&backoff);
+    ASSERT_NEAR(d0, 100.0, 1.0);
+
+    double d1 = sh_backoff_next(&backoff);
+    ASSERT_NEAR(d1, 200.0, 1.0);
+
+    double d2 = sh_backoff_next(&backoff);
+    ASSERT_NEAR(d2, 400.0, 1.0);
+
+    double d3 = sh_backoff_next(&backoff);
+    ASSERT_NEAR(d3, 800.0, 1.0);
+
+    double d4 = sh_backoff_next(&backoff);
+    ASSERT_NEAR(d4, 1600.0, 1.0);
+
+    /* No more retries */
+    ASSERT_EQ(sh_backoff_has_retries(&backoff), 0);
+}
+
+TEST(backoff_max_cap)
+{
+    ShBackoffConfig config = { .base_delay_ms = 1000.0, .max_delay_ms = 2000.0, .max_retries = 5, .jitter_factor = 0.0 };
+    ShBackoff backoff;
+    sh_backoff_init(&backoff, &config);
+
+    /* 1000, 2000 (capped), 2000, 2000, 2000 */
+    sh_backoff_next(&backoff);  /* 1000 */
+    double d1 = sh_backoff_next(&backoff);
+    ASSERT_NEAR(d1, 2000.0, 1.0);
+
+    double d2 = sh_backoff_next(&backoff);
+    ASSERT_NEAR(d2, 2000.0, 1.0);
+}
+
+TEST(backoff_reset)
+{
+    ShBackoffConfig config = { .base_delay_ms = 100.0, .max_delay_ms = 10000.0, .max_retries = 5, .jitter_factor = 0.0 };
+    ShBackoff backoff;
+    sh_backoff_init(&backoff, &config);
+
+    sh_backoff_next(&backoff);
+    sh_backoff_next(&backoff);
+    ASSERT_EQ(sh_backoff_attempt(&backoff), 2);
+
+    sh_backoff_reset(&backoff);
+    ASSERT_EQ(sh_backoff_attempt(&backoff), 0);
+
+    double d = sh_backoff_next(&backoff);
+    ASSERT_NEAR(d, 100.0, 1.0);
+}
+
+TEST(backoff_calculate_stateless)
+{
+    ShBackoffConfig config = { .base_delay_ms = 100.0, .max_delay_ms = 10000.0, .max_retries = 5, .jitter_factor = 0.0 };
+
+    double d0 = sh_backoff_calculate_seeded(&config, 0, 12345);
+    double d1 = sh_backoff_calculate_seeded(&config, 1, 12345);
+    double d2 = sh_backoff_calculate_seeded(&config, 2, 12345);
+
+    ASSERT_NEAR(d0, 100.0, 1.0);
+    ASSERT_NEAR(d1, 200.0, 1.0);
+    ASSERT_NEAR(d2, 400.0, 1.0);
+}
+
+TEST(backoff_jitter_range)
+{
+    ShBackoffConfig config = { .base_delay_ms = 1000.0, .max_delay_ms = 10000.0, .max_retries = 5, .jitter_factor = 0.5 };
+
+    /* With 50% jitter, delay should be in range [500, 1500] for attempt 0 */
+    for (int i = 0; i < 20; i++) {
+        double d = sh_backoff_calculate_seeded(&config, 0, (uint64_t)(i * 9999 + 1));
+        ASSERT(d >= 500.0);
+        ASSERT(d <= 1500.0);
+    }
+}
+
+/* ============================================================================
+ * Retry Tests
+ * ============================================================================ */
+
+TEST(retry_init)
+{
+    ShRetryContext ctx;
+    sh_retry_init(&ctx, NULL, NULL);
+
+    ASSERT_EQ(sh_retry_should_attempt(&ctx), 1);
+    ASSERT_EQ(sh_retry_get_last_status(&ctx), 0);
+}
+
+TEST(retry_success_no_retry)
+{
+    ShRetryContext ctx;
+    sh_retry_init(&ctx, NULL, NULL);
+
+    sh_retry_should_attempt(&ctx);
+    double delay = sh_retry_after_response(&ctx, 200, 0);
+
+    ASSERT_NEAR(delay, 0.0, 0.1);
+    ASSERT_EQ(sh_retry_should_continue(&ctx), 0);
+}
+
+TEST(retry_retryable_status)
+{
+    ASSERT_EQ(sh_retry_is_retryable_status(429), 1);
+    ASSERT_EQ(sh_retry_is_retryable_status(500), 1);
+    ASSERT_EQ(sh_retry_is_retryable_status(502), 1);
+    ASSERT_EQ(sh_retry_is_retryable_status(503), 1);
+    ASSERT_EQ(sh_retry_is_retryable_status(504), 1);
+    ASSERT_EQ(sh_retry_is_retryable_status(400), 0);
+    ASSERT_EQ(sh_retry_is_retryable_status(401), 0);
+    ASSERT_EQ(sh_retry_is_retryable_status(404), 0);
+    ASSERT_EQ(sh_retry_is_retryable_status(505), 0);
+}
+
+TEST(retry_on_503)
+{
+    ShRetryContext ctx;
+    sh_retry_init(&ctx, NULL, NULL);
+
+    sh_retry_should_attempt(&ctx);
+    double delay = sh_retry_after_response(&ctx, 503, 0);
+
+    ASSERT(delay > 0);
+    ASSERT_EQ(sh_retry_should_continue(&ctx), 1);
+}
+
+TEST(retry_honors_retry_after)
+{
+    ShRetryContext ctx;
+    sh_retry_init(&ctx, NULL, NULL);
+
+    sh_retry_should_attempt(&ctx);
+    double delay = sh_retry_after_response(&ctx, 429, 5.0);  /* 5 seconds */
+
+    ASSERT_NEAR(delay, 5000.0, 100.0);  /* Should use Retry-After */
+}
+
+TEST(retry_caps_retry_after)
+{
+    ShRetryConfig config = SH_RETRY_DEFAULT_CONFIG;
+    config.retry_after_max_ms = 2000.0;  /* Cap at 2s */
+
+    ShRetryContext ctx;
+    sh_retry_init(&ctx, NULL, &config);
+
+    sh_retry_should_attempt(&ctx);
+    double delay = sh_retry_after_response(&ctx, 429, 60.0);  /* 60 seconds */
+
+    /* Should use exponential backoff, not the excessive Retry-After */
+    ASSERT(delay < 2000.0);
+}
+
+TEST(retry_exhausts_retries)
+{
+    ShRetryConfig config = SH_RETRY_DEFAULT_CONFIG;
+    config.backoff.max_retries = 2;
+
+    ShRetryContext ctx;
+    sh_retry_init(&ctx, NULL, &config);
+
+    /* First attempt */
+    ASSERT_EQ(sh_retry_should_attempt(&ctx), 1);
+    sh_retry_after_response(&ctx, 503, 0);
+    ASSERT_EQ(sh_retry_should_continue(&ctx), 1);
+
+    /* Second attempt */
+    ASSERT_EQ(sh_retry_should_attempt(&ctx), 1);
+    sh_retry_after_response(&ctx, 503, 0);
+    ASSERT_EQ(sh_retry_should_continue(&ctx), 0);  /* No more retries */
+
+    /* No more attempts */
+    ASSERT_EQ(sh_retry_should_attempt(&ctx), 0);
+}
+
+TEST(retry_with_circuit)
+{
+    ShCircuitConfig cc = { .failure_threshold = 2, .success_threshold = 1, .open_duration_ms = 100000.0 };
+    ShCircuitBreaker *cb = sh_circuit_create(&cc);
+
+    ShRetryContext ctx;
+    sh_retry_init(&ctx, cb, NULL);
+
+    /* Trip the circuit */
+    sh_circuit_record(cb, 0);
+    sh_circuit_record(cb, 0);
+    ASSERT_EQ(sh_circuit_state(cb), SH_CIRCUIT_OPEN);
+
+    /* Retry should not attempt when circuit is open */
+    ASSERT_EQ(sh_retry_should_attempt(&ctx), 0);
+
+    sh_circuit_free(cb);
+}
+
+/* ============================================================================
+ * CORS Tests
+ * ============================================================================ */
+
+TEST(cors_init)
+{
+    ShCorsConfig cors;
+    sh_cors_init(&cors);
+
+    ASSERT_EQ(cors.origin_count, 0);  /* Allow all by default */
+    ASSERT_EQ(cors.max_age_seconds, 86400);
+}
+
+TEST(cors_add_origin)
+{
+    ShCorsConfig cors;
+    sh_cors_init(&cors);
+
+    ASSERT_EQ(sh_cors_add_origin(&cors, "https://example.com"), 1);
+    ASSERT_EQ(cors.origin_count, 1);
+    ASSERT(strcmp(cors.allowed_origins[0], "https://example.com") == 0);
+}
+
+TEST(cors_is_allowed_all)
+{
+    ShCorsConfig cors;
+    sh_cors_init(&cors);
+
+    /* With no origins configured, all are allowed */
+    ASSERT_EQ(sh_cors_is_allowed(&cors, "https://any.com"), 1);
+    ASSERT_EQ(sh_cors_is_allowed(&cors, "https://other.com"), 1);
+}
+
+TEST(cors_is_allowed_whitelist)
+{
+    ShCorsConfig cors;
+    sh_cors_init(&cors);
+    sh_cors_add_origin(&cors, "https://allowed.com");
+
+    ASSERT_EQ(sh_cors_is_allowed(&cors, "https://allowed.com"), 1);
+    ASSERT_EQ(sh_cors_is_allowed(&cors, "https://other.com"), 0);
+}
+
+TEST(cors_headers_wildcard)
+{
+    ShCorsConfig cors;
+    sh_cors_init(&cors);
+
+    char buf[512];
+    int len = sh_cors_headers(&cors, "https://any.com", buf, sizeof(buf));
+
+    ASSERT(len > 0);
+    ASSERT(strstr(buf, "Access-Control-Allow-Origin: *") != NULL);
+}
+
+TEST(cors_headers_specific)
+{
+    ShCorsConfig cors;
+    sh_cors_init(&cors);
+    sh_cors_add_origin(&cors, "https://app.example.com");
+
+    char buf[512];
+    int len = sh_cors_headers(&cors, "https://app.example.com", buf, sizeof(buf));
+
+    ASSERT(len > 0);
+    ASSERT(strstr(buf, "Access-Control-Allow-Origin: https://app.example.com") != NULL);
+}
+
+TEST(cors_preflight_headers)
+{
+    ShCorsConfig cors;
+    sh_cors_init(&cors);
+
+    char buf[1024];
+    int len = sh_cors_preflight_headers(&cors, "https://any.com", buf, sizeof(buf));
+
+    ASSERT(len > 0);
+    ASSERT(strstr(buf, "Access-Control-Allow-Methods:") != NULL);
+    ASSERT(strstr(buf, "Access-Control-Allow-Headers:") != NULL);
+    ASSERT(strstr(buf, "Access-Control-Max-Age:") != NULL);
+}
+
+TEST(cors_parse_origins)
+{
+    ShCorsConfig cors;
+    sh_cors_init(&cors);
+
+    int added = sh_cors_parse_origins(&cors, "https://a.com, https://b.com, https://c.com");
+
+    ASSERT_EQ(added, 3);
+    ASSERT_EQ(cors.origin_count, 3);
+    ASSERT(strcmp(cors.allowed_origins[0], "https://a.com") == 0);
+    ASSERT(strcmp(cors.allowed_origins[1], "https://b.com") == 0);
+    ASSERT(strcmp(cors.allowed_origins[2], "https://c.com") == 0);
+}
+
+TEST(cors_credentials)
+{
+    ShCorsConfig cors;
+    sh_cors_init(&cors);
+    sh_cors_add_origin(&cors, "https://app.example.com");
+    cors.allow_credentials = 1;
+
+    char buf[512];
+    int len = sh_cors_headers(&cors, "https://app.example.com", buf, sizeof(buf));
+
+    ASSERT(len > 0);
+    ASSERT(strstr(buf, "Access-Control-Allow-Credentials: true") != NULL);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1834,6 +2341,48 @@ int main(void)
     RUN_TEST(args_parse_adaptive);
     RUN_TEST(args_parse_positional);
     RUN_TEST(args_prefix);
+
+    printf("\nCircuit Breaker:\n");
+    RUN_TEST(circuit_create_free);
+    RUN_TEST(circuit_create_with_config);
+    RUN_TEST(circuit_free_null_safe);
+    RUN_TEST(circuit_allow_closed);
+    RUN_TEST(circuit_opens_on_failures);
+    RUN_TEST(circuit_success_resets_failures);
+    RUN_TEST(circuit_half_open_recovers);
+    RUN_TEST(circuit_half_open_failure_reopens);
+    RUN_TEST(circuit_stats);
+    RUN_TEST(circuit_reset);
+
+    printf("\nExponential Backoff:\n");
+    RUN_TEST(backoff_init);
+    RUN_TEST(backoff_init_with_config);
+    RUN_TEST(backoff_exponential);
+    RUN_TEST(backoff_max_cap);
+    RUN_TEST(backoff_reset);
+    RUN_TEST(backoff_calculate_stateless);
+    RUN_TEST(backoff_jitter_range);
+
+    printf("\nHTTP Retry:\n");
+    RUN_TEST(retry_init);
+    RUN_TEST(retry_success_no_retry);
+    RUN_TEST(retry_retryable_status);
+    RUN_TEST(retry_on_503);
+    RUN_TEST(retry_honors_retry_after);
+    RUN_TEST(retry_caps_retry_after);
+    RUN_TEST(retry_exhausts_retries);
+    RUN_TEST(retry_with_circuit);
+
+    printf("\nCORS:\n");
+    RUN_TEST(cors_init);
+    RUN_TEST(cors_add_origin);
+    RUN_TEST(cors_is_allowed_all);
+    RUN_TEST(cors_is_allowed_whitelist);
+    RUN_TEST(cors_headers_wildcard);
+    RUN_TEST(cors_headers_specific);
+    RUN_TEST(cors_preflight_headers);
+    RUN_TEST(cors_parse_origins);
+    RUN_TEST(cors_credentials);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

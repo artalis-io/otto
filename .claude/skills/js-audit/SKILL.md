@@ -286,6 +286,80 @@ When making HTTP requests to APIs (routing, geocoding, tile servers), handle bac
 | No timeout | `fetch()` without AbortController | Medium |
 | Thundering herd | All clients retry at same time | Medium |
 
+**Shared Library APIs (Preferred):**
+
+OTTO provides production-ready implementations in `shared/js/`:
+- `CircuitBreaker` - Circuit breaker class with CLOSED/OPEN/HALF_OPEN states
+- `createBackoff()` - Stateful exponential backoff iterator
+- `calculateBackoff()` - Stateless backoff calculation
+- `createResilientFetch()` - Fetch wrapper with retry + circuit breaker
+- `isRetryableStatus()` - Check if HTTP status code is retryable
+
+```javascript
+import {
+    createResilientFetch,
+    CircuitBreaker,
+    createBackoff,
+    isRetryableStatus
+} from '../../shared/js/index.js';
+
+// Create resilient fetch client with circuit breaker
+const client = createResilientFetch({
+    circuit: new CircuitBreaker({ failureThreshold: 5 }),
+    timeoutMs: 30000,
+    maxRetries: 3,
+    baseDelayMs: 100,
+    maxDelayMs: 10000
+});
+
+// Make requests with automatic retry and circuit breaker
+try {
+    const response = await client.fetch('/api/v1/route?from=...');
+    const data = await response.json();
+} catch (err) {
+    if (err.isCircuitOpen) {
+        // Circuit is open - service is unhealthy
+        console.error('Service unavailable');
+    } else if (err.isTimeout) {
+        console.error('Request timed out');
+    } else {
+        console.error('Request failed:', err.message);
+    }
+}
+
+// Low-level usage for custom control
+const backoff = createBackoff({ maxRetries: 5 });
+while (backoff.hasRetries()) {
+    try {
+        const response = await fetch(url);
+        if (response.ok) break;
+        if (!isRetryableStatus(response.status)) throw new Error(`HTTP ${response.status}`);
+        await backoff.wait();  // Wait and advance attempt counter
+    } catch (err) {
+        await backoff.wait();
+    }
+}
+```
+
+**MapProvider Integration (ClayShards):**
+
+```javascript
+import { MapProvider } from './clay-shards-webgl/index.js';
+
+// MapProvider now uses resilient-fetch internally
+const provider = new MapProvider(wasm, {
+    timeoutMs: 30000,
+    maxRetries: 3,
+    circuitFailureThreshold: 5
+});
+
+// Check circuit states
+console.log('Route circuit:', provider.getRouteCircuitState());     // 'closed'|'open'|'half_open'
+console.log('Geocode circuit:', provider.getGeocodeCircuitState());
+```
+
+**Manual Implementation (for reference):**
+
 **HTTP Status Code Handling:**
 
 ```javascript
@@ -390,7 +464,7 @@ async function fetchWithRetry(url, options = {}, retryConfig = DEFAULT_RETRY_CON
 }
 ```
 
-**Circuit Breaker Pattern:**
+**Circuit Breaker Pattern (for reference):**
 
 ```javascript
 class CircuitBreaker {
@@ -967,12 +1041,14 @@ Before marking a module as "audited":
 - [ ] CORS errors handled gracefully
 
 **API Client Resilience:**
-- [ ] HTTP 429/503/504 handled with backoff
-- [ ] Exponential backoff with jitter implemented
-- [ ] Circuit breaker for failing services
+- [ ] Uses `createResilientFetch()` from `shared/js/` or equivalent
+- [ ] Uses `CircuitBreaker` from `shared/js/` for circuit breaker protection
+- [ ] Uses `createBackoff()` or `calculateBackoff()` for exponential backoff
+- [ ] HTTP 429/503/504 handled with backoff (via `isRetryableStatus()`)
 - [ ] Maximum retry count bounded
 - [ ] Request timeouts via AbortController
 - [ ] Retry/circuit settings configurable
+- [ ] MapProvider uses resilient-fetch internally
 
 **Error Handling:**
 - [ ] All async functions have error handling
