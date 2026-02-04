@@ -586,7 +586,232 @@ The Carta codebase remains production-quality. The new serialization code (ct_se
 
 **Current Test Status:**
 - 96/96 carta tests pass
-- 103/103 shared tests pass
+- 160/160 shared tests pass (103 core + 23 font + 34 new resilience infrastructure)
 - Tile server includes rate limiting, work queue, and adaptive capacity
 
 **All security issues fixed in this audit cycle.**
+
+---
+
+## Shared Resilience Infrastructure Audit: 2026-02-04
+
+### New Shared Library Components Audited
+
+The following new APIs were added to the shared library for API client/server resilience:
+
+| Component | Header | Purpose |
+|-----------|--------|---------|
+| sh_args | `sh_args.h` | Centralized argument/env parsing for API servers |
+| sh_cors | `sh_cors.h` | CORS header generation utilities |
+| sh_circuit | `sh_circuit.h` | Circuit breaker pattern for fault tolerance |
+| sh_backoff | `sh_backoff.h` | Exponential backoff with jitter |
+| sh_retry | `sh_retry.h` | HTTP retry logic combining circuit + backoff |
+
+### sh_args.c - Argument Parsing
+
+**Security Findings:**
+
+| Issue | Severity | Status | Details |
+|-------|----------|--------|---------|
+| Environment variable injection | OK | ✅ | Uses getenv() safely |
+| Buffer handling | OK | ✅ | Uses snprintf throughout |
+| Integer parsing | OK | ✅ | atoi/atof with default fallbacks |
+| NULL checks | OK | ✅ | All functions check NULL params |
+
+**Pattern Quality:** Good. Provides standardized config loading with CARTA_, VELO_, LOCUS_, FUELWISE_ prefixes.
+
+### sh_cors.c - CORS Utilities
+
+**Security Findings:**
+
+| Issue | Severity | Status | Details |
+|-------|----------|--------|---------|
+| Origin validation | OK | ✅ | Exact string match against whitelist |
+| Header injection | OK | ✅ | snprintf with bounds checking |
+| safe_strcpy | OK | ✅ | Proper null termination |
+| Buffer overflow | OK | ✅ | All writes bounded by buffer size |
+
+**Pattern Quality:** Excellent. Safe string handling throughout.
+
+### sh_circuit.c - Circuit Breaker
+
+**Security Findings:**
+
+| Issue | Severity | Status | Details |
+|-------|----------|--------|---------|
+| Thread safety | OK | ✅ | pthread_mutex for all state access |
+| Memory management | OK | ✅ | Proper cleanup in sh_circuit_free() |
+| NULL checks | OK | ✅ | All public functions check NULL |
+| Timestamp handling | OK | ✅ | Uses CLOCK_MONOTONIC |
+
+**Pattern Quality:** Excellent. Proper mutex locking/unlocking with clean state machine.
+
+### sh_backoff.c - Exponential Backoff
+
+**Security Findings:**
+
+| Issue | Severity | Status | Details |
+|-------|----------|--------|---------|
+| Overflow potential | OK | ✅ | Capped by max_delay_ms |
+| Random jitter | OK | ✅ | Uses rand() seeded by time |
+| Division by zero | OK | ✅ | RAND_MAX always non-zero |
+
+**Pattern Quality:** Good. Simple stateless calculation with proper capping.
+
+### sh_retry.c - HTTP Retry Logic
+
+**Security Findings:**
+
+| Issue | Severity | Status | Details |
+|-------|----------|--------|---------|
+| Circuit breaker integration | OK | ✅ | Optional, NULL-safe |
+| Retryable status codes | OK | ✅ | 429, 500, 502, 503, 504 |
+| Retry-After header handling | OK | ✅ | Capped by retry_after_max_ms |
+| State management | OK | ✅ | Clean reset between request sequences |
+
+**Pattern Quality:** Excellent. Well-designed composition of circuit breaker and backoff.
+
+### Carta Integration Opportunities
+
+The Carta tile server currently uses:
+- ✅ `sh_ratelimit` - Token bucket rate limiting per IP
+- ✅ `sh_workqueue` - Request queue with backpressure
+- ✅ `sh_adaptive` - Self-tuning capacity based on response times
+
+**Not yet integrated:**
+
+| Component | Applicable? | Recommendation |
+|-----------|-------------|----------------|
+| sh_args | Yes | Could replace manual argument parsing in main.c |
+| sh_cors | Yes | Could replace hardcoded CORS headers |
+| sh_circuit | No | Server-side, not making outbound requests |
+| sh_backoff | No | Server-side, not making outbound requests |
+| sh_retry | No | Server-side, not making outbound requests |
+
+### Integration Analysis: sh_args
+
+**Current Pattern (main.c:1490-1547):**
+```c
+for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) {
+        if (++i < argc) s_config.port = atoi(argv[i]);
+    }
+    // ... 50+ lines of manual parsing ...
+}
+```
+
+**Potential Pattern with sh_args:**
+```c
+ShServerConfig shared_cfg;
+sh_args_init(&shared_cfg, "CARTA");
+sh_args_parse(&shared_cfg, argc, argv);
+sh_args_load_env(&shared_cfg, "CARTA");
+s_config.port = shared_cfg.network.port;
+s_config.rate_limit_enabled = shared_cfg.rate_limit.enabled;
+// ...
+```
+
+**Verdict:** Medium value. Would reduce code duplication but requires adapting TileServerConfig struct. Current approach works correctly.
+
+### Integration Analysis: sh_cors
+
+**Current Pattern (main.c lines 757, 764, 777, 970, etc.):**
+```c
+"Access-Control-Allow-Origin: *\r\n"  // Hardcoded in 10+ locations
+```
+
+**Potential Pattern with sh_cors:**
+```c
+static ShCorsConfig s_cors = SH_CORS_DEFAULT_CONFIG;
+
+// In handler:
+char cors_headers[512];
+sh_cors_headers(&s_cors, origin_header, cors_headers, sizeof(cors_headers));
+mg_http_reply(c, 200, cors_headers, ...);
+```
+
+**Verdict:** High value for production. Current `*` is fine for development but production may need:
+- Specific origin whitelist
+- Credential support
+- Configurable via environment variable
+
+**Recommendation:** Add sh_cors integration when deploying to production with restricted origins.
+
+### Summary: Shared Resilience Infrastructure
+
+| Component | Code Quality | Tests | Carta Integration |
+|-----------|--------------|-------|-------------------|
+| sh_args | ✅ Excellent | ✅ 23 tests | Optional (medium value) |
+| sh_cors | ✅ Excellent | ✅ Tests included | Recommended for production |
+| sh_circuit | ✅ Excellent | ✅ Tests included | N/A (server-side) |
+| sh_backoff | ✅ Excellent | ✅ Tests included | N/A (server-side) |
+| sh_retry | ✅ Excellent | ✅ Tests included | N/A (server-side) |
+
+**Conclusion:** All new shared resilience infrastructure components are well-implemented with proper:
+- Thread safety (mutex where needed)
+- Memory safety (NULL checks, bounded operations)
+- Error handling (graceful degradation)
+
+The sh_circuit, sh_backoff, and sh_retry components are primarily useful for HTTP **clients** making outbound requests (e.g., FuelWise calling external APIs, future Nexus integrations). Carta is an HTTP **server** and doesn't need these for its current functionality.
+
+For Carta specifically:
+1. **sh_cors** - ✅ Integrated - configurable via CARTA_CORS_ORIGINS environment variable
+2. **sh_args** - ✅ Integrated - common server options (port, threads, rate limiting, etc.)
+
+All 160 shared library tests pass.
+
+---
+
+## Integration Complete: 2026-02-04
+
+### sh_args Integration
+
+Carta now uses `ShServerConfig` for common server configuration and `sh_args_parse()` for command-line parsing.
+
+**Changes:**
+- `TileServerConfig` now contains `ShServerConfig server` for common fields
+- `init_carta_defaults()` calls `sh_args_init()` then sets Carta-specific defaults
+- `load_carta_env()` calls `sh_args_load_env()` with `SH_API_CARTA` prefix
+- `main()` uses `sh_args_parse()` for common options, then parses Carta-specific options
+
+**Common options now handled by sh_args:**
+- `-p, --port` - Listen port
+- `-h, --host` - Bind address
+- `-t, --threads` - Worker threads
+- `-s, --static` - Static files directory
+- `--rate-limit-rps`, `--rate-limit-burst`, `--rate-limit-off`
+- `--queue-depth`, `--queue-timeout`, `--queue-off`
+- `--adaptive`, `--utilization`, `--client-timeout`
+
+### sh_cors Integration
+
+Carta now uses `ShCorsConfig` for CORS header generation.
+
+**Changes:**
+- Global `s_cors` config initialized with `sh_cors_init()`
+- `get_cors_headers_from_request()` extracts Origin header and generates CORS response headers
+- `get_cors_preflight_headers()` handles OPTIONS preflight requests
+- `send_json_cors()`, `send_error_cors()`, `send_tile_cors()` pass request context for origin validation
+- All API handlers updated to use CORS-aware response functions
+
+**CORS configuration via environment:**
+```bash
+CARTA_CORS_ORIGINS=https://app.example.com,https://staging.example.com
+CARTA_CORS_METHODS=GET, POST, OPTIONS
+CARTA_CORS_HEADERS=Content-Type, Authorization
+CARTA_CORS_CREDENTIALS=1
+```
+
+**Behavior:**
+- No origins configured (default): Returns `Access-Control-Allow-Origin: *`
+- Origins configured: Validates request Origin header against whitelist
+- Matching origin: Returns `Access-Control-Allow-Origin: <requested-origin>`
+- Non-matching origin: No CORS headers returned (browser blocks request)
+
+### Test Results
+
+All tests pass:
+- 137/137 shared core tests
+- 23/23 shared font tests
+- 96/96 carta tests
+- API tests: health, tilejson, PNG tiles, MVT tiles all pass

@@ -103,34 +103,57 @@ Options:
 
 ```bash
 # Basic configuration
-TILE_PBF_PATH=/data/map.osm.pbf
-TILE_PORT=8081
-TILE_HOST=0.0.0.0
-TILE_STATIC_DIR=./static
-TILE_MIN_ZOOM=0
-TILE_MAX_ZOOM=18
-TILE_SIZE=512
-TILE_NAME="My Tiles"
-CARTA_THREADS=8               # Worker threads (0 = auto-detect)
+TILE_PBF_PATH=/data/map.osm.pbf      # Also: CARTA_DATA_FILE
+CARTA_PORT=8081                       # Listen port (default: 8081)
+CARTA_HOST=0.0.0.0                    # Bind address (default: 0.0.0.0)
+CARTA_STATIC_DIR=./static             # Static files directory
+CARTA_THREADS=8                       # Worker threads (0 = auto-detect)
+
+# Carta-specific
+CARTA_MIN_ZOOM=0                      # Minimum zoom level
+CARTA_MAX_ZOOM=18                     # Maximum zoom level
+CARTA_TILE_SIZE=512                   # PNG tile size
+CARTA_NAME="My Tiles"                 # Server name in TileJSON
+CARTA_LOD=default                     # LOD preset (none, default, detailed, minimal)
+CARTA_RENDER_WORKERS=8                # Render worker threads (0 = auto)
 
 # Rate limiting
-CARTA_RATE_LIMIT_ENABLED=1    # Enable rate limiting (default: 1)
-CARTA_RATE_LIMIT_RPS=10       # Requests per second per IP (default: 10)
-CARTA_RATE_LIMIT_BURST=100    # Burst capacity (default: 100)
+CARTA_RATE_LIMIT_ENABLED=1            # Enable rate limiting (default: 1)
+CARTA_RATE_LIMIT_RPS=10               # Requests per second per IP (default: 10)
+CARTA_RATE_LIMIT_BURST=100            # Burst capacity (default: 100)
 
 # Work queue (backpressure)
-CARTA_WORK_QUEUE_ENABLED=1    # Enable work queue (default: 1)
-CARTA_WORK_QUEUE_DEPTH=256    # Max pending requests (default: 256)
-CARTA_WORK_QUEUE_TIMEOUT=5    # Request timeout in seconds (default: 5)
-CARTA_RENDER_WORKERS=8        # Render worker threads (0 = auto)
+CARTA_WORK_QUEUE_ENABLED=1            # Enable work queue (default: 1)
+CARTA_WORK_QUEUE_DEPTH=256            # Max pending requests (default: 256)
+CARTA_WORK_QUEUE_TIMEOUT=5            # Request timeout in seconds (default: 5)
 
 # Adaptive capacity (self-tuning based on measured response times)
-CARTA_ADAPTIVE_ENABLED=0      # Enable adaptive capacity (default: 0)
-CARTA_TARGET_UTILIZATION=0.7  # Target utilization 0.0-1.0 (default: 0.7)
-CARTA_CLIENT_TIMEOUT=10000    # Client timeout in ms (default: 10000)
-CARTA_BURST_TILES=25          # Tiles in initial view (default: 25)
-CARTA_ADAPTIVE_WINDOW=1000    # Sample window for percentiles (default: 1000)
-CARTA_ADAPTIVE_INTERVAL=1000  # Recalc interval in requests (default: 1000)
+CARTA_ADAPTIVE_ENABLED=0              # Enable adaptive capacity (default: 0)
+CARTA_TARGET_UTILIZATION=0.7          # Target utilization 0.0-1.0 (default: 0.7)
+CARTA_CLIENT_TIMEOUT=10000            # Client timeout in ms (default: 10000)
+CARTA_BURST_TILES=25                  # Tiles in initial view (default: 25)
+CARTA_ADAPTIVE_WINDOW=1000            # Sample window for percentiles (default: 1000)
+CARTA_ADAPTIVE_INTERVAL=1000          # Recalc interval in requests (default: 1000)
+
+# CORS configuration
+CARTA_CORS_ORIGINS=                   # Comma-separated allowed origins (empty = allow all with *)
+CARTA_CORS_METHODS="GET, POST, OPTIONS"  # Allowed HTTP methods
+CARTA_CORS_HEADERS="Content-Type, Authorization"  # Allowed request headers
+CARTA_CORS_CREDENTIALS=0              # Allow credentials (default: 0)
+```
+
+### CORS Configuration
+
+By default, the server allows all origins (`Access-Control-Allow-Origin: *`). For production, you can restrict to specific origins:
+
+```bash
+# Allow only specific origins
+export CARTA_CORS_ORIGINS="https://app.example.com,https://staging.example.com"
+
+# The server will:
+# - Return the requesting origin if it matches the whitelist
+# - Return no CORS headers if the origin doesn't match (browser blocks request)
+# - Work correctly with preflight (OPTIONS) requests
 ```
 
 ### Config File
