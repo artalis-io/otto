@@ -104,11 +104,11 @@ library for text measurement and MSDF sampling.
 - `shared/include/sh_font.h` - Font API
 - `shared/src/sh_font.c` - Implementation (UTF-8, glyph lookup, text measurement, MSDF)
 - `shared/src/sh_font_data.c` - Embedded font data (163 glyphs, 332x332 atlas)
-- `shared/fonts/generate_font_data.py` - Build-time font generator
+- `clayshards/fonts/generate_font_data.py` - Build-time font generator
 
 **Font assets:**
-- `shared/fonts/ui-font.json` - Glyph metrics
-- `shared/fonts/ui-font.png` - MSDF atlas texture
+- `clayshards/fonts/ui-font.json` - Glyph metrics
+- `clayshards/fonts/ui-font.png` - MSDF atlas texture
 
 ### 2.2 Using the Shared Font Library
 
@@ -650,7 +650,7 @@ Total: < 25 KB per tile (negligible)
   - O(1) ASCII lookup, binary search for Unicode
   - Text measurement and MSDF sampling
   - 20 unit tests
-- **Font Assets:** `shared/fonts/ui-font.json` + `ui-font.png`
+- **Font Assets:** `clayshards/fonts/ui-font.json` + `ui-font.png`
 - Uses existing carta infrastructure (tile coords, rendering, MVT encoding)
 - No runtime file loading - font atlas embedded at compile time
 

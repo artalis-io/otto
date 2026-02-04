@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-01 (Updated: 2026-02-03)
 **Reviewer:** Claude Opus 4.5
-**Scope:** `/shared/ui/` codebase (clay-shards, clay-shards-webgl, clay-shards-demo)
+**Scope:** `clayshards/` codebase (clay-shards, clay-shards-webgl, clay-shards-demo)
 
 ---
 
