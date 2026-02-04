@@ -24,6 +24,7 @@
 #include "sh_arena.h"
 #include "sh_pool.h"
 #include "sh_ratelimit.h"
+#include "sh_workqueue.h"
 
 /* Library version */
 #define SHARED_VERSION_MAJOR 1
