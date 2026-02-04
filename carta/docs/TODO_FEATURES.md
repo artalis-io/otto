@@ -9,6 +9,7 @@ This document outlines planned features for Carta with detailed implementation p
 3. [Font/Label Rendering](#3-fontlabel-rendering)
 4. [Configurable Styling](#4-configurable-styling)
 5. [Native Performance Optimization](#5-native-performance-optimization)
+6. [Client-Side MVT Rendering (WebGL)](#6-client-side-mvt-rendering-webgl)
 
 ---
 
@@ -2276,6 +2277,530 @@ int ct_pregenerate_tiles(const CTPregenConfig *config);
 
 ---
 
+## 6. Client-Side MVT Rendering (WebGL)
+
+### Motivation
+
+Move tile rendering from server to client for:
+- **Horizontal scaling** - Server becomes stateless file serving
+- **CDN distribution** - Pre-generated MVT tiles cache globally
+- **Reduced server costs** - No CPU-intensive rendering
+- **Zero egress costs** - CloudFlare R2 or similar
+- **Dynamic styling** - Theme changes without re-rendering server-side
+- **Interactivity** - Hover states, click handling on features
+
+### Architecture
+
+```
+One-time generation (batch job):
+  hungary.osm.pbf → carta-mvt-batch → tiles/{z}/{x}/{y}.mvt → CloudFlare R2
+
+Runtime (per request):
+  Browser → CloudFlare CDN → R2 bucket → MVT bytes
+         ← WebGL renderer ← parsed geometry ←
+```
+
+### Cost Model (CloudFlare R2)
+
+| Component | Cost |
+|-----------|------|
+| R2 storage | ~$0.015/GB/month |
+| R2 egress | **$0** |
+| R2 operations | $0.36/million Class B reads |
+
+For Hungary (~93k km²):
+- z0-z14: ~500K tiles × ~10KB avg = **~5 GB storage = ~$0.08/month**
+- 1M tile requests = **$0.36**
+
+The entire planet's tiles could be served for under $50/month in storage.
+
+### What Already Exists (ClayShards)
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| Tile loading/caching | ✅ Works for PNG | `clay-shards-webgl/map-tiles.js` |
+| WebGL shaders | ✅ Rect, text, texture | `clay-shards-webgl/shaders.js` |
+| MSDF font rendering | ✅ Crisp at any size | `clay-shards-webgl/font.js` |
+| Map pan/zoom | ✅ Full support | `clay-shards/src/cs_map.c` |
+| MVT encoding (C) | ✅ Encoder only | `carta/src/ct_mvt.c` |
+
+### Components to Build
+
+#### Phase 1: MVT Parser (JavaScript) - ~400 lines
+
+Parse Mapbox Vector Tile protobuf format:
+
+```javascript
+// mvt-parser.js
+
+export class MVTParser {
+    /**
+     * Parse MVT tile from ArrayBuffer
+     * @returns {Object} Parsed layers with features
+     */
+    parse(buffer) {
+        const pbf = new Pbf(buffer);
+        const tile = { layers: {} };
+
+        while (pbf.pos < pbf.len) {
+            const tag = pbf.readTag();
+            if (tag.field === 3) {  // Layer
+                const layer = this.readLayer(pbf);
+                tile.layers[layer.name] = layer;
+            } else {
+                pbf.skip(tag.type);
+            }
+        }
+        return tile;
+    }
+
+    readLayer(pbf) { /* ... */ }
+    readFeature(pbf, keys, values) { /* ... */ }
+
+    /**
+     * Decode geometry commands to coordinate arrays
+     * Commands: MoveTo(1), LineTo(2), ClosePath(7)
+     */
+    decodeGeometry(geometry, type) {
+        const result = [];
+        let x = 0, y = 0;
+        let ring = [];
+
+        for (let i = 0; i < geometry.length; ) {
+            const cmdInt = geometry[i++];
+            const cmd = cmdInt & 0x7;
+            const count = cmdInt >> 3;
+
+            if (cmd === 1) {  // MoveTo
+                if (ring.length) result.push(ring);
+                ring = [];
+                for (let j = 0; j < count; j++) {
+                    x += this.zigzag(geometry[i++]);
+                    y += this.zigzag(geometry[i++]);
+                    ring.push([x, y]);
+                }
+            } else if (cmd === 2) {  // LineTo
+                for (let j = 0; j < count; j++) {
+                    x += this.zigzag(geometry[i++]);
+                    y += this.zigzag(geometry[i++]);
+                    ring.push([x, y]);
+                }
+            } else if (cmd === 7) {  // ClosePath
+                if (ring.length) ring.push(ring[0]);
+            }
+        }
+        if (ring.length) result.push(ring);
+        return result;
+    }
+
+    zigzag(n) {
+        return (n >> 1) ^ -(n & 1);
+    }
+}
+```
+
+#### Phase 2: Geometry Rendering - ~1500 lines
+
+**Polygon Fill (~400 lines):**
+```javascript
+// Use earcut for triangulation
+import earcut from 'earcut';
+
+export class PolygonRenderer {
+    constructor(gl) {
+        this.gl = gl;
+        this.program = this.createProgram(POLYGON_VS, POLYGON_FS);
+        this.buffer = gl.createBuffer();
+    }
+
+    render(polygons, color, projMatrix) {
+        const vertices = [];
+
+        for (const polygon of polygons) {
+            // Flatten coordinates for earcut
+            const coords = polygon.flat();
+            const indices = earcut(coords);
+
+            // Build triangle vertices
+            for (const idx of indices) {
+                vertices.push(coords[idx * 2], coords[idx * 2 + 1]);
+            }
+        }
+
+        // Upload and draw
+        this.gl.bufferData(this.gl.ARRAY_BUFFER,
+            new Float32Array(vertices), this.gl.DYNAMIC_DRAW);
+        this.gl.drawArrays(this.gl.TRIANGLES, 0, vertices.length / 2);
+    }
+}
+```
+
+**Line Rendering (~800 lines):**
+
+This is the hardest part. Thick lines with proper joins require generating quads:
+
+```javascript
+export class LineRenderer {
+    constructor(gl) {
+        this.gl = gl;
+        this.program = this.createProgram(LINE_VS, LINE_FS);
+    }
+
+    /**
+     * Generate thick line geometry with miter joins
+     */
+    buildLineGeometry(points, width) {
+        const vertices = [];
+        const halfWidth = width / 2;
+
+        for (let i = 0; i < points.length - 1; i++) {
+            const p0 = points[i];
+            const p1 = points[i + 1];
+
+            // Direction and normal
+            const dx = p1[0] - p0[0];
+            const dy = p1[1] - p0[1];
+            const len = Math.sqrt(dx * dx + dy * dy);
+            const nx = -dy / len * halfWidth;
+            const ny = dx / len * halfWidth;
+
+            // Quad vertices (2 triangles)
+            vertices.push(
+                p0[0] + nx, p0[1] + ny,
+                p0[0] - nx, p0[1] - ny,
+                p1[0] + nx, p1[1] + ny,
+
+                p0[0] - nx, p0[1] - ny,
+                p1[0] - nx, p1[1] - ny,
+                p1[0] + nx, p1[1] + ny
+            );
+
+            // TODO: Miter/bevel joins at corners
+            // TODO: Round caps at endpoints
+        }
+
+        return new Float32Array(vertices);
+    }
+
+    render(lines, color, width, projMatrix) {
+        for (const line of lines) {
+            const vertices = this.buildLineGeometry(line, width);
+            // Upload and draw...
+        }
+    }
+}
+```
+
+**Point Labels (~200 lines):**
+
+Already have MSDF font support, just need placement:
+
+```javascript
+export class LabelRenderer {
+    constructor(gl, font) {
+        this.gl = gl;
+        this.font = font;
+    }
+
+    render(labels, projMatrix) {
+        for (const label of labels) {
+            const width = this.font.measureText(label.text, label.fontSize);
+            const x = label.x - width / 2;  // Center horizontally
+            const y = label.y;
+
+            this.font.renderText(label.text, x, y, label.fontSize,
+                                 label.color, projMatrix);
+        }
+    }
+}
+```
+
+#### Phase 3: Tile Manager - ~300 lines
+
+```javascript
+export class MVTTileCache {
+    constructor(gl, maxTiles = 200) {
+        this.gl = gl;
+        this.cache = new Map();
+        this.maxTiles = maxTiles;
+        this.parser = new MVTParser();
+    }
+
+    async getTile(z, x, y, baseUrl) {
+        const key = `${z}/${x}/${y}`;
+
+        if (this.cache.has(key)) {
+            return this.cache.get(key);
+        }
+
+        const url = `${baseUrl}/${z}/${x}/${y}.mvt`;
+        const response = await fetch(url);
+        const buffer = await response.arrayBuffer();
+
+        const tile = {
+            data: this.parser.parse(buffer),
+            geometry: this.buildGeometry(this.parser.parse(buffer)),
+            loaded: true
+        };
+
+        this.cache.set(key, tile);
+        this.evictOldTiles();
+
+        return tile;
+    }
+
+    /**
+     * Pre-build WebGL buffers for tile geometry
+     */
+    buildGeometry(tileData) {
+        const geometry = {};
+
+        for (const [name, layer] of Object.entries(tileData.layers)) {
+            geometry[name] = {
+                polygons: [],
+                lines: [],
+                points: []
+            };
+
+            for (const feature of layer.features) {
+                const coords = this.parser.decodeGeometry(
+                    feature.geometry, feature.type);
+
+                if (feature.type === 3) {  // Polygon
+                    geometry[name].polygons.push({
+                        coords,
+                        properties: feature.properties
+                    });
+                } else if (feature.type === 2) {  // Line
+                    geometry[name].lines.push({
+                        coords,
+                        properties: feature.properties
+                    });
+                } else if (feature.type === 1) {  // Point
+                    geometry[name].points.push({
+                        coords: coords[0][0],
+                        properties: feature.properties
+                    });
+                }
+            }
+        }
+
+        return geometry;
+    }
+}
+```
+
+#### Phase 4: Styling System - ~400 lines
+
+```javascript
+export const DEFAULT_STYLE = {
+    layers: {
+        water: {
+            type: 'fill',
+            paint: {
+                'fill-color': '#aad3df'
+            }
+        },
+        landuse: {
+            type: 'fill',
+            paint: {
+                'fill-color': ['match', ['get', 'class'],
+                    'park', '#c8facc',
+                    'forest', '#add19e',
+                    '#f2efe9'
+                ]
+            }
+        },
+        roads: {
+            type: 'line',
+            paint: {
+                'line-color': ['match', ['get', 'class'],
+                    'motorway', '#e990a0',
+                    'trunk', '#f9b29c',
+                    'primary', '#fcd6a4',
+                    '#ffffff'
+                ],
+                'line-width': ['match', ['get', 'class'],
+                    'motorway', 4,
+                    'trunk', 3,
+                    'primary', 2,
+                    1
+                ]
+            }
+        },
+        buildings: {
+            type: 'fill',
+            minzoom: 14,
+            paint: {
+                'fill-color': '#d9d0c9',
+                'fill-outline-color': '#b9a9a0'
+            }
+        },
+        labels: {
+            type: 'symbol',
+            layout: {
+                'text-field': ['get', 'name'],
+                'text-size': 12
+            },
+            paint: {
+                'text-color': '#333333',
+                'text-halo-color': '#ffffff',
+                'text-halo-width': 1.5
+            }
+        }
+    }
+};
+```
+
+### Batch MVT Generation Tool
+
+```c
+// carta-mvt-batch.c
+
+typedef struct {
+    const CTPBFContext *pbf;
+    const CTLODConfig *lod;
+    int min_zoom, max_zoom;
+    CTBBox bounds;
+    const char *output_dir;
+    int num_threads;
+} CTMVTBatchConfig;
+
+/**
+ * Generate all MVT tiles for a region
+ * Output: {output_dir}/{z}/{x}/{y}.mvt
+ */
+int ct_mvt_batch_generate(const CTMVTBatchConfig *config) {
+    // Calculate total tiles
+    int total_tiles = 0;
+    for (int z = config->min_zoom; z <= config->max_zoom; z++) {
+        int tiles_at_zoom = count_tiles_in_bbox(config->bounds, z);
+        total_tiles += tiles_at_zoom;
+    }
+
+    printf("Generating %d tiles (z%d-z%d)\n",
+           total_tiles, config->min_zoom, config->max_zoom);
+
+    // Generate tiles in parallel
+    #pragma omp parallel for schedule(dynamic) num_threads(config->num_threads)
+    for (int z = config->min_zoom; z <= config->max_zoom; z++) {
+        for_each_tile_in_bbox(config->bounds, z, [&](int x, int y) {
+            uint8_t buffer[256 * 1024];  // 256KB max
+            size_t size = ct_generate_mvt(config->pbf,
+                                          (CTTileCoord){z, x, y},
+                                          NULL, config->lod,
+                                          buffer, sizeof(buffer));
+
+            if (size > 0) {
+                char path[256];
+                snprintf(path, sizeof(path), "%s/%d/%d/%d.mvt",
+                         config->output_dir, z, x, y);
+                mkdir_p(dirname(path));
+                write_file(path, buffer, size);
+            }
+        });
+    }
+
+    return 0;
+}
+```
+
+### Upload to CloudFlare R2
+
+```bash
+# Generate tiles
+./carta-mvt-batch data/hungary.osm.pbf \
+    --output tiles/ \
+    --min-zoom 0 --max-zoom 14 \
+    --threads 8
+
+# Upload to R2 (using rclone)
+rclone sync tiles/ r2:otto-tiles/hungary/ \
+    --transfers 32 \
+    --checkers 16
+
+# Or using AWS CLI (R2 is S3-compatible)
+aws s3 sync tiles/ s3://otto-tiles/hungary/ \
+    --endpoint-url https://<account>.r2.cloudflarestorage.com
+```
+
+### Effort Estimate
+
+| Component | Lines | Time | Difficulty |
+|-----------|-------|------|------------|
+| MVT Parser | ~400 | 1 day | Easy |
+| Polygon Renderer | ~400 | 1 day | Medium |
+| Line Renderer (basic) | ~300 | 1 day | Medium |
+| Line Renderer (joins/caps) | ~500 | 2 days | Hard |
+| Point Labels | ~200 | 0.5 days | Easy |
+| Tile Manager | ~300 | 1 day | Easy |
+| Styling System | ~400 | 1 day | Medium |
+| Batch Generator | ~300 | 1 day | Easy |
+| **Total** | **~2800** | **~9 days** | |
+
+### Alternatives Considered
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Build custom WebGL** | Full control, lightweight | Line rendering is hard |
+| **Use MapLibre GL JS** | Complete solution | Large dependency (500KB+) |
+| **Use deck.gl MVTLayer** | Good for overlays | React-oriented, complex |
+| **WASM carta renderer** | Reuse C code | Canvas 2D only, no WebGL |
+
+### TODOs
+
+**Phase 1: MVT Parser**
+- [ ] Create `clayshards/clay-shards-webgl/mvt-parser.js`
+- [ ] Implement protobuf decoding (or vendor `pbf` library)
+- [ ] Implement geometry command decoding
+- [ ] Add layer/feature/property parsing
+- [ ] Test with tiles from carta server
+
+**Phase 2: Basic Rendering**
+- [ ] Create polygon fill renderer with earcut triangulation
+- [ ] Create basic line renderer (1px and simple thick lines)
+- [ ] Create point renderer
+- [ ] Integrate with existing map-tiles.js
+
+**Phase 3: Advanced Line Rendering**
+- [ ] Implement miter joins
+- [ ] Implement bevel joins
+- [ ] Implement round joins
+- [ ] Implement line caps (butt, round, square)
+- [ ] Add dashed line support
+
+**Phase 4: Labels**
+- [ ] Integrate with existing MSDF font renderer
+- [ ] Add label collision detection
+- [ ] Add text-along-path for road labels (stretch goal)
+
+**Phase 5: Styling**
+- [ ] Create style specification
+- [ ] Implement property-based styling
+- [ ] Add zoom-based visibility
+- [ ] Support multiple style presets
+
+**Phase 6: Batch Generation**
+- [ ] Create `carta-mvt-batch` tool
+- [ ] Add parallel tile generation
+- [ ] Add progress reporting
+- [ ] Document R2 upload workflow
+
+### Files to Create
+
+| File | Purpose |
+|------|---------|
+| `clayshards/clay-shards-webgl/mvt-parser.js` | MVT protobuf parsing |
+| `clayshards/clay-shards-webgl/mvt-renderer.js` | Main MVT rendering class |
+| `clayshards/clay-shards-webgl/polygon-renderer.js` | Polygon fill with triangulation |
+| `clayshards/clay-shards-webgl/line-renderer.js` | Thick lines with joins |
+| `clayshards/clay-shards-webgl/mvt-style.js` | Styling system |
+| `clayshards/clay-shards-webgl/mvt-shaders.js` | WebGL shaders for MVT |
+| `carta/tools/carta-mvt-batch.c` | Batch tile generator |
+| `scripts/upload-tiles-r2.sh` | R2 upload script |
+
+---
+
 ## Implementation Priority
 
 Recommended order of implementation:
@@ -2297,35 +2822,41 @@ Recommended order of implementation:
    - Performance benefits
    - Foundation for other features
 
-4. **Spatial Index Optimization (Phase 2 of Native Perf)** - High priority
+4. **Client-Side MVT Rendering** - High priority (if scaling is a concern)
+   - Offloads rendering from server to client
+   - Zero egress with CloudFlare R2
+   - Pre-generate tiles once, serve forever
+   - ~9 days effort for basic implementation
+
+5. **Spatial Index Optimization (Phase 2 of Native Perf)** - High priority
    - 2.5x speedup for uncached tiles
    - Reduces load on R-tree queries
    - Tile-based index is straightforward
 
-5. **Geometry & Encoding Optimization (Phases 3-5)** - Medium priority
+6. **Geometry & Encoding Optimization (Phases 3-5)** - Medium priority
    - Additional 2-4x speedup combined
    - SIMD optional (provide scalar fallback)
    - Memory pooling is low-hanging fruit
 
-6. **Configurable Styling** - Medium priority
+7. **Configurable Styling** - Medium priority
    - Quick wins with presets
    - Visibility toggles are simple
    - Dashed lines add polish
 
-7. **Parallelization (Phase 6)** - Medium priority
+8. **Parallelization (Phase 6)** - Medium priority
    - Throughput scaling, not latency reduction
    - Important for batch pre-generation
    - Thread pool is reusable infrastructure
 
-8. **Pre-Generation Pipeline (Phase 7)** - Medium priority
+9. **Pre-Generation Pipeline (Phase 7)** - Medium priority
    - Enables true parity with Martin (~2ms)
    - Outputs MBTiles for production serving
    - Useful for offline/WASM deployment
 
-9. **Font/Label Rendering** - Lower priority (more complex)
-   - Start with bitmap fonts
-   - Label placement is algorithmically complex
-   - Can be deferred until performance work is stable
+10. **Font/Label Rendering** - Lower priority (more complex)
+    - Start with bitmap fonts
+    - Label placement is algorithmically complex
+    - Can be deferred until performance work is stable
 
 ## Testing Strategy
 
