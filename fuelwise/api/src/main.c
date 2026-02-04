@@ -2,9 +2,12 @@
  * FuelWise REST API Server
  *
  * A lightweight HTTP API for fuel optimization using mongoose.
+ * Features rate limiting, work queue for CPU-intensive operations,
+ * and configurable through CLI args and environment variables.
  *
  * Endpoints:
- *   GET  /api/v1/health         - Health check
+ *   GET  /api/v1/health         - Health check (bypasses queue)
+ *   GET  /api/v1/stats          - Server statistics (bypasses queue)
  *   POST /api/v1/filter         - Filter stations to route
  *   POST /api/v1/solve          - Solve refueling problem
  *   POST /api/v1/optimize       - Full optimization pipeline
@@ -14,14 +17,61 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <pthread.h>
+#include <stdint.h>
 #include "mongoose.h"
 #include "fuelwise.h"
+#include "shared.h"  /* For sh_ratelimit, sh_workqueue, sh_args */
 
-/* Default configuration */
-#define DEFAULT_PORT "8080"
-#define MAX_REQUEST_SIZE (10 * 1024 * 1024)  /* 10 MB */
+/* ============================================================================
+ * Configuration
+ * ============================================================================ */
 
-static int s_signo = 0;
+/* Global state */
+static volatile sig_atomic_t s_signo = 0;
+
+/* Rate limiter instance */
+static ShRateLimiter *s_rate_limiter = NULL;
+
+/* Work queue instance */
+static ShWorkQueue *s_work_queue = NULL;
+
+/* Server configuration (from sh_args) */
+static ShServerConfig s_config;
+
+/* CORS configuration */
+static ShCorsConfig s_cors;
+
+/* Work item types for the queue */
+typedef enum {
+    WORK_TYPE_SOLVE,
+    WORK_TYPE_FILTER,
+    WORK_TYPE_OPTIMIZE
+} WorkType;
+
+/* Work item for CPU-intensive operations */
+typedef struct {
+    WorkType type;
+    char *request_body;      /* Copy of request body (owned) */
+    size_t request_len;
+
+    /* Response buffer (set by worker) */
+    char *response_data;
+    size_t response_size;
+    int status_code;
+
+    /* Completion signaling */
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int completed;
+} SolveWorkItem;
+
+/* Worker threads */
+static pthread_t *s_workers = NULL;
+static int s_num_workers = 0;
+static volatile int s_shutdown = 0;
+
+/* Signal handler */
 static void signal_handler(int signo) {
     s_signo = signo;
 }
@@ -120,7 +170,7 @@ static int parse_polyline(const char *json_array, FWPolyline *polyline) {
     return 0;
 }
 
-/* Parse a JSON array of route segments: [{"start_distance": 0, "weight": 40000, "mpg": 6.5}, ...] */
+/* Parse a JSON array of route segments */
 static int parse_segments(const char *json_array, FWRouteSegment **segments, int *count) {
     const char *p = skip_ws(json_array);
     if (*p != '[') return -1;
@@ -386,51 +436,74 @@ static void free_problem(FWRefuelProblem *problem) {
 
 /* Build error response */
 static void send_error(struct mg_connection *c, int status, const char *message) {
-    mg_http_reply(c, status, "Content-Type: application/json\r\n",
-        "{\"error\": \"%s\"}\n", message);
+    char cors_headers[256];
+    sh_cors_headers(&s_cors, NULL, cors_headers, sizeof(cors_headers));
+    char headers[512];
+    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_headers);
+    mg_http_reply(c, status, headers, "{\"error\": \"%s\"}\n", message);
 }
 
 /* Build success response with JSON body */
 static void send_json(struct mg_connection *c, const char *json) {
-    mg_http_reply(c, 200,
-        "Content-Type: application/json\r\n"
-        "Access-Control-Allow-Origin: *\r\n",
-        "%s", json);
+    char cors_headers[256];
+    sh_cors_headers(&s_cors, NULL, cors_headers, sizeof(cors_headers));
+    char headers[512];
+    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_headers);
+    mg_http_reply(c, 200, headers, "%s", json);
+}
+
+/* Build response with custom status code and JSON body */
+static void send_json_status(struct mg_connection *c, int status, const char *json) {
+    char cors_headers[256];
+    sh_cors_headers(&s_cors, NULL, cors_headers, sizeof(cors_headers));
+    char headers[512];
+    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_headers);
+    mg_http_reply(c, status, headers, "%s", json);
 }
 
 /* ============================================================================
- * API Handlers
+ * Rate Limiting Helper
  * ============================================================================ */
 
-/* GET /api/v1/health */
-static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
-    (void)hm;
-    char response[512];
-    snprintf(response, sizeof(response),
-        "{\n"
-        "  \"status\": \"healthy\",\n"
-        "  \"version\": \"%s\",\n"
-        "  \"service\": \"fuelwise-api\"\n"
-        "}\n",
-        fw_version());
-    send_json(c, response);
+/* Check rate limit for a connection. Returns 1 if allowed, 0 if denied. */
+static int check_rate_limit(struct mg_connection *c) {
+    if (!s_rate_limiter) return 1;  /* Rate limiting disabled */
+
+    ShRateLimitAddr client_addr;
+    if (c->rem.is_ip6) {
+        /* Extract IPv6 address from union */
+        sh_ratelimit_addr_ipv6(&client_addr, c->rem.addr.ip6[0], c->rem.addr.ip6[1]);
+    } else {
+        /* Extract IPv4 address (in network byte order from mongoose) */
+        sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
+    }
+
+    return sh_ratelimit_check(s_rate_limiter, &client_addr);
 }
 
-/* POST /api/v1/solve */
-static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
+/* ============================================================================
+ * Core Processing Functions (called by workers)
+ * ============================================================================ */
+
+/* Process a solve request - returns malloc'd response string */
+static char *process_solve(const char *body, int *status_code) {
+    *status_code = 200;
+
     /* Parse request body */
     FWRefuelProblem problem;
-    if (parse_solve_request(hm->body.buf, &problem) != 0) {
-        send_error(c, 400, "Invalid request format");
-        return;
+    if (parse_solve_request(body, &problem) != 0) {
+        *status_code = 400;
+        return strdup("{\"error\": \"Invalid request format\"}\n");
     }
 
     /* Validate problem */
     char error_msg[256];
     if (!fw_validate_problem(&problem, error_msg, sizeof(error_msg))) {
-        send_error(c, 400, error_msg);
+        *status_code = 400;
+        char *resp = malloc(512);
+        if (resp) snprintf(resp, 512, "{\"error\": \"%s\"}\n", error_msg);
         free_problem(&problem);
-        return;
+        return resp;
     }
 
     /* Solve */
@@ -445,29 +518,31 @@ static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
     }
 
     if (ret != 0 || solution.status != FW_STATUS_OPTIMAL) {
-        send_error(c, 422, fw_status_string(solution.status));
+        *status_code = 422;
+        char *resp = malloc(256);
+        if (resp) snprintf(resp, 256, "{\"error\": \"%s\"}\n", fw_status_string(solution.status));
         fw_free_solution(&solution);
         free_problem(&problem);
-        return;
+        return resp;
     }
 
-    /* Build response - use conservative buffer sizing with overflow check */
-    size_t per_station = 256;  /* Conservative estimate per station entry */
+    /* Build response */
+    size_t per_station = 256;
     size_t base_size = 2048;
     if (problem.num_stations < 0 ||
         (size_t)problem.num_stations > (SIZE_MAX - base_size) / per_station) {
-        send_error(c, 500, "Too many stations for response buffer");
+        *status_code = 500;
         fw_free_solution(&solution);
         free_problem(&problem);
-        return;
+        return strdup("{\"error\": \"Too many stations for response buffer\"}\n");
     }
     size_t buf_size = base_size + (size_t)problem.num_stations * per_station;
     char *response = malloc(buf_size);
     if (!response) {
-        send_error(c, 500, "Memory allocation failed");
+        *status_code = 500;
         fw_free_solution(&solution);
         free_problem(&problem);
-        return;
+        return strdup("{\"error\": \"Memory allocation failed\"}\n");
     }
 
     size_t pos = 0;
@@ -507,51 +582,50 @@ static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
         }
     }
 
-    n = snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
-    (void)n;  /* Final snprintf - truncation here is fine, buffer is null-terminated */
+    snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
 
-    send_json(c, response);
-
-    free(response);
     fw_free_solution(&solution);
     free_problem(&problem);
+    return response;
 }
 
-/* POST /api/v1/filter */
-static void handle_filter(struct mg_connection *c, struct mg_http_message *hm) {
+/* Process a filter request - returns malloc'd response string */
+static char *process_filter(const char *body, int *status_code) {
+    *status_code = 200;
+
     /* Parse stations array */
-    const char *stations_json = find_json_key(hm->body.buf, "stations");
+    const char *stations_json = find_json_key(body, "stations");
     if (!stations_json) {
-        send_error(c, 400, "Missing 'stations' array");
-        return;
+        *status_code = 400;
+        return strdup("{\"error\": \"Missing 'stations' array\"}\n");
     }
 
     FWStation *stations = NULL;
     int num_stations = 0;
     if (parse_stations_geo(stations_json, &stations, &num_stations) != 0) {
-        send_error(c, 400, "Invalid stations format");
-        return;
+        *status_code = 400;
+        return strdup("{\"error\": \"Invalid stations format\"}\n");
     }
 
     /* Parse route polyline */
-    const char *route_json = find_json_key(hm->body.buf, "route");
+    const char *route_json = find_json_key(body, "route");
     if (!route_json) {
         free(stations);
-        send_error(c, 400, "Missing 'route' array");
-        return;
+        *status_code = 400;
+        return strdup("{\"error\": \"Missing 'route' array\"}\n");
     }
 
     FWPolyline route;
     if (parse_polyline(route_json, &route) != 0) {
         free(stations);
-        send_error(c, 400, "Invalid route format");
-        return;
+        *status_code = 400;
+        return strdup("{\"error\": \"Invalid route format\"}\n");
     }
 
     /* Parse max_distance (default 5 miles) */
     double max_distance = 5.0;
     const char *p;
-    if ((p = find_json_key(hm->body.buf, "max_distance"))) {
+    if ((p = find_json_key(body, "max_distance"))) {
         max_distance = parse_double(&p);
     }
 
@@ -565,25 +639,25 @@ static void handle_filter(struct mg_connection *c, struct mg_http_message *hm) {
     free(route.points);
 
     if (ret != 0) {
-        send_error(c, 500, "Filter operation failed");
-        return;
+        *status_code = 500;
+        return strdup("{\"error\": \"Filter operation failed\"}\n");
     }
 
-    /* Build response - use conservative buffer sizing with overflow check */
-    size_t per_station = 256;  /* Conservative estimate per station entry */
+    /* Build response */
+    size_t per_station = 256;
     size_t base_size = 1024;
     if (filtered_count < 0 ||
         (size_t)filtered_count > (SIZE_MAX - base_size) / per_station) {
         fw_free_snapped_stations(filtered);
-        send_error(c, 500, "Too many stations for response buffer");
-        return;
+        *status_code = 500;
+        return strdup("{\"error\": \"Too many stations for response buffer\"}\n");
     }
     size_t buf_size = base_size + (size_t)filtered_count * per_station;
     char *response = malloc(buf_size);
     if (!response) {
         fw_free_snapped_stations(filtered);
-        send_error(c, 500, "Memory allocation failed");
-        return;
+        *status_code = 500;
+        return strdup("{\"error\": \"Memory allocation failed\"}\n");
     }
 
     size_t pos = 0;
@@ -616,44 +690,43 @@ static void handle_filter(struct mg_connection *c, struct mg_http_message *hm) {
         if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
     }
 
-    n = snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
-    (void)n;  /* Final snprintf - truncation here is fine, buffer is null-terminated */
+    snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
 
-    send_json(c, response);
-
-    free(response);
     fw_free_snapped_stations(filtered);
+    return response;
 }
 
-/* POST /api/v1/optimize - Full optimization pipeline */
-static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm) {
+/* Process an optimize request - returns malloc'd response string */
+static char *process_optimize(const char *body, int *status_code) {
+    *status_code = 200;
+
     /* Parse stations array */
-    const char *stations_json = find_json_key(hm->body.buf, "stations");
+    const char *stations_json = find_json_key(body, "stations");
     if (!stations_json) {
-        send_error(c, 400, "Missing 'stations' array");
-        return;
+        *status_code = 400;
+        return strdup("{\"error\": \"Missing 'stations' array\"}\n");
     }
 
     FWStation *stations = NULL;
     int num_stations = 0;
     if (parse_stations_geo(stations_json, &stations, &num_stations) != 0) {
-        send_error(c, 400, "Invalid stations format");
-        return;
+        *status_code = 400;
+        return strdup("{\"error\": \"Invalid stations format\"}\n");
     }
 
     /* Parse route polyline */
-    const char *route_json = find_json_key(hm->body.buf, "route");
+    const char *route_json = find_json_key(body, "route");
     if (!route_json) {
         free(stations);
-        send_error(c, 400, "Missing 'route' array");
-        return;
+        *status_code = 400;
+        return strdup("{\"error\": \"Missing 'route' array\"}\n");
     }
 
     FWPolyline route;
     if (parse_polyline(route_json, &route) != 0) {
         free(stations);
-        send_error(c, 400, "Invalid route format");
-        return;
+        *status_code = 400;
+        return strdup("{\"error\": \"Invalid route format\"}\n");
     }
 
     /* Parse config */
@@ -666,36 +739,36 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
     double min_purchase = 0.0;
     double stop_cost = 0.0;
 
-    if ((p = find_json_key(hm->body.buf, "tank_capacity"))) {
+    if ((p = find_json_key(body, "tank_capacity"))) {
         tank_capacity = parse_double(&p);
     }
-    if ((p = find_json_key(hm->body.buf, "current_fuel"))) {
+    if ((p = find_json_key(body, "current_fuel"))) {
         current_fuel = parse_double(&p);
     }
-    if ((p = find_json_key(hm->body.buf, "consumption_mpg"))) {
+    if ((p = find_json_key(body, "consumption_mpg"))) {
         consumption_mpg = parse_double(&p);
     }
-    if ((p = find_json_key(hm->body.buf, "minimum_fuel"))) {
+    if ((p = find_json_key(body, "minimum_fuel"))) {
         min_fuel = parse_double(&p);
     }
-    if ((p = find_json_key(hm->body.buf, "max_distance"))) {
+    if ((p = find_json_key(body, "max_distance"))) {
         max_distance = parse_double(&p);
     }
-    if ((p = find_json_key(hm->body.buf, "min_purchase"))) {
+    if ((p = find_json_key(body, "min_purchase"))) {
         min_purchase = parse_double(&p);
     }
-    if ((p = find_json_key(hm->body.buf, "stop_cost"))) {
+    if ((p = find_json_key(body, "stop_cost"))) {
         stop_cost = parse_double(&p);
     }
     double remaining_fuel_value = 0.0;
-    if ((p = find_json_key(hm->body.buf, "remaining_fuel_value"))) {
+    if ((p = find_json_key(body, "remaining_fuel_value"))) {
         remaining_fuel_value = parse_double(&p);
     }
 
-    /* Parse segments (optional - for variable consumption) */
+    /* Parse segments (optional) */
     FWRouteSegment *segments = NULL;
     int num_segments = 0;
-    p = find_json_key(hm->body.buf, "segments");
+    p = find_json_key(body, "segments");
     if (p && *p == '[') {
         parse_segments(p, &segments, &num_segments);
     }
@@ -711,9 +784,11 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
     if (ret != 0 || filtered_count == 0) {
         free(route.points);
         if (filtered) fw_free_snapped_stations(filtered);
-        send_error(c, 422, filtered_count == 0 ?
-            "No stations found within distance of route" : "Filter failed");
-        return;
+        free(segments);
+        *status_code = 422;
+        return strdup(filtered_count == 0 ?
+            "{\"error\": \"No stations found within distance of route\"}\n" :
+            "{\"error\": \"Filter failed\"}\n");
     }
 
     /* Build refueling problem */
@@ -731,7 +806,6 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
     problem.num_stations = filtered_count;
     problem.stations = filtered;
 
-    /* Add segments if provided */
     if (num_segments > 0 && segments) {
         problem.num_segments = num_segments;
         problem.segments = segments;
@@ -744,11 +818,13 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
     if (!fw_validate_problem(&problem, error_msg, sizeof(error_msg))) {
         fw_free_snapped_stations(filtered);
         free(segments);
-        send_error(c, 400, error_msg);
-        return;
+        *status_code = 400;
+        char *resp = malloc(512);
+        if (resp) snprintf(resp, 512, "{\"error\": \"%s\"}\n", error_msg);
+        return resp;
     }
 
-    /* Solve - use MILP if we have min_purchase or stop_cost */
+    /* Solve */
     FWRefuelSolution solution;
     int use_milp = (min_purchase > 0 || stop_cost > 0);
     if (use_milp) {
@@ -760,21 +836,23 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
     if (ret != 0 || solution.status != FW_STATUS_OPTIMAL) {
         fw_free_snapped_stations(filtered);
         free(segments);
-        send_error(c, 422, fw_status_string(solution.status));
+        *status_code = 422;
+        char *resp = malloc(256);
+        if (resp) snprintf(resp, 256, "{\"error\": \"%s\"}\n", fw_status_string(solution.status));
         fw_free_solution(&solution);
-        return;
+        return resp;
     }
 
-    /* Build response - use conservative buffer sizing with overflow check */
-    size_t per_station = 256;  /* Conservative estimate per station entry */
+    /* Build response */
+    size_t per_station = 256;
     size_t base_size = 2048;
     if (filtered_count < 0 ||
         (size_t)filtered_count > (SIZE_MAX - base_size) / per_station) {
         fw_free_snapped_stations(filtered);
         fw_free_solution(&solution);
         free(segments);
-        send_error(c, 500, "Too many stations for response buffer");
-        return;
+        *status_code = 500;
+        return strdup("{\"error\": \"Too many stations for response buffer\"}\n");
     }
     size_t buf_size = base_size + (size_t)filtered_count * per_station;
     char *response = malloc(buf_size);
@@ -782,8 +860,8 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
         fw_free_snapped_stations(filtered);
         fw_free_solution(&solution);
         free(segments);
-        send_error(c, 500, "Memory allocation failed");
-        return;
+        *status_code = 500;
+        return strdup("{\"error\": \"Memory allocation failed\"}\n");
     }
 
     size_t pos = 0;
@@ -829,25 +907,295 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
         }
     }
 
-    n = snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
-    (void)n;  /* Final snprintf - truncation here is fine, buffer is null-terminated */
+    snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
 
-    send_json(c, response);
-
-    free(response);
     fw_free_snapped_stations(filtered);
     fw_free_solution(&solution);
     free(segments);
+    return response;
+}
+
+/* ============================================================================
+ * Worker Thread
+ * ============================================================================ */
+
+static void *worker_thread_fn(void *arg) {
+    (void)arg;
+
+    while (!s_shutdown) {
+        ShWorkItem *item = sh_workqueue_pop_timeout(s_work_queue, 100);
+        if (!item) continue;
+
+        /* Check if item expired */
+        if (sh_workqueue_item_expired(s_work_queue, item)) {
+            sh_workqueue_item_free(item);
+            continue;
+        }
+
+        /* Get the work item */
+        SolveWorkItem *work = (SolveWorkItem *)item->user_ctx;
+        if (!work) {
+            sh_workqueue_item_free(item);
+            continue;
+        }
+
+        /* Process based on type */
+        int status_code = 200;
+        char *response = NULL;
+
+        switch (work->type) {
+            case WORK_TYPE_SOLVE:
+                response = process_solve(work->request_body, &status_code);
+                break;
+            case WORK_TYPE_FILTER:
+                response = process_filter(work->request_body, &status_code);
+                break;
+            case WORK_TYPE_OPTIMIZE:
+                response = process_optimize(work->request_body, &status_code);
+                break;
+        }
+
+        /* Store result */
+        pthread_mutex_lock(&work->mutex);
+        work->response_data = response;
+        work->response_size = response ? strlen(response) : 0;
+        work->status_code = status_code;
+        work->completed = 1;
+        pthread_cond_signal(&work->cond);
+        pthread_mutex_unlock(&work->mutex);
+
+        sh_workqueue_item_free(item);
+    }
+
+    return NULL;
+}
+
+/* ============================================================================
+ * API Handlers
+ * ============================================================================ */
+
+/* GET /api/v1/health - bypasses work queue */
+static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    char response[512];
+    snprintf(response, sizeof(response),
+        "{\n"
+        "  \"status\": \"healthy\",\n"
+        "  \"version\": \"%s\",\n"
+        "  \"service\": \"fuelwise-api\"\n"
+        "}\n",
+        fw_version());
+    send_json(c, response);
+}
+
+/* GET /api/v1/stats - bypasses work queue */
+static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
+    (void)hm;
+    char response[2048];
+    size_t pos = 0;
+    int n;
+
+    n = snprintf(response + pos, sizeof(response) - pos,
+        "{\n"
+        "  \"service\": \"fuelwise-api\",\n"
+        "  \"version\": \"%s\",\n",
+        fw_version());
+    if (n > 0 && (size_t)n < sizeof(response) - pos) pos += (size_t)n;
+
+    /* Work queue stats */
+    if (s_work_queue) {
+        ShWorkQueueStats wq_stats;
+        sh_workqueue_stats(s_work_queue, &wq_stats);
+        n = snprintf(response + pos, sizeof(response) - pos,
+            "  \"work_queue\": {\n"
+            "    \"enabled\": true,\n"
+            "    \"depth\": %zu,\n"
+            "    \"capacity\": %zu,\n"
+            "    \"pushed\": %llu,\n"
+            "    \"popped\": %llu,\n"
+            "    \"dropped\": %llu,\n"
+            "    \"expired\": %llu,\n"
+            "    \"timeout_sec\": %.1f\n"
+            "  },\n",
+            wq_stats.current_depth,
+            wq_stats.max_capacity,
+            (unsigned long long)wq_stats.total_pushed,
+            (unsigned long long)wq_stats.total_popped,
+            (unsigned long long)wq_stats.total_dropped,
+            (unsigned long long)wq_stats.total_expired,
+            wq_stats.timeout_sec);
+    } else {
+        n = snprintf(response + pos, sizeof(response) - pos,
+            "  \"work_queue\": {\n"
+            "    \"enabled\": false\n"
+            "  },\n");
+    }
+    if (n > 0 && (size_t)n < sizeof(response) - pos) pos += (size_t)n;
+
+    /* Rate limit stats */
+    if (s_rate_limiter) {
+        ShRateLimitStats rl_stats;
+        sh_ratelimit_stats(s_rate_limiter, &rl_stats);
+        n = snprintf(response + pos, sizeof(response) - pos,
+            "  \"rate_limit\": {\n"
+            "    \"enabled\": true,\n"
+            "    \"rps\": %.1f,\n"
+            "    \"burst\": %.1f,\n"
+            "    \"allowed\": %llu,\n"
+            "    \"denied\": %llu,\n"
+            "    \"active_entries\": %zu,\n"
+            "    \"evictions\": %zu\n"
+            "  }\n",
+            s_config.rate_limit_rps,
+            s_config.rate_limit_burst,
+            (unsigned long long)rl_stats.requests_allowed,
+            (unsigned long long)rl_stats.requests_denied,
+            rl_stats.active_entries,
+            rl_stats.evictions);
+    } else {
+        n = snprintf(response + pos, sizeof(response) - pos,
+            "  \"rate_limit\": {\n"
+            "    \"enabled\": false\n"
+            "  }\n");
+    }
+    if (n > 0 && (size_t)n < sizeof(response) - pos) pos += (size_t)n;
+
+    snprintf(response + pos, sizeof(response) - pos, "}\n");
+    send_json(c, response);
+}
+
+/* Generic handler that uses work queue */
+static void handle_via_queue(struct mg_connection *c, struct mg_http_message *hm, WorkType type) {
+    if (!s_work_queue) {
+        /* Work queue disabled - process synchronously */
+        int status_code = 200;
+        char *response = NULL;
+
+        /* Copy body to null-terminated string */
+        char *body = malloc(hm->body.len + 1);
+        if (!body) {
+            send_error(c, 500, "Memory allocation failed");
+            return;
+        }
+        memcpy(body, hm->body.buf, hm->body.len);
+        body[hm->body.len] = '\0';
+
+        switch (type) {
+            case WORK_TYPE_SOLVE:
+                response = process_solve(body, &status_code);
+                break;
+            case WORK_TYPE_FILTER:
+                response = process_filter(body, &status_code);
+                break;
+            case WORK_TYPE_OPTIMIZE:
+                response = process_optimize(body, &status_code);
+                break;
+        }
+
+        free(body);
+
+        if (response) {
+            send_json_status(c, status_code, response);
+            free(response);
+        } else {
+            send_error(c, 500, "Processing failed");
+        }
+        return;
+    }
+
+    /* Create work item */
+    SolveWorkItem *work = calloc(1, sizeof(SolveWorkItem));
+    if (!work) {
+        send_error(c, 500, "Memory allocation failed");
+        return;
+    }
+
+    work->type = type;
+    work->request_body = malloc(hm->body.len + 1);
+    if (!work->request_body) {
+        free(work);
+        send_error(c, 500, "Memory allocation failed");
+        return;
+    }
+    memcpy(work->request_body, hm->body.buf, hm->body.len);
+    work->request_body[hm->body.len] = '\0';
+    work->request_len = hm->body.len;
+    work->completed = 0;
+
+    pthread_mutex_init(&work->mutex, NULL);
+    pthread_cond_init(&work->cond, NULL);
+
+    /* Push to work queue */
+    ShWorkItem item = {
+        .data = NULL,  /* We manage our own data */
+        .data_len = 0,
+        .user_ctx = work
+    };
+
+    double pressure = 0.0;
+    if (!sh_workqueue_try_push(s_work_queue, &item, &pressure)) {
+        /* Queue full - backpressure */
+        pthread_mutex_destroy(&work->mutex);
+        pthread_cond_destroy(&work->cond);
+        free(work->request_body);
+        free(work);
+        send_error(c, 503, "Service unavailable - queue full");
+        return;
+    }
+
+    /* Wait for completion with timeout */
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += (int)s_config.work_queue_timeout;
+
+    pthread_mutex_lock(&work->mutex);
+    while (!work->completed) {
+        int rc = pthread_cond_timedwait(&work->cond, &work->mutex, &ts);
+        if (rc != 0) {
+            /* Timeout */
+            pthread_mutex_unlock(&work->mutex);
+            send_error(c, 504, "Gateway timeout");
+            /* Note: work will be cleaned up when worker processes it */
+            return;
+        }
+    }
+    pthread_mutex_unlock(&work->mutex);
+
+    /* Send response */
+    if (work->response_data) {
+        send_json_status(c, work->status_code, work->response_data);
+        free(work->response_data);
+    } else {
+        send_error(c, 500, "Processing failed");
+    }
+
+    /* Cleanup */
+    pthread_mutex_destroy(&work->mutex);
+    pthread_cond_destroy(&work->cond);
+    free(work->request_body);
+    free(work);
+}
+
+/* POST /api/v1/solve */
+static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
+    handle_via_queue(c, hm, WORK_TYPE_SOLVE);
+}
+
+/* POST /api/v1/filter */
+static void handle_filter(struct mg_connection *c, struct mg_http_message *hm) {
+    handle_via_queue(c, hm, WORK_TYPE_FILTER);
+}
+
+/* POST /api/v1/optimize */
+static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm) {
+    handle_via_queue(c, hm, WORK_TYPE_OPTIMIZE);
 }
 
 /* OPTIONS handler for CORS preflight */
 static void handle_options(struct mg_connection *c) {
-    mg_http_reply(c, 204,
-        "Access-Control-Allow-Origin: *\r\n"
-        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-        "Access-Control-Allow-Headers: Content-Type\r\n"
-        "Access-Control-Max-Age: 86400\r\n",
-        "");
+    char cors_headers[512];
+    sh_cors_preflight_headers(&s_cors, NULL, cors_headers, sizeof(cors_headers));
+    mg_http_reply(c, 204, cors_headers, "");
 }
 
 /* ============================================================================
@@ -858,16 +1206,30 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
-        /* Handle CORS preflight */
+        /* Handle CORS preflight - no rate limiting */
         if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
             handle_options(c);
             return;
         }
 
-        /* Route requests */
+        /* Health and stats bypass rate limiting and work queue */
         if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
             handle_health(c, hm);
-        } else if (mg_match(hm->uri, mg_str("/api/v1/solve"), NULL)) {
+            return;
+        }
+        if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
+            handle_stats(c, hm);
+            return;
+        }
+
+        /* Check rate limit for all other endpoints */
+        if (!check_rate_limit(c)) {
+            send_error(c, 429, "Too many requests");
+            return;
+        }
+
+        /* Route requests */
+        if (mg_match(hm->uri, mg_str("/api/v1/solve"), NULL)) {
             if (mg_match(hm->method, mg_str("POST"), NULL)) {
                 handle_solve(c, hm);
             } else {
@@ -895,17 +1257,44 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
  * Main
  * ============================================================================ */
 
-int main(int argc, char *argv[]) {
-    const char *port = DEFAULT_PORT;
+static void print_usage(const char *prog) {
+    sh_args_usage(prog,
+        "<no-data-file>\n\n"
+        "FuelWise API server for fuel optimization.\n\n"
+        "Example:\n"
+        "  %s -p 8080                    # Start on port 8080\n"
+        "  %s --rate-limit-off           # Disable rate limiting\n"
+        "  %s --queue-off                # Disable work queue\n"
+    );
+}
 
-    /* Parse command line arguments */
+int main(int argc, char *argv[]) {
+    /* Initialize config with defaults */
+    sh_args_init(&s_config);
+    sh_cors_init(&s_cors);
+
+    /* FuelWise-specific defaults */
+    s_config.port = 8080;
+    s_config.rate_limit_rps = 10.0;
+    s_config.rate_limit_burst = 50.0;
+    s_config.work_queue_depth = 100;
+    s_config.work_queue_timeout = 10.0;
+    s_config.worker_threads = 4;
+
+    /* Load from environment first */
+    sh_args_load_env(&s_config, SH_API_FUELWISE);
+
+    /* Parse command line (overrides env) */
+    int first_arg = sh_args_parse(&s_config, argc, argv);
+    if (first_arg < 0) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
+    /* Check for help flag */
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
-            port = argv[++i];
-        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            printf("FuelWise API Server\n");
-            printf("Usage: %s [-p port]\n", argv[0]);
-            printf("  -p port    Port to listen on (default: %s)\n", DEFAULT_PORT);
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
             return 0;
         }
     }
@@ -914,28 +1303,91 @@ int main(int argc, char *argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
+    /* Initialize rate limiter */
+    if (s_config.rate_limit_enabled) {
+        s_rate_limiter = sh_ratelimit_create(
+            s_config.rate_limit_rps,
+            s_config.rate_limit_burst,
+            s_config.rate_limit_buckets > 0 ? s_config.rate_limit_buckets : 4096
+        );
+        if (!s_rate_limiter) {
+            fprintf(stderr, "Error: Failed to create rate limiter\n");
+            return 1;
+        }
+    }
+
+    /* Initialize work queue and workers */
+    if (s_config.work_queue_enabled) {
+        s_work_queue = sh_workqueue_create(
+            s_config.work_queue_depth,
+            s_config.work_queue_timeout
+        );
+        if (!s_work_queue) {
+            fprintf(stderr, "Error: Failed to create work queue\n");
+            sh_ratelimit_free(s_rate_limiter);
+            return 1;
+        }
+
+        /* Start worker threads */
+        s_num_workers = s_config.worker_threads > 0 ? s_config.worker_threads : 4;
+        s_workers = calloc(s_num_workers, sizeof(pthread_t));
+        if (!s_workers) {
+            fprintf(stderr, "Error: Failed to allocate worker threads\n");
+            sh_workqueue_free(s_work_queue);
+            sh_ratelimit_free(s_rate_limiter);
+            return 1;
+        }
+
+        for (int i = 0; i < s_num_workers; i++) {
+            if (pthread_create(&s_workers[i], NULL, worker_thread_fn, NULL) != 0) {
+                fprintf(stderr, "Error: Failed to create worker thread %d\n", i);
+                /* Continue with fewer workers */
+                s_num_workers = i;
+                break;
+            }
+        }
+    }
+
     /* Initialize mongoose */
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
 
     /* Build listen address */
-    char listen_addr[64];
-    snprintf(listen_addr, sizeof(listen_addr), "http://0.0.0.0:%s", port);
+    char listen_addr[128];
+    snprintf(listen_addr, sizeof(listen_addr), "http://%s:%d",
+        s_config.host[0] ? s_config.host : "0.0.0.0", s_config.port);
 
     /* Start listening */
     struct mg_connection *c = mg_http_listen(&mgr, listen_addr, ev_handler, NULL);
     if (c == NULL) {
         fprintf(stderr, "Error: Cannot listen on %s\n", listen_addr);
-        return 1;
+        goto cleanup;
     }
 
+    /* Print startup message */
     printf("FuelWise API Server v%s\n", fw_version());
-    printf("Listening on http://0.0.0.0:%s\n", port);
+    printf("Listening on http://%s:%d\n",
+        s_config.host[0] ? s_config.host : "0.0.0.0", s_config.port);
+    printf("\n");
+    printf("Configuration:\n");
+    printf("  Rate limiting: %s", s_config.rate_limit_enabled ? "enabled" : "disabled");
+    if (s_config.rate_limit_enabled) {
+        printf(" (%.1f RPS, burst %.0f)", s_config.rate_limit_rps, s_config.rate_limit_burst);
+    }
+    printf("\n");
+    printf("  Work queue: %s", s_config.work_queue_enabled ? "enabled" : "disabled");
+    if (s_config.work_queue_enabled) {
+        printf(" (depth %zu, timeout %.1fs, %d workers)",
+            s_config.work_queue_depth, s_config.work_queue_timeout, s_num_workers);
+    }
+    printf("\n");
+    printf("\n");
     printf("Endpoints:\n");
     printf("  GET  /api/v1/health    - Health check\n");
-    printf("  POST /api/v1/solve     - Solve refueling problem (pre-snapped stations)\n");
-    printf("  POST /api/v1/filter    - Filter stations to route polyline\n");
-    printf("  POST /api/v1/optimize  - Full optimization (filter + solve)\n");
+    printf("  GET  /api/v1/stats     - Server statistics\n");
+    printf("  POST /api/v1/solve     - Solve refueling problem\n");
+    printf("  POST /api/v1/filter    - Filter stations to route\n");
+    printf("  POST /api/v1/optimize  - Full optimization pipeline\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
     /* Event loop */
@@ -944,7 +1396,24 @@ int main(int argc, char *argv[]) {
     }
 
     printf("\nShutting down...\n");
+
+cleanup:
+    /* Shutdown workers */
+    s_shutdown = 1;
+    if (s_work_queue) {
+        sh_workqueue_shutdown(s_work_queue);
+    }
+
+    /* Join worker threads */
+    for (int i = 0; i < s_num_workers; i++) {
+        pthread_join(s_workers[i], NULL);
+    }
+    free(s_workers);
+
+    /* Cleanup */
     mg_mgr_free(&mgr);
+    sh_workqueue_free(s_work_queue);
+    sh_ratelimit_free(s_rate_limiter);
 
     return 0;
 }
