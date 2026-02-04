@@ -920,8 +920,22 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
         ct_tile_add_feature(&tile, f);
     }
 
-    /* Render */
+    /* Render features */
     ct_render_tile(ctx, &tile);
+
+    /* Render labels on top */
+    const SHFont *font = sh_font_get_default();
+    if (font) {
+        CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
+        if (placer) {
+            ct_label_place_points(placer, pbf, coord, font, 12.0f);
+            ct_render_labels(ctx, placer, font,
+                            CT_RGB(51, 51, 51),
+                            CT_RGB(255, 255, 255),
+                            1.5f);
+            ct_label_placer_free(placer);
+        }
+    }
 
     /* Cleanup - ct_tile_free handles freeing the points arrays
      * since ct_tile_add_feature took ownership via shallow copy */
@@ -973,8 +987,26 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
         ct_tile_add_feature(&tile, f);
     }
 
-    /* Render */
+    /* Render features */
     ct_render_tile(ctx, &tile);
+
+    /* Render labels on top */
+    const SHFont *font = sh_font_get_default();
+    if (font) {
+        CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
+        if (placer) {
+            /* Place point labels (cities, towns, etc.) */
+            ct_label_place_points(placer, pbf, coord, font, 12.0f);
+
+            /* Render with white halo for readability */
+            ct_render_labels(ctx, placer, font,
+                            CT_RGB(51, 51, 51),      /* Dark gray text */
+                            CT_RGB(255, 255, 255),   /* White halo */
+                            1.5f);                   /* 1.5px halo */
+
+            ct_label_placer_free(placer);
+        }
+    }
 
     /* Cleanup */
     free(features);
@@ -1029,7 +1061,9 @@ void ct_render_glyph(CTRenderContext *ctx,
             int screen_x = x + px;
             if (screen_x < 0 || screen_x >= ctx->width) continue;
 
-            /* Map screen pixel to local glyph coordinates [0, 1] */
+            /* Map screen pixel to local glyph coordinates [0, 1]
+             * local_y=0 -> atlas.bottom (low row = visual top in PNG)
+             * local_y=1 -> atlas.top (high row = visual bottom in PNG) */
             float local_x = ((float)px + 0.5f) / glyph_width;
             float local_y = ((float)py + 0.5f) / glyph_height;
 
