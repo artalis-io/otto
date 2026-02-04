@@ -48,63 +48,29 @@ typedef enum {
     LOD_MINIMAL        /* Fewer features (overview) */
 } LODPreset;
 
+/*
+ * Carta-specific configuration (extends ShServerConfig).
+ */
 typedef struct {
+    /* Common server config (uses sh_args) */
+    ShServerConfig server;
+
+    /* Carta-specific */
     char pbf_path[512];
-    char static_dir[512];
-    char listen_addr[64];
     char save_index_path[512];  /* Path to save binary index */
-    int port;
     int min_zoom;
     int max_zoom;
     int tile_size;
     char name[128];
-    LODPreset lod_preset;  /* LOD filtering preset */
-    int num_threads;       /* Worker threads (0 = auto-detect) */
-    /* Rate limiting configuration */
-    int rate_limit_enabled;   /* 1 = enabled, 0 = disabled */
-    double rate_limit_rps;    /* Tokens refilled per second */
-    double rate_limit_burst;  /* Maximum burst capacity */
-    /* Work queue configuration */
-    int work_queue_enabled;      /* 1 = enabled, 0 = disabled */
-    size_t work_queue_depth;     /* Max pending requests */
-    double work_queue_timeout;   /* Request timeout in seconds */
-    int render_workers;          /* Number of render worker threads (0 = auto) */
-    /* Adaptive capacity configuration */
-    int adaptive_enabled;        /* 1 = enabled, 0 = disabled */
-    double target_utilization;   /* Target utilization (0.0-1.0) */
-    double client_timeout_ms;    /* Client timeout in milliseconds */
-    int burst_tiles;             /* Tiles in initial map view */
-    size_t adaptive_window;      /* Sample window for percentiles */
-    double adaptive_interval;    /* Recalculation interval (requests) */
+    LODPreset lod_preset;       /* LOD filtering preset */
+    int render_workers;         /* Number of render worker threads (0 = auto) */
 } TileServerConfig;
 
 /* Default configuration */
-static TileServerConfig s_config = {
-    .pbf_path = "",
-    .static_dir = "./static",
-    .listen_addr = "0.0.0.0",
-    .port = 8081,
-    .min_zoom = 0,
-    .max_zoom = 18,
-    .tile_size = 512,
-    .name = "Carta Tile Server",
-    .lod_preset = LOD_DEFAULT,  /* OSM-style zoom-dependent filtering */
-    .num_threads = 0,        /* 0 = auto-detect CPU count */
-    .rate_limit_enabled = 1, /* Enabled by default */
-    .rate_limit_rps = 10.0,  /* 10 requests per second */
-    .rate_limit_burst = 100.0, /* Burst capacity of 100 */
-    .work_queue_enabled = 1,   /* Enabled by default */
-    .work_queue_depth = 256,   /* Max 256 pending requests */
-    .work_queue_timeout = 5.0, /* 5 second timeout */
-    .render_workers = 0,       /* 0 = auto-detect CPU count */
-    /* Adaptive capacity defaults */
-    .adaptive_enabled = 0,     /* Disabled by default */
-    .target_utilization = 0.7, /* 70% target */
-    .client_timeout_ms = 10000.0,
-    .burst_tiles = 25,
-    .adaptive_window = 1000,
-    .adaptive_interval = 1000
-};
+static TileServerConfig s_config;
+
+/* CORS configuration (uses sh_cors) */
+static ShCorsConfig s_cors;
 
 /* Global state */
 static volatile sig_atomic_t s_signo = 0;
@@ -610,13 +576,13 @@ static int load_config_file(const char *filename, TileServerConfig *cfg) {
             strncpy(cfg->pbf_path, value, sizeof(cfg->pbf_path) - 1);
             cfg->pbf_path[sizeof(cfg->pbf_path) - 1] = '\0';
         } else if (strcmp(key, "static_dir") == 0 || strcmp(key, "static") == 0) {
-            strncpy(cfg->static_dir, value, sizeof(cfg->static_dir) - 1);
-            cfg->static_dir[sizeof(cfg->static_dir) - 1] = '\0';
+            strncpy(cfg->server.static_dir, value, sizeof(cfg->server.static_dir) - 1);
+            cfg->server.static_dir[sizeof(cfg->server.static_dir) - 1] = '\0';
         } else if (strcmp(key, "listen") == 0 || strcmp(key, "host") == 0) {
-            strncpy(cfg->listen_addr, value, sizeof(cfg->listen_addr) - 1);
-            cfg->listen_addr[sizeof(cfg->listen_addr) - 1] = '\0';
+            strncpy(cfg->server.host, value, sizeof(cfg->server.host) - 1);
+            cfg->server.host[sizeof(cfg->server.host) - 1] = '\0';
         } else if (strcmp(key, "port") == 0) {
-            cfg->port = atoi(value);
+            cfg->server.port = atoi(value);
         } else if (strcmp(key, "min_zoom") == 0) {
             cfg->min_zoom = atoi(value);
         } else if (strcmp(key, "max_zoom") == 0) {
@@ -654,96 +620,72 @@ static LODPreset parse_lod_preset(const char *str) {
     return LOD_DEFAULT;  /* Default if unrecognized */
 }
 
-/* Load configuration from environment variables */
-static void load_config_env(TileServerConfig *cfg) {
+/* Initialize Carta-specific defaults */
+static void init_carta_defaults(TileServerConfig *cfg) {
+    /* Initialize common server config using sh_args */
+    sh_args_init(&cfg->server);
+
+    /* Override defaults for Carta */
+    cfg->server.port = 8081;
+    cfg->server.work_queue_depth = 256;
+    cfg->server.work_queue_timeout = 5.0;
+
+    /* Carta-specific defaults */
+    cfg->pbf_path[0] = '\0';
+    cfg->save_index_path[0] = '\0';
+    cfg->min_zoom = 0;
+    cfg->max_zoom = 18;
+    cfg->tile_size = 512;
+    strncpy(cfg->name, "Carta Tile Server", sizeof(cfg->name) - 1);
+    cfg->lod_preset = LOD_DEFAULT;
+    cfg->render_workers = 0;  /* Auto-detect */
+}
+
+/* Load Carta-specific environment variables */
+static void load_carta_env(TileServerConfig *cfg) {
     const char *val;
 
-    if ((val = getenv("TILE_PBF_PATH")) || (val = getenv("PBF_PATH"))) {
+    /* Load common config using sh_args (handles CARTA_ prefix) */
+    sh_args_load_env(&cfg->server, SH_API_CARTA);
+
+    /* Carta-specific environment variables */
+    if ((val = getenv("TILE_PBF_PATH")) || (val = getenv("PBF_PATH")) ||
+        (val = getenv("CARTA_DATA_FILE"))) {
         strncpy(cfg->pbf_path, val, sizeof(cfg->pbf_path) - 1);
         cfg->pbf_path[sizeof(cfg->pbf_path) - 1] = '\0';
     }
-    if ((val = getenv("TILE_STATIC_DIR")) || (val = getenv("STATIC_DIR"))) {
-        strncpy(cfg->static_dir, val, sizeof(cfg->static_dir) - 1);
-        cfg->static_dir[sizeof(cfg->static_dir) - 1] = '\0';
-    }
-    if ((val = getenv("TILE_PORT")) || (val = getenv("PORT"))) {
-        cfg->port = atoi(val);
-    }
-    if ((val = getenv("TILE_HOST")) || (val = getenv("HOST"))) {
-        strncpy(cfg->listen_addr, val, sizeof(cfg->listen_addr) - 1);
-        cfg->listen_addr[sizeof(cfg->listen_addr) - 1] = '\0';
-    }
-    if ((val = getenv("TILE_MIN_ZOOM"))) {
+    if ((val = getenv("TILE_MIN_ZOOM")) || (val = getenv("CARTA_MIN_ZOOM"))) {
         cfg->min_zoom = atoi(val);
     }
-    if ((val = getenv("TILE_MAX_ZOOM"))) {
+    if ((val = getenv("TILE_MAX_ZOOM")) || (val = getenv("CARTA_MAX_ZOOM"))) {
         cfg->max_zoom = atoi(val);
     }
-    if ((val = getenv("TILE_SIZE"))) {
+    if ((val = getenv("TILE_SIZE")) || (val = getenv("CARTA_TILE_SIZE"))) {
         cfg->tile_size = atoi(val);
     }
-    if ((val = getenv("TILE_NAME"))) {
+    if ((val = getenv("TILE_NAME")) || (val = getenv("CARTA_NAME"))) {
         strncpy(cfg->name, val, sizeof(cfg->name) - 1);
         cfg->name[sizeof(cfg->name) - 1] = '\0';
     }
-    if ((val = getenv("TILE_LOD"))) {
+    if ((val = getenv("TILE_LOD")) || (val = getenv("CARTA_LOD"))) {
         cfg->lod_preset = parse_lod_preset(val);
-    }
-    if ((val = getenv("CARTA_THREADS"))) {
-        cfg->num_threads = atoi(val);
-    }
-    /* Rate limiting configuration */
-    if ((val = getenv("CARTA_RATE_LIMIT_ENABLED"))) {
-        cfg->rate_limit_enabled = (atoi(val) != 0);
-    }
-    if ((val = getenv("CARTA_RATE_LIMIT_RPS"))) {
-        cfg->rate_limit_rps = atof(val);
-        if (cfg->rate_limit_rps <= 0) cfg->rate_limit_rps = 10.0;
-    }
-    if ((val = getenv("CARTA_RATE_LIMIT_BURST"))) {
-        cfg->rate_limit_burst = atof(val);
-        if (cfg->rate_limit_burst <= 0) cfg->rate_limit_burst = 100.0;
-    }
-    /* Work queue configuration */
-    if ((val = getenv("CARTA_WORK_QUEUE_ENABLED"))) {
-        cfg->work_queue_enabled = (atoi(val) != 0);
-    }
-    if ((val = getenv("CARTA_WORK_QUEUE_DEPTH"))) {
-        cfg->work_queue_depth = (size_t)atol(val);
-        if (cfg->work_queue_depth < 1) cfg->work_queue_depth = 256;
-    }
-    if ((val = getenv("CARTA_WORK_QUEUE_TIMEOUT"))) {
-        cfg->work_queue_timeout = atof(val);
-        if (cfg->work_queue_timeout <= 0) cfg->work_queue_timeout = 5.0;
     }
     if ((val = getenv("CARTA_RENDER_WORKERS"))) {
         cfg->render_workers = atoi(val);
     }
-    /* Adaptive capacity configuration */
-    if ((val = getenv("CARTA_ADAPTIVE_ENABLED"))) {
-        cfg->adaptive_enabled = (atoi(val) != 0);
+
+    /* CORS configuration */
+    if ((val = getenv("CARTA_CORS_ORIGINS"))) {
+        sh_cors_parse_origins(&s_cors, val);
     }
-    if ((val = getenv("CARTA_TARGET_UTILIZATION"))) {
-        cfg->target_utilization = atof(val);
-        if (cfg->target_utilization <= 0 || cfg->target_utilization > 1.0) {
-            cfg->target_utilization = 0.7;
-        }
+    if ((val = getenv("CARTA_CORS_METHODS"))) {
+        sh_cors_set_methods(&s_cors, val);
     }
-    if ((val = getenv("CARTA_CLIENT_TIMEOUT"))) {
-        cfg->client_timeout_ms = atof(val);
-        if (cfg->client_timeout_ms <= 0) cfg->client_timeout_ms = 10000.0;
+    if ((val = getenv("CARTA_CORS_HEADERS"))) {
+        sh_cors_set_headers(&s_cors, val);
     }
-    if ((val = getenv("CARTA_BURST_TILES"))) {
-        cfg->burst_tiles = atoi(val);
-        if (cfg->burst_tiles <= 0) cfg->burst_tiles = 25;
-    }
-    if ((val = getenv("CARTA_ADAPTIVE_WINDOW"))) {
-        cfg->adaptive_window = (size_t)atol(val);
-        if (cfg->adaptive_window < 100) cfg->adaptive_window = 1000;
-    }
-    if ((val = getenv("CARTA_ADAPTIVE_INTERVAL"))) {
-        cfg->adaptive_interval = atof(val);
-        if (cfg->adaptive_interval <= 0) cfg->adaptive_interval = 1000;
+    if ((val = getenv("CARTA_CORS_CREDENTIALS"))) {
+        s_cors.allow_credentials = (atoi(val) != 0);
     }
 }
 
@@ -751,35 +693,88 @@ static void load_config_env(TileServerConfig *cfg) {
  * HTTP Response Helpers
  * ============================================================================ */
 
-static void send_json(struct mg_connection *c, int status, const char *json) {
-    mg_http_reply(c, status,
-        "Content-Type: application/json\r\n"
-        "Access-Control-Allow-Origin: *\r\n",
-        "%s", json);
+/* Get CORS preflight headers for an OPTIONS request */
+static void get_cors_preflight_headers(struct mg_http_message *hm, char *buf, size_t size) {
+    buf[0] = '\0';
+    const char *origin = NULL;
+    struct mg_str *origin_hdr = mg_http_get_header(hm, "Origin");
+    if (origin_hdr && origin_hdr->len > 0) {
+        static __thread char origin_buf[256];
+        size_t len = origin_hdr->len < sizeof(origin_buf) - 1 ?
+                     origin_hdr->len : sizeof(origin_buf) - 1;
+        memcpy(origin_buf, origin_hdr->buf, len);
+        origin_buf[len] = '\0';
+        origin = origin_buf;
+    }
+    sh_cors_preflight_headers(&s_cors, origin, buf, size);
 }
 
-static void send_error(struct mg_connection *c, int status, const char *message) {
-    mg_http_reply(c, status,
-        "Content-Type: application/json\r\n"
-        "Access-Control-Allow-Origin: *\r\n",
-        "{\"error\": \"%s\"}\n", message);
+/*
+ * Extract origin from request and generate CORS headers.
+ * Thread-safe using thread-local storage for origin buffer.
+ */
+static void get_cors_headers_from_request(struct mg_http_message *hm, char *buf, size_t size) {
+    buf[0] = '\0';
+    const char *origin = NULL;
+    struct mg_str *origin_hdr = hm ? mg_http_get_header(hm, "Origin") : NULL;
+    if (origin_hdr && origin_hdr->len > 0) {
+        static __thread char origin_buf[256];
+        size_t len = origin_hdr->len < sizeof(origin_buf) - 1 ?
+                     origin_hdr->len : sizeof(origin_buf) - 1;
+        memcpy(origin_buf, origin_hdr->buf, len);
+        origin_buf[len] = '\0';
+        origin = origin_buf;
+    }
+    sh_cors_headers(&s_cors, origin, buf, size);
 }
 
-static void send_tile(struct mg_connection *c, const char *content_type,
-                      const uint8_t *data, size_t size) {
-    /* Send HTTP headers manually for binary data */
-    /* Note: mongoose printf doesn't support %zu, use %lu with cast */
-    /* Use Connection: close to prevent proxy issues with keep-alive */
+static void send_json_cors(struct mg_connection *c, struct mg_http_message *hm,
+                           int status, const char *json) {
+    char cors_headers[512];
+    get_cors_headers_from_request(hm, cors_headers, sizeof(cors_headers));
+
+    char headers[600];
+    snprintf(headers, sizeof(headers),
+        "Content-Type: application/json\r\n%s", cors_headers);
+    mg_http_reply(c, status, headers, "%s", json);
+}
+
+static void send_error_cors(struct mg_connection *c, struct mg_http_message *hm,
+                            int status, const char *message) {
+    char cors_headers[512];
+    get_cors_headers_from_request(hm, cors_headers, sizeof(cors_headers));
+
+    char headers[600];
+    snprintf(headers, sizeof(headers),
+        "Content-Type: application/json\r\n%s", cors_headers);
+    mg_http_reply(c, status, headers, "{\"error\": \"%s\"}\n", message);
+}
+
+static void send_tile_cors(struct mg_connection *c, struct mg_http_message *hm,
+                           const char *content_type, const uint8_t *data, size_t size) {
+    char cors_headers[512];
+    get_cors_headers_from_request(hm, cors_headers, sizeof(cors_headers));
+
     mg_printf(c,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %lu\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
+        "%s"
         "Cache-Control: public, max-age=86400\r\n"
         "Connection: close\r\n"
         "\r\n",
-        content_type, (unsigned long)size);
+        content_type, (unsigned long)size, cors_headers);
     mg_send(c, data, size);
+}
+
+/* Legacy wrappers without request context (for internal callbacks like work queue) */
+static void send_error(struct mg_connection *c, int status, const char *message) {
+    send_error_cors(c, NULL, status, message);
+}
+
+static void send_tile(struct mg_connection *c, const char *content_type,
+                      const uint8_t *data, size_t size) {
+    send_tile_cors(c, NULL, content_type, data, size);
 }
 
 /* ============================================================================
@@ -787,7 +782,7 @@ static void send_tile(struct mg_connection *c, const char *content_type,
  * ============================================================================ */
 
 /* GET /api/v1/health */
-static void handle_health(struct mg_connection *c) {
+static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
     char response[512];
     snprintf(response, sizeof(response),
         "{\n"
@@ -796,13 +791,13 @@ static void handle_health(struct mg_connection *c) {
         "  \"version\": \"%s\"\n"
         "}\n",
         ct_version());
-    send_json(c, 200, response);
+    send_json_cors(c, hm, 200, response);
 }
 
 /* GET /api/v1/stats */
-static void handle_stats(struct mg_connection *c) {
+static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
     if (!s_pbf_ctx) {
-        send_error(c, 503, "PBF not loaded");
+        send_error_cors(c, hm, 503, "PBF not loaded");
         return;
     }
 
@@ -889,7 +884,7 @@ static void handle_stats(struct mg_connection *c) {
         (unsigned long)wq_stats.total_pushed, (unsigned long)wq_stats.total_popped,
         (unsigned long)wq_stats.total_dropped, (unsigned long)wq_stats.total_expired,
         s_rate_limiter ? "true" : "false",
-        s_config.rate_limit_rps, s_config.rate_limit_burst,
+        s_config.server.rate_limit_rps, s_config.server.rate_limit_burst,
         (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied,
         s_adaptive_tracker ? "true" : "false",
         (unsigned long)adaptive_stats.sample_count, (unsigned long)adaptive_stats.recalc_count,
@@ -900,13 +895,13 @@ static void handle_stats(struct mg_connection *c) {
         has_adaptive_params ? adaptive_params.max_throughput_rps : 0.0,
         png_entries, png_bytes, (unsigned long)png_hits, (unsigned long)png_misses,
         mvt_entries, mvt_bytes, (unsigned long)mvt_hits, (unsigned long)mvt_misses);
-    send_json(c, 200, response);
+    send_json_cors(c, hm, 200, response);
 }
 
 /* GET /tiles.json - TileJSON metadata */
 static void handle_tilejson(struct mg_connection *c, struct mg_http_message *hm) {
     if (!s_pbf_ctx) {
-        send_error(c, 503, "PBF not loaded");
+        send_error_cors(c, hm, 503, "PBF not loaded");
         return;
     }
 
@@ -948,7 +943,7 @@ static void handle_tilejson(struct mg_connection *c, struct mg_http_message *hm)
         s_config.min_zoom, s_config.max_zoom,
         bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
         center_lon, center_lat);
-    send_json(c, 200, response);
+    send_json_cors(c, hm, 200, response);
 }
 
 /* Submit render work via work queue and send response */
@@ -974,7 +969,7 @@ static int submit_render_work(struct mg_connection *c, RenderWorkItem *item)
     }
 
     /* Wait for completion with timeout */
-    double timeout = s_config.work_queue_timeout;
+    double timeout = s_config.server.work_queue_timeout;
     if (!render_work_item_wait(item, timeout)) {
         /* Timeout - request took too long */
         mg_http_reply(c, 504,
@@ -1387,20 +1382,17 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
 
         /* CORS preflight */
         if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
-            mg_http_reply(c, 204,
-                "Access-Control-Allow-Origin: *\r\n"
-                "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
-                "Access-Control-Allow-Headers: *\r\n"
-                "Access-Control-Max-Age: 86400\r\n",
-                "");
+            char cors_headers[512];
+            get_cors_preflight_headers(hm, cors_headers, sizeof(cors_headers));
+            mg_http_reply(c, 204, cors_headers, "");
             return;
         }
 
         /* Route requests */
         if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
-            handle_health(c);
+            handle_health(c, hm);
         } else if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
-            handle_stats(c);
+            handle_stats(c, hm);
         } else if (mg_match(hm->uri, mg_str("/tiles.json"), NULL)) {
             handle_tilejson(c, hm);
         } else if (hm->uri.len > 7 && strncmp(hm->uri.buf, "/tiles/", 7) == 0) {
@@ -1423,7 +1415,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
         } else {
             /* Serve static files */
             struct mg_http_serve_opts opts = {
-                .root_dir = s_config.static_dir,
+                .root_dir = s_config.server.static_dir,
                 .extra_headers = "Access-Control-Allow-Origin: *\r\n"
             };
             mg_http_serve_dir(c, hm, &opts);
@@ -1438,69 +1430,60 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
 static void print_usage(const char *prog) {
     printf("Carta Tile Server\n\n");
     printf("Usage: %s [options] <pbf-file>\n\n", prog);
-    printf("Options:\n");
-    printf("  -p, --port PORT      Port to listen on (default: 8081)\n");
-    printf("  -h, --host HOST      Host to bind to (default: 0.0.0.0)\n");
-    printf("  -s, --static DIR     Static files directory (default: ./static)\n");
+
+    /* Common options from sh_args */
+    sh_args_usage(prog, "<pbf-file>");
+
+    printf("Carta-specific options:\n");
     printf("  -c, --config FILE    Configuration file (YAML format)\n");
-    printf("  -t, --threads N      Worker threads (default: auto-detect CPU count)\n");
     printf("  --min-zoom N         Minimum zoom level (default: 0)\n");
     printf("  --max-zoom N         Maximum zoom level (default: 18)\n");
     printf("  --tile-size N        PNG tile size (default: 512)\n");
     printf("  --lod PRESET         LOD filtering: none, default, detailed, minimal\n");
     printf("  --no-lod             Disable LOD filtering (same as --lod none)\n");
     printf("  -S, --save-index FILE  Save binary index for fast loading\n");
-    printf("  --help               Show this help\n");
+    printf("  --render-workers N   Render worker threads (default: auto)\n");
     printf("\n");
-    printf("Environment variables:\n");
-    printf("  TILE_PBF_PATH, PBF_PATH     Path to OSM PBF file\n");
-    printf("  TILE_PORT, PORT             Server port\n");
-    printf("  TILE_HOST, HOST             Server host\n");
-    printf("  TILE_STATIC_DIR             Static files directory\n");
-    printf("  TILE_MIN_ZOOM               Minimum zoom\n");
-    printf("  TILE_MAX_ZOOM               Maximum zoom\n");
-    printf("  TILE_SIZE                   PNG tile size\n");
-    printf("  TILE_LOD                    LOD preset (default, detailed, minimal, none)\n");
-    printf("  CARTA_THREADS               Worker thread count (0 = auto)\n");
-    printf("  CARTA_RATE_LIMIT_ENABLED    Enable rate limiting (default: 1)\n");
-    printf("  CARTA_RATE_LIMIT_RPS        Requests per second (default: 10)\n");
-    printf("  CARTA_RATE_LIMIT_BURST      Burst capacity (default: 100)\n");
-    printf("  CARTA_WORK_QUEUE_ENABLED    Enable work queue (default: 1)\n");
-    printf("  CARTA_WORK_QUEUE_DEPTH      Max pending requests (default: 256)\n");
-    printf("  CARTA_WORK_QUEUE_TIMEOUT    Request timeout in seconds (default: 5)\n");
-    printf("  CARTA_RENDER_WORKERS        Render worker count (0 = auto)\n");
-    printf("  CARTA_ADAPTIVE_ENABLED      Enable adaptive capacity (default: 0)\n");
-    printf("  CARTA_TARGET_UTILIZATION    Target utilization 0.0-1.0 (default: 0.7)\n");
-    printf("  CARTA_CLIENT_TIMEOUT        Client timeout in ms (default: 10000)\n");
-    printf("  CARTA_BURST_TILES           Tiles in initial view (default: 25)\n");
-    printf("  CARTA_ADAPTIVE_WINDOW       Sample window size (default: 1000)\n");
-    printf("  CARTA_ADAPTIVE_INTERVAL     Recalc interval in requests (default: 1000)\n");
+    printf("Carta-specific environment variables:\n");
+    printf("  TILE_PBF_PATH, CARTA_DATA_FILE  Path to OSM PBF file\n");
+    printf("  CARTA_MIN_ZOOM, TILE_MIN_ZOOM   Minimum zoom\n");
+    printf("  CARTA_MAX_ZOOM, TILE_MAX_ZOOM   Maximum zoom\n");
+    printf("  CARTA_TILE_SIZE, TILE_SIZE      PNG tile size\n");
+    printf("  CARTA_LOD, TILE_LOD             LOD preset (default, detailed, minimal, none)\n");
+    printf("  CARTA_RENDER_WORKERS            Render worker count (0 = auto)\n");
+    printf("\n");
+    printf("CORS configuration:\n");
+    printf("  CARTA_CORS_ORIGINS      Comma-separated allowed origins (empty = allow all)\n");
+    printf("  CARTA_CORS_METHODS      Allowed HTTP methods (default: GET, POST, OPTIONS)\n");
+    printf("  CARTA_CORS_HEADERS      Allowed request headers\n");
+    printf("  CARTA_CORS_CREDENTIALS  Allow credentials (default: 0)\n");
     printf("\n");
     printf("Example:\n");
     printf("  %s -p 8081 hungary-latest.osm.pbf\n", prog);
     printf("  %s --threads 8 hungary-latest.osm.pbf\n", prog);
     printf("  %s --no-lod hungary-latest.osm.pbf\n", prog);
+    printf("  CARTA_CORS_ORIGINS=https://app.example.com %s map.pbf\n", prog);
 }
 
 int main(int argc, char *argv[]) {
-    /* Load config from environment first */
-    load_config_env(&s_config);
+    /* Initialize defaults */
+    init_carta_defaults(&s_config);
+    sh_cors_init(&s_cors);
 
-    /* Parse command line arguments */
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) {
-            if (++i < argc) s_config.port = atoi(argv[i]);
-        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--host") == 0) {
-            if (++i < argc) {
-                strncpy(s_config.listen_addr, argv[i], sizeof(s_config.listen_addr) - 1);
-                s_config.listen_addr[sizeof(s_config.listen_addr) - 1] = '\0';
-            }
-        } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--static") == 0) {
-            if (++i < argc) {
-                strncpy(s_config.static_dir, argv[i], sizeof(s_config.static_dir) - 1);
-                s_config.static_dir[sizeof(s_config.static_dir) - 1] = '\0';
-            }
-        } else if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--config") == 0) {
+    /* Load config from environment (uses sh_args for common, carta-specific for the rest) */
+    load_carta_env(&s_config);
+
+    /* Parse command line arguments using sh_args for common options */
+    int arg_index = sh_args_parse(&s_config.server, argc, argv);
+    if (arg_index == -2) {
+        /* --help was passed to sh_args */
+        print_usage(argv[0]);
+        return 0;
+    }
+
+    /* Parse Carta-specific arguments */
+    for (int i = (arg_index > 0 ? arg_index : 1); i < argc; i++) {
+        if (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--config") == 0) {
             if (++i < argc) {
                 if (load_config_file(argv[i], &s_config) != 0) {
                     fprintf(stderr, "Warning: Could not load config file: %s\n", argv[i]);
@@ -1512,8 +1495,6 @@ int main(int argc, char *argv[]) {
             if (++i < argc) s_config.max_zoom = atoi(argv[i]);
         } else if (strcmp(argv[i], "--tile-size") == 0) {
             if (++i < argc) s_config.tile_size = atoi(argv[i]);
-        } else if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--threads") == 0) {
-            if (++i < argc) s_config.num_threads = atoi(argv[i]);
         } else if (strcmp(argv[i], "--lod") == 0) {
             if (++i < argc) s_config.lod_preset = parse_lod_preset(argv[i]);
         } else if (strcmp(argv[i], "--no-lod") == 0) {
@@ -1523,19 +1504,8 @@ int main(int argc, char *argv[]) {
                 strncpy(s_config.save_index_path, argv[i], sizeof(s_config.save_index_path) - 1);
                 s_config.save_index_path[sizeof(s_config.save_index_path) - 1] = '\0';
             }
-        } else if (strcmp(argv[i], "--adaptive") == 0) {
-            s_config.adaptive_enabled = 1;
-        } else if (strcmp(argv[i], "--utilization") == 0) {
-            if (++i < argc) {
-                s_config.target_utilization = atof(argv[i]);
-                if (s_config.target_utilization <= 0 || s_config.target_utilization > 1.0) {
-                    s_config.target_utilization = 0.7;
-                }
-            }
-        } else if (strcmp(argv[i], "--client-timeout") == 0) {
-            if (++i < argc) s_config.client_timeout_ms = atof(argv[i]);
-        } else if (strcmp(argv[i], "--burst-tiles") == 0) {
-            if (++i < argc) s_config.burst_tiles = atoi(argv[i]);
+        } else if (strcmp(argv[i], "--render-workers") == 0) {
+            if (++i < argc) s_config.render_workers = atoi(argv[i]);
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -1631,12 +1601,12 @@ int main(int argc, char *argv[]) {
     }
 
     /* Initialize rate limiter (uses shared library) */
-    if (s_config.rate_limit_enabled) {
-        s_rate_limiter = sh_ratelimit_create(s_config.rate_limit_rps,
-                                             s_config.rate_limit_burst, 4096);
+    if (s_config.server.rate_limit_enabled) {
+        s_rate_limiter = sh_ratelimit_create(s_config.server.rate_limit_rps,
+                                             s_config.server.rate_limit_burst, 4096);
         if (s_rate_limiter) {
             printf("Rate limit: %.0f RPS, burst %.0f (IPv4 + IPv6)\n",
-                   s_config.rate_limit_rps, s_config.rate_limit_burst);
+                   s_config.server.rate_limit_rps, s_config.server.rate_limit_burst);
         } else {
             fprintf(stderr, "Warning: Failed to create rate limiter\n");
         }
@@ -1645,9 +1615,9 @@ int main(int argc, char *argv[]) {
     }
 
     /* Initialize work queue and render workers */
-    if (s_config.work_queue_enabled) {
-        s_work_queue = sh_workqueue_create(s_config.work_queue_depth,
-                                           s_config.work_queue_timeout);
+    if (s_config.server.work_queue_enabled) {
+        s_work_queue = sh_workqueue_create(s_config.server.work_queue_depth,
+                                           s_config.server.work_queue_timeout);
         if (s_work_queue) {
             /* Determine number of render workers */
             int num_render_workers = s_config.render_workers;
@@ -1675,7 +1645,7 @@ int main(int argc, char *argv[]) {
                     }
                 }
                 printf("Work queue: depth %zu, timeout %.1fs, %d render workers\n",
-                       s_config.work_queue_depth, s_config.work_queue_timeout,
+                       s_config.server.work_queue_depth, s_config.server.work_queue_timeout,
                        s_num_render_workers);
             } else {
                 fprintf(stderr, "Warning: Failed to allocate render workers\n");
@@ -1690,21 +1660,21 @@ int main(int argc, char *argv[]) {
     }
 
     /* Initialize adaptive capacity tracker */
-    if (s_config.adaptive_enabled) {
+    if (s_config.server.adaptive_enabled) {
         ShAdaptiveConfig adaptive_cfg;
         sh_adaptive_config_init(&adaptive_cfg);
         adaptive_cfg.num_workers = s_num_render_workers > 0 ? s_num_render_workers : 4;
-        adaptive_cfg.target_utilization = s_config.target_utilization;
-        adaptive_cfg.client_timeout_ms = s_config.client_timeout_ms;
-        adaptive_cfg.burst_tiles = s_config.burst_tiles;
-        adaptive_cfg.window_size = s_config.adaptive_window;
-        adaptive_cfg.recalc_interval = s_config.adaptive_interval;
+        adaptive_cfg.target_utilization = s_config.server.target_utilization;
+        adaptive_cfg.client_timeout_ms = s_config.server.client_timeout_ms;
+        adaptive_cfg.burst_tiles = s_config.server.burst_tiles;
+        adaptive_cfg.window_size = s_config.server.adaptive_window;
+        adaptive_cfg.recalc_interval = s_config.server.adaptive_interval;
 
         s_adaptive_tracker = sh_adaptive_create(&adaptive_cfg);
         if (s_adaptive_tracker) {
             printf("Adaptive capacity: enabled (window=%zu, interval=%.0f, util=%.0f%%)\n",
-                   s_config.adaptive_window, s_config.adaptive_interval,
-                   s_config.target_utilization * 100.0);
+                   s_config.server.adaptive_window, s_config.server.adaptive_interval,
+                   s_config.server.target_utilization * 100.0);
         } else {
             fprintf(stderr, "Warning: Failed to create adaptive tracker\n");
         }
@@ -1718,13 +1688,13 @@ int main(int argc, char *argv[]) {
 
     /* Build listen address (stored globally for worker threads) */
     snprintf(s_listen_url, sizeof(s_listen_url), "http://%s:%d",
-             s_config.listen_addr, s_config.port);
+             s_config.server.host, s_config.server.port);
 
     printf("\nCarta Tile Server v%s\n", ct_version());
-    printf("Listening on http://%s:%d\n", s_config.listen_addr, s_config.port);
+    printf("Listening on http://%s:%d\n", s_config.server.host, s_config.server.port);
 
     /* Determine number of worker threads */
-    int num_threads = s_config.num_threads;
+    int num_threads = s_config.server.worker_threads;
     if (num_threads <= 0) {
 #ifdef _SC_NPROCESSORS_ONLN
         long n = sysconf(_SC_NPROCESSORS_ONLN);
