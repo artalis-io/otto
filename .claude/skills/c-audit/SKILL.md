@@ -454,16 +454,144 @@ sh_workqueue_free(s_work_queue);
 - [ ] Proper shutdown sequence: `shutdown()` -> join threads -> `free()`
 - [ ] Stats exposed via `/api/v1/stats` endpoint
 
+#### Required API Endpoints
+
+All mongoose-based API servers MUST implement these standard endpoints:
+
+```c
+// Health check - NOT rate limited, NOT queued
+GET /api/v1/health
+
+// Statistics - NOT rate limited, NOT queued (for monitoring)
+GET /api/v1/stats
+```
+
+**Health endpoint** returns:
+```json
+{
+  "status": "healthy",
+  "service": "<module>-<purpose>-server",
+  "version": "<version>"
+}
+```
+
+**Stats endpoint** MUST include work queue and rate limiter status (following carta pattern):
+```json
+{
+  "work_queue": {
+    "enabled": true,
+    "depth": 5,
+    "capacity": 256,
+    "pushed": 1234,
+    "popped": 1230,
+    "dropped": 2,
+    "expired": 2
+  },
+  "rate_limit": {
+    "enabled": true,
+    "rps": 10.0,
+    "burst": 100,
+    "allowed": 5678,
+    "denied": 42
+  }
+}
+```
+
+**CRITICAL:** Health and stats endpoints must NOT be blocked by the work queue. Route them before the work queue logic:
+```c
+static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
+    // Rate limiting first (all endpoints)
+    if (s_rate_limiter && !sh_ratelimit_check(s_rate_limiter, &client_addr)) {
+        mg_http_reply(c, 429, ...);
+        return;
+    }
+
+    // Health and stats bypass work queue
+    if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
+        handle_health(c);  // Fast, no queuing
+        return;
+    }
+    if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
+        handle_stats(c);   // Fast, no queuing
+        return;
+    }
+
+    // CPU-intensive endpoints use work queue
+    if (mg_match(hm->uri, mg_str("/api/v1/route"), NULL)) {
+        handle_route_via_queue(c, hm);  // Uses work queue
+        return;
+    }
+}
+```
+
+#### Adaptive Capacity (`shared/include/sh_adaptive.h`)
+
+**Optional: For servers that need to auto-tune rate limits based on measured response times.**
+
+```c
+#include "sh_adaptive.h"
+
+static ShAdaptiveTracker *s_adaptive_tracker = NULL;
+
+// Initialize at startup
+ShAdaptiveConfig adaptive_cfg;
+sh_adaptive_config_init(&adaptive_cfg);
+adaptive_cfg.num_workers = num_workers;
+adaptive_cfg.target_utilization = 0.7;      // 70% target
+adaptive_cfg.client_timeout_ms = 10000.0;   // 10s client timeout
+adaptive_cfg.burst_tiles = 25;              // Initial map view tiles
+adaptive_cfg.window_size = 1000;            // Sample window
+adaptive_cfg.recalc_interval = 1000;        // Recalc every 1000 requests
+
+s_adaptive_tracker = sh_adaptive_create(&adaptive_cfg);
+
+// In worker thread, after processing each request
+gettimeofday(&end, NULL);
+double response_ms = (end.tv_sec - start.tv_sec) * 1000.0 +
+                     (end.tv_usec - start.tv_usec) / 1000.0;
+
+sh_adaptive_record(s_adaptive_tracker, response_ms);
+
+// Check if rate limit should be updated
+ShCapacityParams new_params;
+if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
+    sh_ratelimit_update_rate(s_rate_limiter,
+                             new_params.rate_limit_rps,
+                             new_params.rate_limit_burst);
+}
+
+// Stats endpoint should include adaptive info
+ShAdaptiveStats adaptive_stats;
+sh_adaptive_stats(s_adaptive_tracker, &adaptive_stats);
+// Report: p50_ms, p90_ms, p99_ms, avg_ms, ema_ms, sample_count, recalc_count
+```
+
+**Environment Variables for Adaptive Capacity:**
+```bash
+# Enable/disable
+<MODULE>_ADAPTIVE_ENABLED=0      # Default: disabled
+
+# Tuning parameters
+<MODULE>_TARGET_UTILIZATION=0.7  # Target system utilization (0.0-1.0)
+<MODULE>_CLIENT_TIMEOUT=10000    # Client timeout in ms
+<MODULE>_BURST_TILES=25          # Tiles in initial map view
+<MODULE>_ADAPTIVE_WINDOW=1000    # Sample window size
+<MODULE>_ADAPTIVE_INTERVAL=1000  # Recalc interval in requests
+```
+
 #### API Hardening Checklist
 
 | Check | Severity | Description |
 |-------|----------|-------------|
 | Rate limiting | High | All endpoints protected from abuse |
 | Work queue | High | CPU-intensive ops don't block event loop |
+| Health endpoint | High | `/api/v1/health` exists and bypasses work queue |
+| Stats endpoint | High | `/api/v1/stats` exists, bypasses queue, includes queue/limiter stats |
 | 429 response | Medium | Correct status code for rate limiting |
 | 503 response | Medium | Correct status code for queue full |
 | 504 response | Medium | Correct status code for timeout |
-| Stats endpoint | Low | Monitoring of limiter/queue health |
+| Stats format | Medium | Stats match carta pattern (work_queue, rate_limit objects) |
+| Adaptive capacity | Low | Optional: auto-tune rate limits from response times |
 | Graceful shutdown | Medium | Clean thread termination |
 
 **Reference Implementation:** See `carta/api/src/main.c` for complete example.

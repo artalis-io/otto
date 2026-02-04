@@ -164,7 +164,7 @@ void sh_ratelimit_free(ShRateLimiter *limiter)
 
 int sh_ratelimit_check(ShRateLimiter *limiter, const ShRateLimitAddr *addr)
 {
-    if (!limiter || !addr) return 1;  /* Allow if invalid args */
+    if (!limiter || !addr) return 0;  /* Deny if invalid args (security: deny-by-default) */
 
     /* Don't rate limit zero addresses (invalid) */
     if (!addr->is_ip6 && addr->addr.ip4 == 0) return 1;

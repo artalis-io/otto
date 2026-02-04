@@ -12,6 +12,8 @@
 #include "vl_types.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <limits.h>
 
 /* Forward declaration */
 VLStatus vl_heap_decrease_key(VLHeap *heap, uint32_t node, double new_priority);
@@ -201,6 +203,10 @@ VLStatus vl_heap_push(VLHeap *heap, uint32_t node, double priority)
     /* Grow capacity if needed */
     if (heap->size >= heap->capacity) {
         size_t new_cap = heap->capacity * 2;
+        /* Integer overflow check for allocation size */
+        if (new_cap > SIZE_MAX / sizeof(VLHeapEntry)) {
+            return VL_ERROR_OUT_OF_MEMORY;
+        }
         VLHeapEntry *new_entries = realloc(heap->entries,
                                            new_cap * sizeof(VLHeapEntry));
         if (!new_entries) {

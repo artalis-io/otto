@@ -961,9 +961,9 @@ TEST(ratelimit_null_safe)
     ShRateLimitAddr addr;
     sh_ratelimit_addr_ipv4(&addr, 0x01020304);
 
-    /* Should not crash, return allowed */
-    ASSERT(sh_ratelimit_check(NULL, &addr) == 1);
-    ASSERT(sh_ratelimit_check(NULL, NULL) == 1);
+    /* Should not crash, return denied (security: deny-by-default for invalid args) */
+    ASSERT(sh_ratelimit_check(NULL, &addr) == 0);
+    ASSERT(sh_ratelimit_check(NULL, NULL) == 0);
 
     /* Stats with NULL should not crash */
     sh_ratelimit_stats(NULL, NULL);
