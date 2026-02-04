@@ -523,6 +523,100 @@
             font-size: 12px;
         }
 
+        /* Why C */
+        .why-c {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .why-c-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 32px;
+        }
+
+        .why-c-reasons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .why-c-reason {
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .why-c-reason strong {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--text);
+        }
+
+        .why-c-reason span {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        .why-c-safety h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--success);
+        }
+
+        .why-c-safety ul {
+            list-style: none;
+            font-size: 13px;
+        }
+
+        .why-c-safety li {
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+
+        .why-c-safety li:last-child {
+            border-bottom: none;
+        }
+
+        .why-c-safety li::before {
+            content: "→ ";
+            color: var(--success);
+        }
+
+        .why-c-comparison {
+            margin-top: 24px;
+            overflow-x: auto;
+        }
+
+        .why-c-comparison table {
+            font-size: 12px;
+        }
+
+        .why-c-comparison th {
+            font-size: 11px;
+        }
+
+        .why-c-comparison td:first-child {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .why-c-comparison .winner {
+            color: var(--success);
+        }
+
+        .why-c-comparison .neutral {
+            color: var(--text-muted);
+        }
+
+        .why-c-comparison .weak {
+            color: #ef4444;
+        }
+
         /* For Partners */
         .for-partners {
             padding: 48px 0;
@@ -1073,6 +1167,114 @@ Dependencies:
                         <span>GB+ runtime, server-only, online-only</span>
                     </div>
                 </div>
+            </div>
+        </section>
+
+        <section class="why-c">
+            <h2 class="section-title">Why C?</h2>
+            <div class="why-c-content">
+                <div>
+                    <div class="why-c-reasons">
+                        <div class="why-c-reason">
+                            <strong>Smallest WASM</strong>
+                            <span>~2MB for entire stack</span>
+                        </div>
+                        <div class="why-c-reason">
+                            <strong>Zero GC</strong>
+                            <span>Predictable &lt;100ms latency</span>
+                        </div>
+                        <div class="why-c-reason">
+                            <strong>Universal FFI</strong>
+                            <span>Embed in any language</span>
+                        </div>
+                        <div class="why-c-reason">
+                            <strong>Max Portability</strong>
+                            <span>Browser to embedded</span>
+                        </div>
+                        <div class="why-c-reason">
+                            <strong>Auditable</strong>
+                            <span>Enterprise clients can read it</span>
+                        </div>
+                        <div class="why-c-reason">
+                            <strong>Proven</strong>
+                            <span>Linux, SQLite, Redis, Nginx</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="why-c-safety">
+                    <h3>Memory Safety via Discipline</h3>
+                    <ul>
+                        <li><strong>Arena allocation</strong> &mdash; bulk alloc, bulk free, no use-after-free</li>
+                        <li><strong>Bounded buffers</strong> &mdash; no strcpy/sprintf, snprintf everywhere</li>
+                        <li><strong>WASM sandbox</strong> &mdash; even bugs can't escape the sandbox</li>
+                        <li><strong>Sanitizers</strong> &mdash; ASan + UBSan in all development builds</li>
+                        <li><strong>279+ tests</strong> &mdash; edge cases and stress conditions covered</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="why-c-comparison">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Factor</th>
+                            <th>C</th>
+                            <th>Rust</th>
+                            <th>Go</th>
+                            <th>Zig</th>
+                            <th>C++</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>WASM size</td>
+                            <td class="winner">~2MB</td>
+                            <td class="neutral">~4MB</td>
+                            <td class="weak">~10MB+</td>
+                            <td class="winner">~2MB</td>
+                            <td class="neutral">~4MB</td>
+                        </tr>
+                        <tr>
+                            <td>GC pauses</td>
+                            <td class="winner">None</td>
+                            <td class="winner">None</td>
+                            <td class="weak">Yes</td>
+                            <td class="winner">None</td>
+                            <td class="neutral">Optional</td>
+                        </tr>
+                        <tr>
+                            <td>WASM maturity</td>
+                            <td class="winner">Excellent</td>
+                            <td class="neutral">Good</td>
+                            <td class="weak">Poor</td>
+                            <td class="neutral">Good</td>
+                            <td class="neutral">Good</td>
+                        </tr>
+                        <tr>
+                            <td>Compile speed</td>
+                            <td class="winner">Fast</td>
+                            <td class="weak">Slow</td>
+                            <td class="winner">Fast</td>
+                            <td class="winner">Fast</td>
+                            <td class="weak">Slow</td>
+                        </tr>
+                        <tr>
+                            <td>Complexity</td>
+                            <td class="winner">Low</td>
+                            <td class="weak">High</td>
+                            <td class="winner">Low</td>
+                            <td class="neutral">Medium</td>
+                            <td class="weak">Very High</td>
+                        </tr>
+                        <tr>
+                            <td>Enterprise trust</td>
+                            <td class="winner">High</td>
+                            <td class="neutral">Growing</td>
+                            <td class="neutral">High</td>
+                            <td class="weak">Low</td>
+                            <td class="winner">High</td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
         </section>
 
