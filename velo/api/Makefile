@@ -61,13 +61,13 @@ debug: clean all
 run: all
 	./$(TARGET) ../../data/hungary-latest.osm.pbf
 
-# Test the API endpoints
+# Test the API endpoints (uses --no-landmarks for faster startup)
 test: all
-	@echo "Starting Velo route server for testing..."
-	@./$(TARGET) -p 8084 ../../data/hungary-latest.osm.pbf &
+	@echo "Starting Velo route server for testing (no landmarks for faster startup)..."
+	@./$(TARGET) -p 8084 --no-landmarks ../../data/hungary-latest.osm.pbf &
 	@SERVER_PID=$$!; \
-	echo "Waiting for server to load graph and landmarks (this may take a moment)..."; \
-	sleep 20; \
+	echo "Waiting for server to load graph..."; \
+	sleep 15; \
 	echo ""; \
 	echo "=== Testing Velo Route Server API ==="; \
 	echo ""; \
