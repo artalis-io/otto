@@ -238,13 +238,15 @@ For production, pre-build a binary index from the PBF file. The tile server auto
 
 ### Index File Contents
 
-The binary index (`.idx`) contains everything needed for tile serving:
+The binary index (`.idx`, format v4) contains everything needed for tile serving:
 
 | Section | Contents | Pre-computed |
 |---------|----------|--------------|
 | Ways | ID, coordinates, class, type, name | Yes |
-| R-Tree | Hilbert-packed spatial index | Yes |
+| R-Tree | Hilbert-packed spatial index for ways | Yes |
 | Labeled Points | Cities, towns with names/population | Yes |
+| Multipolygons | Large lakes, forests (relation-based features) | Yes |
+| MP R-Tree | Spatial index for multipolygons | Yes |
 | LOD Metadata | area_sqm, length_m, min_zoom | Yes |
 | String Pool | Deduplicated feature names | Yes |
 

@@ -817,8 +817,8 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
     /* Calculate scale factor from tile extent to render size */
     float scale = (float)ctx->width / CT_MVT_EXTENT;
 
-    /* Render in order: landuse, water, buildings, roads, railways */
-    for (int pass = 0; pass < 5; pass++) {
+    /* Render in order: landuse, water, buildings, roads, railways, boundaries */
+    for (int pass = 0; pass < 6; pass++) {
         CTLayer target_layer;
         switch (pass) {
             case 0: target_layer = CT_LAYER_LANDUSE; break;
@@ -826,6 +826,7 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
             case 2: target_layer = CT_LAYER_BUILDINGS; break;
             case 3: target_layer = CT_LAYER_ROADS; break;
             case 4: target_layer = CT_LAYER_RAILWAYS; break;
+            case 5: target_layer = CT_LAYER_BOUNDARIES; break;
             default: continue;
         }
 
@@ -909,6 +910,13 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                                        ctx->style.railway_width);
                     break;
 
+                case CT_LAYER_BOUNDARIES:
+                    /* Render admin boundaries as semi-transparent lines */
+                    ct_render_polyline(ctx, scaled, f->num_points,
+                                       ctx->style.boundary_color,
+                                       ctx->style.boundary_width);
+                    break;
+
                 default:
                     break;
             }
@@ -987,7 +995,7 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
     if (font) {
         CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
         if (placer) {
-            ct_label_place_points(placer, pbf, coord, font, 12.0f);
+            ct_label_place_points(placer, pbf, coord, font, 16.0f);
             ct_render_labels(ctx, placer, font,
                             CT_RGB(51, 51, 51),
                             CT_RGB(255, 255, 255),
@@ -1055,7 +1063,7 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
         CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
         if (placer) {
             /* Place point labels (cities, towns, etc.) */
-            ct_label_place_points(placer, pbf, coord, font, 12.0f);
+            ct_label_place_points(placer, pbf, coord, font, 16.0f);
 
             /* Render with white halo for readability */
             ct_render_labels(ctx, placer, font,
