@@ -4,6 +4,7 @@
 
 #include "../include/sh_backoff.h"
 #include <sys/time.h>
+#include <stddef.h>
 
 /* ============================================================================
  * Helper Functions

@@ -420,7 +420,10 @@ static int diving_heuristic(MIPSolver *solver) {
     memcpy(model->lb, orig_lb, num_vars * sizeof(double));
     memcpy(model->ub, orig_ub, num_vars * sizeof(double));
 
-    /* Restore tableau bounds and re-solve to get back to original state */
+    /* Restore tableau bounds and re-solve to get back to original state.
+     * Note: dual_simplex_solve may have freed and NULLed lp->tableau,
+     * so we must refresh tab from the current lp->tableau pointer. */
+    tab = lp->tableau;
     if (tab && orig_tab_lb && orig_tab_ub) {
         memcpy(tab->lb_ext, orig_tab_lb, tab->n * sizeof(double));
         memcpy(tab->ub_ext, orig_tab_ub, tab->n * sizeof(double));
