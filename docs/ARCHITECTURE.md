@@ -282,6 +282,29 @@ Consumers are standalone executables registered by job type:
 - `fg-locus`: Batch geocoding
 - `fg-carta`: Tile generation
 
+### Quota - Rate Quoting Engine [PLANNED]
+**Location:** `quota/`
+**Dependencies:** `libralph.a`, `libvelo.a`
+
+**Q**uote **U**nderwriting and **T**ariff **O**ptimization **A**lgorithm. Spot and contract pricing engine.
+
+- Cost modeling: fuel, driver, tolls, deadhead, maintenance
+- Margin optimization based on lane, customer, market conditions
+- Rate generation for spot quotes and contract RFPs
+- Historical rate analysis and trend detection
+
+### Atlas - Network Design Engine [PLANNED]
+**Location:** `atlas/`
+**Dependencies:** `libralph.a`, `libvelo.a`
+
+**A**llocation and **T**actical **L**ane **A**nalysis **S**ystem. Network design and lane balancing.
+
+- Headhaul/backhaul ratio optimization
+- Deadhead accumulation prevention
+- Capacity planning across lanes
+- Network smoothing for new tendered loads
+- Does not assign specific trucks - works at lane/region level
+
 ## Data Flow
 
 ### Refueling Optimization Flow
@@ -444,6 +467,10 @@ make test-locus-api   # Locus API tests
 3. **Layered Architecture**: Clear separation: solver → domain → API → UI
 4. **Portable**: Runs on Linux, macOS, Windows, browsers
 5. **Single Responsibility**: Each module has a focused purpose
+6. **EV & AV Ready**: Electric and autonomous vehicles are zero-day design principles:
+   - EV: Range constraints, charging station routing, battery state-of-charge modeling
+   - AV: Different cost structures, modified/eliminated HoS constraints, mixed fleet optimization
+   - Vehicle type is a first-class parameter in HoSE, Velo, and FuelWise
 
 ## Performance Targets
 

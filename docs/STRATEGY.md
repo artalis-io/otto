@@ -184,6 +184,43 @@ All core optimization engines:
 - Once integrated, rarely ripped out
 - Open source reduces sales friction (try before buy)
 
+### 3.4 Market Intelligence Revenue (Data Monetization)
+
+As OTTO scales across carriers and brokers, aggregate anonymized data becomes valuable:
+
+#### Data Products
+
+| Product | Description | Target Customer |
+|---------|-------------|-----------------|
+| **Lane Rate Index** | Anonymized rate trends by lane, updated weekly | Brokers, shippers, analysts |
+| **Capacity Forecast** | Regional truck availability predictions | Shippers planning RFPs |
+| **Benchmarking Service** | "Your rates vs market" comparisons | Carriers, shippers |
+| **Seasonal Patterns** | Historical demand by lane and season | Logistics planners |
+
+#### Privacy & Anonymization
+
+- Individual carrier/shipper data is **never** shared
+- All data is aggregated at lane/region level
+- Minimum threshold: No lane published with fewer than N transactions
+- Opt-out available for customers who don't want their data in aggregates
+
+#### Revenue Potential
+
+| Year | Subscribers | Price/Year | ARR |
+|------|-------------|------------|-----|
+| 3 | 20 | €25k | €500k |
+| 4 | 50 | €30k | €1.5M |
+| 5 | 100 | €35k | €3.5M |
+
+**Note:** Data revenue is a bonus, not the core business. It requires scale first. Don't over-invest in data infrastructure until the core platform has traction.
+
+#### Strategic Value
+
+Beyond direct revenue, market intelligence provides:
+- **Sales leverage**: "We have the best market data because we run the most loads"
+- **Competitive moat**: Data flywheel—more users → better data → more users
+- **Partnership value**: Brokers and shippers pay for intelligence, carriers get it free (incentive alignment)
+
 ---
 
 ## 4. Open Source vs Closed Source: Pros and Cons
@@ -611,6 +648,38 @@ This positions OTTO as the platform, not just a point solution. Commercial compo
 | **Try-before-buy** | Browser demos without sales friction |
 
 The foundational components aren't just "we built routing." They're strategic infrastructure that enables a business model and deployment story that commercial alternatives structurally cannot match.
+
+### 11.8 EV & Autonomous Vehicle Readiness
+
+Electric and autonomous vehicles are designed in from day one, not retrofitted as afterthoughts.
+
+**Why this matters now:**
+
+| Trend | Timeline | Impact on Planning |
+|-------|----------|-------------------|
+| EV adoption in trucking | 2025-2030 | Range constraints, charging network routing |
+| Mixed diesel/EV fleets | 2026-2032 | Assignment optimization by vehicle type |
+| Autonomous trucks (L4) | 2028-2035 | Different HoS rules, cost structures |
+| Mixed human/autonomous | 2030+ | Complex assignment decisions |
+
+**Design principles embedded in OTTO:**
+
+| Component | EV/AV Consideration |
+|-----------|---------------------|
+| HoSE | Vehicle type parameter: diesel HoS, EV "HoS" (charging stops), AV (no HoS) |
+| Velo | Charging station routing, range constraints, battery state-of-charge |
+| FuelWise | Unified energy optimization (diesel + electric + charging) |
+| Sigma | Mixed fleet assignment (which loads to which vehicle types) |
+| Quota | Different cost models per vehicle type |
+
+**Competitive advantage:**
+
+Most legacy planning software assumes diesel trucks with human drivers. Retrofitting EV and AV support is architecturally expensive:
+- Database schemas assume fuel gallons, not kWh
+- HoS logic hardcoded to FMCSA/EC561 human rules
+- Cost models built around driver wages
+
+OTTO treats vehicle type as a first-class parameter throughout the stack. When EV and AV become mainstream, OTTO is ready. Competitors will be scrambling to retrofit.
 
 ---
 

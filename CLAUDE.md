@@ -48,6 +48,8 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 | Sigma | `sigma/` | **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation |
 | Pulse | `pulse/` | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
 | Iris | `iris/` | **I**ntelligent **R**equest **I**nterpretation **S**ystem - LLM natural language interface |
+| Quota | `quota/` | **Q**uote **U**nderwriting and **T**ariff **O**ptimization **A**lgorithm - spot/contract pricing |
+| Atlas | `atlas/` | **A**llocation and **T**actical **L**ane **A**nalysis **S**ystem - network design, lane balancing |
 
 See `docs/TODO_FEATURES.md` for detailed specifications of planned components.
 See `docs/NEXUS.md` for the data ingress architecture (TMS/ELD/LoadBoard integration).
@@ -243,6 +245,10 @@ make run-locus-api    # Show Locus geocoding server usage
 │  │  HoSE  │ │ Tempo  │ │ Arbor  │ │ Sigma  │ │ Pulse │           │
 │  │  HoS   │ │ Time   │ │ Search │ │ Fleet  │ │ PTA   │           │
 │  └────────┘ └────────┘ └────────┘ └────────┘ └───────┘           │
+│  Network & Pricing [PLANNED]                                      │
+│  ┌─────────────────────────┐ ┌─────────────────────────┐         │
+│  │  Atlas - Lane Balancing │ │  Quota - Rate Quoting   │         │
+│  └─────────────────────────┘ └─────────────────────────┘         │
 ├──────────────────────────────────────────────────────────────────┤
 │  Domain Libraries                                                 │
 │  ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐         │
@@ -622,6 +628,10 @@ The following components are documented in detail in `docs/TODO_FEATURES.md`:
 3. **Layered** - solver → domain → api → ui
 4. **Portable** - Linux, macOS, Windows, browsers
 5. **Not a TMS** - OTTO is an optimization layer, not a System of Record
+6. **EV & AV Ready** - Electric and autonomous vehicles are zero-day design principles, not afterthoughts:
+   - EV: Range constraints, charging station routing, battery state-of-charge, degradation curves
+   - AV: Different cost structures, reduced/eliminated HoS constraints, mixed fleet scenarios
+   - HoSE, Velo, and FuelWise all support vehicle type as a first-class parameter
 
 ## Scaling Philosophy: Engines vs Infrastructure
 
