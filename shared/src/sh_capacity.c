@@ -6,7 +6,11 @@
 
 #include "sh_capacity.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <math.h>
+#include <pthread.h>
+#include <stdint.h>
 
 /* ============================================================================
  * Helper Functions
@@ -294,4 +298,361 @@ int sh_capacity_validate(size_t current_queue_depth,
     }
 
     return warning_count;
+}
+
+/* ============================================================================
+ * Adaptive Capacity Tracker Implementation
+ * ============================================================================ */
+
+/*
+ * Internal structure for adaptive tracker.
+ */
+struct ShAdaptiveTracker {
+    /* Configuration (immutable after creation) */
+    ShAdaptiveConfig config;
+
+    /* Sample buffer (circular) */
+    double *samples;             /* Sample buffer */
+    size_t sample_head;          /* Next write position */
+    size_t sample_count;         /* Samples in buffer (up to window_size) */
+
+    /* Statistics */
+    double ema_ms;               /* Exponential moving average */
+    double sum_ms;               /* Running sum for average */
+    double min_ms;               /* Minimum observed */
+    double max_ms;               /* Maximum observed */
+    uint64_t total_samples;      /* Total samples ever recorded */
+    uint64_t last_recalc_sample; /* Sample count at last recalculation */
+    uint64_t recalc_count;       /* Number of recalculations */
+
+    /* Current calculated parameters */
+    ShCapacityParams current_params;
+    int params_valid;            /* 1 if current_params is valid */
+
+    /* Callback */
+    ShAdaptiveCallback callback;
+    void *callback_user_data;
+
+    /* Thread safety */
+    pthread_mutex_t mutex;
+};
+
+/*
+ * Comparison function for qsort (ascending order).
+ */
+static int compare_double(const void *a, const void *b) {
+    double da = *(const double *)a;
+    double db = *(const double *)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
+/*
+ * Calculate percentile from sorted array.
+ */
+static double percentile(const double *sorted, size_t count, double p) {
+    if (count == 0) return 0;
+    if (count == 1) return sorted[0];
+
+    double index = p * (double)(count - 1);
+    size_t lower = (size_t)index;
+    size_t upper = lower + 1;
+    if (upper >= count) upper = count - 1;
+
+    double frac = index - (double)lower;
+    return sorted[lower] * (1.0 - frac) + sorted[upper] * frac;
+}
+
+void sh_adaptive_config_init(ShAdaptiveConfig *config) {
+    if (!config) return;
+
+    memset(config, 0, sizeof(*config));
+
+    /* Reasonable defaults */
+    config->num_workers = 4;
+    config->target_utilization = 0.7;
+    config->client_timeout_ms = 10000.0;
+    config->burst_tiles = 25;
+
+    config->window_size = SH_ADAPTIVE_DEFAULT_WINDOW;
+    config->recalc_interval = SH_ADAPTIVE_DEFAULT_INTERVAL;
+    config->ema_alpha = SH_ADAPTIVE_DEFAULT_ALPHA;
+    config->max_sample_ms = SH_ADAPTIVE_MAX_SAMPLE_MS;
+
+    /* No bounds by default */
+    config->min_rate_limit_rps = 0;
+    config->max_rate_limit_rps = 0;
+    config->min_queue_depth = 0;
+    config->max_queue_depth = 0;
+}
+
+ShAdaptiveTracker *sh_adaptive_create(const ShAdaptiveConfig *config) {
+    ShAdaptiveTracker *tracker = calloc(1, sizeof(ShAdaptiveTracker));
+    if (!tracker) return NULL;
+
+    /* Copy or initialize config */
+    if (config) {
+        tracker->config = *config;
+    } else {
+        sh_adaptive_config_init(&tracker->config);
+    }
+
+    /* Validate config */
+    if (tracker->config.window_size == 0) {
+        tracker->config.window_size = SH_ADAPTIVE_DEFAULT_WINDOW;
+    }
+    if (tracker->config.recalc_interval == 0) {
+        tracker->config.recalc_interval = SH_ADAPTIVE_DEFAULT_INTERVAL;
+    }
+    if (tracker->config.ema_alpha <= 0 || tracker->config.ema_alpha > 1.0) {
+        tracker->config.ema_alpha = SH_ADAPTIVE_DEFAULT_ALPHA;
+    }
+    if (tracker->config.max_sample_ms <= 0) {
+        tracker->config.max_sample_ms = SH_ADAPTIVE_MAX_SAMPLE_MS;
+    }
+
+    /* Allocate sample buffer */
+    tracker->samples = calloc(tracker->config.window_size, sizeof(double));
+    if (!tracker->samples) {
+        free(tracker);
+        return NULL;
+    }
+
+    /* Initialize statistics */
+    tracker->min_ms = INFINITY;
+    tracker->max_ms = 0;
+
+    /* Initialize mutex */
+    if (pthread_mutex_init(&tracker->mutex, NULL) != 0) {
+        free(tracker->samples);
+        free(tracker);
+        return NULL;
+    }
+
+    return tracker;
+}
+
+void sh_adaptive_free(ShAdaptiveTracker *tracker) {
+    if (!tracker) return;
+
+    pthread_mutex_destroy(&tracker->mutex);
+    free(tracker->samples);
+    free(tracker);
+}
+
+void sh_adaptive_record(ShAdaptiveTracker *tracker, double response_ms) {
+    if (!tracker) return;
+
+    /* Cap sample at max */
+    if (response_ms > tracker->config.max_sample_ms) {
+        response_ms = tracker->config.max_sample_ms;
+    }
+    if (response_ms < 0) {
+        response_ms = 0;
+    }
+
+    pthread_mutex_lock(&tracker->mutex);
+
+    /* Update EMA */
+    if (tracker->total_samples == 0) {
+        tracker->ema_ms = response_ms;
+    } else {
+        tracker->ema_ms = tracker->config.ema_alpha * response_ms
+                        + (1.0 - tracker->config.ema_alpha) * tracker->ema_ms;
+    }
+
+    /* Update min/max */
+    if (response_ms < tracker->min_ms) tracker->min_ms = response_ms;
+    if (response_ms > tracker->max_ms) tracker->max_ms = response_ms;
+
+    /* Add to circular buffer */
+    if (tracker->sample_count < tracker->config.window_size) {
+        /* Buffer not full yet - just append */
+        tracker->samples[tracker->sample_count] = response_ms;
+        tracker->sample_count++;
+        tracker->sum_ms += response_ms;
+    } else {
+        /* Buffer full - replace oldest */
+        tracker->sum_ms -= tracker->samples[tracker->sample_head];
+        tracker->sum_ms += response_ms;
+        tracker->samples[tracker->sample_head] = response_ms;
+    }
+
+    tracker->sample_head = (tracker->sample_head + 1) % tracker->config.window_size;
+    tracker->total_samples++;
+
+    pthread_mutex_unlock(&tracker->mutex);
+}
+
+/*
+ * Internal recalculation (must hold mutex).
+ */
+static int adaptive_recalc_locked(ShAdaptiveTracker *tracker, ShCapacityParams *params) {
+    if (tracker->sample_count == 0) {
+        return 0;
+    }
+
+    /* Copy samples for sorting */
+    double *sorted = malloc(tracker->sample_count * sizeof(double));
+    if (!sorted) return 0;
+
+    memcpy(sorted, tracker->samples, tracker->sample_count * sizeof(double));
+    qsort(sorted, tracker->sample_count, sizeof(double), compare_double);
+
+    /* Calculate percentiles */
+    double p50 = percentile(sorted, tracker->sample_count, 0.50);
+    double p90 = percentile(sorted, tracker->sample_count, 0.90);
+    double p99 = percentile(sorted, tracker->sample_count, 0.99);
+    double avg = tracker->sum_ms / (double)tracker->sample_count;
+
+    free(sorted);
+
+    /* Build input for capacity calculation - use P50 for rate limit sizing */
+    ShCapacityInput input = {
+        .avg_response_ms = p50,  /* Use median for stability */
+        .p99_response_ms = p99,  /* Use actual P99 */
+        .num_workers = tracker->config.num_workers,
+        .target_utilization = tracker->config.target_utilization,
+        .client_timeout_ms = tracker->config.client_timeout_ms,
+        .burst_tiles = tracker->config.burst_tiles,
+        .expected_clients = 10   /* Default assumption */
+    };
+
+    ShCapacityParams new_params;
+    if (!sh_capacity_calculate(&new_params, &input)) {
+        return 0;
+    }
+
+    /* Apply bounds */
+    if (tracker->config.min_rate_limit_rps > 0 &&
+        new_params.rate_limit_rps < tracker->config.min_rate_limit_rps) {
+        new_params.rate_limit_rps = tracker->config.min_rate_limit_rps;
+    }
+    if (tracker->config.max_rate_limit_rps > 0 &&
+        new_params.rate_limit_rps > tracker->config.max_rate_limit_rps) {
+        new_params.rate_limit_rps = tracker->config.max_rate_limit_rps;
+    }
+    if (tracker->config.min_queue_depth > 0 &&
+        new_params.queue_depth < tracker->config.min_queue_depth) {
+        new_params.queue_depth = tracker->config.min_queue_depth;
+    }
+    if (tracker->config.max_queue_depth > 0 &&
+        new_params.queue_depth > tracker->config.max_queue_depth) {
+        new_params.queue_depth = tracker->config.max_queue_depth;
+    }
+
+    /* Store new params */
+    tracker->current_params = new_params;
+    tracker->params_valid = 1;
+    tracker->recalc_count++;
+    tracker->last_recalc_sample = tracker->total_samples;
+
+    if (params) {
+        *params = new_params;
+    }
+
+    /* Invoke callback if set */
+    if (tracker->callback) {
+        ShAdaptiveStats stats = {
+            .p50_ms = p50,
+            .p90_ms = p90,
+            .p99_ms = p99,
+            .avg_ms = avg,
+            .ema_ms = tracker->ema_ms,
+            .min_ms = tracker->min_ms,
+            .max_ms = tracker->max_ms,
+            .sample_count = tracker->total_samples,
+            .recalc_count = tracker->recalc_count
+        };
+        tracker->callback(&new_params, &stats, tracker->callback_user_data);
+    }
+
+    return 1;
+}
+
+int sh_adaptive_update(ShAdaptiveTracker *tracker, ShCapacityParams *params) {
+    if (!tracker) return 0;
+
+    pthread_mutex_lock(&tracker->mutex);
+
+    /* Check if it's time to recalculate */
+    uint64_t samples_since_recalc = tracker->total_samples - tracker->last_recalc_sample;
+    if (samples_since_recalc < (uint64_t)tracker->config.recalc_interval) {
+        pthread_mutex_unlock(&tracker->mutex);
+        return 0;
+    }
+
+    int result = adaptive_recalc_locked(tracker, params);
+
+    pthread_mutex_unlock(&tracker->mutex);
+    return result;
+}
+
+int sh_adaptive_recalculate(ShAdaptiveTracker *tracker, ShCapacityParams *params) {
+    if (!tracker) return 0;
+
+    pthread_mutex_lock(&tracker->mutex);
+    int result = adaptive_recalc_locked(tracker, params);
+    pthread_mutex_unlock(&tracker->mutex);
+
+    return result;
+}
+
+void sh_adaptive_stats(ShAdaptiveTracker *tracker, ShAdaptiveStats *stats) {
+    if (!tracker || !stats) return;
+
+    memset(stats, 0, sizeof(*stats));
+
+    pthread_mutex_lock(&tracker->mutex);
+
+    if (tracker->sample_count > 0) {
+        /* Copy and sort for percentiles */
+        double *sorted = malloc(tracker->sample_count * sizeof(double));
+        if (sorted) {
+            memcpy(sorted, tracker->samples, tracker->sample_count * sizeof(double));
+            qsort(sorted, tracker->sample_count, sizeof(double), compare_double);
+
+            stats->p50_ms = percentile(sorted, tracker->sample_count, 0.50);
+            stats->p90_ms = percentile(sorted, tracker->sample_count, 0.90);
+            stats->p99_ms = percentile(sorted, tracker->sample_count, 0.99);
+
+            free(sorted);
+        }
+
+        stats->avg_ms = tracker->sum_ms / (double)tracker->sample_count;
+    }
+
+    stats->ema_ms = tracker->ema_ms;
+    stats->min_ms = tracker->min_ms == INFINITY ? 0 : tracker->min_ms;
+    stats->max_ms = tracker->max_ms;
+    stats->sample_count = tracker->total_samples;
+    stats->recalc_count = tracker->recalc_count;
+
+    pthread_mutex_unlock(&tracker->mutex);
+}
+
+void sh_adaptive_set_callback(ShAdaptiveTracker *tracker,
+                              ShAdaptiveCallback callback,
+                              void *user_data) {
+    if (!tracker) return;
+
+    pthread_mutex_lock(&tracker->mutex);
+    tracker->callback = callback;
+    tracker->callback_user_data = user_data;
+    pthread_mutex_unlock(&tracker->mutex);
+}
+
+int sh_adaptive_get_params(ShAdaptiveTracker *tracker, ShCapacityParams *params) {
+    if (!tracker || !params) return 0;
+
+    pthread_mutex_lock(&tracker->mutex);
+
+    int valid = tracker->params_valid;
+    if (valid) {
+        *params = tracker->current_params;
+    }
+
+    pthread_mutex_unlock(&tracker->mutex);
+    return valid;
 }

@@ -1411,6 +1411,288 @@ TEST(capacity_validate_null_safe)
 }
 
 /* ============================================================================
+ * Adaptive Capacity Tests
+ * ============================================================================ */
+
+TEST(adaptive_create_free)
+{
+    ShAdaptiveConfig config;
+    sh_adaptive_config_init(&config);
+    config.num_workers = 4;
+
+    ShAdaptiveTracker *tracker = sh_adaptive_create(&config);
+    ASSERT(tracker != NULL);
+
+    sh_adaptive_free(tracker);
+}
+
+TEST(adaptive_create_defaults)
+{
+    /* NULL config uses defaults */
+    ShAdaptiveTracker *tracker = sh_adaptive_create(NULL);
+    ASSERT(tracker != NULL);
+    sh_adaptive_free(tracker);
+}
+
+TEST(adaptive_free_null_safe)
+{
+    sh_adaptive_free(NULL);  /* Should not crash */
+}
+
+TEST(adaptive_record_basic)
+{
+    ShAdaptiveTracker *tracker = sh_adaptive_create(NULL);
+    ASSERT(tracker != NULL);
+
+    /* Record some samples */
+    sh_adaptive_record(tracker, 50.0);
+    sh_adaptive_record(tracker, 75.0);
+    sh_adaptive_record(tracker, 100.0);
+
+    ShAdaptiveStats stats;
+    sh_adaptive_stats(tracker, &stats);
+
+    ASSERT_EQ(stats.sample_count, 3);
+    ASSERT_NEAR(stats.avg_ms, 75.0, 0.1);
+    ASSERT_NEAR(stats.min_ms, 50.0, 0.1);
+    ASSERT_NEAR(stats.max_ms, 100.0, 0.1);
+
+    sh_adaptive_free(tracker);
+}
+
+TEST(adaptive_percentiles)
+{
+    ShAdaptiveConfig config;
+    sh_adaptive_config_init(&config);
+    config.window_size = 100;
+
+    ShAdaptiveTracker *tracker = sh_adaptive_create(&config);
+    ASSERT(tracker != NULL);
+
+    /* Record 100 samples: 1, 2, 3, ..., 100 */
+    for (int i = 1; i <= 100; i++) {
+        sh_adaptive_record(tracker, (double)i);
+    }
+
+    ShAdaptiveStats stats;
+    sh_adaptive_stats(tracker, &stats);
+
+    /* P50 should be around 50 */
+    ASSERT(stats.p50_ms > 45 && stats.p50_ms < 55);
+
+    /* P99 should be around 99 */
+    ASSERT(stats.p99_ms > 95 && stats.p99_ms <= 100);
+
+    sh_adaptive_free(tracker);
+}
+
+TEST(adaptive_recalculate)
+{
+    ShAdaptiveConfig config;
+    sh_adaptive_config_init(&config);
+    config.num_workers = 8;
+    config.target_utilization = 0.7;
+    config.window_size = 100;
+
+    ShAdaptiveTracker *tracker = sh_adaptive_create(&config);
+    ASSERT(tracker != NULL);
+
+    /* Record samples around 75ms */
+    for (int i = 0; i < 100; i++) {
+        sh_adaptive_record(tracker, 70.0 + (double)(i % 10));
+    }
+
+    ShCapacityParams params;
+    int result = sh_adaptive_recalculate(tracker, &params);
+    ASSERT_EQ(result, 1);
+
+    /* Should have calculated reasonable params */
+    ASSERT(params.rate_limit_rps > 0);
+    ASSERT(params.queue_depth > 0);
+    ASSERT(params.max_throughput_rps > 0);
+
+    sh_adaptive_free(tracker);
+}
+
+TEST(adaptive_update_interval)
+{
+    ShAdaptiveConfig config;
+    sh_adaptive_config_init(&config);
+    config.recalc_interval = 10;  /* Recalc every 10 samples */
+    config.window_size = 100;
+
+    ShAdaptiveTracker *tracker = sh_adaptive_create(&config);
+    ASSERT(tracker != NULL);
+
+    ShCapacityParams params;
+
+    /* First 9 samples should not trigger recalc */
+    for (int i = 0; i < 9; i++) {
+        sh_adaptive_record(tracker, 50.0);
+        ASSERT_EQ(sh_adaptive_update(tracker, &params), 0);
+    }
+
+    /* 10th sample should trigger recalc */
+    sh_adaptive_record(tracker, 50.0);
+    ASSERT_EQ(sh_adaptive_update(tracker, &params), 1);
+
+    sh_adaptive_free(tracker);
+}
+
+TEST(adaptive_sample_cap)
+{
+    ShAdaptiveConfig config;
+    sh_adaptive_config_init(&config);
+    config.max_sample_ms = 1000.0;  /* Cap at 1s */
+
+    ShAdaptiveTracker *tracker = sh_adaptive_create(&config);
+    ASSERT(tracker != NULL);
+
+    /* Record a very large sample */
+    sh_adaptive_record(tracker, 99999.0);
+
+    ShAdaptiveStats stats;
+    sh_adaptive_stats(tracker, &stats);
+
+    /* Should be capped at 1000ms */
+    ASSERT_NEAR(stats.max_ms, 1000.0, 0.1);
+
+    sh_adaptive_free(tracker);
+}
+
+TEST(adaptive_get_params)
+{
+    ShAdaptiveTracker *tracker = sh_adaptive_create(NULL);
+    ASSERT(tracker != NULL);
+
+    ShCapacityParams params;
+
+    /* No params before first calculation */
+    ASSERT_EQ(sh_adaptive_get_params(tracker, &params), 0);
+
+    /* Record and recalculate */
+    sh_adaptive_record(tracker, 50.0);
+    sh_adaptive_recalculate(tracker, NULL);
+
+    /* Now params should be available */
+    ASSERT_EQ(sh_adaptive_get_params(tracker, &params), 1);
+    ASSERT(params.rate_limit_rps > 0);
+
+    sh_adaptive_free(tracker);
+}
+
+TEST(adaptive_null_safety)
+{
+    ShCapacityParams params;
+    ShAdaptiveStats stats;
+
+    /* All should not crash with NULL */
+    sh_adaptive_record(NULL, 50.0);
+    ASSERT_EQ(sh_adaptive_update(NULL, &params), 0);
+    ASSERT_EQ(sh_adaptive_recalculate(NULL, &params), 0);
+    sh_adaptive_stats(NULL, &stats);
+    sh_adaptive_set_callback(NULL, NULL, NULL);
+    ASSERT_EQ(sh_adaptive_get_params(NULL, &params), 0);
+}
+
+/* ============================================================================
+ * Args Parsing Tests
+ * ============================================================================ */
+
+TEST(args_init)
+{
+    ShServerConfig cfg;
+    sh_args_init(&cfg);
+
+    /* Check defaults */
+    ASSERT_EQ(cfg.port, 8080);
+    ASSERT(strcmp(cfg.host, "0.0.0.0") == 0);
+    ASSERT_EQ(cfg.rate_limit_enabled, 1);
+    ASSERT_NEAR(cfg.rate_limit_rps, 10.0, 0.1);
+    ASSERT_EQ(cfg.work_queue_enabled, 1);
+    ASSERT_EQ(cfg.adaptive_enabled, 0);
+}
+
+TEST(args_parse_basic)
+{
+    ShServerConfig cfg;
+    sh_args_init(&cfg);
+
+    char *argv[] = {"prog", "-p", "9000", "-t", "4", "data.pbf"};
+    int argc = 6;
+
+    int idx = sh_args_parse(&cfg, argc, argv);
+
+    ASSERT_EQ(idx, 5);  /* Index of data.pbf */
+    ASSERT_EQ(cfg.port, 9000);
+    ASSERT_EQ(cfg.worker_threads, 4);
+}
+
+TEST(args_parse_rate_limit)
+{
+    ShServerConfig cfg;
+    sh_args_init(&cfg);
+
+    char *argv[] = {"prog", "--rate-limit-rps", "20", "--rate-limit-burst", "200"};
+    int argc = 5;
+
+    sh_args_parse(&cfg, argc, argv);
+
+    ASSERT_NEAR(cfg.rate_limit_rps, 20.0, 0.1);
+    ASSERT_NEAR(cfg.rate_limit_burst, 200.0, 0.1);
+}
+
+TEST(args_parse_rate_limit_off)
+{
+    ShServerConfig cfg;
+    sh_args_init(&cfg);
+
+    char *argv[] = {"prog", "--rate-limit-off"};
+    int argc = 2;
+
+    sh_args_parse(&cfg, argc, argv);
+
+    ASSERT_EQ(cfg.rate_limit_enabled, 0);
+}
+
+TEST(args_parse_adaptive)
+{
+    ShServerConfig cfg;
+    sh_args_init(&cfg);
+
+    char *argv[] = {"prog", "--adaptive", "--utilization", "0.8"};
+    int argc = 4;
+
+    sh_args_parse(&cfg, argc, argv);
+
+    ASSERT_EQ(cfg.adaptive_enabled, 1);
+    ASSERT_NEAR(cfg.target_utilization, 0.8, 0.01);
+}
+
+TEST(args_parse_positional)
+{
+    ShServerConfig cfg;
+    sh_args_init(&cfg);
+
+    /* First non-option is the positional arg */
+    char *argv[] = {"prog", "-p", "8081", "mydata.pbf", "extra"};
+    int argc = 5;
+
+    int idx = sh_args_parse(&cfg, argc, argv);
+
+    ASSERT_EQ(idx, 3);  /* Index of mydata.pbf */
+    ASSERT(strcmp(argv[idx], "mydata.pbf") == 0);
+}
+
+TEST(args_prefix)
+{
+    ASSERT(strcmp(sh_args_prefix(SH_API_CARTA), "CARTA") == 0);
+    ASSERT(strcmp(sh_args_prefix(SH_API_VELO), "VELO") == 0);
+    ASSERT(strcmp(sh_args_prefix(SH_API_LOCUS), "LOCUS") == 0);
+    ASSERT(strcmp(sh_args_prefix(SH_API_FUELWISE), "FUELWISE") == 0);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1531,6 +1813,27 @@ int main(void)
     RUN_TEST(capacity_validate_queue_too_deep);
     RUN_TEST(capacity_validate_timeout_too_short);
     RUN_TEST(capacity_validate_null_safe);
+
+    printf("\nAdaptive Capacity:\n");
+    RUN_TEST(adaptive_create_free);
+    RUN_TEST(adaptive_create_defaults);
+    RUN_TEST(adaptive_free_null_safe);
+    RUN_TEST(adaptive_record_basic);
+    RUN_TEST(adaptive_percentiles);
+    RUN_TEST(adaptive_recalculate);
+    RUN_TEST(adaptive_update_interval);
+    RUN_TEST(adaptive_sample_cap);
+    RUN_TEST(adaptive_get_params);
+    RUN_TEST(adaptive_null_safety);
+
+    printf("\nArgs Parsing:\n");
+    RUN_TEST(args_init);
+    RUN_TEST(args_parse_basic);
+    RUN_TEST(args_parse_rate_limit);
+    RUN_TEST(args_parse_rate_limit_off);
+    RUN_TEST(args_parse_adaptive);
+    RUN_TEST(args_parse_positional);
+    RUN_TEST(args_prefix);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
