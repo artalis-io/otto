@@ -1,25 +1,28 @@
 /*
  * ct_serialize.c - Binary Index Serialization with mmap Support
  *
- * Binary format v1:
+ * Binary format v2:
  *
- * [Header] (64 bytes)
+ * [Header] (72 bytes)
  *   magic: u32 (0x43525441 = "CRTA")
- *   version: u32 (1)
+ *   version: u32 (2)
  *   num_ways: u32
  *   total_coords: u32
  *   string_pool_size: u32
  *   rtree_num_nodes: u32
  *   rtree_num_entries: u32
  *   rtree_root_idx: u32
+ *   num_labeled_points: u32
+ *   _reserved: u32
  *   bbox: 4 x f64 (min_lat, min_lon, max_lat, max_lon)
  *
- * [Section Offsets] (48 bytes)
+ * [Section Offsets] (56 bytes)
  *   ways_offset: u64
  *   coords_offset: u64
  *   string_pool_offset: u64
  *   rtree_nodes_offset: u64
  *   rtree_leaf_indices_offset: u64
+ *   labeled_points_offset: u64
  *   _padding: u64
  *
  * [Way Records] - 32 bytes each
@@ -27,6 +30,7 @@
  * [String Pool] - null-terminated strings
  * [R-Tree Nodes] - CTPackedNode array
  * [R-Tree Leaf Indices] - u32 array
+ * [Labeled Points] - 32 bytes each
  */
 
 #include "ct_serialize.h"
@@ -53,6 +57,8 @@ typedef struct __attribute__((packed)) {
     uint32_t rtree_num_nodes;
     uint32_t rtree_num_entries;
     uint32_t rtree_root_idx;
+    uint32_t num_labeled_points;
+    uint32_t _reserved;
     double min_lat;
     double min_lon;
     double max_lat;
@@ -65,6 +71,7 @@ typedef struct __attribute__((packed)) {
     uint64_t string_pool_offset;
     uint64_t rtree_nodes_offset;
     uint64_t rtree_leaf_indices_offset;
+    uint64_t labeled_points_offset;
     uint64_t _padding;
 } CTSectionOffsets;
 
@@ -88,6 +95,19 @@ typedef struct __attribute__((packed)) {
     int32_t lat_e7;
     int32_t lon_e7;
 } CTBinaryCoord;
+
+/* Labeled point - 32 bytes */
+typedef struct __attribute__((packed)) {
+    int64_t id;
+    int32_t lat_e7;
+    int32_t lon_e7;
+    uint32_t name_offset;      /* Offset into string pool */
+    int32_t population;
+    uint8_t type;              /* CTPlaceType */
+    uint8_t min_zoom;
+    uint8_t priority;
+    uint8_t _padding;
+} CTBinaryLabeledPoint;
 
 /* ============================================================================
  * String Pool
@@ -156,6 +176,15 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         name_offsets[i] = string_pool_add(&strings, ctx->ways[i].name);
     }
 
+    /* Add labeled point names to string pool */
+    uint32_t *label_name_offsets = NULL;
+    if (ctx->num_labeled_points > 0) {
+        label_name_offsets = malloc(ctx->num_labeled_points * sizeof(uint32_t));
+        for (size_t i = 0; i < ctx->num_labeled_points; i++) {
+            label_name_offsets[i] = string_pool_add(&strings, ctx->labeled_points[i].name);
+        }
+    }
+
     size_t string_pool_size = strings.size;
     size_t rtree_nodes_size = ctx->rtree ? ctx->rtree->num_nodes * sizeof(CTPackedNode) : 0;
     size_t rtree_leaf_size = ctx->rtree ? ctx->rtree->num_entries * sizeof(uint32_t) : 0;
@@ -170,6 +199,8 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         .rtree_num_nodes = ctx->rtree ? (uint32_t)ctx->rtree->num_nodes : 0,
         .rtree_num_entries = ctx->rtree ? (uint32_t)ctx->rtree->num_entries : 0,
         .rtree_root_idx = ctx->rtree ? ctx->rtree->root_idx : 0,
+        .num_labeled_points = (uint32_t)ctx->num_labeled_points,
+        ._reserved = 0,
         .min_lat = ctx->bbox.min_lat,
         .min_lon = ctx->bbox.min_lon,
         .max_lat = ctx->bbox.max_lat,
@@ -184,6 +215,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         .string_pool_offset = header_size + ways_size + coords_size,
         .rtree_nodes_offset = header_size + ways_size + coords_size + string_pool_size,
         .rtree_leaf_indices_offset = header_size + ways_size + coords_size + string_pool_size + rtree_nodes_size,
+        .labeled_points_offset = header_size + ways_size + coords_size + string_pool_size + rtree_nodes_size + rtree_leaf_size,
         ._padding = 0
     };
     fwrite(&offsets, sizeof(offsets), 1, f);
@@ -234,7 +266,25 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         fwrite(ctx->rtree->leaf_indices, sizeof(uint32_t), ctx->rtree->num_entries, f);
     }
 
+    /* Write labeled points */
+    for (size_t i = 0; i < ctx->num_labeled_points; i++) {
+        const CTLabeledPoint *lp = &ctx->labeled_points[i];
+        CTBinaryLabeledPoint blp = {
+            .id = lp->id,
+            .lat_e7 = (int32_t)(lp->coord.lat * 1e7),
+            .lon_e7 = (int32_t)(lp->coord.lon * 1e7),
+            .name_offset = label_name_offsets ? label_name_offsets[i] : 0,
+            .population = lp->population,
+            .type = (uint8_t)lp->type,
+            .min_zoom = (uint8_t)lp->min_zoom,
+            .priority = (uint8_t)lp->priority,
+            ._padding = 0
+        };
+        fwrite(&blp, sizeof(blp), 1, f);
+    }
+
     free(name_offsets);
+    free(label_name_offsets);
     string_pool_free(&strings);
     fclose(f);
 
@@ -368,6 +418,49 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
         /* Mark as mmap'd so we don't try to free these */
         ctx->rtree_is_mmap = 1;
+    }
+
+    /* Reconstruct labeled points */
+    if (header->num_labeled_points > 0) {
+        const CTBinaryLabeledPoint *binary_labels =
+            (const CTBinaryLabeledPoint *)((char *)map + offsets->labeled_points_offset);
+
+        ctx->num_labeled_points = header->num_labeled_points;
+        ctx->labeled_points_capacity = header->num_labeled_points;
+        ctx->labeled_points = malloc(header->num_labeled_points * sizeof(CTLabeledPoint));
+
+        if (!ctx->labeled_points) {
+            /* Cleanup on allocation failure */
+            for (size_t i = 0; i < ctx->num_ways; i++) {
+                free(ctx->ways[i].name);
+            }
+            free(ctx->ways);
+            free(all_coords);
+            free(ctx->rtree);
+            free(ctx);
+            munmap(map, st.st_size);
+            return NULL;
+        }
+
+        for (size_t i = 0; i < header->num_labeled_points; i++) {
+            const CTBinaryLabeledPoint *blp = &binary_labels[i];
+            CTLabeledPoint *lp = &ctx->labeled_points[i];
+
+            lp->id = blp->id;
+            lp->coord.lat = blp->lat_e7 * 1e-7;
+            lp->coord.lon = blp->lon_e7 * 1e-7;
+            lp->type = (CTPlaceType)blp->type;
+            lp->population = blp->population;
+            lp->min_zoom = blp->min_zoom;
+            lp->priority = blp->priority;
+
+            /* Name from string pool */
+            if (blp->name_offset > 0 && blp->name_offset < header->string_pool_size) {
+                lp->name = strdup(string_pool + blp->name_offset);
+            } else {
+                lp->name = NULL;
+            }
+        }
     }
 
     return ctx;

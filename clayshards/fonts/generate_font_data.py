@@ -158,6 +158,11 @@ def generate_c_file(json_path, png_path, output_path):
     if width != atlas.get('width', width) or height != atlas.get('height', height):
         print(f"Warning: PNG dimensions ({width}x{height}) don't match atlas metadata", file=sys.stderr)
 
+    # Check yOrigin - msdf-atlas-gen uses "bottom" by default (y=0 at bottom)
+    # but PNG images use top-down (y=0 at top), so we need to flip
+    y_origin = atlas.get('yOrigin', 'top')
+    atlas_height = atlas.get('height', height)
+
     # Generate C code
     lines = []
     lines.append("/*")
@@ -180,11 +185,26 @@ def generate_c_file(json_path, png_path, output_path):
         plane = g.get('planeBounds', {})
         atlas_bounds = g.get('atlasBounds', {})
 
+        # Get atlas bounds
+        atlas_left = atlas_bounds.get('left', 0)
+        atlas_right = atlas_bounds.get('right', 0)
+        atlas_bottom = atlas_bounds.get('bottom', 0)
+        atlas_top = atlas_bounds.get('top', 0)
+
+        # Flip Y if yOrigin is "bottom" (convert from math coords to image coords)
+        # In math coords: y=0 at bottom, y increases upward
+        # In image coords: y=0 at top, y increases downward
+        if y_origin == 'bottom':
+            new_bottom = atlas_height - atlas_top
+            new_top = atlas_height - atlas_bottom
+            atlas_bottom = new_bottom
+            atlas_top = new_top
+
         lines.append(f"    {{ {unicode}, {advance:.6f}f, "
                      f"{{ {plane.get('left', 0):.6f}f, {plane.get('bottom', 0):.6f}f, "
                      f"{plane.get('right', 0):.6f}f, {plane.get('top', 0):.6f}f }}, "
-                     f"{{ {atlas_bounds.get('left', 0):.1f}f, {atlas_bounds.get('bottom', 0):.1f}f, "
-                     f"{atlas_bounds.get('right', 0):.1f}f, {atlas_bounds.get('top', 0):.1f}f }} }},")
+                     f"{{ {atlas_left:.1f}f, {atlas_bottom:.1f}f, "
+                     f"{atlas_right:.1f}f, {atlas_top:.1f}f }} }},")
 
     lines.append("};")
     lines.append("")
