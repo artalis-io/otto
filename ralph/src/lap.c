@@ -21,6 +21,7 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+#include <stdatomic.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -52,14 +53,14 @@
 #define LAP_BLOCK_SIZE 64
 
 /*
- * Default configuration settings.
+ * Default configuration settings (thread-safe via atomics).
  * These are copied to workspace cfg_* fields on creation.
  * The actual algorithm uses per-workspace config for thread safety.
  * Options passed to solve functions can override workspace config.
  */
-static int lap_parallel_enabled = 1;           /* Default parallelization setting */
-static int lap_epsilon_scaling_enabled = 0;    /* Default ε-scaling setting */
-static double lap_epsilon_factor = 4.0;        /* Default ε reduction factor */
+static atomic_int lap_parallel_enabled = 1;           /* Default parallelization setting */
+static atomic_int lap_epsilon_scaling_enabled = 0;    /* Default ε-scaling setting */
+static _Atomic double lap_epsilon_factor = 4.0;       /* Default ε reduction factor */
 
 /* Integer overflow check for n*n*sizeof(type) allocations.
  * Returns 0 if safe, -1 if would overflow.
@@ -3247,29 +3248,29 @@ RalphLapStatus ralph_lap_solve_k_best_with_workspace(
  * ============================================================================ */
 
 void ralph_lap_set_parallel(int enabled) {
-    lap_parallel_enabled = enabled ? 1 : 0;
+    atomic_store(&lap_parallel_enabled, enabled ? 1 : 0);
 }
 
 int ralph_lap_get_parallel(void) {
-    return lap_parallel_enabled;
+    return atomic_load(&lap_parallel_enabled);
 }
 
 void ralph_lap_set_epsilon_scaling(int enabled) {
-    lap_epsilon_scaling_enabled = enabled ? 1 : 0;
+    atomic_store(&lap_epsilon_scaling_enabled, enabled ? 1 : 0);
 }
 
 int ralph_lap_get_epsilon_scaling(void) {
-    return lap_epsilon_scaling_enabled;
+    return atomic_load(&lap_epsilon_scaling_enabled);
 }
 
 void ralph_lap_set_epsilon_factor(double factor) {
     if (factor > 1.0) {
-        lap_epsilon_factor = factor;
+        atomic_store(&lap_epsilon_factor, factor);
     }
 }
 
 double ralph_lap_get_epsilon_factor(void) {
-    return lap_epsilon_factor;
+    return atomic_load(&lap_epsilon_factor);
 }
 
 /* ============================================================================

@@ -121,7 +121,15 @@ int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type
     int idx = model->num_vars;
     int new_capacity = model->num_vars + 1;
 
-    /* Reallocate arrays one at a time to handle partial failures safely */
+    /*
+     * Reallocate arrays one at a time. This is safe because:
+     * 1. num_vars is only incremented after ALL allocations succeed
+     * 2. All array accesses are bounded by num_vars, not capacity
+     * 3. On partial failure, some arrays may have extra unused capacity,
+     *    but all data up to num_vars remains valid and accessible
+     *
+     * Alternative (malloc new + memcpy + free old) would double memory usage.
+     */
     double *new_c = (double*)realloc(model->c, new_capacity * sizeof(double));
     if (!new_c) return -1;
     model->c = new_c;
@@ -415,6 +423,7 @@ LPModel* lp_model_copy(const LPModel *src) {
     /* Copy names if present */
     if (src->name) {
         dst->name = strdup(src->name);
+        if (!dst->name) goto error;
     }
 
     /* Note: build_state is not copied - copy results in finalized model */
