@@ -23,7 +23,8 @@ SRCS = src/sh_geo.c \
        src/sh_font_data.c \
        src/sh_arena.c \
        src/sh_pool.c \
-       src/sh_ratelimit.c
+       src/sh_ratelimit.c \
+       src/sh_workqueue.c
 
 MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
              $(VENDOR_DIR)/miniz_tdef.c \
@@ -97,6 +98,7 @@ src/sh_font_data.o: include/sh_font.h
 src/sh_arena.o: include/sh_arena.h
 src/sh_pool.o: include/sh_pool.h
 src/sh_ratelimit.o: include/sh_ratelimit.h
+src/sh_workqueue.o: include/sh_workqueue.h
 
 # Help
 help:

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <time.h>
 
 /* ============================================================================
  * Test Framework
@@ -970,6 +971,227 @@ TEST(ratelimit_null_safe)
 }
 
 /* ============================================================================
+ * Work Queue Tests
+ * ============================================================================ */
+
+TEST(workqueue_create_free)
+{
+    ShWorkQueue *queue = sh_workqueue_create(100, 5.0);
+    ASSERT(queue != NULL);
+    sh_workqueue_free(queue);
+}
+
+TEST(workqueue_create_invalid)
+{
+    /* Zero capacity should fail */
+    ASSERT(sh_workqueue_create(0, 5.0) == NULL);
+}
+
+TEST(workqueue_free_null_safe)
+{
+    /* Should not crash */
+    sh_workqueue_free(NULL);
+}
+
+TEST(workqueue_push_pop_basic)
+{
+    ShWorkQueue *queue = sh_workqueue_create(10, 0);
+    ASSERT(queue != NULL);
+
+    /* Push an item */
+    char *data = malloc(5);
+    memcpy(data, "test", 5);
+    ShWorkItem item = { .data = data, .data_len = 5, .user_ctx = (void*)0x1234 };
+
+    ASSERT(sh_workqueue_push(queue, &item) == 1);
+    ASSERT(sh_workqueue_depth(queue) == 1);
+
+    /* Pop it */
+    ShWorkItem *popped = sh_workqueue_pop_timeout(queue, 0);
+    ASSERT(popped != NULL);
+    ASSERT(popped->data_len == 5);
+    ASSERT(memcmp(popped->data, "test", 5) == 0);
+    ASSERT(popped->user_ctx == (void*)0x1234);
+
+    sh_workqueue_item_free(popped);
+    ASSERT(sh_workqueue_depth(queue) == 0);
+
+    sh_workqueue_free(queue);
+}
+
+TEST(workqueue_full_returns_zero)
+{
+    /* Queue with capacity 2 */
+    ShWorkQueue *queue = sh_workqueue_create(2, 0);
+    ASSERT(queue != NULL);
+
+    /* Push 2 items - should succeed */
+    char *d1 = malloc(1); d1[0] = 'a';
+    char *d2 = malloc(1); d2[0] = 'b';
+    char *d3 = malloc(1); d3[0] = 'c';
+
+    ShWorkItem i1 = { .data = d1, .data_len = 1 };
+    ShWorkItem i2 = { .data = d2, .data_len = 1 };
+    ShWorkItem i3 = { .data = d3, .data_len = 1 };
+
+    ASSERT(sh_workqueue_push(queue, &i1) == 1);
+    ASSERT(sh_workqueue_push(queue, &i2) == 1);
+    ASSERT(sh_workqueue_full(queue) == 1);
+
+    /* Third push should fail - queue full */
+    ASSERT(sh_workqueue_push(queue, &i3) == 0);
+    free(d3);  /* We still own d3 since push failed */
+
+    sh_workqueue_free(queue);
+}
+
+TEST(workqueue_item_expiration)
+{
+    /* Queue with 0.001 second timeout */
+    ShWorkQueue *queue = sh_workqueue_create(10, 0.001);
+    ASSERT(queue != NULL);
+
+    char *data = malloc(4);
+    memcpy(data, "old", 4);
+    ShWorkItem item = { .data = data, .data_len = 4 };
+    ASSERT(sh_workqueue_push(queue, &item) == 1);
+
+    /* Wait for item to expire */
+    struct timespec ts = { 0, 10000000 };  /* 10ms */
+    nanosleep(&ts, NULL);
+
+    /* Pop and check expiration */
+    ShWorkItem *popped = sh_workqueue_pop_timeout(queue, 0);
+    ASSERT(popped != NULL);
+    ASSERT(sh_workqueue_item_expired(queue, popped) == 1);
+    ASSERT(sh_workqueue_item_age(popped) > 0.001);
+
+    sh_workqueue_item_free(popped);
+    sh_workqueue_free(queue);
+}
+
+TEST(workqueue_stats)
+{
+    ShWorkQueue *queue = sh_workqueue_create(3, 1.0);
+    ASSERT(queue != NULL);
+
+    /* Push 2 items */
+    char *d1 = malloc(1);
+    char *d2 = malloc(1);
+    ShWorkItem i1 = { .data = d1, .data_len = 1 };
+    ShWorkItem i2 = { .data = d2, .data_len = 1 };
+
+    sh_workqueue_push(queue, &i1);
+    sh_workqueue_push(queue, &i2);
+
+    ShWorkQueueStats stats;
+    sh_workqueue_stats(queue, &stats);
+
+    ASSERT_EQ(stats.current_depth, 2);
+    ASSERT_EQ(stats.max_capacity, 3);
+    ASSERT_EQ(stats.total_pushed, 2);
+    ASSERT_EQ(stats.total_popped, 0);
+    ASSERT_EQ(stats.total_dropped, 0);
+    ASSERT_NEAR(stats.timeout_sec, 1.0, 0.001);
+
+    /* Pop one */
+    ShWorkItem *popped = sh_workqueue_pop_timeout(queue, 0);
+    sh_workqueue_item_free(popped);
+
+    sh_workqueue_stats(queue, &stats);
+    ASSERT_EQ(stats.current_depth, 1);
+    ASSERT_EQ(stats.total_popped, 1);
+
+    sh_workqueue_free(queue);
+}
+
+TEST(workqueue_try_push_pressure)
+{
+    ShWorkQueue *queue = sh_workqueue_create(4, 0);
+    ASSERT(queue != NULL);
+
+    double pressure;
+
+    char *d1 = malloc(1);
+    ShWorkItem i1 = { .data = d1, .data_len = 1 };
+    ASSERT(sh_workqueue_try_push(queue, &i1, &pressure) == 1);
+    ASSERT_NEAR(pressure, 0.0, 0.01);  /* Was empty before push */
+
+    char *d2 = malloc(1);
+    ShWorkItem i2 = { .data = d2, .data_len = 1 };
+    sh_workqueue_try_push(queue, &i2, &pressure);
+    ASSERT_NEAR(pressure, 0.25, 0.01);  /* 1/4 */
+
+    char *d3 = malloc(1);
+    ShWorkItem i3 = { .data = d3, .data_len = 1 };
+    sh_workqueue_try_push(queue, &i3, &pressure);
+    ASSERT_NEAR(pressure, 0.5, 0.01);  /* 2/4 */
+
+    sh_workqueue_free(queue);
+}
+
+TEST(workqueue_shutdown)
+{
+    ShWorkQueue *queue = sh_workqueue_create(10, 0);
+    ASSERT(queue != NULL);
+
+    /* Shutdown empty queue */
+    sh_workqueue_shutdown(queue);
+
+    /* Pop should return NULL immediately */
+    ASSERT(sh_workqueue_pop_timeout(queue, 0) == NULL);
+
+    /* Push should fail after shutdown */
+    char *data = malloc(1);
+    ShWorkItem item = { .data = data, .data_len = 1 };
+    ASSERT(sh_workqueue_push(queue, &item) == 0);
+    free(data);
+
+    sh_workqueue_free(queue);
+}
+
+TEST(workqueue_null_safety)
+{
+    ShWorkItem item = { .data = NULL, .data_len = 0 };
+
+    /* All these should not crash */
+    ASSERT(sh_workqueue_push(NULL, &item) == 0);
+    ASSERT(sh_workqueue_push(NULL, NULL) == 0);
+    ASSERT(sh_workqueue_pop(NULL) == NULL);
+    ASSERT(sh_workqueue_pop_timeout(NULL, 0) == NULL);
+    ASSERT(sh_workqueue_item_expired(NULL, NULL) == 0);
+    ASSERT_NEAR(sh_workqueue_item_age(NULL), 0.0, 0.001);
+    ASSERT(sh_workqueue_depth(NULL) == 0);
+    ASSERT(sh_workqueue_full(NULL) == 1);
+    sh_workqueue_item_free(NULL);
+    sh_workqueue_shutdown(NULL);
+}
+
+TEST(workqueue_fifo_order)
+{
+    ShWorkQueue *queue = sh_workqueue_create(10, 0);
+    ASSERT(queue != NULL);
+
+    /* Push 3 items with distinct data */
+    for (int i = 0; i < 3; i++) {
+        int *data = malloc(sizeof(int));
+        *data = i;
+        ShWorkItem item = { .data = data, .data_len = sizeof(int) };
+        sh_workqueue_push(queue, &item);
+    }
+
+    /* Pop should return in FIFO order */
+    for (int i = 0; i < 3; i++) {
+        ShWorkItem *popped = sh_workqueue_pop_timeout(queue, 0);
+        ASSERT(popped != NULL);
+        ASSERT_EQ(*(int*)popped->data, i);
+        sh_workqueue_item_free(popped);
+    }
+
+    sh_workqueue_free(queue);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1065,6 +1287,19 @@ int main(void)
     RUN_TEST(ratelimit_reset);
     RUN_TEST(ratelimit_zero_addr_allowed);
     RUN_TEST(ratelimit_null_safe);
+
+    printf("\nWork Queue:\n");
+    RUN_TEST(workqueue_create_free);
+    RUN_TEST(workqueue_create_invalid);
+    RUN_TEST(workqueue_free_null_safe);
+    RUN_TEST(workqueue_push_pop_basic);
+    RUN_TEST(workqueue_full_returns_zero);
+    RUN_TEST(workqueue_item_expiration);
+    RUN_TEST(workqueue_stats);
+    RUN_TEST(workqueue_try_push_pressure);
+    RUN_TEST(workqueue_shutdown);
+    RUN_TEST(workqueue_null_safety);
+    RUN_TEST(workqueue_fifo_order);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
