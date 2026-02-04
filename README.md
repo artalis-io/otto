@@ -23,12 +23,14 @@ A comprehensive trucking and logistics optimization platform, combining route pl
 | Component | Location | Description |
 |-----------|----------|-------------|
 | **Forge** | `forge/` | **F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution - async job queue |
+| **Apex** | `apex/` | **A**synchronous **P**re-computation **Ex**ecution - tile pyramids, route pre-computation, cache warming |
 | **HoSE** | `hose/` | **H**ours **o**f **S**ervice **E**ngine - FMCSA/EC561 compliance |
 | **Tempo** | `tempo/` | **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator |
 | **Arbor** | `arbor/` | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
 | **Sigma** | `sigma/` | **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation |
 | **Pulse** | `pulse/` | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
 | **Nexus** | `nexus/` | **N**ormalized **Ex**ternal **U**nified **S**napshots - TMS/ELD/LoadBoard integration |
+| **Iris** | `iris/` | **I**ntelligent **R**equest **I**nterpretation **S**ystem - LLM natural language interface |
 
 ### Applications
 
@@ -181,12 +183,15 @@ otto/
 │   └── fonts/          #   MSDF font assets
 ├── shared/             # Shared Utilities (libshared.a)
 ├── forge/              # [Planned] Async Job Queue
+├── apex/               # [Planned] Pre-computation Engine (tiles, routes, cache)
 ├── hose/               # [Planned] Hours of Service Engine
 ├── tempo/              # [Planned] Business Rules Engine
 ├── arbor/              # [Planned] State-Space Search Engine
 ├── sigma/              # [Planned] Fleet Plan Selection Engine
 ├── pulse/              # [Planned] Execution Tracker / PTA Engine
 ├── nexus/              # [Planned] External Data Integration Gateway
+├── iris/               # [Planned] LLM Natural Language Interface
+├── site/               # Landing page (static HTML)
 ├── vendor/             # Third-party libraries
 │   ├── mongoose/       #   HTTP server
 │   ├── miniz/          #   zlib compression
@@ -763,6 +768,31 @@ if (!r.ok) {
 
 **No hidden control flow. No exceptions. No surprises.**
 
+### Scaling Philosophy: Engines vs Infrastructure
+
+OTTO distinguishes between **engines** (novel logic) and **infrastructure** (commodity ops):
+
+| Concern | Solution | Is it an Engine? |
+|---------|----------|------------------|
+| More capacity | Horizontal scaling (K8s) | No - just run more instances |
+| Faster responses | Caching (Redis, CDN) | No - standard infrastructure |
+| Tile distribution | CDN edge caching | No - Cloudflare/Fastly |
+| Load balancing | nginx/envoy | No - commodity |
+| Async job execution | **Forge** | **Yes** - job queue logic |
+| Pre-computation strategy | **Apex** | **Yes** - decides WHAT to pre-compute |
+| Natural language interface | **Iris** | **Yes** - intent → API translation |
+
+**The key insight:** Velo, Carta, Locus are stateless—input in, output out. Scaling them is infrastructure (run more containers, add a CDN). But deciding *what* to pre-compute (Apex) and *how* to interpret user intent (Iris) is novel logic that belongs in engines.
+
+**Deployment tiers (same codebase, different topology):**
+- **Local:** Single process, in-memory queue
+- **Small business:** Redis-backed job queue
+- **Enterprise:** Kubernetes, horizontal scaling
+- **Managed:** We run it, you use it
+
+See [docs/STRATEGY.md](docs/STRATEGY.md) for detailed business strategy and technical positioning.
+See [site/](site/) for the public landing page.
+
 ### C Memory Safety Practices
 
 C lacks Rust's borrow checker, but disciplined patterns prevent the common vulnerability classes. OTTO uses these strategies throughout:
@@ -961,3 +991,5 @@ Mark Farkas - 2025
 | **Sigma** | **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation |
 | **Pulse** | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
 | **Nexus** | **N**ormalized **Ex**ternal **U**nified **S**napshots |
+| **Apex** | **A**synchronous **P**re-computation **Ex**ecution |
+| **Iris** | **I**ntelligent **R**equest **I**nterpretation **S**ystem |

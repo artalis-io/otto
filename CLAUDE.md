@@ -40,16 +40,19 @@ make fuelwise-ui-dev          # FuelWise UI on :5173
 | Component | Location | Purpose |
 |-----------|----------|---------|
 | Forge | `forge/` | **F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution - async job queue |
+| Apex | `apex/` | **A**synchronous **P**re-computation **Ex**ecution - tile pyramids, route pre-computation, cache warming |
 | Nexus | `nexus/` | **N**ormalized **Ex**ternal **U**nified **S**napshots - TMS/ELD/LoadBoard integration gateway |
 | HoSE | `hose/` | **H**ours **o**f **S**ervice **E**ngine - FMCSA/EC561 compliance |
 | Tempo | `tempo/` | **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator |
 | Arbor | `arbor/` | **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime |
 | Sigma | `sigma/` | **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation |
 | Pulse | `pulse/` | **P**lan **U**tilization and **L**ive **S**tate **E**stimator |
+| Iris | `iris/` | **I**ntelligent **R**equest **I**nterpretation **S**ystem - LLM natural language interface |
 
 See `docs/TODO_FEATURES.md` for detailed specifications of planned components.
 See `docs/NEXUS.md` for the data ingress architecture (TMS/ELD/LoadBoard integration).
 See `docs/FORGE.md` for the async job queue architecture.
+See `docs/STRATEGY.md` for business strategy and technical positioning.
 
 ### Applications
 
@@ -614,7 +617,46 @@ The following components are documented in detail in `docs/TODO_FEATURES.md`:
 
 ## Design Principles
 
-1. **Zero Dependencies** - Core libraries use only standard C
+1. **Zero Dependencies** - Core libraries use only standard C (vendor libs are vendored source)
 2. **WASM-First** - All components compile to WebAssembly
 3. **Layered** - solver → domain → api → ui
 4. **Portable** - Linux, macOS, Windows, browsers
+5. **Not a TMS** - OTTO is an optimization layer, not a System of Record
+
+## Scaling Philosophy: Engines vs Infrastructure
+
+OTTO distinguishes between **engines** (novel logic) and **infrastructure** (commodity ops):
+
+| Concern | Solution | Is it an Engine? |
+|---------|----------|------------------|
+| More capacity | Horizontal scaling (K8s) | No - just run more instances |
+| Faster responses | Caching (Redis, CDN) | No - standard infrastructure |
+| Tile distribution | CDN edge caching | No - Cloudflare/Fastly |
+| Load balancing | nginx/envoy | No - commodity |
+| Async job execution | **Forge** | **Yes** - job queue logic |
+| Pre-computation strategy | **Apex** | **Yes** - decides WHAT to pre-compute |
+| Natural language interface | **Iris** | **Yes** - intent → API translation |
+
+**Key insight:** Velo, Carta, Locus are stateless—input in, output out. Scaling them is infrastructure (run more containers, add a CDN). But deciding *what* to pre-compute (Apex) and *how* to interpret user intent (Iris) is novel logic that belongs in engines.
+
+**Forge vs Apex:**
+- **Forge** = HOW to execute async jobs (job queue, workers, scheduling)
+- **Apex** = WHAT to pre-compute (tile pyramids, route corridors, cache warming)
+
+**Iris (LLM Interface):**
+- LLM is the UX layer, OTTO engines are the truth layer
+- LLM doesn't hallucinate routes—it translates natural language into API calls
+- Dispatchers speak, OTTO optimizes, LLM explains
+
+**Deployment tiers (same codebase, different topology):**
+- **Local:** Single process, in-memory queue
+- **Small business:** Redis-backed job queue
+- **Enterprise:** Kubernetes, horizontal scaling
+- **Managed:** We run it, you use it
+
+## Additional Documentation
+
+- `docs/STRATEGY.md` - Business strategy, market positioning, partnership opportunities
+- `docs/ARCHITECTURE.md` - Technical architecture overview
+- `docs/TODO_FEATURES.md` - Planned component specifications
+- `site/` - Public landing page (zero-dependency static HTML)
