@@ -8,8 +8,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 #include "fw_refuel.h"
 #include "ralph.h"
+
+/* Maximum stations to prevent integer overflow in allocations */
+#define FW_MAX_STATIONS 100000
 
 /* ============================================================================
  * Fuel Consumption Calculation
@@ -85,6 +89,12 @@ int fw_solve_refuel_lp(
         solution->remaining_fuel = problem->current_fuel -
             fw_calc_total_fuel_consumed(problem);
         return 0;
+    }
+
+    /* Validate k to prevent integer overflow in allocations */
+    if (k < 0 || k > FW_MAX_STATIONS) {
+        solution->status = FW_STATUS_ERROR;
+        return -1;
     }
 
     int num_vars = 2 * k;
@@ -188,11 +198,24 @@ int fw_solve_refuel_lp(
 
     if (ret == 0 && status == RALPH_STATUS_OPTIMAL) {
         double *x = malloc(num_vars * sizeof(double));
+        if (!x) {
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
         ralph_get_solution(model, x);
 
         /* Allocate solution arrays */
         solution->purchases = malloc(k * sizeof(double));
         solution->stop_flags = calloc(k, sizeof(int));
+        if (!solution->purchases || !solution->stop_flags) {
+            free(x);
+            free(solution->purchases);
+            free(solution->stop_flags);
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
 
         double gross_cost = 0.0;
         double total_purchased = 0.0;
@@ -259,6 +282,12 @@ int fw_solve_refuel_milp(
         solution->remaining_fuel = problem->current_fuel -
             fw_calc_total_fuel_consumed(problem);
         return 0;
+    }
+
+    /* Validate k to prevent integer overflow in allocations */
+    if (k < 0 || k > FW_MAX_STATIONS) {
+        solution->status = FW_STATUS_ERROR;
+        return -1;
     }
 
     int num_vars = 3 * k;
@@ -382,11 +411,24 @@ int fw_solve_refuel_milp(
 
     if (ret == 0 && status == RALPH_STATUS_OPTIMAL) {
         double *x = malloc(num_vars * sizeof(double));
+        if (!x) {
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
         ralph_get_solution(model, x);
 
         /* Allocate solution arrays */
         solution->purchases = malloc(k * sizeof(double));
         solution->stop_flags = malloc(k * sizeof(int));
+        if (!solution->purchases || !solution->stop_flags) {
+            free(x);
+            free(solution->purchases);
+            free(solution->stop_flags);
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
 
         double gross_cost = 0.0;
         double total_purchased = 0.0;
@@ -654,6 +696,12 @@ int fw_solve_refuel_benders(
         return 0;
     }
 
+    /* Validate k to prevent integer overflow in allocations */
+    if (k < 0 || k > FW_MAX_STATIONS) {
+        solution->status = FW_STATUS_ERROR;
+        return -1;
+    }
+
     /* If no integer constraints needed, use LP directly */
     if (problem->min_purchase < 0.01 && problem->stop_cost < 0.01) {
         return fw_solve_refuel_lp(problem, solution);
@@ -746,6 +794,16 @@ int fw_solve_refuel_benders(
     if (found_optimal && best_purchases && best_z) {
         solution->purchases = malloc(k * sizeof(double));
         solution->stop_flags = malloc(k * sizeof(int));
+        if (!solution->purchases || !solution->stop_flags) {
+            free(solution->purchases);
+            free(solution->stop_flags);
+            free(z_fixed);
+            free(best_purchases);
+            free(best_z);
+            benders_map_free(map);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
 
         double gross_cost = 0.0;
         double total_purchased = 0.0;

@@ -7,6 +7,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include "fw_geo.h"
 
 /* ============================================================================
@@ -195,6 +196,11 @@ double fw_distance_along_polyline(
         return 0.0;
     }
 
+    /* Bounds check on segment_index */
+    if (segment_index < 0 || segment_index >= polyline->num_points) {
+        return 0.0;
+    }
+
     double total_distance = 0.0;
 
     /* Sum up complete segments before the target segment */
@@ -229,7 +235,12 @@ int fw_subsample_polyline(
     if (polyline->num_points <= target_points) {
         /* No subsampling needed, copy the polyline */
         result->num_points = polyline->num_points;
-        result->points = malloc(result->num_points * sizeof(FWCoord));
+        /* Check for overflow before allocation */
+        if (result->num_points < 0 ||
+            (size_t)result->num_points > SIZE_MAX / sizeof(FWCoord)) {
+            return -1;
+        }
+        result->points = malloc((size_t)result->num_points * sizeof(FWCoord));
         if (result->points == NULL) {
             return -1;
         }
@@ -253,8 +264,11 @@ int fw_subsample_polyline(
         count++;
     }
 
-    /* Allocate result */
-    result->points = malloc(count * sizeof(FWCoord));
+    /* Allocate result - check for overflow */
+    if (count < 0 || (size_t)count > SIZE_MAX / sizeof(FWCoord)) {
+        return -1;
+    }
+    result->points = malloc((size_t)count * sizeof(FWCoord));
     if (result->points == NULL) {
         return -1;
     }
