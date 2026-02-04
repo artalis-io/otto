@@ -870,6 +870,82 @@
             border-bottom: none;
         }
 
+        /* For Owner-Operators */
+        .for-operators {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .operator-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .operator-feature {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .operator-feature h4 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+
+        .operator-feature p {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .operator-cta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 24px;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        .operator-cta-text {
+            flex: 1;
+            min-width: 250px;
+        }
+
+        .operator-cta-text h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .operator-cta-text p {
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+
+        .operator-price {
+            text-align: center;
+        }
+
+        .operator-price .free {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--success);
+        }
+
+        .operator-price .paid {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
         /* For Fleets CTA */
         .for-fleets {
             padding: 48px 0;
@@ -985,10 +1061,11 @@
 
         <main id="main-content">
         <section class="hero">
-            <h1>A complete trucking optimization platform</h1>
+            <h1>Trucking optimization for everyone</h1>
             <p>
-                Route planning, fuel cost minimization, Hours of Service compliance, fleet scheduling,
-                and custom map rendering. All core libraries compile to WebAssembly with no external dependencies.
+                From one-truck owner-operators to 10,000+ truck mega-fleets. Route planning, fuel cost
+                minimization, Hours of Service compliance, and fleet scheduling. Same algorithms for
+                everyone&mdash;runs free in your browser or scales to enterprise.
             </p>
             <div class="badges">
                 <span class="badge green">279+ tests</span>
@@ -1004,26 +1081,26 @@
             <div class="mission-content">
                 <div class="mission-text">
                     <p>
-                        Trucking fleets in the US and EU face a brutal equation: thin margins,
-                        volatile fuel costs, complex Hours of Service regulations, and pressure
-                        to reduce environmental impact. Most fleets run far below optimal utilization.
+                        Large fleet optimization vendors build for fleet-level KPIs&mdash;"how do I
+                        move 10,000 loads with 2,000 trucks?" But the 350,000+ owner-operators and
+                        small trucking companies need a different question answered: "I'm in Tulsa
+                        with an empty trailer&mdash;what's my best next move?"
                     </p>
                     <p>
-                        OTTO exists to change that. By combining route optimization, fuel cost
-                        minimization, HoS-compliant scheduling, and real-time fleet planning,
-                        OTTO enables fleets to hit 2,000&ndash;3,000 loaded miles per week with
-                        70&ndash;80% contract-to-spot ratios.
+                        OTTO serves both. Fleet-level assignment for enterprises AND driver-centric
+                        decision support for small operators. The algorithms are the same; the
+                        interface and questions are different.
                     </p>
                     <p>
-                        Superior utilization means fewer empty miles, lower fuel consumption per
-                        ton-mile, reduced emissions, and better margins. What's good for business
-                        is good for the planet.
+                        Superior optimization means fewer empty miles, lower fuel costs, HoS compliance
+                        without violations, and better margins. What's good for a mega-fleet is good
+                        for a family operation.
                     </p>
                     <p class="mission-statement">
                         We believe logistics optimization shouldn't be locked behind enterprise
-                        contracts. OTTO's core engines are open source&mdash;auditable, forkable,
-                        and free to use. Whether you're a one-truck owner-operator or a 500-truck
-                        fleet, the same technology is available to everyone.
+                        contracts or priced out of reach for small operators. OTTO's core engines
+                        are open source&mdash;free in the browser for a family operation, managed
+                        platform for enterprises, full code ownership for anyone who wants it.
                     </p>
                 </div>
                 <div class="mission-stats">
@@ -1589,6 +1666,42 @@ Dependencies:
                         <li>Priority support &ndash; SLAs and dedicated help</li>
                         <li>Custom development &ndash; Fleet-specific tuning</li>
                     </ul>
+                </div>
+            </div>
+        </section>
+
+        <section class="for-operators">
+            <h2 class="section-title">For Owner-Operators &amp; Small Trucking Companies</h2>
+            <div class="operator-grid">
+                <div class="operator-feature">
+                    <h4>Route Planning</h4>
+                    <p>Optimal routes with truck restrictions, not Google Maps guesswork</p>
+                </div>
+                <div class="operator-feature">
+                    <h4>Fuel Optimization</h4>
+                    <p>Find the cheapest stops on your route&mdash;save $50-100 per trip</p>
+                </div>
+                <div class="operator-feature">
+                    <h4>HoS Calculator</h4>
+                    <p>Know exactly when you need to stop&mdash;avoid $16k violation fines</p>
+                </div>
+                <div class="operator-feature">
+                    <h4>Load Decisions</h4>
+                    <p>"I'm in Tulsa empty"&mdash;what's my best next move?</p>
+                </div>
+            </div>
+            <div class="operator-cta">
+                <div class="operator-cta-text">
+                    <h3>Same algorithms the mega-fleets use</h3>
+                    <p>
+                        No install, no signup required. Runs entirely in your browser.
+                        The same optimization technology that Girteka uses for 10,000 trucks&mdash;available
+                        to you for free.
+                    </p>
+                </div>
+                <div class="operator-price">
+                    <div class="free">Free</div>
+                    <div class="paid">Pro features from $29/mo</div>
                 </div>
             </div>
         </section>
