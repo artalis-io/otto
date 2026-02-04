@@ -272,6 +272,10 @@ VLStatus vl_graph_build_from_pbf(VLGraphBuilder *builder, const VLPBFContext *ct
         return VL_ERROR_INVALID_ARGUMENT;
     }
 
+    /* Integer overflow check */
+    if (ctx->num_nodes > SIZE_MAX / sizeof(VLOSMNodeIndex)) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
     VLOSMNodeIndex *node_index = malloc(ctx->num_nodes * sizeof(VLOSMNodeIndex));
     if (!node_index) return VL_ERROR_OUT_OF_MEMORY;
 
@@ -371,6 +375,12 @@ VLStatus vl_graph_build_reverse_index(VLGraph *graph)
     free(graph->rev_edges);
     free(graph->rev_edge_idx);
 
+    /* Integer overflow checks */
+    if (graph->num_nodes > SIZE_MAX / sizeof(uint32_t) ||
+        graph->num_edges > SIZE_MAX / sizeof(uint32_t)) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
     /* Allocate reverse index arrays */
     graph->rev_edge_start = calloc(graph->num_nodes, sizeof(uint32_t));
     graph->rev_edge_count = calloc(graph->num_nodes, sizeof(uint32_t));
@@ -463,6 +473,12 @@ VLStatus vl_graph_build_grid_index(VLGraph *graph)
     grid->cell_lon = lon_range / VL_GRID_SIZE;
 
     size_t num_cells = (size_t)VL_GRID_SIZE * VL_GRID_SIZE;
+
+    /* Integer overflow check */
+    if (graph->num_nodes > SIZE_MAX / sizeof(uint32_t)) {
+        free(grid);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
 
     /* Allocate cell offsets and temporary count array */
     grid->cell_offsets = calloc(num_cells + 1, sizeof(uint32_t));
@@ -826,6 +842,13 @@ VLStatus vl_graph_contract_degree2(VLGraph *graph)
     printf("velo: Contracting %u degree-2 nodes (%.1f%% of graph)\n",
            num_contractable, 100.0 * num_contractable / num_nodes);
 
+    /* Integer overflow checks */
+    if (num_nodes > SIZE_MAX / sizeof(uint32_t) ||
+        (num_nodes - num_contractable) > SIZE_MAX / sizeof(uint32_t)) {
+        free(contracted);
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
     /* Create mapping from old node IDs to new node IDs */
     uint32_t *old_to_new = malloc(num_nodes * sizeof(uint32_t));
     uint32_t *new_to_old = malloc((num_nodes - num_contractable) * sizeof(uint32_t));
@@ -1020,9 +1043,13 @@ VLStatus vl_graph_unpack_path(const VLGraph *graph,
 
     /* If no contraction data, just copy the path */
     if (!graph->contraction) {
-        uint32_t *copy = malloc(num_nodes * sizeof(uint32_t));
+        /* Integer overflow check */
+        if (num_nodes < 0 || (size_t)num_nodes > SIZE_MAX / sizeof(uint32_t)) {
+            return VL_ERROR_OUT_OF_MEMORY;
+        }
+        uint32_t *copy = malloc((size_t)num_nodes * sizeof(uint32_t));
         if (!copy) return VL_ERROR_OUT_OF_MEMORY;
-        memcpy(copy, node_indices, num_nodes * sizeof(uint32_t));
+        memcpy(copy, node_indices, (size_t)num_nodes * sizeof(uint32_t));
         *out_indices = copy;
         *out_num_nodes = num_nodes;
         return VL_OK;
@@ -1045,8 +1072,13 @@ VLStatus vl_graph_unpack_path(const VLGraph *graph,
         }
     }
 
+    /* Integer overflow check */
+    if (total_nodes < 0 || (size_t)total_nodes > SIZE_MAX / sizeof(uint32_t)) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
     /* Allocate result */
-    uint32_t *result = malloc(total_nodes * sizeof(uint32_t));
+    uint32_t *result = malloc((size_t)total_nodes * sizeof(uint32_t));
     if (!result) return VL_ERROR_OUT_OF_MEMORY;
 
     /* Second pass: build unpacked path */
@@ -1528,6 +1560,13 @@ VLStatus vl_graph_reorder_hilbert(VLGraph *graph)
     double lon_range = lon_max - lon_min;
     if (lat_range < 1e-9) lat_range = 1e-9;
     if (lon_range < 1e-9) lon_range = 1e-9;
+
+    /* Integer overflow checks for all allocations */
+    if (num_nodes > SIZE_MAX / sizeof(HilbertNode) ||
+        num_nodes > SIZE_MAX / sizeof(uint32_t) ||
+        num_nodes > SIZE_MAX / sizeof(VLNode)) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
 
     /* Allocate arrays for sorting */
     HilbertNode *hilbert_nodes = malloc(num_nodes * sizeof(HilbertNode));

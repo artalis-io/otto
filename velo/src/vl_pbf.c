@@ -227,6 +227,11 @@ static VLStatus parse_dense_nodes(VLPBFContext *ctx, const uint8_t *data, size_t
 
     if (count == 0) return VL_OK;
 
+    /* Integer overflow check for allocations */
+    if (count > SIZE_MAX / sizeof(int64_t)) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
     /* Allocate arrays */
     ids = malloc(count * sizeof(int64_t));
     lats = malloc(count * sizeof(int64_t));
@@ -386,6 +391,9 @@ static VLStatus parse_way(VLPBFContext *ctx, const uint8_t *data, size_t len,
 
         /* Validate count fits in int and doesn't exceed max */
         if (count >= 2 && count <= VL_PBF_MAX_WAY_NODES) {
+            /* Integer overflow check (defensive, VL_PBF_MAX_WAY_NODES is small) */
+            if (count > SIZE_MAX / sizeof(int64_t)) return VL_ERROR_OUT_OF_MEMORY;
+
             way.node_refs = malloc(count * sizeof(int64_t));
             if (!way.node_refs) return VL_ERROR_OUT_OF_MEMORY;
 

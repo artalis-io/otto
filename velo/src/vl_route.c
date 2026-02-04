@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdint.h>
 #include <limits.h>
 
 #ifdef _OPENMP
@@ -134,6 +135,13 @@ VLQueryContext *vl_query_context_create(const VLGraph *graph)
 
     size_t n = graph->num_nodes;
     ctx->num_nodes = (uint32_t)n;
+
+    /* Integer overflow checks for all allocations */
+    if (n > SIZE_MAX / sizeof(double) ||
+        n > SIZE_MAX / sizeof(uint32_t)) {
+        free(ctx);
+        return NULL;
+    }
 
     ctx->dist_fwd = malloc(n * sizeof(double));
     ctx->dist_bwd = malloc(n * sizeof(double));
@@ -252,6 +260,12 @@ static VLStatus reconstruct_path(const VLGraph *graph, const uint32_t *parent,
         return VL_ERROR_OUT_OF_MEMORY;
     }
 
+    /* Integer overflow checks for allocations */
+    if (path_len > SIZE_MAX / sizeof(uint32_t) ||
+        path_len > SIZE_MAX / sizeof(VLCoord)) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
     route->node_indices = malloc(path_len * sizeof(uint32_t));
     if (!route->node_indices) {
         return VL_ERROR_OUT_OF_MEMORY;
@@ -318,6 +332,12 @@ static VLStatus reconstruct_bidir_path(const VLGraph *graph,
 
     /* Check for overflow before assigning to int */
     if (path_len > (size_t)INT_MAX) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
+    /* Integer overflow checks for allocations */
+    if (path_len > SIZE_MAX / sizeof(uint32_t) ||
+        path_len > SIZE_MAX / sizeof(VLCoord)) {
         return VL_ERROR_OUT_OF_MEMORY;
     }
 
@@ -1093,6 +1113,12 @@ VLStatus vl_route_astar_landmarks(const VLGraph *graph, const VLLandmarks *lm,
         opts = &default_opts;
     }
 
+    /* Integer overflow checks for allocations */
+    if (graph->num_nodes > SIZE_MAX / sizeof(double) ||
+        graph->num_nodes > SIZE_MAX / sizeof(uint32_t)) {
+        return VL_ERROR_OUT_OF_MEMORY;
+    }
+
     /* Allocate temporary arrays */
     double *dist = malloc(graph->num_nodes * sizeof(double));
     uint32_t *parent = malloc(graph->num_nodes * sizeof(uint32_t));
@@ -1268,6 +1294,12 @@ VLStatus vl_route_dijkstra_bucket(const VLGraph *graph, uint32_t source, uint32_
     if (!opts) {
         vl_default_options(&default_opts);
         opts = &default_opts;
+    }
+
+    /* Integer overflow checks for allocations */
+    if (graph->num_nodes > SIZE_MAX / sizeof(double) ||
+        graph->num_nodes > SIZE_MAX / sizeof(uint32_t)) {
+        return VL_ERROR_OUT_OF_MEMORY;
     }
 
     /* Allocate temporary arrays */
