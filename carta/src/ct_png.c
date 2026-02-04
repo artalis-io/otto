@@ -266,34 +266,75 @@ size_t ct_encode_png_ex(const uint8_t *pixels, int width, int height,
 }
 
 /* ============================================================================
- * Render Context Cache
+ * Render Context Cache (Thread-Safe with Proper Cleanup)
  * ============================================================================ */
+
+#include <pthread.h>
 
 /*
  * Thread-local render context cache for common tile sizes.
  * Avoids malloc/free overhead for repeated tile generation.
- * Each thread maintains its own cache via __thread storage.
  *
- * NOTE: Thread-local storage means cached contexts are not freed when threads
- * exit. For long-running server processes, this is typically not an issue as
- * worker threads are reused. For short-lived threads, call ct_render_free()
- * explicitly if needed.
+ * Uses pthread_key with destructor for automatic cleanup when threads exit.
+ * This prevents memory leaks in applications with short-lived threads.
  */
 #define CT_CACHE_SIZE_256 0
 #define CT_CACHE_SIZE_512 1
 #define CT_CACHE_COUNT 2
 
-static __thread CTRenderContext *render_cache[CT_CACHE_COUNT] = {NULL, NULL};
+/* Thread-local cache structure */
+typedef struct {
+    CTRenderContext *contexts[CT_CACHE_COUNT];
+} CTThreadCache;
+
+static pthread_key_t ct_cache_key;
+static pthread_once_t ct_cache_key_once = PTHREAD_ONCE_INIT;
+
+/* Destructor called automatically when thread exits */
+static void ct_cache_destructor(void *data)
+{
+    CTThreadCache *cache = (CTThreadCache *)data;
+    if (cache) {
+        for (int i = 0; i < CT_CACHE_COUNT; i++) {
+            if (cache->contexts[i]) {
+                ct_render_free(cache->contexts[i]);
+            }
+        }
+        free(cache);
+    }
+}
+
+static void ct_cache_key_init(void)
+{
+    pthread_key_create(&ct_cache_key, ct_cache_destructor);
+}
+
+static CTThreadCache *get_thread_cache(void)
+{
+    pthread_once(&ct_cache_key_once, ct_cache_key_init);
+
+    CTThreadCache *cache = pthread_getspecific(ct_cache_key);
+    if (!cache) {
+        cache = calloc(1, sizeof(CTThreadCache));
+        if (cache) {
+            pthread_setspecific(ct_cache_key, cache);
+        }
+    }
+    return cache;
+}
 
 static CTRenderContext *acquire_render_context(int tile_size)
 {
+    CTThreadCache *cache = get_thread_cache();
+    if (!cache) return ct_render_create(tile_size, tile_size);
+
     int cache_idx = -1;
     if (tile_size == 256) cache_idx = CT_CACHE_SIZE_256;
     else if (tile_size == 512) cache_idx = CT_CACHE_SIZE_512;
 
-    if (cache_idx >= 0 && render_cache[cache_idx]) {
-        CTRenderContext *ctx = render_cache[cache_idx];
-        render_cache[cache_idx] = NULL;
+    if (cache_idx >= 0 && cache->contexts[cache_idx]) {
+        CTRenderContext *ctx = cache->contexts[cache_idx];
+        cache->contexts[cache_idx] = NULL;
         return ctx;
     }
 
@@ -304,12 +345,18 @@ static void release_render_context(CTRenderContext *ctx, int tile_size)
 {
     if (!ctx) return;
 
+    CTThreadCache *cache = get_thread_cache();
+    if (!cache) {
+        ct_render_free(ctx);
+        return;
+    }
+
     int cache_idx = -1;
     if (tile_size == 256) cache_idx = CT_CACHE_SIZE_256;
     else if (tile_size == 512) cache_idx = CT_CACHE_SIZE_512;
 
-    if (cache_idx >= 0 && !render_cache[cache_idx]) {
-        render_cache[cache_idx] = ctx;
+    if (cache_idx >= 0 && !cache->contexts[cache_idx]) {
+        cache->contexts[cache_idx] = ctx;
         return;
     }
 

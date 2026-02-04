@@ -466,7 +466,7 @@ typedef struct {
     /* Node ID to index lookup (hash map) */
     struct {
         int64_t *keys;
-        uint32_t *values;
+        size_t *values;     /* Index into nodes array (size_t for >4B nodes) */
         size_t capacity;
         size_t count;
     } node_map;
@@ -479,7 +479,7 @@ typedef struct {
     /* Way ID to index lookup (for relation member resolution) */
     struct {
         int64_t *keys;
-        uint32_t *values;
+        size_t *values;     /* Index into ways array (size_t for >4B ways) */
         size_t capacity;
         size_t count;
     } way_map;

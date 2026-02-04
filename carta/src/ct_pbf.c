@@ -512,7 +512,7 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
 
     /* Allocate node_map (will grow if needed) */
     ctx->node_map.keys = calloc(node_cap, sizeof(int64_t));
-    ctx->node_map.values = malloc(node_cap * sizeof(uint32_t));
+    ctx->node_map.values = malloc(node_cap * sizeof(size_t));
     if (!ctx->node_map.keys || !ctx->node_map.values) {
         free(ctx->node_map.keys);
         free(ctx->node_map.values);
@@ -525,7 +525,7 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
 
     /* Allocate way_map (will grow if needed) */
     ctx->way_map.keys = calloc(way_cap, sizeof(int64_t));
-    ctx->way_map.values = malloc(way_cap * sizeof(uint32_t));
+    ctx->way_map.values = malloc(way_cap * sizeof(size_t));
     if (!ctx->way_map.keys || !ctx->way_map.values) {
         free(ctx->way_map.keys);
         free(ctx->way_map.values);
@@ -559,12 +559,12 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
     return CT_OK;
 }
 
-static CTStatus node_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
+static CTStatus node_map_insert(CTPBFContext *ctx, int64_t id, size_t index)
 {
     if (ctx->node_map.count >= ctx->node_map.capacity * 3 / 4) {
         size_t new_cap = ctx->node_map.capacity ? ctx->node_map.capacity * 2 : 65536;
-        size_t old_size = ctx->node_map.capacity * (sizeof(int64_t) + sizeof(uint32_t));
-        size_t new_size = new_cap * (sizeof(int64_t) + sizeof(uint32_t));
+        size_t old_size = ctx->node_map.capacity * (sizeof(int64_t) + sizeof(size_t));
+        size_t new_size = new_cap * (sizeof(int64_t) + sizeof(size_t));
 
         /* Check memory limit before growing */
         if (!check_memory_limit(ctx, new_size - old_size)) {
@@ -572,7 +572,7 @@ static CTStatus node_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
         }
 
         int64_t *new_keys = calloc(new_cap, sizeof(int64_t));
-        uint32_t *new_vals = malloc(new_cap * sizeof(uint32_t));
+        size_t *new_vals = malloc(new_cap * sizeof(size_t));
         if (!new_keys || !new_vals) {
             free(new_keys);
             free(new_vals);
@@ -610,9 +610,9 @@ static CTStatus node_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
     return CT_OK;
 }
 
-static uint32_t node_map_lookup(const CTPBFContext *ctx, int64_t id)
+static size_t node_map_lookup(const CTPBFContext *ctx, int64_t id)
 {
-    if (ctx->node_map.capacity == 0) return UINT32_MAX;
+    if (ctx->node_map.capacity == 0) return SIZE_MAX;
 
     uint64_t h = hash_id(id) % ctx->node_map.capacity;
     size_t start = h;
@@ -625,19 +625,19 @@ static uint32_t node_map_lookup(const CTPBFContext *ctx, int64_t id)
         if (h == start) break;
     }
 
-    return UINT32_MAX;
+    return SIZE_MAX;
 }
 
 /* ============================================================================
  * Way Map (Hash Table for relation member resolution)
  * ============================================================================ */
 
-static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
+static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, size_t index)
 {
     if (ctx->way_map.count >= ctx->way_map.capacity * 3 / 4) {
         size_t new_cap = ctx->way_map.capacity ? ctx->way_map.capacity * 2 : 16384;
-        size_t old_size = ctx->way_map.capacity * (sizeof(int64_t) + sizeof(uint32_t));
-        size_t new_size = new_cap * (sizeof(int64_t) + sizeof(uint32_t));
+        size_t old_size = ctx->way_map.capacity * (sizeof(int64_t) + sizeof(size_t));
+        size_t new_size = new_cap * (sizeof(int64_t) + sizeof(size_t));
 
         /* Check memory limit before growing */
         if (!check_memory_limit(ctx, new_size - old_size)) {
@@ -645,7 +645,7 @@ static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
         }
 
         int64_t *new_keys = calloc(new_cap, sizeof(int64_t));
-        uint32_t *new_vals = malloc(new_cap * sizeof(uint32_t));
+        size_t *new_vals = malloc(new_cap * sizeof(size_t));
         if (!new_keys || !new_vals) {
             free(new_keys);
             free(new_vals);
@@ -683,9 +683,9 @@ static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, uint32_t index)
     return CT_OK;
 }
 
-static uint32_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
+static size_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
 {
-    if (ctx->way_map.capacity == 0) return UINT32_MAX;
+    if (ctx->way_map.capacity == 0) return SIZE_MAX;
 
     uint64_t h = hash_id(id) % ctx->way_map.capacity;
     size_t start = h;
@@ -698,7 +698,7 @@ static uint32_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
         if (h == start) break;
     }
 
-    return UINT32_MAX;
+    return SIZE_MAX;
 }
 
 /* ============================================================================
@@ -1122,7 +1122,7 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
         ctx->nodes.coords[idx].lat = lat;
         ctx->nodes.coords[idx].lon = lon;
 
-        node_map_insert(ctx, ids[i], (uint32_t)idx);
+        node_map_insert(ctx, ids[i], idx);
 
         /* Process tags for this node (if keys_vals available) */
         if (kv_pos < kv_count) {
@@ -1299,8 +1299,8 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
 
     size_t coord_count = 0;
     for (size_t i = 0; i < ref_count; i++) {
-        uint32_t idx = node_map_lookup(ctx, refs[i]);
-        if (idx != UINT32_MAX && idx < ctx->nodes.count) {
+        size_t idx = node_map_lookup(ctx, refs[i]);
+        if (idx != SIZE_MAX && idx < ctx->nodes.count) {
             coords[coord_count++] = ctx->nodes.coords[idx];
         }
     }
@@ -1331,7 +1331,7 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
         ctx->ways_capacity = new_cap;
     }
 
-    uint32_t way_idx = (uint32_t)ctx->num_ways;
+    size_t way_idx = ctx->num_ways;
     CTOSMWay *way = &ctx->ways[ctx->num_ways++];
     way->id = id;
     way->coords = coords;

@@ -17,6 +17,27 @@ make
 # Open browser at http://localhost:8081
 ```
 
+## Production Deployment
+
+For production, pre-build a binary index from the PBF file. The tile server auto-detects the file format and uses mmap for instant startup (<1 second vs 30+ seconds for PBF parsing).
+
+```bash
+# Step 1: Build binary index (one-time, offline)
+./carta-tile-server --save-index /data/map.idx /data/map.osm.pbf
+
+# Step 2: Run tile server from index (production)
+./carta-tile-server /data/map.idx
+```
+
+### Why Use Binary Index?
+
+| Aspect | PBF File | Binary Index |
+|--------|----------|--------------|
+| Startup time | 10-60s | <1s |
+| Memory pattern | Peak during parse | Steady-state |
+| R-tree index | Built at startup | Pre-built, mmap'd |
+| Recommended for | Development | Production |
+
 ## Directory Structure
 
 ```
@@ -57,18 +78,22 @@ Configuration can be set via:
 ### Command Line Options
 
 ```bash
-./carta-tile-server [options] <pbf-file>
+./carta-tile-server [options] <pbf-or-index-file>
 
 Options:
-  -p, --port PORT      Port (default: 8081)
-  -h, --host HOST      Host (default: 0.0.0.0)
-  -s, --static DIR     Static files directory
-  -c, --config FILE    Config file
-  -t, --threads N      Worker threads (default: auto-detect CPU count)
-  --min-zoom N         Min zoom (default: 0)
-  --max-zoom N         Max zoom (default: 18)
-  --tile-size N        PNG size (default: 512)
+  -p, --port PORT       Port (default: 8081)
+  -h, --host HOST       Host (default: 0.0.0.0)
+  -s, --static DIR      Static files directory
+  -c, --config FILE     Config file
+  -t, --threads N       Worker threads (default: auto-detect CPU count)
+  -S, --save-index PATH Save binary index to PATH after loading PBF
+  --min-zoom N          Min zoom (default: 0)
+  --max-zoom N          Max zoom (default: 18)
+  --tile-size N         PNG size (default: 512)
+  --lod none|default    LOD filtering preset
 ```
+
+**Note:** The server auto-detects file format. Use `.osm.pbf` for development, `.idx` for production.
 
 ### Environment Variables
 
@@ -180,13 +205,14 @@ make docker   # Build Docker image
 
 ## Performance Notes
 
+- **Use binary index for production** - <1s startup vs 10-60s for PBF
 - PBF loading can take 10-30 seconds for large files (100MB+)
-- First tile requests may be slow (spatial index warm-up)
+- Binary index uses mmap - no parsing overhead, instant R-tree access
 - PNG tiles are CPU-bound (~50-100ms per tile)
 - MVT tiles are faster (~10-30ms per tile)
 - Multi-threading enabled by default (auto-detects CPU count)
 - Worker threads use thread-local render contexts for parallel tile generation
-- Use nginx/CDN caching for production
+- Use nginx/CDN caching for high-traffic deployments
 
 ## Common Issues
 

@@ -163,8 +163,38 @@ void ct_default_style(CTStyle *style);
 | Operation | Time | Notes |
 |-----------|------|-------|
 | PBF parse (Hungary) | ~8s | 294 MB file |
+| Index load (Hungary) | <1s | Pre-built binary index |
 | MVT tile (z14) | ~5ms | Single tile |
 | PNG tile (z14) | ~30ms | 256x256 |
+
+## Production Deployment
+
+For production, pre-build a binary index from the PBF file for instant startup:
+
+```bash
+# Build index (one-time, offline)
+./carta-tile-server --save-index map.idx map.osm.pbf
+
+# Run from index (production)
+./carta-tile-server map.idx
+```
+
+### Binary Index Contents
+
+The `.idx` file contains everything needed for tile serving:
+
+| Pre-computed | Description |
+|--------------|-------------|
+| Ways + Coords | All geometries in fixed-point format |
+| R-Tree Index | Hilbert-packed spatial index |
+| Labeled Points | Cities, towns with population/priority |
+| LOD Metadata | area_sqm, length_m, min_zoom per feature |
+| String Pool | Deduplicated feature names |
+
+**Not pre-computed** (computed on-the-fly):
+- Simplified geometries per zoom (19x storage cost)
+- Per-tile geometry clips (millions of tiles)
+- Rendered tiles (use Apex for tile pyramids)
 
 ## Memory Management
 
@@ -203,10 +233,11 @@ CTPBFContext *ctx = ct_pbf_context_create_with_config(&config);
 
 | Limitation | Value | Notes |
 |------------|-------|-------|
-| Max nodes | ~4 billion | `uint32_t` index |
+| Max nodes | ~18 quintillion | `size_t` index (64-bit) |
 | Max zoom level | 30 | Overflow prevention |
 | Max tiles per query | 10 million | DoS protection |
-| RAM requirement | ~10-15x PBF size | Peak during parsing |
+| RAM requirement | ~10-15x PBF size | Peak during PBF parsing |
+| Index file size | ~1.7x PBF size | Optimized for mmap |
 
 ## Integration with FuelWise
 
