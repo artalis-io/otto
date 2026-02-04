@@ -1192,6 +1192,225 @@ TEST(workqueue_fifo_order)
 }
 
 /* ============================================================================
+ * Capacity Planning Tests
+ * ============================================================================ */
+
+TEST(capacity_calculate_basic)
+{
+    ShCapacityParams params;
+    ShCapacityInput input = {
+        .avg_response_ms = 75.0,      /* 75ms average response */
+        .p99_response_ms = 0,         /* Auto-estimate */
+        .num_workers = 8,             /* 8 worker threads */
+        .target_utilization = 0.7,    /* 70% target */
+        .client_timeout_ms = 10000,   /* 10s client timeout */
+        .burst_tiles = 25,            /* 25 tiles in initial view */
+        .expected_clients = 10        /* 10 concurrent clients */
+    };
+
+    int result = sh_capacity_calculate(&params, &input);
+    ASSERT_EQ(result, 1);
+
+    /* Service rate: 1000/75 = 13.3 RPS per worker */
+    /* Max throughput: 8 * 13.3 * 0.7 = 74.7 RPS */
+    ASSERT(params.max_throughput_rps > 70.0);
+    ASSERT(params.max_throughput_rps < 80.0);
+
+    /* Rate limit per IP should be max_throughput / expected_clients */
+    ASSERT(params.rate_limit_rps > 5.0);
+    ASSERT(params.rate_limit_rps < 15.0);
+
+    /* Burst should accommodate initial tile load */
+    ASSERT(params.rate_limit_burst >= 25.0);
+
+    /* Queue depth should be reasonable */
+    ASSERT(params.queue_depth >= 8);       /* At least worker count */
+    ASSERT(params.queue_depth <= 10000);   /* Cap at 10k */
+
+    /* Timeout should be less than client timeout */
+    ASSERT(params.queue_timeout_sec > 0);
+    ASSERT(params.queue_timeout_sec < 10.0);
+}
+
+TEST(capacity_calculate_invalid_input)
+{
+    ShCapacityParams params;
+    ShCapacityInput input = {0};
+
+    /* NULL parameters */
+    ASSERT_EQ(sh_capacity_calculate(NULL, &input), 0);
+    ASSERT_EQ(sh_capacity_calculate(&params, NULL), 0);
+
+    /* Zero response time */
+    input.avg_response_ms = 0;
+    input.num_workers = 8;
+    input.target_utilization = 0.7;
+    ASSERT_EQ(sh_capacity_calculate(&params, &input), 0);
+
+    /* Zero workers */
+    input.avg_response_ms = 75.0;
+    input.num_workers = 0;
+    ASSERT_EQ(sh_capacity_calculate(&params, &input), 0);
+
+    /* Invalid utilization */
+    input.num_workers = 8;
+    input.target_utilization = 0;
+    ASSERT_EQ(sh_capacity_calculate(&params, &input), 0);
+
+    input.target_utilization = 1.5;
+    ASSERT_EQ(sh_capacity_calculate(&params, &input), 0);
+}
+
+TEST(capacity_calculate_defaults)
+{
+    ShCapacityParams params;
+    ShCapacityInput input = {
+        .avg_response_ms = 100.0,
+        .num_workers = 4,
+        .target_utilization = 0.8,
+        /* All other fields default to 0 */
+    };
+
+    int result = sh_capacity_calculate(&params, &input);
+    ASSERT_EQ(result, 1);
+
+    /* Should use defaults for missing values */
+    ASSERT(params.rate_limit_rps > 0);
+    ASSERT(params.rate_limit_burst > 0);
+    ASSERT(params.queue_depth > 0);
+    ASSERT(params.queue_timeout_sec > 0);
+}
+
+TEST(capacity_calculate_high_load)
+{
+    ShCapacityParams params;
+    ShCapacityInput input = {
+        .avg_response_ms = 200.0,     /* Slow responses */
+        .num_workers = 2,             /* Few workers */
+        .target_utilization = 0.9,    /* High utilization */
+        .client_timeout_ms = 5000,    /* Short timeout */
+        .burst_tiles = 50,            /* Large burst */
+        .expected_clients = 5
+    };
+
+    int result = sh_capacity_calculate(&params, &input);
+    ASSERT_EQ(result, 1);
+
+    /* With slow responses, throughput is lower */
+    /* Service rate: 1000/200 = 5 RPS per worker */
+    /* Max throughput: 2 * 5 * 0.9 = 9 RPS */
+    ASSERT(params.max_throughput_rps > 5.0);
+    ASSERT(params.max_throughput_rps < 15.0);
+
+    /* Burst should handle burst_tiles */
+    ASSERT(params.rate_limit_burst >= 50.0);
+}
+
+TEST(capacity_report)
+{
+    ShCapacityParams params = {
+        .rate_limit_rps = 7.5,
+        .rate_limit_burst = 50.0,
+        .queue_depth = 100,
+        .queue_timeout_sec = 9.5,
+        .max_throughput_rps = 75.0,
+        .expected_wait_ms = 5.0,
+        .headroom_factor = 1.43
+    };
+
+    char buf[1024];
+    int len = sh_capacity_report(&params, buf, sizeof(buf));
+
+    ASSERT(len > 0);
+    ASSERT(strstr(buf, "7.5") != NULL);    /* Rate limit */
+    ASSERT(strstr(buf, "50") != NULL);     /* Burst */
+    ASSERT(strstr(buf, "100") != NULL);    /* Queue depth */
+    ASSERT(strstr(buf, "9.5") != NULL);    /* Timeout */
+}
+
+TEST(capacity_report_null_safe)
+{
+    ShCapacityParams params = {0};
+    char buf[100];
+
+    ASSERT_EQ(sh_capacity_report(NULL, buf, sizeof(buf)), 0);
+    ASSERT_EQ(sh_capacity_report(&params, NULL, sizeof(buf)), 0);
+    ASSERT_EQ(sh_capacity_report(&params, buf, 0), 0);
+}
+
+TEST(capacity_validate_good_config)
+{
+    char warnings[512];
+
+    /* Configuration that matches performance */
+    /* Service rate: 1000/75 = 13.3 RPS/worker */
+    /* Max throughput: 8 * 13.3 = 106.7 RPS */
+    /* Rate limit should be between 10% (10.67) and 80% (85.3) */
+    int count = sh_capacity_validate(
+        100,        /* queue_depth */
+        9.0,        /* timeout_sec */
+        20.0,       /* rate_limit_rps - within acceptable range */
+        75.0,       /* measured_response_ms */
+        8,          /* num_workers */
+        warnings,
+        sizeof(warnings)
+    );
+
+    /* Should have no warnings for well-configured system */
+    ASSERT_EQ(count, 0);
+}
+
+TEST(capacity_validate_queue_too_deep)
+{
+    char warnings[512];
+
+    /* Queue so deep it can't drain in time */
+    int count = sh_capacity_validate(
+        1000,       /* queue_depth - way too deep */
+        5.0,        /* timeout_sec - short */
+        10.0,       /* rate_limit_rps */
+        100.0,      /* measured_response_ms */
+        4,          /* num_workers */
+        warnings,
+        sizeof(warnings)
+    );
+
+    /* Should warn about queue being too deep */
+    ASSERT(count > 0);
+    ASSERT(strstr(warnings, "Queue too deep") != NULL);
+}
+
+TEST(capacity_validate_timeout_too_short)
+{
+    char warnings[512];
+
+    /* Timeout shorter than 2x response time */
+    int count = sh_capacity_validate(
+        10,         /* queue_depth */
+        0.1,        /* timeout_sec - way too short */
+        10.0,       /* rate_limit_rps */
+        100.0,      /* measured_response_ms = 0.1s */
+        4,          /* num_workers */
+        warnings,
+        sizeof(warnings)
+    );
+
+    ASSERT(count > 0);
+    ASSERT(strstr(warnings, "Timeout too short") != NULL);
+}
+
+TEST(capacity_validate_null_safe)
+{
+    char warnings[512];
+
+    /* NULL warnings buffer */
+    ASSERT_EQ(sh_capacity_validate(100, 9.0, 10.0, 75.0, 8, NULL, 512), 0);
+
+    /* Zero buffer size */
+    ASSERT_EQ(sh_capacity_validate(100, 9.0, 10.0, 75.0, 8, warnings, 0), 0);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1300,6 +1519,18 @@ int main(void)
     RUN_TEST(workqueue_shutdown);
     RUN_TEST(workqueue_null_safety);
     RUN_TEST(workqueue_fifo_order);
+
+    printf("\nCapacity Planning:\n");
+    RUN_TEST(capacity_calculate_basic);
+    RUN_TEST(capacity_calculate_invalid_input);
+    RUN_TEST(capacity_calculate_defaults);
+    RUN_TEST(capacity_calculate_high_load);
+    RUN_TEST(capacity_report);
+    RUN_TEST(capacity_report_null_safe);
+    RUN_TEST(capacity_validate_good_config);
+    RUN_TEST(capacity_validate_queue_too_deep);
+    RUN_TEST(capacity_validate_timeout_too_short);
+    RUN_TEST(capacity_validate_null_safe);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
