@@ -451,6 +451,7 @@ sh_workqueue_free(s_work_queue);
 - [ ] Returns HTTP 503 when queue full (backpressure)
 - [ ] Checks `sh_workqueue_item_expired()` before processing
 - [ ] Returns HTTP 504 for expired requests
+- [ ] Work item has `cancelled` flag, set on HTTP timeout, checked by workers
 - [ ] Proper shutdown sequence: `shutdown()` -> join threads -> `free()`
 - [ ] Stats exposed via `/api/v1/stats` endpoint
 
@@ -579,12 +580,73 @@ sh_adaptive_stats(s_adaptive_tracker, &adaptive_stats);
 <MODULE>_ADAPTIVE_INTERVAL=1000  # Recalc interval in requests
 ```
 
+#### Slow Client Protection (`shared/include/sh_httpserver.h`)
+
+**Required: Protect against slow client DoS attacks.**
+
+Slow clients that read responses very slowly can tie up server threads. Use socket write timeouts:
+
+```c
+#include "sh_httpserver.h"
+
+static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
+    /* Set socket write timeout on new connections */
+    if (ev == MG_EV_ACCEPT) {
+        sh_mg_set_write_timeout(c, 5000);  /* 5 second write timeout */
+        return;
+    }
+
+    if (ev == MG_EV_HTTP_MSG) {
+        // ... handle request ...
+    }
+}
+```
+
+**Why this matters:** A slow client downloading a 2MB tile at 1KB/s blocks the event loop thread for ~2000 seconds. With socket write timeout, the OS terminates stalled sends.
+
+#### Work Item Cancellation
+
+**Required: Prevent wasted CPU when HTTP handler times out.**
+
+When HTTP handler times out waiting for a worker, mark the work item as cancelled so workers can skip processing:
+
+```c
+/* Work item struct needs cancelled flag */
+typedef struct {
+    // ... other fields ...
+    volatile int cancelled;  /* Set by HTTP handler on timeout */
+} WorkItem;
+
+/* HTTP handler on timeout */
+if (!work_item_wait(&item, timeout)) {
+    item.cancelled = 1;  /* Mark as cancelled */
+    mg_http_reply(c, 504, headers, "Request timeout\n");
+    return;
+}
+
+/* Worker thread checks before processing */
+if (sh_workqueue_item_expired(queue, item) || work->cancelled) {
+    // Skip processing - HTTP handler already returned 504
+    work_item_complete(work);
+    sh_workqueue_item_free(item);
+    continue;
+}
+```
+
+**Audit Checks:**
+- [ ] `MG_EV_ACCEPT` handler calls `sh_mg_set_write_timeout(c, 5000)`
+- [ ] Work item struct has `volatile int cancelled` field
+- [ ] HTTP handler sets `cancelled = 1` on timeout
+- [ ] Workers check `cancelled` before CPU-intensive processing
+
 #### API Hardening Checklist
 
 | Check | Severity | Description |
 |-------|----------|-------------|
 | Rate limiting | High | All endpoints protected from abuse |
 | Work queue | High | CPU-intensive ops don't block event loop |
+| Socket write timeout | High | `sh_mg_set_write_timeout()` on MG_EV_ACCEPT |
+| Work item cancellation | High | Cancelled flag set on HTTP timeout, checked by workers |
 | Health endpoint | High | `/api/v1/health` exists and bypasses work queue |
 | Stats endpoint | High | `/api/v1/stats` exists, bypasses queue, includes queue/limiter stats |
 | 429 response | Medium | Correct status code for rate limiting |
@@ -1465,6 +1527,8 @@ Before marking a module as "hardened":
 **API Hardening (mongoose servers):**
 - [ ] Rate limiting enabled via `sh_ratelimit`
 - [ ] Work queue for CPU-intensive operations via `sh_workqueue`
+- [ ] Socket write timeout via `sh_mg_set_write_timeout()` on `MG_EV_ACCEPT`
+- [ ] Work item `cancelled` flag set on HTTP timeout, checked by workers
 - [ ] Proper HTTP status codes (429, 503, 504)
 - [ ] Stats endpoint exposes limiter/queue health
 - [ ] Graceful shutdown sequence

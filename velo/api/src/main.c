@@ -34,6 +34,7 @@
 #include "velo.h"
 #include "polyline.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue, sh_cors, sh_capacity */
+#include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
 
 /* ============================================================================
  * Configuration
@@ -129,6 +130,7 @@ typedef struct {
     /* Completion signaling */
     pthread_mutex_t mutex;
     pthread_cond_t cond;
+    volatile int cancelled;  /* Set by HTTP handler on timeout */
 } RouteWorkItem;
 
 /* Route worker thread state */
@@ -422,8 +424,8 @@ static void *route_worker_fn(void *arg) {
             continue;
         }
 
-        /* Check if request has expired */
-        if (sh_workqueue_item_expired(s_work_queue, queue_item)) {
+        /* Check if request has expired or was cancelled by HTTP handler timeout */
+        if (sh_workqueue_item_expired(s_work_queue, queue_item) || item->cancelled) {
             item->status = VL_ERROR_INTERNAL;  /* Timeout */
             strncpy(item->error_msg, "Request timeout", sizeof(item->error_msg) - 1);
             item->error_msg[sizeof(item->error_msg) - 1] = '\0';
@@ -860,6 +862,8 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
 
         /* Wait for completion with timeout */
         if (!route_work_item_wait(&item, s_config.work_queue_timeout)) {
+            /* Mark item as cancelled so worker can skip if not started */
+            item.cancelled = 1;
             route_work_item_cleanup(&item);
             char cors_hdrs[512];
             sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
@@ -1026,6 +1030,12 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
  * ============================================================================ */
 
 static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
+    /* Set socket write timeout on new connections to protect against slow clients */
+    if (ev == MG_EV_ACCEPT) {
+        sh_mg_set_write_timeout(c, 5000);  /* 5 second write timeout */
+        return;
+    }
+
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
