@@ -71,6 +71,8 @@ typedef struct {
     int burst_requests;          /* Requests in initial burst (for sizing) */
     size_t adaptive_window;      /* Sample window size for percentiles */
     double adaptive_interval;    /* Recalculation interval (requests) */
+    /* Build mode */
+    int build_only;              /* Exit after building/saving index (no HTTP server) */
 } RouteServerConfig;
 
 /* Default configuration */
@@ -97,7 +99,9 @@ static RouteServerConfig s_config = {
     .client_timeout_ms = 10000.0,
     .burst_requests = 10,
     .adaptive_window = 1000,
-    .adaptive_interval = 1000
+    .adaptive_interval = 1000,
+    /* Build mode */
+    .build_only = 0
 };
 
 /* Global state */
@@ -1066,6 +1070,7 @@ static void print_usage(const char *prog) {
     printf("  --no-landmarks       Disable ALT landmarks\n");
     printf("  --landmarks N        Number of landmarks (default: 32)\n");
     printf("  --save-index FILE    Save binary index to FILE (for faster future startup)\n");
+    printf("  --build-only         Exit after building/saving index (no HTTP server)\n");
     printf("  --help               Show this help\n");
     printf("\n");
     printf("Graph file can be:\n");
@@ -1134,6 +1139,8 @@ int main(int argc, char *argv[]) {
                 strncpy(s_config.save_index_path, argv[i], sizeof(s_config.save_index_path) - 1);
                 s_config.save_index_path[sizeof(s_config.save_index_path) - 1] = '\0';
             }
+        } else if (strcmp(argv[i], "--build-only") == 0) {
+            s_config.build_only = 1;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -1189,11 +1196,15 @@ int main(int argc, char *argv[]) {
         VLStatus save_status = vl_save_binary(s_graph, s_config.save_index_path);
         if (save_status == VL_OK) {
             printf("Index saved successfully\n");
-            /* Exit after saving - this is typically a pre-build step */
-            vl_graph_free(s_graph);
-            return 0;
         } else {
             fprintf(stderr, "Warning: Failed to save index\n");
+        }
+
+        /* Exit if --build-only was specified */
+        if (s_config.build_only) {
+            printf("Build complete (--build-only specified)\n");
+            vl_graph_free(s_graph);
+            return 0;
         }
     }
 
