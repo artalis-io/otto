@@ -861,8 +861,11 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
             if (!scaled) continue;
 
             for (int j = 0; j < f->num_points; j++) {
-                scaled[j].x = (int)(f->points[j].x * scale);
-                scaled[j].y = (int)(f->points[j].y * scale);
+                /* Use floor() for consistent rounding toward -infinity.
+                 * (int) truncates toward zero, causing coordinates near
+                 * tile boundaries to round inconsistently. */
+                scaled[j].x = (int)floor(f->points[j].x * scale);
+                scaled[j].y = (int)floor(f->points[j].y * scale);
             }
 
             switch (f->layer) {
