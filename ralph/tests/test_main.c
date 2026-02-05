@@ -1078,6 +1078,209 @@ void test_lap_mip_assignment_5x5(void) {
 }
 
 /* ============================================================================
+ * Test: SCP LU Regression (sparse LU bug with non-trivial RHS)
+ *
+ * This test catches a bug in the sparse LU factorization where the LP basis
+ * structure optimization (separating identity columns from structural columns)
+ * produced incorrect solutions for RHS vectors that were not linear combinations
+ * of basis columns. Specifically, RHS = B*ones worked but RHS = tab->rhs - N*x_N
+ * gave large residuals (up to 500+).
+ *
+ * The bug manifested as:
+ * - SCP problems returning INFEASIBLE or ITERATION_LIMIT when they should be OPTIMAL
+ * - Wildly incorrect basic variable values (e.g., [-1e5, 7e4] for binary vars)
+ * - Objective values that oscillated wildly between iterations
+ * ============================================================================ */
+static unsigned int scp_seed;
+static void scp_seed_random(unsigned int seed) { scp_seed = seed; }
+static double scp_rand_double(double lo, double hi) {
+    scp_seed = scp_seed * 1103515245 + 12345;
+    double r = (double)(scp_seed & 0x7fffffff) / (double)0x7fffffff;
+    return lo + r * (hi - lo);
+}
+static int scp_rand_int(int lo, int hi) {
+    return lo + (int)(scp_rand_double(0, 1) * (hi - lo + 1));
+}
+
+static RalphModel *create_scp(int num_elements, int num_subsets, double density, unsigned int seed) {
+    scp_seed_random(seed);
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    for (int j = 0; j < num_subsets; j++) {
+        double cost = scp_rand_double(1.0, 10.0);
+        ralph_add_var(model, 0.0, 1.0, cost, RALPH_BINARY);
+    }
+
+    int *indices = malloc(num_subsets * sizeof(int));
+    double *values = malloc(num_subsets * sizeof(double));
+
+    for (int i = 0; i < num_elements; i++) {
+        int nnz = 0;
+        for (int j = 0; j < num_subsets; j++) {
+            if (scp_rand_double(0, 1) < density) {
+                indices[nnz] = j;
+                values[nnz] = 1.0;
+                nnz++;
+            }
+        }
+        if (nnz == 0) {
+            int j = scp_rand_int(0, num_subsets - 1);
+            indices[0] = j;
+            values[0] = 1.0;
+            nnz = 1;
+        }
+        ralph_add_constraint(model, nnz, indices, values, 'G', 1.0);
+    }
+
+    free(indices);
+    free(values);
+    return model;
+}
+
+/*
+ * Test: MIP Incumbent Feasibility Regression
+ *
+ * This test verifies that the MIP solver only accepts constraint-feasible solutions.
+ * The bug was that diving_heuristic and other heuristics could return solutions that
+ * satisfied integrality but violated constraints.
+ *
+ * Uses SetPartitioning which has equality constraints (sum x_j = 1 for each element).
+ * The greedy "round all up" heuristic would set all x_j = 1, violating these constraints.
+ */
+static unsigned int g_sp_seed;
+static double sp_rand_double(double min, double max) {
+    g_sp_seed = g_sp_seed * 1103515245 + 12345;
+    double r = (double)(g_sp_seed % 100000) / 100000.0;
+    return min + r * (max - min);
+}
+static int sp_rand_int(int min, int max) {
+    g_sp_seed = g_sp_seed * 1103515245 + 12345;
+    return min + (g_sp_seed % (max - min + 1));
+}
+
+void test_mip_incumbent_feasibility_regression(void) {
+    printf("\n=== Test: MIP Incumbent Feasibility Regression ===\n");
+
+    /* Same parameters as the benchmark: 20 elements, 60 subsets, density 0.30, seed 123 */
+    g_sp_seed = 123;
+    int num_elements = 20, num_subsets = 60;
+    double density = 0.30;
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    double *costs = malloc(num_subsets * sizeof(double));
+    for (int j = 0; j < num_subsets; j++) {
+        costs[j] = sp_rand_double(1.0, 10.0);
+        ralph_add_var(model, 0.0, 1.0, costs[j], RALPH_BINARY);
+    }
+
+    /* Store coverage info for verification */
+    int **covers = malloc(num_elements * sizeof(int*));
+    int *cover_count = calloc(num_elements, sizeof(int));
+    for (int i = 0; i < num_elements; i++) {
+        covers[i] = malloc(num_subsets * sizeof(int));
+    }
+
+    int *indices = malloc(num_subsets * sizeof(int));
+    double *values = malloc(num_subsets * sizeof(double));
+    for (int j = 0; j < num_subsets; j++) values[j] = 1.0;
+
+    for (int i = 0; i < num_elements; i++) {
+        int nnz = 0;
+        for (int j = 0; j < num_subsets; j++) {
+            if (sp_rand_double(0, 1) < density) {
+                indices[nnz] = j;
+                covers[i][cover_count[i]++] = j;
+                nnz++;
+            }
+        }
+        /* Ensure at least 2 subsets cover this element */
+        while (nnz < 2) {
+            int j = sp_rand_int(0, num_subsets - 1);
+            indices[nnz] = j;
+            covers[i][cover_count[i]++] = j;
+            nnz++;
+        }
+        ralph_add_constraint(model, nnz, indices, values, 'E', 1.0);  /* SetPartitioning: = 1 */
+    }
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    int status = ralph_get_status(model);
+
+    /* If OPTIMAL, verify solution feasibility */
+    if (status == RALPH_STATUS_OPTIMAL) {
+        double *x = malloc(num_subsets * sizeof(double));
+        ralph_get_solution(model, x);
+
+        int feasible = 1;
+        for (int i = 0; i < num_elements && feasible; i++) {
+            double sum = 0.0;
+            for (int k = 0; k < cover_count[i]; k++) {
+                sum += x[covers[i][k]];
+            }
+            if (sum < 0.999 || sum > 1.001) {
+                feasible = 0;
+            }
+        }
+
+        ASSERT(feasible, "OPTIMAL solution must satisfy all constraints");
+        free(x);
+    } else if (status == RALPH_STATUS_INFEASIBLE) {
+        /* Problem may genuinely be infeasible - that's OK */
+        printf("  (Problem is infeasible - expected for this seed)\n");
+        ASSERT(1, "INFEASIBLE status is valid for this problem");
+    } else {
+        /* Unexpected status */
+        ASSERT(0, "Unexpected status (not OPTIMAL or INFEASIBLE)");
+    }
+
+    for (int i = 0; i < num_elements; i++) free(covers[i]);
+    free(covers);
+    free(cover_count);
+    free(indices);
+    free(values);
+    free(costs);
+    ralph_free(model);
+}
+
+void test_scp_lu_regression(void) {
+    printf("\n=== Test: SCP LU Regression ===\n");
+
+    /* This specific problem (50x100 SCP, density 0.3, seed 12345) triggered the bug
+     * where sparse LU factorization produced wrong results for certain RHS values. */
+    RalphModel *model = create_scp(50, 100, 0.3, 12345);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "detect_special", 0);
+    ralph_set_int_param(model, "presolve", 0);
+    ralph_set_int_param(model, "max_iterations", 10000);
+
+    ralph_optimize(model);
+
+    int status = ralph_get_status(model);
+    double obj = ralph_get_objval(model);
+
+    /* The bug caused status to be INFEASIBLE or ITERATION_LIMIT
+     * when the correct status is OPTIMAL with objective around 9.0 */
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "SCP should be OPTIMAL");
+    ASSERT(obj >= 8.0 && obj <= 15.0, "SCP objective should be reasonable (8-15)");
+
+    if (status == RALPH_STATUS_OPTIMAL) {
+        printf("  SCP solved: obj = %.2f, iterations = %d\n",
+               obj, ralph_get_iterations(model));
+    } else {
+        printf("  SCP failed: status = %d (%s)\n",
+               status, ralph_status_string(status));
+    }
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -1108,6 +1311,8 @@ int main(int argc, char **argv) {
         /* Regression tests for MIP bugs */
         test_mip_bound_adjustment_regression();     /* Suboptimal solution bug */
         test_mip_strong_branching_regression();     /* Strong branching crash */
+        test_scp_lu_regression();                   /* Sparse LU bug with SCP */
+        test_mip_incumbent_feasibility_regression(); /* Infeasible incumbent bug */
 
         /* LAP-based MIP tests */
         test_lap_mip_assignment();

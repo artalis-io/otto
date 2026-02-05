@@ -1539,12 +1539,21 @@ static LPBasisStructure* analyze_lp_basis(const SparseMatrix *B) {
 
     /* Capture cross-terms: structural columns with entries in identity rows */
     /* These go into B21 for Schur complement computation */
+    /* Also check that each structural column has at least one entry in B11 */
+    int *structural_has_b11_entry = (int*)calloc(lp->num_structural, sizeof(int));
+    if (!structural_has_b11_entry) {
+        free_lp_basis_structure(lp);
+        return NULL;
+    }
+
     for (int jj = 0; jj < lp->num_structural; jj++) {
         int j = lp->structural_cols[jj];
         for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
             int row = B->rowidx[p];
             double val = B->values[p];
-            if (lp->row_is_identity[row] && fabs(val) > RALPH_ZERO_TOL) {
+            if (fabs(val) < RALPH_ZERO_TOL) continue;
+
+            if (lp->row_is_identity[row]) {
                 /* This is a cross-term: structural col jj has entry in identity row */
                 if (lp->B21_nnz >= lp->B21_cap) {
                     int new_cap = lp->B21_cap * 2;
@@ -1556,6 +1565,7 @@ static LPBasisStructure* analyze_lp_basis(const SparseMatrix *B) {
                         if (tmp_col) lp->B21_col = tmp_col;
                         if (tmp_row) lp->B21_row = tmp_row;
                         if (tmp_val) lp->B21_val = tmp_val;
+                        free(structural_has_b11_entry);
                         free_lp_basis_structure(lp);
                         return NULL;
                     }
@@ -1568,9 +1578,24 @@ static LPBasisStructure* analyze_lp_basis(const SparseMatrix *B) {
                 lp->B21_row[lp->B21_nnz] = lp->id_to_step[row];  /* Step index (k..m-1) */
                 lp->B21_val[lp->B21_nnz] = val;
                 lp->B21_nnz++;
+            } else {
+                /* Entry in non-identity row - goes to B11 */
+                structural_has_b11_entry[jj] = 1;
             }
         }
     }
+
+    /* Check that all structural columns have at least one B11 entry */
+    /* If any structural column has all entries in identity rows, B11 is singular */
+    for (int jj = 0; jj < lp->num_structural; jj++) {
+        if (!structural_has_b11_entry[jj]) {
+            /* Degenerate case: structural column has no B11 entries */
+            free(structural_has_b11_entry);
+            free_lp_basis_structure(lp);
+            return NULL;
+        }
+    }
+    free(structural_has_b11_entry);
 
     return lp;
 }
@@ -1606,6 +1631,21 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     if (!lu || !B) return -1;
     if (B->nrows != B->ncols || B->nrows != lu->m) return -1;
 
+    /* LP basis structure optimization is disabled due to an unresolved bug.
+     * The factorization produces correct L/U matrices (B*ones works), but
+     * the permutation handling has a subtle bug that causes incorrect solutions
+     * for general RHS vectors (like rhs - N*x_N in simplex).
+     *
+     * See test_scp_lu_regression() in tests/test_main.c for regression test.
+     * TODO: Debug the row/column permutation interaction with solve_L/solve_U.
+     *
+     * For now, just use dense factorization which is simpler and correct.
+     */
+    (void)analyze_lp_basis;  /* Suppress unused function warning */
+    (void)free_lp_basis_structure;
+    return lu_factorize_dense(lu, B);
+
+#if 0  /* Disabled due to permutation bug - keeping code for future debugging */
     int m = lu->m;
 
     /* For small matrices, dense is faster due to overhead */
@@ -2067,11 +2107,71 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     }
     lu->growth_factor = 1.0;
 
-    /* Cleanup */
+    /* Cleanup temporary arrays */
     free(L_row_arr); free(L_col_arr); free(L_val_arr);
     free(U_row_arr); free(U_col_arr); free(U_val_arr);
     free(A_sub); free(sub_perm); free(sub_perm_inv);
     free_lp_basis_structure(lp);
 
+    /* Verify factorization by solving B*x = b for random b, then checking residual */
+    /* If verification fails, fall back to dense factorization */
+    double *test_rhs = (double*)calloc(m, sizeof(double));
+    double *test_sol = (double*)calloc(m, sizeof(double));
+    double *test_resid = (double*)calloc(m, sizeof(double));
+    if (test_rhs && test_sol && test_resid) {
+        int verify_ok = 1;
+
+        /* Generate pseudo-random RHS using simple LCG */
+        unsigned int seed = 12345;
+        for (int i = 0; i < m; i++) {
+            seed = seed * 1103515245 + 12345;
+            test_rhs[i] = (double)((seed >> 16) & 0x7fff) / 32768.0 * 2.0 - 1.0;
+        }
+
+        /* Solve B * x = test_rhs */
+        double *rhs_copy = (double*)calloc(m, sizeof(double));
+        if (rhs_copy) {
+            memcpy(rhs_copy, test_rhs, m * sizeof(double));
+            lu_solve(lu, rhs_copy, test_sol);
+            free(rhs_copy);
+
+            /* Compute residual: B * x - test_rhs */
+            memcpy(test_resid, test_rhs, m * sizeof(double));
+            for (int i = 0; i < m; i++) test_resid[i] = -test_resid[i];
+
+            for (int j = 0; j < m; j++) {
+                double xj = test_sol[j];
+                if (fabs(xj) < RALPH_ZERO_TOL) continue;
+                for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+                    test_resid[B->rowidx[p]] += B->values[p] * xj;
+                }
+            }
+
+            /* Check max residual */
+            double max_resid = 0.0;
+            for (int i = 0; i < m; i++) {
+                if (fabs(test_resid[i]) > max_resid) max_resid = fabs(test_resid[i]);
+            }
+
+            if (max_resid > 1e-8) {
+                verify_ok = 0;
+            }
+        }
+
+        free(test_rhs);
+        free(test_sol);
+        free(test_resid);
+
+        if (!verify_ok) {
+            /* Verification failed - fall back to dense */
+            return lu_factorize_dense(lu, B);
+        }
+    } else {
+        free(test_rhs);
+        free(test_sol);
+        free(test_resid);
+    }
+
     return 0;
+#endif  /* LP basis structure optimization disabled */
 }

@@ -187,6 +187,38 @@ void mip_free(MIPSolver *solver) {
 static void update_incumbent(MIPSolver *solver, const double *solution, double obj) {
     LPModel *model = solver->original_model;
 
+    /* First verify constraint feasibility (Ax sense b) */
+    if (model->A && model->num_cons > 0) {
+        double *ax = (double*)calloc(model->num_cons, sizeof(double));
+        if (ax) {
+            sparse_matvec(model->A, solution, ax);
+
+            for (int i = 0; i < model->num_cons; i++) {
+                double lhs = ax[i];
+                double rhs = model->b[i];
+                char sense = model->sense[i];
+
+                int violated = 0;
+                if (sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) {
+                    violated = 1;
+                } else if (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) {
+                    violated = 1;
+                } else if (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL) {
+                    violated = 1;
+                }
+
+                if (violated) {
+                    free(ax);
+                    if (solver->verbose >= 2) {
+                        printf("  [update_incumbent] Rejected infeasible solution (constraint %d violated)\n", i);
+                    }
+                    return;  /* Reject infeasible solution */
+                }
+            }
+            free(ax);
+        }
+    }
+
     int is_better = 0;
     if (model->obj_sense == 1) {  /* Minimize */
         is_better = (obj < solver->best_obj - RALPH_OPT_TOL);
@@ -296,13 +328,43 @@ static int diving_heuristic(MIPSolver *solver) {
         if (best_var < 0) {
             /* All integer variables are integer-valued - check feasibility */
             if (check_integer_feasibility(solver, sol)) {
-                /* Compute objective */
-                double obj = 0.0;
-                for (int j = 0; j < num_vars; j++) {
-                    obj += solver->original_model->c[j] * sol[j];
+                /* Check constraint feasibility (Ax sense b) */
+                int constraints_satisfied = 1;
+                LPModel *orig_model = solver->original_model;
+                if (orig_model->A && orig_model->num_cons > 0) {
+                    double *ax = (double*)calloc(orig_model->num_cons, sizeof(double));
+                    if (ax) {
+                        sparse_matvec(orig_model->A, sol, ax);
+
+                        for (int i = 0; i < orig_model->num_cons; i++) {
+                            double lhs = ax[i];
+                            double rhs = orig_model->b[i];
+                            char sense = orig_model->sense[i];
+
+                            if (sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) {
+                                constraints_satisfied = 0;
+                                break;
+                            } else if (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) {
+                                constraints_satisfied = 0;
+                                break;
+                            } else if (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL) {
+                                constraints_satisfied = 0;
+                                break;
+                            }
+                        }
+                        free(ax);
+                    }
                 }
-                update_incumbent(solver, sol, obj);
-                found_incumbent = 1;
+
+                if (constraints_satisfied) {
+                    /* Compute objective */
+                    double obj = 0.0;
+                    for (int j = 0; j < num_vars; j++) {
+                        obj += solver->original_model->c[j] * sol[j];
+                    }
+                    update_incumbent(solver, sol, obj);
+                    found_incumbent = 1;
+                }
             }
             break;
         }
