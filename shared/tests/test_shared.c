@@ -12,6 +12,9 @@
 #include "sh_metrics.h"
 #include "sh_completion.h"
 #include "sh_worker_pool.h"
+#include "sh_hashmap.h"
+#include "sh_heap.h"
+#include "sh_spatial_grid.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2818,6 +2821,546 @@ TEST(metrics_http_request)
 }
 
 /* ============================================================================
+ * Hashmap Tests
+ * ============================================================================ */
+
+TEST(hashmap_i64_create_free)
+{
+    SHHashmapI64 *map = sh_hashmap_i64_create(100);
+    ASSERT(map != NULL);
+    ASSERT_EQ(sh_hashmap_i64_count(map), 0);
+    ASSERT(sh_hashmap_i64_capacity(map) >= 100);
+    sh_hashmap_i64_free(map);
+}
+
+TEST(hashmap_i64_insert_lookup)
+{
+    SHHashmapI64 *map = sh_hashmap_i64_create(100);
+    ASSERT(map != NULL);
+
+    ASSERT_EQ(sh_hashmap_i64_insert(map, 12345, 100), SH_HASHMAP_OK);
+    ASSERT_EQ(sh_hashmap_i64_insert(map, 67890, 200), SH_HASHMAP_OK);
+    ASSERT_EQ(sh_hashmap_i64_insert(map, -99999, 300), SH_HASHMAP_OK);
+
+    ASSERT_EQ(sh_hashmap_i64_count(map), 3);
+    ASSERT_EQ(sh_hashmap_i64_lookup(map, 12345), 100);
+    ASSERT_EQ(sh_hashmap_i64_lookup(map, 67890), 200);
+    ASSERT_EQ(sh_hashmap_i64_lookup(map, -99999), 300);
+    ASSERT_EQ(sh_hashmap_i64_lookup(map, 11111), SIZE_MAX);  /* Not found */
+
+    sh_hashmap_i64_free(map);
+}
+
+TEST(hashmap_i64_update)
+{
+    SHHashmapI64 *map = sh_hashmap_i64_create(100);
+
+    sh_hashmap_i64_insert(map, 123, 10);
+    ASSERT_EQ(sh_hashmap_i64_lookup(map, 123), 10);
+
+    sh_hashmap_i64_insert(map, 123, 20);  /* Update */
+    ASSERT_EQ(sh_hashmap_i64_lookup(map, 123), 20);
+    ASSERT_EQ(sh_hashmap_i64_count(map), 1);  /* Still 1 entry */
+
+    sh_hashmap_i64_free(map);
+}
+
+TEST(hashmap_i64_contains)
+{
+    SHHashmapI64 *map = sh_hashmap_i64_create(100);
+
+    ASSERT(!sh_hashmap_i64_contains(map, 123));
+    sh_hashmap_i64_insert(map, 123, 456);
+    ASSERT(sh_hashmap_i64_contains(map, 123));
+    ASSERT(!sh_hashmap_i64_contains(map, 789));
+
+    sh_hashmap_i64_free(map);
+}
+
+TEST(hashmap_i64_zero_key_rejected)
+{
+    SHHashmapI64 *map = sh_hashmap_i64_create(100);
+
+    ASSERT_EQ(sh_hashmap_i64_insert(map, 0, 123), SH_HASHMAP_ERROR_INVALID_KEY);
+    ASSERT_EQ(sh_hashmap_i64_count(map), 0);
+
+    sh_hashmap_i64_free(map);
+}
+
+TEST(hashmap_i64_clear)
+{
+    SHHashmapI64 *map = sh_hashmap_i64_create(100);
+
+    sh_hashmap_i64_insert(map, 1, 10);
+    sh_hashmap_i64_insert(map, 2, 20);
+    sh_hashmap_i64_insert(map, 3, 30);
+    ASSERT_EQ(sh_hashmap_i64_count(map), 3);
+
+    sh_hashmap_i64_clear(map);
+    ASSERT_EQ(sh_hashmap_i64_count(map), 0);
+    ASSERT_EQ(sh_hashmap_i64_lookup(map, 1), SIZE_MAX);
+
+    /* Can reuse after clear */
+    sh_hashmap_i64_insert(map, 100, 1000);
+    ASSERT_EQ(sh_hashmap_i64_lookup(map, 100), 1000);
+
+    sh_hashmap_i64_free(map);
+}
+
+TEST(hashmap_i64_resize)
+{
+    SHHashmapI64 *map = sh_hashmap_i64_create(10);
+    size_t initial_cap = sh_hashmap_i64_capacity(map);
+
+    /* Insert enough entries to trigger resize */
+    for (int64_t i = 1; i <= 100; i++) {
+        ASSERT_EQ(sh_hashmap_i64_insert(map, i, (size_t)i * 10), SH_HASHMAP_OK);
+    }
+
+    ASSERT(sh_hashmap_i64_capacity(map) > initial_cap);
+    ASSERT_EQ(sh_hashmap_i64_count(map), 100);
+
+    /* Verify all entries still accessible */
+    for (int64_t i = 1; i <= 100; i++) {
+        ASSERT_EQ(sh_hashmap_i64_lookup(map, i), (size_t)i * 10);
+    }
+
+    sh_hashmap_i64_free(map);
+}
+
+TEST(hashmap_i64_iterator)
+{
+    SHHashmapI64 *map = sh_hashmap_i64_create(100);
+
+    sh_hashmap_i64_insert(map, 10, 100);
+    sh_hashmap_i64_insert(map, 20, 200);
+    sh_hashmap_i64_insert(map, 30, 300);
+
+    SHHashmapI64Iter iter;
+    sh_hashmap_i64_iter_init(&iter, map);
+
+    int count = 0;
+    int64_t key;
+    size_t value;
+    int64_t sum_keys = 0;
+    size_t sum_values = 0;
+
+    while (sh_hashmap_i64_iter_next(&iter, &key, &value)) {
+        count++;
+        sum_keys += key;
+        sum_values += value;
+    }
+
+    ASSERT_EQ(count, 3);
+    ASSERT_EQ(sum_keys, 60);  /* 10 + 20 + 30 */
+    ASSERT_EQ(sum_values, 600);  /* 100 + 200 + 300 */
+
+    sh_hashmap_i64_free(map);
+}
+
+TEST(hashmap_i64u32_basic)
+{
+    SHHashmapI64U32 *map = sh_hashmap_i64u32_create(100);
+    ASSERT(map != NULL);
+
+    ASSERT_EQ(sh_hashmap_i64u32_insert(map, 12345, 100), SH_HASHMAP_OK);
+    ASSERT_EQ(sh_hashmap_i64u32_insert(map, 67890, 200), SH_HASHMAP_OK);
+
+    ASSERT_EQ(sh_hashmap_i64u32_lookup(map, 12345), 100);
+    ASSERT_EQ(sh_hashmap_i64u32_lookup(map, 67890), 200);
+    ASSERT_EQ(sh_hashmap_i64u32_lookup(map, 11111), UINT32_MAX);
+
+    sh_hashmap_i64u32_free(map);
+}
+
+TEST(hashmap_null_safety)
+{
+    ASSERT(sh_hashmap_i64_create(0) != NULL);  /* Creates with default capacity */
+
+    sh_hashmap_i64_free(NULL);  /* Should not crash */
+
+    ASSERT_EQ(sh_hashmap_i64_insert(NULL, 1, 1), SH_HASHMAP_ERROR_NULL_PARAM);
+    ASSERT_EQ(sh_hashmap_i64_lookup(NULL, 1), SIZE_MAX);
+    ASSERT_EQ(sh_hashmap_i64_count(NULL), 0);
+
+    SHHashmapI64 *map = sh_hashmap_i64_create(10);
+    sh_hashmap_i64_free(map);
+}
+
+/* ============================================================================
+ * Heap Tests
+ * ============================================================================ */
+
+TEST(heap_create_free)
+{
+    SHHeap *heap = sh_heap_create(1000);
+    ASSERT(heap != NULL);
+    ASSERT(sh_heap_empty(heap));
+    ASSERT_EQ(sh_heap_size(heap), 0);
+    sh_heap_free(heap);
+}
+
+TEST(heap_push_pop)
+{
+    SHHeap *heap = sh_heap_create(100);
+
+    ASSERT_EQ(sh_heap_push(heap, 5, 50.0), SH_HEAP_OK);
+    ASSERT_EQ(sh_heap_push(heap, 3, 30.0), SH_HEAP_OK);
+    ASSERT_EQ(sh_heap_push(heap, 7, 70.0), SH_HEAP_OK);
+    ASSERT_EQ(sh_heap_push(heap, 1, 10.0), SH_HEAP_OK);
+    ASSERT_EQ(sh_heap_push(heap, 9, 90.0), SH_HEAP_OK);
+
+    ASSERT_EQ(sh_heap_size(heap), 5);
+
+    /* Pop should return in priority order (min first) */
+    SHHeapEntry entry;
+    ASSERT_EQ(sh_heap_pop(heap, &entry), SH_HEAP_OK);
+    ASSERT_EQ(entry.node, 1);
+    ASSERT_NEAR(entry.priority, 10.0, 0.001);
+
+    ASSERT_EQ(sh_heap_pop(heap, &entry), SH_HEAP_OK);
+    ASSERT_EQ(entry.node, 3);
+
+    ASSERT_EQ(sh_heap_pop(heap, &entry), SH_HEAP_OK);
+    ASSERT_EQ(entry.node, 5);
+
+    ASSERT_EQ(sh_heap_pop(heap, &entry), SH_HEAP_OK);
+    ASSERT_EQ(entry.node, 7);
+
+    ASSERT_EQ(sh_heap_pop(heap, &entry), SH_HEAP_OK);
+    ASSERT_EQ(entry.node, 9);
+
+    ASSERT(sh_heap_empty(heap));
+
+    sh_heap_free(heap);
+}
+
+TEST(heap_peek)
+{
+    SHHeap *heap = sh_heap_create(100);
+
+    sh_heap_push(heap, 5, 50.0);
+    sh_heap_push(heap, 3, 30.0);
+    sh_heap_push(heap, 7, 70.0);
+
+    SHHeapEntry entry;
+    ASSERT_EQ(sh_heap_peek(heap, &entry), SH_HEAP_OK);
+    ASSERT_EQ(entry.node, 3);  /* Minimum */
+    ASSERT_EQ(sh_heap_size(heap), 3);  /* Not removed */
+
+    sh_heap_free(heap);
+}
+
+TEST(heap_contains_priority)
+{
+    SHHeap *heap = sh_heap_create(100);
+
+    ASSERT(!sh_heap_contains(heap, 5));
+    sh_heap_push(heap, 5, 50.0);
+    ASSERT(sh_heap_contains(heap, 5));
+    ASSERT_NEAR(sh_heap_priority(heap, 5), 50.0, 0.001);
+
+    /* Node not in heap returns infinity */
+    ASSERT(!sh_heap_contains(heap, 99));
+    ASSERT(sh_heap_priority(heap, 99) > 1e300);
+
+    sh_heap_free(heap);
+}
+
+TEST(heap_decrease_key)
+{
+    SHHeap *heap = sh_heap_create(100);
+
+    sh_heap_push(heap, 5, 50.0);
+    sh_heap_push(heap, 3, 30.0);
+    sh_heap_push(heap, 7, 70.0);
+
+    /* Decrease key of node 7 to make it minimum */
+    ASSERT_EQ(sh_heap_decrease_key(heap, 7, 10.0), SH_HEAP_OK);
+    ASSERT_NEAR(sh_heap_priority(heap, 7), 10.0, 0.001);
+
+    SHHeapEntry entry;
+    sh_heap_pop(heap, &entry);
+    ASSERT_EQ(entry.node, 7);  /* Now minimum */
+
+    sh_heap_free(heap);
+}
+
+TEST(heap_decrease_key_noop)
+{
+    SHHeap *heap = sh_heap_create(100);
+
+    sh_heap_push(heap, 5, 50.0);
+
+    /* Try to increase priority (should be ignored) */
+    sh_heap_decrease_key(heap, 5, 100.0);
+    ASSERT_NEAR(sh_heap_priority(heap, 5), 50.0, 0.001);
+
+    sh_heap_free(heap);
+}
+
+TEST(heap_push_or_decrease)
+{
+    SHHeap *heap = sh_heap_create(100);
+
+    /* Push new */
+    ASSERT_EQ(sh_heap_push_or_decrease(heap, 5, 50.0), SH_HEAP_OK);
+    ASSERT_EQ(sh_heap_size(heap), 1);
+
+    /* Update existing */
+    ASSERT_EQ(sh_heap_push_or_decrease(heap, 5, 25.0), SH_HEAP_OK);
+    ASSERT_EQ(sh_heap_size(heap), 1);
+    ASSERT_NEAR(sh_heap_priority(heap, 5), 25.0, 0.001);
+
+    sh_heap_free(heap);
+}
+
+TEST(heap_clear)
+{
+    SHHeap *heap = sh_heap_create(100);
+
+    sh_heap_push(heap, 1, 10.0);
+    sh_heap_push(heap, 2, 20.0);
+    sh_heap_push(heap, 3, 30.0);
+    ASSERT_EQ(sh_heap_size(heap), 3);
+
+    sh_heap_clear(heap);
+    ASSERT(sh_heap_empty(heap));
+    ASSERT(!sh_heap_contains(heap, 1));
+
+    /* Can reuse after clear */
+    sh_heap_push(heap, 10, 100.0);
+    ASSERT_EQ(sh_heap_size(heap), 1);
+
+    sh_heap_free(heap);
+}
+
+TEST(heap_many_entries)
+{
+    SHHeap *heap = sh_heap_create(10000);
+
+    /* Insert in reverse order */
+    for (uint32_t i = 1000; i > 0; i--) {
+        sh_heap_push(heap, i - 1, (double)(i - 1));
+    }
+
+    ASSERT_EQ(sh_heap_size(heap), 1000);
+
+    /* Pop should return in order */
+    SHHeapEntry entry;
+    for (uint32_t i = 0; i < 1000; i++) {
+        ASSERT_EQ(sh_heap_pop(heap, &entry), SH_HEAP_OK);
+        ASSERT_EQ(entry.node, i);
+    }
+
+    sh_heap_free(heap);
+}
+
+TEST(heap_null_safety)
+{
+    sh_heap_free(NULL);  /* Should not crash */
+
+    ASSERT(sh_heap_empty(NULL));
+    ASSERT_EQ(sh_heap_size(NULL), 0);
+    ASSERT(!sh_heap_contains(NULL, 0));
+
+    ASSERT_EQ(sh_heap_push(NULL, 1, 1.0), SH_HEAP_ERROR_NULL_PARAM);
+    ASSERT_EQ(sh_heap_pop(NULL, NULL), SH_HEAP_ERROR_NULL_PARAM);
+
+    SHHeap *heap = sh_heap_create(10);
+    ASSERT_EQ(sh_heap_pop(heap, NULL), SH_HEAP_ERROR_EMPTY);
+    sh_heap_free(heap);
+}
+
+/* ============================================================================
+ * Spatial Grid Tests
+ * ============================================================================ */
+
+TEST(dynamic_grid_create_free)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+    SHDynamicGrid *grid = sh_dynamic_grid_create(bounds, 0.1);
+    ASSERT(grid != NULL);
+    ASSERT_EQ(sh_dynamic_grid_num_entries(grid), 0);
+    ASSERT(sh_dynamic_grid_num_cells(grid) > 0);
+    sh_dynamic_grid_free(grid);
+}
+
+TEST(dynamic_grid_insert_query)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+    SHDynamicGrid *grid = sh_dynamic_grid_create(bounds, 0.5);
+
+    /* Insert some points */
+    SHCoord p1 = {47.0, 19.0};
+    SHCoord p2 = {47.1, 19.1};
+    SHCoord p3 = {48.0, 20.0};
+
+    ASSERT_EQ(sh_dynamic_grid_insert(grid, p1, 100), SH_GRID_OK);
+    ASSERT_EQ(sh_dynamic_grid_insert(grid, p2, 101), SH_GRID_OK);
+    ASSERT_EQ(sh_dynamic_grid_insert(grid, p3, 200), SH_GRID_OK);
+
+    ASSERT_EQ(sh_dynamic_grid_num_entries(grid), 3);
+
+    /* Query same cell as p1 */
+    uint32_t results[10];
+    size_t count = sh_dynamic_grid_query_point(grid, p1, 10, results);
+    ASSERT(count >= 1);  /* At least p1 should be there */
+
+    sh_dynamic_grid_free(grid);
+}
+
+TEST(dynamic_grid_radius_query)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+    SHDynamicGrid *grid = sh_dynamic_grid_create(bounds, 0.1);
+
+    /* Insert cluster of points */
+    SHCoord center = {47.0, 19.0};
+    sh_dynamic_grid_insert(grid, center, 0);
+    sh_dynamic_grid_insert(grid, (SHCoord){47.01, 19.0}, 1);
+    sh_dynamic_grid_insert(grid, (SHCoord){47.0, 19.01}, 2);
+    sh_dynamic_grid_insert(grid, (SHCoord){47.02, 19.02}, 3);
+
+    /* Far away point */
+    sh_dynamic_grid_insert(grid, (SHCoord){48.0, 20.0}, 99);
+
+    uint32_t results[10];
+    size_t count = sh_dynamic_grid_query_radius(grid, center, 5000, 10, results);  /* 5km radius */
+    ASSERT(count >= 4);  /* Should find the cluster */
+
+    sh_dynamic_grid_free(grid);
+}
+
+TEST(dynamic_grid_out_of_bounds)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+    SHDynamicGrid *grid = sh_dynamic_grid_create(bounds, 0.1);
+
+    /* Insert out-of-bounds point (should be silently ignored) */
+    SHCoord outside = {60.0, 30.0};
+    ASSERT_EQ(sh_dynamic_grid_insert(grid, outside, 999), SH_GRID_OK);
+    ASSERT_EQ(sh_dynamic_grid_num_entries(grid), 0);
+
+    sh_dynamic_grid_free(grid);
+}
+
+TEST(dynamic_grid_duplicate_detection)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+    SHDynamicGrid *grid = sh_dynamic_grid_create(bounds, 0.1);
+
+    SHCoord p = {47.0, 19.0};
+    sh_dynamic_grid_insert(grid, p, 100);
+    sh_dynamic_grid_insert(grid, p, 100);  /* Same entity */
+    sh_dynamic_grid_insert(grid, p, 101);  /* Different entity */
+
+    ASSERT_EQ(sh_dynamic_grid_num_entries(grid), 2);  /* No duplicate */
+
+    sh_dynamic_grid_free(grid);
+}
+
+TEST(csr_grid_create_free)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+
+    SHCoord coords[] = {
+        {47.0, 19.0},
+        {47.5, 19.5},
+        {48.0, 20.0}
+    };
+
+    SHCSRGrid *grid = sh_csr_grid_create_f(bounds, 0.5, coords, 3);
+    ASSERT(grid != NULL);
+    sh_csr_grid_free(grid);
+}
+
+TEST(csr_grid_query_cell)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+
+    SHCoord coords[] = {
+        {47.0, 19.0},   /* 0 */
+        {47.1, 19.1},   /* 1 - same cell as 0 */
+        {48.0, 20.0}    /* 2 - different cell */
+    };
+
+    SHCSRGrid *grid = sh_csr_grid_create_f(bounds, 0.5, coords, 3);
+
+    const uint32_t *start, *end;
+    SHCoord query = {47.05, 19.05};  /* In same cell as points 0 and 1 */
+
+    ASSERT_EQ(sh_csr_grid_query_cell(grid, query, &start, &end), 0);
+    ASSERT(end - start >= 2);  /* At least 2 points in this cell */
+
+    sh_csr_grid_free(grid);
+}
+
+/* Distance callback for nearest neighbor tests */
+static double test_distance_cb(SHCoord query, uint32_t node_id, void *user_data)
+{
+    SHCoord *coords = (SHCoord *)user_data;
+    return sh_haversine(query, coords[node_id]);
+}
+
+TEST(csr_grid_find_nearest)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+
+    SHCoord coords[] = {
+        {47.0, 19.0},   /* 0 - ~11km from query */
+        {47.5, 19.5},   /* 1 - closest to query */
+        {48.0, 20.0}    /* 2 - far */
+    };
+
+    SHCSRGrid *grid = sh_csr_grid_create_f(bounds, 0.1, coords, 3);
+
+    SHCoord query = {47.51, 19.51};  /* Near point 1 */
+    double dist;
+    uint32_t nearest = sh_csr_grid_find_nearest(grid, query, test_distance_cb, coords, &dist);
+
+    ASSERT_EQ(nearest, 1);
+    ASSERT(dist < 5000);  /* Should be within 5km */
+
+    sh_csr_grid_free(grid);
+}
+
+TEST(csr_grid_cell_index)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+    SHCSRGrid *grid = sh_csr_grid_create_f(bounds, 1.0, NULL, 0);
+
+    SHCoord inside = {47.0, 19.0};
+    SHCoord outside = {60.0, 30.0};
+
+    ASSERT(sh_csr_grid_cell_index(grid, inside) >= 0);
+    ASSERT(sh_csr_grid_cell_index(grid, outside) < 0);
+
+    sh_csr_grid_free(grid);
+}
+
+TEST(grid_config_create)
+{
+    SHBBox bounds = {.min_lat = 45.0, .max_lat = 50.0, .min_lon = 15.0, .max_lon = 25.0};
+    SHGridConfig config = sh_grid_config_create(bounds, 0.5);
+
+    ASSERT_EQ(config.grid_height, 10);  /* 5 degrees / 0.5 = 10 */
+    ASSERT_EQ(config.grid_width, 20);   /* 10 degrees / 0.5 = 20 */
+    ASSERT_NEAR(config.cell_size_lat, 0.5, 0.001);
+}
+
+TEST(spatial_grid_null_safety)
+{
+    sh_dynamic_grid_free(NULL);  /* Should not crash */
+    sh_csr_grid_free(NULL);
+
+    ASSERT_EQ(sh_dynamic_grid_num_entries(NULL), 0);
+    ASSERT_EQ(sh_dynamic_grid_num_cells(NULL), 0);
+
+    ASSERT_EQ(sh_dynamic_grid_insert(NULL, (SHCoord){0, 0}, 0), SH_GRID_ERROR_NULL_PARAM);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -3049,6 +3592,43 @@ int main(void)
     RUN_TEST(metrics_prometheus_output);
     RUN_TEST(metrics_with_tags);
     RUN_TEST(metrics_http_request);
+
+    printf("\nHashmap:\n");
+    RUN_TEST(hashmap_i64_create_free);
+    RUN_TEST(hashmap_i64_insert_lookup);
+    RUN_TEST(hashmap_i64_update);
+    RUN_TEST(hashmap_i64_contains);
+    RUN_TEST(hashmap_i64_zero_key_rejected);
+    RUN_TEST(hashmap_i64_clear);
+    RUN_TEST(hashmap_i64_resize);
+    RUN_TEST(hashmap_i64_iterator);
+    RUN_TEST(hashmap_i64u32_basic);
+    RUN_TEST(hashmap_null_safety);
+
+    printf("\nHeap:\n");
+    RUN_TEST(heap_create_free);
+    RUN_TEST(heap_push_pop);
+    RUN_TEST(heap_peek);
+    RUN_TEST(heap_contains_priority);
+    RUN_TEST(heap_decrease_key);
+    RUN_TEST(heap_decrease_key_noop);
+    RUN_TEST(heap_push_or_decrease);
+    RUN_TEST(heap_clear);
+    RUN_TEST(heap_many_entries);
+    RUN_TEST(heap_null_safety);
+
+    printf("\nSpatial Grid:\n");
+    RUN_TEST(dynamic_grid_create_free);
+    RUN_TEST(dynamic_grid_insert_query);
+    RUN_TEST(dynamic_grid_radius_query);
+    RUN_TEST(dynamic_grid_out_of_bounds);
+    RUN_TEST(dynamic_grid_duplicate_detection);
+    RUN_TEST(csr_grid_create_free);
+    RUN_TEST(csr_grid_query_cell);
+    RUN_TEST(csr_grid_find_nearest);
+    RUN_TEST(csr_grid_cell_index);
+    RUN_TEST(grid_config_create);
+    RUN_TEST(spatial_grid_null_safety);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

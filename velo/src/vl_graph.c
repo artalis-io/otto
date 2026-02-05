@@ -34,94 +34,6 @@ double vl_travel_time(double distance_m, double speed_kmh);
 uint32_t vl_graph_nearest_node(const VLGraph *graph, VLCoord coord);
 
 /* ============================================================================
- * Node Map (Hash Table: OSM ID -> Node Index)
- * ============================================================================ */
-
-#define NODE_MAP_LOAD_FACTOR 0.7
-
-static uint64_t hash_osm_id(int64_t id)
-{
-    uint64_t h = (uint64_t)id;
-    h ^= h >> 33;
-    h *= 0xff51afd7ed558ccdULL;
-    h ^= h >> 33;
-    h *= 0xc4ceb9fe1a85ec53ULL;
-    h ^= h >> 33;
-    return h;
-}
-
-static VLStatus node_map_init(VLNodeMap *map, size_t expected_size)
-{
-    map->num_buckets = (size_t)(expected_size / NODE_MAP_LOAD_FACTOR) + 1;
-    if (map->num_buckets < 1024) map->num_buckets = 1024;
-
-    map->buckets = calloc(map->num_buckets, sizeof(VLNodeMapEntry *));
-    if (!map->buckets) return VL_ERROR_OUT_OF_MEMORY;
-
-    map->num_entries = 0;
-    return VL_OK;
-}
-
-static void node_map_free(VLNodeMap *map)
-{
-    if (!map->buckets) return;
-
-    for (size_t i = 0; i < map->num_buckets; i++) {
-        VLNodeMapEntry *entry = map->buckets[i];
-        while (entry) {
-            VLNodeMapEntry *next = entry->next;
-            free(entry);
-            entry = next;
-        }
-    }
-    free(map->buckets);
-    map->buckets = NULL;
-    map->num_buckets = 0;
-    map->num_entries = 0;
-}
-
-static VLStatus node_map_insert(VLNodeMap *map, int64_t osm_id, uint32_t node_index)
-{
-    size_t bucket = hash_osm_id(osm_id) % map->num_buckets;
-
-    VLNodeMapEntry *entry = map->buckets[bucket];
-    while (entry) {
-        if (entry->osm_id == osm_id) {
-            return VL_OK;
-        }
-        entry = entry->next;
-    }
-
-    entry = malloc(sizeof(VLNodeMapEntry));
-    if (!entry) return VL_ERROR_OUT_OF_MEMORY;
-
-    entry->osm_id = osm_id;
-    entry->node_index = node_index;
-    entry->next = map->buckets[bucket];
-    map->buckets[bucket] = entry;
-    map->num_entries++;
-
-    return VL_OK;
-}
-
-static uint32_t node_map_lookup(const VLNodeMap *map, int64_t osm_id)
-{
-    if (!map->buckets) return VL_INVALID_NODE;
-
-    size_t bucket = hash_osm_id(osm_id) % map->num_buckets;
-    VLNodeMapEntry *entry = map->buckets[bucket];
-
-    while (entry) {
-        if (entry->osm_id == osm_id) {
-            return entry->node_index;
-        }
-        entry = entry->next;
-    }
-
-    return VL_INVALID_NODE;
-}
-
-/* ============================================================================
  * Graph Builder
  * ============================================================================ */
 
@@ -130,7 +42,8 @@ VLGraphBuilder *vl_graph_builder_create(size_t expected_nodes)
     VLGraphBuilder *builder = calloc(1, sizeof(VLGraphBuilder));
     if (!builder) return NULL;
 
-    if (node_map_init(&builder->node_map, expected_nodes) != VL_OK) {
+    builder->node_map = sh_hashmap_i64u32_create(expected_nodes);
+    if (!builder->node_map) {
         free(builder);
         return NULL;
     }
@@ -138,7 +51,7 @@ VLGraphBuilder *vl_graph_builder_create(size_t expected_nodes)
     builder->nodes_capacity = expected_nodes > 0 ? expected_nodes : 65536;
     builder->nodes = malloc(builder->nodes_capacity * sizeof(VLNode));
     if (!builder->nodes) {
-        node_map_free(&builder->node_map);
+        sh_hashmap_i64u32_free(builder->node_map);
         free(builder);
         return NULL;
     }
@@ -148,7 +61,7 @@ VLGraphBuilder *vl_graph_builder_create(size_t expected_nodes)
     builder->temp_edges = malloc(builder->temp_edges_capacity * sizeof(VLTempEdge));
     if (!builder->temp_edges) {
         free(builder->nodes);
-        node_map_free(&builder->node_map);
+        sh_hashmap_i64u32_free(builder->node_map);
         free(builder);
         return NULL;
     }
@@ -159,7 +72,7 @@ VLGraphBuilder *vl_graph_builder_create(size_t expected_nodes)
 void vl_graph_builder_free(VLGraphBuilder *builder)
 {
     if (!builder) return;
-    node_map_free(&builder->node_map);
+    sh_hashmap_i64u32_free(builder->node_map);
     free(builder->nodes);
     free(builder->temp_edges);
     free(builder);
@@ -173,8 +86,8 @@ static uint32_t get_or_create_node(VLGraphBuilder *builder, int64_t osm_id,
         return VL_INVALID_NODE;
     }
 
-    uint32_t idx = node_map_lookup(&builder->node_map, osm_id);
-    if (idx != VL_INVALID_NODE) {
+    uint32_t idx = sh_hashmap_i64u32_lookup(builder->node_map, osm_id);
+    if (idx != UINT32_MAX) {
         return idx;
     }
 
@@ -198,7 +111,7 @@ static uint32_t get_or_create_node(VLGraphBuilder *builder, int64_t osm_id,
     node->edge_start = 0;
     node->edge_count = 0;
 
-    if (node_map_insert(&builder->node_map, osm_id, idx) != VL_OK) {
+    if (sh_hashmap_i64u32_insert(builder->node_map, osm_id, idx) != SH_HASHMAP_OK) {
         return VL_INVALID_NODE;
     }
 

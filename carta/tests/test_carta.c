@@ -806,11 +806,8 @@ TEST(pbf_way_map_initialized)
 {
     CTPBFContext *ctx = ct_pbf_context_create();
 
-    /* way_map should be initialized to NULL/0 */
-    ASSERT(ctx->way_map.keys == NULL);
-    ASSERT(ctx->way_map.values == NULL);
-    ASSERT_EQ(ctx->way_map.capacity, 0);
-    ASSERT_EQ(ctx->way_map.count, 0);
+    /* way_map should be NULL before any ways are loaded */
+    ASSERT(ctx->way_map == NULL);
 
     ct_pbf_context_free(ctx);
     return 1;
