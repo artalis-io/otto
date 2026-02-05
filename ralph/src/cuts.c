@@ -5,6 +5,7 @@
  * - Gomory Mixed Integer (GMI) cuts
  * - Mixed Integer Rounding (MIR) cuts
  * - Cut pool management
+ * - SCP-specific cuts: clique, odd-hole, lifted cover (Phase 3)
  */
 
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "mip.h"
+#include "detect.h"
 
 /* ============================================================================
  * Cut Pool Management
@@ -999,11 +1001,9 @@ void cut_pool_cleanup(CutPool *pool, int max_age) {
     if (!pool) return;
 
     int write_idx = 0;
-    int removed = 0;
     for (int i = 0; i < pool->count; i++) {
         if (pool->cuts[i]->age > max_age) {
             cut_free(pool->cuts[i]);
-            removed++;
         } else {
             pool->cuts[write_idx++] = pool->cuts[i];
         }
@@ -1078,4 +1078,784 @@ void cut_pool_clear(CutPool *pool) {
         cut_free(pool->cuts[i]);
     }
     pool->count = 0;
+}
+
+/* ============================================================================
+ * SCP-Specific Cutting Planes (Phase 3)
+ * ============================================================================ */
+
+/*
+ * Build conflict graph for set covering/partitioning problems.
+ *
+ * Two sets (variables) i and j conflict if they both cover the same element.
+ * This is detected by finding non-zero entries in the same row of the matrix.
+ */
+ConflictGraph *conflict_graph_create(const LPModel *model, const SetCoverSignature *sig) {
+    if (!model || !sig || sig->type == RALPH_SETCOVER_NONE) return NULL;
+
+    int n = sig->num_sets;
+    int m = sig->num_elements;
+
+    ConflictGraph *graph = (ConflictGraph *)calloc(1, sizeof(ConflictGraph));
+    if (!graph) return NULL;
+
+    graph->num_vars = n;
+    graph->adj_ptr = (int *)calloc(n + 1, sizeof(int));
+    if (!graph->adj_ptr) {
+        free(graph);
+        return NULL;
+    }
+
+    /* First pass: count edges per vertex
+     * For each element (row), all pairs of covering sets form edges */
+
+    /* Build row representation: for each row, list of columns with non-zero */
+    int **row_cols = (int **)calloc(m, sizeof(int *));
+    int *row_count = (int *)calloc(m, sizeof(int));
+    if (!row_cols || !row_count) {
+        free(row_cols);
+        free(row_count);
+        free(graph->adj_ptr);
+        free(graph);
+        return NULL;
+    }
+
+    /* Count non-zeros per row using column-major sparse matrix */
+    SparseMatrix *A = model->A;
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int row = A->rowidx[p];
+            if (row < m && fabs(A->values[p]) > RALPH_ZERO_TOL) {
+                row_count[row]++;
+            }
+        }
+    }
+
+    /* Allocate row column lists */
+    for (int i = 0; i < m; i++) {
+        if (row_count[i] > 0) {
+            row_cols[i] = (int *)calloc(row_count[i], sizeof(int));
+            if (!row_cols[i]) {
+                for (int k = 0; k < i; k++) free(row_cols[k]);
+                free(row_cols);
+                free(row_count);
+                free(graph->adj_ptr);
+                free(graph);
+                return NULL;
+            }
+        }
+        row_count[i] = 0;  /* Reset for filling */
+    }
+
+    /* Fill row column lists */
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int row = A->rowidx[p];
+            if (row < m && fabs(A->values[p]) > RALPH_ZERO_TOL) {
+                row_cols[row][row_count[row]++] = j;
+            }
+        }
+    }
+
+    /* Count edges: for each row, each pair of columns is an edge
+     * Use a hash set approach with bit array for deduplication */
+    int *edge_count = (int *)calloc(n, sizeof(int));
+    if (!edge_count) {
+        for (int i = 0; i < m; i++) free(row_cols[i]);
+        free(row_cols);
+        free(row_count);
+        free(graph->adj_ptr);
+        free(graph);
+        return NULL;
+    }
+
+    /* Temporary adjacency sets (bit arrays would be more efficient for large n) */
+    int **temp_adj = (int **)calloc(n, sizeof(int *));
+    int *temp_cap = (int *)calloc(n, sizeof(int));
+    if (!temp_adj || !temp_cap) {
+        free(temp_adj);
+        free(temp_cap);
+        free(edge_count);
+        for (int i = 0; i < m; i++) free(row_cols[i]);
+        free(row_cols);
+        free(row_count);
+        free(graph->adj_ptr);
+        free(graph);
+        return NULL;
+    }
+
+    /* For each element (row), add edges between all covering sets */
+    for (int i = 0; i < m; i++) {
+        int cnt = row_count[i];
+        for (int a = 0; a < cnt; a++) {
+            int col_a = row_cols[i][a];
+            for (int b = a + 1; b < cnt; b++) {
+                int col_b = row_cols[i][b];
+
+                /* Add edge col_a -- col_b (both directions) */
+                /* Check if edge already exists */
+                int found_ab = 0, found_ba = 0;
+                for (int k = 0; k < edge_count[col_a]; k++) {
+                    if (temp_adj[col_a][k] == col_b) { found_ab = 1; break; }
+                }
+                for (int k = 0; k < edge_count[col_b]; k++) {
+                    if (temp_adj[col_b][k] == col_a) { found_ba = 1; break; }
+                }
+
+                if (!found_ab) {
+                    /* Expand if needed */
+                    if (edge_count[col_a] >= temp_cap[col_a]) {
+                        int new_cap = temp_cap[col_a] == 0 ? 8 : temp_cap[col_a] * 2;
+                        int *new_adj = (int *)realloc(temp_adj[col_a], new_cap * sizeof(int));
+                        if (!new_adj) goto cleanup_error;
+                        temp_adj[col_a] = new_adj;
+                        temp_cap[col_a] = new_cap;
+                    }
+                    temp_adj[col_a][edge_count[col_a]++] = col_b;
+                }
+                if (!found_ba) {
+                    if (edge_count[col_b] >= temp_cap[col_b]) {
+                        int new_cap = temp_cap[col_b] == 0 ? 8 : temp_cap[col_b] * 2;
+                        int *new_adj = (int *)realloc(temp_adj[col_b], new_cap * sizeof(int));
+                        if (!new_adj) goto cleanup_error;
+                        temp_adj[col_b] = new_adj;
+                        temp_cap[col_b] = new_cap;
+                    }
+                    temp_adj[col_b][edge_count[col_b]++] = col_a;
+                }
+            }
+        }
+    }
+
+    /* Build CSR structure */
+    graph->adj_ptr[0] = 0;
+    int total_edges = 0;
+    for (int j = 0; j < n; j++) {
+        total_edges += edge_count[j];
+        graph->adj_ptr[j + 1] = total_edges;
+    }
+    graph->num_edges = total_edges / 2;  /* Each edge counted twice */
+
+    graph->adj_list = (int *)calloc(total_edges > 0 ? total_edges : 1, sizeof(int));
+    if (!graph->adj_list) goto cleanup_error;
+
+    /* Copy adjacency lists */
+    for (int j = 0; j < n; j++) {
+        for (int k = 0; k < edge_count[j]; k++) {
+            graph->adj_list[graph->adj_ptr[j] + k] = temp_adj[j][k];
+        }
+    }
+
+    /* Cleanup temporary structures */
+    for (int j = 0; j < n; j++) free(temp_adj[j]);
+    free(temp_adj);
+    free(temp_cap);
+    free(edge_count);
+    for (int i = 0; i < m; i++) free(row_cols[i]);
+    free(row_cols);
+    free(row_count);
+
+    return graph;
+
+cleanup_error:
+    for (int j = 0; j < n; j++) free(temp_adj[j]);
+    free(temp_adj);
+    free(temp_cap);
+    free(edge_count);
+    for (int i = 0; i < m; i++) free(row_cols[i]);
+    free(row_cols);
+    free(row_count);
+    free(graph->adj_list);
+    free(graph->adj_ptr);
+    free(graph);
+    return NULL;
+}
+
+void conflict_graph_free(ConflictGraph *graph) {
+    if (!graph) return;
+    free(graph->adj_list);
+    free(graph->adj_ptr);
+    free(graph);
+}
+
+/*
+ * Check if vertex v is adjacent to all vertices in the clique.
+ */
+static int is_clique_neighbor(const ConflictGraph *graph, const int *clique,
+                               int clique_size, int v) {
+    for (int i = 0; i < clique_size; i++) {
+        int u = clique[i];
+        /* Check if v is in adjacency list of u */
+        int found = 0;
+        for (int p = graph->adj_ptr[u]; p < graph->adj_ptr[u + 1]; p++) {
+            if (graph->adj_list[p] == v) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) return 0;
+    }
+    return 1;
+}
+
+/*
+ * Greedily extend a clique starting from edge (u, v).
+ * Returns clique size.
+ */
+static int extend_clique_greedy(const ConflictGraph *graph, int u, int v,
+                                 const double *x, int *clique, int max_size) {
+    clique[0] = u;
+    clique[1] = v;
+    int size = 2;
+
+    /* Find common neighbors of all vertices in clique */
+    /* Greedily add vertex with highest LP value */
+    while (size < max_size) {
+        int best_w = -1;
+        double best_val = -1.0;
+
+        /* Check all neighbors of first vertex */
+        for (int p = graph->adj_ptr[u]; p < graph->adj_ptr[u + 1]; p++) {
+            int w = graph->adj_list[p];
+
+            /* Skip if already in clique */
+            int in_clique = 0;
+            for (int i = 0; i < size; i++) {
+                if (clique[i] == w) { in_clique = 1; break; }
+            }
+            if (in_clique) continue;
+
+            /* Check if w is adjacent to all clique members */
+            if (is_clique_neighbor(graph, clique, size, w)) {
+                if (x[w] > best_val) {
+                    best_val = x[w];
+                    best_w = w;
+                }
+            }
+        }
+
+        if (best_w < 0) break;  /* No more vertices can be added */
+        clique[size++] = best_w;
+    }
+
+    return size;
+}
+
+/*
+ * Generate clique cuts from conflict graph.
+ */
+int generate_clique_cuts(MIPSolver *solver, CutPool *pool, const ConflictGraph *graph) {
+    if (!solver || !pool || !graph) return 0;
+    if (!solver->lp_solver || !solver->lp_solver->solution) return 0;
+
+    const double *x = solver->lp_solver->solution;
+    int n = graph->num_vars;
+    int cuts_added = 0;
+    int max_clique_size = 64;  /* Reasonable limit */
+
+    int *clique = (int *)calloc(max_clique_size, sizeof(int));
+    if (!clique) return 0;
+
+    /* For each edge with sufficient fractional LP value, try to extend */
+    for (int u = 0; u < n && cuts_added < solver->max_cuts_per_round; u++) {
+        if (x[u] < 0.1) continue;  /* Skip vertices with low LP value */
+
+        for (int p = graph->adj_ptr[u]; p < graph->adj_ptr[u + 1]; p++) {
+            int v = graph->adj_list[p];
+            if (v <= u) continue;  /* Avoid processing same edge twice */
+            if (x[u] + x[v] < 0.8) continue;  /* Skip edges unlikely to be violated */
+
+            /* Extend clique greedily */
+            int size = extend_clique_greedy(graph, u, v, x, clique, max_clique_size);
+
+            if (size < 2) continue;
+
+            /* Calculate violation: sum(x_j) - 1 for clique cut sum <= 1 */
+            double lhs = 0.0;
+            for (int i = 0; i < size; i++) {
+                lhs += x[clique[i]];
+            }
+            double violation = lhs - 1.0;
+
+            if (violation < RALPH_FEAS_TOL) continue;
+
+            /* Create clique cut: sum(x_j : j in clique) <= 1 */
+            Cut *cut = cut_create(size);
+            if (!cut) continue;
+
+            cut->type = CUT_CLIQUE;
+            cut->sense = 'L';
+            cut->rhs = 1.0;
+            cut->violation = violation;
+
+            for (int i = 0; i < size; i++) {
+                cut->indices[cut->nnz] = clique[i];
+                cut->values[cut->nnz] = 1.0;
+                cut->nnz++;
+            }
+
+            cut_pool_add(pool, cut);
+            cuts_added++;
+
+            if (cuts_added >= solver->max_cuts_per_round) break;
+        }
+    }
+
+    free(clique);
+    return cuts_added;
+}
+
+/*
+ * BFS to find shortest odd cycle containing start vertex.
+ * Returns cycle length, fills cycle array. Returns 0 if no odd cycle found.
+ */
+static int find_odd_cycle_bfs(const ConflictGraph *graph, int start,
+                               int *cycle, int max_len, int *visited, int *parent) {
+    int n = graph->num_vars;
+
+    /* Reset visited and parent */
+    for (int i = 0; i < n; i++) {
+        visited[i] = -1;
+        parent[i] = -1;
+    }
+
+    /* BFS with distance tracking */
+    int *queue = (int *)calloc(n, sizeof(int));
+    if (!queue) return 0;
+
+    int head = 0, tail = 0;
+    queue[tail++] = start;
+    visited[start] = 0;
+
+    int cycle_len = 0;
+    int cycle_end = -1;
+
+    while (head < tail && cycle_len == 0) {
+        int u = queue[head++];
+        int u_dist = visited[u];
+
+        for (int p = graph->adj_ptr[u]; p < graph->adj_ptr[u + 1]; p++) {
+            int v = graph->adj_list[p];
+
+            if (visited[v] < 0) {
+                /* Not visited */
+                visited[v] = u_dist + 1;
+                parent[v] = u;
+                queue[tail++] = v;
+            } else if (v != parent[u]) {
+                /* Found a cycle: path from start to u, edge u-v, path from v to start */
+                int total_len = u_dist + 1 + visited[v];
+                if (total_len % 2 == 1 && total_len >= 3) {
+                    /* Odd cycle found */
+                    if (total_len <= max_len) {
+                        cycle_len = total_len;
+                        cycle_end = u;
+                        /* Also need to track v for reconstruction */
+                        /* Store v in a way we can recover */
+                        parent[u] = v;  /* Temporarily overwrite */
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    free(queue);
+
+    if (cycle_len == 0) return 0;
+
+    /* Reconstruct cycle */
+    /* Path from start to cycle_end, then edge to v, then path from v to start */
+    /* This is complex - simplified approach: just return the cycle vertices */
+
+    /* For now, use simplified reconstruction: trace back from both ends */
+    int *path1 = (int *)calloc(cycle_len, sizeof(int));
+    int *path2 = (int *)calloc(cycle_len, sizeof(int));
+    if (!path1 || !path2) {
+        free(path1);
+        free(path2);
+        return 0;
+    }
+
+    /* Trace from cycle_end back */
+    int len1 = 0;
+    int curr = cycle_end;
+    int v_end = parent[cycle_end];  /* The vertex we connected to */
+
+    /* Restore parent */
+    parent[cycle_end] = -1;
+    for (int p = graph->adj_ptr[cycle_end]; p < graph->adj_ptr[cycle_end + 1]; p++) {
+        int maybe_parent = graph->adj_list[p];
+        if (maybe_parent != v_end && visited[maybe_parent] == visited[cycle_end] - 1) {
+            parent[cycle_end] = maybe_parent;
+            break;
+        }
+    }
+
+    /* Trace path from cycle_end to start */
+    curr = cycle_end;
+    while (curr != start && len1 < cycle_len) {
+        path1[len1++] = curr;
+        curr = parent[curr];
+        if (curr < 0) break;
+    }
+    if (curr == start) path1[len1++] = start;
+
+    /* Trace path from v_end to start */
+    int len2 = 0;
+    curr = v_end;
+    while (curr != start && len2 < cycle_len) {
+        path2[len2++] = curr;
+        /* Find parent of curr */
+        int found_parent = -1;
+        for (int p = graph->adj_ptr[curr]; p < graph->adj_ptr[curr + 1]; p++) {
+            int maybe = graph->adj_list[p];
+            if (visited[maybe] == visited[curr] - 1) {
+                found_parent = maybe;
+                break;
+            }
+        }
+        curr = found_parent;
+        if (curr < 0) break;
+    }
+
+    /* Combine: path1 (reversed) + path2 */
+    int idx = 0;
+    for (int i = len1 - 1; i >= 0 && idx < cycle_len; i--) {
+        cycle[idx++] = path1[i];
+    }
+    for (int i = 0; i < len2 && idx < cycle_len; i++) {
+        cycle[idx++] = path2[i];
+    }
+
+    free(path1);
+    free(path2);
+
+    /* Verify cycle length is odd */
+    if (idx % 2 == 0) return 0;  /* Not odd */
+
+    return idx;
+}
+
+/*
+ * Generate odd-hole cuts from conflict graph.
+ */
+int generate_odd_hole_cuts(MIPSolver *solver, CutPool *pool, const ConflictGraph *graph) {
+    if (!solver || !pool || !graph) return 0;
+    if (!solver->lp_solver || !solver->lp_solver->solution) return 0;
+
+    const double *x = solver->lp_solver->solution;
+    int n = graph->num_vars;
+    int cuts_added = 0;
+    int max_cycle_len = 15;  /* Limit cycle length for efficiency */
+
+    int *cycle = (int *)calloc(max_cycle_len, sizeof(int));
+    int *visited = (int *)calloc(n, sizeof(int));
+    int *parent = (int *)calloc(n, sizeof(int));
+    if (!cycle || !visited || !parent) {
+        free(cycle);
+        free(visited);
+        free(parent);
+        return 0;
+    }
+
+    /* Try to find odd cycles starting from vertices with high fractional value */
+    for (int start = 0; start < n && cuts_added < solver->max_cuts_per_round; start++) {
+        if (x[start] < 0.3) continue;  /* Skip low-value vertices */
+
+        int len = find_odd_cycle_bfs(graph, start, cycle, max_cycle_len, visited, parent);
+        if (len < 3 || len % 2 == 0) continue;  /* Need odd cycle of length >= 3 */
+
+        /* Calculate violation: sum(x_j) - k for cycle length 2k+1 */
+        double lhs = 0.0;
+        for (int i = 0; i < len; i++) {
+            lhs += x[cycle[i]];
+        }
+        int k = len / 2;
+        double rhs = (double)k;
+        double violation = lhs - rhs;
+
+        if (violation < RALPH_FEAS_TOL) continue;
+
+        /* Create odd-hole cut: sum(x_j : j in cycle) <= k */
+        Cut *cut = cut_create(len);
+        if (!cut) continue;
+
+        cut->type = CUT_ODD_HOLE;
+        cut->sense = 'L';
+        cut->rhs = rhs;
+        cut->violation = violation;
+
+        for (int i = 0; i < len; i++) {
+            cut->indices[cut->nnz] = cycle[i];
+            cut->values[cut->nnz] = 1.0;
+            cut->nnz++;
+        }
+
+        cut_pool_add(pool, cut);
+        cuts_added++;
+    }
+
+    free(cycle);
+    free(visited);
+    free(parent);
+
+    return cuts_added;
+}
+
+/*
+ * Sequential lifting for cover inequalities.
+ *
+ * Given a cover C with sum(x_j : j in C) <= |C| - 1,
+ * we can strengthen it by lifting coefficients for variables not in C.
+ *
+ * For each variable k not in C, compute lifting coefficient a_k:
+ *   a_k = |C| - 1 - max{ sum(x_j : j in C) : x feasible, x_k = 1 }
+ *
+ * This is done via a simple knapsack DP.
+ */
+static int compute_lifting_coef(const double *coefs, const int *vars, int num_vars,
+                                  double rhs, const int *in_cover, int cover_size,
+                                  int var_to_lift) {
+    /* Knapsack DP: compute max number of cover elements we can select
+     * when var_to_lift is fixed to 1 */
+
+    /* Get coefficient of var_to_lift */
+    double lift_coef = 0.0;
+    for (int i = 0; i < num_vars; i++) {
+        if (vars[i] == var_to_lift) {
+            lift_coef = coefs[i];
+            break;
+        }
+    }
+
+    if (lift_coef < RALPH_ZERO_TOL) return 0;
+
+    /* Remaining capacity after selecting var_to_lift */
+    double remaining = rhs - lift_coef;
+    if (remaining < -RALPH_ZERO_TOL) {
+        /* var_to_lift alone exceeds capacity - lifting coef is |C| - 1 */
+        return cover_size - 1;
+    }
+
+    /* DP: dp[w] = max items from cover we can fit with capacity w */
+    /* Use integer weights (scale by 1000 for precision) */
+    int scale = 1000;
+    int capacity = (int)(remaining * scale + 0.5);
+    if (capacity < 0) capacity = 0;
+    if (capacity > 100000) capacity = 100000;  /* Limit for efficiency */
+
+    int *dp = (int *)calloc(capacity + 1, sizeof(int));
+    if (!dp) return 0;
+
+    /* Process each cover item */
+    for (int i = 0; i < num_vars; i++) {
+        if (!in_cover[i]) continue;
+        int w = (int)(coefs[i] * scale + 0.5);
+        if (w <= 0) continue;
+
+        for (int c = capacity; c >= w; c--) {
+            if (dp[c - w] + 1 > dp[c]) {
+                dp[c] = dp[c - w] + 1;
+            }
+        }
+    }
+
+    int max_selected = dp[capacity];
+    free(dp);
+
+    /* Lifting coefficient: |C| - 1 - max_selected */
+    int lift = cover_size - 1 - max_selected;
+    return lift > 0 ? lift : 0;
+}
+
+/*
+ * Generate lifted cover inequalities.
+ */
+int generate_lifted_cover_cuts(MIPSolver *solver, CutPool *pool) {
+    if (!solver || !solver->lp_solver || !solver->lp_solver->solution) return 0;
+
+    LPModel *model = solver->original_model;
+    const double *x = solver->lp_solver->solution;
+    int n = model->num_vars;
+    int m = model->num_cons;
+    int cuts_added = 0;
+
+    if (model->num_binary == 0) return 0;
+
+    double *coefs = (double *)calloc(n, sizeof(double));
+    int *vars = (int *)calloc(n, sizeof(int));
+    int *in_cover = (int *)calloc(n, sizeof(int));
+    double *lift_coefs = (double *)calloc(n, sizeof(double));
+    if (!coefs || !vars || !in_cover || !lift_coefs) {
+        free(coefs);
+        free(vars);
+        free(in_cover);
+        free(lift_coefs);
+        return 0;
+    }
+
+    /* Scan constraints for knapsack structure */
+    for (int row = 0; row < m && cuts_added < solver->max_cuts_per_round; row++) {
+        /* Get row data */
+        double *row_data = (double *)calloc(n, sizeof(double));
+        if (!row_data) continue;
+        sparse_get_row(model->A, row, row_data);
+
+        /* Check if knapsack constraint */
+        int num_vars_in_row = 0;
+        int is_knapsack = 1;
+        for (int j = 0; j < n; j++) {
+            double aij = row_data[j];
+            if (fabs(aij) < RALPH_ZERO_TOL) continue;
+
+            if (aij < RALPH_ZERO_TOL) { is_knapsack = 0; break; }
+            if (model->var_type[j] != 'B') { is_knapsack = 0; break; }
+
+            coefs[num_vars_in_row] = aij;
+            vars[num_vars_in_row] = j;
+            num_vars_in_row++;
+        }
+        free(row_data);
+
+        if (!is_knapsack || num_vars_in_row < 3) continue;
+        if (model->sense[row] != 'L' && model->sense[row] != 'E') continue;
+
+        double rhs = model->b[row];
+
+        /* Build minimal cover greedily (same as basic cover cuts) */
+        double coef_sum = 0.0;
+        for (int i = 0; i < num_vars_in_row; i++) {
+            coef_sum += coefs[i];
+            in_cover[i] = 0;
+        }
+        if (coef_sum <= rhs + RALPH_ZERO_TOL) continue;
+
+        /* Sort by LP value descending */
+        int *order = (int *)calloc(num_vars_in_row, sizeof(int));
+        if (!order) continue;
+        for (int i = 0; i < num_vars_in_row; i++) order[i] = i;
+        for (int i = 0; i < num_vars_in_row - 1; i++) {
+            for (int j = i + 1; j < num_vars_in_row; j++) {
+                if (x[vars[order[j]]] > x[vars[order[i]]]) {
+                    int tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+                }
+            }
+        }
+
+        /* Build cover */
+        double cover_coef_sum = 0.0;
+        int cover_size = 0;
+        for (int i = 0; i < num_vars_in_row && cover_coef_sum <= rhs; i++) {
+            int idx = order[i];
+            in_cover[idx] = 1;
+            cover_coef_sum += coefs[idx];
+            cover_size++;
+        }
+        free(order);
+
+        if (cover_coef_sum <= rhs + RALPH_ZERO_TOL || cover_size < 2) continue;
+
+        /* Compute lifting coefficients for non-cover variables */
+        for (int i = 0; i < num_vars_in_row; i++) {
+            if (in_cover[i]) {
+                lift_coefs[i] = 1.0;  /* Cover variables have coefficient 1 */
+            } else {
+                int lc = compute_lifting_coef(coefs, vars, num_vars_in_row,
+                                              rhs, in_cover, cover_size, vars[i]);
+                lift_coefs[i] = (double)lc;
+            }
+        }
+
+        /* Check if lifting improved the cut (any non-zero lifting coef) */
+        int has_lifting = 0;
+        for (int i = 0; i < num_vars_in_row; i++) {
+            if (!in_cover[i] && lift_coefs[i] > 0.5) {
+                has_lifting = 1;
+                break;
+            }
+        }
+        if (!has_lifting) continue;  /* No improvement over basic cover */
+
+        /* Calculate violation */
+        double lhs = 0.0;
+        for (int i = 0; i < num_vars_in_row; i++) {
+            if (lift_coefs[i] > 0.5) {
+                lhs += lift_coefs[i] * x[vars[i]];
+            }
+        }
+        double cut_rhs = cover_size - 1.0;
+        double violation = lhs - cut_rhs;
+
+        if (violation < RALPH_FEAS_TOL) continue;
+
+        /* Create lifted cover cut */
+        Cut *cut = cut_create(num_vars_in_row);
+        if (!cut) continue;
+
+        cut->type = CUT_LIFTED_COVER;
+        cut->sense = 'L';
+        cut->rhs = cut_rhs;
+        cut->violation = violation;
+
+        for (int i = 0; i < num_vars_in_row; i++) {
+            if (lift_coefs[i] > 0.5) {
+                cut->indices[cut->nnz] = vars[i];
+                cut->values[cut->nnz] = lift_coefs[i];
+                cut->nnz++;
+            }
+        }
+
+        cut_pool_add(pool, cut);
+        cuts_added++;
+    }
+
+    free(coefs);
+    free(vars);
+    free(in_cover);
+    free(lift_coefs);
+
+    return cuts_added;
+}
+
+/*
+ * Combined SCP cut generation.
+ */
+int generate_scp_cuts(MIPSolver *solver, CutPool *pool) {
+    if (!solver || !pool) return 0;
+
+    /* Detect SCP structure */
+    SetCoverSignature sig;
+    memset(&sig, 0, sizeof(sig));
+
+    if (!detect_set_cover(solver->original_model, &sig)) {
+        return 0;  /* Not an SCP */
+    }
+
+    int total_cuts = 0;
+
+    /* Build conflict graph */
+    ConflictGraph *graph = conflict_graph_create(solver->original_model, &sig);
+    if (graph) {
+        /* Generate clique cuts */
+        int clique_cuts = generate_clique_cuts(solver, pool, graph);
+        total_cuts += clique_cuts;
+
+        /* Generate odd-hole cuts (only for SPP where they're most useful) */
+        if (sig.type == RALPH_SETCOVER_PARTITIONING) {
+            int odd_hole_cuts = generate_odd_hole_cuts(solver, pool, graph);
+            total_cuts += odd_hole_cuts;
+        }
+
+        conflict_graph_free(graph);
+    }
+
+    /* Generate lifted cover cuts */
+    int lifted_cuts = generate_lifted_cover_cuts(solver, pool);
+    total_cuts += lifted_cuts;
+
+    /* Cleanup */
+    detect_set_cover_free(&sig);
+
+    return total_cuts;
 }
