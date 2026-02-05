@@ -718,6 +718,42 @@ typedef struct {
     int num_col_priorities;         /* 0 = disabled, else must equal m (cols) */
     const int *col_priorities;      /* Priority 1-10 for each column */
 
+    /* Cardinality bounds for assignment count.
+     *
+     * Controls how many real pairs are matched in rectangular problems.
+     * - min_assignments: At least this many pairs must be assigned.
+     *   If fewer are possible, returns RALPH_LAP_INFEASIBLE.
+     * - max_assignments: At most this many pairs can be assigned.
+     *   Excess rows/columns go unassigned even if feasible.
+     *
+     * When max_assignments < min(m,n), priorities determine which
+     * rows/columns get assigned. If no priorities, cost optimization
+     * chooses which pairs minimize total cost.
+     */
+    int min_assignments;            /* 0 = no minimum (default) */
+    int max_assignments;            /* 0 = no limit (default), uses min(m,n) */
+
+    /* Qualification constraints (allow-list for columns).
+     *
+     * Specifies which rows are qualified to serve each column.
+     * More ergonomic than forbidden when few rows qualify.
+     * Columns not listed have no restrictions (all rows qualify).
+     *
+     * Uses CSR-like sparse format:
+     * - qual_col_idx[q]: Column index for qualification q
+     * - qual_row_ptr[q..q+1]: Range in qual_rows for column q
+     * - qual_rows[qual_row_ptr[q]..qual_row_ptr[q+1]]: Qualified row indices
+     *
+     * Example: col 2 accepts rows {0,3,7}, col 5 accepts rows {1,4}
+     *   qual_col_idx = [2, 5]
+     *   qual_row_ptr = [0, 3, 5]
+     *   qual_rows = [0, 3, 7, 1, 4]
+     */
+    int num_qual_cols;              /* Number of columns with qualifications (0 = none) */
+    const int *qual_col_idx;        /* Which columns have qualifications [num_qual_cols] */
+    const int *qual_row_ptr;        /* Offsets into qual_rows [num_qual_cols + 1] */
+    const int *qual_rows;           /* Qualified row indices (flattened) */
+
 } RalphLapOptions;
 
 /* Default options initializer */
@@ -737,7 +773,13 @@ typedef struct {
     .num_row_priorities = 0, \
     .row_priorities = NULL, \
     .num_col_priorities = 0, \
-    .col_priorities = NULL \
+    .col_priorities = NULL, \
+    .min_assignments = 0, \
+    .max_assignments = 0, \
+    .num_qual_cols = 0, \
+    .qual_col_idx = NULL, \
+    .qual_row_ptr = NULL, \
+    .qual_rows = NULL \
 }
 
 /*

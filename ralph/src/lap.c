@@ -3496,6 +3496,102 @@ static RalphLapStatus validate_priorities(
 }
 
 /*
+ * Validate cardinality bounds in options.
+ * Returns RALPH_LAP_SUCCESS if valid, RALPH_LAP_INVALID_INPUT otherwise.
+ */
+static RalphLapStatus validate_cardinality(
+    const RalphLapOptions *opts,
+    int n_rows, int n_cols
+) {
+    if (!opts) return RALPH_LAP_SUCCESS;
+
+    int natural_max = (n_rows < n_cols) ? n_rows : n_cols;
+
+    if (opts->min_assignments < 0) return RALPH_LAP_INVALID_INPUT;
+    if (opts->max_assignments < 0) return RALPH_LAP_INVALID_INPUT;
+    if (opts->min_assignments > natural_max) return RALPH_LAP_INVALID_INPUT;
+    if (opts->max_assignments > 0 && opts->max_assignments > natural_max)
+        return RALPH_LAP_INVALID_INPUT;
+    if (opts->max_assignments > 0 && opts->min_assignments > opts->max_assignments)
+        return RALPH_LAP_INVALID_INPUT;
+
+    return RALPH_LAP_SUCCESS;
+}
+
+/*
+ * Validate qualification constraints in options.
+ * Returns RALPH_LAP_SUCCESS if valid, RALPH_LAP_INVALID_INPUT otherwise.
+ */
+static RalphLapStatus validate_qualifications(
+    const RalphLapOptions *opts,
+    int n_rows, int n_cols
+) {
+    if (!opts || opts->num_qual_cols == 0) return RALPH_LAP_SUCCESS;
+
+    if (!opts->qual_col_idx || !opts->qual_row_ptr || !opts->qual_rows)
+        return RALPH_LAP_INVALID_INPUT;
+
+    for (int q = 0; q < opts->num_qual_cols; q++) {
+        /* Validate column index */
+        if (opts->qual_col_idx[q] < 0 || opts->qual_col_idx[q] >= n_cols)
+            return RALPH_LAP_INVALID_INPUT;
+
+        /* Validate row pointer range */
+        int start = opts->qual_row_ptr[q];
+        int end = opts->qual_row_ptr[q + 1];
+        if (start < 0 || end < start)
+            return RALPH_LAP_INVALID_INPUT;
+
+        /* Validate qualified row indices */
+        for (int k = start; k < end; k++) {
+            if (opts->qual_rows[k] < 0 || opts->qual_rows[k] >= n_rows)
+                return RALPH_LAP_INVALID_INPUT;
+        }
+    }
+
+    return RALPH_LAP_SUCCESS;
+}
+
+/*
+ * Apply qualification constraints to dense cost matrix.
+ * Sets cost to INFINITY for non-qualified (row, col) pairs.
+ *
+ * The cost array must be a mutable copy (e.g., ws->work_cost).
+ */
+static void apply_qualifications_dense(
+    int m, int n,
+    double *cost,
+    const RalphLapOptions *opts
+) {
+    if (!opts || opts->num_qual_cols == 0) return;
+
+    for (int q = 0; q < opts->num_qual_cols; q++) {
+        int col = opts->qual_col_idx[q];
+        int start = opts->qual_row_ptr[q];
+        int end = opts->qual_row_ptr[q + 1];
+
+        /* Build bitmap of qualified rows for this column */
+        /* For small m, use stack; for large m, use heap */
+        uint8_t stack_qual[256];
+        uint8_t *qualified = (m <= 256) ? stack_qual : (uint8_t*)calloc(m, 1);
+        if (m <= 256) memset(qualified, 0, m);
+
+        for (int k = start; k < end; k++) {
+            qualified[opts->qual_rows[k]] = 1;
+        }
+
+        /* Set non-qualified rows to infinity for this column */
+        for (int i = 0; i < m; i++) {
+            if (!qualified[i]) {
+                cost[i * n + col] = RALPH_LAP_INFINITY;
+            }
+        }
+
+        if (m > 256) free(qualified);
+    }
+}
+
+/*
  * Internal: solve standard (single solution) LAP with unified problem/options.
  */
 static RalphLapStatus lap_solve_standard_unified(
@@ -3508,14 +3604,20 @@ static RalphLapStatus lap_solve_standard_unified(
     double single_cost = 0;
     double *cost_ptr = result->costs ? result->costs : &single_cost;
 
-    /* Validate priority arrays upfront */
+    /* Validate all constraints upfront */
     status = validate_priorities(opts, prob->n, prob->m);
-    if (status != RALPH_LAP_SUCCESS) {
-        return status;
-    }
+    if (status != RALPH_LAP_SUCCESS) return status;
 
-    /* Check if priorities are set */
+    status = validate_cardinality(opts, prob->n, prob->m);
+    if (status != RALPH_LAP_SUCCESS) return status;
+
+    status = validate_qualifications(opts, prob->n, prob->m);
+    if (status != RALPH_LAP_SUCCESS) return status;
+
+    /* Check which constraints are active */
     int has_priorities = opts && (opts->num_row_priorities > 0 || opts->num_col_priorities > 0);
+    int has_qualifications = opts && opts->num_qual_cols > 0;
+    int has_cardinality = opts && (opts->min_assignments > 0 || opts->max_assignments > 0);
 
     /* Apply algorithm-level settings to workspace (thread-safe) */
     if (opts) {
@@ -3527,13 +3629,24 @@ static RalphLapStatus lap_solve_standard_unified(
     /* Dispatch based on cost representation and dimensions */
     switch (prob->cost_type) {
         case RALPH_LAP_COST_DENSE:
-            if (prob->n == prob->m) {
+            if (prob->n == prob->m && !(has_cardinality && opts->max_assignments > 0 && opts->max_assignments < prob->n)) {
                 /* Square dense LAP - call internal directly */
+                /* (If max_assignments < n, fall through to rectangular path) */
                 const double *cost = apply_forbidden_dense(prob, opts, ws);
+
+                /* Apply qualifications if set (requires mutable copy) */
+                if (has_qualifications) {
+                    if (cost == prob->dense_cost) {
+                        int nn = prob->n * prob->n;
+                        memcpy(ws->work_cost, cost, nn * sizeof(double));
+                    }
+                    apply_qualifications_dense(prob->n, prob->m, ws->work_cost, opts);
+                    cost = ws->work_cost;
+                }
 
                 /* Apply priorities if set (requires mutable copy) */
                 if (has_priorities) {
-                    /* If forbidden didn't copy, we need to copy now */
+                    /* If previous steps didn't copy, we need to copy now */
                     if (cost == prob->dense_cost) {
                         int nn = prob->n * prob->n;
                         memcpy(ws->work_cost, cost, nn * sizeof(double));
@@ -3587,9 +3700,10 @@ static RalphLapStatus lap_solve_standard_unified(
                     }
                 }
             } else {
-                /* Rectangular dense LAP - inline the padding logic */
+                /* Rectangular dense LAP (or square with max_assignments) */
                 int m = prob->n, n = prob->m;
                 const double *cost = prob->dense_cost;
+                int need_copy = 0;
 
                 /* Apply forbidden if needed */
                 if (opts && opts->num_forbidden > 0 && ws) {
@@ -3603,10 +3717,31 @@ static RalphLapStatus lap_solve_standard_unified(
                         }
                     }
                     cost = ws->work_cost;
+                    need_copy = 1;
                 }
 
-                /* Pad to square and solve */
+                /* Apply qualifications if needed */
+                if (has_qualifications) {
+                    if (!need_copy) {
+                        int mn = m * n;
+                        memcpy(ws->work_cost, cost, mn * sizeof(double));
+                        need_copy = 1;
+                    }
+                    apply_qualifications_dense(m, n, ws->work_cost, opts);
+                    cost = ws->work_cost;
+                }
+
+                /* Compute padding size with cardinality bounds */
+                int natural_max = (m < n) ? m : n;
+                int effective_max = natural_max;
+                if (has_cardinality && opts->max_assignments > 0) {
+                    effective_max = opts->max_assignments;
+                }
+                int cardinality_excess = natural_max - effective_max;
+
+                /* k = max(m, n) + excess for cardinality limiting */
                 int k = (m > n) ? m : n;
+                k += cardinality_excess;
 
                 /* Check for overflow in k*k allocation */
                 if (lap_check_size_overflow(k, sizeof(double)) != 0) {
@@ -3676,6 +3811,47 @@ static RalphLapStatus lap_solve_standard_unified(
                                 }
                                 *cost_ptr = actual;
                             }
+
+                            /* Check min_assignments constraint.
+                             * Count only valid assignments:
+                             * - Column in range [0, n)
+                             * - Original cost is finite (not INFINITY/forbidden)
+                             * - Row is qualified for column (if qualifications set)
+                             */
+                            if (has_cardinality && opts->min_assignments > 0) {
+                                int real_count = 0;
+                                for (int i = 0; i < m; i++) {
+                                    int j = result->row_sol[i];
+                                    if (j >= 0 && j < n) {
+                                        double c = prob->dense_cost[i * n + j];
+                                        if (c < RALPH_LAP_INFINITY * 0.5) {
+                                            /* Check qualification if applicable */
+                                            int qualified = 1;
+                                            if (has_qualifications) {
+                                                for (int q = 0; q < opts->num_qual_cols; q++) {
+                                                    if (opts->qual_col_idx[q] == j) {
+                                                        /* This column has qualifications - check if row i is qualified */
+                                                        qualified = 0;
+                                                        int start = opts->qual_row_ptr[q];
+                                                        int end = opts->qual_row_ptr[q + 1];
+                                                        for (int kk = start; kk < end; kk++) {
+                                                            if (opts->qual_rows[kk] == i) {
+                                                                qualified = 1;
+                                                                break;
+                                                            }
+                                                        }
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            if (qualified) real_count++;
+                                        }
+                                    }
+                                }
+                                if (real_count < opts->min_assignments) {
+                                    status = RALPH_LAP_INFEASIBLE;
+                                }
+                            }
                         }
 
                         ralph_lap_workspace_free(temp_ws);
@@ -3688,6 +3864,12 @@ static RalphLapStatus lap_solve_standard_unified(
 
         case RALPH_LAP_COST_SPARSE:
             /* Sparse LAP - call the sparse solver */
+            /* Note: Qualifications and cardinality bounds not supported for sparse */
+            if (has_qualifications || has_cardinality) {
+                /* These require dense representation; could convert but not implemented */
+                status = RALPH_LAP_INVALID_INPUT;
+                break;
+            }
             /* Note: ralph_lap_solve_sparse returns col_sol but not u/v */
             if (has_priorities) {
                 /* Copy sparse values and apply priorities */
@@ -3737,6 +3919,11 @@ static RalphLapStatus lap_solve_standard_unified(
 
         case RALPH_LAP_COST_CALLBACK:
             /* Callback-based LAP - call internal directly */
+            /* Note: Qualifications and cardinality bounds not supported for callbacks */
+            if (has_qualifications || has_cardinality) {
+                status = RALPH_LAP_INVALID_INPUT;
+                break;
+            }
             if (prob->n == 1) {
                 result->row_sol[0] = 0;
                 if (result->col_sol) result->col_sol[0] = 0;
