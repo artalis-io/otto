@@ -186,7 +186,7 @@ else
     echo -e "  ${YELLOW}Building Locus index (this may take a while)...${NC}"
     # Build index and save it - runs synchronously with --build-only (exits after saving)
     echo -n "  "
-    ./locus/api/locus-geocoder --build-only -s "$LOCUS_IDX" "$PBF_FILE" 2>&1 | while read line; do
+    ./locus/api/locus-geocoder --build-only -S "$LOCUS_IDX" "$PBF_FILE" 2>&1 | while read line; do
         printf "."
     done
     echo ""

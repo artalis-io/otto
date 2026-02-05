@@ -28,7 +28,7 @@ make
 ./locus-geocoder -p 8090 ../data/monaco-latest.osm.pbf
 
 # Run with saved index (fast startup)
-./locus-geocoder -s monaco.idx ../data/monaco-latest.osm.pbf  # Build and save
+./locus-geocoder -S monaco.idx ../data/monaco-latest.osm.pbf  # Build and save
 ./locus-geocoder monaco.idx                                    # Load from index
 ```
 
@@ -220,7 +220,7 @@ Common options:
   -v, --verbose             Increase verbosity
 
 Locus-specific options:
-  -s, --save PATH           Save index to binary file after building
+  -S, --save PATH           Save index to binary file after building
   --build-only              Exit after building/saving index (no HTTP server)
   --workers N               Geocode worker threads (default: auto)
 ```
