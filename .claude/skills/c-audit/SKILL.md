@@ -639,6 +639,142 @@ if (sh_workqueue_item_expired(queue, item) || work->cancelled) {
 - [ ] HTTP handler sets `cancelled = 1` on timeout
 - [ ] Workers check `cancelled` before CPU-intensive processing
 
+#### Thread Completion Signaling (`shared/include/sh_completion.h`)
+
+**Required: Use ShCompletion for work item completion signaling instead of manual mutex/cond patterns.**
+
+```c
+#include "sh_completion.h"
+
+/* Work item struct uses ShCompletion instead of manual fields */
+typedef struct {
+    /* Request parameters */
+    int x, y, z;
+
+    /* Response (set by worker) */
+    uint8_t *response_data;
+    size_t response_size;
+    int status_code;
+
+    /* Completion signaling (replaces manual mutex/cond/completed/cancelled) */
+    ShCompletion completion;
+} RenderWorkItem;
+
+/* Initialize work item */
+static void render_work_item_init(RenderWorkItem *item) {
+    memset(item, 0, sizeof(*item));
+    item->status_code = 500;  /* Default to error */
+    sh_completion_init(&item->completion);
+}
+
+/* Clean up work item */
+static void render_work_item_cleanup(RenderWorkItem *item) {
+    sh_completion_cleanup(&item->completion);
+    free(item->response_data);
+}
+
+/* HTTP handler waits for completion */
+if (!sh_completion_wait(&item->completion, timeout_ms)) {
+    /* Timeout - mark as cancelled */
+    sh_completion_cancel(&item->completion);
+    mg_http_reply(c, 504, headers, "Request timeout\n");
+    return;
+}
+
+/* Worker signals completion */
+sh_completion_signal(&item->completion);
+
+/* Worker checks for cancellation before CPU work */
+if (sh_completion_is_cancelled(&item->completion)) {
+    /* Skip processing - HTTP handler already returned 504 */
+    sh_completion_signal(&item->completion);
+    return;
+}
+```
+
+**Why use ShCompletion:**
+- Eliminates ~20 lines of manual mutex/cond boilerplate per work item type
+- Thread-safe, well-tested implementation in shared library
+- Consistent pattern across all API servers
+- Handles edge cases (spurious wakeups, cleanup order)
+
+**Audit Checks:**
+- [ ] Uses `ShCompletion` instead of manual `pthread_mutex_t`/`pthread_cond_t`/`completed`/`cancelled` fields
+- [ ] Calls `sh_completion_init()` in work item init
+- [ ] Calls `sh_completion_cleanup()` in work item cleanup
+- [ ] Uses `sh_completion_wait()` with timeout in HTTP handler
+- [ ] Uses `sh_completion_cancel()` on timeout (not direct field assignment)
+- [ ] Uses `sh_completion_is_cancelled()` in worker (not direct field access)
+- [ ] Calls `sh_completion_signal()` when work complete
+
+#### Worker Pool Management (`shared/include/sh_worker_pool.h`)
+
+**Required: Use ShWorkerPool for work queue consumer threads instead of manual thread management.**
+
+```c
+#include "sh_worker_pool.h"
+
+static ShWorkerPool *s_worker_pool = NULL;
+
+/* Worker callback function (called by pool for each work item) */
+static void render_worker_callback(ShWorkItem *queue_item, void *ctx) {
+    (void)ctx;
+
+    RenderWorkItem *item = (RenderWorkItem *)queue_item->user_ctx;
+    if (!item) {
+        sh_workqueue_item_free(queue_item);
+        return;
+    }
+
+    /* Check expiration/cancellation before CPU work */
+    if (sh_workqueue_item_expired(s_work_queue, queue_item) ||
+        sh_completion_is_cancelled(&item->completion)) {
+        item->status_code = 504;
+        sh_completion_signal(&item->completion);
+        sh_workqueue_item_free(queue_item);
+        return;
+    }
+
+    /* Do the work */
+    process_request(item);
+
+    /* Signal completion and free queue item */
+    sh_completion_signal(&item->completion);
+    sh_workqueue_item_free(queue_item);
+}
+
+/* Initialize at startup */
+ShWorkerPoolConfig pool_cfg = {
+    .queue = s_work_queue,
+    .callback = render_worker_callback,
+    .ctx = NULL,
+    .poll_timeout_ms = 100
+};
+s_worker_pool = sh_worker_pool_create(num_workers, &pool_cfg);  /* 0 = auto-detect CPU count */
+
+printf("Created %d workers\n", sh_worker_pool_size(s_worker_pool));
+
+/* Shutdown sequence */
+sh_worker_pool_stop(s_worker_pool);   /* Signals queue shutdown, wakes threads */
+sh_worker_pool_join(s_worker_pool);   /* Waits for all threads to exit */
+sh_worker_pool_free(s_worker_pool);   /* Frees resources */
+```
+
+**Why use ShWorkerPool:**
+- Eliminates ~40 lines of manual pthread_create/join boilerplate
+- Auto-detects CPU count when num_workers=0
+- Handles partial thread creation failures gracefully
+- Proper shutdown sequence with queue signaling
+- Consistent pattern across all API servers
+
+**Audit Checks:**
+- [ ] Uses `ShWorkerPool` instead of manual `pthread_t` arrays
+- [ ] Worker function is a callback (`void (*)(ShWorkItem*, void*)`) not a thread function
+- [ ] Uses `sh_worker_pool_create()` with 0 for auto-detect or specific count
+- [ ] Shutdown uses `stop()` then `join()` then `free()` sequence
+- [ ] Uses `sh_worker_pool_size()` for stats instead of manual counter
+- [ ] No manual `pthread_create()` / `pthread_join()` for work queue consumers
+
 #### API Hardening Checklist
 
 | Check | Severity | Description |
@@ -646,7 +782,8 @@ if (sh_workqueue_item_expired(queue, item) || work->cancelled) {
 | Rate limiting | High | All endpoints protected from abuse |
 | Work queue | High | CPU-intensive ops don't block event loop |
 | Socket write timeout | High | `sh_mg_set_write_timeout()` on MG_EV_ACCEPT |
-| Work item cancellation | High | Cancelled flag set on HTTP timeout, checked by workers |
+| ShCompletion | High | Use `sh_completion.h` for work item signaling |
+| ShWorkerPool | High | Use `sh_worker_pool.h` for worker thread management |
 | Health endpoint | High | `/api/v1/health` exists and bypasses work queue |
 | Stats endpoint | High | `/api/v1/stats` exists, bypasses queue, includes queue/limiter stats |
 | 429 response | Medium | Correct status code for rate limiting |
@@ -654,7 +791,7 @@ if (sh_workqueue_item_expired(queue, item) || work->cancelled) {
 | 504 response | Medium | Correct status code for timeout |
 | Stats format | Medium | Stats match carta pattern (work_queue, rate_limit objects) |
 | Adaptive capacity | Low | Optional: auto-tune rate limits from response times |
-| Graceful shutdown | Medium | Clean thread termination |
+| Graceful shutdown | Medium | Clean thread termination via `sh_worker_pool_stop/join/free` |
 | Structured logging | Medium | Use `sh_log.h` for JSON/text logging |
 | Trace ID propagation | Medium | Extract/generate trace IDs via `sh_trace.h` |
 | Metrics endpoint | Medium | `/metrics` endpoint for Prometheus scraping |
@@ -1627,10 +1764,13 @@ Before marking a module as "hardened":
 - [ ] Rate limiting enabled via `sh_ratelimit`
 - [ ] Work queue for CPU-intensive operations via `sh_workqueue`
 - [ ] Socket write timeout via `sh_mg_set_write_timeout()` on `MG_EV_ACCEPT`
-- [ ] Work item `cancelled` flag set on HTTP timeout, checked by workers
+- [ ] Uses `ShCompletion` for work item signaling (not manual mutex/cond)
+- [ ] Uses `ShWorkerPool` for worker threads (not manual pthread_create)
+- [ ] Worker callback checks `sh_completion_is_cancelled()` before CPU work
+- [ ] HTTP handler uses `sh_completion_cancel()` on timeout
+- [ ] Shutdown sequence: `sh_worker_pool_stop()` → `join()` → `free()`
 - [ ] Proper HTTP status codes (429, 503, 504)
 - [ ] Stats endpoint exposes limiter/queue health
-- [ ] Graceful shutdown sequence
 - [ ] CORS headers on all responses (including OPTIONS preflight)
 
 **API Client Resilience (HTTP clients):**
