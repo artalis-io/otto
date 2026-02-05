@@ -1536,6 +1536,289 @@ void test_combined_scp_cuts(void) {
 }
 
 /* ============================================================================
+ * SCP Heuristics Tests (Phase 4)
+ * ============================================================================ */
+
+/*
+ * Test greedy set cover heuristic.
+ *
+ * Problem: 3 elements, 4 sets
+ * S0: covers {0, 1}, cost = 3
+ * S1: covers {1, 2}, cost = 3
+ * S2: covers {0},    cost = 2
+ * S3: covers {2},    cost = 2
+ *
+ * Greedy should select: S0 (cost 3, covers 2) then S3 (cost 2, covers 1)
+ * Total cost = 5, covering all elements
+ */
+void test_greedy_set_cover(void) {
+    printf("\n=== Test: Greedy Set Cover Heuristic ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 4 sets with varying costs */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S0: cost 3 */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S1: cost 3 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S2: cost 2 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S3: cost 2 */
+
+    /* Element 0: S0 + S2 >= 1 */
+    int idx0[] = {0, 2};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef, 'G', 1.0);
+
+    /* Element 1: S0 + S1 >= 1 */
+    int idx1[] = {0, 1};
+    lp_model_add_constraint(model, 2, idx1, coef, 'G', 1.0);
+
+    /* Element 2: S1 + S3 >= 1 */
+    int idx2[] = {1, 3};
+    lp_model_add_constraint(model, 2, idx2, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    /* Create MIP solver */
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    /* Run greedy heuristic */
+    double *solution = (double *)calloc(4, sizeof(double));
+    int result = heuristic_greedy_set_cover(solver, solution);
+    ASSERT(result == 0, "Greedy heuristic succeeded");
+
+    /* Calculate objective */
+    double obj = 0;
+    int selected = 0;
+    for (int j = 0; j < 4; j++) {
+        if (solution[j] > 0.5) {
+            obj += model->c[j];
+            selected++;
+        }
+    }
+    printf("  INFO: Greedy selected %d sets, cost = %.1f\n", selected, obj);
+    ASSERT(selected >= 2, "At least 2 sets selected");
+    ASSERT(obj <= 6.0, "Cost is reasonable (<= 6)");
+
+    /* Verify feasibility: all elements covered */
+    int covered[3] = {0, 0, 0};
+    if (solution[0] > 0.5) { covered[0]++; covered[1]++; }
+    if (solution[1] > 0.5) { covered[1]++; covered[2]++; }
+    if (solution[2] > 0.5) { covered[0]++; }
+    if (solution[3] > 0.5) { covered[2]++; }
+    ASSERT(covered[0] >= 1 && covered[1] >= 1 && covered[2] >= 1,
+           "All elements covered");
+
+    free(solution);
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/*
+ * Test LP-guided greedy heuristic.
+ */
+void test_lp_guided_greedy(void) {
+    printf("\n=== Test: LP-Guided Greedy Heuristic ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 3 sets, 2 elements */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S0: cost 2 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S1: cost 2 */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S2: cost 3 */
+
+    /* Element 0: S0 + S2 >= 1 */
+    int idx0[] = {0, 2};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef, 'G', 1.0);
+
+    /* Element 1: S1 + S2 >= 1 */
+    int idx1[] = {1, 2};
+    lp_model_add_constraint(model, 2, idx1, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    /* Fake LP solution biasing toward S2 */
+    double lp_sol[3] = {0.3, 0.3, 0.8};
+
+    double *solution = (double *)calloc(3, sizeof(double));
+    int result = heuristic_lp_guided_greedy(solver, lp_sol, solution);
+    ASSERT(result == 0, "LP-guided greedy succeeded");
+
+    /* With LP guidance toward S2, it should prefer S2 despite higher cost */
+    double obj = 0;
+    for (int j = 0; j < 3; j++) {
+        if (solution[j] > 0.5) obj += model->c[j];
+    }
+    printf("  INFO: LP-guided selected cost = %.1f\n", obj);
+    ASSERT(obj <= 5.0, "Cost is reasonable");
+
+    free(solution);
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/*
+ * Test local search improvement.
+ */
+void test_local_search_scp(void) {
+    printf("\n=== Test: Local Search SCP Improvement ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 3 sets, 2 elements - S0 covers both, S1 and S2 each cover one */
+    lp_model_add_var(model, 0.0, 1.0, 5.0, 'B');  /* S0: cost 5, covers both */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S1: cost 2, covers elem 0 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S2: cost 2, covers elem 1 */
+
+    /* Element 0: S0 + S1 >= 1 */
+    int idx0[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef, 'G', 1.0);
+
+    /* Element 1: S0 + S2 >= 1 */
+    int idx1[] = {0, 2};
+    lp_model_add_constraint(model, 2, idx1, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    /* Start with suboptimal solution: all sets selected */
+    double solution[3] = {1.0, 1.0, 1.0};
+    double initial_cost = 5.0 + 2.0 + 2.0;
+
+    int improvements = heuristic_local_search_scp(solver, solution);
+    ASSERT(improvements >= 0, "Local search completed");
+
+    double final_cost = 0;
+    for (int j = 0; j < 3; j++) {
+        if (solution[j] > 0.5) final_cost += model->c[j];
+    }
+
+    printf("  INFO: Local search: initial=%.1f, final=%.1f, improvements=%d\n",
+           initial_cost, final_cost, improvements);
+    ASSERT(final_cost < initial_cost, "Cost improved");
+
+    /* Should have removed redundant sets - either S0 alone or S1+S2 */
+    int s0 = solution[0] > 0.5;
+    int s1 = solution[1] > 0.5;
+    int s2 = solution[2] > 0.5;
+    ASSERT((s0 && !s1 && !s2) || (!s0 && s1 && s2),
+           "Removed redundant sets correctly");
+
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/*
+ * Test combined SCP heuristic.
+ */
+void test_combined_scp_heuristic(void) {
+    printf("\n=== Test: Combined SCP Heuristic ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 5 sets, 4 elements */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S0 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S1 */
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');  /* S2 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S3 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S4 */
+
+    /* Element 0: S0 + S1 >= 1 */
+    int idx0[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef, 'G', 1.0);
+
+    /* Element 1: S0 + S2 >= 1 */
+    int idx1[] = {0, 2};
+    lp_model_add_constraint(model, 2, idx1, coef, 'G', 1.0);
+
+    /* Element 2: S2 + S3 >= 1 */
+    int idx2[] = {2, 3};
+    lp_model_add_constraint(model, 2, idx2, coef, 'G', 1.0);
+
+    /* Element 3: S3 + S4 >= 1 */
+    int idx3[] = {3, 4};
+    lp_model_add_constraint(model, 2, idx3, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    double *solution = (double *)calloc(5, sizeof(double));
+    int result = heuristic_scp(solver, NULL, solution);
+    ASSERT(result == 0, "Combined SCP heuristic succeeded");
+
+    double obj = 0;
+    int selected = 0;
+    for (int j = 0; j < 5; j++) {
+        if (solution[j] > 0.5) {
+            obj += model->c[j];
+            selected++;
+        }
+    }
+    printf("  INFO: Combined heuristic: %d sets, cost = %.1f\n", selected, obj);
+    ASSERT(selected >= 2, "At least 2 sets needed");
+
+    /* Verify feasibility */
+    int covered[4] = {0, 0, 0, 0};
+    if (solution[0] > 0.5) { covered[0]++; covered[1]++; }
+    if (solution[1] > 0.5) { covered[0]++; }
+    if (solution[2] > 0.5) { covered[1]++; covered[2]++; }
+    if (solution[3] > 0.5) { covered[2]++; covered[3]++; }
+    if (solution[4] > 0.5) { covered[3]++; }
+    ASSERT(covered[0] >= 1 && covered[1] >= 1 && covered[2] >= 1 && covered[3] >= 1,
+           "All elements covered");
+
+    free(solution);
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/*
+ * Test that heuristics return -1 for non-SCP problems.
+ */
+void test_heuristic_non_scp(void) {
+    printf("\n=== Test: Heuristics Reject Non-SCP ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* Non-binary variable -> not SCP */
+    lp_model_add_var(model, 0.0, 5.0, 1.0, 'I');  /* Integer, not binary */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+
+    int idx[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    double solution[2];
+    int result = heuristic_greedy_set_cover(solver, solution);
+    ASSERT(result == -1, "Greedy rejects non-SCP");
+
+    result = heuristic_scp(solver, NULL, solution);
+    ASSERT(result == -1, "Combined heuristic rejects non-SCP");
+
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -1599,6 +1882,16 @@ int main(void) {
     test_odd_hole_cut_generation();
     test_lifted_cover_cut_generation();
     test_combined_scp_cuts();
+
+    printf("\nSCP Heuristics Tests\n");
+    printf("====================\n");
+
+    /* SCP heuristics tests (Phase 4) */
+    test_greedy_set_cover();
+    test_lp_guided_greedy();
+    test_local_search_scp();
+    test_combined_scp_heuristic();
+    test_heuristic_non_scp();
 
     /* Summary */
     printf("\n=======================\n");
