@@ -460,12 +460,28 @@ void ct_render_polygon(CTRenderContext *ctx,
 
     /* Find bounding box */
     int min_y = points[0].y, max_y = points[0].y;
+    int min_x = points[0].x, max_x = points[0].x;
     for (int i = 1; i < num_points; i++) {
         if (points[i].y < min_y) min_y = points[i].y;
         if (points[i].y > max_y) max_y = points[i].y;
+        if (points[i].x < min_x) min_x = points[i].x;
+        if (points[i].x > max_x) max_x = points[i].x;
     }
 
-    if (min_y >= ctx->height || max_y < 0) return;
+    /* Check if polygon is entirely outside visible area */
+    if (min_y >= ctx->height || max_y < 0 ||
+        min_x >= ctx->width || max_x < 0) {
+#ifndef NDEBUG
+        static int outside_warnings = 0;
+        if (outside_warnings < 10) {
+            fprintf(stderr, "ct_render_polygon: polygon entirely outside tile "
+                    "(bbox: x=%d-%d, y=%d-%d, tile: %dx%d)\n",
+                    min_x, max_x, min_y, max_y, ctx->width, ctx->height);
+            outside_warnings++;
+        }
+#endif
+        return;
+    }
     if (min_y < 0) min_y = 0;
     if (max_y >= ctx->height) max_y = ctx->height - 1;
 
@@ -508,6 +524,22 @@ void ct_render_polygon(CTRenderContext *ctx,
         edges[num_edges].x = (double)x0;
         edges[num_edges].dx = (double)(x1 - x0) / (double)(y1 - y0);
         num_edges++;
+    }
+
+    if (num_edges < 2) {
+#ifndef NDEBUG
+        static int few_edges_single_warnings = 0;
+        if (few_edges_single_warnings < 20) {
+            fprintf(stderr, "ct_render_polygon: skipping polygon with only %d edges "
+                    "(num_points=%d)\n", num_edges, num_points);
+            few_edges_single_warnings++;
+        }
+#endif
+        if (edges_allocated) {
+            free(edges);
+            free(active);
+        }
+        return;
     }
 
     qsort(edges, num_edges, sizeof(CTEdge), compare_edges);
@@ -621,12 +653,28 @@ void ct_render_multipolygon(CTRenderContext *ctx,
 
     /* Find bounding box across all points */
     int min_y = points[0].y, max_y = points[0].y;
+    int min_x = points[0].x, max_x = points[0].x;
     for (int i = 1; i < num_points; i++) {
         if (points[i].y < min_y) min_y = points[i].y;
         if (points[i].y > max_y) max_y = points[i].y;
+        if (points[i].x < min_x) min_x = points[i].x;
+        if (points[i].x > max_x) max_x = points[i].x;
     }
 
-    if (min_y >= ctx->height || max_y < 0) return;
+    /* Check if polygon is entirely outside visible area */
+    if (min_y >= ctx->height || max_y < 0 ||
+        min_x >= ctx->width || max_x < 0) {
+#ifndef NDEBUG
+        static int mp_outside_warnings = 0;
+        if (mp_outside_warnings < 10) {
+            fprintf(stderr, "ct_render_multipolygon: polygon entirely outside tile "
+                    "(bbox: x=%d-%d, y=%d-%d, tile: %dx%d, rings=%d)\n",
+                    min_x, max_x, min_y, max_y, ctx->width, ctx->height, num_rings);
+            mp_outside_warnings++;
+        }
+#endif
+        return;
+    }
     if (min_y < 0) min_y = 0;
     if (max_y >= ctx->height) max_y = ctx->height - 1;
 
@@ -685,6 +733,14 @@ void ct_render_multipolygon(CTRenderContext *ctx,
     }
 
     if (num_edges < 2) {
+#ifndef NDEBUG
+        static int few_edges_warnings = 0;
+        if (few_edges_warnings < 20) {
+            fprintf(stderr, "ct_render_multipolygon: skipping polygon with only %d edges "
+                    "(num_points=%d, num_rings=%d)\n", num_edges, num_points, num_rings);
+            few_edges_warnings++;
+        }
+#endif
         if (edges_allocated) {
             free(edges);
             free(active);
