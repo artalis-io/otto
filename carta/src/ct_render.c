@@ -564,9 +564,16 @@ void ct_render_polygon(CTRenderContext *ctx,
 #ifndef NDEBUG
         if (num_active % 2 != 0) {
             static int odd_warnings_single = 0;
-            if (odd_warnings_single < 10) {
-                fprintf(stderr, "ct_render_polygon: odd active edge count %d at y=%d\n",
-                        num_active, y);
+            if (odd_warnings_single < 20) {
+                fprintf(stderr, "ct_render_polygon: odd active edge count %d at y=%d "
+                        "(num_points=%d, num_edges=%d)\n",
+                        num_active, y, num_points, num_edges);
+                if (odd_warnings_single == 0) {
+                    for (int dbg = 0; dbg < num_active && dbg < 5; dbg++) {
+                        fprintf(stderr, "  edge[%d]: x=%.1f, y_min=%d, y_max=%d, dx=%.4f\n",
+                                dbg, active[dbg].x, active[dbg].y_min, active[dbg].y_max, active[dbg].dx);
+                    }
+                }
                 odd_warnings_single++;
             }
         }
@@ -739,9 +746,17 @@ void ct_render_multipolygon(CTRenderContext *ctx,
 #ifndef NDEBUG
         if (num_active % 2 != 0) {
             static int odd_warnings = 0;
-            if (odd_warnings < 10) {
-                fprintf(stderr, "ct_render_multipolygon: odd active edge count %d at y=%d\n",
-                        num_active, y);
+            if (odd_warnings < 20) {
+                fprintf(stderr, "ct_render_multipolygon: odd active edge count %d at y=%d "
+                        "(num_points=%d, num_rings=%d, num_edges=%d)\n",
+                        num_active, y, num_points, num_rings, num_edges);
+                if (odd_warnings == 0) {
+                    /* Print first few active edges for debugging */
+                    for (int dbg = 0; dbg < num_active && dbg < 5; dbg++) {
+                        fprintf(stderr, "  edge[%d]: x=%.1f, y_min=%d, y_max=%d, dx=%.4f\n",
+                                dbg, active[dbg].x, active[dbg].y_min, active[dbg].y_max, active[dbg].dx);
+                    }
+                }
                 odd_warnings++;
             }
         }
