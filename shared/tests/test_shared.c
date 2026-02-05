@@ -11,6 +11,7 @@
 #include "sh_trace.h"
 #include "sh_metrics.h"
 #include "sh_completion.h"
+#include "sh_worker_pool.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1382,6 +1383,139 @@ TEST(completion_wait_timeout)
     ASSERT_EQ(result, 0);  /* Timeout */
 
     sh_completion_cleanup(&comp);
+}
+
+/* ============================================================================
+ * Worker Pool Tests
+ * ============================================================================ */
+
+/* Counter for worker pool tests */
+static volatile int s_pool_items_processed = 0;
+static pthread_mutex_t s_pool_test_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void pool_test_callback(ShWorkItem *item, void *ctx)
+{
+    (void)ctx;
+    if (!item) return;
+
+    /* Simulate some work */
+    usleep(10000);  /* 10ms */
+
+    /* Increment counter */
+    pthread_mutex_lock(&s_pool_test_mutex);
+    s_pool_items_processed++;
+    pthread_mutex_unlock(&s_pool_test_mutex);
+
+    sh_workqueue_item_free(item);
+}
+
+TEST(worker_pool_create_free)
+{
+    ShWorkQueue *queue = sh_workqueue_create(10, 5.0);
+    ASSERT(queue != NULL);
+
+    ShWorkerPoolConfig cfg = {
+        .queue = queue,
+        .callback = pool_test_callback,
+        .ctx = NULL
+    };
+
+    ShWorkerPool *pool = sh_worker_pool_create(2, &cfg);
+    ASSERT(pool != NULL);
+    ASSERT(sh_worker_pool_size(pool) == 2);
+    ASSERT(sh_worker_pool_queue(pool) == queue);
+
+    sh_worker_pool_stop(pool);
+    sh_worker_pool_join(pool);
+    sh_worker_pool_free(pool);
+    sh_workqueue_free(queue);
+}
+
+TEST(worker_pool_create_invalid)
+{
+    ShWorkerPoolConfig cfg = { .queue = NULL, .callback = NULL };
+
+    /* NULL config */
+    ASSERT(sh_worker_pool_create(2, NULL) == NULL);
+
+    /* NULL queue */
+    cfg.callback = pool_test_callback;
+    ASSERT(sh_worker_pool_create(2, &cfg) == NULL);
+
+    /* NULL callback */
+    ShWorkQueue *queue = sh_workqueue_create(10, 5.0);
+    cfg.queue = queue;
+    cfg.callback = NULL;
+    ASSERT(sh_worker_pool_create(2, &cfg) == NULL);
+
+    sh_workqueue_free(queue);
+}
+
+TEST(worker_pool_null_safe)
+{
+    /* These should not crash */
+    sh_worker_pool_stop(NULL);
+    sh_worker_pool_join(NULL);
+    sh_worker_pool_free(NULL);
+    ASSERT(sh_worker_pool_size(NULL) == 0);
+    ASSERT(sh_worker_pool_queue(NULL) == NULL);
+}
+
+TEST(worker_pool_auto_detect)
+{
+    ShWorkQueue *queue = sh_workqueue_create(10, 5.0);
+    ASSERT(queue != NULL);
+
+    ShWorkerPoolConfig cfg = {
+        .queue = queue,
+        .callback = pool_test_callback
+    };
+
+    /* 0 = auto-detect CPU count */
+    ShWorkerPool *pool = sh_worker_pool_create(0, &cfg);
+    ASSERT(pool != NULL);
+    ASSERT(sh_worker_pool_size(pool) >= 1);  /* At least 1 worker */
+
+    sh_worker_pool_stop(pool);
+    sh_worker_pool_join(pool);
+    sh_worker_pool_free(pool);
+    sh_workqueue_free(queue);
+}
+
+TEST(worker_pool_processes_items)
+{
+    ShWorkQueue *queue = sh_workqueue_create(10, 5.0);
+    ASSERT(queue != NULL);
+
+    s_pool_items_processed = 0;
+
+    ShWorkerPoolConfig cfg = {
+        .queue = queue,
+        .callback = pool_test_callback
+    };
+
+    ShWorkerPool *pool = sh_worker_pool_create(2, &cfg);
+    ASSERT(pool != NULL);
+
+    /* Push 5 items */
+    for (int i = 0; i < 5; i++) {
+        int *data = malloc(sizeof(int));
+        *data = i;
+        ShWorkItem item = { .data = data, .data_len = sizeof(int) };
+        ASSERT(sh_workqueue_push(queue, &item) == 1);
+    }
+
+    /* Wait for processing (with timeout) */
+    for (int i = 0; i < 100 && s_pool_items_processed < 5; i++) {
+        usleep(20000);  /* 20ms */
+    }
+
+    ASSERT_EQ(s_pool_items_processed, 5);
+
+    sh_worker_pool_stop(pool);
+    sh_worker_pool_join(pool);
+    sh_worker_pool_free(pool);
+    sh_workqueue_free(queue);
 }
 
 /* ============================================================================
@@ -2806,6 +2940,13 @@ int main(void)
     RUN_TEST(completion_signal_null_safe);
     RUN_TEST(completion_wait_success);
     RUN_TEST(completion_wait_timeout);
+
+    printf("\nWorker Pool:\n");
+    RUN_TEST(worker_pool_create_free);
+    RUN_TEST(worker_pool_create_invalid);
+    RUN_TEST(worker_pool_null_safe);
+    RUN_TEST(worker_pool_auto_detect);
+    RUN_TEST(worker_pool_processes_items);
 
     printf("\nCapacity Planning:\n");
     RUN_TEST(capacity_calculate_basic);
