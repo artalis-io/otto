@@ -267,6 +267,83 @@ int solve_network_at_node(
 );
 
 /* ============================================================================
+ * Set Covering/Partitioning Detection
+ * ============================================================================ */
+
+/*
+ * Set cover problem type.
+ *
+ * A problem has set cover structure if:
+ * - All variables are binary (0 <= x <= 1, integer)
+ * - All coefficients are 0 or 1
+ * - RHS values are positive
+ *
+ * Types based on constraint senses:
+ * - COVERING: Ax >= b (each element covered by at least one set)
+ * - PARTITIONING: Ax = b (each element covered by exactly one set)
+ * - PACKING: Ax <= b (each element covered by at most one set)
+ * - MIXED: combination of above
+ */
+typedef enum {
+    RALPH_SETCOVER_NONE = 0,        /* Not a set cover problem */
+    RALPH_SETCOVER_COVERING,        /* All constraints are >= (set covering) */
+    RALPH_SETCOVER_PARTITIONING,    /* All constraints are = (set partitioning) */
+    RALPH_SETCOVER_PACKING,         /* All constraints are <= (set packing) */
+    RALPH_SETCOVER_MIXED            /* Mix of constraint types */
+} RalphSetCoverType;
+
+/*
+ * Set cover signature - structural information extracted from LP/MIP model.
+ */
+typedef struct {
+    RalphSetCoverType type;         /* Problem classification */
+    int num_elements;               /* Number of constraints (elements to cover) */
+    int num_sets;                   /* Number of variables (sets) */
+
+    /* Constraint type counts */
+    int num_covering;               /* Count of >= constraints */
+    int num_partitioning;           /* Count of = constraints */
+    int num_packing;                /* Count of <= constraints */
+
+    /* Structural statistics */
+    int *set_size;                  /* Number of elements in each set (size num_sets) */
+    int *element_coverage;          /* Number of sets covering each element (size num_elements) */
+    double *rhs;                    /* RHS values (size num_elements) */
+    double density;                 /* nnz / (num_elements * num_sets) */
+
+    /* Cost statistics */
+    double min_cost;                /* Minimum set cost */
+    double max_cost;                /* Maximum set cost */
+    double avg_cost;                /* Average set cost */
+
+    /* For internal use */
+    int obj_sense;                  /* 1=minimize, -1=maximize */
+} SetCoverSignature;
+
+/*
+ * Detect set covering/partitioning structure in an LP/MIP model.
+ *
+ * Parameters:
+ *   model - LP/MIP model to analyze
+ *   sig   - Output: set cover signature (caller allocates struct)
+ *
+ * Returns:
+ *   1 if set cover structure detected, 0 otherwise.
+ *   If 1, sig arrays are allocated and must be freed with detect_set_cover_free().
+ */
+int detect_set_cover(const LPModel *model, SetCoverSignature *sig);
+
+/*
+ * Free memory allocated by detect_set_cover().
+ */
+void detect_set_cover_free(SetCoverSignature *sig);
+
+/*
+ * Get human-readable name for set cover type.
+ */
+const char *ralph_set_cover_type_name(RalphSetCoverType type);
+
+/* ============================================================================
  * Runtime Configuration
  * ============================================================================ */
 
