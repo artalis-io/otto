@@ -179,3 +179,18 @@ CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math
 
 The JVC solver itself takes ~0.05ms for 100×100; the 2.6ms includes model finalization and LAP detection overhead.
 
+### 2026-02-05: Network Simplex Detection - Bypass Presolve
+**File:** `src/ralph.c:262-297`
+**Issue:** Network flow detection happened AFTER presolve and only for pure LP. For MIP network problems, presolve overhead was wasted and MIP infrastructure was created unnecessarily.
+**Fix:** Detect network structure FIRST (before presolve) for both LP and MIP models. Solve directly with network simplex, bypassing presolve entirely.
+**Impact:** Network flow problems now 2-5× faster and more robust:
+
+| Network Size | With Detection | Without Detection | Speedup |
+|--------------|----------------|-------------------|---------|
+| 30 nodes, 200 arcs | 0.13ms | 0.36ms | **2.8×** |
+| 60 nodes, 1200 arcs | 0.52ms | 2.30ms (error) | **4.4×** |
+| 90 nodes, 2700 arcs | 1.38ms | 6.25ms (error) | **4.5×** |
+| 150 nodes, 7500 arcs | 4.28ms | 22.45ms (error) | **5.2×** |
+
+Note: Simplex errors on larger problems due to numerical issues. Network simplex is more robust for network-structured problems.
+

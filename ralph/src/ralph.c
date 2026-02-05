@@ -224,11 +224,13 @@ int ralph_optimize(RalphModel *model) {
     int m_orig = model->lp_model->num_cons;
 
     /*
-     * Try LAP detection BEFORE presolve.
-     * LAP problems have tight structure that presolve can't simplify,
-     * and presolve is expensive for large problems. Detecting LAP first
+     * Try special structure detection BEFORE presolve.
+     * LAP and network problems have tight structure that presolve can't simplify,
+     * and presolve is expensive for large problems. Detecting structure first
      * and solving directly saves the presolve overhead.
      */
+
+    /* Try LAP detection first (most specific) */
     if (model->detect_special && ralph_get_detect_lap()) {
         LAPSignature lap_sig;
         if (detect_lap(model->lp_model, &lap_sig)) {
@@ -260,7 +262,44 @@ int ralph_optimize(RalphModel *model) {
         }
     }
 
-    /* Apply presolve if enabled (LAP problems already handled above) */
+    /* Try network detection (more general than LAP) */
+    if (model->detect_special && ralph_get_detect_network()) {
+        NetworkSignature net_sig;
+        if (detect_network(model->lp_model, &net_sig)) {
+            RalphNetworkType type = detect_network_type(&net_sig);
+            if (model->verbose) {
+                const char *type_str = "general";
+                if (type == RALPH_NETWORK_ASSIGNMENT) type_str = "assignment";
+                else if (type == RALPH_NETWORK_TRANSPORTATION) type_str = "transportation";
+                else if (type == RALPH_NETWORK_SHORTEST_PATH) type_str = "shortest path";
+                printf("Detected network structure: %d nodes, %d arcs (%s)\n",
+                       net_sig.num_nodes, net_sig.num_arcs, type_str);
+                printf("Solving with network simplex (skipping presolve)\n");
+            }
+
+            /* Solve as network flow - bypasses presolve and MIP infrastructure */
+            model->solution = (double*)calloc(n_orig, sizeof(double));
+            if (model->solution) {
+                double net_obj;
+                if (solve_as_network(&net_sig, model->solution, &net_obj) == 0) {
+                    model->status = RALPH_STATUS_OPTIMAL;
+                    model->obj_value = net_obj;
+                    model->best_bound = net_obj;
+                    model->node_count = 0;
+                    model->iteration_count = 0;
+
+                    detect_network_free(&net_sig);
+                    return 0;
+                }
+                free(model->solution);
+                model->solution = NULL;
+            }
+            detect_network_free(&net_sig);
+            /* Fall through to normal path if network solve failed */
+        }
+    }
+
+    /* Apply presolve if enabled (special structure already handled above) */
     PresolveResult *presolved = NULL;
     LPModel *solve_model = model->lp_model;
 
@@ -276,7 +315,9 @@ int ralph_optimize(RalphModel *model) {
         }
     }
 
-    /* Try LAP detection for pure LP (not MIP) - post-presolve */
+    /* Try LAP detection for pure LP (not MIP) - post-presolve fallback.
+     * This is a backup in case presolve reveals LAP structure that wasn't
+     * detected in the original model (rare but possible). */
     if (!ralph_is_mip(model) && model->detect_special && ralph_get_detect_lap()) {
         LAPSignature lap_sig;
         if (detect_lap(solve_model, &lap_sig)) {
@@ -315,7 +356,9 @@ int ralph_optimize(RalphModel *model) {
         }
     }
 
-    /* Try network detection for pure LP (not MIP) */
+    /* Try network detection for pure LP (not MIP) - post-presolve fallback.
+     * This is a backup in case presolve reveals network structure that wasn't
+     * detected in the original model (rare but possible). */
     if (!ralph_is_mip(model) && model->detect_special && ralph_get_detect_network()) {
         NetworkSignature net_sig;
         if (detect_network(solve_model, &net_sig)) {
@@ -360,7 +403,7 @@ int ralph_optimize(RalphModel *model) {
     }
 
     if (ralph_is_mip(model)) {
-        /* MIP solve - LAP problems were already handled above before presolve */
+        /* MIP solve - LAP and network problems were already handled above before presolve */
         model->mip_solver = mip_create(solve_model, model->detect_special, model->node_pool_capacity);
         if (!model->mip_solver) {
             if (presolved) presolve_free(presolved);
