@@ -201,37 +201,56 @@ static void encode_geometry(CTMVTEncoder *enc, const CTFeature *feature)
             }
         }
     } else if (feature->type == CT_GEOM_POLYGON) {
-        /* MoveTo first point */
-        enc_write_varint(enc, (MVT_CMD_MOVETO << 3) | 1);
-        int32_t dx = feature->points[0].x - cx;
-        int32_t dy = feature->points[0].y - cy;
-        enc_write_svarint(enc, dx);
-        enc_write_svarint(enc, dy);
-        cx = feature->points[0].x;
-        cy = feature->points[0].y;
+        /* Handle multipolygons (multiple rings) */
+        int num_rings = (feature->num_rings > 0 && feature->ring_ends) ?
+                        feature->num_rings : 1;
+        int ring_start = 0;
 
-        /* LineTo remaining points (excluding last if it's the same as first) */
-        int last_idx = feature->num_points - 1;
-        if (feature->points[last_idx].x == feature->points[0].x &&
-            feature->points[last_idx].y == feature->points[0].y) {
-            last_idx--;
-        }
+        for (int r = 0; r < num_rings; r++) {
+            int ring_end = (feature->ring_ends && r < feature->num_rings) ?
+                           feature->ring_ends[r] : feature->num_points;
+            int ring_points = ring_end - ring_start;
 
-        if (last_idx > 0) {
-            enc_write_varint(enc, (MVT_CMD_LINETO << 3) | last_idx);
-
-            for (int i = 1; i <= last_idx; i++) {
-                dx = feature->points[i].x - cx;
-                dy = feature->points[i].y - cy;
-                enc_write_svarint(enc, dx);
-                enc_write_svarint(enc, dy);
-                cx = feature->points[i].x;
-                cy = feature->points[i].y;
+            if (ring_points < 3) {
+                ring_start = ring_end;
+                continue;
             }
-        }
 
-        /* ClosePath */
-        enc_write_varint(enc, (MVT_CMD_CLOSEPATH << 3) | 1);
+            /* MoveTo first point of ring */
+            enc_write_varint(enc, (MVT_CMD_MOVETO << 3) | 1);
+            int32_t dx = feature->points[ring_start].x - cx;
+            int32_t dy = feature->points[ring_start].y - cy;
+            enc_write_svarint(enc, dx);
+            enc_write_svarint(enc, dy);
+            cx = feature->points[ring_start].x;
+            cy = feature->points[ring_start].y;
+
+            /* LineTo remaining points (excluding last if it closes the ring) */
+            int last_idx = ring_end - 1;
+            if (feature->points[last_idx].x == feature->points[ring_start].x &&
+                feature->points[last_idx].y == feature->points[ring_start].y) {
+                last_idx--;
+            }
+
+            int lineto_count = last_idx - ring_start;
+            if (lineto_count > 0) {
+                enc_write_varint(enc, (MVT_CMD_LINETO << 3) | lineto_count);
+
+                for (int i = ring_start + 1; i <= last_idx; i++) {
+                    dx = feature->points[i].x - cx;
+                    dy = feature->points[i].y - cy;
+                    enc_write_svarint(enc, dx);
+                    enc_write_svarint(enc, dy);
+                    cx = feature->points[i].x;
+                    cy = feature->points[i].y;
+                }
+            }
+
+            /* ClosePath */
+            enc_write_varint(enc, (MVT_CMD_CLOSEPATH << 3) | 1);
+
+            ring_start = ring_end;
+        }
     }
 
     /* Write actual length */
@@ -484,15 +503,48 @@ size_t ct_generate_mvt(const CTPBFContext *ctx, CTTileCoord coord,
         int clipped_count = 0;
 
         if (f->type == CT_GEOM_POLYGON) {
-            ct_clip_polygon(f->points, f->num_points,
-                           opts->extent, opts->buffer,
-                           &clipped, &clipped_count);
-            /* Skip degenerate polygons (need at least 3 points) */
-            if (clipped_count < 3) {
-                free(clipped);
-                free(f->points);
-                f->points = NULL;
-                continue;
+            /* For multipolygons, skip clipping to preserve ring structure.
+             * Clipping multipolygons correctly requires per-ring clipping
+             * which can produce complex results (ring split, eliminated, etc.)
+             * The MVT renderer handles out-of-bounds coordinates correctly. */
+            if (f->num_rings > 1 && f->ring_ends) {
+                /* Just do a quick bbox check - skip if entirely outside */
+                int min_x = f->points[0].x, max_x = f->points[0].x;
+                int min_y = f->points[0].y, max_y = f->points[0].y;
+                for (int j = 1; j < f->num_points; j++) {
+                    if (f->points[j].x < min_x) min_x = f->points[j].x;
+                    if (f->points[j].x > max_x) max_x = f->points[j].x;
+                    if (f->points[j].y < min_y) min_y = f->points[j].y;
+                    if (f->points[j].y > max_y) max_y = f->points[j].y;
+                }
+                /* Check if entirely outside tile with buffer */
+                if (max_x < -opts->buffer || min_x > opts->extent + opts->buffer ||
+                    max_y < -opts->buffer || min_y > opts->extent + opts->buffer) {
+                    free(f->points);
+                    free(f->ring_ends);
+                    f->points = NULL;
+                    f->ring_ends = NULL;
+                    continue;
+                }
+                /* Keep multipolygon as-is (no clipping) */
+                clipped = f->points;
+                clipped_count = f->num_points;
+                f->points = NULL;  /* Transfer ownership */
+            } else {
+                ct_clip_polygon(f->points, f->num_points,
+                               opts->extent, opts->buffer,
+                               &clipped, &clipped_count);
+                /* Skip degenerate polygons (need at least 3 points) */
+                if (clipped_count < 3) {
+                    free(clipped);
+                    free(f->points);
+                    f->points = NULL;
+                    continue;
+                }
+                /* Single-ring polygon after clipping loses ring_ends */
+                free(f->ring_ends);
+                f->ring_ends = NULL;
+                f->num_rings = 0;
             }
         } else if (f->type == CT_GEOM_LINESTRING) {
             int *segments = NULL;
@@ -538,7 +590,14 @@ size_t ct_generate_mvt(const CTPBFContext *ctx, CTTileCoord coord,
         if (opts->simplify && f->num_points > 2) {
             float tolerance = (float)opts->tolerance;
             if (f->type == CT_GEOM_POLYGON) {
-                ct_simplify_poly_inplace(f->points, &f->num_points, tolerance);
+                /* Use ring-aware simplification for multipolygons */
+                if (f->num_rings > 1 && f->ring_ends) {
+                    ct_simplify_multipolygon_inplace(f->points, &f->num_points,
+                                                     f->ring_ends, f->num_rings,
+                                                     tolerance);
+                } else {
+                    ct_simplify_poly_inplace(f->points, &f->num_points, tolerance);
+                }
             } else if (f->type == CT_GEOM_LINESTRING) {
                 ct_simplify_line_inplace(f->points, &f->num_points, tolerance);
             }

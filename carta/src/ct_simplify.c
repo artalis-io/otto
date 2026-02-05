@@ -258,6 +258,70 @@ void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolera
     free(keep);
 }
 
+void ct_simplify_multipolygon_inplace(CTTilePoint *points, int *num_points,
+                                      int *ring_ends, int num_rings,
+                                      float tolerance)
+{
+    if (num_rings <= 0 || !ring_ends) {
+        /* Fall back to single-ring simplification */
+        ct_simplify_poly_inplace(points, num_points, tolerance);
+        return;
+    }
+
+    int total_points = *num_points;
+    if (total_points < 3) return;
+
+    /* Process each ring separately */
+    int write_idx = 0;
+
+    for (int r = 0; r < num_rings; r++) {
+        int ring_end = ring_ends[r];
+        int ring_start = (r == 0) ? 0 : ring_ends[r - 1];
+        int ring_points = ring_end - ring_start;
+
+        if (ring_points < 3) {
+            /* Copy ring as-is (too small to simplify) */
+            for (int i = ring_start; i < ring_end; i++) {
+                points[write_idx++] = points[i];
+            }
+            ring_ends[r] = write_idx;
+            continue;
+        }
+
+        /* Simplify this ring in a temporary buffer */
+        CTTilePoint *ring_copy = malloc(ring_points * sizeof(CTTilePoint));
+        if (!ring_copy) {
+            /* Copy as-is on allocation failure */
+            for (int i = ring_start; i < ring_end; i++) {
+                points[write_idx++] = points[i];
+            }
+            ring_ends[r] = write_idx;
+            continue;
+        }
+
+        for (int i = 0; i < ring_points; i++) {
+            ring_copy[i] = points[ring_start + i];
+        }
+
+        /* Simplify the ring */
+        int simplified_count = ring_points;
+        ct_simplify_poly_inplace(ring_copy, &simplified_count, tolerance);
+
+        /* Ensure minimum ring validity */
+        if (simplified_count < 3) simplified_count = ring_points < 3 ? ring_points : 3;
+
+        /* Copy simplified ring back */
+        for (int i = 0; i < simplified_count; i++) {
+            points[write_idx++] = ring_copy[i];
+        }
+
+        ring_ends[r] = write_idx;
+        free(ring_copy);
+    }
+
+    *num_points = write_idx;
+}
+
 /* ============================================================================
  * Geographic Coordinate Simplification
  * ============================================================================ */

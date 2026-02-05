@@ -1105,6 +1105,45 @@ TEST(simplify_preserves_endpoints)
     return 1;
 }
 
+TEST(simplify_multipolygon_preserves_rings)
+{
+    /* Test that multipolygon simplification preserves ring structure */
+    /* Outer ring: 8 points square with detail, Inner ring: 8 points square */
+    CTTilePoint points[] = {
+        /* Outer ring (8 points) */
+        {0, 0}, {50, 1}, {100, 0}, {101, 50}, {100, 100}, {50, 99}, {0, 100}, {-1, 50},
+        /* Inner ring / hole (8 points) */
+        {30, 30}, {40, 31}, {50, 30}, {51, 40}, {50, 50}, {40, 49}, {30, 50}, {29, 40}
+    };
+    int num_points = 16;
+    int ring_ends[] = {8, 16};
+    int num_rings = 2;
+
+    /* Make a copy since simplification is in-place */
+    CTTilePoint *copy = malloc(num_points * sizeof(CTTilePoint));
+    memcpy(copy, points, num_points * sizeof(CTTilePoint));
+    int *ring_ends_copy = malloc(num_rings * sizeof(int));
+    memcpy(ring_ends_copy, ring_ends, num_rings * sizeof(int));
+
+    /* Simplify with a tolerance that removes the small deviations */
+    ct_simplify_multipolygon_inplace(copy, &num_points, ring_ends_copy, num_rings, 5.0f);
+
+    /* Both rings should have at least 3 points */
+    int ring1_points = ring_ends_copy[0];
+    int ring2_points = ring_ends_copy[1] - ring_ends_copy[0];
+    ASSERT(ring1_points >= 3);
+    ASSERT(ring2_points >= 3);
+    ASSERT(num_points >= 6);  /* At least 3 points per ring */
+
+    /* Ring ends should be valid */
+    ASSERT(ring_ends_copy[0] <= num_points);
+    ASSERT(ring_ends_copy[1] == num_points);
+
+    free(copy);
+    free(ring_ends_copy);
+    return 1;
+}
+
 TEST(clip_polygon_inside)
 {
     /* Polygon fully inside clip region - should be unchanged */
@@ -2062,6 +2101,7 @@ int main(void)
     printf("\nGeometry:\n");
     run_test_simplify_short_line();
     run_test_simplify_preserves_endpoints();
+    run_test_simplify_multipolygon_preserves_rings();
     run_test_clip_polygon_inside();
     run_test_clip_polygon_partial();
     run_test_clip_polygon_outside();
