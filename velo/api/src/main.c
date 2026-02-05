@@ -35,6 +35,9 @@
 #include "polyline.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue, sh_cors, sh_capacity */
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
+#include "sh_log.h"
+#include "sh_trace.h"
+#include "sh_metrics.h"
 
 /* ============================================================================
  * Configuration
@@ -144,6 +147,20 @@ static int s_num_route_workers = 0;
 
 static void signal_handler(int signo) {
     s_signo = signo;
+}
+
+/* Trace ID header getter for HTTP requests */
+static const char *trace_header_getter(const char *name, void *ctx) {
+    struct mg_http_message *hm = (struct mg_http_message *)ctx;
+    struct mg_str *hdr = mg_http_get_header(hm, name);
+    if (hdr && hdr->len > 0) {
+        static __thread char hdr_buf[128];
+        size_t len = hdr->len < sizeof(hdr_buf) - 1 ? hdr->len : sizeof(hdr_buf) - 1;
+        memcpy(hdr_buf, hdr->buf, len);
+        hdr_buf[len] = '\0';
+        return hdr_buf;
+    }
+    return NULL;
 }
 
 /* ============================================================================
@@ -714,6 +731,22 @@ static void handle_stats(struct mg_connection *c) {
     send_json(c, 200, response);
 }
 
+/* GET /metrics - Prometheus metrics endpoint */
+static void handle_metrics(struct mg_connection *c) {
+    char *prom = sh_metrics_prometheus_output();
+    if (prom) {
+        mg_http_reply(c, 200,
+            "Content-Type: text/plain; version=0.0.4\r\n"
+            "Access-Control-Allow-Origin: *\r\n",
+            "%s", prom);
+        free(prom);
+    } else {
+        mg_http_reply(c, 500,
+            "Content-Type: text/plain\r\n",
+            "Failed to generate metrics\n");
+    }
+}
+
 static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
     if (!s_graph) {
         send_error(c, 503, "Graph not loaded");
@@ -1039,6 +1072,12 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
+        /* Start request timing */
+        ShMetricsTimer req_timer = sh_metrics_timer_start();
+
+        /* Extract or generate trace ID */
+        sh_trace_from_headers(trace_header_getter, hm);
+
         /* Extract Origin header for CORS */
         struct mg_str *origin_hdr = mg_http_get_header(hm, "Origin");
         char origin[256] = "";
@@ -1057,6 +1096,8 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
                 sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
             }
             if (!sh_ratelimit_check(s_rate_limiter, &client_addr)) {
+                sh_metrics_counter_inc("http_requests_total", 1,
+                    "endpoint", "rate_limited", "status", "429", NULL);
                 char cors_hdrs[512];
                 sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
                 char headers[600];
@@ -1064,6 +1105,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
                          "Content-Type: text/plain\r\n"
                          "Retry-After: 1\r\n%s", cors_hdrs);
                 mg_http_reply(c, 429, headers, "Rate limit exceeded\n");
+                sh_trace_clear();
                 return;
             }
         }
@@ -1073,19 +1115,37 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
             char cors_hdrs[512];
             sh_cors_preflight_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
             mg_http_reply(c, 204, cors_hdrs, "");
+            sh_trace_clear();
             return;
         }
 
         /* Route requests */
+        const char *endpoint = "unknown";
         if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
+            endpoint = "health";
             handle_health(c);
         } else if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
+            endpoint = "stats";
             handle_stats(c);
+        } else if (mg_match(hm->uri, mg_str("/metrics"), NULL)) {
+            endpoint = "metrics";
+            handle_metrics(c);
         } else if (mg_match(hm->uri, mg_str("/api/v1/route"), NULL)) {
+            endpoint = "route";
             handle_route(c, hm);
         } else {
+            endpoint = "not_found";
             send_error(c, 404, "Not found");
         }
+
+        /* Record metrics */
+        sh_metrics_counter_inc("http_requests_total", 1,
+            "endpoint", endpoint, "service", "velo", NULL);
+        sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
+            "endpoint", endpoint, "service", "velo", NULL);
+
+        /* Clear trace context */
+        sh_trace_clear();
     }
 }
 
@@ -1341,6 +1401,19 @@ int main(int argc, char *argv[]) {
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+
+    /* Initialize logging */
+    ShLogConfig log_cfg = SH_LOG_CONFIG_DEFAULT;
+    log_cfg.service = "velo";
+    log_cfg.version = vl_version();
+    sh_log_init(&log_cfg);
+
+    /* Initialize metrics */
+    ShMetricsConfig metrics_cfg = SH_METRICS_CONFIG_DEFAULT;
+    metrics_cfg.service = "velo";
+    sh_metrics_init(&metrics_cfg);
+
+    SH_LOG_INFO("Starting velo route server", "version", vl_version(), NULL);
 
     /* Initialize mongoose */
     struct mg_mgr mgr;

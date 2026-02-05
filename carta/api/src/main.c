@@ -36,6 +36,9 @@
 #include "ct_cache.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue */
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
+#include "sh_log.h"         /* For structured logging */
+#include "sh_trace.h"       /* For trace ID propagation */
+#include "sh_metrics.h"     /* For metrics collection */
 
 /* ============================================================================
  * Configuration
@@ -1360,6 +1363,35 @@ static int parse_tile_uri(struct mg_str uri, int *z, int *x, int *y, char *ext) 
  * Main Event Handler
  * ============================================================================ */
 
+/* Helper to extract HTTP header for trace ID propagation */
+static const char *trace_header_getter(const char *name, void *ctx) {
+    struct mg_http_message *hm = (struct mg_http_message *)ctx;
+    struct mg_str *hdr = mg_http_get_header(hm, name);
+    if (hdr && hdr->len > 0) {
+        /* Return pointer to header value (valid for request lifetime) */
+        static __thread char hdr_buf[128];
+        size_t len = hdr->len < sizeof(hdr_buf) - 1 ? hdr->len : sizeof(hdr_buf) - 1;
+        memcpy(hdr_buf, hdr->buf, len);
+        hdr_buf[len] = '\0';
+        return hdr_buf;
+    }
+    return NULL;
+}
+
+/* Handle /metrics endpoint for Prometheus */
+static void handle_metrics(struct mg_connection *c) {
+    char *prom = sh_metrics_prometheus_output();
+    if (prom) {
+        mg_http_reply(c, 200,
+            "Content-Type: text/plain; version=0.0.4\r\n"
+            "Access-Control-Allow-Origin: *\r\n",
+            "%s", prom);
+        free(prom);
+    } else {
+        mg_http_reply(c, 500, "", "Failed to generate metrics\n");
+    }
+}
+
 static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
     /* Set socket write timeout on new connections to protect against slow clients */
     if (ev == MG_EV_ACCEPT) {
@@ -1369,6 +1401,10 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
 
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
+        ShMetricsTimer req_timer = sh_metrics_timer_start();
+
+        /* Extract or generate trace ID */
+        sh_trace_from_headers(trace_header_getter, hm);
 
         /* Rate limiting check (supports both IPv4 and IPv6) */
         if (s_rate_limiter) {
@@ -1380,11 +1416,15 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
                 sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
             }
             if (!sh_ratelimit_check(s_rate_limiter, &client_addr)) {
+                SH_LOG_WARN("Rate limit exceeded", "status", "429");
+                sh_metrics_counter_inc("http_requests_total", 1,
+                                       "status:429", "endpoint:ratelimit", NULL);
                 mg_http_reply(c, 429,
                     "Content-Type: text/plain\r\n"
                     "Retry-After: 1\r\n"
                     "Access-Control-Allow-Origin: *\r\n",
                     "Rate limit exceeded\n");
+                sh_trace_clear();
                 return;
             }
         }
@@ -1400,10 +1440,22 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
         /* Route requests */
         if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
             handle_health(c, hm);
+            sh_trace_clear();
+            return;
         } else if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
             handle_stats(c, hm);
+            sh_trace_clear();
+            return;
+        } else if (mg_match(hm->uri, mg_str("/metrics"), NULL)) {
+            handle_metrics(c);
+            sh_trace_clear();
+            return;
         } else if (mg_match(hm->uri, mg_str("/tiles.json"), NULL)) {
             handle_tilejson(c, hm);
+            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
+                                     "endpoint:tilejson", NULL);
+            sh_metrics_counter_inc("http_requests_total", 1,
+                                   "status:200", "endpoint:tilejson", NULL);
         } else if (hm->uri.len > 7 && strncmp(hm->uri.buf, "/tiles/", 7) == 0) {
             /* Parse tile request: /tiles/{z}/{x}/{y}.{ext} */
             int z, x, y;
@@ -1411,15 +1463,31 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
             if (parse_tile_uri(hm->uri, &z, &x, &y, ext) == 0) {
                 if (strcmp(ext, "mvt") == 0 || strcmp(ext, "pbf") == 0) {
                     handle_mvt_tile(c, z, x, y);
+                    sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
+                                             "endpoint:mvt", NULL);
+                    sh_metrics_counter_inc("http_requests_total", 1,
+                                           "status:200", "endpoint:mvt", NULL);
                 } else if (strcmp(ext, "png") == 0) {
                     handle_png_tile(c, z, x, y);
+                    sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
+                                             "endpoint:png", NULL);
+                    sh_metrics_counter_inc("http_requests_total", 1,
+                                           "status:200", "endpoint:png", NULL);
                 } else if (strcmp(ext, "txt") == 0 || strcmp(ext, "ascii") == 0) {
                     handle_ascii_tile(c, hm, z, x, y);
+                    sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
+                                             "endpoint:ascii", NULL);
+                    sh_metrics_counter_inc("http_requests_total", 1,
+                                           "status:200", "endpoint:ascii", NULL);
                 } else {
                     send_error(c, 400, "Unknown tile format. Use .mvt, .png, .txt, or .ascii");
+                    sh_metrics_counter_inc("http_requests_total", 1,
+                                           "status:400", "endpoint:tiles", NULL);
                 }
             } else {
                 send_error(c, 400, "Invalid tile URL format");
+                sh_metrics_counter_inc("http_requests_total", 1,
+                                       "status:400", "endpoint:tiles", NULL);
             }
         } else {
             /* Serve static files */
@@ -1428,7 +1496,12 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
                 .extra_headers = "Access-Control-Allow-Origin: *\r\n"
             };
             mg_http_serve_dir(c, hm, &opts);
+            sh_metrics_counter_inc("http_requests_total", 1,
+                                   "status:200", "endpoint:static", NULL);
         }
+
+        /* Clear trace context at end of request */
+        sh_trace_clear();
     }
 }
 
@@ -1475,6 +1548,12 @@ static void print_usage(const char *prog) {
 }
 
 int main(int argc, char *argv[]) {
+    /* Initialize logging first (reads SH_LOG_LEVEL, SH_LOG_FORMAT from env) */
+    ShLogConfig log_cfg = SH_LOG_CONFIG_DEFAULT;
+    log_cfg.service = "carta";
+    log_cfg.version = ct_version();
+    sh_log_init(&log_cfg);
+
     /* Initialize defaults */
     init_carta_defaults(&s_config);
     sh_cors_init(&s_cors);
@@ -1691,6 +1770,23 @@ int main(int argc, char *argv[]) {
         printf("Adaptive capacity: disabled\n");
     }
 
+    /* Initialize metrics (reads SH_METRICS_STATSD_HOST from env) */
+    ShMetricsConfig metrics_cfg = SH_METRICS_CONFIG_DEFAULT;
+    metrics_cfg.service = "carta";
+    if (sh_metrics_init(&metrics_cfg) == 0) {
+        const char *statsd_host = getenv("SH_METRICS_STATSD_HOST");
+        if (statsd_host && statsd_host[0]) {
+            printf("Metrics: StatsD enabled (%s:%d)\n", statsd_host,
+                   metrics_cfg.statsd_port ? metrics_cfg.statsd_port : 8125);
+        } else {
+            printf("Metrics: Prometheus endpoint at /metrics\n");
+        }
+    }
+
+    SH_LOG_INFO("Server initializing",
+                "pbf", s_config.pbf_path,
+                "port", s_config.server.host);
+
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -1725,6 +1821,7 @@ int main(int argc, char *argv[]) {
     printf("  GET  /tiles/{z}/{x}/{y}.txt  - ASCII art tile\n");
     printf("  GET  /api/v1/health          - Health check\n");
     printf("  GET  /api/v1/stats           - PBF statistics\n");
+    printf("  GET  /metrics                - Prometheus metrics\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
     /* Allocate worker threads */
@@ -1823,6 +1920,10 @@ int main(int argc, char *argv[]) {
     ct_lod_free(&s_lod_config);
     ct_free_pbf_context(s_pbf_ctx);
     pthread_mutex_destroy(&s_cache_mutex);
+
+    SH_LOG_INFO("Server shutdown complete");
+    sh_metrics_shutdown();
+    sh_log_shutdown();
 
     return 0;
 }

@@ -23,6 +23,9 @@
 #include "fuelwise.h"
 #include "shared.h"  /* For sh_ratelimit, sh_workqueue, sh_args */
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
+#include "sh_log.h"
+#include "sh_trace.h"
+#include "sh_metrics.h"
 
 /* ============================================================================
  * Configuration
@@ -76,6 +79,20 @@ static volatile int s_shutdown = 0;
 /* Signal handler */
 static void signal_handler(int signo) {
     s_signo = signo;
+}
+
+/* Trace ID header getter for HTTP requests */
+static const char *trace_header_getter(const char *name, void *ctx) {
+    struct mg_http_message *hm = (struct mg_http_message *)ctx;
+    struct mg_str *hdr = mg_http_get_header(hm, name);
+    if (hdr && hdr->len > 0) {
+        static __thread char hdr_buf[128];
+        size_t len = hdr->len < sizeof(hdr_buf) - 1 ? hdr->len : sizeof(hdr_buf) - 1;
+        memcpy(hdr_buf, hdr->buf, len);
+        hdr_buf[len] = '\0';
+        return hdr_buf;
+    }
+    return NULL;
 }
 
 /* ============================================================================
@@ -1205,6 +1222,22 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
     handle_via_queue(c, hm, WORK_TYPE_OPTIMIZE);
 }
 
+/* GET /metrics - Prometheus metrics endpoint */
+static void handle_metrics(struct mg_connection *c) {
+    char *prom = sh_metrics_prometheus_output();
+    if (prom) {
+        mg_http_reply(c, 200,
+            "Content-Type: text/plain; version=0.0.4\r\n"
+            "Access-Control-Allow-Origin: *\r\n",
+            "%s", prom);
+        free(prom);
+    } else {
+        mg_http_reply(c, 500,
+            "Content-Type: text/plain\r\n",
+            "Failed to generate metrics\n");
+    }
+}
+
 /* OPTIONS handler for CORS preflight */
 static void handle_options(struct mg_connection *c) {
     char cors_headers[512];
@@ -1226,50 +1259,89 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
+        /* Start request timing */
+        ShMetricsTimer req_timer = sh_metrics_timer_start();
+
+        /* Extract or generate trace ID */
+        sh_trace_from_headers(trace_header_getter, hm);
+
         /* Handle CORS preflight - no rate limiting */
         if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
             handle_options(c);
+            sh_trace_clear();
             return;
         }
 
-        /* Health and stats bypass rate limiting and work queue */
+        /* Health, stats, and metrics bypass rate limiting and work queue */
         if (mg_match(hm->uri, mg_str("/api/v1/health"), NULL)) {
             handle_health(c, hm);
+            sh_metrics_counter_inc("http_requests_total", 1,
+                "endpoint", "health", "service", "fuelwise", NULL);
+            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
+                "endpoint", "health", "service", "fuelwise", NULL);
+            sh_trace_clear();
             return;
         }
         if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
             handle_stats(c, hm);
+            sh_metrics_counter_inc("http_requests_total", 1,
+                "endpoint", "stats", "service", "fuelwise", NULL);
+            sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
+                "endpoint", "stats", "service", "fuelwise", NULL);
+            sh_trace_clear();
+            return;
+        }
+        if (mg_match(hm->uri, mg_str("/metrics"), NULL)) {
+            handle_metrics(c);
+            sh_trace_clear();
             return;
         }
 
         /* Check rate limit for all other endpoints */
         if (!check_rate_limit(c)) {
+            sh_metrics_counter_inc("http_requests_total", 1,
+                "endpoint", "rate_limited", "status", "429", NULL);
             send_error(c, 429, "Too many requests");
+            sh_trace_clear();
             return;
         }
 
         /* Route requests */
+        const char *endpoint = "unknown";
         if (mg_match(hm->uri, mg_str("/api/v1/solve"), NULL)) {
+            endpoint = "solve";
             if (mg_match(hm->method, mg_str("POST"), NULL)) {
                 handle_solve(c, hm);
             } else {
                 send_error(c, 405, "Method not allowed");
             }
         } else if (mg_match(hm->uri, mg_str("/api/v1/optimize"), NULL)) {
+            endpoint = "optimize";
             if (mg_match(hm->method, mg_str("POST"), NULL)) {
                 handle_optimize(c, hm);
             } else {
                 send_error(c, 405, "Method not allowed");
             }
         } else if (mg_match(hm->uri, mg_str("/api/v1/filter"), NULL)) {
+            endpoint = "filter";
             if (mg_match(hm->method, mg_str("POST"), NULL)) {
                 handle_filter(c, hm);
             } else {
                 send_error(c, 405, "Method not allowed");
             }
         } else {
+            endpoint = "not_found";
             send_error(c, 404, "Not found");
         }
+
+        /* Record metrics */
+        sh_metrics_counter_inc("http_requests_total", 1,
+            "endpoint", endpoint, "service", "fuelwise", NULL);
+        sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
+            "endpoint", endpoint, "service", "fuelwise", NULL);
+
+        /* Clear trace context */
+        sh_trace_clear();
     }
 }
 
@@ -1322,6 +1394,19 @@ int main(int argc, char *argv[]) {
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+
+    /* Initialize logging */
+    ShLogConfig log_cfg = SH_LOG_CONFIG_DEFAULT;
+    log_cfg.service = "fuelwise";
+    log_cfg.version = fw_version();
+    sh_log_init(&log_cfg);
+
+    /* Initialize metrics */
+    ShMetricsConfig metrics_cfg = SH_METRICS_CONFIG_DEFAULT;
+    metrics_cfg.service = "fuelwise";
+    sh_metrics_init(&metrics_cfg);
+
+    SH_LOG_INFO("Starting fuelwise API server", "version", fw_version(), NULL);
 
     /* Initialize rate limiter */
     if (s_config.rate_limit_enabled) {
