@@ -36,6 +36,8 @@
 #include "ct_cache.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue */
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
+#include "sh_completion.h"  /* For ShCompletion */
+#include "sh_worker_pool.h" /* For ShWorkerPool */
 #include "sh_log.h"         /* For structured logging */
 #include "sh_trace.h"       /* For trace ID propagation */
 #include "sh_metrics.h"     /* For metrics collection */
@@ -117,21 +119,12 @@ typedef struct {
     char content_type[64];
     char error_msg[128];
 
-    /* Completion signaling */
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    int completed;
-    volatile int cancelled;  /* Set by HTTP handler on timeout */
+    /* Completion signaling (uses shared library) */
+    ShCompletion completion;
 } RenderWorkItem;
 
-/* Render worker thread state */
-typedef struct {
-    int id;
-    pthread_t thread;
-} RenderWorker;
-
-static RenderWorker *s_render_workers = NULL;
-static int s_num_render_workers = 0;
+/* Render worker pool (uses shared library) */
+static ShWorkerPool *s_render_pool = NULL;
 
 /* Worker thread state */
 typedef struct {
@@ -206,16 +199,13 @@ static void render_work_item_init(RenderWorkItem *item, RenderType type,
     item->x = x;
     item->y = y;
     item->status_code = 500;  /* Default to error */
-    item->completed = 0;
-    pthread_mutex_init(&item->mutex, NULL);
-    pthread_cond_init(&item->cond, NULL);
+    sh_completion_init(&item->completion);
 }
 
 /* Clean up a render work item */
 static void render_work_item_cleanup(RenderWorkItem *item)
 {
-    pthread_mutex_destroy(&item->mutex);
-    pthread_cond_destroy(&item->cond);
+    sh_completion_cleanup(&item->completion);
     free(item->response_data);
     item->response_data = NULL;
 }
@@ -223,37 +213,14 @@ static void render_work_item_cleanup(RenderWorkItem *item)
 /* Wait for render work item completion with timeout */
 static int render_work_item_wait(RenderWorkItem *item, double timeout_sec)
 {
-    struct timespec abstime;
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-
-    abstime.tv_sec = tv.tv_sec + (time_t)timeout_sec;
-    abstime.tv_nsec = tv.tv_usec * 1000 +
-                      (long)((timeout_sec - (time_t)timeout_sec) * 1e9);
-    if (abstime.tv_nsec >= 1000000000L) {
-        abstime.tv_sec++;
-        abstime.tv_nsec -= 1000000000L;
-    }
-
-    pthread_mutex_lock(&item->mutex);
-    while (!item->completed) {
-        int rc = pthread_cond_timedwait(&item->cond, &item->mutex, &abstime);
-        if (rc == ETIMEDOUT) {
-            pthread_mutex_unlock(&item->mutex);
-            return 0;  /* Timeout */
-        }
-    }
-    pthread_mutex_unlock(&item->mutex);
-    return 1;  /* Completed */
+    int timeout_ms = (int)(timeout_sec * 1000);
+    return sh_completion_wait(&item->completion, timeout_ms);
 }
 
 /* Signal that render work item is completed */
 static void render_work_item_complete(RenderWorkItem *item)
 {
-    pthread_mutex_lock(&item->mutex);
-    item->completed = 1;
-    pthread_cond_signal(&item->cond);
-    pthread_mutex_unlock(&item->mutex);
+    sh_completion_signal(&item->completion);
 }
 
 /* Process a PNG tile render request */
@@ -463,76 +430,68 @@ static void process_ascii_render(RenderWorkItem *item)
             sizeof(item->content_type));
 }
 
-/* Render worker thread function */
-static void *render_worker_fn(void *arg)
+/* Render worker callback function (called by ShWorkerPool) */
+static void render_worker_callback(ShWorkItem *queue_item, void *ctx)
 {
-    RenderWorker *w = (RenderWorker *)arg;
-    (void)w;  /* Worker ID for debugging if needed */
+    (void)ctx;
 
-    while (s_signo == 0) {
-        /* Pop work item with timeout (100ms to check for shutdown) */
-        ShWorkItem *queue_item = sh_workqueue_pop_timeout(s_work_queue, 100);
-        if (!queue_item) continue;
-
-        RenderWorkItem *item = (RenderWorkItem *)queue_item->user_ctx;
-        if (!item) {
-            sh_workqueue_item_free(queue_item);
-            continue;
-        }
-
-        /* Check if request has expired or was cancelled by HTTP handler timeout */
-        if (sh_workqueue_item_expired(s_work_queue, queue_item) || item->cancelled) {
-            item->status_code = 504;  /* Gateway Timeout */
-            strncpy(item->error_msg, "Request timeout",
-                    sizeof(item->error_msg));
-            render_work_item_complete(item);
-            sh_workqueue_item_free(queue_item);
-            continue;
-        }
-
-        /* Measure render time for adaptive capacity */
-        struct timeval render_start, render_end;
-        gettimeofday(&render_start, NULL);
-
-        /* Process based on type */
-        switch (item->type) {
-            case RENDER_TYPE_PNG:
-                process_png_render(item);
-                break;
-            case RENDER_TYPE_MVT:
-                process_mvt_render(item);
-                break;
-            case RENDER_TYPE_ASCII:
-                process_ascii_render(item);
-                break;
-        }
-
-        /* Record response time for adaptive capacity */
-        gettimeofday(&render_end, NULL);
-        double render_ms = (render_end.tv_sec - render_start.tv_sec) * 1000.0 +
-                           (render_end.tv_usec - render_start.tv_usec) / 1000.0;
-
-        if (s_adaptive_tracker) {
-            sh_adaptive_record(s_adaptive_tracker, render_ms);
-
-            /* Check if rate limiter should be updated */
-            ShCapacityParams new_params;
-            if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
-                /* Update rate limiter with new parameters */
-                if (s_rate_limiter) {
-                    sh_ratelimit_update_rate(s_rate_limiter,
-                                             new_params.rate_limit_rps,
-                                             new_params.rate_limit_burst);
-                }
-            }
-        }
-
-        /* Signal completion */
-        render_work_item_complete(item);
+    RenderWorkItem *item = (RenderWorkItem *)queue_item->user_ctx;
+    if (!item) {
         sh_workqueue_item_free(queue_item);
+        return;
     }
 
-    return NULL;
+    /* Check if request has expired or was cancelled by HTTP handler timeout */
+    if (sh_workqueue_item_expired(s_work_queue, queue_item) ||
+        sh_completion_is_cancelled(&item->completion)) {
+        item->status_code = 504;  /* Gateway Timeout */
+        strncpy(item->error_msg, "Request timeout",
+                sizeof(item->error_msg));
+        render_work_item_complete(item);
+        sh_workqueue_item_free(queue_item);
+        return;
+    }
+
+    /* Measure render time for adaptive capacity */
+    struct timeval render_start, render_end;
+    gettimeofday(&render_start, NULL);
+
+    /* Process based on type */
+    switch (item->type) {
+        case RENDER_TYPE_PNG:
+            process_png_render(item);
+            break;
+        case RENDER_TYPE_MVT:
+            process_mvt_render(item);
+            break;
+        case RENDER_TYPE_ASCII:
+            process_ascii_render(item);
+            break;
+    }
+
+    /* Record response time for adaptive capacity */
+    gettimeofday(&render_end, NULL);
+    double render_ms = (render_end.tv_sec - render_start.tv_sec) * 1000.0 +
+                       (render_end.tv_usec - render_start.tv_usec) / 1000.0;
+
+    if (s_adaptive_tracker) {
+        sh_adaptive_record(s_adaptive_tracker, render_ms);
+
+        /* Check if rate limiter should be updated */
+        ShCapacityParams new_params;
+        if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
+            /* Update rate limiter with new parameters */
+            if (s_rate_limiter) {
+                sh_ratelimit_update_rate(s_rate_limiter,
+                                         new_params.rate_limit_rps,
+                                         new_params.rate_limit_burst);
+            }
+        }
+    }
+
+    /* Signal completion */
+    render_work_item_complete(item);
+    sh_workqueue_item_free(queue_item);
 }
 
 /* ============================================================================
@@ -947,7 +906,7 @@ static int submit_render_work(struct mg_connection *c, RenderWorkItem *item)
     double timeout = s_config.server.work_queue_timeout;
     if (!render_work_item_wait(item, timeout)) {
         /* Timeout - mark item as cancelled so worker can skip if not started */
-        item->cancelled = 1;
+        sh_completion_cancel(&item->completion);
         mg_http_reply(c, 504,
             "Content-Type: text/plain\r\n"
             "Access-Control-Allow-Origin: *\r\n",
@@ -1576,6 +1535,7 @@ int main(int argc, char *argv[]) {
     CTBBox bbox;
     ct_pbf_stats(s_pbf_ctx, &nodes, &ways, &features, &bbox);
     printf("Loaded: %zu nodes, %zu ways, %zu features indexed\n", nodes, ways, features);
+    printf("Multipolygons: %zu\n", s_pbf_ctx->num_multipolygons);
     printf("Bounds: [%.4f, %.4f] to [%.4f, %.4f]\n",
            bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat);
 
@@ -1634,41 +1594,25 @@ int main(int argc, char *argv[]) {
         printf("Rate limit: disabled\n");
     }
 
-    /* Initialize work queue and render workers */
+    /* Initialize work queue and render worker pool */
     if (s_config.server.work_queue_enabled) {
         s_work_queue = sh_workqueue_create(s_config.server.work_queue_depth,
                                            s_config.server.work_queue_timeout);
         if (s_work_queue) {
-            /* Determine number of render workers */
-            int num_render_workers = s_config.render_workers;
-            if (num_render_workers <= 0) {
-#ifdef _SC_NPROCESSORS_ONLN
-                long n = sysconf(_SC_NPROCESSORS_ONLN);
-                num_render_workers = (n > 0) ? (int)n : 4;
-#else
-                num_render_workers = 4;
-#endif
-            }
-            if (num_render_workers > 64) num_render_workers = 64;
-
-            /* Allocate render workers */
-            s_render_workers = calloc(num_render_workers, sizeof(RenderWorker));
-            if (s_render_workers) {
-                s_num_render_workers = num_render_workers;
-                for (int i = 0; i < num_render_workers; i++) {
-                    s_render_workers[i].id = i;
-                    if (pthread_create(&s_render_workers[i].thread, NULL,
-                                       render_worker_fn, &s_render_workers[i]) != 0) {
-                        fprintf(stderr, "Error: Failed to create render worker %d\n", i);
-                        s_num_render_workers = i;
-                        break;
-                    }
-                }
+            /* Create worker pool (0 = auto-detect CPU count) */
+            ShWorkerPoolConfig pool_cfg = {
+                .queue = s_work_queue,
+                .callback = render_worker_callback,
+                .ctx = NULL,
+                .poll_timeout_ms = 100
+            };
+            s_render_pool = sh_worker_pool_create(s_config.render_workers, &pool_cfg);
+            if (s_render_pool) {
                 printf("Work queue: depth %zu, timeout %.1fs, %d render workers\n",
                        s_config.server.work_queue_depth, s_config.server.work_queue_timeout,
-                       s_num_render_workers);
+                       sh_worker_pool_size(s_render_pool));
             } else {
-                fprintf(stderr, "Warning: Failed to allocate render workers\n");
+                fprintf(stderr, "Warning: Failed to create render worker pool\n");
                 sh_workqueue_free(s_work_queue);
                 s_work_queue = NULL;
             }
@@ -1683,7 +1627,8 @@ int main(int argc, char *argv[]) {
     if (s_config.server.adaptive_enabled) {
         ShAdaptiveConfig adaptive_cfg;
         sh_adaptive_config_init(&adaptive_cfg);
-        adaptive_cfg.num_workers = s_num_render_workers > 0 ? s_num_render_workers : 4;
+        int num_workers = s_render_pool ? sh_worker_pool_size(s_render_pool) : 4;
+        adaptive_cfg.num_workers = num_workers > 0 ? num_workers : 4;
         adaptive_cfg.target_utilization = s_config.server.target_utilization;
         adaptive_cfg.client_timeout_ms = s_config.server.client_timeout_ms;
         adaptive_cfg.burst_tiles = s_config.server.burst_tiles;
@@ -1761,15 +1706,13 @@ int main(int argc, char *argv[]) {
     s_workers = calloc(num_threads, sizeof(WorkerThread));
     if (!s_workers) {
         fprintf(stderr, "Error: Failed to allocate worker threads\n");
-        /* Cleanup work queue and render workers */
-        if (s_work_queue) {
-            sh_workqueue_shutdown(s_work_queue);
-            for (int i = 0; i < s_num_render_workers; i++) {
-                pthread_join(s_render_workers[i].thread, NULL);
-            }
-            free(s_render_workers);
-            sh_workqueue_free(s_work_queue);
+        /* Cleanup render worker pool and work queue */
+        if (s_render_pool) {
+            sh_worker_pool_stop(s_render_pool);
+            sh_worker_pool_join(s_render_pool);
+            sh_worker_pool_free(s_render_pool);
         }
+        sh_workqueue_free(s_work_queue);
         sh_ratelimit_free(s_rate_limiter);
         sh_adaptive_free(s_adaptive_tracker);
         ct_cache_free(s_png_cache);
@@ -1804,14 +1747,14 @@ int main(int argc, char *argv[]) {
         pthread_join(s_workers[i].thread, NULL);
     }
 
-    /* Shutdown work queue and wait for render workers */
-    if (s_work_queue) {
-        sh_workqueue_shutdown(s_work_queue);
-        for (int i = 0; i < s_num_render_workers; i++) {
-            pthread_join(s_render_workers[i].thread, NULL);
-        }
+    /* Shutdown render worker pool */
+    if (s_render_pool) {
+        sh_worker_pool_stop(s_render_pool);
+        sh_worker_pool_join(s_render_pool);
+    }
 
-        /* Print work queue stats */
+    /* Print work queue stats */
+    if (s_work_queue) {
         ShWorkQueueStats wq_stats;
         sh_workqueue_stats(s_work_queue, &wq_stats);
         printf("Work queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
@@ -1843,7 +1786,7 @@ int main(int argc, char *argv[]) {
     }
 
     free(s_workers);
-    free(s_render_workers);
+    sh_worker_pool_free(s_render_pool);
     sh_workqueue_free(s_work_queue);
     sh_ratelimit_free(s_rate_limiter);
     sh_adaptive_free(s_adaptive_tracker);
