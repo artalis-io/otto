@@ -396,6 +396,16 @@ int sh_mg_check_rate_limit(struct mg_connection *c,
                            const struct ShCorsConfig *cors, const char *origin);
 
 /*
+ * Mongoose trace header getter for sh_trace_from_headers().
+ * Conforms to sh_trace_header_getter signature.
+ * Expects ctx to be (struct mg_http_message *).
+ *
+ * Usage:
+ *   sh_trace_from_headers(sh_mg_trace_header_getter, hm);
+ */
+const char *sh_mg_trace_header_getter(const char *name, void *ctx);
+
+/*
  * Send chunked response start.
  * Low-level helper for direct Mongoose usage.
  *

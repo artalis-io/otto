@@ -218,6 +218,22 @@ int sh_mg_check_rate_limit(struct mg_connection *c,
     return 1;  /* Allowed */
 }
 
+const char *sh_mg_trace_header_getter(const char *name, void *ctx)
+{
+    struct mg_http_message *hm = (struct mg_http_message *)ctx;
+    if (!hm || !name) return NULL;
+
+    struct mg_str *hdr = mg_http_get_header(hm, name);
+    if (hdr && hdr->len > 0) {
+        static __thread char hdr_buf[128];
+        size_t len = hdr->len < sizeof(hdr_buf) - 1 ? hdr->len : sizeof(hdr_buf) - 1;
+        memcpy(hdr_buf, hdr->buf, len);
+        hdr_buf[len] = '\0';
+        return hdr_buf;
+    }
+    return NULL;
+}
+
 /* ============================================================================
  * Request/Response Structures (for full server implementation)
  * ============================================================================ */
