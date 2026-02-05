@@ -14,7 +14,7 @@ VENDOR_DIR = ../vendor/miniz
 # Debug build
 DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
 
-# Source files
+# Source files (core library - no external dependencies beyond miniz)
 SRCS = src/sh_geo.c \
        src/sh_protobuf.c \
        src/sh_inflate.c \
@@ -30,7 +30,15 @@ SRCS = src/sh_geo.c \
        src/sh_circuit.c \
        src/sh_backoff.c \
        src/sh_retry.c \
-       src/sh_cors.c
+       src/sh_cors.c \
+       src/sh_log.c \
+       src/sh_trace.c \
+       src/sh_metrics.c
+
+# HTTP server components (requires mongoose - compile separately by API servers)
+# API servers should compile sh_httpserver.c directly with mongoose includes.
+# Usage: $(CC) $(CFLAGS) -I../shared/include -I../vendor/mongoose src/sh_httpserver.c
+HTTPSERVER_SRC = src/sh_httpserver.c
 
 MINIZ_SRCS = $(VENDOR_DIR)/miniz.c \
              $(VENDOR_DIR)/miniz_tdef.c \
@@ -111,6 +119,9 @@ src/sh_circuit.o: include/sh_circuit.h
 src/sh_backoff.o: include/sh_backoff.h
 src/sh_retry.o: include/sh_retry.h include/sh_circuit.h include/sh_backoff.h
 src/sh_cors.o: include/sh_cors.h
+src/sh_log.o: include/sh_log.h
+src/sh_trace.o: include/sh_trace.h include/sh_log.h
+src/sh_metrics.o: include/sh_metrics.h
 
 # Help
 help:

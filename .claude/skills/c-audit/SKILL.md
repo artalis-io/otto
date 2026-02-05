@@ -655,8 +655,107 @@ if (sh_workqueue_item_expired(queue, item) || work->cancelled) {
 | Stats format | Medium | Stats match carta pattern (work_queue, rate_limit objects) |
 | Adaptive capacity | Low | Optional: auto-tune rate limits from response times |
 | Graceful shutdown | Medium | Clean thread termination |
+| Structured logging | Medium | Use `sh_log.h` for JSON/text logging |
+| Trace ID propagation | Medium | Extract/generate trace IDs via `sh_trace.h` |
+| Metrics endpoint | Medium | `/metrics` endpoint for Prometheus scraping |
 
 **Reference Implementation:** See `carta/api/src/main.c` for complete example.
+
+#### Observability Requirements (`shared/include/sh_log.h`, `sh_trace.h`, `sh_metrics.h`)
+
+**Required: Structured Logging**
+
+Use the shared logging library for consistent, parseable logs:
+
+```c
+#include "sh_log.h"
+
+/* Initialize at startup */
+sh_log_init(NULL);  /* Reads SH_LOG_LEVEL, SH_LOG_FORMAT from env */
+
+/* Log with structured fields */
+SH_LOG_INFO("Request received", "method", "GET", "path", "/api/health");
+SH_LOG_ERROR("Database error", "code", "ECONNREFUSED", "retry", "3");
+
+/* Shutdown before exit */
+sh_log_shutdown();
+```
+
+Environment variables:
+```bash
+SH_LOG_LEVEL=INFO    # TRACE, DEBUG, INFO, WARN, ERROR, FATAL
+SH_LOG_FORMAT=json   # json or text
+SH_LOG_COLOR=1       # ANSI colors in text mode (auto-detected)
+```
+
+**Required: Trace ID Propagation**
+
+Extract trace IDs from incoming requests, generate if missing, and include in all logs:
+
+```c
+#include "sh_trace.h"
+
+static void handle_request(struct mg_connection *c, struct mg_http_message *hm) {
+    /* Extract or generate trace ID */
+    sh_trace_from_headers(my_header_getter, hm);
+
+    SH_LOG_INFO("Processing request");  /* Trace ID auto-included */
+
+    /* ... process ... */
+
+    /* Add trace ID to response */
+    char trace_hdr[64];
+    sh_trace_format_header(trace_hdr, sizeof(trace_hdr));
+    mg_http_reply(c, 200, trace_hdr, "{\"status\":\"ok\"}");
+
+    /* Clear trace context */
+    sh_trace_clear();
+}
+```
+
+**Required: Metrics Collection**
+
+Record key metrics for monitoring:
+
+```c
+#include "sh_metrics.h"
+
+/* Initialize at startup */
+ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+cfg.service = "carta";
+cfg.statsd_host = getenv("SH_METRICS_STATSD_HOST");
+sh_metrics_init(&cfg);
+
+/* Record metrics */
+ShMetricsTimer timer = sh_metrics_timer_start();
+/* ... process request ... */
+sh_metrics_timer_observe(timer, "http_request_duration_ms", "method:GET", NULL);
+sh_metrics_counter_inc("http_requests_total", 1, "status:200", NULL);
+
+/* Add Prometheus endpoint */
+if (mg_match(hm->uri, mg_str("/metrics"), NULL)) {
+    char *prom = sh_metrics_prometheus_output();
+    mg_http_reply(c, 200, "Content-Type: text/plain\r\n", "%s", prom);
+    free(prom);
+}
+```
+
+#### Observability Checklist
+
+- [ ] Logging initialized with `sh_log_init(NULL)` at startup
+- [ ] Logging shutdown with `sh_log_shutdown()` before exit
+- [ ] All significant operations logged with appropriate level
+- [ ] Error logs include context fields (error code, retry count, etc.)
+- [ ] Trace ID extracted from `X-Trace-Id` or `X-Request-Id` headers
+- [ ] Trace ID generated if not present in request
+- [ ] Trace ID included in response headers
+- [ ] Trace context cleared after request completes
+- [ ] Metrics initialized with service name
+- [ ] HTTP request duration recorded as histogram
+- [ ] HTTP request count recorded as counter with status code
+- [ ] `/metrics` endpoint returns Prometheus format
+- [ ] Work queue metrics exposed (depth, dropped, expired)
+- [ ] Rate limiter metrics exposed (allowed, denied)
 
 ### 10. API Client Resilience (HTTP Clients)
 

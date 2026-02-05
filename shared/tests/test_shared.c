@@ -7,6 +7,9 @@
 #include "sh_backoff.h"
 #include "sh_retry.h"
 #include "sh_cors.h"
+#include "sh_log.h"
+#include "sh_trace.h"
+#include "sh_metrics.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2280,6 +2283,301 @@ TEST(cors_credentials)
 }
 
 /* ============================================================================
+ * Logging Tests
+ * ============================================================================ */
+
+TEST(log_init_shutdown)
+{
+    sh_log_init(NULL);
+    ASSERT_EQ(sh_log_get_level(), SH_LOG_LEVEL_INFO);
+    sh_log_shutdown();
+}
+
+TEST(log_level_from_string)
+{
+    ASSERT_EQ(sh_log_level_from_string("TRACE"), SH_LOG_LEVEL_TRACE);
+    ASSERT_EQ(sh_log_level_from_string("debug"), SH_LOG_LEVEL_DEBUG);
+    ASSERT_EQ(sh_log_level_from_string("INFO"), SH_LOG_LEVEL_INFO);
+    ASSERT_EQ(sh_log_level_from_string("warn"), SH_LOG_LEVEL_WARN);
+    ASSERT_EQ(sh_log_level_from_string("ERROR"), SH_LOG_LEVEL_ERROR);
+    ASSERT_EQ(sh_log_level_from_string("fatal"), SH_LOG_LEVEL_FATAL);
+    ASSERT_EQ(sh_log_level_from_string("invalid"), SH_LOG_LEVEL_INFO);  /* Default */
+}
+
+TEST(log_level_to_string)
+{
+    ASSERT(strcmp(sh_log_level_to_string(SH_LOG_LEVEL_TRACE), "TRACE") == 0);
+    ASSERT(strcmp(sh_log_level_to_string(SH_LOG_LEVEL_DEBUG), "DEBUG") == 0);
+    ASSERT(strcmp(sh_log_level_to_string(SH_LOG_LEVEL_INFO), "INFO") == 0);
+    ASSERT(strcmp(sh_log_level_to_string(SH_LOG_LEVEL_WARN), "WARN") == 0);
+    ASSERT(strcmp(sh_log_level_to_string(SH_LOG_LEVEL_ERROR), "ERROR") == 0);
+    ASSERT(strcmp(sh_log_level_to_string(SH_LOG_LEVEL_FATAL), "FATAL") == 0);
+}
+
+TEST(log_set_level)
+{
+    sh_log_init(NULL);
+    sh_log_set_level(SH_LOG_LEVEL_DEBUG);
+    ASSERT_EQ(sh_log_get_level(), SH_LOG_LEVEL_DEBUG);
+    sh_log_set_level(SH_LOG_LEVEL_ERROR);
+    ASSERT_EQ(sh_log_get_level(), SH_LOG_LEVEL_ERROR);
+    sh_log_shutdown();
+}
+
+TEST(log_enabled)
+{
+    sh_log_init(NULL);  /* Default: INFO */
+    ASSERT_EQ(sh_log_enabled(SH_LOG_LEVEL_TRACE), 0);
+    ASSERT_EQ(sh_log_enabled(SH_LOG_LEVEL_DEBUG), 0);
+    ASSERT_EQ(sh_log_enabled(SH_LOG_LEVEL_INFO), 1);
+    ASSERT_EQ(sh_log_enabled(SH_LOG_LEVEL_WARN), 1);
+    ASSERT_EQ(sh_log_enabled(SH_LOG_LEVEL_ERROR), 1);
+    sh_log_shutdown();
+}
+
+TEST(log_trace_id)
+{
+    sh_log_init(NULL);
+    ASSERT(sh_log_get_trace_id() == NULL);
+
+    sh_log_set_trace_id("test-trace-123");
+    ASSERT(sh_log_get_trace_id() != NULL);
+    ASSERT(strcmp(sh_log_get_trace_id(), "test-trace-123") == 0);
+
+    sh_log_set_trace_id(NULL);
+    ASSERT(sh_log_get_trace_id() == NULL);
+    sh_log_shutdown();
+}
+
+TEST(log_format_from_string)
+{
+    ASSERT_EQ(sh_log_format_from_string("json"), SH_LOG_FORMAT_JSON);
+    ASSERT_EQ(sh_log_format_from_string("JSON"), SH_LOG_FORMAT_JSON);
+    ASSERT_EQ(sh_log_format_from_string("text"), SH_LOG_FORMAT_TEXT);
+    ASSERT_EQ(sh_log_format_from_string("invalid"), SH_LOG_FORMAT_TEXT);
+}
+
+/* ============================================================================
+ * Trace Tests
+ * ============================================================================ */
+
+TEST(trace_generate)
+{
+    char buf[SH_TRACE_ID_LEN];
+    char *result = sh_trace_generate(buf);
+    ASSERT(result == buf);
+    ASSERT(strlen(buf) == 36);
+    ASSERT(buf[8] == '-');
+    ASSERT(buf[13] == '-');
+    ASSERT(buf[14] == '4');  /* UUID v4 */
+    ASSERT(buf[18] == '-');
+    ASSERT(buf[23] == '-');
+}
+
+TEST(trace_validate)
+{
+    ASSERT_EQ(sh_trace_validate("12345678-1234-4123-8123-123456789abc"), 1);
+    ASSERT_EQ(sh_trace_validate("12345678123441238123123456789abc"), 1);  /* Short hex */
+    ASSERT_EQ(sh_trace_validate("invalid"), 0);
+    ASSERT_EQ(sh_trace_validate(NULL), 0);
+    ASSERT_EQ(sh_trace_validate(""), 0);
+    ASSERT_EQ(sh_trace_validate("12345"), 0);  /* Too short */
+}
+
+TEST(trace_set_get)
+{
+    sh_trace_clear();
+    ASSERT(sh_trace_get() == NULL);
+
+    sh_trace_set("test-trace-456");
+    ASSERT(sh_trace_get() != NULL);
+    ASSERT(strcmp(sh_trace_get(), "test-trace-456") == 0);
+
+    sh_trace_clear();
+    ASSERT(sh_trace_get() == NULL);
+}
+
+TEST(trace_new)
+{
+    sh_trace_clear();
+    const char *id1 = sh_trace_new();
+    ASSERT(id1 != NULL);
+    ASSERT(strlen(id1) == 36);
+
+    /* Copy first ID since sh_trace_new() returns pointer to thread-local storage */
+    char id1_copy[SH_TRACE_ID_LEN];
+    strncpy(id1_copy, id1, SH_TRACE_ID_LEN);
+
+    const char *id2 = sh_trace_new();
+    ASSERT(id2 != NULL);
+    ASSERT(strcmp(id1_copy, id2) != 0);  /* Different each time */
+
+    sh_trace_clear();
+}
+
+TEST(trace_format_header)
+{
+    sh_trace_set("abc12345-1234-4123-8123-123456789def");
+    char buf[128];
+    int len = sh_trace_format_header(buf, sizeof(buf));
+    ASSERT(len > 0);
+    ASSERT(strstr(buf, "X-Trace-Id:") != NULL);
+    ASSERT(strstr(buf, "abc12345") != NULL);
+    sh_trace_clear();
+}
+
+TEST(trace_span_basic)
+{
+    sh_log_init(NULL);
+    sh_log_set_level(SH_LOG_LEVEL_OFF);  /* Suppress output during test */
+
+    ShTraceSpan span;
+    sh_trace_span_start(&span, "test_operation");
+    ASSERT(span.span_id[0] != '\0');
+    ASSERT(span.operation != NULL);
+    ASSERT(strcmp(span.operation, "test_operation") == 0);
+
+    sh_trace_span_end(&span);
+    sh_trace_clear();
+    sh_log_shutdown();
+}
+
+/* ============================================================================
+ * Metrics Tests
+ * ============================================================================ */
+
+TEST(metrics_init_shutdown)
+{
+    ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+    cfg.service = "test";
+    ASSERT_EQ(sh_metrics_init(&cfg), 0);
+    ASSERT_EQ(sh_metrics_count(), 0);
+    sh_metrics_shutdown();
+}
+
+TEST(metrics_counter)
+{
+    ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+    cfg.service = "test";
+    sh_metrics_init(&cfg);
+
+    sh_metrics_counter_inc("requests_total", 1, NULL);
+    sh_metrics_counter_inc("requests_total", 5, NULL);
+
+    const ShMetric *m = sh_metrics_get("requests_total", "");
+    ASSERT(m != NULL);
+    ASSERT_EQ(m->type, SH_METRIC_COUNTER);
+    ASSERT_EQ(m->value.counter, 6);
+
+    sh_metrics_shutdown();
+}
+
+TEST(metrics_gauge)
+{
+    ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+    cfg.service = "test";
+    sh_metrics_init(&cfg);
+
+    sh_metrics_gauge_set("connections", 42.0, NULL);
+
+    const ShMetric *m = sh_metrics_get("connections", "");
+    ASSERT(m != NULL);
+    ASSERT_EQ(m->type, SH_METRIC_GAUGE);
+    ASSERT_NEAR(m->value.gauge, 42.0, 0.1);
+
+    sh_metrics_gauge_set("connections", 100.0, NULL);
+    ASSERT_NEAR(m->value.gauge, 100.0, 0.1);
+
+    sh_metrics_shutdown();
+}
+
+TEST(metrics_histogram)
+{
+    ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+    cfg.service = "test";
+    sh_metrics_init(&cfg);
+
+    sh_metrics_histogram_observe("latency_ms", 10.0, NULL);
+    sh_metrics_histogram_observe("latency_ms", 20.0, NULL);
+    sh_metrics_histogram_observe("latency_ms", 30.0, NULL);
+
+    const ShMetric *m = sh_metrics_get("latency_ms", "");
+    ASSERT(m != NULL);
+    ASSERT_EQ(m->type, SH_METRIC_HISTOGRAM);
+    ASSERT_EQ(m->value.histogram.count, 3);
+    ASSERT_NEAR(m->value.histogram.sum, 60.0, 0.1);
+
+    sh_metrics_shutdown();
+}
+
+TEST(metrics_timer)
+{
+    ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+    cfg.service = "test";
+    sh_metrics_init(&cfg);
+
+    ShMetricsTimer timer = sh_metrics_timer_start();
+    /* Small delay to ensure measurable time */
+    for (volatile int i = 0; i < 100000; i++);
+    sh_metrics_timer_observe(timer, "operation_time_ms", NULL);
+
+    const ShMetric *m = sh_metrics_get("operation_time_ms", "");
+    ASSERT(m != NULL);
+    ASSERT_EQ(m->value.histogram.count, 1);
+    ASSERT(m->value.histogram.sum >= 0);  /* Some time elapsed */
+
+    sh_metrics_shutdown();
+}
+
+TEST(metrics_prometheus_output)
+{
+    ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+    cfg.service = "myapp";
+    sh_metrics_init(&cfg);
+
+    sh_metrics_counter_inc("requests", 10, NULL);
+    sh_metrics_gauge_set("temp", 25.5, NULL);
+
+    char *output = sh_metrics_prometheus_output();
+    ASSERT(output != NULL);
+    ASSERT(strstr(output, "myapp_requests") != NULL);
+    ASSERT(strstr(output, "counter") != NULL);
+    ASSERT(strstr(output, "10") != NULL);
+    free(output);
+
+    sh_metrics_shutdown();
+}
+
+TEST(metrics_with_tags)
+{
+    ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+    cfg.service = "test";
+    sh_metrics_init(&cfg);
+
+    sh_metrics_counter_inc("http_requests", 1, "method:GET", "status:200", NULL);
+    sh_metrics_counter_inc("http_requests", 1, "method:POST", "status:201", NULL);
+
+    ASSERT_EQ(sh_metrics_count(), 2);  /* Two different tag combinations */
+
+    sh_metrics_shutdown();
+}
+
+TEST(metrics_http_request)
+{
+    ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+    cfg.service = "test";
+    sh_metrics_init(&cfg);
+
+    sh_metrics_http_request("GET", "/api/health", 200, 15.5, 0, 256);
+    sh_metrics_http_request("POST", "/api/data", 201, 45.0, 1024, 512);
+
+    /* Should have created multiple metrics */
+    ASSERT(sh_metrics_count() > 0);
+
+    sh_metrics_shutdown();
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -2467,6 +2765,33 @@ int main(void)
     RUN_TEST(cors_preflight_headers);
     RUN_TEST(cors_parse_origins);
     RUN_TEST(cors_credentials);
+
+    printf("\nLogging:\n");
+    RUN_TEST(log_init_shutdown);
+    RUN_TEST(log_level_from_string);
+    RUN_TEST(log_level_to_string);
+    RUN_TEST(log_set_level);
+    RUN_TEST(log_enabled);
+    RUN_TEST(log_trace_id);
+    RUN_TEST(log_format_from_string);
+
+    printf("\nTrace IDs:\n");
+    RUN_TEST(trace_generate);
+    RUN_TEST(trace_validate);
+    RUN_TEST(trace_set_get);
+    RUN_TEST(trace_new);
+    RUN_TEST(trace_format_header);
+    RUN_TEST(trace_span_basic);
+
+    printf("\nMetrics:\n");
+    RUN_TEST(metrics_init_shutdown);
+    RUN_TEST(metrics_counter);
+    RUN_TEST(metrics_gauge);
+    RUN_TEST(metrics_histogram);
+    RUN_TEST(metrics_timer);
+    RUN_TEST(metrics_prometheus_output);
+    RUN_TEST(metrics_with_tags);
+    RUN_TEST(metrics_http_request);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
