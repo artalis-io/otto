@@ -9,7 +9,7 @@
 ```bash
 make          # Build libralph.a
 make test     # Run tests (73/73 should pass)
-make test-lap # Run LAP tests (273/273 should pass)
+make test-lap # Run LAP tests (315/315 should pass)
 make test-netflow # Run Network Flow tests (153/153 should pass)
 ```
 
@@ -70,11 +70,12 @@ The LAP solver implements the Jonker-Volgenant-Castanon (JVC) algorithm:
 |---------|-----|-------|
 | Dense LAP | `ralph_lap_solve()` | O(n³), SIMD optimized |
 | Sparse LAP | `ralph_lap_solve_sparse()` | CSR format, auto-fallback to dense |
-| Rectangular | `ralph_lap_solve_rect()` | m×n problems (m ≤ n) |
+| Rectangular | `ralph_lap_solve_rect()` | m×n problems |
 | Warm start | `ralph_lap_solve_warm()` | Reuse dual variables |
 | Callbacks | `ralph_lap_solve_callback()` | O(n) memory for huge problems |
 | k-Best | `ralph_lap_solve_k_best()` | Murty's algorithm |
 | Bottleneck | `ralph_lap_solve_ex()` | Minimax/maximin assignment |
+| Priority | `ralph_lap_solve_ex()` | Row/column priorities for unbalanced LAP |
 | ε-scaling | `ralph_lap_set_epsilon_scaling()` | For degenerate problems |
 
 ### Unified API (Recommended)
@@ -110,6 +111,40 @@ ralph_lap_solve_ex(&prob, &opts, &res, workspace);
 | Rectangular | ✓ | ✓* | ✓ | - |
 
 *Sparse, callback, and rectangular k-best convert to dense/square internally.
+
+### Priority Constraints
+
+For unbalanced rectangular LAP (m ≠ n), priorities determine which agents/jobs get assigned when there are more rows than columns (or vice versa). Priority values range from 1-10 where 10 = highest priority.
+
+```c
+/* 5 workers competing for 3 jobs - high priority workers get assigned */
+double cost[15] = { /* 5×3 cost matrix */ };
+int row_prio[5] = {10, 2, 8, 1, 9};  /* Workers 0,4,2 have priority */
+
+RalphLapProblem prob = {
+    .n = 5, .m = 3,
+    .cost_type = RALPH_LAP_COST_DENSE,
+    .dense_cost = cost,
+    .objective = RALPH_LAP_MINIMIZE
+};
+
+RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+opts.num_row_priorities = 5;
+opts.row_priorities = row_prio;
+
+int row_sol[5];
+RalphLapResult res = {.row_sol = row_sol};
+ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+/* Workers 0,4,2 assigned; workers 1,3 get -1 (unassigned) */
+```
+
+**Implementation**: Costs are transformed by adding penalty `M*(10-priority)` to each row/column. For dummy assignments (unassigned slots), high-priority agents have expensive dummy costs, ensuring they prefer real assignments. Maintains O(n³) complexity.
+
+**Options fields**:
+- `num_row_priorities` / `row_priorities`: Priority array for rows (0 = disabled)
+- `num_col_priorities` / `col_priorities`: Priority array for columns (0 = disabled)
+
+Combines with other options (forbidden, sparse, maximization).
 
 ### Problem Detection
 
@@ -279,7 +314,7 @@ Detects: SHORTEST_PATH, ASSIGNMENT, TRANSPORTATION, and GENERAL network problems
 # All LP/MIP tests (73 tests)
 make test
 
-# LAP tests only (273 tests)
+# LAP tests only (315 tests)
 make test-lap
 
 # Network Flow tests (153 tests)
