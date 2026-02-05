@@ -512,9 +512,14 @@ void ct_render_polygon(CTRenderContext *ctx,
 
     /* Scanline fill */
     for (int y = min_y; y <= max_y; y++) {
-        /* Add edges starting at this scanline */
+        /* Add edges starting at or before this scanline */
         while (edge_idx < num_edges && edges[edge_idx].y_min <= y) {
-            active[num_active++] = edges[edge_idx++];
+            CTEdge e = edges[edge_idx++];
+            /* If edge started before visible area, advance x to current scanline */
+            if (e.y_min < y) {
+                e.x += e.dx * (float)(y - e.y_min);
+            }
+            active[num_active++] = e;
         }
 
         /* Remove edges ending at this scanline */
@@ -660,9 +665,14 @@ void ct_render_multipolygon(CTRenderContext *ctx,
 
     /* Scanline fill using even-odd rule (handles holes naturally) */
     for (int y = min_y; y <= max_y; y++) {
-        /* Add edges starting at this scanline */
+        /* Add edges starting at or before this scanline */
         while (edge_idx < num_edges && edges[edge_idx].y_min <= y) {
-            active[num_active++] = edges[edge_idx++];
+            CTEdge e = edges[edge_idx++];
+            /* If edge started before visible area, advance x to current scanline */
+            if (e.y_min < y) {
+                e.x += e.dx * (float)(y - e.y_min);
+            }
+            active[num_active++] = e;
         }
 
         /* Remove edges ending at this scanline */
