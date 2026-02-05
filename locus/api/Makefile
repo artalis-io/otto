@@ -3,25 +3,39 @@
 CC ?= gcc
 CFLAGS = -Wall -Wextra -O2 -std=c11 -D_GNU_SOURCE
 
-# Include paths
-INCLUDES = -I../include -I../../shared/include -I../../vendor/mongoose -I../../vendor/miniz -Isrc
-
-# Library paths
+# Directories
+SRC_DIR = src
+BUILD_DIR = build
 LOCUS_DIR = ..
 SHARED_DIR = ../../shared
-MONGOOSE_DIR = ../../vendor/mongoose
+VENDOR_DIR = ../../vendor
 
-# Linker flags
-LDFLAGS = -L$(LOCUS_DIR) -llocus -L$(SHARED_DIR) -lshared -lm -lpthread
+# Include paths
+INCLUDES = -I$(SRC_DIR) \
+           -I$(LOCUS_DIR)/include \
+           -I$(SHARED_DIR)/include \
+           -I$(VENDOR_DIR)/mongoose \
+           -I$(VENDOR_DIR)/miniz
+
+# Libraries
+LIBS = -L$(LOCUS_DIR) -llocus \
+       -L$(SHARED_DIR) -lshared \
+       -lm -lpthread
+
+# Mongoose object (compiled separately)
+MONGOOSE_OBJ = $(VENDOR_DIR)/mongoose/mongoose.o
+
+# Shared HTTP server (requires mongoose, compiled here not in libshared)
+HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o
 
 # Source files
-SRCS = src/main.c
-MONGOOSE_SRC = $(MONGOOSE_DIR)/mongoose.c
+SRCS = $(SRC_DIR)/main.c
+OBJS = $(BUILD_DIR)/main.o $(HTTPSERVER_OBJ)
 
 # Output
 TARGET = locus-geocoder
 
-.PHONY: all clean deps run test
+.PHONY: all clean deps run test help
 
 all: deps $(TARGET)
 
@@ -29,10 +43,24 @@ all: deps $(TARGET)
 deps:
 	$(MAKE) -C $(LOCUS_DIR) lib
 	$(MAKE) -C $(SHARED_DIR) lib
+	@# Build mongoose object if needed
+	@if [ ! -f $(MONGOOSE_OBJ) ]; then \
+		$(CC) $(CFLAGS) -c $(VENDOR_DIR)/mongoose/mongoose.c -o $(MONGOOSE_OBJ); \
+	fi
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+# Compile shared HTTP server (requires mongoose includes)
+$(HTTPSERVER_OBJ): $(SHARED_DIR)/src/sh_httpserver.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Build server
-$(TARGET): $(SRCS) $(MONGOOSE_SRC) $(LOCUS_DIR)/liblocus.a $(SHARED_DIR)/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $(SRCS) $(MONGOOSE_SRC) $(LDFLAGS) -o $@
+$(TARGET): $(OBJS) $(MONGOOSE_OBJ)
+	$(CC) $(CFLAGS) -o $@ $^ $(LIBS)
 
 # Run server
 run: $(TARGET)
@@ -40,7 +68,7 @@ run: $(TARGET)
 
 # Clean
 clean:
-	rm -f $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET)
 
 # Test API endpoints
 test: $(TARGET)

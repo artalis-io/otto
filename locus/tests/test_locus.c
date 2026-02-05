@@ -355,15 +355,15 @@ TEST(normalize_lowercase)
 {
     char buf[64];
 
-    strcpy(buf, "BUDAPEST");
+    snprintf(buf, sizeof(buf), "%s", "BUDAPEST");
     lc_lowercase(buf);
     ASSERT_STR_EQ(buf, "budapest");
 
-    strcpy(buf, "New York");
+    snprintf(buf, sizeof(buf), "%s", "New York");
     lc_lowercase(buf);
     ASSERT_STR_EQ(buf, "new york");
 
-    strcpy(buf, "ABC123");
+    snprintf(buf, sizeof(buf), "%s", "ABC123");
     lc_lowercase(buf);
     ASSERT_STR_EQ(buf, "abc123");
 }
@@ -397,15 +397,15 @@ TEST(normalize_whitespace)
 {
     char buf[64];
 
-    strcpy(buf, "  New   York  ");
+    snprintf(buf, sizeof(buf), "%s", "  New   York  ");
     lc_normalize_whitespace(buf);
     ASSERT_STR_EQ(buf, "New York");
 
-    strcpy(buf, "Hello\t\nWorld");
+    snprintf(buf, sizeof(buf), "%s", "Hello\t\nWorld");
     lc_normalize_whitespace(buf);
     ASSERT_STR_EQ(buf, "Hello World");
 
-    strcpy(buf, "   ");
+    snprintf(buf, sizeof(buf), "%s", "   ");
     lc_normalize_whitespace(buf);
     ASSERT_STR_EQ(buf, "");
 }
