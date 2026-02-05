@@ -27,10 +27,12 @@
 /* Minimum feature size in pixels for render-time filtering */
 #define MIN_FEATURE_PIXELS 2.0f
 
-/* Edge structure for scanline polygon fill (defined here for buffer preallocation) */
+/* Edge structure for scanline polygon fill (defined here for buffer preallocation)
+ * Uses double for x and dx to prevent accumulated floating-point error
+ * over many scanlines, which could cause edges to drift and cross incorrectly. */
 typedef struct {
     int y_min, y_max;
-    float x, dx;
+    double x, dx;
 } CTEdge;
 
 /* ============================================================================
@@ -502,8 +504,8 @@ void ct_render_polygon(CTRenderContext *ctx,
 
         edges[num_edges].y_min = y0;
         edges[num_edges].y_max = y1;
-        edges[num_edges].x = (float)x0;
-        edges[num_edges].dx = (float)(x1 - x0) / (float)(y1 - y0);
+        edges[num_edges].x = (double)x0;
+        edges[num_edges].dx = (double)(x1 - x0) / (double)(y1 - y0);
         num_edges++;
     }
 
@@ -522,7 +524,7 @@ void ct_render_polygon(CTRenderContext *ctx,
             if (e.y_max <= y) continue;
             /* If edge started before visible area, advance x to current scanline */
             if (e.y_min < y) {
-                e.x += e.dx * (float)(y - e.y_min);
+                e.x += e.dx * (double)(y - e.y_min);
             }
             active[num_active++] = e;
         }
@@ -559,8 +561,8 @@ void ct_render_polygon(CTRenderContext *ctx,
 
         /* Fill between pairs of edges using fast span fill */
         for (int i = 0; i + 1 < num_active; i += 2) {
-            int x_start = (int)(active[i].x + 0.5f);
-            int x_end = (int)(active[i + 1].x + 0.5f);
+            int x_start = (int)(active[i].x + 0.5);
+            int x_end = (int)(active[i + 1].x + 0.5);
             fill_span(ctx, y, x_start, x_end, color);
         }
 
@@ -649,8 +651,8 @@ void ct_render_multipolygon(CTRenderContext *ctx,
 
             edges[num_edges].y_min = y0;
             edges[num_edges].y_max = y1;
-            edges[num_edges].x = (float)x0;
-            edges[num_edges].dx = (float)(x1 - x0) / (float)(y1 - y0);
+            edges[num_edges].x = (double)x0;
+            edges[num_edges].dx = (double)(x1 - x0) / (double)(y1 - y0);
             num_edges++;
         }
 
@@ -680,7 +682,7 @@ void ct_render_multipolygon(CTRenderContext *ctx,
             if (e.y_max <= y) continue;
             /* If edge started before visible area, advance x to current scanline */
             if (e.y_min < y) {
-                e.x += e.dx * (float)(y - e.y_min);
+                e.x += e.dx * (double)(y - e.y_min);
             }
             active[num_active++] = e;
         }
@@ -717,8 +719,8 @@ void ct_render_multipolygon(CTRenderContext *ctx,
 
         /* Fill between pairs of edges (even-odd rule) using fast span fill */
         for (int i = 0; i + 1 < num_active; i += 2) {
-            int x_start = (int)(active[i].x + 0.5f);
-            int x_end = (int)(active[i + 1].x + 0.5f);
+            int x_start = (int)(active[i].x + 0.5);
+            int x_end = (int)(active[i + 1].x + 0.5);
             fill_span(ctx, y, x_start, x_end, color);
         }
 
