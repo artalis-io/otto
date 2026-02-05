@@ -1333,21 +1333,6 @@ static int parse_tile_uri(struct mg_str uri, int *z, int *x, int *y, char *ext) 
  * Main Event Handler
  * ============================================================================ */
 
-/* Helper to extract HTTP header for trace ID propagation */
-static const char *trace_header_getter(const char *name, void *ctx) {
-    struct mg_http_message *hm = (struct mg_http_message *)ctx;
-    struct mg_str *hdr = mg_http_get_header(hm, name);
-    if (hdr && hdr->len > 0) {
-        /* Return pointer to header value (valid for request lifetime) */
-        static __thread char hdr_buf[128];
-        size_t len = hdr->len < sizeof(hdr_buf) - 1 ? hdr->len : sizeof(hdr_buf) - 1;
-        memcpy(hdr_buf, hdr->buf, len);
-        hdr_buf[len] = '\0';
-        return hdr_buf;
-    }
-    return NULL;
-}
-
 /* Handle /metrics endpoint for Prometheus - uses shared helper */
 static void handle_metrics(struct mg_connection *c) {
     sh_mg_handle_metrics(c);
@@ -1365,7 +1350,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
         ShMetricsTimer req_timer = sh_metrics_timer_start();
 
         /* Extract or generate trace ID */
-        sh_trace_from_headers(trace_header_getter, hm);
+        sh_trace_from_headers(sh_mg_trace_header_getter, hm);
 
         /* Rate limiting check - uses shared helper */
         if (!sh_mg_check_rate_limit(c, s_rate_limiter, &s_cors, get_origin_from_request(hm))) {

@@ -81,20 +81,6 @@ static void signal_handler(int signo) {
     s_signo = signo;
 }
 
-/* Trace ID header getter for HTTP requests */
-static const char *trace_header_getter(const char *name, void *ctx) {
-    struct mg_http_message *hm = (struct mg_http_message *)ctx;
-    struct mg_str *hdr = mg_http_get_header(hm, name);
-    if (hdr && hdr->len > 0) {
-        static __thread char hdr_buf[128];
-        size_t len = hdr->len < sizeof(hdr_buf) - 1 ? hdr->len : sizeof(hdr_buf) - 1;
-        memcpy(hdr_buf, hdr->buf, len);
-        hdr_buf[len] = '\0';
-        return hdr_buf;
-    }
-    return NULL;
-}
-
 /* ============================================================================
  * JSON Parsing Helpers (Simple implementation)
  * ============================================================================ */
@@ -1212,7 +1198,7 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
         ShMetricsTimer req_timer = sh_metrics_timer_start();
 
         /* Extract or generate trace ID */
-        sh_trace_from_headers(trace_header_getter, hm);
+        sh_trace_from_headers(sh_mg_trace_header_getter, hm);
 
         /* Handle CORS preflight - no rate limiting */
         if (mg_match(hm->method, mg_str("OPTIONS"), NULL)) {
