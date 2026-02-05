@@ -251,8 +251,16 @@ void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolera
         }
     }
 
-    /* Ensure at least 3 points for valid polygon */
-    if (write_idx < 3) write_idx = (n < 3) ? n : 3;
+    /* If simplified to fewer than 3 points, polygon is degenerate.
+     * Keep the original polygon instead of returning garbage data.
+     * Note: We cannot just set write_idx=3 because we only wrote
+     * write_idx points during compaction - points[write_idx..n-1]
+     * contain old data that would corrupt the polygon. */
+    if (write_idx < 3) {
+        /* Degenerate result - keep original unchanged */
+        free(keep);
+        return;
+    }
 
     *num_points = write_idx;
     free(keep);
