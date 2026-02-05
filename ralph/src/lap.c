@@ -3320,6 +3320,182 @@ static const double* apply_forbidden_dense(
 }
 
 /*
+ * Compute penalty multiplier M for priority transformation.
+ * M must be large enough that priority differences dominate cost differences.
+ * Returns M = 1.1 * (max_cost - min_cost) + 1.0
+ */
+static double compute_priority_penalty(
+    const double *cost, int count,
+    RalphLapObjective objective
+) {
+    if (count <= 0) return 1.0;
+
+    double min_cost = cost[0], max_cost = cost[0];
+    for (int i = 1; i < count; i++) {
+        if (cost[i] < RALPH_LAP_INFINITY * 0.5) {  /* Skip infinity values */
+            if (cost[i] < min_cost) min_cost = cost[i];
+            if (cost[i] > max_cost) max_cost = cost[i];
+        }
+    }
+
+    /* For maximization, we negate costs, so range is the same */
+    double range = max_cost - min_cost;
+    return 1.1 * range + 1.0;
+}
+
+/*
+ * Apply priority transformation to a dense padded cost matrix.
+ *
+ * For minimization:
+ *   c'[i][j] = c[i][j] + M_row*(10-p_row[i]) + M_col*(10-p_col[j])
+ *
+ * For rectangular m×n problems padded to k×k:
+ *   - Real cells [i<m, j<n]: transform as above
+ *   - Dummy columns [i<m, j>=n]: M_row*(10-p_row[i]) (low-priority rows go here)
+ *   - Dummy rows [i>=m, j<n]: M_col*(10-p_col[j]) (low-priority cols go here)
+ *   - Padding [i>=m, j>=n]: 0 (dummy-to-dummy)
+ *
+ * For maximization, penalties are subtracted instead of added.
+ *
+ * Parameters:
+ *   m, n   - original problem dimensions
+ *   k      - padded square dimension (k = max(m, n))
+ *   cost   - k×k cost matrix (modified in-place)
+ *   row_prio, n_row_prio - row priorities (NULL/0 to disable)
+ *   col_prio, n_col_prio - column priorities (NULL/0 to disable)
+ *   objective - MINIMIZE or MAXIMIZE
+ */
+static void apply_priorities_dense(
+    int m, int n, int k,
+    double *cost,
+    const int *row_prio, int n_row_prio,
+    const int *col_prio, int n_col_prio,
+    RalphLapObjective objective
+) {
+    if ((n_row_prio == 0 || !row_prio) && (n_col_prio == 0 || !col_prio)) {
+        return;  /* No priorities to apply */
+    }
+
+    /* Compute penalty M from the real cost range */
+    double M = compute_priority_penalty(cost, m * n, objective);
+
+    /* Sign: +1 for minimization (penalty increases cost), -1 for maximization */
+    double sign = (objective == RALPH_LAP_MINIMIZE) ? 1.0 : -1.0;
+
+    /* Apply to entire k×k matrix */
+    for (int i = 0; i < k; i++) {
+        /* Row penalty: 0 for priority-10, 9*M for priority-1 */
+        double row_penalty = 0.0;
+        if (n_row_prio > 0 && row_prio && i < m) {
+            row_penalty = M * (10 - row_prio[i]);
+        }
+
+        for (int j = 0; j < k; j++) {
+            /* Column penalty */
+            double col_penalty = 0.0;
+            if (n_col_prio > 0 && col_prio && j < n) {
+                col_penalty = M * (10 - col_prio[j]);
+            }
+
+            /* Handle different regions of the padded matrix */
+            if (i < m && j < n) {
+                /* Real cell: apply both penalties */
+                cost[i * k + j] += sign * (row_penalty + col_penalty);
+            } else if (i < m && j >= n) {
+                /* Dummy column (row i may be left unassigned).
+                 * High-priority rows should avoid dummies (expensive).
+                 * Low-priority rows should accept dummies (cheap).
+                 * Use priority directly, not (10-priority). */
+                double dummy_cost = (n_row_prio > 0 && row_prio) ? M * row_prio[i] : 0.0;
+                cost[i * k + j] = sign * dummy_cost;
+            } else if (i >= m && j < n) {
+                /* Dummy row (column j may be left unassigned).
+                 * High-priority columns should avoid dummies (expensive).
+                 * Low-priority columns should accept dummies (cheap). */
+                double dummy_cost = (n_col_prio > 0 && col_prio) ? M * col_prio[j] : 0.0;
+                cost[i * k + j] = sign * dummy_cost;
+            }
+            /* [i>=m, j>=n] = dummy-to-dummy, keep at 0 */
+        }
+    }
+}
+
+/*
+ * Apply priority transformation to sparse CSR cost values.
+ * This modifies values in-place. Only applies to square problems.
+ *
+ * For each entry (i, j) with value v:
+ *   v' = v + sign * (M_row*(10-p_row[i]) + M_col*(10-p_col[j]))
+ */
+static void apply_priorities_sparse(
+    int n, int nnz,
+    const int *row_ptr, const int *col_idx, double *values,
+    const int *row_prio, int n_row_prio,
+    const int *col_prio, int n_col_prio,
+    RalphLapObjective objective
+) {
+    if ((n_row_prio == 0 || !row_prio) && (n_col_prio == 0 || !col_prio)) {
+        return;
+    }
+
+    double M = compute_priority_penalty(values, nnz, objective);
+    double sign = (objective == RALPH_LAP_MINIMIZE) ? 1.0 : -1.0;
+
+    for (int i = 0; i < n; i++) {
+        double row_penalty = 0.0;
+        if (n_row_prio > 0 && row_prio) {
+            row_penalty = M * (10 - row_prio[i]);
+        }
+
+        for (int k = row_ptr[i]; k < row_ptr[i + 1]; k++) {
+            int j = col_idx[k];
+            double col_penalty = 0.0;
+            if (n_col_prio > 0 && col_prio) {
+                col_penalty = M * (10 - col_prio[j]);
+            }
+            values[k] += sign * (row_penalty + col_penalty);
+        }
+    }
+}
+
+/*
+ * Validate priority arrays in options.
+ * Returns RALPH_LAP_SUCCESS if valid, RALPH_LAP_INVALID_INPUT otherwise.
+ */
+static RalphLapStatus validate_priorities(
+    const RalphLapOptions *opts,
+    int n_rows, int n_cols
+) {
+    if (!opts) return RALPH_LAP_SUCCESS;
+
+    /* Validate row priorities */
+    if (opts->num_row_priorities > 0) {
+        if (opts->num_row_priorities != n_rows || !opts->row_priorities) {
+            return RALPH_LAP_INVALID_INPUT;
+        }
+        for (int i = 0; i < n_rows; i++) {
+            if (opts->row_priorities[i] < 1 || opts->row_priorities[i] > 10) {
+                return RALPH_LAP_INVALID_INPUT;
+            }
+        }
+    }
+
+    /* Validate column priorities */
+    if (opts->num_col_priorities > 0) {
+        if (opts->num_col_priorities != n_cols || !opts->col_priorities) {
+            return RALPH_LAP_INVALID_INPUT;
+        }
+        for (int j = 0; j < n_cols; j++) {
+            if (opts->col_priorities[j] < 1 || opts->col_priorities[j] > 10) {
+                return RALPH_LAP_INVALID_INPUT;
+            }
+        }
+    }
+
+    return RALPH_LAP_SUCCESS;
+}
+
+/*
  * Internal: solve standard (single solution) LAP with unified problem/options.
  */
 static RalphLapStatus lap_solve_standard_unified(
@@ -3331,6 +3507,15 @@ static RalphLapStatus lap_solve_standard_unified(
     RalphLapStatus status;
     double single_cost = 0;
     double *cost_ptr = result->costs ? result->costs : &single_cost;
+
+    /* Validate priority arrays upfront */
+    status = validate_priorities(opts, prob->n, prob->m);
+    if (status != RALPH_LAP_SUCCESS) {
+        return status;
+    }
+
+    /* Check if priorities are set */
+    int has_priorities = opts && (opts->num_row_priorities > 0 || opts->num_col_priorities > 0);
 
     /* Apply algorithm-level settings to workspace (thread-safe) */
     if (opts) {
@@ -3345,6 +3530,22 @@ static RalphLapStatus lap_solve_standard_unified(
             if (prob->n == prob->m) {
                 /* Square dense LAP - call internal directly */
                 const double *cost = apply_forbidden_dense(prob, opts, ws);
+
+                /* Apply priorities if set (requires mutable copy) */
+                if (has_priorities) {
+                    /* If forbidden didn't copy, we need to copy now */
+                    if (cost == prob->dense_cost) {
+                        int nn = prob->n * prob->n;
+                        memcpy(ws->work_cost, cost, nn * sizeof(double));
+                    }
+                    apply_priorities_dense(
+                        prob->n, prob->m, prob->n, ws->work_cost,
+                        opts->row_priorities, opts->num_row_priorities,
+                        opts->col_priorities, opts->num_col_priorities,
+                        prob->objective
+                    );
+                    cost = ws->work_cost;
+                }
 
                 /* Handle trivial case */
                 if (prob->n == 1) {
@@ -3371,6 +3572,18 @@ static RalphLapStatus lap_solve_standard_unified(
                             result->row_sol, result->col_sol,
                             result->u, result->v, cost_ptr, ws
                         );
+                    }
+
+                    /* Recalculate actual cost using original costs (not transformed) */
+                    if (status == RALPH_LAP_SUCCESS && has_priorities && cost_ptr) {
+                        double actual = 0;
+                        for (int i = 0; i < prob->n; i++) {
+                            int j = result->row_sol[i];
+                            if (j >= 0 && j < prob->m) {
+                                actual += prob->dense_cost[i * prob->m + j];
+                            }
+                        }
+                        *cost_ptr = actual;
                     }
                 }
             } else {
@@ -3420,6 +3633,16 @@ static RalphLapStatus lap_solve_standard_unified(
                         }
                     }
 
+                    /* Apply priorities to padded matrix */
+                    if (has_priorities) {
+                        apply_priorities_dense(
+                            m, n, k, padded_cost,
+                            opts->row_priorities, opts->num_row_priorities,
+                            opts->col_priorities, opts->num_col_priorities,
+                            prob->objective
+                        );
+                    }
+
                     /* Create temp workspace for padded problem */
                     RalphLapWorkspace *temp_ws = ralph_lap_workspace_create(k);
                     if (!temp_ws) {
@@ -3466,11 +3689,49 @@ static RalphLapStatus lap_solve_standard_unified(
         case RALPH_LAP_COST_SPARSE:
             /* Sparse LAP - call the sparse solver */
             /* Note: ralph_lap_solve_sparse returns col_sol but not u/v */
-            status = ralph_lap_solve_sparse(
-                prob->n, prob->sparse.nnz,
-                prob->sparse.row_ptr, prob->sparse.col_idx, prob->sparse.values,
-                prob->objective, result->row_sol, result->col_sol, cost_ptr
-            );
+            if (has_priorities) {
+                /* Copy sparse values and apply priorities */
+                double *mod_values = (double *)malloc(prob->sparse.nnz * sizeof(double));
+                if (!mod_values) {
+                    status = RALPH_LAP_MEMORY_ERROR;
+                } else {
+                    memcpy(mod_values, prob->sparse.values, prob->sparse.nnz * sizeof(double));
+                    apply_priorities_sparse(
+                        prob->n, prob->sparse.nnz,
+                        prob->sparse.row_ptr, prob->sparse.col_idx, mod_values,
+                        opts->row_priorities, opts->num_row_priorities,
+                        opts->col_priorities, opts->num_col_priorities,
+                        prob->objective
+                    );
+                    status = ralph_lap_solve_sparse(
+                        prob->n, prob->sparse.nnz,
+                        prob->sparse.row_ptr, prob->sparse.col_idx, mod_values,
+                        prob->objective, result->row_sol, result->col_sol, cost_ptr
+                    );
+                    /* Recalculate actual cost using original values */
+                    if (status == RALPH_LAP_SUCCESS && cost_ptr) {
+                        double actual = 0;
+                        for (int i = 0; i < prob->n; i++) {
+                            int j = result->row_sol[i];
+                            /* Find original cost for (i, j) in sparse format */
+                            for (int kk = prob->sparse.row_ptr[i]; kk < prob->sparse.row_ptr[i + 1]; kk++) {
+                                if (prob->sparse.col_idx[kk] == j) {
+                                    actual += prob->sparse.values[kk];
+                                    break;
+                                }
+                            }
+                        }
+                        *cost_ptr = actual;
+                    }
+                    free(mod_values);
+                }
+            } else {
+                status = ralph_lap_solve_sparse(
+                    prob->n, prob->sparse.nnz,
+                    prob->sparse.row_ptr, prob->sparse.col_idx, prob->sparse.values,
+                    prob->objective, result->row_sol, result->col_sol, cost_ptr
+                );
+            }
             /* u/v dual variables not available from sparse solver */
             break;
 

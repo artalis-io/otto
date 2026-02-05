@@ -53,6 +53,14 @@ static void print_assignment(int n, const int *row_sol) {
     printf("\n");
 }
 
+/* Helper for unified callback tests */
+typedef struct { int n; const double *c; } UnifiedCostCtx;
+
+static double unified_callback_fn(int i, int j, void *ud) {
+    UnifiedCostCtx *c = (UnifiedCostCtx*)ud;
+    return c->c[i * c->n + j];
+}
+
 /* ============================================================================
  * Test 1: Trivial 1x1 problem
  * ============================================================================ */
@@ -2825,18 +2833,12 @@ void test_unified_callback(void) {
         10, 10, 3
     };
 
-    typedef struct { int n; const double *c; } CostCtx;
-    CostCtx ctx = {3, cost};
-
-    double callback_fn(int i, int j, void *ud) {
-        CostCtx *c = (CostCtx*)ud;
-        return c->c[i * c->n + j];
-    }
+    UnifiedCostCtx ctx = {3, cost};
 
     RalphLapProblem prob = {
         .n = 3, .m = 3,
         .cost_type = RALPH_LAP_COST_CALLBACK,
-        .callback = {callback_fn, &ctx},
+        .callback = {unified_callback_fn, &ctx},
         .objective = RALPH_LAP_MINIMIZE
     };
 
@@ -2970,18 +2972,12 @@ void test_unified_callback_k_best(void) {
         10, 10, 3
     };
 
-    typedef struct { int n; const double *c; } CostCtx;
-    CostCtx ctx = {3, matrix};
-
-    double callback_fn(int i, int j, void *ud) {
-        CostCtx *c = (CostCtx*)ud;
-        return c->c[i * c->n + j];
-    }
+    UnifiedCostCtx ctx = {3, matrix};
 
     RalphLapProblem prob = {
         .n = 3, .m = 3,
         .cost_type = RALPH_LAP_COST_CALLBACK,
-        .callback = {callback_fn, &ctx},
+        .callback = {unified_callback_fn, &ctx},
         .objective = RALPH_LAP_MINIMIZE
     };
 
@@ -3430,6 +3426,424 @@ void test_unified_k_best_rect_maximize(void) {
 }
 
 /* ============================================================================
+ * Priority Constraint Tests
+ * ============================================================================ */
+
+/*
+ * Test: Row priorities on rectangular LAP (5 workers, 3 jobs)
+ * Workers with priority 10,9,8 should be assigned; priority 2,1 left out.
+ */
+void test_priority_row_only(void) {
+    printf("\n=== Test: Priority - Row Only (5x3) ===\n");
+
+    /* 5 workers, 3 jobs - all costs equal so priority determines outcome */
+    double cost[15] = {
+        1, 1, 1,   /* Worker 0 */
+        1, 1, 1,   /* Worker 1 */
+        1, 1, 1,   /* Worker 2 */
+        1, 1, 1,   /* Worker 3 */
+        1, 1, 1    /* Worker 4 */
+    };
+
+    int row_prio[5] = {10, 2, 8, 1, 9};  /* Workers 0,4,2 highest priority */
+
+    RalphLapProblem prob = {
+        .n = 5, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_row_priorities = 5;
+    opts.row_priorities = row_prio;
+
+    int row_sol[5];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Workers 0 (prio 10), 4 (prio 9), 2 (prio 8) should be assigned */
+    ASSERT(row_sol[0] >= 0, "Worker 0 (priority 10) assigned");
+    ASSERT(row_sol[4] >= 0, "Worker 4 (priority 9) assigned");
+    ASSERT(row_sol[2] >= 0, "Worker 2 (priority 8) assigned");
+
+    /* Workers 1 (prio 2), 3 (prio 1) should be unassigned */
+    ASSERT(row_sol[1] == -1, "Worker 1 (priority 2) unassigned");
+    ASSERT(row_sol[3] == -1, "Worker 3 (priority 1) unassigned");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 5; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("\n");
+
+    ASSERT_NEAR(total, 3.0, TOLERANCE, "Total cost = 3");
+}
+
+/*
+ * Test: Column priorities on rectangular LAP (3 workers, 5 jobs)
+ * Jobs with priority 10,9,8 should be assigned; priority 2,1 left out.
+ */
+void test_priority_col_only(void) {
+    printf("\n=== Test: Priority - Column Only (3x5) ===\n");
+
+    /* 3 workers, 5 jobs - all costs equal so priority determines outcome */
+    double cost[15] = {
+        1, 1, 1, 1, 1,   /* Worker 0 */
+        1, 1, 1, 1, 1,   /* Worker 1 */
+        1, 1, 1, 1, 1    /* Worker 2 */
+    };
+
+    int col_prio[5] = {2, 10, 1, 9, 8};  /* Jobs 1,3,4 highest priority */
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 5,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_col_priorities = 5;
+    opts.col_priorities = col_prio;
+
+    int row_sol[3], col_sol[5];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .col_sol = col_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Jobs 1 (prio 10), 3 (prio 9), 4 (prio 8) should be assigned */
+    ASSERT(col_sol[1] >= 0, "Job 1 (priority 10) assigned");
+    ASSERT(col_sol[3] >= 0, "Job 3 (priority 9) assigned");
+    ASSERT(col_sol[4] >= 0, "Job 4 (priority 8) assigned");
+
+    /* Jobs 0 (prio 2), 2 (prio 1) should be unassigned */
+    ASSERT(col_sol[0] == -1, "Job 0 (priority 2) unassigned");
+    ASSERT(col_sol[2] == -1, "Job 2 (priority 1) unassigned");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 3; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("\n");
+
+    ASSERT_NEAR(total, 3.0, TOLERANCE, "Total cost = 3");
+}
+
+/*
+ * Test: Both row and column priorities
+ * In a 4x4 square problem, priorities should influence assignment order.
+ */
+void test_priority_both(void) {
+    printf("\n=== Test: Priority - Both Row and Column ===\n");
+
+    /* 4x4 with varying costs - high priority row/col pairs preferred */
+    double cost[16] = {
+        1, 5, 5, 5,   /* Row 0 prefers col 0 */
+        5, 2, 5, 5,   /* Row 1 prefers col 1 */
+        5, 5, 3, 5,   /* Row 2 prefers col 2 */
+        5, 5, 5, 4    /* Row 3 prefers col 3 */
+    };
+
+    /* Row 0 has highest priority, should get its preferred choice (col 0) */
+    int row_prio[4] = {10, 5, 5, 5};
+    /* Col 0 also has high priority - reinforces row 0 getting col 0 */
+    int col_prio[4] = {10, 5, 5, 5};
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 4,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_row_priorities = 4;
+    opts.row_priorities = row_prio;
+    opts.num_col_priorities = 4;
+    opts.col_priorities = col_prio;
+
+    int row_sol[4];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Optimal assignment is diagonal: 0->0, 1->1, 2->2, 3->3, cost = 10 */
+    /* With priorities, row 0 should definitely get col 0 */
+    ASSERT(row_sol[0] == 0, "High priority row 0 assigned to high priority col 0");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 4; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+
+    ASSERT_NEAR(total, 10.0, TOLERANCE, "Total cost = 10");
+}
+
+/*
+ * Test: Priority tie-breaking by cost
+ * When priorities are equal, cost should determine assignment.
+ */
+void test_priority_tie_break(void) {
+    printf("\n=== Test: Priority - Tie Breaking by Cost ===\n");
+
+    /* 4 workers, 2 jobs - workers 0,1 have same priority, should pick by cost */
+    double cost[8] = {
+        10, 1,    /* Worker 0: prefers job 1 (cost 1) */
+        1, 10,    /* Worker 1: prefers job 0 (cost 1) */
+        5, 5,     /* Worker 2 */
+        5, 5      /* Worker 3 */
+    };
+
+    /* Workers 0 and 1 have same high priority */
+    int row_prio[4] = {10, 10, 1, 1};
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 2,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_row_priorities = 4;
+    opts.row_priorities = row_prio;
+
+    int row_sol[4];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Workers 0 and 1 should be assigned (equal high priority) */
+    ASSERT(row_sol[0] >= 0, "Worker 0 (priority 10) assigned");
+    ASSERT(row_sol[1] >= 0, "Worker 1 (priority 10) assigned");
+
+    /* Workers 2 and 3 should be unassigned (low priority) */
+    ASSERT(row_sol[2] == -1, "Worker 2 (priority 1) unassigned");
+    ASSERT(row_sol[3] == -1, "Worker 3 (priority 1) unassigned");
+
+    /* Optimal: 0->1 (cost 1), 1->0 (cost 1), total = 2 */
+    ASSERT_NEAR(total, 2.0, TOLERANCE, "Total cost = 2");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 4; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+}
+
+/*
+ * Test: Priorities with maximization objective
+ */
+void test_priority_maximize(void) {
+    printf("\n=== Test: Priority - Maximization ===\n");
+
+    /* 4 workers, 2 jobs - maximize: want high values assigned */
+    double cost[8] = {
+        1, 10,    /* Worker 0: prefers job 1 (value 10) */
+        10, 1,    /* Worker 1: prefers job 0 (value 10) */
+        5, 5,     /* Worker 2 */
+        5, 5      /* Worker 3 */
+    };
+
+    /* Workers 0 and 1 have highest priority */
+    int row_prio[4] = {10, 9, 2, 1};
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 2,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MAXIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_row_priorities = 4;
+    opts.row_priorities = row_prio;
+
+    int row_sol[4];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Workers 0 and 1 should be assigned */
+    ASSERT(row_sol[0] >= 0, "Worker 0 (priority 10) assigned");
+    ASSERT(row_sol[1] >= 0, "Worker 1 (priority 9) assigned");
+
+    /* Workers 2 and 3 unassigned */
+    ASSERT(row_sol[2] == -1, "Worker 2 (priority 2) unassigned");
+    ASSERT(row_sol[3] == -1, "Worker 3 (priority 1) unassigned");
+
+    /* Optimal maximize: 0->1 (10), 1->0 (10), total = 20 */
+    ASSERT_NEAR(total, 20.0, TOLERANCE, "Total value = 20");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 4; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(value=%.1f)\n", total);
+}
+
+/*
+ * Test: Priorities combined with forbidden constraints
+ */
+void test_priority_with_forbidden(void) {
+    printf("\n=== Test: Priority - Combined with Forbidden ===\n");
+
+    /* 4 workers, 3 jobs */
+    double cost[12] = {
+        1, 1, 1,   /* Worker 0 */
+        1, 1, 1,   /* Worker 1 */
+        1, 1, 1,   /* Worker 2 */
+        1, 1, 1    /* Worker 3 */
+    };
+
+    /* Workers 0,1,2 high priority; worker 3 low */
+    int row_prio[4] = {10, 9, 8, 1};
+
+    /* Forbid worker 0 from job 0 */
+    int forbidden_rows[1] = {0};
+    int forbidden_cols[1] = {0};
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_row_priorities = 4;
+    opts.row_priorities = row_prio;
+    opts.num_forbidden = 1;
+    opts.forbidden_rows = forbidden_rows;
+    opts.forbidden_cols = forbidden_cols;
+
+    int row_sol[4];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Worker 0 should NOT be assigned to job 0 */
+    ASSERT(row_sol[0] != 0, "Worker 0 not assigned to forbidden job 0");
+
+    /* Workers 0,1,2 should be assigned; worker 3 unassigned */
+    ASSERT(row_sol[0] >= 0, "Worker 0 assigned (to non-forbidden job)");
+    ASSERT(row_sol[1] >= 0, "Worker 1 assigned");
+    ASSERT(row_sol[2] >= 0, "Worker 2 assigned");
+    ASSERT(row_sol[3] == -1, "Worker 3 (lowest priority) unassigned");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 4; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+
+    ASSERT_NEAR(total, 3.0, TOLERANCE, "Total cost = 3");
+}
+
+/*
+ * Test: Invalid priority values should fail
+ */
+void test_priority_invalid(void) {
+    printf("\n=== Test: Priority - Invalid Input Validation ===\n");
+
+    double cost[4] = {1, 2, 3, 4};
+    int row_sol[2];
+
+    RalphLapProblem prob = {
+        .n = 2, .m = 2,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+
+    /* Test 1: Priority out of range (0) */
+    int bad_prio1[2] = {0, 10};  /* 0 is invalid (must be 1-10) */
+    opts.num_row_priorities = 2;
+    opts.row_priorities = bad_prio1;
+
+    RalphLapResult res = {.row_sol = row_sol};
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+    ASSERT(status == RALPH_LAP_INVALID_INPUT, "Priority 0 rejected");
+
+    /* Test 2: Priority out of range (11) */
+    int bad_prio2[2] = {5, 11};  /* 11 is invalid */
+    opts.row_priorities = bad_prio2;
+    status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+    ASSERT(status == RALPH_LAP_INVALID_INPUT, "Priority 11 rejected");
+
+    /* Test 3: Wrong count */
+    int good_prio[3] = {5, 5, 5};
+    opts.num_row_priorities = 3;  /* But problem has only 2 rows */
+    opts.row_priorities = good_prio;
+    status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+    ASSERT(status == RALPH_LAP_INVALID_INPUT, "Wrong priority count rejected");
+}
+
+/*
+ * Test: Sparse LAP with priorities
+ */
+void test_priority_sparse(void) {
+    printf("\n=== Test: Priority - Sparse LAP ===\n");
+
+    /* 4x4 sparse problem */
+    int row_ptr[5] = {0, 2, 4, 6, 8};
+    int col_idx[8] = {0, 1, 1, 2, 2, 3, 0, 3};
+    double values[8] = {1, 2, 2, 1, 1, 2, 2, 1};
+
+    /* Row 0 and 3 have highest priority */
+    int row_prio[4] = {10, 5, 5, 10};
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 4,
+        .cost_type = RALPH_LAP_COST_SPARSE,
+        .sparse = {
+            .nnz = 8,
+            .row_ptr = row_ptr,
+            .col_idx = col_idx,
+            .values = values
+        },
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_row_priorities = 4;
+    opts.row_priorities = row_prio;
+
+    int row_sol[4], col_sol[4];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .col_sol = col_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Sparse LAP with priorities succeeded");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 4; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+
+    /* All rows should be assigned in a 4x4 square problem */
+    int all_assigned = 1;
+    for (int i = 0; i < 4; i++) {
+        if (row_sol[i] < 0) all_assigned = 0;
+    }
+    ASSERT(all_assigned, "All rows assigned in square problem");
+
+    /* Optimal cost is 5: 0->0 (1) + 1->1 (2) + 2->2 (1) + 3->3 (1) = 5 */
+    ASSERT_NEAR(total, 5.0, TOLERANCE, "Optimal cost = 5");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -3512,6 +3926,16 @@ int main(void) {
     test_unified_bottleneck_rect_maximin();
     test_unified_k_best_rectangular();
     test_unified_k_best_rect_maximize();
+
+    /* Priority constraint tests */
+    test_priority_row_only();
+    test_priority_col_only();
+    test_priority_both();
+    test_priority_tie_break();
+    test_priority_maximize();
+    test_priority_with_forbidden();
+    test_priority_invalid();
+    test_priority_sparse();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",

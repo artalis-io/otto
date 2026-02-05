@@ -698,6 +698,26 @@ typedef struct {
     double epsilon_factor;          /* ε reduction factor (default: 4.0) */
     int parallel;                   /* 1 = enable OpenMP parallelism */
 
+    /* Priority constraints for unbalanced LAP (rectangular m×n problems).
+     *
+     * When m > n (more rows than columns), some rows will be unassigned.
+     * Row priorities determine which rows get assigned first.
+     *
+     * When n > m (more columns than rows), some columns will be unassigned.
+     * Column priorities determine which columns get assigned first.
+     *
+     * Priority values: 1-10 where 10 = highest priority (assigned first).
+     * Implementation: costs are transformed by adding penalty M*(10-priority)
+     * where M > max(cost) - min(cost), ensuring priority dominates.
+     *
+     * For square problems (n == m), priorities affect assignment order
+     * but all agents are assigned.
+     */
+    int num_row_priorities;         /* 0 = disabled, else must equal n (rows) */
+    const int *row_priorities;      /* Priority 1-10 for each row */
+    int num_col_priorities;         /* 0 = disabled, else must equal m (cols) */
+    const int *col_priorities;      /* Priority 1-10 for each column */
+
 } RalphLapOptions;
 
 /* Default options initializer */
@@ -713,7 +733,11 @@ typedef struct {
     .forbidden_cols = NULL, \
     .epsilon_scaling = 0, \
     .epsilon_factor = 4.0, \
-    .parallel = 1 \
+    .parallel = 1, \
+    .num_row_priorities = 0, \
+    .row_priorities = NULL, \
+    .num_col_priorities = 0, \
+    .col_priorities = NULL \
 }
 
 /*
