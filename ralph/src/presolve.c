@@ -45,7 +45,11 @@ static PresolveContext* presolve_context_create(LPModel *model) {
     ctx->max_rounds = 10;
     ctx->current_round = 0;
 
-    /* Allocate working arrays */
+    /*
+     * Allocate working arrays (batch allocation pattern).
+     * All arrays are allocated, then checked together. On failure,
+     * free(NULL) is safe, so we can clean up all pointers uniformly.
+     */
     ctx->row_deleted = (int*)calloc(model->num_cons, sizeof(int));
     ctx->col_deleted = (int*)calloc(model->num_vars, sizeof(int));
     ctx->row_lb = (double*)calloc(model->num_cons, sizeof(double));

@@ -53,10 +53,16 @@
 #define LAP_BLOCK_SIZE 64
 
 /*
- * Default configuration settings (thread-safe via atomics).
- * These are copied to workspace cfg_* fields on creation.
- * The actual algorithm uses per-workspace config for thread safety.
- * Options passed to solve functions can override workspace config.
+ * Process-wide default configuration settings.
+ *
+ * THREAD SAFETY: Access is atomic, but semantics are process-wide.
+ * These defaults are copied to workspace cfg_* fields on creation.
+ * The algorithm uses per-workspace config, so concurrent solves with
+ * different workspaces are safe. However, changing these defaults
+ * while workspaces are being created can lead to inconsistent config.
+ *
+ * RECOMMENDED: Set these at startup before any solving, or use
+ * per-workspace configuration via RalphLapOptions for per-solve control.
  */
 static atomic_int lap_parallel_enabled = 1;           /* Default parallelization setting */
 static atomic_int lap_epsilon_scaling_enabled = 0;    /* Default ε-scaling setting */
@@ -3873,6 +3879,11 @@ static RalphLapStatus lap_solve_standard_unified(
             /* Note: ralph_lap_solve_sparse returns col_sol but not u/v */
             if (has_priorities) {
                 /* Copy sparse values and apply priorities */
+                /* Check for integer overflow before allocation */
+                if (prob->sparse.nnz > SIZE_MAX / sizeof(double)) {
+                    status = RALPH_LAP_MEMORY_ERROR;
+                    break;
+                }
                 double *mod_values = (double *)malloc(prob->sparse.nnz * sizeof(double));
                 if (!mod_values) {
                     status = RALPH_LAP_MEMORY_ERROR;
