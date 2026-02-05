@@ -3844,6 +3844,758 @@ void test_priority_sparse(void) {
 }
 
 /* ============================================================================
+ * Cardinality Bounds Tests
+ * ============================================================================ */
+
+/*
+ * Test: max_assignments limits how many pairs are assigned
+ */
+void test_cardinality_max_basic(void) {
+    printf("\n=== Test: Cardinality - Max Assignments Basic ===\n");
+
+    /* 5 workers, 3 jobs - normally all 3 jobs assigned */
+    /* With max=2, only 2 jobs should be assigned */
+    double cost[15] = {
+        1, 2, 3,
+        4, 1, 2,
+        3, 4, 1,
+        2, 3, 4,
+        5, 5, 5
+    };
+
+    RalphLapProblem prob = {
+        .n = 5, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.max_assignments = 2;
+
+    int row_sol[5];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Count real assignments */
+    int count = 0;
+    for (int i = 0; i < 5; i++) {
+        if (row_sol[i] >= 0) count++;
+    }
+    ASSERT(count == 2, "Exactly 2 assignments made");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 5; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+
+    /* Optimal 2 assignments: 0->0 (1), 2->2 (1) = 2 */
+    ASSERT_NEAR(total, 2.0, TOLERANCE, "Optimal cost = 2");
+}
+
+/*
+ * Test: min_assignments ensures minimum pairs
+ */
+void test_cardinality_min_basic(void) {
+    printf("\n=== Test: Cardinality - Min Assignments Basic ===\n");
+
+    /* 5 workers, 3 jobs - min=3 means all 3 must be assigned */
+    double cost[15] = {
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1
+    };
+
+    RalphLapProblem prob = {
+        .n = 5, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.min_assignments = 3;
+
+    int row_sol[5];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    int count = 0;
+    for (int i = 0; i < 5; i++) {
+        if (row_sol[i] >= 0) count++;
+    }
+    ASSERT(count >= 3, "At least 3 assignments made");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 5; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f, count=%d)\n", total, count);
+}
+
+/*
+ * Test: exact cardinality (min == max)
+ */
+void test_cardinality_exact(void) {
+    printf("\n=== Test: Cardinality - Exact Count ===\n");
+
+    /* 4x4 square, but only want exactly 2 assignments */
+    double cost[16] = {
+        1, 5, 5, 5,
+        5, 2, 5, 5,
+        5, 5, 3, 5,
+        5, 5, 5, 4
+    };
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 4,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.min_assignments = 2;
+    opts.max_assignments = 2;
+
+    int row_sol[4];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    int count = 0;
+    for (int i = 0; i < 4; i++) {
+        if (row_sol[i] >= 0) count++;
+    }
+    ASSERT(count == 2, "Exactly 2 assignments made");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 4; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+
+    /* Best 2: 0->0 (1), 1->1 (2) = 3 */
+    ASSERT_NEAR(total, 3.0, TOLERANCE, "Optimal cost = 3");
+}
+
+/*
+ * Test: cardinality with priorities - high priority gets assigned
+ */
+void test_cardinality_with_priority(void) {
+    printf("\n=== Test: Cardinality - With Priority ===\n");
+
+    /* 4 workers, 4 jobs, max=2, priorities determine who gets assigned */
+    double cost[16] = {
+        1, 1, 1, 1,
+        1, 1, 1, 1,
+        1, 1, 1, 1,
+        1, 1, 1, 1
+    };
+
+    int row_prio[4] = {5, 10, 3, 8};  /* Workers 1,3 have highest priority */
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 4,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.max_assignments = 2;
+    opts.num_row_priorities = 4;
+    opts.row_priorities = row_prio;
+
+    int row_sol[4];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Workers 1 (prio 10) and 3 (prio 8) should be assigned */
+    ASSERT(row_sol[1] >= 0, "Worker 1 (priority 10) assigned");
+    ASSERT(row_sol[3] >= 0, "Worker 3 (priority 8) assigned");
+    ASSERT(row_sol[0] == -1, "Worker 0 (priority 5) unassigned");
+    ASSERT(row_sol[2] == -1, "Worker 2 (priority 3) unassigned");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 4; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+}
+
+/*
+ * Test: min_assignments causes infeasible when impossible
+ * Use rectangular problem: 5 workers, 3 jobs, but only 2 workers can reach jobs
+ */
+void test_cardinality_min_infeasible(void) {
+    printf("\n=== Test: Cardinality - Min Infeasible ===\n");
+
+    /* 5 workers, 3 jobs but workers 2,3,4 have all INFINITY costs */
+    double cost[15] = {
+        1, 1, 1,                                              /* Worker 0: OK */
+        1, 1, 1,                                              /* Worker 1: OK */
+        RALPH_LAP_INFINITY, RALPH_LAP_INFINITY, RALPH_LAP_INFINITY,  /* Worker 2: blocked */
+        RALPH_LAP_INFINITY, RALPH_LAP_INFINITY, RALPH_LAP_INFINITY,  /* Worker 3: blocked */
+        RALPH_LAP_INFINITY, RALPH_LAP_INFINITY, RALPH_LAP_INFINITY   /* Worker 4: blocked */
+    };
+
+    RalphLapProblem prob = {
+        .n = 5, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.min_assignments = 3;  /* Want 3 but only 2 workers can actually work */
+
+    int row_sol[5];
+    RalphLapResult res = {.row_sol = row_sol};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_INFEASIBLE, "Status is INFEASIBLE");
+    printf("  Correctly detected infeasibility\n");
+}
+
+/*
+ * Test: cardinality validation - invalid bounds
+ */
+void test_cardinality_invalid(void) {
+    printf("\n=== Test: Cardinality - Invalid Input ===\n");
+
+    double cost[9] = {1,2,3,4,5,6,7,8,9};
+    int row_sol[3];
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    RalphLapResult res = {.row_sol = row_sol};
+
+    /* min > natural max */
+    opts.min_assignments = 5;  /* But only 3 possible */
+    opts.max_assignments = 0;
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+    ASSERT(status == RALPH_LAP_INVALID_INPUT, "min > natural_max rejected");
+
+    /* max > natural max */
+    opts.min_assignments = 0;
+    opts.max_assignments = 5;
+    status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+    ASSERT(status == RALPH_LAP_INVALID_INPUT, "max > natural_max rejected");
+
+    /* min > max */
+    opts.min_assignments = 3;
+    opts.max_assignments = 1;
+    status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+    ASSERT(status == RALPH_LAP_INVALID_INPUT, "min > max rejected");
+}
+
+/* ============================================================================
+ * Qualification Subsets Tests
+ * ============================================================================ */
+
+/*
+ * Test: basic qualification - column can only be served by subset of rows
+ */
+void test_qualification_basic(void) {
+    printf("\n=== Test: Qualification - Basic ===\n");
+
+    /* 4 workers, 3 jobs. Job 1 can only be done by workers 0, 2 */
+    double cost[12] = {
+        1, 1, 1,   /* Worker 0 */
+        1, 1, 1,   /* Worker 1 - NOT qualified for job 1 */
+        1, 1, 1,   /* Worker 2 */
+        1, 1, 1    /* Worker 3 - NOT qualified for job 1 */
+    };
+
+    int qual_col_idx[1] = {1};  /* Job 1 has qualification */
+    int qual_row_ptr[2] = {0, 2};  /* 2 qualified rows */
+    int qual_rows[2] = {0, 2};  /* Workers 0 and 2 */
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_qual_cols = 1;
+    opts.qual_col_idx = qual_col_idx;
+    opts.qual_row_ptr = qual_row_ptr;
+    opts.qual_rows = qual_rows;
+
+    int row_sol[4], col_sol[3];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .col_sol = col_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Job 1 must be assigned to worker 0 or 2 */
+    ASSERT(col_sol[1] == 0 || col_sol[1] == 2, "Job 1 assigned to qualified worker");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 4; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+
+    ASSERT_NEAR(total, 3.0, TOLERANCE, "Total cost = 3");
+}
+
+/*
+ * Test: multiple columns with qualifications
+ */
+void test_qualification_multiple_cols(void) {
+    printf("\n=== Test: Qualification - Multiple Columns ===\n");
+
+    /* 4 workers, 3 jobs */
+    /* Job 0: only workers 0, 1 qualified */
+    /* Job 2: only workers 2, 3 qualified */
+    double cost[12] = {
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1
+    };
+
+    int qual_col_idx[2] = {0, 2};
+    int qual_row_ptr[3] = {0, 2, 4};
+    int qual_rows[4] = {0, 1, 2, 3};  /* Job 0: 0,1; Job 2: 2,3 */
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_qual_cols = 2;
+    opts.qual_col_idx = qual_col_idx;
+    opts.qual_row_ptr = qual_row_ptr;
+    opts.qual_rows = qual_rows;
+
+    int row_sol[4], col_sol[3];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .col_sol = col_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Job 0 must be assigned to worker 0 or 1 */
+    ASSERT(col_sol[0] == 0 || col_sol[0] == 1, "Job 0 assigned to qualified worker (0 or 1)");
+    /* Job 2 must be assigned to worker 2 or 3 */
+    ASSERT(col_sol[2] == 2 || col_sol[2] == 3, "Job 2 assigned to qualified worker (2 or 3)");
+
+    printf("  col_sol: %d, %d, %d\n", col_sol[0], col_sol[1], col_sol[2]);
+}
+
+/*
+ * Test: single row qualified for a column
+ */
+void test_qualification_single_qualified(void) {
+    printf("\n=== Test: Qualification - Single Qualified ===\n");
+
+    /* 3 workers, 3 jobs. Job 2 can ONLY be done by worker 1 */
+    double cost[9] = {
+        1, 2, 3,
+        4, 5, 6,
+        7, 8, 9
+    };
+
+    int qual_col_idx[1] = {2};
+    int qual_row_ptr[2] = {0, 1};
+    int qual_rows[1] = {1};  /* Only worker 1 */
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_qual_cols = 1;
+    opts.qual_col_idx = qual_col_idx;
+    opts.qual_row_ptr = qual_row_ptr;
+    opts.qual_rows = qual_rows;
+
+    int row_sol[3], col_sol[3];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .col_sol = col_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+    ASSERT(col_sol[2] == 1, "Job 2 assigned to only qualified worker (1)");
+    ASSERT(row_sol[1] == 2, "Worker 1 assigned to job 2");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 3; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+
+    /* Forced: 1->2 (6). Best remaining: 0->0 (1), 2->1 (8). Total = 15 */
+    ASSERT_NEAR(total, 15.0, TOLERANCE, "Total cost = 15");
+}
+
+/*
+ * Test: qualification makes problem infeasible
+ * Use rectangular with min_assignments to detect infeasibility
+ */
+void test_qualification_infeasible(void) {
+    printf("\n=== Test: Qualification - Infeasible ===\n");
+
+    /* 4 workers, 3 jobs. All 3 jobs can only be done by worker 0.
+     * With min_assignments=3, this is infeasible since worker 0 can only do 1 job.
+     */
+    double cost[12] = {
+        1, 1, 1,   /* Worker 0 */
+        1, 1, 1,   /* Worker 1 */
+        1, 1, 1,   /* Worker 2 */
+        1, 1, 1    /* Worker 3 */
+    };
+
+    /* All 3 jobs can only be done by worker 0 */
+    int qual_col_idx[3] = {0, 1, 2};
+    int qual_row_ptr[4] = {0, 1, 2, 3};
+    int qual_rows[3] = {0, 0, 0};
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_qual_cols = 3;
+    opts.qual_col_idx = qual_col_idx;
+    opts.qual_row_ptr = qual_row_ptr;
+    opts.qual_rows = qual_rows;
+    opts.min_assignments = 3;  /* Require all 3 jobs done, but only 1 worker can do them */
+
+    int row_sol[4];
+    RalphLapResult res = {.row_sol = row_sol};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_INFEASIBLE, "Status is INFEASIBLE");
+    printf("  Correctly detected infeasibility\n");
+}
+
+/*
+ * Test: qualification with forbidden - both constraints apply
+ */
+void test_qualification_with_forbidden(void) {
+    printf("\n=== Test: Qualification - With Forbidden ===\n");
+
+    /* 3 workers, 3 jobs */
+    /* Job 1: only workers 0, 1, 2 qualified (all) */
+    /* But worker 0 is forbidden from job 1 */
+    double cost[9] = {
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1
+    };
+
+    int qual_col_idx[1] = {1};
+    int qual_row_ptr[2] = {0, 3};
+    int qual_rows[3] = {0, 1, 2};
+
+    int forbidden_rows[1] = {0};
+    int forbidden_cols[1] = {1};
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_qual_cols = 1;
+    opts.qual_col_idx = qual_col_idx;
+    opts.qual_row_ptr = qual_row_ptr;
+    opts.qual_rows = qual_rows;
+    opts.num_forbidden = 1;
+    opts.forbidden_rows = forbidden_rows;
+    opts.forbidden_cols = forbidden_cols;
+
+    int row_sol[3], col_sol[3];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .col_sol = col_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+    ASSERT(col_sol[1] != 0, "Job 1 not assigned to forbidden worker 0");
+    ASSERT(col_sol[1] == 1 || col_sol[1] == 2, "Job 1 assigned to worker 1 or 2");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 3; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+}
+
+/*
+ * Test: qualification validation - invalid input
+ */
+void test_qualification_invalid(void) {
+    printf("\n=== Test: Qualification - Invalid Input ===\n");
+
+    double cost[9] = {1,2,3,4,5,6,7,8,9};
+    int row_sol[3];
+
+    RalphLapProblem prob = {
+        .n = 3, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    RalphLapResult res = {.row_sol = row_sol};
+
+    /* Invalid column index */
+    int qual_col_idx_bad[1] = {5};  /* Column 5 doesn't exist */
+    int qual_row_ptr[2] = {0, 1};
+    int qual_rows[1] = {0};
+
+    opts.num_qual_cols = 1;
+    opts.qual_col_idx = qual_col_idx_bad;
+    opts.qual_row_ptr = qual_row_ptr;
+    opts.qual_rows = qual_rows;
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+    ASSERT(status == RALPH_LAP_INVALID_INPUT, "Invalid column index rejected");
+
+    /* Invalid row index */
+    int qual_col_idx_ok[1] = {1};
+    int qual_rows_bad[1] = {10};  /* Row 10 doesn't exist */
+    opts.qual_col_idx = qual_col_idx_ok;
+    opts.qual_rows = qual_rows_bad;
+
+    status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+    ASSERT(status == RALPH_LAP_INVALID_INPUT, "Invalid row index rejected");
+}
+
+/* ============================================================================
+ * Combined Constraint Tests
+ * ============================================================================ */
+
+/*
+ * Test: cardinality + qualifications together
+ */
+void test_combined_cardinality_qualification(void) {
+    printf("\n=== Test: Combined - Cardinality + Qualification ===\n");
+
+    /* 5 workers, 4 jobs */
+    /* max=2: only 2 jobs will be assigned */
+    /* Job 0: only workers 0, 1 qualified */
+    /* Job 1: only workers 2, 3 qualified */
+    double cost[20] = {
+        1, 1, 1, 1,
+        1, 1, 1, 1,
+        1, 1, 1, 1,
+        1, 1, 1, 1,
+        1, 1, 1, 1
+    };
+
+    int qual_col_idx[2] = {0, 1};
+    int qual_row_ptr[3] = {0, 2, 4};
+    int qual_rows[4] = {0, 1, 2, 3};
+
+    RalphLapProblem prob = {
+        .n = 5, .m = 4,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.max_assignments = 2;
+    opts.num_qual_cols = 2;
+    opts.qual_col_idx = qual_col_idx;
+    opts.qual_row_ptr = qual_row_ptr;
+    opts.qual_rows = qual_rows;
+
+    int row_sol[5], col_sol[4];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .col_sol = col_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    int count = 0;
+    for (int i = 0; i < 5; i++) {
+        if (row_sol[i] >= 0) count++;
+    }
+    ASSERT(count == 2, "Exactly 2 assignments made");
+
+    /* If job 0 is assigned, must be to worker 0 or 1 */
+    if (col_sol[0] >= 0) {
+        ASSERT(col_sol[0] == 0 || col_sol[0] == 1, "Job 0 uses qualified worker");
+    }
+    /* If job 1 is assigned, must be to worker 2 or 3 */
+    if (col_sol[1] >= 0) {
+        ASSERT(col_sol[1] == 2 || col_sol[1] == 3, "Job 1 uses qualified worker");
+    }
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 5; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+}
+
+/*
+ * Test: cardinality + priorities + qualifications (all three)
+ */
+void test_combined_all_three(void) {
+    printf("\n=== Test: Combined - Cardinality + Priority + Qualification ===\n");
+
+    /* 6 workers, 4 jobs */
+    /* max=2: only 2 assignments */
+    /* Priorities: workers 0,1 high, 2,3 medium, 4,5 low */
+    /* Job 0: only workers 0,2,4 qualified (one from each priority tier) */
+    /* Job 1: only workers 1,3,5 qualified */
+    double cost[24] = {
+        1, 1, 1, 1,
+        1, 1, 1, 1,
+        1, 1, 1, 1,
+        1, 1, 1, 1,
+        1, 1, 1, 1,
+        1, 1, 1, 1
+    };
+
+    int row_prio[6] = {10, 10, 5, 5, 1, 1};
+    int qual_col_idx[2] = {0, 1};
+    int qual_row_ptr[3] = {0, 3, 6};
+    int qual_rows[6] = {0, 2, 4, 1, 3, 5};
+
+    RalphLapProblem prob = {
+        .n = 6, .m = 4,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.max_assignments = 2;
+    opts.num_row_priorities = 6;
+    opts.row_priorities = row_prio;
+    opts.num_qual_cols = 2;
+    opts.qual_col_idx = qual_col_idx;
+    opts.qual_row_ptr = qual_row_ptr;
+    opts.qual_rows = qual_rows;
+
+    int row_sol[6], col_sol[4];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .col_sol = col_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    int count = 0;
+    for (int i = 0; i < 6; i++) {
+        if (row_sol[i] >= 0) count++;
+    }
+    ASSERT(count == 2, "Exactly 2 assignments made");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 6; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+
+    /* High priority workers should be assigned */
+    /* Worker 0 (prio 10) qualified for job 0 -> should get it */
+    /* Worker 1 (prio 10) qualified for job 1 -> should get it */
+    ASSERT(row_sol[0] >= 0 || row_sol[1] >= 0, "At least one high-priority worker assigned");
+
+    /* Verify qualifications respected */
+    if (col_sol[0] >= 0) {
+        ASSERT(col_sol[0] == 0 || col_sol[0] == 2 || col_sol[0] == 4,
+               "Job 0 assigned to qualified worker (0, 2, or 4)");
+    }
+    if (col_sol[1] >= 0) {
+        ASSERT(col_sol[1] == 1 || col_sol[1] == 3 || col_sol[1] == 5,
+               "Job 1 assigned to qualified worker (1, 3, or 5)");
+    }
+}
+
+/*
+ * Test: priority + qualification (no cardinality)
+ */
+void test_combined_priority_qualification(void) {
+    printf("\n=== Test: Combined - Priority + Qualification ===\n");
+
+    /* 4 workers, 3 jobs */
+    /* Workers 0,1 high priority; 2,3 low priority */
+    /* Job 0: only workers 1,3 qualified */
+    /* Result: worker 1 (high priority, qualified) gets job 0 */
+    double cost[12] = {
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1,
+        1, 1, 1
+    };
+
+    int row_prio[4] = {10, 10, 1, 1};
+    int qual_col_idx[1] = {0};
+    int qual_row_ptr[2] = {0, 2};
+    int qual_rows[2] = {1, 3};  /* Only workers 1, 3 can do job 0 */
+
+    RalphLapProblem prob = {
+        .n = 4, .m = 3,
+        .cost_type = RALPH_LAP_COST_DENSE,
+        .dense_cost = cost,
+        .objective = RALPH_LAP_MINIMIZE
+    };
+
+    RalphLapOptions opts = RALPH_LAP_OPTIONS_DEFAULT;
+    opts.num_row_priorities = 4;
+    opts.row_priorities = row_prio;
+    opts.num_qual_cols = 1;
+    opts.qual_col_idx = qual_col_idx;
+    opts.qual_row_ptr = qual_row_ptr;
+    opts.qual_rows = qual_rows;
+
+    int row_sol[4], col_sol[3];
+    double total;
+    RalphLapResult res = {.row_sol = row_sol, .col_sol = col_sol, .costs = &total};
+
+    RalphLapStatus status = ralph_lap_solve_ex(&prob, &opts, &res, NULL);
+
+    ASSERT(status == RALPH_LAP_SUCCESS, "Status is SUCCESS");
+
+    /* Job 0 must go to qualified worker; prefer worker 1 (higher priority than 3) */
+    ASSERT(col_sol[0] == 1 || col_sol[0] == 3, "Job 0 assigned to qualified worker");
+    /* Among qualified, worker 1 has priority 10 vs worker 3 has priority 1 */
+    ASSERT(col_sol[0] == 1, "Job 0 assigned to higher-priority qualified worker (1)");
+
+    printf("  Assignments: ");
+    for (int i = 0; i < 4; i++) printf("%d->%d ", i, row_sol[i]);
+    printf("(cost=%.1f)\n", total);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -3936,6 +4688,27 @@ int main(void) {
     test_priority_with_forbidden();
     test_priority_invalid();
     test_priority_sparse();
+
+    /* Cardinality bounds tests */
+    test_cardinality_max_basic();
+    test_cardinality_min_basic();
+    test_cardinality_exact();
+    test_cardinality_with_priority();
+    test_cardinality_min_infeasible();
+    test_cardinality_invalid();
+
+    /* Qualification subsets tests */
+    test_qualification_basic();
+    test_qualification_multiple_cols();
+    test_qualification_single_qualified();
+    test_qualification_infeasible();
+    test_qualification_with_forbidden();
+    test_qualification_invalid();
+
+    /* Combined constraint tests */
+    test_combined_cardinality_qualification();
+    test_combined_all_three();
+    test_combined_priority_qualification();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n",
