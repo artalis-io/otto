@@ -543,30 +543,408 @@ void test_null_inputs(void) {
 }
 
 /* ============================================================================
+ * Set Covering Detection Tests
+ * ============================================================================ */
+
+/*
+ * Test: Detect Set Covering Problem (5 elements, 6 sets)
+ *
+ * Elements: 0, 1, 2, 3, 4
+ * Sets:
+ *   S0 = {0, 1}     cost = 2
+ *   S1 = {1, 2, 3}  cost = 3
+ *   S2 = {2, 4}     cost = 2
+ *   S3 = {3, 4}     cost = 2
+ *   S4 = {0, 2, 4}  cost = 4
+ *   S5 = {1, 3}     cost = 2
+ *
+ * Constraints: each element covered by at least one set (>= 1)
+ */
+void test_detect_set_covering(void) {
+    printf("\n=== Test: Detect Set Covering Problem ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;  /* Minimize */
+
+    /* Add binary variables (sets) with costs */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S0: {0,1} */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S1: {1,2,3} */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S2: {2,4} */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S3: {3,4} */
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');  /* S4: {0,2,4} */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S5: {1,3} */
+
+    /* Element 0: S0 + S4 >= 1 */
+    int idx0[] = {0, 4};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef, 'G', 1.0);
+
+    /* Element 1: S0 + S1 + S5 >= 1 */
+    int idx1[] = {0, 1, 5};
+    double coef3[] = {1.0, 1.0, 1.0};
+    lp_model_add_constraint(model, 3, idx1, coef3, 'G', 1.0);
+
+    /* Element 2: S1 + S2 + S4 >= 1 */
+    int idx2[] = {1, 2, 4};
+    lp_model_add_constraint(model, 3, idx2, coef3, 'G', 1.0);
+
+    /* Element 3: S1 + S3 + S5 >= 1 */
+    int idx3[] = {1, 3, 5};
+    lp_model_add_constraint(model, 3, idx3, coef3, 'G', 1.0);
+
+    /* Element 4: S2 + S3 + S4 >= 1 */
+    int idx4[] = {2, 3, 4};
+    lp_model_add_constraint(model, 3, idx4, coef3, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    SetCoverSignature sig;
+    int detected = detect_set_cover(model, &sig);
+
+    ASSERT(detected == 1, "Set covering structure detected");
+    ASSERT(sig.type == RALPH_SETCOVER_COVERING, "Type is SET_COVERING");
+    ASSERT(sig.num_elements == 5, "5 elements");
+    ASSERT(sig.num_sets == 6, "6 sets");
+    ASSERT(sig.num_covering == 5, "5 covering constraints");
+    ASSERT(sig.num_partitioning == 0, "0 partitioning constraints");
+    ASSERT(sig.num_packing == 0, "0 packing constraints");
+
+    /* Check set sizes */
+    ASSERT(sig.set_size[0] == 2, "S0 covers 2 elements");
+    ASSERT(sig.set_size[1] == 3, "S1 covers 3 elements");
+    ASSERT(sig.set_size[4] == 3, "S4 covers 3 elements");
+
+    /* Check element coverage */
+    ASSERT(sig.element_coverage[0] == 2, "Element 0 covered by 2 sets");
+    ASSERT(sig.element_coverage[1] == 3, "Element 1 covered by 3 sets");
+
+    /* Check cost statistics */
+    ASSERT_NEAR(sig.min_cost, 2.0, TOLERANCE, "Min cost = 2");
+    ASSERT_NEAR(sig.max_cost, 4.0, TOLERANCE, "Max cost = 4");
+
+    detect_set_cover_free(&sig);
+    lp_model_free(model);
+}
+
+/*
+ * Test: Detect Set Partitioning Problem (3x3 assignment-like)
+ *
+ * Each row must be covered exactly once, each column exactly once.
+ */
+void test_detect_set_partitioning(void) {
+    printf("\n=== Test: Detect Set Partitioning Problem ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 9 binary variables representing (row, col) pairs */
+    double costs[] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+    for (int i = 0; i < 9; i++) {
+        lp_model_add_var(model, 0.0, 1.0, costs[i], 'B');
+    }
+
+    /* Row constraints: x0+x1+x2=1, x3+x4+x5=1, x6+x7+x8=1 */
+    int row0[] = {0, 1, 2};
+    int row1[] = {3, 4, 5};
+    int row2[] = {6, 7, 8};
+    double ones[] = {1.0, 1.0, 1.0};
+
+    lp_model_add_constraint(model, 3, row0, ones, 'E', 1.0);
+    lp_model_add_constraint(model, 3, row1, ones, 'E', 1.0);
+    lp_model_add_constraint(model, 3, row2, ones, 'E', 1.0);
+
+    /* Column constraints: x0+x3+x6=1, x1+x4+x7=1, x2+x5+x8=1 */
+    int col0[] = {0, 3, 6};
+    int col1[] = {1, 4, 7};
+    int col2[] = {2, 5, 8};
+
+    lp_model_add_constraint(model, 3, col0, ones, 'E', 1.0);
+    lp_model_add_constraint(model, 3, col1, ones, 'E', 1.0);
+    lp_model_add_constraint(model, 3, col2, ones, 'E', 1.0);
+
+    lp_model_finalize(model);
+
+    SetCoverSignature sig;
+    int detected = detect_set_cover(model, &sig);
+
+    ASSERT(detected == 1, "Set partitioning structure detected");
+    ASSERT(sig.type == RALPH_SETCOVER_PARTITIONING, "Type is SET_PARTITIONING");
+    ASSERT(sig.num_elements == 6, "6 constraints");
+    ASSERT(sig.num_sets == 9, "9 variables");
+    ASSERT(sig.num_partitioning == 6, "6 partitioning constraints");
+
+    detect_set_cover_free(&sig);
+    lp_model_free(model);
+}
+
+/*
+ * Test: Detect Set Packing Problem
+ *
+ * Constraints: at most one set selected per element (<=)
+ */
+void test_detect_set_packing(void) {
+    printf("\n=== Test: Detect Set Packing Problem ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = -1;  /* Maximize for packing */
+
+    /* 4 sets, 3 elements */
+    lp_model_add_var(model, 0.0, 1.0, 5.0, 'B');  /* S0: {0,1} */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S1: {1,2} */
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');  /* S2: {0} */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S3: {2} */
+
+    /* Element 0: S0 + S2 <= 1 */
+    int idx0[] = {0, 2};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef2, 'L', 1.0);
+
+    /* Element 1: S0 + S1 <= 1 */
+    int idx1[] = {0, 1};
+    lp_model_add_constraint(model, 2, idx1, coef2, 'L', 1.0);
+
+    /* Element 2: S1 + S3 <= 1 */
+    int idx2[] = {1, 3};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'L', 1.0);
+
+    lp_model_finalize(model);
+
+    SetCoverSignature sig;
+    int detected = detect_set_cover(model, &sig);
+
+    ASSERT(detected == 1, "Set packing structure detected");
+    ASSERT(sig.type == RALPH_SETCOVER_PACKING, "Type is SET_PACKING");
+    ASSERT(sig.num_elements == 3, "3 elements");
+    ASSERT(sig.num_sets == 4, "4 sets");
+    ASSERT(sig.num_packing == 3, "3 packing constraints");
+
+    detect_set_cover_free(&sig);
+    lp_model_free(model);
+}
+
+/*
+ * Test: Detect Mixed Set Cover Problem
+ *
+ * Mix of covering (>=), partitioning (=), and packing (<=)
+ */
+void test_detect_set_cover_mixed(void) {
+    printf("\n=== Test: Detect Mixed Set Cover Problem ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 3 sets, 3 elements */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');
+
+    /* Element 0: covering (>=) */
+    int idx0[] = {0, 1};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef2, 'G', 1.0);
+
+    /* Element 1: partitioning (=) */
+    int idx1[] = {1, 2};
+    lp_model_add_constraint(model, 2, idx1, coef2, 'E', 1.0);
+
+    /* Element 2: packing (<=) */
+    int idx2[] = {0, 2};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'L', 1.0);
+
+    lp_model_finalize(model);
+
+    SetCoverSignature sig;
+    int detected = detect_set_cover(model, &sig);
+
+    ASSERT(detected == 1, "Mixed structure detected");
+    ASSERT(sig.type == RALPH_SETCOVER_MIXED, "Type is MIXED");
+    ASSERT(sig.num_covering == 1, "1 covering constraint");
+    ASSERT(sig.num_partitioning == 1, "1 partitioning constraint");
+    ASSERT(sig.num_packing == 1, "1 packing constraint");
+
+    detect_set_cover_free(&sig);
+    lp_model_free(model);
+}
+
+/*
+ * Test: Detect Weighted Set Covering (RHS > 1)
+ */
+void test_detect_weighted_set_covering(void) {
+    printf("\n=== Test: Detect Weighted Set Covering (RHS > 1) ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 3 sets covering 2 elements with RHS = 2 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S0: {0} */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S1: {0,1} */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S2: {1} */
+
+    /* Element 0: S0 + S1 >= 2 (need both) */
+    int idx0[] = {0, 1};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef2, 'G', 2.0);
+
+    /* Element 1: S1 + S2 >= 1 */
+    int idx1[] = {1, 2};
+    lp_model_add_constraint(model, 2, idx1, coef2, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    SetCoverSignature sig;
+    int detected = detect_set_cover(model, &sig);
+
+    ASSERT(detected == 1, "Weighted set covering detected");
+    ASSERT(sig.type == RALPH_SETCOVER_COVERING, "Type is SET_COVERING");
+    ASSERT_NEAR(sig.rhs[0], 2.0, TOLERANCE, "RHS[0] = 2");
+    ASSERT_NEAR(sig.rhs[1], 1.0, TOLERANCE, "RHS[1] = 1");
+
+    detect_set_cover_free(&sig);
+    lp_model_free(model);
+}
+
+/*
+ * Test: Reject Non-Binary Variables
+ */
+void test_reject_non_binary_scp(void) {
+    printf("\n=== Test: Reject Non-Binary Variables (SCP) ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* Continuous variable - not binary */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'C');
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+
+    int idx[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    SetCoverSignature sig;
+    int detected = detect_set_cover(model, &sig);
+
+    ASSERT(detected == 0, "Non-binary variables rejected");
+
+    lp_model_free(model);
+}
+
+/*
+ * Test: Reject Non-0/1 Coefficients
+ */
+void test_reject_non_01_coef_scp(void) {
+    printf("\n=== Test: Reject Non-0/1 Coefficients (SCP) ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+
+    /* Coefficient 2.0 is not 0/1 */
+    int idx[] = {0, 1};
+    double coef[] = {2.0, 1.0};
+    lp_model_add_constraint(model, 2, idx, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    SetCoverSignature sig;
+    int detected = detect_set_cover(model, &sig);
+
+    ASSERT(detected == 0, "Non-0/1 coefficients rejected");
+
+    lp_model_free(model);
+}
+
+/*
+ * Test: Reject Negative RHS
+ */
+void test_reject_negative_rhs_scp(void) {
+    printf("\n=== Test: Reject Negative RHS (SCP) ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+
+    /* Negative RHS */
+    int idx[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx, coef, 'G', -1.0);
+
+    lp_model_finalize(model);
+
+    SetCoverSignature sig;
+    int detected = detect_set_cover(model, &sig);
+
+    ASSERT(detected == 0, "Negative RHS rejected");
+
+    lp_model_free(model);
+}
+
+/*
+ * Test: Type Name Function
+ */
+void test_set_cover_type_name(void) {
+    printf("\n=== Test: Set Cover Type Names ===\n");
+
+    ASSERT(strcmp(ralph_set_cover_type_name(RALPH_SETCOVER_NONE), "NONE") == 0,
+           "NONE type name");
+    ASSERT(strcmp(ralph_set_cover_type_name(RALPH_SETCOVER_COVERING), "SET_COVERING") == 0,
+           "COVERING type name");
+    ASSERT(strcmp(ralph_set_cover_type_name(RALPH_SETCOVER_PARTITIONING), "SET_PARTITIONING") == 0,
+           "PARTITIONING type name");
+    ASSERT(strcmp(ralph_set_cover_type_name(RALPH_SETCOVER_PACKING), "SET_PACKING") == 0,
+           "PACKING type name");
+    ASSERT(strcmp(ralph_set_cover_type_name(RALPH_SETCOVER_MIXED), "MIXED") == 0,
+           "MIXED type name");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
     printf("Network Detection Tests\n");
     printf("=======================\n");
 
-    /* Detection tests */
+    /* Network detection tests */
     test_detect_simple_network();
     test_detect_transportation();
     test_detect_assignment();
     test_detect_shortest_path();
 
-    /* Rejection tests */
+    /* Network rejection tests */
     test_reject_non_network_coef();
     test_reject_non_network_count();
     test_reject_non_network_inequality();
 
-    /* Solve tests */
+    /* Network solve tests */
     test_solve_via_detection();
     test_solve_assignment_delegation();
 
     /* Edge cases */
     test_empty_model();
     test_null_inputs();
+
+    printf("\nSet Cover Detection Tests\n");
+    printf("=========================\n");
+
+    /* Set cover detection tests */
+    test_detect_set_covering();
+    test_detect_set_partitioning();
+    test_detect_set_packing();
+    test_detect_set_cover_mixed();
+    test_detect_weighted_set_covering();
+
+    /* Set cover rejection tests */
+    test_reject_non_binary_scp();
+    test_reject_non_01_coef_scp();
+    test_reject_negative_rhs_scp();
+
+    /* Utility tests */
+    test_set_cover_type_name();
 
     /* Summary */
     printf("\n=======================\n");

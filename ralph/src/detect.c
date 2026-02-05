@@ -1200,3 +1200,182 @@ int solve_network_at_node(
         return -2;
     }
 }
+
+/* ============================================================================
+ * Set Covering/Partitioning Detection
+ * ============================================================================ */
+
+const char *ralph_set_cover_type_name(RalphSetCoverType type) {
+    switch (type) {
+        case RALPH_SETCOVER_NONE:         return "NONE";
+        case RALPH_SETCOVER_COVERING:     return "SET_COVERING";
+        case RALPH_SETCOVER_PARTITIONING: return "SET_PARTITIONING";
+        case RALPH_SETCOVER_PACKING:      return "SET_PACKING";
+        case RALPH_SETCOVER_MIXED:        return "MIXED";
+        default:                          return "UNKNOWN";
+    }
+}
+
+void detect_set_cover_free(SetCoverSignature *sig) {
+    if (!sig) return;
+    free(sig->set_size);
+    free(sig->element_coverage);
+    free(sig->rhs);
+    sig->set_size = NULL;
+    sig->element_coverage = NULL;
+    sig->rhs = NULL;
+}
+
+/*
+ * Detect set covering/partitioning structure in an LP/MIP model.
+ *
+ * Requirements for detection:
+ * 1. All variables must be binary (lb=0, ub=1, integer type)
+ * 2. All constraint coefficients must be 0 or 1
+ * 3. All RHS values must be positive
+ * 4. Constraint senses: >= (covering), = (partitioning), <= (packing)
+ */
+int detect_set_cover(const LPModel *model, SetCoverSignature *sig) {
+    if (!model || !sig) {
+        return 0;
+    }
+
+    /* Initialize signature */
+    memset(sig, 0, sizeof(SetCoverSignature));
+    sig->type = RALPH_SETCOVER_NONE;
+
+    int m = model->num_cons;  /* Number of constraints (elements) */
+    int n = model->num_vars;  /* Number of variables (sets) */
+
+    if (m == 0 || n == 0) {
+        return 0;
+    }
+
+    /* Check all variables are binary */
+    for (int j = 0; j < n; j++) {
+        /* Must be integer type */
+        if (model->var_type[j] != 'B' && model->var_type[j] != 'I') {
+            return 0;
+        }
+        /* Must have lb=0, ub=1 (binary bounds) */
+        if (model->lb[j] < -TOLERANCE || model->lb[j] > TOLERANCE) {
+            return 0;  /* lb != 0 */
+        }
+        if (model->ub[j] < 1.0 - TOLERANCE || model->ub[j] > 1.0 + TOLERANCE) {
+            /* Allow ub >= 1 for general integers treated as binary */
+            if (model->var_type[j] != 'B' && model->ub[j] < 1.0 - TOLERANCE) {
+                return 0;
+            }
+        }
+    }
+
+    /* Get sparse matrix */
+    const SparseMatrix *A = model->A;
+    if (!A) {
+        return 0;
+    }
+
+    /* Check all coefficients are 0 or 1, and RHS values are positive */
+    int num_covering = 0;
+    int num_partitioning = 0;
+    int num_packing = 0;
+
+    for (int i = 0; i < m; i++) {
+        /* Check RHS is positive */
+        if (model->b[i] < TOLERANCE) {
+            return 0;  /* RHS must be > 0 */
+        }
+
+        /* Classify constraint sense */
+        char sense = model->sense[i];
+        if (sense == 'G') {
+            num_covering++;
+        } else if (sense == 'E') {
+            num_partitioning++;
+        } else if (sense == 'L') {
+            num_packing++;
+        } else {
+            return 0;  /* Unknown sense */
+        }
+    }
+
+    /* Check coefficients - iterate through sparse matrix */
+    /* CSC format: col_ptr, row_idx, values */
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            double val = A->values[p];
+            /* Coefficient must be 0 or 1 */
+            if (fabs(val) < TOLERANCE) {
+                continue;  /* Zero coefficient (shouldn't be stored, but handle it) */
+            }
+            if (fabs(val - 1.0) > TOLERANCE) {
+                return 0;  /* Coefficient != 1 */
+            }
+        }
+    }
+
+    /* Structure detected - now populate signature */
+    sig->num_elements = m;
+    sig->num_sets = n;
+    sig->num_covering = num_covering;
+    sig->num_partitioning = num_partitioning;
+    sig->num_packing = num_packing;
+    sig->obj_sense = model->obj_sense;
+
+    /* Classify problem type */
+    if (num_covering > 0 && num_partitioning == 0 && num_packing == 0) {
+        sig->type = RALPH_SETCOVER_COVERING;
+    } else if (num_partitioning > 0 && num_covering == 0 && num_packing == 0) {
+        sig->type = RALPH_SETCOVER_PARTITIONING;
+    } else if (num_packing > 0 && num_covering == 0 && num_partitioning == 0) {
+        sig->type = RALPH_SETCOVER_PACKING;
+    } else {
+        sig->type = RALPH_SETCOVER_MIXED;
+    }
+
+    /* Allocate arrays */
+    sig->set_size = (int *)calloc(n, sizeof(int));
+    sig->element_coverage = (int *)calloc(m, sizeof(int));
+    sig->rhs = (double *)malloc(m * sizeof(double));
+
+    if (!sig->set_size || !sig->element_coverage || !sig->rhs) {
+        detect_set_cover_free(sig);
+        return 0;
+    }
+
+    /* Copy RHS values */
+    memcpy(sig->rhs, model->b, m * sizeof(double));
+
+    /* Compute set sizes (number of elements each set covers) */
+    for (int j = 0; j < n; j++) {
+        sig->set_size[j] = A->colptr[j + 1] - A->colptr[j];
+    }
+
+    /* Compute element coverage (number of sets covering each element) */
+    /* Need to iterate through matrix in row order - use CSC and count */
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int i = A->rowidx[p];
+            sig->element_coverage[i]++;
+        }
+    }
+
+    /* Compute density */
+    int nnz = A->colptr[n];  /* Total non-zeros */
+    sig->density = (double)nnz / ((double)m * n);
+
+    /* Compute cost statistics */
+    sig->min_cost = RALPH_INFINITY;
+    sig->max_cost = -RALPH_INFINITY;
+    double sum_cost = 0.0;
+
+    for (int j = 0; j < n; j++) {
+        double c = model->c[j];
+        if (c < sig->min_cost) sig->min_cost = c;
+        if (c > sig->max_cost) sig->max_cost = c;
+        sum_cost += c;
+    }
+    sig->avg_cost = sum_cost / n;
+
+    return 1;  /* Detection successful */
+}
