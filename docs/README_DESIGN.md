@@ -2,6 +2,43 @@
 
 This document explains the key design decisions behind OTTO.
 
+## Why Build From Scratch?
+
+OTTO is built from first principles for three reasons:
+
+### 1. Control
+
+Understanding exactly what the code does is non-negotiable for logistics optimization. When a truck arrives late or a fuel stop is suboptimal, we need to trace the decision back to specific constraints and costs. Black-box dependencies make this impossible.
+
+Ralph (the LP/MIP solver) exists because we need to:
+- Debug infeasible models by inspecting constraint violations
+- Tune solver behavior for logistics-specific patterns
+- Understand numerical precision issues in real-world scenarios
+
+If we ever hit limitations, Ralph's API can wrap HiGHS (a mature open-source solver) without changing the domain code.
+
+### 2. Agentic Coding Experiment
+
+OTTO is also a testbed for exploring how far AI-assisted development can go. The codebase is structured for effective human-AI collaboration:
+
+- **Comprehensive CLAUDE.md files** at every level with API details, patterns, and pitfalls
+- **Defined skills** (`/c-audit`, `/api-servers`) that encapsulate common workflows
+- **Consistent patterns** (naming conventions, error handling, memory management) that an agent can learn and apply
+- **Clear module boundaries** with explicit dependencies
+
+The question "how far can this go?" is genuinely open. OTTO is a stress test because it has real algorithmic complexity (LP solvers, routing algorithms, spatial indexing), not just CRUD operations.
+
+### 3. C as Lingua Franca
+
+C is the one language where:
+- WASM compilation is straightforward (no runtime, no GC)
+- FFI from any other language is trivial
+- No hidden allocations or control flow
+- The binary does exactly what the source says
+- It'll still compile in 30 years
+
+The maintenance burden of implementing primitives (protobuf, zlib, geocoding) is real but bounded. We're not reimplementing OpenSSL—just the specific pieces needed for the domain.
+
 ## Why C11?
 
 OTTO is written in **C11** for these key advantages:
