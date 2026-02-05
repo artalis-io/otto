@@ -443,7 +443,10 @@ static int compare_edges(const void *a, const void *b)
     const CTEdge *ea = (const CTEdge *)a;
     const CTEdge *eb = (const CTEdge *)b;
     if (ea->y_min != eb->y_min) return ea->y_min - eb->y_min;
-    return (ea->x < eb->x) ? -1 : 1;
+    /* Must return 0 for equal values to satisfy qsort contract */
+    if (ea->x < eb->x) return -1;
+    if (ea->x > eb->x) return 1;
+    return 0;
 }
 
 void ct_render_polygon(CTRenderContext *ctx,
@@ -584,7 +587,10 @@ void ct_render_multipolygon(CTRenderContext *ctx,
                             const int *ring_ends, int num_rings,
                             CTColor color)
 {
-    if (num_points < 3 || num_rings < 1) return;
+    if (num_points < 3 || num_rings < 1 || !ring_ends) return;
+
+    /* Validate ring_ends: last entry must equal num_points */
+    if (ring_ends[num_rings - 1] != num_points) return;
 
     /* Find bounding box across all points */
     int min_y = points[0].y, max_y = points[0].y;
