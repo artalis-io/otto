@@ -2033,6 +2033,372 @@ void test_var_select_scp_strategy(void) {
 }
 
 /* ============================================================================
+ * SCP Lagrangian Relaxation Tests (Phase 6)
+ * ============================================================================ */
+
+void test_lagrangian_context_creation(void) {
+    printf("\n=== Test: Lagrangian Context Creation ===\n");
+
+    /* Create a simple SCP:
+     * min 3*x0 + 2*x1 + 4*x2
+     * s.t. x0 + x1 >= 1  (element 0)
+     *      x1 + x2 >= 1  (element 1)
+     *      x0 + x2 >= 1  (element 2)
+     */
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');
+
+    int idx0[] = {0, 1};
+    double coef0[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef0, 'G', 1.0);
+
+    int idx1[] = {1, 2};
+    double coef1[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx1, coef1, 'G', 1.0);
+
+    int idx2[] = {0, 2};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    LagrangianContext *ctx = lagrangian_create(solver);
+    ASSERT(ctx != NULL, "Lagrangian context created");
+    ASSERT(ctx->num_elements == 3, "3 elements");
+    ASSERT(ctx->num_sets == 3, "3 sets");
+    ASSERT(ctx->lambda != NULL, "Lambda array allocated");
+    ASSERT(ctx->subgradient != NULL, "Subgradient array allocated");
+
+    lagrangian_free(ctx);
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+void test_lagrangian_bound_computation(void) {
+    printf("\n=== Test: Lagrangian Bound Computation ===\n");
+
+    /* Same SCP as above */
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* c0 = 3 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* c1 = 2 */
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');  /* c2 = 4 */
+
+    int idx0[] = {0, 1};
+    double coef0[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef0, 'G', 1.0);
+
+    int idx1[] = {1, 2};
+    double coef1[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx1, coef1, 'G', 1.0);
+
+    int idx2[] = {0, 2};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    LagrangianContext *ctx = lagrangian_create(solver);
+    ASSERT(ctx != NULL, "Context created");
+
+    /* With lambda = 0, bound should be sum of negative reduced costs */
+    /* All reduced costs are positive (c_j > 0), so bound = 0 */
+    double bound = lagrangian_bound(ctx);
+    printf("  INFO: Bound with lambda=0: %.4f\n", bound);
+    ASSERT(bound < 0.1, "Bound with lambda=0 is 0");
+
+    /* Set lambda = [1, 1, 1]:
+     * Reduced costs:
+     *   c0 - lambda[0] - lambda[2] = 3 - 1 - 1 = 1 > 0, x0 = 0
+     *   c1 - lambda[0] - lambda[1] = 2 - 1 - 1 = 0 >= 0, x1 = 0
+     *   c2 - lambda[1] - lambda[2] = 4 - 1 - 1 = 2 > 0, x2 = 0
+     * L(lambda) = 1+1+1 = 3
+     */
+    ctx->lambda[0] = 1.0;
+    ctx->lambda[1] = 1.0;
+    ctx->lambda[2] = 1.0;
+    bound = lagrangian_bound(ctx);
+    printf("  INFO: Bound with lambda=[1,1,1]: %.4f\n", bound);
+    ASSERT(fabs(bound - 3.0) < 0.01, "Bound with lambda=[1,1,1] is 3");
+
+    /* Set lambda = [2, 2, 2]:
+     * Reduced costs:
+     *   c0 - lambda[0] - lambda[2] = 3 - 2 - 2 = -1 < 0, x0 = 1
+     *   c1 - lambda[0] - lambda[1] = 2 - 2 - 2 = -2 < 0, x1 = 1
+     *   c2 - lambda[1] - lambda[2] = 4 - 2 - 2 = 0 >= 0, x2 = 0
+     * L(lambda) = 2+2+2 + (-1) + (-2) = 3
+     */
+    ctx->lambda[0] = 2.0;
+    ctx->lambda[1] = 2.0;
+    ctx->lambda[2] = 2.0;
+    bound = lagrangian_bound(ctx);
+    printf("  INFO: Bound with lambda=[2,2,2]: %.4f\n", bound);
+    ASSERT(fabs(bound - 3.0) < 0.01, "Bound with lambda=[2,2,2] is 3");
+
+    /* Check subgradient */
+    printf("  INFO: Subgradient: [%.1f, %.1f, %.1f]\n",
+           ctx->subgradient[0], ctx->subgradient[1], ctx->subgradient[2]);
+
+    lagrangian_free(ctx);
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+void test_lagrangian_subgradient_step(void) {
+    printf("\n=== Test: Lagrangian Subgradient Step ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');
+
+    int idx0[] = {0, 1};
+    double coef0[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef0, 'G', 1.0);
+
+    int idx1[] = {1, 2};
+    double coef1[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx1, coef1, 'G', 1.0);
+
+    int idx2[] = {0, 2};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    LagrangianContext *ctx = lagrangian_create(solver);
+    ASSERT(ctx != NULL, "Context created");
+
+    /* Set upper bound (optimal is x1=1, cost=2 doesn't work; need x0+x1=5 or x1+x2=6) */
+    /* Actually optimal is x0=1, x1=1 (covers all) with cost=5 */
+    ctx->ub = 5.0;
+
+    /* Perform a few subgradient steps */
+    double bound1 = lagrangian_step(ctx);
+    double bound2 = lagrangian_step(ctx);
+    double bound3 = lagrangian_step(ctx);
+
+    printf("  INFO: Bounds after steps: %.4f, %.4f, %.4f\n", bound1, bound2, bound3);
+    printf("  INFO: Best bound: %.4f\n", ctx->best_bound);
+    ASSERT(ctx->iterations == 3, "3 iterations performed");
+    ASSERT(ctx->best_bound >= 0.0, "Best bound is non-negative");
+
+    lagrangian_free(ctx);
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+void test_lagrangian_optimize(void) {
+    printf("\n=== Test: Lagrangian Optimization ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');
+
+    int idx0[] = {0, 1};
+    double coef0[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef0, 'G', 1.0);
+
+    int idx1[] = {1, 2};
+    double coef1[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx1, coef1, 'G', 1.0);
+
+    int idx2[] = {0, 2};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    LagrangianContext *ctx = lagrangian_create(solver);
+    ASSERT(ctx != NULL, "Context created");
+
+    /* Set upper bound */
+    ctx->ub = 5.0;  /* Optimal is x0=x1=1 with cost 5 */
+    ctx->max_iterations = 100;
+
+    double best_bound = lagrangian_optimize(ctx);
+    printf("  INFO: Best Lagrangian bound: %.4f (after %d iterations)\n",
+           best_bound, ctx->iterations);
+    printf("  INFO: Bound improvements: %d\n", ctx->bound_improvements);
+
+    /* Lagrangian bound should be <= optimal (5) */
+    ASSERT(best_bound <= 5.0 + 0.01, "Lagrangian bound <= optimal");
+    /* For SCP, Lagrangian bound is usually >= LP bound which is >= 0 */
+    ASSERT(best_bound >= 0.0, "Lagrangian bound >= 0");
+
+    lagrangian_free(ctx);
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+void test_lagrangian_repair(void) {
+    printf("\n=== Test: Lagrangian Repair ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');
+
+    int idx0[] = {0, 1};
+    double coef0[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef0, 'G', 1.0);
+
+    int idx1[] = {1, 2};
+    double coef1[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx1, coef1, 'G', 1.0);
+
+    int idx2[] = {0, 2};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    LagrangianContext *ctx = lagrangian_create(solver);
+    ASSERT(ctx != NULL, "Context created");
+
+    /* Set up a Lagrangian solution that is infeasible (element 2 not covered) */
+    ctx->x_lagrangian[0] = 0.0;
+    ctx->x_lagrangian[1] = 1.0;  /* Covers elements 0, 1 */
+    ctx->x_lagrangian[2] = 0.0;
+
+    double *solution = (double *)calloc(3, sizeof(double));
+    double repair_cost = lagrangian_repair(ctx, solver, solution);
+
+    printf("  INFO: Repair cost: %.4f\n", repair_cost);
+    printf("  INFO: Solution: [%.0f, %.0f, %.0f]\n",
+           solution[0], solution[1], solution[2]);
+
+    ASSERT(repair_cost < RALPH_INFINITY, "Repair succeeded");
+    /* Should add either x0 or x2 to cover element 2 */
+    /* x0 (cost 3) covers elem 2; x2 (cost 4) covers elem 2 */
+    /* Greedy should pick x0 (cheaper) */
+    /* Final: x0=1, x1=1 -> cost 5 */
+    ASSERT(repair_cost <= 6.0, "Repair cost <= 6");
+
+    /* Verify feasibility */
+    int covered[3] = {0, 0, 0};
+    if (solution[0] > 0.5) { covered[0]++; covered[2]++; }
+    if (solution[1] > 0.5) { covered[0]++; covered[1]++; }
+    if (solution[2] > 0.5) { covered[1]++; covered[2]++; }
+    ASSERT(covered[0] >= 1 && covered[1] >= 1 && covered[2] >= 1, "All elements covered");
+
+    free(solution);
+    lagrangian_free(ctx);
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+void test_lagrangian_solve_scp(void) {
+    printf("\n=== Test: Lagrangian Solve SCP ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');
+
+    int idx0[] = {0, 1};
+    double coef0[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef0, 'G', 1.0);
+
+    int idx1[] = {1, 2};
+    double coef1[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx1, coef1, 'G', 1.0);
+
+    int idx2[] = {0, 2};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    double *solution = (double *)calloc(3, sizeof(double));
+    double lower_bound;
+    int result = lagrangian_solve_scp(solver, solution, &lower_bound);
+
+    ASSERT(result == 0, "Lagrangian solve succeeded");
+    printf("  INFO: Lower bound: %.4f\n", lower_bound);
+
+    /* Compute solution objective */
+    double obj = 0.0;
+    int count = 0;
+    for (int j = 0; j < 3; j++) {
+        if (solution[j] > 0.5) {
+            obj += model->c[j];
+            count++;
+        }
+    }
+    printf("  INFO: Solution: [%.0f, %.0f, %.0f], cost=%.1f\n",
+           solution[0], solution[1], solution[2], obj);
+
+    ASSERT(count >= 2, "At least 2 sets selected");
+    ASSERT(lower_bound <= obj + 0.01, "Lower bound <= solution cost");
+
+    /* Verify feasibility */
+    int covered[3] = {0, 0, 0};
+    if (solution[0] > 0.5) { covered[0]++; covered[2]++; }
+    if (solution[1] > 0.5) { covered[0]++; covered[1]++; }
+    if (solution[2] > 0.5) { covered[1]++; covered[2]++; }
+    ASSERT(covered[0] >= 1 && covered[1] >= 1 && covered[2] >= 1, "All elements covered");
+
+    free(solution);
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+void test_lagrangian_rejects_non_scp(void) {
+    printf("\n=== Test: Lagrangian Rejects Non-SCP ===\n");
+
+    /* Create a non-SCP model (general LP) */
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    lp_model_add_var(model, 0.0, RALPH_INFINITY, 1.0, 'C');
+    lp_model_add_var(model, 0.0, RALPH_INFINITY, 2.0, 'C');
+
+    int idx[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx, coef, 'L', 10.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    LagrangianContext *ctx = lagrangian_create(solver);
+    ASSERT(ctx == NULL, "Lagrangian context rejected for non-SCP");
+
+    double solution[2];
+    int result = lagrangian_solve_scp(solver, solution, NULL);
+    ASSERT(result == -1, "Lagrangian solve rejected non-SCP");
+
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -2116,6 +2482,18 @@ int main(void) {
     test_sos1_branching_spp();
     test_scp_branching_rejects_non_scp();
     test_var_select_scp_strategy();
+
+    printf("\nSCP Lagrangian Relaxation Tests\n");
+    printf("================================\n");
+
+    /* SCP Lagrangian relaxation tests (Phase 6) */
+    test_lagrangian_context_creation();
+    test_lagrangian_bound_computation();
+    test_lagrangian_subgradient_step();
+    test_lagrangian_optimize();
+    test_lagrangian_repair();
+    test_lagrangian_solve_scp();
+    test_lagrangian_rejects_non_scp();
 
     /* Summary */
     printf("\n=======================\n");
