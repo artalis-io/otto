@@ -9,7 +9,7 @@
 ```bash
 make          # Build libralph.a
 make test     # Run tests (73/73 should pass)
-make test-lap # Run LAP tests (315/315 should pass)
+make test-lap # Run LAP tests (358/358 should pass)
 make test-netflow # Run Network Flow tests (153/153 should pass)
 ```
 
@@ -76,6 +76,8 @@ The LAP solver implements the Jonker-Volgenant-Castanon (JVC) algorithm:
 | k-Best | `ralph_lap_solve_k_best()` | Murty's algorithm |
 | Bottleneck | `ralph_lap_solve_ex()` | Minimax/maximin assignment |
 | Priority | `ralph_lap_solve_ex()` | Row/column priorities for unbalanced LAP |
+| Cardinality | `ralph_lap_solve_ex()` | Min/max assignment bounds |
+| Qualification | `ralph_lap_solve_ex()` | Allow-list subsets for columns |
 | ε-scaling | `ralph_lap_set_epsilon_scaling()` | For degenerate problems |
 
 ### Unified API (Recommended)
@@ -144,7 +146,39 @@ ralph_lap_solve_ex(&prob, &opts, &res, NULL);
 - `num_row_priorities` / `row_priorities`: Priority array for rows (0 = disabled)
 - `num_col_priorities` / `col_priorities`: Priority array for columns (0 = disabled)
 
-Combines with other options (forbidden, sparse, maximization).
+Combines with other options (forbidden, cardinality, qualifications, maximization).
+
+### Cardinality Bounds
+
+Control how many pairs get matched:
+
+```c
+/* 6 workers, 4 jobs - but only assign 2 pairs */
+opts.max_assignments = 2;  /* At most 2 assigned */
+opts.min_assignments = 2;  /* At least 2 required (returns INFEASIBLE if impossible) */
+```
+
+When `max_assignments < min(m,n)`, priorities determine which rows/columns get assigned. Useful for budget constraints or partial fulfillment scenarios.
+
+### Qualification Subsets
+
+Allow-list for columns - specify which rows can serve each column. More ergonomic than forbidden when few rows qualify (e.g., 3 of 100 drivers are hazmat-certified).
+
+```c
+/* Job 0: only workers 0,1 qualified; Job 2: only workers 2,3 qualified */
+int qual_col_idx[] = {0, 2};
+int qual_row_ptr[] = {0, 2, 4};
+int qual_rows[] = {0, 1, 2, 3};
+
+opts.num_qual_cols = 2;
+opts.qual_col_idx = qual_col_idx;
+opts.qual_row_ptr = qual_row_ptr;
+opts.qual_rows = qual_rows;
+```
+
+Uses CSR-like sparse format. Columns not listed have no restrictions. Combines with priorities, cardinality, and forbidden constraints.
+
+**Note**: Cardinality and qualification constraints require dense cost representation (not supported for sparse/callback).
 
 ### Problem Detection
 
@@ -314,7 +348,7 @@ Detects: SHORTEST_PATH, ASSIGNMENT, TRANSPORTATION, and GENERAL network problems
 # All LP/MIP tests (73 tests)
 make test
 
-# LAP tests only (315 tests)
+# LAP tests only (358 tests)
 make test-lap
 
 # Network Flow tests (153 tests)
