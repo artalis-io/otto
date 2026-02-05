@@ -547,23 +547,39 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
 
             if (curr_inside) {
                 if (!prev_inside) {
-                    /* Compute intersection */
+                    /* Compute intersection - use floor() for consistent rounding,
+                     * then clamp to clip bounds to handle floating-point precision */
                     double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
                     if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
                         double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
-                        output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
-                        output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
+                        int ix = (int)floor(prev.x + t * (curr.x - prev.x));
+                        int iy = (int)floor(prev.y + t * (curr.y - prev.y));
+                        /* Clamp to clip bounds */
+                        if (ix < min) ix = min;
+                        if (ix > max) ix = max;
+                        if (iy < min) iy = min;
+                        if (iy > max) iy = max;
+                        output[output_count].x = ix;
+                        output[output_count].y = iy;
                         output_count++;
                     }
                 }
                 output[output_count++] = curr;
             } else if (prev_inside) {
-                /* Compute intersection */
+                /* Compute intersection - use floor() for consistent rounding,
+                 * then clamp to clip bounds to handle floating-point precision */
                 double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
                 if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
                     double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
-                    output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
-                    output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
+                    int ix = (int)floor(prev.x + t * (curr.x - prev.x));
+                    int iy = (int)floor(prev.y + t * (curr.y - prev.y));
+                    /* Clamp to clip bounds */
+                    if (ix < min) ix = min;
+                    if (ix > max) ix = max;
+                    if (iy < min) iy = min;
+                    if (iy > max) iy = max;
+                    output[output_count].x = ix;
+                    output[output_count].y = iy;
                     output_count++;
                 }
             }
@@ -643,12 +659,18 @@ static int clip_ring_to_buffer(const CTTilePoint *points, int ring_start, int ri
 
             if (curr_inside) {
                 if (!prev_inside) {
-                    /* Compute intersection */
+                    /* Compute intersection - use floor() then clamp to bounds */
                     double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
                     if (fabs(denom) > 1e-10 && output_count < buf_size) {
                         double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
-                        output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
-                        output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
+                        int ix = (int)floor(prev.x + t * (curr.x - prev.x));
+                        int iy = (int)floor(prev.y + t * (curr.y - prev.y));
+                        if (ix < min) ix = min;
+                        if (ix > max) ix = max;
+                        if (iy < min) iy = min;
+                        if (iy > max) iy = max;
+                        output[output_count].x = ix;
+                        output[output_count].y = iy;
                         output_count++;
                     }
                 }
@@ -656,12 +678,18 @@ static int clip_ring_to_buffer(const CTTilePoint *points, int ring_start, int ri
                     output[output_count++] = curr;
                 }
             } else if (prev_inside) {
-                /* Compute intersection */
+                /* Compute intersection - use floor() then clamp to bounds */
                 double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
                 if (fabs(denom) > 1e-10 && output_count < buf_size) {
                     double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
-                    output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
-                    output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
+                    int ix = (int)floor(prev.x + t * (curr.x - prev.x));
+                    int iy = (int)floor(prev.y + t * (curr.y - prev.y));
+                    if (ix < min) ix = min;
+                    if (ix > max) ix = max;
+                    if (iy < min) iy = min;
+                    if (iy > max) iy = max;
+                    output[output_count].x = ix;
+                    output[output_count].y = iy;
                     output_count++;
                 }
             }
@@ -706,6 +734,25 @@ void ct_clip_multipolygon(const CTTilePoint *points, int num_points,
 
     int min = -buffer;
     int max = extent + buffer;
+
+    /* First, check if the outer ring (ring 0) produces a valid clipped polygon.
+     * If the outer ring is clipped away entirely, skip the whole multipolygon.
+     * Otherwise we'd render just the holes, which looks wrong. */
+    int outer_ring_count = ring_ends[0];
+    if (outer_ring_count >= 3) {
+        /* Quick check: clip outer ring to see if it survives */
+        CTTilePoint *temp_out = malloc(outer_ring_count * 4 * sizeof(CTTilePoint));
+        if (temp_out) {
+            int clipped = clip_ring_to_buffer(points, 0, outer_ring_count,
+                                              min, max, temp_out, 0,
+                                              outer_ring_count * 4);
+            free(temp_out);
+            if (clipped < 3) {
+                /* Outer ring clipped away - skip entire multipolygon */
+                return;
+            }
+        }
+    }
 
     /* Allocate output buffers (worst case: each ring grows 4x) */
     int max_out_points = num_points * 4;
