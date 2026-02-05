@@ -981,6 +981,33 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
 
                 case CT_LAYER_WATER:
                     if (f->type == CT_GEOM_POLYGON) {
+#ifndef NDEBUG
+                        /* Debug: log large water polygons (potential Lake Balaton) */
+                        static int water_debug_count = 0;
+                        if (water_debug_count < 5 && f->num_points > 100) {
+                            int min_x = scaled[0].x, max_x = scaled[0].x;
+                            int min_y = scaled[0].y, max_y = scaled[0].y;
+                            for (int d = 1; d < f->num_points; d++) {
+                                if (scaled[d].x < min_x) min_x = scaled[d].x;
+                                if (scaled[d].x > max_x) max_x = scaled[d].x;
+                                if (scaled[d].y < min_y) min_y = scaled[d].y;
+                                if (scaled[d].y > max_y) max_y = scaled[d].y;
+                            }
+                            fprintf(stderr, "WATER POLYGON: %d pts, %d rings, bbox=[%d,%d]-[%d,%d], "
+                                    "tile z%d/%d/%d, ring_ends=%s\n",
+                                    f->num_points, f->num_rings, min_x, min_y, max_x, max_y,
+                                    tile->coord.z, tile->coord.x, tile->coord.y,
+                                    f->ring_ends ? "set" : "NULL");
+                            if (f->ring_ends && f->num_rings > 0) {
+                                fprintf(stderr, "  ring_ends: ");
+                                for (int r = 0; r < f->num_rings && r < 5; r++) {
+                                    fprintf(stderr, "[%d]=%d ", r, f->ring_ends[r]);
+                                }
+                                fprintf(stderr, "\n");
+                            }
+                            water_debug_count++;
+                        }
+#endif
                         if (f->num_rings > 1 && f->ring_ends) {
                             ct_render_multipolygon(ctx, scaled, f->num_points,
                                                    f->ring_ends, f->num_rings,
@@ -1180,6 +1207,31 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
                                      &clipped_ring_ends, &clipped_num_rings);
 
                 if (clipped_pts && clipped_count >= 3 && clipped_num_rings > 0) {
+#ifndef NDEBUG
+                    /* Validate clipped multipolygon structure */
+                    int valid = 1;
+                    if (clipped_ring_ends[clipped_num_rings - 1] != clipped_count) {
+                        fprintf(stderr, "CLIP BUG: ring_ends[%d]=%d != count=%d\n",
+                                clipped_num_rings - 1, clipped_ring_ends[clipped_num_rings - 1], clipped_count);
+                        valid = 0;
+                    }
+                    int prev_end = 0;
+                    for (int r = 0; r < clipped_num_rings; r++) {
+                        int ring_pts = clipped_ring_ends[r] - prev_end;
+                        if (ring_pts < 3) {
+                            fprintf(stderr, "CLIP BUG: ring %d has only %d points\n", r, ring_pts);
+                            valid = 0;
+                        }
+                        if (clipped_ring_ends[r] <= prev_end && r > 0) {
+                            fprintf(stderr, "CLIP BUG: ring_ends not monotonic at %d\n", r);
+                            valid = 0;
+                        }
+                        prev_end = clipped_ring_ends[r];
+                    }
+                    if (!valid) {
+                        fprintf(stderr, "  original: %d pts, %d rings\n", f->num_points, f->num_rings);
+                    }
+#endif
                     /* Replace original with clipped geometry */
                     free(f->points);
                     free(f->ring_ends);
@@ -1231,6 +1283,13 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
                     ct_simplify_multipolygon_inplace(f->points, &f->num_points,
                                                      f->ring_ends, f->num_rings,
                                                      tolerance);
+#ifndef NDEBUG
+                    /* Validate simplified multipolygon structure */
+                    if (f->ring_ends[f->num_rings - 1] != f->num_points) {
+                        fprintf(stderr, "SIMPLIFY BUG: ring_ends[%d]=%d != num_points=%d\n",
+                                f->num_rings - 1, f->ring_ends[f->num_rings - 1], f->num_points);
+                    }
+#endif
                 } else {
                     ct_simplify_poly_inplace(f->points, &f->num_points, tolerance);
                 }

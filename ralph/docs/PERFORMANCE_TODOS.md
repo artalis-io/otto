@@ -165,3 +165,11 @@ CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math
 **Change:** Added SIMD reduction pragma to objective value computation (dot product)
 **Impact:** Vectorized objective computation
 
+### 2026-02-05: MIP LAP Detection - Root LP Using LAP Solver
+**File:** `src/mip.c:870-895`
+**Issue:** LAP detection worked but root LP was always solved with simplex; LAP solver only used for B&B nodes
+**Fix:** Added LAP solver path for root LP when LAP structure detected
+**Impact:** LAP-structured MIPs (assignment problems) now solve in milliseconds instead of timing out
+- 100x100 assignment: Generic MIP times out (>30s), LAP-enabled solves in 0.5s
+- The actual LAP solve is ~0.05ms; rest is model construction overhead
+

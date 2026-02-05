@@ -218,6 +218,13 @@ int sh_mg_check_rate_limit(struct mg_connection *c,
     return 1;  /* Allowed */
 }
 
+/*
+ * Header getter for sh_trace_from_headers().
+ *
+ * NOTE: Returns pointer to thread-local buffer. The returned string is only
+ * valid until the next call to this function from the same thread. Callers
+ * should copy the value if needed beyond immediate use.
+ */
 const char *sh_mg_trace_header_getter(const char *name, void *ctx)
 {
     struct mg_http_message *hm = (struct mg_http_message *)ctx;
