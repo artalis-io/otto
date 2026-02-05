@@ -22,15 +22,18 @@ A comprehensive trucking and logistics optimization platform combining route pla
 
 | Component | Description |
 |-----------|-------------|
-| **Forge** | Async job queue (**F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution) |
-| **Apex** | Pre-computation engine (tiles, routes, cache) |
+| **Fuse** | State integrity (**F**leet **U**nified **S**ignal and **E**stimation) - multi-source fusion, vehicle identity, confidence-weighted geofencing |
 | **HoSE** | Hours of Service (**H**ours **o**f **S**ervice **E**ngine) - FMCSA/EC561 |
-| **Tempo** | Time windows and business rules |
-| **Arbor** | State-space search engine |
-| **Sigma** | Fleet plan selection (set covering MIP) |
-| **Pulse** | Execution tracker / PTA engine |
-| **Nexus** | TMS/ELD/LoadBoard integration gateway |
-| **Iris** | LLM natural language interface |
+| **Tempo** | Time windows and business rules (**T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator) |
+| **Arbor** | State-space search engine (**A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime) |
+| **Sigma** | Fleet plan selection via MIP (**S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation) |
+| **Pulse** | Execution tracker / PTA engine (**P**lan **U**tilization and **L**ive **S**tate **E**stimator) |
+| **Forge** | Async job queue (**F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution) |
+| **Apex** | Pre-computation engine (**A**synchronous **P**re-computation **Ex**ecution) - tiles, routes, cache |
+| **Nexus** | TMS/ELD/LoadBoard integration gateway (**N**ormalized **Ex**ternal **U**nified **S**napshots) |
+| **Iris** | LLM natural language interface (**I**ntelligent **R**equest **I**nterpretation **S**ystem) |
+| **Quota** | Pricing engine (**Q**uote **U**nderwriting and **T**ariff **O**ptimization **A**lgorithm) |
+| **Atlas** | Network design (**A**llocation and **T**actical **L**ane **A**nalysis **S**ystem) |
 
 ## Quick Start
 
@@ -66,6 +69,9 @@ docker-compose --profile all-apis up    # All API servers
 │  Applications: React UI / WASM (Browser) / REST APIs / CLI      │
 ├─────────────────────────────────────────────────────────────────┤
 │  Fleet Optimization [Planned]: HoSE, Tempo, Arbor, Sigma, Pulse │
+│  Network Analysis [Planned]: Atlas, Quota                       │
+├─────────────────────────────────────────────────────────────────┤
+│  State Integrity [Planned]: Fuse (signal fusion, geofencing)    │
 ├─────────────────────────────────────────────────────────────────┤
 │  Domain Libraries: FuelWise, Velo, Carta, Locus                 │
 ├─────────────────────────────────────────────────────────────────┤
@@ -74,6 +80,8 @@ docker-compose --profile all-apis up    # All API servers
 │  Vendor: miniz (zlib) │ mongoose (HTTP) │ Clay (UI layout)      │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Fuse** is the state integrity layer that provides confidence-weighted vehicle positions to all other engines. Geofencing, detention tracking, and ETA stability all depend on Fuse's unified reality model.
 
 ## API Examples
 
