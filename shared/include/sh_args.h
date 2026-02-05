@@ -67,6 +67,9 @@ typedef struct {
     /* Logging */
     int verbose;                 /* Verbosity level (0-3) */
     int quiet;                   /* Suppress non-error output */
+
+    /* Build mode */
+    int build_only;              /* Exit after building/saving index (no HTTP server) */
 } ShServerConfig;
 
 /*

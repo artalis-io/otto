@@ -1548,6 +1548,14 @@ int main(int argc, char *argv[]) {
         } else {
             fprintf(stderr, "Warning: Failed to save index: %s\n", ct_status_string(save_status));
         }
+
+        /* Exit if --build-only was specified */
+        if (s_config.server.build_only) {
+            printf("Build complete (--build-only specified)\n");
+            ct_free_pbf_context(s_pbf_ctx);
+            sh_log_shutdown();
+            return 0;
+        }
     }
 
     /* Initialize LOD config based on preset */

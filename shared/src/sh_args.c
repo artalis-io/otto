@@ -117,6 +117,9 @@ void sh_args_init(ShServerConfig *cfg) {
     /* Logging */
     cfg->verbose = 0;
     cfg->quiet = 0;
+
+    /* Build mode */
+    cfg->build_only = 0;
 }
 
 void sh_args_load_env(ShServerConfig *cfg, ShApiType api_type) {
@@ -296,6 +299,10 @@ int sh_args_parse(ShServerConfig *cfg, int argc, char **argv) {
             if (i + 1 >= argc) return -1;
             cfg->adaptive_alpha = parse_double(argv[++i], cfg->adaptive_alpha);
         }
+        /* Build mode */
+        else if (strcmp(arg, "--build-only") == 0) {
+            cfg->build_only = 1;
+        }
         /* Help */
         else if (strcmp(arg, "--help") == 0) {
             return -2;  /* Signal to show help */
@@ -385,6 +392,9 @@ void sh_args_usage(const char *program_name, const char *extra_usage) {
     printf("  -v, --verbose             Increase verbosity\n");
     printf("  -q, --quiet               Suppress non-error output\n");
     printf("  --help                    Show this help\n");
+
+    printf("\nBuild Mode:\n");
+    printf("  --build-only              Exit after building/saving index (no HTTP server)\n");
 
     printf("\n");
 }

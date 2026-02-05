@@ -160,47 +160,16 @@ else
     # Remove invalid/truncated file if it exists
     [ -f "$CARTA_IDX" ] && rm -f "$CARTA_IDX"
     echo -e "  ${YELLOW}Building Carta index (this may take a while)...${NC}"
-    ./carta/api/carta-tile-server --no-lod --save-index "$CARTA_IDX" "$PBF_FILE" >/dev/null 2>&1 &
-    CARTA_BUILD_PID=$!
-
+    # Build index and save it - runs synchronously with --build-only (exits after saving)
     echo -n "  "
-    while [ ! -f "$CARTA_IDX" ]; do
-        if ! kill -0 $CARTA_BUILD_PID 2>/dev/null; then
-            echo ""
-            echo -e "  ${RED}Carta build failed${NC}"
-            break
-        fi
+    ./carta/api/carta-tile-server --build-only --no-lod -S "$CARTA_IDX" "$PBF_FILE" 2>&1 | while read line; do
         printf "."
-        sleep 5
     done
-
-    if [ -f "$CARTA_IDX" ]; then
-        # Wait for file size to stabilize (write complete)
-        echo ""
-        echo -n "  Writing"
-        PREV_SIZE=0
-        STABLE_COUNT=0
-        while [ $STABLE_COUNT -lt 3 ]; do
-            if ! kill -0 $CARTA_BUILD_PID 2>/dev/null; then
-                # Process exited - file should be complete
-                break
-            fi
-            CURR_SIZE=$(get_file_size "$CARTA_IDX")
-            if [ "$CURR_SIZE" = "$PREV_SIZE" ]; then
-                STABLE_COUNT=$((STABLE_COUNT + 1))
-            else
-                STABLE_COUNT=0
-                PREV_SIZE=$CURR_SIZE
-            fi
-            printf "."
-            sleep 2
-        done
-        echo ""
-        echo -e "  ${GREEN}Built: $CARTA_IDX ($(numfmt --to=iec-i --suffix=B $CURR_SIZE 2>/dev/null || echo "${CURR_SIZE} bytes"))${NC}"
-        kill $CARTA_BUILD_PID 2>/dev/null || true
-        sleep 1
+    echo ""
+    if is_valid_index "$CARTA_IDX" 1048576; then
+        CARTA_SIZE=$(get_file_size "$CARTA_IDX")
+        echo -e "  ${GREEN}Built: $CARTA_IDX ($(numfmt --to=iec-i --suffix=B $CARTA_SIZE 2>/dev/null || echo "${CARTA_SIZE} bytes"))${NC}"
     else
-        echo ""
         echo -e "  ${YELLOW}Carta index not created, using PBF directly${NC}"
         CARTA_IDX=""
     fi
@@ -238,8 +207,9 @@ else
     # Remove invalid/truncated file if it exists
     [ -f "$VELO_IDX" ] && rm -f "$VELO_IDX"
     echo -e "  ${YELLOW}Building Velo index (this may take a while)...${NC}"
-    # Build index and save it - runs synchronously (exits after saving)
-    ./velo/api/velo-route-server --no-landmarks --save-index "$VELO_IDX" "$PBF_FILE" 2>&1 | while read line; do
+    # Build index and save it - runs synchronously with --build-only (exits after saving)
+    echo -n "  "
+    ./velo/api/velo-route-server --build-only --no-landmarks --save-index "$VELO_IDX" "$PBF_FILE" 2>&1 | while read line; do
         printf "."
     done
     echo ""
