@@ -189,6 +189,11 @@ make test-{carta,velo,locus,fuelwise}-api
 ┌─────────────────────────────────────────────────────┐
 │  Applications: React / WASM / REST APIs             │
 ├─────────────────────────────────────────────────────┤
+│  Fleet: HoSE, Tempo, Arbor, Sigma, Pulse [Planned]  │
+│  Network: Atlas, Quota [Planned]                    │
+├─────────────────────────────────────────────────────┤
+│  State: Fuse (signal fusion, geofencing) [Planned]  │
+├─────────────────────────────────────────────────────┤
 │  Domain: FuelWise │ Velo │ Carta │ Locus            │
 ├─────────────────────────────────────────────────────┤
 │  Core: Ralph (LP/MIP) │ Shared (geo, proto, rate)   │
@@ -196,6 +201,8 @@ make test-{carta,velo,locus,fuelwise}-api
 │  Vendor: miniz │ mongoose │ Clay                    │
 └─────────────────────────────────────────────────────┘
 ```
+
+**Fuse** provides confidence-weighted vehicle state to all engines. Geofencing is part of Fuse (requires position confidence for reliable triggers).
 
 ## Skills Reference
 
@@ -210,7 +217,7 @@ make test-{carta,velo,locus,fuelwise}-api
 
 - `docs/ARCHITECTURE.md` - System architecture
 - `docs/STRATEGY.md` - Business strategy
-- `docs/TODO_FEATURES.md` - Planned components (HoSE, Tempo, Arbor, etc.)
+- `docs/TODO_FEATURES.md` - Planned components (Fuse, HoSE, Tempo, Arbor, Sigma, Pulse, Atlas, Quota, etc.)
 
 ## Vendor Libraries
 

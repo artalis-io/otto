@@ -406,6 +406,219 @@
             margin-top: 4px;
         }
 
+        /* Trusted Reality */
+        .trusted-reality {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .trusted-reality-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 32px;
+            margin-bottom: 24px;
+        }
+
+        .trusted-reality-text {
+            color: var(--text-muted);
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        .trusted-reality-text p {
+            margin-bottom: 16px;
+        }
+
+        .trusted-reality-text em {
+            color: var(--text);
+            font-style: italic;
+        }
+
+        .trusted-reality-statement {
+            color: var(--text);
+            border-left: 2px solid var(--accent);
+            padding-left: 16px;
+            font-style: italic;
+        }
+
+        .trusted-reality-features {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 16px;
+        }
+
+        .tr-feature {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 16px;
+        }
+
+        .tr-feature:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .tr-feature-title {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 6px;
+            color: var(--text);
+        }
+
+        .tr-feature-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .trusted-reality-benefits {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            padding: 20px;
+            background: linear-gradient(135deg, #0a1a1a 0%, #0a0a0a 100%);
+            border: 1px solid #1a3a3a;
+            border-radius: 6px;
+        }
+
+        .tr-benefit {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .tr-benefit-label {
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--success);
+        }
+
+        .tr-benefit-label::before {
+            content: "✓ ";
+        }
+
+        .tr-benefit-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .ev-callout {
+            margin-top: 24px;
+            background: linear-gradient(135deg, #1a1a0a 0%, #0a0a0a 100%);
+            border: 1px solid #3a3a1a;
+            border-radius: 6px;
+            padding: 24px;
+        }
+
+        .ev-callout-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--warning);
+            margin-bottom: 16px;
+        }
+
+        .ev-callout-content p {
+            font-size: 14px;
+            color: var(--text-muted);
+            line-height: 1.7;
+            margin-bottom: 16px;
+        }
+
+        .ev-callout-comparison {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+            margin: 20px 0;
+        }
+
+        .ev-comparison-item {
+            padding: 16px;
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ev-comparison-item strong {
+            font-size: 13px;
+        }
+
+        .ev-comparison-item span {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .ev-diesel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .ev-diesel strong {
+            color: var(--text-muted);
+        }
+
+        .ev-electric {
+            background: linear-gradient(135deg, #1a0a0a 0%, #0a0a0a 100%);
+            border: 1px solid #3a1a1a;
+        }
+
+        .ev-electric strong {
+            color: #ef4444;
+        }
+
+        .ev-callout-conclusion {
+            color: var(--text);
+            font-weight: 500;
+            border-left: 2px solid var(--warning);
+            padding-left: 16px;
+            margin-bottom: 0;
+        }
+
+        .operational-events {
+            margin-top: 32px;
+        }
+
+        .operational-events-intro {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
+        .operational-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .operational-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .operational-card:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .operational-card h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 12px;
+        }
+
+        .operational-card p {
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.6;
+            margin-bottom: 12px;
+        }
+
+        .operational-card p:last-child {
+            margin-bottom: 0;
+            color: var(--text);
+        }
+
         /* No Lock-In */
         .no-lockin {
             padding: 48px 0;
@@ -1124,6 +1337,167 @@
             </div>
         </section>
 
+        <section class="trusted-reality">
+            <h2 class="section-title">Built on Trusted Reality</h2>
+            <div class="trusted-reality-content">
+                <div class="trusted-reality-text">
+                    <p>
+                        Most fleet systems treat GPS as ground truth. But GPS drifts, signals conflict,
+                        telematics drop out, and driver apps disagree with ELDs. When your route optimizer
+                        doesn't know where your trucks actually <em>are</em>, every downstream decision
+                        inherits that uncertainty.
+                    </p>
+                    <p>
+                        OTTO maintains a <strong>unified reality model</strong>. Multiple signals&mdash;GPS,
+                        telematics, driver app events, geofence triggers, infrastructure sensors&mdash;are
+                        fused into consistent vehicle states. When signals conflict, OTTO doesn't guess.
+                        It maintains confidence levels and propagates uncertainty through the planning stack.
+                    </p>
+                    <p>
+                        The result: ETAs that account for measurement noise. Geofence events that don't
+                        false-trigger. Compliance checks that distinguish "definitely violated" from
+                        "probably fine." Every optimization decision starts with a clear picture of
+                        what's actually happening.
+                    </p>
+                    <p class="trusted-reality-statement">
+                        "Where is truck 47?" isn't a simple question. The GPS says one thing, the driver
+                        app says another, and the geofence fired twice. OTTO gives you a single answer
+                        you can trust&mdash;and tells you how confident it is.
+                    </p>
+                </div>
+                <div class="trusted-reality-features">
+                    <div class="tr-feature">
+                        <div class="tr-feature-title">Multi-Signal Fusion</div>
+                        <div class="tr-feature-desc">GPS, telematics, driver app, infrastructure events&mdash;combined into one coherent state, not competing sources of confusion.</div>
+                    </div>
+                    <div class="tr-feature">
+                        <div class="tr-feature-title">Identity Consistency</div>
+                        <div class="tr-feature-desc">Track the same vehicle across signal dropouts, device swaps, and driver changes. No phantom trucks, no duplicate entries.</div>
+                    </div>
+                    <div class="tr-feature">
+                        <div class="tr-feature-title">Confidence-Aware Events</div>
+                        <div class="tr-feature-desc">Geofence alerts only fire when confidence exceeds threshold. Fewer false alarms, more trust in real alerts.</div>
+                    </div>
+                    <div class="tr-feature">
+                        <div class="tr-feature-title">Clean Input for Optimization</div>
+                        <div class="tr-feature-desc">Ralph, Velo, and HoSE receive sanitized state data. Better inputs mean better plans.</div>
+                    </div>
+                </div>
+            </div>
+            <div class="trusted-reality-benefits">
+                <div class="tr-benefit">
+                    <span class="tr-benefit-label">Fewer false alerts</span>
+                    <span class="tr-benefit-desc">Geofence events require confidence, not just position</span>
+                </div>
+                <div class="tr-benefit">
+                    <span class="tr-benefit-label">Stable ETAs</span>
+                    <span class="tr-benefit-desc">Predictions account for signal noise, not just last known position</span>
+                </div>
+                <div class="tr-benefit">
+                    <span class="tr-benefit-label">Cleaner compliance</span>
+                    <span class="tr-benefit-desc">HoS reports distinguish certain violations from edge cases</span>
+                </div>
+                <div class="tr-benefit">
+                    <span class="tr-benefit-label">Dispatcher trust</span>
+                    <span class="tr-benefit-desc">When the system says a truck is somewhere, it's actually there</span>
+                </div>
+            </div>
+            <div class="ev-callout">
+                <h3 class="ev-callout-title">Critical for Electric Fleets</h3>
+                <div class="ev-callout-content">
+                    <p>
+                        Diesel trucks are forgiving. Misjudge fuel level by 5%? Coast to the next truck stop.
+                        Electric trucks aren't. Misjudge battery state by 5%? You're stranded on a highway
+                        with a 40-ton anchor.
+                    </p>
+                    <p>
+                        EV state estimation is harder than diesel. Battery capacity degrades unpredictably.
+                        Cold weather cuts range by 20-40%. Regenerative braking varies with terrain and load.
+                        The "fuel gauge" lies in ways diesel gauges never did.
+                    </p>
+                    <p>
+                        And the recovery options are worse. Charging infrastructure is sparse. Chargers break,
+                        get occupied, or charge slower than advertised. A 45-minute charging stop can't be
+                        improvised like a 10-minute diesel fill.
+                    </p>
+                    <div class="ev-callout-comparison">
+                        <div class="ev-comparison-item ev-diesel">
+                            <strong>Diesel: 5% estimation error</strong>
+                            <span>Minor inconvenience&mdash;stop 20 miles earlier than planned</span>
+                        </div>
+                        <div class="ev-comparison-item ev-electric">
+                            <strong>Electric: 5% estimation error</strong>
+                            <span>Potential stranding, tow truck, missed delivery, angry customer</span>
+                        </div>
+                    </div>
+                    <p class="ev-callout-conclusion">
+                        For mixed and electric fleets, state integrity isn't a nice-to-have&mdash;it's the
+                        difference between a functioning operation and a logistics crisis. OTTO's confidence-weighted
+                        state estimation was designed with EVs in mind from day one.
+                    </p>
+                </div>
+            </div>
+            <div class="operational-events">
+                <h3 class="subsection-title">Smarter Operational Events</h3>
+                <p class="operational-events-intro">
+                    When you know where trucks actually are&mdash;not just where GPS says they might be&mdash;every
+                    facility interaction gets more reliable.
+                </p>
+                <div class="operational-grid">
+                    <div class="operational-card">
+                        <h4>Geofencing Without False Triggers</h4>
+                        <p>
+                            GPS drifts. Trucks "arrive" while still on the highway. Drivers "leave" while
+                            parked at the dock. Traditional geofencing fires on raw coordinates and generates
+                            noise.
+                        </p>
+                        <p>
+                            OTTO's geofences require confidence thresholds. A position fix 50 meters inside
+                            the fence with high confidence triggers arrival. A noisy fix that bounces across
+                            the boundary doesn't. Result: alerts you can trust, not alert fatigue.
+                        </p>
+                    </div>
+                    <div class="operational-card">
+                        <h4>Detention Time That Holds Up</h4>
+                        <p>
+                            Detention billing disputes cost the industry billions. "We show you arrived at 2:15."
+                            "Our system shows 2:47." Without accurate arrival/departure timestamps, you're
+                            arguing over whose GPS was less wrong.
+                        </p>
+                        <p>
+                            OTTO records confidence-weighted arrival times with full signal provenance. When
+                            the facility disputes your detention claim, you have auditable data showing
+                            exactly when the truck crossed the threshold&mdash;and how certain you are.
+                        </p>
+                    </div>
+                    <div class="operational-card">
+                        <h4>Wait Time Prediction</h4>
+                        <p>
+                            "How long will I wait at this shipper?" Most systems can't answer this. They
+                            don't track dwell times accurately, so they can't predict them.
+                        </p>
+                        <p>
+                            OTTO builds facility dwell profiles from accurate arrival/departure data across
+                            the network. Historical patterns by day, time, and load type feed into tactical
+                            planning. Dispatchers can route around facilities with 3-hour average waits.
+                        </p>
+                    </div>
+                    <div class="operational-card">
+                        <h4>Live ETA That Doesn't Jump</h4>
+                        <p>
+                            Nothing frustrates a receiver more than an ETA that changes by 45 minutes every
+                            refresh. Raw GPS + naive speed calculations produce unstable predictions.
+                        </p>
+                        <p>
+                            OTTO's ETAs incorporate position confidence, historical corridor speeds, and
+                            known dwell times. The estimate might be less optimistic, but it won't swing
+                            wildly&mdash;receivers can actually plan around it.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="no-lockin">
             <h2 class="section-title">No Lock-In</h2>
             <div class="lockin-grid">
@@ -1250,6 +1624,14 @@
                 </div>
                 <div class="card planned">
                     <div class="card-header">
+                        <span class="card-name">Fuse</span>
+                        <span class="card-lang">C</span>
+                        <span class="badge-planned">planned</span>
+                    </div>
+                    <div class="card-desc"><strong>F</strong>leet <strong>U</strong>nified <strong>S</strong>ignal and <strong>E</strong>stimation engine. Multi-source data fusion, vehicle identity resolution, confidence-weighted state estimation.</div>
+                </div>
+                <div class="card planned">
+                    <div class="card-header">
                         <span class="card-name">Forge</span>
                         <span class="card-lang">C</span>
                         <span class="badge-planned">planned</span>
@@ -1312,6 +1694,7 @@
 ┌─────────────────────────────────────────────┐
 │                                             │
 │ Fleet: HoSE + Tempo + Arbor + Sigma + Pulse │  ◄── planned
+│ State: Fuse (signal fusion + state estimation)│  ◄── planned
 │       Network: Atlas + Quota                │  ◄── planned
 │                                             │
 └──────────────────────┬──────────────────────┘
@@ -1677,7 +2060,7 @@ Dependencies:
                         <li>FuelWise &ndash; Refueling optimization</li>
                         <li>ClayShards &ndash; UI components</li>
                         <li>Shared &ndash; Geo utilities</li>
-                        <li>HoSE, Tempo, Arbor, Sigma, Pulse</li>
+                        <li>HoSE, Tempo, Arbor, Sigma, Pulse, Fuse</li>
                     </ul>
                 </div>
                 <div class="license-column">
