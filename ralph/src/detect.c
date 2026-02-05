@@ -952,6 +952,12 @@ static int solve_assignment_as_lap(const NetworkSignature *sig, double *solution
     }
 
     /* Build cost matrix for LAP */
+    /* Check for integer overflow before n*n allocations */
+    if (detect_check_size_overflow((size_t)n, sizeof(double)) != 0 ||
+        detect_check_size_overflow((size_t)n, sizeof(int)) != 0) {
+        free(source_map); free(sink_map); free(source_nodes); free(sink_nodes);
+        return -2;
+    }
     double *lap_cost = (double *)calloc((size_t)n * n, sizeof(double));
     int *arc_matrix = (int *)calloc((size_t)n * n, sizeof(int));  /* arc_matrix[i*n+j] = arc index */
 

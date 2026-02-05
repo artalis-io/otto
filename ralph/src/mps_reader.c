@@ -291,7 +291,7 @@ static int parse_columns_line(MPSParser *parser, const char *line) {
     }
 
     /* Check for MARKER for integer variables */
-    if (strcmp(row_name1, "'MARKER'") == 0) {
+    if (strncmp(row_name1, "'MARKER'", 9) == 0) {
         if (strstr(line, "'INTORG'")) {
             /* Start of integer section - mark subsequent columns as integer */
             /* This is handled by tracking state */
@@ -386,46 +386,46 @@ static int parse_bounds_line(MPSParser *parser, const char *line) {
         return -1;
     }
 
-    /* Process bound type */
-    if (strcmp(type, "LO") == 0) {
+    /* Process bound type (use strncmp for defensive string comparison) */
+    if (strncmp(type, "LO", 3) == 0) {
         if (n < 4) {
             set_error(parser, "line %d: LO bound requires a value", parser->line_num);
             return -1;
         }
         parser->lb[col_idx] = val;
-    } else if (strcmp(type, "UP") == 0) {
+    } else if (strncmp(type, "UP", 3) == 0) {
         if (n < 4) {
             set_error(parser, "line %d: UP bound requires a value", parser->line_num);
             return -1;
         }
         parser->ub[col_idx] = val;
-    } else if (strcmp(type, "FX") == 0) {
+    } else if (strncmp(type, "FX", 3) == 0) {
         if (n < 4) {
             set_error(parser, "line %d: FX bound requires a value", parser->line_num);
             return -1;
         }
         parser->lb[col_idx] = val;
         parser->ub[col_idx] = val;
-    } else if (strcmp(type, "FR") == 0) {
+    } else if (strncmp(type, "FR", 3) == 0) {
         parser->lb[col_idx] = -RALPH_INFINITY;
         parser->ub[col_idx] = RALPH_INFINITY;
-    } else if (strcmp(type, "MI") == 0) {
+    } else if (strncmp(type, "MI", 3) == 0) {
         parser->lb[col_idx] = -RALPH_INFINITY;
-    } else if (strcmp(type, "PL") == 0) {
+    } else if (strncmp(type, "PL", 3) == 0) {
         parser->ub[col_idx] = RALPH_INFINITY;
-    } else if (strcmp(type, "BV") == 0) {
+    } else if (strncmp(type, "BV", 3) == 0) {
         /* Binary variable */
         parser->lb[col_idx] = 0.0;
         parser->ub[col_idx] = 1.0;
         parser->columns[col_idx].type = 'B';
-    } else if (strcmp(type, "LI") == 0) {
+    } else if (strncmp(type, "LI", 3) == 0) {
         if (n < 4) {
             set_error(parser, "line %d: LI bound requires a value", parser->line_num);
             return -1;
         }
         parser->lb[col_idx] = val;
         parser->columns[col_idx].type = 'I';
-    } else if (strcmp(type, "UI") == 0) {
+    } else if (strncmp(type, "UI", 3) == 0) {
         if (n < 4) {
             set_error(parser, "line %d: UI bound requires a value", parser->line_num);
             return -1;
