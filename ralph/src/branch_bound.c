@@ -1656,3 +1656,427 @@ void mip_print_node_info(const MIPSolver *solver, const BBNode *node) {
     printf("Node %d: depth=%d, bound=%.4f, status=%d\n",
            node->id, node->depth, node->lp_bound, node->lp_status);
 }
+
+/* ============================================================================
+ * Lagrangian Relaxation for SCP (Phase 6)
+ * ============================================================================ */
+
+/*
+ * Create Lagrangian relaxation context for SCP.
+ */
+LagrangianContext *lagrangian_create(MIPSolver *solver) {
+    if (!solver || !solver->original_model) return NULL;
+
+    LPModel *model = solver->original_model;
+    SparseMatrix *A = model->A;
+
+    /* Check if this is an SCP problem */
+    if (!is_scp_model(model)) {
+        return NULL;
+    }
+
+    LagrangianContext *ctx = (LagrangianContext *)calloc(1, sizeof(LagrangianContext));
+    if (!ctx) return NULL;
+
+    ctx->num_elements = A->nrows;
+    ctx->num_sets = A->ncols;
+
+    /* Allocate arrays */
+    ctx->lambda = (double *)calloc(ctx->num_elements, sizeof(double));
+    ctx->subgradient = (double *)calloc(ctx->num_elements, sizeof(double));
+    ctx->best_lambda = (double *)calloc(ctx->num_elements, sizeof(double));
+    ctx->x_lagrangian = (double *)calloc(ctx->num_sets, sizeof(double));
+
+    if (!ctx->lambda || !ctx->subgradient || !ctx->best_lambda || !ctx->x_lagrangian) {
+        lagrangian_free(ctx);
+        return NULL;
+    }
+
+    /* Store pointers to problem data (not owned) */
+    ctx->costs = model->c;
+    ctx->col_ptr = A->colptr;
+    ctx->row_idx = A->rowidx;
+
+    /* Initialize multipliers to zero */
+    /* Could use LP duals as warm start, but zero works fine */
+
+    /* Default parameters */
+    ctx->max_iterations = 500;
+    ctx->step_factor = 2.0;
+    ctx->min_step_factor = 0.01;
+    ctx->no_improve_limit = 30;
+
+    /* Initialize bounds */
+    ctx->best_bound = -RALPH_INFINITY;
+    ctx->ub = RALPH_INFINITY;  /* Will be set by heuristic */
+
+    return ctx;
+}
+
+/*
+ * Free Lagrangian context.
+ */
+void lagrangian_free(LagrangianContext *ctx) {
+    if (!ctx) return;
+
+    free(ctx->lambda);
+    free(ctx->subgradient);
+    free(ctx->best_lambda);
+    free(ctx->x_lagrangian);
+    free(ctx);
+}
+
+/*
+ * Compute Lagrangian bound for current multipliers.
+ *
+ * L(lambda) = sum(lambda) + sum { min(0, c_j - sum(lambda_i : i in S_j)) }
+ */
+double lagrangian_bound(LagrangianContext *ctx) {
+    if (!ctx) return -RALPH_INFINITY;
+
+    int m = ctx->num_elements;
+    int n = ctx->num_sets;
+
+    /* Start with sum of multipliers */
+    double bound = 0.0;
+    for (int i = 0; i < m; i++) {
+        bound += ctx->lambda[i];
+    }
+
+    /* Initialize subgradient to 1 (uncovered elements) */
+    for (int i = 0; i < m; i++) {
+        ctx->subgradient[i] = 1.0;
+    }
+
+    /* Process each set (variable) */
+    for (int j = 0; j < n; j++) {
+        /* Compute reduced cost: c_j - sum(lambda_i : set j covers element i) */
+        double reduced_cost = ctx->costs[j];
+        for (int p = ctx->col_ptr[j]; p < ctx->col_ptr[j + 1]; p++) {
+            int i = ctx->row_idx[p];
+            reduced_cost -= ctx->lambda[i];
+        }
+
+        /* Solve trivial subproblem: x_j = 1 if reduced_cost < 0 */
+        if (reduced_cost < -RALPH_ZERO_TOL) {
+            ctx->x_lagrangian[j] = 1.0;
+            bound += reduced_cost;
+
+            /* Update subgradient: g_i = 1 - sum(x_j : j covers i) */
+            for (int p = ctx->col_ptr[j]; p < ctx->col_ptr[j + 1]; p++) {
+                int i = ctx->row_idx[p];
+                ctx->subgradient[i] -= 1.0;
+            }
+        } else {
+            ctx->x_lagrangian[j] = 0.0;
+        }
+    }
+
+    return bound;
+}
+
+/*
+ * Perform one subgradient update step.
+ *
+ * lambda_i = max(0, lambda_i + step * g_i)
+ *
+ * where step = factor * (ub - L(lambda)) / ||g||^2
+ */
+double lagrangian_step(LagrangianContext *ctx) {
+    if (!ctx) return -RALPH_INFINITY;
+
+    /* Compute current bound and subgradient */
+    double current_bound = lagrangian_bound(ctx);
+
+    /* Update best bound if improved */
+    if (current_bound > ctx->best_bound + RALPH_ZERO_TOL) {
+        ctx->best_bound = current_bound;
+        memcpy(ctx->best_lambda, ctx->lambda, ctx->num_elements * sizeof(double));
+        ctx->bound_improvements++;
+    }
+
+    /* Compute subgradient norm squared */
+    double norm_sq = 0.0;
+    for (int i = 0; i < ctx->num_elements; i++) {
+        norm_sq += ctx->subgradient[i] * ctx->subgradient[i];
+    }
+
+    /* If subgradient is zero, we're at optimum */
+    if (norm_sq < RALPH_ZERO_TOL) {
+        return current_bound;
+    }
+
+    /* Compute step size */
+    double gap = ctx->ub - current_bound;
+    if (gap < RALPH_ZERO_TOL) {
+        gap = 1.0;  /* Use small step if gap is closed */
+    }
+    double step = ctx->step_factor * gap / norm_sq;
+
+    /* Update multipliers with projection to non-negative */
+    for (int i = 0; i < ctx->num_elements; i++) {
+        ctx->lambda[i] += step * ctx->subgradient[i];
+        if (ctx->lambda[i] < 0.0) {
+            ctx->lambda[i] = 0.0;
+        }
+    }
+
+    ctx->iterations++;
+    return current_bound;
+}
+
+/*
+ * Run subgradient optimization to find best Lagrangian bound.
+ */
+double lagrangian_optimize(LagrangianContext *ctx) {
+    if (!ctx) return -RALPH_INFINITY;
+
+    int no_improve_count = 0;
+    double prev_best = ctx->best_bound;
+
+    for (int iter = 0; iter < ctx->max_iterations; iter++) {
+        double bound = lagrangian_step(ctx);
+
+        /* Check for improvement */
+        if (bound > prev_best + RALPH_ZERO_TOL) {
+            no_improve_count = 0;
+            prev_best = bound;
+        } else {
+            no_improve_count++;
+        }
+
+        /* Reduce step factor if no improvement for a while */
+        if (no_improve_count >= ctx->no_improve_limit) {
+            ctx->step_factor *= 0.5;
+            no_improve_count = 0;
+
+            /* Restore best multipliers */
+            memcpy(ctx->lambda, ctx->best_lambda, ctx->num_elements * sizeof(double));
+
+            /* Stop if step factor is too small */
+            if (ctx->step_factor < ctx->min_step_factor) {
+                break;
+            }
+        }
+
+        /* Check if gap is closed */
+        if (ctx->ub - ctx->best_bound < RALPH_OPT_TOL * (fabs(ctx->ub) + 1.0)) {
+            break;
+        }
+    }
+
+    /* Restore best multipliers and recompute bound */
+    memcpy(ctx->lambda, ctx->best_lambda, ctx->num_elements * sizeof(double));
+    lagrangian_bound(ctx);
+
+    return ctx->best_bound;
+}
+
+/*
+ * Convert Lagrangian solution to feasible SCP solution.
+ *
+ * The Lagrangian subproblem solution may leave some elements uncovered.
+ * Use greedy to repair.
+ */
+double lagrangian_repair(LagrangianContext *ctx, MIPSolver *solver, double *solution) {
+    if (!ctx || !solver || !solution) return RALPH_INFINITY;
+
+    LPModel *model = solver->original_model;
+    SparseMatrix *A = model->A;
+    int m = ctx->num_elements;
+    int n = ctx->num_sets;
+
+    /* Start with Lagrangian solution */
+    memcpy(solution, ctx->x_lagrangian, n * sizeof(double));
+
+    /* Track uncovered elements */
+    int *uncovered = (int *)calloc(m, sizeof(int));
+    int *coverage = (int *)calloc(m, sizeof(int));
+    if (!uncovered || !coverage) {
+        free(uncovered);
+        free(coverage);
+        return RALPH_INFINITY;
+    }
+
+    /* Count coverage from Lagrangian solution */
+    for (int j = 0; j < n; j++) {
+        if (solution[j] > 0.5) {
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int i = A->rowidx[p];
+                coverage[i]++;
+            }
+        }
+    }
+
+    /* Find uncovered elements */
+    int num_uncovered = 0;
+    for (int i = 0; i < m; i++) {
+        if (coverage[i] == 0) {
+            uncovered[num_uncovered++] = i;
+        }
+    }
+
+    /* Greedy repair: add sets to cover uncovered elements */
+    while (num_uncovered > 0) {
+        int best_set = -1;
+        double best_ratio = RALPH_INFINITY;
+        int best_covers = 0;
+
+        for (int j = 0; j < n; j++) {
+            if (solution[j] > 0.5) continue;  /* Already selected */
+
+            /* Count how many uncovered elements this set covers */
+            int covers = 0;
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int elem = A->rowidx[p];
+                if (coverage[elem] == 0) {
+                    covers++;
+                }
+            }
+
+            if (covers > 0) {
+                double ratio = model->c[j] / covers;
+                if (ratio < best_ratio) {
+                    best_ratio = ratio;
+                    best_set = j;
+                    best_covers = covers;
+                }
+            }
+        }
+
+        if (best_set < 0) {
+            /* No set can cover remaining elements - problem is infeasible */
+            free(uncovered);
+            free(coverage);
+            return RALPH_INFINITY;
+        }
+
+        /* Add best set */
+        solution[best_set] = 1.0;
+        for (int p = A->colptr[best_set]; p < A->colptr[best_set + 1]; p++) {
+            int elem = A->rowidx[p];
+            coverage[elem]++;
+        }
+
+        /* Recount uncovered */
+        num_uncovered = 0;
+        for (int i = 0; i < m; i++) {
+            if (coverage[i] == 0) {
+                uncovered[num_uncovered++] = i;
+            }
+        }
+
+        (void)best_covers;  /* Suppress unused warning */
+    }
+
+    /* Apply local search to remove redundant sets */
+    for (int j = 0; j < n; j++) {
+        if (solution[j] < 0.5) continue;
+
+        /* Check if removing this set still covers everything */
+        int can_remove = 1;
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int elem = A->rowidx[p];
+            if (coverage[elem] <= 1) {
+                can_remove = 0;
+                break;
+            }
+        }
+
+        if (can_remove) {
+            solution[j] = 0.0;
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int elem = A->rowidx[p];
+                coverage[elem]--;
+            }
+        }
+    }
+
+    /* Compute objective */
+    double obj = 0.0;
+    for (int j = 0; j < n; j++) {
+        if (solution[j] > 0.5) {
+            obj += model->c[j];
+        }
+    }
+
+    free(uncovered);
+    free(coverage);
+    return obj;
+}
+
+/*
+ * Full Lagrangian-based solve for SCP.
+ */
+int lagrangian_solve_scp(MIPSolver *solver, double *solution, double *lower_bound) {
+    if (!solver || !solution) return -1;
+
+    LPModel *model = solver->original_model;
+    int n = model->num_vars;
+
+    /* Create Lagrangian context */
+    LagrangianContext *ctx = lagrangian_create(solver);
+    if (!ctx) return -1;  /* Not an SCP problem */
+
+    /* Run greedy heuristic to get initial upper bound */
+    double *greedy_sol = (double *)calloc(n, sizeof(double));
+    if (!greedy_sol) {
+        lagrangian_free(ctx);
+        return -1;
+    }
+
+    double ub = RALPH_INFINITY;
+    if (heuristic_greedy_set_cover(solver, greedy_sol) == 0) {
+        /* Apply local search */
+        heuristic_local_search_scp(solver, greedy_sol);
+
+        /* Compute objective */
+        ub = 0.0;
+        for (int j = 0; j < n; j++) {
+            if (greedy_sol[j] > 0.5) {
+                ub += model->c[j];
+            }
+        }
+        ctx->ub = ub;
+        memcpy(solution, greedy_sol, n * sizeof(double));
+    }
+
+    /* Run subgradient optimization */
+    double lb = lagrangian_optimize(ctx);
+
+    if (lower_bound) {
+        *lower_bound = lb;
+    }
+
+    /* Try to improve solution by repairing Lagrangian solution */
+    double *repaired_sol = (double *)calloc(n, sizeof(double));
+    if (repaired_sol) {
+        double repair_obj = lagrangian_repair(ctx, solver, repaired_sol);
+        if (repair_obj < ub) {
+            ub = repair_obj;
+            memcpy(solution, repaired_sol, n * sizeof(double));
+
+            /* Update context upper bound and continue optimization */
+            ctx->ub = ub;
+            double new_lb = lagrangian_optimize(ctx);
+            if (new_lb > lb) {
+                lb = new_lb;
+                if (lower_bound) {
+                    *lower_bound = lb;
+                }
+            }
+
+            /* Try one more repair */
+            repair_obj = lagrangian_repair(ctx, solver, repaired_sol);
+            if (repair_obj < ub) {
+                memcpy(solution, repaired_sol, n * sizeof(double));
+            }
+        }
+        free(repaired_sol);
+    }
+
+    free(greedy_sol);
+    lagrangian_free(ctx);
+
+    return 0;
+}

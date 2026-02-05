@@ -442,4 +442,158 @@ int probing_bound_tightening(MIPSolver *solver);
 void mip_print_stats(const MIPSolver *solver);
 void mip_print_node_info(const MIPSolver *solver, const BBNode *node);
 
+/* ============================================================================
+ * Lagrangian Relaxation for SCP (Phase 6)
+ * ============================================================================ */
+
+/*
+ * Lagrangian relaxation context for Set Covering Problems.
+ *
+ * The Lagrangian relaxation of SCP:
+ *   min c'x  s.t. Ax >= 1, x in {0,1}
+ *
+ * With Lagrangian multipliers lambda >= 0:
+ *   L(lambda) = min { c'x + lambda'(1 - Ax) : x in {0,1} }
+ *             = sum(lambda) + min { (c - A'lambda)'x : x in {0,1} }
+ *
+ * The inner minimization is trivial: for each j, x_j = 1 if (c_j - sum(lambda_i : i in S_j)) < 0.
+ *
+ * Properties:
+ * - L(lambda) <= optimal value (valid dual bound)
+ * - max_lambda L(lambda) = Lagrangian dual bound
+ * - Often tighter than LP relaxation for SCP
+ * - Much faster to compute than LP for large instances
+ */
+typedef struct {
+    int num_elements;           /* m: number of constraints (elements) */
+    int num_sets;               /* n: number of variables (sets) */
+
+    /* Lagrangian multipliers (dual variables) */
+    double *lambda;             /* Multipliers for covering constraints (size m) */
+
+    /* Problem data (pointers to model data, not owned) */
+    const double *costs;        /* Set costs c[j] */
+    const int *col_ptr;         /* CSC column pointers */
+    const int *row_idx;         /* CSC row indices */
+
+    /* Subgradient optimization state */
+    double *subgradient;        /* Current subgradient (size m) */
+    double *best_lambda;        /* Best multipliers found (size m) */
+    double best_bound;          /* Best Lagrangian bound found */
+    double ub;                  /* Best known upper bound (from heuristic) */
+
+    /* Parameters */
+    int max_iterations;         /* Maximum subgradient iterations */
+    double step_factor;         /* Step size factor (typically 2.0, halved on no improvement) */
+    double min_step_factor;     /* Minimum step factor before stopping */
+    int no_improve_limit;       /* Iterations without improvement before halving step */
+
+    /* Statistics */
+    int iterations;             /* Total iterations performed */
+    int bound_improvements;     /* Number of times bound improved */
+
+    /* Solution from Lagrangian subproblem */
+    double *x_lagrangian;       /* Binary solution from subproblem (size n) */
+
+} LagrangianContext;
+
+/*
+ * Create Lagrangian relaxation context for SCP.
+ *
+ * Parameters:
+ *   solver - MIP solver with SCP structure
+ *
+ * Returns:
+ *   Lagrangian context, or NULL if not an SCP or allocation failed.
+ *   Caller must free with lagrangian_free().
+ */
+LagrangianContext *lagrangian_create(MIPSolver *solver);
+
+/*
+ * Free Lagrangian context.
+ */
+void lagrangian_free(LagrangianContext *ctx);
+
+/*
+ * Compute Lagrangian bound for current multipliers.
+ *
+ * Solves the Lagrangian subproblem:
+ *   L(lambda) = sum(lambda) + sum { min(0, c_j - sum(lambda_i : i covers j)) }
+ *
+ * Also computes the subgradient g_i = 1 - sum(x_j : j covers i).
+ *
+ * Parameters:
+ *   ctx - Lagrangian context
+ *
+ * Returns:
+ *   Lagrangian bound L(lambda).
+ */
+double lagrangian_bound(LagrangianContext *ctx);
+
+/*
+ * Perform one subgradient update step.
+ *
+ * Updates lambda using:
+ *   lambda_i = max(0, lambda_i + step * g_i)
+ *
+ * where step = factor * (ub - L(lambda)) / ||g||^2
+ *
+ * Parameters:
+ *   ctx - Lagrangian context
+ *
+ * Returns:
+ *   New Lagrangian bound after update.
+ */
+double lagrangian_step(LagrangianContext *ctx);
+
+/*
+ * Run subgradient optimization to find best Lagrangian bound.
+ *
+ * Iterates until:
+ * - max_iterations reached
+ * - step_factor falls below min_step_factor
+ * - gap between ub and bound is within tolerance
+ *
+ * Parameters:
+ *   ctx - Lagrangian context
+ *
+ * Returns:
+ *   Best Lagrangian bound found (also stored in ctx->best_bound).
+ */
+double lagrangian_optimize(LagrangianContext *ctx);
+
+/*
+ * Convert Lagrangian solution to feasible SCP solution.
+ *
+ * The Lagrangian subproblem solution x_lagrangian may be infeasible
+ * (some elements not covered). This function repairs it using greedy.
+ *
+ * Parameters:
+ *   ctx      - Lagrangian context with x_lagrangian populated
+ *   solver   - MIP solver (for costs and coverage data)
+ *   solution - Output: feasible binary solution (size n)
+ *
+ * Returns:
+ *   Objective value of feasible solution, or RALPH_INFINITY if failed.
+ */
+double lagrangian_repair(LagrangianContext *ctx, MIPSolver *solver, double *solution);
+
+/*
+ * Full Lagrangian-based solve for SCP.
+ *
+ * Combines:
+ * 1. Greedy heuristic for initial upper bound
+ * 2. Subgradient optimization for lower bound
+ * 3. Lagrangian repair for improved solutions
+ *
+ * Parameters:
+ *   solver      - MIP solver with SCP structure
+ *   solution    - Output: best solution found
+ *   lower_bound - Output: best lower bound (can be NULL)
+ *
+ * Returns:
+ *   0 on success with solution, -1 if not SCP or error.
+ */
+int lagrangian_solve_scp(MIPSolver *solver, double *solution, double *lower_bound);
+
 #endif /* RALPH_MIP_H */
