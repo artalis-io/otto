@@ -542,7 +542,8 @@ char *lc_expand_abbreviations(const char *input)
                 size_t prefix_len = pos - input;
                 memcpy(result, input, prefix_len);
                 memcpy(result + prefix_len, a->expansion, exp_len);
-                strcpy(result + prefix_len + exp_len, pos + abbr_len);
+                size_t suffix_len = strlen(pos + abbr_len);
+                memcpy(result + prefix_len + exp_len, pos + abbr_len, suffix_len + 1);
 
                 return result;
             }
