@@ -439,10 +439,11 @@ int dual_simplex_solve(SimplexSolver *solver) {
             solver->status = RALPH_STATUS_OPTIMAL;
             solver->obj_value = tab->obj_value * solver->model->obj_sense;
 
-            /* Copy solution to solver */
+            /* Copy solution to solver (lazy allocation) */
             int n_orig = solver->model->num_vars;
             if (!solver->solution) {
                 solver->solution = (double*)calloc(n_orig, sizeof(double));
+                /* Allocation failure is non-fatal: solution accessible via tableau */
             }
             if (solver->solution) {
                 for (int j = 0; j < n_orig; j++) {

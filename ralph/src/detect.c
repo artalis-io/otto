@@ -22,7 +22,15 @@ static int detect_check_size_overflow(size_t n, size_t elem_size) {
     return 0;
 }
 
-/* Global setting for LAP detection (thread-safe via atomic) */
+/*
+ * Process-wide setting for LAP detection.
+ *
+ * THREAD SAFETY: Access is atomic, but semantics are process-wide.
+ * This setting should be configured at startup before any solving.
+ * Changing it while solves are in progress affects all threads.
+ *
+ * For per-model control, use: ralph_set_int_param(model, "detect_special", 0/1)
+ */
 static atomic_int lap_detection_enabled = 1;
 
 void ralph_set_detect_lap(int enabled) {
@@ -556,7 +564,15 @@ int solve_lap_at_node(
 
 #include "netflow.h"
 
-/* Global setting for network detection (thread-safe via atomic) */
+/*
+ * Process-wide setting for network flow detection.
+ *
+ * THREAD SAFETY: Access is atomic, but semantics are process-wide.
+ * This setting should be configured at startup before any solving.
+ * Changing it while solves are in progress affects all threads.
+ *
+ * For per-model control, use: ralph_set_int_param(model, "detect_special", 0/1)
+ */
 static atomic_int network_detection_enabled = 1;
 
 void ralph_set_detect_network(int enabled) {

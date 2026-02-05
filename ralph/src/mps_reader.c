@@ -148,7 +148,7 @@ static char* trim(char *str) {
 
 static int find_row(MPSParser *parser, const char *name) {
     for (int i = 0; i < parser->num_rows; i++) {
-        if (strcmp(parser->rows[i].name, name) == 0) {
+        if (strncmp(parser->rows[i].name, name, MAX_NAME) == 0) {
             return i;
         }
     }
@@ -157,7 +157,7 @@ static int find_row(MPSParser *parser, const char *name) {
 
 static int find_or_add_column(MPSParser *parser, const char *name) {
     for (int i = 0; i < parser->num_cols; i++) {
-        if (strcmp(parser->columns[i].name, name) == 0) {
+        if (strncmp(parser->columns[i].name, name, MAX_NAME) == 0) {
             return i;
         }
     }
