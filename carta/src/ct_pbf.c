@@ -14,6 +14,7 @@
 #include "sh_inflate.h"
 #include "sh_pbf.h"
 #include "sh_pool.h"
+#include "sh_hashmap.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -462,17 +463,8 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
 }
 
 /* ============================================================================
- * Node Map (Hash Table)
+ * Hash Table Preallocation
  * ============================================================================ */
-
-static uint64_t hash_id(int64_t id)
-{
-    uint64_t x = (uint64_t)id;
-    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
-    x = x ^ (x >> 31);
-    return x;
-}
 
 /*
  * Preallocate hash tables and coordinate pool based on file size heuristics.
@@ -510,31 +502,19 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
         way_cap *= 2;
     }
 
-    /* Allocate node_map (will grow if needed) */
-    ctx->node_map.keys = calloc(node_cap, sizeof(int64_t));
-    ctx->node_map.values = malloc(node_cap * sizeof(size_t));
-    if (!ctx->node_map.keys || !ctx->node_map.values) {
-        free(ctx->node_map.keys);
-        free(ctx->node_map.values);
-        ctx->node_map.keys = NULL;
-        ctx->node_map.values = NULL;
+    /* Allocate node_map using shared hashmap */
+    ctx->node_map = sh_hashmap_i64_create(node_cap);
+    if (!ctx->node_map) {
         return CT_ERROR_OUT_OF_MEMORY;
     }
-    ctx->node_map.capacity = node_cap;
-    ctx->node_map.count = 0;
 
-    /* Allocate way_map (will grow if needed) */
-    ctx->way_map.keys = calloc(way_cap, sizeof(int64_t));
-    ctx->way_map.values = malloc(way_cap * sizeof(size_t));
-    if (!ctx->way_map.keys || !ctx->way_map.values) {
-        free(ctx->way_map.keys);
-        free(ctx->way_map.values);
-        ctx->way_map.keys = NULL;
-        ctx->way_map.values = NULL;
+    /* Allocate way_map using shared hashmap */
+    ctx->way_map = sh_hashmap_i64_create(way_cap);
+    if (!ctx->way_map) {
+        sh_hashmap_i64_free(ctx->node_map);
+        ctx->node_map = NULL;
         return CT_ERROR_OUT_OF_MEMORY;
     }
-    ctx->way_map.capacity = way_cap;
-    ctx->way_map.count = 0;
 
     /* Allocate coordinate pool (will grow if needed) */
     size_t coord_cap = ctx->config.initial_coord_capacity;
@@ -559,150 +539,37 @@ static CTStatus preallocate_hash_tables(CTPBFContext *ctx, size_t file_size)
     return CT_OK;
 }
 
+/* ============================================================================
+ * Node Map Wrappers (using shared hashmap)
+ * ============================================================================ */
+
 static CTStatus node_map_insert(CTPBFContext *ctx, int64_t id, size_t index)
 {
-    if (ctx->node_map.count >= ctx->node_map.capacity * 3 / 4) {
-        size_t new_cap = ctx->node_map.capacity ? ctx->node_map.capacity * 2 : 65536;
-        size_t old_size = ctx->node_map.capacity * (sizeof(int64_t) + sizeof(size_t));
-        size_t new_size = new_cap * (sizeof(int64_t) + sizeof(size_t));
-
-        /* Check memory limit before growing */
-        if (!check_memory_limit(ctx, new_size - old_size)) {
-            return CT_ERROR_OUT_OF_MEMORY;
-        }
-
-        int64_t *new_keys = calloc(new_cap, sizeof(int64_t));
-        size_t *new_vals = malloc(new_cap * sizeof(size_t));
-        if (!new_keys || !new_vals) {
-            free(new_keys);
-            free(new_vals);
-            return CT_ERROR_OUT_OF_MEMORY;
-        }
-
-        /* Rehash */
-        for (size_t i = 0; i < ctx->node_map.capacity; i++) {
-            if (ctx->node_map.keys[i] != 0) {
-                uint64_t h = hash_id(ctx->node_map.keys[i]) % new_cap;
-                while (new_keys[h] != 0) {
-                    h = (h + 1) % new_cap;
-                }
-                new_keys[h] = ctx->node_map.keys[i];
-                new_vals[h] = ctx->node_map.values[i];
-            }
-        }
-
-        track_free(ctx, old_size);
-        free(ctx->node_map.keys);
-        free(ctx->node_map.values);
-        ctx->node_map.keys = new_keys;
-        ctx->node_map.values = new_vals;
-        ctx->node_map.capacity = new_cap;
-        track_alloc(ctx, new_size);
-    }
-
-    uint64_t h = hash_id(id) % ctx->node_map.capacity;
-    while (ctx->node_map.keys[h] != 0) {
-        h = (h + 1) % ctx->node_map.capacity;
-    }
-    ctx->node_map.keys[h] = id;
-    ctx->node_map.values[h] = index;
-    ctx->node_map.count++;
-    return CT_OK;
+    SHHashmapStatus status = sh_hashmap_i64_insert(ctx->node_map, id, index);
+    return (status == SH_HASHMAP_OK) ? CT_OK : CT_ERROR_OUT_OF_MEMORY;
 }
 
 static size_t node_map_lookup(const CTPBFContext *ctx, int64_t id)
 {
-    if (ctx->node_map.capacity == 0) return SIZE_MAX;
-
-    uint64_t h = hash_id(id) % ctx->node_map.capacity;
-    size_t start = h;
-
-    while (ctx->node_map.keys[h] != 0) {
-        if (ctx->node_map.keys[h] == id) {
-            return ctx->node_map.values[h];
-        }
-        h = (h + 1) % ctx->node_map.capacity;
-        if (h == start) break;
-    }
-
-    return SIZE_MAX;
+    return sh_hashmap_i64_lookup(ctx->node_map, id);
 }
 
 /* ============================================================================
- * Way Map (Hash Table for relation member resolution)
+ * Way Map Wrappers (using shared hashmap)
  * ============================================================================ */
 
 static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, size_t index)
 {
-    if (ctx->way_map.count >= ctx->way_map.capacity * 3 / 4) {
-        size_t new_cap = ctx->way_map.capacity ? ctx->way_map.capacity * 2 : 16384;
-        size_t old_size = ctx->way_map.capacity * (sizeof(int64_t) + sizeof(size_t));
-        size_t new_size = new_cap * (sizeof(int64_t) + sizeof(size_t));
-
-        /* Check memory limit before growing */
-        if (!check_memory_limit(ctx, new_size - old_size)) {
-            return CT_ERROR_OUT_OF_MEMORY;
-        }
-
-        int64_t *new_keys = calloc(new_cap, sizeof(int64_t));
-        size_t *new_vals = malloc(new_cap * sizeof(size_t));
-        if (!new_keys || !new_vals) {
-            free(new_keys);
-            free(new_vals);
-            return CT_ERROR_OUT_OF_MEMORY;
-        }
-
-        /* Rehash */
-        for (size_t i = 0; i < ctx->way_map.capacity; i++) {
-            if (ctx->way_map.keys[i] != 0) {
-                uint64_t h = hash_id(ctx->way_map.keys[i]) % new_cap;
-                while (new_keys[h] != 0) {
-                    h = (h + 1) % new_cap;
-                }
-                new_keys[h] = ctx->way_map.keys[i];
-                new_vals[h] = ctx->way_map.values[i];
-            }
-        }
-
-        track_free(ctx, old_size);
-        free(ctx->way_map.keys);
-        free(ctx->way_map.values);
-        ctx->way_map.keys = new_keys;
-        ctx->way_map.values = new_vals;
-        ctx->way_map.capacity = new_cap;
-        track_alloc(ctx, new_size);
-    }
-
-    uint64_t h = hash_id(id) % ctx->way_map.capacity;
-    while (ctx->way_map.keys[h] != 0) {
-        h = (h + 1) % ctx->way_map.capacity;
-    }
-    ctx->way_map.keys[h] = id;
-    ctx->way_map.values[h] = index;
-    ctx->way_map.count++;
-    return CT_OK;
+    SHHashmapStatus status = sh_hashmap_i64_insert(ctx->way_map, id, index);
+    return (status == SH_HASHMAP_OK) ? CT_OK : CT_ERROR_OUT_OF_MEMORY;
 }
 
 /*
- * Lookup way by OSM ID. Reserved for future multipolygon relation handling.
+ * Lookup way by OSM ID.
  */
-__attribute__((unused))
 static size_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
 {
-    if (ctx->way_map.capacity == 0) return SIZE_MAX;
-
-    uint64_t h = hash_id(id) % ctx->way_map.capacity;
-    size_t start = h;
-
-    while (ctx->way_map.keys[h] != 0) {
-        if (ctx->way_map.keys[h] == id) {
-            return ctx->way_map.values[h];
-        }
-        h = (h + 1) % ctx->way_map.capacity;
-        if (h == start) break;
-    }
-
-    return SIZE_MAX;
+    return sh_hashmap_i64_lookup(ctx->way_map, id);
 }
 
 /* ============================================================================
@@ -912,12 +779,12 @@ void ct_pbf_context_free(CTPBFContext *ctx)
 
     SAFE_FREE(ctx->nodes.ids);
     SAFE_FREE(ctx->nodes.coords);
-    SAFE_FREE(ctx->node_map.keys);
-    SAFE_FREE(ctx->node_map.values);
 
-    /* Free way_map */
-    SAFE_FREE(ctx->way_map.keys);
-    SAFE_FREE(ctx->way_map.values);
+    /* Free hash maps */
+    sh_hashmap_i64_free(ctx->node_map);
+    ctx->node_map = NULL;
+    sh_hashmap_i64_free(ctx->way_map);
+    ctx->way_map = NULL;
 
     if (ctx->mmap_base) {
         /* mmap'd context - ways point into allocated block, names are strdup'd */
@@ -1804,7 +1671,7 @@ CTStatus ct_pbf_parse_memory(CTPBFContext *ctx, const uint8_t *data, size_t size
     report_progress(ctx, "parsing", 0, size);
 
     /* Preallocate hash tables based on file size to avoid rehashing */
-    if (ctx->node_map.capacity == 0) {
+    if (ctx->node_map == NULL) {
         CTStatus status = preallocate_hash_tables(ctx, size);
         if (status != CT_OK) {
             return status;

@@ -5,6 +5,7 @@
 #include "ct_multipolygon.h"
 #include "ct_rtree.h"
 #include "shared.h"
+#include "sh_hashmap.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -233,35 +234,16 @@ static CTCoord *build_ring(WaySegment *segments, int num_segments,
  * Multipolygon Assembly
  * ============================================================================ */
 
-/* Hash function - must match hash_id() in ct_pbf.c */
-static uint64_t hash_id(int64_t id)
-{
-    uint64_t x = (uint64_t)id;
-    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
-    x = x ^ (x >> 31);
-    return x;
-}
-
 /* Lookup way by ID using way_map */
 static const CTOSMWay *lookup_way(const CTPBFContext *ctx, int64_t id)
 {
-    if (!ctx->way_map.keys || ctx->way_map.count == 0) return NULL;
+    if (!ctx->way_map) return NULL;
 
-    size_t cap = ctx->way_map.capacity;
-    uint64_t h = hash_id(id) % cap;
+    size_t way_idx = sh_hashmap_i64_lookup(ctx->way_map, id);
+    if (way_idx == SIZE_MAX) return NULL;
+    if (way_idx >= ctx->num_ways) return NULL;
 
-    while (ctx->way_map.keys[h] != 0) {
-        if (ctx->way_map.keys[h] == id) {
-            uint32_t way_idx = ctx->way_map.values[h];
-            if (way_idx < ctx->num_ways) {
-                return &ctx->ways[way_idx];
-            }
-            return NULL;
-        }
-        h = (h + 1) % cap;
-    }
-    return NULL;
+    return &ctx->ways[way_idx];
 }
 
 /* Initial capacity for WaySegment scratch buffers */

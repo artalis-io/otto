@@ -10,6 +10,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "sh_hashmap.h"
+#include "sh_heap.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -188,8 +190,8 @@ typedef struct {
  * Query Context (for lazy initialization and memory reuse)
  * ============================================================================ */
 
-/* Forward declaration for heap pointers */
-typedef struct VLHeap VLHeap;
+/* Use shared heap implementation */
+typedef SHHeap VLHeap;
 
 typedef struct {
     /* Distance arrays with timestamps for lazy init */
@@ -312,38 +314,14 @@ typedef struct {
 } VLPBFContext;
 
 /* ============================================================================
- * Binary Min-Heap for Priority Queue
+ * Binary Min-Heap for Priority Queue (uses shared heap)
  * ============================================================================ */
 
-typedef struct {
-    uint32_t node;
-    double priority;       /* Distance/duration for Dijkstra, f-score for A* */
-} VLHeapEntry;
-
-struct VLHeap {
-    VLHeapEntry *entries;
-    uint32_t *positions;   /* positions[node] = index in entries, or UINT32_MAX */
-    size_t size;
-    size_t capacity;
-    size_t num_nodes;      /* For positions array sizing */
-};
+typedef SHHeapEntry VLHeapEntry;
 
 /* ============================================================================
  * Graph Building Context
  * ============================================================================ */
-
-/* Hash map entry for OSM ID -> node index mapping */
-typedef struct VLNodeMapEntry {
-    int64_t osm_id;
-    uint32_t node_index;
-    struct VLNodeMapEntry *next;
-} VLNodeMapEntry;
-
-typedef struct {
-    VLNodeMapEntry **buckets;
-    size_t num_buckets;
-    size_t num_entries;
-} VLNodeMap;
 
 /* Temporary edge during graph construction */
 typedef struct {
@@ -356,7 +334,7 @@ typedef struct {
 
 /* Graph building context */
 typedef struct {
-    VLNodeMap node_map;
+    SHHashmapI64U32 *node_map;
 
     /* Nodes being built */
     VLNode *nodes;

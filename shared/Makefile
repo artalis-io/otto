@@ -35,7 +35,10 @@ SRCS = src/sh_geo.c \
        src/sh_cors.c \
        src/sh_log.c \
        src/sh_trace.c \
-       src/sh_metrics.c
+       src/sh_metrics.c \
+       src/sh_hashmap.c \
+       src/sh_heap.c \
+       src/sh_spatial_grid.c
 
 # HTTP server components (requires mongoose - compile separately by API servers)
 # API servers should compile sh_httpserver.c directly with mongoose includes.
@@ -126,6 +129,9 @@ src/sh_cors.o: include/sh_cors.h
 src/sh_log.o: include/sh_log.h
 src/sh_trace.o: include/sh_trace.h include/sh_log.h
 src/sh_metrics.o: include/sh_metrics.h
+src/sh_hashmap.o: include/sh_hashmap.h
+src/sh_heap.o: include/sh_heap.h
+src/sh_spatial_grid.o: include/sh_spatial_grid.h include/sh_geo.h
 
 # Help
 help:

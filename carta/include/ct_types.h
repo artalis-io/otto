@@ -15,6 +15,9 @@
 typedef struct SHArena SHArena;
 typedef struct SHPool SHPool;
 
+/* Include shared hashmap header for SHHashmapI64 */
+#include "sh_hashmap.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -468,12 +471,7 @@ typedef struct {
     } nodes;
 
     /* Node ID to index lookup (hash map) */
-    struct {
-        int64_t *keys;
-        size_t *values;     /* Index into nodes array (size_t for >4B nodes) */
-        size_t capacity;
-        size_t count;
-    } node_map;
+    SHHashmapI64 *node_map;
 
     /* Parsed ways */
     CTOSMWay *ways;
@@ -481,12 +479,7 @@ typedef struct {
     size_t ways_capacity;
 
     /* Way ID to index lookup (for relation member resolution) */
-    struct {
-        int64_t *keys;
-        size_t *values;     /* Index into ways array (size_t for >4B ways) */
-        size_t capacity;
-        size_t count;
-    } way_map;
+    SHHashmapI64 *way_map;
 
     /* Parsed relations */
     CTOSMRelation *relations;
