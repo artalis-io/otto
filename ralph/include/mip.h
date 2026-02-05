@@ -41,7 +41,9 @@ typedef enum {
     CUT_GOMORY = 0,
     CUT_MIR = 1,
     CUT_CLIQUE = 2,
-    CUT_KNAPSACK = 3
+    CUT_KNAPSACK = 3,
+    CUT_ODD_HOLE = 4,
+    CUT_LIFTED_COVER = 5
 } CutType;
 
 /* A cutting plane */
@@ -235,6 +237,61 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool);
 int generate_mir_cuts(MIPSolver *solver, CutPool *pool);
 int generate_cover_cuts(MIPSolver *solver, CutPool *pool);
 int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts);
+
+/* SCP-specific cutting planes (Phase 3) */
+
+/*
+ * Conflict graph for set covering/partitioning problems.
+ * Two sets (variables) conflict if they both cover the same element.
+ * In SPP (=), at most one can be selected; in SCP (>=), cliques still valid.
+ */
+typedef struct {
+    int num_vars;           /* Number of variables (sets) */
+    int *adj_ptr;           /* CSR pointers into adj_list (size num_vars+1) */
+    int *adj_list;          /* Flattened adjacency lists */
+    int num_edges;          /* Total edges in graph */
+} ConflictGraph;
+
+ConflictGraph *conflict_graph_create(const LPModel *model, const SetCoverSignature *sig);
+void conflict_graph_free(ConflictGraph *graph);
+
+/*
+ * Generate clique cuts from the conflict graph.
+ * A clique C has the property that at most one variable can be 1.
+ * Cut: sum(x_j : j in C) <= 1
+ *
+ * Uses greedy clique extension starting from violated edges.
+ * Returns number of cuts added to pool.
+ */
+int generate_clique_cuts(MIPSolver *solver, CutPool *pool, const ConflictGraph *graph);
+
+/*
+ * Generate odd-hole cuts from the conflict graph.
+ * An odd hole is an odd cycle (length 2k+1) in the conflict graph.
+ * Cut: sum(x_j : j in cycle) <= k
+ *
+ * Uses BFS to find shortest odd cycles.
+ * Returns number of cuts added to pool.
+ */
+int generate_odd_hole_cuts(MIPSolver *solver, CutPool *pool, const ConflictGraph *graph);
+
+/*
+ * Generate lifted cover inequalities for SCP.
+ * Strengthens basic cover cuts via sequential lifting.
+ *
+ * Basic cover: sum(x_j : j in C) <= |C| - 1
+ * Lifted: sum(a_j * x_j) <= |C| - 1  where a_j >= 1 computed via lifting
+ *
+ * Returns number of cuts added to pool.
+ */
+int generate_lifted_cover_cuts(MIPSolver *solver, CutPool *pool);
+
+/*
+ * Combined SCP cut generation.
+ * Detects SCP structure, builds conflict graph, generates all SCP cuts.
+ * Returns total cuts added.
+ */
+int generate_scp_cuts(MIPSolver *solver, CutPool *pool);
 
 /* Primal heuristics */
 int heuristic_rounding(MIPSolver *solver, const double *lp_solution, double *int_solution);
