@@ -23,6 +23,8 @@
 #include "fuelwise.h"
 #include "shared.h"  /* For sh_ratelimit, sh_workqueue, sh_args */
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
+#include "sh_completion.h"  /* For ShCompletion */
+#include "sh_worker_pool.h" /* For ShWorkerPool */
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
@@ -64,17 +66,12 @@ typedef struct {
     size_t response_size;
     int status_code;
 
-    /* Completion signaling */
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    int completed;
-    volatile int cancelled;  /* Set by HTTP handler on timeout */
+    /* Completion signaling (uses shared library) */
+    ShCompletion completion;
 } SolveWorkItem;
 
-/* Worker threads */
-static pthread_t *s_workers = NULL;
-static int s_num_workers = 0;
-static volatile int s_shutdown = 0;
+/* Worker pool (uses shared library) */
+static ShWorkerPool *s_worker_pool = NULL;
 
 /* Signal handler */
 static void signal_handler(int signo) {
@@ -889,69 +886,58 @@ static char *process_optimize(const char *body, int *status_code) {
 }
 
 /* ============================================================================
- * Worker Thread
+ * Worker Pool Callback
  * ============================================================================ */
 
-static void *worker_thread_fn(void *arg) {
-    (void)arg;
+static void worker_callback(ShWorkItem *item, void *ctx) {
+    (void)ctx;
 
-    while (!s_shutdown) {
-        ShWorkItem *item = sh_workqueue_pop_timeout(s_work_queue, 100);
-        if (!item) continue;
-
-        /* Check if item expired */
-        if (sh_workqueue_item_expired(s_work_queue, item)) {
-            sh_workqueue_item_free(item);
-            continue;
-        }
-
-        /* Get the work item */
-        SolveWorkItem *work = (SolveWorkItem *)item->user_ctx;
-        if (!work) {
-            sh_workqueue_item_free(item);
-            continue;
-        }
-
-        /* Check if HTTP handler already timed out and cancelled */
-        if (work->cancelled) {
-            /* Clean up the cancelled work item */
-            free(work->request_body);
-            pthread_mutex_destroy(&work->mutex);
-            pthread_cond_destroy(&work->cond);
-            free(work);
-            sh_workqueue_item_free(item);
-            continue;
-        }
-
-        /* Process based on type */
-        int status_code = 200;
-        char *response = NULL;
-
-        switch (work->type) {
-            case WORK_TYPE_SOLVE:
-                response = process_solve(work->request_body, &status_code);
-                break;
-            case WORK_TYPE_FILTER:
-                response = process_filter(work->request_body, &status_code);
-                break;
-            case WORK_TYPE_OPTIMIZE:
-                response = process_optimize(work->request_body, &status_code);
-                break;
-        }
-
-        /* Store result */
-        pthread_mutex_lock(&work->mutex);
-        work->response_data = response;
-        work->response_size = response ? strlen(response) : 0;
-        work->status_code = status_code;
-        work->completed = 1;
-        pthread_cond_signal(&work->cond);
-        pthread_mutex_unlock(&work->mutex);
-
+    /* Check if item expired */
+    if (sh_workqueue_item_expired(s_work_queue, item)) {
         sh_workqueue_item_free(item);
+        return;
     }
 
-    return NULL;
+    /* Get the work item */
+    SolveWorkItem *work = (SolveWorkItem *)item->user_ctx;
+    if (!work) {
+        sh_workqueue_item_free(item);
+        return;
+    }
+
+    /* Check if HTTP handler already timed out and cancelled */
+    if (sh_completion_is_cancelled(&work->completion)) {
+        /* Clean up the cancelled work item */
+        free(work->request_body);
+        sh_completion_cleanup(&work->completion);
+        free(work);
+        sh_workqueue_item_free(item);
+        return;
+    }
+
+    /* Process based on type */
+    int status_code = 200;
+    char *response = NULL;
+
+    switch (work->type) {
+        case WORK_TYPE_SOLVE:
+            response = process_solve(work->request_body, &status_code);
+            break;
+        case WORK_TYPE_FILTER:
+            response = process_filter(work->request_body, &status_code);
+            break;
+        case WORK_TYPE_OPTIMIZE:
+            response = process_optimize(work->request_body, &status_code);
+            break;
+    }
+
+    /* Store result and signal completion */
+    work->response_data = response;
+    work->response_size = response ? strlen(response) : 0;
+    work->status_code = status_code;
+    sh_completion_signal(&work->completion);
+
+    sh_workqueue_item_free(item);
 }
 
 /* ============================================================================
@@ -1096,10 +1082,8 @@ static void handle_via_queue(struct mg_connection *c, struct mg_http_message *hm
     memcpy(work->request_body, hm->body.buf, hm->body.len);
     work->request_body[hm->body.len] = '\0';
     work->request_len = hm->body.len;
-    work->completed = 0;
 
-    pthread_mutex_init(&work->mutex, NULL);
-    pthread_cond_init(&work->cond, NULL);
+    sh_completion_init(&work->completion);
 
     /* Push to work queue */
     ShWorkItem item = {
@@ -1111,8 +1095,7 @@ static void handle_via_queue(struct mg_connection *c, struct mg_http_message *hm
     double pressure = 0.0;
     if (!sh_workqueue_try_push(s_work_queue, &item, &pressure)) {
         /* Queue full - backpressure */
-        pthread_mutex_destroy(&work->mutex);
-        pthread_cond_destroy(&work->cond);
+        sh_completion_cleanup(&work->completion);
         free(work->request_body);
         free(work);
         send_error(c, 503, "Service unavailable - queue full");
@@ -1120,23 +1103,14 @@ static void handle_via_queue(struct mg_connection *c, struct mg_http_message *hm
     }
 
     /* Wait for completion with timeout */
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += (int)s_config.work_queue_timeout;
-
-    pthread_mutex_lock(&work->mutex);
-    while (!work->completed) {
-        int rc = pthread_cond_timedwait(&work->cond, &work->mutex, &ts);
-        if (rc != 0) {
-            /* Timeout - mark item as cancelled so worker can skip if not started */
-            work->cancelled = 1;
-            pthread_mutex_unlock(&work->mutex);
-            send_error(c, 504, "Gateway timeout");
-            /* Note: work will be cleaned up when worker processes it */
-            return;
-        }
+    int timeout_ms = (int)(s_config.work_queue_timeout * 1000);
+    if (!sh_completion_wait(&work->completion, timeout_ms)) {
+        /* Timeout - mark item as cancelled so worker can skip if not started */
+        sh_completion_cancel(&work->completion);
+        send_error(c, 504, "Gateway timeout");
+        /* Note: work will be cleaned up when worker processes it */
+        return;
     }
-    pthread_mutex_unlock(&work->mutex);
 
     /* Send response */
     if (work->response_data) {
@@ -1147,8 +1121,7 @@ static void handle_via_queue(struct mg_connection *c, struct mg_http_message *hm
     }
 
     /* Cleanup */
-    pthread_mutex_destroy(&work->mutex);
-    pthread_cond_destroy(&work->cond);
+    sh_completion_cleanup(&work->completion);
     free(work->request_body);
     free(work);
 }
@@ -1367,23 +1340,19 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        /* Start worker threads */
-        s_num_workers = s_config.worker_threads > 0 ? s_config.worker_threads : 4;
-        s_workers = calloc(s_num_workers, sizeof(pthread_t));
-        if (!s_workers) {
-            fprintf(stderr, "Error: Failed to allocate worker threads\n");
+        /* Start worker pool */
+        int num_workers = s_config.worker_threads > 0 ? s_config.worker_threads : 0;
+        ShWorkerPoolConfig pool_cfg = {
+            .queue = s_work_queue,
+            .callback = worker_callback,
+            .ctx = NULL
+        };
+        s_worker_pool = sh_worker_pool_create(num_workers, &pool_cfg);
+        if (!s_worker_pool) {
+            fprintf(stderr, "Error: Failed to create worker pool\n");
             sh_workqueue_free(s_work_queue);
             sh_ratelimit_free(s_rate_limiter);
             return 1;
-        }
-
-        for (int i = 0; i < s_num_workers; i++) {
-            if (pthread_create(&s_workers[i], NULL, worker_thread_fn, NULL) != 0) {
-                fprintf(stderr, "Error: Failed to create worker thread %d\n", i);
-                /* Continue with fewer workers */
-                s_num_workers = i;
-                break;
-            }
         }
     }
 
@@ -1415,9 +1384,10 @@ int main(int argc, char *argv[]) {
     }
     printf("\n");
     printf("  Work queue: %s", s_config.work_queue_enabled ? "enabled" : "disabled");
-    if (s_config.work_queue_enabled) {
+    if (s_config.work_queue_enabled && s_worker_pool) {
         printf(" (depth %zu, timeout %.1fs, %d workers)",
-            s_config.work_queue_depth, s_config.work_queue_timeout, s_num_workers);
+            s_config.work_queue_depth, s_config.work_queue_timeout,
+            sh_worker_pool_size(s_worker_pool));
     }
     printf("\n");
     printf("\n");
@@ -1437,17 +1407,12 @@ int main(int argc, char *argv[]) {
     printf("\nShutting down...\n");
 
 cleanup:
-    /* Shutdown workers */
-    s_shutdown = 1;
-    if (s_work_queue) {
-        sh_workqueue_shutdown(s_work_queue);
+    /* Shutdown worker pool */
+    if (s_worker_pool) {
+        sh_worker_pool_stop(s_worker_pool);
+        sh_worker_pool_join(s_worker_pool);
+        sh_worker_pool_free(s_worker_pool);
     }
-
-    /* Join worker threads */
-    for (int i = 0; i < s_num_workers; i++) {
-        pthread_join(s_workers[i], NULL);
-    }
-    free(s_workers);
 
     /* Cleanup */
     mg_mgr_free(&mgr);

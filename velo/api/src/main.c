@@ -35,6 +35,8 @@
 #include "polyline.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue, sh_cors, sh_capacity */
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
+#include "sh_completion.h"  /* For ShCompletion */
+#include "sh_worker_pool.h" /* For ShWorkerPool */
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
@@ -127,23 +129,14 @@ typedef struct {
     /* Response (set by worker) */
     VLRoute route;
     VLStatus status;
-    int completed;
     char error_msg[128];
 
-    /* Completion signaling */
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    volatile int cancelled;  /* Set by HTTP handler on timeout */
+    /* Completion signaling (uses shared library) */
+    ShCompletion completion;
 } RouteWorkItem;
 
-/* Route worker thread state */
-typedef struct {
-    int id;
-    pthread_t thread;
-} RouteWorker;
-
-static RouteWorker *s_route_workers = NULL;
-static int s_num_route_workers = 0;
+/* Worker pool (uses shared library) */
+static ShWorkerPool *s_worker_pool = NULL;
 
 static void signal_handler(int signo) {
     s_signo = signo;
@@ -309,51 +302,25 @@ static void load_config_env(RouteServerConfig *cfg) {
 /* Initialize a route work item */
 static void route_work_item_init(RouteWorkItem *item) {
     memset(item, 0, sizeof(*item));
-    item->completed = 0;
     item->status = VL_ERROR_INVALID_ARGUMENT;
-    pthread_mutex_init(&item->mutex, NULL);
-    pthread_cond_init(&item->cond, NULL);
+    sh_completion_init(&item->completion);
 }
 
 /* Clean up a route work item */
 static void route_work_item_cleanup(RouteWorkItem *item) {
-    pthread_mutex_destroy(&item->mutex);
-    pthread_cond_destroy(&item->cond);
+    sh_completion_cleanup(&item->completion);
     vl_free_route(&item->route);
 }
 
 /* Wait for route work item completion with timeout */
 static int route_work_item_wait(RouteWorkItem *item, double timeout_sec) {
-    struct timespec abstime;
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-
-    abstime.tv_sec = tv.tv_sec + (time_t)timeout_sec;
-    abstime.tv_nsec = tv.tv_usec * 1000 +
-                      (long)((timeout_sec - (time_t)timeout_sec) * 1e9);
-    if (abstime.tv_nsec >= 1000000000L) {
-        abstime.tv_sec++;
-        abstime.tv_nsec -= 1000000000L;
-    }
-
-    pthread_mutex_lock(&item->mutex);
-    while (!item->completed) {
-        int rc = pthread_cond_timedwait(&item->cond, &item->mutex, &abstime);
-        if (rc == ETIMEDOUT) {
-            pthread_mutex_unlock(&item->mutex);
-            return 0;  /* Timeout */
-        }
-    }
-    pthread_mutex_unlock(&item->mutex);
-    return 1;  /* Completed */
+    int timeout_ms = (int)(timeout_sec * 1000);
+    return sh_completion_wait(&item->completion, timeout_ms);
 }
 
 /* Signal that route work item is completed */
 static void route_work_item_complete(RouteWorkItem *item) {
-    pthread_mutex_lock(&item->mutex);
-    item->completed = 1;
-    pthread_cond_signal(&item->cond);
-    pthread_mutex_unlock(&item->mutex);
+    sh_completion_signal(&item->completion);
 }
 
 /* Process a single route request */
@@ -411,65 +378,57 @@ static void process_route_request(RouteWorkItem *item) {
     }
 }
 
-/* Route worker thread function */
-static void *route_worker_fn(void *arg) {
-    RouteWorker *w = (RouteWorker *)arg;
-    (void)w;  /* Worker ID for debugging if needed */
+/* Route worker callback function (called by ShWorkerPool) */
+static void route_worker_callback(ShWorkItem *queue_item, void *ctx) {
+    (void)ctx;
 
-    while (s_signo == 0) {
-        /* Pop work item with timeout (100ms to check for shutdown) */
-        ShWorkItem *queue_item = sh_workqueue_pop_timeout(s_work_queue, 100);
-        if (!queue_item) continue;
-
-        RouteWorkItem *item = (RouteWorkItem *)queue_item->user_ctx;
-        if (!item) {
-            sh_workqueue_item_free(queue_item);
-            continue;
-        }
-
-        /* Check if request has expired or was cancelled by HTTP handler timeout */
-        if (sh_workqueue_item_expired(s_work_queue, queue_item) || item->cancelled) {
-            item->status = VL_ERROR_INTERNAL;  /* Timeout */
-            strncpy(item->error_msg, "Request timeout", sizeof(item->error_msg) - 1);
-            item->error_msg[sizeof(item->error_msg) - 1] = '\0';
-            route_work_item_complete(item);
-            sh_workqueue_item_free(queue_item);
-            continue;
-        }
-
-        /* Track timing for adaptive capacity */
-        struct timeval route_start, route_end;
-        gettimeofday(&route_start, NULL);
-
-        /* Process the route request */
-        process_route_request(item);
-
-        /* Record response time for adaptive capacity */
-        gettimeofday(&route_end, NULL);
-        double route_ms = (route_end.tv_sec - route_start.tv_sec) * 1000.0 +
-                          (route_end.tv_usec - route_start.tv_usec) / 1000.0;
-
-        if (s_adaptive_tracker) {
-            sh_adaptive_record(s_adaptive_tracker, route_ms);
-
-            /* Check if rate limiter should be updated */
-            ShCapacityParams new_params;
-            if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
-                /* Update rate limiter with new parameters */
-                if (s_rate_limiter) {
-                    sh_ratelimit_update_rate(s_rate_limiter,
-                                             new_params.rate_limit_rps,
-                                             new_params.rate_limit_burst);
-                }
-            }
-        }
-
-        /* Signal completion */
-        route_work_item_complete(item);
+    RouteWorkItem *item = (RouteWorkItem *)queue_item->user_ctx;
+    if (!item) {
         sh_workqueue_item_free(queue_item);
+        return;
     }
 
-    return NULL;
+    /* Check if request has expired or was cancelled by HTTP handler timeout */
+    if (sh_workqueue_item_expired(s_work_queue, queue_item) ||
+        sh_completion_is_cancelled(&item->completion)) {
+        item->status = VL_ERROR_INTERNAL;  /* Timeout */
+        strncpy(item->error_msg, "Request timeout", sizeof(item->error_msg) - 1);
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
+        route_work_item_complete(item);
+        sh_workqueue_item_free(queue_item);
+        return;
+    }
+
+    /* Track timing for adaptive capacity */
+    struct timeval route_start, route_end;
+    gettimeofday(&route_start, NULL);
+
+    /* Process the route request */
+    process_route_request(item);
+
+    /* Record response time for adaptive capacity */
+    gettimeofday(&route_end, NULL);
+    double route_ms = (route_end.tv_sec - route_start.tv_sec) * 1000.0 +
+                      (route_end.tv_usec - route_start.tv_usec) / 1000.0;
+
+    if (s_adaptive_tracker) {
+        sh_adaptive_record(s_adaptive_tracker, route_ms);
+
+        /* Check if rate limiter should be updated */
+        ShCapacityParams new_params;
+        if (sh_adaptive_update(s_adaptive_tracker, &new_params)) {
+            /* Update rate limiter with new parameters */
+            if (s_rate_limiter) {
+                sh_ratelimit_update_rate(s_rate_limiter,
+                                         new_params.rate_limit_rps,
+                                         new_params.rate_limit_burst);
+            }
+        }
+    }
+
+    /* Signal completion */
+    route_work_item_complete(item);
+    sh_workqueue_item_free(queue_item);
 }
 
 /* ============================================================================
@@ -856,7 +815,7 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
         /* Wait for completion with timeout */
         if (!route_work_item_wait(&item, s_config.work_queue_timeout)) {
             /* Mark item as cancelled so worker can skip if not started */
-            item.cancelled = 1;
+            sh_completion_cancel(&item.completion);
             route_work_item_cleanup(&item);
             char cors_hdrs[512];
             sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
@@ -1263,41 +1222,25 @@ int main(int argc, char *argv[]) {
         printf("Rate limit: disabled\n");
     }
 
-    /* Initialize work queue and route workers */
+    /* Initialize work queue and worker pool */
     if (s_config.work_queue_enabled) {
         s_work_queue = sh_workqueue_create(s_config.work_queue_depth,
                                            s_config.work_queue_timeout);
         if (s_work_queue) {
-            /* Determine number of route workers */
-            int num_route_workers = s_config.route_workers;
-            if (num_route_workers <= 0) {
-#ifdef _SC_NPROCESSORS_ONLN
-                long n = sysconf(_SC_NPROCESSORS_ONLN);
-                num_route_workers = (n > 0) ? (int)n : 4;
-#else
-                num_route_workers = 4;
-#endif
-            }
-            if (num_route_workers > 64) num_route_workers = 64;
-
-            /* Allocate route workers */
-            s_route_workers = calloc(num_route_workers, sizeof(RouteWorker));
-            if (s_route_workers) {
-                s_num_route_workers = num_route_workers;
-                for (int i = 0; i < num_route_workers; i++) {
-                    s_route_workers[i].id = i;
-                    if (pthread_create(&s_route_workers[i].thread, NULL,
-                                       route_worker_fn, &s_route_workers[i]) != 0) {
-                        fprintf(stderr, "Error: Failed to create route worker %d\n", i);
-                        s_num_route_workers = i;
-                        break;
-                    }
-                }
+            /* Create worker pool (0 = auto-detect CPU count) */
+            ShWorkerPoolConfig pool_cfg = {
+                .queue = s_work_queue,
+                .callback = route_worker_callback,
+                .ctx = NULL,
+                .poll_timeout_ms = 100
+            };
+            s_worker_pool = sh_worker_pool_create(s_config.route_workers, &pool_cfg);
+            if (s_worker_pool) {
                 printf("Work queue: depth %zu, timeout %.1fs, %d route workers\n",
                        s_config.work_queue_depth, s_config.work_queue_timeout,
-                       s_num_route_workers);
+                       sh_worker_pool_size(s_worker_pool));
             } else {
-                fprintf(stderr, "Warning: Failed to allocate route workers\n");
+                fprintf(stderr, "Warning: Failed to create worker pool\n");
                 sh_workqueue_free(s_work_queue);
                 s_work_queue = NULL;
             }
@@ -1323,7 +1266,8 @@ int main(int argc, char *argv[]) {
     if (s_config.adaptive_enabled) {
         ShAdaptiveConfig adaptive_cfg;
         sh_adaptive_config_init(&adaptive_cfg);
-        adaptive_cfg.num_workers = s_num_route_workers > 0 ? s_num_route_workers : 4;
+        int num_workers = s_worker_pool ? sh_worker_pool_size(s_worker_pool) : 4;
+        adaptive_cfg.num_workers = num_workers > 0 ? num_workers : 4;
         adaptive_cfg.target_utilization = s_config.target_utilization;
         adaptive_cfg.client_timeout_ms = s_config.client_timeout_ms;
         adaptive_cfg.burst_tiles = s_config.burst_requests;
@@ -1372,15 +1316,13 @@ int main(int argc, char *argv[]) {
     struct mg_connection *c = mg_http_listen(&mgr, listen_url, ev_handler, NULL);
     if (c == NULL) {
         fprintf(stderr, "Error: Cannot listen on %s\n", listen_url);
-        /* Cleanup work queue */
-        if (s_work_queue) {
-            sh_workqueue_shutdown(s_work_queue);
-            for (int i = 0; i < s_num_route_workers; i++) {
-                pthread_join(s_route_workers[i].thread, NULL);
-            }
-            free(s_route_workers);
-            sh_workqueue_free(s_work_queue);
+        /* Cleanup worker pool and work queue */
+        if (s_worker_pool) {
+            sh_worker_pool_stop(s_worker_pool);
+            sh_worker_pool_join(s_worker_pool);
+            sh_worker_pool_free(s_worker_pool);
         }
+        sh_workqueue_free(s_work_queue);
         sh_adaptive_free(s_adaptive_tracker);
         sh_ratelimit_free(s_rate_limiter);
         if (s_landmarks) vl_landmarks_free(s_landmarks);
@@ -1410,14 +1352,14 @@ int main(int argc, char *argv[]) {
 
     printf("\nShutting down...\n");
 
-    /* Shutdown work queue and wait for route workers */
-    if (s_work_queue) {
-        sh_workqueue_shutdown(s_work_queue);
-        for (int i = 0; i < s_num_route_workers; i++) {
-            pthread_join(s_route_workers[i].thread, NULL);
-        }
+    /* Shutdown worker pool */
+    if (s_worker_pool) {
+        sh_worker_pool_stop(s_worker_pool);
+        sh_worker_pool_join(s_worker_pool);
+    }
 
-        /* Print work queue stats */
+    /* Print work queue stats */
+    if (s_work_queue) {
         ShWorkQueueStats wq_stats;
         sh_workqueue_stats(s_work_queue, &wq_stats);
         printf("Work queue: %lu pushed, %lu popped, %lu dropped, %lu expired\n",
@@ -1428,7 +1370,7 @@ int main(int argc, char *argv[]) {
     }
 
     mg_mgr_free(&mgr);
-    free(s_route_workers);
+    sh_worker_pool_free(s_worker_pool);
     sh_workqueue_free(s_work_queue);
     sh_adaptive_free(s_adaptive_tracker);
     sh_ratelimit_free(s_rate_limiter);
