@@ -819,12 +819,15 @@ static uint32_t add_role_string(CTPBFContext *ctx, const char *role)
 
     /* Hash lookup for deduplication */
     uint32_t hash = djb2_hash(role);
-    uint32_t existing = role_hash_lookup(ctx, role, hash);
-    if (existing != UINT32_MAX) {
+    uint32_t existing_role_idx = role_hash_lookup(ctx, role, hash);
+    if (existing_role_idx != UINT32_MAX && existing_role_idx > 0) {
+        /* Convert 1-based role_idx to 0-based array index */
+        uint32_t arr_idx = existing_role_idx - 1;
         /* Verify hash collision isn't a false positive */
-        if (ctx->role_strings[existing] &&
-            strcmp(ctx->role_strings[existing], role) == 0) {
-            return existing;
+        if (arr_idx < ctx->num_role_strings &&
+            ctx->role_strings[arr_idx] &&
+            strcmp(ctx->role_strings[arr_idx], role) == 0) {
+            return existing_role_idx;
         }
         /* Hash collision with different string - fall through to add */
     }
@@ -836,12 +839,6 @@ static uint32_t add_role_string(CTPBFContext *ctx, const char *role)
         if (!new_strs) return 0;
         ctx->role_strings = new_strs;
         ctx->role_strings_capacity = new_cap;
-
-        /* Initialize first entry as empty string if needed */
-        if (ctx->num_role_strings == 0) {
-            ctx->role_strings[0] = NULL;  /* Index 0 = empty role */
-            ctx->num_role_strings = 1;
-        }
     }
 
     uint32_t new_idx = (uint32_t)ctx->num_role_strings;
@@ -850,10 +847,11 @@ static uint32_t add_role_string(CTPBFContext *ctx, const char *role)
 
     ctx->num_role_strings++;
 
-    /* Add to hash table */
-    role_hash_insert(ctx, hash, new_idx);
+    /* Add to hash table - use 1-based index to match ct_get_role_string */
+    uint32_t role_idx = new_idx + 1;
+    role_hash_insert(ctx, hash, role_idx);
 
-    return new_idx;
+    return role_idx;  /* 1-based: role 0 is reserved for empty, 1 = first real role */
 }
 
 /* ============================================================================
