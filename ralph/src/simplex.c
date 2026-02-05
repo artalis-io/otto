@@ -752,11 +752,16 @@ int tableau_compute_solution(SimplexTableau *tab) {
         free(orig_rhs);
     }
 
-    /* Compute objective value */
-    tab->obj_value = 0.0;
-    for (int j = 0; j < tab->n; j++) {
-        tab->obj_value += tab->c_ext[j] * tab->x[j];
+    /* Compute objective value with SIMD reduction */
+    double obj = 0.0;
+    const double * restrict c = tab->c_ext;
+    const double * restrict x = tab->x;
+    const int n = tab->n;
+    #pragma omp simd reduction(+:obj)
+    for (int j = 0; j < n; j++) {
+        obj += c[j] * x[j];
     }
+    tab->obj_value = obj;
 
     return 0;
 }
@@ -800,8 +805,11 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
      * Using sparse matrix-transpose-vector multiply: O(nnz) instead of O(n*m) */
 
     /* First negate y, then compute c + A'*(-y) = c - A'*y */
+    double * restrict w1 = tab->work1;
+    const double * restrict y = tab->y;
+    #pragma omp simd
     for (int i = 0; i < tab->m; i++) {
-        tab->work1[i] = -tab->y[i];
+        w1[i] = -y[i];
     }
 
     /* rc = c */
@@ -811,8 +819,10 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
     sparse_matvec_transpose_add(tab->A_ext, tab->work1, tab->rc);
 
     /* Zero out reduced costs for basic variables */
+    double * restrict rc = tab->rc;
+    const int * restrict basis = tab->basis;
     for (int k = 0; k < tab->m; k++) {
-        tab->rc[tab->basis[k]] = 0.0;
+        rc[basis[k]] = 0.0;
     }
 
     /* Mark both duals and full rc as valid */

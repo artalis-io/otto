@@ -493,16 +493,27 @@ BBNode* bb_node_pool_copy(BBNodePool *pool, const BBNode *src, int num_vars) {
  * Variable Selection for Branching
  * ============================================================================ */
 
-/* Most infeasible variable selection */
+/*
+ * Most infeasible variable selection.
+ *
+ * Optimization: Use restrict pointers and avoid redundant floor() calls.
+ * The infeasibility is |frac - 0.5| distance from 0.5, maximized when frac = 0.5.
+ */
 static int select_most_infeasible(MIPSolver *solver, const double *solution) {
     int best_var = -1;
     double best_infeas = RALPH_INT_TOL;
 
-    for (int k = 0; k < solver->num_integers; k++) {
-        int j = solver->integer_vars[k];
+    const int * restrict int_vars = solver->integer_vars;
+    const int num_int = solver->num_integers;
+
+    for (int k = 0; k < num_int; k++) {
+        int j = int_vars[k];
         double val = solution[j];
-        double frac = val - floor(val);
-        double infeas = fmin(frac, 1.0 - frac);
+        /* Use subtraction from truncated value - faster than floor() on some systems */
+        double frac = val - (double)(long)val;
+        if (frac < 0.0) frac += 1.0;  /* Handle negative values */
+        /* Infeasibility: distance from nearest integer = min(frac, 1-frac) */
+        double infeas = (frac <= 0.5) ? frac : (1.0 - frac);
 
         if (infeas > best_infeas) {
             best_infeas = infeas;
@@ -513,21 +524,31 @@ static int select_most_infeasible(MIPSolver *solver, const double *solution) {
     return best_var;
 }
 
-/* Pseudo-cost based variable selection */
+/*
+ * Pseudo-cost based variable selection.
+ *
+ * Optimization: Use restrict pointers for better aliasing hints.
+ */
 static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
     int best_var = -1;
     double best_score = -1.0;
 
-    for (int k = 0; k < solver->num_integers; k++) {
-        int j = solver->integer_vars[k];
+    const int * restrict int_vars = solver->integer_vars;
+    const double * restrict pc_down = solver->pseudo_cost_down;
+    const double * restrict pc_up = solver->pseudo_cost_up;
+    const int num_int = solver->num_integers;
+
+    for (int k = 0; k < num_int; k++) {
+        int j = int_vars[k];
         double val = solution[j];
-        double frac = val - floor(val);
+        double frac = val - (double)(long)val;
+        if (frac < 0.0) frac += 1.0;
 
         if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) continue;
 
         /* Estimate degradation */
-        double down_est = frac * solver->pseudo_cost_down[j];
-        double up_est = (1.0 - frac) * solver->pseudo_cost_up[j];
+        double down_est = frac * pc_down[j];
+        double up_est = (1.0 - frac) * pc_up[j];
 
         /* Score function: product of estimates */
         double score = fmax(down_est, RALPH_ZERO_TOL) * fmax(up_est, RALPH_ZERO_TOL);
@@ -921,7 +942,7 @@ int heuristic_rounding(MIPSolver *solver, const double *lp_solution, double *int
  * Check if model has SCP structure (for heuristic applicability).
  * Lightweight check without full detection overhead.
  */
-static int is_scp_model(const LPModel *model) {
+int is_scp_model(const LPModel *model) {
     if (!model || model->num_vars == 0 || model->num_cons == 0) return 0;
 
     /* All variables must be binary */
@@ -1040,20 +1061,12 @@ static void free_coverage_data(int n, int m, int **set_covers, int *set_cover_co
 }
 
 /*
- * Count how many uncovered elements a set would cover.
- */
-static int count_new_coverage(const int *set_covers, int set_cover_count,
-                               const int *uncovered) {
-    int count = 0;
-    for (int k = 0; k < set_cover_count; k++) {
-        int elem = set_covers[k];
-        if (uncovered[elem]) count++;
-    }
-    return count;
-}
-
-/*
- * Greedy set cover heuristic.
+ * Greedy set cover heuristic with incremental coverage tracking.
+ *
+ * Optimization: Instead of recomputing coverage for all sets each iteration O(mn),
+ * we maintain a coverage_count[] array and only update counts for sets that share
+ * elements with the selected set. This reduces per-iteration cost from O(n) to
+ * O(avg_sets_per_element * avg_elements_per_set).
  */
 int heuristic_greedy_set_cover(MIPSolver *solver, double *solution) {
     if (!solver || !solution) return -1;
@@ -1081,6 +1094,15 @@ int heuristic_greedy_set_cover(MIPSolver *solver, double *solution) {
         free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
         return -1;
     }
+
+    /* Track coverage count for each set (how many uncovered elements it would cover) */
+    int *coverage_count = (int *)malloc(n * sizeof(int));
+    if (!coverage_count) {
+        free(uncovered);
+        free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
+        return -1;
+    }
+
     int num_uncovered = 0;
     for (int i = 0; i < m; i++) {
         /* Check RHS - need to cover at least b[i] times */
@@ -1088,15 +1110,26 @@ int heuristic_greedy_set_cover(MIPSolver *solver, double *solution) {
         num_uncovered += uncovered[i];
     }
 
-    /* Greedy selection */
+    /* Initialize coverage counts - each set can cover all its elements initially */
+    for (int j = 0; j < n; j++) {
+        int count = 0;
+        for (int k = 0; k < set_cover_count[j]; k++) {
+            int elem = set_covers[j][k];
+            count += uncovered[elem];
+        }
+        coverage_count[j] = count;
+    }
+
+    /* Greedy selection with incremental updates */
     while (num_uncovered > 0) {
         int best_set = -1;
         double best_ratio = RALPH_INFINITY;
 
+        /* Find best cost/coverage ratio using cached coverage counts */
         for (int j = 0; j < n; j++) {
             if (solution[j] > 0.5) continue;  /* Already selected */
 
-            int covers = count_new_coverage(set_covers[j], set_cover_count[j], uncovered);
+            int covers = coverage_count[j];
             if (covers > 0) {
                 double ratio = model->c[j] / (double)covers;
                 if (ratio < best_ratio) {
@@ -1108,6 +1141,7 @@ int heuristic_greedy_set_cover(MIPSolver *solver, double *solution) {
 
         if (best_set < 0) {
             /* No set can cover remaining elements - infeasible */
+            free(coverage_count);
             free(uncovered);
             free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
             return -1;
@@ -1115,24 +1149,36 @@ int heuristic_greedy_set_cover(MIPSolver *solver, double *solution) {
 
         /* Select best set */
         solution[best_set] = 1.0;
+        coverage_count[best_set] = 0;  /* No longer contributes */
 
-        /* Mark elements as covered */
+        /* Mark elements as covered and update affected sets' coverage counts */
         for (int k = 0; k < set_cover_count[best_set]; k++) {
             int elem = set_covers[best_set][k];
             if (uncovered[elem] > 0) {
+                /* Decrement coverage count for ALL sets that cover this element */
+                for (int s = 0; s < element_set_count[elem]; s++) {
+                    int other_set = element_sets[elem][s];
+                    if (solution[other_set] < 0.5 && coverage_count[other_set] > 0) {
+                        coverage_count[other_set]--;
+                    }
+                }
                 uncovered[elem]--;
                 num_uncovered--;
             }
         }
     }
 
+    free(coverage_count);
     free(uncovered);
     free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
     return 0;
 }
 
 /*
- * LP-guided greedy heuristic.
+ * LP-guided greedy heuristic with incremental coverage tracking.
+ *
+ * Same incremental optimization as heuristic_greedy_set_cover,
+ * but biases selection toward sets with high LP relaxation values.
  */
 int heuristic_lp_guided_greedy(MIPSolver *solver, const double *lp_solution, double *solution) {
     if (!solver || !solution) return -1;
@@ -1164,13 +1210,32 @@ int heuristic_lp_guided_greedy(MIPSolver *solver, const double *lp_solution, dou
         free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
         return -1;
     }
+
+    /* Track coverage count for each set (how many uncovered elements it would cover) */
+    int *coverage_count = (int *)malloc(n * sizeof(int));
+    if (!coverage_count) {
+        free(uncovered);
+        free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
+        return -1;
+    }
+
     int num_uncovered = 0;
     for (int i = 0; i < m; i++) {
         uncovered[i] = (int)(model->b[i] + 0.5);
         num_uncovered += uncovered[i];
     }
 
-    /* LP-guided greedy selection */
+    /* Initialize coverage counts */
+    for (int j = 0; j < n; j++) {
+        int count = 0;
+        for (int k = 0; k < set_cover_count[j]; k++) {
+            int elem = set_covers[j][k];
+            count += uncovered[elem];
+        }
+        coverage_count[j] = count;
+    }
+
+    /* LP-guided greedy selection with incremental updates */
     while (num_uncovered > 0) {
         int best_set = -1;
         double best_ratio = RALPH_INFINITY;
@@ -1178,7 +1243,7 @@ int heuristic_lp_guided_greedy(MIPSolver *solver, const double *lp_solution, dou
         for (int j = 0; j < n; j++) {
             if (solution[j] > 0.5) continue;
 
-            int covers = count_new_coverage(set_covers[j], set_cover_count[j], uncovered);
+            int covers = coverage_count[j];
             if (covers > 0) {
                 /* LP-guided ratio: bias toward high LP values */
                 double lp_boost = 1.0 + lp_solution[j];  /* Range [1, 2] */
@@ -1191,22 +1256,34 @@ int heuristic_lp_guided_greedy(MIPSolver *solver, const double *lp_solution, dou
         }
 
         if (best_set < 0) {
+            free(coverage_count);
             free(uncovered);
             free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
             return -1;
         }
 
+        /* Select best set */
         solution[best_set] = 1.0;
+        coverage_count[best_set] = 0;
 
+        /* Mark elements as covered and update affected sets' coverage counts */
         for (int k = 0; k < set_cover_count[best_set]; k++) {
             int elem = set_covers[best_set][k];
             if (uncovered[elem] > 0) {
+                /* Decrement coverage count for ALL sets that cover this element */
+                for (int s = 0; s < element_set_count[elem]; s++) {
+                    int other_set = element_sets[elem][s];
+                    if (solution[other_set] < 0.5 && coverage_count[other_set] > 0) {
+                        coverage_count[other_set]--;
+                    }
+                }
                 uncovered[elem]--;
                 num_uncovered--;
             }
         }
     }
 
+    free(coverage_count);
     free(uncovered);
     free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
     return 0;
@@ -1659,424 +1736,16 @@ void mip_print_node_info(const MIPSolver *solver, const BBNode *node) {
 
 /* ============================================================================
  * Lagrangian Relaxation for SCP (Phase 6)
+ * ============================================================================
+ * Implementation moved to src/optim/lagrangian_scp.c using the generic
+ * Lagrangian framework from optim_lagrangian.h.
+ *
+ * The following functions are now provided by lagrangian_scp.c:
+ *   - lagrangian_create()
+ *   - lagrangian_free()
+ *   - lagrangian_bound()
+ *   - lagrangian_step()
+ *   - lagrangian_optimize()
+ *   - lagrangian_repair()
+ *   - lagrangian_solve_scp()
  * ============================================================================ */
-
-/*
- * Create Lagrangian relaxation context for SCP.
- */
-LagrangianContext *lagrangian_create(MIPSolver *solver) {
-    if (!solver || !solver->original_model) return NULL;
-
-    LPModel *model = solver->original_model;
-    SparseMatrix *A = model->A;
-
-    /* Check if this is an SCP problem */
-    if (!is_scp_model(model)) {
-        return NULL;
-    }
-
-    LagrangianContext *ctx = (LagrangianContext *)calloc(1, sizeof(LagrangianContext));
-    if (!ctx) return NULL;
-
-    ctx->num_elements = A->nrows;
-    ctx->num_sets = A->ncols;
-
-    /* Allocate arrays */
-    ctx->lambda = (double *)calloc(ctx->num_elements, sizeof(double));
-    ctx->subgradient = (double *)calloc(ctx->num_elements, sizeof(double));
-    ctx->best_lambda = (double *)calloc(ctx->num_elements, sizeof(double));
-    ctx->x_lagrangian = (double *)calloc(ctx->num_sets, sizeof(double));
-
-    if (!ctx->lambda || !ctx->subgradient || !ctx->best_lambda || !ctx->x_lagrangian) {
-        lagrangian_free(ctx);
-        return NULL;
-    }
-
-    /* Store pointers to problem data (not owned) */
-    ctx->costs = model->c;
-    ctx->col_ptr = A->colptr;
-    ctx->row_idx = A->rowidx;
-
-    /* Initialize multipliers to zero */
-    /* Could use LP duals as warm start, but zero works fine */
-
-    /* Default parameters */
-    ctx->max_iterations = 500;
-    ctx->step_factor = 2.0;
-    ctx->min_step_factor = 0.01;
-    ctx->no_improve_limit = 30;
-
-    /* Initialize bounds */
-    ctx->best_bound = -RALPH_INFINITY;
-    ctx->ub = RALPH_INFINITY;  /* Will be set by heuristic */
-
-    return ctx;
-}
-
-/*
- * Free Lagrangian context.
- */
-void lagrangian_free(LagrangianContext *ctx) {
-    if (!ctx) return;
-
-    free(ctx->lambda);
-    free(ctx->subgradient);
-    free(ctx->best_lambda);
-    free(ctx->x_lagrangian);
-    free(ctx);
-}
-
-/*
- * Compute Lagrangian bound for current multipliers.
- *
- * L(lambda) = sum(lambda) + sum { min(0, c_j - sum(lambda_i : i in S_j)) }
- */
-double lagrangian_bound(LagrangianContext *ctx) {
-    if (!ctx) return -RALPH_INFINITY;
-
-    int m = ctx->num_elements;
-    int n = ctx->num_sets;
-
-    /* Start with sum of multipliers */
-    double bound = 0.0;
-    for (int i = 0; i < m; i++) {
-        bound += ctx->lambda[i];
-    }
-
-    /* Initialize subgradient to 1 (uncovered elements) */
-    for (int i = 0; i < m; i++) {
-        ctx->subgradient[i] = 1.0;
-    }
-
-    /* Process each set (variable) */
-    for (int j = 0; j < n; j++) {
-        /* Compute reduced cost: c_j - sum(lambda_i : set j covers element i) */
-        double reduced_cost = ctx->costs[j];
-        for (int p = ctx->col_ptr[j]; p < ctx->col_ptr[j + 1]; p++) {
-            int i = ctx->row_idx[p];
-            reduced_cost -= ctx->lambda[i];
-        }
-
-        /* Solve trivial subproblem: x_j = 1 if reduced_cost < 0 */
-        if (reduced_cost < -RALPH_ZERO_TOL) {
-            ctx->x_lagrangian[j] = 1.0;
-            bound += reduced_cost;
-
-            /* Update subgradient: g_i = 1 - sum(x_j : j covers i) */
-            for (int p = ctx->col_ptr[j]; p < ctx->col_ptr[j + 1]; p++) {
-                int i = ctx->row_idx[p];
-                ctx->subgradient[i] -= 1.0;
-            }
-        } else {
-            ctx->x_lagrangian[j] = 0.0;
-        }
-    }
-
-    return bound;
-}
-
-/*
- * Perform one subgradient update step.
- *
- * lambda_i = max(0, lambda_i + step * g_i)
- *
- * where step = factor * (ub - L(lambda)) / ||g||^2
- */
-double lagrangian_step(LagrangianContext *ctx) {
-    if (!ctx) return -RALPH_INFINITY;
-
-    /* Compute current bound and subgradient */
-    double current_bound = lagrangian_bound(ctx);
-
-    /* Update best bound if improved */
-    if (current_bound > ctx->best_bound + RALPH_ZERO_TOL) {
-        ctx->best_bound = current_bound;
-        memcpy(ctx->best_lambda, ctx->lambda, ctx->num_elements * sizeof(double));
-        ctx->bound_improvements++;
-    }
-
-    /* Compute subgradient norm squared */
-    double norm_sq = 0.0;
-    for (int i = 0; i < ctx->num_elements; i++) {
-        norm_sq += ctx->subgradient[i] * ctx->subgradient[i];
-    }
-
-    /* If subgradient is zero, we're at optimum */
-    if (norm_sq < RALPH_ZERO_TOL) {
-        return current_bound;
-    }
-
-    /* Compute step size */
-    double gap = ctx->ub - current_bound;
-    if (gap < RALPH_ZERO_TOL) {
-        gap = 1.0;  /* Use small step if gap is closed */
-    }
-    double step = ctx->step_factor * gap / norm_sq;
-
-    /* Update multipliers with projection to non-negative */
-    for (int i = 0; i < ctx->num_elements; i++) {
-        ctx->lambda[i] += step * ctx->subgradient[i];
-        if (ctx->lambda[i] < 0.0) {
-            ctx->lambda[i] = 0.0;
-        }
-    }
-
-    ctx->iterations++;
-    return current_bound;
-}
-
-/*
- * Run subgradient optimization to find best Lagrangian bound.
- */
-double lagrangian_optimize(LagrangianContext *ctx) {
-    if (!ctx) return -RALPH_INFINITY;
-
-    int no_improve_count = 0;
-    double prev_best = ctx->best_bound;
-
-    for (int iter = 0; iter < ctx->max_iterations; iter++) {
-        double bound = lagrangian_step(ctx);
-
-        /* Check for improvement */
-        if (bound > prev_best + RALPH_ZERO_TOL) {
-            no_improve_count = 0;
-            prev_best = bound;
-        } else {
-            no_improve_count++;
-        }
-
-        /* Reduce step factor if no improvement for a while */
-        if (no_improve_count >= ctx->no_improve_limit) {
-            ctx->step_factor *= 0.5;
-            no_improve_count = 0;
-
-            /* Restore best multipliers */
-            memcpy(ctx->lambda, ctx->best_lambda, ctx->num_elements * sizeof(double));
-
-            /* Stop if step factor is too small */
-            if (ctx->step_factor < ctx->min_step_factor) {
-                break;
-            }
-        }
-
-        /* Check if gap is closed */
-        if (ctx->ub - ctx->best_bound < RALPH_OPT_TOL * (fabs(ctx->ub) + 1.0)) {
-            break;
-        }
-    }
-
-    /* Restore best multipliers and recompute bound */
-    memcpy(ctx->lambda, ctx->best_lambda, ctx->num_elements * sizeof(double));
-    lagrangian_bound(ctx);
-
-    return ctx->best_bound;
-}
-
-/*
- * Convert Lagrangian solution to feasible SCP solution.
- *
- * The Lagrangian subproblem solution may leave some elements uncovered.
- * Use greedy to repair.
- */
-double lagrangian_repair(LagrangianContext *ctx, MIPSolver *solver, double *solution) {
-    if (!ctx || !solver || !solution) return RALPH_INFINITY;
-
-    LPModel *model = solver->original_model;
-    SparseMatrix *A = model->A;
-    int m = ctx->num_elements;
-    int n = ctx->num_sets;
-
-    /* Start with Lagrangian solution */
-    memcpy(solution, ctx->x_lagrangian, n * sizeof(double));
-
-    /* Track uncovered elements */
-    int *uncovered = (int *)calloc(m, sizeof(int));
-    int *coverage = (int *)calloc(m, sizeof(int));
-    if (!uncovered || !coverage) {
-        free(uncovered);
-        free(coverage);
-        return RALPH_INFINITY;
-    }
-
-    /* Count coverage from Lagrangian solution */
-    for (int j = 0; j < n; j++) {
-        if (solution[j] > 0.5) {
-            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-                int i = A->rowidx[p];
-                coverage[i]++;
-            }
-        }
-    }
-
-    /* Find uncovered elements */
-    int num_uncovered = 0;
-    for (int i = 0; i < m; i++) {
-        if (coverage[i] == 0) {
-            uncovered[num_uncovered++] = i;
-        }
-    }
-
-    /* Greedy repair: add sets to cover uncovered elements */
-    while (num_uncovered > 0) {
-        int best_set = -1;
-        double best_ratio = RALPH_INFINITY;
-        int best_covers = 0;
-
-        for (int j = 0; j < n; j++) {
-            if (solution[j] > 0.5) continue;  /* Already selected */
-
-            /* Count how many uncovered elements this set covers */
-            int covers = 0;
-            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-                int elem = A->rowidx[p];
-                if (coverage[elem] == 0) {
-                    covers++;
-                }
-            }
-
-            if (covers > 0) {
-                double ratio = model->c[j] / covers;
-                if (ratio < best_ratio) {
-                    best_ratio = ratio;
-                    best_set = j;
-                    best_covers = covers;
-                }
-            }
-        }
-
-        if (best_set < 0) {
-            /* No set can cover remaining elements - problem is infeasible */
-            free(uncovered);
-            free(coverage);
-            return RALPH_INFINITY;
-        }
-
-        /* Add best set */
-        solution[best_set] = 1.0;
-        for (int p = A->colptr[best_set]; p < A->colptr[best_set + 1]; p++) {
-            int elem = A->rowidx[p];
-            coverage[elem]++;
-        }
-
-        /* Recount uncovered */
-        num_uncovered = 0;
-        for (int i = 0; i < m; i++) {
-            if (coverage[i] == 0) {
-                uncovered[num_uncovered++] = i;
-            }
-        }
-
-        (void)best_covers;  /* Suppress unused warning */
-    }
-
-    /* Apply local search to remove redundant sets */
-    for (int j = 0; j < n; j++) {
-        if (solution[j] < 0.5) continue;
-
-        /* Check if removing this set still covers everything */
-        int can_remove = 1;
-        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-            int elem = A->rowidx[p];
-            if (coverage[elem] <= 1) {
-                can_remove = 0;
-                break;
-            }
-        }
-
-        if (can_remove) {
-            solution[j] = 0.0;
-            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-                int elem = A->rowidx[p];
-                coverage[elem]--;
-            }
-        }
-    }
-
-    /* Compute objective */
-    double obj = 0.0;
-    for (int j = 0; j < n; j++) {
-        if (solution[j] > 0.5) {
-            obj += model->c[j];
-        }
-    }
-
-    free(uncovered);
-    free(coverage);
-    return obj;
-}
-
-/*
- * Full Lagrangian-based solve for SCP.
- */
-int lagrangian_solve_scp(MIPSolver *solver, double *solution, double *lower_bound) {
-    if (!solver || !solution) return -1;
-
-    LPModel *model = solver->original_model;
-    int n = model->num_vars;
-
-    /* Create Lagrangian context */
-    LagrangianContext *ctx = lagrangian_create(solver);
-    if (!ctx) return -1;  /* Not an SCP problem */
-
-    /* Run greedy heuristic to get initial upper bound */
-    double *greedy_sol = (double *)calloc(n, sizeof(double));
-    if (!greedy_sol) {
-        lagrangian_free(ctx);
-        return -1;
-    }
-
-    double ub = RALPH_INFINITY;
-    if (heuristic_greedy_set_cover(solver, greedy_sol) == 0) {
-        /* Apply local search */
-        heuristic_local_search_scp(solver, greedy_sol);
-
-        /* Compute objective */
-        ub = 0.0;
-        for (int j = 0; j < n; j++) {
-            if (greedy_sol[j] > 0.5) {
-                ub += model->c[j];
-            }
-        }
-        ctx->ub = ub;
-        memcpy(solution, greedy_sol, n * sizeof(double));
-    }
-
-    /* Run subgradient optimization */
-    double lb = lagrangian_optimize(ctx);
-
-    if (lower_bound) {
-        *lower_bound = lb;
-    }
-
-    /* Try to improve solution by repairing Lagrangian solution */
-    double *repaired_sol = (double *)calloc(n, sizeof(double));
-    if (repaired_sol) {
-        double repair_obj = lagrangian_repair(ctx, solver, repaired_sol);
-        if (repair_obj < ub) {
-            ub = repair_obj;
-            memcpy(solution, repaired_sol, n * sizeof(double));
-
-            /* Update context upper bound and continue optimization */
-            ctx->ub = ub;
-            double new_lb = lagrangian_optimize(ctx);
-            if (new_lb > lb) {
-                lb = new_lb;
-                if (lower_bound) {
-                    *lower_bound = lb;
-                }
-            }
-
-            /* Try one more repair */
-            repair_obj = lagrangian_repair(ctx, solver, repaired_sol);
-            if (repair_obj < ub) {
-                memcpy(solution, repaired_sol, n * sizeof(double));
-            }
-        }
-        free(repaired_sol);
-    }
-
-    free(greedy_sol);
-    lagrangian_free(ctx);
-
-    return 0;
-}

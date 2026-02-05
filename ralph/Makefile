@@ -43,7 +43,10 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/ralph.c \
           $(SRC_DIR)/lap.c \
           $(SRC_DIR)/detect.c \
-          $(SRC_DIR)/netflow.c
+          $(SRC_DIR)/netflow.c \
+          $(SRC_DIR)/optim/subgradient.c \
+          $(SRC_DIR)/optim/lagrangian.c \
+          $(SRC_DIR)/optim/lagrangian_scp.c
 
 OBJECTS = $(SOURCES:.c=.o)
 
@@ -69,6 +72,10 @@ NETFLOW_TEST_EXEC = test_netflow
 # Network detection tests
 DETECT_TEST_SOURCES = $(TEST_DIR)/test_detect.c
 DETECT_TEST_EXEC = test_detect
+
+# Optimization module tests
+OPTIM_TEST_SOURCES = $(TEST_DIR)/test_optim.c
+OPTIM_TEST_EXEC = test_optim
 
 # Benchmarks
 BENCH_DIR = benchmarks
@@ -101,6 +108,10 @@ $(LIB_NAME): $(OBJECTS)
 
 # Build object files
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+# Build optim submodule object files
+$(SRC_DIR)/optim/%.o: $(SRC_DIR)/optim/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Build test executable
@@ -146,6 +157,14 @@ $(DETECT_TEST_EXEC): $(DETECT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 # Run network detection tests
 test-detect: $(DETECT_TEST_EXEC)
 	./$(DETECT_TEST_EXEC)
+
+# Build optimization module tests
+$(OPTIM_TEST_EXEC): $(OPTIM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run optimization module tests
+test-optim: $(OPTIM_TEST_EXEC)
+	./$(OPTIM_TEST_EXEC)
 
 # Build size scaling benchmark
 $(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME) $(SHARED_LIB)
@@ -225,7 +244,7 @@ bench-netflow: $(BENCH_NETFLOW_EXEC)
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -239,7 +258,22 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick profile-bench install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench install uninstall help
+
+# MIP benchmark with specialized solvers (LAP, Network, SCP)
+bench-mip-specialized: $(BENCH_MIP_EXEC)
+	./$(BENCH_MIP_EXEC) --specialized
+
+# MIP benchmark comparing generic vs specialized vs GLPK
+bench-mip-compare: $(BENCH_MIP_EXEC)
+	./$(BENCH_MIP_EXEC) --compare-all
+
+# Quick versions of specialized benchmarks
+bench-mip-specialized-quick: $(BENCH_MIP_EXEC)
+	./$(BENCH_MIP_EXEC) --specialized --quick
+
+bench-mip-compare-quick: $(BENCH_MIP_EXEC)
+	./$(BENCH_MIP_EXEC) --compare-all --quick
 
 # Help
 help:
@@ -253,6 +287,7 @@ help:
 	@echo "  test-lap   - Run LAP (assignment problem) tests"
 	@echo "  test-netflow - Run network flow tests"
 	@echo "  test-detect - Run network detection tests"
+	@echo "  test-optim  - Run optimization module tests"
 	@echo "  bench      - Run size scaling benchmark"
 	@echo "  bench-lap  - Run LAP benchmark (JVC vs LP)"
 	@echo "  bench-netflow - Run network flow benchmark"
@@ -260,5 +295,10 @@ help:
 	@echo "  clean      - Remove build artifacts"
 	@echo ""
 	@echo "GLPK Benchmarks (requires GLPK):"
-	@echo "  bench-glpk - Compare Ralph vs GLPK"
-	@echo "  bench-mip  - MIP benchmark vs GLPK"
+	@echo "  bench-glpk - Compare Ralph vs GLPK (LP only)"
+	@echo "  bench-mip  - MIP benchmark: generic Ralph vs GLPK"
+	@echo "  bench-mip-specialized - MIP benchmark: Ralph with LAP/SCP/Network detection vs GLPK"
+	@echo "  bench-mip-compare     - MIP benchmark: generic vs specialized vs GLPK (side-by-side)"
+	@echo ""
+	@echo "Quick benchmark variants (smaller problem sizes):"
+	@echo "  bench-mip-quick, bench-mip-specialized-quick, bench-mip-compare-quick"
