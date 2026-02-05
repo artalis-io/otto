@@ -903,6 +903,462 @@ int heuristic_rounding(MIPSolver *solver, const double *lp_solution, double *int
 }
 
 /* ============================================================================
+ * SCP-Specific Heuristics (Phase 4)
+ * ============================================================================ */
+
+/*
+ * Check if model has SCP structure (for heuristic applicability).
+ * Lightweight check without full detection overhead.
+ */
+static int is_scp_model(const LPModel *model) {
+    if (!model || model->num_vars == 0 || model->num_cons == 0) return 0;
+
+    /* All variables must be binary */
+    for (int j = 0; j < model->num_vars; j++) {
+        if (model->var_type[j] != 'B') return 0;
+    }
+
+    /* All constraints must be >= or = with positive RHS */
+    for (int i = 0; i < model->num_cons; i++) {
+        if (model->sense[i] != 'G' && model->sense[i] != 'E') return 0;
+        if (model->b[i] < RALPH_ZERO_TOL) return 0;
+    }
+
+    /* All coefficients must be 0 or 1 */
+    if (!model->A) return 0;
+    SparseMatrix *A = model->A;
+    for (int p = 0; p < A->colptr[model->num_vars]; p++) {
+        double v = A->values[p];
+        if (fabs(v) > RALPH_ZERO_TOL && fabs(v - 1.0) > RALPH_ZERO_TOL) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+/*
+ * Build coverage data structure for SCP heuristics.
+ * Returns arrays indicating which elements each set covers and vice versa.
+ */
+static int build_coverage_data(const LPModel *model,
+                                int ***set_covers,      /* set_covers[j] = array of elements */
+                                int **set_cover_count,  /* set_cover_count[j] = count */
+                                int ***element_sets,    /* element_sets[i] = array of sets */
+                                int **element_set_count) {
+    int n = model->num_vars;
+    int m = model->num_cons;
+    SparseMatrix *A = model->A;
+
+    /* Allocate arrays */
+    *set_covers = (int **)calloc(n, sizeof(int *));
+    *set_cover_count = (int *)calloc(n, sizeof(int));
+    *element_sets = (int **)calloc(m, sizeof(int *));
+    *element_set_count = (int *)calloc(m, sizeof(int));
+
+    if (!*set_covers || !*set_cover_count || !*element_sets || !*element_set_count) {
+        free(*set_covers); free(*set_cover_count);
+        free(*element_sets); free(*element_set_count);
+        return -1;
+    }
+
+    /* Count coverage from sparse matrix */
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            if (fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                (*set_cover_count)[j]++;
+                int row = A->rowidx[p];
+                if (row < m) {
+                    (*element_set_count)[row]++;
+                }
+            }
+        }
+    }
+
+    /* Allocate individual arrays */
+    for (int j = 0; j < n; j++) {
+        if ((*set_cover_count)[j] > 0) {
+            (*set_covers)[j] = (int *)calloc((*set_cover_count)[j], sizeof(int));
+            if (!(*set_covers)[j]) goto error;
+        }
+        (*set_cover_count)[j] = 0;  /* Reset for filling */
+    }
+    for (int i = 0; i < m; i++) {
+        if ((*element_set_count)[i] > 0) {
+            (*element_sets)[i] = (int *)calloc((*element_set_count)[i], sizeof(int));
+            if (!(*element_sets)[i]) goto error;
+        }
+        (*element_set_count)[i] = 0;  /* Reset for filling */
+    }
+
+    /* Fill arrays */
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            if (fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                int row = A->rowidx[p];
+                if (row < m) {
+                    (*set_covers)[j][(*set_cover_count)[j]++] = row;
+                    (*element_sets)[row][(*element_set_count)[row]++] = j;
+                }
+            }
+        }
+    }
+
+    return 0;
+
+error:
+    for (int j = 0; j < n; j++) free((*set_covers)[j]);
+    for (int i = 0; i < m; i++) free((*element_sets)[i]);
+    free(*set_covers); free(*set_cover_count);
+    free(*element_sets); free(*element_set_count);
+    return -1;
+}
+
+static void free_coverage_data(int n, int m, int **set_covers, int *set_cover_count,
+                                int **element_sets, int *element_set_count) {
+    if (set_covers) {
+        for (int j = 0; j < n; j++) free(set_covers[j]);
+        free(set_covers);
+    }
+    free(set_cover_count);
+    if (element_sets) {
+        for (int i = 0; i < m; i++) free(element_sets[i]);
+        free(element_sets);
+    }
+    free(element_set_count);
+}
+
+/*
+ * Count how many uncovered elements a set would cover.
+ */
+static int count_new_coverage(const int *set_covers, int set_cover_count,
+                               const int *uncovered) {
+    int count = 0;
+    for (int k = 0; k < set_cover_count; k++) {
+        int elem = set_covers[k];
+        if (uncovered[elem]) count++;
+    }
+    return count;
+}
+
+/*
+ * Greedy set cover heuristic.
+ */
+int heuristic_greedy_set_cover(MIPSolver *solver, double *solution) {
+    if (!solver || !solution) return -1;
+
+    LPModel *model = solver->original_model;
+    if (!is_scp_model(model)) return -1;
+
+    int n = model->num_vars;
+    int m = model->num_cons;
+
+    /* Build coverage data */
+    int **set_covers, *set_cover_count;
+    int **element_sets, *element_set_count;
+    if (build_coverage_data(model, &set_covers, &set_cover_count,
+                            &element_sets, &element_set_count) != 0) {
+        return -1;
+    }
+
+    /* Initialize solution to all zeros */
+    memset(solution, 0, n * sizeof(double));
+
+    /* Track uncovered elements */
+    int *uncovered = (int *)calloc(m, sizeof(int));
+    if (!uncovered) {
+        free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
+        return -1;
+    }
+    int num_uncovered = 0;
+    for (int i = 0; i < m; i++) {
+        /* Check RHS - need to cover at least b[i] times */
+        uncovered[i] = (int)(model->b[i] + 0.5);  /* Usually 1 */
+        num_uncovered += uncovered[i];
+    }
+
+    /* Greedy selection */
+    while (num_uncovered > 0) {
+        int best_set = -1;
+        double best_ratio = RALPH_INFINITY;
+
+        for (int j = 0; j < n; j++) {
+            if (solution[j] > 0.5) continue;  /* Already selected */
+
+            int covers = count_new_coverage(set_covers[j], set_cover_count[j], uncovered);
+            if (covers > 0) {
+                double ratio = model->c[j] / (double)covers;
+                if (ratio < best_ratio) {
+                    best_ratio = ratio;
+                    best_set = j;
+                }
+            }
+        }
+
+        if (best_set < 0) {
+            /* No set can cover remaining elements - infeasible */
+            free(uncovered);
+            free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
+            return -1;
+        }
+
+        /* Select best set */
+        solution[best_set] = 1.0;
+
+        /* Mark elements as covered */
+        for (int k = 0; k < set_cover_count[best_set]; k++) {
+            int elem = set_covers[best_set][k];
+            if (uncovered[elem] > 0) {
+                uncovered[elem]--;
+                num_uncovered--;
+            }
+        }
+    }
+
+    free(uncovered);
+    free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
+    return 0;
+}
+
+/*
+ * LP-guided greedy heuristic.
+ */
+int heuristic_lp_guided_greedy(MIPSolver *solver, const double *lp_solution, double *solution) {
+    if (!solver || !solution) return -1;
+    if (!lp_solution) {
+        /* Fall back to pure greedy if no LP solution */
+        return heuristic_greedy_set_cover(solver, solution);
+    }
+
+    LPModel *model = solver->original_model;
+    if (!is_scp_model(model)) return -1;
+
+    int n = model->num_vars;
+    int m = model->num_cons;
+
+    /* Build coverage data */
+    int **set_covers, *set_cover_count;
+    int **element_sets, *element_set_count;
+    if (build_coverage_data(model, &set_covers, &set_cover_count,
+                            &element_sets, &element_set_count) != 0) {
+        return -1;
+    }
+
+    /* Initialize solution to all zeros */
+    memset(solution, 0, n * sizeof(double));
+
+    /* Track uncovered elements */
+    int *uncovered = (int *)calloc(m, sizeof(int));
+    if (!uncovered) {
+        free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
+        return -1;
+    }
+    int num_uncovered = 0;
+    for (int i = 0; i < m; i++) {
+        uncovered[i] = (int)(model->b[i] + 0.5);
+        num_uncovered += uncovered[i];
+    }
+
+    /* LP-guided greedy selection */
+    while (num_uncovered > 0) {
+        int best_set = -1;
+        double best_ratio = RALPH_INFINITY;
+
+        for (int j = 0; j < n; j++) {
+            if (solution[j] > 0.5) continue;
+
+            int covers = count_new_coverage(set_covers[j], set_cover_count[j], uncovered);
+            if (covers > 0) {
+                /* LP-guided ratio: bias toward high LP values */
+                double lp_boost = 1.0 + lp_solution[j];  /* Range [1, 2] */
+                double ratio = model->c[j] / ((double)covers * lp_boost);
+                if (ratio < best_ratio) {
+                    best_ratio = ratio;
+                    best_set = j;
+                }
+            }
+        }
+
+        if (best_set < 0) {
+            free(uncovered);
+            free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
+            return -1;
+        }
+
+        solution[best_set] = 1.0;
+
+        for (int k = 0; k < set_cover_count[best_set]; k++) {
+            int elem = set_covers[best_set][k];
+            if (uncovered[elem] > 0) {
+                uncovered[elem]--;
+                num_uncovered--;
+            }
+        }
+    }
+
+    free(uncovered);
+    free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
+    return 0;
+}
+
+/*
+ * Check if solution remains feasible without a given set.
+ */
+static int is_feasible_without(const LPModel *model, const double *solution,
+                                int exclude_set, int **set_covers, int *set_cover_count) {
+    int m = model->num_cons;
+    int n = model->num_vars;
+
+    /* Compute coverage for each element without exclude_set */
+    int *coverage = (int *)calloc(m, sizeof(int));
+    if (!coverage) return 0;
+
+    for (int j = 0; j < n; j++) {
+        if (j == exclude_set) continue;
+        if (solution[j] < 0.5) continue;
+
+        for (int k = 0; k < set_cover_count[j]; k++) {
+            int elem = set_covers[j][k];
+            if (elem < m) coverage[elem]++;
+        }
+    }
+
+    /* Check if all elements still covered */
+    int feasible = 1;
+    for (int i = 0; i < m; i++) {
+        int required = (int)(model->b[i] + 0.5);
+        if (coverage[i] < required) {
+            feasible = 0;
+            break;
+        }
+    }
+
+    free(coverage);
+    return feasible;
+}
+
+/*
+ * Check if set k can replace set j in the solution.
+ */
+static int can_replace(const LPModel *model, const double *solution,
+                        int j, int k, int **set_covers, int *set_cover_count) {
+    int m = model->num_cons;
+    int n = model->num_vars;
+
+    /* Compute coverage with k instead of j */
+    int *coverage = (int *)calloc(m, sizeof(int));
+    if (!coverage) return 0;
+
+    for (int s = 0; s < n; s++) {
+        if (s == j) continue;  /* Exclude j */
+        int is_selected = (s == k) || (solution[s] > 0.5);
+        if (!is_selected) continue;
+
+        for (int p = 0; p < set_cover_count[s]; p++) {
+            int elem = set_covers[s][p];
+            if (elem < m) coverage[elem]++;
+        }
+    }
+
+    /* Check feasibility */
+    int feasible = 1;
+    for (int i = 0; i < m; i++) {
+        int required = (int)(model->b[i] + 0.5);
+        if (coverage[i] < required) {
+            feasible = 0;
+            break;
+        }
+    }
+
+    free(coverage);
+    return feasible;
+}
+
+/*
+ * Local search improvement for SCP.
+ */
+int heuristic_local_search_scp(MIPSolver *solver, double *solution) {
+    if (!solver || !solution) return -1;
+
+    LPModel *model = solver->original_model;
+    if (!is_scp_model(model)) return -1;
+
+    int n = model->num_vars;
+    int m = model->num_cons;
+
+    /* Build coverage data */
+    int **set_covers, *set_cover_count;
+    int **element_sets, *element_set_count;
+    if (build_coverage_data(model, &set_covers, &set_cover_count,
+                            &element_sets, &element_set_count) != 0) {
+        return -1;
+    }
+
+    int improvements = 0;
+    int changed = 1;
+
+    while (changed) {
+        changed = 0;
+
+        /* 1-opt: Try removing redundant sets */
+        for (int j = 0; j < n; j++) {
+            if (solution[j] < 0.5) continue;
+
+            if (is_feasible_without(model, solution, j, set_covers, set_cover_count)) {
+                solution[j] = 0.0;
+                improvements++;
+                changed = 1;
+            }
+        }
+
+        /* 2-opt: Try replacing a set with a cheaper one */
+        for (int j = 0; j < n; j++) {
+            if (solution[j] < 0.5) continue;
+
+            for (int k = 0; k < n; k++) {
+                if (k == j) continue;
+                if (solution[k] > 0.5) continue;
+                if (model->c[k] >= model->c[j]) continue;  /* k must be cheaper */
+
+                if (can_replace(model, solution, j, k, set_covers, set_cover_count)) {
+                    solution[j] = 0.0;
+                    solution[k] = 1.0;
+                    improvements++;
+                    changed = 1;
+                    break;  /* Restart from this j */
+                }
+            }
+            if (changed) break;
+        }
+    }
+
+    free_coverage_data(n, m, set_covers, set_cover_count, element_sets, element_set_count);
+    return improvements;
+}
+
+/*
+ * Combined SCP heuristic.
+ */
+int heuristic_scp(MIPSolver *solver, const double *lp_solution, double *solution) {
+    if (!solver || !solution) return -1;
+
+    /* Try LP-guided greedy (or pure greedy if no LP solution) */
+    int result;
+    if (lp_solution) {
+        result = heuristic_lp_guided_greedy(solver, lp_solution, solution);
+    } else {
+        result = heuristic_greedy_set_cover(solver, solution);
+    }
+
+    if (result != 0) return -1;
+
+    /* Improve with local search */
+    heuristic_local_search_scp(solver, solution);
+
+    return 0;
+}
+
+/* ============================================================================
  * Utility
  * ============================================================================ */
 

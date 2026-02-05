@@ -297,6 +297,76 @@ int generate_scp_cuts(MIPSolver *solver, CutPool *pool);
 int heuristic_rounding(MIPSolver *solver, const double *lp_solution, double *int_solution);
 int heuristic_feasibility_pump(MIPSolver *solver, double *solution);
 
+/* SCP-specific primal heuristics (Phase 4) */
+
+/*
+ * Greedy set cover heuristic.
+ *
+ * Classic greedy algorithm: repeatedly select the set with the best
+ * cost-to-coverage ratio until all elements are covered.
+ *
+ * Approximation ratio: O(log m) for set covering problems.
+ * Complexity: O(m * n) per complete solution.
+ *
+ * Parameters:
+ *   solver   - MIP solver with SCP structure
+ *   solution - Output: binary solution (caller allocates, size = num_vars)
+ *
+ * Returns:
+ *   0 on success (feasible solution found), -1 on failure.
+ */
+int heuristic_greedy_set_cover(MIPSolver *solver, double *solution);
+
+/*
+ * LP-guided greedy heuristic.
+ *
+ * Modified greedy that biases toward sets with high LP relaxation values.
+ * Uses ratio = cost / (coverage * (1 + lp_value)) to combine:
+ * - Classic greedy cost-effectiveness
+ * - LP relaxation guidance
+ *
+ * Parameters:
+ *   solver      - MIP solver with SCP structure
+ *   lp_solution - Current LP relaxation solution
+ *   solution    - Output: binary solution
+ *
+ * Returns:
+ *   0 on success, -1 on failure.
+ */
+int heuristic_lp_guided_greedy(MIPSolver *solver, const double *lp_solution, double *solution);
+
+/*
+ * Local search improvement for SCP solutions.
+ *
+ * Improves a feasible SCP solution via:
+ * - 1-opt: Remove redundant sets that aren't needed for coverage
+ * - 2-opt: Replace a set with a cheaper one that covers the same elements
+ *
+ * Parameters:
+ *   solver   - MIP solver with SCP structure
+ *   solution - In/out: feasible solution to improve
+ *
+ * Returns:
+ *   Number of improvements made (>= 0), -1 on error.
+ */
+int heuristic_local_search_scp(MIPSolver *solver, double *solution);
+
+/*
+ * Combined SCP heuristic.
+ *
+ * Runs greedy (or LP-guided greedy if LP solution available),
+ * followed by local search improvement.
+ *
+ * Parameters:
+ *   solver      - MIP solver
+ *   lp_solution - Current LP solution (can be NULL for pure greedy)
+ *   solution    - Output: best solution found
+ *
+ * Returns:
+ *   0 on success with feasible solution, -1 on failure.
+ */
+int heuristic_scp(MIPSolver *solver, const double *lp_solution, double *solution);
+
 /* Solution checking */
 int check_integer_feasibility(MIPSolver *solver, const double *solution);
 double compute_integrality_violation(MIPSolver *solver, const double *solution);
