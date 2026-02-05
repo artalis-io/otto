@@ -307,8 +307,19 @@ void ct_simplify_multipolygon_inplace(CTTilePoint *points, int *num_points,
         int simplified_count = ring_points;
         ct_simplify_poly_inplace(ring_copy, &simplified_count, tolerance);
 
-        /* Ensure minimum ring validity */
-        if (simplified_count < 3) simplified_count = ring_points < 3 ? ring_points : 3;
+        /* Ensure minimum ring validity - if simplified to degenerate,
+         * use original ring instead (ring_copy still has original data
+         * at indices >= simplified_count, but that's not guaranteed).
+         * Instead, copy from original points array. */
+        if (simplified_count < 3) {
+            /* Ring became degenerate - copy original instead */
+            for (int i = ring_start; i < ring_end; i++) {
+                points[write_idx++] = points[i];
+            }
+            ring_ends[r] = write_idx;
+            free(ring_copy);
+            continue;
+        }
 
         /* Copy simplified ring back */
         for (int i = 0; i < simplified_count; i++) {

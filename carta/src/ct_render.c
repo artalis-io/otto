@@ -1054,7 +1054,9 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
         /* Skip features too small to see */
         if (!feature_is_visible(f, scale)) {
             free(f->points);
+            free(f->ring_ends);
             f->points = NULL;
+            f->ring_ends = NULL;
             continue;
         }
 
