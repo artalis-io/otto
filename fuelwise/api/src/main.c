@@ -453,51 +453,19 @@ static void free_problem(FWRefuelProblem *problem) {
  * Response Building
  * ============================================================================ */
 
-/* Build error response */
+/* Build error response - uses shared helper */
 static void send_error(struct mg_connection *c, int status, const char *message) {
-    char cors_headers[256];
-    sh_cors_headers(&s_cors, NULL, cors_headers, sizeof(cors_headers));
-    char headers[512];
-    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_headers);
-    mg_http_reply(c, status, headers, "{\"error\": \"%s\"}\n", message);
+    sh_mg_reply_error(c, status, &s_cors, NULL, message);
 }
 
-/* Build success response with JSON body */
+/* Build success response with JSON body - uses shared helper */
 static void send_json(struct mg_connection *c, const char *json) {
-    char cors_headers[256];
-    sh_cors_headers(&s_cors, NULL, cors_headers, sizeof(cors_headers));
-    char headers[512];
-    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_headers);
-    mg_http_reply(c, 200, headers, "%s", json);
+    sh_mg_reply_json(c, 200, &s_cors, NULL, json);
 }
 
-/* Build response with custom status code and JSON body */
+/* Build response with custom status code and JSON body - uses shared helper */
 static void send_json_status(struct mg_connection *c, int status, const char *json) {
-    char cors_headers[256];
-    sh_cors_headers(&s_cors, NULL, cors_headers, sizeof(cors_headers));
-    char headers[512];
-    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_headers);
-    mg_http_reply(c, status, headers, "%s", json);
-}
-
-/* ============================================================================
- * Rate Limiting Helper
- * ============================================================================ */
-
-/* Check rate limit for a connection. Returns 1 if allowed, 0 if denied. */
-static int check_rate_limit(struct mg_connection *c) {
-    if (!s_rate_limiter) return 1;  /* Rate limiting disabled */
-
-    ShRateLimitAddr client_addr;
-    if (c->rem.is_ip6) {
-        /* Extract IPv6 address from union */
-        sh_ratelimit_addr_ipv6(&client_addr, c->rem.addr.ip6[0], c->rem.addr.ip6[1]);
-    } else {
-        /* Extract IPv4 address (in network byte order from mongoose) */
-        sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
-    }
-
-    return sh_ratelimit_check(s_rate_limiter, &client_addr);
+    sh_mg_reply_json(c, status, &s_cors, NULL, json);
 }
 
 /* ============================================================================
@@ -1004,18 +972,10 @@ static void *worker_thread_fn(void *arg) {
  * API Handlers
  * ============================================================================ */
 
-/* GET /api/v1/health - bypasses work queue */
+/* GET /api/v1/health - bypasses work queue, uses shared helper */
 static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
     (void)hm;
-    char response[512];
-    snprintf(response, sizeof(response),
-        "{\n"
-        "  \"status\": \"healthy\",\n"
-        "  \"version\": \"%s\",\n"
-        "  \"service\": \"fuelwise-api\"\n"
-        "}\n",
-        fw_version());
-    send_json(c, response);
+    sh_mg_handle_health(c, &s_cors, NULL, "fuelwise-api", fw_version());
 }
 
 /* GET /api/v1/stats - bypasses work queue */
@@ -1222,20 +1182,9 @@ static void handle_optimize(struct mg_connection *c, struct mg_http_message *hm)
     handle_via_queue(c, hm, WORK_TYPE_OPTIMIZE);
 }
 
-/* GET /metrics - Prometheus metrics endpoint */
+/* GET /metrics - Prometheus metrics endpoint, uses shared helper */
 static void handle_metrics(struct mg_connection *c) {
-    char *prom = sh_metrics_prometheus_output();
-    if (prom) {
-        mg_http_reply(c, 200,
-            "Content-Type: text/plain; version=0.0.4\r\n"
-            "Access-Control-Allow-Origin: *\r\n",
-            "%s", prom);
-        free(prom);
-    } else {
-        mg_http_reply(c, 500,
-            "Content-Type: text/plain\r\n",
-            "Failed to generate metrics\n");
-    }
+    sh_mg_handle_metrics(c);
 }
 
 /* OPTIONS handler for CORS preflight */
@@ -1297,11 +1246,10 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
             return;
         }
 
-        /* Check rate limit for all other endpoints */
-        if (!check_rate_limit(c)) {
+        /* Check rate limit for all other endpoints - uses shared helper */
+        if (!sh_mg_check_rate_limit(c, s_rate_limiter, &s_cors, NULL)) {
             sh_metrics_counter_inc("http_requests_total", 1,
                 "endpoint", "rate_limited", "status", "429", NULL);
-            send_error(c, 429, "Too many requests");
             sh_trace_clear();
             return;
         }

@@ -27,6 +27,11 @@
 /* Include mongoose - assumes it's available via vendor path */
 #include "mongoose.h"
 
+/* Include shared headers for CORS, rate limiting, and metrics */
+#include "sh_cors.h"
+#include "sh_ratelimit.h"
+#include "sh_metrics.h"
+
 /* ============================================================================
  * Configuration Defaults
  * ============================================================================ */
@@ -100,6 +105,117 @@ void sh_mg_chunked_end(struct mg_connection *c)
 
     /* Final chunk: "0\r\n\r\n" */
     mg_send(c, "0\r\n\r\n", 5);
+}
+
+/* ============================================================================
+ * Mongoose Direct Response Helpers
+ * ============================================================================ */
+
+void sh_mg_reply_json(struct mg_connection *c, int status,
+                      const struct ShCorsConfig *cors, const char *origin,
+                      const char *json)
+{
+    if (!c) return;
+
+    char cors_hdrs[512] = "";
+    if (cors) {
+        sh_cors_headers(cors, origin, cors_hdrs, sizeof(cors_hdrs));
+    } else {
+        snprintf(cors_hdrs, sizeof(cors_hdrs), "Access-Control-Allow-Origin: *\r\n");
+    }
+
+    char headers[600];
+    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_hdrs);
+    mg_http_reply(c, status, headers, "%s", json ? json : "{}");
+}
+
+void sh_mg_reply_error(struct mg_connection *c, int status,
+                       const struct ShCorsConfig *cors, const char *origin,
+                       const char *message)
+{
+    if (!c) return;
+
+    char cors_hdrs[512] = "";
+    if (cors) {
+        sh_cors_headers(cors, origin, cors_hdrs, sizeof(cors_hdrs));
+    } else {
+        snprintf(cors_hdrs, sizeof(cors_hdrs), "Access-Control-Allow-Origin: *\r\n");
+    }
+
+    char headers[600];
+    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_hdrs);
+    mg_http_reply(c, status, headers, "{\"error\": \"%s\"}\n", message ? message : "Unknown error");
+}
+
+void sh_mg_handle_metrics(struct mg_connection *c)
+{
+    if (!c) return;
+
+    char *prom = sh_metrics_prometheus_output();
+    if (prom) {
+        mg_http_reply(c, 200,
+            "Content-Type: text/plain; version=0.0.4\r\n"
+            "Access-Control-Allow-Origin: *\r\n",
+            "%s", prom);
+        free(prom);
+    } else {
+        mg_http_reply(c, 500,
+            "Content-Type: text/plain\r\n",
+            "Failed to generate metrics\n");
+    }
+}
+
+void sh_mg_handle_health(struct mg_connection *c,
+                         const struct ShCorsConfig *cors, const char *origin,
+                         const char *service, const char *version)
+{
+    if (!c) return;
+
+    char response[512];
+    snprintf(response, sizeof(response),
+        "{\n"
+        "  \"status\": \"healthy\",\n"
+        "  \"service\": \"%s\",\n"
+        "  \"version\": \"%s\"\n"
+        "}\n",
+        service ? service : "unknown",
+        version ? version : "0.0.0");
+
+    sh_mg_reply_json(c, 200, cors, origin, response);
+}
+
+int sh_mg_check_rate_limit(struct mg_connection *c,
+                           struct ShRateLimiter *limiter,
+                           const struct ShCorsConfig *cors, const char *origin)
+{
+    if (!c || !limiter) return 1;  /* No limiter = allow */
+
+    ShRateLimitAddr client_addr;
+    if (c->rem.is_ip6) {
+        sh_ratelimit_addr_ipv6(&client_addr,
+                               c->rem.addr.ip6[0], c->rem.addr.ip6[1]);
+    } else {
+        sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
+    }
+
+    if (!sh_ratelimit_check(limiter, &client_addr)) {
+        /* Rate limited - send 429 */
+        char cors_hdrs[512] = "";
+        if (cors) {
+            sh_cors_headers(cors, origin, cors_hdrs, sizeof(cors_hdrs));
+        } else {
+            snprintf(cors_hdrs, sizeof(cors_hdrs), "Access-Control-Allow-Origin: *\r\n");
+        }
+
+        char headers[600];
+        snprintf(headers, sizeof(headers),
+                 "Content-Type: text/plain\r\n"
+                 "Retry-After: 1\r\n%s", cors_hdrs);
+        mg_http_reply(c, 429, headers, "Rate limit exceeded\n");
+        return 0;
+    }
+
+    return 1;  /* Allowed */
 }
 
 /* ============================================================================

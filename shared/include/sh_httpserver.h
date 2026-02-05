@@ -323,6 +323,78 @@ void sh_http_res_chunked_end(ShHttpResponse *res);
  */
 void sh_mg_set_write_timeout(struct mg_connection *c, int timeout_ms);
 
+/* ============================================================================
+ * Mongoose Direct Response Helpers
+ *
+ * These functions work directly with mg_connection for API servers
+ * that don't use the full ShHttpServer abstraction.
+ * ============================================================================ */
+
+struct ShCorsConfig;  /* From sh_cors.h */
+
+/*
+ * Send JSON response with CORS headers.
+ *
+ * @param c       Mongoose connection
+ * @param status  HTTP status code
+ * @param cors    CORS config (may be NULL for default CORS)
+ * @param origin  Origin header from request (may be NULL)
+ * @param json    JSON string to send
+ */
+void sh_mg_reply_json(struct mg_connection *c, int status,
+                      const struct ShCorsConfig *cors, const char *origin,
+                      const char *json);
+
+/*
+ * Send error response with CORS headers.
+ * Response format: {"error": "message"}
+ *
+ * @param c       Mongoose connection
+ * @param status  HTTP status code
+ * @param cors    CORS config (may be NULL for default CORS)
+ * @param origin  Origin header from request (may be NULL)
+ * @param message Error message
+ */
+void sh_mg_reply_error(struct mg_connection *c, int status,
+                       const struct ShCorsConfig *cors, const char *origin,
+                       const char *message);
+
+/*
+ * Handle /metrics endpoint (Prometheus format).
+ * Uses sh_metrics_prometheus_output() internally.
+ *
+ * @param c Mongoose connection
+ */
+void sh_mg_handle_metrics(struct mg_connection *c);
+
+/*
+ * Handle /health endpoint with standard JSON format.
+ * Response: {"status": "healthy", "service": "...", "version": "..."}
+ *
+ * @param c       Mongoose connection
+ * @param cors    CORS config (may be NULL for default CORS)
+ * @param origin  Origin header from request (may be NULL)
+ * @param service Service name (e.g., "carta", "velo")
+ * @param version Version string
+ */
+void sh_mg_handle_health(struct mg_connection *c,
+                         const struct ShCorsConfig *cors, const char *origin,
+                         const char *service, const char *version);
+
+/*
+ * Check rate limit and send 429 if exceeded.
+ * Handles both IPv4 and IPv6 addresses.
+ *
+ * @param c         Mongoose connection
+ * @param limiter   Rate limiter instance
+ * @param cors      CORS config (may be NULL)
+ * @param origin    Origin header from request (may be NULL)
+ * @return 1 if request allowed, 0 if rate limited (429 already sent)
+ */
+int sh_mg_check_rate_limit(struct mg_connection *c,
+                           struct ShRateLimiter *limiter,
+                           const struct ShCorsConfig *cors, const char *origin);
+
 /*
  * Send chunked response start.
  * Low-level helper for direct Mongoose usage.
