@@ -19,6 +19,7 @@ This document outlines planned features at the project level, including new comp
 13. [Atlas - Network Design Engine](#13-atlas---network-design-engine)
 14. [Velo Enhancements](#14-velo-enhancements)
 15. [Carta Enhancements](#15-carta-enhancements)
+16. [API Server Infrastructure Improvements](#16-api-server-infrastructure-improvements)
 
 ---
 
@@ -2866,3 +2867,110 @@ Current and planned components:
 9. **Quota Core** - Medium priority (pricing/quoting, revenue generation)
 10. **Atlas Core** - Medium priority (network design, lane balancing)
 11. **Component Integration** - High priority (all modules working together)
+
+---
+
+## 16. API Server Infrastructure Improvements
+
+### Overview
+
+Shared infrastructure improvements for all OTTO API servers (Carta, Velo, Locus, FuelWise) to improve reliability under load.
+
+### Current State
+
+| Server | HTTP Threads | Compute Workers | Slow Client Risk |
+|--------|-------------|-----------------|------------------|
+| Carta | Multiple (auto-detect CPU) | Dedicated render pool | Medium |
+| Velo | Single event loop | Dedicated route pool | High |
+| Locus | Single event loop | None (inline, <20µs) | Low |
+| FuelWise | Single event loop | Dedicated solve pool | High |
+
+### Problems Identified
+
+1. **Slow client vulnerability**: `mg_send()` blocks event loop on slow TCP ACKs. A client reading at 1KB/s can lock an HTTP thread for ~2000s on a 2MB tile.
+
+2. **Single event loop**: Velo/FuelWise use single Mongoose event loops. All requests serialize through one thread.
+
+3. **Work cancellation race**: HTTP handler times out → returns 504 → worker still processes item → result discarded (CPU wasted).
+
+4. **No chunked streaming**: All responses fully buffered in memory before send.
+
+### Planned Components
+
+#### 16.1 sh_httpserver.h - Multi-threaded HTTP Server
+
+Shared abstraction wrapping Mongoose with:
+- Multiple event loops (one per CPU core, uses SO_REUSEPORT)
+- Socket write timeout (prevents slow client DoS)
+- Request context lifecycle management
+- Integration with sh_workqueue for compute offload
+
+```c
+typedef struct {
+    int num_threads;           /* 0 = auto-detect CPU count */
+    int port;
+    const char *host;
+    int socket_timeout_ms;     /* Write timeout per connection */
+    ShWorkQueue *work_queue;   /* Optional: for compute offload */
+    ShRateLimiter *rate_limiter;
+} ShHttpServerConfig;
+
+typedef void (*ShHttpHandler)(ShHttpRequest *req, ShHttpResponse *res);
+
+ShHttpServer *sh_httpserver_create(const ShHttpServerConfig *cfg);
+void sh_httpserver_route(ShHttpServer *srv, const char *pattern, ShHttpHandler handler);
+void sh_httpserver_run(ShHttpServer *srv);  /* Blocking */
+void sh_httpserver_stop(ShHttpServer *srv);
+void sh_httpserver_free(ShHttpServer *srv);
+```
+
+#### 16.2 sh_workqueue.h Extensions - Cancellation Support
+
+Add cancellation flag that workers can check during long computations:
+
+```c
+/* Mark a work item as cancelled (e.g., when HTTP handler times out) */
+void sh_workqueue_item_cancel(ShWorkItem *item);
+
+/* Check if item was cancelled (workers call periodically) */
+int sh_workqueue_item_cancelled(const ShWorkItem *item);
+
+/* Stats extension */
+typedef struct {
+    /* ... existing fields ... */
+    uint64_t total_cancelled;  /* Items cancelled before completion */
+} ShWorkQueueStats;
+```
+
+#### 16.3 sh_chunked.h - Chunked Transfer Encoding
+
+Helpers for streaming large responses without buffering:
+
+```c
+/* Start chunked response */
+void sh_chunked_begin(struct mg_connection *c, int status, const char *content_type);
+
+/* Send a chunk (can be called multiple times) */
+void sh_chunked_send(struct mg_connection *c, const void *data, size_t len);
+
+/* End chunked response */
+void sh_chunked_end(struct mg_connection *c);
+```
+
+### Migration Path
+
+1. **Phase 1**: Add socket timeout to Mongoose connections (immediate fix)
+2. **Phase 2**: Add cancellation support to sh_workqueue
+3. **Phase 3**: Migrate Velo/FuelWise to multi-threaded HTTP (use Carta pattern)
+4. **Phase 4**: Add chunked streaming for large tiles (optional optimization)
+
+### TODOs
+
+- [ ] Add `sh_workqueue_item_cancel()` and `sh_workqueue_item_cancelled()`
+- [ ] Add `total_cancelled` to ShWorkQueueStats
+- [ ] Create `sh_httpserver.h` with multi-threaded Mongoose wrapper
+- [ ] Add socket write timeout to all API servers
+- [ ] Migrate Velo API to multi-threaded HTTP pattern
+- [ ] Migrate FuelWise API to multi-threaded HTTP pattern
+- [ ] Create `sh_chunked.h` for chunked transfer encoding
+- [ ] Add chunked streaming option for large PNG tiles

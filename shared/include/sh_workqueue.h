@@ -54,6 +54,7 @@ typedef struct {
     size_t data_len;      /* Data length in bytes */
     void *user_ctx;       /* User context (connection handle, etc.) - NOT owned */
     double enqueue_time;  /* When item was queued (set by sh_workqueue_push) */
+    volatile int cancelled; /* Set to 1 when HTTP handler times out */
 } ShWorkItem;
 
 /*
@@ -72,6 +73,7 @@ typedef struct {
     uint64_t total_popped;   /* Total items popped (including expired) */
     uint64_t total_dropped;  /* Items dropped due to queue full */
     uint64_t total_expired;  /* Items dropped due to timeout */
+    uint64_t total_cancelled; /* Items cancelled before worker completion */
     double timeout_sec;      /* Configured timeout */
 } ShWorkQueueStats;
 
@@ -175,6 +177,33 @@ int sh_workqueue_item_expired(ShWorkQueue *queue, const ShWorkItem *item);
  * @return Age in seconds since enqueue
  */
 double sh_workqueue_item_age(const ShWorkItem *item);
+
+/*
+ * Mark a work item as cancelled.
+ * Call this when the HTTP handler times out before the worker completes.
+ * The worker should periodically check sh_workqueue_item_cancelled() and
+ * abort early if the result will be discarded anyway.
+ *
+ * This version also increments the queue's total_cancelled counter for stats.
+ *
+ * Thread-safe: Can be called from any thread.
+ *
+ * @param queue Queue the item came from (for stats tracking, may be NULL)
+ * @param item  Item to cancel
+ */
+void sh_workqueue_item_cancel(ShWorkQueue *queue, ShWorkItem *item);
+
+/*
+ * Check if a work item was cancelled.
+ * Workers should call this periodically during long computations and
+ * abort early if cancelled (the HTTP handler already returned 504).
+ *
+ * Thread-safe: Can be called from any thread (uses atomic read).
+ *
+ * @param item Item to check
+ * @return 1 if cancelled, 0 if still active
+ */
+int sh_workqueue_item_cancelled(const ShWorkItem *item);
 
 /*
  * Free a work item after processing.

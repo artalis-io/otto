@@ -17,6 +17,7 @@ endif
 # Source files
 SRC_DIR = src
 MONGOOSE_DIR = ../../vendor/mongoose
+SHARED_DIR = ../../shared
 
 # Libraries
 FUELWISE_LIB = ../libfuelwise.a
@@ -25,17 +26,24 @@ SHARED_LIB = ../../shared/libshared.a
 
 # Output
 TARGET = fuelwise-api
+BUILD_DIR = build
 
 # Source files
 SRCS = $(SRC_DIR)/main.c $(MONGOOSE_DIR)/mongoose.c
 OBJS = $(SRCS:.c=.o)
 
+# Shared HTTP server (requires mongoose, compiled here not in libshared)
+HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o
+
 # Default target
-all: $(TARGET)
+all: $(BUILD_DIR) $(TARGET)
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
 # Build the API server
-$(TARGET): $(OBJS) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(OBJS) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) -lm -lpthread $(OPENMP_LDFLAGS)
+$(TARGET): $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(OBJS) $(HTTPSERVER_OBJ) $(FUELWISE_LIB) $(RALPH_LIB) $(SHARED_LIB) -lm -lpthread $(OPENMP_LDFLAGS)
 
 # Compile source files
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
@@ -43,6 +51,10 @@ $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 
 $(MONGOOSE_DIR)/%.o: $(MONGOOSE_DIR)/%.c
 	$(CC) $(CFLAGS) -DMG_ENABLE_LINES=0 -c $< -o $@
+
+# Compile shared HTTP server (requires mongoose includes)
+$(HTTPSERVER_OBJ): $(SHARED_DIR)/src/sh_httpserver.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 # Ensure dependencies are built
 $(FUELWISE_LIB):
@@ -80,6 +92,6 @@ test-queue: $(TARGET)
 
 # Clean build artifacts
 clean:
-	rm -f $(TARGET) $(SRC_DIR)/*.o $(MONGOOSE_DIR)/*.o
+	rm -rf $(TARGET) $(SRC_DIR)/*.o $(MONGOOSE_DIR)/*.o $(BUILD_DIR)
 
 .PHONY: all clean run run-port test

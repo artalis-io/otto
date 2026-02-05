@@ -1195,6 +1195,86 @@ TEST(workqueue_fifo_order)
     sh_workqueue_free(queue);
 }
 
+TEST(workqueue_item_cancel_basic)
+{
+    ShWorkQueue *queue = sh_workqueue_create(10, 0);
+    ASSERT(queue != NULL);
+
+    /* Push an item */
+    int *data = malloc(sizeof(int));
+    *data = 42;
+    ShWorkItem item = { .data = data, .data_len = sizeof(int) };
+    ASSERT(sh_workqueue_push(queue, &item) == 1);
+
+    /* Pop and verify not cancelled initially */
+    ShWorkItem *popped = sh_workqueue_pop_timeout(queue, 0);
+    ASSERT(popped != NULL);
+    ASSERT(sh_workqueue_item_cancelled(popped) == 0);
+
+    /* Cancel the item */
+    sh_workqueue_item_cancel(queue, popped);
+    ASSERT(sh_workqueue_item_cancelled(popped) == 1);
+
+    /* Verify stats updated */
+    ShWorkQueueStats stats;
+    sh_workqueue_stats(queue, &stats);
+    ASSERT_EQ(stats.total_cancelled, (uint64_t)1);
+
+    sh_workqueue_item_free(popped);
+    sh_workqueue_free(queue);
+}
+
+TEST(workqueue_item_cancel_null_queue)
+{
+    /* Cancel should work without queue (just won't update stats) */
+    int *data = malloc(sizeof(int));
+    *data = 42;
+    ShWorkItem item = { .data = data, .data_len = sizeof(int), .cancelled = 0 };
+
+    /* Cancel without queue - should still set flag */
+    sh_workqueue_item_cancel(NULL, &item);
+    ASSERT(sh_workqueue_item_cancelled(&item) == 1);
+
+    free(data);
+}
+
+TEST(workqueue_item_cancel_null_safety)
+{
+    /* Should handle NULL gracefully */
+    sh_workqueue_item_cancel(NULL, NULL);
+    ASSERT(sh_workqueue_item_cancelled(NULL) == 0);
+}
+
+TEST(workqueue_item_cancel_multiple_times)
+{
+    ShWorkQueue *queue = sh_workqueue_create(10, 0);
+    ASSERT(queue != NULL);
+
+    int *data = malloc(sizeof(int));
+    *data = 1;
+    ShWorkItem item = { .data = data, .data_len = sizeof(int) };
+    sh_workqueue_push(queue, &item);
+
+    ShWorkItem *popped = sh_workqueue_pop_timeout(queue, 0);
+    ASSERT(popped != NULL);
+
+    /* Cancel multiple times - should only increment stats once per call */
+    sh_workqueue_item_cancel(queue, popped);
+    sh_workqueue_item_cancel(queue, popped);
+    sh_workqueue_item_cancel(queue, popped);
+
+    /* Item should still be cancelled */
+    ASSERT(sh_workqueue_item_cancelled(popped) == 1);
+
+    /* Stats should show 3 cancellations (each call increments) */
+    ShWorkQueueStats stats;
+    sh_workqueue_stats(queue, &stats);
+    ASSERT_EQ(stats.total_cancelled, (uint64_t)3);
+
+    sh_workqueue_item_free(popped);
+    sh_workqueue_free(queue);
+}
+
 /* ============================================================================
  * Capacity Planning Tests
  * ============================================================================ */
@@ -2308,6 +2388,10 @@ int main(void)
     RUN_TEST(workqueue_shutdown);
     RUN_TEST(workqueue_null_safety);
     RUN_TEST(workqueue_fifo_order);
+    RUN_TEST(workqueue_item_cancel_basic);
+    RUN_TEST(workqueue_item_cancel_null_queue);
+    RUN_TEST(workqueue_item_cancel_null_safety);
+    RUN_TEST(workqueue_item_cancel_multiple_times);
 
     printf("\nCapacity Planning:\n");
     RUN_TEST(capacity_calculate_basic);

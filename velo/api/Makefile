@@ -29,6 +29,9 @@ OBJS = $(SRCS:src/%.c=build/%.o)
 # Mongoose object (shared)
 MONGOOSE_OBJ = ../../vendor/mongoose/mongoose.o
 
+# Shared HTTP server (requires mongoose, compiled here not in libshared)
+HTTPSERVER_OBJ = build/sh_httpserver.o
+
 TARGET = velo-route-server
 
 .PHONY: all clean deps run debug
@@ -42,10 +45,14 @@ deps:
 		$(CC) -c ../../vendor/mongoose/mongoose.c -o $(MONGOOSE_OBJ); \
 	fi
 
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $(OBJS) $(MONGOOSE_OBJ) $(LDFLAGS)
+$(TARGET): $(OBJS) $(HTTPSERVER_OBJ)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(HTTPSERVER_OBJ) $(MONGOOSE_OBJ) $(LDFLAGS)
 
 build/%.o: src/%.c | build
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+# Compile shared HTTP server (requires mongoose includes)
+$(HTTPSERVER_OBJ): $(SHARED_DIR)/src/sh_httpserver.c | build
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 build:

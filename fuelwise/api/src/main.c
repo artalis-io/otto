@@ -22,6 +22,7 @@
 #include "mongoose.h"
 #include "fuelwise.h"
 #include "shared.h"  /* For sh_ratelimit, sh_workqueue, sh_args */
+#include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
 
 /* ============================================================================
  * Configuration
@@ -64,6 +65,7 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     int completed;
+    volatile int cancelled;  /* Set by HTTP handler on timeout */
 } SolveWorkItem;
 
 /* Worker threads */
@@ -939,6 +941,17 @@ static void *worker_thread_fn(void *arg) {
             continue;
         }
 
+        /* Check if HTTP handler already timed out and cancelled */
+        if (work->cancelled) {
+            /* Clean up the cancelled work item */
+            free(work->request_body);
+            pthread_mutex_destroy(&work->mutex);
+            pthread_cond_destroy(&work->cond);
+            free(work);
+            sh_workqueue_item_free(item);
+            continue;
+        }
+
         /* Process based on type */
         int status_code = 200;
         char *response = NULL;
@@ -1152,7 +1165,8 @@ static void handle_via_queue(struct mg_connection *c, struct mg_http_message *hm
     while (!work->completed) {
         int rc = pthread_cond_timedwait(&work->cond, &work->mutex, &ts);
         if (rc != 0) {
-            /* Timeout */
+            /* Timeout - mark item as cancelled so worker can skip if not started */
+            work->cancelled = 1;
             pthread_mutex_unlock(&work->mutex);
             send_error(c, 504, "Gateway timeout");
             /* Note: work will be cleaned up when worker processes it */
@@ -1203,6 +1217,12 @@ static void handle_options(struct mg_connection *c) {
  * ============================================================================ */
 
 static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
+    /* Set socket write timeout on new connections to protect against slow clients */
+    if (ev == MG_EV_ACCEPT) {
+        sh_mg_set_write_timeout(c, 5000);  /* 5 second write timeout */
+        return;
+    }
+
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 

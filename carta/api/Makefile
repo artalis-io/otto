@@ -29,9 +29,12 @@ VENDOR_OBJS = $(VENDOR_DIR)/mongoose/mongoose.o \
               $(VENDOR_DIR)/miniz/miniz_tdef.o \
               $(VENDOR_DIR)/miniz/miniz_tinfl.o
 
+# Shared HTTP server (requires mongoose, compiled here not in libshared)
+HTTPSERVER_OBJ = $(BUILD_DIR)/sh_httpserver.o
+
 # Source files
 SRCS = $(SRC_DIR)/main.c
-OBJS = $(BUILD_DIR)/main.o
+OBJS = $(BUILD_DIR)/main.o $(HTTPSERVER_OBJ)
 
 # Target
 TARGET = carta-tile-server
@@ -56,6 +59,10 @@ $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+# Compile shared HTTP server (requires mongoose includes)
+$(HTTPSERVER_OBJ): $(SHARED_DIR)/src/sh_httpserver.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(TARGET): $(OBJS) $(VENDOR_OBJS)

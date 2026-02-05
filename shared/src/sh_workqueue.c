@@ -35,6 +35,7 @@ struct ShWorkQueue {
     uint64_t total_popped;
     uint64_t total_dropped;
     uint64_t total_expired;
+    uint64_t total_cancelled;
 };
 
 /* ============================================================================
@@ -341,6 +342,37 @@ double sh_workqueue_item_age(const ShWorkItem *item)
     return get_time_seconds() - item->enqueue_time;
 }
 
+void sh_workqueue_item_cancel(ShWorkQueue *queue, ShWorkItem *item)
+{
+    if (!item) return;
+
+    /* Use atomic store for thread safety (volatile + direct assignment is
+     * sufficient for single-word writes on most architectures, but we use
+     * __atomic_store_n for portability and explicit memory ordering) */
+#if defined(__GNUC__) || defined(__clang__)
+    __atomic_store_n(&item->cancelled, 1, __ATOMIC_RELEASE);
+#else
+    item->cancelled = 1;
+#endif
+
+    /* Update stats if queue provided */
+    if (queue) {
+        pthread_mutex_lock(&queue->mutex);
+        queue->total_cancelled++;
+        pthread_mutex_unlock(&queue->mutex);
+    }
+}
+
+int sh_workqueue_item_cancelled(const ShWorkItem *item)
+{
+    if (!item) return 0;
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_load_n(&item->cancelled, __ATOMIC_ACQUIRE);
+#else
+    return item->cancelled;
+#endif
+}
+
 void sh_workqueue_item_free(ShWorkItem *item)
 {
     if (!item) return;
@@ -363,6 +395,7 @@ void sh_workqueue_stats(ShWorkQueue *queue, ShWorkQueueStats *stats)
     stats->total_popped = queue->total_popped;
     stats->total_dropped = queue->total_dropped;
     stats->total_expired = queue->total_expired;
+    stats->total_cancelled = queue->total_cancelled;
     stats->timeout_sec = queue->timeout_sec;
     pthread_mutex_unlock(&queue->mutex);
 }

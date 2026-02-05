@@ -35,6 +35,7 @@
 #include "carta.h"
 #include "ct_cache.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue */
+#include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
 
 /* ============================================================================
  * Configuration
@@ -117,6 +118,7 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     int completed;
+    volatile int cancelled;  /* Set by HTTP handler on timeout */
 } RenderWorkItem;
 
 /* Render worker thread state */
@@ -475,8 +477,8 @@ static void *render_worker_fn(void *arg)
             continue;
         }
 
-        /* Check if request has expired */
-        if (sh_workqueue_item_expired(s_work_queue, queue_item)) {
+        /* Check if request has expired or was cancelled by HTTP handler timeout */
+        if (sh_workqueue_item_expired(s_work_queue, queue_item) || item->cancelled) {
             item->status_code = 504;  /* Gateway Timeout */
             strncpy(item->error_msg, "Request timeout",
                     sizeof(item->error_msg));
@@ -971,7 +973,8 @@ static int submit_render_work(struct mg_connection *c, RenderWorkItem *item)
     /* Wait for completion with timeout */
     double timeout = s_config.server.work_queue_timeout;
     if (!render_work_item_wait(item, timeout)) {
-        /* Timeout - request took too long */
+        /* Timeout - mark item as cancelled so worker can skip if not started */
+        item->cancelled = 1;
         mg_http_reply(c, 504,
             "Content-Type: text/plain\r\n"
             "Access-Control-Allow-Origin: *\r\n",
@@ -1358,6 +1361,12 @@ static int parse_tile_uri(struct mg_str uri, int *z, int *x, int *y, char *ext) 
  * ============================================================================ */
 
 static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
+    /* Set socket write timeout on new connections to protect against slow clients */
+    if (ev == MG_EV_ACCEPT) {
+        sh_mg_set_write_timeout(c, 5000);  /* 5 second write timeout */
+        return;
+    }
+
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
