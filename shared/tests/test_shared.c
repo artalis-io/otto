@@ -10,12 +10,15 @@
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
+#include "sh_completion.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
 #include <time.h>
+#include <unistd.h>
+#include <pthread.h>
 
 /* ============================================================================
  * Test Framework
@@ -1276,6 +1279,109 @@ TEST(workqueue_item_cancel_multiple_times)
 
     sh_workqueue_item_free(popped);
     sh_workqueue_free(queue);
+}
+
+/* ============================================================================
+ * Completion Signaling Tests
+ * ============================================================================ */
+
+TEST(completion_init_cleanup)
+{
+    ShCompletion comp;
+    sh_completion_init(&comp);
+    ASSERT_EQ(comp.completed, 0);
+    ASSERT_EQ(comp.cancelled, 0);
+    sh_completion_cleanup(&comp);
+}
+
+TEST(completion_init_null_safe)
+{
+    /* Should not crash */
+    sh_completion_init(NULL);
+    sh_completion_cleanup(NULL);
+}
+
+TEST(completion_signal_immediate)
+{
+    ShCompletion comp;
+    sh_completion_init(&comp);
+
+    /* Signal completion before wait */
+    sh_completion_signal(&comp);
+    ASSERT_EQ(comp.completed, 1);
+
+    /* Wait should return immediately */
+    int result = sh_completion_wait(&comp, 1000);
+    ASSERT_EQ(result, 1);
+
+    sh_completion_cleanup(&comp);
+}
+
+TEST(completion_cancel)
+{
+    ShCompletion comp;
+    sh_completion_init(&comp);
+
+    ASSERT_EQ(sh_completion_is_cancelled(&comp), 0);
+    sh_completion_cancel(&comp);
+    ASSERT_EQ(sh_completion_is_cancelled(&comp), 1);
+
+    sh_completion_cleanup(&comp);
+}
+
+TEST(completion_cancel_null_safe)
+{
+    /* Should not crash */
+    sh_completion_cancel(NULL);
+    ASSERT_EQ(sh_completion_is_cancelled(NULL), 0);
+}
+
+TEST(completion_signal_null_safe)
+{
+    /* Should not crash */
+    sh_completion_signal(NULL);
+}
+
+/* Worker thread for completion tests */
+static void *completion_worker_thread(void *arg)
+{
+    ShCompletion *comp = (ShCompletion *)arg;
+
+    /* Simulate some work */
+    usleep(50000);  /* 50ms */
+
+    /* Signal completion */
+    sh_completion_signal(comp);
+    return NULL;
+}
+
+TEST(completion_wait_success)
+{
+    ShCompletion comp;
+    sh_completion_init(&comp);
+
+    /* Start worker thread */
+    pthread_t worker;
+    pthread_create(&worker, NULL, completion_worker_thread, &comp);
+
+    /* Wait for completion with generous timeout */
+    int result = sh_completion_wait(&comp, 1000);
+    ASSERT_EQ(result, 1);  /* Should complete */
+
+    pthread_join(worker, NULL);
+    sh_completion_cleanup(&comp);
+}
+
+TEST(completion_wait_timeout)
+{
+    ShCompletion comp;
+    sh_completion_init(&comp);
+
+    /* Wait with short timeout - should fail (no one signals) */
+    int result = sh_completion_wait(&comp, 50);
+    ASSERT_EQ(result, 0);  /* Timeout */
+
+    sh_completion_cleanup(&comp);
 }
 
 /* ============================================================================
@@ -2690,6 +2796,16 @@ int main(void)
     RUN_TEST(workqueue_item_cancel_null_queue);
     RUN_TEST(workqueue_item_cancel_null_safety);
     RUN_TEST(workqueue_item_cancel_multiple_times);
+
+    printf("\nCompletion Signaling:\n");
+    RUN_TEST(completion_init_cleanup);
+    RUN_TEST(completion_init_null_safe);
+    RUN_TEST(completion_signal_immediate);
+    RUN_TEST(completion_cancel);
+    RUN_TEST(completion_cancel_null_safe);
+    RUN_TEST(completion_signal_null_safe);
+    RUN_TEST(completion_wait_success);
+    RUN_TEST(completion_wait_timeout);
 
     printf("\nCapacity Planning:\n");
     RUN_TEST(capacity_calculate_basic);
