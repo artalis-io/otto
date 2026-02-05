@@ -1153,13 +1153,77 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
     float tolerance = ct_simplify_tolerance(coord.z);
     float scale = (float)ctx->width / CT_MVT_EXTENT;
 
+    /* Clipping buffer: allow 64 pixels overshoot to avoid edge artifacts */
+    int clip_buffer = 64;
+
     for (size_t i = 0; i < count; i++) {
         CTFeature *f = &features[i];
 
         /* Fast batch coordinate transformation */
         ct_batch_transform_points(coord, CT_MVT_EXTENT, f->points, f->num_points);
 
-        /* Apply geometry simplification */
+        /* Clip polygons to tile bounds to prevent scanline fill artifacts.
+         * Large polygons that span multiple tiles cause precision issues
+         * when their edges extend thousands of pixels beyond the visible area. */
+        if (f->type == CT_GEOM_POLYGON && f->num_points >= 3) {
+            if (f->num_rings > 1 && f->ring_ends) {
+                /* Multipolygon with holes */
+                CTTilePoint *clipped_pts = NULL;
+                int clipped_count = 0;
+                int *clipped_ring_ends = NULL;
+                int clipped_num_rings = 0;
+
+                ct_clip_multipolygon(f->points, f->num_points,
+                                     f->ring_ends, f->num_rings,
+                                     CT_MVT_EXTENT, clip_buffer,
+                                     &clipped_pts, &clipped_count,
+                                     &clipped_ring_ends, &clipped_num_rings);
+
+                if (clipped_pts && clipped_count >= 3 && clipped_num_rings > 0) {
+                    /* Replace original with clipped geometry */
+                    free(f->points);
+                    free(f->ring_ends);
+                    f->points = clipped_pts;
+                    f->num_points = clipped_count;
+                    f->ring_ends = clipped_ring_ends;
+                    f->num_rings = clipped_num_rings;
+                } else {
+                    /* Polygon was clipped away entirely */
+                    free(clipped_pts);
+                    free(clipped_ring_ends);
+                    free(f->points);
+                    free(f->ring_ends);
+                    f->points = NULL;
+                    f->ring_ends = NULL;
+                    continue;
+                }
+            } else {
+                /* Simple polygon without holes */
+                CTTilePoint *clipped_pts = NULL;
+                int clipped_count = 0;
+
+                ct_clip_polygon(f->points, f->num_points,
+                               CT_MVT_EXTENT, clip_buffer,
+                               &clipped_pts, &clipped_count);
+
+                if (clipped_pts && clipped_count >= 3) {
+                    /* Replace original with clipped geometry */
+                    free(f->points);
+                    f->points = clipped_pts;
+                    f->num_points = clipped_count;
+                } else {
+                    /* Polygon was clipped away entirely */
+                    free(clipped_pts);
+                    free(f->points);
+                    free(f->ring_ends);
+                    f->points = NULL;
+                    f->ring_ends = NULL;
+                    continue;
+                }
+            }
+        }
+
+        /* Apply geometry simplification after clipping */
         if (f->num_points > 4) {
             if (f->type == CT_GEOM_POLYGON) {
                 /* Use ring-aware simplification for multipolygons */

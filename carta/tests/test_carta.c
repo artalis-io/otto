@@ -1269,6 +1269,212 @@ TEST(clip_linestring_crossing)
     return 1;
 }
 
+TEST(clip_multipolygon_with_hole)
+{
+    /* Multipolygon: outer square with inner hole, both crossing boundary */
+    CTTilePoint points[] = {
+        /* Outer ring: large square crossing left edge */
+        {-500, 100}, {500, 100}, {500, 600}, {-500, 600},
+        /* Inner hole: smaller square also crossing left edge */
+        {-200, 200}, {200, 200}, {200, 400}, {-200, 400}
+    };
+    int ring_ends[] = {4, 8};
+
+    CTTilePoint *out;
+    int out_count;
+    int *out_ring_ends;
+    int out_num_rings;
+
+    ct_clip_multipolygon(points, 8, ring_ends, 2, 4096, 0,
+                         &out, &out_count, &out_ring_ends, &out_num_rings);
+
+    /* Both rings should survive clipping */
+    ASSERT(out_num_rings == 2);
+    ASSERT(out_count >= 6);  /* At least 3 points per ring */
+
+    /* All output points should be within bounds */
+    for (int i = 0; i < out_count; i++) {
+        ASSERT(out[i].x >= 0);
+        ASSERT(out[i].x <= 4096);
+    }
+
+    /* Ring ends should be valid */
+    ASSERT(out_ring_ends[0] >= 3);
+    ASSERT(out_ring_ends[1] == out_count);
+
+    free(out);
+    free(out_ring_ends);
+    return 1;
+}
+
+TEST(clip_multipolygon_outer_only)
+{
+    /* Multipolygon where hole is entirely outside clip region */
+    CTTilePoint points[] = {
+        /* Outer ring: inside tile */
+        {100, 100}, {500, 100}, {500, 500}, {100, 500},
+        /* Inner hole: entirely outside (negative coords) */
+        {-500, -500}, {-100, -500}, {-100, -100}, {-500, -100}
+    };
+    int ring_ends[] = {4, 8};
+
+    CTTilePoint *out;
+    int out_count;
+    int *out_ring_ends;
+    int out_num_rings;
+
+    ct_clip_multipolygon(points, 8, ring_ends, 2, 4096, 0,
+                         &out, &out_count, &out_ring_ends, &out_num_rings);
+
+    /* Only outer ring should survive */
+    ASSERT(out_num_rings == 1);
+    ASSERT(out_count == 4);  /* Original 4 points of outer ring */
+
+    free(out);
+    free(out_ring_ends);
+    return 1;
+}
+
+TEST(clip_polygon_large_coordinates)
+{
+    /* Polygon with very large coordinates that span far beyond tile.
+     * This tests the fix for the scanline fill artifacts. */
+    CTTilePoint points[] = {
+        {-50000, -50000}, {10000, -50000}, {10000, 10000}, {-50000, 10000}
+    };
+    CTTilePoint *out;
+    int out_count;
+
+    ct_clip_polygon(points, 4, 4096, 64, &out, &out_count);
+
+    /* Should produce a valid polygon */
+    ASSERT(out_count >= 3);
+
+    /* All points should be within clipped bounds (extent + buffer) */
+    for (int i = 0; i < out_count; i++) {
+        ASSERT(out[i].x >= -64);
+        ASSERT(out[i].x <= 4096 + 64);
+        ASSERT(out[i].y >= -64);
+        ASSERT(out[i].y <= 4096 + 64);
+    }
+
+    free(out);
+    return 1;
+}
+
+TEST(clip_multipolygon_all_outside)
+{
+    /* Multipolygon entirely outside tile */
+    CTTilePoint points[] = {
+        {-1000, -1000}, {-100, -1000}, {-100, -100}, {-1000, -100}
+    };
+    int ring_ends[] = {4};
+
+    CTTilePoint *out;
+    int out_count;
+    int *out_ring_ends;
+    int out_num_rings;
+
+    ct_clip_multipolygon(points, 4, ring_ends, 1, 4096, 0,
+                         &out, &out_count, &out_ring_ends, &out_num_rings);
+
+    /* Should produce empty result */
+    ASSERT(out_num_rings == 0);
+    ASSERT(out_count == 0);
+
+    /* Should be safe to free even if NULL */
+    free(out);
+    free(out_ring_ends);
+    return 1;
+}
+
+TEST(simplify_line_collinear_points)
+{
+    /* Line with collinear points that should be removed */
+    CTTilePoint points[] = {
+        {0, 0}, {100, 0}, {200, 0}, {300, 0}, {400, 0}
+    };
+    int num_points = 5;
+
+    ct_simplify_line_inplace((CTTilePoint *)points, &num_points, 1.0f);
+
+    /* All middle points are collinear, only endpoints should remain */
+    ASSERT_EQ(num_points, 2);
+    ASSERT_EQ(points[0].x, 0);
+    ASSERT_EQ(points[1].x, 400);
+    return 1;
+}
+
+TEST(simplify_line_zigzag)
+{
+    /* Zigzag line that should be simplified based on tolerance */
+    CTTilePoint points[] = {
+        {0, 0}, {100, 50}, {200, 0}, {300, 50}, {400, 0}
+    };
+    int num_points = 5;
+
+    /* With high tolerance, should simplify to straight line */
+    ct_simplify_line_inplace((CTTilePoint *)points, &num_points, 100.0f);
+
+    ASSERT_EQ(num_points, 2);  /* Only endpoints */
+    return 1;
+}
+
+TEST(simplify_line_preserves_sharp_turns)
+{
+    /* Line with sharp turn that should be preserved */
+    CTTilePoint points[] = {
+        {0, 0}, {500, 0}, {500, 500}
+    };
+    int num_points = 3;
+
+    /* Low tolerance should preserve the turn */
+    ct_simplify_line_inplace((CTTilePoint *)points, &num_points, 1.0f);
+
+    ASSERT_EQ(num_points, 3);  /* All points preserved */
+    return 1;
+}
+
+TEST(simplify_poly_triangle)
+{
+    /* Triangle should not be simplified below 3 points */
+    CTTilePoint points[] = {
+        {0, 0}, {500, 0}, {250, 500}
+    };
+    int num_points = 3;
+
+    ct_simplify_poly_inplace((CTTilePoint *)points, &num_points, 100.0f);
+
+    /* Cannot simplify below 3 points for a valid polygon */
+    ASSERT(num_points >= 3);
+    return 1;
+}
+
+TEST(simplify_multipolygon_preserves_hole)
+{
+    /* Multipolygon with outer and inner ring */
+    CTTilePoint points[] = {
+        /* Outer: square */
+        {0, 0}, {1000, 0}, {1000, 1000}, {0, 1000},
+        /* Inner: small diamond (should not be simplified to < 3 points) */
+        {400, 500}, {500, 400}, {600, 500}, {500, 600}
+    };
+    int ring_ends[] = {4, 8};
+    int num_points = 8;
+    int num_rings = 2;
+
+    ct_simplify_multipolygon_inplace((CTTilePoint *)points, &num_points,
+                                      ring_ends, num_rings, 50.0f);
+
+    /* Both rings should survive (inner ring has significant curvature) */
+    ASSERT(num_points >= 6);  /* At least 3 per ring */
+    /* ring_ends[0] should be >= 3 (outer ring) */
+    ASSERT(ring_ends[0] >= 3);
+    /* ring_ends[1] (total) should equal num_points */
+    ASSERT(ring_ends[num_rings - 1] == num_points);
+    return 1;
+}
+
 /* ============================================================================
  * LOD Tests
  * ============================================================================ */
@@ -2165,6 +2371,15 @@ int main(void)
     run_test_clip_polygon_partial();
     run_test_clip_polygon_outside();
     run_test_clip_linestring_crossing();
+    run_test_clip_multipolygon_with_hole();
+    run_test_clip_multipolygon_outer_only();
+    run_test_clip_polygon_large_coordinates();
+    run_test_clip_multipolygon_all_outside();
+    run_test_simplify_line_collinear_points();
+    run_test_simplify_line_zigzag();
+    run_test_simplify_line_preserves_sharp_turns();
+    run_test_simplify_poly_triangle();
+    run_test_simplify_multipolygon_preserves_hole();
 
     printf("\nLOD:\n");
     run_test_lod_init_empty();

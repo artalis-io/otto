@@ -215,6 +215,29 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
                      CTTilePoint **out, int *out_count);
 
 /*
+ * Clip a multipolygon (polygon with holes) to tile bounds.
+ * Each ring is clipped independently using Sutherland-Hodgman.
+ *
+ * OWNERSHIP: Caller must free() both *out and *out_ring_ends arrays.
+ *
+ * @param points        Input points (in tile coordinates, borrowed)
+ * @param num_points    Number of input points
+ * @param ring_ends     Array of ring end indices (borrowed)
+ * @param num_rings     Number of rings
+ * @param extent        Tile extent
+ * @param buffer        Buffer around tile
+ * @param out           Output clipped points (caller owns, must free)
+ * @param out_count     Output point count
+ * @param out_ring_ends Output ring end indices (caller owns, must free)
+ * @param out_num_rings Output ring count
+ */
+void ct_clip_multipolygon(const CTTilePoint *points, int num_points,
+                          const int *ring_ends, int num_rings,
+                          int extent, int buffer,
+                          CTTilePoint **out, int *out_count,
+                          int **out_ring_ends, int *out_num_rings);
+
+/*
  * Simplify a linestring using Douglas-Peucker algorithm.
  *
  * OWNERSHIP: Caller must free() the *out array.

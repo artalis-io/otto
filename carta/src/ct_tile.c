@@ -590,6 +590,175 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
     free(output);
 }
 
+/*
+ * Clip a single ring using Sutherland-Hodgman, storing result directly
+ * into output arrays. Returns the number of points written.
+ */
+static int clip_ring_to_buffer(const CTTilePoint *points, int ring_start, int ring_count,
+                               int min, int max,
+                               CTTilePoint *out_points, int out_offset,
+                               int max_out_points)
+{
+    if (ring_count < 3) return 0;
+
+    /* Allocate temporary buffers for this ring (4x for potential growth) */
+    int buf_size = ring_count * 4;
+    CTTilePoint *input = malloc(buf_size * sizeof(CTTilePoint));
+    CTTilePoint *output = malloc(buf_size * sizeof(CTTilePoint));
+    if (!input || !output) {
+        free(input);
+        free(output);
+        return 0;
+    }
+
+    /* Copy ring to input buffer */
+    for (int i = 0; i < ring_count; i++) {
+        input[i] = points[ring_start + i];
+    }
+    int input_count = ring_count;
+
+    /* Clip against each edge (left, top, right, bottom) */
+    int edges[4][4] = {
+        {min, min, min, max},  /* Left */
+        {min, max, max, max},  /* Top */
+        {max, max, max, min},  /* Right */
+        {max, min, min, min}   /* Bottom */
+    };
+
+    for (int e = 0; e < 4; e++) {
+        if (input_count == 0) break;
+
+        int output_count = 0;
+        int x1 = edges[e][0], y1 = edges[e][1];
+        int x2 = edges[e][2], y2 = edges[e][3];
+
+        CTTilePoint prev = input[input_count - 1];
+
+        for (int i = 0; i < input_count; i++) {
+            CTTilePoint curr = input[i];
+
+            /* Check if points are inside edge */
+            int prev_inside = (x2 - x1) * (prev.y - y1) - (y2 - y1) * (prev.x - x1) <= 0;
+            int curr_inside = (x2 - x1) * (curr.y - y1) - (y2 - y1) * (curr.x - x1) <= 0;
+
+            if (curr_inside) {
+                if (!prev_inside) {
+                    /* Compute intersection */
+                    double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
+                    if (fabs(denom) > 1e-10 && output_count < buf_size) {
+                        double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
+                        output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
+                        output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
+                        output_count++;
+                    }
+                }
+                if (output_count < buf_size) {
+                    output[output_count++] = curr;
+                }
+            } else if (prev_inside) {
+                /* Compute intersection */
+                double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
+                if (fabs(denom) > 1e-10 && output_count < buf_size) {
+                    double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
+                    output[output_count].x = (int)(prev.x + t * (curr.x - prev.x));
+                    output[output_count].y = (int)(prev.y + t * (curr.y - prev.y));
+                    output_count++;
+                }
+            }
+
+            prev = curr;
+        }
+
+        /* Swap buffers */
+        CTTilePoint *tmp = input;
+        input = output;
+        output = tmp;
+        input_count = output_count;
+    }
+
+    /* Copy result to output buffer if we have a valid polygon */
+    int result_count = 0;
+    if (input_count >= 3 && out_offset + input_count <= max_out_points) {
+        for (int i = 0; i < input_count; i++) {
+            out_points[out_offset + i] = input[i];
+        }
+        result_count = input_count;
+    }
+
+    free(input);
+    free(output);
+    return result_count;
+}
+
+void ct_clip_multipolygon(const CTTilePoint *points, int num_points,
+                          const int *ring_ends, int num_rings,
+                          int extent, int buffer,
+                          CTTilePoint **out, int *out_count,
+                          int **out_ring_ends, int *out_num_rings)
+{
+    /* Initialize outputs */
+    *out = NULL;
+    *out_count = 0;
+    *out_ring_ends = NULL;
+    *out_num_rings = 0;
+
+    if (num_rings <= 0 || num_points < 3 || !ring_ends) return;
+
+    int min = -buffer;
+    int max = extent + buffer;
+
+    /* Allocate output buffers (worst case: each ring grows 4x) */
+    int max_out_points = num_points * 4;
+    CTTilePoint *out_pts = malloc(max_out_points * sizeof(CTTilePoint));
+    int *out_ends = malloc(num_rings * sizeof(int));
+    if (!out_pts || !out_ends) {
+        free(out_pts);
+        free(out_ends);
+        return;
+    }
+
+    int write_idx = 0;
+    int valid_rings = 0;
+
+    /* Clip each ring */
+    int ring_start = 0;
+    for (int r = 0; r < num_rings; r++) {
+        int ring_end = ring_ends[r];
+        int ring_count = ring_end - ring_start;
+
+        if (ring_count >= 3) {
+            int clipped_count = clip_ring_to_buffer(points, ring_start, ring_count,
+                                                     min, max,
+                                                     out_pts, write_idx,
+                                                     max_out_points);
+
+            if (clipped_count >= 3) {
+                write_idx += clipped_count;
+                out_ends[valid_rings] = write_idx;
+                valid_rings++;
+            }
+        }
+
+        ring_start = ring_end;
+    }
+
+    /* If no valid rings remain, return empty */
+    if (valid_rings == 0) {
+        free(out_pts);
+        free(out_ends);
+        return;
+    }
+
+    /* Shrink allocations to actual size */
+    CTTilePoint *final_pts = realloc(out_pts, write_idx * sizeof(CTTilePoint));
+    int *final_ends = realloc(out_ends, valid_rings * sizeof(int));
+
+    *out = final_pts ? final_pts : out_pts;
+    *out_count = write_idx;
+    *out_ring_ends = final_ends ? final_ends : out_ends;
+    *out_num_rings = valid_rings;
+}
+
 /* ============================================================================
  * Geometry Simplification (Douglas-Peucker)
  * ============================================================================ */
