@@ -93,6 +93,73 @@ int presolve_coefficient_reduction(PresolveContext *ctx);
 int presolve_probing(PresolveContext *ctx);
 int presolve_clique_detection(PresolveContext *ctx);
 
+/* Set covering/partitioning specific presolve */
+
+/*
+ * Essential set detection for SCP.
+ *
+ * If an element (constraint) is covered by only one set (variable),
+ * that set must be selected. Fixes the variable to 1 and propagates.
+ *
+ * For set covering (>=): reduces RHS and may remove constraint
+ * For set partitioning (=): reduces RHS to 0 and removes constraint
+ *
+ * Parameters:
+ *   ctx   - Presolve context with working model
+ *   model must have SCP structure (binary vars, 0-1 coefficients)
+ *
+ * Returns:
+ *   Number of variables fixed, or -1 if infeasible.
+ */
+int presolve_scp_essential_sets(PresolveContext *ctx);
+
+/*
+ * Row dominance reduction for SCP.
+ *
+ * For set covering (>=): row i dominates row j if every set covering i
+ * also covers j (and RHS[i] >= RHS[j]). The dominated row i can be removed.
+ *
+ * For set partitioning (=): dominance doesn't apply (exact coverage required).
+ *
+ * Parameters:
+ *   ctx - Presolve context
+ *
+ * Returns:
+ *   Number of rows removed, or -1 on error.
+ */
+int presolve_scp_row_dominance(PresolveContext *ctx);
+
+/*
+ * Column dominance reduction for SCP.
+ *
+ * Column j dominates column k if:
+ *   - Set j covers everything set k covers (column j >= column k elementwise)
+ *   - Cost c[j] <= c[k]
+ *
+ * The dominated column k can be fixed to 0.
+ *
+ * Parameters:
+ *   ctx - Presolve context
+ *
+ * Returns:
+ *   Number of variables fixed to 0, or -1 on error.
+ */
+int presolve_scp_column_dominance(PresolveContext *ctx);
+
+/*
+ * Combined SCP presolve pass.
+ *
+ * Runs essential sets, row dominance, and column dominance
+ * iteratively until no more reductions are found.
+ *
+ * Parameters:
+ *   ctx - Presolve context
+ *
+ * Returns:
+ *   Total reductions made, or -1 if infeasible.
+ */
+int presolve_scp(PresolveContext *ctx);
+
 /* Utility */
 void presolve_compute_implied_bounds(PresolveContext *ctx);
 
