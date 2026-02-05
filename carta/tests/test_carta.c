@@ -203,6 +203,108 @@ TEST(mercator_roundtrip)
     return 1;
 }
 
+/*
+ * Regression test: batch transform must match direct calculation.
+ * Bug fix: The Mercator LUT was using inconsistent formulas between
+ * initialization (bin centers) and lookup (edge-to-edge), causing
+ * ~50 pixel offset at mid-latitudes like Budapest (47°N).
+ */
+TEST(batch_transform_matches_direct)
+{
+    /* Test at Budapest - where the bug was most visible */
+    double lat = 47.4979;
+    double lon = 19.0402;
+    int zoom = 12;
+    int extent = 4096;
+
+    /* Get tile coordinates */
+    int tile_x, tile_y;
+    ct_latlon_to_tile(lat, lon, zoom, &tile_x, &tile_y);
+    CTTileCoord coord = {zoom, tile_x, tile_y};
+
+    /* Direct calculation */
+    int px_direct, py_direct;
+    ct_latlon_to_tile_pixel(lat, lon, coord, extent, &px_direct, &py_direct);
+
+    /* Batch transform (uses Mercator LUT) */
+    CTTilePoint point;
+    point.x = (int32_t)(lon * 1e7);  /* nanodegrees */
+    point.y = (int32_t)(lat * 1e7);
+    ct_batch_transform_points(coord, extent, &point, 1);
+
+    /* Must match within 1 pixel (rounding tolerance) */
+    ASSERT(abs(point.x - px_direct) <= 1);
+    ASSERT(abs(point.y - py_direct) <= 1);
+    return 1;
+}
+
+/*
+ * Test batch transform at multiple latitudes to ensure LUT consistency.
+ * The LUT covers [-85.051, 85.051] degrees - test across the range.
+ */
+TEST(batch_transform_latitude_range)
+{
+    double test_lats[] = {-60.0, -30.0, 0.0, 30.0, 47.5, 60.0, 80.0};
+    double lon = 10.0;
+    int zoom = 10;
+    int extent = 4096;
+
+    for (int i = 0; i < 7; i++) {
+        double lat = test_lats[i];
+
+        int tile_x, tile_y;
+        ct_latlon_to_tile(lat, lon, zoom, &tile_x, &tile_y);
+        CTTileCoord coord = {zoom, tile_x, tile_y};
+
+        /* Direct calculation */
+        int px_direct, py_direct;
+        ct_latlon_to_tile_pixel(lat, lon, coord, extent, &px_direct, &py_direct);
+
+        /* Batch transform */
+        CTTilePoint point;
+        point.x = (int32_t)(lon * 1e7);
+        point.y = (int32_t)(lat * 1e7);
+        ct_batch_transform_points(coord, extent, &point, 1);
+
+        /* Must match within 1 pixel at all latitudes */
+        ASSERT(abs(point.x - px_direct) <= 1);
+        ASSERT(abs(point.y - py_direct) <= 1);
+    }
+    return 1;
+}
+
+/*
+ * Test batch transform at different zoom levels.
+ * Higher zoom = more pixels = more sensitive to LUT errors.
+ */
+TEST(batch_transform_zoom_levels)
+{
+    double lat = 47.5;
+    double lon = 19.0;
+    int extent = 4096;
+
+    for (int zoom = 4; zoom <= 18; zoom += 2) {
+        int tile_x, tile_y;
+        ct_latlon_to_tile(lat, lon, zoom, &tile_x, &tile_y);
+        CTTileCoord coord = {zoom, tile_x, tile_y};
+
+        /* Direct calculation */
+        int px_direct, py_direct;
+        ct_latlon_to_tile_pixel(lat, lon, coord, extent, &px_direct, &py_direct);
+
+        /* Batch transform */
+        CTTilePoint point;
+        point.x = (int32_t)(lon * 1e7);
+        point.y = (int32_t)(lat * 1e7);
+        ct_batch_transform_points(coord, extent, &point, 1);
+
+        /* Must match within 1 pixel at all zoom levels */
+        ASSERT(abs(point.x - px_direct) <= 1);
+        ASSERT(abs(point.y - py_direct) <= 1);
+    }
+    return 1;
+}
+
 /* ============================================================================
  * Tile Management Tests
  * ============================================================================ */
@@ -1899,6 +2001,11 @@ int main(void)
     printf("\nWeb Mercator:\n");
     run_test_mercator_origin();
     run_test_mercator_roundtrip();
+
+    printf("\nBatch Transform:\n");
+    run_test_batch_transform_matches_direct();
+    run_test_batch_transform_latitude_range();
+    run_test_batch_transform_zoom_levels();
 
     printf("\nTile Management:\n");
     run_test_tile_init();
