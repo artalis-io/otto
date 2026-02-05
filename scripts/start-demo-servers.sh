@@ -160,7 +160,7 @@ else
     # Remove invalid/truncated file if it exists
     [ -f "$CARTA_IDX" ] && rm -f "$CARTA_IDX"
     echo -e "  ${YELLOW}Building Carta index (this may take a while)...${NC}"
-    ./carta/api/carta-tile-server --lod default --save-index "$CARTA_IDX" "$PBF_FILE" >/dev/null 2>&1 &
+    ./carta/api/carta-tile-server --no-lod --save-index "$CARTA_IDX" "$PBF_FILE" >/dev/null 2>&1 &
     CARTA_BUILD_PID=$!
 
     echo -n "  "

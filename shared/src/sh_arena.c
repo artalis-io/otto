@@ -40,6 +40,10 @@ void *sh_arena_alloc(SHArena *arena, size_t size)
 
 void *sh_arena_calloc(SHArena *arena, size_t count, size_t size)
 {
+    /* Check for integer overflow before multiplication */
+    if (size > 0 && count > SIZE_MAX / size) {
+        return NULL;
+    }
     size_t total = count * size;
     void *ptr = sh_arena_alloc(arena, total);
     if (ptr) {

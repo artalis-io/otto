@@ -20,6 +20,13 @@
 
 /* ============================================================================
  * Thread-Local Storage
+ *
+ * DESIGN NOTE: Thread-local storage keys must be global by definition. The
+ * actual trace data is per-thread (not shared). This is an accepted exception
+ * to the "no static state in libraries" rule, as TLS keys are inherently global.
+ *
+ * Thread safety: pthread_key_create is called once via pthread_once. TLS access
+ * is thread-safe by design.
  * ============================================================================ */
 
 static pthread_key_t s_trace_key;
@@ -53,7 +60,14 @@ static void get_random_bytes(void *buf, size_t len) {
         if (n == len) return;
     }
 
-    /* Last resort: use time-based PRNG (not cryptographically secure) */
+    /*
+     * Last resort: use time-based PRNG (not cryptographically secure).
+     *
+     * SECURITY NOTE: This fallback uses a weak LCG PRNG. This is acceptable
+     * for trace IDs which only need uniqueness, not unpredictability. Trace
+     * IDs are not used for security purposes (auth tokens, session IDs, etc.).
+     * If getentropy and /dev/urandom both fail, system is likely misconfigured.
+     */
     static unsigned int seed = 0;
     if (seed == 0) {
         seed = (unsigned int)time(NULL) ^ (unsigned int)pthread_self();

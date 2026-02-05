@@ -29,6 +29,12 @@ static void create_trace_id_key(void) {
 
 /* ============================================================================
  * Global State
+ *
+ * DESIGN NOTE: Logging is an intentional singleton. Multiple logger instances
+ * would cause interleaved output and inconsistent configuration. This is an
+ * accepted exception to the "no static state in libraries" rule.
+ *
+ * Thread safety: All access to s_config protected by s_log_mutex.
  * ============================================================================ */
 
 static pthread_mutex_t s_log_mutex = PTHREAD_MUTEX_INITIALIZER;

@@ -19,6 +19,13 @@
 
 /* ============================================================================
  * Configuration and State
+ *
+ * DESIGN NOTE: Metrics collection is an intentional singleton. Aggregating
+ * metrics requires a central registry, and multiple instances would fragment
+ * data. This is an accepted exception to the "no static state in libraries"
+ * rule.
+ *
+ * Thread safety: All access to metrics protected by s_mutex.
  * ============================================================================ */
 
 static pthread_mutex_t s_mutex = PTHREAD_MUTEX_INITIALIZER;

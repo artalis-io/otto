@@ -858,18 +858,34 @@ static int solve_root_node(MIPSolver *solver) {
         root->ub[j] = model->ub[j];
     }
 
-    /* Solve initial LP relaxation */
-    solver->lp_solver = simplex_create(solver->working_model);
-    if (!solver->lp_solver) {
-        bb_node_pool_return(solver->node_pool, root);
-        return -1;
+    /* Solve initial LP relaxation - use LAP solver if detected */
+    int root_lp_solved = 0;
+
+    if (solver->use_lap_solver && solver->lap_sig) {
+        /* Use LAP solver for root LP */
+        if (solve_node_lp_as_lap(solver, root) == 0) {
+            root_lp_solved = 1;
+            if (solver->verbose) {
+                printf("Root LP solved with LAP solver\n");
+            }
+        }
+        /* If LAP fails, fall through to simplex */
     }
 
-    /* Disable scaling for MIP - cuts are generated from tableau which would need unscaling */
-    solver->lp_solver->scaling = 0;
-    solver->lp_solver->verbose = solver->verbose;
+    if (!root_lp_solved) {
+        /* Use standard simplex for root LP */
+        solver->lp_solver = simplex_create(solver->working_model);
+        if (!solver->lp_solver) {
+            bb_node_pool_return(solver->node_pool, root);
+            return -1;
+        }
 
-    simplex_solve(solver->lp_solver);
+        /* Disable scaling for MIP - cuts are generated from tableau which would need unscaling */
+        solver->lp_solver->scaling = 0;
+        solver->lp_solver->verbose = solver->verbose;
+
+        simplex_solve(solver->lp_solver);
+    }
 
     if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL) {
         solver->status = solver->lp_solver->status;
