@@ -26,6 +26,7 @@ SRCS = src/sh_geo.c \
        src/sh_ratelimit.c \
        src/sh_workqueue.c \
        src/sh_completion.c \
+       src/sh_worker_pool.c \
        src/sh_capacity.c \
        src/sh_args.c \
        src/sh_circuit.c \
@@ -115,6 +116,7 @@ src/sh_pool.o: include/sh_pool.h
 src/sh_ratelimit.o: include/sh_ratelimit.h
 src/sh_workqueue.o: include/sh_workqueue.h
 src/sh_completion.o: include/sh_completion.h
+src/sh_worker_pool.o: include/sh_worker_pool.h include/sh_workqueue.h
 src/sh_capacity.o: include/sh_capacity.h
 src/sh_args.o: include/sh_args.h
 src/sh_circuit.o: include/sh_circuit.h
