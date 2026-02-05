@@ -12,6 +12,20 @@
 /* Maximum entities to process per n-gram (skip overly common trigrams) */
 #define LC_NGRAM_MAX_POSTING_SIZE 50000
 
+/* Hash table size for O(1) lookups during indexing */
+#define LC_NGRAM_HASH_SIZE 65536
+
+/* FNV-1a hash for trigrams */
+static uint32_t ngram_hash(const char *ngram)
+{
+    uint32_t hash = 2166136261u;
+    for (int i = 0; i < LC_NGRAM_SIZE && ngram[i]; i++) {
+        hash ^= (uint8_t)ngram[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
 /* ============================================================================
  * N-gram Generation
  * ============================================================================ */
@@ -59,14 +73,42 @@ LCNgramIndex *lc_ngram_create(void)
         return NULL;
     }
 
-    idx->memory_used = sizeof(LCNgramIndex) + idx->capacity * sizeof(LCNgramEntry);
+    /* Allocate hash table for O(1) lookups during indexing */
+    idx->hash_size = LC_NGRAM_HASH_SIZE;
+    idx->hash_table = calloc(idx->hash_size, sizeof(LCNgramBucket *));
+    if (!idx->hash_table) {
+        free(idx->entries);
+        free(idx);
+        return NULL;
+    }
+
+    idx->memory_used = sizeof(LCNgramIndex) + idx->capacity * sizeof(LCNgramEntry) +
+                       idx->hash_size * sizeof(LCNgramBucket *);
     return idx;
+}
+
+/* Free hash table buckets */
+static void free_hash_table(LCNgramIndex *idx)
+{
+    if (!idx->hash_table) return;
+
+    for (uint32_t i = 0; i < idx->hash_size; i++) {
+        LCNgramBucket *bucket = idx->hash_table[i];
+        while (bucket) {
+            LCNgramBucket *next = bucket->next;
+            free(bucket);
+            bucket = next;
+        }
+    }
+    free(idx->hash_table);
+    idx->hash_table = NULL;
 }
 
 void lc_ngram_free(LCNgramIndex *idx)
 {
     if (!idx) return;
 
+    free_hash_table(idx);
     for (uint32_t i = 0; i < idx->num_entries; i++) {
         free(idx->entries[i].entity_ids);
     }
@@ -76,11 +118,15 @@ void lc_ngram_free(LCNgramIndex *idx)
 
 static LCNgramEntry *find_or_create_entry(LCNgramIndex *idx, const char *ngram)
 {
-    /* Linear search for now (will use binary search after build) */
-    for (uint32_t i = 0; i < idx->num_entries; i++) {
-        if (strcmp(idx->entries[i].ngram, ngram) == 0) {
-            return &idx->entries[i];
+    /* Hash table lookup: O(1) average case */
+    uint32_t hash = ngram_hash(ngram) % idx->hash_size;
+    LCNgramBucket *bucket = idx->hash_table[hash];
+
+    while (bucket) {
+        if (strcmp(idx->entries[bucket->entry_idx].ngram, ngram) == 0) {
+            return &idx->entries[bucket->entry_idx];
         }
+        bucket = bucket->next;
     }
 
     /* Create new entry */
@@ -91,10 +137,12 @@ static LCNgramEntry *find_or_create_entry(LCNgramIndex *idx, const char *ngram)
         idx->entries = new_entries;
         memset(idx->entries + idx->capacity, 0, (new_capacity - idx->capacity) * sizeof(LCNgramEntry));
         idx->capacity = new_capacity;
-        idx->memory_used = sizeof(LCNgramIndex) + idx->capacity * sizeof(LCNgramEntry);
+        idx->memory_used = sizeof(LCNgramIndex) + idx->capacity * sizeof(LCNgramEntry) +
+                           idx->hash_size * sizeof(LCNgramBucket *);
     }
 
-    LCNgramEntry *entry = &idx->entries[idx->num_entries++];
+    uint32_t entry_idx = idx->num_entries++;
+    LCNgramEntry *entry = &idx->entries[entry_idx];
     strncpy(entry->ngram, ngram, LC_NGRAM_SIZE);
     entry->ngram[LC_NGRAM_SIZE] = '\0';
     entry->capacity = 8;
@@ -105,17 +153,46 @@ static LCNgramEntry *find_or_create_entry(LCNgramIndex *idx, const char *ngram)
     }
     idx->memory_used += entry->capacity * sizeof(uint32_t);
 
+    /* Add to hash table */
+    LCNgramBucket *new_bucket = malloc(sizeof(LCNgramBucket));
+    if (new_bucket) {
+        new_bucket->entry_idx = entry_idx;
+        new_bucket->next = idx->hash_table[hash];
+        idx->hash_table[hash] = new_bucket;
+        idx->memory_used += sizeof(LCNgramBucket);
+    }
+
     return entry;
+}
+
+/* Binary search for entity_id in sorted array. Returns index if found, or
+ * insertion point (bitwise complement) if not found. */
+static int32_t entity_binary_search(const uint32_t *ids, uint32_t count, uint32_t entity_id)
+{
+    int32_t left = 0;
+    int32_t right = (int32_t)count - 1;
+
+    while (left <= right) {
+        int32_t mid = (left + right) / 2;
+        if (ids[mid] == entity_id) {
+            return mid;  /* Found */
+        } else if (ids[mid] < entity_id) {
+            left = mid + 1;
+        } else {
+            right = mid - 1;
+        }
+    }
+    return ~left;  /* Not found, return insertion point */
 }
 
 static LCStatus entry_add_entity(LCNgramEntry *entry, uint32_t entity_id)
 {
-    /* Check if already present */
-    for (uint32_t i = 0; i < entry->count; i++) {
-        if (entry->entity_ids[i] == entity_id) {
-            return LC_OK;
-        }
+    /* Binary search for duplicate check: O(log n) */
+    int32_t pos = entity_binary_search(entry->entity_ids, entry->count, entity_id);
+    if (pos >= 0) {
+        return LC_OK;  /* Already present */
     }
+    uint32_t insert_pos = (uint32_t)~pos;
 
     /* Grow if needed */
     if (entry->count >= entry->capacity) {
@@ -126,7 +203,14 @@ static LCStatus entry_add_entity(LCNgramEntry *entry, uint32_t entity_id)
         entry->capacity = new_capacity;
     }
 
-    entry->entity_ids[entry->count++] = entity_id;
+    /* Shift elements to make room for insertion (maintain sorted order) */
+    if (insert_pos < entry->count) {
+        memmove(&entry->entity_ids[insert_pos + 1],
+                &entry->entity_ids[insert_pos],
+                (entry->count - insert_pos) * sizeof(uint32_t));
+    }
+    entry->entity_ids[insert_pos] = entity_id;
+    entry->count++;
     return LC_OK;
 }
 
@@ -164,7 +248,12 @@ static int entry_compare(const void *a, const void *b)
 void lc_ngram_build(LCNgramIndex *idx)
 {
     if (!idx || idx->num_entries == 0) return;
+
+    /* Sort entries for binary search during queries */
     qsort(idx->entries, idx->num_entries, sizeof(LCNgramEntry), entry_compare);
+
+    /* Free hash table - only needed during indexing, saves memory */
+    free_hash_table(idx);
 }
 
 /* Binary search for an ngram entry */

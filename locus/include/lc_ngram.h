@@ -37,12 +37,22 @@ typedef struct {
  * N-gram Index
  * ============================================================================ */
 
+/* Hash table bucket for O(1) lookup during indexing */
+typedef struct LCNgramBucket {
+    uint32_t entry_idx;         /* Index into entries array */
+    struct LCNgramBucket *next; /* Collision chain */
+} LCNgramBucket;
+
 typedef struct {
-    LCNgramEntry *entries;      /* Sorted by ngram for binary search */
+    LCNgramEntry *entries;      /* Sorted by ngram for binary search (after build) */
     uint32_t num_entries;
     uint32_t capacity;
     uint32_t max_entity_id;     /* For allocating hit buffer */
     size_t memory_used;
+
+    /* Hash table for O(1) lookups during indexing (freed after build) */
+    LCNgramBucket **hash_table;
+    uint32_t hash_size;
 } LCNgramIndex;
 
 /* ============================================================================
