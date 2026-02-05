@@ -94,11 +94,13 @@ static pthread_once_t mercator_lut_once = PTHREAD_ONCE_INIT;
 
 /*
  * Initialize the Mercator lookup table (thread-safe via pthread_once).
+ * Index i corresponds to lat = MIN + i * RANGE / (SIZE - 1)
+ * so index 0 = MIN, index SIZE-1 = MAX.
  */
 static void mercator_lut_init_impl(void)
 {
     for (int i = 0; i < MERCATOR_LUT_SIZE; i++) {
-        double lat = MERCATOR_LAT_MIN + (i + 0.5) * MERCATOR_LAT_RANGE / MERCATOR_LUT_SIZE;
+        double lat = MERCATOR_LAT_MIN + (double)i * MERCATOR_LAT_RANGE / (MERCATOR_LUT_SIZE - 1);
         double lat_rad = lat * CT_PI / 180.0;
         mercator_lut[i] = log(tan(lat_rad) + 1.0 / cos(lat_rad));
     }
