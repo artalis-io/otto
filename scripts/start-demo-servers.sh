@@ -215,49 +215,16 @@ else
     # Remove invalid/truncated file if it exists
     [ -f "$LOCUS_IDX" ] && rm -f "$LOCUS_IDX"
     echo -e "  ${YELLOW}Building Locus index (this may take a while)...${NC}"
-    # Build index and save it - runs in background
-    ./locus/api/locus-geocoder -s "$LOCUS_IDX" "$PBF_FILE" >/dev/null 2>&1 &
-    LOCUS_BUILD_PID=$!
-
-    # Wait for index file to be created (poll for file existence)
+    # Build index and save it - runs synchronously with --build-only (exits after saving)
     echo -n "  "
-    while [ ! -f "$LOCUS_IDX" ]; do
-        if ! kill -0 $LOCUS_BUILD_PID 2>/dev/null; then
-            echo ""
-            echo -e "  ${RED}Locus build failed${NC}"
-            break
-        fi
+    ./locus/api/locus-geocoder --build-only -s "$LOCUS_IDX" "$PBF_FILE" 2>&1 | while read line; do
         printf "."
-        sleep 5
     done
-
-    # Index file created - wait for write to complete
-    if [ -f "$LOCUS_IDX" ]; then
-        echo ""
-        echo -n "  Writing"
-        PREV_SIZE=0
-        STABLE_COUNT=0
-        while [ $STABLE_COUNT -lt 3 ]; do
-            if ! kill -0 $LOCUS_BUILD_PID 2>/dev/null; then
-                # Process exited - file should be complete
-                break
-            fi
-            CURR_SIZE=$(get_file_size "$LOCUS_IDX")
-            if [ "$CURR_SIZE" = "$PREV_SIZE" ]; then
-                STABLE_COUNT=$((STABLE_COUNT + 1))
-            else
-                STABLE_COUNT=0
-                PREV_SIZE=$CURR_SIZE
-            fi
-            printf "."
-            sleep 2
-        done
-        echo ""
-        echo -e "  ${GREEN}Built: $LOCUS_IDX ($(numfmt --to=iec-i --suffix=B $CURR_SIZE 2>/dev/null || echo "${CURR_SIZE} bytes"))${NC}"
-        kill $LOCUS_BUILD_PID 2>/dev/null || true
-        sleep 1
+    echo ""
+    if is_valid_index "$LOCUS_IDX" 102400; then
+        LOCUS_SIZE=$(get_file_size "$LOCUS_IDX")
+        echo -e "  ${GREEN}Built: $LOCUS_IDX ($(numfmt --to=iec-i --suffix=B $LOCUS_SIZE 2>/dev/null || echo "${LOCUS_SIZE} bytes"))${NC}"
     else
-        echo ""
         echo -e "  ${YELLOW}Index not created, using PBF directly${NC}"
     fi
 fi
