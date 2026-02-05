@@ -2319,32 +2319,92 @@ CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord
         }
 
         free(candidates);
-        return CT_OK;
-    }
+    } else {
+        /* Fallback: linear scan (O(n)) for ways */
+        for (size_t i = 0; i < ctx->num_ways; i++) {
+            const CTOSMWay *way = &ctx->ways[i];
 
-    /* Fallback: linear scan (O(n)) */
-    for (size_t i = 0; i < ctx->num_ways; i++) {
-        const CTOSMWay *way = &ctx->ways[i];
+            /* Quick bbox check first */
+            int intersects = 0;
+            for (int j = 0; j < way->num_coords; j++) {
+                if (way->coords[j].lat >= bbox.min_lat &&
+                    way->coords[j].lat <= bbox.max_lat &&
+                    way->coords[j].lon >= bbox.min_lon &&
+                    way->coords[j].lon <= bbox.max_lon) {
+                    intersects = 1;
+                    break;
+                }
+            }
+            if (!intersects) continue;
 
-        /* Quick bbox check first */
-        int intersects = 0;
-        for (int j = 0; j < way->num_coords; j++) {
-            if (way->coords[j].lat >= bbox.min_lat &&
-                way->coords[j].lat <= bbox.max_lat &&
-                way->coords[j].lon >= bbox.min_lon &&
-                way->coords[j].lon <= bbox.max_lon) {
-                intersects = 1;
-                break;
+            CTStatus status = add_way_with_lod(way, lod, zoom, features, count, &capacity);
+            if (status != CT_OK) {
+                free(*features);
+                *features = NULL;
+                *count = 0;
+                return status;
             }
         }
-        if (!intersects) continue;
+    }
 
-        CTStatus status = add_way_with_lod(way, lod, zoom, features, count, &capacity);
-        if (status != CT_OK) {
-            free(*features);
-            *features = NULL;
-            *count = 0;
-            return status;
+    /* Add multipolygon features with LOD filtering */
+    if (ctx->mp_rtree) {
+        /* Use R-Tree for fast multipolygon lookup */
+        size_t max_mp = ctx->num_multipolygons;
+        uint32_t *mp_candidates = malloc(max_mp * sizeof(uint32_t));
+        if (mp_candidates) {
+            size_t num_mp = ct_rtree_query(ctx->mp_rtree, bbox, mp_candidates, max_mp);
+            for (size_t i = 0; i < num_mp; i++) {
+                uint32_t mp_idx = mp_candidates[i];
+                if (mp_idx >= ctx->num_multipolygons) continue;
+
+                const CTAssembledMultipolygon *mp = &ctx->multipolygons[mp_idx];
+
+                /* LOD filter for multipolygons */
+                CTLayer layer = layer_from_osm_class(mp->feature_class);
+                if (!ct_lod_is_visible(lod, layer, mp->feature_type,
+                                       zoom, mp->area_sqm, 0)) {
+                    continue;
+                }
+
+                CTStatus status = add_multipolygon_as_feature(mp, features, count, &capacity);
+                if (status != CT_OK) {
+                    free(mp_candidates);
+                    free(*features);
+                    *features = NULL;
+                    *count = 0;
+                    return status;
+                }
+            }
+            free(mp_candidates);
+        }
+    } else {
+        /* Fallback: linear scan for multipolygons */
+        for (size_t i = 0; i < ctx->num_multipolygons; i++) {
+            const CTAssembledMultipolygon *mp = &ctx->multipolygons[i];
+
+            /* Quick bbox check */
+            if (mp->bbox.max_lat < bbox.min_lat ||
+                mp->bbox.min_lat > bbox.max_lat ||
+                mp->bbox.max_lon < bbox.min_lon ||
+                mp->bbox.min_lon > bbox.max_lon) {
+                continue;
+            }
+
+            /* LOD filter for multipolygons */
+            CTLayer layer = layer_from_osm_class(mp->feature_class);
+            if (!ct_lod_is_visible(lod, layer, mp->feature_type,
+                                   zoom, mp->area_sqm, 0)) {
+                continue;
+            }
+
+            CTStatus status = add_multipolygon_as_feature(mp, features, count, &capacity);
+            if (status != CT_OK) {
+                free(*features);
+                *features = NULL;
+                *count = 0;
+                return status;
+            }
         }
     }
 
