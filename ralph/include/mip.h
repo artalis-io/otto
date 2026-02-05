@@ -27,7 +27,8 @@ typedef enum {
     VAR_SELECT_MAX_INFEAS = 0,
     VAR_SELECT_PSEUDO_COST = 1,
     VAR_SELECT_STRONG_BRANCH = 2,
-    VAR_SELECT_RELIABILITY = 3
+    VAR_SELECT_RELIABILITY = 3,
+    VAR_SELECT_SCP = 4          /* SCP-specific constraint branching */
 } VarSelectStrategy;
 
 /* Branch direction */
@@ -218,6 +219,69 @@ int strong_branch(MIPSolver *solver, int var, double val,
 void update_pseudo_costs(MIPSolver *solver, int var, double val,
                         double parent_obj, double child_obj, BranchDir dir);
 double estimate_branch_obj(MIPSolver *solver, int var, double val, BranchDir dir);
+
+/* SCP-specific branching (Phase 5) */
+
+/*
+ * Initialize pseudo-costs using SCP structure.
+ *
+ * For SCP, use cost/coverage ratio as initial estimate:
+ *   pseudo_cost_down[j] = c[j] / set_size[j]  (cost per element lost)
+ *   pseudo_cost_up[j] = c[j] / set_size[j]    (cost per element gained)
+ *
+ * This provides better initial estimates than default 1.0 values.
+ *
+ * Parameters:
+ *   solver - MIP solver with SCP structure
+ *
+ * Returns:
+ *   0 on success, -1 if not an SCP model.
+ */
+int init_pseudo_costs_scp(MIPSolver *solver);
+
+/*
+ * Select branching variable using SCP constraint branching.
+ *
+ * Instead of branching on the most fractional variable, this:
+ * 1. Finds the element (constraint) with most fractional coverage
+ * 2. Returns the covering set with highest LP value
+ *
+ * This tends to make better branching decisions for SCP because:
+ * - Elements with fractional coverage are the "bottleneck"
+ * - Branching on high LP-value sets has more impact
+ *
+ * Parameters:
+ *   solver   - MIP solver
+ *   solution - Current LP solution
+ *   element  - Output: element with most fractional coverage (-1 if none)
+ *   set      - Output: best set to branch on
+ *
+ * Returns:
+ *   0 on success with valid branching decision, -1 if no branching needed.
+ */
+int select_scp_branch(MIPSolver *solver, const double *solution,
+                      int *element, int *set);
+
+/*
+ * Select branching variable using SOS1 structure for SPP.
+ *
+ * For set partitioning (Ax = 1), each element defines an SOS1 constraint:
+ * exactly one of the covering sets must be selected.
+ *
+ * This function:
+ * 1. Finds an element with fractional coverage
+ * 2. Partitions covering sets into two groups by LP value
+ * 3. Returns the set at the partition boundary
+ *
+ * Parameters:
+ *   solver   - MIP solver with SPP structure
+ *   solution - Current LP solution
+ *   set      - Output: set to branch on
+ *
+ * Returns:
+ *   0 on success, -1 if not applicable or no branching needed.
+ */
+int select_sos1_branch_spp(MIPSolver *solver, const double *solution, int *set);
 
 /* Cutting planes */
 CutPool* cut_pool_create(int capacity);

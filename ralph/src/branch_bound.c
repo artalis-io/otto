@@ -732,6 +732,17 @@ int select_branch_variable(MIPSolver *solver, const double *solution, int *branc
         case VAR_SELECT_RELIABILITY:
             *branch_var = select_reliability_branch(solver, solution);
             break;
+        case VAR_SELECT_SCP: {
+            /* SCP constraint branching */
+            int element, set;
+            if (select_scp_branch(solver, solution, &element, &set) == 0) {
+                *branch_var = set;
+            } else {
+                /* Fall back to most infeasible if SCP branching fails */
+                *branch_var = select_most_infeasible(solver, solution);
+            }
+            break;
+        }
         default:
             *branch_var = select_most_infeasible(solver, solution);
     }
@@ -1356,6 +1367,284 @@ int heuristic_scp(MIPSolver *solver, const double *lp_solution, double *solution
     heuristic_local_search_scp(solver, solution);
 
     return 0;
+}
+
+/* ============================================================================
+ * SCP-Specific Branching (Phase 5)
+ * ============================================================================ */
+
+/*
+ * Initialize pseudo-costs for SCP using cost/coverage ratio.
+ */
+int init_pseudo_costs_scp(MIPSolver *solver) {
+    if (!solver) return -1;
+
+    LPModel *model = solver->original_model;
+    if (!is_scp_model(model)) return -1;
+
+    int n = model->num_vars;
+    SparseMatrix *A = model->A;
+
+    /* Compute set sizes (number of elements each set covers) */
+    for (int j = 0; j < n; j++) {
+        int set_size = 0;
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            if (fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                set_size++;
+            }
+        }
+
+        if (set_size > 0) {
+            /* Cost per element: good estimate for branching impact */
+            double cost_per_elem = model->c[j] / (double)set_size;
+            solver->pseudo_cost_down[j] = cost_per_elem;
+            solver->pseudo_cost_up[j] = cost_per_elem;
+        } else {
+            /* Empty set - use cost directly */
+            solver->pseudo_cost_down[j] = model->c[j];
+            solver->pseudo_cost_up[j] = model->c[j];
+        }
+
+        /* Mark as initialized */
+        solver->pseudo_count_down[j] = 1;
+        solver->pseudo_count_up[j] = 1;
+    }
+
+    return 0;
+}
+
+/*
+ * Compute coverage of an element by current LP solution.
+ * Returns sum of x_j for all sets j covering element i.
+ */
+static double compute_element_coverage(const LPModel *model, int element,
+                                        const double *solution) {
+    double coverage = 0.0;
+    SparseMatrix *A = model->A;
+    int n = model->num_vars;
+
+    /* Scan columns for sets covering this element */
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            if (A->rowidx[p] == element && fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                coverage += solution[j];
+                break;
+            }
+        }
+    }
+
+    return coverage;
+}
+
+/*
+ * Find the set with highest LP value among those covering an element.
+ */
+static int find_best_covering_set(const LPModel *model, int element,
+                                   const double *solution) {
+    int best_set = -1;
+    double best_val = -1.0;
+    SparseMatrix *A = model->A;
+    int n = model->num_vars;
+
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            if (A->rowidx[p] == element && fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                /* Set j covers element - check LP value and fractionality */
+                double val = solution[j];
+                double frac = val - floor(val);
+                /* Prefer fractional variables with higher LP values */
+                if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
+                    if (val > best_val) {
+                        best_val = val;
+                        best_set = j;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    return best_set;
+}
+
+/*
+ * SCP constraint branching: branch on element with most fractional coverage.
+ */
+int select_scp_branch(MIPSolver *solver, const double *solution,
+                      int *element, int *set) {
+    if (!solver || !solution || !element || !set) return -1;
+
+    LPModel *model = solver->original_model;
+    if (!is_scp_model(model)) return -1;
+
+    int m = model->num_cons;
+
+    *element = -1;
+    *set = -1;
+
+    double max_frac = 0.0;
+    int best_elem = -1;
+
+    /* Find element with most fractional coverage */
+    for (int i = 0; i < m; i++) {
+        double coverage = compute_element_coverage(model, i, solution);
+        double required = model->b[i];
+
+        /* Fractionality: how far from being satisfied integrally */
+        double frac = fabs(coverage - round(coverage));
+
+        /* Also penalize under-coverage (coverage < required) */
+        if (coverage < required - RALPH_ZERO_TOL) {
+            frac += (required - coverage);  /* Boost priority */
+        }
+
+        if (frac > max_frac + RALPH_ZERO_TOL) {
+            max_frac = frac;
+            best_elem = i;
+        }
+    }
+
+    if (best_elem < 0 || max_frac < RALPH_INT_TOL) {
+        return -1;  /* No fractional element found */
+    }
+
+    *element = best_elem;
+
+    /* Find best set to branch on for this element */
+    *set = find_best_covering_set(model, best_elem, solution);
+
+    if (*set < 0) {
+        /* No fractional covering set found - find any covering set */
+        SparseMatrix *A = model->A;
+        int n = model->num_vars;
+        for (int j = 0; j < n; j++) {
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                if (A->rowidx[p] == best_elem && fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                    double frac = solution[j] - floor(solution[j]);
+                    if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
+                        *set = j;
+                        return 0;
+                    }
+                    break;
+                }
+            }
+        }
+        return -1;  /* No valid branching variable */
+    }
+
+    return 0;
+}
+
+/*
+ * SOS1 branching for set partitioning problems.
+ *
+ * For SPP, each element has exactly one covering set selected.
+ * This partitions the covering sets and branches on the median.
+ */
+int select_sos1_branch_spp(MIPSolver *solver, const double *solution, int *set) {
+    if (!solver || !solution || !set) return -1;
+
+    LPModel *model = solver->original_model;
+    if (!is_scp_model(model)) return -1;
+
+    /* Check if this is set partitioning (all = constraints) */
+    int m = model->num_cons;
+    for (int i = 0; i < m; i++) {
+        if (model->sense[i] != 'E') return -1;
+    }
+
+    int n = model->num_vars;
+    SparseMatrix *A = model->A;
+
+    *set = -1;
+    double max_frac = 0.0;
+    int best_elem = -1;
+
+    /* Find element with most fractional coverage */
+    for (int i = 0; i < m; i++) {
+        double coverage = compute_element_coverage(model, i, solution);
+        double frac = fabs(coverage - 1.0);  /* Should be exactly 1 for SPP */
+
+        if (frac > max_frac + RALPH_ZERO_TOL && frac > RALPH_INT_TOL) {
+            max_frac = frac;
+            best_elem = i;
+        }
+    }
+
+    if (best_elem < 0) return -1;
+
+    /* Collect covering sets for this element */
+    int *covering_sets = (int *)calloc(n, sizeof(int));
+    double *lp_values = (double *)calloc(n, sizeof(double));
+    if (!covering_sets || !lp_values) {
+        free(covering_sets);
+        free(lp_values);
+        return -1;
+    }
+
+    int num_covering = 0;
+    for (int j = 0; j < n; j++) {
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            if (A->rowidx[p] == best_elem && fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                covering_sets[num_covering] = j;
+                lp_values[num_covering] = solution[j];
+                num_covering++;
+                break;
+            }
+        }
+    }
+
+    if (num_covering < 2) {
+        free(covering_sets);
+        free(lp_values);
+        return -1;
+    }
+
+    /* Sort covering sets by LP value (descending) */
+    for (int i = 0; i < num_covering - 1; i++) {
+        for (int j = i + 1; j < num_covering; j++) {
+            if (lp_values[j] > lp_values[i]) {
+                double tmp_val = lp_values[i];
+                lp_values[i] = lp_values[j];
+                lp_values[j] = tmp_val;
+                int tmp_set = covering_sets[i];
+                covering_sets[i] = covering_sets[j];
+                covering_sets[j] = tmp_set;
+            }
+        }
+    }
+
+    /* Find the set at the partition boundary (where cumulative LP ~ 0.5) */
+    double cumsum = 0.0;
+    int partition_idx = 0;
+    for (int i = 0; i < num_covering; i++) {
+        cumsum += lp_values[i];
+        if (cumsum >= 0.5) {
+            partition_idx = i;
+            break;
+        }
+    }
+
+    /* Branch on the set at the partition point */
+    *set = covering_sets[partition_idx];
+
+    /* Verify it's fractional */
+    double frac = solution[*set] - floor(solution[*set]);
+    if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) {
+        /* Not fractional - find next fractional one */
+        for (int i = 0; i < num_covering; i++) {
+            frac = solution[covering_sets[i]] - floor(solution[covering_sets[i]]);
+            if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
+                *set = covering_sets[i];
+                break;
+            }
+        }
+    }
+
+    free(covering_sets);
+    free(lp_values);
+
+    return (*set >= 0) ? 0 : -1;
 }
 
 /* ============================================================================

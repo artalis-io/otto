@@ -1819,6 +1819,220 @@ void test_heuristic_non_scp(void) {
 }
 
 /* ============================================================================
+ * SCP Branching Tests (Phase 5)
+ * ============================================================================ */
+
+/*
+ * Test pseudo-cost initialization for SCP.
+ */
+void test_init_pseudo_costs_scp(void) {
+    printf("\n=== Test: SCP Pseudo-Cost Initialization ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 3 sets with different costs and coverage */
+    lp_model_add_var(model, 0.0, 1.0, 6.0, 'B');  /* S0: cost 6, covers 2 elements */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S1: cost 3, covers 1 element */
+    lp_model_add_var(model, 0.0, 1.0, 4.0, 'B');  /* S2: cost 4, covers 2 elements */
+
+    /* Element 0: S0 + S2 >= 1 */
+    int idx0[] = {0, 2};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef, 'G', 1.0);
+
+    /* Element 1: S0 + S1 >= 1 */
+    int idx1[] = {0, 1};
+    lp_model_add_constraint(model, 2, idx1, coef, 'G', 1.0);
+
+    /* Element 2: S2 >= 1 (only S2 covers it) */
+    int idx2[] = {2};
+    double coef1[] = {1.0};
+    lp_model_add_constraint(model, 1, idx2, coef1, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    /* Initialize pseudo-costs */
+    int result = init_pseudo_costs_scp(solver);
+    ASSERT(result == 0, "Pseudo-cost initialization succeeded");
+
+    /* Check pseudo-costs are cost/coverage ratio */
+    /* S0: cost=6, covers 2 -> 3.0 */
+    /* S1: cost=3, covers 1 -> 3.0 */
+    /* S2: cost=4, covers 2 -> 2.0 */
+    ASSERT(fabs(solver->pseudo_cost_down[0] - 3.0) < 0.01, "S0 pseudo-cost = 3.0");
+    ASSERT(fabs(solver->pseudo_cost_down[1] - 3.0) < 0.01, "S1 pseudo-cost = 3.0");
+    ASSERT(fabs(solver->pseudo_cost_down[2] - 2.0) < 0.01, "S2 pseudo-cost = 2.0");
+
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/*
+ * Test SCP constraint branching.
+ */
+void test_scp_constraint_branching(void) {
+    printf("\n=== Test: SCP Constraint Branching ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 3 sets, 2 elements */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S0 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S1 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S2 */
+
+    /* Element 0: S0 + S1 >= 1 */
+    int idx0[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef, 'G', 1.0);
+
+    /* Element 1: S1 + S2 >= 1 */
+    int idx1[] = {1, 2};
+    lp_model_add_constraint(model, 2, idx1, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    /* Fractional solution with fractional coverage:
+     * Element 0: 0.3 + 0.4 = 0.7 (under-covered, fractional)
+     * Element 1: 0.4 + 0.6 = 1.0 (covered, but S1,S2 fractional) */
+    double solution[3] = {0.3, 0.4, 0.6};
+
+    int element, set;
+    int result = select_scp_branch(solver, solution, &element, &set);
+    ASSERT(result == 0, "SCP branching found valid decision");
+    ASSERT(element >= 0 && element < 2, "Valid element selected");
+    ASSERT(set >= 0 && set < 3, "Valid set selected");
+
+    printf("  INFO: Branching on element %d, set %d\n", element, set);
+
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/*
+ * Test SOS1 branching for SPP.
+ */
+void test_sos1_branching_spp(void) {
+    printf("\n=== Test: SOS1 Branching for SPP ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 4 sets, 2 elements - set partitioning (=) */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S0 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S1 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S2 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S3 */
+
+    /* Element 0: S0 + S1 = 1 (fractional coverage 0.6+0.5=1.1, not exact 1) */
+    int idx0[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef, 'E', 1.0);
+
+    /* Element 1: S2 + S3 = 1 (fractional coverage 0.3+0.6=0.9, not exact 1) */
+    int idx1[] = {2, 3};
+    lp_model_add_constraint(model, 2, idx1, coef, 'E', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    /* Fractional solution with coverage != 1 for each element
+     * Element 0: 0.6 + 0.5 = 1.1 (over-covered by 0.1)
+     * Element 1: 0.3 + 0.6 = 0.9 (under-covered by 0.1) */
+    double solution[4] = {0.6, 0.5, 0.3, 0.6};
+
+    int set;
+    int result = select_sos1_branch_spp(solver, solution, &set);
+    ASSERT(result == 0, "SOS1 branching found valid decision");
+    ASSERT(set >= 0 && set < 4, "Valid set selected");
+
+    printf("  INFO: SOS1 branching on set %d (value=%.2f)\n", set, solution[set]);
+
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/*
+ * Test that SCP branching rejects non-SCP models.
+ */
+void test_scp_branching_rejects_non_scp(void) {
+    printf("\n=== Test: SCP Branching Rejects Non-SCP ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* Non-binary variable -> not SCP */
+    lp_model_add_var(model, 0.0, 5.0, 1.0, 'I');  /* Integer, not binary */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+
+    int idx[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    double solution[2] = {0.5, 0.5};
+    int element, set;
+    int result = select_scp_branch(solver, solution, &element, &set);
+    ASSERT(result == -1, "SCP branching rejects non-SCP");
+
+    result = init_pseudo_costs_scp(solver);
+    ASSERT(result == -1, "Pseudo-cost init rejects non-SCP");
+
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/*
+ * Test VAR_SELECT_SCP strategy integration.
+ */
+void test_var_select_scp_strategy(void) {
+    printf("\n=== Test: VAR_SELECT_SCP Strategy ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* Simple SCP */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+
+    int idx[] = {0, 1};
+    double coef[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx, coef, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    MIPSolver *solver = mip_create(model, 0, 256);
+    ASSERT(solver != NULL, "MIP solver created");
+
+    /* Set strategy to SCP */
+    solver->var_select = VAR_SELECT_SCP;
+
+    double solution[2] = {0.6, 0.4};
+    int branch_var;
+    int result = select_branch_variable(solver, solution, &branch_var);
+    ASSERT(result == 0, "Branch variable selection succeeded");
+    ASSERT(branch_var >= 0 && branch_var < 2, "Valid branch variable");
+
+    printf("  INFO: VAR_SELECT_SCP chose var %d\n", branch_var);
+
+    mip_free(solver);
+    lp_model_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -1892,6 +2106,16 @@ int main(void) {
     test_local_search_scp();
     test_combined_scp_heuristic();
     test_heuristic_non_scp();
+
+    printf("\nSCP Branching Tests\n");
+    printf("===================\n");
+
+    /* SCP branching tests (Phase 5) */
+    test_init_pseudo_costs_scp();
+    test_scp_constraint_branching();
+    test_sos1_branching_spp();
+    test_scp_branching_rejects_non_scp();
+    test_var_select_scp_strategy();
 
     /* Summary */
     printf("\n=======================\n");
