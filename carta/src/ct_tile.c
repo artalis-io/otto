@@ -195,12 +195,16 @@ void ct_batch_transform_points(CTTileCoord tile, int extent,
         double lon = points[i].x * 1e-7;
         double lat = points[i].y * 1e-7;
 
-        /* Longitude: simple linear transform */
-        int px = (int)(lon * tf.lon_scale + tf.lon_offset);
+        /* Longitude: simple linear transform
+         * Use floor() for consistent rounding toward -infinity.
+         * (int) truncates toward zero, which causes edges near tile
+         * boundaries to round inconsistently (e.g., -0.3 and 0.3 both
+         * become 0, potentially collapsing edges to horizontal). */
+        int px = (int)floor(lon * tf.lon_scale + tf.lon_offset);
 
         /* Latitude: Mercator projection via lookup table (no trig!) */
         double merc_y = fast_mercator_y(lat);
-        int py = (int)(merc_y * tf.lat_to_py_scale + tf.lat_to_py_offset);
+        int py = (int)floor(merc_y * tf.lat_to_py_scale + tf.lat_to_py_offset);
 
         points[i].x = px;
         points[i].y = py;
