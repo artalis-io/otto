@@ -821,6 +821,389 @@ int presolve_probing(PresolveContext *ctx) {
 }
 
 /* ============================================================================
+ * Set Covering/Partitioning Specific Presolve
+ * ============================================================================ */
+
+/*
+ * Check if model has SCP structure (binary vars, 0-1 coefficients).
+ * Quick check - doesn't verify all constraints, just samples.
+ */
+static int is_scp_structure(const LPModel *model) {
+    if (!model || !model->A) return 0;
+
+    /* Check some variables are binary */
+    int has_binary = 0;
+    for (int j = 0; j < model->num_vars && !has_binary; j++) {
+        if (model->var_type[j] == 'B' ||
+            (model->var_type[j] == 'I' &&
+             fabs(model->lb[j]) < RALPH_ZERO_TOL &&
+             fabs(model->ub[j] - 1.0) < RALPH_ZERO_TOL)) {
+            has_binary = 1;
+        }
+    }
+    return has_binary;
+}
+
+/*
+ * Essential set detection for SCP.
+ *
+ * If an element is covered by only one active set, that set must be selected.
+ */
+int presolve_scp_essential_sets(PresolveContext *ctx) {
+    if (!ctx || !ctx->working) return 0;
+
+    LPModel *model = ctx->working;
+    if (!is_scp_structure(model)) return 0;
+
+    int m = model->num_cons;
+    int n = model->num_vars;
+    int count = 0;
+
+    /* For each row (element), count active columns (sets) covering it */
+    for (int i = 0; i < m; i++) {
+        if (ctx->row_deleted[i]) continue;
+
+        /* Only apply to covering (>=) or partitioning (=) constraints */
+        if (model->sense[i] != 'G' && model->sense[i] != 'E') continue;
+
+        /* Count active sets covering this element and track the single one */
+        int covering_count = 0;
+        int single_set = -1;
+
+        /* Iterate through columns to find which cover this row */
+        for (int j = 0; j < n; j++) {
+            if (ctx->col_deleted[j]) continue;
+
+            /* Check if column j covers row i */
+            for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+                if (model->A->rowidx[p] == i && fabs(model->A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                    covering_count++;
+                    single_set = j;
+                    break;
+                }
+            }
+        }
+
+        /* If exactly one active set covers this element, fix it to 1 */
+        if (covering_count == 1 && single_set >= 0) {
+            /* Check if already fixed */
+            if (model->lb[single_set] >= 1.0 - RALPH_ZERO_TOL) continue;
+
+            /* Fix set to 1 */
+            model->lb[single_set] = 1.0;
+            model->ub[single_set] = 1.0;
+
+            /* Update RHS for all constraints this set covers */
+            for (int p = model->A->colptr[single_set]; p < model->A->colptr[single_set + 1]; p++) {
+                int row = model->A->rowidx[p];
+                if (!ctx->row_deleted[row]) {
+                    model->b[row] -= model->A->values[p];  /* Subtract 1 from RHS */
+                }
+            }
+
+            /* Update objective */
+            model->obj_offset += model->c[single_set];
+
+            /* Mark column as deleted (fixed to 1) */
+            ctx->col_deleted[single_set] = 1;
+            count++;
+
+            /* Check if any constraint became infeasible */
+            for (int p = model->A->colptr[single_set]; p < model->A->colptr[single_set + 1]; p++) {
+                int row = model->A->rowidx[p];
+                if (ctx->row_deleted[row]) continue;
+
+                double rhs = model->b[row];
+                if (model->sense[row] == 'G' && rhs < -RALPH_FEAS_TOL) {
+                    /* Can't satisfy >= constraint */
+                    /* Actually this shouldn't happen if RHS was 1 */
+                }
+                if (model->sense[row] == 'E' && rhs < -RALPH_FEAS_TOL) {
+                    return -1;  /* Infeasible - over-covered */
+                }
+
+                /* If RHS <= 0 for covering constraint, it's satisfied - remove */
+                if (model->sense[row] == 'G' && rhs <= RALPH_ZERO_TOL) {
+                    ctx->row_deleted[row] = 1;
+                }
+                /* If RHS = 0 for partitioning, constraint is satisfied - remove */
+                if (model->sense[row] == 'E' && fabs(rhs) < RALPH_ZERO_TOL) {
+                    ctx->row_deleted[row] = 1;
+                }
+            }
+        }
+
+        /* Check if element has no covering sets - infeasible */
+        if (covering_count == 0 && model->b[i] > RALPH_ZERO_TOL) {
+            if (model->sense[i] == 'G' || model->sense[i] == 'E') {
+                return -1;  /* Cannot cover this element */
+            }
+        }
+    }
+
+    return count;
+}
+
+/*
+ * Row dominance reduction for SCP.
+ *
+ * For covering constraints (>=): row i dominates row j if every set
+ * covering row i also covers row j, and RHS[i] >= RHS[j].
+ * The dominated row i can be removed (it's implied by row j).
+ */
+int presolve_scp_row_dominance(PresolveContext *ctx) {
+    if (!ctx || !ctx->working) return 0;
+
+    LPModel *model = ctx->working;
+    if (!is_scp_structure(model)) return 0;
+
+    int m = model->num_cons;
+    int n = model->num_vars;
+    int count = 0;
+
+    /* Build row coverage sets for efficient comparison */
+    /* For each row, store a bitmask or list of covering columns */
+
+    /* Allocate coverage arrays: coverage[i] = list of active columns covering row i */
+    int **row_coverage = (int **)calloc(m, sizeof(int *));
+    int *row_coverage_count = (int *)calloc(m, sizeof(int));
+    if (!row_coverage || !row_coverage_count) {
+        free(row_coverage);
+        free(row_coverage_count);
+        return 0;
+    }
+
+    /* First pass: count coverage per row */
+    for (int j = 0; j < n; j++) {
+        if (ctx->col_deleted[j]) continue;
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            int i = model->A->rowidx[p];
+            if (!ctx->row_deleted[i] && fabs(model->A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                row_coverage_count[i]++;
+            }
+        }
+    }
+
+    /* Allocate coverage lists */
+    for (int i = 0; i < m; i++) {
+        if (row_coverage_count[i] > 0) {
+            row_coverage[i] = (int *)malloc(row_coverage_count[i] * sizeof(int));
+            if (!row_coverage[i]) {
+                /* Cleanup on failure */
+                for (int k = 0; k < i; k++) free(row_coverage[k]);
+                free(row_coverage);
+                free(row_coverage_count);
+                return 0;
+            }
+        }
+        row_coverage_count[i] = 0;  /* Reset for second pass */
+    }
+
+    /* Second pass: fill coverage lists */
+    for (int j = 0; j < n; j++) {
+        if (ctx->col_deleted[j]) continue;
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            int i = model->A->rowidx[p];
+            if (!ctx->row_deleted[i] && fabs(model->A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                row_coverage[i][row_coverage_count[i]++] = j;
+            }
+        }
+    }
+
+    /* Check dominance: row i dominated by row j if coverage[i] superset of coverage[j] */
+    /* Only for covering constraints (>=) */
+    for (int i = 0; i < m; i++) {
+        if (ctx->row_deleted[i]) continue;
+        if (model->sense[i] != 'G') continue;  /* Only covering constraints */
+
+        for (int j = 0; j < m; j++) {
+            if (i == j || ctx->row_deleted[j]) continue;
+            if (model->sense[j] != 'G') continue;
+
+            /* Check if row i is dominated by row j */
+            /* i dominated if: coverage[j] subset of coverage[i] AND RHS[j] >= RHS[i] */
+            if (model->b[j] < model->b[i] - RALPH_ZERO_TOL) continue;
+
+            /* Check subset: every column covering j must also cover i */
+            int is_dominated = 1;
+            for (int k = 0; k < row_coverage_count[j] && is_dominated; k++) {
+                int col = row_coverage[j][k];
+                /* Check if col covers row i */
+                int found = 0;
+                for (int l = 0; l < row_coverage_count[i] && !found; l++) {
+                    if (row_coverage[i][l] == col) found = 1;
+                }
+                if (!found) is_dominated = 0;
+            }
+
+            if (is_dominated && row_coverage_count[j] > 0) {
+                /* Row i is dominated by row j - remove row i */
+                ctx->row_deleted[i] = 1;
+                count++;
+                break;  /* Move to next row i */
+            }
+        }
+    }
+
+    /* Cleanup */
+    for (int i = 0; i < m; i++) free(row_coverage[i]);
+    free(row_coverage);
+    free(row_coverage_count);
+
+    return count;
+}
+
+/*
+ * Column dominance reduction for SCP.
+ *
+ * Column j dominates column k if:
+ *   - Set j covers everything set k covers (A[*,j] >= A[*,k])
+ *   - Cost c[j] <= c[k]
+ *
+ * The dominated column k can be fixed to 0.
+ */
+int presolve_scp_column_dominance(PresolveContext *ctx) {
+    if (!ctx || !ctx->working) return 0;
+
+    LPModel *model = ctx->working;
+    if (!is_scp_structure(model)) return 0;
+
+    int n = model->num_vars;
+    int count = 0;
+
+    /* Build column coverage as sorted arrays for efficient comparison */
+    int **col_coverage = (int **)calloc(n, sizeof(int *));
+    int *col_coverage_count = (int *)calloc(n, sizeof(int));
+    if (!col_coverage || !col_coverage_count) {
+        free(col_coverage);
+        free(col_coverage_count);
+        return 0;
+    }
+
+    /* Build coverage lists from sparse matrix (already column-major) */
+    for (int j = 0; j < n; j++) {
+        if (ctx->col_deleted[j]) continue;
+
+        int nnz = 0;
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            if (!ctx->row_deleted[model->A->rowidx[p]] &&
+                fabs(model->A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                nnz++;
+            }
+        }
+
+        if (nnz > 0) {
+            col_coverage[j] = (int *)malloc(nnz * sizeof(int));
+            if (!col_coverage[j]) {
+                for (int k = 0; k < j; k++) free(col_coverage[k]);
+                free(col_coverage);
+                free(col_coverage_count);
+                return 0;
+            }
+
+            int idx = 0;
+            for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+                int row = model->A->rowidx[p];
+                if (!ctx->row_deleted[row] && fabs(model->A->values[p] - 1.0) < RALPH_ZERO_TOL) {
+                    col_coverage[j][idx++] = row;
+                }
+            }
+            col_coverage_count[j] = nnz;
+        }
+    }
+
+    /* Check dominance: column j dominates column k if coverage[j] superset of coverage[k] */
+    for (int k = 0; k < n; k++) {
+        if (ctx->col_deleted[k]) continue;
+        if (col_coverage_count[k] == 0) continue;
+
+        /* Only consider binary variables */
+        if (model->var_type[k] != 'B' &&
+            !(model->var_type[k] == 'I' && fabs(model->lb[k]) < RALPH_ZERO_TOL &&
+              model->ub[k] >= 1.0 - RALPH_ZERO_TOL)) {
+            continue;
+        }
+
+        double cost_k = model->c[k] * model->obj_sense;  /* Adjusted for min */
+
+        for (int j = 0; j < n; j++) {
+            if (j == k || ctx->col_deleted[j]) continue;
+            if (col_coverage_count[j] < col_coverage_count[k]) continue;  /* j can't dominate k */
+
+            double cost_j = model->c[j] * model->obj_sense;
+            if (cost_j > cost_k + RALPH_ZERO_TOL) continue;  /* j not cheaper */
+
+            /* Check if j covers everything k covers */
+            int dominates = 1;
+            int j_idx = 0;
+            for (int k_idx = 0; k_idx < col_coverage_count[k] && dominates; k_idx++) {
+                int row_k = col_coverage[k][k_idx];
+                /* Find row_k in col_coverage[j] (both sorted by row index) */
+                while (j_idx < col_coverage_count[j] && col_coverage[j][j_idx] < row_k) {
+                    j_idx++;
+                }
+                if (j_idx >= col_coverage_count[j] || col_coverage[j][j_idx] != row_k) {
+                    dominates = 0;
+                }
+            }
+
+            if (dominates) {
+                /* Column k is dominated by column j - fix k to 0 */
+                model->lb[k] = 0.0;
+                model->ub[k] = 0.0;
+                ctx->col_deleted[k] = 1;
+                count++;
+                break;  /* Move to next k */
+            }
+        }
+    }
+
+    /* Cleanup */
+    for (int j = 0; j < n; j++) free(col_coverage[j]);
+    free(col_coverage);
+    free(col_coverage_count);
+
+    return count;
+}
+
+/*
+ * Combined SCP presolve pass.
+ */
+int presolve_scp(PresolveContext *ctx) {
+    if (!ctx) return 0;
+
+    int total = 0;
+    int changed = 1;
+    int max_rounds = 10;
+    int round = 0;
+
+    while (changed && round < max_rounds) {
+        changed = 0;
+        round++;
+
+        /* Essential sets first (most effective) */
+        int n = presolve_scp_essential_sets(ctx);
+        if (n < 0) return -1;
+        changed += n;
+        total += n;
+
+        /* Row dominance */
+        n = presolve_scp_row_dominance(ctx);
+        if (n < 0) return -1;
+        changed += n;
+        total += n;
+
+        /* Column dominance */
+        n = presolve_scp_column_dominance(ctx);
+        if (n < 0) return -1;
+        changed += n;
+        total += n;
+    }
+
+    return total;
+}
+
+/* ============================================================================
  * Main Presolve Interface
  * ============================================================================ */
 

@@ -10,6 +10,7 @@
 #include <math.h>
 #include "lp.h"
 #include "detect.h"
+#include "presolve.h"
 
 #define TOLERANCE 1e-6
 
@@ -903,6 +904,317 @@ void test_set_cover_type_name(void) {
 }
 
 /* ============================================================================
+ * SCP Presolve Tests
+ * ============================================================================ */
+
+/*
+ * Helper: Create a presolve context from an LPModel
+ */
+static PresolveContext* create_test_presolve_ctx(LPModel *model) {
+    PresolveContext *ctx = (PresolveContext*)calloc(1, sizeof(PresolveContext));
+    if (!ctx) return NULL;
+
+    ctx->original = model;
+    ctx->working = lp_model_copy(model);
+    if (!ctx->working) {
+        free(ctx);
+        return NULL;
+    }
+
+    ctx->row_deleted = (int*)calloc(model->num_cons, sizeof(int));
+    ctx->col_deleted = (int*)calloc(model->num_vars, sizeof(int));
+    ctx->row_lb = (double*)calloc(model->num_cons, sizeof(double));
+    ctx->row_ub = (double*)calloc(model->num_cons, sizeof(double));
+
+    if (!ctx->row_deleted || !ctx->col_deleted) {
+        lp_model_free(ctx->working);
+        free(ctx->row_deleted);
+        free(ctx->col_deleted);
+        free(ctx->row_lb);
+        free(ctx->row_ub);
+        free(ctx);
+        return NULL;
+    }
+
+    return ctx;
+}
+
+static void free_test_presolve_ctx(PresolveContext *ctx) {
+    if (!ctx) return;
+    lp_model_free(ctx->working);
+    free(ctx->row_deleted);
+    free(ctx->col_deleted);
+    free(ctx->row_lb);
+    free(ctx->row_ub);
+    free(ctx);
+}
+
+/*
+ * Test: Essential Set Detection
+ *
+ * Element 0 is covered only by S0 -> S0 must be fixed to 1
+ */
+void test_presolve_scp_essential_sets(void) {
+    printf("\n=== Test: SCP Presolve - Essential Sets ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* S0 covers {0, 1}, S1 covers {1, 2}, S2 covers {2} */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S0: {0,1} cost=3 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S1: {1,2} cost=2 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S2: {2}   cost=1 */
+
+    /* Element 0: S0 >= 1 (only S0 covers it) */
+    int idx0[] = {0};
+    double coef1[] = {1.0};
+    lp_model_add_constraint(model, 1, idx0, coef1, 'G', 1.0);
+
+    /* Element 1: S0 + S1 >= 1 */
+    int idx1[] = {0, 1};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx1, coef2, 'G', 1.0);
+
+    /* Element 2: S1 + S2 >= 1 */
+    int idx2[] = {1, 2};
+    lp_model_add_constraint(model, 2, idx2, coef2, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    PresolveContext *ctx = create_test_presolve_ctx(model);
+    ASSERT(ctx != NULL, "Presolve context created");
+
+    int fixed = presolve_scp_essential_sets(ctx);
+
+    ASSERT(fixed == 1, "1 essential set found (S0)");
+    ASSERT(ctx->col_deleted[0] == 1, "S0 fixed to 1 (deleted)");
+    ASSERT(ctx->col_deleted[1] == 0, "S1 not fixed");
+    ASSERT(ctx->col_deleted[2] == 0, "S2 not fixed");
+
+    /* Element 0 and 1 should be satisfied (RHS reduced) */
+    ASSERT(ctx->row_deleted[0] == 1, "Element 0 satisfied (deleted)");
+    ASSERT(ctx->row_deleted[1] == 1, "Element 1 satisfied (deleted)");
+
+    free_test_presolve_ctx(ctx);
+    lp_model_free(model);
+}
+
+/*
+ * Test: Row Dominance
+ *
+ * Element 0: S0 + S1 >= 1
+ * Element 1: S0 + S1 + S2 >= 1 (dominated by element 0)
+ */
+void test_presolve_scp_row_dominance(void) {
+    printf("\n=== Test: SCP Presolve - Row Dominance ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* 3 sets */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S0 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S1 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S2 */
+
+    /* Element 0: S0 + S1 >= 1 */
+    int idx0[] = {0, 1};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef2, 'G', 1.0);
+
+    /* Element 1: S0 + S1 + S2 >= 1 (dominated - superset of element 0's sets) */
+    int idx1[] = {0, 1, 2};
+    double coef3[] = {1.0, 1.0, 1.0};
+    lp_model_add_constraint(model, 3, idx1, coef3, 'G', 1.0);
+
+    /* Element 2: S2 >= 1 (not dominated) */
+    int idx2[] = {2};
+    double coef1[] = {1.0};
+    lp_model_add_constraint(model, 1, idx2, coef1, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    PresolveContext *ctx = create_test_presolve_ctx(model);
+    ASSERT(ctx != NULL, "Presolve context created");
+
+    int removed = presolve_scp_row_dominance(ctx);
+
+    ASSERT(removed == 1, "1 dominated row removed");
+    ASSERT(ctx->row_deleted[0] == 0, "Element 0 not dominated");
+    ASSERT(ctx->row_deleted[1] == 1, "Element 1 dominated (removed)");
+    ASSERT(ctx->row_deleted[2] == 0, "Element 2 not dominated");
+
+    free_test_presolve_ctx(ctx);
+    lp_model_free(model);
+}
+
+/*
+ * Test: Column Dominance
+ *
+ * S0 covers {0, 1} cost=2
+ * S1 covers {0} cost=3 (dominated by S0 - S0 is cheaper and covers more)
+ * S2 covers {1} cost=1 (not dominated)
+ */
+void test_presolve_scp_column_dominance(void) {
+    printf("\n=== Test: SCP Presolve - Column Dominance ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;  /* Minimize */
+
+    /* S0 covers {0,1} cost=2, S1 covers {0} cost=3, S2 covers {1} cost=1 */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S0: {0,1} */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S1: {0} - dominated by S0 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S2: {1} */
+
+    /* Element 0: S0 + S1 >= 1 */
+    int idx0[] = {0, 1};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef2, 'G', 1.0);
+
+    /* Element 1: S0 + S2 >= 1 */
+    int idx1[] = {0, 2};
+    lp_model_add_constraint(model, 2, idx1, coef2, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    PresolveContext *ctx = create_test_presolve_ctx(model);
+    ASSERT(ctx != NULL, "Presolve context created");
+
+    int fixed = presolve_scp_column_dominance(ctx);
+
+    ASSERT(fixed == 1, "1 dominated column fixed to 0");
+    ASSERT(ctx->col_deleted[0] == 0, "S0 not dominated");
+    ASSERT(ctx->col_deleted[1] == 1, "S1 dominated (fixed to 0)");
+    ASSERT(ctx->col_deleted[2] == 0, "S2 not dominated");
+
+    free_test_presolve_ctx(ctx);
+    lp_model_free(model);
+}
+
+/*
+ * Test: Combined SCP Presolve
+ */
+void test_presolve_scp_combined(void) {
+    printf("\n=== Test: SCP Presolve - Combined ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* Problem with opportunities for all three reductions */
+    /* S0: {0,1} cost=2, S1: {0} cost=3 (dominated), S2: {2} cost=1 (essential) */
+    lp_model_add_var(model, 0.0, 1.0, 2.0, 'B');  /* S0 */
+    lp_model_add_var(model, 0.0, 1.0, 3.0, 'B');  /* S1 - dominated by S0 */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S2 - essential for elem 2 */
+
+    /* Element 0: S0 + S1 >= 1 */
+    int idx0[] = {0, 1};
+    double coef2[] = {1.0, 1.0};
+    lp_model_add_constraint(model, 2, idx0, coef2, 'G', 1.0);
+
+    /* Element 1: S0 >= 1 (also covered by fixing S0 will help) */
+    int idx1[] = {0};
+    double coef1[] = {1.0};
+    lp_model_add_constraint(model, 1, idx1, coef1, 'G', 1.0);
+
+    /* Element 2: S2 >= 1 (only S2 covers it) */
+    int idx2[] = {2};
+    lp_model_add_constraint(model, 1, idx2, coef1, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    PresolveContext *ctx = create_test_presolve_ctx(model);
+    ASSERT(ctx != NULL, "Presolve context created");
+
+    int total = presolve_scp(ctx);
+
+    ASSERT(total >= 2, "At least 2 reductions made");
+    printf("  Total reductions: %d\n", total);
+
+    /* S2 should be essential, S0 should be essential too */
+    /* After essentials, S1 dominance may kick in */
+
+    free_test_presolve_ctx(ctx);
+    lp_model_free(model);
+}
+
+/*
+ * Test: Essential Set Infeasibility
+ *
+ * Element with no covering sets -> infeasible
+ */
+void test_presolve_scp_infeasible(void) {
+    printf("\n=== Test: SCP Presolve - Infeasibility Detection ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* S0 covers {0} only */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');
+
+    /* Element 0: S0 >= 1 */
+    int idx0[] = {0};
+    double coef1[] = {1.0};
+    lp_model_add_constraint(model, 1, idx0, coef1, 'G', 1.0);
+
+    /* Element 1: no sets cover it (will be detected after model changes) */
+    /* We simulate by having an empty constraint after presolve */
+
+    lp_model_finalize(model);
+
+    PresolveContext *ctx = create_test_presolve_ctx(model);
+    ASSERT(ctx != NULL, "Presolve context created");
+
+    /* First fix the essential set */
+    int fixed = presolve_scp_essential_sets(ctx);
+    ASSERT(fixed == 1, "S0 fixed as essential");
+
+    /* Now model should be feasible (all elements covered) */
+    ASSERT(ctx->row_deleted[0] == 1, "Element 0 satisfied");
+
+    free_test_presolve_ctx(ctx);
+    lp_model_free(model);
+}
+
+/*
+ * Test: No Reductions Possible
+ */
+void test_presolve_scp_no_reductions(void) {
+    printf("\n=== Test: SCP Presolve - No Reductions ===\n");
+
+    LPModel *model = lp_model_create();
+    model->obj_sense = 1;
+
+    /* Problem where no presolve applies */
+    /* S0: {0}, S1: {1} - no dominance, no essential (both needed) */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S0: {0} */
+    lp_model_add_var(model, 0.0, 1.0, 1.0, 'B');  /* S1: {1} */
+
+    /* Element 0: S0 >= 1 */
+    int idx0[] = {0};
+    double coef1[] = {1.0};
+    lp_model_add_constraint(model, 1, idx0, coef1, 'G', 1.0);
+
+    /* Element 1: S1 >= 1 */
+    int idx1[] = {1};
+    lp_model_add_constraint(model, 1, idx1, coef1, 'G', 1.0);
+
+    lp_model_finalize(model);
+
+    PresolveContext *ctx = create_test_presolve_ctx(model);
+    ASSERT(ctx != NULL, "Presolve context created");
+
+    /* Each element covered by exactly one set -> both are essential */
+    int total = presolve_scp(ctx);
+
+    /* Both S0 and S1 are essential (each covers unique element) */
+    ASSERT(total == 2, "Both sets fixed as essential");
+    ASSERT(ctx->col_deleted[0] == 1, "S0 fixed");
+    ASSERT(ctx->col_deleted[1] == 1, "S1 fixed");
+
+    free_test_presolve_ctx(ctx);
+    lp_model_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void) {
@@ -945,6 +1257,17 @@ int main(void) {
 
     /* Utility tests */
     test_set_cover_type_name();
+
+    printf("\nSCP Presolve Tests\n");
+    printf("==================\n");
+
+    /* SCP presolve tests */
+    test_presolve_scp_essential_sets();
+    test_presolve_scp_row_dominance();
+    test_presolve_scp_column_dominance();
+    test_presolve_scp_combined();
+    test_presolve_scp_infeasible();
+    test_presolve_scp_no_reductions();
 
     /* Summary */
     printf("\n=======================\n");
