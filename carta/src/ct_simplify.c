@@ -8,71 +8,6 @@
 #include <string.h>
 
 /* ============================================================================
- * Self-Intersection Detection
- * ============================================================================ */
-
-/*
- * Check if two line segments intersect (proper intersection, not at endpoints).
- * Segments: (p1->p2) and (p3->p4)
- * Returns 1 if they properly intersect (cross each other), 0 otherwise.
- */
-static int segments_intersect(int x1, int y1, int x2, int y2,
-                              int x3, int y3, int x4, int y4)
-{
-    /* Compute direction vectors */
-    double d1x = x2 - x1, d1y = y2 - y1;
-    double d2x = x4 - x3, d2y = y4 - y3;
-
-    double cross = d1x * d2y - d1y * d2x;
-
-    /* Parallel segments - no proper intersection */
-    if (fabs(cross) < 1e-10) return 0;
-
-    /* Compute intersection parameters */
-    double t = ((x3 - x1) * d2y - (y3 - y1) * d2x) / cross;
-    double u = ((x3 - x1) * d1y - (y3 - y1) * d1x) / cross;
-
-    /* Proper intersection requires t and u strictly between 0 and 1
-     * (not at endpoints). Use small epsilon to avoid numerical issues. */
-    double eps = 1e-6;
-    return (t > eps && t < 1.0 - eps && u > eps && u < 1.0 - eps);
-}
-
-/*
- * Check if a polygon ring is self-intersecting.
- * Returns 1 if self-intersecting, 0 otherwise.
- *
- * Note: This is O(n^2) but polygon rings are typically small after
- * simplification (tens to hundreds of points), so this is acceptable.
- */
-static int ring_self_intersects(const CTTilePoint *points, int n)
-{
-    if (n < 4) return 0;  /* Triangle can't self-intersect */
-
-    /* Check each pair of non-adjacent edges */
-    for (int i = 0; i < n; i++) {
-        int i_next = (i + 1) % n;
-
-        /* Skip edges that share a vertex with edge i (adjacent edges) */
-        for (int j = i + 2; j < n; j++) {
-            int j_next = (j + 1) % n;
-
-            /* Skip if j_next == i (closing edge is adjacent to edge i) */
-            if (j_next == i) continue;
-
-            if (segments_intersect(
-                    points[i].x, points[i].y,
-                    points[i_next].x, points[i_next].y,
-                    points[j].x, points[j].y,
-                    points[j_next].x, points[j_next].y)) {
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-/* ============================================================================
  * Douglas-Peucker Implementation
  * ============================================================================ */
 
@@ -308,49 +243,18 @@ void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolera
         }
     }
 
-    /* Compact the array into a temporary buffer first to check for self-intersection */
-    int simplified_count = 0;
-    for (int i = 0; i < n; i++) {
-        if (keep[i]) simplified_count++;
-    }
-
-    /* Need at least 3 points for a valid polygon */
-    if (simplified_count < 3) {
-        /* Simplification produced degenerate polygon - keep original */
-        free(keep);
-        return;
-    }
-
-    /* Check if simplified polygon would self-intersect.
-     * Douglas-Peucker can create self-intersecting polygons which break
-     * the even-odd fill rule used by the scanline renderer. */
-    CTTilePoint *simplified = malloc(simplified_count * sizeof(CTTilePoint));
-    if (!simplified) {
-        free(keep);
-        return;
-    }
-
+    /* Compact the array */
     int write_idx = 0;
     for (int i = 0; i < n; i++) {
         if (keep[i]) {
-            simplified[write_idx++] = points[i];
+            points[write_idx++] = points[i];
         }
     }
 
-    /* If self-intersecting, keep original polygon */
-    if (ring_self_intersects(simplified, simplified_count)) {
-        free(simplified);
-        free(keep);
-        return;  /* Keep original points unchanged */
-    }
+    /* Ensure at least 3 points for valid polygon */
+    if (write_idx < 3) write_idx = (n < 3) ? n : 3;
 
-    /* Simplified polygon is valid - copy back to original array */
-    for (int i = 0; i < simplified_count; i++) {
-        points[i] = simplified[i];
-    }
-    *num_points = simplified_count;
-
-    free(simplified);
+    *num_points = write_idx;
     free(keep);
 }
 
@@ -367,12 +271,21 @@ void ct_simplify_multipolygon_inplace(CTTilePoint *points, int *num_points,
     int total_points = *num_points;
     if (total_points < 3) return;
 
+    /* Save original ring boundaries before we start modifying ring_ends.
+     * Without this, ring_ends[r-1] would give the NEW position of ring r-1
+     * instead of the ORIGINAL position where ring r's data starts. */
+    int *orig_ring_ends = malloc(num_rings * sizeof(int));
+    if (!orig_ring_ends) return;
+    for (int r = 0; r < num_rings; r++) {
+        orig_ring_ends[r] = ring_ends[r];
+    }
+
     /* Process each ring separately */
     int write_idx = 0;
 
     for (int r = 0; r < num_rings; r++) {
-        int ring_end = ring_ends[r];
-        int ring_start = (r == 0) ? 0 : ring_ends[r - 1];
+        int ring_end = orig_ring_ends[r];
+        int ring_start = (r == 0) ? 0 : orig_ring_ends[r - 1];
         int ring_points = ring_end - ring_start;
 
         if (ring_points < 3) {
@@ -427,6 +340,7 @@ void ct_simplify_multipolygon_inplace(CTTilePoint *points, int *num_points,
     }
 
     *num_points = write_idx;
+    free(orig_ring_ends);
 }
 
 /* ============================================================================
