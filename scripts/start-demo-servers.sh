@@ -308,17 +308,17 @@ echo ""
 echo "Starting servers..."
 
 # Carta tile server - use index if available
-# 8 worker threads, LOD filtering, higher rate limits for demo
+# 8 worker threads, no LOD filtering (for debugging), higher rate limits for demo
 if [ -n "$CARTA_IDX" ] && [ -f "$CARTA_IDX" ]; then
     ./carta/api/carta-tile-server -p "$CARTA_PORT" -t 8 \
         --rate-limit-rps 50 --rate-limit-burst 200 \
-        --lod default "$CARTA_IDX" >/dev/null 2>&1 &
+        --no-lod "$CARTA_IDX" >/dev/null 2>&1 &
     CARTA_PID=$!
     echo "  Started: Carta (http://localhost:$CARTA_PORT) [PID: $CARTA_PID] - index"
 else
     ./carta/api/carta-tile-server -p "$CARTA_PORT" -t 8 \
         --rate-limit-rps 50 --rate-limit-burst 200 \
-        --lod default "$PBF_FILE" >/dev/null 2>&1 &
+        --no-lod "$PBF_FILE" >/dev/null 2>&1 &
     CARTA_PID=$!
     echo "  Started: Carta (http://localhost:$CARTA_PORT) [PID: $CARTA_PID] - PBF"
 fi
@@ -365,8 +365,8 @@ echo "  Started: Demo (http://localhost:$DEMO_PORT/clayshards/clay-shards-demo/)
 echo ""
 echo "Waiting for servers to be ready..."
 
-# Wait for each server with timeout
-wait_for_server() {
+# Wait for server health endpoint
+wait_for_health() {
     local name=$1
     local url=$2
     local timeout=$3
@@ -382,10 +382,50 @@ wait_for_server() {
     return 1
 }
 
-# Wait for servers (Carta and Velo should be quick, Locus may take longer if building from PBF)
-wait_for_server "Carta" "http://localhost:$CARTA_PORT/api/v1/health" 30
-wait_for_server "Velo" "http://localhost:$VELO_PORT/api/v1/health" 120
-wait_for_server "Locus" "http://localhost:$LOCUS_PORT/api/v1/health" 300
+# Wait for Velo to actually have graph loaded (not just health OK)
+wait_for_velo_ready() {
+    local port=$1
+    local timeout=$2
+
+    echo -n "  Velo: waiting for graph..."
+    for i in $(seq 1 $timeout); do
+        # Check if stats endpoint shows nodes > 0 (graph is loaded)
+        local nodes=$(curl -s "http://localhost:$port/api/v1/stats" 2>/dev/null | grep -o '"num_nodes": *[0-9]*' | grep -o '[0-9]*' || echo "0")
+        if [ "$nodes" -gt 0 ] 2>/dev/null; then
+            echo -e "\r  ${GREEN}Velo ready${NC} ($nodes nodes loaded)        "
+            return 0
+        fi
+        printf "."
+        sleep 1
+    done
+    echo -e "\r  ${YELLOW}Velo timeout (may still be loading)${NC}        "
+    return 1
+}
+
+# Wait for Locus to actually have index loaded
+wait_for_locus_ready() {
+    local port=$1
+    local timeout=$2
+
+    echo -n "  Locus: waiting for index..."
+    for i in $(seq 1 $timeout); do
+        # Check if stats endpoint shows entities > 0 (index is loaded)
+        local entities=$(curl -s "http://localhost:$port/api/v1/stats" 2>/dev/null | grep -o '"entities": *[0-9]*' | grep -o '[0-9]*' || echo "0")
+        if [ "$entities" -gt 0 ] 2>/dev/null; then
+            echo -e "\r  ${GREEN}Locus ready${NC} ($entities entities loaded)        "
+            return 0
+        fi
+        printf "."
+        sleep 1
+    done
+    echo -e "\r  ${YELLOW}Locus timeout (may still be loading)${NC}        "
+    return 1
+}
+
+# Wait for servers - Carta just needs health, Velo/Locus need data loaded
+wait_for_health "Carta" "http://localhost:$CARTA_PORT/api/v1/health" 30
+wait_for_velo_ready "$VELO_PORT" 120
+wait_for_locus_ready "$LOCUS_PORT" 300
 
 echo ""
 echo -e "${GREEN}=== All servers running ===${NC}"
