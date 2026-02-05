@@ -165,11 +165,17 @@ CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math
 **Change:** Added SIMD reduction pragma to objective value computation (dot product)
 **Impact:** Vectorized objective computation
 
-### 2026-02-05: MIP LAP Detection - Root LP Using LAP Solver
-**File:** `src/mip.c:870-895`
-**Issue:** LAP detection worked but root LP was always solved with simplex; LAP solver only used for B&B nodes
-**Fix:** Added LAP solver path for root LP when LAP structure detected
-**Impact:** LAP-structured MIPs (assignment problems) now solve in milliseconds instead of timing out
-- 100x100 assignment: Generic MIP times out (>30s), LAP-enabled solves in 0.5s
-- The actual LAP solve is ~0.05ms; rest is model construction overhead
+### 2026-02-05: MIP LAP Detection - Bypass Presolve + MIP Infrastructure
+**File:** `src/ralph.c:226-260`
+**Issue:** LAP detection happened AFTER presolve, which wasted 480ms for large problems. Then MIP infrastructure was still created, adding more overhead.
+**Fix:** Detect LAP structure FIRST (before presolve) and solve directly with JVC, bypassing both presolve and MIP infrastructure entirely.
+**Impact:** Assignment problems now 17-61× faster than GLPK:
+
+| Size | Ralph Generic | Ralph+Spec | GLPK | Ralph vs GLPK |
+|------|--------------|------------|------|---------------|
+| 20×20 | 4.6ms | **0.1ms** | 1.8ms | **17× faster** |
+| 50×50 | timeout | **0.5ms** | 19.9ms | **40× faster** |
+| 100×100 | timeout | **2.6ms** | 159ms | **61× faster** |
+
+The JVC solver itself takes ~0.05ms for 100×100; the 2.6ms includes model finalization and LAP detection overhead.
 
