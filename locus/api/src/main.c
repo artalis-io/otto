@@ -945,7 +945,7 @@ static void print_usage(const char *prog) {
     sh_args_usage(prog, "<pbf-or-idx-file>");
 
     printf("Locus-specific options:\n");
-    printf("  -s, --save PATH      Save index to binary file after building\n");
+    printf("  -S, --save PATH      Save index to binary file after building\n");
     printf("  --workers N          Geocode worker threads (default: auto)\n");
     printf("\n");
     printf("Locus-specific environment variables:\n");
@@ -959,8 +959,8 @@ static void print_usage(const char *prog) {
     printf("  LOCUS_CORS_CREDENTIALS  Allow credentials (default: 0)\n");
     printf("\n");
     printf("Examples:\n");
-    printf("  %s data/monaco-latest.osm.pbf              # Build from PBF\n", prog);
-    printf("  %s -s monaco.idx data/monaco-latest.osm.pbf  # Build and save\n", prog);
+    printf("  %s data/monaco-latest.osm.pbf               # Build from PBF\n", prog);
+    printf("  %s -S monaco.idx data/monaco-latest.osm.pbf # Build and save\n", prog);
     printf("  %s monaco.idx                              # Load from binary\n", prog);
 }
 
@@ -988,7 +988,7 @@ int main(int argc, char *argv[]) {
 
     /* Parse Locus-specific arguments */
     for (int i = (arg_index > 0 ? arg_index : 1); i < argc; i++) {
-        if (strcmp(argv[i], "--save") == 0) {
+        if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--save") == 0) {
             if (++i < argc) {
                 strncpy(s_config.save_path, argv[i], sizeof(s_config.save_path) - 1);
                 s_config.save_path[sizeof(s_config.save_path) - 1] = '\0';
