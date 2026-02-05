@@ -1038,7 +1038,14 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
         /* Apply geometry simplification */
         if (f->num_points > 4) {
             if (f->type == CT_GEOM_POLYGON) {
-                ct_simplify_poly_inplace(f->points, &f->num_points, tolerance);
+                /* Use ring-aware simplification for multipolygons */
+                if (f->num_rings > 1 && f->ring_ends) {
+                    ct_simplify_multipolygon_inplace(f->points, &f->num_points,
+                                                     f->ring_ends, f->num_rings,
+                                                     tolerance);
+                } else {
+                    ct_simplify_poly_inplace(f->points, &f->num_points, tolerance);
+                }
             } else if (f->type == CT_GEOM_LINESTRING) {
                 ct_simplify_line_inplace(f->points, &f->num_points, tolerance);
             }

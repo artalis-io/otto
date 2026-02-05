@@ -44,6 +44,22 @@ void ct_simplify_line_inplace(CTTilePoint *points, int *num_points, float tolera
 void ct_simplify_poly_inplace(CTTilePoint *points, int *num_points, float tolerance);
 
 /*
+ * Simplify a multipolygon (polygon with holes) in place.
+ *
+ * Each ring is simplified separately to preserve the ring structure.
+ * The ring_ends array is updated to reflect new point counts.
+ *
+ * @param points     Array of tile points (modified in place)
+ * @param num_points Input: original count, Output: simplified count
+ * @param ring_ends  Array of ring end indices (modified in place)
+ * @param num_rings  Number of rings (unchanged)
+ * @param tolerance  Maximum perpendicular distance (in tile units)
+ */
+void ct_simplify_multipolygon_inplace(CTTilePoint *points, int *num_points,
+                                      int *ring_ends, int num_rings,
+                                      float tolerance);
+
+/*
  * Simplify geographic coordinates in place using Douglas-Peucker algorithm.
  *
  * Coordinates are modified in place. Works with lat/lon directly.
