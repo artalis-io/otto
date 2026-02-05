@@ -14,6 +14,7 @@
 #include <string.h>
 #include <limits.h>
 #include <math.h>
+#include <stdio.h>
 
 /* SIMD support detection */
 #if defined(__AVX2__)
@@ -560,6 +561,16 @@ void ct_render_polygon(CTRenderContext *ctx,
         }
 
         /* Fill between pairs of edges using fast span fill */
+#ifndef NDEBUG
+        if (num_active % 2 != 0) {
+            static int odd_warnings_single = 0;
+            if (odd_warnings_single < 10) {
+                fprintf(stderr, "ct_render_polygon: odd active edge count %d at y=%d\n",
+                        num_active, y);
+                odd_warnings_single++;
+            }
+        }
+#endif
         for (int i = 0; i + 1 < num_active; i += 2) {
             int x_start = (int)(active[i].x + 0.5);
             int x_end = (int)(active[i + 1].x + 0.5);
@@ -592,7 +603,14 @@ void ct_render_multipolygon(CTRenderContext *ctx,
     if (num_points < 3 || num_rings < 1 || !ring_ends) return;
 
     /* Validate ring_ends: last entry must equal num_points */
-    if (ring_ends[num_rings - 1] != num_points) return;
+    if (ring_ends[num_rings - 1] != num_points) {
+#ifndef NDEBUG
+        fprintf(stderr, "ct_render_multipolygon: ring_ends mismatch! "
+                "ring_ends[%d-1]=%d != num_points=%d\n",
+                num_rings, ring_ends[num_rings - 1], num_points);
+#endif
+        return;
+    }
 
     /* Find bounding box across all points */
     int min_y = points[0].y, max_y = points[0].y;
@@ -718,6 +736,16 @@ void ct_render_multipolygon(CTRenderContext *ctx,
         }
 
         /* Fill between pairs of edges (even-odd rule) using fast span fill */
+#ifndef NDEBUG
+        if (num_active % 2 != 0) {
+            static int odd_warnings = 0;
+            if (odd_warnings < 10) {
+                fprintf(stderr, "ct_render_multipolygon: odd active edge count %d at y=%d\n",
+                        num_active, y);
+                odd_warnings++;
+            }
+        }
+#endif
         for (int i = 0; i + 1 < num_active; i += 2) {
             int x_start = (int)(active[i].x + 0.5);
             int x_end = (int)(active[i + 1].x + 0.5);
