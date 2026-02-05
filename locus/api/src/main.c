@@ -51,6 +51,7 @@ typedef struct {
     char data_file[512];
     char save_path[512];
     int num_workers;  /* Geocode worker threads (0 = auto) */
+    int build_only;   /* Exit after building/saving index (no HTTP server) */
 } LocusServerConfig;
 
 /* Default configuration */
@@ -157,6 +158,7 @@ static void init_locus_defaults(LocusServerConfig *cfg) {
     cfg->data_file[0] = '\0';
     cfg->save_path[0] = '\0';
     cfg->num_workers = 0;  /* Auto-detect */
+    cfg->build_only = 0;   /* Run HTTP server by default */
 }
 
 /* Load Locus-specific environment variables */
@@ -946,6 +948,7 @@ static void print_usage(const char *prog) {
 
     printf("Locus-specific options:\n");
     printf("  -s, --save PATH      Save index to binary file after building\n");
+    printf("  --build-only         Exit after building/saving index (no HTTP server)\n");
     printf("  --workers N          Geocode worker threads (default: auto)\n");
     printf("\n");
     printf("Locus-specific environment variables:\n");
@@ -993,6 +996,8 @@ int main(int argc, char *argv[]) {
                 strncpy(s_config.save_path, argv[i], sizeof(s_config.save_path) - 1);
                 s_config.save_path[sizeof(s_config.save_path) - 1] = '\0';
             }
+        } else if (strcmp(argv[i], "--build-only") == 0) {
+            s_config.build_only = 1;
         } else if (strcmp(argv[i], "--workers") == 0) {
             if (++i < argc) s_config.num_workers = atoi(argv[i]);
         } else if (strcmp(argv[i], "--help") == 0) {
@@ -1049,6 +1054,14 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "Warning: Failed to save index: %s\n", lc_status_string(status));
             } else {
                 printf("Saved binary index\n");
+            }
+
+            /* Exit if --build-only was specified */
+            if (s_config.build_only) {
+                printf("Build complete (--build-only specified)\n");
+                lc_index_free(g_index);
+                sh_log_shutdown();
+                return 0;
             }
         }
     }

@@ -221,6 +221,7 @@ Common options:
 
 Locus-specific options:
   -s, --save PATH           Save index to binary file after building
+  --build-only              Exit after building/saving index (no HTTP server)
   --workers N               Geocode worker threads (default: auto)
 ```
 
