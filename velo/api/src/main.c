@@ -490,31 +490,24 @@ static void *route_worker_fn(void *arg) {
  * HTTP Response Helpers
  * ============================================================================ */
 
+/* HTTP response helpers - use shared implementation */
 static void send_json_with_cors(struct mg_connection *c, int status,
                                  const char *json, const char *origin) {
-    char cors_hdrs[512];
-    sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
-    char headers[600];
-    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_hdrs);
-    mg_http_reply(c, status, headers, "%s", json);
+    sh_mg_reply_json(c, status, &s_cors_config, origin, json);
 }
 
 static void send_error_with_cors(struct mg_connection *c, int status,
                                   const char *message, const char *origin) {
-    char cors_hdrs[512];
-    sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
-    char headers[600];
-    snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_hdrs);
-    mg_http_reply(c, status, headers, "{\"error\": \"%s\"}\n", message);
+    sh_mg_reply_error(c, status, &s_cors_config, origin, message);
 }
 
 /* Compatibility wrappers for simple calls (uses wildcard origin) */
 static void send_json(struct mg_connection *c, int status, const char *json) {
-    send_json_with_cors(c, status, json, NULL);
+    sh_mg_reply_json(c, status, &s_cors_config, NULL, json);
 }
 
 static void send_error(struct mg_connection *c, int status, const char *message) {
-    send_error_with_cors(c, status, message, NULL);
+    sh_mg_reply_error(c, status, &s_cors_config, NULL, message);
 }
 
 /* Escape backslashes in polyline for JSON output */
@@ -612,15 +605,7 @@ static int parse_bool(struct mg_str str, int default_val) {
  * ============================================================================ */
 
 static void handle_health(struct mg_connection *c) {
-    char response[512];
-    snprintf(response, sizeof(response),
-        "{\n"
-        "  \"status\": \"healthy\",\n"
-        "  \"service\": \"velo-route-server\",\n"
-        "  \"version\": \"%s\"\n"
-        "}\n",
-        vl_version());
-    send_json(c, 200, response);
+    sh_mg_handle_health(c, &s_cors_config, NULL, "velo-route-server", vl_version());
 }
 
 static void handle_stats(struct mg_connection *c) {
@@ -731,20 +716,9 @@ static void handle_stats(struct mg_connection *c) {
     send_json(c, 200, response);
 }
 
-/* GET /metrics - Prometheus metrics endpoint */
+/* GET /metrics - Prometheus metrics endpoint, uses shared helper */
 static void handle_metrics(struct mg_connection *c) {
-    char *prom = sh_metrics_prometheus_output();
-    if (prom) {
-        mg_http_reply(c, 200,
-            "Content-Type: text/plain; version=0.0.4\r\n"
-            "Access-Control-Allow-Origin: *\r\n",
-            "%s", prom);
-        free(prom);
-    } else {
-        mg_http_reply(c, 500,
-            "Content-Type: text/plain\r\n",
-            "Failed to generate metrics\n");
-    }
+    sh_mg_handle_metrics(c);
 }
 
 static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
@@ -1086,28 +1060,12 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
             origin[origin_hdr->len] = '\0';
         }
 
-        /* Rate limiting check (supports both IPv4 and IPv6) */
-        if (s_rate_limiter) {
-            ShRateLimitAddr client_addr;
-            if (c->rem.is_ip6) {
-                sh_ratelimit_addr_ipv6(&client_addr,
-                                       c->rem.addr.ip6[0], c->rem.addr.ip6[1]);
-            } else {
-                sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
-            }
-            if (!sh_ratelimit_check(s_rate_limiter, &client_addr)) {
-                sh_metrics_counter_inc("http_requests_total", 1,
-                    "endpoint", "rate_limited", "status", "429", NULL);
-                char cors_hdrs[512];
-                sh_cors_headers(&s_cors_config, origin, cors_hdrs, sizeof(cors_hdrs));
-                char headers[600];
-                snprintf(headers, sizeof(headers),
-                         "Content-Type: text/plain\r\n"
-                         "Retry-After: 1\r\n%s", cors_hdrs);
-                mg_http_reply(c, 429, headers, "Rate limit exceeded\n");
-                sh_trace_clear();
-                return;
-            }
+        /* Rate limiting check - uses shared helper */
+        if (!sh_mg_check_rate_limit(c, s_rate_limiter, &s_cors_config, origin)) {
+            sh_metrics_counter_inc("http_requests_total", 1,
+                "endpoint", "rate_limited", "status", "429", NULL);
+            sh_trace_clear();
+            return;
         }
 
         /* CORS preflight */

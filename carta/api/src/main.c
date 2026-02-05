@@ -698,29 +698,11 @@ static void load_carta_env(TileServerConfig *cfg) {
  * HTTP Response Helpers
  * ============================================================================ */
 
-/* Get CORS preflight headers for an OPTIONS request */
-static void get_cors_preflight_headers(struct mg_http_message *hm, char *buf, size_t size) {
-    buf[0] = '\0';
-    const char *origin = NULL;
-    struct mg_str *origin_hdr = mg_http_get_header(hm, "Origin");
-    if (origin_hdr && origin_hdr->len > 0) {
-        static __thread char origin_buf[256];
-        size_t len = origin_hdr->len < sizeof(origin_buf) - 1 ?
-                     origin_hdr->len : sizeof(origin_buf) - 1;
-        memcpy(origin_buf, origin_hdr->buf, len);
-        origin_buf[len] = '\0';
-        origin = origin_buf;
-    }
-    sh_cors_preflight_headers(&s_cors, origin, buf, size);
-}
-
 /*
- * Extract origin from request and generate CORS headers.
+ * Extract origin from request.
  * Thread-safe using thread-local storage for origin buffer.
  */
-static void get_cors_headers_from_request(struct mg_http_message *hm, char *buf, size_t size) {
-    buf[0] = '\0';
-    const char *origin = NULL;
+static const char *get_origin_from_request(struct mg_http_message *hm) {
     struct mg_str *origin_hdr = hm ? mg_http_get_header(hm, "Origin") : NULL;
     if (origin_hdr && origin_hdr->len > 0) {
         static __thread char origin_buf[256];
@@ -728,37 +710,32 @@ static void get_cors_headers_from_request(struct mg_http_message *hm, char *buf,
                      origin_hdr->len : sizeof(origin_buf) - 1;
         memcpy(origin_buf, origin_hdr->buf, len);
         origin_buf[len] = '\0';
-        origin = origin_buf;
+        return origin_buf;
     }
-    sh_cors_headers(&s_cors, origin, buf, size);
+    return NULL;
 }
 
+/* Get CORS preflight headers for an OPTIONS request */
+static void get_cors_preflight_headers(struct mg_http_message *hm, char *buf, size_t size) {
+    sh_cors_preflight_headers(&s_cors, get_origin_from_request(hm), buf, size);
+}
+
+/* HTTP response helpers - use shared implementation */
 static void send_json_cors(struct mg_connection *c, struct mg_http_message *hm,
                            int status, const char *json) {
-    char cors_headers[512];
-    get_cors_headers_from_request(hm, cors_headers, sizeof(cors_headers));
-
-    char headers[600];
-    snprintf(headers, sizeof(headers),
-        "Content-Type: application/json\r\n%s", cors_headers);
-    mg_http_reply(c, status, headers, "%s", json);
+    sh_mg_reply_json(c, status, &s_cors, get_origin_from_request(hm), json);
 }
 
 static void send_error_cors(struct mg_connection *c, struct mg_http_message *hm,
                             int status, const char *message) {
-    char cors_headers[512];
-    get_cors_headers_from_request(hm, cors_headers, sizeof(cors_headers));
-
-    char headers[600];
-    snprintf(headers, sizeof(headers),
-        "Content-Type: application/json\r\n%s", cors_headers);
-    mg_http_reply(c, status, headers, "{\"error\": \"%s\"}\n", message);
+    sh_mg_reply_error(c, status, &s_cors, get_origin_from_request(hm), message);
 }
 
+/* send_tile_cors sends binary data so uses sh_cors_headers directly */
 static void send_tile_cors(struct mg_connection *c, struct mg_http_message *hm,
                            const char *content_type, const uint8_t *data, size_t size) {
     char cors_headers[512];
-    get_cors_headers_from_request(hm, cors_headers, sizeof(cors_headers));
+    sh_cors_headers(&s_cors, get_origin_from_request(hm), cors_headers, sizeof(cors_headers));
 
     mg_printf(c,
         "HTTP/1.1 200 OK\r\n"
@@ -786,17 +763,10 @@ static void send_tile(struct mg_connection *c, const char *content_type,
  * API Handlers
  * ============================================================================ */
 
-/* GET /api/v1/health */
+/* GET /api/v1/health - uses shared helper */
 static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
-    char response[512];
-    snprintf(response, sizeof(response),
-        "{\n"
-        "  \"status\": \"healthy\",\n"
-        "  \"service\": \"carta-tile-server\",\n"
-        "  \"version\": \"%s\"\n"
-        "}\n",
-        ct_version());
-    send_json_cors(c, hm, 200, response);
+    sh_mg_handle_health(c, &s_cors, get_origin_from_request(hm),
+                        "carta-tile-server", ct_version());
 }
 
 /* GET /api/v1/stats */
@@ -1378,18 +1348,9 @@ static const char *trace_header_getter(const char *name, void *ctx) {
     return NULL;
 }
 
-/* Handle /metrics endpoint for Prometheus */
+/* Handle /metrics endpoint for Prometheus - uses shared helper */
 static void handle_metrics(struct mg_connection *c) {
-    char *prom = sh_metrics_prometheus_output();
-    if (prom) {
-        mg_http_reply(c, 200,
-            "Content-Type: text/plain; version=0.0.4\r\n"
-            "Access-Control-Allow-Origin: *\r\n",
-            "%s", prom);
-        free(prom);
-    } else {
-        mg_http_reply(c, 500, "", "Failed to generate metrics\n");
-    }
+    sh_mg_handle_metrics(c);
 }
 
 static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
@@ -1406,27 +1367,13 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
         /* Extract or generate trace ID */
         sh_trace_from_headers(trace_header_getter, hm);
 
-        /* Rate limiting check (supports both IPv4 and IPv6) */
-        if (s_rate_limiter) {
-            ShRateLimitAddr client_addr;
-            if (c->rem.is_ip6) {
-                sh_ratelimit_addr_ipv6(&client_addr,
-                                       c->rem.addr.ip6[0], c->rem.addr.ip6[1]);
-            } else {
-                sh_ratelimit_addr_ipv4(&client_addr, c->rem.addr.ip4);
-            }
-            if (!sh_ratelimit_check(s_rate_limiter, &client_addr)) {
-                SH_LOG_WARN("Rate limit exceeded", "status", "429");
-                sh_metrics_counter_inc("http_requests_total", 1,
-                                       "status:429", "endpoint:ratelimit", NULL);
-                mg_http_reply(c, 429,
-                    "Content-Type: text/plain\r\n"
-                    "Retry-After: 1\r\n"
-                    "Access-Control-Allow-Origin: *\r\n",
-                    "Rate limit exceeded\n");
-                sh_trace_clear();
-                return;
-            }
+        /* Rate limiting check - uses shared helper */
+        if (!sh_mg_check_rate_limit(c, s_rate_limiter, &s_cors, get_origin_from_request(hm))) {
+            SH_LOG_WARN("Rate limit exceeded", "status", "429");
+            sh_metrics_counter_inc("http_requests_total", 1,
+                                   "status:429", "endpoint:ratelimit", NULL);
+            sh_trace_clear();
+            return;
         }
 
         /* CORS preflight */
