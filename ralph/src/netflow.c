@@ -724,6 +724,11 @@ static void update_tree(
 
 /*
  * Recalculate all node potentials from scratch using tree structure.
+ *
+ * NOTE: This uses a "repeat until no changes" approach which is O(n²) worst-case
+ * on deep trees but O(n) for balanced trees. A BFS or topological sort approach
+ * would be O(n) always but requires building child lists from parent pointers.
+ * For typical network flow problems (shallow trees), this is efficient enough.
  */
 static void recalculate_potentials(RalphNetflowWorkspace *ws, int num_nodes) {
     int root = num_nodes;

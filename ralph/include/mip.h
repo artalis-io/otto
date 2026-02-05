@@ -177,6 +177,11 @@ typedef struct {
     int lap_nodes_solved;        /* Number of nodes solved with LAP */
     int simplex_nodes_solved;    /* Number of nodes solved with simplex */
 
+    /* SCP-specific optimizations (for set covering/partitioning MIPs) */
+    int use_scp_solver;          /* 1 if SCP structure detected and enabled */
+    int scp_cuts_generated;      /* Number of SCP-specific cuts generated */
+    double lagrangian_bound;     /* Best Lagrangian dual bound (if computed) */
+
 } MIPSolver;
 
 /* MIP solver functions */
@@ -400,6 +405,23 @@ int heuristic_greedy_set_cover(MIPSolver *solver, double *solution);
 int heuristic_lp_guided_greedy(MIPSolver *solver, const double *lp_solution, double *solution);
 
 /*
+ * Check if model has SCP (Set Covering Problem) structure.
+ *
+ * An SCP has:
+ * - All binary variables
+ * - All >= or = constraints
+ * - All 0-1 coefficients
+ * - Positive RHS
+ *
+ * Parameters:
+ *   model - LP model to check
+ *
+ * Returns:
+ *   1 if SCP, 0 otherwise.
+ */
+int is_scp_model(const LPModel *model);
+
+/*
  * Local search improvement for SCP solutions.
  *
  * Improves a feasible SCP solution via:
@@ -595,5 +617,35 @@ double lagrangian_repair(LagrangianContext *ctx, MIPSolver *solver, double *solu
  *   0 on success with solution, -1 if not SCP or error.
  */
 int lagrangian_solve_scp(MIPSolver *solver, double *solution, double *lower_bound);
+
+/*
+ * Solve SCP using generic Lagrangian framework (no MIPSolver dependency).
+ *
+ * This is the low-level function that operates directly on problem data.
+ * Use lagrangian_solve_scp() for the MIPSolver-integrated version.
+ *
+ * Parameters:
+ *   m, n       - Problem dimensions (elements, sets)
+ *   costs      - Set costs [n]
+ *   rhs        - RHS values [m] (typically all 1.0 for SCP)
+ *   col_ptr    - CSC column pointers [n+1]
+ *   row_idx    - CSC row indices
+ *   initial_ub - Initial upper bound from heuristic (HUGE_VAL if none)
+ *   solution   - Output: best solution found [n]
+ *   lower_bound - Output: best lower bound (can be NULL)
+ *
+ * Returns:
+ *   0 on success, -1 on error.
+ */
+int ralph_lagrangian_solve_scp_ex(
+    int m, int n,
+    const double *costs,
+    const double *rhs,
+    const int *col_ptr,
+    const int *row_idx,
+    double initial_ub,
+    double *solution,
+    double *lower_bound
+);
 
 #endif /* RALPH_MIP_H */

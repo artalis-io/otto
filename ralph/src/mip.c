@@ -137,6 +137,21 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
         }
     }
 
+    /* Detect SCP structure for specialized cuts, heuristics, and Lagrangian */
+    solver->use_scp_solver = 0;
+    solver->scp_cuts_generated = 0;
+    solver->lagrangian_bound = -RALPH_INFINITY;
+
+    if (detect_special && is_scp_model(model)) {
+        solver->use_scp_solver = 1;
+        if (solver->verbose) {
+            printf("SCP structure detected: %d elements, %d sets\n",
+                   model->num_cons, model->num_vars);
+        }
+        /* Initialize pseudo-costs using SCP cost/coverage ratio */
+        init_pseudo_costs_scp(solver);
+    }
+
     return solver;
 }
 
@@ -899,6 +914,44 @@ static int solve_root_node(MIPSolver *solver) {
         }
     }
 
+    /* Try SCP-specific heuristics if SCP structure detected */
+    if (solver->use_scp_solver) {
+        double *scp_solution = (double *)calloc(model->num_vars, sizeof(double));
+        if (scp_solution) {
+            if (solver->verbose) {
+                printf("Running SCP heuristics...\n");
+            }
+            /* Run LP-guided greedy + local search */
+            if (heuristic_scp(solver, solver->lp_solver->solution, scp_solution) == 0) {
+                /* Compute objective value */
+                double scp_obj = 0.0;
+                for (int j = 0; j < model->num_vars; j++) {
+                    scp_obj += model->c[j] * scp_solution[j];
+                }
+                /* Check if this is better than current incumbent */
+                int is_better = (model->obj_sense == 1) ?
+                                (scp_obj < solver->best_obj) : (scp_obj > solver->best_obj);
+                if (!solver->has_incumbent || is_better) {
+                    update_incumbent(solver, scp_solution, scp_obj);
+                    if (solver->verbose) {
+                        printf("SCP heuristic found incumbent: %.6f\n", scp_obj);
+                    }
+                }
+            }
+            free(scp_solution);
+
+            /* Check if heuristic found optimal (gap closed) */
+            if (solver->has_incumbent) {
+                double gap = fabs(solver->best_obj - solver->root_bound);
+                if (gap < solver->abs_mip_gap) {
+                    solver->status = RALPH_STATUS_OPTIMAL;
+                    bb_node_pool_return(solver->node_pool, root);
+                    return 0;
+                }
+            }
+        }
+    }
+
     /* Generate cuts at root node */
     int cut_rounds = 0;
     double prev_bound = root->lp_bound;
@@ -920,6 +973,13 @@ static int solve_root_node(MIPSolver *solver) {
 
         /* Generate cover cuts (from knapsack constraints) */
         cuts_added += generate_cover_cuts(solver, solver->cut_pool);
+
+        /* Generate SCP-specific cuts (clique, odd-hole, lifted cover) */
+        if (solver->use_scp_solver) {
+            int scp_cuts = generate_scp_cuts(solver, solver->cut_pool);
+            cuts_added += scp_cuts;
+            solver->scp_cuts_generated += scp_cuts;
+        }
 
         if (cuts_added == 0) {
             /* No new cuts - clean up old ones and try one more time */
@@ -1029,6 +1089,58 @@ static int solve_root_node(MIPSolver *solver) {
 
     /* Initialize best bound */
     solver->best_bound = root->lp_bound;
+
+    /* Compute Lagrangian bound for SCP (often tighter than LP) */
+    if (solver->use_scp_solver && solver->has_incumbent) {
+        double *lagr_solution = (double *)calloc(model->num_vars, sizeof(double));
+        double lagr_lower = -RALPH_INFINITY;
+
+        if (lagr_solution) {
+            if (solver->verbose) {
+                printf("Computing Lagrangian bound...\n");
+            }
+            if (lagrangian_solve_scp(solver, lagr_solution, &lagr_lower) == 0) {
+                solver->lagrangian_bound = lagr_lower;
+
+                /* Use Lagrangian bound if tighter than LP bound */
+                int lagr_tighter = (model->obj_sense == 1) ?
+                                   (lagr_lower > solver->best_bound) :
+                                   (lagr_lower < solver->best_bound);
+                if (lagr_tighter) {
+                    if (solver->verbose) {
+                        printf("Lagrangian bound (%.6f) tighter than LP (%.6f)\n",
+                               lagr_lower, solver->best_bound);
+                    }
+                    solver->best_bound = lagr_lower;
+                    root->lp_bound = lagr_lower;
+                }
+
+                /* Check if Lagrangian found a better solution */
+                double lagr_obj = 0.0;
+                for (int j = 0; j < model->num_vars; j++) {
+                    lagr_obj += model->c[j] * lagr_solution[j];
+                }
+                int is_better = (model->obj_sense == 1) ?
+                                (lagr_obj < solver->best_obj) : (lagr_obj > solver->best_obj);
+                if (is_better) {
+                    update_incumbent(solver, lagr_solution, lagr_obj);
+                    if (solver->verbose) {
+                        printf("Lagrangian found better incumbent: %.6f\n", lagr_obj);
+                    }
+                }
+
+                /* Check if gap is closed */
+                double gap = fabs(solver->best_obj - solver->best_bound);
+                if (gap < solver->abs_mip_gap) {
+                    solver->status = RALPH_STATUS_OPTIMAL;
+                    free(lagr_solution);
+                    bb_node_pool_return(solver->node_pool, root);
+                    return 0;
+                }
+            }
+            free(lagr_solution);
+        }
+    }
 
     /* Add root to queue */
     solver->node_count = 1;

@@ -517,7 +517,7 @@ typedef struct {
     int iterations;
 } SolveResult;
 
-static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit) {
+static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use_specialized) {
     SolveResult result = {0};
 
     RalphModel *model = ralph_create();
@@ -530,6 +530,12 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit) {
     ralph_set_dbl_param(model, "time_limit", time_limit);
     ralph_set_int_param(model, "max_nodes", 100000);
     ralph_set_int_param(model, "presolve", 1);  /* Enable presolve for MIP */
+
+    /* Enable specialized solvers (LAP, Network Simplex, SCP Lagrangian) */
+    if (use_specialized) {
+        ralph_set_int_param(model, "detect_special", 1);
+    }
+
     ralph_set_obj_sense(model, prob->sense);
 
     /* Add variables */
@@ -720,32 +726,90 @@ static void print_result(const char *solver, SolveResult *res) {
            solver, status_str, res->objective, res->solve_time);
 }
 
-static void run_mip_benchmark(MIPProblem *prob, double time_limit) {
+/* Benchmark modes */
+typedef enum {
+    BENCH_MODE_GENERIC,      /* Ralph generic MIP vs GLPK */
+    BENCH_MODE_SPECIALIZED,  /* Ralph with LAP/Network/SCP detection vs GLPK */
+    BENCH_MODE_COMPARE_ALL   /* All three: generic, specialized, and GLPK */
+} BenchMode;
+
+static void run_mip_benchmark(MIPProblem *prob, double time_limit, BenchMode mode) {
     printf("\n");
     printf("Problem: %s\n", prob->name);
     printf("  %d variables (%d integer), %d constraints, %d non-zeros\n",
            prob->num_vars, prob->num_integers, prob->num_cons, prob->nnz);
-    printf("  %-8s %-8s %12s %10s\n", "Solver", "Status", "Objective", "Time(s)");
-    printf("  %-8s %-8s %12s %10s\n", "------", "------", "---------", "-------");
 
-    SolveResult ralph_res = solve_with_ralph(prob, time_limit);
-    print_result("Ralph", &ralph_res);
+    if (mode == BENCH_MODE_COMPARE_ALL) {
+        printf("  %-12s %-8s %12s %10s\n", "Solver", "Status", "Objective", "Time(s)");
+        printf("  %-12s %-8s %12s %10s\n", "------", "------", "---------", "-------");
 
-    SolveResult glpk_res = solve_with_glpk(prob, time_limit);
-    print_result("GLPK", &glpk_res);
+        SolveResult generic_res = solve_with_ralph(prob, time_limit, 0);
+        printf("  %-12s %-8s %12.2f %10.4f\n", "Ralph",
+               generic_res.status == 0 ? "OPT" : (generic_res.status == 1 ? "INF" : "LIM"),
+               generic_res.objective, generic_res.solve_time);
 
-    /* Compare objectives if both optimal */
-    if (ralph_res.status == 0 && glpk_res.status == 0) {
-        double diff = fabs(ralph_res.objective - glpk_res.objective);
-        double scale = fmax(1.0, fabs(glpk_res.objective));
-        if (diff / scale > 1e-4) {
-            printf("  WARNING: Objective mismatch (diff = %.4f)\n", diff);
-        } else {
-            printf("  Objectives match (OK)\n");
+        SolveResult special_res = solve_with_ralph(prob, time_limit, 1);
+        printf("  %-12s %-8s %12.2f %10.4f\n", "Ralph+Spec",
+               special_res.status == 0 ? "OPT" : (special_res.status == 1 ? "INF" : "LIM"),
+               special_res.objective, special_res.solve_time);
+
+        SolveResult glpk_res = solve_with_glpk(prob, time_limit);
+        printf("  %-12s %-8s %12.2f %10.4f\n", "GLPK",
+               glpk_res.status == 0 ? "OPT" : (glpk_res.status == 1 ? "INF" : "LIM"),
+               glpk_res.objective, glpk_res.solve_time);
+
+        /* Compare results */
+        if (generic_res.status == 0 && special_res.status == 0 && glpk_res.status == 0) {
+            printf("\n  Speedups (vs GLPK):\n");
+            if (glpk_res.solve_time > 0) {
+                double generic_ratio = generic_res.solve_time / glpk_res.solve_time;
+                double special_ratio = special_res.solve_time / glpk_res.solve_time;
+                if (generic_ratio > 1.0) {
+                    printf("    Ralph generic:     GLPK %.1fx faster\n", generic_ratio);
+                } else {
+                    printf("    Ralph generic:     Ralph %.1fx faster\n", 1.0 / generic_ratio);
+                }
+                if (special_ratio > 1.0) {
+                    printf("    Ralph specialized: GLPK %.1fx faster\n", special_ratio);
+                } else {
+                    printf("    Ralph specialized: Ralph %.1fx faster\n", 1.0 / special_ratio);
+                }
+            }
+            if (generic_res.solve_time > 0 && special_res.solve_time < generic_res.solve_time) {
+                printf("    Specialized gain:  %.1fx faster than generic\n",
+                       generic_res.solve_time / special_res.solve_time);
+            }
         }
-        if (ralph_res.solve_time > 0 && glpk_res.solve_time > 0) {
-            printf("  Speedup: GLPK %.1fx faster\n",
-                   ralph_res.solve_time / glpk_res.solve_time);
+    } else {
+        int use_specialized = (mode == BENCH_MODE_SPECIALIZED);
+        const char *solver_name = use_specialized ? "Ralph+Spec" : "Ralph";
+
+        printf("  %-8s %-8s %12s %10s\n", "Solver", "Status", "Objective", "Time(s)");
+        printf("  %-8s %-8s %12s %10s\n", "------", "------", "---------", "-------");
+
+        SolveResult ralph_res = solve_with_ralph(prob, time_limit, use_specialized);
+        print_result(solver_name, &ralph_res);
+
+        SolveResult glpk_res = solve_with_glpk(prob, time_limit);
+        print_result("GLPK", &glpk_res);
+
+        /* Compare objectives if both optimal */
+        if (ralph_res.status == 0 && glpk_res.status == 0) {
+            double diff = fabs(ralph_res.objective - glpk_res.objective);
+            double scale = fmax(1.0, fabs(glpk_res.objective));
+            if (diff / scale > 1e-4) {
+                printf("  WARNING: Objective mismatch (diff = %.4f)\n", diff);
+            } else {
+                printf("  Objectives match (OK)\n");
+            }
+            if (ralph_res.solve_time > 0 && glpk_res.solve_time > 0) {
+                double ratio = ralph_res.solve_time / glpk_res.solve_time;
+                if (ratio > 1.0) {
+                    printf("  Speedup: GLPK %.1fx faster\n", ratio);
+                } else {
+                    printf("  Speedup: Ralph %.1fx faster\n", 1.0 / ratio);
+                }
+            }
         }
     }
 }
@@ -766,6 +830,13 @@ static void print_header(void) {
 
 static void print_usage(const char *prog) {
     printf("Usage: %s [options]\n", prog);
+    printf("\nModes:\n");
+    printf("  (default)           Generic Ralph MIP vs GLPK\n");
+    printf("  --specialized       Ralph with specialized solvers vs GLPK\n");
+    printf("                      - LAP/JVC for assignment problems\n");
+    printf("                      - SCP heuristics/cuts/Lagrangian for set covering\n");
+    printf("                      - Network simplex for network flow (LP)\n");
+    printf("  --compare-all       Compare all three: generic, specialized, and GLPK\n");
     printf("\nOptions:\n");
     printf("  --quick             Run quick benchmarks (smaller sizes)\n");
     printf("  --problem NAME      Run only specified problem type:\n");
@@ -773,6 +844,11 @@ static void print_usage(const char *prog) {
     printf("  --size N            Override problem size\n");
     printf("  --time-limit T      Set time limit in seconds (default: 60)\n");
     printf("  --help              Show this help\n");
+    printf("\nExamples:\n");
+    printf("  %s                        # Generic Ralph vs GLPK\n", prog);
+    printf("  %s --specialized          # Ralph with LAP detection vs GLPK\n", prog);
+    printf("  %s --compare-all          # All three modes side-by-side\n", prog);
+    printf("  %s --compare-all --quick  # Quick comparison on small problems\n", prog);
 }
 
 int main(int argc, char **argv) {
@@ -783,10 +859,15 @@ int main(int argc, char **argv) {
     const char *problem_filter = NULL;
     int size_override = 0;
     double time_limit = 60.0;
+    BenchMode mode = BENCH_MODE_GENERIC;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--quick") == 0) {
             quick_mode = 1;
+        } else if (strcmp(argv[i], "--specialized") == 0) {
+            mode = BENCH_MODE_SPECIALIZED;
+        } else if (strcmp(argv[i], "--compare-all") == 0) {
+            mode = BENCH_MODE_COMPARE_ALL;
         } else if (strcmp(argv[i], "--problem") == 0 && i + 1 < argc) {
             problem_filter = argv[++i];
         } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
@@ -813,6 +894,19 @@ int main(int argc, char **argv) {
     printf("\nTime limit: %.0f seconds per problem\n", time_limit);
     if (quick_mode) printf("Quick mode: using smaller problem sizes\n");
 
+    /* Print mode */
+    switch (mode) {
+        case BENCH_MODE_GENERIC:
+            printf("Mode: Generic Ralph MIP vs GLPK\n");
+            break;
+        case BENCH_MODE_SPECIALIZED:
+            printf("Mode: Ralph with specialized solvers (LAP/SCP/Network) vs GLPK\n");
+            break;
+        case BENCH_MODE_COMPARE_ALL:
+            printf("Mode: Comparing generic, specialized, and GLPK\n");
+            break;
+    }
+
     /* Run benchmarks */
     MIPProblem *prob;
 
@@ -824,16 +918,16 @@ int main(int argc, char **argv) {
         printf("--------------------------------------------------------------------------------\n");
 
         prob = generate_set_covering(small_size, small_size * 2, 0.3, 42);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
 
         prob = generate_set_covering(medium_size, medium_size * 2, 0.25, 123);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
 
         if (!quick_mode) {
             prob = generate_set_covering(large_size, large_size * 2, 0.2, 456);
-            run_mip_benchmark(prob, time_limit);
+            run_mip_benchmark(prob, time_limit, mode);
             mip_free(prob);
         }
     }
@@ -846,11 +940,11 @@ int main(int argc, char **argv) {
         printf("--------------------------------------------------------------------------------\n");
 
         prob = generate_set_partitioning(small_size, small_size * 3, 0.35, 42);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
 
         prob = generate_set_partitioning(medium_size, medium_size * 3, 0.30, 123);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
     }
 
@@ -862,16 +956,16 @@ int main(int argc, char **argv) {
         printf("--------------------------------------------------------------------------------\n");
 
         prob = generate_linear_assignment(small_size, 42);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
 
         prob = generate_linear_assignment(medium_size, 123);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
 
         if (!quick_mode) {
             prob = generate_linear_assignment(large_size, 456);
-            run_mip_benchmark(prob, time_limit);
+            run_mip_benchmark(prob, time_limit, mode);
             mip_free(prob);
         }
     }
@@ -884,16 +978,16 @@ int main(int argc, char **argv) {
         printf("--------------------------------------------------------------------------------\n");
 
         prob = generate_network_flow(small_size * 2, small_size * 4, 42);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
 
         prob = generate_network_flow(medium_size * 2, medium_size * 4, 123);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
 
         if (!quick_mode) {
             prob = generate_network_flow(large_size * 2, large_size * 4, 456);
-            run_mip_benchmark(prob, time_limit);
+            run_mip_benchmark(prob, time_limit, mode);
             mip_free(prob);
         }
     }
@@ -906,16 +1000,16 @@ int main(int argc, char **argv) {
         printf("--------------------------------------------------------------------------------\n");
 
         prob = generate_facility_location(small_size, small_size / 2, 42);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
 
         prob = generate_facility_location(medium_size, medium_size / 2, 123);
-        run_mip_benchmark(prob, time_limit);
+        run_mip_benchmark(prob, time_limit, mode);
         mip_free(prob);
 
         if (!quick_mode) {
             prob = generate_facility_location(large_size, large_size / 2, 456);
-            run_mip_benchmark(prob, time_limit);
+            run_mip_benchmark(prob, time_limit, mode);
             mip_free(prob);
         }
     }
