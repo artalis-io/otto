@@ -337,9 +337,11 @@ export class CrtEffects {
 
         if (progress >= 1) return; // Fully off
 
-        // Phase 1 (0-0.7): Vertical collapse to horizontal line
-        // Phase 2 (0.7-1): Horizontal line fades out
-        const collapseEnd = 0.7;
+        // Phase 1 (0-0.35): Vertical collapse to horizontal line
+        // Phase 2 (0.35-0.6): Horizontal collapse to dot in center
+        // Phase 3 (0.6-1): Dot fades out
+        const phase1End = 0.35;
+        const phase2End = 0.6;
 
         // Use CRT shader to maintain scanlines/chromatic effects
         gl.useProgram(this.crtShader.program);
@@ -363,29 +365,30 @@ export class CrtEffects {
         gl.enableVertexAttribArray(posLoc);
         gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-        if (progress < collapseEnd) {
-            // Vertical collapse - draw with shrinking height
-            const t = progress / collapseEnd; // 0-1 for collapse phase
-            const height = 1 - t * 0.98; // Shrink to 2% of original height
+        let scaleX = 1.0, scaleY = 1.0, alpha = 1.0;
 
-            gl.uniform2f(this.crtShader.uniforms.u_scale, 1.0, height);
-            gl.uniform2f(this.crtShader.uniforms.u_offset, 0.0, (1 - height) / 2);
-            gl.uniform1f(this.crtShader.uniforms.u_alpha, 1.0);
-
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
+        if (progress < phase1End) {
+            // Phase 1: Vertical collapse to horizontal line
+            const t = progress / phase1End;
+            scaleY = 1 - t * 0.97; // Shrink to 3% height
+        } else if (progress < phase2End) {
+            // Phase 2: Horizontal collapse to dot
+            const t = (progress - phase1End) / (phase2End - phase1End);
+            scaleY = 0.03; // Stay at 3% height
+            scaleX = 1 - t * 0.95; // Shrink to 5% width
         } else {
-            // Fade out - draw a bright line that fades
-            const t = (progress - collapseEnd) / (1 - collapseEnd); // 0-1 for fade phase
-            const brightness = 1 - t;
-            const lineHeight = 0.02;
-
-            gl.uniform2f(this.crtShader.uniforms.u_scale, 1.0, lineHeight);
-            gl.uniform2f(this.crtShader.uniforms.u_offset, 0.0, (1 - lineHeight) / 2);
-            gl.uniform1f(this.crtShader.uniforms.u_alpha, brightness);
-
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            // Phase 3: Dot fades out
+            const t = (progress - phase2End) / (1 - phase2End);
+            scaleX = 0.05;
+            scaleY = 0.03;
+            alpha = 1 - t;
         }
 
+        gl.uniform2f(this.crtShader.uniforms.u_scale, scaleX, scaleY);
+        gl.uniform2f(this.crtShader.uniforms.u_offset, (1 - scaleX) / 2, (1 - scaleY) / 2);
+        gl.uniform1f(this.crtShader.uniforms.u_alpha, alpha);
+
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
         gl.disableVertexAttribArray(posLoc);
     }
 
