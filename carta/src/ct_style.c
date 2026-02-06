@@ -31,15 +31,16 @@ void ct_default_style(CTStyle *style)
     /* Road widths at key zoom levels (OSM Carto-style)
      * Format: { z10, z14, z18 }
      * Widths are linearly interpolated between these points.
+     * Updated to better match OSM Carto visual appearance.
      */
-    style->road_widths[CT_ROAD_MOTORWAY]    = (CTRoadWidth){ 2.0f, 4.0f, 8.0f };
-    style->road_widths[CT_ROAD_TRUNK]       = (CTRoadWidth){ 1.5f, 3.5f, 7.0f };
-    style->road_widths[CT_ROAD_PRIMARY]     = (CTRoadWidth){ 1.0f, 3.0f, 6.0f };
-    style->road_widths[CT_ROAD_SECONDARY]   = (CTRoadWidth){ 0.8f, 2.5f, 5.0f };
-    style->road_widths[CT_ROAD_TERTIARY]    = (CTRoadWidth){ 0.6f, 2.0f, 4.0f };
-    style->road_widths[CT_ROAD_RESIDENTIAL] = (CTRoadWidth){ 0.4f, 1.5f, 3.0f };
-    style->road_widths[CT_ROAD_SERVICE]     = (CTRoadWidth){ 0.3f, 1.0f, 2.0f };
-    style->road_widths[CT_ROAD_OTHER]       = (CTRoadWidth){ 0.3f, 1.0f, 2.0f };
+    style->road_widths[CT_ROAD_MOTORWAY]    = (CTRoadWidth){ 2.5f, 5.0f, 10.0f };
+    style->road_widths[CT_ROAD_TRUNK]       = (CTRoadWidth){ 2.0f, 4.5f, 9.0f };
+    style->road_widths[CT_ROAD_PRIMARY]     = (CTRoadWidth){ 1.5f, 4.0f, 8.0f };
+    style->road_widths[CT_ROAD_SECONDARY]   = (CTRoadWidth){ 1.2f, 3.5f, 7.0f };
+    style->road_widths[CT_ROAD_TERTIARY]    = (CTRoadWidth){ 1.0f, 3.0f, 6.0f };
+    style->road_widths[CT_ROAD_RESIDENTIAL] = (CTRoadWidth){ 0.8f, 2.5f, 5.0f };
+    style->road_widths[CT_ROAD_SERVICE]     = (CTRoadWidth){ 0.5f, 1.5f, 3.0f };
+    style->road_widths[CT_ROAD_OTHER]       = (CTRoadWidth){ 0.5f, 1.5f, 3.0f };
 
     /* Waterway widths by type (data-driven, not zoom-dependent)
      *
@@ -56,14 +57,17 @@ void ct_default_style(CTStyle *style)
     style->waterway_widths[CT_WATERWAY_DITCH]  = 0.6f;   /* Ditches */
     style->waterway_widths[CT_WATERWAY_OTHER]  = 1.0f;   /* Default */
 
-    /* Area colors */
-    style->water_color           = CT_RGB(170, 211, 223);  /* Light blue */
-    style->land_color            = CT_RGB(242, 239, 233);  /* Beige */
-    style->building_color        = CT_RGB(217, 208, 201);  /* Light brown */
-    style->building_outline_color = CT_RGB(180, 167, 158);
-    style->forest_color          = CT_RGB(173, 209, 158);  /* Green */
-    style->grass_color           = CT_RGB(205, 235, 176);  /* Light green */
-    style->sand_color            = CT_RGB(245, 233, 186);  /* Beige/yellow */
+    /* Area colors (OSM Carto-matched)
+     * Reference: https://github.com/gravitystorm/openstreetmap-carto
+     */
+    style->water_color           = CT_RGB(170, 211, 223);  /* #aad3df - OSM water */
+    style->land_color            = CT_RGB(242, 239, 233);  /* #f2efe9 - OSM land */
+    style->building_color        = CT_RGB(217, 208, 201);  /* #d9d0c9 - OSM building fill */
+    style->building_outline_color = CT_RGB(196, 182, 171); /* #c4b6ab - darker for visibility */
+    style->forest_color          = CT_RGB(157, 202, 138);  /* #9dca8a - OSM wood/forest */
+    style->grass_color           = CT_RGB(205, 235, 176);  /* #cdebb0 - OSM grass */
+    style->park_color            = CT_RGB(200, 250, 204);  /* #c8facc - OSM park (leisure) */
+    style->sand_color            = CT_RGB(245, 233, 186);  /* Beach/sand */
 
     /* Railway */
     style->railway_color = CT_RGB(120, 120, 120);

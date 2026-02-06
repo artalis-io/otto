@@ -968,16 +968,32 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
             }
 
             switch (f->layer) {
-                case CT_LAYER_LANDUSE:
+                case CT_LAYER_LANDUSE: {
+                    /* Select color based on landuse type */
+                    CTColor landuse_color;
+                    switch (f->feature_type) {
+                        case CT_LANDUSE_FOREST:
+                            landuse_color = ctx->style.forest_color;
+                            break;
+                        case CT_LANDUSE_PARK:
+                            landuse_color = ctx->style.park_color;
+                            break;
+                        case CT_LANDUSE_GRASS:
+                            landuse_color = ctx->style.grass_color;
+                            break;
+                        default:
+                            landuse_color = ctx->style.grass_color;
+                            break;
+                    }
                     if (f->num_rings > 1 && f->ring_ends) {
                         ct_render_multipolygon(ctx, scaled, f->num_points,
                                                f->ring_ends, f->num_rings,
-                                               ctx->style.grass_color);
+                                               landuse_color);
                     } else {
-                        ct_render_polygon(ctx, scaled, f->num_points,
-                                          ctx->style.grass_color);
+                        ct_render_polygon(ctx, scaled, f->num_points, landuse_color);
                     }
                     break;
+                }
 
                 case CT_LAYER_WATER:
                     if (f->type == CT_GEOM_POLYGON) {
@@ -1030,14 +1046,18 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
 
                 case CT_LAYER_BUILDINGS:
                     if (f->num_rings > 1 && f->ring_ends) {
+                        /* Multipolygon buildings - render with outline */
                         ct_render_multipolygon(ctx, scaled, f->num_points,
                                                f->ring_ends, f->num_rings,
                                                ctx->style.building_color);
+                        /* Add outline for multipolygon buildings */
+                        ct_render_polygon_outline(ctx, scaled, f->ring_ends[0],
+                                                  ctx->style.building_outline_color, 1.5f);
                     } else {
                         ct_render_polygon_filled(ctx, scaled, f->num_points,
                                                  ctx->style.building_color,
                                                  ctx->style.building_outline_color,
-                                                 1.0f);
+                                                 1.5f);  /* Thicker outline for visibility */
                     }
                     break;
 
