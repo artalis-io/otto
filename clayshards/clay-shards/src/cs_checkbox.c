@@ -54,10 +54,9 @@ CsCheckboxResult cs_checkbox(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
-    /* Focus follows hover - update immediately for this frame */
+    /* Focus follows hover */
     if (is_hovered) {
         g->focused_id = id;
-        is_focused = true;
     }
 
     /* Colors - use focus color for background when focused (visible even with border_width=0) */
