@@ -25,8 +25,10 @@
     #define CT_HAVE_SSE2 1
 #endif
 
-/* Minimum feature size in pixels for render-time filtering */
-#define MIN_FEATURE_PIXELS 2.0f
+/* Minimum feature size in pixels for render-time filtering.
+ * Set to 1.0 to allow single-pixel features (minimum visible size).
+ * Higher values filter out small buildings at high zoom levels. */
+#define MIN_FEATURE_PIXELS 1.0f
 
 /* Edge structure for scanline polygon fill (defined here for buffer preallocation)
  * Uses double for x and dx to prevent accumulated floating-point error
