@@ -362,15 +362,15 @@
                 crt.resize(canvas.width, canvas.height);
                 crt.applyPreset('retro');
 
+                // Setup keyboard input with hidden input for proper text capture
+                const hiddenInput = document.getElementById('hiddenInput');
+
                 // Hide loading, show main
                 loadingEl.style.display = 'none';
                 mainEl.style.display = 'flex';
                 instructionsEl.style.display = 'block';
                 // Focus hidden input for immediate text capture
                 hiddenInput.focus();
-
-                // Setup keyboard input with hidden input for proper text capture
-                const hiddenInput = document.getElementById('hiddenInput');
 
                 // Focus hidden input when canvas is focused
                 canvas.addEventListener('focus', () => {
