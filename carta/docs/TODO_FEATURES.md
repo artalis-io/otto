@@ -2256,6 +2256,16 @@ int ct_pregenerate_tiles(const CTPregenConfig *config);
 - [ ] Add progress reporting
 - [ ] Integrate with MBTiles backend
 
+**Phase 8: Boundary Rendering Optimization**
+- [ ] Pre-stitch boundary segments at index build time (currently done per-render)
+- [ ] Pre-clip boundaries to tile grid during indexing
+- [ ] Cache assembled boundary linestrings in binary index
+- [ ] Avoid per-boundary malloc in render loop (use arena allocator)
+- [ ] Use fixed-point tile coordinates instead of float transforms per-point
+- [ ] Add boundary-specific LOD with pre-simplified geometries per zoom
+- [ ] Consider separate boundary R-tree with coarser granularity
+- [ ] Benchmark: target <5ms overhead for boundaries at z14
+
 ### Files to Create/Modify
 
 | File | Action |
