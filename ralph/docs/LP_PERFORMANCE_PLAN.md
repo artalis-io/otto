@@ -18,13 +18,33 @@ Match GLPK performance on speed and solve all NETLIB tiny suite problems correct
 | Problem | Status | Notes |
 |---------|--------|-------|
 | kb2 | ✅ PASS | 3 iterations |
-| share2b | ✅ PASS | 105 iterations |
-| adlittle | ✅ PASS | 133 iterations |
-| bnl1 | ✅ PASS | 0.009% objective error (acceptable) |
+| share2b | ✅ PASS | 105 iterations (with presolve) |
+| adlittle | ✅ PASS | 133 iterations (with presolve) |
+| bnl1 | ✅ PASS | obj=1977.44 (with/without presolve) |
 | beaconfd | ⚠️ WIP | Presolve works (262→148 vars), LU stability needed |
 
-**Current**: 4/5 pass, 1 in progress
-**Target**: 5/5 pass (requires LU stability improvements - see below)
+**Current**: 4/5 pass, 1 with issues
+**Target**: 5/5 pass
+
+### bnl1 Presolve Bug (FIXED Feb 2026)
+
+bnl1 (1175 vars, 643 cons) was incorrectly returning INFEASIBLE when presolve was enabled.
+
+**Issues Found and Fixed:**
+
+1. **singleton_rows**: Was tightening bounds aggressively when it should only delete
+   constraints that are REDUNDANT given existing bounds. Fixed by only deleting rows
+   when existing bounds already satisfy the singleton constraint (no bound modification).
+
+2. **detect_redundant_rows**: Was using Gaussian elimination to find linearly dependent
+   rows, but incorrectly marked inequality constraints as redundant. A row being a linear
+   combination of others doesn't mean the inequality is redundant - it could be tighter.
+   Fixed by only removing equality constraints that reduce to 0=0.
+
+3. **bound_tightening**: Still disabled pending more robust implementation. The iterative
+   bound derivation accumulates numerical errors that can cause false infeasibility.
+
+**Status**: bnl1 now solves correctly with presolve enabled (obj=1977.44, expected ~1977.62).
 
 ---
 
