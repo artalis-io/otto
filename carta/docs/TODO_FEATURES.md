@@ -2918,6 +2918,44 @@ Recommended order of implementation:
     - Label placement is algorithmically complex
     - Can be deferred until performance work is stable
 
+---
+
+## Backlog Items
+
+### Code Refactoring
+
+- [ ] **Move StringPool to shared/** - The `StringPool` implementation in `ct_serialize.c` is generic and would be useful for other modules (locus string deduplication, velo place names). Move to `shared/include/sh_stringpool.h`.
+
+### Label Improvements
+
+Missing label types compared to OSM Carto (identified via /carta-render-debug on Budapest tiles):
+
+| Label Type | OSM Example | Status | Difficulty |
+|------------|-------------|--------|------------|
+| City/town names | "Budapest" | ✅ Works | - |
+| District names | "Lipótváros" | ✅ Works | - |
+| Bridge labels | "Széchenyi lánchíd" | ❌ Missing | Medium |
+| River labels | "Duna" | ❌ Missing | Medium |
+| Street names | "Hegyalja út" | ❌ Missing | Hard |
+| Road shields | "5101", "M1" | ❌ Missing | Hard |
+| POI icons | Landmarks, churches | ❌ Missing | Hard |
+
+**Priority:** Bridge and river labels are relatively easy (extract name from way/relation). Street names and road shields require line label placement along curved paths (complex).
+
+### Boundary Rendering Optimization
+
+Current boundary rendering is expensive due to:
+1. Relation processing to assemble segments
+2. Segment stitching into continuous lines
+3. Dashed line rendering
+
+Options:
+- [ ] Pre-compute boundary geometry in binary index
+- [ ] Cache assembled boundaries per zoom level
+- [ ] Simplify boundary geometry aggressively at low zoom
+
+---
+
 ## Testing Strategy
 
 For each feature:

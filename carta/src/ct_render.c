@@ -30,9 +30,10 @@
 #endif
 
 /* Minimum feature size in pixels for render-time filtering.
- * Set to 1.0 to allow single-pixel features (minimum visible size).
- * Higher values filter out small buildings at high zoom levels. */
-#define MIN_FEATURE_PIXELS 1.0f
+ * Lines need at least 1px to be visible.
+ * Buildings need at least 3px to render as recognizable shapes, not dots. */
+#define MIN_LINE_PIXELS 1.0f
+#define MIN_POLYGON_PIXELS 3.0f
 
 /* Edge structure for scanline polygon fill (defined here for buffer preallocation)
  * Uses double for x and dx to prevent accumulated floating-point error
@@ -185,17 +186,17 @@ void ct_render_options_fast(CTRenderOptions *opts)
     opts->render_boundaries = 0;       /* OFF - expensive relation processing */
     opts->render_labels = 1;           /* ON - useful for navigation */
 
-    /* Expensive details OFF */
-    opts->render_road_casing = 0;
-    opts->render_railway_casing = 0;
-    opts->render_bridge_outlines = 0;
-    opts->render_building_outlines = 0;
-    opts->render_label_halos = 0;
-    opts->render_boundary_dashes = 0;
+    /* Visual details ON - match OSM quality except boundaries */
+    opts->render_road_casing = 1;
+    opts->render_railway_casing = 1;
+    opts->render_bridge_outlines = 1;
+    opts->render_building_outlines = 1;
+    opts->render_label_halos = 1;
+    opts->render_boundary_dashes = 0;  /* OFF - boundaries disabled anyway */
 
-    /* Default zoom cutoffs for labels */
-    opts->casing_min_zoom = 99;
-    opts->building_outlines_min_zoom = 99;
+    /* Standard zoom cutoffs */
+    opts->casing_min_zoom = 14;
+    opts->building_outlines_min_zoom = 14;
     opts->labels_min_zoom = 8;
 }
 
@@ -1532,6 +1533,9 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
 /*
  * Check if a feature is large enough to be visible.
  * Returns 1 if visible, 0 if too small.
+ *
+ * Buildings need at least 2px to avoid rendering as ugly dots.
+ * Lines only need 1px to be visible.
  */
 static int feature_is_visible(const CTFeature *f, float scale)
 {
@@ -1554,12 +1558,17 @@ static int feature_is_visible(const CTFeature *f, float scale)
     /* Lines: check length */
     if (f->type == CT_GEOM_LINESTRING) {
         float diag = sqrtf(width * width + height * height);
-        return diag >= MIN_FEATURE_PIXELS;
+        return diag >= MIN_LINE_PIXELS;
     }
 
-    /* Polygons: check area (width * height) */
+    /* Polygons: need minimum size to avoid rendering as dots */
     if (f->type == CT_GEOM_POLYGON) {
-        return width >= MIN_FEATURE_PIXELS || height >= MIN_FEATURE_PIXELS;
+        /* Buildings need BOTH dimensions >= 3px to look like shapes, not dots.
+         * Other polygons (water, landuse) only need one dimension >= 1px. */
+        if (f->layer == CT_LAYER_BUILDINGS) {
+            return width >= MIN_POLYGON_PIXELS && height >= MIN_POLYGON_PIXELS;
+        }
+        return width >= MIN_LINE_PIXELS || height >= MIN_LINE_PIXELS;
     }
 
     return 1;

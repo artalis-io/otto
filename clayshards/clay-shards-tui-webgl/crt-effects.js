@@ -170,6 +170,7 @@ export class CrtEffects {
 
     /**
      * End rendering and apply CRT effects to screen.
+     * Glass reflection is rendered as a separate pass on top.
      * Call this after rendering the terminal.
      *
      * @param {number} dt - Delta time in seconds
@@ -195,14 +196,14 @@ export class CrtEffects {
         gl.uniform2f(this.crtShader.uniforms.u_resolution, this.width, this.height);
         gl.uniform1f(this.crtShader.uniforms.u_time, this.time);
 
-        // Effect parameters
+        // Effect parameters (no glass - it's rendered separately on top)
         gl.uniform1f(this.crtShader.uniforms.u_scanlines, this.params.scanlines);
         gl.uniform1f(this.crtShader.uniforms.u_curvature, this.params.curvature);
         gl.uniform1f(this.crtShader.uniforms.u_vignette, this.params.vignette);
         gl.uniform1f(this.crtShader.uniforms.u_chromatic, this.params.chromatic);
         gl.uniform1f(this.crtShader.uniforms.u_flicker, this.params.flicker);
         gl.uniform1f(this.crtShader.uniforms.u_glow, this.params.glow);
-        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, this.glassEnabled ? 1.0 : 0.0);
+        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, 0.0); // Glass rendered separately
         gl.uniform1i(this.crtShader.uniforms.u_colorMode, this.params.colorMode);
 
         // Default transform (fullscreen, full brightness)
@@ -219,6 +220,9 @@ export class CrtEffects {
         gl.drawArrays(gl.TRIANGLES, 0, 6);
 
         gl.disableVertexAttribArray(posLoc);
+
+        // Render glass reflection on top (independent layer)
+        this.renderGlassOnly();
     }
 
     /**
@@ -390,6 +394,7 @@ export class CrtEffects {
 
     /**
      * Draw CRT power-off effect (shrinking to horizontal line then fade).
+     * Glass reflection is rendered separately on top and doesn't fade.
      * @param {number} progress - Animation progress (0-1), where 1 is fully off
      */
     drawPowerOff(progress) {
@@ -401,62 +406,65 @@ export class CrtEffects {
         gl.clearColor(0, 0, 0, 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
-        if (progress >= 1) return; // Fully off
-
         // Phase 1 (0-0.35): Vertical collapse to horizontal line
         // Phase 2 (0.35-0.6): Horizontal collapse to dot in center
         // Phase 3 (0.6-1): Dot fades out
         const phase1End = 0.35;
         const phase2End = 0.6;
 
-        // Use CRT shader to maintain scanlines/chromatic effects
-        gl.useProgram(this.crtShader.program);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, this.texture);
-        gl.uniform1i(this.crtShader.uniforms.u_terminal, 0);
-        gl.uniform2f(this.crtShader.uniforms.u_resolution, this.width, this.height);
-        gl.uniform1f(this.crtShader.uniforms.u_time, this.time);
+        // Render CRT content (without glass - glass rendered separately after)
+        if (progress < 1) {
+            gl.useProgram(this.crtShader.program);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.texture);
+            gl.uniform1i(this.crtShader.uniforms.u_terminal, 0);
+            gl.uniform2f(this.crtShader.uniforms.u_resolution, this.width, this.height);
+            gl.uniform1f(this.crtShader.uniforms.u_time, this.time);
 
-        // Apply CRT effect parameters
-        gl.uniform1f(this.crtShader.uniforms.u_scanlines, this.params.scanlines);
-        gl.uniform1f(this.crtShader.uniforms.u_curvature, this.params.curvature);
-        gl.uniform1f(this.crtShader.uniforms.u_vignette, this.params.vignette);
-        gl.uniform1f(this.crtShader.uniforms.u_chromatic, this.params.chromatic);
-        gl.uniform1f(this.crtShader.uniforms.u_flicker, this.params.flicker);
-        gl.uniform1f(this.crtShader.uniforms.u_glow, this.params.glow);
-        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, this.glassEnabled ? 1.0 : 0.0);
-        gl.uniform1i(this.crtShader.uniforms.u_colorMode, this.params.colorMode);
+            // Apply CRT effect parameters (no glass - it's rendered separately)
+            gl.uniform1f(this.crtShader.uniforms.u_scanlines, this.params.scanlines);
+            gl.uniform1f(this.crtShader.uniforms.u_curvature, this.params.curvature);
+            gl.uniform1f(this.crtShader.uniforms.u_vignette, this.params.vignette);
+            gl.uniform1f(this.crtShader.uniforms.u_chromatic, this.params.chromatic);
+            gl.uniform1f(this.crtShader.uniforms.u_flicker, this.params.flicker);
+            gl.uniform1f(this.crtShader.uniforms.u_glow, this.params.glow);
+            gl.uniform1f(this.crtShader.uniforms.u_glassReflection, 0.0); // No glass in this pass
+            gl.uniform1i(this.crtShader.uniforms.u_colorMode, this.params.colorMode);
 
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
-        const posLoc = gl.getAttribLocation(this.crtShader.program, 'a_pos');
-        gl.enableVertexAttribArray(posLoc);
-        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+            const posLoc = gl.getAttribLocation(this.crtShader.program, 'a_pos');
+            gl.enableVertexAttribArray(posLoc);
+            gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-        let scaleX = 1.0, scaleY = 1.0, alpha = 1.0;
+            let scaleX = 1.0, scaleY = 1.0, alpha = 1.0;
 
-        if (progress < phase1End) {
-            // Phase 1: Vertical collapse to horizontal line
-            const t = progress / phase1End;
-            scaleY = 1 - t * 0.97; // Shrink to 3% height
-        } else if (progress < phase2End) {
-            // Phase 2: Horizontal collapse to dot
-            const t = (progress - phase1End) / (phase2End - phase1End);
-            scaleY = 0.03; // Stay at 3% height
-            scaleX = 1 - t * 0.95; // Shrink to 5% width
-        } else {
-            // Phase 3: Dot fades out
-            const t = (progress - phase2End) / (1 - phase2End);
-            scaleX = 0.05;
-            scaleY = 0.03;
-            alpha = 1 - t;
+            if (progress < phase1End) {
+                // Phase 1: Vertical collapse to horizontal line
+                const t = progress / phase1End;
+                scaleY = 1 - t * 0.97; // Shrink to 3% height
+            } else if (progress < phase2End) {
+                // Phase 2: Horizontal collapse to dot
+                const t = (progress - phase1End) / (phase2End - phase1End);
+                scaleY = 0.03; // Stay at 3% height
+                scaleX = 1 - t * 0.95; // Shrink to 5% width
+            } else {
+                // Phase 3: Dot fades out
+                const t = (progress - phase2End) / (1 - phase2End);
+                scaleX = 0.05;
+                scaleY = 0.03;
+                alpha = 1 - t;
+            }
+
+            gl.uniform2f(this.crtShader.uniforms.u_scale, scaleX, scaleY);
+            gl.uniform2f(this.crtShader.uniforms.u_offset, (1 - scaleX) / 2, (1 - scaleY) / 2);
+            gl.uniform1f(this.crtShader.uniforms.u_alpha, alpha);
+
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            gl.disableVertexAttribArray(posLoc);
         }
 
-        gl.uniform2f(this.crtShader.uniforms.u_scale, scaleX, scaleY);
-        gl.uniform2f(this.crtShader.uniforms.u_offset, (1 - scaleX) / 2, (1 - scaleY) / 2);
-        gl.uniform1f(this.crtShader.uniforms.u_alpha, alpha);
-
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-        gl.disableVertexAttribArray(posLoc);
+        // Render glass reflection on top (doesn't fade with power-off)
+        this.renderGlassOnly();
     }
 
     /**
