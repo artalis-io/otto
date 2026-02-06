@@ -87,9 +87,10 @@ CsSliderResult cs_slider(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
-    /* Focus follows hover */
+    /* Focus follows hover - update immediately for this frame */
     if (is_hovered) {
         g->focused_id = id;
+        is_focused = true;
     }
 
     /* Check if we're currently dragging this slider */

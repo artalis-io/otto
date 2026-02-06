@@ -518,8 +518,40 @@
 
                 updateSliders();
 
-                // Fullscreen button
+                // Fullscreen button with dynamic resizing
                 const terminalContainer = document.querySelector('.terminal-container');
+                let originalWidth = displayWidth;
+                let originalHeight = displayHeight;
+
+                function resizeForFullscreen() {
+                    if (document.fullscreenElement) {
+                        // Calculate how many cells can fit on screen
+                        const screenW = window.innerWidth;
+                        const screenH = window.innerHeight;
+
+                        // Scale up cell size to fill screen while maintaining aspect ratio
+                        const scaleX = screenW / displayWidth;
+                        const scaleY = screenH / displayHeight;
+                        const scale = Math.min(scaleX, scaleY) * 0.95; // 95% of screen
+
+                        const newWidth = Math.floor(displayWidth * scale);
+                        const newHeight = Math.floor(displayHeight * scale);
+
+                        canvas.style.width = `${newWidth}px`;
+                        canvas.style.height = `${newHeight}px`;
+
+                        // Update CRT framebuffer
+                        crt.resize(canvas.width, canvas.height);
+                    } else {
+                        // Restore original size
+                        canvas.style.width = `${originalWidth}px`;
+                        canvas.style.height = `${originalHeight}px`;
+                        crt.resize(canvas.width, canvas.height);
+                    }
+                }
+
+                document.addEventListener('fullscreenchange', resizeForFullscreen);
+
                 document.getElementById('fullscreenBtn').addEventListener('click', () => {
                     if (document.fullscreenElement) {
                         document.exitFullscreen();
