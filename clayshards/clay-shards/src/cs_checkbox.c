@@ -60,8 +60,8 @@ CsCheckboxResult cs_checkbox(
         /* Checked: blue, lighter blue if focused */
         box_bg = is_focused ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS} : (Clay_Color){CS_COLOR_BTN_BLUE};
     } else {
-        /* Unchecked: default bg, focused bg if focused */
-        box_bg = is_focused ? (Clay_Color){CS_COLOR_BG_FOCUSED} : (Clay_Color){CS_COLOR_BG_DEFAULT};
+        /* Unchecked: default bg, use gray focus color for better visibility */
+        box_bg = is_focused ? (Clay_Color){CS_COLOR_BTN_GRAY_FOCUS} : (Clay_Color){CS_COLOR_BG_DEFAULT};
     }
     Clay_Color box_border = is_focused
         ? (Clay_Color){CS_COLOR_BORDER_FOCUSED}

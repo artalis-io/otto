@@ -327,8 +327,9 @@ CsDropdownResult cs_dropdown(
                         bool item_selected = (i == current_selected);
 
                         /* Use list_bg for default to properly overwrite underlying content */
+                        /* When focused (keyboard nav), highlight selected item more prominently */
                         Clay_Color item_bg = item_hovered ? item_hover_bg
-                                           : item_selected ? (Clay_Color){CS_COLOR_BTN_BLUE}
+                                           : item_selected ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS}
                                            : list_bg;
 
                         /* TUI-friendly sizing: use height directly if small (<= 3),

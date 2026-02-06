@@ -177,9 +177,13 @@ CsSliderResult cs_slider(
      * RENDERING - Now render with the updated value
      * ======================================================================== */
 
-    /* Colors */
-    Clay_Color track_bg = (Clay_Color){CS_COLOR_BTN_GRAY};
-    Clay_Color track_fill = (Clay_Color){CS_COLOR_BTN_BLUE};
+    /* Colors - show focus state via track background */
+    Clay_Color track_bg = is_focused
+        ? (Clay_Color){CS_COLOR_BTN_GRAY_FOCUS}
+        : (Clay_Color){CS_COLOR_BTN_GRAY};
+    Clay_Color track_fill = is_focused
+        ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS}
+        : (Clay_Color){CS_COLOR_BTN_BLUE};
     Clay_Color label_color = (Clay_Color){CS_COLOR_TEXT};
     Clay_Color border_color = (Clay_Color){CS_COLOR_BORDER_FOCUSED};
 
