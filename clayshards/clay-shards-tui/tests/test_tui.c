@@ -353,6 +353,64 @@ static void test_cursor_visibility(void) {
 }
 
 /* ============================================================================
+ * Z-Index Tests
+ * ============================================================================ */
+
+/* Access renderer internals for z-index testing */
+extern void cs_tui_set_z_index(CsTuiRenderer *r, int16_t z);
+
+static void test_zindex_overlay(void) {
+    TEST(zindex_overlay);
+
+    CsTuiRenderer *r = cs_tui_create(&test_config);
+    ASSERT(r != NULL, "Failed to create renderer");
+
+    cs_tui_begin(r);
+
+    /* Draw background text at z=0 */
+    cs_tui_set_z_index(r, 0);
+    cs_tui_text(r, 5, 5, "BACKGROUND", -1, (CsTuiColor){255, 0, 0, 255}, NULL);
+
+    /* Draw foreground text at z=100 - should overwrite */
+    cs_tui_set_z_index(r, 100);
+    cs_tui_text(r, 5, 5, "OVERLAY", -1, (CsTuiColor){0, 255, 0, 255}, NULL);
+
+    cs_tui_end(r);
+
+    /* Should see OVERLAY, not BACKGROUND */
+    ASSERT(cs_tui_buffer_contains(r, 5, 5, "OVERLAY"), "Higher z-index should win");
+    ASSERT(!cs_tui_buffer_contains(r, 5, 5, "BACKGROUND"), "Lower z-index should be hidden");
+
+    cs_tui_free(r);
+    PASS();
+}
+
+static void test_zindex_lower_blocked(void) {
+    TEST(zindex_lower_blocked);
+
+    CsTuiRenderer *r = cs_tui_create(&test_config);
+    ASSERT(r != NULL, "Failed to create renderer");
+
+    cs_tui_begin(r);
+
+    /* Draw foreground first at z=100 */
+    cs_tui_set_z_index(r, 100);
+    cs_tui_text(r, 5, 5, "FIRST", -1, (CsTuiColor){0, 255, 0, 255}, NULL);
+
+    /* Try to overwrite with z=0 - should be blocked */
+    cs_tui_set_z_index(r, 0);
+    cs_tui_text(r, 5, 5, "SECOND", -1, (CsTuiColor){255, 0, 0, 255}, NULL);
+
+    cs_tui_end(r);
+
+    /* Should still see FIRST */
+    ASSERT(cs_tui_buffer_contains(r, 5, 5, "FIRST"), "Higher z-index should persist");
+
+    cs_tui_free(r);
+    PASS();
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -384,6 +442,10 @@ int main(void) {
 
     printf("\nCursor tests:\n");
     test_cursor_visibility();
+
+    printf("\nZ-index tests:\n");
+    test_zindex_overlay();
+    test_zindex_lower_blocked();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
 

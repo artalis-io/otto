@@ -6,6 +6,7 @@
 
 #include "cs_tui_internal.h"
 #include <stdarg.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -463,21 +464,27 @@ void cs_tui_begin(CsTuiRenderer *r) {
         r->buffer.back[i].bg_g = 0;
         r->buffer.back[i].bg_b = 0;
         r->buffer.back[i].flags = 0;
+        r->buffer.back[i].z_index = INT16_MIN;  /* Reset z-index */
     }
 
-    /* Reset scissor */
+    /* Reset scissor and z-index */
     r->scissor_depth = 0;
+    r->current_z_index = 0;
 }
 
 void cs_tui_clear(CsTuiRenderer *r, CsTuiColor color) {
     if (!r) return;
 
+    int16_t z = r->current_z_index;
     size_t count = (size_t)r->buffer.width * (size_t)r->buffer.height;
     for (size_t i = 0; i < count; i++) {
-        r->buffer.back[i].codepoint = ' ';
-        r->buffer.back[i].bg_r = color.r;
-        r->buffer.back[i].bg_g = color.g;
-        r->buffer.back[i].bg_b = color.b;
+        if (z >= r->buffer.back[i].z_index) {
+            r->buffer.back[i].codepoint = ' ';
+            r->buffer.back[i].bg_r = color.r;
+            r->buffer.back[i].bg_g = color.g;
+            r->buffer.back[i].bg_b = color.b;
+            r->buffer.back[i].z_index = z;
+        }
     }
 }
 
@@ -486,6 +493,7 @@ void cs_tui_rect(CsTuiRenderer *r, int x, int y, int w, int h,
     if (!r || w <= 0 || h <= 0) return;
 
     CsTuiBoxStyle style = corner_radius > 0 ? CS_TUI_BOX_ROUNDED : r->config.box_style;
+    int16_t z = r->current_z_index;
 
     for (int row = 0; row < h; row++) {
         for (int col = 0; col < w; col++) {
@@ -497,10 +505,14 @@ void cs_tui_rect(CsTuiRenderer *r, int x, int y, int w, int h,
             CsTuiCell *cell = cs_tui_cell_at(&r->buffer, cx, cy);
             if (!cell) continue;
 
-            /* Set background */
+            /* Z-index check: only write if current z >= cell's z */
+            if (z < cell->z_index) continue;
+
+            /* Set background and z-index */
             cell->bg_r = bg.r;
             cell->bg_g = bg.g;
             cell->bg_b = bg.b;
+            cell->z_index = z;
 
             /* Handle borders */
             if (border_color) {
@@ -575,6 +587,7 @@ void cs_tui_text(CsTuiRenderer *r, int x, int y, const char *text, int len,
         len = (int)strlen(text);
     }
 
+    int16_t z = r->current_z_index;
     int col = x;
     int i = 0;
     while (i < len) {
@@ -589,11 +602,12 @@ void cs_tui_text(CsTuiRenderer *r, int x, int y, const char *text, int len,
         }
 
         CsTuiCell *cell = cs_tui_cell_at(&r->buffer, col, y);
-        if (cell) {
+        if (cell && z >= cell->z_index) {
             cell->codepoint = cp;
             cell->fg_r = fg.r;
             cell->fg_g = fg.g;
             cell->fg_b = fg.b;
+            cell->z_index = z;
             if (bg) {
                 cell->bg_r = bg->r;
                 cell->bg_g = bg->g;
@@ -612,16 +626,18 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
     if (h == 1) return;
 
     CsTuiBoxStyle style = corner_radius > 0 ? CS_TUI_BOX_ROUNDED : r->config.box_style;
+    int16_t z = r->current_z_index;
 
-    /* Helper to check if cell has text content (not space/empty) */
+    /* Helper to check if cell has text content (not space/empty) at same or higher z */
     #define HAS_CONTENT(cell) ((cell)->codepoint != 0 && (cell)->codepoint != ' ')
+    #define CAN_WRITE(cell) ((cell) && z >= (cell)->z_index && !HAS_CONTENT(cell))
 
     /* Top edge */
     for (int col = 0; col < w; col++) {
         int cx = x + col;
         if (!cs_tui_clip_point(r, cx, y)) continue;
         CsTuiCell *cell = cs_tui_cell_at(&r->buffer, cx, y);
-        if (!cell || HAS_CONTENT(cell)) continue;  /* Don't overwrite text */
+        if (!CAN_WRITE(cell)) continue;
 
         const char *ch;
         if (col == 0) {
@@ -637,6 +653,7 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
         cell->fg_r = color.r;
         cell->fg_g = color.g;
         cell->fg_b = color.b;
+        cell->z_index = z;
     }
 
     /* Bottom edge */
@@ -645,7 +662,7 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
         int cy = y + h - 1;
         if (!cs_tui_clip_point(r, cx, cy)) continue;
         CsTuiCell *cell = cs_tui_cell_at(&r->buffer, cx, cy);
-        if (!cell || HAS_CONTENT(cell)) continue;  /* Don't overwrite text */
+        if (!CAN_WRITE(cell)) continue;
 
         const char *ch;
         if (col == 0) {
@@ -661,6 +678,7 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
         cell->fg_r = color.r;
         cell->fg_g = color.g;
         cell->fg_b = color.b;
+        cell->z_index = z;
     }
 
     /* Left and right edges */
@@ -670,7 +688,7 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
         /* Left */
         if (cs_tui_clip_point(r, x, cy)) {
             CsTuiCell *cell = cs_tui_cell_at(&r->buffer, x, cy);
-            if (cell && !HAS_CONTENT(cell)) {  /* Don't overwrite text */
+            if (CAN_WRITE(cell)) {
                 const char *ch = cs_tui_box_char(style, CS_TUI_BOX_VERT);
                 uint32_t cp;
                 cs_tui_utf8_decode(ch, 4, &cp);
@@ -678,6 +696,7 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
                 cell->fg_r = color.r;
                 cell->fg_g = color.g;
                 cell->fg_b = color.b;
+                cell->z_index = z;
             }
         }
 
@@ -685,7 +704,7 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
         int rx = x + w - 1;
         if (cs_tui_clip_point(r, rx, cy)) {
             CsTuiCell *cell = cs_tui_cell_at(&r->buffer, rx, cy);
-            if (cell && !HAS_CONTENT(cell)) {  /* Don't overwrite text */
+            if (CAN_WRITE(cell)) {
                 const char *ch = cs_tui_box_char(style, CS_TUI_BOX_VERT);
                 uint32_t cp;
                 cs_tui_utf8_decode(ch, 4, &cp);
@@ -693,11 +712,13 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
                 cell->fg_r = color.r;
                 cell->fg_g = color.g;
                 cell->fg_b = color.b;
+                cell->z_index = z;
             }
         }
     }
 
     #undef HAS_CONTENT
+    #undef CAN_WRITE
 }
 
 void cs_tui_scissor_push(CsTuiRenderer *r, int x, int y, int w, int h) {
@@ -839,6 +860,11 @@ void cs_tui_set_cursor(CsTuiRenderer *r, int x, int y, bool visible) {
     r->cursor_visible = visible;
 }
 
+void cs_tui_set_z_index(CsTuiRenderer *r, int16_t z_index) {
+    if (!r) return;
+    r->current_z_index = z_index;
+}
+
 /* ============================================================================
  * Clay Integration
  * ============================================================================ */
@@ -850,6 +876,9 @@ void cs_tui_render_clay_commands(CsTuiRenderer *r, const void *commands, int cou
 
     for (int i = 0; i < count; i++) {
         const Clay_RenderCommand *cmd = &cmds[i];
+
+        /* Set current z-index from Clay command for layered rendering */
+        r->current_z_index = cmd->zIndex;
 
         /* Convert floating-point bounds to integer cell coordinates */
         int x = (int)(cmd->boundingBox.x);
