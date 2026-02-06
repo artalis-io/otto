@@ -347,6 +347,12 @@ typedef struct {
     CTColor grass_color;
     CTColor park_color;
     CTColor sand_color;
+    CTColor residential_color;   /* Urban/residential areas */
+    CTColor commercial_color;    /* Commercial/retail areas */
+    CTColor industrial_color;    /* Industrial areas */
+    CTColor farmland_color;      /* Agricultural areas */
+    CTColor cemetery_color;      /* Cemeteries */
+    CTColor military_color;      /* Military areas */
 
     /* Railway styling by type */
     CTColor railway_colors[CT_RAILWAY_TYPE_COUNT];

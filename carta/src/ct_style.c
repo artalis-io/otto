@@ -69,6 +69,14 @@ void ct_default_style(CTStyle *style)
     style->park_color            = CT_RGB(198, 236, 199);  /* #c6ecc7 - muted park green */
     style->sand_color            = CT_RGB(245, 233, 186);  /* Beach/sand */
 
+    /* Urban/developed area colors (OSM Carto-matched) */
+    style->residential_color     = CT_RGB(224, 223, 223);  /* #e0dfdf - OSM residential grey */
+    style->commercial_color      = CT_RGB(242, 218, 217);  /* #f2dad9 - OSM commercial light pink */
+    style->industrial_color      = CT_RGB(235, 219, 232);  /* #ebdbe8 - OSM industrial mauve */
+    style->farmland_color        = CT_RGB(238, 240, 213);  /* #eef0d5 - OSM farmland light yellow */
+    style->cemetery_color        = CT_RGB(170, 203, 175);  /* #aacbaf - OSM cemetery muted green */
+    style->military_color        = CT_RGB(243, 216, 216);  /* #f3d8d8 - OSM military light pink */
+
     /* Railway colors by type (OSM Carto-inspired) */
     style->railway_colors[CT_RAILWAY_RAIL]         = CT_RGB(112, 112, 112);  /* Main rail - dark gray */
     style->railway_colors[CT_RAILWAY_SUBWAY]       = CT_RGB(100, 100, 180);  /* Subway - bluish */
