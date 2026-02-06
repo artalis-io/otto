@@ -396,6 +396,7 @@ export class CrtEffects {
         gl.uniform2f(this.bezelShader.uniforms.u_resolution, this.width, this.height);
         gl.uniform1f(this.bezelShader.uniforms.u_time, this.time);
         gl.uniform1f(this.bezelShader.uniforms.u_bezelWidth, this.bezelWidth);
+        gl.uniform1f(this.bezelShader.uniforms.u_curvature, this.params.curvature);
         gl.uniform1f(this.bezelShader.uniforms.u_enabled, 1.0);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
