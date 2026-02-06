@@ -78,6 +78,7 @@ export class CrtEffects {
             chromatic: 0.001,    // RGB split (0-0.01)
             flicker: 0.02,       // Brightness variation (0-0.1)
             glow: 0.1,           // Phosphor bloom (0-1, placeholder)
+            glassReflection: 0,  // Glass reflection (0-1)
             colorMode: CRT_COLOR_RGB  // Phosphor color
         };
 
@@ -199,6 +200,7 @@ export class CrtEffects {
         gl.uniform1f(this.crtShader.uniforms.u_chromatic, this.params.chromatic);
         gl.uniform1f(this.crtShader.uniforms.u_flicker, this.params.flicker);
         gl.uniform1f(this.crtShader.uniforms.u_glow, this.params.glow);
+        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, this.params.glassReflection);
         gl.uniform1i(this.crtShader.uniforms.u_colorMode, this.params.colorMode);
 
         // Default transform (fullscreen, full brightness)
@@ -266,6 +268,7 @@ export class CrtEffects {
                     chromatic: 0.0005,
                     flicker: 0.01,
                     glow: 0.05,
+                    glassReflection: 0,
                     colorMode: CRT_COLOR_RGB
                 };
                 break;
@@ -278,6 +281,7 @@ export class CrtEffects {
                     chromatic: 0.001,
                     flicker: 0.02,
                     glow: 0.1,
+                    glassReflection: 0,
                     colorMode: CRT_COLOR_RGB
                 };
                 break;
@@ -290,6 +294,20 @@ export class CrtEffects {
                     chromatic: 0.002,
                     flicker: 0.03,
                     glow: 0.2,
+                    glassReflection: 0.5,
+                    colorMode: CRT_COLOR_RGB
+                };
+                break;
+            case 'glass':
+                this.enabled = true;
+                this.params = {
+                    scanlines: 0.3,
+                    curvature: 0.04,
+                    vignette: 0.25,
+                    chromatic: 0.001,
+                    flicker: 0.02,
+                    glow: 0.1,
+                    glassReflection: 1.0,
                     colorMode: CRT_COLOR_RGB
                 };
                 break;
@@ -302,6 +320,7 @@ export class CrtEffects {
                     chromatic: 0,
                     flicker: 0.02,
                     glow: 0.15,
+                    glassReflection: 0.7,
                     colorMode: CRT_COLOR_AMBER
                 };
                 break;
@@ -314,6 +333,7 @@ export class CrtEffects {
                     chromatic: 0,
                     flicker: 0.02,
                     glow: 0.15,
+                    glassReflection: 0.7,
                     colorMode: CRT_COLOR_GREEN
                 };
                 break;
@@ -358,6 +378,7 @@ export class CrtEffects {
         gl.uniform1f(this.crtShader.uniforms.u_chromatic, this.params.chromatic);
         gl.uniform1f(this.crtShader.uniforms.u_flicker, this.params.flicker);
         gl.uniform1f(this.crtShader.uniforms.u_glow, this.params.glow);
+        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, this.params.glassReflection);
         gl.uniform1i(this.crtShader.uniforms.u_colorMode, this.params.colorMode);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
