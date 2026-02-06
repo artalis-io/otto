@@ -91,6 +91,7 @@ static AppState g_app = {
 };
 
 static bool g_headless = false;
+static bool g_ansi_dump = false;  /* Use ANSI colors in dump output */
 static int g_frame_number = 0;
 
 /* ============================================================================
@@ -221,7 +222,7 @@ static void dump_frame(CsTuiRenderer *renderer, const char *input_cmd) {
            g_app.priority,
            PRIORITY_OPTIONS[g_app.priority]);
     printf("BUFFER:\n");
-    char *dump = cs_tui_dump_buffer(renderer);
+    char *dump = g_ansi_dump ? cs_tui_dump_buffer_ansi(renderer) : cs_tui_dump_buffer(renderer);
     if (dump) {
         printf("%s", dump);
         free(dump);
@@ -414,7 +415,7 @@ static void render_ui(void) {
                     CLAY_TEXT(CLAY_STRING("Priority:"),
                              CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
                     const CsDropdownStyle dd_style = {
-                        .width = 12,
+                        .width = 30,
                         .height = 1,
                         .font_size = 12,
                         .corner_radius = 0,
@@ -423,10 +424,9 @@ static void render_ui(void) {
                     cs_dropdown(CS_ID("priority_dd"), &g_app.priority, PRIORITY_OPTIONS, 4, &dd_style);
                 }
 
-                /* Separator */
-                CLAY(CLAY_ID("Sep2"), {
-                    .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(1) } },
-                    .backgroundColor = THEME.border
+                /* Space for dropdown list (4 items + padding = ~5 rows) */
+                CLAY(CLAY_ID("DropdownSpace"), {
+                    .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(5) } }
                 }) {}
 
                 /* Buttons */
@@ -489,10 +489,12 @@ static void render_ui(void) {
  * ============================================================================ */
 
 int main(int argc, char *argv[]) {
-    /* Check for --headless flag */
+    /* Check for flags */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--headless") == 0) {
             g_headless = true;
+        } else if (strcmp(argv[i], "--ansi") == 0) {
+            g_ansi_dump = true;
         }
     }
 
@@ -660,16 +662,16 @@ int main(int argc, char *argv[]) {
             cs_tui_begin(renderer);
             cs_tui_render_clay_commands(renderer, commands.internalArray, commands.length);
 
-            uint32_t focused = cs_focused_id();
-            if (focused != 0 && cs_cursor_visible()) {
-                float fx, fy, fw, fh;
-                cs_focused_bounds(&fx, &fy, &fw, &fh);
+            /* Show cursor only for text inputs (inputs set valid bounds) */
+            float fx, fy, fw, fh;
+            cs_focused_bounds(&fx, &fy, &fw, &fh);
+            if (fw > 0 && fh > 0 && cs_cursor_visible()) {
                 int cursor_pos = cs_cursor_pos();
-                /* Position cursor at the character position within the focused element */
                 int cursor_x = (int)fx + cursor_pos;
                 int cursor_y = (int)fy;
                 cs_tui_set_cursor(renderer, cursor_x, cursor_y, true);
             } else {
+                /* Hide cursor when not in text input */
                 cs_tui_set_cursor(renderer, 0, 0, false);
             }
 

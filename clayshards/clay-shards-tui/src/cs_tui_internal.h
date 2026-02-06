@@ -21,14 +21,43 @@
  * Cell Structure
  * ============================================================================ */
 
-/* Single cell in the character buffer */
-typedef struct {
+/*
+ * Single cell in the character buffer.
+ * Packed to exactly 16 bytes for predictable WASM memory layout.
+ *
+ * Memory layout (for JS to read from WASM):
+ *   Offset  Size  Field
+ *   0       4     codepoint (uint32)
+ *   4       1     fg_r
+ *   5       1     fg_g
+ *   6       1     fg_b
+ *   7       1     bg_r
+ *   8       1     bg_g
+ *   9       1     bg_b
+ *   10      1     flags
+ *   11      1     _pad1 (padding)
+ *   12      2     z_index (int16)
+ *   14      2     _pad2 (padding)
+ *   Total: 16 bytes
+ */
+#ifdef __EMSCRIPTEN__
+#define CS_TUI_CELL_PACKED __attribute__((packed, aligned(4)))
+#else
+#define CS_TUI_CELL_PACKED
+#endif
+
+typedef struct CS_TUI_CELL_PACKED {
     uint32_t codepoint;     /* Unicode codepoint (0 = space) */
     uint8_t fg_r, fg_g, fg_b;
     uint8_t bg_r, bg_g, bg_b;
     uint8_t flags;          /* Reserved for bold, underline, etc. */
+    uint8_t _pad1;          /* Explicit padding for alignment */
     int16_t z_index;        /* Z-index for layering (higher = on top) */
+    uint16_t _pad2;         /* Padding to 16 bytes */
 } CsTuiCell;
+
+/* Compile-time size assertion */
+_Static_assert(sizeof(CsTuiCell) == 16, "CsTuiCell must be exactly 16 bytes");
 
 /* Cell flags (future use) */
 #define CS_TUI_CELL_BOLD      0x01
@@ -83,6 +112,7 @@ struct CsTuiRenderer {
     bool needs_full_redraw;
     bool alternate_screen_active;
     bool cursor_hidden;
+    bool buffer_dirty;          /* Set when buffer changes, cleared by cs_tui_buffer_dirty() */
 };
 
 /* ============================================================================

@@ -55,13 +55,15 @@ CsToggleResult cs_toggle(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
-    /* Colors */
-    Clay_Color track_bg = current_value
-        ? (Clay_Color){CS_COLOR_BTN_BLUE}
-        : (Clay_Color){CS_COLOR_BTN_GRAY};
-    Clay_Color track_border = is_focused
-        ? (Clay_Color){CS_COLOR_BORDER_FOCUSED}
-        : (Clay_Color){0, 0, 0, 0};  /* No border unless focused */
+    /* Colors - use focus color for background when focused (visible even with border_width=0) */
+    Clay_Color track_bg;
+    if (current_value) {
+        /* On: blue, lighter blue if focused */
+        track_bg = is_focused ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS} : (Clay_Color){CS_COLOR_BTN_BLUE};
+    } else {
+        /* Off: gray, lighter gray if focused */
+        track_bg = is_focused ? (Clay_Color){CS_COLOR_BTN_GRAY_FOCUS} : (Clay_Color){CS_COLOR_BTN_GRAY};
+    }
     Clay_Color knob_color = (Clay_Color){CS_COLOR_TEXT};  /* White knob */
     Clay_Color label_color = (Clay_Color){CS_COLOR_TEXT};
 
@@ -121,11 +123,9 @@ CsToggleResult cs_toggle(
             },
             .backgroundColor = track_bg,
             .cornerRadius = CLAY_CORNER_RADIUS(style->height / 2.0f)
+            /* Focus is indicated via background color change, no border needed.
+             * Adding border would shift position in TUI mode where padding is minimal. */
         };
-        if (is_focused) {
-            track_config.border.color = track_border;
-            track_config.border.width = (Clay_BorderWidth){2, 2, 2, 2, 0};
-        }
 
         CLAY(track_id, track_config) {
             /* The knob (circular) */

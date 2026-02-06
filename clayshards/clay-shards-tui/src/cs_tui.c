@@ -766,6 +766,7 @@ void cs_tui_end(CsTuiRenderer *r) {
         size_t buf_size = (size_t)(r->buffer.width * r->buffer.height) * sizeof(CsTuiCell);
         memcpy(r->buffer.front, r->buffer.back, buf_size);
         r->needs_full_redraw = false;
+        r->buffer_dirty = true;  /* Mark buffer as changed for WebGL renderer */
         return;
     }
 
@@ -778,7 +779,7 @@ void cs_tui_end(CsTuiRenderer *r) {
     bool colors_set = false;
 
     for (int y = 0; y < r->buffer.height; y++) {
-        bool moved = false;
+        int last_x = -1;  /* Track last output position for gap detection */
 
         for (int x = 0; x < r->buffer.width; x++) {
             CsTuiCell *back = &r->buffer.back[y * r->buffer.width + x];
@@ -791,13 +792,9 @@ void cs_tui_end(CsTuiRenderer *r) {
 
             if (!cell_changed) continue;
 
-            /* Move cursor if needed */
-            if (!moved) {
+            /* Move cursor if needed (first cell or gap in updates) */
+            if (last_x < 0 || x != last_x + 1) {
                 cs_tui_output_printf(r, CS_TUI_CURSOR_POS(y, x));
-                moved = true;
-            } else {
-                /* Check if we need to reposition (gap in updates) */
-                /* For now, just output - consecutive cells are common */
             }
 
             /* Update colors if changed */
@@ -825,6 +822,9 @@ void cs_tui_end(CsTuiRenderer *r) {
             int utf8_len = cs_tui_utf8_encode(back->codepoint ? back->codepoint : ' ', utf8);
             cs_tui_output_append(r, utf8, (size_t)utf8_len);
 
+            /* Track position for gap detection */
+            last_x = x;
+
             /* Update front buffer */
             *front = *back;
         }
@@ -847,6 +847,9 @@ void cs_tui_end(CsTuiRenderer *r) {
     }
 
     cs_tui_output_flush(r);
+
+    /* Mark buffer as changed for WebGL renderer */
+    r->buffer_dirty = true;
 }
 
 /* ============================================================================
@@ -1018,6 +1021,34 @@ void cs_tui_update_clay_size(int width, int height) {
 }
 
 /* ============================================================================
+ * Buffer Access (for WASM/WebGL bridge)
+ * ============================================================================ */
+
+void *cs_tui_get_buffer(CsTuiRenderer *r) {
+    if (!r) return NULL;
+    return r->buffer.front;
+}
+
+int cs_tui_get_buffer_width(CsTuiRenderer *r) {
+    return r ? r->buffer.width : 0;
+}
+
+int cs_tui_get_buffer_height(CsTuiRenderer *r) {
+    return r ? r->buffer.height : 0;
+}
+
+int cs_tui_get_cell_size(void) {
+    return (int)sizeof(CsTuiCell);
+}
+
+bool cs_tui_buffer_dirty(CsTuiRenderer *r) {
+    if (!r) return false;
+    bool dirty = r->buffer_dirty;
+    r->buffer_dirty = false;
+    return dirty;
+}
+
+/* ============================================================================
  * Debug / Testing
  * ============================================================================ */
 
@@ -1094,6 +1125,59 @@ char *cs_tui_dump_buffer(CsTuiRenderer *r) {
             }
         }
         buf[pos++] = '\n';
+    }
+    buf[pos] = '\0';
+
+    return buf;
+}
+
+char *cs_tui_dump_buffer_ansi(CsTuiRenderer *r) {
+    if (!r) return NULL;
+
+    /* Estimate size: each cell can be ~30 bytes (color codes) + 4 (char) + newlines */
+    size_t size = (size_t)(r->buffer.width * 40 + 20) * (size_t)r->buffer.height + 100;
+    char *buf = malloc(size);
+    if (!buf) return NULL;
+
+    size_t pos = 0;
+    uint8_t last_fg_r = 0, last_fg_g = 0, last_fg_b = 0;
+    uint8_t last_bg_r = 0, last_bg_g = 0, last_bg_b = 0;
+    bool first = true;
+
+    for (int y = 0; y < r->buffer.height; y++) {
+        for (int x = 0; x < r->buffer.width; x++) {
+            CsTuiCell *cell = cs_tui_cell_at(&r->buffer, x, y);
+            if (cell) {
+                /* Emit color codes if changed */
+                if (first || cell->fg_r != last_fg_r || cell->fg_g != last_fg_g || cell->fg_b != last_fg_b) {
+                    pos += (size_t)snprintf(buf + pos, size - pos, "\x1b[38;2;%d;%d;%dm",
+                                            cell->fg_r, cell->fg_g, cell->fg_b);
+                    last_fg_r = cell->fg_r;
+                    last_fg_g = cell->fg_g;
+                    last_fg_b = cell->fg_b;
+                }
+                if (first || cell->bg_r != last_bg_r || cell->bg_g != last_bg_g || cell->bg_b != last_bg_b) {
+                    pos += (size_t)snprintf(buf + pos, size - pos, "\x1b[48;2;%d;%d;%dm",
+                                            cell->bg_r, cell->bg_g, cell->bg_b);
+                    last_bg_r = cell->bg_r;
+                    last_bg_g = cell->bg_g;
+                    last_bg_b = cell->bg_b;
+                }
+                first = false;
+
+                if (cell->codepoint) {
+                    int len = cs_tui_utf8_encode(cell->codepoint, buf + pos);
+                    pos += (size_t)len;
+                } else {
+                    buf[pos++] = ' ';
+                }
+            } else {
+                buf[pos++] = ' ';
+            }
+        }
+        /* Reset colors at end of line for cleaner output */
+        pos += (size_t)snprintf(buf + pos, size - pos, "\x1b[0m\n");
+        first = true;  /* Reset for next line */
     }
     buf[pos] = '\0';
 
