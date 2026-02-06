@@ -91,16 +91,99 @@ CsSliderResult cs_slider(
     bool is_dragging = (g->dragging_id == id);
     result.dragging = is_dragging;
 
+    /* ========================================================================
+     * INPUT HANDLING - Process all input BEFORE rendering
+     * ======================================================================== */
+
+    /* Get track bounds from previous frame for pointer-based input */
+    Clay_ElementId track_container_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_WRAPPER, .stringId = {0}};
+    Clay_BoundingBox track_box = Clay_GetElementData(track_container_id).boundingBox;
+    float track_width = style->width;
+    float usable_width = track_width - style->thumb_size;
+
+    /* Handle keyboard when focused - BEFORE rendering so value is up-to-date */
+    if (is_focused) {
+        float new_value = current_value;
+
+        /* Home/End: jump to min/max */
+        if (g->pending_home) {
+            new_value = min;
+        } else if (g->pending_end) {
+            new_value = max;
+        }
+        /* Arrow keys: increment/decrement by step */
+        else if (g->pending_arrow_left || g->pending_arrow_down) {
+            float step_size = style->step > 0.0f ? style->step : (max - min) / 20.0f;
+            new_value = current_value - step_size;
+            new_value = snap_to_step(new_value, min, max, style->step);
+            new_value = clamp_f(new_value, min, max);
+        } else if (g->pending_arrow_right || g->pending_arrow_up) {
+            float step_size = style->step > 0.0f ? style->step : (max - min) / 20.0f;
+            new_value = current_value + step_size;
+            new_value = snap_to_step(new_value, min, max, style->step);
+            new_value = clamp_f(new_value, min, max);
+        }
+
+        if (new_value != current_value) {
+            *value = new_value;
+            current_value = new_value;  /* Update for rendering */
+            result.changed = true;
+        }
+    }
+
+    /* Handle drag start */
+    if (is_hovered && g->pointer_down && !is_dragging && g->dragging_id == 0) {
+        g->dragging_id = id;
+        is_dragging = true;
+        result.dragging = true;
+    }
+
+    /* Handle dragging - calculate value from pointer position */
+    if (is_dragging && g->pointer_down && usable_width > 0) {
+        float rel_x = g->pointer_x - track_box.x - style->thumb_size / 2.0f;
+        float new_normalized = rel_x / usable_width;
+        new_normalized = clamp_f(new_normalized, 0.0f, 1.0f);
+        float new_value = min + new_normalized * (max - min);
+
+        /* Apply step snapping */
+        new_value = snap_to_step(new_value, min, max, style->step);
+
+        if (new_value != current_value) {
+            *value = new_value;
+            current_value = new_value;  /* Update for rendering */
+            result.changed = true;
+        }
+    }
+
+    /* Handle click (mouse) - jump to position */
+    if (is_hovered && g->pending_click && !is_dragging && usable_width > 0) {
+        float rel_x = g->pointer_x - track_box.x - style->thumb_size / 2.0f;
+        float new_normalized = rel_x / usable_width;
+        new_normalized = clamp_f(new_normalized, 0.0f, 1.0f);
+        float new_value = min + new_normalized * (max - min);
+
+        new_value = snap_to_step(new_value, min, max, style->step);
+
+        if (new_value != current_value) {
+            *value = new_value;
+            current_value = new_value;  /* Update for rendering */
+            result.changed = true;
+        }
+        g->clicked_id = id;
+    }
+
+    /* ========================================================================
+     * RENDERING - Now render with the updated value
+     * ======================================================================== */
+
     /* Colors */
     Clay_Color track_bg = (Clay_Color){CS_COLOR_BTN_GRAY};
     Clay_Color track_fill = (Clay_Color){CS_COLOR_BTN_BLUE};
     Clay_Color label_color = (Clay_Color){CS_COLOR_TEXT};
     Clay_Color border_color = (Clay_Color){CS_COLOR_BORDER_FOCUSED};
 
-    /* Calculate thumb position (0.0 to 1.0) */
+    /* Calculate thumb position (0.0 to 1.0) using updated current_value */
     float normalized = (current_value - min) / (max - min);
-    float track_width = style->width;
-    float usable_width = track_width - style->thumb_size;
     float thumb_offset = normalized * usable_width;
 
     /* Build the slider layout: [label] [track] [value?] */
@@ -133,7 +216,6 @@ CsSliderResult cs_slider(
         }
 
         /* The track container (clickable area) */
-        Clay_ElementId track_container_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_WRAPPER, .stringId = {0}};
         float container_height = style->thumb_size > style->height ? style->thumb_size : style->height;
 
         Clay_ElementDeclaration track_container_config = {
@@ -182,8 +264,6 @@ CsSliderResult cs_slider(
             }
         }
 
-        /* Thumb is drawn separately for positioning - we'll use the track bounds */
-
         /* Optional value display */
         if (style->show_value) {
             /* Use widget state to persist the value string across the frame.
@@ -202,85 +282,14 @@ CsSliderResult cs_slider(
         }
     }
 
-    /* Get track bounds for drag calculation */
-    Clay_ElementId track_container_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_WRAPPER, .stringId = {0}};
-    Clay_BoundingBox track_box = Clay_GetElementData(track_container_id).boundingBox;
-
-    /* Register hit targets for click detection (uses previous frame's bounds) */
-    cs_register_hit_target(id, CS_HIT_TRACK, -1, track_box.x, track_box.y, track_box.width, track_box.height);
+    /* Register hit targets for click detection (uses this frame's bounds for next frame) */
+    Clay_BoundingBox new_track_box = Clay_GetElementData(track_container_id).boundingBox;
+    cs_register_hit_target(id, CS_HIT_TRACK, -1, new_track_box.x, new_track_box.y, new_track_box.width, new_track_box.height);
 
     /* Calculate thumb bounds and register thumb hit target */
-    float thumb_x = track_box.x + thumb_offset;
-    float thumb_y = track_box.y + (track_box.height - style->thumb_size) / 2.0f;
+    float thumb_x = new_track_box.x + thumb_offset;
+    float thumb_y = new_track_box.y + (new_track_box.height - style->thumb_size) / 2.0f;
     cs_register_hit_target(id, CS_HIT_THUMB, -1, thumb_x, thumb_y, style->thumb_size, style->thumb_size);
-
-    /* Handle drag start */
-    if (is_hovered && g->pointer_down && !is_dragging && g->dragging_id == 0) {
-        g->dragging_id = id;
-        is_dragging = true;
-        result.dragging = true;
-    }
-
-    /* Handle dragging - calculate value from pointer position */
-    if (is_dragging && g->pointer_down) {
-        float rel_x = g->pointer_x - track_box.x - style->thumb_size / 2.0f;
-        float new_normalized = rel_x / usable_width;
-        new_normalized = clamp_f(new_normalized, 0.0f, 1.0f);
-        float new_value = min + new_normalized * (max - min);
-
-        /* Apply step snapping */
-        new_value = snap_to_step(new_value, min, max, style->step);
-
-        if (new_value != current_value) {
-            *value = new_value;
-            result.changed = true;
-        }
-    }
-
-    /* Handle click (mouse) - jump to position */
-    if (is_hovered && g->pending_click && !is_dragging) {
-        float rel_x = g->pointer_x - track_box.x - style->thumb_size / 2.0f;
-        float new_normalized = rel_x / usable_width;
-        new_normalized = clamp_f(new_normalized, 0.0f, 1.0f);
-        float new_value = min + new_normalized * (max - min);
-
-        new_value = snap_to_step(new_value, min, max, style->step);
-
-        if (new_value != current_value) {
-            *value = new_value;
-            result.changed = true;
-        }
-        g->clicked_id = id;
-    }
-
-    /* Handle keyboard when focused */
-    if (is_focused) {
-        float new_value = current_value;
-
-        /* Home/End: jump to min/max */
-        if (g->pending_home) {
-            new_value = min;
-        } else if (g->pending_end) {
-            new_value = max;
-        }
-        /* Arrow keys: increment/decrement by step */
-        else if (g->pending_arrow_left || g->pending_arrow_down) {
-            float step_size = style->step > 0.0f ? style->step : (max - min) / 20.0f;
-            new_value = current_value - step_size;
-            new_value = snap_to_step(new_value, min, max, style->step);
-            new_value = clamp_f(new_value, min, max);
-        } else if (g->pending_arrow_right || g->pending_arrow_up) {
-            float step_size = style->step > 0.0f ? style->step : (max - min) / 20.0f;
-            new_value = current_value + step_size;
-            new_value = snap_to_step(new_value, min, max, style->step);
-            new_value = clamp_f(new_value, min, max);
-        }
-
-        if (new_value != current_value) {
-            *value = new_value;
-            result.changed = true;
-        }
-    }
 
     /* Update result with final value */
     result.value = *value;

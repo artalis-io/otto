@@ -410,6 +410,48 @@ static void test_zindex_lower_blocked(void) {
     PASS();
 }
 
+/* Test differential update gap detection - non-consecutive cell updates */
+static void test_differential_gap_update(void) {
+    TEST(differential_gap_update);
+
+    /* Use differential mode for this test */
+    CsTuiConfig diff_config = test_config;
+    diff_config.differential = true;
+    diff_config.headless = true;  /* Don't output to terminal */
+
+    CsTuiRenderer *r = cs_tui_create(&diff_config);
+    ASSERT(r != NULL, "Failed to create renderer");
+
+    /* Frame 1: Draw text at positions 0, 5, and 10 (with gaps) */
+    cs_tui_begin(r);
+    cs_tui_text(r, 0, 0, "AAA", -1, (CsTuiColor){255, 255, 255, 255}, NULL);
+    cs_tui_text(r, 8, 0, "BBB", -1, (CsTuiColor){255, 255, 255, 255}, NULL);
+    cs_tui_text(r, 16, 0, "CCC", -1, (CsTuiColor){255, 255, 255, 255}, NULL);
+    cs_tui_end(r);
+
+    /* Verify positions are correct */
+    ASSERT(cs_tui_buffer_contains(r, 0, 0, "AAA"), "First text at position 0");
+    ASSERT(cs_tui_buffer_contains(r, 8, 0, "BBB"), "Second text at position 8");
+    ASSERT(cs_tui_buffer_contains(r, 16, 0, "CCC"), "Third text at position 16");
+    ASSERT(cs_tui_get_cell_char(r, 3, 0) == ' ', "Gap between A and B should be space");
+    ASSERT(cs_tui_get_cell_char(r, 11, 0) == ' ', "Gap between B and C should be space");
+
+    /* Frame 2: Change only one of the texts - test differential with gap */
+    cs_tui_begin(r);
+    cs_tui_text(r, 0, 0, "AAA", -1, (CsTuiColor){255, 255, 255, 255}, NULL);
+    cs_tui_text(r, 8, 0, "XXX", -1, (CsTuiColor){255, 0, 0, 255}, NULL);  /* Changed */
+    cs_tui_text(r, 16, 0, "CCC", -1, (CsTuiColor){255, 255, 255, 255}, NULL);
+    cs_tui_end(r);
+
+    /* Verify all positions still correct after differential update */
+    ASSERT(cs_tui_buffer_contains(r, 0, 0, "AAA"), "First text unchanged");
+    ASSERT(cs_tui_buffer_contains(r, 8, 0, "XXX"), "Second text changed to XXX");
+    ASSERT(cs_tui_buffer_contains(r, 16, 0, "CCC"), "Third text unchanged");
+
+    cs_tui_free(r);
+    PASS();
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -446,6 +488,9 @@ int main(void) {
     printf("\nZ-index tests:\n");
     test_zindex_overlay();
     test_zindex_lower_blocked();
+
+    printf("\nDifferential update tests:\n");
+    test_differential_gap_update();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
 

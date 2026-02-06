@@ -55,13 +55,17 @@ typedef struct {
 #define CS_COLOR_PRIMARY_HOVER  100, 160, 255, 255
 
 /* Button colors - Tailwind palette (RGBA) */
-#define CS_COLOR_BTN_BLUE       59, 130, 246, 255   /* Blue 500 */
-#define CS_COLOR_BTN_BLUE_HOVER 37, 99, 235, 255    /* Blue 600 */
-#define CS_COLOR_BTN_RED        239, 68, 68, 255    /* Red 500 */
-#define CS_COLOR_BTN_RED_HOVER  220, 38, 38, 255    /* Red 600 */
-#define CS_COLOR_BTN_GRAY       75, 85, 99, 255     /* Gray 600 */
-#define CS_COLOR_BTN_GRAY_HOVER 55, 65, 81, 255     /* Gray 700 */
-#define CS_COLOR_BTN_GHOST_HOVER 55, 65, 81, 128   /* Gray 700 @ 50% */
+#define CS_COLOR_BTN_BLUE        59, 130, 246, 255   /* Blue 500 */
+#define CS_COLOR_BTN_BLUE_HOVER  37, 99, 235, 255    /* Blue 600 */
+#define CS_COLOR_BTN_BLUE_FOCUS  96, 165, 250, 255   /* Blue 400 - lighter for focus */
+#define CS_COLOR_BTN_RED         239, 68, 68, 255    /* Red 500 */
+#define CS_COLOR_BTN_RED_HOVER   220, 38, 38, 255    /* Red 600 */
+#define CS_COLOR_BTN_RED_FOCUS   248, 113, 113, 255  /* Red 400 - lighter for focus */
+#define CS_COLOR_BTN_GRAY        75, 85, 99, 255     /* Gray 600 */
+#define CS_COLOR_BTN_GRAY_HOVER  55, 65, 81, 255     /* Gray 700 */
+#define CS_COLOR_BTN_GRAY_FOCUS  107, 114, 128, 255  /* Gray 500 - lighter for focus */
+#define CS_COLOR_BTN_GHOST_HOVER 55, 65, 81, 128     /* Gray 700 @ 50% */
+#define CS_COLOR_BTN_GHOST_FOCUS 75, 85, 99, 128     /* Gray 600 @ 50% - for focus */
 
 /* ============================================================================
  * ID Generation

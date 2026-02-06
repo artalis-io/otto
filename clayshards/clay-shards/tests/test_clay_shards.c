@@ -891,6 +891,108 @@ static void test_slider_show_value(void) {
     PASS();
 }
 
+/* ============================================================================
+ * Input-Before-Render Regression Tests
+ *
+ * These tests verify that input handling happens BEFORE rendering, so that
+ * state changes are reflected immediately in the same frame (no 1-frame lag).
+ * ============================================================================ */
+
+static void test_slider_keyboard_input_immediate(void) {
+    TEST(slider_keyboard_input_immediate);
+
+    init_clay();
+    cs_init();
+
+    float value = 0.5f;
+    const CsSliderStyle style = {
+        .width = 100.0f,
+        .height = 8.0f,
+        .thumb_size = 10.0f,
+        .step = 0.1f,  /* 10% steps */
+        .show_value = true
+    };
+
+    /* Focus the slider and set pending left arrow key */
+    uint32_t slider_id = CS_ID("immediate_slider");
+    cs_focus(slider_id);
+
+    CsState *g = cs_get_state();
+    g->pending_arrow_left = true;  /* Request value decrease */
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        CsSliderResult r = cs_slider(slider_id, &value, 0.0f, 1.0f, "Test", &style);
+
+        /* CRITICAL: Value should be updated IMMEDIATELY, not next frame */
+        ASSERT(r.changed, "Slider should report change on same frame as input");
+        ASSERT(value < 0.5f, "Value should be decreased on same frame");
+        ASSERT(r.value < 0.5f, "Result value should match decreased value");
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    PASS();
+}
+
+static void test_dropdown_enter_closes_immediate(void) {
+    TEST(dropdown_enter_closes_immediate);
+
+    init_clay();
+    cs_init();
+    cs_dropdown_close_all();
+
+    int selected = 1;
+    const char *options[] = {"Low", "Medium", "High"};
+    uint32_t dd_id = CS_ID("immediate_dropdown");
+
+    /* First, open the dropdown */
+    cs_focus(dd_id);
+    CsState *g = cs_get_state();
+    g->pending_arrow_down = true;  /* Opens dropdown if closed */
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        cs_dropdown(dd_id, &selected, options, 3, NULL);
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    ASSERT(cs_dropdown_is_open(dd_id), "Dropdown should be open after arrow down");
+
+    /* Now close it with Enter - should close on SAME frame */
+    g->pending_enter = true;
+
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    CsDropdownResult r = {0};
+    CLAY(CLAY_ID("Root"), {
+        .layout = { .sizing = { CLAY_SIZING_FIXED(800), CLAY_SIZING_FIXED(600) } }
+    }) {
+        r = cs_dropdown(dd_id, &selected, options, 3, NULL);
+    }
+
+    /* CRITICAL: Dropdown should be closed IMMEDIATELY, not next frame */
+    ASSERT(r.closed, "Dropdown should report closed on same frame as Enter");
+    ASSERT(!cs_dropdown_is_open(dd_id), "Dropdown should be closed after Enter");
+
+    Clay_EndLayout();
+    cs_frame_end(0.016f);
+
+    PASS();
+}
+
 static void test_dropdown_renders(void) {
     TEST(dropdown_renders);
 
@@ -2362,7 +2464,9 @@ int main(void) {
     test_slider_invalid_range();
     test_slider_no_label();
     test_slider_show_value();
+    test_slider_keyboard_input_immediate();
     test_dropdown_renders();
+    test_dropdown_enter_closes_immediate();
     test_dropdown_null_params();
     test_dropdown_selection_clamp();
     test_dropdown_open_close();

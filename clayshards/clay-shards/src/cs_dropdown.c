@@ -98,6 +98,98 @@ CsDropdownResult cs_dropdown(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
+    /* ========================================================================
+     * INPUT HANDLING - Process all input BEFORE rendering
+     * ======================================================================== */
+
+    /* Handle keyboard when focused - BEFORE rendering so state is up-to-date */
+    if (is_focused) {
+        /* Enter/Space toggles open state */
+        if (g->pending_enter) {
+            if (is_open) {
+                tls_open_dropdown_id = 0;
+                is_open = false;  /* Update for rendering */
+                result.closed = true;
+            } else {
+                tls_open_dropdown_id = id;
+                is_open = true;   /* Update for rendering */
+                result.opened = true;
+            }
+        }
+
+        /* Escape closes dropdown */
+        if (g->pending_escape && is_open) {
+            tls_open_dropdown_id = 0;
+            is_open = false;      /* Update for rendering */
+            result.closed = true;
+        }
+
+        /* Arrow keys navigate selection */
+        if (g->pending_arrow_up) {
+            if (!is_open) {
+                /* Open dropdown when pressing arrow on closed dropdown */
+                tls_open_dropdown_id = id;
+                is_open = true;   /* Update for rendering */
+                result.opened = true;
+            } else if (current_selected > 0) {
+                *selected = current_selected - 1;
+                current_selected = *selected;  /* Update for rendering */
+                result.changed = true;
+                result.selected = *selected;
+            }
+        }
+        if (g->pending_arrow_down) {
+            if (!is_open) {
+                /* Open dropdown when pressing arrow on closed dropdown */
+                tls_open_dropdown_id = id;
+                is_open = true;   /* Update for rendering */
+                result.opened = true;
+            } else if (current_selected < count - 1) {
+                *selected = current_selected + 1;
+                current_selected = *selected;  /* Update for rendering */
+                result.changed = true;
+                result.selected = *selected;
+            }
+        }
+    }
+
+    /* Handle button click to toggle open/close - BEFORE rendering */
+    if (is_hovered && g->pending_click && !result.closed) {
+        if (is_open) {
+            tls_open_dropdown_id = 0;
+            is_open = false;      /* Update for rendering */
+            result.closed = true;
+        } else {
+            /* Close any other open dropdown first */
+            tls_open_dropdown_id = id;
+            is_open = true;       /* Update for rendering */
+            result.opened = true;
+        }
+        g->clicked_id = id;
+    }
+
+    /* Close dropdown if clicked elsewhere (not on button or list) - BEFORE rendering */
+    if (is_open && g->pending_click && !is_hovered && !result.closed) {
+        /* Check if click was on any list item */
+        bool clicked_on_list = false;
+        for (int i = 0; i < count; i++) {
+            Clay_ElementId item_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_DROPDOWN_ITEM + (uint32_t)i, .stringId = {0}};
+            if (Clay_PointerOver(item_id)) {
+                clicked_on_list = true;
+                break;
+            }
+        }
+        if (!clicked_on_list) {
+            tls_open_dropdown_id = 0;
+            is_open = false;      /* Update for rendering */
+            result.closed = true;
+        }
+    }
+
+    /* ========================================================================
+     * RENDERING - Now render with the updated state
+     * ======================================================================== */
+
     /* Colors */
     Clay_Color bg_color = is_hovered
         ? (Clay_Color){CS_COLOR_BG_HOVER}
@@ -231,9 +323,10 @@ CsDropdownResult cs_dropdown(
                         bool item_hovered = Clay_PointerOver(item_id);
                         bool item_selected = (i == current_selected);
 
+                        /* Use list_bg for default to properly overwrite underlying content */
                         Clay_Color item_bg = item_hovered ? item_hover_bg
                                            : item_selected ? (Clay_Color){CS_COLOR_BTN_BLUE}
-                                           : (Clay_Color){0, 0, 0, 0};
+                                           : list_bg;
 
                         /* TUI-friendly sizing: use height directly if small (<= 3),
                          * otherwise subtract padding for pixel mode */
@@ -296,80 +389,6 @@ CsDropdownResult cs_dropdown(
     /* Button registered at base z-level */
     Clay_BoundingBox button_box = Clay_GetElementData(clay_id).boundingBox;
     cs_register_hit_target(id, CS_HIT_BODY, -1, button_box.x, button_box.y, button_box.width, button_box.height);
-
-    /* Handle button click to toggle open/close */
-    if (is_hovered && g->pending_click && !result.closed) {
-        if (is_open) {
-            tls_open_dropdown_id = 0;
-            result.closed = true;
-        } else {
-            /* Close any other open dropdown first */
-            tls_open_dropdown_id = id;
-            result.opened = true;
-        }
-        g->clicked_id = id;
-    }
-
-    /* Handle keyboard when focused */
-    if (is_focused) {
-        /* Enter/Space toggles open state */
-        if (g->pending_enter) {
-            if (is_open) {
-                tls_open_dropdown_id = 0;
-                result.closed = true;
-            } else {
-                tls_open_dropdown_id = id;
-                result.opened = true;
-            }
-        }
-
-        /* Escape closes dropdown */
-        if (g->pending_escape && is_open) {
-            tls_open_dropdown_id = 0;
-            result.closed = true;
-        }
-
-        /* Arrow keys navigate selection */
-        if (g->pending_arrow_up) {
-            if (!is_open) {
-                /* Open dropdown when pressing arrow on closed dropdown */
-                tls_open_dropdown_id = id;
-                result.opened = true;
-            } else if (current_selected > 0) {
-                *selected = current_selected - 1;
-                result.changed = true;
-                result.selected = *selected;
-            }
-        }
-        if (g->pending_arrow_down) {
-            if (!is_open) {
-                /* Open dropdown when pressing arrow on closed dropdown */
-                tls_open_dropdown_id = id;
-                result.opened = true;
-            } else if (current_selected < count - 1) {
-                *selected = current_selected + 1;
-                result.changed = true;
-                result.selected = *selected;
-            }
-        }
-    }
-
-    /* Close dropdown if clicked elsewhere (not on button or list) */
-    if (is_open && g->pending_click && !is_hovered && !result.closed) {
-        /* Check if click was on any list item */
-        bool clicked_on_list = false;
-        for (int i = 0; i < count; i++) {
-            Clay_ElementId item_id = (Clay_ElementId){.id = id + CS_ID_OFFSET_DROPDOWN_ITEM + (uint32_t)i, .stringId = {0}};
-            if (Clay_PointerOver(item_id)) {
-                clicked_on_list = true;
-                break;
-            }
-        }
-        if (!clicked_on_list) {
-            tls_open_dropdown_id = 0;
-            result.closed = true;
-        }
-    }
 
     /* Mark as non-text element for keyboard navigation */
     CS_MARK_NON_TEXT_IF_FOCUSED(g, is_focused);

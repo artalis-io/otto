@@ -46,32 +46,37 @@ CsButtonResult cs_button(
     bool is_focused = (g->focused_id == id);
 
     /* Colors based on variant */
-    Clay_Color bg, bg_hover, text_color;
+    Clay_Color bg, bg_hover, bg_focus, text_color;
 
     switch (style->variant) {
         case CS_BTN_PRIMARY:
             bg = (Clay_Color){CS_COLOR_BTN_BLUE};
             bg_hover = (Clay_Color){CS_COLOR_BTN_BLUE_HOVER};
+            bg_focus = (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS};
             text_color = (Clay_Color){CS_COLOR_TEXT};
             break;
         case CS_BTN_DANGER:
             bg = (Clay_Color){CS_COLOR_BTN_RED};
             bg_hover = (Clay_Color){CS_COLOR_BTN_RED_HOVER};
+            bg_focus = (Clay_Color){CS_COLOR_BTN_RED_FOCUS};
             text_color = (Clay_Color){CS_COLOR_TEXT};
             break;
         case CS_BTN_SECONDARY:
             bg = (Clay_Color){CS_COLOR_BTN_GRAY};
             bg_hover = (Clay_Color){CS_COLOR_BTN_GRAY_HOVER};
+            bg_focus = (Clay_Color){CS_COLOR_BTN_GRAY_FOCUS};
             text_color = (Clay_Color){CS_COLOR_TEXT};
             break;
         case CS_BTN_GHOST:
             bg = (Clay_Color){0, 0, 0, 0};
             bg_hover = (Clay_Color){CS_COLOR_BTN_GHOST_HOVER};
+            bg_focus = (Clay_Color){CS_COLOR_BTN_GHOST_FOCUS};
             text_color = (Clay_Color){CS_COLOR_TEXT};
             break;
         default: /* CS_BTN_DEFAULT */
             bg = (Clay_Color){CS_COLOR_BG_HOVER};
             bg_hover = (Clay_Color){CS_COLOR_BORDER};
+            bg_focus = (Clay_Color){CS_COLOR_BG_FOCUSED};
             text_color = (Clay_Color){CS_COLOR_TEXT};
             break;
     }
@@ -94,6 +99,14 @@ CsButtonResult cs_button(
         height_sizing = CLAY_SIZING_FIXED(style->height);
     }
 
+    /* Determine background color: focus > hover > default */
+    Clay_Color active_bg = bg;
+    if (is_focused) {
+        active_bg = bg_focus;
+    } else if (is_hovered) {
+        active_bg = bg_hover;
+    }
+
     /* Build button config */
     Clay_ElementDeclaration btn_config = {
         .layout = {
@@ -106,15 +119,12 @@ CsButtonResult cs_button(
             },
             .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER }
         },
-        .backgroundColor = is_hovered ? bg_hover : bg,
+        .backgroundColor = active_bg,
         .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius)
     };
 
-    /* Add focus ring if focused */
-    if (is_focused) {
-        btn_config.border.color = (Clay_Color){CS_COLOR_BORDER_FOCUSED};
-        btn_config.border.width = (Clay_BorderWidth){2, 2, 2, 2, 0};
-    }
+    /* Focus is indicated via background color change (active_bg), no border needed.
+     * Adding border would shift position in TUI mode where padding is minimal. */
 
     /* Check if we need a wrapper for margin/alignment */
     bool has_margin = cs_has_margin(style->margin);

@@ -264,6 +264,49 @@ void cs_tui_update_clay_size(int width, int height);
 void cs_tui_render_clay_commands(CsTuiRenderer *r, const void *commands, int count);
 
 /* ============================================================================
+ * Buffer Access (for WASM/WebGL bridge)
+ * ============================================================================ */
+
+/**
+ * Get pointer to the front (displayed) cell buffer.
+ * Each cell is exactly 16 bytes (see CsTuiCell in cs_tui_internal.h).
+ *
+ * Cell layout (16 bytes):
+ *   0-3:   codepoint (uint32)
+ *   4-6:   fg_r, fg_g, fg_b
+ *   7-9:   bg_r, bg_g, bg_b
+ *   10:    flags
+ *   11:    padding
+ *   12-13: z_index (int16)
+ *   14-15: padding
+ *
+ * @return Pointer to front buffer, or NULL if renderer is NULL
+ */
+void *cs_tui_get_buffer(CsTuiRenderer *r);
+
+/**
+ * Get buffer width in cells.
+ */
+int cs_tui_get_buffer_width(CsTuiRenderer *r);
+
+/**
+ * Get buffer height in cells.
+ */
+int cs_tui_get_buffer_height(CsTuiRenderer *r);
+
+/**
+ * Get size of a single cell in bytes (always 16).
+ */
+int cs_tui_get_cell_size(void);
+
+/**
+ * Check if buffer has changed since last call.
+ * Useful for differential rendering in WebGL.
+ * Resets the dirty flag when called.
+ */
+bool cs_tui_buffer_dirty(CsTuiRenderer *r);
+
+/* ============================================================================
  * Debug / Testing
  * ============================================================================ */
 
@@ -293,6 +336,13 @@ bool cs_tui_buffer_contains(CsTuiRenderer *r, int x, int y, const char *text);
  * Returns allocated string that caller must free.
  */
 char *cs_tui_dump_buffer(CsTuiRenderer *r);
+
+/**
+ * Dump buffer with ANSI color codes (for visual debugging).
+ * Output will show actual colors when printed to a terminal.
+ * Returns allocated string that caller must free.
+ */
+char *cs_tui_dump_buffer_ansi(CsTuiRenderer *r);
 
 #ifdef __cplusplus
 }
