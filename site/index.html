@@ -1434,6 +1434,14 @@
                         <div class="card-desc">Geo utilities, protobuf, rate limiting, work queues, circuit breakers, backoff.</div>
                         <div class="card-meta">206 tests &middot; Common infrastructure</div>
                     </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">ClayShards</span>
+                            <span class="card-lang">C + JS</span>
+                        </div>
+                        <div class="card-desc">Immediate-mode UI components. WebGL renderer, MSDF fonts, map widgets.</div>
+                        <div class="card-meta">84 tests &middot; 9.5K loc &middot; ~140KB WASM</div>
+                    </div>
                 </div>
             </div>
 
@@ -1472,6 +1480,70 @@
                             <span class="badge-planned">planned</span>
                         </div>
                         <div class="card-desc"><strong>N</strong>ormalized <strong>Ex</strong>ternal <strong>U</strong>nified <strong>S</strong>napshots. TMS/ELD/LoadBoard integration gateway.</div>
+                    </div>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Tempo</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>T</strong>ime-window and <strong>E</strong>vent <strong>M</strong>anagement <strong>P</strong>olicy <strong>O</strong>rchestrator. Time windows, facility hours, blackout periods.</div>
+                    </div>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Arbor</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>A</strong>lgorithmic <strong>R</strong>ecursive <strong>B</strong>ranching and <strong>O</strong>ptimization <strong>R</strong>untime. State-space search, beam search, pruning.</div>
+                    </div>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Pulse</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>P</strong>lan <strong>U</strong>tilization and <strong>L</strong>ive <strong>S</strong>tate <strong>E</strong>stimator. PTA computation, execution tracking, break insertion.</div>
+                    </div>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Forge</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>F</strong>lexible <strong>O</strong>rchestration and <strong>R</strong>untime for <strong>G</strong>eneral <strong>E</strong>xecution. Async job queue for background tasks.</div>
+                    </div>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Apex</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>A</strong>synchronous <strong>P</strong>re-computation <strong>Ex</strong>ecution. Tile pyramid generation, route corridor pre-computation, cache warming.</div>
+                    </div>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Iris</span>
+                            <span class="card-lang">Python</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>I</strong>ntelligent <strong>R</strong>equest <strong>I</strong>nterpretation <strong>S</strong>ystem. Natural language interface via LLM for dispatcher queries.</div>
+                    </div>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Quota</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>Q</strong>uote <strong>U</strong>nderwriting and <strong>T</strong>ariff <strong>O</strong>ptimization <strong>A</strong>lgorithm. Spot and contract pricing, margin optimization.</div>
+                    </div>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Atlas</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>A</strong>llocation and <strong>T</strong>actical <strong>L</strong>ane <strong>A</strong>nalysis <strong>S</strong>ystem. Network design, lane balancing, capacity planning.</div>
                     </div>
                 </div>
             </div>
@@ -1675,6 +1747,50 @@ Dependencies:
                     <div class="feature">
                         <div class="feature-title">Portable</div>
                         <div class="feature-desc">Linux, macOS, Windows, browsers. Same codebase everywhere.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scales With You -->
+            <div class="subsection">
+                <h3 class="subsection-title">Scales With You</h3>
+                <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">Same codebase from laptop to enterprise. Only the deployment changes.</p>
+                <div class="deployment-grid">
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x1F4BB;</div>
+                        <div class="deployment-name">Local</div>
+                        <div class="deployment-desc">Single process, in-memory queue</div>
+                    </div>
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x1F3EA;</div>
+                        <div class="deployment-name">Small Business</div>
+                        <div class="deployment-desc">Redis-backed job queue</div>
+                    </div>
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x1F3E2;</div>
+                        <div class="deployment-name">Enterprise</div>
+                        <div class="deployment-desc">Kubernetes, horizontal scaling</div>
+                    </div>
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x2601;&#xFE0F;</div>
+                        <div class="deployment-name">Managed</div>
+                        <div class="deployment-desc">We run it, you use it</div>
+                    </div>
+                </div>
+                <div class="size-comparison" style="margin-top: 24px;">
+                    <div class="size-item otto">
+                        <div class="size-bar"></div>
+                        <div class="size-label">
+                            <strong>OTTO (full stack)</strong>
+                            <span>~2 MB WASM + your data</span>
+                        </div>
+                    </div>
+                    <div class="size-item commercial">
+                        <div class="size-bar"></div>
+                        <div class="size-label">
+                            <strong>Commercial alternatives</strong>
+                            <span>GB+ runtime + your data, server-only</span>
+                        </div>
                     </div>
                 </div>
             </div>
