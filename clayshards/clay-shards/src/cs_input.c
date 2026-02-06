@@ -72,8 +72,9 @@ CsInputResult cs_input(
         : *len;
 
     /* Colors - using constants from cs_common.h */
+    /* Use brighter gray for focus visibility in TUI mode */
     Clay_Color bg = is_focused
-        ? (Clay_Color){CS_COLOR_BG_FOCUSED}
+        ? (Clay_Color){CS_COLOR_BTN_GRAY_FOCUS}
         : (Clay_Color){CS_COLOR_BG_DEFAULT};
     Clay_Color border = is_focused
         ? (Clay_Color){CS_COLOR_BORDER_FOCUSED}
