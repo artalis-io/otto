@@ -108,7 +108,17 @@ int ralph_get_dbl_param(const RalphModel *model, const char *name, double *value
 /* File I/O */
 int ralph_read_mps(RalphModel *model, const char *filename);
 int ralph_write_mps(const RalphModel *model, const char *filename);
+int ralph_read_lp(RalphModel *model, const char *filename);
+int ralph_write_lp(const RalphModel *model, const char *filename);
 int ralph_write_solution(const RalphModel *model, const char *filename);
+
+/* Name management */
+const char* ralph_get_var_name(const RalphModel *model, int var);
+const char* ralph_get_con_name(const RalphModel *model, int con);
+int ralph_set_var_name(RalphModel *model, int var, const char *name);
+int ralph_set_con_name(RalphModel *model, int con, const char *name);
+const char* ralph_get_problem_name(const RalphModel *model);
+int ralph_set_problem_name(RalphModel *model, const char *name);
 
 /* Utility */
 const char* ralph_status_string(RalphStatus status);

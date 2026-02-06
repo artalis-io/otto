@@ -82,7 +82,9 @@ typedef struct {
 
     /* Variable/constraint names (optional) */
     char **var_names;
+    int var_names_capacity; /* Allocated size of var_names array */
     char **con_names;
+    int con_names_capacity; /* Allocated size of con_names array */
     char *name;             /* Problem name */
 
     /* Build state for incremental constraint building (thread-safe) */
@@ -293,6 +295,14 @@ int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
                             const double *values, char sense, double rhs);
 int lp_model_finalize(LPModel *model);
 LPModel* lp_model_copy(const LPModel *model);
+
+/* Name management */
+int lp_model_set_var_name(LPModel *model, int var, const char *name);
+int lp_model_set_con_name(LPModel *model, int con, const char *name);
+const char* lp_model_get_var_name(const LPModel *model, int var);
+const char* lp_model_get_con_name(const LPModel *model, int con);
+int lp_model_set_name(LPModel *model, const char *name);
+const char* lp_model_get_name(const LPModel *model);
 
 /* LU factorization functions */
 LUFactorization* lu_create(int m);

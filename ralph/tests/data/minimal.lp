@@ -1,0 +1,7 @@
+MINIMIZE
+ 5 x1 + 4 x2
+
+SUBJECT TO
+ 2 x1 + 3 x2 <= 100
+
+END

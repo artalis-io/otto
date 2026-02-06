@@ -40,6 +40,8 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/cuts.c \
           $(SRC_DIR)/mip.c \
           $(SRC_DIR)/mps_reader.c \
+          $(SRC_DIR)/lp_reader.c \
+          $(SRC_DIR)/lp_writer.c \
           $(SRC_DIR)/ralph.c \
           $(SRC_DIR)/lap.c \
           $(SRC_DIR)/detect.c \
@@ -76,6 +78,10 @@ DETECT_TEST_EXEC = test_detect
 # Optimization module tests
 OPTIM_TEST_SOURCES = $(TEST_DIR)/test_optim.c
 OPTIM_TEST_EXEC = test_optim
+
+# LP format tests
+LP_TEST_SOURCES = $(TEST_DIR)/test_lp.c
+LP_TEST_EXEC = test_lp
 
 # Benchmarks
 BENCH_DIR = benchmarks
@@ -162,6 +168,14 @@ test-detect: $(DETECT_TEST_EXEC)
 $(OPTIM_TEST_EXEC): $(OPTIM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
+# Build LP format tests
+$(LP_TEST_EXEC): $(LP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP format tests
+test-lp: $(LP_TEST_EXEC)
+	./$(LP_TEST_EXEC)
+
 # Run optimization module tests
 test-optim: $(OPTIM_TEST_EXEC)
 	./$(OPTIM_TEST_EXEC)
@@ -244,7 +258,7 @@ bench-netflow: $(BENCH_NETFLOW_EXEC)
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
