@@ -72,6 +72,10 @@
             box-sizing: border-box;
         }
 
+        html {
+            scroll-behavior: smooth;
+        }
+
         body {
             font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Monaco, Consolas, monospace;
             background: var(--bg);
@@ -101,6 +105,14 @@
             border-bottom: 1px solid var(--border);
         }
 
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
         .logo {
             font-size: 32px;
             font-weight: 700;
@@ -122,6 +134,27 @@
             margin-top: 4px;
             font-size: 13px;
             color: var(--text-muted);
+        }
+
+        .header-nav {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .header-nav a {
+            padding: 6px 12px;
+            font-size: 13px;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            text-decoration: none;
+        }
+
+        .header-nav a:hover {
+            color: var(--text);
+            border-color: var(--accent-dim);
+            text-decoration: none;
         }
 
         /* Hero */
@@ -164,12 +197,60 @@
         .badge.blue { border-color: var(--accent); color: var(--accent); }
         .badge.yellow { border-color: var(--warning); color: var(--warning); }
 
-        /* Components Grid */
-        .components {
+        /* Persona Selector */
+        .persona-selector {
             padding: 48px 0;
             border-bottom: 1px solid var(--border);
         }
 
+        .persona-selector h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 24px;
+            color: var(--text);
+        }
+
+        .persona-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .persona-card {
+            display: block;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 24px 20px;
+            text-decoration: none;
+            transition: border-color 0.15s, transform 0.15s;
+        }
+
+        .persona-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+            text-decoration: none;
+        }
+
+        .persona-icon {
+            font-size: 28px;
+            margin-bottom: 12px;
+        }
+
+        .persona-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 8px;
+        }
+
+        .persona-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+
+        /* Section styling */
         .section-title {
             font-size: 14px;
             font-weight: 600;
@@ -179,6 +260,52 @@
             margin-bottom: 24px;
         }
 
+        .persona-section {
+            padding: 64px 0 48px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .persona-section-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 32px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid var(--accent-dim);
+        }
+
+        .persona-section-icon {
+            font-size: 32px;
+        }
+
+        .persona-section-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .persona-section-subtitle {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .subsection {
+            margin-bottom: 48px;
+        }
+
+        .subsection:last-child {
+            margin-bottom: 0;
+        }
+
+        .subsection-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 16px;
+        }
+
+        /* Grid and Cards */
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -246,12 +373,7 @@
             margin-left: auto;
         }
 
-        /* Architecture */
-        .architecture {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
+        /* ASCII Architecture */
         .ascii-art {
             background: var(--bg-secondary);
             border: 1px solid var(--border);
@@ -267,12 +389,7 @@
             color: var(--text-muted);
         }
 
-        /* Features */
-        .features {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
+        /* Features Grid */
         .feature-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -294,12 +411,7 @@
             font-size: 13px;
         }
 
-        /* Performance */
-        .performance {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
+        /* Performance Table */
         table {
             width: 100%;
             border-collapse: collapse;
@@ -325,12 +437,7 @@
             font-weight: 500;
         }
 
-        /* Quick Start */
-        .quickstart {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
+        /* Code Block */
         .code-block {
             background: var(--bg-secondary);
             border: 1px solid var(--border);
@@ -352,50 +459,112 @@
             color: var(--success);
         }
 
-        /* Mission */
-        .mission {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .mission-content {
+        /* Why C Comparison */
+        .why-c-content {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 32px;
         }
 
-        .mission-text {
-            color: var(--text-muted);
-            font-size: 14px;
-            line-height: 1.7;
-        }
-
-        .mission-text p {
-            margin-bottom: 16px;
-        }
-
-        .mission-text .mission-statement {
-            color: var(--text);
-            border-left: 2px solid var(--accent);
-            padding-left: 16px;
-            font-style: italic;
-        }
-
-        .mission-stats {
+        .why-c-reasons {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .why-c-reason {
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .why-c-reason strong {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--text);
+        }
+
+        .why-c-reason span {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        .why-c-safety h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: var(--success);
+        }
+
+        .why-c-safety ul {
+            list-style: none;
+            font-size: 13px;
+        }
+
+        .why-c-safety li {
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+
+        .why-c-safety li:last-child {
+            border-bottom: none;
+        }
+
+        .why-c-safety li::before {
+            content: "→ ";
+            color: var(--success);
+        }
+
+        .why-c-comparison {
+            margin-top: 24px;
+            overflow-x: auto;
+        }
+
+        .why-c-comparison table {
+            font-size: 12px;
+        }
+
+        .why-c-comparison th {
+            font-size: 11px;
+        }
+
+        .why-c-comparison td:first-child {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .why-c-comparison .winner {
+            color: var(--success);
+        }
+
+        .why-c-comparison .neutral {
+            color: var(--text-muted);
+        }
+
+        .why-c-comparison .weak {
+            color: #ef4444;
+        }
+
+        /* Stats */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
             gap: 16px;
         }
 
         .stat {
-            padding: 16px;
+            padding: 20px;
             background: var(--bg-secondary);
             border: 1px solid var(--border);
             border-radius: 6px;
+            text-align: center;
         }
 
         .stat-value {
-            font-size: 24px;
+            font-size: 28px;
             font-weight: 700;
             color: var(--accent);
         }
@@ -406,12 +575,128 @@
             margin-top: 4px;
         }
 
-        /* Trusted Reality */
-        .trusted-reality {
-            padding: 48px 0;
+        /* No Lock-in */
+        .lockin-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        .lockin-problem, .lockin-solution {
+            padding: 24px;
+            border-radius: 6px;
+        }
+
+        .lockin-problem {
+            background: linear-gradient(135deg, #1a0a0a 0%, #0a0a0a 100%);
+            border: 1px solid #3a1a1a;
+        }
+
+        .lockin-solution {
+            background: linear-gradient(135deg, #0a1a0a 0%, #0a0a0a 100%);
+            border: 1px solid #1a3a1a;
+        }
+
+        .lockin-problem h3 {
+            color: #ef4444;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .lockin-solution h3 {
+            color: var(--success);
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .lockin-list {
+            list-style: none;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .lockin-list li {
+            padding: 8px 0;
             border-bottom: 1px solid var(--border);
         }
 
+        .lockin-list li:last-child {
+            border-bottom: none;
+        }
+
+        .lockin-problem .lockin-list li::before {
+            content: "✗ ";
+            color: #ef4444;
+        }
+
+        .lockin-solution .lockin-list li::before {
+            content: "✓ ";
+            color: var(--success);
+        }
+
+        .lockin-quote {
+            background: var(--bg-secondary);
+            border-left: 3px solid var(--accent);
+            padding: 20px 24px;
+            font-size: 15px;
+            color: var(--text);
+            font-style: italic;
+            border-radius: 0 6px 6px 0;
+        }
+
+        /* License */
+        .license-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+        }
+
+        .license-column {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 24px;
+        }
+
+        .license-type {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .license-type.open {
+            color: var(--success);
+        }
+
+        .license-type.proprietary {
+            color: var(--accent);
+        }
+
+        .license-desc {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+
+        .license-list {
+            list-style: none;
+            font-size: 13px;
+        }
+
+        .license-list li {
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+
+        .license-list li:last-child {
+            border-bottom: none;
+        }
+
+        /* Trusted Reality */
         .trusted-reality-content {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -501,8 +786,117 @@
             color: var(--text-muted);
         }
 
+        /* Operational Grid */
+        .operational-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .operational-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .operational-card:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .operational-card h4 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 12px;
+        }
+
+        .operational-card p {
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.6;
+            margin-bottom: 12px;
+        }
+
+        .operational-card p:last-child {
+            margin-bottom: 0;
+            color: var(--text);
+        }
+
+        /* Operator Features */
+        .operator-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .operator-feature {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .operator-feature h4 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+
+        .operator-feature p {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .operator-cta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 24px;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        .operator-cta-text {
+            flex: 1;
+            min-width: 250px;
+        }
+
+        .operator-cta-text h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .operator-cta-text p {
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+
+        .operator-price {
+            text-align: center;
+        }
+
+        .operator-price .free {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--success);
+        }
+
+        .operator-price .paid {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* EV Callout */
         .ev-callout {
-            margin-top: 24px;
+            margin-top: 32px;
             background: linear-gradient(135deg, #1a1a0a 0%, #0a0a0a 100%);
             border: 1px solid #3a3a1a;
             border-radius: 6px;
@@ -573,135 +967,74 @@
             margin-bottom: 0;
         }
 
-        .operational-events {
-            margin-top: 32px;
-        }
-
-        .operational-events-intro {
-            color: var(--text-muted);
-            font-size: 14px;
-            margin-bottom: 20px;
-        }
-
-        .operational-grid {
+        /* AI Ready */
+        .ai-ready-content {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 32px;
         }
 
-        .operational-card {
+        .ai-example {
             background: var(--bg-secondary);
             border: 1px solid var(--border);
             border-radius: 6px;
             padding: 20px;
         }
 
-        .operational-card:hover {
-            border-color: var(--accent-dim);
-        }
-
-        .operational-card h4 {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
-            margin-bottom: 12px;
-        }
-
-        .operational-card p {
+        .ai-example-prompt {
             font-size: 13px;
-            color: var(--text-muted);
-            line-height: 1.6;
-            margin-bottom: 12px;
-        }
-
-        .operational-card p:last-child {
-            margin-bottom: 0;
-            color: var(--text);
-        }
-
-        /* No Lock-In */
-        .no-lockin {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .lockin-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 24px;
-            margin-bottom: 24px;
-        }
-
-        .lockin-problem, .lockin-solution {
-            padding: 24px;
-            border-radius: 6px;
-        }
-
-        .lockin-problem {
-            background: linear-gradient(135deg, #1a0a0a 0%, #0a0a0a 100%);
-            border: 1px solid #3a1a1a;
-        }
-
-        .lockin-solution {
-            background: linear-gradient(135deg, #0a1a0a 0%, #0a0a0a 100%);
-            border: 1px solid #1a3a1a;
-        }
-
-        .lockin-problem h3 {
-            color: #ef4444;
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 16px;
-        }
-
-        .lockin-solution h3 {
-            color: var(--success);
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 16px;
-        }
-
-        .lockin-list {
-            list-style: none;
-            font-size: 13px;
-            color: var(--text-muted);
-        }
-
-        .lockin-list li {
-            padding: 8px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .lockin-list li:last-child {
-            border-bottom: none;
-        }
-
-        .lockin-problem .lockin-list li::before {
-            content: "✗ ";
-            color: #ef4444;
-        }
-
-        .lockin-solution .lockin-list li::before {
-            content: "✓ ";
-            color: var(--success);
-        }
-
-        .lockin-quote {
-            background: var(--bg-secondary);
-            border-left: 3px solid var(--accent);
-            padding: 20px 24px;
-            font-size: 15px;
-            color: var(--text);
+            color: var(--accent);
             font-style: italic;
-            border-radius: 0 6px 6px 0;
+            margin-bottom: 16px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .ai-example-diagram {
+            font-size: 12px;
+            line-height: 1.4;
+            color: var(--text-muted);
+            overflow-x: auto;
+        }
+
+        .ai-example-diagram pre {
+            margin: 0;
+        }
+
+        .ai-insight {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .ai-insight p {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            line-height: 1.7;
+        }
+
+        .ai-insight .highlight {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .ai-features {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 8px;
+        }
+
+        .ai-feature {
+            font-size: 12px;
+            color: var(--text-muted);
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
         }
 
         /* Runs Everywhere */
-        .runs-everywhere {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
         .deployment-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -783,388 +1116,7 @@
             font-size: 12px;
         }
 
-        .subsection-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
-            margin-top: 32px;
-            margin-bottom: 8px;
-        }
-
-        .scales-intro {
-            color: var(--text-muted);
-            font-size: 14px;
-            margin-bottom: 20px;
-        }
-
-        /* AI Ready */
-        .ai-ready {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .ai-ready-content {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 32px;
-        }
-
-        .ai-example {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 20px;
-        }
-
-        .ai-example-prompt {
-            font-size: 13px;
-            color: var(--accent);
-            font-style: italic;
-            margin-bottom: 16px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .ai-example-diagram {
-            font-size: 12px;
-            line-height: 1.4;
-            color: var(--text-muted);
-            overflow-x: auto;
-        }
-
-        .ai-example-diagram pre {
-            margin: 0;
-        }
-
-        .ai-insight {
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
-
-        .ai-insight p {
-            font-size: 14px;
-            color: var(--text-muted);
-            margin-bottom: 16px;
-            line-height: 1.7;
-        }
-
-        .ai-insight .highlight {
-            color: var(--text);
-            font-weight: 500;
-        }
-
-        .ai-features {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-top: 8px;
-        }
-
-        .ai-feature {
-            font-size: 12px;
-            color: var(--text-muted);
-            padding: 8px 12px;
-            background: var(--bg-tertiary);
-            border-radius: 4px;
-        }
-
-        /* Why C */
-        .why-c {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .why-c-content {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 32px;
-        }
-
-        .why-c-reasons {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-        }
-
-        .why-c-reason {
-            padding: 12px 16px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            font-size: 13px;
-        }
-
-        .why-c-reason strong {
-            display: block;
-            margin-bottom: 4px;
-            color: var(--text);
-        }
-
-        .why-c-reason span {
-            color: var(--text-muted);
-            font-size: 12px;
-        }
-
-        .why-c-safety h3 {
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 16px;
-            color: var(--success);
-        }
-
-        .why-c-safety ul {
-            list-style: none;
-            font-size: 13px;
-        }
-
-        .why-c-safety li {
-            padding: 8px 0;
-            border-bottom: 1px solid var(--border);
-            color: var(--text-muted);
-        }
-
-        .why-c-safety li:last-child {
-            border-bottom: none;
-        }
-
-        .why-c-safety li::before {
-            content: "→ ";
-            color: var(--success);
-        }
-
-        .why-c-comparison {
-            margin-top: 24px;
-            overflow-x: auto;
-        }
-
-        .why-c-comparison table {
-            font-size: 12px;
-        }
-
-        .why-c-comparison th {
-            font-size: 11px;
-        }
-
-        .why-c-comparison td:first-child {
-            color: var(--text);
-            font-weight: 500;
-        }
-
-        .why-c-comparison .winner {
-            color: var(--success);
-        }
-
-        .why-c-comparison .neutral {
-            color: var(--text-muted);
-        }
-
-        .why-c-comparison .weak {
-            color: #ef4444;
-        }
-
-        /* For Partners */
-        .for-partners {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .partner-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
-        }
-
-        .partner-card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 24px;
-        }
-
-        .partner-card:hover {
-            border-color: var(--accent-dim);
-        }
-
-        .partner-type {
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            color: var(--accent);
-            margin-bottom: 8px;
-        }
-
-        .partner-card h3 {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 12px;
-        }
-
-        .partner-card p {
-            font-size: 13px;
-            color: var(--text-muted);
-            margin-bottom: 16px;
-        }
-
-        .partner-exchange {
-            font-size: 12px;
-            padding: 12px;
-            background: var(--bg-tertiary);
-            border-radius: 4px;
-        }
-
-        .partner-exchange .gives, .partner-exchange .gets {
-            margin-bottom: 8px;
-        }
-
-        .partner-exchange .gives:last-child, .partner-exchange .gets:last-child {
-            margin-bottom: 0;
-        }
-
-        .partner-exchange strong {
-            color: var(--text);
-        }
-
-        .partner-exchange span {
-            color: var(--text-muted);
-        }
-
-        /* License */
-        .license {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .license-content {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 24px;
-        }
-
-        .license-column {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 24px;
-        }
-
-        .license-type {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 12px;
-        }
-
-        .license-type.open {
-            color: var(--success);
-        }
-
-        .license-type.proprietary {
-            color: var(--accent);
-        }
-
-        .license-desc {
-            color: var(--text-muted);
-            font-size: 14px;
-            margin-bottom: 16px;
-        }
-
-        .license-list {
-            list-style: none;
-            font-size: 13px;
-        }
-
-        .license-list li {
-            padding: 6px 0;
-            border-bottom: 1px solid var(--border);
-            color: var(--text-muted);
-        }
-
-        .license-list li:last-child {
-            border-bottom: none;
-        }
-
-        /* For Owner-Operators */
-        .for-operators {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .operator-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-
-        .operator-feature {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 20px;
-        }
-
-        .operator-feature h4 {
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: var(--text);
-        }
-
-        .operator-feature p {
-            font-size: 13px;
-            color: var(--text-muted);
-        }
-
-        .operator-cta {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 24px;
-            gap: 24px;
-            flex-wrap: wrap;
-        }
-
-        .operator-cta-text {
-            flex: 1;
-            min-width: 250px;
-        }
-
-        .operator-cta-text h3 {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 8px;
-        }
-
-        .operator-cta-text p {
-            font-size: 14px;
-            color: var(--text-muted);
-        }
-
-        .operator-price {
-            text-align: center;
-        }
-
-        .operator-price .free {
-            font-size: 24px;
-            font-weight: 700;
-            color: var(--success);
-        }
-
-        .operator-price .paid {
-            font-size: 13px;
-            color: var(--text-muted);
-            margin-top: 4px;
-        }
-
-        /* For Fleets CTA */
-        .for-fleets {
-            padding: 48px 0;
-            border-bottom: 1px solid var(--border);
-        }
-
+        /* CTA Box */
         .cta-box {
             background: linear-gradient(135deg, var(--accent-dim) 0%, #1e3a5f 100%);
             border: 1px solid var(--accent);
@@ -1225,6 +1177,67 @@
             text-decoration: none;
         }
 
+        /* Partners */
+        .partner-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        .partner-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 24px;
+        }
+
+        .partner-card:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .partner-type {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent);
+            margin-bottom: 8px;
+        }
+
+        .partner-card h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .partner-card p {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+
+        .partner-exchange {
+            font-size: 12px;
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        .partner-exchange .gives, .partner-exchange .gets {
+            margin-bottom: 8px;
+        }
+
+        .partner-exchange .gives:last-child, .partner-exchange .gets:last-child {
+            margin-bottom: 0;
+        }
+
+        .partner-exchange strong {
+            color: var(--text);
+        }
+
+        .partner-exchange span {
+            color: var(--text-muted);
+        }
+
         /* Footer */
         footer {
             padding: 32px 0;
@@ -1260,6 +1273,10 @@
             .hero h1 { font-size: 18px; }
             .ascii-art { font-size: 10px; padding: 16px; }
             .footer-links { flex-direction: column; gap: 8px; }
+            .header-top { flex-direction: column; }
+            .header-nav { margin-top: 16px; }
+            .why-c-reasons { grid-template-columns: 1fr; }
+            .ai-features { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -1267,12 +1284,25 @@
     <a href="#main-content" class="skip-link">Skip to main content</a>
     <div class="container">
         <header>
-            <div class="logo"><span>O</span>TTO</div>
-            <div class="expand"><strong>O</strong>ptimization for <strong>T</strong>rucking and <strong>T</strong>ransport <strong>O</strong>perations</div>
-            <div class="tagline">Zero-dependency logistics optimization. Built in C, runs everywhere.</div>
+            <div class="header-top">
+                <div>
+                    <div class="logo"><span>O</span>TTO</div>
+                    <div class="expand"><strong>O</strong>ptimization for <strong>T</strong>rucking and <strong>T</strong>ransport <strong>O</strong>perations</div>
+                    <div class="tagline">Zero-dependency logistics optimization. Built in C, runs everywhere.</div>
+                </div>
+                <nav class="header-nav">
+                    <a href="#developers">Developers</a>
+                    <a href="#executives">Executives</a>
+                    <a href="#operations">Operations</a>
+                    <a href="https://github.com/ottofleet/otto">GitHub</a>
+                </nav>
+            </div>
         </header>
 
         <main id="main-content">
+        <!-- ============================================================ -->
+        <!-- SHARED: Hero -->
+        <!-- ============================================================ -->
         <section class="hero">
             <h1>Trucking optimization for everyone</h1>
             <p>
@@ -1281,7 +1311,7 @@
                 everyone&mdash;runs free in your browser or scales to enterprise.
             </p>
             <div class="badges">
-                <span class="badge green">279+ tests</span>
+                <span class="badge green">1000+ tests</span>
                 <span class="badge blue">WASM-first</span>
                 <span class="badge yellow">Zero dependencies</span>
                 <span class="badge">C11</span>
@@ -1289,401 +1319,167 @@
             </div>
         </section>
 
-        <section class="mission">
-            <h2 class="section-title">Why OTTO</h2>
-            <div class="mission-content">
-                <div class="mission-text">
-                    <p>
-                        Large fleet optimization vendors build for fleet-level KPIs&mdash;"how do I
-                        move 10,000 loads with 2,000 trucks?" But the 350,000+ owner-operators and
-                        small trucking companies need a different question answered: "I'm in Tulsa
-                        with an empty trailer&mdash;what's my best next move?"
-                    </p>
-                    <p>
-                        OTTO serves both. Fleet-level assignment for enterprises AND driver-centric
-                        decision support for small operators. The algorithms are the same; the
-                        interface and questions are different.
-                    </p>
-                    <p>
-                        Superior optimization means fewer empty miles, lower fuel costs, HoS compliance
-                        without violations, and better margins. What's good for a mega-fleet is good
-                        for a family operation.
-                    </p>
-                    <p class="mission-statement">
-                        We believe logistics optimization shouldn't be locked behind enterprise
-                        contracts or priced out of reach for small operators. OTTO's core engines
-                        are open source&mdash;free in the browser for a family operation, managed
-                        platform for enterprises, full code ownership for anyone who wants it.
-                    </p>
-                </div>
-                <div class="mission-stats">
-                    <div class="stat">
-                        <div class="stat-value">+25%</div>
-                        <div class="stat-label">Fleet utilization target</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-value">&minus;15%</div>
-                        <div class="stat-label">Fuel cost reduction</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-value">100%</div>
-                        <div class="stat-label">HoS compliance</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-value">&lt;100ms</div>
-                        <div class="stat-label">Optimization latency</div>
-                    </div>
-                </div>
+        <!-- ============================================================ -->
+        <!-- SHARED: Persona Selector -->
+        <!-- ============================================================ -->
+        <section class="persona-selector">
+            <h2>I am a...</h2>
+            <div class="persona-grid">
+                <a href="#developers" class="persona-card">
+                    <div class="persona-icon">&#60;/&#62;</div>
+                    <div class="persona-title">Developer / Contributor</div>
+                    <div class="persona-desc">Architecture, APIs, contributing to open source, building integrations</div>
+                </a>
+                <a href="#executives" class="persona-card">
+                    <div class="persona-icon">&#x1F4BC;</div>
+                    <div class="persona-title">Executive (CEO/CTO/CFO)</div>
+                    <div class="persona-desc">Business value, ROI, vendor risk, total cost of ownership</div>
+                </a>
+                <a href="#operations" class="persona-card">
+                    <div class="persona-icon">&#x1F69A;</div>
+                    <div class="persona-title">Dispatcher / Planner</div>
+                    <div class="persona-desc">Daily planning tools, route optimization, HoS compliance, fuel savings</div>
+                </a>
+                <a href="#partners" class="persona-card">
+                    <div class="persona-icon">&#x1F91D;</div>
+                    <div class="persona-title">Partner</div>
+                    <div class="persona-desc">Integration opportunities for fuel cards, TMS, OEMs, brokers</div>
+                </a>
             </div>
         </section>
 
-        <section class="trusted-reality">
-            <h2 class="section-title">Built on Trusted Reality</h2>
-            <div class="trusted-reality-content">
-                <div class="trusted-reality-text">
-                    <p>
-                        Most fleet systems treat GPS as ground truth. But GPS drifts, signals conflict,
-                        telematics drop out, and driver apps disagree with ELDs. When your route optimizer
-                        doesn't know where your trucks actually <em>are</em>, every downstream decision
-                        inherits that uncertainty.
-                    </p>
-                    <p>
-                        OTTO maintains a <strong>unified reality model</strong>. Multiple signals&mdash;GPS,
-                        telematics, driver app events, geofence triggers, infrastructure sensors&mdash;are
-                        fused into consistent vehicle states. When signals conflict, OTTO doesn't guess.
-                        It maintains confidence levels and propagates uncertainty through the planning stack.
-                    </p>
-                    <p>
-                        The result: ETAs that account for measurement noise. Geofence events that don't
-                        false-trigger. Compliance checks that distinguish "definitely violated" from
-                        "probably fine." Every optimization decision starts with a clear picture of
-                        what's actually happening.
-                    </p>
-                    <p class="trusted-reality-statement">
-                        "Where is truck 47?" isn't a simple question. The GPS says one thing, the driver
-                        app says another, and the geofence fired twice. OTTO gives you a single answer
-                        you can trust&mdash;and tells you how confident it is.
-                    </p>
-                </div>
-                <div class="trusted-reality-features">
-                    <div class="tr-feature">
-                        <div class="tr-feature-title">Multi-Signal Fusion</div>
-                        <div class="tr-feature-desc">GPS, telematics, driver app, infrastructure events&mdash;combined into one coherent state, not competing sources of confusion.</div>
-                    </div>
-                    <div class="tr-feature">
-                        <div class="tr-feature-title">Identity Consistency</div>
-                        <div class="tr-feature-desc">Track the same vehicle across signal dropouts, device swaps, and driver changes. No phantom trucks, no duplicate entries.</div>
-                    </div>
-                    <div class="tr-feature">
-                        <div class="tr-feature-title">Confidence-Aware Events</div>
-                        <div class="tr-feature-desc">Geofence alerts only fire when confidence exceeds threshold. Fewer false alarms, more trust in real alerts.</div>
-                    </div>
-                    <div class="tr-feature">
-                        <div class="tr-feature-title">Clean Input for Optimization</div>
-                        <div class="tr-feature-desc">Ralph, Velo, and HoSE receive sanitized state data. Better inputs mean better plans.</div>
-                    </div>
+        <!-- ============================================================ -->
+        <!-- DEVELOPERS -->
+        <!-- ============================================================ -->
+        <section id="developers" class="persona-section">
+            <div class="persona-section-header">
+                <div class="persona-section-icon">&#60;/&#62;</div>
+                <div>
+                    <div class="persona-section-title">For Developers &amp; Contributors</div>
+                    <div class="persona-section-subtitle">Architecture, APIs, and how to get involved</div>
                 </div>
             </div>
-            <div class="trusted-reality-benefits">
-                <div class="tr-benefit">
-                    <span class="tr-benefit-label">Fewer false alerts</span>
-                    <span class="tr-benefit-desc">Geofence events require confidence, not just position</span>
-                </div>
-                <div class="tr-benefit">
-                    <span class="tr-benefit-label">Stable ETAs</span>
-                    <span class="tr-benefit-desc">Predictions account for signal noise, not just last known position</span>
-                </div>
-                <div class="tr-benefit">
-                    <span class="tr-benefit-label">Cleaner compliance</span>
-                    <span class="tr-benefit-desc">HoS reports distinguish certain violations from edge cases</span>
-                </div>
-                <div class="tr-benefit">
-                    <span class="tr-benefit-label">Dispatcher trust</span>
-                    <span class="tr-benefit-desc">When the system says a truck is somewhere, it's actually there</span>
+
+            <!-- Quick Start -->
+            <div class="subsection">
+                <h3 class="subsection-title">Quick Start</h3>
+                <div class="code-block">
+<pre><span class="comment"># Clone and build</span>
+<span class="command">git clone https://github.com/ottofleet/otto.git</span>
+<span class="command">cd otto && make all</span>
+
+<span class="comment"># Run all tests (1000+)</span>
+<span class="command">make test</span>
+
+<span class="comment"># Start API servers</span>
+<span class="command">make run-fuelwise-api</span>   <span class="comment"># :8080</span>
+<span class="command">make run-velo-api</span>       <span class="comment"># :8082</span>
+<span class="command">make run-carta-api</span>      <span class="comment"># :8081</span>
+<span class="command">make run-locus-api</span>      <span class="comment"># :8083</span>
+
+<span class="comment"># Build for WebAssembly</span>
+<span class="command">make wasm</span></pre>
                 </div>
             </div>
-            <div class="ev-callout">
-                <h3 class="ev-callout-title">Critical for Electric Fleets</h3>
-                <div class="ev-callout-content">
-                    <p>
-                        Diesel trucks are forgiving. Misjudge fuel level by 5%? Coast to the next truck stop.
-                        Electric trucks aren't. Misjudge battery state by 5%? You're stranded on a highway
-                        with a 40-ton anchor.
-                    </p>
-                    <p>
-                        EV state estimation is harder than diesel. Battery capacity degrades unpredictably.
-                        Cold weather cuts range by 20-40%. Regenerative braking varies with terrain and load.
-                        The "fuel gauge" lies in ways diesel gauges never did.
-                    </p>
-                    <p>
-                        And the recovery options are worse. Charging infrastructure is sparse. Chargers break,
-                        get occupied, or charge slower than advertised. A 45-minute charging stop can't be
-                        improvised like a 10-minute diesel fill.
-                    </p>
-                    <div class="ev-callout-comparison">
-                        <div class="ev-comparison-item ev-diesel">
-                            <strong>Diesel: 5% estimation error</strong>
-                            <span>Minor inconvenience&mdash;stop 20 miles earlier than planned</span>
+
+            <!-- Core Engines -->
+            <div class="subsection">
+                <h3 class="subsection-title">Core Engines</h3>
+                <div class="grid">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Ralph</span>
+                            <span class="card-lang">C</span>
                         </div>
-                        <div class="ev-comparison-item ev-electric">
-                            <strong>Electric: 5% estimation error</strong>
-                            <span>Potential stranding, tow truck, missed delivery, angry customer</span>
+                        <div class="card-desc">LP/MIP solver engine. Revised Simplex with LU factorization, Branch &amp; Bound, Gomory cuts.</div>
+                        <div class="card-meta">600+ tests &middot; 23K loc &middot; &lt;100ms for 1000 vars</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Velo</span>
+                            <span class="card-lang">C</span>
                         </div>
+                        <div class="card-desc">OSM routing engine. Dijkstra, A*, bidirectional search, landmark preprocessing.</div>
+                        <div class="card-meta">51 tests &middot; 6.4K loc &middot; &lt;100ms country-scale</div>
                     </div>
-                    <p class="ev-callout-conclusion">
-                        For mixed and electric fleets, state integrity isn't a nice-to-have&mdash;it's the
-                        difference between a functioning operation and a logistics crisis. OTTO's confidence-weighted
-                        state estimation was designed with EVs in mind from day one.
-                    </p>
-                </div>
-            </div>
-            <div class="operational-events">
-                <h3 class="subsection-title">Smarter Operational Events</h3>
-                <p class="operational-events-intro">
-                    When you know where trucks actually are&mdash;not just where GPS says they might be&mdash;every
-                    facility interaction gets more reliable.
-                </p>
-                <div class="operational-grid">
-                    <div class="operational-card">
-                        <h4>Geofencing Without False Triggers</h4>
-                        <p>
-                            GPS drifts. Trucks "arrive" while still on the highway. Drivers "leave" while
-                            parked at the dock. Traditional geofencing fires on raw coordinates and generates
-                            noise.
-                        </p>
-                        <p>
-                            OTTO's geofences require confidence thresholds. A position fix 50 meters inside
-                            the fence with high confidence triggers arrival. A noisy fix that bounces across
-                            the boundary doesn't. Result: alerts you can trust, not alert fatigue.
-                        </p>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Carta</span>
+                            <span class="card-lang">C</span>
+                        </div>
+                        <div class="card-desc">Map tile generator. Vector tiles (MVT) and raster tiles (PNG) from OSM PBF.</div>
+                        <div class="card-meta">110 tests &middot; 11K loc &middot; ~75ms per 512x512 tile</div>
                     </div>
-                    <div class="operational-card">
-                        <h4>Detention Time That Holds Up</h4>
-                        <p>
-                            Detention billing disputes cost the industry billions. "We show you arrived at 2:15."
-                            "Our system shows 2:47." Without accurate arrival/departure timestamps, you're
-                            arguing over whose GPS was less wrong.
-                        </p>
-                        <p>
-                            OTTO records confidence-weighted arrival times with full signal provenance. When
-                            the facility disputes your detention claim, you have auditable data showing
-                            exactly when the truck crossed the threshold&mdash;and how certain you are.
-                        </p>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Locus</span>
+                            <span class="card-lang">C</span>
+                        </div>
+                        <div class="card-desc">OSM geocoding engine. Forward search, autocomplete, reverse lookup with trie + trigram index.</div>
+                        <div class="card-meta">52 tests &middot; 7.3K loc &middot; &lt;20&mu;s per query</div>
                     </div>
-                    <div class="operational-card">
-                        <h4>Wait Time Prediction</h4>
-                        <p>
-                            "How long will I wait at this shipper?" Most systems can't answer this. They
-                            don't track dwell times accurately, so they can't predict them.
-                        </p>
-                        <p>
-                            OTTO builds facility dwell profiles from accurate arrival/departure data across
-                            the network. Historical patterns by day, time, and load type feed into tactical
-                            planning. Dispatchers can route around facilities with 3-hour average waits.
-                        </p>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">FuelWise</span>
+                            <span class="card-lang">C</span>
+                        </div>
+                        <div class="card-desc">Refueling optimization. LP formulation for minimum-cost fuel stops along a route.</div>
+                        <div class="card-meta">33 tests &middot; 2.9K loc &middot; Uses Ralph solver</div>
                     </div>
-                    <div class="operational-card">
-                        <h4>Live ETA That Doesn't Jump</h4>
-                        <p>
-                            Nothing frustrates a receiver more than an ETA that changes by 45 minutes every
-                            refresh. Raw GPS + naive speed calculations produce unstable predictions.
-                        </p>
-                        <p>
-                            OTTO's ETAs incorporate position confidence, historical corridor speeds, and
-                            known dwell times. The estimate might be less optimistic, but it won't swing
-                            wildly&mdash;receivers can actually plan around it.
-                        </p>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Shared</span>
+                            <span class="card-lang">C</span>
+                        </div>
+                        <div class="card-desc">Geo utilities, protobuf, rate limiting, work queues, circuit breakers, backoff.</div>
+                        <div class="card-meta">206 tests &middot; Common infrastructure</div>
                     </div>
-                </div>
-            </div>
-        </section>
-
-        <section class="no-lockin">
-            <h2 class="section-title">No Lock-In</h2>
-            <div class="lockin-grid">
-                <div class="lockin-problem">
-                    <h3>The Vendor Risk</h3>
-                    <ul class="lockin-list">
-                        <li>Vendor gets acquired, roadmap shifts to new owner's priorities</li>
-                        <li>Support team restructured, your contacts disappear</li>
-                        <li>Pricing "aligns with portfolio strategy"</li>
-                        <li>Product gets folded into a suite you don't need</li>
-                        <li>Years of integration work held hostage</li>
-                    </ul>
-                </div>
-                <div class="lockin-solution">
-                    <h3>The OTTO Answer</h3>
-                    <ul class="lockin-list">
-                        <li>Code is MIT licensed&mdash;fork it, own it forever</li>
-                        <li>Self-host at current capability, no permission needed</li>
-                        <li>Hire anyone to maintain your fork</li>
-                        <li>Roadmap diverges? Extend it yourself</li>
-                        <li>Audit the algorithms, verify the logic</li>
-                    </ul>
-                </div>
-            </div>
-            <div class="lockin-quote">
-                "Pay for convenience, not captivity. OTTO is yours whether you stay with us or not."
-            </div>
-        </section>
-
-        <section class="components">
-            <h2 class="section-title">Core Engines</h2>
-            <div class="grid">
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-name">Ralph</span>
-                        <span class="card-lang">C</span>
-                    </div>
-                    <div class="card-desc">LP/MIP solver engine. Revised Simplex with LU factorization, Branch & Bound, Gomory cuts.</div>
-                    <div class="card-meta">73 tests &middot; 23K loc &middot; &lt;100ms for 1000 vars</div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-name">Velo</span>
-                        <span class="card-lang">C</span>
-                    </div>
-                    <div class="card-desc">OSM routing engine. Dijkstra, A*, bidirectional search, landmark preprocessing.</div>
-                    <div class="card-meta">47 tests &middot; 6.4K loc &middot; &lt;100ms country-scale</div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-name">Carta</span>
-                        <span class="card-lang">C</span>
-                    </div>
-                    <div class="card-desc">Map tile generator. Vector tiles (MVT) and raster tiles (PNG) from OSM PBF.</div>
-                    <div class="card-meta">33 tests &middot; 11K loc &middot; ~75ms per 512x512 tile</div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-name">Locus</span>
-                        <span class="card-lang">C</span>
-                    </div>
-                    <div class="card-desc">OSM geocoding engine. Forward search, autocomplete, reverse lookup with trie + trigram index.</div>
-                    <div class="card-meta">52 tests &middot; 7.3K loc &middot; &lt;20&mu;s per query</div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-name">FuelWise</span>
-                        <span class="card-lang">C</span>
-                    </div>
-                    <div class="card-desc">Refueling optimization. LP formulation for minimum-cost fuel stops along a route.</div>
-                    <div class="card-meta">33 tests &middot; 2.9K loc &middot; Uses Ralph solver</div>
-                </div>
-                <div class="card">
-                    <div class="card-header">
-                        <span class="card-name">ClayShards</span>
-                        <span class="card-lang">C + JS</span>
-                    </div>
-                    <div class="card-desc">Immediate-mode UI components. WebGL renderer, MSDF fonts, map widgets.</div>
-                    <div class="card-meta">84 tests &middot; 9.5K loc &middot; ~140KB WASM</div>
                 </div>
             </div>
 
-            <h2 class="section-title" style="margin-top: 48px;">Planned Engines</h2>
-            <div class="grid">
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">HoSE</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
+            <!-- Planned Engines -->
+            <div class="subsection">
+                <h3 class="subsection-title">Planned Engines</h3>
+                <div class="grid">
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">HoSE</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>H</strong>ours <strong>o</strong>f <strong>S</strong>ervice <strong>E</strong>ngine. FMCSA 4-clock model, EU EC/561 rules, break scheduling.</div>
                     </div>
-                    <div class="card-desc"><strong>H</strong>ours <strong>o</strong>f <strong>S</strong>ervice <strong>E</strong>ngine. FMCSA 4-clock model, EU EC/561 rules, break scheduling.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Tempo</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Fuse</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>F</strong>leet <strong>U</strong>nified <strong>S</strong>ignal and <strong>E</strong>stimation engine. Multi-source data fusion, vehicle identity resolution.</div>
                     </div>
-                    <div class="card-desc"><strong>T</strong>ime-window and <strong>E</strong>vent <strong>M</strong>anagement <strong>P</strong>olicy <strong>O</strong>rchestrator. Time windows, facility hours, blackout periods.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Arbor</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Sigma</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>S</strong>election and <strong>I</strong>ntegration for <strong>G</strong>lobal <strong>M</strong>ulti-assignment <strong>A</strong>llocation. Fleet plan selection via MIP.</div>
                     </div>
-                    <div class="card-desc"><strong>A</strong>lgorithmic <strong>R</strong>ecursive <strong>B</strong>ranching and <strong>O</strong>ptimization <strong>R</strong>untime. State-space search, beam search, pruning.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Sigma</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
+                    <div class="card planned">
+                        <div class="card-header">
+                            <span class="card-name">Nexus</span>
+                            <span class="card-lang">C</span>
+                            <span class="badge-planned">planned</span>
+                        </div>
+                        <div class="card-desc"><strong>N</strong>ormalized <strong>Ex</strong>ternal <strong>U</strong>nified <strong>S</strong>napshots. TMS/ELD/LoadBoard integration gateway.</div>
                     </div>
-                    <div class="card-desc"><strong>S</strong>election and <strong>I</strong>ntegration for <strong>G</strong>lobal <strong>M</strong>ulti-assignment <strong>A</strong>llocation. Fleet plan selection via MIP.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Pulse</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
-                    </div>
-                    <div class="card-desc"><strong>P</strong>lan <strong>U</strong>tilization and <strong>L</strong>ive <strong>S</strong>tate <strong>E</strong>stimator. PTA computation, execution tracking, break insertion.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Fuse</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
-                    </div>
-                    <div class="card-desc"><strong>F</strong>leet <strong>U</strong>nified <strong>S</strong>ignal and <strong>E</strong>stimation engine. Multi-source data fusion, vehicle identity resolution, confidence-weighted state estimation.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Forge</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
-                    </div>
-                    <div class="card-desc"><strong>F</strong>lexible <strong>O</strong>rchestration and <strong>R</strong>untime for <strong>G</strong>eneral <strong>E</strong>xecution. Async job queue for background tasks.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Apex</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
-                    </div>
-                    <div class="card-desc"><strong>A</strong>synchronous <strong>P</strong>re-computation <strong>Ex</strong>ecution. Tile pyramid generation, route corridor pre-computation, cache warming, demand prediction.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Nexus</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
-                    </div>
-                    <div class="card-desc"><strong>N</strong>ormalized <strong>Ex</strong>ternal <strong>U</strong>nified <strong>S</strong>napshots. TMS/ELD/LoadBoard integration gateway.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Iris</span>
-                        <span class="card-lang">Python</span>
-                        <span class="badge-planned">planned</span>
-                    </div>
-                    <div class="card-desc"><strong>I</strong>ntelligent <strong>R</strong>equest <strong>I</strong>nterpretation <strong>S</strong>ystem. Natural language interface via LLM. Translates dispatcher queries into API calls, explains results in human terms.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Quota</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
-                    </div>
-                    <div class="card-desc"><strong>Q</strong>uote <strong>U</strong>nderwriting and <strong>T</strong>ariff <strong>O</strong>ptimization <strong>A</strong>lgorithm. Spot and contract pricing, cost modeling, margin optimization, rate generation.</div>
-                </div>
-                <div class="card planned">
-                    <div class="card-header">
-                        <span class="card-name">Atlas</span>
-                        <span class="card-lang">C</span>
-                        <span class="badge-planned">planned</span>
-                    </div>
-                    <div class="card-desc"><strong>A</strong>llocation and <strong>T</strong>actical <strong>L</strong>ane <strong>A</strong>nalysis <strong>S</strong>ystem. Network design, lane balancing, headhaul/backhaul optimization, capacity planning.</div>
                 </div>
             </div>
-        </section>
 
-        <section class="architecture">
-            <h2 class="section-title">Architecture</h2>
-            <div class="ascii-art">
+            <!-- Architecture -->
+            <div class="subsection">
+                <h3 class="subsection-title">Architecture</h3>
+                <div class="ascii-art">
 <pre>
 ┌─────────────────────────────────────────────┐
 │                                             │
@@ -1725,249 +1521,380 @@ Dependencies:
   ClayShards ──► Clay (layout)
   APIs ──► mongoose (HTTP)
 </pre>
-            </div>
-        </section>
-
-        <section class="features">
-            <h2 class="section-title">Design Principles</h2>
-            <div class="feature-grid">
-                <div class="feature">
-                    <div class="feature-title">Zero Dependencies</div>
-                    <div class="feature-desc">No package managers, no external runtimes. Vendor libraries (miniz, mongoose, Clay) are vendored source&mdash;auditable, won't disappear, compiles with just a C compiler.</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-title">WASM-First</div>
-                    <div class="feature-desc">All engines compile to WebAssembly. Same code runs in browsers and on servers.</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-title">Layered Architecture</div>
-                    <div class="feature-desc">Solver &rarr; Domain &rarr; API &rarr; UI. Each layer has a clean C API.</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-title">Arenas &amp; Memory Pools</div>
-                    <div class="feature-desc">Bulk allocate, bulk free. Memory pools for fixed-size objects. No fragmentation, no leaks, cache-friendly.</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-title">Compound Literals</div>
-                    <div class="feature-desc">C11 features for inline configuration. Self-documenting, type-safe APIs.</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-title">Portable</div>
-                    <div class="feature-desc">Linux, macOS, Windows, browsers. Same codebase everywhere.</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-title">Secure by Design</div>
-                    <div class="feature-desc">No strcpy/sprintf, bounded buffers only. Arenas prevent use-after-free. Overflow checks on all allocations. WASM sandbox limits blast radius. APIs include rate limiting and backpressure.</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-title">Production-Hardened APIs</div>
-                    <div class="feature-desc">Rate limiting per IP, bounded work queues, timeout handling. APIs respond gracefully under load&mdash;429 for rate limits, 503 for overload, 504 for timeouts. Adaptive capacity auto-tunes from measured response times.</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-title">Not a TMS</div>
-                    <div class="feature-desc">OTTO is an optimization layer, not a System of Record. Your TMS stays your source of truth. We enhance your stack, we don't replace it. You stay in control. No TMS? Nexus connects to Excel and SharePoint too.</div>
-                </div>
-                <div class="feature">
-                    <div class="feature-title">EV &amp; AV Ready</div>
-                    <div class="feature-desc">Electric and autonomous vehicles aren't afterthoughts. Range constraints, charging infrastructure, battery degradation, and different HoS rules are designed in from day one. Ready for mixed diesel/EV/autonomous fleets.</div>
-                </div>
-            </div>
-        </section>
-
-        <section class="runs-everywhere">
-            <h2 class="section-title">Runs Everywhere</h2>
-            <div class="deployment-grid">
-                <div class="deployment-target">
-                    <div class="deployment-icon">🌐</div>
-                    <div class="deployment-name">Browser</div>
-                    <div class="deployment-desc">Try before you buy, no install</div>
-                </div>
-                <div class="deployment-target">
-                    <div class="deployment-icon">🖥️</div>
-                    <div class="deployment-name">Server</div>
-                    <div class="deployment-desc">Traditional API deployment</div>
-                </div>
-                <div class="deployment-target">
-                    <div class="deployment-icon">⚡</div>
-                    <div class="deployment-name">Edge</div>
-                    <div class="deployment-desc">Cloudflare Workers, CDN</div>
-                </div>
-                <div class="deployment-target">
-                    <div class="deployment-icon">📱</div>
-                    <div class="deployment-name">Mobile</div>
-                    <div class="deployment-desc">In-app via WASM</div>
-                </div>
-                <div class="deployment-target">
-                    <div class="deployment-icon">🚚</div>
-                    <div class="deployment-name">In-Cab</div>
-                    <div class="deployment-desc">Offline tablet, no connectivity needed</div>
-                </div>
-                <div class="deployment-target">
-                    <div class="deployment-icon">🔌</div>
-                    <div class="deployment-name">Embedded</div>
-                    <div class="deployment-desc">IoT, telematics devices</div>
-                </div>
-            </div>
-            <div class="size-comparison">
-                <div class="size-item otto">
-                    <div class="size-bar"></div>
-                    <div class="size-label">
-                        <strong>OTTO (full stack)</strong>
-                        <span>~2 MB WASM + your data</span>
-                    </div>
-                </div>
-                <div class="size-item commercial">
-                    <div class="size-bar"></div>
-                    <div class="size-label">
-                        <strong>Commercial alternatives</strong>
-                        <span>GB+ runtime + your data, server-only</span>
-                    </div>
                 </div>
             </div>
 
-            <h3 class="subsection-title">Scales With You</h3>
-            <p class="scales-intro">Same codebase from laptop to enterprise. Only the deployment changes.</p>
-            <div class="deployment-grid">
-                <div class="deployment-target">
-                    <div class="deployment-icon">💻</div>
-                    <div class="deployment-name">Local</div>
-                    <div class="deployment-desc">Single process, in-memory queue</div>
-                </div>
-                <div class="deployment-target">
-                    <div class="deployment-icon">🏪</div>
-                    <div class="deployment-name">Small Business</div>
-                    <div class="deployment-desc">Redis-backed job queue</div>
-                </div>
-                <div class="deployment-target">
-                    <div class="deployment-icon">🏢</div>
-                    <div class="deployment-name">Enterprise</div>
-                    <div class="deployment-desc">Kubernetes, horizontal scaling</div>
-                </div>
-                <div class="deployment-target">
-                    <div class="deployment-icon">☁️</div>
-                    <div class="deployment-name">Managed</div>
-                    <div class="deployment-desc">We run it, you use it</div>
-                </div>
-            </div>
-        </section>
-
-        <section class="why-c">
-            <h2 class="section-title">Why C?</h2>
-            <div class="why-c-content">
-                <div>
-                    <div class="why-c-reasons">
-                        <div class="why-c-reason">
-                            <strong>Smallest WASM</strong>
-                            <span>~2MB for entire stack</span>
-                        </div>
-                        <div class="why-c-reason">
-                            <strong>Zero GC</strong>
-                            <span>Predictable &lt;100ms latency</span>
-                        </div>
-                        <div class="why-c-reason">
-                            <strong>Universal FFI</strong>
-                            <span>Embed in any language</span>
-                        </div>
-                        <div class="why-c-reason">
-                            <strong>Max Portability</strong>
-                            <span>Browser to embedded</span>
-                        </div>
-                        <div class="why-c-reason">
-                            <strong>Auditable</strong>
-                            <span>Enterprise clients can read it</span>
-                        </div>
-                        <div class="why-c-reason">
-                            <strong>Proven</strong>
-                            <span>Linux, SQLite, Redis, Nginx</span>
+            <!-- Why C -->
+            <div class="subsection">
+                <h3 class="subsection-title">Why C?</h3>
+                <div class="why-c-content">
+                    <div>
+                        <div class="why-c-reasons">
+                            <div class="why-c-reason">
+                                <strong>Smallest WASM</strong>
+                                <span>~2MB for entire stack</span>
+                            </div>
+                            <div class="why-c-reason">
+                                <strong>Zero GC</strong>
+                                <span>Predictable &lt;100ms latency</span>
+                            </div>
+                            <div class="why-c-reason">
+                                <strong>Universal FFI</strong>
+                                <span>Embed in any language</span>
+                            </div>
+                            <div class="why-c-reason">
+                                <strong>Max Portability</strong>
+                                <span>Browser to embedded</span>
+                            </div>
+                            <div class="why-c-reason">
+                                <strong>Auditable</strong>
+                                <span>Enterprise clients can read it</span>
+                            </div>
+                            <div class="why-c-reason">
+                                <strong>Proven</strong>
+                                <span>Linux, SQLite, Redis, Nginx</span>
+                            </div>
                         </div>
                     </div>
+                    <div class="why-c-safety">
+                        <h3>Memory Safety via Discipline</h3>
+                        <ul>
+                            <li><strong>Arenas &amp; pools</strong> &mdash; bulk alloc, bulk free, no use-after-free</li>
+                            <li><strong>Bounded buffers</strong> &mdash; snprintf everywhere, explicit null termination</li>
+                            <li><strong>Overflow protection</strong> &mdash; calloc for safe allocation, bounds checks</li>
+                            <li><strong>WASM sandbox</strong> &mdash; linear memory is bounds-checked</li>
+                            <li><strong>Sanitizers</strong> &mdash; ASan + UBSan in all development builds</li>
+                            <li><strong>1000+ tests</strong> &mdash; edge cases, error paths, stress conditions</li>
+                        </ul>
+                    </div>
                 </div>
-                <div class="why-c-safety">
-                    <h3>Memory Safety via Discipline</h3>
-                    <ul>
-                        <li><strong>Arenas &amp; pools</strong> &mdash; bulk alloc, bulk free, no use-after-free, cache-friendly</li>
-                        <li><strong>Bounded buffers</strong> &mdash; snprintf everywhere, explicit null termination after strncpy</li>
-                        <li><strong>Overflow protection</strong> &mdash; calloc for safe allocation, bounds checks on all indices</li>
-                        <li><strong>WASM sandbox</strong> &mdash; linear memory is bounds-checked, bugs can't escape</li>
-                        <li><strong>Sanitizers</strong> &mdash; ASan + UBSan in all development builds</li>
-                        <li><strong>279+ tests</strong> &mdash; edge cases, error paths, and stress conditions</li>
-                    </ul>
+                <div class="why-c-comparison">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Factor</th>
+                                <th>C</th>
+                                <th>Rust</th>
+                                <th>Go</th>
+                                <th>Zig</th>
+                                <th>C++</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>WASM size</td>
+                                <td class="winner">~2MB</td>
+                                <td class="neutral">~4MB</td>
+                                <td class="weak">~10MB+</td>
+                                <td class="winner">~2MB</td>
+                                <td class="neutral">~4MB</td>
+                            </tr>
+                            <tr>
+                                <td>GC pauses</td>
+                                <td class="winner">None</td>
+                                <td class="winner">None</td>
+                                <td class="weak">Yes</td>
+                                <td class="winner">None</td>
+                                <td class="neutral">Optional</td>
+                            </tr>
+                            <tr>
+                                <td>WASM maturity</td>
+                                <td class="winner">Excellent</td>
+                                <td class="neutral">Good</td>
+                                <td class="weak">Poor</td>
+                                <td class="neutral">Good</td>
+                                <td class="neutral">Good</td>
+                            </tr>
+                            <tr>
+                                <td>Compile speed</td>
+                                <td class="winner">Fast</td>
+                                <td class="weak">Slow</td>
+                                <td class="winner">Fast</td>
+                                <td class="winner">Fast</td>
+                                <td class="weak">Slow</td>
+                            </tr>
+                            <tr>
+                                <td>Complexity</td>
+                                <td class="winner">Low</td>
+                                <td class="weak">High</td>
+                                <td class="winner">Low</td>
+                                <td class="neutral">Medium</td>
+                                <td class="weak">Very High</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
-            <div class="why-c-comparison">
+
+            <!-- Performance -->
+            <div class="subsection">
+                <h3 class="subsection-title">Performance Benchmarks</h3>
                 <table>
                     <thead>
                         <tr>
-                            <th>Factor</th>
-                            <th>C</th>
-                            <th>Rust</th>
-                            <th>Go</th>
-                            <th>Zig</th>
-                            <th>C++</th>
+                            <th>Operation</th>
+                            <th>Target</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <tr>
-                            <td>WASM size</td>
-                            <td class="winner">~2MB</td>
-                            <td class="neutral">~4MB</td>
-                            <td class="weak">~10MB+</td>
-                            <td class="winner">~2MB</td>
-                            <td class="neutral">~4MB</td>
-                        </tr>
-                        <tr>
-                            <td>GC pauses</td>
-                            <td class="winner">None</td>
-                            <td class="winner">None</td>
-                            <td class="weak">Yes</td>
-                            <td class="winner">None</td>
-                            <td class="neutral">Optional</td>
-                        </tr>
-                        <tr>
-                            <td>WASM maturity</td>
-                            <td class="winner">Excellent</td>
-                            <td class="neutral">Good</td>
-                            <td class="weak">Poor</td>
-                            <td class="neutral">Good</td>
-                            <td class="neutral">Good</td>
-                        </tr>
-                        <tr>
-                            <td>Compile speed</td>
-                            <td class="winner">Fast</td>
-                            <td class="weak">Slow</td>
-                            <td class="winner">Fast</td>
-                            <td class="winner">Fast</td>
-                            <td class="weak">Slow</td>
-                        </tr>
-                        <tr>
-                            <td>Complexity</td>
-                            <td class="winner">Low</td>
-                            <td class="weak">High</td>
-                            <td class="winner">Low</td>
-                            <td class="neutral">Medium</td>
-                            <td class="weak">Very High</td>
-                        </tr>
-                        <tr>
-                            <td>Enterprise trust</td>
-                            <td class="winner">High</td>
-                            <td class="neutral">Growing</td>
-                            <td class="neutral">High</td>
-                            <td class="weak">Low</td>
-                            <td class="winner">High</td>
-                        </tr>
+                        <tr><td>LP solve (1000 variables)</td><td>&lt;100ms</td></tr>
+                        <tr><td>Route calculation (country-scale)</td><td>&lt;100ms</td></tr>
+                        <tr><td>PNG tile generation (512&times;512)</td><td>~75ms</td></tr>
+                        <tr><td>Forward geocoding</td><td>&lt;20&mu;s</td></tr>
+                        <tr><td>Autocomplete query</td><td>&lt;20&mu;s</td></tr>
+                        <tr><td>Reverse geocoding</td><td>&lt;30&mu;s</td></tr>
+                        <tr><td>PBF parse (300MB Hungary)</td><td>~10s</td></tr>
                     </tbody>
                 </table>
             </div>
+
+            <!-- Design Principles -->
+            <div class="subsection">
+                <h3 class="subsection-title">Design Principles</h3>
+                <div class="feature-grid">
+                    <div class="feature">
+                        <div class="feature-title">Zero Dependencies</div>
+                        <div class="feature-desc">No package managers, no external runtimes. Vendor libraries are vendored source&mdash;auditable, won't disappear.</div>
+                    </div>
+                    <div class="feature">
+                        <div class="feature-title">WASM-First</div>
+                        <div class="feature-desc">All engines compile to WebAssembly. Same code runs in browsers and on servers.</div>
+                    </div>
+                    <div class="feature">
+                        <div class="feature-title">Layered Architecture</div>
+                        <div class="feature-desc">Solver &rarr; Domain &rarr; API &rarr; UI. Each layer has a clean C API.</div>
+                    </div>
+                    <div class="feature">
+                        <div class="feature-title">Arenas &amp; Memory Pools</div>
+                        <div class="feature-desc">Bulk allocate, bulk free. No fragmentation, no leaks, cache-friendly.</div>
+                    </div>
+                    <div class="feature">
+                        <div class="feature-title">Production-Hardened APIs</div>
+                        <div class="feature-desc">Rate limiting, bounded work queues, timeout handling. 429 for limits, 503 for overload.</div>
+                    </div>
+                    <div class="feature">
+                        <div class="feature-title">Portable</div>
+                        <div class="feature-desc">Linux, macOS, Windows, browsers. Same codebase everywhere.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CTA: GitHub -->
+            <div class="cta-box">
+                <div class="cta-content">
+                    <h3>Start contributing</h3>
+                    <p>
+                        MIT licensed, well-documented, extensive test suite. Pick up an issue or
+                        propose a feature. We review PRs within 48 hours.
+                    </p>
+                    <div class="cta-features">
+                        <span>MIT License</span>
+                        <span>Clean C11 codebase</span>
+                        <span>1000+ tests</span>
+                        <span>Active development</span>
+                    </div>
+                </div>
+                <a href="https://github.com/ottofleet/otto" class="cta-button">View on GitHub</a>
+            </div>
         </section>
 
-        <section class="ai-ready">
-            <h2 class="section-title">AI-Ready</h2>
-            <div class="ai-ready-content">
-                <div class="ai-example">
-                    <div class="ai-example-prompt">
-                        "Find the cheapest route for truck 47 to deliver in Prague by Thursday, he's got 6 hours left on his clock"
+        <!-- ============================================================ -->
+        <!-- EXECUTIVES -->
+        <!-- ============================================================ -->
+        <section id="executives" class="persona-section">
+            <div class="persona-section-header">
+                <div class="persona-section-icon">&#x1F4BC;</div>
+                <div>
+                    <div class="persona-section-title">For Executives</div>
+                    <div class="persona-section-subtitle">Business value, ROI, and strategic positioning</div>
+                </div>
+            </div>
+
+            <!-- Why OTTO -->
+            <div class="subsection">
+                <h3 class="subsection-title">Why OTTO</h3>
+                <p style="color: var(--text-muted); font-size: 14px; line-height: 1.7; max-width: 700px; margin-bottom: 24px;">
+                    Large fleet optimization vendors build for fleet-level KPIs&mdash;"how do I
+                    move 10,000 loads with 2,000 trucks?" OTTO serves both fleet-level assignment
+                    AND driver-centric decision support. Superior optimization means fewer empty
+                    miles, lower fuel costs, HoS compliance without violations, and better margins.
+                </p>
+                <div class="stats-grid">
+                    <div class="stat">
+                        <div class="stat-value">+25%</div>
+                        <div class="stat-label">Fleet utilization target</div>
                     </div>
-                    <div class="ai-example-diagram">
+                    <div class="stat">
+                        <div class="stat-value">&minus;15%</div>
+                        <div class="stat-label">Fuel cost reduction</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">100%</div>
+                        <div class="stat-label">HoS compliance</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-value">&lt;100ms</div>
+                        <div class="stat-label">Optimization latency</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- No Lock-in -->
+            <div class="subsection">
+                <h3 class="subsection-title">No Vendor Lock-In</h3>
+                <div class="lockin-grid">
+                    <div class="lockin-problem">
+                        <h3>The Vendor Risk</h3>
+                        <ul class="lockin-list">
+                            <li>Vendor gets acquired, roadmap shifts to new owner's priorities</li>
+                            <li>Support team restructured, your contacts disappear</li>
+                            <li>Pricing "aligns with portfolio strategy"</li>
+                            <li>Product gets folded into a suite you don't need</li>
+                            <li>Years of integration work held hostage</li>
+                        </ul>
+                    </div>
+                    <div class="lockin-solution">
+                        <h3>The OTTO Answer</h3>
+                        <ul class="lockin-list">
+                            <li>Code is MIT licensed&mdash;fork it, own it forever</li>
+                            <li>Self-host at current capability, no permission needed</li>
+                            <li>Hire anyone to maintain your fork</li>
+                            <li>Roadmap diverges? Extend it yourself</li>
+                            <li>Audit the algorithms, verify the logic</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="lockin-quote">
+                    "Pay for convenience, not captivity. OTTO is yours whether you stay with us or not."
+                </div>
+            </div>
+
+            <!-- License Model -->
+            <div class="subsection">
+                <h3 class="subsection-title">License Model</h3>
+                <div class="license-content">
+                    <div class="license-column">
+                        <h3 class="license-type open">Open Source (MIT)</h3>
+                        <p class="license-desc">
+                            Core engines are MIT licensed. Use them freely, contribute back,
+                            audit the code. No vendor lock-in.
+                        </p>
+                        <ul class="license-list">
+                            <li>Ralph &ndash; LP/MIP solver</li>
+                            <li>Velo &ndash; Routing engine</li>
+                            <li>Carta &ndash; Tile generator</li>
+                            <li>Locus &ndash; Geocoding</li>
+                            <li>FuelWise &ndash; Refueling optimization</li>
+                            <li>HoSE, Tempo, Arbor, Sigma, Pulse, Fuse</li>
+                        </ul>
+                    </div>
+                    <div class="license-column">
+                        <h3 class="license-type proprietary">Commercial</h3>
+                        <p class="license-desc">
+                            Integration layer and managed platform require a commercial license
+                            or subscription.
+                        </p>
+                        <ul class="license-list">
+                            <li>Nexus &ndash; TMS/ELD/LoadBoard connectors</li>
+                            <li>Managed hosting &ndash; Fully operated platform</li>
+                            <li>Priority support &ndash; SLAs and dedicated help</li>
+                            <li>Custom development &ndash; Fleet-specific tuning</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Runs Everywhere -->
+            <div class="subsection">
+                <h3 class="subsection-title">Deployment Flexibility</h3>
+                <div class="deployment-grid">
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x1F310;</div>
+                        <div class="deployment-name">Browser</div>
+                        <div class="deployment-desc">Try before you buy, no install</div>
+                    </div>
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x1F5A5;&#xFE0F;</div>
+                        <div class="deployment-name">Server</div>
+                        <div class="deployment-desc">Traditional API deployment</div>
+                    </div>
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x26A1;</div>
+                        <div class="deployment-name">Edge</div>
+                        <div class="deployment-desc">Cloudflare Workers, CDN</div>
+                    </div>
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x1F4F1;</div>
+                        <div class="deployment-name">Mobile</div>
+                        <div class="deployment-desc">In-app via WASM</div>
+                    </div>
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x1F69A;</div>
+                        <div class="deployment-name">In-Cab</div>
+                        <div class="deployment-desc">Offline tablet, no connectivity</div>
+                    </div>
+                    <div class="deployment-target">
+                        <div class="deployment-icon">&#x2601;&#xFE0F;</div>
+                        <div class="deployment-name">Managed</div>
+                        <div class="deployment-desc">We run it, you use it</div>
+                    </div>
+                </div>
+                <div class="size-comparison">
+                    <div class="size-item otto">
+                        <div class="size-bar"></div>
+                        <div class="size-label">
+                            <strong>OTTO (full stack)</strong>
+                            <span>~2 MB WASM + your data</span>
+                        </div>
+                    </div>
+                    <div class="size-item commercial">
+                        <div class="size-bar"></div>
+                        <div class="size-label">
+                            <strong>Commercial alternatives</strong>
+                            <span>GB+ runtime + your data, server-only</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- EV Ready -->
+            <div class="subsection">
+                <h3 class="subsection-title">Future-Proof: EV &amp; Autonomous Ready</h3>
+                <div class="ev-callout">
+                    <h3 class="ev-callout-title">Critical for Electric Fleets</h3>
+                    <div class="ev-callout-content">
+                        <p>
+                            Diesel trucks are forgiving. Misjudge fuel level by 5%? Coast to the next truck stop.
+                            Electric trucks aren't. Misjudge battery state by 5%? You're stranded on a highway
+                            with a 40-ton anchor.
+                        </p>
+                        <div class="ev-callout-comparison">
+                            <div class="ev-comparison-item ev-diesel">
+                                <strong>Diesel: 5% estimation error</strong>
+                                <span>Minor inconvenience&mdash;stop 20 miles earlier than planned</span>
+                            </div>
+                            <div class="ev-comparison-item ev-electric">
+                                <strong>Electric: 5% estimation error</strong>
+                                <span>Potential stranding, tow truck, missed delivery, angry customer</span>
+                            </div>
+                        </div>
+                        <p class="ev-callout-conclusion">
+                            OTTO's confidence-weighted state estimation was designed with EVs in mind from day one.
+                            Ready for mixed diesel/EV/autonomous fleets.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI Ready -->
+            <div class="subsection">
+                <h3 class="subsection-title">AI-Ready</h3>
+                <div class="ai-ready-content">
+                    <div class="ai-example">
+                        <div class="ai-example-prompt">
+                            "Find the cheapest route for truck 47 to deliver in Prague by Thursday, he's got 6 hours left on his clock"
+                        </div>
+                        <div class="ai-example-diagram">
 <pre>                    ┌─────────────────┐
                     │   LLM Agent     │
                     │ (intent → API)  │
@@ -1979,154 +1906,37 @@ Dependencies:
    │  HoSE   │         │  Velo   │         │FuelWise │
    │(6h left)│         │ (route) │         │ (cost)  │
    └─────────┘         └─────────┘         └─────────┘</pre>
+                        </div>
+                    </div>
+                    <div class="ai-insight">
+                        <p>
+                            <span class="highlight">LLM is the UX layer. OTTO engines are the truth layer.</span>
+                            The AI doesn't hallucinate routes&mdash;it translates natural language into API calls
+                            and explains results in human terms.
+                        </p>
+                        <p>
+                            Dispatchers speak, OTTO optimizes, LLM explains. No training required.
+                        </p>
+                        <div class="ai-features">
+                            <div class="ai-feature">Natural language queries</div>
+                            <div class="ai-feature">What-if scenarios</div>
+                            <div class="ai-feature">Plan explainability</div>
+                            <div class="ai-feature">Multi-language support</div>
+                        </div>
                     </div>
                 </div>
-                <div class="ai-insight">
-                    <p>
-                        <span class="highlight">LLM is the UX layer. OTTO engines are the truth layer.</span>
-                        The AI doesn't hallucinate routes&mdash;it translates natural language into API calls
-                        and explains results in human terms.
-                    </p>
-                    <p>
-                        Dispatchers speak, OTTO optimizes, LLM explains. No training required.
-                    </p>
-                    <div class="ai-features">
-                        <div class="ai-feature">Natural language queries</div>
-                        <div class="ai-feature">What-if scenarios</div>
-                        <div class="ai-feature">Plan explainability</div>
-                        <div class="ai-feature">Multi-language support</div>
-                        <div class="ai-feature">Voice interface ready</div>
-                        <div class="ai-feature">Document extraction</div>
-                    </div>
-                </div>
             </div>
-        </section>
 
-        <section class="performance">
-            <h2 class="section-title">Performance</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Operation</th>
-                        <th>Target</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr><td>LP solve (1000 variables)</td><td>&lt;100ms</td></tr>
-                    <tr><td>Route calculation (country-scale)</td><td>&lt;100ms</td></tr>
-                    <tr><td>PNG tile generation (512&times;512)</td><td>~75ms</td></tr>
-                    <tr><td>Forward geocoding</td><td>&lt;20&mu;s</td></tr>
-                    <tr><td>Autocomplete query</td><td>&lt;20&mu;s</td></tr>
-                    <tr><td>Reverse geocoding</td><td>&lt;30&mu;s</td></tr>
-                    <tr><td>PBF parse (300MB Hungary)</td><td>~10s</td></tr>
-                </tbody>
-            </table>
-        </section>
-
-        <section class="quickstart">
-            <h2 class="section-title">Quick Start</h2>
-            <div class="code-block">
-<pre><span class="comment"># Build all libraries</span>
-<span class="command">make all</span>
-
-<span class="comment"># Run all tests (279+)</span>
-<span class="command">make test</span>
-
-<span class="comment"># Start servers</span>
-<span class="command">make run-fuelwise-api</span>   <span class="comment"># :8080</span>
-<span class="command">make run-velo-api</span>       <span class="comment"># :8082</span>
-<span class="command">make run-carta-api</span>      <span class="comment"># :8081</span>
-<span class="command">make run-locus-api</span>      <span class="comment"># :8083</span>
-
-<span class="comment"># Build for WebAssembly</span>
-<span class="command">make wasm</span></pre>
-            </div>
-        </section>
-
-        <section class="license">
-            <h2 class="section-title">License Model</h2>
-            <div class="license-content">
-                <div class="license-column">
-                    <h3 class="license-type open">Open Source (MIT)</h3>
-                    <p class="license-desc">
-                        Core engines are MIT licensed. Use them freely, contribute back,
-                        audit the code. No vendor lock-in.
-                    </p>
-                    <ul class="license-list">
-                        <li>Ralph &ndash; LP/MIP solver</li>
-                        <li>Velo &ndash; Routing engine</li>
-                        <li>Carta &ndash; Tile generator</li>
-                        <li>Locus &ndash; Geocoding</li>
-                        <li>FuelWise &ndash; Refueling optimization</li>
-                        <li>ClayShards &ndash; UI components</li>
-                        <li>Shared &ndash; Geo utilities</li>
-                        <li>HoSE, Tempo, Arbor, Sigma, Pulse, Fuse</li>
-                    </ul>
-                </div>
-                <div class="license-column">
-                    <h3 class="license-type proprietary">Commercial</h3>
-                    <p class="license-desc">
-                        Integration layer and managed platform require a commercial license
-                        or subscription.
-                    </p>
-                    <ul class="license-list">
-                        <li>Nexus &ndash; TMS/ELD/LoadBoard connectors</li>
-                        <li>Managed hosting &ndash; Fully operated platform</li>
-                        <li>Priority support &ndash; SLAs and dedicated help</li>
-                        <li>Custom development &ndash; Fleet-specific tuning</li>
-                    </ul>
-                </div>
-            </div>
-        </section>
-
-        <section class="for-operators">
-            <h2 class="section-title">For Owner-Operators &amp; Small Trucking Companies</h2>
-            <div class="operator-grid">
-                <div class="operator-feature">
-                    <h4>Route Planning</h4>
-                    <p>Optimal routes with truck restrictions, not Google Maps guesswork</p>
-                </div>
-                <div class="operator-feature">
-                    <h4>Fuel Optimization</h4>
-                    <p>Find the cheapest stops on your route&mdash;save $50-100 per trip</p>
-                </div>
-                <div class="operator-feature">
-                    <h4>HoS Calculator</h4>
-                    <p>Know exactly when you need to stop&mdash;avoid $16k violation fines</p>
-                </div>
-                <div class="operator-feature">
-                    <h4>Load Decisions</h4>
-                    <p>"I'm in Tulsa empty"&mdash;what's my best next move?</p>
-                </div>
-            </div>
-            <div class="operator-cta">
-                <div class="operator-cta-text">
-                    <h3>Same algorithms the mega-fleets use</h3>
-                    <p>
-                        No install, no signup required. Runs entirely in your browser.
-                        The same optimization technology that Girteka uses for 10,000 trucks&mdash;available
-                        to you for free.
-                    </p>
-                </div>
-                <div class="operator-price">
-                    <div class="free">Free</div>
-                    <div class="paid">Pro features from $29/mo</div>
-                </div>
-            </div>
-        </section>
-
-        <section class="for-fleets">
-            <h2 class="section-title">For Fleets</h2>
+            <!-- CTA: Contact -->
             <div class="cta-box">
                 <div class="cta-content">
-                    <h3>Don't want to run your own infrastructure?</h3>
+                    <h3>Ready to talk?</h3>
                     <p>
-                        We offer managed OTTO deployments with TMS/ELD integration,
-                        dedicated support, and guaranteed SLAs. Focus on moving freight,
-                        not managing servers.
+                        Whether you're evaluating for a 50-truck regional fleet or a 10,000-truck
+                        enterprise, we can help you understand how OTTO fits your operation.
                     </p>
                     <div class="cta-features">
-                        <span>Hosted platform</span>
+                        <span>Managed hosting</span>
                         <span>TMS/ELD integration</span>
                         <span>24/7 support</span>
                         <span>Custom tuning</span>
@@ -2136,8 +1946,195 @@ Dependencies:
             </div>
         </section>
 
-        <section class="for-partners">
-            <h2 class="section-title">For Partners</h2>
+        <!-- ============================================================ -->
+        <!-- OPERATIONS -->
+        <!-- ============================================================ -->
+        <section id="operations" class="persona-section">
+            <div class="persona-section-header">
+                <div class="persona-section-icon">&#x1F69A;</div>
+                <div>
+                    <div class="persona-section-title">For Dispatchers &amp; Planners</div>
+                    <div class="persona-section-subtitle">Daily planning tools that actually work</div>
+                </div>
+            </div>
+
+            <!-- For Owner-Operators -->
+            <div class="subsection">
+                <h3 class="subsection-title">For Owner-Operators &amp; Small Trucking Companies</h3>
+                <div class="operator-grid">
+                    <div class="operator-feature">
+                        <h4>Route Planning</h4>
+                        <p>Optimal routes with truck restrictions, not Google Maps guesswork</p>
+                    </div>
+                    <div class="operator-feature">
+                        <h4>Fuel Optimization</h4>
+                        <p>Find the cheapest stops on your route&mdash;save $50-100 per trip</p>
+                    </div>
+                    <div class="operator-feature">
+                        <h4>HoS Calculator</h4>
+                        <p>Know exactly when you need to stop&mdash;avoid $16k violation fines</p>
+                    </div>
+                    <div class="operator-feature">
+                        <h4>Load Decisions</h4>
+                        <p>"I'm in Tulsa empty"&mdash;what's my best next move?</p>
+                    </div>
+                </div>
+                <div class="operator-cta">
+                    <div class="operator-cta-text">
+                        <h3>Same algorithms the mega-fleets use</h3>
+                        <p>
+                            No install, no signup required. Runs entirely in your browser.
+                            The same optimization technology that Girteka uses for 10,000 trucks&mdash;available
+                            to you for free.
+                        </p>
+                    </div>
+                    <div class="operator-price">
+                        <div class="free">Free</div>
+                        <div class="paid">Pro features from $29/mo</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trusted Reality -->
+            <div class="subsection">
+                <h3 class="subsection-title">Built on Trusted Reality</h3>
+                <div class="trusted-reality-content">
+                    <div class="trusted-reality-text">
+                        <p>
+                            Most fleet systems treat GPS as ground truth. But GPS drifts, signals conflict,
+                            telematics drop out, and driver apps disagree with ELDs. When your route optimizer
+                            doesn't know where your trucks actually <em>are</em>, every downstream decision
+                            inherits that uncertainty.
+                        </p>
+                        <p>
+                            OTTO maintains a <strong>unified reality model</strong>. Multiple signals&mdash;GPS,
+                            telematics, driver app events, geofence triggers&mdash;are
+                            fused into consistent vehicle states. When signals conflict, OTTO doesn't guess.
+                            It maintains confidence levels and propagates uncertainty through the planning stack.
+                        </p>
+                        <p class="trusted-reality-statement">
+                            "Where is truck 47?" isn't a simple question. The GPS says one thing, the driver
+                            app says another, and the geofence fired twice. OTTO gives you a single answer
+                            you can trust&mdash;and tells you how confident it is.
+                        </p>
+                    </div>
+                    <div class="trusted-reality-features">
+                        <div class="tr-feature">
+                            <div class="tr-feature-title">Multi-Signal Fusion</div>
+                            <div class="tr-feature-desc">GPS, telematics, driver app, infrastructure events&mdash;combined into one coherent state.</div>
+                        </div>
+                        <div class="tr-feature">
+                            <div class="tr-feature-title">Identity Consistency</div>
+                            <div class="tr-feature-desc">Track the same vehicle across signal dropouts, device swaps, and driver changes.</div>
+                        </div>
+                        <div class="tr-feature">
+                            <div class="tr-feature-title">Confidence-Aware Events</div>
+                            <div class="tr-feature-desc">Geofence alerts only fire when confidence exceeds threshold. Fewer false alarms.</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="trusted-reality-benefits">
+                    <div class="tr-benefit">
+                        <span class="tr-benefit-label">Fewer false alerts</span>
+                        <span class="tr-benefit-desc">Geofence events require confidence, not just position</span>
+                    </div>
+                    <div class="tr-benefit">
+                        <span class="tr-benefit-label">Stable ETAs</span>
+                        <span class="tr-benefit-desc">Predictions account for signal noise</span>
+                    </div>
+                    <div class="tr-benefit">
+                        <span class="tr-benefit-label">Cleaner compliance</span>
+                        <span class="tr-benefit-desc">HoS reports distinguish certain violations from edge cases</span>
+                    </div>
+                    <div class="tr-benefit">
+                        <span class="tr-benefit-label">Dispatcher trust</span>
+                        <span class="tr-benefit-desc">When the system says a truck is somewhere, it's actually there</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Smarter Operational Events -->
+            <div class="subsection">
+                <h3 class="subsection-title">Smarter Operational Events</h3>
+                <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
+                    When you know where trucks actually are&mdash;not just where GPS says they might be&mdash;every
+                    facility interaction gets more reliable.
+                </p>
+                <div class="operational-grid">
+                    <div class="operational-card">
+                        <h4>Geofencing Without False Triggers</h4>
+                        <p>
+                            GPS drifts. Trucks "arrive" while still on the highway. Drivers "leave" while
+                            parked at the dock. Traditional geofencing fires on raw coordinates and generates
+                            noise.
+                        </p>
+                        <p>
+                            OTTO's geofences require confidence thresholds. Result: alerts you can trust, not alert fatigue.
+                        </p>
+                    </div>
+                    <div class="operational-card">
+                        <h4>Detention Time That Holds Up</h4>
+                        <p>
+                            Detention billing disputes cost the industry billions. "We show you arrived at 2:15."
+                            "Our system shows 2:47." Without accurate timestamps, you're arguing over whose GPS was less wrong.
+                        </p>
+                        <p>
+                            OTTO records confidence-weighted arrival times with full signal provenance.
+                        </p>
+                    </div>
+                    <div class="operational-card">
+                        <h4>Wait Time Prediction</h4>
+                        <p>
+                            "How long will I wait at this shipper?" Most systems can't answer this. They
+                            don't track dwell times accurately, so they can't predict them.
+                        </p>
+                        <p>
+                            OTTO builds facility dwell profiles from accurate arrival/departure data. Dispatchers can route around facilities with 3-hour average waits.
+                        </p>
+                    </div>
+                    <div class="operational-card">
+                        <h4>Live ETA That Doesn't Jump</h4>
+                        <p>
+                            Nothing frustrates a receiver more than an ETA that changes by 45 minutes every
+                            refresh. Raw GPS + naive speed calculations produce unstable predictions.
+                        </p>
+                        <p>
+                            OTTO's ETAs incorporate position confidence and historical corridor speeds. The estimate might be less optimistic, but it won't swing wildly.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CTA: Try It -->
+            <div class="cta-box">
+                <div class="cta-content">
+                    <h3>Try it free in your browser</h3>
+                    <p>
+                        No signup, no install, no credit card. Plan your next route right now.
+                        Fuel optimization, HoS calculator, and truck-aware routing&mdash;all free.
+                    </p>
+                    <div class="cta-features">
+                        <span>Works offline</span>
+                        <span>No data leaves your device</span>
+                        <span>Same algorithms as enterprise</span>
+                    </div>
+                </div>
+                <a href="#" class="cta-button">Launch Demo</a>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- PARTNERS -->
+        <!-- ============================================================ -->
+        <section id="partners" class="persona-section">
+            <div class="persona-section-header">
+                <div class="persona-section-icon">&#x1F91D;</div>
+                <div>
+                    <div class="persona-section-title">For Partners</div>
+                    <div class="persona-section-subtitle">Integration opportunities across the logistics ecosystem</div>
+                </div>
+            </div>
+
             <div class="partner-grid">
                 <div class="partner-card">
                     <div class="partner-type">Data Partners</div>
@@ -2201,8 +2198,22 @@ Dependencies:
                     </p>
                     <div class="partner-exchange">
                         <div class="gives"><strong>You provide:</strong> <span>Transaction data (anonymized)</span></div>
-                        <div class="gets"><strong>You get:</strong> <span>Market benchmarks, capacity forecasts, RFP timing signals</span></div>
+                        <div class="gets"><strong>You get:</strong> <span>Market benchmarks, capacity forecasts</span></div>
                     </div>
+                </div>
+            </div>
+
+            <!-- CTA: Contact -->
+            <div style="margin-top: 32px;">
+                <div class="cta-box">
+                    <div class="cta-content">
+                        <h3>Interested in partnering?</h3>
+                        <p>
+                            Whether you're a fuel card network, truck OEM, TMS provider, or freight platform,
+                            we'd love to explore how OTTO can add value to your customers.
+                        </p>
+                    </div>
+                    <a href="#" class="cta-button" data-contact="true">Start a Conversation</a>
                 </div>
             </div>
         </section>
