@@ -27,6 +27,7 @@ typedef struct {
     uint8_t fg_r, fg_g, fg_b;
     uint8_t bg_r, bg_g, bg_b;
     uint8_t flags;          /* Reserved for bold, underline, etc. */
+    int16_t z_index;        /* Z-index for layering (higher = on top) */
 } CsTuiCell;
 
 /* Cell flags (future use) */
@@ -74,6 +75,9 @@ struct CsTuiRenderer {
     /* Cursor state */
     int cursor_x, cursor_y;
     bool cursor_visible;
+
+    /* Z-index tracking for layered rendering */
+    int16_t current_z_index;  /* Z-index of current render command */
 
     /* Flags */
     bool needs_full_redraw;
