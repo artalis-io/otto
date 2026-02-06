@@ -190,10 +190,12 @@ CsDropdownResult cs_dropdown(
      * RENDERING - Now render with the updated state
      * ======================================================================== */
 
-    /* Colors */
+    /* Colors - show focus state via background, not just border */
     Clay_Color bg_color = is_hovered
         ? (Clay_Color){CS_COLOR_BG_HOVER}
-        : (Clay_Color){CS_COLOR_BG_DEFAULT};
+        : is_focused
+            ? (Clay_Color){CS_COLOR_BG_FOCUSED}
+            : (Clay_Color){CS_COLOR_BG_DEFAULT};
     Clay_Color text_color = (Clay_Color){CS_COLOR_TEXT};
     Clay_Color border_color = is_focused
         ? (Clay_Color){CS_COLOR_BORDER_FOCUSED}
