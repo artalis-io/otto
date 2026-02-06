@@ -5,7 +5,7 @@
  * Renders the terminal to a framebuffer, then applies effects to the screen.
  */
 
-import { CRT_VS, CRT_FS, BLIT_VS, BLIT_FS } from './shaders.js';
+import { CRT_VS, CRT_FS, BLIT_VS, BLIT_FS, BEZEL_VS, BEZEL_FS } from './shaders.js';
 
 /**
  * Color mode constants.
@@ -84,6 +84,10 @@ export class CrtEffects {
         // Glass reflection is separate from CRT effects (ambient light on glass)
         this.glassEnabled = false;
 
+        // Monitor bezel (rendered around screen)
+        this.bezelEnabled = false;
+        this.bezelWidth = 0.06; // 6% of screen on each side
+
         this._initResources();
     }
 
@@ -96,6 +100,7 @@ export class CrtEffects {
         // Create shaders
         this.crtShader = createProgram(gl, CRT_VS, CRT_FS);
         this.blitShader = createProgram(gl, BLIT_VS, BLIT_FS);
+        this.bezelShader = createProgram(gl, BEZEL_VS, BEZEL_FS);
 
         // Create fullscreen quad
         this.quadBuffer = gl.createBuffer();
@@ -112,6 +117,11 @@ export class CrtEffects {
         // Framebuffer for rendering terminal
         this.framebuffer = gl.createFramebuffer();
         this.texture = null;
+
+        // Second framebuffer for CRT output (used when bezel is enabled)
+        this.crtFramebuffer = gl.createFramebuffer();
+        this.crtTexture = null;
+
         this.width = 0;
         this.height = 0;
     }
@@ -126,12 +136,15 @@ export class CrtEffects {
 
         const gl = this.gl;
 
-        // Delete old texture
+        // Delete old textures
         if (this.texture) {
             gl.deleteTexture(this.texture);
         }
+        if (this.crtTexture) {
+            gl.deleteTexture(this.crtTexture);
+        }
 
-        // Create new texture
+        // Create terminal texture
         this.texture = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
@@ -145,9 +158,27 @@ export class CrtEffects {
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texture, 0);
 
         // Check completeness
-        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        let status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
         if (status !== gl.FRAMEBUFFER_COMPLETE) {
             console.error('CRT framebuffer incomplete:', status);
+        }
+
+        // Create CRT output texture (for bezel compositing)
+        this.crtTexture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.crtTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        // Attach to CRT framebuffer
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.crtFramebuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.crtTexture, 0);
+
+        status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        if (status !== gl.FRAMEBUFFER_COMPLETE) {
+            console.error('CRT output framebuffer incomplete:', status);
         }
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -182,8 +213,13 @@ export class CrtEffects {
 
         this.time += dt;
 
-        // Bind default framebuffer (screen)
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        // If bezel enabled, render CRT to intermediate framebuffer
+        // Otherwise render directly to screen
+        if (this.bezelEnabled) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, this.crtFramebuffer);
+        } else {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        }
         gl.viewport(0, 0, this.width, this.height);
 
         // Use CRT shader
@@ -220,6 +256,11 @@ export class CrtEffects {
         gl.drawArrays(gl.TRIANGLES, 0, 6);
 
         gl.disableVertexAttribArray(posLoc);
+
+        // If bezel enabled, composite with bezel frame
+        if (this.bezelEnabled) {
+            this.renderBezel();
+        }
 
         // Render glass reflection on top (independent layer)
         this.renderGlassOnly();
@@ -316,6 +357,53 @@ export class CrtEffects {
      */
     isGlassEnabled() {
         return this.glassEnabled;
+    }
+
+    /**
+     * Enable/disable monitor bezel.
+     * @param {boolean} enabled
+     */
+    setBezel(enabled) {
+        this.bezelEnabled = enabled;
+    }
+
+    /**
+     * Check if bezel is enabled.
+     */
+    isBezelEnabled() {
+        return this.bezelEnabled;
+    }
+
+    /**
+     * Render bezel around screen content.
+     * Reads from crtTexture (CRT output) and renders to screen with bezel frame.
+     */
+    renderBezel() {
+        if (!this.bezelEnabled) return;
+
+        const gl = this.gl;
+
+        // Render to screen
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, this.width, this.height);
+
+        gl.useProgram(this.bezelShader.program);
+
+        // Read from CRT output texture
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.crtTexture);
+        gl.uniform1i(this.bezelShader.uniforms.u_screen, 0);
+        gl.uniform2f(this.bezelShader.uniforms.u_resolution, this.width, this.height);
+        gl.uniform1f(this.bezelShader.uniforms.u_time, this.time);
+        gl.uniform1f(this.bezelShader.uniforms.u_bezelWidth, this.bezelWidth);
+        gl.uniform1f(this.bezelShader.uniforms.u_enabled, 1.0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+        const posLoc = gl.getAttribLocation(this.bezelShader.program, 'a_pos');
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        gl.disableVertexAttribArray(posLoc);
     }
 
     /**
@@ -478,14 +566,23 @@ export class CrtEffects {
         if (this.blitShader) {
             gl.deleteProgram(this.blitShader.program);
         }
+        if (this.bezelShader) {
+            gl.deleteProgram(this.bezelShader.program);
+        }
         if (this.quadBuffer) {
             gl.deleteBuffer(this.quadBuffer);
         }
         if (this.framebuffer) {
             gl.deleteFramebuffer(this.framebuffer);
         }
+        if (this.crtFramebuffer) {
+            gl.deleteFramebuffer(this.crtFramebuffer);
+        }
         if (this.texture) {
             gl.deleteTexture(this.texture);
+        }
+        if (this.crtTexture) {
+            gl.deleteTexture(this.crtTexture);
         }
     }
 }
