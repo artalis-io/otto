@@ -70,18 +70,18 @@ void ct_lod_default(CTLODConfig *config)
      * visibility at low zoom levels. Good for trucking/logistics use cases.
      */
 
-    /* Roads - match OSM Carto visibility thresholds exactly
+    /* Roads - delay tertiary/residential to reduce urban clutter
      * OSM Carto: motorway z5, trunk z5, primary z8, secondary z10, tertiary z12
-     * Matching OSM for visual consistency.
+     * We delay tertiary to z13 for cleaner mid-zoom appearance.
      */
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 5, -1, 0, 0);   /* OSM Carto: z5 */
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 5, -1, 0, 0);      /* OSM Carto: z5 */
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 8, -1, 0, 0);    /* OSM Carto: z8 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 10, -1, 0, 0); /* OSM Carto: z10 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 12, -1, 0, 0);  /* OSM Carto: z12 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 13, -1, 0, 0); /* OSM Carto: z13 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 14, -1, 0, 0);   /* OSM Carto: z14 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 14, -1, 0, 0);     /* OSM Carto: z14 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 11, -1, 0, 0); /* Delay from z10 to z11 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 13, -1, 0, 0);  /* Delay from z12 to z13 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 14, -1, 0, 0); /* Delay from z13 to z14 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 15, -1, 0, 0);   /* Delay from z14 to z15 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 15, -1, 0, 0);     /* Delay from z14 to z15 */
 
     /* Buildings - visible at z13+ (OSM shows buildings at z13) */
     ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 13, -1, 500, 0);   /* Medium+ buildings at z13 */
@@ -115,18 +115,18 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DITCH, 15, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_OTHER, 14, -1, 0, 0);
 
-    /* Railways - OSM Carto shows rail at z7, others later
-     * Show main rail earlier to match OSM appearance.
+    /* Railways - delay to reduce clutter at mid-zoom levels
+     * OSM Carto shows main rail thinly, other types much later.
      */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 7, -1, 0, 20000);  /* Main rail >20km at z7 */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 8, -1, 0, 5000);   /* Main rail >5km at z8 */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 9, -1, 0, 0);      /* All main rail at z9 */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_SUBWAY, 12, -1, 0, 0);   /* Subway at z12 */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_TRAM, 13, -1, 0, 0);     /* Tram at z13 */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_NARROW_GAUGE, 11, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_PRESERVED, 12, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_DISUSED, 14, -1, 0, 0);  /* Disused late */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_OTHER, 13, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 8, -1, 0, 50000);  /* Main rail >50km at z8 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 10, -1, 0, 10000); /* Main rail >10km at z10 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 13, -1, 0, 0);     /* All main rail at z13 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_SUBWAY, 14, -1, 0, 0);   /* Subway at z14 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_TRAM, 15, -1, 0, 0);     /* Tram at z15 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_NARROW_GAUGE, 14, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_PRESERVED, 14, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_DISUSED, 16, -1, 0, 0);  /* Disused very late */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_OTHER, 15, -1, 0, 0);
 
     /* Landuse - show large areas earlier
      * OSM Carto shows forests quite early. Hungary's forests are fragmented,
