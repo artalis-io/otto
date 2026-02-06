@@ -1845,6 +1845,8 @@ PresolveResult* presolve(LPModel *model) {
             status = -1;  /* Inconsistent system detected */
         } else {
             result->cons_removed += n;
+            result->matrix_rank = ctx->matrix_rank;
+            result->redundant_rows_found = ctx->redundant_rows_found;
         }
     }
 

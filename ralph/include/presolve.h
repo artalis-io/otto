@@ -40,6 +40,8 @@ typedef struct {
     int cons_removed;
     int bounds_tightened;
     int coefficients_reduced;
+    int matrix_rank;            /* Computed rank of constraint matrix (0 if not computed) */
+    int redundant_rows_found;   /* Count of linearly dependent rows removed */
 
 } PresolveResult;
 
