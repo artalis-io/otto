@@ -243,6 +243,80 @@ Keep exports minimal. Prefer doing logic in C.
 
 ---
 
+## TUI Compatibility
+
+Widgets should work across all renderer targets, including TUI (terminal text UI).
+
+### Process Input Before Rendering
+
+State changes must be reflected immediately, not on the next frame:
+
+```c
+// GOOD: Input before render
+void cs_widget(...) {
+    /* 1. Process input */
+    if (is_focused && g->pending_arrow_down) {
+        *value = new_value;
+        current_value = *value;  /* Update local copy */
+    }
+    /* 2. Render with updated value */
+    CLAY(...) { render_with(current_value); }
+}
+
+// BAD: Input after render = 1-frame lag
+void cs_widget(...) {
+    CLAY(...) { render_with(current_value); }
+    if (is_focused && g->pending_arrow_down) {
+        *value = new_value;  /* Won't show until next frame */
+    }
+}
+```
+
+### Use Background Colors for Focus, Not Borders
+
+Borders add characters in TUI mode and can shift element positions:
+
+```c
+// GOOD: Background color change
+Clay_Color bg = is_focused
+    ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS}
+    : (Clay_Color){CS_COLOR_BTN_BLUE};
+
+// BAD: Border shifts layout in TUI
+if (is_focused) {
+    config.border.width = {2, 2, 2, 2, 0};  /* Adds width! */
+}
+```
+
+### Use Relative Sizing
+
+TUI uses character cells (1 unit = 1 char). Use relative sizing when possible:
+
+```c
+// GOOD: Works in both pixel and character modes
+.sizing = { .width = CLAY_SIZING_GROW(0), .height = CLAY_SIZING_FIT(0) }
+
+// CAREFUL: Interpret differently in TUI
+.height = CLAY_SIZING_FIXED(24.0f)  /* 24px or 24 rows? */
+```
+
+For TUI-friendly widgets, check style dimensions:
+```c
+/* TUI mode: small heights (1-3) are character rows */
+bool tui_mode = style->height <= 3;
+Clay_Padding pad = tui_mode
+    ? (Clay_Padding){1, 1, 0, 0}   /* Minimal for TUI */
+    : (Clay_Padding){8, 8, 4, 4}; /* Pixel padding */
+```
+
+### Test with Both Renderers
+
+Before submitting widgets, verify they work in:
+1. WebGL renderer (pixel coordinates)
+2. TUI renderer (character cells) via `clay-shards-tui/demo/`
+
+---
+
 ## Anti-Patterns
 
 ### Don't Store State in Globals

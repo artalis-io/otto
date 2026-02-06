@@ -102,6 +102,25 @@ The render command array is the contract:
 
 This separation is what makes "render into anything" real.
 
+### 7) Renderer portability requires discipline
+
+ClayShards targets multiple renderer backends:
+
+* **WebGL** — pixel coordinates, GPU-accelerated, floating-point precision
+* **TUI** — character cell coordinates, terminal escape sequences, integer grid
+
+To work across all targets, components must:
+
+* **Process input before rendering** — State changes must be visible in the same frame, not the next. TUI differential updates only redraw changed cells; if state changes after render, the update is missed.
+
+* **Use background color for focus indication** — Borders add physical width in TUI (1 character per side). Focus borders shift element positions. Background color changes have zero layout impact.
+
+* **Avoid assumptions about coordinate scale** — 24.0f height means 24 pixels in WebGL, 24 character rows in TUI. Use `CLAY_SIZING_FIT` or `CLAY_SIZING_GROW` when possible.
+
+* **Clear overlapping content explicitly** — TUI rectangles must set both background color AND clear the codepoint. Old characters "show through" if only color is set.
+
+> **Design principle:** If a widget works in TUI, it works everywhere. TUI is the strictest renderer—it exposes timing bugs, layout assumptions, and focus handling issues that GPU renderers hide.
+
 ### 7) Determinism
 
 Given identical inputs, state, and backend behavior, ClayShards produces identical layout and render commands. This is essential for embedded/web parity and testability.

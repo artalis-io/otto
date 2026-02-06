@@ -277,3 +277,129 @@ This enables:
 - Reproducible testing
 - Web/embedded parity
 - Snapshot-based debugging
+
+---
+
+## Renderer Targets
+
+ClayShards produces Clay render commands that can be consumed by different backends. Each backend has unique constraints.
+
+### WebGL Renderer
+
+The reference implementation (`clay-shards-webgl/`):
+- Pixel-based coordinates from Clay layout
+- Floating-point positioning and sizing
+- GPU-accelerated rendering
+- Borders rendered as separate draw calls (no layout impact)
+
+### TUI Renderer
+
+Terminal text renderer (`clay-shards-tui/`):
+- **Character cell coordinates**: All positions/sizes are in character cells, not pixels
+- **Integer grid**: 1 unit = 1 character cell (e.g., height=1 means 1 row)
+- **Borders consume cells**: A border adds 1 character width/height to each side
+- **Double-buffered**: Front/back buffers enable differential updates
+
+#### TUI Design Constraints
+
+These learnings apply to all text-based renderers:
+
+**1. Input-Before-Render Pattern**
+
+Process all input (keyboard, mouse) BEFORE rendering so state changes are reflected immediately in the same frame:
+
+```c
+/* WRONG: Input after rendering = 1-frame lag */
+void cs_slider(...) {
+    /* Render with current_value */
+    CLAY(...) { render_track_and_thumb(current_value); }
+    /* Process input - too late! */
+    if (is_focused && g->pending_arrow_right) {
+        *value = current_value + step;  /* Won't show until next frame */
+    }
+}
+
+/* CORRECT: Input before rendering = immediate response */
+void cs_slider(...) {
+    /* Process input first */
+    if (is_focused && g->pending_arrow_right) {
+        *value = current_value + step;
+        current_value = *value;  /* Update local for rendering */
+    }
+    /* Render with updated value */
+    CLAY(...) { render_track_and_thumb(current_value); }
+}
+```
+
+**2. Focus Indication via Background Color**
+
+In TUI mode, borders add characters and shift layout. Use background color for focus indication instead:
+
+```c
+/* WRONG: Border-based focus shifts element position */
+if (is_focused) {
+    config.border.width = {2, 2, 2, 2, 0};  /* Adds 2 chars each side */
+}
+
+/* CORRECT: Background color change, no layout impact */
+Clay_Color bg = is_focused ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS}
+                          : (Clay_Color){CS_COLOR_BTN_BLUE};
+```
+
+**3. Differential Update Gap Detection**
+
+When updating only changed cells, track cursor position to handle non-consecutive updates:
+
+```c
+/* WRONG: Simple flag misses gaps */
+bool moved = false;
+for (int x = 0; x < width; x++) {
+    if (!cell_changed) continue;
+    if (!moved) { position_cursor(y, x); moved = true; }
+    output_char();  /* Gap = wrong position! */
+}
+
+/* CORRECT: Track last position, reposition on gap */
+int last_x = -1;
+for (int x = 0; x < width; x++) {
+    if (!cell_changed) continue;
+    if (last_x < 0 || x != last_x + 1) {
+        position_cursor(y, x);  /* Reposition on gap */
+    }
+    output_char();
+    last_x = x;
+}
+```
+
+**4. Z-Index for Layered Content**
+
+TUI rendering uses z-index to determine which content wins when overlapping:
+
+- Higher z-index content overwrites lower z-index
+- Floating elements (dropdowns, tooltips) need elevated z-index
+- Buffer cleared to `z_index = INT16_MIN` each frame
+
+**5. Rectangle Fill Must Clear Characters**
+
+When rendering rectangles, set both background color AND clear the codepoint to space:
+
+```c
+/* Fill rectangle area */
+cell->bg_r = bg.r;
+cell->bg_g = bg.g;
+cell->bg_b = bg.b;
+cell->codepoint = ' ';  /* Clear old text! */
+```
+
+**6. Cursor Visibility Management**
+
+Hide cursor when focused widget is not a text input:
+
+```c
+/* Show cursor only for text inputs */
+if (cs_focused_bounds(&x, &y, &w, &h) && w > 0 && h > 0) {
+    cs_tui_set_cursor(r, cursor_x, cursor_y, true);
+} else {
+    cs_tui_set_cursor(r, 0, 0, false);  /* Hide */
+}
+```
