@@ -199,6 +199,123 @@ make compare
 
 3. Check font rendering in `ct_render.c:ct_render_text()`
 
+## LOD (Level of Detail) Debugging
+
+Use zoom-range comparison to debug LOD filtering issues - features appearing/disappearing at wrong zoom levels.
+
+### Quick LOD Check
+
+```bash
+# Compare same location across zoom 10-16
+./carta-compare 14/9058/5729 ../data/hungary-latest.osm.pbf --zoom-range 10-16 --skip-osm
+
+# With 3x3 neighbors for broader coverage
+./carta-compare 14/9058/5729 ../data/hungary-latest.osm.pbf --zoom-range 12-15 -N --skip-osm
+```
+
+### Understanding Zoom-Range Output
+
+The tool calculates parent/child tiles at each zoom level from your anchor tile:
+
+```
+=== Zoom Range Comparison ===
+
+Anchor tile: 14/9058/5729
+Zoom range: 12 to 15
+
+--- Zoom 12 (center: 12/2264/1432) ---
+  12/2264/1432: 193.9 KB, 16.6 ms [w:73 r:3314 b:0 l:353]
+
+--- Zoom 13 (center: 13/4529/2864) ---
+  13/4529/2864: 328.4 KB, 15.8 ms [w:37 r:2739 b:252 l:280]
+```
+
+Key output fields: `[w:water r:roads b:buildings l:landuse]`
+
+### OSM Carto LOD Reference
+
+When debugging LOD, compare against OSM Carto conventions:
+
+| Feature Type | OSM Carto min_zoom | Carta default |
+|--------------|-------------------|---------------|
+| Motorway | 5 | 5 |
+| Trunk | 6 | 6 |
+| Primary | 8 | 8 |
+| Secondary | 10 | 10 |
+| Tertiary | 12 | 12 |
+| Residential | 13 | 13 |
+| Service | 14 | 14 |
+| Buildings | 13 | 13 |
+| Industrial landuse | 10 | 12 |
+| Residential landuse | 10 | 14 (delayed to reduce clutter) |
+
+### Common LOD Issues
+
+| Symptom | Likely Cause | Check |
+|---------|--------------|-------|
+| Roads appear too late | min_zoom too high | `ct_lod.c:ct_lod_default()` |
+| Buildings appear too early | min_zoom too low | LOD rule for CT_LAYER_BUILDINGS |
+| Too cluttered at mid-zoom | Landuse showing early | Delay residential/grass landuse |
+| Features disappear at high zoom | max_zoom set incorrectly | Check max_zoom in rules |
+| Feature count drops unexpectedly | LOD area/length filter | Check area_sqm, length_m thresholds |
+
+### LOD Debugging Workflow
+
+1. **Identify the zoom transition:**
+   ```bash
+   ./carta-compare 14/9058/5729 hungary.osm.pbf --zoom-range 10-16 --skip-osm
+   ```
+   Look for sudden drops in feature counts (e.g., buildings go from 0 to 252 between z12 and z13).
+
+2. **Compare with OSM at problem zooms:**
+   ```bash
+   ./carta-compare 13/4529/2864 hungary.osm.pbf -o /tmp/z13_check/
+   ```
+   Read both tiles and compare visually.
+
+3. **Check LOD rules in `ct_lod.c`:**
+   ```c
+   // Example: buildings visible from z13
+   ct_lod_add_rule(config, CT_LAYER_BUILDINGS, 0, 13, -1, 0, 0);
+   ```
+
+4. **Verify fix across zoom range:**
+   ```bash
+   ./carta-compare 14/9058/5729 hungary.osm.pbf --zoom-range 11-15 -N
+   ```
+
+### LOD Rule Format
+
+```c
+ct_lod_add_rule(config, layer, feature_type, min_zoom, max_zoom, min_area, min_length);
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `layer` | CT_LAYER_ROADS, CT_LAYER_BUILDINGS, etc. |
+| `feature_type` | Sub-type (e.g., CT_ROAD_PRIMARY) or 0 for all |
+| `min_zoom` | First zoom level where feature appears |
+| `max_zoom` | Last zoom level (-1 = no limit) |
+| `min_area` | Minimum area in m² (for polygons) |
+| `min_length` | Minimum length in m (for lines) |
+
+### Zoom-Range Summary Report
+
+The tool provides a summary table for quick analysis:
+
+```
+Zoom | Tiles | Empty | Avg Time | Features | Water | Roads | Bldgs | Land
+-----|-------|-------|----------|----------|-------|-------|-------|-----
+  12 |     1 |     0 |   16.6 ms |     3740 |    73 |  3314 |     0 |  353
+  13 |     1 |     0 |   15.8 ms |     3308 |    37 |  2739 |   252 |  280
+  14 |     1 |     0 |   17.0 ms |     4279 |    16 |  2556 |  1517 |  190
+```
+
+Look for:
+- **Sudden feature jumps** between zooms (LOD threshold)
+- **Decreasing counts** at higher zoom (expected: tiles cover smaller area)
+- **Zero counts** where features should exist (LOD too restrictive)
+
 ## Tool Reference
 
 ### carta-compare commands
@@ -213,6 +330,9 @@ make compare
 # Batch compare multiple tiles
 ./carta-compare batch <pbf-file> [options]
 
+# Zoom-range comparison (LOD debugging)
+./carta-compare <z/x/y> <pbf-file> --zoom-range MIN-MAX [options]
+
 Options:
   --mvt              Generate MVT instead of PNG
   -o, --output DIR   Output directory (default: /tmp/carta_compare)
@@ -220,6 +340,10 @@ Options:
   -z, --zoom LEVEL   Batch mode: specific zoom level
   -n, --max-tiles N  Batch mode: max tiles per zoom (default: 3)
   --skip-osm         Don't fetch OSM reference tiles
+
+Zoom-range options:
+  --zoom-range MIN-MAX   Compare tile across zoom levels MIN to MAX
+  -N, --neighbors        Render 3x3 neighbor grid at each zoom level
 ```
 
 ### Reading generated tiles

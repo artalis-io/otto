@@ -42,7 +42,8 @@
 typedef enum {
     MODE_SINGLE,    /* Compare single tile */
     MODE_INFO,      /* Show map bounds and valid tiles */
-    MODE_BATCH      /* Compare multiple tiles */
+    MODE_BATCH,     /* Compare multiple tiles */
+    MODE_ZOOM_RANGE /* Compare across zoom levels from anchor tile */
 } CompareMode;
 
 typedef struct {
@@ -56,6 +57,9 @@ typedef struct {
     int max_tiles;            /* Max tiles per zoom in batch mode */
     int verbose;              /* Verbose output */
     int skip_osm;             /* Skip fetching OSM tiles */
+    int zoom_min;             /* For zoom-range mode: min zoom */
+    int zoom_max;             /* For zoom-range mode: max zoom */
+    int with_neighbors;       /* For zoom-range mode: render 3x3 grid */
 } CompareConfig;
 
 /* ============================================================================
@@ -626,16 +630,27 @@ static void print_usage(const char *prog)
     fprintf(stderr, "  -v, --verbose           Verbose output\n");
     fprintf(stderr, "  -h, --help              Show this help\n");
     fprintf(stderr, "\n");
+    fprintf(stderr, "Zoom Range Mode (starting from a tile, compare across zoom levels):\n");
+    fprintf(stderr, "  --zoom-range MIN-MAX    Compare tile at zoom levels MIN to MAX\n");
+    fprintf(stderr, "  -N, --neighbors         Also render 3x3 neighbor grid at each zoom\n");
+    fprintf(stderr, "\n");
     fprintf(stderr, "Examples:\n");
     fprintf(stderr, "  %s info monaco.osm.pbf\n", prog);
     fprintf(stderr, "  %s 14/8527/5979 monaco.osm.pbf\n", prog);
     fprintf(stderr, "  %s batch monaco.osm.pbf --zoom 14\n", prog);
     fprintf(stderr, "  %s batch monaco.osm.pbf -n 5 -o /tmp/tiles/\n", prog);
+    fprintf(stderr, "  %s 14/9058/5729 hungary.osm.pbf --zoom-range 12-17\n", prog);
+    fprintf(stderr, "  %s 14/9058/5729 hungary.osm.pbf --zoom-range 12-17 -N\n", prog);
 }
 
 static int parse_tile_coords(const char *str, int *z, int *x, int *y)
 {
     return sscanf(str, "%d/%d/%d", z, x, y) == 3 ? 0 : -1;
+}
+
+static int parse_zoom_range(const char *str, int *min_zoom, int *max_zoom)
+{
+    return sscanf(str, "%d-%d", min_zoom, max_zoom) == 2 ? 0 : -1;
 }
 
 static int parse_args(int argc, char **argv, CompareConfig *cfg)
@@ -711,6 +726,24 @@ static int parse_args(int argc, char **argv, CompareConfig *cfg)
             cfg->skip_osm = 1;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             cfg->verbose = 1;
+        } else if (strcmp(argv[i], "--zoom-range") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --zoom-range requires MIN-MAX argument\n");
+                return -1;
+            }
+            if (parse_zoom_range(argv[i], &cfg->zoom_min, &cfg->zoom_max) != 0) {
+                fprintf(stderr, "Error: Invalid zoom range '%s' (expected MIN-MAX, e.g., 12-17)\n", argv[i]);
+                return -1;
+            }
+            if (cfg->zoom_min < 0 || cfg->zoom_min > 22 ||
+                cfg->zoom_max < 0 || cfg->zoom_max > 22 ||
+                cfg->zoom_min > cfg->zoom_max) {
+                fprintf(stderr, "Error: Zoom range must be 0-22 and MIN <= MAX\n");
+                return -1;
+            }
+            cfg->mode = MODE_ZOOM_RANGE;
+        } else if (strcmp(argv[i], "-N") == 0 || strcmp(argv[i], "--neighbors") == 0) {
+            cfg->with_neighbors = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             exit(0);
@@ -720,6 +753,214 @@ static int parse_args(int argc, char **argv, CompareConfig *cfg)
         }
     }
 
+    /* Validate zoom-range mode requirements */
+    if (cfg->mode == MODE_ZOOM_RANGE && cfg->z == 0 && cfg->x == 0 && cfg->y == 0) {
+        fprintf(stderr, "Error: --zoom-range requires a tile coordinate (z/x/y)\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+/* ============================================================================
+ * Mode: Zoom Range Comparison
+ * ============================================================================ */
+
+/* Calculate corresponding tile at a different zoom level */
+static void tile_at_zoom(int anchor_z, int anchor_x, int anchor_y,
+                          int target_z, int *out_x, int *out_y)
+{
+    if (target_z == anchor_z) {
+        *out_x = anchor_x;
+        *out_y = anchor_y;
+    } else if (target_z < anchor_z) {
+        /* Zoom out: divide by 2^diff */
+        int diff = anchor_z - target_z;
+        *out_x = anchor_x >> diff;
+        *out_y = anchor_y >> diff;
+    } else {
+        /* Zoom in: multiply by 2^diff (top-left child) */
+        int diff = target_z - anchor_z;
+        *out_x = anchor_x << diff;
+        *out_y = anchor_y << diff;
+    }
+}
+
+/* Structure to track per-zoom statistics */
+typedef struct {
+    int zoom;
+    int tiles_rendered;
+    int tiles_empty;
+    double total_render_ms;
+    size_t total_features;
+    size_t total_water;
+    size_t total_roads;
+    size_t total_buildings;
+    size_t total_landuse;
+} ZoomStats;
+
+static int run_zoom_range_mode(const CTPBFContext *pbf, const CompareConfig *cfg,
+                                uint8_t *buffer, size_t buffer_capacity)
+{
+    TileBounds bounds;
+    compute_tile_bounds(pbf, &bounds);
+
+    printf("=== Zoom Range Comparison ===\n\n");
+    printf("Anchor tile: %d/%d/%d\n", cfg->z, cfg->x, cfg->y);
+    printf("Zoom range: %d to %d\n", cfg->zoom_min, cfg->zoom_max);
+    printf("Neighbors: %s\n\n", cfg->with_neighbors ? "yes (3x3 grid)" : "no");
+
+    int num_zooms = cfg->zoom_max - cfg->zoom_min + 1;
+    ZoomStats *zoom_stats = calloc((size_t)num_zooms, sizeof(ZoomStats));
+    if (!zoom_stats) {
+        fprintf(stderr, "Error: Out of memory\n");
+        return 1;
+    }
+
+    for (int i = 0; i < num_zooms; i++) {
+        zoom_stats[i].zoom = cfg->zoom_min + i;
+    }
+
+    const char *ext = cfg->mvt_mode ? "mvt" : "png";
+
+    /* Process each zoom level */
+    for (int z = cfg->zoom_min; z <= cfg->zoom_max; z++) {
+        int stats_idx = z - cfg->zoom_min;
+        int center_x, center_y;
+        tile_at_zoom(cfg->z, cfg->x, cfg->y, z, &center_x, &center_y);
+
+        printf("--- Zoom %d (center: %d/%d/%d) ---\n", z, z, center_x, center_y);
+
+        /* Determine tiles to render */
+        int offsets[][2] = {{0, 0}};  /* Just center */
+        int num_tiles = 1;
+
+        int neighbor_offsets[][2] = {
+            {-1, -1}, {0, -1}, {1, -1},
+            {-1,  0}, {0,  0}, {1,  0},
+            {-1,  1}, {0,  1}, {1,  1}
+        };
+
+        int *tile_offsets = (int *)offsets;
+        if (cfg->with_neighbors) {
+            tile_offsets = (int *)neighbor_offsets;
+            num_tiles = 9;
+        }
+
+        for (int t = 0; t < num_tiles; t++) {
+            int tx = center_x + tile_offsets[t * 2];
+            int ty = center_y + tile_offsets[t * 2 + 1];
+
+            /* Skip if out of bounds */
+            if (!tile_in_bounds(&bounds, z, tx, ty)) {
+                if (cfg->verbose) {
+                    printf("  %d/%d/%d: (out of bounds)\n", z, tx, ty);
+                }
+                continue;
+            }
+
+            CTTileCoord coord = {z, tx, ty};
+            TileStats stats = {0};
+
+            /* Count features */
+            count_tile_features(pbf, coord, &stats);
+
+            /* Generate carta tile */
+            size_t size;
+            if (cfg->mvt_mode) {
+                size = generate_carta_mvt(pbf, coord, buffer, buffer_capacity, &stats);
+            } else {
+                size = generate_carta_png(pbf, coord, cfg->tile_size, buffer,
+                                          buffer_capacity, &stats);
+            }
+
+            /* Save carta tile */
+            char carta_path[1024];
+            snprintf(carta_path, sizeof(carta_path), "%s/carta_%d_%d_%d.%s",
+                     cfg->output_dir, z, tx, ty, ext);
+
+            if (size > 0) {
+                write_file(carta_path, buffer, size);
+                zoom_stats[stats_idx].tiles_rendered++;
+            } else {
+                zoom_stats[stats_idx].tiles_empty++;
+            }
+
+            /* Fetch OSM tile (PNG only, skip if requested) */
+            if (!cfg->mvt_mode && !cfg->skip_osm) {
+                CurlBuffer osm_buf = {0};
+                if (fetch_osm_tile(z, tx, ty, &osm_buf) == 0) {
+                    char osm_path[1024];
+                    snprintf(osm_path, sizeof(osm_path), "%s/osm_%d_%d_%d.png",
+                             cfg->output_dir, z, tx, ty);
+                    write_file(osm_path, osm_buf.data, osm_buf.size);
+                    free(osm_buf.data);
+                }
+            }
+
+            /* Update zoom stats */
+            zoom_stats[stats_idx].total_render_ms += stats.render_time_ms;
+            zoom_stats[stats_idx].total_features += stats.num_water + stats.num_roads +
+                                                    stats.num_buildings + stats.num_landuse;
+            zoom_stats[stats_idx].total_water += stats.num_water;
+            zoom_stats[stats_idx].total_roads += stats.num_roads;
+            zoom_stats[stats_idx].total_buildings += stats.num_buildings;
+            zoom_stats[stats_idx].total_landuse += stats.num_landuse;
+
+            /* Report tile */
+            const char *pos = "";
+            if (cfg->with_neighbors) {
+                if (t == 4) pos = " [CENTER]";
+                else if (t == 0) pos = " [NW]";
+                else if (t == 2) pos = " [NE]";
+                else if (t == 6) pos = " [SW]";
+                else if (t == 8) pos = " [SE]";
+            }
+
+            if (size == 0) {
+                printf("  %d/%d/%d: (empty)%s\n", z, tx, ty, pos);
+            } else {
+                printf("  %d/%d/%d: %.1f KB, %.1f ms%s [w:%zu r:%zu b:%zu l:%zu]\n",
+                       z, tx, ty, size / 1024.0, stats.render_time_ms, pos,
+                       stats.num_water, stats.num_roads, stats.num_buildings, stats.num_landuse);
+            }
+        }
+        printf("\n");
+    }
+
+    /* Print summary */
+    printf("=== Zoom Range Summary ===\n\n");
+    printf("Zoom | Tiles | Empty | Avg Time | Features | Water | Roads | Bldgs | Land\n");
+    printf("-----|-------|-------|----------|----------|-------|-------|-------|-----\n");
+
+    int total_tiles = 0;
+    int total_empty = 0;
+    double total_time = 0.0;
+    size_t total_features = 0;
+
+    for (int i = 0; i < num_zooms; i++) {
+        ZoomStats *zs = &zoom_stats[i];
+        int tiles = zs->tiles_rendered + zs->tiles_empty;
+        double avg_ms = tiles > 0 ? zs->total_render_ms / tiles : 0.0;
+
+        printf("  %2d | %5d | %5d | %6.1f ms | %8zu | %5zu | %5zu | %5zu | %4zu\n",
+               zs->zoom, zs->tiles_rendered, zs->tiles_empty, avg_ms,
+               zs->total_features, zs->total_water, zs->total_roads,
+               zs->total_buildings, zs->total_landuse);
+
+        total_tiles += tiles;
+        total_empty += zs->tiles_empty;
+        total_time += zs->total_render_ms;
+        total_features += zs->total_features;
+    }
+
+    printf("\n");
+    printf("Total tiles rendered: %d (%d empty)\n", total_tiles - total_empty, total_empty);
+    printf("Total render time: %.1f ms\n", total_time);
+    printf("Total features: %zu\n", total_features);
+    printf("Output directory: %s/\n", cfg->output_dir);
+
+    free(zoom_stats);
     return 0;
 }
 
@@ -776,6 +1017,8 @@ int main(int argc, char **argv)
             result = run_single_mode(pbf, &cfg, buffer, buffer_capacity);
         } else if (cfg.mode == MODE_BATCH) {
             result = run_batch_mode(pbf, &cfg, buffer, buffer_capacity);
+        } else if (cfg.mode == MODE_ZOOM_RANGE) {
+            result = run_zoom_range_mode(pbf, &cfg, buffer, buffer_capacity);
         }
 
         free(buffer);
