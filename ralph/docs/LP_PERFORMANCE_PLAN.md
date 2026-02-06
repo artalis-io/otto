@@ -1,9 +1,11 @@
 # Ralph LP Solver Performance Improvement Plan
 
 ## Goal
-Match GLPK performance (currently ~8x faster on large problems).
+Match GLPK performance on speed and solve all NETLIB tiny suite problems correctly.
 
-## Current Benchmark (1000x500 LP) - Updated January 2026
+## Current Status (February 2026)
+
+### Performance Benchmark (1000x500 LP)
 | Solver | Time | Iterations | Per-Iteration |
 |--------|------|------------|---------------|
 | Ralph  | 0.95s | 2476       | 0.385ms       |
@@ -11,6 +13,47 @@ Match GLPK performance (currently ~8x faster on large problems).
 
 **Progress**: Per-iteration time reduced from 0.58ms to 0.385ms (33% improvement).
 **Remaining gap**: 8.8x per-iteration (down from 13x).
+
+### NETLIB Tiny Suite Results
+| Problem | Status | Notes |
+|---------|--------|-------|
+| kb2 | ✅ PASS | 3 iterations |
+| share2b | ✅ PASS | 105 iterations |
+| adlittle | ✅ PASS | 133 iterations |
+| bnl1 | ⚠️ MISMATCH | 0.009% objective error |
+| beaconfd | ❌ FAIL | Singular basis at iter 163 (140 equality constraints) |
+
+**Current**: 3/5 pass
+**Target**: 5/5 pass (requires two-phase simplex implementation)
+
+---
+
+## Numerical Stability (Critical for NETLIB)
+
+Problems with many equality constraints (like beaconfd with 140 equalities out of 173 total) fail with the Big-M method due to accumulated numerical error. The detailed plan for fixing this is in **[PLAN_TWO_PHASE_SIMPLEX.md](PLAN_TWO_PHASE_SIMPLEX.md)**.
+
+### Summary of Numerical Stability Improvements
+
+| Phase | Feature | Impact | Effort |
+|-------|---------|--------|--------|
+| 1 | **True Two-Phase Simplex** | High - fixes beaconfd | 3-4 days |
+| 2 | **Equilibration Scaling** | Medium - improves conditioning | 1-2 days |
+| 3 | **Intelligent Basis Repair** | Medium - defense in depth | 2-3 days |
+
+### Current Status
+- ✅ Basic basis repair mechanism added (swap structurals with slacks)
+- ⏳ Two-phase simplex not yet implemented (Big-M still used)
+- ⏳ Equilibration scaling not yet implemented
+
+### Root Cause Analysis
+
+The Big-M method adds artificial variable costs of 1e8 to the objective. After ~163 iterations on beaconfd:
+1. LU factorization accumulates numerical error
+2. Basis matrix becomes nearly singular (condition number > 1e10)
+3. Pivot selection fails due to near-linear dependence
+4. Current repair mechanism cannot recover
+
+Two-phase simplex eliminates Big-M entirely, using a Phase 1 objective of `sum(artificials)` which has much better numerical properties.
 
 ---
 
@@ -448,10 +491,11 @@ for (int p = colptr[j]; p < colptr[j+1]; p++) {
 
 ## Verification Strategy
 
-1. **Correctness**: All 59 existing tests must pass after each change
-2. **Performance**: Run `bench_vs_glpk` before/after each phase
-3. **Profiling**: Use `perf record` / `perf report` to verify hotspot reduction
-4. **Memory**: Use `valgrind --tool=cachegrind` to verify cache improvement
+1. **Correctness**: All 76 existing tests must pass after each change
+2. **NETLIB**: Run `./ralph-benchmark --suite tiny` - target 5/5 pass
+3. **Performance**: Run `bench_vs_glpk` before/after each phase
+4. **Profiling**: Use `perf record` / `perf report` to verify hotspot reduction
+5. **Memory**: Use `valgrind --tool=cachegrind` to verify cache improvement
 
 ---
 

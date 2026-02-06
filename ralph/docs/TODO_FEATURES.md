@@ -364,6 +364,26 @@ RalphLapStatus ralph_clap_solve(const RalphClapProblem *prob, RalphClapResult *r
 
 ## 2. Network Flow Solver
 
+### Current State ✅ IMPLEMENTED (2026-01-31)
+
+Ralph now has a dedicated network simplex solver with:
+- **Network Simplex**: Spanning tree basis, O(nm) per iteration
+- **Problem Detection**: Automatic detection of network structure in LP models
+- **Special Case Detection**: SHORTEST_PATH, ASSIGNMENT, TRANSPORTATION, GENERAL
+- **Warm Start**: Reuse basis for re-optimization
+- **Bottleneck**: Minimize maximum arc cost used
+- **Cost Scaling**: Epsilon scaling for degenerate problems
+
+**Test coverage:** 153 tests (100% passing)
+
+**Performance (2026-01-31):**
+| Network Size | With Detection | Without Detection | Speedup |
+|--------------|----------------|-------------------|---------|
+| 30 nodes | 0.13ms | 0.36ms | **2.8×** |
+| 60 nodes | 0.52ms | 2.30ms | **4.4×** |
+| 90 nodes | 1.38ms | 6.25ms | **4.5×** |
+| 150 nodes | 4.28ms | 22.45ms | **5.2×** |
+
 ### Problem Definition
 
 **Minimum Cost Network Flow:**
@@ -381,13 +401,13 @@ Where:
 
 ### Special Cases
 
-| Problem | Characteristics |
-|---------|-----------------|
-| Shortest Path | Single source, single sink, unit flow |
-| Maximum Flow | Zero costs, maximize flow s→t |
-| Assignment | Bipartite, unit capacities, balanced supply/demand |
-| Transportation | Bipartite, no transshipment nodes |
-| Min-Cost Max-Flow | Cost minimization with max-flow constraint |
+| Problem | Characteristics | Detection |
+|---------|-----------------|-----------|
+| Shortest Path | Single source, single sink, unit flow | ✅ Detected |
+| Maximum Flow | Zero costs, maximize flow s→t | Planned |
+| Assignment | Bipartite, unit capacities, balanced supply/demand | ✅ Delegated to LAP |
+| Transportation | Bipartite, no transshipment nodes | ✅ Detected |
+| Min-Cost Max-Flow | Cost minimization with max-flow constraint | Planned |
 
 ### Proposed Algorithm: Network Simplex
 
@@ -632,28 +652,28 @@ For sparse networks (m = O(n)), network simplex is O(n) per iteration vs O(n²).
 
 ### TODOs
 
-- [ ] Create `include/netflow.h` with network flow API
-- [ ] Create `src/netflow.c` with network simplex core
-- [ ] Implement spanning tree data structure with thread
-- [ ] Implement tree potential computation
-- [ ] Implement cycle detection and ratio test
-- [ ] Implement tree pivot (structure update)
-- [ ] Add Big-M initialization for infeasibility detection
-- [ ] Implement max-flow specialization
-- [ ] Add push-relabel algorithm (`src/maxflow.c`)
-- [ ] Create unit tests for network flow
-- [ ] Benchmark against general simplex on network problems
-- [ ] Integrate with problem detection (Section 3)
+- [x] Create `include/netflow.h` with network flow API
+- [x] Create `src/netflow.c` with network simplex core
+- [x] Implement spanning tree data structure with thread
+- [x] Implement tree potential computation
+- [x] Implement cycle detection and ratio test
+- [x] Implement tree pivot (structure update)
+- [x] Add Big-M initialization for infeasibility detection
+- [ ] Implement max-flow specialization (push-relabel)
+- [x] Create unit tests for network flow (153 tests)
+- [x] Benchmark against general simplex on network problems
+- [x] Integrate with problem detection (Section 3)
 
-### Files to Create/Modify
+### Files Created
 
-| File | Action |
+| File | Status |
 |------|--------|
-| `include/netflow.h` | **Create** - Network flow API |
-| `src/netflow.c` | **Create** - Network simplex implementation |
-| `src/maxflow.c` | **Create** - Push-relabel max flow |
-| `tests/test_netflow.c` | **Create** - Network flow tests |
-| `benchmarks/bench_netflow.c` | **Create** - Network benchmarks |
+| `include/netflow.h` | ✅ Created - Network flow API |
+| `src/netflow.c` | ✅ Created - Network simplex implementation |
+| `tests/test_netflow.c` | ✅ Created - 153 unit tests |
+| `benchmarks/bench_netflow.c` | ✅ Created - Network benchmarks |
+| `include/detect.h` | ✅ Extended - Network detection |
+| `src/detect.c` | ✅ Extended - Network solving |
 
 ### References
 
@@ -664,6 +684,15 @@ For sparse networks (m = O(n)), network simplex is O(n) per iteration vs O(n²).
 
 ## 3. Automatic Problem Detection and Delegation
 
+### Current State ✅ IMPLEMENTED (2026-01-31)
+
+Ralph automatically detects special structure and delegates to specialized solvers:
+- **LAP Detection**: 86-633× faster than simplex on assignment problems
+- **Network Detection**: 2-5× faster on network flow problems
+- **Set Cover Detection**: Used for specialized MIP cuts and heuristics
+
+Enable with: `ralph_set_int_param(model, "detect_special", 1)`
+
 ### Motivation
 
 Many real-world LPs have special structure that specialized algorithms can exploit:
@@ -671,7 +700,7 @@ Many real-world LPs have special structure that specialized algorithms can explo
 - Network flows: O(nm) network simplex vs O(m²) general simplex
 - Transportation: Specialized stepping-stone method
 
-Ralph should automatically detect these structures and delegate to the appropriate solver.
+Ralph automatically detects these structures and delegates to the appropriate solver.
 
 ### Detection Strategy
 
@@ -916,29 +945,26 @@ ralph_set_dbl_param(model, "detect_threshold", 0.95);  // Confidence threshold
 
 ### TODOs
 
-- [ ] Create `include/detect.h` with detection API
-- [ ] Create `src/detect.c` with problem analysis
-- [ ] Implement `detect_lap()` for assignment problems
-- [ ] Implement `detect_network()` for network flows
-- [ ] Implement `detect_transportation()` for transportation problems
-- [ ] Create `include/dispatch.h` with solver dispatcher
-- [ ] Create `src/dispatch.c` with automatic solver selection
-- [ ] Integrate detection into `ralph_optimize()`
-- [ ] Add solution mapping back to original variables
-- [ ] Add parameters for enabling/disabling detection
-- [ ] Create tests for problem detection
-- [ ] Benchmark detection overhead
+- [x] Create `include/detect.h` with detection API
+- [x] Create `src/detect.c` with problem analysis
+- [x] Implement `detect_lap()` for assignment problems
+- [x] Implement `detect_network()` for network flows
+- [x] Implement `detect_transportation()` (part of network detection)
+- [x] Implement `detect_set_cover()` for SCP/SPP
+- [x] Integrate detection into `ralph_optimize()`
+- [x] Add solution mapping back to original variables
+- [x] Add parameters for enabling/disabling detection
+- [x] Create tests for problem detection (194 tests)
+- [x] Benchmark detection overhead (~0.1ms for 100×100)
 
-### Files to Create/Modify
+### Files Created
 
-| File | Action |
+| File | Status |
 |------|--------|
-| `include/detect.h` | **Create** - Detection structures and API |
-| `src/detect.c` | **Create** - Problem structure detection |
-| `include/dispatch.h` | **Create** - Solver dispatcher API |
-| `src/dispatch.c` | **Create** - Automatic solver selection |
-| `src/ralph.c` | **Modify** - Integrate detection in optimize() |
-| `tests/test_detect.c` | **Create** - Detection tests |
+| `include/detect.h` | ✅ Created - Detection API for LAP, Network, SCP |
+| `src/detect.c` | ✅ Created - Problem structure detection |
+| `src/ralph.c` | ✅ Modified - Integrated detection before presolve |
+| `tests/test_detect.c` | ✅ Created - 194 detection tests |
 
 ---
 
@@ -2034,35 +2060,41 @@ static const ParamMapping dbl_params[] = {
 
 ## Implementation Priority
 
-Recommended order of implementation:
+### Completed Features (as of February 2026)
 
-1. **External Solver Backends (HiGHS, GLPK)** - High priority
-   - Enables production-grade performance immediately
+1. ✅ **Linear Assignment (LAP)** - COMPLETED 2026-01-29
+   - JVC algorithm with SIMD, sparse, rectangular, warm start, k-best, bottleneck
+   - Priority constraints, cardinality bounds, qualification subsets
+   - 358 tests, full benchmarks
+
+2. ✅ **Network Flow Solver** - COMPLETED 2026-01-31
+   - Network simplex with spanning tree basis
+   - Warm start, bottleneck, cost scaling
+   - 153 tests, full benchmarks
+
+3. ✅ **Problem Detection** - COMPLETED 2026-01-31
+   - LAP, Network, Set Cover detection
+   - Integrated into ralph_optimize() before presolve
+   - 194 tests
+
+### Next Priorities
+
+1. **LP Numerical Stability** - High priority
+   - Two-phase simplex to replace Big-M method
+   - Required to pass NETLIB tiny suite (beaconfd fails)
+   - See [PLAN_TWO_PHASE_SIMPLEX.md](PLAN_TWO_PHASE_SIMPLEX.md)
+
+2. **External Solver Backends (HiGHS, GLPK)** - Medium priority
+   - Enables production-grade performance for complex MIPs
    - Low risk (wraps proven solvers)
-   - Backend abstraction benefits all future development
    - HiGHS especially valuable (MIT license, excellent MIP)
 
-2. ~~**Linear Assignment (LAP)**~~ ✅ COMPLETED (2026-01-29)
-   - JVC algorithm with SIMD, sparse, rectangular, warm start
-   - 146 tests, full benchmarks
-   - See `include/lap.h`, `src/lap.c`
-
-3. **Problem Detection** - High priority
-   - Foundation for automatic delegation
-   - Benefits existing solvers immediately
-   - Low implementation complexity
-
-4. **Network Flow** - Medium priority
-   - Significant speedup for network problems
-   - More complex than LAP (tree data structures)
-   - Network simplex well-documented
-
-5. **Benders Decomposition** - Medium priority
+3. **Benders Decomposition** - Medium priority
    - Requires Farkas ray extraction (partially implemented)
    - Very useful for two-stage stochastic programming
-   - Modular: can start with basic version
+   - Needed for proper FuelWise Benders solver
 
-6. **Dantzig-Wolfe Decomposition** - Lower priority
+4. **Dantzig-Wolfe Decomposition** - Lower priority
    - Most complex implementation
    - Requires dynamic column management
    - Branch-and-price is even more complex

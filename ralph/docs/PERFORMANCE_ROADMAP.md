@@ -1,6 +1,12 @@
 # Ralph Performance Optimization Roadmap
 
-## Current State (January 2026)
+> **See also**:
+> - [LP_PERFORMANCE_PLAN.md](LP_PERFORMANCE_PLAN.md) - Detailed current optimizations with profiling data
+> - [PLAN_TWO_PHASE_SIMPLEX.md](PLAN_TWO_PHASE_SIMPLEX.md) - Numerical stability improvements
+
+This document covers **research-level** optimizations. For current implementation priorities, see LP_PERFORMANCE_PLAN.md.
+
+## Current State (February 2026)
 
 **Benchmark: 500×250 LP, 15% dense, Dantzig pricing**
 
@@ -15,6 +21,8 @@
 - 27% `apply_ft_spikes_backward` - BTRAN update application
 - 26% `apply_ft_spikes_forward` - FTRAN update application
 - 5% Other (solve_L, solve_U, pricing, ratio test)
+
+**NETLIB Status:** 3/5 tiny suite pass (beaconfd fails due to numerical issues - see PLAN_TWO_PHASE_SIMPLEX.md)
 
 ---
 
@@ -445,7 +453,7 @@ if (m < DENSE_THRESHOLD) {
 
 ### 6.3 Preconditioning
 
-**Current:** No preconditioning.
+**Current:** Basic scaling, no equilibration.
 
 **Improvement:** Scale matrix before factorization.
 
@@ -458,6 +466,8 @@ void equilibrate(SparseMatrix *B, double *row_scale, double *col_scale);
 - Better numerical stability
 - Reduced fill-in in some cases
 - Better pivot selection
+
+> **Note:** Detailed equilibration scaling plan in [PLAN_TWO_PHASE_SIMPLEX.md](PLAN_TWO_PHASE_SIMPLEX.md#phase-2-equilibration-scaling-medium-impact)
 
 ---
 
