@@ -1739,6 +1739,28 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         return -1;  /* Singular update */
     }
 
+    /* Threshold pivoting for updates: check if pivot is too small relative to
+     * the maximum element in the spike column. This prevents accumulation of
+     * numerical error from ill-conditioned pivots and forces refactorization
+     * before stability degrades.
+     *
+     * Threshold = 0.001 (0.1%) is less aggressive than MARKOWITZ_THRESHOLD (10%)
+     * to avoid excessive refactorization while still catching very bad pivots.
+     * This is more conservative than RALPH_PIVOT_TOL (1e-10) alone. */
+#define RALPH_UPDATE_PIVOT_THRESHOLD 0.001
+
+    double max_abs_spike = fabs(spike[step_pos]);
+    for (int i = 0; i < m; i++) {
+        double absval = fabs(spike[i]);
+        if (absval > max_abs_spike) max_abs_spike = absval;
+    }
+
+    if (fabs(spike[step_pos]) < RALPH_UPDATE_PIVOT_THRESHOLD * max_abs_spike) {
+        /* Pivot is too small relative to column magnitude.
+         * Force refactorization to get a more stable basis representation. */
+        return -1;
+    }
+
     /* Normalize spike column and count OFF-DIAGONAL non-zeros */
     double pivot = spike[step_pos];
     double diag_val = 1.0 / pivot;

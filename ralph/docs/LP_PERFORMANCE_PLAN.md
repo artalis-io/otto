@@ -44,7 +44,7 @@ Problems with many equality constraints require both numerical improvements (two
 | 2 | **Presolve Module** | ✅ Phase 1 Complete | Reduces beaconfd 262→148 vars, 173→87 cons |
 | 3 | **Problem Scaling** | ✅ Complete | Equilibration scaling in simplex.c |
 | 4 | **Iterative Refinement** | ✅ Complete | Residual correction in tableau_compute_solution() |
-| 5 | **LU Pivot Selection** | ⏳ Next | Threshold pivoting (Markowitz + stability) |
+| 5 | **LU Pivot Selection** | ✅ Complete | Threshold pivoting in factorization + updates |
 
 ### Current Status
 - ✅ Two-phase simplex implemented (triggers for >80% equalities)
@@ -52,41 +52,59 @@ Problems with many equality constraints require both numerical improvements (two
 - ✅ Presolve with redundant row detection
 - ✅ Equilibration scaling (geometric mean)
 - ✅ Iterative refinement for solution computation
+- ✅ Threshold pivoting in sparse factorization (MARKOWITZ_THRESHOLD = 0.1)
+- ✅ Threshold pivoting in LU updates (RALPH_UPDATE_PIVOT_THRESHOLD = 0.001)
 - ⚠️ LU regularization disabled (causes NaN - see below)
-- ⏳ Threshold pivoting needed for beaconfd
+- ⏳ beaconfd still fails - needs Harris ratio test or bound perturbation
 
 ### beaconfd Status (Feb 2026)
 
 beaconfd has 140 equalities out of 173 constraints. After presolve:
 - ✅ Presolve reduces: 262 vars → 148, 173 cons → 87
 - ✅ Redundant row detection finds rank=87 (full rank)
-- ❌ Phase 2 fails with near-singular basis (LU refactorization fails)
+- ❌ Phase 2 fails with near-singular basis
 
 **Root Cause Analysis:**
 1. The basis matrix becomes ill-conditioned during Phase 2 optimization
 2. LU regularization was tried but causes problems:
    - Small regularization (1e-6): Causes NaN via 1/1e-6 = 1e6 multipliers
    - Large regularization (1.0): Destroys constraint structure → UNBOUNDED
-3. The real fix is threshold pivoting to avoid selecting pivots that lead to ill-conditioning
+3. Threshold pivoting was added (Feb 2026) but isn't sufficient alone
 
-### LU Stability Improvement Plan
+**What we've tried:**
+- ✅ Threshold pivoting in sparse factorization (MARKOWITZ_THRESHOLD = 0.1)
+- ✅ Threshold pivoting in LU updates (RALPH_UPDATE_PIVOT_THRESHOLD = 0.001)
+- ✅ Equilibration scaling
+- ✅ Iterative refinement
+- ❌ These improvements don't prevent the basis from becoming ill-conditioned
 
-The remaining improvement needed for beaconfd:
+**Why threshold pivoting isn't enough:**
+Threshold pivoting helps the LU factorization choose stable pivots when it HAS a choice.
+But the simplex algorithm picks which column enters and leaves based on the ratio test,
+and threshold pivoting can only reject the update (forcing refactorization). If the
+basis itself is fundamentally ill-conditioned, refactorization won't help.
+
+### Remaining Improvements for beaconfd
 
 | Priority | Improvement | Rationale | Effort |
 |----------|-------------|-----------|--------|
-| **1st** | Threshold pivoting | Prevents pivot selection that leads to ill-conditioning | ~200 LOC |
+| **1st** | Harris ratio test | Prefer leaving variables that give larger pivots | ~100 LOC |
+| **2nd** | Bound perturbation | Break degeneracy to avoid stalling/cycling | ~150 LOC |
+| **3rd** | Dual simplex | May have better numerical properties for beaconfd | ~500 LOC |
 
-**Threshold Pivoting** (Markowitz with stability):
+**Harris Ratio Test with Pivot Tolerance:**
 ```c
-// Only accept pivot if |a_ij| >= threshold * max_in_column
-// Prevents tiny pivots that cause numerical instability
+// In ratio test, prefer candidates with larger pivot elements
+// Break ties by choosing the one that gives a more stable basis
+double harris_score = ratio + PIVOT_BONUS * fabs(pivot);
 ```
 
-**Iterative Refinement**:
+**Bound Perturbation:**
 ```c
-// After Bx = b solve: x = x + B^{-1}(b - Bx)
-// Corrects residual errors from finite precision
+// Perturb variable bounds slightly to break degeneracy
+// This prevents many degenerate pivots that don't improve objective
+x_lb = x_lb - epsilon * (1 + rand());
+x_ub = x_ub + epsilon * (1 + rand());
 ```
 
 ---
