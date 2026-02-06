@@ -662,13 +662,82 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
     return sparse_get_columns(tab->A_ext, tab->m, tab->basis);
 }
 
+/*
+ * Attempt to repair a singular basis by replacing problematic columns
+ * with slack/artificial variables. Returns 0 on success, -1 on failure.
+ */
+static int repair_singular_basis(SimplexTableau *tab) {
+    int m = tab->m;
+    int n = tab->n;
+    int num_struct = tab->model->num_vars;
+    int repairs = 0;
+    const int MAX_REPAIRS = 50;
+
+    /* Build a copy of the basis for analysis */
+    SparseMatrix *B = build_basis_matrix(tab);
+    if (!B) return -1;
+
+    /* Try to identify linearly dependent columns by replacing basis variables
+     * with slack/artificial variables and attempting factorization */
+    for (int attempt = 0; attempt < MAX_REPAIRS && repairs < MAX_REPAIRS; attempt++) {
+        /* Try factorization */
+        int status = lu_factorize(tab->lu, B);
+        if (status == 0) {
+            sparse_free(B);
+            return 0;  /* Success */
+        }
+
+        /* Factorization failed - try replacing a structural variable in the basis
+         * with a slack variable that's currently non-basic */
+        int replaced = 0;
+
+        /* Try each basis position from last to first */
+        for (int k = m - 1; k >= 0 && !replaced; k--) {
+            int j = tab->basis[k];
+
+            /* Only try to replace structural variables with the slack for row k */
+            if (j < num_struct) {
+                int slack_idx = num_struct + k;  /* Slack for constraint k */
+                if (slack_idx < n &&
+                    (tab->var_status[slack_idx] == RALPH_NONBASIC_LOWER ||
+                     tab->var_status[slack_idx] == RALPH_NONBASIC_UPPER)) {
+                    /* Swap: move j out of basis, slack_idx into basis */
+                    tab->var_status[j] = RALPH_NONBASIC_LOWER;
+                    tab->x[j] = tab->lb_ext[j];
+                    tab->var_status[slack_idx] = RALPH_BASIC;
+                    tab->basis[k] = slack_idx;
+                    tab->basis_pos[j] = -1;
+                    tab->basis_pos[slack_idx] = k;
+
+                    /* Rebuild B */
+                    sparse_free(B);
+                    B = build_basis_matrix(tab);
+                    if (!B) return -1;
+
+                    replaced = 1;
+                    repairs++;
+                }
+            }
+        }
+
+        if (!replaced) break;
+    }
+
+    sparse_free(B);
+    return -1;  /* Failed to repair */
+}
+
 int tableau_refactorize(SimplexTableau *tab) {
     SparseMatrix *B = build_basis_matrix(tab);
     if (!B) return -1;
 
     int status = lu_factorize(tab->lu, B);
-
     sparse_free(B);
+
+    if (status != 0) {
+        /* Factorization failed - try to repair the basis */
+        status = repair_singular_basis(tab);
+    }
 
     return status;
 }
@@ -2012,8 +2081,12 @@ static int simplex_phase2(SimplexSolver *solver) {
         /* Refactorize if needed */
         if (lu_needs_refactorization(tab->lu)) {
             if (tableau_refactorize(tab) != 0) {
+                if (solver->verbose) {
+                    fprintf(stderr, "[primal_simplex] ERROR: refactorization failed at iter %d\n", iter);
+                }
                 primal_remove_perturbation(tab);
                 solver->status = RALPH_STATUS_ERROR;
+                solver->iterations = iter;
                 return -1;
             }
             /* After refactorization, recompute solution to eliminate drift */
