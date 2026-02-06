@@ -238,6 +238,13 @@ typedef struct {
     double *aux_coef;       /* For each aux var: coefficient in that row (+1 or -1) */
     int num_aux;            /* Number of auxiliary variables */
 
+    /* Two-phase simplex support */
+    int use_two_phase;          /* 1 if using two-phase method (not Big-M) */
+    double *c_original;         /* Original objective coefficients (for Phase 2) */
+    int *artificial_vars;       /* Indices of artificial variables */
+    int num_artificial;         /* Count of artificial variables */
+    int num_equalities;         /* Count of equality constraints */
+
     /* Statistics */
     int iterations;
     int phase;              /* 1 or 2 */

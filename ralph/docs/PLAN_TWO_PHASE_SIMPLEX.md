@@ -1,7 +1,7 @@
 # Implementation Plan: Two-Phase Simplex and Numerical Stability
 
 > **Part of**: [LP Performance Plan](LP_PERFORMANCE_PLAN.md)
-> **Status**: Planning (basic basis repair implemented)
+> **Status**: Phase 1 Implemented (two-phase infrastructure complete, beaconfd still failing)
 > **Priority**: High - required to pass NETLIB tiny suite
 
 ## Problem Statement
@@ -18,8 +18,51 @@ The Big-M method fails on problems with many equality constraints (e.g., beaconf
 | kb2 | 0 | 5 | ✅ PASS |
 | share2b | 13 | 96 | ✅ PASS |
 | adlittle | 15 | 56 | ✅ PASS |
-| bnl1 | 9 | 643 | ⚠️ 0.009% error |
-| beaconfd | **140** | 173 | ❌ FAIL (singular at iter 163) |
+| bnl1 | 232 | 643 | ✅ PASS (0.009% error) |
+| beaconfd | **140** | 173 | ❌ FAIL (see below) |
+
+**Note**: bnl1's equality count was incorrectly listed as 9 in the original plan; the actual count is 232.
+
+## Implementation Status
+
+### ✅ Phase 1: Two-Phase Infrastructure (Complete)
+
+Two-phase simplex is now implemented but only triggers for problems with > 80% equality constraints:
+
+**Files modified:**
+- `src/simplex.c`: Added `simplex_phase1()`, `simplex_transition_phase2()`
+- `include/lp.h`: Added `use_two_phase`, `c_original`, `artificial_vars`, `num_artificial`, `num_equalities`
+
+**Implementation:**
+1. Count equality constraints during tableau creation
+2. If equalities > 80% of constraints, use two-phase method
+3. Phase 1: Minimize sum of artificial variables (cost = 1.0 each)
+4. Transition: Fix non-basic artificials at zero (RALPH_FIXED status)
+5. Phase 2: Continue with original objective
+
+**Current issue with beaconfd:**
+- Phase 1 completes successfully (158 iterations)
+- 10 artificial variables remain stuck in basis at zero (redundant rows)
+- Phase 2 refactorization fails at iteration 19 due to numerical issues from stuck artificials
+
+### 🔄 Next Steps: Handle Stuck Artificials
+
+The remaining issue is handling artificial variables that cannot be pivoted out of the basis:
+
+**Option A: Redundant Row Detection**
+- Identify rows where artificial is stuck (basis position)
+- Detect and remove redundant rows before Phase 2
+- Requires modifying constraint matrix structure
+
+**Option B: Improved Pivot Selection**
+- Use more aggressive search for replacement variables
+- Try multiple candidates per stuck artificial
+- Fall back to Big-M if too many stuck
+
+**Option C: Numerical Refinement**
+- Use tighter tolerances when artificials are in basis
+- More frequent refactorization
+- Better condition monitoring
 
 The pattern is clear: problems with a high ratio of equality constraints fail.
 
