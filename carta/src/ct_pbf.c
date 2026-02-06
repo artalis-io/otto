@@ -1422,6 +1422,10 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
             } else {
                 feature_type = classify_waterway(val);
             }
+        } else if (strcmp(key, "building") == 0) {
+            /* Building multipolygons: buildings with courtyards/holes */
+            feature_class = CT_OSM_BUILDING;
+            feature_type = 0;  /* No sub-type for buildings */
         }
     }
 
