@@ -111,7 +111,7 @@ CsInputResult cs_input(
         },
         .backgroundColor = bg,
         .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius),
-        .border = { .width = {1, 1, 1, 1}, .color = border }
+        .border = { .width = {1, 1, 1, 1, 0}, .color = border }
     };
 
     /* Check if we need a wrapper for margin/alignment */

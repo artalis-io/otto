@@ -202,7 +202,7 @@ static void render_layer_panel(void) {
         .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .padding = CLAY_PADDING_ALL(8), .childGap = 6 },
         .backgroundColor = THEME.bg_panel,
         .cornerRadius = CLAY_CORNER_RADIUS(8),
-        .border = { .width = {1, 1, 1, 1}, .color = THEME.border }
+        .border = { .width = {1, 1, 1, 1, 0}, .color = THEME.border }
     }) {
         CLAY_TEXT(CLAY_STRING("Layers"), CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
 
@@ -286,7 +286,7 @@ static void render_info_panel(void) {
         .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .padding = CLAY_PADDING_ALL(12), .childGap = 8 },
         .backgroundColor = THEME.bg_panel,
         .cornerRadius = CLAY_CORNER_RADIUS(8),
-        .border = { .width = {1, 1, 1, 1}, .color = THEME.border }
+        .border = { .width = {1, 1, 1, 1, 0}, .color = THEME.border }
     }) {
         CLAY_TEXT(CLAY_STRING("ClayShards Map"), CLAY_TEXT_CONFIG({ .fontSize = 16, .textColor = THEME.text }));
 
@@ -599,7 +599,7 @@ static void render_route_panel(void) {
         .layout = { .layoutDirection = CLAY_TOP_TO_BOTTOM, .padding = CLAY_PADDING_ALL(10), .childGap = 6 },
         .backgroundColor = THEME.bg_panel,
         .cornerRadius = CLAY_CORNER_RADIUS(8),
-        .border = { .width = {1, 1, 1, 1}, .color = THEME.border }
+        .border = { .width = {1, 1, 1, 1, 0}, .color = THEME.border }
     }) {
         /* Profile dropdown and mode selectors row */
         CLAY(CLAY_ID("RouteOptions"), {

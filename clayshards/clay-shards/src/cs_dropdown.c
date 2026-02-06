@@ -206,8 +206,8 @@ CsDropdownResult cs_dropdown(
                         .sizing = {
                             .width = CLAY_SIZING_FIXED(list_width),
                             .height = style->max_height > 0
-                                ? CLAY_SIZING_FIT((float)style->max_height)
-                                : CLAY_SIZING_FIT(0)
+                                ? CLAY_SIZING_FIT(.max = (float)style->max_height)
+                                : CLAY_SIZING_FIT(.max = 0)
                         },
                         .layoutDirection = CLAY_TOP_TO_BOTTOM,
                         .padding = {4, 4, 4, 4}
