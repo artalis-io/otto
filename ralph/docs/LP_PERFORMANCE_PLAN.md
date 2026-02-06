@@ -39,7 +39,8 @@ bnl1 (1175 vars, 643 cons) was incorrectly returning INFEASIBLE when presolve wa
 2. **detect_redundant_rows**: Was using Gaussian elimination to find linearly dependent
    rows, but incorrectly marked inequality constraints as redundant. A row being a linear
    combination of others doesn't mean the inequality is redundant - it could be tighter.
-   Fixed by only removing equality constraints that reduce to 0=0.
+   Fixed by only removing equality constraints that reduce to 0=0. Inequality constraints
+   are still checked for infeasibility (0 <= negative or 0 >= positive) but not removed.
 
 3. **bound_tightening**: Fixed with cancellation detection and single-round limit:
    - Skip variables whose contribution dominates row sum (>10% of abs_sum) to avoid cancellation
