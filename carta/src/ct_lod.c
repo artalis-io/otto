@@ -113,9 +113,12 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DITCH, 15, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_OTHER, 14, -1, 0, 0);
 
-    /* Railways - show by type and length */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 7, -1, 0, 50000);  /* Main rail >50km at z7 */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 10, -1, 0, 0);     /* All main rail at z10 */
+    /* Railways - OSM Carto shows rail at z7, others later
+     * Show main rail earlier to match OSM appearance.
+     */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 7, -1, 0, 20000);  /* Main rail >20km at z7 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 8, -1, 0, 5000);   /* Main rail >5km at z8 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 9, -1, 0, 0);      /* All main rail at z9 */
     ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_SUBWAY, 12, -1, 0, 0);   /* Subway at z12 */
     ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_TRAM, 13, -1, 0, 0);     /* Tram at z13 */
     ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_NARROW_GAUGE, 11, -1, 0, 0);
@@ -123,12 +126,18 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_DISUSED, 14, -1, 0, 0);  /* Disused late */
     ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_OTHER, 13, -1, 0, 0);
 
-    /* Landuse - show large areas earlier */
+    /* Landuse - show large areas earlier
+     * OSM Carto shows forests quite early. Hungary's forests are fragmented,
+     * so lower thresholds to match OSM appearance.
+     */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 6, -1, 50000000, 0);   /* >50km² at z6 */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 8, -1, 5000000, 0);    /* >5km² at z8 */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 10, -1, 500000, 0);    /* >0.5km² at z10 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 7, -1, 10000000, 0);   /* >10km² at z7 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 8, -1, 2000000, 0);    /* >2km² at z8 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 9, -1, 500000, 0);     /* >0.5km² at z9 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 10, -1, 100000, 0);    /* >0.1km² at z10 */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 12, -1, 0, 0);         /* All at z12 */
 
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 8, -1, 5000000, 0);       /* >5km² at z8 (national parks) */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 9, -1, 1000000, 0);      /* >1km² at z9 */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 11, -1, 100000, 0);      /* >0.1km² at z11 */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 13, -1, 0, 0);           /* All at z13 */
