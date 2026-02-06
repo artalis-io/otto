@@ -70,12 +70,12 @@ void ct_default_style(CTStyle *style)
     style->sand_color            = CT_RGB(245, 233, 186);  /* Beach/sand */
 
     /* Urban/developed area colors (OSM Carto-matched) */
-    style->residential_color     = CT_RGB(224, 223, 223);  /* #e0dfdf - OSM residential grey */
-    style->commercial_color      = CT_RGB(242, 218, 217);  /* #f2dad9 - OSM commercial light pink */
-    style->industrial_color      = CT_RGB(235, 219, 232);  /* #ebdbe8 - OSM industrial mauve */
+    style->residential_color     = CT_RGB(217, 217, 217);  /* #d9d9d9 - neutral grey for urban */
+    style->commercial_color      = CT_RGB(240, 224, 224);  /* #f0e0e0 - very light pink */
+    style->industrial_color      = CT_RGB(232, 219, 232);  /* #e8dbe8 - light mauve */
     style->farmland_color        = CT_RGB(238, 240, 213);  /* #eef0d5 - OSM farmland light yellow */
     style->cemetery_color        = CT_RGB(170, 203, 175);  /* #aacbaf - OSM cemetery muted green */
-    style->military_color        = CT_RGB(243, 216, 216);  /* #f3d8d8 - OSM military light pink */
+    style->military_color        = CT_RGB(240, 224, 224);  /* #f0e0e0 - light pink */
 
     /* Railway colors by type (OSM Carto-inspired) */
     style->railway_colors[CT_RAILWAY_RAIL]         = CT_RGB(112, 112, 112);  /* Main rail - dark gray */
@@ -275,10 +275,10 @@ void ct_style_boundary(const CTStyle *style, CTBoundaryType boundary_type,
         /* Administrative boundaries - purple by admin level */
         switch (admin_level) {
             case CT_BOUNDARY_COUNTRY:  /* admin_level=2 */
-                color = CT_RGBA(140, 60, 140, 180);  /* Stronger purple */
-                width = 2.0f;
-                dash = 10.0f;
-                gap = 5.0f;
+                color = CT_RGBA(140, 60, 140, 200);  /* Stronger purple, more opaque */
+                width = 4.0f;  /* Thicker for visibility */
+                dash = 12.0f;
+                gap = 6.0f;
                 break;
             case CT_BOUNDARY_STATE:  /* admin_level=4 */
                 color = CT_RGBA(160, 80, 160, 160);
