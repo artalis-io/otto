@@ -245,7 +245,7 @@ static void render_ui(void) {
                     CLAY_TEXT(CLAY_STRING("Priority:"),
                              CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
                     const CsDropdownStyle dd_style = {
-                        .width = 30,
+                        .width = 18,
                         .height = 1,
                         .font_size = 12,
                         .corner_radius = 0,
