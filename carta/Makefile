@@ -55,13 +55,16 @@ TEST_BIN = test_carta
 # CLI tool
 CLI_BIN = carta_cli
 
+# Comparison tool
+COMPARE_BIN = carta-compare
+
 # Benchmark binary
 BENCH_BIN = bench_carta
 
 # WASM output
 WASM_OUT = carta.js
 
-.PHONY: all clean test bench lib debug wasm cli fuzz
+.PHONY: all clean test bench lib debug wasm cli compare fuzz
 
 # Default target
 all: lib $(TEST_BIN)
@@ -89,6 +92,12 @@ $(CLI_BIN): src/cli.c $(LIB) $(SHARED_DIR)/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
 cli: $(CLI_BIN)
+
+# Comparison tool (requires libcurl)
+$(COMPARE_BIN): tools/carta_compare.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared -lcurl $(LDFLAGS) -o $@
+
+compare: $(COMPARE_BIN)
 
 # Run tests
 test: $(TEST_BIN)
@@ -137,7 +146,7 @@ $(FUZZ_BIN): $(FUZZ_SRCS) fuzz-lib
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(LIB) libcarta_fuzz.a
-	rm -f $(TEST_BIN) $(CLI_BIN) $(BENCH_BIN) $(FUZZ_BIN)
+	rm -f $(TEST_BIN) $(CLI_BIN) $(COMPARE_BIN) $(BENCH_BIN) $(FUZZ_BIN)
 	rm -f $(WASM_OUT) carta.wasm
 
 # Dependencies
@@ -166,6 +175,7 @@ help:
 	@echo "  test     - Build and run tests"
 	@echo "  bench    - Build and run benchmarks"
 	@echo "  cli      - Build command-line tool"
+	@echo "  compare  - Build tile comparison tool (requires libcurl)"
 	@echo "  debug    - Build with debug symbols"
 	@echo "  wasm     - Build WebAssembly (requires Emscripten)"
 	@echo "  fuzz     - Build fuzzer (requires clang with libFuzzer)"
