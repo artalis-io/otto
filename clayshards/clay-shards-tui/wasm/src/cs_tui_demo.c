@@ -317,7 +317,7 @@ static void render_ui(void) {
             },
             .backgroundColor = THEME.panel
         }) {
-            CLAY_TEXT(CLAY_STRING(" Tab: Navigate | Enter: Activate | Arrow Keys: Adjust "),
+            CLAY_TEXT(CLAY_STRING(" Q:Quit Tab/S-Tab:Nav Space/Enter:Act Arrows:Adj "),
                      CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
         }
     }
