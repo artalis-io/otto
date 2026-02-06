@@ -245,19 +245,19 @@ echo ""
 echo "Starting servers..."
 
 # Carta tile server - use index if available
-# 8 worker threads, no LOD filtering (for debugging), higher rate limits for demo
+# 8 worker threads, LOD filtering enabled for cleaner maps, higher rate limits for demo
 if [ -n "$CARTA_IDX" ] && [ -f "$CARTA_IDX" ]; then
     ./carta/api/carta-tile-server -p "$CARTA_PORT" -t 8 \
         --rate-limit-rps 50 --rate-limit-burst 200 \
-        --no-lod "$CARTA_IDX" >/dev/null 2>&1 &
+        "$CARTA_IDX" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:$CARTA_PORT) [PID: $CARTA_PID] - index"
+    echo "  Started: Carta (http://localhost:$CARTA_PORT) [PID: $CARTA_PID] - index + LOD"
 else
     ./carta/api/carta-tile-server -p "$CARTA_PORT" -t 8 \
         --rate-limit-rps 50 --rate-limit-burst 200 \
-        --no-lod "$PBF_FILE" >/dev/null 2>&1 &
+        "$PBF_FILE" >/dev/null 2>&1 &
     CARTA_PID=$!
-    echo "  Started: Carta (http://localhost:$CARTA_PORT) [PID: $CARTA_PID] - PBF"
+    echo "  Started: Carta (http://localhost:$CARTA_PORT) [PID: $CARTA_PID] - PBF + LOD"
 fi
 
 # Velo route server - use index if available
