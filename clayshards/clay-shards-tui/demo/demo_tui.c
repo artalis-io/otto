@@ -262,15 +262,16 @@ static bool process_headless_command(const char *cmd) {
     } else if (strncmp(cmd, "shift-tab", 9) == 0) {
         cs_focus_prev();
     } else if (strncmp(cmd, "enter", 5) == 0) {
-        cs_set_pending_click();
+        /* Use key_down for Enter to set pending_enter for buttons */
+        cs_key_down(13, false, false);
     } else if (strncmp(cmd, "up", 2) == 0) {
-        cs_key_down(1001, false, false);
+        cs_key_down(38, false, false);  /* Standard key code for Up arrow */
     } else if (strncmp(cmd, "down", 4) == 0) {
-        cs_key_down(1002, false, false);
+        cs_key_down(40, false, false);  /* Standard key code for Down arrow */
     } else if (strncmp(cmd, "left", 4) == 0) {
-        cs_key_down(1004, false, false);
+        cs_key_down(37, false, false);  /* Standard key code for Left arrow */
     } else if (strncmp(cmd, "right", 5) == 0) {
-        cs_key_down(1003, false, false);
+        cs_key_down(39, false, false);  /* Standard key code for Right arrow */
     } else if (strncmp(cmd, "backspace", 9) == 0) {
         cs_key_down(8, false, false);
     } else if (strncmp(cmd, "char:", 5) == 0 && len > 5) {
@@ -334,7 +335,7 @@ static void render_ui(void) {
 
                 const CsInputStyle input_style = {
                     .width = 26,
-                    .height = 1,
+                    .height = 3,  /* TUI needs 3 rows: top border, content, bottom border */
                     .font_size = 12,
                     .padding = 1,
                     .corner_radius = 0
@@ -362,10 +363,11 @@ static void render_ui(void) {
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
 
                 const CsCheckboxStyle check_style = {
-                    .size = 1,
+                    .size = 3,  /* TUI needs larger size for visible checkbox */
                     .font_size = 12,
                     .corner_radius = 0,
-                    .gap = 1
+                    .gap = 1,
+                    .border_width = 1
                 };
                 cs_checkbox(CS_ID("notif_check"), &g_app.notifications, "Notifications", &check_style);
                 cs_checkbox(CS_ID("dark_check"), &g_app.darkmode, "Dark Mode", &check_style);
@@ -393,7 +395,7 @@ static void render_ui(void) {
                              CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
                     const CsToggleStyle toggle_style = {
                         .width = 6,
-                        .height = 1,
+                        .height = 3,  /* TUI needs more height for toggle */
                         .font_size = 12,
                         .gap = 1
                     };
@@ -410,7 +412,7 @@ static void render_ui(void) {
                     const CsSliderStyle slider_style = {
                         .width = 20,
                         .height = 1,
-                        .thumb_size = 1,
+                        .thumb_size = 3,  /* TUI needs larger thumb */
                         .font_size = 12,
                         .corner_radius = 0,
                         .step = 0.1f,
@@ -427,9 +429,10 @@ static void render_ui(void) {
                              CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
                     const CsDropdownStyle dd_style = {
                         .width = 12,
-                        .height = 1,
+                        .height = 3,  /* TUI needs more height */
                         .font_size = 12,
-                        .corner_radius = 0
+                        .corner_radius = 0,
+                        .max_height = 8
                     };
                     cs_dropdown(CS_ID("priority_dd"), &g_app.priority, PRIORITY_OPTIONS, 4, &dd_style);
                 }
@@ -619,15 +622,15 @@ int main(int argc, char *argv[]) {
                 } else if (key == 1005) {
                     cs_focus_prev();
                 } else if (key == '\r' || key == '\n') {
-                    cs_set_pending_click();
+                    cs_key_down(13, false, false);  /* Enter key for activation */
                 } else if (key == 1001) {
-                    cs_key_down(1001, false, false);
+                    cs_key_down(38, false, false);  /* Up arrow */
                 } else if (key == 1002) {
-                    cs_key_down(1002, false, false);
+                    cs_key_down(40, false, false);  /* Down arrow */
                 } else if (key == 1003) {
-                    cs_key_down(1003, false, false);
+                    cs_key_down(39, false, false);  /* Right arrow */
                 } else if (key == 1004) {
-                    cs_key_down(1004, false, false);
+                    cs_key_down(37, false, false);  /* Left arrow */
                 } else if (key == 127 || key == 8) {
                     cs_key_down(8, false, false);
                 } else if (key >= 32 && key < 127) {
