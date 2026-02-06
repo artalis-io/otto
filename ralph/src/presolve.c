@@ -41,7 +41,7 @@ static PresolveContext* presolve_context_create(LPModel *model) {
     ctx->bound_tightening = 1;
     ctx->coefficient_reduction = 0; /* Can be expensive */
     ctx->probing = 0;               /* MIP only */
-    ctx->detect_redundant_rows = 0; /* TODO: fix for inequality constraints */
+    ctx->detect_redundant_rows = 1; /* Only removes redundant equality constraints */
 
     ctx->max_rounds = 1;  /* Single round to avoid error accumulation */
     ctx->current_round = 0;
