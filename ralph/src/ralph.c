@@ -722,3 +722,42 @@ const char* ralph_status_string(RalphStatus status) {
 const char* ralph_version(void) {
     return RALPH_VERSION;
 }
+
+/* ============================================================================
+ * Name Management
+ * ============================================================================ */
+
+const char* ralph_get_var_name(const RalphModel *model, int var) {
+    if (!model || !model->lp_model) return NULL;
+    return lp_model_get_var_name(model->lp_model, var);
+}
+
+const char* ralph_get_con_name(const RalphModel *model, int con) {
+    if (!model || !model->lp_model) return NULL;
+    return lp_model_get_con_name(model->lp_model, con);
+}
+
+int ralph_set_var_name(RalphModel *model, int var, const char *name) {
+    if (!model || !model->lp_model) return -1;
+    return lp_model_set_var_name(model->lp_model, var, name);
+}
+
+int ralph_set_con_name(RalphModel *model, int con, const char *name) {
+    if (!model || !model->lp_model) return -1;
+    return lp_model_set_con_name(model->lp_model, con, name);
+}
+
+const char* ralph_get_problem_name(const RalphModel *model) {
+    if (!model || !model->lp_model) return NULL;
+    return lp_model_get_name(model->lp_model);
+}
+
+int ralph_set_problem_name(RalphModel *model, const char *name) {
+    if (!model || !model->lp_model) return -1;
+    return lp_model_set_name(model->lp_model, name);
+}
+
+/* Internal helper for LP writer - provides access to LPModel */
+LPModel* ralph_get_lp_model(const RalphModel *model) {
+    return model ? model->lp_model : NULL;
+}

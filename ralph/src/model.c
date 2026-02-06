@@ -443,6 +443,106 @@ int lp_model_is_mip(const LPModel *model) {
     return model && model->num_integers > 0;
 }
 
+/* ============================================================================
+ * Name Management
+ * ============================================================================ */
+
+int lp_model_set_var_name(LPModel *model, int var, const char *name) {
+    if (!model || var < 0 || var >= model->num_vars) return -1;
+
+    /* Allocate or grow name array if needed */
+    if (!model->var_names) {
+        int cap = model->num_vars > 16 ? model->num_vars : 16;
+        model->var_names = (char**)calloc(cap, sizeof(char*));
+        if (!model->var_names) return -1;
+        model->var_names_capacity = cap;
+    } else if (var >= model->var_names_capacity) {
+        int new_cap = model->var_names_capacity * 2;
+        if (new_cap <= var) new_cap = var + 16;
+        char **new_names = (char**)realloc(model->var_names, new_cap * sizeof(char*));
+        if (!new_names) return -1;
+        /* Zero the new entries */
+        for (int i = model->var_names_capacity; i < new_cap; i++) {
+            new_names[i] = NULL;
+        }
+        model->var_names = new_names;
+        model->var_names_capacity = new_cap;
+    }
+
+    /* Free old name if present */
+    SAFE_FREE(model->var_names[var]);
+
+    /* Set new name */
+    if (name) {
+        model->var_names[var] = strdup(name);
+        if (!model->var_names[var]) return -1;
+    }
+
+    return 0;
+}
+
+int lp_model_set_con_name(LPModel *model, int con, const char *name) {
+    if (!model || con < 0 || con >= model->num_cons) return -1;
+
+    /* Allocate or grow name array if needed */
+    if (!model->con_names) {
+        int cap = model->num_cons > 16 ? model->num_cons : 16;
+        model->con_names = (char**)calloc(cap, sizeof(char*));
+        if (!model->con_names) return -1;
+        model->con_names_capacity = cap;
+    } else if (con >= model->con_names_capacity) {
+        int new_cap = model->con_names_capacity * 2;
+        if (new_cap <= con) new_cap = con + 16;
+        char **new_names = (char**)realloc(model->con_names, new_cap * sizeof(char*));
+        if (!new_names) return -1;
+        /* Zero the new entries */
+        for (int i = model->con_names_capacity; i < new_cap; i++) {
+            new_names[i] = NULL;
+        }
+        model->con_names = new_names;
+        model->con_names_capacity = new_cap;
+    }
+
+    /* Free old name if present */
+    SAFE_FREE(model->con_names[con]);
+
+    /* Set new name */
+    if (name) {
+        model->con_names[con] = strdup(name);
+        if (!model->con_names[con]) return -1;
+    }
+
+    return 0;
+}
+
+const char* lp_model_get_var_name(const LPModel *model, int var) {
+    if (!model || var < 0 || var >= model->num_vars) return NULL;
+    if (!model->var_names) return NULL;
+    return model->var_names[var];
+}
+
+const char* lp_model_get_con_name(const LPModel *model, int con) {
+    if (!model || con < 0 || con >= model->num_cons) return NULL;
+    if (!model->con_names) return NULL;
+    return model->con_names[con];
+}
+
+int lp_model_set_name(LPModel *model, const char *name) {
+    if (!model) return -1;
+
+    SAFE_FREE(model->name);
+    if (name) {
+        model->name = strdup(name);
+        if (!model->name) return -1;
+    }
+
+    return 0;
+}
+
+const char* lp_model_get_name(const LPModel *model) {
+    return model ? model->name : NULL;
+}
+
 void lp_model_print(const LPModel *model) {
     if (!model) {
         printf("NULL model\n");
