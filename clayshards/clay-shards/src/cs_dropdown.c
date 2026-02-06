@@ -98,11 +98,6 @@ CsDropdownResult cs_dropdown(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
-    /* Focus follows hover */
-    if (is_hovered) {
-        g->focused_id = id;
-    }
-
     /* ========================================================================
      * INPUT HANDLING - Process all input BEFORE rendering
      * ======================================================================== */
@@ -332,9 +327,8 @@ CsDropdownResult cs_dropdown(
                         bool item_selected = (i == current_selected);
 
                         /* Use list_bg for default to properly overwrite underlying content */
-                        /* When focused (keyboard nav), highlight selected item more prominently */
                         Clay_Color item_bg = item_hovered ? item_hover_bg
-                                           : item_selected ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS}
+                                           : item_selected ? (Clay_Color){CS_COLOR_BTN_BLUE}
                                            : list_bg;
 
                         /* TUI-friendly sizing: use height directly if small (<= 3),

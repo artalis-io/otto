@@ -54,19 +54,14 @@ CsCheckboxResult cs_checkbox(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
-    /* Focus follows hover */
-    if (is_hovered) {
-        g->focused_id = id;
-    }
-
     /* Colors - use focus color for background when focused (visible even with border_width=0) */
     Clay_Color box_bg;
     if (current_value) {
         /* Checked: blue, lighter blue if focused */
         box_bg = is_focused ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS} : (Clay_Color){CS_COLOR_BTN_BLUE};
     } else {
-        /* Unchecked: default bg, use gray focus color for better visibility */
-        box_bg = is_focused ? (Clay_Color){CS_COLOR_BTN_GRAY_FOCUS} : (Clay_Color){CS_COLOR_BG_DEFAULT};
+        /* Unchecked: default bg, focused bg if focused */
+        box_bg = is_focused ? (Clay_Color){CS_COLOR_BG_FOCUSED} : (Clay_Color){CS_COLOR_BG_DEFAULT};
     }
     Clay_Color box_border = is_focused
         ? (Clay_Color){CS_COLOR_BORDER_FOCUSED}
