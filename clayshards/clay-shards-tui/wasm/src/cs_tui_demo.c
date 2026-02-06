@@ -523,6 +523,14 @@ int demo_get_quit(void) {
 }
 
 /**
+ * Reset quit state (power back on).
+ */
+EMSCRIPTEN_KEEPALIVE
+void demo_reset_quit(void) {
+    g_app.quit = false;
+}
+
+/**
  * Handle mouse move.
  */
 EMSCRIPTEN_KEEPALIVE
