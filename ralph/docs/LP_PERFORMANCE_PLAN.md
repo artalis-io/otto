@@ -42,40 +42,40 @@ Problems with many equality constraints require both numerical improvements (two
 |-------|---------|--------|-------|
 | 1 | **Two-Phase Simplex** | ✅ Complete | Eliminates Big-M for >80% equality problems |
 | 2 | **Presolve Module** | ✅ Phase 1 Complete | Reduces beaconfd 262→148 vars, 173→87 cons |
-| 3 | **Problem Scaling** | ⏳ Next | Equilibration scaling for ill-conditioned matrices |
-| 4 | **LU Pivot Selection** | ⏳ Planned | Threshold pivoting (Markowitz + stability) |
-| 5 | **Iterative Refinement** | ⏳ Planned | Residual correction after LU solves |
+| 3 | **Problem Scaling** | ✅ Complete | Equilibration scaling in simplex.c |
+| 4 | **Iterative Refinement** | ✅ Complete | Residual correction in tableau_compute_solution() |
+| 5 | **LU Pivot Selection** | ⏳ Next | Threshold pivoting (Markowitz + stability) |
 
 ### Current Status
 - ✅ Two-phase simplex implemented (triggers for >80% equalities)
-- ✅ LU regularization for zero pivots (with limits)
 - ✅ Improved pivot selection via BTRAN
 - ✅ Presolve with redundant row detection
-- ⏳ LU stability improvements needed for beaconfd
+- ✅ Equilibration scaling (geometric mean)
+- ✅ Iterative refinement for solution computation
+- ⚠️ LU regularization disabled (causes NaN - see below)
+- ⏳ Threshold pivoting needed for beaconfd
 
 ### beaconfd Status (Feb 2026)
 
 beaconfd has 140 equalities out of 173 constraints. After presolve:
 - ✅ Presolve reduces: 262 vars → 148, 173 cons → 87
 - ✅ Redundant row detection finds rank=87 (full rank)
-- ❌ Simplex fails at iteration 20 (LU refactorization fails)
-- **Next**: Problem scaling to improve matrix conditioning
+- ❌ Phase 2 fails with near-singular basis (LU refactorization fails)
+
+**Root Cause Analysis:**
+1. The basis matrix becomes ill-conditioned during Phase 2 optimization
+2. LU regularization was tried but causes problems:
+   - Small regularization (1e-6): Causes NaN via 1/1e-6 = 1e6 multipliers
+   - Large regularization (1.0): Destroys constraint structure → UNBOUNDED
+3. The real fix is threshold pivoting to avoid selecting pivots that lead to ill-conditioning
 
 ### LU Stability Improvement Plan
 
-To solve beaconfd, implement in this order:
+The remaining improvement needed for beaconfd:
 
 | Priority | Improvement | Rationale | Effort |
 |----------|-------------|-----------|--------|
-| **1st** | Problem scaling | Normalizes coefficients, often sufficient | ~100 LOC |
-| **2nd** | Threshold pivoting | Prevents tiny pivots from accumulating | ~200 LOC |
-| **3rd** | Iterative refinement | Safety net for residual errors | ~50 LOC |
-
-**Problem Scaling** (equilibration):
-```c
-// Scale rows so max |a_ij| ≈ 1, columns so max |a_ij| ≈ 1
-// Apply before simplex, unscale solution after
-```
+| **1st** | Threshold pivoting | Prevents pivot selection that leads to ill-conditioning | ~200 LOC |
 
 **Threshold Pivoting** (Markowitz with stability):
 ```c
