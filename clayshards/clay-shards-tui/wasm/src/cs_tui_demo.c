@@ -219,15 +219,19 @@ static void render_ui(void) {
                     cs_toggle(CS_ID("enable_toggle"), &g_app.enabled, NULL, &toggle_style);
                 }
 
-                /* Slider */
+                /* Slider - use same layout pattern as dropdown for alignment */
                 CLAY(CLAY_ID("SliderRow"), {
-                    .layout = {
-                        .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                        .childGap = 0
-                    }
+                    .layout = { .childGap = 1, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } }
                 }) {
+                    /* Fixed-width label to align with dropdown */
+                    CLAY(CLAY_ID("SliderLabel"), {
+                        .layout = { .sizing = { CLAY_SIZING_FIXED(9), CLAY_SIZING_FIT(0) } }
+                    }) {
+                        CLAY_TEXT(CLAY_STRING("Volume:"),
+                                 CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
+                    }
                     const CsSliderStyle slider_style = {
-                        .width = 20,
+                        .width = 12,
                         .height = 1,
                         .thumb_size = 1,
                         .font_size = 12,
@@ -235,17 +239,22 @@ static void render_ui(void) {
                         .step = 0.1f,
                         .show_value = true
                     };
-                    cs_slider(CS_ID("volume_slider"), &g_app.volume, 0.0f, 1.0f, "Volume", &slider_style);
+                    cs_slider(CS_ID("volume_slider"), &g_app.volume, 0.0f, 1.0f, NULL, &slider_style);
                 }
 
                 /* Dropdown */
                 CLAY(CLAY_ID("DropdownRow"), {
-                    .layout = { .childGap = 2, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } }
+                    .layout = { .childGap = 1, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } }
                 }) {
-                    CLAY_TEXT(CLAY_STRING("Priority:"),
-                             CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
+                    /* Fixed-width label to align with slider */
+                    CLAY(CLAY_ID("DropdownLabel"), {
+                        .layout = { .sizing = { CLAY_SIZING_FIXED(9), CLAY_SIZING_FIT(0) } }
+                    }) {
+                        CLAY_TEXT(CLAY_STRING("Priority:"),
+                                 CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
+                    }
                     const CsDropdownStyle dd_style = {
-                        .width = 10,
+                        .width = 9,
                         .height = 1,
                         .font_size = 12,
                         .corner_radius = 0,
