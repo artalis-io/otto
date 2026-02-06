@@ -221,7 +221,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
 
     /* Calculate total memory needed for arena (with 8-byte alignment padding).
      * Each allocation rounds up to 8 bytes, so add ~7 bytes padding per alloc.
-     * We have 23 arrays, so add 23*8 = 184 bytes padding margin. */
+     * We have 24 arrays, so add 24*8 = 192 bytes padding margin. */
     size_t arena_size =
         /* double arrays: c_ext, lb_ext, ub_ext (n each) */
         3 * (size_t)n * sizeof(double) +
@@ -241,8 +241,10 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)m * sizeof(int) + (size_t)num_aux_vars * sizeof(int) + 100 * sizeof(int) +
         /* int array: artificial_vars for two-phase */
         (size_t)num_artificial * sizeof(int) +
-        /* Alignment padding (23 allocations * 8 bytes) */
-        184;
+        /* int array: redundant_rows for two-phase (m) */
+        (size_t)m * sizeof(int) +
+        /* Alignment padding (24 allocations * 8 bytes) */
+        192;
 
     /* Create arena */
     tab->arena = sh_arena_create(arena_size);
@@ -295,6 +297,10 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         tab->artificial_vars = NULL;
     }
 
+    /* Redundant row tracking (for handling singular basis from stuck artificials) */
+    tab->redundant_rows = (int*)sh_arena_calloc(tab->arena, m, sizeof(int));
+    tab->num_redundant = 0;
+
     /* Single check for all allocations */
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
@@ -303,7 +309,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
         !tab->cb_sparse_idx || !tab->cb_sparse_val ||
         !tab->aux_row || !tab->aux_coef || !tab->partial_candidates ||
-        !tab->c_original || (num_artificial > 0 && !tab->artificial_vars)) {
+        !tab->c_original || (num_artificial > 0 && !tab->artificial_vars) ||
+        !tab->redundant_rows) {
         return -1;
     }
     return 0;
@@ -706,6 +713,7 @@ void tableau_free(SimplexTableau *tab) {
     tab->aux_row = NULL;
     tab->aux_coef = NULL;
     tab->partial_candidates = NULL;
+    tab->redundant_rows = NULL;
 
     /* Free perturbation backups (allocated separately during anti-cycling) */
     SAFE_FREE(tab->perturb_backup);
@@ -730,21 +738,24 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
 
 /*
  * Attempt to repair a singular basis by replacing problematic columns
- * with slack/artificial variables. Returns 0 on success, -1 on failure.
+ * with slack/auxiliary variables. Returns 0 on success, -1 on failure.
+ *
+ * Strategy:
+ * 1. Try swapping each basis column with any non-basic slack (not just same row)
+ * 2. If that fails, try crash basis (all slacks where possible)
  */
 static int repair_singular_basis(SimplexTableau *tab) {
     int m = tab->m;
     int n = tab->n;
     int num_struct = tab->model->num_vars;
     int repairs = 0;
-    const int MAX_REPAIRS = 50;
+    const int MAX_REPAIRS = 100;
 
     /* Build a copy of the basis for analysis */
     SparseMatrix *B = build_basis_matrix(tab);
     if (!B) return -1;
 
-    /* Try to identify linearly dependent columns by replacing basis variables
-     * with slack/artificial variables and attempting factorization */
+    /* Strategy 1: Try swapping structural variables with any non-basic slack */
     for (int attempt = 0; attempt < MAX_REPAIRS && repairs < MAX_REPAIRS; attempt++) {
         /* Try factorization */
         int status = lu_factorize(tab->lu, B);
@@ -753,49 +764,129 @@ static int repair_singular_basis(SimplexTableau *tab) {
             return 0;  /* Success */
         }
 
-        /* Factorization failed - try replacing a structural variable in the basis
-         * with a slack variable that's currently non-basic */
+        /* Factorization failed - try replacing a basis variable with a non-basic one */
         int replaced = 0;
 
-        /* Try each basis position from last to first */
+        /* Try each basis position */
         for (int k = m - 1; k >= 0 && !replaced; k--) {
             int j = tab->basis[k];
 
-            /* Only try to replace structural variables with the slack for row k */
-            if (j < num_struct) {
-                int slack_idx = num_struct + k;  /* Slack for constraint k */
-                if (slack_idx < n &&
-                    (tab->var_status[slack_idx] == RALPH_NONBASIC_LOWER ||
-                     tab->var_status[slack_idx] == RALPH_NONBASIC_UPPER)) {
-                    /* Swap: move j out of basis, slack_idx into basis */
-                    tab->var_status[j] = RALPH_NONBASIC_LOWER;
-                    tab->x[j] = tab->lb_ext[j];
-                    tab->var_status[slack_idx] = RALPH_BASIC;
-                    tab->basis[k] = slack_idx;
-                    tab->basis_pos[j] = -1;
-                    tab->basis_pos[slack_idx] = k;
+            /* Skip if this is already a slack/auxiliary */
+            if (j >= num_struct) continue;
 
-                    /* Rebuild B */
-                    sparse_free(B);
-                    B = build_basis_matrix(tab);
-                    if (!B) return -1;
-
-                    replaced = 1;
-                    repairs++;
+            /* Try any non-basic slack or auxiliary (not artificial) */
+            for (int slack_idx = num_struct; slack_idx < n && !replaced; slack_idx++) {
+                /* Skip if this is an artificial variable */
+                int is_artificial = 0;
+                for (int kk = 0; kk < tab->num_artificial; kk++) {
+                    if (tab->artificial_vars[kk] == slack_idx) {
+                        is_artificial = 1;
+                        break;
+                    }
                 }
+                if (is_artificial) continue;
+
+                /* Skip if already basic or fixed */
+                if (tab->var_status[slack_idx] == RALPH_BASIC) continue;
+                if (tab->var_status[slack_idx] == RALPH_FIXED) continue;
+
+                /* Swap: move j out of basis, slack_idx into basis */
+                tab->var_status[j] = RALPH_NONBASIC_LOWER;
+                tab->x[j] = tab->lb_ext[j];
+                tab->var_status[slack_idx] = RALPH_BASIC;
+                tab->basis[k] = slack_idx;
+                tab->basis_pos[j] = -1;
+                tab->basis_pos[slack_idx] = k;
+
+                /* Rebuild B and test */
+                sparse_free(B);
+                B = build_basis_matrix(tab);
+                if (!B) return -1;
+
+                /* Test if this improved things */
+                int test_status = lu_factorize(tab->lu, B);
+                if (test_status == 0) {
+                    sparse_free(B);
+                    return 0;  /* Success */
+                }
+
+                replaced = 1;
+                repairs++;
             }
         }
 
         if (!replaced) break;
     }
 
+    /* Strategy 2: Crash basis - try to use all slacks */
+    /* Reset basis to logical basis (all slacks where possible) */
+    for (int k = 0; k < m; k++) {
+        int old_j = tab->basis[k];
+        int slack_idx = num_struct + k;
+
+        if (slack_idx < n && tab->var_status[slack_idx] != RALPH_FIXED) {
+            /* Check if this slack is an artificial */
+            int is_artificial = 0;
+            for (int kk = 0; kk < tab->num_artificial; kk++) {
+                if (tab->artificial_vars[kk] == slack_idx) {
+                    is_artificial = 1;
+                    break;
+                }
+            }
+
+            if (!is_artificial) {
+                /* Swap to slack */
+                if (old_j != slack_idx) {
+                    tab->var_status[old_j] = RALPH_NONBASIC_LOWER;
+                    tab->x[old_j] = tab->lb_ext[old_j];
+                    tab->basis_pos[old_j] = -1;
+                }
+                tab->var_status[slack_idx] = RALPH_BASIC;
+                tab->basis[k] = slack_idx;
+                tab->basis_pos[slack_idx] = k;
+            }
+        }
+    }
+
+    /* Rebuild and try */
     sparse_free(B);
-    return -1;  /* Failed to repair */
+    B = build_basis_matrix(tab);
+    if (!B) return -1;
+
+    int status = lu_factorize(tab->lu, B);
+    sparse_free(B);
+
+    return status;
 }
 
 int tableau_refactorize(SimplexTableau *tab) {
     SparseMatrix *B = build_basis_matrix(tab);
     if (!B) return -1;
+
+    /* Pass redundant row hints to LU for handling stuck artificials */
+    tab->lu->redundant_rows = tab->redundant_rows;
+    tab->lu->num_redundant = tab->num_redundant;
+
+    /* For two-phase problems with many equalities, allow limited regularization
+     * even without pre-marked redundant rows. This handles implicit redundancy
+     * that only manifests during Phase 2 optimization.
+     * Limit: allow up to 10% of rows or num_equalities (whichever is smaller) */
+    /* For two-phase problems with very high equality ratio (>80%), allow very
+     * limited regularization to handle implicit redundancy. Too much regularization
+     * can cause UNBOUNDED results, so we're very conservative here.
+     * The expected rank deficiency for beaconfd-like problems is small (5-15 rows). */
+    if (tab->use_two_phase && tab->num_equalities > 0 &&
+        tab->num_equalities * 10 > tab->m * 8) {  /* >80% equality constraints */
+        tab->lu->allow_regularization = 1;
+        /* Conservative limit based on expected rank deficiency */
+        int max_reg = (tab->m - tab->num_equalities) + 3;
+        if (max_reg > 12) max_reg = 12;  /* Cap at 12 */
+        tab->lu->max_regularizations = max_reg;
+    } else {
+        tab->lu->allow_regularization = 0;
+        tab->lu->max_regularizations = 0;
+    }
+    tab->lu->num_regularized = 0;
 
     int status = lu_factorize(tab->lu, B);
     sparse_free(B);
@@ -2148,57 +2239,170 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
 
     /* Handle artificial variables still in basis.
      * If an artificial variable is basic at value zero, we need to pivot it out
-     * and replace it with an eligible non-artificial variable. */
+     * and replace it with an eligible non-artificial variable.
+     *
+     * Strategy:
+     * 1. Compute the tableau row for the artificial's basis position
+     * 2. Search ALL non-basic non-artificial variables for a non-zero pivot
+     * 3. Prefer structural variables, then slacks
+     * 4. Track stuck artificials (redundant rows) for special handling */
     int art_in_basis = 0;
-    for (int k = 0; k < tab->num_artificial; k++) {
-        int art_j = tab->artificial_vars[k];
-        if (tab->var_status[art_j] == RALPH_BASIC) {
-            art_in_basis++;
-            /* This artificial is basic at zero value.
-             * Try to pivot it out by finding a non-artificial that can enter. */
+    int art_stuck = 0;
 
-            /* Find the basis position of this artificial */
-            int basis_pos = tab->basis_pos[art_j];
-            if (basis_pos < 0) continue;
+    /* Reset redundant row tracking.
+     * Mark ALL rows that have artificial variables as potentially redundant.
+     * This is because the constraint matrix may be rank-deficient (redundant constraints),
+     * and any of these rows could cause singularity during LU factorization.
+     *
+     * Artificial variables have identity columns in A_ext (coefficient 1.0 in exactly one row).
+     * Find the row for each artificial by looking at its column in the sparse matrix. */
+    memset(tab->redundant_rows, 0, tab->m * sizeof(int));
+    tab->num_redundant = 0;
 
-            /* Try to find a non-artificial variable to enter in this row */
-            int found_replacement = 0;
-            for (int j = 0; j < tab->model->num_vars && !found_replacement; j++) {
-                if (tab->var_status[j] != RALPH_BASIC) {
-                    /* Check if this variable has a non-zero coefficient in the basis row */
-                    double coef = 0.0;
-                    for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
-                        if (tab->A_ext->rowidx[p] == basis_pos) {
-                            coef = tab->A_ext->values[p];
-                            break;
-                        }
-                    }
-                    if (fabs(coef) > RALPH_PIVOT_TOL) {
-                        /* Can pivot this variable in, artificial out */
-                        /* Use zero theta since artificial is at zero */
-                        if (simplex_pivot(tab, j, basis_pos, 0.0) == 0) {
-                            found_replacement = 1;
-                        }
-                    }
-                }
-            }
-
-            if (!found_replacement) {
-                /* Could not remove artificial from basis.
-                 * This can happen with redundant constraints.
-                 * The artificial will stay at zero; we'll set its cost to zero
-                 * and it will eventually leave if possible. */
-                if (solver->verbose) {
-                    fprintf(stderr, "[simplex_transition] Warning: artificial var %d stuck in basis (redundant row?)\n",
-                            art_j);
+    /* Build a map from artificial variable index k to its constraint row.
+     * We'll use this to mark rows as redundant when artificials get stuck. */
+    int *artificial_to_row = (int*)calloc(tab->num_artificial, sizeof(int));
+    if (artificial_to_row) {
+        for (int k = 0; k < tab->num_artificial; k++) {
+            int art_j = tab->artificial_vars[k];
+            /* Find the row this artificial corresponds to by looking at A_ext column. */
+            artificial_to_row[k] = -1;  /* Default: unknown */
+            for (int p = tab->A_ext->colptr[art_j]; p < tab->A_ext->colptr[art_j + 1]; p++) {
+                int row = tab->A_ext->rowidx[p];
+                double val = tab->A_ext->values[p];
+                if (fabs(val - 1.0) < RALPH_ZERO_TOL) {
+                    artificial_to_row[k] = row;
+                    break;
                 }
             }
         }
     }
 
-    if (solver->verbose && art_in_basis > 0) {
-        fprintf(stderr, "[simplex_transition] %d artificial variables were in basis after Phase 1\n",
-                art_in_basis);
+
+    for (int k = 0; k < tab->num_artificial; k++) {
+        int art_j = tab->artificial_vars[k];
+        if (tab->var_status[art_j] == RALPH_BASIC) {
+            art_in_basis++;
+
+            /* Find the basis position of this artificial */
+            int basis_pos = tab->basis_pos[art_j];
+            if (basis_pos < 0) continue;
+
+            /* Compute the tableau row: e_i^T * B^{-1} * A
+             * First get e_i^T * B^{-1} via BTRAN */
+            vec_set_zero(tab->work1, tab->m);
+            tab->work1[basis_pos] = 1.0;
+            lu_solve_transpose(tab->lu, tab->work1, tab->work2);  /* work2 = e_i^T * B^{-1} */
+
+            /* Now search for a non-artificial non-basic variable with non-zero coefficient.
+             * Priority: structural variables first, then slacks */
+            int found_replacement = 0;
+            int best_j = -1;
+            double best_coef = 0.0;
+
+            /* Pass 1: Structural variables (prefer these) */
+            for (int j = 0; j < tab->model->num_vars && !found_replacement; j++) {
+                if (tab->var_status[j] == RALPH_BASIC) continue;
+                if (tab->var_status[j] == RALPH_FIXED) continue;
+
+                /* Compute tableau coefficient: (e_i^T B^{-1}) * A[:,j] */
+                double coef = sparse_dot_column(tab->A_ext, j, tab->work2);
+
+                if (fabs(coef) > fabs(best_coef)) {
+                    best_coef = coef;
+                    best_j = j;
+                }
+
+                /* Accept immediately if coefficient is large enough */
+                if (fabs(coef) > 0.1) {
+                    found_replacement = 1;
+                    best_j = j;
+                }
+            }
+
+            /* Pass 2: Slack variables (if no good structural found) */
+            if (!found_replacement) {
+                for (int j = tab->model->num_vars; j < tab->n; j++) {
+                    /* Skip artificial variables */
+                    int is_artificial = 0;
+                    for (int kk = 0; kk < tab->num_artificial; kk++) {
+                        if (tab->artificial_vars[kk] == j) {
+                            is_artificial = 1;
+                            break;
+                        }
+                    }
+                    if (is_artificial) continue;
+                    if (tab->var_status[j] == RALPH_BASIC) continue;
+                    if (tab->var_status[j] == RALPH_FIXED) continue;
+
+                    double coef = sparse_dot_column(tab->A_ext, j, tab->work2);
+
+                    if (fabs(coef) > fabs(best_coef)) {
+                        best_coef = coef;
+                        best_j = j;
+                    }
+
+                    if (fabs(coef) > 0.1) {
+                        found_replacement = 1;
+                        best_j = j;
+                        break;
+                    }
+                }
+            }
+
+            /* Try to pivot if we found any candidate */
+            if (best_j >= 0 && fabs(best_coef) > RALPH_PIVOT_TOL) {
+                /* Pivot with zero theta since artificial is at zero value */
+                if (simplex_pivot(tab, best_j, basis_pos, 0.0) == 0) {
+                    found_replacement = 1;
+                    if (solver->verbose) {
+                        fprintf(stderr, "[simplex_transition] Pivoted out artificial %d with var %d (coef=%.2e)\n",
+                                art_j, best_j, best_coef);
+                    }
+                } else {
+                    found_replacement = 0;
+                }
+            }
+
+            if (!found_replacement) {
+                /* Artificial is stuck in basis - this row is truly redundant.
+                 * Mark its original constraint row for special handling.
+                 * Note: We mark the original constraint row, not basis_pos,
+                 * because the constraint row index is stable while basis_pos changes. */
+                art_stuck++;
+                int orig_row = (artificial_to_row && k >= 0 && k < tab->num_artificial) ?
+                               artificial_to_row[k] : basis_pos;
+                if (orig_row >= 0 && orig_row < tab->m && !tab->redundant_rows[orig_row]) {
+                    tab->redundant_rows[orig_row] = 1;
+                    tab->num_redundant++;
+                }
+
+                if (solver->verbose) {
+                    fprintf(stderr, "[simplex_transition] Warning: artificial var %d stuck in basis row %d "
+                            "(orig constraint row %d, best_coef=%.2e, redundant row)\n",
+                            art_j, basis_pos, orig_row, best_coef);
+                }
+            }
+        }
+    }
+
+    free(artificial_to_row);
+    artificial_to_row = NULL;
+
+    if (solver->verbose) {
+        fprintf(stderr, "[simplex_transition] %d artificial variables were in basis, %d stuck (%d redundant rows)\n",
+                art_in_basis, art_stuck, tab->num_redundant);
+    }
+
+    /* Handle stuck artificials (redundant rows):
+     * Set their costs to zero and mark them as fixed.
+     * The row is redundant, so the artificial can stay at zero without affecting feasibility. */
+    for (int k = 0; k < tab->num_artificial; k++) {
+        int art_j = tab->artificial_vars[k];
+        if (tab->var_status[art_j] == RALPH_BASIC) {
+            /* This artificial is still in basis - fix its cost at zero */
+            tab->c_ext[art_j] = 0.0;
+        }
     }
 
     /* Fix all non-basic artificial variables at zero.
@@ -2243,6 +2447,25 @@ static int simplex_phase2(SimplexSolver *solver) {
 
     tab->phase = 2;
 
+    /* For two-phase problems, force early refactorization to reset numerical state.
+     * The transition may have accumulated error from multiple pivot operations. */
+    if (tab->use_two_phase) {
+        /* Reset LU update count to force fresh factorization soon */
+        tab->lu->num_updates = tab->lu->max_updates;
+
+        /* Force refactorization immediately */
+        if (tableau_refactorize(tab) != 0) {
+            if (solver->verbose) {
+                fprintf(stderr, "[simplex_phase2] ERROR: initial refactorization failed\n");
+            }
+            /* Try crash basis recovery */
+            if (repair_singular_basis(tab) != 0) {
+                solver->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+        }
+    }
+
     /* Note: Bound perturbation is now applied adaptively when degeneracy detected,
      * rather than proactively at start. See cycling detection below.
      */
@@ -2257,6 +2480,9 @@ static int simplex_phase2(SimplexSolver *solver) {
     const int DEGEN_THRESHOLD = 50;  /* Switch to Bland's rule after this many */
     const int NON_DEGEN_THRESHOLD = 100;  /* Non-degenerate pivots to turn Bland off */
     int use_bland = 0;
+
+    /* For two-phase problems, use more frequent refactorization to maintain stability */
+    int refactor_interval = tab->use_two_phase ? 10 : 0;  /* 0 = use normal LU update count */
 
     /* Compute initial reduced costs.
      * For partial pricing, use lazy mode (duals only) for efficiency. */
@@ -2401,16 +2627,31 @@ static int simplex_phase2(SimplexSolver *solver) {
             return -1;
         }
 
-        /* Refactorize if needed */
-        if (lu_needs_refactorization(tab->lu)) {
+        /* Refactorize if needed.
+         * For two-phase problems, use more frequent refactorization (every refactor_interval iters). */
+        int needs_refactor = lu_needs_refactorization(tab->lu);
+        if (!needs_refactor && refactor_interval > 0 && iter > 0 && iter % refactor_interval == 0) {
+            needs_refactor = 1;
+        }
+
+        if (needs_refactor) {
             if (tableau_refactorize(tab) != 0) {
                 if (solver->verbose) {
-                    fprintf(stderr, "[primal_simplex] ERROR: refactorization failed at iter %d\n", iter);
+                    fprintf(stderr, "[primal_simplex] ERROR: refactorization failed at iter %d, attempting repair\n", iter);
                 }
-                primal_remove_perturbation(tab);
-                solver->status = RALPH_STATUS_ERROR;
-                solver->iterations = iter;
-                return -1;
+                /* Try to repair the singular basis */
+                if (repair_singular_basis(tab) != 0) {
+                    if (solver->verbose) {
+                        fprintf(stderr, "[primal_simplex] ERROR: basis repair failed at iter %d\n", iter);
+                    }
+                    primal_remove_perturbation(tab);
+                    solver->status = RALPH_STATUS_ERROR;
+                    solver->iterations = iter;
+                    return -1;
+                }
+                if (solver->verbose) {
+                    fprintf(stderr, "[primal_simplex] Basis repaired at iter %d\n", iter);
+                }
             }
             /* After refactorization, recompute solution to eliminate drift */
             tableau_compute_solution(tab);
