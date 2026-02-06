@@ -168,6 +168,7 @@ CsInputResult cs_input(
 
     if (is_hovered) {
         g->hovered_id = id;
+        g->focused_id = id;  /* Focus follows hover */
     }
 
     /* Handle click to focus and/or position cursor */
