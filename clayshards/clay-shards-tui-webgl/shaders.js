@@ -310,6 +310,199 @@ export const BLIT_FS = `
 `;
 
 /* ============================================================================
+ * Monitor Bezel Shader
+ *
+ * Renders a retro terminal housing around the screen content.
+ * ============================================================================ */
+
+export const BEZEL_VS = `
+    attribute vec2 a_pos;
+    varying vec2 v_uv;
+
+    void main() {
+        gl_Position = vec4(a_pos * 2.0 - 1.0, 0.0, 1.0);
+        v_uv = a_pos;
+    }
+`;
+
+/**
+ * Bezel fragment shader - renders RobCo-style monitor frame.
+ * The screen content is composited in the center.
+ */
+export const BEZEL_FS = `
+    precision mediump float;
+
+    uniform sampler2D u_screen;
+    uniform vec2 u_resolution;
+    uniform float u_time;
+    uniform float u_bezelWidth;    // Bezel thickness (0.08 = 8%)
+    uniform float u_enabled;       // 0 or 1
+
+    varying vec2 v_uv;
+
+    // Pseudo-random for texture variation
+    float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
+
+    // Brushed metal noise
+    float metalNoise(vec2 uv) {
+        vec2 i = floor(uv * 200.0);
+        return hash(i) * 0.15;
+    }
+
+    void main() {
+        if (u_enabled < 0.5) {
+            // Bezel disabled - just show screen
+            gl_FragColor = texture2D(u_screen, v_uv);
+            return;
+        }
+
+        float bw = u_bezelWidth;
+        float cornerRadius = 0.02;
+
+        // Screen area (inset by bezel width)
+        vec2 screenMin = vec2(bw);
+        vec2 screenMax = vec2(1.0 - bw);
+
+        // Check if we're in screen area
+        if (v_uv.x > screenMin.x && v_uv.x < screenMax.x &&
+            v_uv.y > screenMin.y && v_uv.y < screenMax.y) {
+
+            // Map UV to screen content
+            vec2 screenUV = (v_uv - screenMin) / (screenMax - screenMin);
+            vec3 screen = texture2D(u_screen, screenUV).rgb;
+
+            // Inner bevel shadow
+            float innerDist = min(
+                min(v_uv.x - screenMin.x, screenMax.x - v_uv.x),
+                min(v_uv.y - screenMin.y, screenMax.y - v_uv.y)
+            );
+            float innerShadow = smoothstep(0.0, 0.015, innerDist);
+            screen *= 0.7 + 0.3 * innerShadow;
+
+            gl_FragColor = vec4(screen, 1.0);
+            return;
+        }
+
+        // We're in bezel area
+        vec3 bezelColor;
+
+        // Base metal color with gradient
+        float gradY = v_uv.y;
+        vec3 metalBase = mix(
+            vec3(0.22, 0.21, 0.18),  // Dark olive-gray
+            vec3(0.32, 0.31, 0.26),  // Lighter
+            gradY * 0.5 + 0.25
+        );
+
+        // Add brushed metal texture
+        metalBase += metalNoise(v_uv) * vec3(0.08, 0.07, 0.05);
+
+        // Top highlight
+        if (v_uv.y > 0.92) {
+            metalBase += vec3(0.08) * (v_uv.y - 0.92) / 0.08;
+        }
+
+        // Bottom shadow
+        if (v_uv.y < 0.08) {
+            metalBase -= vec3(0.05) * (0.08 - v_uv.y) / 0.08;
+        }
+
+        bezelColor = metalBase;
+
+        // === Nameplate (top center) ===
+        vec2 npCenter = vec2(0.5, 0.96);
+        vec2 npSize = vec2(0.28, 0.022);
+        vec2 npDist = abs(v_uv - npCenter);
+        if (npDist.x < npSize.x && npDist.y < npSize.y) {
+            // Brass/bronze nameplate
+            float npGrad = (v_uv.y - (npCenter.y - npSize.y)) / (npSize.y * 2.0);
+            vec3 brass = mix(
+                vec3(0.55, 0.45, 0.25),
+                vec3(0.75, 0.65, 0.40),
+                npGrad
+            );
+            // Engraved look
+            brass *= 0.9 + 0.1 * sin(v_uv.x * 800.0);
+            bezelColor = brass;
+        }
+
+        // === Vents (top left) ===
+        vec2 ventStart = vec2(0.05, 0.955);
+        for (int i = 0; i < 4; i++) {
+            float vx = ventStart.x + float(i) * 0.025;
+            if (v_uv.x > vx && v_uv.x < vx + 0.018 &&
+                v_uv.y > 0.95 && v_uv.y < 0.97) {
+                bezelColor = vec3(0.08, 0.08, 0.06); // Dark vent slot
+            }
+        }
+
+        // === Indicator LED (top right) ===
+        vec2 ledPos = vec2(0.92, 0.96);
+        float ledDist = length(v_uv - ledPos);
+        if (ledDist < 0.012) {
+            // LED glow
+            float pulse = 0.7 + 0.3 * sin(u_time * 2.0);
+            vec3 ledColor = vec3(0.2, 0.9, 0.3) * pulse;
+            float ledFalloff = smoothstep(0.012, 0.004, ledDist);
+            bezelColor = mix(bezelColor, ledColor, ledFalloff);
+        }
+
+        // === Screws (bottom corners) ===
+        vec2 screwPositions[2];
+        screwPositions[0] = vec2(0.06, 0.04);
+        screwPositions[1] = vec2(0.94, 0.04);
+
+        for (int i = 0; i < 2; i++) {
+            float screwDist = length(v_uv - screwPositions[i]);
+            if (screwDist < 0.015) {
+                // Screw head
+                float screwGrad = screwDist / 0.015;
+                vec3 screwColor = mix(vec3(0.4, 0.38, 0.32), vec3(0.25, 0.24, 0.20), screwGrad);
+                // Slot
+                vec2 toCenter = v_uv - screwPositions[i];
+                if (abs(toCenter.x) < 0.008 && abs(toCenter.y) < 0.002) {
+                    screwColor = vec3(0.1);
+                }
+                bezelColor = screwColor;
+            }
+        }
+
+        // === Model label (bottom center) ===
+        vec2 lblCenter = vec2(0.5, 0.035);
+        vec2 lblSize = vec2(0.15, 0.012);
+        vec2 lblDist = abs(v_uv - lblCenter);
+        if (lblDist.x < lblSize.x && lblDist.y < lblSize.y) {
+            // Slightly darker inset for label area
+            bezelColor *= 0.85;
+        }
+
+        // === Outer edge bevel ===
+        float edgeDist = min(
+            min(v_uv.x, 1.0 - v_uv.x),
+            min(v_uv.y, 1.0 - v_uv.y)
+        );
+        if (edgeDist < 0.008) {
+            // Dark outer edge
+            bezelColor *= 0.6 + 0.4 * (edgeDist / 0.008);
+        }
+
+        // === Inner edge highlight (around screen) ===
+        float toScreenX = min(abs(v_uv.x - screenMin.x), abs(v_uv.x - screenMax.x));
+        float toScreenY = min(abs(v_uv.y - screenMin.y), abs(v_uv.y - screenMax.y));
+        float toScreen = min(toScreenX, toScreenY);
+
+        if (toScreen < 0.012) {
+            // Inner bevel - darker toward screen
+            bezelColor *= 0.7 + 0.3 * (toScreen / 0.012);
+        }
+
+        gl_FragColor = vec4(bezelColor, 1.0);
+    }
+`;
+
+/* ============================================================================
  * Batched Terminal Shaders (for WebGL1 without instancing)
  *
  * Each vertex includes position, UV, and colors inline.
