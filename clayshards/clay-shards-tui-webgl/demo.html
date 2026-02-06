@@ -403,12 +403,12 @@
                     hiddenInput.focus();
                 });
 
-                // Handle special keys (Tab, Enter, Arrows, Escape, Backspace)
+                // Handle special keys (Tab, Enter, Space, Arrows, Escape, Backspace)
                 function handleKeyDown(e) {
                     const mods = (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0);
 
                     // Prevent default for navigation keys
-                    if (['Tab', 'Enter', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Delete'].includes(e.key)) {
+                    if (['Tab', 'Enter', ' ', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Delete', 'Home', 'End'].includes(e.key)) {
                         e.preventDefault();
                         wasm.demo_key_down(e.keyCode, mods);
                     } else if (e.ctrlKey || e.altKey || e.metaKey) {
