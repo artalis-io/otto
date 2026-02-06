@@ -31,9 +31,15 @@
 
 /* Minimum feature size in pixels for render-time filtering.
  * Lines need at least 1px to be visible.
- * Buildings need at least 3px to render as recognizable shapes, not dots. */
+ * Buildings need at least 3px in both dimensions to be worth rendering.
+ * Smaller buildings are filtered out entirely. */
 #define MIN_LINE_PIXELS 1.0f
-#define MIN_POLYGON_PIXELS 3.0f
+#define MIN_BUILDING_PIXELS 3.0f
+
+/* Minimum render size for buildings in pixels.
+ * Buildings smaller than this are scaled up to this size to ensure they
+ * appear as recognizable rectangles rather than dots. */
+#define MIN_BUILDING_RENDER_SIZE 6.0f
 
 /* Edge structure for scanline polygon fill (defined here for buffer preallocation)
  * Uses double for x and dx to prevent accumulated floating-point error
@@ -1416,7 +1422,39 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                         }
                     }
 
-                    if (f->num_rings > 1 && f->ring_ends) {
+                    /* Calculate bounding box for minimum size enforcement */
+                    int32_t bld_min_x = scaled[0].x, bld_max_x = scaled[0].x;
+                    int32_t bld_min_y = scaled[0].y, bld_max_y = scaled[0].y;
+                    for (int k = 1; k < f->num_points; k++) {
+                        if (scaled[k].x < bld_min_x) bld_min_x = scaled[k].x;
+                        if (scaled[k].x > bld_max_x) bld_max_x = scaled[k].x;
+                        if (scaled[k].y < bld_min_y) bld_min_y = scaled[k].y;
+                        if (scaled[k].y > bld_max_y) bld_max_y = scaled[k].y;
+                    }
+                    int32_t bld_width = bld_max_x - bld_min_x;
+                    int32_t bld_height = bld_max_y - bld_min_y;
+
+                    /* If building is too small, render as minimum-sized rectangle
+                     * to ensure it appears as a shape rather than a dot */
+                    int min_size = (int)MIN_BUILDING_RENDER_SIZE;
+                    if (bld_width < min_size || bld_height < min_size) {
+                        int32_t cx = (bld_min_x + bld_max_x) / 2;
+                        int32_t cy = (bld_min_y + bld_max_y) / 2;
+                        int32_t half_w = (bld_width > min_size ? bld_width : min_size) / 2;
+                        int32_t half_h = (bld_height > min_size ? bld_height : min_size) / 2;
+
+                        CTTilePoint rect[4] = {
+                            {cx - half_w, cy - half_h},
+                            {cx + half_w, cy - half_h},
+                            {cx + half_w, cy + half_h},
+                            {cx - half_w, cy + half_h}
+                        };
+                        ct_render_polygon(ctx, rect, 4, ctx->style.building_color);
+                        if (outline_width > 0.0f) {
+                            ct_render_polygon_outline(ctx, rect, 4,
+                                                      ctx->style.building_outline_color, outline_width);
+                        }
+                    } else if (f->num_rings > 1 && f->ring_ends) {
                         /* Multipolygon buildings */
                         ct_render_multipolygon(ctx, scaled, f->num_points,
                                                f->ring_ends, f->num_rings,
@@ -1534,8 +1572,10 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
  * Check if a feature is large enough to be visible.
  * Returns 1 if visible, 0 if too small.
  *
- * Buildings need at least 2px to avoid rendering as ugly dots.
- * Lines only need 1px to be visible.
+ * Buildings need at least MIN_BUILDING_PIXELS (3px) in both dimensions.
+ * Smaller buildings are filtered out entirely.
+ * Buildings that pass are scaled up to MIN_BUILDING_RENDER_SIZE (6px) if needed.
+ * Lines only need MIN_LINE_PIXELS (1px) to be visible.
  */
 static int feature_is_visible(const CTFeature *f, float scale)
 {
@@ -1563,10 +1603,12 @@ static int feature_is_visible(const CTFeature *f, float scale)
 
     /* Polygons: need minimum size to avoid rendering as dots */
     if (f->type == CT_GEOM_POLYGON) {
-        /* Buildings need BOTH dimensions >= 3px to look like shapes, not dots.
+        /* Buildings need BOTH dimensions >= MIN_BUILDING_PIXELS (3px).
+         * Buildings that pass this filter but are smaller than
+         * MIN_BUILDING_RENDER_SIZE (6px) will be scaled up during rendering.
          * Other polygons (water, landuse) only need one dimension >= 1px. */
         if (f->layer == CT_LAYER_BUILDINGS) {
-            return width >= MIN_POLYGON_PIXELS && height >= MIN_POLYGON_PIXELS;
+            return width >= MIN_BUILDING_PIXELS && height >= MIN_BUILDING_PIXELS;
         }
         return width >= MIN_LINE_PIXELS || height >= MIN_LINE_PIXELS;
     }
