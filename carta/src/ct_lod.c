@@ -70,15 +70,18 @@ void ct_lod_default(CTLODConfig *config)
      * visibility at low zoom levels. Good for trucking/logistics use cases.
      */
 
-    /* Roads - show major roads 2 zoom levels earlier than OSM Carto */
+    /* Roads - closer to OSM Carto visibility thresholds
+     * OSM Carto: motorway z5, trunk z5, primary z8, secondary z10, tertiary z12
+     * We show major roads 1 zoom earlier for trucking use case.
+     */
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 4, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 5, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 7, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 9, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 11, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 13, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 14, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 14, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 10, -1, 0, 0);  /* Was z9, now z10 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 12, -1, 0, 0);   /* Was z11, now z12 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 14, -1, 0, 0); /* Was z13, now z14 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 15, -1, 0, 0);    /* Was z14, now z15 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 15, -1, 0, 0);      /* Was z14, now z15 */
 
     /* Buildings - visible at z13+ for large, z14+ for all */
     ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 13, -1, 2000, 0);  /* Large buildings */
@@ -136,13 +139,17 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_CEMETERY, 14, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_OTHER, 14, -1, 0, 0);
 
-    /* Boundaries - by admin level */
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTRY, 2, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_STATE, 4, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTY, 6, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_CITY, 9, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_SUBURB, 12, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_OTHER, 9, -1, 0, 0);
+    /* Boundaries - by admin level
+     * OSM Carto shows boundaries very subtly. We delay lower-level boundaries
+     * to reduce clutter at low zooms. Country borders still visible early
+     * for trucking (customs/border crossing awareness).
+     */
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTRY, 4, -1, 0, 0);  /* Was z2, now z4 */
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_STATE, 6, -1, 0, 0);    /* Was z4, now z6 */
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTY, 10, -1, 0, 0);  /* Was z6, now z10 */
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_CITY, 12, -1, 0, 0);    /* Was z9, now z12 */
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_SUBURB, 14, -1, 0, 0);  /* Was z12, now z14 */
+    ct_lod_add_rule(config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_OTHER, 12, -1, 0, 0);   /* Was z9, now z12 */
 }
 
 void ct_lod_detailed(CTLODConfig *config)
