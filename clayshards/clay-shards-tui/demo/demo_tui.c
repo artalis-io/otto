@@ -224,6 +224,20 @@ static void dump_frame(CsTuiRenderer *renderer, const char *input_cmd) {
     printf("INPUT: %s", input_cmd);
     if (input_cmd[strlen(input_cmd) - 1] != '\n') printf("\n");
     printf("FOCUS: 0x%08x\n", cs_focused_id());
+
+    /* Add cursor info for text input debugging */
+    uint32_t focused = cs_focused_id();
+    if (focused != 0) {
+        printf("CURSOR: pos=%d, visible=%s, text=\"%s\" (len=%d)\n",
+               cs_cursor_pos(),
+               cs_cursor_visible() ? "true" : "false",
+               cs_focused_text() ? cs_focused_text() : "(null)",
+               cs_focused_text_len());
+        float x, y, w, h;
+        cs_focused_bounds(&x, &y, &w, &h);
+        printf("BOUNDS: x=%.0f, y=%.0f, w=%.0f, h=%.0f\n", x, y, w, h);
+    }
+
     printf("STATE: counter=%d, name=\"%s\", email=\"%s\", notifications=%s, darkmode=%s, enabled=%s, volume=%.2f, priority=%d (%s)\n",
            g_app.counter,
            g_app.name,
@@ -335,9 +349,9 @@ static void render_ui(void) {
 
                 const CsInputStyle input_style = {
                     .width = 26,
-                    .height = 3,  /* TUI needs 3 rows: top border, content, bottom border */
+                    .height = 1,  /* Single row for content */
                     .font_size = 12,
-                    .padding = 1,
+                    .padding = 0,
                     .corner_radius = 0
                 };
                 cs_input(CS_ID("name_input"),
@@ -363,11 +377,11 @@ static void render_ui(void) {
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
 
                 const CsCheckboxStyle check_style = {
-                    .size = 3,  /* TUI needs larger size for visible checkbox */
+                    .size = 1,  /* Single character checkbox */
                     .font_size = 12,
                     .corner_radius = 0,
                     .gap = 1,
-                    .border_width = 1
+                    .border_width = 0
                 };
                 cs_checkbox(CS_ID("notif_check"), &g_app.notifications, "Notifications", &check_style);
                 cs_checkbox(CS_ID("dark_check"), &g_app.darkmode, "Dark Mode", &check_style);
@@ -394,8 +408,8 @@ static void render_ui(void) {
                     CLAY_TEXT(CLAY_STRING("Enabled:"),
                              CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
                     const CsToggleStyle toggle_style = {
-                        .width = 6,
-                        .height = 3,  /* TUI needs more height for toggle */
+                        .width = 4,
+                        .height = 1,
                         .font_size = 12,
                         .gap = 1
                     };
@@ -412,7 +426,7 @@ static void render_ui(void) {
                     const CsSliderStyle slider_style = {
                         .width = 20,
                         .height = 1,
-                        .thumb_size = 3,  /* TUI needs larger thumb */
+                        .thumb_size = 1,
                         .font_size = 12,
                         .corner_radius = 0,
                         .step = 0.1f,
@@ -429,10 +443,10 @@ static void render_ui(void) {
                              CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
                     const CsDropdownStyle dd_style = {
                         .width = 12,
-                        .height = 3,  /* TUI needs more height */
+                        .height = 1,
                         .font_size = 12,
                         .corner_radius = 0,
-                        .max_height = 8
+                        .max_height = 6
                     };
                     cs_dropdown(CS_ID("priority_dd"), &g_app.priority, PRIORITY_OPTIONS, 4, &dd_style);
                 }
@@ -564,6 +578,21 @@ int main(int argc, char *argv[]) {
          * ================================================================ */
         char cmd_buf[256];
 
+        /* Helper to render cursor in headless mode - use block character */
+        #define RENDER_CURSOR() do { \
+            uint32_t fid = cs_focused_id(); \
+            if (fid != 0 && cs_cursor_visible()) { \
+                float fx, fy, fw, fh; \
+                cs_focused_bounds(&fx, &fy, &fw, &fh); \
+                int cpos = cs_cursor_pos(); \
+                int cx = (int)fx + cpos; \
+                int cy = (int)fy; \
+                /* Render block cursor - visible in headless dump */ \
+                cs_tui_text(renderer, cx, cy, "\xE2\x96\x88", 3, \
+                           (CsTuiColor){255, 255, 0, 255}, NULL); /* █ U+2588 */ \
+            } \
+        } while(0)
+
         /* Render initial frame */
         cs_frame_begin();
         Clay_BeginLayout();
@@ -573,6 +602,7 @@ int main(int argc, char *argv[]) {
 
         cs_tui_begin(renderer);
         cs_tui_render_clay_commands(renderer, commands.internalArray, commands.length);
+        RENDER_CURSOR();
         cs_tui_end(renderer);
         dump_frame(renderer, "(init)");
 
@@ -590,9 +620,12 @@ int main(int argc, char *argv[]) {
 
             cs_tui_begin(renderer);
             cs_tui_render_clay_commands(renderer, commands.internalArray, commands.length);
+            RENDER_CURSOR();
             cs_tui_end(renderer);
             dump_frame(renderer, cmd_buf);
         }
+
+        #undef RENDER_CURSOR
     } else {
         /* ================================================================
          * Interactive mode: normal terminal UI
@@ -649,8 +682,13 @@ int main(int argc, char *argv[]) {
 
             uint32_t focused = cs_focused_id();
             if (focused != 0 && cs_cursor_visible()) {
+                float fx, fy, fw, fh;
+                cs_focused_bounds(&fx, &fy, &fw, &fh);
                 int cursor_pos = cs_cursor_pos();
-                cs_tui_set_cursor(renderer, cursor_pos + 5, 5, true);
+                /* Position cursor at the character position within the focused element */
+                int cursor_x = (int)fx + cursor_pos;
+                int cursor_y = (int)fy;
+                cs_tui_set_cursor(renderer, cursor_x, cursor_y, true);
             } else {
                 cs_tui_set_cursor(renderer, 0, 0, false);
             }

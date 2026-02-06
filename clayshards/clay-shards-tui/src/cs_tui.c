@@ -608,14 +608,20 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
                    CsTuiColor color, int corner_radius) {
     if (!r || w <= 0 || h <= 0) return;
 
+    /* Skip single-row borders - they would overlap with content */
+    if (h == 1) return;
+
     CsTuiBoxStyle style = corner_radius > 0 ? CS_TUI_BOX_ROUNDED : r->config.box_style;
+
+    /* Helper to check if cell has text content (not space/empty) */
+    #define HAS_CONTENT(cell) ((cell)->codepoint != 0 && (cell)->codepoint != ' ')
 
     /* Top edge */
     for (int col = 0; col < w; col++) {
         int cx = x + col;
         if (!cs_tui_clip_point(r, cx, y)) continue;
         CsTuiCell *cell = cs_tui_cell_at(&r->buffer, cx, y);
-        if (!cell) continue;
+        if (!cell || HAS_CONTENT(cell)) continue;  /* Don't overwrite text */
 
         const char *ch;
         if (col == 0) {
@@ -639,7 +645,7 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
         int cy = y + h - 1;
         if (!cs_tui_clip_point(r, cx, cy)) continue;
         CsTuiCell *cell = cs_tui_cell_at(&r->buffer, cx, cy);
-        if (!cell) continue;
+        if (!cell || HAS_CONTENT(cell)) continue;  /* Don't overwrite text */
 
         const char *ch;
         if (col == 0) {
@@ -664,7 +670,7 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
         /* Left */
         if (cs_tui_clip_point(r, x, cy)) {
             CsTuiCell *cell = cs_tui_cell_at(&r->buffer, x, cy);
-            if (cell) {
+            if (cell && !HAS_CONTENT(cell)) {  /* Don't overwrite text */
                 const char *ch = cs_tui_box_char(style, CS_TUI_BOX_VERT);
                 uint32_t cp;
                 cs_tui_utf8_decode(ch, 4, &cp);
@@ -679,7 +685,7 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
         int rx = x + w - 1;
         if (cs_tui_clip_point(r, rx, cy)) {
             CsTuiCell *cell = cs_tui_cell_at(&r->buffer, rx, cy);
-            if (cell) {
+            if (cell && !HAS_CONTENT(cell)) {  /* Don't overwrite text */
                 const char *ch = cs_tui_box_char(style, CS_TUI_BOX_VERT);
                 uint32_t cp;
                 cs_tui_utf8_decode(ch, 4, &cp);
@@ -690,6 +696,8 @@ void cs_tui_border(CsTuiRenderer *r, int x, int y, int w, int h,
             }
         }
     }
+
+    #undef HAS_CONTENT
 }
 
 void cs_tui_scissor_push(CsTuiRenderer *r, int x, int y, int w, int h) {
