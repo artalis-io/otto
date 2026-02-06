@@ -1052,8 +1052,26 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                         case CT_LANDUSE_GRASS:
                             landuse_color = ctx->style.grass_color;
                             break;
+                        case CT_LANDUSE_RESIDENTIAL:
+                            landuse_color = ctx->style.residential_color;
+                            break;
+                        case CT_LANDUSE_COMMERCIAL:
+                            landuse_color = ctx->style.commercial_color;
+                            break;
+                        case CT_LANDUSE_INDUSTRIAL:
+                            landuse_color = ctx->style.industrial_color;
+                            break;
+                        case CT_LANDUSE_FARMLAND:
+                            landuse_color = ctx->style.farmland_color;
+                            break;
+                        case CT_LANDUSE_CEMETERY:
+                            landuse_color = ctx->style.cemetery_color;
+                            break;
+                        case CT_LANDUSE_MILITARY:
+                            landuse_color = ctx->style.military_color;
+                            break;
                         default:
-                            landuse_color = ctx->style.grass_color;
+                            landuse_color = ctx->style.land_color;
                             break;
                     }
                     if (f->num_rings > 1 && f->ring_ends) {
