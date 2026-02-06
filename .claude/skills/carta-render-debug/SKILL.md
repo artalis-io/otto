@@ -17,7 +17,46 @@ make compare
 
 # 3. Generate tiles for comparison
 ./carta-compare 14/8529/5974 ../data/monaco-latest.osm.pbf
+
+# 4. Test with render presets
+./carta-compare 14/8529/5974 ../data/monaco-latest.osm.pbf --preset fast
 ```
+
+## Render Presets
+
+Carta supports three render presets that control visual quality vs performance:
+
+| Preset | Render Time | Features |
+|--------|-------------|----------|
+| `default` | ~150ms | Full quality: labels, boundaries, casing, outlines |
+| `fast` | ~10-15ms | No boundaries/casing/outlines; labels enabled |
+| `quality` | ~200ms | Maximum quality: all effects, low zoom cutoffs |
+
+**Use `--preset fast` for performance testing and tile server deployments.**
+
+```bash
+# Compare presets
+./carta-compare 14/9058/5729 ../data/hungary-latest.osm.pbf --preset default
+./carta-compare 14/9058/5729 ../data/hungary-latest.osm.pbf --preset fast --skip-osm
+```
+
+### Preset Details
+
+**Default preset:**
+- All layers enabled (water, roads, buildings, landuse, boundaries, labels)
+- Road casing, building outlines, label halos enabled
+- Boundary dashes enabled
+
+**Fast preset (recommended for tile servers):**
+- Boundaries disabled (expensive relation processing)
+- Road casing, railway casing, bridge outlines disabled
+- Building outlines disabled
+- Labels enabled (useful for navigation)
+- ~10x faster than default
+
+**Quality preset:**
+- All effects enabled at lower zoom cutoffs
+- Maximum visual fidelity
 
 ## Workflow
 
@@ -340,6 +379,7 @@ Options:
   -z, --zoom LEVEL   Batch mode: specific zoom level
   -n, --max-tiles N  Batch mode: max tiles per zoom (default: 3)
   --skip-osm         Don't fetch OSM reference tiles
+  --preset PRESET    Render preset: default, fast, quality
 
 Zoom-range options:
   --zoom-range MIN-MAX   Compare tile across zoom levels MIN to MAX
@@ -357,13 +397,28 @@ OSM reference: /tmp/carta_compare/osm_<z>_<x>_<y>.png
 
 ## Performance Baseline
 
+### Fast Preset (recommended for production)
+
 | Operation | Target | Notes |
 |-----------|--------|-------|
-| Monaco tile (z14) | <20 ms | City center with 2000+ features |
-| Hungary tile (z14) | <25 ms | Lake Balaton with water/forests |
+| Monaco tile (z14) | <15 ms | City center with 2000+ features |
+| Hungary tile (z14) | <15 ms | Budapest with buildings/roads |
 | Empty tile | <3 ms | Background only |
 
+### Default Preset (full quality)
+
+| Operation | Target | Notes |
+|-----------|--------|-------|
+| Monaco tile (z14) | <50 ms | With boundaries, casing, outlines |
+| Hungary tile (z14) | <150 ms | Full quality rendering |
+| Empty tile | <5 ms | Background only |
+
 If render time exceeds these by >50%, investigate for performance regression.
+
+**Note:** The `fast` preset is ~10x faster than `default` by disabling:
+- Boundary rendering (expensive relation processing)
+- Road/railway casing
+- Building/bridge outlines
 
 ## Checklist Before Committing
 
