@@ -447,8 +447,11 @@
                 // Setup mouse input
                 function getCellPos(e) {
                     const rect = canvas.getBoundingClientRect();
-                    const x = Math.floor((e.clientX - rect.left) / CELL_WIDTH);
-                    const y = Math.floor((e.clientY - rect.top) / CELL_HEIGHT);
+                    // Use actual display size to handle fullscreen scaling
+                    const actualCellWidth = rect.width / COLS;
+                    const actualCellHeight = rect.height / ROWS;
+                    const x = Math.floor((e.clientX - rect.left) / actualCellWidth);
+                    const y = Math.floor((e.clientY - rect.top) / actualCellHeight);
                     return { x, y };
                 }
 
