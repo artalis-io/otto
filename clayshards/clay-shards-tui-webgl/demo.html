@@ -578,14 +578,27 @@
                 let frameCount = 0;
                 let powerOffProgress = 0;
                 let isPoweringOff = false;
+                let isOff = false;
                 const POWER_OFF_DURATION = 0.8; // seconds
+
+                // Listen for Q to power back on
+                function handlePowerOn(e) {
+                    if ((e.key === 'q' || e.key === 'Q') && isOff) {
+                        isOff = false;
+                        isPoweringOff = false;
+                        powerOffProgress = 0;
+                        wasm.demo_reset_quit();
+                        requestAnimationFrame(render);
+                    }
+                }
+                document.addEventListener('keydown', handlePowerOn);
 
                 function render(timestamp) {
                     const dt = lastTime ? (timestamp - lastTime) / 1000 : 0.016;
                     lastTime = timestamp;
 
                     // Check for quit
-                    if (wasm.demo_get_quit() && !isPoweringOff) {
+                    if (wasm.demo_get_quit() && !isPoweringOff && !isOff) {
                         isPoweringOff = true;
                         powerOffProgress = 0;
                     }
@@ -595,9 +608,11 @@
                         powerOffProgress += dt / POWER_OFF_DURATION;
                         if (powerOffProgress >= 1) {
                             powerOffProgress = 1;
+                            isOff = true;
+                            isPoweringOff = false;
                             // Stay black - don't render anything
                             renderer.clear(0, 0, 0);
-                            return; // Stop animation loop
+                            return; // Stop animation loop, wait for Q to restart
                         }
 
                         // Render normal frame to framebuffer, then apply power-off

@@ -56,7 +56,7 @@ DEMO_EXPORTS = -s EXPORTED_FUNCTIONS='[\
   "_demo_mouse_move","_demo_mouse_click","_demo_mouse_release",\
   "_demo_get_counter","_demo_get_volume","_demo_get_priority",\
   "_demo_get_enabled","_demo_get_notifications","_demo_get_darkmode",\
-  "_demo_get_quit",\
+  "_demo_get_quit","_demo_reset_quit",\
   "_malloc","_free"\
 ]'
 
