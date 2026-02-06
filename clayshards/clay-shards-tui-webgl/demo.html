@@ -224,7 +224,13 @@
                     <button data-preset="subtle">Subtle</button>
                     <button data-preset="retro" class="active">Retro</button>
                     <button data-preset="arcade">Arcade</button>
-                    <button data-preset="glass">Glass</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Glass Reflection</label>
+                <div class="preset-buttons">
+                    <button id="glassToggle">Off</button>
                 </div>
             </div>
 
@@ -527,6 +533,15 @@
                     });
                 });
 
+                // Glass toggle (separate from CRT presets)
+                const glassToggle = document.getElementById('glassToggle');
+                glassToggle.addEventListener('click', () => {
+                    const enabled = !crt.isGlassEnabled();
+                    crt.setGlass(enabled);
+                    glassToggle.textContent = enabled ? 'On' : 'Off';
+                    glassToggle.classList.toggle('active', enabled);
+                });
+
                 function updateSliders() {
                     document.getElementById('scanlines').value = crt.params.scanlines * 100;
                     document.getElementById('scanlines-value').textContent = crt.params.scanlines.toFixed(2);
@@ -631,8 +646,9 @@
                             powerOffProgress = 1;
                             isOff = true;
                             isPoweringOff = false;
-                            // Stay black - don't render anything
+                            // Stay black, but show glass if enabled
                             renderer.clear(0, 0, 0);
+                            crt.renderGlassOnly();
                             return; // Stop animation loop, wait for Q to restart
                         }
 
@@ -649,6 +665,7 @@
                             crt.drawPowerOff(powerOffProgress);
                         } else {
                             renderer.clear(0, 0, 0);
+                            crt.renderGlassOnly();
                         }
                         requestAnimationFrame(render);
                         return;
@@ -678,6 +695,7 @@
                         crt.end(dt);
                     } else {
                         renderer.renderBatched(wasm, renderOpts);
+                        crt.renderGlassOnly(); // Add glass reflection if enabled
                     }
 
                     // Update state display periodically

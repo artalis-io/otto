@@ -78,9 +78,11 @@ export class CrtEffects {
             chromatic: 0.001,    // RGB split (0-0.01)
             flicker: 0.02,       // Brightness variation (0-0.1)
             glow: 0.1,           // Phosphor bloom (0-1, placeholder)
-            glassReflection: 0,  // Glass reflection (0-1)
             colorMode: CRT_COLOR_RGB  // Phosphor color
         };
+
+        // Glass reflection is separate from CRT effects (ambient light on glass)
+        this.glassEnabled = false;
 
         this._initResources();
     }
@@ -200,7 +202,7 @@ export class CrtEffects {
         gl.uniform1f(this.crtShader.uniforms.u_chromatic, this.params.chromatic);
         gl.uniform1f(this.crtShader.uniforms.u_flicker, this.params.flicker);
         gl.uniform1f(this.crtShader.uniforms.u_glow, this.params.glow);
-        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, this.params.glassReflection);
+        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, this.glassEnabled ? 1.0 : 0.0);
         gl.uniform1i(this.crtShader.uniforms.u_colorMode, this.params.colorMode);
 
         // Default transform (fullscreen, full brightness)
@@ -217,6 +219,52 @@ export class CrtEffects {
         gl.drawArrays(gl.TRIANGLES, 0, 6);
 
         gl.disableVertexAttribArray(posLoc);
+    }
+
+    /**
+     * Render glass reflection overlay only (when CRT effects are off).
+     * Call this after rendering the terminal directly when this.enabled is false.
+     */
+    renderGlassOnly() {
+        if (!this.glassEnabled) return;
+
+        const gl = this.gl;
+
+        // Enable blending to overlay glass on top of terminal
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE); // Additive blending
+
+        gl.useProgram(this.crtShader.program);
+
+        // Create a black texture to use as terminal (we only want glass)
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.uniform1i(this.crtShader.uniforms.u_terminal, 0);
+        gl.uniform2f(this.crtShader.uniforms.u_resolution, this.width, this.height);
+        gl.uniform1f(this.crtShader.uniforms.u_time, this.time);
+
+        // Disable all CRT effects, only glass
+        gl.uniform1f(this.crtShader.uniforms.u_scanlines, 0);
+        gl.uniform1f(this.crtShader.uniforms.u_curvature, 0);
+        gl.uniform1f(this.crtShader.uniforms.u_vignette, 0);
+        gl.uniform1f(this.crtShader.uniforms.u_chromatic, 0);
+        gl.uniform1f(this.crtShader.uniforms.u_flicker, 0);
+        gl.uniform1f(this.crtShader.uniforms.u_glow, 0);
+        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, 1.0);
+        gl.uniform1i(this.crtShader.uniforms.u_colorMode, CRT_COLOR_RGB);
+
+        gl.uniform2f(this.crtShader.uniforms.u_scale, 1.0, 1.0);
+        gl.uniform2f(this.crtShader.uniforms.u_offset, 0.0, 0.0);
+        gl.uniform1f(this.crtShader.uniforms.u_alpha, 0.0); // No terminal content, just glass
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+        const posLoc = gl.getAttribLocation(this.crtShader.program, 'a_pos');
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        gl.disableVertexAttribArray(posLoc);
+
+        gl.disable(gl.BLEND);
     }
 
     /**
@@ -251,6 +299,22 @@ export class CrtEffects {
     }
 
     /**
+     * Enable/disable glass reflection effect.
+     * Glass is independent of CRT effects - it's ambient light on the screen.
+     * @param {boolean} enabled
+     */
+    setGlass(enabled) {
+        this.glassEnabled = enabled;
+    }
+
+    /**
+     * Check if glass reflection is enabled.
+     */
+    isGlassEnabled() {
+        return this.glassEnabled;
+    }
+
+    /**
      * Apply a preset.
      * @param {string} preset - 'off', 'subtle', 'retro', 'arcade'
      */
@@ -268,7 +332,6 @@ export class CrtEffects {
                     chromatic: 0.0005,
                     flicker: 0.01,
                     glow: 0.05,
-                    glassReflection: 0,
                     colorMode: CRT_COLOR_RGB
                 };
                 break;
@@ -281,7 +344,6 @@ export class CrtEffects {
                     chromatic: 0.001,
                     flicker: 0.02,
                     glow: 0.1,
-                    glassReflection: 0,
                     colorMode: CRT_COLOR_RGB
                 };
                 break;
@@ -294,20 +356,6 @@ export class CrtEffects {
                     chromatic: 0.002,
                     flicker: 0.03,
                     glow: 0.2,
-                    glassReflection: 0.5,
-                    colorMode: CRT_COLOR_RGB
-                };
-                break;
-            case 'glass':
-                this.enabled = true;
-                this.params = {
-                    scanlines: 0.3,
-                    curvature: 0.04,
-                    vignette: 0.25,
-                    chromatic: 0.001,
-                    flicker: 0.02,
-                    glow: 0.1,
-                    glassReflection: 1.0,
                     colorMode: CRT_COLOR_RGB
                 };
                 break;
@@ -320,7 +368,6 @@ export class CrtEffects {
                     chromatic: 0,
                     flicker: 0.02,
                     glow: 0.15,
-                    glassReflection: 0.7,
                     colorMode: CRT_COLOR_AMBER
                 };
                 break;
@@ -333,7 +380,6 @@ export class CrtEffects {
                     chromatic: 0,
                     flicker: 0.02,
                     glow: 0.15,
-                    glassReflection: 0.7,
                     colorMode: CRT_COLOR_GREEN
                 };
                 break;
@@ -378,7 +424,7 @@ export class CrtEffects {
         gl.uniform1f(this.crtShader.uniforms.u_chromatic, this.params.chromatic);
         gl.uniform1f(this.crtShader.uniforms.u_flicker, this.params.flicker);
         gl.uniform1f(this.crtShader.uniforms.u_glow, this.params.glow);
-        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, this.params.glassReflection);
+        gl.uniform1f(this.crtShader.uniforms.u_glassReflection, this.glassEnabled ? 1.0 : 0.0);
         gl.uniform1i(this.crtShader.uniforms.u_colorMode, this.params.colorMode);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
