@@ -326,7 +326,10 @@ static CTStatus assemble_one_boundary(CTPBFContext *ctx,
 
 CTStatus ct_assemble_boundaries(CTPBFContext *ctx)
 {
-    if (!ctx || !ctx->way_map) return CT_ERROR_INVALID_ARGUMENT;
+    if (!ctx) return CT_ERROR_INVALID_ARGUMENT;
+
+    /* If no way_map, we can't resolve way references - return OK with 0 boundaries */
+    if (!ctx->way_map) return CT_OK;
 
     /* Process each boundary relation */
     for (size_t i = 0; i < ctx->num_boundary_relations; i++) {

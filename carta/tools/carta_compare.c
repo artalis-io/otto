@@ -356,6 +356,7 @@ static int run_info_mode(const CTPBFContext *pbf, const CompareConfig *cfg)
     printf("Statistics:\n");
     printf("  Ways: %zu\n", pbf->num_ways);
     printf("  Multipolygons: %zu\n", pbf->num_multipolygons);
+    printf("  Boundaries: %zu\n", pbf->num_boundaries);
     printf("  Labeled points: %zu\n", ct_pbf_get_label_count(pbf));
     printf("\n");
 
@@ -1001,8 +1002,8 @@ int main(int argc, char **argv)
         curl_global_cleanup();
         return 1;
     }
-    printf("Loaded: %zu ways, %zu multipolygons\n\n",
-           pbf->num_ways, pbf->num_multipolygons);
+    printf("Loaded: %zu ways, %zu multipolygons, %zu boundaries\n\n",
+           pbf->num_ways, pbf->num_multipolygons, pbf->num_boundaries);
 
     int result = 0;
 

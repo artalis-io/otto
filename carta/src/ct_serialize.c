@@ -1,11 +1,11 @@
 /*
  * ct_serialize.c - Binary Index Serialization with mmap Support
  *
- * Binary format v4:
+ * Binary format v5:
  *
- * [Header] (96 bytes)
+ * [Header] (128 bytes)
  *   magic: u32 (0x43525441 = "CRTA")
- *   version: u32 (4)
+ *   version: u32 (5)
  *   num_ways: u32
  *   total_coords: u32
  *   string_pool_size: u32
@@ -19,10 +19,15 @@
  *   mp_rtree_num_nodes: u32
  *   mp_rtree_num_entries: u32
  *   mp_rtree_root_idx: u32
- *   _reserved: u32
+ *   num_boundaries: u32
+ *   total_boundary_coords: u32
+ *   boundary_rtree_num_nodes: u32
+ *   boundary_rtree_num_entries: u32
+ *   boundary_rtree_root_idx: u32
+ *   _reserved: u32[4]
  *   bbox: 4 x f64 (min_lat, min_lon, max_lat, max_lon)
  *
- * [Section Offsets] (96 bytes)
+ * [Section Offsets] (128 bytes)
  *   ways_offset: u64
  *   coords_offset: u64
  *   string_pool_offset: u64
@@ -34,6 +39,10 @@
  *   mp_coords_offset: u64
  *   mp_rtree_nodes_offset: u64
  *   mp_rtree_leaf_indices_offset: u64
+ *   boundaries_offset: u64
+ *   boundary_coords_offset: u64
+ *   boundary_rtree_nodes_offset: u64
+ *   boundary_rtree_leaf_indices_offset: u64
  *   _padding: u64
  *
  * [Way Records] - 32 bytes each
@@ -47,6 +56,10 @@
  * [Multipolygon Coordinates] - 8 bytes each
  * [Multipolygon R-Tree Nodes] - CTPackedNode array
  * [Multipolygon R-Tree Leaf Indices] - u32 array
+ * [Boundaries] - 32 bytes each
+ * [Boundary Coordinates] - 8 bytes each
+ * [Boundary R-Tree Nodes] - CTPackedNode array
+ * [Boundary R-Tree Leaf Indices] - u32 array
  */
 
 #include "ct_serialize.h"
@@ -80,7 +93,12 @@ typedef struct __attribute__((packed)) {
     uint32_t mp_rtree_num_nodes;
     uint32_t mp_rtree_num_entries;
     uint32_t mp_rtree_root_idx;
-    uint32_t _reserved;
+    uint32_t num_boundaries;           /* v5: boundary relations */
+    uint32_t total_boundary_coords;    /* v5 */
+    uint32_t boundary_rtree_num_nodes; /* v5 */
+    uint32_t boundary_rtree_num_entries; /* v5 */
+    uint32_t boundary_rtree_root_idx;  /* v5 */
+    uint32_t _reserved[4];
     double min_lat;
     double min_lon;
     double max_lat;
@@ -99,6 +117,10 @@ typedef struct __attribute__((packed)) {
     uint64_t mp_coords_offset;
     uint64_t mp_rtree_nodes_offset;
     uint64_t mp_rtree_leaf_indices_offset;
+    uint64_t boundaries_offset;               /* v5 */
+    uint64_t boundary_coords_offset;          /* v5 */
+    uint64_t boundary_rtree_nodes_offset;     /* v5 */
+    uint64_t boundary_rtree_leaf_indices_offset; /* v5 */
     uint64_t _padding;
 } CTSectionOffsets;
 
@@ -158,6 +180,18 @@ typedef struct __attribute__((packed)) {
     uint8_t is_outer;
     uint8_t _padding[3];
 } CTBinaryRing;
+
+/* Boundary record - 32 bytes */
+typedef struct __attribute__((packed)) {
+    int64_t relation_id;
+    uint32_t coord_offset;     /* Offset into boundary coords array */
+    uint32_t num_coords;
+    uint32_t name_offset;      /* Offset into string pool */
+    uint8_t boundary_type;     /* CTBoundaryType */
+    uint8_t admin_level;       /* 2=country, 4=state, 6=county, etc. */
+    uint8_t _padding[2];
+    float length_m;
+} CTBinaryBoundary;
 
 /* ============================================================================
  * String Pool
@@ -239,6 +273,12 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         }
     }
 
+    /* Count total coordinates for boundaries */
+    size_t total_boundary_coords = 0;
+    for (size_t i = 0; i < ctx->num_boundaries; i++) {
+        total_boundary_coords += ctx->boundaries[i].num_coords;
+    }
+
     /* Calculate sizes */
     size_t header_size = sizeof(CTBinaryHeader) + sizeof(CTSectionOffsets);
     size_t ways_size = ctx->num_ways * sizeof(CTBinaryWay);
@@ -247,6 +287,8 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
     size_t multipolygons_size = ctx->num_multipolygons * sizeof(CTBinaryMultipolygon);
     size_t mp_rings_size = total_mp_rings * sizeof(CTBinaryRing);
     size_t mp_coords_size = total_mp_coords * sizeof(CTBinaryCoord);
+    size_t boundaries_size = ctx->num_boundaries * sizeof(CTBinaryBoundary);
+    size_t boundary_coords_size = total_boundary_coords * sizeof(CTBinaryCoord);
 
     /* First pass: build string pool to get its size */
     uint32_t *name_offsets = malloc(ctx->num_ways * sizeof(uint32_t));
@@ -287,11 +329,29 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         }
     }
 
+    /* Add boundary names to string pool */
+    uint32_t *boundary_name_offsets = NULL;
+    if (ctx->num_boundaries > 0) {
+        boundary_name_offsets = malloc(ctx->num_boundaries * sizeof(uint32_t));
+        if (!boundary_name_offsets) {
+            free(name_offsets);
+            free(label_name_offsets);
+            free(mp_name_offsets);
+            string_pool_free(&strings);
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+        for (size_t i = 0; i < ctx->num_boundaries; i++) {
+            boundary_name_offsets[i] = string_pool_add(&strings, ctx->boundaries[i].name);
+        }
+    }
+
     size_t string_pool_size = strings.size;
     size_t rtree_nodes_size = ctx->rtree ? ctx->rtree->num_nodes * sizeof(CTPackedNode) : 0;
     size_t rtree_leaf_size = ctx->rtree ? ctx->rtree->num_entries * sizeof(uint32_t) : 0;
     size_t mp_rtree_nodes_size = ctx->mp_rtree ? ctx->mp_rtree->num_nodes * sizeof(CTPackedNode) : 0;
     size_t mp_rtree_leaf_size = ctx->mp_rtree ? ctx->mp_rtree->num_entries * sizeof(uint32_t) : 0;
+    size_t boundary_rtree_nodes_size = ctx->boundary_rtree ? ctx->boundary_rtree->num_nodes * sizeof(CTPackedNode) : 0;
+    size_t boundary_rtree_leaf_size = ctx->boundary_rtree ? ctx->boundary_rtree->num_entries * sizeof(uint32_t) : 0;
 
     /* Write header */
     CTBinaryHeader header = {
@@ -310,7 +370,12 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         .mp_rtree_num_nodes = ctx->mp_rtree ? (uint32_t)ctx->mp_rtree->num_nodes : 0,
         .mp_rtree_num_entries = ctx->mp_rtree ? (uint32_t)ctx->mp_rtree->num_entries : 0,
         .mp_rtree_root_idx = ctx->mp_rtree ? ctx->mp_rtree->root_idx : 0,
-        ._reserved = 0,
+        .num_boundaries = (uint32_t)ctx->num_boundaries,
+        .total_boundary_coords = (uint32_t)total_boundary_coords,
+        .boundary_rtree_num_nodes = ctx->boundary_rtree ? (uint32_t)ctx->boundary_rtree->num_nodes : 0,
+        .boundary_rtree_num_entries = ctx->boundary_rtree ? (uint32_t)ctx->boundary_rtree->num_entries : 0,
+        .boundary_rtree_root_idx = ctx->boundary_rtree ? ctx->boundary_rtree->root_idx : 0,
+        ._reserved = {0, 0, 0, 0},
         .min_lat = ctx->bbox.min_lat,
         .min_lon = ctx->bbox.min_lon,
         .max_lat = ctx->bbox.max_lat,
@@ -330,7 +395,11 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
     size_t mp_rings_offset = offset; offset += mp_rings_size;
     size_t mp_coords_offset = offset; offset += mp_coords_size;
     size_t mp_rtree_nodes_offset = offset; offset += mp_rtree_nodes_size;
-    size_t mp_rtree_leaf_offset = offset;
+    size_t mp_rtree_leaf_offset = offset; offset += mp_rtree_leaf_size;
+    size_t boundaries_offset = offset; offset += boundaries_size;
+    size_t boundary_coords_offset = offset; offset += boundary_coords_size;
+    size_t boundary_rtree_nodes_offset = offset; offset += boundary_rtree_nodes_size;
+    size_t boundary_rtree_leaf_offset = offset;
 
     /* Write section offsets */
     CTSectionOffsets offsets = {
@@ -345,6 +414,10 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         .mp_coords_offset = mp_coords_offset,
         .mp_rtree_nodes_offset = mp_rtree_nodes_offset,
         .mp_rtree_leaf_indices_offset = mp_rtree_leaf_offset,
+        .boundaries_offset = boundaries_offset,
+        .boundary_coords_offset = boundary_coords_offset,
+        .boundary_rtree_nodes_offset = boundary_rtree_nodes_offset,
+        .boundary_rtree_leaf_indices_offset = boundary_rtree_leaf_offset,
         ._padding = 0
     };
     fwrite(&offsets, sizeof(offsets), 1, f);
@@ -475,9 +548,50 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         fwrite(ctx->mp_rtree->leaf_indices, sizeof(uint32_t), ctx->mp_rtree->num_entries, f);
     }
 
+    /* Write boundaries */
+    size_t boundary_coord_offset = 0;
+    for (size_t i = 0; i < ctx->num_boundaries; i++) {
+        const CTAssembledBoundary *b = &ctx->boundaries[i];
+        CTBinaryBoundary bb = {
+            .relation_id = b->relation_id,
+            .coord_offset = (uint32_t)boundary_coord_offset,
+            .num_coords = (uint32_t)b->num_coords,
+            .name_offset = boundary_name_offsets ? boundary_name_offsets[i] : 0,
+            .boundary_type = (uint8_t)b->boundary_type,
+            .admin_level = (uint8_t)b->admin_level,
+            ._padding = {0, 0},
+            .length_m = b->length_m
+        };
+        fwrite(&bb, sizeof(bb), 1, f);
+        boundary_coord_offset += b->num_coords;
+    }
+
+    /* Write boundary coordinates */
+    for (size_t i = 0; i < ctx->num_boundaries; i++) {
+        const CTAssembledBoundary *b = &ctx->boundaries[i];
+        for (int j = 0; j < b->num_coords; j++) {
+            CTBinaryCoord coord = {
+                .lat_e7 = (int32_t)(b->coords[j].lat * 1e7),
+                .lon_e7 = (int32_t)(b->coords[j].lon * 1e7)
+            };
+            fwrite(&coord, sizeof(coord), 1, f);
+        }
+    }
+
+    /* Write Boundary R-Tree nodes */
+    if (ctx->boundary_rtree && ctx->boundary_rtree->nodes) {
+        fwrite(ctx->boundary_rtree->nodes, sizeof(CTPackedNode), ctx->boundary_rtree->num_nodes, f);
+    }
+
+    /* Write Boundary R-Tree leaf indices */
+    if (ctx->boundary_rtree && ctx->boundary_rtree->leaf_indices) {
+        fwrite(ctx->boundary_rtree->leaf_indices, sizeof(uint32_t), ctx->boundary_rtree->num_entries, f);
+    }
+
     free(name_offsets);
     free(label_name_offsets);
     free(mp_name_offsets);
+    free(boundary_name_offsets);
     string_pool_free(&strings);
     fclose(f);
 
@@ -512,9 +626,9 @@ CTPBFContext *ct_index_mmap(const char *path) {
         return NULL;
     }
 
-    /* Support both v3 (no multipolygons) and v4 (with multipolygons) */
-    if (header->version != CT_BINARY_VERSION && header->version != 3) {
-        fprintf(stderr, "Error: Unsupported index version %u (expected %d or 3)\n",
+    /* Support v3 (no multipolygons), v4 (with multipolygons), v5 (with boundaries) */
+    if (header->version != CT_BINARY_VERSION && header->version != 4 && header->version != 3) {
+        fprintf(stderr, "Error: Unsupported index version %u (expected %d, 4, or 3)\n",
                 header->version, CT_BINARY_VERSION);
         munmap(map, st.st_size);
         return NULL;
@@ -763,6 +877,86 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
                         ctx->mp_rtree_is_mmap = 1;
                     }
+                }
+            }
+        }
+    }
+
+    /* Reconstruct boundaries (v5+ only) */
+    if (header->version >= 5 && header->num_boundaries > 0) {
+        const CTBinaryBoundary *binary_boundaries =
+            (const CTBinaryBoundary *)((char *)map + offsets->boundaries_offset);
+        const CTBinaryCoord *binary_boundary_coords =
+            (const CTBinaryCoord *)((char *)map + offsets->boundary_coords_offset);
+
+        ctx->num_boundaries = header->num_boundaries;
+        ctx->boundaries_capacity = header->num_boundaries;
+        ctx->boundaries = malloc(header->num_boundaries * sizeof(CTAssembledBoundary));
+
+        if (ctx->boundaries) {
+            /* Allocate all boundary coordinates in one block */
+            CTCoord *all_boundary_coords = malloc(header->total_boundary_coords * sizeof(CTCoord));
+            if (!all_boundary_coords) {
+                free(ctx->boundaries);
+                ctx->boundaries = NULL;
+                ctx->num_boundaries = 0;
+            } else {
+                ctx->mmap_boundary_coords = all_boundary_coords;
+                size_t boundary_coord_idx = 0;
+
+                for (size_t i = 0; i < header->num_boundaries; i++) {
+                    const CTBinaryBoundary *bb = &binary_boundaries[i];
+                    CTAssembledBoundary *b = &ctx->boundaries[i];
+
+                    b->relation_id = bb->relation_id;
+                    b->num_coords = bb->num_coords;
+                    b->boundary_type = (CTBoundaryType)bb->boundary_type;
+                    b->admin_level = bb->admin_level;
+                    b->length_m = bb->length_m;
+
+                    /* Name from string pool */
+                    if (bb->name_offset > 0 && bb->name_offset < header->string_pool_size) {
+                        b->name = strdup(string_pool + bb->name_offset);
+                    } else {
+                        b->name = NULL;
+                    }
+
+                    /* Point to pre-allocated coords */
+                    b->coords = &all_boundary_coords[boundary_coord_idx];
+
+                    /* Convert coordinates and compute bbox */
+                    b->bbox.min_lat = 90.0;
+                    b->bbox.max_lat = -90.0;
+                    b->bbox.min_lon = 180.0;
+                    b->bbox.max_lon = -180.0;
+
+                    for (uint32_t j = 0; j < bb->num_coords; j++) {
+                        const CTBinaryCoord *bc = &binary_boundary_coords[bb->coord_offset + j];
+                        double lat = bc->lat_e7 * 1e-7;
+                        double lon = bc->lon_e7 * 1e-7;
+                        b->coords[j].lat = lat;
+                        b->coords[j].lon = lon;
+
+                        if (lat < b->bbox.min_lat) b->bbox.min_lat = lat;
+                        if (lat > b->bbox.max_lat) b->bbox.max_lat = lat;
+                        if (lon < b->bbox.min_lon) b->bbox.min_lon = lon;
+                        if (lon > b->bbox.max_lon) b->bbox.max_lon = lon;
+                    }
+                    boundary_coord_idx += bb->num_coords;
+                }
+
+                /* Reconstruct boundary R-Tree */
+                if (header->boundary_rtree_num_nodes > 0) {
+                    ctx->boundary_rtree = calloc(1, sizeof(CTRTree));
+                    ctx->boundary_rtree->num_nodes = header->boundary_rtree_num_nodes;
+                    ctx->boundary_rtree->num_entries = header->boundary_rtree_num_entries;
+                    ctx->boundary_rtree->root_idx = header->boundary_rtree_root_idx;
+
+                    /* Point directly to mmap'd arrays */
+                    ctx->boundary_rtree->nodes = (CTPackedNode *)((char *)map + offsets->boundary_rtree_nodes_offset);
+                    ctx->boundary_rtree->leaf_indices = (uint32_t *)((char *)map + offsets->boundary_rtree_leaf_indices_offset);
+
+                    ctx->boundary_rtree_is_mmap = 1;
                 }
             }
         }
