@@ -1628,11 +1628,11 @@ TEST(lod_landuse_types)
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK,
                                  8, 2000000, 0), 0);   /* z8 hidden */
 
-    /* Residential at z14 - delayed to reduce clutter at mid-zoom */
+    /* Residential at z10 - visible early like OSM Carto */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL,
-                                 14, 0, 0), 1);
+                                 10, 0, 0), 1);
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL,
-                                 13, 0, 0), 0);
+                                 9, 0, 0), 0);
 
     ct_lod_free(&config);
     return 1;

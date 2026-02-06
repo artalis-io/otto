@@ -141,9 +141,9 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 11, -1, 100000, 0);      /* >0.1km² at z11 */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 13, -1, 0, 0);           /* All at z13 */
 
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL, 14, -1, 0, 0);  /* Delay: reduces clutter */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_COMMERCIAL, 13, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_INDUSTRIAL, 12, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL, 10, -1, 0, 0);  /* Urban areas visible at z10 like OSM */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_COMMERCIAL, 12, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_INDUSTRIAL, 11, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_MILITARY, 10, -1, 0, 0);
 
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 8, -1, 10000000, 0);   /* >10km² at z8 */
