@@ -69,9 +69,36 @@ void ct_default_style(CTStyle *style)
     style->park_color            = CT_RGB(198, 236, 199);  /* #c6ecc7 - muted park green */
     style->sand_color            = CT_RGB(245, 233, 186);  /* Beach/sand */
 
-    /* Railway */
-    style->railway_color = CT_RGB(120, 120, 120);
-    style->railway_width = 2.0f;
+    /* Railway colors by type (OSM Carto-inspired) */
+    style->railway_colors[CT_RAILWAY_RAIL]         = CT_RGB(112, 112, 112);  /* Main rail - dark gray */
+    style->railway_colors[CT_RAILWAY_SUBWAY]       = CT_RGB(100, 100, 180);  /* Subway - bluish */
+    style->railway_colors[CT_RAILWAY_TRAM]         = CT_RGB(68, 68, 68);     /* Tram - darker gray */
+    style->railway_colors[CT_RAILWAY_NARROW_GAUGE] = CT_RGB(112, 112, 112);  /* Narrow gauge */
+    style->railway_colors[CT_RAILWAY_PRESERVED]    = CT_RGB(140, 100, 80);   /* Heritage - brownish */
+    style->railway_colors[CT_RAILWAY_DISUSED]      = CT_RGB(180, 180, 180);  /* Disused - light gray */
+    style->railway_colors[CT_RAILWAY_OTHER]        = CT_RGB(140, 140, 140);  /* Other */
+
+    /* Railway outline colors (for crosshatch/dash effect) */
+    style->railway_outline_colors[CT_RAILWAY_RAIL]         = CT_RGB(255, 255, 255);
+    style->railway_outline_colors[CT_RAILWAY_SUBWAY]       = CT_RGB(255, 255, 255);
+    style->railway_outline_colors[CT_RAILWAY_TRAM]         = CT_RGB(200, 200, 200);
+    style->railway_outline_colors[CT_RAILWAY_NARROW_GAUGE] = CT_RGB(255, 255, 255);
+    style->railway_outline_colors[CT_RAILWAY_PRESERVED]    = CT_RGB(220, 200, 180);
+    style->railway_outline_colors[CT_RAILWAY_DISUSED]      = CT_RGB(220, 220, 220);
+    style->railway_outline_colors[CT_RAILWAY_OTHER]        = CT_RGB(200, 200, 200);
+
+    /* Railway widths by type */
+    style->railway_widths[CT_RAILWAY_RAIL]         = 2.0f;
+    style->railway_widths[CT_RAILWAY_SUBWAY]       = 2.0f;
+    style->railway_widths[CT_RAILWAY_TRAM]         = 1.5f;
+    style->railway_widths[CT_RAILWAY_NARROW_GAUGE] = 1.5f;
+    style->railway_widths[CT_RAILWAY_PRESERVED]    = 1.5f;
+    style->railway_widths[CT_RAILWAY_DISUSED]      = 1.0f;
+    style->railway_widths[CT_RAILWAY_OTHER]        = 1.5f;
+
+    /* Bridge styling (stronger outline for elevation effect) */
+    style->bridge_outline_color = CT_RGB(100, 100, 100);  /* Dark outline */
+    style->bridge_outline_width = 1.5f;                    /* Extra outline width */
 
     /* Boundaries (admin borders) - subtle purple like OSM Carto */
     style->boundary_color = CT_RGBA(170, 80, 170, 140);  /* More transparent purple */
@@ -145,6 +172,36 @@ float ct_style_waterway_width(const CTStyle *style, CTWaterwayType waterway_type
     }
 
     float width = style->waterway_widths[waterway_type];
+
+    /* Ensure minimum visibility */
+    if (width < 0.5f) width = 0.5f;
+
+    return width;
+}
+
+/*
+ * Get width for a railway type at a specific zoom level.
+ * Base width scales with zoom similar to roads.
+ */
+float ct_style_railway_width(const CTStyle *style, CTRailwayType railway_type, int zoom)
+{
+    if (railway_type < 0 || railway_type >= CT_RAILWAY_TYPE_COUNT) {
+        return 1.5f;  /* Fallback */
+    }
+
+    float base_width = style->railway_widths[railway_type];
+
+    /* Scale with zoom (railways are thinner at low zoom) */
+    float scale = 1.0f;
+    if (zoom <= 10) {
+        scale = 0.5f;
+    } else if (zoom <= 12) {
+        scale = 0.75f;
+    } else if (zoom >= 16) {
+        scale = 1.5f;
+    }
+
+    float width = base_width * scale;
 
     /* Ensure minimum visibility */
     if (width < 0.5f) width = 0.5f;

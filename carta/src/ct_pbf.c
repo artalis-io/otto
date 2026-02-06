@@ -192,6 +192,39 @@ static int classify_waterway(const char *value)
     return CT_WATERWAY_OTHER;
 }
 
+static int classify_railway(const char *value)
+{
+    /* Main rail lines */
+    if (strcmp(value, "rail") == 0) {
+        return CT_RAILWAY_RAIL;
+    }
+    /* Subway/metro */
+    if (strcmp(value, "subway") == 0 ||
+        strcmp(value, "metro") == 0) {
+        return CT_RAILWAY_SUBWAY;
+    }
+    /* Trams and light rail */
+    if (strcmp(value, "tram") == 0 ||
+        strcmp(value, "light_rail") == 0) {
+        return CT_RAILWAY_TRAM;
+    }
+    /* Narrow gauge */
+    if (strcmp(value, "narrow_gauge") == 0) {
+        return CT_RAILWAY_NARROW_GAUGE;
+    }
+    /* Heritage/preserved railways */
+    if (strcmp(value, "preserved") == 0 ||
+        strcmp(value, "heritage") == 0) {
+        return CT_RAILWAY_PRESERVED;
+    }
+    /* Disused/abandoned */
+    if (strcmp(value, "disused") == 0 ||
+        strcmp(value, "abandoned") == 0) {
+        return CT_RAILWAY_DISUSED;
+    }
+    return CT_RAILWAY_OTHER;
+}
+
 static int classify_landuse(const char *value)
 {
     /* Forests and woods */
@@ -373,22 +406,43 @@ static CTStatus add_labeled_point(CTPBFContext *ctx, int64_t id,
 
 static CTOSMFeatureClass classify_tags(const SHStringTable *st,
                                        const uint32_t *keys, const uint32_t *vals,
-                                       int num_tags, int *feature_type, int *is_area)
+                                       int num_tags, int *feature_type, int *is_area,
+                                       uint8_t *flags)
 {
     *feature_type = 0;
     *is_area = 0;
+    *flags = CT_FLAG_NONE;
 
     /* Track admin_level for boundary classification */
     int admin_level = CT_BOUNDARY_OTHER;
     int has_boundary = 0;
 
-    /* First pass: check for area=yes and admin_level */
+    /* Deferred feature class (set during tag scan, returned at end) */
+    CTOSMFeatureClass feature_class = CT_OSM_UNKNOWN;
+    const char *railway_val = NULL;
+
+    /* First pass: check for area=yes, admin_level, bridge, tunnel, and classify */
     for (int i = 0; i < num_tags; i++) {
         const char *key = sh_string_table_get(st, keys[i]);
         const char *val = sh_string_table_get(st, vals[i]);
+
+        /* Bridge/tunnel flags */
+        if (strcmp(key, "bridge") == 0 && strcmp(val, "yes") == 0) {
+            *flags |= CT_FLAG_BRIDGE;
+        }
+        if (strcmp(key, "tunnel") == 0 && strcmp(val, "yes") == 0) {
+            *flags |= CT_FLAG_TUNNEL;
+        }
+        if (strcmp(key, "oneway") == 0 && strcmp(val, "yes") == 0) {
+            *flags |= CT_FLAG_ONEWAY;
+        }
+
+        /* Area tag */
         if (strcmp(key, "area") == 0 && strcmp(val, "yes") == 0) {
             *is_area = 1;
         }
+
+        /* Admin level */
         if (strcmp(key, "admin_level") == 0) {
             int level = atoi(val);
             /* Bucket to defined LOD levels (2, 4, 6, 8, 10) */
@@ -402,18 +456,13 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
         if (strcmp(key, "boundary") == 0 && strcmp(val, "administrative") == 0) {
             has_boundary = 1;
         }
-    }
 
-    /* Second pass: classify feature */
-    for (int i = 0; i < num_tags; i++) {
-        const char *key = sh_string_table_get(st, keys[i]);
-        const char *val = sh_string_table_get(st, vals[i]);
-
-        if (strcmp(key, "highway") == 0) {
+        /* Feature classification - continue to collect all tags for flags */
+        if (strcmp(key, "highway") == 0 && feature_class == CT_OSM_UNKNOWN) {
             *feature_type = classify_highway(val);
-            return CT_OSM_HIGHWAY;
+            feature_class = CT_OSM_HIGHWAY;
         }
-        if (strcmp(key, "waterway") == 0) {
+        if (strcmp(key, "waterway") == 0 && feature_class == CT_OSM_UNKNOWN) {
             /* riverbank is always an area (polygon) - use water body type */
             if (strcmp(val, "riverbank") == 0) {
                 *feature_type = CT_WATER_RIVERBANK;
@@ -421,45 +470,52 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
             } else {
                 *feature_type = classify_waterway(val);
             }
-            return CT_OSM_WATERWAY;
+            feature_class = CT_OSM_WATERWAY;
         }
-        if (strcmp(key, "natural") == 0) {
+        if (strcmp(key, "natural") == 0 && feature_class == CT_OSM_UNKNOWN) {
             if (strcmp(val, "water") == 0) {
                 *feature_type = CT_WATER_BODY;  /* Distinct from linear waterways */
                 *is_area = 1;
-                return CT_OSM_WATER;
+                feature_class = CT_OSM_WATER;
+            } else {
+                /* Woods and grassland go to landuse layer */
+                *feature_type = classify_natural(val);
+                *is_area = 1;
+                feature_class = CT_OSM_NATURAL;
             }
-            /* Woods and grassland go to landuse layer */
-            *feature_type = classify_natural(val);
-            *is_area = 1;
-            return CT_OSM_NATURAL;
         }
-        if (strcmp(key, "building") == 0) {
+        if (strcmp(key, "building") == 0 && feature_class == CT_OSM_UNKNOWN) {
             *is_area = 1;
-            return CT_OSM_BUILDING;
+            feature_class = CT_OSM_BUILDING;
         }
-        if (strcmp(key, "landuse") == 0) {
+        if (strcmp(key, "landuse") == 0 && feature_class == CT_OSM_UNKNOWN) {
             *feature_type = classify_landuse(val);
             *is_area = 1;
-            return CT_OSM_LANDUSE;
+            feature_class = CT_OSM_LANDUSE;
         }
-        if (strcmp(key, "leisure") == 0) {
+        if (strcmp(key, "leisure") == 0 && feature_class == CT_OSM_UNKNOWN) {
             *feature_type = classify_leisure(val);
             *is_area = 1;
-            return CT_OSM_LANDUSE;  /* Parks go to landuse layer */
+            feature_class = CT_OSM_LANDUSE;  /* Parks go to landuse layer */
         }
-        if (strcmp(key, "railway") == 0) {
-            return CT_OSM_RAILWAY;
+        if (strcmp(key, "railway") == 0 && feature_class == CT_OSM_UNKNOWN) {
+            railway_val = val;
+            feature_class = CT_OSM_RAILWAY;
         }
+    }
+
+    /* Classify railway type if railway tag was found */
+    if (feature_class == CT_OSM_RAILWAY && railway_val) {
+        *feature_type = classify_railway(railway_val);
     }
 
     /* Handle administrative boundaries */
-    if (has_boundary) {
+    if (feature_class == CT_OSM_UNKNOWN && has_boundary) {
         *feature_type = admin_level;
-        return CT_OSM_BOUNDARY;
+        feature_class = CT_OSM_BOUNDARY;
     }
 
-    return CT_OSM_UNKNOWN;
+    return feature_class;
 }
 
 /* ============================================================================
@@ -1167,9 +1223,10 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     /* Classify the way */
     int feature_type = 0;
     int is_area = 0;
+    uint8_t flags = CT_FLAG_NONE;
     int num_tags = (int)(key_count < val_count ? key_count : val_count);
     CTOSMFeatureClass feature_class = classify_tags(st, keys, vals, num_tags,
-                                                    &feature_type, &is_area);
+                                                    &feature_type, &is_area, &flags);
 
     /*
      * NOTE: We store ALL ways, even unclassified ones (CT_OSM_UNKNOWN).
@@ -1228,6 +1285,7 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     way->feature_class = feature_class;
     way->feature_type = feature_type;
     way->is_area = is_area;
+    way->flags = flags;
     way->name = NULL;
 
     /* Register in way_map for relation member lookup */
@@ -1863,6 +1921,7 @@ static CTStatus add_way_as_feature(const CTOSMWay *way, CTFeature **features,
     f->type = way->is_area ? CT_GEOM_POLYGON : CT_GEOM_LINESTRING;
     f->layer = layer_from_osm_class(way->feature_class);
     f->feature_type = way->feature_type;
+    f->flags = way->flags;
     f->area_sqm = way->area_sqm;
     f->length_m = way->length_m;
 
@@ -2126,6 +2185,7 @@ static CTStatus add_way_with_lod(const CTOSMWay *way, const struct CTLODConfig *
     f->type = way->is_area ? CT_GEOM_POLYGON : CT_GEOM_LINESTRING;
     f->layer = layer;
     f->feature_type = way->feature_type;
+    f->flags = way->flags;
 
     /* Allocate and copy coordinates */
     f->points = malloc(way->num_coords * sizeof(CTTilePoint));

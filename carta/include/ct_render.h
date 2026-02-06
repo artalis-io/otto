@@ -231,6 +231,17 @@ float ct_style_road_width(const CTStyle *style, CTRoadType road_type, int zoom);
  */
 float ct_style_waterway_width(const CTStyle *style, CTWaterwayType waterway_type);
 
+/*
+ * Get width for a railway type at a specific zoom level.
+ * Base width scales with zoom similar to roads.
+ *
+ * @param style        Style configuration
+ * @param railway_type Railway type (rail, subway, tram, etc.)
+ * @param zoom         Zoom level
+ * @return Width in pixels
+ */
+float ct_style_railway_width(const CTStyle *style, CTRailwayType railway_type, int zoom);
+
 /* ============================================================================
  * Text Rendering
  * ============================================================================ */

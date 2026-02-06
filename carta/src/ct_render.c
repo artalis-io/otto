@@ -1070,6 +1070,14 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     }
                     /* Use zoom-adaptive road width */
                     float width = ct_style_road_width(&ctx->style, road_type, tile->coord.z);
+
+                    /* Add bridge outline for elevated roads */
+                    if (f->flags & CT_FLAG_BRIDGE) {
+                        ct_render_polyline(ctx, scaled, f->num_points,
+                                           ctx->style.bridge_outline_color,
+                                           width + ctx->style.bridge_outline_width * 2 + 2.0f);
+                    }
+
                     ct_render_polyline_cased(ctx, scaled, f->num_points,
                                              ctx->style.road_colors[road_type],
                                              ctx->style.road_outline_colors[road_type],
@@ -1077,11 +1085,29 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     break;
                 }
 
-                case CT_LAYER_RAILWAYS:
-                    ct_render_polyline(ctx, scaled, f->num_points,
-                                       ctx->style.railway_color,
-                                       ctx->style.railway_width);
+                case CT_LAYER_RAILWAYS: {
+                    int railway_type = f->feature_type;
+                    if (railway_type < 0 || railway_type >= CT_RAILWAY_TYPE_COUNT) {
+                        railway_type = CT_RAILWAY_OTHER;
+                    }
+                    float width = ct_style_railway_width(&ctx->style, railway_type, tile->coord.z);
+                    CTColor color = ctx->style.railway_colors[railway_type];
+                    CTColor outline = ctx->style.railway_outline_colors[railway_type];
+
+                    /* Render railway with casing (tick marks effect) */
+                    ct_render_polyline_cased(ctx, scaled, f->num_points,
+                                             color, outline, width, 0.5f);
+
+                    /* Add extra casing for bridges */
+                    if (f->flags & CT_FLAG_BRIDGE) {
+                        ct_render_polyline(ctx, scaled, f->num_points,
+                                           ctx->style.bridge_outline_color,
+                                           width + ctx->style.bridge_outline_width * 2);
+                        ct_render_polyline_cased(ctx, scaled, f->num_points,
+                                                 color, outline, width, 0.5f);
+                    }
                     break;
+                }
 
                 case CT_LAYER_BOUNDARIES:
                     /* Render admin boundaries as semi-transparent lines */
