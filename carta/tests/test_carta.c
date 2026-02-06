@@ -1543,11 +1543,11 @@ TEST(lod_landuse_types)
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK,
                                  8, 2000000, 0), 0);   /* z8 hidden */
 
-    /* Residential at z12 - balanced preset shows earlier */
+    /* Residential at z14 - delayed to reduce clutter at mid-zoom */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL,
-                                 12, 0, 0), 1);
+                                 14, 0, 0), 1);
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL,
-                                 11, 0, 0), 0);
+                                 13, 0, 0), 0);
 
     ct_lod_free(&config);
     return 1;

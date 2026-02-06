@@ -77,11 +77,11 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 4, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 5, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 7, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 10, -1, 0, 0);  /* Was z9, now z10 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 12, -1, 0, 0);   /* Was z11, now z12 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 14, -1, 0, 0); /* Was z13, now z14 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 15, -1, 0, 0);    /* Was z14, now z15 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 15, -1, 0, 0);      /* Was z14, now z15 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 10, -1, 0, 0);  /* OSM Carto: z10 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 12, -1, 0, 0);   /* OSM Carto: z12 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 13, -1, 0, 0); /* OSM Carto: z13 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 14, -1, 0, 0);    /* OSM Carto: z14 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 14, -1, 0, 0);      /* OSM Carto: z14 */
 
     /* Buildings - visible at z13+ for large, z14+ for all */
     ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 13, -1, 2000, 0);  /* Large buildings */
@@ -127,17 +127,17 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 11, -1, 100000, 0);      /* >0.1km² at z11 */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_PARK, 13, -1, 0, 0);           /* All at z13 */
 
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL, 12, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_COMMERCIAL, 12, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_INDUSTRIAL, 11, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_RESIDENTIAL, 14, -1, 0, 0);  /* Delay: reduces clutter */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_COMMERCIAL, 13, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_INDUSTRIAL, 12, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_MILITARY, 10, -1, 0, 0);
 
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 8, -1, 10000000, 0);   /* >10km² at z8 */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 11, -1, 0, 0);         /* All at z11 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 12, -1, 0, 0);         /* All at z12 */
 
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_GRASS, 13, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_CEMETERY, 14, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_OTHER, 14, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_GRASS, 14, -1, 0, 0);  /* Delay: reduces clutter */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_CEMETERY, 15, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_OTHER, 15, -1, 0, 0);
 
     /* Boundaries - by admin level
      * OSM Carto shows boundaries very subtly. We delay lower-level boundaries
