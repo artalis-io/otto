@@ -382,8 +382,8 @@
 
                 // Handle special keys (Tab, Enter, Space, Arrows, Escape, Backspace)
                 function handleKeyDown(e) {
-                    // Q to power back on when screen is off
-                    if ((e.key === 'q' || e.key === 'Q') && isOff) {
+                    // Any key to power back on when screen is off
+                    if (isOff) {
                         e.preventDefault();
                         powerOn();
                         return;
@@ -392,9 +392,14 @@
                     const mods = (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0);
 
                     // Prevent default for navigation keys
-                    if (['Tab', 'Enter', ' ', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Delete', 'Home', 'End'].includes(e.key)) {
+                    if (['Tab', 'Enter', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Delete', 'Home', 'End'].includes(e.key)) {
                         e.preventDefault();
                         wasm.demo_key_down(e.keyCode, mods);
+                    } else if (e.key === ' ') {
+                        // Space needs both key_down and key_char for cs_input
+                        e.preventDefault();
+                        wasm.demo_key_down(e.keyCode, mods);
+                        wasm.demo_key_char(32);
                     } else if (e.ctrlKey || e.altKey || e.metaKey) {
                         // Pass through modifier combos
                         wasm.demo_key_down(e.keyCode, mods);
@@ -407,13 +412,6 @@
 
                 // Handle character input via the hidden input
                 hiddenInput.addEventListener('input', (e) => {
-                    // Check for power on first
-                    if (isOff && e.data && (e.data.includes('q') || e.data.includes('Q'))) {
-                        powerOn();
-                        hiddenInput.value = '';
-                        return;
-                    }
-
                     const text = e.data;
                     if (text) {
                         for (let i = 0; i < text.length; i++) {
