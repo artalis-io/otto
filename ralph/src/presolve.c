@@ -38,12 +38,12 @@ static PresolveContext* presolve_context_create(LPModel *model) {
     ctx->remove_singleton_rows = 1;
     ctx->remove_singleton_cols = 1;
     ctx->remove_forcing_cons = 1;
-    ctx->bound_tightening = 0;     /* TODO: fix numerical precision issues */
+    ctx->bound_tightening = 1;
     ctx->coefficient_reduction = 0; /* Can be expensive */
     ctx->probing = 0;               /* MIP only */
     ctx->detect_redundant_rows = 0; /* TODO: fix for inequality constraints */
 
-    ctx->max_rounds = 10;
+    ctx->max_rounds = 1;  /* Single round to avoid error accumulation */
     ctx->current_round = 0;
 
     /* Redundant row detection stats */
@@ -562,8 +562,9 @@ int presolve_bound_tightening(PresolveContext *ctx) {
         /* Extract row once (O(nnz) instead of O(n²) element accesses) */
         sparse_get_row(model->A, i, row);
 
-        /* First pass: compute total row_lb and row_ub */
-        double row_lb = 0.0, row_ub = 0.0;
+        /* First pass: compute total row_lb, row_ub, and sum of absolute contributions
+         * The abs_sum helps us detect when cancellation risk is high */
+        double row_lb = 0.0, row_ub = 0.0, abs_sum = 0.0;
         int row_lb_finite = 1, row_ub_finite = 1;
 
         for (int j = 0; j < n; j++) {
@@ -573,14 +574,28 @@ int presolve_bound_tightening(PresolveContext *ctx) {
 
             if (aij > 0) {
                 if (model->lb[j] <= -RALPH_INFINITY/2) row_lb_finite = 0;
-                else row_lb += aij * model->lb[j];
+                else {
+                    double contrib = aij * model->lb[j];
+                    row_lb += contrib;
+                    abs_sum += fabs(contrib);
+                }
                 if (model->ub[j] >= RALPH_INFINITY/2) row_ub_finite = 0;
-                else row_ub += aij * model->ub[j];
+                else {
+                    double contrib = aij * model->ub[j];
+                    row_ub += contrib;
+                }
             } else {
                 if (model->ub[j] >= RALPH_INFINITY/2) row_lb_finite = 0;
-                else row_lb += aij * model->ub[j];
+                else {
+                    double contrib = aij * model->ub[j];
+                    row_lb += contrib;
+                    abs_sum += fabs(contrib);
+                }
                 if (model->lb[j] <= -RALPH_INFINITY/2) row_ub_finite = 0;
-                else row_ub += aij * model->lb[j];
+                else {
+                    double contrib = aij * model->lb[j];
+                    row_ub += contrib;
+                }
             }
         }
 
@@ -591,7 +606,7 @@ int presolve_bound_tightening(PresolveContext *ctx) {
             if (fabs(aij) < RALPH_ZERO_TOL) continue;
 
             /* Compute contribution of variable j to row bounds */
-            double j_contrib_lb, j_contrib_ub;
+            double j_contrib_lb = 0.0, j_contrib_ub = 0.0;
             int j_lb_finite = 1, j_ub_finite = 1;
 
             if (aij > 0) {
@@ -606,18 +621,25 @@ int presolve_bound_tightening(PresolveContext *ctx) {
                 else j_contrib_ub = aij * model->lb[j];
             }
 
+            /* CANCELLATION CHECK: Skip this variable if its contribution is a significant
+             * fraction of the total. When we compute other_lb = row_lb - j_contrib_lb,
+             * catastrophic cancellation occurs if j_contrib_lb ≈ row_lb.
+             * Use conservative threshold: skip if |j_contrib| > 0.1 * abs_sum */
+            if (abs_sum > RALPH_ZERO_TOL && fabs(j_contrib_lb) > 0.1 * abs_sum) {
+                continue;  /* Cancellation risk - skip */
+            }
+
             /* other_lb = row_lb - j_contrib_lb (if both finite) */
             /* other_ub = row_ub - j_contrib_ub (if both finite) */
             double other_lb = row_lb_finite && j_lb_finite ? row_lb - j_contrib_lb : -RALPH_INFINITY;
             double other_ub = row_ub_finite && j_ub_finite ? row_ub - j_contrib_ub : RALPH_INFINITY;
 
-            /* Derive bounds on a_ij * x_j
-             * SAFE ROUNDING: Add a safety margin to derived bounds to account for
-             * floating-point errors. When deriving:
-             * - A new lower bound: subtract margin (conservative, lb might be lower)
-             * - A new upper bound: add margin (conservative, ub might be higher)
-             * This prevents false infeasibility from accumulated numerical errors. */
-            double safety_margin = 1e-6 * fmax(1.0, fmax(fabs(rhs), fabs(other_lb)));
+            /* Compute safety margin based on numerical uncertainty.
+             * The error in other_lb is roughly eps * abs_sum where eps is machine epsilon.
+             * We use a conservative multiplier (1e-8) to account for accumulated errors. */
+            double eps_factor = 1e-8;
+            double safety_margin = eps_factor * fmax(abs_sum, fmax(fabs(rhs), 1.0));
+
             double new_lb = model->lb[j];
             double new_ub = model->ub[j];
 
@@ -625,10 +647,11 @@ int presolve_bound_tightening(PresolveContext *ctx) {
                 /* a_ij * x_j <= rhs - other_lb */
                 if (other_lb > -RALPH_INFINITY/2) {
                     double bound = (rhs - other_lb) / aij;
+                    /* Add safety margin in the conservative direction */
                     if (aij > 0) {
-                        new_ub = fmin(new_ub, bound + safety_margin);  /* Safe: round UP */
+                        new_ub = fmin(new_ub, bound + safety_margin / fabs(aij));
                     } else {
-                        new_lb = fmax(new_lb, bound - safety_margin);  /* Safe: round DOWN */
+                        new_lb = fmax(new_lb, bound - safety_margin / fabs(aij));
                     }
                 }
             }
@@ -637,45 +660,42 @@ int presolve_bound_tightening(PresolveContext *ctx) {
                 /* a_ij * x_j >= rhs - other_ub */
                 if (other_ub < RALPH_INFINITY/2) {
                     double bound = (rhs - other_ub) / aij;
+                    /* Add safety margin in the conservative direction */
                     if (aij > 0) {
-                        new_lb = fmax(new_lb, bound - safety_margin);  /* Safe: round DOWN */
+                        new_lb = fmax(new_lb, bound - safety_margin / fabs(aij));
                     } else {
-                        new_ub = fmin(new_ub, bound + safety_margin);  /* Safe: round UP */
+                        new_ub = fmin(new_ub, bound + safety_margin / fabs(aij));
                     }
                 }
             }
 
-            /* Check for improvement with CONSERVATIVE tolerance.
-             * Only tighten bounds when the improvement is SIGNIFICANT (1e-3 absolute
-             * or 0.1% relative). This prevents tiny numerical errors from accumulating
-             * over many iterations and causing false infeasibility (fixes bnl1). */
-            double bound_tol = 1e-3;  /* Absolute minimum improvement required */
-            double lb_tol = fmax(bound_tol, 1e-3 * fabs(model->lb[j]));  /* 0.1% relative */
-            double ub_tol = fmax(bound_tol, 1e-3 * fabs(model->ub[j]));  /* 0.1% relative */
+            /* Only accept bounds that represent SIGNIFICANT improvement.
+             * Use 1% relative tolerance to avoid accumulating tiny changes. */
+            double rel_tol = 0.01;  /* 1% relative improvement required */
+            double abs_tol = 1e-4;  /* Absolute minimum improvement */
 
-            /* CRITICAL: Before updating bounds, verify that the new bounds won't
-             * cause infeasibility. This prevents numerical errors from accumulating
-             * across iterations and creating lb > ub situations. */
             double curr_lb = model->lb[j];
             double curr_ub = model->ub[j];
+            double range = curr_ub - curr_lb;
 
-            /* Only tighten lb if:
-             * 1. Improvement is significant (> tolerance)
-             * 2. New bound won't exceed current ub (with safety margin) */
-            if (new_lb > curr_lb + lb_tol && new_lb <= curr_ub - bound_tol) {
+            /* For lb improvement: new_lb must be significantly higher than curr_lb */
+            double lb_threshold = fmax(abs_tol, rel_tol * fmax(fabs(curr_lb), range));
+            /* For ub improvement: new_ub must be significantly lower than curr_ub */
+            double ub_threshold = fmax(abs_tol, rel_tol * fmax(fabs(curr_ub), range));
+
+            /* Only tighten lb if improvement is significant AND won't cause infeasibility */
+            if (new_lb > curr_lb + lb_threshold && new_lb < curr_ub - abs_tol) {
                 model->lb[j] = new_lb;
                 count++;
             }
-            /* Only tighten ub if:
-             * 1. Improvement is significant (> tolerance)
-             * 2. New bound won't go below current lb (with safety margin) */
-            if (new_ub < curr_ub - ub_tol && new_ub >= curr_lb + bound_tol) {
+
+            /* Only tighten ub if improvement is significant AND won't cause infeasibility */
+            if (new_ub < curr_ub - ub_threshold && new_ub > curr_lb + abs_tol) {
                 model->ub[j] = new_ub;
                 count++;
             }
 
-            /* Check feasibility - if bounds are infeasible after our careful updates,
-             * the problem is truly infeasible */
+            /* Sanity check - should never happen with our safeguards */
             if (model->lb[j] > model->ub[j] + RALPH_FEAS_TOL) {
                 free(row);
                 return -1;

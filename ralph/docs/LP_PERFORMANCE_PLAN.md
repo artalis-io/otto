@@ -41,10 +41,13 @@ bnl1 (1175 vars, 643 cons) was incorrectly returning INFEASIBLE when presolve wa
    combination of others doesn't mean the inequality is redundant - it could be tighter.
    Fixed by only removing equality constraints that reduce to 0=0.
 
-3. **bound_tightening**: Still disabled pending more robust implementation. The iterative
-   bound derivation accumulates numerical errors that can cause false infeasibility.
+3. **bound_tightening**: Fixed with cancellation detection and single-round limit:
+   - Skip variables whose contribution dominates row sum (>10% of abs_sum) to avoid cancellation
+   - Use conservative safety margins based on numerical uncertainty (eps * abs_sum)
+   - Limit to single presolve round to prevent error accumulation
+   - Require 1% relative improvement before accepting new bounds
 
-**Status**: bnl1 now solves correctly with presolve enabled (obj=1977.44, expected ~1977.62).
+**Status**: bnl1 now solves correctly with presolve enabled (obj=1977.45, expected ~1977.62).
 
 ---
 
