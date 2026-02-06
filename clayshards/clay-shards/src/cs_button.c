@@ -87,6 +87,11 @@ CsButtonResult cs_button(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
+    /* Focus follows hover */
+    if (is_hovered) {
+        g->focused_id = id;
+    }
+
     /* Determine sizing */
     Clay_SizingAxis width_sizing = CLAY_SIZING_FIT(0);
     Clay_SizingAxis height_sizing = CLAY_SIZING_FIT(0);

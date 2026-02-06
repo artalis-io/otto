@@ -55,6 +55,11 @@ CsToggleResult cs_toggle(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
+    /* Focus follows hover */
+    if (is_hovered) {
+        g->focused_id = id;
+    }
+
     /* Colors - use focus color for background when focused (visible even with border_width=0) */
     Clay_Color track_bg;
     if (current_value) {
