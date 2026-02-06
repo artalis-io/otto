@@ -214,58 +214,7 @@
 
         <div class="controls">
             <div class="control-group">
-                <button id="fullscreenBtn" style="width: 100%; padding: 10px; font-size: 1em;">Fullscreen</button>
-            </div>
-
-            <div class="control-group">
-                <label>CRT Preset</label>
-                <div class="preset-buttons">
-                    <button data-preset="off">Off</button>
-                    <button data-preset="subtle">Subtle</button>
-                    <button data-preset="retro">Retro</button>
-                    <button data-preset="arcade" class="active">Arcade</button>
-                </div>
-            </div>
-
-            <div class="control-group">
-                <label>Glass Reflection</label>
-                <div class="preset-buttons">
-                    <button id="glassToggle">Off</button>
-                </div>
-            </div>
-
-            <div class="control-group">
-                <label>Monitor Bezel</label>
-                <div class="preset-buttons">
-                    <button id="bezelToggle">Off</button>
-                </div>
-            </div>
-
-            <div class="control-group">
-                <label>Phosphor</label>
-                <div class="preset-buttons">
-                    <button data-color="rgb">RGB</button>
-                    <button data-color="amber">Amber</button>
-                    <button data-color="green" class="active">Green</button>
-                </div>
-            </div>
-
-            <div class="control-group">
-                <label>Scanlines</label>
-                <input type="range" id="scanlines" min="0" max="100" value="30">
-                <div class="range-value" id="scanlines-value">0.30</div>
-            </div>
-
-            <div class="control-group">
-                <label>Curvature</label>
-                <input type="range" id="curvature" min="0" max="100" value="30">
-                <div class="range-value" id="curvature-value">0.03</div>
-            </div>
-
-            <div class="control-group">
-                <label>Chromatic Aberration</label>
-                <input type="range" id="chromatic" min="0" max="100" value="10">
-                <div class="range-value" id="chromatic-value">0.001</div>
+                <button id="fullscreenBtn" style="width: 100%; padding: 12px; font-size: 1.1em;">Enter Terminal</button>
             </div>
 
             <div class="control-group">
@@ -277,19 +226,16 @@
                     <div><span class="key">Online:</span> <span class="value" id="state-enabled">true</span></div>
                 </div>
             </div>
+
+            <p style="font-size: 0.85em; color: #666; margin-top: 12px;">
+                Press <kbd style="background:#333;padding:2px 6px;border-radius:3px;">ESC</kbd> to exit fullscreen
+            </p>
         </div>
     </div>
 
-    <div class="instructions" id="instructions" style="display: none;">
-        <strong>Keyboard:</strong>
-        <kbd>Tab</kbd> Navigate between widgets |
-        <kbd>Enter</kbd> Activate buttons/toggles |
-        <kbd>Arrow Keys</kbd> Adjust sliders, navigate dropdowns |
-        <kbd>Type</kbd> Enter text in focused input
-    </div>
 
     <script type="module">
-        import { TuiRenderer, TerminalFontAtlas, CrtEffects, CRT_COLOR_AMBER, CRT_COLOR_GREEN, CRT_COLOR_RGB } from './index.js';
+        import { TuiRenderer, TerminalFontAtlas, CrtEffects, CRT_COLOR_GREEN } from './index.js';
 
         const PRIORITY_OPTIONS = ['Minimal', 'Guarded', 'Elevated', 'Severe'];
         const COLS = 80;
@@ -301,7 +247,6 @@
             const loadingEl = document.getElementById('loading');
             const errorEl = document.getElementById('error');
             const mainEl = document.getElementById('main');
-            const instructionsEl = document.getElementById('instructions');
             const canvas = document.getElementById('terminal');
 
             try {
@@ -397,11 +342,12 @@
                 renderer.setFontAtlas(fontAtlas);
                 console.log('Font atlas ready:', fontAtlas.isReady(), 'glyph size:', fontAtlas.glyphWidth, 'x', fontAtlas.glyphHeight);
 
-                // Create CRT effects
+                // Create CRT effects - arcade style with green phosphor and glass
                 const crt = new CrtEffects(renderer.gl);
                 crt.resize(canvas.width, canvas.height);
                 crt.applyPreset('arcade');
                 crt.setColorMode(CRT_COLOR_GREEN);
+                crt.setGlass(true);
 
                 // Setup keyboard input with hidden input for proper text capture
                 const hiddenInput = document.getElementById('hiddenInput');
@@ -409,7 +355,6 @@
                 // Hide loading, show main
                 loadingEl.style.display = 'none';
                 mainEl.style.display = 'flex';
-                instructionsEl.style.display = 'block';
                 // Focus hidden input for immediate text capture
                 hiddenInput.focus();
 
@@ -518,72 +463,6 @@
                     wasm.demo_mouse_release(x, y);
                 });
 
-                // Setup CRT controls
-                const presetButtons = document.querySelectorAll('[data-preset]');
-                presetButtons.forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        presetButtons.forEach(b => b.classList.remove('active'));
-                        btn.classList.add('active');
-                        crt.applyPreset(btn.dataset.preset);
-                        updateSliders();
-                    });
-                });
-
-                const colorButtons = document.querySelectorAll('[data-color]');
-                colorButtons.forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        colorButtons.forEach(b => b.classList.remove('active'));
-                        btn.classList.add('active');
-                        const color = btn.dataset.color;
-                        if (color === 'amber') crt.setColorMode(CRT_COLOR_AMBER);
-                        else if (color === 'green') crt.setColorMode(CRT_COLOR_GREEN);
-                        else crt.setColorMode(CRT_COLOR_RGB);
-                    });
-                });
-
-                // Glass toggle (separate from CRT presets)
-                const glassToggle = document.getElementById('glassToggle');
-                glassToggle.addEventListener('click', () => {
-                    const enabled = !crt.isGlassEnabled();
-                    crt.setGlass(enabled);
-                    glassToggle.textContent = enabled ? 'On' : 'Off';
-                    glassToggle.classList.toggle('active', enabled);
-                });
-
-                // Bezel toggle (RobCo monitor frame - WebGL rendered)
-                const bezelToggle = document.getElementById('bezelToggle');
-                bezelToggle.addEventListener('click', () => {
-                    const enabled = !crt.isBezelEnabled();
-                    crt.setBezel(enabled);
-                    bezelToggle.textContent = enabled ? 'On' : 'Off';
-                    bezelToggle.classList.toggle('active', enabled);
-                });
-
-                function updateSliders() {
-                    document.getElementById('scanlines').value = crt.params.scanlines * 100;
-                    document.getElementById('scanlines-value').textContent = crt.params.scanlines.toFixed(2);
-                    document.getElementById('curvature').value = crt.params.curvature * 1000;
-                    document.getElementById('curvature-value').textContent = crt.params.curvature.toFixed(3);
-                    document.getElementById('chromatic').value = crt.params.chromatic * 10000;
-                    document.getElementById('chromatic-value').textContent = crt.params.chromatic.toFixed(4);
-                }
-
-                document.getElementById('scanlines').addEventListener('input', (e) => {
-                    crt.params.scanlines = e.target.value / 100;
-                    document.getElementById('scanlines-value').textContent = crt.params.scanlines.toFixed(2);
-                });
-
-                document.getElementById('curvature').addEventListener('input', (e) => {
-                    crt.params.curvature = e.target.value / 1000;
-                    document.getElementById('curvature-value').textContent = crt.params.curvature.toFixed(3);
-                });
-
-                document.getElementById('chromatic').addEventListener('input', (e) => {
-                    crt.params.chromatic = e.target.value / 10000;
-                    document.getElementById('chromatic-value').textContent = crt.params.chromatic.toFixed(4);
-                });
-
-                updateSliders();
 
                 // Fullscreen button with dynamic resizing
                 const terminalContainer = document.querySelector('.terminal-container');
