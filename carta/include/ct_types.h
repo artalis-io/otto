@@ -121,6 +121,30 @@ typedef enum {
 } CTRoadType;
 
 /* ============================================================================
+ * Railway Types (for styling)
+ * ============================================================================ */
+
+typedef enum {
+    CT_RAILWAY_RAIL = 0,       /* Main rail lines (railway=rail) */
+    CT_RAILWAY_SUBWAY,         /* Subway/metro (railway=subway) */
+    CT_RAILWAY_TRAM,           /* Trams/streetcars (railway=tram, light_rail) */
+    CT_RAILWAY_NARROW_GAUGE,   /* Narrow gauge (railway=narrow_gauge) */
+    CT_RAILWAY_PRESERVED,      /* Heritage railways (railway=preserved) */
+    CT_RAILWAY_DISUSED,        /* Disused/abandoned (railway=disused, abandoned) */
+    CT_RAILWAY_OTHER,          /* Other railway types */
+    CT_RAILWAY_TYPE_COUNT
+} CTRailwayType;
+
+/* ============================================================================
+ * Feature Flags (bridge, tunnel, etc.)
+ * ============================================================================ */
+
+#define CT_FLAG_NONE     0x00
+#define CT_FLAG_BRIDGE   0x01  /* Feature is on a bridge */
+#define CT_FLAG_TUNNEL   0x02  /* Feature is in a tunnel */
+#define CT_FLAG_ONEWAY   0x04  /* One-way road */
+
+/* ============================================================================
  * Waterway Types (for styling)
  * ============================================================================ */
 
@@ -227,6 +251,7 @@ typedef struct {
     /* Feature classification */
     CTLayer layer;
     int feature_type;        /* Layer-specific subtype (e.g., road type) */
+    uint8_t flags;           /* CT_FLAG_BRIDGE, CT_FLAG_TUNNEL, etc. */
 
     /* Size metrics for LOD filtering */
     float area_sqm;          /* Estimated area in m² (for polygons) */
@@ -294,9 +319,14 @@ typedef struct {
     CTColor park_color;
     CTColor sand_color;
 
-    /* Railway */
-    CTColor railway_color;
-    float railway_width;
+    /* Railway styling by type */
+    CTColor railway_colors[CT_RAILWAY_TYPE_COUNT];
+    CTColor railway_outline_colors[CT_RAILWAY_TYPE_COUNT];
+    float railway_widths[CT_RAILWAY_TYPE_COUNT];
+
+    /* Bridge styling (outlines for elevated features) */
+    CTColor bridge_outline_color;
+    float bridge_outline_width;
 
     /* Boundaries (admin borders) */
     CTColor boundary_color;
@@ -366,6 +396,7 @@ typedef struct {
     CTOSMFeatureClass feature_class;
     int feature_type;        /* Subtype within class */
     int is_area;             /* Closed polygon? */
+    uint8_t flags;           /* CT_FLAG_BRIDGE, CT_FLAG_TUNNEL, etc. */
     char *name;              /* Optional name */
     int min_zoom;            /* Minimum zoom for LOD filtering */
     float area_sqm;          /* Estimated area (for polygons) */

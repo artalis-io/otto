@@ -219,8 +219,10 @@ typedef struct {
     size_t num_multipolygons;
     size_t num_water;
     size_t num_roads;
+    size_t num_railways;
     size_t num_buildings;
     size_t num_landuse;
+    size_t num_bridges;
     double render_time_ms;
     size_t output_size;
 } TileStats;
@@ -244,6 +246,15 @@ static void count_tile_features(const CTPBFContext *pbf, CTTileCoord coord,
                     break;
                 case CT_LAYER_ROADS:
                     stats->num_roads++;
+                    if (features[i].flags & CT_FLAG_BRIDGE) {
+                        stats->num_bridges++;
+                    }
+                    break;
+                case CT_LAYER_RAILWAYS:
+                    stats->num_railways++;
+                    if (features[i].flags & CT_FLAG_BRIDGE) {
+                        stats->num_bridges++;
+                    }
                     break;
                 case CT_LAYER_BUILDINGS:
                     stats->num_buildings++;
@@ -472,8 +483,10 @@ static int run_single_mode(const CTPBFContext *pbf, const CompareConfig *cfg,
     printf("--- FEATURE COUNTS ---\n");
     printf("Water features: %zu\n", stats.num_water);
     printf("Road features: %zu\n", stats.num_roads);
+    printf("Railway features: %zu\n", stats.num_railways);
     printf("Building features: %zu\n", stats.num_buildings);
     printf("Landuse features: %zu\n", stats.num_landuse);
+    printf("Bridges: %zu\n", stats.num_bridges);
     printf("\n");
     printf("--- PERFORMANCE ---\n");
     printf("Render time: %.2f ms\n", stats.render_time_ms);
@@ -586,8 +599,8 @@ static int run_batch_mode(const CTPBFContext *pbf, const CompareConfig *cfg,
             } else {
                 printf("%.1f KB, %.1f ms", size / 1024.0, stats.render_time_ms);
             }
-            printf(" [water:%zu roads:%zu bldg:%zu land:%zu]",
-                   stats.num_water, stats.num_roads, stats.num_buildings, stats.num_landuse);
+            printf(" [w:%zu r:%zu rail:%zu b:%zu l:%zu]",
+                   stats.num_water, stats.num_roads, stats.num_railways, stats.num_buildings, stats.num_landuse);
             if (!success) printf(" ERROR");
             printf("\n");
 
@@ -795,6 +808,7 @@ typedef struct {
     size_t total_features;
     size_t total_water;
     size_t total_roads;
+    size_t total_railways;
     size_t total_buildings;
     size_t total_landuse;
 } ZoomStats;
@@ -901,9 +915,10 @@ static int run_zoom_range_mode(const CTPBFContext *pbf, const CompareConfig *cfg
             /* Update zoom stats */
             zoom_stats[stats_idx].total_render_ms += stats.render_time_ms;
             zoom_stats[stats_idx].total_features += stats.num_water + stats.num_roads +
-                                                    stats.num_buildings + stats.num_landuse;
+                                                    stats.num_railways + stats.num_buildings + stats.num_landuse;
             zoom_stats[stats_idx].total_water += stats.num_water;
             zoom_stats[stats_idx].total_roads += stats.num_roads;
+            zoom_stats[stats_idx].total_railways += stats.num_railways;
             zoom_stats[stats_idx].total_buildings += stats.num_buildings;
             zoom_stats[stats_idx].total_landuse += stats.num_landuse;
 
@@ -920,9 +935,9 @@ static int run_zoom_range_mode(const CTPBFContext *pbf, const CompareConfig *cfg
             if (size == 0) {
                 printf("  %d/%d/%d: (empty)%s\n", z, tx, ty, pos);
             } else {
-                printf("  %d/%d/%d: %.1f KB, %.1f ms%s [w:%zu r:%zu b:%zu l:%zu]\n",
+                printf("  %d/%d/%d: %.1f KB, %.1f ms%s [w:%zu r:%zu rail:%zu b:%zu l:%zu]\n",
                        z, tx, ty, size / 1024.0, stats.render_time_ms, pos,
-                       stats.num_water, stats.num_roads, stats.num_buildings, stats.num_landuse);
+                       stats.num_water, stats.num_roads, stats.num_railways, stats.num_buildings, stats.num_landuse);
             }
         }
         printf("\n");
@@ -930,8 +945,8 @@ static int run_zoom_range_mode(const CTPBFContext *pbf, const CompareConfig *cfg
 
     /* Print summary */
     printf("=== Zoom Range Summary ===\n\n");
-    printf("Zoom | Tiles | Empty | Avg Time | Features | Water | Roads | Bldgs | Land\n");
-    printf("-----|-------|-------|----------|----------|-------|-------|-------|-----\n");
+    printf("Zoom | Tiles | Empty | Avg Time | Features | Water | Roads | Rails | Bldgs | Land\n");
+    printf("-----|-------|-------|----------|----------|-------|-------|-------|-------|-----\n");
 
     int total_tiles = 0;
     int total_empty = 0;
@@ -943,9 +958,9 @@ static int run_zoom_range_mode(const CTPBFContext *pbf, const CompareConfig *cfg
         int tiles = zs->tiles_rendered + zs->tiles_empty;
         double avg_ms = tiles > 0 ? zs->total_render_ms / tiles : 0.0;
 
-        printf("  %2d | %5d | %5d | %6.1f ms | %8zu | %5zu | %5zu | %5zu | %4zu\n",
+        printf("  %2d | %5d | %5d | %6.1f ms | %8zu | %5zu | %5zu | %5zu | %5zu | %4zu\n",
                zs->zoom, zs->tiles_rendered, zs->tiles_empty, avg_ms,
-               zs->total_features, zs->total_water, zs->total_roads,
+               zs->total_features, zs->total_water, zs->total_roads, zs->total_railways,
                zs->total_buildings, zs->total_landuse);
 
         total_tiles += tiles;

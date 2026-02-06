@@ -113,9 +113,15 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DITCH, 15, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_OTHER, 14, -1, 0, 0);
 
-    /* Railways - show major lines earlier */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 7, -1, 0, 50000);   /* > 50km at z7 */
-    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, -1, 10, -1, 0, 0);      /* All railways at z10 */
+    /* Railways - show by type and length */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 7, -1, 0, 50000);  /* Main rail >50km at z7 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_RAIL, 10, -1, 0, 0);     /* All main rail at z10 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_SUBWAY, 12, -1, 0, 0);   /* Subway at z12 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_TRAM, 13, -1, 0, 0);     /* Tram at z13 */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_NARROW_GAUGE, 11, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_PRESERVED, 12, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_DISUSED, 14, -1, 0, 0);  /* Disused late */
+    ct_lod_add_rule(config, CT_LAYER_RAILWAYS, CT_RAILWAY_OTHER, 13, -1, 0, 0);
 
     /* Landuse - show large areas earlier */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FOREST, 6, -1, 50000000, 0);   /* >50km² at z6 */
