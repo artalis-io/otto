@@ -415,6 +415,16 @@ size_t ct_generate_png_lod(const CTPBFContext *ctx, CTTileCoord coord,
                            const CTPNGOptions *opts,
                            uint8_t *buffer, size_t capacity)
 {
+    return ct_generate_png_lod_opts(ctx, coord, style, lod, NULL, opts,
+                                    buffer, capacity);
+}
+
+size_t ct_generate_png_lod_opts(const CTPBFContext *ctx, CTTileCoord coord,
+                                const CTStyle *style, const struct CTLODConfig *lod,
+                                const CTRenderOptions *render_opts,
+                                const CTPNGOptions *opts,
+                                uint8_t *buffer, size_t capacity)
+{
     CTPNGOptions default_opts;
     if (!opts) {
         ct_png_default_options(&default_opts);
@@ -429,6 +439,10 @@ size_t ct_generate_png_lod(const CTPBFContext *ctx, CTTileCoord coord,
 
     if (style) {
         ct_render_set_style(render, style);
+    }
+
+    if (render_opts) {
+        ct_render_set_options(render, render_opts);
     }
 
     /* Render tile with LOD filtering */

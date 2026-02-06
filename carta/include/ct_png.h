@@ -78,6 +78,27 @@ size_t ct_generate_png_lod(const CTPBFContext *ctx, CTTileCoord coord,
                            const CTPNGOptions *opts,
                            uint8_t *buffer, size_t capacity);
 
+/*
+ * Generate PNG tile with LOD filtering and custom render options.
+ *
+ * Extended version that allows control over render quality/performance.
+ *
+ * @param ctx           PBF context with parsed data
+ * @param coord         Tile coordinates
+ * @param style         Rendering style (NULL for defaults)
+ * @param lod           LOD configuration (NULL = no filtering)
+ * @param render_opts   Render options (NULL for defaults)
+ * @param opts          PNG options (NULL for defaults)
+ * @param buffer        Output buffer
+ * @param capacity      Buffer capacity in bytes
+ * @return Number of bytes written, or 0 on error
+ */
+size_t ct_generate_png_lod_opts(const CTPBFContext *ctx, CTTileCoord coord,
+                                const CTStyle *style, const struct CTLODConfig *lod,
+                                const CTRenderOptions *render_opts,
+                                const CTPNGOptions *opts,
+                                uint8_t *buffer, size_t capacity);
+
 /* ============================================================================
  * Low-Level PNG Functions
  * ============================================================================ */

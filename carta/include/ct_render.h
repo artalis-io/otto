@@ -198,6 +198,30 @@ void ct_default_style(CTStyle *style);
 void ct_render_set_style(CTRenderContext *ctx, const CTStyle *style);
 
 /*
+ * Set render context options.
+ */
+void ct_render_set_options(CTRenderContext *ctx, const CTRenderOptions *opts);
+
+/*
+ * Initialize render options to default (balanced quality/performance).
+ * All layers enabled, details enabled with zoom gates.
+ */
+void ct_render_options_default(CTRenderOptions *opts);
+
+/*
+ * Initialize render options for fast rendering.
+ * Disables expensive effects like labels, casing, outlines.
+ * Best for high-load tile serving.
+ */
+void ct_render_options_fast(CTRenderOptions *opts);
+
+/*
+ * Initialize render options for quality rendering.
+ * All effects enabled at all zoom levels.
+ */
+void ct_render_options_quality(CTRenderOptions *opts);
+
+/*
  * Calculate line width for a given zoom level.
  * Scales width from reference zoom (z=14) to actual zoom.
  *
