@@ -1140,6 +1140,17 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     /* Use zoom-adaptive road width */
                     float width = ct_style_road_width(&ctx->style, road_type, tile->coord.z);
 
+                    /* Zoom-adaptive casing: thin at low zoom, thicker at high zoom */
+                    float casing = 0.0f;
+                    if (tile->coord.z >= 16) {
+                        casing = 1.0f;
+                    } else if (tile->coord.z >= 14) {
+                        casing = 0.5f;
+                    } else if (tile->coord.z >= 12) {
+                        casing = 0.3f;
+                    }
+                    /* No casing below z12 for cleaner appearance */
+
                     /* Add bridge outline for elevated roads */
                     if (f->flags & CT_FLAG_BRIDGE) {
                         ct_render_polyline(ctx, scaled, f->num_points,
@@ -1147,10 +1158,16 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                                            width + ctx->style.bridge_outline_width * 2 + 2.0f);
                     }
 
-                    ct_render_polyline_cased(ctx, scaled, f->num_points,
-                                             ctx->style.road_colors[road_type],
-                                             ctx->style.road_outline_colors[road_type],
-                                             width, 1.0f);
+                    if (casing > 0.0f) {
+                        ct_render_polyline_cased(ctx, scaled, f->num_points,
+                                                 ctx->style.road_colors[road_type],
+                                                 ctx->style.road_outline_colors[road_type],
+                                                 width, casing);
+                    } else {
+                        /* No casing - just draw the road fill */
+                        ct_render_polyline(ctx, scaled, f->num_points,
+                                           ctx->style.road_colors[road_type], width);
+                    }
                     break;
                 }
 

@@ -31,16 +31,16 @@ void ct_default_style(CTStyle *style)
     /* Road widths at key zoom levels (OSM Carto-style)
      * Format: { z10, z14, z18 }
      * Widths are linearly interpolated between these points.
-     * Updated to better match OSM Carto visual appearance.
+     * Reduced to match OSM Carto thin road appearance.
      */
-    style->road_widths[CT_ROAD_MOTORWAY]    = (CTRoadWidth){ 2.5f, 5.0f, 10.0f };
-    style->road_widths[CT_ROAD_TRUNK]       = (CTRoadWidth){ 2.0f, 4.5f, 9.0f };
-    style->road_widths[CT_ROAD_PRIMARY]     = (CTRoadWidth){ 1.5f, 4.0f, 8.0f };
-    style->road_widths[CT_ROAD_SECONDARY]   = (CTRoadWidth){ 1.2f, 3.5f, 7.0f };
-    style->road_widths[CT_ROAD_TERTIARY]    = (CTRoadWidth){ 1.0f, 3.0f, 6.0f };
-    style->road_widths[CT_ROAD_RESIDENTIAL] = (CTRoadWidth){ 0.8f, 2.5f, 5.0f };
-    style->road_widths[CT_ROAD_SERVICE]     = (CTRoadWidth){ 0.5f, 1.5f, 3.0f };
-    style->road_widths[CT_ROAD_OTHER]       = (CTRoadWidth){ 0.5f, 1.5f, 3.0f };
+    style->road_widths[CT_ROAD_MOTORWAY]    = (CTRoadWidth){ 1.5f, 3.0f, 6.0f };
+    style->road_widths[CT_ROAD_TRUNK]       = (CTRoadWidth){ 1.2f, 2.5f, 5.0f };
+    style->road_widths[CT_ROAD_PRIMARY]     = (CTRoadWidth){ 1.0f, 2.0f, 4.0f };
+    style->road_widths[CT_ROAD_SECONDARY]   = (CTRoadWidth){ 0.8f, 1.5f, 3.0f };
+    style->road_widths[CT_ROAD_TERTIARY]    = (CTRoadWidth){ 0.6f, 1.2f, 2.5f };
+    style->road_widths[CT_ROAD_RESIDENTIAL] = (CTRoadWidth){ 0.5f, 1.0f, 2.0f };
+    style->road_widths[CT_ROAD_SERVICE]     = (CTRoadWidth){ 0.5f, 0.8f, 1.5f };
+    style->road_widths[CT_ROAD_OTHER]       = (CTRoadWidth){ 0.5f, 0.8f, 1.5f };
 
     /* Waterway widths by type (data-driven, not zoom-dependent)
      *
@@ -87,14 +87,14 @@ void ct_default_style(CTStyle *style)
     style->railway_outline_colors[CT_RAILWAY_DISUSED]      = CT_RGB(220, 220, 220);
     style->railway_outline_colors[CT_RAILWAY_OTHER]        = CT_RGB(200, 200, 200);
 
-    /* Railway widths by type */
-    style->railway_widths[CT_RAILWAY_RAIL]         = 2.0f;
-    style->railway_widths[CT_RAILWAY_SUBWAY]       = 2.0f;
-    style->railway_widths[CT_RAILWAY_TRAM]         = 1.5f;
-    style->railway_widths[CT_RAILWAY_NARROW_GAUGE] = 1.5f;
-    style->railway_widths[CT_RAILWAY_PRESERVED]    = 1.5f;
-    style->railway_widths[CT_RAILWAY_DISUSED]      = 1.0f;
-    style->railway_widths[CT_RAILWAY_OTHER]        = 1.5f;
+    /* Railway widths by type - thin to match OSM Carto */
+    style->railway_widths[CT_RAILWAY_RAIL]         = 1.0f;
+    style->railway_widths[CT_RAILWAY_SUBWAY]       = 1.0f;
+    style->railway_widths[CT_RAILWAY_TRAM]         = 0.8f;
+    style->railway_widths[CT_RAILWAY_NARROW_GAUGE] = 0.8f;
+    style->railway_widths[CT_RAILWAY_PRESERVED]    = 0.8f;
+    style->railway_widths[CT_RAILWAY_DISUSED]      = 0.6f;
+    style->railway_widths[CT_RAILWAY_OTHER]        = 0.8f;
 
     /* Bridge styling (stronger outline for elevation effect) */
     style->bridge_outline_color = CT_RGB(100, 100, 100);  /* Dark outline */
