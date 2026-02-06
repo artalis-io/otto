@@ -65,6 +65,41 @@ clayshards/clay-shards/
 | Custom allocator safety | Null checks on allocator function pointers |
 | Error tracking | `cs_get_last_error()` set on failure paths |
 
+#### 1.3 TUI Compatibility Checks (Critical)
+| Issue | Pattern | Severity |
+|-------|---------|----------|
+| Input after render | State mutation after CLAY() block | High |
+| Border-based focus | `config.border.width` in focus handling | Medium |
+| Fixed pixel sizes | Hardcoded heights >3 without TUI fallback | Low |
+| Missing state update | `*value = x` without updating local copy | High |
+
+**Input-Before-Render Pattern:**
+```c
+// BAD: Input processed after rendering = 1-frame lag in TUI
+CLAY(...) { render(current_value); }
+if (g->pending_arrow) { *value = new_value; }  // Too late!
+
+// GOOD: Input before render = immediate response
+if (g->pending_arrow) {
+    *value = new_value;
+    current_value = *value;  // Update local for rendering
+}
+CLAY(...) { render(current_value); }
+```
+
+**Focus Indication Pattern:**
+```c
+// BAD: Borders shift layout in TUI (1 char per side)
+if (is_focused) {
+    config.border.width = {2, 2, 2, 2, 0};
+}
+
+// GOOD: Background color change, zero layout impact
+Clay_Color bg = is_focused
+    ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS}
+    : (Clay_Color){CS_COLOR_BTN_BLUE};
+```
+
 #### 1.3 OTTO Naming Conventions
 | Component | Required Prefix |
 |-----------|-----------------|
@@ -229,6 +264,21 @@ static double internal_lat;  // WRONG
 
 **Check:** No `rand()`, `time()`, or non-deterministic behavior in layout/component logic.
 
+### 3.8 TUI Renderer Portability
+
+Components must work across all renderer targets. TUI is the strictest test:
+
+- [ ] **Input before render**: All state mutations happen before `CLAY()` blocks
+- [ ] **Focus via background color**: No `border.width` changes for focus indication
+- [ ] **Local value updates**: After `*value = x`, also update `current_value = *value`
+- [ ] **Transparent overlay handling**: Dropdown items use solid background, not transparent
+
+**Why TUI is the strictest renderer:**
+- Differential updates only redraw changed cells (timing bugs visible)
+- Borders add 1 character width (layout shifts visible)
+- Character grid exposes coordinate assumptions
+- No anti-aliasing hides alignment issues
+
 ### Non-Goals Verification
 Ensure ClayShards does NOT:
 - [ ] Implement a DOM
@@ -331,6 +381,15 @@ When `/clayshards-audit` is invoked:
 | Full redraw default | ✅/⚠️/❌ | |
 | Render commands contract | ✅/⚠️/❌ | |
 | Determinism | ✅/⚠️/❌ | |
+| TUI renderer portability | ✅/⚠️/❌ | |
+
+### TUI Compatibility
+| Check | Status | Notes |
+|-------|--------|-------|
+| Input before render | ✅/⚠️/❌ | State changes before CLAY() blocks |
+| Focus via background | ✅/⚠️/❌ | No border-based focus indication |
+| Local value updates | ✅/⚠️/❌ | current_value updated after *value |
+| Solid overlay backgrounds | ✅/⚠️/❌ | No transparent dropdown items |
 
 ### Violations Found
 ...
