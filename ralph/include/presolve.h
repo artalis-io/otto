@@ -58,6 +58,7 @@ typedef struct {
     int bound_tightening;
     int coefficient_reduction;
     int probing;                /* For MIP only */
+    int detect_redundant_rows;  /* Detect linearly dependent rows via rank */
 
     /* Iteration control */
     int max_rounds;
@@ -68,6 +69,10 @@ typedef struct {
     int *col_deleted;
     double *row_lb;             /* Implied row lower bounds */
     double *row_ub;             /* Implied row upper bounds */
+
+    /* Redundant row detection statistics */
+    int redundant_rows_found;   /* Count of linearly dependent rows */
+    int matrix_rank;            /* Computed rank of constraint matrix */
 
 } PresolveContext;
 
@@ -88,6 +93,31 @@ int presolve_singleton_cols(PresolveContext *ctx);
 int presolve_forcing_constraints(PresolveContext *ctx);
 int presolve_bound_tightening(PresolveContext *ctx);
 int presolve_coefficient_reduction(PresolveContext *ctx);
+
+/*
+ * Detect and remove linearly dependent (redundant) rows.
+ *
+ * Uses Gaussian elimination with partial pivoting to compute the rank
+ * of the constraint matrix. Rows that reduce to all-zeros are redundant
+ * and can be safely removed (unless the RHS is non-zero, which indicates
+ * infeasibility).
+ *
+ * This is essential for problems like beaconfd which have many equality
+ * constraints where some are linear combinations of others.
+ *
+ * Parameters:
+ *   ctx - Presolve context with working model
+ *
+ * Returns:
+ *   Number of redundant rows removed, or -1 if infeasible
+ *   (inconsistent system where 0 = non-zero).
+ *
+ * Complexity: O(m * n * min(m,n)) for dense elimination.
+ *
+ * Note: This should be called AFTER other presolve operations that might
+ * make rows empty or reveal hidden redundancy.
+ */
+int presolve_detect_redundant_rows(PresolveContext *ctx);
 
 /* MIP-specific presolve */
 int presolve_probing(PresolveContext *ctx);
