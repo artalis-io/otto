@@ -350,10 +350,11 @@ CS_EXPORT bool cs_key_down(int key_code, bool shift, bool ctrl) {
         }
     }
 
-    /* Non-text focused element: handle Enter, Escape, arrow keys, Home/End */
+    /* Non-text focused element: handle Enter, Space, Escape, arrow keys, Home/End */
     if (tls_state.focused_id != 0 && (!tls_state.active_text || !tls_state.active_len)) {
         switch (key_code) {
             case 13: /* Enter */
+            case 32: /* Space - treat like Enter for activation */
                 tls_state.pending_enter = true;
                 return true;
             case 27: /* Escape */
