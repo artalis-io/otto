@@ -5,6 +5,7 @@
  */
 
 #include "carta.h"
+#include "ct_boundary.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,6 +87,20 @@ CTPBFContext *ct_load_pbf_with_config(const char *filename, const CTPBFConfig *c
         return NULL;
     }
 
+    /* Assemble boundary relations into continuous linestrings */
+    status = ct_assemble_boundaries(ctx);
+    if (status != CT_OK) {
+        ct_pbf_context_free(ctx);
+        return NULL;
+    }
+
+    /* Build spatial index for boundaries */
+    status = ct_build_boundary_rtree(ctx);
+    if (status != CT_OK) {
+        ct_pbf_context_free(ctx);
+        return NULL;
+    }
+
     return ctx;
 }
 
@@ -123,6 +138,20 @@ CTPBFContext *ct_load_pbf_memory(const uint8_t *data, size_t size)
 
     /* Build spatial index for multipolygons */
     status = ct_build_multipolygon_rtree(ctx);
+    if (status != CT_OK) {
+        ct_pbf_context_free(ctx);
+        return NULL;
+    }
+
+    /* Assemble boundary relations into continuous linestrings */
+    status = ct_assemble_boundaries(ctx);
+    if (status != CT_OK) {
+        ct_pbf_context_free(ctx);
+        return NULL;
+    }
+
+    /* Build spatial index for boundaries */
+    status = ct_build_boundary_rtree(ctx);
     if (status != CT_OK) {
         ct_pbf_context_free(ctx);
         return NULL;

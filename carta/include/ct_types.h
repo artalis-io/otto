@@ -194,6 +194,35 @@ typedef enum {
 } CTBoundaryLevel;
 
 /* ============================================================================
+ * Boundary Types (administrative vs protected areas)
+ * ============================================================================ */
+
+typedef enum {
+    CT_BOUNDARY_TYPE_ADMIN = 0,      /* boundary=administrative */
+    CT_BOUNDARY_TYPE_PROTECTED = 1,  /* boundary=protected_area (national parks) */
+    CT_BOUNDARY_TYPE_COUNT
+} CTBoundaryType;
+
+/* Assembled boundary linestring (from relation + member ways) */
+typedef struct {
+    int64_t relation_id;
+    CTBoundaryType boundary_type;  /* Admin or protected area */
+    int admin_level;               /* 2=country, 4=state, etc. (for admin) */
+    CTCoord *coords;               /* Stitched coordinates */
+    int num_coords;
+    CTBBox bbox;
+    float length_m;                /* Total length in meters (for LOD) */
+    char *name;                    /* Optional boundary name */
+} CTAssembledBoundary;
+
+/* Boundary configuration (parametrizable admin levels) */
+typedef struct {
+    int min_admin_level;           /* Minimum admin level to extract (default: 2) */
+    int max_admin_level;           /* Maximum admin level to extract (default: 6) */
+    int include_protected_areas;   /* 1 to include boundary=protected_area */
+} CTBoundaryConfig;
+
+/* ============================================================================
  * Place Types (for label rendering)
  * ============================================================================ */
 
@@ -538,6 +567,22 @@ typedef struct {
     /* R-Tree for multipolygons */
     CTRTree *mp_rtree;
 
+    /* Boundary relations (raw, before assembly) */
+    CTOSMRelation *boundary_relations;
+    size_t num_boundary_relations;
+    size_t boundary_relations_capacity;
+
+    /* Assembled boundaries (stitched linestrings) */
+    CTAssembledBoundary *boundaries;
+    size_t num_boundaries;
+    size_t boundaries_capacity;
+
+    /* R-Tree for boundaries */
+    CTRTree *boundary_rtree;
+
+    /* Boundary extraction configuration */
+    CTBoundaryConfig boundary_config;
+
     /* Spatial index for fast tile queries (ways) */
     CTRTree *rtree;
 
@@ -562,8 +607,10 @@ typedef struct {
     void *mmap_coords;        /* Allocated coordinate block (for mmap'd ways) */
     void *mmap_mp_coords;     /* Allocated coordinate block (for mmap'd multipolygons) */
     void *mmap_mp_rings;      /* Allocated ring block (for mmap'd multipolygons) */
+    void *mmap_boundary_coords;  /* Allocated coordinate block (for mmap'd boundaries) */
     int rtree_is_mmap;        /* 1 if R-Tree points into mmap */
     int mp_rtree_is_mmap;     /* 1 if multipolygon R-Tree points into mmap */
+    int boundary_rtree_is_mmap;  /* 1 if boundary R-Tree points into mmap */
 
     /* Arena for parsing temporaries (reset after each PrimitiveBlock) */
     SHArena *parse_arena;

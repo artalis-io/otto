@@ -8,6 +8,7 @@
 #include "ct_lod.h"
 #include "ct_simplify.h"
 #include "ct_label.h"
+#include "ct_boundary.h"
 #include "sh_font.h"
 #include "shared.h"
 #include <stdlib.h>
@@ -435,6 +436,74 @@ void ct_render_polyline_cased(CTRenderContext *ctx,
                        fill_width + outline_width * 2);
     /* Then fill on top */
     ct_render_polyline(ctx, points, num_points, fill_color, fill_width);
+}
+
+/*
+ * Render a polyline with dashes.
+ * dash_length and gap_length are in pixels.
+ */
+void ct_render_polyline_dashed(CTRenderContext *ctx,
+                               const CTTilePoint *points, int num_points,
+                               CTColor color, float width,
+                               float dash_length, float gap_length)
+{
+    if (num_points < 2) return;
+    if (dash_length <= 0 || gap_length < 0) {
+        /* No dashing - fall back to solid */
+        ct_render_polyline(ctx, points, num_points, color, width);
+        return;
+    }
+
+    float pattern_length = dash_length + gap_length;
+    float distance = 0.0f;  /* Distance along polyline */
+
+    for (int i = 0; i < num_points - 1; i++) {
+        float x0 = (float)points[i].x;
+        float y0 = (float)points[i].y;
+        float x1 = (float)points[i + 1].x;
+        float y1 = (float)points[i + 1].y;
+
+        float dx = x1 - x0;
+        float dy = y1 - y0;
+        float seg_length = sqrtf(dx * dx + dy * dy);
+        if (seg_length < 0.001f) continue;
+
+        /* Unit vector along segment */
+        float ux = dx / seg_length;
+        float uy = dy / seg_length;
+
+        float seg_pos = 0.0f;  /* Position along this segment */
+
+        while (seg_pos < seg_length) {
+            /* Where are we in the dash pattern? */
+            float pattern_pos = fmodf(distance, pattern_length);
+            int in_dash = (pattern_pos < dash_length);
+
+            /* How much of current state (dash or gap) remains? */
+            float remaining;
+            if (in_dash) {
+                remaining = dash_length - pattern_pos;
+            } else {
+                remaining = pattern_length - pattern_pos;
+            }
+
+            /* How much can we draw before end of segment or state change? */
+            float draw_length = seg_length - seg_pos;
+            if (draw_length > remaining) draw_length = remaining;
+
+            if (in_dash) {
+                /* Draw this dash segment */
+                float sx = x0 + ux * seg_pos;
+                float sy = y0 + uy * seg_pos;
+                float ex = x0 + ux * (seg_pos + draw_length);
+                float ey = y0 + uy * (seg_pos + draw_length);
+                ct_render_line(ctx, (int)sx, (int)sy, (int)ex, (int)ey, color, width);
+            }
+
+            seg_pos += draw_length;
+            distance += draw_length;
+        }
+    }
 }
 
 /* ============================================================================
@@ -1348,6 +1417,73 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
 
     /* Render features */
     ct_render_tile(ctx, &tile);
+
+    /* Render boundaries on top of base map but below labels */
+    if (pbf->num_boundaries > 0 && pbf->boundary_rtree) {
+        CTBBox tile_bbox = ct_tile_bounds(coord);
+        size_t *boundary_indices = NULL;
+        size_t boundary_count = 0;
+
+        if (ct_boundary_query(pbf, tile_bbox, &boundary_indices, &boundary_count) == CT_OK &&
+            boundary_count > 0) {
+
+            /* LOD filtering: only show appropriate admin levels at each zoom */
+            int min_admin = CT_BOUNDARY_OTHER;  /* Default: show all */
+            if (coord.z <= 6) {
+                min_admin = CT_BOUNDARY_COUNTRY;  /* z0-6: country borders only */
+            } else if (coord.z <= 8) {
+                min_admin = CT_BOUNDARY_STATE;    /* z7-8: country + state */
+            } else if (coord.z <= 10) {
+                min_admin = CT_BOUNDARY_COUNTY;   /* z9-10: country + state + county */
+            }
+            /* z11+: show all configured admin levels */
+
+            for (size_t i = 0; i < boundary_count; i++) {
+                size_t idx = boundary_indices[i];
+                if (idx >= pbf->num_boundaries) continue;
+
+                const CTAssembledBoundary *b = &pbf->boundaries[idx];
+
+                /* LOD filter: skip boundaries below visibility threshold */
+                if (b->boundary_type == CT_BOUNDARY_TYPE_ADMIN &&
+                    b->admin_level > min_admin) {
+                    continue;
+                }
+
+                /* Protected areas: only show at z8+ */
+                if (b->boundary_type == CT_BOUNDARY_TYPE_PROTECTED && coord.z < 8) {
+                    continue;
+                }
+
+                /* Get boundary styling */
+                CTColor color;
+                float width, dash, gap;
+                ct_style_boundary(&ctx->style, b->boundary_type,
+                                  b->admin_level, coord.z,
+                                  &color, &width, &dash, &gap);
+
+                /* Allocate tile points for this boundary */
+                CTTilePoint *pts = malloc(b->num_coords * sizeof(CTTilePoint));
+                if (!pts) continue;
+
+                /* Transform lat/lon to tile pixel coordinates */
+                for (int j = 0; j < b->num_coords; j++) {
+                    int px, py;
+                    ct_latlon_to_tile_pixel(b->coords[j].lat, b->coords[j].lon,
+                                           coord, ctx->width, &px, &py);
+                    pts[j].x = px;
+                    pts[j].y = py;
+                }
+
+                /* Render the boundary with dashed line */
+                ct_render_polyline_dashed(ctx, pts, b->num_coords,
+                                          color, width, dash, gap);
+
+                free(pts);
+            }
+            free(boundary_indices);
+        }
+    }
 
     /* Render labels on top */
     const SHFont *font = sh_font_get_default();
