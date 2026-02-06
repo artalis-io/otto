@@ -1196,8 +1196,6 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
     CTTile tile;
     ct_tile_init(&tile, coord);
 
-    /* Get simplification tolerance for this zoom level */
-    float tolerance = ct_simplify_tolerance(coord.z);
     float scale = (float)ctx->width / CT_MVT_EXTENT;
 
     /* Clipping buffer: allow 64 pixels overshoot to avoid edge artifacts */
@@ -1295,28 +1293,18 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
             }
         }
 
-        /* Apply geometry simplification after clipping */
-        if (f->num_points > 4) {
-            if (f->type == CT_GEOM_POLYGON) {
-                /* Use ring-aware simplification for multipolygons */
-                if (f->num_rings > 1 && f->ring_ends) {
-                    ct_simplify_multipolygon_inplace(f->points, &f->num_points,
-                                                     f->ring_ends, f->num_rings,
-                                                     tolerance);
-#ifndef NDEBUG
-                    /* Validate simplified multipolygon structure */
-                    if (f->ring_ends[f->num_rings - 1] != f->num_points) {
-                        fprintf(stderr, "SIMPLIFY BUG: ring_ends[%d]=%d != num_points=%d\n",
-                                f->num_rings - 1, f->ring_ends[f->num_rings - 1], f->num_points);
-                    }
-#endif
-                } else {
-                    ct_simplify_poly_inplace(f->points, &f->num_points, tolerance);
-                }
-            } else if (f->type == CT_GEOM_LINESTRING) {
-                ct_simplify_line_inplace(f->points, &f->num_points, tolerance);
-            }
-        }
+        /* NOTE: Simplification disabled for PNG rendering.
+         *
+         * Rationale:
+         * 1. Rasterization already "simplifies" at the pixel level
+         * 2. Aggressive simplification (64 units at z10) causes visible
+         *    polygon degradation - angular/blocky shapes vs OSM's smooth curves
+         * 3. Simplification has CPU overhead that may offset rendering gains
+         * 4. Visual quality is prioritized for PNG output
+         *
+         * Simplification is still applied for MVT output in ct_mvt.c where
+         * it reduces file size without visible quality loss.
+         */
 
         /* Skip features too small to see */
         if (!feature_is_visible(f, scale)) {
