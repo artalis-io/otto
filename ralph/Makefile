@@ -93,6 +93,7 @@ PROFILE_BENCH_EXEC = profile_bench
 BENCH_LAP_EXEC = bench_lap
 BENCH_LAP_PERF_EXEC = bench_lap_perf
 BENCH_NETFLOW_EXEC = bench_netflow
+RALPH_BENCHMARK_EXEC = ralph-benchmark
 
 # GLPK configuration (via Homebrew)
 GLPK_PREFIX = $(shell brew --prefix glpk 2>/dev/null || echo "/opt/homebrew/opt/glpk")
@@ -256,9 +257,22 @@ $(BENCH_NETFLOW_EXEC): $(BENCH_DIR)/bench_netflow.c $(LIB_NAME) $(SHARED_LIB)
 bench-netflow: $(BENCH_NETFLOW_EXEC)
 	./$(BENCH_NETFLOW_EXEC)
 
+# Build ralph-benchmark (NETLIB benchmark tool)
+$(RALPH_BENCHMARK_EXEC): $(BENCH_DIR)/ralph_benchmark.c $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Build target alias for ralph-benchmark
+build-ralph-benchmark: $(RALPH_BENCHMARK_EXEC)
+	@echo "Built: ./ralph-benchmark"
+	@echo "Run: ./ralph-benchmark --help"
+
+# Download NETLIB problems
+download-netlib:
+	cd $(BENCH_DIR) && bash download_netlib.sh
+
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -272,7 +286,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
@@ -316,3 +330,12 @@ help:
 	@echo ""
 	@echo "Quick benchmark variants (smaller problem sizes):"
 	@echo "  bench-mip-quick, bench-mip-specialized-quick, bench-mip-compare-quick"
+	@echo ""
+	@echo "NETLIB Benchmark Tool:"
+	@echo "  build-ralph-benchmark  - Build the benchmark tool"
+	@echo "  download-netlib        - Download NETLIB LP problems"
+	@echo ""
+	@echo "  ./ralph-benchmark --help              # Show benchmark options"
+	@echo "  ./ralph-benchmark --download-netlib   # Download problems"
+	@echo "  ./ralph-benchmark --suite tiny        # Quick smoke test"
+	@echo "  ./ralph-benchmark --netlib afiro -v   # Single problem"
