@@ -207,11 +207,17 @@ typedef struct {
     size_t capacity;
 } StringPool;
 
-static void string_pool_init(StringPool *pool) {
+static int string_pool_init(StringPool *pool) {
     pool->data = malloc(STRING_POOL_INITIAL_CAPACITY);
+    if (!pool->data) {
+        pool->size = 0;
+        pool->capacity = 0;
+        return 0;
+    }
     pool->size = 1;  /* Reserve 0 for NULL strings - offset 0 means empty string */
     pool->capacity = STRING_POOL_INITIAL_CAPACITY;
     pool->data[0] = '\0';
+    return 1;
 }
 
 static uint32_t string_pool_add(StringPool *pool, const char *str) {
@@ -255,7 +261,10 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
 
     /* Build string pool */
     StringPool strings;
-    string_pool_init(&strings);
+    if (!string_pool_init(&strings)) {
+        fclose(f);
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
 
     /* Count total coordinates for ways */
     size_t total_coords = 0;

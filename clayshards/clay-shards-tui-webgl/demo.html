@@ -584,7 +584,11 @@
                     }
                 }
 
-                document.addEventListener('fullscreenchange', resizeForFullscreen);
+                document.addEventListener('fullscreenchange', () => {
+                    resizeForFullscreen();
+                    // Re-focus hidden input for keyboard capture in fullscreen
+                    setTimeout(() => hiddenInput.focus(), 100);
+                });
 
                 document.getElementById('fullscreenBtn').addEventListener('click', () => {
                     if (document.fullscreenElement) {
