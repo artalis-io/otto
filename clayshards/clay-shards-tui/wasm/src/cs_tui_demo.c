@@ -60,8 +60,8 @@ typedef struct {
 } AppState;
 
 static AppState g_app = {
-    .name = "John",
-    .name_len = 4,
+    .name = "Vault Dweller",
+    .name_len = 12,
     .email = "",
     .email_len = 0,
     .notifications = true,
@@ -69,13 +69,13 @@ static AppState g_app = {
     .enabled = true,
     .volume = 0.7f,
     .priority = 1,
-    .counter = 0,
+    .counter = 237,
     .width = 80,
     .height = 24,
     .quit = false,
 };
 
-static const char *PRIORITY_OPTIONS[] = {"Low", "Medium", "High", "Critical"};
+static const char *PRIORITY_OPTIONS[] = {"Minimal", "Guarded", "Elevated", "Severe"};
 
 /* Global renderer */
 static CsTuiRenderer *g_renderer = NULL;
@@ -93,12 +93,12 @@ static const struct {
     Clay_Color border;
     Clay_Color accent;
 } THEME = {
-    .bg         = {30, 30, 30, 255},
-    .panel      = {45, 45, 45, 255},
-    .text       = {240, 240, 240, 255},
-    .text_muted = {150, 150, 150, 255},
-    .border     = {80, 80, 80, 255},
-    .accent     = {80, 140, 200, 255},
+    .bg         = {15, 25, 15, 255},
+    .panel      = {25, 40, 25, 255},
+    .text       = {50, 255, 50, 255},
+    .text_muted = {30, 150, 30, 255},
+    .border     = {40, 100, 40, 255},
+    .accent     = {60, 180, 60, 255},
 };
 
 /* ============================================================================
@@ -124,7 +124,7 @@ static void render_ui(void) {
             },
             .backgroundColor = THEME.accent
         }) {
-            CLAY_TEXT(CLAY_STRING(" ClayShards TUI WebGL Demo "),
+            CLAY_TEXT(CLAY_STRING(" ROBCO INDUSTRIES (TM) TERMLINK PROTOCOL "),
                      CLAY_TEXT_CONFIG({ .fontSize = 14, .textColor = THEME.text }));
         }
 
@@ -147,11 +147,11 @@ static void render_ui(void) {
                 .backgroundColor = THEME.panel,
                 .border = { .width = {1, 1, 1, 1, 0}, .color = THEME.border }
             }) {
-                CLAY_TEXT(CLAY_STRING("Form Inputs"),
+                CLAY_TEXT(CLAY_STRING("CITIZEN REGISTRY"),
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
 
                 /* Name input */
-                CLAY_TEXT(CLAY_STRING("Name:"),
+                CLAY_TEXT(CLAY_STRING("Designation:"),
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
 
                 const CsInputStyle input_style = {
@@ -163,15 +163,15 @@ static void render_ui(void) {
                 };
                 cs_input(CS_ID("name_input"),
                     g_app.name, &g_app.name_len, sizeof(g_app.name),
-                    "Enter name...", &input_style);
+                    "Enter designation...", &input_style);
 
                 /* Email input */
-                CLAY_TEXT(CLAY_STRING("Email:"),
+                CLAY_TEXT(CLAY_STRING("Assignment:"),
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
 
                 cs_input(CS_ID("email_input"),
                     g_app.email, &g_app.email_len, sizeof(g_app.email),
-                    "user@example.com", &input_style);
+                    "Vault 111", &input_style);
 
                 /* Separator */
                 CLAY(CLAY_ID("Sep1"), {
@@ -180,7 +180,7 @@ static void render_ui(void) {
                 }) {}
 
                 /* Checkboxes */
-                CLAY_TEXT(CLAY_STRING("Options:"),
+                CLAY_TEXT(CLAY_STRING("Preferences:"),
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
 
                 const CsCheckboxStyle check_style = {
@@ -190,8 +190,8 @@ static void render_ui(void) {
                     .gap = 1,
                     .border_width = 0
                 };
-                cs_checkbox(CS_ID("notif_check"), &g_app.notifications, "Notifications", &check_style);
-                cs_checkbox(CS_ID("dark_check"), &g_app.darkmode, "Dark Mode", &check_style);
+                cs_checkbox(CS_ID("notif_check"), &g_app.notifications, "Emergency Broadcast", &check_style);
+                cs_checkbox(CS_ID("dark_check"), &g_app.darkmode, "Power Saver", &check_style);
             }
 
             /* Right panel - Controls */
@@ -205,14 +205,14 @@ static void render_ui(void) {
                 .backgroundColor = THEME.panel,
                 .border = { .width = {1, 1, 1, 1, 0}, .color = THEME.border }
             }) {
-                CLAY_TEXT(CLAY_STRING("Controls"),
+                CLAY_TEXT(CLAY_STRING("SYSTEM CONFIG"),
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
 
                 /* Toggle */
                 CLAY(CLAY_ID("ToggleRow"), {
                     .layout = { .childGap = 2, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } }
                 }) {
-                    CLAY_TEXT(CLAY_STRING("Enabled:"),
+                    CLAY_TEXT(CLAY_STRING("Online:"),
                              CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
                     const CsToggleStyle toggle_style = {
                         .width = 4,
@@ -231,7 +231,7 @@ static void render_ui(void) {
                     CLAY(CLAY_ID("SliderLabel"), {
                         .layout = { .sizing = { CLAY_SIZING_FIXED(9), CLAY_SIZING_FIT(0) } }
                     }) {
-                        CLAY_TEXT(CLAY_STRING("Volume:"),
+                        CLAY_TEXT(CLAY_STRING("Gain:"),
                                  CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
                     }
                     const CsSliderStyle slider_style = {
@@ -254,7 +254,7 @@ static void render_ui(void) {
                     CLAY(CLAY_ID("DropdownLabel"), {
                         .layout = { .sizing = { CLAY_SIZING_FIXED(9), CLAY_SIZING_FIT(0) } }
                     }) {
-                        CLAY_TEXT(CLAY_STRING("Priority:"),
+                        CLAY_TEXT(CLAY_STRING("Threat:"),
                                  CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
                     }
                     const CsDropdownStyle dd_style = {
@@ -273,7 +273,7 @@ static void render_ui(void) {
                 }) {}
 
                 /* Buttons */
-                CLAY_TEXT(CLAY_STRING("Actions:"),
+                CLAY_TEXT(CLAY_STRING("Inventory:"),
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
 
                 CLAY(CLAY_ID("ButtonRow"), {
@@ -300,14 +300,14 @@ static void render_ui(void) {
                     if (cs_button(CS_ID("dec_btn"), " - ", &btn_default).clicked) {
                         g_app.counter--;
                     }
-                    if (cs_button(CS_ID("reset_btn"), " Reset ", &btn_default).clicked) {
+                    if (cs_button(CS_ID("reset_btn"), " Spend ", &btn_default).clicked) {
                         g_app.counter = 0;
                     }
                 }
 
                 /* Counter display - use static buffer to persist until Clay_EndLayout */
                 static char counter_str[32];
-                int counter_len = snprintf(counter_str, sizeof(counter_str), "Counter: %d", g_app.counter);
+                int counter_len = snprintf(counter_str, sizeof(counter_str), "Bottle Caps: %d", g_app.counter);
                 CLAY_TEXT(((Clay_String){ .chars = counter_str, .length = counter_len }),
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
             }

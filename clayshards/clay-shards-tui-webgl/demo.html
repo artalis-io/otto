@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ClayShards TUI WebGL Demo</title>
+    <title>RobCo Industries Termlink</title>
     <style>
         * {
             margin: 0;
@@ -195,10 +195,10 @@
     </style>
 </head>
 <body>
-    <h1>ClayShards TUI WebGL Demo</h1>
+    <h1>RobCo Industries (TM) Termlink</h1>
     <p class="description">
-        TUI components rendered in the browser via WebGL with retro CRT effects.
-        The same C code runs in WASM, outputting to a character buffer.
+        Welcome to ROBCO Industries (TM) Termlink.
+        All Vault-Tec personnel must register before accessing secure systems.
     </p>
 
     <div id="loading">Loading WASM...</div>
@@ -222,8 +222,8 @@
                 <div class="preset-buttons">
                     <button data-preset="off">Off</button>
                     <button data-preset="subtle">Subtle</button>
-                    <button data-preset="retro" class="active">Retro</button>
-                    <button data-preset="arcade">Arcade</button>
+                    <button data-preset="retro">Retro</button>
+                    <button data-preset="arcade" class="active">Arcade</button>
                 </div>
             </div>
 
@@ -235,11 +235,11 @@
             </div>
 
             <div class="control-group">
-                <label>Color Mode</label>
+                <label>Phosphor</label>
                 <div class="preset-buttons">
-                    <button data-color="rgb" class="active">RGB</button>
+                    <button data-color="rgb">RGB</button>
                     <button data-color="amber">Amber</button>
-                    <button data-color="green">Green</button>
+                    <button data-color="green" class="active">Green</button>
                 </div>
             </div>
 
@@ -262,12 +262,12 @@
             </div>
 
             <div class="control-group">
-                <label>Application State</label>
+                <label>System Status</label>
                 <div class="state-display" id="state">
-                    <div><span class="key">Counter:</span> <span class="value" id="state-counter">0</span></div>
-                    <div><span class="key">Volume:</span> <span class="value" id="state-volume">0.70</span></div>
-                    <div><span class="key">Priority:</span> <span class="value" id="state-priority">Medium</span></div>
-                    <div><span class="key">Enabled:</span> <span class="value" id="state-enabled">true</span></div>
+                    <div><span class="key">Bottle Caps:</span> <span class="value" id="state-counter">237</span></div>
+                    <div><span class="key">Gain:</span> <span class="value" id="state-volume">0.70</span></div>
+                    <div><span class="key">Threat:</span> <span class="value" id="state-priority">Guarded</span></div>
+                    <div><span class="key">Online:</span> <span class="value" id="state-enabled">true</span></div>
                 </div>
             </div>
         </div>
@@ -284,7 +284,7 @@
     <script type="module">
         import { TuiRenderer, TerminalFontAtlas, CrtEffects, CRT_COLOR_AMBER, CRT_COLOR_GREEN, CRT_COLOR_RGB } from './index.js';
 
-        const PRIORITY_OPTIONS = ['Low', 'Medium', 'High', 'Critical'];
+        const PRIORITY_OPTIONS = ['Minimal', 'Guarded', 'Elevated', 'Severe'];
         const COLS = 80;
         const ROWS = 24;
         const CELL_WIDTH = 9;
@@ -393,7 +393,8 @@
                 // Create CRT effects
                 const crt = new CrtEffects(renderer.gl);
                 crt.resize(canvas.width, canvas.height);
-                crt.applyPreset('retro');
+                crt.applyPreset('arcade');
+                crt.setColorMode(CRT_COLOR_GREEN);
 
                 // Setup keyboard input with hidden input for proper text capture
                 const hiddenInput = document.getElementById('hiddenInput');
