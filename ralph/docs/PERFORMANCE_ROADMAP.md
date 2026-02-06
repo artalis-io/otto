@@ -22,7 +22,7 @@ This document covers **research-level** optimizations. For current implementatio
 - 26% `apply_ft_spikes_forward` - FTRAN update application
 - 5% Other (solve_L, solve_U, pricing, ratio test)
 
-**NETLIB Status:** 3/5 tiny suite pass (beaconfd fails due to numerical issues - see PLAN_TWO_PHASE_SIMPLEX.md)
+**NETLIB Status:** 8/12 problems pass (bandm, beaconfd, blend, lotfi fail due to numerical issues - see LP_PERFORMANCE_PLAN.md)
 
 ---
 

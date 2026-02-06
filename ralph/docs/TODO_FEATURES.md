@@ -42,7 +42,7 @@ Ralph now has a dedicated JVC (Jonker-Volgenant-Castanon) LAP solver with:
 | n=1000 | 10ms | 6.7ms | 1.5ms (7x) |
 | n=2000 | 42ms | - | 6ms (7x) |
 
-**Test coverage:** 273 tests (100% passing)
+**Test coverage:** 358 tests (100% passing)
 
 ### Algorithm: Jonker-Volgenant-Castanon (JVC)
 
@@ -2079,10 +2079,11 @@ static const ParamMapping dbl_params[] = {
 
 ### Next Priorities
 
-1. **LP Numerical Stability** - High priority
-   - Two-phase simplex to replace Big-M method
-   - Required to pass NETLIB tiny suite (beaconfd fails)
-   - See [PLAN_TWO_PHASE_SIMPLEX.md](PLAN_TWO_PHASE_SIMPLEX.md)
+1. **LP Numerical Stability** - In Progress
+   - ✅ Two-phase simplex implemented (replaces Big-M for >80% equalities)
+   - ✅ 8/12 NETLIB problems pass
+   - ❌ 4 failures remain: bandm, beaconfd, blend, lotfi (numerical issues)
+   - See [LP_PERFORMANCE_PLAN.md](LP_PERFORMANCE_PLAN.md)
 
 2. **External Solver Backends (HiGHS, GLPK)** - Medium priority
    - Enables production-grade performance for complex MIPs
