@@ -21,10 +21,10 @@ Match GLPK performance on speed and solve all NETLIB tiny suite problems correct
 | share2b | ✅ PASS | 105 iterations |
 | adlittle | ✅ PASS | 133 iterations |
 | bnl1 | ✅ PASS | 0.009% objective error (acceptable) |
-| beaconfd | ❌ FAIL | Rank-deficient constraint matrix (requires presolve) |
+| beaconfd | ⚠️ WIP | Presolve works (262→148 vars), LU stability needed |
 
-**Current**: 4/5 pass
-**Target**: 5/5 pass (requires presolve module - see [PLAN_PRESOLVE.md](PLAN_PRESOLVE.md))
+**Current**: 4/5 pass, 1 in progress
+**Target**: 5/5 pass (requires LU stability improvements - see below)
 
 ---
 
@@ -34,32 +34,60 @@ Problems with many equality constraints require both numerical improvements (two
 
 ### Related Plans
 - **[PLAN_TWO_PHASE_SIMPLEX.md](PLAN_TWO_PHASE_SIMPLEX.md)** - Two-phase simplex (✅ Complete)
-- **[PLAN_PRESOLVE.md](PLAN_PRESOLVE.md)** - Presolve module for redundant constraint detection (⏳ Not Started)
+- **[PLAN_PRESOLVE.md](PLAN_PRESOLVE.md)** - Presolve module (✅ Phase 1 Complete)
 
 ### Summary of Numerical Stability Improvements
 
 | Phase | Feature | Status | Notes |
 |-------|---------|--------|-------|
 | 1 | **Two-Phase Simplex** | ✅ Complete | Eliminates Big-M for >80% equality problems |
-| 2 | **Presolve Module** | ⏳ Not Started | Required for beaconfd (rank-deficient matrix) |
-| 3 | **Equilibration Scaling** | ⏳ Future | Lower priority, improves conditioning |
+| 2 | **Presolve Module** | ✅ Phase 1 Complete | Reduces beaconfd 262→148 vars, 173→87 cons |
+| 3 | **Problem Scaling** | ⏳ Next | Equilibration scaling for ill-conditioned matrices |
+| 4 | **LU Pivot Selection** | ⏳ Planned | Threshold pivoting (Markowitz + stability) |
+| 5 | **Iterative Refinement** | ⏳ Planned | Residual correction after LU solves |
 
 ### Current Status
 - ✅ Two-phase simplex implemented (triggers for >80% equalities)
 - ✅ LU regularization for zero pivots (with limits)
 - ✅ Improved pivot selection via BTRAN
-- ⏳ Presolve module needed for truly redundant constraints
+- ✅ Presolve with redundant row detection
+- ⏳ LU stability improvements needed for beaconfd
 
-### beaconfd Root Cause
+### beaconfd Status (Feb 2026)
 
-beaconfd has 140 equalities out of 173 constraints. The constraint matrix is **rank-deficient** (some rows are linear combinations of others). This is an algebraic property, not a numerical error:
+beaconfd has 140 equalities out of 173 constraints. After presolve:
+- ✅ Presolve reduces: 262 vars → 148, 173 cons → 87
+- ✅ Redundant row detection finds rank=87 (full rank)
+- ❌ Simplex fails at iteration 20 (LU refactorization fails)
+- **Next**: Problem scaling to improve matrix conditioning
 
-1. Two-phase simplex Phase 1 succeeds (feasibility found)
-2. All artificial variables pivot out correctly
-3. Phase 2 fails because the basis matrix is singular
-4. **Solution**: Detect and remove redundant rows during presolve
+### LU Stability Improvement Plan
 
-See [PLAN_PRESOLVE.md](PLAN_PRESOLVE.md) for the implementation plan.
+To solve beaconfd, implement in this order:
+
+| Priority | Improvement | Rationale | Effort |
+|----------|-------------|-----------|--------|
+| **1st** | Problem scaling | Normalizes coefficients, often sufficient | ~100 LOC |
+| **2nd** | Threshold pivoting | Prevents tiny pivots from accumulating | ~200 LOC |
+| **3rd** | Iterative refinement | Safety net for residual errors | ~50 LOC |
+
+**Problem Scaling** (equilibration):
+```c
+// Scale rows so max |a_ij| ≈ 1, columns so max |a_ij| ≈ 1
+// Apply before simplex, unscale solution after
+```
+
+**Threshold Pivoting** (Markowitz with stability):
+```c
+// Only accept pivot if |a_ij| >= threshold * max_in_column
+// Prevents tiny pivots that cause numerical instability
+```
+
+**Iterative Refinement**:
+```c
+// After Bx = b solve: x = x + B^{-1}(b - Bx)
+// Corrects residual errors from finite precision
+```
 
 ---
 
