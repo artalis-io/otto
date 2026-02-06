@@ -136,6 +136,7 @@ CsSliderResult cs_slider(
         g->dragging_id = id;
         is_dragging = true;
         result.dragging = true;
+        g->focused_id = id;  /* Focus on drag start */
     }
 
     /* Handle dragging - calculate value from pointer position */
