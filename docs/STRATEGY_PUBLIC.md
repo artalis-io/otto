@@ -1319,5 +1319,247 @@ Don't optimize Ralph to beat Gurobi. Optimize HoSE to handle every EC 561 edge c
 
 ---
 
-*Document version: 1.5*
+## 15. EU Emissions Compliance Network (Parallel Bet)
+
+### 15.1 The Opportunity: CSRD Creates Mandatory Data Exchange
+
+The **Corporate Sustainability Reporting Directive (CSRD)** is the most significant EU regulation since GDPR:
+
+| Timeline | Requirement |
+|----------|-------------|
+| 2024 | Large public-interest entities (>500 employees) |
+| 2025 | All large companies (>250 employees or €40M+ revenue) |
+| 2026 | Listed SMEs |
+
+**What CSRD requires:**
+- Scope 3 emissions reporting (includes all transport/logistics)
+- Auditor verification (not self-reported)
+- Standardized methodology (EU taxonomy aligned)
+
+**The transport emissions problem:**
+
+| Stakeholder | Problem | Urgency |
+|-------------|---------|---------|
+| **Shippers** | "How do I report Scope 3 transport emissions?" | Mandatory by law |
+| **Carriers** | "How do I prove my emissions to win contracts?" | Competitive pressure |
+| **Auditors** | "How do I verify transport emissions data?" | Client demand |
+
+**Nobody owns this infrastructure layer yet.**
+
+### 15.2 Strategic Positioning: Parallel Bet
+
+This is positioned as a **parallel bet** alongside fleet planning sales:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     OTTO STRATEGY                                │
+│                                                                  │
+│  ┌─────────────────────────────┐  ┌─────────────────────────────┐│
+│  │    PRIMARY: Fleet Planning  │  │  PARALLEL: Emissions Network ││
+│  │                             │  │                              ││
+│  │  • B2B SaaS to carriers     │  │  • Two-sided marketplace     ││
+│  │  • Known domain, contacts   │  │  • New buyer (shippers)      ││
+│  │  • Proven sales motion      │  │  • Regulatory tailwind       ││
+│  │                             │  │                              ││
+│  │  Revenue: Fleet contracts   │  │  Revenue: Shipper compliance ││
+│  └─────────────────────────────┘  └─────────────────────────────┘│
+│                                                                  │
+│  Both share: OTTO core engines, carrier relationships, data      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why parallel, not pivot:**
+- Fleet planning leverages existing domain expertise and contacts
+- Emissions network tests new market with regulatory tailwind
+- Shared infrastructure (OTTO engines, carrier network)
+- If one accelerates, double down; if both work, they're synergistic
+
+### 15.3 The Two-Sided Network Model
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    SHIPPER SIDE (Revenue)                        │
+│  "I need CSRD-compliant Scope 3 transport data"                 │
+│  → Pay €25-100k/year for verified emissions reports             │
+│  → Dashboard: CO2 per lane, carrier, load                       │
+│  → Audit-ready documentation for CSRD compliance                │
+│  → Benchmarks: "Your emissions vs market average"               │
+└─────────────────────────────────────────────────────────────────┘
+                              ▲
+                              │ Verified emissions data
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                    OTTO EMISSIONS ENGINE                         │
+│                                                                  │
+│  • EN 16258 / GLEC Framework methodology                        │
+│  • Vehicle-specific factors (diesel Euro 6, LNG, EV)            │
+│  • Route-level calculation (distance × vehicle × load factor)   │
+│  • Verification layer (telematics, fuel receipts)               │
+│  • Anonymized benchmarking database                             │
+└─────────────────────────────────────────────────────────────────┘
+                              ▲
+                              │ Operational data
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│                    CARRIER SIDE (Network Growth)                 │
+│  "I get OTTO optimization FREE or heavily subsidized"           │
+│  → Route planning, fuel optimization, HoS compliance            │
+│  → In exchange: operational data feeds the network              │
+│  → Benefit: "OTTO Verified" badge helps win shipper contracts   │
+│  → Benefit: See own emissions, improve efficiency               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Value asymmetry:**
+- Carriers get €10-50k/year value in optimization tools
+- Shippers pay €25-100k/year for compliance data
+- OTTO captures the spread
+
+### 15.4 Why This Moat Is AI-Resistant
+
+| Moat Layer | Why AI Can't Replicate |
+|------------|------------------------|
+| **Carrier network** | Requires operational integration, trust, relationships |
+| **Verified methodology** | Auditor relationships, regulatory expertise |
+| **Benchmark database** | Network effects: more carriers → better benchmarks |
+| **Operational data** | Telematics, fuel receipts, TMS integration |
+| **Domain judgment** | Which emission factors to use, how to allocate LTL |
+
+AI can generate code. AI cannot:
+- Convince carriers to share operational data
+- Get Big 4 auditor endorsement
+- Build carrier network from scratch
+- Navigate EN 16258 edge cases without domain expertise
+
+### 15.5 MVP Specification (Paid Pilot)
+
+**Objective:** Validate shipper willingness to pay with 10 carriers and 1-2 shipper contracts.
+
+**Timeline:** 6 months
+**Investment:** ~€100k (mostly opportunity cost)
+
+#### Phase 1: Foundation (Month 1-2)
+
+**Build emissions calculation engine:**
+
+| Component | Specification |
+|-----------|---------------|
+| Methodology | EN 16258 + GLEC Framework compliant |
+| Vehicle factors | Diesel Euro 5/6, LNG, CNG, EV (by country grid mix) |
+| Calculation | gCO2/tonne-km, allocated by load factor |
+| Scope | Well-to-wheel (WTW) with tank-to-wheel (TTW) breakdown |
+
+**Technical integration:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    OTTO EMISSIONS MODULE                         │
+│                                                                  │
+│  Input:                          Output:                         │
+│  • Route (from Velo)             • gCO2e per shipment            │
+│  • Vehicle type                  • gCO2e per tonne-km            │
+│  • Load weight/factor            • Verification confidence       │
+│  • Fuel consumption (actual      • Audit-ready report            │
+│    or estimated)                 • Benchmark comparison          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Phase 2: Carrier Network (Month 2-4)
+
+**Target:** 10 carriers actively sharing operational data
+
+| Method | Data Quality | Verification |
+|--------|--------------|--------------|
+| **Telematics API** | High | Automatic |
+| **TMS export** | Medium | Manual review |
+| **Fuel card data** | High (fuel) | Automatic |
+| **Manual upload** | Variable | Manual review |
+
+**Carrier incentives:**
+- OTTO optimization tools free during pilot
+- "OTTO Verified" badge for marketing
+- Own emissions reports for shipper conversations
+- Early access to benchmarking data
+
+#### Phase 3: Shipper Pilot (Month 4-6)
+
+**Target:** 1-2 shipper contracts at €25k/pilot
+
+**Ideal pilot shipper profile:**
+- CSRD obligated (2025 wave)
+- €100M+ transport spend
+- EU-headquartered
+- Existing carrier overlap with OTTO network
+- Sustainability-forward culture
+
+**Shipper deliverables:**
+- Emissions dashboard (CO2 by lane, carrier, load, time period)
+- CSRD report template for Scope 3 transport disclosure
+- Carrier scorecards (rank by emissions intensity)
+- Benchmark comparison vs industry average
+- Methodology documentation for auditor review
+
+#### MVP Success Criteria
+
+| Metric | Target | Why It Matters |
+|--------|--------|----------------|
+| Carriers active | 10+ | Network has critical mass |
+| Shipments tracked | 1,000+ | Statistically meaningful data |
+| Shipper contracts | 1-2 | Validated willingness to pay |
+| Revenue | €25-50k | Proof of commercial model |
+| Auditor review | 1 Big 4 informal review | Methodology credibility |
+
+### 15.6 Scaling Path (Post-MVP)
+
+**If MVP succeeds:**
+
+| Phase | Timeline | Carriers | Shippers | ARR |
+|-------|----------|----------|----------|-----|
+| MVP | 0-6 mo | 10 | 2 | €50k |
+| Scale carriers | 6-12 mo | 100 | 5 | €250k |
+| Scale shippers | 12-24 mo | 500 | 20 | €1M |
+| Network effects | 24-36 mo | 2,000 | 50 | €3M |
+| Market leadership | 36+ mo | 10,000 | 200 | €10M+ |
+
+**Expansion vectors:**
+- More shippers (direct sales, auditor referrals)
+- Premium tiers (real-time tracking, API access)
+- Carrier premium services
+- Benchmark data products
+- Carbon credit integration
+- Geographic expansion (US SEC climate rules)
+
+### 15.7 Competitive Landscape
+
+| Competitor | Positioning | OTTO Differentiation |
+|------------|-------------|---------------------|
+| **EcoTransIT** | Methodology standard | No operational integration, no network |
+| **Carbon footprint tools** | Generic calculators | Not transport-specific, no verification |
+| **TMS vendors** | Adding emissions features | No carrier network, siloed data |
+| **Consultants** | Manual emissions audits | Not scalable, expensive |
+
+**OTTO's unique position:** Operational integration + network effects + verification layer.
+
+### 15.8 Synergies with Fleet Planning
+
+| Synergy | Mechanism |
+|---------|-----------|
+| **Carrier acquisition** | "Free OTTO" for emissions network = planning software adoption |
+| **Shipper relationships** | Shippers may want planning for their private fleet |
+| **Data moat** | More operational data = better optimization |
+| **Brand** | "OTTO powers EU transport sustainability" |
+| **Exit optionality** | Acquirer gets fleet planning AND compliance network |
+
+### 15.9 Decision Points
+
+**6-month checkpoint (end of MVP):**
+
+| Signal | Action |
+|--------|--------|
+| 2+ shipper contracts, carrier growth | Double down, dedicated team |
+| 1 shipper, carriers engaged | Continue with current resources |
+| No shipper interest | Pause, reassess market timing |
+
+---
+
+*Document version: 1.6*
 *Last updated: February 2026*
