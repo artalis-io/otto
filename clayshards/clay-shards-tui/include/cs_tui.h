@@ -117,9 +117,15 @@ void cs_tui_free(CsTuiRenderer *r);
 void cs_tui_resize(CsTuiRenderer *r, int width, int height);
 
 /**
- * Get current terminal dimensions.
+ * Get current terminal dimensions from renderer.
  */
 void cs_tui_get_size(CsTuiRenderer *r, int *width, int *height);
+
+/**
+ * Get terminal dimensions from OS (via ioctl).
+ * Does not require a renderer instance.
+ */
+void cs_tui_get_terminal_size(int *width, int *height);
 
 /* ============================================================================
  * Rendering
@@ -204,6 +210,43 @@ void cs_tui_set_cursor(CsTuiRenderer *r, int x, int y, bool visible);
 /* ============================================================================
  * Clay Integration
  * ============================================================================ */
+
+/**
+ * Initialize Clay for TUI rendering.
+ *
+ * This is the recommended way to set up Clay for TUI applications.
+ * It handles:
+ *   - Getting terminal dimensions from OS (if width/height are 0)
+ *   - Allocating Clay memory arena
+ *   - Initializing Clay with character-based dimensions
+ *   - Setting up 1:1 character text measurement
+ *
+ * After calling this, you can use Clay's layout system normally.
+ * All coordinates will be in character cells, not pixels.
+ *
+ * @param width Terminal width (0 = auto-detect from OS)
+ * @param height Terminal height (0 = auto-detect from OS)
+ * @param out_width If non-NULL, receives actual width used
+ * @param out_height If non-NULL, receives actual height used
+ * @return Allocated Clay memory (caller must free), or NULL on error
+ *
+ * Example:
+ *   int w, h;
+ *   void *clay_mem = cs_tui_init_clay(0, 0, &w, &h);
+ *   if (!clay_mem) { error handling }
+ *   // ... use Clay normally ...
+ *   free(clay_mem);
+ */
+void *cs_tui_init_clay(int width, int height, int *out_width, int *out_height);
+
+/**
+ * Update Clay dimensions after terminal resize.
+ * Call this when SIGWINCH is received.
+ *
+ * @param width New width (0 = auto-detect)
+ * @param height New height (0 = auto-detect)
+ */
+void cs_tui_update_clay_size(int width, int height);
 
 /**
  * Render Clay render commands.

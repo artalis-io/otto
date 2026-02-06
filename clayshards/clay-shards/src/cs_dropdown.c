@@ -192,6 +192,11 @@ CsDropdownResult cs_dropdown(
                 /* Calculate list width - match button width */
                 float list_width = style->width > 0 ? style->width : 120.0f;
 
+                /* TUI-friendly: smaller offset and padding when height is small */
+                bool tui_mode = style->height <= 3;
+                Clay_Vector2 list_offset = tui_mode ? (Clay_Vector2){0, 1} : (Clay_Vector2){0, 2};
+                Clay_Padding list_pad = tui_mode ? (Clay_Padding){1, 1, 0, 0} : (Clay_Padding){4, 4, 4, 4};
+
                 Clay_ElementDeclaration list_config = {
                     .floating = {
                         .attachTo = CLAY_ATTACH_TO_PARENT,
@@ -199,7 +204,7 @@ CsDropdownResult cs_dropdown(
                             .element = CLAY_ATTACH_POINT_LEFT_TOP,
                             .parent = CLAY_ATTACH_POINT_LEFT_BOTTOM
                         },
-                        .offset = {0, 2},  /* Small gap below button */
+                        .offset = list_offset,
                         .zIndex = 1000     /* Ensure it's on top */
                     },
                     .layout = {
@@ -210,7 +215,7 @@ CsDropdownResult cs_dropdown(
                                 : CLAY_SIZING_FIT(.max = 0)
                         },
                         .layoutDirection = CLAY_TOP_TO_BOTTOM,
-                        .padding = {4, 4, 4, 4}
+                        .padding = list_pad
                     },
                     .backgroundColor = list_bg,
                     .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius),
@@ -230,17 +235,26 @@ CsDropdownResult cs_dropdown(
                                            : item_selected ? (Clay_Color){CS_COLOR_BTN_BLUE}
                                            : (Clay_Color){0, 0, 0, 0};
 
+                        /* TUI-friendly sizing: use height directly if small (<= 3),
+                         * otherwise subtract padding for pixel mode */
+                        float item_h = style->height <= 3 ? style->height : style->height - 4;
+                        if (item_h < 1) item_h = 1;
+                        /* TUI-friendly padding: minimal if height is small */
+                        Clay_Padding item_pad = style->height <= 3
+                            ? (Clay_Padding){1, 1, 0, 0}
+                            : (Clay_Padding){8, 8, 4, 4};
+
                         CLAY(item_id, {
                             .layout = {
                                 .sizing = {
                                     .width = CLAY_SIZING_GROW(0),
-                                    .height = CLAY_SIZING_FIXED(style->height - 4)
+                                    .height = CLAY_SIZING_FIXED(item_h)
                                 },
-                                .padding = {8, 8, 4, 4},
+                                .padding = item_pad,
                                 .childAlignment = { .y = CLAY_ALIGN_Y_CENTER }
                             },
                             .backgroundColor = item_bg,
-                            .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius - 2)
+                            .cornerRadius = CLAY_CORNER_RADIUS(style->corner_radius > 2 ? style->corner_radius - 2 : 0)
                         }) {
                             const char *opt_label = options[i];
                             Clay_String opt_str = {.chars = opt_label, .length = (int)strnlen(opt_label, CS_MAX_LABEL_LEN)};
