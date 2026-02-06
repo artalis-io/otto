@@ -318,6 +318,68 @@ export class CrtEffects {
     }
 
     /**
+     * Draw CRT power-off effect (shrinking to horizontal line then fade).
+     * @param {number} progress - Animation progress (0-1), where 1 is fully off
+     */
+    drawPowerOff(progress) {
+        const gl = this.gl;
+
+        // Clear to black
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, this.width, this.height);
+        gl.clearColor(0, 0, 0, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        if (progress >= 1) return; // Fully off
+
+        // Phase 1 (0-0.7): Vertical collapse to horizontal line
+        // Phase 2 (0.7-1): Horizontal line fades out
+        const collapseEnd = 0.7;
+
+        if (progress < collapseEnd) {
+            // Vertical collapse - draw texture with shrinking height
+            const t = progress / collapseEnd; // 0-1 for collapse phase
+            const height = 1 - t * 0.98; // Shrink to 2% of original height
+
+            // Use blit shader to draw squished texture
+            gl.useProgram(this.blitShader.program);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.texture);
+            gl.uniform1i(this.blitShader.uniforms.u_texture, 0);
+            gl.uniform2f(this.blitShader.uniforms.u_scale, 1.0, height);
+            gl.uniform2f(this.blitShader.uniforms.u_offset, 0.0, (1 - height) / 2);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+            const posLoc = gl.getAttribLocation(this.blitShader.program, 'a_pos');
+            gl.enableVertexAttribArray(posLoc);
+            gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            gl.disableVertexAttribArray(posLoc);
+        } else {
+            // Fade out - draw a bright line that fades
+            const t = (progress - collapseEnd) / (1 - collapseEnd); // 0-1 for fade phase
+            const brightness = 1 - t;
+            const lineHeight = 0.02;
+
+            // Draw a horizontal line in the middle
+            gl.useProgram(this.blitShader.program);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.texture);
+            gl.uniform1i(this.blitShader.uniforms.u_texture, 0);
+            gl.uniform2f(this.blitShader.uniforms.u_scale, 1.0, lineHeight);
+            gl.uniform2f(this.blitShader.uniforms.u_offset, 0.0, (1 - lineHeight) / 2);
+            gl.uniform1f(this.blitShader.uniforms.u_alpha || 0, brightness);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
+            const posLoc = gl.getAttribLocation(this.blitShader.program, 'a_pos');
+            gl.enableVertexAttribArray(posLoc);
+            gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            gl.disableVertexAttribArray(posLoc);
+        }
+    }
+
+    /**
      * Clean up WebGL resources.
      */
     destroy() {
