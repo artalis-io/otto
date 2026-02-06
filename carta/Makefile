@@ -5,7 +5,7 @@ CC ?= gcc
 
 # Optimization flags
 SIMD_FLAGS = -march=native -ftree-vectorize -ffast-math
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(SIMD_FLAGS)
+CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -DNDEBUG $(SIMD_FLAGS)
 LDFLAGS = -lm
 
 # Include paths
