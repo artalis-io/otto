@@ -403,8 +403,32 @@
                     hiddenInput.focus();
                 });
 
+                // Power state (needs to be accessible by key handlers)
+                let powerOffProgress = 0;
+                let isPoweringOff = false;
+                let isOff = false;
+
+                function powerOn() {
+                    if (isOff) {
+                        isOff = false;
+                        isPoweringOff = false;
+                        powerOffProgress = 0;
+                        wasm.demo_reset_quit();
+                        requestAnimationFrame(render);
+                        return true;
+                    }
+                    return false;
+                }
+
                 // Handle special keys (Tab, Enter, Space, Arrows, Escape, Backspace)
                 function handleKeyDown(e) {
+                    // Q to power back on when screen is off
+                    if ((e.key === 'q' || e.key === 'Q') && isOff) {
+                        e.preventDefault();
+                        powerOn();
+                        return;
+                    }
+
                     const mods = (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0);
 
                     // Prevent default for navigation keys
@@ -423,6 +447,13 @@
 
                 // Handle character input via the hidden input
                 hiddenInput.addEventListener('input', (e) => {
+                    // Check for power on first
+                    if (isOff && e.data && (e.data.includes('q') || e.data.includes('Q'))) {
+                        powerOn();
+                        hiddenInput.value = '';
+                        return;
+                    }
+
                     const text = e.data;
                     if (text) {
                         for (let i = 0; i < text.length; i++) {
@@ -576,22 +607,7 @@
                 // Render loop
                 let lastTime = 0;
                 let frameCount = 0;
-                let powerOffProgress = 0;
-                let isPoweringOff = false;
-                let isOff = false;
                 const POWER_OFF_DURATION = 0.8; // seconds
-
-                // Listen for Q to power back on
-                function handlePowerOn(e) {
-                    if ((e.key === 'q' || e.key === 'Q') && isOff) {
-                        isOff = false;
-                        isPoweringOff = false;
-                        powerOffProgress = 0;
-                        wasm.demo_reset_quit();
-                        requestAnimationFrame(render);
-                    }
-                }
-                document.addEventListener('keydown', handlePowerOn);
 
                 function render(timestamp) {
                     const dt = lastTime ? (timestamp - lastTime) / 1000 : 0.016;
