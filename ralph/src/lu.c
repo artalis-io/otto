@@ -1750,9 +1750,9 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
 /* Threshold for accepting pivots during LU updates.
  * Lower values allow more updates (fewer refactorizations) but may accumulate error.
  * Higher values force more refactorizations but maintain better stability.
- * Original: 0.001 (0.1%) - too strict for highly degenerate problems
- * Current: 1e-6 - moderately permissive, balance between stability and flexibility */
-#define RALPH_UPDATE_PIVOT_THRESHOLD 1e-6
+ * Original: 0.001 (0.1%) caused issues with highly degenerate problems like beaconfd
+ * Current: 1e-4 (0.01%) - moderate compromise */
+#define RALPH_UPDATE_PIVOT_THRESHOLD 1e-4
 
     double max_abs_spike = fabs(spike[step_pos]);
     for (int i = 0; i < m; i++) {
