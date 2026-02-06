@@ -1747,7 +1747,12 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
      * Threshold = 0.001 (0.1%) is less aggressive than MARKOWITZ_THRESHOLD (10%)
      * to avoid excessive refactorization while still catching very bad pivots.
      * This is more conservative than RALPH_PIVOT_TOL (1e-10) alone. */
-#define RALPH_UPDATE_PIVOT_THRESHOLD 0.001
+/* Threshold for accepting pivots during LU updates.
+ * Lower values allow more updates (fewer refactorizations) but may accumulate error.
+ * Higher values force more refactorizations but maintain better stability.
+ * Original: 0.001 (0.1%) - too strict for highly degenerate problems
+ * Current: 1e-6 - moderately permissive, balance between stability and flexibility */
+#define RALPH_UPDATE_PIVOT_THRESHOLD 1e-6
 
     double max_abs_spike = fabs(spike[step_pos]);
     for (int i = 0; i < m; i++) {
