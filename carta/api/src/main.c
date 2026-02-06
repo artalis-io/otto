@@ -1617,7 +1617,7 @@ int main(int argc, char *argv[]) {
     switch (s_config.render_preset) {
         case RENDER_PRESET_FAST:
             ct_render_options_fast(&s_render_opts);
-            printf("Render: fast (no casing, labels, or outlines)\n");
+            printf("Render: fast (no boundaries, casing, or outlines; labels enabled)\n");
             break;
         case RENDER_PRESET_QUALITY:
             ct_render_options_quality(&s_render_opts);
