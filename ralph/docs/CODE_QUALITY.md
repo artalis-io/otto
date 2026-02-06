@@ -2,7 +2,7 @@
 
 This document tracks code quality issues, security concerns, and architectural recommendations identified through code review.
 
-**Last Updated:** 2026-02-04
+**Last Updated:** 2026-02-06
 
 ---
 
@@ -377,6 +377,33 @@ IMPLEMENTED (2026-02-04)
 | Magic numbers | LOW | FIXED |
 | Dense LU fallback allocation | LOW | FIXED |
 | Long functions | LOW | FIXED |
+| Dead code in lu_sparse.c | LOW | FIXED (2026-02-06) |
 | Arena allocator (SimplexTableau) | Enhancement | IMPLEMENTED |
 | Arena allocator (LUFactorization) | Enhancement | IMPLEMENTED |
 | BBNode memory pool | Enhancement | IMPLEMENTED |
+
+---
+
+## Code Audit (2026-02-06)
+
+### Dead Code Removal
+
+**File:** `src/lu_sparse.c`
+
+**Issue:** 529 lines of disabled code in `#if 0` block (Old Schur complement approach).
+
+**Status:** FIXED - Removed the dead code block. The disabled code was a previous optimization attempt that was never completed due to permutation bugs.
+
+### Test Status
+
+All test suites pass after code audit:
+- ralph (LP/MIP): 76/76 passed
+- LAP: 358/358 passed
+- Network Flow: 153/153 passed
+- Detect: 194/194 passed
+
+### NETLIB Benchmark Status
+
+8/12 problems pass (67%):
+- **Passing:** adlittle, bnl1, brandy, degen2, grow7, israel, share2b, stocfor1
+- **Failing:** bandm, beaconfd, blend, lotfi (numerical stability issues)

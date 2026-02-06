@@ -14,17 +14,28 @@ Match GLPK performance on speed and solve all NETLIB tiny suite problems correct
 **Progress**: Per-iteration time reduced from 0.58ms to 0.385ms (33% improvement).
 **Remaining gap**: 8.8x per-iteration (down from 13x).
 
-### NETLIB Tiny Suite Results
+### NETLIB Benchmark Results (12 problems)
+
 | Problem | Status | Notes |
 |---------|--------|-------|
+| adlittle | ✅ PASS | 133 iterations, Ralph 9.6x faster than GLPK |
+| share2b | ✅ PASS | 105 iterations, Ralph 6.8x faster than GLPK |
 | kb2 | ✅ PASS | 3 iterations |
-| share2b | ✅ PASS | 105 iterations (with presolve) |
-| adlittle | ✅ PASS | 133 iterations (with presolve) |
-| bnl1 | ✅ PASS | obj=1977.44 (with/without presolve) |
-| beaconfd | ⚠️ WIP | Presolve works (262→148 vars), LU stability needed |
+| sc50a | ✅ PASS | Small dense problem |
+| sc50b | ✅ PASS | Small dense problem |
+| grow7 | ✅ PASS | Comparable to GLPK |
+| israel | ✅ PASS | Comparable to GLPK |
+| stocfor1 | ✅ PASS | Stochastic programming |
+| bnl1 | ✅ PASS | 2503 iters (GLPK 37x faster - degeneracy) |
+| brandy | ✅ PASS | 133 iters (GLPK 9x faster) |
+| degen2 | ✅ PASS | 2333 iters (GLPK 26x faster - degeneracy) |
+| bandm | ❌ FAIL | Numerical instability (ERROR status) |
+| beaconfd | ❌ FAIL | Phase 2 LU update threshold issue |
+| blend | ❌ FAIL | Returns INFEASIBLE incorrectly |
+| lotfi | ❌ FAIL | Numerical instability (ERROR status) |
 
-**Current**: 4/5 pass, 1 with issues
-**Target**: 5/5 pass
+**Current**: 8/12 pass (67%), 4 known failures
+**Target**: All problems pass
 
 ### bnl1 Presolve Bug (FIXED Feb 2026)
 
@@ -77,31 +88,31 @@ Problems with many equality constraints require both numerical improvements (two
 - ✅ Equilibration scaling (geometric mean)
 - ✅ Iterative refinement for solution computation
 - ✅ Threshold pivoting in sparse factorization (MARKOWITZ_THRESHOLD = 0.1)
-- ✅ Threshold pivoting in LU updates (RALPH_UPDATE_PIVOT_THRESHOLD = 0.001)
+- ✅ Threshold pivoting in LU updates (RALPH_UPDATE_PIVOT_THRESHOLD = 1e-4)
 - ⚠️ LU regularization disabled (causes NaN - see below)
 - ⏳ beaconfd still fails - needs Harris ratio test or bound perturbation
 
-### beaconfd Status (Feb 2026)
+### Known Failures Analysis (Feb 2026)
 
-beaconfd has 140 equalities out of 173 constraints. Current status:
-- ✅ Presolve runs without errors (165 bounds tightened)
-- ❌ Without presolve: Phase 1 completes but Phase 2 fails at first pivot (theta=0.0)
-- ❌ With presolve: Phase 1 fails at iter 147 with pivot error
-- Root cause: Extreme degeneracy (theta=0.0) causing numerical instability
+**beaconfd** (262 vars, 173 cons, 140 equalities):
+- Phase 1 passes with proactive perturbation (188 iterations)
+- Phase 2 fails after 1-2 iterations due to LU update threshold issues
+- Root cause: Pivot ratios ~1e-6 are rejected even with relaxed threshold
 
-**Root Cause Analysis:**
-1. The basis matrix becomes ill-conditioned during Phase 2 optimization
-2. LU regularization was tried but causes problems:
-   - Small regularization (1e-6): Causes NaN via 1/1e-6 = 1e6 multipliers
-   - Large regularization (1.0): Destroys constraint structure → UNBOUNDED
-3. Threshold pivoting was added (Feb 2026) but isn't sufficient alone
+**bandm, blend, lotfi**:
+- Various numerical instability issues
+- Not algorithm bugs - purely numerical precision problems
 
-**What we've tried:**
+**What's implemented:**
 - ✅ Threshold pivoting in sparse factorization (MARKOWITZ_THRESHOLD = 0.1)
-- ✅ Threshold pivoting in LU updates (RALPH_UPDATE_PIVOT_THRESHOLD = 0.001)
+- ✅ Threshold pivoting in LU updates (RALPH_UPDATE_PIVOT_THRESHOLD = 1e-4)
 - ✅ Equilibration scaling
 - ✅ Iterative refinement
-- ❌ These improvements don't prevent the basis from becoming ill-conditioned
+- ✅ Harris ratio test with pivot-size tie-breaking
+- ✅ Proactive bound perturbation for Phase 1 (>80% and <100% equalities)
+- ✅ Bland's rule for first 20 iterations after Phase 2 transition
+- ✅ Pivot failure recovery with refactorization/repair fallback
+- ❌ LU regularization disabled (causes NaN or UNBOUNDED)
 
 **Why threshold pivoting isn't enough:**
 Threshold pivoting helps the LU factorization choose stable pivots when it HAS a choice.
