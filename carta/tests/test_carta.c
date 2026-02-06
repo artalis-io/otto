@@ -5,6 +5,7 @@
 #include "carta.h"
 #include "ct_collision.h"
 #include "ct_label.h"
+#include "ct_boundary.h"
 #include "sh_font.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -906,6 +907,85 @@ TEST(multipolygon_assembled_structure)
     mp.name = NULL;
 
     ASSERT_EQ(mp.feature_class, CT_OSM_WATER);
+    return 1;
+}
+
+/* ============================================================================
+ * Boundary Assembly Tests
+ * ============================================================================ */
+
+TEST(boundary_config_init)
+{
+    CTBoundaryConfig config;
+    ct_boundary_config_init(&config);
+
+    /* Default: country borders (2) to county level (6) */
+    ASSERT_EQ(config.min_admin_level, 2);
+    ASSERT_EQ(config.max_admin_level, 6);
+    ASSERT_EQ(config.include_protected_areas, 1);
+    return 1;
+}
+
+TEST(boundary_assemble_empty)
+{
+    /* Assembling boundaries on empty context should succeed */
+    CTPBFContext *ctx = ct_pbf_context_create();
+    CTStatus status = ct_assemble_boundaries(ctx);
+    ASSERT_EQ(status, CT_OK);
+    ASSERT_EQ(ctx->num_boundaries, 0);
+    ct_pbf_context_free(ctx);
+    return 1;
+}
+
+TEST(boundary_type_enum)
+{
+    /* Verify boundary type enum values */
+    ASSERT_EQ(CT_BOUNDARY_TYPE_ADMIN, 0);
+    ASSERT_EQ(CT_BOUNDARY_TYPE_PROTECTED, 1);
+    ASSERT_EQ(CT_BOUNDARY_TYPE_COUNT, 2);
+    return 1;
+}
+
+TEST(boundary_admin_level_constants)
+{
+    /* Verify admin level constants */
+    ASSERT_EQ(CT_BOUNDARY_COUNTRY, 2);
+    ASSERT_EQ(CT_BOUNDARY_STATE, 4);
+    ASSERT_EQ(CT_BOUNDARY_COUNTY, 6);
+    ASSERT_EQ(CT_BOUNDARY_CITY, 8);
+    ASSERT_EQ(CT_BOUNDARY_SUBURB, 10);
+    ASSERT_EQ(CT_BOUNDARY_OTHER, 99);
+    return 1;
+}
+
+TEST(boundary_assembled_structure)
+{
+    /* Verify CTAssembledBoundary structure */
+    CTAssembledBoundary b;
+    memset(&b, 0, sizeof(b));
+
+    b.relation_id = 123456;
+    b.boundary_type = CT_BOUNDARY_TYPE_ADMIN;
+    b.admin_level = CT_BOUNDARY_COUNTRY;
+    b.coords = NULL;
+    b.num_coords = 0;
+    b.length_m = 0.0f;
+    b.name = NULL;
+
+    ASSERT_EQ(b.relation_id, 123456);
+    ASSERT_EQ(b.boundary_type, CT_BOUNDARY_TYPE_ADMIN);
+    ASSERT_EQ(b.admin_level, CT_BOUNDARY_COUNTRY);
+    return 1;
+}
+
+TEST(boundary_rtree_empty)
+{
+    /* Building boundary R-tree on empty context should succeed */
+    CTPBFContext *ctx = ct_pbf_context_create();
+    CTStatus status = ct_build_boundary_rtree(ctx);
+    ASSERT_EQ(status, CT_OK);
+    ASSERT(ctx->boundary_rtree == NULL);  /* No R-tree for empty data */
+    ct_pbf_context_free(ctx);
     return 1;
 }
 
@@ -2351,6 +2431,14 @@ int main(void)
     run_test_multipolygon_get_role_string_empty();
     run_test_multipolygon_ring_structure();
     run_test_multipolygon_assembled_structure();
+
+    printf("\nBoundary Assembly:\n");
+    run_test_boundary_config_init();
+    run_test_boundary_assemble_empty();
+    run_test_boundary_type_enum();
+    run_test_boundary_admin_level_constants();
+    run_test_boundary_assembled_structure();
+    run_test_boundary_rtree_empty();
 
     printf("\nASCII Rendering:\n");
     run_test_ascii_default_options();
