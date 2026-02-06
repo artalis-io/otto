@@ -1,6 +1,6 @@
 ---
 name: site-update
-description: Update and validate the OTTO landing page. Ensures test counts, modules, personas, and HTML best practices are correct.
+description: Update and validate the OTTO landing page. Ensures test counts, LoC, Quick Start commands, modules, personas, and HTML best practices are correct.
 user-invocable: true
 ---
 
@@ -58,15 +58,17 @@ cat ~/.claude/projects/-Users-mark-Desktop-work-artalis-io-otto/memory/MEMORY.md
 ALL modules must be listed - both implemented and planned.
 
 **Implemented modules (must have cards in #developers):**
-| Module | Description | Test Count |
-|--------|-------------|------------|
-| Ralph | LP/MIP solver | 600+ tests (combined) |
-| Velo | OSM routing | 51 tests |
-| Carta | Map tiles (MVT/PNG) | 110 tests |
-| Locus | Geocoding | 52 tests |
-| FuelWise | Refuel optimization | 33 tests |
-| Shared | Geo/proto/rate limiting | 206 tests |
-| ClayShards | Immediate-mode UI | (in clayshards/) |
+| Module | Description | Tests | LoC |
+|--------|-------------|-------|-----|
+| Ralph | LP/MIP solver | 600+ (combined) | 55K |
+| Velo | OSM routing | 51 | 11K |
+| Carta | Map tiles (MVT/PNG) | 110 | 19K |
+| Locus | Geocoding | 52 | 11K |
+| FuelWise | Refuel optimization | 33 | 7K |
+| Shared | Geo/proto/rate limiting | 206 | 44K |
+| ClayShards | Immediate-mode UI | 84 | 10K |
+
+**Total LoC:** ~157K (C/H files only)
 
 **Planned modules (must have cards with `planned` badge):**
 | Module | Full Name | Description |
@@ -160,6 +162,34 @@ All personas must exist and be navigable with zero JavaScript.
 - [ ] Documentation links work
 - [ ] Contact email obfuscation works
 
+### 6. Quick Start Commands (Critical)
+
+The Quick Start section must match README.md. Current commands:
+
+```bash
+# Build everything
+make all
+
+# Run tests
+make test
+
+# Start API servers
+./carta/api/carta-tile-server data/hungary-latest.osm.pbf    # Tiles on :8081
+./velo/api/velo-route-server data/hungary-latest.osm.pbf     # Routes on :8082
+./locus/api/locus-geocoder data/hungary-latest.osm.pbf       # Geocoding on :8083
+./fuelwise/api/fuelwise-api                                   # Optimization on :8080
+
+# Download OSM data
+./scripts/download-osm.sh hungary   # ~300MB
+./scripts/download-osm.sh monaco    # ~1MB (for testing)
+```
+
+**Docker:**
+```bash
+docker-compose up                       # Full platform
+docker-compose --profile all-apis up    # All API servers
+```
+
 ## Audit Procedure
 
 When `/site-update` is invoked:
@@ -175,21 +205,34 @@ When `/site-update` is invoked:
    # Or read from MEMORY.md
    ```
 
-3. **Compare modules:**
+3. **Get current LoC:**
+   ```bash
+   for dir in ralph velo carta locus fuelwise shared clayshards/clay-shards; do
+     echo -n "$dir: "; find "$dir" -name "*.c" -o -name "*.h" | xargs wc -l | tail -1 | awk '{print $1}'
+   done
+   ```
+
+4. **Compare modules:**
    - Extract module cards from HTML
    - Compare against TODO_FEATURES.md and CLAUDE.md
    - Flag missing modules
+   - Verify LoC counts are accurate (within ~10%)
 
-4. **Verify personas:**
+5. **Verify Quick Start:**
+   - Compare site commands against README.md
+   - Ensure ports match (8080-8083)
+   - Verify download script examples
+
+6. **Verify personas:**
    - Check all 4 persona sections exist
    - Verify anchor IDs match nav links
    - Ensure executives have ROI stats
 
-5. **Check HTML quality:**
+7. **Check HTML quality:**
    - Validate structure
    - Check for common issues
 
-6. **Generate report:**
+8. **Generate report:**
    ```markdown
    ## Site Audit Report
 
@@ -205,6 +248,11 @@ When `/site-update` is invoked:
    - Implemented: X/Y shown
    - Planned: X/Y shown
    - Missing: [list]
+   - LoC accuracy: [OK/NEEDS UPDATE]
+
+   ### Quick Start
+   - Commands match README.md: [OK/OUTDATED]
+   - Ports correct: [OK/MISMATCH]
 
    ### Personas
    - #developers: [OK/MISSING]
@@ -234,6 +282,8 @@ When `--fix` is specified:
 
 **Auto-fixable:**
 - Test count numbers
+- LoC counts
+- Quick Start commands (sync from README.md)
 - Missing module cards (using standard card template)
 - Broken anchor links
 
