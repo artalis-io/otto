@@ -261,6 +261,24 @@ float ct_style_waterway_width(const CTStyle *style, CTWaterwayType waterway_type
 float ct_style_railway_width(const CTStyle *style, CTRailwayType railway_type, int zoom);
 
 /*
+ * Get road casing width at a specific zoom level.
+ * Returns 0 below z14 for performance optimization.
+ *
+ * @param zoom Zoom level
+ * @return Casing width in pixels (0 = no casing)
+ */
+float ct_style_road_casing(int zoom);
+
+/*
+ * Get railway casing width at a specific zoom level.
+ * Returns 0 below z14 for performance optimization.
+ *
+ * @param zoom Zoom level
+ * @return Casing width in pixels (0 = no casing)
+ */
+float ct_style_railway_casing(int zoom);
+
+/*
  * Get styling for a boundary based on type and admin level.
  *
  * @param style         Style configuration

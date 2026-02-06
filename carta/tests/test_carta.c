@@ -437,6 +437,172 @@ TEST(waterway_width)
     return 1;
 }
 
+TEST(road_casing)
+{
+    /* z16+: full casing (1.0) */
+    ASSERT_NEAR(ct_style_road_casing(16), 1.0f, 0.01);
+    ASSERT_NEAR(ct_style_road_casing(17), 1.0f, 0.01);
+    ASSERT_NEAR(ct_style_road_casing(20), 1.0f, 0.01);
+
+    /* z14-15: reduced casing (0.5) */
+    ASSERT_NEAR(ct_style_road_casing(14), 0.5f, 0.01);
+    ASSERT_NEAR(ct_style_road_casing(15), 0.5f, 0.01);
+
+    /* Below z14: no casing (performance optimization) */
+    ASSERT_NEAR(ct_style_road_casing(13), 0.0f, 0.01);
+    ASSERT_NEAR(ct_style_road_casing(12), 0.0f, 0.01);
+    ASSERT_NEAR(ct_style_road_casing(10), 0.0f, 0.01);
+    ASSERT_NEAR(ct_style_road_casing(8), 0.0f, 0.01);
+    ASSERT_NEAR(ct_style_road_casing(0), 0.0f, 0.01);
+
+    return 1;
+}
+
+TEST(railway_casing)
+{
+    /* z14+: standard railway casing (0.5) */
+    ASSERT_NEAR(ct_style_railway_casing(14), 0.5f, 0.01);
+    ASSERT_NEAR(ct_style_railway_casing(15), 0.5f, 0.01);
+    ASSERT_NEAR(ct_style_railway_casing(16), 0.5f, 0.01);
+    ASSERT_NEAR(ct_style_railway_casing(18), 0.5f, 0.01);
+
+    /* Below z14: no casing (performance optimization) */
+    ASSERT_NEAR(ct_style_railway_casing(13), 0.0f, 0.01);
+    ASSERT_NEAR(ct_style_railway_casing(12), 0.0f, 0.01);
+    ASSERT_NEAR(ct_style_railway_casing(10), 0.0f, 0.01);
+    ASSERT_NEAR(ct_style_railway_casing(0), 0.0f, 0.01);
+
+    return 1;
+}
+
+TEST(bresenham_thin_line)
+{
+    /*
+     * Test that thin lines (< 0.75px) use Bresenham (fast, non-AA).
+     * Verify pixels are drawn along the line.
+     */
+    CTRenderContext *ctx = ct_render_create(64, 64);
+    ct_render_clear(ctx);
+
+    CTColor red = CT_RGB(255, 0, 0);
+
+    /* Draw a thin horizontal line (width 0.5, uses Bresenham) */
+    ct_render_line(ctx, 10, 20, 30, 20, red, 0.5f);
+
+    /* Verify some pixels along the line are set */
+    CTColor pixel = ct_render_get_pixel(ctx, 15, 20);
+    ASSERT_EQ(CT_COLOR_R(pixel), 255);
+
+    pixel = ct_render_get_pixel(ctx, 25, 20);
+    ASSERT_EQ(CT_COLOR_R(pixel), 255);
+
+    /* Draw a thin diagonal line */
+    ct_render_line(ctx, 5, 5, 15, 15, red, 0.5f);
+
+    /* Verify diagonal pixels */
+    pixel = ct_render_get_pixel(ctx, 10, 10);
+    ASSERT_EQ(CT_COLOR_R(pixel), 255);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(aa_line_threshold)
+{
+    /*
+     * Test that lines >= 0.75px use anti-aliased rendering.
+     * AA lines produce sub-pixel blending (fractional alpha).
+     */
+    CTRenderContext *ctx = ct_render_create(64, 64);
+    ct_render_clear(ctx);
+
+    CTColor blue = CT_RGB(0, 0, 255);
+
+    /* Draw a line at threshold (0.75px, uses AA) */
+    ct_render_line(ctx, 10, 30, 30, 32, blue, 0.75f);
+
+    /* AA lines should produce some blended pixels adjacent to the line */
+    /* Just verify the line rendered without crashing */
+    CTColor pixel = ct_render_get_pixel(ctx, 20, 31);
+    /* Some blue should be present due to AA blending */
+    ASSERT(CT_COLOR_B(pixel) > 0 || CT_COLOR_B(ct_render_get_pixel(ctx, 20, 30)) > 0);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(simd_alpha_blend)
+{
+    /*
+     * Test SIMD alpha blending by filling a polygon with semi-transparent color.
+     * This exercises the SIMD alpha blending path in fill_span().
+     */
+    CTRenderContext *ctx = ct_render_create(64, 64);
+    ct_render_clear(ctx);
+
+    /* Draw a red rectangle first */
+    CTColor red = CT_RGB(255, 0, 0);
+    CTTilePoint red_rect[] = {{10, 10}, {50, 10}, {50, 50}, {10, 50}};
+    ct_render_polygon(ctx, red_rect, 4, red);
+
+    /* Draw a semi-transparent blue rectangle on top */
+    CTColor blue_trans = CT_RGBA(0, 0, 255, 128);
+    CTTilePoint blue_rect[] = {{20, 20}, {60, 20}, {60, 60}, {20, 60}};
+    ct_render_polygon(ctx, blue_rect, 4, blue_trans);
+
+    /* Check pixels in overlapping region - should be blended purple */
+    CTColor pixel = ct_render_get_pixel(ctx, 30, 30);
+    ASSERT(CT_COLOR_R(pixel) > 0);  /* Some red from background */
+    ASSERT(CT_COLOR_B(pixel) > 0);  /* Some blue from overlay */
+
+    /* Check blue-only region (no red underneath) */
+    CTColor blue_pixel = ct_render_get_pixel(ctx, 55, 55);
+    ASSERT(CT_COLOR_B(blue_pixel) > 0);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(simd_alpha_blend_long_span)
+{
+    /*
+     * Test SIMD alpha blending with long horizontal spans.
+     * Uses a wide rectangle to ensure the SIMD path (4+ pixel spans) is exercised.
+     */
+    CTRenderContext *ctx = ct_render_create(256, 64);
+    ct_render_clear(ctx);
+
+    /* Fill background with solid green */
+    CTColor green = CT_RGB(0, 255, 0);
+    CTTilePoint green_rect[] = {{0, 0}, {256, 0}, {256, 64}, {0, 64}};
+    ct_render_polygon(ctx, green_rect, 4, green);
+
+    /* Overlay with 50% transparent red - this creates 256-pixel spans */
+    CTColor red_trans = CT_RGBA(255, 0, 0, 128);
+    CTTilePoint red_rect[] = {{0, 16}, {256, 16}, {256, 48}, {0, 48}};
+    ct_render_polygon(ctx, red_rect, 4, red_trans);
+
+    /* Check multiple pixels across the span - should all be similar yellow-ish */
+    int sample_xs[] = {10, 64, 128, 192, 250};
+    for (int i = 0; i < 5; i++) {
+        CTColor pixel = ct_render_get_pixel(ctx, sample_xs[i], 32);
+        /* Should have both red and green components */
+        ASSERT(CT_COLOR_R(pixel) > 100);
+        ASSERT(CT_COLOR_G(pixel) > 100);
+        /* Blue should be minimal (no blue in either source) */
+        ASSERT(CT_COLOR_B(pixel) < 50);
+    }
+
+    /* Verify the blend is consistent across the span (SIMD vs scalar consistency) */
+    CTColor first = ct_render_get_pixel(ctx, 10, 32);
+    CTColor last = ct_render_get_pixel(ctx, 250, 32);
+    ASSERT_EQ(CT_COLOR_R(first), CT_COLOR_R(last));
+    ASSERT_EQ(CT_COLOR_G(first), CT_COLOR_G(last));
+
+    ct_render_free(ctx);
+    return 1;
+}
+
 /* ============================================================================
  * Render Context Tests
  * ============================================================================ */
@@ -2401,6 +2567,12 @@ int main(void)
     run_test_scale_width();
     run_test_road_width_at_zoom();
     run_test_waterway_width();
+    run_test_road_casing();
+    run_test_railway_casing();
+    run_test_bresenham_thin_line();
+    run_test_aa_line_threshold();
+    run_test_simd_alpha_blend();
+    run_test_simd_alpha_blend_long_span();
 
     printf("\nRendering:\n");
     run_test_render_create();

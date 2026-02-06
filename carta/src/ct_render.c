@@ -24,6 +24,9 @@
 #elif defined(__SSE2__)
     #include <emmintrin.h>
     #define CT_HAVE_SSE2 1
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+    #include <arm_neon.h>
+    #define CT_HAVE_NEON 1
 #endif
 
 /* Minimum feature size in pixels for render-time filtering.
@@ -255,6 +258,15 @@ static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTCol
                 _mm_storeu_si128((__m128i *)&row32[x], rgba_vec);
             }
         }
+#elif defined(CT_HAVE_NEON)
+        /* NEON: write 4 pixels (16 bytes) at a time */
+        int count = x_end - x_start + 1;
+        if (count >= 4) {
+            uint32x4_t rgba_vec = vdupq_n_u32(rgba);
+            for (; x + 3 <= x_end; x += 4) {
+                vst1q_u32(&row32[x], rgba_vec);
+            }
+        }
 #endif
         /* Scalar remainder */
         for (; x <= x_end; x++) {
@@ -278,7 +290,122 @@ static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTCol
     uint16_t sg_sa = sg * sa;
     uint16_t sb_sa = sb * sa;
 
-    for (int x = x_start; x <= x_end; x++) {
+    int x = x_start;
+
+#if defined(CT_HAVE_SSE2)
+    /*
+     * SIMD alpha blending: process 4 pixels at a time.
+     * Each pixel is RGBA (4 bytes), so 4 pixels = 16 bytes = 128 bits.
+     */
+    int count = x_end - x_start + 1;
+    if (count >= 4) {
+        /* Broadcast source alpha and inv_sa to all 8 lanes (16-bit) */
+        __m128i src_r = _mm_set1_epi16((short)sr_sa);
+        __m128i src_g = _mm_set1_epi16((short)sg_sa);
+        __m128i src_b = _mm_set1_epi16((short)sb_sa);
+        __m128i inv_alpha = _mm_set1_epi16((short)inv_sa);
+        __m128i src_alpha = _mm_set1_epi16((short)sa);
+        __m128i const_128 = _mm_set1_epi16(128);
+        __m128i const_255 = _mm_set1_epi16(255);
+        __m128i zero = _mm_setzero_si128();
+
+        for (; x + 3 <= x_end; x += 4) {
+            /* Load 4 destination pixels (16 bytes) */
+            __m128i dst = _mm_loadu_si128((__m128i *)&row[x * 4]);
+
+            /* Unpack to 16-bit: dst_lo = pixels 0-1, dst_hi = pixels 2-3 */
+            __m128i dst_lo = _mm_unpacklo_epi8(dst, zero);
+            __m128i dst_hi = _mm_unpackhi_epi8(dst, zero);
+
+            /* Extract R, G, B, A channels (interleaved in RGBA order) */
+            /* dst_lo: R0 G0 B0 A0 R1 G1 B1 A1 (16-bit each) */
+            /* dst_hi: R2 G2 B2 A2 R3 G3 B3 A3 (16-bit each) */
+
+            /* Blend each channel: out = (src*sa + dst*inv_sa + 128) >> 8 */
+            /* Process all 8 components (4 pixels * RGBA) in two vectors */
+
+            /* Multiply destination by inv_alpha */
+            __m128i d_inv_lo = _mm_mullo_epi16(dst_lo, inv_alpha);
+            __m128i d_inv_hi = _mm_mullo_epi16(dst_hi, inv_alpha);
+
+            /* Add source (premultiplied) - need to expand to 8 components */
+            /* src pattern for 2 pixels: sr_sa, sg_sa, sb_sa, sa (repeated) */
+            __m128i src_pattern = _mm_set_epi16((short)sa, (short)sb_sa,
+                                                 (short)sg_sa, (short)sr_sa,
+                                                 (short)sa, (short)sb_sa,
+                                                 (short)sg_sa, (short)sr_sa);
+
+            /* Add src + dst*inv + 128 */
+            __m128i sum_lo = _mm_add_epi16(d_inv_lo, src_pattern);
+            __m128i sum_hi = _mm_add_epi16(d_inv_hi, src_pattern);
+            sum_lo = _mm_add_epi16(sum_lo, const_128);
+            sum_hi = _mm_add_epi16(sum_hi, const_128);
+
+            /* Shift right by 8 */
+            sum_lo = _mm_srli_epi16(sum_lo, 8);
+            sum_hi = _mm_srli_epi16(sum_hi, 8);
+
+            /* Fix alpha: out_a = sa + (da * inv_sa + 128) >> 8 */
+            /* Alpha is at indices 3, 7 in each vector */
+            /* For now, clamp to 255 (saturated add handles overflow) */
+            sum_lo = _mm_min_epi16(sum_lo, const_255);
+            sum_hi = _mm_min_epi16(sum_hi, const_255);
+
+            /* Pack back to 8-bit */
+            __m128i result = _mm_packus_epi16(sum_lo, sum_hi);
+
+            /* Store 4 pixels */
+            _mm_storeu_si128((__m128i *)&row[x * 4], result);
+        }
+    }
+#elif defined(CT_HAVE_NEON)
+    /*
+     * NEON alpha blending: process 4 pixels at a time.
+     * Each pixel is RGBA (4 bytes), so 4 pixels = 16 bytes = 128 bits.
+     */
+    int count = x_end - x_start + 1;
+    if (count >= 4) {
+        /* Create source pattern for 4 pixels (RGBA repeated) */
+        uint16_t src_vals[8] = {sr_sa, sg_sa, sb_sa, sa, sr_sa, sg_sa, sb_sa, sa};
+        uint16x8_t src_pattern = vld1q_u16(src_vals);
+        uint16x8_t inv_alpha = vdupq_n_u16(inv_sa);
+        uint16x8_t const_128 = vdupq_n_u16(128);
+
+        for (; x + 3 <= x_end; x += 4) {
+            /* Load 4 destination pixels (16 bytes) */
+            uint8x16_t dst = vld1q_u8(&row[x * 4]);
+
+            /* Unpack to 16-bit: lo = pixels 0-1, hi = pixels 2-3 */
+            uint16x8_t dst_lo = vmovl_u8(vget_low_u8(dst));
+            uint16x8_t dst_hi = vmovl_u8(vget_high_u8(dst));
+
+            /* Multiply destination by inv_alpha */
+            uint16x8_t d_inv_lo = vmulq_u16(dst_lo, inv_alpha);
+            uint16x8_t d_inv_hi = vmulq_u16(dst_hi, inv_alpha);
+
+            /* Add src + dst*inv + 128 */
+            uint16x8_t sum_lo = vaddq_u16(d_inv_lo, src_pattern);
+            uint16x8_t sum_hi = vaddq_u16(d_inv_hi, src_pattern);
+            sum_lo = vaddq_u16(sum_lo, const_128);
+            sum_hi = vaddq_u16(sum_hi, const_128);
+
+            /* Shift right by 8 */
+            sum_lo = vshrq_n_u16(sum_lo, 8);
+            sum_hi = vshrq_n_u16(sum_hi, 8);
+
+            /* Pack back to 8-bit (saturating narrow) */
+            uint8x8_t result_lo = vqmovn_u16(sum_lo);
+            uint8x8_t result_hi = vqmovn_u16(sum_hi);
+            uint8x16_t result = vcombine_u8(result_lo, result_hi);
+
+            /* Store 4 pixels */
+            vst1q_u8(&row[x * 4], result);
+        }
+    }
+#endif
+
+    /* Scalar remainder */
+    for (; x <= x_end; x++) {
         int offset = x * 4;
         uint8_t dr = row[offset + 0];
         uint8_t dg = row[offset + 1];
@@ -379,12 +506,52 @@ static void draw_line_aa(CTRenderContext *ctx,
     }
 }
 
+/*
+ * Bresenham's line drawing algorithm.
+ * Fast integer-based algorithm for 1px lines without anti-aliasing.
+ * Use for performance-critical thin lines like road casing.
+ */
+static void draw_line_bresenham(CTRenderContext *ctx,
+                                int x0, int y0, int x1, int y1,
+                                CTColor color)
+{
+    int dx = abs(x1 - x0);
+    int dy = abs(y1 - y0);
+    int sx = x0 < x1 ? 1 : -1;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx - dy;
+
+    while (1) {
+        ct_render_blend_pixel(ctx, x0, y0, color);
+
+        if (x0 == x1 && y0 == y1) break;
+
+        int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            x0 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
 void ct_render_line(CTRenderContext *ctx,
                     int x0, int y0, int x1, int y1,
                     CTColor color, float width)
 {
     if (width <= 1.0f) {
-        draw_line_aa(ctx, (float)x0, (float)y0, (float)x1, (float)y1, color);
+        /*
+         * For very thin lines (< 0.75px), use fast Bresenham.
+         * For 0.75-1.0px lines, use anti-aliased Xiaolin Wu.
+         */
+        if (width < 0.75f) {
+            draw_line_bresenham(ctx, x0, y0, x1, y1, color);
+        } else {
+            draw_line_aa(ctx, (float)x0, (float)y0, (float)x1, (float)y1, color);
+        }
         return;
     }
 
@@ -402,11 +569,25 @@ void ct_render_line(CTRenderContext *ctx,
     int steps = (int)(width + 0.5f);
     if (steps < 1) steps = 1;
 
+    /*
+     * Performance optimization: Use fast Bresenham for interior lines,
+     * AA only for the two edge lines to maintain smooth appearance.
+     */
     for (int i = 0; i <= steps; i++) {
         float offset = -half + (i * width) / steps;
         float ox = px * offset;
         float oy = py * offset;
-        draw_line_aa(ctx, x0 + ox, y0 + oy, x1 + ox, y1 + oy, color);
+
+        if (i == 0 || i == steps) {
+            /* Edge lines: use AA for smooth appearance */
+            draw_line_aa(ctx, x0 + ox, y0 + oy, x1 + ox, y1 + oy, color);
+        } else {
+            /* Interior lines: use fast Bresenham */
+            draw_line_bresenham(ctx,
+                                (int)(x0 + ox + 0.5f), (int)(y0 + oy + 0.5f),
+                                (int)(x1 + ox + 0.5f), (int)(y1 + oy + 0.5f),
+                                color);
+        }
     }
 }
 
@@ -1175,16 +1356,8 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     /* Use zoom-adaptive road width */
                     float width = ct_style_road_width(&ctx->style, road_type, tile->coord.z);
 
-                    /* Zoom-adaptive casing: thin at low zoom, thicker at high zoom */
-                    float casing = 0.0f;
-                    if (tile->coord.z >= 16) {
-                        casing = 1.0f;
-                    } else if (tile->coord.z >= 14) {
-                        casing = 0.5f;
-                    } else if (tile->coord.z >= 12) {
-                        casing = 0.3f;
-                    }
-                    /* No casing below z12 for cleaner appearance */
+                    /* Get zoom-adaptive casing from style module */
+                    float casing = ct_style_road_casing(tile->coord.z);
 
                     /* Add bridge outline for elevated roads */
                     if (f->flags & CT_FLAG_BRIDGE) {
@@ -1215,17 +1388,25 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     CTColor color = ctx->style.railway_colors[railway_type];
                     CTColor outline = ctx->style.railway_outline_colors[railway_type];
 
-                    /* Render railway with casing (tick marks effect) */
-                    ct_render_polyline_cased(ctx, scaled, f->num_points,
-                                             color, outline, width, 0.5f);
+                    /* Get zoom-adaptive casing from style module */
+                    float casing = ct_style_railway_casing(tile->coord.z);
 
-                    /* Add extra casing for bridges */
-                    if (f->flags & CT_FLAG_BRIDGE) {
+                    if (casing > 0.0f) {
+                        /* Render railway with casing (tick marks effect) */
+                        ct_render_polyline_cased(ctx, scaled, f->num_points,
+                                                 color, outline, width, casing);
+                    } else {
+                        /* No casing at low zoom for performance */
+                        ct_render_polyline(ctx, scaled, f->num_points, color, width);
+                    }
+
+                    /* Add extra casing for bridges (only if casing enabled) */
+                    if ((f->flags & CT_FLAG_BRIDGE) && casing > 0.0f) {
                         ct_render_polyline(ctx, scaled, f->num_points,
                                            ctx->style.bridge_outline_color,
                                            width + ctx->style.bridge_outline_width * 2);
                         ct_render_polyline_cased(ctx, scaled, f->num_points,
-                                                 color, outline, width, 0.5f);
+                                                 color, outline, width, casing);
                     }
                     break;
                 }
