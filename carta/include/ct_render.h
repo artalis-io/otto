@@ -230,9 +230,18 @@ float ct_road_width_at_zoom(const CTRoadWidth *rw, int zoom);
 float ct_style_road_width(const CTStyle *style, CTRoadType road_type, int zoom);
 
 /*
- * Get width for a waterway type.
- * Returns data-driven width based on waterway class (river, stream, canal, etc.).
- * Widths are fixed per type, not zoom-dependent, to match real-world scale.
+ * Get width for a waterway type at a specific zoom level.
+ * Widths are scaled with zoom to match OSM Carto appearance.
+ *
+ * @param style         Style configuration
+ * @param waterway_type Waterway type (river, stream, canal, etc.)
+ * @param zoom          Zoom level
+ * @return Width in pixels
+ */
+float ct_style_waterway_width_at_zoom(const CTStyle *style, CTWaterwayType waterway_type, int zoom);
+
+/*
+ * Get width for a waterway type (legacy API, uses z14 as reference).
  *
  * @param style         Style configuration
  * @param waterway_type Waterway type (river, stream, canal, etc.)

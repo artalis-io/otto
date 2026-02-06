@@ -125,15 +125,25 @@ float ct_scale_width(float base_width, int zoom, int ref_zoom)
 
 /*
  * Get road width at a specific zoom level.
- * Uses linear interpolation between z10, z14, and z18 reference points.
+ * Uses linear interpolation between z6, z10, z14, and z18 reference points.
+ * Roads are rendered thinner at low zoom to match OSM Carto appearance.
  */
 float ct_road_width_at_zoom(const CTRoadWidth *rw, int zoom)
 {
-    if (zoom <= 10) return rw->z10;
     if (zoom >= 18) return rw->z18;
 
+    /* At low zoom (z6 and below), render roads much thinner */
+    if (zoom <= 6) {
+        return rw->z10 * 0.3f;  /* 30% of z10 width */
+    }
+
     /* Linear interpolation between key points */
-    if (zoom <= 14) {
+    if (zoom < 10) {
+        /* Interpolate between z6 (30% of z10) and z10 */
+        float z6_width = rw->z10 * 0.3f;
+        float t = (float)(zoom - 6) / 4.0f;
+        return z6_width + t * (rw->z10 - z6_width);
+    } else if (zoom <= 14) {
         /* Interpolate between z10 and z14 */
         float t = (float)(zoom - 10) / 4.0f;
         return rw->z10 + t * (rw->z14 - rw->z10);
@@ -162,21 +172,43 @@ float ct_style_road_width(const CTStyle *style, CTRoadType road_type, int zoom)
 }
 
 /*
- * Get width for a waterway type.
- * Widths are data-driven based on waterway class, not zoom-dependent.
+ * Get width for a waterway type at a specific zoom level.
+ * Widths are scaled with zoom to match OSM Carto appearance.
  */
-float ct_style_waterway_width(const CTStyle *style, CTWaterwayType waterway_type)
+float ct_style_waterway_width_at_zoom(const CTStyle *style, CTWaterwayType waterway_type, int zoom)
 {
     if (waterway_type < 0 || waterway_type >= CT_WATERWAY_TYPE_COUNT) {
-        return 1.5f;  /* Fallback to stream width */
+        return 1.0f;  /* Fallback */
     }
 
-    float width = style->waterway_widths[waterway_type];
+    float base_width = style->waterway_widths[waterway_type];
+
+    /* Scale with zoom - waterways are thinner at low zoom */
+    float scale = 1.0f;
+    if (zoom <= 8) {
+        scale = 0.4f;
+    } else if (zoom <= 10) {
+        scale = 0.6f;
+    } else if (zoom <= 12) {
+        scale = 0.8f;
+    } else if (zoom >= 16) {
+        scale = 1.5f;
+    }
+
+    float width = base_width * scale;
 
     /* Ensure minimum visibility */
     if (width < 0.5f) width = 0.5f;
 
     return width;
+}
+
+/*
+ * Get width for a waterway type (legacy API, uses z14 as reference).
+ */
+float ct_style_waterway_width(const CTStyle *style, CTWaterwayType waterway_type)
+{
+    return ct_style_waterway_width_at_zoom(style, waterway_type, 14);
 }
 
 /*
