@@ -120,6 +120,15 @@ void ct_render_polyline_cased(CTRenderContext *ctx,
                               float fill_width, float outline_width);
 
 /*
+ * Draw a polyline with dashes.
+ * dash_length and gap_length are in pixels.
+ */
+void ct_render_polyline_dashed(CTRenderContext *ctx,
+                               const CTTilePoint *points, int num_points,
+                               CTColor color, float width,
+                               float dash_length, float gap_length);
+
+/*
  * Fill a polygon.
  *
  * @param ctx        Render context
@@ -241,6 +250,23 @@ float ct_style_waterway_width(const CTStyle *style, CTWaterwayType waterway_type
  * @return Width in pixels
  */
 float ct_style_railway_width(const CTStyle *style, CTRailwayType railway_type, int zoom);
+
+/*
+ * Get styling for a boundary based on type and admin level.
+ *
+ * @param style         Style configuration
+ * @param boundary_type Administrative or protected area
+ * @param admin_level   Admin level (2=country, 4=state, 6=county, etc.)
+ * @param zoom          Zoom level
+ * @param color_out     Output: line color
+ * @param width_out     Output: line width
+ * @param dash_out      Output: dash length in pixels
+ * @param gap_out       Output: gap length in pixels
+ */
+void ct_style_boundary(const CTStyle *style, CTBoundaryType boundary_type,
+                       int admin_level, int zoom,
+                       CTColor *color_out, float *width_out,
+                       float *dash_out, float *gap_out);
 
 /* ============================================================================
  * Text Rendering

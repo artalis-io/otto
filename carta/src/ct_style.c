@@ -208,3 +208,72 @@ float ct_style_railway_width(const CTStyle *style, CTRailwayType railway_type, i
 
     return width;
 }
+
+/*
+ * Get styling for a boundary based on type and admin level.
+ */
+void ct_style_boundary(const CTStyle *style, CTBoundaryType boundary_type,
+                       int admin_level, int zoom,
+                       CTColor *color_out, float *width_out,
+                       float *dash_out, float *gap_out)
+{
+    (void)style;  /* For future custom styling */
+
+    /* Default style */
+    CTColor color = CT_RGBA(170, 80, 170, 140);
+    float width = 1.0f;
+    float dash = 8.0f;
+    float gap = 4.0f;
+
+    if (boundary_type == CT_BOUNDARY_TYPE_PROTECTED) {
+        /* Protected areas (national parks) - green dashed */
+        color = CT_RGBA(85, 170, 85, 160);  /* Semi-transparent green */
+        width = 1.5f;
+        dash = 6.0f;
+        gap = 3.0f;
+    } else {
+        /* Administrative boundaries - purple by admin level */
+        switch (admin_level) {
+            case CT_BOUNDARY_COUNTRY:  /* admin_level=2 */
+                color = CT_RGBA(140, 60, 140, 180);  /* Stronger purple */
+                width = 2.0f;
+                dash = 10.0f;
+                gap = 5.0f;
+                break;
+            case CT_BOUNDARY_STATE:  /* admin_level=4 */
+                color = CT_RGBA(160, 80, 160, 160);
+                width = 1.5f;
+                dash = 8.0f;
+                gap = 4.0f;
+                break;
+            case CT_BOUNDARY_COUNTY:  /* admin_level=6 */
+                color = CT_RGBA(180, 100, 180, 140);
+                width = 1.0f;
+                dash = 6.0f;
+                gap = 3.0f;
+                break;
+            default:  /* admin_level=8+ */
+                color = CT_RGBA(200, 140, 200, 120);  /* Fainter */
+                width = 0.75f;
+                dash = 4.0f;
+                gap = 2.0f;
+                break;
+        }
+    }
+
+    /* Scale width with zoom */
+    if (zoom <= 8) {
+        width *= 0.5f;
+    } else if (zoom <= 10) {
+        width *= 0.75f;
+    } else if (zoom >= 14) {
+        width *= 1.25f;
+    }
+
+    if (width < 0.5f) width = 0.5f;
+
+    *color_out = color;
+    *width_out = width;
+    *dash_out = dash;
+    *gap_out = gap;
+}

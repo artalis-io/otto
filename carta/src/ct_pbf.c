@@ -810,6 +810,11 @@ CTPBFContext *ct_pbf_context_create_with_config(const CTPBFConfig *config)
     /* Initialize role string hash table for this context */
     role_hash_reset(ctx);
 
+    /* Initialize boundary configuration with defaults */
+    ctx->boundary_config.min_admin_level = 2;   /* Country borders */
+    ctx->boundary_config.max_admin_level = 6;   /* Down to county level */
+    ctx->boundary_config.include_protected_areas = 1;  /* Include national parks */
+
     /* Create arena for parsing temporaries */
     ctx->parse_arena = sh_arena_create(ctx->config.arena_size);
     if (!ctx->parse_arena) {
@@ -934,6 +939,42 @@ void ct_pbf_context_free(CTPBFContext *ctx)
         /* Free multipolygon R-Tree */
         ct_rtree_free(ctx->mp_rtree);
         ctx->mp_rtree = NULL;
+    }
+
+    /* Free boundary relations */
+    for (size_t i = 0; i < ctx->num_boundary_relations; i++) {
+        SAFE_FREE(ctx->boundary_relations[i].members);
+        SAFE_FREE(ctx->boundary_relations[i].name);
+    }
+    SAFE_FREE(ctx->boundary_relations);
+
+    /* Free assembled boundaries */
+    if (ctx->mmap_boundary_coords) {
+        /* mmap'd context - coords in bulk-allocated block */
+        for (size_t i = 0; i < ctx->num_boundaries; i++) {
+            SAFE_FREE(ctx->boundaries[i].name);
+        }
+        SAFE_FREE(ctx->boundaries);
+        SAFE_FREE(ctx->mmap_boundary_coords);
+
+        /* Free boundary R-Tree (may point into mmap) */
+        if (ctx->boundary_rtree && !ctx->boundary_rtree_is_mmap) {
+            ct_rtree_free(ctx->boundary_rtree);
+        } else if (ctx->boundary_rtree) {
+            free(ctx->boundary_rtree);
+        }
+        ctx->boundary_rtree = NULL;
+    } else {
+        /* Normal context - free everything individually */
+        for (size_t i = 0; i < ctx->num_boundaries; i++) {
+            SAFE_FREE(ctx->boundaries[i].coords);
+            SAFE_FREE(ctx->boundaries[i].name);
+        }
+        SAFE_FREE(ctx->boundaries);
+
+        /* Free boundary R-Tree */
+        ct_rtree_free(ctx->boundary_rtree);
+        ctx->boundary_rtree = NULL;
     }
 
     /* Free labeled points */
@@ -1434,8 +1475,11 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
 
     ctx->total_relations_parsed++;
 
-    /* Check if this is a multipolygon relation */
+    /* Check relation type and boundary tags */
     int is_multipolygon = 0;
+    int is_boundary = 0;
+    int is_protected_area = 0;
+    int admin_level = -1;
     int num_tags = (int)(key_count < val_count ? key_count : val_count);
     CTOSMFeatureClass feature_class = CT_OSM_UNKNOWN;
     int feature_type = 0;
@@ -1444,12 +1488,103 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
         const char *key = sh_string_table_get(st, keys[i]);
         const char *val = sh_string_table_get(st, vals[i]);
 
-        if (strcmp(key, "type") == 0 && strcmp(val, "multipolygon") == 0) {
-            is_multipolygon = 1;
+        if (strcmp(key, "type") == 0) {
+            if (strcmp(val, "multipolygon") == 0) {
+                is_multipolygon = 1;
+            } else if (strcmp(val, "boundary") == 0) {
+                is_boundary = 1;
+            }
+        }
+        if (strcmp(key, "boundary") == 0) {
+            if (strcmp(val, "administrative") == 0) {
+                is_boundary = 1;
+            } else if (strcmp(val, "protected_area") == 0) {
+                is_protected_area = 1;
+            }
+        }
+        if (strcmp(key, "admin_level") == 0) {
+            admin_level = atoi(val);
         }
     }
 
-    /* Only keep multipolygon relations for now */
+    /* Handle boundary relations separately */
+    if (is_boundary || is_protected_area) {
+        /* Check config for which boundaries to extract */
+        CTBoundaryConfig *cfg = &ctx->boundary_config;
+        int keep_boundary = 0;
+
+        if (is_protected_area && cfg->include_protected_areas) {
+            keep_boundary = 1;
+        } else if (is_boundary && admin_level >= 0) {
+            if (admin_level >= cfg->min_admin_level &&
+                admin_level <= cfg->max_admin_level) {
+                keep_boundary = 1;
+            }
+        }
+
+        if (keep_boundary) {
+            /* Store boundary relation */
+            if (ctx->num_boundary_relations >= ctx->boundary_relations_capacity) {
+                size_t new_cap = ctx->boundary_relations_capacity ? ctx->boundary_relations_capacity * 2 : 100;
+                CTOSMRelation *new_rels = realloc(ctx->boundary_relations, new_cap * sizeof(CTOSMRelation));
+                if (!new_rels) goto skip_relation;
+                ctx->boundary_relations = new_rels;
+                ctx->boundary_relations_capacity = new_cap;
+            }
+
+            /* Build member list (only keep way members) */
+            size_t num_members = memid_count;
+            if (role_count < num_members) num_members = role_count;
+            if (type_count < num_members) num_members = type_count;
+
+            /* Count way members */
+            size_t way_member_count = 0;
+            for (size_t i = 0; i < num_members; i++) {
+                if (types[i] == CT_MEMBER_WAY) way_member_count++;
+            }
+
+            if (way_member_count == 0) goto skip_relation;
+
+            CTRelationMember *members = malloc(way_member_count * sizeof(CTRelationMember));
+            if (!members) goto skip_relation;
+
+            size_t j = 0;
+            for (size_t i = 0; i < num_members; i++) {
+                if (types[i] != CT_MEMBER_WAY) continue;
+                members[j].ref = memids[i];
+                members[j].type = CT_MEMBER_WAY;
+                const char *role_str = sh_string_table_get(st, role_sids[i]);
+                members[j].role_idx = add_role_string(ctx, role_str);
+                j++;
+            }
+
+            CTOSMRelation *rel = &ctx->boundary_relations[ctx->num_boundary_relations++];
+            rel->id = id;
+            rel->members = members;
+            rel->num_members = (int)way_member_count;
+            rel->feature_class = CT_OSM_BOUNDARY;
+            rel->feature_type = is_protected_area ? CT_BOUNDARY_TYPE_PROTECTED : CT_BOUNDARY_TYPE_ADMIN;
+            rel->is_multipolygon = 0;
+            rel->name = NULL;
+
+            /* Extract name and store admin_level in feature_type for admin boundaries */
+            if (!is_protected_area && admin_level >= 0) {
+                /* Encode admin_level in the upper bits of feature_type */
+                rel->feature_type = (admin_level << 8) | CT_BOUNDARY_TYPE_ADMIN;
+            }
+
+            for (int i = 0; i < num_tags; i++) {
+                const char *key = sh_string_table_get(st, keys[i]);
+                if (strcmp(key, "name") == 0) {
+                    rel->name = strdup(sh_string_table_get(st, vals[i]));
+                    break;
+                }
+            }
+        }
+        goto skip_relation;  /* Don't also process as multipolygon */
+    }
+
+    /* Only keep multipolygon relations */
     if (!is_multipolygon) {
         goto skip_relation;
     }
