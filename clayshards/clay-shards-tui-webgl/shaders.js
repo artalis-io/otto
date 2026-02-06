@@ -242,10 +242,13 @@ export const CRT_FS = `
  */
 export const BLIT_VS = `
     attribute vec2 a_pos;
+    uniform vec2 u_scale;
+    uniform vec2 u_offset;
     varying vec2 v_uv;
 
     void main() {
-        gl_Position = vec4(a_pos * 2.0 - 1.0, 0.0, 1.0);
+        vec2 scaled = a_pos * u_scale + u_offset;
+        gl_Position = vec4(scaled * 2.0 - 1.0, 0.0, 1.0);
         v_uv = a_pos;
     }
 `;
@@ -253,10 +256,12 @@ export const BLIT_VS = `
 export const BLIT_FS = `
     precision mediump float;
     uniform sampler2D u_texture;
+    uniform float u_alpha;
     varying vec2 v_uv;
 
     void main() {
-        gl_FragColor = texture2D(u_texture, v_uv);
+        vec4 color = texture2D(u_texture, v_uv);
+        gl_FragColor = vec4(color.rgb * u_alpha, 1.0);
     }
 `;
 

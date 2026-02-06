@@ -576,9 +576,47 @@
                 // Render loop
                 let lastTime = 0;
                 let frameCount = 0;
+                let powerOffProgress = 0;
+                let isPoweringOff = false;
+                const POWER_OFF_DURATION = 0.8; // seconds
+
                 function render(timestamp) {
                     const dt = lastTime ? (timestamp - lastTime) / 1000 : 0.016;
                     lastTime = timestamp;
+
+                    // Check for quit
+                    if (wasm.demo_get_quit() && !isPoweringOff) {
+                        isPoweringOff = true;
+                        powerOffProgress = 0;
+                    }
+
+                    // Handle power-off animation
+                    if (isPoweringOff) {
+                        powerOffProgress += dt / POWER_OFF_DURATION;
+                        if (powerOffProgress >= 1) {
+                            powerOffProgress = 1;
+                            // Stay black - don't render anything
+                            renderer.clear(0, 0, 0);
+                            return; // Stop animation loop
+                        }
+
+                        // Render normal frame to framebuffer, then apply power-off
+                        const cmdCount = wasm.demo_frame(dt);
+                        if (crt.isEnabled()) {
+                            crt.begin();
+                            renderer.renderBatched(wasm, {
+                                getBuffer: 'demo_get_buffer',
+                                getWidth: 'demo_get_width',
+                                getHeight: 'demo_get_height'
+                            });
+                            // Don't call crt.end(), instead draw power-off effect
+                            crt.drawPowerOff(powerOffProgress);
+                        } else {
+                            renderer.clear(0, 0, 0);
+                        }
+                        requestAnimationFrame(render);
+                        return;
+                    }
 
                     // Run WASM frame
                     const cmdCount = wasm.demo_frame(dt);

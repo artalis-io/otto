@@ -54,6 +54,9 @@ typedef struct {
     /* Terminal size */
     int width;
     int height;
+
+    /* Quit flag */
+    bool quit;
 } AppState;
 
 static AppState g_app = {
@@ -69,6 +72,7 @@ static AppState g_app = {
     .counter = 0,
     .width = 80,
     .height = 24,
+    .quit = false,
 };
 
 static const char *PRIORITY_OPTIONS[] = {"Low", "Medium", "High", "Critical"};
@@ -124,11 +128,11 @@ static void render_ui(void) {
                      CLAY_TEXT_CONFIG({ .fontSize = 14, .textColor = THEME.text }));
         }
 
-        /* Main content area */
+        /* Main content area - height = total - padding(2) - title(1) - footer(1) - gaps(2) */
         CLAY(CLAY_ID("Content"), {
             .layout = {
                 .layoutDirection = CLAY_LEFT_TO_RIGHT,
-                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+                .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED((float)(g_app.height - 6)) },
                 .childGap = 2
             }
         }) {
@@ -265,7 +269,7 @@ static void render_ui(void) {
 
                 /* Space for dropdown list */
                 CLAY(CLAY_ID("DropdownSpace"), {
-                    .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(5) } }
+                    .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIXED(2) } }
                 }) {}
 
                 /* Buttons */
@@ -500,9 +504,22 @@ void demo_key_down(int key, int mods) {
  */
 EMSCRIPTEN_KEEPALIVE
 void demo_key_char(uint32_t codepoint) {
+    /* Q/q to quit (only when no text input is focused) */
+    if ((codepoint == 'q' || codepoint == 'Q') && cs_focused_id() == 0) {
+        g_app.quit = true;
+        return;
+    }
     if (codepoint >= 32 && codepoint < 127) {
         cs_key_char(codepoint);
     }
+}
+
+/**
+ * Check if quit was requested.
+ */
+EMSCRIPTEN_KEEPALIVE
+int demo_get_quit(void) {
+    return g_app.quit ? 1 : 0;
 }
 
 /**
