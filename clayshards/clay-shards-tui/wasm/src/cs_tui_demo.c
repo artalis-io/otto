@@ -321,7 +321,7 @@ static void render_ui(void) {
             },
             .backgroundColor = THEME.panel
         }) {
-            CLAY_TEXT(CLAY_STRING(" Q:Quit Tab/S-Tab:Nav Space/Enter:Act Arrows:Adj "),
+            CLAY_TEXT(CLAY_STRING(" Esc:Quit Tab/S-Tab:Nav Space/Enter:Act Arrows:Adj "),
                      CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text_muted }));
         }
     }
@@ -493,8 +493,8 @@ void demo_key_down(int key, int mods) {
         case 35:  /* End */
             cs_key_down(35, false, false);
             break;
-        case 27:  /* Escape */
-            cs_key_down(27, false, false);
+        case 27:  /* Escape - quit */
+            g_app.quit = true;
             break;
     }
 }
@@ -504,11 +504,6 @@ void demo_key_down(int key, int mods) {
  */
 EMSCRIPTEN_KEEPALIVE
 void demo_key_char(uint32_t codepoint) {
-    /* Q/q to quit (only when no text input is focused) */
-    if ((codepoint == 'q' || codepoint == 'Q') && cs_focused_id() == 0) {
-        g_app.quit = true;
-        return;
-    }
     if (codepoint >= 32 && codepoint < 127) {
         cs_key_char(codepoint);
     }

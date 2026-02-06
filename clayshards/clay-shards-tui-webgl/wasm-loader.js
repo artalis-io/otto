@@ -55,12 +55,17 @@ export async function loadTuiWasm(path) {
 export function setupKeyboardHandlers(target, wasm) {
     target.addEventListener('keydown', (e) => {
         // Prevent default for special keys
-        if (e.key === 'Tab' || e.key === 'Escape' || e.key === 'Backspace') {
+        if (['Tab', 'Escape', 'Backspace', ' '].includes(e.key)) {
             e.preventDefault();
         }
 
         const mods = (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0);
         wasm.wasm_tui_key_event(e.keyCode, mods, 1);
+
+        // Space needs explicit char event since keypress is deprecated
+        if (e.key === ' ' && !e.ctrlKey && !e.altKey) {
+            wasm.wasm_tui_char_event(32);
+        }
     });
 
     target.addEventListener('keyup', (e) => {
@@ -68,9 +73,9 @@ export function setupKeyboardHandlers(target, wasm) {
         wasm.wasm_tui_key_event(e.keyCode, mods, 0);
     });
 
-    // Character input for printable keys
+    // Character input for printable keys (deprecated but still works for most chars)
     target.addEventListener('keypress', (e) => {
-        if (e.charCode > 0 && !e.ctrlKey && !e.altKey) {
+        if (e.charCode > 0 && e.charCode !== 32 && !e.ctrlKey && !e.altKey) {
             wasm.wasm_tui_char_event(e.charCode);
         }
     });
