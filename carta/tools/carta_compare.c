@@ -25,6 +25,7 @@
 #include "ct_tile.h"
 #include "ct_pbf.h"
 #include "ct_lod.h"
+#include "ct_render.h"
 
 /* ============================================================================
  * Safe String Macros
@@ -46,6 +47,12 @@ typedef enum {
     MODE_ZOOM_RANGE /* Compare across zoom levels from anchor tile */
 } CompareMode;
 
+typedef enum {
+    PRESET_DEFAULT,  /* Balanced rendering */
+    PRESET_FAST,     /* Performance-optimized (no casing, labels, etc.) */
+    PRESET_QUALITY   /* Maximum visual quality */
+} RenderPreset;
+
 typedef struct {
     CompareMode mode;
     int z, x, y;              /* Tile coordinates (for MODE_SINGLE) */
@@ -60,6 +67,7 @@ typedef struct {
     int zoom_min;             /* For zoom-range mode: min zoom */
     int zoom_max;             /* For zoom-range mode: max zoom */
     int with_neighbors;       /* For zoom-range mode: render 3x3 grid */
+    RenderPreset render_preset; /* Render quality preset */
 } CompareConfig;
 
 /* ============================================================================
@@ -279,7 +287,8 @@ static void count_tile_features(const CTPBFContext *pbf, CTTileCoord coord,
  * ============================================================================ */
 
 static size_t generate_carta_png(const CTPBFContext *pbf, CTTileCoord coord,
-                                 int tile_size, uint8_t *buffer, size_t capacity,
+                                 int tile_size, RenderPreset preset,
+                                 uint8_t *buffer, size_t capacity,
                                  TileStats *stats)
 {
     struct timeval start, end;
@@ -289,12 +298,27 @@ static size_t generate_carta_png(const CTPBFContext *pbf, CTTileCoord coord,
     ct_lod_init(&lod);
     ct_lod_default(&lod);
 
+    /* Configure render options based on preset */
+    CTRenderOptions render_opts;
+    switch (preset) {
+        case PRESET_FAST:
+            ct_render_options_fast(&render_opts);
+            break;
+        case PRESET_QUALITY:
+            ct_render_options_quality(&render_opts);
+            break;
+        case PRESET_DEFAULT:
+        default:
+            ct_render_options_default(&render_opts);
+            break;
+    }
+
     CTPNGOptions opts;
     ct_png_default_options(&opts);
     opts.tile_size = tile_size;
 
-    size_t size = ct_generate_png_lod(pbf, coord, NULL, &lod, &opts,
-                                       buffer, capacity);
+    size_t size = ct_generate_png_lod_opts(pbf, coord, NULL, &lod, &render_opts,
+                                           &opts, buffer, capacity);
 
     gettimeofday(&end, NULL);
 
@@ -430,7 +454,8 @@ static int run_single_mode(const CTPBFContext *pbf, const CompareConfig *cfg,
     if (cfg->mvt_mode) {
         carta_size = generate_carta_mvt(pbf, coord, buffer, buffer_capacity, &stats);
     } else {
-        carta_size = generate_carta_png(pbf, coord, cfg->tile_size, buffer,
+        carta_size = generate_carta_png(pbf, coord, cfg->tile_size,
+                                        cfg->render_preset, buffer,
                                         buffer_capacity, &stats);
     }
 
@@ -472,6 +497,11 @@ static int run_single_mode(const CTPBFContext *pbf, const CompareConfig *cfg,
     printf("--- TILE REPORT ---\n");
     printf("Tile: %d/%d/%d\n", cfg->z, cfg->x, cfg->y);
     printf("Format: %s\n", ext);
+    if (!cfg->mvt_mode) {
+        const char *preset_name = cfg->render_preset == PRESET_FAST ? "fast" :
+                                  cfg->render_preset == PRESET_QUALITY ? "quality" : "default";
+        printf("Preset: %s\n", preset_name);
+    }
     if (carta_size > 0) {
         printf("Carta Output: %s (%.1f KB)\n", carta_path, carta_size / 1024.0);
     } else {
@@ -575,7 +605,8 @@ static int run_batch_mode(const CTPBFContext *pbf, const CompareConfig *cfg,
             if (cfg->mvt_mode) {
                 size = generate_carta_mvt(pbf, coord, buffer, buffer_capacity, &stats);
             } else {
-                size = generate_carta_png(pbf, coord, cfg->tile_size, buffer,
+                size = generate_carta_png(pbf, coord, cfg->tile_size,
+                                          cfg->render_preset, buffer,
                                           buffer_capacity, &stats);
             }
 
@@ -640,6 +671,7 @@ static void print_usage(const char *prog)
     fprintf(stderr, "  -s, --size SIZE         PNG tile size: 256 or 512 (default: 512)\n");
     fprintf(stderr, "  -z, --zoom LEVEL        Batch mode: specific zoom level\n");
     fprintf(stderr, "  -n, --max-tiles N       Batch mode: max tiles per zoom (default: 3)\n");
+    fprintf(stderr, "  --preset PRESET         Render preset: default, fast, quality\n");
     fprintf(stderr, "  --skip-osm              Don't fetch OSM reference tiles\n");
     fprintf(stderr, "  -v, --verbose           Verbose output\n");
     fprintf(stderr, "  -h, --help              Show this help\n");
@@ -648,11 +680,17 @@ static void print_usage(const char *prog)
     fprintf(stderr, "  --zoom-range MIN-MAX    Compare tile at zoom levels MIN to MAX\n");
     fprintf(stderr, "  -N, --neighbors         Also render 3x3 neighbor grid at each zoom\n");
     fprintf(stderr, "\n");
+    fprintf(stderr, "Render Presets:\n");
+    fprintf(stderr, "  default   Balanced rendering (road casing, labels, outlines)\n");
+    fprintf(stderr, "  fast      Performance-optimized (no casing, labels, or outlines)\n");
+    fprintf(stderr, "  quality   Maximum visual quality (all effects enabled)\n");
+    fprintf(stderr, "\n");
     fprintf(stderr, "Examples:\n");
     fprintf(stderr, "  %s info monaco.osm.pbf\n", prog);
     fprintf(stderr, "  %s 14/8527/5979 monaco.osm.pbf\n", prog);
     fprintf(stderr, "  %s batch monaco.osm.pbf --zoom 14\n", prog);
     fprintf(stderr, "  %s batch monaco.osm.pbf -n 5 -o /tmp/tiles/\n", prog);
+    fprintf(stderr, "  %s 14/9058/5729 hungary.osm.pbf --preset fast\n", prog);
     fprintf(stderr, "  %s 14/9058/5729 hungary.osm.pbf --zoom-range 12-17\n", prog);
     fprintf(stderr, "  %s 14/9058/5729 hungary.osm.pbf --zoom-range 12-17 -N\n", prog);
 }
@@ -673,6 +711,7 @@ static int parse_args(int argc, char **argv, CompareConfig *cfg)
     cfg->tile_size = 512;
     cfg->zoom_level = -1;
     cfg->max_tiles = 3;
+    cfg->render_preset = PRESET_DEFAULT;
     SAFE_STRCPY(cfg->output_dir, "/tmp/carta_compare");
 
     if (argc < 3) {
@@ -738,6 +777,21 @@ static int parse_args(int argc, char **argv, CompareConfig *cfg)
             }
         } else if (strcmp(argv[i], "--skip-osm") == 0) {
             cfg->skip_osm = 1;
+        } else if (strcmp(argv[i], "--preset") == 0) {
+            if (++i >= argc) {
+                fprintf(stderr, "Error: --preset requires an argument\n");
+                return -1;
+            }
+            if (strcmp(argv[i], "fast") == 0) {
+                cfg->render_preset = PRESET_FAST;
+            } else if (strcmp(argv[i], "quality") == 0) {
+                cfg->render_preset = PRESET_QUALITY;
+            } else if (strcmp(argv[i], "default") == 0) {
+                cfg->render_preset = PRESET_DEFAULT;
+            } else {
+                fprintf(stderr, "Error: Unknown preset '%s'. Use: default, fast, quality\n", argv[i]);
+                return -1;
+            }
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
             cfg->verbose = 1;
         } else if (strcmp(argv[i], "--zoom-range") == 0) {
@@ -885,7 +939,8 @@ static int run_zoom_range_mode(const CTPBFContext *pbf, const CompareConfig *cfg
             if (cfg->mvt_mode) {
                 size = generate_carta_mvt(pbf, coord, buffer, buffer_capacity, &stats);
             } else {
-                size = generate_carta_png(pbf, coord, cfg->tile_size, buffer,
+                size = generate_carta_png(pbf, coord, cfg->tile_size,
+                                          cfg->render_preset, buffer,
                                           buffer_capacity, &stats);
             }
 

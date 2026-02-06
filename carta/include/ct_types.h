@@ -375,6 +375,34 @@ typedef struct {
 } CTStyle;
 
 /* ============================================================================
+ * Render Options (configurable performance/quality trade-offs)
+ * ============================================================================ */
+
+typedef struct {
+    /* Layer toggles (disable entire layers) */
+    int render_water;
+    int render_landuse;
+    int render_buildings;
+    int render_roads;
+    int render_railways;
+    int render_boundaries;
+    int render_labels;
+
+    /* Detail toggles (expensive visual effects) */
+    int render_road_casing;
+    int render_railway_casing;
+    int render_bridge_outlines;
+    int render_building_outlines;
+    int render_label_halos;
+    int render_boundary_dashes;
+
+    /* Zoom cutoffs (0 = use default) */
+    int casing_min_zoom;            /* Default: 14 */
+    int building_outlines_min_zoom; /* Default: 14 */
+    int labels_min_zoom;            /* Default: 8 */
+} CTRenderOptions;
+
+/* ============================================================================
  * Render Context (for raster tiles)
  * ============================================================================ */
 
@@ -384,6 +412,7 @@ typedef struct {
     int height;
     int stride;              /* Bytes per row (usually width * 4) */
     CTStyle style;
+    CTRenderOptions options; /* Configurable rendering options */
 
     /* Pre-allocated buffers for rendering (avoids per-feature malloc) */
     CTTilePoint *scale_buffer;      /* Reusable point scaling buffer */

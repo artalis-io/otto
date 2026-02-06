@@ -808,6 +808,167 @@ TEST(render_multipolygon_with_hole)
 }
 
 /* ============================================================================
+ * Render Options Tests
+ * ============================================================================ */
+
+TEST(render_options_default)
+{
+    CTRenderOptions opts;
+    ct_render_options_default(&opts);
+
+    /* All layers should be enabled */
+    ASSERT_EQ(opts.render_water, 1);
+    ASSERT_EQ(opts.render_landuse, 1);
+    ASSERT_EQ(opts.render_buildings, 1);
+    ASSERT_EQ(opts.render_roads, 1);
+    ASSERT_EQ(opts.render_railways, 1);
+    ASSERT_EQ(opts.render_boundaries, 1);
+    ASSERT_EQ(opts.render_labels, 1);
+
+    /* All details should be enabled */
+    ASSERT_EQ(opts.render_road_casing, 1);
+    ASSERT_EQ(opts.render_railway_casing, 1);
+    ASSERT_EQ(opts.render_bridge_outlines, 1);
+    ASSERT_EQ(opts.render_building_outlines, 1);
+    ASSERT_EQ(opts.render_label_halos, 1);
+    ASSERT_EQ(opts.render_boundary_dashes, 1);
+
+    /* Check zoom cutoffs */
+    ASSERT_EQ(opts.casing_min_zoom, 14);
+    ASSERT_EQ(opts.building_outlines_min_zoom, 14);
+    ASSERT_EQ(opts.labels_min_zoom, 8);
+
+    return 1;
+}
+
+TEST(render_options_fast)
+{
+    CTRenderOptions opts;
+    ct_render_options_fast(&opts);
+
+    /* Layers should be enabled */
+    ASSERT_EQ(opts.render_water, 1);
+    ASSERT_EQ(opts.render_landuse, 1);
+    ASSERT_EQ(opts.render_buildings, 1);
+    ASSERT_EQ(opts.render_roads, 1);
+    ASSERT_EQ(opts.render_railways, 1);
+    ASSERT_EQ(opts.render_boundaries, 1);
+
+    /* Labels disabled for performance */
+    ASSERT_EQ(opts.render_labels, 0);
+
+    /* Expensive details should be disabled */
+    ASSERT_EQ(opts.render_road_casing, 0);
+    ASSERT_EQ(opts.render_railway_casing, 0);
+    ASSERT_EQ(opts.render_bridge_outlines, 0);
+    ASSERT_EQ(opts.render_building_outlines, 0);
+    ASSERT_EQ(opts.render_label_halos, 0);
+    ASSERT_EQ(opts.render_boundary_dashes, 0);
+
+    /* Zoom cutoffs should be very high (effectively disabled) */
+    ASSERT(opts.casing_min_zoom >= 99);
+    ASSERT(opts.building_outlines_min_zoom >= 99);
+    ASSERT(opts.labels_min_zoom >= 99);
+
+    return 1;
+}
+
+TEST(render_options_quality)
+{
+    CTRenderOptions opts;
+    ct_render_options_quality(&opts);
+
+    /* All layers enabled */
+    ASSERT_EQ(opts.render_water, 1);
+    ASSERT_EQ(opts.render_landuse, 1);
+    ASSERT_EQ(opts.render_buildings, 1);
+    ASSERT_EQ(opts.render_roads, 1);
+    ASSERT_EQ(opts.render_railways, 1);
+    ASSERT_EQ(opts.render_boundaries, 1);
+    ASSERT_EQ(opts.render_labels, 1);
+
+    /* All details enabled */
+    ASSERT_EQ(opts.render_road_casing, 1);
+    ASSERT_EQ(opts.render_railway_casing, 1);
+    ASSERT_EQ(opts.render_bridge_outlines, 1);
+    ASSERT_EQ(opts.render_building_outlines, 1);
+    ASSERT_EQ(opts.render_label_halos, 1);
+    ASSERT_EQ(opts.render_boundary_dashes, 1);
+
+    /* Low zoom cutoffs for quality mode */
+    ASSERT(opts.casing_min_zoom <= 12);
+    ASSERT(opts.building_outlines_min_zoom <= 13);
+    ASSERT(opts.labels_min_zoom <= 6);
+
+    return 1;
+}
+
+TEST(render_context_has_options)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    ASSERT(ctx != NULL);
+
+    /* Context should have default options initialized */
+    ASSERT_EQ(ctx->options.render_water, 1);
+    ASSERT_EQ(ctx->options.render_labels, 1);
+    ASSERT_EQ(ctx->options.render_road_casing, 1);
+    ASSERT_EQ(ctx->options.casing_min_zoom, 14);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(render_set_options)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    ASSERT(ctx != NULL);
+
+    /* Set fast options */
+    CTRenderOptions fast_opts;
+    ct_render_options_fast(&fast_opts);
+    ct_render_set_options(ctx, &fast_opts);
+
+    /* Verify options were applied */
+    ASSERT_EQ(ctx->options.render_labels, 0);
+    ASSERT_EQ(ctx->options.render_road_casing, 0);
+
+    /* Set quality options */
+    CTRenderOptions quality_opts;
+    ct_render_options_quality(&quality_opts);
+    ct_render_set_options(ctx, &quality_opts);
+
+    /* Verify options were changed */
+    ASSERT_EQ(ctx->options.render_labels, 1);
+    ASSERT_EQ(ctx->options.render_road_casing, 1);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(render_options_custom)
+{
+    CTRenderOptions opts;
+    ct_render_options_default(&opts);
+
+    /* Customize for specific use case */
+    opts.render_labels = 0;
+    opts.render_buildings = 0;
+    opts.render_road_casing = 1;
+    opts.casing_min_zoom = 10;
+
+    ASSERT_EQ(opts.render_labels, 0);
+    ASSERT_EQ(opts.render_buildings, 0);
+    ASSERT_EQ(opts.render_road_casing, 1);
+    ASSERT_EQ(opts.casing_min_zoom, 10);
+
+    /* Other settings should remain at defaults */
+    ASSERT_EQ(opts.render_water, 1);
+    ASSERT_EQ(opts.render_roads, 1);
+
+    return 1;
+}
+
+/* ============================================================================
  * MVT Encoding Tests
  * ============================================================================ */
 
@@ -2583,6 +2744,14 @@ int main(void)
     run_test_render_tile_reuses_buffer();
     run_test_render_polygon_scanline_performance();
     run_test_render_multipolygon_with_hole();
+
+    printf("\nRender Options:\n");
+    run_test_render_options_default();
+    run_test_render_options_fast();
+    run_test_render_options_quality();
+    run_test_render_context_has_options();
+    run_test_render_set_options();
+    run_test_render_options_custom();
 
     printf("\nMVT Encoding:\n");
     run_test_mvt_default_options();

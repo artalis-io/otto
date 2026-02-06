@@ -93,6 +93,7 @@ Options:
   --max-zoom N          Max zoom (default: 18)
   --tile-size N         PNG size (default: 512)
   --lod none|default    LOD filtering preset
+  --render-preset P     Render quality: default, fast, quality
   --adaptive            Enable adaptive capacity (auto-tune rate limits)
   --utilization N       Target utilization 0.0-1.0 (default: 0.7)
   --client-timeout N    Client timeout in ms (default: 10000)
@@ -117,6 +118,7 @@ CARTA_MAX_ZOOM=18                     # Maximum zoom level
 CARTA_TILE_SIZE=512                   # PNG tile size
 CARTA_NAME="My Tiles"                 # Server name in TileJSON
 CARTA_LOD=default                     # LOD preset (none, default, detailed, minimal)
+CARTA_RENDER_PRESET=default           # Render quality (default, fast, quality)
 CARTA_RENDER_WORKERS=8                # Render worker threads (0 = auto)
 
 # Rate limiting

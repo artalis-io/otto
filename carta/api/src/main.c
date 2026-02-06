@@ -54,6 +54,13 @@ typedef enum {
     LOD_MINIMAL        /* Fewer features (overview) */
 } LODPreset;
 
+/* Render quality presets */
+typedef enum {
+    RENDER_PRESET_DEFAULT = 0, /* Balanced rendering */
+    RENDER_PRESET_FAST,        /* Performance-optimized (no casing, labels) */
+    RENDER_PRESET_QUALITY      /* Maximum visual quality */
+} RenderPreset;
+
 /*
  * Carta-specific configuration (extends ShServerConfig).
  */
@@ -69,6 +76,7 @@ typedef struct {
     int tile_size;
     char name[128];
     LODPreset lod_preset;       /* LOD filtering preset */
+    RenderPreset render_preset; /* Render quality preset */
     int render_workers;         /* Number of render worker threads (0 = auto) */
 } TileServerConfig;
 
@@ -82,6 +90,7 @@ static ShCorsConfig s_cors;
 static volatile sig_atomic_t s_signo = 0;
 static CTPBFContext *s_pbf_ctx = NULL;
 static CTLODConfig s_lod_config = {0};
+static CTRenderOptions s_render_opts = {0};  /* Render quality options */
 static CTTileCache *s_png_cache = NULL;
 static CTTileCache *s_mvt_cache = NULL;
 
@@ -256,6 +265,9 @@ static void process_png_render(RenderWorkItem *item)
                 sizeof(item->error_msg));
         return;
     }
+
+    /* Apply render options */
+    ct_render_set_options(render, &s_render_opts);
 
     /* Render tile */
     CTTileCoord coord = {z, x, y};
@@ -584,6 +596,17 @@ static LODPreset parse_lod_preset(const char *str) {
     return LOD_DEFAULT;  /* Default if unrecognized */
 }
 
+/* Parse render preset from string */
+static RenderPreset parse_render_preset(const char *str) {
+    if (strcasecmp(str, "fast") == 0) {
+        return RENDER_PRESET_FAST;
+    }
+    if (strcasecmp(str, "quality") == 0) {
+        return RENDER_PRESET_QUALITY;
+    }
+    return RENDER_PRESET_DEFAULT;  /* Default if unrecognized */
+}
+
 /* Initialize Carta-specific defaults */
 static void init_carta_defaults(TileServerConfig *cfg) {
     /* Initialize common server config using sh_args */
@@ -602,6 +625,7 @@ static void init_carta_defaults(TileServerConfig *cfg) {
     cfg->tile_size = 512;
     strncpy(cfg->name, "Carta Tile Server", sizeof(cfg->name) - 1);
     cfg->lod_preset = LOD_DEFAULT;
+    cfg->render_preset = RENDER_PRESET_DEFAULT;
     cfg->render_workers = 0;  /* Auto-detect */
 }
 
@@ -633,6 +657,9 @@ static void load_carta_env(TileServerConfig *cfg) {
     }
     if ((val = getenv("TILE_LOD")) || (val = getenv("CARTA_LOD"))) {
         cfg->lod_preset = parse_lod_preset(val);
+    }
+    if ((val = getenv("CARTA_RENDER_PRESET"))) {
+        cfg->render_preset = parse_render_preset(val);
     }
     if ((val = getenv("CARTA_RENDER_WORKERS"))) {
         cfg->render_workers = atoi(val);
@@ -1213,6 +1240,9 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         return;
     }
 
+    /* Apply render options */
+    ct_render_set_options(render, &s_render_opts);
+
     ct_render_clear(render);
     if (s_config.lod_preset != LOD_NONE) {
         ct_render_from_pbf_lod(render, s_pbf_ctx, coord, &s_lod_config);
@@ -1414,6 +1444,7 @@ static void print_usage(const char *prog) {
     printf("  --tile-size N        PNG tile size (default: 512)\n");
     printf("  --lod PRESET         LOD filtering: none, default, detailed, minimal\n");
     printf("  --no-lod             Disable LOD filtering (same as --lod none)\n");
+    printf("  --render-preset P    Render quality: default, fast, quality\n");
     printf("  -S, --save-index FILE  Save binary index for fast loading\n");
     printf("  --render-workers N   Render worker threads (default: auto)\n");
     printf("\n");
@@ -1423,6 +1454,7 @@ static void print_usage(const char *prog) {
     printf("  CARTA_MAX_ZOOM, TILE_MAX_ZOOM   Maximum zoom\n");
     printf("  CARTA_TILE_SIZE, TILE_SIZE      PNG tile size\n");
     printf("  CARTA_LOD, TILE_LOD             LOD preset (default, detailed, minimal, none)\n");
+    printf("  CARTA_RENDER_PRESET             Render preset (default, fast, quality)\n");
     printf("  CARTA_RENDER_WORKERS            Render worker count (0 = auto)\n");
     printf("\n");
     printf("CORS configuration:\n");
@@ -1478,6 +1510,8 @@ int main(int argc, char *argv[]) {
             if (++i < argc) s_config.lod_preset = parse_lod_preset(argv[i]);
         } else if (strcmp(argv[i], "--no-lod") == 0) {
             s_config.lod_preset = LOD_NONE;
+        } else if (strcmp(argv[i], "--render-preset") == 0) {
+            if (++i < argc) s_config.render_preset = parse_render_preset(argv[i]);
         } else if (strcmp(argv[i], "-S") == 0 || strcmp(argv[i], "--save-index") == 0) {
             if (++i < argc) {
                 strncpy(s_config.save_index_path, argv[i], sizeof(s_config.save_index_path) - 1);
@@ -1576,6 +1610,23 @@ int main(int argc, char *argv[]) {
         case LOD_NONE:
         default:
             printf("LOD: disabled (all features at all zoom levels)\n");
+            break;
+    }
+
+    /* Initialize render options based on preset */
+    switch (s_config.render_preset) {
+        case RENDER_PRESET_FAST:
+            ct_render_options_fast(&s_render_opts);
+            printf("Render: fast (no casing, labels, or outlines)\n");
+            break;
+        case RENDER_PRESET_QUALITY:
+            ct_render_options_quality(&s_render_opts);
+            printf("Render: quality (all effects enabled)\n");
+            break;
+        case RENDER_PRESET_DEFAULT:
+        default:
+            ct_render_options_default(&s_render_opts);
+            printf("Render: default (balanced rendering)\n");
             break;
     }
 

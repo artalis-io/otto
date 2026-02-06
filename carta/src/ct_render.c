@@ -84,6 +84,7 @@ CTRenderContext *ct_render_create(int width, int height)
     ctx->active_buffer = malloc(ctx->edge_buffer_capacity * sizeof(CTEdge));
 
     ct_default_style(&ctx->style);
+    ct_render_options_default(&ctx->options);
     return ctx;
 }
 
@@ -142,6 +143,85 @@ void ct_render_clear(CTRenderContext *ctx)
 void ct_render_set_style(CTRenderContext *ctx, const CTStyle *style)
 {
     ctx->style = *style;
+}
+
+void ct_render_set_options(CTRenderContext *ctx, const CTRenderOptions *opts)
+{
+    ctx->options = *opts;
+}
+
+void ct_render_options_default(CTRenderOptions *opts)
+{
+    /* All layers ON */
+    opts->render_water = 1;
+    opts->render_landuse = 1;
+    opts->render_buildings = 1;
+    opts->render_roads = 1;
+    opts->render_railways = 1;
+    opts->render_boundaries = 1;
+    opts->render_labels = 1;
+
+    /* Details ON with zoom gates */
+    opts->render_road_casing = 1;
+    opts->render_railway_casing = 1;
+    opts->render_bridge_outlines = 1;
+    opts->render_building_outlines = 1;
+    opts->render_label_halos = 1;
+    opts->render_boundary_dashes = 1;
+
+    opts->casing_min_zoom = 14;
+    opts->building_outlines_min_zoom = 14;
+    opts->labels_min_zoom = 8;
+}
+
+void ct_render_options_fast(CTRenderOptions *opts)
+{
+    /* All layers ON (still need base map) */
+    opts->render_water = 1;
+    opts->render_landuse = 1;
+    opts->render_buildings = 1;
+    opts->render_roads = 1;
+    opts->render_railways = 1;
+    opts->render_boundaries = 1;
+    opts->render_labels = 0;           /* OFF - expensive */
+
+    /* Expensive details OFF */
+    opts->render_road_casing = 0;
+    opts->render_railway_casing = 0;
+    opts->render_bridge_outlines = 0;
+    opts->render_building_outlines = 0;
+    opts->render_label_halos = 0;
+    opts->render_boundary_dashes = 0;
+
+    /* High zoom cutoffs effectively disable features */
+    opts->casing_min_zoom = 99;
+    opts->building_outlines_min_zoom = 99;
+    opts->labels_min_zoom = 99;
+}
+
+void ct_render_options_quality(CTRenderOptions *opts)
+{
+    /* All layers ON */
+    opts->render_water = 1;
+    opts->render_landuse = 1;
+    opts->render_buildings = 1;
+    opts->render_roads = 1;
+    opts->render_railways = 1;
+    opts->render_boundaries = 1;
+    opts->render_labels = 1;
+
+    /* All details ON */
+    opts->render_road_casing = 1;
+    opts->render_railway_casing = 1;
+    opts->render_bridge_outlines = 1;
+    opts->render_building_outlines = 1;
+    opts->render_label_halos = 1;
+    opts->render_boundary_dashes = 1;
+
+    /* Low zoom cutoffs - enable at most zoom levels */
+    opts->casing_min_zoom = 12;
+    opts->building_outlines_min_zoom = 13;
+    opts->labels_min_zoom = 6;
 }
 
 uint8_t *ct_render_pixels(CTRenderContext *ctx)
@@ -1193,15 +1273,17 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
     /* Render in order: landuse, water, buildings, roads, railways, boundaries */
     for (int pass = 0; pass < 6; pass++) {
         CTLayer target_layer;
+        int layer_enabled;
         switch (pass) {
-            case 0: target_layer = CT_LAYER_LANDUSE; break;
-            case 1: target_layer = CT_LAYER_WATER; break;
-            case 2: target_layer = CT_LAYER_BUILDINGS; break;
-            case 3: target_layer = CT_LAYER_ROADS; break;
-            case 4: target_layer = CT_LAYER_RAILWAYS; break;
-            case 5: target_layer = CT_LAYER_BOUNDARIES; break;
+            case 0: target_layer = CT_LAYER_LANDUSE;    layer_enabled = ctx->options.render_landuse;    break;
+            case 1: target_layer = CT_LAYER_WATER;      layer_enabled = ctx->options.render_water;      break;
+            case 2: target_layer = CT_LAYER_BUILDINGS;  layer_enabled = ctx->options.render_buildings;  break;
+            case 3: target_layer = CT_LAYER_ROADS;      layer_enabled = ctx->options.render_roads;      break;
+            case 4: target_layer = CT_LAYER_RAILWAYS;   layer_enabled = ctx->options.render_railways;   break;
+            case 5: target_layer = CT_LAYER_BOUNDARIES; layer_enabled = ctx->options.render_boundaries; break;
             default: continue;
         }
+        if (!layer_enabled) continue;
 
         for (size_t i = 0; i < tile->num_features; i++) {
             const CTFeature *f = &tile->features[i];
@@ -1321,12 +1403,17 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                      * z15+: 1.5px outline (full quality)
                      */
                     float outline_width = 0.0f;
-                    if (tile->coord.z >= 15) {
-                        outline_width = 1.5f;
-                    } else if (tile->coord.z >= 14) {
-                        outline_width = 1.0f;
+                    int outline_min_zoom = ctx->options.building_outlines_min_zoom;
+                    if (outline_min_zoom == 0) outline_min_zoom = 14;  /* Default */
+
+                    if (ctx->options.render_building_outlines &&
+                        tile->coord.z >= outline_min_zoom) {
+                        if (tile->coord.z >= 15) {
+                            outline_width = 1.5f;
+                        } else {
+                            outline_width = 1.0f;
+                        }
                     }
-                    /* else z13 and below: no outline */
 
                     if (f->num_rings > 1 && f->ring_ends) {
                         /* Multipolygon buildings */
@@ -1356,11 +1443,18 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     /* Use zoom-adaptive road width */
                     float width = ct_style_road_width(&ctx->style, road_type, tile->coord.z);
 
-                    /* Get zoom-adaptive casing from style module */
-                    float casing = ct_style_road_casing(tile->coord.z);
+                    /* Get zoom-adaptive casing from style module, respecting options */
+                    int casing_min_zoom = ctx->options.casing_min_zoom;
+                    if (casing_min_zoom == 0) casing_min_zoom = 14;  /* Default */
+
+                    float casing = 0.0f;
+                    if (ctx->options.render_road_casing &&
+                        tile->coord.z >= casing_min_zoom) {
+                        casing = ct_style_road_casing(tile->coord.z);
+                    }
 
                     /* Add bridge outline for elevated roads */
-                    if (f->flags & CT_FLAG_BRIDGE) {
+                    if ((f->flags & CT_FLAG_BRIDGE) && ctx->options.render_bridge_outlines) {
                         ct_render_polyline(ctx, scaled, f->num_points,
                                            ctx->style.bridge_outline_color,
                                            width + ctx->style.bridge_outline_width * 2 + 2.0f);
@@ -1388,8 +1482,15 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     CTColor color = ctx->style.railway_colors[railway_type];
                     CTColor outline = ctx->style.railway_outline_colors[railway_type];
 
-                    /* Get zoom-adaptive casing from style module */
-                    float casing = ct_style_railway_casing(tile->coord.z);
+                    /* Get zoom-adaptive casing from style module, respecting options */
+                    int rw_casing_min_zoom = ctx->options.casing_min_zoom;
+                    if (rw_casing_min_zoom == 0) rw_casing_min_zoom = 14;  /* Default */
+
+                    float casing = 0.0f;
+                    if (ctx->options.render_railway_casing &&
+                        tile->coord.z >= rw_casing_min_zoom) {
+                        casing = ct_style_railway_casing(tile->coord.z);
+                    }
 
                     if (casing > 0.0f) {
                         /* Render railway with casing (tick marks effect) */
@@ -1401,7 +1502,8 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     }
 
                     /* Add extra casing for bridges (only if casing enabled) */
-                    if ((f->flags & CT_FLAG_BRIDGE) && casing > 0.0f) {
+                    if ((f->flags & CT_FLAG_BRIDGE) && casing > 0.0f &&
+                        ctx->options.render_bridge_outlines) {
                         ct_render_polyline(ctx, scaled, f->num_points,
                                            ctx->style.bridge_outline_color,
                                            width + ctx->style.bridge_outline_width * 2);
@@ -1491,17 +1593,23 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
     /* Render features */
     ct_render_tile(ctx, &tile);
 
-    /* Render labels on top */
-    const SHFont *font = sh_font_get_default();
-    if (font) {
-        CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
-        if (placer) {
-            ct_label_place_points(placer, pbf, coord, font, 16.0f);
-            ct_render_labels(ctx, placer, font,
-                            CT_RGB(51, 51, 51),
-                            CT_RGB(255, 255, 255),
-                            1.5f);
-            ct_label_placer_free(placer);
+    /* Render labels on top (if enabled) */
+    int labels_min_zoom = ctx->options.labels_min_zoom;
+    if (labels_min_zoom == 0) labels_min_zoom = 8;  /* Default */
+
+    if (ctx->options.render_labels && coord.z >= labels_min_zoom) {
+        const SHFont *font = sh_font_get_default();
+        if (font) {
+            CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
+            if (placer) {
+                ct_label_place_points(placer, pbf, coord, font, 16.0f);
+                float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
+                ct_render_labels(ctx, placer, font,
+                                CT_RGB(51, 51, 51),
+                                CT_RGB(255, 255, 255),
+                                halo_width);
+                ct_label_placer_free(placer);
+            }
         }
     }
 
@@ -1651,8 +1759,9 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
     /* Render features */
     ct_render_tile(ctx, &tile);
 
-    /* Render boundaries on top of base map but below labels */
-    if (pbf->num_boundaries > 0 && pbf->boundary_rtree) {
+    /* Render boundaries on top of base map but below labels (if enabled) */
+    if (ctx->options.render_boundaries &&
+        pbf->num_boundaries > 0 && pbf->boundary_rtree) {
         CTBBox tile_bbox = ct_tile_bounds(coord);
         size_t *boundary_indices = NULL;
         size_t boundary_count = 0;
@@ -1708,9 +1817,13 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
                     pts[j].y = py;
                 }
 
-                /* Render the boundary with dashed line */
-                ct_render_polyline_dashed(ctx, pts, b->num_coords,
-                                          color, width, dash, gap);
+                /* Render the boundary - dashed or solid based on options */
+                if (ctx->options.render_boundary_dashes && dash > 0.0f) {
+                    ct_render_polyline_dashed(ctx, pts, b->num_coords,
+                                              color, width, dash, gap);
+                } else {
+                    ct_render_polyline(ctx, pts, b->num_coords, color, width);
+                }
 
                 free(pts);
             }
@@ -1718,21 +1831,27 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
         }
     }
 
-    /* Render labels on top */
-    const SHFont *font = sh_font_get_default();
-    if (font) {
-        CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
-        if (placer) {
-            /* Place point labels (cities, towns, etc.) */
-            ct_label_place_points(placer, pbf, coord, font, 16.0f);
+    /* Render labels on top (if enabled) */
+    int lod_labels_min_zoom = ctx->options.labels_min_zoom;
+    if (lod_labels_min_zoom == 0) lod_labels_min_zoom = 8;  /* Default */
 
-            /* Render with white halo for readability */
-            ct_render_labels(ctx, placer, font,
-                            CT_RGB(51, 51, 51),      /* Dark gray text */
-                            CT_RGB(255, 255, 255),   /* White halo */
-                            1.5f);                   /* 1.5px halo */
+    if (ctx->options.render_labels && coord.z >= lod_labels_min_zoom) {
+        const SHFont *font = sh_font_get_default();
+        if (font) {
+            CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
+            if (placer) {
+                /* Place point labels (cities, towns, etc.) */
+                ct_label_place_points(placer, pbf, coord, font, 16.0f);
 
-            ct_label_placer_free(placer);
+                /* Render with halo for readability (if enabled) */
+                float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
+                ct_render_labels(ctx, placer, font,
+                                CT_RGB(51, 51, 51),      /* Dark gray text */
+                                CT_RGB(255, 255, 255),   /* White halo */
+                                halo_width);
+
+                ct_label_placer_free(placer);
+            }
         }
     }
 
