@@ -375,18 +375,20 @@ CsTuiRenderer *cs_tui_create(const CsTuiConfig *config) {
 
     r->needs_full_redraw = true;
 
-    /* Setup terminal */
-    if (r->config.alternate_screen) {
-        cs_tui_output_append(r, CS_TUI_ALT_SCREEN_ON, strlen(CS_TUI_ALT_SCREEN_ON));
-        r->alternate_screen_active = true;
-    }
+    /* Setup terminal (skip in headless mode) */
+    if (!r->config.headless) {
+        if (r->config.alternate_screen) {
+            cs_tui_output_append(r, CS_TUI_ALT_SCREEN_ON, strlen(CS_TUI_ALT_SCREEN_ON));
+            r->alternate_screen_active = true;
+        }
 
-    if (r->config.hide_cursor) {
-        cs_tui_output_append(r, CS_TUI_CURSOR_HIDE, strlen(CS_TUI_CURSOR_HIDE));
-        r->cursor_hidden = true;
-    }
+        if (r->config.hide_cursor) {
+            cs_tui_output_append(r, CS_TUI_CURSOR_HIDE, strlen(CS_TUI_CURSOR_HIDE));
+            r->cursor_hidden = true;
+        }
 
-    cs_tui_output_flush(r);
+        cs_tui_output_flush(r);
+    }
 
     return r;
 }
@@ -394,17 +396,19 @@ CsTuiRenderer *cs_tui_create(const CsTuiConfig *config) {
 void cs_tui_free(CsTuiRenderer *r) {
     if (!r) return;
 
-    /* Restore terminal */
-    if (r->cursor_hidden) {
-        cs_tui_output_append(r, CS_TUI_CURSOR_SHOW, strlen(CS_TUI_CURSOR_SHOW));
-    }
+    /* Restore terminal (skip in headless mode) */
+    if (!r->config.headless) {
+        if (r->cursor_hidden) {
+            cs_tui_output_append(r, CS_TUI_CURSOR_SHOW, strlen(CS_TUI_CURSOR_SHOW));
+        }
 
-    if (r->alternate_screen_active) {
-        cs_tui_output_append(r, CS_TUI_ALT_SCREEN_OFF, strlen(CS_TUI_ALT_SCREEN_OFF));
-    }
+        if (r->alternate_screen_active) {
+            cs_tui_output_append(r, CS_TUI_ALT_SCREEN_OFF, strlen(CS_TUI_ALT_SCREEN_OFF));
+        }
 
-    cs_tui_output_append(r, CS_TUI_RESET, strlen(CS_TUI_RESET));
-    cs_tui_output_flush(r);
+        cs_tui_output_append(r, CS_TUI_RESET, strlen(CS_TUI_RESET));
+        cs_tui_output_flush(r);
+    }
 
     cs_tui_buffer_free(&r->buffer);
     cs_tui_output_free(r);
@@ -727,6 +731,14 @@ void cs_tui_invalidate(CsTuiRenderer *r) {
 
 void cs_tui_end(CsTuiRenderer *r) {
     if (!r) return;
+
+    /* Headless mode: just sync buffers, no terminal output */
+    if (r->config.headless) {
+        size_t buf_size = (size_t)(r->buffer.width * r->buffer.height) * sizeof(CsTuiCell);
+        memcpy(r->buffer.front, r->buffer.back, buf_size);
+        r->needs_full_redraw = false;
+        return;
+    }
 
     bool full_redraw = r->needs_full_redraw || !r->config.differential;
     r->needs_full_redraw = false;

@@ -51,6 +51,7 @@ typedef struct {
     bool alternate_screen;      /* Use alternate screen buffer */
     bool hide_cursor;           /* Hide cursor during rendering */
     bool differential;          /* Only update changed regions */
+    bool headless;              /* Headless mode: no terminal I/O, use dump_buffer() */
 } CsTuiConfig;
 
 /* Error codes */

@@ -17,6 +17,10 @@
  *   - Arrow keys: Adjust sliders/navigate dropdowns
  *   - Type: Input text in focused input
  *   - q: Quit
+ *
+ * Headless mode (--headless):
+ *   Reads commands from stdin, outputs debug info to stdout.
+ *   Commands: tab, shift-tab, enter, up, down, left, right, char:X, backspace, quit
  */
 
 #include <stdio.h>
@@ -85,6 +89,9 @@ static AppState g_app = {
     .running = true,
     .needs_redraw = true,
 };
+
+static bool g_headless = false;
+static int g_frame_number = 0;
 
 /* ============================================================================
  * Theme
@@ -196,13 +203,10 @@ static void get_terminal_size(int *w, int *h) {
 static Clay_Dimensions measure_text(Clay_StringSlice text, Clay_TextElementConfig *config, void *userData) {
     (void)userData;
     /* Simple monospace measurement: 1 char = 1 column */
-    /* Height is based on font_size but we map to rows */
     float width = (float)text.length;
     float height = 1.0f;  /* One row per line in TUI */
 
-    /* Scale width by font size ratio (base = 12) */
     if (config && config->fontSize > 0) {
-        /* In TUI, font size doesn't really matter for width, but we can adjust slightly */
         (void)config->fontSize;
     }
 
@@ -210,10 +214,74 @@ static Clay_Dimensions measure_text(Clay_StringSlice text, Clay_TextElementConfi
 }
 
 /* ============================================================================
- * UI Layout
+ * Headless Mode Support
  * ============================================================================ */
 
 static const char *PRIORITY_OPTIONS[] = {"Low", "Medium", "High", "Critical"};
+
+static void dump_frame(CsTuiRenderer *renderer, const char *input_cmd) {
+    printf("=== FRAME %d ===\n", g_frame_number++);
+    printf("INPUT: %s", input_cmd);
+    if (input_cmd[strlen(input_cmd) - 1] != '\n') printf("\n");
+    printf("FOCUS: 0x%08x\n", cs_focused_id());
+    printf("STATE: counter=%d, name=\"%s\", email=\"%s\", notifications=%s, darkmode=%s, enabled=%s, volume=%.2f, priority=%d (%s)\n",
+           g_app.counter,
+           g_app.name,
+           g_app.email,
+           g_app.notifications ? "true" : "false",
+           g_app.darkmode ? "true" : "false",
+           g_app.enabled ? "true" : "false",
+           g_app.volume,
+           g_app.priority,
+           PRIORITY_OPTIONS[g_app.priority]);
+    printf("BUFFER:\n");
+    char *dump = cs_tui_dump_buffer(renderer);
+    if (dump) {
+        printf("%s", dump);
+        free(dump);
+    }
+    printf("\n");
+    fflush(stdout);
+}
+
+/* Parse a headless command and execute it. Returns false on "quit". */
+static bool process_headless_command(const char *cmd) {
+    /* Trim whitespace */
+    while (*cmd == ' ' || *cmd == '\t') cmd++;
+    size_t len = strlen(cmd);
+    while (len > 0 && (cmd[len-1] == '\n' || cmd[len-1] == '\r' || cmd[len-1] == ' ')) {
+        len--;
+    }
+
+    if (len == 0) return true;  /* Empty line, continue */
+
+    if (strncmp(cmd, "quit", 4) == 0 || (len == 1 && cmd[0] == 'q')) {
+        return false;
+    } else if (strncmp(cmd, "tab", 3) == 0) {
+        cs_focus_next();
+    } else if (strncmp(cmd, "shift-tab", 9) == 0) {
+        cs_focus_prev();
+    } else if (strncmp(cmd, "enter", 5) == 0) {
+        cs_set_pending_click();
+    } else if (strncmp(cmd, "up", 2) == 0) {
+        cs_key_down(1001, false, false);
+    } else if (strncmp(cmd, "down", 4) == 0) {
+        cs_key_down(1002, false, false);
+    } else if (strncmp(cmd, "left", 4) == 0) {
+        cs_key_down(1004, false, false);
+    } else if (strncmp(cmd, "right", 5) == 0) {
+        cs_key_down(1003, false, false);
+    } else if (strncmp(cmd, "backspace", 9) == 0) {
+        cs_key_down(8, false, false);
+    } else if (strncmp(cmd, "char:", 5) == 0 && len > 5) {
+        cs_key_char((uint32_t)cmd[5]);
+    }
+    return true;
+}
+
+/* ============================================================================
+ * UI Layout
+ * ============================================================================ */
 
 static void render_ui(void) {
     /* Root container */
@@ -271,23 +339,17 @@ static void render_ui(void) {
                     .padding = 1,
                     .corner_radius = 0
                 };
-                CsInputResult name_result = cs_input(CS_ID("name_input"),
+                cs_input(CS_ID("name_input"),
                     g_app.name, &g_app.name_len, sizeof(g_app.name),
                     "Enter name...", &input_style);
-                if (name_result.changed) {
-                    g_app.needs_redraw = true;
-                }
 
                 /* Email input */
                 CLAY_TEXT(CLAY_STRING("Email:"),
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
 
-                CsInputResult email_result = cs_input(CS_ID("email_input"),
+                cs_input(CS_ID("email_input"),
                     g_app.email, &g_app.email_len, sizeof(g_app.email),
                     "user@example.com", &input_style);
-                if (email_result.changed) {
-                    g_app.needs_redraw = true;
-                }
 
                 /* Separator */
                 CLAY(CLAY_ID("Sep1"), {
@@ -402,15 +464,12 @@ static void render_ui(void) {
 
                     if (cs_button(CS_ID("inc_btn"), " + ", &btn_style).clicked) {
                         g_app.counter++;
-                        g_app.needs_redraw = true;
                     }
                     if (cs_button(CS_ID("dec_btn"), " - ", &btn_default).clicked) {
                         g_app.counter--;
-                        g_app.needs_redraw = true;
                     }
                     if (cs_button(CS_ID("reset_btn"), " Reset ", &btn_default).clicked) {
                         g_app.counter = 0;
-                        g_app.needs_redraw = true;
                     }
                 }
 
@@ -440,22 +499,28 @@ static void render_ui(void) {
  * Main
  * ============================================================================ */
 
-int main(void) {
-    /* Check if running in a terminal */
-    if (!cs_tui_is_tty()) {
-        fprintf(stderr, "Error: Not running in a terminal\n");
-        return 1;
+int main(int argc, char *argv[]) {
+    /* Check for --headless flag */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--headless") == 0) {
+            g_headless = true;
+        }
     }
 
-    /* Get initial terminal size */
-    get_terminal_size(&g_app.width, &g_app.height);
-
-    /* Setup signal handlers */
-    signal(SIGWINCH, handle_sigwinch);
-    signal(SIGINT, handle_sigint);
-
-    /* Enable raw mode for keyboard input */
-    enable_raw_mode();
+    if (g_headless) {
+        g_app.width = 80;
+        g_app.height = 24;
+    } else {
+        if (!cs_tui_is_tty()) {
+            fprintf(stderr, "Error: Not running in a terminal\n");
+            fprintf(stderr, "Use --headless for non-interactive mode\n");
+            return 1;
+        }
+        get_terminal_size(&g_app.width, &g_app.height);
+        signal(SIGWINCH, handle_sigwinch);
+        signal(SIGINT, handle_sigint);
+        enable_raw_mode();
+    }
 
     /* Initialize Clay */
     uint64_t clay_mem_size = Clay_MinMemorySize();
@@ -478,8 +543,10 @@ int main(void) {
     cs_tui_config_init(&tui_config);
     tui_config.width = g_app.width;
     tui_config.height = g_app.height;
-    tui_config.alternate_screen = true;
-    tui_config.hide_cursor = false;  /* Show cursor for input fields */
+    tui_config.headless = g_headless;
+    if (!g_headless) {
+        tui_config.alternate_screen = true;
+    }
 
     CsTuiRenderer *renderer = cs_tui_create(&tui_config);
     if (!renderer) {
@@ -488,97 +555,111 @@ int main(void) {
         return 1;
     }
 
-    /* Main loop */
-    struct timespec last_time, now;
-    clock_gettime(CLOCK_MONOTONIC, &last_time);
+    if (g_headless) {
+        /* ================================================================
+         * Headless mode: read commands from stdin, dump frames to stdout
+         * ================================================================ */
+        char cmd_buf[256];
 
-    while (g_app.running) {
-        /* Handle resize */
-        if (g_resize_pending) {
-            g_resize_pending = 0;
-            get_terminal_size(&g_app.width, &g_app.height);
-            cs_tui_resize(renderer, g_app.width, g_app.height);
-            Clay_SetLayoutDimensions((Clay_Dimensions){(float)g_app.width, (float)g_app.height});
-            g_app.needs_redraw = true;
-        }
-
-        /* Calculate delta time */
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        float dt = (float)(now.tv_sec - last_time.tv_sec) +
-                   (float)(now.tv_nsec - last_time.tv_nsec) / 1e9f;
-        last_time = now;
-
-        /* Read input (non-blocking) */
-        int key = read_key();
-        if (key > 0) {
-            g_app.needs_redraw = true;
-
-            if (key == 'q' || key == 'Q') {
-                g_app.running = false;
-            } else if (key == '\t') {
-                /* Tab - focus next */
-                cs_focus_next();
-            } else if (key == 1005) {
-                /* Shift-Tab - focus previous */
-                cs_focus_prev();
-            } else if (key == '\r' || key == '\n') {
-                /* Enter - activate */
-                cs_set_pending_click();
-            } else if (key == 1001) {
-                /* Up arrow */
-                cs_key_down(1001, false, false);
-            } else if (key == 1002) {
-                /* Down arrow */
-                cs_key_down(1002, false, false);
-            } else if (key == 1003) {
-                /* Right arrow */
-                cs_key_down(1003, false, false);
-            } else if (key == 1004) {
-                /* Left arrow */
-                cs_key_down(1004, false, false);
-            } else if (key == 127 || key == 8) {
-                /* Backspace */
-                cs_key_down(8, false, false);
-            } else if (key >= 32 && key < 127) {
-                /* Printable character */
-                cs_key_char((uint32_t)key);
-            }
-        }
-
-        /* Render frame */
+        /* Render initial frame */
         cs_frame_begin();
         Clay_BeginLayout();
-
         render_ui();
-
         Clay_RenderCommandArray commands = Clay_EndLayout();
-        cs_frame_end(dt);
+        cs_frame_end(0.016f);
 
-        /* Render to terminal */
         cs_tui_begin(renderer);
         cs_tui_render_clay_commands(renderer, commands.internalArray, commands.length);
+        cs_tui_end(renderer);
+        dump_frame(renderer, "(init)");
 
-        /* Position cursor for focused input */
-        uint32_t focused = cs_focused_id();
-        if (focused != 0 && cs_cursor_visible()) {
-            /* Get cursor position from ClayShards */
-            int cursor_pos = cs_cursor_pos();
-            /* For now, estimate position - would need element bounds in real impl */
-            cs_tui_set_cursor(renderer, cursor_pos + 5, 5, true);
-        } else {
-            cs_tui_set_cursor(renderer, 0, 0, false);
+        /* Process commands from stdin */
+        while (fgets(cmd_buf, sizeof(cmd_buf), stdin) != NULL) {
+            if (!process_headless_command(cmd_buf)) {
+                break;
+            }
+
+            cs_frame_begin();
+            Clay_BeginLayout();
+            render_ui();
+            commands = Clay_EndLayout();
+            cs_frame_end(0.016f);
+
+            cs_tui_begin(renderer);
+            cs_tui_render_clay_commands(renderer, commands.internalArray, commands.length);
+            cs_tui_end(renderer);
+            dump_frame(renderer, cmd_buf);
+        }
+    } else {
+        /* ================================================================
+         * Interactive mode: normal terminal UI
+         * ================================================================ */
+        struct timespec last_time, now;
+        clock_gettime(CLOCK_MONOTONIC, &last_time);
+
+        while (g_app.running) {
+            if (g_resize_pending) {
+                g_resize_pending = 0;
+                get_terminal_size(&g_app.width, &g_app.height);
+                cs_tui_resize(renderer, g_app.width, g_app.height);
+                Clay_SetLayoutDimensions((Clay_Dimensions){(float)g_app.width, (float)g_app.height});
+            }
+
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            float dt = (float)(now.tv_sec - last_time.tv_sec) +
+                       (float)(now.tv_nsec - last_time.tv_nsec) / 1e9f;
+            last_time = now;
+
+            int key = read_key();
+            if (key > 0) {
+                if (key == 'q' || key == 'Q') {
+                    g_app.running = false;
+                } else if (key == '\t') {
+                    cs_focus_next();
+                } else if (key == 1005) {
+                    cs_focus_prev();
+                } else if (key == '\r' || key == '\n') {
+                    cs_set_pending_click();
+                } else if (key == 1001) {
+                    cs_key_down(1001, false, false);
+                } else if (key == 1002) {
+                    cs_key_down(1002, false, false);
+                } else if (key == 1003) {
+                    cs_key_down(1003, false, false);
+                } else if (key == 1004) {
+                    cs_key_down(1004, false, false);
+                } else if (key == 127 || key == 8) {
+                    cs_key_down(8, false, false);
+                } else if (key >= 32 && key < 127) {
+                    cs_key_char((uint32_t)key);
+                }
+            }
+
+            cs_frame_begin();
+            Clay_BeginLayout();
+            render_ui();
+            Clay_RenderCommandArray commands = Clay_EndLayout();
+            cs_frame_end(dt);
+
+            cs_tui_begin(renderer);
+            cs_tui_render_clay_commands(renderer, commands.internalArray, commands.length);
+
+            uint32_t focused = cs_focused_id();
+            if (focused != 0 && cs_cursor_visible()) {
+                int cursor_pos = cs_cursor_pos();
+                cs_tui_set_cursor(renderer, cursor_pos + 5, 5, true);
+            } else {
+                cs_tui_set_cursor(renderer, 0, 0, false);
+            }
+
+            cs_tui_end(renderer);
+            usleep(16000);
         }
 
-        cs_tui_end(renderer);
-
-        /* Sleep a bit to avoid spinning */
-        usleep(16000);  /* ~60 FPS */
+        printf("\nGoodbye!\n");
     }
 
-    /* Cleanup */
     cs_tui_free(renderer);
     free(clay_mem);
-
-    printf("\nGoodbye!\n");
     return 0;
 }
