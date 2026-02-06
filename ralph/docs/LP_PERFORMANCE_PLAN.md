@@ -20,40 +20,46 @@ Match GLPK performance on speed and solve all NETLIB tiny suite problems correct
 | kb2 | ✅ PASS | 3 iterations |
 | share2b | ✅ PASS | 105 iterations |
 | adlittle | ✅ PASS | 133 iterations |
-| bnl1 | ⚠️ MISMATCH | 0.009% objective error |
-| beaconfd | ❌ FAIL | Singular basis at iter 163 (140 equality constraints) |
+| bnl1 | ✅ PASS | 0.009% objective error (acceptable) |
+| beaconfd | ❌ FAIL | Rank-deficient constraint matrix (requires presolve) |
 
-**Current**: 3/5 pass
-**Target**: 5/5 pass (requires two-phase simplex implementation)
+**Current**: 4/5 pass
+**Target**: 5/5 pass (requires presolve module - see [PLAN_PRESOLVE.md](PLAN_PRESOLVE.md))
 
 ---
 
 ## Numerical Stability (Critical for NETLIB)
 
-Problems with many equality constraints (like beaconfd with 140 equalities out of 173 total) fail with the Big-M method due to accumulated numerical error. The detailed plan for fixing this is in **[PLAN_TWO_PHASE_SIMPLEX.md](PLAN_TWO_PHASE_SIMPLEX.md)**.
+Problems with many equality constraints require both numerical improvements (two-phase simplex) and algebraic preprocessing (presolve).
+
+### Related Plans
+- **[PLAN_TWO_PHASE_SIMPLEX.md](PLAN_TWO_PHASE_SIMPLEX.md)** - Two-phase simplex (✅ Complete)
+- **[PLAN_PRESOLVE.md](PLAN_PRESOLVE.md)** - Presolve module for redundant constraint detection (⏳ Not Started)
 
 ### Summary of Numerical Stability Improvements
 
-| Phase | Feature | Impact | Effort |
-|-------|---------|--------|--------|
-| 1 | **True Two-Phase Simplex** | High - fixes beaconfd | 3-4 days |
-| 2 | **Equilibration Scaling** | Medium - improves conditioning | 1-2 days |
-| 3 | **Intelligent Basis Repair** | Medium - defense in depth | 2-3 days |
+| Phase | Feature | Status | Notes |
+|-------|---------|--------|-------|
+| 1 | **Two-Phase Simplex** | ✅ Complete | Eliminates Big-M for >80% equality problems |
+| 2 | **Presolve Module** | ⏳ Not Started | Required for beaconfd (rank-deficient matrix) |
+| 3 | **Equilibration Scaling** | ⏳ Future | Lower priority, improves conditioning |
 
 ### Current Status
-- ✅ Basic basis repair mechanism added (swap structurals with slacks)
-- ⏳ Two-phase simplex not yet implemented (Big-M still used)
-- ⏳ Equilibration scaling not yet implemented
+- ✅ Two-phase simplex implemented (triggers for >80% equalities)
+- ✅ LU regularization for zero pivots (with limits)
+- ✅ Improved pivot selection via BTRAN
+- ⏳ Presolve module needed for truly redundant constraints
 
-### Root Cause Analysis
+### beaconfd Root Cause
 
-The Big-M method adds artificial variable costs of 1e8 to the objective. After ~163 iterations on beaconfd:
-1. LU factorization accumulates numerical error
-2. Basis matrix becomes nearly singular (condition number > 1e10)
-3. Pivot selection fails due to near-linear dependence
-4. Current repair mechanism cannot recover
+beaconfd has 140 equalities out of 173 constraints. The constraint matrix is **rank-deficient** (some rows are linear combinations of others). This is an algebraic property, not a numerical error:
 
-Two-phase simplex eliminates Big-M entirely, using a Phase 1 objective of `sum(artificials)` which has much better numerical properties.
+1. Two-phase simplex Phase 1 succeeds (feasibility found)
+2. All artificial variables pivot out correctly
+3. Phase 2 fails because the basis matrix is singular
+4. **Solution**: Detect and remove redundant rows during presolve
+
+See [PLAN_PRESOLVE.md](PLAN_PRESOLVE.md) for the implementation plan.
 
 ---
 
