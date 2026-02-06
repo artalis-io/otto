@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClayShards TUI WebGL Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-family: system-ui, -apple-system, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+            font-size: 1.5em;
+            color: #fff;
+        }
+
+        .description {
+            margin-bottom: 20px;
+            color: #888;
+            text-align: center;
+            max-width: 600px;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .terminal-container {
+            background: #000;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+
+        #terminal {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+
+        .controls {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            min-width: 280px;
+        }
+
+        .control-group {
+            margin-bottom: 16px;
+        }
+
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            color: #ccc;
+        }
+
+        .control-group select,
+        .control-group input[type="range"] {
+            width: 100%;
+            padding: 6px;
+            border-radius: 4px;
+            border: 1px solid #444;
+            background: #333;
+            color: #fff;
+        }
+
+        .control-group input[type="range"] {
+            padding: 0;
+            height: 24px;
+        }
+
+        .range-value {
+            text-align: right;
+            font-size: 0.85em;
+            color: #888;
+            margin-top: 2px;
+        }
+
+        .preset-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .preset-buttons button {
+            flex: 1;
+            min-width: 60px;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px;
+            background: #444;
+            color: #fff;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .preset-buttons button:hover {
+            background: #555;
+        }
+
+        .preset-buttons button.active {
+            background: #5080b0;
+        }
+
+        .state-display {
+            background: #222;
+            border-radius: 4px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 0.85em;
+            line-height: 1.5;
+        }
+
+        .state-display .key {
+            color: #888;
+        }
+
+        .state-display .value {
+            color: #7cb;
+        }
+
+        .instructions {
+            margin-top: 20px;
+            padding: 15px;
+            background: #222;
+            border-radius: 8px;
+            font-size: 0.9em;
+            max-width: 600px;
+        }
+
+        .instructions kbd {
+            display: inline-block;
+            padding: 2px 6px;
+            background: #333;
+            border-radius: 3px;
+            border: 1px solid #555;
+            font-family: monospace;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 1.2em;
+            color: #888;
+        }
+
+        #error {
+            display: none;
+            color: #f88;
+            padding: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>ClayShards TUI WebGL Demo</h1>
+    <p class="description">
+        TUI components rendered in the browser via WebGL with retro CRT effects.
+        The same C code runs in WASM, outputting to a character buffer.
+    </p>
+
+    <div id="loading">Loading WASM...</div>
+    <div id="error"></div>
+
+    <div class="container" style="display: none;" id="main">
+        <div class="terminal-container">
+            <canvas id="terminal" tabindex="0"></canvas>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <label>CRT Preset</label>
+                <div class="preset-buttons">
+                    <button data-preset="off">Off</button>
+                    <button data-preset="subtle">Subtle</button>
+                    <button data-preset="retro" class="active">Retro</button>
+                    <button data-preset="arcade">Arcade</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Color Mode</label>
+                <div class="preset-buttons">
+                    <button data-color="rgb" class="active">RGB</button>
+                    <button data-color="amber">Amber</button>
+                    <button data-color="green">Green</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Scanlines</label>
+                <input type="range" id="scanlines" min="0" max="100" value="30">
+                <div class="range-value" id="scanlines-value">0.30</div>
+            </div>
+
+            <div class="control-group">
+                <label>Curvature</label>
+                <input type="range" id="curvature" min="0" max="100" value="30">
+                <div class="range-value" id="curvature-value">0.03</div>
+            </div>
+
+            <div class="control-group">
+                <label>Chromatic Aberration</label>
+                <input type="range" id="chromatic" min="0" max="100" value="10">
+                <div class="range-value" id="chromatic-value">0.001</div>
+            </div>
+
+            <div class="control-group">
+                <label>Application State</label>
+                <div class="state-display" id="state">
+                    <div><span class="key">Counter:</span> <span class="value" id="state-counter">0</span></div>
+                    <div><span class="key">Volume:</span> <span class="value" id="state-volume">0.70</span></div>
+                    <div><span class="key">Priority:</span> <span class="value" id="state-priority">Medium</span></div>
+                    <div><span class="key">Enabled:</span> <span class="value" id="state-enabled">true</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="instructions" id="instructions" style="display: none;">
+        <strong>Keyboard:</strong>
+        <kbd>Tab</kbd> Navigate between widgets |
+        <kbd>Enter</kbd> Activate buttons/toggles |
+        <kbd>Arrow Keys</kbd> Adjust sliders, navigate dropdowns |
+        <kbd>Type</kbd> Enter text in focused input
+    </div>
+
+    <script type="module">
+        import { TuiRenderer, TerminalFontAtlas, CrtEffects, CRT_COLOR_AMBER, CRT_COLOR_GREEN, CRT_COLOR_RGB } from './index.js';
+
+        const PRIORITY_OPTIONS = ['Low', 'Medium', 'High', 'Critical'];
+        const COLS = 80;
+        const ROWS = 24;
+        const CELL_WIDTH = 9;
+        const CELL_HEIGHT = 18;
+
+        async function main() {
+            const loadingEl = document.getElementById('loading');
+            const errorEl = document.getElementById('error');
+            const mainEl = document.getElementById('main');
+            const instructionsEl = document.getElementById('instructions');
+            const canvas = document.getElementById('terminal');
+
+            try {
+                // Load WASM with WASI stubs
+                const response = await fetch('../clay-shards-tui/wasm/build/demo.wasm');
+                if (!response.ok) {
+                    throw new Error(`Failed to load WASM: ${response.status}`);
+                }
+
+                // Instantiate with WASI stubs
+                const wasmBytes = await response.arrayBuffer();
+
+                // Wrapper object to hold memory reference (set after instantiation)
+                const ctx = { memory: null };
+
+                // Minimal WASI stubs for standalone WASM
+                const wasiStubs = {
+                    environ_sizes_get: (environCountPtr, environBufSizePtr) => {
+                        // No environment variables - write 0 count and 0 size
+                        if (ctx.memory) {
+                            const view = new DataView(ctx.memory.buffer);
+                            view.setUint32(environCountPtr, 0, true);
+                            view.setUint32(environBufSizePtr, 0, true);
+                        }
+                        return 0;
+                    },
+                    environ_get: (environ, environBuf) => {
+                        return 0;
+                    },
+                    fd_write: (fd, iovs, iovsLen, nwrittenPtr) => {
+                        // Calculate total bytes written and set nwritten
+                        if (ctx.memory) {
+                            const view = new DataView(ctx.memory.buffer);
+                            let totalWritten = 0;
+                            for (let i = 0; i < iovsLen; i++) {
+                                const ptr = iovs + i * 8;
+                                const len = view.getUint32(ptr + 4, true);
+                                totalWritten += len;
+                            }
+                            view.setUint32(nwrittenPtr, totalWritten, true);
+                        }
+                        return 0;
+                    },
+                    fd_read: () => 0,
+                    fd_close: () => 0,
+                    fd_seek: () => 0,
+                    proc_exit: (code) => {
+                        console.log('WASM exit:', code);
+                    }
+                };
+
+                const { instance } = await WebAssembly.instantiate(wasmBytes, {
+                    env: {
+                        emscripten_notify_memory_growth: () => {}
+                    },
+                    wasi_snapshot_preview1: wasiStubs
+                });
+                const wasm = instance.exports;
+                ctx.memory = wasm.memory;
+
+                // Initialize demo
+                console.log('Initializing demo with', COLS, 'x', ROWS);
+                if (!wasm.demo_init(COLS, ROWS)) {
+                    throw new Error('Failed to initialize demo');
+                }
+                console.log('Demo initialized, buffer at:', wasm.demo_get_buffer());
+
+                // Setup canvas size
+                canvas.width = COLS * CELL_WIDTH;
+                canvas.height = ROWS * CELL_HEIGHT;
+                canvas.style.width = `${canvas.width}px`;
+                canvas.style.height = `${canvas.height}px`;
+
+                // Create renderer
+                const renderer = new TuiRenderer(canvas, {
+                    cellWidth: CELL_WIDTH,
+                    cellHeight: CELL_HEIGHT
+                });
+
+                // Create and setup font atlas
+                const fontAtlas = new TerminalFontAtlas(renderer.gl);
+                fontAtlas.generateProceduralAtlas({
+                    fontFamily: "'Courier New', Consolas, monospace",
+                    fontSize: 16,
+                    fgColor: 'white',
+                    bgColor: 'transparent'
+                });
+                renderer.setFontAtlas(fontAtlas);
+                console.log('Font atlas ready:', fontAtlas.isReady(), 'glyph size:', fontAtlas.glyphWidth, 'x', fontAtlas.glyphHeight);
+
+                // Create CRT effects
+                const crt = new CrtEffects(renderer.gl);
+                crt.resize(canvas.width, canvas.height);
+                crt.applyPreset('retro');
+
+                // Hide loading, show main
+                loadingEl.style.display = 'none';
+                mainEl.style.display = 'flex';
+                instructionsEl.style.display = 'block';
+                canvas.focus();
+
+                // Setup keyboard input
+                canvas.addEventListener('keydown', (e) => {
+                    e.preventDefault();
+                    const mods = (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0);
+                    wasm.demo_key_down(e.keyCode, mods);
+                });
+
+                canvas.addEventListener('keypress', (e) => {
+                    if (e.charCode >= 32 && e.charCode < 127 && !e.ctrlKey && !e.altKey) {
+                        wasm.demo_key_char(e.charCode);
+                    }
+                });
+
+                // Setup mouse input
+                function getCellPos(e) {
+                    const rect = canvas.getBoundingClientRect();
+                    const x = Math.floor((e.clientX - rect.left) / CELL_WIDTH);
+                    const y = Math.floor((e.clientY - rect.top) / CELL_HEIGHT);
+                    return { x, y };
+                }
+
+                canvas.addEventListener('mousemove', (e) => {
+                    const { x, y } = getCellPos(e);
+                    wasm.demo_mouse_move(x, y);
+                });
+
+                canvas.addEventListener('mousedown', (e) => {
+                    const { x, y } = getCellPos(e);
+                    wasm.demo_mouse_click(x, y);
+                    canvas.focus();
+                });
+
+                canvas.addEventListener('mouseup', (e) => {
+                    const { x, y } = getCellPos(e);
+                    wasm.demo_mouse_release(x, y);
+                });
+
+                // Setup CRT controls
+                const presetButtons = document.querySelectorAll('[data-preset]');
+                presetButtons.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        presetButtons.forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        crt.applyPreset(btn.dataset.preset);
+                        updateSliders();
+                    });
+                });
+
+                const colorButtons = document.querySelectorAll('[data-color]');
+                colorButtons.forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        colorButtons.forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        const color = btn.dataset.color;
+                        if (color === 'amber') crt.setColorMode(CRT_COLOR_AMBER);
+                        else if (color === 'green') crt.setColorMode(CRT_COLOR_GREEN);
+                        else crt.setColorMode(CRT_COLOR_RGB);
+                    });
+                });
+
+                function updateSliders() {
+                    document.getElementById('scanlines').value = crt.params.scanlines * 100;
+                    document.getElementById('scanlines-value').textContent = crt.params.scanlines.toFixed(2);
+                    document.getElementById('curvature').value = crt.params.curvature * 1000;
+                    document.getElementById('curvature-value').textContent = crt.params.curvature.toFixed(3);
+                    document.getElementById('chromatic').value = crt.params.chromatic * 10000;
+                    document.getElementById('chromatic-value').textContent = crt.params.chromatic.toFixed(4);
+                }
+
+                document.getElementById('scanlines').addEventListener('input', (e) => {
+                    crt.params.scanlines = e.target.value / 100;
+                    document.getElementById('scanlines-value').textContent = crt.params.scanlines.toFixed(2);
+                });
+
+                document.getElementById('curvature').addEventListener('input', (e) => {
+                    crt.params.curvature = e.target.value / 1000;
+                    document.getElementById('curvature-value').textContent = crt.params.curvature.toFixed(3);
+                });
+
+                document.getElementById('chromatic').addEventListener('input', (e) => {
+                    crt.params.chromatic = e.target.value / 10000;
+                    document.getElementById('chromatic-value').textContent = crt.params.chromatic.toFixed(4);
+                });
+
+                updateSliders();
+
+                // Update app state display
+                function updateState() {
+                    document.getElementById('state-counter').textContent = wasm.demo_get_counter();
+                    document.getElementById('state-volume').textContent = wasm.demo_get_volume().toFixed(2);
+                    document.getElementById('state-priority').textContent = PRIORITY_OPTIONS[wasm.demo_get_priority()];
+                    document.getElementById('state-enabled').textContent = wasm.demo_get_enabled() ? 'true' : 'false';
+                }
+
+                // Render loop
+                let lastTime = 0;
+                let frameCount = 0;
+                function render(timestamp) {
+                    const dt = lastTime ? (timestamp - lastTime) / 1000 : 0.016;
+                    lastTime = timestamp;
+
+                    // Run WASM frame
+                    const cmdCount = wasm.demo_frame(dt);
+
+                    if (frameCount === 0) {
+                        console.log('First frame: commands =', cmdCount, 'buffer =', wasm.demo_get_buffer(), 'size =', wasm.demo_get_width(), 'x', wasm.demo_get_height());
+                    }
+                    frameCount++;
+
+                    // Clear and render
+                    renderer.clear(0.1, 0.1, 0.1);
+
+                    // Use demo_* function names instead of wasm_tui_*
+                    const renderOpts = {
+                        getBuffer: 'demo_get_buffer',
+                        getWidth: 'demo_get_width',
+                        getHeight: 'demo_get_height'
+                    };
+
+                    if (crt.isEnabled()) {
+                        crt.begin();
+                        renderer.renderBatched(wasm, renderOpts);
+                        crt.end(dt);
+                    } else {
+                        renderer.renderBatched(wasm, renderOpts);
+                    }
+
+                    // Update state display periodically
+                    if (Math.floor(timestamp / 100) !== Math.floor(lastTime / 100)) {
+                        updateState();
+                    }
+
+                    requestAnimationFrame(render);
+                }
+
+                requestAnimationFrame(render);
+
+            } catch (err) {
+                console.error('Error:', err);
+                loadingEl.style.display = 'none';
+                errorEl.style.display = 'block';
+                errorEl.textContent = `Error: ${err.message}\n\nMake sure to build the WASM module first:\ncd ../clay-shards-tui/wasm && make`;
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>
