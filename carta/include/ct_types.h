@@ -291,6 +291,7 @@ typedef struct {
     CTColor building_outline_color;
     CTColor forest_color;
     CTColor grass_color;
+    CTColor park_color;
     CTColor sand_color;
 
     /* Railway */
