@@ -83,10 +83,11 @@ Problems with many equality constraints require both numerical improvements (two
 
 ### beaconfd Status (Feb 2026)
 
-beaconfd has 140 equalities out of 173 constraints. After presolve:
-- ✅ Presolve reduces: 262 vars → 148, 173 cons → 87
-- ✅ Redundant row detection finds rank=87 (full rank)
-- ❌ Phase 2 fails with near-singular basis
+beaconfd has 140 equalities out of 173 constraints. Current status:
+- ✅ Presolve runs without errors (165 bounds tightened)
+- ❌ Without presolve: Phase 1 completes but Phase 2 fails at first pivot (theta=0.0)
+- ❌ With presolve: Phase 1 fails at iter 147 with pivot error
+- Root cause: Extreme degeneracy (theta=0.0) causing numerical instability
 
 **Root Cause Analysis:**
 1. The basis matrix becomes ill-conditioned during Phase 2 optimization
