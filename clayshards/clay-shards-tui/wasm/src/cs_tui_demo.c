@@ -292,10 +292,10 @@ static void render_ui(void) {
                     }
                 }
 
-                /* Counter display */
-                char counter_str[32];
-                snprintf(counter_str, sizeof(counter_str), "Counter: %d", g_app.counter);
-                CLAY_TEXT(((Clay_String){ .chars = counter_str, .length = (int)strlen(counter_str) }),
+                /* Counter display - use static buffer to persist until Clay_EndLayout */
+                static char counter_str[32];
+                int counter_len = snprintf(counter_str, sizeof(counter_str), "Counter: %d", g_app.counter);
+                CLAY_TEXT(((Clay_String){ .chars = counter_str, .length = counter_len }),
                          CLAY_TEXT_CONFIG({ .fontSize = 12, .textColor = THEME.text }));
             }
         }
