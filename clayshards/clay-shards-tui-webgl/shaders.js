@@ -156,6 +156,7 @@ export const CRT_FS = `
     uniform float u_chromatic;      // Chromatic aberration (0.0 - 0.01)
     uniform float u_flicker;        // Flicker amount (0.0 - 0.1)
     uniform float u_glow;           // Phosphor glow (0.0 - 1.0) - placeholder
+    uniform float u_glassReflection; // Glass reflection intensity (0.0 - 1.0)
     uniform int u_colorMode;        // 0=amber, 1=green, 2=white, 3=rgb
     uniform float u_alpha;          // Overall brightness (for power-off)
 
@@ -233,8 +234,29 @@ export const CRT_FS = `
             color *= flicker;
         }
 
-        // Apply alpha (for power-off fade)
+        // Apply alpha (for power-off fade) - but keep glass reflection
         color *= u_alpha;
+
+        // Glass reflection - simulates ambient light reflecting off curved CRT glass
+        // This stays visible even when screen is off (natural light, not phosphor)
+        if (u_glassReflection > 0.0) {
+            // Main reflection arc in upper-left area
+            vec2 reflectCenter = vec2(0.3, 0.25);
+            float reflectDist = length(v_uv - reflectCenter);
+            float arc = smoothstep(0.35, 0.15, reflectDist) * smoothstep(0.0, 0.2, reflectDist);
+
+            // Secondary smaller highlight
+            vec2 highlight = vec2(0.2, 0.15);
+            float highlightDist = length(v_uv - highlight);
+            float spot = smoothstep(0.12, 0.0, highlightDist);
+
+            // Subtle edge reflection on right side
+            float edgeReflect = smoothstep(0.7, 1.0, v_uv.x) * smoothstep(0.8, 0.3, v_uv.y);
+
+            // Combine reflections - stays visible even when alpha=0
+            float reflection = (arc * 0.6 + spot * 0.4 + edgeReflect * 0.2) * u_glassReflection;
+            color += vec3(reflection * 0.15);
+        }
 
         gl_FragColor = vec4(color, 1.0);
     }
