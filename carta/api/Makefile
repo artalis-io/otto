@@ -45,8 +45,8 @@ all: deps $(TARGET)
 
 # Build dependencies first
 deps:
-	$(MAKE) -C $(CARTA_DIR)
-	$(MAKE) -C $(SHARED_DIR)
+	$(MAKE) -C $(CARTA_DIR) lib
+	$(MAKE) -C $(SHARED_DIR) lib
 	@# Build vendor objects if needed
 	@if [ ! -f $(VENDOR_DIR)/mongoose/mongoose.o ]; then \
 		$(CC) $(CFLAGS) -c $(VENDOR_DIR)/mongoose/mongoose.c -o $(VENDOR_DIR)/mongoose/mongoose.o; \

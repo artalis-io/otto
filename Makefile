@@ -79,16 +79,16 @@ locus: shared
 fuelwise-api: fuelwise
 	$(MAKE) -C fuelwise/api
 
-# Carta tile server (depends on Carta)
-carta-api: carta shared
+# Carta tile server (api/Makefile handles deps)
+carta-api:
 	$(MAKE) -C carta/api
 
-# Velo route server (depends on Velo)
-velo-api: velo
+# Velo route server (api/Makefile handles deps)
+velo-api:
 	$(MAKE) -C velo/api
 
-# Locus geocoding server (depends on Locus)
-locus-api: locus
+# Locus geocoding server (api/Makefile handles deps)
+locus-api:
 	$(MAKE) -C locus/api
 
 # Run servers
