@@ -317,3 +317,31 @@ void ct_style_boundary(const CTStyle *style, CTBoundaryType boundary_type,
     *dash_out = dash;
     *gap_out = gap;
 }
+
+/*
+ * Get road casing width at a specific zoom level.
+ * Casing is the outline around roads that provides visual separation.
+ * At low zoom, casing is disabled for performance (2x road render savings).
+ */
+float ct_style_road_casing(int zoom)
+{
+    if (zoom >= 16) {
+        return 1.0f;     /* Full casing at high zoom */
+    } else if (zoom >= 14) {
+        return 0.5f;     /* Reduced casing at medium zoom */
+    }
+    return 0.0f;         /* No casing below z14 for performance */
+}
+
+/*
+ * Get railway casing width at a specific zoom level.
+ * Railways use casing for the distinctive tick-mark appearance.
+ * At low zoom, casing is disabled for performance.
+ */
+float ct_style_railway_casing(int zoom)
+{
+    if (zoom >= 14) {
+        return 0.5f;     /* Standard railway casing */
+    }
+    return 0.0f;         /* No casing below z14 for performance */
+}
