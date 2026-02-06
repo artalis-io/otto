@@ -128,6 +128,9 @@ typedef struct {
 
     /* Generic state */
     bool open;                  /* For collapsibles, dropdowns, etc. */
+
+    /* Value display buffer (for sliders, etc.) */
+    char value_buf[16];         /* Persists until next frame */
 } CsWidgetState;
 
 /* ============================================================================

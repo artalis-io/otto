@@ -186,15 +186,19 @@ CsSliderResult cs_slider(
 
         /* Optional value display */
         if (style->show_value) {
-            char value_buf[32];
-            int len = snprintf(value_buf, sizeof(value_buf), "%.1f", current_value);
-            if (len < 0) len = 0;
-            if (len >= (int)sizeof(value_buf)) len = (int)sizeof(value_buf) - 1;
-            Clay_String value_str = {.chars = value_buf, .length = len};
-            CLAY_TEXT(value_str, CLAY_TEXT_CONFIG({
-                .fontSize = (uint16_t)style->font_size,
-                .textColor = label_color
-            }));
+            /* Use widget state to persist the value string across the frame.
+             * Local buffer would go out of scope before Clay_EndLayout(). */
+            CsWidgetState *ws = cs_widget_state(id);
+            if (ws) {
+                int len = snprintf(ws->value_buf, sizeof(ws->value_buf), "%.1f", current_value);
+                if (len < 0) len = 0;
+                if (len >= (int)sizeof(ws->value_buf)) len = (int)sizeof(ws->value_buf) - 1;
+                Clay_String value_str = {.chars = ws->value_buf, .length = len};
+                CLAY_TEXT(value_str, CLAY_TEXT_CONFIG({
+                    .fontSize = (uint16_t)style->font_size,
+                    .textColor = label_color
+                }));
+            }
         }
     }
 
