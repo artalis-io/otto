@@ -2275,6 +2275,47 @@ int ct_pregenerate_tiles(const CTPregenConfig *config);
 | `src/ct_pregenerate.c` | **Create** - Pre-generation pipeline |
 | `benchmarks/bench_native.c` | **Create** - Performance benchmarks |
 
+### Known Performance Issues (Feb 2026)
+
+#### Building Outline Rendering at z14+
+
+**Problem**: z14 PNG tiles with buildings take ~280ms vs target ~75ms (3.7x slower)
+
+| Zoom | Buildings | Render Time | Status |
+|------|-----------|-------------|--------|
+| z10 | 0 | 72ms | ✅ On target |
+| z13 | 3631 | 154ms | ⚠️ 2x target |
+| z14 | 1501 | 280ms | ❌ 3.7x target |
+
+**Root cause**: Each building renders twice:
+1. `ct_render_polygon()` - Scanline fill (~fast)
+2. `ct_render_polygon_outline()` - Anti-aliased 1.5px polyline (~slow)
+
+The anti-aliased outline with Xiaolin Wu algorithm is expensive per-pixel. With 1500+ buildings, this dominates render time.
+
+**Potential fixes** (in order of impact/effort):
+
+1. **Skip outlines at z13-14** (Easy, high impact)
+   - Only render outlines at z15+ where individual buildings are important
+   - At z13-14, buildings are small enough that fill-only looks acceptable
+
+2. **Use 1px non-anti-aliased outlines** (Easy, medium impact)
+   - Replace Wu line drawing with Bresenham for building outlines
+   - Acceptable quality loss at lower zooms
+
+3. **Batch building rendering** (Medium, high impact)
+   - Render all building fills first, then all outlines
+   - Better CPU cache locality
+
+4. **Zoom-adaptive outline width** (Easy, low impact)
+   - z13: 0.5px outline
+   - z14: 1.0px outline
+   - z15+: 1.5px outline
+
+5. **Pre-render building layer to texture** (Hard, very high impact)
+   - Cache rendered building layer per tile
+   - Only re-render when buildings change
+
 ---
 
 ## 6. Client-Side MVT Rendering (WebGL)
