@@ -1133,22 +1133,39 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                     }
                     break;
 
-                case CT_LAYER_BUILDINGS:
+                case CT_LAYER_BUILDINGS: {
+                    /* Zoom-adaptive building outlines for performance:
+                     * z13: no outline (buildings are tiny, outlines add noise)
+                     * z14: 1px outline (single AA line, fast)
+                     * z15+: 1.5px outline (full quality)
+                     */
+                    float outline_width = 0.0f;
+                    if (tile->coord.z >= 15) {
+                        outline_width = 1.5f;
+                    } else if (tile->coord.z >= 14) {
+                        outline_width = 1.0f;
+                    }
+                    /* else z13 and below: no outline */
+
                     if (f->num_rings > 1 && f->ring_ends) {
-                        /* Multipolygon buildings - render with outline */
+                        /* Multipolygon buildings */
                         ct_render_multipolygon(ctx, scaled, f->num_points,
                                                f->ring_ends, f->num_rings,
                                                ctx->style.building_color);
-                        /* Add outline for multipolygon buildings */
-                        ct_render_polygon_outline(ctx, scaled, f->ring_ends[0],
-                                                  ctx->style.building_outline_color, 1.5f);
+                        if (outline_width > 0.0f) {
+                            ct_render_polygon_outline(ctx, scaled, f->ring_ends[0],
+                                                      ctx->style.building_outline_color, outline_width);
+                        }
                     } else {
-                        ct_render_polygon_filled(ctx, scaled, f->num_points,
-                                                 ctx->style.building_color,
-                                                 ctx->style.building_outline_color,
-                                                 1.5f);  /* Thicker outline for visibility */
+                        /* Simple buildings */
+                        ct_render_polygon(ctx, scaled, f->num_points, ctx->style.building_color);
+                        if (outline_width > 0.0f) {
+                            ct_render_polygon_outline(ctx, scaled, f->num_points,
+                                                      ctx->style.building_outline_color, outline_width);
+                        }
                     }
                     break;
+                }
 
                 case CT_LAYER_ROADS: {
                     int road_type = f->feature_type;
