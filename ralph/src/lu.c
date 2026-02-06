@@ -187,6 +187,13 @@ LUFactorization* lu_create(int m) {
     lu->cond_estimate = 1.0;
     lu->growth_factor = 1.0;
 
+    /* Initialize redundant row hints (set by caller before factorization) */
+    lu->redundant_rows = NULL;
+    lu->num_redundant = 0;
+    lu->allow_regularization = 0;
+    lu->max_regularizations = 0;
+    lu->num_regularized = 0;
+
     /* Pre-allocate dense workspace for fallback factorization (m×m matrix)
      * Allocated separately due to large size O(m²) */
     lu->dense_work = (double*)calloc((size_t)m * (size_t)m, sizeof(double));
@@ -335,7 +342,65 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
 
         /* Check for singular matrix */
         if (max_val < RALPH_PIVOT_TOL) {
-            return -1;  /* Singular or near-singular */
+            /* Check if this row corresponds to a redundant constraint.
+             * For two-phase simplex, redundant rows (with stuck artificials)
+             * cause singularity but can be safely regularized.
+             * The original row number at position k is lu->perm[k]. */
+            int can_regularize = 0;
+
+            /* First check: pre-marked redundant rows (most reliable) */
+            if (lu->redundant_rows && lu->num_redundant > 0) {
+                /* Check all unfactored rows (k to m-1) that could be pivot row */
+                for (int check = k; check < m; check++) {
+                    int orig_row = lu->perm[check];
+                    if (lu->redundant_rows[orig_row]) {
+                        can_regularize = 1;
+                        pivot_row = check;  /* Use this redundant row */
+                        break;
+                    }
+                }
+            }
+
+            /* Second check: allow_regularization flag for rank-deficient problems.
+             * If no pre-marked rows but regularization is allowed, regularize this row
+             * up to the limit. This handles problems with implicit redundancy. */
+            if (!can_regularize && lu->allow_regularization &&
+                lu->num_regularized < lu->max_regularizations) {
+                can_regularize = 1;
+                /* Use current pivot_row (k) - no need to search */
+            }
+
+            if (can_regularize) {
+                /* Regularize: set diagonal to 1.0 to make row independent.
+                 * For redundant rows, the artificial stays at zero anyway,
+                 * so this regularization preserves solution correctness. */
+                lu->num_regularized++;
+#ifdef RALPH_DEBUG_LU
+                fprintf(stderr, "[lu_factorize_dense] Regularizing row %d (orig %d) at step %d (total: %d)\n",
+                        pivot_row, lu->perm[pivot_row], k, lu->num_regularized);
+#endif
+                if (pivot_row != k) {
+                    /* Swap the redundant row into position k */
+                    for (int j = 0; j < m; j++) {
+                        double tmp = A[k + j * m];
+                        A[k + j * m] = A[pivot_row + j * m];
+                        A[pivot_row + j * m] = tmp;
+                    }
+                    int tmp = lu->perm[k];
+                    lu->perm[k] = lu->perm[pivot_row];
+                    lu->perm[pivot_row] = tmp;
+                }
+                /* Set diagonal to 1.0 (regularization) */
+                A[k + k * m] = 1.0;
+                max_val = 1.0;
+            } else {
+#ifdef RALPH_DEBUG_LU
+                fprintf(stderr, "[lu_factorize_dense] Singular at step %d, max_val=%.2e, redundant_rows=%p, num_redundant=%d, allow_reg=%d, max_reg=%d\n",
+                        k, max_val, (void*)lu->redundant_rows, lu->num_redundant,
+                        lu->allow_regularization, lu->max_regularizations);
+#endif
+                return -1;  /* Truly singular, no redundant row to help */
+            }
         }
 
         /* Swap rows if necessary */

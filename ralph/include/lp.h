@@ -155,6 +155,14 @@ typedef struct {
     double cond_estimate;   /* Estimated condition number */
     double growth_factor;   /* Growth in U during updates */
 
+    /* Redundant row hints (for two-phase simplex with stuck artificials)
+     * These point to external data from the tableau, not owned by LU */
+    const int *redundant_rows;  /* Bitmap: row[i]=1 if redundant (NULL if none) */
+    int num_redundant;          /* Count of redundant rows */
+    int allow_regularization;   /* 1 to allow regularizing zero pivots (for rank-deficient problems) */
+    int max_regularizations;    /* Limit on number of rows to regularize */
+    int num_regularized;        /* Count of rows regularized in current factorization */
+
     /* Pre-allocated workspace for hyper-sparse operations */
     double *hs_work1;       /* Dense workspace 1 */
     double *hs_work2;       /* Dense workspace 2 */
@@ -244,6 +252,8 @@ typedef struct {
     int *artificial_vars;       /* Indices of artificial variables */
     int num_artificial;         /* Count of artificial variables */
     int num_equalities;         /* Count of equality constraints */
+    int *redundant_rows;        /* Bitmap: row[i]=1 if redundant (stuck artificial) */
+    int num_redundant;          /* Count of redundant rows */
 
     /* Statistics */
     int iterations;
