@@ -852,10 +852,12 @@ TEST(render_options_fast)
     ASSERT_EQ(opts.render_buildings, 1);
     ASSERT_EQ(opts.render_roads, 1);
     ASSERT_EQ(opts.render_railways, 1);
-    ASSERT_EQ(opts.render_boundaries, 1);
 
-    /* Labels disabled for performance */
-    ASSERT_EQ(opts.render_labels, 0);
+    /* Boundaries disabled - expensive relation processing */
+    ASSERT_EQ(opts.render_boundaries, 0);
+
+    /* Labels enabled - useful for navigation */
+    ASSERT_EQ(opts.render_labels, 1);
 
     /* Expensive details should be disabled */
     ASSERT_EQ(opts.render_road_casing, 0);
@@ -865,10 +867,10 @@ TEST(render_options_fast)
     ASSERT_EQ(opts.render_label_halos, 0);
     ASSERT_EQ(opts.render_boundary_dashes, 0);
 
-    /* Zoom cutoffs should be very high (effectively disabled) */
+    /* Zoom cutoffs should be set appropriately */
     ASSERT(opts.casing_min_zoom >= 99);
     ASSERT(opts.building_outlines_min_zoom >= 99);
-    ASSERT(opts.labels_min_zoom >= 99);
+    ASSERT_EQ(opts.labels_min_zoom, 8);
 
     return 1;
 }
@@ -928,8 +930,9 @@ TEST(render_set_options)
     ct_render_options_fast(&fast_opts);
     ct_render_set_options(ctx, &fast_opts);
 
-    /* Verify options were applied */
-    ASSERT_EQ(ctx->options.render_labels, 0);
+    /* Verify options were applied - fast has labels=1, boundaries=0 */
+    ASSERT_EQ(ctx->options.render_labels, 1);
+    ASSERT_EQ(ctx->options.render_boundaries, 0);
     ASSERT_EQ(ctx->options.render_road_casing, 0);
 
     /* Set quality options */
@@ -939,6 +942,7 @@ TEST(render_set_options)
 
     /* Verify options were changed */
     ASSERT_EQ(ctx->options.render_labels, 1);
+    ASSERT_EQ(ctx->options.render_boundaries, 1);
     ASSERT_EQ(ctx->options.render_road_casing, 1);
 
     ct_render_free(ctx);

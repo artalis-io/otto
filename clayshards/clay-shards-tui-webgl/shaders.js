@@ -120,10 +120,13 @@ export const TERM_FS_BITMAP = `
  */
 export const CRT_VS = `
     attribute vec2 a_pos;
+    uniform vec2 u_scale;
+    uniform vec2 u_offset;
     varying vec2 v_uv;
 
     void main() {
-        gl_Position = vec4(a_pos * 2.0 - 1.0, 0.0, 1.0);
+        vec2 scaled = a_pos * u_scale + u_offset;
+        gl_Position = vec4(scaled * 2.0 - 1.0, 0.0, 1.0);
         v_uv = a_pos;
     }
 `;
@@ -154,6 +157,7 @@ export const CRT_FS = `
     uniform float u_flicker;        // Flicker amount (0.0 - 0.1)
     uniform float u_glow;           // Phosphor glow (0.0 - 1.0) - placeholder
     uniform int u_colorMode;        // 0=amber, 1=green, 2=white, 3=rgb
+    uniform float u_alpha;          // Overall brightness (for power-off)
 
     varying vec2 v_uv;
 
@@ -228,6 +232,9 @@ export const CRT_FS = `
             float flicker = 1.0 - u_flicker * 0.5 * sin(u_time * 60.0);
             color *= flicker;
         }
+
+        // Apply alpha (for power-off fade)
+        color *= u_alpha;
 
         gl_FragColor = vec4(color, 1.0);
     }
