@@ -325,7 +325,7 @@ static void cs_tui_buffer_free(CsTuiBuffer *buf) {
     buf->height = 0;
 }
 
-static void cs_tui_get_terminal_size(int *width, int *height) {
+void cs_tui_get_terminal_size(int *width, int *height) {
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
         *width = ws.ws_col;
@@ -955,6 +955,66 @@ void cs_tui_render_clay_commands(CsTuiRenderer *r, const void *commands, int cou
                 break;
         }
     }
+}
+
+/* ============================================================================
+ * Clay Initialization for TUI
+ * ============================================================================ */
+
+/**
+ * TUI text measurement callback for Clay.
+ * Returns 1 character = 1 unit width, 1 unit height (monospace).
+ */
+static Clay_Dimensions cs_tui_measure_text(
+    Clay_StringSlice text,
+    Clay_TextElementConfig *config,
+    void *userData
+) {
+    (void)config;
+    (void)userData;
+
+    /* In TUI mode, each character is exactly 1 cell wide, 1 cell tall */
+    return (Clay_Dimensions){
+        .width = (float)text.length,
+        .height = 1.0f
+    };
+}
+
+void *cs_tui_init_clay(int width, int height, int *out_width, int *out_height) {
+    /* Auto-detect terminal size if not specified */
+    if (width <= 0 || height <= 0) {
+        cs_tui_get_terminal_size(&width, &height);
+    }
+
+    /* Return dimensions to caller */
+    if (out_width) *out_width = width;
+    if (out_height) *out_height = height;
+
+    /* Allocate Clay memory */
+    uint64_t clay_mem_size = Clay_MinMemorySize();
+    void *clay_mem = malloc(clay_mem_size);
+    if (!clay_mem) {
+        return NULL;
+    }
+
+    /* Initialize Clay with character-based dimensions */
+    Clay_Arena arena = Clay_CreateArenaWithCapacityAndMemory(clay_mem_size, clay_mem);
+    Clay_Initialize(arena, (Clay_Dimensions){(float)width, (float)height},
+                    (Clay_ErrorHandler){0});
+
+    /* Set TUI text measurement: 1 char = 1 unit */
+    Clay_SetMeasureTextFunction(cs_tui_measure_text, NULL);
+
+    return clay_mem;
+}
+
+void cs_tui_update_clay_size(int width, int height) {
+    /* Auto-detect terminal size if not specified */
+    if (width <= 0 || height <= 0) {
+        cs_tui_get_terminal_size(&width, &height);
+    }
+
+    Clay_SetLayoutDimensions((Clay_Dimensions){(float)width, (float)height});
 }
 
 /* ============================================================================

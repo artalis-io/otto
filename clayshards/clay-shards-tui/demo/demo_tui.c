@@ -185,34 +185,6 @@ static void handle_sigint(int sig) {
     g_app.running = false;
 }
 
-static void get_terminal_size(int *w, int *h) {
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
-        *w = ws.ws_col;
-        *h = ws.ws_row;
-    } else {
-        *w = 80;
-        *h = 24;
-    }
-}
-
-/* ============================================================================
- * Clay Text Measurement
- * ============================================================================ */
-
-static Clay_Dimensions measure_text(Clay_StringSlice text, Clay_TextElementConfig *config, void *userData) {
-    (void)userData;
-    /* Simple monospace measurement: 1 char = 1 column */
-    float width = (float)text.length;
-    float height = 1.0f;  /* One row per line in TUI */
-
-    if (config && config->fontSize > 0) {
-        (void)config->fontSize;
-    }
-
-    return (Clay_Dimensions){width, height};
-}
-
 /* ============================================================================
  * Headless Mode Support
  * ============================================================================ */
@@ -533,24 +505,28 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Use --headless for non-interactive mode\n");
             return 1;
         }
-        get_terminal_size(&g_app.width, &g_app.height);
         signal(SIGWINCH, handle_sigwinch);
         signal(SIGINT, handle_sigint);
         enable_raw_mode();
     }
 
-    /* Initialize Clay */
-    uint64_t clay_mem_size = Clay_MinMemorySize();
-    void *clay_mem = malloc(clay_mem_size);
+    /* Initialize Clay with TUI character-based coordinates.
+     * cs_tui_init_clay() handles:
+     *   - Getting terminal size from OS (if width/height are 0)
+     *   - Allocating Clay memory
+     *   - Initializing Clay with character dimensions
+     *   - Setting up 1:1 character text measurement
+     */
+    void *clay_mem = cs_tui_init_clay(
+        g_headless ? g_app.width : 0,   /* 0 = auto-detect from OS */
+        g_headless ? g_app.height : 0,
+        &g_app.width,
+        &g_app.height
+    );
     if (!clay_mem) {
-        fprintf(stderr, "Error: Failed to allocate Clay memory\n");
+        fprintf(stderr, "Error: Failed to initialize Clay\n");
         return 1;
     }
-
-    Clay_Arena arena = Clay_CreateArenaWithCapacityAndMemory(clay_mem_size, clay_mem);
-    Clay_Initialize(arena, (Clay_Dimensions){(float)g_app.width, (float)g_app.height},
-                    (Clay_ErrorHandler){0});
-    Clay_SetMeasureTextFunction(measure_text, NULL);
 
     /* Initialize ClayShards */
     cs_init();
@@ -579,17 +555,21 @@ int main(int argc, char *argv[]) {
         char cmd_buf[256];
 
         /* Helper to render cursor in headless mode - use block character */
+        /* Only render for text inputs (when there's active text or bounds are valid) */
         #define RENDER_CURSOR() do { \
             uint32_t fid = cs_focused_id(); \
-            if (fid != 0 && cs_cursor_visible()) { \
+            if (fid != 0 && cs_cursor_visible() && cs_focused_text_len() >= 0) { \
                 float fx, fy, fw, fh; \
                 cs_focused_bounds(&fx, &fy, &fw, &fh); \
-                int cpos = cs_cursor_pos(); \
-                int cx = (int)fx + cpos; \
-                int cy = (int)fy; \
-                /* Render block cursor - visible in headless dump */ \
-                cs_tui_text(renderer, cx, cy, "\xE2\x96\x88", 3, \
-                           (CsTuiColor){255, 255, 0, 255}, NULL); /* █ U+2588 */ \
+                /* Only render if bounds are valid (text input sets these) */ \
+                if (fw > 0 && fh > 0) { \
+                    int cpos = cs_cursor_pos(); \
+                    int cx = (int)fx + cpos; \
+                    int cy = (int)fy; \
+                    /* Render block cursor - visible in headless dump */ \
+                    cs_tui_text(renderer, cx, cy, "\xE2\x96\x88", 3, \
+                               (CsTuiColor){255, 255, 0, 255}, NULL); /* █ U+2588 */ \
+                } \
             } \
         } while(0)
 
@@ -636,9 +616,9 @@ int main(int argc, char *argv[]) {
         while (g_app.running) {
             if (g_resize_pending) {
                 g_resize_pending = 0;
-                get_terminal_size(&g_app.width, &g_app.height);
+                cs_tui_get_terminal_size(&g_app.width, &g_app.height);
                 cs_tui_resize(renderer, g_app.width, g_app.height);
-                Clay_SetLayoutDimensions((Clay_Dimensions){(float)g_app.width, (float)g_app.height});
+                cs_tui_update_clay_size(g_app.width, g_app.height);
             }
 
             clock_gettime(CLOCK_MONOTONIC, &now);
