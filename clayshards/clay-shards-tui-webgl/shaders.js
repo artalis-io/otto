@@ -326,8 +326,8 @@ export const BEZEL_VS = `
 `;
 
 /**
- * Bezel fragment shader - renders RobCo-style monitor frame with 3D depth.
- * Features: normal mapping, industrial coating texture, curved screen cutout.
+ * Bezel fragment shader - Fallout-style terminal frame.
+ * Clean, utilitarian design with rounded screen opening.
  */
 export const BEZEL_FS = `
     precision highp float;
@@ -335,113 +335,28 @@ export const BEZEL_FS = `
     uniform sampler2D u_screen;
     uniform vec2 u_resolution;
     uniform float u_time;
-    uniform float u_bezelWidth;    // Bezel thickness (0.08 = 8%)
-    uniform float u_curvature;     // Screen curvature to match CRT
-    uniform float u_enabled;       // 0 or 1
+    uniform float u_bezelWidth;
+    uniform float u_curvature;
+    uniform float u_enabled;
 
     varying vec2 v_uv;
 
-    // Light direction (from top-left-front)
-    const vec3 lightDir = normalize(vec3(-0.4, 0.5, 1.0));
-    const vec3 lightColor = vec3(1.0, 0.98, 0.95);
-    const float ambient = 0.35;
-
-    // Hash functions for procedural textures
     float hash(vec2 p) {
         return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
     }
 
-    float hash3(vec3 p) {
-        return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
-    }
-
-    // Smooth noise
     float noise(vec2 p) {
         vec2 i = floor(p);
         vec2 f = fract(p);
         f = f * f * (3.0 - 2.0 * f);
-
-        float a = hash(i);
-        float b = hash(i + vec2(1.0, 0.0));
-        float c = hash(i + vec2(0.0, 1.0));
-        float d = hash(i + vec2(1.0, 1.0));
-
-        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+        return mix(mix(hash(i), hash(i + vec2(1,0)), f.x),
+                   mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
     }
 
-    // FBM for industrial coating texture
-    float fbm(vec2 p) {
-        float value = 0.0;
-        float amplitude = 0.5;
-        for (int i = 0; i < 4; i++) {
-            value += amplitude * noise(p);
-            p *= 2.0;
-            amplitude *= 0.5;
-        }
-        return value;
-    }
-
-    // Compute normal from height field (for bump mapping)
-    vec3 computeNormal(vec2 uv, float scale) {
-        float eps = 0.002;
-        float h = fbm(uv * scale);
-        float hx = fbm((uv + vec2(eps, 0.0)) * scale);
-        float hy = fbm((uv + vec2(0.0, eps)) * scale);
-
-        vec3 normal = normalize(vec3(
-            (h - hx) / eps * 0.15,
-            (h - hy) / eps * 0.15,
-            1.0
-        ));
-        return normal;
-    }
-
-    // Apply barrel distortion (same as CRT shader) for screen edge
-    vec2 curveUV(vec2 uv, float curvature) {
-        vec2 centered = uv * 2.0 - 1.0;
-        float r2 = dot(centered, centered);
-        centered *= 1.0 + curvature * r2;
-        return centered * 0.5 + 0.5;
-    }
-
-    // Check if point is inside curved screen area
-    bool isInScreen(vec2 uv, float bw, float curvature) {
-        vec2 screenMin = vec2(bw);
-        vec2 screenMax = vec2(1.0 - bw);
-
-        // First check rectangular bounds
-        if (uv.x < screenMin.x || uv.x > screenMax.x ||
-            uv.y < screenMin.y || uv.y > screenMax.y) {
-            return false;
-        }
-
-        // Map to screen space and check curvature
-        vec2 screenUV = (uv - screenMin) / (screenMax - screenMin);
-        vec2 curved = curveUV(screenUV, curvature);
-
-        // If curved UV is outside 0-1, we're in the curved corner area
-        return curved.x >= 0.0 && curved.x <= 1.0 &&
-               curved.y >= 0.0 && curved.y <= 1.0;
-    }
-
-    // Distance to curved screen edge (for bevels)
-    float distToScreenEdge(vec2 uv, float bw, float curvature) {
-        vec2 screenMin = vec2(bw);
-        vec2 screenMax = vec2(1.0 - bw);
-        vec2 screenUV = (uv - screenMin) / (screenMax - screenMin);
-
-        // Distance to rectangular edge
-        float rectDist = min(
-            min(uv.x - screenMin.x, screenMax.x - uv.x),
-            min(uv.y - screenMin.y, screenMax.y - uv.y)
-        );
-
-        // Curved corner adjustment
-        vec2 centered = screenUV * 2.0 - 1.0;
-        float cornerDist = length(centered) - 1.0;
-        float curveAdjust = curvature * cornerDist * 0.5;
-
-        return rectDist - curveAdjust * 0.1;
+    // Rounded rectangle SDF
+    float roundedRect(vec2 p, vec2 size, float radius) {
+        vec2 d = abs(p) - size + radius;
+        return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radius;
     }
 
     void main() {
@@ -451,219 +366,95 @@ export const BEZEL_FS = `
         }
 
         float bw = u_bezelWidth;
-        float curvature = u_curvature;
+        vec2 center = vec2(0.5);
 
-        // Screen area check with curvature
-        vec2 screenMin = vec2(bw);
-        vec2 screenMax = vec2(1.0 - bw);
+        // Screen opening with rounded corners
+        vec2 screenSize = vec2(0.5 - bw, 0.5 - bw);
+        float cornerRadius = 0.03 + u_curvature * 0.3;
+        float screenDist = roundedRect(v_uv - center, screenSize, cornerRadius);
 
-        if (isInScreen(v_uv, bw, curvature * 0.5)) {
-            // Inside screen - show CRT content
+        // Inside screen area
+        if (screenDist < 0.0) {
+            vec2 screenMin = vec2(bw);
+            vec2 screenMax = vec2(1.0 - bw);
             vec2 screenUV = (v_uv - screenMin) / (screenMax - screenMin);
             vec3 screen = texture2D(u_screen, screenUV).rgb;
 
-            // Inner shadow/bevel around screen edge
-            float edgeDist = distToScreenEdge(v_uv, bw, curvature);
-            float innerShadow = smoothstep(0.0, 0.02, edgeDist);
-
-            // Deep inset shadow
-            screen *= 0.6 + 0.4 * innerShadow;
-
-            // Subtle screen glass reflection
-            float glassReflect = pow(1.0 - screenUV.y, 3.0) * 0.08;
-            screen += vec3(glassReflect);
+            // Soft shadow at screen edges
+            float edgeShadow = smoothstep(0.0, -0.025, screenDist);
+            screen *= 0.7 + 0.3 * edgeShadow;
 
             gl_FragColor = vec4(screen, 1.0);
             return;
         }
 
-        // === BEZEL AREA ===
+        // === BEZEL ===
 
-        // Industrial coating base color (dark olive/gray like old equipment)
-        vec3 baseColor = vec3(0.18, 0.17, 0.14);
+        // Base color - dark industrial olive/gray
+        vec3 bezelColor = vec3(0.16, 0.15, 0.12);
 
-        // Surface texture - industrial powder coating with slight orange peel
-        float coatingNoise = fbm(v_uv * 80.0) * 0.08;
-        float fineGrain = noise(v_uv * 400.0) * 0.03;
-        baseColor += vec3(coatingNoise + fineGrain) * vec3(1.0, 0.95, 0.85);
+        // Subtle surface texture
+        float grain = noise(v_uv * 150.0) * 0.04;
+        bezelColor += grain;
 
-        // Compute surface normal for lighting (bump mapping)
-        vec3 normal = computeNormal(v_uv, 60.0);
+        // Simple top-down lighting gradient
+        float lightGrad = 0.85 + 0.3 * v_uv.y;
+        bezelColor *= lightGrad;
 
-        // Add larger surface undulations (casting imperfections)
-        float largeWave = fbm(v_uv * 15.0) * 0.3;
-        normal = normalize(normal + vec3(
-            sin(v_uv.x * 30.0 + largeWave) * 0.05,
-            sin(v_uv.y * 25.0 + largeWave) * 0.05,
-            0.0
-        ));
+        // Outer frame - thick raised border
+        float outerDist = min(min(v_uv.x, 1.0 - v_uv.x), min(v_uv.y, 1.0 - v_uv.y));
+        float frameWidth = 0.025;
 
-        // Lighting calculation
-        float NdotL = max(dot(normal, lightDir), 0.0);
-        float diffuse = NdotL * 0.6;
-
-        // Specular (subtle, matte surface)
-        vec3 viewDir = vec3(0.0, 0.0, 1.0);
-        vec3 halfDir = normalize(lightDir + viewDir);
-        float spec = pow(max(dot(normal, halfDir), 0.0), 20.0) * 0.15;
-
-        // Combine lighting
-        vec3 bezelColor = baseColor * (ambient + diffuse) * lightColor + vec3(spec);
-
-        // === Depth bevels ===
-
-        // Outer frame bevel (raised edge)
-        float outerDist = min(
-            min(v_uv.x, 1.0 - v_uv.x),
-            min(v_uv.y, 1.0 - v_uv.y)
-        );
-
-        if (outerDist < 0.015) {
-            float t = outerDist / 0.015;
-            // Outer lit edge
-            float edgeLight = (1.0 - t) * 0.3;
-            if (v_uv.y > 0.5) edgeLight *= 1.5; // Top edge catches more light
-            if (v_uv.x < 0.5) edgeLight *= 1.2; // Left edge catches light
-            bezelColor += vec3(edgeLight);
-            // Dark inner part of bevel
-            bezelColor *= 0.7 + 0.3 * t;
+        if (outerDist < frameWidth) {
+            float t = outerDist / frameWidth;
+            // Beveled edge - lit on top/left, shadowed on bottom/right
+            float bevel = 0.0;
+            if (v_uv.y > 0.98 || v_uv.x < 0.02) bevel = 0.15 * (1.0 - t);
+            if (v_uv.y < 0.02 || v_uv.x > 0.98) bevel = -0.1 * (1.0 - t);
+            bezelColor += bevel;
+            bezelColor *= 0.85 + 0.15 * t;
         }
 
-        // Inner bevel (around screen - recessed)
-        float innerDist = distToScreenEdge(v_uv, bw, curvature);
-        if (innerDist > 0.0 && innerDist < 0.025) {
-            float t = innerDist / 0.025;
-            // Dark shadow going into screen recess
-            bezelColor *= 0.5 + 0.5 * (1.0 - pow(1.0 - t, 2.0));
-            // Highlight on outer lip of recess
-            if (t > 0.7) {
-                float lipLight = (t - 0.7) / 0.3;
-                if (v_uv.y < 0.5 + bw) bezelColor += vec3(lipLight * 0.15); // Bottom lip lit
-                if (v_uv.x > 0.5 - bw) bezelColor += vec3(lipLight * 0.1);  // Right lip lit
+        // Inner lip around screen (recessed edge)
+        if (screenDist < 0.02) {
+            float t = screenDist / 0.02;
+            // Dark recess going into screen
+            bezelColor *= 0.6 + 0.4 * t;
+            // Lit inner lip
+            if (t > 0.5) {
+                float lipT = (t - 0.5) / 0.5;
+                bezelColor += vec3(0.08) * lipT * (0.5 + 0.5 * v_uv.y);
             }
         }
 
-        // === DETAILS ===
+        // === Simple details ===
 
-        // Nameplate (embossed brass plate)
-        vec2 npCenter = vec2(0.5, 0.965);
-        vec2 npSize = vec2(0.22, 0.018);
-        vec2 npDist = abs(v_uv - npCenter);
-        if (npDist.x < npSize.x && npDist.y < npSize.y) {
-            float npEdge = min(npSize.x - npDist.x, npSize.y - npDist.y);
-            vec3 brass = vec3(0.7, 0.55, 0.3);
-
-            // Brushed brass texture
-            brass += noise(vec2(v_uv.x * 500.0, v_uv.y * 50.0)) * 0.1;
-
-            // Embossed effect
-            if (npEdge < 0.004) {
-                float bevelT = npEdge / 0.004;
-                brass *= 0.6 + 0.4 * bevelT;
-                brass += vec3(0.2) * (1.0 - bevelT) * float(v_uv.y > npCenter.y);
-            }
-
-            // Engraved text suggestion (subtle horizontal lines)
-            float textLine = sin(v_uv.x * 300.0) * 0.5 + 0.5;
-            brass *= 0.95 + 0.05 * textLine;
-
-            bezelColor = brass;
+        // Small nameplate (top)
+        vec2 npPos = vec2(0.5, 0.97);
+        vec2 npSize = vec2(0.15, 0.012);
+        if (abs(v_uv.x - npPos.x) < npSize.x && abs(v_uv.y - npPos.y) < npSize.y) {
+            float npEdge = min(npSize.x - abs(v_uv.x - npPos.x), npSize.y - abs(v_uv.y - npPos.y));
+            vec3 plate = vec3(0.5, 0.42, 0.25); // Brass-ish
+            if (npEdge < 0.003) plate *= 0.7;
+            bezelColor = plate * (0.8 + 0.2 * v_uv.y);
         }
 
-        // Ventilation slots (top left) - recessed
-        for (int i = 0; i < 5; i++) {
-            vec2 ventCenter = vec2(0.06 + float(i) * 0.022, 0.962);
-            vec2 ventSize = vec2(0.008, 0.012);
-            vec2 vd = abs(v_uv - ventCenter);
-            if (vd.x < ventSize.x && vd.y < ventSize.y) {
-                float ventDepth = min(ventSize.x - vd.x, ventSize.y - vd.y);
-                if (ventDepth < 0.003) {
-                    // Vent edge bevel
-                    bezelColor *= 0.4 + 0.6 * (ventDepth / 0.003);
-                } else {
-                    // Deep dark interior
-                    bezelColor = vec3(0.02, 0.02, 0.015);
-                }
+        // Power indicator LED (top right)
+        vec2 ledPos = vec2(0.92, 0.97);
+        float ledDist = length(v_uv - ledPos);
+        if (ledDist < 0.008) {
+            float pulse = 0.7 + 0.3 * sin(u_time * 2.0);
+            float glow = smoothstep(0.008, 0.002, ledDist);
+            bezelColor = mix(bezelColor, vec3(0.2, 0.9, 0.3) * pulse, glow);
+        }
+
+        // Speaker grille (bottom) - horizontal lines
+        if (v_uv.y < 0.05 && v_uv.x > 0.35 && v_uv.x < 0.65) {
+            float lineY = fract(v_uv.y * 60.0);
+            if (lineY < 0.4) {
+                bezelColor *= 0.3; // Dark slots
             }
         }
-
-        // Power LED (top right) - recessed housing with glowing LED
-        vec2 ledPos = vec2(0.93, 0.962);
-        float ledDist = length((v_uv - ledPos) * vec2(1.0, 1.5)); // Slightly oval
-        if (ledDist < 0.015) {
-            if (ledDist > 0.01) {
-                // LED housing rim
-                bezelColor = vec3(0.08) * (1.0 + (ledDist - 0.01) / 0.005);
-            } else {
-                // LED glow
-                float pulse = 0.6 + 0.4 * sin(u_time * 1.5);
-                float intensity = (1.0 - ledDist / 0.01);
-                vec3 ledColor = vec3(0.1, 1.0, 0.2) * pulse * intensity;
-                // Bloom
-                ledColor += vec3(0.05, 0.3, 0.1) * pow(intensity, 0.5);
-                bezelColor = ledColor;
-            }
-        }
-
-        // Screws (4 corners) - Phillips head, recessed
-        vec2 screwPos[4];
-        screwPos[0] = vec2(0.035, 0.035);
-        screwPos[1] = vec2(0.965, 0.035);
-        screwPos[2] = vec2(0.035, 0.965);
-        screwPos[3] = vec2(0.965, 0.965);
-
-        for (int i = 0; i < 4; i++) {
-            float sd = length(v_uv - screwPos[i]);
-            if (sd < 0.018) {
-                if (sd > 0.014) {
-                    // Countersink recess
-                    float t = (sd - 0.014) / 0.004;
-                    bezelColor *= 0.5 + 0.5 * t;
-                } else if (sd > 0.012) {
-                    // Screw head edge
-                    bezelColor = vec3(0.35, 0.33, 0.28);
-                } else {
-                    // Screw head surface
-                    vec3 screwColor = vec3(0.45, 0.43, 0.38);
-                    // Dome shape lighting
-                    float dome = 1.0 - sd / 0.012;
-                    screwColor *= 0.8 + 0.4 * dome;
-
-                    // Phillips cross
-                    vec2 sc = v_uv - screwPos[i];
-                    float cross = min(abs(sc.x), abs(sc.y));
-                    if (cross < 0.002 && sd < 0.008) {
-                        screwColor *= 0.3; // Dark cross slot
-                    }
-                    bezelColor = screwColor;
-                }
-            }
-        }
-
-        // Model number label (bottom center) - recessed plate
-        vec2 lblCenter = vec2(0.5, 0.032);
-        vec2 lblSize = vec2(0.12, 0.012);
-        vec2 lblDist = abs(v_uv - lblCenter);
-        if (lblDist.x < lblSize.x && lblDist.y < lblSize.y) {
-            float lblEdge = min(lblSize.x - lblDist.x, lblSize.y - lblDist.y);
-            if (lblEdge < 0.003) {
-                bezelColor *= 0.6 + 0.4 * (lblEdge / 0.003);
-            } else {
-                // Slightly lighter recessed area for label
-                bezelColor = vec3(0.22, 0.21, 0.18);
-            }
-        }
-
-        // Wear and age effects
-        float wear = noise(v_uv * 20.0);
-        if (wear > 0.85) {
-            // Subtle scratches/wear marks
-            bezelColor *= 0.9 + 0.1 * noise(v_uv * 200.0);
-        }
-
-        // Edge wear (corners and edges show more use)
-        float cornerWear = (1.0 - outerDist * 20.0) * 0.1;
-        bezelColor += vec3(cornerWear * wear);
 
         gl_FragColor = vec4(bezelColor, 1.0);
     }
