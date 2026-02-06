@@ -2679,6 +2679,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                        iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
             }
         }
+
     }
 
     primal_remove_perturbation(tab);
@@ -2769,6 +2770,7 @@ int simplex_solve(SimplexSolver *solver) {
 
     /* Phase 2: Optimize */
     int status = simplex_phase2(solver);
+    (void)status;  /* Status is set in solver->status directly */
 
     solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
 

@@ -41,9 +41,14 @@ static PresolveContext* presolve_context_create(LPModel *model) {
     ctx->bound_tightening = 1;
     ctx->coefficient_reduction = 0;  /* Can be expensive */
     ctx->probing = 0;  /* MIP only */
+    ctx->detect_redundant_rows = 1;  /* Critical for equality-heavy problems */
 
     ctx->max_rounds = 10;
     ctx->current_round = 0;
+
+    /* Redundant row detection stats */
+    ctx->redundant_rows_found = 0;
+    ctx->matrix_rank = -1;  /* Not computed yet */
 
     /*
      * Allocate working arrays (batch allocation pattern).
@@ -636,6 +641,234 @@ int presolve_bound_tightening(PresolveContext *ctx) {
 }
 
 /* ============================================================================
+ * Redundant Row Detection via Gaussian Elimination
+ * ============================================================================ */
+
+/*
+ * Detect and remove linearly dependent (redundant) rows.
+ *
+ * Algorithm:
+ * 1. Build dense augmented matrix [A | b] from active rows/columns
+ * 2. Perform Gaussian elimination with partial pivoting
+ * 3. Rows that reduce to all-zeros in A are redundant
+ * 4. If b[row] != 0 for a zero row -> infeasible
+ *
+ * This is critical for problems like beaconfd which have 140 equalities
+ * out of 173 constraints - some are linear combinations of others.
+ */
+int presolve_detect_redundant_rows(PresolveContext *ctx) {
+    if (!ctx || !ctx->working) return 0;
+
+    LPModel *model = ctx->working;
+    int m_orig = model->num_cons;
+    int n_orig = model->num_vars;
+
+    /* Count active rows and columns */
+    int m_active = 0, n_active = 0;
+    for (int i = 0; i < m_orig; i++) {
+        if (!ctx->row_deleted[i]) m_active++;
+    }
+    for (int j = 0; j < n_orig; j++) {
+        if (!ctx->col_deleted[j]) n_active++;
+    }
+
+    if (m_active == 0 || n_active == 0) {
+        ctx->matrix_rank = 0;
+        return 0;
+    }
+
+    /* Build mapping from active indices to dense indices */
+    int *row_to_dense = (int *)malloc((size_t)m_orig * sizeof(int));
+    int *col_to_dense = (int *)malloc((size_t)n_orig * sizeof(int));
+    int *dense_to_row = (int *)malloc((size_t)m_active * sizeof(int));
+
+    if (!row_to_dense || !col_to_dense || !dense_to_row) {
+        free(row_to_dense);
+        free(col_to_dense);
+        free(dense_to_row);
+        return 0;
+    }
+
+    int dense_row = 0;
+    for (int i = 0; i < m_orig; i++) {
+        if (!ctx->row_deleted[i]) {
+            row_to_dense[i] = dense_row;
+            dense_to_row[dense_row] = i;
+            dense_row++;
+        } else {
+            row_to_dense[i] = -1;
+        }
+    }
+
+    int dense_col = 0;
+    for (int j = 0; j < n_orig; j++) {
+        if (!ctx->col_deleted[j]) {
+            col_to_dense[j] = dense_col;
+            dense_col++;
+        } else {
+            col_to_dense[j] = -1;
+        }
+    }
+
+    /* Allocate dense augmented matrix [A | b] in column-major order
+     * Size: m_active rows x (n_active + 1) columns */
+    size_t aug_cols = (size_t)n_active + 1;
+    double *A = (double *)calloc((size_t)m_active * aug_cols, sizeof(double));
+    int *pivot_col = (int *)malloc((size_t)m_active * sizeof(int));
+
+    if (!A || !pivot_col) {
+        free(row_to_dense);
+        free(col_to_dense);
+        free(dense_to_row);
+        free(A);
+        free(pivot_col);
+        return 0;
+    }
+
+    /* Fill the dense matrix from sparse CSC */
+    for (int j = 0; j < n_orig; j++) {
+        if (ctx->col_deleted[j]) continue;
+        int dc = col_to_dense[j];
+
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            int i = model->A->rowidx[p];
+            if (ctx->row_deleted[i]) continue;
+            int dr = row_to_dense[i];
+            A[dr + (size_t)dc * m_active] = model->A->values[p];
+        }
+    }
+
+    /* Fill the RHS column (last column of augmented matrix) */
+    for (int i = 0; i < m_orig; i++) {
+        if (ctx->row_deleted[i]) continue;
+        int dr = row_to_dense[i];
+        A[dr + (size_t)n_active * m_active] = model->b[i];
+    }
+
+    /* Gaussian elimination with partial pivoting */
+    int rank = 0;
+    int min_dim = (m_active < n_active) ? m_active : n_active;
+
+    for (int k = 0; k < min_dim; k++) {
+        pivot_col[k] = -1;
+    }
+
+    int col = 0;  /* Current column being processed */
+    for (int k = 0; k < min_dim && col < n_active; ) {
+        /* Find pivot: largest absolute value in column 'col' from row k onwards */
+        int best_row = -1;
+        double best_val = RALPH_PIVOT_TOL;
+
+        for (int i = k; i < m_active; i++) {
+            double val = fabs(A[i + (size_t)col * m_active]);
+            if (val > best_val) {
+                best_val = val;
+                best_row = i;
+            }
+        }
+
+        if (best_row < 0) {
+            /* No pivot in this column, try next column */
+            col++;
+            continue;
+        }
+
+        /* Swap rows k and best_row */
+        if (best_row != k) {
+            for (int j = col; j <= n_active; j++) {  /* Include RHS column */
+                double tmp = A[k + (size_t)j * m_active];
+                A[k + (size_t)j * m_active] = A[best_row + (size_t)j * m_active];
+                A[best_row + (size_t)j * m_active] = tmp;
+            }
+            /* Swap in dense_to_row mapping too */
+            int tmp_idx = dense_to_row[k];
+            dense_to_row[k] = dense_to_row[best_row];
+            dense_to_row[best_row] = tmp_idx;
+        }
+
+        /* Eliminate below pivot */
+        double pivot = A[k + (size_t)col * m_active];
+        for (int i = k + 1; i < m_active; i++) {
+            double factor = A[i + (size_t)col * m_active] / pivot;
+            if (fabs(factor) < RALPH_ZERO_TOL) continue;
+
+            A[i + (size_t)col * m_active] = 0.0;  /* Exact zero */
+            for (int j = col + 1; j <= n_active; j++) {  /* Include RHS */
+                A[i + (size_t)j * m_active] -= factor * A[k + (size_t)j * m_active];
+            }
+        }
+
+        pivot_col[k] = col;
+        rank++;
+        k++;
+        col++;
+    }
+
+    ctx->matrix_rank = rank;
+
+    /* Check rows rank..m_active-1 for redundancy/infeasibility */
+    int count = 0;
+    int infeasible = 0;
+
+    for (int k = rank; k < m_active; k++) {
+        /* Row k should be all zeros in A part */
+        int is_zero_row = 1;
+        for (int j = 0; j < n_active; j++) {
+            if (fabs(A[k + (size_t)j * m_active]) > RALPH_ZERO_TOL) {
+                is_zero_row = 0;
+                break;
+            }
+        }
+
+        if (is_zero_row) {
+            /* Check RHS */
+            double rhs = A[k + (size_t)n_active * m_active];
+            int orig_row = dense_to_row[k];
+            char sense = model->sense[orig_row];
+
+            if (sense == 'E') {
+                /* Equality: 0 = rhs must have rhs = 0 */
+                if (fabs(rhs) > RALPH_FEAS_TOL) {
+                    infeasible = 1;
+                    break;
+                }
+            } else if (sense == 'L') {
+                /* 0 <= rhs: satisfied if rhs >= 0 */
+                if (rhs < -RALPH_FEAS_TOL) {
+                    infeasible = 1;
+                    break;
+                }
+            } else if (sense == 'G') {
+                /* 0 >= rhs: satisfied if rhs <= 0 */
+                if (rhs > RALPH_FEAS_TOL) {
+                    infeasible = 1;
+                    break;
+                }
+            }
+
+            /* Row is redundant - mark for deletion */
+            ctx->row_deleted[orig_row] = 1;
+            count++;
+        }
+    }
+
+    ctx->redundant_rows_found = count;
+
+    /* Cleanup */
+    free(row_to_dense);
+    free(col_to_dense);
+    free(dense_to_row);
+    free(A);
+    free(pivot_col);
+
+    if (infeasible) {
+        return -1;  /* Inconsistent system */
+    }
+
+    return count;
+}
+
+/* ============================================================================
  * MIP-Specific Presolve: Probing
  * ============================================================================ */
 
@@ -1204,6 +1437,247 @@ int presolve_scp(PresolveContext *ctx) {
 }
 
 /* ============================================================================
+ * Build Reduced Model
+ * ============================================================================ */
+
+/*
+ * Build a reduced LPModel by physically removing deleted rows and columns.
+ *
+ * This is necessary because the working model still contains all original
+ * rows/columns - only marked as deleted in arrays. The simplex solver needs
+ * a properly sized model to work correctly.
+ *
+ * Parameters:
+ *   ctx     - Presolve context with deletion flags
+ *   var_map - Output: mapping from reduced var idx to original var idx
+ *   con_map - Output: mapping from reduced con idx to original con idx
+ *
+ * Returns:
+ *   New LPModel with only active rows/columns, or NULL on error.
+ */
+static LPModel* build_reduced_model(PresolveContext *ctx,
+                                    int *var_map, int *con_map) {
+    if (!ctx || !ctx->working) return NULL;
+
+    LPModel *orig = ctx->working;
+    int n_orig = orig->num_vars;
+    int m_orig = orig->num_cons;
+
+    /* Count active rows and columns */
+    int n_new = 0, m_new = 0;
+    for (int j = 0; j < n_orig; j++) {
+        if (!ctx->col_deleted[j]) n_new++;
+    }
+    for (int i = 0; i < m_orig; i++) {
+        if (!ctx->row_deleted[i]) m_new++;
+    }
+
+    /* If no reduction, just return a copy of the working model */
+    if (n_new == n_orig && m_new == m_orig) {
+        return lp_model_copy(orig);
+    }
+
+    /* Build reverse mapping: original idx -> new idx */
+    int *col_map_inv = (int *)malloc((size_t)n_orig * sizeof(int));
+    int *row_map_inv = (int *)malloc((size_t)m_orig * sizeof(int));
+
+    if (!col_map_inv || !row_map_inv) {
+        free(col_map_inv);
+        free(row_map_inv);
+        return NULL;
+    }
+
+    int new_col = 0;
+    for (int j = 0; j < n_orig; j++) {
+        if (!ctx->col_deleted[j]) {
+            col_map_inv[j] = new_col;
+            if (var_map) var_map[new_col] = j;
+            new_col++;
+        } else {
+            col_map_inv[j] = -1;
+        }
+    }
+
+    int new_row = 0;
+    for (int i = 0; i < m_orig; i++) {
+        if (!ctx->row_deleted[i]) {
+            row_map_inv[i] = new_row;
+            if (con_map) con_map[new_row] = i;
+            new_row++;
+        } else {
+            row_map_inv[i] = -1;
+        }
+    }
+
+    /* Create new model */
+    LPModel *reduced = lp_model_create();
+    if (!reduced) {
+        free(col_map_inv);
+        free(row_map_inv);
+        return NULL;
+    }
+
+    /* Copy problem metadata */
+    reduced->obj_sense = orig->obj_sense;
+    reduced->obj_offset = orig->obj_offset;
+    if (orig->name) {
+        reduced->name = strdup(orig->name);
+    }
+
+    /* Allocate arrays for new dimensions */
+    reduced->num_vars = n_new;
+    reduced->num_cons = m_new;
+
+    reduced->c = (double *)calloc((size_t)n_new, sizeof(double));
+    reduced->lb = (double *)malloc((size_t)n_new * sizeof(double));
+    reduced->ub = (double *)malloc((size_t)n_new * sizeof(double));
+    reduced->var_type = (char *)malloc((size_t)n_new * sizeof(char));
+    reduced->b = (double *)malloc((size_t)m_new * sizeof(double));
+    reduced->sense = (char *)malloc((size_t)m_new * sizeof(char));
+
+    if (!reduced->c || !reduced->lb || !reduced->ub ||
+        !reduced->var_type || !reduced->b || !reduced->sense) {
+        free(col_map_inv);
+        free(row_map_inv);
+        lp_model_free(reduced);
+        return NULL;
+    }
+
+    /* Copy variable data */
+    new_col = 0;
+    reduced->num_integers = 0;
+    reduced->num_binary = 0;
+    for (int j = 0; j < n_orig; j++) {
+        if (!ctx->col_deleted[j]) {
+            reduced->c[new_col] = orig->c[j];
+            reduced->lb[new_col] = orig->lb[j];
+            reduced->ub[new_col] = orig->ub[j];
+            reduced->var_type[new_col] = orig->var_type[j];
+            if (orig->var_type[j] == 'I' || orig->var_type[j] == 'B') {
+                reduced->num_integers++;
+                if (orig->var_type[j] == 'B') reduced->num_binary++;
+            }
+            new_col++;
+        }
+    }
+
+    /* Copy constraint data */
+    new_row = 0;
+    for (int i = 0; i < m_orig; i++) {
+        if (!ctx->row_deleted[i]) {
+            reduced->b[new_row] = orig->b[i];
+            reduced->sense[new_row] = orig->sense[i];
+            new_row++;
+        }
+    }
+
+    /* Build new sparse matrix: count non-zeros per column first */
+    int *new_colptr = (int *)calloc((size_t)(n_new + 1), sizeof(int));
+    if (!new_colptr) {
+        free(col_map_inv);
+        free(row_map_inv);
+        lp_model_free(reduced);
+        return NULL;
+    }
+
+    /* Count nnz per column */
+    int total_nnz = 0;
+
+    /* Check if original matrix exists and has data */
+    if (!orig->A || !orig->A->colptr || !orig->A->rowidx || !orig->A->values) {
+        fprintf(stderr, "build_reduced_model: orig->A is NULL or incomplete!\n");
+        fprintf(stderr, "  orig->A=%p, num_elements=%d\n",
+                (void*)orig->A, orig->num_elements);
+        /* Fall back to empty matrix */
+    } else {
+        for (int j = 0; j < n_orig; j++) {
+            if (ctx->col_deleted[j]) continue;
+            int new_j = col_map_inv[j];
+
+            for (int p = orig->A->colptr[j]; p < orig->A->colptr[j + 1]; p++) {
+                int i = orig->A->rowidx[p];
+                if (!ctx->row_deleted[i]) {
+                    new_colptr[new_j + 1]++;
+                    total_nnz++;
+                }
+            }
+        }
+    }
+
+    /* Convert counts to offsets */
+    for (int j = 0; j < n_new; j++) {
+        new_colptr[j + 1] += new_colptr[j];
+    }
+
+    /* Allocate sparse arrays */
+    int *new_rowidx = (int *)malloc((size_t)total_nnz * sizeof(int));
+    double *new_values = (double *)malloc((size_t)total_nnz * sizeof(double));
+    int *insert_pos = (int *)malloc((size_t)n_new * sizeof(int));
+
+    if (!new_rowidx || !new_values || !insert_pos) {
+        free(col_map_inv);
+        free(row_map_inv);
+        free(new_colptr);
+        free(new_rowidx);
+        free(new_values);
+        free(insert_pos);
+        lp_model_free(reduced);
+        return NULL;
+    }
+
+    /* Initialize insert positions */
+    for (int j = 0; j < n_new; j++) {
+        insert_pos[j] = new_colptr[j];
+    }
+
+    /* Copy non-zero entries */
+    for (int j = 0; j < n_orig; j++) {
+        if (ctx->col_deleted[j]) continue;
+        int new_j = col_map_inv[j];
+
+        for (int p = orig->A->colptr[j]; p < orig->A->colptr[j + 1]; p++) {
+            int i = orig->A->rowidx[p];
+            if (!ctx->row_deleted[i]) {
+                int new_i = row_map_inv[i];
+                int pos = insert_pos[new_j]++;
+                new_rowidx[pos] = new_i;
+                new_values[pos] = orig->A->values[p];
+            }
+        }
+    }
+
+    /* Create sparse matrix */
+    reduced->A = sparse_create(m_new, n_new, total_nnz);
+    if (!reduced->A) {
+        free(col_map_inv);
+        free(row_map_inv);
+        free(new_colptr);
+        free(new_rowidx);
+        free(new_values);
+        free(insert_pos);
+        lp_model_free(reduced);
+        return NULL;
+    }
+
+    /* Copy sparse data */
+    memcpy(reduced->A->colptr, new_colptr, (size_t)(n_new + 1) * sizeof(int));
+    memcpy(reduced->A->rowidx, new_rowidx, (size_t)total_nnz * sizeof(int));
+    memcpy(reduced->A->values, new_values, (size_t)total_nnz * sizeof(double));
+    reduced->A->nnz = total_nnz;  /* CRITICAL: set nnz in sparse matrix */
+    reduced->num_elements = total_nnz;
+
+    /* Cleanup temporaries */
+    free(col_map_inv);
+    free(row_map_inv);
+    free(new_colptr);
+    free(new_rowidx);
+    free(new_values);
+    free(insert_pos);
+
+    return reduced;
+}
+
+/* ============================================================================
  * Main Presolve Interface
  * ============================================================================ */
 
@@ -1290,16 +1764,25 @@ PresolveResult* presolve(LPModel *model) {
         }
     }
 
+    /* Redundant row detection via rank computation.
+     * This is expensive O(m*n*min(m,n)) so we do it once AFTER other
+     * reductions have stabilized. Critical for equality-heavy problems
+     * like beaconfd (140 equalities out of 173 constraints). */
+    if (status >= 0 && ctx->detect_redundant_rows) {
+        int n = presolve_detect_redundant_rows(ctx);
+        if (n < 0) {
+            status = -1;  /* Inconsistent system detected */
+        } else {
+            result->cons_removed += n;
+        }
+    }
+
     if (status < 0) {
         /* Problem is infeasible */
         free(result);
         presolve_context_free(ctx);
         return NULL;
     }
-
-    /* Build reduced model */
-    result->reduced_model = ctx->working;
-    ctx->working = NULL;  /* Transfer ownership */
 
     /* Preserve original variable types for MIP */
     result->num_orig_vars = model->num_vars;
@@ -1308,57 +1791,51 @@ PresolveResult* presolve(LPModel *model) {
         memcpy(result->orig_var_types, model->var_type, model->num_vars * sizeof(char));
     }
 
-    /* Ensure reduced model has correct variable types */
-    if (result->reduced_model && result->reduced_model->var_type) {
-        /* The working model was a copy of original, but we need to update
-         * var_type array to reflect only non-deleted variables in correct order */
-        int new_var = 0;
+    /* Count active dimensions for mapping arrays */
+    int n_new = 0, m_new = 0;
+    for (int j = 0; j < model->num_vars; j++) {
+        if (!ctx->col_deleted[j]) n_new++;
+    }
+    for (int i = 0; i < model->num_cons; i++) {
+        if (!ctx->row_deleted[i]) m_new++;
+    }
+
+    /* Build mappings (allocated to reduced size, not original size) */
+    result->var_map = (int*)calloc(n_new > 0 ? n_new : 1, sizeof(int));
+    result->con_map = (int*)calloc(m_new > 0 ? m_new : 1, sizeof(int));
+    result->var_map_inv = (int*)calloc(model->num_vars, sizeof(int));
+    result->con_map_inv = (int*)calloc(model->num_cons, sizeof(int));
+
+    /* Build reduced model with mappings */
+    result->reduced_model = build_reduced_model(ctx, result->var_map, result->con_map);
+
+    if (!result->reduced_model) {
+        presolve_free(result);
+        presolve_context_free(ctx);
+        return NULL;
+    }
+
+    /* Build inverse mappings */
+    if (result->var_map_inv) {
         for (int j = 0; j < model->num_vars; j++) {
-            if (!ctx->col_deleted[j]) {
-                result->reduced_model->var_type[new_var] = model->var_type[j];
-                new_var++;
-            }
+            result->var_map_inv[j] = -1;  /* Default: deleted */
         }
-        /* Recount integers and binaries */
-        result->reduced_model->num_integers = 0;
-        result->reduced_model->num_binary = 0;
-        for (int j = 0; j < result->reduced_model->num_vars; j++) {
-            if (result->reduced_model->var_type[j] == 'I' ||
-                result->reduced_model->var_type[j] == 'B') {
-                result->reduced_model->num_integers++;
-                if (result->reduced_model->var_type[j] == 'B') {
-                    result->reduced_model->num_binary++;
-                }
+        for (int j = 0; j < n_new; j++) {
+            int orig_j = result->var_map[j];
+            if (orig_j >= 0 && orig_j < model->num_vars) {
+                result->var_map_inv[orig_j] = j;
             }
         }
     }
 
-    /* Build mappings */
-    result->var_map = (int*)calloc(model->num_vars, sizeof(int));
-    result->con_map = (int*)calloc(model->num_cons, sizeof(int));
-    result->var_map_inv = (int*)calloc(model->num_vars, sizeof(int));
-    result->con_map_inv = (int*)calloc(model->num_cons, sizeof(int));
-
-    if (result->var_map && result->con_map) {
-        int new_var = 0;
-        for (int j = 0; j < model->num_vars; j++) {
-            if (!ctx->col_deleted[j]) {
-                result->var_map_inv[j] = new_var;
-                result->var_map[new_var] = j;
-                new_var++;
-            } else {
-                result->var_map_inv[j] = -1;
-            }
-        }
-
-        int new_con = 0;
+    if (result->con_map_inv) {
         for (int i = 0; i < model->num_cons; i++) {
-            if (!ctx->row_deleted[i]) {
-                result->con_map_inv[i] = new_con;
-                result->con_map[new_con] = i;
-                new_con++;
-            } else {
-                result->con_map_inv[i] = -1;
+            result->con_map_inv[i] = -1;  /* Default: deleted */
+        }
+        for (int i = 0; i < m_new; i++) {
+            int orig_i = result->con_map[i];
+            if (orig_i >= 0 && orig_i < model->num_cons) {
+                result->con_map_inv[orig_i] = i;
             }
         }
     }
