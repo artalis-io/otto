@@ -72,22 +72,18 @@ CsInputResult cs_input(
         : *len;
 
     /* Colors - using constants from cs_common.h */
-    /* Check hover early for color decisions */
-    Clay_ElementId clay_id = (Clay_ElementId){.id = id, .stringId = {0}};
-    bool is_hovered = Clay_PointerOver(clay_id);
-
-    /* Use brighter gray for focus, slightly lighter for hover */
     Clay_Color bg = is_focused
-        ? (Clay_Color){CS_COLOR_BTN_GRAY_FOCUS}
-        : is_hovered
-            ? (Clay_Color){CS_COLOR_BG_HOVER}
-            : (Clay_Color){CS_COLOR_BG_DEFAULT};
+        ? (Clay_Color){CS_COLOR_BG_FOCUSED}
+        : (Clay_Color){CS_COLOR_BG_DEFAULT};
     Clay_Color border = is_focused
         ? (Clay_Color){CS_COLOR_BORDER_FOCUSED}
         : (Clay_Color){CS_COLOR_BORDER};
     Clay_Color text_color = (*len == 0 && !is_focused)
         ? (Clay_Color){CS_COLOR_TEXT_MUTED}
         : (Clay_Color){CS_COLOR_TEXT};
+
+    /* Build Clay element */
+    Clay_ElementId clay_id = (Clay_ElementId){.id = id, .stringId = {0}};
 
     /* Determine sizing */
     Clay_SizingAxis width_sizing = CLAY_SIZING_FIT(0);
@@ -166,7 +162,9 @@ CsInputResult cs_input(
         }
     }
 
-    /* Track hover state (but don't auto-focus - input requires click or Tab) */
+    /* Check interaction */
+    bool is_hovered = Clay_PointerOver(clay_id);
+
     if (is_hovered) {
         g->hovered_id = id;
     }

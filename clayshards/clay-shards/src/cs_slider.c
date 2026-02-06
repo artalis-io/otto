@@ -87,11 +87,6 @@ CsSliderResult cs_slider(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
-    /* Focus follows hover */
-    if (is_hovered) {
-        g->focused_id = id;
-    }
-
     /* Check if we're currently dragging this slider */
     bool is_dragging = (g->dragging_id == id);
     result.dragging = is_dragging;
@@ -141,7 +136,6 @@ CsSliderResult cs_slider(
         g->dragging_id = id;
         is_dragging = true;
         result.dragging = true;
-        g->focused_id = id;  /* Focus on drag start */
     }
 
     /* Handle dragging - calculate value from pointer position */
@@ -183,13 +177,9 @@ CsSliderResult cs_slider(
      * RENDERING - Now render with the updated value
      * ======================================================================== */
 
-    /* Colors - show focus state via track background */
-    Clay_Color track_bg = is_focused
-        ? (Clay_Color){CS_COLOR_BTN_GRAY_FOCUS}
-        : (Clay_Color){CS_COLOR_BTN_GRAY};
-    Clay_Color track_fill = is_focused
-        ? (Clay_Color){CS_COLOR_BTN_BLUE_FOCUS}
-        : (Clay_Color){CS_COLOR_BTN_BLUE};
+    /* Colors */
+    Clay_Color track_bg = (Clay_Color){CS_COLOR_BTN_GRAY};
+    Clay_Color track_fill = (Clay_Color){CS_COLOR_BTN_BLUE};
     Clay_Color label_color = (Clay_Color){CS_COLOR_TEXT};
     Clay_Color border_color = (Clay_Color){CS_COLOR_BORDER_FOCUSED};
 
