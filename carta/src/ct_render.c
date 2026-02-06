@@ -176,14 +176,14 @@ void ct_render_options_default(CTRenderOptions *opts)
 
 void ct_render_options_fast(CTRenderOptions *opts)
 {
-    /* All layers ON (still need base map) */
+    /* All layers ON except boundaries (expensive relation processing) */
     opts->render_water = 1;
     opts->render_landuse = 1;
     opts->render_buildings = 1;
     opts->render_roads = 1;
     opts->render_railways = 1;
-    opts->render_boundaries = 1;
-    opts->render_labels = 0;           /* OFF - expensive */
+    opts->render_boundaries = 0;       /* OFF - expensive relation processing */
+    opts->render_labels = 1;           /* ON - useful for navigation */
 
     /* Expensive details OFF */
     opts->render_road_casing = 0;
@@ -193,10 +193,10 @@ void ct_render_options_fast(CTRenderOptions *opts)
     opts->render_label_halos = 0;
     opts->render_boundary_dashes = 0;
 
-    /* High zoom cutoffs effectively disable features */
+    /* Default zoom cutoffs for labels */
     opts->casing_min_zoom = 99;
     opts->building_outlines_min_zoom = 99;
-    opts->labels_min_zoom = 99;
+    opts->labels_min_zoom = 8;
 }
 
 void ct_render_options_quality(CTRenderOptions *opts)
