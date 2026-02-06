@@ -1353,19 +1353,18 @@ CTLabelStyle water_label_style;
 
 ### TODOs
 
-- [ ] Create `include/ct_font.h` with font structures
-- [ ] Create `src/ct_font_bitmap.c` with embedded bitmap font
-- [ ] Generate font data from public domain font (tool: `tools/gen_font.py`)
-- [ ] Implement basic `ct_render_text()` for bitmap fonts
-- [ ] Add text halo rendering (outline around text for readability)
-- [ ] Create `include/ct_label.h` with label structures
-- [ ] Create `src/ct_label.c` with label extraction and placement
-- [ ] Implement collision detection grid for label placement
-- [ ] Add `name` field extraction in PBF parsing
-- [ ] Integrate label rendering into `ct_render_tile()`
+- [x] Create font structures (in `shared/include/sh_font.h`)
+- [x] Create embedded bitmap font (`shared/src/sh_font.c`)
+- [x] Implement basic text rendering (`ct_render_text()`)
+- [x] Add text halo rendering (outline around text for readability)
+- [x] Create `include/ct_label.h` with label structures
+- [x] Create `src/ct_label.c` with label extraction and placement
+- [x] Implement collision detection grid (`src/ct_collision.c`)
+- [x] Add `name` field extraction in PBF parsing
+- [x] Integrate label rendering into tile generation
 - [ ] (Optional) Vendor `stb_truetype.h` for TTF support
 - [ ] (Optional) Embed DejaVu Sans font as C array
-- [ ] Add label styling to CTStyle
+- [x] Add label styling to CTStyle
 - [ ] Update tests for label rendering
 
 ### Files to Modify/Create
@@ -1566,19 +1565,19 @@ void ct_render_polyline_dashed(CTRenderContext *ctx,
 
 ### TODOs
 
-- [ ] Extend `CTStyle` with visibility flags and opacity per layer
-- [ ] Add `CTLayerVisibility` structure
+- [x] Extend `CTStyle` with visibility flags (`CTRenderOptions`)
+- [x] Add render options structure with layer toggles
 - [ ] Implement `ct_style_dark()` preset
 - [ ] Implement `ct_style_print()` preset
 - [ ] Implement `ct_style_satellite_overlay()` preset
 - [ ] Implement `ct_style_minimal()` preset
 - [ ] Add individual style setter functions
-- [ ] Implement dashed line rendering in `ct_render.c`
-- [ ] Add `CTLineStyle` enum and dash pattern support
+- [x] Implement dashed line rendering (`ct_render_polyline_dashed()`)
+- [x] Add dash pattern support for boundaries
 - [ ] (Optional) Implement style file parser
 - [ ] (Optional) Add style file saving
-- [ ] Update `ct_render_tile()` to respect visibility and opacity
-- [ ] Add alpha blending for layer opacity
+- [x] Update tile rendering to respect render options
+- [x] Add alpha blending for layer opacity
 - [ ] Document style API and presets
 - [ ] Add style preview examples in tests
 
@@ -2205,6 +2204,7 @@ int ct_pregenerate_tiles(const CTPregenConfig *config);
 | 5 | Memory pooling | 7ms → 5ms | Low |
 | 6 | Parallelization | 5ms → 5ms (but 4x throughput) | Medium |
 | 7 | Pre-generation | 5ms → 2ms | Medium |
+| 8 | Boundary optimization | Reduce boundary overhead to <5ms | Medium |
 
 **Target achieved:** 50ms → 5ms for uncached, 2ms for cached/pre-generated
 
@@ -2229,7 +2229,7 @@ int ct_pregenerate_tiles(const CTPregenConfig *config);
 **Phase 3: Geometry Processing**
 - [ ] Add early-exit bbox classification
 - [ ] Implement iterative Douglas-Peucker
-- [ ] Add SIMD coordinate transforms (with fallback)
+- [x] Add SIMD coordinate transforms (with fallback)
 - [ ] Pre-clip geometry at index time (optional)
 
 **Phase 4: MVT Encoding**
@@ -2240,7 +2240,7 @@ int ct_pregenerate_tiles(const CTPregenConfig *config);
 
 **Phase 5: Memory Optimization**
 - [ ] Implement memory pool for tile generation
-- [ ] Add thread-local tile contexts
+- [x] Add thread-local tile contexts (in tile server)
 - [ ] Implement compact feature storage
 - [ ] Reduce allocations per tile to near-zero
 
