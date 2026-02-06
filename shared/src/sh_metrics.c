@@ -61,12 +61,24 @@ static int connect_statsd(void) {
     s_statsd_addr.sin_family = AF_INET;
     s_statsd_addr.sin_port = htons(s_config.statsd_port);
 
-    /* Resolve hostname */
-    struct hostent *host = gethostbyname(s_config.statsd_host);
-    if (host) {
-        memcpy(&s_statsd_addr.sin_addr, host->h_addr, host->h_length);
+    /* Resolve hostname using thread-safe getaddrinfo */
+    struct addrinfo hints;
+    struct addrinfo *result = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    if (getaddrinfo(s_config.statsd_host, NULL, &hints, &result) == 0 && result) {
+        struct sockaddr_in *addr = (struct sockaddr_in *)result->ai_addr;
+        memcpy(&s_statsd_addr.sin_addr, &addr->sin_addr, sizeof(s_statsd_addr.sin_addr));
+        freeaddrinfo(result);
     } else {
-        inet_pton(AF_INET, s_config.statsd_host, &s_statsd_addr.sin_addr);
+        /* Fallback: try parsing as IP address */
+        if (inet_pton(AF_INET, s_config.statsd_host, &s_statsd_addr.sin_addr) != 1) {
+            close(s_statsd_socket);
+            s_statsd_socket = -1;
+            return -1;
+        }
     }
 
     return 0;

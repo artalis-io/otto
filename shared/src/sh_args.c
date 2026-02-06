@@ -87,6 +87,7 @@ void sh_args_init(ShServerConfig *cfg) {
     /* Network defaults */
     cfg->port = 8080;
     strncpy(cfg->host, "0.0.0.0", sizeof(cfg->host) - 1);
+    cfg->host[sizeof(cfg->host) - 1] = '\0';
 
     /* Threading defaults */
     cfg->worker_threads = 0;  /* Auto-detect */
@@ -113,6 +114,7 @@ void sh_args_init(ShServerConfig *cfg) {
 
     /* Paths */
     strncpy(cfg->static_dir, "./static", sizeof(cfg->static_dir) - 1);
+    cfg->static_dir[sizeof(cfg->static_dir) - 1] = '\0';
 
     /* Logging */
     cfg->verbose = 0;
@@ -134,6 +136,7 @@ void sh_args_load_env(ShServerConfig *cfg, ShApiType api_type) {
     }
     if ((val = get_env_with_prefix(prefix, "HOST"))) {
         strncpy(cfg->host, val, sizeof(cfg->host) - 1);
+        cfg->host[sizeof(cfg->host) - 1] = '\0';
     }
 
     /* Threading */
@@ -192,9 +195,11 @@ void sh_args_load_env(ShServerConfig *cfg, ShApiType api_type) {
     /* Paths */
     if ((val = get_env_with_prefix(prefix, "STATIC_DIR"))) {
         strncpy(cfg->static_dir, val, sizeof(cfg->static_dir) - 1);
+        cfg->static_dir[sizeof(cfg->static_dir) - 1] = '\0';
     }
     if ((val = get_env_with_prefix(prefix, "DATA_FILE"))) {
         strncpy(cfg->data_file, val, sizeof(cfg->data_file) - 1);
+        cfg->data_file[sizeof(cfg->data_file) - 1] = '\0';
     }
 
     /* Logging */
@@ -232,6 +237,7 @@ int sh_args_parse(ShServerConfig *cfg, int argc, char **argv) {
         else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--host") == 0) {
             if (i + 1 >= argc) return -1;
             strncpy(cfg->host, argv[++i], sizeof(cfg->host) - 1);
+            cfg->host[sizeof(cfg->host) - 1] = '\0';
         }
         else if (strcmp(arg, "-t") == 0 || strcmp(arg, "--threads") == 0) {
             if (i + 1 >= argc) return -1;
@@ -240,6 +246,7 @@ int sh_args_parse(ShServerConfig *cfg, int argc, char **argv) {
         else if (strcmp(arg, "-s") == 0 || strcmp(arg, "--static") == 0) {
             if (i + 1 >= argc) return -1;
             strncpy(cfg->static_dir, argv[++i], sizeof(cfg->static_dir) - 1);
+            cfg->static_dir[sizeof(cfg->static_dir) - 1] = '\0';
         }
         else if (strcmp(arg, "-v") == 0 || strcmp(arg, "--verbose") == 0) {
             cfg->verbose++;

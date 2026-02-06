@@ -184,7 +184,10 @@ void sh_log_set_trace_id(const char *trace_id) {
     }
 
     if (trace_id) {
-        pthread_setspecific(s_trace_id_key, strdup(trace_id));
+        char *copy = strdup(trace_id);
+        if (copy) {
+            pthread_setspecific(s_trace_id_key, copy);
+        }
     } else {
         pthread_setspecific(s_trace_id_key, NULL);
     }
