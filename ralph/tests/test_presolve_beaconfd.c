@@ -101,9 +101,26 @@ int main(void) {
     if (status_presolve == RALPH_STATUS_OPTIMAL) {
         double obj = ralph_get_objval(model);
         printf("Objective: %.6f (expected: %.6f)\n", obj, BEACONFD_OPT);
+
+        /* Debug: check for NaN/Inf in solution */
+        int n = ralph_get_num_vars(model);
+        double *sol = (double*)malloc(n * sizeof(double));
+        if (sol) {
+            ralph_get_solution(model, sol);
+            int nan_count = 0, inf_count = 0;
+            for (int j = 0; j < n; j++) {
+                if (isnan(sol[j])) nan_count++;
+                if (isinf(sol[j])) inf_count++;
+            }
+            if (nan_count > 0 || inf_count > 0) {
+                printf("DEBUG: Solution has %d NaN, %d Inf values\n", nan_count, inf_count);
+            }
+            free(sol);
+        }
+
         double rel_err = fabs(obj - BEACONFD_OPT) / (fabs(BEACONFD_OPT) + 1e-10);
         printf("Relative error: %.6f%%\n", rel_err * 100);
-        TEST(rel_err < 0.01, "Objective within 1% of expected");
+        TEST(!isnan(obj) && rel_err < 0.01, "Objective within 1% of expected");
     } else {
         printf("Note: Presolve reduces problem but numerical issues remain.\n");
         printf("      Additional LU stability improvements needed.\n");

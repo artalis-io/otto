@@ -372,8 +372,10 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
 
             if (can_regularize) {
                 /* Regularize: set diagonal to 1.0 to make row independent.
-                 * For redundant rows, the artificial stays at zero anyway,
-                 * so this regularization preserves solution correctness. */
+                 * NOTE: This is currently disabled in simplex.c because:
+                 * - Small values (1e-6) cause NaN via large multipliers (1/1e-6 = 1e6)
+                 * - Large values (1.0) destroy constraint structure -> UNBOUNDED
+                 * The proper fix is threshold pivoting to avoid near-singular bases. */
                 lu->num_regularized++;
 #ifdef RALPH_DEBUG_LU
                 fprintf(stderr, "[lu_factorize_dense] Regularizing row %d (orig %d) at step %d (total: %d)\n",

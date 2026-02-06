@@ -868,24 +868,12 @@ int tableau_refactorize(SimplexTableau *tab) {
     tab->lu->num_redundant = tab->num_redundant;
 
     /* For two-phase problems with many equalities, allow limited regularization
-     * even without pre-marked redundant rows. This handles implicit redundancy
-     * that only manifests during Phase 2 optimization.
-     * Limit: allow up to 10% of rows or num_equalities (whichever is smaller) */
-    /* For two-phase problems with very high equality ratio (>80%), allow very
-     * limited regularization to handle implicit redundancy. Too much regularization
-     * can cause UNBOUNDED results, so we're very conservative here.
-     * The expected rank deficiency for beaconfd-like problems is small (5-15 rows). */
-    if (tab->use_two_phase && tab->num_equalities > 0 &&
-        tab->num_equalities * 10 > tab->m * 8) {  /* >80% equality constraints */
-        tab->lu->allow_regularization = 1;
-        /* Conservative limit based on expected rank deficiency */
-        int max_reg = (tab->m - tab->num_equalities) + 3;
-        if (max_reg > 12) max_reg = 12;  /* Cap at 12 */
-        tab->lu->max_regularizations = max_reg;
-    } else {
-        tab->lu->allow_regularization = 0;
-        tab->lu->max_regularizations = 0;
-    }
+     * to handle near-singular bases. Currently DISABLED because:
+     * - Regularization with small diagonal (1e-6) causes NaN via 1/1e-6 = 1e6 multipliers
+     * - Regularization with large diagonal (1.0) causes UNBOUNDED (constraint structure lost)
+     * TODO: Implement threshold pivoting in LU to avoid near-singular bases entirely */
+    tab->lu->allow_regularization = 0;
+    tab->lu->max_regularizations = 0;
     tab->lu->num_regularized = 0;
 
     int status = lu_factorize(tab->lu, B);
