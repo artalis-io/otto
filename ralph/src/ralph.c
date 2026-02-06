@@ -308,9 +308,13 @@ int ralph_optimize(RalphModel *model) {
         if (presolved && presolved->reduced_model) {
             solve_model = presolved->reduced_model;
             if (model->verbose) {
-                printf("Presolve: %d vars removed, %d cons removed, %d bounds tightened\n",
+                printf("Presolve: %d vars removed, %d cons removed, %d bounds tightened",
                        presolved->vars_removed, presolved->cons_removed,
                        presolved->bounds_tightened);
+                if (presolved->matrix_rank > 0) {
+                    printf(", matrix rank=%d", presolved->matrix_rank);
+                }
+                printf("\n");
             }
         }
     }

@@ -1898,7 +1898,13 @@ static void primal_apply_perturbation(SimplexTableau *tab) {
         tab->primal_saved_ub[j] = tab->ub_ext[j];
     }
 
-    /* Apply perturbations */
+    /* Apply perturbations to bounds only.
+     * Non-basic variable x values stay at their current (original) bound values.
+     * This widens the feasible region so basic variables have positive slack.
+     * Note: Do NOT update x values here - that would change the RHS and
+     * potentially worsen numerical stability. The key insight is that
+     * for the ratio test, only basic variable slacks matter, and those
+     * are computed from (x_j - lb_j) where x_j is unchanged and lb_j is now lower. */
     for (int j = 0; j < n; j++) {
         /* Pseudo-random perturbation factor */
         double factor = 1.0 + (j * PRIMAL_PERTURB_MULT) % 13;
@@ -1924,10 +1930,18 @@ static void primal_remove_perturbation(SimplexTableau *tab) {
         return;
     }
 
-    /* Restore original bounds */
+    /* Restore original bounds and reset non-basic variable values */
     for (int j = 0; j < tab->n; j++) {
         tab->lb_ext[j] = tab->primal_saved_lb[j];
         tab->ub_ext[j] = tab->primal_saved_ub[j];
+
+        /* Reset non-basic variables to their proper bounds */
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+            tab->x[j] = tab->lb_ext[j];
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+            tab->x[j] = tab->ub_ext[j];
+        }
+        /* Basic variables will be recomputed by tableau_compute_solution */
     }
 
     free(tab->primal_saved_lb);
@@ -2085,10 +2099,26 @@ static int simplex_phase1(SimplexSolver *solver) {
         return 0;
     }
 
-    /* Cycling detection */
+    /* Cycling detection and anti-cycling measures */
     int degenerate_count = 0;
-    const int DEGEN_THRESHOLD = 50;
+    const int PERTURB_THRESHOLD = 30;  /* Apply perturbation after this many degenerate pivots */
+    const int DEGEN_THRESHOLD = 50;    /* Switch to Bland's rule after this many */
     int use_bland = 0;
+    int perturbation_active = 0;
+
+    /* For problems with many equalities (highly degenerate), apply perturbation proactively.
+     * This prevents numerical issues from accumulating over many degenerate pivots.
+     * Threshold: apply if equalities >= 50% of constraints */
+    if (tab->num_equalities >= tab->m / 2) {
+        primal_apply_perturbation(tab);
+        perturbation_active = 1;
+        if (solver->verbose) {
+            fprintf(stderr, "[simplex_phase1] Proactive perturbation: %d equalities out of %d constraints\n",
+                    tab->num_equalities, tab->m);
+        }
+        /* Recompute solution with perturbed bounds */
+        tableau_compute_solution(tab);
+    }
 
     /* Compute initial reduced costs */
     tableau_compute_reduced_costs(tab);
@@ -2113,7 +2143,10 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         if (price_status != 0) {
-            /* Optimal for Phase 1 */
+            /* Optimal for Phase 1 - remove perturbation first, then check */
+            primal_remove_perturbation(tab);
+
+            /* Recompute solution without perturbation */
             tableau_compute_solution(tab);
 
             /* Check if all artificial variables are zero */
@@ -2124,16 +2157,29 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
 
             if (art_sum > RALPH_FEAS_TOL) {
-                /* Infeasible - artificial variables cannot be driven to zero */
-                if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] INFEASIBLE: artificial sum = %g after %d iterations\n",
-                            art_sum, iter);
+                /* Small residual might be fixable with a few more iterations.
+                 * Use a relaxed tolerance (1e-4) to distinguish true infeasibility
+                 * from numerical noise. */
+                if (art_sum > 1e-4) {
+                    /* Truly infeasible */
+                    if (solver->verbose) {
+                        fprintf(stderr, "[simplex_phase1] INFEASIBLE: artificial sum = %g after %d iterations\n",
+                                art_sum, iter);
+                    }
+                    solver->status = RALPH_STATUS_INFEASIBLE;
+                    solver->iterations = iter;
+                    return -1;
                 }
-                solver->status = RALPH_STATUS_INFEASIBLE;
-                solver->iterations = iter;
-                return -1;
+
+                /* Small residual - try to clean up with a few more iterations */
+                if (solver->verbose) {
+                    fprintf(stderr, "[simplex_phase1] Cleanup phase: art_sum=%g, continuing...\n", art_sum);
+                }
+                tableau_compute_reduced_costs(tab);
+                continue;  /* Try more iterations to drive artificials to zero */
             }
 
+            /* Success */
             if (solver->verbose) {
                 fprintf(stderr, "[simplex_phase1] Phase 1 complete: feasible in %d iterations\n", iter);
             }
@@ -2151,14 +2197,30 @@ static int simplex_phase1(SimplexSolver *solver) {
             if (solver->verbose) {
                 fprintf(stderr, "[simplex_phase1] ERROR: unbounded in Phase 1 at iter %d\n", iter);
             }
+            primal_remove_perturbation(tab);
             solver->status = RALPH_STATUS_ERROR;
             solver->iterations = iter;
             return -1;
         }
 
-        /* Track degeneracy */
+        /* Track degeneracy and apply anti-cycling measures */
         if (theta < RALPH_FEAS_TOL) {
             degenerate_count++;
+
+            /* First try perturbation (less restrictive than Bland's rule) */
+            if (degenerate_count >= PERTURB_THRESHOLD && !perturbation_active && !use_bland) {
+                primal_apply_perturbation(tab);
+                perturbation_active = 1;
+                if (solver->verbose) {
+                    fprintf(stderr, "[simplex_phase1] Applying bound perturbation after %d degenerate pivots\n",
+                            degenerate_count);
+                }
+                /* Recompute solution with perturbed bounds */
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+            }
+
+            /* If still cycling after perturbation, use Bland's rule */
             if (degenerate_count > DEGEN_THRESHOLD && !use_bland) {
                 use_bland = 1;
                 if (solver->verbose) {
@@ -2173,6 +2235,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             if (solver->verbose) {
                 fprintf(stderr, "[simplex_phase1] ERROR: pivot failed at iter %d\n", iter);
             }
+            primal_remove_perturbation(tab);
             solver->status = RALPH_STATUS_ERROR;
             solver->iterations = iter;
             return -1;
@@ -2184,6 +2247,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (solver->verbose) {
                     fprintf(stderr, "[simplex_phase1] ERROR: refactorization failed at iter %d\n", iter);
                 }
+                primal_remove_perturbation(tab);
                 solver->status = RALPH_STATUS_ERROR;
                 solver->iterations = iter;
                 return -1;
@@ -2194,6 +2258,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     }
 
     /* Iteration limit exceeded */
+    primal_remove_perturbation(tab);
     if (solver->verbose) {
         fprintf(stderr, "[simplex_phase1] Iteration limit (%d) reached\n", solver->max_iterations);
     }
@@ -2454,10 +2519,29 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
     }
 
-    /* Note: Bound perturbation is now applied adaptively when degeneracy detected,
-     * rather than proactively at start. See cycling detection below.
-     */
+    /* Apply proactive perturbation for highly degenerate problems (many equalities).
+     * This prevents numerical issues from accumulating over many degenerate pivots. */
     int perturbation_active = 0;
+    if (tab->num_equalities >= tab->m / 2) {
+        primal_apply_perturbation(tab);
+        perturbation_active = 1;
+        if (solver->verbose) {
+            fprintf(stderr, "[primal_simplex] Proactive perturbation: %d equalities out of %d constraints\n",
+                    tab->num_equalities, tab->m);
+        }
+
+        /* Force refactorization after perturbation to ensure clean LU state */
+        if (tableau_refactorize(tab) != 0) {
+            if (solver->verbose) {
+                fprintf(stderr, "[primal_simplex] WARNING: refactorization failed after perturbation\n");
+            }
+            if (repair_singular_basis(tab) != 0) {
+                primal_remove_perturbation(tab);
+                solver->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+        }
+    }
 
     /* Compute initial solution for Phase 2 */
     tableau_compute_solution(tab);
