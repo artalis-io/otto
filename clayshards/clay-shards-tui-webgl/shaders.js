@@ -257,11 +257,26 @@ export const BLIT_FS = `
     precision mediump float;
     uniform sampler2D u_texture;
     uniform float u_alpha;
+    uniform int u_colorMode;
     varying vec2 v_uv;
 
     void main() {
         vec4 color = texture2D(u_texture, v_uv);
-        gl_FragColor = vec4(color.rgb * u_alpha, 1.0);
+
+        // Apply color mode (0=amber, 1=green, 2=white, 3=rgb)
+        vec3 rgb = color.rgb;
+        if (u_colorMode == 0) {
+            float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
+            rgb = vec3(1.0, 0.7, 0.0) * luma;
+        } else if (u_colorMode == 1) {
+            float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
+            rgb = vec3(0.2, 1.0, 0.2) * luma;
+        } else if (u_colorMode == 2) {
+            float luma = dot(rgb, vec3(0.299, 0.587, 0.114));
+            rgb = vec3(0.9, 0.9, 1.0) * luma;
+        }
+
+        gl_FragColor = vec4(rgb * u_alpha, 1.0);
     }
 `;
 
