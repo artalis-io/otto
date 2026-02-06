@@ -360,7 +360,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
     size_t mp_rtree_nodes_size = ctx->mp_rtree ? ctx->mp_rtree->num_nodes * sizeof(CTPackedNode) : 0;
     size_t mp_rtree_leaf_size = ctx->mp_rtree ? ctx->mp_rtree->num_entries * sizeof(uint32_t) : 0;
     size_t boundary_rtree_nodes_size = ctx->boundary_rtree ? ctx->boundary_rtree->num_nodes * sizeof(CTPackedNode) : 0;
-    size_t boundary_rtree_leaf_size = ctx->boundary_rtree ? ctx->boundary_rtree->num_entries * sizeof(uint32_t) : 0;
+    (void)boundary_rtree_nodes_size;  /* Reserved for future boundary R-tree serialization */
 
     /* Write header */
     CTBinaryHeader header = {

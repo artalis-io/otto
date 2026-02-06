@@ -810,15 +810,6 @@ void ct_render_polygon(CTRenderContext *ctx,
     /* Check if polygon is entirely outside visible area */
     if (min_y >= ctx->height || max_y < 0 ||
         min_x >= ctx->width || max_x < 0) {
-#ifndef NDEBUG
-        static int outside_warnings = 0;
-        if (outside_warnings < 10) {
-            fprintf(stderr, "ct_render_polygon: polygon entirely outside tile "
-                    "(bbox: x=%d-%d, y=%d-%d, tile: %dx%d)\n",
-                    min_x, max_x, min_y, max_y, ctx->width, ctx->height);
-            outside_warnings++;
-        }
-#endif
         return;
     }
     if (min_y < 0) min_y = 0;
@@ -866,14 +857,6 @@ void ct_render_polygon(CTRenderContext *ctx,
     }
 
     if (num_edges < 2) {
-#ifndef NDEBUG
-        static int few_edges_single_warnings = 0;
-        if (few_edges_single_warnings < 20) {
-            fprintf(stderr, "ct_render_polygon: skipping polygon with only %d edges "
-                    "(num_points=%d)\n", num_edges, num_points);
-            few_edges_single_warnings++;
-        }
-#endif
         if (edges_allocated) {
             free(edges);
             free(active);
@@ -932,23 +915,6 @@ void ct_render_polygon(CTRenderContext *ctx,
         }
 
         /* Fill between pairs of edges using fast span fill */
-#ifndef NDEBUG
-        if (num_active % 2 != 0) {
-            static int odd_warnings_single = 0;
-            if (odd_warnings_single < 20) {
-                fprintf(stderr, "ct_render_polygon: odd active edge count %d at y=%d "
-                        "(num_points=%d, num_edges=%d)\n",
-                        num_active, y, num_points, num_edges);
-                if (odd_warnings_single == 0) {
-                    for (int dbg = 0; dbg < num_active && dbg < 5; dbg++) {
-                        fprintf(stderr, "  edge[%d]: x=%.1f, y_min=%d, y_max=%d, dx=%.4f\n",
-                                dbg, active[dbg].x, active[dbg].y_min, active[dbg].y_max, active[dbg].dx);
-                    }
-                }
-                odd_warnings_single++;
-            }
-        }
-#endif
         for (int i = 0; i + 1 < num_active; i += 2) {
             int x_start = (int)(active[i].x + 0.5);
             int x_end = (int)(active[i + 1].x + 0.5);
@@ -1003,15 +969,6 @@ void ct_render_multipolygon(CTRenderContext *ctx,
     /* Check if polygon is entirely outside visible area */
     if (min_y >= ctx->height || max_y < 0 ||
         min_x >= ctx->width || max_x < 0) {
-#ifndef NDEBUG
-        static int mp_outside_warnings = 0;
-        if (mp_outside_warnings < 10) {
-            fprintf(stderr, "ct_render_multipolygon: polygon entirely outside tile "
-                    "(bbox: x=%d-%d, y=%d-%d, tile: %dx%d, rings=%d)\n",
-                    min_x, max_x, min_y, max_y, ctx->width, ctx->height, num_rings);
-            mp_outside_warnings++;
-        }
-#endif
         return;
     }
     if (min_y < 0) min_y = 0;
@@ -1072,14 +1029,6 @@ void ct_render_multipolygon(CTRenderContext *ctx,
     }
 
     if (num_edges < 2) {
-#ifndef NDEBUG
-        static int few_edges_warnings = 0;
-        if (few_edges_warnings < 20) {
-            fprintf(stderr, "ct_render_multipolygon: skipping polygon with only %d edges "
-                    "(num_points=%d, num_rings=%d)\n", num_edges, num_points, num_rings);
-            few_edges_warnings++;
-        }
-#endif
         if (edges_allocated) {
             free(edges);
             free(active);
@@ -1138,24 +1087,6 @@ void ct_render_multipolygon(CTRenderContext *ctx,
         }
 
         /* Fill between pairs of edges (even-odd rule) using fast span fill */
-#ifndef NDEBUG
-        if (num_active % 2 != 0) {
-            static int odd_warnings = 0;
-            if (odd_warnings < 20) {
-                fprintf(stderr, "ct_render_multipolygon: odd active edge count %d at y=%d "
-                        "(num_points=%d, num_rings=%d, num_edges=%d)\n",
-                        num_active, y, num_points, num_rings, num_edges);
-                if (odd_warnings == 0) {
-                    /* Print first few active edges for debugging */
-                    for (int dbg = 0; dbg < num_active && dbg < 5; dbg++) {
-                        fprintf(stderr, "  edge[%d]: x=%.1f, y_min=%d, y_max=%d, dx=%.4f\n",
-                                dbg, active[dbg].x, active[dbg].y_min, active[dbg].y_max, active[dbg].dx);
-                    }
-                }
-                odd_warnings++;
-            }
-        }
-#endif
         for (int i = 0; i + 1 < num_active; i += 2) {
             int x_start = (int)(active[i].x + 0.5);
             int x_end = (int)(active[i + 1].x + 0.5);
@@ -1356,33 +1287,6 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
 
                 case CT_LAYER_WATER:
                     if (f->type == CT_GEOM_POLYGON) {
-#ifndef NDEBUG
-                        /* Debug: log large water polygons (potential Lake Balaton) */
-                        static int water_debug_count = 0;
-                        if (water_debug_count < 5 && f->num_points > 100) {
-                            int min_x = scaled[0].x, max_x = scaled[0].x;
-                            int min_y = scaled[0].y, max_y = scaled[0].y;
-                            for (int d = 1; d < f->num_points; d++) {
-                                if (scaled[d].x < min_x) min_x = scaled[d].x;
-                                if (scaled[d].x > max_x) max_x = scaled[d].x;
-                                if (scaled[d].y < min_y) min_y = scaled[d].y;
-                                if (scaled[d].y > max_y) max_y = scaled[d].y;
-                            }
-                            fprintf(stderr, "WATER POLYGON: %d pts, %d rings, bbox=[%d,%d]-[%d,%d], "
-                                    "tile z%d/%d/%d, ring_ends=%s\n",
-                                    f->num_points, f->num_rings, min_x, min_y, max_x, max_y,
-                                    tile->coord.z, tile->coord.x, tile->coord.y,
-                                    f->ring_ends ? "set" : "NULL");
-                            if (f->ring_ends && f->num_rings > 0) {
-                                fprintf(stderr, "  ring_ends: ");
-                                for (int r = 0; r < f->num_rings && r < 5; r++) {
-                                    fprintf(stderr, "[%d]=%d ", r, f->ring_ends[r]);
-                                }
-                                fprintf(stderr, "\n");
-                            }
-                            water_debug_count++;
-                        }
-#endif
                         if (f->num_rings > 1 && f->ring_ends) {
                             ct_render_multipolygon(ctx, scaled, f->num_points,
                                                    f->ring_ends, f->num_rings,

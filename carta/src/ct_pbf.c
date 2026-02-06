@@ -113,18 +113,6 @@ static void track_alloc(CTPBFContext *ctx, size_t bytes)
     ctx->memory_used += bytes;
 }
 
-/*
- * Track memory deallocation.
- */
-static void track_free(CTPBFContext *ctx, size_t bytes)
-{
-    if (bytes <= ctx->memory_used) {
-        ctx->memory_used -= bytes;
-    } else {
-        ctx->memory_used = 0;
-    }
-}
-
 /* ============================================================================
  * Feature Classification
  * ============================================================================ */
@@ -618,14 +606,6 @@ static CTStatus way_map_insert(CTPBFContext *ctx, int64_t id, size_t index)
 {
     SHHashmapStatus status = sh_hashmap_i64_insert(ctx->way_map, id, index);
     return (status == SH_HASHMAP_OK) ? CT_OK : CT_ERROR_OUT_OF_MEMORY;
-}
-
-/*
- * Lookup way by OSM ID.
- */
-static size_t way_map_lookup(const CTPBFContext *ctx, int64_t id)
-{
-    return sh_hashmap_i64_lookup(ctx->way_map, id);
 }
 
 /* ============================================================================
