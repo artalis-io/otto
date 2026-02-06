@@ -64,18 +64,18 @@ void ct_default_style(CTStyle *style)
     style->land_color            = CT_RGB(242, 239, 233);  /* #f2efe9 - OSM land */
     style->building_color        = CT_RGB(217, 208, 201);  /* #d9d0c9 - OSM building fill */
     style->building_outline_color = CT_RGB(196, 182, 171); /* #c4b6ab - darker for visibility */
-    style->forest_color          = CT_RGB(157, 202, 138);  /* #9dca8a - OSM wood/forest */
+    style->forest_color          = CT_RGB(173, 209, 158);  /* #add19e - muted forest green */
     style->grass_color           = CT_RGB(205, 235, 176);  /* #cdebb0 - OSM grass */
-    style->park_color            = CT_RGB(200, 250, 204);  /* #c8facc - OSM park (leisure) */
+    style->park_color            = CT_RGB(198, 236, 199);  /* #c6ecc7 - muted park green */
     style->sand_color            = CT_RGB(245, 233, 186);  /* Beach/sand */
 
     /* Railway */
     style->railway_color = CT_RGB(120, 120, 120);
     style->railway_width = 2.0f;
 
-    /* Boundaries (admin borders) - purple/magenta dashed line */
-    style->boundary_color = CT_RGBA(170, 80, 170, 200);  /* Semi-transparent purple */
-    style->boundary_width = 1.5f;
+    /* Boundaries (admin borders) - subtle purple like OSM Carto */
+    style->boundary_color = CT_RGBA(170, 80, 170, 140);  /* More transparent purple */
+    style->boundary_width = 1.0f;  /* Thinner for less clutter */
 
     /* Background */
     style->background_color = CT_RGB(242, 239, 233);  /* Same as land */

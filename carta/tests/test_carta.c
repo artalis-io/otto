@@ -1559,23 +1559,23 @@ TEST(lod_boundary_admin_levels)
     ct_lod_init(&config);
     ct_lod_default(&config);
 
-    /* Country boundary (admin_level 2) visible at z2 */
+    /* Country boundary (admin_level 2) visible at z4 - delayed for less clutter */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTRY,
-                                 2, 0, 0), 1);
-    ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTRY,
-                                 1, 0, 0), 0);
-
-    /* State boundary (admin_level 4) visible at z4 */
-    ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_STATE,
                                  4, 0, 0), 1);
-    ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_STATE,
+    ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_COUNTRY,
                                  3, 0, 0), 0);
 
-    /* City boundary (admin_level 8) visible at z9 - balanced preset shows earlier */
+    /* State boundary (admin_level 4) visible at z6 - delayed for less clutter */
+    ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_STATE,
+                                 6, 0, 0), 1);
+    ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_STATE,
+                                 5, 0, 0), 0);
+
+    /* City boundary (admin_level 8) visible at z12 - delayed for cleaner maps */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_CITY,
-                                 9, 0, 0), 1);
+                                 12, 0, 0), 1);
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_BOUNDARIES, CT_BOUNDARY_CITY,
-                                 8, 0, 0), 0);
+                                 11, 0, 0), 0);
 
     ct_lod_free(&config);
     return 1;
