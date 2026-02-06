@@ -524,35 +524,40 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
         char *trimmed = trim(parser->line);
         if (trimmed[0] == '\0' || trimmed[0] == '*') continue;
 
-        /* Check for section headers (must start at column 1 or after whitespace) */
-        if (strncmp(trimmed, "NAME", 4) == 0 && (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
-            section = SECTION_NAME;
-            parse_name(parser);
-            continue;
-        } else if (strncmp(trimmed, "OBJSENSE", 8) == 0) {
-            section = SECTION_OBJSENSE;
-            continue;
-        } else if (strncmp(trimmed, "ROWS", 4) == 0 && (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
-            section = SECTION_ROWS;
-            parser->has_rows = 1;
-            continue;
-        } else if (strncmp(trimmed, "COLUMNS", 7) == 0 && (trimmed[7] == '\0' || isspace((unsigned char)trimmed[7]))) {
-            section = SECTION_COLUMNS;
-            parser->has_columns = 1;
-            continue;
-        } else if (strncmp(trimmed, "RHS", 3) == 0 && (trimmed[3] == '\0' || isspace((unsigned char)trimmed[3]))) {
-            section = SECTION_RHS;
-            continue;
-        } else if (strncmp(trimmed, "RANGES", 6) == 0 && (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
-            section = SECTION_RANGES;
-            continue;
-        } else if (strncmp(trimmed, "BOUNDS", 6) == 0 && (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
-            section = SECTION_BOUNDS;
-            continue;
-        } else if (strncmp(trimmed, "ENDATA", 6) == 0) {
-            section = SECTION_END;
-            parser->has_endata = 1;
-            break;
+        /* Check for section headers - must start at column 1 (not indented)
+         * In MPS format, data lines are indented, section headers are not */
+        int is_section_header = !isspace((unsigned char)parser->line[0]);
+
+        if (is_section_header) {
+            if (strncmp(trimmed, "NAME", 4) == 0 && (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+                section = SECTION_NAME;
+                parse_name(parser);
+                continue;
+            } else if (strncmp(trimmed, "OBJSENSE", 8) == 0) {
+                section = SECTION_OBJSENSE;
+                continue;
+            } else if (strncmp(trimmed, "ROWS", 4) == 0 && (trimmed[4] == '\0' || isspace((unsigned char)trimmed[4]))) {
+                section = SECTION_ROWS;
+                parser->has_rows = 1;
+                continue;
+            } else if (strncmp(trimmed, "COLUMNS", 7) == 0 && (trimmed[7] == '\0' || isspace((unsigned char)trimmed[7]))) {
+                section = SECTION_COLUMNS;
+                parser->has_columns = 1;
+                continue;
+            } else if (strncmp(trimmed, "RHS", 3) == 0 && (trimmed[3] == '\0' || isspace((unsigned char)trimmed[3]))) {
+                section = SECTION_RHS;
+                continue;
+            } else if (strncmp(trimmed, "RANGES", 6) == 0 && (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
+                section = SECTION_RANGES;
+                continue;
+            } else if (strncmp(trimmed, "BOUNDS", 6) == 0 && (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
+                section = SECTION_BOUNDS;
+                continue;
+            } else if (strncmp(trimmed, "ENDATA", 6) == 0) {
+                section = SECTION_END;
+                parser->has_endata = 1;
+                break;
+            }
         }
 
         /* Process line based on current section */
@@ -640,6 +645,21 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
     }
 
     /* Build constraint matrix and add constraints */
+    /* Update triplets dimensions to actual size before converting to CSC */
+    if (parser->matrix) {
+        parser->matrix->nrows = parser->num_rows;
+        parser->matrix->ncols = parser->num_cols;
+    }
+#ifdef DEBUG_MPS_READER
+    fprintf(stderr, "DEBUG: First 5 non-zero RHS values:\n");
+    int rhs_count = 0;
+    for (int i = 0; i < parser->num_rows && rhs_count < 5; i++) {
+        if (fabs(parser->rhs[i]) > 1e-10) {
+            fprintf(stderr, "  rhs[%d] (%s) = %g\n", i, parser->rows[i].name, parser->rhs[i]);
+            rhs_count++;
+        }
+    }
+#endif
     SparseMatrix *A = triplets_to_csc(parser->matrix);
     if (A) {
         /* Add each constraint */

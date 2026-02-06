@@ -2000,6 +2000,10 @@ static int simplex_phase2(SimplexSolver *solver) {
 
         /* Perform pivot */
         if (simplex_pivot(tab, entering, leaving, theta) != 0) {
+            if (solver->verbose) {
+                fprintf(stderr, "[primal_simplex] ERROR: simplex_pivot failed at iter %d (entering=%d, leaving=%d, theta=%e)\n",
+                        iter, entering, leaving, theta);
+            }
             primal_remove_perturbation(tab);
             solver->status = RALPH_STATUS_ERROR;
             return -1;
