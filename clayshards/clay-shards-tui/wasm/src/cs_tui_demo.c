@@ -500,7 +500,8 @@ void demo_key_char(uint32_t codepoint) {
  */
 EMSCRIPTEN_KEEPALIVE
 void demo_mouse_move(int x, int y) {
-    Clay_SetPointerState((Clay_Vector2){(float)x, (float)y}, false);
+    Clay_SetPointerState((Clay_Vector2){(float)x, (float)y}, cs_is_pointer_down());
+    cs_set_pointer((float)x, (float)y);
 }
 
 /**
@@ -509,6 +510,8 @@ void demo_mouse_move(int x, int y) {
 EMSCRIPTEN_KEEPALIVE
 void demo_mouse_click(int x, int y) {
     Clay_SetPointerState((Clay_Vector2){(float)x, (float)y}, true);
+    cs_set_pointer((float)x, (float)y);
+    cs_set_pointer_down(true);
     cs_set_pending_click();
 }
 
@@ -518,6 +521,8 @@ void demo_mouse_click(int x, int y) {
 EMSCRIPTEN_KEEPALIVE
 void demo_mouse_release(int x, int y) {
     Clay_SetPointerState((Clay_Vector2){(float)x, (float)y}, false);
+    cs_set_pointer((float)x, (float)y);
+    cs_set_pointer_down(false);
 }
 
 /**

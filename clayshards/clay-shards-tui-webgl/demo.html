@@ -334,23 +334,28 @@
                 }
                 console.log('Demo initialized, buffer at:', wasm.demo_get_buffer());
 
-                // Setup canvas size
-                canvas.width = COLS * CELL_WIDTH;
-                canvas.height = ROWS * CELL_HEIGHT;
-                canvas.style.width = `${canvas.width}px`;
-                canvas.style.height = `${canvas.height}px`;
+                // Setup canvas size with devicePixelRatio for sharp rendering
+                const dpr = window.devicePixelRatio || 1;
+                const displayWidth = COLS * CELL_WIDTH;
+                const displayHeight = ROWS * CELL_HEIGHT;
 
-                // Create renderer
+                // Set backing store to match device pixels
+                canvas.width = displayWidth * dpr;
+                canvas.height = displayHeight * dpr;
+                canvas.style.width = `${displayWidth}px`;
+                canvas.style.height = `${displayHeight}px`;
+
+                // Create renderer with scaled cell size
                 const renderer = new TuiRenderer(canvas, {
-                    cellWidth: CELL_WIDTH,
-                    cellHeight: CELL_HEIGHT
+                    cellWidth: CELL_WIDTH * dpr,
+                    cellHeight: CELL_HEIGHT * dpr
                 });
 
-                // Create and setup font atlas
+                // Create and setup font atlas at higher resolution for HiDPI
                 const fontAtlas = new TerminalFontAtlas(renderer.gl);
                 fontAtlas.generateProceduralAtlas({
                     fontFamily: "'Courier New', Consolas, monospace",
-                    fontSize: 16,
+                    fontSize: 16 * dpr,
                     fgColor: 'white',
                     bgColor: 'transparent'
                 });
