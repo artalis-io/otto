@@ -464,7 +464,8 @@ void demo_key_down(int key, int mods) {
             }
             break;
         case 13:  /* Enter */
-            cs_key_down(13, false, false);
+        case 32:  /* Space - treat like Enter */
+            cs_key_down(key, false, false);
             break;
         case 8:   /* Backspace */
         case 46:  /* Delete */
