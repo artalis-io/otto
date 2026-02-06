@@ -84,6 +84,20 @@ const BLOCK_MAP = new Map([
     [0x2593, 183], // ▓ DARK SHADE
 ]);
 
+// UI symbols used by ClayShards components
+const UI_SYMBOL_MAP = new Map([
+    // Checkmarks and X marks
+    [0x2713, 184], // ✓ CHECK MARK (checkbox checked)
+    [0x2714, 185], // ✔ HEAVY CHECK MARK
+    [0x2717, 186], // ✗ BALLOT X
+    [0x2718, 187], // ✘ HEAVY BALLOT X
+    // Triangles (dropdown arrows)
+    [0x25B2, 188], // ▲ BLACK UP-POINTING TRIANGLE
+    [0x25BC, 189], // ▼ BLACK DOWN-POINTING TRIANGLE
+    [0x25B6, 190], // ▶ BLACK RIGHT-POINTING TRIANGLE
+    [0x25C0, 191], // ◀ BLACK LEFT-POINTING TRIANGLE
+]);
+
 // Braille patterns (U+2800-U+28FF) - for ASCII art maps
 // We can't include all 256, so just include the common ones
 const BRAILLE_START = 0x2800;
@@ -134,6 +148,11 @@ export class TerminalFontAtlas {
         // Block elements
         if (BLOCK_MAP.has(codepoint)) {
             return BLOCK_MAP.get(codepoint);
+        }
+
+        // UI symbols (checkmarks, triangles)
+        if (UI_SYMBOL_MAP.has(codepoint)) {
+            return UI_SYMBOL_MAP.get(codepoint);
         }
 
         // Braille - map to reserved range 192-255
@@ -276,6 +295,16 @@ export class TerminalFontAtlas {
 
         // Render block elements
         for (const [codepoint, index] of BLOCK_MAP) {
+            const char = String.fromCodePoint(codepoint);
+            const col = index % this.atlasWidth;
+            const row = Math.floor(index / this.atlasWidth);
+            const x = col * charWidth;
+            const y = row * charHeight;
+            ctx.fillText(char, x, y);
+        }
+
+        // Render UI symbols (checkmarks, triangles)
+        for (const [codepoint, index] of UI_SYMBOL_MAP) {
             const char = String.fromCodePoint(codepoint);
             const col = index % this.atlasWidth;
             const row = Math.floor(index / this.atlasWidth);

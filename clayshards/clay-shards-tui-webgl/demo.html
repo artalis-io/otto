@@ -190,6 +190,9 @@
     <div class="container" style="display: none;" id="main">
         <div class="terminal-container">
             <canvas id="terminal" tabindex="0"></canvas>
+            <!-- Hidden input for capturing text input (IME-friendly) -->
+            <input type="text" id="hiddenInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+                   style="position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0;">
         </div>
 
         <div class="controls">
@@ -363,18 +366,55 @@
                 loadingEl.style.display = 'none';
                 mainEl.style.display = 'flex';
                 instructionsEl.style.display = 'block';
-                canvas.focus();
+                // Focus hidden input for immediate text capture
+                hiddenInput.focus();
 
-                // Setup keyboard input
-                canvas.addEventListener('keydown', (e) => {
-                    e.preventDefault();
-                    const mods = (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0);
-                    wasm.demo_key_down(e.keyCode, mods);
+                // Setup keyboard input with hidden input for proper text capture
+                const hiddenInput = document.getElementById('hiddenInput');
+
+                // Focus hidden input when canvas is focused
+                canvas.addEventListener('focus', () => {
+                    hiddenInput.focus();
                 });
 
-                canvas.addEventListener('keypress', (e) => {
-                    if (e.charCode >= 32 && e.charCode < 127 && !e.ctrlKey && !e.altKey) {
-                        wasm.demo_key_char(e.charCode);
+                // Handle special keys (Tab, Enter, Arrows, Escape, Backspace)
+                function handleKeyDown(e) {
+                    const mods = (e.ctrlKey ? 1 : 0) | (e.shiftKey ? 2 : 0) | (e.altKey ? 4 : 0);
+
+                    // Prevent default for navigation keys
+                    if (['Tab', 'Enter', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Delete'].includes(e.key)) {
+                        e.preventDefault();
+                        wasm.demo_key_down(e.keyCode, mods);
+                    } else if (e.ctrlKey || e.altKey || e.metaKey) {
+                        // Pass through modifier combos
+                        wasm.demo_key_down(e.keyCode, mods);
+                    }
+                    // Regular character keys are handled by the 'input' event
+                }
+
+                canvas.addEventListener('keydown', handleKeyDown);
+                hiddenInput.addEventListener('keydown', handleKeyDown);
+
+                // Handle character input via the hidden input
+                hiddenInput.addEventListener('input', (e) => {
+                    const text = e.data;
+                    if (text) {
+                        for (let i = 0; i < text.length; i++) {
+                            const code = text.charCodeAt(i);
+                            if (code >= 32 && code < 127) {
+                                wasm.demo_key_char(code);
+                            }
+                        }
+                    }
+                    // Clear the hidden input to capture next character
+                    hiddenInput.value = '';
+                });
+
+                // Keep hidden input focused when user types
+                hiddenInput.addEventListener('blur', () => {
+                    // Re-focus if canvas area was clicked
+                    if (document.activeElement === canvas || document.activeElement === document.body) {
+                        hiddenInput.focus();
                     }
                 });
 
@@ -394,7 +434,8 @@
                 canvas.addEventListener('mousedown', (e) => {
                     const { x, y } = getCellPos(e);
                     wasm.demo_mouse_click(x, y);
-                    canvas.focus();
+                    // Focus hidden input for text capture
+                    hiddenInput.focus();
                 });
 
                 canvas.addEventListener('mouseup', (e) => {
