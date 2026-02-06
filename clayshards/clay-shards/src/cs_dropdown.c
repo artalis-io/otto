@@ -98,9 +98,10 @@ CsDropdownResult cs_dropdown(
     bool is_hovered = Clay_PointerOver(clay_id);
     result.hovered = is_hovered;
 
-    /* Focus follows hover */
+    /* Focus follows hover - update immediately for this frame */
     if (is_hovered) {
         g->focused_id = id;
+        is_focused = true;
     }
 
     /* ========================================================================
