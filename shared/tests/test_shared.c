@@ -2820,6 +2820,36 @@ TEST(metrics_http_request)
     sh_metrics_shutdown();
 }
 
+TEST(metrics_statsd_hostname_resolution)
+{
+    /*
+     * Test that statsd connection works with different hostname formats.
+     * Uses getaddrinfo internally (thread-safe replacement for gethostbyname).
+     */
+    ShMetricsConfig cfg = SH_METRICS_CONFIG_DEFAULT;
+    cfg.service = "test";
+
+    /* Test 1: IP address should work */
+    cfg.statsd_host = "127.0.0.1";
+    cfg.statsd_port = 8125;
+    ASSERT_EQ(sh_metrics_init(&cfg), 0);
+    /* Send a metric - won't fail even if no server is listening (UDP) */
+    sh_metrics_counter_inc("test_counter", 1, NULL);
+    sh_metrics_shutdown();
+
+    /* Test 2: "localhost" hostname should resolve */
+    cfg.statsd_host = "localhost";
+    ASSERT_EQ(sh_metrics_init(&cfg), 0);
+    sh_metrics_counter_inc("test_counter", 1, NULL);
+    sh_metrics_shutdown();
+
+    /* Test 3: NULL host should work (no statsd connection) */
+    cfg.statsd_host = NULL;
+    ASSERT_EQ(sh_metrics_init(&cfg), 0);
+    sh_metrics_counter_inc("test_counter", 1, NULL);
+    sh_metrics_shutdown();
+}
+
 /* ============================================================================
  * Hashmap Tests
  * ============================================================================ */
@@ -3592,6 +3622,7 @@ int main(void)
     RUN_TEST(metrics_prometheus_output);
     RUN_TEST(metrics_with_tags);
     RUN_TEST(metrics_http_request);
+    RUN_TEST(metrics_statsd_hostname_resolution);
 
     printf("\nHashmap:\n");
     RUN_TEST(hashmap_i64_create_free);

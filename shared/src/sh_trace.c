@@ -150,8 +150,10 @@ void sh_trace_set(const char *trace_id) {
 
     if (trace_id && trace_id[0]) {
         char *copy = strdup(trace_id);
-        pthread_setspecific(s_trace_key, copy);
-        sh_log_set_trace_id(copy);
+        if (copy) {
+            pthread_setspecific(s_trace_key, copy);
+            sh_log_set_trace_id(copy);
+        }
     } else {
         pthread_setspecific(s_trace_key, NULL);
         sh_log_set_trace_id(NULL);
