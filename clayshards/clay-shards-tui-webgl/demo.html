@@ -47,6 +47,125 @@
             border-radius: 12px;
             padding: 20px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            position: relative;
+        }
+
+        /* RobCo Monitor Bezel */
+        .terminal-container.bezel-enabled {
+            background: linear-gradient(145deg, #4a4a42 0%, #3a3a32 50%, #2a2a22 100%);
+            border-radius: 8px;
+            padding: 0;
+            border: 4px solid #2a2a22;
+            box-shadow:
+                0 8px 32px rgba(0,0,0,0.8),
+                inset 0 2px 4px rgba(255,255,255,0.1),
+                inset 0 -2px 4px rgba(0,0,0,0.3);
+        }
+
+        .bezel-enabled .bezel-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            background: linear-gradient(180deg, #5a5a52 0%, #4a4a42 100%);
+            border-bottom: 2px solid #2a2a22;
+            border-radius: 4px 4px 0 0;
+        }
+
+        .bezel-top { display: none; }
+
+        .bezel-nameplate {
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            font-weight: bold;
+            color: #1a1a12;
+            background: linear-gradient(180deg, #c4b998 0%, #a89878 100%);
+            padding: 3px 12px;
+            border-radius: 2px;
+            border: 1px solid #887858;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.3);
+            letter-spacing: 1px;
+        }
+
+        .bezel-vents {
+            display: flex;
+            gap: 3px;
+        }
+
+        .bezel-vent {
+            width: 20px;
+            height: 4px;
+            background: #1a1a12;
+            border-radius: 1px;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
+        }
+
+        .bezel-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #2a4a2a;
+            border: 1px solid #1a1a12;
+            box-shadow: 0 0 4px #0f0;
+            animation: blink 2s infinite;
+        }
+
+        @keyframes blink {
+            0%, 90% { background: #2a4a2a; box-shadow: 0 0 4px #0a0; }
+            95% { background: #4a8a4a; box-shadow: 0 0 8px #0f0; }
+        }
+
+        .bezel-enabled .bezel-screen {
+            margin: 12px;
+            padding: 8px;
+            background: #0a0a08;
+            border-radius: 8px;
+            border: 3px solid #1a1a12;
+            box-shadow:
+                inset 0 0 20px rgba(0,0,0,0.8),
+                inset 0 0 4px rgba(0,255,0,0.1);
+        }
+
+        .bezel-screen { display: contents; }
+
+        .bezel-enabled .bezel-bottom {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 6px 16px 10px;
+            background: linear-gradient(0deg, #3a3a32 0%, #4a4a42 100%);
+            border-top: 1px solid #5a5a52;
+            border-radius: 0 0 4px 4px;
+            gap: 12px;
+        }
+
+        .bezel-bottom { display: none; }
+
+        .bezel-screw {
+            width: 10px;
+            height: 10px;
+            background: linear-gradient(135deg, #6a6a62 0%, #3a3a32 100%);
+            border-radius: 50%;
+            border: 1px solid #2a2a22;
+            position: relative;
+        }
+
+        .bezel-screw::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 6px;
+            height: 1px;
+            background: #2a2a22;
+        }
+
+        .bezel-label {
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
+            color: #8a8a72;
+            letter-spacing: 2px;
         }
 
         #terminal {
@@ -58,11 +177,17 @@
         /* Fullscreen styles */
         .terminal-container:fullscreen {
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             background: #000;
             border-radius: 0;
             padding: 0;
+            border: none;
+        }
+
+        .terminal-container:fullscreen.bezel-enabled {
+            background: #2a2a22;
         }
 
         .terminal-container:fullscreen #terminal {
@@ -70,6 +195,18 @@
             max-height: 100vh;
             width: auto;
             height: auto;
+        }
+
+        .terminal-container:fullscreen .bezel-top,
+        .terminal-container:fullscreen .bezel-bottom {
+            display: none;
+        }
+
+        .terminal-container:fullscreen.bezel-enabled .bezel-screen {
+            margin: 0;
+            padding: 0;
+            border: none;
+            border-radius: 0;
         }
 
         .controls {
@@ -205,8 +342,30 @@
     <div id="error"></div>
 
     <div class="container" style="display: none;" id="main">
-        <div class="terminal-container">
-            <canvas id="terminal" tabindex="0"></canvas>
+        <div class="terminal-container" id="terminalContainer">
+            <!-- RobCo Bezel Top -->
+            <div class="bezel-top">
+                <div class="bezel-vents">
+                    <div class="bezel-vent"></div>
+                    <div class="bezel-vent"></div>
+                    <div class="bezel-vent"></div>
+                </div>
+                <div class="bezel-nameplate">ROBCO INDUSTRIES UNIFIED OS</div>
+                <div class="bezel-indicator"></div>
+            </div>
+
+            <!-- Screen Area -->
+            <div class="bezel-screen">
+                <canvas id="terminal" tabindex="0"></canvas>
+            </div>
+
+            <!-- RobCo Bezel Bottom -->
+            <div class="bezel-bottom">
+                <div class="bezel-screw"></div>
+                <div class="bezel-label">MODEL UX-7800 TERMLINK</div>
+                <div class="bezel-screw"></div>
+            </div>
+
             <!-- Hidden input for capturing text input (IME-friendly) -->
             <input type="text" id="hiddenInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
                    style="position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0;">
@@ -231,6 +390,13 @@
                 <label>Glass Reflection</label>
                 <div class="preset-buttons">
                     <button id="glassToggle">Off</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Monitor Bezel</label>
+                <div class="preset-buttons">
+                    <button id="bezelToggle">Off</button>
                 </div>
             </div>
 
@@ -541,6 +707,15 @@
                     crt.setGlass(enabled);
                     glassToggle.textContent = enabled ? 'On' : 'Off';
                     glassToggle.classList.toggle('active', enabled);
+                });
+
+                // Bezel toggle (RobCo monitor frame)
+                const bezelToggle = document.getElementById('bezelToggle');
+                const terminalContainerEl = document.getElementById('terminalContainer');
+                bezelToggle.addEventListener('click', () => {
+                    const enabled = terminalContainerEl.classList.toggle('bezel-enabled');
+                    bezelToggle.textContent = enabled ? 'On' : 'Off';
+                    bezelToggle.classList.toggle('active', enabled);
                 });
 
                 function updateSliders() {
