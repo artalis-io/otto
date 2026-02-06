@@ -1104,12 +1104,12 @@ void ct_render_tile(CTRenderContext *ctx, const CTTile *tile)
                                               ctx->style.water_color);
                         }
                     } else {
-                        /* Use data-driven width based on waterway type */
+                        /* Use zoom-adaptive width based on waterway type */
                         int waterway_type = f->feature_type;
                         if (waterway_type < 0 || waterway_type >= CT_WATERWAY_TYPE_COUNT) {
                             waterway_type = CT_WATERWAY_OTHER;
                         }
-                        float width = ct_style_waterway_width(&ctx->style, waterway_type);
+                        float width = ct_style_waterway_width_at_zoom(&ctx->style, waterway_type, tile->coord.z);
                         ct_render_polyline(ctx, scaled, f->num_points,
                                            ctx->style.water_color, width);
                     }

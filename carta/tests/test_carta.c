@@ -397,8 +397,13 @@ TEST(road_width_at_zoom)
     float mid16 = ct_road_width_at_zoom(&rw, 16);
     ASSERT(mid16 > 4.0f && mid16 < 8.0f);
 
-    /* Below z10 clamps to z10 width */
-    ASSERT_NEAR(ct_road_width_at_zoom(&rw, 5), 2.0f, 0.01);
+    /* At z6 and below, roads are 30% of z10 width for low-zoom clarity */
+    float z6_width = ct_road_width_at_zoom(&rw, 6);
+    ASSERT_NEAR(z6_width, 2.0f * 0.3f, 0.01);  /* 30% of z10 */
+
+    /* Interpolation between z6 (30%) and z10 */
+    float z8_width = ct_road_width_at_zoom(&rw, 8);
+    ASSERT(z8_width > z6_width && z8_width < 2.0f);
 
     /* Above z18 clamps to z18 width */
     ASSERT_NEAR(ct_road_width_at_zoom(&rw, 20), 8.0f, 0.01);
@@ -1592,13 +1597,13 @@ TEST(lod_default_preset)
     /* Should have many rules */
     ASSERT(config.num_rules > 20);
 
-    /* Check motorway rule - visible at z4+ (balanced preset) */
+    /* Check motorway rule - visible at z5+ (matches OSM Carto) */
     int motorway_visible = ct_lod_is_visible(&config, CT_LAYER_ROADS,
-                                              CT_ROAD_MOTORWAY, 4, 0, 0);
+                                              CT_ROAD_MOTORWAY, 5, 0, 0);
     ASSERT_EQ(motorway_visible, 1);
 
     int motorway_hidden = ct_lod_is_visible(&config, CT_LAYER_ROADS,
-                                             CT_ROAD_MOTORWAY, 3, 0, 0);
+                                             CT_ROAD_MOTORWAY, 4, 0, 0);
     ASSERT_EQ(motorway_hidden, 0);
 
     ct_lod_free(&config);
@@ -1728,17 +1733,17 @@ TEST(lod_waterway_types)
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_RIVER,
                                  10, 0, 100), 1);
 
-    /* Streams visible at z13+ - balanced preset shows earlier */
+    /* Streams visible at z14+ (matches OSM Carto to reduce clutter) */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_STREAM,
-                                 13, 0, 0), 1);
+                                 14, 0, 0), 1);
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_STREAM,
-                                 12, 0, 0), 0);
+                                 13, 0, 0), 0);
 
-    /* Canals visible at z10+ - balanced preset shows earlier */
+    /* Canals visible at z12+ (delayed to reduce clutter at low zoom) */
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_CANAL,
-                                 10, 0, 0), 1);
+                                 12, 0, 0), 1);
     ASSERT_EQ(ct_lod_is_visible(&config, CT_LAYER_WATER, CT_WATERWAY_CANAL,
-                                 9, 0, 0), 0);
+                                 11, 0, 0), 0);
 
     ct_lod_free(&config);
     return 1;

@@ -70,21 +70,21 @@ void ct_lod_default(CTLODConfig *config)
      * visibility at low zoom levels. Good for trucking/logistics use cases.
      */
 
-    /* Roads - closer to OSM Carto visibility thresholds
+    /* Roads - match OSM Carto visibility thresholds exactly
      * OSM Carto: motorway z5, trunk z5, primary z8, secondary z10, tertiary z12
-     * We show major roads 1 zoom earlier for trucking use case.
+     * Matching OSM for visual consistency.
      */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 4, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 5, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 7, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 10, -1, 0, 0);  /* OSM Carto: z10 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 12, -1, 0, 0);   /* OSM Carto: z12 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_MOTORWAY, 5, -1, 0, 0);   /* OSM Carto: z5 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TRUNK, 5, -1, 0, 0);      /* OSM Carto: z5 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_PRIMARY, 8, -1, 0, 0);    /* OSM Carto: z8 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SECONDARY, 10, -1, 0, 0); /* OSM Carto: z10 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_TERTIARY, 12, -1, 0, 0);  /* OSM Carto: z12 */
     ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_RESIDENTIAL, 13, -1, 0, 0); /* OSM Carto: z13 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 14, -1, 0, 0);    /* OSM Carto: z14 */
-    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 14, -1, 0, 0);      /* OSM Carto: z14 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_SERVICE, 14, -1, 0, 0);   /* OSM Carto: z14 */
+    ct_lod_add_rule(config, CT_LAYER_ROADS, CT_ROAD_OTHER, 14, -1, 0, 0);     /* OSM Carto: z14 */
 
-    /* Buildings - visible at z13+ for large, z14+ for all */
-    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 13, -1, 2000, 0);  /* Large buildings */
+    /* Buildings - visible at z13+ (OSM shows buildings at z13) */
+    ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 13, -1, 500, 0);   /* Medium+ buildings at z13 */
     ct_lod_add_rule(config, CT_LAYER_BUILDINGS, -1, 14, -1, 0, 0);     /* All buildings */
 
     /* Water bodies (lakes, reservoirs, ponds) - show earlier
@@ -103,12 +103,14 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 6, -1, 100000, 0);    /* > 0.1 km² */
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATER_RIVERBANK, 8, -1, 0, 0);         /* All riverbanks */
 
-    /* Linear waterways - show rivers earlier */
+    /* Linear waterways - closer to OSM Carto visibility
+     * OSM shows rivers early but canals/streams later to reduce clutter
+     */
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 6, -1, 0, 100000);  /* >100km at z6 */
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 8, -1, 0, 20000);   /* >20km at z8 */
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_RIVER, 10, -1, 0, 0);      /* All rivers at z10 */
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_CANAL, 10, -1, 0, 0);
-    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_STREAM, 13, -1, 0, 0);
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_CANAL, 12, -1, 0, 0);      /* Delay canals to z12 */
+    ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_STREAM, 14, -1, 0, 0);     /* Delay streams to z14 */
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DRAIN, 15, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_DITCH, 15, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_WATER, CT_WATERWAY_OTHER, 14, -1, 0, 0);
