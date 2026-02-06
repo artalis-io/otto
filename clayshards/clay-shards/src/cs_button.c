@@ -212,6 +212,7 @@ CsButtonResult cs_button(
     if (is_hovered && g->pending_click) {
         result.clicked = true;
         g->clicked_id = id;
+        g->focused_id = id;  /* Focus on click */
     }
 
     /* Check keyboard activation (Enter key when focused) */

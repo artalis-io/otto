@@ -166,6 +166,7 @@ CsDropdownResult cs_dropdown(
             result.opened = true;
         }
         g->clicked_id = id;
+        g->focused_id = id;  /* Focus on click */
     }
 
     /* Close dropdown if clicked elsewhere (not on button or list) - BEFORE rendering */

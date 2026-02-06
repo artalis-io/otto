@@ -140,6 +140,7 @@ CsCheckboxResult cs_checkbox(
         *checked = !current_value;
         result.changed = true;
         g->clicked_id = id;
+        g->focused_id = id;  /* Focus on click */
     }
 
     /* Handle keyboard activation (Space or Enter when focused) */

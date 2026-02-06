@@ -170,6 +170,7 @@ CsSliderResult cs_slider(
             result.changed = true;
         }
         g->clicked_id = id;
+        g->focused_id = id;  /* Focus on click */
     }
 
     /* ========================================================================
