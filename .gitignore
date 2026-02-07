@@ -3,6 +3,7 @@
 *.a
 *.so
 *.dylib
+*.dSYM/
 
 # Test binaries
 test_ralph
