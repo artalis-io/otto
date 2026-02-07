@@ -38,8 +38,8 @@ size_t lc_ngram_generate(const char *str, char ngrams[][LC_NGRAM_SIZE + 1], size
     if (len < LC_NGRAM_SIZE) {
         /* String too short - use the whole string as a single "ngram" */
         if (len > 0) {
-            strncpy(ngrams[0], str, LC_NGRAM_SIZE);
-            ngrams[0][len] = '\0';
+            memcpy(ngrams[0], str, len);
+            ngrams[0][len] = '\0';  /* Explicit null termination */
             return 1;
         }
         return 0;
