@@ -17,6 +17,17 @@ OTTO (**O**ptimization for **T**rucking and **T**ransport **O**perations) is a c
 │         └───────────────────┼───────────────────┘                           │
 ├─────────────────────────────┼───────────────────────────────────────────────┤
 │                             ▼                                                │
+│                       UI Components                                          │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                        ClayShards                                     │   │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐     │   │
+│  │  │   Core     │  │   WebGL    │  │    TUI     │  │ TUI-WebGL  │     │   │
+│  │  │ Components │  │  Renderer  │  │  Renderer  │  │ CRT Effects│     │   │
+│  │  └────────────┘  └────────────┘  └────────────┘  └────────────┘     │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                             │                                                │
+├─────────────────────────────┼───────────────────────────────────────────────┤
+│                             ▼                                                │
 │                      Domain Libraries                                        │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
 │  │  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐        │   │
@@ -58,7 +69,7 @@ OTTO (**O**ptimization for **T**rucking and **T**ransport **O**perations) is a c
 ## Directory Structure
 
 ```
-fuelwise-platform/
+otto/
 ├── ralph/              # LP/MIP Solver (libralph.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   Simplex, LU factorization, Branch & Bound
@@ -90,7 +101,7 @@ fuelwise-platform/
 ├── locus/              # Geocoding Engine (liblocus.a)
 │   ├── include/        #   Public headers (locus.h, lc_*.h)
 │   ├── src/            #   Trie, n-gram, spatial index, PBF parsing
-│   ├── tests/          #   52 tests
+│   ├── tests/          #   68 tests
 │   ├── api/            #   Locus Geocoding Server REST API
 │   ├── tools/          #   CLI search utilities
 │   └── wasm/           #   WebAssembly build
@@ -106,11 +117,17 @@ fuelwise-platform/
 │   ├── api/            #   REST + WebSocket server (:8084)
 │   └── consumers/      #   Built-in job consumers
 │
+├── clayshards/         # UI Component System
+│   ├── clay-shards/    #   Immediate-mode UI components (C11)
+│   ├── clay-shards-webgl/    # WebGL renderer
+│   ├── clay-shards-tui/      # Terminal TUI renderer
+│   └── clay-shards-tui-webgl/# CRT effects for browser TUI
+│
 ├── vendor/             # Third-party code (vendored)
 │   ├── miniz/          #   Public domain zlib implementation
 │   ├── mongoose/       #   Embedded HTTP server
 │   ├── sqlite/         #   Embedded SQL database [PLANNED]
-│   └── clay/           #   UI layout library (future)
+│   └── clay/           #   UI layout library
 │
 ├── scripts/            # Utility scripts
 │   ├── download-osm.sh #   Download OSM PBF from Geofabrik
@@ -232,7 +249,7 @@ Map tile generation:
 - Autocomplete (prefix-based type-ahead suggestions)
 - Reverse geocoding (coordinates → nearest address/place)
 - Fuzzy matching using trigram similarity
-- Binary index format (.lcix) for fast loading
+- Binary index format (.lcx) for fast loading
 
 Data structures:
 - **Prefix Trie**: O(m) lookup for autocomplete (m = query length)
@@ -243,6 +260,25 @@ The GIS trifecta (**Velo**, **Carta**, **Locus**) provides complete geographic f
 - **Velo**: Routing (A* search, turn-by-turn navigation)
 - **Carta**: Map tiles (vector MVT, raster PNG)
 - **Locus**: Geocoding (forward search, autocomplete, reverse lookup)
+
+### ClayShards - UI Component System
+**Location:** `clayshards/`
+**Dependencies:** `vendor/clay`
+
+Immediate-mode UI component library in C11, built on Clay for layout. Renderer-agnostic design allows the same UI code to run on multiple backends:
+
+- **clay-shards/**: Core components (buttons, inputs, checkboxes, sliders, dropdowns, scrolls, maps)
+- **clay-shards-webgl/**: WebGL renderer for browser deployment
+- **clay-shards-tui/**: Terminal TUI renderer (ANSI escape sequences)
+- **clay-shards-tui-webgl/**: Browser TUI with CRT phosphor effects
+
+Key principles:
+- Immediate mode: UI rebuilt each frame, no retained widget tree
+- Stable identity via string hash (`CS_ID("name")`)
+- Renderer-agnostic: same code targets WebGL, TUI, or framebuffer
+- State ownership: app owns business state, ClayShards owns UI state
+
+See [MANIFESTO.md](MANIFESTO.md) for design philosophy.
 
 ### Shared - Common Utilities
 **Location:** `shared/`
@@ -615,73 +651,9 @@ int warnings = sh_capacity_validate(
 
 ---
 
-# TODO: Structural Improvements
+## Remaining Structural TODOs
 
-The following improvements are planned for the project structure:
-
-## High Priority
-
-- [x] **Consolidate vendor/ directories** (COMPLETED)
-  - Moved miniz from `velo/vendor/` and `carta/vendor/` to root `vendor/miniz/`
-  - Updated Makefiles to reference `../vendor/miniz`
-  - Single source of truth for vendored code
-
-- [x] **Create shared/ library** (COMPLETED)
-  - Created `shared/` with geo utilities (haversine, Web Mercator, coordinates)
-  - `libshared.a` with 23 tests
-  - Provides common types: `SHCoord`, `SHBBox`, coordinate conversions
-
-- [x] **Reorganize API/WASM/UI directories** (COMPLETED)
-  - Moved `api/` → `fuelwise/api/`
-  - Moved `wasm/` → `fuelwise/wasm/`
-  - Moved `ui/` → `fuelwise/ui/`
-  - Created `velo/api/` for route server
-  - Created `carta/api/` for tile server
-  - Created `velo/wasm/` and `carta/wasm/` for WebAssembly builds
-
-- [x] **Standardize Makefile targets** (COMPLETED)
-  - Consistent targets across all modules: `all`, `lib`, `test`, `clean`, `help`
-  - API targets: `fuelwise-api`, `velo-api`, `carta-api`
-  - WASM targets: `wasm-fuelwise`, `wasm-velo`, `wasm-carta`
-  - Run targets: `run-fuelwise-api`, `run-velo-api`, `run-carta-api`
-
-## Medium Priority
-
-- [x] **Add API endpoint tests** (COMPLETED)
-  - `test-fuelwise-api` - FuelWise API curl tests
-  - `test-velo-api` - Velo route server tests
-  - `test-carta-api` - Carta tile server tests
-  - `test-api` - Run all API tests
-
-- [ ] **Standardize test structure**
-  - Currently inconsistent: inline tests vs separate files
-  - Adopt single pattern across all modules
-  - Consider unified test runner
-
-- [ ] **Add integration tests at root**
-  - Create `tests/integration/` directory
-  - End-to-end tests (route + refuel + tiles)
-  - Cross-module integration tests
-
-## Low Priority
-
-- [x] **Add scripts/ directory** (COMPLETED)
-  - `download-osm.sh` - Fetch OSM data from Geofabrik
-  - `benchmark.sh` - Run all benchmarks
-  - `ci.sh` - CI/CD pipeline script
-
-- [x] **Add carta-ui** (COMPLETED)
-  - Moved `carta/api/ui/` to `carta/ui/`
-  - Added `carta-ui` and `carta-ui-dev` Makefile targets
-
-- [x] **Docker multi-service** (COMPLETED)
-  - `docker/Dockerfile.velo` - Velo route server
-  - `docker/Dockerfile.carta` - Carta tile server
-  - Updated `docker-compose.yml` with all 3 APIs
-
-- [ ] **Improve documentation**
-  - Add CONTRIBUTING.md
-  - Add CHANGELOG.md
-
-- [ ] **Generate TypeScript types**
-  - `gen-types.sh` - Generate TypeScript types from C headers
+- [ ] **Standardize test structure** - Adopt single pattern across all modules
+- [ ] **Add integration tests** - End-to-end tests (route + refuel + tiles)
+- [ ] **Add CONTRIBUTING.md and CHANGELOG.md**
+- [ ] **Generate TypeScript types** - `gen-types.sh` from C headers
