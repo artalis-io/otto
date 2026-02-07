@@ -469,26 +469,52 @@
             font-weight: 500;
         }
 
-        /* Code Block */
+        /* Code Block - Terminal CRT style */
         .code-block {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
+            background: linear-gradient(135deg, #0a0a0a 0%, #141414 100%);
+            border: 1px solid #2a2a2a;
             border-radius: 6px;
             padding: 20px;
             overflow-x: auto;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .code-block::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(255, 255, 255, 0.02) 0px,
+                rgba(255, 255, 255, 0.02) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
         }
 
         .code-block pre {
             margin: 0;
             font-size: 13px;
+            position: relative;
+            z-index: 1;
+            animation: crt-flicker-gray 5s infinite;
         }
 
         .code-block .comment {
-            color: var(--text-muted);
+            color: #707070;
+            text-shadow: 0 0 5px rgba(150, 150, 150, 0.2);
         }
 
         .code-block .command {
-            color: var(--success);
+            color: #50c878;
+            text-shadow:
+                0 0 5px rgba(80, 200, 120, 0.4),
+                0 0 10px rgba(80, 200, 120, 0.2);
         }
 
         /* Why C Comparison */
