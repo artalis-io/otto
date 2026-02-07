@@ -5,31 +5,27 @@
 (function() {
     'use strict';
 
-    // Store original content and track animated blocks
+    const CURSOR = '\u2588'; // Block cursor character
     const codeBlocks = document.querySelectorAll('.code-block');
     const blockData = new Map();
 
-    // Initialize after page is fully rendered (fonts loaded, CSS applied)
+    // Initialize after page is fully rendered
     function initBlocks() {
         codeBlocks.forEach(block => {
             const pre = block.querySelector('pre');
-            // Only animate static code blocks (those with content, not demo result containers)
             if (pre && pre.innerHTML.trim().length > 0 && !pre.id && !blockData.has(block)) {
-                // Capture the final height after full render
                 const finalHeight = pre.offsetHeight;
                 blockData.set(block, {
                     originalHTML: pre.innerHTML,
                     finalHeight: finalHeight,
                     animated: false
                 });
-                // Set fixed height to prevent layout shift, hide content for animation
                 pre.style.minHeight = finalHeight + 'px';
                 pre.style.visibility = 'hidden';
             }
         });
     }
 
-    // Wait for fonts and layout to complete
     if (document.readyState === 'complete') {
         requestAnimationFrame(initBlocks);
     } else {
@@ -38,7 +34,6 @@
         });
     }
 
-    // Typing animation function
     function typeContent(block) {
         const data = blockData.get(block);
         if (!data || data.animated) return;
@@ -49,132 +44,97 @@
         pre.style.visibility = 'visible';
         block.classList.add('typing');
 
-        // Build a flat list of characters with their HTML wrapper info
-        const chars = [];
-        let inTag = false;
-        let currentTag = '';
-        let tagStack = [];
-
-        // Parse the HTML to extract characters with their formatting context
+        // Get plain text and build a map of positions to HTML
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = originalHTML;
+        const fullText = tempDiv.textContent || tempDiv.innerText;
 
-        function walkNodes(node, wrapperStack) {
-            if (node.nodeType === Node.TEXT_NODE) {
-                const text = node.textContent;
-                // Clone current wrapper stack for each character
-                for (let i = 0; i < text.length; i++) {
-                    chars.push({
-                        char: text[i],
-                        wrappers: wrapperStack.slice()
-                    });
-                }
-            } else if (node.nodeType === Node.ELEMENT_NODE) {
-                const newStack = wrapperStack.slice();
-                newStack.push({
-                    tag: node.tagName.toLowerCase(),
-                    className: node.className
-                });
-                for (let child of node.childNodes) {
-                    walkNodes(child, newStack);
-                }
-            }
-        }
+        // Remove trailing whitespace for cursor positioning
+        const trimmedText = fullText.replace(/\s+$/, '');
+        const textLength = trimmedText.length;
 
-        walkNodes(tempDiv, []);
-
-        // Remove trailing newlines so cursor doesn't jump to new line
-        while (chars.length > 0 && chars[chars.length - 1].char === '\n') {
-            chars.pop();
-        }
-
-        // Now render characters one by one
-        let index = 0;
-        let builtHTML = '';
-
-        function getOpenTags(wrappers) {
-            return wrappers.map(w => {
-                if (w.className) {
-                    return `<${w.tag} class="${w.className}">`;
-                }
-                return `<${w.tag}>`;
-            }).join('');
-        }
-
-        function getCloseTags(wrappers) {
-            return wrappers.slice().reverse().map(w => `</${w.tag}>`).join('');
-        }
-
-        function escapeHTML(char) {
-            if (char === '<') return '&lt;';
-            if (char === '>') return '&gt;';
-            if (char === '&') return '&amp;';
-            return char;
-        }
+        let charIndex = 0;
 
         function typeNext() {
-            if (index >= chars.length) {
+            if (charIndex >= textLength) {
+                // Animation complete - show final content with blinking cursor
                 block.classList.remove('typing');
                 block.classList.add('typed');
-                // Remove fixed height constraint now that content is complete
                 pre.style.minHeight = '';
-                // Restore original content without cursor
-                pre.innerHTML = originalHTML;
+                // Find position to insert cursor (before trailing whitespace)
+                const cursorHTML = '<span class="typed-cursor">' + CURSOR + '</span>';
+                // Insert cursor at end of trimmed content
+                pre.innerHTML = originalHTML.replace(/(\s*)$/, cursorHTML + '$1');
                 return;
             }
 
-            const charData = chars[index];
-            const openTags = getOpenTags(charData.wrappers);
-            const closeTags = getCloseTags(charData.wrappers);
+            // Show text up to current position with cursor
+            const currentText = trimmedText.substring(0, charIndex + 1);
+            const remaining = trimmedText.substring(charIndex + 1);
 
-            // Rebuild full HTML up to current character
-            builtHTML = '';
-            for (let i = 0; i <= index; i++) {
-                const c = chars[i];
-                const prevWrappers = i > 0 ? chars[i-1].wrappers : [];
-                const currWrappers = c.wrappers;
+            // Rebuild HTML with visible portion + cursor
+            // Simple approach: show original HTML structure but with cursor inserted
+            tempDiv.innerHTML = originalHTML;
+            const walker = document.createTreeWalker(tempDiv, NodeFilter.SHOW_TEXT, null, false);
 
-                // Find where wrappers diverge
-                let commonLen = 0;
-                while (commonLen < prevWrappers.length &&
-                       commonLen < currWrappers.length &&
-                       prevWrappers[commonLen].tag === currWrappers[commonLen].tag &&
-                       prevWrappers[commonLen].className === currWrappers[commonLen].className) {
-                    commonLen++;
+            let pos = 0;
+            let cursorInserted = false;
+            const targetPos = charIndex + 1;
+
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                const nodeText = node.textContent;
+                const nodeStart = pos;
+                const nodeEnd = pos + nodeText.length;
+
+                if (!cursorInserted && targetPos <= nodeEnd) {
+                    // Cursor goes in this node
+                    const localPos = targetPos - nodeStart;
+                    const before = nodeText.substring(0, localPos);
+                    const after = nodeText.substring(localPos);
+
+                    // Create cursor span
+                    const cursorSpan = document.createElement('span');
+                    cursorSpan.className = 'typing-cursor';
+                    cursorSpan.textContent = CURSOR;
+
+                    // Replace text node with before + cursor + hidden after
+                    const parent = node.parentNode;
+                    const beforeNode = document.createTextNode(before);
+                    const afterSpan = document.createElement('span');
+                    afterSpan.style.visibility = 'hidden';
+                    afterSpan.textContent = after;
+
+                    parent.insertBefore(beforeNode, node);
+                    parent.insertBefore(cursorSpan, node);
+                    parent.insertBefore(afterSpan, node);
+                    parent.removeChild(node);
+
+                    cursorInserted = true;
+                    break;
                 }
 
-                // Close tags that are no longer needed
-                for (let j = prevWrappers.length - 1; j >= commonLen; j--) {
-                    builtHTML += `</${prevWrappers[j].tag}>`;
-                }
-
-                // Open new tags
-                for (let j = commonLen; j < currWrappers.length; j++) {
-                    const w = currWrappers[j];
-                    if (w.className) {
-                        builtHTML += `<${w.tag} class="${w.className}">`;
-                    } else {
-                        builtHTML += `<${w.tag}>`;
-                    }
-                }
-
-                builtHTML += escapeHTML(c.char);
+                pos = nodeEnd;
             }
 
-            // Close any remaining open tags
-            const lastWrappers = chars[index].wrappers;
-            for (let j = lastWrappers.length - 1; j >= 0; j--) {
-                builtHTML += `</${lastWrappers[j].tag}>`;
+            // Hide all text after cursor position
+            if (cursorInserted) {
+                // Continue walking to hide remaining text
+                while (walker.nextNode()) {
+                    const node = walker.currentNode;
+                    const hiddenSpan = document.createElement('span');
+                    hiddenSpan.style.visibility = 'hidden';
+                    hiddenSpan.textContent = node.textContent;
+                    node.parentNode.insertBefore(hiddenSpan, node);
+                    node.parentNode.removeChild(node);
+                }
             }
 
-            // Add inline cursor
-            builtHTML += '<span class="typing-cursor">\u2588</span>';
-
-            pre.innerHTML = builtHTML;
-            index++;
+            pre.innerHTML = tempDiv.innerHTML;
+            charIndex++;
 
             // Variable typing speed
-            const char = charData.char;
+            const char = trimmedText[charIndex - 1];
             let delay;
             if (char === '\n') {
                 delay = 25 + Math.random() * 15;
@@ -190,7 +150,6 @@
         typeNext();
     }
 
-    // Intersection Observer for triggering animation on scroll
     const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting && blockData.has(entry.target)) {
@@ -200,7 +159,6 @@
         });
     }, { threshold: 0.3 });
 
-    // Start observing all code blocks (observer will check blockData when triggered)
     codeBlocks.forEach(block => {
         observer.observe(block);
     });
