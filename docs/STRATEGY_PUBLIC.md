@@ -1565,5 +1565,52 @@ AI can generate code. AI cannot:
 
 ---
 
-*Document version: 1.6*
+## 16. Architectural Moat: Dual Agnostic Design
+
+OTTO's architecture creates structural advantages that closed-source B2B competitors cannot replicate.
+
+### 16.1 Transport-Agnostic Backend
+
+Every OTTO API is a pure C function. HTTP, WASM, embedded—these are thin wrappers over the same core. The demo IS the product: same algorithms run in the browser as on the server.
+
+| Competitor Reality | OTTO Reality |
+|-------------------|--------------|
+| "Schedule a demo" | "Try it now—same code runs in browser" |
+| "Requires cloud setup" | "Single WASM binary, no infrastructure" |
+| "Edge is roadmap" | "If it runs in browser, it runs anywhere" |
+
+### 16.2 Render-Agnostic Frontend (ClayShards)
+
+UI code produces render commands—WebGL, TUI terminal, OpenGL ES are thin renderers over the same component code. Hybrid design: declarative layout (Clay) + imperative interaction (widgets).
+
+| Competitor Reality | OTTO Reality |
+|-------------------|--------------|
+| Locked to web frameworks | C code, any renderer |
+| Separate mobile/desktop codebases | Same WASM everywhere |
+| Browser-first, embedded later | Embedded-first, browser free |
+
+### 16.3 B2B Sales Advantages
+
+**The demo advantage:**
+- Competitors: 2-week sales cycle minimum ("schedule a demo")
+- OTTO: Prospect evaluates same day with a single HTML file
+
+**Edge deployment closes deals:**
+- Most competitors are SaaS-only, require connectivity
+- OTTO: Same code runs in truck cab, on tablet, in browser, on server
+
+### 16.4 Why Competitors Can't Copy This
+
+| Barrier | Explanation |
+|---------|-------------|
+| Sunken cost | Millions invested in existing architecture |
+| Team skills | C expertise is rare |
+| Risk aversion | "Rewrite in C" isn't viable for incumbents |
+| Time-to-market | Ground-up rewrite = years |
+
+**The moat is the architecture, not the code.** Open-sourcing doesn't help competitors because they can't adopt it without rewriting everything.
+
+---
+
+*Document version: 1.7*
 *Last updated: February 2026*

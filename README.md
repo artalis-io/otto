@@ -127,9 +127,48 @@ Each component has a `CLAUDE.md` with API details:
 
 - **Zero Dependencies** - Core libraries use only standard C
 - **WASM-First** - All components compile to WebAssembly (50-150KB)
+- **Transport-Agnostic APIs** - Core is pure C functions; HTTP/WASM/embedded are thin wrappers
 - **C11** - Compound literals, designated initializers, no runtime overhead
 - **Arena Allocators** - Bulk alloc, bulk free, no fragmentation
 - **Immediate Mode UI** - No retained state, deterministic rendering
+
+### Transport-Agnostic Architecture
+
+Every OTTO API is fundamentally a pure C function:
+
+```c
+int carta_render_tile(int z, int x, int y, uint8_t **out, size_t *len);
+int vl_route(VLGraph *g, int from, int to, VLRoute *route);
+```
+
+HTTP (Mongoose) and WASM (Emscripten) are just thin wrappers (~10 lines each) over the same core. This means:
+
+- **The demo IS the product** - Browser WASM demos run the actual algorithms
+- **Zero-infrastructure evaluation** - Send a single HTML file, no server needed
+- **Edge-ready by design** - If it runs in WASM, it runs anywhere
+
+See [docs/TRANSPORT_AGNOSTIC.md](docs/TRANSPORT_AGNOSTIC.md) for the full manifesto.
+
+### Render Backend Agnostic UI
+
+ClayShards applies the same philosophy to the frontend. UI code produces render commands—WebGL, TUI terminal, OpenGL ES are thin renderers over the same component code:
+
+```c
+// Hybrid design: declarative layout (Clay) + imperative interaction (ClayShards)
+CLAY(CLAY_ID("Panel"), CLAY_LAYOUT(.padding = {16, 16, 16, 16})) {
+    if (cs_button(CS_ID("submit"), "Submit", NULL).clicked) {
+        handle_submit();  // Immediate mode: if clicked, react now
+    }
+}
+// Layout answers "where and how big?" — Components answer "what does it do?"
+```
+
+- **Declarative layout** - Clay handles sizing, padding, flex layouts
+- **Imperative interaction** - Immediate mode widgets respond to input inline
+- **Render commands as contract** - UI produces commands; renderers consume them
+- **TUI as strictest target** - If it works in terminal, it works everywhere
+
+See [clayshards/clay-shards/MANIFESTO.md](clayshards/clay-shards/MANIFESTO.md) for the full manifesto.
 
 See [README_DESIGN.md](docs/README_DESIGN.md) for detailed rationale.
 

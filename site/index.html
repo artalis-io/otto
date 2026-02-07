@@ -2161,6 +2161,97 @@
                 </p>
             </div>
 
+            <!-- Transport-Agnostic Architecture -->
+            <div class="subsection">
+                <h3 class="subsection-title">Transport-Agnostic Architecture</h3>
+                <p style="margin-bottom: 16px; color: var(--text-secondary); line-height: 1.6;">
+                    Every OTTO API is a <strong>pure C function</strong> that takes input and produces output.
+                    HTTP, WebAssembly, Unix sockets, embedded calls &mdash; these are thin wrappers over the same core.
+                    <em>The demo is the product.</em>
+                </p>
+                <div class="code-block">
+<pre><span class="comment">// Core function: transport-agnostic, runs anywhere</span>
+<span class="type">int</span> carta_render_tile(<span class="type">int</span> z, <span class="type">int</span> x, <span class="type">int</span> y, <span class="type">uint8_t</span> **out, <span class="type">size_t</span> *len);
+
+<span class="comment">// HTTP wrapper (Mongoose): ~10 lines</span>
+<span class="comment">// WASM wrapper (Emscripten): ~10 lines</span>
+<span class="comment">// Embedded call: direct invocation</span></pre>
+                </div>
+                <div class="grid" style="margin-top: 20px;">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Zero-Infrastructure Demo</span>
+                        </div>
+                        <div class="card-desc">Open <a href="api.html">api.html</a> and click "Try it" &mdash; the actual tile renderer, router, and geocoder run in your browser via WASM. No server required.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Proof by Demonstration</span>
+                        </div>
+                        <div class="card-desc">"Will it run on edge devices?" &mdash; It runs in your browser tab. Same C code compiles to HTTP server, WASM module, or embedded library.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">ClayShards Pattern</span>
+                        </div>
+                        <div class="card-desc">Frontend: UI code is renderer-agnostic (WebGL, TUI). Backend: API code is transport-agnostic (HTTP, WASM). Same philosophy, full stack.</div>
+                    </div>
+                </div>
+                <p style="margin-top: 16px; font-size: 14px; color: var(--text-muted);">
+                    See <a href="https://github.com/ottofleet/otto/blob/main/docs/TRANSPORT_AGNOSTIC.md">Transport-Agnostic Manifesto</a> for the full design philosophy.
+                </p>
+            </div>
+
+            <!-- Render Backend Agnostic UI Logic -->
+            <div class="subsection">
+                <h3 class="subsection-title">Render Backend Agnostic UI Logic</h3>
+                <p style="margin-bottom: 16px; color: var(--text-secondary); line-height: 1.6;">
+                    ClayShards is built on a <strong>hybrid declarative/imperative design</strong> &mdash;
+                    declarative layout composition (Clay) with imperative immediate-mode interaction (widgets).
+                    Layout answers <em>"where and how big?"</em> Components answer <em>"what is it, how does it behave?"</em>
+                    The result: the best of both worlds when reasoning about layout and state.
+                </p>
+                <p style="margin-bottom: 16px; color: var(--text-secondary); line-height: 1.6;">
+                    UI logic produces render commands &mdash; WebGL, TUI terminal, OpenGL ES &mdash;
+                    these are thin renderers over the same component code.
+                    <em>If it works in TUI, it works everywhere.</em>
+                </p>
+                <div class="code-block">
+<pre><span class="comment">// UI code: renderer-agnostic, produces Clay render commands</span>
+<span class="keyword">if</span> (cs_button(CS_ID(<span class="string">"submit"</span>), <span class="string">"Submit"</span>, NULL)) {
+    handle_submit();
+}
+cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span class="string">"Search..."</span>, NULL);
+
+<span class="comment">// WebGL renderer: ~200 lines (GPU-accelerated)</span>
+<span class="comment">// TUI renderer: ~300 lines (terminal ANSI sequences)</span>
+<span class="comment">// Same UI code, same layout, different pixels</span></pre>
+                </div>
+                <div class="grid" style="margin-top: 20px;">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Render Commands as Contract</span>
+                        </div>
+                        <div class="card-desc">UI produces render commands; renderers consume them. No GL state assumptions, no DOM &mdash; just rectangles, text, and images.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">TUI as Strictest Target</span>
+                        </div>
+                        <div class="card-desc">Terminal rendering exposes timing bugs, layout assumptions, and focus issues that GPU renderers hide. TUI compatibility guarantees cross-platform correctness.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Same Philosophy, Full Stack</span>
+                        </div>
+                        <div class="card-desc">Frontend: UI code is renderer-agnostic. Backend: API code is transport-agnostic. Business logic stays in C, deployment targets are just renderer/wrapper choices.</div>
+                    </div>
+                </div>
+                <p style="margin-top: 16px; font-size: 14px; color: var(--text-muted);">
+                    See <a href="https://github.com/ottofleet/otto/blob/main/clayshards/clay-shards/MANIFESTO.md">ClayShards Manifesto</a> for the full design philosophy.
+                </p>
+            </div>
+
             <!-- Core Engines -->
             <div class="subsection">
                 <h3 class="subsection-title">Core Engines</h3>
