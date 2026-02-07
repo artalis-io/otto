@@ -28,7 +28,11 @@
       "description": "Route planning between coordinates with vehicle profiles, optimization modes, and Google Polyline encoded geometry. Uses A* with Landmarks for fast queries.",
       "header_file": "velo/include/vl_api.h",
       "wasm": {
-        "enabled": false
+        "enabled": true,
+        "script": "wasm/velo-api-demo.js",
+        "wrapper": "js/velo-api-demo.js",
+        "factory_name": "VeloAPIDemo",
+        "class_name": "VeloDemo"
       }
     },
     {

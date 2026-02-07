@@ -21,6 +21,8 @@
     <script src="wasm/carta-api-demo.js"></script>
     <script src="js/carta-api-demo.js"></script>
 
+    <script src="wasm/velo-api-demo.js"></script>
+    <script src="js/velo-api-demo.js"></script>
 
 
 
@@ -879,6 +881,22 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 }</pre>
                             </div>
                         </div>
+                        <div class="wasm-demo" id="velo-route-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Calculate a route in Monaco using WASM
+                            </p>
+                            <button class="try-btn" id="velo-route-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="velo-route-output">
+                                <div class="code-block">
+                                    <pre id="velo-route-result"></pre>
+                                </div>
+                                <div class="demo-status" id="velo-route-status"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -925,6 +943,22 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 }</pre>
                             </div>
                         </div>
+                        <div class="wasm-demo" id="velo-health-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Check WASM health status
+                            </p>
+                            <button class="try-btn" id="velo-health-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="velo-health-output">
+                                <div class="code-block">
+                                    <pre id="velo-health-result"></pre>
+                                </div>
+                                <div class="demo-status" id="velo-health-status"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -950,6 +984,22 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
     <span class="key">"max_lat"</span>: <span class="number">48.58</span>,
     <span class="key">"max_lon"</span>: <span class="number">22.90</span>
 }</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo" id="velo-stats-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Get Monaco graph statistics
+                            </p>
+                            <button class="try-btn" id="velo-stats-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="velo-stats-output">
+                                <div class="code-block">
+                                    <pre id="velo-stats-result"></pre>
+                                </div>
+                                <div class="demo-status" id="velo-stats-status"></div>
                             </div>
                         </div>
                     </div>
@@ -1045,6 +1095,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
         // WASM Demo instances
         let cartaDemo = null;
 
+        let veloDemo = null;
 
 
 
@@ -1135,6 +1186,40 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             }
         }
 
+
+        // Velo Route Server WASM init
+        async function initVeloWasm() {
+            try {
+                if (typeof VeloDemo === 'undefined') {
+                    throw new Error('VeloDemo class not loaded');
+                }
+
+                veloDemo = new VeloDemo();
+                await veloDemo.init();
+
+                // Enable WASM demo buttons for velo
+                enableBtn('velo-route-try-btn', 'Calculate Route');
+                enableBtn('velo-health-try-btn', 'Check Health');
+                enableBtn('velo-stats-try-btn', 'Get Stats');
+                const veloStatus = document.getElementById('velo-route-status');
+                if (veloStatus) {
+                    veloStatus.textContent = `Velo ${veloDemo.getVersion()} ready (Monaco: ${veloDemo.getNodeCount()} nodes)`;
+                    veloStatus.className = 'demo-status success';
+                    document.getElementById('velo-route-output').classList.add('visible');
+                }
+            } catch (err) {
+                console.error('Velo Route Server WASM init failed:', err);
+                disableBtn('velo-route-try-btn');
+                disableBtn('velo-health-try-btn');
+                disableBtn('velo-stats-try-btn');
+                const veloStatus = document.getElementById('velo-route-status');
+                if (veloStatus) {
+                    veloStatus.textContent = 'Failed to load WASM: ' + err.message;
+                    veloStatus.className = 'demo-status error';
+                    document.getElementById('velo-route-output').classList.add('visible');
+                }
+            }
+        }
 
 
 
@@ -1254,10 +1339,55 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             fetchJsonEndpoint(cartaDemo, '/api/v1/stats', 'stats-try-btn', 'stats-result', 'stats-status', 'stats-output', 'Get Stats');
         }
 
+        // Velo-specific WASM handlers
+        async function calculateVeloRoute() {
+            if (!veloDemo || !veloDemo.isReady()) return;
+
+            const btn = document.getElementById('velo-route-try-btn');
+            const result = document.getElementById('velo-route-result');
+            const status = document.getElementById('velo-route-status');
+            const output = document.getElementById('velo-route-output');
+
+            btn.disabled = true;
+            btn.textContent = 'Calculating...';
+            output.classList.add('visible');
+
+            // Monaco demo coordinates (Casino to Port)
+            const from = {lat: 43.7384, lon: 7.4246};
+            const to = {lat: 43.7311, lon: 7.4197};
+
+            try {
+                const startTime = performance.now();
+                const route = await veloDemo.route(from, to);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                result.innerHTML = formatJsonWithHighlighting(route);
+                status.textContent = `Route calculated in ${elapsed}ms (${(route.route.distance).toFixed(0)}m, ${(route.route.duration).toFixed(0)}s)`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('Route calculation failed:', err);
+                result.textContent = '';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Calculate Route';
+            }
+        }
+
+        function fetchVeloHealth() {
+            fetchJsonEndpoint(veloDemo, '/api/v1/health', 'velo-health-try-btn', 'velo-health-result', 'velo-health-status', 'velo-health-output', 'Check Health');
+        }
+
+        function fetchVeloStats() {
+            fetchJsonEndpoint(veloDemo, '/api/v1/stats', 'velo-stats-try-btn', 'velo-stats-result', 'velo-stats-status', 'velo-stats-output', 'Get Stats');
+        }
+
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             initCartaWasm();
 
+            initVeloWasm();
 
 
 
@@ -1268,6 +1398,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             document.getElementById('tilejson-try-btn').addEventListener('click', fetchTileJSON);
             document.getElementById('health-try-btn').addEventListener('click', fetchHealth);
             document.getElementById('stats-try-btn').addEventListener('click', fetchStats);
+            document.getElementById('velo-route-try-btn').addEventListener('click', calculateVeloRoute);
+            document.getElementById('velo-health-try-btn').addEventListener('click', fetchVeloHealth);
+            document.getElementById('velo-stats-try-btn').addEventListener('click', fetchVeloStats);
         });
     })();
     </script>

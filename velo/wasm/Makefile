@@ -12,7 +12,7 @@ CFLAGS += -s MODULARIZE=1 -s EXPORT_NAME='Velo'
 CFLAGS += -s INITIAL_MEMORY=33554432
 
 # Include paths
-INCLUDES = -I../include -I../../vendor/miniz
+INCLUDES = -I../include -I../../shared/include -I../../vendor/miniz
 
 # Source files
 VELO_SRC = $(wildcard ../src/*.c)
@@ -101,3 +101,76 @@ types:
 test: $(OUTPUT_JS)
 	@echo "Testing Velo WASM build..."
 	@node -e "const Velo = require('./$(OUTPUT_JS)'); Velo().then(m => { console.log('Version:', m._wasm_version()); console.log('WASM loaded successfully!'); });"
+
+# =============================================================================
+# API Demo Build (self-contained with embedded Monaco graph)
+# =============================================================================
+
+# Shared library sources (core only, no pthread-dependent code)
+SHARED_SRC = ../../shared/src/sh_geo.c \
+             ../../shared/src/sh_protobuf.c \
+             ../../shared/src/sh_inflate.c \
+             ../../shared/src/sh_pbf.c \
+             ../../shared/src/sh_arena.c \
+             ../../shared/src/sh_pool.c \
+             ../../shared/src/sh_hashmap.c \
+             ../../shared/src/sh_heap.c
+
+API_WASM_SRC = src/vl_wasm_api.c
+API_ALL_SRC = $(API_WASM_SRC) $(VELO_SRC) $(SHARED_SRC) $(MINIZ_SRC)
+
+# Exported functions - API demo mode
+API_EXPORTS = _velo_api_init,_velo_api_free,_velo_api_ready
+API_EXPORTS += ,_velo_api_handle
+API_EXPORTS += ,_velo_response_status,_velo_response_content_type
+API_EXPORTS += ,_velo_response_body,_velo_response_body_len
+API_EXPORTS += ,_velo_api_graph_size,_velo_api_version
+API_EXPORTS += ,_velo_api_node_count,_velo_api_edge_count
+API_EXPORTS += ,_malloc,_free
+
+# Output files - API demo mode
+API_OUTPUT_JS = $(OUTPUT_DIR)/velo-api-demo.js
+
+.PHONY: api-demo embed-monaco test-api
+
+# Build API demo (self-contained with embedded Monaco)
+api-demo: check-emcc $(API_OUTPUT_JS)
+
+$(API_OUTPUT_JS): $(API_ALL_SRC) src/monaco_vlg.h
+	@mkdir -p $(OUTPUT_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -Isrc \
+		-s EXPORT_NAME='VeloAPIDemo' \
+		-s SINGLE_FILE=1 \
+		-s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","getValue","setValue","UTF8ToString","allocateUTF8"]' \
+		-DMINIZ_NO_STDIO -DMINIZ_NO_TIME \
+		-s EXPORTED_FUNCTIONS='[$(API_EXPORTS)]' \
+		$(API_ALL_SRC) \
+		-o $(API_OUTPUT_JS)
+	@echo ""
+	@echo "API Demo build complete (single-file, works offline)!"
+	@echo "  $(API_OUTPUT_JS)"
+	@echo ""
+	@ls -lh $(OUTPUT_DIR)/velo-api-demo.*
+
+# Test API demo build
+test-api: $(API_OUTPUT_JS)
+	@echo "Testing Velo API Demo build..."
+	@node -e "\
+		const VeloAPIDemo = require('./$(API_OUTPUT_JS)'); \
+		VeloAPIDemo().then(m => { \
+			console.log('Initializing...'); \
+			const result = m._velo_api_init(); \
+			console.log('Init result:', result); \
+			console.log('Graph size:', m._velo_api_graph_size(), 'bytes'); \
+			console.log('Node count:', m._velo_api_node_count()); \
+			console.log('API ready:', m._velo_api_ready()); \
+			console.log('API Demo loaded successfully!'); \
+		});"
+
+# Generate embedded graph header from Monaco data
+embed-monaco:
+	@echo "Generating monaco_vlg.h from data/monaco.vlg..."
+	@test -f ../../data/monaco.vlg || (echo "Error: data/monaco.vlg not found. Build it first with: ./velo-route-server --save-index data/monaco.vlg data/monaco-latest.osm.pbf --build-only" && exit 1)
+	xxd -i ../../data/monaco.vlg | sed 's/______data_monaco_vlg/monaco_vlg_data/g' > src/monaco_vlg.h
+	@echo "Generated src/monaco_vlg.h"
+	@wc -c src/monaco_vlg.h

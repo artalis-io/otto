@@ -116,6 +116,11 @@ VLStatus vl_save_binary(const VLGraph *graph, const char *filename)
     return vl_graph_save(graph, filename);
 }
 
+VLGraph *vl_load_binary_memory(const uint8_t *data, size_t size)
+{
+    return vl_graph_load_memory(data, size);
+}
+
 /* ============================================================================
  * Coordinate Validation
  * ============================================================================ */

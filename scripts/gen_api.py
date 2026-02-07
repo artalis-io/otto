@@ -270,6 +270,16 @@ def generate_endpoint_html(api: dict, module_id: str) -> str:
     elif module_id == "carta" and api["path"] == "/tiles.json":
         demo_id = "tilejson"
         img_id = None
+    # Special demo IDs for velo endpoints
+    elif module_id == "velo" and api["path"] == "/api/v1/route":
+        demo_id = "velo-route"
+        img_id = None
+    elif module_id == "velo" and api["path"] == "/api/v1/health":
+        demo_id = "velo-health"
+        img_id = None
+    elif module_id == "velo" and api["path"] == "/api/v1/stats":
+        demo_id = "velo-stats"
+        img_id = None
     else:
         demo_id = f"{module_id}-{api['path'].replace('/', '-').replace('{', '').replace('}', '').replace('.', '-').strip('-')}"
         img_id = f"{demo_id}-img"
@@ -478,6 +488,32 @@ def generate_wasm_handlers(all_endpoints: dict, config: dict) -> tuple[dict, dic
             button_handlers.append("            document.getElementById('health-try-btn').addEventListener('click', fetchHealth);")
             button_handlers.append("            document.getElementById('stats-try-btn').addEventListener('click', fetchStats);")
 
+        # For velo, add routing demo handlers
+        elif module_id == "velo":
+            init_lines.append("                enableBtn('velo-route-try-btn', 'Calculate Route');")
+            init_lines.append("                enableBtn('velo-health-try-btn', 'Check Health');")
+            init_lines.append("                enableBtn('velo-stats-try-btn', 'Get Stats');")
+            init_lines.append("                const veloStatus = document.getElementById('velo-route-status');")
+            init_lines.append("                if (veloStatus) {")
+            init_lines.append("                    veloStatus.textContent = `Velo ${veloDemo.getVersion()} ready (Monaco: ${veloDemo.getNodeCount()} nodes)`;")
+            init_lines.append("                    veloStatus.className = 'demo-status success';")
+            init_lines.append("                    document.getElementById('velo-route-output').classList.add('visible');")
+            init_lines.append("                }")
+
+            error_lines.append("                disableBtn('velo-route-try-btn');")
+            error_lines.append("                disableBtn('velo-health-try-btn');")
+            error_lines.append("                disableBtn('velo-stats-try-btn');")
+            error_lines.append("                const veloStatus = document.getElementById('velo-route-status');")
+            error_lines.append("                if (veloStatus) {")
+            error_lines.append("                    veloStatus.textContent = 'Failed to load WASM: ' + err.message;")
+            error_lines.append("                    veloStatus.className = 'demo-status error';")
+            error_lines.append("                    document.getElementById('velo-route-output').classList.add('visible');")
+            error_lines.append("                }")
+
+            button_handlers.append("            document.getElementById('velo-route-try-btn').addEventListener('click', calculateVeloRoute);")
+            button_handlers.append("            document.getElementById('velo-health-try-btn').addEventListener('click', fetchVeloHealth);")
+            button_handlers.append("            document.getElementById('velo-stats-try-btn').addEventListener('click', fetchVeloStats);")
+
         wasm_init_code[module_id] = "\n".join(init_lines) if init_lines else "                // No demo buttons to enable"
         wasm_error_code[module_id] = "\n".join(error_lines) if error_lines else "                // No error handling needed"
 
@@ -677,6 +713,55 @@ def generate_carta_wasm_functions() -> str:
 '''
 
 
+def generate_velo_wasm_functions() -> str:
+    """Generate the Velo-specific WASM helper functions."""
+    return '''
+        // Velo-specific WASM handlers
+        async function calculateVeloRoute() {
+            if (!veloDemo || !veloDemo.isReady()) return;
+
+            const btn = document.getElementById('velo-route-try-btn');
+            const result = document.getElementById('velo-route-result');
+            const status = document.getElementById('velo-route-status');
+            const output = document.getElementById('velo-route-output');
+
+            btn.disabled = true;
+            btn.textContent = 'Calculating...';
+            output.classList.add('visible');
+
+            // Monaco demo coordinates (Casino to Port)
+            const from = {lat: 43.7384, lon: 7.4246};
+            const to = {lat: 43.7311, lon: 7.4197};
+
+            try {
+                const startTime = performance.now();
+                const route = await veloDemo.route(from, to);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                result.innerHTML = formatJsonWithHighlighting(route);
+                status.textContent = `Route calculated in ${elapsed}ms (${(route.route.distance).toFixed(0)}m, ${(route.route.duration).toFixed(0)}s)`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('Route calculation failed:', err);
+                result.textContent = '';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Calculate Route';
+            }
+        }
+
+        function fetchVeloHealth() {
+            fetchJsonEndpoint(veloDemo, '/api/v1/health', 'velo-health-try-btn', 'velo-health-result', 'velo-health-status', 'velo-health-output', 'Check Health');
+        }
+
+        function fetchVeloStats() {
+            fetchJsonEndpoint(veloDemo, '/api/v1/stats', 'velo-stats-try-btn', 'velo-stats-result', 'velo-stats-status', 'velo-stats-output', 'Get Stats');
+        }
+'''
+
+
 def main():
     """Main entry point."""
     global VERBOSE
@@ -755,11 +840,11 @@ def main():
     output_html = render_template(template, config, endpoints_html,
                                   wasm_init_code, wasm_error_code, button_handlers)
 
-    # Insert Carta-specific WASM functions before the "// Initialize on page load" comment
-    carta_functions = generate_carta_wasm_functions()
+    # Insert module-specific WASM functions before the "// Initialize on page load" comment
+    wasm_functions = generate_carta_wasm_functions() + generate_velo_wasm_functions()
     insert_marker = "        // Initialize on page load"
     if insert_marker in output_html:
-        output_html = output_html.replace(insert_marker, carta_functions + "\n" + insert_marker)
+        output_html = output_html.replace(insert_marker, wasm_functions + "\n" + insert_marker)
 
     if check_mode:
         # Compare with existing file

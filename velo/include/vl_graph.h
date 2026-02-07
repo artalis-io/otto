@@ -181,6 +181,17 @@ VLStatus vl_graph_save(const VLGraph *graph, const char *filename);
  */
 VLGraph *vl_graph_load(const char *filename);
 
+/*
+ * Load a binary graph from memory buffer.
+ * Used for WASM where file I/O is not available.
+ *
+ * data: pointer to binary graph data
+ * size: size of data in bytes
+ *
+ * Returns loaded graph, or NULL on failure.
+ */
+VLGraph *vl_graph_load_memory(const uint8_t *data, size_t size);
+
 #ifndef _WIN32
 /*
  * Memory-map a binary graph file for faster loading.
