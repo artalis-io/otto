@@ -1,6 +1,6 @@
 # Locus API Server - Claude Instructions
 
-> **Quick Reference:** Use `/api-servers locus` for CLI args, env vars, and startup commands.
+> **Quick Reference:** Use `/api-run locus` for CLI args, env vars, and startup commands.
 
 ## Overview
 
