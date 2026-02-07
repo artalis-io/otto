@@ -65,13 +65,14 @@ void lc_index_free(LCIndex *index)
     if (index->mmap_idx) {
         LCMmapIndex *mmap_idx = index->mmap_idx;
 
-        /* Unmap and close */
-        if (mmap_idx->map_base && mmap_idx->map_base != MAP_FAILED) {
-            munmap(mmap_idx->map_base, mmap_idx->map_size);
-        }
+        /* Unmap and close (skip if memory-based: fd == -1) */
         if (mmap_idx->fd >= 0) {
+            if (mmap_idx->map_base && mmap_idx->map_base != MAP_FAILED) {
+                munmap(mmap_idx->map_base, mmap_idx->map_size);
+            }
             close(mmap_idx->fd);
         }
+        /* Note: when fd == -1, this is a memory-based index (WASM) - don't free the buffer */
         free(mmap_idx);
 
         /* v4 has no allocated entity store, trie, ngrams, or grid */

@@ -33,6 +33,36 @@ make test     # Test WASM build with Node.js
 make clean    # Remove build artifacts
 ```
 
+### API Demo Build (Self-Contained)
+
+```bash
+make api-demo    # Build with embedded Monaco index
+make test-api    # Test API demo
+make embed-monaco # Regenerate monaco_lcx.h from index file
+```
+
+The API demo embeds the Monaco geocoding index (~3.7 MB) directly in the WASM module, making it completely self-contained for offline demos.
+
+#### Generating the Monaco Index
+
+```bash
+# From project root
+./locus/api/locus-geocoder --build-only -S data/monaco.lcx data/monaco-latest.osm.pbf
+
+# Convert to C header
+cd locus/wasm
+make embed-monaco
+```
+
+#### Key API Demo Files
+
+| File | Purpose |
+|------|---------|
+| `src/lc_wasm_api.c` | API demo WASM wrapper |
+| `src/monaco_lcx.h` | Embedded Monaco index (~3.7 MB) |
+| `build/locus-api-demo.js` | Self-contained WASM module (~5.1 MB) |
+| `../../site/js/locus-api-demo.js` | Browser wrapper class |
+
 ## WASM API
 
 ### Memory Management
