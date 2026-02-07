@@ -195,6 +195,25 @@ header {
     overflow: hidden;
 }
 
+.code-block::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.15) 0px,
+        rgba(0, 0, 0, 0.15) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    pointer-events: none;
+    z-index: 2;
+    animation: crt-scanline-roll 8s linear infinite;
+}
+
 .code-block::after {
     content: '';
     position: absolute;
@@ -204,8 +223,8 @@ header {
     bottom: 0;
     background: repeating-linear-gradient(
         0deg,
-        rgba(255, 255, 255, 0.02) 0px,
-        rgba(255, 255, 255, 0.02) 1px,
+        rgba(255, 255, 255, 0.03) 0px,
+        rgba(255, 255, 255, 0.03) 1px,
         transparent 1px,
         transparent 2px
     );
@@ -217,8 +236,8 @@ header {
     padding: 20px;
     font-size: 13px;
     position: relative;
-    z-index: 1;
-    animation: crt-flicker-gray 5s infinite;
+    z-index: 3;
+    animation: crt-flicker-gray 4s infinite;
     /* Base CRT phosphor glow for all text */
     color: #b0b0b0;
     text-shadow:
@@ -276,12 +295,27 @@ header {
         0 0 10px rgba(206, 147, 216, 0.3);
 }
 
-/* CRT flicker animation */
+/* CRT flicker animation - subtle brightness variation */
 @keyframes crt-flicker-gray {
-    0%, 100% { opacity: 1; }
-    94% { opacity: 1; }
-    95% { opacity: 0.97; }
-    96% { opacity: 1; }
+    0%, 100% { opacity: 1; filter: brightness(1); }
+    10% { opacity: 1; filter: brightness(1.01); }
+    20% { opacity: 0.99; filter: brightness(0.99); }
+    30% { opacity: 1; filter: brightness(1); }
+    40% { opacity: 0.98; filter: brightness(1.02); }
+    50% { opacity: 1; filter: brightness(1); }
+    60% { opacity: 0.99; filter: brightness(0.98); }
+    70% { opacity: 1; filter: brightness(1.01); }
+    80% { opacity: 0.98; filter: brightness(1); }
+    90% { opacity: 1; filter: brightness(0.99); }
+    94% { opacity: 1; filter: brightness(1); }
+    95% { opacity: 0.95; filter: brightness(0.97); }
+    96% { opacity: 1; filter: brightness(1); }
+}
+
+/* CRT scanline animation - subtle vertical movement */
+@keyframes crt-scanline-roll {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 60px; }
 }
 
 /* Typing animation cursor */
@@ -320,6 +354,25 @@ header {
     overflow: hidden;
 }
 
+.ascii-art::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.12) 0px,
+        rgba(0, 0, 0, 0.12) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    pointer-events: none;
+    z-index: 2;
+    animation: crt-scanline-roll 8s linear infinite;
+}
+
 .ascii-art::after {
     content: '';
     position: absolute;
@@ -329,8 +382,8 @@ header {
     bottom: 0;
     background: repeating-linear-gradient(
         0deg,
-        rgba(255, 255, 255, 0.03) 0px,
-        rgba(255, 255, 255, 0.03) 1px,
+        rgba(255, 255, 255, 0.04) 0px,
+        rgba(255, 255, 255, 0.04) 1px,
         transparent 1px,
         transparent 2px
     );
@@ -346,8 +399,8 @@ header {
         0 0 10px rgba(200, 200, 200, 0.3),
         0 0 20px rgba(200, 200, 200, 0.1);
     position: relative;
-    z-index: 1;
-    animation: crt-flicker-gray 5s infinite;
+    z-index: 3;
+    animation: crt-flicker-gray 4s infinite;
 }
 
 /* ============================================================================
