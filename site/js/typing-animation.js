@@ -8,17 +8,33 @@
     const codeBlocks = document.querySelectorAll('.code-block');
     const blockData = new Map();
 
-    codeBlocks.forEach(block => {
-        const pre = block.querySelector('pre');
-        // Only animate static code blocks (those with content, not demo result containers)
-        if (pre && pre.innerHTML.trim().length > 0 && !pre.id) {
-            blockData.set(block, {
-                originalHTML: pre.innerHTML,
-                animated: false
-            });
-            pre.style.visibility = 'hidden';
-        }
-    });
+    // Initialize after page fully loads (fonts, CSS applied) for correct height
+    function initBlocks() {
+        codeBlocks.forEach(block => {
+            const pre = block.querySelector('pre');
+            // Only animate static code blocks (those with content, not demo result containers)
+            if (pre && pre.innerHTML.trim().length > 0 && !pre.id && !blockData.has(block)) {
+                // Capture final height before hiding
+                const finalHeight = pre.offsetHeight;
+                blockData.set(block, {
+                    originalHTML: pre.innerHTML,
+                    finalHeight: finalHeight,
+                    animated: false
+                });
+                // Set fixed height to prevent layout shift
+                pre.style.minHeight = finalHeight + 'px';
+                pre.style.visibility = 'hidden';
+            }
+        });
+    }
+
+    if (document.readyState === 'complete') {
+        requestAnimationFrame(initBlocks);
+    } else {
+        window.addEventListener('load', function() {
+            requestAnimationFrame(initBlocks);
+        });
+    }
 
     function typeContent(block) {
         const data = blockData.get(block);
@@ -28,6 +44,7 @@
         const pre = block.querySelector('pre');
         const originalHTML = data.originalHTML;
         pre.style.visibility = 'visible';
+        pre.style.whiteSpace = 'pre';  // Ensure whitespace is preserved
         pre.innerHTML = '';
         block.classList.add('typing');
 
@@ -64,6 +81,7 @@
             if (index >= segments.length) {
                 block.classList.remove('typing');
                 block.classList.add('typed');
+                pre.style.minHeight = '';
                 return;
             }
 
