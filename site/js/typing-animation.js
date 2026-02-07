@@ -83,8 +83,8 @@
 
         walkNodes(tempDiv, []);
 
-        // Remove trailing whitespace so cursor doesn't jump to new line
-        while (chars.length > 0 && /\s/.test(chars[chars.length - 1].char)) {
+        // Remove trailing newlines so cursor doesn't jump to new line
+        while (chars.length > 0 && chars[chars.length - 1].char === '\n') {
             chars.pop();
         }
 
