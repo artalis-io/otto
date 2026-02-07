@@ -6,8 +6,10 @@ This directory contains development roadmaps and specifications for planned comp
 
 | Module | Description | Status |
 |--------|-------------|--------|
-| [carta.md](carta.md) | Map tile generator improvements | In Progress |
-| [velo.md](velo.md) | Routing engine enhancements | In Progress |
+| [ralph.md](ralph.md) | LP/MIP solver - performance, numerical stability | In Progress |
+| [carta.md](carta.md) | Map tile generator - labels, styling | In Progress |
+| [velo.md](velo.md) | Routing engine - continental scale, CCH | In Progress |
+| [locus.md](locus.md) | Geocoding - performance, fuzzy search | In Progress |
 
 ## Planned Components
 

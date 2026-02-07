@@ -309,7 +309,7 @@ cs_init();
 ## Related
 
 - [MANIFESTO.md](MANIFESTO.md) - Design principles
-- [DESIGN.md](DESIGN.md) - Architecture details
+- [Design Internals](../../docs/internals/clayshards-design.md) - Architecture details
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Adding widgets
 - [clay-shards-webgl](../clay-shards-webgl/) - WebGL renderer
 - [clay-shards-tui](../clay-shards-tui/) - Terminal TUI renderer

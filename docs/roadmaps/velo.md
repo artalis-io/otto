@@ -536,3 +536,63 @@ velo/
 - [ ] Turn-by-turn instructions generated
 - [ ] Distance matrix computed efficiently
 - [ ] Landmarks persisted to .vlg (instant startup)
+
+---
+
+## Chapter 11: Performance Optimization Strategies
+
+### 11.1 Current Benchmarks vs OSRM
+
+| Metric | OSRM | Velo (Current) | Gap |
+|--------|------|----------------|-----|
+| Query Time | < 1ms | 20-500ms | 20-500x |
+| Preprocessing | Hours | Seconds | OSRM slower |
+| Memory (Graph) | 2-8 GB | 50-300 MB | Velo better |
+| Algorithm | Contraction Hierarchies | A* / Dijkstra | Fundamental |
+
+**Key Insight**: OSRM trades preprocessing time (hours) and memory (GB) for sub-millisecond queries. Velo uses no preprocessing but pays at query time.
+
+### 11.2 Current Performance (Hungary - 2.7M nodes)
+
+| Algorithm | Time | Notes |
+|-----------|------|-------|
+| Baseline A* bidirectional | 130-285ms | No preprocessing |
+| With ALT (16 landmarks) | 36-86ms | 3-4x speedup |
+| Target | <10ms | Approaching OSRM |
+
+### 11.3 Recommended Optimizations (Without CCH)
+
+| Priority | Technique | Expected Speedup | Effort |
+|----------|-----------|------------------|--------|
+| **P1** | Arc Flags | 3-5x → ~15ms | 2-3 days |
+| **P2** | Reach Pruning | 2-3x additional | 1-2 days |
+| **P3** | Goal-Directed Arc Flags | 10-20x combined → ~5ms | 1 week |
+| **P4** | Hub Labeling | Sub-millisecond | 2+ weeks |
+
+### 11.4 Arc Flags (Best ROI)
+
+Partition graph into 64-128 regions and precompute reachability flags per edge:
+
+```c
+// During search: single bitmask AND prunes 70-90% of edges
+if (!(edge->arc_flags & (1ULL << target_region))) continue;
+```
+
+**Preprocessing**: ~30 minutes (parallelizable)
+**Memory**: +8 bytes/edge (64 regions) = ~44MB for Hungary
+
+### 11.5 Known Bottlenecks
+
+| Issue | Severity | Impact |
+|-------|----------|--------|
+| No reverse graph index | CRITICAL | O(V×E) per backward expansion |
+| Full array initialization | HIGH | O(V) even for short routes |
+| Haversine per edge | MEDIUM | Expensive trig on every relaxation |
+| No spatial index for nearest | MEDIUM | O(V) linear scan |
+
+### 11.6 Quick Wins
+
+1. **Reverse adjacency list**: Store incoming edges for O(degree) backward expansion
+2. **Lazy initialization**: Use sentinel values + visited set instead of full init
+3. **Haversine LUT**: Precompute or approximate with Euclidean for A* heuristic
+4. **K-d tree for nearest**: O(log V) nearest node lookup

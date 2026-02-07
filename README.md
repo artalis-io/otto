@@ -113,10 +113,14 @@ curl -X POST http://localhost:8080/api/v1/optimize \
 
 ## Documentation
 
-- **[CLAUDE.md](CLAUDE.md)** - Development guide and patterns
-- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture
-- **[docs/business/STRATEGY.md](docs/business/STRATEGY.md)** - Business strategy
-- **[site/api.html](site/api.html)** - Interactive API documentation with WASM demos
+| Document | Purpose |
+|----------|---------|
+| **[CLAUDE.md](CLAUDE.md)** | Development guide and patterns |
+| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | System architecture, layers, data flow |
+| **[docs/MANIFESTO.md](docs/MANIFESTO.md)** | Design philosophy (C, WASM, transport-agnostic) |
+| **[docs/business/](docs/business/)** | Strategy, valuation |
+| **[docs/roadmaps/](docs/roadmaps/)** | Active development roadmaps (15 components) |
+| **[site/api.html](site/api.html)** | Interactive API docs with WASM demos |
 
 ### Regenerating API Documentation
 
@@ -204,9 +208,7 @@ CLAY(CLAY_ID("Panel"), CLAY_LAYOUT(.padding = {16, 16, 16, 16})) {
 - **Render commands as contract** - UI produces commands; renderers consume them
 - **TUI as strictest target** - If it works in terminal, it works everywhere
 
-See [clayshards/clay-shards/MANIFESTO.md](clayshards/clay-shards/MANIFESTO.md) for the full manifesto.
-
-See [README_DESIGN.md](docs/MANIFESTO.md) for detailed rationale.
+See [clayshards/clay-shards/MANIFESTO.md](clayshards/clay-shards/MANIFESTO.md) for ClayShards-specific details.
 
 ## Requirements
 
