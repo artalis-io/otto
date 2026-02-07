@@ -335,9 +335,10 @@ api-docs-check:
 	@python3 scripts/gen_api.py --check
 
 # Generate PDF from strategy document (for sharing with partners)
+# Note: STRATEGY.md contains REDACT markers - strip them before generating public PDF
 strategy-pdf:
 	@echo "Generating OTTO_Strategy.pdf..."
-	@pandoc docs/STRATEGY_PUBLIC.md \
+	@pandoc docs/business/STRATEGY.md \
 		-o OTTO_Strategy.pdf \
 		--pdf-engine=xelatex \
 		-V geometry:margin=1in \

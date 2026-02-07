@@ -3,7 +3,7 @@
 <!--
 REDACTION GUIDE FOR PUBLIC VERSION:
 Sections marked with <!-- REDACT --> should be removed or softened for public/investor docs.
-Use `grep -n "REDACT" docs/STRATEGY.md` to find all marked sections.
+Use `grep -n "REDACT" docs/business/STRATEGY.md` to find all marked sections.
 -->
 
 ## Executive Summary

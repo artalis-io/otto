@@ -115,7 +115,7 @@ curl -X POST http://localhost:8080/api/v1/optimize \
 
 - **[CLAUDE.md](CLAUDE.md)** - Development guide and patterns
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture
-- **[docs/STRATEGY.md](docs/STRATEGY.md)** - Business strategy
+- **[docs/business/STRATEGY.md](docs/business/STRATEGY.md)** - Business strategy
 - **[site/api.html](site/api.html)** - Interactive API documentation with WASM demos
 
 ### Regenerating API Documentation
