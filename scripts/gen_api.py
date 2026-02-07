@@ -689,7 +689,13 @@ def generate_carta_wasm_functions() -> str:
                 const tileJson = await cartaDemo.getTileJSON();
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
-                result.innerHTML = formatJsonWithHighlighting(tileJson);
+                const html = formatJsonWithHighlighting(tileJson);
+                const codeBlock = result.closest('.code-block');
+                if (codeBlock && window.typeAnimateContent) {
+                    window.typeAnimateContent(codeBlock, html);
+                } else {
+                    result.innerHTML = html;
+                }
                 status.textContent = `Fetched in ${elapsed}ms`;
                 status.className = 'demo-status success';
             } catch (err) {
@@ -738,7 +744,13 @@ def generate_velo_wasm_functions() -> str:
                 const route = await veloDemo.route(from, to);
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
-                result.innerHTML = formatJsonWithHighlighting(route);
+                const html = formatJsonWithHighlighting(route);
+                const codeBlock = result.closest('.code-block');
+                if (codeBlock && window.typeAnimateContent) {
+                    window.typeAnimateContent(codeBlock, html);
+                } else {
+                    result.innerHTML = html;
+                }
                 status.textContent = `Route calculated in ${elapsed}ms (${(route.route.distance).toFixed(0)}m, ${(route.route.duration).toFixed(0)}s)`;
                 status.className = 'demo-status success';
             } catch (err) {

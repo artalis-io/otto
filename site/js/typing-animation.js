@@ -8,6 +8,99 @@
     const codeBlocks = document.querySelectorAll('.code-block');
     const blockData = new Map();
 
+    /**
+     * Animate typing of HTML content into a code block.
+     * Can be called dynamically for WASM demo responses.
+     *
+     * @param {HTMLElement} block - The .code-block container
+     * @param {string} html - The HTML content to type
+     */
+    function typeAnimateContent(block, html) {
+        const pre = block.querySelector('pre');
+        if (!pre) return;
+
+        // Clear and prepare
+        pre.innerHTML = '';
+        pre.style.whiteSpace = 'pre';
+        block.classList.remove('typed');
+        block.classList.add('typing');
+
+        // Parse HTML into segments
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+
+        const segments = [];
+        function extractSegments(node, wrapper) {
+            if (node.nodeType === Node.TEXT_NODE) {
+                const text = node.textContent;
+                for (let i = 0; i < text.length; i++) {
+                    segments.push({ char: text[i], wrapper: wrapper });
+                }
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                const newWrapper = { tag: node.tagName.toLowerCase(), className: node.className };
+                for (const child of node.childNodes) {
+                    extractSegments(child, newWrapper);
+                }
+            }
+        }
+        for (const child of tempDiv.childNodes) {
+            extractSegments(child, null);
+        }
+
+        // Type characters
+        let index = 0;
+        let currentSpan = null;
+        let currentWrapper = null;
+
+        function typeNext() {
+            if (index >= segments.length) {
+                block.classList.remove('typing');
+                block.classList.add('typed');
+                return;
+            }
+
+            const segment = segments[index];
+            const wrapperKey = segment.wrapper ? `${segment.wrapper.tag}.${segment.wrapper.className}` : null;
+
+            if (wrapperKey !== currentWrapper) {
+                currentWrapper = wrapperKey;
+                if (segment.wrapper) {
+                    currentSpan = document.createElement(segment.wrapper.tag);
+                    currentSpan.className = segment.wrapper.className;
+                    pre.appendChild(currentSpan);
+                } else {
+                    currentSpan = null;
+                }
+            }
+
+            const textNode = document.createTextNode(segment.char);
+            if (currentSpan) {
+                currentSpan.appendChild(textNode);
+            } else {
+                pre.appendChild(textNode);
+            }
+
+            index++;
+
+            // Faster typing for dynamic content
+            let delay;
+            if (segment.char === '\n') {
+                delay = 15 + Math.random() * 10;
+            } else if (segment.char === ' ') {
+                delay = 4 + Math.random() * 4;
+            } else {
+                delay = 6 + Math.random() * 8;
+            }
+
+            setTimeout(typeNext, delay);
+        }
+
+        typeNext();
+    }
+
+    // Export for dynamic use
+    window.typeAnimateContent = typeAnimateContent;
+
     // Initialize after page fully loads (fonts, CSS applied) for correct height
     function initBlocks() {
         codeBlocks.forEach(block => {
