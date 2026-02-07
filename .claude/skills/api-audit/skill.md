@@ -498,8 +498,8 @@ Before marking a module as API-compliant:
 | Module | Handler | Annotations | Config | api.html | Status |
 |--------|---------|-------------|--------|----------|--------|
 | carta | ✅ ct_api.h | ✅ 4 endpoints | ✅ | ✅ | **Compliant** |
-| velo | ❌ inline | ❌ none | ⚠️ points to main.c | ⚠️ | Needs work |
-| locus | ❌ inline | ❌ none | ⚠️ points to main.c | ⚠️ | Needs work |
+| velo | ✅ vl_api.h | ✅ 5 endpoints | ✅ | ✅ | **Compliant** |
+| locus | ✅ lc_api.h | ✅ 6 endpoints | ✅ | ✅ | **Compliant** |
 | fuelwise | ❌ inline | ❌ none | ⚠️ points to main.c | ⚠️ | Needs work |
 
 Run `/api-audit all` to get current status, `/api-audit <module> --fix` to remediate.

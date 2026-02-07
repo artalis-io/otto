@@ -41,7 +41,7 @@
       "icon": "📍",
       "port": 8083,
       "description": "Forward geocoding (text search), autocomplete, and reverse geocoding (coordinate to address). Uses trie + trigram index for fast fuzzy matching.",
-      "header_file": "locus/api/src/main.c",
+      "header_file": "locus/include/lc_api.h",
       "wasm": {
         "enabled": false
       }
