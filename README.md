@@ -116,6 +116,29 @@ curl -X POST http://localhost:8080/api/v1/optimize \
 - **[CLAUDE.md](CLAUDE.md)** - Development guide and patterns
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture
 - **[docs/STRATEGY.md](docs/STRATEGY.md)** - Business strategy
+- **[site/api.html](site/api.html)** - Interactive API documentation with WASM demos
+
+### Regenerating API Documentation
+
+The API documentation (`site/api.html`) is generated from C header annotations and includes live WASM demos. It auto-rebuilds when sources change:
+
+```bash
+make api-docs              # Generate site/api.html (rebuilds dependencies as needed)
+make api-docs-check        # Verify docs are up-to-date (for CI)
+```
+
+**Dependency chain** (all automatic):
+```
+data/monaco-latest.osm.pbf  →  data/monaco.vlg  →  WASM demos  →  site/api.html
+         ↓                           ↓                  ↓
+   (downloads if missing)    (rebuilds if velo/ changes)  (copies to site/js/)
+```
+
+To force a full rebuild:
+```bash
+rm -f data/monaco.vlg velo/wasm/src/monaco_vlg.h carta/wasm/src/monaco_pbf.h
+make api-docs
+```
 
 ### Component Documentation
 

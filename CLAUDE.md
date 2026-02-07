@@ -176,6 +176,39 @@ make wasm
 make test             # All tests
 make test-{ralph,velo,carta,locus,fuelwise,shared}
 make test-{carta,velo,locus,fuelwise}-api
+
+# API Documentation
+make api-docs         # Generate site/api.html (auto-rebuilds dependencies)
+make api-docs-check   # Verify docs are up-to-date (for CI)
+```
+
+### API Documentation Generation
+
+`site/api.html` is generated from C header annotations (`/*@api ... */`) and includes live WASM demos with embedded Monaco data.
+
+**Dependency chain** (all automatic):
+```
+data/monaco-latest.osm.pbf  (downloads if missing)
+           ↓
+data/monaco.vlg  (rebuilds when velo/ sources change)
+           ↓
+{velo,carta}/wasm/src/monaco_*.h  (embedded data headers)
+           ↓
+{velo,carta}/wasm/build/*-api-demo.js  (WASM modules)
+           ↓
+site/api.html  (copies WASM to site/js/, generates HTML)
+```
+
+**Key files:**
+- `scripts/gen_api.py` - Generator script (parses headers, renders template)
+- `site/api-template.html` - HTML template with Jinja2-like syntax
+- `site/api-config.json` - Module configuration (ports, WASM settings)
+- `{module}/include/*.h` - API annotations parsed for docs
+
+**Force full rebuild:**
+```bash
+rm -f data/monaco.vlg velo/wasm/src/monaco_vlg.h carta/wasm/src/monaco_pbf.h
+make api-docs
 ```
 
 ## Performance Targets
