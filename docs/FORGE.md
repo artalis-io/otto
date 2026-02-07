@@ -725,3 +725,38 @@ The design supports incremental scaling:
 4. **Add K8s** - Autoscaling, health checks, rolling updates
 
 Each level is a superset of the previous. The consumer protocol (stdin/stdout) remains unchanged regardless of deployment model - workers don't care how they're scheduled.
+
+---
+
+## Implementation TODOs
+
+**Phase 1: Core Infrastructure**
+- [ ] Define job and consumer data structures
+- [ ] Implement SQLite persistence layer
+- [ ] Implement consumer registry (config file or directory convention)
+- [ ] Implement job lifecycle (pending → running → completed/failed)
+
+**Phase 2: Process Management**
+- [ ] Implement process spawning (fork/exec on POSIX)
+- [ ] Implement stdin/stdout/stderr pipe management
+- [ ] Implement progress parsing from stderr
+- [ ] Implement timeout handling and job cancellation
+- [ ] Implement max_concurrent limits per consumer type
+
+**Phase 3: REST API**
+- [ ] Implement job submission endpoint
+- [ ] Implement job status/result endpoints
+- [ ] Implement job cancellation endpoint
+- [ ] Implement WebSocket streaming for progress
+
+**Phase 4: Built-in Consumers**
+- [ ] Create fg-ralph consumer (LP/MIP solving)
+- [ ] Create fg-fuelwise consumer (refueling optimization)
+- [ ] Create fg-locus consumer (batch geocoding)
+- [ ] Create fg-velo consumer (batch routing)
+
+**Phase 5: Advanced Features**
+- [ ] Implement webhook callbacks for job completion
+- [ ] Implement job TTL and auto-cleanup
+- [ ] Implement job priority queue
+- [ ] Add comprehensive job statistics

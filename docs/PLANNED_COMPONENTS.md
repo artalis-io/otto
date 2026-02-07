@@ -1,38 +1,32 @@
-# Project-Level Feature TODOs
+# Planned Components
 
-This document outlines planned features at the project level, including new components and infrastructure changes.
+This document outlines planned components and infrastructure for OTTO.
 
 ## Table of Contents
 
-1. [Project Renaming](#1-project-renaming)
-2. [HoSE - Hours of Service Engine](#2-hose---hours-of-service-engine)
-3. [Tempo - Business Rules Engine](#3-tempo---business-rules-engine)
-4. [Arbor - State-Space Search Engine](#4-arbor---state-space-search-engine)
-5. [Sigma - Fleet Plan Selection Engine](#5-sigma---fleet-plan-selection-engine)
-6. [Pulse - Execution Tracker and PTA Engine](#6-pulse---execution-tracker-and-pta-engine)
-7. [Nexus - External Data Integration Gateway](#7-nexus---external-data-integration-gateway)
-8. [Forge - Async Job Queue](#8-forge---async-job-queue)
-9. [Distance and Duration Estimation](#9-distance-and-duration-estimation-cross-cutting)
-10. [Cost and Profit Calculations](#10-cost-and-profit-calculations-cross-cutting)
-11. [FuelWise Integration](#11-fuelwise-integration-refueling-in-search)
-12. [Quota - Rate Quoting Engine](#12-quota---rate-quoting-engine)
-13. [Atlas - Network Design Engine](#13-atlas---network-design-engine)
-14. [Velo Enhancements](#14-velo-enhancements)
-15. [Carta Enhancements](#15-carta-enhancements)
-16. [API Server Infrastructure Improvements](#16-api-server-infrastructure-improvements)
-17. [Observability Infrastructure](#17-observability-infrastructure-logging-tracing-metrics)
+1. [HoSE - Hours of Service Engine](#1-hose---hours-of-service-engine)
+2. [Tempo - Business Rules Engine](#2-tempo---business-rules-engine)
+3. [Arbor - State-Space Search Engine](#3-arbor---state-space-search-engine)
+4. [Sigma - Fleet Plan Selection Engine](#4-sigma---fleet-plan-selection-engine)
+5. [Pulse - Execution Tracker and PTA Engine](#5-pulse---execution-tracker-and-pta-engine)
+6. [Distance and Duration Estimation](#6-distance-and-duration-estimation-cross-cutting)
+7. [Cost and Profit Calculations](#7-cost-and-profit-calculations-cross-cutting)
+8. [FuelWise Integration](#8-fuelwise-integration-refueling-in-search)
+9. [Quota - Rate Quoting Engine](#9-quota---rate-quoting-engine)
+10. [Atlas - Network Design Engine](#10-atlas---network-design-engine)
+11. [API Server Infrastructure](#11-api-server-infrastructure-improvements)
+12. [Observability Infrastructure](#12-observability-infrastructure-logging-tracing-metrics)
+
+## Related Documents
+
+- [NEXUS.md](NEXUS.md) - External data integration gateway
+- [FORGE.md](FORGE.md) - Async job queue
+- [VELO_ROADMAP.md](VELO_ROADMAP.md) - Routing engine enhancements
+- [CARTA_ROADMAP.md](CARTA_ROADMAP.md) - Map tile generator enhancements
 
 ---
 
-## 1. Project Renaming ✅ DONE
-
-The project has been renamed to **OTTO** (**O**ptimization for **T**rucking and **T**ransport **O**perations).
-
-All major documentation and references have been updated.
-
----
-
-## 2. HoSE - Hours of Service Engine
+## 1. HoSE - Hours of Service Engine
 
 **H**ours **o**f **S**ervice **E**ngine
 
@@ -428,7 +422,7 @@ typedef enum {
 
 ---
 
-## 3. Tempo - Business Rules Engine
+## 2. Tempo - Business Rules Engine
 
 **T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator
 
@@ -690,7 +684,7 @@ int tp_intersect_windows(const TPTimeWindow *windows, int num_windows,
 
 ---
 
-## 4. Arbor - State-Space Search Engine
+## 3. Arbor - State-Space Search Engine
 
 **A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime
 
@@ -1122,7 +1116,7 @@ double trip_lower_bound(const ARState *state) {
 
 ---
 
-## 5. Sigma - Fleet Plan Selection Engine
+## 4. Sigma - Fleet Plan Selection Engine
 
 **S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation
 
@@ -1505,7 +1499,7 @@ double cg_pricing_objective(const ARState *state, const ColumnGenContext *ctx) {
 
 ---
 
-## 6. Pulse - Execution Tracker and PTA Engine
+## 5. Pulse - Execution Tracker and PTA Engine
 
 **P**lan **U**tilization and **L**ive **S**tate **E**stimator
 
@@ -1906,166 +1900,7 @@ typedef struct {
 
 ---
 
-## 7. Nexus - External Data Integration Gateway
-
-**N**ormalized **Ex**ternal **U**nified **S**napshots
-
-### Overview
-
-Nexus is the data ingress gateway for OTTO, providing a stateless interface for receiving planning snapshots from external systems (TMS, ELD, LoadBoards). OTTO remains a pure computation engine - Nexus handles normalization and translation.
-
-**Key Design Principle**: OTTO is NOT a system of record. All state lives in customer systems. Nexus receives snapshots, OTTO computes optimal plans, and results are pushed back.
-
-### Full Documentation
-
-See **[docs/NEXUS.md](NEXUS.md)** for complete architecture specification including:
-
-- Core data structures (NxDriver, NxLoad, NxVehicle, etc.)
-- REST API design with example requests/responses
-- Adapter interface for TMS/ELD/LoadBoard integration
-- Module file structure
-
-### Quick Summary
-
-```
-External Systems                    OTTO Platform
-┌──────────────┐                   ┌──────────────────────────────────┐
-│     TMS      │───adapter───┐     │                                  │
-├──────────────┤             │     │  ┌────────┐    ┌─────────────┐  │
-│     ELD      │───adapter───┼────▶│  │ Nexus  │───▶│  Optimizer  │  │
-├──────────────┤             │     │  │Gateway │    │   Pipeline  │  │
-│  LoadBoard   │───adapter───┘     │  └────────┘    └─────────────┘  │
-└──────────────┘                   └──────────────────────────────────┘
-```
-
-### TODOs
-
-- [ ] Define NxDriver, NxLoad, NxVehicle, NxLocation structures
-- [ ] Define NxPlanningRequest and NxPlanningResponse
-- [ ] Implement adapter interface (TMS, ELD, LoadBoard)
-- [ ] Implement REST API endpoints
-- [ ] Create sample adapters for common TMS systems
-- [ ] Add webhook support for async results
-
----
-
-## 8. Forge - Async Job Queue
-
-**F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution
-
-### Overview
-
-Forge is a generic job broker for running long-running async tasks like optimization, batch geocoding, and index building. It provides job submission, polling, WebSocket streaming, and webhook callbacks. Jobs are persisted in SQLite and executed by registered consumer processes.
-
-**Key Design Principle**: Forge is a dumb pipe. It doesn't know about LP solvers or geocoding - it just spawns processes and captures their output. Consumers are standalone executables that follow a simple stdin/stdout protocol.
-
-### Full Documentation
-
-See **[docs/FORGE.md](FORGE.md)** for complete architecture specification including:
-
-- Consumer protocol (stdin/stdout/stderr)
-- REST API design with example requests/responses
-- SQLite schema for job persistence
-- Consumer registration via config file
-
-### Quick Summary
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                        Forge Broker                          │
-│  1. Receive job (type="solve_lp", payload={...})             │
-│  2. Look up consumer for "solve_lp"                          │
-│  3. Spawn: ./consumers/solve_lp                              │
-│  4. Write payload to stdin                                   │
-│  5. Read progress from stderr                                │
-│  6. Read result from stdout                                  │
-│  7. Capture exit code                                        │
-└──────────────────────────────────────────────────────────────┘
-                           │
-                           │ spawn
-                           ▼
-                 ┌─────────────────┐
-                 │    Consumer     │
-                 │                 │
-                 │ stdin  ← JSON payload
-                 │ stderr → PROGRESS 0.5 message...
-                 │ stdout → JSON result
-                 │ exit   → 0=success, 1=failure
-                 └─────────────────┘
-```
-
-### Consumer Protocol
-
-A consumer is any executable that follows this contract:
-
-**stdin**: JSON payload (the job parameters)
-**stdout**: JSON result (captured when process exits)
-**stderr**: Progress updates in simple format:
-```
-PROGRESS 0.0 Starting...
-PROGRESS 0.25 Loading data...
-PROGRESS 0.5 Solving...
-PROGRESS 1.0 Done
-LOG Some debug info
-WARN Something suspicious
-ERROR Something bad (but continuing)
-```
-**exit code**: 0 = success, non-zero = failure
-
-### REST API
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/jobs` | POST | Submit job, get ID |
-| `/api/v1/jobs/:id` | GET | Get job status |
-| `/api/v1/jobs/:id/result` | GET | Get job result |
-| `/api/v1/jobs/:id` | DELETE | Cancel job |
-| `/api/v1/jobs/:id/stream` | WS | Stream progress |
-| `/api/v1/consumers` | GET | List registered consumers |
-
-### Dependencies
-
-- **SQLite**: Embedded, vendored (public domain) - job persistence
-- **mongoose**: Already have it for HTTP/WebSocket
-- **pthreads**: Standard on POSIX, available on Windows
-
-### TODOs
-
-**Phase 1: Core Infrastructure**
-- [ ] Define job and consumer data structures
-- [ ] Implement SQLite persistence layer
-- [ ] Implement consumer registry (config file or directory convention)
-- [ ] Implement job lifecycle (pending → running → completed/failed)
-
-**Phase 2: Process Management**
-- [ ] Implement process spawning (fork/exec on POSIX)
-- [ ] Implement stdin/stdout/stderr pipe management
-- [ ] Implement progress parsing from stderr
-- [ ] Implement timeout handling and job cancellation
-- [ ] Implement max_concurrent limits per consumer type
-
-**Phase 3: REST API**
-- [ ] Implement job submission endpoint
-- [ ] Implement job status/result endpoints
-- [ ] Implement job cancellation endpoint
-- [ ] Implement WebSocket streaming for progress
-
-**Phase 4: Built-in Consumers**
-- [ ] Create fg-ralph consumer (LP/MIP solving)
-- [ ] Create fg-fuelwise consumer (refueling optimization)
-- [ ] Create fg-locus consumer (batch geocoding)
-- [ ] Create fg-velo consumer (batch routing)
-- [ ] Create consumer helper library (optional)
-
-**Phase 5: Advanced Features**
-- [ ] Implement webhook callbacks for job completion
-- [ ] Implement job TTL and auto-cleanup
-- [ ] Implement job priority queue
-- [ ] Add comprehensive job statistics
-
----
-
-## 9. Distance and Duration Estimation (Cross-Cutting)
+## 6. Distance and Duration Estimation (Cross-Cutting)
 
 ### Overview
 
@@ -2137,7 +1972,7 @@ double duration = route.total_duration;
 
 ---
 
-## 10. Cost and Profit Calculations (Cross-Cutting)
+## 7. Cost and Profit Calculations (Cross-Cutting)
 
 ### Overview
 
@@ -2268,7 +2103,7 @@ This allows accurate fuel cost estimation for trucks that consume more fuel when
 
 ---
 
-## 11. FuelWise Integration (Refueling in Search)
+## 8. FuelWise Integration (Refueling in Search)
 
 ### Overview
 
@@ -2336,7 +2171,7 @@ Already supported in FuelWise. Weight-dependent consumption:
 
 ---
 
-## 12. Quota - Rate Quoting Engine
+## 9. Quota - Rate Quoting Engine
 
 ### Overview
 
@@ -2405,7 +2240,7 @@ Quota can incorporate external market data:
 
 ---
 
-## 13. Atlas - Network Design Engine
+## 10. Atlas - Network Design Engine
 
 ### Overview
 
@@ -2515,267 +2350,6 @@ CapacityRecommendation *at_plan_capacity(
 
 ---
 
-## 14. Velo Enhancements
-
-Planned improvements to the Velo routing engine.
-
-### Turn-by-Turn Navigation
-
-Generate human-readable driving instructions from route geometry.
-
-**Features:**
-- Road name extraction from OSM way tags
-- Maneuver detection (turn left, turn right, continue, merge, exit)
-- Distance-to-next-maneuver
-- Voice instruction text generation
-- Support for multiple languages (i18n)
-
-**Data Model:**
-```c
-typedef struct {
-    double lat, lon;           /* Maneuver location */
-    double distance_m;         /* Distance to this maneuver from previous */
-    double duration_s;         /* Time to this maneuver from previous */
-    VLManeuverType type;       /* TURN_LEFT, TURN_RIGHT, CONTINUE, etc. */
-    int exit_number;           /* For roundabouts/exits */
-    char road_name[128];       /* Name of road to turn onto */
-    char instruction[256];     /* Human-readable instruction */
-} VLManeuver;
-
-typedef struct {
-    VLManeuver *maneuvers;
-    size_t maneuver_count;
-    double total_distance_m;
-    double total_duration_s;
-} VLTurnByTurn;
-```
-
-**API:**
-```c
-int vl_route_turn_by_turn(VLGraph *graph, VLRoute *route, VLTurnByTurn *out);
-void vl_turn_by_turn_free(VLTurnByTurn *tbt);
-```
-
-### Distance/Duration Matrix Calculation
-
-Compute many-to-many distance and duration matrices efficiently.
-
-**Use Cases:**
-- Fleet dispatch (assign N drivers to M loads)
-- Clustering for route optimization
-- Service area analysis
-
-**API:**
-```c
-typedef struct {
-    double *distances;         /* [sources * targets] matrix, row-major */
-    double *durations;         /* [sources * targets] matrix, row-major */
-    size_t num_sources;
-    size_t num_targets;
-} VLMatrix;
-
-int vl_compute_matrix(
-    VLGraph *graph,
-    const VLCoord *sources, size_t num_sources,
-    const VLCoord *targets, size_t num_targets,
-    VLRouteOptions *opts,
-    VLMatrix *out
-);
-
-void vl_matrix_free(VLMatrix *matrix);
-```
-
-**Optimization Strategies:**
-- Shared Dijkstra from each source (compute all targets in one search)
-- Contraction Hierarchies for O(1) lookups after preprocessing
-- Early termination when all targets found
-- Parallel computation across sources
-
-### ALT Algorithm Speedup
-
-The ALT (A* with Landmarks and Triangle inequality) algorithm currently computes landmarks at server startup. This adds 4-8 seconds to startup time for country-scale graphs.
-
-**Current State:**
-- Landmarks computed via `vl_landmarks_create()` at startup
-- 32 landmarks × 4 Dijkstra runs (to/from × distance/time) = 128 Dijkstra runs
-- Landmarks are **NOT** stored in the `.vlg` binary index file
-- Must recompute on every server restart
-
-**Optimization Options:**
-
-| Option | Startup Time | Index Size | Implementation |
-|--------|--------------|------------|----------------|
-| Current (compute at startup) | 4-8s | Unchanged | Already implemented |
-| Persist landmarks to .vlg | <1s | +50-100MB | Extend vl_graph_save/load |
-| Separate landmark file | <1s | Separate file | New vl_landmarks_save/load |
-| Lazy landmark computation | ~0s | Unchanged | Compute on first long route |
-
-**Recommended: Persist landmarks to .vlg index**
-
-Extend the binary graph format to include pre-computed landmarks:
-```c
-/* In vl_graph_save(): */
-// ... existing graph data ...
-// Landmarks section (optional, version 2+)
-write_u32(num_landmarks);
-write_u32(num_nodes);
-for (int l = 0; l < num_landmarks; l++) {
-    write_u32(landmark_node_id[l]);
-    write_doubles(dist_to_landmark[l], num_nodes);
-    write_doubles(dist_from_landmark[l], num_nodes);
-    write_doubles(time_to_landmark[l], num_nodes);
-    write_doubles(time_from_landmark[l], num_nodes);
-}
-```
-
-**Benefits:**
-- Instant startup (<1s) with full ALT performance
-- One-time precomputation during index build
-- Consistent with Carta's approach (pre-build index offline, mmap in production)
-
-### TODOs
-
-- [ ] Turn-by-turn: Extract road names from OSM way tags
-- [ ] Turn-by-turn: Implement maneuver detection algorithm
-- [ ] Turn-by-turn: Generate instruction text
-- [ ] Matrix: Implement single-source multi-target Dijkstra
-- [ ] Matrix: Add parallel computation across sources
-- [ ] Matrix: Consider Contraction Hierarchies for large matrices
-- [ ] ALT: Extend .vlg format to include landmark arrays
-- [ ] ALT: Update vl_graph_save() to persist landmarks
-- [ ] ALT: Update vl_graph_mmap() to load landmarks
-- [ ] ALT: Add --with-landmarks flag to graph build tool
-
----
-
-## 15. Carta Enhancements
-
-Planned improvements to the Carta map tile generator.
-
-### Text Rendering for Labels
-
-Add text rendering capability for road names, place labels, route annotations, and custom overlays.
-
-**Current State:**
-- Carta renders geometry (lines, polygons, points) to PNG tiles
-- No text rendering - road names, city labels, POI names are not displayed
-- MVT tiles include name properties but PNG tiles don't render them
-
-**Features Needed:**
-- Road name labels along polylines (curved text following road geometry)
-- Place labels (cities, towns, villages) with collision detection
-- POI labels (fuel stations, rest stops)
-- Route overlay labels (distance markers, turn instructions)
-- Custom text overlays via API
-
-**Technical Challenges:**
-
-| Challenge | Solution |
-|-----------|----------|
-| Font rendering | Bitmap fonts or SDF (Signed Distance Field) fonts |
-| Text along path | Sample points along polyline, compute tangent angles |
-| Label collision | R-tree of placed labels, skip if overlaps |
-| Multi-tile labels | Labels near tile edges need cross-tile coordination |
-| Zoom-dependent sizing | Scale font size with zoom level |
-| i18n / Unicode | UTF-8 support, RTL languages |
-
-**Proposed Architecture:**
-
-```c
-/* Font loading */
-typedef struct CTFont CTFont;
-CTFont *ct_font_load(const char *path);      /* Load .ttf or bitmap font */
-CTFont *ct_font_load_sdf(const char *path);  /* Load SDF font atlas */
-void ct_font_free(CTFont *font);
-
-/* Text rendering primitives */
-typedef struct {
-    const char *text;          /* UTF-8 text */
-    double x, y;               /* Position (tile coordinates) */
-    double size;               /* Font size in pixels */
-    uint32_t color;            /* RGBA color */
-    CTTextAlign align;         /* LEFT, CENTER, RIGHT */
-} CTTextLabel;
-
-typedef struct {
-    const char *text;          /* UTF-8 text */
-    const double *coords;      /* Polyline coordinates */
-    size_t coord_count;
-    double size;
-    uint32_t color;
-    double offset;             /* Perpendicular offset from line */
-} CTTextAlongPath;
-
-/* Render functions */
-int ct_render_text(CTRenderContext *ctx, const CTTextLabel *label);
-int ct_render_text_along_path(CTRenderContext *ctx, const CTTextAlongPath *text);
-
-/* Label placement with collision detection */
-typedef struct CTLabelPlacer CTLabelPlacer;
-CTLabelPlacer *ct_label_placer_create(int tile_width, int tile_height);
-int ct_label_place(CTLabelPlacer *placer, const CTTextLabel *label);  /* Returns 0 if collision */
-void ct_label_placer_free(CTLabelPlacer *placer);
-```
-
-**Implementation Phases:**
-
-1. **Phase 1: Point Labels**
-   - Bitmap font rendering at fixed positions
-   - Simple collision detection (axis-aligned bounding boxes)
-   - Place labels, city names
-
-2. **Phase 2: Road Labels**
-   - Text along polyline paths
-   - Curved text following road geometry
-   - Label spacing and repetition for long roads
-
-3. **Phase 3: Advanced Features**
-   - SDF fonts for crisp scaling
-   - Halo/outline effects for readability
-   - Priority-based label placement
-   - Cross-tile label coordination
-
-### Route Overlay Rendering
-
-Render route polylines and annotations as tile overlays.
-
-**Use Cases:**
-- Highlight planned route on map
-- Show turn-by-turn navigation path
-- Display multiple route alternatives
-- Fuel stop markers along route
-
-**API:**
-```c
-typedef struct {
-    const double *coords;      /* lon/lat pairs */
-    size_t coord_count;
-    uint32_t stroke_color;     /* Line color */
-    uint32_t fill_color;       /* For route corridor/buffer */
-    double stroke_width;       /* Line width in pixels */
-    double buffer_radius;      /* Optional corridor width */
-    int draw_arrows;           /* Direction arrows */
-    int draw_distance_markers; /* Distance labels every N km */
-} CTRouteOverlay;
-
-int ct_render_route_overlay(CTRenderContext *ctx, const CTRouteOverlay *route);
-```
-
-### TODOs
-
-- [ ] Text: Implement bitmap font loader
-- [ ] Text: Add basic text rendering at point locations
-- [ ] Text: Implement label collision detection (R-tree)
-- [ ] Text: Add text-along-path for road names
-- [ ] Text: Evaluate SDF fonts for better scaling
-- [ ] Text: Handle Unicode/UTF-8 properly
-- [ ] Route: Implement polyline overlay rendering
-- [ ] Route: Add direction arrows along route
-- [ ] Route: Add distance marker labels
-- [ ] Route: Support route corridor/buffer rendering
-
----
-
 ## Component Summary
 
 Current and planned components:
@@ -2815,7 +2389,7 @@ Current and planned components:
 
 ---
 
-## 16. API Server Infrastructure Improvements
+## 11. API Server Infrastructure Improvements
 
 ### Overview
 
@@ -2922,7 +2496,7 @@ void sh_chunked_end(struct mg_connection *c);
 
 ---
 
-## 17. Observability Infrastructure (Logging, Tracing, Metrics)
+## 12. Observability Infrastructure (Logging, Tracing, Metrics)
 
 ### Overview
 

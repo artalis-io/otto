@@ -1,5 +1,11 @@
 # OTTO Strategic Business Plan
 
+<!--
+REDACTION GUIDE FOR PUBLIC VERSION:
+Sections marked with <!-- REDACT --> should be removed or softened for public/investor docs.
+Use `grep -n "REDACT" docs/STRATEGY.md` to find all marked sections.
+-->
+
 ## Executive Summary
 
 OTTO is an open-source logistics optimization platform serving the entire trucking market—from one-truck owner-operators to 10,000+ truck mega-fleets. The business model combines open-source core engines with proprietary integrations and managed services, addressing a market gap left by closed-source vendors who create lock-in risk for enterprise customers and price out small operators entirely.
@@ -486,12 +492,14 @@ Fleets using Nexogen's planning system (now Trimble) face:
 
 ### 9.2 Exit Scenarios
 
+<!-- REDACT: Remove valuation ranges for public version -->
 | Scenario | Timing | Valuation Range | Likely Buyers |
 |----------|--------|-----------------|---------------|
 | Early strategic | Year 2-3 | €15-30M | Sennder, Convoy, vertical integrators |
 | Growth acquisition | Year 4-5 | €50-100M | Trimble, Samsara, Motive, Descartes |
 | PE rollup | Year 5+ | €80-150M | Vista, Thoma Bravo |
 | IPO / independence | Year 7+ | €200M+ | Public markets |
+<!-- END REDACT -->
 
 ---
 
@@ -696,6 +704,7 @@ OTTO treats vehicle type as a first-class parameter throughout the stack. When E
 
 ---
 
+<!-- REDACT: Entire section 12 - internal negotiation strategy, not for public -->
 ## 12. Strategic Positioning: Build vs Employment
 
 ### 12.1 The Acquirer-as-Employer Dynamic
@@ -828,6 +837,7 @@ When evaluating employment offers against building:
 - You want ownership, not just income
 
 **The conviction test:** If you believe OTTO will work, the math always favors building. The employment offer is "sell your optionality for guaranteed income." Only do that if you don't believe in your own optionality.
+<!-- END REDACT -->
 
 ---
 
@@ -1904,6 +1914,7 @@ Result: 5x smaller attack surface, 3x faster iteration, zero "works on server bu
 
 ---
 
+<!-- REDACT: Section 18 contains specific probabilities, valuations, and Trimble timing -->
 ## 18. Business Outcome Scenarios
 
 ### 18.1 Outcome Range
@@ -1972,6 +1983,7 @@ The pitch is **"You'll never be locked in again"**—not "we're open source."
 | "We built everything in C" | "Try it now—this HTML file runs the real product" |
 
 Open source is the *proof* of the no-lock-in promise, not the headline. Enterprise buyers don't care about ideology; they care about not getting screwed by acquisitions.
+<!-- END REDACT -->
 
 ---
 

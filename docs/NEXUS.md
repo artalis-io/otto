@@ -590,3 +590,14 @@ const NxAdapter* nx_get_adapter(const char *name);
 | `nexus/adapters/generic.c` | Generic JSON adapter |
 | `nexus/api/main.c` | REST API server |
 | `nexus/tests/test_nexus.c` | Unit tests |
+
+---
+
+## Implementation TODOs
+
+- [ ] Define NxDriver, NxLoad, NxVehicle, NxLocation structures
+- [ ] Define NxPlanningRequest and NxPlanningResponse
+- [ ] Implement adapter interface (TMS, ELD, LoadBoard)
+- [ ] Implement REST API endpoints
+- [ ] Create sample adapters for common TMS systems
+- [ ] Add webhook support for async results
