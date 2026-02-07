@@ -285,16 +285,15 @@ header {
 }
 
 /* Typing animation cursor (inline element) */
-.typing-cursor {
+.typing-cursor,
+.typed-cursor {
     color: #50c878;
-    animation: cursor-blink 0.7s step-end infinite;
     text-shadow: 0 0 8px rgba(80, 200, 120, 0.6);
+    white-space: pre;
 }
 
 .typed-cursor {
-    color: #50c878;
     animation: cursor-blink 1s step-end infinite;
-    text-shadow: 0 0 8px rgba(80, 200, 120, 0.6);
 }
 
 @keyframes cursor-blink {

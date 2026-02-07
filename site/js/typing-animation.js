@@ -118,36 +118,8 @@
                 block.classList.add('typed');
                 // Remove fixed height constraint now that content is complete
                 pre.style.minHeight = '';
-                // Final content with cursor
-                let finalHTML = '';
-                for (let i = 0; i < chars.length; i++) {
-                    const c = chars[i];
-                    const prevWrappers = i > 0 ? chars[i-1].wrappers : [];
-                    const currWrappers = c.wrappers;
-                    let commonLen = 0;
-                    while (commonLen < prevWrappers.length &&
-                           commonLen < currWrappers.length &&
-                           prevWrappers[commonLen].tag === currWrappers[commonLen].tag &&
-                           prevWrappers[commonLen].className === currWrappers[commonLen].className) {
-                        commonLen++;
-                    }
-                    for (let j = prevWrappers.length - 1; j >= commonLen; j--) {
-                        finalHTML += `</${prevWrappers[j].tag}>`;
-                    }
-                    for (let j = commonLen; j < currWrappers.length; j++) {
-                        const w = currWrappers[j];
-                        finalHTML += w.className ? `<${w.tag} class="${w.className}">` : `<${w.tag}>`;
-                    }
-                    finalHTML += escapeHTML(c.char);
-                }
-                if (chars.length > 0) {
-                    const lastWrappers = chars[chars.length - 1].wrappers;
-                    for (let j = lastWrappers.length - 1; j >= 0; j--) {
-                        finalHTML += `</${lastWrappers[j].tag}>`;
-                    }
-                }
-                finalHTML += '<span class="typed-cursor">\u2588</span>';
-                pre.innerHTML = finalHTML;
+                // Restore original content without cursor
+                pre.innerHTML = originalHTML;
                 return;
             }
 
