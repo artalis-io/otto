@@ -36,6 +36,7 @@ Annotation format in C headers:
 
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -774,6 +775,39 @@ def generate_velo_wasm_functions() -> str:
 '''
 
 
+def copy_wasm_files(config: dict) -> list:
+    """Copy WASM demo files to site/js/ directory."""
+    copied = []
+    js_dir = SITE_DIR / "js"
+    js_dir.mkdir(exist_ok=True)
+
+    for module in config["modules"]:
+        wasm = module.get("wasm", {})
+        if not wasm.get("enabled"):
+            continue
+
+        # Copy the main WASM script (e.g., carta-api-demo.js)
+        script_name = wasm.get("script", "")
+        if script_name:
+            src_path = ROOT / f"{module['id']}/wasm/build/{script_name}"
+            dst_path = js_dir / script_name
+            if src_path.exists():
+                shutil.copy2(src_path, dst_path)
+                copied.append(f"{module['id']}/wasm/build/{script_name} -> site/js/{script_name}")
+            else:
+                print(f"  Warning: WASM script not found: {src_path}")
+
+        # Copy the wrapper script (e.g., carta-api-demo-wrapper.js)
+        wrapper_name = wasm.get("wrapper", "")
+        if wrapper_name:
+            src_path = SITE_DIR / "js" / wrapper_name
+            # Wrapper should already be in site/js/, just verify it exists
+            if not src_path.exists():
+                print(f"  Warning: Wrapper not found: {src_path}")
+
+    return copied
+
+
 def main():
     """Main entry point."""
     global VERBOSE
@@ -873,6 +907,13 @@ def main():
             print(f"\n✗ {OUTPUT_FILE.name} does not exist")
             sys.exit(1)
     else:
+        # Copy WASM files to site/js/
+        copied = copy_wasm_files(config)
+        if copied:
+            print("\nCopied WASM files:")
+            for c in copied:
+                print(f"  {c}")
+
         # Write output
         OUTPUT_FILE.write_text(output_html)
         print(f"\n✓ Generated {OUTPUT_FILE.name} ({len(output_html):,} bytes)")

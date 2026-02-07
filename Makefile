@@ -22,11 +22,11 @@
 .PHONY: all lib clean test help
 .PHONY: ralph fuelwise velo carta locus shared
 .PHONY: fuelwise-api carta-api velo-api
-.PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test
+.PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test wasm-api-demos
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-serve
 .PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
 .PHONY: run-fuelwise-api run-carta-api run-velo-api
-.PHONY: benchmark ci api-docs api-docs-check
+.PHONY: benchmark ci api-docs api-docs-check download-monaco
 
 # =============================================================================
 # Default Targets
@@ -262,14 +262,70 @@ clean-all: clean
 	-cd carta/ui && rm -rf node_modules dist 2>/dev/null || true
 
 # =============================================================================
+# Demo Data (Monaco - small test dataset)
+# =============================================================================
+
+# Download Monaco PBF if missing
+data/monaco-latest.osm.pbf:
+	@echo "Downloading Monaco OSM data..."
+	@./scripts/download-osm.sh monaco
+
+# Build Velo graph index from PBF
+# The graph format may change when velo/ sources change, so rebuild when sources change
+VELO_SOURCES = $(wildcard velo/src/*.c) $(wildcard velo/include/*.h)
+data/monaco.vlg: data/monaco-latest.osm.pbf $(VELO_SOURCES) | velo
+	@echo "Building Velo graph index from PBF..."
+	@./velo/bench_pbf data/monaco-latest.osm.pbf data/monaco.vlg
+	@echo "Built: data/monaco.vlg"
+
+# Embed Monaco data into WASM headers
+velo/wasm/src/monaco_vlg.h: data/monaco.vlg
+	@echo "Embedding Monaco graph into WASM header..."
+	@xxd -i data/monaco.vlg | sed 's/data_monaco_vlg/monaco_vlg_data/g' > velo/wasm/src/monaco_vlg.h
+	@echo "Generated: velo/wasm/src/monaco_vlg.h"
+
+carta/wasm/src/monaco_pbf.h: data/monaco-latest.osm.pbf
+	@echo "Embedding Monaco PBF into WASM header..."
+	@xxd -i data/monaco-latest.osm.pbf | sed 's/data_monaco_latest_osm_pbf/monaco_pbf_data/g' > carta/wasm/src/monaco_pbf.h
+	@echo "Generated: carta/wasm/src/monaco_pbf.h"
+
+# WASM API demos with embedded Monaco data
+VELO_WASM_SOURCES = $(wildcard velo/wasm/src/*.c) $(VELO_SOURCES)
+velo/wasm/build/velo-api-demo.js: velo/wasm/src/monaco_vlg.h $(VELO_WASM_SOURCES) | shared
+	@echo "Building Velo WASM API demo..."
+	$(MAKE) -C velo/wasm api-demo
+
+CARTA_SOURCES = $(wildcard carta/src/*.c) $(wildcard carta/include/*.h)
+CARTA_WASM_SOURCES = $(wildcard carta/wasm/src/*.c) $(CARTA_SOURCES)
+carta/wasm/build/carta-api-demo.js: carta/wasm/src/monaco_pbf.h $(CARTA_WASM_SOURCES) | shared
+	@echo "Building Carta WASM API demo..."
+	$(MAKE) -C carta/wasm api-demo
+
+# Build both WASM API demos
+wasm-api-demos: velo/wasm/build/velo-api-demo.js carta/wasm/build/carta-api-demo.js
+	@echo "WASM API demos built successfully"
+
+# Convenience target for downloading Monaco
+download-monaco: data/monaco-latest.osm.pbf
+	@echo "Monaco data available: data/monaco-latest.osm.pbf"
+
+# =============================================================================
 # Documentation
 # =============================================================================
 
+# Header files that api-docs depends on
+API_HEADERS = $(wildcard carta/include/*.h) $(wildcard velo/include/*.h) \
+              $(wildcard locus/include/*.h) $(wildcard fuelwise/include/*.h)
+
 # Generate API documentation from C header annotations
-api-docs:
+# Depends on: headers (for annotations), WASM demos (copied to site/js/), generator script
+site/api.html: scripts/gen_api.py site/api-template.html site/api-config.json $(API_HEADERS) \
+               velo/wasm/build/velo-api-demo.js carta/wasm/build/carta-api-demo.js
 	@echo "Generating API documentation..."
 	@python3 scripts/gen_api.py
 	@echo "Done: site/api.html"
+
+api-docs: site/api.html
 
 # Check API docs are up-to-date (for CI)
 api-docs-check:
@@ -350,8 +406,13 @@ help:
 	@echo "  benchmark        - Run performance benchmarks"
 	@echo "  ci               - Run CI pipeline"
 	@echo ""
+	@echo "Demo Data (Monaco):"
+	@echo "  data/monaco-latest.osm.pbf  - Download Monaco OSM data"
+	@echo "  data/monaco.vlg             - Build Velo graph from PBF"
+	@echo "  wasm-api-demos              - Build WASM API demos with Monaco"
+	@echo ""
 	@echo "Documentation:"
-	@echo "  api-docs         - Generate API docs from C annotations"
+	@echo "  api-docs         - Generate API docs (rebuilds if sources changed)"
 	@echo "  api-docs-check   - Check API docs are up-to-date (for CI)"
 	@echo ""
 	@echo "Testing:"
