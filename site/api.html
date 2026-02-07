@@ -17,8 +17,101 @@
     <!-- Shared Styles -->
     <link rel="stylesheet" href="style.css">
 
+    <!-- WASM API Demo -->
+    <script src="wasm/carta-api-demo.js"></script>
+    <script src="js/carta-api-demo.js"></script>
+
     <!-- API-specific Styles -->
     <style>
+        /* WASM Demo */
+        .wasm-demo {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        .wasm-demo-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .wasm-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 4px 8px;
+            background: #2563eb;
+            color: white;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .wasm-demo-title {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .try-btn {
+            padding: 8px 16px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-family: inherit;
+            transition: background 0.15s;
+        }
+
+        .try-btn:hover {
+            background: #2563eb;
+        }
+
+        .try-btn:disabled {
+            background: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        .demo-output {
+            margin-top: 12px;
+            display: none;
+        }
+
+        .demo-output.visible {
+            display: block;
+        }
+
+        .demo-output img {
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            max-width: 100%;
+        }
+
+        .demo-output pre {
+            margin: 0;
+            padding: 12px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            font-size: 12px;
+            overflow-x: auto;
+        }
+
+        .demo-status {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 8px;
+        }
+
+        .demo-status.error {
+            color: var(--error);
+        }
+
+        .demo-status.success {
+            color: var(--success);
+        }
         /* Service Navigation */
         .service-nav {
             padding: 24px 0;
@@ -363,6 +456,19 @@
 }</pre>
                             </div>
                         </div>
+                        <div class="wasm-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <button class="try-btn" id="health-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="health-output">
+                                <div class="code-block">
+                                    <pre id="health-result"></pre>
+                                </div>
+                                <div class="demo-status" id="health-status"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -395,6 +501,43 @@
     <span class="key">"denied"</span>: <span class="number">42</span>
   }
 }</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <button class="try-btn" id="stats-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="stats-output">
+                                <div class="code-block">
+                                    <pre id="stats-result"></pre>
+                                </div>
+                                <div class="demo-status" id="stats-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/metrics</span>
+                        <span class="endpoint-desc">Prometheus metrics</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre><span class="comment"># HELP carta_requests_total Total HTTP requests</span>
+<span class="comment"># TYPE carta_requests_total counter</span>
+carta_requests_total{status="200"} 1234
+carta_requests_total{status="404"} 12
+<span class="comment"># HELP carta_request_duration_ms Request duration in milliseconds</span>
+<span class="comment"># TYPE carta_request_duration_ms histogram</span>
+carta_request_duration_ms_bucket{le="10"} 500
+carta_request_duration_ms_bucket{le="50"} 1100
+carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             </div>
                         </div>
                     </div>
@@ -459,6 +602,31 @@
                         <div class="endpoint-section">
                             <h4>Response</h4>
                             <p style="color: var(--text-muted); font-size: 13px;">PNG image (512x512 by default). Content-Type: image/png</p>
+                        </div>
+                        <div class="wasm-demo" id="carta-png-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Generate a tile using Carta WASM with embedded Monaco data. No server required.
+                            </p>
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <label style="font-size: 13px;">
+                                    z: <input type="number" id="carta-z" value="14" min="0" max="18" style="width: 50px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <label style="font-size: 13px;">
+                                    x: <input type="number" id="carta-x" value="8529" min="0" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <label style="font-size: 13px;">
+                                    y: <input type="number" id="carta-y" value="5974" min="0" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <button class="try-btn" id="carta-try-btn" disabled>Loading WASM...</button>
+                            </div>
+                            <div class="demo-output" id="carta-output">
+                                <img id="carta-tile-img" alt="Generated tile">
+                                <div class="demo-status" id="carta-status"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -551,6 +719,22 @@
   <span class="key">"center"</span>: [<span class="number">19.50</span>, <span class="number">47.16</span>, <span class="number">7</span>],
   <span class="key">"tiles"</span>: [<span class="string">"http://localhost:8081/tiles/{z}/{x}/{y}.png"</span>]
 }</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo" id="carta-tilejson-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Fetch TileJSON metadata from embedded Monaco data.
+                            </p>
+                            <button class="try-btn" id="tilejson-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="tilejson-output">
+                                <div class="code-block">
+                                    <pre id="tilejson-result"></pre>
+                                </div>
+                                <div class="demo-status" id="tilejson-status"></div>
                             </div>
                         </div>
                     </div>
@@ -966,5 +1150,228 @@
             <div>&copy; 2024-2026 OTTO Platform</div>
         </footer>
     </div>
+
+    <!-- WASM Demo Script -->
+    <script>
+    (function() {
+        'use strict';
+
+        // Carta WASM Demo
+        let cartaDemo = null;
+
+        // Format JSON with syntax highlighting (matches code-block style)
+        function formatJsonWithHighlighting(obj, indent = 0) {
+            const spaces = '  '.repeat(indent);
+            const nextSpaces = '  '.repeat(indent + 1);
+
+            if (obj === null) return '<span class="number">null</span>';
+            if (typeof obj === 'boolean') return `<span class="number">${obj}</span>`;
+            if (typeof obj === 'number') return `<span class="number">${obj}</span>`;
+            if (typeof obj === 'string') return `<span class="string">"${obj}"</span>`;
+
+            if (Array.isArray(obj)) {
+                if (obj.length === 0) return '[]';
+                // For short arrays of primitives, keep on one line
+                if (obj.every(v => typeof v !== 'object') && obj.length <= 4) {
+                    const items = obj.map(v => formatJsonWithHighlighting(v, 0)).join(', ');
+                    return `[${items}]`;
+                }
+                const items = obj.map(v => nextSpaces + formatJsonWithHighlighting(v, indent + 1));
+                return `[\n${items.join(',\n')}\n${spaces}]`;
+            }
+
+            if (typeof obj === 'object') {
+                const keys = Object.keys(obj);
+                if (keys.length === 0) return '{}';
+                const items = keys.map(key => {
+                    const value = formatJsonWithHighlighting(obj[key], indent + 1);
+                    return `${nextSpaces}<span class="key">"${key}"</span>: ${value}`;
+                });
+                return `{\n${items.join(',\n')}\n${spaces}}`;
+            }
+
+            return String(obj);
+        }
+
+        // Helper to enable a button
+        function enableBtn(id, label) {
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.textContent = label;
+                btn.disabled = false;
+            }
+        }
+
+        // Helper to disable a button with error state
+        function disableBtn(id) {
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.textContent = 'WASM unavailable';
+                btn.disabled = true;
+            }
+        }
+
+        async function initCartaWasm() {
+            const pngBtn = document.getElementById('carta-try-btn');
+            const pngStatus = document.getElementById('carta-status');
+
+            try {
+                // CartaDemo is loaded from js/carta-api-demo.js
+                if (typeof CartaDemo === 'undefined') {
+                    throw new Error('CartaDemo class not loaded');
+                }
+
+                cartaDemo = new CartaDemo();
+                await cartaDemo.init();
+
+                // Enable PNG tile button
+                pngBtn.textContent = 'Generate Tile';
+                pngBtn.disabled = false;
+                pngStatus.textContent = `Carta ${cartaDemo.getVersion()} ready (Monaco PBF: ${(cartaDemo.getPBFSize() / 1024).toFixed(0)} KB)`;
+                pngStatus.className = 'demo-status success';
+                document.getElementById('carta-output').classList.add('visible');
+
+                // Enable all other WASM demo buttons
+                enableBtn('tilejson-try-btn', 'Fetch TileJSON');
+                enableBtn('health-try-btn', 'Check Health');
+                enableBtn('stats-try-btn', 'Get Stats');
+            } catch (err) {
+                console.error('Carta WASM init failed:', err);
+                pngBtn.textContent = 'WASM unavailable';
+                pngStatus.textContent = 'Failed to load WASM module: ' + err.message;
+                pngStatus.className = 'demo-status error';
+                document.getElementById('carta-output').classList.add('visible');
+
+                disableBtn('tilejson-try-btn');
+                disableBtn('health-try-btn');
+                disableBtn('stats-try-btn');
+            }
+        }
+
+        async function generateCartaTile() {
+            if (!cartaDemo || !cartaDemo.isReady()) return;
+
+            const btn = document.getElementById('carta-try-btn');
+            const img = document.getElementById('carta-tile-img');
+            const status = document.getElementById('carta-status');
+            const output = document.getElementById('carta-output');
+
+            const z = parseInt(document.getElementById('carta-z').value) || 14;
+            const x = parseInt(document.getElementById('carta-x').value) || 8529;
+            const y = parseInt(document.getElementById('carta-y').value) || 5974;
+
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const dataUrl = await cartaDemo.getTileDataURL(z, x, y);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                img.src = dataUrl;
+                img.style.display = 'block';
+                status.textContent = `Tile ${z}/${x}/${y}.png generated in ${elapsed}ms`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('Tile generation failed:', err);
+                img.style.display = 'none';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Generate Tile';
+            }
+        }
+
+        async function fetchTileJSON() {
+            if (!cartaDemo || !cartaDemo.isReady()) return;
+
+            const btn = document.getElementById('tilejson-try-btn');
+            const result = document.getElementById('tilejson-result');
+            const status = document.getElementById('tilejson-status');
+            const output = document.getElementById('tilejson-output');
+
+            btn.disabled = true;
+            btn.textContent = 'Fetching...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const tileJson = await cartaDemo.getTileJSON();
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                result.innerHTML = formatJsonWithHighlighting(tileJson);
+                status.textContent = `Fetched in ${elapsed}ms`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('TileJSON fetch failed:', err);
+                result.textContent = '';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Fetch TileJSON';
+            }
+        }
+
+        // Generic JSON endpoint fetcher
+        async function fetchJsonEndpoint(endpoint, btnId, resultId, statusId, outputId, btnLabel) {
+            if (!cartaDemo || !cartaDemo.isReady()) return;
+
+            const btn = document.getElementById(btnId);
+            const result = document.getElementById(resultId);
+            const status = document.getElementById(statusId);
+            const output = document.getElementById(outputId);
+
+            btn.disabled = true;
+            btn.textContent = 'Fetching...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const response = await cartaDemo.fetch(endpoint);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                result.innerHTML = formatJsonWithHighlighting(data);
+                status.textContent = `Fetched in ${elapsed}ms`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error(`${endpoint} fetch failed:`, err);
+                result.textContent = '';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = btnLabel;
+            }
+        }
+
+        function fetchHealth() {
+            fetchJsonEndpoint('/api/v1/health', 'health-try-btn', 'health-result', 'health-status', 'health-output', 'Check Health');
+        }
+
+        function fetchStats() {
+            fetchJsonEndpoint('/api/v1/stats', 'stats-try-btn', 'stats-result', 'stats-status', 'stats-output', 'Get Stats');
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Init Carta WASM
+            initCartaWasm();
+
+            // Button click handlers
+            document.getElementById('carta-try-btn').addEventListener('click', generateCartaTile);
+            document.getElementById('tilejson-try-btn').addEventListener('click', fetchTileJSON);
+            document.getElementById('health-try-btn').addEventListener('click', fetchHealth);
+            document.getElementById('stats-try-btn').addEventListener('click', fetchStats);
+        });
+    })();
+    </script>
 </body>
 </html>

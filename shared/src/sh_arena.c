@@ -5,6 +5,7 @@
 #include "sh_arena.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>  /* For SIZE_MAX */
 
 SHArena *sh_arena_create(size_t capacity)
 {
