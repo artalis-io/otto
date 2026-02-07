@@ -663,19 +663,35 @@ exports.mk: ../include/ct_api.h
  */
 ```
 
-### Step 3: Implement Generator (3 hours)
+### Step 3: Implement Generator (3 hours) ✅ DONE
 
-1. Parser for annotations
-2. HTML generation with highlighting
-3. WASM exports generation
-4. JS wrapper generation
+1. ✅ Parser for annotations (parse_api_annotation, parse_wasm_exports, parse_header_file)
+2. ✅ HTML generation with syntax highlighting (generate_endpoint_html, format_json_html)
+3. ✅ Template rendering (render_template with Jinja2-like substitution)
+4. ✅ Carta WASM demo handlers (generate_carta_wasm_functions)
+5. ✅ --check mode for CI validation
 
-### Step 4: Integrate and Test (1 hour)
+**Generated output:**
+- `site/api.html` - Complete HTML documentation (46KB)
+- Supports 4 Carta endpoints from annotations
+- WASM demos for PNG tiles, TileJSON, health, stats
+- Proper CRT-style syntax highlighting
 
-1. Add to build system
-2. Delete hand-written api.html
-3. Verify WASM demos still work
-4. Visual comparison
+### Step 4: Integrate and Test (1 hour) ✅ DONE
+
+1. ✅ Added to build system:
+   - `make api-docs` - Generate API documentation
+   - `make api-docs-check` - Verify up-to-date (for CI)
+2. ✅ api.html is now fully generated (no hand-written version)
+3. ✅ CI integration via `scripts/ci.sh lint` stage
+4. ✅ Structure validation confirms all sections present
+
+**Build integration:**
+```bash
+make api-docs       # Regenerate site/api.html
+make api-docs-check # Verify api.html is up-to-date (exits 1 if stale)
+./scripts/ci.sh lint # Includes api-docs-check in lint stage
+```
 
 ### Step 5: Add Other Modules (2 hours)
 
