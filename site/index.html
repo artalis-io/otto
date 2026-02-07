@@ -121,10 +121,83 @@
             font-weight: 700;
             letter-spacing: 4px;
             color: var(--text);
+            animation: logo-electric 4s infinite;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
         }
 
         .logo span {
             color: var(--accent);
+        }
+
+        @keyframes logo-electric {
+            0%, 100% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15),
+                    0 0 20px rgba(255, 255, 255, 0.05);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            5% {
+                text-shadow:
+                    -1px 0 rgba(255, 100, 100, 0.5),
+                    1px 0 rgba(100, 180, 255, 0.5),
+                    0 0 10px rgba(255, 255, 255, 0.2);
+                transform: translate(0.5px, 0);
+            }
+            10% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15);
+                transform: translate(0, 0);
+            }
+            30% {
+                text-shadow:
+                    -2px 0 rgba(255, 60, 60, 0.6),
+                    2px 0 rgba(60, 180, 255, 0.6),
+                    0 0 20px rgba(255, 255, 255, 0.3);
+                transform: translate(1px, 0) skewX(0.5deg);
+                filter: brightness(1.15);
+            }
+            31% {
+                text-shadow:
+                    2px 0 rgba(255, 60, 60, 0.5),
+                    -2px 0 rgba(60, 180, 255, 0.5),
+                    0 0 15px rgba(255, 255, 255, 0.2);
+                transform: translate(-0.5px, 0.3px) skewX(-0.3deg);
+            }
+            33% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            55% {
+                text-shadow:
+                    0.5px 0 rgba(255, 150, 150, 0.3),
+                    -0.5px 0 rgba(150, 200, 255, 0.3),
+                    0 0 10px rgba(255, 255, 255, 0.15);
+            }
+            60% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15),
+                    0 0 20px rgba(255, 255, 255, 0.05);
+            }
+            75% {
+                text-shadow:
+                    -1.5px 0 rgba(255, 80, 80, 0.5),
+                    1.5px 0 rgba(80, 180, 255, 0.5),
+                    0 0 15px rgba(255, 255, 255, 0.25);
+                transform: translate(0.6px, -0.2px);
+                filter: brightness(1.1);
+            }
+            77% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            92% { filter: brightness(0.95); }
+            93% { filter: brightness(1.08); }
+            94% { filter: brightness(1); }
         }
 
         .tagline {
