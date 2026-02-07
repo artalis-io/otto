@@ -271,8 +271,14 @@ static void serialize_trie_iterative(TrieSerializer *ts, const LCTrieNode *root)
         if (top->child_idx == -1) {
             /* First visit: allocate node and store data */
             if (ts->node_count >= ts->node_capacity) {
-                ts->node_capacity *= 2;
-                ts->nodes = realloc(ts->nodes, ts->node_capacity * sizeof(LCBinaryTrieNode));
+                size_t new_capacity = ts->node_capacity * 2;
+                LCBinaryTrieNode *new_nodes = realloc(ts->nodes, new_capacity * sizeof(LCBinaryTrieNode));
+                if (!new_nodes) {
+                    free(stack);
+                    return;  /* Out of memory - abort serialization */
+                }
+                ts->nodes = new_nodes;
+                ts->node_capacity = new_capacity;
             }
 
             top->node_idx = ts->node_count++;
@@ -290,10 +296,17 @@ static void serialize_trie_iterative(TrieSerializer *ts, const LCTrieNode *root)
 
             if (top->node->num_entities > 0) {
                 if (ts->entity_count + top->node->num_entities > ts->entity_capacity) {
-                    while (ts->entity_count + top->node->num_entities > ts->entity_capacity) {
-                        ts->entity_capacity *= 2;
+                    size_t new_capacity = ts->entity_capacity;
+                    while (ts->entity_count + top->node->num_entities > new_capacity) {
+                        new_capacity *= 2;
                     }
-                    ts->entity_ids = realloc(ts->entity_ids, ts->entity_capacity * sizeof(uint32_t));
+                    uint32_t *new_ids = realloc(ts->entity_ids, new_capacity * sizeof(uint32_t));
+                    if (!new_ids) {
+                        free(stack);
+                        return;  /* Out of memory - abort serialization */
+                    }
+                    ts->entity_ids = new_ids;
+                    ts->entity_capacity = new_capacity;
                 }
                 memcpy(ts->entity_ids + ts->entity_count, top->node->entity_ids,
                        top->node->num_entities * sizeof(uint32_t));
@@ -310,8 +323,14 @@ static void serialize_trie_iterative(TrieSerializer *ts, const LCTrieNode *root)
             if (top->node->children[i]) {
                 /* Grow stack if needed */
                 if (stack_size >= stack_capacity) {
-                    stack_capacity *= 2;
-                    stack = realloc(stack, stack_capacity * sizeof(TrieStackEntry));
+                    size_t new_capacity = stack_capacity * 2;
+                    TrieStackEntry *new_stack = realloc(stack, new_capacity * sizeof(TrieStackEntry));
+                    if (!new_stack) {
+                        free(stack);
+                        return;  /* Out of memory - abort serialization */
+                    }
+                    stack = new_stack;
+                    stack_capacity = new_capacity;
                     top = &stack[stack_size - 1];  /* Realloc may move */
                 }
 
@@ -417,16 +436,23 @@ static void serialize_ngram(const LCNgramIndex *ngram, NgramSerializer *ns) {
 
         /* Grow entries array if needed */
         if (ns->entry_count >= ns->entry_capacity) {
-            ns->entry_capacity *= 2;
-            ns->entries = realloc(ns->entries, ns->entry_capacity * sizeof(LCBinaryNgramEntry));
+            uint32_t new_capacity = ns->entry_capacity * 2;
+            LCBinaryNgramEntry *new_entries = realloc(ns->entries, new_capacity * sizeof(LCBinaryNgramEntry));
+            if (!new_entries) return;  /* Out of memory - abort serialization */
+            ns->entries = new_entries;
+            ns->entry_capacity = new_capacity;
         }
 
         /* Grow entity IDs array if needed */
         if (ns->entity_count + e->count > ns->entity_capacity) {
-            while (ns->entity_count + e->count > ns->entity_capacity) {
-                ns->entity_capacity *= 2;
+            uint32_t new_capacity = ns->entity_capacity;
+            while (ns->entity_count + e->count > new_capacity) {
+                new_capacity *= 2;
             }
-            ns->entity_ids = realloc(ns->entity_ids, ns->entity_capacity * sizeof(uint32_t));
+            uint32_t *new_ids = realloc(ns->entity_ids, new_capacity * sizeof(uint32_t));
+            if (!new_ids) return;  /* Out of memory - abort serialization */
+            ns->entity_ids = new_ids;
+            ns->entity_capacity = new_capacity;
         }
 
         /* Pack trigram into 24-bit value */
@@ -478,16 +504,23 @@ static uint32_t serialize_entity_geometry(const LCEntity *e, uint32_t entity_id,
 
     /* Grow offsets array if needed */
     if (gs->offset_count >= gs->offset_capacity) {
-        gs->offset_capacity *= 2;
-        gs->offsets = realloc(gs->offsets, gs->offset_capacity * sizeof(LCBinaryGeometry));
+        uint32_t new_capacity = gs->offset_capacity * 2;
+        LCBinaryGeometry *new_offsets = realloc(gs->offsets, new_capacity * sizeof(LCBinaryGeometry));
+        if (!new_offsets) return NULL_OFFSET;  /* Out of memory */
+        gs->offsets = new_offsets;
+        gs->offset_capacity = new_capacity;
     }
 
     /* Grow points array if needed */
     if (gs->point_count + e->geometry->count > gs->point_capacity) {
-        while (gs->point_count + e->geometry->count > gs->point_capacity) {
-            gs->point_capacity *= 2;
+        uint32_t new_capacity = gs->point_capacity;
+        while (gs->point_count + e->geometry->count > new_capacity) {
+            new_capacity *= 2;
         }
-        gs->points = realloc(gs->points, gs->point_capacity * sizeof(LCBinaryPoint));
+        LCBinaryPoint *new_points = realloc(gs->points, new_capacity * sizeof(LCBinaryPoint));
+        if (!new_points) return NULL_OFFSET;  /* Out of memory */
+        gs->points = new_points;
+        gs->point_capacity = new_capacity;
     }
 
     uint32_t geom_idx = gs->offset_count++;
