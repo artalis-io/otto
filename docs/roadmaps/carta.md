@@ -97,6 +97,18 @@ typedef struct CTRTreeNode {
 
 **Priority**: Low (5% improvement expected).
 
+### 1.6 Additional Completed Optimizations
+
+| Optimization | Impact | Location |
+|-------------|--------|----------|
+| SIMD Polygon Fill | 8x for opaque fill | `ct_render.c:fill_span()` |
+| PNG Compression Level 2 | 3x faster encoding | `ct_png.c` |
+| Mercator Lookup Table | Eliminates trig calls | `ct_tile.c` |
+| Render Context Pool | No 262KB alloc/free per tile | `ct_png.c` |
+| Batch Coordinate Transform | Reduced per-point overhead | `ct_tile.c` |
+| PBF Hash Preallocation | 30-40% faster parsing | `ct_pbf.c` |
+| Fast Alpha Blending | Integer approx for transparency | `ct_render.c` |
+
 ---
 
 ## Chapter 2: Tile Cache

@@ -299,13 +299,48 @@ See `docs/MANIFESTO.md` for the full manifesto.
 | `/js-audit` | JavaScript/WebGL code review |
 | `/clayshards-audit` | Full ClayShards audit (C + JS + Manifesto) |
 
-## Documentation Links
+## Documentation Structure
 
-- `docs/ARCHITECTURE.md` - System architecture
-- `docs/MANIFESTO.md` - Design philosophy (C, WASM, agnostic patterns)
-- `docs/business/STRATEGY.md` - Business strategy
-- `docs/TODO_FEATURES.md` - Planned components (Fuse, HoSE, Tempo, Arbor, Sigma, Pulse, Atlas, Quota, etc.)
-- `clayshards/clay-shards/MANIFESTO.md` - ClayShards frontend philosophy (companion to Transport-Agnostic)
+| Path | Purpose |
+|------|---------|
+| `docs/ARCHITECTURE.md` | System architecture, layers, data flow |
+| `docs/MANIFESTO.md` | Design philosophy (C, WASM, transport-agnostic, render-agnostic) |
+| `docs/KNOWN_ISSUES.md` | Known bugs and workarounds |
+| `docs/TOOLING.md` | Build tools, scripts, CI |
+| `docs/business/` | Strategy, valuation (some content has redaction markers) |
+| `docs/roadmaps/` | Active development roadmaps by component (15 files) |
+| `docs/archive/` | Completed or superseded plans |
+
+### Roadmaps
+
+Active roadmaps in `docs/roadmaps/`:
+
+| File | Components |
+|------|------------|
+| `velo.md` | Continental routing, CCH, landmarks |
+| `carta.md` | Labels, styling, MVT optimizations |
+| `forge.md` | Async job queue architecture |
+| `nexus.md` | TMS/ELD integration gateway |
+| `hose.md` | Hours of Service engine |
+| `tempo.md` | Time windows, business rules |
+| `arbor.md` | State-space search |
+| `sigma.md` | Fleet plan selection (MIP) |
+| `pulse.md` | Execution tracker, PTA engine |
+| `atlas.md` | Network design |
+| `quota.md` | Pricing engine |
+
+See `docs/roadmaps/README.md` for priority overview.
+
+### Technical Internals
+
+Deep-dive documentation in `docs/internals/`:
+
+| File | Topic |
+|------|-------|
+| `ralph-architecture.md` | LP/MIP solver architecture |
+| `lu-factorization.md` | LU decomposition, eta updates |
+| `simplex.md` | Revised simplex implementation |
+| `clayshards-design.md` | UI widget state, focus model |
 
 ## Vendor Libraries
 
