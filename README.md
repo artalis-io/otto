@@ -140,6 +140,19 @@ rm -f data/monaco.vlg velo/wasm/src/monaco_vlg.h carta/wasm/src/monaco_pbf.h
 make api-docs
 ```
 
+### Building & Serving the Site
+
+The `site/` directory contains source files. Deployable files are built into `site/build/`:
+
+```bash
+make site-build            # Build site/build/ (only deployable files)
+make site-serve            # Build and serve on :8000
+```
+
+**Structure:**
+- `site/` - Source files (templates, config, Makefile)
+- `site/build/` - Deployable files only (gitignored, auto-generated)
+
 ### Component Documentation
 
 Each component has a `CLAUDE.md` with API details:
