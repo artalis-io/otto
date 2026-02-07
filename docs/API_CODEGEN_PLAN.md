@@ -701,6 +701,36 @@ make api-docs-check # Verify api.html is up-to-date (exits 1 if stale)
 
 ## Total Effort: ~8 hours
 
+## WASM Demo Size Estimates
+
+When adding WASM demos to api.html, expect these sizes (gzipped):
+
+| Component | WASM | Demo Data | Total |
+|-----------|------|-----------|-------|
+| Carta (tiles) | ~200KB | Monaco PBF ~700KB | ~900KB |
+| Velo (routing) | ~150KB | Monaco graph ~300KB | ~450KB |
+| Locus (geocoding) | ~100KB | Monaco index ~200KB | ~300KB |
+| FuelWise (optimizer) | ~150KB | Sample stations ~50KB | ~200KB |
+| **All 4 demos** | | | **~2MB** |
+
+This is acceptable for a demo page. Monaco is used as demo data because it's
+small (~700KB) while still having roads, buildings, coastline, etc.
+
+### Self-Contained Option
+
+For truly offline demos (e.g., sales presentations), WASM and data can be
+base64-encoded inline:
+
+```html
+<script>
+const wasmBase64 = 'AGFzbQEAAAAB...';  // ~1.2MB base64
+const wasmBinary = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0));
+const module = await WebAssembly.instantiate(wasmBinary, imports);
+</script>
+```
+
+This makes api.html completely self-contained (no external fetches needed).
+
 ## Benefits
 
 1. **Can't forget to document** - Endpoint without annotation = build warning
