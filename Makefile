@@ -26,7 +26,7 @@
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-serve
 .PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
 .PHONY: run-fuelwise-api run-carta-api run-velo-api
-.PHONY: benchmark ci
+.PHONY: benchmark ci api-docs api-docs-check
 
 # =============================================================================
 # Default Targets
@@ -265,6 +265,16 @@ clean-all: clean
 # Documentation
 # =============================================================================
 
+# Generate API documentation from C header annotations
+api-docs:
+	@echo "Generating API documentation..."
+	@python3 scripts/gen_api.py
+	@echo "Done: site/api.html"
+
+# Check API docs are up-to-date (for CI)
+api-docs-check:
+	@python3 scripts/gen_api.py --check
+
 # Generate PDF from strategy document (for sharing with partners)
 strategy-pdf:
 	@echo "Generating OTTO_Strategy.pdf..."
@@ -339,6 +349,10 @@ help:
 	@echo "Scripts:"
 	@echo "  benchmark        - Run performance benchmarks"
 	@echo "  ci               - Run CI pipeline"
+	@echo ""
+	@echo "Documentation:"
+	@echo "  api-docs         - Generate API docs from C annotations"
+	@echo "  api-docs-check   - Check API docs are up-to-date (for CI)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  test             - Run all library tests (~256)"

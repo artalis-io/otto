@@ -258,7 +258,17 @@ def format_json_html(json_str: str) -> str:
 def generate_endpoint_html(api: dict, module_id: str) -> str:
     """Generate HTML for a single endpoint."""
     method_lower = api["method"].lower()
-    demo_id = f"{module_id}-{api['path'].replace('/', '-').replace('{', '').replace('}', '').replace('.', '-').strip('-')}"
+
+    # Special demo IDs for carta endpoints (to match legacy JavaScript)
+    if module_id == "carta" and api["path"] == "/tiles/{z}/{x}/{y}.png":
+        demo_id = "carta"
+        img_id = "carta-tile-img"
+    elif module_id == "carta" and api["path"] == "/tiles.json":
+        demo_id = "tilejson"
+        img_id = None
+    else:
+        demo_id = f"{module_id}-{api['path'].replace('/', '-').replace('{', '').replace('}', '').replace('.', '-').strip('-')}"
+        img_id = f"{demo_id}-img"
 
     html = f'''                <div class="endpoint">
                     <div class="endpoint-header">
@@ -394,9 +404,10 @@ def generate_endpoint_html(api: dict, module_id: str) -> str:
 
         # Output area
         if api["demo"] == "image":
+            actual_img_id = img_id if img_id else f"{demo_id}-img"
             html += f'''
                             <div class="demo-output" id="{demo_id}-output">
-                                <img id="{demo_id}-img" alt="Generated output">
+                                <img id="{actual_img_id}" alt="Generated output">
                                 <div class="demo-status" id="{demo_id}-status"></div>
                             </div>'''
         else:
@@ -416,6 +427,250 @@ def generate_endpoint_html(api: dict, module_id: str) -> str:
                 </div>
 '''
     return html
+
+
+def generate_wasm_handlers(all_endpoints: dict, config: dict) -> tuple[dict, dict, str]:
+    """Generate WASM init code, error code, and button handlers for each module."""
+    wasm_init_code = {}
+    wasm_error_code = {}
+    button_handlers = []
+
+    for module in config["modules"]:
+        module_id = module["id"]
+        apis = all_endpoints.get(module_id, [])
+
+        if not module.get("wasm", {}).get("enabled"):
+            continue
+
+        # Build init code for this module
+        init_lines = []
+        error_lines = []
+
+        # For carta, add special handling for the PNG demo
+        if module_id == "carta":
+            # Use raw strings to avoid f-string brace issues with JS template literals
+            init_lines.append("                const pngBtn = document.getElementById('carta-try-btn');")
+            init_lines.append("                const pngStatus = document.getElementById('carta-status');")
+            init_lines.append("                pngBtn.textContent = 'Generate Tile';")
+            init_lines.append("                pngBtn.disabled = false;")
+            init_lines.append("                pngStatus.textContent = `Carta ${cartaDemo.getVersion()} ready (Monaco PBF: ${(cartaDemo.getPBFSize() / 1024).toFixed(0)} KB)`;")
+            init_lines.append("                pngStatus.className = 'demo-status success';")
+            init_lines.append("                document.getElementById('carta-output').classList.add('visible');")
+            init_lines.append("                enableBtn('tilejson-try-btn', 'Fetch TileJSON');")
+            init_lines.append("                enableBtn('health-try-btn', 'Check Health');")
+            init_lines.append("                enableBtn('stats-try-btn', 'Get Stats');")
+
+            error_lines.append("                pngBtn.textContent = 'WASM unavailable';")
+            error_lines.append("                pngStatus.textContent = 'Failed to load WASM module: ' + err.message;")
+            error_lines.append("                pngStatus.className = 'demo-status error';")
+            error_lines.append("                document.getElementById('carta-output').classList.add('visible');")
+            error_lines.append("                disableBtn('tilejson-try-btn');")
+            error_lines.append("                disableBtn('health-try-btn');")
+            error_lines.append("                disableBtn('stats-try-btn');")
+
+            # Add carta button handlers
+            button_handlers.append("            document.getElementById('carta-try-btn').addEventListener('click', generateCartaTile);")
+            button_handlers.append("            document.getElementById('tilejson-try-btn').addEventListener('click', fetchTileJSON);")
+            button_handlers.append("            document.getElementById('health-try-btn').addEventListener('click', fetchHealth);")
+            button_handlers.append("            document.getElementById('stats-try-btn').addEventListener('click', fetchStats);")
+
+        wasm_init_code[module_id] = "\n".join(init_lines) if init_lines else "                // No demo buttons to enable"
+        wasm_error_code[module_id] = "\n".join(error_lines) if error_lines else "                // No error handling needed"
+
+    return wasm_init_code, wasm_error_code, "\n".join(button_handlers)
+
+
+def render_template(template: str, config: dict, endpoints: dict,
+                   wasm_init_code: dict, wasm_error_code: dict, button_handlers: str) -> str:
+    """Render the Jinja2-like template with actual values."""
+
+    # Simple value substitutions
+    result = template
+    result = result.replace("{{ config.title }}", config["title"])
+    result = result.replace("{{ config.description }}", config["description"])
+    result = result.replace("{{ config.canonical_url }}", config["canonical_url"])
+    result = result.replace("{{ config.github_url }}", config["github_url"])
+
+    # Process for loops for modules
+    # Find {% for module in config.modules %}...{% endfor %} blocks
+    module_loop_pattern = r"{% for module in config\.modules %}\n(.*?){% endfor %}"
+
+    def replace_module_loop(match):
+        template_block = match.group(1)
+        result_blocks = []
+
+        for module in config["modules"]:
+            block = template_block
+
+            # Simple substitutions
+            block = block.replace("{{ module.id }}", module["id"])
+            block = block.replace("{{ module.id | upper }}", module["id"].upper())
+            block = block.replace("{{ module.id | capitalize }}", module["id"].capitalize())
+            block = block.replace("{{ module.name }}", module["name"])
+            block = block.replace("{{ module.icon }}", module["icon"])
+            block = block.replace("{{ module.port }}", str(module["port"]))
+            block = block.replace("{{ module.description }}", module["description"])
+            block = block.replace("{{ module.header_file }}", module["header_file"])
+
+            # Name with filters
+            name = module["name"]
+            name_short = name.replace(" Server", "").replace(" Optimizer", "").replace(" Geocoder", "").replace(" Tile", "")
+            block = block.replace('{{ module.name | replace(" Server", "") | replace(" Optimizer", "") | replace(" Geocoder", "") }}', name_short)
+
+            # WASM-related
+            wasm = module.get("wasm", {})
+            if wasm.get("enabled"):
+                block = block.replace("{{ module.wasm.script }}", wasm.get("script", ""))
+                block = block.replace("{{ module.wasm.wrapper }}", wasm.get("wrapper", ""))
+                block = block.replace("{{ module.wasm.class_name }}", wasm.get("class_name", ""))
+                block = block.replace("{{ module.wasm.factory_name }}", wasm.get("factory_name", ""))
+
+            # Endpoint HTML
+            module_endpoints = endpoints.get(module["id"], "")
+            block = block.replace("{{ endpoints[module.id] }}", module_endpoints)
+
+            # WASM init/error code
+            init_code = wasm_init_code.get(module["id"], "                // No demo buttons")
+            error_code = wasm_error_code.get(module["id"], "                // No error handling")
+            block = block.replace('{{ wasm_init_code[module.id] | default("                // TODO: Enable demo buttons") }}', init_code)
+            block = block.replace('{{ wasm_error_code[module.id] | default("                // TODO: Handle error") }}', error_code)
+
+            # Handle conditionals within the block
+            # {% if module.wasm.enabled %}...{% endif %}
+            if_wasm_pattern = r"{% if module\.wasm\.enabled %}\n?(.*?){% endif %}"
+            if wasm.get("enabled"):
+                block = re.sub(if_wasm_pattern, r"\1", block, flags=re.DOTALL)
+            else:
+                block = re.sub(if_wasm_pattern, "", block, flags=re.DOTALL)
+
+            result_blocks.append(block)
+
+        return "".join(result_blocks)
+
+    result = re.sub(module_loop_pattern, replace_module_loop, result, flags=re.DOTALL)
+
+    # Process common_endpoints loop
+    common_ep_pattern = r"{% for ep in config\.common_endpoints %}\n(.*?){% endfor %}"
+
+    def replace_common_ep_loop(match):
+        template_block = match.group(1)
+        result_blocks = []
+
+        for ep in config["common_endpoints"]:
+            block = template_block
+            block = block.replace("{{ ep.method }}", ep["method"])
+            block = block.replace("{{ ep.method | lower }}", ep["method"].lower())
+            block = block.replace("{{ ep.path }}", ep["path"])
+            block = block.replace("{{ ep.description }}", ep["description"])
+            result_blocks.append(block)
+
+        return "".join(result_blocks)
+
+    result = re.sub(common_ep_pattern, replace_common_ep_loop, result, flags=re.DOTALL)
+
+    # Process status_codes loop
+    status_code_pattern = r"{% for sc in config\.status_codes %}\n(.*?){% endfor %}"
+
+    def replace_status_code_loop(match):
+        template_block = match.group(1)
+        result_blocks = []
+
+        for sc in config["status_codes"]:
+            block = template_block
+            block = block.replace("{{ sc.code }}", str(sc["code"]))
+            block = block.replace("{{ sc.text }}", sc["text"])
+            block = block.replace("{{ sc.type }}", sc["type"])
+            result_blocks.append(block)
+
+        return "".join(result_blocks)
+
+    result = re.sub(status_code_pattern, replace_status_code_loop, result, flags=re.DOTALL)
+
+    # Insert button handlers
+    result = result.replace("{{ button_handlers }}", button_handlers)
+
+    return result
+
+
+def generate_carta_wasm_functions() -> str:
+    """Generate the Carta-specific WASM helper functions."""
+    return '''
+        // Carta-specific WASM handlers
+        async function generateCartaTile() {
+            if (!cartaDemo || !cartaDemo.isReady()) return;
+
+            const btn = document.getElementById('carta-try-btn');
+            const img = document.getElementById('carta-tile-img');
+            const status = document.getElementById('carta-status');
+            const output = document.getElementById('carta-output');
+
+            const z = parseInt(document.getElementById('carta-z').value) || 14;
+            const x = parseInt(document.getElementById('carta-x').value) || 8529;
+            const y = parseInt(document.getElementById('carta-y').value) || 5974;
+
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const dataUrl = await cartaDemo.getTileDataURL(z, x, y);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                img.src = dataUrl;
+                img.style.display = 'block';
+                status.textContent = `Tile ${z}/${x}/${y}.png generated in ${elapsed}ms`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('Tile generation failed:', err);
+                img.style.display = 'none';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Generate Tile';
+            }
+        }
+
+        async function fetchTileJSON() {
+            if (!cartaDemo || !cartaDemo.isReady()) return;
+
+            const btn = document.getElementById('tilejson-try-btn');
+            const result = document.getElementById('tilejson-result');
+            const status = document.getElementById('tilejson-status');
+            const output = document.getElementById('tilejson-output');
+
+            btn.disabled = true;
+            btn.textContent = 'Fetching...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const tileJson = await cartaDemo.getTileJSON();
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                result.innerHTML = formatJsonWithHighlighting(tileJson);
+                status.textContent = `Fetched in ${elapsed}ms`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('TileJSON fetch failed:', err);
+                result.textContent = '';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Fetch TileJSON';
+            }
+        }
+
+        function fetchHealth() {
+            fetchJsonEndpoint(cartaDemo, '/api/v1/health', 'health-try-btn', 'health-result', 'health-status', 'health-output', 'Check Health');
+        }
+
+        function fetchStats() {
+            fetchJsonEndpoint(cartaDemo, '/api/v1/stats', 'stats-try-btn', 'stats-result', 'stats-status', 'stats-output', 'Get Stats');
+        }
+'''
 
 
 def main():
@@ -476,20 +731,50 @@ def main():
             if exports:
                 print(f"\n{module_id}: {exports}")
 
-    # Generate HTML for endpoints
-    if VERBOSE:
-        print("\n=== Generated HTML (first endpoint) ===")
-        for module_id, apis in all_endpoints.items():
-            if apis:
-                html = generate_endpoint_html(apis[0], module_id)
-                print(html[:500] + "..." if len(html) > 500 else html)
-                break
+    # Generate HTML for each module's endpoints
+    endpoints_html = {}
+    for module_id, apis in all_endpoints.items():
+        html_parts = []
+        for api in apis:
+            html_parts.append(generate_endpoint_html(api, module_id))
+        endpoints_html[module_id] = "\n".join(html_parts)
+
+    # Generate WASM handlers
+    wasm_init_code, wasm_error_code, button_handlers = generate_wasm_handlers(all_endpoints, config)
+
+    # Load and render template
+    if not TEMPLATE_FILE.exists():
+        print(f"Error: Template file not found: {TEMPLATE_FILE}")
+        sys.exit(1)
+
+    template = TEMPLATE_FILE.read_text()
+    output_html = render_template(template, config, endpoints_html,
+                                  wasm_init_code, wasm_error_code, button_handlers)
+
+    # Insert Carta-specific WASM functions before the "// Initialize on page load" comment
+    carta_functions = generate_carta_wasm_functions()
+    insert_marker = "        // Initialize on page load"
+    if insert_marker in output_html:
+        output_html = output_html.replace(insert_marker, carta_functions + "\n" + insert_marker)
 
     if check_mode:
-        print("\n--check mode: Would verify api.html is up-to-date")
+        # Compare with existing file
+        if OUTPUT_FILE.exists():
+            existing = OUTPUT_FILE.read_text()
+            if existing == output_html:
+                print(f"\n✓ {OUTPUT_FILE.name} is up-to-date")
+                sys.exit(0)
+            else:
+                print(f"\n✗ {OUTPUT_FILE.name} needs regeneration")
+                print("  Run 'python3 scripts/gen_api.py' to update")
+                sys.exit(1)
+        else:
+            print(f"\n✗ {OUTPUT_FILE.name} does not exist")
+            sys.exit(1)
     else:
-        print("\nNote: Full template rendering coming in Step 3.")
-        print("Run 'python3 scripts/gen_api.py --verbose' to see parsed data.")
+        # Write output
+        OUTPUT_FILE.write_text(output_html)
+        print(f"\n✓ Generated {OUTPUT_FILE.name} ({len(output_html):,} bytes)")
 
 
 if __name__ == "__main__":

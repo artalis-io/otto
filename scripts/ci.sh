@@ -100,6 +100,12 @@ stage_test_api() {
     fi
 }
 
+# Stage: Check Generated Files
+stage_check_generated() {
+    info "Checking generated files are up-to-date..."
+    make api-docs-check
+}
+
 # Stage: C Lint (basic checks)
 stage_lint_c() {
     info "Checking C code style..."
@@ -218,6 +224,7 @@ main() {
             run_stage "API Tests" stage_test_api
             ;;
         lint)
+            run_stage "Check Generated" stage_check_generated
             run_stage "C Lint" stage_lint_c
             run_stage "TypeScript Lint" stage_lint_ts
             ;;
@@ -232,6 +239,7 @@ main() {
             run_stage "Build Libraries" stage_build
             run_stage "Build APIs" stage_build_api
             run_stage "Unit Tests" stage_test
+            run_stage "Check Generated" stage_check_generated
             run_stage "C Lint" stage_lint_c
             run_stage "Security Check" stage_security
             ;;
