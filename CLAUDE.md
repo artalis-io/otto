@@ -82,10 +82,14 @@ shared/include/sh_protobuf.h   # Protobuf primitives
 
 ### UI System (ClayShards)
 ```
-clayshards/clay-shards/include/cs_common.h     # Core API
-clayshards/clay-shards/src/cs_map.c            # Map component
-clayshards/clay-shards-webgl/renderer.js       # WebGL renderer
-clayshards/clay-shards-webgl/map-provider.js   # API client
+clayshards/clay-shards/include/cs_common.h           # Core API
+clayshards/clay-shards/src/cs_map.c                  # Map component
+clayshards/clay-shards-webgl/renderer.js             # WebGL renderer
+clayshards/clay-shards-webgl/map-provider.js         # API client
+clayshards/clay-shards-tui/include/cs_tui.h          # TUI renderer API
+clayshards/clay-shards-tui/src/cs_tui.c              # Terminal ANSI renderer
+clayshards/clay-shards-tui-webgl/tui-renderer.js     # TUI WebGL renderer
+clayshards/clay-shards-tui-webgl/crt-effects.js      # CRT post-processing
 ```
 
 ## Naming Conventions
@@ -152,7 +156,7 @@ shared:   137 tests (includes circuit, backoff, retry)
 velo:     47 tests
 carta:    33 tests
 locus:    52 tests
-clayshards: 84 tests
+clayshards: 101 tests (includes TUI renderer)
 ```
 
 ## Build Commands
