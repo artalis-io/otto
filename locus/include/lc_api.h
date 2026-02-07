@@ -59,6 +59,9 @@ extern "C" {
  *
  * @example curl "http://localhost:8083/api/v1/search?q=Monte%20Carlo&limit=5"
  * @example_comment Search for "Monte Carlo" with max 5 results
+ *
+ * @demo json
+ * @demo_title Search Monaco places using WASM with embedded index
  */
 
 /*@api
@@ -81,6 +84,9 @@ extern "C" {
  *
  * @example curl "http://localhost:8083/api/v1/autocomplete?q=Mon&limit=10"
  * @example_comment Get autocomplete suggestions for "Mon"
+ *
+ * @demo json
+ * @demo_title Autocomplete suggestions using WASM with embedded Monaco index
  */
 
 /*@api
@@ -106,6 +112,9 @@ extern "C" {
  *
  * @example curl "http://localhost:8083/api/v1/reverse?lat=43.7384&lon=7.4246"
  * @example_comment Reverse geocode coordinates in Monaco
+ *
+ * @demo json
+ * @demo_title Reverse geocode a Monaco location using WASM
  */
 
 /*@api
@@ -120,6 +129,9 @@ extern "C" {
  *   "service": "locus",
  *   "version": "0.1.0"
  * }
+ *
+ * @demo json
+ * @demo_title Check WASM health status
  */
 
 /*@api
@@ -149,6 +161,9 @@ extern "C" {
  *     "capacity": 128
  *   }
  * }
+ *
+ * @demo json
+ * @demo_title Get Monaco index statistics
  */
 
 /*@api

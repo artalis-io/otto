@@ -515,6 +515,38 @@ def generate_wasm_handlers(all_endpoints: dict, config: dict) -> tuple[dict, dic
             button_handlers.append("            document.getElementById('velo-health-try-btn').addEventListener('click', fetchVeloHealth);")
             button_handlers.append("            document.getElementById('velo-stats-try-btn').addEventListener('click', fetchVeloStats);")
 
+        # For locus, add geocoding demo handlers
+        elif module_id == "locus":
+            init_lines.append("                enableBtn('locus-api-v1-search-try-btn', 'Search');")
+            init_lines.append("                enableBtn('locus-api-v1-autocomplete-try-btn', 'Autocomplete');")
+            init_lines.append("                enableBtn('locus-api-v1-reverse-try-btn', 'Reverse Geocode');")
+            init_lines.append("                enableBtn('locus-api-v1-health-try-btn', 'Check Health');")
+            init_lines.append("                enableBtn('locus-api-v1-stats-try-btn', 'Get Stats');")
+            init_lines.append("                const locusStatus = document.getElementById('locus-api-v1-search-status');")
+            init_lines.append("                if (locusStatus) {")
+            init_lines.append("                    locusStatus.textContent = `Locus ${locusDemo.getVersion()} ready (Monaco: ${locusDemo.getEntityCount()} entities)`;")
+            init_lines.append("                    locusStatus.className = 'demo-status success';")
+            init_lines.append("                    document.getElementById('locus-api-v1-search-output').classList.add('visible');")
+            init_lines.append("                }")
+
+            error_lines.append("                disableBtn('locus-api-v1-search-try-btn');")
+            error_lines.append("                disableBtn('locus-api-v1-autocomplete-try-btn');")
+            error_lines.append("                disableBtn('locus-api-v1-reverse-try-btn');")
+            error_lines.append("                disableBtn('locus-api-v1-health-try-btn');")
+            error_lines.append("                disableBtn('locus-api-v1-stats-try-btn');")
+            error_lines.append("                const locusStatus = document.getElementById('locus-api-v1-search-status');")
+            error_lines.append("                if (locusStatus) {")
+            error_lines.append("                    locusStatus.textContent = 'Failed to load WASM: ' + err.message;")
+            error_lines.append("                    locusStatus.className = 'demo-status error';")
+            error_lines.append("                    document.getElementById('locus-api-v1-search-output').classList.add('visible');")
+            error_lines.append("                }")
+
+            button_handlers.append("            document.getElementById('locus-api-v1-search-try-btn').addEventListener('click', fetchLocusSearch);")
+            button_handlers.append("            document.getElementById('locus-api-v1-autocomplete-try-btn').addEventListener('click', fetchLocusAutocomplete);")
+            button_handlers.append("            document.getElementById('locus-api-v1-reverse-try-btn').addEventListener('click', fetchLocusReverse);")
+            button_handlers.append("            document.getElementById('locus-api-v1-health-try-btn').addEventListener('click', fetchLocusHealth);")
+            button_handlers.append("            document.getElementById('locus-api-v1-stats-try-btn').addEventListener('click', fetchLocusStats);")
+
         wasm_init_code[module_id] = "\n".join(init_lines) if init_lines else "                // No demo buttons to enable"
         wasm_error_code[module_id] = "\n".join(error_lines) if error_lines else "                // No error handling needed"
 
@@ -775,6 +807,152 @@ def generate_velo_wasm_functions() -> str:
 '''
 
 
+def generate_locus_wasm_functions() -> str:
+    """Generate the Locus-specific WASM helper functions."""
+    return '''
+        // Locus-specific WASM handlers
+        async function fetchLocusSearch() {
+            if (!locusDemo || !locusDemo.isReady()) return;
+
+            const btn = document.getElementById('locus-api-v1-search-try-btn');
+            const result = document.getElementById('locus-api-v1-search-result');
+            const status = document.getElementById('locus-api-v1-search-status');
+            const output = document.getElementById('locus-api-v1-search-output');
+
+            btn.disabled = true;
+            btn.textContent = 'Searching...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const response = await locusDemo.fetch('/api/v1/search?q=Monte%20Carlo&limit=5');
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                const html = formatJsonWithHighlighting(data);
+                const codeBlock = result.closest('.code-block');
+                if (codeBlock && window.typeAnimateContent) {
+                    window.typeAnimateContent(codeBlock, html);
+                } else {
+                    result.innerHTML = html;
+                }
+                const total = data.total || data.results?.length || 0;
+                status.textContent = `Search completed in ${elapsed}ms (${total} results)`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('Search failed:', err);
+                result.textContent = '';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Search';
+            }
+        }
+
+        async function fetchLocusAutocomplete() {
+            if (!locusDemo || !locusDemo.isReady()) return;
+
+            const btn = document.getElementById('locus-api-v1-autocomplete-try-btn');
+            const result = document.getElementById('locus-api-v1-autocomplete-result');
+            const status = document.getElementById('locus-api-v1-autocomplete-status');
+            const output = document.getElementById('locus-api-v1-autocomplete-output');
+
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const response = await locusDemo.fetch('/api/v1/autocomplete?q=Mon&limit=10');
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                const html = formatJsonWithHighlighting(data);
+                const codeBlock = result.closest('.code-block');
+                if (codeBlock && window.typeAnimateContent) {
+                    window.typeAnimateContent(codeBlock, html);
+                } else {
+                    result.innerHTML = html;
+                }
+                const count = Array.isArray(data) ? data.length : 0;
+                status.textContent = `Autocomplete in ${elapsed}ms (${count} suggestions)`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('Autocomplete failed:', err);
+                result.textContent = '';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Autocomplete';
+            }
+        }
+
+        async function fetchLocusReverse() {
+            if (!locusDemo || !locusDemo.isReady()) return;
+
+            const btn = document.getElementById('locus-api-v1-reverse-try-btn');
+            const result = document.getElementById('locus-api-v1-reverse-result');
+            const status = document.getElementById('locus-api-v1-reverse-status');
+            const output = document.getElementById('locus-api-v1-reverse-output');
+
+            btn.disabled = true;
+            btn.textContent = 'Geocoding...';
+            output.classList.add('visible');
+
+            // Monaco Casino coordinates
+            const lat = 43.7384;
+            const lon = 7.4246;
+
+            try {
+                const startTime = performance.now();
+                const response = await locusDemo.fetch(`/api/v1/reverse?lat=${lat}&lon=${lon}`);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                const html = formatJsonWithHighlighting(data);
+                const codeBlock = result.closest('.code-block');
+                if (codeBlock && window.typeAnimateContent) {
+                    window.typeAnimateContent(codeBlock, html);
+                } else {
+                    result.innerHTML = html;
+                }
+                status.textContent = `Reverse geocode in ${elapsed}ms`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('Reverse geocoding failed:', err);
+                result.textContent = '';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Reverse Geocode';
+            }
+        }
+
+        function fetchLocusHealth() {
+            fetchJsonEndpoint(locusDemo, '/api/v1/health', 'locus-api-v1-health-try-btn', 'locus-api-v1-health-result', 'locus-api-v1-health-status', 'locus-api-v1-health-output', 'Check Health');
+        }
+
+        function fetchLocusStats() {
+            fetchJsonEndpoint(locusDemo, '/api/v1/stats', 'locus-api-v1-stats-try-btn', 'locus-api-v1-stats-result', 'locus-api-v1-stats-status', 'locus-api-v1-stats-output', 'Get Stats');
+        }
+'''
+
+
 def copy_wasm_files(config: dict) -> list:
     """Copy WASM demo files to site/js/ directory."""
     copied = []
@@ -887,7 +1065,7 @@ def main():
                                   wasm_init_code, wasm_error_code, button_handlers)
 
     # Insert module-specific WASM functions before the "// Initialize on page load" comment
-    wasm_functions = generate_carta_wasm_functions() + generate_velo_wasm_functions()
+    wasm_functions = generate_carta_wasm_functions() + generate_velo_wasm_functions() + generate_locus_wasm_functions()
     insert_marker = "        // Initialize on page load"
     if insert_marker in output_html:
         output_html = output_html.replace(insert_marker, wasm_functions + "\n" + insert_marker)
