@@ -8,6 +8,8 @@ Immediate-mode UI components built on Clay layout, designed for C11 and WebAssem
 |-----------|----------|-------------|
 | **clay-shards** | `clay-shards/` | Core C library - immediate mode components |
 | **clay-shards-webgl** | `clay-shards-webgl/` | WebGL renderer for browsers |
+| **clay-shards-tui** | `clay-shards-tui/` | Terminal renderer (ANSI escape sequences) |
+| **clay-shards-tui-webgl** | `clay-shards-tui-webgl/` | TUI WebGL renderer with CRT effects |
 | **clay-shards-demo** | `clay-shards-demo/` | Example map viewer application |
 
 ## Architecture
@@ -29,6 +31,8 @@ Immediate-mode UI components built on Clay layout, designed for C11 and WebAssem
 ├─────────────────────────────────────────┤
 │            Renderer                     │
 │  • WebGL (browser)                      │
+│  • TUI (terminal ANSI)                  │
+│  • TUI WebGL (browser with CRT effects) │
 │  • SDL/raylib/sokol (native) [planned]  │
 └─────────────────────────────────────────┘
 ```
@@ -70,23 +74,29 @@ cs_init();
 ## Building
 
 ```bash
-cd clay-shards && make       # Build library
-cd clay-shards && make test  # Run 55 tests
+cd clay-shards && make       # Build core library
+cd clay-shards && make test  # Run tests
+
+cd clay-shards-tui && make       # Build TUI renderer
+cd clay-shards-tui && make test  # Run TUI tests
 ```
 
 ## Documentation
 
 - [ClayShards API](clay-shards/CLAUDE.md) - Full API reference
+- [TUI Renderer](clay-shards-tui/CLAUDE.md) - Terminal renderer documentation
+- [TUI WebGL Renderer](clay-shards-tui-webgl/CLAUDE.md) - Browser TUI with CRT effects
 - [Design Principles](clay-shards/MANIFESTO.md) - Architecture philosophy
 - [Compliance Review](clay-shards/REVIEW.md) - Code quality assessment
 - [Contributing](clay-shards/CONTRIBUTING.md) - Adding new widgets
 
-## Planned Renderers
+## Renderers
 
 | Backend | Target | Status |
 |---------|--------|--------|
 | `clay-shards-webgl` | Browsers | Active |
+| `clay-shards-tui` | Terminal (ANSI) | Active |
+| `clay-shards-tui-webgl` | Browser TUI with CRT effects | Active |
 | `clay-shards-sdl` | Desktop/Mobile | Planned |
 | `clay-shards-raylib` | Games | Planned |
 | `clay-shards-sokol` | Minimal deps | Planned |
-| `clay-shards-terminal` | TUI | Planned |
