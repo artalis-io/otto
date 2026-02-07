@@ -235,7 +235,7 @@
 
 
     <script type="module">
-        import { TuiRenderer, TerminalFontAtlas, CrtEffects, CRT_COLOR_GREEN } from './index.js';
+        import { TuiRenderer, TerminalFontAtlas, CrtEffects, CRT_COLOR_GREEN } from '../../clay-shards-tui-webgl/index.js';
 
         const PRIORITY_OPTIONS = ['Minimal', 'Guarded', 'Elevated', 'Severe'];
         const COLS = 80;
@@ -251,7 +251,7 @@
 
             try {
                 // Load WASM with WASI stubs
-                const response = await fetch('../clay-shards-tui/wasm/build/demo.wasm');
+                const response = await fetch('build/demo.wasm');
                 if (!response.ok) {
                     throw new Error(`Failed to load WASM: ${response.status}`);
                 }
@@ -606,7 +606,7 @@
                 console.error('Error:', err);
                 loadingEl.style.display = 'none';
                 errorEl.style.display = 'block';
-                errorEl.textContent = `Error: ${err.message}\n\nMake sure to build the WASM module first:\ncd ../clay-shards-tui/wasm && make`;
+                errorEl.textContent = `Error: ${err.message}\n\nMake sure to build the WASM module first:\nmake tui-demo-wasm`;
             }
         }
 

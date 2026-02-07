@@ -1,37 +1,29 @@
-# ClayShards TUI WASM Build
+# ClayShards TUI WASM Library
 #
-# Builds the TUI renderer as a standalone WASM module for browser use.
+# Builds the TUI renderer as a standalone WASM module.
 
-# Emscripten compiler
 CC = emcc
 CFLAGS = -O3 -Wall -Wextra
 
-# Include paths
+# Include paths (from clay-shards-tui/wasm/)
 INCLUDES = -I../include \
            -I../src \
            -I../../clay-shards/include \
            -I../../../vendor/clay
 
-# Source files - library only
-LIB_SOURCES = src/cs_tui_wasm.c \
-              ../src/cs_tui.c \
-              ../../clay-shards/src/cs_immediate.c
-
-# Demo sources - includes the demo UI
-DEMO_SOURCES = src/cs_tui_demo.c \
-               ../src/cs_tui.c \
-               ../../clay-shards/src/cs_immediate.c
+# Source files
+SOURCES = src/cs_tui_wasm.c \
+          ../src/cs_tui.c \
+          ../../clay-shards/src/cs_immediate.c
 
 # Output
 BUILD_DIR = build
-LIB_OUTPUT = $(BUILD_DIR)/cs_tui.wasm
-DEMO_OUTPUT = $(BUILD_DIR)/demo.wasm
+OUTPUT = $(BUILD_DIR)/cs_tui.wasm
 
-# WASM export settings - standalone WASM, no JS glue
+# WASM settings
 WASM_FLAGS = -s STANDALONE_WASM=1
 
-# Library exports
-LIB_EXPORTS = -s EXPORTED_FUNCTIONS='[\
+EXPORTS = -s EXPORTED_FUNCTIONS='[\
   "_wasm_tui_init","_wasm_tui_resize","_wasm_tui_destroy",\
   "_wasm_tui_get_buffer","_wasm_tui_get_width","_wasm_tui_get_height",\
   "_wasm_tui_get_cell_size","_wasm_tui_buffer_dirty",\
@@ -48,67 +40,31 @@ LIB_EXPORTS = -s EXPORTED_FUNCTIONS='[\
   "_malloc","_free"\
 ]'
 
-# Demo exports
-DEMO_EXPORTS = -s EXPORTED_FUNCTIONS='[\
-  "_demo_init","_demo_resize",\
-  "_demo_get_buffer","_demo_get_width","_demo_get_height","_demo_get_cell_size",\
-  "_demo_frame","_demo_key_down","_demo_key_char",\
-  "_demo_mouse_move","_demo_mouse_click","_demo_mouse_release",\
-  "_demo_get_counter","_demo_get_volume","_demo_get_priority",\
-  "_demo_get_enabled","_demo_get_notifications","_demo_get_darkmode",\
-  "_demo_get_quit","_demo_reset_quit",\
-  "_malloc","_free"\
-]'
+MEM_FLAGS = -s INITIAL_MEMORY=16777216 \
+            -s ALLOW_MEMORY_GROWTH=1 \
+            -s MAXIMUM_MEMORY=16777216 \
+            --no-entry
 
-# Memory settings (need enough for Clay + TUI buffer)
-MEM_FLAGS = -s INITIAL_MEMORY=16777216
-MEM_FLAGS += -s ALLOW_MEMORY_GROWTH=1
-MEM_FLAGS += -s MAXIMUM_MEMORY=16777216
-MEM_FLAGS += --no-entry
+.PHONY: all clean help
 
-.PHONY: all lib demo clean help
-
-all: lib demo
-
-lib: $(LIB_OUTPUT)
-
-demo: $(DEMO_OUTPUT)
+all: $(OUTPUT)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(LIB_OUTPUT): $(LIB_SOURCES) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) $(WASM_FLAGS) $(LIB_EXPORTS) $(MEM_FLAGS) $(LIB_SOURCES) -o $@
-	@echo "Built library: $@"
+$(OUTPUT): $(SOURCES) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) $(WASM_FLAGS) $(EXPORTS) $(MEM_FLAGS) $(SOURCES) -o $@
+	@echo "Built: $@"
 	@ls -lh $@
-
-$(DEMO_OUTPUT): $(DEMO_SOURCES) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(INCLUDES) $(WASM_FLAGS) $(DEMO_EXPORTS) $(MEM_FLAGS) $(DEMO_SOURCES) -o $@
-	@echo "Built demo: $@"
-	@ls -lh $@
-
-# Debug build with symbols
-debug: CFLAGS = -O0 -g -Wall -Wextra -std=c11
-debug: WASM_FLAGS += -s ASSERTIONS=1
-debug: all
-	@echo "Built debug versions"
 
 clean:
 	rm -rf $(BUILD_DIR)
 
 help:
-	@echo "ClayShards TUI WASM Build"
+	@echo "ClayShards TUI WASM Library"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all     - Build library and demo (default)"
-	@echo "  lib     - Build library WASM only"
-	@echo "  demo    - Build demo WASM only"
-	@echo "  debug   - Build with debug symbols and assertions"
+	@echo "  all     - Build library (default)"
 	@echo "  clean   - Remove build artifacts"
 	@echo ""
-	@echo "Requirements:"
-	@echo "  - Emscripten SDK (emcc)"
-	@echo ""
-	@echo "Output:"
-	@echo "  $(LIB_OUTPUT)  - Library for custom apps"
-	@echo "  $(DEMO_OUTPUT) - Demo with widgets"
+	@echo "Output: $(OUTPUT)"

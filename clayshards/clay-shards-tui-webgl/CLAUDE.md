@@ -48,7 +48,6 @@ Renders the TUI character buffer (from WASM) to WebGL:
 | `font-atlas.js` | Bitmap font atlas management |
 | `crt-effects.js` | Post-processing pipeline |
 | `wasm-loader.js` | WASM loading and input handling |
-| `demo.html` | Interactive demo |
 
 ## Usage
 
@@ -123,14 +122,12 @@ Offset  Size  Field
 ## Building the Demo
 
 ```bash
-# Build WASM
-cd ../clay-shards-tui/wasm
-make demo
-
-# Serve and open demo
-python3 -m http.server 8000
-# Open http://localhost:8000/clay-shards-tui-webgl/demo.html
+# From project root
+make tui-demo-serve
+# Opens http://localhost:8000/clayshards/clay-shards-tui/wasm/demo.html
 ```
+
+Demo lives in `../clay-shards-tui/wasm/demo.html` (co-located with WASM source).
 
 ## Dependencies
 
