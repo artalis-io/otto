@@ -48,6 +48,7 @@ LCAPIContext *lc_api_create(LCIndex *index, const LCAPIConfig *config) {
 
     if (ctx->name[0] == '\0') {
         strncpy(ctx->name, "locus", sizeof(ctx->name) - 1);
+        ctx->name[sizeof(ctx->name) - 1] = '\0';
     }
 
     return ctx;

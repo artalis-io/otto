@@ -12,15 +12,6 @@
  * ============================================================================ */
 
 /**
- * Check if character is part of a house number.
- * Allows: digits, '/', '-', and letters (for suffixes like "5/A" or "3B")
- */
-static bool is_housenumber_char(char c)
-{
-    return isdigit((unsigned char)c) || c == '/' || c == '-' || isalpha((unsigned char)c);
-}
-
-/**
  * Check if a string looks like a house number.
  * Must start with a digit and can contain digits, '/', '-', letters.
  * Examples: "7", "123", "5/A", "12-14", "3B"
@@ -52,27 +43,6 @@ bool lc_is_housenumber(const char *str)
     }
 
     return has_digit;
-}
-
-/**
- * Trim leading and trailing whitespace from a string (in place).
- * Returns pointer to trimmed string (within original buffer).
- */
-static char *trim_whitespace(char *str)
-{
-    if (!str) return NULL;
-
-    /* Trim leading */
-    while (isspace((unsigned char)*str)) str++;
-
-    if (*str == '\0') return str;
-
-    /* Trim trailing */
-    char *end = str + strlen(str) - 1;
-    while (end > str && isspace((unsigned char)*end)) end--;
-    end[1] = '\0';
-
-    return str;
 }
 
 /**

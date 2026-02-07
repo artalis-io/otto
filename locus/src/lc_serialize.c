@@ -541,12 +541,13 @@ LCStatus lc_index_save(const LCIndex *index, const char *path)
 
     /* Allocate arrays */
     uint32_t *alt_name_offsets = NULL;
+    LCBinaryEntityV4 *records = NULL;
+
     if (total_alt_names > 0) {
         alt_name_offsets = malloc(total_alt_names * sizeof(uint32_t));
         if (!alt_name_offsets) goto error;
     }
 
-    LCBinaryEntityV4 *records = NULL;
     records = malloc(index->num_entities * sizeof(LCBinaryEntityV4));
     if (!records) goto error;
 
@@ -840,6 +841,7 @@ typedef struct {
 
 static LCIndex *lc_index_mmap_v4(const char *path, void *map, size_t file_size, int fd)
 {
+    (void)path;  /* Reserved for future use (error messages) */
     const LCBinaryHeaderV4 *header = (const LCBinaryHeaderV4 *)map;
     const LCSectionOffsetsV4 *sections = (const LCSectionOffsetsV4 *)((char *)map + sizeof(LCBinaryHeaderV4));
 
@@ -900,6 +902,7 @@ static LCIndex *lc_index_mmap_v4(const char *path, void *map, size_t file_size, 
 
 static LCIndex *lc_index_mmap_v3(const char *path, void *map, size_t file_size, int fd)
 {
+    (void)path;  /* Reserved for future use (error messages) */
     const LCBinaryHeaderV3 *header = (const LCBinaryHeaderV3 *)map;
     const LCSectionOffsetsV3 *sections = (const LCSectionOffsetsV3 *)((char *)map + sizeof(LCBinaryHeaderV3));
 
