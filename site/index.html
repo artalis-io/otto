@@ -520,16 +520,19 @@
                 0 0 10px rgba(80, 200, 120, 0.2);
         }
 
-        /* Typing animation cursor (inline element) */
-        .typing-cursor {
+        /* Typing animation cursor */
+        .code-block.typing pre::after {
+            content: '\2588';
             color: #50c878;
+            animation: cursor-blink 0.7s step-end infinite;
             text-shadow: 0 0 8px rgba(80, 200, 120, 0.6);
         }
 
-        .typed-cursor {
+        .code-block.typed pre::after {
+            content: '\2588';
             color: #50c878;
-            text-shadow: 0 0 8px rgba(80, 200, 120, 0.6);
             animation: cursor-blink 1s step-end infinite;
+            text-shadow: 0 0 8px rgba(80, 200, 120, 0.6);
         }
 
         @keyframes cursor-blink {
