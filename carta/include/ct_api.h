@@ -23,6 +23,101 @@ extern "C" {
 #endif
 
 /* ============================================================================
+ * API Endpoint Documentation
+ *
+ * These annotations are parsed by scripts/gen_api.py to generate site/api.html
+ * ============================================================================ */
+
+/*@api
+ * GET /tiles/{z}/{x}/{y}.png
+ * Raster tile (PNG)
+ *
+ * @path z:int Zoom level (0-18)
+ * @path x:int Tile X coordinate
+ * @path y:int Tile Y coordinate
+ *
+ * @returns image/png PNG image (512x512 by default). Content-Type: image/png
+ * @error 400 Invalid coordinates
+ * @error 404 Outside map bounds
+ *
+ * @example curl http://localhost:8081/tiles/14/8529/5974.png -o tile.png
+ * @example_comment Get tile at zoom 14, Monaco area
+ *
+ * @demo image
+ * @demo_title Generate a tile using Carta WASM with embedded Monaco data. No server required.
+ * @demo_input z:number:14:0:18
+ * @demo_input x:number:8529
+ * @demo_input y:number:5974
+ */
+
+/*@api
+ * GET /tiles/{z}/{x}/{y}.mvt
+ * Vector tile (MVT/Protobuf)
+ *
+ * @path z:int Zoom level (0-18)
+ * @path x:int Tile X coordinate
+ * @path y:int Tile Y coordinate
+ *
+ * @returns application/x-protobuf Mapbox Vector Tile format. Use with MapLibre GL JS or similar vector tile renderers.
+ * @error 400 Invalid coordinates
+ * @error 404 Outside map bounds
+ */
+
+/*@api
+ * GET /tiles/{z}/{x}/{y}.txt
+ * ASCII art tile
+ *
+ * @path z:int Zoom level
+ * @path x:int Tile X coordinate
+ * @path y:int Tile Y coordinate
+ * @query width:int:80 Output width in characters (20-400, default: 80)
+ * @query height:int:0 Output height (0=auto from aspect ratio)
+ * @query charset:string:extended simple, extended (default), blocks, braille
+ * @query invert:bool:0 1 for light background terminals
+ * @query color:bool:0 1 for ANSI 256-color output
+ *
+ * @returns text/plain ASCII art representation of the tile
+ *
+ * @example curl "http://localhost:8081/tiles/14/9058/5729.txt?width=120&charset=blocks"
+ * @example_comment ASCII map in terminal
+ */
+
+/*@api
+ * GET /tiles.json
+ * TileJSON metadata
+ *
+ * @returns application/json TileJSON 2.2.0 specification
+ * @response_json
+ * {
+ *   "tilejson": "2.2.0",
+ *   "name": "OTTO Carta",
+ *   "minzoom": 0,
+ *   "maxzoom": 18,
+ *   "bounds": [7.41, 43.72, 7.44, 43.75],
+ *   "center": [7.42, 43.73, 14],
+ *   "tiles": ["http://localhost:8081/tiles/{z}/{x}/{y}.png"]
+ * }
+ *
+ * @demo json
+ * @demo_title Fetch TileJSON metadata from embedded Monaco data.
+ */
+
+/*@wasm
+ * @export carta_api_init
+ * @export carta_api_free
+ * @export carta_api_ready
+ * @export carta_api_handle
+ * @export carta_response_status
+ * @export carta_response_content_type
+ * @export carta_response_body
+ * @export carta_response_body_len
+ * @export carta_api_pbf_size
+ * @export carta_api_version
+ * @export malloc
+ * @export free
+ */
+
+/* ============================================================================
  * API Context
  * ============================================================================ */
 
