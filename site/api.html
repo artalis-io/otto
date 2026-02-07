@@ -24,6 +24,8 @@
     <script src="wasm/velo-api-demo.js"></script>
     <script src="js/velo-api-demo.js"></script>
 
+    <script src="wasm/locus-api-demo.js"></script>
+    <script src="js/locus-api-demo.js"></script>
 
 
 
@@ -1288,6 +1290,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 
         let veloDemo = null;
 
+        let locusDemo = null;
 
 
 
@@ -1412,6 +1415,24 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             }
         }
 
+
+        // Locus Geocoder WASM init
+        async function initLocusWasm() {
+            try {
+                if (typeof LocusDemo === 'undefined') {
+                    throw new Error('LocusDemo class not loaded');
+                }
+
+                locusDemo = new LocusDemo();
+                await locusDemo.init();
+
+                // Enable WASM demo buttons for locus
+                // No demo buttons to enable
+            } catch (err) {
+                console.error('Locus Geocoder WASM init failed:', err);
+                // No error handling needed
+            }
+        }
 
 
 
@@ -1598,6 +1619,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 
             initVeloWasm();
 
+            initLocusWasm();
 
 
 

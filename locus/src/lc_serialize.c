@@ -930,6 +930,71 @@ static LCIndex *lc_index_mmap_v4(const char *path, void *map, size_t file_size, 
 }
 
 /* ============================================================================
+ * Load Index from Memory Buffer (for WASM/embedded use)
+ * ============================================================================ */
+
+LCIndex *lc_index_load_memory(const uint8_t *data, size_t len)
+{
+    if (!data || len < 8) return NULL;
+
+    /* Check magic and version */
+    const uint32_t *magic_ptr = (const uint32_t *)data;
+    if (*magic_ptr != LC_BINARY_MAGIC) return NULL;
+
+    uint32_t version = magic_ptr[1];
+
+    /* Only v4 format is supported for memory loading */
+    if (version < LC_BINARY_VERSION_V4) return NULL;
+
+    const LCBinaryHeaderV4 *header = (const LCBinaryHeaderV4 *)data;
+    const LCSectionOffsetsV4 *sections = (const LCSectionOffsetsV4 *)((const char *)data + sizeof(LCBinaryHeaderV4));
+
+    /* Allocate mmap index */
+    LCMmapIndex *mmap_idx = calloc(1, sizeof(LCMmapIndex));
+    if (!mmap_idx) return NULL;
+
+    mmap_idx->map_base = (void *)data;  /* Point to embedded data */
+    mmap_idx->map_size = len;
+    mmap_idx->fd = -1;  /* -1 indicates memory-based, don't munmap/close */
+    mmap_idx->header = header;
+
+    /* Set up direct pointers into memory */
+    mmap_idx->entities = (const LCBinaryEntityV4 *)((const char *)data + sections->entities_offset);
+    mmap_idx->alt_name_offsets = (const uint32_t *)((const char *)data + sections->alt_names_offset);
+    mmap_idx->string_pool = (const char *)data + sections->string_pool_offset;
+    mmap_idx->trie_nodes = (const LCBinaryTrieNodeV4 *)((const char *)data + sections->trie_nodes_offset);
+    mmap_idx->trie_entity_ids = (const uint32_t *)((const char *)data + sections->trie_entities_offset);
+    mmap_idx->grid_cell_offsets = (const uint32_t *)((const char *)data + sections->grid_cells_offset);
+    mmap_idx->grid_entity_ids = (const uint32_t *)((const char *)data + sections->grid_entities_offset);
+    mmap_idx->ngram_entries = (const LCBinaryNgramEntry *)((const char *)data + sections->ngram_entries_offset);
+    mmap_idx->ngram_entity_ids = (const uint32_t *)((const char *)data + sections->ngram_entities_offset);
+    mmap_idx->geometry_offsets = (const LCBinaryGeometry *)((const char *)data + sections->geometry_offsets_offset);
+    mmap_idx->geometry_points = (const LCBinaryPoint *)((const char *)data + sections->geometry_points_offset);
+
+    /* Create index - NO entity store, NO n-gram index, true zero-copy! */
+    LCIndex *index = calloc(1, sizeof(LCIndex));
+    if (!index) {
+        free(mmap_idx);
+        return NULL;
+    }
+
+    index->mmap_idx = mmap_idx;
+    index->entities = NULL;  /* No entity store - use mmap accessors */
+    index->trie = NULL;
+    index->ngrams = NULL;    /* No n-gram index - use mmap'd n-grams */
+    index->grid = NULL;
+    index->mmap_ctx = NULL;  /* v3 context not used */
+
+    index->num_entities = header->entity_count;
+    index->bounds.min_lat = header->min_lat;
+    index->bounds.min_lon = header->min_lon;
+    index->bounds.max_lat = header->max_lat;
+    index->bounds.max_lon = header->max_lon;
+
+    return index;
+}
+
+/* ============================================================================
  * Load Index via mmap (v3 - with entity store repopulation)
  * ============================================================================ */
 

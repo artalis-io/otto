@@ -1,0 +1,5 @@
+# Build output
+build/
+
+# Embedded data headers (generated from data/*.lcx)
+src/monaco_lcx.h

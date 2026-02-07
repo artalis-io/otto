@@ -124,3 +124,76 @@ types:
 test: $(OUTPUT_JS)
 	@echo "Testing Locus WASM build..."
 	@node -e "const Locus = require('./$(OUTPUT_JS)'); Locus().then(m => { console.log('Version:', m._wasm_version()); console.log('WASM loaded successfully!'); });"
+
+# =============================================================================
+# API Demo Build (self-contained with embedded Monaco index)
+# =============================================================================
+
+# Shared library sources (core only, no pthread-dependent code)
+API_SHARED_SRC = ../../shared/src/sh_geo.c \
+             ../../shared/src/sh_protobuf.c \
+             ../../shared/src/sh_inflate.c \
+             ../../shared/src/sh_pbf.c \
+             ../../shared/src/sh_arena.c \
+             ../../shared/src/sh_pool.c \
+             ../../shared/src/sh_hashmap.c \
+             ../../shared/src/sh_heap.c
+
+API_WASM_SRC = src/lc_wasm_api.c
+API_ALL_SRC = $(API_WASM_SRC) $(LOCUS_SRC) $(API_SHARED_SRC) $(MINIZ_SRC)
+
+# Exported functions - API demo mode
+API_EXPORTS = _locus_api_init,_locus_api_free,_locus_api_ready
+API_EXPORTS += ,_locus_api_handle
+API_EXPORTS += ,_locus_response_status,_locus_response_content_type
+API_EXPORTS += ,_locus_response_body,_locus_response_body_len
+API_EXPORTS += ,_locus_api_index_size,_locus_api_version
+API_EXPORTS += ,_locus_api_entity_count
+API_EXPORTS += ,_malloc,_free
+
+# Output files - API demo mode
+API_OUTPUT_JS = $(OUTPUT_DIR)/locus-api-demo.js
+
+.PHONY: api-demo embed-monaco test-api
+
+# Build API demo (self-contained with embedded Monaco)
+api-demo: check-emcc $(API_OUTPUT_JS)
+
+$(API_OUTPUT_JS): $(API_ALL_SRC) src/monaco_lcx.h
+	@mkdir -p $(OUTPUT_DIR)
+	$(CC) $(CFLAGS) $(INCLUDES) -Isrc \
+		-s EXPORT_NAME='LocusAPIDemo' \
+		-s SINGLE_FILE=1 \
+		-s EXPORTED_RUNTIME_METHODS='["cwrap","ccall","getValue","setValue","UTF8ToString","allocateUTF8"]' \
+		-DMINIZ_NO_STDIO -DMINIZ_NO_TIME \
+		-s EXPORTED_FUNCTIONS='[$(API_EXPORTS)]' \
+		$(API_ALL_SRC) \
+		-o $(API_OUTPUT_JS)
+	@echo ""
+	@echo "API Demo build complete (single-file, works offline)!"
+	@echo "  $(API_OUTPUT_JS)"
+	@echo ""
+	@ls -lh $(OUTPUT_DIR)/locus-api-demo.*
+
+# Test API demo build
+test-api: $(API_OUTPUT_JS)
+	@echo "Testing Locus API Demo build..."
+	@node -e "\
+		const LocusAPIDemo = require('./$(API_OUTPUT_JS)'); \
+		LocusAPIDemo().then(m => { \
+			console.log('Initializing...'); \
+			const result = m._locus_api_init(); \
+			console.log('Init result:', result); \
+			console.log('Index size:', m._locus_api_index_size(), 'bytes'); \
+			console.log('Entity count:', m._locus_api_entity_count()); \
+			console.log('API ready:', m._locus_api_ready()); \
+			console.log('API Demo loaded successfully!'); \
+		});"
+
+# Generate embedded index header from Monaco data
+embed-monaco:
+	@echo "Generating monaco_lcx.h from data/monaco.lcx..."
+	@test -f ../../data/monaco.lcx || (echo "Error: data/monaco.lcx not found. Build it first with: ./locus-geocoder --build-only -S data/monaco.lcx data/monaco-latest.osm.pbf" && exit 1)
+	xxd -i ../../data/monaco.lcx | sed 's/______data_monaco_lcx/monaco_lcx_data/g' > src/monaco_lcx.h
+	@echo "Generated src/monaco_lcx.h"
+	@wc -c src/monaco_lcx.h

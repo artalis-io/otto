@@ -45,6 +45,13 @@ LCIndex *lc_index_load(const char *path);
 LCIndex *lc_index_mmap(const char *path);
 
 /*
+ * Load index from memory buffer (for WASM/embedded use).
+ * The buffer must remain valid for the lifetime of the index.
+ * Returns NULL on error.
+ */
+LCIndex *lc_index_load_memory(const uint8_t *data, size_t len);
+
+/*
  * Check if file is a valid Locus binary index.
  */
 int lc_is_binary_index(const char *path);
