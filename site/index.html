@@ -1083,6 +1083,25 @@
             overflow: hidden;
         }
 
+        .ai-example-diagram::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.12) 0px,
+                rgba(0, 0, 0, 0.12) 1px,
+                transparent 1px,
+                transparent 3px
+            );
+            pointer-events: none;
+            z-index: 2;
+            animation: crt-scanline-roll-gray 8s linear infinite;
+        }
+
         .ai-example-diagram::after {
             content: '';
             position: absolute;
@@ -1092,8 +1111,8 @@
             bottom: 0;
             background: repeating-linear-gradient(
                 0deg,
-                rgba(255, 255, 255, 0.03) 0px,
-                rgba(255, 255, 255, 0.03) 1px,
+                rgba(255, 255, 255, 0.04) 0px,
+                rgba(255, 255, 255, 0.04) 1px,
                 transparent 1px,
                 transparent 2px
             );
@@ -1107,8 +1126,13 @@
                 0 0 5px rgba(200, 200, 200, 0.3),
                 0 0 10px rgba(200, 200, 200, 0.1);
             position: relative;
-            z-index: 1;
-            animation: crt-flicker-gray 5s infinite;
+            z-index: 3;
+            animation: crt-flicker-gray 4s infinite;
+        }
+
+        @keyframes crt-scanline-roll-gray {
+            0% { background-position: 0 0; }
+            100% { background-position: 0 60px; }
         }
 
         .ai-insight {
