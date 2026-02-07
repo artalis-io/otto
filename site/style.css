@@ -114,6 +114,12 @@ header {
     flex-wrap: wrap;
 }
 
+.nav-separator {
+    color: var(--border);
+    font-weight: 300;
+    align-self: center;
+}
+
 .header-nav a {
     padding: 6px 12px;
     font-size: 13px;
