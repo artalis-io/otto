@@ -81,4 +81,6 @@ site/build/
 
 # Generated config files
 demo-config.json
-docs/VALUATION_*
+
+# Business docs (may want to gitignore for public fork)
+# docs/business/

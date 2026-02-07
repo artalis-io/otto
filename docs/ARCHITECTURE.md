@@ -307,7 +307,7 @@ Vendored libraries (each has its own `CLAUDE.md` with API documentation):
 **Location:** `forge/`
 **Dependencies:** `vendor/sqlite`, `vendor/mongoose`
 
-Generic job broker for long-running async tasks. See [FORGE.md](FORGE.md) for full specification.
+Generic job broker for long-running async tasks. See [roadmaps/forge.md](roadmaps/forge.md) for full specification.
 
 - Job submission with polling and WebSocket streaming
 - SQLite persistence for durability

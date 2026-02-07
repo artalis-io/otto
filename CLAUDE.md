@@ -303,7 +303,7 @@ See `docs/MANIFESTO.md` for the full manifesto.
 
 - `docs/ARCHITECTURE.md` - System architecture
 - `docs/MANIFESTO.md` - Design philosophy (C, WASM, agnostic patterns)
-- `docs/STRATEGY.md` - Business strategy
+- `docs/business/STRATEGY.md` - Business strategy
 - `docs/TODO_FEATURES.md` - Planned components (Fuse, HoSE, Tempo, Arbor, Sigma, Pulse, Atlas, Quota, etc.)
 - `clayshards/clay-shards/MANIFESTO.md` - ClayShards frontend philosophy (companion to Transport-Agnostic)
 
