@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include "mongoose.h"
 #include "velo.h"
+#include "vl_api.h"
 #include "polyline.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue, sh_cors, sh_capacity */
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
@@ -108,6 +109,7 @@ static RouteServerConfig s_config = {
 static volatile sig_atomic_t s_signo = 0;
 static VLGraph *s_graph = NULL;
 static VLLandmarks *s_landmarks = NULL;
+static VLAPIContext *s_api_ctx = NULL;  /* Transport-agnostic API context */
 
 /* Rate limiter instance (uses shared library) */
 static ShRateLimiter *s_rate_limiter = NULL;
@@ -1219,6 +1221,19 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    /* Create transport-agnostic API context */
+    {
+        VLAPIConfig api_cfg;
+        vl_api_config_init(&api_cfg);
+        api_cfg.graph_path = s_config.graph_path;
+        api_cfg.name = s_config.name;
+        api_cfg.landmark_count = s_landmarks ? s_config.landmark_count : 0;
+        s_api_ctx = vl_api_create(s_graph, s_landmarks, &api_cfg);
+        if (!s_api_ctx) {
+            fprintf(stderr, "Warning: Failed to create API context\n");
+        }
+    }
+
     /* Initialize rate limiter (uses shared library) */
     if (s_config.rate_limit_enabled) {
         s_rate_limiter = sh_ratelimit_create(s_config.rate_limit_rps,
@@ -1336,6 +1351,7 @@ int main(int argc, char *argv[]) {
         sh_workqueue_free(s_work_queue);
         sh_adaptive_free(s_adaptive_tracker);
         sh_ratelimit_free(s_rate_limiter);
+        vl_api_free(s_api_ctx);
         if (s_landmarks) vl_landmarks_free(s_landmarks);
         vl_graph_free(s_graph);
         return 1;
@@ -1385,6 +1401,7 @@ int main(int argc, char *argv[]) {
     sh_workqueue_free(s_work_queue);
     sh_adaptive_free(s_adaptive_tracker);
     sh_ratelimit_free(s_rate_limiter);
+    vl_api_free(s_api_ctx);
     if (s_landmarks) vl_landmarks_free(s_landmarks);
     vl_graph_free(s_graph);
 
