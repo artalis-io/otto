@@ -1612,5 +1612,53 @@ UI code produces render commands—WebGL, TUI terminal, OpenGL ES are thin rende
 
 ---
 
-*Document version: 1.7*
+## 17. Business Outlook
+
+### 17.1 Risk Profile
+
+OTTO's structure creates asymmetric outcomes—meaningful upside with limited downside:
+
+| Risk Factor | Mitigation |
+|-------------|------------|
+| Long sales cycles | Runway measured in years, not months |
+| Scope ambition | Interface strategy (can use commercial solvers/routing when needed) |
+| Market timing | Emissions network as parallel bet with regulatory tailwind |
+| Competition | Warm relationships with decision-makers, not cold prospecting |
+
+### 17.2 Strategic Optionality
+
+The emissions network (Section 15) uses the same assets as fleet planning:
+
+| Asset | Fleet Use | Emissions Use |
+|-------|-----------|---------------|
+| Carrier relationships | Software sales | Network seeding |
+| Routing/optimization | Planning | Emissions calculation |
+| Technical stack | Edge deployment | Verification |
+
+This isn't a fallback—it's a parallel opportunity with different timing characteristics.
+
+### 17.3 Sales Positioning
+
+The message is **"You'll never be locked in again"**—open source is the proof, not the headline.
+
+| Proof Point | What It Demonstrates |
+|-------------|---------------------|
+| Open source | No vendor lock-in, inspect the code |
+| WASM demos | Same code runs anywhere, try it now |
+| Edge deployment | Works in truck cab, no connectivity needed |
+| Interface architecture | Swap components without rewrite |
+
+Enterprise buyers care about avoiding lock-in, not about open source ideology. The architecture makes the promise credible.
+
+### 17.4 Outcome Expectations
+
+Given structural advantages (runway, relationships, technical execution, optionality), the question is magnitude rather than viability:
+
+- **Base case**: Sustainable business serving carriers escaping vendor lock-in
+- **Upside**: Fleet + emissions create compounding value
+- **Optionality**: Technical assets valuable to strategic acquirers regardless of GTM outcome
+
+---
+
+*Document version: 1.8*
 *Last updated: February 2026*
