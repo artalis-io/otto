@@ -639,11 +639,29 @@ exports.mk: ../include/ct_api.h
 - `site/api-template.html` - Full HTML template with `{{ }}` placeholders
 - `scripts/gen_api.py` - Parser for `/*@api ... */` annotations
 
-### Step 2: Annotate ct_api.h (1 hour)
+### Step 2: Annotate ct_api.h (1 hour) ✅ DONE
 
-1. Add `/*@api ... */` blocks for each endpoint
-2. Add `/*@wasm ... */` block for exports
-3. Run generator, compare output to current api.html
+1. ✅ Added `/*@api ... */` blocks for 4 endpoints:
+   - GET /tiles/{z}/{x}/{y}.png (with WASM demo)
+   - GET /tiles/{z}/{x}/{y}.mvt
+   - GET /tiles/{z}/{x}/{y}.txt (with query params)
+   - GET /tiles.json (with response JSON and WASM demo)
+2. ✅ Added `/*@wasm ... */` block with 12 exports
+3. ✅ Parser correctly extracts all annotations
+
+**Annotation format:**
+```c
+/*@api
+ * GET /tiles/{z}/{x}/{y}.png
+ * Raster tile (PNG)
+ *
+ * @path z:int Zoom level (0-18)
+ * @query width:int:80 Output width
+ * @returns image/png PNG image
+ * @demo image
+ * @demo_input z:number:14:0:18
+ */
+```
 
 ### Step 3: Implement Generator (3 hours)
 
