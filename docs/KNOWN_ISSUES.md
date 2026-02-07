@@ -99,7 +99,7 @@
 
 ## Reporting Issues
 
-File issues at: https://github.com/artalis-io/ralph/issues
+File issues at: https://github.com/ottofleet/otto/issues
 
 Include:
 - Problem description (ideally MPS or C code to reproduce)

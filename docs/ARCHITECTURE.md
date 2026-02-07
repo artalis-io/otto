@@ -1,8 +1,8 @@
-# FuelWise Platform Architecture
+# OTTO Platform Architecture
 
 ## Overview
 
-FuelWise is a truck refueling optimization platform built on a layered architecture of zero-dependency C libraries. The platform is designed for both native deployment and WebAssembly (WASM) for browser-based applications.
+OTTO (**O**ptimization for **T**rucking and **T**ransport **O**perations) is a comprehensive trucking logistics optimization platform built on a layered architecture of zero-dependency C libraries. The platform is designed for both native deployment and WebAssembly (WASM) for browser-based applications.
 
 ## System Architecture
 
@@ -62,12 +62,12 @@ fuelwise-platform/
 ├── ralph/              # LP/MIP Solver (libralph.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   Simplex, LU factorization, Branch & Bound
-│   └── tests/          #   65 tests
+│   └── tests/          #   76 tests
 │
 ├── fuelwise/           # Refueling Library (libfuelwise.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   LP formulation, route filtering
-│   ├── tests/          #   32 tests
+│   ├── tests/          #   33 tests
 │   ├── api/            #   FuelWise REST API server
 │   ├── wasm/           #   WebAssembly build
 │   └── ui/             #   React frontend application
@@ -75,14 +75,14 @@ fuelwise-platform/
 ├── velo/               # Routing Engine (libvelo.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   OSM PBF parsing, Dijkstra, A*, landmarks
-│   ├── tests/          #   39 tests
+│   ├── tests/          #   51 tests
 │   ├── api/            #   Velo Route Server REST API
 │   └── wasm/           #   WebAssembly build
 │
 ├── carta/              # Tile Generator (libcarta.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   MVT encoding, PNG rendering, Web Mercator
-│   ├── tests/          #   33 tests
+│   ├── tests/          #   128 tests
 │   ├── api/            #   Carta Tile Server REST API
 │   ├── ui/             #   Tile Viewer React Application
 │   └── wasm/           #   WebAssembly build
@@ -98,7 +98,7 @@ fuelwise-platform/
 ├── shared/             # Shared utilities (libshared.a)
 │   ├── include/        #   Common headers
 │   ├── src/            #   Geo utilities, protobuf, rate limiting, capacity
-│   └── tests/          #   86 tests
+│   └── tests/          #   207 tests
 │
 ├── forge/              # Async Job Queue [PLANNED]
 │   ├── include/        #   Public headers
@@ -411,7 +411,7 @@ Search Request → API/WASM → Locus
 ```makefile
 make all              # Build all libraries (ralph, fuelwise, velo, carta, shared)
 make lib              # Build libraries only (no tests)
-make test             # Run all tests (~280 tests)
+make test             # Run all tests (~700+ tests)
 make clean            # Clean all build artifacts
 ```
 
@@ -450,12 +450,12 @@ make shared       # Build libshared.a
 
 ### Testing
 ```makefile
-make test-ralph       # 65 tests
-make test-fuelwise    # 32 tests
-make test-velo        # 39 tests
-make test-carta       # 33 tests
-make test-locus       # 52 tests
-make test-shared      # 103 tests
+make test-ralph       # 76 tests (+ LAP 358, netflow 153, detect 194)
+make test-fuelwise    # 33 tests
+make test-velo        # 51 tests
+make test-carta       # 128 tests
+make test-locus       # 68 tests
+make test-shared      # 207 tests
 make test-api         # All API endpoint tests (requires OSM data)
 make test-fuelwise-api# FuelWise API tests
 make test-velo-api    # Velo API tests

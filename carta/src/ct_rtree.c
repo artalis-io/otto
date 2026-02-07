@@ -73,22 +73,9 @@ static CTBBox way_bbox(const CTOSMWay *way)
     return bb;
 }
 
-static CTBBox bbox_union(CTBBox a, CTBBox b)
-{
-    CTBBox u = {
-        .min_lat = a.min_lat < b.min_lat ? a.min_lat : b.min_lat,
-        .max_lat = a.max_lat > b.max_lat ? a.max_lat : b.max_lat,
-        .min_lon = a.min_lon < b.min_lon ? a.min_lon : b.min_lon,
-        .max_lon = a.max_lon > b.max_lon ? a.max_lon : b.max_lon
-    };
-    return u;
-}
-
-static int bbox_intersects(CTBBox a, CTBBox b)
-{
-    return !(a.max_lon < b.min_lon || a.min_lon > b.max_lon ||
-             a.max_lat < b.min_lat || a.min_lat > b.max_lat);
-}
+/* CTBBox is now a typedef to SHBBox - use shared library directly */
+#define bbox_union sh_bbox_union
+#define bbox_intersects sh_bbox_intersects
 
 /* ============================================================================
  * Sorting for Hilbert Packing
