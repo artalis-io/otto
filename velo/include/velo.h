@@ -94,6 +94,17 @@ VL_EXPORT VLGraph *vl_load_pbf(const char *filename);
 VL_EXPORT VLGraph *vl_load_binary(const char *filename);
 
 /*
+ * Load a binary graph from memory buffer.
+ * Used for WASM where file I/O is not available.
+ *
+ * data: pointer to binary graph data
+ * size: size of data in bytes
+ *
+ * Returns loaded graph, or NULL on failure.
+ */
+VL_EXPORT VLGraph *vl_load_binary_memory(const uint8_t *data, size_t size);
+
+/*
  * Save a graph to binary format.
  *
  * graph: graph to save

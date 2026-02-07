@@ -63,6 +63,9 @@ extern "C" {
  *
  * @example curl "http://localhost:8082/api/v1/route?from=47.5,19.0&to=46.2,20.1&profile=car&mode=fastest"
  * @example_comment Calculate fastest car route between Budapest and Szeged
+ *
+ * @demo json
+ * @demo_title Calculate a route in Monaco using WASM
  */
 
 /*@api
@@ -101,6 +104,9 @@ extern "C" {
  *   "service": "velo-route-server",
  *   "version": "1.0.0"
  * }
+ *
+ * @demo json
+ * @demo_title Check WASM health status
  */
 
 /*@api
@@ -123,6 +129,9 @@ extern "C" {
  *     "max_lon": 22.90
  *   }
  * }
+ *
+ * @demo json
+ * @demo_title Get Monaco graph statistics
  */
 
 /*@api

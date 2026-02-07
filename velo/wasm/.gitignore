@@ -1,0 +1,5 @@
+# Build output
+build/
+
+# Embedded data headers (generated from data/*.vlg)
+src/monaco_vlg.h

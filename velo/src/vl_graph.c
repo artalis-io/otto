@@ -1148,6 +1148,55 @@ VLGraph *vl_graph_load(const char *filename)
     return graph;
 }
 
+VLGraph *vl_graph_load_memory(const uint8_t *data, size_t size)
+{
+    if (!data || size < sizeof(VLBinaryHeader)) return NULL;
+
+    const VLBinaryHeader *header = (const VLBinaryHeader *)data;
+
+    if (header->magic != VL_BINARY_MAGIC) {
+        return NULL;
+    }
+
+    size_t expected_size = sizeof(VLBinaryHeader) +
+                          header->num_nodes * sizeof(VLNode) +
+                          header->num_edges * sizeof(VLEdge);
+
+    if (size < expected_size) {
+        return NULL;
+    }
+
+    VLGraph *graph = calloc(1, sizeof(VLGraph));
+    if (!graph) return NULL;
+
+    graph->num_nodes = header->num_nodes;
+    graph->num_edges = header->num_edges;
+    graph->bbox_min.lat = header->bbox_min_lat;
+    graph->bbox_min.lon = header->bbox_min_lon;
+    graph->bbox_max.lat = header->bbox_max_lat;
+    graph->bbox_max.lon = header->bbox_max_lon;
+    graph->owns_memory = 1;
+
+    graph->nodes = malloc(graph->num_nodes * sizeof(VLNode));
+    graph->edges = malloc(graph->num_edges * sizeof(VLEdge));
+
+    if (!graph->nodes || !graph->edges) {
+        vl_graph_free(graph);
+        return NULL;
+    }
+
+    const uint8_t *ptr = data + sizeof(VLBinaryHeader);
+    memcpy(graph->nodes, ptr, graph->num_nodes * sizeof(VLNode));
+    ptr += graph->num_nodes * sizeof(VLNode);
+    memcpy(graph->edges, ptr, graph->num_edges * sizeof(VLEdge));
+
+    /* Build indexes after loading */
+    vl_graph_build_reverse_index(graph);
+    vl_graph_build_grid_index(graph);
+
+    return graph;
+}
+
 #ifndef _WIN32
 VLGraph *vl_graph_mmap(const char *filename)
 {
