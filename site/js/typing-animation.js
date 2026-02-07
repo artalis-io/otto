@@ -5,34 +5,20 @@
 (function() {
     'use strict';
 
-    const CURSOR = '\u2588'; // Block cursor character
     const codeBlocks = document.querySelectorAll('.code-block');
     const blockData = new Map();
 
-    // Initialize after page is fully rendered
-    function initBlocks() {
-        codeBlocks.forEach(block => {
-            const pre = block.querySelector('pre');
-            if (pre && pre.innerHTML.trim().length > 0 && !pre.id && !blockData.has(block)) {
-                const finalHeight = pre.offsetHeight;
-                blockData.set(block, {
-                    originalHTML: pre.innerHTML,
-                    finalHeight: finalHeight,
-                    animated: false
-                });
-                pre.style.minHeight = finalHeight + 'px';
-                pre.style.visibility = 'hidden';
-            }
-        });
-    }
-
-    if (document.readyState === 'complete') {
-        requestAnimationFrame(initBlocks);
-    } else {
-        window.addEventListener('load', function() {
-            requestAnimationFrame(initBlocks);
-        });
-    }
+    codeBlocks.forEach(block => {
+        const pre = block.querySelector('pre');
+        // Only animate static code blocks (those with content, not demo result containers)
+        if (pre && pre.innerHTML.trim().length > 0 && !pre.id) {
+            blockData.set(block, {
+                originalHTML: pre.innerHTML,
+                animated: false
+            });
+            pre.style.visibility = 'hidden';
+        }
+    });
 
     function typeContent(block) {
         const data = blockData.get(block);
@@ -42,106 +28,85 @@
         const pre = block.querySelector('pre');
         const originalHTML = data.originalHTML;
         pre.style.visibility = 'visible';
+        pre.innerHTML = '';
         block.classList.add('typing');
 
-        // Get plain text and build a map of positions to HTML
+        // Parse HTML into text chunks with their tags
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = originalHTML;
-        const fullText = tempDiv.textContent || tempDiv.innerText;
 
-        // Remove trailing whitespace for cursor positioning
-        const trimmedText = fullText.replace(/\s+$/, '');
-        const textLength = trimmedText.length;
+        // Extract all text content with formatting
+        const segments = [];
+        function extractSegments(node) {
+            if (node.nodeType === Node.TEXT_NODE) {
+                const text = node.textContent;
+                for (let i = 0; i < text.length; i++) {
+                    segments.push({ char: text[i], wrapper: null });
+                }
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                const tag = node.tagName.toLowerCase();
+                const className = node.className;
+                const children = node.childNodes;
+                for (let i = 0; i < children.length; i++) {
+                    const childNode = children[i];
+                    if (childNode.nodeType === Node.TEXT_NODE) {
+                        const text = childNode.textContent;
+                        for (let j = 0; j < text.length; j++) {
+                            segments.push({ char: text[j], wrapper: { tag, className } });
+                        }
+                    } else {
+                        extractSegments(childNode);
+                    }
+                }
+            }
+        }
+        extractSegments(tempDiv);
 
-        let charIndex = 0;
+        // Type characters with variable speed
+        let index = 0;
+        let currentSpan = null;
+        let currentWrapper = null;
 
         function typeNext() {
-            if (charIndex >= textLength) {
-                // Animation complete - show final content with blinking cursor
+            if (index >= segments.length) {
                 block.classList.remove('typing');
                 block.classList.add('typed');
-                pre.style.minHeight = '';
-                // Find position to insert cursor (before trailing whitespace)
-                const cursorHTML = '<span class="typed-cursor">' + CURSOR + '</span>';
-                // Insert cursor at end of trimmed content
-                pre.innerHTML = originalHTML.replace(/(\s*)$/, cursorHTML + '$1');
                 return;
             }
 
-            // Show text up to current position with cursor
-            const currentText = trimmedText.substring(0, charIndex + 1);
-            const remaining = trimmedText.substring(charIndex + 1);
+            const segment = segments[index];
+            const wrapperKey = segment.wrapper ? `${segment.wrapper.tag}.${segment.wrapper.className}` : null;
 
-            // Rebuild HTML with visible portion + cursor
-            // Simple approach: show original HTML structure but with cursor inserted
-            tempDiv.innerHTML = originalHTML;
-            const walker = document.createTreeWalker(tempDiv, NodeFilter.SHOW_TEXT, null, false);
-
-            let pos = 0;
-            let cursorInserted = false;
-            const targetPos = charIndex + 1;
-
-            while (walker.nextNode()) {
-                const node = walker.currentNode;
-                const nodeText = node.textContent;
-                const nodeStart = pos;
-                const nodeEnd = pos + nodeText.length;
-
-                if (!cursorInserted && targetPos <= nodeEnd) {
-                    // Cursor goes in this node
-                    const localPos = targetPos - nodeStart;
-                    const before = nodeText.substring(0, localPos);
-                    const after = nodeText.substring(localPos);
-
-                    // Create cursor span
-                    const cursorSpan = document.createElement('span');
-                    cursorSpan.className = 'typing-cursor';
-                    cursorSpan.textContent = CURSOR;
-
-                    // Replace text node with before + cursor + hidden after
-                    const parent = node.parentNode;
-                    const beforeNode = document.createTextNode(before);
-                    const afterSpan = document.createElement('span');
-                    afterSpan.style.visibility = 'hidden';
-                    afterSpan.textContent = after;
-
-                    parent.insertBefore(beforeNode, node);
-                    parent.insertBefore(cursorSpan, node);
-                    parent.insertBefore(afterSpan, node);
-                    parent.removeChild(node);
-
-                    cursorInserted = true;
-                    break;
-                }
-
-                pos = nodeEnd;
-            }
-
-            // Hide all text after cursor position
-            if (cursorInserted) {
-                // Continue walking to hide remaining text
-                while (walker.nextNode()) {
-                    const node = walker.currentNode;
-                    const hiddenSpan = document.createElement('span');
-                    hiddenSpan.style.visibility = 'hidden';
-                    hiddenSpan.textContent = node.textContent;
-                    node.parentNode.insertBefore(hiddenSpan, node);
-                    node.parentNode.removeChild(node);
+            // Handle wrapper changes
+            if (wrapperKey !== currentWrapper) {
+                currentWrapper = wrapperKey;
+                if (segment.wrapper) {
+                    currentSpan = document.createElement(segment.wrapper.tag);
+                    currentSpan.className = segment.wrapper.className;
+                    pre.appendChild(currentSpan);
+                } else {
+                    currentSpan = null;
                 }
             }
 
-            pre.innerHTML = tempDiv.innerHTML;
-            charIndex++;
+            // Add character
+            const textNode = document.createTextNode(segment.char);
+            if (currentSpan) {
+                currentSpan.appendChild(textNode);
+            } else {
+                pre.appendChild(textNode);
+            }
+
+            index++;
 
             // Variable typing speed
-            const char = trimmedText[charIndex - 1];
             let delay;
-            if (char === '\n') {
-                delay = 25 + Math.random() * 15;
-            } else if (char === ' ') {
-                delay = 6 + Math.random() * 6;
+            if (segment.char === '\n') {
+                delay = 30 + Math.random() * 20;
+            } else if (segment.char === ' ') {
+                delay = 8 + Math.random() * 8;
             } else {
-                delay = 10 + Math.random() * 15;
+                delay = 12 + Math.random() * 18;
             }
 
             setTimeout(typeNext, delay);
