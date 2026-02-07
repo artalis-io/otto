@@ -1122,12 +1122,109 @@
         .ai-example-diagram pre {
             margin: 0;
             color: #a0a0a0;
-            text-shadow:
-                0 0 5px rgba(200, 200, 200, 0.3),
-                0 0 10px rgba(200, 200, 200, 0.1);
             position: relative;
             z-index: 3;
-            animation: crt-flicker-gray 4s infinite;
+            animation: electric-scatter 3s infinite;
+        }
+
+        /* Electric scattering - retro-futuristic glitch effect */
+        @keyframes electric-scatter {
+            0%, 100% {
+                text-shadow:
+                    0 0 5px rgba(200, 200, 200, 0.4),
+                    0 0 10px rgba(200, 200, 200, 0.2);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            5% {
+                text-shadow:
+                    -1px 0 rgba(255, 100, 100, 0.5),
+                    1px 0 rgba(100, 200, 255, 0.5),
+                    0 0 5px rgba(200, 200, 200, 0.4);
+                transform: translate(0.5px, 0);
+            }
+            10% {
+                text-shadow:
+                    0 0 5px rgba(200, 200, 200, 0.4),
+                    0 0 10px rgba(200, 200, 200, 0.2);
+                transform: translate(0, 0);
+            }
+            15% {
+                text-shadow:
+                    1px 0 rgba(255, 100, 100, 0.4),
+                    -1px 0 rgba(100, 200, 255, 0.4),
+                    0 0 8px rgba(200, 200, 200, 0.5);
+                transform: translate(-0.3px, 0);
+                filter: brightness(1.1);
+            }
+            20% {
+                text-shadow:
+                    0 0 5px rgba(200, 200, 200, 0.4);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            /* Glitch burst */
+            35% {
+                text-shadow:
+                    -2px 0 rgba(255, 50, 50, 0.7),
+                    2px 0 rgba(50, 200, 255, 0.7),
+                    0 0 15px rgba(255, 255, 255, 0.5);
+                transform: translate(1px, 0) skewX(0.5deg);
+                filter: brightness(1.2);
+            }
+            36% {
+                text-shadow:
+                    2px 0 rgba(255, 50, 50, 0.6),
+                    -2px 0 rgba(50, 200, 255, 0.6),
+                    0 -1px rgba(50, 255, 50, 0.3),
+                    0 0 10px rgba(255, 255, 255, 0.4);
+                transform: translate(-1px, 0.5px) skewX(-0.3deg);
+            }
+            37% {
+                text-shadow:
+                    0 0 5px rgba(200, 200, 200, 0.4);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            50% {
+                text-shadow:
+                    0.5px 0 rgba(255, 150, 150, 0.3),
+                    -0.5px 0 rgba(150, 200, 255, 0.3),
+                    0 0 5px rgba(200, 200, 200, 0.4);
+            }
+            55% {
+                text-shadow:
+                    0 0 5px rgba(200, 200, 200, 0.4),
+                    0 0 10px rgba(200, 200, 200, 0.2);
+            }
+            /* Second glitch */
+            72% {
+                text-shadow:
+                    -1.5px 0 rgba(255, 80, 80, 0.6),
+                    1.5px 0 rgba(80, 180, 255, 0.6),
+                    0 1px rgba(80, 255, 80, 0.2),
+                    0 0 12px rgba(255, 255, 255, 0.4);
+                transform: translate(0.8px, -0.3px);
+                filter: brightness(1.15);
+            }
+            73% {
+                text-shadow:
+                    1px 0 rgba(255, 80, 80, 0.5),
+                    -1px 0 rgba(80, 180, 255, 0.5),
+                    0 0 8px rgba(255, 255, 255, 0.3);
+                transform: translate(-0.5px, 0.2px) skewX(0.2deg);
+            }
+            75% {
+                text-shadow:
+                    0 0 5px rgba(200, 200, 200, 0.4),
+                    0 0 10px rgba(200, 200, 200, 0.2);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            /* Subtle flicker */
+            88% { filter: brightness(0.95); }
+            89% { filter: brightness(1.05); }
+            90% { filter: brightness(1); }
         }
 
         @keyframes crt-scanline-roll-gray {
