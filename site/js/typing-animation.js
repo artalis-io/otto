@@ -9,22 +9,34 @@
     const codeBlocks = document.querySelectorAll('.code-block');
     const blockData = new Map();
 
-    codeBlocks.forEach(block => {
-        const pre = block.querySelector('pre');
-        // Only animate static code blocks (those with content, not demo result containers)
-        if (pre && pre.innerHTML.trim().length > 0 && !pre.id) {
-            // Capture the final height before hiding content
-            const finalHeight = pre.offsetHeight;
-            blockData.set(block, {
-                originalHTML: pre.innerHTML,
-                finalHeight: finalHeight,
-                animated: false
-            });
-            // Set fixed height to prevent layout shift, hide content for animation
-            pre.style.minHeight = finalHeight + 'px';
-            pre.style.visibility = 'hidden';
-        }
-    });
+    // Initialize after page is fully rendered (fonts loaded, CSS applied)
+    function initBlocks() {
+        codeBlocks.forEach(block => {
+            const pre = block.querySelector('pre');
+            // Only animate static code blocks (those with content, not demo result containers)
+            if (pre && pre.innerHTML.trim().length > 0 && !pre.id && !blockData.has(block)) {
+                // Capture the final height after full render
+                const finalHeight = pre.offsetHeight;
+                blockData.set(block, {
+                    originalHTML: pre.innerHTML,
+                    finalHeight: finalHeight,
+                    animated: false
+                });
+                // Set fixed height to prevent layout shift, hide content for animation
+                pre.style.minHeight = finalHeight + 'px';
+                pre.style.visibility = 'hidden';
+            }
+        });
+    }
+
+    // Wait for fonts and layout to complete
+    if (document.readyState === 'complete') {
+        requestAnimationFrame(initBlocks);
+    } else {
+        window.addEventListener('load', function() {
+            requestAnimationFrame(initBlocks);
+        });
+    }
 
     // Typing animation function
     function typeContent(block) {
@@ -171,16 +183,15 @@
     // Intersection Observer for triggering animation on scroll
     const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
-            if (entry.isIntersecting) {
+            if (entry.isIntersecting && blockData.has(entry.target)) {
                 typeContent(entry.target);
                 observer.unobserve(entry.target);
             }
         });
     }, { threshold: 0.3 });
 
+    // Start observing all code blocks (observer will check blockData when triggered)
     codeBlocks.forEach(block => {
-        if (blockData.has(block)) {
-            observer.observe(block);
-        }
+        observer.observe(block);
     });
 })();
