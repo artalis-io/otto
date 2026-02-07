@@ -1,12 +1,12 @@
 ---
-name: api-servers
-description: Quick reference for starting OTTO API servers (Carta, Velo, Locus, FuelWise) with CLI arguments and environment variables.
+name: api-run
+description: Quick reference for running OTTO API servers (Carta, Velo, Locus, FuelWise) with CLI arguments and environment variables.
 user-invocable: true
 ---
 
 # OTTO API Servers Quick Reference
 
-Start and configure the OTTO API servers: Carta (tiles), Velo (routing), Locus (geocoding), and FuelWise (refueling optimization).
+Run and configure the OTTO API servers: Carta (tiles), Velo (routing), Locus (geocoding), and FuelWise (refueling optimization).
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ make carta-api velo-api locus-api fuelwise-api
 |--------|--------------|-----------|-----------------|
 | **Carta** (tiles) | 8081 | `.osm.pbf` or `.idx` | `/api/v1/health` |
 | **Velo** (routing) | 8082 | `.osm.pbf` or `.vlg` | `/api/v1/health` |
-| **Locus** (geocoding) | 8083 | `.osm.pbf` | `/api/v1/health` |
+| **Locus** (geocoding) | 8083 | `.osm.pbf` or `.lcx` | `/api/v1/health` |
 | **FuelWise** (optimization) | 8080 | None | `/api/v1/health` |
 
 ---
@@ -89,10 +89,12 @@ Serves PNG and MVT tiles from OSM data.
 
 ```bash
 -S, --save-index PATH     Save binary index after loading PBF
+--build-only              Exit after building/saving index (no server)
 --min-zoom N              Minimum zoom level (default: 0)
 --max-zoom N              Maximum zoom level (default: 18)
 --tile-size N             PNG tile size in pixels (default: 512)
---lod none|default        Level-of-detail filtering preset
+--lod PRESET              LOD filtering: none, default, detailed, minimal
+--render-preset P         Render quality: default, fast, quality
 --burst-tiles N           Tiles in initial map view (default: 25)
 ```
 
@@ -172,7 +174,9 @@ Computes routes between coordinates with vehicle profiles.
 ### Velo-Specific Arguments
 
 ```bash
---landmarks N             Number of landmarks for ALT (default: 16)
+-S, --save-index PATH     Save binary graph after loading PBF
+--build-only              Exit after building/saving graph (no server)
+--landmarks N             Number of landmarks for ALT (default: 32)
 --no-landmarks            Disable landmark preprocessing
 -c, --config FILE         Config file path
 ```
@@ -239,31 +243,50 @@ Forward/reverse geocoding and autocomplete.
 ### Start Commands
 
 ```bash
-# Basic
+# Development (parses PBF on startup)
 ./locus/api/locus-geocoder data/monaco-latest.osm.pbf
 
-# Custom port
-./locus/api/locus-geocoder -p 8090 data/hungary-latest.osm.pbf
+# Production (instant startup with pre-built index)
+./locus/api/locus-geocoder data/monaco.lcx
+
+# Build index for production
+./locus/api/locus-geocoder -S data/monaco.lcx data/monaco-latest.osm.pbf
+
+# Build index only (no server)
+./locus/api/locus-geocoder -S data/monaco.lcx data/monaco-latest.osm.pbf --build-only
 ```
 
 ### Locus-Specific Arguments
 
 ```bash
--p PORT                   Listen port (default: 8083)
--h                        Show help
+-S, --save PATH           Save index to binary file after building
+--build-only              Exit after building/saving index (no server)
+--workers N               Geocode worker threads (default: auto)
 ```
 
 ### Environment Variables (LOCUS_ prefix)
 
 ```bash
+# Basic
 LOCUS_PORT=8083
 LOCUS_HOST=0.0.0.0
 LOCUS_THREADS=8
+LOCUS_DATA_FILE=/data/map.osm.pbf
+LOCUS_NUM_WORKERS=0       # 0 = auto-detect
 
 # Rate Limiting
 LOCUS_RATE_LIMIT_ENABLED=1
-LOCUS_RATE_LIMIT_RPS=20
+LOCUS_RATE_LIMIT_RPS=50   # Geocoding is fast
 LOCUS_RATE_LIMIT_BURST=100
+
+# Work Queue
+LOCUS_WORK_QUEUE_ENABLED=1
+LOCUS_WORK_QUEUE_DEPTH=128
+LOCUS_WORK_QUEUE_TIMEOUT=5
+
+# CORS
+LOCUS_CORS_ORIGINS=       # Empty = allow all (*)
+LOCUS_CORS_CREDENTIALS=0
 ```
 
 ### Endpoints
@@ -411,11 +434,16 @@ lsof -i :8081
 
 ```bash
 # Carta: Use binary index for instant startup
-./carta/api/carta-tile-server --save-index data/map.idx data/map.osm.pbf
+./carta/api/carta-tile-server -S data/map.idx data/map.osm.pbf --build-only
 ./carta/api/carta-tile-server data/map.idx  # <1s startup
 
 # Velo: Use binary graph
-./velo/api/velo-route-server data/map.vlg   # ~100ms vs ~8s for PBF
+./velo/api/velo-route-server -S data/map.vlg data/map.osm.pbf --build-only
+./velo/api/velo-route-server data/map.vlg   # ~100ms startup
+
+# Locus: Use binary index
+./locus/api/locus-geocoder -S data/map.lcx data/map.osm.pbf --build-only
+./locus/api/locus-geocoder data/map.lcx     # Instant startup
 ```
 
 ### Out of memory
