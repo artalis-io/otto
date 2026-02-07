@@ -683,7 +683,13 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 }
 
                 const data = await response.json();
-                result.innerHTML = formatJsonWithHighlighting(data);
+                const html = formatJsonWithHighlighting(data);
+                const codeBlock = result.closest('.code-block');
+                if (codeBlock && window.typeAnimateContent) {
+                    window.typeAnimateContent(codeBlock, html);
+                } else {
+                    result.innerHTML = html;
+                }
                 status.textContent = `Fetched in ${elapsed}ms`;
                 status.className = 'demo-status success';
             } catch (err) {
