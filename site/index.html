@@ -521,21 +521,18 @@
         }
 
         /* Typing animation cursor */
-        .code-block.typing pre::after,
-        .code-block.typed pre::after {
+        .code-block.typing pre::after {
             content: '\2588';
-            display: inline;
-            vertical-align: baseline;
             color: #50c878;
+            animation: cursor-blink 0.7s step-end infinite;
             text-shadow: 0 0 8px rgba(80, 200, 120, 0.6);
         }
 
-        .code-block.typing pre::after {
-            animation: cursor-blink 0.7s step-end infinite;
-        }
-
         .code-block.typed pre::after {
+            content: '\2588';
+            color: #50c878;
             animation: cursor-blink 1s step-end infinite;
+            text-shadow: 0 0 8px rgba(80, 200, 120, 0.6);
         }
 
         @keyframes cursor-blink {
