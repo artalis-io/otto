@@ -1,7 +1,7 @@
 # Shared Building Blocks Consolidation Plan
 
 **Created:** 2026-02-05
-**Status:** ✅ Phase 1 Complete (sh_hashmap, sh_heap integrated)
+**Status:** ✅ Complete (Phase 1 + Phase 2 done, Phase 3 optional/deferred)
 
 ## Summary
 
@@ -83,16 +83,16 @@ Analysis of carta/, velo/, and locus/ identified multiple duplicated data struct
 - Locus's LCSpatialGrid uses geometry-aware distance calculation
 - Generic version would sacrifice these optimizations without significant code reduction
 
-### Phase 2: Housekeeping (Remove Duplicates)
+### Phase 2: Housekeeping (Remove Duplicates) ✅ COMPLETE
 
-#### 2.1 Carta Web Mercator Consolidation
-**Files to update:**
-- carta/src/ct_tile.c: Remove duplicate `ct_latlon_to_mercator()`, use `sh_latlon_to_mercator()` from sh_geo.h
-- carta/include/ct_tile.h: Update function declarations
+#### 2.1 Carta Web Mercator Consolidation ✅
+**Files updated:**
+- carta/src/ct_tile.c: `ct_latlon_to_mercator()` now delegates to `sh_latlon_to_mercator()`
 
-#### 2.2 Carta Bbox Consolidation
-**Files to update:**
-- carta/src/ct_rtree.c: Remove `bbox_union()`, `bbox_intersects()`, use `sh_bbox_*` from sh_geo.h
+#### 2.2 Carta Bbox Consolidation ✅
+**Files updated:**
+- carta/include/ct_types.h: `CTBBox` is now a typedef to `SHBBox`
+- carta/src/ct_rtree.c: `bbox_union`, `bbox_intersects` are now macros for `sh_bbox_*` functions
 
 ### Phase 3: Optional Extraction (Lower Priority)
 

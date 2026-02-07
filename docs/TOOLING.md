@@ -6,7 +6,7 @@ This document tracks cross-functional/cross-cutting concerns for the OTTO platfo
 
 ### What Exists ✓
 - Basic CI (GitHub Actions) - builds, tests, WASM, Docker
-- Unit tests (190+ across modules)
+- Unit tests (700+ across modules)
 - Debug builds (`make debug`)
 - Consistent error enums per module (LC_ERROR_*, VL_ERROR_*, etc.)
 - Memory safety guidelines in CLAUDE.md

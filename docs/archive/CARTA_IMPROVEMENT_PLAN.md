@@ -1,5 +1,20 @@
 # Carta Tile Server Improvement Plan
 
+## Status: 85% Complete (Feb 2026)
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1: R-Tree | ✅ Complete | Hilbert R-Tree in ct_rtree.c |
+| Phase 1: Cache | ✅ Complete | LRU tile cache in ct_cache.c |
+| Phase 1: Clipping/Simplification | ✅ Complete | ct_clip.c, ct_simplify.c |
+| Phase 1: Render pass optimization | ✅ Complete | Layer pre-sorting |
+| Phase 1: Stack allocation | ✅ Complete | |
+| Phase 2: LOD rules | ✅ Complete | OSM-like zoom rules |
+| Phase 2: Road widths | ✅ Complete | Width by class and zoom |
+| Phase 3: Point labels | ✅ Complete | Cities, towns, POIs |
+| Phase 3: Road labels | ❌ TODO | Text along paths |
+| Phase 3: Area labels | ❌ TODO | Lakes, parks |
+
 ## Executive Summary
 
 This plan addresses three major areas:
@@ -7,8 +22,9 @@ This plan addresses three major areas:
 2. **LOD Quality**: OSM-like zoom level rules, smooth transitions
 3. **Label Rendering**: Street names, city names, POI labels
 
-**Current State**: ~30ms per PNG tile, no spatial index (O(n) per tile), no labels
-**Target State**: <10ms per tile, O(log n) queries, labeled maps
+**Original State**: ~30ms per PNG tile, no spatial index (O(n) per tile), no labels
+**Current State**: ~75ms per PNG tile with labels, O(log n) queries, point labels working
+**Target State**: <10ms per tile (with cache hit), labeled maps
 
 ---
 

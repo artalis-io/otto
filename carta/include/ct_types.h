@@ -15,8 +15,9 @@
 typedef struct SHArena SHArena;
 typedef struct SHPool SHPool;
 
-/* Include shared hashmap header for SHHashmapI64 */
+/* Include shared headers */
 #include "sh_hashmap.h"
+#include "sh_geo.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,11 +56,8 @@ typedef struct {
     int32_t lon;  /* lon * 1e7 */
 } CTCoordFixed;
 
-/* Bounding box in lat/lon */
-typedef struct {
-    double min_lat, min_lon;
-    double max_lat, max_lon;
-} CTBBox;
+/* Bounding box in lat/lon (alias to shared type) */
+typedef SHBBox CTBBox;
 
 /* Point in tile coordinates (0 to extent-1) */
 typedef struct {

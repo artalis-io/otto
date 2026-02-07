@@ -9,21 +9,7 @@
 #include <math.h>
 #include <pthread.h>
 
-/* ============================================================================
- * Web Mercator Projection
- * ============================================================================ */
-
-void ct_latlon_to_mercator(double lat, double lon, double *x, double *y)
-{
-    /* Clamp latitude to valid Mercator range */
-    if (lat > 85.051128779806) lat = 85.051128779806;
-    if (lat < -85.051128779806) lat = -85.051128779806;
-
-    double lat_rad = lat * CT_PI / 180.0;
-
-    *x = CT_EARTH_RADIUS_M * lon * CT_PI / 180.0;
-    *y = CT_EARTH_RADIUS_M * log(tan(CT_PI / 4.0 + lat_rad / 2.0));
-}
+/* ct_latlon_to_mercator is now inline in ct_tile.h */
 
 void ct_mercator_to_latlon(double x, double y, double *lat, double *lon)
 {

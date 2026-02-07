@@ -24,67 +24,11 @@ This document outlines planned features at the project level, including new comp
 
 ---
 
-## 1. Project Renaming
+## 1. Project Renaming ✅ DONE
 
-### Current State
+The project has been renamed to **OTTO** (**O**ptimization for **T**rucking and **T**ransport **O**perations).
 
-The project is currently named "ralph" (after the LP solver component), but the scope has expanded significantly beyond refueling optimization:
-
-| Component | Purpose |
-|-----------|---------|
-| `ralph/` | LP/MIP solver engine |
-| `fuelwise/` | Refueling optimization domain logic |
-| `velo/` | Routing engine (Dijkstra, A*, landmarks) |
-| `carta/` | Map tile generation (MVT, PNG) |
-| `shared/` | Common geo utilities |
-| `hose/` | **Planned**: Hours of Service rule engine |
-| `tempo/` | **Planned**: Business rules / time window engine |
-| `arbor/` | **Planned**: State-space search framework |
-| `sigma/` | **Planned**: Fleet-wide plan selection (set covering MIP) |
-| `pulse/` | **Planned**: Execution tracking and PTA computation |
-| `forge/` | **Planned**: Async job queue and worker orchestration |
-| `quota/` | **Planned**: Rate quoting and pricing engine |
-| `atlas/` | **Planned**: Network design and lane balancing |
-
-### Problem
-
-- "ralph" implies LP solver only
-- "fuelwise" implies refueling only
-- The project is evolving into a comprehensive trucking/logistics optimization platform
-
-### Proposed Names
-
-The name should sound like an animal or human name - catchy and memorable.
-
-**Recommended (Human/Animal-like):**
-
-| Name | Backronym | Why It Works |
-|------|-----------|--------------|
-| **OTTO** | **O**ptimization for **T**rucking and **T**ransport **O**perations | German name, evokes efficiency/engineering |
-| **RUFUS** | **R**outing **U**tility for **F**leet **U**nified **S**cheduling | Friendly, memorable |
-| **MARCO** | **M**apping **A**nd **R**oute **C**oordination **O**ptimizer | Like Marco Polo - exploration/routing |
-| **FELIX** | **F**leet and **L**ogistics **I**ntelligence e**X**ecutive | Latin for "lucky/successful" |
-| **ATLAS** | (no backronym needed) | Titan who carries the world - strong imagery |
-| **ORCA** | **O**ptimization for **R**outing, **C**ompliance, and **A**llocation | Powerful, intelligent animal |
-| **HAWK** | **H**aulage **A**nd **W**orkflow **K**ernel | Sharp, efficient predator |
-
-**Other options:**
-
-| Name | Meaning | Pros | Cons |
-|------|---------|------|------|
-| **artalis** | From "Artalis.io" (company name) | Brand consistency | Generic |
-| **haul** | Trucking theme | Short, memorable | Common word |
-| **convoy** | Fleet/logistics theme | Evocative | Existing company |
-
-### TODOs
-
-- [ ] Decide on new project name
-- [ ] Update all documentation references
-- [ ] Update CLAUDE.md files across components
-- [ ] Update Makefile targets
-- [ ] Update Docker image names
-- [ ] Update GitHub repository name (if applicable)
-- [ ] Update import paths in code
+All major documentation and references have been updated.
 
 ---
 

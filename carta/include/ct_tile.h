@@ -9,6 +9,7 @@
 #define CT_TILE_H
 
 #include "ct_types.h"
+#include "sh_geo.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -113,13 +114,12 @@ int ct_tile_is_valid(CTTileCoord tile);
 /*
  * Project lat/lon to Web Mercator coordinates (meters).
  * Origin is at (0, 0), X increases east, Y increases north.
- *
- * @param lat Latitude in degrees
- * @param lon Longitude in degrees
- * @param x   Output X in meters
- * @param y   Output Y in meters
+ * Delegates to shared library sh_latlon_to_mercator().
  */
-void ct_latlon_to_mercator(double lat, double lon, double *x, double *y);
+static inline void ct_latlon_to_mercator(double lat, double lon, double *x, double *y)
+{
+    sh_latlon_to_mercator(lat, lon, x, y);
+}
 
 /*
  * Unproject Web Mercator to lat/lon.

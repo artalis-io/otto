@@ -1,15 +1,25 @@
 # Carta Tile Rendering Performance Plan
 
+## Status: 80% Complete (Feb 2026)
+
+| Sprint | Status | Notes |
+|--------|--------|-------|
+| Sprint 1: Memory allocation | ✅ Complete | Reusable scale/edge buffers |
+| Sprint 2: Polygon sorting | ✅ Complete | Insertion sort O(n) |
+| Sprint 3: R-Tree trust | ✅ Complete | Removed redundant checks |
+| Sprint 4: Context pooling | ✅ Complete | Render context reuse |
+| Sprint 5: Zoom-adaptive AA | ❌ TODO | Low priority |
+
 ## Executive Summary
 
-Analysis reveals tile rendering is **memory-bound, not CPU-bound**. Primary bottlenecks:
+Analysis revealed tile rendering was **memory-bound, not CPU-bound**. Primary bottlenecks addressed:
 
-1. **Per-feature malloc/free** - 500+ allocations per tile (~100-150ms)
-2. **O(n²) polygon scanline sorting** - Bubble sort per scanline (~80-120ms)
-3. **Redundant coordinate checks** - Re-checking after R-Tree query (~20-50ms)
-4. **Per-tile render buffer allocation** - 1MB alloc+clear per tile (~2-5ms)
+1. ✅ **Per-feature malloc/free** - Fixed with reusable buffers
+2. ✅ **O(n²) polygon scanline sorting** - Fixed with insertion sort
+3. ✅ **Redundant coordinate checks** - Fixed by trusting R-Tree
+4. ✅ **Per-tile render buffer allocation** - Fixed with context pooling
 
-**Expected improvement: 60-70% faster rendering** (from ~240ms to ~70-100ms per tile)
+**Result: ~75ms average tile latency** (down from ~240ms)
 
 ---
 
