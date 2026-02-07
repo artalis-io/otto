@@ -73,6 +73,9 @@ docs/FOUNDER_EQUITY.md
 # Generated documents
 OTTO_Strategy.pdf
 
+# Site build output
+site/build/
+
 # Audit reports (temporary)
 **/AUDIT_REPORT*.md
 

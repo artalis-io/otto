@@ -23,7 +23,7 @@
 .PHONY: ralph fuelwise velo carta locus shared
 .PHONY: fuelwise-api carta-api velo-api
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test wasm-api-demos
-.PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-serve
+.PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-build site-serve
 .PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
 .PHONY: run-fuelwise-api run-carta-api run-velo-api
 .PHONY: benchmark ci api-docs api-docs-check download-monaco
@@ -165,7 +165,10 @@ clay-map:
 clay-map-serve: clay-map
 	$(MAKE) -C clayshards/clay-shards-demo serve
 
-# Landing Page (static HTML)
+# Landing Page
+site-build:
+	$(MAKE) -C site build
+
 site-serve:
 	$(MAKE) -C site serve
 
