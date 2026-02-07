@@ -27,7 +27,8 @@ CORE_SRCS = src/locus.c \
             src/lc_spatial.c \
             src/lc_index.c \
             src/lc_serialize.c \
-            src/lc_query.c
+            src/lc_query.c \
+            src/lc_api.c
 
 # Object files
 CORE_OBJS = $(CORE_SRCS:.c=.o)
@@ -96,6 +97,7 @@ clean:
 src/locus.o: include/locus.h include/lc_types.h include/lc_pbf.h
 src/lc_types.o: include/lc_types.h
 src/lc_pbf.o: include/lc_types.h include/lc_pbf.h $(SHARED_DIR)/include/sh_protobuf.h $(SHARED_DIR)/include/sh_inflate.h $(SHARED_DIR)/include/sh_pbf.h
+src/lc_api.o: include/lc_api.h include/locus.h
 
 # Help
 help:

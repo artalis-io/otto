@@ -1036,7 +1036,198 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                     Forward geocoding (text search), autocomplete, and reverse geocoding (coordinate to address). Uses trie + trigram index for fast fuzzy matching.
                 </p>
 
-                <!-- Endpoints generated from locus/api/src/main.c annotations -->
+                <!-- Endpoints generated from locus/include/lc_api.h annotations -->
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/search</span>
+                        <span class="endpoint-desc">Forward geocoding - search for places by name</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Query Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">limit</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Maximum results (1-100) (default: 10)</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="comment"># Search for "Monte Carlo" with max 5 results</span>
+<span class="command">curl</span> <span class="url">"http://localhost:8083/api/v1/search?q=Monte%20Carlo&limit=5"</span></pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"query"</span>: <span class="string">"Monte Carlo"</span>,
+  <span class="key">"total"</span>: <span class="number">5</span>,
+  <span class="key">"took_ms"</span>: <span class="number">0.12</span>,
+  <span class="key">"results"</span>: [
+    {
+      <span class="key">"osm_id"</span>: <span class="number">12345</span>,
+      <span class="key">"osm_type"</span>: <span class="string">"node"</span>,
+      <span class="key">"name"</span>: <span class="string">"Monte Carlo"</span>,
+      <span class="key">"class"</span>: <span class="string">"place"</span>,
+      <span class="key">"lat"</span>: <span class="number">43.7396</span>,
+      <span class="key">"lon"</span>: <span class="number">7.4269</span>,
+      <span class="key">"score"</span>: <span class="number">1.0</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/autocomplete</span>
+                        <span class="endpoint-desc">Autocomplete suggestions for partial input</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Query Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">limit</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Maximum suggestions (1-20) (default: 10)</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="comment"># Get autocomplete suggestions for "Mon"</span>
+<span class="command">curl</span> <span class="url">"http://localhost:8083/api/v1/autocomplete?q=Mon&limit=10"</span></pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>[
+  "Monaco",
+  "Monte Carlo",
+  "Moneghetti"
+]
+</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/reverse</span>
+                        <span class="endpoint-desc">Reverse geocoding - find address for coordinates</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="comment"># Reverse geocode coordinates in Monaco</span>
+<span class="command">curl</span> <span class="url">"http://localhost:8083/api/v1/reverse?lat=43.7384&lon=7.4246"</span></pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"lat"</span>: <span class="number">43.7384</span>,
+  <span class="key">"lon"</span>: <span class="number">7.4246</span>,
+  <span class="key">"display_name"</span>: <span class="string">"Avenue de Monte-Carlo, Monaco"</span>,
+  <span class="key">"distance_m"</span>: <span class="number">45.2</span>,
+  <span class="key">"place"</span>: <span class="string">"Monaco"</span>,
+  <span class="key">"street"</span>: <span class="string">"Avenue de Monte-Carlo"</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/health</span>
+                        <span class="endpoint-desc">Health check endpoint</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"healthy"</span>,
+  <span class="key">"service"</span>: <span class="string">"locus"</span>,
+  <span class="key">"version"</span>: <span class="string">"0.1.0"</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/stats</span>
+                        <span class="endpoint-desc">Index and server statistics</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"entities"</span>: <span class="number">2763</span>,
+  <span class="key">"memory_mb"</span>: <span class="number">7.8</span>,
+  <span class="key">"bounds"</span>: {
+    <span class="key">"min_lat"</span>: <span class="number">43.7234</span>,
+    <span class="key">"min_lon"</span>: <span class="number">7.4089</span>,
+    <span class="key">"max_lat"</span>: <span class="number">43.7519</span>,
+    <span class="key">"max_lon"</span>: <span class="number">7.4398</span>
+  },
+  <span class="key">"rate_limit"</span>: {
+    <span class="key">"enabled"</span>: <span class="number">true</span>,
+    <span class="key">"rps"</span>: <span class="number">50.0</span>,
+    <span class="key">"burst"</span>: <span class="number">100</span>
+  },
+  <span class="key">"work_queue"</span>: {
+    <span class="key">"enabled"</span>: <span class="number">true</span>,
+    <span class="key">"depth"</span>: <span class="number">5</span>,
+    <span class="key">"capacity"</span>: <span class="number">128</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/metrics</span>
+                        <span class="endpoint-desc">Prometheus metrics endpoint</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <p style="color: var(--text-muted); font-size: 13px;">Prometheus exposition format metrics</p>
+                        </div>
+                    </div>
+                </div>
 
             </section>
 
