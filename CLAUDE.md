@@ -10,7 +10,7 @@
 |------|---------|
 | Build all | `make all` |
 | Run tests | `make test` |
-| Start servers | Use `/api-servers` skill |
+| Start servers | Use `/api-run` skill |
 | Audit C code | Use `/c-audit` skill |
 | Audit JS code | Use `/js-audit` skill |
 | Audit ClayShards | Use `/clayshards-audit` skill |
@@ -294,7 +294,7 @@ See `docs/MANIFESTO.md` for the full manifesto.
 
 | Skill | Purpose |
 |-------|---------|
-| `/api-servers` | Start servers, CLI args, env vars |
+| `/api-run` | Start servers, CLI args, env vars |
 | `/c-audit` | C code security review |
 | `/js-audit` | JavaScript/WebGL code review |
 | `/clayshards-audit` | Full ClayShards audit (C + JS + Manifesto) |

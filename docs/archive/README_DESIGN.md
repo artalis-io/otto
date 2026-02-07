@@ -22,7 +22,7 @@ If we ever hit limitations, Ralph's API can wrap HiGHS (a mature open-source sol
 OTTO is also a testbed for exploring how far AI-assisted development can go. The codebase is structured for effective human-AI collaboration:
 
 - **Comprehensive CLAUDE.md files** at every level with API details, patterns, and pitfalls
-- **Defined skills** (`/c-audit`, `/api-servers`) that encapsulate common workflows
+- **Defined skills** (`/c-audit`, `/api-run`) that encapsulate common workflows
 - **Consistent patterns** (naming conventions, error handling, memory management) that an agent can learn and apply
 - **Clear module boundaries** with explicit dependencies
 

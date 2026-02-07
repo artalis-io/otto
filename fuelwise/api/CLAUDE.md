@@ -1,6 +1,6 @@
 # Claude Code Instructions for FuelWise API
 
-> **Quick Reference:** Use `/api-servers fuelwise` for CLI args, env vars, and startup commands.
+> **Quick Reference:** Use `/api-run fuelwise` for CLI args, env vars, and startup commands.
 
 ## Overview
 

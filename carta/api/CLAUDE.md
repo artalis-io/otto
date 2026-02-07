@@ -1,6 +1,6 @@
 # Carta Tile Server - Claude Instructions
 
-> **Quick Reference:** Use `/api-servers carta` for CLI args, env vars, and startup commands.
+> **Quick Reference:** Use `/api-run carta` for CLI args, env vars, and startup commands.
 
 ## Overview
 

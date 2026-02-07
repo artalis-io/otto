@@ -1,6 +1,6 @@
 # Velo Route Server - Claude Instructions
 
-> **Quick Reference:** Use `/api-servers velo` for CLI args, env vars, and startup commands.
+> **Quick Reference:** Use `/api-run velo` for CLI args, env vars, and startup commands.
 
 ## Overview
 
