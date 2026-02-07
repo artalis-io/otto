@@ -41,7 +41,7 @@ extern "C" {
 /*
  * CORS configuration.
  */
-typedef struct {
+typedef struct ShCorsConfig {
     char allowed_origins[SH_CORS_MAX_ORIGINS][SH_CORS_ORIGIN_SIZE];
     int origin_count;           /* 0 = allow all (*) */
     char allowed_methods[128];  /* Default: "GET, POST, OPTIONS" */

@@ -441,17 +441,6 @@ static void route_worker_callback(ShWorkItem *queue_item, void *ctx) {
  * HTTP Response Helpers
  * ============================================================================ */
 
-/* HTTP response helpers - use shared implementation */
-static void send_json_with_cors(struct mg_connection *c, int status,
-                                 const char *json, const char *origin) {
-    sh_mg_reply_json(c, status, &s_cors_config, origin, json);
-}
-
-static void send_error_with_cors(struct mg_connection *c, int status,
-                                  const char *message, const char *origin) {
-    sh_mg_reply_error(c, status, &s_cors_config, origin, message);
-}
-
 /* Compatibility wrappers for simple calls (uses wildcard origin) */
 static void send_json(struct mg_connection *c, int status, const char *json) {
     sh_mg_reply_json(c, status, &s_cors_config, NULL, json);
