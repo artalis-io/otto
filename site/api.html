@@ -779,7 +779,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
   <span class="key">"maxzoom"</span>: <span class="number">18</span>,
   <span class="key">"bounds"</span>: [<span class="number">7.41</span>, <span class="number">43.72</span>, <span class="number">7.44</span>, <span class="number">43.75</span>],
   <span class="key">"center"</span>: [<span class="number">7.42</span>, <span class="number">43.73</span>, <span class="number">14</span>],
-  <span class="key">"tiles"</span>: [<span class="string">"http://localhost:8081/tiles/{z}/{x}/{y}.png"</span>]
+  <span class="key">"tiles"</span>: ["http://localhost:<span class="number">8081</span>/tiles/{z}/{x}/{y}.png"]
 }</pre>
                             </div>
                         </div>
@@ -872,7 +872,10 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
     <span class="key">"from"</span>: [<span class="number">47.497</span>, <span class="number">19.040</span>],
     <span class="key">"to"</span>: [<span class="number">46.253</span>, <span class="number">20.148</span>],
     <span class="key">"geometry"</span>: <span class="string">"encoded_polyline..."</span>
-  }
+  },
+  <span class="key">"meta"</span>: {
+    <span class="key">"nodes_explored"</span>: <span class="number">12543</span>,
+    <span class="key">"search_time_ms"</span>: <span class="number">34.5</span>
 }</pre>
                             </div>
                         </div>
@@ -899,7 +902,6 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
     <span class="key">"from"</span>: [<span class="number">47.497</span>, <span class="number">19.040</span>],
     <span class="key">"to"</span>: [<span class="number">46.253</span>, <span class="number">20.148</span>],
     <span class="key">"geometry"</span>: <span class="string">"encoded_polyline..."</span>
-  }
 }</pre>
                             </div>
                         </div>
@@ -947,7 +949,6 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
     <span class="key">"min_lon"</span>: <span class="number">16.11</span>,
     <span class="key">"max_lat"</span>: <span class="number">48.58</span>,
     <span class="key">"max_lon"</span>: <span class="number">22.90</span>
-  }
 }</pre>
                             </div>
                         </div>
@@ -1270,8 +1271,5 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
         });
     })();
     </script>
-
-    <!-- CRT Terminal Typing Animation -->
-    <script src="js/typing-animation.js"></script>
 </body>
 </html>

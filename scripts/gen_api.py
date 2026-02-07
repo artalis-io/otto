@@ -80,26 +80,30 @@ def parse_api_annotation(text: str) -> dict:
     response_json_lines = []
 
     for line in lines:
-        # Remove leading " * " from comment lines
-        line = re.sub(r"^\s*\*\s?", "", line).strip()
+        # Remove leading " * " from comment lines, preserve indentation for JSON
+        line = re.sub(r"^\s*\*\s?", "", line)
 
-        if not line:
-            continue
-
-        # Check for multi-line response_json
+        # Check for multi-line response_json (before stripping, to preserve indentation)
         if in_response_json:
-            if line.startswith("@") or line.startswith("}"):
-                if line.startswith("}"):
-                    response_json_lines.append(line)
+            stripped = line.strip()
+            if stripped.startswith("@") or stripped == "}":
+                if stripped == "}":
+                    response_json_lines.append("}")
                 result["response_json"] = "\n".join(response_json_lines)
                 in_response_json = False
-                if line.startswith("@"):
-                    pass  # Continue processing this line below
+                if stripped.startswith("@"):
+                    line = stripped  # Continue processing this line below
                 else:
                     continue
             else:
-                response_json_lines.append(line)
+                response_json_lines.append(line.rstrip())  # Preserve leading whitespace
                 continue
+
+        # Strip for all other line types
+        line = line.strip()
+
+        if not line:
+            continue
 
         # First line: "GET /path" or "common" marker
         if not result["path"]:
