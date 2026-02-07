@@ -599,6 +599,10 @@ The entire OTTO stack compiles to WebAssembly:
 
 A prospect can run OTTO in their browser with their own data before any sales call. No sandbox environment, no trial license keys, no "let me check with legal." This dramatically shortens the sales cycle.
 
+**The "hacker terminal" demo:**
+
+To prove the architecture works anywhere, the entire OTTO UI runs in a retro CRT terminal with phosphor glow and scanlines. Same components, same algorithms—just rendered to ASCII with WebGL post-processing. It's part gimmick, part technical proof: if it runs in a Fallout-style terminal, it runs anywhere.
+
 ### 11.4 Size Comparison
 
 | Solution | Deployment Size | Browser? | Offline? |

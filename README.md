@@ -15,7 +15,7 @@ A comprehensive trucking and logistics optimization platform combining route pla
 | [**Carta**](carta/) | Map tile generator (MVT vector, PNG raster) | 8081 |
 | [**Locus**](locus/) | OSM geocoding (forward search, autocomplete, reverse lookup) | 8083 |
 | [**FuelWise**](fuelwise/) | Refueling optimization library | 8080 |
-| [**ClayShards**](clayshards/) | Immediate mode UI components, WebGL renderer | - |
+| [**ClayShards**](clayshards/) | Immediate mode UI components (WebGL, TUI renderers) | - |
 | [**Shared**](shared/) | Common utilities: geo, protobuf, zlib, rate limiting | - |
 
 ### Planned Engines
