@@ -37,30 +37,23 @@
 
         // Extract all text content with formatting
         const segments = [];
-        function extractSegments(node) {
+        function extractSegments(node, wrapper) {
             if (node.nodeType === Node.TEXT_NODE) {
                 const text = node.textContent;
                 for (let i = 0; i < text.length; i++) {
-                    segments.push({ char: text[i], wrapper: null });
+                    segments.push({ char: text[i], wrapper: wrapper });
                 }
             } else if (node.nodeType === Node.ELEMENT_NODE) {
-                const tag = node.tagName.toLowerCase();
-                const className = node.className;
-                const children = node.childNodes;
-                for (let i = 0; i < children.length; i++) {
-                    const childNode = children[i];
-                    if (childNode.nodeType === Node.TEXT_NODE) {
-                        const text = childNode.textContent;
-                        for (let j = 0; j < text.length; j++) {
-                            segments.push({ char: text[j], wrapper: { tag, className } });
-                        }
-                    } else {
-                        extractSegments(childNode);
-                    }
+                const newWrapper = { tag: node.tagName.toLowerCase(), className: node.className };
+                for (const child of node.childNodes) {
+                    extractSegments(child, newWrapper);
                 }
             }
         }
-        extractSegments(tempDiv);
+        // Start extraction from container's children (not the container itself)
+        for (const child of tempDiv.childNodes) {
+            extractSegments(child, null);
+        }
 
         // Type characters with variable speed
         let index = 0;
