@@ -211,6 +211,24 @@ rm -f data/monaco.vlg velo/wasm/src/monaco_vlg.h carta/wasm/src/monaco_pbf.h
 make api-docs
 ```
 
+### Site Build Structure
+
+The `site/` directory contains source files; `site/build/` contains deployable files:
+
+```bash
+make site-build   # Build site/build/
+make site-serve   # Build and serve on :8000
+```
+
+**What's in site/build/** (deployed):
+- `index.html`, `api.html`, `style.css`
+- `js/*.js` (WASM wrappers, typing animation)
+- `wasm/*.js` (WASM modules)
+
+**What stays in site/** (not deployed):
+- `api-template.html`, `api-config.json` (generator sources)
+- `Makefile`, `README.md` (build/docs)
+
 ## Performance Targets
 
 | Operation | Target |
