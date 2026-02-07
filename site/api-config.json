@@ -26,7 +26,7 @@
       "icon": "🛣️",
       "port": 8082,
       "description": "Route planning between coordinates with vehicle profiles, optimization modes, and Google Polyline encoded geometry. Uses A* with Landmarks for fast queries.",
-      "header_file": "velo/api/src/main.c",
+      "header_file": "velo/include/vl_api.h",
       "wasm": {
         "enabled": false
       }

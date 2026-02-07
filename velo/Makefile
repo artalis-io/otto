@@ -62,6 +62,8 @@ CORE_SRCS = src/vl_geo.c \
             src/vl_graph.c \
             src/vl_route.c \
             src/vl_landmarks.c \
+            src/vl_api.c \
+            src/polyline.c \
             src/velo.c
 
 # miniz is now linked via shared library

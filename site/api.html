@@ -819,7 +819,151 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                     Route planning between coordinates with vehicle profiles, optimization modes, and Google Polyline encoded geometry. Uses A* with Landmarks for fast queries.
                 </p>
 
-                <!-- Endpoints generated from velo/api/src/main.c annotations -->
+                <!-- Endpoints generated from velo/include/vl_api.h annotations -->
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/route</span>
+                        <span class="endpoint-desc">Calculate route between coordinates</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Query Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">profile</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>Vehicle profile: car, truck, bike, foot (default: car)</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">mode</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>Optimization: fastest (time) or shortest (distance) (default: fastest)</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">geometry</span></td>
+                                    <td><span class="param-type">bool</span></td>
+                                    <td>Include Google Polyline encoded geometry (default: true)</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="comment"># Calculate fastest car route between Budapest and Szeged</span>
+<span class="command">curl</span> <span class="url">"http://localhost:8082/api/v1/route?from=47.5,19.0&to=46.2,20.1&profile=car&mode=fastest"</span></pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+<span class="key">"status"</span>: <span class="string">"ok"</span>,
+<span class="key">"route"</span>: {
+<span class="key">"distance"</span>: <span class="number">187432.5</span>,
+<span class="key">"duration"</span>: <span class="number">7234.2</span>,
+<span class="key">"profile"</span>: <span class="string">"car"</span>,
+<span class="key">"mode"</span>: <span class="string">"fastest"</span>,
+<span class="key">"from"</span>: [<span class="number">47.497</span>, <span class="number">19.040</span>],
+<span class="key">"to"</span>: [<span class="number">46.253</span>, <span class="number">20.148</span>],
+<span class="key">"geometry"</span>: <span class="string">"encoded_polyline..."</span>
+},</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method post">POST</span>
+                        <span class="path">/api/v1/route</span>
+                        <span class="endpoint-desc">Calculate route between coordinates (JSON body)</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+<span class="key">"status"</span>: <span class="string">"ok"</span>,
+<span class="key">"route"</span>: {
+<span class="key">"distance"</span>: <span class="number">187432.5</span>,
+<span class="key">"duration"</span>: <span class="number">7234.2</span>,
+<span class="key">"profile"</span>: <span class="string">"car"</span>,
+<span class="key">"mode"</span>: <span class="string">"fastest"</span>,
+<span class="key">"from"</span>: [<span class="number">47.497</span>, <span class="number">19.040</span>],
+<span class="key">"to"</span>: [<span class="number">46.253</span>, <span class="number">20.148</span>],
+<span class="key">"geometry"</span>: <span class="string">"encoded_polyline..."</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/health</span>
+                        <span class="endpoint-desc">Health check endpoint</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+<span class="key">"status"</span>: <span class="string">"healthy"</span>,
+<span class="key">"service"</span>: <span class="string">"velo-route-server"</span>,
+<span class="key">"version"</span>: <span class="string">"1.0.0"</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/stats</span>
+                        <span class="endpoint-desc">Graph and server statistics</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+<span class="key">"graph_path"</span>: <span class="string">"/data/hungary.osm.pbf"</span>,
+<span class="key">"num_nodes"</span>: <span class="number">2745632</span>,
+<span class="key">"num_edges"</span>: <span class="number">5891234</span>,
+<span class="key">"landmarks_enabled"</span>: <span class="number">true</span>,
+<span class="key">"landmark_count"</span>: <span class="number">32</span>,
+<span class="key">"bbox"</span>: {
+<span class="key">"min_lat"</span>: <span class="number">45.74</span>,
+<span class="key">"min_lon"</span>: <span class="number">16.11</span>,
+<span class="key">"max_lat"</span>: <span class="number">48.58</span>,
+<span class="key">"max_lon"</span>: <span class="number">22.90</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/metrics</span>
+                        <span class="endpoint-desc">Prometheus metrics endpoint</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <p style="color: var(--text-muted); font-size: 13px;">Prometheus exposition format metrics</p>
+                        </div>
+                    </div>
+                </div>
 
             </section>
 
