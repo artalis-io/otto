@@ -183,7 +183,7 @@ HTTP (Mongoose) and WASM (Emscripten) are just thin wrappers (~10 lines each) ov
 - **Zero-infrastructure evaluation** - Send a single HTML file, no server needed
 - **Edge-ready by design** - If it runs in WASM, it runs anywhere
 
-See [docs/TRANSPORT_AGNOSTIC.md](docs/TRANSPORT_AGNOSTIC.md) for the full manifesto.
+See [docs/MANIFESTO.md](docs/MANIFESTO.md) for the full manifesto.
 
 ### Render Backend Agnostic UI
 
@@ -206,7 +206,7 @@ CLAY(CLAY_ID("Panel"), CLAY_LAYOUT(.padding = {16, 16, 16, 16})) {
 
 See [clayshards/clay-shards/MANIFESTO.md](clayshards/clay-shards/MANIFESTO.md) for the full manifesto.
 
-See [README_DESIGN.md](docs/README_DESIGN.md) for detailed rationale.
+See [README_DESIGN.md](docs/MANIFESTO.md) for detailed rationale.
 
 ## Requirements
 

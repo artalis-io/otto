@@ -288,7 +288,7 @@ int carta_render_tile(int z, int x, int y, uint8_t **out, size_t *len);
 - **Zero-infrastructure eval** - Single HTML file, no server needed
 - **Edge-ready by design** - If it runs in WASM, it runs anywhere
 
-See `docs/TRANSPORT_AGNOSTIC.md` for the full manifesto.
+See `docs/MANIFESTO.md` for the full manifesto.
 
 ## Skills Reference
 
@@ -302,7 +302,7 @@ See `docs/TRANSPORT_AGNOSTIC.md` for the full manifesto.
 ## Documentation Links
 
 - `docs/ARCHITECTURE.md` - System architecture
-- `docs/TRANSPORT_AGNOSTIC.md` - Transport-agnostic API design philosophy
+- `docs/MANIFESTO.md` - Design philosophy (C, WASM, agnostic patterns)
 - `docs/STRATEGY.md` - Business strategy
 - `docs/TODO_FEATURES.md` - Planned components (Fuse, HoSE, Tempo, Arbor, Sigma, Pulse, Atlas, Quota, etc.)
 - `clayshards/clay-shards/MANIFESTO.md` - ClayShards frontend philosophy (companion to Transport-Agnostic)

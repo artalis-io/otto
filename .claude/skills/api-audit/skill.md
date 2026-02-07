@@ -463,7 +463,7 @@ carta/
 
 **Key files to reference:**
 - `carta/include/ct_api.h` - Annotation format, struct definitions
-- `docs/TRANSPORT_AGNOSTIC.md` - Philosophy and patterns
+- `docs/MANIFESTO.md` - Philosophy and patterns
 - `docs/API_CODEGEN_PLAN.md` - Codegen details
 - `scripts/gen_api.py` - How annotations become HTML
 
