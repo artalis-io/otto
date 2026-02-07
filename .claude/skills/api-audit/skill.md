@@ -204,15 +204,45 @@ The module must be registered in `site/api-config.json`:
 
 ### 7. Generated Documentation
 
-The `site/api.html` must be up-to-date with annotations:
+The `site/api.html` is auto-generated from C header annotations and includes live WASM demos with embedded Monaco data.
 
 ```bash
 # Check if api.html is current
 make api-docs-check
 
-# Regenerate if stale
+# Regenerate if stale (auto-rebuilds all dependencies)
 make api-docs
 ```
+
+**Dependency chain** (all automatic):
+```
+data/monaco-latest.osm.pbf  (downloads if missing)
+           ↓
+data/monaco.vlg  (rebuilds when velo/ sources change)
+           ↓
+{velo,carta}/wasm/src/monaco_*.h  (embedded data headers via xxd)
+           ↓
+{velo,carta}/wasm/build/*-api-demo.js  (WASM modules)
+           ↓
+site/api.html  (copies WASM to site/js/, generates HTML from annotations)
+```
+
+**Key generator files:**
+- `scripts/gen_api.py` - Parses annotations, renders template, copies WASM
+- `site/api-template.html` - HTML template with Jinja2-like syntax
+- `site/api-config.json` - Module configuration (ports, WASM settings)
+
+**Force full rebuild:**
+```bash
+rm -f data/monaco.vlg velo/wasm/src/monaco_vlg.h carta/wasm/src/monaco_pbf.h
+make api-docs
+```
+
+**What triggers auto-rebuild:**
+- `velo/src/*.c` or `velo/include/*.h` changes → monaco.vlg rebuilt → WASM rebuilt
+- `carta/src/*.c` or `carta/include/*.h` changes → WASM rebuilt
+- `scripts/gen_api.py` or `site/api-template.html` changes → HTML regenerated
+- Header annotation changes → HTML regenerated
 
 ## Audit Procedure
 
