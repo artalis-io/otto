@@ -24,6 +24,7 @@
 .PHONY: fuelwise-api carta-api velo-api
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-serve
+.PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
 .PHONY: run-fuelwise-api run-carta-api run-velo-api
 .PHONY: benchmark ci
 
@@ -168,6 +169,23 @@ clay-map-serve: clay-map
 site-serve:
 	$(MAKE) -C site serve
 
+# ClayShards TUI
+tui-demo-tty:
+	$(MAKE) -C clayshards/demos/tty
+
+tui-demo-wasm:
+	$(MAKE) -C clayshards/demos/wasm
+
+tui-demo-serve: tui-demo-wasm
+	@echo "Open http://localhost:8000/clayshards/demos/wasm/demo.html"
+	python3 -m http.server 8000
+
+tui-wasm:
+	$(MAKE) -C clayshards/clay-shards-tui/wasm
+
+test-tui:
+	$(MAKE) -C clayshards/clay-shards-tui test
+
 # =============================================================================
 # Scripts
 # =============================================================================
@@ -233,6 +251,10 @@ clean:
 	-$(MAKE) -C velo/api clean 2>/dev/null || true
 	-$(MAKE) -C velo/wasm clean 2>/dev/null || true
 	-$(MAKE) -C clayshards/clay-shards-demo clean 2>/dev/null || true
+	-$(MAKE) -C clayshards/clay-shards-tui clean 2>/dev/null || true
+	-$(MAKE) -C clayshards/clay-shards-tui/wasm clean 2>/dev/null || true
+	-$(MAKE) -C clayshards/demos/tty clean 2>/dev/null || true
+	-$(MAKE) -C clayshards/demos/wasm clean 2>/dev/null || true
 	-rm -f vendor/miniz/*.o 2>/dev/null || true
 
 clean-all: clean
@@ -306,6 +328,13 @@ help:
 	@echo "  carta-ui-dev     - Run Carta UI dev server"
 	@echo "  clay-map         - Build Clay Map Viewer WASM (requires Emscripten)"
 	@echo "  clay-map-serve   - Build and serve Clay Map on :8000"
+	@echo ""
+	@echo "ClayShards TUI:"
+	@echo "  tui-demo-tty     - Build native TUI demo (runs in terminal)"
+	@echo "  tui-demo-wasm    - Build WASM TUI demo (requires Emscripten)"
+	@echo "  tui-demo-serve   - Build + serve TUI WebGL demo on :8000"
+	@echo "  tui-wasm         - Build TUI WASM library (requires Emscripten)"
+	@echo "  test-tui         - Run TUI renderer tests"
 	@echo ""
 	@echo "Scripts:"
 	@echo "  benchmark        - Run performance benchmarks"
