@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ config.title }}</title>
+    <meta name="description" content="{{ config.description }}">
+
+    <!-- SEO -->
+    <link rel="canonical" href="{{ config.canonical_url }}">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="style.css">
+
+    <!-- WASM API Demos -->
+{% for module in config.modules %}
+{% if module.wasm.enabled %}
+    <script src="{{ module.wasm.script }}"></script>
+    <script src="{{ module.wasm.wrapper }}"></script>
+{% endif %}
+{% endfor %}
+
+    <!-- API-specific Styles -->
+    <style>
+        /* WASM Demo */
+        .wasm-demo {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 16px;
+            margin-top: 16px;
+        }
+
+        .wasm-demo-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .wasm-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 4px 8px;
+            background: #2563eb;
+            color: white;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .wasm-demo-title {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .try-btn {
+            padding: 8px 16px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            font-family: inherit;
+            transition: background 0.15s;
+        }
+
+        .try-btn:hover {
+            background: #2563eb;
+        }
+
+        .try-btn:disabled {
+            background: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        .demo-output {
+            margin-top: 12px;
+            display: none;
+        }
+
+        .demo-output.visible {
+            display: block;
+        }
+
+        .demo-output img {
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            max-width: 100%;
+        }
+
+        .demo-output pre {
+            margin: 0;
+            padding: 12px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            font-size: 12px;
+            overflow-x: auto;
+        }
+
+        .demo-status {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 8px;
+        }
+
+        .demo-status.error {
+            color: var(--error);
+        }
+
+        .demo-status.success {
+            color: var(--success);
+        }
+        /* Service Navigation */
+        .service-nav {
+            padding: 24px 0;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .service-nav a {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 14px;
+            transition: border-color 0.15s;
+        }
+
+        .service-nav a:hover {
+            border-color: var(--accent);
+            text-decoration: none;
+        }
+
+        .service-nav .port {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* Service Section */
+        .service-section {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .service-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .service-icon {
+            font-size: 32px;
+        }
+
+        .service-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .service-port {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .service-desc {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 32px;
+            max-width: 700px;
+        }
+
+        /* Endpoint */
+        .endpoint {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 16px;
+        }
+
+        .endpoint-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .method {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .method.get {
+            background: #1e3a5f;
+            color: #60a5fa;
+        }
+
+        .method.post {
+            background: #1e4620;
+            color: #4ade80;
+        }
+
+        .path {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .endpoint-desc {
+            color: var(--text-muted);
+            font-size: 13px;
+            margin-left: auto;
+        }
+
+        .endpoint-body {
+            padding: 20px;
+        }
+
+        .endpoint-section {
+            margin-bottom: 20px;
+        }
+
+        .endpoint-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .endpoint-section h4 {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+
+        /* Parameters Table */
+        .params-table {
+            width: 100%;
+            font-size: 13px;
+            border-collapse: collapse;
+        }
+
+        .params-table th {
+            text-align: left;
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            font-weight: 500;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        .params-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+
+        .params-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .params-table td:last-child {
+            color: var(--text-muted);
+            font-weight: normal;
+        }
+
+        .param-name {
+            font-weight: 500;
+            color: var(--accent);
+        }
+
+        .param-required {
+            color: var(--error);
+            font-size: 11px;
+        }
+
+        .param-type {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* Status Codes */
+        .status-codes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .status-code {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .status-code .code {
+            font-weight: 600;
+        }
+
+        .status-code.success .code {
+            color: var(--success);
+        }
+
+        .status-code.error .code {
+            color: var(--error);
+        }
+
+        .status-code.warning .code {
+            color: var(--warning);
+        }
+
+        /* Common Endpoints */
+        .common-endpoints {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+            margin-bottom: 32px;
+        }
+
+        .common-endpoints h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .common-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .common-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+        }
+
+        .common-item .method {
+            font-size: 10px;
+        }
+
+        .common-item .path {
+            color: var(--text-muted);
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .service-nav { flex-direction: column; }
+            .endpoint-header { flex-wrap: wrap; }
+            .endpoint-desc { margin-left: 0; margin-top: 8px; width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div>
+                    <div class="logo"><span>O</span>TTO <span style="font-size: 16px; color: var(--text-muted); letter-spacing: 2px;">API</span></div>
+                </div>
+                <nav class="header-nav">
+                    <a href="index.html">Home</a>
+                    <a href="{{ config.github_url }}">GitHub</a>
+                </nav>
+            </div>
+        </header>
+
+        <main>
+            <!-- Hero -->
+            <section class="hero">
+                <h1>REST API Documentation</h1>
+                <p>
+                    All OTTO services expose RESTful APIs with JSON responses. Each service includes
+                    rate limiting, work queue backpressure, CORS support, and Prometheus metrics.
+                </p>
+            </section>
+
+            <!-- Service Navigation -->
+            <nav class="service-nav">
+{% for module in config.modules %}
+                <a href="#{{ module.id }}">
+                    <span>{{ module.icon }}</span>
+                    <span>{{ module.name | replace(" Server", "") | replace(" Optimizer", "") | replace(" Geocoder", "") }}</span>
+                    <span class="port">:{{ module.port }}</span>
+                </a>
+{% endfor %}
+            </nav>
+
+            <!-- Common Endpoints -->
+            <section class="service-section">
+                <div class="common-endpoints">
+                    <h3>Common Endpoints (All Services)</h3>
+                    <div class="common-list">
+{% for ep in config.common_endpoints %}
+                        <div class="common-item">
+                            <span class="method {{ ep.method | lower }}">{{ ep.method }}</span>
+                            <span class="path">{{ ep.path }}</span>
+                        </div>
+{% endfor %}
+                    </div>
+                </div>
+
+                <!-- Health Endpoint -->
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/health</span>
+                        <span class="endpoint-desc">Health check (bypasses rate limit and queue)</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"healthy"</span>,
+  <span class="key">"service"</span>: <span class="string">"carta"</span>,
+  <span class="key">"version"</span>: <span class="string">"1.0.0"</span>
+}</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <button class="try-btn" id="health-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="health-output">
+                                <div class="code-block">
+                                    <pre id="health-result"></pre>
+                                </div>
+                                <div class="demo-status" id="health-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Stats Endpoint -->
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/stats</span>
+                        <span class="endpoint-desc">Server statistics (bypasses queue)</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"service"</span>: <span class="string">"carta"</span>,
+  <span class="key">"work_queue"</span>: {
+    <span class="key">"enabled"</span>: <span class="number">true</span>,
+    <span class="key">"depth"</span>: <span class="number">5</span>,
+    <span class="key">"capacity"</span>: <span class="number">256</span>,
+    <span class="key">"pushed"</span>: <span class="number">1234</span>,
+    <span class="key">"popped"</span>: <span class="number">1230</span>,
+    <span class="key">"dropped"</span>: <span class="number">2</span>,
+    <span class="key">"expired"</span>: <span class="number">2</span>
+  },
+  <span class="key">"rate_limit"</span>: {
+    <span class="key">"enabled"</span>: <span class="number">true</span>,
+    <span class="key">"rps"</span>: <span class="number">10.0</span>,
+    <span class="key">"burst"</span>: <span class="number">100</span>,
+    <span class="key">"allowed"</span>: <span class="number">5678</span>,
+    <span class="key">"denied"</span>: <span class="number">42</span>
+  }
+}</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <button class="try-btn" id="stats-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="stats-output">
+                                <div class="code-block">
+                                    <pre id="stats-result"></pre>
+                                </div>
+                                <div class="demo-status" id="stats-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Metrics Endpoint -->
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/metrics</span>
+                        <span class="endpoint-desc">Prometheus metrics</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre><span class="comment"># HELP carta_requests_total Total HTTP requests</span>
+<span class="comment"># TYPE carta_requests_total counter</span>
+carta_requests_total{status="200"} 1234
+carta_requests_total{status="404"} 12
+<span class="comment"># HELP carta_request_duration_ms Request duration in milliseconds</span>
+<span class="comment"># TYPE carta_request_duration_ms histogram</span>
+carta_request_duration_ms_bucket{le="10"} 500
+carta_request_duration_ms_bucket{le="50"} 1100
+carta_request_duration_ms_bucket{le="100"} 1200</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Module Sections (generated from annotations) -->
+{% for module in config.modules %}
+            <!-- ============================================================ -->
+            <!-- {{ module.id | upper }} -->
+            <!-- ============================================================ -->
+            <section id="{{ module.id }}" class="service-section">
+                <div class="service-header">
+                    <div class="service-icon">{{ module.icon }}</div>
+                    <div>
+                        <div class="service-title">{{ module.name }}</div>
+                        <div class="service-port">Default port: {{ module.port }}</div>
+                    </div>
+                </div>
+                <p class="service-desc">
+                    {{ module.description }}
+                </p>
+
+                <!-- Endpoints generated from {{ module.header_file }} annotations -->
+{{ endpoints[module.id] }}
+            </section>
+
+{% endfor %}
+            <!-- Status Codes -->
+            <section class="service-section">
+                <h2 style="font-size: 18px; margin-bottom: 24px;">HTTP Status Codes</h2>
+                <div class="status-codes">
+{% for sc in config.status_codes %}
+                    <div class="status-code {{ sc.type }}"><span class="code">{{ sc.code }}</span> {{ sc.text }}</div>
+{% endfor %}
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <div class="footer-links">
+                <a href="index.html">Home</a>
+                <a href="{{ config.github_url }}">GitHub</a>
+            </div>
+            <div>&copy; 2024-2026 OTTO Platform</div>
+        </footer>
+    </div>
+
+    <!-- WASM Demo Script -->
+    <script>
+    (function() {
+        'use strict';
+
+        // WASM Demo instances
+{% for module in config.modules %}
+{% if module.wasm.enabled %}
+        let {{ module.id }}Demo = null;
+{% endif %}
+{% endfor %}
+
+        // Format JSON with syntax highlighting (matches code-block style)
+        function formatJsonWithHighlighting(obj, indent = 0) {
+            const spaces = '  '.repeat(indent);
+            const nextSpaces = '  '.repeat(indent + 1);
+
+            if (obj === null) return '<span class="number">null</span>';
+            if (typeof obj === 'boolean') return `<span class="number">${obj}</span>`;
+            if (typeof obj === 'number') return `<span class="number">${obj}</span>`;
+            if (typeof obj === 'string') return `<span class="string">"${obj}"</span>`;
+
+            if (Array.isArray(obj)) {
+                if (obj.length === 0) return '[]';
+                // For short arrays of primitives, keep on one line
+                if (obj.every(v => typeof v !== 'object') && obj.length <= 4) {
+                    const items = obj.map(v => formatJsonWithHighlighting(v, 0)).join(', ');
+                    return `[${items}]`;
+                }
+                const items = obj.map(v => nextSpaces + formatJsonWithHighlighting(v, indent + 1));
+                return `[\n${items.join(',\n')}\n${spaces}]`;
+            }
+
+            if (typeof obj === 'object') {
+                const keys = Object.keys(obj);
+                if (keys.length === 0) return '{}';
+                const items = keys.map(key => {
+                    const value = formatJsonWithHighlighting(obj[key], indent + 1);
+                    return `${nextSpaces}<span class="key">"${key}"</span>: ${value}`;
+                });
+                return `{\n${items.join(',\n')}\n${spaces}}`;
+            }
+
+            return String(obj);
+        }
+
+        // Helper to enable a button
+        function enableBtn(id, label) {
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.textContent = label;
+                btn.disabled = false;
+            }
+        }
+
+        // Helper to disable a button with error state
+        function disableBtn(id) {
+            const btn = document.getElementById(id);
+            if (btn) {
+                btn.textContent = 'WASM unavailable';
+                btn.disabled = true;
+            }
+        }
+
+{% for module in config.modules %}
+{% if module.wasm.enabled %}
+        // {{ module.name }} WASM init
+        async function init{{ module.id | capitalize }}Wasm() {
+            try {
+                if (typeof {{ module.wasm.class_name }} === 'undefined') {
+                    throw new Error('{{ module.wasm.class_name }} class not loaded');
+                }
+
+                {{ module.id }}Demo = new {{ module.wasm.class_name }}();
+                await {{ module.id }}Demo.init();
+
+                // Enable WASM demo buttons for {{ module.id }}
+{{ wasm_init_code[module.id] | default("                // TODO: Enable demo buttons") }}
+            } catch (err) {
+                console.error('{{ module.name }} WASM init failed:', err);
+{{ wasm_error_code[module.id] | default("                // TODO: Handle error") }}
+            }
+        }
+
+{% endif %}
+{% endfor %}
+        // Generic JSON endpoint fetcher
+        async function fetchJsonEndpoint(demo, endpoint, btnId, resultId, statusId, outputId, btnLabel) {
+            if (!demo || !demo.isReady()) return;
+
+            const btn = document.getElementById(btnId);
+            const result = document.getElementById(resultId);
+            const status = document.getElementById(statusId);
+            const output = document.getElementById(outputId);
+
+            btn.disabled = true;
+            btn.textContent = 'Fetching...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const response = await demo.fetch(endpoint);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                result.innerHTML = formatJsonWithHighlighting(data);
+                status.textContent = `Fetched in ${elapsed}ms`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error(`${endpoint} fetch failed:`, err);
+                result.textContent = '';
+                status.textContent = 'Error: ' + err.message;
+                status.className = 'demo-status error';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = btnLabel;
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+{% for module in config.modules %}
+{% if module.wasm.enabled %}
+            init{{ module.id | capitalize }}Wasm();
+{% endif %}
+{% endfor %}
+
+            // Button click handlers (generated from annotations)
+{{ button_handlers }}
+        });
+    })();
+    </script>
+</body>
+</html>

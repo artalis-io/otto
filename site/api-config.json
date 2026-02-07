@@ -1,0 +1,90 @@
+{
+  "title": "OTTO API Documentation",
+  "description": "REST API documentation for OTTO platform services: Carta tile server, Velo routing, Locus geocoding, and FuelWise optimization.",
+  "canonical_url": "https://ottofleet.io/api.html",
+  "github_url": "https://github.com/ottofleet/otto",
+
+  "modules": [
+    {
+      "id": "carta",
+      "name": "Carta Tile Server",
+      "icon": "🗺️",
+      "port": 8081,
+      "description": "Serves vector tiles (MVT), raster tiles (PNG), and ASCII art tiles from OSM PBF files. Compatible with Leaflet, MapLibre, Google Maps, and OpenLayers.",
+      "header_file": "carta/include/ct_api.h",
+      "wasm": {
+        "enabled": true,
+        "script": "wasm/carta-api-demo.js",
+        "wrapper": "js/carta-api-demo.js",
+        "factory_name": "CartaAPIDemo",
+        "class_name": "CartaDemo"
+      }
+    },
+    {
+      "id": "velo",
+      "name": "Velo Route Server",
+      "icon": "🛣️",
+      "port": 8082,
+      "description": "Route planning between coordinates with vehicle profiles, optimization modes, and Google Polyline encoded geometry. Uses A* with Landmarks for fast queries.",
+      "header_file": "velo/api/src/main.c",
+      "wasm": {
+        "enabled": false
+      }
+    },
+    {
+      "id": "locus",
+      "name": "Locus Geocoder",
+      "icon": "📍",
+      "port": 8083,
+      "description": "Forward geocoding (text search), autocomplete, and reverse geocoding (coordinate to address). Uses trie + trigram index for fast fuzzy matching.",
+      "header_file": "locus/api/src/main.c",
+      "wasm": {
+        "enabled": false
+      }
+    },
+    {
+      "id": "fuelwise",
+      "name": "FuelWise Optimizer",
+      "icon": "⛽",
+      "port": 8080,
+      "description": "Refueling optimization using Linear Programming. Finds minimum-cost fuel stops along a route considering tank capacity, fuel prices, and consumption patterns.",
+      "header_file": "fuelwise/api/src/main.c",
+      "wasm": {
+        "enabled": false
+      }
+    }
+  ],
+
+  "common_endpoints": [
+    {
+      "method": "GET",
+      "path": "/api/v1/health",
+      "description": "Health check (bypasses rate limit and queue)",
+      "wasm_demo": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/stats",
+      "description": "Server statistics (bypasses queue)",
+      "wasm_demo": true
+    },
+    {
+      "method": "GET",
+      "path": "/metrics",
+      "description": "Prometheus metrics",
+      "wasm_demo": false
+    }
+  ],
+
+  "status_codes": [
+    {"code": 200, "text": "Success", "type": "success"},
+    {"code": 400, "text": "Bad Request", "type": "error"},
+    {"code": 404, "text": "Not Found", "type": "error"},
+    {"code": 405, "text": "Method Not Allowed", "type": "error"},
+    {"code": 422, "text": "Infeasible Problem", "type": "warning"},
+    {"code": 429, "text": "Rate Limited", "type": "warning"},
+    {"code": 500, "text": "Server Error", "type": "error"},
+    {"code": 503, "text": "Queue Full", "type": "warning"},
+    {"code": 504, "text": "Request Timeout", "type": "warning"}
+  ]
+}
