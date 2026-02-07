@@ -154,13 +154,17 @@ static uint32_t hash_string(const char *str) {
     return hash;
 }
 
-static void pool_init(StringPool *pool) {
+static int pool_init(StringPool *pool) {
     memset(pool, 0, sizeof(StringPool));
     for (int i = 0; i < HASH_TABLE_SIZE; i++) {
         pool->buckets[i] = -1;
     }
     pool->entry_capacity = 4096;
     pool->entries = malloc(pool->entry_capacity * sizeof(StringEntry));
+    if (!pool->entries) {
+        return -1;  /* Allocation failed */
+    }
+    return 0;
 }
 
 static void pool_free(StringPool *pool) {
@@ -553,7 +557,10 @@ LCStatus lc_index_save(const LCIndex *index, const char *path)
 
     /* Initialize serializers */
     StringPool pool;
-    pool_init(&pool);
+    if (pool_init(&pool) != 0) {
+        fclose(f);
+        return LC_ERROR_OUT_OF_MEMORY;
+    }
 
     TrieSerializer ts;
     trie_serializer_init(&ts);

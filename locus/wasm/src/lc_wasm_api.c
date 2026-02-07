@@ -23,10 +23,17 @@
 #define WASM_EXPORT
 #endif
 
-/* Global index (initialized once) */
+/*
+ * Global State
+ *
+ * THREAD SAFETY: These static globals are acceptable because WASM runs
+ * single-threaded in the browser. The index is initialized once and
+ * read-only thereafter. Response buffers are written per-request with
+ * no concurrent access possible in the JS event loop model.
+ */
 static LCIndex *g_index = NULL;
 
-/* Response buffer for JSON */
+/* Response buffer for JSON (single-threaded WASM - no concurrent access) */
 static char g_response_buf[65536];
 static size_t g_response_len = 0;
 static int g_response_status = 200;
