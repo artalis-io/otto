@@ -208,6 +208,37 @@ make test-{carta,velo,locus,fuelwise}-api
 
 **Fuse** provides confidence-weighted vehicle state to all engines. Geofencing is part of Fuse (requires position confidence for reliable triggers).
 
+## Transport-Agnostic API Design
+
+OTTO APIs follow a transport-agnostic pattern. Core logic is pure C functions; HTTP/WASM/embedded are thin wrappers.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Transport Layer (thin, ~10 lines each)             │
+│  Mongoose HTTP │ WASM+JS │ Unix socket │ Embedded   │
+├─────────────────────────────────────────────────────┤
+│  Core API (pure C functions)                        │
+│  carta_render_tile() │ vl_route() │ lc_search()     │
+└─────────────────────────────────────────────────────┘
+```
+
+**Pattern:**
+```c
+// Core: transport-agnostic, runs anywhere
+int carta_render_tile(int z, int x, int y, uint8_t **out, size_t *len);
+
+// HTTP wrapper: parse request → call core → format response
+// WASM wrapper: parse JSON → call core → return JSON
+// Embedded: direct call
+```
+
+**Benefits:**
+- **Demo IS the product** - Browser WASM runs the actual algorithms
+- **Zero-infrastructure eval** - Single HTML file, no server needed
+- **Edge-ready by design** - If it runs in WASM, it runs anywhere
+
+See `docs/TRANSPORT_AGNOSTIC.md` for the full manifesto.
+
 ## Skills Reference
 
 | Skill | Purpose |
@@ -220,8 +251,10 @@ make test-{carta,velo,locus,fuelwise}-api
 ## Documentation Links
 
 - `docs/ARCHITECTURE.md` - System architecture
+- `docs/TRANSPORT_AGNOSTIC.md` - Transport-agnostic API design philosophy
 - `docs/STRATEGY.md` - Business strategy
 - `docs/TODO_FEATURES.md` - Planned components (Fuse, HoSE, Tempo, Arbor, Sigma, Pulse, Atlas, Quota, etc.)
+- `clayshards/clay-shards/MANIFESTO.md` - ClayShards frontend philosophy (companion to Transport-Agnostic)
 
 ## Vendor Libraries
 

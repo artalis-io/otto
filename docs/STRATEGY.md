@@ -1904,5 +1904,76 @@ Result: 5x smaller attack surface, 3x faster iteration, zero "works on server bu
 
 ---
 
-*Document version: 1.7*
+## 18. Business Outcome Scenarios
+
+### 18.1 Outcome Range
+
+| Scenario | Probability | Outcome | Path |
+|----------|-------------|---------|------|
+| **Base case** | 50% | $20-50M exit or $5-10M ARR | Land 2-3 former clients, become the "not Trimble" option |
+| **Upside** | 30% | $100-200M exit | Fleet + emissions both work, strategic acquisition |
+| **Big upside** | 10% | $500M+ | Emissions network becomes transport carbon standard |
+| **Downside** | 10% | Break-even / acquihire | Sales slower, pivot to services, sell IP + team |
+
+**Expected value**: $50-100M with meaningful optionality above.
+
+### 18.2 Why True Failure Is Unlikely
+
+1. **Fortress runway** — $25M+ collective liquid means 5+ years of iteration
+2. **Warm relationships** — Not cold-starting sales; former clients already trust us
+3. **Emissions pivot** — Real backup using same stack and relationships
+4. **Acquihire floor** — Technical stack alone worth $5-10M to right buyer
+5. **Regulatory tailwind** — CSRD enforcement creates demand for emissions network
+
+### 18.3 The Trimble Window
+
+Former clients are nervous *now*. This is a time-sensitive wedge:
+
+| Timeline | Trimble Status | OTTO Opportunity |
+|----------|----------------|------------------|
+| Now - 12 months | Integration uncertainty | **Maximum opportunity** — clients actively looking for alternatives |
+| 12-24 months | Stabilizing or failing | Window closing if stabilizing; accelerating if failing |
+| 24+ months | Integrated or divested | Window closed; compete on product merit only |
+
+**Strategic implication**: Fleet planning has time-sensitive wedge. Emissions network has longer runway but less urgency. Prioritize fleet deals while Trimble window is open.
+
+### 18.4 Emissions as Strategic Optionality
+
+The emissions network (Section 16) isn't a desperate pivot—it's a parallel bet using the same assets:
+
+| Asset | Fleet Planning Use | Emissions Network Use |
+|-------|-------------------|----------------------|
+| Carrier relationships | Planning software sales | Network seeding |
+| Routing/optimization | Route planning | Emissions calculation |
+| Technical stack | Edge deployment | Verification layer |
+| Regulatory expertise | HoS compliance | CSRD compliance |
+
+If fleet planning stalls, emissions isn't "pivot to something random"—it's the same relationships, same tech, different revenue model.
+
+### 18.5 The Real Risk
+
+The risk isn't failure—it's allocation. Spending 5 years building something worth $30M when it could have been $300M.
+
+Key allocation questions:
+- **Fleet vs emissions**: Which has better risk-adjusted return?
+- **Depth vs breadth**: Nail 3 carriers or spread across 10?
+- **Build vs integrate**: Native Ralph or Gurobi interface?
+
+These are optimization questions, not survival questions.
+
+### 18.6 Sales Positioning
+
+The pitch is **"You'll never be locked in again"**—not "we're open source."
+
+| Wrong Pitch | Right Pitch |
+|-------------|-------------|
+| "We're open source" | "You'll never be locked in again" |
+| "Look at our architecture" | "Same code runs in the truck, no connectivity needed" |
+| "We built everything in C" | "Try it now—this HTML file runs the real product" |
+
+Open source is the *proof* of the no-lock-in promise, not the headline. Enterprise buyers don't care about ideology; they care about not getting screwed by acquisitions.
+
+---
+
+*Document version: 1.8*
 *Last updated: February 2026*
