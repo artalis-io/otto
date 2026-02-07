@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OTTO API Documentation</title>
+    <meta name="description" content="REST API documentation for OTTO platform services: Carta tile server, Velo routing, Locus geocoding, and FuelWise optimization.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/api.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="style.css">
+
+    <!-- API-specific Styles -->
+    <style>
+        /* Service Navigation */
+        .service-nav {
+            padding: 24px 0;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .service-nav a {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 14px;
+            transition: border-color 0.15s;
+        }
+
+        .service-nav a:hover {
+            border-color: var(--accent);
+            text-decoration: none;
+        }
+
+        .service-nav .port {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* Service Section */
+        .service-section {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .service-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .service-icon {
+            font-size: 32px;
+        }
+
+        .service-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .service-port {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .service-desc {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 32px;
+            max-width: 700px;
+        }
+
+        /* Endpoint */
+        .endpoint {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 16px;
+        }
+
+        .endpoint-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .method {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .method.get {
+            background: #1e3a5f;
+            color: #60a5fa;
+        }
+
+        .method.post {
+            background: #1e4620;
+            color: #4ade80;
+        }
+
+        .path {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .endpoint-desc {
+            color: var(--text-muted);
+            font-size: 13px;
+            margin-left: auto;
+        }
+
+        .endpoint-body {
+            padding: 20px;
+        }
+
+        .endpoint-section {
+            margin-bottom: 20px;
+        }
+
+        .endpoint-section:last-child {
+            margin-bottom: 0;
+        }
+
+        .endpoint-section h4 {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+
+        /* Parameters Table */
+        .params-table {
+            width: 100%;
+            font-size: 13px;
+            border-collapse: collapse;
+        }
+
+        .params-table th {
+            text-align: left;
+            padding: 8px 12px;
+            background: var(--bg-tertiary);
+            font-weight: 500;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        .params-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+
+        .params-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .params-table td:last-child {
+            color: var(--text-muted);
+            font-weight: normal;
+        }
+
+        .param-name {
+            font-weight: 500;
+            color: var(--accent);
+        }
+
+        .param-required {
+            color: var(--error);
+            font-size: 11px;
+        }
+
+        .param-type {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        /* Status Codes */
+        .status-codes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .status-code {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .status-code .code {
+            font-weight: 600;
+        }
+
+        .status-code.success .code {
+            color: var(--success);
+        }
+
+        .status-code.error .code {
+            color: var(--error);
+        }
+
+        .status-code.warning .code {
+            color: var(--warning);
+        }
+
+        /* Common Endpoints */
+        .common-endpoints {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+            margin-bottom: 32px;
+        }
+
+        .common-endpoints h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .common-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .common-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+        }
+
+        .common-item .method {
+            font-size: 10px;
+        }
+
+        .common-item .path {
+            color: var(--text-muted);
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .service-nav { flex-direction: column; }
+            .endpoint-header { flex-wrap: wrap; }
+            .endpoint-desc { margin-left: 0; margin-top: 8px; width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div>
+                    <div class="logo"><span>O</span>TTO <span style="font-size: 16px; color: var(--text-muted); letter-spacing: 2px;">API</span></div>
+                </div>
+                <nav class="header-nav">
+                    <a href="index.html">Home</a>
+                    <a href="https://github.com/ottofleet/otto">GitHub</a>
+                </nav>
+            </div>
+        </header>
+
+        <main>
+            <!-- Hero -->
+            <section class="hero">
+                <h1>REST API Documentation</h1>
+                <p>
+                    All OTTO services expose RESTful APIs with JSON responses. Each service includes
+                    rate limiting, work queue backpressure, CORS support, and Prometheus metrics.
+                </p>
+            </section>
+
+            <!-- Service Navigation -->
+            <nav class="service-nav">
+                <a href="#carta">
+                    <span>🗺️</span>
+                    <span>Carta</span>
+                    <span class="port">:8081</span>
+                </a>
+                <a href="#velo">
+                    <span>🛣️</span>
+                    <span>Velo</span>
+                    <span class="port">:8082</span>
+                </a>
+                <a href="#locus">
+                    <span>📍</span>
+                    <span>Locus</span>
+                    <span class="port">:8083</span>
+                </a>
+                <a href="#fuelwise">
+                    <span>⛽</span>
+                    <span>FuelWise</span>
+                    <span class="port">:8080</span>
+                </a>
+            </nav>
+
+            <!-- Common Endpoints -->
+            <section class="service-section">
+                <div class="common-endpoints">
+                    <h3>Common Endpoints (All Services)</h3>
+                    <div class="common-list">
+                        <div class="common-item">
+                            <span class="method get">GET</span>
+                            <span class="path">/api/v1/health</span>
+                        </div>
+                        <div class="common-item">
+                            <span class="method get">GET</span>
+                            <span class="path">/api/v1/stats</span>
+                        </div>
+                        <div class="common-item">
+                            <span class="method get">GET</span>
+                            <span class="path">/metrics</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/health</span>
+                        <span class="endpoint-desc">Health check (bypasses rate limit and queue)</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"healthy"</span>,
+  <span class="key">"service"</span>: <span class="string">"carta"</span>,
+  <span class="key">"version"</span>: <span class="string">"1.0.0"</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/stats</span>
+                        <span class="endpoint-desc">Server statistics (bypasses queue)</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"service"</span>: <span class="string">"carta"</span>,
+  <span class="key">"work_queue"</span>: {
+    <span class="key">"enabled"</span>: <span class="number">true</span>,
+    <span class="key">"depth"</span>: <span class="number">5</span>,
+    <span class="key">"capacity"</span>: <span class="number">256</span>,
+    <span class="key">"pushed"</span>: <span class="number">1234</span>,
+    <span class="key">"popped"</span>: <span class="number">1230</span>,
+    <span class="key">"dropped"</span>: <span class="number">2</span>,
+    <span class="key">"expired"</span>: <span class="number">2</span>
+  },
+  <span class="key">"rate_limit"</span>: {
+    <span class="key">"enabled"</span>: <span class="number">true</span>,
+    <span class="key">"rps"</span>: <span class="number">10.0</span>,
+    <span class="key">"burst"</span>: <span class="number">100</span>,
+    <span class="key">"allowed"</span>: <span class="number">5678</span>,
+    <span class="key">"denied"</span>: <span class="number">42</span>
+  }
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================================ -->
+            <!-- CARTA -->
+            <!-- ============================================================ -->
+            <section id="carta" class="service-section">
+                <div class="service-header">
+                    <div class="service-icon">🗺️</div>
+                    <div>
+                        <div class="service-title">Carta Tile Server</div>
+                        <div class="service-port">Default port: 8081</div>
+                    </div>
+                </div>
+                <p class="service-desc">
+                    Serves vector tiles (MVT), raster tiles (PNG), and ASCII art tiles from OSM PBF files.
+                    Compatible with Leaflet, MapLibre, Google Maps, and OpenLayers.
+                </p>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/tiles/{z}/{x}/{y}.png</span>
+                        <span class="endpoint-desc">Raster tile (PNG)</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Path Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">z</span> <span class="param-required">required</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Zoom level (0-18)</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">x</span> <span class="param-required">required</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Tile X coordinate</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">y</span> <span class="param-required">required</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Tile Y coordinate</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="comment"># Get tile at zoom 14, Budapest area</span>
+<span class="command">curl</span> <span class="url">http://localhost:8081/tiles/14/9058/5729.png</span> -o tile.png</pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <p style="color: var(--text-muted); font-size: 13px;">PNG image (512x512 by default). Content-Type: image/png</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/tiles/{z}/{x}/{y}.mvt</span>
+                        <span class="endpoint-desc">Vector tile (MVT/Protobuf)</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <p style="color: var(--text-muted); font-size: 13px;">
+                                Mapbox Vector Tile format. Content-Type: application/x-protobuf.
+                                Use with MapLibre GL JS or similar vector tile renderers.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/tiles/{z}/{x}/{y}.txt</span>
+                        <span class="endpoint-desc">ASCII art tile</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Query Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">width</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Output width in characters (20-400, default: 80)</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">height</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Output height (0=auto from aspect ratio)</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">charset</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>simple, extended (default), blocks, braille</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">invert</span></td>
+                                    <td><span class="param-type">bool</span></td>
+                                    <td>1 for light background terminals</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">color</span></td>
+                                    <td><span class="param-type">bool</span></td>
+                                    <td>1 for ANSI 256-color output</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="comment"># ASCII map in terminal</span>
+<span class="command">curl</span> <span class="url">"http://localhost:8081/tiles/14/9058/5729.txt?width=120&charset=blocks"</span></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/tiles.json</span>
+                        <span class="endpoint-desc">TileJSON metadata</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"tilejson"</span>: <span class="string">"2.2.0"</span>,
+  <span class="key">"name"</span>: <span class="string">"OTTO Carta"</span>,
+  <span class="key">"minzoom"</span>: <span class="number">0</span>,
+  <span class="key">"maxzoom"</span>: <span class="number">18</span>,
+  <span class="key">"bounds"</span>: [<span class="number">16.11</span>, <span class="number">45.74</span>, <span class="number">22.90</span>, <span class="number">48.58</span>],
+  <span class="key">"center"</span>: [<span class="number">19.50</span>, <span class="number">47.16</span>, <span class="number">7</span>],
+  <span class="key">"tiles"</span>: [<span class="string">"http://localhost:8081/tiles/{z}/{x}/{y}.png"</span>]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================================ -->
+            <!-- VELO -->
+            <!-- ============================================================ -->
+            <section id="velo" class="service-section">
+                <div class="service-header">
+                    <div class="service-icon">🛣️</div>
+                    <div>
+                        <div class="service-title">Velo Route Server</div>
+                        <div class="service-port">Default port: 8082</div>
+                    </div>
+                </div>
+                <p class="service-desc">
+                    Route planning between coordinates with vehicle profiles, optimization modes,
+                    and Google Polyline encoded geometry. Uses A* with Landmarks for fast queries.
+                </p>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/route</span>
+                        <span class="endpoint-desc">Calculate route</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Query Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">from</span> <span class="param-required">required</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>Origin coordinates (lat,lon)</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">to</span> <span class="param-required">required</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>Destination coordinates (lat,lon)</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">profile</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>car (default), truck, bike, foot</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">mode</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>fastest (default), shortest</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">geometry</span></td>
+                                    <td><span class="param-type">bool</span></td>
+                                    <td>Include polyline (default: true)</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="comment"># Route from Budapest to Debrecen</span>
+<span class="command">curl</span> <span class="url">"http://localhost:8082/api/v1/route?from=47.497,19.040&to=47.531,21.627&profile=truck"</span></pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"ok"</span>,
+  <span class="key">"route"</span>: {
+    <span class="key">"distance"</span>: <span class="number">231245.5</span>,
+    <span class="key">"duration"</span>: <span class="number">9123.4</span>,
+    <span class="key">"profile"</span>: <span class="string">"truck"</span>,
+    <span class="key">"mode"</span>: <span class="string">"fastest"</span>,
+    <span class="key">"from"</span>: [<span class="number">47.497</span>, <span class="number">19.040</span>],
+    <span class="key">"to"</span>: [<span class="number">47.531</span>, <span class="number">21.627</span>],
+    <span class="key">"geometry"</span>: <span class="string">"_p~iF~ps|U_ulLnnqC..."</span>
+  },
+  <span class="key">"meta"</span>: {
+    <span class="key">"nodes_explored"</span>: <span class="number">12543</span>,
+    <span class="key">"search_time_ms"</span>: <span class="number">34.5</span>
+  }
+}</pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Vehicle Profiles</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Profile</th>
+                                    <th colspan="2">Avoids</th>
+                                </tr>
+                                <tr>
+                                    <td>car</td>
+                                    <td colspan="2">Nothing (all roads)</td>
+                                </tr>
+                                <tr>
+                                    <td>truck</td>
+                                    <td colspan="2">Roads with hgv=no, residential, service</td>
+                                </tr>
+                                <tr>
+                                    <td>bike</td>
+                                    <td colspan="2">Motorways, trunk roads</td>
+                                </tr>
+                                <tr>
+                                    <td>foot</td>
+                                    <td colspan="2">Motorways, trunk, primary roads</td>
+                                </tr>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================================ -->
+            <!-- LOCUS -->
+            <!-- ============================================================ -->
+            <section id="locus" class="service-section">
+                <div class="service-header">
+                    <div class="service-icon">📍</div>
+                    <div>
+                        <div class="service-title">Locus Geocoder</div>
+                        <div class="service-port">Default port: 8083</div>
+                    </div>
+                </div>
+                <p class="service-desc">
+                    Forward geocoding (text search), autocomplete, and reverse geocoding (coordinate to address).
+                    Uses trie + trigram index for fast fuzzy matching.
+                </p>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/search</span>
+                        <span class="endpoint-desc">Forward geocoding</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Query Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">q</span> <span class="param-required">required</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>Search query (UTF-8)</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">limit</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Max results (default: 10, max: 100)</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="command">curl</span> <span class="url">"http://localhost:8083/api/v1/search?q=Budapest&limit=5"</span></pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"query"</span>: <span class="string">"Budapest"</span>,
+  <span class="key">"total"</span>: <span class="number">3</span>,
+  <span class="key">"took_ms"</span>: <span class="number">0.12</span>,
+  <span class="key">"results"</span>: [
+    {
+      <span class="key">"osm_id"</span>: <span class="number">21583</span>,
+      <span class="key">"osm_type"</span>: <span class="string">"relation"</span>,
+      <span class="key">"name"</span>: <span class="string">"Budapest"</span>,
+      <span class="key">"class"</span>: <span class="string">"place"</span>,
+      <span class="key">"lat"</span>: <span class="number">47.4979</span>,
+      <span class="key">"lon"</span>: <span class="number">19.0402</span>,
+      <span class="key">"score"</span>: <span class="number">1.0</span>
+    }
+  ]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/autocomplete</span>
+                        <span class="endpoint-desc">Prefix completion</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Query Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">q</span> <span class="param-required">required</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>Prefix to complete</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">limit</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Max results (default: 10, max: 20)</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>[<span class="string">"Budapest"</span>, <span class="string">"Budaörs"</span>, <span class="string">"Budakeszi"</span>]</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/reverse</span>
+                        <span class="endpoint-desc">Reverse geocoding</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Query Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">lat</span> <span class="param-required">required</span></td>
+                                    <td><span class="param-type">float</span></td>
+                                    <td>Latitude</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">lon</span> <span class="param-required">required</span></td>
+                                    <td><span class="param-type">float</span></td>
+                                    <td>Longitude</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="command">curl</span> <span class="url">"http://localhost:8083/api/v1/reverse?lat=47.4979&lon=19.0402"</span></pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"lat"</span>: <span class="number">47.4979</span>,
+  <span class="key">"lon"</span>: <span class="number">19.0402</span>,
+  <span class="key">"display_name"</span>: <span class="string">"Kossuth Lajos tér, Budapest"</span>,
+  <span class="key">"distance_m"</span>: <span class="number">12.5</span>,
+  <span class="key">"place"</span>: <span class="string">"Budapest"</span>,
+  <span class="key">"street"</span>: <span class="string">"Kossuth Lajos tér"</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================================ -->
+            <!-- FUELWISE -->
+            <!-- ============================================================ -->
+            <section id="fuelwise" class="service-section">
+                <div class="service-header">
+                    <div class="service-icon">⛽</div>
+                    <div>
+                        <div class="service-title">FuelWise Optimizer</div>
+                        <div class="service-port">Default port: 8080</div>
+                    </div>
+                </div>
+                <p class="service-desc">
+                    Refueling optimization using Linear Programming. Finds minimum-cost fuel stops
+                    along a route considering tank capacity, fuel prices, and consumption patterns.
+                </p>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method post">POST</span>
+                        <span class="path">/api/v1/solve</span>
+                        <span class="endpoint-desc">Solve refueling problem</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Request Body</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"total_distance"</span>: <span class="number">500</span>,
+  <span class="key">"tank_capacity"</span>: <span class="number">100</span>,
+  <span class="key">"current_fuel"</span>: <span class="number">30</span>,
+  <span class="key">"consumption_mpg"</span>: <span class="number">8</span>,
+  <span class="key">"minimum_fuel"</span>: <span class="number">10</span>,
+  <span class="key">"stations"</span>: [
+    {<span class="key">"id"</span>: <span class="number">1</span>, <span class="key">"distance"</span>: <span class="number">100</span>, <span class="key">"price"</span>: <span class="number">3.50</span>},
+    {<span class="key">"id"</span>: <span class="number">2</span>, <span class="key">"distance"</span>: <span class="number">250</span>, <span class="key">"price"</span>: <span class="number">3.25</span>},
+    {<span class="key">"id"</span>: <span class="number">3</span>, <span class="key">"distance"</span>: <span class="number">400</span>, <span class="key">"price"</span>: <span class="number">3.40</span>}
+  ],
+  <span class="key">"segments"</span>: [
+    {<span class="key">"start"</span>: <span class="number">0</span>, <span class="key">"mpg"</span>: <span class="number">6.0</span>, <span class="key">"weight"</span>: <span class="number">45000</span>},
+    {<span class="key">"start"</span>: <span class="number">200</span>, <span class="key">"mpg"</span>: <span class="number">8.0</span>, <span class="key">"weight"</span>: <span class="number">30000</span>}
+  ]
+}</pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"optimal"</span>,
+  <span class="key">"total_cost"</span>: <span class="number">187.50</span>,
+  <span class="key">"purchases"</span>: [
+    {<span class="key">"station_id"</span>: <span class="number">2</span>, <span class="key">"gallons"</span>: <span class="number">45.5</span>, <span class="key">"cost"</span>: <span class="number">147.88</span>},
+    {<span class="key">"station_id"</span>: <span class="number">3</span>, <span class="key">"gallons"</span>: <span class="number">11.7</span>, <span class="key">"cost"</span>: <span class="number">39.62</span>}
+  ],
+  <span class="key">"final_fuel"</span>: <span class="number">15.3</span>,
+  <span class="key">"solve_time_ms"</span>: <span class="number">2.3</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method post">POST</span>
+                        <span class="path">/api/v1/filter</span>
+                        <span class="endpoint-desc">Filter stations to route</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Request Body</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"stations"</span>: [
+    {<span class="key">"id"</span>: <span class="number">1</span>, <span class="key">"lat"</span>: <span class="number">34.0</span>, <span class="key">"lon"</span>: <span class="number">-118.0</span>, <span class="key">"price"</span>: <span class="number">3.50</span>}
+  ],
+  <span class="key">"route"</span>: [[<span class="number">34.0</span>, <span class="number">-118.0</span>], [<span class="number">33.5</span>, <span class="number">-117.0</span>]],
+  <span class="key">"max_distance"</span>: <span class="number">5</span>
+}</pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <p style="color: var(--text-muted); font-size: 13px;">
+                                Returns stations within max_distance miles of the route polyline,
+                                sorted by distance along route.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method post">POST</span>
+                        <span class="path">/api/v1/optimize</span>
+                        <span class="endpoint-desc">Full optimization pipeline</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Description</h4>
+                            <p style="color: var(--text-muted); font-size: 13px;">
+                                Combines station filtering and LP solving in one call.
+                                Accepts raw station coordinates and route polyline,
+                                snaps stations to route, and returns optimal refueling plan.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Status Codes -->
+            <section class="service-section">
+                <h2 style="font-size: 18px; margin-bottom: 24px;">HTTP Status Codes</h2>
+                <div class="status-codes">
+                    <div class="status-code success"><span class="code">200</span> Success</div>
+                    <div class="status-code error"><span class="code">400</span> Bad Request</div>
+                    <div class="status-code error"><span class="code">404</span> Not Found</div>
+                    <div class="status-code error"><span class="code">405</span> Method Not Allowed</div>
+                    <div class="status-code warning"><span class="code">422</span> Infeasible Problem</div>
+                    <div class="status-code warning"><span class="code">429</span> Rate Limited</div>
+                    <div class="status-code error"><span class="code">500</span> Server Error</div>
+                    <div class="status-code warning"><span class="code">503</span> Queue Full</div>
+                    <div class="status-code warning"><span class="code">504</span> Request Timeout</div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <div class="footer-links">
+                <a href="index.html">Home</a>
+                <a href="https://github.com/ottofleet/otto">GitHub</a>
+            </div>
+            <div>&copy; 2024-2026 OTTO Platform</div>
+        </footer>
+    </div>
+</body>
+</html>
