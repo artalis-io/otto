@@ -30,7 +30,7 @@ void render_ui(float dt) {
     Clay_RenderCommandArray commands = Clay_EndLayout();
     cs_frame_end(dt);
 
-    render_commands(commands);  // Your renderer: WebGL, SDL, raylib, etc.
+    render_commands(commands);  // Your renderer: WebGL, TUI, SDL, raylib, etc.
 }
 ```
 

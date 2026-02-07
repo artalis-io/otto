@@ -192,20 +192,20 @@ To create a renderer for another platform (SDL, raylib, etc.):
    - `IMAGE` - Textured quad
    - `SCISSOR_START/END` - Clipping regions
 
-## Future Renderers
+## Other Renderers
 
-Planned additional backends:
-
-```
-clay-renderer-sdl/       # SDL2 for desktop/mobile
-clay-renderer-raylib/    # raylib for games
-clay-renderer-sokol/     # Sokol for minimal deps
-clay-renderer-terminal/  # TUI rendering
-```
+| Renderer | Target | Status |
+|----------|--------|--------|
+| `clay-shards-tui` | Terminal (ANSI) | Active |
+| `clay-shards-tui-webgl` | Browser TUI with CRT effects | Active |
+| `clay-shards-sdl` | SDL2 for desktop/mobile | Planned |
+| `clay-shards-raylib` | raylib for games | Planned |
+| `clay-shards-sokol` | Sokol for minimal deps | Planned |
 
 ## Related
 
 - [clay-shards](../clay-shards/) - Immediate mode components
+- [clay-shards-tui](../clay-shards-tui/) - Terminal TUI renderer
+- [clay-shards-tui-webgl](../clay-shards-tui-webgl/) - Browser TUI with CRT effects
 - [clay-shards-demo](../clay-shards-demo/) - Example application
 - [Clay Library](../../vendor/clay/)
-- [Architecture Guide](../../.claude/skills/clay-ui-architecture.md)

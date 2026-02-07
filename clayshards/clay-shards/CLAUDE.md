@@ -312,5 +312,7 @@ cs_init();
 - [DESIGN.md](DESIGN.md) - Architecture details
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Adding widgets
 - [clay-shards-webgl](../clay-shards-webgl/) - WebGL renderer
+- [clay-shards-tui](../clay-shards-tui/) - Terminal TUI renderer
+- [clay-shards-tui-webgl](../clay-shards-tui-webgl/) - Browser TUI with CRT effects
 - [clay-shards-demo](../clay-shards-demo/) - Example application
 - [Clay Layout Library](../../vendor/clay/CLAUDE.md)
