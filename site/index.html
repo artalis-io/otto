@@ -1337,6 +1337,25 @@
             animation: crt-flicker 4s infinite;
         }
 
+        .terminal-demo-ascii::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.2) 0px,
+                rgba(0, 0, 0, 0.2) 1px,
+                transparent 1px,
+                transparent 3px
+            );
+            pointer-events: none;
+            z-index: 1;
+            animation: crt-scanline-roll-green 8s linear infinite;
+        }
+
         .terminal-demo-ascii::after {
             content: '';
             position: absolute;
@@ -1346,8 +1365,8 @@
             bottom: 0;
             background: repeating-linear-gradient(
                 0deg,
-                rgba(0, 0, 0, 0.15) 0px,
-                rgba(0, 0, 0, 0.15) 1px,
+                rgba(80, 255, 80, 0.03) 0px,
+                rgba(80, 255, 80, 0.03) 1px,
                 transparent 1px,
                 transparent 2px
             );
@@ -1355,12 +1374,26 @@
         }
 
         @keyframes crt-flicker {
-            0%, 100% { opacity: 1; }
-            92% { opacity: 1; }
-            93% { opacity: 0.95; }
-            94% { opacity: 1; }
-            97% { opacity: 0.98; }
-            98% { opacity: 1; }
+            0%, 100% { opacity: 1; filter: brightness(1); }
+            10% { opacity: 1; filter: brightness(1.02); }
+            20% { opacity: 0.99; filter: brightness(0.98); }
+            30% { opacity: 1; filter: brightness(1); }
+            40% { opacity: 0.98; filter: brightness(1.03); }
+            50% { opacity: 1; filter: brightness(1); }
+            60% { opacity: 0.99; filter: brightness(0.97); }
+            70% { opacity: 1; filter: brightness(1.02); }
+            80% { opacity: 0.98; filter: brightness(1); }
+            90% { opacity: 1; filter: brightness(0.98); }
+            92% { opacity: 1; filter: brightness(1); }
+            93% { opacity: 0.94; filter: brightness(0.95); }
+            94% { opacity: 1; filter: brightness(1); }
+            97% { opacity: 0.97; filter: brightness(1.01); }
+            98% { opacity: 1; filter: brightness(1); }
+        }
+
+        @keyframes crt-scanline-roll-green {
+            0% { background-position: 0 0; }
+            100% { background-position: 0 60px; }
         }
 
         .terminal-demo-link {
