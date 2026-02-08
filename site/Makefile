@@ -2,7 +2,7 @@
 #
 # Builds deployable site into build/ directory.
 
-.PHONY: all build clean serve serve-dev
+.PHONY: all build clean serve serve-dev test test-install
 
 BUILD_DIR = build
 
@@ -35,3 +35,12 @@ serve-dev:
 # Clean build output
 clean:
 	rm -rf $(BUILD_DIR)
+
+# Install test dependencies
+test-install:
+	@cd tests && npm install
+
+# Run WASM demo tests (requires api.html to be built)
+test:
+	@echo "Running WASM demo tests..."
+	@cd tests && npx playwright test wasm-demos.spec.js
