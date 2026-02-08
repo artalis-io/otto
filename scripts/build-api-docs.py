@@ -629,7 +629,7 @@ class HtmlGenerator:
             html += '''
                             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">'''
             for inp in api.demo_inputs:
-                inp_id = f"{module_id}-{inp.name}"
+                inp_id = f"{demo_id}-{inp.name}"
 
                 if inp.type == "select" and inp.options:
                     # Render as dropdown

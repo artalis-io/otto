@@ -11,8 +11,8 @@ async function fetchLocusSearch() {
     const status = document.getElementById('locus-api-v1-search-status');
     const output = document.getElementById('locus-api-v1-search-output');
 
-    // Get query from input field
-    const qInput = document.getElementById('locus-q');
+    // Get query from input field (ID matches demo_id pattern)
+    const qInput = document.getElementById('locus-api-v1-search-q');
     const q = qInput ? qInput.value.trim() : 'Monte Carlo';
 
     btn.disabled = true;
@@ -56,8 +56,8 @@ async function fetchLocusAutocomplete() {
     const status = document.getElementById('locus-api-v1-autocomplete-status');
     const output = document.getElementById('locus-api-v1-autocomplete-output');
 
-    // Get query from input field
-    const qInput = document.getElementById('locus-q');
+    // Get query from input field (ID matches demo_id pattern)
+    const qInput = document.getElementById('locus-api-v1-autocomplete-q');
     const q = qInput ? qInput.value.trim() : 'Mon';
 
     btn.disabled = true;
@@ -101,9 +101,9 @@ async function fetchLocusReverse() {
     const status = document.getElementById('locus-api-v1-reverse-status');
     const output = document.getElementById('locus-api-v1-reverse-output');
 
-    // Get coordinates from input fields
-    const latInput = document.getElementById('locus-lat');
-    const lonInput = document.getElementById('locus-lon');
+    // Get coordinates from input fields (IDs match demo_id pattern)
+    const latInput = document.getElementById('locus-api-v1-reverse-lat');
+    const lonInput = document.getElementById('locus-api-v1-reverse-lon');
     const lat = latInput ? parseFloat(latInput.value) : 43.7384;
     const lon = lonInput ? parseFloat(lonInput.value) : 7.4246;
 
