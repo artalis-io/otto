@@ -39,13 +39,15 @@ The OTTO API manifesto requires that API logic be transport-agnostic. The core h
     └── {prefix}_wasm_api.c  # WASM wrapper (thin)
 ```
 
-**Module prefixes:**
+**Module prefixes (derived from header_file in api-config.json):**
 | Module | Prefix | Header | Example |
 |--------|--------|--------|---------|
 | carta | ct | ct_api.h | ct_api_handle() |
 | velo | vl | vl_api.h | vl_api_handle() |
 | locus | lc | lc_api.h | lc_api_handle() |
 | fuelwise | fw | fw_api.h | fw_api_handle() |
+
+**Note:** The module list is read from `site/api-config.json`. New modules are automatically discovered when added there.
 
 ### 2. Handler Interface Pattern
 
@@ -720,6 +722,99 @@ Before marking a module as API-compliant:
 - [ ] All endpoints visible in `site/api.html`
 - [ ] WASM demos work (if enabled)
 - [ ] `make test-api-docs` passes (automated WASM tests)
+
+## Adding New Modules
+
+When creating a new API module (e.g., `surge` with prefix `sg_`), follow these steps to integrate with api-audit:
+
+### 1. Create Module Structure
+
+```
+{module}/
+├── include/
+│   └── {prefix}_api.h       # Handler interface + annotations
+├── src/
+│   └── {prefix}_api.c       # Handler implementation
+├── api/
+│   └── src/
+│       └── main.c           # Mongoose wrapper
+└── wasm/
+    └── {prefix}_wasm_api.c  # WASM wrapper (if WASM enabled)
+```
+
+### 2. Register in api-config.json
+
+Add entry to `site/api-config.json`:
+
+```json
+{
+  "id": "surge",
+  "name": "Surge Scheduler",
+  "icon": "📦",
+  "port": 8084,
+  "description": "Rich VRP solver for urban delivery",
+  "header_file": "surge/include/sg_api.h",
+  "wasm": {
+    "enabled": true,
+    "script": "wasm/surge-api-demo.js",
+    "wrapper": "js/surge-api-demo.js",
+    "factory_name": "SurgeAPIDemo",
+    "class_name": "SurgeDemo",
+    "handlers_file": "js/handlers/surge.js",
+    "init_function": "initSurgeDemo",
+    "error_function": "handleSurgeError",
+    "buttons": {
+      "surge-api-v1-solve-try-btn": "solveSurgeProblem"
+    }
+  }
+}
+```
+
+### 3. Add WASM Demo Tests
+
+Add test cases to `site/tests/wasm-demos.spec.js`:
+
+```javascript
+test.describe('Surge (VRP Solver)', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto(API_HTML_PATH);
+    await page.waitForFunction(() =>
+      typeof surgeDemo !== 'undefined' && surgeDemo.isReady(),
+      { timeout: WASM_INIT_TIMEOUT }
+    );
+  });
+
+  test('health endpoint returns healthy status', async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const resp = await surgeDemo.fetch('/api/v1/health');
+      return { status: resp.status, body: await resp.json() };
+    });
+    expect(result.status).toBe(200);
+    expect(result.body.status).toBe('healthy');
+  });
+
+  // Add tests for each @demo endpoint...
+});
+```
+
+### 4. Run Audit
+
+```bash
+# Audit new module
+/api-audit surge
+
+# Verify tests pass
+make test-api-docs
+```
+
+### Module Discovery
+
+The skill reads modules from `site/api-config.json`:
+- `/api-audit all` audits every module in the `modules` array
+- `/api-audit <module>` audits only that module
+- Module prefix is derived from `header_file` (e.g., `sg_api.h` → prefix `sg`)
+
+When a new module is added to api-config.json, it's automatically included in `/api-audit all`.
 
 ## Current Module Status
 
