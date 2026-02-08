@@ -31,14 +31,47 @@ Do NOT use for:
 - Quick typo fixes (1-2 lines)
 - Emergency hotfixes (discuss with user first)
 
+### Planning Phase (Required for Large Changes)
+
+**Before creating a feature branch** for large-scale work, enter planning mode:
+
+| Triggers for Planning Phase |
+|-----------------------------|
+| Multiple files affected |
+| Large module refactoring |
+| New feature with architectural decisions |
+| Changes spanning multiple components |
+
+**Planning workflow:**
+1. **Explore:** Read relevant code, understand current architecture
+2. **Plan:** Design approach, identify files to change, consider tradeoffs
+3. **Document:** Write findings as a plan (do NOT change any code)
+4. **Present:** Show plan to user for approval
+5. **Persist:** After approval, append/merge plan to `docs/roadmaps/{module}.md`
+
+**Example:**
+```
+User: "Add continental-scale routing to Velo"
+
+Claude: Enters planning mode (no code changes)
+        → Explores velo/src/, reads current graph implementation
+        → Identifies: need mmap, sparse restrictions, new index format
+        → Writes plan with phases, file changes, tradeoffs
+        → Presents to user
+        → After approval: appends to docs/roadmaps/velo.md
+        → Then uses /feature-branch to implement
+```
+
 ### Workflow Steps
 
-1. **Start:** Use `/feature-branch <name> <description>` to create branch
-2. **Work:** Implement with regular commits on the feature branch
-3. **Test:** Run `make test` and relevant API tests before PR
-4. **PR:** Create pull request with `gh pr create`
-5. **Review:** Wait for user approval before merging
-6. **Merge:** After approval, merge to main and delete feature branch
+1. **Plan (if large):** Enter planning mode, explore, document, get approval
+2. **Persist:** Append approved plan to `docs/roadmaps/{module}.md`
+3. **Branch:** Use `/feature-branch <name> <description>` to create branch
+4. **Work:** Implement with regular commits on the feature branch
+5. **Test:** Run `make test` and relevant API tests before PR
+6. **PR:** Create pull request with `gh pr create`
+7. **Review:** Wait for user approval before merging
+8. **Merge:** After approval, merge to main and delete feature branch
 
 ### Example
 
