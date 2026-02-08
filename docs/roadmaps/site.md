@@ -65,36 +65,37 @@ function typeAnimateContent(block, html) {
 
 ## Phase 2: Sync Examples with Reality
 
-**Status:** Planned
+**Status:** Complete
 **Effort:** 2-3 hours
 
 ### Problem
 
-`@response_json` annotations in C headers are hand-written and may drift from actual API responses.
+`@response_json` annotations in C headers were:
+1. Sometimes invalid JSON (parser bug with nested objects)
+2. Outdated compared to actual implementation (e.g., TileJSON 2.2.0 vs 3.0.0)
 
 ### Solution
 
-#### Option A: Build-time Validation
-Add `--validate` flag to `build-api-docs.py` that runs WASM modules and compares output against `@response_json`. Warn on mismatch.
+#### Part A: JSON Syntax Validation (Implemented)
+Added `--validate` flag to `build-api-docs.py` that validates all `@response_json` annotations are syntactically valid JSON.
 
 ```bash
 python3 scripts/build-api-docs.py --validate
 ```
 
-#### Option B: Generate from WASM
-New annotation `@response_from_wasm` that fetches real response at build time:
+#### Part B: Fixed Parser Bug
+The parser was stopping at the first `}` instead of tracking nested braces/brackets. Fixed by counting `{}`/`[]` depth.
 
-```c
-/*@api
- * GET /tiles.json
- * @response_from_wasm
- */
-```
+#### Part C: Fixed Known Discrepancies
+- `carta/include/ct_api.h`: Updated TileJSON from 2.2.0 to 3.0.0, added missing fields
+
+### Future Enhancement
+Option B: `@response_from_wasm` that fetches real response at build time (not implemented yet).
 
 ### Files
 
-- `scripts/build-api-docs.py`
-- `*/include/*_api.h` (annotations)
+- `scripts/build-api-docs.py` - Added `--validate` flag, fixed brace parsing
+- `carta/include/ct_api.h` - Updated TileJSON response
 
 ---
 

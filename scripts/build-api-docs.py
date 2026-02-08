@@ -5,6 +5,7 @@ build-api-docs.py - Generate api.html from C header annotations and config
 Usage:
     python3 scripts/build-api-docs.py              # Generate site/api.html
     python3 scripts/build-api-docs.py --check      # Verify api.html is up-to-date
+    python3 scripts/build-api-docs.py --validate   # Validate @response_json syntax
     python3 scripts/build-api-docs.py --verbose    # Show parsed annotations
 
 Annotation format in C headers:
@@ -303,25 +304,30 @@ class AnnotationParser:
         lines = text.strip().split("\n")
         in_response_json = False
         response_json_lines: list[str] = []
+        brace_depth = 0
 
         for line in lines:
             # Remove comment prefix
             line = re.sub(r"^\s*\*\s?", "", line)
 
-            # Handle multi-line response_json
+            # Handle multi-line response_json (track nested braces/brackets)
             if in_response_json:
                 stripped = line.strip()
-                if stripped.startswith("@") or stripped == "}":
-                    if stripped == "}":
-                        response_json_lines.append("}")
+                # Count braces and brackets to handle nested objects/arrays
+                brace_depth += stripped.count("{") - stripped.count("}")
+                brace_depth += stripped.count("[") - stripped.count("]")
+                response_json_lines.append(stripped)
+                # End when we're back to depth 0 (matched all braces/brackets) or hit next annotation
+                if brace_depth <= 0 or stripped.startswith("@"):
+                    if stripped.startswith("@"):
+                        # Remove the @line from JSON, it's the next annotation
+                        response_json_lines.pop()
+                        line = stripped
                     api.response_json = "\n".join(response_json_lines)
                     in_response_json = False
-                    if stripped.startswith("@"):
-                        line = stripped
-                    else:
+                    if not stripped.startswith("@"):
                         continue
                 else:
-                    response_json_lines.append(line.rstrip())
                     continue
 
             line = line.strip()
@@ -960,10 +966,26 @@ def load_config() -> Config:
 # Main
 # =============================================================================
 
+def validate_response_json(endpoints: dict[str, list[ApiEndpoint]], verbose: bool = False) -> list[str]:
+    """Validate that all @response_json annotations contain valid JSON."""
+    errors = []
+    for module_id, apis in endpoints.items():
+        for api in apis:
+            if api.response_json:
+                try:
+                    json.loads(api.response_json)
+                    if verbose:
+                        print(f"    ✓ {api.method} {api.path}: valid JSON")
+                except json.JSONDecodeError as e:
+                    errors.append(f"{module_id}: {api.method} {api.path}: Invalid JSON - {e}")
+    return errors
+
+
 def main() -> int:
     """Main entry point. Returns exit code."""
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
     check_mode = "--check" in sys.argv
+    validate_mode = "--validate" in sys.argv
 
     try:
         # Load config
@@ -993,6 +1015,19 @@ def main() -> int:
         total_endpoints = sum(len(e) for e in all_endpoints.values())
         total_exports = sum(len(e) for e in all_exports.values())
         print(f"\nTotal: {total_endpoints} endpoints, {total_exports} WASM exports")
+
+        # Validate @response_json annotations
+        if validate_mode or verbose:
+            print("\nValidating @response_json annotations...")
+            json_errors = validate_response_json(all_endpoints, verbose)
+            if json_errors:
+                print("\n✗ JSON validation errors:")
+                for err in json_errors:
+                    print(f"  - {err}")
+                if validate_mode:
+                    return 1
+            else:
+                print("✓ All @response_json annotations are valid JSON")
 
         # Generate HTML for endpoints
         html_gen = HtmlGenerator(config)
