@@ -418,6 +418,37 @@ When `/api-audit <module>` is invoked:
 8. **Test WASM demos:**
    - [ ] `make test-api-docs` passes
    - [ ] All demo endpoints return expected responses
+   - [ ] New endpoints have test coverage in `site/tests/wasm-demos.spec.js`
+
+### Verifying Test Coverage
+
+When auditing, compare annotated endpoints against test coverage:
+
+```bash
+# List all @api endpoints from headers
+grep -h "^\s*\* GET\|^\s*\* POST" {carta,velo,locus,fuelwise}/include/*_api.h
+
+# List all tested endpoints in wasm-demos.spec.js
+grep -E "fetch\('|\.route\(|\.fetch\(" site/tests/wasm-demos.spec.js
+```
+
+**For each endpoint with `@demo`:**
+1. Find the endpoint path (e.g., `/api/v1/route`, `/tiles/{z}/{x}/{y}.png`)
+2. Check `site/tests/wasm-demos.spec.js` has a test that calls this endpoint
+3. If missing, add a test case following existing patterns
+
+**Test case template for new endpoints:**
+```javascript
+test('{endpoint} returns expected response', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const resp = await {module}Demo.fetch('{path}');
+    return { status: resp.status, body: await resp.json() };
+  });
+
+  expect(result.status).toBe(200);
+  // Add assertions based on @response_json in header
+});
+```
 
 ## Report Format
 
@@ -450,6 +481,17 @@ When `/api-audit <module>` is invoked:
 | {prefix}_api_init | ✅ | ✅ | ✅ |
 | {prefix}_api_handle | ✅ | ❌ | ❌ Missing |
 
+### Test Coverage
+
+| Endpoint | Has @demo | Test Exists | Test Passes |
+|----------|-----------|-------------|-------------|
+| GET /api/v1/health | ✅ | ✅ | ✅ |
+| GET /api/v1/route | ✅ | ✅ | ✅ |
+| GET /api/v1/new-endpoint | ✅ | ❌ | N/A |
+
+**Test run:** `make test-api-docs`
+**Result:** ✅ 20/20 passed | ❌ X failed
+
 ### api-config.json
 
 | Field | Status | Value |
@@ -471,6 +513,8 @@ When `/api-audit <module>` is invoked:
 2. Add `/*@api ... */` annotations to endpoints: ...
 3. Update api-config.json header_file to ...
 4. Run `make api-docs` to regenerate documentation
+5. Add missing tests to `site/tests/wasm-demos.spec.js` for: {endpoints}
+6. Run `make test-api-docs` to verify all tests pass
 ```
 
 ## Fix Mode (--fix)
