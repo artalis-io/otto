@@ -25,7 +25,7 @@
 .PHONY: wasm wasm-fuelwise wasm-velo wasm-carta wasm-locus wasm-types wasm-test wasm-api-demos
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-build site-serve
 .PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
-.PHONY: run-fuelwise-api run-carta-api run-velo-api
+.PHONY: run-fuelwise-api run-carta-api run-velo-api run-ralph-api
 .PHONY: benchmark ci api-docs api-docs-check test-api-docs test-api-docs-install download-monaco
 
 # =============================================================================
@@ -92,6 +92,10 @@ velo-api:
 locus-api:
 	$(MAKE) -C locus/api
 
+# Ralph LP/MIP solver server (api/Makefile handles deps)
+ralph-api:
+	$(MAKE) -C ralph/api
+
 # Run servers
 run-fuelwise-api: fuelwise-api
 	$(MAKE) -C fuelwise/api run
@@ -107,6 +111,9 @@ run-velo-api: velo-api
 run-locus-api: locus-api
 	@echo "Usage: ./locus/api/locus-geocoder <pbf-file>"
 	@echo "Example: ./locus/api/locus-geocoder data/monaco-latest.osm.pbf"
+
+run-ralph-api: ralph-api
+	$(MAKE) -C ralph/api run
 
 # =============================================================================
 # WebAssembly Builds (requires Emscripten)
