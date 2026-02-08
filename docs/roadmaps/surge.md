@@ -1,27 +1,89 @@
-# Surge - PDPTW Solver Architecture
+# Surge - Rich VRP/PDPTW Solver
 
 **S**cheduler for **U**rban **R**outing and **G**eneral **E**xpress
 
-ALNS-based solver for Pickup and Delivery Problems with Time Windows, built on Arbor.
+ALNS-based solver for Vehicle Routing and Pickup-Delivery Problems with rich side
+constraints, built on Arbor.
 
-## Problem Definition
+## Problem Classes
 
-### PDPTW Components
+Surge handles both **VRPTW** and **PDPTW** as first-class citizens, plus rich extensions:
+
+| Problem | Description | Request Type |
+|---------|-------------|--------------|
+| **VRPTW** | Vehicle Routing with Time Windows | Single visit (delivery or pickup) |
+| **PDPTW** | Pickup and Delivery with TW | Paired pickup → delivery |
+| **DARP** | Dial-a-Ride Problem | PDPTW with ride time limits |
+| **Rich VRP** | Any combination + side constraints | Mixed |
+
+## Constraint Dimensions
+
+Surge supports orthogonal constraint dimensions that can be combined freely:
+
+### Core Constraints (Always Active)
+
+| Constraint | Description |
+|------------|-------------|
+| **Time Windows** | Arrival must be within allowed windows |
+| **Vehicle Shift** | Route must start/end within shift |
+| **Request Pairing** | Pickup and delivery on same vehicle (PDPTW) |
+| **Precedence** | Pickup before delivery (PDPTW) |
+
+### Capacity Constraints (Multi-dimensional)
+
+| Dimension | Unit | Example |
+|-----------|------|---------|
+| Weight | kg | Max 24,000 kg |
+| Volume | m³ | Max 80 m³ |
+| Pallet count | count | Max 33 EUR pallets |
+| Piece count | count | Max 500 parcels |
+| Axle load | kg | Max 10,000 kg per axle |
+| Custom | user-defined | Refrigeration units, etc. |
+
+### Time Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| **Disjunct TW** | Multiple allowed windows per location |
+| **Max ride time** | Passenger/cargo max time on vehicle (DARP) |
+| **Max route duration** | Total route time limit |
+| **Break requirements** | Mandatory breaks (HoSE integration) |
+| **Waiting costs** | Penalize early arrival waiting |
+
+### Compatibility Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| **Request exclusions** | Request A excludes B, C, D on same vehicle |
+| **Commodity conflicts** | Hazmat ∉ same vehicle as food |
+| **Vehicle qualifications** | Request requires refrigerated/ADR/tail-lift |
+| **Customer preferences** | Soft: prefer driver X for customer Y |
+
+### Depot Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| **Multiple depots** | Vehicles assigned to different depots |
+| **Open routes** | End anywhere (not return to depot) |
+| **Depot capacity** | Max vehicles dispatched per depot |
+| **Depot time windows** | Loading dock availability |
+
+### Objective Components
+
+| Component | Weight | Description |
+|-----------|--------|-------------|
+| Distance | w₁ | Total km traveled |
+| Duration | w₂ | Total time (travel + service + wait) |
+| Vehicles | w₃ | Number of vehicles used |
+| Unassigned | w₄ | Penalty for unserved requests |
+| Tardiness | w₅ | Soft TW violation penalty |
+| Waiting | w₆ | Cost of waiting at locations |
 
 ```
-Requests:  { (pickup_i, delivery_i, load_i, tw_pickup_i, tw_delivery_i) }
-Vehicles:  { (capacity_k, depot_k, shift_start_k, shift_end_k) }
-Objective: Minimize total cost (distance + time + vehicles used)
-
-Constraints:
-- Precedence: pickup_i before delivery_i on same route
-- Pairing: pickup_i and delivery_i on same vehicle
-- Capacity: sum(loads on vehicle) ≤ capacity at all times
-- Time windows: arrival ∈ [early, late] for each stop
-- Shift: route starts/ends within vehicle shift window
+Objective = w₁·distance + w₂·duration + w₃·vehicles + w₄·unassigned + w₅·tardiness + w₆·waiting
 ```
 
-### Complexity
+## Problem Complexity
 
 | Instance Size | Requests | Approach |
 |--------------|----------|----------|
@@ -34,36 +96,42 @@ Constraints:
 
 ## Architecture
 
-Surge uses Arbor's ALNS framework (see `docs/roadmaps/arbor.md`) with PDPTW-specific
+Surge uses Arbor's ALNS framework (see `docs/roadmaps/arbor.md`) with VRP/PDPTW-specific
 operators. The generic ALNS loop, operator selection, and acceptance criteria live in
-Arbor; Surge provides the domain logic.
+Arbor; Surge provides the domain logic and constraint checking.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                         Surge API                                │
 │  sg_create() │ sg_solve() │ sg_add_request() │ sg_get_solution() │
 ├──────────────────────────────────────────────────────────────────┤
-│                    PDPTW Operators (Surge)                       │
+│                    VRP/PDPTW Operators (Surge)                   │
 │  ┌────────────────────────┐ ┌──────────────────────────────────┐ │
 │  │ Destroy: random, worst │ │ Repair: greedy, regret-k         │ │
-│  │   Shaw, route, cluster │ │   best position, sequential      │ │
+│  │   Shaw, route, cluster │ │   best position, parallel        │ │
+│  │   zone, time-based     │ │   constraint-aware               │ │
 │  └────────────────────────┘ └──────────────────────────────────┘ │
 ├──────────────────────────────────────────────────────────────────┤
-│                   PDPTW Feasibility (Surge)                      │
-│  TW propagation │ Capacity check │ Precedence │ Cost delta       │
+│                   Constraint Checking (Surge)                    │
+│  ┌──────────────┐ ┌──────────────┐ ┌────────────────────────────┐│
+│  │ Time Windows │ │   Capacity   │ │     Compatibility          ││
+│  │  • Disjunct  │ │  • Multi-dim │ │  • Qualifications          ││
+│  │  • Soft TW   │ │  • Axle load │ │  • Commodity conflicts     ││
+│  │  • Ride time │ │  • Volume    │ │  • Exclusion groups        ││
+│  └──────────────┘ └──────────────┘ └────────────────────────────┘│
 ├──────────────────────────────────────────────────────────────────┤
 │                   Solution Representation (Surge)                │
-│  SGSolution → SGRoute[] → SGStop[] → { request, type, times }   │
+│  SGSolution → SGRoute[] → SGStop[] → { load[], commodities }     │
 ├──────────────────────────────────────────────────────────────────┤
 │                     ALNS Framework (Arbor)                       │
 │  ar_alns_solve() │ roulette selection │ adaptive weights         │
 │  SA/RRT/GD acceptance │ ar_remove_worst() │ ar_remove_related()  │
 ├──────────────────────────────────────────────────────────────────┤
 │                   Supporting Infrastructure                      │
-│  ┌─────────┐ ┌─────────┐ ┌──────────────────────────────────────┐│
-│  │  Velo   │ │  Ralph  │ │              Shared                  ││
-│  │ Routing │ │  MIP    │ │    Geo, Heap, HashMap, Arena         ││
-│  └─────────┘ └─────────┘ └──────────────────────────────────────┘│
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────────────────┐│
+│  │  Velo   │ │  Ralph  │ │  HoSE   │ │        Shared           ││
+│  │ Routing │ │  MIP    │ │ Breaks  │ │ Geo, Heap, HashMap      ││
+│  └─────────┘ └─────────┘ └─────────┘ └─────────────────────────┘│
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,85 +149,228 @@ Arbor; Surge provides the domain logic.
 | `ar_remove_worst()` | Generic worst removal with randomization |
 | `ar_remove_related()` | Generic Shaw removal with relatedness fn |
 
-### What Surge Provides (PDPTW-specific)
+### What Surge Provides (VRP/PDPTW-specific)
 
 | Component | Description |
 |-----------|-------------|
-| `SGSolution`, `SGRoute`, `SGStop` | PDPTW solution structures |
-| `sg_destroy_shaw()` | Shaw removal using pickup distance + TW similarity |
-| `sg_destroy_route()` | Remove entire route |
-| `sg_repair_greedy()` | Insert at cheapest position |
-| `sg_repair_regret_k()` | Regret-k insertion heuristic |
-| `sg_check_feasible()` | TW propagation, capacity, precedence |
-| `sg_compute_relatedness()` | Distance + time + load similarity |
-| `sg_insertion_cost()` | Delta cost for pickup-delivery insertion |
+| Request types | PDPTW pairs, VRPTW deliveries/pickups, service visits |
+| Multi-dim capacity | Weight, volume, pallets, axle load, custom |
+| Disjunct time windows | Multiple allowed windows per stop |
+| Compatibility | Qualifications, commodity conflicts, exclusion groups |
+| Soft constraints | Tardiness penalties, waiting costs, priorities |
+| DARP support | Max ride time enforcement |
+| Multi-depot | Per-vehicle depot assignment, open routes |
+| Feasibility checker | Combines all constraint types |
+| Insertion cost | Delta cost with all constraint impacts |
+| Relatedness | Distance + time + load + commodity similarity |
 
 ---
 
 ## Data Structures
 
+### Request Types
+
+```c
+/* Request type determines pairing/precedence rules */
+typedef enum {
+    SG_REQUEST_PICKUP_DELIVERY,  /* PDPTW: paired pickup → delivery */
+    SG_REQUEST_DELIVERY,         /* VRPTW: delivery from depot */
+    SG_REQUEST_PICKUP,           /* VRPTW: pickup to depot (backhaul) */
+    SG_REQUEST_SERVICE,          /* Visit without load change */
+} SGRequestType;
+```
+
+### Time Windows (Disjunct)
+
+```c
+/* Single time window */
+typedef struct {
+    int32_t early;           /* Earliest arrival (seconds from midnight) */
+    int32_t late;            /* Latest arrival */
+} SGTimeWindow;
+
+/* Disjunct time windows: arrival must be within ANY window */
+typedef struct {
+    uint32_t count;          /* Number of windows (1 = single TW) */
+    SGTimeWindow *windows;   /* Array of allowed windows */
+} SGTimeWindows;
+```
+
+### Multi-dimensional Capacity
+
+```c
+/* Capacity dimension definition */
+typedef struct {
+    const char *name;        /* "weight", "volume", "pallets", etc. */
+    const char *unit;        /* "kg", "m3", "count", etc. */
+} SGCapacityDim;
+
+/* Load vector (one value per dimension) */
+typedef struct {
+    uint32_t num_dims;
+    double *values;          /* values[dim_idx] = load in that dimension */
+} SGLoadVector;
+```
+
+### Compatibility & Exclusions
+
+```c
+/* Exclusion group: requests that cannot share a vehicle */
+typedef struct {
+    uint32_t group_id;
+    uint32_t *request_ids;   /* Requests in this exclusion group */
+    uint32_t count;
+} SGExclusionGroup;
+
+/* Vehicle qualification (bit flags) */
+typedef enum {
+    SG_QUAL_NONE        = 0,
+    SG_QUAL_REFRIGERATED = 1 << 0,
+    SG_QUAL_ADR_HAZMAT   = 1 << 1,
+    SG_QUAL_TAIL_LIFT    = 1 << 2,
+    SG_QUAL_SIDE_LOADER  = 1 << 3,
+    SG_QUAL_CRANE        = 1 << 4,
+    SG_QUAL_DOUBLE_DECK  = 1 << 5,
+    /* ... extend as needed ... */
+} SGQualification;
+
+/* Commodity type for conflict checking */
+typedef struct {
+    uint32_t id;
+    const char *name;        /* "food", "hazmat", "livestock", etc. */
+    uint64_t conflicts;      /* Bitmask of conflicting commodity IDs */
+} SGCommodity;
+```
+
 ### Core Types
 
 ```c
-/* Request: pickup-delivery pair with time windows */
-typedef struct {
-    uint32_t id;
-
-    /* Locations (indices into location array) */
-    uint32_t pickup_loc;
-    uint32_t delivery_loc;
-
-    /* Load (positive = pickup adds, delivery removes) */
-    int32_t load;
-
-    /* Time windows [early, late] in seconds from midnight */
-    int32_t pickup_early, pickup_late;
-    int32_t delivery_early, delivery_late;
-
-    /* Service times at each location */
-    int32_t pickup_service;
-    int32_t delivery_service;
-
-    /* Priority (for regret calculation) */
-    int32_t priority;
-} SGRequest;
-
-/* Vehicle with capacity and shift constraints */
-typedef struct {
-    uint32_t id;
-    uint32_t depot_loc;
-    int32_t capacity;
-    int32_t shift_start, shift_end;
-    double cost_per_km;
-    double cost_per_hour;
-    double fixed_cost;
-} SGVehicle;
-
-/* Location with coordinates */
+/* Location with coordinates and constraints */
 typedef struct {
     uint32_t id;
     double lat, lon;
     const char *name;
+
+    /* Location-level time windows (e.g., dock availability) */
+    SGTimeWindows time_windows;
+
+    /* Service time at this location (can be overridden per request) */
+    int32_t default_service_time;
 } SGLocation;
 
-/* Stop in a route */
+/* Request: unified structure for all request types */
+typedef struct {
+    uint32_t id;
+    SGRequestType type;
+
+    /* Locations (interpretation depends on type) */
+    uint32_t origin_loc;     /* Pickup loc (PDPTW) or depot (VRPTW delivery) */
+    uint32_t dest_loc;       /* Delivery loc (PDPTW/VRPTW) or depot (pickup) */
+
+    /* Multi-dimensional load */
+    SGLoadVector load;       /* Load change at pickup (+) and delivery (-) */
+
+    /* Time windows (disjunct) */
+    SGTimeWindows origin_tw; /* Time windows at origin */
+    SGTimeWindows dest_tw;   /* Time windows at destination */
+
+    /* Service times (0 = use location default) */
+    int32_t origin_service;
+    int32_t dest_service;
+
+    /* DARP: max ride time (0 = unlimited) */
+    int32_t max_ride_time;
+
+    /* Soft constraints */
+    int32_t priority;        /* Higher = insert first in regret */
+    double tardiness_cost;   /* Cost per second of late arrival */
+
+    /* Compatibility */
+    uint64_t required_quals; /* Bitmask: vehicle must have these */
+    uint32_t commodity_id;   /* For conflict checking (0 = none) */
+
+    /* Exclusions: requests that cannot be on same vehicle */
+    uint32_t *excludes;      /* Array of request IDs */
+    uint32_t num_excludes;
+} SGRequest;
+
+/* Depot with constraints */
+typedef struct {
+    uint32_t id;
+    uint32_t location_id;
+    const char *name;
+
+    /* Depot capacity */
+    uint32_t max_vehicles;   /* Max vehicles dispatched (0 = unlimited) */
+
+    /* Depot time windows */
+    SGTimeWindows dispatch_tw;  /* When vehicles can leave */
+    SGTimeWindows return_tw;    /* When vehicles must return */
+} SGDepot;
+
+/* Vehicle with rich constraints */
+typedef struct {
+    uint32_t id;
+    uint32_t depot_id;       /* Index into depots array */
+
+    /* Multi-dimensional capacity */
+    SGLoadVector capacity;   /* Max load in each dimension */
+
+    /* Shift constraints */
+    int32_t shift_start;     /* Earliest departure (seconds from midnight) */
+    int32_t shift_end;       /* Latest return */
+    int32_t max_duration;    /* Max route duration (0 = unlimited) */
+
+    /* Qualifications */
+    uint64_t qualifications; /* Bitmask of SG_QUAL_* */
+
+    /* Costs */
+    double cost_per_km;
+    double cost_per_hour;
+    double fixed_cost;       /* Cost to use this vehicle at all */
+    double overtime_cost;    /* Cost per hour beyond shift_end */
+
+    /* Route type */
+    bool open_end;           /* true = don't return to depot */
+    uint32_t end_depot_id;   /* If different from start depot */
+} SGVehicle;
+
+/* Stop in a route (computed state) */
 typedef struct {
     uint32_t request_id;
-    uint8_t type;            /* SG_STOP_PICKUP, SG_STOP_DELIVERY, SG_STOP_DEPOT */
+    uint8_t stop_type;       /* SG_STOP_ORIGIN, SG_STOP_DEST, SG_STOP_DEPOT */
+
+    /* Timing */
     int32_t arrival;         /* Computed arrival time */
-    int32_t departure;       /* arrival + service + wait */
-    int32_t load_after;      /* Cumulative load after this stop */
+    int32_t wait;            /* Wait time before service (early arrival) */
+    int32_t service;         /* Service duration */
+    int32_t departure;       /* arrival + wait + service */
+    int32_t tardiness;       /* Late arrival amount (for soft TW) */
+
+    /* Load state after this stop */
+    SGLoadVector load_after; /* Cumulative load in each dimension */
+
+    /* Active commodities on vehicle after this stop (bitmask) */
+    uint64_t commodities_after;
 } SGStop;
 
 /* Route: sequence of stops for one vehicle */
 typedef struct {
     uint32_t vehicle_id;
     uint32_t num_stops;
-    uint32_t capacity;       /* Allocated capacity */
-    SGStop *stops;           /* Array of stops (including depot start/end) */
-    double distance;         /* Total route distance */
-    double duration;         /* Total route duration */
-    double cost;             /* Total route cost */
+    uint32_t capacity;       /* Allocated array capacity */
+    SGStop *stops;           /* Array of stops (depot → ... → depot) */
+
+    /* Computed metrics */
+    double distance;
+    double duration;
+    double cost;
+    double tardiness_total;
+    double wait_total;
+
+    /* Feasibility flags (for incremental checking) */
+    bool feasible;
+    uint32_t first_infeasible; /* First stop index with violation */
 } SGRoute;
 
 /* Solution: set of routes */
@@ -168,9 +379,18 @@ typedef struct {
     uint32_t num_unassigned;
     SGRoute *routes;
     uint32_t *unassigned;    /* Request IDs not yet assigned */
-    double total_cost;
+
+    /* Objective components */
     double total_distance;
+    double total_duration;
+    double total_tardiness;
+    double total_waiting;
+    double unassigned_penalty;
+    double total_cost;       /* Weighted sum */
+
+    /* Metadata */
     int64_t iteration;
+    double elapsed_seconds;
 } SGSolution;
 ```
 
@@ -178,13 +398,25 @@ typedef struct {
 
 ```c
 typedef struct {
-    /* Problem data */
+    /* Problem dimensions */
     uint32_t num_requests;
     uint32_t num_vehicles;
     uint32_t num_locations;
+    uint32_t num_depots;
+    uint32_t num_capacity_dims;
+    uint32_t num_commodities;
+
+    /* Problem data */
     SGRequest *requests;
     SGVehicle *vehicles;
     SGLocation *locations;
+    SGDepot *depots;
+    SGCapacityDim *capacity_dims;
+    SGCommodity *commodities;
+
+    /* Exclusion groups (sparse) */
+    uint32_t num_exclusion_groups;
+    SGExclusionGroup *exclusion_groups;
 
     /* Distance/time matrix (precomputed or on-demand via Velo) */
     double *dist_matrix;     /* num_locations × num_locations */
@@ -192,10 +424,12 @@ typedef struct {
     bool matrix_precomputed;
     VLGraph *road_graph;     /* For on-demand routing */
 
-    /* ALNS state */
+    /* Current solution state */
     SGSolution current;
     SGSolution best;
-    SGALNSState alns;
+
+    /* Objective weights */
+    SGObjectiveWeights weights;
 
     /* Configuration */
     SGConfig config;
@@ -203,6 +437,39 @@ typedef struct {
     /* Memory arena for allocations */
     Arena arena;
 } SGContext;
+
+/* Objective weights */
+typedef struct {
+    double distance;         /* Per km */
+    double duration;         /* Per hour */
+    double vehicle;          /* Per vehicle used */
+    double unassigned;       /* Per unassigned request */
+    double tardiness;        /* Per second late */
+    double waiting;          /* Per second waiting */
+} SGObjectiveWeights;
+```
+
+### Feasibility Checking Helpers
+
+```c
+/* Check if vehicle can serve request (qualifications + depot) */
+bool sg_vehicle_can_serve(SGContext *ctx, uint32_t vehicle_id, uint32_t request_id);
+
+/* Check commodity compatibility on current route */
+bool sg_commodities_compatible(SGContext *ctx, SGRoute *route, uint32_t request_id);
+
+/* Check exclusion constraints */
+bool sg_exclusions_satisfied(SGContext *ctx, SGRoute *route, uint32_t request_id);
+
+/* Check multi-dimensional capacity at insertion point */
+bool sg_capacity_feasible(SGContext *ctx, SGRoute *route, int pos, SGRequest *req);
+
+/* Check disjunct time window feasibility */
+bool sg_time_window_feasible(int32_t arrival, const SGTimeWindows *tw);
+
+/* Full insertion feasibility (combines all checks) */
+bool sg_insertion_feasible(SGContext *ctx, SGRoute *route,
+                           int origin_pos, int dest_pos, uint32_t request_id);
 ```
 
 ---
@@ -758,6 +1025,17 @@ ARStatus sg_arbor_transition(ARState *state, ARAction action, ARState *next) {
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Forward declarations (see Data Structures section for full definitions) */
+typedef struct SGContext SGContext;
+typedef struct SGRequest SGRequest;
+typedef struct SGVehicle SGVehicle;
+typedef struct SGLocation SGLocation;
+typedef struct SGDepot SGDepot;
+typedef struct SGSolution SGSolution;
+typedef struct SGRoute SGRoute;
+typedef struct SGTimeWindow SGTimeWindow;
+typedef struct SGLoadVector SGLoadVector;
+
 /* Status codes */
 typedef enum {
     SG_STATUS_OK = 0,
@@ -795,34 +1073,92 @@ void sg_free(SGContext *ctx);
 void sg_config_default(SGConfig *config);
 void sg_set_config(SGContext *ctx, const SGConfig *config);
 
-/* Problem building */
+/* Objective weights */
+void sg_set_weights(SGContext *ctx, double distance, double duration,
+                    double vehicle, double unassigned, double tardiness, double waiting);
+
+/*=== Problem Definition ===*/
+
+/* Capacity dimensions (call before adding vehicles/requests) */
+uint32_t sg_add_capacity_dim(SGContext *ctx, const char *name, const char *unit);
+
+/* Commodities and conflicts */
+uint32_t sg_add_commodity(SGContext *ctx, const char *name);
+void sg_set_commodity_conflict(SGContext *ctx, uint32_t commodity_a, uint32_t commodity_b);
+
+/* Locations */
 uint32_t sg_add_location(SGContext *ctx, double lat, double lon, const char *name);
-uint32_t sg_add_vehicle(SGContext *ctx, uint32_t depot_loc, int capacity,
-                         int shift_start, int shift_end);
-uint32_t sg_add_request(SGContext *ctx,
-                         uint32_t pickup_loc, uint32_t delivery_loc,
-                         int load,
-                         int pickup_early, int pickup_late,
-                         int delivery_early, int delivery_late,
-                         int pickup_service, int delivery_service);
+void sg_location_add_time_window(SGContext *ctx, uint32_t loc_id,
+                                  int32_t early, int32_t late);
+
+/* Depots */
+uint32_t sg_add_depot(SGContext *ctx, uint32_t location_id, const char *name);
+void sg_depot_set_capacity(SGContext *ctx, uint32_t depot_id, uint32_t max_vehicles);
+void sg_depot_add_dispatch_window(SGContext *ctx, uint32_t depot_id,
+                                   int32_t early, int32_t late);
+
+/* Vehicles */
+uint32_t sg_add_vehicle(SGContext *ctx, uint32_t depot_id);
+void sg_vehicle_set_capacity(SGContext *ctx, uint32_t vehicle_id,
+                              uint32_t dim, double value);
+void sg_vehicle_set_shift(SGContext *ctx, uint32_t vehicle_id,
+                           int32_t start, int32_t end);
+void sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
+                                    uint64_t qual_flags);
+void sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
+                           double per_km, double per_hour, double fixed);
+void sg_vehicle_set_open_end(SGContext *ctx, uint32_t vehicle_id, bool open);
+
+/* Requests - PDPTW (pickup-delivery pair) */
+uint32_t sg_add_request_pd(SGContext *ctx,
+                            uint32_t pickup_loc, uint32_t delivery_loc);
+
+/* Requests - VRPTW (single visit) */
+uint32_t sg_add_request_delivery(SGContext *ctx, uint32_t location_id);
+uint32_t sg_add_request_pickup(SGContext *ctx, uint32_t location_id);
+uint32_t sg_add_request_service(SGContext *ctx, uint32_t location_id);
+
+/* Request attributes (apply to any request type) */
+void sg_request_set_load(SGContext *ctx, uint32_t req_id,
+                          uint32_t dim, double value);
+void sg_request_add_origin_tw(SGContext *ctx, uint32_t req_id,
+                               int32_t early, int32_t late);
+void sg_request_add_dest_tw(SGContext *ctx, uint32_t req_id,
+                             int32_t early, int32_t late);
+void sg_request_set_service_times(SGContext *ctx, uint32_t req_id,
+                                   int32_t origin_service, int32_t dest_service);
+void sg_request_set_max_ride_time(SGContext *ctx, uint32_t req_id, int32_t max_ride);
+void sg_request_set_required_quals(SGContext *ctx, uint32_t req_id, uint64_t quals);
+void sg_request_set_commodity(SGContext *ctx, uint32_t req_id, uint32_t commodity_id);
+void sg_request_set_priority(SGContext *ctx, uint32_t req_id, int32_t priority);
+void sg_request_set_tardiness_cost(SGContext *ctx, uint32_t req_id, double cost_per_sec);
+
+/* Request exclusions */
+void sg_add_exclusion(SGContext *ctx, uint32_t req_a, uint32_t req_b);
+void sg_add_exclusion_group(SGContext *ctx, uint32_t *req_ids, uint32_t count);
 
 /* Optional: set road graph for Velo routing */
 void sg_set_road_graph(SGContext *ctx, VLGraph *graph);
 
-/* Solving */
-SGStatus sg_solve(SGContext *ctx);
+/*=== Solving ===*/
 
-/* Solution access */
+SGStatus sg_solve(SGContext *ctx);
+void sg_stop(SGContext *ctx);  /* Interrupt from another thread */
+
+/*=== Solution Access ===*/
+
+const SGSolution *sg_get_solution(SGContext *ctx);
 int sg_get_num_routes(SGContext *ctx);
-int sg_get_route_stops(SGContext *ctx, int route_idx,
-                        uint32_t *request_ids, uint8_t *types, int max_stops);
+const SGRoute *sg_get_route(SGContext *ctx, int route_idx);
 double sg_get_total_cost(SGContext *ctx);
 double sg_get_total_distance(SGContext *ctx);
+double sg_get_total_tardiness(SGContext *ctx);
 int sg_get_num_unassigned(SGContext *ctx);
 const uint32_t *sg_get_unassigned(SGContext *ctx);
 
 /* Export */
 char *sg_solution_to_json(SGContext *ctx);
+int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 #endif /* SURGE_H */
 ```
@@ -831,41 +1167,77 @@ char *sg_solution_to_json(SGContext *ctx);
 
 ## Implementation Plan
 
-### Phase 1: Core Data Structures (1 week)
-- [ ] Data structures (SGRequest, SGVehicle, SGRoute, SGSolution)
+### Phase 1: Core Foundation (1-2 weeks)
+- [ ] Core data structures (SGRequest, SGVehicle, SGRoute, SGSolution)
+- [ ] Request types: PDPTW, VRPTW delivery, pickup, service
+- [ ] Single-dimension capacity (weight only initially)
+- [ ] Single time window per stop
 - [ ] Problem builder API
 - [ ] Greedy construction heuristic
 - [ ] Basic feasibility checking (TW, capacity, precedence)
-- [ ] Distance matrix (Euclidean initially)
+- [ ] Euclidean distance matrix
 
-### Phase 2: PDPTW Operators (1 week)
+### Phase 2: Basic ALNS (1 week)
 - [ ] Basic destroy: random, worst
 - [ ] Basic repair: greedy, regret-2
 - [ ] Arbor solution ops callbacks (copy, cost, free)
 - [ ] Register operators with Arbor ALNS
+- [ ] Unit tests for operators
 
-### Phase 3: Advanced Operators (1 week)
-- [ ] Shaw removal (relatedness function)
+### Phase 3: Rich Capacity Constraints (1 week)
+- [ ] Multi-dimensional capacity (weight, volume, pallets, etc.)
+- [ ] SGLoadVector operations (add, subtract, compare)
+- [ ] Incremental capacity tracking on route
+- [ ] Update feasibility checker for multi-dim
+
+### Phase 4: Rich Time Constraints (1 week)
+- [ ] Disjunct time windows (multiple windows per stop)
+- [ ] Soft time windows with tardiness penalties
+- [ ] Max ride time (DARP support)
+- [ ] Waiting cost in objective
+- [ ] Efficient TW propagation for disjunct windows
+
+### Phase 5: Compatibility Constraints (1 week)
+- [ ] Vehicle qualifications (refrigerated, ADR, tail-lift, etc.)
+- [ ] Commodity types and conflicts
+- [ ] Request exclusion groups
+- [ ] Incremental commodity tracking on route
+- [ ] Compatibility-aware insertion
+
+### Phase 6: Multi-Depot & Route Types (1 week)
+- [ ] Multiple depots with constraints
+- [ ] Per-depot vehicle limits
+- [ ] Open routes (no return to depot)
+- [ ] Different start/end depots
+- [ ] Depot time windows
+
+### Phase 7: Advanced Operators (1 week)
+- [ ] Shaw removal (distance + time + load + commodity similarity)
 - [ ] Route removal
-- [ ] Regret-k insertion (k=2,3)
-- [ ] Time window propagation optimization
+- [ ] Zone-based removal (geographic clusters)
+- [ ] Regret-k insertion (k=2,3,4)
+- [ ] Parallel insertion evaluation
 
-### Phase 4: Integration (1 week)
+### Phase 8: Integration (1 week)
 - [ ] Velo integration (road distance/time matrices)
 - [ ] Ralph integration (exact MIP for small instances)
+- [ ] HoSE integration (driver breaks)
 - [ ] API server endpoints
 - [ ] JSON input/output
 - [ ] WASM compilation
 
-### Phase 5: Testing & Optimization (1 week)
-- [ ] Unit tests (feasibility, operators)
-- [ ] Benchmark on standard instances (Solomon, Li & Lim)
+### Phase 9: Testing & Benchmarking (1-2 weeks)
+- [ ] Unit tests for all constraint types
+- [ ] Benchmark on Solomon VRPTW instances
+- [ ] Benchmark on Li & Lim PDPTW instances
+- [ ] Benchmark on Cordeau DARP instances
+- [ ] Rich VRP instances (custom)
 - [ ] Parameter tuning
-- [ ] Performance optimization
+- [ ] Performance profiling and optimization
 
 **Note:** The ALNS framework (main loop, operator selection, acceptance criteria,
-adaptive weights) is provided by Arbor. Surge implements PDPTW-specific operators
-and integrates via Arbor's callback interface.
+adaptive weights) is provided by Arbor. Surge implements VRP/PDPTW-specific operators
+and constraint checking, integrating via Arbor's callback interface.
 
 ---
 
@@ -882,14 +1254,43 @@ and integrates via Arbor's callback interface.
 
 ## References
 
+### Core ALNS
 1. Ropke & Pisinger (2006) - "An Adaptive Large Neighborhood Search Heuristic for the Pickup and Delivery Problem with Time Windows"
 2. Shaw (1997) - "A New Local Search Algorithm Providing High Quality Solutions to Vehicle Routing Problems"
-3. Li & Lim (2001) - PDPTW benchmark instances
-4. Solomon (1987) - VRPTW benchmark instances
+3. Pisinger & Ropke (2007) - "A general heuristic for vehicle routing problems"
+
+### Rich VRP
+4. Hasle & Kloster (2007) - "Industrial aspects and literature survey: fleet composition and routing"
+5. Vidal et al. (2014) - "A unified solution framework for multi-attribute vehicle routing problems"
+6. Drexl (2012) - "Rich vehicle routing in theory and practice"
+
+### DARP (Dial-a-Ride)
+7. Cordeau & Laporte (2007) - "The dial-a-ride problem: models and algorithms"
+8. Parragh et al. (2008) - "A survey on pickup and delivery problems"
+
+### Benchmark Instances
+9. Solomon (1987) - VRPTW benchmark instances
+10. Li & Lim (2001) - PDPTW benchmark instances
+11. Cordeau (2006) - DARP benchmark instances
 
 ---
 
 ## Appendix: Standard Benchmark Instances
+
+### Solomon VRPTW Instances
+
+Download: http://web.cba.neu.edu/~msolomon/problems.htm
+
+| Class | Customers | TW Width | Distribution |
+|-------|-----------|----------|--------------|
+| C1 | 100 | Narrow | Clustered |
+| C2 | 100 | Wide | Clustered |
+| R1 | 100 | Narrow | Random |
+| R2 | 100 | Wide | Random |
+| RC1 | 100 | Narrow | Mixed |
+| RC2 | 100 | Wide | Mixed |
+
+Extended versions with 200, 400, 600, 800, 1000 customers also available.
 
 ### Li & Lim PDPTW Instances
 
@@ -903,5 +1304,27 @@ Download: https://www.sintef.no/projectweb/top/pdptw/li-lim-benchmark/
 | LR2 | 100-1000 | Wide | Random |
 | LRC1 | 100-1000 | Narrow | Mixed |
 | LRC2 | 100-1000 | Wide | Mixed |
+
+### Cordeau DARP Instances
+
+Download: https://www.bernabe.dorronsoro.es/vrp/
+
+| Instance | Vehicles | Requests | Max Ride Time |
+|----------|----------|----------|---------------|
+| a2-16 | 2 | 16 | 30 min |
+| a4-32 | 4 | 32 | 30 min |
+| a8-64 | 8 | 64 | 30 min |
+| b2-16 | 2 | 16 | 45 min |
+| b4-32 | 4 | 32 | 45 min |
+| b8-64 | 8 | 64 | 45 min |
+
+### Rich VRP Testing
+
+For rich constraint testing, generate synthetic instances with:
+- Multi-dimensional capacity (2-4 dimensions)
+- Disjunct time windows (2-3 windows per stop)
+- Commodity conflicts (3-5 commodity types)
+- Vehicle qualifications (5-8 different qualifications)
+- Exclusion groups (10-20% of requests have exclusions)
 
 Use these for validation against published best-known solutions.
