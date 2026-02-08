@@ -89,7 +89,14 @@
         "script": "wasm/fuelwise-api-demo.js",
         "wrapper": "js/fuelwise-api-demo.js",
         "factory_name": "FuelWiseAPIDemo",
-        "class_name": "FuelWiseDemo"
+        "class_name": "FuelWiseDemo",
+        "handlers_file": "js/handlers/fuelwise.js",
+        "init_function": "initFuelWiseDemo",
+        "error_function": "handleFuelWiseError",
+        "buttons": {
+          "fuelwise-api-v1-health-try-btn": "fetchFuelWiseHealth",
+          "fuelwise-api-v1-stats-try-btn": "fetchFuelWiseStats"
+        }
       }
     }
   ],

@@ -15,12 +15,21 @@ async function calculateVeloRoute() {
     btn.textContent = 'Calculating...';
     output.classList.add('visible');
 
-    const from = {lat: 43.7384, lon: 7.4246};
-    const to = {lat: 43.7311, lon: 7.4197};
+    // Read from input fields
+    const from = {
+        lat: parseFloat(document.getElementById('velo-from_lat').value) || 43.7384,
+        lon: parseFloat(document.getElementById('velo-from_lon').value) || 7.4246
+    };
+    const to = {
+        lat: parseFloat(document.getElementById('velo-to_lat').value) || 43.7311,
+        lon: parseFloat(document.getElementById('velo-to_lon').value) || 7.4197
+    };
+    const profile = document.getElementById('velo-profile').value || 'car';
+    const mode = document.getElementById('velo-mode').value || 'fastest';
 
     try {
         const startTime = performance.now();
-        const route = await veloDemo.route(from, to);
+        const route = await veloDemo.route(from, to, { profile, mode });
         const elapsed = (performance.now() - startTime).toFixed(1);
 
         const html = formatJsonWithHighlighting(route);
