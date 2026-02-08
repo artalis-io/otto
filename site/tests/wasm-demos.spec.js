@@ -357,4 +357,84 @@ test.describe('WASM API Demos', () => {
     });
   });
 
+  test.describe('Ralph (LP/MIP Solver)', () => {
+    test.beforeEach(async ({ page }) => {
+      await page.goto(API_HTML_PATH);
+      await page.waitForFunction(() =>
+        typeof ralphDemo !== 'undefined' && ralphDemo.isReady(),
+        { timeout: WASM_INIT_TIMEOUT }
+      );
+    });
+
+    test('health endpoint returns healthy status', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const resp = await ralphDemo.fetch('/api/v1/health');
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.body.status).toBe('ok');
+      expect(result.body.version).toMatch(/^\d+\.\d+\.\d+$/);
+    });
+
+    test('formats endpoint returns supported formats', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const resp = await ralphDemo.fetch('/api/v1/formats');
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.body.formats).toBeDefined();
+      expect(Array.isArray(result.body.formats)).toBe(true);
+      expect(result.body.formats.length).toBeGreaterThan(0);
+    });
+
+    test('solve endpoint solves LP problem', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const problem = {
+          format: 'lp',
+          problem: `max: 5 x + 3 y
+subject to
+wood: 2 x + 4 y <= 40
+labor: 3 x + 2 y <= 24
+bounds
+x >= 0
+y >= 0
+end`
+        };
+        const resp = await ralphDemo.fetch('/api/v1/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(problem)
+        });
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.body.status).toBe('optimal');
+      expect(result.body.objective).toBeCloseTo(40, 1);
+      expect(result.body.variables).toBeDefined();
+      expect(result.body.variables.x).toBeCloseTo(8, 1);
+      expect(result.body.variables.y).toBeCloseTo(0, 1);
+    });
+
+    test('solve endpoint handles invalid LP syntax', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const problem = {
+          format: 'lp',
+          problem: 'this is not valid LP syntax'
+        };
+        const resp = await ralphDemo.fetch('/api/v1/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(problem)
+        });
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBeDefined();
+    });
+  });
+
 });

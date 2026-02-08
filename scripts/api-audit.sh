@@ -198,23 +198,26 @@ check_handler_interface() {
         return
     fi
 
-    local PREFIX_UPPER
+    local PREFIX_UPPER PREFIX_PASCAL
     PREFIX_UPPER=$(echo "$prefix" | tr '[:lower:]' '[:upper:]')
+    # PascalCase: first letter uppercase, rest lowercase (e.g., "ralph" -> "Ralph")
+    PREFIX_PASCAL="$(echo "${prefix:0:1}" | tr '[:lower:]' '[:upper:]')$(echo "${prefix:1}" | tr '[:upper:]' '[:lower:]')"
 
     # Check for required typedefs/structs
-    if grep -q "${PREFIX_UPPER}APIContext\|${prefix}_api_context" "$ROOT_DIR/$header" 2>/dev/null; then
+    # Accepts: PREFIXAPIContext, prefix_api_context, or PascalCaseAPIContext
+    if grep -q "${PREFIX_UPPER}APIContext\|${prefix}_api_context\|${PREFIX_PASCAL}APIContext" "$ROOT_DIR/$header" 2>/dev/null; then
         pass "APIContext type defined"
     else
         fail "Missing ${PREFIX_UPPER}APIContext typedef"
     fi
 
-    if grep -q "${PREFIX_UPPER}APIRequest\|${prefix}_api_request" "$ROOT_DIR/$header" 2>/dev/null; then
+    if grep -q "${PREFIX_UPPER}APIRequest\|${prefix}_api_request\|${PREFIX_PASCAL}APIRequest" "$ROOT_DIR/$header" 2>/dev/null; then
         pass "APIRequest struct defined"
     else
         fail "Missing ${PREFIX_UPPER}APIRequest struct"
     fi
 
-    if grep -q "${PREFIX_UPPER}APIResponse\|${prefix}_api_response" "$ROOT_DIR/$header" 2>/dev/null; then
+    if grep -q "${PREFIX_UPPER}APIResponse\|${prefix}_api_response\|${PREFIX_PASCAL}APIResponse" "$ROOT_DIR/$header" 2>/dev/null; then
         pass "APIResponse struct defined"
     else
         fail "Missing ${PREFIX_UPPER}APIResponse struct"
