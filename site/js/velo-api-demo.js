@@ -158,6 +158,7 @@ class VeloDemo {
 
         if (options.profile) params.set('profile', options.profile);
         if (options.mode) params.set('mode', options.mode);
+        if (options.geometry !== undefined) params.set('geometry', options.geometry.toString());
 
         const response = await this.fetch(`/api/v1/route?${params}`);
         const data = await response.json();
