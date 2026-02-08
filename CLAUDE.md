@@ -91,8 +91,65 @@ Claude: Uses /feature-branch velo-cache "Add route caching"
 
 - **Never push directly to main** for non-trivial changes
 - **Always wait for user approval** before merging PRs
-- **Delete feature branches** locally after merge (remote deletion optional, ask user)
+- **Delete feature branches** after merge (both local and remote, keeps repo clean)
 - **Keep PRs focused** - one feature per branch
+
+### Branch Naming (Collision Avoidance)
+
+Use specific names to avoid conflicts between concurrent Claude sessions:
+
+```
+feature/<module>-<feature>-<detail>
+```
+
+**Examples:**
+- `feature/velo-cache-lru` (not just `feature/velo-cache`)
+- `feature/ralph-api-mps-parser`
+- `fix/carta-clip-multipolygon`
+
+If unsure about uniqueness, check existing branches first: `git branch -a | grep <name>`
+
+### Roadmap Lock (Multi-Session Safety)
+
+When appending to `docs/roadmaps/{module}.md`, use a lock file to prevent concurrent writes:
+
+```bash
+# Before writing to roadmap
+LOCK_FILE=".claude/locks/roadmap-{module}.lock"
+mkdir -p .claude/locks
+if [ -f "$LOCK_FILE" ]; then
+    echo "Roadmap locked by another session. Wait or coordinate."
+    exit 1
+fi
+echo "$(date -Iseconds) session:$$" > "$LOCK_FILE"
+
+# ... append to roadmap ...
+
+# After writing
+rm -f "$LOCK_FILE"
+```
+
+**Important:** If a session crashes, stale locks may remain. Check the timestamp - locks older than 1 hour are likely stale and can be removed.
+
+### Session Handoff
+
+If a Claude session ends mid-work (context limit, crash, user stops), persist state to the roadmap:
+
+```markdown
+## WIP: <Feature Name> (Session Handoff)
+
+**Status:** In progress, paused at <phase>
+**Branch:** feature/<branch-name>
+**Last commit:** <hash>
+**Next steps:**
+1. ...
+2. ...
+
+**Blockers/Notes:**
+- ...
+```
+
+The next session can read the roadmap to resume. Delete the WIP section when work completes.
 
 ## Components
 
@@ -225,18 +282,6 @@ void *p = calloc(count, element_size);  /* Or use calloc */
 4. **Locus**: Queries must be UTF-8 encoded
 5. **FuelWise**: Stations must be sorted by distance_from_start
 6. **Memory**: Always free: solutions, routes, contexts
-
-## Test Counts
-
-```
-ralph:    73 tests
-fuelwise: 33 tests
-shared:   137 tests (includes circuit, backoff, retry)
-velo:     47 tests
-carta:    33 tests
-locus:    52 tests
-clayshards: 101 tests (includes TUI renderer)
-```
 
 ## Build Commands
 
