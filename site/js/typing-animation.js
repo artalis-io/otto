@@ -8,9 +8,14 @@
     const codeBlocks = document.querySelectorAll('.code-block');
     const blockData = new Map();
 
+    // Track active animations to prevent overlapping renders
+    const activeAnimations = new Map();
+    let animationIdCounter = 0;
+
     /**
      * Animate typing of HTML content into a code block.
      * Can be called dynamically for WASM demo responses.
+     * Safe to call multiple times - cancels any existing animation.
      *
      * @param {HTMLElement} block - The .code-block container
      * @param {string} html - The HTML content to type
@@ -18,6 +23,10 @@
     function typeAnimateContent(block, html) {
         const pre = block.querySelector('pre');
         if (!pre) return;
+
+        // Cancel any existing animation on this block
+        const thisAnimationId = ++animationIdCounter;
+        activeAnimations.set(block, thisAnimationId);
 
         // Clear and prepare
         pre.innerHTML = '';
@@ -53,9 +62,15 @@
         let currentWrapper = null;
 
         function typeNext() {
+            // Abort if a newer animation started on this block
+            if (activeAnimations.get(block) !== thisAnimationId) {
+                return;
+            }
+
             if (index >= segments.length) {
                 block.classList.remove('typing');
                 block.classList.add('typed');
+                activeAnimations.delete(block);
                 return;
             }
 
