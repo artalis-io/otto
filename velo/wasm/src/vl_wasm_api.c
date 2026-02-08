@@ -140,7 +140,7 @@ static void handle_route(const char *query) {
     /* Parse optional parameters */
     VLRouteOptions opts;
     vl_default_options(&opts);
-    opts.include_geometry = 1;
+    opts.include_geometry = 0;  /* Default: no geometry */
 
     const char *profile_str = get_query_param(query, "profile", buf, sizeof(buf));
     if (profile_str) {
@@ -152,6 +152,11 @@ static void handle_route(const char *query) {
     const char *mode_str = get_query_param(query, "mode", buf, sizeof(buf));
     if (mode_str && strcmp(mode_str, "shortest") == 0) {
         opts.weight = VL_WEIGHT_DISTANCE;
+    }
+
+    const char *geom_str = get_query_param(query, "geometry", buf, sizeof(buf));
+    if (geom_str && strcmp(geom_str, "true") == 0) {
+        opts.include_geometry = 1;
     }
 
     /* Calculate route */
@@ -170,37 +175,61 @@ static void handle_route(const char *query) {
     }
 
     /* Build JSON response */
-    int offset = snprintf(g_response_buf, sizeof(g_response_buf),
-        "{\n"
-        "  \"status\": \"ok\",\n"
-        "  \"route\": {\n"
-        "    \"distance\": %.1f,\n"
-        "    \"duration\": %.1f,\n"
-        "    \"profile\": \"%s\",\n"
-        "    \"mode\": \"%s\",\n"
-        "    \"from\": [%.6f, %.6f],\n"
-        "    \"to\": [%.6f, %.6f],\n"
-        "    \"geometry\": [",
-        route.distance_m,
-        route.duration_s,
-        opts.profile == VL_PROFILE_TRUCK ? "truck" :
-        opts.profile == VL_PROFILE_BIKE ? "bike" :
-        opts.profile == VL_PROFILE_FOOT ? "foot" : "car",
-        opts.weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest",
-        from_lat, from_lon,
-        to_lat, to_lon);
+    int offset;
+    if (opts.include_geometry) {
+        offset = snprintf(g_response_buf, sizeof(g_response_buf),
+            "{\n"
+            "  \"status\": \"ok\",\n"
+            "  \"route\": {\n"
+            "    \"distance\": %.1f,\n"
+            "    \"duration\": %.1f,\n"
+            "    \"profile\": \"%s\",\n"
+            "    \"mode\": \"%s\",\n"
+            "    \"from\": [%.6f, %.6f],\n"
+            "    \"to\": [%.6f, %.6f],\n"
+            "    \"geometry\": [",
+            route.distance_m,
+            route.duration_s,
+            opts.profile == VL_PROFILE_TRUCK ? "truck" :
+            opts.profile == VL_PROFILE_BIKE ? "bike" :
+            opts.profile == VL_PROFILE_FOOT ? "foot" : "car",
+            opts.weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest",
+            from_lat, from_lon,
+            to_lat, to_lon);
 
-    /* Add geometry coordinates */
-    for (uint32_t i = 0; i < route.num_coords && offset < (int)sizeof(g_response_buf) - 100; i++) {
-        if (i > 0) {
-            offset += snprintf(g_response_buf + offset, sizeof(g_response_buf) - offset, ",");
+        /* Add geometry coordinates */
+        for (uint32_t i = 0; i < route.num_coords && offset < (int)sizeof(g_response_buf) - 100; i++) {
+            if (i > 0) {
+                offset += snprintf(g_response_buf + offset, sizeof(g_response_buf) - offset, ",");
+            }
+            offset += snprintf(g_response_buf + offset, sizeof(g_response_buf) - offset,
+                "[%.6f,%.6f]", route.coords[i].lat, route.coords[i].lon);
         }
-        offset += snprintf(g_response_buf + offset, sizeof(g_response_buf) - offset,
-            "[%.6f,%.6f]", route.coords[i].lat, route.coords[i].lon);
-    }
 
-    offset += snprintf(g_response_buf + offset, sizeof(g_response_buf) - offset,
-        "]\n  }\n}");
+        offset += snprintf(g_response_buf + offset, sizeof(g_response_buf) - offset,
+            "]\n  }\n}");
+    } else {
+        offset = snprintf(g_response_buf, sizeof(g_response_buf),
+            "{\n"
+            "  \"status\": \"ok\",\n"
+            "  \"route\": {\n"
+            "    \"distance\": %.1f,\n"
+            "    \"duration\": %.1f,\n"
+            "    \"profile\": \"%s\",\n"
+            "    \"mode\": \"%s\",\n"
+            "    \"from\": [%.6f, %.6f],\n"
+            "    \"to\": [%.6f, %.6f]\n"
+            "  }\n"
+            "}",
+            route.distance_m,
+            route.duration_s,
+            opts.profile == VL_PROFILE_TRUCK ? "truck" :
+            opts.profile == VL_PROFILE_BIKE ? "bike" :
+            opts.profile == VL_PROFILE_FOOT ? "foot" : "car",
+            opts.weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest",
+            from_lat, from_lon,
+            to_lat, to_lon);
+    }
 
     g_response_len = offset;
     g_response_status = 200;
