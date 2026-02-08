@@ -323,14 +323,22 @@ make api-docs-check    # Check if api.html is up-to-date (for CI)
 ```
 data/monaco-latest.osm.pbf  (downloads if missing)
            ↓
-data/monaco.vlg  (rebuilds when velo/ sources change)
+data/monaco.vlg + data/monaco.lcx  (index files for velo/locus)
            ↓
-{velo,carta}/wasm/src/monaco_*.h  (embedded data headers via xxd)
+{velo,carta,locus}/wasm/src/monaco_*.h  (embedded data headers via xxd)
            ↓
-{velo,carta}/wasm/build/*-api-demo.js  (WASM modules)
+{velo,carta,locus,fuelwise}/wasm/build/*-api-demo.js  (WASM modules)
            ↓
-site/api.html  (copies WASM to site/js/, generates HTML from annotations)
+site/api.html  (copies WASM to site/wasm/, generates HTML from annotations)
 ```
+
+**Module WASM dependencies:**
+| Module | Embedded Data | Dependencies |
+|--------|---------------|--------------|
+| velo | `monaco_vlg.h` (routing graph) | velo/src/*.c, shared |
+| carta | `monaco_pbf.h` (raw PBF) | carta/src/*.c, shared |
+| locus | `monaco_lcx.h` (geocoding index) | locus/src/*.c, shared |
+| fuelwise | none (no embedded data) | fuelwise/src/*.c, shared, ralph |
 
 **Key generator files:**
 - `scripts/build-api-docs.py` - Parses annotations, renders template, copies WASM
@@ -339,13 +347,16 @@ site/api.html  (copies WASM to site/js/, generates HTML from annotations)
 
 **Force full rebuild:**
 ```bash
-rm -f data/monaco.vlg velo/wasm/src/monaco_vlg.h carta/wasm/src/monaco_pbf.h
+rm -f data/monaco.vlg data/monaco.lcx
+rm -f velo/wasm/src/monaco_vlg.h carta/wasm/src/monaco_pbf.h locus/wasm/src/monaco_lcx.h
 make api-docs
 ```
 
 **What triggers auto-rebuild:**
-- `velo/src/*.c` or `velo/include/*.h` changes → monaco.vlg rebuilt → WASM rebuilt
-- `carta/src/*.c` or `carta/include/*.h` changes → WASM rebuilt
+- `velo/src/*.c` or `velo/include/*.h` changes → velo WASM rebuilt
+- `carta/src/*.c` or `carta/include/*.h` changes → carta WASM rebuilt
+- `locus/src/*.c` or `locus/include/*.h` changes → locus WASM rebuilt
+- `fuelwise/src/*.c` or `fuelwise/include/*.h` changes → fuelwise WASM rebuilt
 - `scripts/build-api-docs.py` or `site/api-template.html` changes → HTML regenerated
 - Header annotation changes → HTML regenerated
 

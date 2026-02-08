@@ -304,8 +304,21 @@ carta/wasm/build/carta-api-demo.js: carta/wasm/src/monaco_pbf.h $(CARTA_WASM_SOU
 	@echo "Building Carta WASM API demo..."
 	$(MAKE) -C carta/wasm api-demo
 
-# Build both WASM API demos
-wasm-api-demos: velo/wasm/build/velo-api-demo.js carta/wasm/build/carta-api-demo.js
+LOCUS_SOURCES = $(wildcard locus/src/*.c) $(wildcard locus/include/*.h)
+LOCUS_WASM_SOURCES = $(wildcard locus/wasm/src/*.c) $(LOCUS_SOURCES)
+locus/wasm/build/locus-api-demo.js: locus/wasm/src/monaco_lcx.h $(LOCUS_WASM_SOURCES) | shared
+	@echo "Building Locus WASM API demo..."
+	$(MAKE) -C locus/wasm api-demo
+
+FUELWISE_SOURCES = $(wildcard fuelwise/src/*.c) $(wildcard fuelwise/include/*.h)
+FUELWISE_WASM_SOURCES = $(wildcard fuelwise/wasm/src/*.c) $(FUELWISE_SOURCES)
+fuelwise/wasm/build/fuelwise-api-demo.js: $(FUELWISE_WASM_SOURCES) | shared ralph
+	@echo "Building FuelWise WASM API demo..."
+	$(MAKE) -C fuelwise/wasm api-demo
+
+# Build all WASM API demos
+wasm-api-demos: velo/wasm/build/velo-api-demo.js carta/wasm/build/carta-api-demo.js \
+                locus/wasm/build/locus-api-demo.js fuelwise/wasm/build/fuelwise-api-demo.js
 	@echo "WASM API demos built successfully"
 
 # Convenience target for downloading Monaco
@@ -323,7 +336,8 @@ API_HEADERS = $(wildcard carta/include/*.h) $(wildcard velo/include/*.h) \
 # Generate API documentation from C header annotations
 # Depends on: headers (for annotations), WASM demos (copied to site/js/), generator script
 site/api.html: scripts/build-api-docs.py site/api-template.html site/api-config.json $(API_HEADERS) \
-               velo/wasm/build/velo-api-demo.js carta/wasm/build/carta-api-demo.js
+               velo/wasm/build/velo-api-demo.js carta/wasm/build/carta-api-demo.js \
+               locus/wasm/build/locus-api-demo.js fuelwise/wasm/build/fuelwise-api-demo.js
 	@echo "Generating API documentation..."
 	@python3 scripts/build-api-docs.py
 	@echo "Done: site/api.html"
