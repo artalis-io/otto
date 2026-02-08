@@ -110,6 +110,13 @@ void fw_latlon_to_local(FWCoord coord, FWCoord ref, double *x, double *y)
 void fw_local_to_latlon(double x, double y, FWCoord ref, FWCoord *coord)
 {
     double cos_lat = cos(ref.lat * FW_DEG_TO_RAD);
+
+    /* Guard against division by near-zero at poles (|lat| > 89.9 degrees).
+     * Trucking routes don't go to poles, but handle gracefully. */
+    if (cos_lat < 1e-6) {
+        cos_lat = 1e-6;
+    }
+
     coord->lon = ref.lon + (x / (FW_EARTH_RADIUS_MILES * cos_lat)) * FW_RAD_TO_DEG;
     coord->lat = ref.lat + (y / FW_EARTH_RADIUS_MILES) * FW_RAD_TO_DEG;
 }

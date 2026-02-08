@@ -52,6 +52,9 @@ double wasm_haversine(double lat1, double lon1, double lat2, double lon2) {
 
 WASM_EXPORT
 double wasm_polyline_length(double *points, int num_points) {
+    /* Validate inputs */
+    if (!points || num_points < 2) return 0.0;
+
     FWPolyline poly;
     poly.points = (FWCoord*)points;
     poly.num_points = num_points;
@@ -76,8 +79,15 @@ int wasm_filter_stations(
     double *result_buffer,      /* Output: [id, dist_from_start, perp_dist, price] x filtered */
     int result_buffer_size)
 {
+    /* Validate inputs */
+    if (!stations_flat || num_stations <= 0 ||
+        !route_flat || num_points < 2 ||
+        !result_buffer || result_buffer_size <= 0) {
+        return -1;
+    }
+
     /* Build station array */
-    FWStation *stations = malloc(num_stations * sizeof(FWStation));
+    FWStation *stations = malloc((size_t)num_stations * sizeof(FWStation));
     if (!stations) return -1;
 
     for (int i = 0; i < num_stations; i++) {
@@ -136,6 +146,12 @@ int wasm_solve_simple(
     double *result_purchases,   /* Output: gallons at each station */
     double *result_meta)        /* Output: [status, num_stops, total_cost, remaining_fuel] */
 {
+    /* Validate inputs */
+    if (!stations_flat || num_stations <= 0 ||
+        !result_purchases || !result_meta) {
+        return -1;
+    }
+
     /* Build problem */
     FWRefuelProblem problem;
     memset(&problem, 0, sizeof(problem));
@@ -149,7 +165,7 @@ int wasm_solve_simple(
     problem.num_stations = num_stations;
 
     /* Build stations */
-    FWSnappedStation *stations = malloc(num_stations * sizeof(FWSnappedStation));
+    FWSnappedStation *stations = malloc((size_t)num_stations * sizeof(FWSnappedStation));
     if (!stations) return -1;
 
     for (int i = 0; i < num_stations; i++) {
@@ -206,6 +222,15 @@ int wasm_solve_segments(
     double *result_purchases,
     double *result_meta)
 {
+    /* Validate inputs */
+    if (!stations_flat || num_stations <= 0 ||
+        !result_purchases || !result_meta) {
+        return -1;
+    }
+    if (num_segments > 0 && !segments_flat) {
+        return -1;
+    }
+
     /* Build problem */
     FWRefuelProblem problem;
     memset(&problem, 0, sizeof(problem));
@@ -220,7 +245,7 @@ int wasm_solve_segments(
     problem.num_stations = num_stations;
 
     /* Build stations */
-    FWSnappedStation *stations = malloc(num_stations * sizeof(FWSnappedStation));
+    FWSnappedStation *stations = malloc((size_t)num_stations * sizeof(FWSnappedStation));
     if (!stations) return -1;
 
     for (int i = 0; i < num_stations; i++) {
@@ -234,7 +259,7 @@ int wasm_solve_segments(
     /* Build segments */
     FWRouteSegment *segments = NULL;
     if (num_segments > 0) {
-        segments = malloc(num_segments * sizeof(FWRouteSegment));
+        segments = malloc((size_t)num_segments * sizeof(FWRouteSegment));
         if (!segments) {
             free(stations);
             return -1;
@@ -299,8 +324,18 @@ int wasm_optimize_route(
     double *result_meta,        /* Output: [status, num_filtered, num_stops, total_cost, remaining_fuel, route_dist] */
     int *result_station_ids)    /* Output: filtered station IDs */
 {
+    /* Validate inputs */
+    if (!stations_flat || num_stations <= 0 ||
+        !route_flat || num_points < 2 ||
+        !result_purchases || !result_meta || !result_station_ids) {
+        return -1;
+    }
+    if (num_segments > 0 && !segments_flat) {
+        return -1;
+    }
+
     /* Build station array */
-    FWStation *stations = malloc(num_stations * sizeof(FWStation));
+    FWStation *stations = malloc((size_t)num_stations * sizeof(FWStation));
     if (!stations) return -1;
 
     for (int i = 0; i < num_stations; i++) {
@@ -347,16 +382,18 @@ int wasm_optimize_route(
     /* Add segments if provided */
     FWRouteSegment *segments = NULL;
     if (num_segments > 0 && segments_flat) {
-        segments = malloc(num_segments * sizeof(FWRouteSegment));
-        if (segments) {
-            for (int i = 0; i < num_segments; i++) {
-                segments[i].start_distance = segments_flat[i * 3 + 0];
-                segments[i].cargo_weight_lbs = segments_flat[i * 3 + 1];
-                segments[i].consumption_mpg = segments_flat[i * 3 + 2];
-            }
-            problem.num_segments = num_segments;
-            problem.segments = segments;
+        segments = malloc((size_t)num_segments * sizeof(FWRouteSegment));
+        if (!segments) {
+            fw_free_snapped_stations(filtered);
+            return -1;
         }
+        for (int i = 0; i < num_segments; i++) {
+            segments[i].start_distance = segments_flat[i * 3 + 0];
+            segments[i].cargo_weight_lbs = segments_flat[i * 3 + 1];
+            segments[i].consumption_mpg = segments_flat[i * 3 + 2];
+        }
+        problem.num_segments = num_segments;
+        problem.segments = segments;
     }
 
     /* Solve */

@@ -53,8 +53,16 @@ static int parse_int(const char **p) {
     return val;
 }
 
-/* Find a key in a JSON object and return pointer to value */
+/* Find a key in a JSON object and return pointer to value.
+ * Note: Key must be < 250 chars to fit in search buffer.
+ */
 static const char* find_json_key(const char *json, const char *key) {
+    if (!json || !key) return NULL;
+
+    /* Validate key length to prevent truncation */
+    size_t key_len = strnlen(key, 256);
+    if (key_len >= 250) return NULL;
+
     char search[256];
     snprintf(search, sizeof(search), "\"%s\"", key);
 
