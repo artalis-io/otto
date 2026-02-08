@@ -15,6 +15,52 @@
 | Audit JS code | Use `/js-audit` skill |
 | Audit ClayShards | Use `/clayshards-audit` skill |
 
+## Git Workflow
+
+**IMPORTANT:** For new features or significant changes, always use feature branches.
+
+### When to Use Feature Branches
+
+Use `/feature-branch` skill when:
+- Implementing a new feature
+- Making changes that touch multiple files
+- Refactoring or restructuring code
+- Any change that should be reviewed before merging
+
+Do NOT use for:
+- Quick typo fixes (1-2 lines)
+- Emergency hotfixes (discuss with user first)
+
+### Workflow Steps
+
+1. **Start:** Use `/feature-branch <name> <description>` to create branch
+2. **Work:** Implement with regular commits on the feature branch
+3. **Test:** Run `make test` and relevant API tests before PR
+4. **PR:** Create pull request with `gh pr create`
+5. **Review:** Wait for user approval before merging
+6. **Merge:** After approval, merge to main and delete feature branch
+
+### Example
+
+```
+User: "Add caching to the Velo router"
+
+Claude: Uses /feature-branch velo-cache "Add route caching"
+        → Creates feature/velo-cache branch
+        → Implements caching
+        → Runs tests
+        → Creates PR
+        → Waits for user approval
+        → Merges and deletes branch
+```
+
+### Key Rules
+
+- **Never push directly to main** for non-trivial changes
+- **Always wait for user approval** before merging PRs
+- **Delete feature branches** locally after merge (remote deletion optional, ask user)
+- **Keep PRs focused** - one feature per branch
+
 ## Components
 
 | Component | Location | Port | Purpose |
@@ -294,7 +340,9 @@ See `docs/MANIFESTO.md` for the full manifesto.
 
 | Skill | Purpose |
 |-------|---------|
+| `/feature-branch` | Create feature branch for new work (required for non-trivial changes) |
 | `/api-run` | Start servers, CLI args, env vars |
+| `/api-audit` | Audit API modules for transport-agnostic compliance |
 | `/c-audit` | C code security review |
 | `/js-audit` | JavaScript/WebGL code review |
 | `/clayshards-audit` | Full ClayShards audit (C + JS + Manifesto) |
