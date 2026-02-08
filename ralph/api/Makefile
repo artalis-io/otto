@@ -91,7 +91,7 @@ test: all
 		-H "Content-Type: application/json" \
 		-d '{"format":"lp","problem":"max: 5 x + 3 y\nsubject to\nwood: 2 x + 4 y <= 40\nlabor: 3 x + 2 y <= 24\nbounds\nx >= 0\ny >= 0\nend"}'); \
 	echo "$$SOLVE" | head -20; \
-	if echo "$$SOLVE" | grep -q '"status":"optimal"'; then \
+	if echo "$$SOLVE" | grep -q '"status":"OPTIMAL"'; then \
 		echo "  PASS: Solve endpoint works"; \
 	else \
 		echo "  FAIL: Solve endpoint"; \
