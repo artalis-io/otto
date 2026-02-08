@@ -355,6 +355,47 @@ test.describe('WASM API Demos', () => {
         expect(result.body.total_cost).toBeDefined();
       }
     });
+
+    test('solve with documented example matches expected response', async ({ page }) => {
+      // This test uses the EXACT input from @request_body in fw_api.h
+      // to verify docs match actual behavior
+      const result = await page.evaluate(async () => {
+        const problem = {
+          total_distance: 1000,
+          tank_capacity: 100,
+          current_fuel: 50,
+          consumption_mpg: 10,
+          minimum_fuel: 10,
+          stations: [
+            { id: 1, distance: 200, price: 1.20 },
+            { id: 2, distance: 500, price: 1.00 },
+            { id: 3, distance: 700, price: 1.30 }
+          ]
+        };
+        const resp = await fuelwiseDemo.fetch('/api/v1/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(problem)
+        });
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.body.status).toBe('optimal');
+      // Verify response structure matches @response_json in fw_api.h
+      expect(result.body.num_stops).toBeDefined();
+      expect(result.body.total_cost).toBeDefined();
+      expect(result.body.gross_cost).toBeDefined();
+      expect(result.body.remaining_fuel).toBeDefined();
+      expect(result.body.stops).toBeDefined();
+      expect(Array.isArray(result.body.stops)).toBe(true);
+      // Verify each stop has required fields
+      for (const stop of result.body.stops) {
+        expect(stop.station_id).toBeDefined();
+        expect(stop.gallons).toBeDefined();
+        expect(stop.cost).toBeDefined();
+      }
+    });
   });
 
   test.describe('Ralph (LP/MIP Solver)', () => {

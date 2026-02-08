@@ -1613,15 +1613,15 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             <h4>Request Body <span style="color: var(--text-muted); font-weight: normal; font-size: 12px;">(JSON)</span></h4>
                             <div class="code-block">
 <pre>{
-  <span class="key">"total_distance"</span>: <span class="number">500</span>,
+  <span class="key">"total_distance"</span>: <span class="number">1000</span>,
   <span class="key">"tank_capacity"</span>: <span class="number">100</span>,
-  <span class="key">"current_fuel"</span>: <span class="number">30</span>,
-  <span class="key">"consumption_mpg"</span>: <span class="number">6.5</span>,
-  <span class="key">"minimum_fuel"</span>: <span class="number">25</span>,
+  <span class="key">"current_fuel"</span>: <span class="number">50</span>,
+  <span class="key">"consumption_mpg"</span>: <span class="number">10</span>,
+  <span class="key">"minimum_fuel"</span>: <span class="number">10</span>,
   <span class="key">"stations"</span>: [
-    {<span class="key">"id"</span>: <span class="number">1</span>, <span class="key">"distance"</span>: <span class="number">100</span>, <span class="key">"price"</span>: <span class="number">3.50</span>},
-    {<span class="key">"id"</span>: <span class="number">2</span>, <span class="key">"distance"</span>: <span class="number">250</span>, <span class="key">"price"</span>: <span class="number">3.25</span>},
-    {<span class="key">"id"</span>: <span class="number">3</span>, <span class="key">"distance"</span>: <span class="number">400</span>, <span class="key">"price"</span>: <span class="number">3.75</span>}
+    {<span class="key">"id"</span>: <span class="number">1</span>, <span class="key">"distance"</span>: <span class="number">200</span>, <span class="key">"price"</span>: <span class="number">1.20</span>},
+    {<span class="key">"id"</span>: <span class="number">2</span>, <span class="key">"distance"</span>: <span class="number">500</span>, <span class="key">"price"</span>: <span class="number">1.00</span>},
+    {<span class="key">"id"</span>: <span class="number">3</span>, <span class="key">"distance"</span>: <span class="number">700</span>, <span class="key">"price"</span>: <span class="number">1.30</span>}
   ]
 }</pre>
                             </div>
@@ -1632,12 +1632,12 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 <pre>{
   <span class="key">"status"</span>: <span class="string">"optimal"</span>,
   <span class="key">"num_stops"</span>: <span class="number">2</span>,
-  <span class="key">"total_cost"</span>: <span class="number">156.78</span>,
-  <span class="key">"gross_cost"</span>: <span class="number">156.78</span>,
-  <span class="key">"remaining_fuel"</span>: <span class="number">25.00</span>,
+  <span class="key">"total_cost"</span>: <span class="number">68.00</span>,
+  <span class="key">"gross_cost"</span>: <span class="number">68.00</span>,
+  <span class="key">"remaining_fuel"</span>: <span class="number">10.00</span>,
   <span class="key">"stops"</span>: [
-    {<span class="key">"station_id"</span>: <span class="number">1</span>, <span class="key">"gallons"</span>: <span class="number">45.5</span>, <span class="key">"cost"</span>: <span class="number">159.25</span>},
-    {<span class="key">"station_id"</span>: <span class="number">3</span>, <span class="key">"gallons"</span>: <span class="number">30.0</span>, <span class="key">"cost"</span>: <span class="number">97.50</span>}
+    {<span class="key">"station_id"</span>: <span class="number">1</span>, <span class="key">"gallons"</span>: <span class="number">30.00</span>, <span class="key">"cost"</span>: <span class="number">36.00</span>},
+    {<span class="key">"station_id"</span>: <span class="number">2</span>, <span class="key">"gallons"</span>: <span class="number">30.00</span>, <span class="key">"cost"</span>: <span class="number">30.00</span>}
   ]
 }</pre>
                             </div>

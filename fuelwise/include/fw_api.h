@@ -130,15 +130,15 @@ int fw_api_handle(FWAPIContext *ctx,
  *
  * @request_body json
  * {
- *   "total_distance": 500,
+ *   "total_distance": 1000,
  *   "tank_capacity": 100,
- *   "current_fuel": 30,
- *   "consumption_mpg": 6.5,
- *   "minimum_fuel": 25,
+ *   "current_fuel": 50,
+ *   "consumption_mpg": 10,
+ *   "minimum_fuel": 10,
  *   "stations": [
- *     {"id": 1, "distance": 100, "price": 3.50},
- *     {"id": 2, "distance": 250, "price": 3.25},
- *     {"id": 3, "distance": 400, "price": 3.75}
+ *     {"id": 1, "distance": 200, "price": 1.20},
+ *     {"id": 2, "distance": 500, "price": 1.00},
+ *     {"id": 3, "distance": 700, "price": 1.30}
  *   ]
  * }
  *
@@ -146,12 +146,12 @@ int fw_api_handle(FWAPIContext *ctx,
  * {
  *   "status": "optimal",
  *   "num_stops": 2,
- *   "total_cost": 156.78,
- *   "gross_cost": 156.78,
- *   "remaining_fuel": 25.00,
+ *   "total_cost": 68.00,
+ *   "gross_cost": 68.00,
+ *   "remaining_fuel": 10.00,
  *   "stops": [
- *     {"station_id": 1, "gallons": 45.5, "cost": 159.25},
- *     {"station_id": 3, "gallons": 30.0, "cost": 97.50}
+ *     {"station_id": 1, "gallons": 30.00, "cost": 36.00},
+ *     {"station_id": 2, "gallons": 30.00, "cost": 30.00}
  *   ]
  * }
  *
