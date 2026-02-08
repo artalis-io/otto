@@ -131,6 +131,36 @@ typedef struct {
     char error[128];
 } OSRMValidation;
 
+/*
+ * Self-consistency invariants:
+ * - shortest_distance <= fastest_distance
+ * - fastest_duration <= shortest_duration
+ * - truck_distance >= car_distance (trucks have more restrictions)
+ * - truck_duration >= car_duration
+ */
+typedef struct {
+    int checked;             /* 1 if invariants were checked */
+    int pass;                /* All invariants passed */
+
+    /* Shortest vs Fastest */
+    double shortest_distance_m;
+    double shortest_duration_s;
+    double fastest_distance_m;
+    double fastest_duration_s;
+    int shortest_leq_fastest_dist;   /* shortest_distance <= fastest_distance */
+    int fastest_leq_shortest_dur;    /* fastest_duration <= shortest_duration */
+
+    /* Car vs Truck (only if route profile is truck) */
+    double car_distance_m;
+    double car_duration_s;
+    double truck_distance_m;
+    double truck_duration_s;
+    int truck_geq_car_dist;          /* truck_distance >= car_distance */
+    int truck_geq_car_dur;           /* truck_duration >= car_duration */
+
+    char violations[256];
+} InvariantValidation;
+
 typedef struct {
     int overall_pass;
     DistanceValidation distance;
@@ -138,6 +168,7 @@ typedef struct {
     ProfileValidation profile;
     ConsistencyValidation consistency;
     OSRMValidation osrm;
+    InvariantValidation invariants;
 } RouteValidation;
 
 typedef struct {
@@ -183,6 +214,9 @@ typedef struct {
     /* OSRM comparison */
     char osrm_url[256];      /* e.g., "http://localhost:5000" */
     int compare_osrm;        /* 1 if --osrm-url was specified */
+
+    /* Self-consistency invariants */
+    int check_invariants;    /* 1 if --check-invariants was specified */
 
     char *route_files[MAX_ROUTES];
     int num_route_files;
@@ -671,6 +705,123 @@ static void validate_consistency(VLGraph *graph, VLLandmarks *landmarks,
     }
 }
 
+/*
+ * Validate self-consistency invariants:
+ * 1. shortest_distance <= fastest_distance
+ * 2. fastest_duration <= shortest_duration
+ * 3. truck_distance >= car_distance (trucks have restrictions)
+ * 4. truck_duration >= car_duration
+ */
+static void validate_invariants(VLGraph *graph, BenchRoute *route, InvariantValidation *v)
+{
+    memset(v, 0, sizeof(*v));
+    v->checked = 1;
+    v->pass = 1;
+
+    VLCoord origin = {route->origin_lat, route->origin_lon};
+    VLCoord dest = {route->dest_lat, route->dest_lon};
+
+    uint32_t source = vl_graph_nearest_node(graph, origin);
+    uint32_t target = vl_graph_nearest_node(graph, dest);
+
+    if (source == (uint32_t)-1 || target == (uint32_t)-1) {
+        v->checked = 0;
+        return;
+    }
+
+    VLRouteOptions opts;
+    vl_default_options(&opts);
+    opts.algorithm = VL_ALGORITHM_DIJKSTRA;  /* Use Dijkstra for correctness */
+    opts.profile = route->profile;
+    opts.include_geometry = 0;
+
+    VLRoute shortest_route, fastest_route;
+
+    /* Compute shortest (distance) route */
+    opts.weight = VL_WEIGHT_DISTANCE;
+    if (vl_route(graph, source, target, &opts, &shortest_route) != VL_OK) {
+        v->checked = 0;
+        return;
+    }
+    v->shortest_distance_m = shortest_route.distance_m;
+    v->shortest_duration_s = shortest_route.duration_s;
+    vl_free_route(&shortest_route);
+
+    /* Compute fastest (duration) route */
+    opts.weight = VL_WEIGHT_DURATION;
+    if (vl_route(graph, source, target, &opts, &fastest_route) != VL_OK) {
+        v->checked = 0;
+        return;
+    }
+    v->fastest_distance_m = fastest_route.distance_m;
+    v->fastest_duration_s = fastest_route.duration_s;
+    vl_free_route(&fastest_route);
+
+    /* Check invariant: shortest_distance <= fastest_distance */
+    v->shortest_leq_fastest_dist = (v->shortest_distance_m <= v->fastest_distance_m + 1.0);
+    if (!v->shortest_leq_fastest_dist) {
+        v->pass = 0;
+        snprintf(v->violations, sizeof(v->violations),
+                 "shortest_dist %.1f > fastest_dist %.1f",
+                 v->shortest_distance_m, v->fastest_distance_m);
+    }
+
+    /* Check invariant: fastest_duration <= shortest_duration */
+    v->fastest_leq_shortest_dur = (v->fastest_duration_s <= v->shortest_duration_s + 1.0);
+    if (!v->fastest_leq_shortest_dur) {
+        v->pass = 0;
+        if (v->violations[0]) strncat(v->violations, "; ", sizeof(v->violations) - strlen(v->violations) - 1);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "fastest_dur %.1f > shortest_dur %.1f",
+                 v->fastest_duration_s, v->shortest_duration_s);
+        strncat(v->violations, buf, sizeof(v->violations) - strlen(v->violations) - 1);
+    }
+
+    /* Check truck vs car invariants (only if profile is truck) */
+    if (route->profile == VL_PROFILE_TRUCK) {
+        VLRoute car_route, truck_route;
+
+        /* Car route */
+        opts.profile = VL_PROFILE_CAR;
+        opts.weight = route->weight;
+        if (vl_route(graph, source, target, &opts, &car_route) == VL_OK) {
+            v->car_distance_m = car_route.distance_m;
+            v->car_duration_s = car_route.duration_s;
+            vl_free_route(&car_route);
+
+            /* Truck route */
+            opts.profile = VL_PROFILE_TRUCK;
+            if (vl_route(graph, source, target, &opts, &truck_route) == VL_OK) {
+                v->truck_distance_m = truck_route.distance_m;
+                v->truck_duration_s = truck_route.duration_s;
+                vl_free_route(&truck_route);
+
+                /* Check invariant: truck_distance >= car_distance (trucks have more restrictions) */
+                v->truck_geq_car_dist = (v->truck_distance_m >= v->car_distance_m - 1.0);
+                if (!v->truck_geq_car_dist) {
+                    v->pass = 0;
+                    if (v->violations[0]) strncat(v->violations, "; ", sizeof(v->violations) - strlen(v->violations) - 1);
+                    char buf[128];
+                    snprintf(buf, sizeof(buf), "truck_dist %.1f < car_dist %.1f",
+                             v->truck_distance_m, v->car_distance_m);
+                    strncat(v->violations, buf, sizeof(v->violations) - strlen(v->violations) - 1);
+                }
+
+                /* Check invariant: truck_duration >= car_duration */
+                v->truck_geq_car_dur = (v->truck_duration_s >= v->car_duration_s - 1.0);
+                if (!v->truck_geq_car_dur) {
+                    v->pass = 0;
+                    if (v->violations[0]) strncat(v->violations, "; ", sizeof(v->violations) - strlen(v->violations) - 1);
+                    char buf[128];
+                    snprintf(buf, sizeof(buf), "truck_dur %.1f < car_dur %.1f",
+                             v->truck_duration_s, v->car_duration_s);
+                    strncat(v->violations, buf, sizeof(v->violations) - strlen(v->violations) - 1);
+                }
+            }
+        }
+    }
+}
+
 /* ============================================================================
  * Benchmark Execution
  * ============================================================================ */
@@ -785,12 +936,20 @@ static void run_single_route(VLGraph *graph, VLLandmarks *landmarks,
         result->validation.osrm.pass = 1;  /* Skip if no OSRM URL */
     }
 
+    /* Self-consistency invariants */
+    if (opts->check_invariants) {
+        validate_invariants(graph, route, &result->validation.invariants);
+    } else {
+        result->validation.invariants.pass = 1;  /* Skip if not enabled */
+    }
+
     result->validation.overall_pass =
         result->validation.distance.pass &&
         result->validation.duration.pass &&
         result->validation.profile.pass &&
         result->validation.consistency.pass &&
-        (!opts->compare_osrm || result->validation.osrm.pass);
+        (!opts->compare_osrm || result->validation.osrm.pass) &&
+        (!opts->check_invariants || result->validation.invariants.pass);
 
     vl_free_route(&final_route);
 }
@@ -920,6 +1079,39 @@ static void output_result_json(BenchResult *result, VLGraph *graph, FILE *out)
     } else {
         fprintf(out, "        \"error\": \"not configured\"\n");
     }
+    fprintf(out, "      },\n");
+
+    /* Self-consistency invariants */
+    fprintf(out, "      \"invariants\": {\n");
+    fprintf(out, "        \"checked\": %s,\n", result->validation.invariants.checked ? "true" : "false");
+    if (result->validation.invariants.checked) {
+        fprintf(out, "        \"pass\": %s,\n", result->validation.invariants.pass ? "true" : "false");
+        fprintf(out, "        \"shortest_distance_m\": %.1f,\n", result->validation.invariants.shortest_distance_m);
+        fprintf(out, "        \"shortest_duration_s\": %.1f,\n", result->validation.invariants.shortest_duration_s);
+        fprintf(out, "        \"fastest_distance_m\": %.1f,\n", result->validation.invariants.fastest_distance_m);
+        fprintf(out, "        \"fastest_duration_s\": %.1f,\n", result->validation.invariants.fastest_duration_s);
+        fprintf(out, "        \"shortest_leq_fastest_dist\": %s,\n",
+                result->validation.invariants.shortest_leq_fastest_dist ? "true" : "false");
+        fprintf(out, "        \"fastest_leq_shortest_dur\": %s,\n",
+                result->validation.invariants.fastest_leq_shortest_dur ? "true" : "false");
+        if (result->validation.invariants.truck_distance_m > 0) {
+            fprintf(out, "        \"car_distance_m\": %.1f,\n", result->validation.invariants.car_distance_m);
+            fprintf(out, "        \"car_duration_s\": %.1f,\n", result->validation.invariants.car_duration_s);
+            fprintf(out, "        \"truck_distance_m\": %.1f,\n", result->validation.invariants.truck_distance_m);
+            fprintf(out, "        \"truck_duration_s\": %.1f,\n", result->validation.invariants.truck_duration_s);
+            fprintf(out, "        \"truck_geq_car_dist\": %s,\n",
+                    result->validation.invariants.truck_geq_car_dist ? "true" : "false");
+            fprintf(out, "        \"truck_geq_car_dur\": %s,\n",
+                    result->validation.invariants.truck_geq_car_dur ? "true" : "false");
+        }
+        if (result->validation.invariants.violations[0]) {
+            fprintf(out, "        \"violations\": \"%s\"\n", result->validation.invariants.violations);
+        } else {
+            fprintf(out, "        \"violations\": null\n");
+        }
+    } else {
+        fprintf(out, "        \"pass\": true\n");
+    }
     fprintf(out, "      }\n");
     fprintf(out, "    },\n");
 
@@ -1039,6 +1231,7 @@ static void print_usage(const char *prog)
            DEFAULT_DISTANCE_TOLERANCE_PCT);
     printf("  --duration-tolerance PCT Duration tolerance (default: %.1f%%)\n",
            DEFAULT_DURATION_TOLERANCE_PCT);
+    printf("  --check-invariants       Verify self-consistency invariants\n");
     printf("  --strict                 Fail on any warning\n");
     printf("\n");
     printf("PERFORMANCE OPTIONS:\n");
@@ -1106,6 +1299,8 @@ static int parse_args(int argc, char *argv[], BenchOptions *opts)
         } else if (strcmp(arg, "--duration-tolerance") == 0) {
             if (++i >= argc) { fprintf(stderr, "Missing argument for %s\n", arg); return 0; }
             opts->duration_tolerance = atof(argv[i]);
+        } else if (strcmp(arg, "--check-invariants") == 0) {
+            opts->check_invariants = 1;
         } else if (strcmp(arg, "--strict") == 0) {
             opts->strict = 1;
         } else if (strcmp(arg, "--iterations") == 0) {
