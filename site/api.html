@@ -1805,14 +1805,14 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
     (function() {
         'use strict';
 
-        // WASM Demo instances
-        let cartaDemo = null;
+        // WASM Demo instances (exposed on window for testing)
+        window.cartaDemo = null;
 
-        let veloDemo = null;
+        window.veloDemo = null;
 
-        let locusDemo = null;
+        window.locusDemo = null;
 
-        let fuelwiseDemo = null;
+        window.fuelwiseDemo = null;
 
 
 
