@@ -1102,22 +1102,22 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             </p>
                             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                                 <label style="font-size: 13px;">
-                                    from_lat: <input type="number" id="velo-from_lat" value="43.7384" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    from_lat: <input type="number" id="velo-route-from_lat" value="43.7384" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>
                                 <label style="font-size: 13px;">
-                                    from_lon: <input type="number" id="velo-from_lon" value="7.4246" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    from_lon: <input type="number" id="velo-route-from_lon" value="7.4246" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>
                                 <label style="font-size: 13px;">
-                                    to_lat: <input type="number" id="velo-to_lat" value="43.7311" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    to_lat: <input type="number" id="velo-route-to_lat" value="43.7311" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>
                                 <label style="font-size: 13px;">
-                                    to_lon: <input type="number" id="velo-to_lon" value="7.4197" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    to_lon: <input type="number" id="velo-route-to_lon" value="7.4197" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>
                                 <label style="font-size: 13px;">
-                                    profile: <select id="velo-profile" style="padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);"><option value="car" selected>car</option><option value="truck">truck</option><option value="bike">bike</option><option value="foot">foot</option></select>
+                                    profile: <select id="velo-route-profile" style="padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);"><option value="car" selected>car</option><option value="truck">truck</option><option value="bike">bike</option><option value="foot">foot</option></select>
                                 </label>
                                 <label style="font-size: 13px;">
-                                    mode: <select id="velo-mode" style="padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);"><option value="fastest" selected>fastest</option><option value="shortest">shortest</option></select>
+                                    mode: <select id="velo-route-mode" style="padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);"><option value="fastest" selected>fastest</option><option value="shortest">shortest</option></select>
                                 </label>
                                 <button class="try-btn" id="velo-route-try-btn" disabled>Loading WASM...</button>
                             </div>
@@ -1330,7 +1330,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             </p>
                             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                                 <label style="font-size: 13px;">
-                                    q: <input type="text" id="locus-q" value="Monte Carlo" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    q: <input type="text" id="locus-api-v1-search-q" value="Monte Carlo" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>
                                 <button class="try-btn" id="locus-api-v1-search-try-btn" disabled>Loading WASM...</button>
                             </div>
@@ -1393,7 +1393,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             </p>
                             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                                 <label style="font-size: 13px;">
-                                    q: <input type="text" id="locus-q" value="Mon" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    q: <input type="text" id="locus-api-v1-autocomplete-q" value="Mon" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>
                                 <button class="try-btn" id="locus-api-v1-autocomplete-try-btn" disabled>Loading WASM...</button>
                             </div>
@@ -1444,10 +1444,10 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             </p>
                             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
                                 <label style="font-size: 13px;">
-                                    lat: <input type="number" id="locus-lat" value="43.7384" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    lat: <input type="number" id="locus-api-v1-reverse-lat" value="43.7384" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>
                                 <label style="font-size: 13px;">
-                                    lon: <input type="number" id="locus-lon" value="7.4246" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    lon: <input type="number" id="locus-api-v1-reverse-lon" value="7.4246" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>
                                 <button class="try-btn" id="locus-api-v1-reverse-try-btn" disabled>Loading WASM...</button>
                             </div>
@@ -2313,8 +2313,8 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             const status = document.getElementById('locus-api-v1-search-status');
             const output = document.getElementById('locus-api-v1-search-output');
 
-            // Get query from input field
-            const qInput = document.getElementById('locus-q');
+            // Get query from input field (ID matches demo_id pattern)
+            const qInput = document.getElementById('locus-api-v1-search-q');
             const q = qInput ? qInput.value.trim() : 'Monte Carlo';
 
             btn.disabled = true;
@@ -2358,8 +2358,8 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             const status = document.getElementById('locus-api-v1-autocomplete-status');
             const output = document.getElementById('locus-api-v1-autocomplete-output');
 
-            // Get query from input field
-            const qInput = document.getElementById('locus-q');
+            // Get query from input field (ID matches demo_id pattern)
+            const qInput = document.getElementById('locus-api-v1-autocomplete-q');
             const q = qInput ? qInput.value.trim() : 'Mon';
 
             btn.disabled = true;
@@ -2403,9 +2403,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             const status = document.getElementById('locus-api-v1-reverse-status');
             const output = document.getElementById('locus-api-v1-reverse-output');
 
-            // Get coordinates from input fields
-            const latInput = document.getElementById('locus-lat');
-            const lonInput = document.getElementById('locus-lon');
+            // Get coordinates from input fields (IDs match demo_id pattern)
+            const latInput = document.getElementById('locus-api-v1-reverse-lat');
+            const lonInput = document.getElementById('locus-api-v1-reverse-lon');
             const lat = latInput ? parseFloat(latInput.value) : 43.7384;
             const lon = lonInput ? parseFloat(lonInput.value) : 7.4246;
 
