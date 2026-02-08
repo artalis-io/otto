@@ -101,7 +101,7 @@ Option B: `@response_from_wasm` that fetches real response at build time (not im
 
 ## Phase 3: Enable All WASM Demos
 
-**Status:** Planned
+**Status:** In Progress
 **Effort:** 3-4 hours
 
 ### Current Coverage
@@ -109,17 +109,22 @@ Option B: `@response_from_wasm` that fetches real response at build time (not im
 | Module | Endpoints | WASM Demos | Missing |
 |--------|-----------|------------|---------|
 | Carta | 4 | 2 | mvt, ascii |
-| Velo | 5 | 1 | nearest, snap, isochrone |
-| Locus | 6 | 3 | batch |
-| FuelWise | 5 | 2 | **optimize** (main endpoint!) |
+| Velo | 5 | 3 | nearest, snap |
+| Locus | 6 | 5 | batch |
+| FuelWise | 5 | 3 | filter, optimize |
 
-### Tasks
+### Completed
 
-1. Add `/api/v1/optimize` demo to FuelWise (priority!)
-2. Add missing Velo demos (nearest, snap)
-3. Add MVT demo for Carta (hex dump or parsed view)
-4. Update `api-config.json` button mappings
-5. Add handler functions to `site/js/handlers/*.js`
+- [x] Add `/api/v1/solve` demo to FuelWise (core LP optimization)
+- [x] Update `api-config.json` button mapping for solve
+- [x] Add `solveFuelWiseProblem()` handler with sample problem
+
+### Remaining Tasks
+
+1. Add missing Velo demos (nearest, snap)
+2. Add MVT demo for Carta (hex dump or parsed view)
+3. Add batch demo for Locus (if worthwhile for small Monaco data)
+4. Consider filter/optimize demos for FuelWise (require route polyline)
 
 ### Auto-generate Button Wiring
 

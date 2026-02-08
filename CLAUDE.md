@@ -200,7 +200,7 @@ site/api.html  (copies WASM to site/js/, generates HTML)
 ```
 
 **Key files:**
-- `scripts/gen_api.py` - Generator script (parses headers, renders template)
+- `scripts/build-api-docs.py` - Generator script (parses headers, renders template)
 - `site/api-template.html` - HTML template with Jinja2-like syntax
 - `site/api-config.json` - Module configuration (ports, WASM settings)
 - `{module}/include/*.h` - API annotations parsed for docs

@@ -94,6 +94,7 @@
         "init_function": "initFuelWiseDemo",
         "error_function": "handleFuelWiseError",
         "buttons": {
+          "fuelwise-api-v1-solve-try-btn": "solveFuelWiseProblem",
           "fuelwise-api-v1-health-try-btn": "fetchFuelWiseHealth",
           "fuelwise-api-v1-stats-try-btn": "fetchFuelWiseStats"
         }

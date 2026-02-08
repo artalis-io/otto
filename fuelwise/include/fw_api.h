@@ -145,6 +145,9 @@ int fw_api_handle(FWAPIContext *ctx,
  * curl -X POST http://localhost:8080/api/v1/solve \
  *   -H "Content-Type: application/json" \
  *   -d '{"total_distance":500,"tank_capacity":100,"current_fuel":30,"consumption_mpg":6.5,"minimum_fuel":25,"stations":[{"id":1,"distance":100,"price":3.50},{"id":2,"distance":250,"price":3.25}]}'
+ *
+ * @demo json
+ * @demo_title Solve a refueling problem using LP optimization in WASM. No server required.
  */
 
 /*@api
