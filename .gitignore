@@ -86,3 +86,6 @@ demo-config.json
 # Business docs (may want to gitignore for public fork)
 # docs/business/
 __pycache__/
+
+# Claude Code session locks
+.claude/locks/
