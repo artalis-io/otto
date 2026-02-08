@@ -669,6 +669,15 @@ class HtmlGenerator:
                                 </div>
                                 <div class="demo-status" id="{demo_id}-status"></div>
                             </div>'''
+        elif api.demo == "text":
+            # ASCII/text output - no line spacing
+            html += f'''
+                            <div class="demo-output ascii-output" id="{demo_id}-output">
+                                <div class="code-block">
+                                    <pre id="{demo_id}-result"></pre>
+                                </div>
+                                <div class="demo-status" id="{demo_id}-status"></div>
+                            </div>'''
         else:
             html += f'''
                             <div class="demo-output" id="{demo_id}-output">
