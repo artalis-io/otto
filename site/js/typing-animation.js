@@ -34,8 +34,9 @@
         block.classList.remove('typed');
         block.classList.add('typing');
 
-        // Parse HTML into segments
-        const tempDiv = document.createElement('div');
+        // Parse HTML into segments (use pre to preserve whitespace)
+        const tempDiv = document.createElement('pre');
+        tempDiv.style.whiteSpace = 'pre';
         tempDiv.innerHTML = html;
 
         const segments = [];
