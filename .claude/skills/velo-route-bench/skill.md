@@ -235,8 +235,37 @@ OPTIONS:
   --landmarks N            Use N landmarks (default: 16)
   --iterations N           Run each route N times
   --distance-tolerance PCT Distance error tolerance (default: 0.1%)
+  --osrm-url URL           Compare against OSRM server
   --strict                 Fail on any warning
 ```
+
+## OSRM Comparison
+
+Compare Velo results against a running OSRM server (similar to Ralph vs GLPK):
+
+```bash
+# Start OSRM (if you have it running)
+./velo-route-bench --graph data/hungary.vlg --osrm-url http://localhost:5000 \
+    benchmarks/routes/regional/budapest_szeged.json -v
+```
+
+Output includes OSRM comparison in validation:
+```json
+{
+  "osrm": {
+    "available": true,
+    "pass": true,
+    "osrm_distance_m": 174832.0,
+    "velo_distance_m": 174850.0,
+    "distance_diff_pct": 0.01
+  }
+}
+```
+
+**Requirements:** `curl` must be installed. OSRM profiles map as:
+- car/truck/any → driving
+- bike → cycling
+- foot → walking
 
 ## Checklist Before Committing
 
@@ -248,6 +277,6 @@ OPTIONS:
 
 ## Related Documentation
 
-- **Roadmap:** `velo/docs/roadmaps/ROUTE_BENCH.md` - Full implementation plan
+- **Velo Roadmap:** `docs/roadmaps/velo.md` - Routing engine roadmap
 - **Velo CLAUDE.md:** `velo/CLAUDE.md` - Library architecture
 - **Existing benchmarks:** `velo/benchmarks/bench_routing.c` - Algorithm benchmarks

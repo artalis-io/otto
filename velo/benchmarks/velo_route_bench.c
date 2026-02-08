@@ -117,11 +117,27 @@ typedef struct {
 } ConsistencyValidation;
 
 typedef struct {
+    int available;           /* 1 if OSRM server was reachable */
+    int pass;                /* Distance within tolerance */
+    double osrm_distance_m;
+    double osrm_duration_s;
+    double velo_distance_m;
+    double velo_duration_s;
+    double distance_diff_m;
+    double distance_diff_pct;
+    double duration_diff_s;
+    double duration_diff_pct;
+    double osrm_query_ms;
+    char error[128];
+} OSRMValidation;
+
+typedef struct {
     int overall_pass;
     DistanceValidation distance;
     DurationValidation duration;
     ProfileValidation profile;
     ConsistencyValidation consistency;
+    OSRMValidation osrm;
 } RouteValidation;
 
 typedef struct {
@@ -163,6 +179,10 @@ typedef struct {
     double time_limit_ms;
     int strict;
     char format[16];
+
+    /* OSRM comparison */
+    char osrm_url[256];      /* e.g., "http://localhost:5000" */
+    int compare_osrm;        /* 1 if --osrm-url was specified */
 
     char *route_files[MAX_ROUTES];
     int num_route_files;
@@ -258,6 +278,146 @@ static int json_get_int(const char *json, const char *key, int *val)
     if (!json_get_double(json, key, &d)) return 0;
     *val = (int)d;
     return 1;
+}
+
+/* ============================================================================
+ * OSRM Comparison
+ * ============================================================================ */
+
+/*
+ * Query OSRM server and compare results.
+ * OSRM API: GET /route/v1/{profile}/{lon1},{lat1};{lon2},{lat2}?overview=false
+ * Response: {"routes":[{"distance":123.4,"duration":56.7}],"code":"Ok"}
+ *
+ * Uses curl via popen() - similar to Ralph's GLPK comparison via glpsol.
+ */
+static void query_osrm(const char *osrm_url, BenchRoute *route,
+                       double velo_distance, double velo_duration,
+                       double tolerance_pct, OSRMValidation *v)
+{
+    memset(v, 0, sizeof(*v));
+
+    /* Map Velo profile to OSRM profile */
+    const char *osrm_profile = "driving";
+    switch (route->profile) {
+        case VL_PROFILE_CAR:
+        case VL_PROFILE_TRUCK:
+        case VL_PROFILE_ANY:
+            osrm_profile = "driving";
+            break;
+        case VL_PROFILE_BIKE:
+            osrm_profile = "cycling";
+            break;
+        case VL_PROFILE_FOOT:
+            osrm_profile = "walking";
+            break;
+    }
+
+    /* Build OSRM URL: /route/v1/{profile}/{lon},{lat};{lon},{lat}?overview=false */
+    char url[1024];
+    snprintf(url, sizeof(url),
+             "%s/route/v1/%s/%.6f,%.6f;%.6f,%.6f?overview=false",
+             osrm_url, osrm_profile,
+             route->origin_lon, route->origin_lat,
+             route->dest_lon, route->dest_lat);
+
+    /* Query using curl */
+    char cmd[1200];
+    snprintf(cmd, sizeof(cmd),
+             "curl -s --connect-timeout 5 --max-time 10 '%s' 2>/dev/null", url);
+
+    double start = get_time_ms();
+    FILE *pipe = popen(cmd, "r");
+    if (!pipe) {
+        snprintf(v->error, sizeof(v->error), "Failed to run curl");
+        return;
+    }
+
+    /* Read response */
+    char response[8192];
+    size_t total = 0;
+    size_t n;
+    while ((n = fread(response + total, 1, sizeof(response) - total - 1, pipe)) > 0) {
+        total += n;
+    }
+    response[total] = '\0';
+
+    int ret = pclose(pipe);
+    v->osrm_query_ms = get_time_ms() - start;
+
+    if (ret != 0 || total == 0) {
+        snprintf(v->error, sizeof(v->error), "OSRM server not reachable");
+        return;
+    }
+
+    /* Check for OSRM error response */
+    char code[32] = {0};
+    if (json_get_string(response, "code", code, sizeof(code))) {
+        if (strcmp(code, "Ok") != 0) {
+            snprintf(v->error, sizeof(v->error), "OSRM error: %s", code);
+            return;
+        }
+    } else {
+        snprintf(v->error, sizeof(v->error), "Invalid OSRM response");
+        return;
+    }
+
+    /* Parse distance and duration from routes[0] */
+    const char *routes = strstr(response, "\"routes\"");
+    if (!routes) {
+        snprintf(v->error, sizeof(v->error), "No routes in OSRM response");
+        return;
+    }
+
+    if (!json_get_double(routes, "distance", &v->osrm_distance_m) ||
+        !json_get_double(routes, "duration", &v->osrm_duration_s)) {
+        snprintf(v->error, sizeof(v->error), "Failed to parse OSRM distance/duration");
+        return;
+    }
+
+    v->available = 1;
+    v->velo_distance_m = velo_distance;
+    v->velo_duration_s = velo_duration;
+
+    /* Compute differences */
+    v->distance_diff_m = velo_distance - v->osrm_distance_m;
+    v->duration_diff_s = velo_duration - v->osrm_duration_s;
+
+    if (v->osrm_distance_m > 0) {
+        v->distance_diff_pct = (v->distance_diff_m / v->osrm_distance_m) * 100.0;
+    }
+    if (v->osrm_duration_s > 0) {
+        v->duration_diff_pct = (v->duration_diff_s / v->osrm_duration_s) * 100.0;
+    }
+
+    /* Pass if distance within tolerance (use absolute value) */
+    v->pass = (fabs(v->distance_diff_pct) <= tolerance_pct);
+}
+
+/*
+ * Check if curl is available (called once at startup)
+ */
+static int osrm_check_curl(void)
+{
+    return system("which curl >/dev/null 2>&1") == 0;
+}
+
+/*
+ * Check if OSRM server is reachable
+ */
+static int osrm_check_server(const char *osrm_url, int verbose)
+{
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd),
+             "curl -s --connect-timeout 2 '%s/health' >/dev/null 2>&1 || "
+             "curl -s --connect-timeout 2 '%s/' >/dev/null 2>&1",
+             osrm_url, osrm_url);
+
+    int ret = system(cmd);
+    if (ret != 0 && verbose) {
+        fprintf(stderr, "Warning: OSRM server at %s not reachable\n", osrm_url);
+    }
+    return ret == 0;
 }
 
 /* ============================================================================
@@ -615,11 +775,22 @@ static void run_single_route(VLGraph *graph, VLLandmarks *landmarks,
         result->validation.consistency.pass = 1;
     }
 
+    /* OSRM comparison */
+    if (opts->compare_osrm && opts->osrm_url[0]) {
+        query_osrm(opts->osrm_url, route,
+                   result->result_distance_m, result->result_duration_s,
+                   route->distance_tolerance_pct,
+                   &result->validation.osrm);
+    } else {
+        result->validation.osrm.pass = 1;  /* Skip if no OSRM URL */
+    }
+
     result->validation.overall_pass =
         result->validation.distance.pass &&
         result->validation.duration.pass &&
         result->validation.profile.pass &&
-        result->validation.consistency.pass;
+        result->validation.consistency.pass &&
+        (!opts->compare_osrm || result->validation.osrm.pass);
 
     vl_free_route(&final_route);
 }
@@ -728,6 +899,27 @@ static void output_result_json(BenchResult *result, VLGraph *graph, FILE *out)
     fprintf(out, "      \"consistency\": {\n");
     fprintf(out, "        \"pass\": %s,\n", result->validation.consistency.pass ? "true" : "false");
     fprintf(out, "        \"algorithms_tested\": %d\n", result->validation.consistency.algorithms_tested);
+    fprintf(out, "      },\n");
+
+    /* OSRM comparison (if available) */
+    fprintf(out, "      \"osrm\": {\n");
+    fprintf(out, "        \"available\": %s,\n", result->validation.osrm.available ? "true" : "false");
+    if (result->validation.osrm.available) {
+        fprintf(out, "        \"pass\": %s,\n", result->validation.osrm.pass ? "true" : "false");
+        fprintf(out, "        \"osrm_distance_m\": %.1f,\n", result->validation.osrm.osrm_distance_m);
+        fprintf(out, "        \"osrm_duration_s\": %.1f,\n", result->validation.osrm.osrm_duration_s);
+        fprintf(out, "        \"velo_distance_m\": %.1f,\n", result->validation.osrm.velo_distance_m);
+        fprintf(out, "        \"velo_duration_s\": %.1f,\n", result->validation.osrm.velo_duration_s);
+        fprintf(out, "        \"distance_diff_m\": %.1f,\n", result->validation.osrm.distance_diff_m);
+        fprintf(out, "        \"distance_diff_pct\": %.2f,\n", result->validation.osrm.distance_diff_pct);
+        fprintf(out, "        \"duration_diff_s\": %.1f,\n", result->validation.osrm.duration_diff_s);
+        fprintf(out, "        \"duration_diff_pct\": %.2f,\n", result->validation.osrm.duration_diff_pct);
+        fprintf(out, "        \"osrm_query_ms\": %.1f\n", result->validation.osrm.osrm_query_ms);
+    } else if (result->validation.osrm.error[0]) {
+        fprintf(out, "        \"error\": \"%s\"\n", result->validation.osrm.error);
+    } else {
+        fprintf(out, "        \"error\": \"not configured\"\n");
+    }
     fprintf(out, "      }\n");
     fprintf(out, "    },\n");
 
@@ -855,6 +1047,7 @@ static void print_usage(const char *prog)
     printf("\n");
     printf("REFERENCE OPTIONS:\n");
     printf("  --generate-reference     Compute reference using Dijkstra\n");
+    printf("  --osrm-url URL           Compare against OSRM server (e.g., http://localhost:5000)\n");
     printf("\n");
     printf("UTILITY:\n");
     printf("  --list-routes            List available benchmark routes\n");
@@ -923,6 +1116,10 @@ static int parse_args(int argc, char *argv[], BenchOptions *opts)
             opts->warmup = atoi(argv[i]);
         } else if (strcmp(arg, "--generate-reference") == 0) {
             opts->generate_reference = 1;
+        } else if (strcmp(arg, "--osrm-url") == 0) {
+            if (++i >= argc) { fprintf(stderr, "Missing argument for %s\n", arg); return 0; }
+            strncpy(opts->osrm_url, argv[i], sizeof(opts->osrm_url) - 1);
+            opts->compare_osrm = 1;
         } else if (strcmp(arg, "--list-routes") == 0) {
             /* TODO: List routes */
             printf("Available routes in benchmarks/routes/:\n");
@@ -990,6 +1187,21 @@ int main(int argc, char *argv[])
                 graph->num_nodes, graph->num_edges);
     }
 
+    /* Check OSRM if enabled */
+    if (opts.compare_osrm) {
+        if (!osrm_check_curl()) {
+            fprintf(stderr, "Error: curl not found. Install curl to use --osrm-url.\n");
+            vl_graph_free(graph);
+            return 1;
+        }
+        if (opts.verbose) {
+            fprintf(stderr, "Checking OSRM server: %s\n", opts.osrm_url);
+        }
+        if (!osrm_check_server(opts.osrm_url, opts.verbose)) {
+            fprintf(stderr, "Warning: OSRM server not responding, comparison may fail\n");
+        }
+    }
+
     /* Create landmarks if enabled */
     VLLandmarks *landmarks = NULL;
     if (opts.use_landmarks && opts.num_landmarks > 0) {
@@ -1017,10 +1229,15 @@ int main(int argc, char *argv[])
     /* Run benchmarks */
     fprintf(out, "{\n");
     fprintf(out, "  \"benchmark\": {\n");
-    fprintf(out, "    \"tool_version\": \"1.0.0\",\n");
+    fprintf(out, "    \"tool_version\": \"1.1.0\",\n");
     fprintf(out, "    \"graph_file\": \"%s\",\n", opts.graph_file);
     fprintf(out, "    \"graph_nodes\": %u,\n", graph->num_nodes);
-    fprintf(out, "    \"graph_edges\": %u\n", graph->num_edges);
+    fprintf(out, "    \"graph_edges\": %u,\n", graph->num_edges);
+    if (opts.compare_osrm) {
+        fprintf(out, "    \"osrm_url\": \"%s\"\n", opts.osrm_url);
+    } else {
+        fprintf(out, "    \"osrm_url\": null\n");
+    }
     fprintf(out, "  },\n");
     fprintf(out, "  \"routes\": [\n");
 
