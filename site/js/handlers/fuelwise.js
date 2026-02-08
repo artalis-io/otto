@@ -3,19 +3,19 @@
  * Auto-loaded by build-api-docs.py
  */
 
-// Sample refueling problem for demo
+// Sample problem matching test case from fuelwise/tests/test_fuelwise.c
+// 1000 miles at 10 mpg = 100 gal needed, start with 50, need 10 at end
+// So need to purchase 60 gallons across the stations
 const SAMPLE_PROBLEM = {
-    total_distance: 500,
+    total_distance: 1000,
     tank_capacity: 100,
-    current_fuel: 30,
-    consumption_mpg: 6.5,
-    minimum_fuel: 25,
+    current_fuel: 50,
+    consumption_mpg: 10,
+    minimum_fuel: 10,
     stations: [
-        { id: 1, distance: 80, price: 3.45 },
-        { id: 2, distance: 150, price: 3.29 },
-        { id: 3, distance: 250, price: 3.55 },
-        { id: 4, distance: 320, price: 3.19 },
-        { id: 5, distance: 420, price: 3.39 }
+        { id: 1, distance: 200, price: 1.20 },
+        { id: 2, distance: 500, price: 1.00 },
+        { id: 3, distance: 700, price: 1.30 }
     ]
 };
 

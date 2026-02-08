@@ -96,6 +96,27 @@
             overflow: hidden;
         }
 
+        /* Scanlines overlay - moves slowly */
+        .crt-image-wrapper::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.12) 0px,
+                rgba(0, 0, 0, 0.12) 1px,
+                transparent 1px,
+                transparent 3px
+            );
+            pointer-events: none;
+            z-index: 2;
+            animation: crt-scanline-roll 8s linear infinite;
+        }
+
+        /* Secondary scanline layer */
         .crt-image-wrapper::after {
             content: '';
             position: absolute;
@@ -105,12 +126,13 @@
             bottom: 0;
             background: repeating-linear-gradient(
                 0deg,
-                rgba(0, 0, 0, 0.15) 0px,
-                rgba(0, 0, 0, 0.15) 1px,
+                rgba(255, 255, 255, 0.03) 0px,
+                rgba(255, 255, 255, 0.03) 1px,
                 transparent 1px,
                 transparent 2px
             );
             pointer-events: none;
+            z-index: 1;
             border-radius: 4px;
         }
 
@@ -119,12 +141,22 @@
             border-radius: 4px;
             border: 1px solid var(--border);
             max-width: 100%;
-            animation: crt-glow 4s ease-in-out infinite;
+            position: relative;
+            z-index: 0;
+            animation: crt-flicker 4s infinite;
         }
 
-        @keyframes crt-glow {
-            0%, 100% { filter: brightness(1) contrast(1.05); }
-            50% { filter: brightness(1.02) contrast(1.08); }
+        @keyframes crt-flicker {
+            0%, 100% { opacity: 1; filter: brightness(1) contrast(1.05); }
+            92% { opacity: 1; filter: brightness(1) contrast(1.05); }
+            93% { opacity: 0.97; filter: brightness(0.98) contrast(1.03); }
+            94% { opacity: 1; filter: brightness(1.02) contrast(1.08); }
+            95% { opacity: 0.98; filter: brightness(1) contrast(1.05); }
+        }
+
+        @keyframes crt-scanline-roll {
+            0% { background-position: 0 0; }
+            100% { background-position: 0 60px; }
         }
 
         .demo-output img {
@@ -459,7 +491,8 @@
         <header>
             <div class="header-top">
                 <div>
-                    <div class="logo"><span>O</span>TTO <span style="font-size: 16px; color: var(--text-muted); letter-spacing: 2px;">API</span></div>
+                    <div class="logo"><span>O</span>TTO</div>
+                    <div class="tagline">REST API Documentation</div>
                 </div>
                 <nav class="header-nav">
                     <a href="index.html">Home</a>
