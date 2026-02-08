@@ -178,6 +178,7 @@ All core optimization engines:
 | HoSE | Hours of Service | Domain logic, regulatory compliance |
 | Tempo | Time windows | Domain logic, scheduling rules |
 | Arbor | State-space search | Algorithm framework |
+| Surge | PDPTW solver | ALNS for pickup/delivery |
 | Sigma | Fleet selection | MIP-based assignment |
 | Pulse | Execution tracking | PTA computation |
 | ClayShards | UI components | Developer adoption |
