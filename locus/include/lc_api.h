@@ -62,6 +62,7 @@ extern "C" {
  *
  * @demo json
  * @demo_title Search Monaco places using WASM with embedded index
+ * @demo_input q:text:Monte Carlo
  */
 
 /*@api
@@ -87,6 +88,7 @@ extern "C" {
  *
  * @demo json
  * @demo_title Autocomplete suggestions using WASM with embedded Monaco index
+ * @demo_input q:text:Mon
  */
 
 /*@api
@@ -115,6 +117,8 @@ extern "C" {
  *
  * @demo json
  * @demo_title Reverse geocode a Monaco location using WASM
+ * @demo_input lat:number:43.7384
+ * @demo_input lon:number:7.4246
  */
 
 /*@api

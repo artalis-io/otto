@@ -8,6 +8,7 @@ async function generateCartaTile() {
 
     const btn = document.getElementById('carta-try-btn');
     const img = document.getElementById('carta-tile-img');
+    const placeholder = document.getElementById('carta-placeholder');
     const status = document.getElementById('carta-status');
     const output = document.getElementById('carta-output');
 
@@ -26,11 +27,17 @@ async function generateCartaTile() {
 
         img.src = dataUrl;
         img.style.display = 'block';
+        if (placeholder) placeholder.style.display = 'none';
         status.textContent = `Tile ${z}/${x}/${y}.png generated in ${elapsed}ms`;
         status.className = 'demo-status success';
     } catch (err) {
         console.error('Tile generation failed:', err);
         img.style.display = 'none';
+        if (placeholder) {
+            placeholder.style.display = 'block';
+            placeholder.setAttribute('data-error', err.message);
+            placeholder.querySelector('::after')?.remove();
+        }
         status.textContent = 'Error: ' + err.message;
         status.className = 'demo-status error';
     } finally {
@@ -80,9 +87,9 @@ async function generateCartaMVT() {
         status.className = 'demo-status success';
     } catch (err) {
         console.error('MVT generation failed:', err);
-        result.textContent = '';
-        status.textContent = 'Error: ' + err.message;
-        status.className = 'demo-status error';
+        result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+        status.textContent = '';
+        status.className = 'demo-status';
     } finally {
         btn.disabled = false;
         btn.textContent = 'Generate MVT';
@@ -116,9 +123,9 @@ async function generateCartaASCII() {
         status.className = 'demo-status success';
     } catch (err) {
         console.error('ASCII generation failed:', err);
-        result.textContent = '';
-        status.textContent = 'Error: ' + err.message;
-        status.className = 'demo-status error';
+        result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+        status.textContent = '';
+        status.className = 'demo-status';
     } finally {
         btn.disabled = false;
         btn.textContent = 'Render ASCII';
@@ -153,9 +160,9 @@ async function fetchTileJSON() {
         status.className = 'demo-status success';
     } catch (err) {
         console.error('TileJSON fetch failed:', err);
-        result.textContent = '';
-        status.textContent = 'Error: ' + err.message;
-        status.className = 'demo-status error';
+        result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+        status.textContent = '';
+        status.className = 'demo-status';
     } finally {
         btn.disabled = false;
         btn.textContent = 'Fetch TileJSON';

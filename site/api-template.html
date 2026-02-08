@@ -159,6 +159,58 @@
             100% { background-position: 0 60px; }
         }
 
+        /* TV static placeholder */
+        .tv-static-placeholder {
+            width: 256px;
+            height: 256px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tv-static-placeholder::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            opacity: 0.15;
+            animation: tv-static 0.1s steps(5) infinite;
+        }
+
+        .tv-static-placeholder::after {
+            content: 'NO SIGNAL';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--text-muted);
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            text-shadow: 0 0 10px rgba(100, 100, 100, 0.5);
+            animation: crt-flicker 3s infinite;
+        }
+
+        @keyframes tv-static {
+            0% { transform: translate(0, 0); }
+            20% { transform: translate(-2px, 1px); }
+            40% { transform: translate(1px, -1px); }
+            60% { transform: translate(-1px, 2px); }
+            80% { transform: translate(2px, -2px); }
+            100% { transform: translate(0, 0); }
+        }
+
+        /* Error display in code block */
+        .demo-error {
+            color: var(--error);
+            font-weight: 500;
+        }
+
         .demo-output img {
             border-radius: 4px;
             border: 1px solid var(--border);
@@ -848,9 +900,10 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error(`${endpoint} fetch failed:`, err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
+                // Show error in code block with red styling
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
             } finally {
                 btn.disabled = false;
                 btn.textContent = btnLabel;

@@ -11,13 +11,17 @@ async function fetchLocusSearch() {
     const status = document.getElementById('locus-api-v1-search-status');
     const output = document.getElementById('locus-api-v1-search-output');
 
+    // Get query from input field
+    const qInput = document.getElementById('locus-q');
+    const q = qInput ? qInput.value.trim() : 'Monte Carlo';
+
     btn.disabled = true;
     btn.textContent = 'Searching...';
     output.classList.add('visible');
 
     try {
         const startTime = performance.now();
-        const response = await locusDemo.fetch('/api/v1/search?q=Monte%20Carlo&limit=5');
+        const response = await locusDemo.fetch(`/api/v1/search?q=${encodeURIComponent(q)}&limit=5`);
         const elapsed = (performance.now() - startTime).toFixed(1);
 
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -35,9 +39,9 @@ async function fetchLocusSearch() {
         status.className = 'demo-status success';
     } catch (err) {
         console.error('Search failed:', err);
-        result.textContent = '';
-        status.textContent = 'Error: ' + err.message;
-        status.className = 'demo-status error';
+        result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+        status.textContent = '';
+        status.className = 'demo-status';
     } finally {
         btn.disabled = false;
         btn.textContent = 'Search';
@@ -52,13 +56,17 @@ async function fetchLocusAutocomplete() {
     const status = document.getElementById('locus-api-v1-autocomplete-status');
     const output = document.getElementById('locus-api-v1-autocomplete-output');
 
+    // Get query from input field
+    const qInput = document.getElementById('locus-q');
+    const q = qInput ? qInput.value.trim() : 'Mon';
+
     btn.disabled = true;
     btn.textContent = 'Loading...';
     output.classList.add('visible');
 
     try {
         const startTime = performance.now();
-        const response = await locusDemo.fetch('/api/v1/autocomplete?q=Mon&limit=10');
+        const response = await locusDemo.fetch(`/api/v1/autocomplete?q=${encodeURIComponent(q)}&limit=10`);
         const elapsed = (performance.now() - startTime).toFixed(1);
 
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -76,9 +84,9 @@ async function fetchLocusAutocomplete() {
         status.className = 'demo-status success';
     } catch (err) {
         console.error('Autocomplete failed:', err);
-        result.textContent = '';
-        status.textContent = 'Error: ' + err.message;
-        status.className = 'demo-status error';
+        result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+        status.textContent = '';
+        status.className = 'demo-status';
     } finally {
         btn.disabled = false;
         btn.textContent = 'Autocomplete';
@@ -93,12 +101,15 @@ async function fetchLocusReverse() {
     const status = document.getElementById('locus-api-v1-reverse-status');
     const output = document.getElementById('locus-api-v1-reverse-output');
 
+    // Get coordinates from input fields
+    const latInput = document.getElementById('locus-lat');
+    const lonInput = document.getElementById('locus-lon');
+    const lat = latInput ? parseFloat(latInput.value) : 43.7384;
+    const lon = lonInput ? parseFloat(lonInput.value) : 7.4246;
+
     btn.disabled = true;
     btn.textContent = 'Geocoding...';
     output.classList.add('visible');
-
-    const lat = 43.7384;
-    const lon = 7.4246;
 
     try {
         const startTime = performance.now();
@@ -119,9 +130,9 @@ async function fetchLocusReverse() {
         status.className = 'demo-status success';
     } catch (err) {
         console.error('Reverse geocoding failed:', err);
-        result.textContent = '';
-        status.textContent = 'Error: ' + err.message;
-        status.className = 'demo-status error';
+        result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+        status.textContent = '';
+        status.className = 'demo-status';
     } finally {
         btn.disabled = false;
         btn.textContent = 'Reverse Geocode';
