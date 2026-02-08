@@ -367,11 +367,47 @@
             color: var(--text-muted);
         }
 
+        /* Copy Button */
+        .code-block {
+            position: relative;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            padding: 4px 8px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-muted);
+            font-size: 11px;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.15s, background 0.15s;
+        }
+
+        .code-block:hover .copy-btn {
+            opacity: 1;
+        }
+
+        .copy-btn:hover {
+            background: var(--bg-secondary);
+            color: var(--text);
+        }
+
+        .copy-btn.copied {
+            background: var(--success);
+            color: white;
+            border-color: var(--success);
+        }
+
         /* Responsive */
         @media (max-width: 600px) {
             .service-nav { flex-direction: column; }
             .endpoint-header { flex-wrap: wrap; }
             .endpoint-desc { margin-left: 0; margin-top: 8px; width: 100%; }
+            .copy-btn { opacity: 1; }
         }
     </style>
 </head>
@@ -638,6 +674,46 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             }
         }
 
+        // Copy to clipboard functionality
+        function copyToClipboard(text, btn) {
+            navigator.clipboard.writeText(text).then(() => {
+                const originalText = btn.textContent;
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.classList.remove('copied');
+                }, 1500);
+            }).catch(err => {
+                console.error('Copy failed:', err);
+                btn.textContent = 'Failed';
+                setTimeout(() => {
+                    btn.textContent = 'Copy';
+                }, 1500);
+            });
+        }
+
+        // Add copy buttons to all code blocks
+        function initCopyButtons() {
+            document.querySelectorAll('.code-block').forEach(block => {
+                // Skip if already has copy button
+                if (block.querySelector('.copy-btn')) return;
+
+                const pre = block.querySelector('pre');
+                if (!pre) return;
+
+                const btn = document.createElement('button');
+                btn.className = 'copy-btn';
+                btn.textContent = 'Copy';
+                btn.addEventListener('click', () => {
+                    // Get text content, stripping HTML tags
+                    const text = pre.textContent || pre.innerText;
+                    copyToClipboard(text, btn);
+                });
+                block.appendChild(btn);
+            });
+        }
+
 {% for module in config.modules %}
 {% if module.wasm.enabled %}
         // {{ module.name }} WASM init
@@ -705,6 +781,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
+            // Add copy buttons to all code blocks
+            initCopyButtons();
+
 {% for module in config.modules %}
 {% if module.wasm.enabled %}
             init{{ module.id | capitalize }}Wasm();
