@@ -294,7 +294,7 @@ function handle{Module}Error(err) {
 **Adding a new module's WASM handlers:**
 1. Create `site/js/handlers/{module}.js` with handler functions
 2. Add `handlers_file`, `init_function`, `error_function`, `buttons` to wasm config in api-config.json
-3. Run `make api-docs` - no changes to gen_api.py needed
+3. Run `make api-docs` - no changes to build-api-docs.py needed
 
 **Button ID convention:** `{demo-id}-try-btn` where demo-id is derived from the endpoint path (e.g., `velo-route-try-btn` for `/api/v1/route`)
 
@@ -316,8 +316,8 @@ make api-docs-check    # Check if api.html is up-to-date (for CI)
 **What each target does:**
 | Target | Action | Use Case |
 |--------|--------|----------|
-| `api-docs` | Rebuilds WASM demos if needed, then runs gen_api.py | After changing annotations or handlers |
-| `api-docs-check` | Runs gen_api.py --check (compares, doesn't write) | CI validation, pre-commit hooks |
+| `api-docs` | Rebuilds WASM demos if needed, then runs build-api-docs.py | After changing annotations or handlers |
+| `api-docs-check` | Runs build-api-docs.py --check (compares, doesn't write) | CI validation, pre-commit hooks |
 
 **Dependency chain** (all automatic):
 ```
@@ -333,7 +333,7 @@ site/api.html  (copies WASM to site/js/, generates HTML from annotations)
 ```
 
 **Key generator files:**
-- `scripts/gen_api.py` - Parses annotations, renders template, copies WASM
+- `scripts/build-api-docs.py` - Parses annotations, renders template, copies WASM
 - `site/api-template.html` - HTML template with Jinja2-like syntax
 - `site/api-config.json` - Module configuration (ports, WASM settings)
 
@@ -346,7 +346,7 @@ make api-docs
 **What triggers auto-rebuild:**
 - `velo/src/*.c` or `velo/include/*.h` changes → monaco.vlg rebuilt → WASM rebuilt
 - `carta/src/*.c` or `carta/include/*.h` changes → WASM rebuilt
-- `scripts/gen_api.py` or `site/api-template.html` changes → HTML regenerated
+- `scripts/build-api-docs.py` or `site/api-template.html` changes → HTML regenerated
 - Header annotation changes → HTML regenerated
 
 ## Audit Procedure
@@ -570,7 +570,7 @@ carta/
 - `carta/include/ct_api.h` - Annotation format, struct definitions
 - `docs/MANIFESTO.md` - Philosophy and patterns
 - `docs/API_CODEGEN_PLAN.md` - Codegen details
-- `scripts/gen_api.py` - How annotations become HTML
+- `scripts/build-api-docs.py` - How annotations become HTML
 
 ## Checklist for "API Compliant" Status
 

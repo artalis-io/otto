@@ -97,7 +97,7 @@ $(DATA_DIR):
 # Download OSM data
 $(PBF_FILE): | $(DATA_DIR)
 	@echo "Downloading $(REGION) OSM data..."
-	cd $(ROOT) && ./scripts/download-osm.sh $(REGION)
+	cd $(ROOT) && ./scripts/data-download-osm.sh $(REGION)
 	mv $(ROOT)/data/$(REGION)-latest.osm.pbf $(PBF_FILE) 2>/dev/null || \
 		cp $(ROOT)/data/$(REGION)-latest.osm.pbf $(PBF_FILE)
 

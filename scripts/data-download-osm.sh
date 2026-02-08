@@ -3,10 +3,10 @@
 # Download OSM PBF data from Geofabrik
 #
 # Usage:
-#   ./scripts/download-osm.sh <region>
-#   ./scripts/download-osm.sh hungary
-#   ./scripts/download-osm.sh monaco
-#   ./scripts/download-osm.sh list
+#   ./scripts/data-download-osm.sh <region>
+#   ./scripts/data-download-osm.sh hungary
+#   ./scripts/data-download-osm.sh monaco
+#   ./scripts/data-download-osm.sh list
 #
 # Popular regions:
 #   europe/hungary, europe/monaco, europe/austria
@@ -67,8 +67,8 @@ usage() {
 Download OSM PBF data from Geofabrik
 
 USAGE:
-    ./scripts/download-osm.sh <region>
-    ./scripts/download-osm.sh [OPTIONS]
+    ./scripts/data-download-osm.sh <region>
+    ./scripts/data-download-osm.sh [OPTIONS]
 
 OPTIONS:
     -h, --help      Show this help message
@@ -122,10 +122,10 @@ REGIONS:
       asia/japan
 
 EXAMPLES:
-    ./scripts/download-osm.sh monaco           # Quick test (1 MB)
-    ./scripts/download-osm.sh hungary          # Medium size (350 MB)
-    ./scripts/download-osm.sh europe/austria   # Full path syntax
-    ./scripts/download-osm.sh list             # Show all short names
+    ./scripts/data-download-osm.sh monaco           # Quick test (1 MB)
+    ./scripts/data-download-osm.sh hungary          # Medium size (350 MB)
+    ./scripts/data-download-osm.sh europe/austria   # Full path syntax
+    ./scripts/data-download-osm.sh list             # Show all short names
 
 ENVIRONMENT:
     DATA_DIR    Output directory (default: ./data)

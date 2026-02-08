@@ -180,8 +180,8 @@ make test
 ./fuelwise/api/fuelwise-api                                   # Optimization on :8080
 
 # Download OSM data
-./scripts/download-osm.sh hungary   # ~300MB
-./scripts/download-osm.sh monaco    # ~1MB (for testing)
+./scripts/data-download-osm.sh hungary   # ~300MB
+./scripts/data-download-osm.sh monaco    # ~1MB (for testing)
 ```
 
 **Docker:**

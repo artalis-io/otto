@@ -3,11 +3,11 @@
 # CI/CD Pipeline Script for FuelWise Platform
 #
 # Usage:
-#   ./scripts/ci.sh [stage]
-#   ./scripts/ci.sh           # Run all stages
-#   ./scripts/ci.sh build     # Build only
-#   ./scripts/ci.sh test      # Test only
-#   ./scripts/ci.sh lint      # Lint only
+#   ./scripts/ci-pipeline.sh [stage]
+#   ./scripts/ci-pipeline.sh           # Run all stages
+#   ./scripts/ci-pipeline.sh build     # Build only
+#   ./scripts/ci-pipeline.sh test      # Test only
+#   ./scripts/ci-pipeline.sh lint      # Lint only
 #
 
 set -e
@@ -95,7 +95,7 @@ stage_test_api() {
         # make test-carta-api
     else
         warn "Skipping API tests (no OSM data)"
-        warn "Run: ./scripts/download-osm.sh monaco"
+        warn "Run: ./scripts/data-download-osm.sh monaco"
         return 0
     fi
 }

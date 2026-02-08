@@ -16,7 +16,7 @@
 #   locus/        - OSM Geocoding Library (liblocus.a)
 #   shared/       - Shared Utilities (libshared.a)
 #   vendor/       - Third-party libraries (mongoose, miniz)
-#   scripts/      - Utility scripts (download-osm, benchmark, ci)
+#   scripts/      - Utility scripts (build-, ci-, data-, demo-, test-, util-)
 #   docs/         - Architecture documentation
 
 .PHONY: all lib clean test help
@@ -194,10 +194,10 @@ test-tui:
 # =============================================================================
 
 benchmark:
-	./scripts/benchmark.sh
+	./scripts/test-benchmark.sh
 
 ci:
-	./scripts/ci.sh
+	./scripts/ci-pipeline.sh
 
 # =============================================================================
 # Testing
@@ -271,7 +271,7 @@ clean-all: clean
 # Download Monaco PBF if missing
 data/monaco-latest.osm.pbf:
 	@echo "Downloading Monaco OSM data..."
-	@./scripts/download-osm.sh monaco
+	@./scripts/data-download-osm.sh monaco
 
 # Build Velo graph index from PBF
 # The graph format may change when velo/ sources change, so rebuild when sources change
@@ -322,17 +322,17 @@ API_HEADERS = $(wildcard carta/include/*.h) $(wildcard velo/include/*.h) \
 
 # Generate API documentation from C header annotations
 # Depends on: headers (for annotations), WASM demos (copied to site/js/), generator script
-site/api.html: scripts/gen_api.py site/api-template.html site/api-config.json $(API_HEADERS) \
+site/api.html: scripts/build-api-docs.py site/api-template.html site/api-config.json $(API_HEADERS) \
                velo/wasm/build/velo-api-demo.js carta/wasm/build/carta-api-demo.js
 	@echo "Generating API documentation..."
-	@python3 scripts/gen_api.py
+	@python3 scripts/build-api-docs.py
 	@echo "Done: site/api.html"
 
 api-docs: site/api.html
 
 # Check API docs are up-to-date (for CI)
 api-docs-check:
-	@python3 scripts/gen_api.py --check
+	@python3 scripts/build-api-docs.py --check
 
 # Generate PDF from strategy document (for sharing with partners)
 # Note: STRATEGY.md contains REDACT markers - strip them before generating public PDF

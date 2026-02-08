@@ -72,7 +72,7 @@ done
 # Validate PBF file
 if [[ ! -f "$PBF_FILE" ]]; then
     error "PBF file not found: $PBF_FILE"
-    info "Run: ./scripts/download-osm.sh hungary"
+    info "Run: ./scripts/data-download-osm.sh hungary"
     exit 1
 fi
 

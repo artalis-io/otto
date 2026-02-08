@@ -129,10 +129,10 @@ otto/
 │   ├── sqlite/         #   Embedded SQL database [PLANNED]
 │   └── clay/           #   UI layout library
 │
-├── scripts/            # Utility scripts
-│   ├── download-osm.sh #   Download OSM PBF from Geofabrik
-│   ├── benchmark.sh    #   Performance benchmarks
-│   └── ci.sh           #   CI/CD pipeline
+├── scripts/            # Utility scripts (prefix: build-, ci-, data-, demo-, test-, util-)
+│   ├── data-download-osm.sh  # Download OSM PBF from Geofabrik
+│   ├── test-benchmark.sh     # Performance benchmarks
+│   └── ci-pipeline.sh        # CI/CD pipeline
 │
 ├── docs/               # Documentation
 │   ├── ARCHITECTURE.md #   This file

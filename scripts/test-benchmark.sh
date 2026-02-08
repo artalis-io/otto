@@ -3,12 +3,12 @@
 # Run performance benchmarks for FuelWise Platform
 #
 # Usage:
-#   ./scripts/benchmark.sh [component]
-#   ./scripts/benchmark.sh           # Run all benchmarks
-#   ./scripts/benchmark.sh ralph     # Ralph solver only
-#   ./scripts/benchmark.sh velo      # Velo routing only
-#   ./scripts/benchmark.sh carta     # Carta tiles only
-#   ./scripts/benchmark.sh api       # API latency tests
+#   ./scripts/test-benchmark.sh [component]
+#   ./scripts/test-benchmark.sh           # Run all benchmarks
+#   ./scripts/test-benchmark.sh ralph     # Ralph solver only
+#   ./scripts/test-benchmark.sh velo      # Velo routing only
+#   ./scripts/test-benchmark.sh carta     # Carta tiles only
+#   ./scripts/test-benchmark.sh api       # API latency tests
 #
 
 set -e
@@ -61,7 +61,7 @@ bench_velo() {
     
     if [[ \! -f "$PBF_FILE" ]]; then
         error "PBF file not found: $PBF_FILE"
-        warn "Run: ./scripts/download-osm.sh hungary"
+        warn "Run: ./scripts/data-download-osm.sh hungary"
         return
     fi
     
@@ -118,7 +118,7 @@ bench_carta() {
     
     if [[ \! -f "$PBF_FILE" ]]; then
         error "PBF file not found: $PBF_FILE"
-        warn "Run: ./scripts/download-osm.sh hungary"
+        warn "Run: ./scripts/data-download-osm.sh hungary"
         return
     fi
     

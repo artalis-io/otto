@@ -65,7 +65,7 @@ mkdir -p "$TMP_DIR"
 PBF_FILE="$DATA_DIR/monaco-latest.osm.pbf"
 if [ ! -f "$PBF_FILE" ]; then
     skip "Monaco PBF not found at $PBF_FILE"
-    skip "Run: ./scripts/download-osm.sh monaco"
+    skip "Run: ./scripts/data-download-osm.sh monaco"
     exit 0
 fi
 
