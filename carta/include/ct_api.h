@@ -25,7 +25,7 @@ extern "C" {
 /* ============================================================================
  * API Endpoint Documentation
  *
- * These annotations are parsed by scripts/gen_api.py to generate site/api.html
+ * These annotations are parsed by scripts/build-api-docs.py to generate site/api.html
  * ============================================================================ */
 
 /*@api
@@ -181,6 +181,23 @@ void ct_api_free(CTAPIContext *ctx);
  */
 CTPBFContext *ct_api_get_pbf(CTAPIContext *ctx);
 
+/*
+ * Set LOD configuration.
+ * Use this to apply custom LOD settings after context creation.
+ */
+void ct_api_set_lod(CTAPIContext *ctx, const CTLODConfig *lod);
+
+/*
+ * Set render options.
+ * Use this to apply custom render settings after context creation.
+ */
+void ct_api_set_render_opts(CTAPIContext *ctx, const CTRenderOptions *opts);
+
+/*
+ * Disable LOD filtering entirely.
+ */
+void ct_api_disable_lod(CTAPIContext *ctx);
+
 /* ============================================================================
  * Request/Response
  * ============================================================================ */
@@ -290,6 +307,20 @@ char *ct_api_generate_health(CTAPIContext *ctx, size_t *out_len);
  * Caller must free the returned buffer.
  */
 char *ct_api_generate_stats(CTAPIContext *ctx, size_t *out_len);
+
+/*
+ * Generate an ASCII art tile.
+ *
+ * Renders the tile to pixels, then converts to ASCII art.
+ * Query parameters control output: width, height, charset, invert, color.
+ *
+ * Returns allocated ASCII string, or NULL on failure.
+ * Caller must free the returned buffer.
+ */
+char *ct_api_generate_ascii(CTAPIContext *ctx,
+                            int z, int x, int y,
+                            const char *query,
+                            size_t *out_len);
 
 #ifdef __cplusplus
 }

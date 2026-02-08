@@ -27,10 +27,11 @@
 /* Include mongoose - assumes it's available via vendor path */
 #include "mongoose.h"
 
-/* Include shared headers for CORS, rate limiting, and metrics */
+/* Include shared headers for CORS, rate limiting, metrics, and query parsing */
 #include "sh_cors.h"
 #include "sh_ratelimit.h"
 #include "sh_metrics.h"
+#include "sh_query.h"
 
 /* ============================================================================
  * Configuration Defaults
@@ -288,13 +289,11 @@ int sh_http_req_query_param(const ShHttpRequest *req, const char *name,
 {
     if (!req || !name || !buf || len == 0) return -1;
 
-    struct mg_str val = mg_http_var(req->hm->query, mg_str(name));
-    if (val.buf == NULL) return -1;
+    /* Use transport-agnostic query parser */
+    size_t written = sh_query_get_str(req->query_buf, name, buf, len);
+    if (written == 0) return -1;
 
-    size_t copy_len = val.len < len - 1 ? val.len : len - 1;
-    memcpy(buf, val.buf, copy_len);
-    buf[copy_len] = '\0';
-    return (int)copy_len;
+    return (int)written;
 }
 
 const char *sh_http_req_header(const ShHttpRequest *req, const char *name)

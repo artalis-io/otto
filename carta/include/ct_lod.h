@@ -59,6 +59,12 @@ void ct_lod_init(CTLODConfig *config);
 void ct_lod_free(CTLODConfig *config);
 
 /*
+ * Deep copy LOD configuration.
+ * Destination must be initialized (ct_lod_init) or zeroed.
+ */
+void ct_lod_copy(CTLODConfig *dest, const CTLODConfig *src);
+
+/*
  * Add a rule to the LOD configuration.
  *
  * @param config       Configuration to modify

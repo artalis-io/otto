@@ -1,6 +1,6 @@
 /**
  * Carta WASM Demo Handlers
- * Auto-loaded by gen_api.py
+ * Auto-loaded by build-api-docs.py
  */
 
 async function generateCartaTile() {

@@ -33,6 +33,7 @@
 #include <errno.h>    /* For ETIMEDOUT */
 #include "mongoose.h"
 #include "carta.h"
+#include "ct_api.h"
 #include "ct_cache.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue */
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
@@ -89,6 +90,7 @@ static ShCorsConfig s_cors;
 /* Global state */
 static volatile sig_atomic_t s_signo = 0;
 static CTPBFContext *s_pbf_ctx = NULL;
+static CTAPIContext *s_api_ctx = NULL;  /* Transport-agnostic API handler */
 static CTLODConfig s_lod_config = {0};
 static CTRenderOptions s_render_opts = {0};  /* Render quality options */
 static CTTileCache *s_png_cache = NULL;
@@ -257,47 +259,12 @@ static void process_png_render(RenderWorkItem *item)
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    /* Use thread-local render context */
-    CTRenderContext *render = get_thread_render_ctx(s_config.tile_size);
-    if (!render) {
-        item->status_code = 500;
-        strncpy(item->error_msg, "Render context creation failed",
-                sizeof(item->error_msg));
-        return;
-    }
+    /* Use transport-agnostic API to generate tile */
+    size_t size;
+    item->response_data = ct_api_generate_png(s_api_ctx, z, x, y, &size);
 
-    /* Apply render options */
-    ct_render_set_options(render, &s_render_opts);
-
-    /* Render tile */
-    CTTileCoord coord = {z, x, y};
-    ct_render_clear(render);
-    if (s_config.lod_preset != LOD_NONE) {
-        ct_render_from_pbf_lod(render, s_pbf_ctx, coord, &s_lod_config);
-    } else {
-        ct_render_from_pbf(render, s_pbf_ctx, coord);
-    }
-
-    /* Encode to PNG */
-    size_t capacity = ct_png_max_size(s_config.tile_size, s_config.tile_size);
-    item->response_data = malloc(capacity);
-    if (!item->response_data) {
-        item->status_code = 500;
-        strncpy(item->error_msg, "Memory allocation failed",
-                sizeof(item->error_msg));
-        return;
-    }
-
-    CTPNGOptions opts;
-    ct_png_default_options(&opts);
-    opts.tile_size = s_config.tile_size;
-
-    size_t size = ct_encode_png(ct_render_pixels(render),
-                                s_config.tile_size, s_config.tile_size,
-                                &opts, item->response_data, capacity);
-
-    if (size == 0) {
-        free(item->response_data);
+    if (!item->response_data || size == 0) {
+        if (item->response_data) free(item->response_data);
         item->response_data = NULL;
         item->status_code = 500;
         strncpy(item->error_msg, "Tile generation failed",
@@ -343,36 +310,14 @@ static void process_mvt_render(RenderWorkItem *item)
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    /* Generate MVT tile */
-    size_t capacity = 2 * 1024 * 1024;  /* 2MB */
-    item->response_data = malloc(capacity);
+    /* Use transport-agnostic API to generate tile */
+    size_t size;
+    item->response_data = ct_api_generate_mvt(s_api_ctx, z, x, y, &size);
+
     if (!item->response_data) {
         item->status_code = 500;
-        strncpy(item->error_msg, "Memory allocation failed",
+        strncpy(item->error_msg, "Tile generation failed",
                 sizeof(item->error_msg));
-        return;
-    }
-
-    CTTileCoord coord = {z, x, y};
-    CTMVTOptions opts;
-    ct_mvt_default_options(&opts);
-
-    const CTLODConfig *lod = (s_config.lod_preset != LOD_NONE) ? &s_lod_config : NULL;
-    size_t size = ct_generate_mvt(s_pbf_ctx, coord, &opts, lod,
-                                  item->response_data, capacity);
-
-    if (size == 0) {
-        /* Empty tile */
-        free(item->response_data);
-        item->response_data = malloc(2);
-        if (item->response_data) {
-            item->response_data[0] = 0x1a;
-            item->response_data[1] = 0x00;
-            item->response_size = 0;  /* Empty MVT */
-        }
-        item->status_code = 200;
-        strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
-                sizeof(item->content_type));
         return;
     }
 
@@ -394,49 +339,35 @@ static void process_ascii_render(RenderWorkItem *item)
 {
     int z = item->z, x = item->x, y = item->y;
 
-    /* Create render context for this tile */
-    int tile_size = 512;
-    CTRenderContext *render_ctx = ct_render_create(tile_size, tile_size);
-    if (!render_ctx) {
+    /* Build query string from parsed ASCII options */
+    CTAsciiOptions *opts = &item->ascii_opts;
+    const char *charset_str = "extended";
+    switch (opts->charset) {
+        case CT_ASCII_SIMPLE:   charset_str = "simple"; break;
+        case CT_ASCII_EXTENDED: charset_str = "extended"; break;
+        case CT_ASCII_BLOCKS:   charset_str = "blocks"; break;
+        case CT_ASCII_BRAILLE:  charset_str = "braille"; break;
+    }
+
+    char query[256];
+    snprintf(query, sizeof(query), "width=%d&height=%d&charset=%s&invert=%d&color=%d",
+             opts->width, opts->height, charset_str, opts->invert, opts->color);
+
+    /* Use transport-agnostic API to generate ASCII tile */
+    size_t size;
+    item->response_data = (uint8_t *)ct_api_generate_ascii(s_api_ctx, z, x, y,
+                                                            query, &size);
+
+    if (!item->response_data || size == 0) {
+        if (item->response_data) free(item->response_data);
+        item->response_data = NULL;
         item->status_code = 500;
-        strncpy(item->error_msg, "Render context creation failed",
+        strncpy(item->error_msg, "ASCII tile generation failed",
                 sizeof(item->error_msg));
         return;
     }
 
-    ct_render_clear(render_ctx);
-
-    /* Render from PBF */
-    CTTileCoord coord = {z, x, y};
-    ct_render_from_pbf(render_ctx, s_pbf_ctx, coord);
-
-    /* Get pixel buffer */
-    const uint8_t *pixels = ct_render_pixels(render_ctx);
-
-    /* Allocate ASCII buffer */
-    CTAsciiOptions *ascii_opts = &item->ascii_opts;
-    size_t ascii_size = ct_ascii_buffer_size(
-        ascii_opts->width,
-        ascii_opts->height > 0 ? ascii_opts->height : ascii_opts->width / 2,
-        ascii_opts->charset, ascii_opts->color);
-
-    item->response_data = malloc(ascii_size);
-    if (!item->response_data) {
-        ct_render_free(render_ctx);
-        item->status_code = 500;
-        strncpy(item->error_msg, "ASCII buffer allocation failed",
-                sizeof(item->error_msg));
-        return;
-    }
-
-    /* Render to ASCII */
-    size_t ascii_len = ct_render_ascii(pixels, tile_size, tile_size,
-                                       ascii_opts, (char *)item->response_data,
-                                       ascii_size);
-
-    ct_render_free(render_ctx);
-
-    item->response_size = ascii_len;
+    item->response_size = size;
     item->status_code = 200;
     strncpy(item->content_type, "text/plain; charset=utf-8",
             sizeof(item->content_type));
@@ -861,50 +792,29 @@ static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
 
 /* GET /tiles.json - TileJSON metadata */
 static void handle_tilejson(struct mg_connection *c, struct mg_http_message *hm) {
-    if (!s_pbf_ctx) {
-        send_error_cors(c, hm, 503, "PBF not loaded");
+    if (!s_api_ctx) {
+        send_error_cors(c, hm, 503, "API not initialized");
         return;
     }
 
     /* Get host header for building tile URLs */
-    struct mg_str host = mg_http_get_header(hm, "Host") ?
-                         *mg_http_get_header(hm, "Host") : mg_str("localhost:8081");
+    struct mg_str *host_hdr = mg_http_get_header(hm, "Host");
+    char host_buf[256] = "localhost:8081";
+    if (host_hdr && host_hdr->len > 0 && host_hdr->len < sizeof(host_buf)) {
+        memcpy(host_buf, host_hdr->buf, host_hdr->len);
+        host_buf[host_hdr->len] = '\0';
+    }
 
-    size_t nodes, ways, features;
-    CTBBox bbox;
-    ct_pbf_stats(s_pbf_ctx, &nodes, &ways, &features, &bbox);
+    /* Use transport-agnostic API to generate TileJSON */
+    size_t len;
+    char *response = ct_api_generate_tilejson(s_api_ctx, host_buf, &len);
+    if (!response) {
+        send_error_cors(c, hm, 500, "TileJSON generation failed");
+        return;
+    }
 
-    /* Calculate center */
-    double center_lat = (bbox.min_lat + bbox.max_lat) / 2.0;
-    double center_lon = (bbox.min_lon + bbox.max_lon) / 2.0;
-
-    char response[2048];
-    snprintf(response, sizeof(response),
-        "{\n"
-        "  \"tilejson\": \"3.0.0\",\n"
-        "  \"name\": \"%s\",\n"
-        "  \"description\": \"Map tiles generated by Carta\",\n"
-        "  \"version\": \"1.0.0\",\n"
-        "  \"attribution\": \"OpenStreetMap contributors\",\n"
-        "  \"scheme\": \"xyz\",\n"
-        "  \"tiles\": [\n"
-        "    \"http://%.*s/tiles/{z}/{x}/{y}.png\"\n"
-        "  ],\n"
-        "  \"vector_tiles\": [\n"
-        "    \"http://%.*s/tiles/{z}/{x}/{y}.mvt\"\n"
-        "  ],\n"
-        "  \"minzoom\": %d,\n"
-        "  \"maxzoom\": %d,\n"
-        "  \"bounds\": [%.6f, %.6f, %.6f, %.6f],\n"
-        "  \"center\": [%.6f, %.6f, 10]\n"
-        "}\n",
-        s_config.name,
-        (int)host.len, host.buf,
-        (int)host.len, host.buf,
-        s_config.min_zoom, s_config.max_zoom,
-        bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
-        center_lon, center_lat);
     send_json_cors(c, hm, 200, response);
+    free(response);
 }
 
 /* Submit render work via work queue and send response */
@@ -1630,6 +1540,34 @@ int main(int argc, char *argv[]) {
             break;
     }
 
+    /* Create transport-agnostic API context */
+    {
+        CTAPIConfig api_config;
+        ct_api_config_init(&api_config);
+        api_config.min_zoom = s_config.min_zoom;
+        api_config.max_zoom = s_config.max_zoom;
+        api_config.tile_size = s_config.tile_size;
+        api_config.enable_lod = (s_config.lod_preset != LOD_NONE);
+        api_config.name = s_config.name;
+
+        s_api_ctx = ct_api_create_from_pbf(s_pbf_ctx, &api_config);
+        if (!s_api_ctx) {
+            fprintf(stderr, "Error: Failed to create API context\n");
+            ct_free_pbf_context(s_pbf_ctx);
+            return 1;
+        }
+
+        /* Apply LOD preset (default is already set, apply others) */
+        if (s_config.lod_preset == LOD_NONE) {
+            ct_api_disable_lod(s_api_ctx);
+        } else if (s_config.lod_preset != LOD_DEFAULT) {
+            ct_api_set_lod(s_api_ctx, &s_lod_config);
+        }
+
+        /* Apply render options */
+        ct_api_set_render_opts(s_api_ctx, &s_render_opts);
+    }
+
     /* Initialize tile caches (256MB each by default) */
     s_png_cache = ct_cache_create(256);
     s_mvt_cache = ct_cache_create(256);
@@ -1777,6 +1715,7 @@ int main(int argc, char *argv[]) {
         ct_cache_free(s_png_cache);
         ct_cache_free(s_mvt_cache);
         ct_lod_free(&s_lod_config);
+        ct_api_free(s_api_ctx);
         ct_free_pbf_context(s_pbf_ctx);
         return 1;
     }
@@ -1852,6 +1791,7 @@ int main(int argc, char *argv[]) {
     ct_cache_free(s_png_cache);
     ct_cache_free(s_mvt_cache);
     ct_lod_free(&s_lod_config);
+    ct_api_free(s_api_ctx);
     ct_free_pbf_context(s_pbf_ctx);
     pthread_mutex_destroy(&s_cache_mutex);
 

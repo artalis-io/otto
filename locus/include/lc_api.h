@@ -25,7 +25,7 @@ extern "C" {
 /* ============================================================================
  * API Endpoint Documentation
  *
- * These annotations are parsed by scripts/gen_api.py to generate site/api.html
+ * These annotations are parsed by scripts/build-api-docs.py to generate site/api.html
  * ============================================================================ */
 
 /*@api

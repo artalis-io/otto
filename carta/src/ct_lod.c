@@ -4,6 +4,7 @@
 
 #include "ct_lod.h"
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 /* ============================================================================
@@ -31,6 +32,22 @@ void ct_lod_free(CTLODConfig *config)
 {
     free(config->rules);
     ct_lod_init(config);
+}
+
+void ct_lod_copy(CTLODConfig *dest, const CTLODConfig *src)
+{
+    if (!dest || !src) return;
+
+    ct_lod_free(dest);
+
+    if (src->num_rules == 0) return;
+
+    dest->rules = malloc(src->num_rules * sizeof(CTLODRule));
+    if (!dest->rules) return;
+
+    memcpy(dest->rules, src->rules, src->num_rules * sizeof(CTLODRule));
+    dest->num_rules = src->num_rules;
+    dest->capacity = src->num_rules;
 }
 
 CTStatus ct_lod_add_rule(CTLODConfig *config,
