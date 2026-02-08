@@ -183,6 +183,7 @@ class DemoInput:
     default: str = ""
     min: str | None = None
     max: str | None = None
+    options: list[str] | None = None  # For select dropdowns
 
 
 @dataclass
@@ -395,6 +396,7 @@ class AnnotationParser:
                 continue
 
             # @demo_input name:type:default:min:max
+            # @demo_input name:select:default:option1,option2,option3
             if m := self.PATTERNS["demo_input"].match(line):
                 parts = m.group(1).split(":")
                 inp = DemoInput(name=parts[0])
@@ -402,9 +404,12 @@ class AnnotationParser:
                     inp.type = parts[1]
                 if len(parts) > 2:
                     inp.default = parts[2]
-                if len(parts) > 3:
+                if inp.type == "select" and len(parts) > 3:
+                    # For select, 4th part is comma-separated options
+                    inp.options = parts[3].split(",")
+                elif len(parts) > 3:
                     inp.min = parts[3]
-                if len(parts) > 4:
+                if len(parts) > 4 and inp.type != "select":
                     inp.max = parts[4]
                 api.demo_inputs.append(inp)
                 continue
@@ -595,11 +600,23 @@ class HtmlGenerator:
                             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">'''
             for inp in api.demo_inputs:
                 inp_id = f"{module_id}-{inp.name}"
-                min_attr = f' min="{inp.min}"' if inp.min else ""
-                max_attr = f' max="{inp.max}"' if inp.max else ""
-                width = "50px" if inp.type == "number" and len(inp.default) <= 2 else "70px"
 
-                html += f'''
+                if inp.type == "select" and inp.options:
+                    # Render as dropdown
+                    options_html = ""
+                    for opt in inp.options:
+                        selected = ' selected' if opt == inp.default else ''
+                        options_html += f'<option value="{opt}"{selected}>{opt}</option>'
+                    html += f'''
+                                <label style="font-size: 13px;">
+                                    {inp.name}: <select id="{inp_id}" style="padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">{options_html}</select>
+                                </label>'''
+                else:
+                    # Render as input
+                    min_attr = f' min="{inp.min}"' if inp.min else ""
+                    max_attr = f' max="{inp.max}"' if inp.max else ""
+                    width = "50px" if inp.type == "number" and len(inp.default) <= 2 else "70px"
+                    html += f'''
                                 <label style="font-size: 13px;">
                                     {inp.name}: <input type="{inp.type}" id="{inp_id}" value="{inp.default}"{min_attr}{max_attr} style="width: {width}; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>'''

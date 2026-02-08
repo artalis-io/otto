@@ -907,10 +907,10 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                                     to_lon: <input type="number" id="velo-to_lon" value="7.4197" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>
                                 <label style="font-size: 13px;">
-                                    profile: <input type="text" id="velo-profile" value="car" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    profile: <select id="velo-profile" style="padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);"><option value="car" selected>car</option><option value="truck">truck</option><option value="bike">bike</option><option value="foot">foot</option></select>
                                 </label>
                                 <label style="font-size: 13px;">
-                                    mode: <input type="text" id="velo-mode" value="fastest" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    mode: <select id="velo-mode" style="padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);"><option value="fastest" selected>fastest</option><option value="shortest">shortest</option></select>
                                 </label>
                                 <button class="try-btn" id="velo-route-try-btn" disabled>Loading WASM...</button>
                             </div>

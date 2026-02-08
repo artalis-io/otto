@@ -119,7 +119,14 @@ Each endpoint must have a `/*@api ... */` block in the header:
 | `@example` | Shell command | No | curl example |
 | `@demo` | `json` or `image` | No | Enable WASM demo |
 | `@demo_title` | Text | If @demo | Demo description |
-| `@demo_input` | `name:type:default:min:max` | If @demo needs inputs | Demo input field |
+| `@demo_input` | `name:type:default:min:max` | If @demo needs inputs | Demo input field (see below) |
+
+**@demo_input types:**
+| Type | Format | Example | Renders as |
+|------|--------|---------|------------|
+| `number` | `name:number:default:min:max` | `zoom:number:14:0:18` | `<input type="number">` |
+| `text` | `name:text:default` | `query:text:Budapest` | `<input type="text">` |
+| `select` | `name:select:default:opt1,opt2,opt3` | `profile:select:car:car,truck,bike,foot` | `<select>` dropdown |
 
 ### 4. WASM Exports
 
