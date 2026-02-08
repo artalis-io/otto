@@ -754,10 +754,10 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
     (function() {
         'use strict';
 
-        // WASM Demo instances
+        // WASM Demo instances (exposed on window for testing)
 {% for module in config.modules %}
 {% if module.wasm.enabled %}
-        let {{ module.id }}Demo = null;
+        window.{{ module.id }}Demo = null;
 {% endif %}
 {% endfor %}
 
