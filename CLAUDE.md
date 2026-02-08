@@ -43,11 +43,15 @@ Do NOT use for:
 | Changes spanning multiple components |
 
 **Planning workflow:**
-1. **Explore:** Read relevant code, understand current architecture
-2. **Plan:** Design approach, identify files to change, consider tradeoffs
-3. **Document:** Write findings as a plan (do NOT change any code)
-4. **Present:** Show plan to user for approval
-5. **Persist:** After approval, append/merge plan to `docs/roadmaps/{module}.md`
+1. **Read key docs first:**
+   - `docs/MANIFESTO.md` - Design philosophy (C, WASM, transport-agnostic)
+   - `docs/ARCHITECTURE.md` - System layers, data flow, component relationships
+   - `docs/roadmaps/{module}.md` - Existing plans for the module
+2. **Explore:** Read relevant code, understand current implementation
+3. **Plan:** Design approach aligned with manifesto, identify files to change, consider tradeoffs
+4. **Document:** Write findings as a plan (do NOT change any code)
+5. **Present:** Show plan to user for approval
+6. **Persist:** After approval, append/merge plan to `docs/roadmaps/{module}.md`
 
 **Example:**
 ```
@@ -66,20 +70,26 @@ Claude: Enters planning mode (no code changes)
 
 1. **Plan (if large):** Enter planning mode, explore, document, get approval
 2. **Persist:** Append approved plan to `docs/roadmaps/{module}.md`
-3. **Branch:** Use `/feature-branch <name> <description>` to create branch
-4. **Work:** Implement with regular commits on the feature branch
-5. **Test:** Run `make test` and relevant API tests before PR
-6. **PR:** Create pull request with `gh pr create`
-7. **Review:** Wait for user approval before merging
-8. **Merge:** After approval, merge to main and delete feature branch
+3. **Sync:** Run `git pull origin main` to ensure up-to-date before branching
+4. **Branch:** Use `/feature-branch <name> <description>` to create branch
+5. **Work:** Implement with regular commits on the feature branch
+6. **Test:** Run `make test` and relevant API tests before PR
+7. **PR:** Create pull request with `gh pr create`
+8. **Review:** Wait for user approval before merging
+9. **Merge:** After approval, merge to main and delete feature branch
 
 ### Example
 
 ```
 User: "Add caching to the Velo router"
 
-Claude: Uses /feature-branch velo-cache "Add route caching"
-        → Creates feature/velo-cache branch
+Claude: Enters planning mode (no code changes)
+        → Explores velo/src/, identifies cache integration points
+        → Plans: LRU cache, cache key design, invalidation strategy
+        → Presents plan to user
+        → After approval: appends to docs/roadmaps/velo.md
+        → Runs: git pull origin main
+        → Uses /feature-branch velo-cache-lru "Add LRU route caching"
         → Implements caching
         → Runs tests
         → Creates PR
@@ -113,23 +123,17 @@ If unsure about uniqueness, check existing branches first: `git branch -a | grep
 
 When appending to `docs/roadmaps/{module}.md`, use a lock file to prevent concurrent writes:
 
-```bash
-# Before writing to roadmap
-LOCK_FILE=".claude/locks/roadmap-{module}.lock"
-mkdir -p .claude/locks
-if [ -f "$LOCK_FILE" ]; then
-    echo "Roadmap locked by another session. Wait or coordinate."
-    exit 1
-fi
-echo "$(date -Iseconds) session:$$" > "$LOCK_FILE"
+**Before writing to roadmap:**
+1. Use `Read` tool to check if `.claude/locks/roadmap-{module}.lock` exists
+2. If exists, check timestamp - if older than 1 hour, it's stale (proceed)
+3. If recent, wait or coordinate with other session
+4. Use `Bash` to create lock: `mkdir -p .claude/locks && echo "$(date -Iseconds)" > .claude/locks/roadmap-{module}.lock`
+5. Use `Edit` tool to append to the roadmap
+6. Use `Bash` to remove lock: `rm -f .claude/locks/roadmap-{module}.lock`
 
-# ... append to roadmap ...
+**Cross-module features:** If a feature spans multiple modules (e.g., FuelWise + Velo integration), append the relevant parts to each module's roadmap separately. Each module's roadmap documents its portion of the work.
 
-# After writing
-rm -f "$LOCK_FILE"
-```
-
-**Important:** If a session crashes, stale locks may remain. Check the timestamp - locks older than 1 hour are likely stale and can be removed.
+**Note:** `.claude/locks/` is gitignored - lock files are local only.
 
 ### Session Handoff
 
@@ -155,7 +159,7 @@ The next session can read the roadmap to resume. Delete the WIP section when wor
 
 | Component | Location | Port | Purpose |
 |-----------|----------|------|---------|
-| Ralph | `ralph/` | - | LP/MIP solver |
+| Ralph | `ralph/` | 8084 | LP/MIP solver |
 | Velo | `velo/` | 8082 | OSM routing |
 | Carta | `carta/` | 8081 | Map tiles (MVT/PNG) |
 | Locus | `locus/` | 8083 | Geocoding |
