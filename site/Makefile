@@ -15,10 +15,11 @@ WASM_FILES = $(wildcard wasm/*.js)
 all: build
 
 build:
-	@mkdir -p $(BUILD_DIR)/js $(BUILD_DIR)/wasm
+	@mkdir -p $(BUILD_DIR)/js $(BUILD_DIR)/wasm $(BUILD_DIR)/fonts
 	@cp index.html style.css api.html $(BUILD_DIR)/
 	@cp js/*.js $(BUILD_DIR)/js/ 2>/dev/null || true
 	@cp wasm/*.js $(BUILD_DIR)/wasm/ 2>/dev/null || true
+	@cp fonts/*.woff2 $(BUILD_DIR)/fonts/ 2>/dev/null || true
 	@echo "Site built in $(BUILD_DIR)/"
 	@echo "  Files: $$(find $(BUILD_DIR) -type f | wc -l | tr -d ' ')"
 
