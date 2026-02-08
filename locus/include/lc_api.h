@@ -132,6 +132,7 @@ extern "C" {
  *
  * @demo json
  * @demo_title Check WASM health status
+ * @demo_fetch /api/v1/health
  */
 
 /*@api
@@ -164,6 +165,7 @@ extern "C" {
  *
  * @demo json
  * @demo_title Get Monaco index statistics
+ * @demo_fetch /api/v1/stats
  */
 
 /*@api
