@@ -651,7 +651,7 @@ void ar_remove_related(void *ctx, void *solution, int q, uint32_t *removed,
 
 | Problem | Arbor Provides | Problem Implements |
 |---------|----------------|-------------------|
-| **PDPTW (Surge)** | ALNS loop, weights, acceptance | Request removal/insertion, TW feasibility |
+| **Rich VRP/PDPTW (Surge)** | ALNS loop, weights, acceptance | Multi-dim capacity, disjunct TW, commodity conflicts, exclusions |
 | **VRP** | ALNS loop, weights, acceptance | Route operators, capacity checks |
 | **Job-Shop** | ALNS loop, weights, acceptance | Task movement, machine constraints |
 | **Bin Packing** | ALNS loop, weights, acceptance | Item removal/insertion, bin capacity |
@@ -710,7 +710,7 @@ void ar_remove_related(void *ctx, void *solution, int q, uint32_t *removed,
 - [ ] Add relatedness function interface
 
 **Phase 9: ALNS Applications**
-- [ ] Surge (PDPTW) - first consumer
+- [ ] Surge (Rich VRP/PDPTW) - first consumer
 - [ ] VRP example
 - [ ] Job-shop scheduling example
 

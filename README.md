@@ -26,7 +26,7 @@ A comprehensive trucking and logistics optimization platform combining route pla
 | **HoSE** | Hours of Service (**H**ours **o**f **S**ervice **E**ngine) - FMCSA/EC561 |
 | **Tempo** | Time windows and business rules (**T**ime-window and **E**vent **M**anagement **P**olicy **O**rchestrator) |
 | **Arbor** | State-space search engine (**A**lgorithmic **R**ecursive **B**ranching and **O**ptimization **R**untime) |
-| **Surge** | PDPTW solver (**S**cheduler for **U**rban **R**outing and **G**eneral **E**xpress) - ALNS metaheuristics for pickup/delivery |
+| **Surge** | Rich VRP/PDPTW solver (**S**cheduler for **U**rban **R**outing and **G**eneral **E**xpress) - VRPTW, PDPTW, DARP with multi-dim capacity, disjunct TW, commodity conflicts |
 | **Sigma** | Fleet plan selection via MIP (**S**election and **I**ntegration for **G**lobal **M**ulti-assignment **A**llocation) |
 | **Pulse** | Execution tracker / PTA engine (**P**lan **U**tilization and **L**ive **S**tate **E**stimator) |
 | **Forge** | Async job queue (**F**lexible **O**rchestration and **R**untime for **G**eneral **E**xecution) |
