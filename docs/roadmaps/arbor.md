@@ -390,6 +390,274 @@ double trip_lower_bound(const ARState *state) {
 }
 ```
 
+---
+
+## ALNS/LNS Metaheuristics
+
+In addition to tree search, Arbor provides Adaptive Large Neighborhood Search (ALNS) for
+problems where constructive search is impractical due to solution space size.
+
+### ALNS Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                       ALNS Controller                             │
+│  ar_alns_solve() │ operator selection │ acceptance │ termination │
+├────────────────────┬─────────────────────────────────────────────┤
+│   Destroy Operators │              Repair Operators               │
+│  (problem-specific) │             (problem-specific)              │
+├────────────────────┴─────────────────────────────────────────────┤
+│                     Generic Infrastructure                        │
+│  Roulette selection │ Adaptive weights │ SA/RRT/GD acceptance    │
+├──────────────────────────────────────────────────────────────────┤
+│                     Solution Interface                            │
+│  ar_solution_copy() │ ar_solution_cost() │ ar_solution_free()    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### ALNS Types
+
+```c
+/* ar_alns.h */
+
+/* Destroy operator: removes elements from solution */
+typedef void (*ARDestroyOp)(void *ctx, void *solution, int count, uint32_t *removed);
+
+/* Repair operator: inserts elements back into solution */
+typedef void (*ARRepairOp)(void *ctx, void *solution, int count, uint32_t *removed);
+
+/* Solution interface - problem must implement these */
+typedef struct {
+    void* (*copy)(const void *solution);
+    void  (*free)(void *solution);
+    double (*cost)(const void *solution);
+    int   (*size)(const void *solution);  /* Number of elements */
+} ARSolutionOps;
+
+/* Acceptance criteria */
+typedef enum {
+    AR_ACCEPT_SA,           /* Simulated Annealing */
+    AR_ACCEPT_RRT,          /* Record-to-Record Travel */
+    AR_ACCEPT_GD,           /* Great Deluge */
+    AR_ACCEPT_IMPROVING,    /* Only accept improvements */
+} ARAcceptType;
+
+/* ALNS parameters */
+typedef struct {
+    int max_iterations;
+    int max_time_seconds;
+    double initial_temp;        /* For SA */
+    double cooling_rate;        /* For SA: temp *= cooling_rate */
+    double threshold;           /* For RRT */
+    int segment_size;           /* Iterations between weight updates */
+    ARAcceptType accept_type;
+
+    /* Adaptive weight rewards */
+    double reward_best;         /* Found new global best */
+    double reward_better;       /* Accepted improving solution */
+    double reward_accepted;     /* Accepted non-improving */
+    double reward_rejected;     /* Rejected */
+
+    /* Removal count: q = rand(q_min, q_max) */
+    int q_min;
+    int q_max;
+} ARALNSParams;
+
+/* ALNS context */
+typedef struct ARALNSContext ARALNSContext;
+
+/* ALNS statistics */
+typedef struct {
+    int64_t iterations;
+    int64_t improvements;
+    int64_t accepted;
+    int64_t rejected;
+    double best_cost;
+    double elapsed_seconds;
+    int *destroy_counts;        /* Per-operator usage */
+    int *repair_counts;
+    double *destroy_weights;    /* Current adaptive weights */
+    double *repair_weights;
+} ARALNSStats;
+```
+
+### ALNS API
+
+```c
+/* Create ALNS context */
+ARALNSContext *ar_alns_create(const ARSolutionOps *ops, void *problem_data);
+
+/* Register operators */
+int ar_alns_add_destroy(ARALNSContext *ctx, const char *name, ARDestroyOp op,
+                         double initial_weight);
+int ar_alns_add_repair(ARALNSContext *ctx, const char *name, ARRepairOp op,
+                        double initial_weight);
+
+/* Set initial solution */
+void ar_alns_set_initial(ARALNSContext *ctx, void *solution);
+
+/* Run ALNS */
+int ar_alns_solve(ARALNSContext *ctx, const ARALNSParams *params);
+
+/* Get results */
+void *ar_alns_get_best(ARALNSContext *ctx);
+ARALNSStats ar_alns_get_stats(ARALNSContext *ctx);
+
+/* Free context */
+void ar_alns_free(ARALNSContext *ctx);
+```
+
+### ALNS Main Loop (Internal)
+
+```c
+int ar_alns_solve(ARALNSContext *ctx, const ARALNSParams *params) {
+    void *current = ctx->ops->copy(ctx->initial);
+    void *best = ctx->ops->copy(current);
+    double best_cost = ctx->ops->cost(best);
+
+    double temperature = params->initial_temp;
+
+    for (int iter = 0; iter < params->max_iterations; iter++) {
+        /* Select operators via roulette wheel */
+        int d_idx = ar_roulette_select(ctx->destroy_weights, ctx->num_destroy);
+        int r_idx = ar_roulette_select(ctx->repair_weights, ctx->num_repair);
+
+        /* Copy and modify */
+        void *candidate = ctx->ops->copy(current);
+        int q = ar_random_int(params->q_min, params->q_max);
+        uint32_t *removed = malloc(q * sizeof(uint32_t));
+
+        ctx->destroy_ops[d_idx](ctx->problem_data, candidate, q, removed);
+        ctx->repair_ops[r_idx](ctx->problem_data, candidate, q, removed);
+        free(removed);
+
+        double delta = ctx->ops->cost(candidate) - ctx->ops->cost(current);
+
+        /* Accept/reject */
+        if (ar_accept(delta, temperature, params)) {
+            ctx->ops->free(current);
+            current = candidate;
+
+            if (ctx->ops->cost(current) < best_cost) {
+                ctx->ops->free(best);
+                best = ctx->ops->copy(current);
+                best_cost = ctx->ops->cost(best);
+                ar_update_weight(ctx, d_idx, r_idx, params->reward_best);
+            } else {
+                ar_update_weight(ctx, d_idx, r_idx, params->reward_better);
+            }
+        } else {
+            ctx->ops->free(candidate);
+            ar_update_weight(ctx, d_idx, r_idx, params->reward_rejected);
+        }
+
+        temperature *= params->cooling_rate;
+
+        if (iter % params->segment_size == 0) {
+            ar_normalize_weights(ctx);
+        }
+    }
+
+    ctx->best = best;
+    ctx->ops->free(current);
+    return 0;
+}
+```
+
+### Acceptance Criteria
+
+```c
+/* Simulated Annealing */
+bool ar_accept_sa(double delta, double temperature) {
+    if (delta < 0) return true;
+    return ar_random_double() < exp(-delta / temperature);
+}
+
+/* Record-to-Record Travel (deterministic) */
+bool ar_accept_rrt(double current_cost, double candidate_cost,
+                   double best_cost, double threshold) {
+    return candidate_cost < best_cost + threshold;
+}
+
+/* Great Deluge */
+bool ar_accept_gd(double candidate_cost, double water_level) {
+    return candidate_cost < water_level;
+}
+```
+
+### Roulette Wheel Selection
+
+```c
+int ar_roulette_select(double *weights, int n) {
+    double sum = 0;
+    for (int i = 0; i < n; i++) sum += weights[i];
+
+    double r = ar_random_double() * sum;
+    double cumulative = 0;
+
+    for (int i = 0; i < n; i++) {
+        cumulative += weights[i];
+        if (r <= cumulative) return i;
+    }
+    return n - 1;
+}
+
+void ar_update_weight(ARALNSContext *ctx, int d, int r, double reward) {
+    ctx->destroy_scores[d] += reward;
+    ctx->repair_scores[r] += reward;
+    ctx->destroy_counts[d]++;
+    ctx->repair_counts[r]++;
+}
+
+void ar_normalize_weights(ARALNSContext *ctx) {
+    double reaction = 0.1;  /* How quickly weights adapt */
+
+    for (int i = 0; i < ctx->num_destroy; i++) {
+        if (ctx->destroy_counts[i] > 0) {
+            double avg = ctx->destroy_scores[i] / ctx->destroy_counts[i];
+            ctx->destroy_weights[i] = ctx->destroy_weights[i] * (1 - reaction)
+                                     + avg * reaction;
+        }
+        ctx->destroy_scores[i] = 0;
+        ctx->destroy_counts[i] = 0;
+    }
+    /* Same for repair weights */
+}
+```
+
+### Generic Operator Helpers
+
+```c
+/* ar_operators.h - helpers for implementing operators */
+
+/* Compute relatedness between two elements (for Shaw removal) */
+typedef double (*ARRelatednessFn)(void *ctx, uint32_t a, uint32_t b);
+
+/* Random removal: pick q random elements */
+void ar_remove_random(void *solution, int q, uint32_t *removed,
+                      int (*get_size)(void*), uint32_t (*get_element)(void*, int));
+
+/* Worst removal: remove elements with highest cost contribution */
+void ar_remove_worst(void *ctx, void *solution, int q, uint32_t *removed,
+                     double (*removal_cost)(void*, void*, uint32_t),
+                     double randomness);
+
+/* Related removal (Shaw): remove elements similar to a seed */
+void ar_remove_related(void *ctx, void *solution, int q, uint32_t *removed,
+                       ARRelatednessFn relatedness, double randomness);
+```
+
+### ALNS Applications
+
+| Problem | Arbor Provides | Problem Implements |
+|---------|----------------|-------------------|
+| **PDPTW (Surge)** | ALNS loop, weights, acceptance | Request removal/insertion, TW feasibility |
+| **VRP** | ALNS loop, weights, acceptance | Route operators, capacity checks |
+| **Job-Shop** | ALNS loop, weights, acceptance | Task movement, machine constraints |
+| **Bin Packing** | ALNS loop, weights, acceptance | Item removal/insertion, bin capacity |
+
+---
+
 ### TODOs
 
 **Phase 1: Core Infrastructure**
@@ -423,10 +691,28 @@ double trip_lower_bound(const ARState *state) {
 - [ ] Implement dominance-based pruning (optional)
 - [ ] Add comprehensive search statistics
 
-**Phase 6: Applications**
+**Phase 6: Applications (Tree Search)**
 - [ ] Create trip planning example (integrate HoSE + Tempo)
 - [ ] Create scheduling example
 - [ ] Benchmark on realistic problem sizes
+
+**Phase 7: ALNS Core**
+- [ ] Implement ARALNSContext and lifecycle
+- [ ] Implement operator registration
+- [ ] Implement roulette wheel selection
+- [ ] Implement adaptive weight updates
+- [ ] Implement SA/RRT/GD acceptance criteria
+
+**Phase 8: ALNS Helpers**
+- [ ] Implement ar_remove_random()
+- [ ] Implement ar_remove_worst()
+- [ ] Implement ar_remove_related() (Shaw)
+- [ ] Add relatedness function interface
+
+**Phase 9: ALNS Applications**
+- [ ] Surge (PDPTW) - first consumer
+- [ ] VRP example
+- [ ] Job-shop scheduling example
 
 ---
 

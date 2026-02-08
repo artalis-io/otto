@@ -34,37 +34,65 @@ Constraints:
 
 ## Architecture
 
+Surge uses Arbor's ALNS framework (see `docs/roadmaps/arbor.md`) with PDPTW-specific
+operators. The generic ALNS loop, operator selection, and acceptance criteria live in
+Arbor; Surge provides the domain logic.
+
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                         Surge API                              │
+│                         Surge API                                │
 │  sg_create() │ sg_solve() │ sg_add_request() │ sg_get_solution() │
 ├──────────────────────────────────────────────────────────────────┤
-│                        ALNS Controller                            │
-│  Operator selection (roulette) │ Acceptance │ Termination        │
-├────────────────────┬─────────────────────────────────────────────┤
-│   Destroy Operators │              Repair Operators               │
-│  ┌────────────────┐ │ ┌────────────────┐ ┌─────────────────────┐ │
-│  │ Random Remove  │ │ │ Greedy Insert  │ │ Regret-k Insert     │ │
-│  │ Worst Remove   │ │ │ Best Insert    │ │ Sequential Insert   │ │
-│  │ Related Remove │ │ │ Cheapest Insert│ │ Parallel Insert     │ │
-│  │ Shaw Remove    │ │ └────────────────┘ └─────────────────────┘ │
-│  │ Cluster Remove │ │                                            │
-│  │ Route Remove   │ │                                            │
-│  └────────────────┘ │                                            │
-├────────────────────┴─────────────────────────────────────────────┤
-│                      Solution Representation                      │
-│  Routes[] → Stops[] → { request_id, type, arrival, departure }   │
+│                    PDPTW Operators (Surge)                       │
+│  ┌────────────────────────┐ ┌──────────────────────────────────┐ │
+│  │ Destroy: random, worst │ │ Repair: greedy, regret-k         │ │
+│  │   Shaw, route, cluster │ │   best position, sequential      │ │
+│  └────────────────────────┘ └──────────────────────────────────┘ │
 ├──────────────────────────────────────────────────────────────────┤
-│                         Evaluation Layer                          │
-│  Feasibility check │ Cost delta │ TW propagation │ Capacity check │
+│                   PDPTW Feasibility (Surge)                      │
+│  TW propagation │ Capacity check │ Precedence │ Cost delta       │
 ├──────────────────────────────────────────────────────────────────┤
-│                     Infrastructure (Existing)                     │
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────────────────────────┐│
-│  │  Arbor  │ │  Velo   │ │  Ralph  │ │         Shared           ││
-│  │ Search  │ │ Routing │ │  MIP    │ │ Geo, Heap, HashMap, Arena││
-│  └─────────┘ └─────────┘ └─────────┘ └──────────────────────────┘│
+│                   Solution Representation (Surge)                │
+│  SGSolution → SGRoute[] → SGStop[] → { request, type, times }   │
+├──────────────────────────────────────────────────────────────────┤
+│                     ALNS Framework (Arbor)                       │
+│  ar_alns_solve() │ roulette selection │ adaptive weights         │
+│  SA/RRT/GD acceptance │ ar_remove_worst() │ ar_remove_related()  │
+├──────────────────────────────────────────────────────────────────┤
+│                   Supporting Infrastructure                      │
+│  ┌─────────┐ ┌─────────┐ ┌──────────────────────────────────────┐│
+│  │  Velo   │ │  Ralph  │ │              Shared                  ││
+│  │ Routing │ │  MIP    │ │    Geo, Heap, HashMap, Arena         ││
+│  └─────────┘ └─────────┘ └──────────────────────────────────────┘│
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+### What Arbor Provides (Generic)
+
+| Component | Description |
+|-----------|-------------|
+| `ar_alns_solve()` | Main ALNS loop with termination |
+| `ar_alns_add_destroy()` | Register destroy operators |
+| `ar_alns_add_repair()` | Register repair operators |
+| Roulette selection | Probabilistic operator choice |
+| Adaptive weights | Score-based weight updates |
+| Acceptance criteria | SA, RRT, Great Deluge |
+| `ar_remove_random()` | Generic random removal |
+| `ar_remove_worst()` | Generic worst removal with randomization |
+| `ar_remove_related()` | Generic Shaw removal with relatedness fn |
+
+### What Surge Provides (PDPTW-specific)
+
+| Component | Description |
+|-----------|-------------|
+| `SGSolution`, `SGRoute`, `SGStop` | PDPTW solution structures |
+| `sg_destroy_shaw()` | Shaw removal using pickup distance + TW similarity |
+| `sg_destroy_route()` | Remove entire route |
+| `sg_repair_greedy()` | Insert at cheapest position |
+| `sg_repair_regret_k()` | Regret-k insertion heuristic |
+| `sg_check_feasible()` | TW propagation, capacity, precedence |
+| `sg_compute_relatedness()` | Distance + time + load similarity |
+| `sg_insertion_cost()` | Delta cost for pickup-delivery insertion |
 
 ---
 
@@ -179,92 +207,69 @@ typedef struct {
 
 ---
 
-## ALNS Algorithm
+## ALNS Integration
 
-### Main Loop
+Surge uses Arbor's ALNS framework (`ar_alns_solve()`) for the main optimization loop.
+The generic algorithm—operator selection, acceptance criteria, adaptive weights—lives
+in Arbor. Surge provides PDPTW-specific operators and solution operations via callbacks.
+
+### Registering Operators with Arbor
 
 ```c
-SGStatus sg_solve_alns(SGContext *ctx) {
+SGStatus sg_solve(SGContext *ctx) {
     /* Initialize with greedy construction */
     sg_construct_initial(ctx);
-    sg_copy_solution(&ctx->best, &ctx->current);
 
-    /* ALNS parameters */
-    double temperature = ctx->config.initial_temp;
-    const double cooling_rate = ctx->config.cooling_rate;
-    const int max_iter = ctx->config.max_iterations;
-    const int segment_size = ctx->config.segment_size;
+    /* Create Arbor ALNS context */
+    ARALNSParams params = {
+        .max_iterations = ctx->config.max_iterations,
+        .initial_temp = ctx->config.initial_temp,
+        .cooling_rate = ctx->config.cooling_rate,
+        .segment_size = ctx->config.segment_size,
+        .acceptance = AR_ACCEPT_SA,  /* Or AR_ACCEPT_RRT, AR_ACCEPT_GD */
+    };
 
-    for (int iter = 0; iter < max_iter; iter++) {
-        /* Select operators via roulette wheel */
-        int destroy_op = sg_select_operator(ctx->alns.destroy_weights, NUM_DESTROY_OPS);
-        int repair_op = sg_select_operator(ctx->alns.repair_weights, NUM_REPAIR_OPS);
+    ARALNSContext *alns = ar_alns_create(&params);
 
-        /* Copy current solution to working copy */
-        SGSolution candidate;
-        sg_copy_solution(&candidate, &ctx->current);
+    /* Solution operations (Arbor callbacks into Surge) */
+    ARSolutionOps ops = {
+        .copy = sg_solution_copy,
+        .cost = sg_solution_cost,
+        .free = sg_solution_free,
+        .user_data = ctx
+    };
+    ar_alns_set_solution_ops(alns, &ops);
 
-        /* Destroy: remove q requests */
-        int q = sg_compute_removal_count(ctx, iter);
-        uint32_t removed[q];
-        ctx->alns.destroy_ops[destroy_op](ctx, &candidate, q, removed);
+    /* Register PDPTW destroy operators */
+    ar_alns_add_destroy(alns, "random", sg_destroy_random, 1.0);
+    ar_alns_add_destroy(alns, "worst", sg_destroy_worst, 1.0);
+    ar_alns_add_destroy(alns, "shaw", sg_destroy_shaw, 1.0);
+    ar_alns_add_destroy(alns, "route", sg_destroy_route, 1.0);
 
-        /* Repair: reinsert removed requests */
-        ctx->alns.repair_ops[repair_op](ctx, &candidate, q, removed);
+    /* Register PDPTW repair operators */
+    ar_alns_add_repair(alns, "greedy", sg_repair_greedy, 1.0);
+    ar_alns_add_repair(alns, "regret2", sg_repair_regret_2, 1.0);
+    ar_alns_add_repair(alns, "regret3", sg_repair_regret_3, 1.0);
 
-        /* Evaluate and accept/reject */
-        double delta = candidate.total_cost - ctx->current.total_cost;
+    /* Run ALNS (Arbor handles the loop, selection, acceptance) */
+    ARStatus status = ar_alns_solve(alns, &ctx->current, &ctx->best);
 
-        if (sg_accept(delta, temperature, ctx)) {
-            sg_copy_solution(&ctx->current, &candidate);
-
-            if (ctx->current.total_cost < ctx->best.total_cost) {
-                sg_copy_solution(&ctx->best, &ctx->current);
-                sg_update_operator_weight(ctx, destroy_op, repair_op, SG_REWARD_BEST);
-            } else {
-                sg_update_operator_weight(ctx, destroy_op, repair_op, SG_REWARD_BETTER);
-            }
-        } else {
-            sg_update_operator_weight(ctx, destroy_op, repair_op, SG_REWARD_REJECTED);
-        }
-
-        /* Update temperature */
-        temperature *= cooling_rate;
-
-        /* Normalize weights every segment */
-        if (iter % segment_size == 0) {
-            sg_normalize_weights(ctx);
-        }
-
-        /* Early termination check */
-        if (sg_should_terminate(ctx, iter)) break;
-    }
-
-    return SG_STATUS_OK;
+    ar_alns_free(alns);
+    return (status == AR_STATUS_OK) ? SG_STATUS_OK : SG_STATUS_ERROR;
 }
 ```
 
-### Acceptance Criteria
+### Arbor Acceptance Criteria
 
-```c
-/* Simulated Annealing acceptance */
-bool sg_accept_sa(double delta, double temperature, SGContext *ctx) {
-    if (delta < 0) return true;  /* Always accept improvements */
+Arbor provides these acceptance criteria (Surge selects via `params.acceptance`):
 
-    double prob = exp(-delta / temperature);
-    return sg_random_double(ctx) < prob;
-}
+| Criterion | Arbor Enum | Behavior |
+|-----------|------------|----------|
+| Simulated Annealing | `AR_ACCEPT_SA` | Accept worse with prob exp(-Δ/T) |
+| Record-to-Record Travel | `AR_ACCEPT_RRT` | Accept if within threshold of best |
+| Great Deluge | `AR_ACCEPT_GD` | Accept if below water level |
 
-/* Record-to-Record Travel (deterministic) */
-bool sg_accept_rrt(double delta, double threshold, SGContext *ctx) {
-    return (ctx->current.total_cost + delta) < (ctx->best.total_cost + threshold);
-}
-
-/* Great Deluge */
-bool sg_accept_gd(double delta, double water_level, SGContext *ctx) {
-    return (ctx->current.total_cost + delta) < water_level;
-}
-```
+See `docs/roadmaps/arbor.md` for details on Arbor's ALNS framework.
 
 ---
 
@@ -826,29 +831,28 @@ char *sg_solution_to_json(SGContext *ctx);
 
 ## Implementation Plan
 
-### Phase 1: Core (1 week)
+### Phase 1: Core Data Structures (1 week)
 - [ ] Data structures (SGRequest, SGVehicle, SGRoute, SGSolution)
 - [ ] Problem builder API
 - [ ] Greedy construction heuristic
-- [ ] Basic feasibility checking
+- [ ] Basic feasibility checking (TW, capacity, precedence)
 - [ ] Distance matrix (Euclidean initially)
 
-### Phase 2: ALNS Framework (1 week)
-- [ ] ALNS main loop
-- [ ] Operator selection (roulette wheel)
-- [ ] Simulated annealing acceptance
+### Phase 2: PDPTW Operators (1 week)
 - [ ] Basic destroy: random, worst
 - [ ] Basic repair: greedy, regret-2
+- [ ] Arbor solution ops callbacks (copy, cost, free)
+- [ ] Register operators with Arbor ALNS
 
 ### Phase 3: Advanced Operators (1 week)
-- [ ] Shaw removal (related)
+- [ ] Shaw removal (relatedness function)
 - [ ] Route removal
-- [ ] Regret-k insertion
+- [ ] Regret-k insertion (k=2,3)
 - [ ] Time window propagation optimization
 
 ### Phase 4: Integration (1 week)
-- [ ] Velo integration (distance/time matrices)
-- [ ] Arbor integration (parallel evaluation)
+- [ ] Velo integration (road distance/time matrices)
+- [ ] Ralph integration (exact MIP for small instances)
 - [ ] API server endpoints
 - [ ] JSON input/output
 - [ ] WASM compilation
@@ -858,6 +862,10 @@ char *sg_solution_to_json(SGContext *ctx);
 - [ ] Benchmark on standard instances (Solomon, Li & Lim)
 - [ ] Parameter tuning
 - [ ] Performance optimization
+
+**Note:** The ALNS framework (main loop, operator selection, acceptance criteria,
+adaptive weights) is provided by Arbor. Surge implements PDPTW-specific operators
+and integrates via Arbor's callback interface.
 
 ---
 
