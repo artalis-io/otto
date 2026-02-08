@@ -141,4 +141,4 @@ For production, use a caching proxy (nginx, Cloudflare, etc.).
 
 ## License
 
-MIT
+AGPLv3 + Commercial License with Trucking Exception - see [LICENSE](../../LICENSE).

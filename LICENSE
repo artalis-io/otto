@@ -1,21 +1,64 @@
-MIT License
+# OTTO Licensing
 
-Copyright (c) 2026 Mark Farkas
+OTTO is dual-licensed under the GNU Affero General Public License v3.0 (AGPL-3.0)
+and a Commercial License.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## Open Source License (AGPLv3)
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Copyright (c) 2026 Mark Farkas / Artalis
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+## Commercial License
+
+A commercial license is available for organizations that:
+- Want to embed OTTO in proprietary SaaS products
+- Cannot comply with AGPL's open-source requirements
+- Need additional support, indemnification, or custom terms
+
+### Trucking Exception
+
+The commercial license includes a perpetual, royalty-free, worldwide grant for:
+
+> "Use solely in connection with the ownership, operation, dispatch, routing,
+> maintenance, compliance, or insurance of motor vehicles operated by the
+> licensee or its affiliates."
+
+This means trucking companies (from owner-operators to mega-fleets) can use OTTO
+commercially without licensing fees. The AGPL network-service provisions do not
+apply to internal fleet operations.
+
+### Who Needs a Commercial License?
+
+| Use Case | License Required |
+|----------|------------------|
+| Trucking fleet (internal use) | Free (AGPL + Trucking Exception) |
+| Self-hosted by motor carrier | Free (AGPL + Trucking Exception) |
+| SaaS vendor embedding OTTO | Commercial License |
+| Platform reselling OTTO features | Commercial License |
+| Offering OTTO as a service to third parties | Commercial License (or AGPL compliance) |
+
+### Contact
+
+For commercial licensing inquiries: licensing@artalis.io
+
+---
+
+## Third-Party Licenses
+
+The `vendor/` directory contains third-party code under their respective licenses:
+- miniz: Public domain / MIT
+- mongoose: GPLv2 (with commercial license available)
+- Clay: zlib license
+
+See individual LICENSE files in `vendor/` subdirectories.

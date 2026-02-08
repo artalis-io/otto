@@ -276,7 +276,7 @@ make wasm
 
 ## License
 
-MIT License - see LICENSE file.
+AGPLv3 + Commercial License with Trucking Exception - see [LICENSE](../LICENSE).
 
 ## See Also
 

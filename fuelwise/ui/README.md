@@ -31,4 +31,4 @@ npm run preview
 
 ## License
 
-MIT License - see [LICENSE](../LICENSE) for details.
+AGPLv3 + Commercial License with Trucking Exception - see [LICENSE](../../LICENSE).
