@@ -103,7 +103,7 @@ int fw_api_handle(FWAPIContext *ctx,
 /* ============================================================================
  * API Endpoint Annotations
  *
- * These annotations are parsed by scripts/gen_api.py to generate documentation.
+ * These annotations are parsed by scripts/build-api-docs.py to generate documentation.
  * ============================================================================ */
 
 /*@api
@@ -275,6 +275,20 @@ int fw_api_handle(FWAPIContext *ctx,
  *
  * @demo json
  * @demo_title View FuelWise server statistics
+ */
+
+/*@wasm
+ * @export fuelwise_api_init
+ * @export fuelwise_api_free
+ * @export fuelwise_api_ready
+ * @export fuelwise_api_handle
+ * @export fuelwise_response_status
+ * @export fuelwise_response_content_type
+ * @export fuelwise_response_body
+ * @export fuelwise_response_body_len
+ * @export fuelwise_api_version
+ * @export malloc
+ * @export free
  */
 
 #ifdef __cplusplus

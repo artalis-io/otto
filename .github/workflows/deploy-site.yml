@@ -5,7 +5,7 @@ on:
     branches: [ "main" ]
     paths:
       - 'site/**'
-      - 'scripts/gen_api.py'
+      - 'scripts/build-api-docs.py'
       - 'carta/include/ct_api.h'
       - 'velo/include/vl_api.h'
       - 'locus/include/lc_api.h'

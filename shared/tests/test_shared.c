@@ -15,6 +15,7 @@
 #include "sh_hashmap.h"
 #include "sh_heap.h"
 #include "sh_spatial_grid.h"
+#include "sh_query.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3391,6 +3392,84 @@ TEST(spatial_grid_null_safety)
 }
 
 /* ============================================================================
+ * Query String Parsing Tests
+ * ============================================================================ */
+
+TEST(query_get_int_basic)
+{
+    ASSERT_EQ(sh_query_get_int("width=80&height=40", "width", 0), 80);
+    ASSERT_EQ(sh_query_get_int("width=80&height=40", "height", 0), 40);
+}
+
+TEST(query_get_int_default)
+{
+    ASSERT_EQ(sh_query_get_int("width=80", "height", 99), 99);
+    ASSERT_EQ(sh_query_get_int(NULL, "width", 42), 42);
+    ASSERT_EQ(sh_query_get_int("", "width", 42), 42);
+}
+
+TEST(query_get_int_edge_cases)
+{
+    /* First parameter */
+    ASSERT_EQ(sh_query_get_int("x=5", "x", 0), 5);
+    /* Last parameter without & */
+    ASSERT_EQ(sh_query_get_int("a=1&b=2&c=3", "c", 0), 3);
+    /* Negative numbers */
+    ASSERT_EQ(sh_query_get_int("x=-42", "x", 0), -42);
+}
+
+TEST(query_get_str_basic)
+{
+    char buf[64];
+    ASSERT_EQ(sh_query_get_str("name=hello&type=test", "name", buf, sizeof(buf)), 5);
+    ASSERT(strcmp(buf, "hello") == 0);
+    ASSERT_EQ(sh_query_get_str("name=hello&type=test", "type", buf, sizeof(buf)), 4);
+    ASSERT(strcmp(buf, "test") == 0);
+}
+
+TEST(query_get_str_not_found)
+{
+    char buf[64];
+    buf[0] = 'X';
+    ASSERT_EQ(sh_query_get_str("name=hello", "missing", buf, sizeof(buf)), 0);
+    ASSERT(buf[0] == '\0');  /* Buffer cleared even on not found */
+}
+
+TEST(query_get_str_null_safety)
+{
+    char buf[64];
+    ASSERT_EQ(sh_query_get_str(NULL, "key", buf, sizeof(buf)), 0);
+    ASSERT_EQ(sh_query_get_str("key=val", NULL, buf, sizeof(buf)), 0);
+    ASSERT_EQ(sh_query_get_str("key=val", "key", NULL, sizeof(buf)), 0);
+    ASSERT_EQ(sh_query_get_str("key=val", "key", buf, 0), 0);
+}
+
+TEST(query_has_basic)
+{
+    ASSERT_EQ(sh_query_has("debug=1&verbose", "debug"), 1);
+    ASSERT_EQ(sh_query_has("debug=1&verbose", "verbose"), 1);
+    ASSERT_EQ(sh_query_has("debug=1&verbose", "missing"), 0);
+}
+
+TEST(query_has_null_safety)
+{
+    ASSERT_EQ(sh_query_has(NULL, "key"), 0);
+    ASSERT_EQ(sh_query_has("key=val", NULL), 0);
+}
+
+TEST(query_get_double_basic)
+{
+    ASSERT_NEAR(sh_query_get_double("lat=47.5&lon=19.1", "lat", 0.0), 47.5, 0.0001);
+    ASSERT_NEAR(sh_query_get_double("lat=47.5&lon=19.1", "lon", 0.0), 19.1, 0.0001);
+}
+
+TEST(query_get_double_default)
+{
+    ASSERT_NEAR(sh_query_get_double("x=1.5", "y", 99.9), 99.9, 0.0001);
+    ASSERT_NEAR(sh_query_get_double(NULL, "x", 42.0), 42.0, 0.0001);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -3660,6 +3739,18 @@ int main(void)
     RUN_TEST(csr_grid_cell_index);
     RUN_TEST(grid_config_create);
     RUN_TEST(spatial_grid_null_safety);
+
+    printf("\nQuery String Parsing:\n");
+    RUN_TEST(query_get_int_basic);
+    RUN_TEST(query_get_int_default);
+    RUN_TEST(query_get_int_edge_cases);
+    RUN_TEST(query_get_str_basic);
+    RUN_TEST(query_get_str_not_found);
+    RUN_TEST(query_get_str_null_safety);
+    RUN_TEST(query_has_basic);
+    RUN_TEST(query_has_null_safety);
+    RUN_TEST(query_get_double_basic);
+    RUN_TEST(query_get_double_default);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

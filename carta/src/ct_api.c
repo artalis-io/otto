@@ -7,6 +7,8 @@
 
 #include "carta.h"
 #include "ct_api.h"
+#include "ct_ascii.h"
+#include "sh_query.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -108,6 +110,23 @@ void ct_api_free(CTAPIContext *ctx) {
 
 CTPBFContext *ct_api_get_pbf(CTAPIContext *ctx) {
     return ctx ? ctx->pbf : NULL;
+}
+
+void ct_api_set_lod(CTAPIContext *ctx, const CTLODConfig *lod) {
+    if (!ctx || !lod) return;
+    ct_lod_free(&ctx->lod_config);
+    ct_lod_copy(&ctx->lod_config, lod);
+}
+
+void ct_api_set_render_opts(CTAPIContext *ctx, const CTRenderOptions *opts) {
+    if (!ctx || !opts) return;
+    ctx->render_opts = *opts;
+}
+
+void ct_api_disable_lod(CTAPIContext *ctx) {
+    if (!ctx) return;
+    ct_lod_free(&ctx->lod_config);
+    ct_lod_init(&ctx->lod_config);  /* Reset to empty = no filtering */
 }
 
 /* ============================================================================
@@ -304,6 +323,86 @@ char *ct_api_generate_stats(CTAPIContext *ctx, size_t *out_len) {
     return buffer;
 }
 
+char *ct_api_generate_ascii(CTAPIContext *ctx,
+                            int z, int x, int y,
+                            const char *query,
+                            size_t *out_len) {
+    if (!ctx || !ctx->pbf || !out_len) return NULL;
+    *out_len = 0;
+
+    /* Validate coordinates */
+    if (z < ctx->min_zoom || z > ctx->max_zoom || z > 30) return NULL;
+    int max_coord = 1 << z;
+    if (x < 0 || x >= max_coord || y < 0 || y >= max_coord) return NULL;
+
+    /* Parse ASCII options from query string */
+    CTAsciiOptions ascii_opts;
+    ct_ascii_default_options(&ascii_opts);
+
+    ascii_opts.width = sh_query_get_int(query, "width", 80);
+    ascii_opts.height = sh_query_get_int(query, "height", 0);  /* 0 = auto */
+    ascii_opts.invert = sh_query_get_int(query, "invert", 0);
+    ascii_opts.color = sh_query_get_int(query, "color", 0);
+
+    /* Parse charset: simple, extended, blocks, braille */
+    char charset_buf[16];
+    if (sh_query_get_str(query, "charset", charset_buf, sizeof(charset_buf)) > 0) {
+        if (strcmp(charset_buf, "simple") == 0) {
+            ascii_opts.charset = CT_ASCII_SIMPLE;
+        } else if (strcmp(charset_buf, "extended") == 0) {
+            ascii_opts.charset = CT_ASCII_EXTENDED;
+        } else if (strcmp(charset_buf, "blocks") == 0) {
+            ascii_opts.charset = CT_ASCII_BLOCKS;
+        } else if (strcmp(charset_buf, "braille") == 0) {
+            ascii_opts.charset = CT_ASCII_BRAILLE;
+        }
+    }
+
+    /* Clamp dimensions to reasonable range */
+    if (ascii_opts.width < 20) ascii_opts.width = 20;
+    if (ascii_opts.width > 400) ascii_opts.width = 400;
+    if (ascii_opts.height > 200) ascii_opts.height = 200;
+
+    /* Create render context */
+    CTRenderContext *render = ct_render_create(ctx->tile_size, ctx->tile_size);
+    if (!render) return NULL;
+
+    /* Apply render options */
+    ct_render_set_options(render, &ctx->render_opts);
+
+    /* Render tile */
+    CTTileCoord coord = {z, x, y};
+    ct_render_clear(render);
+    ct_render_from_pbf_lod(render, ctx->pbf, coord, &ctx->lod_config);
+
+    /* Get pixels */
+    const uint8_t *pixels = ct_render_pixels(render);
+
+    /* Calculate buffer size and allocate */
+    int out_height = ascii_opts.height > 0 ? ascii_opts.height : ascii_opts.width / 2;
+    size_t buf_size = ct_ascii_buffer_size(ascii_opts.width, out_height,
+                                            ascii_opts.charset, ascii_opts.color);
+    char *buffer = malloc(buf_size);
+    if (!buffer) {
+        ct_render_free(render);
+        return NULL;
+    }
+
+    /* Render to ASCII */
+    size_t len = ct_render_ascii(pixels, ctx->tile_size, ctx->tile_size,
+                                  &ascii_opts, buffer, buf_size);
+
+    ct_render_free(render);
+
+    if (len == 0) {
+        free(buffer);
+        return NULL;
+    }
+
+    *out_len = len;
+    return buffer;
+}
+
 /* ============================================================================
  * Path Parsing
  * ============================================================================ */
@@ -452,9 +551,20 @@ int ct_api_handle(CTAPIContext *ctx,
                 resp->body = (uint8_t *)strdup("Tile generation failed");
                 resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
             }
+        } else if (strcmp(ext, "txt") == 0 || strcmp(ext, "ascii") == 0) {
+            resp->body = (uint8_t *)ct_api_generate_ascii(ctx, z, x, y,
+                                                           req->query, &resp->body_len);
+            if (resp->body) {
+                resp->status_code = 200;
+                resp->content_type = "text/plain; charset=utf-8";
+            } else {
+                resp->status_code = 500;
+                resp->body = (uint8_t *)strdup("ASCII tile generation failed");
+                resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
+            }
         } else {
             resp->status_code = 400;
-            resp->body = (uint8_t *)strdup("Unknown tile format. Use .png or .mvt");
+            resp->body = (uint8_t *)strdup("Unknown tile format. Use .png, .mvt, or .txt");
             resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
         }
 
