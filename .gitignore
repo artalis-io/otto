@@ -89,3 +89,7 @@ __pycache__/
 
 # Claude Code session locks
 .claude/locks/
+
+# Build artifacts
+ralph/api/ralph-solver-server
+site/test-results/
