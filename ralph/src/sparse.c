@@ -125,6 +125,12 @@ void triplets_free(SparseTriplets *trips) {
 
 int triplets_add(SparseTriplets *trips, int row, int col, double val) {
     if (!trips) return -1;
+
+    /* Validate indices before storing */
+    if (row < 0 || row >= trips->nrows || col < 0 || col >= trips->ncols) {
+        return -1;
+    }
+
     if (fabs(val) < 1e-15) return 0;  /* Skip zeros */
 
     /* Expand if needed */
