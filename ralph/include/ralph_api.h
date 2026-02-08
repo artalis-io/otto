@@ -32,28 +32,37 @@ extern "C" {
  * POST /api/v1/solve
  * Solve LP/MIP problem
  *
- * Solves a linear or mixed-integer programming problem from LP or MPS format
- * embedded in JSON. Designed for small educational/demo problems.
+ * Solves a linear or mixed-integer programming problem. Accepts raw LP or MPS
+ * format in the request body (use format query param), or JSON wrapper.
  *
- * @body format:string Problem format: "lp" or "mps"
- * @body problem:string Problem definition in specified format
- * @body timeout_ms:int:5000 Timeout in milliseconds (max 30000)
+ * @query format:string:lp Input format: "lp", "mps", or "json" (default: lp)
+ * @query timeout_ms:int:5000 Timeout in milliseconds (max 30000)
  *
- * @returns application/json Solution status and variable values
+ * @returns text/plain Solution in SOL format (for lp/mps input)
  * @error 400 Invalid problem format or syntax error
  * @error 413 Problem too large (>100 vars/constraints for LP, >50 for MIP)
  * @error 408 Timeout exceeded
  *
- * @response_json
- * {
- *   "status": "optimal",
- *   "objective": 42.5,
- *   "variables": {"x": 10.0, "y": 5.5},
- *   "solve_time_ms": 12,
- *   "iterations": 23
- * }
+ * @request_body lp
+ * max: 5 x + 3 y
  *
- * @example curl -X POST http://localhost:8084/api/v1/solve -H "Content-Type: application/json" -d '{"format":"lp","problem":"max: 5x + 3y; 2x + 4y <= 40; x >= 0; y >= 0;"}'
+ * subject to
+ * wood:  2 x + 4 y <= 40
+ * labor: 3 x + 2 y <= 24
+ *
+ * bounds
+ * x >= 0
+ * y >= 0
+ *
+ * end
+ *
+ * @response_text
+ * solution status: OPTIMAL
+ * objective value: 40.000000
+ * x 8.000000
+ * y 0.000000
+ *
+ * @example curl -X POST "http://localhost:8084/api/v1/solve?format=lp" -d @problem.lp
  *
  * @demo json
  * @demo_title Solve a small LP problem using Ralph WASM. No server required.

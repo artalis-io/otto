@@ -198,6 +198,20 @@ class DemoConfig:
 
 
 @dataclass
+class RequestBody:
+    """Request body example."""
+    format: str = "json"  # json, lp, mps, text
+    content: str = ""
+
+
+@dataclass
+class ResponseBody:
+    """Response body example."""
+    format: str = "json"  # json, text, sol
+    content: str = ""
+
+
+@dataclass
 class ApiEndpoint:
     """Parsed API endpoint from header annotations."""
     method: str = "GET"
@@ -211,7 +225,9 @@ class ApiEndpoint:
     errors: list[tuple[int, str]] = field(default_factory=list)
     example: str = ""
     example_comment: str = ""
-    response_json: str | None = None
+    request_body: RequestBody | None = None  # Input example
+    response_json: str | None = None  # Legacy: JSON response
+    response_body: ResponseBody | None = None  # New: any format response
     demo: str | None = None  # "image", "json", "text", "binary"
     demo_title: str = ""
     demo_inputs: list[DemoInput] = field(default_factory=list)
@@ -270,6 +286,8 @@ class AnnotationParser:
         "error": re.compile(r"^@error\s+(\d+)\s+(.*)$"),
         "example": re.compile(r"^@example\s+(.*)$"),
         "example_comment": re.compile(r"^@example_comment\s+(.*)$"),
+        "request_body": re.compile(r"^@request_body\s+(\w+)$"),
+        "response_text": re.compile(r"^@response_text$"),
         "demo": re.compile(r"^@demo\s+(\w+)$"),
         "demo_title": re.compile(r"^@demo_title\s+(.*)$"),
         "demo_input": re.compile(r"^@demo_input\s+(.*)$"),
@@ -317,7 +335,12 @@ class AnnotationParser:
         api = ApiEndpoint()
         lines = text.strip().split("\n")
         in_response_json = False
+        in_request_body = False
+        in_response_text = False
         response_json_lines: list[str] = []
+        request_body_lines: list[str] = []
+        response_text_lines: list[str] = []
+        request_body_format = "lp"
         brace_depth = 0
 
         for line in lines:
@@ -342,6 +365,36 @@ class AnnotationParser:
                     if not stripped.startswith("@"):
                         continue
                 else:
+                    continue
+
+            # Handle multi-line request_body (plain text until next @annotation)
+            if in_request_body:
+                stripped = line.strip()
+                if stripped.startswith("@"):
+                    # End of request body block
+                    api.request_body = RequestBody(
+                        format=request_body_format,
+                        content="\n".join(request_body_lines).strip()
+                    )
+                    in_request_body = False
+                    line = stripped
+                else:
+                    request_body_lines.append(line)
+                    continue
+
+            # Handle multi-line response_text (plain text until next @annotation)
+            if in_response_text:
+                stripped = line.strip()
+                if stripped.startswith("@"):
+                    # End of response text block
+                    api.response_body = ResponseBody(
+                        format="text",
+                        content="\n".join(response_text_lines).strip()
+                    )
+                    in_response_text = False
+                    line = stripped
+                else:
+                    response_text_lines.append(line)
                     continue
 
             line = line.strip()
@@ -405,6 +458,19 @@ class AnnotationParser:
                 response_json_lines = []
                 continue
 
+            # @request_body format (multi-line) - starts block for input example
+            if m := self.PATTERNS["request_body"].match(line):
+                request_body_format = m.group(1)  # lp, mps, json, text
+                in_request_body = True
+                request_body_lines = []
+                continue
+
+            # @response_text (multi-line) - plain text response (SOL format, etc.)
+            if line.startswith("@response_text"):
+                in_response_text = True
+                response_text_lines = []
+                continue
+
             # @demo image|json
             if m := self.PATTERNS["demo"].match(line):
                 api.demo = m.group(1)
@@ -443,6 +509,18 @@ class AnnotationParser:
             if m := self.PATTERNS["demo_handler"].match(line):
                 api.demo_handler = m.group(1)
                 continue
+
+        # Finalize any pending multi-line blocks
+        if in_request_body and request_body_lines:
+            api.request_body = RequestBody(
+                format=request_body_format,
+                content="\n".join(request_body_lines).strip()
+            )
+        if in_response_text and response_text_lines:
+            api.response_body = ResponseBody(
+                format="text",
+                content="\n".join(response_text_lines).strip()
+            )
 
         return api
 
@@ -510,8 +588,15 @@ class HtmlGenerator:
         if api.example:
             html += self._generate_example(api)
 
+        # Request Body (Input example - shown before response)
+        if api.request_body and api.request_body.content:
+            html += self._generate_request_body(api.request_body)
+
         # Response
-        if api.response_json:
+        if api.response_body and api.response_body.content:
+            # New: text/SOL response format
+            html += self._generate_response_body(api.response_body)
+        elif api.response_json:
             html += f'''
                         <div class="endpoint-section">
                             <h4>Response</h4>
@@ -606,6 +691,57 @@ class HtmlGenerator:
                             <h4>Example</h4>
                             <div class="code-block">
 <pre>{comment_html}{api.example}</pre>
+                            </div>
+                        </div>'''
+
+    def _generate_request_body(self, request_body: RequestBody) -> str:
+        """Generate request body example block (input)."""
+        # Format label based on type
+        format_labels = {
+            "lp": "LP Format",
+            "mps": "MPS Format",
+            "json": "JSON",
+            "text": "Text",
+        }
+        label = format_labels.get(request_body.format, request_body.format.upper())
+
+        # For JSON, apply syntax highlighting
+        if request_body.format == "json":
+            content_html = self.format_json_html(request_body.content)
+        else:
+            # For LP/MPS/text, just escape and show as-is
+            content_html = request_body.content.replace("<", "&lt;").replace(">", "&gt;")
+
+        return f'''
+                        <div class="endpoint-section">
+                            <h4>Request Body <span style="color: var(--text-muted); font-weight: normal; font-size: 12px;">({label})</span></h4>
+                            <div class="code-block">
+<pre>{content_html}</pre>
+                            </div>
+                        </div>'''
+
+    def _generate_response_body(self, response_body: ResponseBody) -> str:
+        """Generate response body example block (output)."""
+        # Format label based on type
+        format_labels = {
+            "json": "JSON",
+            "text": "Text",
+            "sol": "SOL Format",
+        }
+        label = format_labels.get(response_body.format, response_body.format.upper())
+
+        # For JSON, apply syntax highlighting
+        if response_body.format == "json":
+            content_html = self.format_json_html(response_body.content)
+        else:
+            # For text/SOL, just escape and show as-is
+            content_html = response_body.content.replace("<", "&lt;").replace(">", "&gt;")
+
+        return f'''
+                        <div class="endpoint-section">
+                            <h4>Response <span style="color: var(--text-muted); font-weight: normal; font-size: 12px;">({label})</span></h4>
+                            <div class="code-block">
+<pre>{content_html}</pre>
                             </div>
                         </div>'''
 
