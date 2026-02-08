@@ -152,7 +152,7 @@ All personas must exist and be navigable with zero JavaScript.
 
 **Verify claims match reality:**
 - [ ] "Zero dependencies" - vendored libs only
-- [ ] "MIT License" - core engines are MIT
+- [ ] License terms - AGPLv3 + Commercial with Trucking Exception
 - [ ] "WASM-first" - all compile to WASM
 - [ ] Performance numbers match benchmarks
 - [ ] Pricing ($29/mo pro) matches current offering

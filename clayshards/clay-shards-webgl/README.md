@@ -61,4 +61,4 @@ import {
 
 ## License
 
-MIT - Part of the OTTO platform
+AGPLv3 + Commercial License with Trucking Exception - see [LICENSE](../../LICENSE).

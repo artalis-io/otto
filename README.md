@@ -219,7 +219,12 @@ See [clayshards/clay-shards/MANIFESTO.md](clayshards/clay-shards/MANIFESTO.md) f
 
 ## License
 
-MIT License - see [LICENSE](LICENSE)
+**Dual-licensed:** AGPLv3 + Commercial License with Trucking Exception.
+
+- **Trucking companies:** Free forever (owner-operators to mega-fleets)
+- **SaaS vendors:** Commercial license required
+
+See [LICENSE](LICENSE) for details.
 
 ---
 

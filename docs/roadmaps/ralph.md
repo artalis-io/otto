@@ -144,7 +144,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 ### 4.2 External Solver Backends
 
 **HiGHS Integration** (Planned)
-- MIT-licensed LP/MIP solver
+- Open-source LP/MIP solver
 - Fallback for hard problems
 - Interface: `ralph_set_backend(RALPH_BACKEND_HIGHS)`
 

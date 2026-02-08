@@ -101,4 +101,4 @@ For WASM, include `src/cs_immediate.c` in your Emscripten build.
 
 ## License
 
-MIT
+AGPLv3 + Commercial License with Trucking Exception - see [LICENSE](../../LICENSE).
