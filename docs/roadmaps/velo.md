@@ -429,6 +429,7 @@ make route-bench
 - Profile compliance checking (VL_ACCESS_NO_TRUCK, etc.)
 - Algorithm consistency (all algorithms return same optimal distance)
 - Performance metrics (query_time_ms, nodes_explored, ms_per_km)
+- OSRM comparison (--osrm-url) - compare against reference implementation
 - Structured JSON output for CI integration
 - Skill: `/velo-route-bench` for debugging workflow
 
@@ -445,7 +446,6 @@ make route-bench
 **TODO:**
 - [ ] Create remaining ~20 benchmark routes
 - [ ] Route assertions (avoids_highway_class, passes_near)
-- [ ] OSRM comparison mode (--osrm-url)
 - [ ] CI integration (GitHub Actions)
 - [ ] Baseline performance capture
 
