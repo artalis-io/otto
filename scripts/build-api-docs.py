@@ -330,7 +330,7 @@ class AnnotationParser:
                 # Count braces and brackets to handle nested objects/arrays
                 brace_depth += stripped.count("{") - stripped.count("}")
                 brace_depth += stripped.count("[") - stripped.count("]")
-                response_json_lines.append(stripped)
+                response_json_lines.append(line)  # Preserve indentation
                 # End when we're back to depth 0 (matched all braces/brackets) or hit next annotation
                 if brace_depth <= 0 or stripped.startswith("@"):
                     if stripped.startswith("@"):
