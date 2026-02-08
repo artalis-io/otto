@@ -45,6 +45,10 @@ class WasmConfig:
     wrapper: str = ""
     factory_name: str = ""
     class_name: str = ""
+    handlers_file: str = ""
+    init_function: str = ""
+    error_function: str = ""
+    buttons: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WasmConfig:
@@ -54,6 +58,10 @@ class WasmConfig:
             wrapper=data.get("wrapper", ""),
             factory_name=data.get("factory_name", ""),
             class_name=data.get("class_name", ""),
+            handlers_file=data.get("handlers_file", ""),
+            init_function=data.get("init_function", ""),
+            error_function=data.get("error_function", ""),
+            buttons=data.get("buttons", {}),
         )
 
 
@@ -743,78 +751,21 @@ class TemplateRenderer:
         return block
 
     def _get_wasm_code(self, module: ModuleConfig) -> tuple[str, str]:
-        """Get WASM init and error code for a module."""
+        """Get WASM init and error code for a module from config."""
         if not module.wasm.enabled:
             return "                // WASM not enabled", "                // WASM not enabled"
 
-        # Module-specific code (necessary evil - JS needs specific element IDs)
-        wasm_code = {
-            "carta": (
-                '''                const pngBtn = document.getElementById('carta-try-btn');
-                const pngStatus = document.getElementById('carta-status');
-                pngBtn.textContent = 'Generate Tile';
-                pngBtn.disabled = false;
-                pngStatus.textContent = `Carta ${cartaDemo.getVersion()} ready (Monaco PBF: ${(cartaDemo.getPBFSize() / 1024).toFixed(0)} KB)`;
-                pngStatus.className = 'demo-status success';
-                document.getElementById('carta-output').classList.add('visible');
-                enableBtn('tilejson-try-btn', 'Fetch TileJSON');
-                enableBtn('health-try-btn', 'Check Health');
-                enableBtn('stats-try-btn', 'Get Stats');''',
-                '''                pngBtn.textContent = 'WASM unavailable';
-                pngStatus.textContent = 'Failed to load WASM module: ' + err.message;
-                pngStatus.className = 'demo-status error';
-                document.getElementById('carta-output').classList.add('visible');
-                disableBtn('tilejson-try-btn');
-                disableBtn('health-try-btn');
-                disableBtn('stats-try-btn');'''
-            ),
-            "velo": (
-                '''                enableBtn('velo-route-try-btn', 'Calculate Route');
-                enableBtn('velo-health-try-btn', 'Check Health');
-                enableBtn('velo-stats-try-btn', 'Get Stats');
-                const veloStatus = document.getElementById('velo-route-status');
-                if (veloStatus) {
-                    veloStatus.textContent = `Velo ${veloDemo.getVersion()} ready (Monaco: ${veloDemo.getNodeCount()} nodes)`;
-                    veloStatus.className = 'demo-status success';
-                    document.getElementById('velo-route-output').classList.add('visible');
-                }''',
-                '''                disableBtn('velo-route-try-btn');
-                disableBtn('velo-health-try-btn');
-                disableBtn('velo-stats-try-btn');
-                const veloStatus = document.getElementById('velo-route-status');
-                if (veloStatus) {
-                    veloStatus.textContent = 'Failed to load WASM: ' + err.message;
-                    veloStatus.className = 'demo-status error';
-                    document.getElementById('velo-route-output').classList.add('visible');
-                }'''
-            ),
-            "locus": (
-                '''                enableBtn('locus-api-v1-search-try-btn', 'Search');
-                enableBtn('locus-api-v1-autocomplete-try-btn', 'Autocomplete');
-                enableBtn('locus-api-v1-reverse-try-btn', 'Reverse Geocode');
-                enableBtn('locus-api-v1-health-try-btn', 'Check Health');
-                enableBtn('locus-api-v1-stats-try-btn', 'Get Stats');
-                const locusStatus = document.getElementById('locus-api-v1-search-status');
-                if (locusStatus) {
-                    locusStatus.textContent = `Locus ${locusDemo.getVersion()} ready (Monaco: ${locusDemo.getEntityCount()} entities)`;
-                    locusStatus.className = 'demo-status success';
-                    document.getElementById('locus-api-v1-search-output').classList.add('visible');
-                }''',
-                '''                disableBtn('locus-api-v1-search-try-btn');
-                disableBtn('locus-api-v1-autocomplete-try-btn');
-                disableBtn('locus-api-v1-reverse-try-btn');
-                disableBtn('locus-api-v1-health-try-btn');
-                disableBtn('locus-api-v1-stats-try-btn');
-                const locusStatus = document.getElementById('locus-api-v1-search-status');
-                if (locusStatus) {
-                    locusStatus.textContent = 'Failed to load WASM: ' + err.message;
-                    locusStatus.className = 'demo-status error';
-                    document.getElementById('locus-api-v1-search-output').classList.add('visible');
-                }'''
-            ),
-        }
+        if module.wasm.init_function:
+            init_code = f"                {module.wasm.init_function}();"
+        else:
+            init_code = "                // No init function configured"
 
-        return wasm_code.get(module.id, ("                // No demo buttons", "                // No error handling"))
+        if module.wasm.error_function:
+            error_code = f"                {module.wasm.error_function}(err);"
+        else:
+            error_code = "                // No error function configured"
+
+        return init_code, error_code
 
     def _process_common_endpoint_loops(self, text: str) -> str:
         """Process {% for ep in config.common_endpoints %} loops."""
@@ -858,7 +809,7 @@ class TemplateRenderer:
         for module in self.config.modules:
             if not module.wasm.enabled:
                 continue
-            handlers = self._get_button_handlers(module.id)
+            handlers = self._get_button_handlers(module)
             button_handlers.extend(handlers)
 
         text = text.replace("{{ button_handlers }}", "\n".join(button_handlers))
@@ -871,309 +822,57 @@ class TemplateRenderer:
 
         return text
 
-    def _get_button_handlers(self, module_id: str) -> list[str]:
-        """Get button click handler registrations for a module."""
-        handlers = {
-            "carta": [
-                "            document.getElementById('carta-try-btn').addEventListener('click', generateCartaTile);",
-                "            document.getElementById('tilejson-try-btn').addEventListener('click', fetchTileJSON);",
-                "            document.getElementById('health-try-btn').addEventListener('click', fetchHealth);",
-                "            document.getElementById('stats-try-btn').addEventListener('click', fetchStats);",
-            ],
-            "velo": [
-                "            document.getElementById('velo-route-try-btn').addEventListener('click', calculateVeloRoute);",
-                "            document.getElementById('velo-health-try-btn').addEventListener('click', fetchVeloHealth);",
-                "            document.getElementById('velo-stats-try-btn').addEventListener('click', fetchVeloStats);",
-            ],
-            "locus": [
-                "            document.getElementById('locus-api-v1-search-try-btn').addEventListener('click', fetchLocusSearch);",
-                "            document.getElementById('locus-api-v1-autocomplete-try-btn').addEventListener('click', fetchLocusAutocomplete);",
-                "            document.getElementById('locus-api-v1-reverse-try-btn').addEventListener('click', fetchLocusReverse);",
-                "            document.getElementById('locus-api-v1-health-try-btn').addEventListener('click', fetchLocusHealth);",
-                "            document.getElementById('locus-api-v1-stats-try-btn').addEventListener('click', fetchLocusStats);",
-            ],
-        }
-        return handlers.get(module_id, [])
+    def _get_button_handlers(self, module: ModuleConfig) -> list[str]:
+        """Get button click handler registrations for a module from config."""
+        if not module.wasm.enabled or not module.wasm.buttons:
+            return []
+
+        handlers = []
+        for btn_id, func_name in module.wasm.buttons.items():
+            handlers.append(
+                f"            document.getElementById('{btn_id}').addEventListener('click', {func_name});"
+            )
+        return handlers
 
     def _get_wasm_functions(self) -> str:
-        """Get all WASM handler function definitions."""
-        # These are loaded from separate files to keep this script clean
-        functions_file = SITE_DIR / "js" / "wasm-handlers.js"
-        if functions_file.exists():
-            # Read from external file if it exists
-            return f"\n        // WASM handlers loaded from {functions_file.name}\n"
+        """Load WASM handler functions from external files specified in config."""
+        parts = []
+        loaded_files = set()
 
-        # Fallback: inline the functions (for backwards compatibility)
-        return self._get_inline_wasm_functions()
+        for module in self.config.modules:
+            if not module.wasm.enabled or not module.wasm.handlers_file:
+                continue
 
-    def _get_inline_wasm_functions(self) -> str:
-        """Get inline WASM handler functions (legacy fallback)."""
-        return '''
-        // Carta-specific WASM handlers
-        async function generateCartaTile() {
-            if (!cartaDemo || !cartaDemo.isReady()) return;
+            handlers_path = SITE_DIR / module.wasm.handlers_file
+            if handlers_path in loaded_files:
+                continue
 
-            const btn = document.getElementById('carta-try-btn');
-            const img = document.getElementById('carta-tile-img');
-            const status = document.getElementById('carta-status');
-            const output = document.getElementById('carta-output');
+            if handlers_path.exists():
+                content = handlers_path.read_text()
+                # Strip the comment header and add module comment
+                lines = content.split('\n')
+                # Skip initial comment block
+                start = 0
+                for i, line in enumerate(lines):
+                    if line.strip() and not line.strip().startswith('*') and not line.strip().startswith('/*'):
+                        start = i
+                        break
+                    if line.strip() == '*/':
+                        start = i + 1
+                        break
 
-            const z = parseInt(document.getElementById('carta-z').value) || 14;
-            const x = parseInt(document.getElementById('carta-x').value) || 8529;
-            const y = parseInt(document.getElementById('carta-y').value) || 5974;
+                code = '\n'.join(lines[start:]).strip()
+                if code:
+                    parts.append(f"\n        // {module.id.capitalize()} handlers (from {module.wasm.handlers_file})")
+                    # Indent each line for inline JS
+                    indented = '\n'.join('        ' + line if line.strip() else '' for line in code.split('\n'))
+                    parts.append(indented)
+                    loaded_files.add(handlers_path)
+            else:
+                if self.verbose:
+                    print(f"  Warning: Handlers file not found: {handlers_path}")
 
-            btn.disabled = true;
-            btn.textContent = 'Generating...';
-            output.classList.add('visible');
-
-            try {
-                const startTime = performance.now();
-                const dataUrl = await cartaDemo.getTileDataURL(z, x, y);
-                const elapsed = (performance.now() - startTime).toFixed(1);
-
-                img.src = dataUrl;
-                img.style.display = 'block';
-                status.textContent = `Tile ${z}/${x}/${y}.png generated in ${elapsed}ms`;
-                status.className = 'demo-status success';
-            } catch (err) {
-                console.error('Tile generation failed:', err);
-                img.style.display = 'none';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Generate Tile';
-            }
-        }
-
-        async function fetchTileJSON() {
-            if (!cartaDemo || !cartaDemo.isReady()) return;
-
-            const btn = document.getElementById('tilejson-try-btn');
-            const result = document.getElementById('tilejson-result');
-            const status = document.getElementById('tilejson-status');
-            const output = document.getElementById('tilejson-output');
-
-            btn.disabled = true;
-            btn.textContent = 'Fetching...';
-            output.classList.add('visible');
-
-            try {
-                const startTime = performance.now();
-                const tileJson = await cartaDemo.getTileJSON();
-                const elapsed = (performance.now() - startTime).toFixed(1);
-
-                const html = formatJsonWithHighlighting(tileJson);
-                const codeBlock = result.closest('.code-block');
-                if (codeBlock && window.typeAnimateContent) {
-                    window.typeAnimateContent(codeBlock, html);
-                } else {
-                    result.innerHTML = html;
-                }
-                status.textContent = `Fetched in ${elapsed}ms`;
-                status.className = 'demo-status success';
-            } catch (err) {
-                console.error('TileJSON fetch failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Fetch TileJSON';
-            }
-        }
-
-        function fetchHealth() {
-            fetchJsonEndpoint(cartaDemo, '/api/v1/health', 'health-try-btn', 'health-result', 'health-status', 'health-output', 'Check Health');
-        }
-
-        function fetchStats() {
-            fetchJsonEndpoint(cartaDemo, '/api/v1/stats', 'stats-try-btn', 'stats-result', 'stats-status', 'stats-output', 'Get Stats');
-        }
-
-        // Velo-specific WASM handlers
-        async function calculateVeloRoute() {
-            if (!veloDemo || !veloDemo.isReady()) return;
-
-            const btn = document.getElementById('velo-route-try-btn');
-            const result = document.getElementById('velo-route-result');
-            const status = document.getElementById('velo-route-status');
-            const output = document.getElementById('velo-route-output');
-
-            btn.disabled = true;
-            btn.textContent = 'Calculating...';
-            output.classList.add('visible');
-
-            const from = {lat: 43.7384, lon: 7.4246};
-            const to = {lat: 43.7311, lon: 7.4197};
-
-            try {
-                const startTime = performance.now();
-                const route = await veloDemo.route(from, to);
-                const elapsed = (performance.now() - startTime).toFixed(1);
-
-                const html = formatJsonWithHighlighting(route);
-                const codeBlock = result.closest('.code-block');
-                if (codeBlock && window.typeAnimateContent) {
-                    window.typeAnimateContent(codeBlock, html);
-                } else {
-                    result.innerHTML = html;
-                }
-                status.textContent = `Route calculated in ${elapsed}ms (${(route.route.distance).toFixed(0)}m, ${(route.route.duration).toFixed(0)}s)`;
-                status.className = 'demo-status success';
-            } catch (err) {
-                console.error('Route calculation failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Calculate Route';
-            }
-        }
-
-        function fetchVeloHealth() {
-            fetchJsonEndpoint(veloDemo, '/api/v1/health', 'velo-health-try-btn', 'velo-health-result', 'velo-health-status', 'velo-health-output', 'Check Health');
-        }
-
-        function fetchVeloStats() {
-            fetchJsonEndpoint(veloDemo, '/api/v1/stats', 'velo-stats-try-btn', 'velo-stats-result', 'velo-stats-status', 'velo-stats-output', 'Get Stats');
-        }
-
-        // Locus-specific WASM handlers
-        async function fetchLocusSearch() {
-            if (!locusDemo || !locusDemo.isReady()) return;
-
-            const btn = document.getElementById('locus-api-v1-search-try-btn');
-            const result = document.getElementById('locus-api-v1-search-result');
-            const status = document.getElementById('locus-api-v1-search-status');
-            const output = document.getElementById('locus-api-v1-search-output');
-
-            btn.disabled = true;
-            btn.textContent = 'Searching...';
-            output.classList.add('visible');
-
-            try {
-                const startTime = performance.now();
-                const response = await locusDemo.fetch('/api/v1/search?q=Monte%20Carlo&limit=5');
-                const elapsed = (performance.now() - startTime).toFixed(1);
-
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                const data = await response.json();
-                const html = formatJsonWithHighlighting(data);
-                const codeBlock = result.closest('.code-block');
-                if (codeBlock && window.typeAnimateContent) {
-                    window.typeAnimateContent(codeBlock, html);
-                } else {
-                    result.innerHTML = html;
-                }
-                const total = data.total || data.results?.length || 0;
-                status.textContent = `Search completed in ${elapsed}ms (${total} results)`;
-                status.className = 'demo-status success';
-            } catch (err) {
-                console.error('Search failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Search';
-            }
-        }
-
-        async function fetchLocusAutocomplete() {
-            if (!locusDemo || !locusDemo.isReady()) return;
-
-            const btn = document.getElementById('locus-api-v1-autocomplete-try-btn');
-            const result = document.getElementById('locus-api-v1-autocomplete-result');
-            const status = document.getElementById('locus-api-v1-autocomplete-status');
-            const output = document.getElementById('locus-api-v1-autocomplete-output');
-
-            btn.disabled = true;
-            btn.textContent = 'Loading...';
-            output.classList.add('visible');
-
-            try {
-                const startTime = performance.now();
-                const response = await locusDemo.fetch('/api/v1/autocomplete?q=Mon&limit=10');
-                const elapsed = (performance.now() - startTime).toFixed(1);
-
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                const data = await response.json();
-                const html = formatJsonWithHighlighting(data);
-                const codeBlock = result.closest('.code-block');
-                if (codeBlock && window.typeAnimateContent) {
-                    window.typeAnimateContent(codeBlock, html);
-                } else {
-                    result.innerHTML = html;
-                }
-                const count = Array.isArray(data) ? data.length : 0;
-                status.textContent = `Autocomplete in ${elapsed}ms (${count} suggestions)`;
-                status.className = 'demo-status success';
-            } catch (err) {
-                console.error('Autocomplete failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Autocomplete';
-            }
-        }
-
-        async function fetchLocusReverse() {
-            if (!locusDemo || !locusDemo.isReady()) return;
-
-            const btn = document.getElementById('locus-api-v1-reverse-try-btn');
-            const result = document.getElementById('locus-api-v1-reverse-result');
-            const status = document.getElementById('locus-api-v1-reverse-status');
-            const output = document.getElementById('locus-api-v1-reverse-output');
-
-            btn.disabled = true;
-            btn.textContent = 'Geocoding...';
-            output.classList.add('visible');
-
-            const lat = 43.7384;
-            const lon = 7.4246;
-
-            try {
-                const startTime = performance.now();
-                const response = await locusDemo.fetch(`/api/v1/reverse?lat=${lat}&lon=${lon}`);
-                const elapsed = (performance.now() - startTime).toFixed(1);
-
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-                const data = await response.json();
-                const html = formatJsonWithHighlighting(data);
-                const codeBlock = result.closest('.code-block');
-                if (codeBlock && window.typeAnimateContent) {
-                    window.typeAnimateContent(codeBlock, html);
-                } else {
-                    result.innerHTML = html;
-                }
-                status.textContent = `Reverse geocode in ${elapsed}ms`;
-                status.className = 'demo-status success';
-            } catch (err) {
-                console.error('Reverse geocoding failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Reverse Geocode';
-            }
-        }
-
-        function fetchLocusHealth() {
-            fetchJsonEndpoint(locusDemo, '/api/v1/health', 'locus-api-v1-health-try-btn', 'locus-api-v1-health-result', 'locus-api-v1-health-status', 'locus-api-v1-health-output', 'Check Health');
-        }
-
-        function fetchLocusStats() {
-            fetchJsonEndpoint(locusDemo, '/api/v1/stats', 'locus-api-v1-stats-try-btn', 'locus-api-v1-stats-result', 'locus-api-v1-stats-status', 'locus-api-v1-stats-output', 'Get Stats');
-        }
-'''
+        return '\n'.join(parts) if parts else ""
 
     def _check_unprocessed_tags(self, text: str) -> None:
         """Check for unprocessed template tags and warn."""

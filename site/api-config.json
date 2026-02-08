@@ -17,7 +17,16 @@
         "script": "wasm/carta-api-demo.js",
         "wrapper": "js/carta-api-demo.js",
         "factory_name": "CartaAPIDemo",
-        "class_name": "CartaDemo"
+        "class_name": "CartaDemo",
+        "handlers_file": "js/handlers/carta.js",
+        "init_function": "initCartaDemo",
+        "error_function": "handleCartaError",
+        "buttons": {
+          "carta-try-btn": "generateCartaTile",
+          "tilejson-try-btn": "fetchTileJSON",
+          "health-try-btn": "fetchCartaHealth",
+          "stats-try-btn": "fetchCartaStats"
+        }
       }
     },
     {
@@ -32,7 +41,15 @@
         "script": "wasm/velo-api-demo.js",
         "wrapper": "js/velo-api-demo.js",
         "factory_name": "VeloAPIDemo",
-        "class_name": "VeloDemo"
+        "class_name": "VeloDemo",
+        "handlers_file": "js/handlers/velo.js",
+        "init_function": "initVeloDemo",
+        "error_function": "handleVeloError",
+        "buttons": {
+          "velo-route-try-btn": "calculateVeloRoute",
+          "velo-health-try-btn": "fetchVeloHealth",
+          "velo-stats-try-btn": "fetchVeloStats"
+        }
       }
     },
     {
@@ -47,7 +64,17 @@
         "script": "wasm/locus-api-demo.js",
         "wrapper": "js/locus-api-demo.js",
         "factory_name": "LocusAPIDemo",
-        "class_name": "LocusDemo"
+        "class_name": "LocusDemo",
+        "handlers_file": "js/handlers/locus.js",
+        "init_function": "initLocusDemo",
+        "error_function": "handleLocusError",
+        "buttons": {
+          "locus-api-v1-search-try-btn": "fetchLocusSearch",
+          "locus-api-v1-autocomplete-try-btn": "fetchLocusAutocomplete",
+          "locus-api-v1-reverse-try-btn": "fetchLocusReverse",
+          "locus-api-v1-health-try-btn": "fetchLocusHealth",
+          "locus-api-v1-stats-try-btn": "fetchLocusStats"
+        }
       }
     },
     {
@@ -58,7 +85,11 @@
       "description": "Refueling optimization using Linear Programming. Finds minimum-cost fuel stops along a route considering tank capacity, fuel prices, and consumption patterns.",
       "header_file": "fuelwise/include/fw_api.h",
       "wasm": {
-        "enabled": false
+        "enabled": true,
+        "script": "wasm/fuelwise-api-demo.js",
+        "wrapper": "js/fuelwise-api-demo.js",
+        "factory_name": "FuelWiseAPIDemo",
+        "class_name": "FuelWiseDemo"
       }
     }
   ],
