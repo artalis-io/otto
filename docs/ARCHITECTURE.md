@@ -72,13 +72,14 @@ OTTO (**O**ptimization for **T**rucking and **T**ransport **O**perations) is a c
 otto/
 ├── ralph/              # LP/MIP Solver (libralph.a)
 │   ├── include/        #   Public headers
-│   ├── src/            #   Simplex, LU factorization, Branch & Bound
-│   └── tests/          #   76 tests
+│   ├── src/            #   Simplex, LU, B&B, LAP, Network Flow, Detect
+│   ├── api/            #   Ralph Solver REST API server
+│   └── tests/          #   LP/MIP, LAP, Network Flow, Detect tests
 │
 ├── fuelwise/           # Refueling Library (libfuelwise.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   LP formulation, route filtering
-│   ├── tests/          #   33 tests
+│   ├── tests/          #   Unit tests
 │   ├── api/            #   FuelWise REST API server
 │   ├── wasm/           #   WebAssembly build
 │   └── ui/             #   React frontend application
@@ -86,14 +87,14 @@ otto/
 ├── velo/               # Routing Engine (libvelo.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   OSM PBF parsing, Dijkstra, A*, landmarks
-│   ├── tests/          #   51 tests
+│   ├── tests/          #   Unit tests
 │   ├── api/            #   Velo Route Server REST API
 │   └── wasm/           #   WebAssembly build
 │
 ├── carta/              # Tile Generator (libcarta.a)
 │   ├── include/        #   Public headers
 │   ├── src/            #   MVT encoding, PNG rendering, Web Mercator
-│   ├── tests/          #   128 tests
+│   ├── tests/          #   Unit tests
 │   ├── api/            #   Carta Tile Server REST API
 │   ├── ui/             #   Tile Viewer React Application
 │   └── wasm/           #   WebAssembly build
@@ -101,7 +102,7 @@ otto/
 ├── locus/              # Geocoding Engine (liblocus.a)
 │   ├── include/        #   Public headers (locus.h, lc_*.h)
 │   ├── src/            #   Trie, n-gram, spatial index, PBF parsing
-│   ├── tests/          #   68 tests
+│   ├── tests/          #   Unit tests
 │   ├── api/            #   Locus Geocoding Server REST API
 │   ├── tools/          #   CLI search utilities
 │   └── wasm/           #   WebAssembly build
@@ -109,12 +110,12 @@ otto/
 ├── shared/             # Shared utilities (libshared.a)
 │   ├── include/        #   Common headers
 │   ├── src/            #   Geo utilities, protobuf, rate limiting, capacity
-│   └── tests/          #   207 tests
+│   └── tests/          #   Unit tests
 │
 ├── forge/              # Async Job Queue [PLANNED]
 │   ├── include/        #   Public headers
 │   ├── src/            #   Broker, dispatcher, SQLite persistence
-│   ├── api/            #   REST + WebSocket server (:8084)
+│   ├── api/            #   REST + WebSocket server (:8085)
 │   └── consumers/      #   Built-in job consumers
 │
 ├── clayshards/         # UI Component System
@@ -196,15 +197,21 @@ otto/
 ### Ralph - LP/MIP Solver
 **Location:** `ralph/`
 **Library:** `libralph.a`
+**API Server:** `ralph/api/` (port 8084)
 **Dependencies:** None (zero-dependency)
 
 Core optimization engine implementing:
-- Revised Simplex Method with LU factorization
-- Branch and Bound for mixed-integer problems
-- Gomory cutting planes
+- **Simplex:** Revised Simplex Method with LU factorization
+- **MIP:** Branch and Bound with Gomory cutting planes
+- **LAP:** Linear Assignment Problem solver (JVC algorithm, O(n³))
+  - Dense, sparse, rectangular, k-best, bottleneck variants
+  - Priority, cardinality, and qualification constraints
+- **Network Flow:** Network simplex for minimum cost flow
+  - Warm start, bottleneck, cost scaling
+- **Detection:** Auto-detects LAP/network structure in LP models
 - Sparse matrix operations (CSC format)
 
-See [RALPH_ARCHITECTURE.md](RALPH_ARCHITECTURE.md) for detailed solver internals.
+See [internals/ralph-architecture.md](internals/ralph-architecture.md) for detailed solver internals.
 
 ### FuelWise - Refueling Optimization
 **Location:** `fuelwise/`
@@ -447,20 +454,17 @@ Search Request → API/WASM → Locus
 ```makefile
 make all              # Build all libraries (ralph, fuelwise, velo, carta, shared)
 make lib              # Build libraries only (no tests)
-make test             # Run all tests (~700+ tests)
+make test             # Run all tests
 make clean            # Clean all build artifacts
 ```
 
 ### API Server Targets
 ```makefile
-make fuelwise-api     # Build FuelWise REST API (fuelwise/api)
-make velo-api         # Build Velo route server (velo/api)
-make carta-api        # Build Carta tile server (carta/api)
-make locus-api        # Build Locus geocoding server (locus/api)
-make run-fuelwise-api # Run FuelWise API on :8080
-make run-velo-api     # Show Velo route server usage
-make run-carta-api    # Show Carta tile server usage
-make run-locus-api    # Show Locus geocoding server usage
+make fuelwise-api     # Build FuelWise REST API (fuelwise/api) :8080
+make carta-api        # Build Carta tile server (carta/api) :8081
+make velo-api         # Build Velo route server (velo/api) :8082
+make locus-api        # Build Locus geocoding server (locus/api) :8083
+make ralph-api        # Build Ralph solver server (ralph/api) :8084
 ```
 
 ### WebAssembly Targets
@@ -486,17 +490,17 @@ make shared       # Build libshared.a
 
 ### Testing
 ```makefile
-make test-ralph       # 76 tests (+ LAP 358, netflow 153, detect 194)
-make test-fuelwise    # 33 tests
-make test-velo        # 51 tests
-make test-carta       # 128 tests
-make test-locus       # 68 tests
-make test-shared      # 207 tests
-make test-api         # All API endpoint tests (requires OSM data)
-make test-fuelwise-api# FuelWise API tests
-make test-velo-api    # Velo API tests
-make test-carta-api   # Carta API tests
-make test-locus-api   # Locus API tests
+make test             # Run all tests
+make test-ralph       # Ralph LP/MIP tests
+make test-ralph-lap   # Ralph LAP solver tests
+make test-ralph-netflow # Ralph network flow tests
+make test-ralph-detect  # Ralph problem detection tests
+make test-fuelwise    # FuelWise tests
+make test-velo        # Velo routing tests
+make test-carta       # Carta tile tests
+make test-locus       # Locus geocoding tests
+make test-shared      # Shared library tests
+make test-api         # All API endpoint tests
 ```
 
 ## Design Principles
