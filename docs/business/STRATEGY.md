@@ -116,6 +116,43 @@ The commercial license includes a perpetual, royalty-free grant for:
 - **Mega-fleets (Girteka, Waberer's):** Free forever. Full source access, fork rights, no lock-in.
 - **SaaS vendors (Samsara, Motive, KeepTruckin):** Must either open-source their stack (AGPL) or purchase commercial license.
 
+#### Free License ≠ Free Service
+
+The trucking exception removes **licensing fees**, not **service fees**. Fleet revenue comes from value-added services:
+
+| What's Free (License) | What's Paid (Services) |
+|-----------------------|------------------------|
+| OTTO source code | Managed hosting |
+| Right to modify | SLA guarantees |
+| Right to self-host | Premium support |
+| Right to fork | Nexus integrations (TMS/ELD connectors) |
+| Commercial use for own fleet | Custom development |
+| No lock-in, ever | Training and onboarding |
+
+**The business reality:** Most fleets won't self-host. Running optimization infrastructure is not their core competency. They'll pay for:
+
+- **Convenience:** "Just make it work" → Managed platform
+- **Reliability:** "Don't go down during peak season" → SLA + dedicated support
+- **Integration:** "Connect to our Samsara ELD and SAP TMS" → Nexus connectors (proprietary)
+
+**The psychology difference:**
+
+| Model | Customer Feeling | Churn Risk |
+|-------|------------------|------------|
+| "Pay us because you're locked in" | Resentment, trapped | High (always looking to escape) |
+| "Pay us because we make your life easier" | Partnership, value | Low (stay because it works) |
+
+This is the Red Hat model: Linux is free (GPL), but enterprises pay for RHEL subscriptions because self-support is expensive and risky. OTTO works the same way—the code is free, but the operational excellence is worth paying for.
+
+**Revenue implications:**
+
+| Customer Type | License Revenue | Service Revenue |
+|---------------|-----------------|-----------------|
+| Trucking fleets | $0 (exception) | €75k-500k/year (hosting, support, Nexus) |
+| SaaS vendors | €500k-2M/year | Optional |
+
+This maximizes platform monetization **without** creating lock-in for the target audience. Fleets pay because they *want* the service, not because they're *forced* to license.
+
 #### Why This Structure
 
 | Stakeholder | Under MIT | Under AGPL + Commercial |
@@ -166,37 +203,49 @@ All core optimization engines:
 
 ### 3.1 Pricing Structure
 
+**Key distinction:** Tiers 1-4 are for trucking operators. They pay for **services** (hosting, support, integrations), not licensing—the trucking exception makes the license free. Tier 5 is for SaaS vendors who pay for the **license** itself.
+
 #### Tier 1: Self-Service (Open Source)
 - **Price:** Free (AGPLv3 + Trucking Exception)
-- **Includes:** All core engines, documentation, community support
-- **Target:** Trucking fleets of any size, developers evaluating
+- **What they pay for:** Nothing—self-hosted, community support only
+- **Includes:** All core engines, documentation, community forums
+- **Target:** Tech-savvy owner-operators, developers evaluating, fleets with in-house IT
 - **Goal:** Adoption, community, brand building
-- **Note:** Trucking operators have zero AGPL obligations—the trucking exception grants perpetual commercial rights for fleet operations
+- **Conversion path:** As operations grow, self-hosting becomes painful → upgrade to Professional
 
-#### Tier 2: Professional
+#### Tier 2: Professional (Managed Services)
 - **Price:** €50-100k/year
-- **Includes:** Managed hosting, standard integrations (2-3 TMS/ELD), email support
-- **Target:** Mid-size fleets (50-500 trucks)
+- **What they pay for:** Convenience, not permission
+- **Includes:** Managed hosting, standard Nexus integrations (2-3 TMS/ELD), email support
+- **Target:** Mid-size fleets (50-500 trucks) without dedicated IT
 - **Goal:** Volume, market penetration
+- **Why they pay:** Self-hosting OTTO + maintaining integrations costs more than €75k/year in engineering time
 
-#### Tier 3: Enterprise
+#### Tier 3: Enterprise (Managed Services + SLA)
 - **Price:** €250-500k/year
-- **Includes:** Managed hosting, unlimited integrations, dedicated support, SLA, custom development hours
+- **What they pay for:** Reliability guarantees, dedicated attention
+- **Includes:** Managed hosting, unlimited Nexus integrations, dedicated support engineer, SLA (99.9%+), custom development hours
 - **Target:** Large fleets (500+ trucks), 3PLs
 - **Goal:** High-value accounts, strategic relationships
+- **Why they pay:** Downtime during peak season costs more than the annual contract
 
 #### Tier 4: Strategic Partnership
 - **Price:** €500k-1M+/year
-- **Includes:** Everything in Enterprise + co-development, white-labeling, exclusive features
-- **Target:** Very large fleets (5000+ trucks), technology partners
-- **Goal:** Anchor accounts, reference customers
+- **What they pay for:** Co-development, influence, exclusivity
+- **Includes:** Everything in Enterprise + roadmap influence, white-labeling, custom features, executive access
+- **Target:** Very large fleets (5000+ trucks), anchor customers
+- **Goal:** Reference accounts, case studies, deep product feedback
 
-#### Tier 5: SaaS/Platform License
+---
+
+#### Tier 5: SaaS/Platform License (Commercial License)
 - **Price:** €500k-2M+/year (based on revenue/usage)
-- **Includes:** Commercial license to embed OTTO in proprietary SaaS products, white-label rights, priority support
+- **What they pay for:** The license itself (to avoid AGPL obligations)
+- **Includes:** Right to embed OTTO in proprietary products, white-label rights, priority support
 - **Target:** ELD vendors (Samsara, Motive, KeepTruckin), TMS vendors, load boards, logistics platforms
-- **Goal:** High-margin revenue from intermediaries who would otherwise free-ride
-- **Note:** This tier exists because of AGPL. Under MIT, these vendors would use OTTO for free and sell to the same fleets we serve.
+- **Goal:** High-margin revenue from intermediaries
+- **Why they pay:** Opening their proprietary stack (AGPL requirement) would expose trade secrets; paying €1M/year is cheaper than the alternative
+- **Note:** This tier exists *because* of AGPL. Under MIT, these vendors would embed OTTO for free.
 
 ### 3.2 Revenue Projections
 
