@@ -158,6 +158,32 @@ make site-serve            # Build and serve on :8000
 - `site/` - Source files (templates, config, Makefile)
 - `site/build/` - Deployable files only (gitignored, auto-generated)
 
+### API Audit Tool
+
+Automated validation of API modules for compliance with the transport-agnostic manifesto:
+
+```bash
+./scripts/api-audit.sh velo       # Audit single module
+./scripts/api-audit.sh all        # Audit all modules
+./scripts/api-audit.sh all --test # Also run WASM demo tests
+```
+
+**What it checks:**
+- Handler header/implementation exist (`{prefix}_api.h`, `{prefix}_api.c`)
+- Handler interface types defined (Context, Request, Response)
+- `@api` and `@demo` annotations present in headers
+- WASM wrapper and JS handlers configured
+- Test coverage for each `@demo` endpoint
+- `api.html` up-to-date status
+
+```bash
+# First-time setup for WASM tests
+make test-api-docs-install
+
+# Run WASM demo tests (rebuilds api.html if needed)
+make test-api-docs
+```
+
 ### Component Documentation
 
 Each component has a `CLAUDE.md` with API details:

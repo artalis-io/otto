@@ -19,12 +19,79 @@ Audit OTTO API modules for compliance with the transport-agnostic manifesto and 
 /api-audit all --fix          # Fix all modules
 ```
 
-**Automated script:** `./scripts/api-audit.sh [module|all] [--test]`
+## Automated Script
+
+The `scripts/api-audit.sh` script programmatically validates all compliance checks:
 
 ```bash
 ./scripts/api-audit.sh velo       # Audit single module
 ./scripts/api-audit.sh all        # Audit all modules
 ./scripts/api-audit.sh all --test # Also run WASM demo tests
+```
+
+**What the script checks:**
+
+| Check | Description |
+|-------|-------------|
+| Handler header | `{module}/include/{prefix}_api.h` exists |
+| Handler implementation | `{module}/src/{prefix}_api.c` exists |
+| Server main | `{module}/api/src/main.c` exists |
+| APIContext type | Typedef for opaque context |
+| APIRequest struct | Request with path, query, host |
+| APIResponse struct | Response with status, content_type, body |
+| Handler function | `{prefix}_api_handle()` declared |
+| @api annotations | Count of `/*@api ... */` blocks |
+| @demo annotations | Count of `@demo` directives |
+| WASM wrapper | `{module}/wasm/src/{prefix}_wasm_api.c` |
+| Handlers file | `site/js/handlers/{module}.js` |
+| Test coverage | Each `@demo` endpoint has a test |
+| api.html status | `make api-docs-check` passes |
+
+**Example output:**
+```
+═══════════════════════════════════════════════════════════
+  Module: velo
+═══════════════════════════════════════════════════════════
+
+Structure:
+  ✓ Handler header: velo/include/vl_api.h
+  ✓ Handler implementation: velo/src/vl_api.c
+  ✓ Server main: velo/api/src/main.c
+
+Handler Interface:
+  ✓ APIContext type defined
+  ✓ APIRequest struct defined
+  ✓ APIResponse struct defined
+  ✓ Handler function declared
+
+Annotations:
+  ✓ 5 @api annotations found
+  ✓ 3 @demo annotations found
+
+Test Coverage:
+  ✓ Test suite exists for velo
+  ✓ Test exists for /api/v1/route
+  ✓ Test exists for /api/v1/health
+  ✓ Test exists for /api/v1/stats
+
+Summary:
+  Passed:   16
+  Failed:   0
+
+Audit PASSED
+```
+
+**Exit codes:**
+- `0` - All checks passed
+- `1` - One or more checks failed
+
+**CI integration:**
+```yaml
+- name: API Audit
+  run: ./scripts/api-audit.sh all
+
+- name: WASM Demo Tests
+  run: make test-api-docs
 ```
 
 ## What This Skill Checks
