@@ -41,6 +41,12 @@ jq '.routes[] | select(.validation.profile.violations > 0)' results.json
 
 # Find distance mismatches
 jq '.routes[] | select(.validation.distance.pass == false)' results.json
+
+# Find invariant violations (--check-invariants)
+jq '.routes[] | select(.validation.invariants.pass == false)' results.json
+
+# Find OSRM mismatches (--osrm-url)
+jq '.routes[] | select(.validation.osrm.pass == false)' results.json
 ```
 
 ### Phase 2: Diagnose Root Cause
@@ -158,6 +164,13 @@ static void test_regression_issue_NNN(void) {
 - [ ] Bidirectional should explore fewer than unidirectional
 - [ ] Check for floating point precision issues
 
+### Invariant Violation
+- [ ] `shortest > fastest dist`: Check weight types in `vl_route.c`
+- [ ] `fastest > shortest dur`: Check duration calculation, speed limits
+- [ ] `truck < car`: Check `VL_ACCESS_NO_TRUCK` flag, `is_edge_allowed()`
+- [ ] Look for edge cases near graph boundaries
+- [ ] Check for disconnected subgraphs causing different routes
+
 ## Benchmark Suites
 
 | Suite | Routes | Purpose | Time |
@@ -210,6 +223,17 @@ Key fields to check in benchmark output:
     "consistency": {
       "pass": true,
       "algorithms_tested": 4
+    },
+    "osrm": {
+      "available": true,
+      "pass": true,
+      "distance_diff_pct": 0.01
+    },
+    "invariants": {
+      "checked": true,
+      "pass": true,
+      "shortest_leq_fastest_dist": true,
+      "fastest_leq_shortest_dur": true
     }
   },
   "performance": {
@@ -235,6 +259,7 @@ OPTIONS:
   --landmarks N            Use N landmarks (default: 16)
   --iterations N           Run each route N times
   --distance-tolerance PCT Distance error tolerance (default: 0.1%)
+  --check-invariants       Verify self-consistency invariants
   --osrm-url URL           Compare against OSRM server
   --strict                 Fail on any warning
 ```
@@ -266,6 +291,71 @@ Output includes OSRM comparison in validation:
 - car/truck/any → driving
 - bike → cycling
 - foot → walking
+
+## Self-Consistency Invariant Checks
+
+Validate routing correctness by checking mathematical invariants that must always hold:
+
+```bash
+# Run with invariant checking
+./velo-route-bench --graph data/hungary.vlg --check-invariants \
+    benchmarks/routes/regional/budapest_szeged.json -v
+
+# Find invariant violations
+jq '.routes[] | select(.validation.invariants.pass == false)' results.json
+```
+
+### Invariants Checked
+
+| Invariant | Meaning | Failure Indicates |
+|-----------|---------|-------------------|
+| `shortest_distance <= fastest_distance` | Shortest path may use slower roads | Bug in weight calculation |
+| `fastest_duration <= shortest_duration` | Fastest path may take longer route | Bug in duration calculation |
+| `truck_distance >= car_distance` | Trucks have more restrictions | Bug in profile filtering |
+| `truck_duration >= car_duration` | Trucks can't take car shortcuts | Bug in truck profile |
+
+### JSON Output
+
+When `--check-invariants` is enabled:
+
+```json
+{
+  "invariants": {
+    "checked": true,
+    "pass": true,
+    "shortest_distance_m": 174500.0,
+    "shortest_duration_s": 7800.0,
+    "fastest_distance_m": 182300.0,
+    "fastest_duration_s": 6900.0,
+    "shortest_leq_fastest_dist": true,
+    "fastest_leq_shortest_dur": true,
+    "car_distance_m": 174500.0,
+    "car_duration_s": 6900.0,
+    "truck_distance_m": 178200.0,
+    "truck_duration_s": 7100.0,
+    "truck_geq_car_dist": true,
+    "truck_geq_car_dur": true,
+    "violations": null
+  }
+}
+```
+
+### Debugging Invariant Failures
+
+**shortest > fastest distance:**
+- Check `VL_WEIGHT_DISTANCE` vs `VL_WEIGHT_DURATION` in `vl_route.c`
+- Verify edge weights are set correctly (distance_mm vs duration_cs)
+- Look for negative weights or overflow
+
+**fastest > shortest duration:**
+- Check duration calculation uses correct speed limits
+- Verify time weights in graph construction
+- Check for missing speed data on edges
+
+**truck < car distance/duration:**
+- Check `VL_ACCESS_NO_TRUCK` flag in edge parsing
+- Verify `is_edge_allowed()` logic for truck profile
+- Look for missing `hgv=no` tag parsing
 
 ## Checklist Before Committing
 
