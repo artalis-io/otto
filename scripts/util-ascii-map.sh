@@ -1,14 +1,14 @@
 #!/bin/bash
 #
-# ascii-map.sh - Generate ASCII art map for a location
+# util-ascii-map.sh - Generate ASCII art map for a location
 #
 # Usage:
-#   ./scripts/ascii-map.sh LAT LON ZOOM [OPTIONS]
+#   ./scripts/util-ascii-map.sh LAT LON ZOOM [OPTIONS]
 #
 # Examples:
-#   ./scripts/ascii-map.sh 47.497 19.040 11              # Budapest
-#   ./scripts/ascii-map.sh 48.858 2.347 12 -w 60         # Paris
-#   ./scripts/ascii-map.sh 40.748 -73.985 13 -c braille  # NYC
+#   ./scripts/util-ascii-map.sh 47.497 19.040 11              # Budapest
+#   ./scripts/util-ascii-map.sh 48.858 2.347 12 -w 60         # Paris
+#   ./scripts/util-ascii-map.sh 40.748 -73.985 13 -c braille  # NYC
 #
 # Options:
 #   -w, --width WIDTH    Width per tile (default: 50)

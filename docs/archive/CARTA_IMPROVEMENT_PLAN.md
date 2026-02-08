@@ -500,7 +500,7 @@ int ct_place_text_on_path(const CTTilePoint *path, int path_len,
 ### Performance Benchmarks
 ```bash
 # Baseline (before optimizations)
-./scripts/benchmark.sh carta
+./scripts/test-benchmark.sh carta
 
 # Per-optimization benchmarks
 time ./carta/api/carta-server data/hungary.pbf &

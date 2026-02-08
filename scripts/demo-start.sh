@@ -8,9 +8,9 @@
 #   8000 - Demo HTTP server
 #
 # Usage:
-#   ./scripts/start-demo-servers.sh              # Uses data/hungary-latest.osm.pbf
-#   ./scripts/start-demo-servers.sh monaco       # Uses data/monaco-latest.osm.pbf
-#   ./scripts/start-demo-servers.sh /path/to.pbf # Uses custom PBF file
+#   ./scripts/demo-start.sh              # Uses data/hungary-latest.osm.pbf
+#   ./scripts/demo-start.sh monaco       # Uses data/monaco-latest.osm.pbf
+#   ./scripts/demo-start.sh /path/to.pbf # Uses custom PBF file
 
 set -e
 cd "$(dirname "$0")/.."
@@ -79,8 +79,8 @@ if [ -n "$1" ]; then
         ls -1 data/*.pbf 2>/dev/null || echo "  (none)"
         echo ""
         echo "To download OSM data, run:"
-        echo "  ./scripts/download-osm.sh monaco    # Small test dataset"
-        echo "  ./scripts/download-osm.sh hungary   # Medium dataset"
+        echo "  ./scripts/data-download-osm.sh monaco    # Small test dataset"
+        echo "  ./scripts/data-download-osm.sh hungary   # Medium dataset"
         exit 1
     fi
 else
@@ -93,7 +93,7 @@ if [ ! -f "$PBF_FILE" ]; then
     echo -e "${RED}Error: PBF file not found: $PBF_FILE${NC}"
     echo ""
     echo "To download OSM data, run:"
-    echo "  ./scripts/download-osm.sh $REGION"
+    echo "  ./scripts/data-download-osm.sh $REGION"
     exit 1
 fi
 
@@ -102,7 +102,7 @@ echo "  PBF file: $PBF_FILE"
 echo ""
 
 # Stop any existing servers
-./scripts/stop-demo-servers.sh 2>/dev/null || true
+./scripts/demo-stop.sh 2>/dev/null || true
 echo ""
 
 # Build all components
@@ -374,4 +374,4 @@ echo "  Carta:    http://localhost:$CARTA_PORT"
 echo "  Velo:     http://localhost:$VELO_PORT"
 echo "  Locus:    http://localhost:$LOCUS_PORT"
 echo ""
-echo "Run './scripts/stop-demo-servers.sh' to stop all servers."
+echo "Run './scripts/demo-stop.sh' to stop all servers."

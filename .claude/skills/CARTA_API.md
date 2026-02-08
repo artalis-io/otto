@@ -8,7 +8,7 @@ A Leaflet/Google Maps compatible tile server that serves vector (MVT) and raster
 
 ```bash
 # Download OSM data first
-../scripts/download-osm.sh hungary
+../scripts/data-download-osm.sh hungary
 
 # Build and run
 cd carta/api
@@ -300,7 +300,7 @@ npm run build
 
 ```bash
 # Download first
-../scripts/download-osm.sh hungary
+../scripts/data-download-osm.sh hungary
 ```
 
 ### CORS errors in browser

@@ -16,7 +16,7 @@ A Leaflet/Google Maps compatible tile server that generates map tiles from OpenS
 
 ```bash
 # 1. Download OSM data (Hungary ~300MB)
-../scripts/download-osm.sh hungary
+../scripts/data-download-osm.sh hungary
 
 # 2. Build the server
 make
@@ -31,7 +31,7 @@ make
 
 ```bash
 # 1. Download OSM data
-../scripts/download-osm.sh hungary
+../scripts/data-download-osm.sh hungary
 
 # 2. Build and run with docker-compose
 docker-compose up --build

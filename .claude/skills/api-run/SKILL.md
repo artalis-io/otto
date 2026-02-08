@@ -425,9 +425,9 @@ lsof -i :8081
 
 ```bash
 # Download OSM data
-./scripts/download-osm.sh hungary
-./scripts/download-osm.sh monaco  # Small, for testing
-./scripts/download-osm.sh list    # Show available regions
+./scripts/data-download-osm.sh hungary
+./scripts/data-download-osm.sh monaco  # Small, for testing
+./scripts/data-download-osm.sh list    # Show available regions
 ```
 
 ### Slow startup

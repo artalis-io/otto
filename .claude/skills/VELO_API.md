@@ -8,7 +8,7 @@ HTTP routing API server built on Velo. Provides route planning between coordinat
 
 ```bash
 # Download OSM data first
-../scripts/download-osm.sh hungary
+../scripts/data-download-osm.sh hungary
 
 # Build and run
 cd velo/api

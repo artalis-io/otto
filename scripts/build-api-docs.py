@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-gen_api.py - Generate api.html from C header annotations and config
+build-api-docs.py - Generate api.html from C header annotations and config
 
 Usage:
-    python3 scripts/gen_api.py              # Generate site/api.html
-    python3 scripts/gen_api.py --check      # Verify api.html is up-to-date
-    python3 scripts/gen_api.py --verbose    # Show parsed annotations
+    python3 scripts/build-api-docs.py              # Generate site/api.html
+    python3 scripts/build-api-docs.py --check      # Verify api.html is up-to-date
+    python3 scripts/build-api-docs.py --verbose    # Show parsed annotations
 
 Annotation format in C headers:
 
@@ -1018,7 +1018,7 @@ def main() -> int:
                     return 0
                 else:
                     print(f"\n✗ {OUTPUT_FILE.name} needs regeneration")
-                    print("  Run 'python3 scripts/gen_api.py' to update")
+                    print("  Run 'python3 scripts/build-api-docs.py' to update")
                     return 1
             else:
                 print(f"\n✗ {OUTPUT_FILE.name} does not exist")
