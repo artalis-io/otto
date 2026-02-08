@@ -70,8 +70,8 @@ extern "C" {
  * @demo_input from_lon:number:7.4246
  * @demo_input to_lat:number:43.7311
  * @demo_input to_lon:number:7.4197
- * @demo_input profile:text:car
- * @demo_input mode:text:fastest
+ * @demo_input profile:select:car:car,truck,bike,foot
+ * @demo_input mode:select:fastest:fastest,shortest
  */
 
 /*@api
