@@ -244,7 +244,7 @@ make site-serve   # Build and serve on :8000
 ┌─────────────────────────────────────────────────────┐
 │  Applications: React / WASM / REST APIs             │
 ├─────────────────────────────────────────────────────┤
-│  Fleet: HoSE, Tempo, Arbor, Sigma, Pulse [Planned]  │
+│  Fleet: HoSE, Tempo, Arbor, Surge, Sigma, Pulse [Planned]  │
 │  Network: Atlas, Quota [Planned]                    │
 ├─────────────────────────────────────────────────────┤
 │  State: Fuse (signal fusion, geofencing) [Planned]  │
