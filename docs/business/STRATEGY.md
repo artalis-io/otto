@@ -36,7 +36,7 @@ Enterprise fleets investing in planning systems face structural risks:
 
 | Fear | Open Source Answer |
 |------|-------------------|
-| Vendor disappears | Code is MIT licensed, fork and continue |
+| Vendor disappears | Code is AGPLv3 licensed, fork and continue |
 | Rug-pull on pricing | Self-host at current capability forever |
 | Roadmap diverges | Fork and extend for your specific needs |
 | Key people leave | Community + documentation + hire anyone |
@@ -76,7 +76,7 @@ The best code wins in open source. If OTTO's algorithms are superior, adoption w
 │  │ Connectors  │  │  Platform   │  │  Engineering        │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘  │
 ├─────────────────────────────────────────────────────────────┤
-│                     OPEN SOURCE (MIT)                       │
+│                   OPEN SOURCE (AGPLv3)                      │
 │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────┐  │
 │  │ Ralph  │ │  Velo  │ │ Carta  │ │ Locus  │ │ FuelWise │  │
 │  │ Solver │ │ Routes │ │ Tiles  │ │ Geocode│ │  Fuel    │  │
@@ -92,7 +92,42 @@ The best code wins in open source. If OTTO's algorithms are superior, adoption w
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 What's Open (MIT License)
+### 2.2 Dual Licensing: AGPLv3 + Commercial
+
+OTTO uses a dual licensing model that maximizes freedom for trucking operators while creating monetization leverage over SaaS intermediaries.
+
+#### License Options
+
+| License | Cost | Who It's For |
+|---------|------|--------------|
+| **AGPLv3** | Free | Anyone willing to open-source their modifications when offering OTTO as a network service |
+| **Commercial** | Paid | SaaS vendors, platforms, and integrators who want to keep their code proprietary |
+| **Trucking Exception** | Free | Motor carriers using OTTO for their own operations (built into commercial license) |
+
+#### The Trucking Exception
+
+The commercial license includes a perpetual, royalty-free grant for:
+
+> *"Use solely in connection with the ownership, operation, dispatch, routing, maintenance, compliance, or insurance of motor vehicles operated by the licensee or its affiliates."*
+
+**What this means:**
+- **Owner-operators:** Free forever. Run OTTO on your laptop, customize it, no obligations.
+- **Small fleets:** Free forever. Self-host, modify, integrate with your TMS.
+- **Mega-fleets (Girteka, Waberer's):** Free forever. Full source access, fork rights, no lock-in.
+- **SaaS vendors (Samsara, Motive, KeepTruckin):** Must either open-source their stack (AGPL) or purchase commercial license.
+
+#### Why This Structure
+
+| Stakeholder | Under MIT | Under AGPL + Commercial |
+|-------------|-----------|-------------------------|
+| Trucking fleet (any size) | Free | Free (trucking exception) |
+| SaaS vendor embedding OTTO | Free ride | Must pay or open-source |
+| Competitor forking OTTO | Free ride | Must pay or open-source |
+| Amazon/Google offering "Logistics Optimizer" | Free ride | Must pay or open-source |
+
+**The insight:** MIT maximizes optionality for downstream users. AGPL + Commercial maximizes optionality for the project owner. Trucking operators—our primary users—lose nothing. SaaS intermediaries—who have budgets and would otherwise free-ride—become a revenue source.
+
+#### Open Source Components (AGPLv3)
 
 All core optimization engines:
 
@@ -111,7 +146,7 @@ All core optimization engines:
 | ClayShards | UI components | Developer adoption |
 | Shared | Utilities | Common infrastructure |
 
-**Rationale:** These components demonstrate domain expertise and build trust. They're valuable but not sufficient alone—integration and operation are where real enterprise value lies.
+**Rationale:** These components demonstrate domain expertise and build trust. They're valuable but not sufficient alone—integration and operation are where real enterprise value lies. The AGPL ensures that anyone offering these as a service must either contribute back or pay for the privilege of keeping their stack closed.
 
 ### 2.3 What's Commercial
 
@@ -132,10 +167,11 @@ All core optimization engines:
 ### 3.1 Pricing Structure
 
 #### Tier 1: Self-Service (Open Source)
-- **Price:** Free (MIT)
+- **Price:** Free (AGPLv3 + Trucking Exception)
 - **Includes:** All core engines, documentation, community support
-- **Target:** Small fleets, developers, tire-kickers
+- **Target:** Trucking fleets of any size, developers evaluating
 - **Goal:** Adoption, community, brand building
+- **Note:** Trucking operators have zero AGPL obligations—the trucking exception grants perpetual commercial rights for fleet operations
 
 #### Tier 2: Professional
 - **Price:** €50-100k/year
@@ -155,23 +191,33 @@ All core optimization engines:
 - **Target:** Very large fleets (5000+ trucks), technology partners
 - **Goal:** Anchor accounts, reference customers
 
+#### Tier 5: SaaS/Platform License
+- **Price:** €500k-2M+/year (based on revenue/usage)
+- **Includes:** Commercial license to embed OTTO in proprietary SaaS products, white-label rights, priority support
+- **Target:** ELD vendors (Samsara, Motive, KeepTruckin), TMS vendors, load boards, logistics platforms
+- **Goal:** High-margin revenue from intermediaries who would otherwise free-ride
+- **Note:** This tier exists because of AGPL. Under MIT, these vendors would use OTTO for free and sell to the same fleets we serve.
+
 ### 3.2 Revenue Projections
 
 **Conservative scenario (5 years):**
 
-| Year | Self-Service | Professional | Enterprise | Total ARR |
-|------|--------------|--------------|------------|-----------|
-| 1 | 50 users | 2 × €75k | 1 × €350k | €500k |
-| 2 | 200 users | 5 × €75k | 3 × €375k | €1.5M |
-| 3 | 500 users | 10 × €75k | 6 × €400k | €3.15M |
-| 4 | 1000 users | 15 × €80k | 10 × €420k | €5.4M |
-| 5 | 2000 users | 20 × €85k | 15 × €450k | €8.45M |
+| Year | Self-Service | Professional | Enterprise | SaaS/Platform | Total ARR |
+|------|--------------|--------------|------------|---------------|-----------|
+| 1 | 50 users | 2 × €75k | 1 × €350k | 0 | €500k |
+| 2 | 200 users | 5 × €75k | 3 × €375k | 1 × €750k | €2.25M |
+| 3 | 500 users | 10 × €75k | 6 × €400k | 2 × €1M | €5.15M |
+| 4 | 1000 users | 15 × €80k | 10 × €420k | 3 × €1.2M | €9M |
+| 5 | 2000 users | 20 × €85k | 15 × €450k | 5 × €1.5M | €16.2M |
 
 **Key assumptions:**
 - Professional tier average: €75-85k/year
 - Enterprise tier average: €350-450k/year
+- SaaS/Platform tier: €750k-1.5M/year (ELD/TMS vendors embedding OTTO)
 - Low churn (<5%) due to switching costs
 - Modest expansion revenue (upgrades, more trucks)
+
+**SaaS/Platform revenue note:** This revenue stream exists *because* of AGPL. Under MIT, these vendors would embed OTTO for free. Year 2+ projections assume at least one major ELD/TMS vendor (Samsara, Motive, KeepTruckin, etc.) licenses OTTO commercially rather than open-sourcing their proprietary stack.
 
 ### 3.3 Unit Economics
 
@@ -248,14 +294,68 @@ Beyond direct revenue, market intelligence provides:
 
 | Disadvantage | Mitigation |
 |--------------|------------|
-| **Competitors can fork** | They still need domain expertise to extend/maintain |
-| **Harder to capture value** | Proprietary integration layer (Nexus) |
+| **Competitors can fork** | AGPL requires open-sourcing modifications if offered as service; domain expertise still required |
+| **Harder to capture value** | AGPL + Commercial creates licensing revenue from SaaS vendors; Nexus for integrations |
 | **Support expectations** | Clear tier separation: community vs paid support |
 | **IP exposure** | Algorithms aren't the moat; judgment and integrations are |
-| **Investor skepticism** | Point to Red Hat, HashiCorp, GitLab precedents |
-| **Free riders** | They're still marketing; convert later or let go |
+| **Investor skepticism** | Point to Red Hat, HashiCorp, GitLab, MongoDB precedents |
+| **SaaS free-riding** | AGPL prevents this—SaaS vendors must open-source or pay |
 
-### 4.3 Comparison Matrix
+### 4.3 Why AGPL Instead of MIT
+
+Many open-source companies start with MIT and later regret it. We chose AGPL deliberately.
+
+#### The MIT Problem
+
+Under MIT:
+- Amazon could offer "Amazon Logistics Optimizer" using OTTO code, contribute nothing back
+- Samsara could embed OTTO in their ELD platform, sell to fleets, we get $0
+- Any SaaS vendor can build a business on our code with no obligation to engage
+
+MIT maximizes downstream optionality **for others**. It's great for adoption but weak for monetization.
+
+#### The AGPL Solution
+
+Under AGPL:
+- Anyone can use, modify, and self-host OTTO freely
+- But if you offer OTTO as a **network service** to third parties, you must open-source your entire stack
+- SaaS vendors won't open-source their proprietary code, so they buy commercial licenses
+
+AGPL + Commercial maximizes optionality **for the project owner**.
+
+#### Why Trucking Operators Are Unaffected
+
+AGPL only triggers when you provide software **as a service to third parties**.
+
+| Use Case | AGPL Obligation? |
+|----------|------------------|
+| Fleet runs OTTO internally | No |
+| Fleet modifies OTTO for their needs | No |
+| Fleet shares modified OTTO with subsidiary | No |
+| SaaS vendor embeds OTTO in their product | **Yes** |
+| Competitor offers OTTO-based planning service | **Yes** |
+
+The trucking exception in the commercial license makes this explicit, but even pure AGPL doesn't burden internal fleet use.
+
+#### Comparison: MIT vs AGPL + Commercial
+
+| Dimension | MIT | AGPL + Commercial |
+|-----------|-----|-------------------|
+| Open source legitimacy | ✅ OSI-approved | ✅ OSI-approved |
+| Trucking fleet freedom | ✅ Full | ✅ Full (exception) |
+| SaaS free-riding | ❌ Allowed | ✅ Monetized |
+| Built-in monetization leverage | ❌ None | ✅ Licensing revenue |
+| Commercial negotiation power | ❌ Weak | ✅ Strong |
+| Adoption friction | Lowest | Moderate (SaaS only) |
+
+#### The Bottom Line
+
+> **MIT maximizes optionality for downstream users.**
+> **AGPL + Commercial maximizes optionality for OTTO.**
+
+Trucking operators—our primary users—experience no difference. SaaS intermediaries—who have budgets and would otherwise free-ride—become a revenue source.
+
+### 4.4 Comparison Matrix
 
 | Factor | Closed Source | Open Source (OTTO) |
 |--------|---------------|-------------------|
@@ -268,20 +368,21 @@ Beyond direct revenue, market intelligence provides:
 | Talent attraction | Market rate | Premium (mission + visibility) |
 | Customer references | Requires permission | Public usage visible |
 
-### 4.4 The Moat Question
+### 4.5 The Moat Question
 
 **"If it's open source, what's the moat?"**
 
 The moat is not the code. The moat is:
 
-1. **Domain judgment** — Knowing which HoS edge cases matter, which constraints dispatchers ignore, which "optimal" solutions drivers reject
-2. **Integration expertise** — Nexus connectors require deep knowledge of each TMS/ELD API
-3. **Operational excellence** — Running managed platform at scale with SLAs
-4. **Velocity** — Shipping features faster than anyone could build internally
-5. **Brand/trust** — Being the canonical OTTO, not a fork
-6. **Relationships** — Direct lines to Girteka, Waberer's, other key accounts
+1. **Licensing leverage** — AGPL forces SaaS vendors to negotiate; they can't just take the code
+2. **Domain judgment** — Knowing which HoS edge cases matter, which constraints dispatchers ignore, which "optimal" solutions drivers reject
+3. **Integration expertise** — Nexus connectors require deep knowledge of each TMS/ELD API
+4. **Operational excellence** — Running managed platform at scale with SLAs
+5. **Velocity** — Shipping features faster than anyone could build internally
+6. **Brand/trust** — Being the canonical OTTO, not a fork
+7. **Relationships** — Direct lines to Girteka, Waberer's, other key accounts
 
-Competitors can fork OTTO. They cannot fork the judgment layer, the relationships, or the velocity.
+Competitors can fork OTTO—but they must either open-source their modifications (unlikely for commercial vendors) or pay for a commercial license. They cannot fork the judgment layer, the relationships, the licensing terms, or the velocity.
 
 ---
 
@@ -311,7 +412,7 @@ Fleets using Nexogen's planning system (now Trimble) face:
 | Pricing increases | Self-host option caps your maximum cost |
 | Integration breaks | Open integrations + Nexus connectors you can extend |
 | No customization | Fork and customize, or pay for custom development |
-| Lock-in anxiety | MIT license = permanent exit option |
+| Lock-in anxiety | AGPLv3 + trucking exception = permanent exit option |
 
 ### 5.3 Migration Path
 
@@ -360,7 +461,15 @@ Fleets using Nexogen's planning system (now Trimble) face:
 
 **"What if you get acquired too?"**
 
-"The code stays MIT licensed forever. An acquisition can't change that. Worst case, you fork and continue. That's the point."
+"The code stays AGPLv3 licensed forever. An acquisition can't change that. Worst case, you fork and continue. That's the point."
+
+**"Isn't AGPL scary / viral / problematic?"**
+
+"AGPL only affects you if you offer OTTO as a network service to third parties. Running it internally for your own fleet? Zero obligations. The trucking exception in our commercial license makes this explicit. AGPL is scary to SaaS vendors who want to free-ride—that's by design."
+
+**"Why not just use MIT like everyone else?"**
+
+"MIT lets Amazon, Samsara, and every SaaS vendor build products on our code without contributing anything back. AGPL ensures that if someone wants to build a commercial service on OTTO, they either contribute to the commons or pay for the privilege. Trucking operators get the same freedom either way."
 
 **"Our IT team can't maintain this."**
 
@@ -536,7 +645,7 @@ OTTO's foundational components (Ralph, Velo, Carta, Locus) are built from scratc
 
 | Advantage | Business Impact |
 |-----------|-----------------|
-| MIT licensing | No contamination, clean IP for acquisition |
+| AGPLv3 + Commercial | Dual licensing creates revenue stream; clean IP for acquisition |
 | WASM compilation | Runs in browser, edge, embedded—anywhere |
 | No per-request costs | Predictable pricing for customers |
 | Offline capability | Works in truck stops, rural areas, spotty connectivity |
@@ -923,7 +1032,7 @@ An owner-operator would rationally pay $50-100/month for tools that deliver thes
 
 ### 13.4 Product Tiers for Owner-Operators
 
-#### Free Tier (MIT, self-hosted or basic cloud)
+#### Free Tier (AGPLv3 + Trucking Exception, self-hosted or basic cloud)
 
 - Fuel price optimization (cheapest stops on route)
 - Basic route planning
@@ -1367,10 +1476,11 @@ Girteka isn't just a customer—they're a **design partner** for enterprise feat
 
 **What to protect:**
 
-- Core engines stay MIT licensed, always
+- Core engines stay AGPLv3 licensed, always (with trucking exception in commercial terms)
 - No exclusivity on the open source layer
 - OTTO brand on the planning engine (co-branding OK, not erasure)
 - Right to serve competitors (non-exclusive partnerships)
+- Commercial licensing revenue from SaaS/platform partners
 
 ---
 
