@@ -98,6 +98,20 @@ test.describe('WASM API Demos', () => {
       expect(result.contentType).toMatch(/text\/plain/);
       expect(result.hasContent).toBe(true);
     });
+
+    test('TileJSON returns valid metadata', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const resp = await cartaDemo.fetch('/tiles.json');
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.body.tilejson).toBe('3.0.0');
+      expect(result.body.tiles).toBeDefined();
+      expect(Array.isArray(result.body.tiles)).toBe(true);
+      expect(result.body.minzoom).toBeDefined();
+      expect(result.body.maxzoom).toBeDefined();
+    });
   });
 
   test.describe('Velo (Routing)', () => {
@@ -309,6 +323,37 @@ test.describe('WASM API Demos', () => {
       // May return 400 if stations not provided, but should return valid JSON
       expect([200, 400]).toContain(result.status);
       expect(result.body).toBeDefined();
+    });
+
+    test('solve endpoint returns optimization result', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const problem = {
+          total_distance: 500,
+          tank_capacity: 200,
+          current_fuel: 50,
+          consumption_mpg: 6.5,
+          minimum_fuel: 25,
+          stations: [
+            { id: 1, distance: 100, price: 3.50 },
+            { id: 2, distance: 250, price: 3.25 },
+            { id: 3, distance: 400, price: 3.75 }
+          ]
+        };
+        const resp = await fuelwiseDemo.fetch('/api/v1/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(problem)
+        });
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      // Should return 200 with solution or 400/422 if problem is infeasible
+      expect([200, 400, 422]).toContain(result.status);
+      expect(result.body).toBeDefined();
+      if (result.status === 200) {
+        expect(result.body.status).toBe('optimal');
+        expect(result.body.total_cost).toBeDefined();
+      }
     });
   });
 
