@@ -250,7 +250,7 @@ int vl_api_parse_route_params(const char *query, const char *body,
     memset(params, 0, sizeof(*params));
     params->profile = VL_PROFILE_CAR;
     params->weight = VL_WEIGHT_DURATION;
-    params->include_geometry = 1;
+    params->include_geometry = 0;
 
     int is_post = method && strcmp(method, "POST") == 0;
 
@@ -329,7 +329,7 @@ int vl_api_parse_route_params(const char *query, const char *body,
         }
 
         if (get_query_param(query, "geometry", value, sizeof(value)) == 0) {
-            params->include_geometry = parse_bool(value, 1);
+            params->include_geometry = parse_bool(value, 0);
         }
     }
 

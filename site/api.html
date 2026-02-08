@@ -1119,6 +1119,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                                 <label style="font-size: 13px;">
                                     mode: <select id="velo-route-mode" style="padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);"><option value="fastest" selected>fastest</option><option value="shortest">shortest</option></select>
                                 </label>
+                                <label style="font-size: 13px;">
+                                    geometry: <select id="velo-route-geometry" style="padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);"><option value="false" selected>false</option><option value="true">true</option></select>
+                                </label>
                                 <button class="try-btn" id="velo-route-try-btn" disabled>Loading WASM...</button>
                             </div>
                             <div class="demo-output" id="velo-route-output">
@@ -2246,10 +2249,11 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             };
             const profile = document.getElementById('velo-route-profile').value || 'car';
             const mode = document.getElementById('velo-route-mode').value || 'fastest';
+            const geometry = document.getElementById('velo-route-geometry').value === 'true';
 
             try {
                 const startTime = performance.now();
-                const route = await veloDemo.route(from, to, { profile, mode });
+                const route = await veloDemo.route(from, to, { profile, mode, geometry });
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
                 const html = formatJsonWithHighlighting(route);

@@ -72,6 +72,7 @@ extern "C" {
  * @demo_input to_lon:number:7.4197
  * @demo_input profile:select:car:car,truck,bike,foot
  * @demo_input mode:select:fastest:fastest,shortest
+ * @demo_input geometry:select:false:false,true
  */
 
 /*@api

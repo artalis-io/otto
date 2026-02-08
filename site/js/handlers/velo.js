@@ -26,10 +26,11 @@ async function calculateVeloRoute() {
     };
     const profile = document.getElementById('velo-route-profile').value || 'car';
     const mode = document.getElementById('velo-route-mode').value || 'fastest';
+    const geometry = document.getElementById('velo-route-geometry').value === 'true';
 
     try {
         const startTime = performance.now();
-        const route = await veloDemo.route(from, to, { profile, mode });
+        const route = await veloDemo.route(from, to, { profile, mode, geometry });
         const elapsed = (performance.now() - startTime).toFixed(1);
 
         const html = formatJsonWithHighlighting(route);
