@@ -19,6 +19,14 @@ Audit OTTO API modules for compliance with the transport-agnostic manifesto and 
 /api-audit all --fix          # Fix all modules
 ```
 
+**Automated script:** `./scripts/api-audit.sh [module|all] [--test]`
+
+```bash
+./scripts/api-audit.sh velo       # Audit single module
+./scripts/api-audit.sh all        # Audit all modules
+./scripts/api-audit.sh all --test # Also run WASM demo tests
+```
+
 ## What This Skill Checks
 
 ### 1. Transport-Agnostic Handler Structure
