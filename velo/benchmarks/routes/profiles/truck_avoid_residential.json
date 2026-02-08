@@ -1,0 +1,41 @@
+{
+  "name": "Truck Route Avoiding Residential",
+  "description": "Truck profile should avoid residential roads",
+  "category": "profiles",
+
+  "origin": {
+    "lat": 47.4979,
+    "lon": 19.0402,
+    "name": "Budapest"
+  },
+  "destination": {
+    "lat": 46.2530,
+    "lon": 20.1414,
+    "name": "Szeged"
+  },
+
+  "options": {
+    "profile": "truck",
+    "weight": "distance",
+    "algorithm": "astar_bidir"
+  },
+
+  "reference": {
+    "source": "dijkstra_exhaustive",
+    "computed_at": "2026-02-08",
+    "distance_m": 176500,
+    "duration_s": 8100,
+    "waypoint_count": 1180
+  },
+
+  "tolerances": {
+    "distance_pct": 0.5,
+    "duration_pct": 10.0,
+    "time_ms_max": 100
+  },
+
+  "assertions": [
+    {"type": "avoids_highway_class", "class": "residential"},
+    {"type": "avoids_restriction", "restriction": "hgv=no"}
+  ]
+}

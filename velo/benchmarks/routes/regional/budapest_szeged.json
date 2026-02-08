@@ -1,0 +1,36 @@
+{
+  "name": "Budapest to Szeged",
+  "description": "Regional route through Hungarian plains, ~170km",
+  "category": "regional",
+
+  "origin": {
+    "lat": 47.4979,
+    "lon": 19.0402,
+    "name": "Budapest Keleti"
+  },
+  "destination": {
+    "lat": 46.2530,
+    "lon": 20.1414,
+    "name": "Szeged Center"
+  },
+
+  "options": {
+    "profile": "car",
+    "weight": "distance",
+    "algorithm": "astar_bidir"
+  },
+
+  "reference": {
+    "source": "dijkstra_exhaustive",
+    "computed_at": "2026-02-08",
+    "distance_m": 174832,
+    "duration_s": 7920,
+    "waypoint_count": 1247
+  },
+
+  "tolerances": {
+    "distance_pct": 0.1,
+    "duration_pct": 5.0,
+    "time_ms_max": 100
+  }
+}

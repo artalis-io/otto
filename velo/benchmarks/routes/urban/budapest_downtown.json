@@ -1,0 +1,36 @@
+{
+  "name": "Budapest Downtown Loop",
+  "description": "Urban route within Budapest city center, ~8km",
+  "category": "urban",
+
+  "origin": {
+    "lat": 47.4979,
+    "lon": 19.0402,
+    "name": "Keleti Station"
+  },
+  "destination": {
+    "lat": 47.5025,
+    "lon": 19.0534,
+    "name": "Heroes Square"
+  },
+
+  "options": {
+    "profile": "car",
+    "weight": "duration",
+    "algorithm": "astar_bidir"
+  },
+
+  "reference": {
+    "source": "dijkstra_exhaustive",
+    "computed_at": "2026-02-08",
+    "distance_m": 2340,
+    "duration_s": 420,
+    "waypoint_count": 45
+  },
+
+  "tolerances": {
+    "distance_pct": 0.5,
+    "duration_pct": 10.0,
+    "time_ms_max": 10
+  }
+}
