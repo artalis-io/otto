@@ -663,7 +663,9 @@ class HtmlGenerator:
             img_id = "carta-tile-img" if demo_id == "carta" else f"{demo_id}-img"
             html += f'''
                             <div class="demo-output" id="{demo_id}-output">
-                                <img id="{img_id}" alt="Generated output">
+                                <div class="crt-image-wrapper">
+                                    <img id="{img_id}" alt="Generated output">
+                                </div>
                                 <div class="demo-status" id="{demo_id}-status"></div>
                             </div>'''
         else:
