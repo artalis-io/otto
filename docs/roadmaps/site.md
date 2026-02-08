@@ -198,46 +198,53 @@ If maintenance burden grows:
 
 ## Phase 5: UI/UX Polish
 
-**Status:** Planned
+**Status:** Complete
 **Effort:** 2-3 hours
 
-### Response Format Toggle
+### Implemented
 
-Add tabs for different views:
+#### Copy Buttons (Done)
+- Added "Copy" button to all code blocks (examples, responses, demo output)
+- Appears on hover, copies text content to clipboard
+- Visual feedback: button shows "Copied!" with green highlight
+- Mobile: always visible (no hover state)
 
+#### Editable Demo Inputs (Already Present)
+- Velo route demo: editable from/to coordinates, profile, mode selects
+- Carta tile demo: editable z/x/y coordinates
+- No additional work needed
+
+### Not Implementing (Low Value/High Effort)
+
+| Feature | Reason |
+|---------|--------|
+| Response format toggle | Complex UI for minimal benefit; users can copy and format externally |
+| Side-by-side layout | Would require significant HTML restructuring; current flow is clear |
+| TypeScript code gen | Niche use case; cURL example sufficient |
+
+### CSS/JS Added
+
+```css
+.copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.code-block:hover .copy-btn { opacity: 1; }
+.copy-btn.copied { background: var(--success); }
 ```
-[Raw JSON] [Formatted] [cURL] [TypeScript]
+
+```javascript
+function copyToClipboard(text, btn) {
+    navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        // Reset after 1.5s
+    });
+}
 ```
-
-### Editable Demo Inputs
-
-Replace static values with editable fields:
-
-```html
-<div class="demo-inputs">
-    <label>z: <input type="number" value="14" min="0" max="18"></label>
-    <label>x: <input type="number" value="8529"></label>
-    <label>y: <input type="number" value="5974"></label>
-</div>
-```
-
-### Request/Response Layout
-
-Side-by-side view:
-
-```
-+---------------------+----------------------+
-| REQUEST             | RESPONSE             |
-| GET /tiles/14/...   | { "tilejson": ... }  |
-+---------------------+----------------------+
-```
-
-### Copy Buttons
-
-One-click copy for:
-- cURL command
-- Response JSON
-- TypeScript fetch code
 
 ---
 
