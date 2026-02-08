@@ -56,7 +56,7 @@
       "icon": "⛽",
       "port": 8080,
       "description": "Refueling optimization using Linear Programming. Finds minimum-cost fuel stops along a route considering tank capacity, fuel prices, and consumption patterns.",
-      "header_file": "fuelwise/api/src/main.c",
+      "header_file": "fuelwise/include/fw_api.h",
       "wasm": {
         "enabled": false
       }
