@@ -307,10 +307,20 @@ function handle{Module}Error(err) {
 
 The `site/api.html` is auto-generated from C header annotations and includes live WASM demos with embedded Monaco data.
 
-**Makefile targets:**
+**Makefile targets (root):**
 ```bash
-make api-docs          # Regenerate site/api.html (auto-rebuilds WASM deps)
-make api-docs-check    # Check if api.html is up-to-date (for CI)
+make api-docs              # Regenerate site/api.html (auto-rebuilds WASM deps)
+make api-docs-check        # Check if api.html is up-to-date (for CI)
+make test-api-docs         # Run Playwright tests on WASM demos
+make test-api-docs-install # Install Playwright + Chromium (first time)
+```
+
+**Makefile targets (site/):**
+```bash
+cd site && make build      # Build deployable site to build/
+cd site && make serve      # Build and serve on :8000
+cd site && make test       # Run WASM demo tests
+cd site && make test-install # Install Playwright deps
 ```
 
 **What each target does:**
@@ -318,6 +328,8 @@ make api-docs-check    # Check if api.html is up-to-date (for CI)
 |--------|--------|----------|
 | `api-docs` | Rebuilds WASM demos if needed, then runs build-api-docs.py | After changing annotations or handlers |
 | `api-docs-check` | Runs build-api-docs.py --check (compares, doesn't write) | CI validation, pre-commit hooks |
+| `test-api-docs` | Runs Playwright tests against api.html WASM demos | Verify demos work after changes |
+| `test-api-docs-install` | npm install + playwright install chromium | First-time setup |
 
 **Dependency chain** (all automatic):
 ```
@@ -402,6 +414,10 @@ When `/api-audit <module>` is invoked:
 7. **Check api.html:**
    - [ ] `make api-docs-check` passes
    - [ ] All endpoints from annotations appear in HTML
+
+8. **Test WASM demos:**
+   - [ ] `make test-api-docs` passes
+   - [ ] All demo endpoints return expected responses
 
 ## Report Format
 
@@ -583,6 +599,57 @@ carta/
 - `docs/API_CODEGEN_PLAN.md` - Codegen details
 - `scripts/build-api-docs.py` - How annotations become HTML
 
+## WASM Demo Testing
+
+Automated tests verify that WASM demos in api.html work correctly and return expected responses.
+
+**Test location:** `site/tests/wasm-demos.spec.js`
+
+**What's tested:**
+| Module | Tests |
+|--------|-------|
+| Carta | health, stats, PNG tile, MVT tile, ASCII tile |
+| Velo | health, stats, route (profiles, modes, geometry on/off) |
+| Locus | health, stats, search, autocomplete, reverse geocoding |
+| FuelWise | health, stats, optimize |
+
+**Running tests:**
+```bash
+# First time setup
+make test-api-docs-install
+
+# Run tests (rebuilds api.html if needed)
+make test-api-docs
+
+# Or from site/ directory
+cd site && make test
+```
+
+**Test structure:**
+```javascript
+test('velo route returns valid route', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    return await veloDemo.route(
+      { lat: 43.7384, lon: 7.4246 },
+      { lat: 43.7311, lon: 7.4197 }
+    );
+  });
+  expect(result.route.distance).toBeGreaterThan(0);
+  expect(result.route.duration).toBeGreaterThan(0);
+});
+```
+
+**Adding tests for new endpoints:**
+1. Add test case to `site/tests/wasm-demos.spec.js`
+2. Use `page.evaluate()` to call WASM demo API
+3. Assert response matches expected values from C annotations
+
+**CI integration:**
+```yaml
+- name: Test WASM demos
+  run: make test-api-docs
+```
+
 ## Checklist for "API Compliant" Status
 
 Before marking a module as API-compliant:
@@ -608,6 +675,7 @@ Before marking a module as API-compliant:
 - [ ] `make api-docs-check` passes
 - [ ] All endpoints visible in `site/api.html`
 - [ ] WASM demos work (if enabled)
+- [ ] `make test-api-docs` passes (automated WASM tests)
 
 ## Current Module Status
 
