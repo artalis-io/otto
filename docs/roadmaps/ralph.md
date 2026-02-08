@@ -172,11 +172,107 @@ For deep-dive documentation, see [docs/internals/](../internals/):
 - [lu-factorization.md](../internals/lu-factorization.md) - LU decomposition details
 - [simplex.md](../internals/simplex.md) - Revised simplex implementation
 
+---
+
+## Chapter 5: REST API & WASM Demo
+
+Transport-agnostic API for solving small LP/MIP problems, primarily for WASM demos
+on the documentation site. Follows patterns from Carta, Velo, Locus.
+
+### 5.1 Scope
+
+| Use Case | Supported | Notes |
+|----------|-----------|-------|
+| WASM demo on docs | ✅ | Primary goal |
+| Small LP/MIP via curl | ✅ | Testing, learning |
+| MPS/LP format input | ✅ | Embedded in JSON |
+| Large production problems | ❌ | Embed library directly |
+| Warm starts | ❌ | Stateful, use library |
+
+### 5.2 API Design
+
+**Port**: 8084
+
+**Endpoints**:
+```
+POST /api/v1/solve      - Solve LP/MIP from JSON-embedded problem
+GET  /api/v1/health     - Health check
+GET  /api/v1/formats    - List supported input formats
+```
+
+**Request** (POST /api/v1/solve):
+```json
+{
+  "format": "lp",
+  "problem": "max: 5x + 3y; 2x + 4y <= 40; x >= 0; y >= 0;",
+  "timeout_ms": 5000
+}
+```
+
+**Response**:
+```json
+{
+  "status": "optimal",
+  "objective": 42.5,
+  "variables": {"x": 10.0, "y": 5.5},
+  "solve_time_ms": 12,
+  "iterations": 23
+}
+```
+
+**Size Limits**: 100 vars/constraints (LP), 50 vars/constraints (MIP), 5s default timeout.
+
+### 5.3 File Structure
+
+```
+ralph/
+├── include/
+│   └── ralph_api.h          # Transport-agnostic API handler
+├── src/
+│   ├── ralph_api.c          # API handler implementation
+│   └── ralph_parse_lp.c     # LP format parser
+├── api/
+│   └── src/main.c           # Mongoose wrapper (port 8084)
+└── wasm/
+    └── ralph_wasm_api.c     # WASM wrapper
+```
+
+### 5.4 LP Format
+
+```
+/* Production Planning Example */
+max: 5 chairs + 3 tables;
+
+wood:  2 chairs + 4 tables <= 40;
+labor: 3 chairs + 2 tables <= 24;
+
+chairs >= 0;
+tables >= 0;
+```
+
+Supports: `min`/`max` objective, `<=`/`>=`/`=` constraints, named constraints, bounds, comments.
+
+### 5.5 Implementation TODOs
+
+| Phase | Duration | Deliverables |
+|-------|----------|--------------|
+| 1. Handler | 2-3 days | `ralph_api.h`, `ralph_api.c`, `ralph_parse_lp.c` |
+| 2. HTTP Server | 1 day | `ralph/api/src/main.c`, Makefile |
+| 3. WASM | 1 day | `ralph/wasm/ralph_wasm_api.c`, Makefile |
+| 4. JS Handler | 1 day | `site/js/handlers/ralph.js`, api-config.json |
+| 5. Demo | 0.5 day | Example LP, documentation |
+| 6. Testing | 1 day | Integration, api-docs, test script |
+
+**Total: ~6-7 days**
+
+---
+
 ## Related Files
 
 | File | Purpose |
 |------|---------|
 | `ralph/CLAUDE.md` | Development guide, API reference |
 | `ralph/include/ralph.h` | Public API |
+| `ralph/include/ralph_api.h` | REST API (planned) |
 | `ralph/include/lap.h` | LAP solver API |
 | `ralph/include/netflow.h` | Network flow API |
