@@ -21,11 +21,11 @@
   },
 
   "reference": {
-    "source": "dijkstra_exhaustive",
+    "source": "velo_dijkstra",
     "computed_at": "2026-02-08",
-    "distance_m": 174832,
-    "duration_s": 7920,
-    "waypoint_count": 1247
+    "distance_m": 169943,
+    "duration_s": 5449,
+    "waypoint_count": 1793
   },
 
   "tolerances": {
