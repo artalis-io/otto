@@ -15,17 +15,17 @@ async function calculateVeloRoute() {
     btn.textContent = 'Calculating...';
     output.classList.add('visible');
 
-    // Read from input fields
+    // Read from input fields (IDs match demo_id pattern: velo-route-*)
     const from = {
-        lat: parseFloat(document.getElementById('velo-from_lat').value) || 43.7384,
-        lon: parseFloat(document.getElementById('velo-from_lon').value) || 7.4246
+        lat: parseFloat(document.getElementById('velo-route-from_lat').value) || 43.7384,
+        lon: parseFloat(document.getElementById('velo-route-from_lon').value) || 7.4246
     };
     const to = {
-        lat: parseFloat(document.getElementById('velo-to_lat').value) || 43.7311,
-        lon: parseFloat(document.getElementById('velo-to_lon').value) || 7.4197
+        lat: parseFloat(document.getElementById('velo-route-to_lat').value) || 43.7311,
+        lon: parseFloat(document.getElementById('velo-route-to_lon').value) || 7.4197
     };
-    const profile = document.getElementById('velo-profile').value || 'car';
-    const mode = document.getElementById('velo-mode').value || 'fastest';
+    const profile = document.getElementById('velo-route-profile').value || 'car';
+    const mode = document.getElementById('velo-route-mode').value || 'fastest';
 
     try {
         const startTime = performance.now();
