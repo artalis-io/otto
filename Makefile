@@ -26,7 +26,7 @@
 .PHONY: fuelwise-ui fuelwise-ui-dev carta-ui carta-ui-dev clay-map clay-map-serve site-build site-serve
 .PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
 .PHONY: run-fuelwise-api run-carta-api run-velo-api
-.PHONY: benchmark ci api-docs api-docs-check download-monaco
+.PHONY: benchmark ci api-docs api-docs-check test-api-docs test-api-docs-install download-monaco
 
 # =============================================================================
 # Default Targets
@@ -348,6 +348,15 @@ api-docs: site/api.html
 api-docs-check:
 	@python3 scripts/build-api-docs.py --check
 
+# Test WASM demos in api.html (requires Playwright)
+test-api-docs: api-docs
+	@$(MAKE) -C site test
+
+# Install test dependencies for api-docs
+test-api-docs-install:
+	@$(MAKE) -C site test-install
+	@cd site/tests && npx playwright install chromium
+
 # Generate PDF from strategy document (for sharing with partners)
 # Note: STRATEGY.md contains REDACT markers - strip them before generating public PDF
 strategy-pdf:
@@ -430,8 +439,10 @@ help:
 	@echo "  wasm-api-demos              - Build WASM API demos with Monaco"
 	@echo ""
 	@echo "Documentation:"
-	@echo "  api-docs         - Generate API docs (rebuilds if sources changed)"
-	@echo "  api-docs-check   - Check API docs are up-to-date (for CI)"
+	@echo "  api-docs              - Generate API docs (rebuilds if sources changed)"
+	@echo "  api-docs-check        - Check API docs are up-to-date (for CI)"
+	@echo "  test-api-docs         - Test WASM demos in api.html (requires Playwright)"
+	@echo "  test-api-docs-install - Install Playwright for testing"
 	@echo ""
 	@echo "Testing:"
 	@echo "  test             - Run all library tests (~256)"

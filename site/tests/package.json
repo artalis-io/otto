@@ -1,0 +1,13 @@
+{
+  "name": "otto-wasm-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WASM API demo tests for OTTO",
+  "scripts": {
+    "test": "playwright test wasm-demos.spec.js",
+    "test:headed": "playwright test wasm-demos.spec.js --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.41.0"
+  }
+}
