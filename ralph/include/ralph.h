@@ -112,6 +112,15 @@ int ralph_read_lp(RalphModel *model, const char *filename);
 int ralph_write_lp(const RalphModel *model, const char *filename);
 int ralph_write_solution(const RalphModel *model, const char *filename);
 
+/* Write solution to buffer in SOL format.
+ * @param model    Solved model
+ * @param buf      Output buffer
+ * @param buf_size Size of buffer
+ * @return Number of bytes written (not including null terminator), or -1 on error.
+ *         If return value >= buf_size, output was truncated.
+ */
+int ralph_write_solution_buf(const RalphModel *model, char *buf, size_t buf_size);
+
 /* Name management */
 const char* ralph_get_var_name(const RalphModel *model, int var);
 const char* ralph_get_con_name(const RalphModel *model, int con);

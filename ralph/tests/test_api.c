@@ -243,6 +243,144 @@ TEST(version) {
     ASSERT(strlen(version) > 0);
 }
 
+/* Test: Raw LP body with format=lp query param → SOL output */
+TEST(raw_lp_sol_output) {
+    RalphAPIContext *ctx = ralph_api_create();
+    ASSERT(ctx != NULL);
+
+    /* Raw LP problem (not wrapped in JSON) */
+    const char *lp_body =
+        "max: 5 x + 3 y\n"
+        "subject to\n"
+        "wood: 2 x + 4 y <= 40\n"
+        "labor: 3 x + 2 y <= 24\n"
+        "bounds\n"
+        "x >= 0\n"
+        "y >= 0\n"
+        "end";
+
+    RalphAPIRequest req = {
+        .method = "POST",
+        .path = "/api/v1/solve",
+        .query = "format=lp",  /* Key: format in query string */
+        .body = lp_body,
+        .body_len = strlen(lp_body)
+    };
+
+    RalphAPIResponse resp;
+    int result = ralph_api_handle(ctx, &req, &resp);
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(resp.status_code, 200);
+
+    /* SOL format output (uses UPPERCASE from ralph_status_string) */
+    ASSERT(strstr((char*)resp.body, "solution status: OPTIMAL") != NULL);
+    ASSERT(strstr((char*)resp.body, "objective value:") != NULL);
+    ASSERT(strstr((char*)resp.body, "x ") != NULL);
+    ASSERT(strstr((char*)resp.body, "y ") != NULL);
+
+    /* Content type should be text/plain for SOL output */
+    ASSERT(strcmp(resp.content_type, "text/plain") == 0);
+
+    ralph_api_response_free(&resp);
+    ralph_api_free(ctx);
+}
+
+/* Test: JSON format param still works (backward compat) */
+TEST(json_format_backward_compat) {
+    RalphAPIContext *ctx = ralph_api_create();
+    ASSERT(ctx != NULL);
+
+    /* Same JSON as solve_simple_lp but with format=json query param */
+    const char *json_body =
+        "{"
+        "\"format\":\"lp\","
+        "\"problem\":\"max: 5 x + 3 y\\n"
+        "subject to\\n"
+        "wood: 2 x + 4 y <= 40\\n"
+        "labor: 3 x + 2 y <= 24\\n"
+        "bounds\\n"
+        "x >= 0\\n"
+        "y >= 0\\n"
+        "end\""
+        "}";
+
+    /* Explicitly specify format=json in query */
+    RalphAPIRequest req = {
+        .method = "POST",
+        .path = "/api/v1/solve",
+        .query = "format=json",
+        .body = json_body,
+        .body_len = strlen(json_body)
+    };
+
+    RalphAPIResponse resp;
+    int result = ralph_api_handle(ctx, &req, &resp);
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(resp.status_code, 200);
+
+    /* JSON format output */
+    ASSERT(strstr((char*)resp.body, "\"status\":\"optimal\"") != NULL);
+    ASSERT(strcmp(resp.content_type, "application/json") == 0);
+
+    ralph_api_response_free(&resp);
+    ralph_api_free(ctx);
+}
+
+/* Test: Invalid format query param */
+TEST(invalid_format_param) {
+    RalphAPIContext *ctx = ralph_api_create();
+    ASSERT(ctx != NULL);
+
+    const char *body = "max: x\nsubject to\nc1: x <= 10\nend";
+
+    RalphAPIRequest req = {
+        .method = "POST",
+        .path = "/api/v1/solve",
+        .query = "format=invalid",
+        .body = body,
+        .body_len = strlen(body)
+    };
+
+    RalphAPIResponse resp;
+    int result = ralph_api_handle(ctx, &req, &resp);
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(resp.status_code, 400);
+    ASSERT(strstr((char*)resp.body, "Invalid format") != NULL);
+
+    ralph_api_response_free(&resp);
+    ralph_api_free(ctx);
+}
+
+/* Test: Timeout via query param */
+TEST(timeout_query_param) {
+    RalphAPIContext *ctx = ralph_api_create();
+    ASSERT(ctx != NULL);
+
+    /* Note: LP parser requires explicit coefficients (1 x not just x) */
+    const char *lp_body =
+        "max: 1 x\n"
+        "subject to\n"
+        "c1: 1 x <= 10\n"
+        "end";
+
+    RalphAPIRequest req = {
+        .method = "POST",
+        .path = "/api/v1/solve",
+        .query = "format=lp&timeout_ms=1000",
+        .body = lp_body,
+        .body_len = strlen(lp_body)
+    };
+
+    RalphAPIResponse resp;
+    int result = ralph_api_handle(ctx, &req, &resp);
+    ASSERT_EQ(result, 0);
+    ASSERT_EQ(resp.status_code, 200);
+    ASSERT(strstr((char*)resp.body, "solution status: OPTIMAL") != NULL);
+
+    ralph_api_response_free(&resp);
+    ralph_api_free(ctx);
+}
+
 int main(void) {
     printf("Ralph API Tests\n");
     printf("===============\n\n");
@@ -256,6 +394,10 @@ int main(void) {
     RUN_TEST(parse_error);
     RUN_TEST(wasm_helpers);
     RUN_TEST(version);
+    RUN_TEST(raw_lp_sol_output);
+    RUN_TEST(json_format_backward_compat);
+    RUN_TEST(invalid_format_param);
+    RUN_TEST(timeout_query_param);
 
     printf("\n===============\n");
     printf("Results: %d passed, %d failed\n", tests_passed, tests_failed);

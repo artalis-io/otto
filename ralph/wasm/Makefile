@@ -18,7 +18,7 @@ INCLUDES = -I../include -I../../shared/include
 RALPH_SRC = $(wildcard ../src/*.c) $(wildcard ../src/optim/*.c)
 
 # Source files - Shared library
-SHARED_SRC = ../../shared/src/sh_arena.c
+SHARED_SRC = ../../shared/src/sh_arena.c ../../shared/src/sh_query.c
 
 # =============================================================================
 # API Demo build (self-contained)
