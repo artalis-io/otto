@@ -66,6 +66,12 @@ extern "C" {
  *
  * @demo json
  * @demo_title Calculate a route in Monaco using WASM
+ * @demo_input from_lat:number:43.7384
+ * @demo_input from_lon:number:7.4246
+ * @demo_input to_lat:number:43.7311
+ * @demo_input to_lon:number:7.4197
+ * @demo_input profile:text:car
+ * @demo_input mode:text:fastest
  */
 
 /*@api

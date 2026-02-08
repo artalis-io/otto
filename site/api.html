@@ -27,6 +27,8 @@
     <script src="wasm/locus-api-demo.js"></script>
     <script src="js/locus-api-demo.js"></script>
 
+    <script src="wasm/fuelwise-api-demo.js"></script>
+    <script src="js/fuelwise-api-demo.js"></script>
 
 
 
@@ -891,7 +893,27 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
                                 Calculate a route in Monaco using WASM
                             </p>
-                            <button class="try-btn" id="velo-route-try-btn" disabled>Loading WASM...</button>
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <label style="font-size: 13px;">
+                                    from_lat: <input type="number" id="velo-from_lat" value="43.7384" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <label style="font-size: 13px;">
+                                    from_lon: <input type="number" id="velo-from_lon" value="7.4246" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <label style="font-size: 13px;">
+                                    to_lat: <input type="number" id="velo-to_lat" value="43.7311" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <label style="font-size: 13px;">
+                                    to_lon: <input type="number" id="velo-to_lon" value="7.4197" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <label style="font-size: 13px;">
+                                    profile: <input type="text" id="velo-profile" value="car" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <label style="font-size: 13px;">
+                                    mode: <input type="text" id="velo-mode" value="fastest" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <button class="try-btn" id="velo-route-try-btn" disabled>Loading WASM...</button>
+                            </div>
                             <div class="demo-output" id="velo-route-output">
                                 <div class="code-block">
                                     <pre id="velo-route-result"></pre>
@@ -1328,7 +1350,165 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                     Refueling optimization using Linear Programming. Finds minimum-cost fuel stops along a route considering tank capacity, fuel prices, and consumption patterns.
                 </p>
 
-                <!-- Endpoints generated from fuelwise/api/src/main.c annotations -->
+                <!-- Endpoints generated from fuelwise/include/fw_api.h annotations -->
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method post">POST</span>
+                        <span class="path">/api/v1/solve</span>
+                        <span class="endpoint-desc">Solve a refueling optimization problem</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"optimal"</span>,
+  <span class="key">"num_stops"</span>: <span class="number">2</span>,
+  <span class="key">"total_cost"</span>: <span class="number">156.78</span>,
+  <span class="key">"gross_cost"</span>: <span class="number">156.78</span>,
+  <span class="key">"remaining_fuel"</span>: <span class="number">25.00</span>,
+  <span class="key">"stops"</span>: [
+    {<span class="key">"station_id"</span>: <span class="number">1</span>, <span class="key">"gallons"</span>: <span class="number">45.5</span>, <span class="key">"cost"</span>: <span class="number">159.25</span>},
+    {<span class="key">"station_id"</span>: <span class="number">3</span>, <span class="key">"gallons"</span>: <span class="number">30.0</span>, <span class="key">"cost"</span>: <span class="number">97.50</span>}
+  ]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method post">POST</span>
+                        <span class="path">/api/v1/filter</span>
+                        <span class="endpoint-desc">Filter fuel stations to those near a route</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"count"</span>: <span class="number">3</span>,
+  <span class="key">"stations"</span>: [
+    {
+      <span class="key">"station_id"</span>: <span class="number">1</span>,
+      <span class="key">"distance_from_start"</span>: <span class="number">45.2</span>,
+      <span class="key">"perpendicular_distance"</span>: <span class="number">0.8</span>,
+      <span class="key">"price_per_gallon"</span>: <span class="number">3.45</span>,
+      <span class="key">"snap_point"</span>: [<span class="number">34.0522</span>, -<span class="number">118.2437</span>]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method post">POST</span>
+                        <span class="path">/api/v1/optimize</span>
+                        <span class="endpoint-desc">Full optimization pipeline: filter stations and solve refueling</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"optimal"</span>,
+  <span class="key">"route_distance"</span>: <span class="number">487.5</span>,
+  <span class="key">"stations_filtered"</span>: <span class="number">5</span>,
+  <span class="key">"num_stops"</span>: <span class="number">2</span>,
+  <span class="key">"total_cost"</span>: <span class="number">245.50</span>,
+  <span class="key">"gross_cost"</span>: <span class="number">245.50</span>,
+  <span class="key">"remaining_fuel"</span>: <span class="number">28.3</span>,
+  <span class="key">"stops"</span>: [
+    {<span class="key">"station_id"</span>: <span class="number">3</span>, <span class="key">"distance_from_start"</span>: <span class="number">125.4</span>, <span class="key">"gallons"</span>: <span class="number">42.0</span>, <span class="key">"cost"</span>: <span class="number">142.80</span>},
+    {<span class="key">"station_id"</span>: <span class="number">7</span>, <span class="key">"distance_from_start"</span>: <span class="number">356.2</span>, <span class="key">"gallons"</span>: <span class="number">35.5</span>, <span class="key">"cost"</span>: <span class="number">102.70</span>}
+  ]
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/health</span>
+                        <span class="endpoint-desc">Health check endpoint</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"healthy"</span>,
+  <span class="key">"service"</span>: <span class="string">"fuelwise-api"</span>,
+  <span class="key">"version"</span>: <span class="string">"1.0.0"</span>
+}</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo" id="fuelwise-api-v1-health-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Check FuelWise API health status
+                            </p>
+                            <button class="try-btn" id="fuelwise-api-v1-health-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="fuelwise-api-v1-health-output">
+                                <div class="code-block">
+                                    <pre id="fuelwise-api-v1-health-result"></pre>
+                                </div>
+                                <div class="demo-status" id="fuelwise-api-v1-health-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/stats</span>
+                        <span class="endpoint-desc">Server statistics endpoint</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"service"</span>: <span class="string">"fuelwise-api"</span>,
+  <span class="key">"version"</span>: <span class="string">"1.0.0"</span>,
+  <span class="key">"work_queue"</span>: {
+    <span class="key">"enabled"</span>: <span class="number">true</span>,
+    <span class="key">"depth"</span>: <span class="number">0</span>,
+    <span class="key">"capacity"</span>: <span class="number">100</span>
+  },
+  <span class="key">"rate_limit"</span>: {
+    <span class="key">"enabled"</span>: <span class="number">true</span>,
+    <span class="key">"rps"</span>: <span class="number">10.0</span>,
+    <span class="key">"burst"</span>: <span class="number">100.0</span>
+}</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo" id="fuelwise-api-v1-stats-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                View FuelWise server statistics
+                            </p>
+                            <button class="try-btn" id="fuelwise-api-v1-stats-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="fuelwise-api-v1-stats-output">
+                                <div class="code-block">
+                                    <pre id="fuelwise-api-v1-stats-result"></pre>
+                                </div>
+                                <div class="demo-status" id="fuelwise-api-v1-stats-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
             </section>
 
@@ -1372,6 +1552,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 
         let locusDemo = null;
 
+        let fuelwiseDemo = null;
 
 
 
@@ -1438,25 +1619,10 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 await cartaDemo.init();
 
                 // Enable WASM demo buttons for carta
-                const pngBtn = document.getElementById('carta-try-btn');
-                const pngStatus = document.getElementById('carta-status');
-                pngBtn.textContent = 'Generate Tile';
-                pngBtn.disabled = false;
-                pngStatus.textContent = `Carta ${cartaDemo.getVersion()} ready (Monaco PBF: ${(cartaDemo.getPBFSize() / 1024).toFixed(0)} KB)`;
-                pngStatus.className = 'demo-status success';
-                document.getElementById('carta-output').classList.add('visible');
-                enableBtn('tilejson-try-btn', 'Fetch TileJSON');
-                enableBtn('health-try-btn', 'Check Health');
-                enableBtn('stats-try-btn', 'Get Stats');
+                initCartaDemo();
             } catch (err) {
                 console.error('Carta Tile Server WASM init failed:', err);
-                pngBtn.textContent = 'WASM unavailable';
-                pngStatus.textContent = 'Failed to load WASM module: ' + err.message;
-                pngStatus.className = 'demo-status error';
-                document.getElementById('carta-output').classList.add('visible');
-                disableBtn('tilejson-try-btn');
-                disableBtn('health-try-btn');
-                disableBtn('stats-try-btn');
+                handleCartaError(err);
             }
         }
 
@@ -1472,26 +1638,10 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 await veloDemo.init();
 
                 // Enable WASM demo buttons for velo
-                enableBtn('velo-route-try-btn', 'Calculate Route');
-                enableBtn('velo-health-try-btn', 'Check Health');
-                enableBtn('velo-stats-try-btn', 'Get Stats');
-                const veloStatus = document.getElementById('velo-route-status');
-                if (veloStatus) {
-                    veloStatus.textContent = `Velo ${veloDemo.getVersion()} ready (Monaco: ${veloDemo.getNodeCount()} nodes)`;
-                    veloStatus.className = 'demo-status success';
-                    document.getElementById('velo-route-output').classList.add('visible');
-                }
+                initVeloDemo();
             } catch (err) {
                 console.error('Velo Route Server WASM init failed:', err);
-                disableBtn('velo-route-try-btn');
-                disableBtn('velo-health-try-btn');
-                disableBtn('velo-stats-try-btn');
-                const veloStatus = document.getElementById('velo-route-status');
-                if (veloStatus) {
-                    veloStatus.textContent = 'Failed to load WASM: ' + err.message;
-                    veloStatus.className = 'demo-status error';
-                    document.getElementById('velo-route-output').classList.add('visible');
-                }
+                handleVeloError(err);
             }
         }
 
@@ -1507,33 +1657,31 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 await locusDemo.init();
 
                 // Enable WASM demo buttons for locus
-                enableBtn('locus-api-v1-search-try-btn', 'Search');
-                enableBtn('locus-api-v1-autocomplete-try-btn', 'Autocomplete');
-                enableBtn('locus-api-v1-reverse-try-btn', 'Reverse Geocode');
-                enableBtn('locus-api-v1-health-try-btn', 'Check Health');
-                enableBtn('locus-api-v1-stats-try-btn', 'Get Stats');
-                const locusStatus = document.getElementById('locus-api-v1-search-status');
-                if (locusStatus) {
-                    locusStatus.textContent = `Locus ${locusDemo.getVersion()} ready (Monaco: ${locusDemo.getEntityCount()} entities)`;
-                    locusStatus.className = 'demo-status success';
-                    document.getElementById('locus-api-v1-search-output').classList.add('visible');
-                }
+                initLocusDemo();
             } catch (err) {
                 console.error('Locus Geocoder WASM init failed:', err);
-                disableBtn('locus-api-v1-search-try-btn');
-                disableBtn('locus-api-v1-autocomplete-try-btn');
-                disableBtn('locus-api-v1-reverse-try-btn');
-                disableBtn('locus-api-v1-health-try-btn');
-                disableBtn('locus-api-v1-stats-try-btn');
-                const locusStatus = document.getElementById('locus-api-v1-search-status');
-                if (locusStatus) {
-                    locusStatus.textContent = 'Failed to load WASM: ' + err.message;
-                    locusStatus.className = 'demo-status error';
-                    document.getElementById('locus-api-v1-search-output').classList.add('visible');
-                }
+                handleLocusError(err);
             }
         }
 
+
+        // FuelWise Optimizer WASM init
+        async function initFuelwiseWasm() {
+            try {
+                if (typeof FuelWiseDemo === 'undefined') {
+                    throw new Error('FuelWiseDemo class not loaded');
+                }
+
+                fuelwiseDemo = new FuelWiseDemo();
+                await fuelwiseDemo.init();
+
+                // Enable WASM demo buttons for fuelwise
+                initFuelWiseDemo();
+            } catch (err) {
+                console.error('FuelWise Optimizer WASM init failed:', err);
+                handleFuelWiseError(err);
+            }
+        }
 
 
 
@@ -1581,7 +1729,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
         }
 
 
-        // Carta-specific WASM handlers
+        // Carta handlers (from js/handlers/carta.js)
         async function generateCartaTile() {
             if (!cartaDemo || !cartaDemo.isReady()) return;
 
@@ -1655,15 +1803,40 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             }
         }
 
-        function fetchHealth() {
+        function fetchCartaHealth() {
             fetchJsonEndpoint(cartaDemo, '/api/v1/health', 'health-try-btn', 'health-result', 'health-status', 'health-output', 'Check Health');
         }
 
-        function fetchStats() {
+        function fetchCartaStats() {
             fetchJsonEndpoint(cartaDemo, '/api/v1/stats', 'stats-try-btn', 'stats-result', 'stats-status', 'stats-output', 'Get Stats');
         }
 
-        // Velo-specific WASM handlers
+        function initCartaDemo() {
+            const pngBtn = document.getElementById('carta-try-btn');
+            const pngStatus = document.getElementById('carta-status');
+            pngBtn.textContent = 'Generate Tile';
+            pngBtn.disabled = false;
+            pngStatus.textContent = `Carta ${cartaDemo.getVersion()} ready (Monaco PBF: ${(cartaDemo.getPBFSize() / 1024).toFixed(0)} KB)`;
+            pngStatus.className = 'demo-status success';
+            document.getElementById('carta-output').classList.add('visible');
+            enableBtn('tilejson-try-btn', 'Fetch TileJSON');
+            enableBtn('health-try-btn', 'Check Health');
+            enableBtn('stats-try-btn', 'Get Stats');
+        }
+
+        function handleCartaError(err) {
+            const pngBtn = document.getElementById('carta-try-btn');
+            const pngStatus = document.getElementById('carta-status');
+            pngBtn.textContent = 'WASM unavailable';
+            pngStatus.textContent = 'Failed to load WASM module: ' + err.message;
+            pngStatus.className = 'demo-status error';
+            document.getElementById('carta-output').classList.add('visible');
+            disableBtn('tilejson-try-btn');
+            disableBtn('health-try-btn');
+            disableBtn('stats-try-btn');
+        }
+
+        // Velo handlers (from js/handlers/velo.js)
         async function calculateVeloRoute() {
             if (!veloDemo || !veloDemo.isReady()) return;
 
@@ -1676,13 +1849,21 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             btn.textContent = 'Calculating...';
             output.classList.add('visible');
 
-            // Monaco demo coordinates (Casino to Port)
-            const from = {lat: 43.7384, lon: 7.4246};
-            const to = {lat: 43.7311, lon: 7.4197};
+            // Read from input fields
+            const from = {
+                lat: parseFloat(document.getElementById('velo-from_lat').value) || 43.7384,
+                lon: parseFloat(document.getElementById('velo-from_lon').value) || 7.4246
+            };
+            const to = {
+                lat: parseFloat(document.getElementById('velo-to_lat').value) || 43.7311,
+                lon: parseFloat(document.getElementById('velo-to_lon').value) || 7.4197
+            };
+            const profile = document.getElementById('velo-profile').value || 'car';
+            const mode = document.getElementById('velo-mode').value || 'fastest';
 
             try {
                 const startTime = performance.now();
-                const route = await veloDemo.route(from, to);
+                const route = await veloDemo.route(from, to, { profile, mode });
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
                 const html = formatJsonWithHighlighting(route);
@@ -1713,7 +1894,31 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             fetchJsonEndpoint(veloDemo, '/api/v1/stats', 'velo-stats-try-btn', 'velo-stats-result', 'velo-stats-status', 'velo-stats-output', 'Get Stats');
         }
 
-        // Locus-specific WASM handlers
+        function initVeloDemo() {
+            enableBtn('velo-route-try-btn', 'Calculate Route');
+            enableBtn('velo-health-try-btn', 'Check Health');
+            enableBtn('velo-stats-try-btn', 'Get Stats');
+            const veloStatus = document.getElementById('velo-route-status');
+            if (veloStatus) {
+                veloStatus.textContent = `Velo ${veloDemo.getVersion()} ready (Monaco: ${veloDemo.getNodeCount()} nodes)`;
+                veloStatus.className = 'demo-status success';
+                document.getElementById('velo-route-output').classList.add('visible');
+            }
+        }
+
+        function handleVeloError(err) {
+            disableBtn('velo-route-try-btn');
+            disableBtn('velo-health-try-btn');
+            disableBtn('velo-stats-try-btn');
+            const veloStatus = document.getElementById('velo-route-status');
+            if (veloStatus) {
+                veloStatus.textContent = 'Failed to load WASM: ' + err.message;
+                veloStatus.className = 'demo-status error';
+                document.getElementById('velo-route-output').classList.add('visible');
+            }
+        }
+
+        // Locus handlers (from js/handlers/locus.js)
         async function fetchLocusSearch() {
             if (!locusDemo || !locusDemo.isReady()) return;
 
@@ -1731,9 +1936,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 const response = await locusDemo.fetch('/api/v1/search?q=Monte%20Carlo&limit=5');
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
                 const html = formatJsonWithHighlighting(data);
@@ -1774,9 +1977,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 const response = await locusDemo.fetch('/api/v1/autocomplete?q=Mon&limit=10');
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
                 const html = formatJsonWithHighlighting(data);
@@ -1812,7 +2013,6 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             btn.textContent = 'Geocoding...';
             output.classList.add('visible');
 
-            // Monaco Casino coordinates
             const lat = 43.7384;
             const lon = 7.4246;
 
@@ -1821,9 +2021,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 const response = await locusDemo.fetch(`/api/v1/reverse?lat=${lat}&lon=${lon}`);
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
                 const html = formatJsonWithHighlighting(data);
@@ -1854,6 +2052,64 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             fetchJsonEndpoint(locusDemo, '/api/v1/stats', 'locus-api-v1-stats-try-btn', 'locus-api-v1-stats-result', 'locus-api-v1-stats-status', 'locus-api-v1-stats-output', 'Get Stats');
         }
 
+        function initLocusDemo() {
+            enableBtn('locus-api-v1-search-try-btn', 'Search');
+            enableBtn('locus-api-v1-autocomplete-try-btn', 'Autocomplete');
+            enableBtn('locus-api-v1-reverse-try-btn', 'Reverse Geocode');
+            enableBtn('locus-api-v1-health-try-btn', 'Check Health');
+            enableBtn('locus-api-v1-stats-try-btn', 'Get Stats');
+            const locusStatus = document.getElementById('locus-api-v1-search-status');
+            if (locusStatus) {
+                locusStatus.textContent = `Locus ${locusDemo.getVersion()} ready (Monaco: ${locusDemo.getEntityCount()} entities)`;
+                locusStatus.className = 'demo-status success';
+                document.getElementById('locus-api-v1-search-output').classList.add('visible');
+            }
+        }
+
+        function handleLocusError(err) {
+            disableBtn('locus-api-v1-search-try-btn');
+            disableBtn('locus-api-v1-autocomplete-try-btn');
+            disableBtn('locus-api-v1-reverse-try-btn');
+            disableBtn('locus-api-v1-health-try-btn');
+            disableBtn('locus-api-v1-stats-try-btn');
+            const locusStatus = document.getElementById('locus-api-v1-search-status');
+            if (locusStatus) {
+                locusStatus.textContent = 'Failed to load WASM: ' + err.message;
+                locusStatus.className = 'demo-status error';
+                document.getElementById('locus-api-v1-search-output').classList.add('visible');
+            }
+        }
+
+        // Fuelwise handlers (from js/handlers/fuelwise.js)
+        function fetchFuelWiseHealth() {
+            fetchJsonEndpoint(fuelwiseDemo, '/api/v1/health', 'fuelwise-api-v1-health-try-btn', 'fuelwise-api-v1-health-result', 'fuelwise-api-v1-health-status', 'fuelwise-api-v1-health-output', 'Check Health');
+        }
+
+        function fetchFuelWiseStats() {
+            fetchJsonEndpoint(fuelwiseDemo, '/api/v1/stats', 'fuelwise-api-v1-stats-try-btn', 'fuelwise-api-v1-stats-result', 'fuelwise-api-v1-stats-status', 'fuelwise-api-v1-stats-output', 'Get Stats');
+        }
+
+        function initFuelWiseDemo() {
+            enableBtn('fuelwise-api-v1-health-try-btn', 'Check Health');
+            enableBtn('fuelwise-api-v1-stats-try-btn', 'Get Stats');
+            const fuelwiseStatus = document.getElementById('fuelwise-api-v1-health-status');
+            if (fuelwiseStatus) {
+                fuelwiseStatus.textContent = `FuelWise ${fuelwiseDemo.getVersion()} ready`;
+                fuelwiseStatus.className = 'demo-status success';
+                document.getElementById('fuelwise-api-v1-health-output').classList.add('visible');
+            }
+        }
+
+        function handleFuelWiseError(err) {
+            disableBtn('fuelwise-api-v1-health-try-btn');
+            disableBtn('fuelwise-api-v1-stats-try-btn');
+            const fuelwiseStatus = document.getElementById('fuelwise-api-v1-health-status');
+            if (fuelwiseStatus) {
+                fuelwiseStatus.textContent = 'Failed to load WASM: ' + err.message;
+                fuelwiseStatus.className = 'demo-status error';
+                document.getElementById('fuelwise-api-v1-health-output').classList.add('visible');
+            }
+        }
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             initCartaWasm();
@@ -1862,14 +2118,15 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 
             initLocusWasm();
 
+            initFuelwiseWasm();
 
 
 
             // Button click handlers (generated from annotations)
             document.getElementById('carta-try-btn').addEventListener('click', generateCartaTile);
             document.getElementById('tilejson-try-btn').addEventListener('click', fetchTileJSON);
-            document.getElementById('health-try-btn').addEventListener('click', fetchHealth);
-            document.getElementById('stats-try-btn').addEventListener('click', fetchStats);
+            document.getElementById('health-try-btn').addEventListener('click', fetchCartaHealth);
+            document.getElementById('stats-try-btn').addEventListener('click', fetchCartaStats);
             document.getElementById('velo-route-try-btn').addEventListener('click', calculateVeloRoute);
             document.getElementById('velo-health-try-btn').addEventListener('click', fetchVeloHealth);
             document.getElementById('velo-stats-try-btn').addEventListener('click', fetchVeloStats);
@@ -1878,6 +2135,8 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             document.getElementById('locus-api-v1-reverse-try-btn').addEventListener('click', fetchLocusReverse);
             document.getElementById('locus-api-v1-health-try-btn').addEventListener('click', fetchLocusHealth);
             document.getElementById('locus-api-v1-stats-try-btn').addEventListener('click', fetchLocusStats);
+            document.getElementById('fuelwise-api-v1-health-try-btn').addEventListener('click', fetchFuelWiseHealth);
+            document.getElementById('fuelwise-api-v1-stats-try-btn').addEventListener('click', fetchFuelWiseStats);
         });
     })();
     </script>
