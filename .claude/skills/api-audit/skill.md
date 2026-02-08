@@ -101,7 +101,8 @@ Each endpoint must have a `/*@api ... */` block in the header:
  *
  * @demo json|image
  * @demo_title Description for WASM demo
- * @demo_input name:type:default:min:max
+ * @demo_input from_lat:number:43.7384
+ * @demo_input profile:select:car:car,truck,bike,foot
  */
 ```
 
@@ -126,7 +127,55 @@ Each endpoint must have a `/*@api ... */` block in the header:
 |------|--------|---------|------------|
 | `number` | `name:number:default:min:max` | `zoom:number:14:0:18` | `<input type="number">` |
 | `text` | `name:text:default` | `query:text:Budapest` | `<input type="text">` |
-| `select` | `name:select:default:opt1,opt2,opt3` | `profile:select:car:car,truck,bike,foot` | `<select>` dropdown |
+| `select` | `name:select:default:opt1,opt2,...` | `profile:select:car:car,truck,bike,foot` | `<select>` dropdown |
+
+**Reading inputs in handlers:**
+
+Input elements are generated with ID `{module}-{input_name}`. Handlers read values like:
+
+```javascript
+// In site/js/handlers/{module}.js
+const fromLat = parseFloat(document.getElementById('velo-from_lat').value);
+const profile = document.getElementById('velo-profile').value;  // Works for both input and select
+```
+
+**Complete example (Velo route):**
+
+Header annotation:
+```c
+/*@api
+ * GET /api/v1/route
+ * Calculate route between coordinates
+ * ...
+ * @demo json
+ * @demo_title Calculate a route in Monaco using WASM
+ * @demo_input from_lat:number:43.7384
+ * @demo_input from_lon:number:7.4246
+ * @demo_input to_lat:number:43.7311
+ * @demo_input to_lon:number:7.4197
+ * @demo_input profile:select:car:car,truck,bike,foot
+ * @demo_input mode:select:fastest:fastest,shortest
+ */
+```
+
+Handler in `site/js/handlers/velo.js`:
+```javascript
+async function calculateVeloRoute() {
+    const from = {
+        lat: parseFloat(document.getElementById('velo-from_lat').value),
+        lon: parseFloat(document.getElementById('velo-from_lon').value)
+    };
+    const to = {
+        lat: parseFloat(document.getElementById('velo-to_lat').value),
+        lon: parseFloat(document.getElementById('velo-to_lon').value)
+    };
+    const profile = document.getElementById('velo-profile').value;
+    const mode = document.getElementById('velo-mode').value;
+
+    const route = await veloDemo.route(from, to, { profile, mode });
+    // ... display result
+}
+```
 
 ### 4. WASM Exports
 
