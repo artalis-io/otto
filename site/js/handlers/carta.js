@@ -42,10 +42,10 @@ async function generateCartaTile() {
 async function generateCartaMVT() {
     if (!cartaDemo || !cartaDemo.isReady()) return;
 
-    const btn = document.getElementById('carta-mvt-try-btn');
-    const result = document.getElementById('carta-mvt-result');
-    const status = document.getElementById('carta-mvt-status');
-    const output = document.getElementById('carta-mvt-output');
+    const btn = document.getElementById('carta-tiles-z-x-y-mvt-try-btn');
+    const result = document.getElementById('carta-tiles-z-x-y-mvt-result');
+    const status = document.getElementById('carta-tiles-z-x-y-mvt-status');
+    const output = document.getElementById('carta-tiles-z-x-y-mvt-output');
 
     const z = 14, x = 8529, y = 5974;
 
@@ -92,10 +92,10 @@ async function generateCartaMVT() {
 async function generateCartaASCII() {
     if (!cartaDemo || !cartaDemo.isReady()) return;
 
-    const btn = document.getElementById('carta-ascii-try-btn');
-    const result = document.getElementById('carta-ascii-result');
-    const status = document.getElementById('carta-ascii-status');
-    const output = document.getElementById('carta-ascii-output');
+    const btn = document.getElementById('carta-tiles-z-x-y-txt-try-btn');
+    const result = document.getElementById('carta-tiles-z-x-y-txt-result');
+    const status = document.getElementById('carta-tiles-z-x-y-txt-status');
+    const output = document.getElementById('carta-tiles-z-x-y-txt-output');
 
     const z = 14, x = 8529, y = 5974;
 
@@ -178,8 +178,8 @@ function initCartaDemo() {
     pngStatus.textContent = `Carta ${cartaDemo.getVersion()} ready (Monaco PBF: ${(cartaDemo.getPBFSize() / 1024).toFixed(0)} KB)`;
     pngStatus.className = 'demo-status success';
     document.getElementById('carta-output').classList.add('visible');
-    enableBtn('carta-mvt-try-btn', 'Generate MVT');
-    enableBtn('carta-ascii-try-btn', 'Render ASCII');
+    enableBtn('carta-tiles-z-x-y-mvt-try-btn', 'Generate MVT');
+    enableBtn('carta-tiles-z-x-y-txt-try-btn', 'Render ASCII');
     enableBtn('tilejson-try-btn', 'Fetch TileJSON');
     enableBtn('health-try-btn', 'Check Health');
     enableBtn('stats-try-btn', 'Get Stats');
@@ -192,8 +192,8 @@ function handleCartaError(err) {
     pngStatus.textContent = 'Failed to load WASM module: ' + err.message;
     pngStatus.className = 'demo-status error';
     document.getElementById('carta-output').classList.add('visible');
-    disableBtn('carta-mvt-try-btn');
-    disableBtn('carta-ascii-try-btn');
+    disableBtn('carta-tiles-z-x-y-mvt-try-btn');
+    disableBtn('carta-tiles-z-x-y-txt-try-btn');
     disableBtn('tilejson-try-btn');
     disableBtn('health-try-btn');
     disableBtn('stats-try-btn');
