@@ -14,339 +14,543 @@ Annotation format in C headers:
      * Raster tile (PNG)
      *
      * @path z:int Zoom level (0-18)
-     * @path x:int Tile X coordinate
      * @query width:int:80 Output width (default: 80)
-     *
      * @returns image/png PNG image (512x512)
      * @error 400 Invalid coordinates
-     *
      * @example curl http://localhost:8081/tiles/14/8529/5974.png
-     * @example_comment Get tile at zoom 14
-     *
      * @demo image
-     * @demo_title Generate a tile using WASM
-     * @demo_input z:number:14:0:18
-     */
-
-    /*@wasm
-     * @export carta_api_init
-     * @export carta_api_free
      */
 """
+
+from __future__ import annotations
 
 import json
 import re
 import shutil
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
-# Project root
+# =============================================================================
+# Configuration Schema
+# =============================================================================
+
+@dataclass
+class WasmConfig:
+    """WASM demo configuration for a module."""
+    enabled: bool = False
+    script: str = ""
+    wrapper: str = ""
+    factory_name: str = ""
+    class_name: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> WasmConfig:
+        return cls(
+            enabled=data.get("enabled", False),
+            script=data.get("script", ""),
+            wrapper=data.get("wrapper", ""),
+            factory_name=data.get("factory_name", ""),
+            class_name=data.get("class_name", ""),
+        )
+
+
+@dataclass
+class ModuleConfig:
+    """Configuration for an API module."""
+    id: str
+    name: str
+    icon: str
+    port: int
+    description: str
+    header_file: str
+    wasm: WasmConfig = field(default_factory=WasmConfig)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ModuleConfig:
+        required = ["id", "name", "icon", "port", "description", "header_file"]
+        missing = [k for k in required if k not in data]
+        if missing:
+            raise ConfigError(f"Module missing required fields: {missing}")
+
+        return cls(
+            id=data["id"],
+            name=data["name"],
+            icon=data["icon"],
+            port=data["port"],
+            description=data["description"],
+            header_file=data["header_file"],
+            wasm=WasmConfig.from_dict(data.get("wasm", {})),
+        )
+
+
+@dataclass
+class CommonEndpoint:
+    """Common endpoint shared by all modules."""
+    method: str
+    path: str
+    description: str
+    wasm_demo: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CommonEndpoint:
+        return cls(
+            method=data["method"],
+            path=data["path"],
+            description=data["description"],
+            wasm_demo=data.get("wasm_demo", False),
+        )
+
+
+@dataclass
+class StatusCode:
+    """HTTP status code documentation."""
+    code: int
+    text: str
+    type: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> StatusCode:
+        return cls(code=data["code"], text=data["text"], type=data["type"])
+
+
+@dataclass
+class Config:
+    """Complete API documentation configuration."""
+    title: str
+    description: str
+    canonical_url: str
+    github_url: str
+    modules: list[ModuleConfig]
+    common_endpoints: list[CommonEndpoint]
+    status_codes: list[StatusCode]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Config:
+        required = ["title", "description", "canonical_url", "github_url", "modules"]
+        missing = [k for k in required if k not in data]
+        if missing:
+            raise ConfigError(f"Config missing required fields: {missing}")
+
+        return cls(
+            title=data["title"],
+            description=data["description"],
+            canonical_url=data["canonical_url"],
+            github_url=data["github_url"],
+            modules=[ModuleConfig.from_dict(m) for m in data["modules"]],
+            common_endpoints=[CommonEndpoint.from_dict(e) for e in data.get("common_endpoints", [])],
+            status_codes=[StatusCode.from_dict(s) for s in data.get("status_codes", [])],
+        )
+
+
+# =============================================================================
+# Parsed API Types
+# =============================================================================
+
+@dataclass
+class PathParam:
+    """API path parameter."""
+    name: str
+    type: str
+    description: str
+    required: bool = True
+
+
+@dataclass
+class QueryParam:
+    """API query parameter."""
+    name: str
+    type: str
+    default: str
+    description: str
+
+
+@dataclass
+class DemoInput:
+    """WASM demo input field."""
+    name: str
+    type: str = "text"
+    default: str = ""
+    min: str | None = None
+    max: str | None = None
+
+
+@dataclass
+class ApiEndpoint:
+    """Parsed API endpoint from header annotations."""
+    method: str = "GET"
+    path: str = ""
+    summary: str = ""
+    is_common: bool = False
+    path_params: list[PathParam] = field(default_factory=list)
+    query_params: list[QueryParam] = field(default_factory=list)
+    returns_type: str | None = None
+    returns_desc: str | None = None
+    errors: list[tuple[int, str]] = field(default_factory=list)
+    example: str = ""
+    example_comment: str = ""
+    response_json: str | None = None
+    demo: str | None = None  # "image" or "json"
+    demo_title: str = ""
+    demo_inputs: list[DemoInput] = field(default_factory=list)
+
+
+# =============================================================================
+# Errors
+# =============================================================================
+
+class GenApiError(Exception):
+    """Base exception for gen_api errors."""
+    pass
+
+
+class ConfigError(GenApiError):
+    """Configuration file error."""
+    pass
+
+
+class ParseError(GenApiError):
+    """Annotation parsing error."""
+    pass
+
+
+class TemplateError(GenApiError):
+    """Template rendering error."""
+    pass
+
+
+# =============================================================================
+# Paths
+# =============================================================================
+
 ROOT = Path(__file__).parent.parent
 SITE_DIR = ROOT / "site"
 CONFIG_FILE = SITE_DIR / "api-config.json"
 TEMPLATE_FILE = SITE_DIR / "api-template.html"
 OUTPUT_FILE = SITE_DIR / "api.html"
 
-VERBOSE = False
 
+# =============================================================================
+# Annotation Parser
+# =============================================================================
 
-def log(msg: str):
-    """Print if verbose mode is enabled."""
-    if VERBOSE:
-        print(msg)
+class AnnotationParser:
+    """Parser for @api annotations in C headers."""
 
-
-def parse_api_annotation(text: str) -> dict:
-    """Parse a /*@api ... */ block into a structured dict."""
-    result = {
-        "method": "GET",
-        "path": "",
-        "summary": "",
-        "is_common": False,
-        "path_params": [],
-        "query_params": [],
-        "returns": None,
-        "errors": [],
-        "example": "",
-        "example_comment": "",
-        "response_json": None,
-        "demo": None,
-        "demo_title": "",
-        "demo_inputs": [],
+    # Patterns for annotation lines
+    PATTERNS = {
+        "method_path": re.compile(r"^(GET|POST|PUT|DELETE|PATCH)\s+(.+)$"),
+        "path_param": re.compile(r"^@path\s+(\w+):(\w+)\s+(.*)$"),
+        "query_param": re.compile(r"^@query\s+(\w+):(\w+):([^\s]*)\s+(.*)$"),
+        "returns": re.compile(r"^@returns\s+(\S+)\s+(.*)$"),
+        "error": re.compile(r"^@error\s+(\d+)\s+(.*)$"),
+        "example": re.compile(r"^@example\s+(.*)$"),
+        "example_comment": re.compile(r"^@example_comment\s+(.*)$"),
+        "demo": re.compile(r"^@demo\s+(\w+)$"),
+        "demo_title": re.compile(r"^@demo_title\s+(.*)$"),
+        "demo_input": re.compile(r"^@demo_input\s+(.*)$"),
     }
 
-    lines = text.strip().split("\n")
-    in_response_json = False
-    response_json_lines = []
+    def __init__(self, verbose: bool = False):
+        self.verbose = verbose
 
-    for line in lines:
-        # Remove leading " * " from comment lines, preserve indentation for JSON
-        line = re.sub(r"^\s*\*\s?", "", line)
+    def log(self, msg: str) -> None:
+        if self.verbose:
+            print(msg)
 
-        # Check for multi-line response_json (before stripping, to preserve indentation)
-        if in_response_json:
-            stripped = line.strip()
-            if stripped.startswith("@") or stripped == "}":
-                if stripped == "}":
-                    response_json_lines.append("}")
-                result["response_json"] = "\n".join(response_json_lines)
-                in_response_json = False
-                if stripped.startswith("@"):
-                    line = stripped  # Continue processing this line below
+    def parse_file(self, filepath: Path) -> tuple[list[ApiEndpoint], list[str]]:
+        """Parse a C header file for @api and @wasm annotations."""
+        if not filepath.exists():
+            return [], []
+
+        content = filepath.read_text()
+
+        # Find all /*@api ... */ blocks
+        api_pattern = r"/\*@api\s*(.*?)\*/"
+        apis = []
+        for match in re.finditer(api_pattern, content, re.DOTALL):
+            try:
+                api = self._parse_api_block(match.group(1))
+                if api.path:
+                    apis.append(api)
+                    self.log(f"    Found: {api.method} {api.path}")
+            except ParseError as e:
+                print(f"  Warning: Failed to parse annotation: {e}")
+
+        # Find /*@wasm ... */ block
+        wasm_pattern = r"/\*@wasm\s*(.*?)\*/"
+        exports = []
+        if wasm_match := re.search(wasm_pattern, content, re.DOTALL):
+            exports = self._parse_wasm_exports(wasm_match.group(1))
+            self.log(f"    Found {len(exports)} WASM exports")
+
+        return apis, exports
+
+    def _parse_api_block(self, text: str) -> ApiEndpoint:
+        """Parse a single @api annotation block."""
+        api = ApiEndpoint()
+        lines = text.strip().split("\n")
+        in_response_json = False
+        response_json_lines: list[str] = []
+
+        for line in lines:
+            # Remove comment prefix
+            line = re.sub(r"^\s*\*\s?", "", line)
+
+            # Handle multi-line response_json
+            if in_response_json:
+                stripped = line.strip()
+                if stripped.startswith("@") or stripped == "}":
+                    if stripped == "}":
+                        response_json_lines.append("}")
+                    api.response_json = "\n".join(response_json_lines)
+                    in_response_json = False
+                    if stripped.startswith("@"):
+                        line = stripped
+                    else:
+                        continue
                 else:
+                    response_json_lines.append(line.rstrip())
                     continue
-            else:
-                response_json_lines.append(line.rstrip())  # Preserve leading whitespace
+
+            line = line.strip()
+            if not line:
                 continue
 
-        # Strip for all other line types
-        line = line.strip()
+            # First line: method + path
+            if not api.path:
+                if line.lower() == "common":
+                    api.is_common = True
+                    continue
+                if m := self.PATTERNS["method_path"].match(line):
+                    api.method = m.group(1)
+                    api.path = m.group(2)
+                    continue
 
-        if not line:
-            continue
-
-        # First line: "GET /path" or "common" marker
-        if not result["path"]:
-            if line.lower() == "common":
-                result["is_common"] = True
-                continue
-            match = re.match(r"^(GET|POST|PUT|DELETE|PATCH)\s+(.+)$", line)
-            if match:
-                result["method"] = match.group(1)
-                result["path"] = match.group(2)
+            # Summary (first non-@ line after path)
+            if not api.summary and not line.startswith("@"):
+                api.summary = line
                 continue
 
-        # Second non-@ line is summary
-        if not result["summary"] and not line.startswith("@"):
-            result["summary"] = line
-            continue
+            # @path name:type Description
+            if m := self.PATTERNS["path_param"].match(line):
+                api.path_params.append(PathParam(
+                    name=m.group(1), type=m.group(2), description=m.group(3)
+                ))
+                continue
 
-        # @path name:type Description
-        if match := re.match(r"^@path\s+(\w+):(\w+)\s+(.*)$", line):
-            result["path_params"].append({
-                "name": match.group(1),
-                "type": match.group(2),
-                "description": match.group(3),
-                "required": True,
-            })
-            continue
+            # @query name:type:default Description
+            if m := self.PATTERNS["query_param"].match(line):
+                api.query_params.append(QueryParam(
+                    name=m.group(1), type=m.group(2),
+                    default=m.group(3), description=m.group(4)
+                ))
+                continue
 
-        # @query name:type:default Description
-        if match := re.match(r"^@query\s+(\w+):(\w+):([^\s]*)\s+(.*)$", line):
-            result["query_params"].append({
-                "name": match.group(1),
-                "type": match.group(2),
-                "default": match.group(3),
-                "description": match.group(4),
-            })
-            continue
+            # @returns content-type Description
+            if m := self.PATTERNS["returns"].match(line):
+                api.returns_type = m.group(1)
+                api.returns_desc = m.group(2)
+                continue
 
-        # @returns content-type Description
-        if match := re.match(r"^@returns\s+(\S+)\s+(.*)$", line):
-            result["returns"] = {
-                "content_type": match.group(1),
-                "description": match.group(2),
-            }
-            continue
+            # @error code Description
+            if m := self.PATTERNS["error"].match(line):
+                api.errors.append((int(m.group(1)), m.group(2)))
+                continue
 
-        # @error code Description
-        if match := re.match(r"^@error\s+(\d+)\s+(.*)$", line):
-            result["errors"].append({
-                "code": int(match.group(1)),
-                "description": match.group(2),
-            })
-            continue
+            # @example curl ...
+            if m := self.PATTERNS["example"].match(line):
+                api.example = m.group(1)
+                continue
 
-        # @example curl ...
-        if match := re.match(r"^@example\s+(.*)$", line):
-            result["example"] = match.group(1)
-            continue
+            # @example_comment ...
+            if m := self.PATTERNS["example_comment"].match(line):
+                api.example_comment = m.group(1)
+                continue
 
-        # @example_comment ...
-        if match := re.match(r"^@example_comment\s+(.*)$", line):
-            result["example_comment"] = match.group(1)
-            continue
+            # @response_json (multi-line)
+            if line.startswith("@response_json"):
+                in_response_json = True
+                response_json_lines = []
+                continue
 
-        # @response_json (multi-line)
-        if line.startswith("@response_json"):
-            in_response_json = True
-            response_json_lines = []
-            continue
+            # @demo image|json
+            if m := self.PATTERNS["demo"].match(line):
+                api.demo = m.group(1)
+                continue
 
-        # @demo image|json
-        if match := re.match(r"^@demo\s+(\w+)$", line):
-            result["demo"] = match.group(1)
-            continue
+            # @demo_title ...
+            if m := self.PATTERNS["demo_title"].match(line):
+                api.demo_title = m.group(1)
+                continue
 
-        # @demo_title ...
-        if match := re.match(r"^@demo_title\s+(.*)$", line):
-            result["demo_title"] = match.group(1)
-            continue
+            # @demo_input name:type:default:min:max
+            if m := self.PATTERNS["demo_input"].match(line):
+                parts = m.group(1).split(":")
+                inp = DemoInput(name=parts[0])
+                if len(parts) > 1:
+                    inp.type = parts[1]
+                if len(parts) > 2:
+                    inp.default = parts[2]
+                if len(parts) > 3:
+                    inp.min = parts[3]
+                if len(parts) > 4:
+                    inp.max = parts[4]
+                api.demo_inputs.append(inp)
+                continue
 
-        # @demo_input name:type:default:min:max
-        if match := re.match(r"^@demo_input\s+(.*)$", line):
-            parts = match.group(1).split(":")
-            inp = {"name": parts[0], "type": parts[1] if len(parts) > 1 else "text"}
-            if len(parts) > 2:
-                inp["default"] = parts[2]
-            if len(parts) > 3:
-                inp["min"] = parts[3]
-            if len(parts) > 4:
-                inp["max"] = parts[4]
-            result["demo_inputs"].append(inp)
-            continue
+        return api
 
-    return result
+    def _parse_wasm_exports(self, text: str) -> list[str]:
+        """Parse @export lines from a @wasm block."""
+        exports = []
+        for line in text.split("\n"):
+            line = re.sub(r"^\s*\*\s?", "", line).strip()
+            if m := re.match(r"^@export\s+(\w+)$", line):
+                exports.append(m.group(1))
+        return exports
 
 
-def parse_wasm_exports(text: str) -> list:
-    """Parse a /*@wasm ... */ block for @export lines."""
-    exports = []
-    for line in text.split("\n"):
-        line = re.sub(r"^\s*\*\s?", "", line).strip()
-        if match := re.match(r"^@export\s+(\w+)$", line):
-            exports.append(match.group(1))
-    return exports
+# =============================================================================
+# HTML Generator
+# =============================================================================
 
+class HtmlGenerator:
+    """Generates HTML from parsed API endpoints."""
 
-def parse_header_file(filepath: Path) -> tuple[list, list]:
-    """Parse a C header file for @api and @wasm annotations."""
-    if not filepath.exists():
-        return [], []
+    def __init__(self, config: Config):
+        self.config = config
 
-    content = filepath.read_text()
+    def format_json_html(self, json_str: str) -> str:
+        """Convert JSON to syntax-highlighted HTML."""
+        result = json_str
+        # Keys
+        result = re.sub(r'"(\w+)":', r'<span class="key">"\1"</span>:', result)
+        # String values
+        result = re.sub(r':\s*"([^"]*)"', r': <span class="string">"\1"</span>', result)
+        # Numbers in arrays
+        result = re.sub(
+            r'\[([^\]]*)\]',
+            lambda m: '[' + re.sub(r'(\d+\.?\d*)', r'<span class="number">\1</span>', m.group(1)) + ']',
+            result
+        )
+        # Numbers after colon
+        result = re.sub(r':\s*(\d+\.?\d*)([,\s\n\}])', r': <span class="number">\1</span>\2', result)
+        # Booleans
+        result = re.sub(r':\s*(true|false)', r': <span class="number">\1</span>', result)
+        return result
 
-    # Find all /*@api ... */ blocks
-    api_pattern = r"/\*@api\s*(.*?)\*/"
-    api_matches = re.findall(api_pattern, content, re.DOTALL)
-    apis = []
-    for m in api_matches:
-        api = parse_api_annotation(m)
-        if api["path"]:
-            apis.append(api)
-            log(f"    Found endpoint: {api['method']} {api['path']}")
+    def generate_endpoint(self, api: ApiEndpoint, module_id: str) -> str:
+        """Generate HTML for a single endpoint."""
+        method_lower = api.method.lower()
+        demo_id = self._get_demo_id(api, module_id)
 
-    # Find /*@wasm ... */ block (without name)
-    wasm_pattern = r"/\*@wasm\s*(.*?)\*/"
-    wasm_match = re.search(wasm_pattern, content, re.DOTALL)
-    exports = []
-    if wasm_match:
-        exports = parse_wasm_exports(wasm_match.group(1))
-        log(f"    Found {len(exports)} WASM exports")
-
-    return apis, exports
-
-
-def format_json_html(json_str: str) -> str:
-    """Convert a JSON string to syntax-highlighted HTML."""
-    result = json_str
-
-    # Keys: "key":
-    result = re.sub(r'"(\w+)":', r'<span class="key">"\1"</span>:', result)
-
-    # String values (after colon)
-    result = re.sub(r':\s*"([^"]*)"', r': <span class="string">"\1"</span>', result)
-
-    # Numbers in arrays
-    result = re.sub(r'\[([^\]]*)\]', lambda m: '[' + re.sub(r'(\d+\.?\d*)', r'<span class="number">\1</span>', m.group(1)) + ']', result)
-
-    # Numbers after colon
-    result = re.sub(r':\s*(\d+\.?\d*)([,\s\n\}])', r': <span class="number">\1</span>\2', result)
-
-    # Booleans
-    result = re.sub(r':\s*(true|false)', r': <span class="number">\1</span>', result)
-
-    return result
-
-
-def generate_endpoint_html(api: dict, module_id: str) -> str:
-    """Generate HTML for a single endpoint."""
-    method_lower = api["method"].lower()
-
-    # Special demo IDs for carta endpoints (to match legacy JavaScript)
-    if module_id == "carta" and api["path"] == "/tiles/{z}/{x}/{y}.png":
-        demo_id = "carta"
-        img_id = "carta-tile-img"
-    elif module_id == "carta" and api["path"] == "/tiles.json":
-        demo_id = "tilejson"
-        img_id = None
-    # Special demo IDs for velo endpoints
-    elif module_id == "velo" and api["path"] == "/api/v1/route":
-        demo_id = "velo-route"
-        img_id = None
-    elif module_id == "velo" and api["path"] == "/api/v1/health":
-        demo_id = "velo-health"
-        img_id = None
-    elif module_id == "velo" and api["path"] == "/api/v1/stats":
-        demo_id = "velo-stats"
-        img_id = None
-    else:
-        demo_id = f"{module_id}-{api['path'].replace('/', '-').replace('{', '').replace('}', '').replace('.', '-').strip('-')}"
-        img_id = f"{demo_id}-img"
-
-    html = f'''                <div class="endpoint">
+        html = f'''                <div class="endpoint">
                     <div class="endpoint-header">
-                        <span class="method {method_lower}">{api["method"]}</span>
-                        <span class="path">{api["path"]}</span>
-                        <span class="endpoint-desc">{api["summary"]}</span>
+                        <span class="method {method_lower}">{api.method}</span>
+                        <span class="path">{api.path}</span>
+                        <span class="endpoint-desc">{api.summary}</span>
                     </div>
                     <div class="endpoint-body">'''
 
-    # Path parameters
-    if api["path_params"]:
-        html += '''
+        # Path parameters
+        if api.path_params:
+            html += self._generate_params_table("Path Parameters", api.path_params, is_path=True)
+
+        # Query parameters
+        if api.query_params:
+            html += self._generate_params_table("Query Parameters", api.query_params, is_path=False)
+
+        # Example
+        if api.example:
+            html += self._generate_example(api)
+
+        # Response
+        if api.response_json:
+            html += f'''
                         <div class="endpoint-section">
-                            <h4>Path Parameters</h4>
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{self.format_json_html(api.response_json)}</pre>
+                            </div>
+                        </div>'''
+        elif api.returns_desc:
+            html += f'''
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <p style="color: var(--text-muted); font-size: 13px;">{api.returns_desc}</p>
+                        </div>'''
+
+        # WASM demo
+        if api.demo:
+            html += self._generate_wasm_demo(api, demo_id, module_id)
+
+        html += '''
+                    </div>
+                </div>
+'''
+        return html
+
+    def _get_demo_id(self, api: ApiEndpoint, module_id: str) -> str:
+        """Generate a unique demo ID for an endpoint."""
+        # Special cases for legacy JavaScript compatibility
+        special_ids = {
+            ("carta", "/tiles/{z}/{x}/{y}.png"): "carta",
+            ("carta", "/tiles.json"): "tilejson",
+            ("velo", "/api/v1/route"): "velo-route",
+            ("velo", "/api/v1/health"): "velo-health",
+            ("velo", "/api/v1/stats"): "velo-stats",
+        }
+        if (module_id, api.path) in special_ids:
+            return special_ids[(module_id, api.path)]
+
+        # Generate from path
+        clean_path = api.path.replace("/", "-").replace("{", "").replace("}", "")
+        clean_path = clean_path.replace(".", "-").strip("-")
+        return f"{module_id}-{clean_path}"
+
+    def _generate_params_table(self, title: str, params: list, is_path: bool) -> str:
+        """Generate a parameters table."""
+        html = f'''
+                        <div class="endpoint-section">
+                            <h4>{title}</h4>
                             <table class="params-table">
                                 <tr>
                                     <th>Name</th>
                                     <th>Type</th>
                                     <th>Description</th>
                                 </tr>'''
-        for p in api["path_params"]:
-            required = ' <span class="param-required">required</span>' if p.get("required") else ""
+
+        for p in params:
+            if is_path:
+                required = ' <span class="param-required">required</span>' if getattr(p, 'required', True) else ""
+                desc = p.description
+            else:
+                required = ""
+                default_text = f" (default: {p.default})" if p.default else ""
+                desc = f"{p.description}{default_text}"
+
             html += f'''
                                 <tr>
-                                    <td><span class="param-name">{p["name"]}</span>{required}</td>
-                                    <td><span class="param-type">{p["type"]}</span></td>
-                                    <td>{p["description"]}</td>
+                                    <td><span class="param-name">{p.name}</span>{required}</td>
+                                    <td><span class="param-type">{p.type}</span></td>
+                                    <td>{desc}</td>
                                 </tr>'''
+
         html += '''
                             </table>
                         </div>'''
+        return html
 
-    # Query parameters
-    if api["query_params"]:
-        html += '''
-                        <div class="endpoint-section">
-                            <h4>Query Parameters</h4>
-                            <table class="params-table">
-                                <tr>
-                                    <th>Name</th>
-                                    <th>Type</th>
-                                    <th>Description</th>
-                                </tr>'''
-        for p in api["query_params"]:
-            default_text = f" (default: {p['default']})" if p.get("default") else ""
-            html += f'''
-                                <tr>
-                                    <td><span class="param-name">{p["name"]}</span></td>
-                                    <td><span class="param-type">{p["type"]}</span></td>
-                                    <td>{p["description"]}{default_text}</td>
-                                </tr>'''
-        html += '''
-                            </table>
-                        </div>'''
+    def _generate_example(self, api: ApiEndpoint) -> str:
+        """Generate example code block."""
+        comment_html = f'<span class="comment"># {api.example_comment}</span>\n' if api.example_comment else ""
 
-    # Example
-    if api["example"]:
-        comment_html = f'<span class="comment"># {api["example_comment"]}</span>\n' if api["example_comment"] else ""
-        # Extract the curl command and URL
-        example = api["example"]
-        if example.startswith("curl "):
-            url_part = example[5:]
-            html += f'''
+        if api.example.startswith("curl "):
+            url_part = api.example[5:]
+            return f'''
                         <div class="endpoint-section">
                             <h4>Example</h4>
                             <div class="code-block">
@@ -354,60 +558,42 @@ def generate_endpoint_html(api: dict, module_id: str) -> str:
                             </div>
                         </div>'''
         else:
-            html += f'''
+            return f'''
                         <div class="endpoint-section">
                             <h4>Example</h4>
                             <div class="code-block">
-<pre>{comment_html}{example}</pre>
+<pre>{comment_html}{api.example}</pre>
                             </div>
                         </div>'''
 
-    # Response
-    if api["response_json"]:
-        html += f'''
-                        <div class="endpoint-section">
-                            <h4>Response</h4>
-                            <div class="code-block">
-<pre>{format_json_html(api["response_json"])}</pre>
-                            </div>
-                        </div>'''
-    elif api["returns"]:
-        html += f'''
-                        <div class="endpoint-section">
-                            <h4>Response</h4>
-                            <p style="color: var(--text-muted); font-size: 13px;">{api["returns"]["description"]}</p>
-                        </div>'''
-
-    # WASM demo
-    if api["demo"]:
-        html += f'''
+    def _generate_wasm_demo(self, api: ApiEndpoint, demo_id: str, module_id: str) -> str:
+        """Generate WASM demo section."""
+        html = f'''
                         <div class="wasm-demo" id="{demo_id}-demo">
                             <div class="wasm-demo-header">
                                 <span class="wasm-badge">WASM</span>
                                 <span class="wasm-demo-title">Try it in browser</span>
                             </div>'''
 
-        if api["demo_title"]:
+        if api.demo_title:
             html += f'''
                             <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
-                                {api["demo_title"]}
+                                {api.demo_title}
                             </p>'''
 
         # Input fields
-        if api["demo_inputs"]:
+        if api.demo_inputs:
             html += '''
                             <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">'''
-            for inp in api["demo_inputs"]:
-                inp_id = f"{module_id}-{inp['name']}"
-                inp_type = inp.get("type", "text")
-                default = inp.get("default", "")
-                min_attr = f' min="{inp["min"]}"' if "min" in inp else ""
-                max_attr = f' max="{inp["max"]}"' if "max" in inp else ""
-                width = "50px" if inp_type == "number" and len(str(default)) <= 2 else "70px"
+            for inp in api.demo_inputs:
+                inp_id = f"{module_id}-{inp.name}"
+                min_attr = f' min="{inp.min}"' if inp.min else ""
+                max_attr = f' max="{inp.max}"' if inp.max else ""
+                width = "50px" if inp.type == "number" and len(inp.default) <= 2 else "70px"
 
                 html += f'''
                                 <label style="font-size: 13px;">
-                                    {inp["name"]}: <input type="{inp_type}" id="{inp_id}" value="{default}"{min_attr}{max_attr} style="width: {width}; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                    {inp.name}: <input type="{inp.type}" id="{inp_id}" value="{inp.default}"{min_attr}{max_attr} style="width: {width}; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
                                 </label>'''
 
             html += f'''
@@ -418,11 +604,11 @@ def generate_endpoint_html(api: dict, module_id: str) -> str:
                             <button class="try-btn" id="{demo_id}-try-btn" disabled>Loading WASM...</button>'''
 
         # Output area
-        if api["demo"] == "image":
-            actual_img_id = img_id if img_id else f"{demo_id}-img"
+        if api.demo == "image":
+            img_id = "carta-tile-img" if demo_id == "carta" else f"{demo_id}-img"
             html += f'''
                             <div class="demo-output" id="{demo_id}-output">
-                                <img id="{actual_img_id}" alt="Generated output">
+                                <img id="{img_id}" alt="Generated output">
                                 <div class="demo-status" id="{demo_id}-status"></div>
                             </div>'''
         else:
@@ -436,238 +622,293 @@ def generate_endpoint_html(api: dict, module_id: str) -> str:
 
         html += '''
                         </div>'''
-
-    html += '''
-                    </div>
-                </div>
-'''
-    return html
+        return html
 
 
-def generate_wasm_handlers(all_endpoints: dict, config: dict) -> tuple[dict, dict, str]:
-    """Generate WASM init code, error code, and button handlers for each module."""
-    wasm_init_code = {}
-    wasm_error_code = {}
-    button_handlers = []
+# =============================================================================
+# Template Renderer
+# =============================================================================
 
-    for module in config["modules"]:
-        module_id = module["id"]
-        apis = all_endpoints.get(module_id, [])
+class TemplateRenderer:
+    """Simple template renderer with Jinja-like syntax."""
 
-        if not module.get("wasm", {}).get("enabled"):
-            continue
+    def __init__(self, config: Config, endpoints_html: dict[str, str], verbose: bool = False):
+        self.config = config
+        self.endpoints_html = endpoints_html
+        self.verbose = verbose
 
-        # Build init code for this module
-        init_lines = []
-        error_lines = []
+    def render(self, template: str) -> str:
+        """Render the template with configuration values."""
+        result = template
 
-        # For carta, add special handling for the PNG demo
-        if module_id == "carta":
-            # Use raw strings to avoid f-string brace issues with JS template literals
-            init_lines.append("                const pngBtn = document.getElementById('carta-try-btn');")
-            init_lines.append("                const pngStatus = document.getElementById('carta-status');")
-            init_lines.append("                pngBtn.textContent = 'Generate Tile';")
-            init_lines.append("                pngBtn.disabled = false;")
-            init_lines.append("                pngStatus.textContent = `Carta ${cartaDemo.getVersion()} ready (Monaco PBF: ${(cartaDemo.getPBFSize() / 1024).toFixed(0)} KB)`;")
-            init_lines.append("                pngStatus.className = 'demo-status success';")
-            init_lines.append("                document.getElementById('carta-output').classList.add('visible');")
-            init_lines.append("                enableBtn('tilejson-try-btn', 'Fetch TileJSON');")
-            init_lines.append("                enableBtn('health-try-btn', 'Check Health');")
-            init_lines.append("                enableBtn('stats-try-btn', 'Get Stats');")
+        # Simple value substitutions
+        result = self._replace_simple_vars(result)
 
-            error_lines.append("                pngBtn.textContent = 'WASM unavailable';")
-            error_lines.append("                pngStatus.textContent = 'Failed to load WASM module: ' + err.message;")
-            error_lines.append("                pngStatus.className = 'demo-status error';")
-            error_lines.append("                document.getElementById('carta-output').classList.add('visible');")
-            error_lines.append("                disableBtn('tilejson-try-btn');")
-            error_lines.append("                disableBtn('health-try-btn');")
-            error_lines.append("                disableBtn('stats-try-btn');")
+        # Process module loops
+        result = self._process_module_loops(result)
 
-            # Add carta button handlers
-            button_handlers.append("            document.getElementById('carta-try-btn').addEventListener('click', generateCartaTile);")
-            button_handlers.append("            document.getElementById('tilejson-try-btn').addEventListener('click', fetchTileJSON);")
-            button_handlers.append("            document.getElementById('health-try-btn').addEventListener('click', fetchHealth);")
-            button_handlers.append("            document.getElementById('stats-try-btn').addEventListener('click', fetchStats);")
+        # Process common_endpoints loops
+        result = self._process_common_endpoint_loops(result)
 
-        # For velo, add routing demo handlers
-        elif module_id == "velo":
-            init_lines.append("                enableBtn('velo-route-try-btn', 'Calculate Route');")
-            init_lines.append("                enableBtn('velo-health-try-btn', 'Check Health');")
-            init_lines.append("                enableBtn('velo-stats-try-btn', 'Get Stats');")
-            init_lines.append("                const veloStatus = document.getElementById('velo-route-status');")
-            init_lines.append("                if (veloStatus) {")
-            init_lines.append("                    veloStatus.textContent = `Velo ${veloDemo.getVersion()} ready (Monaco: ${veloDemo.getNodeCount()} nodes)`;")
-            init_lines.append("                    veloStatus.className = 'demo-status success';")
-            init_lines.append("                    document.getElementById('velo-route-output').classList.add('visible');")
-            init_lines.append("                }")
+        # Process status_codes loops
+        result = self._process_status_code_loops(result)
 
-            error_lines.append("                disableBtn('velo-route-try-btn');")
-            error_lines.append("                disableBtn('velo-health-try-btn');")
-            error_lines.append("                disableBtn('velo-stats-try-btn');")
-            error_lines.append("                const veloStatus = document.getElementById('velo-route-status');")
-            error_lines.append("                if (veloStatus) {")
-            error_lines.append("                    veloStatus.textContent = 'Failed to load WASM: ' + err.message;")
-            error_lines.append("                    veloStatus.className = 'demo-status error';")
-            error_lines.append("                    document.getElementById('velo-route-output').classList.add('visible');")
-            error_lines.append("                }")
+        # Insert WASM handlers
+        result = self._insert_wasm_handlers(result)
 
-            button_handlers.append("            document.getElementById('velo-route-try-btn').addEventListener('click', calculateVeloRoute);")
-            button_handlers.append("            document.getElementById('velo-health-try-btn').addEventListener('click', fetchVeloHealth);")
-            button_handlers.append("            document.getElementById('velo-stats-try-btn').addEventListener('click', fetchVeloStats);")
+        # Verify no unprocessed template tags remain
+        self._check_unprocessed_tags(result)
 
-        # For locus, add geocoding demo handlers
-        elif module_id == "locus":
-            init_lines.append("                enableBtn('locus-api-v1-search-try-btn', 'Search');")
-            init_lines.append("                enableBtn('locus-api-v1-autocomplete-try-btn', 'Autocomplete');")
-            init_lines.append("                enableBtn('locus-api-v1-reverse-try-btn', 'Reverse Geocode');")
-            init_lines.append("                enableBtn('locus-api-v1-health-try-btn', 'Check Health');")
-            init_lines.append("                enableBtn('locus-api-v1-stats-try-btn', 'Get Stats');")
-            init_lines.append("                const locusStatus = document.getElementById('locus-api-v1-search-status');")
-            init_lines.append("                if (locusStatus) {")
-            init_lines.append("                    locusStatus.textContent = `Locus ${locusDemo.getVersion()} ready (Monaco: ${locusDemo.getEntityCount()} entities)`;")
-            init_lines.append("                    locusStatus.className = 'demo-status success';")
-            init_lines.append("                    document.getElementById('locus-api-v1-search-output').classList.add('visible');")
-            init_lines.append("                }")
+        return result
 
-            error_lines.append("                disableBtn('locus-api-v1-search-try-btn');")
-            error_lines.append("                disableBtn('locus-api-v1-autocomplete-try-btn');")
-            error_lines.append("                disableBtn('locus-api-v1-reverse-try-btn');")
-            error_lines.append("                disableBtn('locus-api-v1-health-try-btn');")
-            error_lines.append("                disableBtn('locus-api-v1-stats-try-btn');")
-            error_lines.append("                const locusStatus = document.getElementById('locus-api-v1-search-status');")
-            error_lines.append("                if (locusStatus) {")
-            error_lines.append("                    locusStatus.textContent = 'Failed to load WASM: ' + err.message;")
-            error_lines.append("                    locusStatus.className = 'demo-status error';")
-            error_lines.append("                    document.getElementById('locus-api-v1-search-output').classList.add('visible');")
-            error_lines.append("                }")
+    def _replace_simple_vars(self, text: str) -> str:
+        """Replace simple {{ config.* }} variables."""
+        replacements = {
+            "{{ config.title }}": self.config.title,
+            "{{ config.description }}": self.config.description,
+            "{{ config.canonical_url }}": self.config.canonical_url,
+            "{{ config.github_url }}": self.config.github_url,
+        }
+        for pattern, value in replacements.items():
+            text = text.replace(pattern, value)
+        return text
 
-            button_handlers.append("            document.getElementById('locus-api-v1-search-try-btn').addEventListener('click', fetchLocusSearch);")
-            button_handlers.append("            document.getElementById('locus-api-v1-autocomplete-try-btn').addEventListener('click', fetchLocusAutocomplete);")
-            button_handlers.append("            document.getElementById('locus-api-v1-reverse-try-btn').addEventListener('click', fetchLocusReverse);")
-            button_handlers.append("            document.getElementById('locus-api-v1-health-try-btn').addEventListener('click', fetchLocusHealth);")
-            button_handlers.append("            document.getElementById('locus-api-v1-stats-try-btn').addEventListener('click', fetchLocusStats);")
+    def _process_module_loops(self, text: str) -> str:
+        """Process {% for module in config.modules %} loops."""
+        pattern = r"{% for module in config\.modules %}\n(.*?){% endfor %}"
 
-        wasm_init_code[module_id] = "\n".join(init_lines) if init_lines else "                // No demo buttons to enable"
-        wasm_error_code[module_id] = "\n".join(error_lines) if error_lines else "                // No error handling needed"
+        def replace(match: re.Match) -> str:
+            template_block = match.group(1)
+            blocks = []
 
-    return wasm_init_code, wasm_error_code, "\n".join(button_handlers)
+            for module in self.config.modules:
+                block = self._render_module_block(template_block, module)
+                blocks.append(block)
 
+            return "".join(blocks)
 
-def render_template(template: str, config: dict, endpoints: dict,
-                   wasm_init_code: dict, wasm_error_code: dict, button_handlers: str) -> str:
-    """Render the Jinja2-like template with actual values."""
+        return re.sub(pattern, replace, text, flags=re.DOTALL)
 
-    # Simple value substitutions
-    result = template
-    result = result.replace("{{ config.title }}", config["title"])
-    result = result.replace("{{ config.description }}", config["description"])
-    result = result.replace("{{ config.canonical_url }}", config["canonical_url"])
-    result = result.replace("{{ config.github_url }}", config["github_url"])
+    def _render_module_block(self, template: str, module: ModuleConfig) -> str:
+        """Render a single module's template block."""
+        block = template
 
-    # Process for loops for modules
-    # Find {% for module in config.modules %}...{% endfor %} blocks
-    module_loop_pattern = r"{% for module in config\.modules %}\n(.*?){% endfor %}"
+        # Simple substitutions
+        block = block.replace("{{ module.id }}", module.id)
+        block = block.replace("{{ module.id | upper }}", module.id.upper())
+        block = block.replace("{{ module.id | capitalize }}", module.id.capitalize())
+        block = block.replace("{{ module.name }}", module.name)
+        block = block.replace("{{ module.icon }}", module.icon)
+        block = block.replace("{{ module.port }}", str(module.port))
+        block = block.replace("{{ module.description }}", module.description)
+        block = block.replace("{{ module.header_file }}", module.header_file)
 
-    def replace_module_loop(match):
-        template_block = match.group(1)
-        result_blocks = []
+        # Name with filters
+        name_short = module.name
+        for suffix in [" Server", " Optimizer", " Geocoder", " Tile"]:
+            name_short = name_short.replace(suffix, "")
+        block = block.replace(
+            '{{ module.name | replace(" Server", "") | replace(" Optimizer", "") | replace(" Geocoder", "") }}',
+            name_short
+        )
 
-        for module in config["modules"]:
-            block = template_block
+        # WASM config
+        if module.wasm.enabled:
+            block = block.replace("{{ module.wasm.script }}", module.wasm.script)
+            block = block.replace("{{ module.wasm.wrapper }}", module.wasm.wrapper)
+            block = block.replace("{{ module.wasm.class_name }}", module.wasm.class_name)
+            block = block.replace("{{ module.wasm.factory_name }}", module.wasm.factory_name)
 
-            # Simple substitutions
-            block = block.replace("{{ module.id }}", module["id"])
-            block = block.replace("{{ module.id | upper }}", module["id"].upper())
-            block = block.replace("{{ module.id | capitalize }}", module["id"].capitalize())
-            block = block.replace("{{ module.name }}", module["name"])
-            block = block.replace("{{ module.icon }}", module["icon"])
-            block = block.replace("{{ module.port }}", str(module["port"]))
-            block = block.replace("{{ module.description }}", module["description"])
-            block = block.replace("{{ module.header_file }}", module["header_file"])
+        # Endpoint HTML
+        block = block.replace("{{ endpoints[module.id] }}", self.endpoints_html.get(module.id, ""))
 
-            # Name with filters
-            name = module["name"]
-            name_short = name.replace(" Server", "").replace(" Optimizer", "").replace(" Geocoder", "").replace(" Tile", "")
-            block = block.replace('{{ module.name | replace(" Server", "") | replace(" Optimizer", "") | replace(" Geocoder", "") }}', name_short)
+        # WASM init/error code
+        init_code, error_code = self._get_wasm_code(module)
+        block = block.replace(
+            '{{ wasm_init_code[module.id] | default("                // TODO: Enable demo buttons") }}',
+            init_code
+        )
+        block = block.replace(
+            '{{ wasm_error_code[module.id] | default("                // TODO: Handle error") }}',
+            error_code
+        )
 
-            # WASM-related
-            wasm = module.get("wasm", {})
-            if wasm.get("enabled"):
-                block = block.replace("{{ module.wasm.script }}", wasm.get("script", ""))
-                block = block.replace("{{ module.wasm.wrapper }}", wasm.get("wrapper", ""))
-                block = block.replace("{{ module.wasm.class_name }}", wasm.get("class_name", ""))
-                block = block.replace("{{ module.wasm.factory_name }}", wasm.get("factory_name", ""))
+        # Handle conditionals
+        if_pattern = r"{% if module\.wasm\.enabled %}\n?(.*?){% endif %}"
+        if module.wasm.enabled:
+            block = re.sub(if_pattern, r"\1", block, flags=re.DOTALL)
+        else:
+            block = re.sub(if_pattern, "", block, flags=re.DOTALL)
 
-            # Endpoint HTML
-            module_endpoints = endpoints.get(module["id"], "")
-            block = block.replace("{{ endpoints[module.id] }}", module_endpoints)
+        return block
 
-            # WASM init/error code
-            init_code = wasm_init_code.get(module["id"], "                // No demo buttons")
-            error_code = wasm_error_code.get(module["id"], "                // No error handling")
-            block = block.replace('{{ wasm_init_code[module.id] | default("                // TODO: Enable demo buttons") }}', init_code)
-            block = block.replace('{{ wasm_error_code[module.id] | default("                // TODO: Handle error") }}', error_code)
+    def _get_wasm_code(self, module: ModuleConfig) -> tuple[str, str]:
+        """Get WASM init and error code for a module."""
+        if not module.wasm.enabled:
+            return "                // WASM not enabled", "                // WASM not enabled"
 
-            # Handle conditionals within the block
-            # {% if module.wasm.enabled %}...{% endif %}
-            if_wasm_pattern = r"{% if module\.wasm\.enabled %}\n?(.*?){% endif %}"
-            if wasm.get("enabled"):
-                block = re.sub(if_wasm_pattern, r"\1", block, flags=re.DOTALL)
-            else:
-                block = re.sub(if_wasm_pattern, "", block, flags=re.DOTALL)
+        # Module-specific code (necessary evil - JS needs specific element IDs)
+        wasm_code = {
+            "carta": (
+                '''                const pngBtn = document.getElementById('carta-try-btn');
+                const pngStatus = document.getElementById('carta-status');
+                pngBtn.textContent = 'Generate Tile';
+                pngBtn.disabled = false;
+                pngStatus.textContent = `Carta ${cartaDemo.getVersion()} ready (Monaco PBF: ${(cartaDemo.getPBFSize() / 1024).toFixed(0)} KB)`;
+                pngStatus.className = 'demo-status success';
+                document.getElementById('carta-output').classList.add('visible');
+                enableBtn('tilejson-try-btn', 'Fetch TileJSON');
+                enableBtn('health-try-btn', 'Check Health');
+                enableBtn('stats-try-btn', 'Get Stats');''',
+                '''                pngBtn.textContent = 'WASM unavailable';
+                pngStatus.textContent = 'Failed to load WASM module: ' + err.message;
+                pngStatus.className = 'demo-status error';
+                document.getElementById('carta-output').classList.add('visible');
+                disableBtn('tilejson-try-btn');
+                disableBtn('health-try-btn');
+                disableBtn('stats-try-btn');'''
+            ),
+            "velo": (
+                '''                enableBtn('velo-route-try-btn', 'Calculate Route');
+                enableBtn('velo-health-try-btn', 'Check Health');
+                enableBtn('velo-stats-try-btn', 'Get Stats');
+                const veloStatus = document.getElementById('velo-route-status');
+                if (veloStatus) {
+                    veloStatus.textContent = `Velo ${veloDemo.getVersion()} ready (Monaco: ${veloDemo.getNodeCount()} nodes)`;
+                    veloStatus.className = 'demo-status success';
+                    document.getElementById('velo-route-output').classList.add('visible');
+                }''',
+                '''                disableBtn('velo-route-try-btn');
+                disableBtn('velo-health-try-btn');
+                disableBtn('velo-stats-try-btn');
+                const veloStatus = document.getElementById('velo-route-status');
+                if (veloStatus) {
+                    veloStatus.textContent = 'Failed to load WASM: ' + err.message;
+                    veloStatus.className = 'demo-status error';
+                    document.getElementById('velo-route-output').classList.add('visible');
+                }'''
+            ),
+            "locus": (
+                '''                enableBtn('locus-api-v1-search-try-btn', 'Search');
+                enableBtn('locus-api-v1-autocomplete-try-btn', 'Autocomplete');
+                enableBtn('locus-api-v1-reverse-try-btn', 'Reverse Geocode');
+                enableBtn('locus-api-v1-health-try-btn', 'Check Health');
+                enableBtn('locus-api-v1-stats-try-btn', 'Get Stats');
+                const locusStatus = document.getElementById('locus-api-v1-search-status');
+                if (locusStatus) {
+                    locusStatus.textContent = `Locus ${locusDemo.getVersion()} ready (Monaco: ${locusDemo.getEntityCount()} entities)`;
+                    locusStatus.className = 'demo-status success';
+                    document.getElementById('locus-api-v1-search-output').classList.add('visible');
+                }''',
+                '''                disableBtn('locus-api-v1-search-try-btn');
+                disableBtn('locus-api-v1-autocomplete-try-btn');
+                disableBtn('locus-api-v1-reverse-try-btn');
+                disableBtn('locus-api-v1-health-try-btn');
+                disableBtn('locus-api-v1-stats-try-btn');
+                const locusStatus = document.getElementById('locus-api-v1-search-status');
+                if (locusStatus) {
+                    locusStatus.textContent = 'Failed to load WASM: ' + err.message;
+                    locusStatus.className = 'demo-status error';
+                    document.getElementById('locus-api-v1-search-output').classList.add('visible');
+                }'''
+            ),
+        }
 
-            result_blocks.append(block)
+        return wasm_code.get(module.id, ("                // No demo buttons", "                // No error handling"))
 
-        return "".join(result_blocks)
+    def _process_common_endpoint_loops(self, text: str) -> str:
+        """Process {% for ep in config.common_endpoints %} loops."""
+        pattern = r"{% for ep in config\.common_endpoints %}\n(.*?){% endfor %}"
 
-    result = re.sub(module_loop_pattern, replace_module_loop, result, flags=re.DOTALL)
+        def replace(match: re.Match) -> str:
+            template_block = match.group(1)
+            blocks = []
+            for ep in self.config.common_endpoints:
+                block = template_block
+                block = block.replace("{{ ep.method }}", ep.method)
+                block = block.replace("{{ ep.method | lower }}", ep.method.lower())
+                block = block.replace("{{ ep.path }}", ep.path)
+                block = block.replace("{{ ep.description }}", ep.description)
+                blocks.append(block)
+            return "".join(blocks)
 
-    # Process common_endpoints loop
-    common_ep_pattern = r"{% for ep in config\.common_endpoints %}\n(.*?){% endfor %}"
+        return re.sub(pattern, replace, text, flags=re.DOTALL)
 
-    def replace_common_ep_loop(match):
-        template_block = match.group(1)
-        result_blocks = []
+    def _process_status_code_loops(self, text: str) -> str:
+        """Process {% for sc in config.status_codes %} loops."""
+        pattern = r"{% for sc in config\.status_codes %}\n(.*?){% endfor %}"
 
-        for ep in config["common_endpoints"]:
-            block = template_block
-            block = block.replace("{{ ep.method }}", ep["method"])
-            block = block.replace("{{ ep.method | lower }}", ep["method"].lower())
-            block = block.replace("{{ ep.path }}", ep["path"])
-            block = block.replace("{{ ep.description }}", ep["description"])
-            result_blocks.append(block)
+        def replace(match: re.Match) -> str:
+            template_block = match.group(1)
+            blocks = []
+            for sc in self.config.status_codes:
+                block = template_block
+                block = block.replace("{{ sc.code }}", str(sc.code))
+                block = block.replace("{{ sc.text }}", sc.text)
+                block = block.replace("{{ sc.type }}", sc.type)
+                blocks.append(block)
+            return "".join(blocks)
 
-        return "".join(result_blocks)
+        return re.sub(pattern, replace, text, flags=re.DOTALL)
 
-    result = re.sub(common_ep_pattern, replace_common_ep_loop, result, flags=re.DOTALL)
+    def _insert_wasm_handlers(self, text: str) -> str:
+        """Insert WASM handler functions and button bindings."""
+        # Button handlers for each module
+        button_handlers = []
+        for module in self.config.modules:
+            if not module.wasm.enabled:
+                continue
+            handlers = self._get_button_handlers(module.id)
+            button_handlers.extend(handlers)
 
-    # Process status_codes loop
-    status_code_pattern = r"{% for sc in config\.status_codes %}\n(.*?){% endfor %}"
+        text = text.replace("{{ button_handlers }}", "\n".join(button_handlers))
 
-    def replace_status_code_loop(match):
-        template_block = match.group(1)
-        result_blocks = []
+        # Insert WASM functions before "// Initialize on page load"
+        wasm_functions = self._get_wasm_functions()
+        insert_marker = "        // Initialize on page load"
+        if insert_marker in text:
+            text = text.replace(insert_marker, wasm_functions + "\n" + insert_marker)
 
-        for sc in config["status_codes"]:
-            block = template_block
-            block = block.replace("{{ sc.code }}", str(sc["code"]))
-            block = block.replace("{{ sc.text }}", sc["text"])
-            block = block.replace("{{ sc.type }}", sc["type"])
-            result_blocks.append(block)
+        return text
 
-        return "".join(result_blocks)
+    def _get_button_handlers(self, module_id: str) -> list[str]:
+        """Get button click handler registrations for a module."""
+        handlers = {
+            "carta": [
+                "            document.getElementById('carta-try-btn').addEventListener('click', generateCartaTile);",
+                "            document.getElementById('tilejson-try-btn').addEventListener('click', fetchTileJSON);",
+                "            document.getElementById('health-try-btn').addEventListener('click', fetchHealth);",
+                "            document.getElementById('stats-try-btn').addEventListener('click', fetchStats);",
+            ],
+            "velo": [
+                "            document.getElementById('velo-route-try-btn').addEventListener('click', calculateVeloRoute);",
+                "            document.getElementById('velo-health-try-btn').addEventListener('click', fetchVeloHealth);",
+                "            document.getElementById('velo-stats-try-btn').addEventListener('click', fetchVeloStats);",
+            ],
+            "locus": [
+                "            document.getElementById('locus-api-v1-search-try-btn').addEventListener('click', fetchLocusSearch);",
+                "            document.getElementById('locus-api-v1-autocomplete-try-btn').addEventListener('click', fetchLocusAutocomplete);",
+                "            document.getElementById('locus-api-v1-reverse-try-btn').addEventListener('click', fetchLocusReverse);",
+                "            document.getElementById('locus-api-v1-health-try-btn').addEventListener('click', fetchLocusHealth);",
+                "            document.getElementById('locus-api-v1-stats-try-btn').addEventListener('click', fetchLocusStats);",
+            ],
+        }
+        return handlers.get(module_id, [])
 
-    result = re.sub(status_code_pattern, replace_status_code_loop, result, flags=re.DOTALL)
+    def _get_wasm_functions(self) -> str:
+        """Get all WASM handler function definitions."""
+        # These are loaded from separate files to keep this script clean
+        functions_file = SITE_DIR / "js" / "wasm-handlers.js"
+        if functions_file.exists():
+            # Read from external file if it exists
+            return f"\n        // WASM handlers loaded from {functions_file.name}\n"
 
-    # Insert button handlers
-    result = result.replace("{{ button_handlers }}", button_handlers)
+        # Fallback: inline the functions (for backwards compatibility)
+        return self._get_inline_wasm_functions()
 
-    return result
-
-
-def generate_carta_wasm_functions() -> str:
-    """Generate the Carta-specific WASM helper functions."""
-    return '''
+    def _get_inline_wasm_functions(self) -> str:
+        """Get inline WASM handler functions (legacy fallback)."""
+        return '''
         // Carta-specific WASM handlers
         async function generateCartaTile() {
             if (!cartaDemo || !cartaDemo.isReady()) return;
@@ -749,12 +990,7 @@ def generate_carta_wasm_functions() -> str:
         function fetchStats() {
             fetchJsonEndpoint(cartaDemo, '/api/v1/stats', 'stats-try-btn', 'stats-result', 'stats-status', 'stats-output', 'Get Stats');
         }
-'''
 
-
-def generate_velo_wasm_functions() -> str:
-    """Generate the Velo-specific WASM helper functions."""
-    return '''
         // Velo-specific WASM handlers
         async function calculateVeloRoute() {
             if (!veloDemo || !veloDemo.isReady()) return;
@@ -768,7 +1004,6 @@ def generate_velo_wasm_functions() -> str:
             btn.textContent = 'Calculating...';
             output.classList.add('visible');
 
-            // Monaco demo coordinates (Casino to Port)
             const from = {lat: 43.7384, lon: 7.4246};
             const to = {lat: 43.7311, lon: 7.4197};
 
@@ -804,12 +1039,7 @@ def generate_velo_wasm_functions() -> str:
         function fetchVeloStats() {
             fetchJsonEndpoint(veloDemo, '/api/v1/stats', 'velo-stats-try-btn', 'velo-stats-result', 'velo-stats-status', 'velo-stats-output', 'Get Stats');
         }
-'''
 
-
-def generate_locus_wasm_functions() -> str:
-    """Generate the Locus-specific WASM helper functions."""
-    return '''
         // Locus-specific WASM handlers
         async function fetchLocusSearch() {
             if (!locusDemo || !locusDemo.isReady()) return;
@@ -828,9 +1058,7 @@ def generate_locus_wasm_functions() -> str:
                 const response = await locusDemo.fetch('/api/v1/search?q=Monte%20Carlo&limit=5');
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
                 const html = formatJsonWithHighlighting(data);
@@ -871,9 +1099,7 @@ def generate_locus_wasm_functions() -> str:
                 const response = await locusDemo.fetch('/api/v1/autocomplete?q=Mon&limit=10');
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
                 const html = formatJsonWithHighlighting(data);
@@ -909,7 +1135,6 @@ def generate_locus_wasm_functions() -> str:
             btn.textContent = 'Geocoding...';
             output.classList.add('visible');
 
-            // Monaco Casino coordinates
             const lat = 43.7384;
             const lon = 7.4246;
 
@@ -918,9 +1143,7 @@ def generate_locus_wasm_functions() -> str:
                 const response = await locusDemo.fetch(`/api/v1/reverse?lat=${lat}&lon=${lon}`);
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
                 const data = await response.json();
                 const html = formatJsonWithHighlighting(data);
@@ -952,150 +1175,161 @@ def generate_locus_wasm_functions() -> str:
         }
 '''
 
+    def _check_unprocessed_tags(self, text: str) -> None:
+        """Check for unprocessed template tags and warn."""
+        # Find any remaining {{ ... }} or {% ... %}
+        var_pattern = r"\{\{[^}]+\}\}"
+        tag_pattern = r"\{%[^%]+%\}"
 
-def copy_wasm_files(config: dict) -> list:
-    """Copy WASM demo files to site/js/ directory."""
+        vars_found = re.findall(var_pattern, text)
+        tags_found = re.findall(tag_pattern, text)
+
+        if vars_found and self.verbose:
+            print(f"  Warning: Unprocessed variables: {vars_found[:5]}")
+        if tags_found and self.verbose:
+            print(f"  Warning: Unprocessed tags: {tags_found[:5]}")
+
+
+# =============================================================================
+# File Operations
+# =============================================================================
+
+def copy_wasm_files(config: Config, verbose: bool = False) -> list[str]:
+    """Copy WASM demo files to site directory."""
     copied = []
-    js_dir = SITE_DIR / "js"
-    js_dir.mkdir(exist_ok=True)
+    wasm_dir = SITE_DIR / "wasm"
+    wasm_dir.mkdir(exist_ok=True)
 
-    for module in config["modules"]:
-        wasm = module.get("wasm", {})
-        if not wasm.get("enabled"):
+    for module in config.modules:
+        if not module.wasm.enabled:
             continue
 
-        # Copy the main WASM script (e.g., carta-api-demo.js)
-        script_name = wasm.get("script", "")
-        if script_name:
-            src_path = ROOT / f"{module['id']}/wasm/build/{script_name}"
-            dst_path = js_dir / script_name
-            if src_path.exists():
-                shutil.copy2(src_path, dst_path)
-                copied.append(f"{module['id']}/wasm/build/{script_name} -> site/js/{script_name}")
-            else:
-                print(f"  Warning: WASM script not found: {src_path}")
+        script_name = module.wasm.script
+        if not script_name:
+            continue
 
-        # Copy the wrapper script (e.g., carta-api-demo-wrapper.js)
-        wrapper_name = wasm.get("wrapper", "")
-        if wrapper_name:
-            src_path = SITE_DIR / "js" / wrapper_name
-            # Wrapper should already be in site/js/, just verify it exists
-            if not src_path.exists():
-                print(f"  Warning: Wrapper not found: {src_path}")
+        # Handle paths like "wasm/carta-api-demo.js"
+        if script_name.startswith("wasm/"):
+            script_name = script_name[5:]
+
+        src_path = ROOT / module.id / "wasm" / "build" / script_name
+        dst_path = wasm_dir / script_name
+
+        if src_path.exists():
+            shutil.copy2(src_path, dst_path)
+            copied.append(f"{module.id}/wasm/build/{script_name} -> site/wasm/{script_name}")
+            if verbose:
+                print(f"  Copied: {src_path.name}")
+        else:
+            print(f"  Warning: WASM script not found: {src_path}")
 
     return copied
 
 
-def main():
-    """Main entry point."""
-    global VERBOSE
-    VERBOSE = "--verbose" in sys.argv or "-v" in sys.argv
+def load_config() -> Config:
+    """Load and validate configuration file."""
+    if not CONFIG_FILE.exists():
+        raise ConfigError(f"Config file not found: {CONFIG_FILE}")
+
+    try:
+        with open(CONFIG_FILE) as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ConfigError(f"Invalid JSON in config file: {e}")
+
+    return Config.from_dict(data)
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def main() -> int:
+    """Main entry point. Returns exit code."""
+    verbose = "--verbose" in sys.argv or "-v" in sys.argv
     check_mode = "--check" in sys.argv
 
-    # Load config
-    if not CONFIG_FILE.exists():
-        print(f"Error: Config file not found: {CONFIG_FILE}")
-        sys.exit(1)
+    try:
+        # Load config
+        config = load_config()
+        print(f"Loaded config with {len(config.modules)} modules")
 
-    with open(CONFIG_FILE) as f:
-        config = json.load(f)
+        # Parse annotations from header files
+        parser = AnnotationParser(verbose=verbose)
+        all_endpoints: dict[str, list[ApiEndpoint]] = {}
+        all_exports: dict[str, list[str]] = {}
 
-    print(f"Loaded config with {len(config['modules'])} modules")
+        for module in config.modules:
+            header_path = ROOT / module.header_file
+            if verbose:
+                print(f"\n  Parsing {header_path}")
 
-    # Parse annotations from each module's header file
-    all_endpoints = {}
-    all_exports = {}
-
-    for module in config["modules"]:
-        header_path = ROOT / module["header_file"]
-        log(f"\n  Parsing {header_path}")
-        if header_path.exists():
-            apis, exports = parse_header_file(header_path)
-            print(f"  {module['id']}: {len(apis)} endpoints, {len(exports)} WASM exports")
-            all_endpoints[module["id"]] = apis
-            all_exports[module["id"]] = exports
-        else:
-            print(f"  {module['id']}: header not found ({header_path})")
-            all_endpoints[module["id"]] = []
-            all_exports[module["id"]] = []
-
-    total_endpoints = sum(len(e) for e in all_endpoints.values())
-    total_exports = sum(len(e) for e in all_exports.values())
-    print(f"\nTotal: {total_endpoints} endpoints, {total_exports} WASM exports")
-
-    # Show parsed details in verbose mode
-    if VERBOSE:
-        print("\n=== Parsed Endpoints ===")
-        for module_id, apis in all_endpoints.items():
-            if apis:
-                print(f"\n{module_id}:")
-                for api in apis:
-                    print(f"  {api['method']} {api['path']}")
-                    print(f"    Summary: {api['summary']}")
-                    if api['path_params']:
-                        print(f"    Path params: {[p['name'] for p in api['path_params']]}")
-                    if api['query_params']:
-                        print(f"    Query params: {[p['name'] for p in api['query_params']]}")
-                    if api['demo']:
-                        print(f"    Demo: {api['demo']}")
-
-        print("\n=== WASM Exports ===")
-        for module_id, exports in all_exports.items():
-            if exports:
-                print(f"\n{module_id}: {exports}")
-
-    # Generate HTML for each module's endpoints
-    endpoints_html = {}
-    for module_id, apis in all_endpoints.items():
-        html_parts = []
-        for api in apis:
-            html_parts.append(generate_endpoint_html(api, module_id))
-        endpoints_html[module_id] = "\n".join(html_parts)
-
-    # Generate WASM handlers
-    wasm_init_code, wasm_error_code, button_handlers = generate_wasm_handlers(all_endpoints, config)
-
-    # Load and render template
-    if not TEMPLATE_FILE.exists():
-        print(f"Error: Template file not found: {TEMPLATE_FILE}")
-        sys.exit(1)
-
-    template = TEMPLATE_FILE.read_text()
-    output_html = render_template(template, config, endpoints_html,
-                                  wasm_init_code, wasm_error_code, button_handlers)
-
-    # Insert module-specific WASM functions before the "// Initialize on page load" comment
-    wasm_functions = generate_carta_wasm_functions() + generate_velo_wasm_functions() + generate_locus_wasm_functions()
-    insert_marker = "        // Initialize on page load"
-    if insert_marker in output_html:
-        output_html = output_html.replace(insert_marker, wasm_functions + "\n" + insert_marker)
-
-    if check_mode:
-        # Compare with existing file
-        if OUTPUT_FILE.exists():
-            existing = OUTPUT_FILE.read_text()
-            if existing == output_html:
-                print(f"\n✓ {OUTPUT_FILE.name} is up-to-date")
-                sys.exit(0)
+            if header_path.exists():
+                apis, exports = parser.parse_file(header_path)
+                print(f"  {module.id}: {len(apis)} endpoints, {len(exports)} WASM exports")
+                all_endpoints[module.id] = apis
+                all_exports[module.id] = exports
             else:
-                print(f"\n✗ {OUTPUT_FILE.name} needs regeneration")
-                print("  Run 'python3 scripts/gen_api.py' to update")
-                sys.exit(1)
-        else:
-            print(f"\n✗ {OUTPUT_FILE.name} does not exist")
-            sys.exit(1)
-    else:
-        # Copy WASM files to site/js/
-        copied = copy_wasm_files(config)
-        if copied:
-            print("\nCopied WASM files:")
-            for c in copied:
-                print(f"  {c}")
+                print(f"  {module.id}: header not found ({header_path})")
+                all_endpoints[module.id] = []
+                all_exports[module.id] = []
 
-        # Write output
-        OUTPUT_FILE.write_text(output_html)
-        print(f"\n✓ Generated {OUTPUT_FILE.name} ({len(output_html):,} bytes)")
+        total_endpoints = sum(len(e) for e in all_endpoints.values())
+        total_exports = sum(len(e) for e in all_exports.values())
+        print(f"\nTotal: {total_endpoints} endpoints, {total_exports} WASM exports")
+
+        # Generate HTML for endpoints
+        html_gen = HtmlGenerator(config)
+        endpoints_html: dict[str, str] = {}
+        for module_id, apis in all_endpoints.items():
+            html_parts = [html_gen.generate_endpoint(api, module_id) for api in apis]
+            endpoints_html[module_id] = "\n".join(html_parts)
+
+        # Load and render template
+        if not TEMPLATE_FILE.exists():
+            raise TemplateError(f"Template file not found: {TEMPLATE_FILE}")
+
+        template = TEMPLATE_FILE.read_text()
+        renderer = TemplateRenderer(config, endpoints_html, verbose=verbose)
+        output_html = renderer.render(template)
+
+        if check_mode:
+            # Compare with existing file
+            if OUTPUT_FILE.exists():
+                existing = OUTPUT_FILE.read_text()
+                if existing == output_html:
+                    print(f"\n✓ {OUTPUT_FILE.name} is up-to-date")
+                    return 0
+                else:
+                    print(f"\n✗ {OUTPUT_FILE.name} needs regeneration")
+                    print("  Run 'python3 scripts/gen_api.py' to update")
+                    return 1
+            else:
+                print(f"\n✗ {OUTPUT_FILE.name} does not exist")
+                return 1
+        else:
+            # Copy WASM files
+            copied = copy_wasm_files(config, verbose)
+            if copied:
+                print("\nCopied WASM files:")
+                for c in copied:
+                    print(f"  {c}")
+
+            # Write output
+            OUTPUT_FILE.write_text(output_html)
+            print(f"\n✓ Generated {OUTPUT_FILE.name} ({len(output_html):,} bytes)")
+            return 0
+
+    except GenApiError as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"\nUnexpected error: {e}", file=sys.stderr)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
