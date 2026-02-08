@@ -128,6 +128,20 @@ int fw_api_handle(FWAPIContext *ctx,
  * @error 422 Problem is infeasible (cannot reach destination)
  * @error 500 Internal server error
  *
+ * @request_body json
+ * {
+ *   "total_distance": 500,
+ *   "tank_capacity": 100,
+ *   "current_fuel": 30,
+ *   "consumption_mpg": 6.5,
+ *   "minimum_fuel": 25,
+ *   "stations": [
+ *     {"id": 1, "distance": 100, "price": 3.50},
+ *     {"id": 2, "distance": 250, "price": 3.25},
+ *     {"id": 3, "distance": 400, "price": 3.75}
+ *   ]
+ * }
+ *
  * @response_json
  * {
  *   "status": "optimal",

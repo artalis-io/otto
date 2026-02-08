@@ -1610,6 +1610,23 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                     </div>
                     <div class="endpoint-body">
                         <div class="endpoint-section">
+                            <h4>Request Body <span style="color: var(--text-muted); font-weight: normal; font-size: 12px;">(JSON)</span></h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"total_distance"</span>: <span class="number">500</span>,
+  <span class="key">"tank_capacity"</span>: <span class="number">100</span>,
+  <span class="key">"current_fuel"</span>: <span class="number">30</span>,
+  <span class="key">"consumption_mpg"</span>: <span class="number">6.5</span>,
+  <span class="key">"minimum_fuel"</span>: <span class="number">25</span>,
+  <span class="key">"stations"</span>: [
+    {<span class="key">"id"</span>: <span class="number">1</span>, <span class="key">"distance"</span>: <span class="number">100</span>, <span class="key">"price"</span>: <span class="number">3.50</span>},
+    {<span class="key">"id"</span>: <span class="number">2</span>, <span class="key">"distance"</span>: <span class="number">250</span>, <span class="key">"price"</span>: <span class="number">3.25</span>},
+    {<span class="key">"id"</span>: <span class="number">3</span>, <span class="key">"distance"</span>: <span class="number">400</span>, <span class="key">"price"</span>: <span class="number">3.75</span>}
+  ]
+}</pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
                             <h4>Response</h4>
                             <div class="code-block">
 <pre>{
