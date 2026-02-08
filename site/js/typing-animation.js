@@ -136,11 +136,30 @@
         });
     }
 
+    // Trigger animations for blocks already in viewport
+    function animateVisibleBlocks() {
+        blockData.forEach((data, block) => {
+            if (data.animated) return;
+            const rect = block.getBoundingClientRect();
+            const inViewport = rect.top < window.innerHeight && rect.bottom > 0;
+            if (inViewport) {
+                typeContent(block);
+                observer.unobserve(block);
+            }
+        });
+    }
+
     if (document.readyState === 'complete') {
-        requestAnimationFrame(initBlocks);
+        requestAnimationFrame(() => {
+            initBlocks();
+            animateVisibleBlocks();
+        });
     } else {
         window.addEventListener('load', function() {
-            requestAnimationFrame(initBlocks);
+            requestAnimationFrame(() => {
+                initBlocks();
+                animateVisibleBlocks();
+            });
         });
     }
 
