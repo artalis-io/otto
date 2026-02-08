@@ -135,96 +135,64 @@ All practical endpoints now have WASM demos:
 
 ## Phase 4: Simplify Build Pipeline
 
-**Status:** Planned
-**Effort:** 4-6 hours
+**Status:** In Progress (Partial)
+**Effort:** 4-6 hours (reduced scope)
 
-### Current Flow (Too Many Files)
+### Current Flow
 
 ```
 C headers (@api annotations)
        |
-api-config.json (manual module config, button mappings)
+api-config.json (module config, button mappings)
        |
 build-api-docs.py (parser + generator)
        |
 api-template.html (Jinja-like template)
        |
-js/handlers/*.js (manual, 4 files)
+js/handlers/*.js (4 handler files)
        |
 site/api.html (output)
 ```
 
-### Proposed Flow
+### Implemented Improvements
 
-```
-C headers (ALL metadata in annotations)
-       |
-build-api-docs.py (single script)
-       |
-site/api.html + site/js/api-handlers.js (both generated)
-```
+1. **Added `@demo_fetch` annotation** - For simple fetch endpoints, specify the path directly:
+   ```c
+   * @demo json
+   * @demo_fetch /api/v1/health
+   ```
 
-### New Annotation Schema
+2. **Added `@demo_handler` annotation** - For custom handlers:
+   ```c
+   * @demo image
+   * @demo_handler generateCartaTile
+   ```
 
-File-level module metadata:
+3. **Added HandlerGenerator class** - Infrastructure for auto-generating simple handlers
 
-```c
-/*@module
- * @name Carta Tile Server
- * @icon 🗺️
- * @port 8081
- * @description Serves vector tiles (MVT), raster tiles (PNG)...
- * @wasm_factory CartaAPIDemo
- * @wasm_class CartaDemo
- */
-```
+### Kept As-Is (Working Well)
 
-Endpoint with demo config:
+- `api-config.json` for module-level config (ports, WASM factory names)
+- Custom handlers in `js/handlers/*.js` for complex demos (tile generation, routing)
+- Template-based HTML generation
 
-```c
-/*@api
- * GET /tiles/{z}/{x}/{y}.png
- * Raster tile (PNG)
- *
- * @path z:int:required Zoom level (0-18)
- * @returns image/png
- *
- * @demo type:image
- * @demo input:z:number:14:0:18 "Zoom level"
- * @demo input:x:number:8529 "Tile X"
- * @demo input:y:number:5974 "Tile Y"
- * @demo call:getTileDataURL(z,x,y)
- */
-```
+### Why Not Full Automation
 
-### Generated Handler Code
+The original plan to move ALL config into C headers was reconsidered:
 
-`build-api-docs.py` generates `site/js/api-handlers.js`:
+| Concern | Decision |
+|---------|----------|
+| Mixing JS config in C headers | Keep separate - cleaner separation of concerns |
+| Complex handler logic | Keep in JS files - easier to debug/modify |
+| Module-level config | Keep in JSON - rarely changes, easy to edit |
+| Simple fetch handlers | Can auto-generate, but manual is ~5 lines each |
 
-```javascript
-// AUTO-GENERATED - DO NOT EDIT
-const ApiHandlers = {
-    'carta-tiles-png': {
-        type: 'image',
-        inputs: [
-            {id: 'z', type: 'number', default: 14, min: 0, max: 18, label: 'Zoom level'},
-            {id: 'x', type: 'number', default: 8529, label: 'Tile X'},
-            {id: 'y', type: 'number', default: 5974, label: 'Tile Y'}
-        ],
-        async run(demo, inputs) {
-            return demo.getTileDataURL(inputs.z, inputs.x, inputs.y);
-        }
-    },
-    // ... other handlers
-};
-```
+### Future Enhancements (Optional)
 
-### Benefits
-
-- Single source of truth (C headers)
-- No manual JS handler maintenance
-- Fewer config files
-- Easier to add new endpoints
+If maintenance burden grows:
+- Generate `api-handlers.js` from `@demo_fetch` annotations
+- Remove redundant button mappings from `api-config.json`
+- Add `@module` annotations for module-level config
 
 ---
 

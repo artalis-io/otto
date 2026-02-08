@@ -249,6 +249,7 @@ int fw_api_handle(FWAPIContext *ctx,
  *
  * @demo json
  * @demo_title Check FuelWise API health status
+ * @demo_fetch /api/v1/health
  */
 
 /*@api
@@ -278,6 +279,7 @@ int fw_api_handle(FWAPIContext *ctx,
  *
  * @demo json
  * @demo_title View FuelWise server statistics
+ * @demo_fetch /api/v1/stats
  */
 
 /*@wasm

@@ -111,6 +111,7 @@ extern "C" {
  *
  * @demo json
  * @demo_title Fetch TileJSON metadata from embedded Monaco data.
+ * @demo_fetch /tiles.json
  */
 
 /*@wasm
