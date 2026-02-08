@@ -137,7 +137,7 @@ POST /solve
 **Response:**
 ```json
 {
-  "status": "Optimal solution found",
+  "status": "OPTIMAL",
   "num_stops": 2,
   "total_cost": 175.50,
   "gross_cost": 155.50,
@@ -202,7 +202,7 @@ POST /optimize
 **Response:**
 ```json
 {
-  "status": "Optimal solution found",
+  "status": "OPTIMAL",
   "route_distance": 365.42,
   "stations_filtered": 3,
   "num_stops": 2,

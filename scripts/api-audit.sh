@@ -188,6 +188,28 @@ check_test_coverage() {
     fi
 }
 
+# Check status strings are uppercase
+check_uppercase_status() {
+    local module="$1"
+    local prefix="$2"
+
+    # Find status_to_json or status_string functions and check they return uppercase
+    local src_files=("$ROOT_DIR/$module/src/${prefix}_api.c" "$ROOT_DIR/$module/src/${module}.c")
+
+    for src_file in "${src_files[@]}"; do
+        if [[ -f "$src_file" ]]; then
+            # Check for lowercase status returns like "optimal", "infeasible"
+            if grep -E 'return\s+"(optimal|infeasible|unbounded|error|unknown)"' "$src_file" 2>/dev/null; then
+                fail "Lowercase status string in $(basename "$src_file") (should be UPPERCASE)"
+                return 1
+            fi
+        fi
+    done
+
+    pass "Status strings are uppercase"
+    return 0
+}
+
 # Check handler interface
 check_handler_interface() {
     local module="$1"
@@ -313,6 +335,10 @@ audit_module() {
     else
         warn "No @demo annotations (WASM demos won't be generated)"
     fi
+
+    echo ""
+    echo "Status Strings:"
+    check_uppercase_status "$module" "$prefix"
 
     echo ""
     echo "WASM Configuration:"

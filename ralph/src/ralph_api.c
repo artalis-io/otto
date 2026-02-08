@@ -205,15 +205,15 @@ static void set_error_response(RalphAPIResponse *resp, int status,
 
 static const char *status_to_json(RalphStatus status) {
     switch (status) {
-        case RALPH_STATUS_OPTIMAL:        return "optimal";
-        case RALPH_STATUS_INFEASIBLE:     return "infeasible";
-        case RALPH_STATUS_UNBOUNDED:      return "unbounded";
-        case RALPH_STATUS_INF_OR_UNBD:    return "infeasible_or_unbounded";
-        case RALPH_STATUS_ITERATION_LIMIT: return "iteration_limit";
-        case RALPH_STATUS_TIME_LIMIT:     return "time_limit";
-        case RALPH_STATUS_NODE_LIMIT:     return "node_limit";
-        case RALPH_STATUS_ERROR:          return "error";
-        default:                          return "unknown";
+        case RALPH_STATUS_OPTIMAL:        return "OPTIMAL";
+        case RALPH_STATUS_INFEASIBLE:     return "INFEASIBLE";
+        case RALPH_STATUS_UNBOUNDED:      return "UNBOUNDED";
+        case RALPH_STATUS_INF_OR_UNBD:    return "INFEASIBLE_OR_UNBOUNDED";
+        case RALPH_STATUS_ITERATION_LIMIT: return "ITERATION_LIMIT";
+        case RALPH_STATUS_TIME_LIMIT:     return "TIME_LIMIT";
+        case RALPH_STATUS_NODE_LIMIT:     return "NODE_LIMIT";
+        case RALPH_STATUS_ERROR:          return "ERROR";
+        default:                          return "UNKNOWN";
     }
 }
 

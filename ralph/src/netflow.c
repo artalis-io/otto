@@ -336,13 +336,13 @@ int ralph_netflow_warm_start_valid(const RalphNetflowWorkspace *ws, int num_node
 
 const char* ralph_netflow_status_string(RalphNetflowStatus status) {
     switch (status) {
-        case RALPH_NETFLOW_OPTIMAL:        return "Optimal";
-        case RALPH_NETFLOW_INFEASIBLE:     return "Infeasible";
-        case RALPH_NETFLOW_UNBOUNDED:      return "Unbounded";
-        case RALPH_NETFLOW_MAX_ITERATIONS: return "Max iterations reached";
-        case RALPH_NETFLOW_INVALID_INPUT:  return "Invalid input";
-        case RALPH_NETFLOW_OUT_OF_MEMORY:  return "Out of memory";
-        default:                           return "Unknown status";
+        case RALPH_NETFLOW_OPTIMAL:        return "OPTIMAL";
+        case RALPH_NETFLOW_INFEASIBLE:     return "INFEASIBLE";
+        case RALPH_NETFLOW_UNBOUNDED:      return "UNBOUNDED";
+        case RALPH_NETFLOW_MAX_ITERATIONS: return "MAX_ITERATIONS";
+        case RALPH_NETFLOW_INVALID_INPUT:  return "INVALID_INPUT";
+        case RALPH_NETFLOW_OUT_OF_MEMORY:  return "OUT_OF_MEMORY";
+        default:                           return "UNKNOWN";
     }
 }
 

@@ -28,13 +28,13 @@ const char* fw_version(void)
 const char* fw_status_string(FWStatus status)
 {
     switch (status) {
-        case FW_STATUS_OPTIMAL:        return "Optimal solution found";
-        case FW_STATUS_INFEASIBLE:     return "No feasible solution exists";
-        case FW_STATUS_UNBOUNDED:      return "Problem is unbounded";
-        case FW_STATUS_ERROR:          return "Solver error";
-        case FW_STATUS_ITERATION_LIMIT: return "Iteration limit reached";
-        case FW_STATUS_TIME_LIMIT:     return "Time limit reached";
-        default:                       return "Unknown status";
+        case FW_STATUS_OPTIMAL:        return "OPTIMAL";
+        case FW_STATUS_INFEASIBLE:     return "INFEASIBLE";
+        case FW_STATUS_UNBOUNDED:      return "UNBOUNDED";
+        case FW_STATUS_ERROR:          return "ERROR";
+        case FW_STATUS_ITERATION_LIMIT: return "ITERATION_LIMIT";
+        case FW_STATUS_TIME_LIMIT:     return "TIME_LIMIT";
+        default:                       return "UNKNOWN";
     }
 }
 

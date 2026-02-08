@@ -535,7 +535,7 @@ void test_json_serialization(void)
 
     if (json) {
         printf("  JSON output:\n%s", json);
-        ASSERT(strstr(json, "Optimal") != NULL, "JSON contains status");
+        ASSERT(strstr(json, "OPTIMAL") != NULL, "JSON contains status");
         ASSERT(strstr(json, "125.50") != NULL, "JSON contains cost");
         fw_free_json(json);
     }

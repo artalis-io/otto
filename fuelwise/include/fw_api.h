@@ -144,7 +144,7 @@ int fw_api_handle(FWAPIContext *ctx,
  *
  * @response_json
  * {
- *   "status": "optimal",
+ *   "status": "OPTIMAL",
  *   "num_stops": 2,
  *   "total_cost": 68.00,
  *   "gross_cost": 68.00,
@@ -226,7 +226,7 @@ int fw_api_handle(FWAPIContext *ctx,
  *
  * @response_json
  * {
- *   "status": "optimal",
+ *   "status": "OPTIMAL",
  *   "route_distance": 487.5,
  *   "stations_filtered": 5,
  *   "num_stops": 2,

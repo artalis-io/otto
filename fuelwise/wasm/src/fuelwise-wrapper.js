@@ -157,7 +157,7 @@ function createAPI(module) {
             module._wasm_free(metaPtr);
 
             return {
-                status: ['optimal', 'infeasible', 'unbounded', 'error'][status] || 'error',
+                status: ['OPTIMAL', 'INFEASIBLE', 'UNBOUNDED', 'ERROR'][status] || 'ERROR',
                 numStops,
                 totalCost,
                 remainingFuel,
@@ -226,7 +226,7 @@ function createAPI(module) {
             module._wasm_free(metaPtr);
 
             return {
-                status: ['optimal', 'infeasible', 'unbounded', 'error'][status] || 'error',
+                status: ['OPTIMAL', 'INFEASIBLE', 'UNBOUNDED', 'ERROR'][status] || 'ERROR',
                 numStops,
                 totalCost,
                 remainingFuel,
@@ -303,7 +303,7 @@ function createAPI(module) {
             if (segmentsPtr) module._wasm_free(segmentsPtr);
 
             return {
-                status: ['optimal', 'infeasible', 'unbounded', 'error'][status] || 'error',
+                status: ['OPTIMAL', 'INFEASIBLE', 'UNBOUNDED', 'ERROR'][status] || 'ERROR',
                 routeDistance,
                 stationsFiltered: numFiltered,
                 numStops,

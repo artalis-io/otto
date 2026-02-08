@@ -129,7 +129,7 @@ test_solve_basic() {
             ]
         }')
 
-    if echo "$RESP" | grep -q '"status": "Optimal solution found"'; then
+    if echo "$RESP" | grep -q '"status": "OPTIMAL"'; then
         pass "Solve returns optimal solution"
     else
         fail "Solve did not return optimal solution"
@@ -171,7 +171,7 @@ test_solve_with_segments() {
             ]
         }')
 
-    if echo "$RESP" | grep -q '"status": "Optimal solution found"'; then
+    if echo "$RESP" | grep -q '"status": "OPTIMAL"'; then
         pass "Solve with segments returns optimal solution"
     else
         fail "Solve with segments failed"
