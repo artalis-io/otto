@@ -11,6 +11,7 @@ Comprehensive development plan for the Velo OSM routing engine covering algorith
 | **ALT (Landmarks)** | ✅ Complete | `vl_landmarks.c` |
 | **Vehicle Profiles** | ✅ Complete | Car, Truck, Bike, Foot |
 | **Binary Graph Format** | ✅ Complete | `.vlg` format |
+| **Route Benchmark Tool** | ✅ Complete | `velo_route_bench.c` |
 | **Turn-by-Turn Navigation** | ❌ TODO | Maneuver detection |
 | **Distance/Duration Matrix** | ❌ TODO | Many-to-many routing |
 | **Landmark Persistence** | ❌ TODO | Store landmarks in .vlg |
@@ -410,7 +411,50 @@ int vl_route_cch(VLGraph *g, uint32_t from, uint32_t to,
 ./bench_pbf map.osm.pbf output.vlg
 ```
 
-### 8.3 Performance Notes
+### 8.3 Route Quality Benchmark Tool (✅ Complete)
+
+Automated feedback loop for routing quality and performance optimization.
+
+**Usage:**
+```bash
+make route-bench
+./velo-route-bench --graph data/hungary.vlg --suite smoke -v
+./velo-route-bench --graph data/hungary.vlg --compare-algorithms routes/*.json
+```
+
+**Implemented Features:**
+- JSON-based route definitions with origin/destination, profile, tolerances
+- Distance validation (expected vs actual with tolerance)
+- Duration validation
+- Profile compliance checking (VL_ACCESS_NO_TRUCK, etc.)
+- Algorithm consistency (all algorithms return same optimal distance)
+- Performance metrics (query_time_ms, nodes_explored, ms_per_km)
+- Structured JSON output for CI integration
+- Skill: `/velo-route-bench` for debugging workflow
+
+**Benchmark Routes (4 created, ~25 planned):**
+
+| Category | Routes | Status |
+|----------|--------|--------|
+| Urban | budapest_downtown.json | ✅ |
+| Regional | budapest_szeged.json | ✅ |
+| Cross-country | sopron_nyiregyhaza.json | ✅ |
+| Profiles | truck_avoid_residential.json | ✅ |
+| Edge cases | ferry, tunnel, one-way maze | ❌ TODO |
+
+**TODO:**
+- [ ] Create remaining ~20 benchmark routes
+- [ ] Route assertions (avoids_highway_class, passes_near)
+- [ ] OSRM comparison mode (--osrm-url)
+- [ ] CI integration (GitHub Actions)
+- [ ] Baseline performance capture
+
+**Key Files:**
+- `benchmarks/velo_route_bench.c` - CLI tool
+- `benchmarks/routes/` - Benchmark route definitions
+- `.claude/skills/velo-route-bench/skill.md` - Debugging workflow
+
+### 8.4 Performance Notes
 
 | Metric | Value |
 |--------|-------|
@@ -507,7 +551,15 @@ velo/
 ├── api/                  # Route server REST API
 ├── tools/                # CLI tools (vl-build)
 ├── tests/                # Test suite
-└── benchmarks/           # Performance tests
+└── benchmarks/
+    ├── bench_routing.c       # Algorithm benchmarks
+    ├── bench_pbf.c           # PBF parsing benchmarks
+    ├── velo_route_bench.c    # Route quality benchmark
+    └── routes/               # Benchmark route definitions
+        ├── urban/
+        ├── regional/
+        ├── cross_country/
+        └── profiles/
 ```
 
 ---
