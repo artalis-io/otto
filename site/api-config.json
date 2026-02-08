@@ -1,6 +1,6 @@
 {
   "title": "OTTO API Documentation",
-  "description": "REST API documentation for OTTO platform services: Carta tile server, Velo routing, Locus geocoding, and FuelWise optimization.",
+  "description": "REST API documentation for OTTO platform services: Carta tile server, Velo routing, Locus geocoding, FuelWise optimization, and Ralph LP/MIP solver.",
   "canonical_url": "https://ottofleet.io/api.html",
   "github_url": "https://github.com/ottofleet/otto",
 
@@ -99,6 +99,29 @@
           "fuelwise-api-v1-solve-try-btn": "solveFuelWiseProblem",
           "fuelwise-api-v1-health-try-btn": "fetchFuelWiseHealth",
           "fuelwise-api-v1-stats-try-btn": "fetchFuelWiseStats"
+        }
+      }
+    },
+    {
+      "id": "ralph",
+      "name": "Ralph LP/MIP Solver",
+      "icon": "📐",
+      "port": 8084,
+      "description": "Linear and Mixed-Integer Programming solver. Supports LP format input with simplex, branch-and-bound, LAP, and network flow algorithms.",
+      "header_file": "ralph/include/ralph_api.h",
+      "wasm": {
+        "enabled": true,
+        "script": "wasm/ralph-api-demo.js",
+        "wrapper": "js/ralph-api-demo.js",
+        "factory_name": "RalphAPIDemo",
+        "class_name": "RalphDemo",
+        "handlers_file": "js/handlers/ralph.js",
+        "init_function": "initRalphDemo",
+        "error_function": "handleRalphError",
+        "buttons": {
+          "ralph-api-v1-solve-try-btn": "solveRalphProblem",
+          "ralph-api-v1-formats-try-btn": "fetchRalphFormats",
+          "ralph-api-v1-health-try-btn": "fetchRalphHealth"
         }
       }
     }
