@@ -46,6 +46,8 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/lap.c \
           $(SRC_DIR)/detect.c \
           $(SRC_DIR)/netflow.c \
+          $(SRC_DIR)/ralph_api.c \
+          $(SRC_DIR)/ralph_parse_lp.c \
           $(SRC_DIR)/optim/subgradient.c \
           $(SRC_DIR)/optim/lagrangian.c \
           $(SRC_DIR)/optim/lagrangian_scp.c
@@ -82,6 +84,10 @@ OPTIM_TEST_EXEC = test_optim
 # LP format tests
 LP_TEST_SOURCES = $(TEST_DIR)/test_lp.c
 LP_TEST_EXEC = test_lp
+
+# API tests
+API_TEST_SOURCES = $(TEST_DIR)/test_api.c
+API_TEST_EXEC = test_api
 
 # Benchmarks
 BENCH_DIR = benchmarks
@@ -176,6 +182,14 @@ $(LP_TEST_EXEC): $(LP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 # Run LP format tests
 test-lp: $(LP_TEST_EXEC)
 	./$(LP_TEST_EXEC)
+
+# Build API tests
+$(API_TEST_EXEC): $(API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run API tests
+test-api: $(API_TEST_EXEC)
+	./$(API_TEST_EXEC)
 
 # Run optimization module tests
 test-optim: $(OPTIM_TEST_EXEC)
@@ -272,7 +286,7 @@ download-netlib:
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(API_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -286,7 +300,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
