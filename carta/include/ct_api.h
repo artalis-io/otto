@@ -61,6 +61,9 @@ extern "C" {
  * @returns application/x-protobuf Mapbox Vector Tile format. Use with MapLibre GL JS or similar vector tile renderers.
  * @error 400 Invalid coordinates
  * @error 404 Outside map bounds
+ *
+ * @demo binary
+ * @demo_title Generate MVT vector tile using WASM (shows size info)
  */
 
 /*@api
@@ -80,6 +83,9 @@ extern "C" {
  *
  * @example curl "http://localhost:8081/tiles/14/9058/5729.txt?width=120&charset=blocks"
  * @example_comment ASCII map in terminal
+ *
+ * @demo text
+ * @demo_title Render ASCII art map tile using WASM
  */
 
 /*@api

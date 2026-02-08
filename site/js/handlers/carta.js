@@ -39,6 +39,92 @@ async function generateCartaTile() {
     }
 }
 
+async function generateCartaMVT() {
+    if (!cartaDemo || !cartaDemo.isReady()) return;
+
+    const btn = document.getElementById('carta-mvt-try-btn');
+    const result = document.getElementById('carta-mvt-result');
+    const status = document.getElementById('carta-mvt-status');
+    const output = document.getElementById('carta-mvt-output');
+
+    const z = 14, x = 8529, y = 5974;
+
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+    output.classList.add('visible');
+
+    try {
+        const startTime = performance.now();
+        const response = await cartaDemo.fetch(`/tiles/${z}/${x}/${y}.mvt`);
+        const elapsed = (performance.now() - startTime).toFixed(1);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const mvtData = await response.arrayBuffer();
+        const info = {
+            tile: `${z}/${x}/${y}.mvt`,
+            size_bytes: mvtData.byteLength,
+            size_kb: (mvtData.byteLength / 1024).toFixed(2),
+            content_type: 'application/x-protobuf',
+            note: 'Use with MapLibre GL JS or similar vector tile renderer'
+        };
+
+        const html = formatJsonWithHighlighting(info);
+        const codeBlock = result.closest('.code-block');
+        if (codeBlock && window.typeAnimateContent) {
+            window.typeAnimateContent(codeBlock, html);
+        } else {
+            result.innerHTML = html;
+        }
+        status.textContent = `MVT tile generated in ${elapsed}ms (${info.size_kb} KB)`;
+        status.className = 'demo-status success';
+    } catch (err) {
+        console.error('MVT generation failed:', err);
+        result.textContent = '';
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'demo-status error';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate MVT';
+    }
+}
+
+async function generateCartaASCII() {
+    if (!cartaDemo || !cartaDemo.isReady()) return;
+
+    const btn = document.getElementById('carta-ascii-try-btn');
+    const result = document.getElementById('carta-ascii-result');
+    const status = document.getElementById('carta-ascii-status');
+    const output = document.getElementById('carta-ascii-output');
+
+    const z = 14, x = 8529, y = 5974;
+
+    btn.disabled = true;
+    btn.textContent = 'Rendering...';
+    output.classList.add('visible');
+
+    try {
+        const startTime = performance.now();
+        const response = await cartaDemo.fetch(`/tiles/${z}/${x}/${y}.txt?width=60&charset=blocks`);
+        const elapsed = (performance.now() - startTime).toFixed(1);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const asciiArt = await response.text();
+        result.textContent = asciiArt;
+        status.textContent = `ASCII tile rendered in ${elapsed}ms (${asciiArt.length} chars)`;
+        status.className = 'demo-status success';
+    } catch (err) {
+        console.error('ASCII generation failed:', err);
+        result.textContent = '';
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'demo-status error';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Render ASCII';
+    }
+}
+
 async function fetchTileJSON() {
     if (!cartaDemo || !cartaDemo.isReady()) return;
 
@@ -92,6 +178,8 @@ function initCartaDemo() {
     pngStatus.textContent = `Carta ${cartaDemo.getVersion()} ready (Monaco PBF: ${(cartaDemo.getPBFSize() / 1024).toFixed(0)} KB)`;
     pngStatus.className = 'demo-status success';
     document.getElementById('carta-output').classList.add('visible');
+    enableBtn('carta-mvt-try-btn', 'Generate MVT');
+    enableBtn('carta-ascii-try-btn', 'Render ASCII');
     enableBtn('tilejson-try-btn', 'Fetch TileJSON');
     enableBtn('health-try-btn', 'Check Health');
     enableBtn('stats-try-btn', 'Get Stats');
@@ -104,6 +192,8 @@ function handleCartaError(err) {
     pngStatus.textContent = 'Failed to load WASM module: ' + err.message;
     pngStatus.className = 'demo-status error';
     document.getElementById('carta-output').classList.add('visible');
+    disableBtn('carta-mvt-try-btn');
+    disableBtn('carta-ascii-try-btn');
     disableBtn('tilejson-try-btn');
     disableBtn('health-try-btn');
     disableBtn('stats-try-btn');
