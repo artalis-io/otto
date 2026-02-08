@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OTTO API Documentation</title>
-    <meta name="description" content="REST API documentation for OTTO platform services: Carta tile server, Velo routing, Locus geocoding, and FuelWise optimization.">
+    <meta name="description" content="REST API documentation for OTTO platform services: Carta tile server, Velo routing, Locus geocoding, FuelWise optimization, and Ralph LP/MIP solver.">
 
     <!-- SEO -->
     <link rel="canonical" href="https://ottofleet.io/api.html">
@@ -29,6 +29,9 @@
 
     <script src="wasm/fuelwise-api-demo.js"></script>
     <script src="js/fuelwise-api-demo.js"></script>
+
+    <script src="wasm/ralph-api-demo.js"></script>
+    <script src="js/ralph-api-demo.js"></script>
 
 
 
@@ -604,6 +607,11 @@
                     <span>⛽</span>
                     <span>FuelWise</span>
                     <span class="port">:8080</span>
+                </a>
+                <a href="#ralph">
+                    <span>📐</span>
+                    <span>Ralph LP/MIP Solver</span>
+                    <span class="port">:8084</span>
                 </a>
 
             </nav>
@@ -1774,6 +1782,121 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 
             </section>
 
+            <!-- ============================================================ -->
+            <!-- RALPH -->
+            <!-- ============================================================ -->
+            <section id="ralph" class="service-section">
+                <div class="service-header">
+                    <div class="service-icon">📐</div>
+                    <div>
+                        <div class="service-title">Ralph LP/MIP Solver</div>
+                        <div class="service-port">Default port: 8084</div>
+                    </div>
+                </div>
+                <p class="service-desc">
+                    Linear and Mixed-Integer Programming solver. Supports LP format input with simplex, branch-and-bound, LAP, and network flow algorithms.
+                </p>
+
+                <!-- Endpoints generated from ralph/include/ralph_api.h annotations -->
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method post">POST</span>
+                        <span class="path">/api/v1/solve</span>
+                        <span class="endpoint-desc">Solve LP/MIP problem</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Example</h4>
+                            <div class="code-block">
+<pre><span class="command">curl</span> <span class="url">-X POST http://localhost:8084/api/v1/solve -H "Content-Type: application/json" -d '{"format":"lp","problem":"max: 5x + 3y; 2x + 4y <= 40; x >= 0; y >= 0;"}'</span></pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"optimal"</span>,
+  <span class="key">"objective"</span>: <span class="number">42.5</span>,
+  <span class="key">"variables"</span>: {<span class="key">"x"</span>: <span class="number">10.0</span>, <span class="key">"y"</span>: <span class="number">5.5</span>},
+  <span class="key">"solve_time_ms"</span>: <span class="number">12</span>,
+  <span class="key">"iterations"</span>: <span class="number">23</span>
+}</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo" id="ralph-api-v1-solve-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Solve a small LP problem using Ralph WASM. No server required.
+                            </p>
+                            <button class="try-btn" id="ralph-api-v1-solve-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="ralph-api-v1-solve-output">
+                                <div class="code-block">
+                                    <pre id="ralph-api-v1-solve-result"></pre>
+                                </div>
+                                <div class="demo-status" id="ralph-api-v1-solve-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/formats</span>
+                        <span class="endpoint-desc">List supported input formats</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"formats"</span>: [
+    {<span class="key">"id"</span>: <span class="string">"lp"</span>, <span class="key">"name"</span>: <span class="string">"CPLEX LP"</span>, <span class="key">"description"</span>: <span class="string">"CPLEX LP file format"</span>},
+    {<span class="key">"id"</span>: <span class="string">"mps"</span>, <span class="key">"name"</span>: <span class="string">"MPS"</span>, <span class="key">"description"</span>: <span class="string">"Mathematical Programming System format"</span>}
+  ]
+}</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo" id="ralph-api-v1-formats-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Get supported formats
+                            </p>
+                            <button class="try-btn" id="ralph-api-v1-formats-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="ralph-api-v1-formats-output">
+                                <div class="code-block">
+                                    <pre id="ralph-api-v1-formats-result"></pre>
+                                </div>
+                                <div class="demo-status" id="ralph-api-v1-formats-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/health</span>
+                        <span class="endpoint-desc">Health check</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{<span class="key">"status"</span>: <span class="string">"ok"</span>, <span class="key">"version"</span>: <span class="string">"1.0.0"</span>}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+
 
             <!-- Status Codes -->
             <section class="service-section">
@@ -1815,6 +1938,8 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
         window.locusDemo = null;
 
         window.fuelwiseDemo = null;
+
+        window.ralphDemo = null;
 
 
 
@@ -1982,6 +2107,25 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             } catch (err) {
                 console.error('FuelWise Optimizer WASM init failed:', err);
                 handleFuelWiseError(err);
+            }
+        }
+
+
+        // Ralph LP/MIP Solver WASM init
+        async function initRalphWasm() {
+            try {
+                if (typeof RalphDemo === 'undefined') {
+                    throw new Error('RalphDemo class not loaded');
+                }
+
+                ralphDemo = new RalphDemo();
+                await ralphDemo.init();
+
+                // Enable WASM demo buttons for ralph
+                initRalphDemo();
+            } catch (err) {
+                console.error('Ralph LP/MIP Solver WASM init failed:', err);
+                handleRalphError(err);
             }
         }
 
@@ -2578,6 +2722,140 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 document.getElementById('fuelwise-api-v1-health-output').classList.add('visible');
             }
         }
+
+        // Ralph handlers (from js/handlers/ralph.js)
+        async function solveRalphProblem() {
+            if (!ralphDemo || !ralphDemo.isReady()) return;
+
+            const btn = document.getElementById('ralph-api-v1-solve-try-btn');
+            const result = document.getElementById('ralph-api-v1-solve-result');
+            const status = document.getElementById('ralph-api-v1-solve-status');
+            const output = document.getElementById('ralph-api-v1-solve-output');
+
+            // Get problem from textarea (ID matches demo_id pattern)
+            const problemInput = document.getElementById('ralph-api-v1-solve-problem');
+            const problem = problemInput ? problemInput.value : `max: 5 x + 3 y
+        subject to
+        wood: 2 x + 4 y <= 40
+        labor: 3 x + 2 y <= 24
+        bounds
+        x >= 0
+        y >= 0
+        end`;
+
+            btn.disabled = true;
+            btn.textContent = 'Solving...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const response = await ralphDemo.fetch('/api/v1/solve', {
+                    method: 'POST',
+                    body: {
+                        format: 'lp',
+                        problem: problem
+                    }
+                });
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                const data = await response.json();
+                const html = formatJsonWithHighlighting(data);
+                const codeBlock = result.closest('.code-block');
+                if (codeBlock && window.typeAnimateContent) {
+                    window.typeAnimateContent(codeBlock, html);
+                } else {
+                    result.innerHTML = html;
+                }
+
+                if (response.ok && data.status === 'optimal') {
+                    status.textContent = `Solved in ${elapsed}ms: objective = ${data.objective}`;
+                    status.className = 'demo-status success';
+                } else if (data.error) {
+                    status.textContent = `Error: ${data.error}`;
+                    status.className = 'demo-status error';
+                } else {
+                    status.textContent = `Status: ${data.status} (${elapsed}ms)`;
+                    status.className = 'demo-status warning';
+                }
+            } catch (err) {
+                console.error('Solve failed:', err);
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Solve';
+            }
+        }
+
+        async function fetchRalphFormats() {
+            if (!ralphDemo || !ralphDemo.isReady()) return;
+
+            const btn = document.getElementById('ralph-api-v1-formats-try-btn');
+            const result = document.getElementById('ralph-api-v1-formats-result');
+            const status = document.getElementById('ralph-api-v1-formats-status');
+            const output = document.getElementById('ralph-api-v1-formats-output');
+
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const response = await ralphDemo.fetch('/api/v1/formats');
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const data = await response.json();
+                const html = formatJsonWithHighlighting(data);
+                const codeBlock = result.closest('.code-block');
+                if (codeBlock && window.typeAnimateContent) {
+                    window.typeAnimateContent(codeBlock, html);
+                } else {
+                    result.innerHTML = html;
+                }
+                const count = data.formats ? data.formats.length : 0;
+                status.textContent = `${count} formats available (${elapsed}ms)`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('Formats request failed:', err);
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Get Formats';
+            }
+        }
+
+        function fetchRalphHealth() {
+            fetchJsonEndpoint(ralphDemo, '/api/v1/health', 'ralph-api-v1-health-try-btn', 'ralph-api-v1-health-result', 'ralph-api-v1-health-status', 'ralph-api-v1-health-output', 'Check Health');
+        }
+
+        function initRalphDemo() {
+            enableBtn('ralph-api-v1-solve-try-btn', 'Solve');
+            enableBtn('ralph-api-v1-formats-try-btn', 'Get Formats');
+            enableBtn('ralph-api-v1-health-try-btn', 'Check Health');
+            const ralphStatus = document.getElementById('ralph-api-v1-solve-status');
+            if (ralphStatus) {
+                ralphStatus.textContent = `Ralph ${ralphDemo.getVersion()} ready - LP/MIP solver in your browser`;
+                ralphStatus.className = 'demo-status success';
+                document.getElementById('ralph-api-v1-solve-output').classList.add('visible');
+            }
+        }
+
+        function handleRalphError(err) {
+            disableBtn('ralph-api-v1-solve-try-btn');
+            disableBtn('ralph-api-v1-formats-try-btn');
+            disableBtn('ralph-api-v1-health-try-btn');
+            const ralphStatus = document.getElementById('ralph-api-v1-solve-status');
+            if (ralphStatus) {
+                ralphStatus.textContent = 'Failed to load WASM: ' + err.message;
+                ralphStatus.className = 'demo-status error';
+                document.getElementById('ralph-api-v1-solve-output').classList.add('visible');
+            }
+        }
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             // Add copy buttons to all code blocks
@@ -2590,6 +2868,8 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             initLocusWasm();
 
             initFuelwiseWasm();
+
+            initRalphWasm();
 
 
 
@@ -2611,6 +2891,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             document.getElementById('fuelwise-api-v1-solve-try-btn').addEventListener('click', solveFuelWiseProblem);
             document.getElementById('fuelwise-api-v1-health-try-btn').addEventListener('click', fetchFuelWiseHealth);
             document.getElementById('fuelwise-api-v1-stats-try-btn').addEventListener('click', fetchFuelWiseStats);
+            document.getElementById('ralph-api-v1-solve-try-btn').addEventListener('click', solveRalphProblem);
+            document.getElementById('ralph-api-v1-formats-try-btn').addEventListener('click', fetchRalphFormats);
+            document.getElementById('ralph-api-v1-health-try-btn').addEventListener('click', fetchRalphHealth);
         });
     })();
     </script>
