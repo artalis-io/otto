@@ -197,22 +197,71 @@ The module must be registered in `site/api-config.json`:
     "script": "wasm/{module}-api-demo.js",
     "wrapper": "js/{module}-api-demo.js",
     "factory_name": "{Module}APIDemo",
-    "class_name": "{Module}Demo"
+    "class_name": "{Module}Demo",
+    "handlers_file": "js/handlers/{module}.js",
+    "init_function": "init{Module}Demo",
+    "error_function": "handle{Module}Error",
+    "buttons": {
+      "{demo-id}-try-btn": "handlerFunctionName"
+    }
   }
 }
 ```
+
+### 6.1 WASM Handler Files
+
+For modules with WASM demos, handler functions live in external JS files:
+
+**Location:** `site/js/handlers/{module}.js`
+
+**Required functions:**
+```javascript
+// Handler for each button (referenced in wasm.buttons)
+async function handlerFunctionName() {
+    if (!{module}Demo || !{module}Demo.isReady()) return;
+    // ... demo logic ...
+}
+
+// Init function (called when WASM loads successfully)
+function init{Module}Demo() {
+    enableBtn('{demo-id}-try-btn', 'Button Label');
+    // ... enable other buttons, show status ...
+}
+
+// Error function (called when WASM fails to load)
+function handle{Module}Error(err) {
+    disableBtn('{demo-id}-try-btn');
+    // ... disable buttons, show error ...
+}
+```
+
+**Adding a new module's WASM handlers:**
+1. Create `site/js/handlers/{module}.js` with handler functions
+2. Add `handlers_file`, `init_function`, `error_function`, `buttons` to wasm config in api-config.json
+3. Run `make api-docs` - no changes to gen_api.py needed
+
+**Button ID convention:** `{demo-id}-try-btn` where demo-id is derived from the endpoint path (e.g., `velo-route-try-btn` for `/api/v1/route`)
+
+**Existing handlers (use as reference):**
+- `site/js/handlers/carta.js` - Tile generation, TileJSON
+- `site/js/handlers/velo.js` - Route calculation
+- `site/js/handlers/locus.js` - Search, autocomplete, reverse geocoding
 
 ### 7. Generated Documentation
 
 The `site/api.html` is auto-generated from C header annotations and includes live WASM demos with embedded Monaco data.
 
+**Makefile targets:**
 ```bash
-# Check if api.html is current
-make api-docs-check
-
-# Regenerate if stale (auto-rebuilds all dependencies)
-make api-docs
+make api-docs          # Regenerate site/api.html (auto-rebuilds WASM deps)
+make api-docs-check    # Check if api.html is up-to-date (for CI)
 ```
+
+**What each target does:**
+| Target | Action | Use Case |
+|--------|--------|----------|
+| `api-docs` | Rebuilds WASM demos if needed, then runs gen_api.py | After changing annotations or handlers |
+| `api-docs-check` | Runs gen_api.py --check (compares, doesn't write) | CI validation, pre-commit hooks |
 
 **Dependency chain** (all automatic):
 ```
