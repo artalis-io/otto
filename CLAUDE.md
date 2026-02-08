@@ -438,7 +438,7 @@ See `docs/MANIFESTO.md` for the full manifesto.
 | `docs/KNOWN_ISSUES.md` | Known bugs and workarounds |
 | `docs/TOOLING.md` | Build tools, scripts, CI |
 | `docs/business/` | Strategy, valuation (some content has redaction markers) |
-| `docs/roadmaps/` | Active development roadmaps by component (15 files) |
+| `docs/roadmaps/` | Active development roadmaps by component |
 | `docs/archive/` | Completed or superseded plans |
 
 ### Roadmaps
@@ -447,17 +447,24 @@ Active roadmaps in `docs/roadmaps/`:
 
 | File | Components |
 |------|------------|
+| `ralph.md` | LP/MIP solver improvements |
 | `velo.md` | Continental routing, CCH, landmarks |
 | `carta.md` | Labels, styling, MVT optimizations |
+| `locus.md` | Geocoding enhancements |
+| `arbor.md` | State-space search, ALNS framework |
+| `surge.md` | Rich VRP/PDPTW solver |
 | `forge.md` | Async job queue architecture |
 | `nexus.md` | TMS/ELD integration gateway |
 | `hose.md` | Hours of Service engine |
 | `tempo.md` | Time windows, business rules |
-| `arbor.md` | State-space search |
 | `sigma.md` | Fleet plan selection (MIP) |
 | `pulse.md` | Execution tracker, PTA engine |
 | `atlas.md` | Network design |
 | `quota.md` | Pricing engine |
+| `site.md` | Landing page, API docs |
+| `fuel-demo.md` | Fuel optimizer demo |
+| `infrastructure.md` | Build, CI/CD, deployment |
+| `cross-cutting.md` | Cross-module concerns |
 
 See `docs/roadmaps/README.md` for priority overview.
 
