@@ -23,8 +23,8 @@
         "error_function": "handleCartaError",
         "buttons": {
           "carta-try-btn": "generateCartaTile",
-          "carta-mvt-try-btn": "generateCartaMVT",
-          "carta-ascii-try-btn": "generateCartaASCII",
+          "carta-tiles-z-x-y-mvt-try-btn": "generateCartaMVT",
+          "carta-tiles-z-x-y-txt-try-btn": "generateCartaASCII",
           "tilejson-try-btn": "fetchTileJSON",
           "health-try-btn": "fetchCartaHealth",
           "stats-try-btn": "fetchCartaStats"
