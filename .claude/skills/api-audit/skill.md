@@ -45,7 +45,16 @@ The `scripts/api-audit.sh` script programmatically validates all compliance chec
 | WASM wrapper | `{module}/wasm/src/{prefix}_wasm_api.c` |
 | Handlers file | `site/js/handlers/{module}.js` |
 | Test coverage | Each `@demo` endpoint has a test |
+| Docs consistency | `@request_body` matches demo SAMPLE_PROBLEM |
 | api.html status | `make api-docs-check` passes |
+
+**Documentation Consistency:**
+
+For endpoints with WASM demos, ensure `@request_body` and `@response_json` match what the demo actually uses:
+- Check `site/js/handlers/{module}.js` for `SAMPLE_PROBLEM` or equivalent
+- The documented input should match the demo input exactly
+- The documented response should be a valid response for that input
+- Tests in `site/tests/wasm-demos.spec.js` verify this automatically
 
 **Example output:**
 ```
