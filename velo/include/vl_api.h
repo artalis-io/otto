@@ -36,7 +36,7 @@ extern "C" {
  * @query to:string Destination coordinates as lat,lon (e.g., 46.2,20.1)
  * @query profile:string:car Vehicle profile: car, truck, bike, foot
  * @query mode:string:fastest Optimization: fastest (time) or shortest (distance)
- * @query geometry:bool:true Include Google Polyline encoded geometry
+ * @query geometry:bool:false Include Google Polyline encoded geometry
  *
  * @returns application/json Route with distance, duration, and optional geometry
  * @error 400 Invalid coordinates or parameters
