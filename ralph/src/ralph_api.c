@@ -13,6 +13,7 @@
 
 #include "ralph_api.h"
 #include "ralph.h"
+#include "sh_query.h"
 
 /* ============================================================================
  * Internal Constants
@@ -24,6 +25,7 @@
 
 /* Content type strings */
 static const char *CT_JSON = "application/json";
+static const char *CT_TEXT = "text/plain";
 
 /* ============================================================================
  * API Context
@@ -242,6 +244,61 @@ static int handle_formats(RalphAPIContext *ctx, RalphAPIResponse *resp) {
     return 0;
 }
 
+/* Build JSON response from solution */
+static void build_json_response(RalphModel *model, RalphStatus status,
+                                double solve_time_ms, JsonBuilder *jb) {
+    int num_vars = ralph_get_num_vars(model);
+    int is_mip = ralph_is_mip(model);
+
+    json_append(jb, "{");
+    json_append(jb, "\"status\":\"%s\"", status_to_json(status));
+
+    if (status == RALPH_STATUS_OPTIMAL ||
+        status == RALPH_STATUS_TIME_LIMIT ||
+        status == RALPH_STATUS_ITERATION_LIMIT) {
+        double objval = ralph_get_objval(model);
+        json_append(jb, ",\"objective\":%.10g", objval);
+
+        /* Get solution values */
+        double *x = (double *)malloc(num_vars * sizeof(double));
+        if (x && ralph_get_solution(model, x) == 0) {
+            json_append(jb, ",\"variables\":{");
+            int first = 1;
+            for (int j = 0; j < num_vars; j++) {
+                const char *name = ralph_get_var_name(model, j);
+                if (!first) json_append(jb, ",");
+                first = 0;
+                if (name && name[0]) {
+                    json_append_escaped(jb, name);
+                } else {
+                    json_append(jb, "\"x%d\"", j);
+                }
+                json_append(jb, ":%.10g", x[j]);
+            }
+            json_append(jb, "}");
+        }
+        free(x);
+    }
+
+    if (status == RALPH_STATUS_INFEASIBLE) {
+        json_append(jb, ",\"message\":\"Problem is infeasible\"");
+    } else if (status == RALPH_STATUS_UNBOUNDED) {
+        json_append(jb, ",\"message\":\"Problem is unbounded\"");
+    } else if (status == RALPH_STATUS_TIME_LIMIT) {
+        json_append(jb, ",\"message\":\"Timeout exceeded\"");
+    }
+
+    json_append(jb, ",\"solve_time_ms\":%.1f", solve_time_ms);
+    json_append(jb, ",\"iterations\":%d", ralph_get_iterations(model));
+    json_append(jb, ",\"num_vars\":%d", num_vars);
+    json_append(jb, ",\"num_cons\":%d", ralph_get_num_cons(model));
+    if (is_mip) {
+        json_append(jb, ",\"is_mip\":true");
+        json_append(jb, ",\"nodes\":%d", ralph_get_node_count(model));
+    }
+    json_append(jb, "}");
+}
+
 static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
                         RalphAPIResponse *resp) {
     (void)ctx;
@@ -251,77 +308,111 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
         return 0;
     }
 
-    /* Parse JSON request */
-    char format[16] = {0};
+    /* Check format query param: lp, mps, or json (default) */
+    char format[16] = "json";  /* Default to JSON for backward compat */
+    sh_query_get_str(req->query, "format", format, sizeof(format));
+
+    /* Determine if we're using raw body or JSON-wrapped */
+    int use_json = (strcmp(format, "json") == 0);
+    int use_lp = (strcmp(format, "lp") == 0);
+    int use_mps = (strcmp(format, "mps") == 0);
+
+    if (!use_json && !use_lp && !use_mps) {
+        set_error_response(resp, 400, "Invalid format. Use 'lp', 'mps', or 'json'");
+        return 0;
+    }
+
     char *problem = NULL;
+    char problem_format[16] = {0};
     int timeout_ms = RALPH_API_DEFAULT_TIMEOUT_MS;
 
-    if (json_get_string(req->body, "format", format, sizeof(format)) != 0) {
-        set_error_response(resp, 400, "Missing 'format' field");
-        return 0;
-    }
-
-    /* Get timeout if specified */
-    int parsed_timeout;
-    if (json_get_int(req->body, "timeout_ms", &parsed_timeout) == 0) {
-        if (parsed_timeout > 0 && parsed_timeout <= RALPH_API_MAX_TIMEOUT_MS) {
-            timeout_ms = parsed_timeout;
+    if (use_json) {
+        /* Parse JSON request (original behavior) */
+        if (json_get_string(req->body, "format", problem_format, sizeof(problem_format)) != 0) {
+            set_error_response(resp, 400, "Missing 'format' field in JSON body");
+            return 0;
         }
-    }
 
-    /* Extract problem string (may be large) */
-    /* Find the problem field manually to handle large strings */
-    const char *p = strstr(req->body, "\"problem\"");
-    if (!p) {
-        set_error_response(resp, 400, "Missing 'problem' field");
-        return 0;
-    }
-    p += 9;  /* strlen("\"problem\"") */
-    p = skip_ws(p);
-    if (*p != ':') {
-        set_error_response(resp, 400, "Invalid JSON: expected ':' after 'problem'");
-        return 0;
-    }
-    p++;
-    p = skip_ws(p);
-    if (*p != '"') {
-        set_error_response(resp, 400, "Invalid JSON: expected string for 'problem'");
-        return 0;
-    }
-    p++;
-
-    /* Find end of string and decode */
-    size_t problem_capacity = req->body_len;  /* Upper bound */
-    problem = (char *)malloc(problem_capacity + 1);
-    if (!problem) {
-        set_error_response(resp, 500, "Memory allocation failed");
-        return 0;
-    }
-
-    size_t i = 0;
-    while (*p && *p != '"' && i < problem_capacity) {
-        if (*p == '\\' && *(p + 1)) {
-            p++;
-            switch (*p) {
-                case 'n': problem[i++] = '\n'; break;
-                case 't': problem[i++] = '\t'; break;
-                case 'r': problem[i++] = '\r'; break;
-                case '\\': problem[i++] = '\\'; break;
-                case '"': problem[i++] = '"'; break;
-                default: problem[i++] = *p; break;
+        /* Get timeout if specified */
+        int parsed_timeout;
+        if (json_get_int(req->body, "timeout_ms", &parsed_timeout) == 0) {
+            if (parsed_timeout > 0 && parsed_timeout <= RALPH_API_MAX_TIMEOUT_MS) {
+                timeout_ms = parsed_timeout;
             }
-        } else {
-            problem[i++] = *p;
+        }
+
+        /* Extract problem string (may be large) */
+        const char *p = strstr(req->body, "\"problem\"");
+        if (!p) {
+            set_error_response(resp, 400, "Missing 'problem' field");
+            return 0;
+        }
+        p += 9;  /* strlen("\"problem\"") */
+        p = skip_ws(p);
+        if (*p != ':') {
+            set_error_response(resp, 400, "Invalid JSON: expected ':' after 'problem'");
+            return 0;
         }
         p++;
-    }
-    problem[i] = '\0';
+        p = skip_ws(p);
+        if (*p != '"') {
+            set_error_response(resp, 400, "Invalid JSON: expected string for 'problem'");
+            return 0;
+        }
+        p++;
 
-    /* Validate format */
-    if (strcmp(format, "lp") != 0 && strcmp(format, "mps") != 0) {
-        free(problem);
-        set_error_response(resp, 400, "Unsupported format. Use 'lp' or 'mps'");
-        return 0;
+        /* Find end of string and decode */
+        size_t problem_capacity = req->body_len;
+        problem = (char *)malloc(problem_capacity + 1);
+        if (!problem) {
+            set_error_response(resp, 500, "Memory allocation failed");
+            return 0;
+        }
+
+        size_t i = 0;
+        while (*p && *p != '"' && i < problem_capacity) {
+            if (*p == '\\' && *(p + 1)) {
+                p++;
+                switch (*p) {
+                    case 'n': problem[i++] = '\n'; break;
+                    case 't': problem[i++] = '\t'; break;
+                    case 'r': problem[i++] = '\r'; break;
+                    case '\\': problem[i++] = '\\'; break;
+                    case '"': problem[i++] = '"'; break;
+                    default: problem[i++] = *p; break;
+                }
+            } else {
+                problem[i++] = *p;
+            }
+            p++;
+        }
+        problem[i] = '\0';
+
+        /* Validate format from JSON body */
+        if (strcmp(problem_format, "lp") != 0 && strcmp(problem_format, "mps") != 0) {
+            free(problem);
+            set_error_response(resp, 400, "Unsupported format in body. Use 'lp' or 'mps'");
+            return 0;
+        }
+    } else {
+        /* Raw LP/MPS body */
+        strncpy(problem_format, format, sizeof(problem_format) - 1);
+        problem_format[sizeof(problem_format) - 1] = '\0';
+
+        /* Copy body directly */
+        problem = (char *)malloc(req->body_len + 1);
+        if (!problem) {
+            set_error_response(resp, 500, "Memory allocation failed");
+            return 0;
+        }
+        memcpy(problem, req->body, req->body_len);
+        problem[req->body_len] = '\0';
+
+        /* Check for timeout_ms query param */
+        timeout_ms = sh_query_get_int(req->query, "timeout_ms", timeout_ms);
+        if (timeout_ms > RALPH_API_MAX_TIMEOUT_MS) {
+            timeout_ms = RALPH_API_MAX_TIMEOUT_MS;
+        }
     }
 
     /* Create model and parse */
@@ -335,7 +426,7 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
     const char *parse_error = NULL;
     int parse_result;
 
-    if (strcmp(format, "lp") == 0) {
+    if (strcmp(problem_format, "lp") == 0) {
         parse_result = ralph_api_parse_lp(problem, strlen(problem), model, &parse_error);
     } else {
         parse_result = ralph_api_parse_mps(problem, strlen(problem), model, &parse_error);
@@ -380,81 +471,47 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
     clock_t end = clock();
     double solve_time_ms = (double)(end - start) / CLOCKS_PER_SEC * 1000.0;
 
-    (void)solve_result;  /* Status retrieved via ralph_get_status */
+    (void)solve_result;
 
     RalphStatus status = ralph_get_status(model);
 
-    /* Build response */
-    char *json_buf = (char *)malloc(MAX_JSON_RESPONSE);
-    if (!json_buf) {
+    /* Build response in appropriate format */
+    char *buf = (char *)malloc(MAX_JSON_RESPONSE);
+    if (!buf) {
         ralph_free(model);
         set_error_response(resp, 500, "Memory allocation failed");
         return 0;
     }
 
-    JsonBuilder jb;
-    json_init(&jb, json_buf, MAX_JSON_RESPONSE);
+    size_t body_len;
+    const char *content_type;
 
-    json_append(&jb, "{");
-    json_append(&jb, "\"status\":\"%s\"", status_to_json(status));
-
-    if (status == RALPH_STATUS_OPTIMAL ||
-        status == RALPH_STATUS_TIME_LIMIT ||
-        status == RALPH_STATUS_ITERATION_LIMIT) {
-        double objval = ralph_get_objval(model);
-        json_append(&jb, ",\"objective\":%.10g", objval);
-
-        /* Get solution values */
-        double *x = (double *)malloc(num_vars * sizeof(double));
-        if (x && ralph_get_solution(model, x) == 0) {
-            json_append(&jb, ",\"variables\":{");
-            int first = 1;
-            for (int j = 0; j < num_vars; j++) {
-                const char *name = ralph_get_var_name(model, j);
-                if (!first) json_append(&jb, ",");
-                first = 0;
-                if (name && name[0]) {
-                    json_append_escaped(&jb, name);
-                } else {
-                    json_append(&jb, "\"x%d\"", j);
-                }
-                json_append(&jb, ":%.10g", x[j]);
-            }
-            json_append(&jb, "}");
-        }
-        free(x);
+    if (use_json) {
+        /* JSON output */
+        JsonBuilder jb;
+        json_init(&jb, buf, MAX_JSON_RESPONSE);
+        build_json_response(model, status, solve_time_ms, &jb);
+        body_len = jb.pos;
+        content_type = CT_JSON;
+    } else {
+        /* SOL format output (using core ralph function) */
+        int len = ralph_write_solution_buf(model, buf, MAX_JSON_RESPONSE);
+        body_len = len > 0 ? (size_t)len : 0;
+        content_type = CT_TEXT;
     }
-
-    if (status == RALPH_STATUS_INFEASIBLE) {
-        json_append(&jb, ",\"message\":\"Problem is infeasible\"");
-    } else if (status == RALPH_STATUS_UNBOUNDED) {
-        json_append(&jb, ",\"message\":\"Problem is unbounded\"");
-    } else if (status == RALPH_STATUS_TIME_LIMIT) {
-        json_append(&jb, ",\"message\":\"Timeout exceeded\"");
-    }
-
-    json_append(&jb, ",\"solve_time_ms\":%.1f", solve_time_ms);
-    json_append(&jb, ",\"iterations\":%d", ralph_get_iterations(model));
-    json_append(&jb, ",\"num_vars\":%d", num_vars);
-    json_append(&jb, ",\"num_cons\":%d", num_cons);
-    if (is_mip) {
-        json_append(&jb, ",\"is_mip\":true");
-        json_append(&jb, ",\"nodes\":%d", ralph_get_node_count(model));
-    }
-    json_append(&jb, "}");
 
     ralph_free(model);
 
     /* Set response */
     int http_status = 200;
     if (status == RALPH_STATUS_TIME_LIMIT) {
-        http_status = 408;  /* Request Timeout */
+        http_status = 408;
     }
 
     resp->status_code = http_status;
-    resp->content_type = CT_JSON;
-    resp->body_len = jb.pos;
-    resp->body = (uint8_t *)json_buf;
+    resp->content_type = content_type;
+    resp->body_len = body_len;
+    resp->body = (uint8_t *)buf;
 
     return 0;
 }

@@ -310,6 +310,59 @@ static void test_name_api(void) {
 }
 
 /* ============================================================================
+ * Test: Solution buffer writer
+ * ============================================================================ */
+
+static void test_solution_buf(void) {
+    printf("\n=== Test: Solution Buffer Writer ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+
+    /* Build a simple problem: max x+y s.t. x+y<=10, x,y>=0 */
+    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    ralph_add_var(model, 0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(model, 0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* y */
+
+    ralph_set_var_name(model, 0, "x");
+    ralph_set_var_name(model, 1, "y");
+
+    int idx[] = {0, 1};
+    double val[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 10.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    /* Write solution to buffer */
+    char buf[4096];
+    int len = ralph_write_solution_buf(model, buf, sizeof(buf));
+
+    ASSERT(len > 0, "Buffer write returned positive length");
+    ASSERT(len < (int)sizeof(buf), "Buffer not truncated");
+
+    /* Check content */
+    ASSERT(strstr(buf, "solution status: OPTIMAL") != NULL, "Contains OPTIMAL status");
+    ASSERT(strstr(buf, "objective value:") != NULL, "Contains objective value");
+    ASSERT(strstr(buf, "x ") != NULL, "Contains variable x");
+    ASSERT(strstr(buf, "y ") != NULL, "Contains variable y");
+
+    /* Test small buffer (truncation) */
+    char small_buf[50];
+    int small_len = ralph_write_solution_buf(model, small_buf, sizeof(small_buf));
+    ASSERT(small_len >= (int)sizeof(small_buf) - 1, "Small buffer returns truncated length");
+
+    /* Test NULL inputs */
+    ASSERT(ralph_write_solution_buf(NULL, buf, sizeof(buf)) == -1, "NULL model returns -1");
+    ASSERT(ralph_write_solution_buf(model, NULL, sizeof(buf)) == -1, "NULL buffer returns -1");
+    ASSERT(ralph_write_solution_buf(model, buf, 0) == -1, "Zero size returns -1");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Test: Invalid file handling
  * ============================================================================ */
 
@@ -350,6 +403,7 @@ int main(int argc, char **argv) {
     test_write_lp();
     test_roundtrip();
     test_name_api();
+    test_solution_buf();
     test_invalid_file();
 
     printf("\n══════════════════════════════════════════════════════════\n");
