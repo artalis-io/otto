@@ -151,10 +151,11 @@ static const char *get_query_param(const char *query, const char *name, char *bu
 
 /* Handle GET /api/v1/search */
 static void handle_search(const char *query) {
-    char buf[256];
+    char q_buf[256];
+    char limit_buf[32];
 
     /* Parse query string */
-    const char *q = get_query_param(query, "q", buf, sizeof(buf));
+    const char *q = get_query_param(query, "q", q_buf, sizeof(q_buf));
     if (!q || !*q) {
         g_response_status = 400;
         g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
@@ -164,7 +165,7 @@ static void handle_search(const char *query) {
 
     /* Parse limit */
     int limit = 10;
-    const char *limit_str = get_query_param(query, "limit", buf, sizeof(buf));
+    const char *limit_str = get_query_param(query, "limit", limit_buf, sizeof(limit_buf));
     if (limit_str) {
         int l = atoi(limit_str);
         if (l > 0 && l <= 100) limit = l;
@@ -220,10 +221,11 @@ static void handle_search(const char *query) {
 
 /* Handle GET /api/v1/autocomplete */
 static void handle_autocomplete(const char *query) {
-    char buf[256];
+    char q_buf[256];
+    char limit_buf[32];
 
     /* Parse query string */
-    const char *q = get_query_param(query, "q", buf, sizeof(buf));
+    const char *q = get_query_param(query, "q", q_buf, sizeof(q_buf));
     if (!q || !*q) {
         g_response_status = 400;
         g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
@@ -233,7 +235,7 @@ static void handle_autocomplete(const char *query) {
 
     /* Parse limit */
     int limit = 10;
-    const char *limit_str = get_query_param(query, "limit", buf, sizeof(buf));
+    const char *limit_str = get_query_param(query, "limit", limit_buf, sizeof(limit_buf));
     if (limit_str) {
         int l = atoi(limit_str);
         if (l > 0 && l <= 20) limit = l;
@@ -265,10 +267,11 @@ static void handle_autocomplete(const char *query) {
 
 /* Handle GET /api/v1/reverse */
 static void handle_reverse(const char *query) {
-    char buf[64];
+    char lat_buf[64];
+    char lon_buf[64];
 
     /* Parse coordinates */
-    const char *lat_str = get_query_param(query, "lat", buf, sizeof(buf));
+    const char *lat_str = get_query_param(query, "lat", lat_buf, sizeof(lat_buf));
     if (!lat_str) {
         g_response_status = 400;
         g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
@@ -277,7 +280,7 @@ static void handle_reverse(const char *query) {
     }
     double lat = atof(lat_str);
 
-    const char *lon_str = get_query_param(query, "lon", buf, sizeof(buf));
+    const char *lon_str = get_query_param(query, "lon", lon_buf, sizeof(lon_buf));
     if (!lon_str) {
         g_response_status = 400;
         g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),

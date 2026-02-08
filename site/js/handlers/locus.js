@@ -21,7 +21,8 @@ async function fetchLocusSearch() {
 
     try {
         const startTime = performance.now();
-        const response = await locusDemo.fetch(`/api/v1/search?q=${encodeURIComponent(q)}&limit=5`);
+        const url = `/api/v1/search?q=${encodeURIComponent(q)}&limit=5`;
+        const response = await locusDemo.fetch(url);
         const elapsed = (performance.now() - startTime).toFixed(1);
 
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -66,7 +67,8 @@ async function fetchLocusAutocomplete() {
 
     try {
         const startTime = performance.now();
-        const response = await locusDemo.fetch(`/api/v1/autocomplete?q=${encodeURIComponent(q)}&limit=10`);
+        const url = `/api/v1/autocomplete?q=${encodeURIComponent(q)}&limit=10`;
+        const response = await locusDemo.fetch(url);
         const elapsed = (performance.now() - startTime).toFixed(1);
 
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
