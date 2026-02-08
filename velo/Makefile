@@ -84,11 +84,12 @@ TEST_OSRM = test_osrm_comparison
 # Benchmark binaries
 BENCH_ROUTING = bench_routing
 BENCH_PBF = bench_pbf
+ROUTE_BENCH = velo-route-bench
 
 # WASM output
 WASM_OUT = velo.js
 
-.PHONY: all clean test bench lib debug wasm
+.PHONY: all clean test bench lib debug wasm route-bench
 
 # Default target
 all: lib $(TEST_BIN)
@@ -132,6 +133,14 @@ $(BENCH_PBF): benchmarks/bench_pbf.c $(LIB) $(SHARED_DIR)/libshared.a
 bench: $(BENCH_ROUTING) $(BENCH_PBF)
 	./$(BENCH_ROUTING)
 
+# Route quality benchmark
+$(ROUTE_BENCH): benchmarks/velo_route_bench.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lvelo -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+
+route-bench: $(ROUTE_BENCH)
+	@echo "Route benchmark built: ./$(ROUTE_BENCH)"
+	@echo "Usage: ./$(ROUTE_BENCH) --graph data/map.vlg --suite smoke -v"
+
 # Debug build
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: clean all
@@ -143,7 +152,7 @@ wasm:
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(LIB)
-	rm -f $(TEST_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF)
+	rm -f $(TEST_BIN) $(TEST_OSRM) $(BENCH_ROUTING) $(BENCH_PBF) $(ROUTE_BENCH)
 	rm -f $(WASM_OUT) velo.wasm
 
 # Dependencies
@@ -159,16 +168,18 @@ help:
 	@echo "Velo Build System"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all      - Build library and tests (default)"
-	@echo "  lib      - Build static library (libvelo.a)"
-	@echo "  test     - Build and run tests"
-	@echo "  bench    - Build and run benchmarks"
-	@echo "  debug    - Build with debug symbols"
-	@echo "  wasm     - Build WebAssembly (requires Emscripten)"
-	@echo "  clean    - Remove build artifacts"
+	@echo "  all         - Build library and tests (default)"
+	@echo "  lib         - Build static library (libvelo.a)"
+	@echo "  test        - Build and run tests"
+	@echo "  bench       - Build and run algorithm benchmarks"
+	@echo "  route-bench - Build route quality benchmark tool"
+	@echo "  debug       - Build with debug symbols"
+	@echo "  wasm        - Build WebAssembly (requires Emscripten)"
+	@echo "  clean       - Remove build artifacts"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make                    # Build library and tests"
-	@echo "  make test               # Run test suite"
-	@echo "  make bench              # Run benchmarks"
-	@echo "  ./bench_pbf map.osm.pbf # Benchmark PBF parsing"
+	@echo "  make                           # Build library and tests"
+	@echo "  make test                      # Run test suite"
+	@echo "  make bench                     # Run algorithm benchmarks"
+	@echo "  make route-bench               # Build route quality tool"
+	@echo "  ./velo-route-bench --help      # Route benchmark usage"

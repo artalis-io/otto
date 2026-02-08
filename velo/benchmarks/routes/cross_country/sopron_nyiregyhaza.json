@@ -1,0 +1,36 @@
+{
+  "name": "Sopron to Nyiregyhaza",
+  "description": "Cross-country route across Hungary, ~450km",
+  "category": "cross_country",
+
+  "origin": {
+    "lat": 47.6851,
+    "lon": 16.5908,
+    "name": "Sopron"
+  },
+  "destination": {
+    "lat": 47.9554,
+    "lon": 21.7167,
+    "name": "Nyiregyhaza"
+  },
+
+  "options": {
+    "profile": "car",
+    "weight": "distance",
+    "algorithm": "astar_bidir"
+  },
+
+  "reference": {
+    "source": "dijkstra_exhaustive",
+    "computed_at": "2026-02-08",
+    "distance_m": 456000,
+    "duration_s": 18000,
+    "waypoint_count": 3200
+  },
+
+  "tolerances": {
+    "distance_pct": 0.05,
+    "duration_pct": 5.0,
+    "time_ms_max": 200
+  }
+}
