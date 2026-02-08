@@ -166,6 +166,58 @@
             100% { background-position: 0 60px; }
         }
 
+        /* TV static placeholder */
+        .tv-static-placeholder {
+            width: 256px;
+            height: 256px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tv-static-placeholder::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            opacity: 0.15;
+            animation: tv-static 0.1s steps(5) infinite;
+        }
+
+        .tv-static-placeholder::after {
+            content: 'NO SIGNAL';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--text-muted);
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            text-shadow: 0 0 10px rgba(100, 100, 100, 0.5);
+            animation: crt-flicker 3s infinite;
+        }
+
+        @keyframes tv-static {
+            0% { transform: translate(0, 0); }
+            20% { transform: translate(-2px, 1px); }
+            40% { transform: translate(1px, -1px); }
+            60% { transform: translate(-1px, 2px); }
+            80% { transform: translate(2px, -2px); }
+            100% { transform: translate(0, 0); }
+        }
+
+        /* Error display in code block */
+        .demo-error {
+            color: var(--error);
+            font-weight: 500;
+        }
+
         .demo-output img {
             border-radius: 4px;
             border: 1px solid var(--border);
@@ -756,7 +808,8 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             </div>
                             <div class="demo-output" id="carta-output">
                                 <div class="crt-image-wrapper">
-                                    <img id="carta-tile-img" alt="Generated output">
+                                    <div class="tv-static-placeholder" id="carta-placeholder"></div>
+                                    <img id="carta-tile-img" alt="Generated output" style="display: none;">
                                 </div>
                                 <div class="demo-status" id="carta-status"></div>
                             </div>
@@ -1275,7 +1328,12 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
                                 Search Monaco places using WASM with embedded index
                             </p>
-                            <button class="try-btn" id="locus-api-v1-search-try-btn" disabled>Loading WASM...</button>
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <label style="font-size: 13px;">
+                                    q: <input type="text" id="locus-q" value="Monte Carlo" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <button class="try-btn" id="locus-api-v1-search-try-btn" disabled>Loading WASM...</button>
+                            </div>
                             <div class="demo-output" id="locus-api-v1-search-output">
                                 <div class="code-block">
                                     <pre id="locus-api-v1-search-result"></pre>
@@ -1333,7 +1391,12 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
                                 Autocomplete suggestions using WASM with embedded Monaco index
                             </p>
-                            <button class="try-btn" id="locus-api-v1-autocomplete-try-btn" disabled>Loading WASM...</button>
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <label style="font-size: 13px;">
+                                    q: <input type="text" id="locus-q" value="Mon" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <button class="try-btn" id="locus-api-v1-autocomplete-try-btn" disabled>Loading WASM...</button>
+                            </div>
                             <div class="demo-output" id="locus-api-v1-autocomplete-output">
                                 <div class="code-block">
                                     <pre id="locus-api-v1-autocomplete-result"></pre>
@@ -1379,7 +1442,15 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                             <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
                                 Reverse geocode a Monaco location using WASM
                             </p>
-                            <button class="try-btn" id="locus-api-v1-reverse-try-btn" disabled>Loading WASM...</button>
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <label style="font-size: 13px;">
+                                    lat: <input type="number" id="locus-lat" value="43.7384" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <label style="font-size: 13px;">
+                                    lon: <input type="number" id="locus-lon" value="7.4246" style="width: 70px; padding: 4px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                                </label>
+                                <button class="try-btn" id="locus-api-v1-reverse-try-btn" disabled>Loading WASM...</button>
+                            </div>
                             <div class="demo-output" id="locus-api-v1-reverse-output">
                                 <div class="code-block">
                                     <pre id="locus-api-v1-reverse-result"></pre>
@@ -1936,9 +2007,10 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error(`${endpoint} fetch failed:`, err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
+                // Show error in code block with red styling
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
             } finally {
                 btn.disabled = false;
                 btn.textContent = btnLabel;
@@ -1952,6 +2024,7 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 
             const btn = document.getElementById('carta-try-btn');
             const img = document.getElementById('carta-tile-img');
+            const placeholder = document.getElementById('carta-placeholder');
             const status = document.getElementById('carta-status');
             const output = document.getElementById('carta-output');
 
@@ -1970,11 +2043,17 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
 
                 img.src = dataUrl;
                 img.style.display = 'block';
+                if (placeholder) placeholder.style.display = 'none';
                 status.textContent = `Tile ${z}/${x}/${y}.png generated in ${elapsed}ms`;
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error('Tile generation failed:', err);
                 img.style.display = 'none';
+                if (placeholder) {
+                    placeholder.style.display = 'block';
+                    placeholder.setAttribute('data-error', err.message);
+                    placeholder.querySelector('::after')?.remove();
+                }
                 status.textContent = 'Error: ' + err.message;
                 status.className = 'demo-status error';
             } finally {
@@ -2024,9 +2103,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error('MVT generation failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Generate MVT';
@@ -2060,9 +2139,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error('ASCII generation failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Render ASCII';
@@ -2097,9 +2176,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error('TileJSON fetch failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Fetch TileJSON';
@@ -2234,13 +2313,17 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             const status = document.getElementById('locus-api-v1-search-status');
             const output = document.getElementById('locus-api-v1-search-output');
 
+            // Get query from input field
+            const qInput = document.getElementById('locus-q');
+            const q = qInput ? qInput.value.trim() : 'Monte Carlo';
+
             btn.disabled = true;
             btn.textContent = 'Searching...';
             output.classList.add('visible');
 
             try {
                 const startTime = performance.now();
-                const response = await locusDemo.fetch('/api/v1/search?q=Monte%20Carlo&limit=5');
+                const response = await locusDemo.fetch(`/api/v1/search?q=${encodeURIComponent(q)}&limit=5`);
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2258,9 +2341,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error('Search failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Search';
@@ -2275,13 +2358,17 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             const status = document.getElementById('locus-api-v1-autocomplete-status');
             const output = document.getElementById('locus-api-v1-autocomplete-output');
 
+            // Get query from input field
+            const qInput = document.getElementById('locus-q');
+            const q = qInput ? qInput.value.trim() : 'Mon';
+
             btn.disabled = true;
             btn.textContent = 'Loading...';
             output.classList.add('visible');
 
             try {
                 const startTime = performance.now();
-                const response = await locusDemo.fetch('/api/v1/autocomplete?q=Mon&limit=10');
+                const response = await locusDemo.fetch(`/api/v1/autocomplete?q=${encodeURIComponent(q)}&limit=10`);
                 const elapsed = (performance.now() - startTime).toFixed(1);
 
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2299,9 +2386,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error('Autocomplete failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Autocomplete';
@@ -2316,12 +2403,15 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
             const status = document.getElementById('locus-api-v1-reverse-status');
             const output = document.getElementById('locus-api-v1-reverse-output');
 
+            // Get coordinates from input fields
+            const latInput = document.getElementById('locus-lat');
+            const lonInput = document.getElementById('locus-lon');
+            const lat = latInput ? parseFloat(latInput.value) : 43.7384;
+            const lon = lonInput ? parseFloat(lonInput.value) : 7.4246;
+
             btn.disabled = true;
             btn.textContent = 'Geocoding...';
             output.classList.add('visible');
-
-            const lat = 43.7384;
-            const lon = 7.4246;
 
             try {
                 const startTime = performance.now();
@@ -2342,9 +2432,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error('Reverse geocoding failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Reverse Geocode';
@@ -2432,9 +2522,9 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                 status.className = 'demo-status success';
             } catch (err) {
                 console.error('Solve failed:', err);
-                result.textContent = '';
-                status.textContent = 'Error: ' + err.message;
-                status.className = 'demo-status error';
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Solve Problem';

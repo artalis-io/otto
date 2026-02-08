@@ -664,7 +664,8 @@ class HtmlGenerator:
             html += f'''
                             <div class="demo-output" id="{demo_id}-output">
                                 <div class="crt-image-wrapper">
-                                    <img id="{img_id}" alt="Generated output">
+                                    <div class="tv-static-placeholder" id="{demo_id}-placeholder"></div>
+                                    <img id="{img_id}" alt="Generated output" style="display: none;">
                                 </div>
                                 <div class="demo-status" id="{demo_id}-status"></div>
                             </div>'''

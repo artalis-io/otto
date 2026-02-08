@@ -47,9 +47,9 @@ async function solveFuelWiseProblem() {
         status.className = 'demo-status success';
     } catch (err) {
         console.error('Solve failed:', err);
-        result.textContent = '';
-        status.textContent = 'Error: ' + err.message;
-        status.className = 'demo-status error';
+        result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+        status.textContent = '';
+        status.className = 'demo-status';
     } finally {
         btn.disabled = false;
         btn.textContent = 'Solve Problem';
