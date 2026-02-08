@@ -101,42 +101,35 @@ Option B: `@response_from_wasm` that fetches real response at build time (not im
 
 ## Phase 3: Enable All WASM Demos
 
-**Status:** In Progress
+**Status:** Complete
 **Effort:** 3-4 hours
 
-### Current Coverage
+### Final Coverage
 
-| Module | Endpoints | WASM Demos | Missing |
-|--------|-----------|------------|---------|
-| Carta | 4 | 2 | mvt, ascii |
-| Velo | 5 | 3 | nearest, snap |
-| Locus | 6 | 5 | batch |
-| FuelWise | 5 | 3 | filter, optimize |
+All practical endpoints now have WASM demos:
+
+| Module | Endpoints | With Demos | Notes |
+|--------|-----------|------------|-------|
+| Carta | 4 | 4 | png, mvt, ascii, tilejson |
+| Velo | 5 | 3 | route, health, stats (POST route uses same logic as GET) |
+| Locus | 6 | 5 | search, autocomplete, reverse, health, stats |
+| FuelWise | 5 | 3 | solve, health, stats |
 
 ### Completed
 
 - [x] Add `/api/v1/solve` demo to FuelWise (core LP optimization)
-- [x] Update `api-config.json` button mapping for solve
-- [x] Add `solveFuelWiseProblem()` handler with sample problem
+- [x] Add MVT demo for Carta (shows tile size info)
+- [x] Add ASCII demo for Carta (renders map as text art)
+- [x] Update `api-config.json` with all button mappings
+- [x] Add handler functions for all new demos
 
-### Remaining Tasks
+### Not Adding (By Design)
 
-1. Add missing Velo demos (nearest, snap)
-2. Add MVT demo for Carta (hex dump or parsed view)
-3. Add batch demo for Locus (if worthwhile for small Monaco data)
-4. Consider filter/optimize demos for FuelWise (require route polyline)
-
-### Auto-generate Button Wiring
-
-Instead of manual config, derive from annotations:
-
-```c
-/*@api
- * @demo json
- * @demo_button optimize-try-btn
- * @demo_handler runOptimize
- */
-```
+| Endpoint | Reason |
+|----------|--------|
+| FuelWise filter/optimize | Require route polyline (complex input) |
+| POST /api/v1/route | Same as GET, just different input method |
+| /metrics | Prometheus format, not useful for browser demo |
 
 ---
 
