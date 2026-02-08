@@ -91,7 +91,7 @@ Claude: Uses /feature-branch velo-cache "Add route caching"
 
 - **Never push directly to main** for non-trivial changes
 - **Always wait for user approval** before merging PRs
-- **Delete feature branches** after merge (both local and remote, keeps repo clean)
+- **Delete feature branches** after merge (local always, remote by default)
 - **Keep PRs focused** - one feature per branch
 
 ### Branch Naming (Collision Avoidance)
