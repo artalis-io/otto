@@ -1106,13 +1106,13 @@ static void test_first_eligible_pricing(void) {
 static void test_status_string(void) {
     printf("\n=== Test: Status Strings ===\n");
 
-    ASSERT(strcmp(ralph_netflow_status_string(RALPH_NETFLOW_OPTIMAL), "Optimal") == 0,
+    ASSERT(strcmp(ralph_netflow_status_string(RALPH_NETFLOW_OPTIMAL), "OPTIMAL") == 0,
            "OPTIMAL string");
-    ASSERT(strcmp(ralph_netflow_status_string(RALPH_NETFLOW_INFEASIBLE), "Infeasible") == 0,
+    ASSERT(strcmp(ralph_netflow_status_string(RALPH_NETFLOW_INFEASIBLE), "INFEASIBLE") == 0,
            "INFEASIBLE string");
-    ASSERT(strcmp(ralph_netflow_status_string(RALPH_NETFLOW_UNBOUNDED), "Unbounded") == 0,
+    ASSERT(strcmp(ralph_netflow_status_string(RALPH_NETFLOW_UNBOUNDED), "UNBOUNDED") == 0,
            "UNBOUNDED string");
-    ASSERT(strcmp(ralph_netflow_status_string(RALPH_NETFLOW_INVALID_INPUT), "Invalid input") == 0,
+    ASSERT(strcmp(ralph_netflow_status_string(RALPH_NETFLOW_INVALID_INPUT), "INVALID_INPUT") == 0,
            "INVALID_INPUT string");
 }
 

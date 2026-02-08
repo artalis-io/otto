@@ -42,11 +42,25 @@ The `scripts/api-audit.sh` script programmatically validates all compliance chec
 | Handler function | `{prefix}_api_handle()` declared |
 | @api annotations | Count of `/*@api ... */` blocks |
 | @demo annotations | Count of `@demo` directives |
+| Status strings | Must be UPPERCASE (OPTIMAL, INFEASIBLE, etc.) |
 | WASM wrapper | `{module}/wasm/src/{prefix}_wasm_api.c` |
 | Handlers file | `site/js/handlers/{module}.js` |
 | Test coverage | Each `@demo` endpoint has a test |
 | Docs consistency | `@request_body` matches demo SAMPLE_PROBLEM |
 | api.html status | `make api-docs-check` passes |
+
+**Status String Convention:**
+
+All API status strings must be UPPERCASE for consistency:
+- `OPTIMAL` (not "optimal" or "Optimal solution found")
+- `INFEASIBLE` (not "infeasible" or "No feasible solution")
+- `UNBOUNDED`, `ERROR`, `UNKNOWN`, etc.
+
+This applies to:
+- C `*_status_string()` functions
+- JSON response `"status"` fields
+- WASM wrapper status mappings
+- API documentation examples
 
 **Documentation Consistency:**
 

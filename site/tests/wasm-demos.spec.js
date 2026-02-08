@@ -351,7 +351,7 @@ test.describe('WASM API Demos', () => {
       expect([200, 400, 422]).toContain(result.status);
       expect(result.body).toBeDefined();
       if (result.status === 200) {
-        expect(result.body.status).toBe('optimal');
+        expect(result.body.status).toBe('OPTIMAL');
         expect(result.body.total_cost).toBeDefined();
       }
     });
@@ -381,7 +381,7 @@ test.describe('WASM API Demos', () => {
       });
 
       expect(result.status).toBe(200);
-      expect(result.body.status).toBe('optimal');
+      expect(result.body.status).toBe('OPTIMAL');
       // Verify response structure matches @response_json in fw_api.h
       expect(result.body.num_stops).toBeDefined();
       expect(result.body.total_cost).toBeDefined();
@@ -452,7 +452,7 @@ end`
       });
 
       expect(result.status).toBe(200);
-      expect(result.body.status).toBe('optimal');
+      expect(result.body.status).toBe('OPTIMAL');
       expect(result.body.objective).toBeCloseTo(40, 1);
       expect(result.body.variables).toBeDefined();
       expect(result.body.variables.x).toBeCloseTo(8, 1);
