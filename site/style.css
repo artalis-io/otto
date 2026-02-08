@@ -3,6 +3,15 @@
  * Used by index.html and api.html
  */
 
+/* IBM Plex Mono for CRT/terminal blocks - classic IBM terminal font */
+@font-face {
+    font-family: 'IBM Plex Mono';
+    src: url('fonts/IBMPlexMono-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
 /* ============================================================================
  * CSS Variables
  * ============================================================================ */
@@ -308,6 +317,7 @@ header {
     margin: 0;
     padding: 20px;
     font-size: 13px;
+    font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
     position: relative;
     z-index: 3;
     animation: crt-flicker-gray 4s infinite;
@@ -465,6 +475,7 @@ header {
 
 .ascii-art pre {
     margin: 0;
+    font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
     color: #a0a0a0;
     text-shadow:
         0 0 2px rgba(200, 200, 200, 0.8),
