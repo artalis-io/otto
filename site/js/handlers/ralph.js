@@ -28,37 +28,43 @@ end`;
 
     try {
         const startTime = performance.now();
-        const response = await ralphDemo.fetch('/api/v1/solve', {
+        // Use format=lp query param to get SOL format output
+        const response = await ralphDemo.fetch('/api/v1/solve?format=lp', {
             method: 'POST',
-            body: {
-                format: 'lp',
-                problem: problem
-            }
+            headers: { 'Content-Type': 'text/plain' },
+            body: problem  // Raw LP text, not JSON
         });
         const elapsed = (performance.now() - startTime).toFixed(1);
 
-        const data = await response.json();
-        const html = formatJsonWithHighlighting(data);
+        const text = await response.text();
+
+        // Display as plain text (SOL format)
         const codeBlock = result.closest('.code-block');
         if (codeBlock && window.typeAnimateContent) {
-            window.typeAnimateContent(codeBlock, html);
+            window.typeAnimateContent(codeBlock, text);
         } else {
-            result.innerHTML = html;
+            result.textContent = text;
         }
 
-        if (response.ok && data.status === 'optimal') {
-            status.textContent = `Solved in ${elapsed}ms: objective = ${data.objective}`;
+        if (response.ok && text.includes('OPTIMAL')) {
+            // Extract objective from SOL output
+            const objMatch = text.match(/objective value:\s*([\d.-]+)/);
+            const obj = objMatch ? objMatch[1] : '?';
+            status.textContent = `Solved in ${elapsed}ms: objective = ${obj}`;
             status.className = 'demo-status success';
-        } else if (data.error) {
-            status.textContent = `Error: ${data.error}`;
+        } else if (text.includes('INFEASIBLE')) {
+            status.textContent = `Infeasible (${elapsed}ms)`;
+            status.className = 'demo-status error';
+        } else if (text.includes('error')) {
+            status.textContent = `Error (${elapsed}ms)`;
             status.className = 'demo-status error';
         } else {
-            status.textContent = `Status: ${data.status} (${elapsed}ms)`;
+            status.textContent = `Completed in ${elapsed}ms`;
             status.className = 'demo-status warning';
         }
     } catch (err) {
         console.error('Solve failed:', err);
-        result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+        result.textContent = `Error: ${err.message}`;
         status.textContent = '';
         status.className = 'demo-status';
     } finally {
