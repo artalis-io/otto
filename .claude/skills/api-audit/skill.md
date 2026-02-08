@@ -193,11 +193,43 @@ Each endpoint must have a `/*@api ... */` block in the header:
 | `@query` | `name:type:default Description` | If query params | Query parameter |
 | `@returns` | `content-type Description` | Yes | Response type |
 | `@error` | `code Description` | No | Error response |
-| `@response_json` | JSON block | No | Example response |
+| `@request_body` | `format` + multi-line block | No | Input example (lp, mps, json, text) |
+| `@response_json` | JSON block | No | Example JSON response |
+| `@response_text` | Text block | No | Example text/SOL response |
 | `@example` | Shell command | No | curl example |
 | `@demo` | `json` or `image` | No | Enable WASM demo |
 | `@demo_title` | Text | If @demo | Demo description |
 | `@demo_input` | `name:type:default:min:max` | If @demo needs inputs | Demo input field (see below) |
+
+**Request/Response body examples:**
+
+For POST endpoints, you can show both input and output examples:
+
+```c
+/*@api
+ * POST /api/v1/solve
+ * Solve LP problem
+ *
+ * @query format:string:lp Input format (lp, mps, json)
+ * @returns text/plain Solution in SOL format
+ *
+ * @request_body lp
+ * max: 5 x + 3 y
+ * subject to
+ * c1: 2 x + 4 y <= 40
+ * end
+ *
+ * @response_text
+ * solution status: OPTIMAL
+ * objective value: 40.000000
+ * x 8.000000
+ * y 0.000000
+ */
+```
+
+- `@request_body format` starts a multi-line input example block (format: lp, mps, json, text)
+- `@response_text` starts a multi-line plain text response (e.g., SOL format)
+- Both blocks end when the next `@` annotation is encountered or at end of comment
 
 **@demo_input types:**
 | Type | Format | Example | Renders as |

@@ -1806,21 +1806,54 @@ carta_request_duration_ms_bucket{le="100"} 1200</pre>
                     </div>
                     <div class="endpoint-body">
                         <div class="endpoint-section">
+                            <h4>Query Parameters</h4>
+                            <table class="params-table">
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Type</th>
+                                    <th>Description</th>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">format</span></td>
+                                    <td><span class="param-type">string</span></td>
+                                    <td>Input format: "lp", "mps", or "json" (default: lp) (default: lp)</td>
+                                </tr>
+                                <tr>
+                                    <td><span class="param-name">timeout_ms</span></td>
+                                    <td><span class="param-type">int</span></td>
+                                    <td>Timeout in milliseconds (max 30000) (default: 5000)</td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="endpoint-section">
                             <h4>Example</h4>
                             <div class="code-block">
-<pre><span class="command">curl</span> <span class="url">-X POST http://localhost:8084/api/v1/solve -H "Content-Type: application/json" -d '{"format":"lp","problem":"max: 5x + 3y; 2x + 4y <= 40; x >= 0; y >= 0;"}'</span></pre>
+<pre><span class="command">curl</span> <span class="url">-X POST "http://localhost:8084/api/v1/solve?format=lp" -d @problem.lp</span></pre>
                             </div>
                         </div>
                         <div class="endpoint-section">
-                            <h4>Response</h4>
+                            <h4>Request Body <span style="color: var(--text-muted); font-weight: normal; font-size: 12px;">(LP Format)</span></h4>
                             <div class="code-block">
-<pre>{
-  <span class="key">"status"</span>: <span class="string">"optimal"</span>,
-  <span class="key">"objective"</span>: <span class="number">42.5</span>,
-  <span class="key">"variables"</span>: {<span class="key">"x"</span>: <span class="number">10.0</span>, <span class="key">"y"</span>: <span class="number">5.5</span>},
-  <span class="key">"solve_time_ms"</span>: <span class="number">12</span>,
-  <span class="key">"iterations"</span>: <span class="number">23</span>
-}</pre>
+<pre>max: 5 x + 3 y
+
+subject to
+wood:  2 x + 4 y &lt;= 40
+labor: 3 x + 2 y &lt;= 24
+
+bounds
+x &gt;= 0
+y &gt;= 0
+
+end</pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response <span style="color: var(--text-muted); font-weight: normal; font-size: 12px;">(Text)</span></h4>
+                            <div class="code-block">
+<pre>solution status: OPTIMAL
+objective value: 40.000000
+x 8.000000
+y 0.000000</pre>
                             </div>
                         </div>
                         <div class="wasm-demo" id="ralph-api-v1-solve-demo">
