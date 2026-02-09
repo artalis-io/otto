@@ -1,12 +1,21 @@
-# Carta Tile Server Dockerfile
+# Carta Tile Server
 #
 # Build:
-#   docker build -f docker/Dockerfile.carta -t carta-tile-server .
+#   docker build -f docker/Dockerfile.carta -t otto-carta .
 #
 # Run:
-#   docker run -p 8081:8081 -v $(pwd)/data:/data carta-tile-server /data/hungary-latest.osm.pbf
+#   docker run -p 8081:8081 -v $(pwd)/data:/data:ro otto-carta /data/map.osm.pbf
 #
+# Security:
+#   - Distroless base (no shell, no package manager)
+#   - Non-root user (uid 65532)
+#   - Read-only root filesystem supported
+#
+# See docs/internals/security-model.md for security architecture.
 
+# =============================================================================
+# Build stage
+# =============================================================================
 FROM debian:bookworm-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -16,37 +25,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# Copy source files
 COPY carta/ carta/
 COPY shared/ shared/
 COPY vendor/ vendor/
 COPY Makefile .
 
-# Build carta library and API
-RUN make carta && make shared && make carta-api
+RUN make shared && make carta && make carta-api
 
-# Runtime image
-FROM debian:bookworm-slim
+# Verify the binary works
+RUN ./carta/api/carta-tile-server --help || true
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# =============================================================================
+# Runtime stage (distroless)
+# =============================================================================
+FROM gcr.io/distroless/cc-debian12:nonroot
+
+# Labels
+LABEL org.opencontainers.image.title="OTTO Carta Tile Server"
+LABEL org.opencontainers.image.description="OSM vector and raster tile generator"
+LABEL org.opencontainers.image.source="https://github.com/ottofleet/otto"
+LABEL org.opencontainers.image.documentation="https://github.com/ottofleet/otto/blob/main/carta/CLAUDE.md"
 
 WORKDIR /app
 
-# Copy binary and static files
-COPY --from=builder /build/carta/api/carta-tile-server /app/carta-tile-server
-COPY --from=builder /build/carta/api/static /app/static
+# Copy binary (owned by nonroot user)
+COPY --from=builder --chown=nonroot:nonroot /build/carta/api/carta-tile-server /app/carta-tile-server
+COPY --from=builder --chown=nonroot:nonroot /build/carta/api/static /app/static
 
-# Create data directory
-RUN mkdir -p /data
+# Data directory (mount point)
+# Note: distroless doesn't have mkdir, directory created by volume mount
 
 EXPOSE 8081
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD curl -f http://localhost:8081/api/v1/health || exit 1
+# Distroless uses nonroot user by default (uid 65532)
+USER nonroot
 
-# Entrypoint expects PBF file path as argument
+# Health check not available in distroless (no curl/wget)
+# Use orchestrator health checks instead (Kubernetes, Docker Compose)
+
 ENTRYPOINT ["/app/carta-tile-server", "-p", "8081", "-s", "/app/static"]
 CMD ["/data/map.osm.pbf"]

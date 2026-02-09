@@ -1,0 +1,36 @@
+[Unit]
+Description=OTTO Carta Tile Server
+Documentation=https://github.com/ottofleet/otto/blob/main/carta/CLAUDE.md
+After=network.target
+
+[Service]
+Type=simple
+User=otto
+Group=otto
+WorkingDirectory=/opt/otto
+
+ExecStart=/opt/otto/bin/carta-tile-server -p 8081 %i
+Restart=on-failure
+RestartSec=5
+
+# Include base hardening
+.include /etc/systemd/system/otto-base.conf
+
+# === Role B+C: Transport + Compute ===
+# Network access for HTTP
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Read-only access to map data
+ReadOnlyPaths=/opt/otto/data
+BindReadOnlyPaths=/opt/otto/data
+
+# Writable paths (none needed for carta)
+ReadWritePaths=
+
+# Environment
+Environment=CARTA_RATE_LIMIT_RPS=10
+Environment=CARTA_RATE_LIMIT_BURST=100
+Environment=CARTA_WORK_QUEUE_DEPTH=256
+
+[Install]
+WantedBy=multi-user.target

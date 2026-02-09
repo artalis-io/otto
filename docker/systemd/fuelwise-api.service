@@ -1,0 +1,32 @@
+[Unit]
+Description=OTTO FuelWise Refueling Optimizer
+Documentation=https://github.com/ottofleet/otto/blob/main/fuelwise/CLAUDE.md
+After=network.target
+
+[Service]
+Type=simple
+User=otto
+Group=otto
+WorkingDirectory=/opt/otto
+
+ExecStart=/opt/otto/bin/fuelwise-api -p 8080
+Restart=on-failure
+RestartSec=5
+
+# Include base hardening
+.include /etc/systemd/system/otto-base.conf
+
+# === Role B+C: Transport + Compute ===
+# Network access for HTTP
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# FuelWise doesn't need file access (data comes via API)
+ReadOnlyPaths=
+ReadWritePaths=
+
+# Environment
+Environment=FUELWISE_RATE_LIMIT_RPS=10
+Environment=FUELWISE_RATE_LIMIT_BURST=20
+
+[Install]
+WantedBy=multi-user.target

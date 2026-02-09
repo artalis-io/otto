@@ -1,0 +1,36 @@
+[Unit]
+Description=OTTO Ralph LP/MIP Solver
+Documentation=https://github.com/ottofleet/otto/blob/main/ralph/CLAUDE.md
+After=network.target
+
+[Service]
+Type=simple
+User=otto
+Group=otto
+WorkingDirectory=/opt/otto
+
+ExecStart=/opt/otto/bin/ralph-solver -p 8084
+Restart=on-failure
+RestartSec=5
+
+# Include base hardening
+.include /etc/systemd/system/otto-base.conf
+
+# === Role B+C: Transport + Compute ===
+# Network access for HTTP
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Ralph doesn't need file access (problems come via API)
+ReadOnlyPaths=
+ReadWritePaths=
+
+# Higher memory limit for large LP/MIP problems
+MemoryMax=8G
+
+# Environment
+Environment=RALPH_TIMEOUT_MS=5000
+Environment=RALPH_MAX_VARS=100
+Environment=RALPH_MAX_CONSTRAINTS=100
+
+[Install]
+WantedBy=multi-user.target

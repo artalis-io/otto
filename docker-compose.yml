@@ -1,136 +1,118 @@
 version: '3.8'
 
 # =============================================================================
-# FuelWise Platform - Docker Compose Configuration
+# OTTO Platform - Docker Compose Configuration
 # =============================================================================
 #
-# Profiles:
-#   default     - Full platform (fuelwise + UI)
-#   all-apis    - All 3 API servers
-#   dev         - Development environment
-#
 # Usage:
-#   docker-compose up                        # Full platform
-#   docker-compose --profile all-apis up     # All APIs
-#   docker-compose --profile dev up          # Development
+#   docker-compose up carta velo locus    # GIS trifecta
+#   docker-compose up fuelwise ralph      # Optimization services
+#   docker-compose up                     # All services
 #
+# With custom data:
+#   PBF_FILE=/path/to/map.osm.pbf docker-compose up carta velo locus
+#
+# Security: All services run as non-root with minimal attack surface.
+# See docs/internals/security-model.md for security architecture.
 # =============================================================================
 
 services:
   # ---------------------------------------------------------------------------
-  # Full Platform (FuelWise UI + API)
+  # Carta Tile Server (MVT/PNG)
   # ---------------------------------------------------------------------------
-  fuelwise:
-    build:
-      context: .
-      target: runtime
-    ports:
-      - "80:80"
-      - "8080:8080"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-  # ---------------------------------------------------------------------------
-  # FuelWise API Only
-  # ---------------------------------------------------------------------------
-  fuelwise-api:
-    build:
-      context: .
-      target: api-only
-    ports:
-      - "8080:8080"
-    restart: unless-stopped
-    profiles:
-      - all-apis
-      - fuelwise-only
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # ---------------------------------------------------------------------------
-  # Velo Route Server
-  # ---------------------------------------------------------------------------
-  velo-api:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.velo
-    ports:
-      - "8082:8082"
-    volumes:
-      - ./data:/data:ro
-    environment:
-      - PBF_FILE=/data/hungary-latest.osm.pbf
-    restart: unless-stopped
-    profiles:
-      - all-apis
-      - velo-only
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s  # Extra time for graph loading
-
-  # ---------------------------------------------------------------------------
-  # Carta Tile Server
-  # ---------------------------------------------------------------------------
-  carta-api:
+  carta:
     build:
       context: .
       dockerfile: docker/Dockerfile.carta
     ports:
       - "8081:8081"
     volumes:
-      - ./data:/data:ro
-    environment:
-      - PBF_FILE=/data/hungary-latest.osm.pbf
+      - ${DATA_DIR:-./data}:/data:ro
+    command: ["${PBF_FILE:-/data/map.osm.pbf}"]
     restart: unless-stopped
-    profiles:
-      - all-apis
-      - carta-only
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s  # Extra time for PBF loading
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   # ---------------------------------------------------------------------------
-  # Development Environment
+  # Velo Route Server
   # ---------------------------------------------------------------------------
-  dev:
+  velo:
     build:
       context: .
-      target: development
+      dockerfile: docker/Dockerfile.velo
     ports:
-      - "5173:5173"
-      - "8080:8080"
-      - "8081:8081"
       - "8082:8082"
     volumes:
-      - .:/workspace
-      - /workspace/fuelwise/ui/node_modules
-      - /workspace/carta/ui/node_modules
-    working_dir: /workspace
-    profiles:
-      - dev
-    command: >
-      bash -c "
-        make fuelwise-api &&
-        ./fuelwise/api/fuelwise-api -p 8080 &
-        cd fuelwise/ui && npm run dev -- --host 0.0.0.0
-      "
+      - ${DATA_DIR:-./data}:/data:ro
+    command: ["${PBF_FILE:-/data/map.osm.pbf}"]
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ---------------------------------------------------------------------------
+  # Locus Geocoder
+  # ---------------------------------------------------------------------------
+  locus:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.locus
+    ports:
+      - "8083:8083"
+    volumes:
+      - ${DATA_DIR:-./data}:/data:ro
+    command: ["${PBF_FILE:-/data/map.osm.pbf}"]
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ---------------------------------------------------------------------------
+  # FuelWise Refueling Optimizer
+  # ---------------------------------------------------------------------------
+  fuelwise:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.fuelwise
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # ---------------------------------------------------------------------------
+  # Ralph LP/MIP Solver
+  # ---------------------------------------------------------------------------
+  ralph:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ralph
+    ports:
+      - "8084:8084"
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 8G
 
 # =============================================================================
 # Networks
 # =============================================================================
 networks:
   default:
-    name: fuelwise-network
+    name: otto-network

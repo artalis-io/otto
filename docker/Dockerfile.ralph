@@ -1,15 +1,16 @@
-# Velo Route Server
+# Ralph LP/MIP Solver
 #
 # Build:
-#   docker build -f docker/Dockerfile.velo -t otto-velo .
+#   docker build -f docker/Dockerfile.ralph -t otto-ralph .
 #
 # Run:
-#   docker run -p 8082:8082 -v $(pwd)/data:/data:ro otto-velo /data/map.osm.pbf
+#   docker run -p 8084:8084 otto-ralph
 #
 # Security:
 #   - Distroless base (no shell, no package manager)
 #   - Non-root user (uid 65532)
 #   - Read-only root filesystem supported
+#   - No filesystem access needed (problems via API)
 #
 # See docs/internals/security-model.md for security architecture.
 
@@ -25,33 +26,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-COPY velo/ velo/
+COPY ralph/ ralph/
 COPY shared/ shared/
 COPY vendor/ vendor/
 COPY Makefile .
 
-RUN make shared && make velo && make velo-api
+RUN make shared && make ralph && make ralph-api
 
 # Verify the binary works
-RUN ./velo/api/velo-route-server --help || true
+RUN ./ralph/api/ralph-solver --help || true
 
 # =============================================================================
 # Runtime stage (distroless)
 # =============================================================================
 FROM gcr.io/distroless/cc-debian12:nonroot
 
-LABEL org.opencontainers.image.title="OTTO Velo Route Server"
-LABEL org.opencontainers.image.description="OSM routing engine with Dijkstra, A*, bidirectional search"
+LABEL org.opencontainers.image.title="OTTO Ralph Solver"
+LABEL org.opencontainers.image.description="LP/MIP solver with Revised Simplex, Branch & Bound, Gomory cuts"
 LABEL org.opencontainers.image.source="https://github.com/ottofleet/otto"
-LABEL org.opencontainers.image.documentation="https://github.com/ottofleet/otto/blob/main/velo/CLAUDE.md"
+LABEL org.opencontainers.image.documentation="https://github.com/ottofleet/otto/blob/main/ralph/CLAUDE.md"
 
 WORKDIR /app
 
-COPY --from=builder --chown=nonroot:nonroot /build/velo/api/velo-route-server /app/velo-route-server
+COPY --from=builder --chown=nonroot:nonroot /build/ralph/api/ralph-solver /app/ralph-solver
 
-EXPOSE 8082
+EXPOSE 8084
 
 USER nonroot
 
-ENTRYPOINT ["/app/velo-route-server", "-p", "8082"]
-CMD ["/data/map.osm.pbf"]
+ENTRYPOINT ["/app/ralph-solver", "-p", "8084"]

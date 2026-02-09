@@ -63,11 +63,13 @@ This is the **demo architecture** — everything bundled in one WASM module. The
 
 ## Phase 1: systemd Hardening (Default Mode)
 
+**Status:** ✅ Complete
+
 **Goal:** Harden the existing in-process architecture with systemd directives.
 
 ### 1.1 Base Unit Template
 
-Create `docker/systemd/otto-base.conf`:
+Created `docker/systemd/otto-base.conf`:
 
 ```ini
 [Service]
@@ -107,9 +109,19 @@ ReadOnlyPaths=/data/carta
 .include /etc/systemd/system/otto-base.conf
 ```
 
-Similar for velo, locus, fuelwise, ralph.
+Service files created for all 5 APIs:
+- `carta-tile-server.service`
+- `velo-route-server.service`
+- `locus-geocoder.service`
+- `fuelwise-api.service`
+- `ralph-solver.service`
 
-**Estimate:** 1-2 days
+**Container hardening also complete:**
+- Distroless base images (`gcr.io/distroless/cc-debian12:nonroot`)
+- Non-root user (uid 65532)
+- Read-only root filesystem
+- All capabilities dropped
+- No-new-privileges enabled
 
 ---
 
@@ -187,8 +199,8 @@ void sh_parser_pool_free(ShParserPool *pool);
 
 ## Implementation Order
 
-1. **Phase 1** - systemd hardening (immediate value, low effort)
-2. **Phase 2** - Audit integration (already done)
+1. **Phase 1** - systemd hardening ✅ Complete
+2. **Phase 2** - Audit integration ✅ Complete
 3. **Phase 3** - Process pool (only if required by deployment)
 
 ---

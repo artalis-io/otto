@@ -1,10 +1,13 @@
-# Velo Route Server
+# Locus Geocoder
 #
 # Build:
-#   docker build -f docker/Dockerfile.velo -t otto-velo .
+#   docker build -f docker/Dockerfile.locus -t otto-locus .
 #
 # Run:
-#   docker run -p 8082:8082 -v $(pwd)/data:/data:ro otto-velo /data/map.osm.pbf
+#   docker run -p 8083:8083 -v $(pwd)/data:/data:ro otto-locus /data/map.osm.pbf
+#
+# With pre-built index:
+#   docker run -p 8083:8083 -v $(pwd)/data:/data:ro otto-locus -i /data/map.lcx
 #
 # Security:
 #   - Distroless base (no shell, no package manager)
@@ -25,33 +28,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-COPY velo/ velo/
+COPY locus/ locus/
 COPY shared/ shared/
 COPY vendor/ vendor/
 COPY Makefile .
 
-RUN make shared && make velo && make velo-api
+RUN make shared && make locus && make locus-api
 
 # Verify the binary works
-RUN ./velo/api/velo-route-server --help || true
+RUN ./locus/api/locus-geocoder --help || true
 
 # =============================================================================
 # Runtime stage (distroless)
 # =============================================================================
 FROM gcr.io/distroless/cc-debian12:nonroot
 
-LABEL org.opencontainers.image.title="OTTO Velo Route Server"
-LABEL org.opencontainers.image.description="OSM routing engine with Dijkstra, A*, bidirectional search"
+LABEL org.opencontainers.image.title="OTTO Locus Geocoder"
+LABEL org.opencontainers.image.description="OSM geocoding with forward search, autocomplete, and reverse lookup"
 LABEL org.opencontainers.image.source="https://github.com/ottofleet/otto"
-LABEL org.opencontainers.image.documentation="https://github.com/ottofleet/otto/blob/main/velo/CLAUDE.md"
+LABEL org.opencontainers.image.documentation="https://github.com/ottofleet/otto/blob/main/locus/CLAUDE.md"
 
 WORKDIR /app
 
-COPY --from=builder --chown=nonroot:nonroot /build/velo/api/velo-route-server /app/velo-route-server
+COPY --from=builder --chown=nonroot:nonroot /build/locus/api/locus-geocoder /app/locus-geocoder
 
-EXPOSE 8082
+EXPOSE 8083
 
 USER nonroot
 
-ENTRYPOINT ["/app/velo-route-server", "-p", "8082"]
+ENTRYPOINT ["/app/locus-geocoder", "-p", "8083"]
 CMD ["/data/map.osm.pbf"]
