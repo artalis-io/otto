@@ -35,6 +35,7 @@ static void print_usage(const char *prog)
     printf("                     highway - 3000km (5 days), cross-country (default)\n");
     printf("                     long    - 5000km (7+ days), transcontinental\n");
     printf("                     tight   - 2500km, sparse infrastructure, tight margins\n");
+    printf("                     us      - 2000mi US interstate, Class 8 (imperial)\n");
     printf("  --runs N         Number of runs per scenario (default: 100)\n");
     printf("  --seed N         Random seed (default: time-based)\n");
     printf("  --milp           Use MILP solver (default: LP)\n");
@@ -103,6 +104,8 @@ static FWBenchConfig get_config(const char *scenario, uint64_t seed)
         cfg = fw_bench_config_long_haul();
     } else if (strcmp(scenario, "tight") == 0) {
         cfg = fw_bench_config_tight_margins();
+    } else if (strcmp(scenario, "us") == 0) {
+        cfg = fw_bench_config_us_interstate();
     } else {
         fprintf(stderr, "Unknown scenario: %s\n", scenario);
         cfg = fw_bench_config_highway();
@@ -157,7 +160,7 @@ int main(int argc, char **argv)
     int failures = 0;
 
     if (opts.run_all) {
-        const char *scenarios[] = {"urban", "highway", "long", "tight"};
+        const char *scenarios[] = {"urban", "highway", "long", "tight", "us"};
         int num_scenarios = sizeof(scenarios) / sizeof(scenarios[0]);
 
         if (opts.as_json) {

@@ -8,6 +8,7 @@
 
 #include "fw_bench.h"
 #include "fuelwise.h"
+#include "sh_units.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,11 +195,18 @@ void fw_bench_print_results(
         printf("  }\n");
         printf("}\n");
     } else {
+        /* Determine units for display */
+        int imperial = (config->units == SH_UNITS_IMPERIAL);
+        const char *dist_unit = imperial ? "mi" : "km";
+        double route_dist = imperial
+            ? sh_m_to_miles(config->route_length_m)
+            : config->route_length_m / 1000.0;
+
         printf("\nFuelWise Benchmark Results\n");
         printf("==========================\n");
-        printf("Scenario: %s (%.0fkm, seed=%llu)\n",
+        printf("Scenario: %s (%.0f%s, seed=%llu)\n",
                scenario ? scenario : "custom",
-               config->route_length_m / 1000.0,
+               route_dist, dist_unit,
                (unsigned long long)config->seed);
         printf("\n");
 
