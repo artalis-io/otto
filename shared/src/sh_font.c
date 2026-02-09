@@ -428,61 +428,48 @@ float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atla
         return 0.0f;
     }
 
-    /* Convert to float [0, 1] and compute median for each corner */
+    /* Convert to float [0, 1] */
     const float inv255 = 1.0f / 255.0f;
 
     float r00 = font->atlas_data[idx00 + 0] * inv255;
     float g00 = font->atlas_data[idx00 + 1] * inv255;
     float b00 = font->atlas_data[idx00 + 2] * inv255;
-    float m00 = median3f(r00, g00, b00);
 
     float r10 = font->atlas_data[idx10 + 0] * inv255;
     float g10 = font->atlas_data[idx10 + 1] * inv255;
     float b10 = font->atlas_data[idx10 + 2] * inv255;
-    float m10 = median3f(r10, g10, b10);
 
     float r01 = font->atlas_data[idx01 + 0] * inv255;
     float g01 = font->atlas_data[idx01 + 1] * inv255;
     float b01 = font->atlas_data[idx01 + 2] * inv255;
-    float m01 = median3f(r01, g01, b01);
 
     float r11 = font->atlas_data[idx11 + 0] * inv255;
     float g11 = font->atlas_data[idx11 + 1] * inv255;
     float b11 = font->atlas_data[idx11 + 2] * inv255;
-    float m11 = median3f(r11, g11, b11);
 
-    /* Bilinear interpolation */
-    float m0 = lerpf(m00, m10, tx);
-    float m1 = lerpf(m01, m11, tx);
-    return lerpf(m0, m1, ty);
+    /* Bilinearly interpolate each channel FIRST (matches GPU texture filtering)
+     * This is critical for MSDF - must interpolate RGB, then compute median */
+    float r0 = lerpf(r00, r10, tx);
+    float r1 = lerpf(r01, r11, tx);
+    float r = lerpf(r0, r1, ty);
+
+    float g0 = lerpf(g00, g10, tx);
+    float g1 = lerpf(g01, g11, tx);
+    float g = lerpf(g0, g1, ty);
+
+    float b0 = lerpf(b00, b10, tx);
+    float b1 = lerpf(b01, b11, tx);
+    float b = lerpf(b0, b1, ty);
+
+    /* THEN compute median of the interpolated values */
+    return median3f(r, g, b);
 }
 
 float sh_font_msdf_coverage_bilinear(const SHFont *font, const SHGlyph *glyph,
                                       float local_x, float local_y, float font_size)
 {
-    if (!font || !glyph || font_size <= 0.0f) {
-        return 0.0f;
-    }
-
-    /* Map local coordinates [0,1] to atlas coordinates */
-    float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
-    float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
-
-    /* Sample with bilinear interpolation */
-    float dist_norm = sh_font_sample_msdf_bilinear(font, atlas_x, atlas_y);
-
-    /* Convert from [0, 1] to signed distance [-1, 1] (0.5 = edge) */
-    float dist = (dist_norm - 0.5f) * 2.0f;
-
-    /* Calculate screen pixel range for anti-aliasing */
-    float screen_px_range = font->distance_range * (font_size / font->em_size);
-    if (screen_px_range < 1.0f) screen_px_range = 1.0f;
-
-    /* Smoothing width in distance units */
-    float smoothing = 0.5f / screen_px_range;
-
-    /* Apply smoothstep for anti-aliased coverage */
-    return smoothstepf(-smoothing, smoothing, dist);
+    /* Just use the threshold version with threshold = 0.5 (normal edge) */
+    return sh_font_msdf_coverage_threshold(font, glyph, local_x, local_y, font_size, 0.5f);
 }
 
 float sh_font_msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
@@ -493,26 +480,29 @@ float sh_font_msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
         return 0.0f;
     }
 
-    /* Map local coordinates [0,1] to atlas coordinates */
+    /* Map local coordinates [0,1] to atlas coordinates
+     * Note: local_y=0 is TOP of glyph (in screen space, lower Y),
+     * which maps to atlas.top (higher row number in PNG, which is LOWER visually)
+     * because the font atlas uses yOrigin=bottom (OpenGL convention) */
     float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
     float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
 
     /* Sample with bilinear interpolation */
-    float dist_norm = sh_font_sample_msdf_bilinear(font, atlas_x, atlas_y);
+    float sd = sh_font_sample_msdf_bilinear(font, atlas_x, atlas_y);
 
-    /* Convert from [0, 1] to signed distance [-1, 1]
-     * Adjust by threshold: threshold=0.5 means edge at 0.5 (normal)
-     * threshold=0.3 means edge at 0.3 (expands glyph for halo)
+    /* Calculate screen pixel range (same formula as WebGL renderer)
+     * pxRange = distanceRange * (fontSize / emSize)
      */
-    float dist = (dist_norm - threshold) * 2.0f;
+    float pxRange = font->distance_range * (font_size / font->em_size);
 
-    /* Calculate screen pixel range for anti-aliasing */
-    float screen_px_range = font->distance_range * (font_size / font->em_size);
-    if (screen_px_range < 1.0f) screen_px_range = 1.0f;
+    /* Match WebGL shader formula exactly:
+     * screenPxDistance = pxRange * (sd - 0.5)
+     * opacity = clamp(screenPxDistance + 0.5, 0.0, 1.0)
+     *
+     * For threshold != 0.5, adjust the edge position
+     */
+    float screenPxDist = pxRange * (sd - threshold);
 
-    /* Smoothing width in distance units */
-    float smoothing = 0.5f / screen_px_range;
-
-    /* Apply smoothstep for anti-aliased coverage */
-    return smoothstepf(-smoothing, smoothing, dist);
+    /* Linear clamp for anti-aliased edge (matches WebGL shader exactly) */
+    return clampf(screenPxDist + 0.5f, 0.0f, 1.0f);
 }
