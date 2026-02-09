@@ -35,7 +35,7 @@ extern "C" {
 typedef struct {
     /* Network */
     int port;                    /* Listen port */
-    char host[64];               /* Bind address */
+    char host[256];              /* Bind address (DNS max is 253 chars) */
 
     /* Threading */
     int worker_threads;          /* Worker thread count (0 = auto) */
