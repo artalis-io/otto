@@ -31,10 +31,10 @@ static void print_usage(const char *prog)
     printf("Usage: %s [options]\n\n", prog);
     printf("Options:\n");
     printf("  --scenario NAME  Run specific scenario:\n");
-    printf("                     urban   - 200km, dense stations, light truck\n");
-    printf("                     highway - 800km, typical truck (default)\n");
-    printf("                     long    - 2000km, sparse rural\n");
-    printf("                     tight   - 500km, tight margins\n");
+    printf("                     urban   - 1500km (3 days), dense stations\n");
+    printf("                     highway - 3000km (5 days), cross-country (default)\n");
+    printf("                     long    - 5000km (7+ days), transcontinental\n");
+    printf("                     tight   - 2500km, sparse infrastructure, tight margins\n");
     printf("  --runs N         Number of runs per scenario (default: 100)\n");
     printf("  --seed N         Random seed (default: time-based)\n");
     printf("  --milp           Use MILP solver (default: LP)\n");

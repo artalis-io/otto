@@ -16,93 +16,108 @@
  * Preset Configurations
  * ============================================================================ */
 
+/*
+ * Preset Configurations
+ *
+ * Realistic trucking scenarios:
+ * - Drivers cover 500-700 km/day (EU driving time limits)
+ * - Week-long routes: 3000-5000 km
+ * - Fuel consumption: 25-35 L/100km depending on load
+ * - Tank sizes: 400-1000L (400L typical, 800-1000L for long-haul)
+ * - Fuel stops: Every 500-1000 km (1-2x per day)
+ */
+
+/* 3-day regional route: ~1500 km, Central Europe hub-and-spoke */
 FWBenchConfig fw_bench_config_short_urban(void)
 {
     FWBenchConfig cfg = {0};
-    cfg.route_length_m = 200000;        /* 200 km */
-    cfg.mean_station_gap_m = 15000;     /* 15 km average */
+    cfg.route_length_m = 1500000;       /* 1500 km (3 days) */
+    cfg.mean_station_gap_m = 30000;     /* 30 km average (dense coverage) */
     cfg.gap_shape = 2.5;
-    cfg.tank_capacity_l = 150;
-    cfg.tare_weight_kg = 8000;
-    cfg.max_gvw_kg = 12000;
-    cfg.curve = NULL;                   /* Use light truck */
-    cfg.num_weight_events = 2;
-    cfg.cargo_weight_mean_kg = 1500;
-    cfg.cargo_weight_stddev_kg = 300;
-    cfg.min_fuel_l = 15;
-    cfg.start_fuel_fraction = 0.5;
-    cfg.base_price_per_l = 1.60;
+    cfg.tank_capacity_l = 400;          /* Standard single tank */
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;                   /* EU standard truck */
+    cfg.num_weight_events = 4;          /* Pickups/deliveries */
+    cfg.cargo_weight_mean_kg = 6000;
+    cfg.cargo_weight_stddev_kg = 2000;
+    cfg.min_fuel_l = 50;
+    cfg.start_fuel_fraction = 0.5;      /* Half tank at start */
+    cfg.base_price_per_l = 1.55;        /* EUR/L */
     cfg.price_stddev = 0.15;
     cfg.price_correlation = 0.5;
     cfg.rng_type = SH_RNG_XORSHIFT128;
-    cfg.seed = 0;                       /* Will be set by caller */
+    cfg.seed = 0;
     return cfg;
 }
 
+/* 5-day cross-country: ~3000 km, typical Europe corridor */
 FWBenchConfig fw_bench_config_highway(void)
 {
     FWBenchConfig cfg = {0};
-    cfg.route_length_m = 800000;        /* 800 km */
+    cfg.route_length_m = 3000000;       /* 3000 km (5 days) */
     cfg.mean_station_gap_m = 40000;     /* 40 km average */
     cfg.gap_shape = 2.5;
-    cfg.tank_capacity_l = 500;
+    cfg.tank_capacity_l = 500;          /* Dual tanks common for this range */
     cfg.tare_weight_kg = 15000;
     cfg.max_gvw_kg = 40000;
-    cfg.curve = NULL;                   /* Use EU standard */
-    cfg.num_weight_events = 4;
-    cfg.cargo_weight_mean_kg = 5000;
-    cfg.cargo_weight_stddev_kg = 1500;
-    cfg.min_fuel_l = 50;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 6;          /* Multiple stops */
+    cfg.cargo_weight_mean_kg = 8000;
+    cfg.cargo_weight_stddev_kg = 2500;
+    cfg.min_fuel_l = 60;
     cfg.start_fuel_fraction = 0.6;
     cfg.base_price_per_l = 1.50;
-    cfg.price_stddev = 0.12;
-    cfg.price_correlation = 0.4;
+    cfg.price_stddev = 0.18;            /* Higher variance across countries */
+    cfg.price_correlation = 0.3;        /* Less correlated (border effects) */
     cfg.rng_type = SH_RNG_XORSHIFT128;
     cfg.seed = 0;
     return cfg;
 }
 
+/* 7+ day transcontinental: ~5000 km, Spain to Poland type route */
 FWBenchConfig fw_bench_config_long_haul(void)
 {
     FWBenchConfig cfg = {0};
-    cfg.route_length_m = 2000000;       /* 2000 km */
-    cfg.mean_station_gap_m = 60000;     /* 60 km average */
-    cfg.gap_shape = 2.0;                /* More variance */
-    cfg.tank_capacity_l = 800;
+    cfg.route_length_m = 5000000;       /* 5000 km (full week+) */
+    cfg.mean_station_gap_m = 50000;     /* 50 km average */
+    cfg.gap_shape = 2.0;                /* More variance (rural sections) */
+    cfg.tank_capacity_l = 800;          /* Long-haul configuration */
     cfg.tare_weight_kg = 15000;
     cfg.max_gvw_kg = 40000;
     cfg.curve = NULL;
-    cfg.num_weight_events = 6;
-    cfg.cargo_weight_mean_kg = 6000;
-    cfg.cargo_weight_stddev_kg = 2000;
+    cfg.num_weight_events = 8;          /* Multiple pickups/drops */
+    cfg.cargo_weight_mean_kg = 10000;
+    cfg.cargo_weight_stddev_kg = 3000;
     cfg.min_fuel_l = 80;
     cfg.start_fuel_fraction = 0.7;
-    cfg.base_price_per_l = 1.45;
-    cfg.price_stddev = 0.20;
-    cfg.price_correlation = 0.3;
+    cfg.base_price_per_l = 1.45;        /* Varies by country */
+    cfg.price_stddev = 0.25;            /* Large variance (Spain vs Poland) */
+    cfg.price_correlation = 0.2;        /* Low correlation (different markets) */
     cfg.rng_type = SH_RNG_XORSHIFT128;
     cfg.seed = 0;
     return cfg;
 }
 
+/* Tight margins: Eastern Europe, older equipment, sparse infrastructure */
 FWBenchConfig fw_bench_config_tight_margins(void)
 {
     FWBenchConfig cfg = {0};
-    cfg.route_length_m = 500000;        /* 500 km */
-    cfg.mean_station_gap_m = 50000;     /* 50 km - sparse */
-    cfg.gap_shape = 3.0;                /* Less variance */
-    cfg.tank_capacity_l = 300;          /* Smaller tank */
+    cfg.route_length_m = 2500000;       /* 2500 km (4-5 days) */
+    cfg.mean_station_gap_m = 70000;     /* 70 km - sparser coverage */
+    cfg.gap_shape = 2.0;
+    cfg.tank_capacity_l = 350;          /* Smaller/older tank */
     cfg.tare_weight_kg = 15000;
     cfg.max_gvw_kg = 40000;
     cfg.curve = NULL;
-    cfg.num_weight_events = 3;
-    cfg.cargo_weight_mean_kg = 8000;    /* Heavy cargo */
-    cfg.cargo_weight_stddev_kg = 1000;
+    cfg.num_weight_events = 5;
+    cfg.cargo_weight_mean_kg = 12000;   /* Heavy loads */
+    cfg.cargo_weight_stddev_kg = 2000;
     cfg.min_fuel_l = 40;
-    cfg.start_fuel_fraction = 0.4;      /* Low starting fuel */
-    cfg.base_price_per_l = 1.55;
-    cfg.price_stddev = 0.10;
-    cfg.price_correlation = 0.6;
+    cfg.start_fuel_fraction = 0.3;      /* Low starting fuel */
+    cfg.base_price_per_l = 1.35;        /* Lower base (Eastern Europe) */
+    cfg.price_stddev = 0.20;
+    cfg.price_correlation = 0.4;
     cfg.rng_type = SH_RNG_XORSHIFT128;
     cfg.seed = 0;
     return cfg;
