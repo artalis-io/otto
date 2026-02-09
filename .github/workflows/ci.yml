@@ -89,7 +89,7 @@ jobs:
 
       # FuelWise API has full test suite (starts server, tests endpoints, stops)
       - name: Test FuelWise API
-        run: make test-fuelwise-api
+        run: make -C fuelwise/api test
 
       # Ralph API has full test suite (no external data needed)
       - name: Test Ralph API
