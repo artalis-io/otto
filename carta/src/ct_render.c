@@ -23,15 +23,6 @@
  * See sh_fill_span() and sh_clear_buffer() for SIMD-optimized implementations.
  */
 
-/*
- * Convert CTColor (RGBA from high to low bits) to shared library format (ABGR from high to low).
- * Both use the same memory layout (R at offset 0, A at offset 3), but different uint32_t packing.
- */
-static inline uint32_t ct_to_sh_color(CTColor c)
-{
-    return SH_RGBA(CT_COLOR_R(c), CT_COLOR_G(c), CT_COLOR_B(c), CT_COLOR_A(c));
-}
-
 /* Minimum feature size in pixels for render-time filtering.
  * Lines need at least 1px to be visible.
  * Buildings need at least 3px in both dimensions to be worth rendering.
@@ -112,8 +103,8 @@ void ct_render_clear(CTRenderContext *ctx)
 {
     CTColor bg = ctx->style.background_color;
     /* Use SIMD-optimized clear from shared library.
-     * Convert CTColor to shared format (different uint32_t packing). */
-    sh_clear_buffer(ctx->pixels, ctx->width, ctx->height, ct_to_sh_color(bg));
+     * CTColor now uses same format as sh_render (0xAABBGGRR). */
+    sh_clear_buffer(ctx->pixels, ctx->width, ctx->height, bg);
 }
 
 void ct_render_set_style(CTRenderContext *ctx, const CTStyle *style)
@@ -275,7 +266,7 @@ void ct_render_blend_pixel(CTRenderContext *ctx, int x, int y, CTColor color)
  */
 static inline void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTColor color)
 {
-    sh_fill_span(ctx->pixels, ctx->width, ctx->height, y, x_start, x_end, ct_to_sh_color(color));
+    sh_fill_span(ctx->pixels, ctx->width, ctx->height, y, x_start, x_end, color);
 }
 
 /* ============================================================================

@@ -306,16 +306,18 @@ typedef struct {
  * Styling
  * ============================================================================ */
 
-/* RGBA color (0xRRGGBBAA) */
+/* RGBA color - packed as 0xAABBGGRR for efficient SIMD operations.
+ * On little-endian systems, this stores as [R,G,B,A] in memory.
+ * Same format as shared library (sh_render.h) for zero-copy interop. */
 typedef uint32_t CTColor;
 
 #define CT_RGBA(r, g, b, a) \
-    (((uint32_t)(r) << 24) | ((uint32_t)(g) << 16) | ((uint32_t)(b) << 8) | (uint32_t)(a))
+    (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(r))
 #define CT_RGB(r, g, b) CT_RGBA(r, g, b, 255)
-#define CT_COLOR_R(c) (((c) >> 24) & 0xFF)
-#define CT_COLOR_G(c) (((c) >> 16) & 0xFF)
-#define CT_COLOR_B(c) (((c) >> 8) & 0xFF)
-#define CT_COLOR_A(c) ((c) & 0xFF)
+#define CT_COLOR_R(c) ((c) & 0xFF)
+#define CT_COLOR_G(c) (((c) >> 8) & 0xFF)
+#define CT_COLOR_B(c) (((c) >> 16) & 0xFF)
+#define CT_COLOR_A(c) (((c) >> 24) & 0xFF)
 
 /*
  * Road width specification at key zoom levels.
