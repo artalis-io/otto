@@ -446,6 +446,8 @@ void cs_soft_text(CsSoftRenderer *r, const char *text, int len,
     uint8_t cg = (color >> 16) & 0xFF;
     uint8_t cb = (color >> 8) & 0xFF;
 
+    /* y is top of text bounding box - calculate baseline (same as carta) */
+    float baseline_y = y + sh_font_ascent(font, size);
     float cursor_x = x;
 
     for (int i = 0; i < len; i++) {
@@ -458,20 +460,34 @@ void cs_soft_text(CsSoftRenderer *r, const char *text, int len,
             continue;
         }
 
-        /* Calculate glyph dimensions - plane bounds are in em-space (0-1) */
-        /* Multiply by font size to get pixel dimensions */
+        /* Calculate glyph dimensions in screen pixels (same as carta) */
         float glyph_w = (glyph->plane.right - glyph->plane.left) * size;
         float glyph_h = (glyph->plane.top - glyph->plane.bottom) * size;
-        float gx = cursor_x + glyph->plane.left * size;
-        float gy = y - glyph->plane.top * size;  /* Baseline-relative, y is baseline */
 
-        /* Render glyph using MSDF */
-        for (int py = 0; py < (int)glyph_h && py < 256; py++) {
-            int screen_y = (int)(gy + py);
+        if (glyph_w <= 0.0f || glyph_h <= 0.0f) {
+            cursor_x += glyph->advance * size;
+            i += bytes - 1;
+            continue;
+        }
+
+        /* Calculate glyph position (same as carta) */
+        float glyph_x = cursor_x + glyph->plane.left * size;
+        float glyph_y = baseline_y - glyph->plane.top * size;
+
+        /* Integer dimensions and position for rendering
+         * Use ceiling for dimensions to avoid missing edge pixels */
+        int gx = (int)glyph_x;
+        int gy = (int)glyph_y;
+        int gw = (int)ceilf(glyph_w);
+        int gh = (int)ceilf(glyph_h);
+
+        /* Render glyph using MSDF (same approach as carta ct_render_glyph) */
+        for (int py = 0; py < gh; py++) {
+            int screen_y = gy + py;
             if (screen_y < 0 || screen_y >= r->height) continue;
 
-            for (int px = 0; px < (int)glyph_w && px < 256; px++) {
-                int screen_x = (int)(gx + px);
+            for (int px = 0; px < gw; px++) {
+                int screen_x = gx + px;
                 if (screen_x < 0 || screen_x >= r->width) continue;
 
                 /* Check scissor */
@@ -479,29 +495,35 @@ void cs_soft_text(CsSoftRenderer *r, const char *text, int len,
                     continue;
                 }
 
-                /* Sample glyph coverage using MSDF */
-                float u = (float)px / glyph_w;
-                float v = (float)py / glyph_h;
-                float coverage = sh_font_msdf_coverage_threshold(font, glyph, u, v, size, 0.5f);
+                /* Map screen pixel to local glyph coordinates [0, 1]
+                 * Note: local_x is NOT flipped (left-to-right is same in both)
+                 * local_y IS flipped (screen Y increases down, but glyph top is at low Y) */
+                float local_x = ((float)px + 0.5f) / glyph_w;
+                float local_y = ((float)py + 0.5f) / glyph_h;
 
-                if (coverage > 0.0f) {
-                    uint8_t alpha = (uint8_t)(coverage * 255);
-                    uint32_t glyph_color = cs_pack_color(cr, cg, cb, alpha);
+                /* Get MSDF coverage with threshold (uses bilinear sampling) */
+                float coverage = sh_font_msdf_coverage_threshold(font, glyph,
+                                                                  local_x, local_y,
+                                                                  size, 0.5f);
 
-                    /* Blend onto buffer */
-                    int offset = (screen_y * r->width + screen_x) * 4;
-                    uint32_t dest = ((uint32_t)r->pixels[offset + 3] << 24) |
-                                    ((uint32_t)r->pixels[offset + 2] << 16) |
-                                    ((uint32_t)r->pixels[offset + 1] << 8) |
-                                    r->pixels[offset];
+                if (coverage <= 0.0f) continue;
 
-                    uint32_t blended = cs_blend_color(cs_to_sh_color(glyph_color), dest);
+                uint8_t alpha = (uint8_t)(coverage * 255.0f);
 
-                    r->pixels[offset + 0] = blended & 0xFF;
-                    r->pixels[offset + 1] = (blended >> 8) & 0xFF;
-                    r->pixels[offset + 2] = (blended >> 16) & 0xFF;
-                    r->pixels[offset + 3] = (blended >> 24) & 0xFF;
-                }
+                /* Blend onto buffer using simple alpha blending
+                 * Buffer is in RGBA format (R at offset+0) */
+                int offset = (screen_y * r->width + screen_x) * 4;
+                uint8_t dr = r->pixels[offset + 0];
+                uint8_t dg = r->pixels[offset + 1];
+                uint8_t db = r->pixels[offset + 2];
+                uint8_t da = r->pixels[offset + 3];
+
+                /* Porter-Duff source-over: out = src + dst * (1 - src_alpha) */
+                uint32_t inv_alpha = 255 - alpha;
+                r->pixels[offset + 0] = (uint8_t)((cr * alpha + dr * inv_alpha) / 255);
+                r->pixels[offset + 1] = (uint8_t)((cg * alpha + dg * inv_alpha) / 255);
+                r->pixels[offset + 2] = (uint8_t)((cb * alpha + db * inv_alpha) / 255);
+                r->pixels[offset + 3] = (uint8_t)(alpha + (da * inv_alpha) / 255);
             }
         }
 
