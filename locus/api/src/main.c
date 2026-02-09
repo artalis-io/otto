@@ -1162,7 +1162,7 @@ int main(int argc, char *argv[]) {
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
 
-    char listen_addr[64];
+    char listen_addr[128];
     snprintf(listen_addr, sizeof(listen_addr), "http://%s:%d",
              s_config.server.host, s_config.server.port);
 
