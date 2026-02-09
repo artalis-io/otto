@@ -40,6 +40,11 @@ static TestCase test_cases[] = {
     { "mixed_24",    "The quick brown fox jumps over the lazy dog.", 24.0f, 800, 50 },
     { "small_12",    "Small text at 12px",    12.0f, 200, 30 },
     { "large_64",    "BIG",                   64.0f, 200, 100 },
+    /* Problem characters - for debugging */
+    { "Z_24",        "Z",                     24.0f, 40, 40 },
+    { "z_24",        "z",                     24.0f, 40, 40 },
+    { "R_24",        "R",                     24.0f, 40, 40 },
+    { "B_24",        "B",                     24.0f, 40, 40 },
 };
 
 static int num_test_cases = sizeof(test_cases) / sizeof(test_cases[0]);
@@ -71,10 +76,32 @@ static int render_test_case(const TestCase *tc, const char *output_dir)
     /* Render text - white on dark background */
     /* Position: 10px from left, vertically centered */
     float y = (tc->height - tc->font_size) / 2.0f;
+
+    /* Debug: print glyph position for single-char tests */
+    if (strlen(tc->text) == 1) {
+        const SHGlyph *g = sh_font_get_glyph(font, tc->text[0]);
+        if (g) {
+            float glyph_y = y + (1.0f - g->plane.top) * tc->font_size;
+            float glyph_h = (g->plane.top - g->plane.bottom) * tc->font_size;
+            printf("  %s: y=%.2f, glyph_y=%.2f, glyph_h=%.2f, range=[%.2f, %.2f]\n",
+                   tc->name, y, glyph_y, glyph_h, glyph_y, glyph_y + glyph_h);
+        }
+    }
+
     sh_font_render_text(pixels, tc->width, tc->height,
                         font, tc->text, -1,
                         10.0f, y, tc->font_size,
                         255, 255, 255, 255);
+
+    /* Debug: check pixels at (12,14-16) for Z_24 */
+    if (strcmp(tc->name, "Z_24") == 0) {
+        printf("  Buffer check after render:\n");
+        for (int dy = 14; dy <= 20; dy++) {
+            int idx = (dy * tc->width + 12) * 4;
+            printf("    (12,%d): (%d,%d,%d,%d)\n", dy,
+                   pixels[idx], pixels[idx+1], pixels[idx+2], pixels[idx+3]);
+        }
+    }
 
     /* Encode as PNG */
     size_t png_capacity = ct_png_max_size(tc->width, tc->height);
@@ -183,56 +210,56 @@ static int generate_html(const char *output_dir)
     }
     fprintf(f, "];\n\n");
 
+    fprintf(f, "async function loadImage(src) {\n");
+    fprintf(f, "  return new Promise((resolve, reject) => {\n");
+    fprintf(f, "    const img = new Image();\n");
+    fprintf(f, "    img.onload = () => resolve(img);\n");
+    fprintf(f, "    img.onerror = reject;\n");
+    fprintf(f, "    img.src = src;\n");
+    fprintf(f, "  });\n");
+    fprintf(f, "}\n\n");
+
     fprintf(f, "async function main() {\n");
+    fprintf(f, "  // Process one at a time to avoid WebGL context limits\n");
     fprintf(f, "  for (const tc of testCases) {\n");
-    fprintf(f, "    // Render with WebGL\n");
     fprintf(f, "    const canvas = document.getElementById('webgl_' + tc.name);\n");
     fprintf(f, "    const renderer = new ClayRenderer(canvas);\n");
     fprintf(f, "    const font = new MSDFFont();\n");
     fprintf(f, "    await font.load(renderer.gl, '../../clayshards/fonts/ui-font.json', '../../clayshards/fonts/ui-font.png');\n");
     fprintf(f, "    renderer.setFont(font);\n\n");
 
-    fprintf(f, "    // Clear to dark gray\n");
     fprintf(f, "    renderer.clear(30/255, 30/255, 30/255);\n");
-    fprintf(f, "    const proj = renderer.getProjectionMatrix();\n\n");
-
-    fprintf(f, "    // Render text\n");
+    fprintf(f, "    const proj = renderer.getProjectionMatrix();\n");
     fprintf(f, "    const y = (tc.height - tc.fontSize) / 2;\n");
     fprintf(f, "    renderer.renderText(tc.text, 10, y, tc.fontSize, [1, 1, 1, 1], proj);\n\n");
 
-    fprintf(f, "    // Compare with software render\n");
-    fprintf(f, "    const softImg = new Image();\n");
-    fprintf(f, "    softImg.onload = () => {\n");
-    fprintf(f, "      comparePngs(tc.name, softImg, canvas);\n");
-    fprintf(f, "    };\n");
-    fprintf(f, "    softImg.src = 'soft_' + tc.name + '.png';\n");
+    fprintf(f, "    // Read pixels and compare immediately before moving to next\n");
+    fprintf(f, "    const gl = renderer.gl;\n");
+    fprintf(f, "    const webglPixels = new Uint8Array(tc.width * tc.height * 4);\n");
+    fprintf(f, "    gl.readPixels(0, 0, tc.width, tc.height, gl.RGBA, gl.UNSIGNED_BYTE, webglPixels);\n\n");
+
+    fprintf(f, "    const softImg = await loadImage('soft_' + tc.name + '.png');\n");
+    fprintf(f, "    comparePngs(tc.name, softImg, webglPixels, tc.width, tc.height);\n");
     fprintf(f, "  }\n");
     fprintf(f, "}\n\n");
 
-    fprintf(f, "function comparePngs(name, softImg, webglCanvas) {\n");
+    fprintf(f, "function comparePngs(name, softImg, webglPixels, w, h) {\n");
     fprintf(f, "  const diffCanvas = document.getElementById('diff_' + name);\n");
-    fprintf(f, "  const ctx = diffCanvas.getContext('2d');\n");
-    fprintf(f, "  const w = diffCanvas.width, h = diffCanvas.height;\n\n");
+    fprintf(f, "  const ctx = diffCanvas.getContext('2d');\n\n");
 
-    fprintf(f, "  // Get software pixels\n");
     fprintf(f, "  const softCanvas = document.createElement('canvas');\n");
     fprintf(f, "  softCanvas.width = w; softCanvas.height = h;\n");
     fprintf(f, "  const softCtx = softCanvas.getContext('2d');\n");
     fprintf(f, "  softCtx.drawImage(softImg, 0, 0);\n");
     fprintf(f, "  const softData = softCtx.getImageData(0, 0, w, h).data;\n\n");
 
-    fprintf(f, "  // Get WebGL pixels\n");
-    fprintf(f, "  const webglCtx = webglCanvas.getContext('webgl') || webglCanvas.getContext('webgl2');\n");
-    fprintf(f, "  const webglPixels = new Uint8Array(w * h * 4);\n");
-    fprintf(f, "  webglCtx.readPixels(0, 0, w, h, webglCtx.RGBA, webglCtx.UNSIGNED_BYTE, webglPixels);\n\n");
-
-    fprintf(f, "  // Compute difference\n");
+    fprintf(f, "  // Compute difference (webglPixels is bottom-up)\n");
     fprintf(f, "  const diffData = ctx.createImageData(w, h);\n");
     fprintf(f, "  let totalDiff = 0, maxDiff = 0, diffPixels = 0;\n");
     fprintf(f, "  for (let y = 0; y < h; y++) {\n");
     fprintf(f, "    for (let x = 0; x < w; x++) {\n");
     fprintf(f, "      const si = (y * w + x) * 4;\n");
-    fprintf(f, "      const wi = ((h - 1 - y) * w + x) * 4;  // WebGL is Y-flipped\n");
+    fprintf(f, "      const wi = ((h - 1 - y) * w + x) * 4;\n");
     fprintf(f, "      const di = (y * w + x) * 4;\n\n");
 
     fprintf(f, "      const dr = Math.abs(softData[si] - webglPixels[wi]);\n");

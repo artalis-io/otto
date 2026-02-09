@@ -9,6 +9,15 @@
 #include <string.h>
 #include <math.h>
 
+/* Debug flag - set to 1 to enable debug output */
+#ifndef BILINEAR_DEBUG
+#define BILINEAR_DEBUG 0
+#endif
+
+#if BILINEAR_DEBUG
+#include <stdio.h>
+#endif
+
 /* ============================================================================
  * External Font Data (generated at build time)
  * ============================================================================ */
@@ -384,38 +393,94 @@ static inline float smoothstepf(float edge0, float edge1, float x)
 
 /*
  * Median of three floats (for MSDF).
+ * Formula: max(min(a,b), min(max(a,b), c))
  */
 static inline float median3f(float a, float b, float c)
 {
     float max_ab = a > b ? a : b;
     float min_ab = a < b ? a : b;
-    float max_bc = b > c ? b : c;
-    float min_max = max_ab < c ? max_ab : c;
-    return min_ab > max_bc ? min_ab : (min_max > max_bc ? max_bc : min_max);
+    float min_max_c = max_ab < c ? max_ab : c;  /* min(max(a,b), c) */
+    return min_ab > min_max_c ? min_ab : min_max_c;  /* max(min(a,b), min(max(a,b),c)) */
 }
 
-float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atlas_y)
+/*
+ * Nearest-neighbor MSDF sampling (for testing - MSDF typically uses bilinear).
+ * Uses texelFetch-style: round to nearest integer coordinates.
+ */
+float sh_font_sample_msdf_nearest(const SHFont *font, float atlas_x, float atlas_y)
 {
     if (!font || !font->atlas_data) {
         return 0.0f;
     }
 
-    /* Clamp to atlas bounds */
-    float x = clampf(atlas_x, 0.0f, (float)(font->atlas_width - 1));
-    float y = clampf(atlas_y, 0.0f, (float)(font->atlas_height - 1));
+    /* Round to nearest integer */
+    int x = (int)(atlas_x + 0.5f);
+    int y = (int)(atlas_y + 0.5f);
 
-    /* Get integer coordinates and fractional parts */
-    int x0 = (int)x;
-    int y0 = (int)y;
+    /* Clamp to atlas bounds */
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x >= font->atlas_width) x = font->atlas_width - 1;
+    if (y >= font->atlas_height) y = font->atlas_height - 1;
+
+    /* Sample single texel */
+    size_t idx = ((size_t)y * (size_t)font->atlas_width + (size_t)x) * 4;
+
+    if (idx + 2 >= font->atlas_data_size) {
+        return 0.0f;
+    }
+
+    /* Convert to float [0, 1] */
+    const float inv255 = 1.0f / 255.0f;
+    float r = font->atlas_data[idx + 0] * inv255;
+    float g = font->atlas_data[idx + 1] * inv255;
+    float b = font->atlas_data[idx + 2] * inv255;
+
+    /* Compute median */
+    return median3f(r, g, b);
+}
+
+float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atlas_y)
+{
+    if (!font || !font->atlas_data) {
+#if BILINEAR_DEBUG
+        fprintf(stderr, "bilinear: null font/data\n");
+#endif
+        return 0.0f;
+    }
+
+    /* GPU bilinear filtering samples at texel CENTERS, not edges.
+     * Texel centers are at 0.5, 1.5, 2.5, etc.
+     * When sampling at coordinate x, GPU interpolates between texels
+     * at floor(x-0.5) and floor(x-0.5)+1.
+     *
+     * To match GPU behavior, subtract 0.5 before computing integer coords.
+     */
+    float x = atlas_x - 0.5f;
+    float y = atlas_y - 0.5f;
+
+    /* Get integer coordinates (floor) */
+    int x0 = (int)floorf(x);
+    int y0 = (int)floorf(y);
     int x1 = x0 + 1;
     int y1 = y0 + 1;
 
-    /* Clamp to bounds */
-    if (x1 >= font->atlas_width) x1 = font->atlas_width - 1;
-    if (y1 >= font->atlas_height) y1 = font->atlas_height - 1;
-
+    /* Fractional parts for interpolation weights */
     float tx = x - (float)x0;
     float ty = y - (float)y0;
+
+    /* Clamp integer coords to atlas bounds */
+    if (x0 < 0) { x0 = 0; tx = 0.0f; }
+    if (y0 < 0) { y0 = 0; ty = 0.0f; }
+    if (x1 >= font->atlas_width) x1 = font->atlas_width - 1;
+    if (y1 >= font->atlas_height) y1 = font->atlas_height - 1;
+    if (x0 >= font->atlas_width) x0 = font->atlas_width - 1;
+    if (y0 >= font->atlas_height) y0 = font->atlas_height - 1;
+
+#if BILINEAR_DEBUG
+    fprintf(stderr, "bilinear: atlas=(%.2f,%.2f) -> x0=%d,y0=%d tx=%.3f,ty=%.3f\n",
+            atlas_x, atlas_y, x0, y0, tx, ty);
+#endif
 
     /* Sample four corners (RGBA atlas, we need RGB for MSDF) */
     size_t idx00 = ((size_t)y0 * (size_t)font->atlas_width + (size_t)x0) * 4;
@@ -425,6 +490,10 @@ float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atla
 
     /* Bounds check */
     if (idx11 + 2 >= font->atlas_data_size) {
+#if BILINEAR_DEBUG
+        fprintf(stderr, "bilinear: bounds check failed idx11+2=%zu >= %zu\n",
+                idx11 + 2, font->atlas_data_size);
+#endif
         return 0.0f;
     }
 
@@ -462,7 +531,12 @@ float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atla
     float b = lerpf(b0, b1, ty);
 
     /* THEN compute median of the interpolated values */
-    return median3f(r, g, b);
+    float result = median3f(r, g, b);
+#if BILINEAR_DEBUG
+    fprintf(stderr, "bilinear: rgb=(%.4f,%.4f,%.4f) median=%.4f\n",
+            r, g, b, result);
+#endif
+    return result;
 }
 
 float sh_font_msdf_coverage_bilinear(const SHFont *font, const SHGlyph *glyph,
@@ -480,15 +554,36 @@ float sh_font_msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
         return 0.0f;
     }
 
-    /* Map local coordinates [0,1] to atlas coordinates
-     * Note: despite yOrigin=bottom in the atlas JSON, the actual bounds are
-     * in PNG row coordinates where atlas.bottom < atlas.top numerically,
-     * and lower values = closer to top of image = visual top of glyph */
+    /* Map local coordinates [0,1] to atlas coordinates (PNG row space).
+     *
+     * After the generator's yOrigin=bottom flip:
+     * - C atlas.bottom = visual TOP of glyph in PNG (smaller row number)
+     * - C atlas.top = visual BOTTOM of glyph in PNG (larger row number)
+     *
+     * local_y=0 (screen top) → atlas.bottom (visual top in PNG)
+     * local_y=1 (screen bottom) → atlas.top (visual bottom in PNG)
+     */
     float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
     float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
 
-    /* Sample with bilinear interpolation */
+    /* Clamp to glyph's atlas region to avoid sampling adjacent glyphs.
+     * This is necessary because the render loop extends by 1 pixel for AA,
+     * which can push local_x/local_y outside [0,1] */
+    atlas_x = clampf(atlas_x, glyph->atlas.left, glyph->atlas.right);
+    atlas_y = clampf(atlas_y, glyph->atlas.bottom, glyph->atlas.top);
+
+    /* Sample MSDF: Use nearest-neighbor or bilinear based on compile flag.
+     * Standard MSDF uses bilinear (GL_LINEAR), but nearest can help debug.
+     * Set MSDF_USE_NEAREST=1 to test nearest-neighbor sampling. */
+#ifndef MSDF_USE_NEAREST
+#define MSDF_USE_NEAREST 0
+#endif
+
+#if MSDF_USE_NEAREST
+    float sd = sh_font_sample_msdf_nearest(font, atlas_x, atlas_y);
+#else
     float sd = sh_font_sample_msdf_bilinear(font, atlas_x, atlas_y);
+#endif
 
     /* Calculate screen pixel range (same formula as WebGL renderer)
      * pxRange = distanceRange * (fontSize / emSize)
@@ -522,9 +617,18 @@ static inline int scissor_test(const SHScissor *s, int x, int y)
            y >= s->y && y < s->y + s->h;
 }
 
+/* Debug: set to 1 to enable render tracing */
+#ifndef RENDER_DEBUG
+#define RENDER_DEBUG 0
+#endif
+
+#if RENDER_DEBUG
+#include <stdio.h>
+#endif
+
 void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height,
                                    const SHFont *font, const SHGlyph *glyph,
-                                   int x, int y, float font_size,
+                                   float x, float y, float font_size,
                                    uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
                                    float threshold, const SHScissor *scissor)
 {
@@ -536,54 +640,74 @@ void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height
     float glyph_width = (glyph->plane.right - glyph->plane.left) * font_size;
     float glyph_height = (glyph->plane.top - glyph->plane.bottom) * font_size;
 
+#if RENDER_DEBUG
+    if (glyph->unicode == 90) { /* 'Z' */
+        fprintf(stderr, "RENDER Z: x=%.2f y=%.2f font_size=%.1f glyph_w=%.2f glyph_h=%.2f\n",
+                x, y, font_size, glyph_width, glyph_height);
+        fprintf(stderr, "  atlas: L=%.1f B=%.1f R=%.1f T=%.1f\n",
+                glyph->atlas.left, glyph->atlas.bottom, glyph->atlas.right, glyph->atlas.top);
+    }
+#endif
+
     if (glyph_width <= 0.0f || glyph_height <= 0.0f) {
         return;
     }
 
-    /* Extend by 1 pixel on each side to capture MSDF anti-aliasing at edges
-     * (WebGL renders a quad that covers the full UV range; we need to match) */
-    int gx = x - 1;
-    int gy = y - 1;
-    int px_width = (int)ceilf(glyph_width) + 2;
-    int px_height = (int)ceilf(glyph_height) + 2;
+    /* Calculate screen pixel bounds that the glyph covers.
+     * Extend by 1 pixel on each side for MSDF anti-aliasing. */
+    int x0 = (int)floorf(x) - 1;
+    int y0 = (int)floorf(y) - 1;
+    int x1 = (int)ceilf(x + glyph_width) + 1;
+    int y1 = (int)ceilf(y + glyph_height) + 1;
 
     /* Early bounds check against buffer */
-    if (gx + px_width < 0 || gx >= buf_width ||
-        gy + px_height < 0 || gy >= buf_height) {
+    if (x1 < 0 || x0 >= buf_width || y1 < 0 || y0 >= buf_height) {
         return;
     }
 
-    /* Early scissor rejection: check if glyph bbox is completely outside scissor */
+    /* Early scissor rejection */
     if (scissor) {
-        if (gx + px_width <= scissor->x || gx >= scissor->x + scissor->w ||
-            gy + px_height <= scissor->y || gy >= scissor->y + scissor->h) {
+        if (x1 <= scissor->x || x0 >= scissor->x + scissor->w ||
+            y1 <= scissor->y || y0 >= scissor->y + scissor->h) {
             return;
         }
     }
 
     /* Sample each pixel in the glyph bounding box */
-    for (int py = 0; py < px_height; py++) {
-        int screen_y = gy + py;
+    for (int screen_y = y0; screen_y < y1; screen_y++) {
         if (screen_y < 0 || screen_y >= buf_height) continue;
 
-        for (int px = 0; px < px_width; px++) {
-            int screen_x = gx + px;
+        for (int screen_x = x0; screen_x < x1; screen_x++) {
             if (screen_x < 0 || screen_x >= buf_width) continue;
 
             /* Scissor test */
             if (!scissor_test(scissor, screen_x, screen_y)) continue;
 
-            /* Map screen pixel to local glyph coordinates [0, 1]
-             * Account for the 1-pixel extension on each side */
-            float local_x = ((float)px - 0.5f) / glyph_width;
-            float local_y = ((float)py - 0.5f) / glyph_height;
+            /* Map screen pixel center to local glyph coordinates [0, 1]
+             * This matches how WebGL interpolates UV across the quad */
+            float local_x = ((float)screen_x + 0.5f - x) / glyph_width;
+            float local_y = ((float)screen_y + 0.5f - y) / glyph_height;
 
             /* Get MSDF coverage with threshold (uses bilinear sampling) */
             float coverage = sh_font_msdf_coverage_threshold(font, glyph,
                                                               local_x, local_y,
                                                               font_size, threshold);
 
-            if (coverage <= 0.0f) continue;
+#if RENDER_DEBUG
+            if (glyph->unicode == 90 && screen_x == 12 && screen_y >= 14 && screen_y <= 20) {
+                fprintf(stderr, "  pixel(%d,%d): local=(%.3f,%.3f) cov=%.4f",
+                        screen_x, screen_y, local_x, local_y, coverage);
+            }
+#endif
+
+            if (coverage <= 0.0f) {
+#if RENDER_DEBUG
+                if (glyph->unicode == 90 && screen_x == 12 && screen_y >= 14 && screen_y <= 20) {
+                    fprintf(stderr, " SKIP(cov=0)\n");
+                }
+#endif
+                continue;
+            }
 
             /* Apply coverage to alpha */
             uint8_t pixel_alpha = (uint8_t)(alpha * coverage);
@@ -591,6 +715,11 @@ void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height
 
             /* Blend pixel using sh_render */
             uint32_t color = SH_RGBA(r, g, b, pixel_alpha);
+#if RENDER_DEBUG
+            if (glyph->unicode == 90 && screen_x == 12 && screen_y >= 14 && screen_y <= 20) {
+                fprintf(stderr, " BLEND(alpha=%d)\n", pixel_alpha);
+            }
+#endif
             sh_blend_pixel(pixels, buf_width, buf_height, screen_x, screen_y, color);
         }
     }
@@ -598,7 +727,7 @@ void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height
 
 void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
                           const SHFont *font, const SHGlyph *glyph,
-                          int x, int y, float font_size,
+                          float x, float y, float font_size,
                           uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
                           float threshold)
 {
@@ -623,8 +752,6 @@ void sh_font_render_text_clipped(uint8_t *pixels, int buf_width, int buf_height,
         while (*p++) len++;
     }
 
-    /* y is top of text bounding box - calculate baseline */
-    float baseline_y = y + sh_font_ascent(font, font_size);
     float cursor_x = x;
 
     for (int i = 0; i < len; ) {
@@ -642,13 +769,16 @@ void sh_font_render_text_clipped(uint8_t *pixels, int buf_width, int buf_height,
         float glyph_h = (glyph->plane.top - glyph->plane.bottom) * font_size;
 
         if (glyph_w > 0.0f && glyph_h > 0.0f) {
-            /* Calculate glyph position */
+            /* Calculate glyph position - match WebGL exactly:
+             * x0 = cursorX + pb.left * fontSize
+             * y0 = y + (1 - pb.top) * fontSize
+             */
             float glyph_x = cursor_x + glyph->plane.left * font_size;
-            float glyph_y = baseline_y - glyph->plane.top * font_size;
+            float glyph_y = y + (1.0f - glyph->plane.top) * font_size;
 
             sh_font_render_glyph_clipped(pixels, buf_width, buf_height,
                                           font, glyph,
-                                          (int)glyph_x, (int)glyph_y, font_size,
+                                          glyph_x, glyph_y, font_size,
                                           r, g, b, alpha, 0.5f, scissor);
         }
 
