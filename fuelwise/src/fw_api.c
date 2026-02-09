@@ -176,15 +176,15 @@ static int parse_segments(const char *json_array, FWRouteSegment **segments, int
         } else if ((sp = find_json_key(obj_start, "start"))) {
             (*segments)[i].start_distance = parse_double(&sp);
         }
-        if ((sp = find_json_key(obj_start, "cargo_weight_lbs"))) {
-            (*segments)[i].cargo_weight_lbs = parse_double(&sp);
+        if ((sp = find_json_key(obj_start, "cargo_weight"))) {
+            (*segments)[i].cargo_weight = parse_double(&sp);
         } else if ((sp = find_json_key(obj_start, "weight"))) {
-            (*segments)[i].cargo_weight_lbs = parse_double(&sp);
+            (*segments)[i].cargo_weight = parse_double(&sp);
         }
-        if ((sp = find_json_key(obj_start, "consumption_mpg"))) {
-            (*segments)[i].consumption_mpg = parse_double(&sp);
+        if ((sp = find_json_key(obj_start, "consumption"))) {
+            (*segments)[i].consumption = parse_double(&sp);
         } else if ((sp = find_json_key(obj_start, "mpg"))) {
-            (*segments)[i].consumption_mpg = parse_double(&sp);
+            (*segments)[i].consumption = parse_double(&sp);
         }
 
         p = obj_end + 1;
@@ -251,9 +251,9 @@ static int parse_stations_geo(const char *json_array, FWStation **stations, int 
             (*stations)[i].location.lon = parse_double(&sp);
         }
         if ((sp = find_json_key(obj_start, "price"))) {
-            (*stations)[i].price_per_gallon = parse_double(&sp);
-        } else if ((sp = find_json_key(obj_start, "price_per_gallon"))) {
-            (*stations)[i].price_per_gallon = parse_double(&sp);
+            (*stations)[i].price = parse_double(&sp);
+        } else if ((sp = find_json_key(obj_start, "price"))) {
+            (*stations)[i].price = parse_double(&sp);
         }
         (*stations)[i].name = NULL;
 
@@ -281,8 +281,8 @@ static int parse_solve_request(const char *json, FWRefuelProblem *problem) {
     if ((p = find_json_key(json, "current_fuel"))) {
         problem->current_fuel = parse_double(&p);
     }
-    if ((p = find_json_key(json, "consumption_mpg"))) {
-        problem->base_consumption_mpg = parse_double(&p);
+    if ((p = find_json_key(json, "consumption"))) {
+        problem->base_consumption = parse_double(&p);
     }
     if ((p = find_json_key(json, "minimum_fuel"))) {
         problem->minimum_fuel = parse_double(&p);
@@ -363,10 +363,10 @@ static int parse_solve_request(const char *json, FWRefuelProblem *problem) {
         } else if ((sp = find_json_key(obj_start, "distance"))) {
             problem->stations[i].distance_from_start = parse_double(&sp);
         }
-        if ((sp = find_json_key(obj_start, "price_per_gallon"))) {
-            problem->stations[i].price_per_gallon = parse_double(&sp);
+        if ((sp = find_json_key(obj_start, "price"))) {
+            problem->stations[i].price = parse_double(&sp);
         } else if ((sp = find_json_key(obj_start, "price"))) {
-            problem->stations[i].price_per_gallon = parse_double(&sp);
+            problem->stations[i].price = parse_double(&sp);
         }
 
         p = obj_end + 1;
@@ -479,7 +479,7 @@ static char *process_solve(const char *body, int *status_code) {
                 "}",
                 problem.stations[i].station_id,
                 solution.purchases[i],
-                solution.purchases[i] * problem.stations[i].price_per_gallon);
+                solution.purchases[i] * problem.stations[i].price);
             if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
         }
     }
@@ -580,13 +580,13 @@ static char *process_filter(const char *body, int *status_code) {
             "\"station_id\": %d, "
             "\"distance_from_start\": %.2f, "
             "\"perpendicular_distance\": %.3f, "
-            "\"price_per_gallon\": %.3f, "
+            "\"price\": %.3f, "
             "\"snap_point\": [%.6f, %.6f]"
             "}",
             filtered[i].station_id,
             filtered[i].distance_from_start,
             filtered[i].perpendicular_distance,
-            filtered[i].price_per_gallon,
+            filtered[i].price,
             filtered[i].snap_point.lat,
             filtered[i].snap_point.lon);
         if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
@@ -635,7 +635,7 @@ static char *process_optimize(const char *body, int *status_code) {
     const char *p;
     double tank_capacity = 100.0;
     double current_fuel = 50.0;
-    double consumption_mpg = 6.5;
+    double consumption = 6.5;
     double min_fuel = 25.0;
     double max_distance = 5.0;
     double min_purchase = 0.0;
@@ -647,8 +647,8 @@ static char *process_optimize(const char *body, int *status_code) {
     if ((p = find_json_key(body, "current_fuel"))) {
         current_fuel = parse_double(&p);
     }
-    if ((p = find_json_key(body, "consumption_mpg"))) {
-        consumption_mpg = parse_double(&p);
+    if ((p = find_json_key(body, "consumption"))) {
+        consumption = parse_double(&p);
     }
     if ((p = find_json_key(body, "minimum_fuel"))) {
         min_fuel = parse_double(&p);
@@ -699,7 +699,7 @@ static char *process_optimize(const char *body, int *status_code) {
     problem.total_distance = fw_polyline_length(&route);
     problem.tank_capacity = tank_capacity;
     problem.current_fuel = current_fuel;
-    problem.base_consumption_mpg = consumption_mpg;
+    problem.base_consumption = consumption;
     problem.minimum_fuel = min_fuel;
     problem.minimum_fuel_at_end = min_fuel;
     problem.min_purchase = min_purchase;
@@ -804,7 +804,7 @@ static char *process_optimize(const char *body, int *status_code) {
                 filtered[i].station_id,
                 filtered[i].distance_from_start,
                 solution.purchases[i],
-                solution.purchases[i] * filtered[i].price_per_gallon);
+                solution.purchases[i] * filtered[i].price);
             if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
         }
     }
