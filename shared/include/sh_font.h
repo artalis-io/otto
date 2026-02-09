@@ -260,7 +260,7 @@ typedef struct {
  */
 void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
                           const SHFont *font, const SHGlyph *glyph,
-                          int x, int y, float font_size,
+                          float x, float y, float font_size,
                           uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
                           float threshold);
 
@@ -274,7 +274,7 @@ void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
  */
 void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height,
                                    const SHFont *font, const SHGlyph *glyph,
-                                   int x, int y, float font_size,
+                                   float x, float y, float font_size,
                                    uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
                                    float threshold, const SHScissor *scissor);
 
