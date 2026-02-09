@@ -70,7 +70,7 @@ SHHashmapI64 *sh_hashmap_i64_create_ex(size_t expected_size, float load_factor)
     size_t capacity = next_power_of_two(min_capacity);
 
     map->keys = calloc(capacity, sizeof(int64_t));
-    map->values = malloc(capacity * sizeof(size_t));
+    map->values = calloc(capacity, sizeof(size_t));  /* Use calloc for overflow protection */
     if (!map->keys || !map->values) {
         free(map->keys);
         free(map->values);
@@ -109,7 +109,7 @@ static SHHashmapStatus sh_hashmap_i64_resize(SHHashmapI64 *map)
     }
 
     int64_t *new_keys = calloc(new_capacity, sizeof(int64_t));
-    size_t *new_values = malloc(new_capacity * sizeof(size_t));
+    size_t *new_values = calloc(new_capacity, sizeof(size_t));  /* Use calloc for overflow protection */
     if (!new_keys || !new_values) {
         free(new_keys);
         free(new_values);
@@ -226,7 +226,7 @@ SHHashmapI64U32 *sh_hashmap_i64u32_create_ex(size_t expected_size, float load_fa
     size_t capacity = next_power_of_two(min_capacity);
 
     map->keys = calloc(capacity, sizeof(int64_t));
-    map->values = malloc(capacity * sizeof(uint32_t));
+    map->values = calloc(capacity, sizeof(uint32_t));  /* Use calloc for overflow protection */
     if (!map->keys || !map->values) {
         free(map->keys);
         free(map->values);
@@ -264,7 +264,7 @@ static SHHashmapStatus sh_hashmap_i64u32_resize(SHHashmapI64U32 *map)
     }
 
     int64_t *new_keys = calloc(new_capacity, sizeof(int64_t));
-    uint32_t *new_values = malloc(new_capacity * sizeof(uint32_t));
+    uint32_t *new_values = calloc(new_capacity, sizeof(uint32_t));  /* Use calloc for overflow protection */
     if (!new_keys || !new_values) {
         free(new_keys);
         free(new_values);
