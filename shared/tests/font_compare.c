@@ -184,21 +184,12 @@ static int generate_html(const char *output_dir)
     fprintf(f, "];\n\n");
 
     fprintf(f, "async function main() {\n");
-    fprintf(f, "  // Load font\n");
-    fprintf(f, "  const fontJson = await fetch('../../clayshards/fonts/ui-font.json').then(r => r.json());\n");
-    fprintf(f, "  const fontImg = await new Promise((resolve, reject) => {\n");
-    fprintf(f, "    const img = new Image();\n");
-    fprintf(f, "    img.onload = () => resolve(img);\n");
-    fprintf(f, "    img.onerror = reject;\n");
-    fprintf(f, "    img.src = '../../clayshards/fonts/ui-font.png';\n");
-    fprintf(f, "  });\n\n");
-
     fprintf(f, "  for (const tc of testCases) {\n");
     fprintf(f, "    // Render with WebGL\n");
     fprintf(f, "    const canvas = document.getElementById('webgl_' + tc.name);\n");
     fprintf(f, "    const renderer = new ClayRenderer(canvas);\n");
     fprintf(f, "    const font = new MSDFFont();\n");
-    fprintf(f, "    await font.loadFromData(renderer.gl, fontJson, fontImg);\n");
+    fprintf(f, "    await font.load(renderer.gl, '../../clayshards/fonts/ui-font.json', '../../clayshards/fonts/ui-font.png');\n");
     fprintf(f, "    renderer.setFont(font);\n\n");
 
     fprintf(f, "    // Clear to dark gray\n");
