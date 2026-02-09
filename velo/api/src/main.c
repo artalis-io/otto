@@ -48,9 +48,9 @@
  * ============================================================================ */
 
 typedef struct {
-    char graph_path[512];
-    char save_index_path[512];  /* Path to save binary index (empty = don't save) */
-    char listen_addr[256];      /* DNS hostname max is 253 chars */
+    char graph_path[SH_PATH_MAX];
+    char save_index_path[SH_PATH_MAX];  /* Path to save binary index (empty = don't save) */
+    char listen_addr[SH_HOSTNAME_MAX];
     int port;
     int use_landmarks;
     int landmark_count;
@@ -1313,7 +1313,7 @@ int main(int argc, char *argv[]) {
     mg_mgr_init(&mgr);
 
     /* Build listen address */
-    char listen_url[320];  /* http:// + 253 char DNS + :port */
+    char listen_url[SH_URL_MAX];
     snprintf(listen_url, sizeof(listen_url), "http://%s:%d",
              s_config.listen_addr, s_config.port);
 
