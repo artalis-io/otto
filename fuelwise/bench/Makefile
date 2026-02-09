@@ -6,9 +6,18 @@ CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE
 # Include paths
 INCLUDES = -I../include -I../../shared/include -I../../ralph/include
 
+# OpenMP flags - platform-specific
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    # macOS with Homebrew
+    OMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
+else
+    # Linux - GCC handles OpenMP natively
+    OMP_LDFLAGS = -fopenmp
+endif
+
 # Library paths
-# OpenMP is needed for Ralph LAP solver
-LDFLAGS = -L.. -L../../shared -L../../ralph -lfuelwise -lshared -lralph -lm -lpthread -L/opt/homebrew/opt/libomp/lib -lomp
+LDFLAGS = -L.. -L../../shared -L../../ralph -lfuelwise -lshared -lralph -lm -lpthread $(OMP_LDFLAGS)
 
 # Source files
 SRCS = main.c fw_bench.c fw_gen.c fw_validate.c
