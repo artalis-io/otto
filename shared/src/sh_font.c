@@ -481,9 +481,9 @@ float sh_font_msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
     }
 
     /* Map local coordinates [0,1] to atlas coordinates
-     * Note: local_y=0 is TOP of glyph (in screen space, lower Y),
-     * which maps to atlas.top (higher row number in PNG, which is LOWER visually)
-     * because the font atlas uses yOrigin=bottom (OpenGL convention) */
+     * Note: despite yOrigin=bottom in the atlas JSON, the actual bounds are
+     * in PNG row coordinates where atlas.bottom < atlas.top numerically,
+     * and lower values = closer to top of image = visual top of glyph */
     float atlas_x = glyph->atlas.left + local_x * (glyph->atlas.right - glyph->atlas.left);
     float atlas_y = glyph->atlas.bottom + local_y * (glyph->atlas.top - glyph->atlas.bottom);
 
