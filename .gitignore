@@ -93,3 +93,7 @@ __pycache__/
 # Build artifacts
 ralph/api/ralph-solver-server
 site/test-results/
+
+# Node modules and package-lock.json
+node_modules/
+package-lock.json
