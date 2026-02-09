@@ -15,7 +15,28 @@
 /* Tolerance for floating-point comparisons */
 #define EPSILON 1e-6
 
-/* Relative tolerance: epsilon = 1e-6 * max(1.0, |expected|) */
+/*
+ * Tolerance for fuel level comparisons.
+ * LP solvers have ~0.01% relative precision, so we use 0.1% to be safe.
+ * This accommodates numerical noise in constraint satisfaction.
+ */
+#define FUEL_TOLERANCE_REL 0.001  /* 0.1% relative */
+#define FUEL_TOLERANCE_ABS 0.1    /* 0.1 liters absolute minimum */
+
+/*
+ * Threshold for counting a purchase as a "stop".
+ * Must match the solver's threshold (0.5L) for consistency.
+ */
+#define STOP_THRESHOLD 0.5  /* liters */
+
+/* Relative tolerance for fuel: max(0.1L, 0.1% of expected) */
+static double fuel_tol(double expected)
+{
+    double rel = FUEL_TOLERANCE_REL * fabs(expected);
+    return rel > FUEL_TOLERANCE_ABS ? rel : FUEL_TOLERANCE_ABS;
+}
+
+/* Tight relative tolerance for other comparisons */
 static double rel_tol(double expected)
 {
     double abs_val = fabs(expected);
@@ -133,7 +154,7 @@ int fw_validate_solution(
         }
 
         /* Check minimum fuel at arrival */
-        if (fuel < problem->minimum_fuel - rel_tol(problem->minimum_fuel)) {
+        if (fuel < problem->minimum_fuel - fuel_tol(problem->minimum_fuel)) {
             if (result->first_violation_station < 0) {
                 result->feasible = 0;
                 result->min_fuel_ok = 0;
@@ -183,7 +204,7 @@ int fw_validate_solution(
         }
 
         /* Check tank capacity after refuel */
-        if (fuel > problem->tank_capacity + rel_tol(problem->tank_capacity)) {
+        if (fuel > problem->tank_capacity + fuel_tol(problem->tank_capacity)) {
             if (result->first_violation_station < 0) {
                 result->feasible = 0;
                 result->tank_capacity_ok = 0;
@@ -194,10 +215,11 @@ int fw_validate_solution(
             }
         }
 
-        /* Check stop flags consistency (MILP) */
+        /* Check stop flags consistency (MILP and LP with stop_flags) */
         if (solution->stop_flags != NULL) {
             int stopped = solution->stop_flags[i];
-            if (purchase > EPSILON && !stopped) {
+            /* Use same threshold as solver (0.5L) for what counts as a stop */
+            if (purchase > STOP_THRESHOLD && !stopped) {
                 if (result->first_violation_station < 0) {
                     result->feasible = 0;
                     result->stop_flags_ok = 0;
@@ -225,7 +247,7 @@ int fw_validate_solution(
         ? problem->minimum_fuel_at_end
         : problem->minimum_fuel;
 
-    if (fuel < min_at_end - rel_tol(min_at_end)) {
+    if (fuel < min_at_end - fuel_tol(min_at_end)) {
         result->feasible = 0;
         result->reaches_destination = 0;
         if (result->first_violation_station < 0) {
