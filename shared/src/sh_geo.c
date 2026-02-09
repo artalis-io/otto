@@ -239,3 +239,28 @@ SHBBox sh_tile_bounds(int zoom, int tile_x, int tile_y)
 
     return bbox;
 }
+
+/* ============================================================================
+ * Local Cartesian Projection
+ * ============================================================================ */
+
+void sh_latlon_to_local(SHCoord coord, SHCoord ref, double *x, double *y)
+{
+    double cos_lat = cos(ref.lat * SH_DEG_TO_RAD);
+    *x = (coord.lon - ref.lon) * SH_DEG_TO_RAD * SH_EARTH_RADIUS_M * cos_lat;
+    *y = (coord.lat - ref.lat) * SH_DEG_TO_RAD * SH_EARTH_RADIUS_M;
+}
+
+void sh_local_to_latlon(double x, double y, SHCoord ref, SHCoord *coord)
+{
+    double cos_lat = cos(ref.lat * SH_DEG_TO_RAD);
+
+    /* Guard against division by near-zero at poles (|lat| > 89.9 degrees).
+     * Trucking routes don't go to poles, but handle gracefully. */
+    if (cos_lat < 1e-6) {
+        cos_lat = 1e-6;
+    }
+
+    coord->lon = ref.lon + (x / (SH_EARTH_RADIUS_M * cos_lat)) * SH_RAD_TO_DEG;
+    coord->lat = ref.lat + (y / SH_EARTH_RADIUS_M) * SH_RAD_TO_DEG;
+}

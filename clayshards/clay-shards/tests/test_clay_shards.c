@@ -2146,7 +2146,9 @@ static void* tracking_alloc(size_t size, void *user_data) {
 
 static void* tracking_realloc(void *ptr, size_t size, void *user_data) {
     (void)user_data;
-    /* Note: doesn't track old size, but good enough for testing */
+    /* Count reallocs as allocations for testing purposes */
+    g_alloc_count++;
+    g_total_allocated += size;  /* Note: doesn't subtract old size, but good enough for testing */
     return realloc(ptr, size);
 }
 

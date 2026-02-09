@@ -57,7 +57,7 @@ double wasm_polyline_length(double *points, int num_points) {
 
     FWPolyline poly;
     poly.points = (FWCoord*)points;
-    poly.num_points = num_points;
+    poly.count = num_points;
     return fw_polyline_length(&poly);
 }
 
@@ -101,7 +101,7 @@ int wasm_filter_stations(
     /* Build polyline */
     FWPolyline route;
     route.points = (FWCoord*)route_flat;
-    route.num_points = num_points;
+    route.count = num_points;
 
     /* Filter */
     FWSnappedStation *filtered = NULL;
@@ -349,7 +349,7 @@ int wasm_optimize_route(
     /* Build polyline */
     FWPolyline route;
     route.points = (FWCoord*)route_flat;
-    route.num_points = num_points;
+    route.count = num_points;
 
     /* Filter stations */
     FWSnappedStation *filtered = NULL;

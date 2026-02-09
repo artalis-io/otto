@@ -6,7 +6,7 @@
  */
 
 #include "vl_api.h"
-#include "polyline.h"
+#include "sh_polyline.h"
 #include "vl_types.h"
 #include <stdlib.h>
 #include <string.h>
@@ -515,7 +515,7 @@ char *vl_api_route(VLAPIContext *ctx,
     /* Encode polyline if geometry requested */
     char *polyline = NULL;
     if (params->include_geometry && route.num_coords > 0) {
-        size_t max_len = polyline_max_encoded_size(route.num_coords);
+        size_t max_len = sh_polyline_max_encoded_size(route.num_coords);
         polyline = malloc(max_len);
         if (polyline) {
             double *coords = NULL;
@@ -527,7 +527,7 @@ char *vl_api_route(VLAPIContext *ctx,
                     coords[i * 2] = route.coords[i].lat;
                     coords[i * 2 + 1] = route.coords[i].lon;
                 }
-                polyline_encode(coords, route.num_coords, 5, polyline, max_len);
+                sh_polyline_encode(coords, route.num_coords, 5, polyline, max_len);
                 free(coords);
             } else {
                 free(polyline);

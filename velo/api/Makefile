@@ -12,8 +12,8 @@ SHARED_DIR = ../../shared
 # Library paths (no OpenMP - build velo with NOMP=1 for compatibility)
 LDFLAGS = -L.. -lvelo -L$(SHARED_DIR) -lshared -lm -lpthread
 
-# Source files
-SRCS = src/main.c src/polyline.c
+# Source files (polyline.c moved to shared library)
+SRCS = src/main.c
 OBJS = $(SRCS:src/%.c=build/%.o)
 
 # Mongoose object (shared)
