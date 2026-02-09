@@ -5,7 +5,7 @@
 
 CC = gcc
 CFLAGS = -O2 -Wall -Wextra -std=c99
-INCLUDES = -Iinclude -I../../vendor/clay
+INCLUDES = -Iinclude -I../../shared/include -I../../vendor/clay
 
 EMCC = emcc
 WASM_CFLAGS = -O3 -Wall -Wextra

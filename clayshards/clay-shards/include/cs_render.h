@@ -18,6 +18,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "sh_font.h"  /* For SHScissor */
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,17 +36,16 @@ extern "C" {
 
 /**
  * Scissor region (clipping rectangle).
+ * Alias for SHScissor for compatibility with shared font rendering.
  */
-typedef struct {
-    int x, y, w, h;
-} CsScissor;
+typedef SHScissor CsScissor;
 
 /**
  * Scissor stack for hierarchical clipping.
  * Each push intersects with the current clip region.
  */
 typedef struct {
-    CsScissor stack[CS_MAX_SCISSOR_DEPTH];
+    SHScissor stack[CS_MAX_SCISSOR_DEPTH];
     int depth;
     int screen_w;
     int screen_h;

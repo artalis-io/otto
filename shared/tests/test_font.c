@@ -658,6 +658,163 @@ TEST(render_text_explicit_length)
     return 1;
 }
 
+TEST(render_glyph_scissor_full)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    const SHGlyph *glyph = sh_font_get_glyph(font, 'A');
+    if (!glyph) return 1;
+
+    int w = 64, h = 64;
+    uint8_t *pixels1 = calloc(w * h, 4);
+    uint8_t *pixels2 = calloc(w * h, 4);
+    ASSERT(pixels1 && pixels2);
+
+    /* Render without scissor */
+    sh_font_render_glyph(pixels1, w, h, font, glyph, 10, 10, 24.0f,
+                         255, 255, 255, 255, 0.5f);
+
+    /* Render with scissor covering entire buffer */
+    SHScissor full = {0, 0, w, h};
+    sh_font_render_glyph_clipped(pixels2, w, h, font, glyph, 10, 10, 24.0f,
+                                  255, 255, 255, 255, 0.5f, &full);
+
+    /* Both should produce identical output */
+    int identical = 1;
+    for (int i = 0; i < w * h * 4; i++) {
+        if (pixels1[i] != pixels2[i]) {
+            identical = 0;
+            break;
+        }
+    }
+    ASSERT(identical);
+
+    free(pixels1);
+    free(pixels2);
+    return 1;
+}
+
+TEST(render_glyph_scissor_partial)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    const SHGlyph *glyph = sh_font_get_glyph(font, 'W');  /* Wide glyph */
+    if (!glyph) return 1;
+
+    int w = 64, h = 64;
+    uint8_t *pixels_full = calloc(w * h, 4);
+    uint8_t *pixels_clipped = calloc(w * h, 4);
+    ASSERT(pixels_full && pixels_clipped);
+
+    /* Render without scissor */
+    sh_font_render_glyph(pixels_full, w, h, font, glyph, 10, 10, 24.0f,
+                         255, 255, 255, 255, 0.5f);
+
+    /* Render with scissor covering left half only */
+    SHScissor left_half = {0, 0, 32, h};
+    sh_font_render_glyph_clipped(pixels_clipped, w, h, font, glyph, 10, 10, 24.0f,
+                                  255, 255, 255, 255, 0.5f, &left_half);
+
+    /* Left half should match, right half of clipped should be zero */
+    int left_matches = 1;
+    int right_is_zero = 1;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int offset = (y * w + x) * 4;
+            if (x < 32) {
+                if (memcmp(pixels_full + offset, pixels_clipped + offset, 4) != 0) {
+                    left_matches = 0;
+                }
+            } else {
+                if (pixels_clipped[offset + 3] != 0) {
+                    right_is_zero = 0;
+                }
+            }
+        }
+    }
+    ASSERT(left_matches);
+    ASSERT(right_is_zero);
+
+    free(pixels_full);
+    free(pixels_clipped);
+    return 1;
+}
+
+TEST(render_glyph_scissor_outside)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    const SHGlyph *glyph = sh_font_get_glyph(font, 'A');
+    if (!glyph) return 1;
+
+    int w = 64, h = 64;
+    uint8_t *pixels = calloc(w * h, 4);
+    ASSERT(pixels != NULL);
+
+    /* Render with scissor that doesn't overlap glyph at all */
+    SHScissor outside = {50, 50, 10, 10};  /* Bottom-right corner */
+    sh_font_render_glyph_clipped(pixels, w, h, font, glyph, 10, 10, 24.0f,
+                                  255, 255, 255, 255, 0.5f, &outside);
+
+    /* Buffer should be completely empty */
+    int all_zero = 1;
+    for (int i = 0; i < w * h * 4; i++) {
+        if (pixels[i] != 0) {
+            all_zero = 0;
+            break;
+        }
+    }
+    ASSERT(all_zero);
+
+    free(pixels);
+    return 1;
+}
+
+TEST(render_text_scissor)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    int w = 256, h = 64;
+    uint8_t *pixels = calloc(w * h, 4);
+    ASSERT(pixels != NULL);
+
+    /* Render with scissor covering only part of text */
+    SHScissor partial = {20, 0, 50, h};
+    sh_font_render_text_clipped(pixels, w, h, font, "Hello World", -1,
+                                 10.0f, 10.0f, 24.0f, 255, 255, 255, 255, &partial);
+
+    /* Check that some pixels were drawn */
+    int has_pixels = 0;
+    for (int i = 0; i < w * h * 4; i += 4) {
+        if (pixels[i + 3] > 0) {
+            has_pixels = 1;
+            break;
+        }
+    }
+    ASSERT(has_pixels);
+
+    /* Check that pixels outside scissor are zero */
+    int outside_ok = 1;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            if (x < 20 || x >= 70) {  /* Outside scissor */
+                int offset = (y * w + x) * 4;
+                if (pixels[offset + 3] != 0) {
+                    outside_ok = 0;
+                }
+            }
+        }
+    }
+    ASSERT(outside_ok);
+
+    free(pixels);
+    return 1;
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -707,6 +864,12 @@ int main(void)
     RUN_TEST(render_text_basic);
     RUN_TEST(render_text_null_safety);
     RUN_TEST(render_text_explicit_length);
+
+    printf("\nScissor Clipping:\n");
+    RUN_TEST(render_glyph_scissor_full);
+    RUN_TEST(render_glyph_scissor_partial);
+    RUN_TEST(render_glyph_scissor_outside);
+    RUN_TEST(render_text_scissor);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 

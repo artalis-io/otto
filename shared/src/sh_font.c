@@ -514,11 +514,19 @@ float sh_font_msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
 #include "sh_render.h"
 #include <math.h>
 
-void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
-                          const SHFont *font, const SHGlyph *glyph,
-                          int x, int y, float font_size,
-                          uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
-                          float threshold)
+/* Helper: test if point is inside scissor rectangle */
+static inline int scissor_test(const SHScissor *s, int x, int y)
+{
+    if (!s) return 1;  /* No scissor = always inside */
+    return x >= s->x && x < s->x + s->w &&
+           y >= s->y && y < s->y + s->h;
+}
+
+void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height,
+                                   const SHFont *font, const SHGlyph *glyph,
+                                   int x, int y, float font_size,
+                                   uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
+                                   float threshold, const SHScissor *scissor)
 {
     if (!pixels || !font || !glyph || font_size <= 0.0f) {
         return;
@@ -539,10 +547,18 @@ void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
     int px_width = (int)ceilf(glyph_width) + 2;
     int px_height = (int)ceilf(glyph_height) + 2;
 
-    /* Early bounds check */
+    /* Early bounds check against buffer */
     if (gx + px_width < 0 || gx >= buf_width ||
         gy + px_height < 0 || gy >= buf_height) {
         return;
+    }
+
+    /* Early scissor rejection: check if glyph bbox is completely outside scissor */
+    if (scissor) {
+        if (gx + px_width <= scissor->x || gx >= scissor->x + scissor->w ||
+            gy + px_height <= scissor->y || gy >= scissor->y + scissor->h) {
+            return;
+        }
     }
 
     /* Sample each pixel in the glyph bounding box */
@@ -553,6 +569,9 @@ void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
         for (int px = 0; px < px_width; px++) {
             int screen_x = gx + px;
             if (screen_x < 0 || screen_x >= buf_width) continue;
+
+            /* Scissor test */
+            if (!scissor_test(scissor, screen_x, screen_y)) continue;
 
             /* Map screen pixel to local glyph coordinates [0, 1]
              * Account for the 1-pixel extension on each side */
@@ -577,10 +596,22 @@ void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
     }
 }
 
-void sh_font_render_text(uint8_t *pixels, int buf_width, int buf_height,
-                         const SHFont *font, const char *text, int len,
-                         float x, float y, float font_size,
-                         uint8_t r, uint8_t g, uint8_t b, uint8_t alpha)
+void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
+                          const SHFont *font, const SHGlyph *glyph,
+                          int x, int y, float font_size,
+                          uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
+                          float threshold)
+{
+    sh_font_render_glyph_clipped(pixels, buf_width, buf_height,
+                                  font, glyph, x, y, font_size,
+                                  r, g, b, alpha, threshold, NULL);
+}
+
+void sh_font_render_text_clipped(uint8_t *pixels, int buf_width, int buf_height,
+                                  const SHFont *font, const char *text, int len,
+                                  float x, float y, float font_size,
+                                  uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
+                                  const SHScissor *scissor)
 {
     if (!pixels || !font || !text || font_size <= 0.0f) {
         return;
@@ -615,13 +646,23 @@ void sh_font_render_text(uint8_t *pixels, int buf_width, int buf_height,
             float glyph_x = cursor_x + glyph->plane.left * font_size;
             float glyph_y = baseline_y - glyph->plane.top * font_size;
 
-            sh_font_render_glyph(pixels, buf_width, buf_height,
-                                 font, glyph,
-                                 (int)glyph_x, (int)glyph_y, font_size,
-                                 r, g, b, alpha, 0.5f);
+            sh_font_render_glyph_clipped(pixels, buf_width, buf_height,
+                                          font, glyph,
+                                          (int)glyph_x, (int)glyph_y, font_size,
+                                          r, g, b, alpha, 0.5f, scissor);
         }
 
         cursor_x += glyph->advance * font_size;
         i += bytes;
     }
+}
+
+void sh_font_render_text(uint8_t *pixels, int buf_width, int buf_height,
+                         const SHFont *font, const char *text, int len,
+                         float x, float y, float font_size,
+                         uint8_t r, uint8_t g, uint8_t b, uint8_t alpha)
+{
+    sh_font_render_text_clipped(pixels, buf_width, buf_height,
+                                 font, text, len, x, y, font_size,
+                                 r, g, b, alpha, NULL);
 }
