@@ -1608,12 +1608,16 @@ void ct_render_glyph(CTRenderContext *ctx,
         return;
     }
 
-    int px_width = (int)ceilf(glyph_width);
-    int px_height = (int)ceilf(glyph_height);
+    /* Extend by 1 pixel on each side to capture MSDF anti-aliasing at edges
+     * (WebGL renders a quad that covers the full UV range; we need to match) */
+    int gx = x - 1;
+    int gy = y - 1;
+    int px_width = (int)ceilf(glyph_width) + 2;
+    int px_height = (int)ceilf(glyph_height) + 2;
 
     /* Early bounds check */
-    if (x + px_width < 0 || x >= ctx->width ||
-        y + px_height < 0 || y >= ctx->height) {
+    if (gx + px_width < 0 || gx >= ctx->width ||
+        gy + px_height < 0 || gy >= ctx->height) {
         return;
     }
 
@@ -1624,18 +1628,19 @@ void ct_render_glyph(CTRenderContext *ctx,
 
     /* Sample each pixel in the glyph bounding box */
     for (int py = 0; py < px_height; py++) {
-        int screen_y = y + py;
+        int screen_y = gy + py;
         if (screen_y < 0 || screen_y >= ctx->height) continue;
 
         for (int px = 0; px < px_width; px++) {
-            int screen_x = x + px;
+            int screen_x = gx + px;
             if (screen_x < 0 || screen_x >= ctx->width) continue;
 
             /* Map screen pixel to local glyph coordinates [0, 1]
+             * Account for the 1-pixel extension on each side
              * local_y=0 -> atlas.bottom (low row = visual top in PNG)
              * local_y=1 -> atlas.top (high row = visual bottom in PNG) */
-            float local_x = ((float)px + 0.5f) / glyph_width;
-            float local_y = ((float)py + 0.5f) / glyph_height;
+            float local_x = ((float)px - 0.5f) / glyph_width;
+            float local_y = ((float)py - 0.5f) / glyph_height;
 
             /* Get MSDF coverage with threshold (uses bilinear sampling) */
             float coverage = sh_font_msdf_coverage_threshold(font, glyph, local_x, local_y,
