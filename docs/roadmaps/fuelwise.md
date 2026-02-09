@@ -109,8 +109,9 @@ double sh_step_eval(const SHStepFunc *sf, double x);
 /* Integration: ∫f(x)dx from a to b */
 double sh_step_integrate(const SHStepFunc *sf, double a, double b);
 
-/* Combine with piecewise-linear: ∫f(x)*g(x)dx from a to b
- * where f is step function (e.g., weight) and g is piecewise-linear (e.g., consumption rate)
+/* Combine with piecewise-linear: ∫g(f(x))dx from a to b
+ * where f is step function (e.g., weight(x)) and g is piecewise-linear (e.g., consumption(weight))
+ * Computes the integral of the composition g∘f, NOT the product g*f.
  * This is the core calculation for weight-dependent fuel consumption. */
 double sh_step_pwl_integrate(
     const SHStepFunc *sf,
@@ -161,7 +162,10 @@ SHPoly *sh_poly_integral(const SHPoly *p);
 /* Definite integral: ∫f(x)dx from a to b */
 double sh_poly_integrate(const SHPoly *p, double a, double b);
 
-/* Root finding (real roots only) */
+/* Root finding (real roots only, degree ≤ 4)
+ * Uses closed-form solutions: linear, quadratic formula, Cardano, Ferrari.
+ * Returns -1 for degree > 4 (use numerical solver if needed).
+ * Returns number of real roots found. */
 int sh_poly_roots(const SHPoly *p, double *roots, int max_roots);
 
 /* Fitting: least squares fit to (x, y) data */
@@ -286,10 +290,7 @@ double sh_dist_exponential_cdf(double x, double rate);
 | `shared/src/sh_stepfunc.c` | Step function implementation |
 | `shared/src/sh_poly.c` | Polynomial implementation |
 | `shared/src/sh_dist.c` | Distribution implementation |
-| `shared/tests/test_piecewise.c` | Piecewise-linear tests |
-| `shared/tests/test_stepfunc.c` | Step function tests |
-| `shared/tests/test_poly.c` | Polynomial tests |
-| `shared/tests/test_dist.c` | Distribution tests |
+| `shared/tests/test_shared.c` | All math primitive tests (integrated into existing test file) |
 
 ### 0.6 Test Cases
 
@@ -351,7 +352,7 @@ The consumption model builds on `shared/` components from Chapter 0:
 |-----------|-------------|----------------|
 | Consumption curve | `SHPiecewiseLinear` | consumption(weight) → L/100km |
 | Weight profile | `SHStepFunc` | weight(distance) → kg |
-| Fuel calculation | `sh_step_pwl_integrate()` | ∫consumption(weight(d))dd |
+| Fuel calculation | `sh_step_pwl_integrate()` | ∫consumption(weight(d)) dd (composition) |
 
 FuelWise provides thin wrappers with domain-specific validation.
 
@@ -472,6 +473,13 @@ double fw_calc_fuel_for_segment(
 3. Return result
 ```
 
+**Numerical Precision Notes:**
+- Distances are in meters (large numbers), consumption in L/100km (small numbers)
+- The product `consumption * distance` can lose precision for very long segments
+- Mitigation: Process segments in order, accumulate in double precision
+- Validation tolerance: `epsilon = 1e-6 * max(1.0, |expected|)` for relative comparison
+- Real-world accuracy: ±0.1 L over 1000 km is acceptable (< 0.1% error)
+
 ### 1.4 Integration with Solver
 
 Update `FWRefuelProblem` to include weight-dependent consumption:
@@ -508,8 +516,10 @@ typedef struct {
 ### 1.5 API Functions
 
 ```c
-/* Create a consumption curve */
-FWConsumptionCurve *fw_consumption_curve_create(int num_points);
+/* Create a consumption curve
+ * truck_type: "EU Standard", "US Class8", "Light Truck", or NULL for empty curve
+ * Returns pre-populated curve for known types, empty curve for NULL/unknown */
+FWConsumptionCurve *fw_consumption_curve_create(const char *truck_type);
 void fw_consumption_curve_free(FWConsumptionCurve *curve);
 
 /* Add a point to the curve (must be added in ascending weight order) */
@@ -523,16 +533,23 @@ int fw_consumption_curve_add_point(
 FWWeightProfile *fw_weight_profile_create(double tare_weight_kg, double max_gvw_kg);
 void fw_weight_profile_free(FWWeightProfile *profile);
 
-/* Add a weight event (pickup/delivery) */
+/* Add a weight event (pickup/delivery)
+ * Positive delta = pickup, negative = delivery
+ * Caller tracks stop associations separately if needed */
 int fw_weight_profile_add_event(
     FWWeightProfile *profile,
     double distance_m,
-    double weight_delta_kg,
-    int stop_id
+    double weight_delta_kg
 );
 
 /* Validate weight profile (no overweight, no negative cargo) */
 int fw_weight_profile_validate(const FWWeightProfile *profile, char *error_msg, size_t msg_size);
+
+/* Memory Ownership:
+ * - All *_create() functions return owned pointers; caller must call *_free()
+ * - FWRefuelProblem does NOT own consumption_curve/weight_profile (caller manages)
+ * - FWBenchInstance DOES own its curve/profile (fw_bench_free_instance frees them)
+ */
 
 /* Get weight at a specific distance */
 double fw_weight_at_distance(const FWWeightProfile *profile, double distance_m);
@@ -570,13 +587,16 @@ FWConsumptionCurve *fw_curve_light_truck(void);
 |------|---------|
 | `fuelwise/include/fw_consumption.h` | FuelWise wrappers with domain validation |
 | `fuelwise/src/fw_consumption.c` | Wrapper implementation, default curves |
-| `fuelwise/tests/test_consumption.c` | FuelWise-specific domain tests |
 
-Note: Core math primitives are in `shared/` and tested in `shared/tests/`.
+**Test Organization:**
+- **`shared/tests/test_shared.c`**: Add math primitive tests (piecewise, step, poly, dist)
+- **`fuelwise/tests/test_fuelwise.c`**: Add domain-specific tests (weight validation, curve bounds, solver integration)
+
+The split keeps shared/ self-contained while FuelWise tests focus on trucking domain logic.
 
 ### 1.8 Test Cases
 
-**FuelWise-specific tests (in `fuelwise/tests/`):**
+**FuelWise-specific tests (in `fuelwise/tests/test_fuelwise.c`):**
 1. **Constant weight**: Backward compatibility with current behavior
 2. **Single pickup**: Weight increases, consumption increases appropriately
 3. **Pickup + delivery**: Weight up then down, verify fuel totals
@@ -586,10 +606,12 @@ Note: Core math primitives are in `shared/` and tested in `shared/tests/`.
 7. **Default curves**: Verify EU/US/light truck curves return sensible values
 8. **Integration with solver**: Full LP solve with weight profile
 
-**Shared primitive tests (in `shared/tests/`):**
+**Shared primitive tests (in `shared/tests/test_shared.c`):**
 - Piecewise-linear: interpolation, extrapolation, integration
 - Step function: evaluation, integration, boundary handling
-- Combined step+pwl integration: accuracy, edge cases
+- Combined step+pwl integration: accuracy, edge cases (composition `g(f(x))`)
+- Polynomial: Horner evaluation, derivatives, roots ≤ degree 4
+- Distributions: RNG backend reproducibility, statistical tests
 
 ---
 
@@ -639,10 +661,19 @@ typedef struct {
     double min_fuel_l;              /* Minimum fuel level to maintain */
     double start_fuel_fraction;     /* Starting fuel as fraction of tank (0.3-0.8) */
 
-    /* Price distribution (uses sh_rng_normal from shared/) */
+    /* Price distribution (uses sh_rng_normal from shared/)
+     *
+     * Spatial correlation model (AR(1) process):
+     *   price[i] = base_price + correlation * (price[i-1] - base_price) + noise
+     *   where noise ~ Normal(0, stddev * sqrt(1 - correlation^2))
+     *
+     * correlation = 0: Independent prices (pure random)
+     * correlation = 1: All prices identical (fully correlated)
+     * Typical: 0.3-0.7 (nearby stations have similar prices)
+     */
     double base_price_per_l;        /* Mean fuel price ($/L) */
     double price_stddev;            /* Price standard deviation */
-    double price_correlation;       /* Spatial correlation (0-1) */
+    double price_correlation;       /* Spatial correlation (0-1), see above */
 
     /* RNG (uses SHRng from shared/ - pluggable backend) */
     SHRngType rng_type;             /* Default: SH_RNG_XORSHIFT128 */
@@ -655,9 +686,15 @@ typedef struct {
 Generated problems are guaranteed solvable:
 
 1. **Gap check**: No gap exceeds `(tank_capacity - min_fuel) / max_consumption`
-2. **Start check**: Starting fuel can reach first station
-3. **End check**: Last station can reach destination
+   - `max_consumption` = `sh_pwl_max_y(curve->pwl)` (highest consumption at max weight)
+   - Conservative: assumes worst-case consumption for entire gap
+2. **Start check**: Starting fuel can reach first station (at actual weight)
+3. **End check**: Last station can reach destination (at actual weight)
 4. **Insertion**: If gap too large, insert additional station(s)
+
+**Weight-aware gap check**: For generated problems with weight profiles, the gap check
+uses the maximum possible consumption from the curve. This is conservative but guarantees
+solvability without needing to know the exact weight at each segment.
 
 ```c
 typedef struct {
@@ -698,6 +735,8 @@ typedef struct {
     int non_negative_purchase_ok;   /* All purchases ≥ 0 */
     int reaches_destination;        /* Ends with enough fuel */
     int min_purchase_ok;            /* Meets minimum purchase (if set) */
+    int stop_flags_ok;              /* Only stopped at allowed stations (MILP) */
+    int stop_cost_ok;               /* Stop costs correctly applied (MILP) */
 
     /* Diagnostics */
     double min_fuel_observed;       /* Lowest fuel level seen */
@@ -764,6 +803,13 @@ fuel -= fuel_consumed
 # Check arrival
 if fuel < min_fuel_at_end - epsilon:
     FAIL: "Arrived at destination with {fuel}L, below minimum {min_fuel_at_end}L"
+
+# For MILP: verify stop costs in total_cost
+if use_milp:
+    expected_cost = sum(purchase * price for each station with purchase > 0)
+    expected_cost += sum(stop_cost for each station with purchase > 0)
+    if |solution.total_cost - expected_cost| > epsilon:
+        FAIL: "Total cost mismatch (stop costs not applied correctly)"
 
 PASS
 ```
@@ -999,6 +1045,21 @@ sh_rng_free(rng);
 | 2 | Document, update MEMORY.md |
 
 **Total: ~10-13 days** (including shared primitives)
+
+---
+
+## WASM Considerations
+
+The shared math primitives and FuelWise consumption model are WASM-compatible:
+
+- **No dynamic allocation in hot paths**: Curves/profiles are built once, evaluated many times
+- **No thread-local storage**: RNG state is explicitly passed
+- **No file I/O**: `SH_RNG_SYSTEM` backend not available in WASM (falls back to seed from JS)
+- **Bounded memory**: Piecewise/step functions have explicit capacity, no unbounded growth
+
+**WASM Demo Strategy**: The fuel demo already uses WASM. Weight-dependent consumption
+adds a more realistic simulation without changing the WASM interface—only internal
+calculation changes.
 
 ---
 
