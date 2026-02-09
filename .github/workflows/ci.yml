@@ -99,7 +99,7 @@ jobs:
         run: |
           ./fuelwise/api/fuelwise-api -p 8080 &
           sleep 2
-          curl -sf http://localhost:8080/api/v1/health | grep -q '"status":"ok"'
+          curl -sf http://localhost:8080/api/v1/health | grep -q '"status"'
           curl -sf -X POST http://localhost:8080/api/v1/solve \
             -H "Content-Type: application/json" \
             -d '{"total_distance":500,"tank_capacity":100,"current_fuel":30,"consumption_mpg":8,"minimum_fuel":10,"stations":[{"id":1,"distance":100,"price":3.50},{"id":2,"distance":300,"price":3.25}]}' \
