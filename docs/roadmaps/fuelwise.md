@@ -517,14 +517,10 @@ typedef struct {
     double base_consumption;                /* L/100km if no curve */
 
     /* Ending inventory valuation (new)
-     * Credits remaining fuel at destination at this price.
+     * Accounts for fuel you'll need to buy later to refill the tank.
      * Set to expected future fuel price for multi-trip optimization.
-     * Set to 0 to disable (minimize cost only, ignore ending fuel value). */
+     * Set to 0 to disable (minimize purchase cost only). */
     double destination_fuel_value;          /* $/L, 0 = disabled */
-
-    /* Existing segment override (deprecated, use weight_profile) */
-    int num_segments;
-    FWSegment *segments;
 } FWRefuelProblem;
 ```
 
@@ -536,15 +532,19 @@ typedef struct {
 
 **Objective function:**
 ```
-minimize: Σ(x[i] * price[i]) - y[final] * destination_fuel_value
+minimize: Σ(x[i] * price[i]) + (tank_capacity - y[final]) * destination_fuel_value
+         └─── fuel purchased ───┘   └─── fuel to buy later to refill ───┘
 ```
 
 Where `y[final]` is fuel remaining at destination. When `destination_fuel_value > 0`:
-- Solver is credited for fuel remaining at end
-- If last station is cheap relative to future price → fill up
-- If last station is expensive relative to future price → buy minimum
+- Total cost includes future refill cost
+- If last station is cheap relative to future price → fill up (less to buy later)
+- If last station is expensive relative to future price → buy minimum (buy more later cheaper)
 
 When `destination_fuel_value = 0`, reduces to current behavior (minimize purchase cost only).
+
+Note: The `tank_capacity * destination_fuel_value` term is constant and doesn't affect
+the optimal solution, but makes `total_cost` interpretable as "total trip fuel cost."
 
 ### 1.5 API Functions
 
@@ -845,7 +845,7 @@ expected_cost = sum(purchase * price for each station)
 if use_milp:
     expected_cost += sum(stop_cost for each station with purchase > 0)
 if destination_fuel_value > 0:
-    expected_cost -= fuel * destination_fuel_value  # credit for remaining fuel
+    expected_cost += (tank_capacity - fuel) * destination_fuel_value  # future refill cost
 if |solution.total_cost - expected_cost| > epsilon:
     FAIL: "Total cost mismatch"
 
