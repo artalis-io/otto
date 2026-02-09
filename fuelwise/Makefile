@@ -83,10 +83,14 @@ debug: clean all
 # Run tests
 test: $(TEST_EXEC)
 	./$(TEST_EXEC)
+	@echo ""
+	@echo "Running benchmark validator tests..."
+	$(MAKE) -C bench validator-test
 
 # Clean
 clean:
 	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC)
+	$(MAKE) -C bench clean
 
 # Clean all including Ralph
 clean-all: clean
