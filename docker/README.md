@@ -31,6 +31,55 @@ docker run -p 8084:8084 otto-ralph
 | `otto-locus` | 8083 | Geocoder | OSM PBF or .lcx |
 | `otto-fuelwise` | 8080 | Refueling optimizer | None (via API) |
 | `otto-ralph` | 8084 | LP/MIP solver | None (via API) |
+| `otto-data-builder` | - | Index builder | OSM PBF (input) |
+
+## Data Management
+
+GIS services (Carta, Velo, Locus) need map data. Two approaches:
+
+### Option 1: Direct PBF (Development)
+
+Download OSM data and mount as volume. Services parse on startup.
+
+```bash
+# Download map data (350 MB for Hungary)
+./scripts/data-download-osm.sh hungary
+
+# Run with PBF - parses on startup
+docker run -p 8081:8081 -v $(pwd)/data:/data:ro otto-carta /data/hungary-latest.osm.pbf
+```
+
+### Option 2: Pre-built Indexes (Production)
+
+Build indexes once, use for faster startup.
+
+```bash
+# Build the data-builder image
+docker build -f docker/Dockerfile.data-builder -t otto-data-builder .
+
+# Download PBF
+./scripts/data-download-osm.sh hungary
+
+# Build all indexes (~2-5 min depending on size)
+docker run -v $(pwd)/data:/data otto-data-builder /data/hungary-latest.osm.pbf
+
+# Result: data/hungary.vlg, data/hungary.lcx, data/hungary.idx
+
+# Run with pre-built indexes (instant startup)
+docker run -p 8082:8082 -v $(pwd)/data:/data:ro otto-velo /data/hungary.vlg
+docker run -p 8083:8083 -v $(pwd)/data:/data:ro otto-locus /data/hungary.lcx
+docker run -p 8081:8081 -v $(pwd)/data:/data:ro otto-carta /data/hungary.idx
+```
+
+### Index File Formats
+
+| Service | Extension | Contents |
+|---------|-----------|----------|
+| Velo | `.vlg` | CSR graph, landmarks, restrictions |
+| Locus | `.lcx` | Trie, n-grams, spatial grid |
+| Carta | `.idx` | Ways, R-tree, multipolygons |
+
+All indexes are **read-only** and can be shared across container instances.
 
 ## Security Features
 

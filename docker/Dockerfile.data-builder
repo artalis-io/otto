@@ -1,0 +1,109 @@
+# OTTO Data Builder
+#
+# Builds pre-computed indexes (.vlg, .lcx, .idx) from OSM PBF files.
+# Use this for production deployments to avoid startup-time parsing.
+#
+# Build:
+#   docker build -f docker/Dockerfile.data-builder -t otto-data-builder .
+#
+# Usage:
+#   # Download PBF first
+#   ./scripts/data-download-osm.sh hungary
+#
+#   # Build indexes
+#   docker run -v $(pwd)/data:/data otto-data-builder /data/hungary-latest.osm.pbf
+#
+#   # Or build with custom output prefix
+#   docker run -v $(pwd)/data:/data otto-data-builder /data/hungary-latest.osm.pbf /data/hungary
+#
+# Output:
+#   /data/hungary.vlg   - Velo routing graph
+#   /data/hungary.lcx   - Locus geocoding index
+#   /data/hungary.idx   - Carta tile index
+#
+# Then run services with pre-built indexes:
+#   docker run -v $(pwd)/data:/data:ro otto-velo /data/hungary.vlg
+#   docker run -v $(pwd)/data:/data:ro otto-locus /data/hungary.lcx
+#   docker run -v $(pwd)/data:/data:ro otto-carta /data/hungary.idx
+
+# =============================================================================
+# Build stage - compile all indexers
+# =============================================================================
+FROM debian:bookworm-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+COPY shared/ shared/
+COPY ralph/ ralph/
+COPY velo/ velo/
+COPY carta/ carta/
+COPY locus/ locus/
+COPY vendor/ vendor/
+COPY Makefile .
+
+# Build all API servers (they include index-building capability)
+RUN make shared && make ralph && make velo && make carta && make locus
+RUN make velo-api && make carta-api && make locus-api
+
+# =============================================================================
+# Runtime stage - index builder tools
+# =============================================================================
+FROM debian:bookworm-slim
+
+LABEL org.opencontainers.image.title="OTTO Data Builder"
+LABEL org.opencontainers.image.description="Build pre-computed indexes from OSM PBF files"
+
+WORKDIR /app
+
+# Copy the API servers (used for building indexes)
+COPY --from=builder /build/velo/api/velo-route-server /app/
+COPY --from=builder /build/carta/api/carta-tile-server /app/
+COPY --from=builder /build/locus/api/locus-geocoder /app/
+
+# Builder script
+COPY --chmod=755 <<'EOF' /app/build-indexes.sh
+#!/bin/bash
+set -e
+
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <input.osm.pbf> [output-prefix]"
+    echo ""
+    echo "Example:"
+    echo "  $0 /data/hungary-latest.osm.pbf"
+    echo "  $0 /data/hungary-latest.osm.pbf /data/hungary"
+    exit 1
+fi
+
+PBF="$1"
+PREFIX="${2:-${PBF%.osm.pbf}}"
+PREFIX="${PREFIX%-latest}"
+
+echo "Building indexes from: $PBF"
+echo "Output prefix: $PREFIX"
+echo ""
+
+# Build Velo routing graph
+echo "=== Building Velo index (${PREFIX}.vlg) ==="
+/app/velo-route-server --save-index "${PREFIX}.vlg" "$PBF" --build-only
+echo ""
+
+# Build Locus geocoding index
+echo "=== Building Locus index (${PREFIX}.lcx) ==="
+/app/locus-geocoder --build-only -S "${PREFIX}.lcx" "$PBF"
+echo ""
+
+# Build Carta tile index
+echo "=== Building Carta index (${PREFIX}.idx) ==="
+/app/carta-tile-server --save-index "${PREFIX}.idx" "$PBF" --build-only
+echo ""
+
+echo "=== Done ==="
+ls -lh "${PREFIX}".{vlg,lcx,idx} 2>/dev/null || true
+EOF
+
+ENTRYPOINT ["/app/build-indexes.sh"]

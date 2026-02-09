@@ -2403,10 +2403,23 @@
 <span class="command">make run-ralph-api</span>      <span class="comment"># :8084</span>
 
 <span class="comment"># Build for WebAssembly</span>
-<span class="command">make wasm</span></pre>
+<span class="command">make wasm</span>
+
+<span class="comment"># --- Or use Docker Compose ---</span>
+
+<span class="comment"># Download map data (Hungary, 350 MB)</span>
+<span class="command">./scripts/data-download-osm.sh hungary</span>
+
+<span class="comment"># Start all GIS services</span>
+<span class="command">PBF_FILE=/data/hungary-latest.osm.pbf docker-compose up carta velo locus</span>
+
+<span class="comment"># For production: pre-build indexes first</span>
+<span class="command">docker build -f docker/Dockerfile.data-builder -t otto-data-builder .</span>
+<span class="command">docker run -v $(pwd)/data:/data otto-data-builder /data/hungary-latest.osm.pbf</span></pre>
                 </div>
                 <p style="margin-top: 16px; font-size: 14px; color: var(--text-muted);">
                     See <a href="api.html">API Documentation</a> for REST endpoint details.
+                    For Docker deployment, see <code>docker/README.md</code>.
                 </p>
             </div>
 
