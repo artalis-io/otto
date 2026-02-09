@@ -11,7 +11,8 @@
  *   #include "cs_immediate.c"  // or compile separately
  */
 
-/* Core and components (no Clay dependency) */
+/* Core and shared utilities (no Clay dependency) */
+#include "cs_render.c"
 #include "cs_common.c"
 #include "cs_input.c"
 #include "cs_button.c"

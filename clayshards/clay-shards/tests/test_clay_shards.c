@@ -14,6 +14,7 @@
 #define CLAY_IMPLEMENTATION
 #include "clay.h"
 #include "cs_immediate.h"
+#include "cs_render.h"
 #include "cs_map.h"
 #include "cs_map_provider.h"
 #include "../src/cs_internal.h"  /* For CsState, cs_get_state, cs_widget_state */
@@ -2408,6 +2409,177 @@ static void test_scroll_set_position_not_found(void) {
 }
 
 /* ============================================================================
+ * Scissor Stack Tests
+ * ============================================================================ */
+
+static void test_scissor_init(void) {
+    TEST(scissor_init);
+
+    CsScissorStack stack;
+    cs_scissor_init(&stack, 800, 600);
+
+    ASSERT(stack.depth == 0, "Stack should be empty after init");
+    ASSERT(stack.screen_w == 800, "Screen width should be set");
+    ASSERT(stack.screen_h == 600, "Screen height should be set");
+
+    CsScissor sc = cs_scissor_current(&stack);
+    ASSERT(sc.x == 0 && sc.y == 0, "Current should be origin");
+    ASSERT(sc.w == 800 && sc.h == 600, "Current should be full screen");
+
+    PASS();
+}
+
+static void test_scissor_push_pop(void) {
+    TEST(scissor_push_pop);
+
+    CsScissorStack stack;
+    cs_scissor_init(&stack, 800, 600);
+
+    cs_scissor_push(&stack, 100, 100, 200, 200);
+    ASSERT(stack.depth == 1, "Depth should be 1");
+
+    CsScissor sc = cs_scissor_current(&stack);
+    ASSERT(sc.x == 100 && sc.y == 100, "Scissor position correct");
+    ASSERT(sc.w == 200 && sc.h == 200, "Scissor size correct");
+
+    cs_scissor_pop(&stack);
+    ASSERT(stack.depth == 0, "Depth should be 0 after pop");
+
+    PASS();
+}
+
+static void test_scissor_nesting(void) {
+    TEST(scissor_nesting);
+
+    CsScissorStack stack;
+    cs_scissor_init(&stack, 800, 600);
+
+    /* Push outer scissor */
+    cs_scissor_push(&stack, 100, 100, 400, 400);
+
+    /* Push inner scissor that should be clipped to outer */
+    cs_scissor_push(&stack, 200, 200, 500, 500);  /* Extends past outer */
+
+    CsScissor sc = cs_scissor_current(&stack);
+    ASSERT(sc.x == 200 && sc.y == 200, "Inner scissor starts at 200,200");
+    /* Should be clipped: outer ends at 500 (100+400), so inner can only be 300 wide */
+    ASSERT(sc.w == 300, "Width should be clipped to 300");
+    ASSERT(sc.h == 300, "Height should be clipped to 300");
+
+    cs_scissor_pop(&stack);
+    cs_scissor_pop(&stack);
+    ASSERT(stack.depth == 0, "Stack should be empty");
+
+    PASS();
+}
+
+static void test_scissor_point_test(void) {
+    TEST(scissor_point_test);
+
+    CsScissorStack stack;
+    cs_scissor_init(&stack, 800, 600);
+
+    cs_scissor_push(&stack, 100, 100, 200, 200);
+
+    /* Inside scissor */
+    ASSERT(cs_scissor_test_point(&stack, 150, 150), "150,150 should be inside");
+    ASSERT(cs_scissor_test_point(&stack, 100, 100), "100,100 edge should be inside");
+    ASSERT(cs_scissor_test_point(&stack, 299, 299), "299,299 should be inside");
+
+    /* Outside scissor */
+    ASSERT(!cs_scissor_test_point(&stack, 50, 50), "50,50 should be outside");
+    ASSERT(!cs_scissor_test_point(&stack, 300, 300), "300,300 should be outside");
+    ASSERT(!cs_scissor_test_point(&stack, 150, 400), "150,400 should be outside");
+
+    cs_scissor_pop(&stack);
+
+    PASS();
+}
+
+static void test_scissor_clip_rect(void) {
+    TEST(scissor_clip_rect);
+
+    CsScissorStack stack;
+    cs_scissor_init(&stack, 800, 600);
+
+    cs_scissor_push(&stack, 100, 100, 200, 200);
+
+    /* Rectangle fully inside */
+    int x = 150, y = 150, w = 50, h = 50;
+    bool visible = cs_scissor_clip_rect(&stack, &x, &y, &w, &h);
+    ASSERT(visible, "Should be visible");
+    ASSERT(x == 150 && y == 150 && w == 50 && h == 50, "Should be unchanged");
+
+    /* Rectangle partially outside */
+    x = 250; y = 250; w = 100; h = 100;  /* Extends past 300,300 */
+    visible = cs_scissor_clip_rect(&stack, &x, &y, &w, &h);
+    ASSERT(visible, "Should still be visible");
+    ASSERT(x == 250 && y == 250, "Origin should be preserved");
+    ASSERT(w == 50 && h == 50, "Should be clipped to scissor");
+
+    /* Rectangle fully outside */
+    x = 400; y = 400; w = 50; h = 50;
+    visible = cs_scissor_clip_rect(&stack, &x, &y, &w, &h);
+    ASSERT(!visible, "Should not be visible");
+    ASSERT(w == 0 && h == 0, "Size should be zeroed");
+
+    cs_scissor_pop(&stack);
+
+    PASS();
+}
+
+static void test_scissor_color_blend(void) {
+    TEST(scissor_color_blend);
+
+    /* Opaque over opaque */
+    uint32_t red = cs_pack_color(255, 0, 0, 255);
+    uint32_t blue = cs_pack_color(0, 0, 255, 255);
+    uint32_t result = cs_blend_color(red, blue);
+    uint8_t r, g, b, a;
+    cs_unpack_color(result, &r, &g, &b, &a);
+    ASSERT(r == 255 && g == 0 && b == 0 && a == 255, "Opaque over opaque = source");
+
+    /* Transparent over opaque */
+    uint32_t transparent = cs_pack_color(0, 0, 0, 0);
+    result = cs_blend_color(transparent, blue);
+    cs_unpack_color(result, &r, &g, &b, &a);
+    ASSERT(r == 0 && g == 0 && b == 255 && a == 255, "Transparent over = dest");
+
+    /* 50% alpha blend */
+    uint32_t half_red = cs_pack_color(255, 0, 0, 128);
+    result = cs_blend_color(half_red, blue);
+    cs_unpack_color(result, &r, &g, &b, &a);
+    ASSERT(r > 100 && b > 100, "50% blend should have both colors");
+
+    PASS();
+}
+
+static void test_scissor_color_lerp(void) {
+    TEST(scissor_color_lerp);
+
+    uint32_t black = cs_pack_color(0, 0, 0, 255);
+    uint32_t white = cs_pack_color(255, 255, 255, 255);
+
+    /* t=0 should be first color */
+    uint32_t result = cs_lerp_color(black, white, 0.0f);
+    uint8_t r, g, b, a;
+    cs_unpack_color(result, &r, &g, &b, &a);
+    ASSERT(r == 0 && g == 0 && b == 0, "t=0 should be black");
+
+    /* t=1 should be second color */
+    result = cs_lerp_color(black, white, 1.0f);
+    cs_unpack_color(result, &r, &g, &b, &a);
+    ASSERT(r == 255 && g == 255 && b == 255, "t=1 should be white");
+
+    /* t=0.5 should be gray */
+    result = cs_lerp_color(black, white, 0.5f);
+    cs_unpack_color(result, &r, &g, &b, &a);
+    ASSERT(r > 120 && r < 140, "t=0.5 should be ~128");
+
+    PASS();
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -2534,6 +2706,15 @@ int main(void) {
     test_scroll_container_hovered_flag();
     test_scroll_info_not_found();
     test_scroll_set_position_not_found();
+
+    printf("\nScissor Stack Tests:\n");
+    test_scissor_init();
+    test_scissor_push_pop();
+    test_scissor_nesting();
+    test_scissor_point_test();
+    test_scissor_clip_rect();
+    test_scissor_color_blend();
+    test_scissor_color_lerp();
 
     printf("\n======================================\n");
     printf("Results: %d/%d tests passed\n", tests_passed, tests_run);

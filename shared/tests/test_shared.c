@@ -16,6 +16,7 @@
 #include "sh_heap.h"
 #include "sh_spatial_grid.h"
 #include "sh_query.h"
+#include "sh_render.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3470,6 +3471,250 @@ TEST(query_get_double_default)
 }
 
 /* ============================================================================
+ * Render Tests
+ * ============================================================================ */
+
+TEST(render_set_get_pixel)
+{
+    /* Create a 4x4 RGBA buffer */
+    uint8_t pixels[4 * 4 * 4];
+    memset(pixels, 0, sizeof(pixels));
+
+    /* Set a pixel */
+    sh_set_pixel(pixels, 4, 4, 1, 2, SH_RGBA(255, 128, 64, 255));
+
+    /* Get it back */
+    uint32_t c = sh_get_pixel(pixels, 4, 4, 1, 2);
+    ASSERT_EQ(SH_COLOR_R(c), 255);
+    ASSERT_EQ(SH_COLOR_G(c), 128);
+    ASSERT_EQ(SH_COLOR_B(c), 64);
+    ASSERT_EQ(SH_COLOR_A(c), 255);
+}
+
+TEST(render_get_pixel_out_of_bounds)
+{
+    uint8_t pixels[4 * 4 * 4];
+    memset(pixels, 0xFF, sizeof(pixels));
+
+    /* Out of bounds should return 0 */
+    ASSERT_EQ(sh_get_pixel(pixels, 4, 4, -1, 0), 0);
+    ASSERT_EQ(sh_get_pixel(pixels, 4, 4, 0, -1), 0);
+    ASSERT_EQ(sh_get_pixel(pixels, 4, 4, 4, 0), 0);
+    ASSERT_EQ(sh_get_pixel(pixels, 4, 4, 0, 4), 0);
+}
+
+TEST(render_set_pixel_out_of_bounds)
+{
+    uint8_t pixels[4 * 4 * 4];
+    memset(pixels, 0, sizeof(pixels));
+
+    /* Out of bounds set should be no-op */
+    sh_set_pixel(pixels, 4, 4, -1, 0, SH_RGBA(255, 255, 255, 255));
+    sh_set_pixel(pixels, 4, 4, 4, 0, SH_RGBA(255, 255, 255, 255));
+
+    /* Verify no pixels were modified */
+    for (int i = 0; i < 4 * 4 * 4; i++) {
+        ASSERT_EQ(pixels[i], 0);
+    }
+}
+
+TEST(render_blend_pixel_opaque)
+{
+    uint8_t pixels[4] = {100, 100, 100, 255};  /* Gray background */
+
+    /* Blend fully opaque red */
+    sh_blend_pixel_unchecked(pixels, SH_RGBA(255, 0, 0, 255));
+
+    ASSERT_EQ(pixels[0], 255);  /* R */
+    ASSERT_EQ(pixels[1], 0);    /* G */
+    ASSERT_EQ(pixels[2], 0);    /* B */
+    ASSERT_EQ(pixels[3], 255);  /* A */
+}
+
+TEST(render_blend_pixel_transparent)
+{
+    uint8_t pixels[4] = {100, 100, 100, 255};
+
+    /* Blend fully transparent - should not change */
+    sh_blend_pixel_unchecked(pixels, SH_RGBA(255, 0, 0, 0));
+
+    ASSERT_EQ(pixels[0], 100);
+    ASSERT_EQ(pixels[1], 100);
+    ASSERT_EQ(pixels[2], 100);
+    ASSERT_EQ(pixels[3], 255);
+}
+
+TEST(render_blend_pixel_50_percent)
+{
+    uint8_t pixels[4] = {0, 0, 0, 255};  /* Black background */
+
+    /* Blend 50% white */
+    sh_blend_pixel_unchecked(pixels, SH_RGBA(255, 255, 255, 128));
+
+    /* Should be close to gray */
+    ASSERT(pixels[0] > 100 && pixels[0] < 156);  /* R ~128 */
+    ASSERT(pixels[1] > 100 && pixels[1] < 156);  /* G ~128 */
+    ASSERT(pixels[2] > 100 && pixels[2] < 156);  /* B ~128 */
+}
+
+TEST(render_fill_span_opaque)
+{
+    uint8_t pixels[10 * 4 * 4];  /* 10x4 buffer */
+    memset(pixels, 0, sizeof(pixels));
+
+    /* Fill span on row 1 from x=2 to x=5 */
+    sh_fill_span(pixels, 10, 4, 1, 2, 5, SH_RGBA(200, 100, 50, 255));
+
+    /* Check pixels on row 1 */
+    for (int x = 0; x < 10; x++) {
+        uint32_t c = sh_get_pixel(pixels, 10, 4, x, 1);
+        if (x >= 2 && x <= 5) {
+            ASSERT_EQ(SH_COLOR_R(c), 200);
+            ASSERT_EQ(SH_COLOR_G(c), 100);
+            ASSERT_EQ(SH_COLOR_B(c), 50);
+        } else {
+            ASSERT_EQ(c, 0);  /* Not touched */
+        }
+    }
+}
+
+TEST(render_fill_span_clipping)
+{
+    uint8_t pixels[4 * 2 * 4];  /* 4x2 buffer */
+    memset(pixels, 0, sizeof(pixels));
+
+    /* Span extends beyond buffer - should clip */
+    sh_fill_span(pixels, 4, 2, 0, -2, 6, SH_RGBA(255, 0, 0, 255));
+
+    /* Only x=0 to x=3 should be filled */
+    for (int x = 0; x < 4; x++) {
+        uint32_t c = sh_get_pixel(pixels, 4, 2, x, 0);
+        ASSERT_EQ(SH_COLOR_R(c), 255);
+    }
+
+    /* Row 1 should be untouched */
+    for (int x = 0; x < 4; x++) {
+        ASSERT_EQ(sh_get_pixel(pixels, 4, 2, x, 1), 0);
+    }
+}
+
+TEST(render_fill_span_out_of_bounds_y)
+{
+    uint8_t pixels[4 * 2 * 4];
+    memset(pixels, 0, sizeof(pixels));
+
+    /* Y out of bounds - should be no-op */
+    sh_fill_span(pixels, 4, 2, -1, 0, 3, SH_RGBA(255, 0, 0, 255));
+    sh_fill_span(pixels, 4, 2, 2, 0, 3, SH_RGBA(255, 0, 0, 255));
+
+    /* Verify no pixels were modified */
+    for (int i = 0; i < 4 * 2 * 4; i++) {
+        ASSERT_EQ(pixels[i], 0);
+    }
+}
+
+TEST(render_fill_span_alpha_blend)
+{
+    uint8_t pixels[4 * 4];  /* 4x1 buffer */
+    memset(pixels, 0, sizeof(pixels));  /* Black background */
+
+    /* Fill with 50% white */
+    sh_fill_span(pixels, 4, 1, 0, 0, 3, SH_RGBA(255, 255, 255, 128));
+
+    /* All pixels should be ~gray */
+    for (int x = 0; x < 4; x++) {
+        uint32_t c = sh_get_pixel(pixels, 4, 1, x, 0);
+        ASSERT(SH_COLOR_R(c) > 100 && SH_COLOR_R(c) < 160);
+    }
+}
+
+TEST(render_clear_buffer)
+{
+    uint8_t pixels[8 * 8 * 4];
+    memset(pixels, 0, sizeof(pixels));
+
+    /* Clear to a color */
+    sh_clear_buffer(pixels, 8, 8, SH_RGBA(50, 100, 150, 255));
+
+    /* Check all pixels */
+    for (int y = 0; y < 8; y++) {
+        for (int x = 0; x < 8; x++) {
+            uint32_t c = sh_get_pixel(pixels, 8, 8, x, y);
+            ASSERT_EQ(SH_COLOR_R(c), 50);
+            ASSERT_EQ(SH_COLOR_G(c), 100);
+            ASSERT_EQ(SH_COLOR_B(c), 150);
+            ASSERT_EQ(SH_COLOR_A(c), 255);
+        }
+    }
+}
+
+TEST(render_clear_buffer_uniform)
+{
+    uint8_t pixels[8 * 8 * 4];
+
+    /* Clear to uniform color (memset fast path) */
+    sh_clear_buffer(pixels, 8, 8, SH_RGBA(128, 128, 128, 128));
+
+    for (int i = 0; i < 8 * 8 * 4; i++) {
+        ASSERT_EQ(pixels[i], 128);
+    }
+}
+
+TEST(render_clear_rect)
+{
+    uint8_t pixels[10 * 10 * 4];
+    memset(pixels, 0, sizeof(pixels));
+
+    /* Clear a 4x3 rectangle at (2, 3) */
+    sh_clear_rect(pixels, 10, 10, 2, 3, 4, 3, SH_RGBA(255, 128, 64, 255));
+
+    /* Check that only the rectangle is filled */
+    for (int y = 0; y < 10; y++) {
+        for (int x = 0; x < 10; x++) {
+            uint32_t c = sh_get_pixel(pixels, 10, 10, x, y);
+            if (x >= 2 && x < 6 && y >= 3 && y < 6) {
+                ASSERT_EQ(SH_COLOR_R(c), 255);
+                ASSERT_EQ(SH_COLOR_G(c), 128);
+            } else {
+                ASSERT_EQ(c, 0);
+            }
+        }
+    }
+}
+
+TEST(render_clear_rect_clipping)
+{
+    uint8_t pixels[4 * 4 * 4];
+    memset(pixels, 0, sizeof(pixels));
+
+    /* Rectangle partially outside buffer */
+    sh_clear_rect(pixels, 4, 4, -1, -1, 3, 3, SH_RGBA(255, 0, 0, 255));
+
+    /* Only (0,0), (1,0), (0,1), (1,1) should be filled */
+    ASSERT(SH_COLOR_R(sh_get_pixel(pixels, 4, 4, 0, 0)) == 255);
+    ASSERT(SH_COLOR_R(sh_get_pixel(pixels, 4, 4, 1, 0)) == 255);
+    ASSERT(SH_COLOR_R(sh_get_pixel(pixels, 4, 4, 0, 1)) == 255);
+    ASSERT(SH_COLOR_R(sh_get_pixel(pixels, 4, 4, 1, 1)) == 255);
+    ASSERT_EQ(sh_get_pixel(pixels, 4, 4, 2, 0), 0);
+    ASSERT_EQ(sh_get_pixel(pixels, 4, 4, 0, 2), 0);
+}
+
+TEST(render_color_macros)
+{
+    uint32_t c = SH_RGBA(10, 20, 30, 40);
+    ASSERT_EQ(SH_COLOR_R(c), 10);
+    ASSERT_EQ(SH_COLOR_G(c), 20);
+    ASSERT_EQ(SH_COLOR_B(c), 30);
+    ASSERT_EQ(SH_COLOR_A(c), 40);
+
+    uint32_t rgb = SH_RGB(100, 150, 200);
+    ASSERT_EQ(SH_COLOR_R(rgb), 100);
+    ASSERT_EQ(SH_COLOR_G(rgb), 150);
+    ASSERT_EQ(SH_COLOR_B(rgb), 200);
+    ASSERT_EQ(SH_COLOR_A(rgb), 255);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -3751,6 +3996,23 @@ int main(void)
     RUN_TEST(query_has_null_safety);
     RUN_TEST(query_get_double_basic);
     RUN_TEST(query_get_double_default);
+
+    printf("\nRender Utilities:\n");
+    RUN_TEST(render_set_get_pixel);
+    RUN_TEST(render_get_pixel_out_of_bounds);
+    RUN_TEST(render_set_pixel_out_of_bounds);
+    RUN_TEST(render_blend_pixel_opaque);
+    RUN_TEST(render_blend_pixel_transparent);
+    RUN_TEST(render_blend_pixel_50_percent);
+    RUN_TEST(render_fill_span_opaque);
+    RUN_TEST(render_fill_span_clipping);
+    RUN_TEST(render_fill_span_out_of_bounds_y);
+    RUN_TEST(render_fill_span_alpha_blend);
+    RUN_TEST(render_clear_buffer);
+    RUN_TEST(render_clear_buffer_uniform);
+    RUN_TEST(render_clear_rect);
+    RUN_TEST(render_clear_rect_clipping);
+    RUN_TEST(render_color_macros);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
