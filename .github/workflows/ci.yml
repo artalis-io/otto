@@ -87,49 +87,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential libomp-dev
 
-      - name: Build all API servers
-        run: |
-          make fuelwise-api
-          make carta-api
-          make velo-api
-          make locus-api
-          make ralph-api
-
+      # FuelWise API has full test suite (starts server, tests endpoints, stops)
       - name: Test FuelWise API
-        run: |
-          ./fuelwise/api/fuelwise-api -p 8080 &
-          sleep 2
-          curl -sf http://localhost:8080/api/v1/health | grep -q '"status"'
-          curl -sf -X POST http://localhost:8080/api/v1/solve \
-            -H "Content-Type: application/json" \
-            -d '{"total_distance":500,"tank_capacity":100,"current_fuel":30,"consumption_mpg":8,"minimum_fuel":10,"stations":[{"id":1,"distance":100,"price":3.50},{"id":2,"distance":300,"price":3.25}]}' \
-            | grep -q '"status":"optimal"'
-          pkill -f fuelwise-api || true
+        run: make test-fuelwise-api
 
-      - name: Test Carta API
-        run: |
-          # Carta needs PBF data - test health endpoint only
-          ./carta/api/carta-tile-server --help > /dev/null
-          echo "Carta API binary verified"
-
-      - name: Test Velo API
-        run: |
-          # Velo needs graph data - test health endpoint only
-          ./velo/api/velo-route-server --help > /dev/null
-          echo "Velo API binary verified"
-
-      - name: Test Locus API
-        run: |
-          # Locus needs index data - test health endpoint only
-          ./locus/api/locus-geocoder --help > /dev/null
-          echo "Locus API binary verified"
-
+      # Ralph API has full test suite (no external data needed)
       - name: Test Ralph API
+        run: make -C ralph/api test
+
+      # APIs that need OSM data - just verify they build and show help
+      - name: Build Carta API
         run: |
-          ./ralph/api/ralph-solver-server -p 8084 &
-          sleep 2
-          curl -sf http://localhost:8084/api/v1/health | grep -q '"status"'
-          pkill -f ralph-solver-server || true
+          make carta-api
+          ./carta/api/carta-tile-server --help > /dev/null
+
+      - name: Build Velo API
+        run: |
+          make velo-api
+          ./velo/api/velo-route-server --help > /dev/null
+
+      - name: Build Locus API
+        run: |
+          make locus-api
+          ./locus/api/locus-geocoder --help > /dev/null
 
   # ==========================================================================
   # Build WebAssembly
