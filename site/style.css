@@ -480,7 +480,7 @@ header {
 
 .ascii-art pre {
     margin: 0;
-    font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
     color: #a0a0a0;
     text-shadow:
         0 0 2px rgba(200, 200, 200, 0.8),
