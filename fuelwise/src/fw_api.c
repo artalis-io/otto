@@ -283,6 +283,8 @@ static int parse_solve_request(const char *json, FWRefuelProblem *problem) {
     }
     if ((p = find_json_key(json, "consumption"))) {
         problem->base_consumption = parse_double(&p);
+    } else if ((p = find_json_key(json, "consumption_mpg"))) {
+        problem->base_consumption = parse_double(&p);
     }
     if ((p = find_json_key(json, "minimum_fuel"))) {
         problem->minimum_fuel = parse_double(&p);
@@ -648,6 +650,8 @@ static char *process_optimize(const char *body, int *status_code) {
         current_fuel = parse_double(&p);
     }
     if ((p = find_json_key(body, "consumption"))) {
+        consumption = parse_double(&p);
+    } else if ((p = find_json_key(body, "consumption_mpg"))) {
         consumption = parse_double(&p);
     }
     if ((p = find_json_key(body, "minimum_fuel"))) {
