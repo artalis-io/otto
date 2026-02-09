@@ -119,6 +119,7 @@ curl -X POST http://localhost:8080/api/v1/optimize \
 | **[CLAUDE.md](CLAUDE.md)** | Development guide and patterns |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | System architecture, layers, data flow |
 | **[docs/MANIFESTO.md](docs/MANIFESTO.md)** | Design philosophy (C, WASM, transport-agnostic) |
+| **[docs/internals/security-model.md](docs/internals/security-model.md)** | Security architecture, role separation, hardening |
 | **[docs/business/](docs/business/)** | Strategy, valuation |
 | **[docs/roadmaps/](docs/roadmaps/)** | Active development roadmaps (15 components) |
 | **[site/api.html](site/api.html)** | Interactive API docs with WASM demos |
@@ -236,6 +237,18 @@ CLAY(CLAY_ID("Panel"), CLAY_LAYOUT(.padding = {16, 16, 16, 16})) {
 - **TUI as strictest target** - If it works in terminal, it works everywhere
 
 See [clayshards/clay-shards/MANIFESTO.md](clayshards/clay-shards/MANIFESTO.md) for ClayShards-specific details.
+
+### Defense-in-Depth Security
+
+OTTO implements role-based privilege separation with three deployment modes:
+
+- **In-process** (default) - Worker threads via `sh_worker_pool`, systemd hardening
+- **WASM** (demos/edge) - Parsing + compute bundled in WASM sandbox
+- **Process pool** (high-security) - Long-lived parser processes with seccomp/pledge
+
+The same `*_api_handle()` interface works identically in all modes. No `system()`, `exec*()`, `popen()`, `dlopen()`. OSM parsing is offline-only—derived indexes are mmap'd read-only.
+
+See [docs/internals/security-model.md](docs/internals/security-model.md) for the full security architecture.
 
 ## Requirements
 

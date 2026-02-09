@@ -454,3 +454,26 @@ OTTO's design philosophy:
 7. **Layered architecture** with clean boundaries
 8. **Arena allocation** for predictable memory
 9. **Errors as values** for explicit control flow
+
+---
+
+## 11. Security Model
+
+OTTO implements defense-in-depth through **role-based privilege separation**:
+
+| Role | Responsibility | Trust Level |
+|------|----------------|-------------|
+| **Transport (B)** | Protocol framing, TLS, limits | Touches network |
+| **Parser (P)** | Parse JSON/MPS/LP, validate | Handles raw bytes |
+| **Compute (C)** | Business logic, solver | Sees only clean IR |
+| **Dataset (D)** | Index access, queries | Read-only data |
+| **WASM (W)** | Sandboxed execution | Zero ambient authority |
+
+**Key principles:**
+
+- **Raw bytes are toxic** — parsing happens in isolated processes
+- **IPC is the security boundary** — roles communicate via Unix sockets
+- **mmap for speed, not privilege** — read-only derived indexes only
+- **Compromise collapses into crash** — no lateral movement
+
+For the complete security architecture, see [internals/security-model.md](internals/security-model.md).

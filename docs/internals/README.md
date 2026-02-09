@@ -6,6 +6,7 @@ Deep-dive technical documentation for OTTO's core algorithms and architectures.
 
 | Document | Component | Description |
 |----------|-----------|-------------|
+| [security-model.md](security-model.md) | Platform | Role separation, process isolation, hardening |
 | [ralph-architecture.md](ralph-architecture.md) | Ralph | LP/MIP solver architecture, data flow, performance |
 | [lu-factorization.md](lu-factorization.md) | Ralph | LU decomposition, eta updates, numerical stability |
 | [simplex.md](simplex.md) | Ralph | Revised simplex implementation details |

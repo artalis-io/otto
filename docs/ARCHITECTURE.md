@@ -515,6 +515,7 @@ make test-api         # All API endpoint tests
    - AV: Different cost structures, modified/eliminated HoS constraints, mixed fleet optimization
    - Vehicle type is a first-class parameter in HoSE, Velo, and FuelWise
 7. **Defense in Depth**: Production-ready with multiple protective layers
+   - See [internals/security-model.md](internals/security-model.md) for role-based privilege separation
 
 ## Production Hardening
 

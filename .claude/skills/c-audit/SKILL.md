@@ -20,6 +20,39 @@ Perform comprehensive security, safety, and quality audits on OTTO C modules.
 
 ## Audit Categories
 
+### 0. Security Model Compliance (Warnings)
+
+OTTO follows a [security model](../../../docs/internals/security-model.md) with role-based privilege separation. These checks warn about violations (not failures, for now).
+
+| Check | Pattern | Severity | Rationale |
+|-------|---------|----------|-----------|
+| `system()` call | `system\s*\(` | Warning | No shell execution allowed |
+| `exec*()` call | `exec[lv]p?\s*\(` | Warning | No process spawning in libraries |
+| `popen()` call | `popen\s*\(` | Warning | No shell pipes allowed |
+| `dlopen()` call | `dlopen\s*\(` | Warning | No runtime plugin loading |
+| Inline parsing in handlers | Handler directly calls `json_*`, `parse_*` | Warning | Parsing should be in Role P |
+| Broad file access | `fopen` without path validation | Warning | Restrict to known paths |
+
+**Role Reference:**
+- **Role B (Transport):** Mongoose handlers - should only frame/limit, not parse
+- **Role P (Parser):** Parsing code - runs in isolated process
+- **Role C (Compute):** Business logic - receives only clean IR, no raw bytes
+- **Role D (Dataset):** Index access - read-only mmap of derived formats
+
+**Audit Output Section:**
+```markdown
+### Security Model Compliance
+
+| Check | Status | Notes |
+|-------|--------|-------|
+| No system/exec/popen | ✅ | |
+| No dlopen | ✅ | |
+| Parsing isolated | ⚠️ | JSON parsed inline in `handle_request()` |
+| File access restricted | ✅ | |
+
+See docs/internals/security-model.md for target architecture.
+```
+
 ### 1. Memory Safety (Critical)
 
 | Issue | Pattern to Find | Severity |
@@ -1578,7 +1611,13 @@ When `/c-audit <module>` is invoked:
    └── tests/       # Test files
    ```
 
-2. **Scan for Critical Issues**
+2. **Check Security Model Compliance** (Warnings)
+   - Search for: `system(`, `execl(`, `execlp(`, `execv(`, `execvp(`, `popen(`, `dlopen(`
+   - In API servers: check if handlers parse complex input directly vs. delegating
+   - Check for broad `fopen()` without path restrictions
+   - Reference: `docs/internals/security-model.md`
+
+3. **Scan for Critical Issues**
    - Search for unsafe functions: `strcpy`, `sprintf`, `gets`, `strcat`
    - Search for unchecked allocations: `malloc` without NULL check
    - Search for missing bounds checks on array access
@@ -1728,6 +1767,12 @@ DEBUG_CFLAGS += -fsanitize=address,undefined -g
 ## Checklist Summary
 
 Before marking a module as "hardened":
+
+**Security Model Compliance:**
+- [ ] No `system()`, `exec*()`, `popen()`, `dlopen()` calls
+- [ ] Parsing not done inline in HTTP handlers (delegate to Role P)
+- [ ] File access restricted to known paths
+- [ ] See `docs/internals/security-model.md` for full requirements
 
 **Memory Safety:**
 - [ ] No Critical or High severity issues
