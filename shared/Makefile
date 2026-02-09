@@ -63,7 +63,7 @@ LIB = libshared.a
 TEST_BIN = test_shared
 TEST_FONT_BIN = test_font
 
-.PHONY: all clean test test-font lib debug generate-font-data
+.PHONY: all clean test test-font font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -97,6 +97,19 @@ test: $(TEST_BIN) $(TEST_FONT_BIN)
 test-font: $(TEST_FONT_BIN)
 	./$(TEST_FONT_BIN)
 
+# Font comparison tool (software vs WebGL)
+FONT_COMPARE_BIN = tests/font_compare
+CARTA_INCLUDES = -I../carta/include
+CARTA_LIBS = -L../carta -lcarta
+
+font-compare: $(FONT_COMPARE_BIN)
+	@echo "Run: cd shared && python3 -m http.server 8000"
+	@echo "Then open: http://localhost:8000/tests/compare.html"
+
+$(FONT_COMPARE_BIN): tests/font_compare.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $(CARTA_INCLUDES) $< -L. -lshared $(CARTA_LIBS) $(LDFLAGS) -o $@
+	./$(FONT_COMPARE_BIN) tests
+
 # Generate font data from JSON/PNG (requires Python 3)
 generate-font-data:
 	python3 fonts/generate_font_data.py fonts/ui-font.json fonts/ui-font.png src/sh_font_data.c
@@ -107,7 +120,8 @@ debug: clean all
 
 # Clean
 clean:
-	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN)
+	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN) $(FONT_COMPARE_BIN)
+	rm -f tests/soft_*.png tests/compare.html
 
 # Dependencies
 src/sh_geo.o: include/sh_geo.h include/shared.h
