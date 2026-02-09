@@ -234,6 +234,11 @@ float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atla
  * Glyph Rendering (Software Rasterization)
  * ============================================================================ */
 
+/* Scissor rectangle for clipping (NULL = no clipping) */
+typedef struct {
+    int x, y, w, h;
+} SHScissor;
+
 /*
  * Render a single glyph to a pixel buffer.
  *
@@ -260,6 +265,20 @@ void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
                           float threshold);
 
 /*
+ * Render a single glyph with scissor clipping.
+ *
+ * Same as sh_font_render_glyph but with optional scissor rectangle.
+ * Pixels outside the scissor region are not drawn.
+ *
+ * @param scissor    Scissor rectangle (NULL = no clipping)
+ */
+void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height,
+                                   const SHFont *font, const SHGlyph *glyph,
+                                   int x, int y, float font_size,
+                                   uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
+                                   float threshold, const SHScissor *scissor);
+
+/*
  * Render a text string to a pixel buffer.
  *
  * Convenience function that iterates UTF-8 codepoints and renders each glyph.
@@ -280,6 +299,19 @@ void sh_font_render_text(uint8_t *pixels, int buf_width, int buf_height,
                          const SHFont *font, const char *text, int len,
                          float x, float y, float font_size,
                          uint8_t r, uint8_t g, uint8_t b, uint8_t alpha);
+
+/*
+ * Render a text string with scissor clipping.
+ *
+ * Same as sh_font_render_text but with optional scissor rectangle.
+ *
+ * @param scissor    Scissor rectangle (NULL = no clipping)
+ */
+void sh_font_render_text_clipped(uint8_t *pixels, int buf_width, int buf_height,
+                                  const SHFont *font, const char *text, int len,
+                                  float x, float y, float font_size,
+                                  uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
+                                  const SHScissor *scissor);
 
 #ifdef __cplusplus
 }

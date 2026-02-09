@@ -439,97 +439,19 @@ void cs_soft_text(CsSoftRenderer *r, const char *text, int len,
     const SHFont *font = sh_font_get_default();
     if (!font) return;
 
-    if (len < 0) len = (int)strlen(text);
-
-    /* Convert color */
+    /* Extract color components (cs_pack_color format: R in high byte) */
     uint8_t cr = (color >> 24) & 0xFF;
     uint8_t cg = (color >> 16) & 0xFF;
     uint8_t cb = (color >> 8) & 0xFF;
+    uint8_t ca = color & 0xFF;
 
-    /* y is top of text bounding box - calculate baseline (same as carta) */
-    float baseline_y = y + sh_font_ascent(font, size);
-    float cursor_x = x;
+    /* Get current scissor (CsScissor is now an alias of SHScissor) */
+    SHScissor scissor = cs_scissor_current(&r->scissor);
 
-    for (int i = 0; i < len; i++) {
-        uint32_t codepoint;
-        int bytes = sh_utf8_decode(text + i, &codepoint);
-
-        const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
-        if (!glyph) {
-            i += bytes - 1;
-            continue;
-        }
-
-        /* Calculate glyph dimensions in screen pixels (same as carta) */
-        float glyph_w = (glyph->plane.right - glyph->plane.left) * size;
-        float glyph_h = (glyph->plane.top - glyph->plane.bottom) * size;
-
-        if (glyph_w <= 0.0f || glyph_h <= 0.0f) {
-            cursor_x += glyph->advance * size;
-            i += bytes - 1;
-            continue;
-        }
-
-        /* Calculate glyph position (same as carta) */
-        float glyph_x = cursor_x + glyph->plane.left * size;
-        float glyph_y = baseline_y - glyph->plane.top * size;
-
-        /* Integer dimensions and position for rendering
-         * Extend by 1 pixel on each side to capture MSDF anti-aliasing at edges
-         * (WebGL renders a quad that covers the full UV range; we need to match) */
-        int gx = (int)floorf(glyph_x) - 1;
-        int gy = (int)floorf(glyph_y) - 1;
-        int gw = (int)ceilf(glyph_w) + 2;
-        int gh = (int)ceilf(glyph_h) + 2;
-
-        /* Render glyph using MSDF (same approach as carta ct_render_glyph) */
-        for (int py = 0; py < gh; py++) {
-            int screen_y = gy + py;
-            if (screen_y < 0 || screen_y >= r->height) continue;
-
-            for (int px = 0; px < gw; px++) {
-                int screen_x = gx + px;
-                if (screen_x < 0 || screen_x >= r->width) continue;
-
-                /* Check scissor */
-                if (!cs_scissor_test_point(&r->scissor, screen_x, screen_y)) {
-                    continue;
-                }
-
-                /* Map screen pixel to local glyph coordinates [0, 1]
-                 * Account for the 1-pixel extension on each side */
-                float local_x = ((float)px - 0.5f) / glyph_w;
-                float local_y = ((float)py - 0.5f) / glyph_h;
-
-                /* Get MSDF coverage with threshold (uses bilinear sampling) */
-                float coverage = sh_font_msdf_coverage_threshold(font, glyph,
-                                                                  local_x, local_y,
-                                                                  size, 0.5f);
-
-                if (coverage <= 0.0f) continue;
-
-                uint8_t alpha = (uint8_t)(coverage * 255.0f);
-
-                /* Blend onto buffer using simple alpha blending
-                 * Buffer is in RGBA format (R at offset+0) */
-                int offset = (screen_y * r->width + screen_x) * 4;
-                uint8_t dr = r->pixels[offset + 0];
-                uint8_t dg = r->pixels[offset + 1];
-                uint8_t db = r->pixels[offset + 2];
-                uint8_t da = r->pixels[offset + 3];
-
-                /* Porter-Duff source-over: out = src + dst * (1 - src_alpha) */
-                uint32_t inv_alpha = 255 - alpha;
-                r->pixels[offset + 0] = (uint8_t)((cr * alpha + dr * inv_alpha) / 255);
-                r->pixels[offset + 1] = (uint8_t)((cg * alpha + dg * inv_alpha) / 255);
-                r->pixels[offset + 2] = (uint8_t)((cb * alpha + db * inv_alpha) / 255);
-                r->pixels[offset + 3] = (uint8_t)(alpha + (da * inv_alpha) / 255);
-            }
-        }
-
-        cursor_x += glyph->advance * size;
-        i += bytes - 1;
-    }
+    /* Use shared font rendering with scissor clipping */
+    sh_font_render_text_clipped(r->pixels, r->width, r->height,
+                                 font, text, len, x, y, size,
+                                 cr, cg, cb, ca, &scissor);
 }
 
 /* ============================================================================
