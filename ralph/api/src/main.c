@@ -17,10 +17,9 @@
 #include "ralph_api.h"
 #include "sh_args.h"
 
-/* Configuration */
-static int s_port = 8084;
-static const char *s_host = "0.0.0.0";
-static int s_running = 1;
+/* Configuration (uses shared library) */
+static ShServerConfig s_config;
+static volatile sig_atomic_t s_running = 1;
 
 /* Global API context */
 static RalphAPIContext *s_ctx = NULL;
@@ -137,43 +136,29 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
 }
 
 static void print_usage(const char *prog) {
-    printf("Usage: %s [options]\n\n", prog);
-    printf("Options:\n");
-    printf("  -p, --port PORT    Listen port (default: 8084)\n");
-    printf("  -h, --host HOST    Bind address (default: 0.0.0.0)\n");
-    printf("  --help             Show this help\n");
-    printf("\nEnvironment Variables:\n");
-    printf("  RALPH_PORT         Listen port\n");
-    printf("  RALPH_HOST         Bind address\n");
-    printf("\nEndpoints:\n");
-    printf("  GET  /api/v1/health   Health check\n");
-    printf("  GET  /api/v1/formats  Supported formats\n");
-    printf("  POST /api/v1/solve    Solve LP/MIP problem\n");
-}
-
-static void parse_args(int argc, char *argv[]) {
-    /* Environment variables first */
-    const char *env_port = getenv("RALPH_PORT");
-    const char *env_host = getenv("RALPH_HOST");
-
-    if (env_port) s_port = sh_parse_int(env_port, 8084, 1, 65535);
-    if (env_host) s_host = env_host;
-
-    /* Command line overrides */
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--help") == 0) {
-            print_usage(argv[0]);
-            exit(0);
-        } else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) && i + 1 < argc) {
-            s_port = sh_parse_int(argv[++i], 8084, 1, 65535);
-        } else if ((strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--host") == 0) && i + 1 < argc) {
-            s_host = argv[++i];
-        }
-    }
+    printf("Ralph LP/MIP Solver - HTTP Server\n\n");
+    sh_args_usage(prog,
+        "\nEndpoints:\n"
+        "  GET  /api/v1/health   Health check\n"
+        "  GET  /api/v1/formats  Supported formats\n"
+        "  POST /api/v1/solve    Solve LP/MIP problem\n");
 }
 
 int main(int argc, char *argv[]) {
-    parse_args(argc, argv);
+    /* Initialize config with defaults */
+    sh_args_init(&s_config);
+    s_config.port = 8084;  /* Ralph default port */
+
+    /* Load from environment variables */
+    sh_args_load_env(&s_config, SH_API_RALPH);
+
+    /* Parse command line arguments */
+    int arg_index = sh_args_parse(&s_config, argc, argv);
+    if (arg_index == -2) {
+        /* --help was requested */
+        print_usage(argv[0]);
+        return 0;
+    }
 
     /* Set up signal handlers */
     signal(SIGINT, signal_handler);
@@ -195,7 +180,7 @@ int main(int argc, char *argv[]) {
     mg_mgr_init(&mgr);
 
     char url[128];
-    snprintf(url, sizeof(url), "http://%s:%d", s_host, s_port);
+    snprintf(url, sizeof(url), "http://%s:%d", s_config.host, s_config.port);
 
     struct mg_connection *c = mg_http_listen(&mgr, url, ev_handler, NULL);
     if (!c) {
