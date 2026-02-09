@@ -38,13 +38,13 @@ static double station_min_distance_to_polyline(
     const FWPolyline *polyline,
     double max_radius)
 {
-    if (polyline == NULL || polyline->num_points < 2) {
+    if (polyline == NULL || polyline->count < 2) {
         return -1.0;
     }
 
     double min_dist = max_radius + 1.0;
 
-    for (int i = 0; i < polyline->num_points - 1; i++) {
+    for (int i = 0; i < polyline->count - 1; i++) {
         double dist = fw_point_to_segment_distance(
             station,
             polyline->points[i],
@@ -105,7 +105,7 @@ int fw_filter_stations(
     *result_count = 0;
 
     if (stations == NULL || num_stations == 0 ||
-        polyline == NULL || polyline->num_points < 2) {
+        polyline == NULL || polyline->count < 2) {
         return 0;  /* Empty result is not an error */
     }
 
@@ -172,7 +172,7 @@ int fw_filter_stations_two_step(
     (void)overview;  /* Not used in current implementation */
 
     if (stations == NULL || num_stations == 0 ||
-        detailed == NULL || detailed->num_points < 2 ||
+        detailed == NULL || detailed->count < 2 ||
         config == NULL) {
         return 0;
     }
@@ -256,7 +256,7 @@ int fw_filter_stations_two_step(
 
     double along_polyline = 0.0;
 
-    for (int seg = 0; seg < subsampled.num_points - 1; seg++) {
+    for (int seg = 0; seg < subsampled.count - 1; seg++) {
         FWCoord seg_start = subsampled.points[seg];
         FWCoord seg_end = subsampled.points[seg + 1];
 

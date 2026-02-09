@@ -54,7 +54,7 @@ ifdef LOWMEM
 CFLAGS += -DVL_LANDMARKS_NO_TRANSPOSE
 endif
 
-# Source files (removed vl_protobuf.c and vl_inflate.c - now in shared)
+# Source files (removed vl_protobuf.c, vl_inflate.c, polyline.c - now in shared)
 CORE_SRCS = src/vl_geo.c \
             src/vl_heap.c \
             src/vl_bucket_heap.c \
@@ -63,7 +63,6 @@ CORE_SRCS = src/vl_geo.c \
             src/vl_route.c \
             src/vl_landmarks.c \
             src/vl_api.c \
-            src/polyline.c \
             src/velo.c
 
 # miniz is now linked via shared library

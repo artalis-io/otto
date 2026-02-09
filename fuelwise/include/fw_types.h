@@ -108,13 +108,13 @@ typedef struct {
 /* ============================================================================
  * Polyline (Route Geometry)
  *
- * A sequence of coordinates representing a route or path.
+ * FWPolyline is now an alias to SHPolyline from the shared library.
+ * Note: Field name changed from 'num_points' to 'count' for consistency.
  * ============================================================================ */
 
-typedef struct {
-    FWCoord *points;    /* Array of coordinate points */
-    int num_points;     /* Number of points in the array */
-} FWPolyline;
+#include "sh_polyline.h"
+
+typedef SHPolyline FWPolyline;
 
 /* ============================================================================
  * Snapped Station

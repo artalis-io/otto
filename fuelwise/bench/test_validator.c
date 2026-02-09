@@ -1852,7 +1852,7 @@ void test_api_roundtrip(void)
     };
     FWPolyline route = {
         .points = route_points,
-        .num_points = 2,
+        .count = 2,
     };
 
     /* Create request */

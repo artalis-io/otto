@@ -104,7 +104,7 @@ static int parse_polyline(const char *json_array, FWPolyline *polyline) {
     /* Allocate points */
     polyline->points = calloc((size_t)count, sizeof(FWCoord));
     if (!polyline->points) return -1;
-    polyline->num_points = count;
+    polyline->count = count;
 
     /* Parse each [lat, lon] pair */
     for (int i = 0; i < count; i++) {

@@ -3,6 +3,7 @@
  */
 
 #include "shared.h"
+#include "sh_polyline.h"
 #include "sh_circuit.h"
 #include "sh_backoff.h"
 #include "sh_retry.h"
@@ -4597,6 +4598,274 @@ TEST(rng_poisson)
     sh_rng_free(rng);
 }
 
+/* ============================================================================
+ * Polyline Tests
+ * ============================================================================ */
+
+TEST(polyline_encode_decode_roundtrip)
+{
+    /* Simple 3-point polyline */
+    double coords[] = {38.5, -120.2, 40.7, -120.95, 43.252, -126.453};
+    char encoded[256];
+
+    size_t len = sh_polyline_encode(coords, 3, 5, encoded, sizeof(encoded));
+    ASSERT(len > 0);
+
+    double decoded[6];
+    size_t count = sh_polyline_decode(encoded, 5, decoded, 3);
+    ASSERT(count == 3);
+
+    /* Verify coordinates match within precision */
+    for (int i = 0; i < 6; i++) {
+        ASSERT_NEAR(coords[i], decoded[i], 0.00001);
+    }
+}
+
+TEST(polyline_encode_precision_6)
+{
+    /* Use coordinates with many decimals so precision difference is measurable */
+    double coords[] = {47.4979876, 19.0402345};
+    char encoded5[64], encoded6[64];
+
+    sh_polyline_encode(coords, 1, 5, encoded5, sizeof(encoded5));
+    sh_polyline_encode(coords, 1, 6, encoded6, sizeof(encoded6));
+
+    /* Different precisions should produce different encodings */
+    ASSERT(strcmp(encoded5, encoded6) != 0);
+
+    /* Decode and verify */
+    double decoded5[2], decoded6[2];
+    sh_polyline_decode(encoded5, 5, decoded5, 1);
+    sh_polyline_decode(encoded6, 6, decoded6, 1);
+
+    /* Precision 6 should be closer to original (or equal, never worse) */
+    double err5 = fabs(decoded5[0] - coords[0]) + fabs(decoded5[1] - coords[1]);
+    double err6 = fabs(decoded6[0] - coords[0]) + fabs(decoded6[1] - coords[1]);
+    ASSERT(err6 <= err5);  /* Less than or equal */
+}
+
+TEST(polyline_decode_malformed)
+{
+    /* Empty string */
+    double coords[10];
+    size_t count = sh_polyline_decode("", 5, coords, 5);
+    ASSERT(count == 0);
+
+    /* Truncated encoding (incomplete varint) */
+    count = sh_polyline_decode("_p~", 5, coords, 5);
+    /* Should return 0 or partial result, not crash */
+    ASSERT(count <= 5);
+}
+
+TEST(polyline_max_encoded_size)
+{
+    size_t size1 = sh_polyline_max_encoded_size(1);
+    size_t size10 = sh_polyline_max_encoded_size(10);
+    size_t size100 = sh_polyline_max_encoded_size(100);
+
+    ASSERT(size1 == 13);   /* 1 * 12 + 1 */
+    ASSERT(size10 == 121); /* 10 * 12 + 1 */
+    ASSERT(size100 == 1201); /* 100 * 12 + 1 */
+}
+
+TEST(polyline_length_simple)
+{
+    /* 3-point polyline: 1 degree lon at 40 lat ~85km, 1 degree lat ~111km */
+    SHCoord points[] = {
+        {40.0, -100.0},
+        {40.0, -99.0},
+        {41.0, -99.0}
+    };
+    SHPolyline polyline = {points, 3};
+
+    double length = sh_polyline_length(&polyline);
+    /* Expect approximately 196 km = 196000 meters */
+    ASSERT(length > 180000 && length < 210000);
+}
+
+TEST(polyline_length_single_point)
+{
+    SHCoord points[] = {{40.0, -100.0}};
+    SHPolyline polyline = {points, 1};
+
+    double length = sh_polyline_length(&polyline);
+    ASSERT_NEAR(length, 0.0, 0.001);
+}
+
+TEST(polyline_length_null)
+{
+    double length = sh_polyline_length(NULL);
+    ASSERT_NEAR(length, 0.0, 0.001);
+}
+
+TEST(point_to_segment_distance)
+{
+    /* Point perpendicular to horizontal segment */
+    SHCoord seg_start = {40.0, -100.0};
+    SHCoord seg_end = {40.0, -99.0};
+    SHCoord point = {40.5, -99.5};
+
+    SHCoord closest;
+    double dist = sh_point_to_segment_distance(point, seg_start, seg_end, &closest);
+
+    /* Closest point should be at midpoint longitude */
+    ASSERT_NEAR(closest.lon, -99.5, 0.1);
+    ASSERT_NEAR(closest.lat, 40.0, 0.1);
+
+    /* 0.5 degrees latitude ~ 55.5 km */
+    ASSERT(dist > 50000 && dist < 60000);
+}
+
+TEST(find_closest_on_polyline)
+{
+    SHCoord points[] = {
+        {40.0, -100.0},
+        {40.0, -99.0},
+        {40.0, -98.0}
+    };
+    SHPolyline polyline = {points, 3};
+
+    /* Point near second segment */
+    SHCoord point = {40.1, -98.5};
+
+    int seg_idx;
+    double t;
+    SHCoord closest;
+    double dist = sh_find_closest_on_polyline(point, &polyline, &seg_idx, &t, &closest);
+
+    ASSERT(dist >= 0);
+    ASSERT(seg_idx == 1);  /* Second segment (index 1) */
+    ASSERT(t >= 0.0 && t <= 1.0);
+    ASSERT_NEAR(closest.lon, -98.5, 0.1);
+}
+
+TEST(distance_along_polyline)
+{
+    SHCoord points[] = {
+        {40.0, -100.0},
+        {40.0, -99.0},
+        {40.0, -98.0}
+    };
+    SHPolyline polyline = {points, 3};
+
+    /* Distance at start */
+    double d0 = sh_distance_along_polyline(&polyline, 0, 0.0);
+    ASSERT_NEAR(d0, 0.0, 0.001);
+
+    /* Distance at end of first segment */
+    double d1 = sh_distance_along_polyline(&polyline, 0, 1.0);
+    double seg1_len = sh_haversine(points[0], points[1]);
+    ASSERT_NEAR(d1, seg1_len, 1.0);
+
+    /* Distance at midpoint of second segment */
+    double d2 = sh_distance_along_polyline(&polyline, 1, 0.5);
+    double seg2_len = sh_haversine(points[1], points[2]);
+    ASSERT_NEAR(d2, seg1_len + seg2_len * 0.5, 1.0);
+}
+
+TEST(subsample_polyline)
+{
+    /* Create a 10-point polyline */
+    SHCoord points[10];
+    for (int i = 0; i < 10; i++) {
+        points[i].lat = 40.0;
+        points[i].lon = -100.0 + i * 0.1;
+    }
+    SHPolyline input = {points, 10};
+
+    SHPolyline result = {NULL, 0};
+    int ret = sh_subsample_polyline(&input, 5, &result);
+
+    ASSERT(ret == 0);
+    ASSERT(result.count >= 4 && result.count <= 6);
+
+    /* First and last should be preserved */
+    ASSERT_NEAR(result.points[0].lon, points[0].lon, 0.0001);
+    ASSERT_NEAR(result.points[result.count - 1].lon, points[9].lon, 0.0001);
+
+    free(result.points);
+}
+
+TEST(latlon_to_local_roundtrip)
+{
+    SHCoord ref = {47.5, 19.0};  /* Budapest area */
+    SHCoord point = {47.6, 19.1};
+
+    double x, y;
+    sh_latlon_to_local(point, ref, &x, &y);
+
+    SHCoord back;
+    sh_local_to_latlon(x, y, ref, &back);
+
+    ASSERT_NEAR(back.lat, point.lat, 0.0001);
+    ASSERT_NEAR(back.lon, point.lon, 0.0001);
+}
+
+TEST(douglas_peucker_basic)
+{
+    /* Create a nearly-straight line with one deviation */
+    SHCoord points[] = {
+        {40.0, -100.0},
+        {40.0, -99.5},  /* On line - should be removed */
+        {40.5, -99.0},  /* Off line - should be kept if epsilon < deviation */
+        {40.0, -98.5},  /* On line - should be removed */
+        {40.0, -98.0}
+    };
+    SHPolyline input = {points, 5};
+
+    SHCoord output_points[5];
+    SHPolyline output = {output_points, 0};
+
+    /* Small epsilon should keep the deviation point */
+    int count = sh_polyline_simplify(&input, 0.001, &output, 5);
+    ASSERT(count >= 3);  /* At least first, deviation, last */
+    ASSERT(count <= 5);
+
+    /* First and last always kept */
+    ASSERT_NEAR(output.points[0].lon, -100.0, 0.0001);
+    ASSERT_NEAR(output.points[output.count - 1].lon, -98.0, 0.0001);
+}
+
+TEST(douglas_peucker_adaptive)
+{
+    /* Create a polyline with many points */
+    SHCoord points[20];
+    for (int i = 0; i < 20; i++) {
+        points[i].lat = 40.0 + 0.01 * sin(i);
+        points[i].lon = -100.0 + i * 0.1;
+    }
+    SHPolyline input = {points, 20};
+
+    SHCoord output_points[5];
+    SHPolyline output = {output_points, 0};
+
+    /* Adaptive should reduce to at most 5 points */
+    int count = sh_polyline_simplify_adaptive(&input, 0.0001, &output, 5);
+    ASSERT(count >= 2);
+    ASSERT(count <= 5);
+}
+
+TEST(douglas_peucker_edge_cases)
+{
+    /* Single segment - nothing to simplify */
+    SHCoord points2[] = {{40.0, -100.0}, {40.0, -99.0}};
+    SHPolyline input2 = {points2, 2};
+    SHCoord out2[2];
+    SHPolyline output2 = {out2, 0};
+
+    int count = sh_polyline_simplify(&input2, 0.01, &output2, 2);
+    ASSERT(count == 2);
+
+    /* Single point */
+    SHCoord points1[] = {{40.0, -100.0}};
+    SHPolyline input1 = {points1, 1};
+    SHCoord out1[1];
+    SHPolyline output1 = {out1, 0};
+
+    count = sh_polyline_simplify(&input1, 0.01, &output1, 1);
+    ASSERT(count == 1);
+}
+
 TEST(rng_shuffle)
 {
     SHRng *rng = sh_rng_create_default();
@@ -5079,6 +5348,23 @@ int main(void)
     RUN_TEST(step_pwl_integrate_weight_changes);
     RUN_TEST(step_utilities);
     RUN_TEST(step_null_safety);
+
+    printf("\nPolyline:\n");
+    RUN_TEST(polyline_encode_decode_roundtrip);
+    RUN_TEST(polyline_encode_precision_6);
+    RUN_TEST(polyline_decode_malformed);
+    RUN_TEST(polyline_max_encoded_size);
+    RUN_TEST(polyline_length_simple);
+    RUN_TEST(polyline_length_single_point);
+    RUN_TEST(polyline_length_null);
+    RUN_TEST(point_to_segment_distance);
+    RUN_TEST(find_closest_on_polyline);
+    RUN_TEST(distance_along_polyline);
+    RUN_TEST(subsample_polyline);
+    RUN_TEST(latlon_to_local_roundtrip);
+    RUN_TEST(douglas_peucker_basic);
+    RUN_TEST(douglas_peucker_adaptive);
+    RUN_TEST(douglas_peucker_edge_cases);
 
     printf("\nRNG and Distributions:\n");
     RUN_TEST(rng_create_free);

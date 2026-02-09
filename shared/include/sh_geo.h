@@ -178,4 +178,32 @@ void sh_latlon_to_tile(double lat, double lon, int zoom, int *tile_x, int *tile_
  */
 SHBBox sh_tile_bounds(int zoom, int tile_x, int tile_y);
 
+/* ============================================================================
+ * Local Cartesian Projection
+ *
+ * Convert between lat/lon and local Cartesian coordinates (meters from a
+ * reference point). Uses equirectangular approximation, suitable for small
+ * areas (< 500km from reference).
+ * ============================================================================ */
+
+/*
+ * Convert lat/lon to local Cartesian coordinates.
+ *
+ * @param coord Geographic coordinate to convert
+ * @param ref   Reference point (origin of local system)
+ * @param x     Output: local X coordinate in meters (east-positive)
+ * @param y     Output: local Y coordinate in meters (north-positive)
+ */
+void sh_latlon_to_local(SHCoord coord, SHCoord ref, double *x, double *y);
+
+/*
+ * Convert local Cartesian coordinates back to lat/lon.
+ *
+ * @param x     Local X coordinate in meters
+ * @param y     Local Y coordinate in meters
+ * @param ref   Reference point (origin of local system)
+ * @param coord Output: geographic coordinate
+ */
+void sh_local_to_latlon(double x, double y, SHCoord ref, SHCoord *coord);
+
 #endif /* SH_GEO_H */

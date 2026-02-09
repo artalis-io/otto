@@ -33,7 +33,7 @@
 #include "mongoose.h"
 #include "velo.h"
 #include "vl_api.h"
-#include "polyline.h"
+#include "sh_polyline.h"
 #include "shared.h"   /* For sh_ratelimit, sh_workqueue, sh_cors, sh_capacity */
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
 #include "sh_completion.h"  /* For ShCompletion */
@@ -879,7 +879,7 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
     /* Encode polyline if geometry requested */
     char *polyline = NULL;
     if (include_geometry && route.num_coords > 0) {
-        size_t max_len = polyline_max_encoded_size(route.num_coords);
+        size_t max_len = sh_polyline_max_encoded_size(route.num_coords);
         polyline = malloc(max_len);
         if (polyline) {
             /* Convert VLCoord array to double array (check for overflow first) */
@@ -893,7 +893,7 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
                     coords[i * 2] = route.coords[i].lat;
                     coords[i * 2 + 1] = route.coords[i].lon;
                 }
-                polyline_encode(coords, route.num_coords, 5, polyline, max_len);
+                sh_polyline_encode(coords, route.num_coords, 5, polyline, max_len);
                 free(coords);
             } else {
                 free(polyline);

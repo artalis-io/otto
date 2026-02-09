@@ -16,6 +16,7 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
 
 # Source files (core library - no external dependencies beyond miniz)
 SRCS = src/sh_geo.c \
+       src/sh_polyline.c \
        src/sh_protobuf.c \
        src/sh_inflate.c \
        src/sh_pbf.c \
@@ -154,6 +155,7 @@ src/sh_heap.o: include/sh_heap.h
 src/sh_spatial_grid.o: include/sh_spatial_grid.h include/sh_geo.h
 src/sh_render.o: include/sh_render.h
 src/sh_units.o: include/sh_units.h
+src/sh_polyline.o: include/sh_polyline.h include/sh_geo.h
 
 # Help
 help:
