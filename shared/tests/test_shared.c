@@ -19,6 +19,7 @@
 #include "sh_render.h"
 #include "sh_units.h"
 #include "sh_piecewise.h"
+#include "sh_stepfunc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4107,6 +4108,230 @@ TEST(pwl_consumption_curve)
 }
 
 /* ============================================================================
+ * Step Functions
+ * ============================================================================ */
+
+TEST(step_create_free)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+    ASSERT(sf != NULL);
+    ASSERT(sf->num_steps == 0);
+    ASSERT_NEAR(sf->initial_value, 100.0, 0.001);
+    sh_step_free(sf);
+    /* Free NULL should be safe */
+    sh_step_free(NULL);
+}
+
+TEST(step_add_delta)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+
+    /* Add steps with delta changes */
+    ASSERT(sh_step_add(sf, 10.0, +50.0) == 0);   /* 100 + 50 = 150 */
+    ASSERT(sh_step_add(sf, 20.0, -30.0) == 0);   /* 150 - 30 = 120 */
+    ASSERT(sh_step_add(sf, 30.0, +20.0) == 0);   /* 120 + 20 = 140 */
+
+    ASSERT(sf->num_steps == 3);
+    ASSERT_NEAR(sf->y[0], 150.0, 0.001);
+    ASSERT_NEAR(sf->y[1], 120.0, 0.001);
+    ASSERT_NEAR(sf->y[2], 140.0, 0.001);
+
+    /* Out of order should fail */
+    ASSERT(sh_step_add(sf, 25.0, 10.0) == -1);
+
+    sh_step_free(sf);
+}
+
+TEST(step_set_absolute)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+
+    ASSERT(sh_step_set(sf, 10.0, 200.0) == 0);
+    ASSERT(sh_step_set(sf, 20.0, 150.0) == 0);
+
+    ASSERT(sf->num_steps == 2);
+    ASSERT_NEAR(sf->y[0], 200.0, 0.001);
+    ASSERT_NEAR(sf->y[1], 150.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_eval)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+    sh_step_add(sf, 10.0, +50.0);   /* 150 at x >= 10 */
+    sh_step_add(sf, 20.0, -30.0);   /* 120 at x >= 20 */
+
+    /* Before first step */
+    ASSERT_NEAR(sh_step_eval(sf, 5.0), 100.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, 0.0), 100.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, -10.0), 100.0, 0.001);
+
+    /* At and after first step */
+    ASSERT_NEAR(sh_step_eval(sf, 10.0), 150.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, 15.0), 150.0, 0.001);
+
+    /* At and after second step */
+    ASSERT_NEAR(sh_step_eval(sf, 20.0), 120.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, 100.0), 120.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_eval_empty)
+{
+    SHStepFunc *sf = sh_step_create(42.0, 4);
+
+    /* Empty step function should return initial value */
+    ASSERT_NEAR(sh_step_eval(sf, 0.0), 42.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, 100.0), 42.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_integrate_constant)
+{
+    SHStepFunc *sf = sh_step_create(10.0, 4);
+
+    /* No steps, constant value */
+    /* ∫[0,100] 10 dx = 1000 */
+    ASSERT_NEAR(sh_step_integrate(sf, 0.0, 100.0), 1000.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_integrate_single_step)
+{
+    SHStepFunc *sf = sh_step_create(10.0, 4);
+    sh_step_set(sf, 50.0, 20.0);  /* Value becomes 20 at x=50 */
+
+    /* ∫[0,100] = 10*50 + 20*50 = 500 + 1000 = 1500 */
+    ASSERT_NEAR(sh_step_integrate(sf, 0.0, 100.0), 1500.0, 0.001);
+
+    /* ∫[0,50] = 10*50 = 500 */
+    ASSERT_NEAR(sh_step_integrate(sf, 0.0, 50.0), 500.0, 0.001);
+
+    /* ∫[50,100] = 20*50 = 1000 */
+    ASSERT_NEAR(sh_step_integrate(sf, 50.0, 100.0), 1000.0, 0.001);
+
+    /* ∫[25,75] = 10*25 + 20*25 = 250 + 500 = 750 */
+    ASSERT_NEAR(sh_step_integrate(sf, 25.0, 75.0), 750.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_integrate_multiple_steps)
+{
+    SHStepFunc *sf = sh_step_create(10.0, 4);
+    sh_step_set(sf, 20.0, 30.0);
+    sh_step_set(sf, 40.0, 20.0);
+    sh_step_set(sf, 60.0, 40.0);
+
+    /* ∫[0,100]:
+     * [0,20): 10 * 20 = 200
+     * [20,40): 30 * 20 = 600
+     * [40,60): 20 * 20 = 400
+     * [60,100]: 40 * 40 = 1600
+     * Total = 2800 */
+    ASSERT_NEAR(sh_step_integrate(sf, 0.0, 100.0), 2800.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_integrate_reversed)
+{
+    SHStepFunc *sf = sh_step_create(10.0, 4);
+
+    /* ∫[100,0] = -∫[0,100] */
+    ASSERT_NEAR(sh_step_integrate(sf, 100.0, 0.0), -1000.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_pwl_integrate_constant)
+{
+    /* Step function: constant 25000 kg */
+    SHStepFunc *sf = sh_step_create(25000.0, 4);
+
+    /* PWL: consumption curve */
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    sh_pwl_add_point(pwl, 15000.0, 24.0);
+    sh_pwl_add_point(pwl, 25000.0, 28.5);
+    sh_pwl_add_point(pwl, 40000.0, 36.5);
+
+    /* At 25000 kg, consumption = 28.5 L/100km */
+    /* ∫[0,100000] g(f(x)) dx = 28.5 * 100000 = 2850000 */
+    /* (in L/100km * m, divide by 100000 to get liters) */
+    double integral = sh_step_pwl_integrate(sf, pwl, 0.0, 100000.0);
+    ASSERT_NEAR(integral / 100000.0, 28.5, 0.001);
+
+    sh_pwl_free(pwl);
+    sh_step_free(sf);
+}
+
+TEST(step_pwl_integrate_weight_changes)
+{
+    /* Realistic test: truck with pickup and delivery */
+    /* Weight profile: starts at 15000, pickup at 100km adds 10000, delivery at 300km removes 10000 */
+    SHStepFunc *weight = sh_step_create(15000.0, 4);
+    sh_step_add(weight, 100000.0, +10000.0);   /* 25000 kg at 100km */
+    sh_step_add(weight, 300000.0, -10000.0);   /* 15000 kg at 300km */
+
+    /* Consumption curve */
+    SHPiecewiseLinear *curve = sh_pwl_create(4);
+    sh_pwl_add_point(curve, 15000.0, 24.0);   /* Empty: 24 L/100km */
+    sh_pwl_add_point(curve, 25000.0, 28.5);   /* Loaded: 28.5 L/100km */
+    sh_pwl_add_point(curve, 40000.0, 36.5);
+
+    /* Total distance: 400km
+     * [0, 100km): 15000 kg -> 24 L/100km -> 24 L
+     * [100km, 300km): 25000 kg -> 28.5 L/100km -> 57 L
+     * [300km, 400km): 15000 kg -> 24 L/100km -> 24 L
+     * Total: 24 + 57 + 24 = 105 L */
+    double integral = sh_step_pwl_integrate(weight, curve, 0.0, 400000.0);
+    double fuel_liters = integral / 100000.0;  /* Convert from L/100km * m to L */
+    ASSERT_NEAR(fuel_liters, 105.0, 0.1);
+
+    sh_pwl_free(curve);
+    sh_step_free(weight);
+}
+
+TEST(step_utilities)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+    sh_step_set(sf, 10.0, 50.0);
+    sh_step_set(sf, 20.0, 150.0);
+    sh_step_set(sf, 30.0, 80.0);
+
+    ASSERT_NEAR(sh_step_min(sf), 50.0, 0.001);
+    ASSERT_NEAR(sh_step_max(sf), 150.0, 0.001);
+
+    ASSERT(sh_step_count_changes(sf, 0.0, 100.0) == 3);
+    ASSERT(sh_step_count_changes(sf, 15.0, 25.0) == 1);
+    ASSERT(sh_step_count_changes(sf, 0.0, 5.0) == 0);
+
+    ASSERT_NEAR(sh_step_value_before(sf, 10.0), 100.0, 0.001);
+    ASSERT_NEAR(sh_step_value_before(sf, 15.0), 50.0, 0.001);
+    ASSERT_NEAR(sh_step_value_before(sf, 25.0), 150.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_null_safety)
+{
+    ASSERT(isnan(sh_step_eval(NULL, 0.0)));
+    ASSERT(isnan(sh_step_integrate(NULL, 0.0, 1.0)));
+    ASSERT(isnan(sh_step_min(NULL)));
+    ASSERT(isnan(sh_step_max(NULL)));
+    ASSERT(sh_step_count_changes(NULL, 0.0, 1.0) == 0);
+
+    SHStepFunc *sf = sh_step_create(0.0, 4);
+    ASSERT(isnan(sh_step_pwl_integrate(sf, NULL, 0.0, 1.0)));
+    ASSERT(isnan(sh_step_pwl_integrate(NULL, NULL, 0.0, 1.0)));
+    sh_step_free(sf);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -4442,6 +4667,21 @@ int main(void)
     RUN_TEST(pwl_utilities);
     RUN_TEST(pwl_invalid);
     RUN_TEST(pwl_consumption_curve);
+
+    printf("\nStep Functions:\n");
+    RUN_TEST(step_create_free);
+    RUN_TEST(step_add_delta);
+    RUN_TEST(step_set_absolute);
+    RUN_TEST(step_eval);
+    RUN_TEST(step_eval_empty);
+    RUN_TEST(step_integrate_constant);
+    RUN_TEST(step_integrate_single_step);
+    RUN_TEST(step_integrate_multiple_steps);
+    RUN_TEST(step_integrate_reversed);
+    RUN_TEST(step_pwl_integrate_constant);
+    RUN_TEST(step_pwl_integrate_weight_changes);
+    RUN_TEST(step_utilities);
+    RUN_TEST(step_null_safety);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

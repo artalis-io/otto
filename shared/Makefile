@@ -42,7 +42,8 @@ SRCS = src/sh_geo.c \
        src/sh_query.c \
        src/sh_render.c \
        src/sh_units.c \
-       src/sh_piecewise.c
+       src/sh_piecewise.c \
+       src/sh_stepfunc.c
 
 # HTTP server components (requires mongoose - compile separately by API servers)
 # API servers should compile sh_httpserver.c directly with mongoose includes.
