@@ -18,6 +18,9 @@
 #include "sh_query.h"
 #include "sh_render.h"
 #include "sh_units.h"
+#include "sh_piecewise.h"
+#include "sh_stepfunc.h"
+#include "sh_dist.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3957,6 +3960,767 @@ TEST(unit_tonnes)
 }
 
 /* ============================================================================
+ * Piecewise-Linear Functions
+ * ============================================================================ */
+
+TEST(pwl_create_free)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    ASSERT(pwl != NULL);
+    ASSERT(pwl->num_points == 0);
+    ASSERT(pwl->capacity >= 4);
+    sh_pwl_free(pwl);
+    /* Free NULL should be safe */
+    sh_pwl_free(NULL);
+}
+
+TEST(pwl_add_points)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    ASSERT(sh_pwl_add_point(pwl, 0.0, 10.0) == 0);
+    ASSERT(sh_pwl_add_point(pwl, 1.0, 20.0) == 0);
+    ASSERT(sh_pwl_add_point(pwl, 2.0, 15.0) == 0);
+    ASSERT(pwl->num_points == 3);
+    /* Out of order should fail */
+    ASSERT(sh_pwl_add_point(pwl, 1.5, 0.0) == -1);
+    ASSERT(pwl->num_points == 3);  /* Unchanged */
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_eval_interpolation)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 100.0);
+
+    /* Exact points */
+    ASSERT_NEAR(sh_pwl_eval(pwl, 0.0), 0.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 10.0), 100.0, 0.001);
+
+    /* Interpolation */
+    ASSERT_NEAR(sh_pwl_eval(pwl, 5.0), 50.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 2.5), 25.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_eval_clamp)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 10.0);
+    sh_pwl_add_point(pwl, 10.0, 20.0);
+
+    /* Clamp mode (default) */
+    ASSERT_NEAR(sh_pwl_eval(pwl, -5.0), 10.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 15.0), 20.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_eval_extrapolate)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 100.0);  /* slope = 10 */
+
+    /* Extrapolate mode */
+    ASSERT_NEAR(sh_pwl_eval_ex(pwl, -5.0, SH_PWL_EXTRAPOLATE), -50.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval_ex(pwl, 15.0, SH_PWL_EXTRAPOLATE), 150.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_eval_nan)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 100.0);
+
+    /* NaN mode */
+    ASSERT(isnan(sh_pwl_eval_ex(pwl, -5.0, SH_PWL_NAN)));
+    ASSERT(isnan(sh_pwl_eval_ex(pwl, 15.0, SH_PWL_NAN)));
+    /* Within range should still work */
+    ASSERT_NEAR(sh_pwl_eval_ex(pwl, 5.0, SH_PWL_NAN), 50.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_linear)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 10.0);  /* y = x */
+
+    /* ∫[0,10] x dx = 50 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 0.0, 10.0), 50.0, 0.001);
+
+    /* ∫[0,5] x dx = 12.5 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 0.0, 5.0), 12.5, 0.001);
+
+    /* ∫[5,10] x dx = 37.5 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 5.0, 10.0), 37.5, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_constant)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 5.0);
+    sh_pwl_add_point(pwl, 10.0, 5.0);  /* y = 5 (constant) */
+
+    /* ∫[0,10] 5 dx = 50 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 0.0, 10.0), 50.0, 0.001);
+
+    /* ∫[2,7] 5 dx = 25 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 2.0, 7.0), 25.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_multiple_segments)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 5.0, 10.0);
+    sh_pwl_add_point(pwl, 10.0, 10.0);  /* Constant from 5 to 10 */
+
+    /* First segment: triangle = 0.5 * 5 * 10 = 25 */
+    /* Second segment: rectangle = 5 * 10 = 50 */
+    /* Total = 75 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 0.0, 10.0), 75.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_clamped)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 10.0);
+    sh_pwl_add_point(pwl, 10.0, 10.0);  /* Constant = 10 */
+
+    /* Extend left: ∫[-5,0] 10 dx = 50 */
+    /* Within: ∫[0,10] 10 dx = 100 */
+    /* Extend right: ∫[10,15] 10 dx = 50 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, -5.0, 15.0), 200.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_reversed)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 10.0);
+
+    /* ∫[10,0] = -∫[0,10] */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 10.0, 0.0), -50.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_utilities)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    sh_pwl_add_point(pwl, 1.0, 5.0);
+    sh_pwl_add_point(pwl, 3.0, 15.0);
+    sh_pwl_add_point(pwl, 7.0, 10.0);
+
+    ASSERT_NEAR(sh_pwl_min_x(pwl), 1.0, 0.001);
+    ASSERT_NEAR(sh_pwl_max_x(pwl), 7.0, 0.001);
+    ASSERT_NEAR(sh_pwl_min_y(pwl), 5.0, 0.001);
+    ASSERT_NEAR(sh_pwl_max_y(pwl), 15.0, 0.001);
+
+    ASSERT(sh_pwl_is_valid(pwl) == 1);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_invalid)
+{
+    /* NULL should return NaN */
+    ASSERT(isnan(sh_pwl_eval(NULL, 0.0)));
+    ASSERT(isnan(sh_pwl_integrate(NULL, 0.0, 1.0)));
+
+    /* Less than 2 points is invalid */
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    ASSERT(sh_pwl_is_valid(pwl) == 0);
+    ASSERT(isnan(sh_pwl_eval(pwl, 0.0)));
+
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    ASSERT(sh_pwl_is_valid(pwl) == 0);
+
+    sh_pwl_add_point(pwl, 1.0, 1.0);
+    ASSERT(sh_pwl_is_valid(pwl) == 1);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_consumption_curve)
+{
+    /* Realistic test: truck consumption curve */
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    sh_pwl_add_point(pwl, 15000.0, 24.0);   /* Empty: 24 L/100km */
+    sh_pwl_add_point(pwl, 25000.0, 28.5);
+    sh_pwl_add_point(pwl, 32000.0, 32.0);
+    sh_pwl_add_point(pwl, 40000.0, 36.5);   /* Max GVW: 36.5 L/100km */
+
+    /* Check interpolation at 30000 kg */
+    /* Between (25000, 28.5) and (32000, 32.0) */
+    double expected = 28.5 + (30000.0 - 25000.0) / (32000.0 - 25000.0) * (32.0 - 28.5);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 30000.0), expected, 0.001);
+
+    /* Check boundaries */
+    ASSERT_NEAR(sh_pwl_eval(pwl, 15000.0), 24.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 40000.0), 36.5, 0.001);
+
+    /* Clamp outside range */
+    ASSERT_NEAR(sh_pwl_eval(pwl, 10000.0), 24.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 50000.0), 36.5, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+/* ============================================================================
+ * Step Functions
+ * ============================================================================ */
+
+TEST(step_create_free)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+    ASSERT(sf != NULL);
+    ASSERT(sf->num_steps == 0);
+    ASSERT_NEAR(sf->initial_value, 100.0, 0.001);
+    sh_step_free(sf);
+    /* Free NULL should be safe */
+    sh_step_free(NULL);
+}
+
+TEST(step_add_delta)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+
+    /* Add steps with delta changes */
+    ASSERT(sh_step_add(sf, 10.0, +50.0) == 0);   /* 100 + 50 = 150 */
+    ASSERT(sh_step_add(sf, 20.0, -30.0) == 0);   /* 150 - 30 = 120 */
+    ASSERT(sh_step_add(sf, 30.0, +20.0) == 0);   /* 120 + 20 = 140 */
+
+    ASSERT(sf->num_steps == 3);
+    ASSERT_NEAR(sf->y[0], 150.0, 0.001);
+    ASSERT_NEAR(sf->y[1], 120.0, 0.001);
+    ASSERT_NEAR(sf->y[2], 140.0, 0.001);
+
+    /* Out of order should fail */
+    ASSERT(sh_step_add(sf, 25.0, 10.0) == -1);
+
+    sh_step_free(sf);
+}
+
+TEST(step_set_absolute)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+
+    ASSERT(sh_step_set(sf, 10.0, 200.0) == 0);
+    ASSERT(sh_step_set(sf, 20.0, 150.0) == 0);
+
+    ASSERT(sf->num_steps == 2);
+    ASSERT_NEAR(sf->y[0], 200.0, 0.001);
+    ASSERT_NEAR(sf->y[1], 150.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_eval)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+    sh_step_add(sf, 10.0, +50.0);   /* 150 at x >= 10 */
+    sh_step_add(sf, 20.0, -30.0);   /* 120 at x >= 20 */
+
+    /* Before first step */
+    ASSERT_NEAR(sh_step_eval(sf, 5.0), 100.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, 0.0), 100.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, -10.0), 100.0, 0.001);
+
+    /* At and after first step */
+    ASSERT_NEAR(sh_step_eval(sf, 10.0), 150.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, 15.0), 150.0, 0.001);
+
+    /* At and after second step */
+    ASSERT_NEAR(sh_step_eval(sf, 20.0), 120.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, 100.0), 120.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_eval_empty)
+{
+    SHStepFunc *sf = sh_step_create(42.0, 4);
+
+    /* Empty step function should return initial value */
+    ASSERT_NEAR(sh_step_eval(sf, 0.0), 42.0, 0.001);
+    ASSERT_NEAR(sh_step_eval(sf, 100.0), 42.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_integrate_constant)
+{
+    SHStepFunc *sf = sh_step_create(10.0, 4);
+
+    /* No steps, constant value */
+    /* ∫[0,100] 10 dx = 1000 */
+    ASSERT_NEAR(sh_step_integrate(sf, 0.0, 100.0), 1000.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_integrate_single_step)
+{
+    SHStepFunc *sf = sh_step_create(10.0, 4);
+    sh_step_set(sf, 50.0, 20.0);  /* Value becomes 20 at x=50 */
+
+    /* ∫[0,100] = 10*50 + 20*50 = 500 + 1000 = 1500 */
+    ASSERT_NEAR(sh_step_integrate(sf, 0.0, 100.0), 1500.0, 0.001);
+
+    /* ∫[0,50] = 10*50 = 500 */
+    ASSERT_NEAR(sh_step_integrate(sf, 0.0, 50.0), 500.0, 0.001);
+
+    /* ∫[50,100] = 20*50 = 1000 */
+    ASSERT_NEAR(sh_step_integrate(sf, 50.0, 100.0), 1000.0, 0.001);
+
+    /* ∫[25,75] = 10*25 + 20*25 = 250 + 500 = 750 */
+    ASSERT_NEAR(sh_step_integrate(sf, 25.0, 75.0), 750.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_integrate_multiple_steps)
+{
+    SHStepFunc *sf = sh_step_create(10.0, 4);
+    sh_step_set(sf, 20.0, 30.0);
+    sh_step_set(sf, 40.0, 20.0);
+    sh_step_set(sf, 60.0, 40.0);
+
+    /* ∫[0,100]:
+     * [0,20): 10 * 20 = 200
+     * [20,40): 30 * 20 = 600
+     * [40,60): 20 * 20 = 400
+     * [60,100]: 40 * 40 = 1600
+     * Total = 2800 */
+    ASSERT_NEAR(sh_step_integrate(sf, 0.0, 100.0), 2800.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_integrate_reversed)
+{
+    SHStepFunc *sf = sh_step_create(10.0, 4);
+
+    /* ∫[100,0] = -∫[0,100] */
+    ASSERT_NEAR(sh_step_integrate(sf, 100.0, 0.0), -1000.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_pwl_integrate_constant)
+{
+    /* Step function: constant 25000 kg */
+    SHStepFunc *sf = sh_step_create(25000.0, 4);
+
+    /* PWL: consumption curve */
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    sh_pwl_add_point(pwl, 15000.0, 24.0);
+    sh_pwl_add_point(pwl, 25000.0, 28.5);
+    sh_pwl_add_point(pwl, 40000.0, 36.5);
+
+    /* At 25000 kg, consumption = 28.5 L/100km */
+    /* ∫[0,100000] g(f(x)) dx = 28.5 * 100000 = 2850000 */
+    /* (in L/100km * m, divide by 100000 to get liters) */
+    double integral = sh_step_pwl_integrate(sf, pwl, 0.0, 100000.0);
+    ASSERT_NEAR(integral / 100000.0, 28.5, 0.001);
+
+    sh_pwl_free(pwl);
+    sh_step_free(sf);
+}
+
+TEST(step_pwl_integrate_weight_changes)
+{
+    /* Realistic test: truck with pickup and delivery */
+    /* Weight profile: starts at 15000, pickup at 100km adds 10000, delivery at 300km removes 10000 */
+    SHStepFunc *weight = sh_step_create(15000.0, 4);
+    sh_step_add(weight, 100000.0, +10000.0);   /* 25000 kg at 100km */
+    sh_step_add(weight, 300000.0, -10000.0);   /* 15000 kg at 300km */
+
+    /* Consumption curve */
+    SHPiecewiseLinear *curve = sh_pwl_create(4);
+    sh_pwl_add_point(curve, 15000.0, 24.0);   /* Empty: 24 L/100km */
+    sh_pwl_add_point(curve, 25000.0, 28.5);   /* Loaded: 28.5 L/100km */
+    sh_pwl_add_point(curve, 40000.0, 36.5);
+
+    /* Total distance: 400km
+     * [0, 100km): 15000 kg -> 24 L/100km -> 24 L
+     * [100km, 300km): 25000 kg -> 28.5 L/100km -> 57 L
+     * [300km, 400km): 15000 kg -> 24 L/100km -> 24 L
+     * Total: 24 + 57 + 24 = 105 L */
+    double integral = sh_step_pwl_integrate(weight, curve, 0.0, 400000.0);
+    double fuel_liters = integral / 100000.0;  /* Convert from L/100km * m to L */
+    ASSERT_NEAR(fuel_liters, 105.0, 0.1);
+
+    sh_pwl_free(curve);
+    sh_step_free(weight);
+}
+
+TEST(step_utilities)
+{
+    SHStepFunc *sf = sh_step_create(100.0, 4);
+    sh_step_set(sf, 10.0, 50.0);
+    sh_step_set(sf, 20.0, 150.0);
+    sh_step_set(sf, 30.0, 80.0);
+
+    ASSERT_NEAR(sh_step_min(sf), 50.0, 0.001);
+    ASSERT_NEAR(sh_step_max(sf), 150.0, 0.001);
+
+    ASSERT(sh_step_count_changes(sf, 0.0, 100.0) == 3);
+    ASSERT(sh_step_count_changes(sf, 15.0, 25.0) == 1);
+    ASSERT(sh_step_count_changes(sf, 0.0, 5.0) == 0);
+
+    ASSERT_NEAR(sh_step_value_before(sf, 10.0), 100.0, 0.001);
+    ASSERT_NEAR(sh_step_value_before(sf, 15.0), 50.0, 0.001);
+    ASSERT_NEAR(sh_step_value_before(sf, 25.0), 150.0, 0.001);
+
+    sh_step_free(sf);
+}
+
+TEST(step_null_safety)
+{
+    ASSERT(isnan(sh_step_eval(NULL, 0.0)));
+    ASSERT(isnan(sh_step_integrate(NULL, 0.0, 1.0)));
+    ASSERT(isnan(sh_step_min(NULL)));
+    ASSERT(isnan(sh_step_max(NULL)));
+    ASSERT(sh_step_count_changes(NULL, 0.0, 1.0) == 0);
+
+    SHStepFunc *sf = sh_step_create(0.0, 4);
+    ASSERT(isnan(sh_step_pwl_integrate(sf, NULL, 0.0, 1.0)));
+    ASSERT(isnan(sh_step_pwl_integrate(NULL, NULL, 0.0, 1.0)));
+    sh_step_free(sf);
+}
+
+/* ============================================================================
+ * RNG and Distributions
+ * ============================================================================ */
+
+TEST(rng_create_free)
+{
+    SHRng *rng = sh_rng_create(SH_RNG_XORSHIFT128);
+    ASSERT(rng != NULL);
+    sh_rng_free(rng);
+
+    rng = sh_rng_create(SH_RNG_PCG64);
+    ASSERT(rng != NULL);
+    sh_rng_free(rng);
+
+    rng = sh_rng_create(SH_RNG_SPLITMIX64);
+    ASSERT(rng != NULL);
+    sh_rng_free(rng);
+
+    rng = sh_rng_create_default();
+    ASSERT(rng != NULL);
+    sh_rng_free(rng);
+
+    /* Free NULL should be safe */
+    sh_rng_free(NULL);
+}
+
+TEST(rng_seed_reproducibility)
+{
+    SHRng *rng1 = sh_rng_create(SH_RNG_XORSHIFT128);
+    SHRng *rng2 = sh_rng_create(SH_RNG_XORSHIFT128);
+
+    sh_rng_seed(rng1, 12345);
+    sh_rng_seed(rng2, 12345);
+
+    /* Same seed should produce same sequence */
+    for (int i = 0; i < 10; i++) {
+        uint64_t v1 = sh_rng_next_u64(rng1);
+        uint64_t v2 = sh_rng_next_u64(rng2);
+        ASSERT(v1 == v2);
+    }
+
+    sh_rng_free(rng1);
+    sh_rng_free(rng2);
+}
+
+TEST(rng_uniform_range)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 42);
+
+    /* Test uniform in [0, 1) */
+    for (int i = 0; i < 100; i++) {
+        double u = sh_rng_uniform(rng);
+        ASSERT(u >= 0.0 && u < 1.0);
+    }
+
+    /* Test uniform in [a, b) */
+    for (int i = 0; i < 100; i++) {
+        double u = sh_rng_uniform_range(rng, 10.0, 20.0);
+        ASSERT(u >= 10.0 && u < 20.0);
+    }
+
+    /* Test int in [a, b] */
+    for (int i = 0; i < 100; i++) {
+        int v = sh_rng_int_range(rng, 5, 10);
+        ASSERT(v >= 5 && v <= 10);
+    }
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_state_save_restore)
+{
+    SHRng *rng = sh_rng_create(SH_RNG_XORSHIFT128);
+    sh_rng_seed(rng, 999);
+
+    /* Generate some values */
+    sh_rng_next_u64(rng);
+    sh_rng_next_u64(rng);
+
+    /* Save state */
+    size_t state_size = sh_rng_state_size(rng);
+    void *state = malloc(state_size);
+    sh_rng_save_state(rng, state);
+
+    /* Generate more values */
+    uint64_t v1 = sh_rng_next_u64(rng);
+    uint64_t v2 = sh_rng_next_u64(rng);
+    uint64_t v3 = sh_rng_next_u64(rng);
+
+    /* Restore state */
+    sh_rng_restore_state(rng, state);
+
+    /* Should reproduce same values */
+    ASSERT(sh_rng_next_u64(rng) == v1);
+    ASSERT(sh_rng_next_u64(rng) == v2);
+    ASSERT(sh_rng_next_u64(rng) == v3);
+
+    free(state);
+    sh_rng_free(rng);
+}
+
+TEST(rng_normal)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 123);
+
+    /* Generate many samples and check mean/stddev approximately */
+    double sum = 0.0, sum_sq = 0.0;
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        double x = sh_rng_normal(rng, 100.0, 15.0);
+        sum += x;
+        sum_sq += x * x;
+    }
+
+    double mean = sum / n;
+    double var = sum_sq / n - mean * mean;
+    double stddev = sqrt(var);
+
+    /* Mean should be close to 100, stddev close to 15 */
+    ASSERT(fabs(mean - 100.0) < 1.0);  /* Within 1 */
+    ASSERT(fabs(stddev - 15.0) < 1.0);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_exponential)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 456);
+
+    /* Rate = 2, mean should be 0.5 */
+    double sum = 0.0;
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        double x = sh_rng_exponential(rng, 2.0);
+        ASSERT(x >= 0.0);  /* Exponential is non-negative */
+        sum += x;
+    }
+
+    double mean = sum / n;
+    ASSERT(fabs(mean - 0.5) < 0.05);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_gamma)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 789);
+
+    /* Shape=2.5, scale=15 -> mean=37.5 */
+    double sum = 0.0;
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        double x = sh_rng_gamma(rng, 2.5, 15.0);
+        ASSERT(x >= 0.0);
+        sum += x;
+    }
+
+    double mean = sum / n;
+    /* Mean of gamma = shape * scale = 2.5 * 15 = 37.5 */
+    ASSERT(fabs(mean - 37.5) < 2.0);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_poisson)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 321);
+
+    /* Lambda = 5, mean should be 5 */
+    double sum = 0.0;
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        int k = sh_rng_poisson(rng, 5.0);
+        ASSERT(k >= 0);
+        sum += k;
+    }
+
+    double mean = sum / n;
+    ASSERT(fabs(mean - 5.0) < 0.2);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_shuffle)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 111);
+
+    int arr[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    int original_sum = 0;
+    for (int i = 0; i < 10; i++) original_sum += arr[i];
+
+    sh_rng_shuffle(rng, arr, 10, sizeof(int));
+
+    /* Sum should be preserved */
+    int new_sum = 0;
+    for (int i = 0; i < 10; i++) new_sum += arr[i];
+    ASSERT(new_sum == original_sum);
+
+    /* Should be different from sorted (with high probability) */
+    int is_sorted = 1;
+    for (int i = 0; i < 9; i++) {
+        if (arr[i] > arr[i + 1]) {
+            is_sorted = 0;
+            break;
+        }
+    }
+    ASSERT(is_sorted == 0);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_choice)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 222);
+
+    double weights[] = {1.0, 0.0, 3.0, 0.0, 1.0};  /* Indices 0, 2, 4 should be chosen */
+    int counts[5] = {0};
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        int choice = sh_rng_choice(rng, weights, 5);
+        ASSERT(choice >= 0 && choice < 5);
+        counts[choice]++;
+    }
+
+    /* Indices with zero weight should not be chosen */
+    ASSERT(counts[1] == 0);
+    ASSERT(counts[3] == 0);
+
+    /* Index 2 should be chosen most often (weight 3) */
+    ASSERT(counts[2] > counts[0]);
+    ASSERT(counts[2] > counts[4]);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_sample)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 333);
+
+    int out[5];
+    sh_rng_sample(rng, 20, 5, out);
+
+    /* All should be in [0, 19] */
+    for (int i = 0; i < 5; i++) {
+        ASSERT(out[i] >= 0 && out[i] < 20);
+    }
+
+    /* All should be unique */
+    for (int i = 0; i < 5; i++) {
+        for (int j = i + 1; j < 5; j++) {
+            ASSERT(out[i] != out[j]);
+        }
+    }
+
+    sh_rng_free(rng);
+}
+
+TEST(dist_pdf_cdf)
+{
+    /* Normal PDF at mean should be highest */
+    double pdf_at_mean = sh_dist_normal_pdf(0.0, 0.0, 1.0);
+    double pdf_at_1 = sh_dist_normal_pdf(1.0, 0.0, 1.0);
+    double pdf_at_2 = sh_dist_normal_pdf(2.0, 0.0, 1.0);
+    ASSERT(pdf_at_mean > pdf_at_1);
+    ASSERT(pdf_at_1 > pdf_at_2);
+
+    /* Normal CDF at mean should be 0.5 */
+    double cdf_at_mean = sh_dist_normal_cdf(0.0, 0.0, 1.0);
+    ASSERT_NEAR(cdf_at_mean, 0.5, 0.001);
+
+    /* Exponential PDF at 0 equals rate */
+    double exp_pdf_0 = sh_dist_exponential_pdf(0.0, 2.0);
+    ASSERT_NEAR(exp_pdf_0, 2.0, 0.001);
+
+    /* Exponential CDF at 0 is 0 */
+    double exp_cdf_0 = sh_dist_exponential_cdf(0.0, 2.0);
+    ASSERT_NEAR(exp_cdf_0, 0.0, 0.001);
+}
+
+TEST(rng_backend_comparison)
+{
+    /* Different backends with same seed should produce different sequences */
+    SHRng *xor = sh_rng_create(SH_RNG_XORSHIFT128);
+    SHRng *pcg = sh_rng_create(SH_RNG_PCG64);
+    SHRng *split = sh_rng_create(SH_RNG_SPLITMIX64);
+
+    sh_rng_seed(xor, 12345);
+    sh_rng_seed(pcg, 12345);
+    sh_rng_seed(split, 12345);
+
+    uint64_t v_xor = sh_rng_next_u64(xor);
+    uint64_t v_pcg = sh_rng_next_u64(pcg);
+    uint64_t v_split = sh_rng_next_u64(split);
+
+    /* Should all be different (with overwhelming probability) */
+    ASSERT(v_xor != v_pcg || v_pcg != v_split);
+
+    sh_rng_free(xor);
+    sh_rng_free(pcg);
+    sh_rng_free(split);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -4284,6 +5048,52 @@ int main(void)
     RUN_TEST(unit_ml_floz);
     RUN_TEST(unit_grams_ounces);
     RUN_TEST(unit_tonnes);
+
+    printf("\nPiecewise-Linear Functions:\n");
+    RUN_TEST(pwl_create_free);
+    RUN_TEST(pwl_add_points);
+    RUN_TEST(pwl_eval_interpolation);
+    RUN_TEST(pwl_eval_clamp);
+    RUN_TEST(pwl_eval_extrapolate);
+    RUN_TEST(pwl_eval_nan);
+    RUN_TEST(pwl_integrate_linear);
+    RUN_TEST(pwl_integrate_constant);
+    RUN_TEST(pwl_integrate_multiple_segments);
+    RUN_TEST(pwl_integrate_clamped);
+    RUN_TEST(pwl_integrate_reversed);
+    RUN_TEST(pwl_utilities);
+    RUN_TEST(pwl_invalid);
+    RUN_TEST(pwl_consumption_curve);
+
+    printf("\nStep Functions:\n");
+    RUN_TEST(step_create_free);
+    RUN_TEST(step_add_delta);
+    RUN_TEST(step_set_absolute);
+    RUN_TEST(step_eval);
+    RUN_TEST(step_eval_empty);
+    RUN_TEST(step_integrate_constant);
+    RUN_TEST(step_integrate_single_step);
+    RUN_TEST(step_integrate_multiple_steps);
+    RUN_TEST(step_integrate_reversed);
+    RUN_TEST(step_pwl_integrate_constant);
+    RUN_TEST(step_pwl_integrate_weight_changes);
+    RUN_TEST(step_utilities);
+    RUN_TEST(step_null_safety);
+
+    printf("\nRNG and Distributions:\n");
+    RUN_TEST(rng_create_free);
+    RUN_TEST(rng_seed_reproducibility);
+    RUN_TEST(rng_uniform_range);
+    RUN_TEST(rng_state_save_restore);
+    RUN_TEST(rng_normal);
+    RUN_TEST(rng_exponential);
+    RUN_TEST(rng_gamma);
+    RUN_TEST(rng_poisson);
+    RUN_TEST(rng_shuffle);
+    RUN_TEST(rng_choice);
+    RUN_TEST(rng_sample);
+    RUN_TEST(dist_pdf_cdf);
+    RUN_TEST(rng_backend_comparison);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

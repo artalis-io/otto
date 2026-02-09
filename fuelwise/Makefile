@@ -36,6 +36,7 @@ SOURCES = $(SRC_DIR)/fw_geo.c \
           $(SRC_DIR)/fw_route.c \
           $(SRC_DIR)/fw_refuel.c \
           $(SRC_DIR)/fw_api.c \
+          $(SRC_DIR)/fw_consumption.c \
           $(SRC_DIR)/fuelwise.c
 
 OBJECTS = $(SOURCES:.c=.o)
@@ -82,10 +83,14 @@ debug: clean all
 # Run tests
 test: $(TEST_EXEC)
 	./$(TEST_EXEC)
+	@echo ""
+	@echo "Running benchmark validator tests..."
+	$(MAKE) -C bench validator-test
 
 # Clean
 clean:
 	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC)
+	$(MAKE) -C bench clean
 
 # Clean all including Ralph
 clean-all: clean
