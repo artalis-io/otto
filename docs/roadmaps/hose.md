@@ -392,6 +392,35 @@ arrived[t] ∈ {0,1} Has completed driving (arrived at destination)
 done[t] ∈ {0,1}    Task complete (work finished)
 ```
 
+##### Initial State (Driver Already Mid-Activity)
+
+The driver at t_now may already be in the middle of an activity:
+
+**Input parameters:**
+```
+status_init ∈ {DRIVE, WORK, OFF}   Current activity at t_now
+status_duration ∈ ℝ+               Time already spent in current activity (hours)
+d0, w0, b0, c0                     Clock values at t_now
+in_duty_init ∈ {0,1}               Is driver in an active duty period?
+daily_log[1..8]                    On-duty hours for past 8 days (for recap)
+```
+
+**Why this matters:**
+- If driver has been OFF for 7h, only 3h more needed for 10h reset
+- If driver has been OFF for 25 min, only 5 min more for qualifying 30-min break
+- If driver is OFF but `in_duty_init = 1`, the 14h window is still ticking (wall clock)
+- If driver is OFF and `in_duty_init = 0`, they completed a 10h reset and window is paused
+
+**Example scenarios:**
+
+| Scenario | status_init | status_duration | in_duty_init | Effect |
+|----------|-------------|-----------------|--------------|--------|
+| Fresh driver (10h+ off) | OFF | 10+ hours | 0 | All clocks reset, ready to start new duty period |
+| Mid-shift break | OFF | 1 hour | 1 | 14h window still running, need 9h more for reset |
+| Driving continuously | DRIVE | 3 hours | 1 | Continue driving, clocks reflect 3h usage |
+| Loading at dock | WORK | 2 hours | 1 | On-duty non-driving, 14h and 70h affected |
+| Mid-34h restart | OFF | 20 hours | 0 | 14h more for 34h restart (70h reset) |
+
 ##### Constraints
 
 **State exclusivity:**
@@ -399,51 +428,103 @@ done[t] ∈ {0,1}    Task complete (work finished)
 ∑_s x[t,s] = 1   ∀t
 ```
 
+**Initial state from ongoing activity:**
+```
+// Initialize consecutive OFF counter based on current status
+off_consec[0] = floor(status_duration / δ)  if status_init = OFF
+off_consec[0] = 0                            otherwise
+
+// Initialize in_duty based on whether driver is in active duty period
+in_duty[0] = in_duty_init
+
+// If driver continues same activity in period 0, streak continues
+// If driver switches activity, streak resets appropriately
+```
+
+**Virtual "pre-history" for break detection:**
+
+For the 30-min break rule, we need to know if the driver is already mid-break:
+```
+// Pre-history: status_init = OFF and status_duration ≥ k·δ means
+// x[-k,OFF] = x[-k+1,OFF] = ... = x[-1,OFF] = 1 (virtually)
+
+// Periods needed for 30-min break
+break_periods = ceil(0.5 / δ)  // e.g., 6 periods at δ=5min
+
+// Already accumulated OFF periods before t=0
+pre_off = floor(status_duration / δ)  if status_init = OFF, else 0
+
+// break30[t] triggers when total consecutive OFF ≥ break_periods
+// For early periods (t < break_periods), include pre-history:
+break30[t] = 1 iff (pre_off + consecutive OFF from 0 to t) ≥ break_periods
+```
+
 **11h clock dynamics:**
 ```
 d[t] = d[t-1] + δ·x[t,DRIVE] - 11·reset10[t]
-d[0] = d0  (initial state)
+d[0] = d0  (initial state, reflects driving already done this shift)
 x[t,DRIVE] ≤ (11 - d[t-1]) / δ    // Can't drive if clock exhausted
 ```
 
 **14h window (wall clock from first on-duty):**
 ```
-// Duty period starts when first DRIVE or WORK, ends after 10h OFF
-in_duty[t] ≥ in_duty[t-1] - reset10[t]
-in_duty[t] ≥ x[t,DRIVE] + x[t,WORK]
-in_duty[t] ≤ in_duty[t-1] + x[t,DRIVE] + x[t,WORK]  // only starts on DRIVE/WORK
+// Duty period state propagation
+in_duty[t] ≥ in_duty[t-1] - reset10[t]           // stays 1 until reset
+in_duty[t] ≥ x[t,DRIVE] + x[t,WORK]              // becomes 1 on activity
+in_duty[t] ≤ in_duty[t-1] + x[t,DRIVE] + x[t,WORK]  // only starts on activity
+
+// Initial duty state from input
+in_duty[0] ≥ in_duty_init                         // preserve ongoing duty period
+in_duty[0] ≥ x[0,DRIVE] + x[0,WORK]              // or start new one
 
 // Window clock runs whenever in_duty = 1
 w[t] = w[t-1]·(1 - reset10[t]) + δ·in_duty[t]
-w[0] = w0  (initial state)
+w[0] = w0  (initial state, may be mid-window)
 
 // Can't drive if window exhausted
 x[t,DRIVE] ≤ M·(1 - in_duty[t-1]) + (14 - w[t-1]) / δ
 ```
 
-**30-minute break rule:**
+**30-minute break rule (with pre-history):**
 ```
 b[t] = b[t-1]·(1 - break30[t]) + δ·x[t,DRIVE]
 b[0] = b0  (initial state)
 
-// break30[t] = 1 if 6+ consecutive OFF periods (30 min at δ=5min)
-break30[t] ≤ min(x[t-1,OFF], x[t-2,OFF], ..., x[t-6,OFF])
+// For periods t < break_periods, include pre-history in break detection
+// pre_off = floor(status_duration / δ) if status_init = OFF, else 0
+
+// At t=0: if pre_off ≥ break_periods, driver already has qualifying break
+// break30[0] = 1 iff pre_off ≥ break_periods
+
+// For t ∈ [1, break_periods-1]:
+// Need (pre_off + t+1) consecutive OFF periods
+// break30[t] = 1 iff x[0..t] all OFF AND pre_off + t + 1 ≥ break_periods
+
+// For t ≥ break_periods: standard rule (no pre-history needed)
+break30[t] = 1 iff x[t-break_periods+1..t] all OFF
 
 // Can't drive if 8h break clock exhausted without qualifying break
 x[t,DRIVE] ≤ (8 - b[t-1]) / δ + M·break30_available[t]
 ```
 
-**10h and 34h reset detection:**
+**10h and 34h reset detection (with pre-history):**
 ```
-// Track consecutive OFF periods
+// Consecutive OFF counter (initialized from status_duration)
 off_consec[t] = (off_consec[t-1] + 1)·x[t,OFF]
+off_consec[0] = (pre_off + 1)·x[0,OFF]  // continue streak if still OFF
 
-// 10h reset = 120 consecutive OFF (at δ=5min)
-reset10[t] = 1 iff off_consec[t] ≥ 120
-// Linearized: reset10[t] ≤ off_consec[t]/120, reset10[t] ≥ (off_consec[t]-119)/M
+// Reset thresholds
+reset10_periods = ceil(10 / δ)  // 120 at δ=5min
+reset34_periods = ceil(34 / δ)  // 408 at δ=5min
 
-// 34h reset = 408 consecutive OFF
-reset34[t] = 1 iff off_consec[t] ≥ 408
+// 10h reset triggers when consecutive OFF reaches threshold
+reset10[t] = 1 iff off_consec[t] ≥ reset10_periods
+
+// 34h reset triggers when consecutive OFF reaches threshold
+reset34[t] = 1 iff off_consec[t] ≥ reset34_periods
+
+// Edge case: if pre_off already ≥ threshold, reset happens at t=0
+// (driver was already past the reset point when optimization starts)
 ```
 
 **70h cycle with daily recap:**
