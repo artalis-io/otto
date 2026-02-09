@@ -496,6 +496,11 @@
             position: relative;
             z-index: 1;
             animation: crt-flicker-gray 5s infinite;
+            /* Force consistent character width for box-drawing */
+            letter-spacing: 0;
+            word-spacing: 0;
+            font-variant-ligatures: none;
+            font-feature-settings: "calt" 0;
         }
 
         @keyframes crt-flicker-gray {
@@ -1208,6 +1213,11 @@
             position: relative;
             z-index: 3;
             animation: electric-scatter 3s infinite;
+            /* Force consistent character width for box-drawing */
+            letter-spacing: 0;
+            word-spacing: 0;
+            font-variant-ligatures: none;
+            font-feature-settings: "calt" 0;
         }
 
         /* Electric scattering - retro-futuristic glitch effect */
