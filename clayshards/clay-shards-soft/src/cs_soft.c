@@ -475,11 +475,12 @@ void cs_soft_text(CsSoftRenderer *r, const char *text, int len,
         float glyph_y = baseline_y - glyph->plane.top * size;
 
         /* Integer dimensions and position for rendering
-         * Use ceiling for dimensions to avoid missing edge pixels */
-        int gx = (int)glyph_x;
-        int gy = (int)glyph_y;
-        int gw = (int)ceilf(glyph_w);
-        int gh = (int)ceilf(glyph_h);
+         * Extend by 1 pixel on each side to capture MSDF anti-aliasing at edges
+         * (WebGL renders a quad that covers the full UV range; we need to match) */
+        int gx = (int)floorf(glyph_x) - 1;
+        int gy = (int)floorf(glyph_y) - 1;
+        int gw = (int)ceilf(glyph_w) + 2;
+        int gh = (int)ceilf(glyph_h) + 2;
 
         /* Render glyph using MSDF (same approach as carta ct_render_glyph) */
         for (int py = 0; py < gh; py++) {
@@ -496,10 +497,9 @@ void cs_soft_text(CsSoftRenderer *r, const char *text, int len,
                 }
 
                 /* Map screen pixel to local glyph coordinates [0, 1]
-                 * Note: local_x is NOT flipped (left-to-right is same in both)
-                 * local_y IS flipped (screen Y increases down, but glyph top is at low Y) */
-                float local_x = ((float)px + 0.5f) / glyph_w;
-                float local_y = ((float)py + 0.5f) / glyph_h;
+                 * Account for the 1-pixel extension on each side */
+                float local_x = ((float)px - 0.5f) / glyph_w;
+                float local_y = ((float)py - 0.5f) / glyph_h;
 
                 /* Get MSDF coverage with threshold (uses bilinear sampling) */
                 float coverage = sh_font_msdf_coverage_threshold(font, glyph,
