@@ -1,7 +1,24 @@
 # Ralph LP/MIP Solver - HTTP Server Makefile
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -std=c11 -D_POSIX_C_SOURCE=200809L
+
+# Platform-specific RELRO (Linux only)
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    RELRO_FLAGS = -Wl,-z,relro,-z,now
+else
+    RELRO_FLAGS =
+endif
+
+# Production build (with hardening)
+CFLAGS = -Wall -Wextra -O2 -std=c11 -D_POSIX_C_SOURCE=200809L \
+         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+LDFLAGS_EXTRA = -pie $(RELRO_FLAGS)
+
+# Debug build (with sanitizers)
+DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_POSIX_C_SOURCE=200809L -DDEBUG \
+               -fsanitize=address,undefined -fno-omit-frame-pointer
+DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 # Include paths
 INCLUDES = -I../include -I../../shared/include -I../../vendor/mongoose -Isrc
@@ -51,7 +68,8 @@ build:
 clean:
 	rm -rf build $(TARGET)
 
-debug: CFLAGS += -g -DDEBUG
+debug: CFLAGS = $(DEBUG_CFLAGS)
+debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run the server

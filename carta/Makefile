@@ -5,8 +5,24 @@ CC ?= gcc
 
 # Optimization flags
 SIMD_FLAGS = -march=native -ftree-vectorize -ffast-math
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -DNDEBUG $(SIMD_FLAGS)
-LDFLAGS = -lm
+
+# Platform-specific RELRO (Linux only)
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    RELRO_FLAGS = -Wl,-z,relro,-z,now
+else
+    RELRO_FLAGS =
+endif
+
+# Production build (with hardening)
+# Note: -pie is implicit on macOS, only add on Linux
+CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -DNDEBUG $(SIMD_FLAGS) \
+         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+ifeq ($(UNAME_S),Linux)
+    LDFLAGS = -lm -pie $(RELRO_FLAGS)
+else
+    LDFLAGS = -lm
+endif
 
 # Include paths
 INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz
@@ -17,8 +33,10 @@ VENDOR_DIR = ../vendor/miniz
 # Shared library path
 SHARED_DIR = ../shared
 
-# Debug build
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
+# Debug build (with sanitizers)
+DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
+               -fsanitize=address,undefined -fno-omit-frame-pointer
+DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 # Source files (removed ct_protobuf.c and ct_inflate.c - now in shared)
 CORE_SRCS = src/carta.c \
@@ -112,8 +130,9 @@ $(BENCH_BIN): benchmarks/bench_carta.c $(LIB) $(SHARED_DIR)/libshared.a
 bench: $(BENCH_BIN)
 	./$(BENCH_BIN)
 
-# Debug build
+# Debug build (with sanitizers)
 debug: CFLAGS = $(DEBUG_CFLAGS)
+debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 # WASM build (delegates to wasm/ subdirectory)
