@@ -342,6 +342,346 @@ typedef enum {
 | **API** | Expose HoS computation as REST endpoint |
 | **UI** | Display break schedule and ETA with HoS |
 
+### LP/MIP Formulation for Verification & Benchmarking
+
+The greedy heuristic ("drive when you can, rest when you must, start on-duty as late as possible to conserve the 14h window") needs verification against an optimal solution. This section defines MIP formulations that compute the **minimum span** schedule for a task or chain of tasks.
+
+**Use case:** Verification tool to find corner cases in the heuristic, not production solving.
+
+#### Problem Definition
+
+**Given:**
+- Driver state at t_now: (drive_11h_used, window_14h_used, break_8h_used, cycle_70h_used, daily_log[8])
+- Task: t_drive (driving time), t_work (on-duty work at destination)
+- Time window: [earliest_arrival, latest_departure]
+  - Continuous: site open for entire interval
+  - Recurring: site open daily (e.g., 10:00-17:00 Mon-Fri)
+
+**Find:**
+- Schedule minimizing **span** = t_finish - t_now
+- Secondary objective: maximize remaining clock optionality (11h, 14h, 70h remaining)
+
+**Subject to:**
+- 11h driving limit (resets after 10h off-duty)
+- 14h window (wall clock from first on-duty, resets after 10h off-duty)
+- 8h driving triggers mandatory 30-min break
+- 70h/8d or 60h/7d cycle with daily recap (resets after 34h off-duty)
+
+**Definitions:**
+- **Slack**: Arriving before earliest_arrival → off-duty waiting
+- **Work**: On-duty non-driving at site (consumes 14h window and 70h, not 11h or 8h-break)
+- **Optionality**: Preserving clocks = delaying on-duty start to not "waste" the 14h window
+
+---
+
+#### Formulation 1: Time-Indexed MIP
+
+**Discretization:** δ = 1/12 hours (5 minutes), horizon H periods (1 week = 2016 periods)
+
+##### Variables
+
+```
+x[t,s] ∈ {0,1}     State at period t: s ∈ {DRIVE, WORK, OFF}
+d[t] ∈ [0,11]      11h clock: driving since last 10h reset
+w[t] ∈ [0,14]      14h window: wall-clock elapsed since duty period started
+b[t] ∈ [0,8]       8h break clock: driving since last 30-min break
+c[t] ∈ [0,70]      70h cycle clock (or 60h for 60/7 mode)
+in_duty[t] ∈ {0,1} Currently in active duty period (14h window running)
+off_consec[t] ∈ ℤ+ Consecutive OFF periods ending at t
+arrived[t] ∈ {0,1} Has completed driving (arrived at destination)
+done[t] ∈ {0,1}    Task complete (work finished)
+```
+
+##### Constraints
+
+**State exclusivity:**
+```
+∑_s x[t,s] = 1   ∀t
+```
+
+**11h clock dynamics:**
+```
+d[t] = d[t-1] + δ·x[t,DRIVE] - 11·reset10[t]
+d[0] = d0  (initial state)
+x[t,DRIVE] ≤ (11 - d[t-1]) / δ    // Can't drive if clock exhausted
+```
+
+**14h window (wall clock from first on-duty):**
+```
+// Duty period starts when first DRIVE or WORK, ends after 10h OFF
+in_duty[t] ≥ in_duty[t-1] - reset10[t]
+in_duty[t] ≥ x[t,DRIVE] + x[t,WORK]
+in_duty[t] ≤ in_duty[t-1] + x[t,DRIVE] + x[t,WORK]  // only starts on DRIVE/WORK
+
+// Window clock runs whenever in_duty = 1
+w[t] = w[t-1]·(1 - reset10[t]) + δ·in_duty[t]
+w[0] = w0  (initial state)
+
+// Can't drive if window exhausted
+x[t,DRIVE] ≤ M·(1 - in_duty[t-1]) + (14 - w[t-1]) / δ
+```
+
+**30-minute break rule:**
+```
+b[t] = b[t-1]·(1 - break30[t]) + δ·x[t,DRIVE]
+b[0] = b0  (initial state)
+
+// break30[t] = 1 if 6+ consecutive OFF periods (30 min at δ=5min)
+break30[t] ≤ min(x[t-1,OFF], x[t-2,OFF], ..., x[t-6,OFF])
+
+// Can't drive if 8h break clock exhausted without qualifying break
+x[t,DRIVE] ≤ (8 - b[t-1]) / δ + M·break30_available[t]
+```
+
+**10h and 34h reset detection:**
+```
+// Track consecutive OFF periods
+off_consec[t] = (off_consec[t-1] + 1)·x[t,OFF]
+
+// 10h reset = 120 consecutive OFF (at δ=5min)
+reset10[t] = 1 iff off_consec[t] ≥ 120
+// Linearized: reset10[t] ≤ off_consec[t]/120, reset10[t] ≥ (off_consec[t]-119)/M
+
+// 34h reset = 408 consecutive OFF
+reset34[t] = 1 iff off_consec[t] ≥ 408
+```
+
+**70h cycle with daily recap:**
+```
+// At each midnight, gain back hours from 8 days ago
+recap[t] = daily_log[8] if t crosses midnight, else 0
+c[t] = c[t-1] + δ·(x[t,DRIVE] + x[t,WORK]) - recap[t] - 70·reset34[t]
+c[0] = c0
+
+// Can't work or drive if cycle exhausted
+x[t,DRIVE] + x[t,WORK] ≤ (70 - c[t-1]) / δ
+```
+
+**Task sequencing:**
+```
+// Accumulate driving and work
+drive_done[t] = drive_done[t-1] + δ·x[t,DRIVE]
+work_done[t] = work_done[t-1] + δ·x[t,WORK]
+
+// Must complete required driving
+drive_done[H] ≥ t_drive
+
+// Must complete required work
+work_done[H] ≥ t_work
+
+// Can only work after arriving (driving complete)
+x[t,WORK] ≤ arrived[t]
+arrived[t] = 1 iff drive_done[t] ≥ t_drive
+```
+
+**Time windows:**
+```
+// Continuous [E, L]: work only within window
+x[t,WORK] = 0  if t·δ + t_now < E
+work_done[t] ≤ t_work  if t·δ + t_now > L
+
+// Recurring (e.g., 10:00-17:00 daily):
+x[t,WORK] = 0  if hour_of_day(t·δ + t_now) ∉ [10, 17]
+```
+
+**Slack handling:**
+```
+// After arriving, if before earliest_arrival, must be OFF (waiting)
+arrived[t] = 1 ∧ (t·δ + t_now < E) → x[t,OFF] = 1
+```
+
+##### Objective
+
+```
+// Primary: minimize span
+min span where done[span/δ] = 1
+
+// Equivalent linearization:
+min ∑_t δ·(1 - done[t])
+
+// Secondary (lexicographic or weighted):
+// Maximize remaining optionality
++ ε·(11 - d[T]) + ε·(14 - w[T]) + ε·(70 - c[T])
+```
+
+---
+
+#### Formulation 2: Event-Based MIP
+
+Model the schedule as a sequence of up to N activity segments.
+
+##### Variables
+
+```
+s[i]               Start time of segment i (continuous)
+e[i]               End time of segment i (e[i] = s[i+1])
+dur[i] = e[i] - s[i]
+type[i] ∈ {DRIVE, WORK, OFF}  (binary encoding)
+
+// Clock states at end of segment i
+d[i] ∈ [0,11]      11h clock after segment i
+w[i] ∈ [0,14]      14h window after segment i
+b[i] ∈ [0,8]       8h break clock after segment i
+c[i] ∈ [0,70]      70h clock after segment i
+
+// Reset/break indicators
+is_reset10[i] ∈ {0,1}   Segment i is OFF with dur[i] ≥ 10h
+is_reset34[i] ∈ {0,1}   Segment i is OFF with dur[i] ≥ 34h
+is_break30[i] ∈ {0,1}   Segment i is OFF with dur[i] ≥ 0.5h
+```
+
+##### Constraints
+
+**Segment ordering:**
+```
+e[i] = s[i+1]   ∀i
+s[0] = t_now
+dur[i] ≥ 0
+```
+
+**11h clock (big-M linearization):**
+```
+d[i] ≥ d[i-1] + dur[i] - M·(1 - isDRIVE[i]) - 11·is_reset10[i]
+d[i] ≤ d[i-1] + dur[i] + M·(1 - isDRIVE[i])
+d[i] ≤ 11
+isDRIVE[i] = 1 → d[i-1] + dur[i] ≤ 11  // can't exceed while driving
+```
+
+**14h window (requires tracking duty period start):**
+```
+// duty_start[i] = time when current duty period started
+// Complex: must track across segments using big-M
+
+// Simpler approach: track in_duty[i] and w[i]
+in_duty[i] = in_duty[i-1]·(1 - is_reset10[i-1]) + (isDRIVE[i] + isWORK[i])·(1 - in_duty[i-1])
+
+// Window accumulates wall-clock time while in_duty
+w[i] = (w[i-1] + dur[i])·in_duty[i]·(1 - is_reset10[i])  // nonlinear, needs linearization
+
+isDRIVE[i] = 1 → w[i] ≤ 14
+```
+
+**30-min break:**
+```
+is_break30[i] ≤ isOFF[i]
+is_break30[i] → dur[i] ≥ 0.5
+
+b[i] = b[i-1]·(1 - is_break30[i]) + dur[i]·isDRIVE[i]
+isDRIVE[i] = 1 → b[i] ≤ 8
+```
+
+**Reset detection:**
+```
+is_reset10[i] ≤ isOFF[i]
+is_reset10[i] → dur[i] ≥ 10
+
+is_reset34[i] ≤ is_reset10[i]
+is_reset34[i] → dur[i] ≥ 34
+```
+
+**Task completion:**
+```
+∑_i dur[i]·isDRIVE[i] ≥ t_drive
+∑_i dur[i]·isWORK[i] ≥ t_work
+
+// All WORK segments after all DRIVE segments
+```
+
+##### Objective
+
+```
+min span = e[last] - s[0]
+```
+
+---
+
+#### Comparison: Time-Indexed vs Event-Based
+
+| Aspect | Time-Indexed | Event-Based |
+|--------|--------------|-------------|
+| **Model size** | O(H/δ) variables; 1 week at 5-min = 2016 periods | O(N) segments; typically N ≤ 20 |
+| **14h window** | Easy: just sum `in_duty[t]·δ` | Hard: requires tracking duty period start with big-M |
+| **30-min break** | Easy: count consecutive OFF periods | Moderate: detect qualifying breaks |
+| **Recurring windows** | Easy: mask invalid periods | Hard: split work across intervals |
+| **Recap (70h rollover)** | Easy: trigger at midnight periods | Moderate: detect midnight crossings |
+| **Precision** | Quantized to δ | Exact continuous time |
+| **Solve time** | Slower (more variables), but simpler | Faster if well-formulated, but big-M issues |
+| **Solution interpretation** | Direct: read x[t,s] matrix | Abstract: sequence of segments |
+| **Debugging** | Easy: visualize period-by-period | Harder: must trace constraint logic |
+
+**Recommendation:** Use **time-indexed** for verification because:
+1. The 14h window is much easier to model correctly
+2. Recurring time windows are trivial
+3. Solution is easy to visualize and verify
+4. 5-minute granularity is fine for trucking (HoS rules don't care about seconds)
+
+---
+
+#### Feasibility Analysis
+
+**1 week horizon at δ = 5 minutes:**
+- Periods: 7 × 24 × 12 = **2016 periods**
+- Variables: ~6000 binary (x[t,s]), ~8000 continuous (clocks)
+- Constraints: ~15000
+
+**Solve time estimate (Ralph):**
+- Single task: **1-5 seconds** (depends on problem structure)
+- Chain of 5 tasks: **5-30 seconds**
+
+**Memory:** ~50-100 MB for the model
+
+This is tractable for verification/benchmarking. Not suitable for real-time production, which is fine since the heuristic handles that.
+
+---
+
+#### Extension to Chain of Tasks
+
+For a fixed sequence of N tasks (FTL with known legs):
+
+**Option 1: Extended horizon**
+- Single model with H = sum of worst-case spans
+- Track task-specific completion variables: `arrived[t,k]`, `done[t,k]`
+- Constraint: `done[t,k] = 1` before `x[t,DRIVE] = 1` for task k+1 can start
+
+**Option 2: Iterative solving**
+- Solve task 1 → get end state → solve task 2 → ...
+- Faster but loses global optimality (local decisions may be suboptimal globally)
+- Good enough for heuristic verification if tasks are loosely coupled
+
+**Option 3: Hybrid**
+- Solve globally for "critical" portions (tight time windows)
+- Use heuristic + local verification for slack portions
+
+---
+
+#### Implementation Plan
+
+**Phase 1: Time-Indexed Single Task**
+- [ ] Define `HSVerifyProblem` struct (driver state, task, time window)
+- [ ] Build MIP model using Ralph API
+- [ ] Implement clock constraints (11h, 14h, 8h-break, 70h)
+- [ ] Implement reset detection (10h, 34h, 30-min)
+- [ ] Implement time window constraints (continuous first, recurring later)
+- [ ] Extract solution as `HSAction` sequence
+- [ ] Test against known scenarios (fresh driver, exhausted clocks, etc.)
+
+**Phase 2: Heuristic Comparison**
+- [ ] Run heuristic and MIP on same inputs
+- [ ] Compare span: heuristic_span vs optimal_span
+- [ ] Flag cases where heuristic_span > optimal_span × (1 + tolerance)
+- [ ] Analyze corner cases to improve heuristic
+
+**Phase 3: Chain Extension**
+- [ ] Implement iterative solving with state propagation
+- [ ] Implement global model for short chains (N ≤ 5)
+- [ ] Compare iterative vs global for optimality gap
+
+**Phase 4: Recurring Time Windows**
+- [ ] Extend time-indexed model to handle daily open/close
+- [ ] Test with realistic shipper appointment patterns
+
+---
+
 ### Future Extensions
 
 - **ELD Integration**: Parse Electronic Logging Device data to initialize state
