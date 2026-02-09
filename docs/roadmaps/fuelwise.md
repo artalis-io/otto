@@ -397,6 +397,21 @@ fw_weight_profile_add_cargo(profile, 300000.0, -8000.0);
 
 ### 1.2 Consumption Curve Model
 
+The consumption curve is a **static property of the truck** that maps weight → fuel consumption rate:
+
+```
+Consumption (L/100km)
+    │
+ 36 ┤                              ● (40t max GVW)
+ 32 ┤                    ●
+ 28 ┤          ●
+ 24 ┼──●───────────────────────────────────────► Weight (kg)
+      15t     25t      32t       40t
+     (empty)
+```
+
+Heavier truck = higher consumption. The relationship is approximately linear but captured as piecewise-linear to allow for real-world data.
+
 **Implementation using `SHPiecewiseLinear` from `shared/`**
 ```c
 /* FuelWise wrapper around SHPiecewiseLinear with truck metadata */
@@ -407,16 +422,15 @@ typedef struct {
     const char *truck_type;     /* Description (e.g., "EU Standard 40t") */
 } FWConsumptionCurve;
 
-/* Usage example */
-FWConsumptionCurve *curve = fw_consumption_curve_create("EU Standard");
+/* Usage: pre-populated curve for common truck type */
+FWConsumptionCurve *curve = fw_curve_eu_standard();  /* See section 1.6 */
+double consumption = fw_consumption_at_weight(curve, 30000.0);  /* ~31 L/100km */
 
-fw_consumption_curve_add_point(curve, 15000.0, 24.0);  /* Empty: 24 L/100km */
-fw_consumption_curve_add_point(curve, 25000.0, 28.5);
-fw_consumption_curve_add_point(curve, 32000.0, 32.0);
-fw_consumption_curve_add_point(curve, 40000.0, 36.5);  /* Max GVW: 36.5 L/100km */
-
-/* Query consumption - internally uses sh_pwl_eval() */
-double consumption = fw_consumption_at_weight(curve, 30000.0);  /* Interpolates */
+/* Usage: custom curve (e.g., specific vehicle or conditions) */
+FWConsumptionCurve *custom = fw_consumption_curve_create(4);  /* capacity for 4 points */
+fw_consumption_curve_add_point(custom, 12000.0, 20.0);  /* Light truck empty */
+fw_consumption_curve_add_point(custom, 18000.0, 26.0);  /* Light truck loaded */
+/* Query: internally uses sh_pwl_eval() to interpolate */
 ```
 
 **Example Curve (European Truck)**
@@ -516,10 +530,10 @@ typedef struct {
 ### 1.5 API Functions
 
 ```c
-/* Create a consumption curve
- * truck_type: "EU Standard", "US Class8", "Light Truck", or NULL for empty curve
- * Returns pre-populated curve for known types, empty curve for NULL/unknown */
-FWConsumptionCurve *fw_consumption_curve_create(const char *truck_type);
+/* Create empty consumption curve (caller adds points)
+ * The curve maps weight (kg) → consumption rate (L/100km)
+ * Use convenience functions below for common truck types */
+FWConsumptionCurve *fw_consumption_curve_create(int initial_capacity);
 void fw_consumption_curve_free(FWConsumptionCurve *curve);
 
 /* Add a point to the curve (must be added in ascending weight order) */
