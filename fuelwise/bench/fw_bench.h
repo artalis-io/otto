@@ -46,6 +46,7 @@ typedef struct {
 
     /* Fuel parameters */
     double min_fuel_l;              /* Minimum fuel level to maintain */
+    double min_purchase_l;          /* Minimum purchase per stop (0 = LP, >0 = MILP) */
     double start_fuel_fraction;     /* Starting fuel as fraction of tank (0.3-0.8) */
 
     /* Price distribution (AR(1) spatial correlation model)
