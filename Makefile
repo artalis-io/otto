@@ -215,6 +215,9 @@ test: test-ralph test-fuelwise test-shared test-velo test-carta test-locus
 
 test-ralph:
 	$(MAKE) -C ralph test
+	$(MAKE) -C ralph test-lap
+	$(MAKE) -C ralph test-netflow
+	$(MAKE) -C ralph test-detect
 
 test-fuelwise: fuelwise
 	$(MAKE) -C fuelwise test

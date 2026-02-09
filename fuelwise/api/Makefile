@@ -1,7 +1,25 @@
 # FuelWise REST API Makefile
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 -g
+
+# Platform-specific RELRO (Linux only)
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    RELRO_FLAGS = -Wl,-z,relro,-z,now
+else
+    RELRO_FLAGS =
+endif
+
+# Production build (with hardening)
+CFLAGS = -Wall -Wextra -O2 -g \
+         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+LDFLAGS_EXTRA = -pie $(RELRO_FLAGS)
+
+# Debug build (with sanitizers)
+DEBUG_CFLAGS = -Wall -Wextra -g -O0 -DDEBUG \
+               -fsanitize=address,undefined -fno-omit-frame-pointer
+DEBUG_LDFLAGS = -fsanitize=address,undefined
+
 INCLUDES = -I../include -I../../ralph/include -I../../vendor/mongoose -I../../shared/include
 
 # OpenMP support (required when linking against libralph.a which uses OpenMP)

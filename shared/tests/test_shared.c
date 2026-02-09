@@ -2075,6 +2075,59 @@ TEST(parse_int_edge_cases)
 }
 
 /* ============================================================================
+ * sh_parse_double() Tests
+ * ============================================================================ */
+
+TEST(parse_double_valid)
+{
+    /* Valid doubles within bounds */
+    ASSERT_NEAR(sh_parse_double("3.14", 0.0, 0.0, 10.0), 3.14, 0.001);
+    ASSERT_NEAR(sh_parse_double("0.0", -1.0, 0.0, 10.0), 0.0, 0.001);
+    ASSERT_NEAR(sh_parse_double("10.0", 0.0, 0.0, 10.0), 10.0, 0.001);
+    ASSERT_NEAR(sh_parse_double("-5.5", 0.0, -10.0, 10.0), -5.5, 0.001);
+    ASSERT_NEAR(sh_parse_double("0.7", 0.0, 0.0, 1.0), 0.7, 0.001);
+    /* Integer string parses as double */
+    ASSERT_NEAR(sh_parse_double("42", 0.0, 0.0, 100.0), 42.0, 0.001);
+}
+
+TEST(parse_double_null_empty)
+{
+    /* NULL and empty strings return default */
+    ASSERT_NEAR(sh_parse_double(NULL, 99.0, 0.0, 100.0), 99.0, 0.001);
+    ASSERT_NEAR(sh_parse_double("", 99.0, 0.0, 100.0), 99.0, 0.001);
+}
+
+TEST(parse_double_invalid)
+{
+    /* Invalid strings return default */
+    ASSERT_NEAR(sh_parse_double("abc", 99.0, 0.0, 100.0), 99.0, 0.001);
+    ASSERT_NEAR(sh_parse_double("inf", 99.0, 0.0, 100.0), 99.0, 0.001);
+    ASSERT_NEAR(sh_parse_double("-inf", 99.0, 0.0, 100.0), 99.0, 0.001);
+    ASSERT_NEAR(sh_parse_double("nan", 99.0, 0.0, 100.0), 99.0, 0.001);
+    ASSERT_NEAR(sh_parse_double("NaN", 99.0, 0.0, 100.0), 99.0, 0.001);
+    /* Note: strtod accepts leading whitespace and trailing garbage, but consumes what it can */
+    ASSERT_NEAR(sh_parse_double("  3.14", 0.0, 0.0, 10.0), 3.14, 0.001);  /* Leading space OK */
+}
+
+TEST(parse_double_out_of_range)
+{
+    /* Out of range returns default */
+    ASSERT_NEAR(sh_parse_double("200.0", 99.0, 0.0, 100.0), 99.0, 0.001);   /* Above max */
+    ASSERT_NEAR(sh_parse_double("-5.0", 99.0, 0.0, 100.0), 99.0, 0.001);    /* Below min */
+    ASSERT_NEAR(sh_parse_double("0.0", 99.0, 0.1, 100.0), 99.0, 0.001);     /* Below min */
+}
+
+TEST(parse_double_edge_cases)
+{
+    /* Edge cases at boundaries */
+    ASSERT_NEAR(sh_parse_double("0.0", 0.0, 0.0, 1.0), 0.0, 0.001);   /* At min */
+    ASSERT_NEAR(sh_parse_double("1.0", 0.0, 0.0, 1.0), 1.0, 0.001);   /* At max */
+    /* Scientific notation */
+    ASSERT_NEAR(sh_parse_double("1e-3", 0.0, 0.0, 1.0), 0.001, 0.0001);
+    ASSERT_NEAR(sh_parse_double("1.5e2", 0.0, 0.0, 200.0), 150.0, 0.001);
+}
+
+/* ============================================================================
  * Circuit Breaker Tests
  * ============================================================================ */
 
@@ -5157,6 +5210,11 @@ int main(void)
     RUN_TEST(parse_int_invalid);
     RUN_TEST(parse_int_out_of_range);
     RUN_TEST(parse_int_edge_cases);
+    RUN_TEST(parse_double_valid);
+    RUN_TEST(parse_double_null_empty);
+    RUN_TEST(parse_double_invalid);
+    RUN_TEST(parse_double_out_of_range);
+    RUN_TEST(parse_double_edge_cases);
 
     printf("\nCircuit Breaker:\n");
     RUN_TEST(circuit_create_free);

@@ -2,10 +2,31 @@
 # Makefile
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math
-CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG
+
+# Platform-specific RELRO (Linux only)
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    RELRO_FLAGS = -Wl,-z,relro,-z,now
+else
+    RELRO_FLAGS =
+endif
+
+# Production build (with hardening)
+# Note: -pie is implicit on macOS, only add on Linux
+CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math \
+         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+
+# Debug build (with sanitizers)
+CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG \
+               -fsanitize=address,undefined -fno-omit-frame-pointer
+DEBUG_LDFLAGS = -fsanitize=address,undefined
+
 INCLUDES = -I./include -I../ralph/include -I../shared/include
-LDFLAGS = -lm
+ifeq ($(UNAME_S),Linux)
+    LDFLAGS = -lm -pie $(RELRO_FLAGS)
+else
+    LDFLAGS = -lm
+endif
 
 # Shared library (required by Ralph)
 SHARED_DIR = ../shared
@@ -76,8 +97,9 @@ $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 $(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME) $(RALPH_LIB) $(SHARED_LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lfuelwise -L$(RALPH_DIR) -lralph -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
 
-# Debug build
+# Debug build (with sanitizers)
 debug: CFLAGS = $(CFLAGS_DEBUG)
+debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests

@@ -42,7 +42,7 @@ A comprehensive trucking and logistics optimization platform combining route pla
 # Build everything
 make all
 
-# Run tests (~340 tests)
+# Run tests (~1500 tests)
 make test
 
 # Start API servers
@@ -56,12 +56,57 @@ make test
 ./scripts/data-download-osm.sh monaco    # ~1MB (for testing)
 ```
 
-### Docker
+### Docker (Production)
 
 ```bash
 docker-compose up                       # Full platform
-docker-compose --profile all-apis up    # All API servers
+docker-compose up carta velo locus      # GIS services only
+
+# Or build individual images
+docker build -f docker/Dockerfile.carta -t otto-carta .
+docker build -f docker/Dockerfile.velo -t otto-velo .
 ```
+
+See [docker/README.md](docker/README.md) for data management and security options.
+
+## Build Modes
+
+### Production Build (Default)
+
+```bash
+make all                  # Build all libraries and tests
+make carta velo locus     # Build specific modules
+```
+
+Production flags include:
+- `-O3 -march=native` - Full optimization
+- `-fstack-protector-strong` - Stack buffer overflow protection
+- `-D_FORTIFY_SOURCE=2` - Buffer overflow detection
+- `-fPIE` + `-pie` (Linux) - Position independent executables
+- `-Wl,-z,relro,-z,now` (Linux) - Full RELRO
+
+### Debug Build (with Sanitizers)
+
+```bash
+make -C velo debug        # Single module with ASan + UBSan
+make -C carta debug       # Catches memory errors, UB at runtime
+```
+
+Debug flags include:
+- `-g -O0` - Debug symbols, no optimization
+- `-fsanitize=address,undefined` - AddressSanitizer + UBSan
+- `-fno-omit-frame-pointer` - Better stack traces
+
+### macOS ARM64 Note
+
+Velo uses OpenMP for parallel landmark computation. On macOS ARM64 with Homebrew's libomp, you may see linker errors:
+
+```bash
+# If OpenMP linking fails on macOS:
+make -C velo NOMP=1       # Build without OpenMP (slightly slower landmarks)
+```
+
+This is not needed for Docker builds (Linux) or Intel Macs.
 
 ## Architecture
 

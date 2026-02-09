@@ -18,15 +18,24 @@ ifeq ($(UNAME_S),Darwin)
     OPENMP_FLAGS = -Xclang -fopenmp
     OPENMP_LDFLAGS = -L/opt/homebrew/opt/libomp/lib -lomp
     OPENMP_INCLUDES = -I/opt/homebrew/opt/libomp/include
+    RELRO_FLAGS =
 else
-    # Linux - native GCC OpenMP
+    # Linux - native GCC OpenMP with RELRO
     OPENMP_FLAGS = -fopenmp -fopenmp-simd
     OPENMP_LDFLAGS = -fopenmp
     OPENMP_INCLUDES =
+    RELRO_FLAGS = -Wl,-z,relro,-z,now
 endif
 
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(OPENMP_FLAGS) $(SIMD_FLAGS)
-LDFLAGS = -lm $(OPENMP_LDFLAGS)
+# Production build (with hardening)
+# Note: -pie is implicit on macOS, only add on Linux
+CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE $(OPENMP_FLAGS) $(SIMD_FLAGS) \
+         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+ifeq ($(UNAME_S),Linux)
+    LDFLAGS = -lm $(OPENMP_LDFLAGS) -pie $(RELRO_FLAGS)
+else
+    LDFLAGS = -lm $(OPENMP_LDFLAGS)
+endif
 
 # Include paths
 INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz $(OPENMP_INCLUDES)
@@ -37,8 +46,10 @@ VENDOR_DIR = ../vendor/miniz
 # Shared library path
 SHARED_DIR = ../shared
 
-# Debug build (no OpenMP for easier debugging)
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
+# Debug build (with sanitizers, no OpenMP for easier debugging)
+DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
+               -fsanitize=address,undefined -fno-omit-frame-pointer
+DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 # Non-OpenMP build for compatibility
 # Use: make NOMP=1 all
@@ -140,8 +151,9 @@ route-bench: $(ROUTE_BENCH)
 	@echo "Route benchmark built: ./$(ROUTE_BENCH)"
 	@echo "Usage: ./$(ROUTE_BENCH) --graph data/map.vlg --suite smoke -v"
 
-# Debug build
+# Debug build (with sanitizers)
 debug: CFLAGS = $(DEBUG_CFLAGS)
+debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 # WASM build (delegates to wasm/ subdirectory)
