@@ -21,6 +21,7 @@ rasterization. Provides platform backends for window creation and display.
 ├─────────────────────────────────────────┤
 │    Platform Backends                    │
 │  • Headless (built-in)                  │
+│  • Cocoa/macOS (done)                   │
 │  • X11 (planned)                        │
 │  • Win32 (planned)                      │
 │  • Wayland (planned)                    │
@@ -34,8 +35,9 @@ rasterization. Provides platform backends for window creation and display.
 | `include/cs_soft.h` | Public API |
 | `src/cs_soft.c` | Core renderer + headless platform |
 | `src/cs_soft_internal.h` | Internal types, platform vtable |
-| `src/platforms/cs_soft_x11.c` | X11 backend (planned) |
+| `src/platforms/cs_soft_cocoa.m` | macOS/Cocoa backend |
 | `tests/test_soft.c` | Unit tests |
+| `tests/demo_soft.c` | Interactive demo |
 
 ## Usage
 
@@ -184,6 +186,7 @@ uint32_t pixel = cs_soft_get_pixel(r, x, y);
 | Platform | Status | Display Method | Input |
 |----------|--------|----------------|-------|
 | Headless | Done | None (testing) | None |
+| Cocoa/macOS | Done | NSBitmapImageRep | NSEvent |
 | X11 | Planned | XShmPutImage | XNextEvent |
 | Win32 | Planned | BitBlt/DIB | WndProc |
 | Wayland | Planned | wl_shm | wl_seat |
