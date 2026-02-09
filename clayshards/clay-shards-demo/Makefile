@@ -6,16 +6,17 @@ CC = emcc
 CFLAGS = -O3 -Wall -Wextra
 # Note: Not defining CLAY_WASM - using regular function pointers instead
 
-# Include paths - Clay vendor + ClayShards
-INCLUDES = -I../../vendor/clay -I../clay-shards/include
+# Include paths - Clay vendor + ClayShards + Shared (for sh_font.h, sh_polyline.h)
+INCLUDES = -I../../vendor/clay -I../clay-shards/include -I../../shared/include
 
 # Don't use CLAY_WASM - we'll set measure function via Clay_SetMeasureTextFunction
 # This avoids needing JS imports for measureTextFunction/queryScrollOffsetFunction
 
-# Source files (includes immediate mode components and provider)
+# Source files (includes immediate mode components, provider, and shared polyline)
 SOURCES = src/demo.c \
           ../clay-shards/src/cs_immediate.c \
-          ../clay-shards/src/cs_map_provider.c
+          ../clay-shards/src/cs_map_provider.c \
+          ../../shared/src/sh_polyline.c
 
 # Output
 BUILD_DIR = build
