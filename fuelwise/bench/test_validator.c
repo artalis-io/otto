@@ -578,6 +578,191 @@ void test_skip_expensive_stations(void)
 }
 
 /* ============================================================================
+ * Test: Fuel balance equation holds
+ * ============================================================================ */
+void test_fuel_balance(void)
+{
+    printf("\n=== Test: Fuel Balance Equation ===\n");
+
+    FWSnappedStation stations[2] = {
+        {.station_id = 0, .distance_from_start = 150000, .price = 1.50},
+        {.station_id = 1, .distance_from_start = 300000, .price = 1.40},
+    };
+
+    FWRefuelProblem problem = {
+        .total_distance = 400000,       /* 400 km */
+        .base_consumption = 25.0,       /* 25 L/100km = 100L total consumed */
+        .tank_capacity = 200,
+        .current_fuel = 60,
+        .minimum_fuel = 10,
+        .minimum_fuel_at_end = 10,
+        .num_stations = 2,
+        .stations = stations,
+    };
+
+    FWRefuelSolution solution;
+    memset(&solution, 0, sizeof(solution));
+    int rc = fw_solve_refuel_lp(&problem, &solution);
+    ASSERT(rc == 0 && solution.status == FW_STATUS_OPTIMAL, "Solver finds optimal");
+
+    /* Calculate fuel balance: start + purchased - consumed = remaining */
+    double total_purchased = 0.0;
+    for (int i = 0; i < problem.num_stations; i++) {
+        total_purchased += solution.purchases[i];
+    }
+
+    double total_consumed = (problem.base_consumption / 100.0) *
+                            (problem.total_distance / 1000.0);
+    double expected_remaining = problem.current_fuel + total_purchased - total_consumed;
+
+    printf("  Start fuel: %.2fL\n", problem.current_fuel);
+    printf("  Total purchased: %.2fL\n", total_purchased);
+    printf("  Total consumed: %.2fL\n", total_consumed);
+    printf("  Expected remaining: %.2fL\n", expected_remaining);
+    printf("  Reported remaining: %.2fL\n", solution.remaining_fuel);
+
+    double diff = fabs(expected_remaining - solution.remaining_fuel);
+    ASSERT(diff < 0.1, "Fuel balance equation holds");
+
+    fw_free_solution(&solution);
+}
+
+/* ============================================================================
+ * Test: Infeasible problem correctly detected
+ * ============================================================================ */
+void test_infeasible_detection(void)
+{
+    printf("\n=== Test: Infeasible Problem Detection ===\n");
+
+    /* Create impossible problem: gap too large for tank */
+    FWSnappedStation stations[1] = {
+        {.station_id = 0, .distance_from_start = 500000, .price = 1.50},  /* 500km away! */
+    };
+
+    FWRefuelProblem problem = {
+        .total_distance = 600000,       /* 600 km */
+        .base_consumption = 25.0,       /* 25 L/100km = 150L needed total */
+        .tank_capacity = 100,           /* Only 100L tank */
+        .current_fuel = 50,             /* Start with 50L */
+        .minimum_fuel = 10,             /* Need 10L minimum */
+        .minimum_fuel_at_end = 10,
+        .num_stations = 1,
+        .stations = stations,
+    };
+
+    /* First gap: 500km = 125L needed, but only 50L start + 100L tank = can't reach */
+
+    FWRefuelSolution solution;
+    memset(&solution, 0, sizeof(solution));
+    int rc = fw_solve_refuel_lp(&problem, &solution);
+
+    printf("  Solver return code: %d\n", rc);
+    printf("  Solution status: %d (INFEASIBLE=%d)\n",
+           solution.status, FW_STATUS_INFEASIBLE);
+
+    /* Either solver returns error or reports infeasible */
+    int detected = (rc != 0) || (solution.status == FW_STATUS_INFEASIBLE);
+    ASSERT(detected, "Infeasible problem correctly detected");
+
+    fw_free_solution(&solution);
+}
+
+/* ============================================================================
+ * Test: Free station attracts all fuel
+ * ============================================================================ */
+void test_free_station_attracts_all(void)
+{
+    printf("\n=== Test: Free Station Attracts All Fuel ===\n");
+
+    /* Station 1 is FREE - all fuel should come from there */
+    FWSnappedStation stations[3] = {
+        {.station_id = 0, .distance_from_start = 100000, .price = 2.00},
+        {.station_id = 1, .distance_from_start = 200000, .price = 0.00},  /* FREE! */
+        {.station_id = 2, .distance_from_start = 300000, .price = 2.00},
+    };
+
+    FWRefuelProblem problem = {
+        .total_distance = 400000,       /* 400 km */
+        .base_consumption = 25.0,       /* 25 L/100km = 100L total */
+        .tank_capacity = 200,           /* Large tank - can fill at free station */
+        .current_fuel = 80,             /* Enough to reach free station */
+        .minimum_fuel = 10,
+        .minimum_fuel_at_end = 10,
+        .num_stations = 3,
+        .stations = stations,
+    };
+
+    FWRefuelSolution solution;
+    memset(&solution, 0, sizeof(solution));
+    int rc = fw_solve_refuel_lp(&problem, &solution);
+    ASSERT(rc == 0 && solution.status == FW_STATUS_OPTIMAL, "Solver finds optimal");
+
+    printf("  Station 0 ($2.00): %.2fL\n", solution.purchases[0]);
+    printf("  Station 1 (FREE):  %.2fL\n", solution.purchases[1]);
+    printf("  Station 2 ($2.00): %.2fL\n", solution.purchases[2]);
+    printf("  Total cost: $%.2f\n", solution.total_cost);
+
+    /* Free station should have the bulk of purchases */
+    double free_fraction = solution.purchases[1] /
+        (solution.purchases[0] + solution.purchases[1] + solution.purchases[2] + 0.001);
+
+    ASSERT(free_fraction > 0.8, "Most fuel from free station");
+    ASSERT(solution.total_cost < 10.0, "Total cost near zero (mostly free fuel)");
+
+    fw_free_solution(&solution);
+}
+
+/* ============================================================================
+ * Test: Tank capacity is binding when tank is small
+ * ============================================================================ */
+void test_tank_capacity_binding(void)
+{
+    printf("\n=== Test: Tank Capacity Binding ===\n");
+
+    /* Small tank relative to fuel needs - should hit capacity */
+    FWSnappedStation stations[3] = {
+        {.station_id = 0, .distance_from_start = 80000, .price = 1.00},   /* Cheapest */
+        {.station_id = 1, .distance_from_start = 160000, .price = 1.50},
+        {.station_id = 2, .distance_from_start = 240000, .price = 1.50},
+    };
+
+    FWRefuelProblem problem = {
+        .total_distance = 300000,       /* 300 km */
+        .base_consumption = 25.0,       /* 25 L/100km = 75L total needed */
+        .tank_capacity = 50,            /* Small 50L tank */
+        .current_fuel = 25,             /* Start with 25L */
+        .minimum_fuel = 5,
+        .minimum_fuel_at_end = 5,
+        .num_stations = 3,
+        .stations = stations,
+    };
+
+    /* Need 75L total, start with 25L, need 50L + 5L buffer = 55L
+     * But tank is only 50L, so must fill multiple times */
+
+    FWRefuelSolution solution;
+    memset(&solution, 0, sizeof(solution));
+    int rc = fw_solve_refuel_lp(&problem, &solution);
+    ASSERT(rc == 0 && solution.status == FW_STATUS_OPTIMAL, "Solver finds optimal");
+
+    printf("  Tank capacity: %.0fL\n", problem.tank_capacity);
+    printf("  Station 0: %.2fL\n", solution.purchases[0]);
+    printf("  Station 1: %.2fL\n", solution.purchases[1]);
+    printf("  Station 2: %.2fL\n", solution.purchases[2]);
+
+    /* At station 0, we should fill to near capacity (have 25-20=5L, fill to ~50L) */
+    /* The validator already checked we don't exceed tank, but let's verify
+     * we're actually using the tank capacity efficiently */
+    int multiple_stops = (solution.purchases[0] > 1.0) +
+                         (solution.purchases[1] > 1.0) +
+                         (solution.purchases[2] > 1.0);
+
+    ASSERT(multiple_stops >= 2, "Small tank requires multiple stops");
+
+    fw_free_solution(&solution);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void)
@@ -603,6 +788,13 @@ int main(void)
     test_cost_matches_purchases();
     test_arrive_with_minimum();
     test_skip_expensive_stations();
+
+    /* Consistency checks */
+    printf("\n--- Consistency Checks ---\n");
+    test_fuel_balance();
+    test_infeasible_detection();
+    test_free_station_attracts_all();
+    test_tank_capacity_binding();
 
     printf("\n========================\n");
     printf("Tests passed: %d/%d\n", tests_passed, tests_run);
