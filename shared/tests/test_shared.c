@@ -18,6 +18,7 @@
 #include "sh_query.h"
 #include "sh_render.h"
 #include "sh_units.h"
+#include "sh_piecewise.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3884,6 +3885,228 @@ TEST(unit_tonnes)
 }
 
 /* ============================================================================
+ * Piecewise-Linear Functions
+ * ============================================================================ */
+
+TEST(pwl_create_free)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    ASSERT(pwl != NULL);
+    ASSERT(pwl->num_points == 0);
+    ASSERT(pwl->capacity >= 4);
+    sh_pwl_free(pwl);
+    /* Free NULL should be safe */
+    sh_pwl_free(NULL);
+}
+
+TEST(pwl_add_points)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    ASSERT(sh_pwl_add_point(pwl, 0.0, 10.0) == 0);
+    ASSERT(sh_pwl_add_point(pwl, 1.0, 20.0) == 0);
+    ASSERT(sh_pwl_add_point(pwl, 2.0, 15.0) == 0);
+    ASSERT(pwl->num_points == 3);
+    /* Out of order should fail */
+    ASSERT(sh_pwl_add_point(pwl, 1.5, 0.0) == -1);
+    ASSERT(pwl->num_points == 3);  /* Unchanged */
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_eval_interpolation)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 100.0);
+
+    /* Exact points */
+    ASSERT_NEAR(sh_pwl_eval(pwl, 0.0), 0.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 10.0), 100.0, 0.001);
+
+    /* Interpolation */
+    ASSERT_NEAR(sh_pwl_eval(pwl, 5.0), 50.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 2.5), 25.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_eval_clamp)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 10.0);
+    sh_pwl_add_point(pwl, 10.0, 20.0);
+
+    /* Clamp mode (default) */
+    ASSERT_NEAR(sh_pwl_eval(pwl, -5.0), 10.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 15.0), 20.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_eval_extrapolate)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 100.0);  /* slope = 10 */
+
+    /* Extrapolate mode */
+    ASSERT_NEAR(sh_pwl_eval_ex(pwl, -5.0, SH_PWL_EXTRAPOLATE), -50.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval_ex(pwl, 15.0, SH_PWL_EXTRAPOLATE), 150.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_eval_nan)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 100.0);
+
+    /* NaN mode */
+    ASSERT(isnan(sh_pwl_eval_ex(pwl, -5.0, SH_PWL_NAN)));
+    ASSERT(isnan(sh_pwl_eval_ex(pwl, 15.0, SH_PWL_NAN)));
+    /* Within range should still work */
+    ASSERT_NEAR(sh_pwl_eval_ex(pwl, 5.0, SH_PWL_NAN), 50.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_linear)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 10.0);  /* y = x */
+
+    /* ∫[0,10] x dx = 50 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 0.0, 10.0), 50.0, 0.001);
+
+    /* ∫[0,5] x dx = 12.5 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 0.0, 5.0), 12.5, 0.001);
+
+    /* ∫[5,10] x dx = 37.5 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 5.0, 10.0), 37.5, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_constant)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 5.0);
+    sh_pwl_add_point(pwl, 10.0, 5.0);  /* y = 5 (constant) */
+
+    /* ∫[0,10] 5 dx = 50 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 0.0, 10.0), 50.0, 0.001);
+
+    /* ∫[2,7] 5 dx = 25 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 2.0, 7.0), 25.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_multiple_segments)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 5.0, 10.0);
+    sh_pwl_add_point(pwl, 10.0, 10.0);  /* Constant from 5 to 10 */
+
+    /* First segment: triangle = 0.5 * 5 * 10 = 25 */
+    /* Second segment: rectangle = 5 * 10 = 50 */
+    /* Total = 75 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 0.0, 10.0), 75.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_clamped)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 10.0);
+    sh_pwl_add_point(pwl, 10.0, 10.0);  /* Constant = 10 */
+
+    /* Extend left: ∫[-5,0] 10 dx = 50 */
+    /* Within: ∫[0,10] 10 dx = 100 */
+    /* Extend right: ∫[10,15] 10 dx = 50 */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, -5.0, 15.0), 200.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_integrate_reversed)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    sh_pwl_add_point(pwl, 10.0, 10.0);
+
+    /* ∫[10,0] = -∫[0,10] */
+    ASSERT_NEAR(sh_pwl_integrate(pwl, 10.0, 0.0), -50.0, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_utilities)
+{
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    sh_pwl_add_point(pwl, 1.0, 5.0);
+    sh_pwl_add_point(pwl, 3.0, 15.0);
+    sh_pwl_add_point(pwl, 7.0, 10.0);
+
+    ASSERT_NEAR(sh_pwl_min_x(pwl), 1.0, 0.001);
+    ASSERT_NEAR(sh_pwl_max_x(pwl), 7.0, 0.001);
+    ASSERT_NEAR(sh_pwl_min_y(pwl), 5.0, 0.001);
+    ASSERT_NEAR(sh_pwl_max_y(pwl), 15.0, 0.001);
+
+    ASSERT(sh_pwl_is_valid(pwl) == 1);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_invalid)
+{
+    /* NULL should return NaN */
+    ASSERT(isnan(sh_pwl_eval(NULL, 0.0)));
+    ASSERT(isnan(sh_pwl_integrate(NULL, 0.0, 1.0)));
+
+    /* Less than 2 points is invalid */
+    SHPiecewiseLinear *pwl = sh_pwl_create(2);
+    ASSERT(sh_pwl_is_valid(pwl) == 0);
+    ASSERT(isnan(sh_pwl_eval(pwl, 0.0)));
+
+    sh_pwl_add_point(pwl, 0.0, 0.0);
+    ASSERT(sh_pwl_is_valid(pwl) == 0);
+
+    sh_pwl_add_point(pwl, 1.0, 1.0);
+    ASSERT(sh_pwl_is_valid(pwl) == 1);
+
+    sh_pwl_free(pwl);
+}
+
+TEST(pwl_consumption_curve)
+{
+    /* Realistic test: truck consumption curve */
+    SHPiecewiseLinear *pwl = sh_pwl_create(4);
+    sh_pwl_add_point(pwl, 15000.0, 24.0);   /* Empty: 24 L/100km */
+    sh_pwl_add_point(pwl, 25000.0, 28.5);
+    sh_pwl_add_point(pwl, 32000.0, 32.0);
+    sh_pwl_add_point(pwl, 40000.0, 36.5);   /* Max GVW: 36.5 L/100km */
+
+    /* Check interpolation at 30000 kg */
+    /* Between (25000, 28.5) and (32000, 32.0) */
+    double expected = 28.5 + (30000.0 - 25000.0) / (32000.0 - 25000.0) * (32.0 - 28.5);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 30000.0), expected, 0.001);
+
+    /* Check boundaries */
+    ASSERT_NEAR(sh_pwl_eval(pwl, 15000.0), 24.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 40000.0), 36.5, 0.001);
+
+    /* Clamp outside range */
+    ASSERT_NEAR(sh_pwl_eval(pwl, 10000.0), 24.0, 0.001);
+    ASSERT_NEAR(sh_pwl_eval(pwl, 50000.0), 36.5, 0.001);
+
+    sh_pwl_free(pwl);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -4203,6 +4426,22 @@ int main(void)
     RUN_TEST(unit_ml_floz);
     RUN_TEST(unit_grams_ounces);
     RUN_TEST(unit_tonnes);
+
+    printf("\nPiecewise-Linear Functions:\n");
+    RUN_TEST(pwl_create_free);
+    RUN_TEST(pwl_add_points);
+    RUN_TEST(pwl_eval_interpolation);
+    RUN_TEST(pwl_eval_clamp);
+    RUN_TEST(pwl_eval_extrapolate);
+    RUN_TEST(pwl_eval_nan);
+    RUN_TEST(pwl_integrate_linear);
+    RUN_TEST(pwl_integrate_constant);
+    RUN_TEST(pwl_integrate_multiple_segments);
+    RUN_TEST(pwl_integrate_clamped);
+    RUN_TEST(pwl_integrate_reversed);
+    RUN_TEST(pwl_utilities);
+    RUN_TEST(pwl_invalid);
+    RUN_TEST(pwl_consumption_curve);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
