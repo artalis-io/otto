@@ -9,15 +9,6 @@
 #include <string.h>
 #include <math.h>
 
-/* Debug flag - set to 1 to enable debug output */
-#ifndef BILINEAR_DEBUG
-#define BILINEAR_DEBUG 0
-#endif
-
-#if BILINEAR_DEBUG
-#include <stdio.h>
-#endif
-
 /* ============================================================================
  * External Font Data (generated at build time)
  * ============================================================================ */
@@ -443,9 +434,6 @@ float sh_font_sample_msdf_nearest(const SHFont *font, float atlas_x, float atlas
 float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atlas_y)
 {
     if (!font || !font->atlas_data) {
-#if BILINEAR_DEBUG
-        fprintf(stderr, "bilinear: null font/data\n");
-#endif
         return 0.0f;
     }
 
@@ -477,11 +465,6 @@ float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atla
     if (x0 >= font->atlas_width) x0 = font->atlas_width - 1;
     if (y0 >= font->atlas_height) y0 = font->atlas_height - 1;
 
-#if BILINEAR_DEBUG
-    fprintf(stderr, "bilinear: atlas=(%.2f,%.2f) -> x0=%d,y0=%d tx=%.3f,ty=%.3f\n",
-            atlas_x, atlas_y, x0, y0, tx, ty);
-#endif
-
     /* Sample four corners (RGBA atlas, we need RGB for MSDF) */
     size_t idx00 = ((size_t)y0 * (size_t)font->atlas_width + (size_t)x0) * 4;
     size_t idx10 = ((size_t)y0 * (size_t)font->atlas_width + (size_t)x1) * 4;
@@ -490,10 +473,6 @@ float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atla
 
     /* Bounds check */
     if (idx11 + 2 >= font->atlas_data_size) {
-#if BILINEAR_DEBUG
-        fprintf(stderr, "bilinear: bounds check failed idx11+2=%zu >= %zu\n",
-                idx11 + 2, font->atlas_data_size);
-#endif
         return 0.0f;
     }
 
@@ -531,12 +510,7 @@ float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atla
     float b = lerpf(b0, b1, ty);
 
     /* THEN compute median of the interpolated values */
-    float result = median3f(r, g, b);
-#if BILINEAR_DEBUG
-    fprintf(stderr, "bilinear: rgb=(%.4f,%.4f,%.4f) median=%.4f\n",
-            r, g, b, result);
-#endif
-    return result;
+    return median3f(r, g, b);
 }
 
 float sh_font_msdf_coverage_bilinear(const SHFont *font, const SHGlyph *glyph,
@@ -617,15 +591,6 @@ static inline int scissor_test(const SHScissor *s, int x, int y)
            y >= s->y && y < s->y + s->h;
 }
 
-/* Debug: set to 1 to enable render tracing */
-#ifndef RENDER_DEBUG
-#define RENDER_DEBUG 0
-#endif
-
-#if RENDER_DEBUG
-#include <stdio.h>
-#endif
-
 void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height,
                                    const SHFont *font, const SHGlyph *glyph,
                                    float x, float y, float font_size,
@@ -639,15 +604,6 @@ void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height
     /* Calculate glyph dimensions in screen pixels */
     float glyph_width = (glyph->plane.right - glyph->plane.left) * font_size;
     float glyph_height = (glyph->plane.top - glyph->plane.bottom) * font_size;
-
-#if RENDER_DEBUG
-    if (glyph->unicode == 90) { /* 'Z' */
-        fprintf(stderr, "RENDER Z: x=%.2f y=%.2f font_size=%.1f glyph_w=%.2f glyph_h=%.2f\n",
-                x, y, font_size, glyph_width, glyph_height);
-        fprintf(stderr, "  atlas: L=%.1f B=%.1f R=%.1f T=%.1f\n",
-                glyph->atlas.left, glyph->atlas.bottom, glyph->atlas.right, glyph->atlas.top);
-    }
-#endif
 
     if (glyph_width <= 0.0f || glyph_height <= 0.0f) {
         return;
@@ -692,22 +648,7 @@ void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height
             float coverage = sh_font_msdf_coverage_threshold(font, glyph,
                                                               local_x, local_y,
                                                               font_size, threshold);
-
-#if RENDER_DEBUG
-            if (glyph->unicode == 90 && screen_x == 12 && screen_y >= 14 && screen_y <= 20) {
-                fprintf(stderr, "  pixel(%d,%d): local=(%.3f,%.3f) cov=%.4f",
-                        screen_x, screen_y, local_x, local_y, coverage);
-            }
-#endif
-
-            if (coverage <= 0.0f) {
-#if RENDER_DEBUG
-                if (glyph->unicode == 90 && screen_x == 12 && screen_y >= 14 && screen_y <= 20) {
-                    fprintf(stderr, " SKIP(cov=0)\n");
-                }
-#endif
-                continue;
-            }
+            if (coverage <= 0.0f) continue;
 
             /* Apply coverage to alpha */
             uint8_t pixel_alpha = (uint8_t)(alpha * coverage);
@@ -715,11 +656,6 @@ void sh_font_render_glyph_clipped(uint8_t *pixels, int buf_width, int buf_height
 
             /* Blend pixel using sh_render */
             uint32_t color = SH_RGBA(r, g, b, pixel_alpha);
-#if RENDER_DEBUG
-            if (glyph->unicode == 90 && screen_x == 12 && screen_y >= 14 && screen_y <= 20) {
-                fprintf(stderr, " BLEND(alpha=%d)\n", pixel_alpha);
-            }
-#endif
             sh_blend_pixel(pixels, buf_width, buf_height, screen_x, screen_y, color);
         }
     }
