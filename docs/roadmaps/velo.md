@@ -16,6 +16,7 @@ Comprehensive development plan for the Velo OSM routing engine covering algorith
 | **Distance/Duration Matrix** | ❌ TODO | Many-to-many routing |
 | **Landmark Persistence** | ❌ TODO | Store landmarks in .vlg |
 | **Continental Scale** | ❌ TODO | mmap, sparse restrictions |
+| **Commercial Truck Routing** | ❌ TODO | Turn restrictions, dimensions, PTV DDS |
 | **Contraction Hierarchies** | ❌ TODO (Phase 2) | CCH preprocessing |
 
 **Current Performance**: ~100ms country-scale routes with ALT
@@ -648,3 +649,96 @@ if (!(edge->arc_flags & (1ULL << target_region))) continue;
 2. **Lazy initialization**: Use sentinel values + visited set instead of full init
 3. **Haversine LUT**: Precompute or approximate with Euclidean for A* heuristic
 4. **K-d tree for nearest**: O(log V) nearest node lookup
+
+---
+
+## Chapter 12: Commercial Truck Routing (❌ TODO)
+
+> **Detailed Plan:** See `velo-commercial-routing.md` for full analysis
+
+### 12.1 Overview
+
+Commercial-grade truck routing requires features beyond basic OSM access flags:
+
+| Feature | Current State | Required |
+|---------|---------------|----------|
+| Turn restrictions | ❌ None | Edge-to-edge prohibitions |
+| Dimensional constraints | ❌ None | Height, weight, width, length, axle load |
+| Hazmat routing | ❌ None | Tunnel codes, hazmat categories |
+| Commercial data formats | ❌ OSM only | PTV DDS, TomTom GDF-AS |
+| Time-dependent routing | ❌ None | Conditional restrictions |
+
+### 12.2 Proposed Data Structures
+
+```c
+/* Sparse restriction record (only for edges with limits) */
+typedef struct {
+    uint16_t max_height_dm;       /* Decimeters (0 = no limit) */
+    uint16_t max_width_dm;
+    uint32_t max_weight_kg;
+    uint16_t max_length_dm;
+    uint16_t max_axle_kg;         /* In 100kg units */
+    uint8_t hazmat_flags;
+    uint8_t tunnel_code;          /* ADR A-E */
+} VLEdgeRestriction;
+
+/* Turn restriction */
+typedef struct {
+    uint32_t from_edge;
+    uint32_t to_edge;
+    uint8_t restriction_type;     /* PROHIBITED, REQUIRED */
+    uint8_t vehicle_mask;
+} VLTurnRestriction;
+
+/* Full truck profile */
+typedef struct {
+    uint16_t height_dm, width_dm, length_dm;
+    uint32_t gross_weight_kg;
+    uint16_t axle_weight_100kg;
+    uint8_t hazmat_class;
+    uint8_t tunnel_category;
+} VLTruckProfile;
+```
+
+### 12.3 Commercial Data Formats
+
+| Format | File Types | Parser Effort | Recommendation |
+|--------|------------|---------------|----------------|
+| **PTV DDS** | Shapefile, MIF/MID, TAB | 2-3 weeks | **Start here** |
+| TomTom GDF-AS | CSV/TSV | 3-4 weeks | Add later if needed |
+
+**PTV DDS advantages:**
+- Simpler format (Shapefile is well-documented)
+- Lower licensing cost
+- Sample data available for development
+- Strong European logistics adoption (Girteka, Waberer's)
+- Independent of Trimble (supports vendor lock-in narrative)
+
+### 12.4 Implementation Timeline (~9 weeks)
+
+| Phase | Duration | Deliverable |
+|-------|----------|-------------|
+| 0: Schema | 1 week | Extended data structures |
+| 1: Turn restrictions | 2 weeks | Turn enforcement in all algorithms |
+| 2: Dimensional constraints | 1 week | Height/weight/width filtering |
+| 3: PTV DDS parser | 2-3 weeks | Commercial data ingestion |
+| 4: Integration | 2 weeks | End-to-end testing |
+
+### 12.5 API Changes
+
+```
+GET /api/v1/route?from=...&to=...&profile=truck
+    &height=4.0       # Vehicle height in meters
+    &width=2.55       # Vehicle width in meters
+    &weight=40000     # Gross weight in kg
+    &length=16.5      # Vehicle length in meters
+    &hazmat=3         # UN hazmat class (optional)
+```
+
+### 12.6 Success Criteria
+
+- [ ] Turn restrictions enforced (no illegal turns)
+- [ ] Dimensional constraints checked (no low bridges)
+- [ ] PTV DDS data successfully ingested
+- [ ] Routes validated against known truck GPS traces
+- [ ] API accepts truck dimensions
