@@ -8,6 +8,7 @@
  */
 
 #include "fw_bench.h"
+#include "sh_units.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -124,6 +125,33 @@ FWBenchConfig fw_bench_config_tight_margins(void)
     cfg.price_correlation = 0.4;
     cfg.rng_type = SH_RNG_XORSHIFT128;
     cfg.seed = 0;
+    return cfg;
+}
+
+/* US Interstate: ~2000 miles (3200 km), typical Class 8 truck */
+FWBenchConfig fw_bench_config_us_interstate(void)
+{
+    FWBenchConfig cfg = {0};
+    /* Config in imperial, stored as metric internally */
+    cfg.route_length_m = sh_miles_to_m(2000);           /* 2000 miles */
+    cfg.mean_station_gap_m = sh_miles_to_m(50);         /* 50 miles average */
+    cfg.gap_shape = 2.5;
+    cfg.tank_capacity_l = sh_gallons_to_liters(300);    /* 300 gallon dual tanks */
+    cfg.tare_weight_kg = sh_lbs_to_kg(35000);           /* 35,000 lbs tare */
+    cfg.max_gvw_kg = sh_lbs_to_kg(80000);               /* 80,000 lbs GVW limit */
+    cfg.curve = NULL;                                    /* US Class 8 default */
+    cfg.num_weight_events = 4;
+    cfg.cargo_weight_mean_kg = sh_lbs_to_kg(30000);     /* 30,000 lbs average load */
+    cfg.cargo_weight_stddev_kg = sh_lbs_to_kg(10000);
+    cfg.min_fuel_l = sh_gallons_to_liters(50);          /* 50 gallon minimum */
+    cfg.min_purchase_l = 0;                              /* 0 = LP solver (fast) */
+    cfg.start_fuel_fraction = 0.5;
+    cfg.base_price_per_l = sh_price_per_gallon_to_liter(3.50);  /* $3.50/gal */
+    cfg.price_stddev = sh_price_per_gallon_to_liter(0.40);      /* $0.40 stddev */
+    cfg.price_correlation = 0.4;
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    cfg.units = SH_UNITS_IMPERIAL;                       /* Report in imperial */
     return cfg;
 }
 

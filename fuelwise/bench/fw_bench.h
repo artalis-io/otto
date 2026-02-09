@@ -13,6 +13,7 @@
 #include "fw_types.h"
 #include "fw_consumption.h"
 #include "sh_dist.h"
+#include "sh_units.h"
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -60,6 +61,9 @@ typedef struct {
     /* RNG (uses SHRng from shared/ - pluggable backend) */
     SHRngType rng_type;             /* Default: SH_RNG_XORSHIFT128 */
     uint64_t seed;                  /* For reproducibility */
+
+    /* Unit system (for display/reporting only - internal always metric) */
+    SHUnitSystem units;             /* Default: SH_UNITS_METRIC */
 } FWBenchConfig;
 
 /* ============================================================================
@@ -168,6 +172,9 @@ FWBenchConfig fw_bench_config_long_haul(void);
 
 /* Tight margins: 500km, challenging constraints */
 FWBenchConfig fw_bench_config_tight_margins(void);
+
+/* US Interstate: 2000 miles, Class 8 truck (imperial units) */
+FWBenchConfig fw_bench_config_us_interstate(void);
 
 /* ============================================================================
  * Validation API
