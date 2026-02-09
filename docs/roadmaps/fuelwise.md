@@ -1141,3 +1141,269 @@ Based on Freightliner Cascadia, Kenworth T680 data:
 | 36,000 | 42.0 | Maximum GVW |
 
 Note: US trucks have higher consumption due to larger engines, higher speeds, and different fuel formulations.
+
+---
+
+## Chapter 5: Shadow Prices, Economic Interpretation & Monetization
+
+### 5.1 LP Dual Variables (Shadow Prices)
+
+The FuelWise LP (`fw_solve_refuel_lp`) has these constraints with economically meaningful duals:
+
+| Constraint | Dual Variable | Economic Meaning |
+|------------|---------------|------------------|
+| **Fuel balance** `y[i] = current_fuel + Σx[j]` | λ_balance[i] | Marginal value of 1L starting fuel, propagated to station i |
+| **Min fuel at arrival** `y[i] - consumed[i] ≥ min_fuel` | λ_min[i] | **Cost of safety reserve** at station i |
+| **Tank capacity** `y[i] + x[i] ≤ capacity + consumed[i]` | λ_cap[i] | **Value of larger tank** at station i |
+| **Reach destination** `Σx[i] ≥ needed` | λ_dest | **Marginal cost of trip completion** |
+
+### 5.2 Practical Business Applications
+
+**1. Tank Size ROI Analysis**
+```
+Total value of +1L tank = Σ max(0, λ_cap[i])
+```
+If this sum is $0.50/trip and you do 200 trips/year, a 100L larger tank saves $100/year.
+Compare to tank upgrade cost for fleet-wide decisions.
+
+**2. Safety Margin Pricing**
+```
+Cost of safety reserve = Σ λ_min[i]
+```
+Quantifies the tradeoff between safety and cost. High values at specific stations:
+- Route is dangerously tight there
+- Consider finding intermediate stations
+- Useful for insurance/risk discussions with fleet managers
+- Input to detention cost negotiations ("we had to take expensive fuel because of your delay")
+
+**3. Station Negotiation Leverage**
+The reduced costs on x[i] variables tell you how much cheaper a station must be before
+you'd buy there. Use this in fuel card/network contract negotiations.
+
+**4. Route Feasibility Warnings**
+High λ_dest indicates the route is barely feasible. Alerts for dispatchers:
+- Add contingency stations to the route
+- Flag risky segments in driver app
+- Trigger re-routing if fuel stops become unavailable
+
+**5. Multi-Trip Optimization**
+The `remaining_fuel_value` parameter already captures "opportunity cost of empty tank."
+Shadow prices extend this to per-station analysis.
+
+### 5.3 Exposing Duals via API
+
+To expose shadow prices, add to `FWRefuelSolution`:
+
+```c
+typedef struct {
+    /* Existing fields... */
+    FWStatus status;
+    double *purchases;
+    int *stop_flags;
+    double total_cost;
+    double remaining_fuel;
+
+    /* Dual values (new) */
+    double *dual_min_fuel;      /* λ_min[i]: cost of safety margin at each station */
+    double *dual_tank_cap;      /* λ_cap[i]: value of +1L tank at each station */
+    double dual_destination;    /* λ_dest: marginal cost of reaching destination */
+    int has_duals;              /* 1 if duals were computed, 0 otherwise */
+} FWRefuelSolution;
+```
+
+Ralph already supports `ralph_get_dual()` for retrieving dual values.
+
+### 5.4 Missing Constraints for FTL Trucking Monetization
+
+#### High-Value Missing Constraints
+
+| Constraint | Business Value | Complexity |
+|------------|----------------|------------|
+| **Fuel card network** | Fleets have contracts (Pilot, Love's, TA). Filter to approved stations | Low |
+| **Hours of Service** | Driver must stop for rest regardless of fuel. Co-optimize timing | High (HoSE integration) |
+| **Volume discounts** | ≥50 gal gets $0.05/gal off. Non-convex pricing | Medium (MILP) |
+| **DEF co-purchase** | DEF consumed ~2-3% of diesel. Same stop for both | Low |
+| **Reefer fuel** | Refrigerated trailers consume extra fuel for cooling | Low (add to consumption) |
+
+#### International (EU) Specific
+
+| Constraint | Business Value | Notes |
+|------------|----------------|-------|
+| **VAT recovery** | Fuel in certain countries has recoverable VAT | Filter by country, track VAT |
+| **Currency optimization** | EUR/CHF/GBP/CZK pricing differences | Convert to base currency |
+| **Toll corridors** | Combined fuel+toll optimization | Integrate with Velo toll data |
+| **Cabotage rules** | EU rules on consecutive domestic trips | Route feasibility |
+
+#### Quick Wins for Monetization
+
+**1. Fuel Card Filter (Simplest)**
+```c
+typedef struct {
+    /* ... existing fields ... */
+    int *approved_station_ids;   /* NULL = all allowed */
+    int num_approved;
+} FWRefuelProblem;
+```
+Just filter `stations` array before solving. No solver changes needed.
+
+**2. Volume Discount Tiers**
+```c
+typedef struct {
+    double threshold_liters;     /* e.g., 189.27L (50 gal) */
+    double discount_per_liter;   /* e.g., $0.013/L ($0.05/gal) */
+} FWVolumeDiscount;
+```
+Makes problem non-convex. Handle with binary variable for "bought ≥ threshold" in MILP.
+
+**3. Dual Fuel (Diesel + DEF)**
+```c
+typedef struct {
+    double diesel_price;
+    double def_price;
+    double def_available;        /* Some stations don't have DEF */
+} FWStation;
+```
+DEF consumption is ~2-3% of diesel. Add as parallel constraint set.
+
+### 5.5 Benders Decomposition Fix
+
+#### Current State
+
+The current `fw_solve_refuel_benders()` does **exhaustive enumeration** for k ≤ 20 stations:
+```c
+int num_combinations = 1 << k;  /* 2^k */
+for (int combo = 1; combo < num_combinations; combo++) {
+    /* Solve subproblem for each z combination */
+}
+```
+
+This is correct but not true Benders decomposition—it's brute force.
+
+#### Proper Benders Implementation
+
+True Benders iterates between:
+1. **Master problem** (MIP): Choose which stations to stop at (z variables)
+2. **Subproblem** (LP): Given z, optimize fuel purchases (x variables)
+3. **Cuts**: Add constraints to master based on subproblem results
+
+**Optimality Cut** (when subproblem is feasible):
+```
+θ ≥ c'x* + π'(b - Az)
+```
+where π are dual values from subproblem, θ is objective approximation in master.
+
+**Feasibility Cut** (when subproblem is infeasible):
+```
+0 ≥ μ'(b - Az)
+```
+where μ is the Farkas ray from Ralph (`ralph_get_farkas()`).
+
+#### Implementation Plan
+
+```c
+/* Master problem variables */
+/* z[i] ∈ {0,1} - stop at station i */
+/* θ - objective value approximation */
+
+/* Iteration */
+while (!converged) {
+    /* 1. Solve master MIP */
+    ralph_optimize(master);
+    z_fixed = ralph_get_solution(master);  /* Get z values */
+    θ_master = z_fixed[θ_index];
+
+    /* 2. Solve subproblem LP with fixed z */
+    build_subproblem(problem, z_fixed, &subproblem);
+    ralph_optimize(subproblem);
+
+    if (ralph_get_status(subproblem) == RALPH_STATUS_OPTIMAL) {
+        /* 3a. Add optimality cut */
+        double sub_obj = ralph_get_objval(subproblem);
+        double *duals = ralph_get_dual(subproblem);
+
+        /* Cut: θ ≥ sub_obj + Σ duals[i] * (rhs[i] - coef[i] * z[i]) */
+        add_optimality_cut(master, sub_obj, duals, z_coefficients);
+
+        /* Check convergence */
+        if (sub_obj <= θ_master + epsilon) {
+            converged = 1;
+            /* z_fixed is optimal */
+        }
+    } else {
+        /* 3b. Add feasibility cut */
+        double *farkas = ralph_get_farkas(subproblem);
+
+        /* Cut: 0 ≥ Σ farkas[i] * (rhs[i] - coef[i] * z[i]) */
+        add_feasibility_cut(master, farkas, z_coefficients);
+    }
+}
+```
+
+#### Benefits over Enumeration
+
+| Metric | Enumeration | Benders |
+|--------|-------------|---------|
+| Subproblems for k=20 | 1,048,576 | Typically 10-50 |
+| Subproblems for k=30 | 1 billion | Typically 20-100 |
+| Memory | O(2^k) worst case | O(k) |
+| Scalability | k ≤ 20 | k ≤ 1000+ |
+
+#### Implementation Files
+
+| File | Changes |
+|------|---------|
+| `fw_refuel.c` | Replace enumeration with Benders loop |
+| `ralph.h` | Already has `ralph_get_farkas()` |
+| `fw_types.h` | Add Benders iteration stats to solution |
+
+### 5.6 Implementation Priority
+
+1. **Expose duals via API** (1 day) - Immediate value for business intelligence
+2. **Fuel card filter** (0.5 day) - Simplest monetization constraint
+3. **Benders fix** (2-3 days) - Enables scaling to 100+ stations
+4. **Volume discounts** (1 day) - Common contract structure
+5. **DEF co-purchase** (1 day) - Required for US compliance
+6. **HoS integration** (3-5 days) - Requires HoSE module
+
+---
+
+## Chapter 6: API Enhancements
+
+### 6.1 Dual Value Retrieval
+
+```c
+/* Get shadow prices from last solve */
+int fw_get_duals(
+    const FWRefuelSolution *solution,
+    double *dual_min_fuel,      /* [num_stations] or NULL */
+    double *dual_tank_cap,      /* [num_stations] or NULL */
+    double *dual_destination    /* scalar or NULL */
+);
+```
+
+### 6.2 Station Filtering
+
+```c
+/* Filter stations to approved network before solving */
+int fw_filter_approved_stations(
+    FWRefuelProblem *problem,
+    const int *approved_ids,
+    int num_approved
+);
+```
+
+### 6.3 Benders Statistics
+
+```c
+typedef struct {
+    int iterations;
+    int optimality_cuts;
+    int feasibility_cuts;
+    double master_time_ms;
+    double subproblem_time_ms;
+} FWBendersStats;
+
+int fw_get_benders_stats(
+    const FWRefuelSolution *solution,
+    FWBendersStats *stats
+);
