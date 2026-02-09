@@ -634,6 +634,190 @@ This is tractable for verification/benchmarking. Not suitable for real-time prod
 
 ---
 
+#### Performance Considerations
+
+##### MIP Structure
+
+The time-indexed formulation is a **MIP** (Mixed Integer Program):
+- Binary: `x[t,s]` state variables (~6000), reset/break indicators, completion flags
+- Continuous: clock states `d[t]`, `w[t]`, `b[t]`, `c[t]`
+
+**Why it solves fast despite size:**
+1. **Path structure**: States form a sequence through time—once in a state, you transition or stay
+2. **Tight LP relaxation**: Continuous relaxation is often near-integral
+3. **Natural branching**: Branch on "when does first break occur?" converges quickly
+4. **Sparse constraints**: Each period only links to adjacent periods
+
+Most instances solve at the root node with presolve + cuts. Branching is rare.
+
+##### Handling Non-Aligned Times
+
+Real inputs don't align to δ boundaries:
+- Driving time: 2h 37min (not a multiple of 5 min)
+- Loading time: 45 min (aligns) or 47 min (doesn't)
+- Time window: [10:23, 17:45] (odd boundaries)
+
+**Approach: Continuous accumulators with period triggers**
+
+```
+# Continuous variables track exact totals
+drive_total[t] ∈ ℝ       # Actual driving time accumulated
+work_total[t] ∈ ℝ        # Actual work time accumulated
+arrival_time ∈ ℝ         # Exact arrival time (continuous)
+
+# Period-based updates (each active period contributes δ)
+drive_total[t] = drive_total[t-1] + δ·x[t,DRIVE]
+work_total[t] = work_total[t-1] + δ·x[t,WORK]
+
+# Completion: exact threshold (not quantized)
+drive_total[H] ≥ t_drive    # e.g., 2.617 hours exactly
+
+# Arrival time: first period where driving is complete
+arrival_time ≥ t·δ - M·(1 - arrived[t])   ∀t
+arrival_time ≤ t·δ + M·arrived[t]         ∀t
+arrived[t] = 1 iff drive_total[t] ≥ t_drive
+```
+
+**Time windows with exact boundaries:**
+
+```
+# Window [E, L] with exact times
+# Work can only happen when: arrived AND within window
+
+# Arrival must be ≤ L (latest departure minus work time)
+arrival_time ≤ L - t_work
+
+# Work starts at max(arrival_time, E)
+work_start ≥ arrival_time
+work_start ≥ E
+work_start ≤ arrival_time + M·(arrival_time ≥ E)  # if early, wait until E
+
+# Map work_start to period for x[t,WORK] activation
+# Period p is active for work if: p·δ ≥ work_start AND p·δ < work_start + t_work
+```
+
+**Practical simplification:** For HoS verification, quantization error of ±2.5 min is acceptable. Round:
+- Driving/work times: up to next δ (conservative)
+- Time windows: inward (earliest up, latest down)
+
+This guarantees feasible solutions remain feasible after rounding.
+
+##### Problem-Specific Cuts for Ralph
+
+HoS problems have domain structure that generic MIP cuts miss. Ralph could support **problem-class cut generators**:
+
+**Cut examples for HoS:**
+
+```
+# 1. Driving capacity cut
+# "Cannot drive more than 11h before a 10h reset"
+∑_{t=t0}^{t1} x[t,DRIVE] ≤ 11/δ + M·(∃ reset10 in [t0,t1])
+
+# 2. Mandatory break cut
+# "After 8h driving, must have 30-min OFF before more driving"
+For any t where b[t] approaches 8h:
+  x[t+1,DRIVE] + x[t+2,DRIVE] + ... ≤ M·(break30 occurs before next DRIVE)
+
+# 3. Shift window cut
+# "Once in_duty starts, cannot drive after 14h wall-clock"
+x[t,DRIVE] = 0  for all t where w[t] would exceed 14h
+
+# 4. Symmetry breaking
+# "Prefer earlier rest when equivalent" (reduces search space)
+If two OFF placements yield same span, prefer leftmost
+```
+
+**Ralph integration approaches:**
+
+**Option A: Callback API (most flexible)**
+```c
+typedef struct {
+    int (*generate_cuts)(RalphModel *model, const double *x_relaxation,
+                         RalphCut *cuts, int max_cuts);
+    void *user_data;
+} RalphCutCallback;
+
+void ralph_set_cut_callback(RalphModel *model, RalphCutCallback *cb);
+```
+- Called during branch-and-bound at each node
+- User provides domain-specific cut generator
+- Most flexible but requires callback machinery in Ralph
+
+**Option B: Registered problem classes**
+```c
+typedef enum {
+    RALPH_PROBLEM_GENERIC,
+    RALPH_PROBLEM_HOS_SCHEDULE,    // HoS time-indexed
+    RALPH_PROBLEM_SET_COVER,       // For SCP
+    RALPH_PROBLEM_NETWORK_FLOW,    // For assignment/transport
+} RalphProblemClass;
+
+void ralph_set_problem_class(RalphModel *model, RalphProblemClass cls);
+```
+- Ralph has built-in cut generators for known problem classes
+- Simpler API, but less flexible
+- Good for OTTO's core problem types
+
+**Option C: Lazy constraints**
+```c
+// Add constraint only when violated
+int ralph_add_lazy_constraint(RalphModel *model,
+                               int num_vars, int *indices, double *coeffs,
+                               char sense, double rhs);
+```
+- User checks solution, adds violated constraints, re-solves
+- Iterative but simple implementation
+- Works well when violations are easy to detect
+
+**Recommendation for Ralph:**
+1. Start with **Option C** (lazy constraints)—simple to implement
+2. Add **Option B** for HoS and SCP—known problem classes with clear cut structures
+3. Consider **Option A** for power users—callback API is complex but maximally flexible
+
+**HoS-specific cut generator skeleton:**
+```c
+// In hose/src/hs_mip_cuts.c
+
+int hs_generate_cuts(RalphModel *model, const double *x,
+                     RalphCut *cuts, int max_cuts) {
+    int num_cuts = 0;
+
+    // Check driving capacity violations
+    double driving_since_reset = 0;
+    for (int t = 0; t < num_periods && num_cuts < max_cuts; t++) {
+        if (x[DRIVE_VAR(t)] > 0.5) {
+            driving_since_reset += delta;
+        }
+        if (x[RESET10_VAR(t)] > 0.5) {
+            driving_since_reset = 0;
+        }
+
+        // Violation: driving > 11h without reset
+        if (driving_since_reset > 11.0 + EPS) {
+            // Add cut: sum of DRIVE from last reset to t ≤ 11/δ
+            cuts[num_cuts++] = make_driving_capacity_cut(model, last_reset, t);
+        }
+    }
+
+    // Check 14h window violations...
+    // Check 30-min break violations...
+
+    return num_cuts;
+}
+```
+
+##### Adaptive Discretization (Advanced)
+
+For very long horizons (multi-week), consider **variable δ**:
+- Fine granularity (5 min) near task boundaries and time windows
+- Coarse granularity (30 min or 1 hour) during long rest periods
+
+This reduces period count significantly while maintaining precision where it matters.
+
+**Implementation:** Pre-process the problem to identify "interesting" time points, then build a non-uniform time grid. Constraints adapt to variable period lengths.
+
+---
+
 #### Extension to Chain of Tasks
 
 For a fixed sequence of N tasks (FTL with known legs):
