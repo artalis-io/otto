@@ -9,26 +9,25 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include "fw_geo.h"
+#include "sh_geo.h"
+#include "sh_units.h"
 
 /* ============================================================================
  * Distance Calculations
+ *
+ * FuelWise uses SI units internally:
+ * - Distance: meters
+ * - Volume: liters
+ * - Fuel efficiency: L/100km
+ * - Mass: kilograms
+ *
+ * Unit conversions happen at API boundaries, not here.
  * ============================================================================ */
 
 double fw_haversine_distance(FWCoord a, FWCoord b)
 {
-    double dlat = (b.lat - a.lat) * FW_DEG_TO_RAD;
-    double dlon = (b.lon - a.lon) * FW_DEG_TO_RAD;
-
-    double sin_dlat = sin(dlat / 2.0);
-    double sin_dlon = sin(dlon / 2.0);
-
-    double h = sin_dlat * sin_dlat +
-               cos(a.lat * FW_DEG_TO_RAD) * cos(b.lat * FW_DEG_TO_RAD) *
-               sin_dlon * sin_dlon;
-
-    double c = 2.0 * atan2(sqrt(h), sqrt(1.0 - h));
-
-    return FW_EARTH_RADIUS_MILES * c;
+    /* sh_haversine returns meters, which we use internally */
+    return sh_haversine(a, b);
 }
 
 /*
@@ -103,8 +102,8 @@ double fw_point_to_segment_distance(
 void fw_latlon_to_local(FWCoord coord, FWCoord ref, double *x, double *y)
 {
     double cos_lat = cos(ref.lat * FW_DEG_TO_RAD);
-    *x = (coord.lon - ref.lon) * FW_DEG_TO_RAD * FW_EARTH_RADIUS_MILES * cos_lat;
-    *y = (coord.lat - ref.lat) * FW_DEG_TO_RAD * FW_EARTH_RADIUS_MILES;
+    *x = (coord.lon - ref.lon) * FW_DEG_TO_RAD * SH_EARTH_RADIUS_M * cos_lat;
+    *y = (coord.lat - ref.lat) * FW_DEG_TO_RAD * SH_EARTH_RADIUS_M;
 }
 
 void fw_local_to_latlon(double x, double y, FWCoord ref, FWCoord *coord)
@@ -117,8 +116,8 @@ void fw_local_to_latlon(double x, double y, FWCoord ref, FWCoord *coord)
         cos_lat = 1e-6;
     }
 
-    coord->lon = ref.lon + (x / (FW_EARTH_RADIUS_MILES * cos_lat)) * FW_RAD_TO_DEG;
-    coord->lat = ref.lat + (y / FW_EARTH_RADIUS_MILES) * FW_RAD_TO_DEG;
+    coord->lon = ref.lon + (x / (SH_EARTH_RADIUS_M * cos_lat)) * FW_RAD_TO_DEG;
+    coord->lat = ref.lat + (y / SH_EARTH_RADIUS_M) * FW_RAD_TO_DEG;
 }
 
 /* ============================================================================

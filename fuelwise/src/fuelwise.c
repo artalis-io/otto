@@ -46,9 +46,9 @@ void fw_default_filter_config(FWFilterConfig *config)
 {
     if (!config) return;
 
-    config->max_distance_miles = 5.0;
-    config->max_dedup_distance_miles = 10.0;
-    config->min_repeat_distance_miles = 0.155;  /* ~250 meters */
+    config->max_distance = 8000.0;          /* 8 km in meters */
+    config->max_dedup_distance = 16000.0;   /* 16 km in meters */
+    config->min_repeat_distance = 250.0;    /* 250 meters */
     config->dedup_strategy = FW_DEDUP_CLOSEST;
 }
 
@@ -70,7 +70,7 @@ int fw_optimize(
     int filtered_count = 0;
 
     int ret;
-    if (request->filter_config.max_distance_miles > 0) {
+    if (request->filter_config.max_distance > 0) {
         ret = fw_filter_stations_two_step(
             request->stations,
             request->num_stations,
@@ -112,7 +112,7 @@ int fw_optimize(
         .total_distance = response->total_distance,
         .num_segments = request->num_segments,
         .segments = request->segments,
-        .base_consumption_mpg = request->consumption_mpg,
+        .base_consumption = request->consumption,
         .tank_capacity = request->tank_capacity,
         .current_fuel = request->current_fuel,
         .minimum_fuel = request->minimum_fuel,
@@ -174,7 +174,7 @@ int fw_optimize_simple(
     const FWPolyline *route,
     double tank_capacity,
     double current_fuel,
-    double consumption_mpg,
+    double consumption,
     double min_fuel,
     FWRefuelSolution *solution)
 {
@@ -191,7 +191,7 @@ int fw_optimize_simple(
         .filter_config = filter_config,
         .tank_capacity = tank_capacity,
         .current_fuel = current_fuel,
-        .consumption_mpg = consumption_mpg,
+        .consumption = consumption,
         .minimum_fuel = min_fuel,
         .minimum_fuel_at_end = min_fuel,
         .min_purchase = 0.0,
@@ -317,15 +317,15 @@ char* fw_response_to_json(const FWOptimizeResponse *response)
                 "\n    {\n"
                 "      \"station_id\": %d,\n"
                 "      \"distance_from_start\": %.2f,\n"
-                "      \"price_per_gallon\": %.4f,\n"
-                "      \"gallons\": %.2f,\n"
+                "      \"price\": %.4f,\n"
+                "      \"liters\": %.2f,\n"
                 "      \"cost\": %.2f\n"
                 "    }",
                 response->filtered_stations[i].station_id,
                 response->filtered_stations[i].distance_from_start,
-                response->filtered_stations[i].price_per_gallon,
+                response->filtered_stations[i].price,
                 response->purchases[i],
-                response->purchases[i] * response->filtered_stations[i].price_per_gallon
+                response->purchases[i] * response->filtered_stations[i].price
             );
         }
     }

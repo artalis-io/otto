@@ -24,12 +24,20 @@ extern "C" {
 #define FW_FUTURE_API  /* Reserved for future use */
 
 /* ============================================================================
- * Constants
+ * Shared Library Dependencies
  * ============================================================================ */
 
-#define FW_EARTH_RADIUS_MILES 3958.8
-#define FW_DEG_TO_RAD (3.14159265358979323846 / 180.0)
-#define FW_RAD_TO_DEG (180.0 / 3.14159265358979323846)
+#include "sh_geo.h"    /* For SHCoord */
+#include "sh_units.h"  /* For unit conversions */
+
+/* ============================================================================
+ * Constants (deprecated - use shared library constants)
+ * ============================================================================ */
+
+/* Keep FW_DEG_TO_RAD and FW_RAD_TO_DEG for backward compatibility,
+ * but prefer SH_DEG_TO_RAD and SH_RAD_TO_DEG from sh_geo.h */
+#define FW_DEG_TO_RAD SH_DEG_TO_RAD
+#define FW_RAD_TO_DEG SH_RAD_TO_DEG
 
 /* ============================================================================
  * Status Codes
@@ -60,12 +68,29 @@ typedef enum {
 
 /* ============================================================================
  * Coordinate Point
+ *
+ * FWCoord is now an alias to SHCoord from the shared library.
+ * Both have the same layout: { double lat; double lon; }
  * ============================================================================ */
 
-typedef struct {
-    double lat;     /* Latitude in degrees */
-    double lon;     /* Longitude in degrees */
-} FWCoord;
+typedef SHCoord FWCoord;
+
+/* ============================================================================
+ * Internal Unit System
+ *
+ * FuelWise uses SI units internally for all calculations:
+ *   - Distance: meters (m)
+ *   - Volume: liters (L)
+ *   - Fuel efficiency: L/100km (liters per 100 kilometers)
+ *   - Mass: kilograms (kg)
+ *   - Price: currency per liter ($/L, €/L, etc.)
+ *
+ * Unit conversions happen at API boundaries (JSON parsing/serialization).
+ * The API accepts both metric (default) and imperial units via "units" field.
+ *
+ * Legacy field names (e.g., "price_per_gallon") are kept for backward
+ * compatibility but now represent SI values internally.
+ * ============================================================================ */
 
 /* ============================================================================
  * Fuel Station
@@ -76,7 +101,7 @@ typedef struct {
 typedef struct {
     int id;                     /* Unique station identifier */
     FWCoord location;           /* Geographic location */
-    double price_per_gallon;    /* Fuel price in $/gallon */
+    double price;               /* Fuel price per liter ($/L, €/L, etc.) */
     const char *name;           /* Optional station name (can be NULL) */
 } FWStation;
 
@@ -100,10 +125,10 @@ typedef struct {
 
 typedef struct {
     int station_id;                 /* Original station ID */
-    double distance_from_start;     /* Miles along route from start */
-    double perpendicular_distance;  /* Miles from route (snap distance) */
+    double distance_from_start;     /* Meters along route from start */
+    double perpendicular_distance;  /* Meters from route (snap distance) */
     FWCoord snap_point;             /* Location where station projects onto route */
-    double price_per_gallon;        /* Fuel price */
+    double price;                   /* Fuel price per liter ($/L, €/L, etc.) */
 } FWSnappedStation;
 
 /* ============================================================================
@@ -115,51 +140,53 @@ typedef struct {
  * ============================================================================ */
 
 typedef struct {
-    double start_distance;      /* Start distance of this segment (miles) */
-    double cargo_weight_lbs;    /* Cargo weight in this segment (lbs) */
-    double consumption_mpg;     /* Fuel consumption rate (miles per gallon) */
+    double start_distance;      /* Start distance of this segment (meters) */
+    double cargo_weight;        /* Cargo weight in this segment (kg) */
+    double consumption;         /* Fuel consumption rate (L/100km) */
 } FWRouteSegment;
 
 /* ============================================================================
  * Station Filter Configuration
  *
  * Parameters for filtering and snapping stations to a route.
+ * All distances in meters internally.
  * ============================================================================ */
 
 typedef struct {
-    double max_distance_miles;          /* Max perpendicular distance to include station */
-    double max_dedup_distance_miles;    /* Max distance for deduplication grouping */
-    double min_repeat_distance_miles;   /* Min distance between repeated stations */
-    FWDedupStrategy dedup_strategy;     /* How to handle duplicate stations */
+    double max_distance;            /* Max perpendicular distance to include station (meters) */
+    double max_dedup_distance;      /* Max distance for deduplication grouping (meters) */
+    double min_repeat_distance;     /* Min distance between repeated stations (meters) */
+    FWDedupStrategy dedup_strategy; /* How to handle duplicate stations */
 } FWFilterConfig;
 
 /* ============================================================================
  * Refueling Problem Definition
  *
  * Complete specification of a refueling optimization problem.
+ * All values use SI units internally.
  * ============================================================================ */
 
 typedef struct {
     /* Route */
-    double total_distance;          /* Total route distance in miles */
+    double total_distance;          /* Total route distance (meters) */
     int num_segments;               /* Number of route segments (0 = constant rate) */
     FWRouteSegment *segments;       /* Array of segments (NULL if constant rate) */
-    double base_consumption_mpg;    /* Used if segments == NULL */
+    double base_consumption;        /* Consumption rate (L/100km) if segments == NULL */
 
     /* Fuel tank */
-    double tank_capacity;           /* Maximum tank capacity in gallons */
-    double current_fuel;            /* Current fuel level in gallons */
-    double minimum_fuel;            /* Minimum fuel level during route */
-    double minimum_fuel_at_end;     /* Minimum fuel level at destination */
+    double tank_capacity;           /* Maximum tank capacity (liters) */
+    double current_fuel;            /* Current fuel level (liters) */
+    double minimum_fuel;            /* Minimum fuel level during route (liters) */
+    double minimum_fuel_at_end;     /* Minimum fuel level at destination (liters) */
 
     /* Stations (snapped to route) */
     int num_stations;               /* Number of fuel stations */
     FWSnappedStation *stations;     /* Array of snapped stations */
 
     /* Optional constraints */
-    double min_purchase;            /* Minimum gallons per purchase (0 = no min) */
-    double stop_cost;               /* Fixed cost per stop in $ (0 = no cost) */
-    double remaining_fuel_value;    /* $/gallon credit for remaining fuel (0 = ignore) */
+    double min_purchase;            /* Minimum liters per purchase (0 = no min) */
+    double stop_cost;               /* Fixed cost per stop (0 = no cost) */
+    double remaining_fuel_value;    /* Credit per liter for remaining fuel (0 = ignore) */
 } FWRefuelProblem;
 
 /* ============================================================================
@@ -172,9 +199,9 @@ typedef struct {
     FWStatus status;        /* Solution status */
     int num_stops;          /* Number of stops made */
     double total_cost;      /* Total cost (fuel + stop costs - remaining fuel credit) */
-    double *purchases;      /* Gallons purchased at each station (array of num_stations) */
+    double *purchases;      /* Liters purchased at each station (array of num_stations) */
     int *stop_flags;        /* 1 if stopping at station, 0 otherwise (for MILP) */
-    double remaining_fuel;  /* Fuel remaining at destination */
+    double remaining_fuel;  /* Fuel remaining at destination (liters) */
     double gross_cost;      /* Fuel cost only (before remaining fuel credit) */
 } FWRefuelSolution;
 
@@ -193,6 +220,7 @@ typedef struct {
  * Complete Optimization Request
  *
  * All-in-one structure for the high-level fw_optimize_route() API.
+ * All values use SI units internally.
  * ============================================================================ */
 
 typedef struct {
@@ -208,16 +236,16 @@ typedef struct {
     FWFilterConfig filter_config;
 
     /* Input: Vehicle parameters */
-    double tank_capacity;
-    double current_fuel;
-    double consumption_mpg;
-    double minimum_fuel;
-    double minimum_fuel_at_end;
+    double tank_capacity;       /* liters */
+    double current_fuel;        /* liters */
+    double consumption;         /* L/100km */
+    double minimum_fuel;        /* liters */
+    double minimum_fuel_at_end; /* liters */
 
     /* Input: Optional constraints */
-    double min_purchase;
-    double stop_cost;
-    double remaining_fuel_value;
+    double min_purchase;        /* liters */
+    double stop_cost;           /* currency */
+    double remaining_fuel_value;/* currency per liter */
 
     /* Input: Route segments (optional) */
     int num_segments;

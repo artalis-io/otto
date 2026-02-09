@@ -1340,7 +1340,206 @@ For **API servers**:
 - [ ] Shutdown flag uses `volatile sig_atomic_t`
 - [ ] Uses thread-safe shared library APIs (`sh_ratelimit`, `sh_workqueue`)
 
-### 12. Memory Management Tradeoffs and Limitations
+### 12. Shared Library Delegation
+
+**Rule: Reusable functionality MUST live in `shared/`.**
+
+When auditing a module, check if any functionality can be delegated to or already exists in the shared library.
+
+#### What Belongs in `shared/`
+
+| Category | Examples in `shared/` | Check for Duplication |
+|----------|----------------------|----------------------|
+| **Geo** | `sh_haversine()`, `SHCoord`, `SH_EARTH_RADIUS_M` | Module has own distance calc? |
+| **Units** | `sh_km_to_miles()`, `sh_l100km_to_mpg()`, `SHUnitSystem` | Module defines unit constants? |
+| **Data Structures** | `sh_hashmap`, `sh_heap`, `sh_pool`, `sh_arena` | Module has own hashmap/heap? |
+| **HTTP** | `sh_ratelimit`, `sh_workqueue`, `sh_completion` | Module reimplements rate limiting? |
+| **Protobuf** | `sh_protobuf_*` | Module has own protobuf parsing? |
+| **Resilience** | `sh_circuit`, `sh_backoff`, `sh_retry` | Module has retry logic inline? |
+
+#### Audit Checks
+
+**Duplication Detection:**
+```c
+// BAD: Module duplicates shared functionality
+#define FW_EARTH_RADIUS_MILES 3958.8  // Use SH_EARTH_RADIUS_M instead!
+double fw_haversine(...) { ... }       // Use sh_haversine() instead!
+
+// GOOD: Delegate to shared
+#include "sh_geo.h"
+double distance_m = sh_haversine(a, b);
+```
+
+**Candidate for Extraction:**
+```c
+// If you find utility code that's not domain-specific, extract to shared/
+// Examples:
+// - Generic string helpers → shared/include/sh_string.h
+// - Time formatting → shared/include/sh_time.h
+// - Math utilities → shared/include/sh_math.h
+```
+
+#### Audit Questions
+
+When reviewing a module, ask:
+
+1. **Does this code exist in shared?** Search `shared/include/` for similar functionality
+2. **Is this domain-specific?** If no, it belongs in shared
+3. **Would other modules benefit?** If yes, extract to shared
+4. **Does the module reinvent geo/units/data structures?** Red flag for delegation
+
+#### Shared Delegation Checklist
+
+- [ ] No duplicate distance calculations (use `sh_haversine()`)
+- [ ] No duplicate unit definitions (use `sh_units.h` constants)
+- [ ] No custom coordinate types (use `SHCoord`)
+- [ ] No inline rate limiting (use `sh_ratelimit.h`)
+- [ ] No inline exponential backoff (use `sh_backoff.h`)
+- [ ] No custom hashmap implementations (use `sh_hashmap.h`)
+- [ ] Utility functions extracted to shared if reusable
+
+### 13. SI Units Enforcement (Internal Representation)
+
+**Rule: Internal calculations MUST use SI units. Imperial units only at API boundaries.**
+
+OTTO uses a consistent internal unit system for all calculations:
+
+| Quantity | Internal SI Unit | API Metric | API Imperial |
+|----------|-----------------|------------|--------------|
+| Distance | **meters** | km | miles |
+| Volume | **liters** | liters | gallons |
+| Efficiency | **L/100km** | L/100km | MPG |
+| Mass | **kilograms** | kg | lbs |
+| Price | **per liter** | $/L | $/gallon |
+
+#### Why SI Internally
+
+1. **Consistency**: `sh_haversine()` returns meters, all geo functions use meters
+2. **No conversion errors**: Single unit system eliminates mid-calculation conversions
+3. **Precision**: SI units are the international standard
+4. **Simplicity**: Convert once at API boundary, not throughout code
+
+#### Boundary Conversion Pattern
+
+```c
+// API INPUT (boundary): Convert to internal SI
+if (units == SH_UNITS_IMPERIAL) {
+    distance_m = sh_miles_to_m(input_distance);
+    consumption_l100km = sh_mpg_to_l100km(input_mpg);
+    volume_l = sh_gallons_to_liters(input_gallons);
+}
+
+// INTERNAL: All calculations in SI (meters, liters, L/100km, kg)
+double fuel_consumed_l = (distance_m / 100000.0) * consumption_l100km;
+
+// API OUTPUT (boundary): Convert from internal SI
+if (units == SH_UNITS_IMPERIAL) {
+    output_gallons = sh_liters_to_gallons(fuel_consumed_l);
+}
+```
+
+#### Audit Patterns to Flag
+
+**BAD: Imperial constants in internal code**
+```c
+// WRONG: Imperial radius used internally
+#define EARTH_RADIUS_MILES 3958.8
+double dist = haversine_miles(a, b);
+
+// RIGHT: SI radius, convert at boundary if needed
+#include "sh_geo.h"
+double dist_m = sh_haversine(a, b);  // Returns meters
+```
+
+**BAD: Unit-specific field names in internal structs**
+```c
+// WRONG: Field name implies imperial
+typedef struct {
+    double price_per_gallon;    // Imperial-specific name!
+    double consumption_mpg;     // Imperial-specific name!
+} Station;
+
+// RIGHT: Unit-agnostic names, document SI
+typedef struct {
+    double price;        // Price per liter (SI internal)
+    double consumption;  // L/100km (SI internal)
+} Station;
+```
+
+**BAD: Conversion mid-calculation**
+```c
+// WRONG: Converting in the middle of algorithm
+double dist_miles = dist_m / 1609.344;
+double fuel_gallons = dist_miles / mpg;
+
+// RIGHT: Work in SI, convert only at output
+double fuel_liters = (dist_m / 100000.0) * l100km;
+// Convert to gallons only when outputting to imperial API
+```
+
+**BAD: MPG formula internally (L/100km is inverse!)**
+```c
+// WRONG: MPG formula (higher = better)
+double fuel = distance / mpg;
+
+// RIGHT: L/100km formula (fuel per distance unit)
+// L/100km means: liters consumed per 100 kilometers
+// So: fuel(L) = distance(m) / 100000 * consumption(L/100km)
+double fuel = (distance_m / 100000.0) * l100km;
+```
+
+#### Unit System Documentation
+
+Every module should document its internal unit system:
+
+```c
+/*
+ * FuelWise uses SI units internally:
+ * - Distance: meters
+ * - Volume: liters
+ * - Fuel efficiency: L/100km
+ * - Mass: kilograms
+ * - Price: currency per liter
+ *
+ * API boundaries handle unit conversion via sh_units.h.
+ */
+```
+
+#### SI Units Checklist
+
+- [ ] No imperial constants defined (use `sh_units.h` for conversion)
+- [ ] No imperial unit suffixes in internal field names (`_miles`, `_mpg`, `_gallons`, `_lbs`)
+- [ ] Internal distance calculations use meters (from `sh_haversine()`)
+- [ ] Fuel consumption uses L/100km formula (not MPG formula)
+- [ ] Unit conversion only at API boundaries (input parsing, output formatting)
+- [ ] Module documents its internal SI unit system
+- [ ] Uses `SHUnitSystem` enum for API unit selection
+- [ ] Uses `sh_units.h` functions for conversions (`sh_miles_to_m()`, `sh_mpg_to_l100km()`, etc.)
+
+#### Common L/100km Formula Mistakes
+
+Remember: **L/100km is the inverse of MPG**
+
+| MPG | L/100km | Relationship |
+|-----|---------|--------------|
+| 30 | 7.84 | Higher MPG = lower L/100km |
+| 10 | 23.52 | Lower MPG = higher L/100km |
+| 6.5 | 36.19 | Typical truck efficiency |
+
+```c
+// Conversion formula
+double sh_mpg_to_l100km(double mpg) {
+    if (mpg <= 0) return 0;
+    return 235.214583 / mpg;  // The conversion constant
+}
+
+// Fuel consumption formula for L/100km:
+// distance is in meters, consumption is L/100km
+double fuel_liters = (distance_m / 100000.0) * consumption_l100km;
+// NOT: fuel = distance / consumption (that's the MPG formula!)
+```
+
+### 14. Memory Management Tradeoffs and Limitations
 
 Choosing a memory strategy affects API usability, problem size limits, and performance. This section documents real-world tradeoffs to help you choose wisely.
 
@@ -1664,12 +1863,27 @@ When `/c-audit <module>` is invoked:
    - Check shutdown flags use `volatile sig_atomic_t`
    - Verify mutex/rwlock usage for complex shared state
 
-10. **Verify OTTO Patterns**
+10. **Check Shared Library Delegation**
+    - Search for duplicate functionality that exists in `shared/`
+    - Flag custom distance calculations (should use `sh_haversine()`)
+    - Flag custom unit constants (should use `sh_units.h`)
+    - Flag custom coordinate types (should use `SHCoord`)
+    - Identify reusable utilities that should be extracted to shared
+
+11. **Check SI Units Enforcement**
+    - Flag imperial constants defined internally (`EARTH_RADIUS_MILES`, etc.)
+    - Flag imperial field name suffixes (`_miles`, `_mpg`, `_gallons`, `_lbs`)
+    - Verify internal distance calculations use meters
+    - Verify fuel consumption uses L/100km formula, not MPG formula
+    - Check unit conversions happen only at API boundaries
+    - Verify module documents its internal SI unit system
+
+12. **Verify OTTO Patterns**
     - Correct naming prefix for module
     - Consistent error handling
     - Proper header guards
 
-11. **Generate Report**
+13. **Generate Report**
     Format: Markdown table with findings, severity, file:line, and suggested fix
 
 ## Report Format
@@ -1835,6 +2049,25 @@ Before marking a module as "hardened":
 - [ ] Statistics counters use `atomic_uint_fast64_t` or similar
 - [ ] Shutdown flags use `volatile sig_atomic_t`
 - [ ] Read-only-after-init globals clearly documented
+
+**Shared Library Delegation:**
+- [ ] No duplicate distance calculations (use `sh_haversine()`)
+- [ ] No duplicate unit definitions (use `sh_units.h` constants)
+- [ ] No custom coordinate types (use `SHCoord`)
+- [ ] No inline rate limiting (use `sh_ratelimit.h`)
+- [ ] No inline exponential backoff (use `sh_backoff.h`)
+- [ ] No custom hashmap implementations (use `sh_hashmap.h`)
+- [ ] Utility functions extracted to shared if reusable
+
+**SI Units Enforcement (Internal Representation):**
+- [ ] No imperial constants defined internally (use `sh_units.h` for conversion)
+- [ ] No imperial unit suffixes in internal field names (`_miles`, `_mpg`, `_gallons`, `_lbs`)
+- [ ] Internal distance calculations use meters (from `sh_haversine()`)
+- [ ] Fuel consumption uses L/100km formula: `fuel = (distance_m / 100000.0) * l100km`
+- [ ] Unit conversion only at API boundaries (input parsing, output formatting)
+- [ ] Module documents its internal SI unit system
+- [ ] Uses `SHUnitSystem` enum for API unit selection
+- [ ] Uses `sh_units.h` functions for conversions
 
 **Standards:**
 - [ ] Follows OTTO naming conventions

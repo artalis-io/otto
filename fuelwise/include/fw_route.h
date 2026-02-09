@@ -23,14 +23,14 @@ extern "C" {
 /*
  * Filter stations by distance to a polyline and snap them to the route.
  *
- * Finds all stations within max_distance_miles of the route, projects them
+ * Finds all stations within max_distance (meters) of the route, projects them
  * onto the route, and returns them sorted by distance along the route.
  *
  * Parameters:
  *   stations          - Array of input stations
  *   num_stations      - Number of input stations
  *   polyline          - Route polyline
- *   max_distance_miles - Maximum perpendicular distance to include a station
+ *   max_distance      - Maximum perpendicular distance in meters
  *   result            - Output: allocated array of snapped stations
  *   result_count      - Output: number of stations in result
  *
@@ -39,13 +39,13 @@ extern "C" {
  *
  * Notes:
  *   - Caller must free result->stations using fw_free_snapped_stations()
- *   - Result is sorted by distance_from_start
+ *   - Result is sorted by distance_from_start (in meters)
  */
 int fw_filter_stations(
     const FWStation *stations,
     int num_stations,
     const FWPolyline *polyline,
-    double max_distance_miles,
+    double max_distance,
     FWSnappedStation **result,
     int *result_count
 );
