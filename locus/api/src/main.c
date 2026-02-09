@@ -1162,7 +1162,7 @@ int main(int argc, char *argv[]) {
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
 
-    char listen_addr[320];  /* http:// + 253 char DNS + :port */
+    char listen_addr[SH_URL_MAX];
     snprintf(listen_addr, sizeof(listen_addr), "http://%s:%d",
              s_config.server.host, s_config.server.port);
 

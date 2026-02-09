@@ -26,6 +26,26 @@ extern "C" {
 #endif
 
 /* ============================================================================
+ * Buffer Size Constants
+ * ============================================================================ */
+
+/*
+ * DNS hostname max is 253 chars (RFC 1035). Add padding for null + alignment.
+ */
+#define SH_HOSTNAME_MAX 256
+
+/*
+ * Full URL buffer: "http://" (7) + hostname (253) + ":" (1) + port (5) + null (1) = 267
+ * Rounded up for alignment.
+ */
+#define SH_URL_MAX 320
+
+/*
+ * Path buffer for filesystem paths.
+ */
+#define SH_PATH_MAX 512
+
+/* ============================================================================
  * Types
  * ============================================================================ */
 
@@ -35,7 +55,7 @@ extern "C" {
 typedef struct {
     /* Network */
     int port;                    /* Listen port */
-    char host[256];              /* Bind address (DNS max is 253 chars) */
+    char host[SH_HOSTNAME_MAX];  /* Bind address (DNS max is 253 chars) */
 
     /* Threading */
     int worker_threads;          /* Worker thread count (0 = auto) */
@@ -61,8 +81,8 @@ typedef struct {
     double adaptive_alpha;       /* EMA smoothing factor */
 
     /* Paths */
-    char static_dir[256];        /* Static files directory */
-    char data_file[512];         /* Primary data file (PBF, index, etc.) */
+    char static_dir[SH_PATH_MAX];  /* Static files directory */
+    char data_file[SH_PATH_MAX];   /* Primary data file (PBF, index, etc.) */
 
     /* Logging */
     int verbose;                 /* Verbosity level (0-3) */
