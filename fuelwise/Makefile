@@ -36,6 +36,7 @@ SOURCES = $(SRC_DIR)/fw_geo.c \
           $(SRC_DIR)/fw_route.c \
           $(SRC_DIR)/fw_refuel.c \
           $(SRC_DIR)/fw_api.c \
+          $(SRC_DIR)/fw_consumption.c \
           $(SRC_DIR)/fuelwise.c
 
 OBJECTS = $(SOURCES:.c=.o)
