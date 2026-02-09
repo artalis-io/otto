@@ -493,8 +493,8 @@ static int adaptive_recalc_locked(ShAdaptiveTracker *tracker, ShCapacityParams *
         return 0;
     }
 
-    /* Copy samples for sorting */
-    double *sorted = malloc(tracker->sample_count * sizeof(double));
+    /* Copy samples for sorting - use calloc for overflow protection */
+    double *sorted = calloc(tracker->sample_count, sizeof(double));
     if (!sorted) return 0;
 
     memcpy(sorted, tracker->samples, tracker->sample_count * sizeof(double));
@@ -607,8 +607,8 @@ void sh_adaptive_stats(ShAdaptiveTracker *tracker, ShAdaptiveStats *stats) {
     pthread_mutex_lock(&tracker->mutex);
 
     if (tracker->sample_count > 0) {
-        /* Copy and sort for percentiles */
-        double *sorted = malloc(tracker->sample_count * sizeof(double));
+        /* Copy and sort for percentiles - use calloc for overflow protection */
+        double *sorted = calloc(tracker->sample_count, sizeof(double));
         if (sorted) {
             memcpy(sorted, tracker->samples, tracker->sample_count * sizeof(double));
             qsort(sorted, tracker->sample_count, sizeof(double), compare_double);
