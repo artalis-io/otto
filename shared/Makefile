@@ -2,8 +2,19 @@
 # Common utilities for OTTO platform
 
 CC ?= gcc
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE
-LDFLAGS = -lm -lpthread
+
+# Platform-specific settings
+UNAME_S := $(shell uname -s)
+
+# Production build (with hardening)
+# Note: -pie is implicit on macOS, only add on Linux
+CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE \
+         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+ifeq ($(UNAME_S),Linux)
+    LDFLAGS = -lm -lpthread -pie -Wl,-z,relro,-z,now
+else
+    LDFLAGS = -lm -lpthread
+endif
 
 # Include paths
 INCLUDES = -Iinclude -I../vendor/miniz
@@ -11,8 +22,10 @@ INCLUDES = -Iinclude -I../vendor/miniz
 # Vendor path
 VENDOR_DIR = ../vendor/miniz
 
-# Debug build
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG
+# Debug build (with sanitizers)
+DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
+               -fsanitize=address,undefined -fno-omit-frame-pointer
+DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 # Source files (core library - no external dependencies beyond miniz)
 SRCS = src/sh_geo.c \
@@ -119,8 +132,9 @@ $(FONT_COMPARE_BIN): tests/font_compare.c $(LIB)
 generate-font-data:
 	python3 fonts/generate_font_data.py fonts/ui-font.json fonts/ui-font.png src/sh_font_data.c
 
-# Debug build
+# Debug build (with sanitizers)
 debug: CFLAGS = $(DEBUG_CFLAGS)
+debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Clean

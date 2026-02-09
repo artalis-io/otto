@@ -1,7 +1,10 @@
 # Ralph LP/MIP Solver Makefile
 
 CC = gcc
-CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math
+
+# Production build (with hardening)
+CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math \
+         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
 
 # OpenMP SIMD support (portable vectorization)
 # On macOS: brew install libomp && use clang with -Xclang -fopenmp
@@ -13,12 +16,15 @@ ifeq ($(UNAME_S),Darwin)
     CFLAGS += -Xclang -fopenmp -I$(OMP_PREFIX)/include
     OMP_LDFLAGS = -L$(OMP_PREFIX)/lib -lomp
 else
-    # Linux: use gcc's native OpenMP
+    # Linux: use gcc's native OpenMP with RELRO
     CFLAGS += -fopenmp
-    OMP_LDFLAGS = -fopenmp
+    OMP_LDFLAGS = -fopenmp -Wl,-z,relro,-z,now
 endif
 
-CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG
+# Debug build (with sanitizers)
+CFLAGS_DEBUG = -Wall -Wextra -g -O0 -DDEBUG \
+               -fsanitize=address,undefined -fno-omit-frame-pointer
+DEBUG_LDFLAGS = -fsanitize=address,undefined
 INCLUDES = -I./include -I../shared/include
 SHARED_LIB = ../shared/libshared.a
 LDFLAGS = -lm $(OMP_LDFLAGS)
@@ -131,8 +137,9 @@ $(SRC_DIR)/optim/%.o: $(SRC_DIR)/optim/%.c
 $(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
-# Debug build
+# Debug build (with sanitizers)
 debug: CFLAGS = $(CFLAGS_DEBUG)
+debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
