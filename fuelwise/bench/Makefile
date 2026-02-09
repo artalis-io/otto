@@ -16,8 +16,8 @@ else
     OMP_LDFLAGS = -fopenmp
 endif
 
-# Library paths
-LDFLAGS = -L.. -L../../shared -L../../ralph -lfuelwise -lshared -lralph -lm -lpthread $(OMP_LDFLAGS)
+# Library paths (order matters: fuelwise -> ralph -> shared)
+LDFLAGS = -L.. -L../../shared -L../../ralph -lfuelwise -lralph -lshared -lm -lpthread $(OMP_LDFLAGS)
 
 # Source files
 SRCS = main.c fw_bench.c fw_gen.c fw_validate.c
