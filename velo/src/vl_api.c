@@ -56,6 +56,7 @@ VLAPIContext *vl_api_create(VLGraph *graph, VLLandmarks *landmarks,
         ctx->landmark_count = config->landmark_count;
     } else {
         strncpy(ctx->name, "velo-route-server", sizeof(ctx->name) - 1);
+        ctx->name[sizeof(ctx->name) - 1] = '\0';
     }
 
     return ctx;
@@ -132,8 +133,14 @@ static int parse_coord(const char *str, double *lat, double *lon) {
     if (!comma) return -1;
     *comma = '\0';
 
-    *lat = atof(buf);
-    *lon = atof(comma + 1);
+    /* Use strtod for proper error detection */
+    char *end_lat;
+    char *end_lon;
+    *lat = strtod(buf, &end_lat);
+    *lon = strtod(comma + 1, &end_lon);
+
+    /* Reject if no digits were consumed */
+    if (end_lat == buf || end_lon == comma + 1) return -1;
 
     /* Reject inf/NaN from malformed input */
     if (!isfinite(*lat) || !isfinite(*lon)) return -1;

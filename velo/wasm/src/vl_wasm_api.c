@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include "velo.h"
 #include "monaco_vlg.h"
 
@@ -96,46 +97,63 @@ static const char *get_query_param(const char *query, const char *name, char *bu
     return NULL;
 }
 
+/* Safe coordinate parsing with validation */
+static int safe_parse_coord(const char *str, double *out, double min_val, double max_val) {
+    if (!str || !*str) return -1;
+
+    char *end;
+    double val = strtod(str, &end);
+
+    /* No digits consumed */
+    if (end == str) return -1;
+
+    /* Reject inf/nan */
+    if (!isfinite(val)) return -1;
+
+    /* Range check */
+    if (val < min_val || val > max_val) return -1;
+
+    *out = val;
+    return 0;
+}
+
 /* Handle GET /api/v1/route */
 static void handle_route(const char *query) {
     char buf[64];
+    double from_lat, from_lon, to_lat, to_lon;
 
-    /* Parse coordinates */
+    /* Parse coordinates with validation */
     const char *from_lat_str = get_query_param(query, "from_lat", buf, sizeof(buf));
-    if (!from_lat_str) {
+    if (!from_lat_str || safe_parse_coord(from_lat_str, &from_lat, -90.0, 90.0) != 0) {
         g_response_status = 400;
         g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"Missing from_lat parameter\"}");
+            "{\"error\": \"Missing or invalid from_lat parameter\"}");
         return;
     }
-    double from_lat = atof(from_lat_str);
 
     const char *from_lon_str = get_query_param(query, "from_lon", buf, sizeof(buf));
-    if (!from_lon_str) {
+    if (!from_lon_str || safe_parse_coord(from_lon_str, &from_lon, -180.0, 180.0) != 0) {
         g_response_status = 400;
         g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"Missing from_lon parameter\"}");
+            "{\"error\": \"Missing or invalid from_lon parameter\"}");
         return;
     }
-    double from_lon = atof(from_lon_str);
 
     const char *to_lat_str = get_query_param(query, "to_lat", buf, sizeof(buf));
-    if (!to_lat_str) {
+    if (!to_lat_str || safe_parse_coord(to_lat_str, &to_lat, -90.0, 90.0) != 0) {
         g_response_status = 400;
         g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"Missing to_lat parameter\"}");
+            "{\"error\": \"Missing or invalid to_lat parameter\"}");
         return;
     }
-    double to_lat = atof(to_lat_str);
 
     const char *to_lon_str = get_query_param(query, "to_lon", buf, sizeof(buf));
-    if (!to_lon_str) {
+    if (!to_lon_str || safe_parse_coord(to_lon_str, &to_lon, -180.0, 180.0) != 0) {
         g_response_status = 400;
         g_response_len = snprintf(g_response_buf, sizeof(g_response_buf),
-            "{\"error\": \"Missing to_lon parameter\"}");
+            "{\"error\": \"Missing or invalid to_lon parameter\"}");
         return;
     }
-    double to_lon = atof(to_lon_str);
 
     /* Parse optional parameters */
     VLRouteOptions opts;
