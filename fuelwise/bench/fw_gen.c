@@ -42,6 +42,7 @@ FWBenchConfig fw_bench_config_short_urban(void)
     cfg.cargo_weight_mean_kg = 6000;
     cfg.cargo_weight_stddev_kg = 2000;
     cfg.min_fuel_l = 50;
+    cfg.min_purchase_l = 0;             /* 0 = LP solver (fast) */
     cfg.start_fuel_fraction = 0.5;      /* Half tank at start */
     cfg.base_price_per_l = 1.55;        /* EUR/L */
     cfg.price_stddev = 0.15;
@@ -66,6 +67,7 @@ FWBenchConfig fw_bench_config_highway(void)
     cfg.cargo_weight_mean_kg = 8000;
     cfg.cargo_weight_stddev_kg = 2500;
     cfg.min_fuel_l = 60;
+    cfg.min_purchase_l = 0;             /* 0 = LP solver (fast) */
     cfg.start_fuel_fraction = 0.6;
     cfg.base_price_per_l = 1.50;
     cfg.price_stddev = 0.18;            /* Higher variance across countries */
@@ -90,6 +92,7 @@ FWBenchConfig fw_bench_config_long_haul(void)
     cfg.cargo_weight_mean_kg = 10000;
     cfg.cargo_weight_stddev_kg = 3000;
     cfg.min_fuel_l = 80;
+    cfg.min_purchase_l = 0;             /* 0 = LP solver (fast) */
     cfg.start_fuel_fraction = 0.7;
     cfg.base_price_per_l = 1.45;        /* Varies by country */
     cfg.price_stddev = 0.25;            /* Large variance (Spain vs Poland) */
@@ -114,6 +117,7 @@ FWBenchConfig fw_bench_config_tight_margins(void)
     cfg.cargo_weight_mean_kg = 12000;   /* Heavy loads */
     cfg.cargo_weight_stddev_kg = 2000;
     cfg.min_fuel_l = 40;
+    cfg.min_purchase_l = 0;             /* 0 = LP solver (fast) */
     cfg.start_fuel_fraction = 0.3;      /* Low starting fuel */
     cfg.base_price_per_l = 1.35;        /* Lower base (Eastern Europe) */
     cfg.price_stddev = 0.20;
@@ -293,7 +297,7 @@ int fw_bench_generate(const FWBenchConfig *config, FWBenchInstance *out)
     out->problem.minimum_fuel_at_end = config->min_fuel_l;
     out->problem.num_stations = num_stations;
     out->problem.stations = stations;
-    out->problem.min_purchase = 0;
+    out->problem.min_purchase = config->min_purchase_l;
     out->problem.stop_cost = 0;
     out->problem.remaining_fuel_value = 0;
 

@@ -70,8 +70,11 @@ int fw_bench_run(
 
         double t0 = get_time_ms();
 
+        /* Use MILP if explicitly requested or if min_purchase is set */
+        int needs_milp = use_milp || (instance.problem.min_purchase > 0.01);
+
         int rc;
-        if (use_milp) {
+        if (needs_milp) {
             rc = fw_solve_refuel_milp(&instance.problem, &solution);
         } else {
             rc = fw_solve_refuel_lp(&instance.problem, &solution);
