@@ -17,12 +17,19 @@ OBJS = $(SRCS:.c=.o)
 # Target binary
 TARGET = fuelwise-bench
 
-.PHONY: all clean test quick
+# Validator test binary
+TEST_VALIDATOR = test_validator
+TEST_VALIDATOR_OBJS = test_validator.o fw_bench.o fw_gen.o fw_validate.o
+
+.PHONY: all clean test quick validator-test
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS) ../libfuelwise.a ../../shared/libshared.a ../../ralph/libralph.a
 	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) -o $@
+
+$(TEST_VALIDATOR): $(TEST_VALIDATOR_OBJS) ../libfuelwise.a ../../shared/libshared.a ../../ralph/libralph.a
+	$(CC) $(CFLAGS) $(TEST_VALIDATOR_OBJS) $(LDFLAGS) -o $@
 
 %.o: %.c fw_bench.h
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
@@ -51,8 +58,12 @@ test: $(TARGET)
 quick: $(TARGET)
 	./$(TARGET) --runs 5 --scenario highway
 
+# Run validator tests
+validator-test: $(TEST_VALIDATOR)
+	./$(TEST_VALIDATOR)
+
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f $(OBJS) $(TEST_VALIDATOR_OBJS) $(TARGET) $(TEST_VALIDATOR)
 
 help:
 	@echo "FuelWise Benchmark"
