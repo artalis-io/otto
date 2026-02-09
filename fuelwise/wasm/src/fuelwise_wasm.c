@@ -112,7 +112,10 @@ int wasm_filter_stations(
 
     if (ret != 0) return -1;
 
-    /* Copy to result buffer */
+    /* Copy to result buffer.
+     * NOTE: result_buffer_size is the count of double values in the buffer.
+     * Each filtered station requires 4 doubles, so max_results = size / 4.
+     */
     int max_results = result_buffer_size / 4;
     int copy_count = (filtered_count < max_results) ? filtered_count : max_results;
 
@@ -149,6 +152,12 @@ int wasm_solve_simple(
     /* Validate inputs */
     if (!stations_flat || num_stations <= 0 ||
         !result_purchases || !result_meta) {
+        return -1;
+    }
+
+    /* Validate physical parameters */
+    if (total_distance <= 0 || tank_capacity <= 0 ||
+        current_fuel < 0 || consumption_mpg <= 0 || minimum_fuel < 0) {
         return -1;
     }
 
@@ -228,6 +237,15 @@ int wasm_solve_segments(
         return -1;
     }
     if (num_segments > 0 && !segments_flat) {
+        return -1;
+    }
+    if (num_segments < 0) {
+        return -1;
+    }
+
+    /* Validate physical parameters */
+    if (total_distance <= 0 || tank_capacity <= 0 ||
+        current_fuel < 0 || minimum_fuel < 0) {
         return -1;
     }
 
