@@ -432,7 +432,8 @@ static CTOSMFeatureClass classify_tags(const SHStringTable *st,
 
         /* Admin level */
         if (strcmp(key, "admin_level") == 0) {
-            int level = atoi(val);
+            /* Parse admin_level with bounds check (OSM levels 1-12), default to 99 (OTHER) */
+            int level = sh_parse_int(val, 99, 1, 12);
             /* Bucket to defined LOD levels (2, 4, 6, 8, 10) */
             if (level <= 2) admin_level = CT_BOUNDARY_COUNTRY;
             else if (level <= 4) admin_level = CT_BOUNDARY_STATE;
@@ -1113,7 +1114,8 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
                 } else if (strcmp(key, "name") == 0) {
                     name = val;
                 } else if (strcmp(key, "population") == 0) {
-                    population = atoi(val);
+                    /* Parse population with bounds check, default 0 */
+                    population = sh_parse_int(val, 0, 0, 100000000);
                 } else if (strcmp(key, "natural") == 0 && strcmp(val, "peak") == 0) {
                     is_peak = 1;
                 }
@@ -1483,7 +1485,8 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
             }
         }
         if (strcmp(key, "admin_level") == 0) {
-            admin_level = atoi(val);
+            /* Parse admin_level with bounds check (OSM levels 1-12), default -1 (unset) */
+            admin_level = sh_parse_int(val, -1, 1, 12);
         }
     }
 
