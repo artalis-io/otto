@@ -20,6 +20,7 @@
 #include "sh_units.h"
 #include "sh_piecewise.h"
 #include "sh_stepfunc.h"
+#include "sh_dist.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4332,6 +4333,321 @@ TEST(step_null_safety)
 }
 
 /* ============================================================================
+ * RNG and Distributions
+ * ============================================================================ */
+
+TEST(rng_create_free)
+{
+    SHRng *rng = sh_rng_create(SH_RNG_XORSHIFT128);
+    ASSERT(rng != NULL);
+    sh_rng_free(rng);
+
+    rng = sh_rng_create(SH_RNG_PCG64);
+    ASSERT(rng != NULL);
+    sh_rng_free(rng);
+
+    rng = sh_rng_create(SH_RNG_SPLITMIX64);
+    ASSERT(rng != NULL);
+    sh_rng_free(rng);
+
+    rng = sh_rng_create_default();
+    ASSERT(rng != NULL);
+    sh_rng_free(rng);
+
+    /* Free NULL should be safe */
+    sh_rng_free(NULL);
+}
+
+TEST(rng_seed_reproducibility)
+{
+    SHRng *rng1 = sh_rng_create(SH_RNG_XORSHIFT128);
+    SHRng *rng2 = sh_rng_create(SH_RNG_XORSHIFT128);
+
+    sh_rng_seed(rng1, 12345);
+    sh_rng_seed(rng2, 12345);
+
+    /* Same seed should produce same sequence */
+    for (int i = 0; i < 10; i++) {
+        uint64_t v1 = sh_rng_next_u64(rng1);
+        uint64_t v2 = sh_rng_next_u64(rng2);
+        ASSERT(v1 == v2);
+    }
+
+    sh_rng_free(rng1);
+    sh_rng_free(rng2);
+}
+
+TEST(rng_uniform_range)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 42);
+
+    /* Test uniform in [0, 1) */
+    for (int i = 0; i < 100; i++) {
+        double u = sh_rng_uniform(rng);
+        ASSERT(u >= 0.0 && u < 1.0);
+    }
+
+    /* Test uniform in [a, b) */
+    for (int i = 0; i < 100; i++) {
+        double u = sh_rng_uniform_range(rng, 10.0, 20.0);
+        ASSERT(u >= 10.0 && u < 20.0);
+    }
+
+    /* Test int in [a, b] */
+    for (int i = 0; i < 100; i++) {
+        int v = sh_rng_int_range(rng, 5, 10);
+        ASSERT(v >= 5 && v <= 10);
+    }
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_state_save_restore)
+{
+    SHRng *rng = sh_rng_create(SH_RNG_XORSHIFT128);
+    sh_rng_seed(rng, 999);
+
+    /* Generate some values */
+    sh_rng_next_u64(rng);
+    sh_rng_next_u64(rng);
+
+    /* Save state */
+    size_t state_size = sh_rng_state_size(rng);
+    void *state = malloc(state_size);
+    sh_rng_save_state(rng, state);
+
+    /* Generate more values */
+    uint64_t v1 = sh_rng_next_u64(rng);
+    uint64_t v2 = sh_rng_next_u64(rng);
+    uint64_t v3 = sh_rng_next_u64(rng);
+
+    /* Restore state */
+    sh_rng_restore_state(rng, state);
+
+    /* Should reproduce same values */
+    ASSERT(sh_rng_next_u64(rng) == v1);
+    ASSERT(sh_rng_next_u64(rng) == v2);
+    ASSERT(sh_rng_next_u64(rng) == v3);
+
+    free(state);
+    sh_rng_free(rng);
+}
+
+TEST(rng_normal)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 123);
+
+    /* Generate many samples and check mean/stddev approximately */
+    double sum = 0.0, sum_sq = 0.0;
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        double x = sh_rng_normal(rng, 100.0, 15.0);
+        sum += x;
+        sum_sq += x * x;
+    }
+
+    double mean = sum / n;
+    double var = sum_sq / n - mean * mean;
+    double stddev = sqrt(var);
+
+    /* Mean should be close to 100, stddev close to 15 */
+    ASSERT(fabs(mean - 100.0) < 1.0);  /* Within 1 */
+    ASSERT(fabs(stddev - 15.0) < 1.0);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_exponential)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 456);
+
+    /* Rate = 2, mean should be 0.5 */
+    double sum = 0.0;
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        double x = sh_rng_exponential(rng, 2.0);
+        ASSERT(x >= 0.0);  /* Exponential is non-negative */
+        sum += x;
+    }
+
+    double mean = sum / n;
+    ASSERT(fabs(mean - 0.5) < 0.05);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_gamma)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 789);
+
+    /* Shape=2.5, scale=15 -> mean=37.5 */
+    double sum = 0.0;
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        double x = sh_rng_gamma(rng, 2.5, 15.0);
+        ASSERT(x >= 0.0);
+        sum += x;
+    }
+
+    double mean = sum / n;
+    /* Mean of gamma = shape * scale = 2.5 * 15 = 37.5 */
+    ASSERT(fabs(mean - 37.5) < 2.0);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_poisson)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 321);
+
+    /* Lambda = 5, mean should be 5 */
+    double sum = 0.0;
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        int k = sh_rng_poisson(rng, 5.0);
+        ASSERT(k >= 0);
+        sum += k;
+    }
+
+    double mean = sum / n;
+    ASSERT(fabs(mean - 5.0) < 0.2);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_shuffle)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 111);
+
+    int arr[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    int original_sum = 0;
+    for (int i = 0; i < 10; i++) original_sum += arr[i];
+
+    sh_rng_shuffle(rng, arr, 10, sizeof(int));
+
+    /* Sum should be preserved */
+    int new_sum = 0;
+    for (int i = 0; i < 10; i++) new_sum += arr[i];
+    ASSERT(new_sum == original_sum);
+
+    /* Should be different from sorted (with high probability) */
+    int is_sorted = 1;
+    for (int i = 0; i < 9; i++) {
+        if (arr[i] > arr[i + 1]) {
+            is_sorted = 0;
+            break;
+        }
+    }
+    ASSERT(is_sorted == 0);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_choice)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 222);
+
+    double weights[] = {1.0, 0.0, 3.0, 0.0, 1.0};  /* Indices 0, 2, 4 should be chosen */
+    int counts[5] = {0};
+    int n = 10000;
+
+    for (int i = 0; i < n; i++) {
+        int choice = sh_rng_choice(rng, weights, 5);
+        ASSERT(choice >= 0 && choice < 5);
+        counts[choice]++;
+    }
+
+    /* Indices with zero weight should not be chosen */
+    ASSERT(counts[1] == 0);
+    ASSERT(counts[3] == 0);
+
+    /* Index 2 should be chosen most often (weight 3) */
+    ASSERT(counts[2] > counts[0]);
+    ASSERT(counts[2] > counts[4]);
+
+    sh_rng_free(rng);
+}
+
+TEST(rng_sample)
+{
+    SHRng *rng = sh_rng_create_default();
+    sh_rng_seed(rng, 333);
+
+    int out[5];
+    sh_rng_sample(rng, 20, 5, out);
+
+    /* All should be in [0, 19] */
+    for (int i = 0; i < 5; i++) {
+        ASSERT(out[i] >= 0 && out[i] < 20);
+    }
+
+    /* All should be unique */
+    for (int i = 0; i < 5; i++) {
+        for (int j = i + 1; j < 5; j++) {
+            ASSERT(out[i] != out[j]);
+        }
+    }
+
+    sh_rng_free(rng);
+}
+
+TEST(dist_pdf_cdf)
+{
+    /* Normal PDF at mean should be highest */
+    double pdf_at_mean = sh_dist_normal_pdf(0.0, 0.0, 1.0);
+    double pdf_at_1 = sh_dist_normal_pdf(1.0, 0.0, 1.0);
+    double pdf_at_2 = sh_dist_normal_pdf(2.0, 0.0, 1.0);
+    ASSERT(pdf_at_mean > pdf_at_1);
+    ASSERT(pdf_at_1 > pdf_at_2);
+
+    /* Normal CDF at mean should be 0.5 */
+    double cdf_at_mean = sh_dist_normal_cdf(0.0, 0.0, 1.0);
+    ASSERT_NEAR(cdf_at_mean, 0.5, 0.001);
+
+    /* Exponential PDF at 0 equals rate */
+    double exp_pdf_0 = sh_dist_exponential_pdf(0.0, 2.0);
+    ASSERT_NEAR(exp_pdf_0, 2.0, 0.001);
+
+    /* Exponential CDF at 0 is 0 */
+    double exp_cdf_0 = sh_dist_exponential_cdf(0.0, 2.0);
+    ASSERT_NEAR(exp_cdf_0, 0.0, 0.001);
+}
+
+TEST(rng_backend_comparison)
+{
+    /* Different backends with same seed should produce different sequences */
+    SHRng *xor = sh_rng_create(SH_RNG_XORSHIFT128);
+    SHRng *pcg = sh_rng_create(SH_RNG_PCG64);
+    SHRng *split = sh_rng_create(SH_RNG_SPLITMIX64);
+
+    sh_rng_seed(xor, 12345);
+    sh_rng_seed(pcg, 12345);
+    sh_rng_seed(split, 12345);
+
+    uint64_t v_xor = sh_rng_next_u64(xor);
+    uint64_t v_pcg = sh_rng_next_u64(pcg);
+    uint64_t v_split = sh_rng_next_u64(split);
+
+    /* Should all be different (with overwhelming probability) */
+    ASSERT(v_xor != v_pcg || v_pcg != v_split);
+
+    sh_rng_free(xor);
+    sh_rng_free(pcg);
+    sh_rng_free(split);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -4682,6 +4998,21 @@ int main(void)
     RUN_TEST(step_pwl_integrate_weight_changes);
     RUN_TEST(step_utilities);
     RUN_TEST(step_null_safety);
+
+    printf("\nRNG and Distributions:\n");
+    RUN_TEST(rng_create_free);
+    RUN_TEST(rng_seed_reproducibility);
+    RUN_TEST(rng_uniform_range);
+    RUN_TEST(rng_state_save_restore);
+    RUN_TEST(rng_normal);
+    RUN_TEST(rng_exponential);
+    RUN_TEST(rng_gamma);
+    RUN_TEST(rng_poisson);
+    RUN_TEST(rng_shuffle);
+    RUN_TEST(rng_choice);
+    RUN_TEST(rng_sample);
+    RUN_TEST(dist_pdf_cdf);
+    RUN_TEST(rng_backend_comparison);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
