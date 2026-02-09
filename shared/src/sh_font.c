@@ -506,3 +506,122 @@ float sh_font_msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
     /* Linear clamp for anti-aliased edge (matches WebGL shader exactly) */
     return clampf(screenPxDist + 0.5f, 0.0f, 1.0f);
 }
+
+/* ============================================================================
+ * Glyph Rendering
+ * ============================================================================ */
+
+#include "sh_render.h"
+#include <math.h>
+
+void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
+                          const SHFont *font, const SHGlyph *glyph,
+                          int x, int y, float font_size,
+                          uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
+                          float threshold)
+{
+    if (!pixels || !font || !glyph || font_size <= 0.0f) {
+        return;
+    }
+
+    /* Calculate glyph dimensions in screen pixels */
+    float glyph_width = (glyph->plane.right - glyph->plane.left) * font_size;
+    float glyph_height = (glyph->plane.top - glyph->plane.bottom) * font_size;
+
+    if (glyph_width <= 0.0f || glyph_height <= 0.0f) {
+        return;
+    }
+
+    /* Extend by 1 pixel on each side to capture MSDF anti-aliasing at edges
+     * (WebGL renders a quad that covers the full UV range; we need to match) */
+    int gx = x - 1;
+    int gy = y - 1;
+    int px_width = (int)ceilf(glyph_width) + 2;
+    int px_height = (int)ceilf(glyph_height) + 2;
+
+    /* Early bounds check */
+    if (gx + px_width < 0 || gx >= buf_width ||
+        gy + px_height < 0 || gy >= buf_height) {
+        return;
+    }
+
+    /* Sample each pixel in the glyph bounding box */
+    for (int py = 0; py < px_height; py++) {
+        int screen_y = gy + py;
+        if (screen_y < 0 || screen_y >= buf_height) continue;
+
+        for (int px = 0; px < px_width; px++) {
+            int screen_x = gx + px;
+            if (screen_x < 0 || screen_x >= buf_width) continue;
+
+            /* Map screen pixel to local glyph coordinates [0, 1]
+             * Account for the 1-pixel extension on each side */
+            float local_x = ((float)px - 0.5f) / glyph_width;
+            float local_y = ((float)py - 0.5f) / glyph_height;
+
+            /* Get MSDF coverage with threshold (uses bilinear sampling) */
+            float coverage = sh_font_msdf_coverage_threshold(font, glyph,
+                                                              local_x, local_y,
+                                                              font_size, threshold);
+
+            if (coverage <= 0.0f) continue;
+
+            /* Apply coverage to alpha */
+            uint8_t pixel_alpha = (uint8_t)(alpha * coverage);
+            if (pixel_alpha == 0) continue;
+
+            /* Blend pixel using sh_render */
+            uint32_t color = SH_RGBA(r, g, b, pixel_alpha);
+            sh_blend_pixel(pixels, buf_width, buf_height, screen_x, screen_y, color);
+        }
+    }
+}
+
+void sh_font_render_text(uint8_t *pixels, int buf_width, int buf_height,
+                         const SHFont *font, const char *text, int len,
+                         float x, float y, float font_size,
+                         uint8_t r, uint8_t g, uint8_t b, uint8_t alpha)
+{
+    if (!pixels || !font || !text || font_size <= 0.0f) {
+        return;
+    }
+
+    if (len < 0) {
+        len = 0;
+        const char *p = text;
+        while (*p++) len++;
+    }
+
+    /* y is top of text bounding box - calculate baseline */
+    float baseline_y = y + sh_font_ascent(font, font_size);
+    float cursor_x = x;
+
+    for (int i = 0; i < len; ) {
+        uint32_t codepoint;
+        int bytes = sh_utf8_decode(text + i, &codepoint);
+
+        const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
+        if (!glyph) {
+            i += bytes;
+            continue;
+        }
+
+        /* Calculate glyph dimensions in screen pixels */
+        float glyph_w = (glyph->plane.right - glyph->plane.left) * font_size;
+        float glyph_h = (glyph->plane.top - glyph->plane.bottom) * font_size;
+
+        if (glyph_w > 0.0f && glyph_h > 0.0f) {
+            /* Calculate glyph position */
+            float glyph_x = cursor_x + glyph->plane.left * font_size;
+            float glyph_y = baseline_y - glyph->plane.top * font_size;
+
+            sh_font_render_glyph(pixels, buf_width, buf_height,
+                                 font, glyph,
+                                 (int)glyph_x, (int)glyph_y, font_size,
+                                 r, g, b, alpha, 0.5f);
+        }
+
+        cursor_x += glyph->advance * font_size;
+        i += bytes;
+    }
+}

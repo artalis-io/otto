@@ -1596,67 +1596,16 @@ void ct_render_glyph(CTRenderContext *ctx,
                      const SHFont *font, float font_size,
                      CTColor color, float threshold)
 {
-    if (!ctx || !glyph || !font || font_size <= 0.0f) {
+    if (!ctx || !ctx->pixels) {
         return;
     }
 
-    /* Calculate glyph dimensions in screen pixels */
-    float glyph_width = (glyph->plane.right - glyph->plane.left) * font_size;
-    float glyph_height = (glyph->plane.top - glyph->plane.bottom) * font_size;
-
-    if (glyph_width <= 0.0f || glyph_height <= 0.0f) {
-        return;
-    }
-
-    /* Extend by 1 pixel on each side to capture MSDF anti-aliasing at edges
-     * (WebGL renders a quad that covers the full UV range; we need to match) */
-    int gx = x - 1;
-    int gy = y - 1;
-    int px_width = (int)ceilf(glyph_width) + 2;
-    int px_height = (int)ceilf(glyph_height) + 2;
-
-    /* Early bounds check */
-    if (gx + px_width < 0 || gx >= ctx->width ||
-        gy + px_height < 0 || gy >= ctx->height) {
-        return;
-    }
-
-    uint8_t sr = CT_COLOR_R(color);
-    uint8_t sg = CT_COLOR_G(color);
-    uint8_t sb = CT_COLOR_B(color);
-    uint8_t base_alpha = CT_COLOR_A(color);
-
-    /* Sample each pixel in the glyph bounding box */
-    for (int py = 0; py < px_height; py++) {
-        int screen_y = gy + py;
-        if (screen_y < 0 || screen_y >= ctx->height) continue;
-
-        for (int px = 0; px < px_width; px++) {
-            int screen_x = gx + px;
-            if (screen_x < 0 || screen_x >= ctx->width) continue;
-
-            /* Map screen pixel to local glyph coordinates [0, 1]
-             * Account for the 1-pixel extension on each side
-             * local_y=0 -> atlas.bottom (low row = visual top in PNG)
-             * local_y=1 -> atlas.top (high row = visual bottom in PNG) */
-            float local_x = ((float)px - 0.5f) / glyph_width;
-            float local_y = ((float)py - 0.5f) / glyph_height;
-
-            /* Get MSDF coverage with threshold (uses bilinear sampling) */
-            float coverage = sh_font_msdf_coverage_threshold(font, glyph, local_x, local_y,
-                                                              font_size, threshold);
-
-            if (coverage <= 0.0f) continue;
-
-            /* Apply coverage to alpha */
-            uint8_t alpha = (uint8_t)(base_alpha * coverage);
-            if (alpha == 0) continue;
-
-            /* Blend pixel */
-            CTColor pixel_color = CT_RGBA(sr, sg, sb, alpha);
-            ct_render_blend_pixel(ctx, screen_x, screen_y, pixel_color);
-        }
-    }
+    /* Extract color components and delegate to shared implementation */
+    sh_font_render_glyph(ctx->pixels, ctx->width, ctx->height,
+                         font, glyph, x, y, font_size,
+                         CT_COLOR_R(color), CT_COLOR_G(color),
+                         CT_COLOR_B(color), CT_COLOR_A(color),
+                         threshold);
 }
 
 void ct_render_text(CTRenderContext *ctx,

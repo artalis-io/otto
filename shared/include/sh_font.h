@@ -230,6 +230,57 @@ float sh_font_msdf_coverage_threshold(const SHFont *font, const SHGlyph *glyph,
  */
 float sh_font_sample_msdf_bilinear(const SHFont *font, float atlas_x, float atlas_y);
 
+/* ============================================================================
+ * Glyph Rendering (Software Rasterization)
+ * ============================================================================ */
+
+/*
+ * Render a single glyph to a pixel buffer.
+ *
+ * Uses MSDF sampling with bilinear interpolation and proper edge coverage.
+ * Extends the glyph bounding box by 1 pixel on each side to capture
+ * anti-aliasing at the edges (matching WebGL behavior).
+ *
+ * @param pixels     RGBA pixel buffer (row-major, 4 bytes/pixel)
+ * @param buf_width  Buffer width in pixels
+ * @param buf_height Buffer height in pixels
+ * @param font       Font with atlas data
+ * @param glyph      Glyph to render
+ * @param x          X position of glyph left edge (screen pixels)
+ * @param y          Y position of glyph top edge (screen pixels)
+ * @param font_size  Font size in pixels
+ * @param r, g, b    Color components (0-255)
+ * @param alpha      Alpha/opacity (0-255)
+ * @param threshold  Edge threshold (0.5 = normal, lower = expanded for halo)
+ */
+void sh_font_render_glyph(uint8_t *pixels, int buf_width, int buf_height,
+                          const SHFont *font, const SHGlyph *glyph,
+                          int x, int y, float font_size,
+                          uint8_t r, uint8_t g, uint8_t b, uint8_t alpha,
+                          float threshold);
+
+/*
+ * Render a text string to a pixel buffer.
+ *
+ * Convenience function that iterates UTF-8 codepoints and renders each glyph.
+ *
+ * @param pixels     RGBA pixel buffer (row-major, 4 bytes/pixel)
+ * @param buf_width  Buffer width in pixels
+ * @param buf_height Buffer height in pixels
+ * @param font       Font with atlas data
+ * @param text       UTF-8 encoded text
+ * @param len        Text length in bytes (-1 for null-terminated)
+ * @param x          X position of text left edge (screen pixels)
+ * @param y          Y position of text top edge (screen pixels, NOT baseline)
+ * @param font_size  Font size in pixels
+ * @param r, g, b    Color components (0-255)
+ * @param alpha      Alpha/opacity (0-255)
+ */
+void sh_font_render_text(uint8_t *pixels, int buf_width, int buf_height,
+                         const SHFont *font, const char *text, int len,
+                         float x, float y, float font_size,
+                         uint8_t r, uint8_t g, uint8_t b, uint8_t alpha);
+
 #ifdef __cplusplus
 }
 #endif
