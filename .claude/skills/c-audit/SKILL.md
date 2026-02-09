@@ -1830,6 +1830,207 @@ When reviewing memory strategy choices, ask:
 5. **Performance**: Is allocation on hot path? → Arena/Pool; malloc adds latency
 6. **Complexity**: Is manual memory management adding bugs? → Simplify with arena
 
+### 15. Make Memory Unsafety Harder to Trigger
+
+You won't get Rust's guarantees in C, but you can push C into a much safer regime with tooling and discipline.
+
+#### Use Sanitizers in Dev/CI
+
+Run tests with sanitizers enabled to catch issues early:
+
+```makefile
+# Address Sanitizer (ASan) - detects memory errors
+DEBUG_CFLAGS += -fsanitize=address -fno-omit-frame-pointer
+
+# Undefined Behavior Sanitizer (UBSan) - catches UB like signed overflow, null deref
+DEBUG_CFLAGS += -fsanitize=undefined
+
+# Memory Sanitizer (MSan) - detects uninitialized reads (Clang only, Linux)
+# Note: Requires all linked libraries to be instrumented
+# DEBUG_CFLAGS += -fsanitize=memory
+
+# Thread Sanitizer (TSan) - detects data races
+# Note: Cannot combine with ASan
+# DEBUG_CFLAGS += -fsanitize=thread
+
+# Combined (typical dev build)
+DEBUG_CFLAGS += -fsanitize=address,undefined -g -fno-omit-frame-pointer
+```
+
+**CI Integration:**
+```yaml
+# Example CI job
+test-sanitizers:
+  run: |
+    make clean
+    CFLAGS="-fsanitize=address,undefined -g" make test
+```
+
+**OTTO Pattern:** All modules should pass `make test` with ASan+UBSan enabled.
+
+#### Compile Hardening Flags
+
+Production builds should enable defensive compiler options:
+
+```makefile
+# Stack protection (detects stack buffer overflows)
+CFLAGS += -fstack-protector-strong
+
+# Fortify source (adds runtime checks to libc functions)
+CFLAGS += -D_FORTIFY_SOURCE=2  # or =3 for stricter checks (GCC 12+)
+
+# Position Independent Executable (enables ASLR)
+CFLAGS += -fPIE
+LDFLAGS += -pie
+
+# Read-only relocations (hardens GOT/PLT)
+LDFLAGS += -Wl,-z,relro,-z,now
+
+# No common symbols (prevents certain symbol collision attacks)
+CFLAGS += -fno-common
+
+# Treat warnings as errors in CI
+CI_CFLAGS += -Werror
+```
+
+**Full hardening flags:**
+```makefile
+# Development (max warnings, sanitizers)
+DEV_CFLAGS = -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wformat=2 \
+             -Wstrict-prototypes -Wmissing-prototypes \
+             -fsanitize=address,undefined -g -fno-omit-frame-pointer
+
+# Production (hardening, optimized)
+PROD_CFLAGS = -Wall -Wextra -O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 \
+              -fPIE -fno-common
+PROD_LDFLAGS = -pie -Wl,-z,relro,-z,now
+```
+
+#### Enable Warnings and Treat UB Seriously
+
+```makefile
+# Minimum warning set for all builds
+CFLAGS += -Wall -Wextra
+
+# Additional recommended warnings
+CFLAGS += -Wconversion      # Implicit type conversions
+CFLAGS += -Wshadow          # Variable shadowing
+CFLAGS += -Wformat=2        # Format string issues
+CFLAGS += -Wstrict-prototypes -Wmissing-prototypes  # Function declarations
+CFLAGS += -Wcast-align      # Pointer alignment issues
+CFLAGS += -Wnull-dereference # Potential null pointer dereference (GCC)
+CFLAGS += -Wdouble-promotion # float promoted to double
+
+# GCC-specific
+CFLAGS += -Wlogical-op      # Suspicious logical operations
+CFLAGS += -Wduplicated-cond # Duplicated conditions in if-else
+CFLAGS += -Wduplicated-branches # Duplicated branches
+
+# In CI: treat warnings as errors
+CI_CFLAGS += -Werror
+```
+
+#### Avoid the Worst Patterns
+
+**1. No custom string parsers when well-tested ones exist:**
+```c
+// BAD: Hand-rolled URL parser
+char *parse_query_param(char *url, char *key) {
+    char *p = strstr(url, key);  // Fragile, doesn't handle encoding
+    // ... error-prone manual parsing ...
+}
+
+// GOOD: Use sh_query.h from shared/
+#include "sh_query.h"
+int value = sh_query_get_int(query, "param", default_val);
+```
+
+**2. Avoid manual buffer arithmetic in untrusted parsing paths:**
+```c
+// BAD: Manual pointer arithmetic on untrusted input
+char *p = user_input;
+while (*p && *p != ',') p++;  // What if no comma? What if p overflows?
+size_t len = p - user_input;   // Could be enormous
+memcpy(buf, user_input, len);  // Buffer overflow!
+
+// GOOD: Use bounded functions
+size_t len = strnlen(user_input, MAX_INPUT_LEN);
+char *comma = memchr(user_input, ',', len);
+size_t field_len = comma ? (size_t)(comma - user_input) : len;
+if (field_len >= sizeof(buf)) return ERROR_TOO_LONG;
+memcpy(buf, user_input, field_len);
+buf[field_len] = '\0';
+```
+
+**3. Validate while parsing (not "parse then validate"):**
+```c
+// BAD: Parse first, validate later (attacker-controlled values used before check)
+int x = atoi(input_x);
+int y = atoi(input_y);
+int result = x * y;  // Overflow here before validation!
+if (result < 0 || result > MAX_RESULT) return ERROR;
+
+// GOOD: Validate while parsing, before any computation
+int x = sh_parse_int(input_x, 0, 0, 1000);  // Validated bounds
+int y = sh_parse_int(input_y, 0, 0, 1000);  // Validated bounds
+// Now x*y cannot overflow if MAX is small enough
+int result = x * y;  // Safe: 1000*1000 = 1M, fits in int
+```
+
+**4. Use static analysis tools:**
+```bash
+# Clang static analyzer
+scan-build make
+
+# Cppcheck
+cppcheck --enable=all --error-exitcode=1 src/
+
+# Include-what-you-use (reduces unnecessary includes)
+iwyu_tool.py -p . src/*.c
+```
+
+#### Fuzzing (Advanced)
+
+For modules that parse complex input (PBF, MVT, JSON), consider fuzzing:
+
+```c
+// libFuzzer entry point
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    // Parse the fuzzed input
+    Result *r = parse_input(data, size);
+    if (r) result_free(r);
+    return 0;
+}
+```
+
+```bash
+# Build with fuzzer
+clang -fsanitize=fuzzer,address src/parser.c -o fuzz_parser
+
+# Run fuzzer
+./fuzz_parser corpus/ -max_len=65536 -jobs=4
+```
+
+**OTTO modules that benefit from fuzzing:**
+- `shared/src/sh_pbf.c` - PBF parsing
+- `carta/src/ct_mvt.c` - MVT encoding
+- `locus/src/lc_trie.c` - Query parsing
+- `ralph/src/mps_parser.c` - MPS file parsing
+
+#### Hardening Audit Checklist
+
+| Check | Severity | Description |
+|-------|----------|-------------|
+| Sanitizers in tests | High | Tests run with ASan+UBSan in CI |
+| Stack protection | High | `-fstack-protector-strong` in prod builds |
+| FORTIFY_SOURCE | Medium | `-D_FORTIFY_SOURCE=2` in prod builds |
+| PIE/RELRO | Medium | Position-independent with full RELRO |
+| Warnings as errors | Medium | `-Werror` in CI builds |
+| No custom parsers | Medium | Uses shared library for string/query parsing |
+| Validate while parsing | High | Bounds checked before values used in computation |
+| Static analysis | Low | Passes `scan-build` or `cppcheck` |
+| Fuzzing | Low | Critical parsers have fuzz targets |
+
 ## Audit Procedure
 
 When `/c-audit <module>` is invoked:
@@ -1917,7 +2118,15 @@ When `/c-audit <module>` is invoked:
     - Consistent error handling
     - Proper header guards
 
-13. **Generate Report**
+13. **Check Build Hardening**
+    - Check Makefile for `-fstack-protector-strong` in production builds
+    - Check for `-D_FORTIFY_SOURCE=2` in production builds
+    - Check for sanitizers in debug/test builds (`-fsanitize=address,undefined`)
+    - Verify tests can run under ASan+UBSan
+    - Check for position-independent executable flags (`-fPIE -pie`)
+    - Look for custom string parsers that should use shared library
+
+14. **Generate Report**
     Format: Markdown table with findings, severity, file:line, and suggested fix
 
 ## Report Format
@@ -2105,8 +2314,19 @@ Before marking a module as "hardened":
 - [ ] Uses `SHUnitSystem` enum for API unit selection
 - [ ] Uses `sh_units.h` functions for conversions
 
+**Compile Hardening (Production Builds):**
+- [ ] Stack protection enabled (`-fstack-protector-strong`)
+- [ ] FORTIFY_SOURCE enabled (`-D_FORTIFY_SOURCE=2`)
+- [ ] Position Independent Executable (`-fPIE -pie`)
+- [ ] Full RELRO enabled (`-Wl,-z,relro,-z,now`)
+- [ ] No common symbols (`-fno-common`)
+- [ ] No custom string parsers when shared library provides alternatives
+- [ ] Input validation happens during parsing (not after)
+
 **Standards:**
 - [ ] Follows OTTO naming conventions
 - [ ] Has comprehensive test coverage
 - [ ] Compiles clean with `-Wall -Wextra -Werror`
 - [ ] Passes AddressSanitizer and UBSan checks
+- [ ] Static analysis clean (`scan-build` or `cppcheck`)
+- [ ] Critical parsers have fuzz targets (optional but recommended)

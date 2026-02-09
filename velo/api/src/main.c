@@ -38,6 +38,7 @@
 #include "sh_httpserver.h"  /* For sh_mg_set_write_timeout */
 #include "sh_completion.h"  /* For ShCompletion */
 #include "sh_worker_pool.h" /* For ShWorkerPool */
+#include "sh_args.h"        /* For sh_parse_int, sh_parse_double */
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
@@ -243,30 +244,26 @@ static void load_config_env(RouteServerConfig *cfg) {
     }
     /* Rate limiting configuration */
     if ((val = getenv("VELO_RATE_LIMIT_ENABLED"))) {
-        cfg->rate_limit_enabled = (atoi(val) != 0);
+        cfg->rate_limit_enabled = sh_parse_int(val, cfg->rate_limit_enabled, 0, 1);
     }
     if ((val = getenv("VELO_RATE_LIMIT_RPS"))) {
-        cfg->rate_limit_rps = atof(val);
-        if (cfg->rate_limit_rps <= 0) cfg->rate_limit_rps = 10.0;
+        cfg->rate_limit_rps = sh_parse_double(val, cfg->rate_limit_rps, 0.1, 10000.0);
     }
     if ((val = getenv("VELO_RATE_LIMIT_BURST"))) {
-        cfg->rate_limit_burst = atof(val);
-        if (cfg->rate_limit_burst <= 0) cfg->rate_limit_burst = 50.0;
+        cfg->rate_limit_burst = sh_parse_double(val, cfg->rate_limit_burst, 1.0, 100000.0);
     }
     /* Work queue configuration */
     if ((val = getenv("VELO_WORK_QUEUE_ENABLED"))) {
-        cfg->work_queue_enabled = (atoi(val) != 0);
+        cfg->work_queue_enabled = sh_parse_int(val, cfg->work_queue_enabled, 0, 1);
     }
     if ((val = getenv("VELO_WORK_QUEUE_DEPTH"))) {
-        cfg->work_queue_depth = (size_t)atol(val);
-        if (cfg->work_queue_depth < 1) cfg->work_queue_depth = 128;
+        cfg->work_queue_depth = (size_t)sh_parse_int(val, (int)cfg->work_queue_depth, 1, 100000);
     }
     if ((val = getenv("VELO_WORK_QUEUE_TIMEOUT"))) {
-        cfg->work_queue_timeout = atof(val);
-        if (cfg->work_queue_timeout <= 0) cfg->work_queue_timeout = 10.0;
+        cfg->work_queue_timeout = sh_parse_double(val, cfg->work_queue_timeout, 0.1, 3600.0);
     }
     if ((val = getenv("VELO_ROUTE_WORKERS"))) {
-        cfg->route_workers = atoi(val);
+        cfg->route_workers = sh_parse_int(val, cfg->route_workers, 1, 256);
     }
     /* CORS configuration */
     if ((val = getenv("VELO_CORS_ORIGINS"))) {
@@ -275,29 +272,22 @@ static void load_config_env(RouteServerConfig *cfg) {
     }
     /* Adaptive capacity configuration */
     if ((val = getenv("VELO_ADAPTIVE_ENABLED"))) {
-        cfg->adaptive_enabled = (atoi(val) != 0);
+        cfg->adaptive_enabled = sh_parse_int(val, cfg->adaptive_enabled, 0, 1);
     }
     if ((val = getenv("VELO_TARGET_UTILIZATION"))) {
-        cfg->target_utilization = atof(val);
-        if (cfg->target_utilization <= 0 || cfg->target_utilization > 1.0) {
-            cfg->target_utilization = 0.7;
-        }
+        cfg->target_utilization = sh_parse_double(val, cfg->target_utilization, 0.01, 1.0);
     }
     if ((val = getenv("VELO_CLIENT_TIMEOUT"))) {
-        cfg->client_timeout_ms = atof(val);
-        if (cfg->client_timeout_ms <= 0) cfg->client_timeout_ms = 10000.0;
+        cfg->client_timeout_ms = sh_parse_double(val, cfg->client_timeout_ms, 100.0, 600000.0);
     }
     if ((val = getenv("VELO_BURST_REQUESTS"))) {
-        cfg->burst_requests = atoi(val);
-        if (cfg->burst_requests < 1) cfg->burst_requests = 10;
+        cfg->burst_requests = sh_parse_int(val, cfg->burst_requests, 1, 10000);
     }
     if ((val = getenv("VELO_ADAPTIVE_WINDOW"))) {
-        cfg->adaptive_window = (size_t)atol(val);
-        if (cfg->adaptive_window < 10) cfg->adaptive_window = 1000;
+        cfg->adaptive_window = (size_t)sh_parse_int(val, (int)cfg->adaptive_window, 10, 100000);
     }
     if ((val = getenv("VELO_ADAPTIVE_INTERVAL"))) {
-        cfg->adaptive_interval = atof(val);
-        if (cfg->adaptive_interval < 1) cfg->adaptive_interval = 1000;
+        cfg->adaptive_interval = sh_parse_double(val, cfg->adaptive_interval, 1.0, 100000.0);
     }
 }
 
