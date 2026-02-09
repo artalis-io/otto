@@ -86,7 +86,12 @@ double sh_query_get_double(const char *query, const char *key, double default_va
     while (*p) {
         /* Match key */
         if (strncmp(p, key, key_len) == 0 && p[key_len] == '=') {
-            return atof(p + key_len + 1);
+            const char *val = p + key_len + 1;
+            char *end;
+            double result = strtod(val, &end);
+            /* Return default if no valid conversion occurred */
+            if (end == val) return default_val;
+            return result;
         }
         /* Skip to next parameter */
         while (*p && *p != '&') p++;
