@@ -516,6 +516,12 @@ typedef struct {
     /* Fallback for simple case */
     double base_consumption;                /* L/100km if no curve */
 
+    /* Ending inventory valuation (new)
+     * Credits remaining fuel at destination at this price.
+     * Set to expected future fuel price for multi-trip optimization.
+     * Set to 0 to disable (minimize cost only, ignore ending fuel value). */
+    double destination_fuel_value;          /* $/L, 0 = disabled */
+
     /* Existing segment override (deprecated, use weight_profile) */
     int num_segments;
     FWSegment *segments;
@@ -526,6 +532,19 @@ typedef struct {
 1. Pre-compute fuel consumption between each pair of consecutive stations
 2. Use these values in LP constraint generation
 3. Existing `fw_calc_fuel_consumed()` updated to use new model
+4. Modified objective for ending inventory valuation:
+
+**Objective function:**
+```
+minimize: Σ(x[i] * price[i]) - y[final] * destination_fuel_value
+```
+
+Where `y[final]` is fuel remaining at destination. When `destination_fuel_value > 0`:
+- Solver is credited for fuel remaining at end
+- If last station is cheap relative to future price → fill up
+- If last station is expensive relative to future price → buy minimum
+
+When `destination_fuel_value = 0`, reduces to current behavior (minimize purchase cost only).
 
 ### 1.5 API Functions
 
@@ -619,6 +638,9 @@ The split keeps shared/ self-contained while FuelWise tests focus on trucking do
 6. **Negative cargo validation**: Reject profile going below tare weight
 7. **Default curves**: Verify EU/US/light truck curves return sensible values
 8. **Integration with solver**: Full LP solve with weight profile
+9. **Ending inventory - cheap last station**: Last station $1.00/L, future $1.50/L → fills tank
+10. **Ending inventory - expensive last station**: Last station $2.00/L, future $1.50/L → buys minimum
+11. **Ending inventory disabled**: destination_fuel_value=0 → ignores ending fuel value
 
 **Shared primitive tests (in `shared/tests/test_shared.c`):**
 - Piecewise-linear: interpolation, extrapolation, integration
@@ -818,12 +840,14 @@ fuel -= fuel_consumed
 if fuel < min_fuel_at_end - epsilon:
     FAIL: "Arrived at destination with {fuel}L, below minimum {min_fuel_at_end}L"
 
-# For MILP: verify stop costs in total_cost
+# Verify total_cost calculation
+expected_cost = sum(purchase * price for each station)
 if use_milp:
-    expected_cost = sum(purchase * price for each station with purchase > 0)
     expected_cost += sum(stop_cost for each station with purchase > 0)
-    if |solution.total_cost - expected_cost| > epsilon:
-        FAIL: "Total cost mismatch (stop costs not applied correctly)"
+if destination_fuel_value > 0:
+    expected_cost -= fuel * destination_fuel_value  # credit for remaining fuel
+if |solution.total_cost - expected_cost| > epsilon:
+    FAIL: "Total cost mismatch"
 
 PASS
 ```
