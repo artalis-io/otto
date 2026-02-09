@@ -3,6 +3,7 @@
  */
 
 #include "sh_log.h"
+#include "sh_args.h"  /* For sh_parse_int */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -134,7 +135,7 @@ void sh_log_init(const ShLogConfig *config) {
 
     const char *env_color = getenv("SH_LOG_COLOR");
     if (env_color) {
-        s_config.color = atoi(env_color);
+        s_config.color = sh_parse_int(env_color, 0, 0, 1);
     }
 
     /* Auto-detect color if not explicitly set */

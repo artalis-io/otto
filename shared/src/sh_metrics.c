@@ -3,6 +3,7 @@
  */
 
 #include "sh_metrics.h"
+#include "sh_args.h"  /* For sh_parse_int */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -112,7 +113,7 @@ int sh_metrics_init(const ShMetricsConfig *config) {
 
     const char *env_port = getenv("SH_METRICS_STATSD_PORT");
     if (env_port) {
-        s_config.statsd_port = atoi(env_port);
+        s_config.statsd_port = sh_parse_int(env_port, 8125, 1, 65535);
     }
 
     /* Allocate metric storage */
@@ -216,7 +217,9 @@ static ShMetric *find_or_create_metric(const char *name, const char *tags,
     ShMetric *m = &s_metrics[s_num_metrics++];
     memset(m, 0, sizeof(*m));
     strncpy(m->name, name, sizeof(m->name) - 1);
+    m->name[sizeof(m->name) - 1] = '\0';
     strncpy(m->tags, tags ? tags : "", sizeof(m->tags) - 1);
+    m->tags[sizeof(m->tags) - 1] = '\0';
     m->type = type;
 
     return m;
@@ -478,6 +481,7 @@ char *sh_metrics_prometheus_output(void) {
             snprintf(full_name, sizeof(full_name), "%s_%s", s_config.service, m->name);
         } else {
             strncpy(full_name, m->name, sizeof(full_name) - 1);
+            full_name[sizeof(full_name) - 1] = '\0';
         }
 
         /* Replace dots and hyphens with underscores for Prometheus */

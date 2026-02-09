@@ -259,6 +259,7 @@ void sh_trace_span_start(ShTraceSpan *span, const char *operation) {
         trace_id = sh_trace_new();
     }
     strncpy(span->trace_id, trace_id, SH_TRACE_ID_LEN - 1);
+    span->trace_id[SH_TRACE_ID_LEN - 1] = '\0';
 
     /* Generate span ID */
     generate_span_id(span->span_id);
