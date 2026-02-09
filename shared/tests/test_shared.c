@@ -2025,6 +2025,51 @@ TEST(args_prefix)
     ASSERT(strcmp(sh_args_prefix(SH_API_FUELWISE), "FUELWISE") == 0);
 }
 
+TEST(parse_int_valid)
+{
+    /* Valid integers within bounds */
+    ASSERT_EQ(sh_parse_int("42", 0, 0, 100), 42);
+    ASSERT_EQ(sh_parse_int("0", -1, 0, 100), 0);
+    ASSERT_EQ(sh_parse_int("100", 0, 0, 100), 100);
+    ASSERT_EQ(sh_parse_int("-5", 0, -10, 10), -5);
+    ASSERT_EQ(sh_parse_int("65535", 0, 1, 65535), 65535);
+}
+
+TEST(parse_int_null_empty)
+{
+    /* NULL and empty strings return default */
+    ASSERT_EQ(sh_parse_int(NULL, 99, 0, 100), 99);
+    ASSERT_EQ(sh_parse_int("", 99, 0, 100), 99);
+}
+
+TEST(parse_int_invalid)
+{
+    /* Invalid strings return default */
+    ASSERT_EQ(sh_parse_int("abc", 99, 0, 100), 99);
+    ASSERT_EQ(sh_parse_int("12abc", 99, 0, 100), 99);  /* Trailing garbage */
+    ASSERT_EQ(sh_parse_int("12.5", 99, 0, 100), 99);   /* Decimal point is garbage */
+    ASSERT_EQ(sh_parse_int("42  ", 99, 0, 100), 99);   /* Trailing space */
+    /* Note: strtol skips leading whitespace per C standard, so "  42" = 42 */
+    ASSERT_EQ(sh_parse_int("  42", 0, 0, 100), 42);    /* Leading space accepted by strtol */
+}
+
+TEST(parse_int_out_of_range)
+{
+    /* Out of range returns default */
+    ASSERT_EQ(sh_parse_int("200", 99, 0, 100), 99);   /* Above max */
+    ASSERT_EQ(sh_parse_int("-5", 99, 0, 100), 99);    /* Below min */
+    ASSERT_EQ(sh_parse_int("0", 99, 1, 100), 99);     /* Equal to min-1 */
+}
+
+TEST(parse_int_edge_cases)
+{
+    /* Edge cases at boundaries */
+    ASSERT_EQ(sh_parse_int("1", 0, 1, 65535), 1);     /* At min */
+    ASSERT_EQ(sh_parse_int("65535", 0, 1, 65535), 65535); /* At max */
+    ASSERT_EQ(sh_parse_int("2147483647", 0, 0, 2147483647), 2147483647);  /* INT_MAX */
+    ASSERT_EQ(sh_parse_int("-2147483648", 0, -2147483648, 0), -2147483648); /* INT_MIN */
+}
+
 /* ============================================================================
  * Circuit Breaker Tests
  * ============================================================================ */
@@ -3471,6 +3516,34 @@ TEST(query_get_double_default)
     ASSERT_NEAR(sh_query_get_double(NULL, "x", 42.0), 42.0, 0.0001);
 }
 
+TEST(query_get_int_bounded_valid)
+{
+    ASSERT_EQ(sh_query_get_int_bounded("width=80", "width", 0, 1, 256), 80);
+    ASSERT_EQ(sh_query_get_int_bounded("a=1&b=50&c=100", "b", 0, 0, 100), 50);
+    ASSERT_EQ(sh_query_get_int_bounded("zoom=15", "zoom", 0, 0, 22), 15);
+}
+
+TEST(query_get_int_bounded_out_of_range)
+{
+    /* Value above max returns default */
+    ASSERT_EQ(sh_query_get_int_bounded("width=300", "width", 80, 1, 256), 80);
+    /* Value below min returns default */
+    ASSERT_EQ(sh_query_get_int_bounded("zoom=-5", "zoom", 10, 0, 22), 10);
+    /* At boundary - inclusive */
+    ASSERT_EQ(sh_query_get_int_bounded("x=256", "x", 0, 1, 256), 256);
+    ASSERT_EQ(sh_query_get_int_bounded("x=1", "x", 0, 1, 256), 1);
+}
+
+TEST(query_get_int_bounded_invalid)
+{
+    /* Invalid string returns default */
+    ASSERT_EQ(sh_query_get_int_bounded("width=abc", "width", 80, 1, 256), 80);
+    /* Missing key returns default */
+    ASSERT_EQ(sh_query_get_int_bounded("height=40", "width", 80, 1, 256), 80);
+    /* NULL query returns default */
+    ASSERT_EQ(sh_query_get_int_bounded(NULL, "width", 80, 1, 256), 80);
+}
+
 /* ============================================================================
  * Render Tests
  * ============================================================================ */
@@ -4046,6 +4119,11 @@ int main(void)
     RUN_TEST(args_parse_adaptive);
     RUN_TEST(args_parse_positional);
     RUN_TEST(args_prefix);
+    RUN_TEST(parse_int_valid);
+    RUN_TEST(parse_int_null_empty);
+    RUN_TEST(parse_int_invalid);
+    RUN_TEST(parse_int_out_of_range);
+    RUN_TEST(parse_int_edge_cases);
 
     printf("\nCircuit Breaker:\n");
     RUN_TEST(circuit_create_free);
@@ -4165,6 +4243,9 @@ int main(void)
     RUN_TEST(query_has_null_safety);
     RUN_TEST(query_get_double_basic);
     RUN_TEST(query_get_double_default);
+    RUN_TEST(query_get_int_bounded_valid);
+    RUN_TEST(query_get_int_bounded_out_of_range);
+    RUN_TEST(query_get_int_bounded_invalid);
 
     printf("\nRender Utilities:\n");
     RUN_TEST(render_set_get_pixel);

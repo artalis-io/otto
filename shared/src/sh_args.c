@@ -76,6 +76,26 @@ static size_t parse_size(const char *str, size_t default_val) {
 }
 
 /* ============================================================================
+ * Safe Parsing Utilities
+ * ============================================================================ */
+
+int sh_parse_int(const char *str, int default_val, int min_val, int max_val) {
+    if (!str || !*str) return default_val;
+
+    char *end;
+    long val = strtol(str, &end, 10);
+
+    /* Parse failure: no digits consumed or trailing garbage */
+    if (end == str || *end != '\0') return default_val;
+
+    /* Overflow: strtol returns LONG_MIN/LONG_MAX on overflow */
+    if (val < (long)min_val) return default_val;
+    if (val > (long)max_val) return default_val;
+
+    return (int)val;
+}
+
+/* ============================================================================
  * Public API
  * ============================================================================ */
 
