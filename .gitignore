@@ -23,6 +23,8 @@ bench_sizes
 bench_vs_glpk
 bench_mip
 compare_glpk
+fuelwise-bench
+test_validator
 
 # API server binaries
 fuelwise-api
