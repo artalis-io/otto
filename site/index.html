@@ -2501,6 +2501,63 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                 </p>
             </div>
 
+            <!-- Security Model -->
+            <div class="subsection">
+                <h3 class="subsection-title">Defense-in-Depth Security Model</h3>
+                <p style="margin-bottom: 16px; color: var(--text-secondary); line-height: 1.6;">
+                    OTTO implements <strong>role-based privilege separation</strong> with multiple deployment modes.
+                    The same transport-agnostic code runs in three security configurations &mdash;
+                    choose based on your deployment requirements.
+                </p>
+                <div class="code-block">
+<pre><span class="comment">// Same handler interface works in ALL deployment modes:</span>
+<span class="type">int</span> vl_api_handle(VLAPIContext *ctx, <span class="keyword">const</span> VLAPIRequest *req, VLAPIResponse *resp);
+
+<span class="comment">// In-process:  Mongoose → sh_worker_pool → handler (systemd sandbox)</span>
+<span class="comment">// WASM:        Browser → WASM module → handler (WASM sandbox)</span>
+<span class="comment">// Process pool: Parser processes ↔ IPC ↔ handler (process isolation)</span></pre>
+                </div>
+                <div class="grid" style="margin-top: 20px;">
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">In-Process Mode</span>
+                            <span class="card-lang">Default</span>
+                        </div>
+                        <div class="card-desc">Worker threads via <code>sh_worker_pool</code>. Security from systemd hardening: restricted syscalls, read-only paths, capability dropping. Best performance.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">WASM Mode</span>
+                            <span class="card-lang">Demos &amp; Edge</span>
+                        </div>
+                        <div class="card-desc">Parsing + compute bundled in single WASM module. The sandbox IS the security &mdash; no filesystem, no network, no exec. Memory bounds-checked by construction.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
+                            <span class="card-name">Process Pool Mode</span>
+                            <span class="card-lang">High-Security</span>
+                        </div>
+                        <div class="card-desc">Long-lived parser processes with seccomp/pledge sandbox. IPC via Unix sockets. For regulatory requirements demanding process isolation.</div>
+                    </div>
+                </div>
+                <div style="margin-top: 20px; padding: 16px; background: var(--bg-tertiary); border-radius: 8px; border-left: 3px solid var(--accent);">
+                    <div style="font-weight: 600; margin-bottom: 8px; color: var(--text-primary);">Prime Directive</div>
+                    <div style="color: var(--text-secondary); line-height: 1.6;">
+                        <strong>Raw bytes are toxic.</strong> Any component receiving attacker-controlled input
+                        (JSON, MPS/LP, protobuf) is isolated from filesystem, secrets, and application state.
+                        Compromise collapses into a crash or bounded computation &mdash; never lateral movement.
+                    </div>
+                </div>
+                <div style="margin-top: 16px; color: var(--text-secondary); line-height: 1.6;">
+                    <strong>Non-negotiables:</strong> No <code>system()</code>, <code>exec*()</code>, <code>popen()</code>, <code>dlopen()</code>.
+                    No runtime plugin loading. No broad filesystem access. OSM PBF parsing is offline-only &mdash;
+                    derived indexes (<code>.vlg</code>, <code>.lcx</code>, <code>.idx</code>) are mmap'd read-only.
+                </div>
+                <p style="margin-top: 16px; font-size: 14px; color: var(--text-muted);">
+                    See <a href="https://github.com/ottofleet/otto/blob/main/docs/internals/security-model.md">Security Model</a> for the full architecture and <a href="https://github.com/ottofleet/otto/blob/main/docs/roadmaps/security.md">Security Roadmap</a> for implementation status.
+                </p>
+            </div>
+
             <!-- Core Engines -->
             <div class="subsection">
                 <h3 class="subsection-title">Core Engines</h3>

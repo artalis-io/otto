@@ -46,6 +46,7 @@ Do NOT use for:
 1. **Read key docs first:**
    - `docs/MANIFESTO.md` - Design philosophy (C, WASM, transport-agnostic)
    - `docs/ARCHITECTURE.md` - System layers, data flow, component relationships
+   - `docs/internals/security-model.md` - Role separation, parsing isolation (for API/server work)
    - `docs/roadmaps/{module}.md` - Existing plans for the module
 2. **Explore:** Read relevant code, understand current implementation
 3. **Plan:** Design approach aligned with manifesto, identify files to change, consider tradeoffs
@@ -435,6 +436,7 @@ See `docs/MANIFESTO.md` for the full manifesto.
 |------|---------|
 | `docs/ARCHITECTURE.md` | System architecture, layers, data flow |
 | `docs/MANIFESTO.md` | Design philosophy (C, WASM, transport-agnostic, render-agnostic) |
+| `docs/internals/security-model.md` | Security architecture, role separation, hardening |
 | `docs/KNOWN_ISSUES.md` | Known bugs and workarounds |
 | `docs/TOOLING.md` | Build tools, scripts, CI |
 | `docs/business/` | Strategy, valuation (some content has redaction markers) |
@@ -464,6 +466,7 @@ Active roadmaps in `docs/roadmaps/`:
 | `site.md` | Landing page, API docs |
 | `fuel-demo.md` | Fuel optimizer demo |
 | `infrastructure.md` | Build, CI/CD, deployment |
+| `security.md` | Role separation, process isolation, hardening |
 | `cross-cutting.md` | Cross-module concerns |
 
 See `docs/roadmaps/README.md` for priority overview.

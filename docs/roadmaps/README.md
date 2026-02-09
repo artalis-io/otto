@@ -32,6 +32,7 @@ This directory contains development roadmaps and specifications for planned comp
 | [forge.md](forge.md) | Async job queue | Planned |
 | [nexus.md](nexus.md) | External data integration gateway | Planned |
 | [infrastructure.md](infrastructure.md) | API server and observability | Planned |
+| [security.md](security.md) | Role separation, process isolation, hardening | Planned |
 
 ### Cross-Cutting
 
@@ -57,6 +58,9 @@ Phase 4 (Network):
 
 Infrastructure (Parallel):
   Forge, Nexus (can proceed independently)
+
+Security (Near-term):
+  Process-isolated parsing → IPC framework → systemd hardening
 ```
 
 ## See Also
