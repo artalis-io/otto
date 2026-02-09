@@ -161,6 +161,26 @@ void sh_args_usage(const char *program_name, const char *extra_usage);
  */
 const char *sh_args_prefix(ShApiType api_type);
 
+/* ============================================================================
+ * Safe Parsing Utilities
+ * ============================================================================ */
+
+/*
+ * Parse integer from string with bounds validation.
+ *
+ * Uses strtol() for proper error detection. Returns default_val if:
+ * - str is NULL or empty
+ * - str is not a valid integer
+ * - parsed value is outside [min_val, max_val] range
+ *
+ * @param str         String to parse
+ * @param default_val Value to return on parse failure or out-of-range
+ * @param min_val     Minimum acceptable value (inclusive)
+ * @param max_val     Maximum acceptable value (inclusive)
+ * @return Parsed integer clamped to [min_val, max_val], or default_val on error
+ */
+int sh_parse_int(const char *str, int default_val, int min_val, int max_val);
+
 #ifdef __cplusplus
 }
 #endif

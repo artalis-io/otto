@@ -59,6 +59,7 @@ See docs/internals/security-model.md for target architecture.
 |-------|-----------------|----------|
 | Buffer overflow | `strcpy`, `strcat`, `sprintf`, `gets`, unbounded loops | Critical |
 | Unbounded string ops | `strlen`, `strcmp` on untrusted input | Critical |
+| Unsafe integer parsing | `atoi`, `atol`, `atof` (no error detection, no bounds) | High |
 | Integer overflow | `malloc(a * b)` without overflow check | Critical |
 | Use-after-free | Pointer used after `free()` | Critical |
 | Double-free | `free()` called twice on same pointer | Critical |
@@ -88,6 +89,38 @@ strcmp(a, b)               -> strncmp(a, b, MAX_LEN);
 
 // Memory allocation
 malloc(count * size)       -> calloc(count, size);  // or check overflow first
+
+// Integer parsing (atoi/atol have no error detection!)
+atoi(str)                  -> sh_parse_int(str, default, min, max);  // From sh_args.h
+atol(str)                  -> strtol(str, &end, 10) with validation;
+```
+
+**Integer Parsing - Why atoi/atol are dangerous:**
+```c
+// BAD: atoi() has no error detection
+int zoom = atoi(value);  // Returns 0 for "abc", no way to know if it failed!
+int port = atoi(argv[1]);  // What if argv[1] is "99999999999999"? Overflow!
+
+// GOOD: Use sh_parse_int() from shared/include/sh_args.h
+#include "sh_args.h"
+int zoom = sh_parse_int(value, 10, 0, 22);  // default=10, valid range 0-22
+int port = sh_parse_int(value, 8080, 1, 65535);  // default=8080, valid ports
+
+// GOOD: For query string parsing, use sh_query_get_int_bounded()
+#include "sh_query.h"
+int width = sh_query_get_int_bounded(query, "width", 80, 1, 256);
+
+// If you must use strtol directly:
+char *end;
+long val = strtol(str, &end, 10);
+if (end == str || *end != '\0') {
+    // Parse failed - str was not a valid integer
+    return default_value;
+}
+if (val < min || val > max) {
+    // Out of range
+    return default_value;
+}
 ```
 
 **Critical Rule: ALWAYS null-terminate strings explicitly!**
@@ -1818,6 +1851,7 @@ When `/c-audit <module>` is invoked:
 
 3. **Scan for Critical Issues**
    - Search for unsafe functions: `strcpy`, `sprintf`, `gets`, `strcat`
+   - Search for unsafe integer parsing: `atoi`, `atol`, `atof` (use `sh_parse_int()` instead)
    - Search for unchecked allocations: `malloc` without NULL check
    - Search for missing bounds checks on array access
 
@@ -1927,6 +1961,7 @@ When `--fix` is specified:
 - `sprintf` -> `snprintf` with buffer size
 - `strlen` -> `strnlen` with max length (on untrusted input)
 - `strcmp` -> `strncmp` with bounded length
+- `atoi` -> `sh_parse_int()` with bounds (requires `#include "sh_args.h"`)
 - Missing null terminator after `strncpy` (add explicit `buf[size-1] = '\0'`)
 - Missing NULL checks (add early return)
 - Missing `= {0}` initialization
@@ -1996,6 +2031,7 @@ Before marking a module as "hardened":
 
 **String Safety:**
 - [ ] No unbounded string functions (`strcpy`, `strcat`, `sprintf`, `gets`)
+- [ ] No unsafe integer parsing (`atoi`, `atol`, `atof`) - use `sh_parse_int()` or `strtol` with validation
 - [ ] Uses `strnlen` instead of `strlen` on untrusted input
 - [ ] Uses `strncmp` instead of `strcmp` where appropriate
 - [ ] All `strncpy` calls followed by explicit null termination
