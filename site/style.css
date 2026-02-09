@@ -327,6 +327,11 @@ header {
         0 0 2px rgba(180, 180, 180, 0.8),
         0 0 5px rgba(180, 180, 180, 0.4),
         0 0 10px rgba(180, 180, 180, 0.2);
+    /* Force consistent character width for box-drawing */
+    letter-spacing: 0;
+    word-spacing: 0;
+    font-variant-ligatures: none;
+    font-feature-settings: "calt" 0;
 }
 
 .code-block .comment {
@@ -485,6 +490,11 @@ header {
     position: relative;
     z-index: 3;
     animation: crt-flicker-gray 4s infinite;
+    /* Force consistent character width for box-drawing */
+    letter-spacing: 0;
+    word-spacing: 0;
+    font-variant-ligatures: none;
+    font-feature-settings: "calt" 0;
 }
 
 /* ============================================================================
