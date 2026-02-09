@@ -430,6 +430,13 @@
             color: var(--text-muted);
         }
 
+        .card-roadmap {
+            font-size: 11px;
+            color: var(--accent);
+            margin-top: 8px;
+            font-style: italic;
+        }
+
         .card.planned {
             border-style: dashed;
             opacity: 0.7;
@@ -2590,6 +2597,7 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                         </div>
                         <div class="card-desc">OSM routing engine. Dijkstra, A*, bidirectional search, landmark preprocessing.</div>
                         <div class="card-meta">51 tests &middot; 11K loc &middot; &lt;100ms country-scale</div>
+                        <div class="card-roadmap">Roadmap: Turn restrictions, dimensional constraints (height/weight/width), commercial data formats (PTV DDS)</div>
                     </div>
                     <div class="card">
                         <div class="card-header">
