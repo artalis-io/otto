@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <math.h>
 
 /* ============================================================================
  * Environment Variable Prefixes
@@ -93,6 +94,24 @@ int sh_parse_int(const char *str, int default_val, int min_val, int max_val) {
     if (val > (long)max_val) return default_val;
 
     return (int)val;
+}
+
+double sh_parse_double(const char *str, double default_val, double min_val, double max_val) {
+    if (!str || !*str) return default_val;
+
+    char *end;
+    double val = strtod(str, &end);
+
+    /* Parse failure: no digits consumed */
+    if (end == str) return default_val;
+
+    /* Reject inf/nan */
+    if (!isfinite(val)) return default_val;
+
+    /* Bounds check */
+    if (val < min_val || val > max_val) return default_val;
+
+    return val;
 }
 
 /* ============================================================================
