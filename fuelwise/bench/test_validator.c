@@ -291,6 +291,66 @@ void test_min_purchase_milp(void)
 }
 
 /* ============================================================================
+ * Test: Minimum fuel level maintained throughout route
+ * ============================================================================ */
+void test_minimum_fuel_maintained(void)
+{
+    printf("\n=== Test: Minimum Fuel Level Maintained ===\n");
+
+    /* Scenario: Long gaps that require stopping to maintain 30L minimum
+     * Without refueling, truck would drop below minimum between stations */
+    FWSnappedStation stations[3] = {
+        {.station_id = 0, .distance_from_start = 100000, .price = 1.50},  /* 100km */
+        {.station_id = 1, .distance_from_start = 250000, .price = 1.40},  /* 250km */
+        {.station_id = 2, .distance_from_start = 350000, .price = 1.45},  /* 350km */
+    };
+
+    FWRefuelProblem problem = {
+        .total_distance = 400000,       /* 400 km */
+        .base_consumption = 25.0,       /* 25 L/100km */
+        .tank_capacity = 100,
+        .current_fuel = 60,             /* Start with 60L */
+        .minimum_fuel = 30,             /* HIGH minimum - must maintain 30L always */
+        .minimum_fuel_at_end = 30,
+        .num_stations = 3,
+        .stations = stations,
+    };
+
+    /* Analysis:
+     * - Total fuel needed: 100L (400km * 25L/100km)
+     * - Start with 60L, need 40L more + 30L buffer
+     * - Gap 0→1 is 150km = 37.5L consumed
+     * - If we don't refuel at station 0, we'd have 60 - 25 = 35L at station 0
+     *   then 35 - 37.5 = -2.5L at station 1 (FAIL!)
+     * - So we MUST refuel at station 0 to maintain 30L minimum */
+
+    FWRefuelSolution solution;
+    memset(&solution, 0, sizeof(solution));
+    int rc = fw_solve_refuel_lp(&problem, &solution);
+    ASSERT(rc == 0 && solution.status == FW_STATUS_OPTIMAL, "Solver finds optimal");
+
+    /* Validate that minimum fuel is maintained throughout */
+    FWValidationResult vresult;
+    int feasible = fw_validate_solution(&problem, &solution, NULL, NULL, &vresult);
+
+    printf("  Purchases: [%.1fL, %.1fL, %.1fL]\n",
+           solution.purchases[0], solution.purchases[1], solution.purchases[2]);
+    printf("  Min fuel observed: %.2fL (minimum required: %.2fL)\n",
+           vresult.min_fuel_observed, problem.minimum_fuel);
+
+    ASSERT(feasible, "Solution is feasible");
+    ASSERT(vresult.min_fuel_ok, "Minimum fuel constraint satisfied throughout");
+    ASSERT(vresult.min_fuel_observed >= problem.minimum_fuel - 0.5,
+           "Never dropped below minimum fuel level");
+
+    /* Verify we actually had to refuel at station 0 (not just coast through) */
+    ASSERT(solution.purchases[0] > 0.5 || solution.purchases[1] > 0.5,
+           "Had to refuel to maintain minimum");
+
+    fw_free_solution(&solution);
+}
+
+/* ============================================================================
  * Test: Don't overfill when cheaper station ahead
  * ============================================================================ */
 void test_cheaper_ahead_no_overfill(void)
@@ -532,8 +592,9 @@ int main(void)
     test_negative_purchase_fails();
     test_benchmark_solutions_valid();
 
-    /* MILP constraint test */
+    /* Constraint enforcement tests */
     test_min_purchase_milp();
+    test_minimum_fuel_maintained();
 
     /* Economic optimality tests */
     printf("\n--- Economic Optimality Tests ---\n");
