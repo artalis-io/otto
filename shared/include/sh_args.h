@@ -81,7 +81,8 @@ typedef enum {
     SH_API_CARTA,     /* CARTA_ prefix */
     SH_API_VELO,      /* VELO_ prefix */
     SH_API_LOCUS,     /* LOCUS_ prefix */
-    SH_API_FUELWISE   /* FUELWISE_ prefix */
+    SH_API_FUELWISE,  /* FUELWISE_ prefix */
+    SH_API_RALPH      /* RALPH_ prefix */
 } ShApiType;
 
 /* ============================================================================
