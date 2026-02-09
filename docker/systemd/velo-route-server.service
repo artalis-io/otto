@@ -1,0 +1,35 @@
+[Unit]
+Description=OTTO Velo Route Server
+Documentation=https://github.com/ottofleet/otto/blob/main/velo/CLAUDE.md
+After=network.target
+
+[Service]
+Type=simple
+User=otto
+Group=otto
+WorkingDirectory=/opt/otto
+
+ExecStart=/opt/otto/bin/velo-route-server -p 8082 %i
+Restart=on-failure
+RestartSec=5
+
+# Include base hardening
+.include /etc/systemd/system/otto-base.conf
+
+# === Role B+C: Transport + Compute ===
+# Network access for HTTP
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Read-only access to map data and routing index
+ReadOnlyPaths=/opt/otto/data
+BindReadOnlyPaths=/opt/otto/data
+
+# Writable paths (none needed for velo)
+ReadWritePaths=
+
+# Environment
+Environment=VELO_RATE_LIMIT_RPS=20
+Environment=VELO_RATE_LIMIT_BURST=50
+
+[Install]
+WantedBy=multi-user.target

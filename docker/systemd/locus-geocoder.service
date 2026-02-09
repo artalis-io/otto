@@ -1,0 +1,35 @@
+[Unit]
+Description=OTTO Locus Geocoder
+Documentation=https://github.com/ottofleet/otto/blob/main/locus/CLAUDE.md
+After=network.target
+
+[Service]
+Type=simple
+User=otto
+Group=otto
+WorkingDirectory=/opt/otto
+
+ExecStart=/opt/otto/bin/locus-geocoder -p 8083 %i
+Restart=on-failure
+RestartSec=5
+
+# Include base hardening
+.include /etc/systemd/system/otto-base.conf
+
+# === Role B+C: Transport + Compute ===
+# Network access for HTTP
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Read-only access to geocoding index
+ReadOnlyPaths=/opt/otto/data
+BindReadOnlyPaths=/opt/otto/data
+
+# Writable paths (none needed for locus)
+ReadWritePaths=
+
+# Environment
+Environment=LOCUS_RATE_LIMIT_RPS=50
+Environment=LOCUS_RATE_LIMIT_BURST=100
+
+[Install]
+WantedBy=multi-user.target

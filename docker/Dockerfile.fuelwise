@@ -1,22 +1,21 @@
-# DEPRECATED - Use per-service Dockerfiles instead
+# FuelWise Refueling Optimizer
 #
-# This file is kept for backwards compatibility but will be removed in a future release.
-#
-# Per-service Dockerfiles (recommended):
-#   docker build -f docker/Dockerfile.carta -t otto-carta .
-#   docker build -f docker/Dockerfile.velo -t otto-velo .
-#   docker build -f docker/Dockerfile.locus -t otto-locus .
+# Build:
 #   docker build -f docker/Dockerfile.fuelwise -t otto-fuelwise .
-#   docker build -f docker/Dockerfile.ralph -t otto-ralph .
 #
-# Or use docker-compose:
-#   docker-compose up carta velo locus
+# Run:
+#   docker run -p 8080:8080 otto-fuelwise
 #
-# See docker/README.md for full documentation.
+# Security:
+#   - Distroless base (no shell, no package manager)
+#   - Non-root user (uid 65532)
+#   - Read-only root filesystem supported
+#   - No filesystem access needed (data via API)
+#
 # See docs/internals/security-model.md for security architecture.
 
 # =============================================================================
-# This Dockerfile builds FuelWise only (legacy behavior)
+# Build stage
 # =============================================================================
 FROM debian:bookworm-slim AS builder
 
@@ -35,13 +34,21 @@ COPY Makefile .
 
 RUN make shared && make ralph && make fuelwise && make fuelwise-api
 
+# Run tests
+RUN make test-ralph && make test-fuelwise
+
+# Verify the binary works
+RUN ./fuelwise/api/fuelwise-api --help || true
+
 # =============================================================================
-# Runtime (distroless)
+# Runtime stage (distroless)
 # =============================================================================
 FROM gcr.io/distroless/cc-debian12:nonroot
 
-LABEL org.opencontainers.image.title="OTTO FuelWise API (Legacy Dockerfile)"
-LABEL org.opencontainers.image.description="Use docker/Dockerfile.fuelwise instead"
+LABEL org.opencontainers.image.title="OTTO FuelWise API"
+LABEL org.opencontainers.image.description="Truck refueling optimization via LP formulation"
+LABEL org.opencontainers.image.source="https://github.com/ottofleet/otto"
+LABEL org.opencontainers.image.documentation="https://github.com/ottofleet/otto/blob/main/fuelwise/CLAUDE.md"
 
 WORKDIR /app
 
