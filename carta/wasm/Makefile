@@ -24,6 +24,7 @@ SHARED_SRC = ../../shared/src/sh_geo.c \
              ../../shared/src/sh_pbf.c \
              ../../shared/src/sh_font.c \
              ../../shared/src/sh_font_data.c \
+             ../../shared/src/sh_render.c \
              ../../shared/src/sh_arena.c \
              ../../shared/src/sh_pool.c \
              ../../shared/src/sh_hashmap.c \
