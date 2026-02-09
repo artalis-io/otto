@@ -20,6 +20,7 @@
  */
 
 #include "fw_bench.h"
+#include "sh_args.h"  /* For sh_parse_int */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,7 +73,7 @@ static int parse_args(int argc, char **argv, BenchOptions *opts)
         } else if (strcmp(argv[i], "--scenario") == 0 && i + 1 < argc) {
             opts->scenario = argv[++i];
         } else if (strcmp(argv[i], "--runs") == 0 && i + 1 < argc) {
-            opts->num_runs = atoi(argv[++i]);
+            opts->num_runs = sh_parse_int(argv[++i], 100, 1, 10000);
         } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
             opts->seed = strtoull(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--milp") == 0) {

@@ -20,10 +20,14 @@ export async function loadFuelWise() {
         return createAPI(wasmModule);
     }
 
-    // Dynamic import of the Emscripten-generated module
-    const FuelWise = (await import('./build/fuelwise.js')).default;
-    wasmModule = await FuelWise();
-    return createAPI(wasmModule);
+    try {
+        // Dynamic import of the Emscripten-generated module
+        const FuelWise = (await import('./build/fuelwise.js')).default;
+        wasmModule = await FuelWise();
+        return createAPI(wasmModule);
+    } catch (err) {
+        throw new Error(`Failed to load FuelWise WASM module: ${err.message}`);
+    }
 }
 
 /**
