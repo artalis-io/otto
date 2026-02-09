@@ -17,6 +17,9 @@
 
 /* ============================================================================
  * Fuel Consumption Calculation
+ *
+ * Distance is in meters, consumption is L/100km, fuel is in liters.
+ * Formula: fuel (L) = distance (m) / 100000.0 * consumption (L/100km)
  * ============================================================================ */
 
 double fw_calc_fuel_consumed(
@@ -28,7 +31,8 @@ double fw_calc_fuel_consumed(
 
     /* Use constant rate if no segments defined */
     if (problem->num_segments == 0 || problem->segments == NULL) {
-        return (to_distance - from_distance) / problem->base_consumption_mpg;
+        double distance_m = to_distance - from_distance;
+        return (distance_m / 100000.0) * problem->base_consumption;
     }
 
     /* Piecewise linear: sum fuel consumed in each segment */
@@ -54,8 +58,8 @@ double fw_calc_fuel_consumed(
         double range_end = (to_distance < seg_end) ? to_distance : seg_end;
 
         if (range_start < range_end) {
-            double segment_distance = range_end - range_start;
-            double segment_fuel = segment_distance / problem->segments[s].consumption_mpg;
+            double segment_distance_m = range_end - range_start;
+            double segment_fuel = (segment_distance_m / 100000.0) * problem->segments[s].consumption;
             total_fuel += segment_fuel;
             current_dist = range_end;
         }
@@ -117,7 +121,7 @@ int fw_solve_refuel_lp(
      */
     double est_price = problem->remaining_fuel_value;
     for (int i = 0; i < k; i++) {
-        double obj_coeff = problem->stations[i].price_per_gallon - est_price;
+        double obj_coeff = problem->stations[i].price - est_price;
         ralph_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_CONTINUOUS);
     }
 
@@ -237,7 +241,7 @@ int fw_solve_refuel_lp(
 
         for (int i = 0; i < k; i++) {
             solution->purchases[i] = x[x_start + i];
-            gross_cost += solution->purchases[i] * problem->stations[i].price_per_gallon;
+            gross_cost += solution->purchases[i] * problem->stations[i].price;
             total_purchased += solution->purchases[i];
             if (solution->purchases[i] > 0.5) {
                 solution->stop_flags[i] = 1;
@@ -321,7 +325,7 @@ int fw_solve_refuel_milp(
     /* Add x[i] variables - fuel purchased */
     double est_price = problem->remaining_fuel_value;
     for (int i = 0; i < k; i++) {
-        double obj_coeff = problem->stations[i].price_per_gallon - est_price;
+        double obj_coeff = problem->stations[i].price - est_price;
         ralph_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_CONTINUOUS);
     }
 
@@ -467,7 +471,7 @@ int fw_solve_refuel_milp(
             solution->purchases[i] = x[x_start + i];
             solution->stop_flags[i] = (x[z_start + i] > 0.5) ? 1 : 0;
 
-            gross_cost += solution->purchases[i] * problem->stations[i].price_per_gallon;
+            gross_cost += solution->purchases[i] * problem->stations[i].price;
             total_purchased += solution->purchases[i];
             stop_costs += x[z_start + i] * problem->stop_cost;
 
@@ -593,7 +597,7 @@ static RalphModel* build_benders_subproblem(
     /* Add x[i] variables */
     double est_price = problem->remaining_fuel_value;
     for (int i = 0; i < k; i++) {
-        double obj_coeff = problem->stations[i].price_per_gallon - est_price;
+        double obj_coeff = problem->stations[i].price - est_price;
         ralph_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_CONTINUOUS);
     }
 
@@ -854,7 +858,7 @@ int fw_solve_refuel_benders(
             solution->purchases[i] = best_purchases[i];
             solution->stop_flags[i] = best_z[i];
 
-            gross_cost += solution->purchases[i] * problem->stations[i].price_per_gallon;
+            gross_cost += solution->purchases[i] * problem->stations[i].price;
             total_purchased += solution->purchases[i];
             stop_costs += best_z[i] * problem->stop_cost;
 
@@ -932,7 +936,7 @@ int fw_validate_problem(
         return 0;
     }
 
-    if (problem->base_consumption_mpg <= 0 && problem->num_segments == 0) {
+    if (problem->base_consumption <= 0 && problem->num_segments == 0) {
         if (error_msg) snprintf(error_msg, error_msg_size, "Invalid consumption rate");
         return 0;
     }

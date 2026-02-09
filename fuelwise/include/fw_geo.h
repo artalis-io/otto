@@ -18,6 +18,9 @@ extern "C" {
 
 /* ============================================================================
  * Distance Calculations
+ *
+ * All distances in FuelWise are in SI units (meters) internally.
+ * Unit conversions happen at API boundaries.
  * ============================================================================ */
 
 /*
@@ -27,7 +30,7 @@ extern "C" {
  *   a, b - Geographic coordinates
  *
  * Returns:
- *   Distance in miles
+ *   Distance in meters
  */
 double fw_haversine_distance(FWCoord a, FWCoord b);
 
@@ -42,7 +45,7 @@ double fw_haversine_distance(FWCoord a, FWCoord b);
  *   closest   - Output: closest point on segment (can be NULL)
  *
  * Returns:
- *   Perpendicular distance in miles
+ *   Perpendicular distance in meters
  */
 double fw_point_to_segment_distance(
     FWCoord point,
@@ -56,13 +59,13 @@ double fw_point_to_segment_distance(
  * ============================================================================ */
 
 /*
- * Convert lat/lon to local Cartesian coordinates (miles from reference point).
+ * Convert lat/lon to local Cartesian coordinates (meters from reference point).
  * Uses equirectangular approximation, suitable for small areas.
  *
  * Parameters:
  *   coord   - Geographic coordinate to convert
  *   ref     - Reference point (origin of local system)
- *   x, y    - Output: local coordinates in miles
+ *   x, y    - Output: local coordinates in meters
  */
 void fw_latlon_to_local(FWCoord coord, FWCoord ref, double *x, double *y);
 
@@ -70,7 +73,7 @@ void fw_latlon_to_local(FWCoord coord, FWCoord ref, double *x, double *y);
  * Convert local Cartesian coordinates back to lat/lon.
  *
  * Parameters:
- *   x, y    - Local coordinates in miles
+ *   x, y    - Local coordinates in meters
  *   ref     - Reference point (origin of local system)
  *   coord   - Output: geographic coordinate
  */
@@ -87,7 +90,7 @@ void fw_local_to_latlon(double x, double y, FWCoord ref, FWCoord *coord);
  *   polyline - The polyline to measure
  *
  * Returns:
- *   Total length in miles
+ *   Total length in meters
  */
 double fw_polyline_length(const FWPolyline *polyline);
 
@@ -102,7 +105,7 @@ double fw_polyline_length(const FWPolyline *polyline);
  *   closest        - Output: closest point on polyline (can be NULL)
  *
  * Returns:
- *   Distance to closest point in miles, or -1 if polyline is empty
+ *   Distance to closest point in meters, or -1 if polyline is empty
  */
 double fw_find_closest_on_polyline(
     FWCoord point,
@@ -121,7 +124,7 @@ double fw_find_closest_on_polyline(
  *   t             - Parameter along segment [0,1]
  *
  * Returns:
- *   Distance from start of polyline in miles
+ *   Distance from start of polyline in meters
  */
 double fw_distance_along_polyline(
     const FWPolyline *polyline,

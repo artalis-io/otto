@@ -17,6 +17,7 @@
 #include "sh_spatial_grid.h"
 #include "sh_query.h"
 #include "sh_render.h"
+#include "sh_units.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3715,6 +3716,174 @@ TEST(render_color_macros)
 }
 
 /* ============================================================================
+ * Unit Conversion Tests
+ * ============================================================================ */
+
+TEST(unit_km_miles_roundtrip)
+{
+    double km = 100.0;
+    double miles = sh_km_to_miles(km);
+    double km_back = sh_miles_to_km(miles);
+    ASSERT_NEAR(km, km_back, 0.0001);
+}
+
+TEST(unit_miles_km_roundtrip)
+{
+    double miles = 100.0;
+    double km = sh_miles_to_km(miles);
+    double miles_back = sh_km_to_miles(km);
+    ASSERT_NEAR(miles, miles_back, 0.0001);
+}
+
+TEST(unit_meters_km)
+{
+    ASSERT_NEAR(sh_m_to_km(1000.0), 1.0, 0.0001);
+    ASSERT_NEAR(sh_km_to_m(1.0), 1000.0, 0.0001);
+}
+
+TEST(unit_meters_miles)
+{
+    /* 1609.344 meters = 1 mile */
+    ASSERT_NEAR(sh_m_to_miles(1609.344), 1.0, 0.0001);
+    ASSERT_NEAR(sh_miles_to_m(1.0), 1609.344, 0.001);
+}
+
+TEST(unit_efficiency_conversion)
+{
+    /* 30 MPG is approximately 7.84 L/100km */
+    double mpg = 30.0;
+    double l100km = sh_mpg_to_l100km(mpg);
+    ASSERT_NEAR(l100km, 7.84, 0.01);
+
+    /* Round-trip */
+    double mpg_back = sh_l100km_to_mpg(l100km);
+    ASSERT_NEAR(mpg, mpg_back, 0.001);
+}
+
+TEST(unit_efficiency_zero_handling)
+{
+    /* Zero efficiency should not crash */
+    ASSERT_NEAR(sh_mpg_to_l100km(0), 0.0, 0.0001);
+    ASSERT_NEAR(sh_l100km_to_mpg(0), 0.0, 0.0001);
+}
+
+TEST(unit_volume_conversion)
+{
+    double gallons = 10.0;
+    double liters = sh_gallons_to_liters(gallons);
+    ASSERT_NEAR(liters, 37.8541, 0.001);
+    ASSERT_NEAR(sh_liters_to_gallons(liters), gallons, 0.0001);
+}
+
+TEST(unit_weight_conversion)
+{
+    double kg = 100.0;
+    double lbs = sh_kg_to_lbs(kg);
+    ASSERT_NEAR(lbs, 220.462, 0.01);
+    ASSERT_NEAR(sh_lbs_to_kg(lbs), kg, 0.0001);
+}
+
+TEST(unit_price_conversion)
+{
+    /* $3.00/gallon -> $0.79/liter (approx) */
+    double ppg = 3.00;
+    double ppl = sh_price_per_gallon_to_liter(ppg);
+    ASSERT_NEAR(ppl, 0.7925, 0.001);
+
+    /* Round-trip */
+    ASSERT_NEAR(sh_price_per_liter_to_gallon(ppl), ppg, 0.0001);
+}
+
+TEST(unit_parse_metric)
+{
+    ASSERT_EQ(sh_parse_units("metric"), SH_UNITS_METRIC);
+    ASSERT_EQ(sh_parse_units("METRIC"), SH_UNITS_METRIC);
+    ASSERT_EQ(sh_parse_units("\"metric\""), SH_UNITS_METRIC);
+    ASSERT_EQ(sh_parse_units(NULL), SH_UNITS_METRIC);
+    ASSERT_EQ(sh_parse_units("unknown"), SH_UNITS_METRIC);
+    ASSERT_EQ(sh_parse_units(""), SH_UNITS_METRIC);
+}
+
+TEST(unit_parse_imperial)
+{
+    ASSERT_EQ(sh_parse_units("imperial"), SH_UNITS_IMPERIAL);
+    ASSERT_EQ(sh_parse_units("IMPERIAL"), SH_UNITS_IMPERIAL);
+    ASSERT_EQ(sh_parse_units("Imperial"), SH_UNITS_IMPERIAL);
+    ASSERT_EQ(sh_parse_units("\"imperial\""), SH_UNITS_IMPERIAL);
+    ASSERT_EQ(sh_parse_units("  imperial"), SH_UNITS_IMPERIAL);
+}
+
+TEST(unit_string_representation)
+{
+    ASSERT(strcmp(sh_units_string(SH_UNITS_METRIC), "metric") == 0);
+    ASSERT(strcmp(sh_units_string(SH_UNITS_IMPERIAL), "imperial") == 0);
+}
+
+TEST(unit_meters_feet)
+{
+    /* 1 meter = 3.28084 feet */
+    ASSERT_NEAR(sh_m_to_ft(1.0), 3.28084, 0.0001);
+    /* Round-trip */
+    double m = 10.0;
+    double ft = sh_m_to_ft(m);
+    ASSERT_NEAR(sh_ft_to_m(ft), m, 0.0001);
+}
+
+TEST(unit_meters_yards)
+{
+    /* 1 meter = 1.09361 yards */
+    ASSERT_NEAR(sh_m_to_yards(1.0), 1.09361, 0.0001);
+    /* Round-trip */
+    double m = 100.0;
+    ASSERT_NEAR(sh_yards_to_m(sh_m_to_yards(m)), m, 0.0001);
+}
+
+TEST(unit_cm_inches)
+{
+    /* 2.54 cm = 1 inch exactly */
+    ASSERT_NEAR(sh_in_to_cm(1.0), 2.54, 0.0001);
+    ASSERT_NEAR(sh_cm_to_in(2.54), 1.0, 0.0001);
+    /* Round-trip */
+    double cm = 50.0;
+    ASSERT_NEAR(sh_in_to_cm(sh_cm_to_in(cm)), cm, 0.0001);
+}
+
+TEST(unit_mm_inches)
+{
+    /* 25.4 mm = 1 inch */
+    ASSERT_NEAR(sh_in_to_mm(1.0), 25.4, 0.0001);
+    ASSERT_NEAR(sh_mm_to_in(25.4), 1.0, 0.0001);
+}
+
+TEST(unit_ml_floz)
+{
+    /* 29.5735 ml = 1 fl oz */
+    ASSERT_NEAR(sh_floz_to_ml(1.0), 29.5735, 0.001);
+    /* Round-trip */
+    double ml = 500.0;
+    ASSERT_NEAR(sh_floz_to_ml(sh_ml_to_floz(ml)), ml, 0.001);
+}
+
+TEST(unit_grams_ounces)
+{
+    /* 28.3495 g = 1 oz */
+    ASSERT_NEAR(sh_oz_to_g(1.0), 28.3495, 0.001);
+    /* Round-trip */
+    double g = 100.0;
+    ASSERT_NEAR(sh_oz_to_g(sh_g_to_oz(g)), g, 0.001);
+}
+
+TEST(unit_tonnes)
+{
+    /* 1000 kg = 1 metric tonne */
+    ASSERT_NEAR(sh_kg_to_tonnes(1000.0), 1.0, 0.0001);
+    ASSERT_NEAR(sh_tonnes_to_kg(1.0), 1000.0, 0.0001);
+    /* 907.18474 kg = 1 US short ton */
+    ASSERT_NEAR(sh_kg_to_tons_us(907.18474), 1.0, 0.0001);
+    ASSERT_NEAR(sh_tons_us_to_kg(1.0), 907.18474, 0.001);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -4013,6 +4182,27 @@ int main(void)
     RUN_TEST(render_clear_rect);
     RUN_TEST(render_clear_rect_clipping);
     RUN_TEST(render_color_macros);
+
+    printf("\nUnit Conversions:\n");
+    RUN_TEST(unit_km_miles_roundtrip);
+    RUN_TEST(unit_miles_km_roundtrip);
+    RUN_TEST(unit_meters_km);
+    RUN_TEST(unit_meters_miles);
+    RUN_TEST(unit_efficiency_conversion);
+    RUN_TEST(unit_efficiency_zero_handling);
+    RUN_TEST(unit_volume_conversion);
+    RUN_TEST(unit_weight_conversion);
+    RUN_TEST(unit_price_conversion);
+    RUN_TEST(unit_parse_metric);
+    RUN_TEST(unit_parse_imperial);
+    RUN_TEST(unit_string_representation);
+    RUN_TEST(unit_meters_feet);
+    RUN_TEST(unit_meters_yards);
+    RUN_TEST(unit_cm_inches);
+    RUN_TEST(unit_mm_inches);
+    RUN_TEST(unit_ml_floz);
+    RUN_TEST(unit_grams_ounces);
+    RUN_TEST(unit_tonnes);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

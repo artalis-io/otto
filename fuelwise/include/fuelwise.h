@@ -80,14 +80,19 @@ void fw_free_response(FWOptimizeResponse *response);
 /*
  * Simple route optimization with default settings.
  *
+ * All units are SI:
+ *   - Distances: meters
+ *   - Volumes: liters
+ *   - Consumption: L/100km
+ *
  * Parameters:
  *   stations        - Array of fuel stations
  *   num_stations    - Number of stations
  *   route           - Route polyline
- *   tank_capacity   - Tank capacity in gallons
- *   current_fuel    - Current fuel level in gallons
- *   consumption_mpg - Miles per gallon
- *   min_fuel        - Minimum fuel level to maintain
+ *   tank_capacity   - Tank capacity in liters
+ *   current_fuel    - Current fuel level in liters
+ *   consumption     - Fuel consumption in L/100km
+ *   min_fuel        - Minimum fuel level to maintain in liters
  *   solution        - Output: refueling solution
  *
  * Returns:
@@ -99,7 +104,7 @@ int fw_optimize_simple(
     const FWPolyline *route,
     double tank_capacity,
     double current_fuel,
-    double consumption_mpg,
+    double consumption,
     double min_fuel,
     FWRefuelSolution *solution
 );

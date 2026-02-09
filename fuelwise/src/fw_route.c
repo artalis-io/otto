@@ -36,13 +36,13 @@ static int compare_snapped_stations(const void *a, const void *b)
 static double station_min_distance_to_polyline(
     FWCoord station,
     const FWPolyline *polyline,
-    double max_radius_miles)
+    double max_radius)
 {
     if (polyline == NULL || polyline->num_points < 2) {
         return -1.0;
     }
 
-    double min_dist = max_radius_miles + 1.0;
+    double min_dist = max_radius + 1.0;
 
     for (int i = 0; i < polyline->num_points - 1; i++) {
         double dist = fw_point_to_segment_distance(
@@ -55,13 +55,13 @@ static double station_min_distance_to_polyline(
         if (dist < min_dist) {
             min_dist = dist;
             /* Early exit if we found a segment within radius */
-            if (min_dist <= max_radius_miles) {
+            if (min_dist <= max_radius) {
                 return min_dist;
             }
         }
     }
 
-    return (min_dist <= max_radius_miles) ? min_dist : -1.0;
+    return (min_dist <= max_radius) ? min_dist : -1.0;
 }
 
 /*
@@ -72,7 +72,7 @@ static int* create_station_filter_mask(
     const FWStation *stations,
     int num_stations,
     const FWPolyline *polyline,
-    double max_radius_miles)
+    double max_radius)
 {
     int *mask = calloc(num_stations, sizeof(int));
     if (!mask) return NULL;
@@ -81,7 +81,7 @@ static int* create_station_filter_mask(
         double dist = station_min_distance_to_polyline(
             stations[i].location,
             polyline,
-            max_radius_miles
+            max_radius
         );
         mask[i] = (dist >= 0.0) ? 1 : 0;
     }
@@ -97,7 +97,7 @@ int fw_filter_stations(
     const FWStation *stations,
     int num_stations,
     const FWPolyline *polyline,
-    double max_distance_miles,
+    double max_distance,
     FWSnappedStation **result,
     int *result_count)
 {
@@ -131,12 +131,12 @@ int fw_filter_stations(
             &closest
         );
 
-        if (perp_dist >= 0.0 && perp_dist <= max_distance_miles) {
+        if (perp_dist >= 0.0 && perp_dist <= max_distance) {
             temp[count].station_id = stations[i].id;
             temp[count].distance_from_start = fw_distance_along_polyline(polyline, seg_idx, t);
             temp[count].perpendicular_distance = perp_dist;
             temp[count].snap_point = closest;
-            temp[count].price_per_gallon = stations[i].price_per_gallon;
+            temp[count].price = stations[i].price;
             count++;
         }
     }
@@ -181,7 +181,7 @@ int fw_filter_stations_two_step(
     int *filter_mask = create_station_filter_mask(
         stations, num_stations,
         detailed,
-        config->max_distance_miles
+        config->max_distance
     );
 
     if (!filter_mask) {
@@ -272,14 +272,14 @@ int fw_filter_stations_two_step(
                 &snap
             );
 
-            if (perp_dist <= config->max_distance_miles) {
+            if (perp_dist <= config->max_distance) {
                 double along_segment = fw_haversine_distance(seg_start, snap);
                 double current_along = along_polyline + along_segment;
 
                 /* Check min distance between identical points */
                 double last_dist = last_along_dist[st];
                 if (last_dist == 0.0 ||
-                    (current_along - last_dist) >= config->min_repeat_distance_miles) {
+                    (current_along - last_dist) >= config->min_repeat_distance) {
 
                     last_along_dist[st] = current_along;
 
@@ -298,7 +298,7 @@ int fw_filter_stations_two_step(
 
                     collected[collected_count].station_id = filtered_stations[st].id;
                     collected[collected_count].distance_from_start = current_along;
-                    collected[collected_count].price_per_gallon = filtered_stations[st].price_per_gallon;
+                    collected[collected_count].price = filtered_stations[st].price;
                     collected[collected_count].perpendicular_distance = perp_dist;
                     collected[collected_count].snap_point = snap;
                     collected_count++;
@@ -349,7 +349,7 @@ int fw_filter_stations_two_step(
         int can_dedup = 0;
         if (curr->station_id == last->station_id) {
             double dist_between = curr->distance_from_start - last->distance_from_start;
-            if (dist_between < config->max_dedup_distance_miles) {
+            if (dist_between < config->max_dedup_distance) {
                 can_dedup = 1;
             }
         }
