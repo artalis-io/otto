@@ -146,7 +146,7 @@ typedef struct {
 
 static WorkerThread *s_workers = NULL;
 static int s_num_workers = 0;
-static char s_listen_url[128] = "";
+static char s_listen_url[320] = "";  /* http:// + 253 char DNS + :port */
 
 /* Progress callback for PBF loading */
 static void pbf_progress_callback(const char *phase, size_t current,

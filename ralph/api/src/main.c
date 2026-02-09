@@ -179,7 +179,7 @@ int main(int argc, char *argv[]) {
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
 
-    char url[128];
+    char url[320];  /* http:// + 253 char DNS + :port */
     snprintf(url, sizeof(url), "http://%s:%d", s_config.host, s_config.port);
 
     struct mg_connection *c = mg_http_listen(&mgr, url, ev_handler, NULL);
