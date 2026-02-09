@@ -15,6 +15,7 @@
 
 #include "mongoose.h"
 #include "ralph_api.h"
+#include "sh_args.h"
 
 /* Configuration */
 static int s_port = 8084;
@@ -155,7 +156,7 @@ static void parse_args(int argc, char *argv[]) {
     const char *env_port = getenv("RALPH_PORT");
     const char *env_host = getenv("RALPH_HOST");
 
-    if (env_port) s_port = atoi(env_port);
+    if (env_port) s_port = sh_parse_int(env_port, 8084, 1, 65535);
     if (env_host) s_host = env_host;
 
     /* Command line overrides */
@@ -164,7 +165,7 @@ static void parse_args(int argc, char *argv[]) {
             print_usage(argv[0]);
             exit(0);
         } else if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0) && i + 1 < argc) {
-            s_port = atoi(argv[++i]);
+            s_port = sh_parse_int(argv[++i], 8084, 1, 65535);
         } else if ((strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--host") == 0) && i + 1 < argc) {
             s_host = argv[++i];
         }
