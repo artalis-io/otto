@@ -431,6 +431,234 @@ TEST(msdf_coverage_threshold)
 }
 
 /* ============================================================================
+ * Glyph Rendering Tests
+ * ============================================================================ */
+
+#include "sh_render.h"
+#include <stdlib.h>
+
+TEST(render_glyph_basic)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    const SHGlyph *glyph = sh_font_get_glyph(font, 'A');
+    if (!glyph) return 1;
+
+    /* Create a small test buffer */
+    int w = 64, h = 64;
+    uint8_t *pixels = calloc(w * h, 4);
+    ASSERT(pixels != NULL);
+
+    /* Render glyph at center */
+    sh_font_render_glyph(pixels, w, h, font, glyph, 10, 10, 24.0f,
+                         255, 255, 255, 255, 0.5f);
+
+    /* Check that some pixels were drawn (non-zero alpha somewhere) */
+    int has_pixels = 0;
+    for (int i = 0; i < w * h * 4; i += 4) {
+        if (pixels[i + 3] > 0) {
+            has_pixels = 1;
+            break;
+        }
+    }
+    ASSERT(has_pixels);
+
+    free(pixels);
+    return 1;
+}
+
+TEST(render_glyph_null_safety)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    const SHGlyph *glyph = sh_font_get_glyph(font, 'A');
+    if (!glyph) return 1;
+
+    uint8_t pixels[64 * 4];
+    memset(pixels, 0, sizeof(pixels));
+
+    /* NULL pixels - should not crash */
+    sh_font_render_glyph(NULL, 64, 1, font, glyph, 0, 0, 16.0f, 255, 255, 255, 255, 0.5f);
+
+    /* NULL font - should not crash */
+    sh_font_render_glyph(pixels, 64, 1, NULL, glyph, 0, 0, 16.0f, 255, 255, 255, 255, 0.5f);
+
+    /* NULL glyph - should not crash */
+    sh_font_render_glyph(pixels, 64, 1, font, NULL, 0, 0, 16.0f, 255, 255, 255, 255, 0.5f);
+
+    /* Zero/negative font size - should not crash */
+    sh_font_render_glyph(pixels, 64, 1, font, glyph, 0, 0, 0.0f, 255, 255, 255, 255, 0.5f);
+    sh_font_render_glyph(pixels, 64, 1, font, glyph, 0, 0, -10.0f, 255, 255, 255, 255, 0.5f);
+
+    return 1;
+}
+
+TEST(render_glyph_clipping)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    const SHGlyph *glyph = sh_font_get_glyph(font, 'A');
+    if (!glyph) return 1;
+
+    int w = 32, h = 32;
+    uint8_t *pixels = calloc(w * h, 4);
+    ASSERT(pixels != NULL);
+
+    /* Render fully outside - should not crash and leave buffer unchanged */
+    sh_font_render_glyph(pixels, w, h, font, glyph, -100, -100, 16.0f,
+                         255, 255, 255, 255, 0.5f);
+
+    /* Check buffer is still zero */
+    int all_zero = 1;
+    for (int i = 0; i < w * h * 4; i++) {
+        if (pixels[i] != 0) {
+            all_zero = 0;
+            break;
+        }
+    }
+    ASSERT(all_zero);
+
+    /* Render partially clipped */
+    sh_font_render_glyph(pixels, w, h, font, glyph, -5, 5, 16.0f,
+                         255, 0, 0, 255, 0.5f);
+
+    /* Some pixels should be drawn now */
+    int has_pixels = 0;
+    for (int i = 0; i < w * h * 4; i += 4) {
+        if (pixels[i + 3] > 0) {
+            has_pixels = 1;
+            break;
+        }
+    }
+    ASSERT(has_pixels);
+
+    free(pixels);
+    return 1;
+}
+
+TEST(render_glyph_alpha)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    const SHGlyph *glyph = sh_font_get_glyph(font, 'O');  /* Solid glyph */
+    if (!glyph) return 1;
+
+    int w = 64, h = 64;
+    uint8_t *pixels1 = calloc(w * h, 4);
+    uint8_t *pixels2 = calloc(w * h, 4);
+    ASSERT(pixels1 && pixels2);
+
+    /* Render with full alpha */
+    sh_font_render_glyph(pixels1, w, h, font, glyph, 10, 10, 24.0f,
+                         255, 255, 255, 255, 0.5f);
+
+    /* Render with half alpha */
+    sh_font_render_glyph(pixels2, w, h, font, glyph, 10, 10, 24.0f,
+                         255, 255, 255, 128, 0.5f);
+
+    /* Half-alpha version should have lower max alpha */
+    uint8_t max1 = 0, max2 = 0;
+    for (int i = 0; i < w * h * 4; i += 4) {
+        if (pixels1[i + 3] > max1) max1 = pixels1[i + 3];
+        if (pixels2[i + 3] > max2) max2 = pixels2[i + 3];
+    }
+    ASSERT(max1 > max2);  /* Full alpha should have higher max */
+
+    free(pixels1);
+    free(pixels2);
+    return 1;
+}
+
+TEST(render_text_basic)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    int w = 256, h = 64;
+    uint8_t *pixels = calloc(w * h, 4);
+    ASSERT(pixels != NULL);
+
+    sh_font_render_text(pixels, w, h, font, "Hello", -1,
+                        10.0f, 10.0f, 24.0f, 255, 255, 255, 255);
+
+    /* Check that pixels were drawn */
+    int has_pixels = 0;
+    for (int i = 0; i < w * h * 4; i += 4) {
+        if (pixels[i + 3] > 0) {
+            has_pixels = 1;
+            break;
+        }
+    }
+    ASSERT(has_pixels);
+
+    free(pixels);
+    return 1;
+}
+
+TEST(render_text_null_safety)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    uint8_t pixels[256 * 4];
+    memset(pixels, 0, sizeof(pixels));
+
+    /* NULL pixels */
+    sh_font_render_text(NULL, 256, 1, font, "Hi", -1, 0, 0, 16.0f, 255, 255, 255, 255);
+
+    /* NULL font */
+    sh_font_render_text(pixels, 256, 1, NULL, "Hi", -1, 0, 0, 16.0f, 255, 255, 255, 255);
+
+    /* NULL text */
+    sh_font_render_text(pixels, 256, 1, font, NULL, -1, 0, 0, 16.0f, 255, 255, 255, 255);
+
+    /* Empty text */
+    sh_font_render_text(pixels, 256, 1, font, "", -1, 0, 0, 16.0f, 255, 255, 255, 255);
+
+    /* Zero font size */
+    sh_font_render_text(pixels, 256, 1, font, "Hi", -1, 0, 0, 0.0f, 255, 255, 255, 255);
+
+    return 1;
+}
+
+TEST(render_text_explicit_length)
+{
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    int w = 256, h = 64;
+    uint8_t *pixels1 = calloc(w * h, 4);
+    uint8_t *pixels2 = calloc(w * h, 4);
+    ASSERT(pixels1 && pixels2);
+
+    /* Render "Hello World" with explicit length 5 (just "Hello") */
+    sh_font_render_text(pixels1, w, h, font, "Hello World", 5,
+                        10.0f, 10.0f, 24.0f, 255, 255, 255, 255);
+
+    /* Render just "Hello" */
+    sh_font_render_text(pixels2, w, h, font, "Hello", -1,
+                        10.0f, 10.0f, 24.0f, 255, 255, 255, 255);
+
+    /* Both should produce identical output */
+    int identical = 1;
+    for (int i = 0; i < w * h * 4; i++) {
+        if (pixels1[i] != pixels2[i]) {
+            identical = 0;
+            break;
+        }
+    }
+    ASSERT(identical);
+
+    free(pixels1);
+    free(pixels2);
+    return 1;
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -470,6 +698,15 @@ int main(void)
     RUN_TEST(msdf_sample_bilinear);
     RUN_TEST(msdf_coverage_bilinear);
     RUN_TEST(msdf_coverage_threshold);
+
+    printf("\nGlyph Rendering:\n");
+    RUN_TEST(render_glyph_basic);
+    RUN_TEST(render_glyph_null_safety);
+    RUN_TEST(render_glyph_clipping);
+    RUN_TEST(render_glyph_alpha);
+    RUN_TEST(render_text_basic);
+    RUN_TEST(render_text_null_safety);
+    RUN_TEST(render_text_explicit_length);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 
