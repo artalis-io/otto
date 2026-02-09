@@ -26,6 +26,7 @@
 #include "ct_pbf.h"
 #include "ct_lod.h"
 #include "ct_render.h"
+#include "shared.h"  /* For sh_parse_int */
 
 /* ============================================================================
  * Safe String Macros
@@ -750,7 +751,7 @@ static int parse_args(int argc, char **argv, CompareConfig *cfg)
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i-1]);
                 return -1;
             }
-            cfg->tile_size = atoi(argv[i]);
+            cfg->tile_size = sh_parse_int(argv[i], 0, 256, 512);
             if (cfg->tile_size != 256 && cfg->tile_size != 512) {
                 fprintf(stderr, "Error: Tile size must be 256 or 512\n");
                 return -1;
@@ -760,7 +761,7 @@ static int parse_args(int argc, char **argv, CompareConfig *cfg)
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i-1]);
                 return -1;
             }
-            cfg->zoom_level = atoi(argv[i]);
+            cfg->zoom_level = sh_parse_int(argv[i], -1, 0, 22);
             if (cfg->zoom_level < 0 || cfg->zoom_level > 22) {
                 fprintf(stderr, "Error: Zoom level must be 0-22\n");
                 return -1;
@@ -770,7 +771,7 @@ static int parse_args(int argc, char **argv, CompareConfig *cfg)
                 fprintf(stderr, "Error: %s requires an argument\n", argv[i-1]);
                 return -1;
             }
-            cfg->max_tiles = atoi(argv[i]);
+            cfg->max_tiles = sh_parse_int(argv[i], 0, 1, 100);
             if (cfg->max_tiles < 1 || cfg->max_tiles > 100) {
                 fprintf(stderr, "Error: Max tiles must be 1-100\n");
                 return -1;

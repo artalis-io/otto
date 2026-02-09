@@ -489,13 +489,13 @@ static int load_config_file(const char *filename, TileServerConfig *cfg) {
             strncpy(cfg->server.host, value, sizeof(cfg->server.host) - 1);
             cfg->server.host[sizeof(cfg->server.host) - 1] = '\0';
         } else if (strcmp(key, "port") == 0) {
-            cfg->server.port = atoi(value);
+            cfg->server.port = sh_parse_int(value, cfg->server.port, 1, 65535);
         } else if (strcmp(key, "min_zoom") == 0) {
-            cfg->min_zoom = atoi(value);
+            cfg->min_zoom = sh_parse_int(value, cfg->min_zoom, 0, 22);
         } else if (strcmp(key, "max_zoom") == 0) {
-            cfg->max_zoom = atoi(value);
+            cfg->max_zoom = sh_parse_int(value, cfg->max_zoom, 0, 22);
         } else if (strcmp(key, "tile_size") == 0) {
-            cfg->tile_size = atoi(value);
+            cfg->tile_size = sh_parse_int(value, cfg->tile_size, 64, 4096);
         } else if (strcmp(key, "name") == 0) {
             strncpy(cfg->name, value, sizeof(cfg->name) - 1);
             cfg->name[sizeof(cfg->name) - 1] = '\0';
@@ -574,13 +574,13 @@ static void load_carta_env(TileServerConfig *cfg) {
         cfg->pbf_path[sizeof(cfg->pbf_path) - 1] = '\0';
     }
     if ((val = getenv("TILE_MIN_ZOOM")) || (val = getenv("CARTA_MIN_ZOOM"))) {
-        cfg->min_zoom = atoi(val);
+        cfg->min_zoom = sh_parse_int(val, cfg->min_zoom, 0, 22);
     }
     if ((val = getenv("TILE_MAX_ZOOM")) || (val = getenv("CARTA_MAX_ZOOM"))) {
-        cfg->max_zoom = atoi(val);
+        cfg->max_zoom = sh_parse_int(val, cfg->max_zoom, 0, 22);
     }
     if ((val = getenv("TILE_SIZE")) || (val = getenv("CARTA_TILE_SIZE"))) {
-        cfg->tile_size = atoi(val);
+        cfg->tile_size = sh_parse_int(val, cfg->tile_size, 64, 4096);
     }
     if ((val = getenv("TILE_NAME")) || (val = getenv("CARTA_NAME"))) {
         strncpy(cfg->name, val, sizeof(cfg->name) - 1);
@@ -593,7 +593,7 @@ static void load_carta_env(TileServerConfig *cfg) {
         cfg->render_preset = parse_render_preset(val);
     }
     if ((val = getenv("CARTA_RENDER_WORKERS"))) {
-        cfg->render_workers = atoi(val);
+        cfg->render_workers = sh_parse_int(val, cfg->render_workers, 0, 256);
     }
 
     /* CORS configuration */
@@ -607,7 +607,7 @@ static void load_carta_env(TileServerConfig *cfg) {
         sh_cors_set_headers(&s_cors, val);
     }
     if ((val = getenv("CARTA_CORS_CREDENTIALS"))) {
-        s_cors.allow_credentials = (atoi(val) != 0);
+        s_cors.allow_credentials = (sh_parse_int(val, 0, 0, 1) != 0);
     }
 }
 
@@ -961,13 +961,17 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
     free(buffer);
 }
 
-/* Parse query string for a parameter, returns default if not found */
-static int get_query_int(struct mg_str query, const char *name, int default_val) {
-    char buf[32];
-    if (mg_http_get_var(&query, name, buf, sizeof(buf)) > 0) {
-        return atoi(buf);
-    }
-    return default_val;
+/* Parse query string for a parameter with bounds, returns default if not found/invalid.
+ * Converts mongoose mg_str to null-terminated string and uses sh_query_get_int_bounded. */
+static int get_query_int(struct mg_str query, const char *name, int default_val,
+                         int min_val, int max_val) {
+    /* Convert mg_str to null-terminated string for sh_query */
+    char query_buf[512];
+    size_t len = query.len < sizeof(query_buf) - 1 ? query.len : sizeof(query_buf) - 1;
+    memcpy(query_buf, query.buf, len);
+    query_buf[len] = '\0';
+
+    return sh_query_get_int_bounded(query_buf, name, default_val, min_val, max_val);
 }
 
 /* GET /tiles/{z}/{x}/{y}.txt or .ascii */
@@ -993,10 +997,10 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
     CTAsciiOptions ascii_opts;
     ct_ascii_default_options(&ascii_opts);
 
-    ascii_opts.width = get_query_int(hm->query, "width", 80);
-    ascii_opts.height = get_query_int(hm->query, "height", 0);  /* 0 = auto */
-    ascii_opts.invert = get_query_int(hm->query, "invert", 0);
-    ascii_opts.color = get_query_int(hm->query, "color", 0);
+    ascii_opts.width = get_query_int(hm->query, "width", 80, 1, 256);
+    ascii_opts.height = get_query_int(hm->query, "height", 0, 0, 256);  /* 0 = auto */
+    ascii_opts.invert = get_query_int(hm->query, "invert", 0, 0, 1);
+    ascii_opts.color = get_query_int(hm->query, "color", 0, 0, 1);
 
     /* Parse charset: simple, extended, blocks, braille */
     char charset_buf[16];
@@ -1411,11 +1415,11 @@ int main(int argc, char *argv[]) {
                 }
             }
         } else if (strcmp(argv[i], "--min-zoom") == 0) {
-            if (++i < argc) s_config.min_zoom = atoi(argv[i]);
+            if (++i < argc) s_config.min_zoom = sh_parse_int(argv[i], s_config.min_zoom, 0, 22);
         } else if (strcmp(argv[i], "--max-zoom") == 0) {
-            if (++i < argc) s_config.max_zoom = atoi(argv[i]);
+            if (++i < argc) s_config.max_zoom = sh_parse_int(argv[i], s_config.max_zoom, 0, 22);
         } else if (strcmp(argv[i], "--tile-size") == 0) {
-            if (++i < argc) s_config.tile_size = atoi(argv[i]);
+            if (++i < argc) s_config.tile_size = sh_parse_int(argv[i], s_config.tile_size, 64, 4096);
         } else if (strcmp(argv[i], "--lod") == 0) {
             if (++i < argc) s_config.lod_preset = parse_lod_preset(argv[i]);
         } else if (strcmp(argv[i], "--no-lod") == 0) {
@@ -1428,7 +1432,7 @@ int main(int argc, char *argv[]) {
                 s_config.save_index_path[sizeof(s_config.save_index_path) - 1] = '\0';
             }
         } else if (strcmp(argv[i], "--render-workers") == 0) {
-            if (++i < argc) s_config.render_workers = atoi(argv[i]);
+            if (++i < argc) s_config.render_workers = sh_parse_int(argv[i], s_config.render_workers, 0, 256);
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;

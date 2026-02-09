@@ -19,10 +19,23 @@ extern "C" {
  *
  * @param query       Query string (e.g., "width=80&height=40")
  * @param key         Parameter name to find
- * @param default_val Value to return if not found
+ * @param default_val Value to return if not found or invalid
  * @return Parameter value or default_val
  */
 int sh_query_get_int(const char *query, const char *key, int default_val);
+
+/*
+ * Get integer parameter from query string with bounds validation.
+ *
+ * @param query       Query string (e.g., "width=80&height=40")
+ * @param key         Parameter name to find
+ * @param default_val Value to return if not found, invalid, or out of range
+ * @param min_val     Minimum acceptable value (inclusive)
+ * @param max_val     Maximum acceptable value (inclusive)
+ * @return Parameter value clamped to [min_val, max_val], or default_val on error
+ */
+int sh_query_get_int_bounded(const char *query, const char *key, int default_val,
+                             int min_val, int max_val);
 
 /*
  * Get string parameter from query string.
