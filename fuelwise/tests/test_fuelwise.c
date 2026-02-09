@@ -10,6 +10,7 @@
 #include <string.h>
 #include <math.h>
 #include "fuelwise.h"
+#include "fw_consumption.h"
 #include "sh_units.h"
 
 #define TOLERANCE 1e-4
@@ -803,6 +804,173 @@ void test_efficiency_formula(void)
 }
 
 /* ============================================================================
+ * Test: Consumption Curve
+ * ============================================================================ */
+void test_consumption_curve(void)
+{
+    printf("\n=== Test: Consumption Curve ===\n");
+
+    /* Create custom curve */
+    FWConsumptionCurve *curve = fw_consumption_curve_create(4);
+    ASSERT(curve != NULL, "Curve created");
+
+    fw_consumption_curve_add_point(curve, 15000.0, 24.0);
+    fw_consumption_curve_add_point(curve, 25000.0, 28.5);
+    fw_consumption_curve_add_point(curve, 35000.0, 33.5);
+    fw_consumption_curve_add_point(curve, 40000.0, 36.5);
+
+    ASSERT(fw_consumption_curve_is_valid(curve), "Curve is valid");
+
+    /* Test interpolation */
+    double cons_at_30t = fw_consumption_at_weight(curve, 30000.0);
+    printf("  Consumption at 30t: %.2f L/100km\n", cons_at_30t);
+    /* Between 25000 (28.5) and 35000 (33.5), at 30000: 31.0 */
+    ASSERT_NEAR(cons_at_30t, 31.0, 0.1, "Interpolation at 30t");
+
+    /* Test max */
+    ASSERT_NEAR(fw_consumption_max(curve), 36.5, 0.001, "Max consumption");
+
+    fw_consumption_curve_free(curve);
+
+    /* Test built-in curves */
+    FWConsumptionCurve *eu = fw_curve_eu_standard();
+    ASSERT(eu != NULL, "EU curve created");
+    ASSERT(fw_consumption_curve_is_valid(eu), "EU curve valid");
+    ASSERT_NEAR(fw_consumption_at_weight(eu, 15000.0), 24.0, 0.001, "EU empty");
+    ASSERT_NEAR(fw_consumption_at_weight(eu, 40000.0), 36.5, 0.001, "EU max GVW");
+    fw_consumption_curve_free(eu);
+
+    FWConsumptionCurve *us = fw_curve_us_class8();
+    ASSERT(us != NULL, "US curve created");
+    fw_consumption_curve_free(us);
+
+    FWConsumptionCurve *light = fw_curve_light_truck();
+    ASSERT(light != NULL, "Light truck curve created");
+    fw_consumption_curve_free(light);
+}
+
+/* ============================================================================
+ * Test: Weight Profile
+ * ============================================================================ */
+void test_weight_profile(void)
+{
+    printf("\n=== Test: Weight Profile ===\n");
+
+    /* Create profile for EU truck: 15t tare, 40t max */
+    FWWeightProfile *profile = fw_weight_profile_create(15000.0, 40000.0);
+    ASSERT(profile != NULL, "Profile created");
+
+    /* Initial weight is tare */
+    ASSERT_NEAR(fw_weight_at_distance(profile, 0.0), 15000.0, 0.001, "Initial weight");
+
+    /* Add pickup at 100km: +10t cargo */
+    int r1 = fw_weight_profile_add_event(profile, 100000.0, +10000.0);
+    ASSERT(r1 == 0, "Pickup added");
+
+    /* Add delivery at 300km: -10t cargo */
+    int r2 = fw_weight_profile_add_event(profile, 300000.0, -10000.0);
+    ASSERT(r2 == 0, "Delivery added");
+
+    /* Check weights at various distances */
+    ASSERT_NEAR(fw_weight_at_distance(profile, 50000.0), 15000.0, 0.001, "Before pickup");
+    ASSERT_NEAR(fw_weight_at_distance(profile, 100000.0), 25000.0, 0.001, "At pickup");
+    ASSERT_NEAR(fw_weight_at_distance(profile, 200000.0), 25000.0, 0.001, "Between");
+    ASSERT_NEAR(fw_weight_at_distance(profile, 300000.0), 15000.0, 0.001, "At delivery");
+    ASSERT_NEAR(fw_weight_at_distance(profile, 400000.0), 15000.0, 0.001, "After delivery");
+
+    /* Check min/max */
+    ASSERT_NEAR(fw_weight_min(profile), 15000.0, 0.001, "Min weight");
+    ASSERT_NEAR(fw_weight_max(profile), 25000.0, 0.001, "Max weight");
+
+    /* Validate profile */
+    char error[256];
+    ASSERT(fw_weight_profile_validate(profile, error, sizeof(error)), "Profile valid");
+
+    fw_weight_profile_free(profile);
+}
+
+/* ============================================================================
+ * Test: Weight Profile Validation
+ * ============================================================================ */
+void test_weight_profile_validation(void)
+{
+    printf("\n=== Test: Weight Profile Validation ===\n");
+
+    /* Test overweight rejection */
+    FWWeightProfile *p1 = fw_weight_profile_create(15000.0, 40000.0);
+    int r = fw_weight_profile_add_event(p1, 100000.0, +30000.0);  /* Would be 45t > 40t */
+    ASSERT(r == -1, "Overweight rejected");
+    fw_weight_profile_free(p1);
+
+    /* Test negative cargo rejection */
+    FWWeightProfile *p2 = fw_weight_profile_create(15000.0, 40000.0);
+    r = fw_weight_profile_add_event(p2, 100000.0, -1000.0);  /* Would go below tare */
+    ASSERT(r == -1, "Negative cargo rejected");
+    fw_weight_profile_free(p2);
+}
+
+/* ============================================================================
+ * Test: Fuel Calculation with Weight Changes
+ * ============================================================================ */
+void test_fuel_calculation_with_weight(void)
+{
+    printf("\n=== Test: Fuel Calculation with Weight Changes ===\n");
+
+    /* Create consumption curve */
+    FWConsumptionCurve *curve = fw_curve_eu_standard();
+
+    /* Create weight profile: 15t -> 25t at 100km -> 15t at 300km */
+    FWWeightProfile *profile = fw_weight_profile_create(15000.0, 40000.0);
+    fw_weight_profile_add_event(profile, 100000.0, +10000.0);
+    fw_weight_profile_add_event(profile, 300000.0, -10000.0);
+
+    /* Calculate fuel for 400km route
+     * [0, 100km): 15t -> 24 L/100km -> 24 L
+     * [100km, 300km): 25t -> 28.5 L/100km -> 57 L
+     * [300km, 400km): 15t -> 24 L/100km -> 24 L
+     * Total: 105 L */
+    double fuel = fw_calc_fuel_for_segment(curve, profile, 0.0, 400000.0);
+    printf("  Total fuel for 400km: %.2f L (expected ~105 L)\n", fuel);
+    ASSERT_NEAR(fuel, 105.0, 1.0, "Total fuel with weight changes");
+
+    /* Calculate fuel for first segment only */
+    double fuel_seg1 = fw_calc_fuel_for_segment(curve, profile, 0.0, 100000.0);
+    printf("  Fuel for first 100km: %.2f L (expected 24 L)\n", fuel_seg1);
+    ASSERT_NEAR(fuel_seg1, 24.0, 0.1, "First segment fuel");
+
+    /* Calculate fuel for loaded segment */
+    double fuel_seg2 = fw_calc_fuel_for_segment(curve, profile, 100000.0, 300000.0);
+    printf("  Fuel for loaded 200km: %.2f L (expected 57 L)\n", fuel_seg2);
+    ASSERT_NEAR(fuel_seg2, 57.0, 0.1, "Loaded segment fuel");
+
+    fw_consumption_curve_free(curve);
+    fw_weight_profile_free(profile);
+}
+
+/* ============================================================================
+ * Test: Constant Weight Fuel Calculation
+ * ============================================================================ */
+void test_fuel_constant_weight(void)
+{
+    printf("\n=== Test: Constant Weight Fuel Calculation ===\n");
+
+    FWConsumptionCurve *curve = fw_curve_eu_standard();
+
+    /* At 25t, consumption is 28.5 L/100km */
+    /* For 100km: 28.5 L */
+    double fuel = fw_calc_fuel_constant_weight(curve, 25000.0, 0.0, 100000.0);
+    printf("  100km at 25t: %.2f L (expected 28.5 L)\n", fuel);
+    ASSERT_NEAR(fuel, 28.5, 0.01, "Constant weight fuel calculation");
+
+    /* For 500km: 142.5 L */
+    fuel = fw_calc_fuel_constant_weight(curve, 25000.0, 0.0, 500000.0);
+    printf("  500km at 25t: %.2f L (expected 142.5 L)\n", fuel);
+    ASSERT_NEAR(fuel, 142.5, 0.1, "Constant weight long distance");
+
+    fw_consumption_curve_free(curve);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void)
@@ -825,6 +993,11 @@ int main(void)
     test_unit_conversion_roundtrip();
     test_efficiency_formula();
     test_metric_imperial_equivalence();
+    test_consumption_curve();
+    test_weight_profile();
+    test_weight_profile_validation();
+    test_fuel_calculation_with_weight();
+    test_fuel_constant_weight();
 
     printf("\n===================\n");
     printf("Tests passed: %d/%d\n", tests_passed, tests_run);
