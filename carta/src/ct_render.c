@@ -10,6 +10,7 @@
 #include "ct_label.h"
 #include "ct_boundary.h"
 #include "sh_font.h"
+#include "sh_render.h"
 #include "shared.h"
 #include <stdlib.h>
 #include <string.h>
@@ -17,17 +18,19 @@
 #include <math.h>
 #include <stdio.h>
 
-/* SIMD support detection */
-#if defined(__AVX2__)
-    #include <immintrin.h>
-    #define CT_HAVE_AVX2 1
-#elif defined(__SSE2__)
-    #include <emmintrin.h>
-    #define CT_HAVE_SSE2 1
-#elif defined(__ARM_NEON) || defined(__aarch64__)
-    #include <arm_neon.h>
-    #define CT_HAVE_NEON 1
-#endif
+/*
+ * SIMD support is now provided by sh_render.c in the shared library.
+ * See sh_fill_span() and sh_clear_buffer() for SIMD-optimized implementations.
+ */
+
+/*
+ * Convert CTColor (RGBA from high to low bits) to shared library format (ABGR from high to low).
+ * Both use the same memory layout (R at offset 0, A at offset 3), but different uint32_t packing.
+ */
+static inline uint32_t ct_to_sh_color(CTColor c)
+{
+    return SH_RGBA(CT_COLOR_R(c), CT_COLOR_G(c), CT_COLOR_B(c), CT_COLOR_A(c));
+}
 
 /* Minimum feature size in pixels for render-time filtering.
  * Lines need at least 1px to be visible.
@@ -108,43 +111,9 @@ void ct_render_free(CTRenderContext *ctx)
 void ct_render_clear(CTRenderContext *ctx)
 {
     CTColor bg = ctx->style.background_color;
-    uint8_t r = CT_COLOR_R(bg);
-    uint8_t g = CT_COLOR_G(bg);
-    uint8_t b = CT_COLOR_B(bg);
-    uint8_t a = CT_COLOR_A(bg);
-
-    int num_pixels = ctx->width * ctx->height;
-
-    /* Fast path: if all components are the same, use memset */
-    if (r == g && g == b && b == a) {
-        memset(ctx->pixels, r, (size_t)num_pixels * 4);
-        return;
-    }
-
-    /* Use SIMD for non-uniform colors */
-    uint32_t rgba = ((uint32_t)a << 24) | ((uint32_t)b << 16) |
-                    ((uint32_t)g << 8) | (uint32_t)r;
-    uint32_t *pixels32 = (uint32_t *)ctx->pixels;
-    int i = 0;
-
-#if defined(CT_HAVE_AVX2)
-    /* AVX2: clear 8 pixels at a time */
-    __m256i rgba_vec = _mm256_set1_epi32((int)rgba);
-    for (; i + 7 < num_pixels; i += 8) {
-        _mm256_storeu_si256((__m256i *)&pixels32[i], rgba_vec);
-    }
-#elif defined(CT_HAVE_SSE2)
-    /* SSE2: clear 4 pixels at a time */
-    __m128i rgba_vec = _mm_set1_epi32((int)rgba);
-    for (; i + 3 < num_pixels; i += 4) {
-        _mm_storeu_si128((__m128i *)&pixels32[i], rgba_vec);
-    }
-#endif
-
-    /* Scalar remainder */
-    for (; i < num_pixels; i++) {
-        pixels32[i] = rgba;
-    }
+    /* Use SIMD-optimized clear from shared library.
+     * Convert CTColor to shared format (different uint32_t packing). */
+    sh_clear_buffer(ctx->pixels, ctx->width, ctx->height, ct_to_sh_color(bg));
 }
 
 void ct_render_set_style(CTRenderContext *ctx, const CTStyle *style)
@@ -300,214 +269,13 @@ void ct_render_blend_pixel(CTRenderContext *ctx, int x, int y, CTColor color)
 }
 
 /*
- * Fast horizontal span fill - does bounds checking once, not per pixel.
- * Uses SIMD when available for maximum throughput.
+ * Fast horizontal span fill - wrapper around shared SIMD implementation.
+ * Uses sh_fill_span from shared/src/sh_render.c which provides
+ * AVX2/SSE2/NEON acceleration.
  */
-static void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTColor color)
+static inline void fill_span(CTRenderContext *ctx, int y, int x_start, int x_end, CTColor color)
 {
-    /* Bounds check y once */
-    if (y < 0 || y >= ctx->height) return;
-
-    /* Clip x range to buffer */
-    if (x_start < 0) x_start = 0;
-    if (x_end >= ctx->width) x_end = ctx->width - 1;
-    if (x_start > x_end) return;
-
-    uint8_t sr = CT_COLOR_R(color);
-    uint8_t sg = CT_COLOR_G(color);
-    uint8_t sb = CT_COLOR_B(color);
-    uint8_t sa = CT_COLOR_A(color);
-
-    uint8_t *row = ctx->pixels + y * ctx->width * 4;
-
-    /* Fast path: opaque color - use SIMD when available */
-    if (sa == 255) {
-        uint32_t rgba = ((uint32_t)255 << 24) | ((uint32_t)sb << 16) |
-                        ((uint32_t)sg << 8) | (uint32_t)sr;
-        uint32_t *row32 = (uint32_t *)row;
-        int x = x_start;
-
-#if defined(CT_HAVE_AVX2)
-        /* AVX2: write 8 pixels (32 bytes) at a time */
-        int count = x_end - x_start + 1;
-        if (count >= 8) {
-            __m256i rgba_vec = _mm256_set1_epi32((int)rgba);
-            for (; x + 7 <= x_end; x += 8) {
-                _mm256_storeu_si256((__m256i *)&row32[x], rgba_vec);
-            }
-        }
-#elif defined(CT_HAVE_SSE2)
-        /* SSE2: write 4 pixels (16 bytes) at a time */
-        int count = x_end - x_start + 1;
-        if (count >= 4) {
-            __m128i rgba_vec = _mm_set1_epi32((int)rgba);
-            for (; x + 3 <= x_end; x += 4) {
-                _mm_storeu_si128((__m128i *)&row32[x], rgba_vec);
-            }
-        }
-#elif defined(CT_HAVE_NEON)
-        /* NEON: write 4 pixels (16 bytes) at a time */
-        int count = x_end - x_start + 1;
-        if (count >= 4) {
-            uint32x4_t rgba_vec = vdupq_n_u32(rgba);
-            for (; x + 3 <= x_end; x += 4) {
-                vst1q_u32(&row32[x], rgba_vec);
-            }
-        }
-#endif
-        /* Scalar remainder */
-        for (; x <= x_end; x++) {
-            row32[x] = rgba;
-        }
-        return;
-    }
-
-    /* Transparent - nothing to do */
-    if (sa == 0) return;
-
-    /*
-     * Alpha blending using fast integer approximation.
-     * Formula: out = (src * sa + dst * inv_sa + 128) >> 8
-     * This approximates division by 255 with good accuracy.
-     */
-    uint16_t inv_sa = 255 - sa;
-
-    /* Pre-multiply source by alpha */
-    uint16_t sr_sa = sr * sa;
-    uint16_t sg_sa = sg * sa;
-    uint16_t sb_sa = sb * sa;
-
-    int x = x_start;
-
-#if defined(CT_HAVE_SSE2)
-    /*
-     * SIMD alpha blending: process 4 pixels at a time.
-     * Each pixel is RGBA (4 bytes), so 4 pixels = 16 bytes = 128 bits.
-     */
-    int count = x_end - x_start + 1;
-    if (count >= 4) {
-        /* Broadcast source alpha and inv_sa to all 8 lanes (16-bit) */
-        __m128i src_r = _mm_set1_epi16((short)sr_sa);
-        __m128i src_g = _mm_set1_epi16((short)sg_sa);
-        __m128i src_b = _mm_set1_epi16((short)sb_sa);
-        __m128i inv_alpha = _mm_set1_epi16((short)inv_sa);
-        __m128i src_alpha = _mm_set1_epi16((short)sa);
-        __m128i const_128 = _mm_set1_epi16(128);
-        __m128i const_255 = _mm_set1_epi16(255);
-        __m128i zero = _mm_setzero_si128();
-
-        for (; x + 3 <= x_end; x += 4) {
-            /* Load 4 destination pixels (16 bytes) */
-            __m128i dst = _mm_loadu_si128((__m128i *)&row[x * 4]);
-
-            /* Unpack to 16-bit: dst_lo = pixels 0-1, dst_hi = pixels 2-3 */
-            __m128i dst_lo = _mm_unpacklo_epi8(dst, zero);
-            __m128i dst_hi = _mm_unpackhi_epi8(dst, zero);
-
-            /* Extract R, G, B, A channels (interleaved in RGBA order) */
-            /* dst_lo: R0 G0 B0 A0 R1 G1 B1 A1 (16-bit each) */
-            /* dst_hi: R2 G2 B2 A2 R3 G3 B3 A3 (16-bit each) */
-
-            /* Blend each channel: out = (src*sa + dst*inv_sa + 128) >> 8 */
-            /* Process all 8 components (4 pixels * RGBA) in two vectors */
-
-            /* Multiply destination by inv_alpha */
-            __m128i d_inv_lo = _mm_mullo_epi16(dst_lo, inv_alpha);
-            __m128i d_inv_hi = _mm_mullo_epi16(dst_hi, inv_alpha);
-
-            /* Add source (premultiplied) - need to expand to 8 components */
-            /* src pattern for 2 pixels: sr_sa, sg_sa, sb_sa, sa (repeated) */
-            __m128i src_pattern = _mm_set_epi16((short)sa, (short)sb_sa,
-                                                 (short)sg_sa, (short)sr_sa,
-                                                 (short)sa, (short)sb_sa,
-                                                 (short)sg_sa, (short)sr_sa);
-
-            /* Add src + dst*inv + 128 */
-            __m128i sum_lo = _mm_add_epi16(d_inv_lo, src_pattern);
-            __m128i sum_hi = _mm_add_epi16(d_inv_hi, src_pattern);
-            sum_lo = _mm_add_epi16(sum_lo, const_128);
-            sum_hi = _mm_add_epi16(sum_hi, const_128);
-
-            /* Shift right by 8 */
-            sum_lo = _mm_srli_epi16(sum_lo, 8);
-            sum_hi = _mm_srli_epi16(sum_hi, 8);
-
-            /* Fix alpha: out_a = sa + (da * inv_sa + 128) >> 8 */
-            /* Alpha is at indices 3, 7 in each vector */
-            /* For now, clamp to 255 (saturated add handles overflow) */
-            sum_lo = _mm_min_epi16(sum_lo, const_255);
-            sum_hi = _mm_min_epi16(sum_hi, const_255);
-
-            /* Pack back to 8-bit */
-            __m128i result = _mm_packus_epi16(sum_lo, sum_hi);
-
-            /* Store 4 pixels */
-            _mm_storeu_si128((__m128i *)&row[x * 4], result);
-        }
-    }
-#elif defined(CT_HAVE_NEON)
-    /*
-     * NEON alpha blending: process 4 pixels at a time.
-     * Each pixel is RGBA (4 bytes), so 4 pixels = 16 bytes = 128 bits.
-     */
-    int count = x_end - x_start + 1;
-    if (count >= 4) {
-        /* Create source pattern for 4 pixels (RGBA repeated) */
-        uint16_t src_vals[8] = {sr_sa, sg_sa, sb_sa, sa, sr_sa, sg_sa, sb_sa, sa};
-        uint16x8_t src_pattern = vld1q_u16(src_vals);
-        uint16x8_t inv_alpha = vdupq_n_u16(inv_sa);
-        uint16x8_t const_128 = vdupq_n_u16(128);
-
-        for (; x + 3 <= x_end; x += 4) {
-            /* Load 4 destination pixels (16 bytes) */
-            uint8x16_t dst = vld1q_u8(&row[x * 4]);
-
-            /* Unpack to 16-bit: lo = pixels 0-1, hi = pixels 2-3 */
-            uint16x8_t dst_lo = vmovl_u8(vget_low_u8(dst));
-            uint16x8_t dst_hi = vmovl_u8(vget_high_u8(dst));
-
-            /* Multiply destination by inv_alpha */
-            uint16x8_t d_inv_lo = vmulq_u16(dst_lo, inv_alpha);
-            uint16x8_t d_inv_hi = vmulq_u16(dst_hi, inv_alpha);
-
-            /* Add src + dst*inv + 128 */
-            uint16x8_t sum_lo = vaddq_u16(d_inv_lo, src_pattern);
-            uint16x8_t sum_hi = vaddq_u16(d_inv_hi, src_pattern);
-            sum_lo = vaddq_u16(sum_lo, const_128);
-            sum_hi = vaddq_u16(sum_hi, const_128);
-
-            /* Shift right by 8 */
-            sum_lo = vshrq_n_u16(sum_lo, 8);
-            sum_hi = vshrq_n_u16(sum_hi, 8);
-
-            /* Pack back to 8-bit (saturating narrow) */
-            uint8x8_t result_lo = vqmovn_u16(sum_lo);
-            uint8x8_t result_hi = vqmovn_u16(sum_hi);
-            uint8x16_t result = vcombine_u8(result_lo, result_hi);
-
-            /* Store 4 pixels */
-            vst1q_u8(&row[x * 4], result);
-        }
-    }
-#endif
-
-    /* Scalar remainder */
-    for (; x <= x_end; x++) {
-        int offset = x * 4;
-        uint8_t dr = row[offset + 0];
-        uint8_t dg = row[offset + 1];
-        uint8_t db = row[offset + 2];
-        uint8_t da = row[offset + 3];
-
-        /* Fast approximate blend: (src*sa + dst*inv_sa + 128) >> 8 */
-        row[offset + 0] = (uint8_t)((sr_sa + dr * inv_sa + 128) >> 8);
-        row[offset + 1] = (uint8_t)((sg_sa + dg * inv_sa + 128) >> 8);
-        row[offset + 2] = (uint8_t)((sb_sa + db * inv_sa + 128) >> 8);
-
-        /* Output alpha: sa + da * (1 - sa) */
-        uint16_t out_a = sa + ((da * inv_sa + 128) >> 8);
-        row[offset + 3] = (uint8_t)(out_a > 255 ? 255 : out_a);
-    }
+    sh_fill_span(ctx->pixels, ctx->width, ctx->height, y, x_start, x_end, ct_to_sh_color(color));
 }
 
 /* ============================================================================
