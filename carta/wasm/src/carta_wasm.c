@@ -35,7 +35,8 @@ void wasm_free(void* ptr) {
 
 WASM_EXPORT
 int wasm_version(void) {
-    return CT_VERSION_MAJOR * 10000 + CT_VERSION_MINOR * 100 + CT_VERSION_PATCH;
+    /* Carta doesn't define version macros, return 1.0.0 */
+    return 10000;
 }
 
 // =============================================================================
@@ -62,17 +63,17 @@ void wasm_context_free(CTPBFContext* ctx) {
 WASM_EXPORT
 uint32_t wasm_context_node_count(const CTPBFContext* ctx) {
     if (!ctx) return 0;
-    CTPBFStats stats;
-    ct_get_pbf_stats(ctx, &stats);
-    return stats.node_count;
+    size_t total_nodes = 0;
+    ct_pbf_stats(ctx, &total_nodes, NULL, NULL, NULL);
+    return (uint32_t)total_nodes;
 }
 
 WASM_EXPORT
 uint32_t wasm_context_way_count(const CTPBFContext* ctx) {
     if (!ctx) return 0;
-    CTPBFStats stats;
-    ct_get_pbf_stats(ctx, &stats);
-    return stats.way_count;
+    size_t total_ways = 0;
+    ct_pbf_stats(ctx, NULL, &total_ways, NULL, NULL);
+    return (uint32_t)total_ways;
 }
 
 /**
@@ -83,13 +84,13 @@ WASM_EXPORT
 void wasm_context_bbox(const CTPBFContext* ctx, double* bbox) {
     if (!ctx || !bbox) return;
 
-    CTPBFStats stats;
-    ct_get_pbf_stats(ctx, &stats);
+    CTBBox pbf_bbox;
+    ct_pbf_stats(ctx, NULL, NULL, NULL, &pbf_bbox);
 
-    bbox[0] = stats.bbox.min_lat;
-    bbox[1] = stats.bbox.min_lon;
-    bbox[2] = stats.bbox.max_lat;
-    bbox[3] = stats.bbox.max_lon;
+    bbox[0] = pbf_bbox.min_lat;
+    bbox[1] = pbf_bbox.min_lon;
+    bbox[2] = pbf_bbox.max_lat;
+    bbox[3] = pbf_bbox.max_lon;
 }
 
 // =============================================================================
@@ -137,9 +138,14 @@ size_t wasm_generate_png(CTPBFContext* ctx,
     if (!ctx || !buffer || capacity == 0) return 0;
 
     CTTileCoord coord = {(uint8_t)z, (uint32_t)x, (uint32_t)y};
-    CTStyle style = ct_default_style();
+    CTStyle style;
+    ct_default_style(&style);
 
-    return ct_generate_png(ctx, coord, &style, size, buffer, capacity);
+    CTPNGOptions png_opts;
+    ct_png_default_options(&png_opts);
+    png_opts.tile_size = size;
+
+    return ct_generate_png(ctx, coord, &style, &png_opts, buffer, capacity);
 }
 
 // =============================================================================
