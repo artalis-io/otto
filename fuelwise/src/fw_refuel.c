@@ -764,6 +764,46 @@ int fw_solve_refuel_benders(
         free(values);
     }
 
+    /* Add reach cuts: if we can't reach station i without refueling,
+     * at least one station j < i must be visited.
+     *
+     * For each station i where:
+     *   current_fuel - fuel_consumed_to(station_i) < minimum_fuel
+     * We add:
+     *   sum(z[j] for j < i) >= 1
+     *
+     * These are domain-specific valid inequalities that strengthen the master
+     * problem and often eliminate infeasible solutions early, reducing Benders
+     * iterations.
+     */
+    for (int i = 1; i < k; i++) {
+        double fuel_consumed = fw_calc_fuel_consumed(problem, 0,
+            problem->stations[i].distance_from_start);
+        double fuel_available = problem->current_fuel - fuel_consumed;
+
+        if (fuel_available < problem->minimum_fuel) {
+            /* Can't reach station i without refueling - need at least one stop before */
+            int *indices = malloc(i * sizeof(int));
+            double *values = malloc(i * sizeof(double));
+            if (!indices || !values) {
+                free(indices);
+                free(values);
+                ralph_free(model);
+                solution->status = FW_STATUS_ERROR;
+                return -1;
+            }
+
+            for (int j = 0; j < i; j++) {
+                indices[j] = z_start + j;
+                values[j] = 1.0;
+            }
+
+            ralph_add_constraint(model, i, indices, values, RALPH_GREATER_EQUAL, 1.0);
+            free(indices);
+            free(values);
+        }
+    }
+
     /* Configure Benders decomposition */
     int *master_vars = malloc(k * sizeof(int));
     if (!master_vars) {
