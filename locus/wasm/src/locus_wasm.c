@@ -284,7 +284,7 @@ double wasm_result_get_lat(const WasmResult *result, size_t idx) {
     }
 
     const LCEntity *entity = lc_entity_store_get(result->index->entities, entity_id);
-    return entity ? entity->coord.lat : 0.0;
+    return entity ? entity->centroid.lat : 0.0;
 }
 
 WASM_EXPORT
@@ -299,7 +299,7 @@ double wasm_result_get_lon(const WasmResult *result, size_t idx) {
     }
 
     const LCEntity *entity = lc_entity_store_get(result->index->entities, entity_id);
-    return entity ? entity->coord.lon : 0.0;
+    return entity ? entity->centroid.lon : 0.0;
 }
 
 WASM_EXPORT
@@ -330,12 +330,12 @@ WASM_EXPORT
 double wasm_entity_get_lat(const LCIndex *index, uint32_t entity_id) {
     if (!index || !index->entities) return 0.0;
     const LCEntity *entity = lc_entity_store_get(index->entities, entity_id);
-    return entity ? entity->coord.lat : 0.0;
+    return entity ? entity->centroid.lat : 0.0;
 }
 
 WASM_EXPORT
 double wasm_entity_get_lon(const LCIndex *index, uint32_t entity_id) {
     if (!index || !index->entities) return 0.0;
     const LCEntity *entity = lc_entity_store_get(index->entities, entity_id);
-    return entity ? entity->coord.lon : 0.0;
+    return entity ? entity->centroid.lon : 0.0;
 }
