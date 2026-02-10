@@ -137,6 +137,49 @@ typedef struct {
 - **Branching:** Select fractional variable, create child nodes
 - **Bounding:** Solve LP relaxation at each node
 - **Pruning:** Discard nodes that can't improve incumbent
+- **Cut Callbacks:** User-provided cut generation at each node
+- **Branch Callbacks:** User-provided variable selection override
+
+**MIP Infrastructure (Feb 2026):**
+
+The solver supports domain-specific customization via callbacks and priorities:
+
+```c
+/* Branching control */
+void ralph_set_branch_priorities(RalphModel *m, const int *priorities);
+void ralph_set_branch_directions(RalphModel *m, const int *directions);
+
+/* Warm start for re-optimization */
+RalphBasis* ralph_save_basis(const RalphModel *m);
+int ralph_load_basis(RalphModel *m, const RalphBasis *basis);
+void ralph_free_basis(RalphBasis *basis);
+
+/* Cut callback - invoked at each B&B node */
+typedef struct {
+    int (*generate_cuts)(void *user_data, const double *x_relaxation,
+                         int num_vars, RalphCut *cuts, int max_cuts);
+    void *user_data;
+} RalphCutCallback;
+void ralph_set_cut_callback(RalphModel *m, const RalphCutCallback *cb);
+
+/* Branch callback - custom variable selection */
+typedef struct {
+    int (*select_branch_var)(void *user_data, const double *x_relaxation,
+                              int num_vars, const int *is_integer,
+                              const double *lb, const double *ub);
+    void *user_data;
+} RalphBranchCallback;
+void ralph_set_branch_callback(RalphModel *m, const RalphBranchCallback *cb);
+
+/* Lazy constraints - add cuts and re-solve */
+int ralph_add_lazy_constraint(RalphModel *m, const RalphCut *cut);
+int ralph_add_lazy_constraints(RalphModel *m, const RalphCut *cuts, int count);
+```
+
+**Use cases:**
+- **FuelWise:** Reach cuts for reachability constraints, Benders decomposition
+- **HoSE:** Driving capacity cuts (11h limit), mandatory break cuts (8h)
+- **General:** Custom branching priorities, domain-specific cut generation
 
 ## Algorithm Details
 
