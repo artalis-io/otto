@@ -210,10 +210,21 @@ For a valid Farkas certificate of infeasibility, `extract_farkas_ray()` validate
 - Phase 1 costs: 0 for structural/slack, 1 for artificial variables
 - Row ordering is stable: row i in `solver->farkas_ray` = original constraint i
 
-### Benders Row Indexing
+### Benders Row Indexing (Robust)
 
-Subproblem constraints are ordered:
-- Rows 0..`num_sub_cons-1`: sub-only constraints
-- Rows `num_sub_cons`..`num_sub_cons+num_linking-1`: linking constraints
+Each `LinkingConstraint` stores its subproblem row index in `lc->sub_row_idx`.
+This is set during `benders_build_subproblem()` (scenario 0).
 
-Both optimality and feasibility cuts read duals/rays starting at `ctx->num_sub_cons`.
+**Usage pattern:**
+```c
+for (int k = 0; k < ctx->num_linking; k++) {
+    LinkingConstraint *lc = &ctx->linking[k];
+    double pi_k = solver->dual_solution[lc->sub_row_idx];  // Not: linking_start + k
+    // ...
+}
+```
+
+**Why explicit indices:**
+- Eliminates fragile `ctx->num_sub_cons` offset arithmetic
+- Robust to constraint ordering changes
+- Works even if linking constraints are interleaved with sub-only constraints
