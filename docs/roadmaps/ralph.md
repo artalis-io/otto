@@ -15,7 +15,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | **Presolve** | ✅ Phase 1 | Singleton, redundant rows, bound tightening |
 | **NETLIB Suite** | 67% Pass | 8/12 problems (see below) |
 | **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
-| **Benders Decomposition** | ⏳ Planned | Generic solver, ~1100 LoC (§7) |
+| **Benders Decomposition** | ✅ Complete | Generic solver, ~1100 LoC, 24 tests (§7) |
 
 ---
 
@@ -692,9 +692,11 @@ and provides better performance for FuelWise/HoSE problem classes.
 
 ---
 
-## Chapter 7: Generic Benders Decomposition
+## Chapter 7: Generic Benders Decomposition ✅
 
-This chapter specifies a generic Benders decomposition solver in Ralph, replacing
+**Status:** Complete (Feb 2026) - 24 tests passing
+
+This chapter describes the generic Benders decomposition solver in Ralph, replacing
 domain-specific implementations (e.g., FuelWise enumeration) with a reusable algorithm.
 
 ### 7.1 Background
@@ -955,26 +957,46 @@ RalphBendersConfig config = {
 Ralph creates K subproblems (one per scenario), solves in parallel, generates
 weighted cuts: `θ[k] ≥ π[k]'(h[k] - T[k]x)` for each scenario.
 
-### 7.7 Implementation Plan
+### 7.7 Implementation Status ✅
 
-| Phase | Component | LoC | Notes |
-|-------|-----------|-----|-------|
-| 1 | Model partitioning | 150 | Split vars/constraints into master/sub |
-| 2 | Linking detection | 100 | Find constraints coupling master↔sub |
-| 3 | Cut generation | 200 | Optimality (from duals) + feasibility (Farkas) |
-| 4 | Benders loop | 150 | Convergence, iteration control |
-| 5 | B&B integration | 100 | Hook into existing B&B for cuts_at_lp_nodes |
-| 6 | Warm start | 50 | Basis reuse between subproblem solves |
-| 7 | Stochastic | 150 | Multi-scenario, parallel subproblems |
-| 8 | Testing | 200 | Unit tests, FuelWise integration |
+| Phase | Component | LoC | Status |
+|-------|-----------|-----|--------|
+| 1 | Model partitioning | 150 | ✅ Complete |
+| 2 | Linking detection | 100 | ✅ Complete |
+| 3 | Cut generation | 200 | ✅ Complete (optimality + feasibility) |
+| 4 | Benders loop | 150 | ✅ Complete (classic algorithm) |
+| 5 | B&B integration | 100 | ⏳ Planned (modern B&B&C) |
+| 6 | Warm start | 50 | ✅ Complete |
+| 7 | Stochastic | 150 | ✅ Complete (multi-scenario) |
+| 8 | Testing | 200 | ✅ 24 tests passing |
 | **Total** | | **~1100** | |
+
+**Files:**
+- `ralph/src/benders.c` - Main implementation
+- `ralph/include/benders.h` - API header
+- `ralph/tests/test_benders.c` - Test suite
 
 **Dependencies:**
 - §6 MIP infrastructure (✅ complete)
 - Network flow solver (✅ complete) - for fast subproblems
 - Farkas ray extraction (✅ complete)
 
-### 7.8 Expected Performance
+### 7.8 Known Limitations
+
+| Limitation | Impact | Workaround |
+|------------|--------|------------|
+| **Classic Benders only** | Modern B&B&C (cuts at LP nodes) not implemented | Classic algorithm works well for structured problems |
+| **Numerical sensitivity** | Very large bounds (1e30) can cause simplex instability | Use reasonable bounds (<1e6) for theta variable |
+| **0 master constraints** | Edge case returns error | Add dummy constraint if needed |
+| **Feasibility cuts** | Less tested than optimality cuts | Most problems have feasible subproblems |
+
+**Does NOT affect FuelWise:**
+- FuelWise has master constraints (capacity constraints)
+- Classic Benders provides the main scaling win: O(k² × iterations) vs O(2^k) enumeration
+- FuelWise subproblems are typically feasible (flow balance with sufficient capacity)
+- Reasonable bounds are natural for fuel quantities
+
+### 7.9 Expected Performance
 
 | Problem | Current (enumeration) | With Benders | Speedup |
 |---------|----------------------|--------------|---------|
@@ -985,7 +1007,7 @@ weighted cuts: `θ[k] ≥ π[k]'(h[k] - T[k]x)` for each scenario.
 
 The key win is scaling: enumeration is O(2^k), Benders is typically O(k² · iterations).
 
-### 7.9 Relationship to §6.3
+### 7.10 Relationship to §6.3
 
 §6.3 described FuelWise-specific Benders design. This chapter supersedes that with
 a generic implementation. FuelWise becomes a *user* of generic Benders:
