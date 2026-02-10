@@ -1323,6 +1323,140 @@ TEST(write_kv_helpers)
 }
 
 /* ============================================================================
+ * ShJsonBuf Tests (shared buffer helper)
+ * ============================================================================ */
+
+TEST(json_buf_init_free)
+{
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+    ASSERT(jb.buf == NULL);
+    ASSERT_EQ(jb.len, 0u);
+    ASSERT_EQ(jb.cap, 0u);
+
+    /* Free on empty is safe */
+    sh_json_buf_free(&jb);
+    ASSERT(jb.buf == NULL);
+}
+
+TEST(json_buf_simple_write)
+{
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_string(&w, "status", "ok");
+    sh_json_write_object_end(&w);
+
+    ASSERT(!sh_json_writer_error(&w));
+    ASSERT(jb.buf != NULL);
+    ASSERT_STREQ(jb.buf, "{\"status\":\"ok\"}");
+
+    sh_json_buf_free(&jb);
+}
+
+TEST(json_buf_growth)
+{
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+
+    /* Write enough data to trigger multiple growths */
+    sh_json_write_array_start(&w);
+    for (int i = 0; i < 100; i++) {
+        sh_json_write_int(&w, i);
+    }
+    sh_json_write_array_end(&w);
+
+    ASSERT(!sh_json_writer_error(&w));
+    ASSERT(jb.buf != NULL);
+    ASSERT(jb.len > 200);  /* At least 100 numbers + commas + brackets */
+    ASSERT(strncmp(jb.buf, "[0,1,2,", 7) == 0);
+    ASSERT(jb.buf[jb.len - 1] == ']');
+
+    sh_json_buf_free(&jb);
+}
+
+TEST(json_buf_reset)
+{
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+    sh_json_write_string(&w, "first");
+    ASSERT_STREQ(jb.buf, "\"first\"");
+
+    /* Reset and reuse */
+    sh_json_buf_reset(&jb);
+    ASSERT_EQ(jb.len, 0u);
+    ASSERT(jb.cap > 0);  /* Capacity preserved */
+
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+    sh_json_write_string(&w, "second");
+    ASSERT_STREQ(jb.buf, "\"second\"");
+
+    sh_json_buf_free(&jb);
+}
+
+TEST(json_buf_take)
+{
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+    sh_json_write_string(&w, "test");
+
+    char *taken = sh_json_buf_take(&jb);
+    ASSERT(taken != NULL);
+    ASSERT_STREQ(taken, "\"test\"");
+
+    /* Buffer is now empty */
+    ASSERT(jb.buf == NULL);
+    ASSERT_EQ(jb.len, 0u);
+    ASSERT_EQ(jb.cap, 0u);
+
+    free(taken);
+}
+
+TEST(json_buf_complex)
+{
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+
+    /* Build a complex nested structure */
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_string(&w, "service", "test");
+    sh_json_write_kv_int(&w, "version", 1);
+    sh_json_write_key(&w, "config");
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_bool(&w, "enabled", true);
+    sh_json_write_kv_double(&w, "timeout", 30.5);
+    sh_json_write_object_end(&w);
+    sh_json_write_key(&w, "ports");
+    sh_json_write_array_start(&w);
+    sh_json_write_int(&w, 8080);
+    sh_json_write_int(&w, 8443);
+    sh_json_write_array_end(&w);
+    sh_json_write_object_end(&w);
+
+    ASSERT(!sh_json_writer_error(&w));
+    ASSERT(strstr(jb.buf, "\"service\":\"test\"") != NULL);
+    ASSERT(strstr(jb.buf, "\"enabled\":true") != NULL);
+    ASSERT(strstr(jb.buf, "\"ports\":[8080,8443]") != NULL);
+
+    sh_json_buf_free(&jb);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1469,6 +1603,14 @@ int main(void)
     RUN_TEST(write_nested_array);
     RUN_TEST(write_mixed);
     RUN_TEST(write_kv_helpers);
+
+    printf("\nJSON Buffer Helper:\n");
+    RUN_TEST(json_buf_init_free);
+    RUN_TEST(json_buf_simple_write);
+    RUN_TEST(json_buf_growth);
+    RUN_TEST(json_buf_reset);
+    RUN_TEST(json_buf_take);
+    RUN_TEST(json_buf_complex);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 

@@ -437,45 +437,6 @@ static void send_json(struct mg_connection *c, int status, const char *json) {
     sh_mg_reply_json(c, status, &s_cors_config, NULL, json);
 }
 
-/* Growable buffer for JSON writer */
-typedef struct {
-    char *buf;
-    size_t len;
-    size_t cap;
-} JsonBuf;
-
-static int json_buf_write(void *ctx, const char *data, size_t len) {
-    JsonBuf *jb = (JsonBuf *)ctx;
-
-    /* Grow buffer if needed */
-    while (jb->len + len + 1 > jb->cap) {
-        size_t new_cap = jb->cap * 2;
-        if (new_cap < 1024) new_cap = 1024;
-        char *new_buf = realloc(jb->buf, new_cap);
-        if (!new_buf) return -1;
-        jb->buf = new_buf;
-        jb->cap = new_cap;
-    }
-
-    memcpy(jb->buf + jb->len, data, len);
-    jb->len += len;
-    jb->buf[jb->len] = '\0';
-    return 0;
-}
-
-static void json_buf_init(JsonBuf *jb) {
-    jb->buf = NULL;
-    jb->len = 0;
-    jb->cap = 0;
-}
-
-static void json_buf_free(JsonBuf *jb) {
-    free(jb->buf);
-    jb->buf = NULL;
-    jb->len = 0;
-    jb->cap = 0;
-}
-
 static void send_error(struct mg_connection *c, int status, const char *message) {
     sh_mg_reply_error(c, status, &s_cors_config, NULL, message);
 }
@@ -606,11 +567,11 @@ static void handle_stats(struct mg_connection *c) {
     }
 
     /* Build response using streaming JSON writer */
-    JsonBuf jb;
-    json_buf_init(&jb);
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
     ShJsonWriter w;
-    sh_json_writer_init(&w, json_buf_write, &jb);
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
 
     sh_json_write_object_start(&w);
 
@@ -684,7 +645,7 @@ static void handle_stats(struct mg_connection *c) {
         send_error(c, 500, "Failed to generate response");
     }
 
-    json_buf_free(&jb);
+    sh_json_buf_free(&jb);
 }
 
 /* GET /metrics - Prometheus metrics endpoint, uses shared helper */

@@ -322,6 +322,69 @@ int sh_json_write_kv_string(ShJsonWriter *w, const char *key, const char *val);
 int sh_json_write_array_start(ShJsonWriter *w);
 int sh_json_write_array_end(ShJsonWriter *w);
 
+/* ----------------------------------------------------------------------------
+ * Buffer Helper
+ *
+ * Growable buffer for building JSON in memory. Use this with ShJsonWriter
+ * when you need to build a complete JSON string before sending (e.g., for
+ * transport-agnostic APIs that return malloc'd strings).
+ *
+ * Usage:
+ *   ShJsonBuf jb;
+ *   sh_json_buf_init(&jb);
+ *
+ *   ShJsonWriter w;
+ *   sh_json_writer_init(&w, sh_json_buf_write, &jb);
+ *   sh_json_write_object_start(&w);
+ *   sh_json_write_kv_string(&w, "status", "ok");
+ *   sh_json_write_object_end(&w);
+ *
+ *   if (!sh_json_writer_error(&w) && jb.buf) {
+ *       send_response(jb.buf);  // jb.buf is null-terminated
+ *   }
+ *   sh_json_buf_free(&jb);
+ *
+ * For mongoose specifically:
+ *   send_json(c, 200, jb.buf);  // Works with existing helpers
+ *   sh_json_buf_free(&jb);
+ * ---------------------------------------------------------------------------- */
+
+typedef struct {
+    char *buf;    /* Growable buffer (null-terminated) */
+    size_t len;   /* Current length (excludes null terminator) */
+    size_t cap;   /* Capacity */
+} ShJsonBuf;
+
+/*
+ * Initialize an empty JSON buffer.
+ */
+void sh_json_buf_init(ShJsonBuf *jb);
+
+/*
+ * Free the buffer. Safe to call on an uninitialized/zeroed struct.
+ */
+void sh_json_buf_free(ShJsonBuf *jb);
+
+/*
+ * Reset buffer for reuse (keeps allocated memory).
+ */
+void sh_json_buf_reset(ShJsonBuf *jb);
+
+/*
+ * Write callback for ShJsonWriter. Pass this to sh_json_writer_init()
+ * with an ShJsonBuf* as the context.
+ *
+ * Returns 0 on success, -1 on allocation failure.
+ */
+int sh_json_buf_write(void *ctx, const char *data, size_t len);
+
+/*
+ * Take ownership of the buffer. After calling, jb is reset to empty.
+ * Caller is responsible for freeing the returned pointer.
+ * Returns NULL if buffer is empty.
+ */
+char *sh_json_buf_take(ShJsonBuf *jb);
+
 #ifdef __cplusplus
 }
 #endif
