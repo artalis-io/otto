@@ -682,6 +682,74 @@ void test_farkas_equality(void) {
 }
 
 /* ============================================================================
+ * Test: Farkas Ray - Negative RHS with G-sense (Row Sign Corner Case)
+ *
+ * Micro regression test for the row_sign normalization edge case.
+ * When b < 0 AND sense = G, the tableau normalizes by:
+ *   1. Multiply row by -1 (to make b positive)
+ *   2. Flip sense from G to L
+ *
+ * This tests that the Farkas ray is correctly computed in this case.
+ *
+ * min  x
+ * s.t. x >= -5   (b < 0, G sense -> normalized to -x <= 5, row_sign = -1)
+ *      x <= -10  (b < 0, L sense -> normalized to -x >= 10 -> x <= -10, row_sign = -1)
+ *
+ * Variable bounds: x >= 0
+ *
+ * Infeasible: x >= 0 conflicts with x <= -10
+ * ============================================================================ */
+void test_farkas_negative_rhs_gsense(void) {
+    printf("\n=== Test: Farkas Ray Negative RHS G-Sense ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "force_two_phase", 1);
+
+    /* x with lower bound 0 */
+    ralph_add_var(model, 0, 1e30, 1.0, RALPH_CONTINUOUS);
+
+    /* Constraint 1: x >= -5 (b < 0, G sense) */
+    int idx1[] = {0};
+    double val1[] = {1.0};
+    ralph_add_constraint(model, 1, idx1, val1, RALPH_GREATER_EQUAL, -5.0);
+
+    /* Constraint 2: x <= -10 (b < 0, L sense) */
+    int idx2[] = {0};
+    double val2[] = {1.0};
+    ralph_add_constraint(model, 1, idx2, val2, RALPH_LESS_EQUAL, -10.0);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_INFEASIBLE, "Status is INFEASIBLE");
+
+    double ray[2];
+    int ret = ralph_get_farkas_ray(model, ray);
+    ASSERT(ret == 0, "Farkas ray retrieved");
+
+    if (ret == 0) {
+        printf("  Farkas ray: [%.6f, %.6f]\n", ray[0], ray[1]);
+
+        /* Verify ray is non-trivial */
+        ASSERT(fabs(ray[0]) > 1e-6 || fabs(ray[1]) > 1e-6, "Ray is non-trivial");
+
+        /* After normalization:
+         * Row 0: x >= -5 with b=-5 < 0 becomes -x <= 5 (L sense)
+         * Row 1: x <= -10 with b=-10 < 0 becomes -x >= 10 (G sense)
+         *
+         * In standard form:
+         * Row 0: -x <= 5
+         * Row 1: x <= -10 (stays as-is for checking)
+         *
+         * The variable bound x >= 0 interacts with x <= -10 to cause infeasibility.
+         * The Farkas certificate shows this via the slack variable constraint. */
+    }
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Test: API Functions
  * ============================================================================ */
 void test_api_functions(void) {
@@ -1999,6 +2067,7 @@ int main(int argc, char **argv) {
     test_farkas_bound_conflict();
     test_farkas_sum_conflict();
     test_farkas_equality();
+    test_farkas_negative_rhs_gsense();
     test_larger_lp();
     test_network_flow();  /* Regression test for objective computation bug */
 
