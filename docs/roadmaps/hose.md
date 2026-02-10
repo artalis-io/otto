@@ -1588,13 +1588,130 @@ void ralph_set_branch_callback(RalphModel *model, RalphBranchCallback *cb);
 
 ##### Adaptive Discretization (Advanced)
 
-For very long horizons (multi-week), consider **variable δ**:
-- Fine granularity (5 min) near task boundaries and time windows
-- Coarse granularity (30 min or 1 hour) during long rest periods
+Since we know the task list beforehand, we can use **variable δ** - fine granularity where decisions matter, coarse where they don't.
 
-This reduces period count significantly while maintaining precision where it matters.
+**Key insight:** Most of a multi-day schedule is either "driving continuously" or "resting for 10+ hours". Fine granularity only matters near:
+- Task boundaries (arrival, departure)
+- Time window edges
+- Clock thresholds (8h break trigger, 11h limit, 14h window end)
+- Mandatory break insertion points
 
-**Implementation:** Pre-process the problem to identify "interesting" time points, then build a non-uniform time grid. Constraints adapt to variable period lengths.
+**Period reduction example (5-task chain over 3 days):**
+
+| Approach | Periods | Variables | Solve time |
+|----------|---------|-----------|------------|
+| Uniform δ=5min | 864 | ~5000 | 10-30s |
+| Adaptive | ~200 | ~1200 | 1-5s |
+
+**Algorithm: Build non-uniform time grid**
+
+```c
+typedef struct {
+    double start;      // Period start time (hours from t_now)
+    double duration;   // Period duration (variable!)
+} AdaptivePeriod;
+
+AdaptivePeriod* build_adaptive_grid(
+    HSTask *tasks, int num_tasks,
+    HSDriverState *state,
+    int *num_periods_out
+) {
+    // Step 1: Collect "interesting" time points
+    double *points = NULL;
+    int num_points = 0;
+
+    for (int k = 0; k < num_tasks; k++) {
+        // Task boundaries (fine grid needed)
+        add_point(&points, &num_points, tasks[k].earliest_start);
+        add_point(&points, &num_points, tasks[k].latest_start);
+        add_point(&points, &num_points, tasks[k].earliest_start + tasks[k].work_duration);
+
+        // Driving completion estimate (± buffer)
+        double eta = estimate_arrival(tasks, k, state);
+        add_point(&points, &num_points, eta - 0.5);  // 30 min before
+        add_point(&points, &num_points, eta + 0.5);  // 30 min after
+    }
+
+    // Clock thresholds (relative to current state)
+    double time_to_8h_break = 8.0 - state->driving_since_break;
+    double time_to_11h = 11.0 - state->driving_today;
+    double time_to_14h = 14.0 - state->window_elapsed;
+
+    add_point(&points, &num_points, time_to_8h_break - 0.5);
+    add_point(&points, &num_points, time_to_8h_break);
+    add_point(&points, &num_points, time_to_11h - 0.5);
+    add_point(&points, &num_points, time_to_11h);
+    add_point(&points, &num_points, time_to_14h - 0.5);
+    add_point(&points, &num_points, time_to_14h);
+
+    // Step 2: Sort and deduplicate
+    qsort(points, num_points, sizeof(double), cmp_double);
+    deduplicate(&points, &num_points, 0.1);  // merge points within 6 min
+
+    // Step 3: Build adaptive grid
+    // - Fine (5 min) within ±1h of interesting points
+    // - Medium (15 min) within ±3h
+    // - Coarse (1 hour) elsewhere
+
+    AdaptivePeriod *grid = NULL;
+    int num_periods = 0;
+    double t = 0.0;
+    double horizon = estimate_total_horizon(tasks, num_tasks, state);
+
+    while (t < horizon) {
+        double delta;
+        double dist_to_interesting = min_distance_to_points(t, points, num_points);
+
+        if (dist_to_interesting < 1.0) {
+            delta = 5.0 / 60.0;   // 5 min
+        } else if (dist_to_interesting < 3.0) {
+            delta = 15.0 / 60.0;  // 15 min
+        } else {
+            delta = 1.0;          // 1 hour
+        }
+
+        // Don't overshoot next interesting point
+        delta = fmin(delta, dist_to_interesting + 0.1);
+
+        grid = realloc(grid, (num_periods + 1) * sizeof(AdaptivePeriod));
+        grid[num_periods].start = t;
+        grid[num_periods].duration = delta;
+        num_periods++;
+
+        t += delta;
+    }
+
+    free(points);
+    *num_periods_out = num_periods;
+    return grid;
+}
+```
+
+**Constraint adaptation for variable δ:**
+
+```
+// Clock dynamics with variable period duration
+d[t] = d[t-1] + duration[t] · x[t,DRIVE] - 11 · reset10[t]
+
+// Break detection: need 0.5h consecutive non-driving
+// With variable δ, a single coarse period might satisfy the break
+break30[t] = 1 iff:
+  (duration[t] ≥ 0.5 AND not_driving[t] = 1)
+  OR (consecutive non-driving time across periods ≥ 0.5h)
+
+// 10h reset detection: similar, need 10h consecutive OFF
+// A single 10h coarse period can satisfy this directly
+```
+
+**When to use adaptive:**
+- Chain of 3+ tasks spanning multiple days
+- Long-haul routes with overnight rests
+- Weekly planning horizons
+
+**When uniform is fine:**
+- Single task verification
+- Short chains (1-2 days)
+- Real-time tracking (solve frequently, short horizon)
 
 ---
 
