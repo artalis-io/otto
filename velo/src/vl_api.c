@@ -7,6 +7,8 @@
 
 #include "vl_api.h"
 #include "sh_polyline.h"
+#include "sh_json.h"
+#include "sh_arena.h"
 #include "vl_types.h"
 #include <stdlib.h>
 #include <string.h>
@@ -181,68 +183,6 @@ static int parse_bool(const char *str, int default_val) {
     return default_val;
 }
 
-/* Simple JSON string extraction (for POST body parsing) */
-static char *json_get_string(const char *json, const char *key) {
-    if (!json || !key) return NULL;
-
-    /* Look for "key": "value" */
-    char search[128];
-    snprintf(search, sizeof(search), "\"%s\"", key);
-
-    const char *key_pos = strstr(json, search);
-    if (!key_pos) return NULL;
-
-    /* Find the colon */
-    const char *colon = strchr(key_pos + strlen(search), ':');
-    if (!colon) return NULL;
-
-    /* Skip whitespace */
-    const char *p = colon + 1;
-    while (*p && isspace((unsigned char)*p)) p++;
-
-    /* Expect a quote */
-    if (*p != '"') return NULL;
-    p++;
-
-    /* Find closing quote */
-    const char *end = strchr(p, '"');
-    if (!end) return NULL;
-
-    size_t len = (size_t)(end - p);
-    char *result = malloc(len + 1);
-    if (!result) return NULL;
-
-    memcpy(result, p, len);
-    result[len] = '\0';
-    return result;
-}
-
-/* Simple JSON boolean extraction */
-static int json_get_bool(const char *json, const char *key, int *value) {
-    if (!json || !key || !value) return 0;
-
-    char search[128];
-    snprintf(search, sizeof(search), "\"%s\"", key);
-
-    const char *key_pos = strstr(json, search);
-    if (!key_pos) return 0;
-
-    const char *colon = strchr(key_pos + strlen(search), ':');
-    if (!colon) return 0;
-
-    const char *p = colon + 1;
-    while (*p && isspace((unsigned char)*p)) p++;
-
-    if (strncmp(p, "true", 4) == 0) {
-        *value = 1;
-        return 1;
-    } else if (strncmp(p, "false", 5) == 0) {
-        *value = 0;
-        return 1;
-    }
-
-    return 0;
-}
 
 /* ============================================================================
  * Route Parameter Parsing
@@ -262,49 +202,70 @@ int vl_api_parse_route_params(const char *query, const char *body,
     int is_post = method && strcmp(method, "POST") == 0;
 
     if (is_post && body) {
-        /* Parse JSON body */
-        char *from_str = json_get_string(body, "from");
-        if (from_str) {
-            if (parse_coord(from_str, &params->from_lat, &params->from_lon) != 0) {
-                free(from_str);
-                if (error_msg) snprintf(error_msg, error_msg_len, "Invalid 'from' coordinate");
-                return -1;
-            }
-            free(from_str);
-        } else {
+        /* Parse JSON body using sh_json */
+        size_t body_len = strlen(body);
+        size_t arena_size = body_len * 8;
+        if (arena_size < 4096) arena_size = 4096;
+        SHArena *arena = sh_arena_create(arena_size);
+        if (!arena) {
+            if (error_msg) snprintf(error_msg, error_msg_len, "Memory allocation failed");
+            return -1;
+        }
+
+        ShJsonValue *root = NULL;
+        ShJsonStatus json_status = sh_json_parse(body, body_len, arena, &root);
+        if (json_status != SH_JSON_OK) {
+            sh_arena_free(arena);
+            if (error_msg) snprintf(error_msg, error_msg_len, "Invalid JSON: %s",
+                                    sh_json_status_str(json_status));
+            return -1;
+        }
+
+        /* Extract 'from' field */
+        const char *from_str = sh_json_as_string(sh_json_get(root, "from"), NULL);
+        if (!from_str) {
+            sh_arena_free(arena);
             if (error_msg) snprintf(error_msg, error_msg_len, "Missing 'from' field");
             return -1;
         }
-
-        char *to_str = json_get_string(body, "to");
-        if (to_str) {
-            if (parse_coord(to_str, &params->to_lat, &params->to_lon) != 0) {
-                free(to_str);
-                if (error_msg) snprintf(error_msg, error_msg_len, "Invalid 'to' coordinate");
-                return -1;
-            }
-            free(to_str);
-        } else {
-            if (error_msg) snprintf(error_msg, error_msg_len, "Missing 'to' field");
+        if (parse_coord(from_str, &params->from_lat, &params->from_lon) != 0) {
+            sh_arena_free(arena);
+            if (error_msg) snprintf(error_msg, error_msg_len, "Invalid 'from' coordinate");
             return -1;
         }
 
-        char *profile_str = json_get_string(body, "profile");
+        /* Extract 'to' field */
+        const char *to_str = sh_json_as_string(sh_json_get(root, "to"), NULL);
+        if (!to_str) {
+            sh_arena_free(arena);
+            if (error_msg) snprintf(error_msg, error_msg_len, "Missing 'to' field");
+            return -1;
+        }
+        if (parse_coord(to_str, &params->to_lat, &params->to_lon) != 0) {
+            sh_arena_free(arena);
+            if (error_msg) snprintf(error_msg, error_msg_len, "Invalid 'to' coordinate");
+            return -1;
+        }
+
+        /* Optional: profile */
+        const char *profile_str = sh_json_as_string(sh_json_get(root, "profile"), NULL);
         if (profile_str) {
             params->profile = parse_profile(profile_str);
-            free(profile_str);
         }
 
-        char *mode_str = json_get_string(body, "mode");
+        /* Optional: mode */
+        const char *mode_str = sh_json_as_string(sh_json_get(root, "mode"), NULL);
         if (mode_str) {
             params->weight = parse_mode(mode_str);
-            free(mode_str);
         }
 
-        int geom;
-        if (json_get_bool(body, "geometry", &geom)) {
-            params->include_geometry = geom;
+        /* Optional: geometry (boolean) */
+        ShJsonValue *geom_val = sh_json_get(root, "geometry");
+        if (geom_val && sh_json_type(geom_val) == SH_JSON_BOOL) {
+            params->include_geometry = sh_json_as_bool(geom_val, 0) ? 1 : 0;
         }
+
+        sh_arena_free(arena);
     } else {
         /* Parse query string */
         char value[256];
