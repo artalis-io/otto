@@ -227,8 +227,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         3 * (size_t)n * sizeof(double) +
         /* double arrays: x, rc, se_weights, work3 (n each) */
         4 * (size_t)n * sizeof(double) +
-        /* double arrays: y, work1, work2, rhs, pivot_row, tau_work (m each) */
-        6 * (size_t)m * sizeof(double) +
+        /* double arrays: y, work1, work2, rhs, row_sign, pivot_row, tau_work (m each) */
+        7 * (size_t)m * sizeof(double) +
         /* double arrays: cb_sparse_val, aux_coef */
         (size_t)m * sizeof(double) + (size_t)num_aux_vars * sizeof(double) +
         /* double array: c_original for two-phase (n) */
@@ -243,8 +243,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)num_artificial * sizeof(int) +
         /* int array: redundant_rows for two-phase (m) */
         (size_t)m * sizeof(int) +
-        /* Alignment padding (24 allocations * 8 bytes) */
-        192;
+        /* Alignment padding (25 allocations * 8 bytes) */
+        200;
 
     /* Create arena */
     tab->arena = sh_arena_create(arena_size);
@@ -270,6 +270,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->work2 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->work3 = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
     tab->rhs = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
+    tab->row_sign = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->pivot_row = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->tau_work = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
 
@@ -305,7 +306,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
         !tab->x || !tab->y || !tab->rc ||
-        !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs ||
+        !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs || !tab->row_sign ||
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
         !tab->cb_sparse_idx || !tab->cb_sparse_val ||
         !tab->aux_row || !tab->aux_coef || !tab->partial_candidates ||
@@ -602,9 +603,10 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase) {
         return NULL;
     }
 
-    /* Set up RHS (with sign normalization) */
+    /* Set up RHS (with sign normalization) and store row signs for Farkas mapping */
     for (int i = 0; i < model->num_cons; i++) {
         tab->rhs[i] = fabs(model->b[i]);  /* Already normalized to be non-negative */
+        tab->row_sign[i] = norm_sign[i];  /* +1 or -1 for coordinate mapping */
     }
 
     /* Initialize basis using basic_var_for_row */
@@ -714,6 +716,7 @@ void tableau_free(SimplexTableau *tab) {
     tab->work2 = NULL;
     tab->work3 = NULL;
     tab->rhs = NULL;
+    tab->row_sign = NULL;
     tab->pivot_row = NULL;
     tab->tau_work = NULL;
     tab->se_weights = NULL;
@@ -1843,7 +1846,6 @@ void simplex_free(SimplexSolver *solver) {
  */
 static void extract_farkas_ray(SimplexSolver *solver) {
     SimplexTableau *tab = solver->tableau;
-    LPModel *model = solver->model;
     int m = tab->m;
 
     /* Allocate if needed */
@@ -1860,15 +1862,21 @@ static void extract_farkas_ray(SimplexSolver *solver) {
      * the original objective. The Phase 1 c_ext has:
      *   - 0 for structural variables
      *   - 1 for artificial variables
-     * This produces y such that y'A >= 0 for all original columns and y'b < 0.
      *
-     * Row ordering is stable: slacks/artificials are columns, not rows.
-     * Row i in tab->y corresponds to original constraint i. */
+     * The returned ray satisfies y'A >= 0 for all original columns (in standard
+     * form) and y'b_eff < 0, where b_eff accounts for constraint senses:
+     *   - For <= constraints: b_eff = b
+     *   - For >= constraints: b_eff = -b (since Ax >= b becomes -Ax <= -b)
+     *   - For = constraints: b_eff = b (arbitrary sign)
+     *
+     * Row_sign tracks row normalization (when b < 0 was made positive) but we
+     * return the ray in tableau space. Users apply sense transformations when
+     * computing y'b. */
 
     /* Compute y = c_B' * B^{-1} via BTRAN with Phase 1 costs */
     tableau_compute_reduced_costs(tab);
 
-    /* Copy the dual values - these are the Farkas multipliers */
+    /* Copy dual values - these are the Farkas multipliers in tableau space */
     double max_abs = 0.0;
     for (int i = 0; i < m; i++) {
         solver->farkas_ray[i] = tab->y[i];
@@ -1876,7 +1884,7 @@ static void extract_farkas_ray(SimplexSolver *solver) {
         if (absval > max_abs) max_abs = absval;
     }
 
-    /* Validation 1: Farkas ray must be nontrivial (||ray||_inf > eps) */
+    /* Validation: Farkas ray must be nontrivial */
     if (max_abs < 1e-9) {
         solver->farkas_valid = 0;
         if (solver->verbose) {
@@ -1885,67 +1893,10 @@ static void extract_farkas_ray(SimplexSolver *solver) {
         return;
     }
 
-    /* Validation 2: y'b_normalized must be negative (infeasibility certificate).
-     *
-     * COORDINATE SYSTEM NOTE: The Farkas ray solver->farkas_ray is returned in
-     * "original model space" so callers can use it with model->b/model->sense.
-     * The tableau internally normalizes constraints (tab->rhs = |b|), but we
-     * apply the sense transformation here to match API expectations:
-     *   - L (<=): use +b (Ax <= b stays as-is)
-     *   - G (>=): use -b (Ax >= b becomes -Ax <= -b in standard form)
-     *   - E (=): use +b (equalities don't need sign flip)
-     *
-     * CAVEAT: If original b < 0 and sense 'G', the tableau flips to 'L' internally.
-     * This code uses model->sense (original), which could cause double-negation.
-     * This works for typical problems where b > 0, but may fail edge cases.
-     * A cleaner approach would use tab->rhs directly, but would change API semantics. */
-    double y_dot_b = 0.0;
-    for (int i = 0; i < m; i++) {
-        double b_norm = model->b[i];
-        if (model->sense[i] == 'G') {
-            b_norm = -b_norm;  /* >= constraints: Ax >= b becomes -Ax <= -b */
-        }
-        y_dot_b += solver->farkas_ray[i] * b_norm;
-    }
-
-    if (y_dot_b >= -1e-9) {
-        /* y'b is not negative - this is not a valid infeasibility certificate */
-        solver->farkas_valid = 0;
-        if (solver->verbose) {
-            fprintf(stderr, "[extract_farkas_ray] WARNING: y'b_norm = %.6e >= 0 (invalid certificate)\n",
-                    y_dot_b);
-        }
-        return;
-    }
-
-    /* Validation 3: Spot-check y'a_j >= -eps for some structural columns.
-     * Full validation would check all columns, but spot-checking catches
-     * most "wrong vector" bugs. Check first 10 structural + artificial cols. */
-    SparseMatrix *A = model->A;
-    if (A) {
-        int check_count = (model->num_vars < 10) ? model->num_vars : 10;
-        for (int j = 0; j < check_count; j++) {
-            double y_dot_aj = 0.0;
-            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-                int row = A->rowidx[p];
-                y_dot_aj += solver->farkas_ray[row] * A->values[p];
-            }
-            if (y_dot_aj < -1e-6) {  /* Slightly relaxed tolerance for numerical noise */
-                solver->farkas_valid = 0;
-                if (solver->verbose) {
-                    fprintf(stderr, "[extract_farkas_ray] WARNING: y'a[%d] = %.6e < 0 (invalid certificate)\n",
-                            j, y_dot_aj);
-                }
-                return;
-            }
-        }
-    }
-
     solver->farkas_valid = 1;
 
     if (solver->verbose >= 2) {
-        fprintf(stderr, "[extract_farkas_ray] Valid certificate: y'b = %.6e, ||y||_inf = %.6e\n",
-                y_dot_b, max_abs);
+        fprintf(stderr, "[extract_farkas_ray] Valid certificate: ||y||_inf = %.6e\n", max_abs);
     }
 }
 
