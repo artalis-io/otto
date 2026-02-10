@@ -17,7 +17,8 @@ INCLUDES = -I../include -I../../ralph/include -I../../shared/include
 FUELWISE_SRC = $(wildcard ../src/*.c)
 RALPH_SRC = $(wildcard ../../ralph/src/*.c) $(wildcard ../../ralph/src/optim/*.c)
 # Shared sources needed by Ralph and FuelWise
-SHARED_SRC = ../../shared/src/sh_geo.c ../../shared/src/sh_arena.c
+SHARED_SRC = ../../shared/src/sh_geo.c ../../shared/src/sh_arena.c \
+             ../../shared/src/sh_polyline.c ../../shared/src/sh_json.c
 WASM_SRC = src/fuelwise_wasm.c
 
 # All source files
