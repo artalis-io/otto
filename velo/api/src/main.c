@@ -42,6 +42,7 @@
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
+#include "sh_json.h"  /* For streaming JSON writer */
 
 /* ============================================================================
  * Configuration
@@ -436,6 +437,45 @@ static void send_json(struct mg_connection *c, int status, const char *json) {
     sh_mg_reply_json(c, status, &s_cors_config, NULL, json);
 }
 
+/* Growable buffer for JSON writer */
+typedef struct {
+    char *buf;
+    size_t len;
+    size_t cap;
+} JsonBuf;
+
+static int json_buf_write(void *ctx, const char *data, size_t len) {
+    JsonBuf *jb = (JsonBuf *)ctx;
+
+    /* Grow buffer if needed */
+    while (jb->len + len + 1 > jb->cap) {
+        size_t new_cap = jb->cap * 2;
+        if (new_cap < 1024) new_cap = 1024;
+        char *new_buf = realloc(jb->buf, new_cap);
+        if (!new_buf) return -1;
+        jb->buf = new_buf;
+        jb->cap = new_cap;
+    }
+
+    memcpy(jb->buf + jb->len, data, len);
+    jb->len += len;
+    jb->buf[jb->len] = '\0';
+    return 0;
+}
+
+static void json_buf_init(JsonBuf *jb) {
+    jb->buf = NULL;
+    jb->len = 0;
+    jb->cap = 0;
+}
+
+static void json_buf_free(JsonBuf *jb) {
+    free(jb->buf);
+    jb->buf = NULL;
+    jb->len = 0;
+    jb->cap = 0;
+}
+
 static void send_error(struct mg_connection *c, int status, const char *message) {
     sh_mg_reply_error(c, status, &s_cors_config, NULL, message);
 }
@@ -565,85 +605,86 @@ static void handle_stats(struct mg_connection *c) {
         has_adaptive_params = sh_adaptive_get_params(s_adaptive_tracker, &adaptive_params);
     }
 
-    char response[6144];
-    int n = snprintf(response, sizeof(response),
-        "{\n"
-        "  \"graph_path\": \"%s\",\n"
-        "  \"num_nodes\": %u,\n"
-        "  \"num_edges\": %u,\n"
-        "  \"landmarks_enabled\": %s,\n"
-        "  \"landmark_count\": %d,\n"
-        "  \"bbox\": {\n"
-        "    \"min_lat\": %.6f,\n"
-        "    \"min_lon\": %.6f,\n"
-        "    \"max_lat\": %.6f,\n"
-        "    \"max_lon\": %.6f\n"
-        "  },\n"
-        "  \"work_queue\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"depth\": %zu,\n"
-        "    \"capacity\": %zu,\n"
-        "    \"pushed\": %lu,\n"
-        "    \"popped\": %lu,\n"
-        "    \"dropped\": %lu,\n"
-        "    \"expired\": %lu\n"
-        "  },\n"
-        "  \"rate_limit\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"rps\": %.1f,\n"
-        "    \"burst\": %.0f,\n"
-        "    \"allowed\": %lu,\n"
-        "    \"denied\": %lu\n"
-        "  },\n"
-        "  \"adaptive\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"sample_count\": %lu,\n"
-        "    \"recalc_count\": %lu",
-        s_config.graph_path,
-        s_graph->num_nodes,
-        s_graph->num_edges,
-        s_landmarks ? "true" : "false",
-        s_landmarks ? s_config.landmark_count : 0,
-        s_graph->bbox_min.lat,
-        s_graph->bbox_min.lon,
-        s_graph->bbox_max.lat,
-        s_graph->bbox_max.lon,
-        s_work_queue ? "true" : "false",
-        wq_stats.current_depth, wq_stats.max_capacity,
-        (unsigned long)wq_stats.total_pushed, (unsigned long)wq_stats.total_popped,
-        (unsigned long)wq_stats.total_dropped, (unsigned long)wq_stats.total_expired,
-        s_rate_limiter ? "true" : "false",
-        s_config.rate_limit_rps, s_config.rate_limit_burst,
-        (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied,
-        s_adaptive_tracker ? "true" : "false",
-        (unsigned long)adaptive_stats.sample_count, (unsigned long)adaptive_stats.recalc_count);
+    /* Build response using streaming JSON writer */
+    JsonBuf jb;
+    json_buf_init(&jb);
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, json_buf_write, &jb);
+
+    sh_json_write_object_start(&w);
+
+    /* Graph info */
+    sh_json_write_kv_string(&w, "graph_path", s_config.graph_path);
+    sh_json_write_kv_int(&w, "num_nodes", (int64_t)s_graph->num_nodes);
+    sh_json_write_kv_int(&w, "num_edges", (int64_t)s_graph->num_edges);
+    sh_json_write_kv_bool(&w, "landmarks_enabled", s_landmarks != NULL);
+    sh_json_write_kv_int(&w, "landmark_count", s_landmarks ? s_config.landmark_count : 0);
+
+    /* Bounding box */
+    sh_json_write_key(&w, "bbox");
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_double_fmt(&w, "min_lat", s_graph->bbox_min.lat, 6);
+    sh_json_write_kv_double_fmt(&w, "min_lon", s_graph->bbox_min.lon, 6);
+    sh_json_write_kv_double_fmt(&w, "max_lat", s_graph->bbox_max.lat, 6);
+    sh_json_write_kv_double_fmt(&w, "max_lon", s_graph->bbox_max.lon, 6);
+    sh_json_write_object_end(&w);
+
+    /* Work queue stats */
+    sh_json_write_key(&w, "work_queue");
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_bool(&w, "enabled", s_work_queue != NULL);
+    sh_json_write_kv_int(&w, "depth", (int64_t)wq_stats.current_depth);
+    sh_json_write_kv_int(&w, "capacity", (int64_t)wq_stats.max_capacity);
+    sh_json_write_kv_int(&w, "pushed", (int64_t)wq_stats.total_pushed);
+    sh_json_write_kv_int(&w, "popped", (int64_t)wq_stats.total_popped);
+    sh_json_write_kv_int(&w, "dropped", (int64_t)wq_stats.total_dropped);
+    sh_json_write_kv_int(&w, "expired", (int64_t)wq_stats.total_expired);
+    sh_json_write_object_end(&w);
+
+    /* Rate limiter stats */
+    sh_json_write_key(&w, "rate_limit");
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_bool(&w, "enabled", s_rate_limiter != NULL);
+    sh_json_write_kv_double_fmt(&w, "rps", s_config.rate_limit_rps, 1);
+    sh_json_write_kv_double_fmt(&w, "burst", s_config.rate_limit_burst, 0);
+    sh_json_write_kv_int(&w, "allowed", (int64_t)rl_stats.requests_allowed);
+    sh_json_write_kv_int(&w, "denied", (int64_t)rl_stats.requests_denied);
+    sh_json_write_object_end(&w);
+
+    /* Adaptive capacity stats */
+    sh_json_write_key(&w, "adaptive");
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_bool(&w, "enabled", s_adaptive_tracker != NULL);
+    sh_json_write_kv_int(&w, "sample_count", (int64_t)adaptive_stats.sample_count);
+    sh_json_write_kv_int(&w, "recalc_count", (int64_t)adaptive_stats.recalc_count);
 
     /* Add percentile stats if we have samples */
-    if (s_adaptive_tracker && adaptive_stats.sample_count > 0 && n > 0 && (size_t)n < sizeof(response)) {
-        n += snprintf(response + n, sizeof(response) - (size_t)n,
-            ",\n    \"p50_ms\": %.2f,\n"
-            "    \"p90_ms\": %.2f,\n"
-            "    \"p99_ms\": %.2f,\n"
-            "    \"avg_ms\": %.2f,\n"
-            "    \"ema_ms\": %.2f",
-            adaptive_stats.p50_ms, adaptive_stats.p90_ms, adaptive_stats.p99_ms,
-            adaptive_stats.avg_ms, adaptive_stats.ema_ms);
+    if (s_adaptive_tracker && adaptive_stats.sample_count > 0) {
+        sh_json_write_kv_double_fmt(&w, "p50_ms", adaptive_stats.p50_ms, 2);
+        sh_json_write_kv_double_fmt(&w, "p90_ms", adaptive_stats.p90_ms, 2);
+        sh_json_write_kv_double_fmt(&w, "p99_ms", adaptive_stats.p99_ms, 2);
+        sh_json_write_kv_double_fmt(&w, "avg_ms", adaptive_stats.avg_ms, 2);
+        sh_json_write_kv_double_fmt(&w, "ema_ms", adaptive_stats.ema_ms, 2);
     }
 
     /* Add calculated params if available */
-    if (has_adaptive_params && n > 0 && (size_t)n < sizeof(response)) {
-        n += snprintf(response + n, sizeof(response) - (size_t)n,
-            ",\n    \"calc_rps\": %.2f,\n"
-            "    \"calc_burst\": %.0f",
-            adaptive_params.rate_limit_rps, adaptive_params.rate_limit_burst);
+    if (has_adaptive_params) {
+        sh_json_write_kv_double_fmt(&w, "calc_rps", adaptive_params.rate_limit_rps, 2);
+        sh_json_write_kv_double_fmt(&w, "calc_burst", adaptive_params.rate_limit_burst, 0);
     }
 
-    /* Close adaptive section and response */
-    if (n > 0 && (size_t)n < sizeof(response)) {
-        snprintf(response + n, sizeof(response) - (size_t)n, "\n  }\n}\n");
+    sh_json_write_object_end(&w);  /* Close adaptive */
+    sh_json_write_object_end(&w);  /* Close root */
+
+    /* Send response */
+    if (!sh_json_writer_error(&w) && jb.buf) {
+        send_json(c, 200, jb.buf);
+    } else {
+        send_error(c, 500, "Failed to generate response");
     }
 
-    send_json(c, 200, response);
+    json_buf_free(&jb);
 }
 
 /* GET /metrics - Prometheus metrics endpoint, uses shared helper */

@@ -28,6 +28,7 @@
 #include "sh_arena.h"
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -235,6 +236,91 @@ ShJsonValue *sh_json_get_n(const ShJsonValue *v, const char *key, size_t key_len
  *   sh_json_get_path(root, "data.items[2].id") // root.data.items[2].id
  */
 ShJsonValue *sh_json_get_path(const ShJsonValue *v, const char *path);
+
+/* ============================================================================
+ * JSON Writer (Streaming)
+ * ============================================================================
+ *
+ * Streaming JSON writer that outputs directly to a callback function.
+ * No intermediate buffering - writes go straight to the destination.
+ *
+ * Usage with mongoose:
+ *   static int mg_json_write(void *ctx, const char *data, size_t len) {
+ *       mg_send((struct mg_connection *)ctx, data, len);
+ *       return 0;
+ *   }
+ *
+ *   ShJsonWriter w;
+ *   sh_json_writer_init(&w, mg_json_write, c);
+ *   sh_json_write_object_start(&w);
+ *   sh_json_write_kv_string(&w, "status", "ok");
+ *   sh_json_write_kv_double(&w, "distance", 12345.6);
+ *   sh_json_write_object_end(&w);
+ */
+
+/* Write callback: return 0 on success, non-zero on error */
+typedef int (*ShJsonWriteFn)(void *ctx, const char *data, size_t len);
+
+typedef struct {
+    ShJsonWriteFn write_fn;  /* Output callback */
+    void *ctx;               /* Callback context (e.g., socket, file) */
+    int depth;               /* Nesting depth (for future pretty-print) */
+    int needs_comma;         /* Need comma before next element */
+    int error;               /* Sticky error flag */
+    int first_in_container;  /* First element in current array/object */
+} ShJsonWriter;
+
+/*
+ * Initialize writer with output callback.
+ *
+ * @param w        Writer to initialize
+ * @param write_fn Callback to write data (e.g., mg_send wrapper)
+ * @param ctx      Context passed to write_fn
+ */
+void sh_json_writer_init(ShJsonWriter *w, ShJsonWriteFn write_fn, void *ctx);
+
+/*
+ * Check if writer has encountered an error.
+ */
+int sh_json_writer_error(const ShJsonWriter *w);
+
+/* ----------------------------------------------------------------------------
+ * Primitive Values
+ * ---------------------------------------------------------------------------- */
+
+int sh_json_write_null(ShJsonWriter *w);
+int sh_json_write_bool(ShJsonWriter *w, bool val);
+int sh_json_write_int(ShJsonWriter *w, int64_t val);
+int sh_json_write_double(ShJsonWriter *w, double val);
+int sh_json_write_double_fmt(ShJsonWriter *w, double val, int precision);
+int sh_json_write_string(ShJsonWriter *w, const char *str);
+int sh_json_write_string_n(ShJsonWriter *w, const char *str, size_t len);
+
+/* Write raw JSON (for pre-formatted content) */
+int sh_json_write_raw(ShJsonWriter *w, const char *raw, size_t len);
+
+/* ----------------------------------------------------------------------------
+ * Objects
+ * ---------------------------------------------------------------------------- */
+
+int sh_json_write_object_start(ShJsonWriter *w);
+int sh_json_write_object_end(ShJsonWriter *w);
+int sh_json_write_key(ShJsonWriter *w, const char *key);
+
+/* Convenience: key + value in one call */
+int sh_json_write_kv_null(ShJsonWriter *w, const char *key);
+int sh_json_write_kv_bool(ShJsonWriter *w, const char *key, bool val);
+int sh_json_write_kv_int(ShJsonWriter *w, const char *key, int64_t val);
+int sh_json_write_kv_double(ShJsonWriter *w, const char *key, double val);
+int sh_json_write_kv_double_fmt(ShJsonWriter *w, const char *key, double val, int precision);
+int sh_json_write_kv_string(ShJsonWriter *w, const char *key, const char *val);
+
+/* ----------------------------------------------------------------------------
+ * Arrays
+ * ---------------------------------------------------------------------------- */
+
+int sh_json_write_array_start(ShJsonWriter *w);
+int sh_json_write_array_end(ShJsonWriter *w);
 
 #ifdef __cplusplus
 }
