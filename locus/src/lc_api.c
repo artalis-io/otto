@@ -546,7 +546,8 @@ int lc_api_handle(LCAPIContext *ctx,
         }
 
         int status_code;
-        char *json = lc_api_search(ctx, query, atoi(limit_str), &status_code, &resp->body_len);
+        int limit = sh_parse_int(limit_str, 10, 1, 100);
+        char *json = lc_api_search(ctx, query, limit, &status_code, &resp->body_len);
         if (json) {
             resp->status_code = status_code;
             resp->body = (uint8_t *)json;
@@ -569,7 +570,8 @@ int lc_api_handle(LCAPIContext *ctx,
         }
 
         int status_code;
-        char *json = lc_api_autocomplete(ctx, query, atoi(limit_str), &status_code, &resp->body_len);
+        int limit = sh_parse_int(limit_str, 10, 1, 100);
+        char *json = lc_api_autocomplete(ctx, query, limit, &status_code, &resp->body_len);
         if (json) {
             resp->status_code = status_code;
             resp->body = (uint8_t *)json;
