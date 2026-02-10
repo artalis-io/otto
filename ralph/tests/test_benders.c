@@ -63,16 +63,16 @@ void test_simple_two_stage(void) {
     ralph_set_obj_sense(model, RALPH_MINIMIZE);
 
     /* Variables: x1, x2 (master), y1, y2 (sub), theta (recourse) */
-    /* x1: master, integer - bound by reasonable values to avoid numerical issues */
-    int x1 = ralph_add_var(model, 0, 100.0, 1.0, RALPH_INTEGER);
+    /* x1: master, integer - use large but not infinite bounds */
+    int x1 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
     /* x2: master, integer */
-    int x2 = ralph_add_var(model, 0, 100.0, 2.0, RALPH_INTEGER);
+    int x2 = ralph_add_var(model, 0, 1e9, 2.0, RALPH_INTEGER);
     /* y1: subproblem, continuous */
-    int y1 = ralph_add_var(model, 0, 100.0, 3.0, RALPH_CONTINUOUS);
+    int y1 = ralph_add_var(model, 0, 1e9, 3.0, RALPH_CONTINUOUS);
     /* y2: subproblem, continuous */
-    int y2 = ralph_add_var(model, 0, 100.0, 4.0, RALPH_CONTINUOUS);
-    /* theta: recourse cost - use reasonable bounds to avoid numerical issues */
-    int theta = ralph_add_var(model, -1e6, 1e6, 1.0, RALPH_CONTINUOUS);
+    int y2 = ralph_add_var(model, 0, 1e9, 4.0, RALPH_CONTINUOUS);
+    /* theta: recourse cost - large bounds for general problems */
+    int theta = ralph_add_var(model, -1e9, 1e9, 1.0, RALPH_CONTINUOUS);
 
     ASSERT(x1 == 0 && x2 == 1 && y1 == 2 && y2 == 3 && theta == 4,
            "Variables added correctly");
@@ -169,10 +169,10 @@ void test_continuous_master(void) {
 
     ralph_set_obj_sense(model, RALPH_MINIMIZE);
 
-    /* Variables: x (master), y1, y2 (sub) - use reasonable bounds */
-    int x = ralph_add_var(model, 0, 10, 1.0, RALPH_CONTINUOUS);
-    int y1 = ralph_add_var(model, 0, 100.0, 2.0, RALPH_CONTINUOUS);
-    int y2 = ralph_add_var(model, 0, 100.0, 3.0, RALPH_CONTINUOUS);
+    /* Variables: x (master), y1, y2 (sub) - use large bounds */
+    int x = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int y1 = ralph_add_var(model, 0, 1e9, 2.0, RALPH_CONTINUOUS);
+    int y2 = ralph_add_var(model, 0, 1e9, 3.0, RALPH_CONTINUOUS);
 
     /* Master: x >= 2 */
     {
@@ -233,11 +233,11 @@ void test_infeasible_subproblem(void) {
 
     ralph_set_obj_sense(model, RALPH_MINIMIZE);
 
-    /* Master var x controls subproblem capacity - use reasonable bounds */
-    int x = ralph_add_var(model, 0, 10, 1.0, RALPH_INTEGER);
+    /* Master var x controls subproblem capacity - use large bounds */
+    int x = ralph_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
     /* Sub vars y1, y2 */
-    int y1 = ralph_add_var(model, 0, 100.0, 1.0, RALPH_CONTINUOUS);
-    int y2 = ralph_add_var(model, 0, 100.0, 1.0, RALPH_CONTINUOUS);
+    int y1 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int y2 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
 
     /* Linking: y1 <= 2*x */
     {
@@ -293,11 +293,11 @@ void test_stochastic_benders(void) {
 
     ralph_set_obj_sense(model, RALPH_MINIMIZE);
 
-    /* First-stage: x (investment decision) - use reasonable bounds */
-    int x = ralph_add_var(model, 0, 10, 2.0, RALPH_INTEGER);
+    /* First-stage: x (investment decision) - use large bounds */
+    int x = ralph_add_var(model, 0, 1e9, 2.0, RALPH_INTEGER);
 
     /* Second-stage: y (recourse for both scenarios) */
-    int y = ralph_add_var(model, 0, 100.0, 1.0, RALPH_CONTINUOUS);
+    int y = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
 
     /* Linking: y <= x (can't use more than invested) */
     {
