@@ -4,7 +4,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Status Summary (Feb 2026)
 
-| Area | Status | Tests |
+| Area | Status | Notes |
 |------|--------|-------|
 | **Revised Simplex** | ✅ Complete | Primal simplex with LU factorization |
 | **LU Factorization** | ✅ Complete | Sparse factorization, eta updates |
@@ -15,6 +15,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | **Presolve** | ✅ Phase 1 | Singleton, redundant rows, bound tightening |
 | **NETLIB Suite** | 67% Pass | 8/12 problems (see below) |
 | **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
+| **Benders Decomposition** | ⏳ Planned | Generic solver, ~1100 LoC (§7) |
 
 ---
 
@@ -132,13 +133,9 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ### 4.1 Decomposition Methods
 
-**Benders Decomposition** (Infrastructure ✅, Algorithm ⏳)
-- For mixed-integer stochastic programs
-- Master problem (integer) + subproblems (LP)
-- Useful for: fleet optimization, network design
-- **Status:** MIP infrastructure (cut callbacks, warm start, lazy constraints) complete in §6
-- **Next:** Implement true Benders algorithm in FuelWise (currently uses enumeration for k≤20)
-- **See §6.3** for FuelWise-specific Benders design (planned)
+**Benders Decomposition** → See **Chapter 7** for full design
+- Generic implementation in Ralph (not domain-specific)
+- Infrastructure complete (§6), algorithm planned (§7)
 
 **Dantzig-Wolfe Decomposition** (Planned)
 - For block-angular structure
@@ -692,6 +689,315 @@ This chapter implements several items from §4.3:
 
 The domain-specific approach here is more targeted than generic MIP improvements
 and provides better performance for FuelWise/HoSE problem classes.
+
+---
+
+## Chapter 7: Generic Benders Decomposition
+
+This chapter specifies a generic Benders decomposition solver in Ralph, replacing
+domain-specific implementations (e.g., FuelWise enumeration) with a reusable algorithm.
+
+### 7.1 Background
+
+**Benders decomposition** solves problems of the form:
+
+```
+min  c'x + d'y
+s.t. Ax = b                    (master constraints)
+     Tx + Wy = h               (linking constraints)
+     x ∈ X (integer/binary)    (complicating variables)
+     y ≥ 0                     (continuous variables)
+```
+
+The key insight: once x is fixed, the subproblem in y is an LP. We can represent
+the optimal subproblem cost Q(x) via linear cuts in the master problem.
+
+**Algorithm:**
+1. Solve master: `min c'x + θ` subject to master constraints + accumulated cuts
+2. Fix x*, solve subproblem: `min d'y s.t. Wy = h - Tx*`
+3. If subproblem optimal with objective q*:
+   - Add **optimality cut**: `θ ≥ π'(h - Tx)` where π = subproblem duals
+4. If subproblem infeasible:
+   - Add **feasibility cut**: `0 ≥ y'(h - Tx)` where y = Farkas ray
+5. Repeat until `θ ≈ q*` (convergence)
+
+### 7.2 API Design Options
+
+#### Option A: Structure-Based (Recommended)
+
+User specifies which variables are "complicating" (go to master), Ralph handles decomposition:
+
+```c
+typedef struct {
+    /* Which variables belong to master problem */
+    int *master_var_indices;
+    int num_master_vars;
+
+    /* The θ variable representing subproblem cost (-1 to auto-create) */
+    int theta_var;
+
+    /* Stochastic Benders: multiple scenarios */
+    int num_scenarios;          /* 1 for deterministic */
+    double *scenario_probs;     /* NULL = equal weights */
+
+    /* Algorithm parameters */
+    double gap_tolerance;       /* Convergence gap (default 1e-6) */
+    int max_iterations;         /* Iteration limit (default 1000) */
+    int cuts_at_lp_nodes;       /* 1 = branch-and-Benders-cut (modern) */
+    int warm_start_subproblems; /* 1 = reuse subproblem basis */
+} RalphBendersConfig;
+
+/* Main entry point */
+int ralph_solve_benders(
+    RalphModel *model,
+    const RalphBendersConfig *config,
+    RalphSolution *solution
+);
+```
+
+**Ralph automatically:**
+1. Partitions model into master (variables in `master_var_indices`) + subproblem (rest)
+2. Identifies linking constraints (those involving both master and subproblem vars)
+3. Creates master MIP with θ variable for recourse cost
+4. Generates cuts from subproblem duals (optimality) or Farkas rays (feasibility)
+5. Iterates until convergence
+
+#### Option B: Callback-Based (Maximum Flexibility)
+
+For non-standard Benders variants (e.g., logic-based Benders, combinatorial subproblems):
+
+```c
+typedef struct {
+    /* User builds subproblem given fixed master solution */
+    RalphModel* (*build_subproblem)(
+        void *user_data,
+        int scenario,
+        const double *x_master,
+        int num_master_vars
+    );
+
+    /* User adds cut to master (NULL = use automatic cut generation) */
+    int (*add_cut)(
+        void *user_data,
+        RalphModel *master,
+        int scenario,
+        int cut_type,           /* RALPH_BENDERS_OPTIMALITY or _FEASIBILITY */
+        const double *multipliers,
+        double subproblem_obj
+    );
+
+    /* User decides convergence (NULL = use gap tolerance) */
+    int (*check_convergence)(
+        void *user_data,
+        double master_obj,
+        double subproblem_obj,
+        int iteration
+    );
+
+    void *user_data;
+    int num_scenarios;
+    double *scenario_probs;
+} RalphBendersCallbacks;
+
+int ralph_solve_benders_ex(
+    RalphModel *master,
+    const RalphBendersCallbacks *callbacks,
+    RalphSolution *solution
+);
+```
+
+### 7.3 Comparison
+
+| Aspect | Option A (Structure) | Option B (Callback) |
+|--------|---------------------|---------------------|
+| **User effort** | Minimal - just tag variables | Significant - implement callbacks |
+| **Flexibility** | Standard Benders only | Any Benders variant |
+| **Cut generation** | Automatic | User-controlled |
+| **Stochastic** | Built-in | User implements |
+| **Debugging** | Easier (Ralph handles logic) | Harder (user code) |
+| **Performance tuning** | Limited | Full control |
+
+**Recommendation:** Implement **Option A first**, with Option B as future extension.
+
+Option A covers 90% of use cases (FuelWise, stochastic fleet planning, network design)
+with minimal user code. Option B can be added later for exotic variants.
+
+### 7.4 Integration with MIP Infrastructure (§6)
+
+**Key insight:** The master problem is a MIP solved by Ralph's B&B. All §6 features
+apply to the master, working in tandem with Benders:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Benders Master MIP                            │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Branch & Bound (existing)                                │   │
+│  │                                                           │   │
+│  │  • Branching priorities (§6 P0)                          │   │
+│  │    → Control which master vars branch first               │   │
+│  │    → FuelWise: cheap stations first                       │   │
+│  │                                                           │   │
+│  │  • Branching directions (§6 P0)                          │   │
+│  │    → Hint down/up preference                              │   │
+│  │    → FuelWise: prefer z=1 (stop) at cheap stations        │   │
+│  │                                                           │   │
+│  │  • User cut callback (§6 P2)                             │   │
+│  │    → Add domain-specific cuts during B&B                  │   │
+│  │    → FuelWise: reach cuts (must stop in interval)         │   │
+│  │    → HoSE: driving capacity cuts                          │   │
+│  │                                                           │   │
+│  │  • Benders cuts (NEW - this chapter)                     │   │
+│  │    → Optimality cuts from subproblem duals                │   │
+│  │    → Feasibility cuts from Farkas rays                    │   │
+│  │    → Added at integer solutions OR LP nodes               │   │
+│  │                                                           │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                           │                                      │
+│                           ▼                                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Subproblem LP (for each integer/LP solution)             │   │
+│  │                                                           │   │
+│  │  • Warm start (§6 P2)                                    │   │
+│  │    → Reuse basis between subproblem solves                │   │
+│  │    → Major speedup for similar x values                   │   │
+│  │                                                           │   │
+│  │  • Network detection (existing)                          │   │
+│  │    → Auto-dispatch to network simplex if applicable       │   │
+│  │    → FuelWise: subproblem has path structure              │   │
+│  │                                                           │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Example: FuelWise with full integration**
+
+```c
+/* 1. Build full model */
+RalphModel *model = fw_build_full_milp(problem);  /* z[i], x[i], θ */
+
+/* 2. Set branching priorities (cheap stations first) */
+int priorities[k];
+for (int i = 0; i < k; i++) {
+    priorities[i] = (int)(1000.0 / problem->stations[i].price);
+}
+ralph_set_branch_priorities(model, priorities);
+
+/* 3. Set branching directions (prefer stopping at cheap stations) */
+int directions[k];
+for (int i = 0; i < k; i++) {
+    directions[i] = (problem->stations[i].price < avg_price) ? 1 : 0;
+}
+ralph_set_branch_directions(model, directions);
+
+/* 4. Set user cut callback for reach cuts */
+RalphCutCallback reach_cb = {
+    .generate_cuts = fw_generate_reach_cuts,
+    .user_data = problem
+};
+ralph_set_cut_callback(model, &reach_cb);
+
+/* 5. Configure Benders */
+int master_vars[k];  /* z[0]...z[k-1] */
+for (int i = 0; i < k; i++) master_vars[i] = i;
+
+RalphBendersConfig benders = {
+    .master_var_indices = master_vars,
+    .num_master_vars = k,
+    .theta_var = theta_idx,
+    .num_scenarios = 1,
+    .cuts_at_lp_nodes = 1,       /* Modern branch-and-Benders-cut */
+    .warm_start_subproblems = 1
+};
+
+/* 6. Solve */
+RalphSolution solution;
+ralph_solve_benders(model, &benders, &solution);
+```
+
+**What happens internally:**
+
+1. Master B&B starts, using priorities to branch z[cheap] before z[expensive]
+2. At each B&B node:
+   - User cut callback adds reach cuts if violated
+   - If `cuts_at_lp_nodes=1`: solve subproblem, add Benders cuts even for fractional x
+3. At integer solutions:
+   - Solve subproblem LP (warm started, may use network simplex)
+   - If feasible: add optimality cut `θ ≥ π'(h - Tz)`
+   - If infeasible: add feasibility cut from Farkas ray
+4. Converges when master θ matches subproblem objective
+
+### 7.5 Modern vs Classic Benders
+
+| Variant | Cuts added at | Pros | Cons |
+|---------|--------------|------|------|
+| **Classic** | Integer solutions only | Simpler, fewer subproblem solves | More B&B nodes |
+| **Modern (B&B&C)** | LP nodes too | Tighter LP relaxation, fewer nodes | More subproblem solves |
+
+**Recommendation:** Default to modern (`cuts_at_lp_nodes=1`) with option to disable.
+Modern Benders is typically 2-10x faster on structured problems like FuelWise.
+
+### 7.6 Stochastic Benders
+
+For problems with uncertainty (e.g., demand scenarios, price scenarios):
+
+```c
+/* K scenarios with probabilities p[k] */
+RalphBendersConfig config = {
+    .master_var_indices = first_stage_vars,
+    .num_master_vars = n1,
+    .theta_var = -1,            /* Auto-create K theta variables */
+    .num_scenarios = K,
+    .scenario_probs = probs     /* Sum to 1.0 */
+};
+```
+
+Ralph creates K subproblems (one per scenario), solves in parallel, generates
+weighted cuts: `θ[k] ≥ π[k]'(h[k] - T[k]x)` for each scenario.
+
+### 7.7 Implementation Plan
+
+| Phase | Component | LoC | Notes |
+|-------|-----------|-----|-------|
+| 1 | Model partitioning | 150 | Split vars/constraints into master/sub |
+| 2 | Linking detection | 100 | Find constraints coupling master↔sub |
+| 3 | Cut generation | 200 | Optimality (from duals) + feasibility (Farkas) |
+| 4 | Benders loop | 150 | Convergence, iteration control |
+| 5 | B&B integration | 100 | Hook into existing B&B for cuts_at_lp_nodes |
+| 6 | Warm start | 50 | Basis reuse between subproblem solves |
+| 7 | Stochastic | 150 | Multi-scenario, parallel subproblems |
+| 8 | Testing | 200 | Unit tests, FuelWise integration |
+| **Total** | | **~1100** | |
+
+**Dependencies:**
+- §6 MIP infrastructure (✅ complete)
+- Network flow solver (✅ complete) - for fast subproblems
+- Farkas ray extraction (✅ complete)
+
+### 7.8 Expected Performance
+
+| Problem | Current (enumeration) | With Benders | Speedup |
+|---------|----------------------|--------------|---------|
+| FuelWise k=20 | 50ms | 30ms | 1.7x |
+| FuelWise k=30 | timeout (2^30) | 80ms | ∞ |
+| FuelWise k=50 | timeout | 150ms | ∞ |
+| FuelWise k=100 | timeout | 500ms | ∞ |
+
+The key win is scaling: enumeration is O(2^k), Benders is typically O(k² · iterations).
+
+### 7.9 Relationship to §6.3
+
+§6.3 described FuelWise-specific Benders design. This chapter supersedes that with
+a generic implementation. FuelWise becomes a *user* of generic Benders:
+
+- §6.3 reach cuts → User cut callback (works with Benders)
+- §6.3 Benders loop → Handled by `ralph_solve_benders()`
+- §6.3 Farkas cuts → Automatic in generic Benders
+
+The domain-specific value in FuelWise is now:
+1. Reach cut generation (user callback)
+2. Branching priorities (cheap stations first)
+3. Problem formulation (how to express as Benders structure)
 
 ---
 
