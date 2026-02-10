@@ -14,6 +14,8 @@
 #include "ralph_api.h"
 #include "ralph.h"
 #include "sh_query.h"
+#include "sh_json.h"
+#include "sh_arena.h"
 
 /* ============================================================================
  * Internal Constants
@@ -52,76 +54,6 @@ int ralph_api_ready(RalphAPIContext *ctx) {
     return ctx && ctx->initialized;
 }
 
-/* ============================================================================
- * Simple JSON Parser (minimal, no dependencies)
- * ============================================================================ */
-
-/* Skip whitespace */
-static const char *skip_ws(const char *s) {
-    while (s && *s && isspace((unsigned char)*s)) s++;
-    return s;
-}
-
-/* Extract string value between quotes */
-static int json_get_string(const char *json, const char *key,
-                           char *out, size_t out_size) {
-    char pattern[128];
-    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-
-    const char *p = strstr(json, pattern);
-    if (!p) return -1;
-
-    p += strlen(pattern);
-    p = skip_ws(p);
-    if (*p != ':') return -1;
-    p++;
-    p = skip_ws(p);
-    if (*p != '"') return -1;
-    p++;
-
-    /* Copy until closing quote */
-    size_t i = 0;
-    while (*p && *p != '"' && i < out_size - 1) {
-        if (*p == '\\' && *(p + 1)) {
-            p++;
-            switch (*p) {
-                case 'n': out[i++] = '\n'; break;
-                case 't': out[i++] = '\t'; break;
-                case 'r': out[i++] = '\r'; break;
-                case '\\': out[i++] = '\\'; break;
-                case '"': out[i++] = '"'; break;
-                default: out[i++] = *p; break;
-            }
-        } else {
-            out[i++] = *p;
-        }
-        p++;
-    }
-    out[i] = '\0';
-    return 0;
-}
-
-/* Extract integer value */
-static int json_get_int(const char *json, const char *key, int *out) {
-    char pattern[128];
-    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-
-    const char *p = strstr(json, pattern);
-    if (!p) return -1;
-
-    p += strlen(pattern);
-    p = skip_ws(p);
-    if (*p != ':') return -1;
-    p++;
-    p = skip_ws(p);
-
-    char *end;
-    long val = strtol(p, &end, 10);
-    if (end == p) return -1;
-
-    *out = (int)val;
-    return 0;
-}
 
 /* ============================================================================
  * JSON Response Builder
@@ -205,15 +137,15 @@ static void set_error_response(RalphAPIResponse *resp, int status,
 
 static const char *status_to_json(RalphStatus status) {
     switch (status) {
-        case RALPH_STATUS_OPTIMAL:        return "OPTIMAL";
-        case RALPH_STATUS_INFEASIBLE:     return "INFEASIBLE";
-        case RALPH_STATUS_UNBOUNDED:      return "UNBOUNDED";
-        case RALPH_STATUS_INF_OR_UNBD:    return "INFEASIBLE_OR_UNBOUNDED";
-        case RALPH_STATUS_ITERATION_LIMIT: return "ITERATION_LIMIT";
-        case RALPH_STATUS_TIME_LIMIT:     return "TIME_LIMIT";
-        case RALPH_STATUS_NODE_LIMIT:     return "NODE_LIMIT";
-        case RALPH_STATUS_ERROR:          return "ERROR";
-        default:                          return "UNKNOWN";
+        case RALPH_STATUS_OPTIMAL:        return "optimal";
+        case RALPH_STATUS_INFEASIBLE:     return "infeasible";
+        case RALPH_STATUS_UNBOUNDED:      return "unbounded";
+        case RALPH_STATUS_INF_OR_UNBD:    return "infeasible_or_unbounded";
+        case RALPH_STATUS_ITERATION_LIMIT: return "iteration_limit";
+        case RALPH_STATUS_TIME_LIMIT:     return "time_limit";
+        case RALPH_STATUS_NODE_LIMIT:     return "node_limit";
+        case RALPH_STATUS_ERROR:          return "error";
+        default:                          return "unknown";
     }
 }
 
@@ -327,66 +259,62 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
     int timeout_ms = RALPH_API_DEFAULT_TIMEOUT_MS;
 
     if (use_json) {
-        /* Parse JSON request (original behavior) */
-        if (json_get_string(req->body, "format", problem_format, sizeof(problem_format)) != 0) {
-            set_error_response(resp, 400, "Missing 'format' field in JSON body");
-            return 0;
-        }
-
-        /* Get timeout if specified */
-        int parsed_timeout;
-        if (json_get_int(req->body, "timeout_ms", &parsed_timeout) == 0) {
-            if (parsed_timeout > 0 && parsed_timeout <= RALPH_API_MAX_TIMEOUT_MS) {
-                timeout_ms = parsed_timeout;
-            }
-        }
-
-        /* Extract problem string (may be large) */
-        const char *p = strstr(req->body, "\"problem\"");
-        if (!p) {
-            set_error_response(resp, 400, "Missing 'problem' field");
-            return 0;
-        }
-        p += 9;  /* strlen("\"problem\"") */
-        p = skip_ws(p);
-        if (*p != ':') {
-            set_error_response(resp, 400, "Invalid JSON: expected ':' after 'problem'");
-            return 0;
-        }
-        p++;
-        p = skip_ws(p);
-        if (*p != '"') {
-            set_error_response(resp, 400, "Invalid JSON: expected string for 'problem'");
-            return 0;
-        }
-        p++;
-
-        /* Find end of string and decode */
-        size_t problem_capacity = req->body_len;
-        problem = (char *)malloc(problem_capacity + 1);
-        if (!problem) {
+        /* Parse JSON request using sh_json */
+        /* Arena needs space for DOM nodes + copies of strings; use 8x input or 4KB min */
+        size_t arena_size = req->body_len * 8;
+        if (arena_size < 4096) arena_size = 4096;
+        SHArena *arena = sh_arena_create(arena_size);
+        if (!arena) {
             set_error_response(resp, 500, "Memory allocation failed");
             return 0;
         }
 
-        size_t i = 0;
-        while (*p && *p != '"' && i < problem_capacity) {
-            if (*p == '\\' && *(p + 1)) {
-                p++;
-                switch (*p) {
-                    case 'n': problem[i++] = '\n'; break;
-                    case 't': problem[i++] = '\t'; break;
-                    case 'r': problem[i++] = '\r'; break;
-                    case '\\': problem[i++] = '\\'; break;
-                    case '"': problem[i++] = '"'; break;
-                    default: problem[i++] = *p; break;
-                }
-            } else {
-                problem[i++] = *p;
-            }
-            p++;
+        ShJsonValue *root = NULL;
+        ShJsonStatus json_status = sh_json_parse(req->body, req->body_len, arena, &root);
+        if (json_status != SH_JSON_OK) {
+            sh_arena_free(arena);
+            char err_buf[256];
+            snprintf(err_buf, sizeof(err_buf), "Invalid JSON: %s",
+                     sh_json_status_str(json_status));
+            set_error_response(resp, 400, err_buf);
+            return 0;
         }
-        problem[i] = '\0';
+
+        /* Get format field */
+        const char *format_str = sh_json_as_string(sh_json_get(root, "format"), NULL);
+        if (!format_str) {
+            sh_arena_free(arena);
+            set_error_response(resp, 400, "Missing 'format' field in JSON body");
+            return 0;
+        }
+        strncpy(problem_format, format_str, sizeof(problem_format) - 1);
+        problem_format[sizeof(problem_format) - 1] = '\0';
+
+        /* Get timeout if specified */
+        int parsed_timeout = (int)sh_json_as_double(sh_json_get(root, "timeout_ms"), 0.0);
+        if (parsed_timeout > 0 && parsed_timeout <= RALPH_API_MAX_TIMEOUT_MS) {
+            timeout_ms = parsed_timeout;
+        }
+
+        /* Get problem string */
+        const char *problem_str = sh_json_as_string(sh_json_get(root, "problem"), NULL);
+        if (!problem_str) {
+            sh_arena_free(arena);
+            set_error_response(resp, 400, "Missing 'problem' field");
+            return 0;
+        }
+
+        /* Copy problem out of arena before freeing */
+        size_t problem_len = strlen(problem_str);
+        problem = (char *)malloc(problem_len + 1);
+        if (!problem) {
+            sh_arena_free(arena);
+            set_error_response(resp, 500, "Memory allocation failed");
+            return 0;
+        }
+        memcpy(problem, problem_str, problem_len + 1);
+
+        sh_arena_free(arena);
 
         /* Validate format from JSON body */
         if (strcmp(problem_format, "lp") != 0 && strcmp(problem_format, "mps") != 0) {
