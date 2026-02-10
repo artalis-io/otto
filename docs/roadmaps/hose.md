@@ -1311,46 +1311,204 @@ void hs_setup_callbacks(RalphModel *model, HSCutContext *cut_ctx, HSBranchContex
 
 ---
 
-###### Ralph Implementation Roadmap
+###### Ralph Requirements for HoSE MIP
 
-**Phase 1: Static Branching Priorities**
+**Complete API needed:**
+
+| Function | Purpose | LoC | Priority |
+|----------|---------|-----|----------|
+| `ralph_set_branch_priorities()` | Static priority per variable | ~50 | P0 |
+| `ralph_set_branch_directions()` | Preferred branch direction | ~30 | P0 |
+| `ralph_get_var_bounds()` | Query current lb/ub | ~10 | P1 |
+| `ralph_add_lazy_constraint()` | Add cut between solves | ~100 | P1 |
+| `ralph_set_cut_callback()` | Automatic cuts during B&B | ~400 | P2 |
+| `ralph_set_branch_callback()` | Custom variable selection | ~200 | P2 |
+
+**Phase 1: Static Branching Priorities (P0)**
 ```c
-// Easy to implement, high impact for symmetry
+// Store priority and direction per variable
 void ralph_set_branch_priorities(RalphModel *model, const int *priorities);
 void ralph_set_branch_directions(RalphModel *model, const int *directions);
-```
-- Store priorities in RalphModel
-- Modify variable selection in branch_and_bound.c to use priorities
-- ~50-100 LoC
 
-**Phase 2: Lazy Constraints**
+// Query bounds (for cut generators)
+int ralph_get_var_bounds(RalphModel *model, int var, double *lb, double *ub);
+```
+- Store arrays in RalphModel struct
+- Modify `select_branching_variable()` in branch_and_bound.c
+- Use direction hint when creating child nodes
+- **~80-100 LoC total**
+
+**Phase 2: Lazy Constraints (P1)**
 ```c
-// Simple cut addition between solves
+// Add constraint and re-solve with warm start
 int ralph_add_lazy_constraint(RalphModel *model, RalphCut *cut);
+int ralph_add_lazy_constraints(RalphModel *model, RalphCut *cuts, int count);
 ```
-- Add constraint to model
-- Re-solve from current basis (warm start)
-- User loops: solve → check → add cuts → solve
-- ~100 LoC
+- Append constraint to model's constraint matrix
+- Preserve basis for warm start
+- User controls loop: solve → check → add → solve
+- **~100-150 LoC**
 
-**Phase 3: Cut Callback**
+**Phase 3: Cut Callback (P2)**
 ```c
-// Called automatically during B&B
 void ralph_set_cut_callback(RalphModel *model, RalphCutCallback *cb);
 ```
-- Invoke callback after each node LP solve
-- Add returned cuts to node's constraint set
-- More complex: need to manage cut pool, avoid duplicates
-- ~300-500 LoC
+- Invoke after each node LP solve
+- Manage cut pool (avoid duplicates, limit total cuts)
+- Age out ineffective cuts
+- **~300-500 LoC**
 
-**Phase 4: Branching Callback**
+**Phase 4: Branching Callback (P2)**
 ```c
-// Full control over branching
 void ralph_set_branch_callback(RalphModel *model, RalphBranchCallback *cb);
 ```
-- Replace default variable selection with callback
-- Pass fractional variable info to callback
-- ~200 LoC
+- Replace default variable selection
+- Build fractional variable list for callback
+- **~200 LoC**
+
+**Estimated total: ~700-950 LoC** for full callback support.
+
+---
+
+###### Performance Assessment: Can Ralph Solve This?
+
+**Problem size (1 week, δ=5 min):**
+- Periods: 2016
+- Binary variables: ~6000 (x[t,s] for s ∈ {DRIVE, WORK, OFF})
+- Continuous variables: ~8000 (clocks d, w, b, c, accumulators)
+- Constraints: ~15000
+- Non-zeros: ~50000
+
+**Favorable structure:**
+- Path-like: state at time t depends only on t-1
+- Tight LP relaxation: fractional solutions are rare
+- Sparse: each constraint touches ≤10 variables
+- Domain cuts: 11h/8h cuts are very effective
+
+**Ralph vs Commercial Solvers:**
+
+| Feature | Gurobi/CPLEX | Ralph | Impact |
+|---------|--------------|-------|--------|
+| Presolve | Advanced | Basic | Medium |
+| Generic cuts | Gomory, MIR, clique, etc. | Gomory only | Low (domain cuts compensate) |
+| Parallel B&B | Yes | No | Medium |
+| Node selection | Best-bound, diving, etc. | Depth-first | Low |
+| LP solver | Dual simplex, barrier | Primal simplex | Medium |
+
+**Realistic time estimates:**
+
+| Scenario | Variables | Gurobi | Ralph (no cuts) | Ralph (with cuts) |
+|----------|-----------|--------|-----------------|-------------------|
+| Fresh driver, 1 task | ~6000 | <0.1s | 1-5s | <1s |
+| Mid-shift, 1 task | ~6000 | <0.1s | 2-10s | 1-3s |
+| Exhausted clocks, 1 task | ~6000 | 0.1-0.5s | 5-30s | 2-10s |
+| Chain of 3 tasks | ~18000 | 0.5-2s | 30-120s | 10-30s |
+| Chain of 5 tasks, tight TW | ~30000 | 2-10s | 2-10 min | 30-120s |
+
+**Key insight:** Domain-specific cuts are the equalizer. Without them, Ralph struggles on larger instances. With them, it's competitive for verification workloads.
+
+**Confidence assessment:**
+- **High confidence**: Single task, any driver state → <10s with cuts
+- **Medium confidence**: Chain of 3-5 tasks → <2 min with cuts
+- **Low confidence**: Complex chains with multiple tight time windows → may need timeout
+
+**Recommendations:**
+1. Implement Phase 1 (priorities) first—biggest bang for buck
+2. Add lazy constraints (Phase 2) before full cut callback
+3. Set 60-second timeout for verification runs
+4. Fall back to iterative solving for long chains
+
+---
+
+###### Use Case Analysis: Validation vs Tracking
+
+**Validation (offline, batch):**
+- Compare heuristic span vs optimal span
+- Find corner cases where heuristic is suboptimal
+- Prove optimality of heuristic decisions
+- **Tolerance for latency: 1-60 seconds**
+
+**Tracking (online, real-time):**
+- Continuous monitoring of driver state
+- Proactive alerts: "HoS violation in 2 hours if you keep driving"
+- Feasibility queries: "Can we make this delivery?"
+- **Tolerance for latency: <1 second**
+
+**Can MIP be used for tracking?**
+
+| Use Case | MIP Suitable? | Notes |
+|----------|---------------|-------|
+| Proactive alerts | ⚠️ Maybe | Solve small lookahead (2h), cache results |
+| Feasibility check | ✅ Yes | Binary answer, can use LP relaxation |
+| What-if analysis | ✅ Yes | User-initiated, can wait 5-10s |
+| Real-time dashboard | ❌ No | Heuristic is better (O(1) vs exponential) |
+| Route planning | ✅ Yes | Pre-dispatch, 30-60s acceptable |
+
+**Hybrid tracking architecture:**
+
+```
+                    ┌─────────────────────────────────────┐
+                    │         Real-Time Layer             │
+                    │   Greedy heuristic (O(n) per leg)   │
+                    │   Updates dashboard, ETA, alerts    │
+                    │   Latency: <10ms                    │
+                    └──────────────┬──────────────────────┘
+                                   │
+                    ┌──────────────▼──────────────────────┐
+                    │         Validation Layer            │
+                    │   MIP solver (async, background)    │
+                    │   Verifies heuristic decisions      │
+                    │   Flags suboptimal choices          │
+                    │   Latency: 1-60s (async)            │
+                    └──────────────┬──────────────────────┘
+                                   │
+                    ┌──────────────▼──────────────────────┐
+                    │         Learning Layer              │
+                    │   Collect heuristic vs optimal      │
+                    │   Identify systematic gaps          │
+                    │   Improve heuristic over time       │
+                    └─────────────────────────────────────┘
+```
+
+**Practical tracking with MIP:**
+
+1. **Warm start from heuristic**: Use heuristic solution as MIP starting point
+   ```c
+   // Heuristic gives initial feasible solution
+   HSTransitResult heuristic_result = hs_compute_transit_greedy(...);
+
+   // Convert to MIP variable values
+   set_mip_initial_solution(model, &heuristic_result);
+
+   // MIP proves optimality or finds improvement
+   ralph_optimize(model);  // Often proves optimal at root
+   ```
+
+2. **Incremental re-solve**: As time passes, warm start from previous solution
+   ```c
+   // At t=0: solve full problem, save basis
+   ralph_optimize(model);
+   ralph_save_basis(model, &basis);
+
+   // At t=5min: fix x[0..0], solve remaining
+   ralph_fix_var(model, period_0_vars, actual_values);
+   ralph_load_basis(model, &basis);  // warm start
+   ralph_optimize(model);  // much faster
+   ```
+
+3. **Lookahead caching**: Pre-compute common scenarios
+   ```c
+   // Cache: "fresh driver, 6h driving" → optimal span, break schedule
+   // Cache: "8h driven, need 30min break" → next feasible drive start
+   // Hit rate should be high for common driver states
+   ```
+
+**Bottom line:**
+- **Validation**: MIP works well, Ralph is sufficient with domain cuts
+- **Tracking**: Heuristic for real-time, MIP for async verification/improvement
+- **Planning**: MIP for pre-dispatch route optimization (30-60s acceptable)
+
+---
 
 ##### Adaptive Discretization (Advanced)
 
