@@ -858,109 +858,499 @@ work_start ≤ arrival_time + M·(arrival_time ≥ E)  # if early, wait until E
 
 This guarantees feasible solutions remain feasible after rounding.
 
-##### Problem-Specific Cuts for Ralph
+##### Problem-Specific Cuts and Branching for Ralph
 
-HoS problems have domain structure that generic MIP cuts miss. Ralph could support **problem-class cut generators**:
+HoS problems have domain structure that generic MIP cuts miss. Ralph should support:
+1. **Cut callbacks** - user-defined cuts called during B&B
+2. **Branching callbacks** - user-defined variable selection for branching
 
-**Cut examples for HoS:**
+---
 
-```
-# 1. Driving capacity cut
-# "Cannot drive more than 11h before a 10h reset"
-∑_{t=t0}^{t1} x[t,DRIVE] ≤ 11/δ + M·(∃ reset10 in [t0,t1])
+###### Ralph Callback API Design
 
-# 2. Mandatory break cut
-# "After 8h driving, must have 30-min OFF before more driving"
-For any t where b[t] approaches 8h:
-  x[t+1,DRIVE] + x[t+2,DRIVE] + ... ≤ M·(break30 occurs before next DRIVE)
-
-# 3. Shift window cut
-# "Once in_duty starts, cannot drive after 14h wall-clock"
-x[t,DRIVE] = 0  for all t where w[t] would exceed 14h
-
-# 4. Symmetry breaking
-# "Prefer earlier rest when equivalent" (reduces search space)
-If two OFF placements yield same span, prefer leftmost
-```
-
-**Ralph integration approaches:**
-
-**Option A: Callback API (most flexible)**
+**Cut Callback:**
 ```c
+// Cut representation
 typedef struct {
-    int (*generate_cuts)(RalphModel *model, const double *x_relaxation,
-                         RalphCut *cuts, int max_cuts);
+    int *indices;       // Variable indices
+    double *coeffs;     // Coefficients
+    int num_vars;       // Number of variables in cut
+    char sense;         // 'L' (<=), 'G' (>=), 'E' (=)
+    double rhs;         // Right-hand side
+} RalphCut;
+
+// Cut callback signature
+typedef struct {
+    // Called at each B&B node after LP relaxation solved
+    // x_relaxation: current LP solution (fractional)
+    // Returns number of cuts added (0 = no cuts found)
+    int (*generate_cuts)(
+        void *user_data,
+        const double *x_relaxation,
+        int num_vars,
+        RalphCut *cuts,         // Output: array of cuts
+        int max_cuts            // Max cuts to generate
+    );
     void *user_data;
 } RalphCutCallback;
 
 void ralph_set_cut_callback(RalphModel *model, RalphCutCallback *cb);
 ```
-- Called during branch-and-bound at each node
-- User provides domain-specific cut generator
-- Most flexible but requires callback machinery in Ralph
 
-**Option B: Registered problem classes**
+**Branching Priority Callback:**
 ```c
-typedef enum {
-    RALPH_PROBLEM_GENERIC,
-    RALPH_PROBLEM_HOS_SCHEDULE,    // HoS time-indexed
-    RALPH_PROBLEM_SET_COVER,       // For SCP
-    RALPH_PROBLEM_NETWORK_FLOW,    // For assignment/transport
-} RalphProblemClass;
+// Branching decision
+typedef struct {
+    int var_index;      // Variable to branch on (-1 = use default)
+    double branch_point;// Value to branch at (usually 0.5 for binary)
+    int direction;      // 0 = down first, 1 = up first
+} RalphBranchDecision;
 
-void ralph_set_problem_class(RalphModel *model, RalphProblemClass cls);
+// Branching callback signature
+typedef struct {
+    // Called when B&B needs to select a branching variable
+    // fractional_vars: indices of variables with fractional values
+    // fractional_vals: their current LP values
+    // Returns branching decision (var_index = -1 to use default)
+    RalphBranchDecision (*select_branch)(
+        void *user_data,
+        const double *x_relaxation,
+        const int *fractional_vars,
+        const double *fractional_vals,
+        int num_fractional
+    );
+    void *user_data;
+} RalphBranchCallback;
+
+void ralph_set_branch_callback(RalphModel *model, RalphBranchCallback *cb);
 ```
-- Ralph has built-in cut generators for known problem classes
-- Simpler API, but less flexible
-- Good for OTTO's core problem types
 
-**Option C: Lazy constraints**
+**Static Branching Priorities (simpler alternative):**
 ```c
-// Add constraint only when violated
-int ralph_add_lazy_constraint(RalphModel *model,
-                               int num_vars, int *indices, double *coeffs,
-                               char sense, double rhs);
+// Set priority for each variable (higher = branch first)
+// Useful when priorities are known upfront
+void ralph_set_branch_priorities(RalphModel *model, const int *priorities);
+
+// Set preferred direction for each variable
+// 0 = down first, 1 = up first, -1 = auto
+void ralph_set_branch_directions(RalphModel *model, const int *directions);
 ```
-- User checks solution, adds violated constraints, re-solves
-- Iterative but simple implementation
-- Works well when violations are easy to detect
 
-**Recommendation for Ralph:**
-1. Start with **Option C** (lazy constraints)—simple to implement
-2. Add **Option B** for HoS and SCP—known problem classes with clear cut structures
-3. Consider **Option A** for power users—callback API is complex but maximally flexible
+---
 
-**HoS-specific cut generator skeleton:**
+###### Concrete Cut Formulations for HoS
+
+**Cut 1: Driving Capacity (11h limit)**
+
+Detects: Fractional solution has > 11h driving between resets.
+
+```
+Given interval [t0, t1] with no reset10[τ] = 1 for τ ∈ [t0, t1]:
+
+Violation detected when:
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] · δ > 11 + ε
+
+Cut to add:
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] ≤ floor(11/δ)
+
+Strengthened with reset variables:
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] ≤ floor(11/δ) + ceil(11/δ) · ∑_{τ=t0}^{t1} reset10[τ]
+```
+
+**Implementation:**
 ```c
-// In hose/src/hs_mip_cuts.c
-
-int hs_generate_cuts(RalphModel *model, const double *x,
-                     RalphCut *cuts, int max_cuts) {
+int generate_driving_capacity_cuts(
+    const double *x, int num_periods, double delta,
+    int drive_var_offset, int reset_var_offset,
+    RalphCut *cuts, int max_cuts
+) {
     int num_cuts = 0;
+    int last_reset = -1;
+    double driving_sum = 0.0;
 
-    // Check driving capacity violations
-    double driving_since_reset = 0;
     for (int t = 0; t < num_periods && num_cuts < max_cuts; t++) {
-        if (x[DRIVE_VAR(t)] > 0.5) {
-            driving_since_reset += delta;
-        }
-        if (x[RESET10_VAR(t)] > 0.5) {
-            driving_since_reset = 0;
+        double x_drive = x[drive_var_offset + t];
+        double x_reset = x[reset_var_offset + t];
+
+        // Track fractional driving (works on LP relaxation)
+        driving_sum += x_drive * delta;
+
+        // Reset detected (even fractionally)
+        if (x_reset > 0.5) {
+            last_reset = t;
+            driving_sum = 0.0;
+            continue;
         }
 
-        // Violation: driving > 11h without reset
-        if (driving_since_reset > 11.0 + EPS) {
-            // Add cut: sum of DRIVE from last reset to t ≤ 11/δ
-            cuts[num_cuts++] = make_driving_capacity_cut(model, last_reset, t);
+        // Violation: driving exceeds 11h without reset
+        if (driving_sum > 11.0 + 1e-6) {
+            int t0 = last_reset + 1;
+            int t1 = t;
+            int cut_size = t1 - t0 + 1;
+
+            // Build cut: ∑ x[τ,DRIVE] ≤ floor(11/δ)
+            cuts[num_cuts].num_vars = cut_size;
+            cuts[num_cuts].indices = malloc(cut_size * sizeof(int));
+            cuts[num_cuts].coeffs = malloc(cut_size * sizeof(double));
+            for (int i = 0; i < cut_size; i++) {
+                cuts[num_cuts].indices[i] = drive_var_offset + t0 + i;
+                cuts[num_cuts].coeffs[i] = 1.0;
+            }
+            cuts[num_cuts].sense = 'L';
+            cuts[num_cuts].rhs = floor(11.0 / delta);
+            num_cuts++;
+
+            // Reset for next segment
+            driving_sum = 0.0;
+            last_reset = t;
         }
     }
-
-    // Check 14h window violations...
-    // Check 30-min break violations...
-
     return num_cuts;
 }
 ```
+
+**Cut 2: Mandatory Break (30-min after 8h driving)**
+
+Detects: Fractional solution drives > 8h without a 30-min non-driving break.
+
+```
+Given interval [t0, t1] with no break30[τ] = 1 for τ ∈ [t0, t1]:
+
+Violation detected when:
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] · δ > 8 + ε
+
+Cut to add (at period t1 where violation detected):
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] ≤ floor(8/δ) + ceil(8/δ) · ∑_{τ=t0}^{t1} break30[τ]
+```
+
+**Implementation:**
+```c
+int generate_break_cuts(
+    const double *x, int num_periods, double delta,
+    int drive_var_offset, int break_var_offset,
+    RalphCut *cuts, int max_cuts
+) {
+    int num_cuts = 0;
+    int last_break = -1;
+    double driving_sum = 0.0;
+
+    for (int t = 0; t < num_periods && num_cuts < max_cuts; t++) {
+        double x_drive = x[drive_var_offset + t];
+        double x_break = x[break_var_offset + t];
+
+        driving_sum += x_drive * delta;
+
+        if (x_break > 0.5) {
+            last_break = t;
+            driving_sum = 0.0;
+            continue;
+        }
+
+        // Violation: 8h driving without break
+        if (driving_sum > 8.0 + 1e-6) {
+            int t0 = last_break + 1;
+            int t1 = t;
+            int interval_len = t1 - t0 + 1;
+
+            // Cut includes both DRIVE and BREAK variables
+            int cut_size = 2 * interval_len;
+            cuts[num_cuts].indices = malloc(cut_size * sizeof(int));
+            cuts[num_cuts].coeffs = malloc(cut_size * sizeof(double));
+
+            // ∑ x[DRIVE] - floor(8/δ) · ∑ break30 ≤ floor(8/δ)
+            for (int i = 0; i < interval_len; i++) {
+                cuts[num_cuts].indices[i] = drive_var_offset + t0 + i;
+                cuts[num_cuts].coeffs[i] = 1.0;
+                cuts[num_cuts].indices[interval_len + i] = break_var_offset + t0 + i;
+                cuts[num_cuts].coeffs[interval_len + i] = -floor(8.0 / delta);
+            }
+            cuts[num_cuts].num_vars = cut_size;
+            cuts[num_cuts].sense = 'L';
+            cuts[num_cuts].rhs = floor(8.0 / delta);
+            num_cuts++;
+
+            driving_sum = 0.0;
+            last_break = t;
+        }
+    }
+    return num_cuts;
+}
+```
+
+**Cut 3: 14h Window**
+
+This is better handled as **variable fixing** (preprocessing) rather than cuts:
+
+```c
+// At model construction time, fix variables to 0 where 14h would be exceeded
+void fix_14h_window_violations(
+    RalphModel *model, int num_periods, double delta,
+    double w0,  // initial window usage
+    int in_duty_init,
+    int drive_var_offset
+) {
+    // If driver starts in duty period, window is already ticking
+    double window_time = in_duty_init ? w0 : 0.0;
+    int in_duty = in_duty_init;
+
+    for (int t = 0; t < num_periods; t++) {
+        // Once in_duty, window advances with wall clock
+        if (in_duty) {
+            window_time += delta;
+        }
+
+        // Can't drive if window would exceed 14h
+        if (window_time > 14.0) {
+            // Fix x[t,DRIVE] = 0
+            ralph_set_var_bounds(model, drive_var_offset + t, 0.0, 0.0);
+        }
+
+        // Note: This is a simplification. Full model needs to track
+        // when in_duty transitions based on activity and resets.
+    }
+}
+```
+
+For dynamic 14h tracking during B&B (when reset timing is uncertain), use a cut:
+
+```
+Given in_duty starts at t_start:
+
+Violation detected when:
+  in_duty[t] = 1 AND (t - t_start) · δ > 14 AND x[t,DRIVE] > 0
+
+Cut to add:
+  x[t,DRIVE] ≤ 1 - in_duty[t]   (if t is beyond 14h from any possible duty start)
+```
+
+---
+
+###### Symmetry Breaking via Branching Priority
+
+Symmetry: Multiple equivalent rest placements yield the same span. E.g., taking a 10h break at period 50 vs 51 may be equivalent.
+
+**Solution: Branching priorities that prefer earlier decisions**
+
+```c
+// HoS branching priority: prefer earlier periods, prefer OFF over DRIVE
+RalphBranchDecision hos_select_branch(
+    void *user_data,
+    const double *x,
+    const int *frac_vars,
+    const double *frac_vals,
+    int num_frac
+) {
+    HSBranchContext *ctx = (HSBranchContext *)user_data;
+    RalphBranchDecision decision = { .var_index = -1 };  // default
+
+    int best_var = -1;
+    int best_period = INT_MAX;
+    double best_score = -1.0;
+
+    for (int i = 0; i < num_frac; i++) {
+        int var = frac_vars[i];
+        double val = frac_vals[i];
+
+        // Decode variable: which period and which state?
+        int period = ctx->var_to_period[var];
+        int state = ctx->var_to_state[var];  // DRIVE=0, WORK=1, OFF=2
+
+        // Priority score: earlier periods first, OFF states preferred
+        // (branching on OFF first explores "take rest early" branch)
+        double score = (ctx->num_periods - period) * 10.0;
+        if (state == STATE_OFF) score += 5.0;
+
+        // Also consider fractionality (closer to 0.5 = harder to decide)
+        double frac_score = 1.0 - fabs(val - 0.5) * 2.0;  // 1.0 at 0.5, 0.0 at 0 or 1
+        score += frac_score;
+
+        if (score > best_score) {
+            best_score = score;
+            best_var = var;
+            best_period = period;
+        }
+    }
+
+    if (best_var >= 0) {
+        decision.var_index = best_var;
+        decision.branch_point = 0.5;
+        // Branch UP first for OFF variables (try taking rest early)
+        // Branch DOWN first for DRIVE variables (try not driving)
+        decision.direction = (ctx->var_to_state[best_var] == STATE_OFF) ? 1 : 0;
+    }
+
+    return decision;
+}
+```
+
+**Static Priority Alternative:**
+```c
+// Set priorities at model construction (simpler, no callback needed)
+void set_hos_branch_priorities(RalphModel *model, HSModelInfo *info) {
+    int *priorities = calloc(info->num_vars, sizeof(int));
+    int *directions = calloc(info->num_vars, sizeof(int));
+
+    for (int t = 0; t < info->num_periods; t++) {
+        // Earlier periods get higher priority
+        int base_priority = (info->num_periods - t) * 10;
+
+        // OFF variables: high priority, branch up first
+        priorities[info->off_var[t]] = base_priority + 5;
+        directions[info->off_var[t]] = 1;  // up first
+
+        // DRIVE variables: medium priority, branch down first
+        priorities[info->drive_var[t]] = base_priority + 3;
+        directions[info->drive_var[t]] = 0;  // down first
+
+        // WORK variables: lower priority
+        priorities[info->work_var[t]] = base_priority + 1;
+        directions[info->work_var[t]] = 0;
+    }
+
+    ralph_set_branch_priorities(model, priorities);
+    ralph_set_branch_directions(model, directions);
+
+    free(priorities);
+    free(directions);
+}
+```
+
+---
+
+###### Cut Strength Analysis
+
+| Cut Type | Strength | When to Generate | Cost |
+|----------|----------|------------------|------|
+| **Driving capacity (11h)** | Strong | Always—core constraint often violated in LP relaxation | O(H) scan |
+| **Mandatory break (8h)** | Strong | Always—similar to driving capacity | O(H) scan |
+| **14h window** | Medium | Preprocessing preferred; cut if reset timing uncertain | O(H) |
+| **70h cycle** | Weak | Rarely needed—usually satisfied naturally | O(H) |
+| **Symmetry breaking** | N/A | Use branching priority instead | N/A |
+
+**Cut generation strategy:**
+1. Generate at most 10-20 cuts per callback (diminishing returns)
+2. Prioritize driving capacity and break cuts
+3. Skip 14h and 70h cuts unless LP relaxation shows clear violation
+4. Always use branching priorities for symmetry (not cuts)
+
+---
+
+###### Complete HoS Cut Callback Implementation
+
+```c
+// In hose/src/hs_mip_cuts.c
+
+typedef struct {
+    int num_periods;
+    double delta;
+    int drive_var_offset;
+    int work_var_offset;
+    int off_var_offset;
+    int reset10_var_offset;
+    int break30_var_offset;
+    int *var_to_period;
+    int *var_to_state;
+} HSCutContext;
+
+int hs_generate_cuts(
+    void *user_data,
+    const double *x,
+    int num_vars,
+    RalphCut *cuts,
+    int max_cuts
+) {
+    HSCutContext *ctx = (HSCutContext *)user_data;
+    int num_cuts = 0;
+    int remaining = max_cuts;
+
+    // 1. Driving capacity cuts (11h limit)
+    int n = generate_driving_capacity_cuts(
+        x, ctx->num_periods, ctx->delta,
+        ctx->drive_var_offset, ctx->reset10_var_offset,
+        cuts + num_cuts, remaining
+    );
+    num_cuts += n;
+    remaining -= n;
+
+    if (remaining <= 0) return num_cuts;
+
+    // 2. Mandatory break cuts (8h limit)
+    n = generate_break_cuts(
+        x, ctx->num_periods, ctx->delta,
+        ctx->drive_var_offset, ctx->break30_var_offset,
+        cuts + num_cuts, remaining
+    );
+    num_cuts += n;
+    remaining -= n;
+
+    // 3. Skip 14h and 70h cuts (preprocessing handles most cases)
+
+    return num_cuts;
+}
+
+// Setup callback
+void hs_setup_callbacks(RalphModel *model, HSCutContext *cut_ctx, HSBranchContext *branch_ctx) {
+    // Cut callback
+    RalphCutCallback cut_cb = {
+        .generate_cuts = hs_generate_cuts,
+        .user_data = cut_ctx
+    };
+    ralph_set_cut_callback(model, &cut_cb);
+
+    // Branching callback (or use static priorities)
+    RalphBranchCallback branch_cb = {
+        .select_branch = hos_select_branch,
+        .user_data = branch_ctx
+    };
+    ralph_set_branch_callback(model, &branch_cb);
+
+    // Alternative: static priorities (simpler)
+    // set_hos_branch_priorities(model, branch_ctx->model_info);
+}
+```
+
+---
+
+###### Ralph Implementation Roadmap
+
+**Phase 1: Static Branching Priorities**
+```c
+// Easy to implement, high impact for symmetry
+void ralph_set_branch_priorities(RalphModel *model, const int *priorities);
+void ralph_set_branch_directions(RalphModel *model, const int *directions);
+```
+- Store priorities in RalphModel
+- Modify variable selection in branch_and_bound.c to use priorities
+- ~50-100 LoC
+
+**Phase 2: Lazy Constraints**
+```c
+// Simple cut addition between solves
+int ralph_add_lazy_constraint(RalphModel *model, RalphCut *cut);
+```
+- Add constraint to model
+- Re-solve from current basis (warm start)
+- User loops: solve → check → add cuts → solve
+- ~100 LoC
+
+**Phase 3: Cut Callback**
+```c
+// Called automatically during B&B
+void ralph_set_cut_callback(RalphModel *model, RalphCutCallback *cb);
+```
+- Invoke callback after each node LP solve
+- Add returned cuts to node's constraint set
+- More complex: need to manage cut pool, avoid duplicates
+- ~300-500 LoC
+
+**Phase 4: Branching Callback**
+```c
+// Full control over branching
+void ralph_set_branch_callback(RalphModel *model, RalphBranchCallback *cb);
+```
+- Replace default variable selection with callback
+- Pass fractional variable info to callback
+- ~200 LoC
 
 ##### Adaptive Discretization (Advanced)
 
