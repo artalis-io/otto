@@ -6,6 +6,8 @@
 
 #include "sh_geo.h"
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* ============================================================================
  * Version
@@ -76,6 +78,43 @@ int sh_coord_valid(SHCoord c)
 {
     return c.lat >= -90.0 && c.lat <= 90.0 &&
            c.lon >= -180.0 && c.lon <= 180.0;
+}
+
+int sh_parse_coord(const char *str, SHCoord *coord)
+{
+    if (!str || !*str || !coord) return -1;
+
+    /* Copy to mutable buffer for parsing */
+    char buf[64];
+    size_t len = strlen(str);
+    if (len >= sizeof(buf)) return -1;
+    memcpy(buf, str, len + 1);
+
+    /* Find comma separator */
+    char *comma = strchr(buf, ',');
+    if (!comma) return -1;
+    *comma = '\0';
+
+    /* Parse latitude using strtod for proper error detection */
+    char *end_lat;
+    double lat = strtod(buf, &end_lat);
+    if (end_lat == buf || *end_lat != '\0') return -1;
+
+    /* Parse longitude */
+    char *end_lon;
+    double lon = strtod(comma + 1, &end_lon);
+    if (end_lon == comma + 1 || *end_lon != '\0') return -1;
+
+    /* Reject inf/NaN from malformed input like "1e1000" */
+    if (!isfinite(lat) || !isfinite(lon)) return -1;
+
+    /* Validate ranges */
+    if (lat < -90.0 || lat > 90.0) return -1;
+    if (lon < -180.0 || lon > 180.0) return -1;
+
+    coord->lat = lat;
+    coord->lon = lon;
+    return 0;
 }
 
 int sh_coord_in_bbox(SHCoord c, SHBBox bbox)

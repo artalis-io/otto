@@ -342,6 +342,1427 @@ typedef enum {
 | **API** | Expose HoS computation as REST endpoint |
 | **UI** | Display break schedule and ETA with HoS |
 
+### LP/MIP Formulation for Verification & Benchmarking
+
+The greedy heuristic ("drive when you can, rest when you must, start on-duty as late as possible to conserve the 14h window") needs verification against an optimal solution. This section defines MIP formulations that compute the **minimum span** schedule for a task or chain of tasks.
+
+**Use case:** Verification tool to find corner cases in the heuristic, not production solving.
+
+#### Problem Definition
+
+**Given:**
+- Driver state at t_now: (drive_11h_used, window_14h_used, break_8h_used, cycle_70h_used, daily_log[8])
+- Task: t_drive (driving time), t_work (on-duty work at destination)
+- Time window: [earliest_arrival, latest_departure]
+  - Continuous: site open for entire interval
+  - Recurring: site open daily (e.g., 10:00-17:00 Mon-Fri)
+
+**Find:**
+- Schedule minimizing **span** = t_finish - t_now
+- Secondary objective: maximize remaining clock optionality (11h, 14h, 70h remaining)
+
+**Subject to:**
+- 11h driving limit (resets after 10h off-duty)
+- 14h window (wall clock from first on-duty, resets after 10h off-duty)
+- 8h driving triggers mandatory 30-min break
+- 70h/8d or 60h/7d cycle with daily recap (resets after 34h off-duty)
+
+**Definitions:**
+- **Slack**: Arriving before earliest_arrival → off-duty waiting
+- **Work**: On-duty non-driving at site (consumes 14h window and 70h, not 11h or 8h-break)
+- **Optionality**: Preserving clocks = delaying on-duty start to not "waste" the 14h window
+
+---
+
+#### Precision & Time Granularity
+
+##### Internal vs MIP Precision
+
+| Layer | Granularity | Rationale |
+|-------|-------------|-----------|
+| **Heuristic engine** | Seconds | Exact clock tracking, no quantization error |
+| **Data structures** | Seconds (double) | Timestamps, durations, clock values |
+| **MIP verification** | 5 minutes (δ) | Tractable problem size, sufficient for compliance |
+| **Display to user** | "About X hours" | Avoids false precision, matches mental model |
+
+**Why 5 minutes, not 1 minute?**
+
+| δ | Periods/week | Binary vars | Solve time | Benefit |
+|---|--------------|-------------|------------|---------|
+| 1 min | 10,080 | ~30,000 | 30-300s | Overkill precision |
+| 5 min | 2,016 | ~6,000 | 1-30s | Sweet spot |
+| 15 min | 672 | ~2,000 | <5s | Too coarse for 30-min break |
+
+**5 minutes is the sweet spot because:**
+1. **30-min break rule**: Need at least 6 periods to model a 30-min break accurately
+2. **FMCSA tolerance**: Regulations don't care about seconds; ELDs record 1-min increments but inspectors look at 15-min grid blocks
+3. **Problem size**: 5× reduction from 1-min → 25× fewer constraints
+4. **Conservative rounding**: Round driving UP, windows INWARD → feasible in model = definitely feasible in reality
+
+##### Client Objections & Responses
+
+| Objection | Response |
+|-----------|----------|
+| "Your system says 2h 35m but my ELD says 2h 38m" | "We round conservatively. If we say you have 2h 35m, you have *at least* that much. Your ELD might show slightly more." |
+| "Why does my ETA jump by 5 minutes sometimes?" | Display layer smooths this with interpolation. Internally we recalculate, but display shows gradual changes. |
+| "The schedule shows 8:00 but I actually started at 7:58" | "We align to 5-minute boundaries for planning. This is more precise than the 15-minute grid on paper logs that DOT inspectors use." |
+| "Is this accurate enough for compliance?" | "Yes. FMCSA doesn't issue violations for 2-3 minute discrepancies. Our conservative rounding means if we say you're compliant, you definitely are." |
+
+##### Display Best Practices
+
+```c
+// INTERNAL: precise seconds
+double remaining_drive_sec = 11.0 * 3600 - driver->driving_today;  // e.g., 9432.7
+
+// MIP: 5-min periods
+int remaining_periods = (int)(remaining_drive_sec / 300.0);  // 31 periods
+
+// DISPLAY: human-friendly, avoids false precision
+if (remaining_drive_sec >= 3600) {
+    // "About 2.5 hours" or "~2h 30m"
+    printf("About %.1f hours remaining", remaining_drive_sec / 3600.0);
+} else {
+    // "About 45 minutes"
+    printf("About %d minutes remaining", (int)(remaining_drive_sec / 60.0 / 5) * 5);
+}
+
+// NEVER: "2h 37m 12s" (false precision, confuses users, invites ELD comparison)
+```
+
+##### Rounding Strategy
+
+**Inputs to MIP (conservative):**
+```c
+// Driving time: round UP to next 5-min boundary
+double drive_time_hours = 2.617;  // 2h 37m
+int drive_periods = (int)ceil(drive_time_hours * 12);  // 32 periods = 2h 40m
+
+// Time windows: round INWARD
+time_t window_open = 10:03;   // round UP to 10:05
+time_t window_close = 17:58;  // round DOWN to 17:55
+
+// Current clocks: round UP (less remaining = conservative)
+double driving_used = 4.12;  // 4h 7m 12s
+int clock_periods = (int)ceil(driving_used * 12);  // 50 periods = 4h 10m used
+```
+
+**Result:** If MIP says feasible, real-world execution is guaranteed feasible. We never promise more time than the driver actually has.
+
+---
+
+#### Formulation 1: Time-Indexed MIP
+
+**Discretization:** δ = 1/12 hours (5 minutes), horizon H periods (1 week = 2016 periods)
+
+##### Variables
+
+```
+x[t,s] ∈ {0,1}     State at period t: s ∈ {DRIVE, WORK, OFF}
+d[t] ∈ [0,11]      11h clock: driving since last 10h reset
+w[t] ∈ [0,14]      14h window: wall-clock elapsed since duty period started
+b[t] ∈ [0,8]       8h break clock: driving since last 30-min break
+c[t] ∈ [0,70]      70h cycle clock (or 60h for 60/7 mode)
+in_duty[t] ∈ {0,1} Currently in active duty period (14h window running)
+off_consec[t] ∈ ℤ+ Consecutive OFF periods ending at t
+arrived[t] ∈ {0,1} Has completed driving (arrived at destination)
+done[t] ∈ {0,1}    Task complete (work finished)
+```
+
+##### Initial State (Driver Already Mid-Activity)
+
+The driver at t_now may already be in the middle of an activity:
+
+**Input parameters:**
+```
+status_init ∈ {DRIVE, WORK, OFF}   Current activity at t_now
+status_duration ∈ ℝ+               Time already spent in current activity (hours)
+d0, w0, b0, c0                     Clock values at t_now
+in_duty_init ∈ {0,1}               Is driver in an active duty period?
+daily_log[1..8]                    On-duty hours for past 8 days (for recap)
+```
+
+**Why this matters:**
+- If driver has been OFF for 7h, only 3h more needed for 10h reset
+- If driver has been OFF for 25 min, only 5 min more for qualifying 30-min break
+- If driver is OFF but `in_duty_init = 1`, the 14h window is still ticking (wall clock)
+- If driver is OFF and `in_duty_init = 0`, they completed a 10h reset and window is paused
+
+**Example scenarios:**
+
+| Scenario | status_init | status_duration | in_duty_init | Effect |
+|----------|-------------|-----------------|--------------|--------|
+| Fresh driver (10h+ off) | OFF | 10+ hours | 0 | All clocks reset, ready to start new duty period |
+| Mid-shift break | OFF | 1 hour | 1 | 14h window still running, need 9h more for reset |
+| Driving continuously | DRIVE | 3 hours | 1 | Continue driving, clocks reflect 3h usage |
+| Loading at dock | WORK | 2 hours | 1 | On-duty non-driving, 14h and 70h affected |
+| Mid-34h restart | OFF | 20 hours | 0 | 14h more for 34h restart (70h reset) |
+
+##### Constraints
+
+**State exclusivity:**
+```
+∑_s x[t,s] = 1   ∀t
+```
+
+**Initial state from ongoing activity:**
+```
+// Initialize consecutive OFF counter based on current status
+off_consec[0] = floor(status_duration / δ)  if status_init = OFF
+off_consec[0] = 0                            otherwise
+
+// Initialize in_duty based on whether driver is in active duty period
+in_duty[0] = in_duty_init
+
+// If driver continues same activity in period 0, streak continues
+// If driver switches activity, streak resets appropriately
+```
+
+**Virtual "pre-history" for break detection:**
+
+For the 30-min break rule, we need to know if the driver is already mid-break:
+```
+// Pre-history: status_init = OFF and status_duration ≥ k·δ means
+// x[-k,OFF] = x[-k+1,OFF] = ... = x[-1,OFF] = 1 (virtually)
+
+// Periods needed for 30-min break
+break_periods = ceil(0.5 / δ)  // e.g., 6 periods at δ=5min
+
+// Already accumulated OFF periods before t=0
+pre_off = floor(status_duration / δ)  if status_init = OFF, else 0
+
+// break30[t] triggers when total consecutive OFF ≥ break_periods
+// For early periods (t < break_periods), include pre-history:
+break30[t] = 1 iff (pre_off + consecutive OFF from 0 to t) ≥ break_periods
+```
+
+**11h clock dynamics:**
+```
+d[t] = d[t-1] + δ·x[t,DRIVE] - 11·reset10[t]
+d[0] = d0  (initial state, reflects driving already done this shift)
+x[t,DRIVE] ≤ (11 - d[t-1]) / δ    // Can't drive if clock exhausted
+```
+
+**14h window (wall clock from first on-duty):**
+```
+// Duty period state propagation
+in_duty[t] ≥ in_duty[t-1] - reset10[t]           // stays 1 until reset
+in_duty[t] ≥ x[t,DRIVE] + x[t,WORK]              // becomes 1 on activity
+in_duty[t] ≤ in_duty[t-1] + x[t,DRIVE] + x[t,WORK]  // only starts on activity
+
+// Initial duty state from input
+in_duty[0] ≥ in_duty_init                         // preserve ongoing duty period
+in_duty[0] ≥ x[0,DRIVE] + x[0,WORK]              // or start new one
+
+// Window clock runs whenever in_duty = 1
+w[t] = w[t-1]·(1 - reset10[t]) + δ·in_duty[t]
+w[0] = w0  (initial state, may be mid-window)
+
+// Can't drive if window exhausted
+x[t,DRIVE] ≤ M·(1 - in_duty[t-1]) + (14 - w[t-1]) / δ
+```
+
+**30-minute break rule (with pre-history):**
+
+Per FMCSA 2020 final rule:
+- Break required after **8 cumulative hours of driving** (not on-duty)
+- Both OFF and WORK (on-duty/not-driving) qualify as break time
+
+```
+b[t] = b[t-1]·(1 - break30[t]) + δ·x[t,DRIVE]
+b[0] = b0  (initial state)
+
+// Break qualification: 30 min of either OFF or WORK (on-duty/not-driving)
+// Define: not_driving[t] = x[t,OFF] + x[t,WORK]
+not_driving[t] = 1 - x[t,DRIVE]
+
+// For periods t < break_periods, include pre-history in break detection
+// pre_off = floor(status_duration / δ) if status_init ∈ {OFF, WORK}, else 0
+
+// At t=0: if pre_off ≥ break_periods, driver already has qualifying break
+// break30[0] = 1 iff pre_off ≥ break_periods
+
+// For t ∈ [1, break_periods-1]:
+// Need (pre_off + t+1) consecutive non-driving periods
+// break30[t] = 1 iff not_driving[0..t] all 1 AND pre_off + t + 1 ≥ break_periods
+
+// For t ≥ break_periods: standard rule (no pre-history needed)
+break30[t] = 1 iff not_driving[t-break_periods+1..t] all 1
+
+// Equivalently: break30[t] = 1 iff x[τ,DRIVE] = 0 for all τ ∈ [t-5, t] (at δ=5min)
+
+// Can't drive if 8h break clock exhausted without qualifying break
+x[t,DRIVE] ≤ (8 - b[t-1]) / δ + M·break30_available[t]
+```
+
+**10h and 34h reset detection (with pre-history):**
+```
+// Consecutive OFF counter (initialized from status_duration)
+off_consec[t] = (off_consec[t-1] + 1)·x[t,OFF]
+off_consec[0] = (pre_off + 1)·x[0,OFF]  // continue streak if still OFF
+
+// Reset thresholds
+reset10_periods = ceil(10 / δ)  // 120 at δ=5min
+reset34_periods = ceil(34 / δ)  // 408 at δ=5min
+
+// 10h reset triggers when consecutive OFF reaches threshold
+reset10[t] = 1 iff off_consec[t] ≥ reset10_periods
+
+// 34h reset triggers when consecutive OFF reaches threshold
+reset34[t] = 1 iff off_consec[t] ≥ reset34_periods
+
+// Edge case: if pre_off already ≥ threshold, reset happens at t=0
+// (driver was already past the reset point when optimization starts)
+```
+
+**70h cycle with daily recap:**
+```
+// At each midnight, gain back hours from 8 days ago
+recap[t] = daily_log[8] if t crosses midnight, else 0
+c[t] = c[t-1] + δ·(x[t,DRIVE] + x[t,WORK]) - recap[t] - 70·reset34[t]
+c[0] = c0
+
+// Can't work or drive if cycle exhausted
+x[t,DRIVE] + x[t,WORK] ≤ (70 - c[t-1]) / δ
+```
+
+**Task sequencing:**
+```
+// Accumulate driving and work
+drive_done[t] = drive_done[t-1] + δ·x[t,DRIVE]
+work_done[t] = work_done[t-1] + δ·x[t,WORK]
+
+// Must complete required driving
+drive_done[H] ≥ t_drive
+
+// Must complete required work
+work_done[H] ≥ t_work
+
+// Can only work after arriving (driving complete)
+x[t,WORK] ≤ arrived[t]
+arrived[t] = 1 iff drive_done[t] ≥ t_drive
+```
+
+**Time windows:**
+```
+// Continuous [E, L]: work only within window
+x[t,WORK] = 0  if t·δ + t_now < E
+work_done[t] ≤ t_work  if t·δ + t_now > L
+
+// Recurring (e.g., 10:00-17:00 daily):
+x[t,WORK] = 0  if hour_of_day(t·δ + t_now) ∉ [10, 17]
+```
+
+**Slack handling:**
+```
+// After arriving, if before earliest_arrival, must be OFF (waiting)
+arrived[t] = 1 ∧ (t·δ + t_now < E) → x[t,OFF] = 1
+```
+
+##### Objective
+
+```
+// Primary: minimize span
+min span where done[span/δ] = 1
+
+// Equivalent linearization:
+min ∑_t δ·(1 - done[t])
+
+// Secondary (lexicographic or weighted):
+// Maximize remaining optionality
++ ε·(11 - d[T]) + ε·(14 - w[T]) + ε·(70 - c[T])
+```
+
+##### FMCSA 2020 Final Rule Compliance
+
+The time-indexed MIP models the core HoS rules. Here's the status of the June 2020 provisions:
+
+| Provision | Status | Notes |
+|-----------|--------|-------|
+| **11-Hour Driving Limit** | ✅ Modeled | `d[t] ≤ 11`, resets after 10h OFF |
+| **14-Hour Driving Window** | ✅ Modeled | `w[t] ≤ 14`, wall-clock from first on-duty |
+| **30-Minute Break** | ✅ Modeled | After 8h driving; OFF or WORK qualifies (2020 rule) |
+| **60/70-Hour Limit** | ✅ Modeled | `c[t] ≤ 70` with daily recap |
+| **34-Hour Restart** | ✅ Modeled | `reset34[t]` clears 70h clock |
+| **Short-Haul Exception** | ⚪ Out of scope | Different ruleset for <150 air-mile operations |
+| **Adverse Driving Conditions** | ⚠️ Not modeled | See extension below |
+| **Sleeper Berth Split** | ⚠️ Not modeled | See extension below |
+
+**Extension: Adverse Driving Conditions**
+
+When adverse conditions occur, driver may extend both 11h and 14h limits by up to 2h:
+
+```
+// Input parameter
+adverse_conditions ∈ {0,1}   // 1 if adverse conditions apply
+adverse_extension = 2.0      // hours (max allowed)
+
+// Modified limits
+driving_limit = 11 + adverse_extension·adverse_conditions  // 11 or 13
+window_limit = 14 + adverse_extension·adverse_conditions   // 14 or 16
+
+// Updated constraints
+x[t,DRIVE] ≤ (driving_limit - d[t-1]) / δ
+x[t,DRIVE] ≤ M·(1 - in_duty[t-1]) + (window_limit - w[t-1]) / δ
+```
+
+**Extension: Sleeper Berth Split**
+
+The 2020 rule allows 7+2 or 7+3 splits where neither period counts against the 14h window:
+
+```
+// Additional state: s ∈ {DRIVE, WORK, OFF, SLEEPER}
+x[t,s] ∈ {0,1}   for s ∈ {DRIVE, WORK, OFF, SLEEPER}
+
+// Track sleeper berth periods
+sleeper_consec[t] = (sleeper_consec[t-1] + 1)·x[t,SLEEPER]
+
+// Detect qualifying split (7h sleeper completed)
+split_7h[t] = 1 iff sleeper_consec[t] ≥ 7/δ
+
+// After 7h sleeper, driver needs 2-3h more OFF (outside berth) to complete split
+// Track off_after_sleeper[t] for consecutive OFF after split_7h
+
+// Key insight: during a valid split, the 14h window PAUSES
+// w[t] only advances when in_duty[t] = 1 AND NOT in a valid split period
+
+// Simplified: track split_active[t] = 1 during split rest periods
+// w[t] = w[t-1]·(1 - reset10[t]) + δ·in_duty[t]·(1 - split_active[t])
+```
+
+The sleeper berth logic is complex and adds significant model size. For verification purposes, consider:
+1. Testing non-split scenarios first (most common)
+2. Adding split support as a separate model variant
+3. Using the heuristic for split decisions, MIP for verification
+
+---
+
+#### Formulation 2: Event-Based MIP
+
+Model the schedule as a sequence of up to N activity segments.
+
+##### Variables
+
+```
+s[i]               Start time of segment i (continuous)
+e[i]               End time of segment i (e[i] = s[i+1])
+dur[i] = e[i] - s[i]
+type[i] ∈ {DRIVE, WORK, OFF}  (binary encoding)
+
+// Clock states at end of segment i
+d[i] ∈ [0,11]      11h clock after segment i
+w[i] ∈ [0,14]      14h window after segment i
+b[i] ∈ [0,8]       8h break clock after segment i
+c[i] ∈ [0,70]      70h clock after segment i
+
+// Reset/break indicators
+is_reset10[i] ∈ {0,1}   Segment i is OFF with dur[i] ≥ 10h
+is_reset34[i] ∈ {0,1}   Segment i is OFF with dur[i] ≥ 34h
+is_break30[i] ∈ {0,1}   Segment i is non-driving (OFF or WORK) with dur[i] ≥ 0.5h
+```
+
+##### Constraints
+
+**Segment ordering:**
+```
+e[i] = s[i+1]   ∀i
+s[0] = t_now
+dur[i] ≥ 0
+```
+
+**11h clock (big-M linearization):**
+```
+d[i] ≥ d[i-1] + dur[i] - M·(1 - isDRIVE[i]) - 11·is_reset10[i]
+d[i] ≤ d[i-1] + dur[i] + M·(1 - isDRIVE[i])
+d[i] ≤ 11
+isDRIVE[i] = 1 → d[i-1] + dur[i] ≤ 11  // can't exceed while driving
+```
+
+**14h window (requires tracking duty period start):**
+```
+// duty_start[i] = time when current duty period started
+// Complex: must track across segments using big-M
+
+// Simpler approach: track in_duty[i] and w[i]
+in_duty[i] = in_duty[i-1]·(1 - is_reset10[i-1]) + (isDRIVE[i] + isWORK[i])·(1 - in_duty[i-1])
+
+// Window accumulates wall-clock time while in_duty
+w[i] = (w[i-1] + dur[i])·in_duty[i]·(1 - is_reset10[i])  // nonlinear, needs linearization
+
+isDRIVE[i] = 1 → w[i] ≤ 14
+```
+
+**30-min break (2020 rule: OFF or WORK qualifies):**
+```
+// Non-driving segment (OFF or WORK) can satisfy break requirement
+is_break30[i] ≤ isOFF[i] + isWORK[i]   // must be non-driving
+is_break30[i] ≤ 1 - isDRIVE[i]          // equivalent
+is_break30[i] → dur[i] ≥ 0.5
+
+b[i] = b[i-1]·(1 - is_break30[i]) + dur[i]·isDRIVE[i]
+isDRIVE[i] = 1 → b[i] ≤ 8
+```
+
+**Reset detection:**
+```
+is_reset10[i] ≤ isOFF[i]
+is_reset10[i] → dur[i] ≥ 10
+
+is_reset34[i] ≤ is_reset10[i]
+is_reset34[i] → dur[i] ≥ 34
+```
+
+**Task completion:**
+```
+∑_i dur[i]·isDRIVE[i] ≥ t_drive
+∑_i dur[i]·isWORK[i] ≥ t_work
+
+// All WORK segments after all DRIVE segments
+```
+
+##### Objective
+
+```
+min span = e[last] - s[0]
+```
+
+---
+
+#### Comparison: Time-Indexed vs Event-Based
+
+| Aspect | Time-Indexed | Event-Based |
+|--------|--------------|-------------|
+| **Model size** | O(H/δ) variables; 1 week at 5-min = 2016 periods | O(N) segments; typically N ≤ 20 |
+| **14h window** | Easy: just sum `in_duty[t]·δ` | Hard: requires tracking duty period start with big-M |
+| **30-min break** | Easy: count consecutive OFF periods | Moderate: detect qualifying breaks |
+| **Recurring windows** | Easy: mask invalid periods | Hard: split work across intervals |
+| **Recap (70h rollover)** | Easy: trigger at midnight periods | Moderate: detect midnight crossings |
+| **Precision** | Quantized to δ | Exact continuous time |
+| **Solve time** | Slower (more variables), but simpler | Faster if well-formulated, but big-M issues |
+| **Solution interpretation** | Direct: read x[t,s] matrix | Abstract: sequence of segments |
+| **Debugging** | Easy: visualize period-by-period | Harder: must trace constraint logic |
+
+**Recommendation:** Use **time-indexed** for verification because:
+1. The 14h window is much easier to model correctly
+2. Recurring time windows are trivial
+3. Solution is easy to visualize and verify
+4. 5-minute granularity is fine for trucking (HoS rules don't care about seconds)
+
+---
+
+#### Feasibility Analysis
+
+**1 week horizon at δ = 5 minutes:**
+- Periods: 7 × 24 × 12 = **2016 periods**
+- Variables: ~6000 binary (x[t,s]), ~8000 continuous (clocks)
+- Constraints: ~15000
+
+**Solve time estimate (Ralph):**
+- Single task: **1-5 seconds** (depends on problem structure)
+- Chain of 5 tasks: **5-30 seconds**
+
+**Memory:** ~50-100 MB for the model
+
+This is tractable for verification/benchmarking. Not suitable for real-time production, which is fine since the heuristic handles that.
+
+---
+
+#### Performance Considerations
+
+##### MIP Structure
+
+The time-indexed formulation is a **MIP** (Mixed Integer Program):
+- Binary: `x[t,s]` state variables (~6000), reset/break indicators, completion flags
+- Continuous: clock states `d[t]`, `w[t]`, `b[t]`, `c[t]`
+
+**Why it solves fast despite size:**
+1. **Path structure**: States form a sequence through time—once in a state, you transition or stay
+2. **Tight LP relaxation**: Continuous relaxation is often near-integral
+3. **Natural branching**: Branch on "when does first break occur?" converges quickly
+4. **Sparse constraints**: Each period only links to adjacent periods
+
+Most instances solve at the root node with presolve + cuts. Branching is rare.
+
+##### Handling Non-Aligned Times
+
+Real inputs don't align to δ boundaries:
+- Driving time: 2h 37min (not a multiple of 5 min)
+- Loading time: 45 min (aligns) or 47 min (doesn't)
+- Time window: [10:23, 17:45] (odd boundaries)
+
+**Approach: Continuous accumulators with period triggers**
+
+```
+# Continuous variables track exact totals
+drive_total[t] ∈ ℝ       # Actual driving time accumulated
+work_total[t] ∈ ℝ        # Actual work time accumulated
+arrival_time ∈ ℝ         # Exact arrival time (continuous)
+
+# Period-based updates (each active period contributes δ)
+drive_total[t] = drive_total[t-1] + δ·x[t,DRIVE]
+work_total[t] = work_total[t-1] + δ·x[t,WORK]
+
+# Completion: exact threshold (not quantized)
+drive_total[H] ≥ t_drive    # e.g., 2.617 hours exactly
+
+# Arrival time: first period where driving is complete
+arrival_time ≥ t·δ - M·(1 - arrived[t])   ∀t
+arrival_time ≤ t·δ + M·arrived[t]         ∀t
+arrived[t] = 1 iff drive_total[t] ≥ t_drive
+```
+
+**Time windows with exact boundaries:**
+
+```
+# Window [E, L] with exact times
+# Work can only happen when: arrived AND within window
+
+# Arrival must be ≤ L (latest departure minus work time)
+arrival_time ≤ L - t_work
+
+# Work starts at max(arrival_time, E)
+work_start ≥ arrival_time
+work_start ≥ E
+work_start ≤ arrival_time + M·(arrival_time ≥ E)  # if early, wait until E
+
+# Map work_start to period for x[t,WORK] activation
+# Period p is active for work if: p·δ ≥ work_start AND p·δ < work_start + t_work
+```
+
+**Practical simplification:** For HoS verification, quantization error of ±2.5 min is acceptable. Round:
+- Driving/work times: up to next δ (conservative)
+- Time windows: inward (earliest up, latest down)
+
+This guarantees feasible solutions remain feasible after rounding.
+
+##### Problem-Specific Cuts and Branching for Ralph
+
+HoS problems have domain structure that generic MIP cuts miss. Ralph should support:
+1. **Cut callbacks** - user-defined cuts called during B&B
+2. **Branching callbacks** - user-defined variable selection for branching
+
+---
+
+###### Ralph Callback API Design
+
+**Cut Callback:**
+```c
+// Cut representation
+typedef struct {
+    int *indices;       // Variable indices
+    double *coeffs;     // Coefficients
+    int num_vars;       // Number of variables in cut
+    char sense;         // 'L' (<=), 'G' (>=), 'E' (=)
+    double rhs;         // Right-hand side
+} RalphCut;
+
+// Cut callback signature
+typedef struct {
+    // Called at each B&B node after LP relaxation solved
+    // x_relaxation: current LP solution (fractional)
+    // Returns number of cuts added (0 = no cuts found)
+    int (*generate_cuts)(
+        void *user_data,
+        const double *x_relaxation,
+        int num_vars,
+        RalphCut *cuts,         // Output: array of cuts
+        int max_cuts            // Max cuts to generate
+    );
+    void *user_data;
+} RalphCutCallback;
+
+void ralph_set_cut_callback(RalphModel *model, RalphCutCallback *cb);
+```
+
+**Branching Priority Callback:**
+```c
+// Branching decision
+typedef struct {
+    int var_index;      // Variable to branch on (-1 = use default)
+    double branch_point;// Value to branch at (usually 0.5 for binary)
+    int direction;      // 0 = down first, 1 = up first
+} RalphBranchDecision;
+
+// Branching callback signature
+typedef struct {
+    // Called when B&B needs to select a branching variable
+    // fractional_vars: indices of variables with fractional values
+    // fractional_vals: their current LP values
+    // Returns branching decision (var_index = -1 to use default)
+    RalphBranchDecision (*select_branch)(
+        void *user_data,
+        const double *x_relaxation,
+        const int *fractional_vars,
+        const double *fractional_vals,
+        int num_fractional
+    );
+    void *user_data;
+} RalphBranchCallback;
+
+void ralph_set_branch_callback(RalphModel *model, RalphBranchCallback *cb);
+```
+
+**Static Branching Priorities (simpler alternative):**
+```c
+// Set priority for each variable (higher = branch first)
+// Useful when priorities are known upfront
+void ralph_set_branch_priorities(RalphModel *model, const int *priorities);
+
+// Set preferred direction for each variable
+// 0 = down first, 1 = up first, -1 = auto
+void ralph_set_branch_directions(RalphModel *model, const int *directions);
+```
+
+---
+
+###### Concrete Cut Formulations for HoS
+
+**Cut 1: Driving Capacity (11h limit)**
+
+Detects: Fractional solution has > 11h driving between resets.
+
+```
+Given interval [t0, t1] with no reset10[τ] = 1 for τ ∈ [t0, t1]:
+
+Violation detected when:
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] · δ > 11 + ε
+
+Cut to add:
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] ≤ floor(11/δ)
+
+Strengthened with reset variables:
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] ≤ floor(11/δ) + ceil(11/δ) · ∑_{τ=t0}^{t1} reset10[τ]
+```
+
+**Implementation:**
+```c
+int generate_driving_capacity_cuts(
+    const double *x, int num_periods, double delta,
+    int drive_var_offset, int reset_var_offset,
+    RalphCut *cuts, int max_cuts
+) {
+    int num_cuts = 0;
+    int last_reset = -1;
+    double driving_sum = 0.0;
+
+    for (int t = 0; t < num_periods && num_cuts < max_cuts; t++) {
+        double x_drive = x[drive_var_offset + t];
+        double x_reset = x[reset_var_offset + t];
+
+        // Track fractional driving (works on LP relaxation)
+        driving_sum += x_drive * delta;
+
+        // Reset detected (even fractionally)
+        if (x_reset > 0.5) {
+            last_reset = t;
+            driving_sum = 0.0;
+            continue;
+        }
+
+        // Violation: driving exceeds 11h without reset
+        if (driving_sum > 11.0 + 1e-6) {
+            int t0 = last_reset + 1;
+            int t1 = t;
+            int cut_size = t1 - t0 + 1;
+
+            // Build cut: ∑ x[τ,DRIVE] ≤ floor(11/δ)
+            cuts[num_cuts].num_vars = cut_size;
+            cuts[num_cuts].indices = malloc(cut_size * sizeof(int));
+            cuts[num_cuts].coeffs = malloc(cut_size * sizeof(double));
+            for (int i = 0; i < cut_size; i++) {
+                cuts[num_cuts].indices[i] = drive_var_offset + t0 + i;
+                cuts[num_cuts].coeffs[i] = 1.0;
+            }
+            cuts[num_cuts].sense = 'L';
+            cuts[num_cuts].rhs = floor(11.0 / delta);
+            num_cuts++;
+
+            // Reset for next segment
+            driving_sum = 0.0;
+            last_reset = t;
+        }
+    }
+    return num_cuts;
+}
+```
+
+**Cut 2: Mandatory Break (30-min after 8h driving)**
+
+Detects: Fractional solution drives > 8h without a 30-min non-driving break.
+
+```
+Given interval [t0, t1] with no break30[τ] = 1 for τ ∈ [t0, t1]:
+
+Violation detected when:
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] · δ > 8 + ε
+
+Cut to add (at period t1 where violation detected):
+  ∑_{τ=t0}^{t1} x[τ,DRIVE] ≤ floor(8/δ) + ceil(8/δ) · ∑_{τ=t0}^{t1} break30[τ]
+```
+
+**Implementation:**
+```c
+int generate_break_cuts(
+    const double *x, int num_periods, double delta,
+    int drive_var_offset, int break_var_offset,
+    RalphCut *cuts, int max_cuts
+) {
+    int num_cuts = 0;
+    int last_break = -1;
+    double driving_sum = 0.0;
+
+    for (int t = 0; t < num_periods && num_cuts < max_cuts; t++) {
+        double x_drive = x[drive_var_offset + t];
+        double x_break = x[break_var_offset + t];
+
+        driving_sum += x_drive * delta;
+
+        if (x_break > 0.5) {
+            last_break = t;
+            driving_sum = 0.0;
+            continue;
+        }
+
+        // Violation: 8h driving without break
+        if (driving_sum > 8.0 + 1e-6) {
+            int t0 = last_break + 1;
+            int t1 = t;
+            int interval_len = t1 - t0 + 1;
+
+            // Cut includes both DRIVE and BREAK variables
+            int cut_size = 2 * interval_len;
+            cuts[num_cuts].indices = malloc(cut_size * sizeof(int));
+            cuts[num_cuts].coeffs = malloc(cut_size * sizeof(double));
+
+            // ∑ x[DRIVE] - floor(8/δ) · ∑ break30 ≤ floor(8/δ)
+            for (int i = 0; i < interval_len; i++) {
+                cuts[num_cuts].indices[i] = drive_var_offset + t0 + i;
+                cuts[num_cuts].coeffs[i] = 1.0;
+                cuts[num_cuts].indices[interval_len + i] = break_var_offset + t0 + i;
+                cuts[num_cuts].coeffs[interval_len + i] = -floor(8.0 / delta);
+            }
+            cuts[num_cuts].num_vars = cut_size;
+            cuts[num_cuts].sense = 'L';
+            cuts[num_cuts].rhs = floor(8.0 / delta);
+            num_cuts++;
+
+            driving_sum = 0.0;
+            last_break = t;
+        }
+    }
+    return num_cuts;
+}
+```
+
+**Cut 3: 14h Window**
+
+This is better handled as **variable fixing** (preprocessing) rather than cuts:
+
+```c
+// At model construction time, fix variables to 0 where 14h would be exceeded
+void fix_14h_window_violations(
+    RalphModel *model, int num_periods, double delta,
+    double w0,  // initial window usage
+    int in_duty_init,
+    int drive_var_offset
+) {
+    // If driver starts in duty period, window is already ticking
+    double window_time = in_duty_init ? w0 : 0.0;
+    int in_duty = in_duty_init;
+
+    for (int t = 0; t < num_periods; t++) {
+        // Once in_duty, window advances with wall clock
+        if (in_duty) {
+            window_time += delta;
+        }
+
+        // Can't drive if window would exceed 14h
+        if (window_time > 14.0) {
+            // Fix x[t,DRIVE] = 0
+            ralph_set_var_bounds(model, drive_var_offset + t, 0.0, 0.0);
+        }
+
+        // Note: This is a simplification. Full model needs to track
+        // when in_duty transitions based on activity and resets.
+    }
+}
+```
+
+For dynamic 14h tracking during B&B (when reset timing is uncertain), use a cut:
+
+```
+Given in_duty starts at t_start:
+
+Violation detected when:
+  in_duty[t] = 1 AND (t - t_start) · δ > 14 AND x[t,DRIVE] > 0
+
+Cut to add:
+  x[t,DRIVE] ≤ 1 - in_duty[t]   (if t is beyond 14h from any possible duty start)
+```
+
+---
+
+###### Symmetry Breaking via Branching Priority
+
+Symmetry: Multiple equivalent rest placements yield the same span. E.g., taking a 10h break at period 50 vs 51 may be equivalent.
+
+**Solution: Branching priorities that prefer earlier decisions**
+
+```c
+// HoS branching priority: prefer earlier periods, prefer OFF over DRIVE
+RalphBranchDecision hos_select_branch(
+    void *user_data,
+    const double *x,
+    const int *frac_vars,
+    const double *frac_vals,
+    int num_frac
+) {
+    HSBranchContext *ctx = (HSBranchContext *)user_data;
+    RalphBranchDecision decision = { .var_index = -1 };  // default
+
+    int best_var = -1;
+    int best_period = INT_MAX;
+    double best_score = -1.0;
+
+    for (int i = 0; i < num_frac; i++) {
+        int var = frac_vars[i];
+        double val = frac_vals[i];
+
+        // Decode variable: which period and which state?
+        int period = ctx->var_to_period[var];
+        int state = ctx->var_to_state[var];  // DRIVE=0, WORK=1, OFF=2
+
+        // Priority score: earlier periods first, OFF states preferred
+        // (branching on OFF first explores "take rest early" branch)
+        double score = (ctx->num_periods - period) * 10.0;
+        if (state == STATE_OFF) score += 5.0;
+
+        // Also consider fractionality (closer to 0.5 = harder to decide)
+        double frac_score = 1.0 - fabs(val - 0.5) * 2.0;  // 1.0 at 0.5, 0.0 at 0 or 1
+        score += frac_score;
+
+        if (score > best_score) {
+            best_score = score;
+            best_var = var;
+            best_period = period;
+        }
+    }
+
+    if (best_var >= 0) {
+        decision.var_index = best_var;
+        decision.branch_point = 0.5;
+        // Branch UP first for OFF variables (try taking rest early)
+        // Branch DOWN first for DRIVE variables (try not driving)
+        decision.direction = (ctx->var_to_state[best_var] == STATE_OFF) ? 1 : 0;
+    }
+
+    return decision;
+}
+```
+
+**Static Priority Alternative:**
+```c
+// Set priorities at model construction (simpler, no callback needed)
+void set_hos_branch_priorities(RalphModel *model, HSModelInfo *info) {
+    int *priorities = calloc(info->num_vars, sizeof(int));
+    int *directions = calloc(info->num_vars, sizeof(int));
+
+    for (int t = 0; t < info->num_periods; t++) {
+        // Earlier periods get higher priority
+        int base_priority = (info->num_periods - t) * 10;
+
+        // OFF variables: high priority, branch up first
+        priorities[info->off_var[t]] = base_priority + 5;
+        directions[info->off_var[t]] = 1;  // up first
+
+        // DRIVE variables: medium priority, branch down first
+        priorities[info->drive_var[t]] = base_priority + 3;
+        directions[info->drive_var[t]] = 0;  // down first
+
+        // WORK variables: lower priority
+        priorities[info->work_var[t]] = base_priority + 1;
+        directions[info->work_var[t]] = 0;
+    }
+
+    ralph_set_branch_priorities(model, priorities);
+    ralph_set_branch_directions(model, directions);
+
+    free(priorities);
+    free(directions);
+}
+```
+
+---
+
+###### Cut Strength Analysis
+
+| Cut Type | Strength | When to Generate | Cost |
+|----------|----------|------------------|------|
+| **Driving capacity (11h)** | Strong | Always—core constraint often violated in LP relaxation | O(H) scan |
+| **Mandatory break (8h)** | Strong | Always—similar to driving capacity | O(H) scan |
+| **14h window** | Medium | Preprocessing preferred; cut if reset timing uncertain | O(H) |
+| **70h cycle** | Weak | Rarely needed—usually satisfied naturally | O(H) |
+| **Symmetry breaking** | N/A | Use branching priority instead | N/A |
+
+**Cut generation strategy:**
+1. Generate at most 10-20 cuts per callback (diminishing returns)
+2. Prioritize driving capacity and break cuts
+3. Skip 14h and 70h cuts unless LP relaxation shows clear violation
+4. Always use branching priorities for symmetry (not cuts)
+
+---
+
+###### Complete HoS Cut Callback Implementation
+
+```c
+// In hose/src/hs_mip_cuts.c
+
+typedef struct {
+    int num_periods;
+    double delta;
+    int drive_var_offset;
+    int work_var_offset;
+    int off_var_offset;
+    int reset10_var_offset;
+    int break30_var_offset;
+    int *var_to_period;
+    int *var_to_state;
+} HSCutContext;
+
+int hs_generate_cuts(
+    void *user_data,
+    const double *x,
+    int num_vars,
+    RalphCut *cuts,
+    int max_cuts
+) {
+    HSCutContext *ctx = (HSCutContext *)user_data;
+    int num_cuts = 0;
+    int remaining = max_cuts;
+
+    // 1. Driving capacity cuts (11h limit)
+    int n = generate_driving_capacity_cuts(
+        x, ctx->num_periods, ctx->delta,
+        ctx->drive_var_offset, ctx->reset10_var_offset,
+        cuts + num_cuts, remaining
+    );
+    num_cuts += n;
+    remaining -= n;
+
+    if (remaining <= 0) return num_cuts;
+
+    // 2. Mandatory break cuts (8h limit)
+    n = generate_break_cuts(
+        x, ctx->num_periods, ctx->delta,
+        ctx->drive_var_offset, ctx->break30_var_offset,
+        cuts + num_cuts, remaining
+    );
+    num_cuts += n;
+    remaining -= n;
+
+    // 3. Skip 14h and 70h cuts (preprocessing handles most cases)
+
+    return num_cuts;
+}
+
+// Setup callback
+void hs_setup_callbacks(RalphModel *model, HSCutContext *cut_ctx, HSBranchContext *branch_ctx) {
+    // Cut callback
+    RalphCutCallback cut_cb = {
+        .generate_cuts = hs_generate_cuts,
+        .user_data = cut_ctx
+    };
+    ralph_set_cut_callback(model, &cut_cb);
+
+    // Branching callback (or use static priorities)
+    RalphBranchCallback branch_cb = {
+        .select_branch = hos_select_branch,
+        .user_data = branch_ctx
+    };
+    ralph_set_branch_callback(model, &branch_cb);
+
+    // Alternative: static priorities (simpler)
+    // set_hos_branch_priorities(model, branch_ctx->model_info);
+}
+```
+
+---
+
+###### Ralph Requirements for HoSE MIP
+
+**Complete API needed:**
+
+| Function | Purpose | LoC | Priority |
+|----------|---------|-----|----------|
+| `ralph_set_branch_priorities()` | Static priority per variable | ~50 | P0 |
+| `ralph_set_branch_directions()` | Preferred branch direction | ~30 | P0 |
+| `ralph_get_var_bounds()` | Query current lb/ub | ~10 | P1 |
+| `ralph_add_lazy_constraint()` | Add cut between solves | ~100 | P1 |
+| `ralph_set_cut_callback()` | Automatic cuts during B&B | ~400 | P2 |
+| `ralph_set_branch_callback()` | Custom variable selection | ~200 | P2 |
+
+**Phase 1: Static Branching Priorities (P0)**
+```c
+// Store priority and direction per variable
+void ralph_set_branch_priorities(RalphModel *model, const int *priorities);
+void ralph_set_branch_directions(RalphModel *model, const int *directions);
+
+// Query bounds (for cut generators)
+int ralph_get_var_bounds(RalphModel *model, int var, double *lb, double *ub);
+```
+- Store arrays in RalphModel struct
+- Modify `select_branching_variable()` in branch_and_bound.c
+- Use direction hint when creating child nodes
+- **~80-100 LoC total**
+
+**Phase 2: Lazy Constraints (P1)**
+```c
+// Add constraint and re-solve with warm start
+int ralph_add_lazy_constraint(RalphModel *model, RalphCut *cut);
+int ralph_add_lazy_constraints(RalphModel *model, RalphCut *cuts, int count);
+```
+- Append constraint to model's constraint matrix
+- Preserve basis for warm start
+- User controls loop: solve → check → add → solve
+- **~100-150 LoC**
+
+**Phase 3: Cut Callback (P2)**
+```c
+void ralph_set_cut_callback(RalphModel *model, RalphCutCallback *cb);
+```
+- Invoke after each node LP solve
+- Manage cut pool (avoid duplicates, limit total cuts)
+- Age out ineffective cuts
+- **~300-500 LoC**
+
+**Phase 4: Branching Callback (P2)**
+```c
+void ralph_set_branch_callback(RalphModel *model, RalphBranchCallback *cb);
+```
+- Replace default variable selection
+- Build fractional variable list for callback
+- **~200 LoC**
+
+**Estimated total: ~700-950 LoC** for full callback support.
+
+---
+
+###### Performance Assessment: Can Ralph Solve This?
+
+**Problem size (1 week, δ=5 min):**
+- Periods: 2016
+- Binary variables: ~6000 (x[t,s] for s ∈ {DRIVE, WORK, OFF})
+- Continuous variables: ~8000 (clocks d, w, b, c, accumulators)
+- Constraints: ~15000
+- Non-zeros: ~50000
+
+**Favorable structure:**
+- Path-like: state at time t depends only on t-1
+- Tight LP relaxation: fractional solutions are rare
+- Sparse: each constraint touches ≤10 variables
+- Domain cuts: 11h/8h cuts are very effective
+
+**Ralph vs Commercial Solvers:**
+
+| Feature | Gurobi/CPLEX | Ralph | Impact |
+|---------|--------------|-------|--------|
+| Presolve | Advanced | Basic | Medium |
+| Generic cuts | Gomory, MIR, clique, etc. | Gomory only | Low (domain cuts compensate) |
+| Parallel B&B | Yes | No | Medium |
+| Node selection | Best-bound, diving, etc. | Depth-first | Low |
+| LP solver | Dual simplex, barrier | Primal simplex | Medium |
+
+**Realistic time estimates:**
+
+| Scenario | Variables | Gurobi | Ralph (no cuts) | Ralph (with cuts) |
+|----------|-----------|--------|-----------------|-------------------|
+| Fresh driver, 1 task | ~6000 | <0.1s | 1-5s | <1s |
+| Mid-shift, 1 task | ~6000 | <0.1s | 2-10s | 1-3s |
+| Exhausted clocks, 1 task | ~6000 | 0.1-0.5s | 5-30s | 2-10s |
+| Chain of 3 tasks | ~18000 | 0.5-2s | 30-120s | 10-30s |
+| Chain of 5 tasks, tight TW | ~30000 | 2-10s | 2-10 min | 30-120s |
+
+**Key insight:** Domain-specific cuts are the equalizer. Without them, Ralph struggles on larger instances. With them, it's competitive for verification workloads.
+
+**Confidence assessment:**
+- **High confidence**: Single task, any driver state → <10s with cuts
+- **Medium confidence**: Chain of 3-5 tasks → <2 min with cuts
+- **Low confidence**: Complex chains with multiple tight time windows → may need timeout
+
+**Recommendations:**
+1. Implement Phase 1 (priorities) first—biggest bang for buck
+2. Add lazy constraints (Phase 2) before full cut callback
+3. Set 60-second timeout for verification runs
+4. Fall back to iterative solving for long chains
+
+---
+
+###### Use Case Analysis: Validation vs Tracking
+
+**Validation (offline, batch):**
+- Compare heuristic span vs optimal span
+- Find corner cases where heuristic is suboptimal
+- Prove optimality of heuristic decisions
+- **Tolerance for latency: 1-60 seconds**
+
+**Tracking (online, real-time):**
+- Continuous monitoring of driver state
+- Proactive alerts: "HoS violation in 2 hours if you keep driving"
+- Feasibility queries: "Can we make this delivery?"
+- **Tolerance for latency: <1 second**
+
+**Can MIP be used for tracking?**
+
+| Use Case | MIP Suitable? | Notes |
+|----------|---------------|-------|
+| Proactive alerts | ⚠️ Maybe | Solve small lookahead (2h), cache results |
+| Feasibility check | ✅ Yes | Binary answer, can use LP relaxation |
+| What-if analysis | ✅ Yes | User-initiated, can wait 5-10s |
+| Real-time dashboard | ❌ No | Heuristic is better (O(1) vs exponential) |
+| Route planning | ✅ Yes | Pre-dispatch, 30-60s acceptable |
+
+**Hybrid tracking architecture:**
+
+```
+                    ┌─────────────────────────────────────┐
+                    │         Real-Time Layer             │
+                    │   Greedy heuristic (O(n) per leg)   │
+                    │   Updates dashboard, ETA, alerts    │
+                    │   Latency: <10ms                    │
+                    └──────────────┬──────────────────────┘
+                                   │
+                    ┌──────────────▼──────────────────────┐
+                    │         Validation Layer            │
+                    │   MIP solver (async, background)    │
+                    │   Verifies heuristic decisions      │
+                    │   Flags suboptimal choices          │
+                    │   Latency: 1-60s (async)            │
+                    └──────────────┬──────────────────────┘
+                                   │
+                    ┌──────────────▼──────────────────────┐
+                    │         Learning Layer              │
+                    │   Collect heuristic vs optimal      │
+                    │   Identify systematic gaps          │
+                    │   Improve heuristic over time       │
+                    └─────────────────────────────────────┘
+```
+
+**Practical tracking with MIP:**
+
+1. **Warm start from heuristic**: Use heuristic solution as MIP starting point
+   ```c
+   // Heuristic gives initial feasible solution
+   HSTransitResult heuristic_result = hs_compute_transit_greedy(...);
+
+   // Convert to MIP variable values
+   set_mip_initial_solution(model, &heuristic_result);
+
+   // MIP proves optimality or finds improvement
+   ralph_optimize(model);  // Often proves optimal at root
+   ```
+
+2. **Incremental re-solve**: As time passes, warm start from previous solution
+   ```c
+   // At t=0: solve full problem, save basis
+   ralph_optimize(model);
+   ralph_save_basis(model, &basis);
+
+   // At t=5min: fix x[0..0], solve remaining
+   ralph_fix_var(model, period_0_vars, actual_values);
+   ralph_load_basis(model, &basis);  // warm start
+   ralph_optimize(model);  // much faster
+   ```
+
+3. **Lookahead caching**: Pre-compute common scenarios
+   ```c
+   // Cache: "fresh driver, 6h driving" → optimal span, break schedule
+   // Cache: "8h driven, need 30min break" → next feasible drive start
+   // Hit rate should be high for common driver states
+   ```
+
+**Bottom line:**
+- **Validation**: MIP works well, Ralph is sufficient with domain cuts
+- **Tracking**: Heuristic for real-time, MIP for async verification/improvement
+- **Planning**: MIP for pre-dispatch route optimization (30-60s acceptable)
+
+---
+
+##### Adaptive Discretization (Advanced)
+
+Since we know the task list beforehand, we can use **variable δ** - fine granularity where decisions matter, coarse where they don't.
+
+**Key insight:** Most of a multi-day schedule is either "driving continuously" or "resting for 10+ hours". Fine granularity only matters near:
+- Task boundaries (arrival, departure)
+- Time window edges
+- Clock thresholds (8h break trigger, 11h limit, 14h window end)
+- Mandatory break insertion points
+
+**Period reduction example (5-task chain over 3 days):**
+
+| Approach | Periods | Variables | Solve time |
+|----------|---------|-----------|------------|
+| Uniform δ=5min | 864 | ~5000 | 10-30s |
+| Adaptive | ~200 | ~1200 | 1-5s |
+
+**Algorithm: Build non-uniform time grid**
+
+```c
+typedef struct {
+    double start;      // Period start time (hours from t_now)
+    double duration;   // Period duration (variable!)
+} AdaptivePeriod;
+
+AdaptivePeriod* build_adaptive_grid(
+    HSTask *tasks, int num_tasks,
+    HSDriverState *state,
+    int *num_periods_out
+) {
+    // Step 1: Collect "interesting" time points
+    double *points = NULL;
+    int num_points = 0;
+
+    for (int k = 0; k < num_tasks; k++) {
+        // Task boundaries (fine grid needed)
+        add_point(&points, &num_points, tasks[k].earliest_start);
+        add_point(&points, &num_points, tasks[k].latest_start);
+        add_point(&points, &num_points, tasks[k].earliest_start + tasks[k].work_duration);
+
+        // Driving completion estimate (± buffer)
+        double eta = estimate_arrival(tasks, k, state);
+        add_point(&points, &num_points, eta - 0.5);  // 30 min before
+        add_point(&points, &num_points, eta + 0.5);  // 30 min after
+    }
+
+    // Clock thresholds (relative to current state)
+    double time_to_8h_break = 8.0 - state->driving_since_break;
+    double time_to_11h = 11.0 - state->driving_today;
+    double time_to_14h = 14.0 - state->window_elapsed;
+
+    add_point(&points, &num_points, time_to_8h_break - 0.5);
+    add_point(&points, &num_points, time_to_8h_break);
+    add_point(&points, &num_points, time_to_11h - 0.5);
+    add_point(&points, &num_points, time_to_11h);
+    add_point(&points, &num_points, time_to_14h - 0.5);
+    add_point(&points, &num_points, time_to_14h);
+
+    // Step 2: Sort and deduplicate
+    qsort(points, num_points, sizeof(double), cmp_double);
+    deduplicate(&points, &num_points, 0.1);  // merge points within 6 min
+
+    // Step 3: Build adaptive grid
+    // - Fine (5 min) within ±1h of interesting points
+    // - Medium (15 min) within ±3h
+    // - Coarse (1 hour) elsewhere
+
+    AdaptivePeriod *grid = NULL;
+    int num_periods = 0;
+    double t = 0.0;
+    double horizon = estimate_total_horizon(tasks, num_tasks, state);
+
+    while (t < horizon) {
+        double delta;
+        double dist_to_interesting = min_distance_to_points(t, points, num_points);
+
+        if (dist_to_interesting < 1.0) {
+            delta = 5.0 / 60.0;   // 5 min
+        } else if (dist_to_interesting < 3.0) {
+            delta = 15.0 / 60.0;  // 15 min
+        } else {
+            delta = 1.0;          // 1 hour
+        }
+
+        // Don't overshoot next interesting point
+        delta = fmin(delta, dist_to_interesting + 0.1);
+
+        grid = realloc(grid, (num_periods + 1) * sizeof(AdaptivePeriod));
+        grid[num_periods].start = t;
+        grid[num_periods].duration = delta;
+        num_periods++;
+
+        t += delta;
+    }
+
+    free(points);
+    *num_periods_out = num_periods;
+    return grid;
+}
+```
+
+**Constraint adaptation for variable δ:**
+
+```
+// Clock dynamics with variable period duration
+d[t] = d[t-1] + duration[t] · x[t,DRIVE] - 11 · reset10[t]
+
+// Break detection: need 0.5h consecutive non-driving
+// With variable δ, a single coarse period might satisfy the break
+break30[t] = 1 iff:
+  (duration[t] ≥ 0.5 AND not_driving[t] = 1)
+  OR (consecutive non-driving time across periods ≥ 0.5h)
+
+// 10h reset detection: similar, need 10h consecutive OFF
+// A single 10h coarse period can satisfy this directly
+```
+
+**When to use adaptive:**
+- Chain of 3+ tasks spanning multiple days
+- Long-haul routes with overnight rests
+- Weekly planning horizons
+
+**When uniform is fine:**
+- Single task verification
+- Short chains (1-2 days)
+- Real-time tracking (solve frequently, short horizon)
+
+---
+
+#### Extension to Chain of Tasks
+
+For a fixed sequence of N tasks (FTL with known legs):
+
+**Option 1: Extended horizon**
+- Single model with H = sum of worst-case spans
+- Track task-specific completion variables: `arrived[t,k]`, `done[t,k]`
+- Constraint: `done[t,k] = 1` before `x[t,DRIVE] = 1` for task k+1 can start
+
+**Option 2: Iterative solving**
+- Solve task 1 → get end state → solve task 2 → ...
+- Faster but loses global optimality (local decisions may be suboptimal globally)
+- Good enough for heuristic verification if tasks are loosely coupled
+
+**Option 3: Hybrid**
+- Solve globally for "critical" portions (tight time windows)
+- Use heuristic + local verification for slack portions
+
+---
+
+#### Implementation Plan
+
+**Phase 1: Time-Indexed Single Task**
+- [ ] Define `HSVerifyProblem` struct (driver state, task, time window)
+- [ ] Build MIP model using Ralph API
+- [ ] Implement clock constraints (11h, 14h, 8h-break, 70h)
+- [ ] Implement reset detection (10h, 34h, 30-min)
+- [ ] Implement time window constraints (continuous first, recurring later)
+- [ ] Extract solution as `HSAction` sequence
+- [ ] Test against known scenarios (fresh driver, exhausted clocks, etc.)
+
+**Phase 2: Heuristic Comparison**
+- [ ] Run heuristic and MIP on same inputs
+- [ ] Compare span: heuristic_span vs optimal_span
+- [ ] Flag cases where heuristic_span > optimal_span × (1 + tolerance)
+- [ ] Analyze corner cases to improve heuristic
+
+**Phase 3: Chain Extension**
+- [ ] Implement iterative solving with state propagation
+- [ ] Implement global model for short chains (N ≤ 5)
+- [ ] Compare iterative vs global for optimality gap
+
+**Phase 4: Recurring Time Windows**
+- [ ] Extend time-indexed model to handle daily open/close
+- [ ] Test with realistic shipper appointment patterns
+
+---
+
 ### Future Extensions
 
 - **ELD Integration**: Parse Electronic Logging Device data to initialize state

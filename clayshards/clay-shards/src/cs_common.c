@@ -273,6 +273,11 @@ CS_EXPORT float cs_focused_y(void) { return tls_state.focused_y; }
 CS_EXPORT float cs_focused_w(void) { return tls_state.focused_w; }
 CS_EXPORT float cs_focused_h(void) { return tls_state.focused_h; }
 
+/**
+ * Returns pointer to the active text input buffer.
+ * WARNING: Pointer is only valid during the current frame.
+ * WASM callers must copy immediately (pointer invalidated by cs_frame_begin).
+ */
 CS_EXPORT const char* cs_focused_text(void) {
     if (tls_state.focused_id == 0 || !tls_state.active_text) return "";
     return tls_state.active_text;

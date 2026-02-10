@@ -6,9 +6,11 @@
 
 #include "lc_api.h"
 #include "lc_mmap.h"
+#include "sh_args.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <sys/time.h>
 
 /* ============================================================================
@@ -544,7 +546,8 @@ int lc_api_handle(LCAPIContext *ctx,
         }
 
         int status_code;
-        char *json = lc_api_search(ctx, query, atoi(limit_str), &status_code, &resp->body_len);
+        int limit = sh_parse_int(limit_str, 10, 1, 100);
+        char *json = lc_api_search(ctx, query, limit, &status_code, &resp->body_len);
         if (json) {
             resp->status_code = status_code;
             resp->body = (uint8_t *)json;
@@ -567,7 +570,8 @@ int lc_api_handle(LCAPIContext *ctx,
         }
 
         int status_code;
-        char *json = lc_api_autocomplete(ctx, query, atoi(limit_str), &status_code, &resp->body_len);
+        int limit = sh_parse_int(limit_str, 10, 1, 100);
+        char *json = lc_api_autocomplete(ctx, query, limit, &status_code, &resp->body_len);
         if (json) {
             resp->status_code = status_code;
             resp->body = (uint8_t *)json;
@@ -589,8 +593,12 @@ int lc_api_handle(LCAPIContext *ctx,
             return 0;
         }
 
-        double lat = atof(lat_str);
-        double lon = atof(lon_str);
+        double lat = sh_parse_double(lat_str, NAN, -90.0, 90.0);
+        double lon = sh_parse_double(lon_str, NAN, -180.0, 180.0);
+        if (isnan(lat) || isnan(lon)) {
+            set_error_response(resp, 400, "Invalid coordinates");
+            return 0;
+        }
 
         int status_code;
         char *json = lc_api_reverse(ctx, lat, lon, &status_code, &resp->body_len);

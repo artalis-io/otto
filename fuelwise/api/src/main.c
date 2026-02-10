@@ -31,6 +31,7 @@
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
+#include "sh_json.h"  /* For JSON building */
 
 /* ============================================================================
  * Configuration
@@ -162,77 +163,79 @@ static void handle_health(struct mg_connection *c, struct mg_http_message *hm) {
 /* GET /api/v1/stats - bypasses work queue */
 static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
     (void)hm;
-    char response[2048];
-    size_t pos = 0;
-    int n;
 
-    n = snprintf(response + pos, sizeof(response) - pos,
-        "{\n"
-        "  \"service\": \"fuelwise-api\",\n"
-        "  \"version\": \"%s\",\n",
-        fw_version());
-    if (n > 0 && (size_t)n < sizeof(response) - pos) pos += (size_t)n;
+    /* Build JSON response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "service");
+    sh_json_write_string(&jw, "fuelwise-api");
+    sh_json_write_key(&jw, "version");
+    sh_json_write_string(&jw, fw_version());
 
     /* Work queue stats */
+    sh_json_write_key(&jw, "work_queue");
+    sh_json_write_object_start(&jw);
     if (s_work_queue) {
         ShWorkQueueStats wq_stats;
         sh_workqueue_stats(s_work_queue, &wq_stats);
-        n = snprintf(response + pos, sizeof(response) - pos,
-            "  \"work_queue\": {\n"
-            "    \"enabled\": true,\n"
-            "    \"depth\": %zu,\n"
-            "    \"capacity\": %zu,\n"
-            "    \"pushed\": %llu,\n"
-            "    \"popped\": %llu,\n"
-            "    \"dropped\": %llu,\n"
-            "    \"expired\": %llu,\n"
-            "    \"timeout_sec\": %.1f\n"
-            "  },\n",
-            wq_stats.current_depth,
-            wq_stats.max_capacity,
-            (unsigned long long)wq_stats.total_pushed,
-            (unsigned long long)wq_stats.total_popped,
-            (unsigned long long)wq_stats.total_dropped,
-            (unsigned long long)wq_stats.total_expired,
-            wq_stats.timeout_sec);
+        sh_json_write_key(&jw, "enabled");
+        sh_json_write_bool(&jw, true);
+        sh_json_write_key(&jw, "depth");
+        sh_json_write_int(&jw, (int64_t)wq_stats.current_depth);
+        sh_json_write_key(&jw, "capacity");
+        sh_json_write_int(&jw, (int64_t)wq_stats.max_capacity);
+        sh_json_write_key(&jw, "pushed");
+        sh_json_write_int(&jw, (int64_t)wq_stats.total_pushed);
+        sh_json_write_key(&jw, "popped");
+        sh_json_write_int(&jw, (int64_t)wq_stats.total_popped);
+        sh_json_write_key(&jw, "dropped");
+        sh_json_write_int(&jw, (int64_t)wq_stats.total_dropped);
+        sh_json_write_key(&jw, "expired");
+        sh_json_write_int(&jw, (int64_t)wq_stats.total_expired);
+        sh_json_write_key(&jw, "timeout_sec");
+        sh_json_write_double(&jw, wq_stats.timeout_sec);
     } else {
-        n = snprintf(response + pos, sizeof(response) - pos,
-            "  \"work_queue\": {\n"
-            "    \"enabled\": false\n"
-            "  },\n");
+        sh_json_write_key(&jw, "enabled");
+        sh_json_write_bool(&jw, false);
     }
-    if (n > 0 && (size_t)n < sizeof(response) - pos) pos += (size_t)n;
+    sh_json_write_object_end(&jw);
 
     /* Rate limit stats */
+    sh_json_write_key(&jw, "rate_limit");
+    sh_json_write_object_start(&jw);
     if (s_rate_limiter) {
         ShRateLimitStats rl_stats;
         sh_ratelimit_stats(s_rate_limiter, &rl_stats);
-        n = snprintf(response + pos, sizeof(response) - pos,
-            "  \"rate_limit\": {\n"
-            "    \"enabled\": true,\n"
-            "    \"rps\": %.1f,\n"
-            "    \"burst\": %.1f,\n"
-            "    \"allowed\": %llu,\n"
-            "    \"denied\": %llu,\n"
-            "    \"active_entries\": %zu,\n"
-            "    \"evictions\": %zu\n"
-            "  }\n",
-            s_config.rate_limit_rps,
-            s_config.rate_limit_burst,
-            (unsigned long long)rl_stats.requests_allowed,
-            (unsigned long long)rl_stats.requests_denied,
-            rl_stats.active_entries,
-            rl_stats.evictions);
+        sh_json_write_key(&jw, "enabled");
+        sh_json_write_bool(&jw, true);
+        sh_json_write_key(&jw, "rps");
+        sh_json_write_double(&jw, s_config.rate_limit_rps);
+        sh_json_write_key(&jw, "burst");
+        sh_json_write_double(&jw, s_config.rate_limit_burst);
+        sh_json_write_key(&jw, "allowed");
+        sh_json_write_int(&jw, (int64_t)rl_stats.requests_allowed);
+        sh_json_write_key(&jw, "denied");
+        sh_json_write_int(&jw, (int64_t)rl_stats.requests_denied);
+        sh_json_write_key(&jw, "active_entries");
+        sh_json_write_int(&jw, (int64_t)rl_stats.active_entries);
+        sh_json_write_key(&jw, "evictions");
+        sh_json_write_int(&jw, (int64_t)rl_stats.evictions);
     } else {
-        n = snprintf(response + pos, sizeof(response) - pos,
-            "  \"rate_limit\": {\n"
-            "    \"enabled\": false\n"
-            "  }\n");
+        sh_json_write_key(&jw, "enabled");
+        sh_json_write_bool(&jw, false);
     }
-    if (n > 0 && (size_t)n < sizeof(response) - pos) pos += (size_t)n;
+    sh_json_write_object_end(&jw);
 
-    snprintf(response + pos, sizeof(response) - pos, "}\n");
-    send_json(c, response);
+    sh_json_write_object_end(&jw);
+
+    char *json = sh_json_buf_take(&jb);
+    send_json(c, json);
+    free(json);
 }
 
 /* Generic handler that uses work queue */
@@ -565,7 +568,7 @@ int main(int argc, char *argv[]) {
     mg_mgr_init(&mgr);
 
     /* Build listen address */
-    char listen_addr[128];
+    char listen_addr[SH_URL_MAX];
     snprintf(listen_addr, sizeof(listen_addr), "http://%s:%d",
         s_config.host[0] ? s_config.host : "0.0.0.0", s_config.port);
 

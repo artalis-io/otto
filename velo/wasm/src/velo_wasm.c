@@ -62,12 +62,12 @@ void wasm_graph_free(VLGraph* graph) {
 
 WASM_EXPORT
 uint32_t wasm_graph_node_count(const VLGraph* graph) {
-    return graph ? graph->node_count : 0;
+    return graph ? graph->num_nodes : 0;
 }
 
 WASM_EXPORT
 uint32_t wasm_graph_edge_count(const VLGraph* graph) {
-    return graph ? graph->edge_count : 0;
+    return graph ? graph->num_edges : 0;
 }
 
 // =============================================================================
@@ -114,7 +114,7 @@ WasmRoute* wasm_route(VLGraph* graph,
     vl_default_options(&opts);
     opts.profile = (VLProfile)profile;
     opts.weight = (mode == 1) ? VL_WEIGHT_DISTANCE : VL_WEIGHT_DURATION;
-    opts.geometry = 1;
+    opts.include_geometry = 1;
 
     VLRoute route;
     memset(&route, 0, sizeof(route));

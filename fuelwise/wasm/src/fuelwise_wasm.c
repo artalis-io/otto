@@ -93,7 +93,7 @@ int wasm_filter_stations(
     for (int i = 0; i < num_stations; i++) {
         stations[i].location.lat = stations_flat[i * 4 + 0];
         stations[i].location.lon = stations_flat[i * 4 + 1];
-        stations[i].price_per_gallon = stations_flat[i * 4 + 2];
+        stations[i].price = stations_flat[i * 4 + 2];
         stations[i].id = (int)stations_flat[i * 4 + 3];
         stations[i].name = NULL;
     }
@@ -123,7 +123,7 @@ int wasm_filter_stations(
         result_buffer[i * 4 + 0] = filtered[i].station_id;
         result_buffer[i * 4 + 1] = filtered[i].distance_from_start;
         result_buffer[i * 4 + 2] = filtered[i].perpendicular_distance;
-        result_buffer[i * 4 + 3] = filtered[i].price_per_gallon;
+        result_buffer[i * 4 + 3] = filtered[i].price;
     }
 
     fw_free_snapped_stations(filtered);
@@ -168,7 +168,7 @@ int wasm_solve_simple(
     problem.total_distance = total_distance;
     problem.tank_capacity = tank_capacity;
     problem.current_fuel = current_fuel;
-    problem.base_consumption_mpg = consumption_mpg;
+    problem.base_consumption = consumption_mpg;
     problem.minimum_fuel = minimum_fuel;
     problem.minimum_fuel_at_end = minimum_fuel;
     problem.num_stations = num_stations;
@@ -180,7 +180,7 @@ int wasm_solve_simple(
     for (int i = 0; i < num_stations; i++) {
         stations[i].station_id = (int)stations_flat[i * 3 + 0];
         stations[i].distance_from_start = stations_flat[i * 3 + 1];
-        stations[i].price_per_gallon = stations_flat[i * 3 + 2];
+        stations[i].price = stations_flat[i * 3 + 2];
         stations[i].perpendicular_distance = 0;
     }
     problem.stations = stations;
@@ -269,7 +269,7 @@ int wasm_solve_segments(
     for (int i = 0; i < num_stations; i++) {
         stations[i].station_id = (int)stations_flat[i * 3 + 0];
         stations[i].distance_from_start = stations_flat[i * 3 + 1];
-        stations[i].price_per_gallon = stations_flat[i * 3 + 2];
+        stations[i].price = stations_flat[i * 3 + 2];
         stations[i].perpendicular_distance = 0;
     }
     problem.stations = stations;
@@ -284,8 +284,8 @@ int wasm_solve_segments(
         }
         for (int i = 0; i < num_segments; i++) {
             segments[i].start_distance = segments_flat[i * 3 + 0];
-            segments[i].cargo_weight_lbs = segments_flat[i * 3 + 1];
-            segments[i].consumption_mpg = segments_flat[i * 3 + 2];
+            segments[i].cargo_weight = segments_flat[i * 3 + 1];
+            segments[i].consumption = segments_flat[i * 3 + 2];
         }
         problem.num_segments = num_segments;
         problem.segments = segments;
@@ -359,7 +359,7 @@ int wasm_optimize_route(
     for (int i = 0; i < num_stations; i++) {
         stations[i].location.lat = stations_flat[i * 4 + 0];
         stations[i].location.lon = stations_flat[i * 4 + 1];
-        stations[i].price_per_gallon = stations_flat[i * 4 + 2];
+        stations[i].price = stations_flat[i * 4 + 2];
         stations[i].id = (int)stations_flat[i * 4 + 3];
         stations[i].name = NULL;
     }
@@ -391,7 +391,7 @@ int wasm_optimize_route(
     problem.total_distance = route_dist;
     problem.tank_capacity = tank_capacity;
     problem.current_fuel = current_fuel;
-    problem.base_consumption_mpg = base_consumption_mpg;
+    problem.base_consumption = base_consumption_mpg;
     problem.minimum_fuel = minimum_fuel;
     problem.minimum_fuel_at_end = minimum_fuel;
     problem.num_stations = filtered_count;
@@ -407,8 +407,8 @@ int wasm_optimize_route(
         }
         for (int i = 0; i < num_segments; i++) {
             segments[i].start_distance = segments_flat[i * 3 + 0];
-            segments[i].cargo_weight_lbs = segments_flat[i * 3 + 1];
-            segments[i].consumption_mpg = segments_flat[i * 3 + 2];
+            segments[i].cargo_weight = segments_flat[i * 3 + 1];
+            segments[i].consumption = segments_flat[i * 3 + 2];
         }
         problem.num_segments = num_segments;
         problem.segments = segments;

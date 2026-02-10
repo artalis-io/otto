@@ -135,8 +135,26 @@ float cs_focused_y(void);
 float cs_focused_w(void);
 float cs_focused_h(void);
 
-/* Get focused input text (for cursor rendering) */
+/**
+ * Get focused input text (for cursor rendering).
+ *
+ * IMPORTANT: Pointer lifetime is limited to the current frame only.
+ * The pointer becomes invalid after cs_frame_begin() is called.
+ *
+ * In WASM contexts, JavaScript callers MUST copy the string data
+ * immediately (e.g., using UTF8ToString) rather than storing the
+ * pointer. The returned pointer references internal thread-local
+ * state that is reset each frame.
+ *
+ * @return Pointer to focused input text, or empty string if no focused input.
+ *         Valid only until next cs_frame_begin() call.
+ */
 const char* cs_focused_text(void);
+
+/**
+ * Get focused input text length.
+ * @return Length in bytes (not including null terminator).
+ */
 int cs_focused_text_len(void);
 
 /* ============================================================================

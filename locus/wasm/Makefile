@@ -16,7 +16,19 @@ INCLUDES = -I../include -I../../shared/include -I../../vendor/miniz
 
 # Source files
 LOCUS_SRC = $(wildcard ../src/*.c)
-SHARED_SRC = $(wildcard ../../shared/src/*.c)
+
+# Shared library sources (core only, no pthread/mongoose-dependent code)
+SHARED_SRC = ../../shared/src/sh_geo.c \
+             ../../shared/src/sh_protobuf.c \
+             ../../shared/src/sh_inflate.c \
+             ../../shared/src/sh_pbf.c \
+             ../../shared/src/sh_arena.c \
+             ../../shared/src/sh_pool.c \
+             ../../shared/src/sh_hashmap.c \
+             ../../shared/src/sh_heap.c \
+             ../../shared/src/sh_args.c \
+             ../../shared/src/sh_spatial_grid.c
+
 MINIZ_SRC = ../../vendor/miniz/miniz.c ../../vendor/miniz/miniz_tdef.c ../../vendor/miniz/miniz_tinfl.c
 WASM_SRC = src/locus_wasm.c
 

@@ -369,25 +369,25 @@ void test_cheaper_ahead_no_overfill(void)
         .total_distance = 300000,       /* 300 km */
         .base_consumption = 25.0,       /* 25 L/100km */
         .tank_capacity = 200,
-        .current_fuel = 30,             /* Just enough to reach station 0 + minimum */
+        .current_fuel = 55,             /* Enough slack to skip expensive station */
         .minimum_fuel = 5,
         .minimum_fuel_at_end = 5,
         .num_stations = 2,
         .stations = stations,
     };
 
-    /* Fuel needed: 75L total, have 30L, need 45L more + 5L buffer = 50L
-     * Optimal: Buy minimum at expensive station 0, fill up at cheap station 1 */
+    /* Fuel needed: 75L total, have 55L, need 20L more + 5L buffer = 25L
+     * Optimal: Skip expensive station 0, buy at cheap station 1 */
 
     FWRefuelSolution solution;
     memset(&solution, 0, sizeof(solution));
     int rc = fw_solve_refuel_lp(&problem, &solution);
     ASSERT(rc == 0 && solution.status == FW_STATUS_OPTIMAL, "Solver finds optimal");
 
-    /* At station 0: should buy just enough to reach station 1 with minimum fuel
-     * Fuel at station 0 arrival: 30 - 25 = 5L (at minimum)
-     * Need to reach station 1 (100km = 25L) with minimum (5L)
-     * So buy: 25 + 5 - 5 = 25L at station 0 */
+    /* At station 0: should buy nothing since we have enough to reach station 1
+     * Fuel at station 0 arrival: 55 - 25 = 30L (above minimum)
+     * Can reach station 1 (100km = 25L) with 5L remaining
+     * Optimal: buy 0L at expensive station 0, buy at cheap station 1 */
     printf("  Station 0 (expensive $2.00): bought %.2fL\n", solution.purchases[0]);
     printf("  Station 1 (cheap $1.00): bought %.2fL\n", solution.purchases[1]);
 

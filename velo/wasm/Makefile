@@ -19,8 +19,18 @@ VELO_SRC = $(wildcard ../src/*.c)
 MINIZ_SRC = ../../vendor/miniz/miniz.c ../../vendor/miniz/miniz_tdef.c ../../vendor/miniz/miniz_tinfl.c
 WASM_SRC = src/velo_wasm.c
 
+# Shared library sources needed by Velo
+SHARED_CORE_SRC = ../../shared/src/sh_geo.c \
+                  ../../shared/src/sh_protobuf.c \
+                  ../../shared/src/sh_inflate.c \
+                  ../../shared/src/sh_pbf.c \
+                  ../../shared/src/sh_arena.c \
+                  ../../shared/src/sh_pool.c \
+                  ../../shared/src/sh_hashmap.c \
+                  ../../shared/src/sh_heap.c
+
 # All source files
-ALL_SRC = $(WASM_SRC) $(VELO_SRC) $(MINIZ_SRC)
+ALL_SRC = $(WASM_SRC) $(VELO_SRC) $(SHARED_CORE_SRC) $(MINIZ_SRC)
 
 # Exported functions
 EXPORTS = _wasm_malloc,_wasm_free,_wasm_version
@@ -106,18 +116,9 @@ test: $(OUTPUT_JS)
 # API Demo Build (self-contained with embedded Monaco graph)
 # =============================================================================
 
-# Shared library sources (core only, no pthread-dependent code)
-SHARED_SRC = ../../shared/src/sh_geo.c \
-             ../../shared/src/sh_protobuf.c \
-             ../../shared/src/sh_inflate.c \
-             ../../shared/src/sh_pbf.c \
-             ../../shared/src/sh_arena.c \
-             ../../shared/src/sh_pool.c \
-             ../../shared/src/sh_hashmap.c \
-             ../../shared/src/sh_heap.c
-
+# API Demo uses the same shared sources as main build
 API_WASM_SRC = src/vl_wasm_api.c
-API_ALL_SRC = $(API_WASM_SRC) $(VELO_SRC) $(SHARED_SRC) $(MINIZ_SRC)
+API_ALL_SRC = $(API_WASM_SRC) $(VELO_SRC) $(SHARED_CORE_SRC) $(MINIZ_SRC)
 
 # Exported functions - API demo mode
 API_EXPORTS = _velo_api_init,_velo_api_free,_velo_api_ready
