@@ -844,6 +844,33 @@ static int select_pseudo_cost_with_priority(MIPSolver *solver, const double *sol
 }
 
 int select_branch_variable(MIPSolver *solver, const double *solution, int *branch_var) {
+    /* Try user-provided branching callback first */
+    if (solver->has_branch_callback && solver->branch_callback.select_branch_var) {
+        LPModel *model = solver->original_model;
+        int user_var = solver->branch_callback.select_branch_var(
+            solver->branch_callback.user_data,
+            solution,
+            model->num_vars,
+            solver->is_integer,
+            model->lb,
+            model->ub
+        );
+
+        /* If user returns valid variable index, use it */
+        if (user_var >= 0 && user_var < model->num_vars) {
+            /* Verify it's actually fractional */
+            if (solver->is_integer[user_var]) {
+                double val = solution[user_var];
+                double frac = val - floor(val);
+                if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
+                    *branch_var = user_var;
+                    return 0;
+                }
+            }
+        }
+        /* If user returns -1 or invalid variable, fall through to default */
+    }
+
     /* Find max priority among fractional variables */
     int max_prio = find_max_priority(solver, solution);
 

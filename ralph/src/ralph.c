@@ -58,6 +58,10 @@ struct RalphModel {
     RalphCutCallback cut_callback;
     int has_cut_callback;
 
+    /* Branch callback (stored until MIP solver is created) */
+    RalphBranchCallback branch_callback;
+    int has_branch_callback;
+
     /* Statistics */
     int iteration_count;
 };
@@ -460,6 +464,12 @@ int ralph_optimize(RalphModel *model) {
         if (model->has_cut_callback) {
             model->mip_solver->cut_callback = model->cut_callback;
             model->mip_solver->has_cut_callback = 1;
+        }
+
+        /* Pass branch callback to MIP solver */
+        if (model->has_branch_callback) {
+            model->mip_solver->branch_callback = model->branch_callback;
+            model->mip_solver->has_branch_callback = 1;
         }
 
         /* Solve */
@@ -870,6 +880,22 @@ void ralph_set_cut_callback(RalphModel *model, const RalphCutCallback *callback)
     } else {
         memset(&model->cut_callback, 0, sizeof(RalphCutCallback));
         model->has_cut_callback = 0;
+    }
+}
+
+/* ============================================================================
+ * Branching Callback
+ * ============================================================================ */
+
+void ralph_set_branch_callback(RalphModel *model, const RalphBranchCallback *callback) {
+    if (!model) return;
+
+    if (callback) {
+        model->branch_callback = *callback;
+        model->has_branch_callback = 1;
+    } else {
+        memset(&model->branch_callback, 0, sizeof(RalphBranchCallback));
+        model->has_branch_callback = 0;
     }
 }
 

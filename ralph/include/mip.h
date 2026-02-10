@@ -161,6 +161,10 @@ typedef struct {
     RalphCutCallback cut_callback;
     int has_cut_callback;
 
+    /* User-provided branching callback */
+    RalphBranchCallback branch_callback;
+    int has_branch_callback;
+
     /* Parameters */
     int max_nodes;
     double time_limit;
