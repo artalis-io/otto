@@ -1123,3 +1123,59 @@ int sh_json_write_array_end(ShJsonWriter *w) {
     w->needs_comma = 1;  /* After closing, next sibling needs comma */
     return jw_writes(w, "]");
 }
+
+/* ============================================================================
+ * JSON Buffer Helper Implementation
+ * ============================================================================ */
+
+void sh_json_buf_init(ShJsonBuf *jb) {
+    if (!jb) return;
+    jb->buf = NULL;
+    jb->len = 0;
+    jb->cap = 0;
+}
+
+void sh_json_buf_free(ShJsonBuf *jb) {
+    if (!jb) return;
+    free(jb->buf);
+    jb->buf = NULL;
+    jb->len = 0;
+    jb->cap = 0;
+}
+
+void sh_json_buf_reset(ShJsonBuf *jb) {
+    if (!jb) return;
+    jb->len = 0;
+    if (jb->buf) jb->buf[0] = '\0';
+}
+
+int sh_json_buf_write(void *ctx, const char *data, size_t len) {
+    ShJsonBuf *jb = (ShJsonBuf *)ctx;
+    if (!jb || !data) return -1;
+    if (len == 0) return 0;
+
+    /* Grow buffer if needed */
+    while (jb->len + len + 1 > jb->cap) {
+        size_t new_cap = jb->cap * 2;
+        if (new_cap < 1024) new_cap = 1024;
+        if (new_cap < jb->len + len + 1) new_cap = jb->len + len + 1;
+        char *new_buf = realloc(jb->buf, new_cap);
+        if (!new_buf) return -1;
+        jb->buf = new_buf;
+        jb->cap = new_cap;
+    }
+
+    memcpy(jb->buf + jb->len, data, len);
+    jb->len += len;
+    jb->buf[jb->len] = '\0';
+    return 0;
+}
+
+char *sh_json_buf_take(ShJsonBuf *jb) {
+    if (!jb || !jb->buf) return NULL;
+    char *result = jb->buf;
+    jb->buf = NULL;
+    jb->len = 0;
+    jb->cap = 0;
+    return result;
+}
