@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/time.h>
+#include <math.h>
 
 /* Shared library includes */
 #include "shared.h"
@@ -844,9 +845,16 @@ static void handle_reverse(struct mg_connection *c, struct mg_http_message *hm) 
         return;
     }
 
+    double lat_val = sh_parse_double(lat_str, NAN, -90.0, 90.0);
+    double lon_val = sh_parse_double(lon_str, NAN, -180.0, 180.0);
+    if (isnan(lat_val) || isnan(lon_val)) {
+        send_error_cors(c, hm, 400, "Invalid coordinates");
+        return;
+    }
+
     SHCoord coord;
-    coord.lat = atof(lat_str);
-    coord.lon = atof(lon_str);
+    coord.lat = lat_val;
+    coord.lon = lon_val;
 
     /* Use work queue if enabled */
     if (s_work_queue) {
