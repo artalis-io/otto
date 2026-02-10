@@ -12,6 +12,8 @@
 
 #include "fw_api.h"
 #include "fuelwise.h"
+#include "sh_json.h"
+#include "sh_arena.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,354 +28,178 @@ struct FWAPIContext {
 };
 
 /* ============================================================================
- * JSON Parsing Helpers
+ * JSON Parsing Helpers (using sh_json)
  * ============================================================================ */
 
-/* Skip whitespace */
-static const char* skip_ws(const char *s) {
-    while (*s && (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r')) s++;
-    return s;
-}
-
-/* Parse a double from JSON */
-static double parse_double(const char **p) {
-    const char *s = skip_ws(*p);
-    char *end;
-    double val = strtod(s, &end);
-    *p = end;
-    return val;
-}
-
-/* Parse an integer from JSON */
-static int parse_int(const char **p) {
-    const char *s = skip_ws(*p);
-    char *end;
-    int val = (int)strtol(s, &end, 10);
-    *p = end;
-    return val;
-}
-
-/* Find a key in a JSON object and return pointer to value.
- * Note: Key must be < 250 chars to fit in search buffer.
- */
-static const char* find_json_key(const char *json, const char *key) {
-    if (!json || !key) return NULL;
-
-    /* Validate key length to prevent truncation */
-    size_t key_len = strnlen(key, 256);
-    if (key_len >= 250) return NULL;
-
-    char search[256];
-    snprintf(search, sizeof(search), "\"%s\"", key);
-
-    const char *p = strstr(json, search);
-    if (!p) return NULL;
-
-    p += strlen(search);
-    p = skip_ws(p);
-    if (*p != ':') return NULL;
-    p++;
-    return skip_ws(p);
-}
-
 /* Parse a JSON array of points into a polyline */
-static int parse_polyline(const char *json_array, FWPolyline *polyline) {
+static int parse_polyline(const ShJsonValue *arr, FWPolyline *polyline) {
     memset(polyline, 0, sizeof(FWPolyline));
 
-    const char *p = skip_ws(json_array);
-    if (*p != '[') return -1;
-    p++;
+    if (!arr || sh_json_type(arr) != SH_JSON_ARRAY) return -1;
 
-    /* Count points - each point is [lat, lon] */
-    int count = 0;
-    int depth = 0;
-    const char *scan = p;
-    while (*scan) {
-        if (*scan == '[') {
-            if (depth == 0) count++;
-            depth++;
-        } else if (*scan == ']') {
-            depth--;
-            if (depth < 0) break;
-        }
-        scan++;
-    }
-
+    size_t count = sh_json_array_len(arr);
     if (count == 0) return -1;
 
-    /* Allocate points */
-    polyline->points = calloc((size_t)count, sizeof(FWCoord));
+    polyline->points = calloc(count, sizeof(FWCoord));
     if (!polyline->points) return -1;
-    polyline->count = count;
+    polyline->count = (int)count;
 
-    /* Parse each [lat, lon] pair */
-    for (int i = 0; i < count; i++) {
-        p = skip_ws(p);
-        if (*p != '[') break;
-        p++;  /* skip '[' */
+    for (size_t i = 0; i < count; i++) {
+        ShJsonValue *point = sh_json_array_get(arr, i);
+        if (!point || sh_json_type(point) != SH_JSON_ARRAY) continue;
 
-        polyline->points[i].lat = parse_double(&p);
-        p = skip_ws(p);
-        if (*p == ',') p++;
-        polyline->points[i].lon = parse_double(&p);
-
-        /* Find closing bracket */
-        while (*p && *p != ']') p++;
-        if (*p == ']') p++;
-        p = skip_ws(p);
-        if (*p == ',') p++;
+        /* Point is [lat, lon] */
+        polyline->points[i].lat = sh_json_as_double(sh_json_array_get(point, 0), 0.0);
+        polyline->points[i].lon = sh_json_as_double(sh_json_array_get(point, 1), 0.0);
     }
 
     return 0;
 }
 
 /* Parse a JSON array of route segments */
-static int parse_segments(const char *json_array, FWRouteSegment **segments, int *count) {
-    const char *p = skip_ws(json_array);
-    if (*p != '[') return -1;
+static int parse_segments(const ShJsonValue *arr, FWRouteSegment **segments, int *count) {
+    *segments = NULL;
+    *count = 0;
 
-    /* Count segments */
-    int seg_count = 0;
-    int depth = 0;
-    const char *scan = p + 1;
-    while (*scan) {
-        if (*scan == '{') {
-            if (depth == 0) seg_count++;
-            depth++;
-        } else if (*scan == '}') {
-            depth--;
-        } else if (*scan == ']' && depth == 0) {
-            break;
-        }
-        scan++;
-    }
+    if (!arr || sh_json_type(arr) != SH_JSON_ARRAY) return 0;
 
-    if (seg_count == 0) {
-        *segments = NULL;
-        *count = 0;
-        return 0;
-    }
+    size_t seg_count = sh_json_array_len(arr);
+    if (seg_count == 0) return 0;
 
-    /* Allocate segments */
-    *segments = calloc((size_t)seg_count, sizeof(FWRouteSegment));
+    *segments = calloc(seg_count, sizeof(FWRouteSegment));
     if (!*segments) return -1;
-    *count = seg_count;
+    *count = (int)seg_count;
 
-    /* Parse each segment */
-    p++;  /* skip '[' */
-    for (int i = 0; i < seg_count; i++) {
-        p = skip_ws(p);
-        if (*p != '{') break;
+    for (size_t i = 0; i < seg_count; i++) {
+        ShJsonValue *seg = sh_json_array_get(arr, i);
+        if (!seg) continue;
 
-        const char *obj_start = p;
-        const char *obj_end = strchr(p, '}');
-        if (!obj_end) break;
-
-        /* Parse segment fields */
-        const char *sp;
-        if ((sp = find_json_key(obj_start, "start_distance"))) {
-            (*segments)[i].start_distance = parse_double(&sp);
-        } else if ((sp = find_json_key(obj_start, "start"))) {
-            (*segments)[i].start_distance = parse_double(&sp);
+        /* Parse segment fields with fallback keys */
+        ShJsonValue *v;
+        if ((v = sh_json_get(seg, "start_distance")) || (v = sh_json_get(seg, "start"))) {
+            (*segments)[i].start_distance = sh_json_as_double(v, 0.0);
         }
-        if ((sp = find_json_key(obj_start, "cargo_weight"))) {
-            (*segments)[i].cargo_weight = parse_double(&sp);
-        } else if ((sp = find_json_key(obj_start, "weight"))) {
-            (*segments)[i].cargo_weight = parse_double(&sp);
+        if ((v = sh_json_get(seg, "cargo_weight")) || (v = sh_json_get(seg, "weight"))) {
+            (*segments)[i].cargo_weight = sh_json_as_double(v, 0.0);
         }
-        if ((sp = find_json_key(obj_start, "consumption"))) {
-            (*segments)[i].consumption = parse_double(&sp);
-        } else if ((sp = find_json_key(obj_start, "mpg"))) {
-            (*segments)[i].consumption = parse_double(&sp);
+        if ((v = sh_json_get(seg, "consumption")) || (v = sh_json_get(seg, "mpg"))) {
+            (*segments)[i].consumption = sh_json_as_double(v, 0.0);
         }
-
-        p = obj_end + 1;
-        p = skip_ws(p);
-        if (*p == ',') p++;
     }
 
     return 0;
 }
 
 /* Parse a JSON array of stations with lat/lon/price */
-static int parse_stations_geo(const char *json_array, FWStation **stations, int *count) {
-    const char *p = skip_ws(json_array);
-    if (*p != '[') return -1;
+static int parse_stations_geo(const ShJsonValue *arr, FWStation **stations, int *count) {
+    *stations = NULL;
+    *count = 0;
 
-    /* Count stations */
-    int station_count = 0;
-    int depth = 0;
-    const char *scan = p + 1;
-    while (*scan) {
-        if (*scan == '{') {
-            if (depth == 0) station_count++;
-            depth++;
-        } else if (*scan == '}') {
-            depth--;
-        } else if (*scan == ']' && depth == 0) {
-            break;
-        }
-        scan++;
-    }
+    if (!arr || sh_json_type(arr) != SH_JSON_ARRAY) return -1;
 
-    if (station_count == 0) {
-        *stations = NULL;
-        *count = 0;
-        return 0;
-    }
+    size_t station_count = sh_json_array_len(arr);
+    if (station_count == 0) return 0;
 
-    /* Allocate stations */
-    *stations = calloc((size_t)station_count, sizeof(FWStation));
+    *stations = calloc(station_count, sizeof(FWStation));
     if (!*stations) return -1;
-    *count = station_count;
+    *count = (int)station_count;
 
-    /* Parse each station */
-    p++;  /* skip '[' */
-    for (int i = 0; i < station_count; i++) {
-        p = skip_ws(p);
-        if (*p != '{') break;
+    for (size_t i = 0; i < station_count; i++) {
+        ShJsonValue *st = sh_json_array_get(arr, i);
+        if (!st) continue;
 
-        const char *obj_start = p;
-        const char *obj_end = strchr(p, '}');
-        if (!obj_end) break;
-
-        /* Parse station fields */
-        const char *sp;
-        if ((sp = find_json_key(obj_start, "id"))) {
-            (*stations)[i].id = parse_int(&sp);
+        ShJsonValue *v;
+        if ((v = sh_json_get(st, "id"))) {
+            (*stations)[i].id = sh_json_as_int(v, (int)(i + 1));
         } else {
-            (*stations)[i].id = i + 1;
+            (*stations)[i].id = (int)(i + 1);
         }
-        if ((sp = find_json_key(obj_start, "lat"))) {
-            (*stations)[i].location.lat = parse_double(&sp);
-        }
-        if ((sp = find_json_key(obj_start, "lon"))) {
-            (*stations)[i].location.lon = parse_double(&sp);
-        }
-        if ((sp = find_json_key(obj_start, "price"))) {
-            (*stations)[i].price = parse_double(&sp);
-        } else if ((sp = find_json_key(obj_start, "price"))) {
-            (*stations)[i].price = parse_double(&sp);
-        }
+        (*stations)[i].location.lat = sh_json_as_double(sh_json_get(st, "lat"), 0.0);
+        (*stations)[i].location.lon = sh_json_as_double(sh_json_get(st, "lon"), 0.0);
+        (*stations)[i].price = sh_json_as_double(sh_json_get(st, "price"), 0.0);
         (*stations)[i].name = NULL;
+    }
 
-        p = obj_end + 1;
-        p = skip_ws(p);
-        if (*p == ',') p++;
+    return 0;
+}
+
+/* Parse snapped stations for solve request */
+static int parse_snapped_stations(const ShJsonValue *arr, FWSnappedStation **stations, int *count) {
+    *stations = NULL;
+    *count = 0;
+
+    if (!arr || sh_json_type(arr) != SH_JSON_ARRAY) return -1;
+
+    size_t station_count = sh_json_array_len(arr);
+    if (station_count == 0) return -1;
+
+    *stations = calloc(station_count, sizeof(FWSnappedStation));
+    if (!*stations) return -1;
+    *count = (int)station_count;
+
+    for (size_t i = 0; i < station_count; i++) {
+        ShJsonValue *st = sh_json_array_get(arr, i);
+        if (!st) continue;
+
+        ShJsonValue *v;
+        if ((v = sh_json_get(st, "station_id")) || (v = sh_json_get(st, "id"))) {
+            (*stations)[i].station_id = sh_json_as_int(v, 0);
+        }
+        if ((v = sh_json_get(st, "distance_from_start")) || (v = sh_json_get(st, "distance"))) {
+            (*stations)[i].distance_from_start = sh_json_as_double(v, 0.0);
+        }
+        (*stations)[i].price = sh_json_as_double(sh_json_get(st, "price"), 0.0);
     }
 
     return 0;
 }
 
 /* Parse a solve request from JSON */
-static int parse_solve_request(const char *json, FWRefuelProblem *problem) {
+static int parse_solve_request(const ShJsonValue *root, FWRefuelProblem *problem) {
     memset(problem, 0, sizeof(FWRefuelProblem));
 
-    const char *p;
+    if (!root || sh_json_type(root) != SH_JSON_OBJECT) return -1;
 
     /* Parse scalar fields */
-    if ((p = find_json_key(json, "total_distance"))) {
-        problem->total_distance = parse_double(&p);
+    problem->total_distance = sh_json_as_double(sh_json_get(root, "total_distance"), 0.0);
+    problem->tank_capacity = sh_json_as_double(sh_json_get(root, "tank_capacity"), 0.0);
+    problem->current_fuel = sh_json_as_double(sh_json_get(root, "current_fuel"), 0.0);
+
+    ShJsonValue *v;
+    if ((v = sh_json_get(root, "consumption")) || (v = sh_json_get(root, "consumption_mpg"))) {
+        problem->base_consumption = sh_json_as_double(v, 0.0);
     }
-    if ((p = find_json_key(json, "tank_capacity"))) {
-        problem->tank_capacity = parse_double(&p);
-    }
-    if ((p = find_json_key(json, "current_fuel"))) {
-        problem->current_fuel = parse_double(&p);
-    }
-    if ((p = find_json_key(json, "consumption"))) {
-        problem->base_consumption = parse_double(&p);
-    } else if ((p = find_json_key(json, "consumption_mpg"))) {
-        problem->base_consumption = parse_double(&p);
-    }
-    if ((p = find_json_key(json, "minimum_fuel"))) {
-        problem->minimum_fuel = parse_double(&p);
-    }
-    if ((p = find_json_key(json, "minimum_fuel_at_end"))) {
-        problem->minimum_fuel_at_end = parse_double(&p);
+
+    problem->minimum_fuel = sh_json_as_double(sh_json_get(root, "minimum_fuel"), 0.0);
+
+    if ((v = sh_json_get(root, "minimum_fuel_at_end"))) {
+        problem->minimum_fuel_at_end = sh_json_as_double(v, problem->minimum_fuel);
     } else {
         problem->minimum_fuel_at_end = problem->minimum_fuel;
     }
-    if ((p = find_json_key(json, "min_purchase"))) {
-        problem->min_purchase = parse_double(&p);
-    }
-    if ((p = find_json_key(json, "stop_cost"))) {
-        problem->stop_cost = parse_double(&p);
-    }
 
-    /* Parse segments array (optional - for variable consumption) */
-    p = find_json_key(json, "segments");
-    if (p && *p == '[') {
+    problem->min_purchase = sh_json_as_double(sh_json_get(root, "min_purchase"), 0.0);
+    problem->stop_cost = sh_json_as_double(sh_json_get(root, "stop_cost"), 0.0);
+
+    /* Parse segments array (optional) */
+    ShJsonValue *segments_arr = sh_json_get(root, "segments");
+    if (segments_arr && sh_json_type(segments_arr) == SH_JSON_ARRAY) {
         FWRouteSegment *segments = NULL;
         int num_segments = 0;
-        if (parse_segments(p, &segments, &num_segments) == 0 && num_segments > 0) {
+        if (parse_segments(segments_arr, &segments, &num_segments) == 0 && num_segments > 0) {
             problem->segments = segments;
             problem->num_segments = num_segments;
         }
     }
 
-    /* Parse stations array */
-    p = find_json_key(json, "stations");
-    if (!p || *p != '[') {
-        return -1;  /* stations required */
-    }
-
-    /* Count stations */
-    int count = 0;
-    const char *scan = p + 1;
-    int depth = 0;
-    while (*scan) {
-        if (*scan == '{') {
-            if (depth == 0) count++;
-            depth++;
-        } else if (*scan == '}') {
-            depth--;
-        } else if (*scan == ']' && depth == 0) {
-            break;
-        }
-        scan++;
-    }
-
-    if (count == 0) {
+    /* Parse stations array (required) */
+    ShJsonValue *stations_arr = sh_json_get(root, "stations");
+    if (!stations_arr || sh_json_type(stations_arr) != SH_JSON_ARRAY) {
         return -1;
     }
 
-    /* Allocate stations */
-    problem->stations = calloc((size_t)count, sizeof(FWSnappedStation));
-    if (!problem->stations) return -1;
-    problem->num_stations = count;
-
-    /* Parse each station */
-    p++;  /* skip '[' */
-    for (int i = 0; i < count; i++) {
-        p = skip_ws(p);
-        if (*p != '{') break;
-
-        const char *obj_start = p;
-        const char *obj_end = strchr(p, '}');
-        if (!obj_end) break;
-
-        /* Parse station fields */
-        const char *sp;
-        if ((sp = find_json_key(obj_start, "station_id"))) {
-            problem->stations[i].station_id = parse_int(&sp);
-        } else if ((sp = find_json_key(obj_start, "id"))) {
-            problem->stations[i].station_id = parse_int(&sp);
-        }
-        if ((sp = find_json_key(obj_start, "distance_from_start"))) {
-            problem->stations[i].distance_from_start = parse_double(&sp);
-        } else if ((sp = find_json_key(obj_start, "distance"))) {
-            problem->stations[i].distance_from_start = parse_double(&sp);
-        }
-        if ((sp = find_json_key(obj_start, "price"))) {
-            problem->stations[i].price = parse_double(&sp);
-        } else if ((sp = find_json_key(obj_start, "price"))) {
-            problem->stations[i].price = parse_double(&sp);
-        }
-
-        p = obj_end + 1;
-        p = skip_ws(p);
-        if (*p == ',') p++;
+    if (parse_snapped_stations(stations_arr, &problem->stations, &problem->num_stations) != 0) {
+        return -1;
     }
 
     return 0;
@@ -390,15 +216,37 @@ static void free_problem(FWRefuelProblem *problem) {
  * ============================================================================ */
 
 /* Process a solve request - returns malloc'd response string */
-static char *process_solve(const char *body, int *status_code) {
+static char *process_solve(const char *body, size_t body_len, int *status_code) {
     *status_code = 200;
 
-    /* Parse request body */
+    /* Create arena for JSON parsing */
+    SHArena *arena = sh_arena_create(body_len * 4 + 4096);
+    if (!arena) {
+        *status_code = 500;
+        return strdup("{\"error\": \"Memory allocation failed\"}\n");
+    }
+
+    /* Parse JSON */
+    ShJsonValue *root = NULL;
+    ShJsonStatus json_status = sh_json_parse(body, body_len, arena, &root);
+    if (json_status != SH_JSON_OK) {
+        sh_arena_free(arena);
+        *status_code = 400;
+        char *resp = malloc(256);
+        if (resp) snprintf(resp, 256, "{\"error\": \"JSON parse error: %s\"}\n",
+                          sh_json_status_str(json_status));
+        return resp;
+    }
+
+    /* Parse request */
     FWRefuelProblem problem;
-    if (parse_solve_request(body, &problem) != 0) {
+    if (parse_solve_request(root, &problem) != 0) {
+        sh_arena_free(arena);
         *status_code = 400;
         return strdup("{\"error\": \"Invalid request format\"}\n");
     }
+
+    sh_arena_free(arena);  /* Done with JSON, problem has copies */
 
     /* Validate problem */
     char error_msg[256];
@@ -430,76 +278,81 @@ static char *process_solve(const char *body, int *status_code) {
         return resp;
     }
 
-    /* Build response */
-    size_t per_station = 256;
-    size_t base_size = 2048;
-    if (problem.num_stations < 0 ||
-        (size_t)problem.num_stations > (SIZE_MAX - base_size) / per_station) {
-        *status_code = 500;
-        fw_free_solution(&solution);
-        free_problem(&problem);
-        return strdup("{\"error\": \"Too many stations for response buffer\"}\n");
-    }
-    size_t buf_size = base_size + (size_t)problem.num_stations * per_station;
-    char *response = malloc(buf_size);
-    if (!response) {
-        *status_code = 500;
-        fw_free_solution(&solution);
-        free_problem(&problem);
-        return strdup("{\"error\": \"Memory allocation failed\"}\n");
-    }
+    /* Build response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    size_t pos = 0;
-    int n = snprintf(response + pos, buf_size - pos,
-        "{\n"
-        "  \"status\": \"%s\",\n"
-        "  \"num_stops\": %d,\n"
-        "  \"total_cost\": %.2f,\n"
-        "  \"gross_cost\": %.2f,\n"
-        "  \"remaining_fuel\": %.2f,\n"
-        "  \"stops\": [",
-        fw_status_string(solution.status),
-        solution.num_stops,
-        solution.total_cost,
-        solution.gross_cost,
-        solution.remaining_fuel);
-    if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
-    int first = 1;
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "status");
+    sh_json_write_string(&jw, fw_status_string(solution.status));
+    sh_json_write_key(&jw, "num_stops");
+    sh_json_write_int(&jw, solution.num_stops);
+    sh_json_write_key(&jw, "total_cost");
+    sh_json_write_double(&jw, solution.total_cost);
+    sh_json_write_key(&jw, "gross_cost");
+    sh_json_write_double(&jw, solution.gross_cost);
+    sh_json_write_key(&jw, "remaining_fuel");
+    sh_json_write_double(&jw, solution.remaining_fuel);
+
+    sh_json_write_key(&jw, "stops");
+    sh_json_write_array_start(&jw);
     for (int i = 0; i < problem.num_stations; i++) {
         if (solution.purchases[i] > 0.001) {
-            if (!first) {
-                n = snprintf(response + pos, buf_size - pos, ",");
-                if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
-            }
-            first = 0;
-            n = snprintf(response + pos, buf_size - pos,
-                "\n    {"
-                "\"station_id\": %d, "
-                "\"gallons\": %.2f, "
-                "\"cost\": %.2f"
-                "}",
-                problem.stations[i].station_id,
-                solution.purchases[i],
-                solution.purchases[i] * problem.stations[i].price);
-            if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+            sh_json_write_object_start(&jw);
+            sh_json_write_key(&jw, "station_id");
+            sh_json_write_int(&jw, problem.stations[i].station_id);
+            sh_json_write_key(&jw, "gallons");
+            sh_json_write_double(&jw, solution.purchases[i]);
+            sh_json_write_key(&jw, "cost");
+            sh_json_write_double(&jw, solution.purchases[i] * problem.stations[i].price);
+            sh_json_write_object_end(&jw);
         }
     }
-
-    snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    sh_json_write_array_end(&jw);
+    sh_json_write_object_end(&jw);
 
     fw_free_solution(&solution);
     free_problem(&problem);
-    return response;
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        *status_code = 500;
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
 }
 
 /* Process a filter request - returns malloc'd response string */
-static char *process_filter(const char *body, int *status_code) {
+static char *process_filter(const char *body, size_t body_len, int *status_code) {
     *status_code = 200;
 
+    /* Create arena for JSON parsing */
+    SHArena *arena = sh_arena_create(body_len * 4 + 4096);
+    if (!arena) {
+        *status_code = 500;
+        return strdup("{\"error\": \"Memory allocation failed\"}\n");
+    }
+
+    /* Parse JSON */
+    ShJsonValue *root = NULL;
+    ShJsonStatus json_status = sh_json_parse(body, body_len, arena, &root);
+    if (json_status != SH_JSON_OK) {
+        sh_arena_free(arena);
+        *status_code = 400;
+        char *resp = malloc(256);
+        if (resp) snprintf(resp, 256, "{\"error\": \"JSON parse error: %s\"}\n",
+                          sh_json_status_str(json_status));
+        return resp;
+    }
+
     /* Parse stations array */
-    const char *stations_json = find_json_key(body, "stations");
+    ShJsonValue *stations_json = sh_json_get(root, "stations");
     if (!stations_json) {
+        sh_arena_free(arena);
         *status_code = 400;
         return strdup("{\"error\": \"Missing 'stations' array\"}\n");
     }
@@ -507,14 +360,16 @@ static char *process_filter(const char *body, int *status_code) {
     FWStation *stations = NULL;
     int num_stations = 0;
     if (parse_stations_geo(stations_json, &stations, &num_stations) != 0) {
+        sh_arena_free(arena);
         *status_code = 400;
         return strdup("{\"error\": \"Invalid stations format\"}\n");
     }
 
     /* Parse route polyline */
-    const char *route_json = find_json_key(body, "route");
+    ShJsonValue *route_json = sh_json_get(root, "route");
     if (!route_json) {
         free(stations);
+        sh_arena_free(arena);
         *status_code = 400;
         return strdup("{\"error\": \"Missing 'route' array\"}\n");
     }
@@ -522,16 +377,15 @@ static char *process_filter(const char *body, int *status_code) {
     FWPolyline route;
     if (parse_polyline(route_json, &route) != 0) {
         free(stations);
+        sh_arena_free(arena);
         *status_code = 400;
         return strdup("{\"error\": \"Invalid route format\"}\n");
     }
 
     /* Parse max_distance (default 5 miles) */
-    double max_distance = 5.0;
-    const char *p;
-    if ((p = find_json_key(body, "max_distance"))) {
-        max_distance = parse_double(&p);
-    }
+    double max_distance = sh_json_as_double(sh_json_get(root, "max_distance"), 5.0);
+
+    sh_arena_free(arena);  /* Done with JSON */
 
     /* Filter stations */
     FWSnappedStation *filtered = NULL;
@@ -547,66 +401,77 @@ static char *process_filter(const char *body, int *status_code) {
         return strdup("{\"error\": \"Filter operation failed\"}\n");
     }
 
-    /* Build response */
-    size_t per_station = 256;
-    size_t base_size = 1024;
-    if (filtered_count < 0 ||
-        (size_t)filtered_count > (SIZE_MAX - base_size) / per_station) {
-        fw_free_snapped_stations(filtered);
-        *status_code = 500;
-        return strdup("{\"error\": \"Too many stations for response buffer\"}\n");
+    /* Build response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "count");
+    sh_json_write_int(&jw, filtered_count);
+
+    sh_json_write_key(&jw, "stations");
+    sh_json_write_array_start(&jw);
+    for (int i = 0; i < filtered_count; i++) {
+        sh_json_write_object_start(&jw);
+        sh_json_write_key(&jw, "station_id");
+        sh_json_write_int(&jw, filtered[i].station_id);
+        sh_json_write_key(&jw, "distance_from_start");
+        sh_json_write_double(&jw, filtered[i].distance_from_start);
+        sh_json_write_key(&jw, "perpendicular_distance");
+        sh_json_write_double(&jw, filtered[i].perpendicular_distance);
+        sh_json_write_key(&jw, "price");
+        sh_json_write_double(&jw, filtered[i].price);
+        sh_json_write_key(&jw, "snap_point");
+        sh_json_write_array_start(&jw);
+        sh_json_write_double(&jw, filtered[i].snap_point.lat);
+        sh_json_write_double(&jw, filtered[i].snap_point.lon);
+        sh_json_write_array_end(&jw);
+        sh_json_write_object_end(&jw);
     }
-    size_t buf_size = base_size + (size_t)filtered_count * per_station;
-    char *response = malloc(buf_size);
-    if (!response) {
-        fw_free_snapped_stations(filtered);
+    sh_json_write_array_end(&jw);
+    sh_json_write_object_end(&jw);
+
+    fw_free_snapped_stations(filtered);
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        *status_code = 500;
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
+}
+
+/* Process an optimize request - returns malloc'd response string */
+static char *process_optimize(const char *body, size_t body_len, int *status_code) {
+    *status_code = 200;
+
+    /* Create arena for JSON parsing */
+    SHArena *arena = sh_arena_create(body_len * 4 + 4096);
+    if (!arena) {
         *status_code = 500;
         return strdup("{\"error\": \"Memory allocation failed\"}\n");
     }
 
-    size_t pos = 0;
-    int n = snprintf(response + pos, buf_size - pos,
-        "{\n"
-        "  \"count\": %d,\n"
-        "  \"stations\": [",
-        filtered_count);
-    if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
-
-    for (int i = 0; i < filtered_count; i++) {
-        if (i > 0) {
-            n = snprintf(response + pos, buf_size - pos, ",");
-            if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
-        }
-        n = snprintf(response + pos, buf_size - pos,
-            "\n    {"
-            "\"station_id\": %d, "
-            "\"distance_from_start\": %.2f, "
-            "\"perpendicular_distance\": %.3f, "
-            "\"price\": %.3f, "
-            "\"snap_point\": [%.6f, %.6f]"
-            "}",
-            filtered[i].station_id,
-            filtered[i].distance_from_start,
-            filtered[i].perpendicular_distance,
-            filtered[i].price,
-            filtered[i].snap_point.lat,
-            filtered[i].snap_point.lon);
-        if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+    /* Parse JSON */
+    ShJsonValue *root = NULL;
+    ShJsonStatus json_status = sh_json_parse(body, body_len, arena, &root);
+    if (json_status != SH_JSON_OK) {
+        sh_arena_free(arena);
+        *status_code = 400;
+        char *resp = malloc(256);
+        if (resp) snprintf(resp, 256, "{\"error\": \"JSON parse error: %s\"}\n",
+                          sh_json_status_str(json_status));
+        return resp;
     }
 
-    snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
-
-    fw_free_snapped_stations(filtered);
-    return response;
-}
-
-/* Process an optimize request - returns malloc'd response string */
-static char *process_optimize(const char *body, int *status_code) {
-    *status_code = 200;
-
     /* Parse stations array */
-    const char *stations_json = find_json_key(body, "stations");
+    ShJsonValue *stations_json = sh_json_get(root, "stations");
     if (!stations_json) {
+        sh_arena_free(arena);
         *status_code = 400;
         return strdup("{\"error\": \"Missing 'stations' array\"}\n");
     }
@@ -614,14 +479,16 @@ static char *process_optimize(const char *body, int *status_code) {
     FWStation *stations = NULL;
     int num_stations = 0;
     if (parse_stations_geo(stations_json, &stations, &num_stations) != 0) {
+        sh_arena_free(arena);
         *status_code = 400;
         return strdup("{\"error\": \"Invalid stations format\"}\n");
     }
 
     /* Parse route polyline */
-    const char *route_json = find_json_key(body, "route");
+    ShJsonValue *route_json = sh_json_get(root, "route");
     if (!route_json) {
         free(stations);
+        sh_arena_free(arena);
         *status_code = 400;
         return strdup("{\"error\": \"Missing 'route' array\"}\n");
     }
@@ -629,55 +496,36 @@ static char *process_optimize(const char *body, int *status_code) {
     FWPolyline route;
     if (parse_polyline(route_json, &route) != 0) {
         free(stations);
+        sh_arena_free(arena);
         *status_code = 400;
         return strdup("{\"error\": \"Invalid route format\"}\n");
     }
 
-    /* Parse config */
-    const char *p;
-    double tank_capacity = 100.0;
-    double current_fuel = 50.0;
-    double consumption = 6.5;
-    double min_fuel = 25.0;
-    double max_distance = 5.0;
-    double min_purchase = 0.0;
-    double stop_cost = 0.0;
+    /* Parse config with defaults */
+    double tank_capacity = sh_json_as_double(sh_json_get(root, "tank_capacity"), 100.0);
+    double current_fuel = sh_json_as_double(sh_json_get(root, "current_fuel"), 50.0);
+    double min_fuel = sh_json_as_double(sh_json_get(root, "minimum_fuel"), 25.0);
+    double max_distance = sh_json_as_double(sh_json_get(root, "max_distance"), 5.0);
+    double min_purchase = sh_json_as_double(sh_json_get(root, "min_purchase"), 0.0);
+    double stop_cost = sh_json_as_double(sh_json_get(root, "stop_cost"), 0.0);
+    double remaining_fuel_value = sh_json_as_double(sh_json_get(root, "remaining_fuel_value"), 0.0);
 
-    if ((p = find_json_key(body, "tank_capacity"))) {
-        tank_capacity = parse_double(&p);
-    }
-    if ((p = find_json_key(body, "current_fuel"))) {
-        current_fuel = parse_double(&p);
-    }
-    if ((p = find_json_key(body, "consumption"))) {
-        consumption = parse_double(&p);
-    } else if ((p = find_json_key(body, "consumption_mpg"))) {
-        consumption = parse_double(&p);
-    }
-    if ((p = find_json_key(body, "minimum_fuel"))) {
-        min_fuel = parse_double(&p);
-    }
-    if ((p = find_json_key(body, "max_distance"))) {
-        max_distance = parse_double(&p);
-    }
-    if ((p = find_json_key(body, "min_purchase"))) {
-        min_purchase = parse_double(&p);
-    }
-    if ((p = find_json_key(body, "stop_cost"))) {
-        stop_cost = parse_double(&p);
-    }
-    double remaining_fuel_value = 0.0;
-    if ((p = find_json_key(body, "remaining_fuel_value"))) {
-        remaining_fuel_value = parse_double(&p);
+    /* Consumption with fallback key */
+    double consumption = 6.5;
+    ShJsonValue *cons_v;
+    if ((cons_v = sh_json_get(root, "consumption")) || (cons_v = sh_json_get(root, "consumption_mpg"))) {
+        consumption = sh_json_as_double(cons_v, 6.5);
     }
 
     /* Parse segments (optional) */
     FWRouteSegment *segments = NULL;
     int num_segments = 0;
-    p = find_json_key(body, "segments");
-    if (p && *p == '[') {
-        parse_segments(p, &segments, &num_segments);
+    ShJsonValue *segments_json = sh_json_get(root, "segments");
+    if (segments_json && sh_json_type(segments_json) == SH_JSON_ARRAY) {
+        parse_segments(segments_json, &segments, &num_segments);
     }
+
+    sh_arena_free(arena);  /* Done with JSON */
 
     /* Filter stations to route */
     FWSnappedStation *filtered = NULL;
@@ -749,113 +597,124 @@ static char *process_optimize(const char *body, int *status_code) {
         return resp;
     }
 
-    /* Build response */
-    size_t per_station = 256;
-    size_t base_size = 2048;
-    if (filtered_count < 0 ||
-        (size_t)filtered_count > (SIZE_MAX - base_size) / per_station) {
-        fw_free_snapped_stations(filtered);
-        fw_free_solution(&solution);
-        free(segments);
-        *status_code = 500;
-        return strdup("{\"error\": \"Too many stations for response buffer\"}\n");
-    }
-    size_t buf_size = base_size + (size_t)filtered_count * per_station;
-    char *response = malloc(buf_size);
-    if (!response) {
-        fw_free_snapped_stations(filtered);
-        fw_free_solution(&solution);
-        free(segments);
-        *status_code = 500;
-        return strdup("{\"error\": \"Memory allocation failed\"}\n");
-    }
+    /* Build response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    size_t pos = 0;
-    int n = snprintf(response + pos, buf_size - pos,
-        "{\n"
-        "  \"status\": \"%s\",\n"
-        "  \"route_distance\": %.2f,\n"
-        "  \"stations_filtered\": %d,\n"
-        "  \"num_stops\": %d,\n"
-        "  \"total_cost\": %.2f,\n"
-        "  \"gross_cost\": %.2f,\n"
-        "  \"remaining_fuel\": %.2f,\n"
-        "  \"stops\": [",
-        fw_status_string(solution.status),
-        problem.total_distance,
-        filtered_count,
-        solution.num_stops,
-        solution.total_cost,
-        solution.gross_cost,
-        solution.remaining_fuel);
-    if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
-    int first = 1;
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "status");
+    sh_json_write_string(&jw, fw_status_string(solution.status));
+    sh_json_write_key(&jw, "route_distance");
+    sh_json_write_double(&jw, problem.total_distance);
+    sh_json_write_key(&jw, "stations_filtered");
+    sh_json_write_int(&jw, filtered_count);
+    sh_json_write_key(&jw, "num_stops");
+    sh_json_write_int(&jw, solution.num_stops);
+    sh_json_write_key(&jw, "total_cost");
+    sh_json_write_double(&jw, solution.total_cost);
+    sh_json_write_key(&jw, "gross_cost");
+    sh_json_write_double(&jw, solution.gross_cost);
+    sh_json_write_key(&jw, "remaining_fuel");
+    sh_json_write_double(&jw, solution.remaining_fuel);
+
+    sh_json_write_key(&jw, "stops");
+    sh_json_write_array_start(&jw);
     for (int i = 0; i < filtered_count; i++) {
         if (solution.purchases[i] > 0.001) {
-            if (!first) {
-                n = snprintf(response + pos, buf_size - pos, ",");
-                if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
-            }
-            first = 0;
-            n = snprintf(response + pos, buf_size - pos,
-                "\n    {"
-                "\"station_id\": %d, "
-                "\"distance_from_start\": %.2f, "
-                "\"gallons\": %.2f, "
-                "\"cost\": %.2f"
-                "}",
-                filtered[i].station_id,
-                filtered[i].distance_from_start,
-                solution.purchases[i],
-                solution.purchases[i] * filtered[i].price);
-            if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+            sh_json_write_object_start(&jw);
+            sh_json_write_key(&jw, "station_id");
+            sh_json_write_int(&jw, filtered[i].station_id);
+            sh_json_write_key(&jw, "distance_from_start");
+            sh_json_write_double(&jw, filtered[i].distance_from_start);
+            sh_json_write_key(&jw, "gallons");
+            sh_json_write_double(&jw, solution.purchases[i]);
+            sh_json_write_key(&jw, "cost");
+            sh_json_write_double(&jw, solution.purchases[i] * filtered[i].price);
+            sh_json_write_object_end(&jw);
         }
     }
-
-    snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    sh_json_write_array_end(&jw);
+    sh_json_write_object_end(&jw);
 
     fw_free_snapped_stations(filtered);
     fw_free_solution(&solution);
     free(segments);
-    return response;
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        *status_code = 500;
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
 }
 
 /* Process health request */
 static char *process_health(int *status_code) {
     *status_code = 200;
-    char *response = malloc(256);
-    if (!response) return strdup("{\"error\": \"Memory allocation failed\"}\n");
 
-    snprintf(response, 256,
-        "{\n"
-        "  \"status\": \"healthy\",\n"
-        "  \"service\": \"fuelwise-api\",\n"
-        "  \"version\": \"%s\"\n"
-        "}\n",
-        fw_version());
-    return response;
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "status");
+    sh_json_write_string(&jw, "healthy");
+    sh_json_write_key(&jw, "service");
+    sh_json_write_string(&jw, "fuelwise-api");
+    sh_json_write_key(&jw, "version");
+    sh_json_write_string(&jw, fw_version());
+    sh_json_write_object_end(&jw);
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
 }
 
 /* Process stats request */
 static char *process_stats(int *status_code) {
     *status_code = 200;
-    char *response = malloc(512);
-    if (!response) return strdup("{\"error\": \"Memory allocation failed\"}\n");
 
-    snprintf(response, 512,
-        "{\n"
-        "  \"service\": \"fuelwise-api\",\n"
-        "  \"version\": \"%s\",\n"
-        "  \"work_queue\": {\n"
-        "    \"enabled\": false\n"
-        "  },\n"
-        "  \"rate_limit\": {\n"
-        "    \"enabled\": false\n"
-        "  }\n"
-        "}\n",
-        fw_version());
-    return response;
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "service");
+    sh_json_write_string(&jw, "fuelwise-api");
+    sh_json_write_key(&jw, "version");
+    sh_json_write_string(&jw, fw_version());
+
+    sh_json_write_key(&jw, "work_queue");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, false);
+    sh_json_write_object_end(&jw);
+
+    sh_json_write_key(&jw, "rate_limit");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, false);
+    sh_json_write_object_end(&jw);
+
+    sh_json_write_object_end(&jw);
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
 }
 
 /* ============================================================================
@@ -913,17 +772,7 @@ int fw_api_handle(FWAPIContext *ctx, const FWAPIRequest *req, FWAPIResponse *res
             status_code = 400;
             response_body = strdup("{\"error\": \"Missing request body\"}\n");
         } else {
-            /* Ensure null-terminated body */
-            char *body_copy = malloc(req->body_len + 1);
-            if (body_copy) {
-                memcpy(body_copy, req->body, req->body_len);
-                body_copy[req->body_len] = '\0';
-                response_body = process_solve(body_copy, &status_code);
-                free(body_copy);
-            } else {
-                status_code = 500;
-                response_body = strdup("{\"error\": \"Memory allocation failed\"}\n");
-            }
+            response_body = process_solve(req->body, req->body_len, &status_code);
         }
     }
     else if (strcmp(req->path, "/api/v1/filter") == 0) {
@@ -931,16 +780,7 @@ int fw_api_handle(FWAPIContext *ctx, const FWAPIRequest *req, FWAPIResponse *res
             status_code = 400;
             response_body = strdup("{\"error\": \"Missing request body\"}\n");
         } else {
-            char *body_copy = malloc(req->body_len + 1);
-            if (body_copy) {
-                memcpy(body_copy, req->body, req->body_len);
-                body_copy[req->body_len] = '\0';
-                response_body = process_filter(body_copy, &status_code);
-                free(body_copy);
-            } else {
-                status_code = 500;
-                response_body = strdup("{\"error\": \"Memory allocation failed\"}\n");
-            }
+            response_body = process_filter(req->body, req->body_len, &status_code);
         }
     }
     else if (strcmp(req->path, "/api/v1/optimize") == 0) {
@@ -948,16 +788,7 @@ int fw_api_handle(FWAPIContext *ctx, const FWAPIRequest *req, FWAPIResponse *res
             status_code = 400;
             response_body = strdup("{\"error\": \"Missing request body\"}\n");
         } else {
-            char *body_copy = malloc(req->body_len + 1);
-            if (body_copy) {
-                memcpy(body_copy, req->body, req->body_len);
-                body_copy[req->body_len] = '\0';
-                response_body = process_optimize(body_copy, &status_code);
-                free(body_copy);
-            } else {
-                status_code = 500;
-                response_body = strdup("{\"error\": \"Memory allocation failed\"}\n");
-            }
+            response_body = process_optimize(req->body, req->body_len, &status_code);
         }
     }
     else {

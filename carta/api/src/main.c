@@ -42,6 +42,7 @@
 #include "sh_log.h"         /* For structured logging */
 #include "sh_trace.h"       /* For trace ID propagation */
 #include "sh_metrics.h"     /* For metrics collection */
+#include "sh_json.h"        /* For JSON building */
 
 /* ============================================================================
  * Configuration
@@ -146,7 +147,7 @@ typedef struct {
 
 static WorkerThread *s_workers = NULL;
 static int s_num_workers = 0;
-static char s_listen_url[128] = "";
+static char s_listen_url[SH_URL_MAX] = "";
 
 /* Progress callback for PBF loading */
 static void pbf_progress_callback(const char *phase, size_t current,
@@ -731,63 +732,134 @@ static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
         has_adaptive_params = sh_adaptive_get_params(s_adaptive_tracker, &adaptive_params);
     }
 
-    char response[4096];
-    snprintf(response, sizeof(response),
-        "{\n"
-        "  \"pbf\": {\n"
-        "    \"path\": \"%s\",\n"
-        "    \"nodes\": %zu,\n"
-        "    \"ways\": %zu,\n"
-        "    \"features\": %zu,\n"
-        "    \"bbox\": [%.6f, %.6f, %.6f, %.6f]\n"
-        "  },\n"
-        "  \"work_queue\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"depth\": %zu,\n"
-        "    \"capacity\": %zu,\n"
-        "    \"pushed\": %lu,\n"
-        "    \"popped\": %lu,\n"
-        "    \"dropped\": %lu,\n"
-        "    \"expired\": %lu\n"
-        "  },\n"
-        "  \"rate_limit\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"rps\": %.1f,\n"
-        "    \"burst\": %.0f,\n"
-        "    \"allowed\": %lu,\n"
-        "    \"denied\": %lu\n"
-        "  },\n"
-        "  \"adaptive\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"samples\": %lu,\n"
-        "    \"recalculations\": %lu,\n"
-        "    \"response_ms\": {\"p50\": %.1f, \"p90\": %.1f, \"p99\": %.1f, \"avg\": %.1f, \"ema\": %.1f},\n"
-        "    \"current\": {\"rate_limit_rps\": %.1f, \"queue_depth\": %zu, \"throughput_rps\": %.1f}\n"
-        "  },\n"
-        "  \"cache\": {\n"
-        "    \"png\": {\"entries\": %zu, \"bytes\": %zu, \"hits\": %lu, \"misses\": %lu},\n"
-        "    \"mvt\": {\"entries\": %zu, \"bytes\": %zu, \"hits\": %lu, \"misses\": %lu}\n"
-        "  }\n"
-        "}\n",
-        s_config.pbf_path, nodes, ways, features,
-        bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
-        s_work_queue ? "true" : "false",
-        wq_stats.current_depth, wq_stats.max_capacity,
-        (unsigned long)wq_stats.total_pushed, (unsigned long)wq_stats.total_popped,
-        (unsigned long)wq_stats.total_dropped, (unsigned long)wq_stats.total_expired,
-        s_rate_limiter ? "true" : "false",
-        s_config.server.rate_limit_rps, s_config.server.rate_limit_burst,
-        (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied,
-        s_adaptive_tracker ? "true" : "false",
-        (unsigned long)adaptive_stats.sample_count, (unsigned long)adaptive_stats.recalc_count,
-        adaptive_stats.p50_ms, adaptive_stats.p90_ms, adaptive_stats.p99_ms,
-        adaptive_stats.avg_ms, adaptive_stats.ema_ms,
-        has_adaptive_params ? adaptive_params.rate_limit_rps : 0.0,
-        has_adaptive_params ? adaptive_params.queue_depth : 0,
-        has_adaptive_params ? adaptive_params.max_throughput_rps : 0.0,
-        png_entries, png_bytes, (unsigned long)png_hits, (unsigned long)png_misses,
-        mvt_entries, mvt_bytes, (unsigned long)mvt_hits, (unsigned long)mvt_misses);
-    send_json_cors(c, hm, 200, response);
+    /* Build JSON response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+
+    /* pbf object */
+    sh_json_write_key(&jw, "pbf");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "path");
+    sh_json_write_string(&jw, s_config.pbf_path);
+    sh_json_write_key(&jw, "nodes");
+    sh_json_write_int(&jw, (int64_t)nodes);
+    sh_json_write_key(&jw, "ways");
+    sh_json_write_int(&jw, (int64_t)ways);
+    sh_json_write_key(&jw, "features");
+    sh_json_write_int(&jw, (int64_t)features);
+    sh_json_write_key(&jw, "bbox");
+    sh_json_write_array_start(&jw);
+    sh_json_write_double(&jw, bbox.min_lon);
+    sh_json_write_double(&jw, bbox.min_lat);
+    sh_json_write_double(&jw, bbox.max_lon);
+    sh_json_write_double(&jw, bbox.max_lat);
+    sh_json_write_array_end(&jw);
+    sh_json_write_object_end(&jw);
+
+    /* work_queue object */
+    sh_json_write_key(&jw, "work_queue");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, s_work_queue != NULL);
+    sh_json_write_key(&jw, "depth");
+    sh_json_write_int(&jw, (int64_t)wq_stats.current_depth);
+    sh_json_write_key(&jw, "capacity");
+    sh_json_write_int(&jw, (int64_t)wq_stats.max_capacity);
+    sh_json_write_key(&jw, "pushed");
+    sh_json_write_int(&jw, (int64_t)wq_stats.total_pushed);
+    sh_json_write_key(&jw, "popped");
+    sh_json_write_int(&jw, (int64_t)wq_stats.total_popped);
+    sh_json_write_key(&jw, "dropped");
+    sh_json_write_int(&jw, (int64_t)wq_stats.total_dropped);
+    sh_json_write_key(&jw, "expired");
+    sh_json_write_int(&jw, (int64_t)wq_stats.total_expired);
+    sh_json_write_object_end(&jw);
+
+    /* rate_limit object */
+    sh_json_write_key(&jw, "rate_limit");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, s_rate_limiter != NULL);
+    sh_json_write_key(&jw, "rps");
+    sh_json_write_double(&jw, s_config.server.rate_limit_rps);
+    sh_json_write_key(&jw, "burst");
+    sh_json_write_double(&jw, s_config.server.rate_limit_burst);
+    sh_json_write_key(&jw, "allowed");
+    sh_json_write_int(&jw, (int64_t)rl_stats.requests_allowed);
+    sh_json_write_key(&jw, "denied");
+    sh_json_write_int(&jw, (int64_t)rl_stats.requests_denied);
+    sh_json_write_object_end(&jw);
+
+    /* adaptive object */
+    sh_json_write_key(&jw, "adaptive");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, s_adaptive_tracker != NULL);
+    sh_json_write_key(&jw, "samples");
+    sh_json_write_int(&jw, (int64_t)adaptive_stats.sample_count);
+    sh_json_write_key(&jw, "recalculations");
+    sh_json_write_int(&jw, (int64_t)adaptive_stats.recalc_count);
+    sh_json_write_key(&jw, "response_ms");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "p50");
+    sh_json_write_double(&jw, adaptive_stats.p50_ms);
+    sh_json_write_key(&jw, "p90");
+    sh_json_write_double(&jw, adaptive_stats.p90_ms);
+    sh_json_write_key(&jw, "p99");
+    sh_json_write_double(&jw, adaptive_stats.p99_ms);
+    sh_json_write_key(&jw, "avg");
+    sh_json_write_double(&jw, adaptive_stats.avg_ms);
+    sh_json_write_key(&jw, "ema");
+    sh_json_write_double(&jw, adaptive_stats.ema_ms);
+    sh_json_write_object_end(&jw);
+    sh_json_write_key(&jw, "current");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "rate_limit_rps");
+    sh_json_write_double(&jw, has_adaptive_params ? adaptive_params.rate_limit_rps : 0.0);
+    sh_json_write_key(&jw, "queue_depth");
+    sh_json_write_int(&jw, (int64_t)(has_adaptive_params ? adaptive_params.queue_depth : 0));
+    sh_json_write_key(&jw, "throughput_rps");
+    sh_json_write_double(&jw, has_adaptive_params ? adaptive_params.max_throughput_rps : 0.0);
+    sh_json_write_object_end(&jw);
+    sh_json_write_object_end(&jw);
+
+    /* cache object */
+    sh_json_write_key(&jw, "cache");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "png");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "entries");
+    sh_json_write_int(&jw, (int64_t)png_entries);
+    sh_json_write_key(&jw, "bytes");
+    sh_json_write_int(&jw, (int64_t)png_bytes);
+    sh_json_write_key(&jw, "hits");
+    sh_json_write_int(&jw, (int64_t)png_hits);
+    sh_json_write_key(&jw, "misses");
+    sh_json_write_int(&jw, (int64_t)png_misses);
+    sh_json_write_object_end(&jw);
+    sh_json_write_key(&jw, "mvt");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "entries");
+    sh_json_write_int(&jw, (int64_t)mvt_entries);
+    sh_json_write_key(&jw, "bytes");
+    sh_json_write_int(&jw, (int64_t)mvt_bytes);
+    sh_json_write_key(&jw, "hits");
+    sh_json_write_int(&jw, (int64_t)mvt_hits);
+    sh_json_write_key(&jw, "misses");
+    sh_json_write_int(&jw, (int64_t)mvt_misses);
+    sh_json_write_object_end(&jw);
+    sh_json_write_object_end(&jw);
+
+    sh_json_write_object_end(&jw);
+
+    char *json = sh_json_buf_take(&jb);
+    send_json_cors(c, hm, 200, json);
+    free(json);
 }
 
 /* GET /tiles.json - TileJSON metadata */

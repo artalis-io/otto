@@ -1141,3 +1141,608 @@ Based on Freightliner Cascadia, Kenworth T680 data:
 | 36,000 | 42.0 | Maximum GVW |
 
 Note: US trucks have higher consumption due to larger engines, higher speeds, and different fuel formulations.
+
+---
+
+## Chapter 5: Shadow Prices, Economic Interpretation & Monetization
+
+### 5.1 LP Dual Variables (Shadow Prices)
+
+The FuelWise LP (`fw_solve_refuel_lp`) has these constraints with economically meaningful duals:
+
+| Constraint | Dual Variable | Economic Meaning |
+|------------|---------------|------------------|
+| **Fuel balance** `y[i] = current_fuel + Σx[j]` | λ_balance[i] | Marginal value of 1L starting fuel, propagated to station i |
+| **Min fuel at arrival** `y[i] - consumed[i] ≥ min_fuel` | λ_min[i] | **Cost of safety reserve** at station i |
+| **Tank capacity** `y[i] + x[i] ≤ capacity + consumed[i]` | λ_cap[i] | **Value of larger tank** at station i |
+| **Reach destination** `Σx[i] ≥ needed` | λ_dest | **Marginal cost of trip completion** |
+
+### 5.2 Practical Business Applications
+
+**1. Tank Size ROI Analysis**
+```
+Total value of +1L tank = Σ max(0, λ_cap[i])
+```
+If this sum is $0.50/trip and you do 200 trips/year, a 100L larger tank saves $100/year.
+Compare to tank upgrade cost for fleet-wide decisions.
+
+**2. Safety Margin Pricing**
+```
+Cost of safety reserve = Σ λ_min[i]
+```
+Quantifies the tradeoff between safety and cost. High values at specific stations:
+- Route is dangerously tight there
+- Consider finding intermediate stations
+- Useful for insurance/risk discussions with fleet managers
+- Input to detention cost negotiations ("we had to take expensive fuel because of your delay")
+
+**3. Station Negotiation Leverage**
+The reduced costs on x[i] variables tell you how much cheaper a station must be before
+you'd buy there. Use this in fuel card/network contract negotiations.
+
+**4. Route Feasibility Warnings**
+High λ_dest indicates the route is barely feasible. Alerts for dispatchers:
+- Add contingency stations to the route
+- Flag risky segments in driver app
+- Trigger re-routing if fuel stops become unavailable
+
+**5. Multi-Trip Optimization**
+The `remaining_fuel_value` parameter already captures "opportunity cost of empty tank."
+Shadow prices extend this to per-station analysis.
+
+### 5.3 Exposing Duals via API
+
+To expose shadow prices, add to `FWRefuelSolution`:
+
+```c
+typedef struct {
+    /* Existing fields... */
+    FWStatus status;
+    double *purchases;
+    int *stop_flags;
+    double total_cost;
+    double remaining_fuel;
+
+    /* Dual values (new) */
+    double *dual_min_fuel;      /* λ_min[i]: cost of safety margin at each station */
+    double *dual_tank_cap;      /* λ_cap[i]: value of +1L tank at each station */
+    double dual_destination;    /* λ_dest: marginal cost of reaching destination */
+    int has_duals;              /* 1 if duals were computed, 0 otherwise */
+} FWRefuelSolution;
+```
+
+Ralph already supports `ralph_get_dual()` for retrieving dual values.
+
+### 5.4 Missing Constraints for FTL Trucking Monetization
+
+#### High-Value Missing Constraints
+
+| Constraint | Business Value | Complexity |
+|------------|----------------|------------|
+| **Fuel card network** | Fleets have contracts (Pilot, Love's, TA). Filter to approved stations | Low |
+| **Hours of Service** | Driver must stop for rest regardless of fuel. Co-optimize timing | High (HoSE integration) |
+| **Volume discounts** | ≥50 gal gets $0.05/gal off. Non-convex pricing | Medium (MILP) |
+| **DEF co-purchase** | DEF consumed ~2-3% of diesel. Same stop for both | Low |
+| **Reefer fuel** | Refrigerated trailers consume extra fuel for cooling | Low (add to consumption) |
+
+#### International (EU) Specific
+
+| Constraint | Business Value | Notes |
+|------------|----------------|-------|
+| **VAT recovery** | Fuel in certain countries has recoverable VAT | Filter by country, track VAT |
+| **Currency optimization** | EUR/CHF/GBP/CZK pricing differences | Convert to base currency |
+| **Toll corridors** | Combined fuel+toll optimization | Integrate with Velo toll data |
+| **Cabotage rules** | EU rules on consecutive domestic trips | Route feasibility |
+
+#### Quick Wins for Monetization
+
+**1. Fuel Card Filter (Simplest)**
+```c
+typedef struct {
+    /* ... existing fields ... */
+    int *approved_station_ids;   /* NULL = all allowed */
+    int num_approved;
+} FWRefuelProblem;
+```
+Just filter `stations` array before solving. No solver changes needed.
+
+**2. Volume Discount Tiers**
+```c
+typedef struct {
+    double threshold_liters;     /* e.g., 189.27L (50 gal) */
+    double discount_per_liter;   /* e.g., $0.013/L ($0.05/gal) */
+} FWVolumeDiscount;
+```
+Makes problem non-convex. Handle with binary variable for "bought ≥ threshold" in MILP.
+
+**3. Dual Fuel (Diesel + DEF)**
+```c
+typedef struct {
+    double diesel_price;
+    double def_price;
+    double def_available;        /* Some stations don't have DEF */
+} FWStation;
+```
+DEF consumption is ~2-3% of diesel. Add as parallel constraint set.
+
+### 5.5 Benders Decomposition Fix
+
+#### Current State
+
+The current `fw_solve_refuel_benders()` does **exhaustive enumeration** for k ≤ 20 stations:
+```c
+int num_combinations = 1 << k;  /* 2^k */
+for (int combo = 1; combo < num_combinations; combo++) {
+    /* Solve subproblem for each z combination */
+}
+```
+
+This is correct but not true Benders decomposition—it's brute force.
+
+#### Proper Benders Implementation
+
+True Benders iterates between:
+1. **Master problem** (MIP): Choose which stations to stop at (z variables)
+2. **Subproblem** (LP): Given z, optimize fuel purchases (x variables)
+3. **Cuts**: Add constraints to master based on subproblem results
+
+**Optimality Cut** (when subproblem is feasible):
+```
+θ ≥ c'x* + π'(b - Az)
+```
+where π are dual values from subproblem, θ is objective approximation in master.
+
+**Feasibility Cut** (when subproblem is infeasible):
+```
+0 ≥ μ'(b - Az)
+```
+where μ is the Farkas ray from Ralph (`ralph_get_farkas()`).
+
+#### Implementation Plan
+
+```c
+/* Master problem variables */
+/* z[i] ∈ {0,1} - stop at station i */
+/* θ - objective value approximation */
+
+/* Iteration */
+while (!converged) {
+    /* 1. Solve master MIP */
+    ralph_optimize(master);
+    z_fixed = ralph_get_solution(master);  /* Get z values */
+    θ_master = z_fixed[θ_index];
+
+    /* 2. Solve subproblem LP with fixed z */
+    build_subproblem(problem, z_fixed, &subproblem);
+    ralph_optimize(subproblem);
+
+    if (ralph_get_status(subproblem) == RALPH_STATUS_OPTIMAL) {
+        /* 3a. Add optimality cut */
+        double sub_obj = ralph_get_objval(subproblem);
+        double *duals = ralph_get_dual(subproblem);
+
+        /* Cut: θ ≥ sub_obj + Σ duals[i] * (rhs[i] - coef[i] * z[i]) */
+        add_optimality_cut(master, sub_obj, duals, z_coefficients);
+
+        /* Check convergence */
+        if (sub_obj <= θ_master + epsilon) {
+            converged = 1;
+            /* z_fixed is optimal */
+        }
+    } else {
+        /* 3b. Add feasibility cut */
+        double *farkas = ralph_get_farkas(subproblem);
+
+        /* Cut: 0 ≥ Σ farkas[i] * (rhs[i] - coef[i] * z[i]) */
+        add_feasibility_cut(master, farkas, z_coefficients);
+    }
+}
+```
+
+#### Benefits over Enumeration
+
+| Metric | Enumeration | Benders |
+|--------|-------------|---------|
+| Subproblems for k=20 | 1,048,576 | Typically 10-50 |
+| Subproblems for k=30 | 1 billion | Typically 20-100 |
+| Memory | O(2^k) worst case | O(k) |
+| Scalability | k ≤ 20 | k ≤ 1000+ |
+
+#### Implementation Files
+
+| File | Changes |
+|------|---------|
+| `fw_refuel.c` | Replace enumeration with Benders loop |
+| `ralph.h` | Already has `ralph_get_farkas()` |
+| `fw_types.h` | Add Benders iteration stats to solution |
+
+### 5.6 Implementation Priority
+
+1. **Expose duals via API** (1 day) - Immediate value for business intelligence
+2. **Fuel card filter** (0.5 day) - Simplest monetization constraint
+3. **Benders fix** (2-3 days) - Enables scaling to 100+ stations
+4. **Volume discounts** (1 day) - Common contract structure
+5. **DEF co-purchase** (1 day) - Required for US compliance
+6. **HoS integration** (3-5 days) - Requires HoSE module
+
+---
+
+## Chapter 6: API Enhancements
+
+### 6.1 Dual Value Retrieval
+
+```c
+/* Get shadow prices from last solve */
+int fw_get_duals(
+    const FWRefuelSolution *solution,
+    double *dual_min_fuel,      /* [num_stations] or NULL */
+    double *dual_tank_cap,      /* [num_stations] or NULL */
+    double *dual_destination    /* scalar or NULL */
+);
+```
+
+### 6.2 Station Filtering
+
+```c
+/* Filter stations to approved network before solving */
+int fw_filter_approved_stations(
+    FWRefuelProblem *problem,
+    const int *approved_ids,
+    int num_approved
+);
+```
+
+### 6.3 Benders Statistics
+
+```c
+typedef struct {
+    int iterations;
+    int optimality_cuts;
+    int feasibility_cuts;
+    double master_time_ms;
+    double subproblem_time_ms;
+} FWBendersStats;
+
+int fw_get_benders_stats(
+    const FWRefuelSolution *solution,
+    FWBendersStats *stats
+);
+
+---
+
+## Chapter 7: MIP Optimization Strategies
+
+### 7.1 Problem Structure Analysis
+
+**FuelWise MILP formulation:**
+```
+Variables:
+  x[i] ∈ [0, tank_capacity]    Fuel purchased at station i (continuous)
+  y[i] ∈ [0, y_upper]          Fuel level at station i (continuous)
+  z[i] ∈ {0, 1}                Stop at station i (binary)
+
+Objective:
+  min Σ price[i]·x[i] + stop_cost·Σz[i]
+
+Constraints:
+  y[i] = y[i-1] + x[i-1] - consumption[i-1]   (flow balance)
+  y[i] ≥ min_fuel                              (safety reserve)
+  y[i] + x[i] ≤ tank_capacity + consumption[i] (tank capacity)
+  x[i] ≤ tank_capacity · z[i]                  (linking: buy only if stop)
+  x[i] ≥ min_purchase · z[i]                   (minimum purchase if stop)
+```
+
+**Key structural properties:**
+1. **Path structure**: Variables form a sequence along the route
+2. **Clean linking**: z[i] only affects bounds on x[i] (RHS-only coupling)
+3. **Network flow subproblem**: Given z, the LP is a simple path flow
+4. **Small binary count**: k binary variables for k stations
+
+### 7.2 Optimization Approaches
+
+#### Approach 1: Domain-Specific Cuts + B&B Priorities
+
+**Reach cuts:** "Must stop at least once in [i, j] to have enough fuel to reach j+1"
+
+```c
+/*
+ * Generate reach cuts based on problem structure.
+ * These are valid inequalities that can be added upfront or lazily.
+ */
+void fw_generate_reach_cuts(
+    const FWRefuelProblem *problem,
+    int *cut_starts,      /* Cut i covers stations [cut_starts[i], cut_ends[i]] */
+    int *cut_ends,
+    int *num_cuts
+) {
+    double fuel = problem->tank_capacity;  /* Assume full tank at start */
+    int segment_start = 0;
+
+    for (int i = 0; i < problem->num_stations; i++) {
+        double consumed = fw_calc_fuel_consumed(problem,
+            (i == 0) ? 0 : problem->stations[i-1].distance_from_start,
+            problem->stations[i].distance_from_start);
+
+        fuel -= consumed;
+
+        /* Check if we can reach station i+1 without refueling */
+        double next_consumed = fw_calc_fuel_consumed(problem,
+            problem->stations[i].distance_from_start,
+            (i+1 < problem->num_stations)
+                ? problem->stations[i+1].distance_from_start
+                : problem->total_distance);
+
+        if (fuel - next_consumed < problem->minimum_fuel) {
+            /* Must stop somewhere in [segment_start, i] */
+            cut_starts[*num_cuts] = segment_start;
+            cut_ends[*num_cuts] = i;
+            (*num_cuts)++;
+
+            /* Assume we refuel to full */
+            fuel = problem->tank_capacity;
+            segment_start = i + 1;
+        }
+    }
+}
+
+/*
+ * Add reach cut to model:
+ *   z[start] + z[start+1] + ... + z[end] >= 1
+ */
+void fw_add_reach_cut(RalphModel *model, int z_start_idx, int start, int end) {
+    int size = end - start + 1;
+    int *indices = malloc(size * sizeof(int));
+    double *coeffs = malloc(size * sizeof(double));
+
+    for (int i = 0; i < size; i++) {
+        indices[i] = z_start_idx + start + i;
+        coeffs[i] = 1.0;
+    }
+
+    ralph_add_constraint(model, size, indices, coeffs, RALPH_GREATER_EQUAL, 1.0);
+
+    free(indices);
+    free(coeffs);
+}
+```
+
+**B&B priorities:** Branch on earlier stations first, prefer cheap stations.
+
+```c
+void fw_set_branch_priorities(RalphModel *model, const FWRefuelProblem *problem, int z_start_idx) {
+    int k = problem->num_stations;
+    int *priorities = calloc(3 * k, sizeof(int));  /* x, y, z variables */
+    int *directions = calloc(3 * k, sizeof(int));
+
+    /* Find price percentiles for priority assignment */
+    double *prices = malloc(k * sizeof(double));
+    for (int i = 0; i < k; i++) {
+        prices[i] = problem->stations[i].price;
+    }
+    double median_price = percentile(prices, k, 0.5);
+
+    for (int i = 0; i < k; i++) {
+        int z_idx = z_start_idx + i;
+
+        /* Earlier stations get higher priority (branch first) */
+        int base_priority = (k - i) * 10;
+
+        /* Cheap stations get bonus priority (explore "stop here" first) */
+        int price_bonus = (problem->stations[i].price < median_price) ? 5 : 0;
+
+        priorities[z_idx] = base_priority + price_bonus;
+
+        /* Branch UP first for cheap stations (try stopping there)
+         * Branch DOWN first for expensive stations (try skipping) */
+        directions[z_idx] = (problem->stations[i].price < median_price) ? 1 : 0;
+    }
+
+    ralph_set_branch_priorities(model, priorities);
+    ralph_set_branch_directions(model, directions);
+
+    free(priorities);
+    free(directions);
+    free(prices);
+}
+```
+
+#### Approach 2: Benders Decomposition
+
+**Why FuelWise is ideal for Benders:**
+1. z affects only RHS of linking constraints (x[i] ≤ tank_capacity · z[i])
+2. Subproblem is trivially fast (simple LP with k variables)
+3. Infeasibility has clear meaning: "can't reach station j+1"
+4. Cuts accumulate, tightening master over iterations
+
+**Benders structure:**
+```
+Master (MIP):
+  min  stop_cost·Σz[i] + θ
+  s.t. z[i] ∈ {0, 1}
+       feasibility cuts (from Farkas rays)
+       optimality cuts (from LP duals)
+       θ ≥ lower_bound
+
+Subproblem (LP, given z_fixed):
+  min  Σ price[i]·x[i]
+  s.t. flow balance constraints
+       y[i] ≥ min_fuel
+       y[i] + x[i] ≤ tank_capacity + consumption[i]
+       x[i] ≤ tank_capacity · z_fixed[i]    (RHS depends on z)
+       x[i] ≥ min_purchase · z_fixed[i]     (RHS depends on z)
+```
+
+**Feasibility cut (when subproblem infeasible):**
+
+The Farkas ray μ proves infeasibility: μ'b < 0 while μ'A ≥ 0.
+
+For FuelWise, infeasibility means: "With these stops disabled (z[i]=0), can't reach some station."
+
+The cut says: "At least one of these z[i] must be 1":
+```
+Σ_{i ∈ blocking_set} z[i] ≥ 1
+```
+
+Where blocking_set = stations whose z[i]=0 caused infeasibility.
+
+```c
+/*
+ * Extract feasibility cut from Farkas ray.
+ * Returns indices of z variables that must have at least one z[i]=1.
+ */
+int fw_extract_feasibility_cut(
+    RalphModel *subproblem,
+    const int *z_fixed,
+    int k,
+    int *blocking_set,
+    int *blocking_size
+) {
+    double *farkas = malloc(ralph_get_num_constraints(subproblem) * sizeof(double));
+    ralph_get_farkas_ray(subproblem, farkas);
+
+    *blocking_size = 0;
+
+    /* Find which z[i]=0 constraints contributed to infeasibility */
+    for (int i = 0; i < k; i++) {
+        if (z_fixed[i] == 0) {
+            /* Check if the upper bound constraint x[i] ≤ 0 has positive Farkas multiplier */
+            int con_idx = get_upper_bound_constraint_index(i);
+            if (farkas[con_idx] > 1e-6) {
+                blocking_set[(*blocking_size)++] = i;
+            }
+        }
+    }
+
+    free(farkas);
+    return (*blocking_size > 0) ? 0 : -1;
+}
+```
+
+**Optimality cut (when subproblem optimal):**
+
+```
+θ ≥ LP_obj + Σ λ_upper[i] · tank_capacity · (z[i] - z_fixed[i])
+           + Σ λ_lower[i] · min_purchase · (z[i] - z_fixed[i])
+```
+
+Where λ_upper, λ_lower are duals on the linking constraints.
+
+#### Approach 3: Hybrid (Cuts + Benders)
+
+Best of both worlds:
+1. Add reach cuts to master upfront (warm start Benders)
+2. Use B&B priorities within master MIP solve
+3. Use Benders iteration for convergence
+
+### 7.3 Ralph Requirements
+
+| Function | Purpose | Status |
+|----------|---------|--------|
+| `ralph_set_branch_priorities()` | Static priority per variable | **Needed** |
+| `ralph_set_branch_directions()` | Preferred branch direction | **Needed** |
+| `ralph_get_var_bounds()` | Query current lb/ub | **Needed** |
+| `ralph_get_farkas_ray()` | Extract infeasibility certificate | Exists (verify) |
+| `ralph_set_constraint_rhs()` | Modify RHS for Benders iterations | **Needed** |
+| `ralph_get_dual()` | Get dual values for optimality cuts | Exists |
+| `ralph_add_constraint()` | Add cuts to master | Exists |
+| `ralph_warm_start()` | Reuse basis between iterations | **Needed** |
+
+**New Ralph functions needed:**
+
+```c
+/* Branch-and-bound control */
+void ralph_set_branch_priorities(RalphModel *model, const int *priorities);
+void ralph_set_branch_directions(RalphModel *model, const int *directions);
+
+/* Model introspection */
+int ralph_get_var_bounds(RalphModel *model, int var, double *lb, double *ub);
+
+/* Benders support */
+int ralph_set_constraint_rhs(RalphModel *model, int constraint, double rhs);
+int ralph_get_farkas_ray(RalphModel *model, double *ray);  /* Verify exists */
+
+/* Warm start */
+int ralph_save_basis(RalphModel *model, int **basis);
+int ralph_load_basis(RalphModel *model, const int *basis);
+```
+
+### 7.4 Performance Comparison
+
+| Approach | k ≤ 20 | k = 20-50 | k > 50 | Implementation |
+|----------|--------|-----------|--------|----------------|
+| **Enumeration** (current) | Fast | Infeasible | Impossible | Done |
+| **Naive MIP** | Slow | Very slow | Impossible | Done |
+| **Cuts + B&B priorities** | Fast | Moderate | Slow | ~250 LoC |
+| **Benders** | Moderate | Fast | Fast | ~500 LoC |
+| **Hybrid** | Fast | Fast | Fast | ~600 LoC |
+
+**Estimated solve times (Ralph with enhancements):**
+
+| k | Enumeration | MIP + Cuts | Benders |
+|---|-------------|------------|---------|
+| 10 | 1ms | 5ms | 10ms |
+| 20 | 1s | 50ms | 30ms |
+| 30 | - | 500ms | 100ms |
+| 50 | - | 5s | 300ms |
+| 100 | - | timeout | 1s |
+
+### 7.5 Recommended Priority
+
+| Priority | What | Impact | Effort | Shared with HoSE |
+|----------|------|--------|--------|------------------|
+| **P0** | B&B priorities | High for k=20-40 | ~100 LoC | ✅ Yes |
+| **P1** | Reach cuts (preprocessing) | High | ~150 LoC | ❌ No |
+| **P1** | `ralph_set_constraint_rhs()` | Medium (Benders) | ~30 LoC | ❌ No |
+| **P2** | `ralph_get_farkas_ray()` | High (Benders) | ~200 LoC | ❌ No |
+| **P2** | Full Benders loop | Very High for k>30 | ~400 LoC | ❌ No |
+
+**Recommendation:**
+
+1. **Start with P0 (priorities)** - Already needed for HoSE, immediate benefit
+2. **Add reach cuts (P1)** - Big impact, no Ralph changes needed
+3. **Evaluate performance** at k=30-50 with cuts + priorities
+4. **If still slow, implement Benders (P2)** - Transformative for large k
+
+### 7.6 Can Ralph Be Competitive with HiGHS?
+
+**For FuelWise specifically: Yes, likely.**
+
+| Factor | Assessment |
+|--------|------------|
+| Problem structure | Very favorable (path, few binaries) |
+| Reach cuts | Extremely effective (like subtour elimination) |
+| LP subproblem | Tiny and fast |
+| HiGHS advantage | Generic presolve, parallel B&B |
+| Ralph advantage | Domain cuts, no overhead |
+
+**Estimate:** With reach cuts + priorities, Ralph should be within 2-5× of HiGHS for k ≤ 50.
+
+For k > 50, Benders becomes necessary regardless of solver. At that point, Ralph's Benders implementation could actually **beat** HiGHS's generic MIP because:
+1. Subproblem structure is exploited (network flow LP)
+2. Cuts are domain-specific (not generic Gomory)
+3. No branch-and-cut overhead on subproblems
+
+### 7.7 Implementation Files
+
+| File | Changes |
+|------|---------|
+| `fuelwise/src/fw_refuel.c` | Add reach cuts, B&B priorities, Benders loop |
+| `fuelwise/include/fw_types.h` | Add cut/Benders statistics to solution |
+| `ralph/src/branch_bound.c` | Add priority/direction support |
+| `ralph/src/ralph.c` | Add `ralph_set_constraint_rhs()`, verify Farkas |
+| `ralph/include/ralph.h` | New API declarations |
+
+### 7.8 Test Plan
+
+**Cuts + Priorities:**
+1. k=20: Compare solve time with/without cuts
+2. k=30: Verify solves within 1s
+3. k=40: Verify solves within 5s
+4. Correctness: All solutions pass `fw_validate_solution()`
+
+**Benders:**
+1. k=20: Compare iterations vs enumeration
+2. k=50: Verify solves within 1s
+3. k=100: Verify solves within 5s
+4. Infeasibility: Verify Farkas cuts block infeasible z patterns
+5. Optimality: Verify final solution matches enumeration (for k≤20)

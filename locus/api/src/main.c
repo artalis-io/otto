@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <sys/time.h>
+#include <math.h>
 
 /* Shared library includes */
 #include "shared.h"
@@ -35,6 +36,7 @@
 #include "sh_metrics.h"
 #include "sh_completion.h"
 #include "sh_worker_pool.h"
+#include "sh_json.h"
 
 /* ============================================================================
  * Configuration
@@ -120,22 +122,7 @@ static void signal_handler(int signo) {
     s_signo = signo;
 }
 
-/* ============================================================================
- * JSON Helpers
- * ============================================================================ */
-
-static void json_escape(const char *s, char *buf, size_t size) {
-    size_t j = 0;
-    for (size_t i = 0; s[i] && j < size - 1; i++) {
-        char c = s[i];
-        if (c == '"' || c == '\\') {
-            if (j + 2 >= size) break;
-            buf[j++] = '\\';
-        }
-        buf[j++] = c;
-    }
-    buf[j] = '\0';
-}
+/* JSON building is handled by sh_json.h (ShJsonWriter + ShJsonBuf) */
 
 /* ============================================================================
  * Configuration Loading
@@ -172,7 +159,7 @@ static void load_locus_env(LocusServerConfig *cfg) {
         cfg->data_file[sizeof(cfg->data_file) - 1] = '\0';
     }
     if ((val = getenv("LOCUS_NUM_WORKERS"))) {
-        cfg->num_workers = atoi(val);
+        cfg->num_workers = sh_parse_int(val, 0, 0, 256);
     }
 
     /* CORS configuration */
@@ -186,7 +173,7 @@ static void load_locus_env(LocusServerConfig *cfg) {
         sh_cors_set_headers(&s_cors, val);
     }
     if ((val = getenv("LOCUS_CORS_CREDENTIALS"))) {
-        s_cors.allow_credentials = (atoi(val) != 0);
+        s_cors.allow_credentials = (sh_parse_int(val, 0, 0, 1) != 0);
     }
 }
 
@@ -287,29 +274,26 @@ static void process_search(GeoWorkItem *item) {
         return;
     }
 
-    /* Build JSON response */
-    char *json = malloc(64 * 1024);  /* 64KB buffer */
-    if (!json) {
-        lc_search_result_free(&result);
-        item->status_code = 500;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Out of memory");
-        return;
-    }
+    /* Build JSON response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    char escaped_query[512];
-    json_escape(item->query, escaped_query, sizeof(escaped_query));
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
-    int offset = snprintf(json, 64 * 1024,
-                          "{\n"
-                          "  \"query\": \"%s\",\n"
-                          "  \"total\": %zu,\n"
-                          "  \"took_ms\": %.2f,\n"
-                          "  \"results\": [",
-                          escaped_query, result.total_matches, took_ms);
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "query");
+    sh_json_write_string(&jw, item->query);
+    sh_json_write_key(&jw, "total");
+    sh_json_write_int(&jw, (int64_t)result.total_matches);
+    sh_json_write_key(&jw, "took_ms");
+    sh_json_write_double(&jw, took_ms);
+    sh_json_write_key(&jw, "results");
+    sh_json_write_array_start(&jw);
 
     for (size_t i = 0; i < result.num_results; i++) {
         uint32_t eid = result.matches[i].entity_id;
-        char escaped_name[512] = "";
+        const char *name = NULL;
         const char *osm_type = "node";
         uint64_t osm_id = 0;
         const char *fclass_str = "unknown";
@@ -317,8 +301,7 @@ static void process_search(GeoWorkItem *item) {
 
         if (g_index->mmap_idx) {
             /* v4 mmap path */
-            const char *name = lc_mmap_entity_name(g_index->mmap_idx, eid);
-            if (name) json_escape(name, escaped_name, sizeof(escaped_name));
+            name = lc_mmap_entity_name(g_index->mmap_idx, eid);
 
             LCEntityType type = lc_mmap_entity_type(g_index->mmap_idx, eid);
             if (type == LC_ENTITY_WAY) osm_type = "way";
@@ -334,7 +317,7 @@ static void process_search(GeoWorkItem *item) {
             const LCEntity *e = lc_search_get_entity(g_index, &result.matches[i]);
             if (!e) continue;
 
-            if (e->name) json_escape(e->name, escaped_name, sizeof(escaped_name));
+            name = e->name;
             if (e->type == LC_ENTITY_WAY) osm_type = "way";
             else if (e->type == LC_ENTITY_RELATION) osm_type = "relation";
 
@@ -344,32 +327,38 @@ static void process_search(GeoWorkItem *item) {
             lon = e->centroid.lon;
         }
 
-        offset += snprintf(json + offset, 64 * 1024 - offset,
-                          "%s\n    {\n"
-                          "      \"osm_id\": %lu,\n"
-                          "      \"osm_type\": \"%s\",\n"
-                          "      \"name\": \"%s\",\n"
-                          "      \"class\": \"%s\",\n"
-                          "      \"lat\": %.6f,\n"
-                          "      \"lon\": %.6f,\n"
-                          "      \"score\": %.4f\n"
-                          "    }",
-                          i > 0 ? "," : "",
-                          (unsigned long)osm_id,
-                          osm_type,
-                          escaped_name,
-                          fclass_str,
-                          lat,
-                          lon,
-                          result.matches[i].score);
+        sh_json_write_object_start(&jw);
+        sh_json_write_key(&jw, "osm_id");
+        sh_json_write_int(&jw, (int64_t)osm_id);
+        sh_json_write_key(&jw, "osm_type");
+        sh_json_write_string(&jw, osm_type);
+        sh_json_write_key(&jw, "name");
+        sh_json_write_string(&jw, name ? name : "");
+        sh_json_write_key(&jw, "class");
+        sh_json_write_string(&jw, fclass_str);
+        sh_json_write_key(&jw, "lat");
+        sh_json_write_double(&jw, lat);
+        sh_json_write_key(&jw, "lon");
+        sh_json_write_double(&jw, lon);
+        sh_json_write_key(&jw, "score");
+        sh_json_write_double(&jw, result.matches[i].score);
+        sh_json_write_object_end(&jw);
     }
 
-    offset += snprintf(json + offset, 64 * 1024 - offset, "\n  ]\n}\n");
+    sh_json_write_array_end(&jw);
+    sh_json_write_object_end(&jw);
 
     lc_search_result_free(&result);
 
-    item->response_json = json;
-    item->response_len = offset;
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        item->status_code = 500;
+        snprintf(item->error_msg, sizeof(item->error_msg), "JSON write error");
+        return;
+    }
+
+    item->response_json = sh_json_buf_take(&jb);
+    item->response_len = jb.len;
     item->status_code = 200;
 }
 
@@ -388,16 +377,14 @@ static void process_autocomplete(GeoWorkItem *item) {
     LCSearchResult result;
     lc_autocomplete(g_index, item->query, limit, &result);
 
-    /* Build simple suggestions array */
-    char *json = malloc(16 * 1024);
-    if (!json) {
-        lc_search_result_free(&result);
-        item->status_code = 500;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Out of memory");
-        return;
-    }
+    /* Build simple suggestions array using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    int offset = snprintf(json, 16 * 1024, "[\n");
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_array_start(&jw);
 
     for (size_t i = 0; i < result.num_results; i++) {
         const char *name = NULL;
@@ -411,21 +398,22 @@ static void process_autocomplete(GeoWorkItem *item) {
 
         if (!name) continue;
 
-        char escaped[512];
-        json_escape(name, escaped, sizeof(escaped));
-
-        offset += snprintf(json + offset, 16 * 1024 - offset,
-                          "%s  \"%s\"",
-                          i > 0 ? ",\n" : "",
-                          escaped);
+        sh_json_write_string(&jw, name);
     }
 
-    offset += snprintf(json + offset, 16 * 1024 - offset, "\n]\n");
+    sh_json_write_array_end(&jw);
 
     lc_search_result_free(&result);
 
-    item->response_json = json;
-    item->response_len = offset;
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        item->status_code = 500;
+        snprintf(item->error_msg, sizeof(item->error_msg), "JSON write error");
+        return;
+    }
+
+    item->response_json = sh_json_buf_take(&jb);
+    item->response_len = jb.len;
     item->status_code = 200;
 }
 
@@ -449,45 +437,46 @@ static void process_reverse(GeoWorkItem *item) {
     char address[512] = "";
     lc_format_address(&result, address, sizeof(address));
 
-    char escaped_address[1024];
-    json_escape(address, escaped_address, sizeof(escaped_address));
+    /* Build JSON response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    char *json = malloc(4 * 1024);
-    if (!json) {
-        lc_reverse_result_free(&result);
-        item->status_code = 500;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Out of memory");
-        return;
-    }
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
-    int offset = snprintf(json, 4 * 1024,
-                          "{\n"
-                          "  \"lat\": %.6f,\n"
-                          "  \"lon\": %.6f,\n"
-                          "  \"display_name\": \"%s\",\n"
-                          "  \"distance_m\": %.1f",
-                          item->coord.lat, item->coord.lon, escaped_address, result.distance_m);
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "lat");
+    sh_json_write_double(&jw, item->coord.lat);
+    sh_json_write_key(&jw, "lon");
+    sh_json_write_double(&jw, item->coord.lon);
+    sh_json_write_key(&jw, "display_name");
+    sh_json_write_string(&jw, address);
+    sh_json_write_key(&jw, "distance_m");
+    sh_json_write_double(&jw, result.distance_m);
 
     if (result.place && result.place->name) {
-        char escaped[512];
-        json_escape(result.place->name, escaped, sizeof(escaped));
-        offset += snprintf(json + offset, 4 * 1024 - offset,
-                          ",\n  \"place\": \"%s\"", escaped);
+        sh_json_write_key(&jw, "place");
+        sh_json_write_string(&jw, result.place->name);
     }
 
     if (result.street && result.street->name) {
-        char escaped[512];
-        json_escape(result.street->name, escaped, sizeof(escaped));
-        offset += snprintf(json + offset, 4 * 1024 - offset,
-                          ",\n  \"street\": \"%s\"", escaped);
+        sh_json_write_key(&jw, "street");
+        sh_json_write_string(&jw, result.street->name);
     }
 
-    offset += snprintf(json + offset, 4 * 1024 - offset, "\n}\n");
+    sh_json_write_object_end(&jw);
 
     lc_reverse_result_free(&result);
 
-    item->response_json = json;
-    item->response_len = offset;
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        item->status_code = 500;
+        snprintf(item->error_msg, sizeof(item->error_msg), "JSON write error");
+        return;
+    }
+
+    item->response_json = sh_json_buf_take(&jb);
+    item->response_len = jb.len;
     item->status_code = 200;
 }
 
@@ -629,55 +618,90 @@ static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
         sh_adaptive_stats(s_adaptive_tracker, &adaptive_stats);
     }
 
-    char response[4096];
-    snprintf(response, sizeof(response),
-        "{\n"
-        "  \"entities\": %u,\n"
-        "  \"memory_mb\": %.2f,\n"
-        "  \"bounds\": {\n"
-        "    \"min_lat\": %.6f,\n"
-        "    \"min_lon\": %.6f,\n"
-        "    \"max_lat\": %.6f,\n"
-        "    \"max_lon\": %.6f\n"
-        "  },\n"
-        "  \"rate_limit\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"rps\": %.1f,\n"
-        "    \"burst\": %.0f,\n"
-        "    \"allowed\": %lu,\n"
-        "    \"denied\": %lu\n"
-        "  },\n"
-        "  \"work_queue\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"depth\": %zu,\n"
-        "    \"capacity\": %zu,\n"
-        "    \"pushed\": %lu,\n"
-        "    \"popped\": %lu,\n"
-        "    \"dropped\": %lu,\n"
-        "    \"expired\": %lu\n"
-        "  },\n"
-        "  \"adaptive\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"samples\": %lu,\n"
-        "    \"response_ms\": {\"p50\": %.2f, \"p90\": %.2f, \"p99\": %.2f}\n"
-        "  }\n"
-        "}\n",
-        lc_index_entity_count(g_index),
-        (double)lc_index_memory_usage(g_index) / (1024.0 * 1024.0),
-        bounds.min_lat, bounds.min_lon,
-        bounds.max_lat, bounds.max_lon,
-        s_rate_limiter ? "true" : "false",
-        s_config.server.rate_limit_rps, s_config.server.rate_limit_burst,
-        (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied,
-        s_work_queue ? "true" : "false",
-        wq_stats.current_depth, wq_stats.max_capacity,
-        (unsigned long)wq_stats.total_pushed, (unsigned long)wq_stats.total_popped,
-        (unsigned long)wq_stats.total_dropped, (unsigned long)wq_stats.total_expired,
-        s_adaptive_tracker ? "true" : "false",
-        (unsigned long)adaptive_stats.sample_count,
-        adaptive_stats.p50_ms, adaptive_stats.p90_ms, adaptive_stats.p99_ms);
+    /* Build JSON response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    send_json_cors(c, hm, 200, response);
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+
+    sh_json_write_key(&jw, "entities");
+    sh_json_write_int(&jw, lc_index_entity_count(g_index));
+    sh_json_write_key(&jw, "memory_mb");
+    sh_json_write_double(&jw, (double)lc_index_memory_usage(g_index) / (1024.0 * 1024.0));
+
+    /* bounds object */
+    sh_json_write_key(&jw, "bounds");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "min_lat");
+    sh_json_write_double(&jw, bounds.min_lat);
+    sh_json_write_key(&jw, "min_lon");
+    sh_json_write_double(&jw, bounds.min_lon);
+    sh_json_write_key(&jw, "max_lat");
+    sh_json_write_double(&jw, bounds.max_lat);
+    sh_json_write_key(&jw, "max_lon");
+    sh_json_write_double(&jw, bounds.max_lon);
+    sh_json_write_object_end(&jw);
+
+    /* rate_limit object */
+    sh_json_write_key(&jw, "rate_limit");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, s_rate_limiter != NULL);
+    sh_json_write_key(&jw, "rps");
+    sh_json_write_double(&jw, s_config.server.rate_limit_rps);
+    sh_json_write_key(&jw, "burst");
+    sh_json_write_double(&jw, s_config.server.rate_limit_burst);
+    sh_json_write_key(&jw, "allowed");
+    sh_json_write_int(&jw, (int64_t)rl_stats.requests_allowed);
+    sh_json_write_key(&jw, "denied");
+    sh_json_write_int(&jw, (int64_t)rl_stats.requests_denied);
+    sh_json_write_object_end(&jw);
+
+    /* work_queue object */
+    sh_json_write_key(&jw, "work_queue");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, s_work_queue != NULL);
+    sh_json_write_key(&jw, "depth");
+    sh_json_write_int(&jw, (int64_t)wq_stats.current_depth);
+    sh_json_write_key(&jw, "capacity");
+    sh_json_write_int(&jw, (int64_t)wq_stats.max_capacity);
+    sh_json_write_key(&jw, "pushed");
+    sh_json_write_int(&jw, (int64_t)wq_stats.total_pushed);
+    sh_json_write_key(&jw, "popped");
+    sh_json_write_int(&jw, (int64_t)wq_stats.total_popped);
+    sh_json_write_key(&jw, "dropped");
+    sh_json_write_int(&jw, (int64_t)wq_stats.total_dropped);
+    sh_json_write_key(&jw, "expired");
+    sh_json_write_int(&jw, (int64_t)wq_stats.total_expired);
+    sh_json_write_object_end(&jw);
+
+    /* adaptive object */
+    sh_json_write_key(&jw, "adaptive");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, s_adaptive_tracker != NULL);
+    sh_json_write_key(&jw, "samples");
+    sh_json_write_int(&jw, (int64_t)adaptive_stats.sample_count);
+    sh_json_write_key(&jw, "response_ms");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "p50");
+    sh_json_write_double(&jw, adaptive_stats.p50_ms);
+    sh_json_write_key(&jw, "p90");
+    sh_json_write_double(&jw, adaptive_stats.p90_ms);
+    sh_json_write_key(&jw, "p99");
+    sh_json_write_double(&jw, adaptive_stats.p99_ms);
+    sh_json_write_object_end(&jw);
+    sh_json_write_object_end(&jw);
+
+    sh_json_write_object_end(&jw);
+
+    char *json = sh_json_buf_take(&jb);
+    send_json_cors(c, hm, 200, json);
+    free(json);
 }
 
 static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
@@ -713,7 +737,7 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
         geo_work_item_init(&item, GEO_TYPE_SEARCH);
         strncpy(item.query, query, sizeof(item.query) - 1);
         item.query[sizeof(item.query) - 1] = '\0';
-        item.limit = atoi(limit_str);
+        item.limit = sh_parse_int(limit_str, 10, 1, 100);
 
         submit_geocode_work(c, hm, &item);
         geo_work_item_cleanup(&item);
@@ -725,7 +749,7 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
     geo_work_item_init(&item, GEO_TYPE_SEARCH);
     strncpy(item.query, query, sizeof(item.query) - 1);
     item.query[sizeof(item.query) - 1] = '\0';
-    item.limit = atoi(limit_str);
+    item.limit = sh_parse_int(limit_str, 10, 1, 100);
 
     process_search(&item);
 
@@ -770,7 +794,7 @@ static void handle_autocomplete(struct mg_connection *c, struct mg_http_message 
         geo_work_item_init(&item, GEO_TYPE_AUTOCOMPLETE);
         strncpy(item.query, query, sizeof(item.query) - 1);
         item.query[sizeof(item.query) - 1] = '\0';
-        item.limit = atoi(limit_str);
+        item.limit = sh_parse_int(limit_str, 10, 1, 100);
 
         submit_geocode_work(c, hm, &item);
         geo_work_item_cleanup(&item);
@@ -782,7 +806,7 @@ static void handle_autocomplete(struct mg_connection *c, struct mg_http_message 
     geo_work_item_init(&item, GEO_TYPE_AUTOCOMPLETE);
     strncpy(item.query, query, sizeof(item.query) - 1);
     item.query[sizeof(item.query) - 1] = '\0';
-    item.limit = atoi(limit_str);
+    item.limit = sh_parse_int(limit_str, 10, 1, 100);
 
     process_autocomplete(&item);
 
@@ -821,9 +845,16 @@ static void handle_reverse(struct mg_connection *c, struct mg_http_message *hm) 
         return;
     }
 
+    double lat_val = sh_parse_double(lat_str, NAN, -90.0, 90.0);
+    double lon_val = sh_parse_double(lon_str, NAN, -180.0, 180.0);
+    if (isnan(lat_val) || isnan(lon_val)) {
+        send_error_cors(c, hm, 400, "Invalid coordinates");
+        return;
+    }
+
     SHCoord coord;
-    coord.lat = atof(lat_str);
-    coord.lon = atof(lon_str);
+    coord.lat = lat_val;
+    coord.lon = lon_val;
 
     /* Use work queue if enabled */
     if (s_work_queue) {
@@ -994,7 +1025,7 @@ int main(int argc, char *argv[]) {
                 s_config.save_path[sizeof(s_config.save_path) - 1] = '\0';
             }
         } else if (strcmp(argv[i], "--workers") == 0) {
-            if (++i < argc) s_config.num_workers = atoi(argv[i]);
+            if (++i < argc) s_config.num_workers = sh_parse_int(argv[i], 0, 0, 256);
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -1162,7 +1193,7 @@ int main(int argc, char *argv[]) {
     struct mg_mgr mgr;
     mg_mgr_init(&mgr);
 
-    char listen_addr[64];
+    char listen_addr[SH_URL_MAX];
     snprintf(listen_addr, sizeof(listen_addr), "http://%s:%d",
              s_config.server.host, s_config.server.port);
 

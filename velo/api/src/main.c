@@ -42,15 +42,17 @@
 #include "sh_log.h"
 #include "sh_trace.h"
 #include "sh_metrics.h"
+#include "sh_json.h"  /* For streaming JSON writer */
+#include "sh_geo.h"   /* For sh_parse_coord */
 
 /* ============================================================================
  * Configuration
  * ============================================================================ */
 
 typedef struct {
-    char graph_path[512];
-    char save_index_path[512];  /* Path to save binary index (empty = don't save) */
-    char listen_addr[64];
+    char graph_path[SH_PATH_MAX];
+    char save_index_path[SH_PATH_MAX];  /* Path to save binary index (empty = don't save) */
+    char listen_addr[SH_HOSTNAME_MAX];
     int port;
     int use_landmarks;
     int landmark_count;
@@ -440,34 +442,7 @@ static void send_error(struct mg_connection *c, int status, const char *message)
     sh_mg_reply_error(c, status, &s_cors_config, NULL, message);
 }
 
-/* Escape backslashes in polyline for JSON output */
-static char *json_escape_polyline(const char *polyline) {
-    if (!polyline) return NULL;
-
-    /* Count backslashes */
-    size_t len = strlen(polyline);
-    size_t backslashes = 0;
-    for (size_t i = 0; i < len; i++) {
-        if (polyline[i] == '\\') backslashes++;
-    }
-
-    /* Allocate escaped string (check for overflow) */
-    if (len > SIZE_MAX - backslashes - 1) return NULL;
-    char *escaped = malloc(len + backslashes + 1);
-    if (!escaped) return NULL;
-
-    /* Copy with escaping */
-    char *dst = escaped;
-    for (size_t i = 0; i < len; i++) {
-        if (polyline[i] == '\\') {
-            *dst++ = '\\';
-        }
-        *dst++ = polyline[i];
-    }
-    *dst = '\0';
-
-    return escaped;
-}
+/* Note: json_escape_polyline removed - ShJsonWriter handles escaping */
 
 /* ============================================================================
  * Query Parameter Parsing
@@ -479,16 +454,11 @@ static int parse_coord(struct mg_str str, double *lat, double *lon) {
     memcpy(buf, str.buf, str.len);
     buf[str.len] = '\0';
 
-    char *comma = strchr(buf, ',');
-    if (!comma) return -1;
-    *comma = '\0';
-
-    *lat = atof(buf);
-    *lon = atof(comma + 1);
-
-    /* Reject inf/NaN from malformed input like "1e1000" */
-    if (!isfinite(*lat) || !isfinite(*lon)) return -1;
-    if (*lat < -90 || *lat > 90 || *lon < -180 || *lon > 180) return -1;
+    /* Use shared library coordinate parser */
+    SHCoord coord;
+    if (sh_parse_coord(buf, &coord) != 0) return -1;
+    *lat = coord.lat;
+    *lon = coord.lon;
     return 0;
 }
 
@@ -565,85 +535,86 @@ static void handle_stats(struct mg_connection *c) {
         has_adaptive_params = sh_adaptive_get_params(s_adaptive_tracker, &adaptive_params);
     }
 
-    char response[6144];
-    int n = snprintf(response, sizeof(response),
-        "{\n"
-        "  \"graph_path\": \"%s\",\n"
-        "  \"num_nodes\": %u,\n"
-        "  \"num_edges\": %u,\n"
-        "  \"landmarks_enabled\": %s,\n"
-        "  \"landmark_count\": %d,\n"
-        "  \"bbox\": {\n"
-        "    \"min_lat\": %.6f,\n"
-        "    \"min_lon\": %.6f,\n"
-        "    \"max_lat\": %.6f,\n"
-        "    \"max_lon\": %.6f\n"
-        "  },\n"
-        "  \"work_queue\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"depth\": %zu,\n"
-        "    \"capacity\": %zu,\n"
-        "    \"pushed\": %lu,\n"
-        "    \"popped\": %lu,\n"
-        "    \"dropped\": %lu,\n"
-        "    \"expired\": %lu\n"
-        "  },\n"
-        "  \"rate_limit\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"rps\": %.1f,\n"
-        "    \"burst\": %.0f,\n"
-        "    \"allowed\": %lu,\n"
-        "    \"denied\": %lu\n"
-        "  },\n"
-        "  \"adaptive\": {\n"
-        "    \"enabled\": %s,\n"
-        "    \"sample_count\": %lu,\n"
-        "    \"recalc_count\": %lu",
-        s_config.graph_path,
-        s_graph->num_nodes,
-        s_graph->num_edges,
-        s_landmarks ? "true" : "false",
-        s_landmarks ? s_config.landmark_count : 0,
-        s_graph->bbox_min.lat,
-        s_graph->bbox_min.lon,
-        s_graph->bbox_max.lat,
-        s_graph->bbox_max.lon,
-        s_work_queue ? "true" : "false",
-        wq_stats.current_depth, wq_stats.max_capacity,
-        (unsigned long)wq_stats.total_pushed, (unsigned long)wq_stats.total_popped,
-        (unsigned long)wq_stats.total_dropped, (unsigned long)wq_stats.total_expired,
-        s_rate_limiter ? "true" : "false",
-        s_config.rate_limit_rps, s_config.rate_limit_burst,
-        (unsigned long)rl_stats.requests_allowed, (unsigned long)rl_stats.requests_denied,
-        s_adaptive_tracker ? "true" : "false",
-        (unsigned long)adaptive_stats.sample_count, (unsigned long)adaptive_stats.recalc_count);
+    /* Build response using streaming JSON writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&w);
+
+    /* Graph info */
+    sh_json_write_kv_string(&w, "graph_path", s_config.graph_path);
+    sh_json_write_kv_int(&w, "num_nodes", (int64_t)s_graph->num_nodes);
+    sh_json_write_kv_int(&w, "num_edges", (int64_t)s_graph->num_edges);
+    sh_json_write_kv_bool(&w, "landmarks_enabled", s_landmarks != NULL);
+    sh_json_write_kv_int(&w, "landmark_count", s_landmarks ? s_config.landmark_count : 0);
+
+    /* Bounding box */
+    sh_json_write_key(&w, "bbox");
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_double_fmt(&w, "min_lat", s_graph->bbox_min.lat, 6);
+    sh_json_write_kv_double_fmt(&w, "min_lon", s_graph->bbox_min.lon, 6);
+    sh_json_write_kv_double_fmt(&w, "max_lat", s_graph->bbox_max.lat, 6);
+    sh_json_write_kv_double_fmt(&w, "max_lon", s_graph->bbox_max.lon, 6);
+    sh_json_write_object_end(&w);
+
+    /* Work queue stats */
+    sh_json_write_key(&w, "work_queue");
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_bool(&w, "enabled", s_work_queue != NULL);
+    sh_json_write_kv_int(&w, "depth", (int64_t)wq_stats.current_depth);
+    sh_json_write_kv_int(&w, "capacity", (int64_t)wq_stats.max_capacity);
+    sh_json_write_kv_int(&w, "pushed", (int64_t)wq_stats.total_pushed);
+    sh_json_write_kv_int(&w, "popped", (int64_t)wq_stats.total_popped);
+    sh_json_write_kv_int(&w, "dropped", (int64_t)wq_stats.total_dropped);
+    sh_json_write_kv_int(&w, "expired", (int64_t)wq_stats.total_expired);
+    sh_json_write_object_end(&w);
+
+    /* Rate limiter stats */
+    sh_json_write_key(&w, "rate_limit");
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_bool(&w, "enabled", s_rate_limiter != NULL);
+    sh_json_write_kv_double_fmt(&w, "rps", s_config.rate_limit_rps, 1);
+    sh_json_write_kv_double_fmt(&w, "burst", s_config.rate_limit_burst, 0);
+    sh_json_write_kv_int(&w, "allowed", (int64_t)rl_stats.requests_allowed);
+    sh_json_write_kv_int(&w, "denied", (int64_t)rl_stats.requests_denied);
+    sh_json_write_object_end(&w);
+
+    /* Adaptive capacity stats */
+    sh_json_write_key(&w, "adaptive");
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_bool(&w, "enabled", s_adaptive_tracker != NULL);
+    sh_json_write_kv_int(&w, "sample_count", (int64_t)adaptive_stats.sample_count);
+    sh_json_write_kv_int(&w, "recalc_count", (int64_t)adaptive_stats.recalc_count);
 
     /* Add percentile stats if we have samples */
-    if (s_adaptive_tracker && adaptive_stats.sample_count > 0 && n > 0 && (size_t)n < sizeof(response)) {
-        n += snprintf(response + n, sizeof(response) - (size_t)n,
-            ",\n    \"p50_ms\": %.2f,\n"
-            "    \"p90_ms\": %.2f,\n"
-            "    \"p99_ms\": %.2f,\n"
-            "    \"avg_ms\": %.2f,\n"
-            "    \"ema_ms\": %.2f",
-            adaptive_stats.p50_ms, adaptive_stats.p90_ms, adaptive_stats.p99_ms,
-            adaptive_stats.avg_ms, adaptive_stats.ema_ms);
+    if (s_adaptive_tracker && adaptive_stats.sample_count > 0) {
+        sh_json_write_kv_double_fmt(&w, "p50_ms", adaptive_stats.p50_ms, 2);
+        sh_json_write_kv_double_fmt(&w, "p90_ms", adaptive_stats.p90_ms, 2);
+        sh_json_write_kv_double_fmt(&w, "p99_ms", adaptive_stats.p99_ms, 2);
+        sh_json_write_kv_double_fmt(&w, "avg_ms", adaptive_stats.avg_ms, 2);
+        sh_json_write_kv_double_fmt(&w, "ema_ms", adaptive_stats.ema_ms, 2);
     }
 
     /* Add calculated params if available */
-    if (has_adaptive_params && n > 0 && (size_t)n < sizeof(response)) {
-        n += snprintf(response + n, sizeof(response) - (size_t)n,
-            ",\n    \"calc_rps\": %.2f,\n"
-            "    \"calc_burst\": %.0f",
-            adaptive_params.rate_limit_rps, adaptive_params.rate_limit_burst);
+    if (has_adaptive_params) {
+        sh_json_write_kv_double_fmt(&w, "calc_rps", adaptive_params.rate_limit_rps, 2);
+        sh_json_write_kv_double_fmt(&w, "calc_burst", adaptive_params.rate_limit_burst, 0);
     }
 
-    /* Close adaptive section and response */
-    if (n > 0 && (size_t)n < sizeof(response)) {
-        snprintf(response + n, sizeof(response) - (size_t)n, "\n  }\n}\n");
+    sh_json_write_object_end(&w);  /* Close adaptive */
+    sh_json_write_object_end(&w);  /* Close root */
+
+    /* Send response */
+    if (!sh_json_writer_error(&w) && jb.buf) {
+        send_json(c, 200, jb.buf);
+    } else {
+        send_error(c, 500, "Failed to generate response");
     }
 
-    send_json(c, 200, response);
+    sh_json_buf_free(&jb);
 }
 
 /* GET /metrics - Prometheus metrics endpoint, uses shared helper */
@@ -892,15 +863,12 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
         }
     }
 
-    /* Build JSON response (double polyline size for potential backslash escaping) */
-    size_t resp_capacity = 4096 + (polyline ? strlen(polyline) * 2 : 0);
-    char *response = malloc(resp_capacity);
-    if (!response) {
-        if (polyline) free(polyline);
-        vl_free_route(&route);
-        send_error(c, 500, "Out of memory");
-        return;
-    }
+    /* Build JSON response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
     const char *profile_str = "car";
     switch (profile) {
@@ -912,54 +880,56 @@ static void handle_route(struct mg_connection *c, struct mg_http_message *hm) {
 
     const char *mode_str = weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest";
 
-    size_t n = 0;
-    int written = snprintf(response, resp_capacity,
-        "{\n"
-        "  \"status\": \"ok\",\n"
-        "  \"route\": {\n"
-        "    \"distance\": %.2f,\n"
-        "    \"duration\": %.2f,\n"
-        "    \"profile\": \"%s\",\n"
-        "    \"mode\": \"%s\",\n"
-        "    \"from\": [%.6f, %.6f],\n"
-        "    \"to\": [%.6f, %.6f]",
-        route.distance_m,
-        route.duration_s,
-        profile_str,
-        mode_str,
-        from_lat, from_lon,
-        to_lat, to_lon);
-    if (written > 0) n = (size_t)written;
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_string(&jw, "status", "ok");
 
-    if (polyline && n < resp_capacity) {
-        char *escaped = json_escape_polyline(polyline);
-        if (escaped) {
-            written = snprintf(response + n, resp_capacity - n,
-                ",\n    \"geometry\": \"%s\"",
-                escaped);
-            if (written > 0) n += (size_t)written;
-            free(escaped);
-        }
+    sh_json_write_key(&jw, "route");
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_double_fmt(&jw, "distance", route.distance_m, 2);
+    sh_json_write_kv_double_fmt(&jw, "duration", route.duration_s, 2);
+    sh_json_write_kv_string(&jw, "profile", profile_str);
+    sh_json_write_kv_string(&jw, "mode", mode_str);
+
+    /* from: [lat, lon] */
+    sh_json_write_key(&jw, "from");
+    sh_json_write_array_start(&jw);
+    sh_json_write_double_fmt(&jw, from_lat, 6);
+    sh_json_write_double_fmt(&jw, from_lon, 6);
+    sh_json_write_array_end(&jw);
+
+    /* to: [lat, lon] */
+    sh_json_write_key(&jw, "to");
+    sh_json_write_array_start(&jw);
+    sh_json_write_double_fmt(&jw, to_lat, 6);
+    sh_json_write_double_fmt(&jw, to_lon, 6);
+    sh_json_write_array_end(&jw);
+
+    /* geometry (optional) - ShJsonWriter handles escaping */
+    if (polyline) {
+        sh_json_write_kv_string(&jw, "geometry", polyline);
     }
 
-    if (n < resp_capacity) {
-        written = snprintf(response + n, resp_capacity - n,
-            "\n  },\n"
-            "  \"meta\": {\n"
-            "    \"nodes_explored\": %u,\n"
-            "    \"search_time_ms\": %.2f\n"
-            "  }\n"
-            "}\n",
-            route.nodes_explored,
-            route.search_time_ms);
-        if (written > 0) n += (size_t)written;
-    }
+    sh_json_write_object_end(&jw);  /* Close route */
 
-    send_json(c, 200, response);
+    /* meta object */
+    sh_json_write_key(&jw, "meta");
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_int(&jw, "nodes_explored", (int64_t)route.nodes_explored);
+    sh_json_write_kv_double_fmt(&jw, "search_time_ms", route.search_time_ms, 2);
+    sh_json_write_object_end(&jw);
 
-    free(response);
+    sh_json_write_object_end(&jw);  /* Close root */
+
     if (polyline) free(polyline);
     vl_free_route(&route);
+
+    if (!sh_json_writer_error(&jw) && jb.buf) {
+        send_json(c, 200, jb.buf);
+    } else {
+        send_error(c, 500, "Failed to generate response");
+    }
+
+    sh_json_buf_free(&jb);
 }
 
 /* ============================================================================
@@ -1313,7 +1283,7 @@ int main(int argc, char *argv[]) {
     mg_mgr_init(&mgr);
 
     /* Build listen address */
-    char listen_url[128];
+    char listen_url[SH_URL_MAX];
     snprintf(listen_url, sizeof(listen_url), "http://%s:%d",
              s_config.listen_addr, s_config.port);
 

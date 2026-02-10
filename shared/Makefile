@@ -58,7 +58,8 @@ SRCS = src/sh_geo.c \
        src/sh_units.c \
        src/sh_piecewise.c \
        src/sh_stepfunc.c \
-       src/sh_dist.c
+       src/sh_dist.c \
+       src/sh_json.c
 
 # HTTP server components (requires mongoose - compile separately by API servers)
 # API servers should compile sh_httpserver.c directly with mongoose includes.
@@ -80,8 +81,9 @@ LIB = libshared.a
 # Test binaries
 TEST_BIN = test_shared
 TEST_FONT_BIN = test_font
+TEST_JSON_BIN = test_sh_json
 
-.PHONY: all clean test test-font font-compare lib debug generate-font-data
+.PHONY: all clean test test-font test-json font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -106,10 +108,18 @@ $(TEST_BIN): tests/test_shared.c $(LIB)
 $(TEST_FONT_BIN): tests/test_font.c $(LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
 
+$(TEST_JSON_BIN): tests/test_sh_json.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+
 # Run all tests
-test: $(TEST_BIN) $(TEST_FONT_BIN)
+test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN)
 	./$(TEST_BIN)
 	./$(TEST_FONT_BIN)
+	./$(TEST_JSON_BIN)
+
+# Run JSON tests only
+test-json: $(TEST_JSON_BIN)
+	./$(TEST_JSON_BIN)
 
 # Run font tests only
 test-font: $(TEST_FONT_BIN)
@@ -139,7 +149,7 @@ debug: clean all
 
 # Clean
 clean:
-	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN) $(FONT_COMPARE_BIN)
+	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(FONT_COMPARE_BIN)
 	rm -f tests/soft_*.png tests/compare.html
 
 # Dependencies
@@ -170,6 +180,7 @@ src/sh_spatial_grid.o: include/sh_spatial_grid.h include/sh_geo.h
 src/sh_render.o: include/sh_render.h
 src/sh_units.o: include/sh_units.h
 src/sh_polyline.o: include/sh_polyline.h include/sh_geo.h
+src/sh_json.o: include/sh_json.h include/sh_arena.h
 
 # Help
 help:

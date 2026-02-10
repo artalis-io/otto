@@ -78,13 +78,13 @@ test_health() {
 
     RESP=$(curl -s http://localhost:$PORT/api/v1/health)
 
-    if echo "$RESP" | grep -q '"status": "healthy"'; then
+    if echo "$RESP" | grep -qE '"status":\s*"healthy"'; then
         pass "Health endpoint returns healthy status"
     else
         fail "Health endpoint did not return healthy status"
     fi
 
-    if echo "$RESP" | grep -q '"service": "fuelwise-api"'; then
+    if echo "$RESP" | grep -qE '"service":\s*"fuelwise-api"'; then
         pass "Health endpoint returns correct service name"
     else
         fail "Health endpoint missing service name"
@@ -97,18 +97,21 @@ test_stats() {
 
     RESP=$(curl -s http://localhost:$PORT/api/v1/stats)
 
-    if echo "$RESP" | grep -q '"work_queue"'; then
+    if echo "$RESP" | grep -qE '"work_queue"'; then
         pass "Stats endpoint returns work_queue info"
     else
         fail "Stats endpoint missing work_queue info"
     fi
 
-    if echo "$RESP" | grep -q '"rate_limit"'; then
+    if echo "$RESP" | grep -qE '"rate_limit"'; then
         pass "Stats endpoint returns rate_limit info"
     else
         fail "Stats endpoint missing rate_limit info"
     fi
 }
+
+# Note: All grep patterns use -E (extended regex) and \s* to match optional whitespace
+# This handles both compact JSON ("key":"value") and pretty-printed JSON ("key": "value")
 
 test_solve_basic() {
     echo ""
@@ -129,20 +132,20 @@ test_solve_basic() {
             ]
         }')
 
-    if echo "$RESP" | grep -q '"status": "OPTIMAL"'; then
+    if echo "$RESP" | grep -qE '"status":\s*"OPTIMAL"'; then
         pass "Solve returns optimal solution"
     else
         fail "Solve did not return optimal solution"
         echo "  Response: $RESP"
     fi
 
-    if echo "$RESP" | grep -q '"num_stops"'; then
+    if echo "$RESP" | grep -qE '"num_stops"'; then
         pass "Solve returns num_stops"
     else
         fail "Solve missing num_stops"
     fi
 
-    if echo "$RESP" | grep -q '"total_cost"'; then
+    if echo "$RESP" | grep -qE '"total_cost"'; then
         pass "Solve returns total_cost"
     else
         fail "Solve missing total_cost"
@@ -171,7 +174,7 @@ test_solve_with_segments() {
             ]
         }')
 
-    if echo "$RESP" | grep -q '"status": "OPTIMAL"'; then
+    if echo "$RESP" | grep -qE '"status":\s*"OPTIMAL"'; then
         pass "Solve with segments returns optimal solution"
     else
         fail "Solve with segments failed"
@@ -341,8 +344,8 @@ test_rate_limiting() {
 
     # Check stats show rate limiting
     STATS=$(curl -s http://localhost:$PORT/api/v1/stats)
-    if echo "$STATS" | grep -q '"denied":'; then
-        DENIED_COUNT=$(echo "$STATS" | grep -o '"denied": [0-9]*' | grep -o '[0-9]*')
+    if echo "$STATS" | grep -qE '"denied":\s*'; then
+        DENIED_COUNT=$(echo "$STATS" | grep -oE '"denied":\s*[0-9]+' | grep -o '[0-9]*')
         if [ "$DENIED_COUNT" -gt 0 ]; then
             pass "Stats show rate limit denials ($DENIED_COUNT)"
         else
@@ -383,14 +386,14 @@ test_work_queue() {
 
     # Check stats show work queue enabled
     STATS=$(curl -s http://localhost:$PORT/api/v1/stats)
-    if echo "$STATS" | grep -q '"capacity": 5'; then
+    if echo "$STATS" | grep -qE '"capacity":\s*5'; then
         pass "Work queue configured with correct depth"
     else
         fail "Work queue depth not configured correctly"
     fi
 
     # Test queue timeout tracking
-    if echo "$STATS" | grep -q '"timeout_sec"'; then
+    if echo "$STATS" | grep -qE '"timeout_sec"'; then
         pass "Work queue shows timeout configuration"
     else
         fail "Work queue missing timeout configuration"
@@ -401,7 +404,7 @@ test_work_queue() {
     start_server "--queue-off"
 
     STATS=$(curl -s http://localhost:$PORT/api/v1/stats)
-    if echo "$STATS" | grep -q '"enabled": false'; then
+    if echo "$STATS" | grep -qE '"enabled":\s*false'; then
         pass "Work queue can be disabled"
     else
         fail "Work queue should show disabled in stats"
