@@ -167,6 +167,8 @@ void mip_free(MIPSolver *solver) {
     free(solver->pseudo_cost_up);
     free(solver->pseudo_count_down);
     free(solver->pseudo_count_up);
+    free(solver->branch_priorities);
+    free(solver->branch_directions);
     node_queue_free_with_pool(solver->node_queue, solver->node_pool);
     bb_node_pool_free(solver->node_pool);
     cut_pool_free(solver->cut_pool);

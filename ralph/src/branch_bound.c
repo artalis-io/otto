@@ -13,6 +13,7 @@
 #include <math.h>
 #include <time.h>
 #include <stdint.h>
+#include <limits.h>
 #include "mip.h"
 
 /* ============================================================================
@@ -741,16 +742,129 @@ static int select_reliability_branch(MIPSolver *solver, const double *solution) 
     return best_var;
 }
 
+/*
+ * Find the maximum priority among fractional integer variables.
+ * Returns the max priority, or INT_MIN if no fractional variables.
+ */
+static int find_max_priority(MIPSolver *solver, const double *solution) {
+    if (!solver->branch_priorities) return 0;  /* All equal priority */
+
+    int max_prio = INT_MIN;
+    const int * restrict int_vars = solver->integer_vars;
+    const int num_int = solver->num_integers;
+    const int * restrict prios = solver->branch_priorities;
+
+    for (int k = 0; k < num_int; k++) {
+        int j = int_vars[k];
+        double val = solution[j];
+        double frac = val - (double)(long)val;
+        if (frac < 0.0) frac += 1.0;
+
+        if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
+            if (prios[j] > max_prio) {
+                max_prio = prios[j];
+            }
+        }
+    }
+    return max_prio;
+}
+
+/*
+ * Most infeasible selection with priority filtering.
+ * Only considers variables at the maximum priority level.
+ */
+static int select_most_infeasible_with_priority(MIPSolver *solver, const double *solution, int max_prio) {
+    int best_var = -1;
+    double best_infeas = RALPH_INT_TOL;
+
+    const int * restrict int_vars = solver->integer_vars;
+    const int num_int = solver->num_integers;
+    const int * restrict prios = solver->branch_priorities;
+
+    for (int k = 0; k < num_int; k++) {
+        int j = int_vars[k];
+
+        /* Skip if not at max priority */
+        if (prios && prios[j] < max_prio) continue;
+
+        double val = solution[j];
+        double frac = val - (double)(long)val;
+        if (frac < 0.0) frac += 1.0;
+        double infeas = (frac <= 0.5) ? frac : (1.0 - frac);
+
+        if (infeas > best_infeas) {
+            best_infeas = infeas;
+            best_var = j;
+        }
+    }
+
+    return best_var;
+}
+
+/*
+ * Pseudo-cost selection with priority filtering.
+ */
+static int select_pseudo_cost_with_priority(MIPSolver *solver, const double *solution, int max_prio) {
+    int best_var = -1;
+    double best_score = -1.0;
+
+    const int * restrict int_vars = solver->integer_vars;
+    const double * restrict pc_down = solver->pseudo_cost_down;
+    const double * restrict pc_up = solver->pseudo_cost_up;
+    const int num_int = solver->num_integers;
+    const int * restrict prios = solver->branch_priorities;
+
+    for (int k = 0; k < num_int; k++) {
+        int j = int_vars[k];
+
+        /* Skip if not at max priority */
+        if (prios && prios[j] < max_prio) continue;
+
+        double val = solution[j];
+        double frac = val - (double)(long)val;
+        if (frac < 0.0) frac += 1.0;
+
+        if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) continue;
+
+        double down_est = frac * pc_down[j];
+        double up_est = (1.0 - frac) * pc_up[j];
+        double score = fmax(down_est, RALPH_ZERO_TOL) * fmax(up_est, RALPH_ZERO_TOL);
+
+        if (score > best_score) {
+            best_score = score;
+            best_var = j;
+        }
+    }
+
+    if (best_var < 0) {
+        best_var = select_most_infeasible_with_priority(solver, solution, max_prio);
+    }
+
+    return best_var;
+}
+
 int select_branch_variable(MIPSolver *solver, const double *solution, int *branch_var) {
+    /* Find max priority among fractional variables */
+    int max_prio = find_max_priority(solver, solution);
+
     switch (solver->var_select) {
         case VAR_SELECT_MAX_INFEAS:
-            *branch_var = select_most_infeasible(solver, solution);
+            if (solver->branch_priorities) {
+                *branch_var = select_most_infeasible_with_priority(solver, solution, max_prio);
+            } else {
+                *branch_var = select_most_infeasible(solver, solution);
+            }
             break;
         case VAR_SELECT_PSEUDO_COST:
-            *branch_var = select_pseudo_cost(solver, solution);
+            if (solver->branch_priorities) {
+                *branch_var = select_pseudo_cost_with_priority(solver, solution, max_prio);
+            } else {
+                *branch_var = select_pseudo_cost(solver, solution);
+            }
             break;
         case VAR_SELECT_STRONG_BRANCH:
         case VAR_SELECT_RELIABILITY:
+            /* Note: reliability branching doesn't yet support priorities */
             *branch_var = select_reliability_branch(solver, solution);
             break;
         case VAR_SELECT_SCP: {
@@ -842,6 +956,20 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
         (*child_up)->branch_dir = BRANCH_UP;
         (*child_up)->lb[branch_var] = ceil(val);
         (*child_up)->estimate = estimate_branch_obj(solver, branch_var, val, BRANCH_UP);
+    }
+
+    /* Apply preferred branch direction by swapping if needed.
+     * The first child (child_down in original output slot) is explored first
+     * in depth-first search. By swapping, we control which direction is tried first.
+     */
+    if (solver->branch_directions) {
+        int pref = solver->branch_directions[branch_var];
+        if (pref > 0) {  /* RALPH_BRANCH_UP: prefer up first */
+            BBNode *tmp = *child_down;
+            *child_down = *child_up;
+            *child_up = tmp;
+        }
+        /* pref < 0 (RALPH_BRANCH_DOWN) or pref == 0 (AUTO): keep default order */
     }
 }
 

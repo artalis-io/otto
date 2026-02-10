@@ -153,6 +153,10 @@ typedef struct {
     int *pseudo_count_down;
     int *pseudo_count_up;
 
+    /* User-provided branching control */
+    int *branch_priorities;     /* Priority for each variable (higher = branch first) */
+    int *branch_directions;     /* Preferred direction: -1=down, 0=auto, 1=up */
+
     /* Parameters */
     int max_nodes;
     double time_limit;
