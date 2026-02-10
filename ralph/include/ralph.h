@@ -270,6 +270,100 @@ typedef struct {
  */
 void ralph_set_branch_callback(RalphModel *model, const RalphBranchCallback *callback);
 
+/* ============================================================================
+ * Benders Decomposition
+ * ============================================================================
+ *
+ * Generic Benders decomposition solver for problems of the form:
+ *   min c'x + d'y
+ *   s.t. Ax = b               (master constraints)
+ *        Tx + Wy = h          (linking constraints)
+ *        x ∈ X (integer)      (complicating variables)
+ *        y ≥ 0                (continuous recourse)
+ *
+ * User specifies which variables are "complicating" (go to master problem).
+ * Ralph automatically:
+ *   1. Partitions model into master (MIP) + subproblem (LP)
+ *   2. Detects linking constraints
+ *   3. Generates optimality cuts from subproblem duals
+ *   4. Generates feasibility cuts from Farkas rays
+ *   5. Iterates until convergence
+ */
+
+/* Benders configuration */
+typedef struct {
+    /* Which variables belong to master problem (complicating variables) */
+    const int *master_var_indices;
+    int num_master_vars;
+
+    /* The θ variable representing subproblem cost (-1 to auto-create) */
+    int theta_var;
+
+    /* Stochastic Benders: multiple scenarios (deterministic = 1) */
+    int num_scenarios;
+    const double *scenario_probs;   /* NULL = equal weights */
+
+    /* Algorithm parameters */
+    double gap_tolerance;           /* Convergence gap (default 1e-6) */
+    int max_iterations;             /* Iteration limit (default 1000) */
+    int cuts_at_lp_nodes;           /* 1 = modern branch-and-Benders-cut */
+    int warm_start_subproblems;     /* 1 = reuse subproblem basis */
+    int verbose;                    /* Verbosity level (0-2) */
+} RalphBendersConfig;
+
+/* Default configuration */
+#define RALPH_BENDERS_CONFIG_DEFAULT { \
+    .master_var_indices = NULL,        \
+    .num_master_vars = 0,              \
+    .theta_var = -1,                   \
+    .num_scenarios = 1,                \
+    .scenario_probs = NULL,            \
+    .gap_tolerance = 1e-6,             \
+    .max_iterations = 1000,            \
+    .cuts_at_lp_nodes = 1,             \
+    .warm_start_subproblems = 1,       \
+    .verbose = 0                       \
+}
+
+/* Benders result information */
+typedef struct {
+    RalphStatus status;         /* Solution status */
+    double objective;           /* Optimal objective value */
+    double master_obj;          /* Master objective (c'x + θ) */
+    double subproblem_obj;      /* Subproblem objective (d'y) */
+    double gap;                 /* Final optimality gap */
+    int iterations;             /* Number of Benders iterations */
+    int optimality_cuts;        /* Number of optimality cuts added */
+    int feasibility_cuts;       /* Number of feasibility cuts added */
+    int nodes_explored;         /* B&B nodes (if cuts_at_lp_nodes) */
+    double solve_time;          /* Total solve time in seconds */
+} RalphBendersResult;
+
+/*
+ * Solve a model using Benders decomposition.
+ *
+ * @param model   The full model containing all variables and constraints
+ * @param config  Benders configuration specifying master variables
+ * @param x       Output: optimal solution (size = num_vars). May be NULL.
+ * @param result  Output: detailed result info. May be NULL.
+ * @return 0 on success, -1 on error
+ *
+ * The model is partitioned into:
+ *   - Master: variables in master_var_indices + theta variable
+ *   - Subproblem: all other variables
+ *
+ * Constraints are classified as:
+ *   - Master-only: only involve master variables → go to master
+ *   - Subproblem-only: only involve subproblem variables → go to subproblem
+ *   - Linking: involve both → RHS depends on master solution
+ */
+int ralph_solve_benders(
+    RalphModel *model,
+    const RalphBendersConfig *config,
+    double *x,
+    RalphBendersResult *result
+);
+
 /* Parameters */
 int ralph_set_int_param(RalphModel *model, const char *name, int value);
 int ralph_set_dbl_param(RalphModel *model, const char *name, double value);
