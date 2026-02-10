@@ -1746,3 +1746,74 @@ For k > 50, Benders becomes necessary regardless of solver. At that point, Ralph
 3. k=100: Verify solves within 5s
 4. Infeasibility: Verify Farkas cuts block infeasible z patterns
 5. Optimality: Verify final solution matches enumeration (for k≤20)
+
+---
+
+## Chapter 8: Known Issues & TODOs
+
+### 8.1 Benders Decomposition Known Issues (Feb 2026)
+
+**Issue 1: Gomory Cuts Cause Infeasibility**
+
+When using Ralph's generic Benders solver (`ralph_solve_benders`) with FuelWise, enabling
+Gomory/MIR cut generation in the master MIP solver causes the algorithm to return INFEASIBLE
+even on feasible problems.
+
+**Root cause:** Gomory cuts are generated based on the LP relaxation at each B&B node. In
+Benders, the master LP relaxation is incomplete (missing the full subproblem structure),
+so Gomory cuts can incorrectly cut off the optimal solution.
+
+**Workaround:** Disable cut generation in the master solver:
+```c
+ctx->master_solver->max_cut_rounds = 0;
+```
+
+**Status:** Workaround applied. This is expected behavior—Benders requires custom cut
+handling, not generic LP cuts on an incomplete master formulation.
+
+---
+
+**Issue 2: Algorithm Converges to Suboptimal Solution**
+
+The Benders implementation runs without crashes but finds a suboptimal solution.
+
+**Test case:** 3-station problem with expected optimal cost $74.00
+**Actual result:** Benders returns $85.00 (suboptimal)
+
+**Numerical stability fix applied:** Changed theta bounds from hardcoded ±1e9 to calculated
+bounds based on problem structure:
+```c
+double max_fuel_value = k * tank_capacity * max_price;
+double theta_bound = 100.0 * (max_fuel_value + 1.0);
+```
+
+This fixed the RALPH_STATUS_ERROR (-1) crashes but the algorithm still converges to a
+suboptimal solution.
+
+---
+
+### 8.2 TODO: Investigate Cut Generation
+
+The suboptimal convergence suggests issues in how Benders cuts are generated or applied.
+Priority investigation areas:
+
+| Area | Suspected Issue | Investigation Steps |
+|------|-----------------|---------------------|
+| **Optimality cuts** | Dual values incorrectly extracted or transformed | 1. Print dual values after each subproblem solve<br>2. Verify sign convention matches Benders formulation<br>3. Check constraint indexing (linking vs sub-only) |
+| **RHS contribution** | `sub_only_rhs_contribution` calculation may be wrong | 1. Verify which constraints are classified as linking<br>2. Check RHS adjustment when z values change<br>3. Test with simpler 2-station problem |
+| **Cut coefficients** | Theta coefficient or z coefficients may be wrong | 1. Print full cut before adding to master<br>2. Manually verify cut validity<br>3. Compare with textbook Benders formulation |
+| **Feasibility cuts** | May be too weak or incorrectly normalized | 1. Test with problem that requires feasibility cuts<br>2. Verify Farkas ray normalization<br>3. Check blocking set extraction |
+
+**Approach:** Create minimal test case (2 stations, explicit optimal solution), trace through
+Benders iteration, verify each cut manually against theory.
+
+---
+
+### 8.3 Relationship to Ralph §7.8
+
+These issues are also documented in `docs/roadmaps/ralph.md` §7.8 (Known Limitations).
+The FuelWise-specific context is:
+
+- FuelWise is the primary use case for Ralph's Benders solver
+- The suboptimal convergence was discovered during FuelWise benchmark testing
+- Fixes should be validated against FuelWise test cases before closing
