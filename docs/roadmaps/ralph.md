@@ -14,7 +14,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
 | **Presolve** | ✅ Phase 1 | Singleton, redundant rows, bound tightening |
 | **NETLIB Suite** | 67% Pass | 8/12 problems (see below) |
-| **MIP Infrastructure** | ⏳ Planned | Branching priorities, cut callbacks, Benders (§6) |
+| **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
 
 ---
 
@@ -132,11 +132,13 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ### 4.1 Decomposition Methods
 
-**Benders Decomposition** (Planned)
+**Benders Decomposition** (Infrastructure ✅, Algorithm ⏳)
 - For mixed-integer stochastic programs
 - Master problem (integer) + subproblems (LP)
 - Useful for: fleet optimization, network design
-- **See §6.3** for FuelWise-specific Benders implementation
+- **Status:** MIP infrastructure (cut callbacks, warm start, lazy constraints) complete in §6
+- **Next:** Implement true Benders algorithm in FuelWise (currently uses enumeration for k≤20)
+- **See §6.3** for FuelWise-specific Benders design (planned)
 
 **Dantzig-Wolfe Decomposition** (Planned)
 - For block-angular structure
@@ -363,20 +365,25 @@ while (1) {
 }
 ```
 
-#### P2: Warm Start + Farkas Ray (~350 LoC)
+#### P2: Warm Start + Cut Callback ✅
 
 ```c
-/*
- * Save/restore LP basis for warm start between solves.
- */
-int ralph_save_basis(RalphModel *model, int **basis);
-int ralph_load_basis(RalphModel *model, const int *basis);
+/* Basis representation for warm start */
+typedef struct RalphBasis RalphBasis;
+RalphBasis* ralph_save_basis(const RalphModel *model);
+int ralph_load_basis(RalphModel *model, const RalphBasis *basis);
+void ralph_free_basis(RalphBasis *basis);
 
-/*
- * Extract Farkas ray (infeasibility certificate) for Benders feasibility cuts.
- * Returns ray such that: ray'b < 0 while ray'A >= 0, proving infeasibility.
- */
-int ralph_get_farkas_ray(RalphModel *model, double *ray);
+/* Farkas ray (infeasibility certificate) - already implemented */
+int ralph_get_farkas_ray(const RalphModel *model, double *ray);
+
+/* Cut callback for automatic cut generation at B&B nodes */
+typedef struct {
+    int (*generate_cuts)(void *user_data, const double *x_relaxation,
+                         int num_vars, RalphCut *cuts, int max_cuts);
+    void *user_data;
+} RalphCutCallback;
+void ralph_set_cut_callback(RalphModel *model, const RalphCutCallback *cb);
 ```
 
 **Use case:** Benders decomposition for FuelWise with k>30 stations. See §4.1 for
@@ -421,29 +428,22 @@ void ralph_set_cut_callback(RalphModel *model, RalphCutCallback *cb);
 - Age out ineffective cuts
 - Generate at most 10-20 cuts per callback (diminishing returns)
 
-#### P3: Branching Callback (~200 LoC)
+#### P3: Branching Callback ✅
 
 ```c
-/* Branching decision */
+/* Branching callback for custom variable selection */
 typedef struct {
-    int var_index;      /* Variable to branch on (-1 = use default) */
-    double branch_point;/* Value to branch at (usually 0.5 for binary) */
-    int direction;      /* 0 = down first, 1 = up first */
-} RalphBranchDecision;
-
-typedef struct {
-    RalphBranchDecision (*select_branch)(
-        void *user_data,
-        const double *x_relaxation,
-        const int *fractional_vars,
-        const double *fractional_vals,
-        int num_fractional
-    );
+    int (*select_branch_var)(void *user_data, const double *x_relaxation,
+                              int num_vars, const int *is_integer,
+                              const double *lb, const double *ub);
     void *user_data;
 } RalphBranchCallback;
 
-void ralph_set_branch_callback(RalphModel *model, RalphBranchCallback *cb);
+void ralph_set_branch_callback(RalphModel *model, const RalphBranchCallback *cb);
 ```
+
+Callback returns variable index to branch on, or -1 to use default strategy.
+Variable must be fractional and integer-constrained.
 
 ### 6.3 FuelWise-Specific Cuts
 
@@ -517,7 +517,13 @@ int fw_generate_reach_cuts(
 }
 ```
 
-#### Benders Decomposition
+#### Benders Decomposition (Planned)
+
+**Current state:** FuelWise uses exhaustive enumeration for k≤20 stations via
+`fw_solve_refuel_benders()`, which iterates all 2^k combinations. This is not
+true Benders decomposition.
+
+**Why upgrade to true Benders:** Scale to k>30 stations without exponential blowup.
 
 See §4.1 for general Benders background. For FuelWise specifically:
 
@@ -659,17 +665,19 @@ Per FMCSA 2020 rule, both OFF and WORK (on-duty/not-driving) qualify as break ti
 | Chain of 3 tasks | 30-120s | 10-30s |
 | Chain of 5 tasks | 2-10 min | 30-120s |
 
-### 6.6 Implementation Timeline
+### 6.6 Implementation Status
 
-| Week | Features | LoC | Enables |
-|------|----------|-----|---------|
-| 1 | Branch priorities + directions | 100 | Better MIP for k≤30 |
-| 2 | Lazy constraints + bound query + RHS mod | 200 | Manual cut loop, Benders prep |
-| 3 | Warm start + Farkas ray | 350 | Full Benders for k>30 |
-| 4 | Cut callback | 400 | Automatic domain cuts during B&B |
-| 5 | Integration + testing | - | FuelWise reach cuts, HoSE clock cuts |
+| Phase | Features | Status | Notes |
+|-------|----------|--------|-------|
+| P0 | Branch priorities + directions | ✅ Complete | Better MIP for k≤30 |
+| P1 | Lazy constraints + bound query + RHS mod | ✅ Complete | Manual cut loop, Benders prep |
+| P2 | Warm start + cut callback | ✅ Complete | Basis save/restore, automatic cuts |
+| P3 | Branching callback | ✅ Complete | Custom variable selection |
+| - | FuelWise true Benders | ⏳ Planned | Replace enumeration with MIP master |
+| - | HoSE clock cuts | ⏳ Planned | Driving/break capacity cuts |
 
-**Total: ~1050 LoC** for complete MIP infrastructure.
+**MIP infrastructure complete (Feb 2026).** Next: implement domain-specific algorithms
+using the infrastructure (true Benders for FuelWise, clock cuts for HoSE).
 
 ### 6.7 Relationship to §4.3 MIP Improvements
 
