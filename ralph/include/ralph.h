@@ -177,6 +177,65 @@ int ralph_add_lazy_constraint(RalphModel *model, const RalphCut *cut);
  */
 int ralph_add_lazy_constraints(RalphModel *model, const RalphCut *cuts, int count);
 
+/* Warm start support (basis save/restore)
+ *
+ * Save and restore LP basis between solves for warm start. Particularly
+ * useful for Benders decomposition where the subproblem changes slightly
+ * between iterations.
+ */
+
+/* Opaque basis handle */
+typedef struct RalphBasis RalphBasis;
+
+/* Save the current LP basis.
+ * @param model The model (must have been solved)
+ * @return Basis handle, or NULL on error. Caller must free with ralph_free_basis().
+ */
+RalphBasis* ralph_save_basis(const RalphModel *model);
+
+/* Load a previously saved basis for warm start.
+ * @param model The model
+ * @param basis The basis to load
+ * @return 0 on success, -1 on error (e.g., dimensions mismatch)
+ */
+int ralph_load_basis(RalphModel *model, const RalphBasis *basis);
+
+/* Free a saved basis.
+ * @param basis The basis to free (may be NULL)
+ */
+void ralph_free_basis(RalphBasis *basis);
+
+/* Cut callback (for automatic cut generation during MIP solving)
+ *
+ * The callback is invoked at each B&B node after the LP relaxation is solved.
+ * The user can generate domain-specific cuts based on the fractional solution.
+ */
+typedef struct {
+    /*
+     * Called at each B&B node after LP relaxation solved.
+     * @param user_data   User-provided context pointer
+     * @param x_relaxation Current LP solution (may be fractional)
+     * @param num_vars    Number of variables
+     * @param cuts        Output array for generated cuts
+     * @param max_cuts    Maximum number of cuts to generate
+     * @return Number of cuts added (0 = no cuts found), or -1 on error
+     */
+    int (*generate_cuts)(
+        void *user_data,
+        const double *x_relaxation,
+        int num_vars,
+        RalphCut *cuts,
+        int max_cuts
+    );
+    void *user_data;    /* User-provided context (passed to generate_cuts) */
+} RalphCutCallback;
+
+/* Set cut callback for automatic cut generation during MIP solving.
+ * @param model    The model
+ * @param callback The callback (NULL to disable)
+ */
+void ralph_set_cut_callback(RalphModel *model, const RalphCutCallback *callback);
+
 /* Parameters */
 int ralph_set_int_param(RalphModel *model, const char *name, int value);
 int ralph_set_dbl_param(RalphModel *model, const char *name, double value);

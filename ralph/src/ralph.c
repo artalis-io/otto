@@ -54,8 +54,20 @@ struct RalphModel {
     int *branch_priorities;
     int *branch_directions;
 
+    /* Cut callback (stored until MIP solver is created) */
+    RalphCutCallback cut_callback;
+    int has_cut_callback;
+
     /* Statistics */
     int iteration_count;
+};
+
+/* Basis representation for warm start */
+struct RalphBasis {
+    int m;              /* Number of constraints */
+    int n;              /* Number of extended variables */
+    int *basis;         /* Basic variable indices (size m) */
+    VarStatus *var_status;  /* Variable status array (size n) */
 };
 
 /* ============================================================================
@@ -444,6 +456,12 @@ int ralph_optimize(RalphModel *model) {
             }
         }
 
+        /* Pass cut callback to MIP solver */
+        if (model->has_cut_callback) {
+            model->mip_solver->cut_callback = model->cut_callback;
+            model->mip_solver->has_cut_callback = 1;
+        }
+
         /* Solve */
         mip_solve(model->mip_solver);
 
@@ -742,6 +760,117 @@ int ralph_add_lazy_constraints(RalphModel *model, const RalphCut *cuts, int coun
     }
 
     return 0;
+}
+
+/* ============================================================================
+ * Warm Start (Basis Save/Restore)
+ * ============================================================================ */
+
+RalphBasis* ralph_save_basis(const RalphModel *model) {
+    if (!model || !model->lp_solver || !model->lp_solver->tableau) {
+        return NULL;
+    }
+
+    SimplexTableau *tab = model->lp_solver->tableau;
+    if (!tab->basis || !tab->var_status) {
+        return NULL;
+    }
+
+    RalphBasis *basis = (RalphBasis*)calloc(1, sizeof(RalphBasis));
+    if (!basis) return NULL;
+
+    basis->m = tab->m;
+    basis->n = tab->n;
+
+    /* Copy basis array */
+    basis->basis = (int*)malloc(tab->m * sizeof(int));
+    if (!basis->basis) {
+        free(basis);
+        return NULL;
+    }
+    memcpy(basis->basis, tab->basis, tab->m * sizeof(int));
+
+    /* Copy variable status array */
+    basis->var_status = (VarStatus*)malloc(tab->n * sizeof(VarStatus));
+    if (!basis->var_status) {
+        free(basis->basis);
+        free(basis);
+        return NULL;
+    }
+    memcpy(basis->var_status, tab->var_status, tab->n * sizeof(VarStatus));
+
+    return basis;
+}
+
+int ralph_load_basis(RalphModel *model, const RalphBasis *basis) {
+    if (!model || !basis) return -1;
+
+    /* We can't load basis directly into the simplex solver since it might not exist yet.
+     * Instead, we need to store the basis in the model and apply it when we create the solver.
+     *
+     * For now, if the solver already exists and has matching dimensions, we can load directly.
+     */
+    if (model->lp_solver && model->lp_solver->tableau) {
+        SimplexTableau *tab = model->lp_solver->tableau;
+
+        /* Check dimension compatibility */
+        if (tab->m != basis->m || tab->n != basis->n) {
+            return -1;  /* Dimensions don't match */
+        }
+
+        /* Copy basis data */
+        memcpy(tab->basis, basis->basis, tab->m * sizeof(int));
+        memcpy(tab->var_status, basis->var_status, tab->n * sizeof(VarStatus));
+
+        /* Rebuild basis_pos from basis */
+        for (int j = 0; j < tab->n; j++) {
+            tab->basis_pos[j] = -1;  /* Mark as non-basic */
+        }
+        for (int i = 0; i < tab->m; i++) {
+            int basic_var = tab->basis[i];
+            if (basic_var >= 0 && basic_var < tab->n) {
+                tab->basis_pos[basic_var] = i;
+            }
+        }
+
+        /* Invalidate current solution to force recomputation */
+        tab->duals_valid = 0;
+        tab->rc_all_valid = 0;
+
+        /* Force refactorization with new basis */
+        if (tableau_refactorize(tab) != 0) {
+            return -1;
+        }
+
+        return 0;
+    }
+
+    /* If no solver exists yet, we'd need to store the basis and apply it later.
+     * For now, return error - caller should load basis after first solve. */
+    return -1;
+}
+
+void ralph_free_basis(RalphBasis *basis) {
+    if (!basis) return;
+    free(basis->basis);
+    free(basis->var_status);
+    free(basis);
+}
+
+/* ============================================================================
+ * Cut Callback
+ * ============================================================================ */
+
+void ralph_set_cut_callback(RalphModel *model, const RalphCutCallback *callback) {
+    if (!model) return;
+
+    if (callback) {
+        model->cut_callback = *callback;
+        model->has_cut_callback = 1;
+    } else {
+        memset(&model->cut_callback, 0, sizeof(RalphCutCallback));
+        model->has_cut_callback = 0;
+    }
 }
 
 /* ============================================================================
