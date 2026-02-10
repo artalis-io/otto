@@ -1843,6 +1843,7 @@ void simplex_free(SimplexSolver *solver) {
  */
 static void extract_farkas_ray(SimplexSolver *solver) {
     SimplexTableau *tab = solver->tableau;
+    LPModel *model = solver->model;
     int m = tab->m;
 
     /* Allocate if needed */
@@ -1875,9 +1876,8 @@ static void extract_farkas_ray(SimplexSolver *solver) {
         if (absval > max_abs) max_abs = absval;
     }
 
-    /* Validate: Farkas ray must be nontrivial (||ray||_inf > eps) */
+    /* Validation 1: Farkas ray must be nontrivial (||ray||_inf > eps) */
     if (max_abs < 1e-9) {
-        /* Zero ray indicates a problem with the extraction */
         solver->farkas_valid = 0;
         if (solver->verbose) {
             fprintf(stderr, "[extract_farkas_ray] WARNING: Farkas ray is all zeros\n");
@@ -1885,7 +1885,61 @@ static void extract_farkas_ray(SimplexSolver *solver) {
         return;
     }
 
+    /* Validation 2: y'b_normalized must be negative (infeasibility certificate).
+     * For standard form, >= constraints are transformed to <= by negation.
+     * So for the Farkas check:
+     *   - L (<=): use +b
+     *   - G (>=): use -b (since Ax >= b becomes -Ax <= -b)
+     *   - E (=): use +b (both directions bounded)
+     * We check y'b_norm < -eps for infeasibility. */
+    double y_dot_b = 0.0;
+    for (int i = 0; i < m; i++) {
+        double b_norm = model->b[i];
+        if (model->sense[i] == 'G') {
+            b_norm = -b_norm;  /* >= constraints are negated in standard form */
+        }
+        y_dot_b += solver->farkas_ray[i] * b_norm;
+    }
+
+    if (y_dot_b >= -1e-9) {
+        /* y'b is not negative - this is not a valid infeasibility certificate */
+        solver->farkas_valid = 0;
+        if (solver->verbose) {
+            fprintf(stderr, "[extract_farkas_ray] WARNING: y'b_norm = %.6e >= 0 (invalid certificate)\n",
+                    y_dot_b);
+        }
+        return;
+    }
+
+    /* Validation 3: Spot-check y'a_j >= -eps for some structural columns.
+     * Full validation would check all columns, but spot-checking catches
+     * most "wrong vector" bugs. Check first 10 structural + artificial cols. */
+    SparseMatrix *A = model->A;
+    if (A) {
+        int check_count = (model->num_vars < 10) ? model->num_vars : 10;
+        for (int j = 0; j < check_count; j++) {
+            double y_dot_aj = 0.0;
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int row = A->rowidx[p];
+                y_dot_aj += solver->farkas_ray[row] * A->values[p];
+            }
+            if (y_dot_aj < -1e-6) {  /* Slightly relaxed tolerance for numerical noise */
+                solver->farkas_valid = 0;
+                if (solver->verbose) {
+                    fprintf(stderr, "[extract_farkas_ray] WARNING: y'a[%d] = %.6e < 0 (invalid certificate)\n",
+                            j, y_dot_aj);
+                }
+                return;
+            }
+        }
+    }
+
     solver->farkas_valid = 1;
+
+    if (solver->verbose >= 2) {
+        fprintf(stderr, "[extract_farkas_ray] Valid certificate: y'b = %.6e, ||y||_inf = %.6e\n",
+                y_dot_b, max_abs);
+    }
 }
 
 /* ============================================================================
