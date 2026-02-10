@@ -336,7 +336,8 @@ static void tableau_init_weights(SimplexTableau *tab) {
     tab->rc_all_valid = 0;
 }
 
-SimplexTableau* tableau_create(LPModel *model) {
+/* Internal: create tableau with explicit two-phase control */
+static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase) {
     if (!model) return NULL;
 
     /* Finalize model if not done */
@@ -406,8 +407,11 @@ SimplexTableau* tableau_create(LPModel *model) {
      * Two-phase is more numerically stable when there are many equalities,
      * but can have issues with stuck artificials (redundant rows).
      * Threshold: use two-phase only when equalities > 80% of constraints.
-     * This targets extreme cases like beaconfd (81% equalities). */
-    int use_two_phase = (num_equalities > (4 * model->num_cons) / 5);
+     * This targets extreme cases like beaconfd (81% equalities).
+     *
+     * IMPORTANT: For Benders decomposition, force_two_phase=1 ensures clean
+     * duals without BigM contamination. */
+    int use_two_phase = force_two_phase || (num_equalities > (4 * model->num_cons) / 5);
     tab->use_two_phase = use_two_phase;
 
     /* Allocate all tableau arrays */
@@ -677,6 +681,11 @@ SimplexTableau* tableau_create(LPModel *model) {
     free(norm_sign);
     free(basic_var_for_row);
     return tab;
+}
+
+/* Public wrapper: create tableau with automatic two-phase decision */
+SimplexTableau* tableau_create(LPModel *model) {
+    return tableau_create_ex(model, 0);
 }
 
 void tableau_free(SimplexTableau *tab) {
@@ -1846,18 +1855,34 @@ static void extract_farkas_ray(SimplexSolver *solver) {
     }
 
     /* The dual values y = c_B' * B^{-1} from Phase 1 give the Farkas ray.
-     * At infeasibility detection, tab->y contains these values.
-     * We need to compute them fresh using the current basis. */
+     * IMPORTANT: This must be called while still in Phase 1, before restoring
+     * the original objective. The Phase 1 c_ext has:
+     *   - 0 for structural variables
+     *   - 1 for artificial variables
+     * This produces y such that y'A >= 0 for all original columns and y'b < 0.
+     *
+     * Row ordering is stable: slacks/artificials are columns, not rows.
+     * Row i in tab->y corresponds to original constraint i. */
 
-    /* Compute y = c_B' * B^{-1} via BTRAN
-     * For Phase 1 infeasibility, we use the direction of the infeasible row */
-
-    /* Get the dual values from the tableau */
+    /* Compute y = c_B' * B^{-1} via BTRAN with Phase 1 costs */
     tableau_compute_reduced_costs(tab);
 
     /* Copy the dual values - these are the Farkas multipliers */
+    double max_abs = 0.0;
     for (int i = 0; i < m; i++) {
         solver->farkas_ray[i] = tab->y[i];
+        double absval = fabs(tab->y[i]);
+        if (absval > max_abs) max_abs = absval;
+    }
+
+    /* Validate: Farkas ray must be nontrivial (||ray||_inf > eps) */
+    if (max_abs < 1e-9) {
+        /* Zero ray indicates a problem with the extraction */
+        solver->farkas_valid = 0;
+        if (solver->verbose) {
+            fprintf(stderr, "[extract_farkas_ray] WARNING: Farkas ray is all zeros\n");
+        }
+        return;
     }
 
     solver->farkas_valid = 1;
@@ -2164,11 +2189,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                  * Use a relaxed tolerance (1e-4) to distinguish true infeasibility
                  * from numerical noise. */
                 if (art_sum > 1e-4) {
-                    /* Truly infeasible */
+                    /* Truly infeasible - extract Farkas ray from Phase 1 duals.
+                     * The Phase 1 duals y = c_B^T * B^{-1} provide the certificate. */
                     if (solver->verbose) {
                         fprintf(stderr, "[simplex_phase1] INFEASIBLE: artificial sum = %g after %d iterations\n",
                                 art_sum, iter);
                     }
+                    extract_farkas_ray(solver);
                     solver->status = RALPH_STATUS_INFEASIBLE;
                     solver->iterations = iter;
                     return -1;
@@ -2822,9 +2849,9 @@ int simplex_solve(SimplexSolver *solver) {
         }
     }
 
-    /* Create tableau */
+    /* Create tableau (force two-phase if requested, e.g., for Benders subproblems) */
     if (solver->verbose) printf("[simplex_solve] Creating tableau...\n");
-    solver->tableau = tableau_create(solver->model);
+    solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase);
     if (!solver->tableau) {
         solver->status = RALPH_STATUS_ERROR;
         return -1;

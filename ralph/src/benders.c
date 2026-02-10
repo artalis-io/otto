@@ -554,6 +554,9 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
     if (!ctx->sub_solvers[scenario]) {
         ctx->sub_solvers[scenario] = simplex_create(sub);
         if (!ctx->sub_solvers[scenario]) return -1;
+        /* Force two-phase simplex for Benders subproblems.
+         * This prevents BigM dual contamination that invalidates cuts. */
+        ctx->sub_solvers[scenario]->force_two_phase = 1;
     }
 
     SimplexSolver *solver = ctx->sub_solvers[scenario];

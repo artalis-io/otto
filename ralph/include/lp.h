@@ -280,6 +280,7 @@ typedef struct {
     int scaling;
     int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial */
     int verbose;
+    int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
 
     /* Scaling factors (used if scaling enabled) */
     double *row_scale;      /* Row scaling factors */
