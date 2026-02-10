@@ -989,6 +989,30 @@ weighted cuts: `θ[k] ≥ π[k]'(h[k] - T[k]x)` for each scenario.
 | **Numerical sensitivity** | Very large bounds (1e30) can cause simplex instability | Use reasonable bounds (<1e6) for theta variable |
 | **0 master constraints** | Edge case returns error | Add dummy constraint if needed |
 | **Feasibility cuts** | Less tested than optimality cuts | Most problems have feasible subproblems |
+| **Gomory cuts + Benders** | Gomory/MIR cuts in master solver cause INFEASIBLE status | Set `max_cut_rounds = 0` on master solver to disable |
+| **Algorithm correctness** | FuelWise Benders converges to suboptimal solution ($85 vs expected $74) | Under investigation (see TODO below) |
+
+**TODO: Benders Algorithm Correctness**
+
+The Benders implementation converges without errors but finds a suboptimal solution in FuelWise
+test cases. Suspected issues to investigate:
+
+1. **Optimality cut generation**: Verify dual values from subproblem are correctly extracted
+   and transformed into valid Benders optimality cuts. Check sign conventions and constraint
+   indexing.
+
+2. **Subproblem RHS handling**: The subproblem RHS depends on master solution (z values).
+   Verify `sub_only_rhs_contribution` correctly accounts for constraints that only involve
+   subproblem variables vs linking constraints.
+
+3. **Farkas ray normalization**: Feasibility cuts use Farkas rays which require normalization.
+   The current implementation normalizes but may have sign/indexing issues.
+
+4. **Theta bounds**: Fixed by calculating from problem structure (max_fuel_value * 100) rather
+   than hardcoded ±1e9. Verify this is sufficient for all problem instances.
+
+5. **Cut accumulation**: Ensure cuts from previous iterations remain valid and are not
+   inadvertently modified or dropped.
 
 **Does NOT affect FuelWise:**
 - FuelWise has master constraints (capacity constraints)
