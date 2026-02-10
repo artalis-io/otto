@@ -50,6 +50,10 @@ struct RalphModel {
     double best_bound;
     int node_count;
 
+    /* Branching control (stored until MIP solver is created) */
+    int *branch_priorities;
+    int *branch_directions;
+
     /* Statistics */
     int iteration_count;
 };
@@ -95,6 +99,8 @@ void ralph_free(RalphModel *model) {
     free(model->solution);
     free(model->dual_solution);
     free(model->reduced_costs);
+    free(model->branch_priorities);
+    free(model->branch_directions);
     free(model);
 }
 
@@ -422,6 +428,22 @@ int ralph_optimize(RalphModel *model) {
         model->mip_solver->verbose = model->verbose;
         model->mip_solver->max_cut_rounds = model->max_cut_rounds;
 
+        /* Pass branching control data to MIP solver */
+        if (model->branch_priorities) {
+            int n = model->lp_model->num_vars;
+            model->mip_solver->branch_priorities = (int*)malloc(n * sizeof(int));
+            if (model->mip_solver->branch_priorities) {
+                memcpy(model->mip_solver->branch_priorities, model->branch_priorities, n * sizeof(int));
+            }
+        }
+        if (model->branch_directions) {
+            int n = model->lp_model->num_vars;
+            model->mip_solver->branch_directions = (int*)malloc(n * sizeof(int));
+            if (model->mip_solver->branch_directions) {
+                memcpy(model->mip_solver->branch_directions, model->branch_directions, n * sizeof(int));
+            }
+        }
+
         /* Solve */
         mip_solve(model->mip_solver);
 
@@ -611,6 +633,48 @@ int ralph_get_node_count(const RalphModel *model) {
 
 int ralph_get_iterations(const RalphModel *model) {
     return model ? model->iteration_count : 0;
+}
+
+/* ============================================================================
+ * Branching Control
+ * ============================================================================ */
+
+int ralph_set_branch_priorities(RalphModel *model, const int *priorities) {
+    if (!model) return -1;
+
+    /* Free existing priorities */
+    free(model->branch_priorities);
+    model->branch_priorities = NULL;
+
+    if (!priorities) return 0;  /* Clear priorities */
+
+    int n = ralph_get_num_vars(model);
+    if (n <= 0) return -1;
+
+    model->branch_priorities = (int*)malloc(n * sizeof(int));
+    if (!model->branch_priorities) return -1;
+
+    memcpy(model->branch_priorities, priorities, n * sizeof(int));
+    return 0;
+}
+
+int ralph_set_branch_directions(RalphModel *model, const int *directions) {
+    if (!model) return -1;
+
+    /* Free existing directions */
+    free(model->branch_directions);
+    model->branch_directions = NULL;
+
+    if (!directions) return 0;  /* Clear directions */
+
+    int n = ralph_get_num_vars(model);
+    if (n <= 0) return -1;
+
+    model->branch_directions = (int*)malloc(n * sizeof(int));
+    if (!model->branch_directions) return -1;
+
+    memcpy(model->branch_directions, directions, n * sizeof(int));
+    return 0;
 }
 
 /* ============================================================================

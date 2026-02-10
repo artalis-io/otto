@@ -49,6 +49,13 @@ typedef enum {
 /* Constants */
 #define RALPH_INFINITY 1e30
 
+/* Branch direction hints */
+typedef enum {
+    RALPH_BRANCH_AUTO = 0,   /* Solver chooses direction */
+    RALPH_BRANCH_DOWN = -1,  /* Prefer branching down (x <= floor(val)) */
+    RALPH_BRANCH_UP = 1      /* Prefer branching up (x >= ceil(val)) */
+} RalphBranchDir;
+
 /* Opaque model handle */
 typedef struct RalphModel RalphModel;
 
@@ -98,6 +105,27 @@ int ralph_get_iterations(const RalphModel *model);
 double ralph_get_best_bound(const RalphModel *model);
 double ralph_get_mip_gap(const RalphModel *model);
 int ralph_get_node_count(const RalphModel *model);
+
+/* Branching control (MIP)
+ *
+ * These functions control variable selection during branch and bound.
+ * Must be called before ralph_optimize(). Arrays are copied internally.
+ */
+
+/* Set branching priorities for integer variables.
+ * Higher priority variables are branched on first.
+ * @param model      The model
+ * @param priorities Array of priorities (size = num_vars). NULL to clear.
+ * @return 0 on success, -1 on error
+ */
+int ralph_set_branch_priorities(RalphModel *model, const int *priorities);
+
+/* Set preferred branch direction for integer variables.
+ * @param model      The model
+ * @param directions Array of RalphBranchDir values (size = num_vars). NULL to clear.
+ * @return 0 on success, -1 on error
+ */
+int ralph_set_branch_directions(RalphModel *model, const int *directions);
 
 /* Parameters */
 int ralph_set_int_param(RalphModel *model, const char *name, int value);

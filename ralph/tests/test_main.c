@@ -1281,6 +1281,80 @@ void test_scp_lu_regression(void) {
 }
 
 /* ============================================================================
+ * Test: Branching Control API
+ *
+ * Tests the ralph_set_branch_priorities() and ralph_set_branch_directions()
+ * functions for MIP branching control.
+ * ============================================================================ */
+void test_branching_control(void) {
+    printf("\n=== Test: Branching Control API ===\n");
+
+    /* Simple MIP: min x0 + x1
+     * s.t. x0 + x1 >= 1
+     *      x0, x1 binary
+     * Optimal: x0=1 or x1=1, obj=1
+     */
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* Two binary variables */
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);  /* x0 */
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);  /* x1 */
+
+    /* x0 + x1 >= 1 */
+    int idx[] = {0, 1};
+    double val[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 1.0);
+
+    /* Set priorities: x1 has higher priority than x0 */
+    int priorities[2] = {1, 10};  /* x1 (priority 10) > x0 (priority 1) */
+    int ret = ralph_set_branch_priorities(model, priorities);
+    ASSERT(ret == 0, "ralph_set_branch_priorities returns 0");
+
+    /* Set branch directions: prefer x1=1 first (BRANCH_UP) */
+    int directions[2] = {RALPH_BRANCH_AUTO, RALPH_BRANCH_UP};
+    ret = ralph_set_branch_directions(model, directions);
+    ASSERT(ret == 0, "ralph_set_branch_directions returns 0");
+
+    /* Solve */
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, 1.0, TOLERANCE, "Objective value is 1.0");
+
+    double x[2];
+    ralph_get_solution(model, x);
+
+    /* Verify solution: exactly one variable is 1 */
+    int sum = (int)(x[0] + 0.5) + (int)(x[1] + 0.5);
+    ASSERT(sum >= 1, "At least one variable is 1");
+    ASSERT(x[0] + x[1] >= 1.0 - TOLERANCE, "Constraint satisfied");
+
+    ralph_free(model);
+
+    /* Test clearing priorities and directions */
+    model = ralph_create();
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
+
+    /* Set then clear */
+    int prios[2] = {5, 5};
+    ralph_set_branch_priorities(model, prios);
+    ret = ralph_set_branch_priorities(model, NULL);  /* Clear */
+    ASSERT(ret == 0, "Clearing priorities returns 0");
+
+    ret = ralph_set_branch_directions(model, NULL);  /* Clear non-existent */
+    ASSERT(ret == 0, "Clearing directions returns 0");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -1313,6 +1387,9 @@ int main(int argc, char **argv) {
         test_mip_strong_branching_regression();     /* Strong branching crash */
         test_scp_lu_regression();                   /* Sparse LU bug with SCP */
         test_mip_incumbent_feasibility_regression(); /* Infeasible incumbent bug */
+
+        /* Branching control tests */
+        test_branching_control();
 
         /* LAP-based MIP tests */
         test_lap_mip_assignment();
