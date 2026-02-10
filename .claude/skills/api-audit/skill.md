@@ -554,7 +554,14 @@ When `/api-audit <module>` is invoked:
    - [ ] Error responses use `ShJsonWriter` (not strdup/snprintf)
    - [ ] No forbidden patterns detected (see JSON Compliance section)
 
-9. **Test WASM demos:**
+9. **Check coordinate parsing compliance:**
+   - [ ] All "lat,lon" string parsing uses `sh_parse_coord()` from `sh_geo.h`
+   - [ ] No `atof()` on coordinate-related strings
+   - [ ] No inline `strtod()` for coordinate parsing
+   - [ ] No `sscanf()` for "lat,lon" format parsing
+   - [ ] Flag any unsupported use cases for shared library extension
+
+10. **Test WASM demos:**
    - [ ] `make test-api-docs` passes
    - [ ] All demo endpoints return expected responses
    - [ ] New endpoints have test coverage in `site/tests/wasm-demos.spec.js`
@@ -893,6 +900,93 @@ Add this section to the audit report:
 - [ ] All tests pass after migration
 ```
 
+## Coordinate Parsing Compliance
+
+Geographic coordinate parsing (lat,lon strings) MUST use `sh_parse_coord()` from `shared/include/sh_geo.h`. This function provides:
+- Proper error detection via `strtod` (not `atof`)
+- Validation of lat/lon ranges (-90 to 90, -180 to 180)
+- Rejection of inf/NaN from malformed input
+- Consistent parsing across all API modules
+
+### Required Pattern
+
+```c
+#include "sh_geo.h"
+
+static int parse_coord(const char *str, double *lat, double *lon) {
+    SHCoord coord;
+    if (sh_parse_coord(str, &coord) != 0) {
+        return -1;  /* Invalid coordinate string */
+    }
+    *lat = coord.lat;
+    *lon = coord.lon;
+    return 0;
+}
+
+/* Usage from query parameter */
+const char *from_str = get_query_param(query, "from");
+double lat, lon;
+if (parse_coord(from_str, &lat, &lon) != 0) {
+    return error_response(400, "Invalid 'from' coordinate");
+}
+```
+
+### Forbidden Patterns
+
+| Pattern | Why Forbidden | Replacement |
+|---------|---------------|-------------|
+| `atof(lat_str)` | No error detection, accepts garbage | `sh_parse_coord()` |
+| `strtod()` inline | Missing validation, duplication | `sh_parse_coord()` |
+| `sscanf(str, "%lf,%lf", &lat, &lon)` | No range validation, error-prone | `sh_parse_coord()` |
+| Local `parse_coord()` with `atof` | Unsafe, duplicated | Use shared library |
+| Manual comma search + `atof` | Error-prone, no validation | `sh_parse_coord()` |
+
+**Detection grep patterns:**
+```bash
+# Hand-rolled coordinate parsing
+grep -n 'atof.*lat\|atof.*lon' {module}/src/*.c {module}/api/src/*.c
+grep -n 'strtod.*lat\|strtod.*lon' {module}/src/*.c {module}/api/src/*.c
+grep -n 'sscanf.*%lf.*%lf' {module}/src/*.c {module}/api/src/*.c
+```
+
+### When sh_parse_coord Applies
+
+**Use sh_parse_coord for:**
+- Query parameters like `from=47.5,19.0` or `to=46.2,20.1`
+- JSON fields containing coordinate strings
+- Any user-provided "lat,lon" format string
+
+**Does NOT apply to:**
+- Tile coordinates (z/x/y) - use `sh_query_get_int_bounded()` for integers
+- Internal coordinate structs (`SHCoord`, `CTCoord`) - already typed
+- PBF/binary data - parsed as fixed-point integers
+
+### Audit Checklist for Coordinate Parsing
+
+- [ ] All "lat,lon" string parsing uses `sh_parse_coord()`
+- [ ] No `atof()` on coordinate-related strings
+- [ ] No inline `strtod()` for coordinate parsing
+- [ ] No `sscanf()` for coordinate parsing
+- [ ] Error handling for invalid coordinates (400 Bad Request)
+
+### Unsupported Use Cases
+
+If your module needs coordinate parsing that `sh_parse_coord()` doesn't support, **flag it in the audit report** and consider extending the shared library:
+
+| Use Case | Current Support | Action |
+|----------|-----------------|--------|
+| "lat,lon" string | ✅ Supported | Use `sh_parse_coord()` |
+| "lon,lat" order | ❌ Not supported | Flag for shared library extension |
+| Whitespace around comma | ❌ Not supported | Flag for shared library extension |
+| Semicolon separator | ❌ Not supported | Flag for shared library extension |
+| Array of coords in string | ❌ Not supported | Parse JSON array, iterate with `sh_parse_coord()` |
+
+**To extend sh_parse_coord:**
+1. Add functionality to `shared/src/sh_geo.c`
+2. Add tests to `shared/tests/test_shared.c`
+3. Update `shared/include/sh_geo.h` documentation
+4. Never add local copies in module code
+
 ## Report Format
 
 ```markdown
@@ -1175,6 +1269,13 @@ Before marking a module as API-compliant:
 - [ ] No `malloc`/`calloc` for JSON response buffers
 - [ ] No static/fixed-size buffers for JSON responses
 - [ ] No local `json_*` helper functions
+
+**Coordinate Parsing (if applicable):**
+- [ ] All "lat,lon" string parsing uses `sh_parse_coord()` from `sh_geo.h`
+- [ ] No `atof()` on coordinate-related strings
+- [ ] No inline `strtod()` for coordinate parsing
+- [ ] No `sscanf()` for "lat,lon" format parsing
+- [ ] Unsupported use cases flagged for shared library extension
 
 ## Adding New Modules
 
