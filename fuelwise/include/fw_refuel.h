@@ -108,6 +108,25 @@ int fw_solve_refuel_benders(
 );
 
 /*
+ * Set the threshold for using Benders decomposition.
+ *
+ * If num_stations > threshold, use Benders; otherwise use MILP.
+ * Default is 0, meaning always use Benders decomposition.
+ *
+ * Parameters:
+ *   threshold - Station count threshold (0 = always use Benders)
+ */
+void fw_set_benders_threshold(int threshold);
+
+/*
+ * Get the current Benders threshold.
+ *
+ * Returns:
+ *   Current threshold value
+ */
+int fw_get_benders_threshold(void);
+
+/*
  * Free resources allocated in a solution.
  *
  * Parameters:
