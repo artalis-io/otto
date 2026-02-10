@@ -8,6 +8,7 @@
 #include "sh_protobuf.h"
 #include "sh_inflate.h"
 #include "sh_pbf.h"
+#include "sh_args.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -435,7 +436,7 @@ static void add_entity_from_tags_with_geometry(LCPBFContext *ctx, uint64_t osm_i
         ctx->stats.places_found++;
     } else if (tags->boundary && strcmp(tags->boundary, "administrative") == 0) {
         if (!ctx->opts.include_boundaries) return;
-        int level = tags->admin_level ? atoi(tags->admin_level) : 0;
+        int level = tags->admin_level ? sh_parse_int(tags->admin_level, 0, 0, 12) : 0;
         if (level < ctx->opts.min_admin_level || level > ctx->opts.max_admin_level) return;
         entity.fclass = lc_classify_boundary_tag(level);
         entity.admin_level = (int8_t)level;
@@ -500,7 +501,7 @@ static void add_entity_from_tags_with_geometry(LCPBFContext *ctx, uint64_t osm_i
 
     /* Population */
     if (tags->population) {
-        entity.population = atoi(tags->population);
+        entity.population = sh_parse_int(tags->population, 0, 0, 2000000000);
     }
 
     /* Address components */

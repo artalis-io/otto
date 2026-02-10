@@ -159,7 +159,7 @@ static void load_locus_env(LocusServerConfig *cfg) {
         cfg->data_file[sizeof(cfg->data_file) - 1] = '\0';
     }
     if ((val = getenv("LOCUS_NUM_WORKERS"))) {
-        cfg->num_workers = atoi(val);
+        cfg->num_workers = sh_parse_int(val, 0, 0, 256);
     }
 
     /* CORS configuration */
@@ -173,7 +173,7 @@ static void load_locus_env(LocusServerConfig *cfg) {
         sh_cors_set_headers(&s_cors, val);
     }
     if ((val = getenv("LOCUS_CORS_CREDENTIALS"))) {
-        s_cors.allow_credentials = (atoi(val) != 0);
+        s_cors.allow_credentials = (sh_parse_int(val, 0, 0, 1) != 0);
     }
 }
 
@@ -737,7 +737,7 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
         geo_work_item_init(&item, GEO_TYPE_SEARCH);
         strncpy(item.query, query, sizeof(item.query) - 1);
         item.query[sizeof(item.query) - 1] = '\0';
-        item.limit = atoi(limit_str);
+        item.limit = sh_parse_int(limit_str, 10, 1, 100);
 
         submit_geocode_work(c, hm, &item);
         geo_work_item_cleanup(&item);
@@ -749,7 +749,7 @@ static void handle_search(struct mg_connection *c, struct mg_http_message *hm) {
     geo_work_item_init(&item, GEO_TYPE_SEARCH);
     strncpy(item.query, query, sizeof(item.query) - 1);
     item.query[sizeof(item.query) - 1] = '\0';
-    item.limit = atoi(limit_str);
+    item.limit = sh_parse_int(limit_str, 10, 1, 100);
 
     process_search(&item);
 
@@ -794,7 +794,7 @@ static void handle_autocomplete(struct mg_connection *c, struct mg_http_message 
         geo_work_item_init(&item, GEO_TYPE_AUTOCOMPLETE);
         strncpy(item.query, query, sizeof(item.query) - 1);
         item.query[sizeof(item.query) - 1] = '\0';
-        item.limit = atoi(limit_str);
+        item.limit = sh_parse_int(limit_str, 10, 1, 100);
 
         submit_geocode_work(c, hm, &item);
         geo_work_item_cleanup(&item);
@@ -806,7 +806,7 @@ static void handle_autocomplete(struct mg_connection *c, struct mg_http_message 
     geo_work_item_init(&item, GEO_TYPE_AUTOCOMPLETE);
     strncpy(item.query, query, sizeof(item.query) - 1);
     item.query[sizeof(item.query) - 1] = '\0';
-    item.limit = atoi(limit_str);
+    item.limit = sh_parse_int(limit_str, 10, 1, 100);
 
     process_autocomplete(&item);
 
@@ -1025,7 +1025,7 @@ int main(int argc, char *argv[]) {
                 s_config.save_path[sizeof(s_config.save_path) - 1] = '\0';
             }
         } else if (strcmp(argv[i], "--workers") == 0) {
-            if (++i < argc) s_config.num_workers = atoi(argv[i]);
+            if (++i < argc) s_config.num_workers = sh_parse_int(argv[i], 0, 0, 256);
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
