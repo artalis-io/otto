@@ -236,6 +236,40 @@ typedef struct {
  */
 void ralph_set_cut_callback(RalphModel *model, const RalphCutCallback *callback);
 
+/* Branching callback (for custom variable selection during MIP solving)
+ *
+ * The callback is invoked when the MIP solver needs to select a branching
+ * variable. The user can examine the fractional LP solution and choose
+ * which variable to branch on, or return -1 to use the default strategy.
+ */
+typedef struct {
+    /*
+     * Called when MIP solver needs to select a branching variable.
+     * @param user_data    User-provided context pointer
+     * @param x_relaxation Current LP solution (may have fractional integer vars)
+     * @param num_vars     Number of variables
+     * @param is_integer   Boolean array: is_integer[j]=1 if var j is integer
+     * @param lb           Current lower bounds
+     * @param ub           Current upper bounds
+     * @return Variable index to branch on (0 to num_vars-1), or -1 to use default
+     */
+    int (*select_branch_var)(
+        void *user_data,
+        const double *x_relaxation,
+        int num_vars,
+        const int *is_integer,
+        const double *lb,
+        const double *ub
+    );
+    void *user_data;    /* User-provided context (passed to select_branch_var) */
+} RalphBranchCallback;
+
+/* Set branching callback for custom variable selection during MIP solving.
+ * @param model    The model
+ * @param callback The callback (NULL to disable, uses default strategy)
+ */
+void ralph_set_branch_callback(RalphModel *model, const RalphBranchCallback *callback);
+
 /* Parameters */
 int ralph_set_int_param(RalphModel *model, const char *name, int value);
 int ralph_set_dbl_param(RalphModel *model, const char *name, double value);

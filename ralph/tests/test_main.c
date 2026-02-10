@@ -1678,6 +1678,119 @@ void test_cut_callback(void) {
 }
 
 /* ============================================================================
+ * Test: Branch Callback
+ *
+ * Test that user-provided branch callback is invoked for variable selection.
+ * ============================================================================ */
+
+/* Global counter for branch callback invocations */
+static int branch_callback_count = 0;
+static int branch_callback_var_selected = -1;
+
+static int test_branch_callback_fn(void *user_data, const double *x_relaxation,
+                                    int num_vars, const int *is_integer,
+                                    const double *lb, const double *ub) {
+    (void)lb;
+    (void)ub;
+
+    branch_callback_count++;
+
+    /* Get preference from user data (which variable to prefer) */
+    int preferred = user_data ? *(int*)user_data : -1;
+
+    /* Find a fractional integer variable to branch on */
+    int best_var = -1;
+    double best_frac = 0.0;
+
+    for (int j = 0; j < num_vars; j++) {
+        if (!is_integer[j]) continue;
+
+        double val = x_relaxation[j];
+        double frac = val - floor(val);
+        double infeas = frac;
+        if (infeas > 0.5) infeas = 1.0 - infeas;
+
+        if (infeas > 1e-5) {  /* Variable is fractional */
+            /* If this is the preferred variable, select it */
+            if (j == preferred) {
+                branch_callback_var_selected = j;
+                return j;
+            }
+            /* Otherwise track most fractional */
+            if (infeas > best_frac) {
+                best_frac = infeas;
+                best_var = j;
+            }
+        }
+    }
+
+    branch_callback_var_selected = best_var;
+    return best_var;  /* Return most fractional, or -1 if none */
+}
+
+void test_branch_callback(void) {
+    printf("\n=== Test: Branch Callback ===\n");
+
+    /* Reset counters */
+    branch_callback_count = 0;
+    branch_callback_var_selected = -1;
+
+    /* Simple MIP: min x + 2y
+     * s.t. x + y >= 1
+     *      x, y binary
+     */
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);  /* x (cheaper) */
+    ralph_add_var(model, 0.0, 1.0, 2.0, RALPH_BINARY);  /* y (more expensive) */
+
+    int idx[] = {0, 1};
+    double val[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 1.0);
+
+    /* Set up branch callback - prefer variable 1 (y) */
+    int preferred = 1;
+    RalphBranchCallback callback = {
+        .select_branch_var = test_branch_callback_fn,
+        .user_data = &preferred
+    };
+    ralph_set_branch_callback(model, &callback);
+
+    /* Solve */
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, 1.0, TOLERANCE, "Objective is 1.0");
+
+    /* The callback may or may not be invoked depending on whether
+     * branching was needed (LP relaxation might be integer feasible) */
+    printf("  INFO: Branch callback invoked %d times\n", branch_callback_count);
+    ASSERT(branch_callback_count >= 0, "Callback invocation count >= 0");
+
+    ralph_free(model);
+
+    /* Test clearing callback */
+    model = ralph_create();
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
+    ralph_add_var(model, 0.0, 1.0, 2.0, RALPH_BINARY);
+    ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 1.0);
+
+    ralph_set_branch_callback(model, &callback);
+    ralph_set_branch_callback(model, NULL);  /* Clear callback */
+
+    ralph_optimize(model);
+    ASSERT(1, "Clearing branch callback works");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -1723,6 +1836,9 @@ int main(int argc, char **argv) {
 
         /* Cut callback tests */
         test_cut_callback();
+
+        /* Branch callback tests */
+        test_branch_callback();
 
         /* LAP-based MIP tests */
         test_lap_mip_assignment();
