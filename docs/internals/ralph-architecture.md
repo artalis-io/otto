@@ -181,6 +181,65 @@ int ralph_add_lazy_constraints(RalphModel *m, const RalphCut *cuts, int count);
 - **HoSE:** Driving capacity cuts (11h limit), mandatory break cuts (8h)
 - **General:** Custom branching priorities, domain-specific cut generation
 
+### 6. Benders Decomposition (`benders.c`)
+
+**Purpose:** Solve problems with complicating variables via master/subproblem decomposition.
+
+**Algorithm:**
+1. Partition model: master vars (integer/binary) vs subproblem vars (continuous)
+2. Detect linking constraints (constraints involving both)
+3. Solve master MIP with theta variable for recourse cost
+4. Fix master solution, solve subproblem LP
+5. Generate cuts from subproblem duals (optimality) or Farkas rays (feasibility)
+6. Repeat until convergence
+
+**Data Structures:**
+```c
+typedef struct {
+    int *master_var_indices;    /* Which vars go to master */
+    int num_master_vars;
+    int theta_var;              /* Recourse cost variable (-1 = auto) */
+    int num_scenarios;          /* 1 for deterministic */
+    double *scenario_probs;     /* Weights for stochastic */
+    double gap_tolerance;       /* Convergence criterion */
+    int max_iterations;
+    int cuts_at_lp_nodes;       /* 1 = modern B&B&C (not yet implemented) */
+    int warm_start_subproblems; /* Reuse subproblem basis */
+} RalphBendersConfig;
+
+typedef struct {
+    int status;                 /* OPTIMAL, INFEASIBLE, etc. */
+    double objective;
+    int iterations;
+    int optimality_cuts;        /* Cuts generated */
+    int feasibility_cuts;
+} RalphBendersResult;
+```
+
+**Internal Context:**
+```c
+typedef struct {
+    LPModel *master_model;      /* Master MIP */
+    LPModel *sub_model;         /* Subproblem LP */
+    int *master_to_orig;        /* Variable mapping */
+    int *sub_to_orig;
+    LinkingConstraint *linking; /* Constraints coupling master↔sub */
+    int num_linking;
+    double *master_solution;    /* Current master solution */
+    BendersCut *cuts;           /* Accumulated cuts */
+    int num_cuts;
+} BendersContext;
+```
+
+**Cut Generation:**
+- **Optimality cut:** `θ >= π'(h - Tx)` where π = subproblem duals
+- **Feasibility cut:** `0 >= y'(h - Tx)` where y = Farkas ray
+
+**Key Implementation Details:**
+- Model finalization: After adding cuts, must re-finalize master (rebuilds sparse matrix)
+- Numerical stability: Avoid RALPH_INFINITY bounds on theta; use domain-appropriate limits
+- Linking detection: Scans constraint matrix for mixed master/sub variable references
+
 ## Algorithm Details
 
 ### Revised Simplex Method
