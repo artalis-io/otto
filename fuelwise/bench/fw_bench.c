@@ -32,7 +32,7 @@ static double get_time_ms(void)
 int fw_bench_run(
     const FWBenchConfig *config,
     int num_runs,
-    int use_milp,
+    FWSolverType solver_type,
     FWBenchResults *results)
 {
     if (!config || !results || num_runs <= 0) return -1;
@@ -71,14 +71,26 @@ int fw_bench_run(
 
         double t0 = get_time_ms();
 
-        /* Use MILP if explicitly requested or if min_purchase is set */
-        int needs_milp = use_milp || (instance.problem.min_purchase > 0.01);
+        /* Select solver based on type and problem characteristics */
+        FWSolverType effective_solver = solver_type;
+
+        /* Force MILP/Benders if min_purchase requires binary decisions */
+        if (effective_solver == FW_SOLVER_LP && instance.problem.min_purchase > 0.01) {
+            effective_solver = FW_SOLVER_MILP;
+        }
 
         int rc;
-        if (needs_milp) {
-            rc = fw_solve_refuel_milp(&instance.problem, &solution);
-        } else {
-            rc = fw_solve_refuel_lp(&instance.problem, &solution);
+        switch (effective_solver) {
+            case FW_SOLVER_BENDERS:
+                rc = fw_solve_refuel_benders(&instance.problem, &solution);
+                break;
+            case FW_SOLVER_MILP:
+                rc = fw_solve_refuel_milp(&instance.problem, &solution);
+                break;
+            case FW_SOLVER_LP:
+            default:
+                rc = fw_solve_refuel_lp(&instance.problem, &solution);
+                break;
         }
 
         double solve_time = get_time_ms() - t0;
