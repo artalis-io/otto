@@ -278,67 +278,52 @@ static char *process_solve(const char *body, size_t body_len, int *status_code) 
         return resp;
     }
 
-    /* Build response */
-    size_t per_station = 256;
-    size_t base_size = 2048;
-    if (problem.num_stations < 0 ||
-        (size_t)problem.num_stations > (SIZE_MAX - base_size) / per_station) {
-        *status_code = 500;
-        fw_free_solution(&solution);
-        free_problem(&problem);
-        return strdup("{\"error\": \"Too many stations for response buffer\"}\n");
-    }
-    size_t buf_size = base_size + (size_t)problem.num_stations * per_station;
-    char *response = malloc(buf_size);
-    if (!response) {
-        *status_code = 500;
-        fw_free_solution(&solution);
-        free_problem(&problem);
-        return strdup("{\"error\": \"Memory allocation failed\"}\n");
-    }
+    /* Build response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    size_t pos = 0;
-    int n = snprintf(response + pos, buf_size - pos,
-        "{\n"
-        "  \"status\": \"%s\",\n"
-        "  \"num_stops\": %d,\n"
-        "  \"total_cost\": %.2f,\n"
-        "  \"gross_cost\": %.2f,\n"
-        "  \"remaining_fuel\": %.2f,\n"
-        "  \"stops\": [",
-        fw_status_string(solution.status),
-        solution.num_stops,
-        solution.total_cost,
-        solution.gross_cost,
-        solution.remaining_fuel);
-    if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
-    int first = 1;
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "status");
+    sh_json_write_string(&jw, fw_status_string(solution.status));
+    sh_json_write_key(&jw, "num_stops");
+    sh_json_write_int(&jw, solution.num_stops);
+    sh_json_write_key(&jw, "total_cost");
+    sh_json_write_double(&jw, solution.total_cost);
+    sh_json_write_key(&jw, "gross_cost");
+    sh_json_write_double(&jw, solution.gross_cost);
+    sh_json_write_key(&jw, "remaining_fuel");
+    sh_json_write_double(&jw, solution.remaining_fuel);
+
+    sh_json_write_key(&jw, "stops");
+    sh_json_write_array_start(&jw);
     for (int i = 0; i < problem.num_stations; i++) {
         if (solution.purchases[i] > 0.001) {
-            if (!first) {
-                n = snprintf(response + pos, buf_size - pos, ",");
-                if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
-            }
-            first = 0;
-            n = snprintf(response + pos, buf_size - pos,
-                "\n    {"
-                "\"station_id\": %d, "
-                "\"gallons\": %.2f, "
-                "\"cost\": %.2f"
-                "}",
-                problem.stations[i].station_id,
-                solution.purchases[i],
-                solution.purchases[i] * problem.stations[i].price);
-            if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+            sh_json_write_object_start(&jw);
+            sh_json_write_key(&jw, "station_id");
+            sh_json_write_int(&jw, problem.stations[i].station_id);
+            sh_json_write_key(&jw, "gallons");
+            sh_json_write_double(&jw, solution.purchases[i]);
+            sh_json_write_key(&jw, "cost");
+            sh_json_write_double(&jw, solution.purchases[i] * problem.stations[i].price);
+            sh_json_write_object_end(&jw);
         }
     }
-
-    snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    sh_json_write_array_end(&jw);
+    sh_json_write_object_end(&jw);
 
     fw_free_solution(&solution);
     free_problem(&problem);
-    return response;
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        *status_code = 500;
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
 }
 
 /* Process a filter request - returns malloc'd response string */
@@ -416,57 +401,48 @@ static char *process_filter(const char *body, size_t body_len, int *status_code)
         return strdup("{\"error\": \"Filter operation failed\"}\n");
     }
 
-    /* Build response */
-    size_t per_station = 256;
-    size_t base_size = 1024;
-    if (filtered_count < 0 ||
-        (size_t)filtered_count > (SIZE_MAX - base_size) / per_station) {
-        fw_free_snapped_stations(filtered);
-        *status_code = 500;
-        return strdup("{\"error\": \"Too many stations for response buffer\"}\n");
-    }
-    size_t buf_size = base_size + (size_t)filtered_count * per_station;
-    char *response = malloc(buf_size);
-    if (!response) {
-        fw_free_snapped_stations(filtered);
-        *status_code = 500;
-        return strdup("{\"error\": \"Memory allocation failed\"}\n");
-    }
+    /* Build response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    size_t pos = 0;
-    int n = snprintf(response + pos, buf_size - pos,
-        "{\n"
-        "  \"count\": %d,\n"
-        "  \"stations\": [",
-        filtered_count);
-    if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "count");
+    sh_json_write_int(&jw, filtered_count);
+
+    sh_json_write_key(&jw, "stations");
+    sh_json_write_array_start(&jw);
     for (int i = 0; i < filtered_count; i++) {
-        if (i > 0) {
-            n = snprintf(response + pos, buf_size - pos, ",");
-            if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
-        }
-        n = snprintf(response + pos, buf_size - pos,
-            "\n    {"
-            "\"station_id\": %d, "
-            "\"distance_from_start\": %.2f, "
-            "\"perpendicular_distance\": %.3f, "
-            "\"price\": %.3f, "
-            "\"snap_point\": [%.6f, %.6f]"
-            "}",
-            filtered[i].station_id,
-            filtered[i].distance_from_start,
-            filtered[i].perpendicular_distance,
-            filtered[i].price,
-            filtered[i].snap_point.lat,
-            filtered[i].snap_point.lon);
-        if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+        sh_json_write_object_start(&jw);
+        sh_json_write_key(&jw, "station_id");
+        sh_json_write_int(&jw, filtered[i].station_id);
+        sh_json_write_key(&jw, "distance_from_start");
+        sh_json_write_double(&jw, filtered[i].distance_from_start);
+        sh_json_write_key(&jw, "perpendicular_distance");
+        sh_json_write_double(&jw, filtered[i].perpendicular_distance);
+        sh_json_write_key(&jw, "price");
+        sh_json_write_double(&jw, filtered[i].price);
+        sh_json_write_key(&jw, "snap_point");
+        sh_json_write_array_start(&jw);
+        sh_json_write_double(&jw, filtered[i].snap_point.lat);
+        sh_json_write_double(&jw, filtered[i].snap_point.lon);
+        sh_json_write_array_end(&jw);
+        sh_json_write_object_end(&jw);
     }
-
-    snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    sh_json_write_array_end(&jw);
+    sh_json_write_object_end(&jw);
 
     fw_free_snapped_stations(filtered);
-    return response;
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        *status_code = 500;
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
 }
 
 /* Process an optimize request - returns malloc'd response string */
@@ -621,113 +597,124 @@ static char *process_optimize(const char *body, size_t body_len, int *status_cod
         return resp;
     }
 
-    /* Build response */
-    size_t per_station = 256;
-    size_t base_size = 2048;
-    if (filtered_count < 0 ||
-        (size_t)filtered_count > (SIZE_MAX - base_size) / per_station) {
-        fw_free_snapped_stations(filtered);
-        fw_free_solution(&solution);
-        free(segments);
-        *status_code = 500;
-        return strdup("{\"error\": \"Too many stations for response buffer\"}\n");
-    }
-    size_t buf_size = base_size + (size_t)filtered_count * per_station;
-    char *response = malloc(buf_size);
-    if (!response) {
-        fw_free_snapped_stations(filtered);
-        fw_free_solution(&solution);
-        free(segments);
-        *status_code = 500;
-        return strdup("{\"error\": \"Memory allocation failed\"}\n");
-    }
+    /* Build response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    size_t pos = 0;
-    int n = snprintf(response + pos, buf_size - pos,
-        "{\n"
-        "  \"status\": \"%s\",\n"
-        "  \"route_distance\": %.2f,\n"
-        "  \"stations_filtered\": %d,\n"
-        "  \"num_stops\": %d,\n"
-        "  \"total_cost\": %.2f,\n"
-        "  \"gross_cost\": %.2f,\n"
-        "  \"remaining_fuel\": %.2f,\n"
-        "  \"stops\": [",
-        fw_status_string(solution.status),
-        problem.total_distance,
-        filtered_count,
-        solution.num_stops,
-        solution.total_cost,
-        solution.gross_cost,
-        solution.remaining_fuel);
-    if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
-    int first = 1;
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "status");
+    sh_json_write_string(&jw, fw_status_string(solution.status));
+    sh_json_write_key(&jw, "route_distance");
+    sh_json_write_double(&jw, problem.total_distance);
+    sh_json_write_key(&jw, "stations_filtered");
+    sh_json_write_int(&jw, filtered_count);
+    sh_json_write_key(&jw, "num_stops");
+    sh_json_write_int(&jw, solution.num_stops);
+    sh_json_write_key(&jw, "total_cost");
+    sh_json_write_double(&jw, solution.total_cost);
+    sh_json_write_key(&jw, "gross_cost");
+    sh_json_write_double(&jw, solution.gross_cost);
+    sh_json_write_key(&jw, "remaining_fuel");
+    sh_json_write_double(&jw, solution.remaining_fuel);
+
+    sh_json_write_key(&jw, "stops");
+    sh_json_write_array_start(&jw);
     for (int i = 0; i < filtered_count; i++) {
         if (solution.purchases[i] > 0.001) {
-            if (!first) {
-                n = snprintf(response + pos, buf_size - pos, ",");
-                if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
-            }
-            first = 0;
-            n = snprintf(response + pos, buf_size - pos,
-                "\n    {"
-                "\"station_id\": %d, "
-                "\"distance_from_start\": %.2f, "
-                "\"gallons\": %.2f, "
-                "\"cost\": %.2f"
-                "}",
-                filtered[i].station_id,
-                filtered[i].distance_from_start,
-                solution.purchases[i],
-                solution.purchases[i] * filtered[i].price);
-            if (n > 0 && (size_t)n < buf_size - pos) pos += (size_t)n;
+            sh_json_write_object_start(&jw);
+            sh_json_write_key(&jw, "station_id");
+            sh_json_write_int(&jw, filtered[i].station_id);
+            sh_json_write_key(&jw, "distance_from_start");
+            sh_json_write_double(&jw, filtered[i].distance_from_start);
+            sh_json_write_key(&jw, "gallons");
+            sh_json_write_double(&jw, solution.purchases[i]);
+            sh_json_write_key(&jw, "cost");
+            sh_json_write_double(&jw, solution.purchases[i] * filtered[i].price);
+            sh_json_write_object_end(&jw);
         }
     }
-
-    snprintf(response + pos, buf_size - pos, "\n  ]\n}\n");
+    sh_json_write_array_end(&jw);
+    sh_json_write_object_end(&jw);
 
     fw_free_snapped_stations(filtered);
     fw_free_solution(&solution);
     free(segments);
-    return response;
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        *status_code = 500;
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
 }
 
 /* Process health request */
 static char *process_health(int *status_code) {
     *status_code = 200;
-    char *response = malloc(256);
-    if (!response) return strdup("{\"error\": \"Memory allocation failed\"}\n");
 
-    snprintf(response, 256,
-        "{\n"
-        "  \"status\": \"healthy\",\n"
-        "  \"service\": \"fuelwise-api\",\n"
-        "  \"version\": \"%s\"\n"
-        "}\n",
-        fw_version());
-    return response;
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "status");
+    sh_json_write_string(&jw, "healthy");
+    sh_json_write_key(&jw, "service");
+    sh_json_write_string(&jw, "fuelwise-api");
+    sh_json_write_key(&jw, "version");
+    sh_json_write_string(&jw, fw_version());
+    sh_json_write_object_end(&jw);
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
 }
 
 /* Process stats request */
 static char *process_stats(int *status_code) {
     *status_code = 200;
-    char *response = malloc(512);
-    if (!response) return strdup("{\"error\": \"Memory allocation failed\"}\n");
 
-    snprintf(response, 512,
-        "{\n"
-        "  \"service\": \"fuelwise-api\",\n"
-        "  \"version\": \"%s\",\n"
-        "  \"work_queue\": {\n"
-        "    \"enabled\": false\n"
-        "  },\n"
-        "  \"rate_limit\": {\n"
-        "    \"enabled\": false\n"
-        "  }\n"
-        "}\n",
-        fw_version());
-    return response;
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "service");
+    sh_json_write_string(&jw, "fuelwise-api");
+    sh_json_write_key(&jw, "version");
+    sh_json_write_string(&jw, fw_version());
+
+    sh_json_write_key(&jw, "work_queue");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, false);
+    sh_json_write_object_end(&jw);
+
+    sh_json_write_key(&jw, "rate_limit");
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "enabled");
+    sh_json_write_bool(&jw, false);
+    sh_json_write_object_end(&jw);
+
+    sh_json_write_object_end(&jw);
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        return strdup("{\"error\": \"JSON write error\"}\n");
+    }
+
+    return sh_json_buf_take(&jb);
 }
 
 /* ============================================================================
