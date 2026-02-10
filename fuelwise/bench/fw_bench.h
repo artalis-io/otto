@@ -21,6 +21,16 @@ extern "C" {
 #endif
 
 /* ============================================================================
+ * Solver Type Enumeration
+ * ============================================================================ */
+
+typedef enum {
+    FW_SOLVER_LP = 0,       /* Pure LP (no stop costs) */
+    FW_SOLVER_MILP = 1,     /* Branch and bound MILP */
+    FW_SOLVER_BENDERS = 2   /* Benders decomposition */
+} FWSolverType;
+
+/* ============================================================================
  * Problem Generation Configuration
  * ============================================================================ */
 
@@ -176,6 +186,11 @@ FWBenchConfig fw_bench_config_tight_margins(void);
 /* US Interstate: 2000 miles, Class 8 truck (imperial units) */
 FWBenchConfig fw_bench_config_us_interstate(void);
 
+/* Benders benchmarks: fixed station counts for scalability testing */
+FWBenchConfig fw_bench_config_benders_30(void);   /* 30 stations */
+FWBenchConfig fw_bench_config_benders_50(void);   /* 50 stations */
+FWBenchConfig fw_bench_config_benders_100(void);  /* 100 stations */
+
 /* ============================================================================
  * Validation API
  * ============================================================================ */
@@ -214,7 +229,7 @@ int fw_validate_solution(
  * Parameters:
  *   config      - Problem generation config
  *   num_runs    - Number of problems to generate and solve
- *   use_milp    - 1 for MILP solver, 0 for LP
+ *   solver_type - Which solver to use (LP, MILP, or Benders)
  *   results     - Output: benchmark statistics
  *
  * Returns:
@@ -223,7 +238,7 @@ int fw_validate_solution(
 int fw_bench_run(
     const FWBenchConfig *config,
     int num_runs,
-    int use_milp,
+    FWSolverType solver_type,
     FWBenchResults *results
 );
 

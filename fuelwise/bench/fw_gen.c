@@ -155,6 +155,81 @@ FWBenchConfig fw_bench_config_us_interstate(void)
     return cfg;
 }
 
+/* Benders benchmark: 30 stations, medium route for Benders scalability testing */
+FWBenchConfig fw_bench_config_benders_30(void)
+{
+    FWBenchConfig cfg = {0};
+    cfg.route_length_m = 2400000;       /* 2400 km to get ~30 stations at 80km gap */
+    cfg.mean_station_gap_m = 80000;     /* 80 km average */
+    cfg.gap_shape = 3.0;                /* Less variance for predictable station count */
+    cfg.tank_capacity_l = 500;
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 4;
+    cfg.cargo_weight_mean_kg = 8000;
+    cfg.cargo_weight_stddev_kg = 2000;
+    cfg.min_fuel_l = 50;
+    cfg.min_purchase_l = 20;            /* Require min purchase (triggers Benders) */
+    cfg.start_fuel_fraction = 0.5;
+    cfg.base_price_per_l = 1.50;
+    cfg.price_stddev = 0.15;
+    cfg.price_correlation = 0.4;
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    return cfg;
+}
+
+/* Benders benchmark: 50 stations, longer route for Benders scalability testing */
+FWBenchConfig fw_bench_config_benders_50(void)
+{
+    FWBenchConfig cfg = {0};
+    cfg.route_length_m = 4000000;       /* 4000 km to get ~50 stations at 80km gap */
+    cfg.mean_station_gap_m = 80000;     /* 80 km average */
+    cfg.gap_shape = 3.0;
+    cfg.tank_capacity_l = 600;
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 6;
+    cfg.cargo_weight_mean_kg = 9000;
+    cfg.cargo_weight_stddev_kg = 2500;
+    cfg.min_fuel_l = 60;
+    cfg.min_purchase_l = 20;            /* Require min purchase (triggers Benders) */
+    cfg.start_fuel_fraction = 0.5;
+    cfg.base_price_per_l = 1.50;
+    cfg.price_stddev = 0.18;
+    cfg.price_correlation = 0.3;
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    return cfg;
+}
+
+/* Benders benchmark: 100 stations, long route for Benders stress testing */
+FWBenchConfig fw_bench_config_benders_100(void)
+{
+    FWBenchConfig cfg = {0};
+    cfg.route_length_m = 8000000;       /* 8000 km to get ~100 stations at 80km gap */
+    cfg.mean_station_gap_m = 80000;     /* 80 km average */
+    cfg.gap_shape = 3.0;
+    cfg.tank_capacity_l = 800;          /* Larger tank for long route */
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 8;
+    cfg.cargo_weight_mean_kg = 10000;
+    cfg.cargo_weight_stddev_kg = 3000;
+    cfg.min_fuel_l = 80;
+    cfg.min_purchase_l = 20;            /* Require min purchase (triggers Benders) */
+    cfg.start_fuel_fraction = 0.5;
+    cfg.base_price_per_l = 1.45;
+    cfg.price_stddev = 0.20;
+    cfg.price_correlation = 0.3;
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    return cfg;
+}
+
 /* ============================================================================
  * Problem Generation
  * ============================================================================ */
