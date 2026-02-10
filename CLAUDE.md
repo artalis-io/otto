@@ -17,23 +17,35 @@
 
 ## Git Workflow
 
-**IMPORTANT:** For new features or significant changes, always use feature branches.
+**IMPORTANT:** For new features or significant changes, use isolated git worktrees to enable parallel agent development without conflicts.
 
-### When to Use Feature Branches
+### When to Use Agent Worktrees
 
-Use `/feature-branch` skill when:
-- Implementing a new feature
-- Making changes that touch multiple files
-- Refactoring or restructuring code
-- Any change that should be reviewed before merging
+Use `/agent-worktree` skill when:
+- Spawning agents to work in parallel on the same codebase
+- Implementing features that need isolation from other work
+- Any non-trivial change that should be reviewed before merging
 
 Do NOT use for:
-- Quick typo fixes (1-2 lines)
+- Quick typo fixes (1-2 lines) - commit directly to main
 - Emergency hotfixes (discuss with user first)
+
+### How Worktrees Work
+
+```
+otto/                      # Main worktree (main branch, user's primary)
+otto-agent-a1b2c3/         # Agent 1's isolated workspace
+otto-agent-d4e5f6/         # Agent 2's isolated workspace
+```
+
+- Each agent gets its own directory with its own feature branch
+- No branch switching conflicts - worktrees are locked to their branches
+- Shared git database - commits visible after push
+- Main worktree stays on `main`, never touched by agents
 
 ### Planning Phase (Required for Large Changes)
 
-**Before creating a feature branch** for large-scale work, enter planning mode:
+**Before creating a worktree** for large-scale work, enter planning mode:
 
 | Triggers for Planning Phase |
 |-----------------------------|
@@ -64,20 +76,19 @@ Claude: Enters planning mode (no code changes)
         → Writes plan with phases, file changes, tradeoffs
         → Presents to user
         → After approval: appends to docs/roadmaps/velo.md
-        → Then uses /feature-branch to implement
+        → Then uses /agent-worktree to implement
 ```
 
 ### Workflow Steps
 
 1. **Plan (if large):** Enter planning mode, explore, document, get approval
 2. **Persist:** Append approved plan to `docs/roadmaps/{module}.md`
-3. **Sync:** Run `git pull origin main` to ensure up-to-date before branching
-4. **Branch:** Use `/feature-branch <name> <description>` to create branch
-5. **Work:** Implement with regular commits on the feature branch
-6. **Test:** Run `make test` and relevant API tests before PR
-7. **PR:** Create pull request with `gh pr create`
-8. **Review:** Wait for user approval before merging
-9. **Merge:** After approval, merge to main and delete feature branch
+3. **Worktree:** Use `/agent-worktree <task>` to create isolated worktree
+4. **Work:** Implement with regular commits in the worktree
+5. **Test:** Run `make test` and relevant API tests before PR
+6. **PR:** Create pull request with `gh pr create`
+7. **Review:** Wait for user approval before merging
+8. **Cleanup:** After merge, remove worktree and delete branch
 
 ### Example
 
@@ -89,72 +100,55 @@ Claude: Enters planning mode (no code changes)
         → Plans: LRU cache, cache key design, invalidation strategy
         → Presents plan to user
         → After approval: appends to docs/roadmaps/velo.md
-        → Runs: git pull origin main
-        → Uses /feature-branch velo-cache-lru "Add LRU route caching"
-        → Implements caching
-        → Runs tests
+        → Uses /agent-worktree "Add LRU caching to Velo"
+        → Works in ../otto-agent-a1b2c3/
+        → Implements caching, runs tests
         → Creates PR
         → Waits for user approval
-        → Merges and deletes branch
+        → After merge: removes worktree, deletes branch
 ```
 
 ### Key Rules
 
 - **Never push directly to main** for non-trivial changes
 - **Always wait for user approval** before merging PRs
-- **Delete feature branches** after merge (local always, remote by default)
-- **Keep PRs focused** - one feature per branch
+- **Always cleanup worktrees** after merge (worktree + branch)
+- **Keep PRs focused** - one feature per worktree
+- **Work only in your worktree** - never modify other worktrees or main
 
-### Branch Naming (Collision Avoidance)
+### Multi-Agent Parallel Development
 
-Use specific names to avoid conflicts between concurrent Claude sessions:
+When spawning multiple agents with the Task tool, each gets its own worktree:
 
+```bash
+# Each agent works in isolation
+Task 1: "Work in /path/to/otto-agent-a1b2c3 on Velo caching..."
+Task 2: "Work in /path/to/otto-agent-d4e5f6 on Ralph API..."
 ```
-feature/<module>-<feature>-<detail>
+
+**Syncing between agents:** If Agent 2 needs Agent 1's merged work:
+```bash
+git fetch origin main
+git rebase origin/main
 ```
-
-**Examples:**
-- `feature/velo-cache-lru` (not just `feature/velo-cache`)
-- `feature/ralph-api-mps-parser`
-- `fix/carta-clip-multipolygon`
-
-If unsure about uniqueness, check existing branches first: `git branch -a | grep <name>`
-
-### Roadmap Lock (Multi-Session Safety)
-
-When appending to `docs/roadmaps/{module}.md`, use a lock file to prevent concurrent writes:
-
-**Before writing to roadmap:**
-1. Use `Read` tool to check if `.claude/locks/roadmap-{module}.lock` exists
-2. If exists, check timestamp - if older than 1 hour, it's stale (proceed)
-3. If recent, wait or coordinate with other session
-4. Use `Bash` to create lock: `mkdir -p .claude/locks && echo "$(date -Iseconds)" > .claude/locks/roadmap-{module}.lock`
-5. Use `Edit` tool to append to the roadmap
-6. Use `Bash` to remove lock: `rm -f .claude/locks/roadmap-{module}.lock`
-
-**Cross-module features:** If a feature spans multiple modules (e.g., FuelWise + Velo integration), append the relevant parts to each module's roadmap separately. Each module's roadmap documents its portion of the work.
-
-**Note:** `.claude/locks/` is gitignored - lock files are local only.
 
 ### Session Handoff
 
-If a Claude session ends mid-work (context limit, crash, user stops), persist state to the roadmap:
+If a Claude session ends mid-work, persist state to the roadmap:
 
 ```markdown
 ## WIP: <Feature Name> (Session Handoff)
 
 **Status:** In progress, paused at <phase>
-**Branch:** feature/<branch-name>
+**Worktree:** ../otto-agent-<id>
+**Branch:** feature/<id>-<task-name>
 **Last commit:** <hash>
 **Next steps:**
 1. ...
 2. ...
-
-**Blockers/Notes:**
-- ...
 ```
 
-The next session can read the roadmap to resume. Delete the WIP section when work completes.
+The next session can `cd` to the worktree and continue. Delete the WIP section when work completes.
 
 ## Components
 
@@ -423,7 +417,7 @@ See `docs/MANIFESTO.md` for the full manifesto.
 
 | Skill | Purpose |
 |-------|---------|
-| `/feature-branch` | Create feature branch for new work (required for non-trivial changes) |
+| `/agent-worktree` | Create isolated worktree for parallel agent development |
 | `/api-run` | Start servers, CLI args, env vars |
 | `/api-audit` | Audit API modules for transport-agnostic compliance |
 | `/c-audit` | C code security review |
