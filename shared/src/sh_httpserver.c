@@ -32,6 +32,7 @@
 #include "sh_ratelimit.h"
 #include "sh_metrics.h"
 #include "sh_query.h"
+#include "sh_json.h"
 
 /* ============================================================================
  * Configuration Defaults
@@ -143,9 +144,32 @@ void sh_mg_reply_error(struct mg_connection *c, int status,
         snprintf(cors_hdrs, sizeof(cors_hdrs), "Access-Control-Allow-Origin: *\r\n");
     }
 
+    /* Build error JSON using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "error");
+    sh_json_write_string(&jw, message ? message : "Unknown error");
+    sh_json_write_object_end(&jw);
+
+    char *json = sh_json_buf_take(&jb);
+    if (!json || jw.error) {
+        /* Fallback if JSON writer fails */
+        sh_json_buf_free(&jb);
+        char headers[600];
+        snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_hdrs);
+        mg_http_reply(c, status, headers, "{\"error\":\"JSON write error\"}");
+        return;
+    }
+
     char headers[600];
     snprintf(headers, sizeof(headers), "Content-Type: application/json\r\n%s", cors_hdrs);
-    mg_http_reply(c, status, headers, "{\"error\": \"%s\"}\n", message ? message : "Unknown error");
+    mg_http_reply(c, status, headers, "%s", json);
+    free(json);
 }
 
 void sh_mg_handle_metrics(struct mg_connection *c)
