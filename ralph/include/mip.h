@@ -157,6 +157,10 @@ typedef struct {
     int *branch_priorities;     /* Priority for each variable (higher = branch first) */
     int *branch_directions;     /* Preferred direction: -1=down, 0=auto, 1=up */
 
+    /* User-provided cut callback */
+    RalphCutCallback cut_callback;
+    int has_cut_callback;
+
     /* Parameters */
     int max_nodes;
     double time_limit;

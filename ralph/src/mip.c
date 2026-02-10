@@ -778,6 +778,49 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     double lp_obj = solver->lp_solver->obj_value;
     double *lp_sol = solver->lp_solver->solution;
 
+    /* Invoke user-provided cut callback if available */
+    if (solver->has_cut_callback && solver->cut_callback.generate_cuts) {
+        RalphCut user_cuts[32];  /* Max cuts from callback per node */
+        memset(user_cuts, 0, sizeof(user_cuts));
+
+        int num_cuts = solver->cut_callback.generate_cuts(
+            solver->cut_callback.user_data,
+            lp_sol,
+            model->num_vars,
+            user_cuts,
+            32
+        );
+
+        if (num_cuts > 0) {
+            for (int i = 0; i < num_cuts && i < 32; i++) {
+                RalphCut *uc = &user_cuts[i];
+                if (!uc->indices || !uc->coeffs || uc->num_vars <= 0) continue;
+
+                /* Convert RalphCut to internal Cut and add to pool */
+                Cut *cut = cut_create(uc->num_vars);
+                if (cut) {
+                    for (int j = 0; j < uc->num_vars; j++) {
+                        cut->indices[j] = uc->indices[j];
+                        cut->values[j] = uc->coeffs[j];
+                    }
+                    cut->nnz = uc->num_vars;
+                    cut->sense = (char)uc->sense;
+                    cut->rhs = uc->rhs;
+                    cut->type = CUT_GOMORY;  /* Generic cut type */
+                    cut->violation = 0.0;
+                    cut->age = 0;
+
+                    cut_pool_add(solver->cut_pool, cut);
+                    solver->cuts_generated++;
+                }
+            }
+
+            if (solver->verbose) {
+                printf("  [cut_callback] Added %d user cuts at node %d\n", num_cuts, node->id);
+            }
+        }
+    }
+
     /* Check if node can be pruned by bound */
     if (solver->has_incumbent) {
         if (model->obj_sense == 1) {  /* Minimize */
