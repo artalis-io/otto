@@ -11,6 +11,7 @@
 #include "mip.h"
 #include "presolve.h"
 #include "detect.h"
+#include "benders.h"
 
 #define RALPH_VERSION "0.1.0"
 
@@ -897,6 +898,30 @@ void ralph_set_branch_callback(RalphModel *model, const RalphBranchCallback *cal
         memset(&model->branch_callback, 0, sizeof(RalphBranchCallback));
         model->has_branch_callback = 0;
     }
+}
+
+/* ============================================================================
+ * Benders Decomposition
+ * ============================================================================ */
+
+int ralph_solve_benders(
+    RalphModel *model,
+    const RalphBendersConfig *config,
+    double *x,
+    RalphBendersResult *result)
+{
+    if (!model || !config) return -1;
+    if (!model->lp_model) return -1;
+
+    /* Finalize model if needed (builds sparse matrix A) */
+    if (!model->lp_model->A) {
+        if (lp_model_finalize(model->lp_model) != 0) {
+            return -1;
+        }
+    }
+
+    /* Delegate to internal Benders solver */
+    return benders_solve(model->lp_model, config, x, result);
 }
 
 /* ============================================================================
