@@ -486,22 +486,33 @@ x[t,DRIVE] ≤ M·(1 - in_duty[t-1]) + (14 - w[t-1]) / δ
 ```
 
 **30-minute break rule (with pre-history):**
+
+Per FMCSA 2020 final rule:
+- Break required after **8 cumulative hours of driving** (not on-duty)
+- Both OFF and WORK (on-duty/not-driving) qualify as break time
+
 ```
 b[t] = b[t-1]·(1 - break30[t]) + δ·x[t,DRIVE]
 b[0] = b0  (initial state)
 
+// Break qualification: 30 min of either OFF or WORK (on-duty/not-driving)
+// Define: not_driving[t] = x[t,OFF] + x[t,WORK]
+not_driving[t] = 1 - x[t,DRIVE]
+
 // For periods t < break_periods, include pre-history in break detection
-// pre_off = floor(status_duration / δ) if status_init = OFF, else 0
+// pre_off = floor(status_duration / δ) if status_init ∈ {OFF, WORK}, else 0
 
 // At t=0: if pre_off ≥ break_periods, driver already has qualifying break
 // break30[0] = 1 iff pre_off ≥ break_periods
 
 // For t ∈ [1, break_periods-1]:
-// Need (pre_off + t+1) consecutive OFF periods
-// break30[t] = 1 iff x[0..t] all OFF AND pre_off + t + 1 ≥ break_periods
+// Need (pre_off + t+1) consecutive non-driving periods
+// break30[t] = 1 iff not_driving[0..t] all 1 AND pre_off + t + 1 ≥ break_periods
 
 // For t ≥ break_periods: standard rule (no pre-history needed)
-break30[t] = 1 iff x[t-break_periods+1..t] all OFF
+break30[t] = 1 iff not_driving[t-break_periods+1..t] all 1
+
+// Equivalently: break30[t] = 1 iff x[τ,DRIVE] = 0 for all τ ∈ [t-5, t] (at δ=5min)
 
 // Can't drive if 8h break clock exhausted without qualifying break
 x[t,DRIVE] ≤ (8 - b[t-1]) / δ + M·break30_available[t]
@@ -585,6 +596,68 @@ min ∑_t δ·(1 - done[t])
 + ε·(11 - d[T]) + ε·(14 - w[T]) + ε·(70 - c[T])
 ```
 
+##### FMCSA 2020 Final Rule Compliance
+
+The time-indexed MIP models the core HoS rules. Here's the status of the June 2020 provisions:
+
+| Provision | Status | Notes |
+|-----------|--------|-------|
+| **11-Hour Driving Limit** | ✅ Modeled | `d[t] ≤ 11`, resets after 10h OFF |
+| **14-Hour Driving Window** | ✅ Modeled | `w[t] ≤ 14`, wall-clock from first on-duty |
+| **30-Minute Break** | ✅ Modeled | After 8h driving; OFF or WORK qualifies (2020 rule) |
+| **60/70-Hour Limit** | ✅ Modeled | `c[t] ≤ 70` with daily recap |
+| **34-Hour Restart** | ✅ Modeled | `reset34[t]` clears 70h clock |
+| **Short-Haul Exception** | ⚪ Out of scope | Different ruleset for <150 air-mile operations |
+| **Adverse Driving Conditions** | ⚠️ Not modeled | See extension below |
+| **Sleeper Berth Split** | ⚠️ Not modeled | See extension below |
+
+**Extension: Adverse Driving Conditions**
+
+When adverse conditions occur, driver may extend both 11h and 14h limits by up to 2h:
+
+```
+// Input parameter
+adverse_conditions ∈ {0,1}   // 1 if adverse conditions apply
+adverse_extension = 2.0      // hours (max allowed)
+
+// Modified limits
+driving_limit = 11 + adverse_extension·adverse_conditions  // 11 or 13
+window_limit = 14 + adverse_extension·adverse_conditions   // 14 or 16
+
+// Updated constraints
+x[t,DRIVE] ≤ (driving_limit - d[t-1]) / δ
+x[t,DRIVE] ≤ M·(1 - in_duty[t-1]) + (window_limit - w[t-1]) / δ
+```
+
+**Extension: Sleeper Berth Split**
+
+The 2020 rule allows 7+2 or 7+3 splits where neither period counts against the 14h window:
+
+```
+// Additional state: s ∈ {DRIVE, WORK, OFF, SLEEPER}
+x[t,s] ∈ {0,1}   for s ∈ {DRIVE, WORK, OFF, SLEEPER}
+
+// Track sleeper berth periods
+sleeper_consec[t] = (sleeper_consec[t-1] + 1)·x[t,SLEEPER]
+
+// Detect qualifying split (7h sleeper completed)
+split_7h[t] = 1 iff sleeper_consec[t] ≥ 7/δ
+
+// After 7h sleeper, driver needs 2-3h more OFF (outside berth) to complete split
+// Track off_after_sleeper[t] for consecutive OFF after split_7h
+
+// Key insight: during a valid split, the 14h window PAUSES
+// w[t] only advances when in_duty[t] = 1 AND NOT in a valid split period
+
+// Simplified: track split_active[t] = 1 during split rest periods
+// w[t] = w[t-1]·(1 - reset10[t]) + δ·in_duty[t]·(1 - split_active[t])
+```
+
+The sleeper berth logic is complex and adds significant model size. For verification purposes, consider:
+1. Testing non-split scenarios first (most common)
+2. Adding split support as a separate model variant
+3. Using the heuristic for split decisions, MIP for verification
+
 ---
 
 #### Formulation 2: Event-Based MIP
@@ -608,7 +681,7 @@ c[i] ∈ [0,70]      70h clock after segment i
 // Reset/break indicators
 is_reset10[i] ∈ {0,1}   Segment i is OFF with dur[i] ≥ 10h
 is_reset34[i] ∈ {0,1}   Segment i is OFF with dur[i] ≥ 34h
-is_break30[i] ∈ {0,1}   Segment i is OFF with dur[i] ≥ 0.5h
+is_break30[i] ∈ {0,1}   Segment i is non-driving (OFF or WORK) with dur[i] ≥ 0.5h
 ```
 
 ##### Constraints
@@ -642,9 +715,11 @@ w[i] = (w[i-1] + dur[i])·in_duty[i]·(1 - is_reset10[i])  // nonlinear, needs l
 isDRIVE[i] = 1 → w[i] ≤ 14
 ```
 
-**30-min break:**
+**30-min break (2020 rule: OFF or WORK qualifies):**
 ```
-is_break30[i] ≤ isOFF[i]
+// Non-driving segment (OFF or WORK) can satisfy break requirement
+is_break30[i] ≤ isOFF[i] + isWORK[i]   // must be non-driving
+is_break30[i] ≤ 1 - isDRIVE[i]          // equivalent
 is_break30[i] → dur[i] ≥ 0.5
 
 b[i] = b[i-1]·(1 - is_break30[i]) + dur[i]·isDRIVE[i]
