@@ -374,6 +374,82 @@ The greedy heuristic ("drive when you can, rest when you must, start on-duty as 
 
 ---
 
+#### Precision & Time Granularity
+
+##### Internal vs MIP Precision
+
+| Layer | Granularity | Rationale |
+|-------|-------------|-----------|
+| **Heuristic engine** | Seconds | Exact clock tracking, no quantization error |
+| **Data structures** | Seconds (double) | Timestamps, durations, clock values |
+| **MIP verification** | 5 minutes (δ) | Tractable problem size, sufficient for compliance |
+| **Display to user** | "About X hours" | Avoids false precision, matches mental model |
+
+**Why 5 minutes, not 1 minute?**
+
+| δ | Periods/week | Binary vars | Solve time | Benefit |
+|---|--------------|-------------|------------|---------|
+| 1 min | 10,080 | ~30,000 | 30-300s | Overkill precision |
+| 5 min | 2,016 | ~6,000 | 1-30s | Sweet spot |
+| 15 min | 672 | ~2,000 | <5s | Too coarse for 30-min break |
+
+**5 minutes is the sweet spot because:**
+1. **30-min break rule**: Need at least 6 periods to model a 30-min break accurately
+2. **FMCSA tolerance**: Regulations don't care about seconds; ELDs record 1-min increments but inspectors look at 15-min grid blocks
+3. **Problem size**: 5× reduction from 1-min → 25× fewer constraints
+4. **Conservative rounding**: Round driving UP, windows INWARD → feasible in model = definitely feasible in reality
+
+##### Client Objections & Responses
+
+| Objection | Response |
+|-----------|----------|
+| "Your system says 2h 35m but my ELD says 2h 38m" | "We round conservatively. If we say you have 2h 35m, you have *at least* that much. Your ELD might show slightly more." |
+| "Why does my ETA jump by 5 minutes sometimes?" | Display layer smooths this with interpolation. Internally we recalculate, but display shows gradual changes. |
+| "The schedule shows 8:00 but I actually started at 7:58" | "We align to 5-minute boundaries for planning. This is more precise than the 15-minute grid on paper logs that DOT inspectors use." |
+| "Is this accurate enough for compliance?" | "Yes. FMCSA doesn't issue violations for 2-3 minute discrepancies. Our conservative rounding means if we say you're compliant, you definitely are." |
+
+##### Display Best Practices
+
+```c
+// INTERNAL: precise seconds
+double remaining_drive_sec = 11.0 * 3600 - driver->driving_today;  // e.g., 9432.7
+
+// MIP: 5-min periods
+int remaining_periods = (int)(remaining_drive_sec / 300.0);  // 31 periods
+
+// DISPLAY: human-friendly, avoids false precision
+if (remaining_drive_sec >= 3600) {
+    // "About 2.5 hours" or "~2h 30m"
+    printf("About %.1f hours remaining", remaining_drive_sec / 3600.0);
+} else {
+    // "About 45 minutes"
+    printf("About %d minutes remaining", (int)(remaining_drive_sec / 60.0 / 5) * 5);
+}
+
+// NEVER: "2h 37m 12s" (false precision, confuses users, invites ELD comparison)
+```
+
+##### Rounding Strategy
+
+**Inputs to MIP (conservative):**
+```c
+// Driving time: round UP to next 5-min boundary
+double drive_time_hours = 2.617;  // 2h 37m
+int drive_periods = (int)ceil(drive_time_hours * 12);  // 32 periods = 2h 40m
+
+// Time windows: round INWARD
+time_t window_open = 10:03;   // round UP to 10:05
+time_t window_close = 17:58;  // round DOWN to 17:55
+
+// Current clocks: round UP (less remaining = conservative)
+double driving_used = 4.12;  // 4h 7m 12s
+int clock_periods = (int)ceil(driving_used * 12);  // 50 periods = 4h 10m used
+```
+
+**Result:** If MIP says feasible, real-world execution is guaranteed feasible. We never promise more time than the driver actually has.
+
+---
+
 #### Formulation 1: Time-Indexed MIP
 
 **Discretization:** δ = 1/12 hours (5 minutes), horizon H periods (1 week = 2016 periods)
