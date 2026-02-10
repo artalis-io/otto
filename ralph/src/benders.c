@@ -482,10 +482,15 @@ int benders_build_subproblem(BendersContext *ctx, int scenario) {
         free(values);
     }
 
-    /* Add linking constraints (RHS will be updated per iteration) */
+    /* Add linking constraints (RHS will be updated per iteration)
+     * Store sub_row_idx for robust dual/Farkas extraction (no offset math) */
     for (int k = 0; k < ctx->num_linking; k++) {
         LinkingConstraint *lc = &ctx->linking[k];
         if (lc->num_sub_terms > 0) {
+            /* Record row index before adding constraint */
+            if (scenario == 0) {
+                lc->sub_row_idx = sub->num_cons;
+            }
             lp_model_add_constraint(sub, lc->num_sub_terms,
                                    lc->sub_var_indices, lc->sub_coeffs,
                                    lc->sense, lc->original_rhs);
@@ -516,9 +521,9 @@ int benders_update_subproblem_rhs(BendersContext *ctx, int scenario,
     if (!ctx->sub_models[scenario]) return -1;
 
     LPModel *sub = ctx->sub_models[scenario];
-    int linking_start_row = ctx->num_sub_cons;
 
-    /* Update RHS for linking constraints: h - T*x_master */
+    /* Update RHS for linking constraints: h - T*x_master
+     * Use explicit sub_row_idx for robust indexing */
     for (int k = 0; k < ctx->num_linking; k++) {
         LinkingConstraint *lc = &ctx->linking[k];
         double rhs = lc->original_rhs;
@@ -529,7 +534,7 @@ int benders_update_subproblem_rhs(BendersContext *ctx, int scenario,
             rhs -= lc->master_coeffs[t] * x_master[master_j];
         }
 
-        sub->b[linking_start_row + k] = rhs;
+        sub->b[lc->sub_row_idx] = rhs;
     }
 
     return 0;
@@ -574,12 +579,11 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
         *is_feasible = 1;
         *obj = solver->obj_value;
 
-        /* Extract duals for linking constraints */
+        /* Extract duals for linking constraints using explicit row indices */
         if (duals && solver->dual_solution) {
-            /* Copy duals for linking constraints only */
-            int linking_start = ctx->num_sub_cons;
             for (int k = 0; k < ctx->num_linking; k++) {
-                duals[k] = solver->dual_solution[linking_start + k];
+                LinkingConstraint *lc = &ctx->linking[k];
+                duals[k] = solver->dual_solution[lc->sub_row_idx];
             }
         }
 
@@ -594,10 +598,10 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
 
         /* Extract Farkas ray for linking constraints + compute sub-only RHS contribution */
         if (farkas && solver->farkas_valid && solver->farkas_ray) {
-            /* Extract linking constraint Farkas multipliers */
-            int linking_start = ctx->num_sub_cons;
+            /* Extract linking constraint Farkas multipliers using explicit row indices */
             for (int k = 0; k < ctx->num_linking; k++) {
-                farkas[k] = solver->farkas_ray[linking_start + k];
+                LinkingConstraint *lc = &ctx->linking[k];
+                farkas[k] = solver->farkas_ray[lc->sub_row_idx];
             }
 
             /* Compute sub-only constraint RHS contribution: sum(y_sub[i] * b_sub[i])
@@ -728,11 +732,10 @@ int benders_add_optimality_cut(BendersContext *ctx, int scenario,
      */
 
     double constant = sub_obj;  /* Start with subproblem objective */
-    int linking_start = ctx->num_sub_cons;
 
     for (int k = 0; k < ctx->num_linking; k++) {
-        double pi_k = sub_solver->dual_solution[linking_start + k];
         LinkingConstraint *lc = &ctx->linking[k];
+        double pi_k = sub_solver->dual_solution[lc->sub_row_idx];
 
         /* Add contribution to x coefficients: π_k * T_kj for each master var j */
         for (int t = 0; t < lc->num_master_terms; t++) {
@@ -777,7 +780,8 @@ int benders_add_optimality_cut(BendersContext *ctx, int scenario,
         /* Debug: show linking duals */
         printf("    Linking duals: ");
         for (int k = 0; k < ctx->num_linking; k++) {
-            printf("π[%d]=%.4f ", k, sub_solver->dual_solution[linking_start + k]);
+            LinkingConstraint *lc = &ctx->linking[k];
+            printf("π[%d]=%.4f ", k, sub_solver->dual_solution[lc->sub_row_idx]);
         }
         printf("\n");
     }
