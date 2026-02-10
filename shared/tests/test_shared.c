@@ -139,6 +139,75 @@ TEST(coord_valid)
     ASSERT(!sh_coord_valid(invalid_lon));
 }
 
+TEST(parse_coord_valid)
+{
+    SHCoord c;
+
+    /* Valid coordinates */
+    ASSERT_EQ(sh_parse_coord("47.5,19.0", &c), 0);
+    ASSERT_NEAR(c.lat, 47.5, 0.0001);
+    ASSERT_NEAR(c.lon, 19.0, 0.0001);
+
+    /* Negative coordinates */
+    ASSERT_EQ(sh_parse_coord("-34.6,-58.4", &c), 0);
+    ASSERT_NEAR(c.lat, -34.6, 0.0001);
+    ASSERT_NEAR(c.lon, -58.4, 0.0001);
+
+    /* Boundary values */
+    ASSERT_EQ(sh_parse_coord("90,180", &c), 0);
+    ASSERT_NEAR(c.lat, 90.0, 0.0001);
+    ASSERT_NEAR(c.lon, 180.0, 0.0001);
+
+    ASSERT_EQ(sh_parse_coord("-90,-180", &c), 0);
+    ASSERT_NEAR(c.lat, -90.0, 0.0001);
+    ASSERT_NEAR(c.lon, -180.0, 0.0001);
+
+    /* Zero coordinates */
+    ASSERT_EQ(sh_parse_coord("0,0", &c), 0);
+    ASSERT_NEAR(c.lat, 0.0, 0.0001);
+    ASSERT_NEAR(c.lon, 0.0, 0.0001);
+
+    /* High precision */
+    ASSERT_EQ(sh_parse_coord("43.738450,7.424590", &c), 0);
+    ASSERT_NEAR(c.lat, 43.73845, 0.000001);
+    ASSERT_NEAR(c.lon, 7.42459, 0.000001);
+}
+
+TEST(parse_coord_invalid)
+{
+    SHCoord c;
+
+    /* Empty input */
+    ASSERT_EQ(sh_parse_coord("", &c), -1);
+    ASSERT_EQ(sh_parse_coord(NULL, &c), -1);
+
+    /* Missing comma */
+    ASSERT_EQ(sh_parse_coord("47.5 19.0", &c), -1);
+    ASSERT_EQ(sh_parse_coord("47.5", &c), -1);
+
+    /* Invalid numbers */
+    ASSERT_EQ(sh_parse_coord("abc,19.0", &c), -1);
+    ASSERT_EQ(sh_parse_coord("47.5,xyz", &c), -1);
+    ASSERT_EQ(sh_parse_coord("47.5,", &c), -1);
+    ASSERT_EQ(sh_parse_coord(",19.0", &c), -1);
+
+    /* Out of range latitude */
+    ASSERT_EQ(sh_parse_coord("91,0", &c), -1);
+    ASSERT_EQ(sh_parse_coord("-91,0", &c), -1);
+
+    /* Out of range longitude */
+    ASSERT_EQ(sh_parse_coord("0,181", &c), -1);
+    ASSERT_EQ(sh_parse_coord("0,-181", &c), -1);
+
+    /* Inf/NaN from malformed input */
+    ASSERT_EQ(sh_parse_coord("1e1000,0", &c), -1);
+    ASSERT_EQ(sh_parse_coord("0,1e1000", &c), -1);
+
+    /* Trailing garbage */
+    ASSERT_EQ(sh_parse_coord("47.5,19.0,extra", &c), -1);
+    ASSERT_EQ(sh_parse_coord("47.5abc,19.0", &c), -1);
+}
+
 TEST(coord_in_bbox)
 {
     SHBBox bbox = {.min_lat = 46, .max_lat = 48, .min_lon = 18, .max_lon = 20};
@@ -5068,6 +5137,8 @@ int main(void)
     RUN_TEST(bearing_east);
     RUN_TEST(bearing_north);
     RUN_TEST(destination);
+    RUN_TEST(parse_coord_valid);
+    RUN_TEST(parse_coord_invalid);
 
     printf("\nBounding Box:\n");
     RUN_TEST(bbox_init);

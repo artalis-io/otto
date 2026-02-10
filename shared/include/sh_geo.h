@@ -105,6 +105,22 @@ double sh_distance_fast_fixed(SHCoordFixed a, SHCoordFixed b);
 int sh_coord_valid(SHCoord c);
 
 /*
+ * Parse a coordinate string in "lat,lon" format.
+ *
+ * Uses strtod for proper error detection. Validates:
+ * - Non-empty input
+ * - Contains exactly one comma separator
+ * - Both lat and lon are valid numbers (not inf/NaN)
+ * - Latitude in range [-90, 90]
+ * - Longitude in range [-180, 180]
+ *
+ * @param str    Input string (e.g., "47.5,19.0")
+ * @param coord  Output coordinate (only modified on success)
+ * @return 0 on success, -1 on error
+ */
+int sh_parse_coord(const char *str, SHCoord *coord);
+
+/*
  * Check if a coordinate is within a bounding box.
  */
 int sh_coord_in_bbox(SHCoord c, SHBBox bbox);
