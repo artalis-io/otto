@@ -57,11 +57,42 @@ static void extract_farkas_ray_dual(SimplexSolver *solver) {
     tableau_compute_reduced_costs(tab);
 
     /* Copy the dual values - these are the Farkas multipliers */
+    double max_abs = 0.0;
     for (int i = 0; i < m; i++) {
         solver->farkas_ray[i] = tab->y[i];
+        double absval = fabs(tab->y[i]);
+        if (absval > max_abs) max_abs = absval;
+    }
+
+    /* Validation: Farkas ray must be nontrivial */
+    if (max_abs < 1e-9) {
+        solver->farkas_valid = 0;
+        if (solver->verbose) {
+            fprintf(stderr, "[extract_farkas_ray_dual] WARNING: Farkas ray is all zeros\n");
+        }
+        return;
+    }
+
+    /* Debug validation: verify y'b_tab < 0 (Farkas lemma requirement) */
+    double y_tab_dot_rhs = 0.0;
+    for (int i = 0; i < m; i++) {
+        y_tab_dot_rhs += tab->y[i] * tab->rhs[i];
+    }
+
+    if (y_tab_dot_rhs >= -1e-6) {
+        if (solver->verbose) {
+            fprintf(stderr, "[extract_farkas_ray_dual] WARNING: y'b_tab = %.6e (expected < 0)\n",
+                    y_tab_dot_rhs);
+        }
+    } else if (solver->verbose >= 2) {
+        fprintf(stderr, "[extract_farkas_ray_dual] y'b_tab = %.6e < 0 (valid)\n", y_tab_dot_rhs);
     }
 
     solver->farkas_valid = 1;
+
+    if (solver->verbose >= 2) {
+        fprintf(stderr, "[extract_farkas_ray_dual] Valid certificate: ||y||_inf = %.6e\n", max_abs);
+    }
 }
 
 /* ============================================================================

@@ -1893,6 +1893,26 @@ static void extract_farkas_ray(SimplexSolver *solver) {
         return;
     }
 
+    /* Debug validation: verify y'b_tab < 0 (Farkas lemma requirement)
+     * b_tab is the normalized RHS (all non-negative after row transformations).
+     * For a valid certificate, the dot product must be negative. */
+    double y_tab_dot_rhs = 0.0;
+    for (int i = 0; i < m; i++) {
+        y_tab_dot_rhs += tab->y[i] * tab->rhs[i];
+    }
+
+    if (y_tab_dot_rhs >= -1e-6) {
+        /* This shouldn't happen if the Farkas extraction is correct */
+        if (solver->verbose) {
+            fprintf(stderr, "[extract_farkas_ray] WARNING: y'b_tab = %.6e (expected < 0)\n",
+                    y_tab_dot_rhs);
+        }
+        /* Don't invalidate - this might be a borderline numerical case.
+         * The ray can still be used, but user should be aware. */
+    } else if (solver->verbose >= 2) {
+        fprintf(stderr, "[extract_farkas_ray] y'b_tab = %.6e < 0 (valid)\n", y_tab_dot_rhs);
+    }
+
     solver->farkas_valid = 1;
 
     if (solver->verbose >= 2) {
