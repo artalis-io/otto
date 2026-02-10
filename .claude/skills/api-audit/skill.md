@@ -547,7 +547,14 @@ When `/api-audit <module>` is invoked:
    - [ ] `make api-docs-check` passes
    - [ ] All endpoints from annotations appear in HTML
 
-8. **Test WASM demos:**
+8. **Check JSON handling compliance:**
+   - [ ] Uses `sh_json_parse()` for all request parsing (no hand-rolled)
+   - [ ] Uses `ShJsonWriter` + `ShJsonBuf` for all response building
+   - [ ] No local JSON helper functions (use shared library)
+   - [ ] Error responses use `ShJsonWriter` (not strdup/snprintf)
+   - [ ] No forbidden patterns detected (see JSON Compliance section)
+
+9. **Test WASM demos:**
    - [ ] `make test-api-docs` passes
    - [ ] All demo endpoints return expected responses
    - [ ] New endpoints have test coverage in `site/tests/wasm-demos.spec.js`
@@ -580,6 +587,310 @@ test('{endpoint} returns expected response', async ({ page }) => {
   expect(result.status).toBe(200);
   // Add assertions based on @response_json in header
 });
+```
+
+## JSON Handling Compliance
+
+All API modules MUST use the shared JSON library (`sh_json.h`) for both parsing requests and building responses. Hand-rolled JSON handling is **explicitly forbidden** for consistency, auditability, and safety.
+
+### Required Patterns
+
+**Request Parsing (Decoding):**
+```c
+#include "sh_json.h"
+#include "sh_arena.h"
+
+static char *process_request(const char *body, size_t body_len, int *status_code) {
+    /* Create arena for JSON parsing */
+    SHArena *arena = sh_arena_create(body_len * 4 + 4096);
+    if (!arena) {
+        *status_code = 500;
+        /* Use ShJsonWriter even for errors - see below */
+    }
+
+    /* Parse JSON using shared library */
+    ShJsonValue *root = NULL;
+    ShJsonStatus json_status = sh_json_parse(body, body_len, arena, &root);
+    if (json_status != SH_JSON_OK) {
+        sh_arena_free(arena);
+        *status_code = 400;
+        /* Return error using ShJsonWriter */
+    }
+
+    /* Access values using sh_json accessors */
+    double value = sh_json_as_double(sh_json_get(root, "key"), 0.0);
+    const char *str = sh_json_as_string(sh_json_get(root, "name"), "");
+    int count = sh_json_as_int(sh_json_get(root, "count"), 0);
+
+    /* Arrays */
+    ShJsonValue *arr = sh_json_get(root, "items");
+    size_t len = sh_json_array_len(arr);
+    for (size_t i = 0; i < len; i++) {
+        ShJsonValue *item = sh_json_array_get(arr, i);
+        /* ... */
+    }
+
+    sh_arena_free(arena);
+    /* ... */
+}
+```
+
+**Response Building (Encoding):**
+```c
+#include "sh_json.h"
+
+static char *build_response(Result *result) {
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "status");
+    sh_json_write_string(&jw, "OPTIMAL");
+    sh_json_write_key(&jw, "value");
+    sh_json_write_double(&jw, result->value);
+    sh_json_write_key(&jw, "items");
+    sh_json_write_array_start(&jw);
+    for (int i = 0; i < result->count; i++) {
+        sh_json_write_int(&jw, result->items[i]);
+    }
+    sh_json_write_array_end(&jw);
+    sh_json_write_object_end(&jw);
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        return NULL;  /* Handle error */
+    }
+
+    return sh_json_buf_take(&jb);  /* Caller frees */
+}
+```
+
+**Error Responses (MUST use ShJsonWriter):**
+```c
+/* GOOD: Error responses use ShJsonWriter for consistency */
+static char *make_error_response(const char *message) {
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "error");
+    sh_json_write_string(&jw, message);
+    sh_json_write_object_end(&jw);
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
+        return strdup("{\"error\":\"JSON write error\"}");  /* Last resort fallback */
+    }
+
+    return sh_json_buf_take(&jb);
+}
+
+/* BAD: Do NOT use strdup for error responses */
+return strdup("{\"error\": \"Something went wrong\"}\n");  /* FORBIDDEN */
+```
+
+### Forbidden Patterns
+
+The audit MUST flag these patterns as **CRITICAL violations**:
+
+#### Hand-Rolled JSON Parsing
+
+| Pattern | Why Forbidden | Replacement |
+|---------|---------------|-------------|
+| `strstr(body, "\"key\"")` | Matches inside strings, fragile | `sh_json_get(root, "key")` |
+| `strchr(body, '{')` or `strchr(body, '}')` | Fails on nested objects | `sh_json_parse()` |
+| `strchr(body, ',')` for splitting | Fails on arrays/nested | `sh_json_array_get()` |
+| `atoi()` on extracted JSON | No error detection, overflow | `sh_json_as_int()` |
+| `atof()` on extracted JSON | No error detection | `sh_json_as_double()` |
+| `strtol/strtod` on raw body | Still hand-rolling | `sh_json_as_int/double()` |
+| Local `parse_json_*()` functions | Duplication, bugs | Use `sh_json_*()` |
+| Local `json_escape()` functions | Duplication | `sh_json_write_string()` handles escaping |
+
+**Detection grep patterns:**
+```bash
+# Hand-rolled parsing
+grep -n 'strstr.*\"\\\"' {module}/src/*.c
+grep -n 'strchr.*[{}\[\],:]' {module}/src/*.c
+grep -n 'atoi\|atof\|atol' {module}/src/*.c
+grep -n 'strtol\|strtod' {module}/src/*.c | grep -v sh_json
+
+# Local JSON helpers (should not exist)
+grep -n 'json_escape\|parse_json\|json_parse' {module}/src/*.c
+```
+
+#### Hand-Rolled JSON Encoding
+
+| Pattern | Why Forbidden | Replacement |
+|---------|---------------|-------------|
+| `snprintf(buf + pos, ...)` chains | Buffer calc errors, no escaping | `ShJsonWriter` |
+| `malloc(buf_size)` for JSON response | Manual sizing, overflow risk | `ShJsonBuf` (auto-grows) |
+| `calloc(...) + snprintf` for response | Same issues | `ShJsonBuf` |
+| `realloc` for growing JSON buffer | Manual, error-prone | `ShJsonBuf` (handles internally) |
+| Static buffer `char response[N]` | Fixed size, overflow risk | `ShJsonBuf` |
+| `strdup("{\"error\": ...}")` | No escaping, inconsistent | `ShJsonWriter` for errors too |
+| `sprintf` (unbounded) | Buffer overflow | Never use for JSON |
+| `"{\n  \"key\": %d\n}"` format strings | Manual formatting, fragile | `ShJsonWriter` |
+
+**Detection grep patterns:**
+```bash
+# Hand-rolled encoding
+grep -n 'snprintf.*response\|snprintf.*buf.*pos' {module}/src/*.c
+grep -n 'malloc.*buf_size\|calloc.*response' {module}/src/*.c
+grep -n 'strdup.*{.*error' {module}/src/*.c
+grep -n 'sprintf\s*(' {module}/src/*.c
+grep -n 'char\s\+response\[' {module}/src/*.c
+
+# Should NOT appear (static buffers for JSON)
+grep -n 'static char.*\[.*\].*=' {module}/src/*api*.c
+```
+
+#### Fixed-Size Buffers
+
+Fixed-size buffers are **forbidden** for JSON responses except:
+- **Exception:** Last-resort error fallback (e.g., "JSON write error" when ShJsonBuf itself fails)
+- **Never** for success responses, even if "small"
+- **Never** for error messages that include dynamic content (user input, file paths, etc.)
+
+```c
+/* FORBIDDEN: Fixed buffer for response */
+char response[1024];
+snprintf(response, sizeof(response), "{\"count\": %d}", count);
+
+/* FORBIDDEN: Even for "simple" responses */
+char buf[256];
+snprintf(buf, sizeof(buf), "{\"status\": \"healthy\"}");
+
+/* ALLOWED: Only as last-resort fallback */
+if (jw.error) {
+    sh_json_buf_free(&jb);
+    return strdup("{\"error\":\"JSON write error\"}");
+}
+```
+
+### No Local JSON Helpers
+
+All JSON-related helper functions MUST live in `shared/include/sh_json.h`. Local helpers are forbidden because:
+1. Duplication across modules
+2. Inconsistent escaping/formatting
+3. Untested edge cases
+4. Maintenance burden
+
+**Forbidden local patterns:**
+```c
+/* FORBIDDEN: Local escape function */
+static void json_escape(char *dst, const char *src, size_t max) { ... }
+
+/* FORBIDDEN: Local JSON builder */
+static int json_add_field(char *buf, size_t *pos, const char *key, int val) { ... }
+
+/* FORBIDDEN: Module-specific JSON helpers */
+static char *fw_build_json_response(...) { ... }  /* Use ShJsonWriter instead */
+```
+
+**If you need functionality not in sh_json.h:**
+1. Check if it already exists (read `shared/include/sh_json.h`)
+2. If genuinely missing, add it to `shared/src/sh_json.c`
+3. Add tests to `shared/tests/test_sh_json.c`
+4. Never add local copies
+
+### Audit Checklist for JSON Compliance
+
+When auditing a module, verify:
+
+**Files to check:**
+- `{module}/src/{prefix}_api.c` - Transport-agnostic handler
+- `{module}/api/src/main.c` - HTTP wrapper (stats endpoint, etc.)
+
+**Required includes:**
+```c
+#include "sh_json.h"   /* Must be present if any JSON handling */
+#include "sh_arena.h"  /* Required for sh_json_parse() */
+```
+
+**Checklist:**
+- [ ] `#include "sh_json.h"` present in files doing JSON
+- [ ] All request parsing uses `sh_json_parse()` + accessors
+- [ ] All response building uses `ShJsonWriter` + `ShJsonBuf`
+- [ ] Error responses use `ShJsonWriter` (not strdup)
+- [ ] No `strstr`, `strchr` on JSON content
+- [ ] No `atoi`, `atof`, `atol` on JSON values
+- [ ] No `snprintf` chains building JSON
+- [ ] No `malloc`/`calloc`/`realloc` for JSON response buffers
+- [ ] No static/fixed-size buffers for JSON responses
+- [ ] No local `json_*` helper functions
+- [ ] No format strings with JSON structure (`"{\"%s\": %d}"`)
+
+### Migration Checklist
+
+When migrating a module to sh_json compliance:
+
+#### Phase 1: Request Parsing
+1. [ ] Add `#include "sh_json.h"` and `#include "sh_arena.h"`
+2. [ ] Replace `strstr(body, "\"key\"")` with `sh_json_get(root, "key")`
+3. [ ] Replace `atoi/atof` with `sh_json_as_int/double()`
+4. [ ] Replace manual array iteration with `sh_json_array_len/get()`
+5. [ ] Remove local `parse_*` functions
+6. [ ] Test parsing with malformed input
+
+#### Phase 2: Response Building
+1. [ ] Replace `snprintf` chains with `ShJsonWriter`
+2. [ ] Replace `malloc(buf_size)` with `sh_json_buf_init()`
+3. [ ] Replace buffer size calculations with `sh_json_buf_take()`
+4. [ ] Handle `jw.error` after writing
+5. [ ] Test response format matches expected
+
+#### Phase 3: Error Responses
+1. [ ] Replace `strdup("{\"error\":...}")` with `ShJsonWriter`
+2. [ ] Create helper or inline `ShJsonWriter` for each error path
+3. [ ] Verify error messages are properly escaped
+4. [ ] Test error responses with special characters
+
+#### Phase 4: Cleanup
+1. [ ] Remove local `json_escape()` functions
+2. [ ] Remove unused buffer size constants
+3. [ ] Remove `#define RESPONSE_BUF_SIZE` etc.
+4. [ ] Run tests, verify JSON format unchanged
+5. [ ] Run with ASan to verify no leaks
+
+### Report Section for JSON Compliance
+
+Add this section to the audit report:
+
+```markdown
+### JSON Handling Compliance
+
+| Check | Status | Notes |
+|-------|--------|-------|
+| Uses sh_json_parse() | ✅/❌ | |
+| Uses ShJsonWriter | ✅/❌ | |
+| Error responses use ShJsonWriter | ✅/❌ | Line X uses strdup |
+| No hand-rolled parsing | ✅/❌ | strstr at line Y |
+| No hand-rolled encoding | ✅/❌ | snprintf chain at line Z |
+| No local JSON helpers | ✅/❌ | json_escape() at line W |
+| No fixed-size JSON buffers | ✅/❌ | char response[1024] at line V |
+
+**Violations Found:**
+
+| File:Line | Pattern | Severity | Fix |
+|-----------|---------|----------|-----|
+| fw_api.c:142 | `strstr(body, "\"key\"")` | Critical | Use `sh_json_get()` |
+| fw_api.c:256 | `snprintf(response + pos, ...)` | Critical | Use `ShJsonWriter` |
+| fw_api.c:301 | `strdup("{\"error\":...")` | High | Use `ShJsonWriter` |
+| main.c:89 | `char stats_buf[2048]` | High | Use `ShJsonBuf` |
+
+**Migration Checklist:**
+
+- [ ] Phase 1: Request parsing migrated
+- [ ] Phase 2: Response building migrated
+- [ ] Phase 3: Error responses migrated
+- [ ] Phase 4: Local helpers removed
+- [ ] All tests pass after migration
 ```
 
 ## Report Format
@@ -853,6 +1164,18 @@ Before marking a module as API-compliant:
 - [ ] WASM demos work (if enabled)
 - [ ] `make test-api-docs` passes (automated WASM tests)
 
+**JSON Handling (Critical):**
+- [ ] `#include "sh_json.h"` in all files doing JSON
+- [ ] Request parsing uses `sh_json_parse()` + accessors only
+- [ ] Response building uses `ShJsonWriter` + `ShJsonBuf` only
+- [ ] Error responses use `ShJsonWriter` (not strdup/snprintf)
+- [ ] No `strstr`/`strchr` for JSON key lookup
+- [ ] No `atoi`/`atof`/`atol` on JSON values
+- [ ] No `snprintf` chains building JSON
+- [ ] No `malloc`/`calloc` for JSON response buffers
+- [ ] No static/fixed-size buffers for JSON responses
+- [ ] No local `json_*` helper functions
+
 ## Adding New Modules
 
 When creating a new API module (e.g., `surge` with prefix `sg_`), follow these steps to integrate with api-audit:
@@ -948,11 +1271,13 @@ When a new module is added to api-config.json, it's automatically included in `/
 
 ## Current Module Status
 
-| Module | Handler | Annotations | Config | api.html | Status |
-|--------|---------|-------------|--------|----------|--------|
-| carta | ✅ ct_api.h | ✅ 4 endpoints | ✅ | ✅ | **Compliant** |
-| velo | ✅ vl_api.h | ✅ 5 endpoints | ✅ | ✅ | **Compliant** |
-| locus | ✅ lc_api.h | ✅ 6 endpoints | ✅ | ✅ | **Compliant** |
-| fuelwise | ❌ inline | ❌ none | ⚠️ points to main.c | ⚠️ | Needs work |
+| Module | Handler | Annotations | Config | api.html | JSON | Status |
+|--------|---------|-------------|--------|----------|------|--------|
+| carta | ✅ ct_api.h | ✅ 4 endpoints | ✅ | ✅ | ✅ | **Compliant** |
+| velo | ✅ vl_api.h | ✅ 5 endpoints | ✅ | ✅ | ✅ | **Compliant** |
+| locus | ✅ lc_api.h | ✅ 6 endpoints | ✅ | ✅ | ✅ | **Compliant** |
+| fuelwise | ✅ fw_api.h | ❌ none | ⚠️ points to main.c | ⚠️ | ✅ | Partial |
+
+**JSON column:** Uses `sh_json_parse()` for parsing and `ShJsonWriter` + `ShJsonBuf` for encoding.
 
 Run `/api-audit all` to get current status, `/api-audit <module> --fix` to remediate.
