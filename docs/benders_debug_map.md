@@ -187,3 +187,33 @@ extract_farkas_ray(solver);  // Added before setting INFEASIBLE status
 ### Verification
 - FuelWise Benders test: $74 optimal (was $72-$85 before fix)
 - All Ralph tests pass: 125 main, 358 LAP, 153 netflow, 194 detect
+
+## Farkas Ray Validation Invariants
+
+For a valid Farkas certificate of infeasibility, `extract_farkas_ray()` validates:
+
+1. **Nontrivial ray**: `||y||_∞ > 1e-9`
+   - Zero ray indicates extraction from wrong state or c_ext costs incorrect
+
+2. **Infeasibility certificate**: `y'b_norm < -1e-9`
+   - Must account for constraint sense: `b_norm[i] = -b[i]` for >= constraints
+   - This proves no feasible solution exists
+
+3. **Dual feasibility (spot-check)**: `y'a_j >= -1e-6` for sampled columns
+   - Check first 10 structural columns
+   - Catches "wrong vector" bugs where tab->y isn't row duals
+
+### Key Implementation Notes
+
+- Farkas ray must be extracted **during Phase 1** before restoring Phase 2 costs
+- `tab->y` contains row duals `y = c_B' * B^{-1}` computed by `tableau_compute_reduced_costs()`
+- Phase 1 costs: 0 for structural/slack, 1 for artificial variables
+- Row ordering is stable: row i in `solver->farkas_ray` = original constraint i
+
+### Benders Row Indexing
+
+Subproblem constraints are ordered:
+- Rows 0..`num_sub_cons-1`: sub-only constraints
+- Rows `num_sub_cons`..`num_sub_cons+num_linking-1`: linking constraints
+
+Both optimality and feasibility cuts read duals/rays starting at `ctx->num_sub_cons`.
