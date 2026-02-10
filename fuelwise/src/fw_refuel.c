@@ -513,214 +513,29 @@ int fw_solve_refuel_milp(
 
 /* ============================================================================
  * Refueling Problem Solving - Benders Decomposition
+ *
+ * True Benders decomposition using ralph_solve_benders():
+ * - Master problem: binary z[i] variables (stop decisions) + θ (recourse cost)
+ * - Subproblem: continuous x[i] (purchases), y[i] (cumulative fuel)
+ * - Linking constraints: x[i] <= tank_capacity * z[i], x[i] >= min_purchase * z[i]
+ *
+ * This scales to k > 30 stations where enumeration (2^k) would timeout.
  * ============================================================================ */
 
-/*
- * Bookkeeping for subproblem constraint mapping.
- * Tracks which constraints depend on z and their RHS values for Farkas cuts.
- */
-typedef struct {
-    int num_stations;
-    int num_constraints;
-
-    /* Constraint indices (into subproblem constraint array) */
-    int *upper_bound_con_idx;   /* x[i] <= tank_capacity * z[i] */
-    int *lower_bound_con_idx;   /* x[i] >= min_purchase * z[i] (or -1 if not present) */
-
-    /* RHS values for all constraints (for Farkas cut computation) */
-    double *rhs;
-
-    /* Problem parameters needed for cut coefficients */
-    double tank_capacity;
-    double min_purchase;
-} BendersSubproblemMap;
-
-static BendersSubproblemMap* benders_map_create(int k, double tank_cap, double min_purch) {
-    BendersSubproblemMap *map = malloc(sizeof(BendersSubproblemMap));
-    if (!map) return NULL;
-
-    map->num_stations = k;
-    map->num_constraints = 0;
-    map->tank_capacity = tank_cap;
-    map->min_purchase = min_purch;
-
-    map->upper_bound_con_idx = malloc(k * sizeof(int));
-    map->lower_bound_con_idx = malloc(k * sizeof(int));
-    /* Allocate enough for max constraints: k fuel balance + k min fuel + k tank cap + k upper + k lower + 1 reach */
-    map->rhs = malloc((5 * k + 1) * sizeof(double));
-
-    if (!map->upper_bound_con_idx || !map->lower_bound_con_idx || !map->rhs) {
-        free(map->upper_bound_con_idx);
-        free(map->lower_bound_con_idx);
-        free(map->rhs);
-        free(map);
-        return NULL;
-    }
-
-    for (int i = 0; i < k; i++) {
-        map->upper_bound_con_idx[i] = -1;
-        map->lower_bound_con_idx[i] = -1;
-    }
-
-    return map;
-}
-
-static void benders_map_free(BendersSubproblemMap *map) {
-    if (map) {
-        free(map->upper_bound_con_idx);
-        free(map->lower_bound_con_idx);
-        free(map->rhs);
-        free(map);
-    }
-}
+/* Threshold for using Benders vs MILP. 0 = always use Benders. */
+static int fw_benders_threshold = 0;
 
 /*
- * Build the subproblem LP with fixed z values.
- * Returns the model and populates the constraint map for Farkas cut generation.
+ * Set the threshold for using Benders decomposition.
+ * If num_stations > threshold, use Benders; otherwise use MILP.
+ * Set to 0 to always use Benders (default).
  */
-static RalphModel* build_benders_subproblem(
-    const FWRefuelProblem *problem,
-    const int *z_fixed,
-    BendersSubproblemMap *map)
-{
-    int k = problem->num_stations;
+void fw_set_benders_threshold(int threshold) {
+    fw_benders_threshold = threshold;
+}
 
-    RalphModel *model = ralph_create();
-    if (!model) return NULL;
-
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-
-    int x_start = 0;
-    int y_start = k;
-    int con_idx = 0;
-
-    /* Add x[i] variables */
-    double est_price = problem->remaining_fuel_value;
-    for (int i = 0; i < k; i++) {
-        double obj_coeff = problem->stations[i].price - est_price;
-        ralph_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_CONTINUOUS);
-    }
-
-    /* Add y[i] variables */
-    double y_upper = problem->current_fuel + k * problem->tank_capacity;
-    for (int i = 0; i < k; i++) {
-        ralph_add_var(model, 0.0, y_upper, 0.0, RALPH_CONTINUOUS);
-    }
-
-    /* Constraint 1: Fuel balance - y[i] = current_fuel + sum(x[j] for j < i) */
-    for (int i = 0; i < k; i++) {
-        int nnz = 1 + i;
-        int *indices = malloc(nnz * sizeof(int));
-        double *values = malloc(nnz * sizeof(double));
-        if (!indices || !values) {
-            free(indices);
-            free(values);
-            ralph_free(model);
-            return NULL;
-        }
-
-        indices[0] = y_start + i;
-        values[0] = 1.0;
-
-        for (int j = 0; j < i; j++) {
-            indices[1 + j] = x_start + j;
-            values[1 + j] = -1.0;
-        }
-
-        double rhs = problem->current_fuel;
-        ralph_add_constraint(model, nnz, indices, values, RALPH_EQUAL, rhs);
-        map->rhs[con_idx++] = rhs;
-
-        free(indices);
-        free(values);
-    }
-
-    /* Constraint 2: Minimum fuel at arrival */
-    for (int i = 0; i < k; i++) {
-        int indices[1] = {y_start + i};
-        double values[1] = {1.0};
-        double fuel_consumed = fw_calc_fuel_consumed(problem, 0,
-            problem->stations[i].distance_from_start);
-        double rhs = problem->minimum_fuel + fuel_consumed;
-
-        ralph_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
-        map->rhs[con_idx++] = rhs;
-    }
-
-    /* Constraint 3: Tank capacity after refuel */
-    for (int i = 0; i < k; i++) {
-        int indices[2] = {y_start + i, x_start + i};
-        double values[2] = {1.0, 1.0};
-        double fuel_consumed = fw_calc_fuel_consumed(problem, 0,
-            problem->stations[i].distance_from_start);
-        double rhs = problem->tank_capacity + fuel_consumed;
-
-        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, rhs);
-        map->rhs[con_idx++] = rhs;
-    }
-
-    /* Constraint 4: Link x[i] to z[i] (upper bound) - x[i] <= tank_capacity * z[i]
-     * With fixed z, this becomes: x[i] <= tank_capacity * z_fixed[i]
-     * For Farkas cut, we store the CONSTANT part of RHS (0), not the z-dependent part.
-     */
-    for (int i = 0; i < k; i++) {
-        int indices[1] = {x_start + i};
-        double values[1] = {1.0};
-        double rhs = problem->tank_capacity * z_fixed[i];
-
-        ralph_add_constraint(model, 1, indices, values, RALPH_LESS_EQUAL, rhs);
-        map->upper_bound_con_idx[i] = con_idx;
-        map->rhs[con_idx++] = 0.0;  /* Constant part of RHS is 0 */
-    }
-
-    /* Constraint 5: Minimum purchase (lower bound) - x[i] >= min_purchase * z[i]
-     * With fixed z: x[i] >= min_purchase * z_fixed[i]
-     * For Farkas cut, we store the CONSTANT part of RHS (0).
-     */
-    if (problem->min_purchase > 0.01) {
-        for (int i = 0; i < k; i++) {
-            int indices[1] = {x_start + i};
-            double values[1] = {1.0};
-            double rhs = problem->min_purchase * z_fixed[i];
-
-            ralph_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
-            map->lower_bound_con_idx[i] = con_idx;
-            map->rhs[con_idx++] = 0.0;  /* Constant part of RHS is 0 */
-        }
-    }
-
-    /* Constraint 6: Reach destination */
-    {
-        int *indices = malloc(k * sizeof(int));
-        double *values = malloc(k * sizeof(double));
-        if (!indices || !values) {
-            free(indices);
-            free(values);
-            ralph_free(model);
-            return NULL;
-        }
-
-        for (int i = 0; i < k; i++) {
-            indices[i] = x_start + i;
-            values[i] = 1.0;
-        }
-
-        double total_fuel_needed = fw_calc_total_fuel_consumed(problem);
-        double min_end = (problem->minimum_fuel_at_end > 0) ?
-                         problem->minimum_fuel_at_end : problem->minimum_fuel;
-        double rhs = min_end + total_fuel_needed - problem->current_fuel;
-
-        if (rhs > 0) {
-            ralph_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, rhs);
-            map->rhs[con_idx++] = rhs;
-        }
-
-        free(indices);
-        free(values);
-    }
-
-    map->num_constraints = con_idx;
-    return model;
+int fw_get_benders_threshold(void) {
+    return fw_benders_threshold;
 }
 
 int fw_solve_refuel_benders(
@@ -751,100 +566,247 @@ int fw_solve_refuel_benders(
         return fw_solve_refuel_lp(problem, solution);
     }
 
-    /* For small k, enumerate all 2^k z combinations directly.
-     * This is simpler and more robust than Benders with MIP master.
-     * For k <= 20, 2^k = ~1M which is tractable.
-     */
-    if (k > 20) {
-        /* Fall back to MILP for large problems */
+    /* Use MILP for small k if threshold is set */
+    if (fw_benders_threshold > 0 && k <= fw_benders_threshold) {
         return fw_solve_refuel_milp(problem, solution);
     }
 
-    /* Working arrays */
-    int *z_fixed = malloc(k * sizeof(int));
-    BendersSubproblemMap *map = benders_map_create(k, problem->tank_capacity, problem->min_purchase);
+    /*
+     * Build full MILP model for Benders decomposition.
+     *
+     * Variable layout:
+     *   x[0..k-1]     - fuel purchased at each station (continuous, subproblem)
+     *   y[k..2k-1]    - cumulative fuel before arriving (continuous, subproblem)
+     *   z[2k..3k-1]   - stop decisions (binary, master)
+     *   θ = 3k        - recourse cost (continuous, master)
+     *
+     * Constraints:
+     *   - Fuel balance: y[i] = current_fuel + sum(x[j] for j < i)
+     *   - Min fuel at arrival: y[i] >= min_fuel + consumed_to_i
+     *   - Tank capacity: y[i] + x[i] <= tank_capacity + consumed_to_i
+     *   - Linking upper: x[i] <= tank_capacity * z[i]
+     *   - Linking lower: x[i] >= min_purchase * z[i] (if min_purchase > 0)
+     *   - Reach destination: sum(x[i]) >= total_needed
+     */
 
-    if (!z_fixed || !map) {
-        free(z_fixed);
-        benders_map_free(map);
+    int x_start = 0;
+    int y_start = k;
+    int z_start = 2 * k;
+    int theta_idx = 3 * k;
+    int num_vars = 3 * k + 1;
+
+    RalphModel *model = ralph_create();
+    if (!model) {
         solution->status = FW_STATUS_ERROR;
         return -1;
     }
 
-    int found_optimal = 0;
-    double best_obj = 1e30;
-    double *best_purchases = NULL;
-    int *best_z = NULL;
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
 
-    /* Enumerate all 2^k combinations */
-    int num_combinations = 1 << k;  /* 2^k */
-
-    for (int combo = 1; combo < num_combinations; combo++) {
-        /* Decode combo into z values (skip combo=0 which is all zeros) */
-        for (int i = 0; i < k; i++) {
-            z_fixed[i] = (combo >> i) & 1;
-        }
-
-        /* Quick lower bound check: if stop costs alone exceed best, skip */
-        double stop_cost_sum = 0.0;
-        for (int i = 0; i < k; i++) {
-            stop_cost_sum += z_fixed[i] * problem->stop_cost;
-        }
-        if (stop_cost_sum >= best_obj) {
-            continue;  /* Can't improve */
-        }
-
-        /* Build and solve subproblem with fixed z */
-        RalphModel *subproblem = build_benders_subproblem(problem, z_fixed, map);
-        if (!subproblem) {
-            continue;  /* Skip this z */
-        }
-
-        ralph_set_int_param(subproblem, "verbose", 0);
-        ralph_optimize(subproblem);
-        RalphStatus sub_status = ralph_get_status(subproblem);
-
-        if (sub_status == RALPH_STATUS_OPTIMAL) {
-            double sub_obj = ralph_get_objval(subproblem);
-            double total_obj = sub_obj + stop_cost_sum;
-
-            if (total_obj < best_obj) {
-                best_obj = total_obj;
-
-                /* Store best solution */
-                if (!best_purchases) {
-                    best_purchases = malloc(k * sizeof(double));
-                    best_z = malloc(k * sizeof(int));
-                }
-
-                int num_vars = 2 * k;
-                double *sub_sol = malloc(num_vars * sizeof(double));
-                ralph_get_solution(subproblem, sub_sol);
-
-                for (int i = 0; i < k; i++) {
-                    best_purchases[i] = sub_sol[i];
-                    best_z[i] = z_fixed[i];
-                }
-
-                free(sub_sol);
-                found_optimal = 1;
-            }
-        }
-
-        ralph_free(subproblem);
+    /* Add x[i] variables - fuel purchased (subproblem) */
+    double est_price = problem->remaining_fuel_value;
+    for (int i = 0; i < k; i++) {
+        double obj_coeff = problem->stations[i].price - est_price;
+        ralph_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_CONTINUOUS);
     }
 
-    /* Build final solution */
-    if (found_optimal && best_purchases && best_z) {
+    /* Add y[i] variables - cumulative fuel (subproblem) */
+    double y_upper = problem->current_fuel + k * problem->tank_capacity;
+    for (int i = 0; i < k; i++) {
+        ralph_add_var(model, 0.0, y_upper, 0.0, RALPH_CONTINUOUS);
+    }
+
+    /* Add z[i] variables - stop decisions (master) with stop_cost in objective */
+    for (int i = 0; i < k; i++) {
+        ralph_add_var(model, 0.0, 1.0, problem->stop_cost, RALPH_BINARY);
+    }
+
+    /* Add θ variable - recourse cost (master) */
+    /* Bounds: θ represents total fuel cost/credit. Use reasonable bounds to avoid
+     * numerical issues in the LP solver. The bounds are based on:
+     * - max_cost = k * tank_capacity * max_price
+     * - max_credit = k * tank_capacity * remaining_fuel_value
+     * Using 100x safety margin for robustness. */
+    double max_price = 0.0;
+    for (int i = 0; i < k; i++) {
+        if (problem->stations[i].price > max_price) {
+            max_price = problem->stations[i].price;
+        }
+    }
+    double max_fuel_value = k * problem->tank_capacity *
+        (max_price > est_price ? max_price : est_price);
+    double theta_bound = 100.0 * (max_fuel_value + 1.0);  /* Safety margin */
+    double theta_lb = -theta_bound;
+    double theta_ub = theta_bound;
+    ralph_add_var(model, theta_lb, theta_ub, 1.0, RALPH_CONTINUOUS);
+
+    /* Constraint: Fuel balance - y[i] = current_fuel + sum(x[j] for j < i) */
+    for (int i = 0; i < k; i++) {
+        int nnz = 1 + i;
+        int *indices = malloc(nnz * sizeof(int));
+        double *values = malloc(nnz * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
+
+        indices[0] = y_start + i;
+        values[0] = 1.0;
+
+        for (int j = 0; j < i; j++) {
+            indices[1 + j] = x_start + j;
+            values[1 + j] = -1.0;
+        }
+
+        ralph_add_constraint(model, nnz, indices, values, RALPH_EQUAL, problem->current_fuel);
+        free(indices);
+        free(values);
+    }
+
+    /* Constraint: Minimum fuel at arrival */
+    for (int i = 0; i < k; i++) {
+        int indices[1] = {y_start + i};
+        double values[1] = {1.0};
+        double fuel_consumed = fw_calc_fuel_consumed(problem, 0,
+            problem->stations[i].distance_from_start);
+        double rhs = problem->minimum_fuel + fuel_consumed;
+
+        ralph_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
+    }
+
+    /* Constraint: Tank capacity after refuel */
+    for (int i = 0; i < k; i++) {
+        int indices[2] = {y_start + i, x_start + i};
+        double values[2] = {1.0, 1.0};
+        double fuel_consumed = fw_calc_fuel_consumed(problem, 0,
+            problem->stations[i].distance_from_start);
+        double rhs = problem->tank_capacity + fuel_consumed;
+
+        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, rhs);
+    }
+
+    /* Linking constraint: x[i] <= tank_capacity * z[i]
+     * Rewritten as: x[i] - tank_capacity * z[i] <= 0 */
+    for (int i = 0; i < k; i++) {
+        int indices[2] = {x_start + i, z_start + i};
+        double values[2] = {1.0, -problem->tank_capacity};
+
+        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, 0.0);
+    }
+
+    /* Linking constraint: x[i] >= min_purchase * z[i] (if min_purchase > 0)
+     * Rewritten as: x[i] - min_purchase * z[i] >= 0 */
+    if (problem->min_purchase > 0.01) {
+        for (int i = 0; i < k; i++) {
+            int indices[2] = {x_start + i, z_start + i};
+            double values[2] = {1.0, -problem->min_purchase};
+
+            ralph_add_constraint(model, 2, indices, values, RALPH_GREATER_EQUAL, 0.0);
+        }
+    }
+
+    /* Constraint: Reach destination */
+    {
+        int *indices = malloc(k * sizeof(int));
+        double *values = malloc(k * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
+
+        for (int i = 0; i < k; i++) {
+            indices[i] = x_start + i;
+            values[i] = 1.0;
+        }
+
+        double total_fuel_needed = fw_calc_total_fuel_consumed(problem);
+        double min_end = (problem->minimum_fuel_at_end > 0) ?
+                         problem->minimum_fuel_at_end : problem->minimum_fuel;
+        double rhs = min_end + total_fuel_needed - problem->current_fuel;
+
+        if (rhs > 0) {
+            ralph_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, rhs);
+        }
+
+        free(indices);
+        free(values);
+    }
+
+    /* Add a trivial master constraint: sum(z[i]) >= 0
+     * This is always satisfied (z[i] >= 0 by definition) but needed because
+     * Benders requires at least one pure-master constraint to work correctly.
+     * Without this, all constraints are linking (involve both z and x).
+     */
+    {
+        int *indices = malloc(k * sizeof(int));
+        double *values = malloc(k * sizeof(double));
+        if (!indices || !values) {
+            free(indices);
+            free(values);
+            ralph_free(model);
+            solution->status = FW_STATUS_ERROR;
+            return -1;
+        }
+
+        for (int i = 0; i < k; i++) {
+            indices[i] = z_start + i;
+            values[i] = 1.0;
+        }
+
+        ralph_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, 0.0);
+        free(indices);
+        free(values);
+    }
+
+    /* Configure Benders decomposition */
+    int *master_vars = malloc(k * sizeof(int));
+    if (!master_vars) {
+        ralph_free(model);
+        solution->status = FW_STATUS_ERROR;
+        return -1;
+    }
+
+    /* Master variables are z[0..k-1] (at indices z_start to z_start+k-1) */
+    for (int i = 0; i < k; i++) {
+        master_vars[i] = z_start + i;
+    }
+
+    RalphBendersConfig config = RALPH_BENDERS_CONFIG_DEFAULT;
+    config.master_var_indices = master_vars;
+    config.num_master_vars = k;
+    config.theta_var = theta_idx;
+    config.verbose = 2;  /* Debug: enable verbose output (level 2 for cut details) */
+
+    /* Solve with Benders */
+    double *x = malloc(num_vars * sizeof(double));
+    RalphBendersResult result;
+
+    if (!x) {
+        free(master_vars);
+        ralph_free(model);
+        solution->status = FW_STATUS_ERROR;
+        return -1;
+    }
+
+    int ret = ralph_solve_benders(model, &config, x, &result);
+
+    free(master_vars);
+
+    if (ret == 0 && result.status == RALPH_STATUS_OPTIMAL) {
+        /* Allocate solution arrays */
         solution->purchases = malloc(k * sizeof(double));
         solution->stop_flags = malloc(k * sizeof(int));
         if (!solution->purchases || !solution->stop_flags) {
+            free(x);
             free(solution->purchases);
             free(solution->stop_flags);
-            free(z_fixed);
-            free(best_purchases);
-            free(best_z);
-            benders_map_free(map);
+            ralph_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
@@ -855,21 +817,22 @@ int fw_solve_refuel_benders(
         int num_stops = 0;
 
         for (int i = 0; i < k; i++) {
-            solution->purchases[i] = best_purchases[i];
-            solution->stop_flags[i] = best_z[i];
+            solution->purchases[i] = x[x_start + i];
+            solution->stop_flags[i] = (x[z_start + i] > 0.5) ? 1 : 0;
 
             gross_cost += solution->purchases[i] * problem->stations[i].price;
             total_purchased += solution->purchases[i];
-            stop_costs += best_z[i] * problem->stop_cost;
+            stop_costs += solution->stop_flags[i] * problem->stop_cost;
 
-            if (best_z[i]) num_stops++;
+            if (solution->stop_flags[i]) {
+                num_stops++;
+            }
         }
 
         double total_consumed = fw_calc_total_fuel_consumed(problem);
         solution->remaining_fuel = problem->current_fuel + total_purchased - total_consumed;
         solution->gross_cost = gross_cost;
 
-        double est_price = problem->remaining_fuel_value;
         if (est_price > 0.0) {
             double empty_capacity = problem->tank_capacity - solution->remaining_fuel;
             solution->total_cost = gross_cost + stop_costs + empty_capacity * est_price;
@@ -879,17 +842,23 @@ int fw_solve_refuel_benders(
 
         solution->num_stops = num_stops;
         solution->status = FW_STATUS_OPTIMAL;
-    } else {
-        solution->status = FW_STATUS_INFEASIBLE;
+
+        free(x);
+        ralph_free(model);
+        return 0;
     }
 
-    /* Cleanup */
-    free(z_fixed);
-    free(best_purchases);
-    free(best_z);
-    benders_map_free(map);
+    /* Handle failure */
+    free(x);
+    ralph_free(model);
 
-    return (solution->status == FW_STATUS_OPTIMAL) ? 0 : -1;
+    if (result.status == RALPH_STATUS_INFEASIBLE) {
+        solution->status = FW_STATUS_INFEASIBLE;
+    } else {
+        solution->status = FW_STATUS_ERROR;
+    }
+
+    return -1;
 }
 
 /* ============================================================================

@@ -1144,14 +1144,29 @@ static int solve_root_node(MIPSolver *solver) {
                 return -1;
             }
 
-            /* Disable scaling for MIP */
+            /* Disable scaling for MIP and propagate verbose flag */
             solver->lp_solver->scaling = 0;
+            solver->lp_solver->verbose = solver->verbose;
+
+            if (solver->verbose) {
+                printf("  Re-solving LP with %d constraints...\n",
+                       solver->working_model->num_cons);
+            }
 
             /* Re-solve LP with cuts */
             simplex_solve(solver->lp_solver);
 
+            if (solver->verbose) {
+                printf("  LP after cuts: status=%d, obj=%.6f\n",
+                       solver->lp_solver->status, solver->lp_solver->obj_value);
+            }
+
             if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL) {
                 /* LP became infeasible with cuts - shouldn't happen */
+                if (solver->verbose) {
+                    printf("  WARNING: LP became non-optimal after cuts (status=%d)\n",
+                           solver->lp_solver->status);
+                }
                 solver->status = solver->lp_solver->status;
                 bb_node_pool_return(solver->node_pool, root);
                 return 0;

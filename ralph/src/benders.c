@@ -589,12 +589,39 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
         *is_feasible = 0;
         *obj = RALPH_INFINITY;
 
-        /* Extract Farkas ray */
+        /* Extract Farkas ray for linking constraints + compute sub-only RHS contribution */
         if (farkas && solver->farkas_valid && solver->farkas_ray) {
+            /* Extract linking constraint Farkas multipliers */
             int linking_start = ctx->num_sub_cons;
             for (int k = 0; k < ctx->num_linking; k++) {
                 farkas[k] = solver->farkas_ray[linking_start + k];
             }
+
+            /* Compute sub-only constraint RHS contribution: sum(y_sub[i] * b_sub[i])
+             * This is needed for the feasibility cut RHS: y'b = y_sub'b_sub + y_link'b_link
+             * We store this in farkas[num_linking] as a special "RHS constant" slot */
+            double sub_rhs_contrib = 0.0;
+            LPModel *sub = ctx->sub_models[scenario];
+            for (int i = 0; i < ctx->num_sub_cons; i++) {
+                sub_rhs_contrib += solver->farkas_ray[i] * sub->b[i];
+            }
+
+            /* Normalize the Farkas ray to avoid numerical issues with huge coefficients.
+             * We scale so the largest coefficient is 1.0. */
+            double max_abs = fabs(sub_rhs_contrib);
+            for (int k = 0; k < ctx->num_linking; k++) {
+                double absval = fabs(farkas[k]);
+                if (absval > max_abs) max_abs = absval;
+            }
+            if (max_abs > 1e-9) {
+                for (int k = 0; k < ctx->num_linking; k++) {
+                    farkas[k] /= max_abs;
+                }
+                sub_rhs_contrib /= max_abs;
+            }
+
+            /* Store in a special slot - caller should allocate num_linking+1 */
+            farkas[ctx->num_linking] = sub_rhs_contrib;
         }
 
     } else {
@@ -786,7 +813,10 @@ int benders_add_feasibility_cut(BendersContext *ctx, int scenario,
         return -1;
     }
 
-    double constant = 0.0;
+    /* The constant (RHS) is y'b for the full subproblem:
+     * constant = sum(y_sub[i] * b_sub[i]) + sum(y_link[k] * b_link[k])
+     * The sub-only contribution is stored in farkas[num_linking] */
+    double constant = farkas[ctx->num_linking];  /* Sub-only RHS contribution */
 
     for (int k = 0; k < ctx->num_linking; k++) {
         double y_k = farkas[k];
@@ -799,6 +829,7 @@ int benders_add_feasibility_cut(BendersContext *ctx, int scenario,
             master_coeffs[master_j] += y_k * lc->master_coeffs[t];
         }
 
+        /* Add linking RHS contribution */
         constant += y_k * lc->original_rhs;
     }
 
@@ -820,8 +851,19 @@ int benders_add_feasibility_cut(BendersContext *ctx, int scenario,
     ctx->feasibility_cuts_added++;
 
     if (ctx->config.verbose >= 2) {
-        printf("  Added feasibility cut: <%d terms> >= %.4f (scenario %d)\n",
-               num_terms, constant, scenario);
+        printf("  Added feasibility cut: ");
+        for (int i = 0; i < num_terms; i++) {
+            printf("%.4f*z[%d] ", cut->coeffs[i], cut->master_var_indices[i]);
+            if (i < num_terms - 1) printf("+ ");
+        }
+        printf(">= %.4f (scenario %d)\n", constant, scenario);
+
+        /* Also print the Farkas ray values */
+        printf("    Farkas ray for linking: ");
+        for (int kk = 0; kk < ctx->num_linking; kk++) {
+            printf("y[%d]=%.6f ", kk, farkas[kk]);
+        }
+        printf("\n");
     }
 
     return 0;
@@ -925,9 +967,11 @@ int benders_check_convergence(BendersContext *ctx, double master_obj,
 int benders_solve_classic(BendersContext *ctx) {
     double start_time = get_time_sec();
 
-    /* Allocate dual/Farkas arrays */
+    /* Allocate dual/Farkas arrays
+     * farkas has num_linking+1 slots: [0..num_linking-1] for link duals,
+     * [num_linking] for sub-only RHS contribution */
     double *duals = (double*)malloc(ctx->num_linking * sizeof(double));
-    double *farkas = (double*)malloc(ctx->num_linking * sizeof(double));
+    double *farkas = (double*)malloc((ctx->num_linking + 1) * sizeof(double));
 
     if (!duals || !farkas) {
         free(duals);
@@ -935,13 +979,17 @@ int benders_solve_classic(BendersContext *ctx) {
         return -1;
     }
 
-    /* Create master MIP solver */
+    /* Create master MIP solver.
+     * Disable cut generation - Benders adds its own cuts (optimality/feasibility).
+     * MIP's Gomory cuts can conflict with the iterative constraint addition. */
     ctx->master_solver = mip_create(ctx->master_model, 0, 1024);
     if (!ctx->master_solver) {
         free(duals);
         free(farkas);
         return -1;
     }
+    ctx->master_solver->max_cut_rounds = 0;  /* Disable Gomory/MIR cuts */
+    ctx->master_solver->verbose = ctx->config.verbose;
 
     /* Apply user's branching priorities to master variables */
     /* (Integration with §6 infrastructure) */
@@ -980,6 +1028,11 @@ int benders_solve_classic(BendersContext *ctx) {
 
         if (ctx->config.verbose) {
             printf("Master obj: %.6f (theta = %.6f)\n", master_obj, theta_val);
+            printf("  Master z values: ");
+            for (int j = 0; j < ctx->config.num_master_vars; j++) {
+                printf("z[%d]=%.2f ", j, ctx->master_solution[j]);
+            }
+            printf("\n");
         }
 
         /* Solve subproblems and generate cuts */
@@ -1056,6 +1109,15 @@ int benders_solve_classic(BendersContext *ctx) {
         benders_apply_cuts_to_master(ctx);
         ctx->num_cuts = 0; /* Clear applied cuts */
 
+        if (ctx->config.verbose >= 2) {
+            printf("  Master model after adding cuts: %d vars, %d cons\n",
+                   ctx->master_model->num_vars, ctx->master_model->num_cons);
+            for (int i = 0; i < ctx->master_model->num_cons && i < 10; i++) {
+                printf("    Con %d: sense=%c rhs=%.4f\n", i,
+                       ctx->master_model->sense[i], ctx->master_model->b[i]);
+            }
+        }
+
         /* Re-finalize master model after adding cuts (rebuilds sparse matrix) */
         if (lp_model_finalize(ctx->master_model) != 0) {
             if (ctx->config.verbose) {
@@ -1066,6 +1128,31 @@ int benders_solve_classic(BendersContext *ctx) {
             return -1;
         }
 
+        if (ctx->config.verbose >= 2) {
+            SparseMatrix *A = ctx->master_model->A;
+            printf("  After finalize: A has %d nnz, %d rows, %d cols\n",
+                   A ? A->colptr[ctx->master_model->num_vars] : -1,
+                   ctx->master_model->num_cons, ctx->master_model->num_vars);
+
+            /* Print sparse matrix */
+            if (A) {
+                printf("  Matrix coefficients:\n");
+                for (int j = 0; j < ctx->master_model->num_vars; j++) {
+                    for (int p = A->colptr[j]; p < A->colptr[j+1]; p++) {
+                        printf("    A[%d,%d] = %.4f\n", A->rowidx[p], j, A->values[p]);
+                    }
+                }
+            }
+
+            /* Print variable bounds */
+            printf("  Variable bounds:\n");
+            for (int j = 0; j < ctx->master_model->num_vars; j++) {
+                printf("    x[%d]: lb=%.4f ub=%.4f c=%.4f type=%c\n",
+                       j, ctx->master_model->lb[j], ctx->master_model->ub[j],
+                       ctx->master_model->c[j], ctx->master_model->var_type[j]);
+            }
+        }
+
         /* Recreate master solver with new constraints */
         mip_free(ctx->master_solver);
         ctx->master_solver = mip_create(ctx->master_model, 0, 1024);
@@ -1074,6 +1161,8 @@ int benders_solve_classic(BendersContext *ctx) {
             free(farkas);
             return -1;
         }
+        ctx->master_solver->max_cut_rounds = 0;  /* Disable Gomory/MIR cuts */
+        ctx->master_solver->verbose = ctx->config.verbose;
     }
 
     ctx->total_time = get_time_sec() - start_time;
