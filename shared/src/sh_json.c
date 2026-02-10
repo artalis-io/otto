@@ -8,7 +8,9 @@
 #include "sh_json.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <ctype.h>
+#include <inttypes.h>
 
 /* ============================================================================
  * Parser State
@@ -868,4 +870,256 @@ ShJsonValue *sh_json_get_path(const ShJsonValue *v, const char *path)
     }
 
     return (ShJsonValue *)current;
+}
+
+/* ============================================================================
+ * JSON Writer Implementation
+ * ============================================================================ */
+
+void sh_json_writer_init(ShJsonWriter *w, ShJsonWriteFn write_fn, void *ctx) {
+    if (!w) return;
+    w->write_fn = write_fn;
+    w->ctx = ctx;
+    w->depth = 0;
+    w->needs_comma = 0;
+    w->error = 0;
+    w->first_in_container = 0;
+}
+
+int sh_json_writer_error(const ShJsonWriter *w) {
+    return w ? w->error : 1;
+}
+
+/* Internal: write bytes through callback */
+static int jw_write(ShJsonWriter *w, const char *data, size_t len) {
+    if (!w || w->error) return -1;
+    if (!data || len == 0) return 0;
+    if (w->write_fn(w->ctx, data, len) != 0) {
+        w->error = 1;
+        return -1;
+    }
+    return 0;
+}
+
+/* Internal: write null-terminated string */
+static int jw_writes(ShJsonWriter *w, const char *str) {
+    return jw_write(w, str, strlen(str));
+}
+
+/* Internal: write comma if needed before next element */
+static int jw_comma(ShJsonWriter *w) {
+    if (w->needs_comma) {
+        return jw_writes(w, ",");
+    }
+    return 0;
+}
+
+/* Internal: mark that next element needs comma */
+static void jw_mark_comma(ShJsonWriter *w) {
+    w->needs_comma = 1;
+}
+
+int sh_json_write_null(ShJsonWriter *w) {
+    if (!w || w->error) return -1;
+    if (jw_comma(w) != 0) return -1;
+    jw_mark_comma(w);
+    return jw_writes(w, "null");
+}
+
+int sh_json_write_bool(ShJsonWriter *w, bool val) {
+    if (!w || w->error) return -1;
+    if (jw_comma(w) != 0) return -1;
+    jw_mark_comma(w);
+    return jw_writes(w, val ? "true" : "false");
+}
+
+int sh_json_write_int(ShJsonWriter *w, int64_t val) {
+    if (!w || w->error) return -1;
+    if (jw_comma(w) != 0) return -1;
+    jw_mark_comma(w);
+
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%" PRId64, val);
+    if (len < 0 || (size_t)len >= sizeof(buf)) {
+        w->error = 1;
+        return -1;
+    }
+    return jw_write(w, buf, (size_t)len);
+}
+
+int sh_json_write_double(ShJsonWriter *w, double val) {
+    return sh_json_write_double_fmt(w, val, 6);
+}
+
+int sh_json_write_double_fmt(ShJsonWriter *w, double val, int precision) {
+    if (!w || w->error) return -1;
+    if (jw_comma(w) != 0) return -1;
+    jw_mark_comma(w);
+
+    char buf[64];
+    int len;
+
+    /* Handle special cases */
+    if (val != val) { /* NaN */
+        return jw_writes(w, "null");
+    }
+    if (val == (1.0 / 0.0) || val == (-1.0 / 0.0)) { /* Inf */
+        return jw_writes(w, "null");
+    }
+
+    /* Format with specified precision */
+    if (precision < 0) precision = 6;
+    if (precision > 17) precision = 17;
+    len = snprintf(buf, sizeof(buf), "%.*g", precision, val);
+    if (len < 0 || (size_t)len >= sizeof(buf)) {
+        w->error = 1;
+        return -1;
+    }
+    return jw_write(w, buf, (size_t)len);
+}
+
+/* Internal: write escaped JSON string content (without quotes) */
+static int jw_escape_string(ShJsonWriter *w, const char *str, size_t len) {
+    const char *p = str;
+    const char *end = str + len;
+    const char *chunk_start = p;
+
+    while (p < end) {
+        unsigned char c = (unsigned char)*p;
+        const char *escape = NULL;
+        char hex_buf[8];
+
+        if (c == '"') escape = "\\\"";
+        else if (c == '\\') escape = "\\\\";
+        else if (c == '\b') escape = "\\b";
+        else if (c == '\f') escape = "\\f";
+        else if (c == '\n') escape = "\\n";
+        else if (c == '\r') escape = "\\r";
+        else if (c == '\t') escape = "\\t";
+        else if (c < 0x20) {
+            /* Control character - use \uXXXX */
+            snprintf(hex_buf, sizeof(hex_buf), "\\u%04x", c);
+            escape = hex_buf;
+        }
+
+        if (escape) {
+            /* Write pending chunk */
+            if (chunk_start < p) {
+                if (jw_write(w, chunk_start, (size_t)(p - chunk_start)) != 0) return -1;
+            }
+            if (jw_writes(w, escape) != 0) return -1;
+            p++;
+            chunk_start = p;
+        } else {
+            p++;
+        }
+    }
+
+    /* Write remaining chunk */
+    if (chunk_start < p) {
+        if (jw_write(w, chunk_start, (size_t)(p - chunk_start)) != 0) return -1;
+    }
+
+    return 0;
+}
+
+int sh_json_write_string(ShJsonWriter *w, const char *str) {
+    if (!str) {
+        return sh_json_write_null(w);
+    }
+    return sh_json_write_string_n(w, str, strlen(str));
+}
+
+int sh_json_write_string_n(ShJsonWriter *w, const char *str, size_t len) {
+    if (!w || w->error) return -1;
+    if (!str) {
+        return sh_json_write_null(w);
+    }
+    if (jw_comma(w) != 0) return -1;
+    jw_mark_comma(w);
+
+    if (jw_writes(w, "\"") != 0) return -1;
+    if (jw_escape_string(w, str, len) != 0) return -1;
+    return jw_writes(w, "\"");
+}
+
+int sh_json_write_raw(ShJsonWriter *w, const char *raw, size_t len) {
+    if (!w || w->error) return -1;
+    if (!raw || len == 0) return 0;
+    if (jw_comma(w) != 0) return -1;
+    jw_mark_comma(w);
+    return jw_write(w, raw, len);
+}
+
+int sh_json_write_object_start(ShJsonWriter *w) {
+    if (!w || w->error) return -1;
+    if (jw_comma(w) != 0) return -1;
+    w->depth++;
+    w->needs_comma = 0;  /* First element doesn't need comma */
+    return jw_writes(w, "{");
+}
+
+int sh_json_write_object_end(ShJsonWriter *w) {
+    if (!w || w->error) return -1;
+    if (w->depth > 0) w->depth--;
+    w->needs_comma = 1;  /* After closing, next sibling needs comma */
+    return jw_writes(w, "}");
+}
+
+int sh_json_write_key(ShJsonWriter *w, const char *key) {
+    if (!w || w->error) return -1;
+    if (!key) return -1;
+    if (jw_comma(w) != 0) return -1;
+
+    if (jw_writes(w, "\"") != 0) return -1;
+    if (jw_escape_string(w, key, strlen(key)) != 0) return -1;
+    if (jw_writes(w, "\":") != 0) return -1;
+
+    w->needs_comma = 0;  /* Value follows immediately, no comma */
+    return 0;
+}
+
+int sh_json_write_kv_null(ShJsonWriter *w, const char *key) {
+    if (sh_json_write_key(w, key) != 0) return -1;
+    return sh_json_write_null(w);
+}
+
+int sh_json_write_kv_bool(ShJsonWriter *w, const char *key, bool val) {
+    if (sh_json_write_key(w, key) != 0) return -1;
+    return sh_json_write_bool(w, val);
+}
+
+int sh_json_write_kv_int(ShJsonWriter *w, const char *key, int64_t val) {
+    if (sh_json_write_key(w, key) != 0) return -1;
+    return sh_json_write_int(w, val);
+}
+
+int sh_json_write_kv_double(ShJsonWriter *w, const char *key, double val) {
+    if (sh_json_write_key(w, key) != 0) return -1;
+    return sh_json_write_double(w, val);
+}
+
+int sh_json_write_kv_double_fmt(ShJsonWriter *w, const char *key, double val, int precision) {
+    if (sh_json_write_key(w, key) != 0) return -1;
+    return sh_json_write_double_fmt(w, val, precision);
+}
+
+int sh_json_write_kv_string(ShJsonWriter *w, const char *key, const char *val) {
+    if (sh_json_write_key(w, key) != 0) return -1;
+    return sh_json_write_string(w, val);
+}
+
+int sh_json_write_array_start(ShJsonWriter *w) {
+    if (!w || w->error) return -1;
+    if (jw_comma(w) != 0) return -1;
+    w->depth++;
+    w->needs_comma = 0;  /* First element doesn't need comma */
+    return jw_writes(w, "[");
+}
+
+int sh_json_write_array_end(ShJsonWriter *w) {
+    if (!w || w->error) return -1;
+    if (w->depth > 0) w->depth--;
+    w->needs_comma = 1;  /* After closing, next sibling needs comma */
+    return jw_writes(w, "]");
 }

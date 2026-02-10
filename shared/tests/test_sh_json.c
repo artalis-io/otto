@@ -982,6 +982,347 @@ TEST(as_int_overflow)
 }
 
 /* ============================================================================
+ * JSON Writer Tests
+ * ============================================================================ */
+
+/* Buffer-based writer for testing */
+typedef struct {
+    char *buf;
+    size_t len;
+    size_t cap;
+} WriterBuf;
+
+static int test_write_fn(void *ctx, const char *data, size_t len) {
+    WriterBuf *wb = (WriterBuf *)ctx;
+    if (wb->len + len >= wb->cap) return -1;  /* Buffer overflow */
+    memcpy(wb->buf + wb->len, data, len);
+    wb->len += len;
+    wb->buf[wb->len] = '\0';
+    return 0;
+}
+
+static void writer_buf_init(WriterBuf *wb, char *buf, size_t cap) {
+    wb->buf = buf;
+    wb->len = 0;
+    wb->cap = cap;
+    buf[0] = '\0';
+}
+
+TEST(write_null)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_null(&w), 0);
+    ASSERT_STREQ(buf, "null");
+}
+
+TEST(write_bool_true)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_bool(&w, true), 0);
+    ASSERT_STREQ(buf, "true");
+}
+
+TEST(write_bool_false)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_bool(&w, false), 0);
+    ASSERT_STREQ(buf, "false");
+}
+
+TEST(write_int_positive)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_int(&w, 42), 0);
+    ASSERT_STREQ(buf, "42");
+}
+
+TEST(write_int_negative)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_int(&w, -123), 0);
+    ASSERT_STREQ(buf, "-123");
+}
+
+TEST(write_int_zero)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_int(&w, 0), 0);
+    ASSERT_STREQ(buf, "0");
+}
+
+TEST(write_double)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_double(&w, 3.14159), 0);
+    /* %g with precision 6 gives 3.14159 */
+    ASSERT(strstr(buf, "3.14159") != NULL);
+}
+
+TEST(write_double_precision)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_double_fmt(&w, 1.23456789, 3), 0);
+    ASSERT_STREQ(buf, "1.23");
+}
+
+TEST(write_double_nan)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    double nan_val = 0.0 / 0.0;
+    ASSERT_EQ(sh_json_write_double(&w, nan_val), 0);
+    ASSERT_STREQ(buf, "null");  /* NaN becomes null */
+}
+
+TEST(write_double_inf)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    double inf_val = 1.0 / 0.0;
+    ASSERT_EQ(sh_json_write_double(&w, inf_val), 0);
+    ASSERT_STREQ(buf, "null");  /* Infinity becomes null */
+}
+
+TEST(write_string_simple)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_string(&w, "hello"), 0);
+    ASSERT_STREQ(buf, "\"hello\"");
+}
+
+TEST(write_string_escapes)
+{
+    char buf[128];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_string(&w, "line1\nline2\ttab\"quote\\slash"), 0);
+    ASSERT_STREQ(buf, "\"line1\\nline2\\ttab\\\"quote\\\\slash\"");
+}
+
+TEST(write_string_null)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_string(&w, NULL), 0);
+    ASSERT_STREQ(buf, "null");  /* NULL string becomes null */
+}
+
+TEST(write_empty_object)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_object_start(&w), 0);
+    ASSERT_EQ(sh_json_write_object_end(&w), 0);
+    ASSERT_STREQ(buf, "{}");
+}
+
+TEST(write_object_single)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_object_start(&w), 0);
+    ASSERT_EQ(sh_json_write_key(&w, "name"), 0);
+    ASSERT_EQ(sh_json_write_string(&w, "test"), 0);
+    ASSERT_EQ(sh_json_write_object_end(&w), 0);
+    ASSERT_STREQ(buf, "{\"name\":\"test\"}");
+}
+
+TEST(write_object_multiple)
+{
+    char buf[128];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_object_start(&w), 0);
+    ASSERT_EQ(sh_json_write_key(&w, "a"), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 1), 0);
+    ASSERT_EQ(sh_json_write_key(&w, "b"), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 2), 0);
+    ASSERT_EQ(sh_json_write_object_end(&w), 0);
+    ASSERT_STREQ(buf, "{\"a\":1,\"b\":2}");
+}
+
+TEST(write_empty_array)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_array_start(&w), 0);
+    ASSERT_EQ(sh_json_write_array_end(&w), 0);
+    ASSERT_STREQ(buf, "[]");
+}
+
+TEST(write_array_numbers)
+{
+    char buf[64];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_array_start(&w), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 1), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 2), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 3), 0);
+    ASSERT_EQ(sh_json_write_array_end(&w), 0);
+    ASSERT_STREQ(buf, "[1,2,3]");
+}
+
+TEST(write_nested_object)
+{
+    char buf[128];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_object_start(&w), 0);
+    ASSERT_EQ(sh_json_write_key(&w, "outer"), 0);
+    ASSERT_EQ(sh_json_write_object_start(&w), 0);
+    ASSERT_EQ(sh_json_write_key(&w, "inner"), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 42), 0);
+    ASSERT_EQ(sh_json_write_object_end(&w), 0);
+    ASSERT_EQ(sh_json_write_object_end(&w), 0);
+    ASSERT_STREQ(buf, "{\"outer\":{\"inner\":42}}");
+}
+
+TEST(write_nested_array)
+{
+    char buf[128];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_array_start(&w), 0);
+    ASSERT_EQ(sh_json_write_array_start(&w), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 1), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 2), 0);
+    ASSERT_EQ(sh_json_write_array_end(&w), 0);
+    ASSERT_EQ(sh_json_write_array_start(&w), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 3), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 4), 0);
+    ASSERT_EQ(sh_json_write_array_end(&w), 0);
+    ASSERT_EQ(sh_json_write_array_end(&w), 0);
+    ASSERT_STREQ(buf, "[[1,2],[3,4]]");
+}
+
+TEST(write_mixed)
+{
+    char buf[256];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_object_start(&w), 0);
+    ASSERT_EQ(sh_json_write_key(&w, "status"), 0);
+    ASSERT_EQ(sh_json_write_string(&w, "ok"), 0);
+    ASSERT_EQ(sh_json_write_key(&w, "data"), 0);
+    ASSERT_EQ(sh_json_write_array_start(&w), 0);
+    ASSERT_EQ(sh_json_write_int(&w, 1), 0);
+    ASSERT_EQ(sh_json_write_null(&w), 0);
+    ASSERT_EQ(sh_json_write_bool(&w, true), 0);
+    ASSERT_EQ(sh_json_write_array_end(&w), 0);
+    ASSERT_EQ(sh_json_write_object_end(&w), 0);
+    ASSERT_STREQ(buf, "{\"status\":\"ok\",\"data\":[1,null,true]}");
+}
+
+TEST(write_kv_helpers)
+{
+    char buf[256];
+    WriterBuf wb;
+    writer_buf_init(&wb, buf, sizeof(buf));
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, test_write_fn, &wb);
+    ASSERT_EQ(sh_json_write_object_start(&w), 0);
+    ASSERT_EQ(sh_json_write_kv_string(&w, "name", "test"), 0);
+    ASSERT_EQ(sh_json_write_kv_int(&w, "count", 42), 0);
+    ASSERT_EQ(sh_json_write_kv_double(&w, "value", 3.14), 0);
+    ASSERT_EQ(sh_json_write_kv_bool(&w, "active", true), 0);
+    ASSERT_EQ(sh_json_write_kv_null(&w, "empty"), 0);
+    ASSERT_EQ(sh_json_write_object_end(&w), 0);
+    ASSERT(strstr(buf, "\"name\":\"test\"") != NULL);
+    ASSERT(strstr(buf, "\"count\":42") != NULL);
+    ASSERT(strstr(buf, "\"active\":true") != NULL);
+    ASSERT(strstr(buf, "\"empty\":null") != NULL);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1104,6 +1445,30 @@ int main(void)
     RUN_TEST(mixed_array);
     RUN_TEST(trailing_content);
     RUN_TEST(as_int_overflow);
+
+    printf("\nJSON Writer:\n");
+    RUN_TEST(write_null);
+    RUN_TEST(write_bool_true);
+    RUN_TEST(write_bool_false);
+    RUN_TEST(write_int_positive);
+    RUN_TEST(write_int_negative);
+    RUN_TEST(write_int_zero);
+    RUN_TEST(write_double);
+    RUN_TEST(write_double_precision);
+    RUN_TEST(write_double_nan);
+    RUN_TEST(write_double_inf);
+    RUN_TEST(write_string_simple);
+    RUN_TEST(write_string_escapes);
+    RUN_TEST(write_string_null);
+    RUN_TEST(write_empty_object);
+    RUN_TEST(write_object_single);
+    RUN_TEST(write_object_multiple);
+    RUN_TEST(write_empty_array);
+    RUN_TEST(write_array_numbers);
+    RUN_TEST(write_nested_object);
+    RUN_TEST(write_nested_array);
+    RUN_TEST(write_mixed);
+    RUN_TEST(write_kv_helpers);
 
     printf("\n=== Results: %d/%d tests passed ===\n\n", tests_passed, tests_run);
 
