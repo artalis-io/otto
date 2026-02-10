@@ -9,12 +9,41 @@
 #include "sh_polyline.h"
 #include "sh_json.h"
 #include "sh_arena.h"
+#include "sh_geo.h"
 #include "vl_types.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <math.h>
+
+/* ============================================================================
+ * JSON Response Helpers
+ * ============================================================================ */
+
+/* Build an error response using ShJsonWriter */
+static char *make_error_response(const char *message, size_t *out_len) {
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_string(&jw, "error", message ? message : "Unknown error");
+    sh_json_write_object_end(&jw);
+
+    if (sh_json_writer_error(&jw)) {
+        sh_json_buf_free(&jb);
+        char *fallback = strdup("{\"error\":\"JSON write error\"}");
+        if (out_len) *out_len = fallback ? strlen(fallback) : 0;
+        return fallback;
+    }
+
+    char *result = sh_json_buf_take(&jb);
+    if (out_len) *out_len = result ? strlen(result) : 0;
+    return result;
+}
 
 /* ============================================================================
  * API Context
@@ -123,31 +152,12 @@ static int get_query_param(const char *query, const char *name,
     return -1;
 }
 
-/* Parse coordinate string "lat,lon" */
+/* Parse coordinate string "lat,lon" - delegates to shared library */
 static int parse_coord(const char *str, double *lat, double *lon) {
-    if (!str || !*str) return -1;
-
-    char buf[64];
-    strncpy(buf, str, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-
-    char *comma = strchr(buf, ',');
-    if (!comma) return -1;
-    *comma = '\0';
-
-    /* Use strtod for proper error detection */
-    char *end_lat;
-    char *end_lon;
-    *lat = strtod(buf, &end_lat);
-    *lon = strtod(comma + 1, &end_lon);
-
-    /* Reject if no digits were consumed */
-    if (end_lat == buf || end_lon == comma + 1) return -1;
-
-    /* Reject inf/NaN from malformed input */
-    if (!isfinite(*lat) || !isfinite(*lon)) return -1;
-    if (*lat < -90 || *lat > 90 || *lon < -180 || *lon > 180) return -1;
-
+    SHCoord coord;
+    if (sh_parse_coord(str, &coord) != 0) return -1;
+    *lat = coord.lat;
+    *lon = coord.lon;
     return 0;
 }
 
@@ -305,56 +315,29 @@ int vl_api_parse_route_params(const char *query, const char *body,
 }
 
 /* ============================================================================
- * Polyline Encoding Helper
- * ============================================================================ */
-
-/* Escape backslashes in polyline for JSON output */
-static char *json_escape_polyline(const char *polyline) {
-    if (!polyline) return NULL;
-
-    size_t len = strlen(polyline);
-    size_t backslashes = 0;
-    for (size_t i = 0; i < len; i++) {
-        if (polyline[i] == '\\') backslashes++;
-    }
-
-    if (len > SIZE_MAX - backslashes - 1) return NULL;
-    char *escaped = malloc(len + backslashes + 1);
-    if (!escaped) return NULL;
-
-    char *dst = escaped;
-    for (size_t i = 0; i < len; i++) {
-        if (polyline[i] == '\\') {
-            *dst++ = '\\';
-        }
-        *dst++ = polyline[i];
-    }
-    *dst = '\0';
-
-    return escaped;
-}
-
-/* ============================================================================
  * Individual Handlers
  * ============================================================================ */
 
 char *vl_api_health(VLAPIContext *ctx, size_t *out_len) {
-    char response[512];
-    int n = snprintf(response, sizeof(response),
-        "{\n"
-        "  \"status\": \"healthy\",\n"
-        "  \"service\": \"%s\",\n"
-        "  \"version\": \"%s\"\n"
-        "}\n",
-        ctx ? ctx->name : "velo-route-server",
-        vl_version());
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
 
-    if (n < 0 || (size_t)n >= sizeof(response)) {
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_string(&jw, "status", "healthy");
+    sh_json_write_kv_string(&jw, "service", ctx ? ctx->name : "velo-route-server");
+    sh_json_write_kv_string(&jw, "version", vl_version());
+    sh_json_write_object_end(&jw);
+
+    if (sh_json_writer_error(&jw)) {
+        sh_json_buf_free(&jb);
         if (out_len) *out_len = 0;
         return NULL;
     }
 
-    char *result = strdup(response);
+    char *result = sh_json_buf_take(&jb);
     if (out_len) *out_len = result ? strlen(result) : 0;
     return result;
 }
@@ -366,35 +349,37 @@ char *vl_api_stats(VLAPIContext *ctx, size_t *out_len) {
     }
 
     VLGraph *g = ctx->graph;
-    char response[2048];
-    int n = snprintf(response, sizeof(response),
-        "{\n"
-        "  \"graph_path\": \"%s\",\n"
-        "  \"num_nodes\": %u,\n"
-        "  \"num_edges\": %u,\n"
-        "  \"landmarks_enabled\": %s,\n"
-        "  \"landmark_count\": %d,\n"
-        "  \"bbox\": {\n"
-        "    \"min_lat\": %.6f,\n"
-        "    \"min_lon\": %.6f,\n"
-        "    \"max_lat\": %.6f,\n"
-        "    \"max_lon\": %.6f\n"
-        "  }\n"
-        "}\n",
-        ctx->graph_path,
-        g->num_nodes,
-        g->num_edges,
-        ctx->landmarks ? "true" : "false",
-        ctx->landmark_count,
-        g->bbox_min.lat, g->bbox_min.lon,
-        g->bbox_max.lat, g->bbox_max.lon);
 
-    if (n < 0 || (size_t)n >= sizeof(response)) {
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_string(&jw, "graph_path", ctx->graph_path);
+    sh_json_write_kv_int(&jw, "num_nodes", (int64_t)g->num_nodes);
+    sh_json_write_kv_int(&jw, "num_edges", (int64_t)g->num_edges);
+    sh_json_write_kv_bool(&jw, "landmarks_enabled", ctx->landmarks != NULL);
+    sh_json_write_kv_int(&jw, "landmark_count", ctx->landmark_count);
+
+    sh_json_write_key(&jw, "bbox");
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_double_fmt(&jw, "min_lat", g->bbox_min.lat, 6);
+    sh_json_write_kv_double_fmt(&jw, "min_lon", g->bbox_min.lon, 6);
+    sh_json_write_kv_double_fmt(&jw, "max_lat", g->bbox_max.lat, 6);
+    sh_json_write_kv_double_fmt(&jw, "max_lon", g->bbox_max.lon, 6);
+    sh_json_write_object_end(&jw);
+
+    sh_json_write_object_end(&jw);
+
+    if (sh_json_writer_error(&jw)) {
+        sh_json_buf_free(&jb);
         if (out_len) *out_len = 0;
         return NULL;
     }
 
-    char *result = strdup(response);
+    char *result = sh_json_buf_take(&jb);
     if (out_len) *out_len = result ? strlen(result) : 0;
     return result;
 }
@@ -415,16 +400,12 @@ char *vl_api_route(VLAPIContext *ctx,
     if (params->from_lat < g->bbox_min.lat || params->from_lat > g->bbox_max.lat ||
         params->from_lon < g->bbox_min.lon || params->from_lon > g->bbox_max.lon) {
         if (status_code) *status_code = 400;
-        char *err = strdup("{\"error\": \"Origin coordinate outside graph bounds\"}");
-        if (out_len) *out_len = err ? strlen(err) : 0;
-        return err;
+        return make_error_response("Origin coordinate outside graph bounds", out_len);
     }
     if (params->to_lat < g->bbox_min.lat || params->to_lat > g->bbox_max.lat ||
         params->to_lon < g->bbox_min.lon || params->to_lon > g->bbox_max.lon) {
         if (status_code) *status_code = 400;
-        char *err = strdup("{\"error\": \"Destination coordinate outside graph bounds\"}");
-        if (out_len) *out_len = err ? strlen(err) : 0;
-        return err;
+        return make_error_response("Destination coordinate outside graph bounds", out_len);
     }
 
     /* Set up routing options */
@@ -447,15 +428,11 @@ char *vl_api_route(VLAPIContext *ctx,
 
         if (from_node == VL_INVALID_NODE) {
             if (status_code) *status_code = 400;
-            char *err = strdup("{\"error\": \"Could not find road near origin\"}");
-            if (out_len) *out_len = err ? strlen(err) : 0;
-            return err;
+            return make_error_response("Could not find road near origin", out_len);
         }
         if (to_node == VL_INVALID_NODE) {
             if (status_code) *status_code = 400;
-            char *err = strdup("{\"error\": \"Could not find road near destination\"}");
-            if (out_len) *out_len = err ? strlen(err) : 0;
-            return err;
+            return make_error_response("Could not find road near destination", out_len);
         }
 
         vl_status = vl_route_astar_landmarks_bidir(g, ctx->landmarks,
@@ -473,11 +450,7 @@ char *vl_api_route(VLAPIContext *ctx,
             default: break;
         }
         if (status_code) *status_code = 404;
-        char err[256];
-        snprintf(err, sizeof(err), "{\"error\": \"%s\"}", msg);
-        char *result = strdup(err);
-        if (out_len) *out_len = result ? strlen(result) : 0;
-        return result;
+        return make_error_response(msg, out_len);
     }
 
     /* Encode polyline if geometry requested */
@@ -504,16 +477,12 @@ char *vl_api_route(VLAPIContext *ctx,
         }
     }
 
-    /* Build JSON response */
-    size_t resp_capacity = 4096 + (polyline ? strlen(polyline) * 2 : 0);
-    char *response = malloc(resp_capacity);
-    if (!response) {
-        if (polyline) free(polyline);
-        vl_free_route(&route);
-        if (status_code) *status_code = 500;
-        if (out_len) *out_len = 0;
-        return NULL;
-    }
+    /* Build JSON response using streaming writer */
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
 
     const char *profile_str = "car";
     switch (params->profile) {
@@ -525,55 +494,60 @@ char *vl_api_route(VLAPIContext *ctx,
 
     const char *mode_str = params->weight == VL_WEIGHT_DISTANCE ? "shortest" : "fastest";
 
-    size_t n = 0;
-    int written = snprintf(response, resp_capacity,
-        "{\n"
-        "  \"status\": \"ok\",\n"
-        "  \"route\": {\n"
-        "    \"distance\": %.2f,\n"
-        "    \"duration\": %.2f,\n"
-        "    \"profile\": \"%s\",\n"
-        "    \"mode\": \"%s\",\n"
-        "    \"from\": [%.6f, %.6f],\n"
-        "    \"to\": [%.6f, %.6f]",
-        route.distance_m,
-        route.duration_s,
-        profile_str,
-        mode_str,
-        params->from_lat, params->from_lon,
-        params->to_lat, params->to_lon);
-    if (written > 0) n = (size_t)written;
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_string(&jw, "status", "ok");
 
-    if (polyline && n < resp_capacity) {
-        char *escaped = json_escape_polyline(polyline);
-        if (escaped) {
-            written = snprintf(response + n, resp_capacity - n,
-                ",\n    \"geometry\": \"%s\"",
-                escaped);
-            if (written > 0) n += (size_t)written;
-            free(escaped);
-        }
+    sh_json_write_key(&jw, "route");
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_double_fmt(&jw, "distance", route.distance_m, 2);
+    sh_json_write_kv_double_fmt(&jw, "duration", route.duration_s, 2);
+    sh_json_write_kv_string(&jw, "profile", profile_str);
+    sh_json_write_kv_string(&jw, "mode", mode_str);
+
+    /* from: [lat, lon] */
+    sh_json_write_key(&jw, "from");
+    sh_json_write_array_start(&jw);
+    sh_json_write_double_fmt(&jw, params->from_lat, 6);
+    sh_json_write_double_fmt(&jw, params->from_lon, 6);
+    sh_json_write_array_end(&jw);
+
+    /* to: [lat, lon] */
+    sh_json_write_key(&jw, "to");
+    sh_json_write_array_start(&jw);
+    sh_json_write_double_fmt(&jw, params->to_lat, 6);
+    sh_json_write_double_fmt(&jw, params->to_lon, 6);
+    sh_json_write_array_end(&jw);
+
+    /* geometry (optional) - ShJsonWriter handles escaping */
+    if (polyline) {
+        sh_json_write_kv_string(&jw, "geometry", polyline);
     }
 
-    if (n < resp_capacity) {
-        written = snprintf(response + n, resp_capacity - n,
-            "\n  },\n"
-            "  \"meta\": {\n"
-            "    \"nodes_explored\": %u,\n"
-            "    \"search_time_ms\": %.2f\n"
-            "  }\n"
-            "}\n",
-            route.nodes_explored,
-            route.search_time_ms);
-        if (written > 0) n += (size_t)written;
-    }
+    sh_json_write_object_end(&jw);  /* Close route */
+
+    /* meta object */
+    sh_json_write_key(&jw, "meta");
+    sh_json_write_object_start(&jw);
+    sh_json_write_kv_int(&jw, "nodes_explored", (int64_t)route.nodes_explored);
+    sh_json_write_kv_double_fmt(&jw, "search_time_ms", route.search_time_ms, 2);
+    sh_json_write_object_end(&jw);
+
+    sh_json_write_object_end(&jw);  /* Close root */
 
     if (polyline) free(polyline);
     vl_free_route(&route);
 
+    if (sh_json_writer_error(&jw)) {
+        sh_json_buf_free(&jb);
+        if (status_code) *status_code = 500;
+        if (out_len) *out_len = 0;
+        return NULL;
+    }
+
+    char *result = sh_json_buf_take(&jb);
     if (status_code) *status_code = 200;
-    if (out_len) *out_len = n;
-    return response;
+    if (out_len) *out_len = result ? strlen(result) : 0;
+    return result;
 }
 
 /* ============================================================================
@@ -600,8 +574,7 @@ int vl_api_handle(VLAPIContext *ctx,
     if (strcmp(req->path, "/api/v1/stats") == 0) {
         if (!ctx->graph) {
             resp->status_code = 503;
-            resp->body = (uint8_t *)strdup("{\"error\": \"Graph not loaded\"}");
-            resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
+            resp->body = (uint8_t *)make_error_response("Graph not loaded", &resp->body_len);
             return 0;
         }
         char *body = vl_api_stats(ctx, &resp->body_len);
@@ -614,8 +587,7 @@ int vl_api_handle(VLAPIContext *ctx,
     if (strcmp(req->path, "/api/v1/route") == 0) {
         if (!ctx->graph) {
             resp->status_code = 503;
-            resp->body = (uint8_t *)strdup("{\"error\": \"Graph not loaded\"}");
-            resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
+            resp->body = (uint8_t *)make_error_response("Graph not loaded", &resp->body_len);
             return 0;
         }
 
@@ -625,10 +597,7 @@ int vl_api_handle(VLAPIContext *ctx,
         if (vl_api_parse_route_params(req->query, req->body, req->method,
                                        &params, error_msg, sizeof(error_msg)) != 0) {
             resp->status_code = 400;
-            char err[512];
-            snprintf(err, sizeof(err), "{\"error\": \"%s\"}", error_msg);
-            resp->body = (uint8_t *)strdup(err);
-            resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
+            resp->body = (uint8_t *)make_error_response(error_msg, &resp->body_len);
             return 0;
         }
 
@@ -641,7 +610,6 @@ int vl_api_handle(VLAPIContext *ctx,
 
     /* 404 Not Found */
     resp->status_code = 404;
-    resp->body = (uint8_t *)strdup("{\"error\": \"Not found\"}");
-    resp->body_len = resp->body ? strlen((char *)resp->body) : 0;
+    resp->body = (uint8_t *)make_error_response("Not found", &resp->body_len);
     return 0;
 }
