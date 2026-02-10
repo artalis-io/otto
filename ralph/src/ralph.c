@@ -678,6 +678,73 @@ int ralph_set_branch_directions(RalphModel *model, const int *directions) {
 }
 
 /* ============================================================================
+ * Constraint Modification
+ * ============================================================================ */
+
+int ralph_set_constraint_rhs(RalphModel *model, int constraint, double rhs) {
+    if (!model || !model->lp_model) return -1;
+    if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
+
+    model->lp_model->b[constraint] = rhs;
+
+    /* Invalidate any existing solver state to force re-solve */
+    simplex_free(model->lp_solver);
+    model->lp_solver = NULL;
+    mip_free(model->mip_solver);
+    model->mip_solver = NULL;
+
+    return 0;
+}
+
+int ralph_get_var_bounds(const RalphModel *model, int var, double *lb, double *ub) {
+    if (!model || !model->lp_model) return -1;
+    if (var < 0 || var >= model->lp_model->num_vars) return -1;
+
+    if (lb) *lb = model->lp_model->lb[var];
+    if (ub) *ub = model->lp_model->ub[var];
+
+    return 0;
+}
+
+int ralph_add_lazy_constraint(RalphModel *model, const RalphCut *cut) {
+    if (!model || !model->lp_model || !cut) return -1;
+
+    /* Add the constraint to the model */
+    int result = lp_model_add_constraint(model->lp_model,
+                                          cut->num_vars,
+                                          cut->indices,
+                                          cut->coeffs,
+                                          (char)cut->sense,
+                                          cut->rhs);
+    if (result < 0) return -1;
+
+    /* Invalidate solver state to force re-solve (will use warm start if available) */
+    /* Note: For true warm start, we keep the LP solver but invalidate MIP solver */
+    mip_free(model->mip_solver);
+    model->mip_solver = NULL;
+
+    /* Keep LP solver for potential warm start, but invalidate cached solution */
+    if (model->lp_solver) {
+        model->lp_solver->status = RALPH_STATUS_UNKNOWN;
+    }
+
+    return 0;
+}
+
+int ralph_add_lazy_constraints(RalphModel *model, const RalphCut *cuts, int count) {
+    if (!model || !cuts) return -1;
+    if (count <= 0) return 0;
+
+    for (int i = 0; i < count; i++) {
+        if (ralph_add_lazy_constraint(model, &cuts[i]) < 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/* ============================================================================
  * Parameters
  * ============================================================================ */
 

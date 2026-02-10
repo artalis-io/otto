@@ -1281,6 +1281,144 @@ void test_scp_lu_regression(void) {
 }
 
 /* ============================================================================
+ * Test: Constraint Modification API
+ *
+ * Tests ralph_set_constraint_rhs() and ralph_get_var_bounds().
+ * ============================================================================ */
+void test_constraint_modification(void) {
+    printf("\n=== Test: Constraint Modification API ===\n");
+
+    /* Simple LP: min x + y
+     * s.t. x + y >= 2
+     *      x, y >= 0
+     * Optimal: x=0, y=2 or x=2, y=0, obj=2
+     */
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* y */
+
+    int idx[] = {0, 1};
+    double val[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 2.0);
+
+    /* Test bounds query */
+    double lb, ub;
+    int ret = ralph_get_var_bounds(model, 0, &lb, &ub);
+    ASSERT(ret == 0, "ralph_get_var_bounds returns 0");
+    ASSERT_NEAR(lb, 0.0, TOLERANCE, "Lower bound is 0");
+    ASSERT(ub >= 1e29, "Upper bound is infinity");
+
+    /* Solve */
+    ralph_optimize(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Initial solve is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 2.0, TOLERANCE, "Objective is 2.0");
+
+    /* Modify RHS: change x + y >= 2 to x + y >= 5 */
+    ret = ralph_set_constraint_rhs(model, 0, 5.0);
+    ASSERT(ret == 0, "ralph_set_constraint_rhs returns 0");
+
+    /* Re-solve */
+    ralph_optimize(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Re-solve is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 5.0, TOLERANCE, "New objective is 5.0");
+
+    /* Test invalid constraint index */
+    ret = ralph_set_constraint_rhs(model, 99, 1.0);
+    ASSERT(ret == -1, "Invalid constraint index returns -1");
+
+    /* Test invalid variable index for bounds query */
+    ret = ralph_get_var_bounds(model, 99, &lb, &ub);
+    ASSERT(ret == -1, "Invalid variable index returns -1");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Lazy Constraints API
+ *
+ * Tests ralph_add_lazy_constraint() and ralph_add_lazy_constraints().
+ * ============================================================================ */
+void test_lazy_constraints(void) {
+    printf("\n=== Test: Lazy Constraints API ===\n");
+
+    /* Start with relaxed LP: min x + y
+     * s.t. x + y <= 10  (doesn't affect optimum at x=y=0)
+     *      x >= 0, y >= 0
+     * Optimal: x=0, y=0, obj=0
+     */
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* y */
+
+    /* Add a loose constraint that doesn't affect the optimum */
+    int idx0[] = {0, 1};
+    double val0[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx0, val0, RALPH_LESS_EQUAL, 10.0);
+
+    /* Solve relaxed */
+    ralph_optimize(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Relaxed solve is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 0.0, TOLERANCE, "Relaxed objective is 0.0");
+
+    /* Add lazy constraint: x + y >= 3 */
+    int idx1[] = {0, 1};
+    double val1[] = {1.0, 1.0};
+    RalphCut cut1 = {
+        .indices = idx1,
+        .coeffs = val1,
+        .num_vars = 2,
+        .sense = RALPH_GREATER_EQUAL,
+        .rhs = 3.0
+    };
+
+    int ret = ralph_add_lazy_constraint(model, &cut1);
+    ASSERT(ret == 0, "ralph_add_lazy_constraint returns 0");
+
+    /* Re-solve with cut */
+    ralph_optimize(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "With cut is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 3.0, TOLERANCE, "With cut objective is 3.0");
+
+    /* Add multiple lazy constraints: x >= 2, y >= 2 */
+    int idx2[] = {0};
+    double val2[] = {1.0};
+    RalphCut cut2 = {
+        .indices = idx2,
+        .coeffs = val2,
+        .num_vars = 1,
+        .sense = RALPH_GREATER_EQUAL,
+        .rhs = 2.0
+    };
+
+    int idx3[] = {1};
+    double val3[] = {1.0};
+    RalphCut cut3 = {
+        .indices = idx3,
+        .coeffs = val3,
+        .num_vars = 1,
+        .sense = RALPH_GREATER_EQUAL,
+        .rhs = 2.0
+    };
+
+    RalphCut cuts[] = {cut2, cut3};
+    ret = ralph_add_lazy_constraints(model, cuts, 2);
+    ASSERT(ret == 0, "ralph_add_lazy_constraints returns 0");
+
+    /* Re-solve */
+    ralph_optimize(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "With multiple cuts is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 4.0, TOLERANCE, "With multiple cuts objective is 4.0");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Test: Branching Control API
  *
  * Tests the ralph_set_branch_priorities() and ralph_set_branch_directions()
@@ -1387,6 +1525,10 @@ int main(int argc, char **argv) {
         test_mip_strong_branching_regression();     /* Strong branching crash */
         test_scp_lu_regression();                   /* Sparse LU bug with SCP */
         test_mip_incumbent_feasibility_regression(); /* Infeasible incumbent bug */
+
+        /* Constraint modification and lazy constraint tests */
+        test_constraint_modification();
+        test_lazy_constraints();
 
         /* Branching control tests */
         test_branching_control();

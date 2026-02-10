@@ -127,6 +127,56 @@ int ralph_set_branch_priorities(RalphModel *model, const int *priorities);
  */
 int ralph_set_branch_directions(RalphModel *model, const int *directions);
 
+/* Constraint modification (for Benders decomposition, cut loops)
+ *
+ * These functions allow modifying the model between solves. After modification,
+ * call ralph_optimize() to re-solve. The solver will attempt warm start.
+ */
+
+/* Modify RHS of existing constraint.
+ * @param model      The model
+ * @param constraint Constraint index (0 to num_cons-1)
+ * @param rhs        New right-hand side value
+ * @return 0 on success, -1 on error (invalid constraint index)
+ */
+int ralph_set_constraint_rhs(RalphModel *model, int constraint, double rhs);
+
+/* Query variable bounds.
+ * @param model The model
+ * @param var   Variable index (0 to num_vars-1)
+ * @param lb    Output: lower bound (may be NULL if not needed)
+ * @param ub    Output: upper bound (may be NULL if not needed)
+ * @return 0 on success, -1 on error (invalid variable index)
+ */
+int ralph_get_var_bounds(const RalphModel *model, int var, double *lb, double *ub);
+
+/* Cut representation for lazy constraints and callbacks */
+typedef struct {
+    const int *indices;     /* Variable indices */
+    const double *coeffs;   /* Coefficients */
+    int num_vars;           /* Number of variables in cut */
+    RalphSense sense;       /* 'L' (<=), 'G' (>=), 'E' (=) */
+    double rhs;             /* Right-hand side */
+} RalphCut;
+
+/* Add a lazy constraint to the model.
+ * User controls the cut loop externally. After adding constraints, call
+ * ralph_optimize() to re-solve. The solver will attempt warm start.
+ *
+ * @param model The model
+ * @param cut   The cut to add
+ * @return 0 on success, -1 on error
+ */
+int ralph_add_lazy_constraint(RalphModel *model, const RalphCut *cut);
+
+/* Add multiple lazy constraints to the model.
+ * @param model The model
+ * @param cuts  Array of cuts to add
+ * @param count Number of cuts
+ * @return 0 on success, -1 on error
+ */
+int ralph_add_lazy_constraints(RalphModel *model, const RalphCut *cuts, int count);
+
 /* Parameters */
 int ralph_set_int_param(RalphModel *model, const char *name, int value);
 int ralph_set_dbl_param(RalphModel *model, const char *name, double value);
