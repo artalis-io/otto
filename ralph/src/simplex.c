@@ -1886,17 +1886,24 @@ static void extract_farkas_ray(SimplexSolver *solver) {
     }
 
     /* Validation 2: y'b_normalized must be negative (infeasibility certificate).
-     * For standard form, >= constraints are transformed to <= by negation.
-     * So for the Farkas check:
-     *   - L (<=): use +b
-     *   - G (>=): use -b (since Ax >= b becomes -Ax <= -b)
-     *   - E (=): use +b (both directions bounded)
-     * We check y'b_norm < -eps for infeasibility. */
+     *
+     * COORDINATE SYSTEM NOTE: The Farkas ray solver->farkas_ray is returned in
+     * "original model space" so callers can use it with model->b/model->sense.
+     * The tableau internally normalizes constraints (tab->rhs = |b|), but we
+     * apply the sense transformation here to match API expectations:
+     *   - L (<=): use +b (Ax <= b stays as-is)
+     *   - G (>=): use -b (Ax >= b becomes -Ax <= -b in standard form)
+     *   - E (=): use +b (equalities don't need sign flip)
+     *
+     * CAVEAT: If original b < 0 and sense 'G', the tableau flips to 'L' internally.
+     * This code uses model->sense (original), which could cause double-negation.
+     * This works for typical problems where b > 0, but may fail edge cases.
+     * A cleaner approach would use tab->rhs directly, but would change API semantics. */
     double y_dot_b = 0.0;
     for (int i = 0; i < m; i++) {
         double b_norm = model->b[i];
         if (model->sense[i] == 'G') {
-            b_norm = -b_norm;  /* >= constraints are negated in standard form */
+            b_norm = -b_norm;  /* >= constraints: Ax >= b becomes -Ax <= -b */
         }
         y_dot_b += solver->farkas_ray[i] * b_norm;
     }

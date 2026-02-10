@@ -19,6 +19,7 @@
 /* Linking constraint information */
 typedef struct {
     int constraint_idx;     /* Index in original model */
+    int sub_row_idx;        /* Row index in subproblem (set during build) */
     double original_rhs;    /* Original RHS value */
 
     /* Master variable contributions: T*x part */
