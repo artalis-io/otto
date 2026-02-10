@@ -493,6 +493,195 @@ void test_farkas_ray(void) {
 }
 
 /* ============================================================================
+ * Test: Farkas Ray - Simple Upper/Lower Bound Conflict (Two-Phase)
+ *
+ * Uses two-phase simplex for clean Farkas duals (no Big-M contamination).
+ *
+ * min  x
+ * s.t. x >= 10
+ *      x <= 5
+ *      x >= 0
+ *
+ * Infeasible: x >= 10 and x <= 5 is impossible.
+ *
+ * Farkas ray should satisfy y'b_eff < 0 where:
+ *   b_eff[0] = -10 (>= constraint becomes -x <= -10)
+ *   b_eff[1] = 5   (<= constraint stays as-is)
+ * ============================================================================ */
+void test_farkas_bound_conflict(void) {
+    printf("\n=== Test: Farkas Ray Bound Conflict ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "force_two_phase", 1);  /* Clean Farkas duals */
+
+    ralph_add_var(model, 0, 1e30, 1.0, RALPH_CONTINUOUS);
+
+    /* Constraint 1: x >= 10 */
+    int idx1[] = {0};
+    double val1[] = {1.0};
+    ralph_add_constraint(model, 1, idx1, val1, RALPH_GREATER_EQUAL, 10.0);
+
+    /* Constraint 2: x <= 5 */
+    int idx2[] = {0};
+    double val2[] = {1.0};
+    ralph_add_constraint(model, 1, idx2, val2, RALPH_LESS_EQUAL, 5.0);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_INFEASIBLE, "Status is INFEASIBLE");
+
+    double ray[2];
+    int ret = ralph_get_farkas_ray(model, ray);
+    ASSERT(ret == 0, "Farkas ray retrieved");
+
+    if (ret == 0) {
+        printf("  Farkas ray: [%.6f, %.6f]\n", ray[0], ray[1]);
+
+        /* In standard form:
+         *   Row 0: -x <= -10 (from x >= 10)
+         *   Row 1:  x <= 5
+         * b_eff = [-10, 5]
+         * y'b_eff = ray[0]*(-10) + ray[1]*5 should be < 0 */
+        double yTb = ray[0] * (-10.0) + ray[1] * 5.0;
+        printf("  y' * b_eff = %.6f\n", yTb);
+        ASSERT(yTb < TOLERANCE, "y' * b_eff < 0 (infeasibility proven)");
+
+        /* Verify ray is non-trivial */
+        ASSERT(fabs(ray[0]) > 1e-6 || fabs(ray[1]) > 1e-6, "Ray is non-trivial");
+    }
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Farkas Ray - Conflicting Sum Constraints (Two-Phase)
+ *
+ * Uses two-phase simplex for clean Farkas duals.
+ *
+ * min  x + y
+ * s.t. x + y <= 2
+ *      x + y >= 5
+ *      x, y >= 0
+ *
+ * Clearly infeasible (x+y can't be both <= 2 and >= 5).
+ *
+ * In standard form (all <= constraints):
+ *   Row 0:  (x + y) <= 2
+ *   Row 1: -(x + y) <= -5  (from x + y >= 5)
+ *
+ * b_eff = [2, -5]
+ * y'b_eff should be < 0
+ * ============================================================================ */
+void test_farkas_sum_conflict(void) {
+    printf("\n=== Test: Farkas Ray Sum Conflict ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "force_two_phase", 1);  /* Clean Farkas duals */
+
+    ralph_add_var(model, 0, 1e30, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(model, 0, 1e30, 1.0, RALPH_CONTINUOUS);  /* y */
+
+    /* Constraint 1: x + y <= 2 */
+    int idx1[] = {0, 1};
+    double val1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx1, val1, RALPH_LESS_EQUAL, 2.0);
+
+    /* Constraint 2: x + y >= 5 */
+    int idx2[] = {0, 1};
+    double val2[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_GREATER_EQUAL, 5.0);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_INFEASIBLE, "Status is INFEASIBLE");
+
+    double ray[2];
+    int ret = ralph_get_farkas_ray(model, ray);
+    ASSERT(ret == 0, "Farkas ray retrieved");
+
+    if (ret == 0) {
+        printf("  Farkas ray: [%.6f, %.6f]\n", ray[0], ray[1]);
+
+        /* y'b_eff = ray[0]*2 + ray[1]*(-5) should be < 0 */
+        double yTb = ray[0] * 2.0 + ray[1] * (-5.0);
+        printf("  y' * b_eff = %.6f\n", yTb);
+        ASSERT(yTb < TOLERANCE, "y' * b_eff < 0 (infeasibility proven)");
+
+        /* Verify ray is non-trivial */
+        ASSERT(fabs(ray[0]) > 1e-6 || fabs(ray[1]) > 1e-6, "Ray is non-trivial");
+    }
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Farkas Ray with Equality Constraint (Two-Phase)
+ *
+ * Uses two-phase simplex for clean Farkas duals.
+ *
+ * min  x + y
+ * s.t. x + y = 5
+ *      x <= 1
+ *      y <= 1
+ *      x, y >= 0
+ *
+ * Infeasible: x + y = 5 but x <= 1 and y <= 1 means x + y <= 2.
+ *
+ * NOTE: For equality constraints, the Farkas dual can be positive or negative
+ * (unrestricted in sign). The simple y'b < 0 check doesn't apply directly
+ * because equalities expand to two constraints internally. This test just
+ * verifies infeasibility detection and non-trivial ray.
+ * ============================================================================ */
+void test_farkas_equality(void) {
+    printf("\n=== Test: Farkas Ray with Equality ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "force_two_phase", 1);  /* Clean Farkas duals */
+
+    ralph_add_var(model, 0, 1e30, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(model, 0, 1e30, 1.0, RALPH_CONTINUOUS);  /* y */
+
+    /* Constraint 1: x + y = 5 */
+    int idx1[] = {0, 1};
+    double val1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx1, val1, RALPH_EQUAL, 5.0);
+
+    /* Constraint 2: x <= 1 */
+    int idx2[] = {0};
+    double val2[] = {1.0};
+    ralph_add_constraint(model, 1, idx2, val2, RALPH_LESS_EQUAL, 1.0);
+
+    /* Constraint 3: y <= 1 */
+    int idx3[] = {1};
+    double val3[] = {1.0};
+    ralph_add_constraint(model, 1, idx3, val3, RALPH_LESS_EQUAL, 1.0);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_INFEASIBLE, "Status is INFEASIBLE");
+
+    double ray[3];
+    int ret = ralph_get_farkas_ray(model, ray);
+    ASSERT(ret == 0, "Farkas ray retrieved");
+
+    if (ret == 0) {
+        printf("  Farkas ray: [%.4f, %.4f, %.4f]\n", ray[0], ray[1], ray[2]);
+
+        /* Verify ray is non-trivial */
+        ASSERT(fabs(ray[0]) > 1e-6 || fabs(ray[1]) > 1e-6 || fabs(ray[2]) > 1e-6,
+               "Ray is non-trivial");
+    }
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Test: API Functions
  * ============================================================================ */
 void test_api_functions(void) {
@@ -1807,6 +1996,9 @@ int main(int argc, char **argv) {
     test_diet_problem();
     test_infeasible_lp();
     test_farkas_ray();
+    test_farkas_bound_conflict();
+    test_farkas_sum_conflict();
+    test_farkas_equality();
     test_larger_lp();
     test_network_flow();  /* Regression test for objective computation bug */
 

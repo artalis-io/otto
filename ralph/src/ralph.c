@@ -39,6 +39,7 @@ struct RalphModel {
     int pricing; /* 0=Dantzig, 1=Steepest edge, 2=Devex (default), 3=Partial */
     int detect_special; /* 1=detect LAP/network structure, 0=disable */
     int node_pool_capacity; /* Pre-allocated B&B node pool size (default 1024) */
+    int force_two_phase; /* 1=force two-phase simplex for clean Farkas duals */
 
     /* Solution */
     RalphStatus status;
@@ -515,6 +516,7 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->verbose = model->verbose;
         model->lp_solver->presolve = 0;  /* Already done */
         model->lp_solver->pricing_strategy = model->pricing;
+        model->lp_solver->force_two_phase = model->force_two_phase;
 
         /* Solve using selected method */
         if (model->method == 1) {
@@ -956,6 +958,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (STREQ(name, "node_pool_capacity") || STREQ(name, "PoolCapacity")) {
         /* Pre-allocated B&B node pool size (0 = use default 1024) */
         model->node_pool_capacity = value > 0 ? value : 1024;
+    } else if (STREQ(name, "force_two_phase") || STREQ(name, "TwoPhase")) {
+        /* 1=force two-phase simplex for clean Farkas duals, 0=default (Big-M) */
+        model->force_two_phase = value;
     } else {
         return -1;  /* Unknown parameter */
     }

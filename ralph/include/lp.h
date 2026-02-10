@@ -211,7 +211,8 @@ typedef struct {
     double *work1;
     double *work2;
     double *work3;
-    double *rhs;
+    double *rhs;            /* Normalized RHS (always >= 0) */
+    double *row_sign;       /* Row transformation signs (+1 or -1) for Farkas mapping */
     double *pivot_row;      /* Pre-allocated for simplex_pivot */
     double *tau_work;       /* Pre-allocated for steepest edge */
 
