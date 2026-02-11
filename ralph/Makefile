@@ -108,6 +108,14 @@ PRESOLVE_TEST_EXEC = test_presolve
 BEACONFD_TEST_SOURCES = $(TEST_DIR)/test_presolve_beaconfd.c
 BEACONFD_TEST_EXEC = test_presolve_beaconfd
 
+# NETLIB regression tests (bandm, blend, lotfi)
+BANDM_TEST_SOURCES = $(TEST_DIR)/test_presolve_bandm.c
+BANDM_TEST_EXEC = test_presolve_bandm
+BLEND_TEST_SOURCES = $(TEST_DIR)/test_presolve_blend.c
+BLEND_TEST_EXEC = test_presolve_blend
+LOTFI_TEST_SOURCES = $(TEST_DIR)/test_presolve_lotfi.c
+LOTFI_TEST_EXEC = test_presolve_lotfi
+
 # Beaconfd Phase-1 failure-trace regression test
 BEACONFD_TRACE_TEST_SOURCES = $(TEST_DIR)/test_beaconfd_phase1_trace.c
 BEACONFD_TRACE_TEST_EXEC = test_beaconfd_phase1_trace
@@ -164,10 +172,13 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC)
+test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC)
 	./$(TEST_EXEC)
 	./$(PRESOLVE_TEST_EXEC)
 	./$(BEACONFD_TEST_EXEC)
+	./$(BANDM_TEST_EXEC)
+	./$(BLEND_TEST_EXEC)
+	./$(LOTFI_TEST_EXEC)
 	./$(BEACONFD_TRACE_TEST_EXEC)
 	./$(SIMPLEX_POLICY_TEST_EXEC)
 
@@ -246,6 +257,26 @@ $(BEACONFD_TEST_EXEC): $(BEACONFD_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 # Run beaconfd numerical-regression test
 test-beaconfd: $(BEACONFD_TEST_EXEC)
 	./$(BEACONFD_TEST_EXEC)
+
+# Build NETLIB regression tests (bandm, blend, lotfi)
+$(BANDM_TEST_EXEC): $(BANDM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+$(BLEND_TEST_EXEC): $(BLEND_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+$(LOTFI_TEST_EXEC): $(LOTFI_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run NETLIB regression tests individually
+test-bandm: $(BANDM_TEST_EXEC)
+	./$(BANDM_TEST_EXEC)
+
+test-blend: $(BLEND_TEST_EXEC)
+	./$(BLEND_TEST_EXEC)
+
+test-lotfi: $(LOTFI_TEST_EXEC)
+	./$(LOTFI_TEST_EXEC)
 
 # Build beaconfd phase-1 trace regression test
 $(BEACONFD_TRACE_TEST_EXEC): $(BEACONFD_TRACE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)

@@ -13,7 +13,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
 | **Presolve** | ✅ Phase 3 | 12 techniques, 20-round fixed-point, probing w/ implication propagation (P3) |
-| **NETLIB Suite** | 75% Pass | 9/12 problems (beaconfd fixed by presolve) |
+| **NETLIB Suite** | 92% Pass | 11/12 problems (bandm, lotfi, beaconfd fixed) |
 | **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
 | **Benders Decomposition** | ✅ Complete | Generic solver, ~1430 LoC, 8 tests (§7) |
 
@@ -47,10 +47,10 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | bnl1 | ✅ PASS | 2503 iters (degeneracy) |
 | brandy | ✅ PASS | 133 iters |
 | degen2 | ✅ PASS | 2333 iters (degeneracy) |
-| bandm | ❌ FAIL | Numerical instability |
+| bandm | ✅ PASS | OPTIMAL both paths (224 iters w/o presolve, 172 w/ presolve), obj=-158.628 |
 | beaconfd | ✅ PASS | Fixed by presolve: 262→148 vars, 173→87 cons, obj=33592.49 |
-| blend | ❌ FAIL | Returns INFEASIBLE incorrectly |
-| lotfi | ❌ FAIL | Numerical instability |
+| blend | ❌ FAIL | Returns INFEASIBLE (no presolve) / UNBOUNDED (presolve) — known opt: -30.812 |
+| lotfi | ✅ PASS | Fixed by presolve: 308→302 vars, 153→144 cons, obj=-25.265 |
 
 ### 1.3 Performance TODO
 
