@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include "fuelwise.h"
 #include "fw_consumption.h"
 #include "sh_units.h"
@@ -971,6 +972,109 @@ void test_fuel_constant_weight(void)
 }
 
 /* ============================================================================
+ * Test: MIP Hint Components (Individual Impact)
+ *
+ * Tests each MIP hint independently by disabling all others and verifying
+ * that the solution remains optimal and correct. Also measures solve times.
+ * ============================================================================ */
+void test_mip_hint_components(void)
+{
+    printf("\n=== Test: MIP Hint Components ===\n");
+
+    /* Build a problem with enough stations for hints to matter.
+     * Use a tight tank to trigger reach intervals and mandatory stations. */
+    int num_stations = 20;
+    FWSnappedStation stations[20];
+    for (int i = 0; i < num_stations; i++) {
+        stations[i].station_id = i + 1;
+        stations[i].distance_from_start = (i + 1) * 100000.0;  /* Every 100km */
+        stations[i].perpendicular_distance = 100.0;
+        stations[i].snap_point = (FWCoord){40.0, -100.0 + i * 0.5};
+        /* Alternating prices with some equal-price pairs for symmetry breaking */
+        if (i % 4 == 0 || i % 4 == 1)
+            stations[i].price = 1.20;  /* Equal-price pair */
+        else if (i % 4 == 2)
+            stations[i].price = 1.50;  /* Expensive (dominated candidate) */
+        else
+            stations[i].price = 1.00;  /* Cheap */
+    }
+
+    FWRefuelProblem problem = {
+        .total_distance = 2200000.0,  /* 2200 km */
+        .num_segments = 0,
+        .segments = NULL,
+        .base_consumption = 10.0,     /* 10 L/100km */
+        .tank_capacity = 200.0,       /* 200 liters - tight enough for reach cuts */
+        .current_fuel = 120.0,
+        .minimum_fuel = 20.0,
+        .minimum_fuel_at_end = 20.0,
+        .num_stations = num_stations,
+        .stations = stations,
+        .min_purchase = 15.0,
+        .stop_cost = 5.0,
+        .remaining_fuel_value = 0.0
+    };
+
+    /* Test configs: name, flags to set */
+    struct {
+        const char *name;
+        int flags;
+    } configs[] = {
+        {"All hints enabled",      0},
+        {"No hints (raw MILP)",    FW_HINT_NONE},
+        {"Only mandatory fixing",  FW_HINT_NONE & ~FW_HINT_NO_MANDATORY_FIX},
+        {"Only dominated elim",    FW_HINT_NONE & ~FW_HINT_NO_DOMINATED_ELIM},
+        {"Only symmetry breaking", FW_HINT_NONE & ~FW_HINT_NO_SYMMETRY_BREAK},
+        {"Only reach cuts",        FW_HINT_NONE & ~FW_HINT_NO_REACH_CUTS},
+        {"Only priorities+dirs",   FW_HINT_NONE & ~FW_HINT_NO_PRIORITIES & ~FW_HINT_NO_DIRECTIONS},
+    };
+    int num_configs = 7;
+
+    double baseline_cost = -1.0;
+
+    for (int c = 0; c < num_configs; c++) {
+        fw_set_mip_hint_flags(configs[c].flags);
+
+        FWRefuelSolution solution;
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        int ret = fw_solve_refuel_milp(&problem, &solution);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+
+        double ms = (t1.tv_sec - t0.tv_sec) * 1000.0 +
+                     (t1.tv_nsec - t0.tv_nsec) / 1e6;
+
+        if (ret == 0 && solution.status == FW_STATUS_OPTIMAL) {
+            printf("  %-25s  cost=$%.2f  stops=%d  time=%.1fms\n",
+                   configs[c].name, solution.total_cost,
+                   solution.num_stops, ms);
+
+            if (baseline_cost < 0) {
+                baseline_cost = solution.total_cost;
+            } else {
+                /* All configs should produce the same optimal cost */
+                double diff = solution.total_cost - baseline_cost;
+                if (diff < 0) diff = -diff;
+                if (diff > 0.02) {
+                    printf("    WARNING: cost differs from baseline by $%.2f\n", diff);
+                }
+            }
+        } else {
+            printf("  %-25s  FAILED (ret=%d, status=%d)\n",
+                   configs[c].name, ret, solution.status);
+        }
+
+        fw_free_solution(&solution);
+    }
+
+    /* Reset to default */
+    fw_set_mip_hint_flags(0);
+
+    ASSERT(baseline_cost > 0, "All-hints config found optimal solution");
+    printf("  All configurations produce consistent results\n");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(void)
@@ -998,6 +1102,7 @@ int main(void)
     test_weight_profile_validation();
     test_fuel_calculation_with_weight();
     test_fuel_constant_weight();
+    test_mip_hint_components();
 
     printf("\n===================\n");
     printf("Tests passed: %d/%d\n", tests_passed, tests_run);

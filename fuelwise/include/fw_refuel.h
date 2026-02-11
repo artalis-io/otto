@@ -126,6 +126,28 @@ void fw_set_benders_threshold(int threshold);
  */
 int fw_get_benders_threshold(void);
 
+/* ============================================================================
+ * MIP Hint Flags
+ *
+ * Control which domain-specific MIP enhancements are active.
+ * Default (0) enables all hints. Set flags to disable specific hints.
+ * Useful for benchmarking the impact of individual optimizations.
+ * NOT thread-safe if modified concurrently with solving.
+ * ============================================================================ */
+
+#define FW_HINT_NO_PRIORITIES     (1 << 0)  /* Disable branching priorities */
+#define FW_HINT_NO_DIRECTIONS     (1 << 1)  /* Disable branching directions */
+#define FW_HINT_NO_REACH_CUTS     (1 << 2)  /* Disable reach-cut callback */
+#define FW_HINT_NO_MANDATORY_FIX  (1 << 3)  /* Disable mandatory station fixing */
+#define FW_HINT_NO_DOMINATED_ELIM (1 << 4)  /* Disable dominated station elimination */
+#define FW_HINT_NO_SYMMETRY_BREAK (1 << 5)  /* Disable symmetry-breaking constraints */
+
+/* Disable all hints (raw MILP, no domain intelligence) */
+#define FW_HINT_NONE              (0x3F)
+
+void fw_set_mip_hint_flags(int flags);
+int fw_get_mip_hint_flags(void);
+
 /*
  * Export the MILP model as an LP file (without domain hints).
  *
