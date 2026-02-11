@@ -614,6 +614,51 @@ static int sg_request_tw_width(const SGContext *ctx, uint32_t request_id, int32_
     return 0;
 }
 
+static int sg_request_time_window_bounds(const SGContext *ctx, uint32_t request_id,
+                                         int32_t *early_out, int32_t *late_out) {
+    const SGRequestHint *hint = sg_get_hint(ctx, request_id);
+    const SGRequestRecord *request = sg_get_request_record(ctx, request_id);
+
+    if (!early_out || !late_out) {
+        return 0;
+    }
+
+    if (hint && hint->has_time_window && hint->tw_late >= hint->tw_early) {
+        *early_out = hint->tw_early;
+        *late_out = hint->tw_late;
+        return 1;
+    }
+    if (!request) {
+        return 0;
+    }
+
+    if (request->kind == SG_REQUEST_KIND_DELIVERY_ONLY && request->has_delivery_task) {
+        const SGTaskRecord *delivery = sg_get_task_record(ctx, request->delivery_task_id);
+        if (delivery && delivery->has_time_window && delivery->tw_late >= delivery->tw_early) {
+            *early_out = delivery->tw_early;
+            *late_out = delivery->tw_late;
+            return 1;
+        }
+    } else if (request->kind == SG_REQUEST_KIND_PICKUP_DELIVERY &&
+               request->has_pickup_task && request->has_delivery_task) {
+        const SGTaskRecord *pickup = sg_get_task_record(ctx, request->pickup_task_id);
+        const SGTaskRecord *delivery = sg_get_task_record(ctx, request->delivery_task_id);
+        if (pickup && delivery && pickup->has_time_window && delivery->has_time_window) {
+            *early_out = pickup->tw_early < delivery->tw_early
+                       ? pickup->tw_early
+                       : delivery->tw_early;
+            *late_out = pickup->tw_late > delivery->tw_late
+                      ? pickup->tw_late
+                      : delivery->tw_late;
+            if (*late_out >= *early_out) {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int sg_request_centroid(const SGContext *ctx, uint32_t request_id, double *x, double *y) {
     const SGRequestRecord *request = sg_get_request_record(ctx, request_id);
 
@@ -1652,6 +1697,49 @@ static double sg_time_cluster_relatedness(void *ctx, uint32_t a, uint32_t b) {
 
     score -= fabs(sg_request_priority_score(sg_ctx, a) -
                   sg_request_priority_score(sg_ctx, b)) / 30.0;
+    return score;
+}
+
+static double sg_time_window_relatedness(void *ctx, uint32_t a, uint32_t b) {
+    const SGContext *sg_ctx = (const SGContext *)ctx;
+    int32_t early_a = 0;
+    int32_t late_a = 0;
+    int32_t early_b = 0;
+    int32_t late_b = 0;
+    int64_t mid_a = 0;
+    int64_t mid_b = 0;
+    double score = 0.0;
+
+    if (sg_request_time_window_bounds(sg_ctx, a, &early_a, &late_a) &&
+        sg_request_time_window_bounds(sg_ctx, b, &early_b, &late_b)) {
+        int32_t overlap_start = early_a > early_b ? early_a : early_b;
+        int32_t overlap_end = late_a < late_b ? late_a : late_b;
+        int32_t span_start = early_a < early_b ? early_a : early_b;
+        int32_t span_end = late_a > late_b ? late_a : late_b;
+        double overlap = overlap_end > overlap_start
+                       ? (double)(overlap_end - overlap_start)
+                       : 0.0;
+        double span = span_end > span_start
+                    ? (double)(span_end - span_start)
+                    : 1.0;
+        double width_delta = fabs((double)(late_a - early_a) - (double)(late_b - early_b));
+        double midpoint_delta = fabs((((double)early_a + (double)late_a) * 0.5) -
+                                     (((double)early_b + (double)late_b) * 0.5));
+
+        score += 16.0 * (overlap / span);
+        score -= midpoint_delta / 1800.0;
+        score -= width_delta / 3600.0;
+    } else if (sg_request_time_midpoint(sg_ctx, a, &mid_a) &&
+               sg_request_time_midpoint(sg_ctx, b, &mid_b)) {
+        score -= (double)sg_abs_i64(mid_a - mid_b) / 1800.0;
+    } else {
+        score -= (double)sg_abs_i64((int64_t)a - (int64_t)b);
+    }
+
+    if (sg_request_kind(sg_ctx, a) == sg_request_kind(sg_ctx, b)) {
+        score += 0.5;
+    }
+    score += 1.0 / (1.0 + (double)sg_abs_i64((int64_t)a - (int64_t)b));
     return score;
 }
 
@@ -2983,6 +3071,114 @@ static ARStatus sg_route_destroy_time_cluster(void *op_ctx, void *solution, int 
     return sg_route_unassign_removed_requests(ctx, sol, removed_ids, *removed_count);
 }
 
+static ARStatus sg_route_destroy_route_removal(void *op_ctx, void *solution, int count,
+                                               uint32_t *removed_ids, int *removed_count) {
+    SGContext *ctx = (SGContext *)op_ctx;
+    SGRouteSolution *sol = (SGRouteSolution *)solution;
+    int target;
+    int total_removed = 0;
+
+    if (!ctx || !ctx->op_rng || !sol || !removed_count || count < 0) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    *removed_count = 0;
+    if (count == 0 || sol->base.num_assigned == 0) {
+        return AR_STATUS_OK;
+    }
+    if (!removed_ids) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    target = count;
+    if ((uint32_t)target > sol->base.num_assigned) {
+        target = (int)sol->base.num_assigned;
+    }
+
+    while (total_removed < target) {
+        uint32_t selected_vehicle = UINT32_MAX;
+        uint32_t seen_nonempty = 0;
+        uint32_t route_len;
+        uint32_t *route_snapshot;
+        uint32_t v;
+        int take;
+        int i;
+        ARStatus status;
+
+        for (v = 0; v < sol->num_vehicles; v++) {
+            if (sol->route_lengths[v] == 0) {
+                continue;
+            }
+            seen_nonempty++;
+            if (seen_nonempty == 1 ||
+                sh_rng_int_range(ctx->op_rng, 0, (int)seen_nonempty - 1) == 0) {
+                selected_vehicle = v;
+            }
+        }
+
+        if (selected_vehicle == UINT32_MAX) {
+            break;
+        }
+
+        route_len = sol->route_lengths[selected_vehicle];
+        if (route_len == 0) {
+            continue;
+        }
+
+        route_snapshot = (uint32_t *)malloc((size_t)route_len * sizeof(uint32_t));
+        if (!route_snapshot) {
+            return AR_STATUS_OUT_OF_MEMORY;
+        }
+        memcpy(route_snapshot, sg_route_vehicle_ptr_const(sol, selected_vehicle),
+               (size_t)route_len * sizeof(uint32_t));
+
+        take = target - total_removed;
+        if ((uint32_t)take > route_len) {
+            take = (int)route_len;
+        }
+
+        for (i = 0; i < take; i++) {
+            int j = sh_rng_int_range(ctx->op_rng, i, (int)route_len - 1);
+            uint32_t tmp = route_snapshot[i];
+            route_snapshot[i] = route_snapshot[j];
+            route_snapshot[j] = tmp;
+            removed_ids[total_removed + i] = route_snapshot[i];
+        }
+
+        status = sg_route_unassign_removed_requests(ctx, sol, &removed_ids[total_removed], take);
+        free(route_snapshot);
+        if (status != AR_STATUS_OK) {
+            return status;
+        }
+
+        total_removed += take;
+    }
+
+    *removed_count = total_removed;
+    return AR_STATUS_OK;
+}
+
+static ARStatus sg_route_destroy_time_window(void *op_ctx, void *solution, int count,
+                                             uint32_t *removed_ids, int *removed_count) {
+    SGContext *ctx = (SGContext *)op_ctx;
+    SGRouteSolution *sol = (SGRouteSolution *)solution;
+    ARStatus status;
+
+    if (!ctx || !ctx->op_rng || !sol || !removed_count || count < 0) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
+                               sg_get_assigned_count, sg_get_assigned_element,
+                               sg_time_window_relatedness, SG_TIME_CLUSTER_RANDOMNESS,
+                               NULL, removed_count);
+    if (status != AR_STATUS_OK) {
+        return status;
+    }
+
+    return sg_route_unassign_removed_requests(ctx, sol, removed_ids, *removed_count);
+}
+
 static ARStatus sg_route_destroy_paired_shaw(void *op_ctx, void *solution, int count,
                                              uint32_t *removed_ids, int *removed_count) {
     SGContext *ctx = (SGContext *)op_ctx;
@@ -3128,6 +3324,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
     if (ar_alns_add_destroy(alns, "random", sg_route_destroy_random, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "criticality-worst", sg_route_destroy_criticality_worst, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "route-removal", sg_route_destroy_route_removal, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "time-window-removal", sg_route_destroy_time_window, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "route-cluster", sg_route_destroy_route_cluster, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "time-cluster", sg_route_destroy_time_cluster, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "paired-shaw", sg_route_destroy_paired_shaw, ctx, 1.0) != AR_STATUS_OK ||
