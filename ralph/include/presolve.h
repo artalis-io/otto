@@ -222,6 +222,30 @@ int presolve_scp_column_dominance(PresolveContext *ctx);
  */
 int presolve_scp(PresolveContext *ctx);
 
+/* Row activity bounds result */
+typedef struct {
+    double lb;           /* Lower bound on a'x */
+    double ub;           /* Upper bound on a'x */
+    double abs_sum;      /* Sum of |contributions| for cancellation detection */
+    int lb_finite;       /* All lower bound contributions were finite */
+    int ub_finite;       /* All upper bound contributions were finite */
+} RowBounds;
+
+/*
+ * Compute row activity bounds: lb <= a'x <= ub given variable bounds.
+ *
+ * For each variable j with coefficient a_ij:
+ *   - If a_ij > 0: contributes a_ij*lb_j to row lb, a_ij*ub_j to row ub
+ *   - If a_ij < 0: contributes a_ij*ub_j to row lb, a_ij*lb_j to row ub
+ *
+ * Tracks finiteness flags and absolute contribution sum for cancellation
+ * detection. This is the shared primitive used by forcing constraints,
+ * bound tightening, and implied free detection.
+ */
+void compute_row_bounds(const double *row, int n,
+                        const double *var_lb, const double *var_ub,
+                        const int *col_deleted, RowBounds *out);
+
 /* Utility */
 void presolve_compute_implied_bounds(PresolveContext *ctx);
 

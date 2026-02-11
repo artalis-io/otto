@@ -87,6 +87,60 @@ static void presolve_context_free(PresolveContext *ctx) {
 }
 
 /* ============================================================================
+ * Row Activity Bounds (shared primitive)
+ * ============================================================================ */
+
+void compute_row_bounds(const double *row, int n,
+                        const double *var_lb, const double *var_ub,
+                        const int *col_deleted, RowBounds *out) {
+    out->lb = 0.0;
+    out->ub = 0.0;
+    out->abs_sum = 0.0;
+    out->lb_finite = 1;
+    out->ub_finite = 1;
+
+    for (int j = 0; j < n; j++) {
+        if (col_deleted && col_deleted[j]) continue;
+        double aij = row[j];
+        if (fabs(aij) < RALPH_ZERO_TOL) continue;
+
+        if (aij > 0) {
+            if (var_lb[j] <= -RALPH_INFINITY/2) {
+                out->lb_finite = 0;
+            } else {
+                double contrib = aij * var_lb[j];
+                out->lb += contrib;
+                out->abs_sum += fabs(contrib);
+            }
+            if (var_ub[j] >= RALPH_INFINITY/2) {
+                out->ub_finite = 0;
+            } else {
+                double contrib = aij * var_ub[j];
+                out->ub += contrib;
+            }
+        } else {
+            if (var_ub[j] >= RALPH_INFINITY/2) {
+                out->lb_finite = 0;
+            } else {
+                double contrib = aij * var_ub[j];
+                out->lb += contrib;
+                out->abs_sum += fabs(contrib);
+            }
+            if (var_lb[j] <= -RALPH_INFINITY/2) {
+                out->ub_finite = 0;
+            } else {
+                double contrib = aij * var_lb[j];
+                out->ub += contrib;
+            }
+        }
+    }
+
+    /* Map non-finite accumulations to infinity sentinels */
+    if (!out->lb_finite) out->lb = -RALPH_INFINITY;
+    if (!out->ub_finite) out->ub = RALPH_INFINITY;
+}
+
+/* ============================================================================
  * Implied Bounds Computation
  * ============================================================================ */
 
@@ -94,53 +148,19 @@ void presolve_compute_implied_bounds(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int n = model->num_vars;
 
-    /* Allocate dense row buffer once */
     double *row = (double*)calloc(n, sizeof(double));
     if (!row) return;
 
     for (int i = 0; i < model->num_cons; i++) {
         if (ctx->row_deleted[i]) continue;
 
-        /* Extract row once instead of O(n) element accesses */
         sparse_get_row(model->A, i, row);
 
-        double lb = 0.0;
-        double ub = 0.0;
+        RowBounds rb;
+        compute_row_bounds(row, n, model->lb, model->ub, ctx->col_deleted, &rb);
 
-        /* Compute implied bounds: lb <= a'x <= ub based on variable bounds */
-        for (int j = 0; j < n; j++) {
-            if (ctx->col_deleted[j]) continue;
-
-            double aij = row[j];
-            if (fabs(aij) < RALPH_ZERO_TOL) continue;
-
-            if (aij > 0) {
-                if (model->lb[j] > -RALPH_INFINITY/2) {
-                    lb += aij * model->lb[j];
-                } else {
-                    lb = -RALPH_INFINITY;
-                }
-                if (model->ub[j] < RALPH_INFINITY/2) {
-                    ub += aij * model->ub[j];
-                } else {
-                    ub = RALPH_INFINITY;
-                }
-            } else {
-                if (model->ub[j] < RALPH_INFINITY/2) {
-                    lb += aij * model->ub[j];
-                } else {
-                    lb = -RALPH_INFINITY;
-                }
-                if (model->lb[j] > -RALPH_INFINITY/2) {
-                    ub += aij * model->lb[j];
-                } else {
-                    ub = RALPH_INFINITY;
-                }
-            }
-        }
-
-        ctx->row_lb[i] = lb;
-        ctx->row_ub[i] = ub;
+        ctx->row_lb[i] = rb.lb;
+        ctx->row_ub[i] = rb.ub;
     }
 
     free(row);
@@ -943,42 +963,11 @@ int presolve_bound_tightening(PresolveContext *ctx) {
         /* Extract row once (O(nnz) instead of O(n²) element accesses) */
         sparse_get_row(model->A, i, row);
 
-        /* First pass: compute total row_lb, row_ub, and sum of absolute contributions
-         * The abs_sum helps us detect when cancellation risk is high */
-        double row_lb = 0.0, row_ub = 0.0, abs_sum = 0.0;
-        int row_lb_finite = 1, row_ub_finite = 1;
-
-        for (int j = 0; j < n; j++) {
-            if (ctx->col_deleted[j]) continue;
-            double aij = row[j];
-            if (fabs(aij) < RALPH_ZERO_TOL) continue;
-
-            if (aij > 0) {
-                if (model->lb[j] <= -RALPH_INFINITY/2) row_lb_finite = 0;
-                else {
-                    double contrib = aij * model->lb[j];
-                    row_lb += contrib;
-                    abs_sum += fabs(contrib);
-                }
-                if (model->ub[j] >= RALPH_INFINITY/2) row_ub_finite = 0;
-                else {
-                    double contrib = aij * model->ub[j];
-                    row_ub += contrib;
-                }
-            } else {
-                if (model->ub[j] >= RALPH_INFINITY/2) row_lb_finite = 0;
-                else {
-                    double contrib = aij * model->ub[j];
-                    row_lb += contrib;
-                    abs_sum += fabs(contrib);
-                }
-                if (model->lb[j] <= -RALPH_INFINITY/2) row_ub_finite = 0;
-                else {
-                    double contrib = aij * model->lb[j];
-                    row_ub += contrib;
-                }
-            }
-        }
+        /* First pass: compute total row activity bounds */
+        RowBounds rb;
+        compute_row_bounds(row, n, model->lb, model->ub, ctx->col_deleted, &rb);
+        double row_lb = rb.lb, row_ub = rb.ub, abs_sum = rb.abs_sum;
+        int row_lb_finite = rb.lb_finite, row_ub_finite = rb.ub_finite;
 
         /* Second pass: derive bounds for each variable */
         for (int j = 0; j < n; j++) {
@@ -1395,7 +1384,7 @@ int presolve_shift_bounds(PresolveContext *ctx, PresolveResult *result) {
                 .value = lb,
                 .factor = 0.0,
             };
-            postsolve_push(result, op);
+            if (postsolve_push(result, op) < 0) continue;
         }
 
         /* Update RHS for all constraints */
@@ -2350,9 +2339,6 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
 
     /* Check if original matrix exists and has data */
     if (!orig->A || !orig->A->colptr || !orig->A->rowidx || !orig->A->values) {
-        fprintf(stderr, "build_reduced_model: orig->A is NULL or incomplete!\n");
-        fprintf(stderr, "  orig->A=%p, num_elements=%d\n",
-                (void*)orig->A, orig->num_elements);
         /* Fall back to empty matrix */
     } else {
         for (int j = 0; j < n_orig; j++) {
@@ -2613,7 +2599,7 @@ PresolveResult* presolve(LPModel *model) {
                         .value = working->lb[j],
                         .factor = 0.0,
                     };
-                    postsolve_push(result, op);
+                    if (postsolve_push(result, op) < 0) continue;
                 }
             }
         }

@@ -51,12 +51,15 @@ flipping (P5), and a cleaner `dual_simplex_solve()` without primal fallbacks.
 | Forcing constraints | Yes (all vars at bounds) | ✅ Yes |
 | Implied free | Yes (bounds implied by constraints) | ✅ Yes (tightens to finite implied bounds) |
 | Doubleton equality | Yes (substitution elimination) | ✅ Yes (with postsolve stack) |
-| Proportional columns/rows | Yes (dominated column detection) | No |
+| Proportional columns/rows | Yes (dominated column detection) | ✅ Yes (rows and columns) |
+| Shift variable bounds | Yes | ✅ Yes (with postsolve SHIFT ops) |
+| MIP probing | Yes (implication propagation) | ✅ Yes (probing + bound tightening reuse) |
 | Dualization | Yes (auto-dual when constraints >> vars) | No |
-| Presolve loop | Up to 20 passes until fixed-point | ✅ Up to 10 passes |
+| Presolve loop | Up to 20 passes until fixed-point | ✅ Up to 20 passes |
 | Redundant row detection | Implicit via reductions | ✅ Explicit Gaussian elimination |
 | Empty row/col removal | Yes | ✅ Yes |
 | Bound tightening | Yes | ✅ Yes (with cancellation guards) |
+| Shared row bounds primitive | Implicit | ✅ `compute_row_bounds()` used by forcing, tightening, probing |
 
 **Status: IMPLEMENTED** (P3 in `ralph/src/presolve.c`, Feb 2026)
 
@@ -72,16 +75,21 @@ Benchmarks (FuelWise MILP, seed=42, post-P3 vs pre-P3):
 | milp200 (3 runs) | 19472.76 | 8987.79 | **2.2x** |
 
 **Key implementation details:**
-- Multi-round fixed-point loop (10 iterations, up from 1)
+- Multi-round fixed-point loop (20 iterations, matching GLOP)
 - Singleton row bound tightening for LE/GE/EQ constraints
 - Doubleton equality elimination with CSC fill-in check, integer variable guard
 - Implied free variable detection (tightens to finite bounds, not ±infinity, to avoid
   breaking Big-M in simplex Phase 1)
+- Proportional row/column detection (rows: redundancy/tighter dominance; columns: cost-dominated fixing)
+- Shift-variable-bounds with `POSTSOLVE_SHIFT` ops (skips integer/binary variables)
+- MIP probing with implication propagation: orthogonally reuses `presolve_bound_tightening()`
+  rather than duplicating constraint-based bound propagation
+- `compute_row_bounds()` shared primitive eliminates duplication between forcing constraints
+  and bound tightening (all callers get cancellation guards and finiteness tracking)
 - LIFO postsolve stack (`PostsolveOp`) for recovering original variable values
 
-**Remaining gap vs GLOP:** Proportional column/row detection, dualization for constraint-heavy
-problems, and more aggressive probing (integer variable implications). Ralph also lacks
-GLOP's shift-variable-bounds preprocessor.
+**Remaining gap vs GLOP:** Dualization for constraint-heavy problems. Ralph also lacks
+GLOP's more aggressive probing (non-binary integer implications, clique detection).
 
 ### 3. Crash Basis (Advanced Initial Basis)
 
@@ -176,6 +184,8 @@ tableau creation). Ralph's `simplex_solve()` creates a new tableau from scratch 
 - **Contiguous spike pool**: Cache-friendly FT storage with offset indexing
 - **Phase-1 recovery**: Dual rescue, entering exclusion, redundant row marking
 - **Arena allocator**: Minimal allocation overhead in hot paths
+- **LP Presolve**: 12 techniques with orthogonal design — shared `compute_row_bounds()` primitive,
+  probing reuses `presolve_bound_tightening()`, 105 unit tests
 - **For target problem sizes** (100s-low 1000s of variables): capable and fast
 
 ## Implementation Priority
