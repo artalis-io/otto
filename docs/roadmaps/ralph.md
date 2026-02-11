@@ -13,7 +13,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
 | **Presolve** | ✅ Phase 3 | 12 techniques, 20-round fixed-point, probing w/ implication propagation (P3) |
-| **NETLIB Suite** | 67% Pass | 8/12 problems (see below) |
+| **NETLIB Suite** | 75% Pass | 9/12 problems (beaconfd fixed by presolve) |
 | **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
 | **Benders Decomposition** | ✅ Complete | Generic solver, ~1430 LoC, 8 tests (§7) |
 
@@ -48,7 +48,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | brandy | ✅ PASS | 133 iters |
 | degen2 | ✅ PASS | 2333 iters (degeneracy) |
 | bandm | ❌ FAIL | Numerical instability |
-| beaconfd | ❌ FAIL | LU update threshold issue |
+| beaconfd | ✅ PASS | Fixed by presolve: 262→148 vars, 173→87 cons, obj=33592.49 |
 | blend | ❌ FAIL | Returns INFEASIBLE incorrectly |
 | lotfi | ❌ FAIL | Numerical instability |
 
