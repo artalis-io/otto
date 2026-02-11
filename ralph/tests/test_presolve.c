@@ -1317,6 +1317,118 @@ static void test_probing_bound_tightening(void) {
 }
 
 /* ============================================================================
+ * compute_row_bounds() unit tests
+ * ============================================================================ */
+
+static void test_compute_row_bounds(void) {
+    printf("\n=== Test: compute_row_bounds ===\n");
+
+    /* Case 1: Simple finite row [2, -3, 1], bounds [0,5], [1,4], [0,10] */
+    {
+        double row[3] = {2.0, -3.0, 1.0};
+        double var_lb[3] = {0.0, 1.0, 0.0};
+        double var_ub[3] = {5.0, 4.0, 10.0};
+        RowBounds rb;
+        compute_row_bounds(row, 3, var_lb, var_ub, NULL, &rb);
+
+        /* lb: 2*0 + (-3)*4 + 1*0 = -12 */
+        /* ub: 2*5 + (-3)*1 + 1*10 = 17 */
+        ASSERT_NEAR(rb.lb, -12.0, TOLERANCE, "Simple row lb = -12");
+        ASSERT_NEAR(rb.ub, 17.0, TOLERANCE, "Simple row ub = 17");
+        ASSERT(rb.lb_finite == 1, "Simple row lb is finite");
+        ASSERT(rb.ub_finite == 1, "Simple row ub is finite");
+        ASSERT(rb.abs_sum > 0.0, "Simple row abs_sum > 0");
+    }
+
+    /* Case 2: Infinite lower bound on a variable */
+    {
+        double row[2] = {1.0, 2.0};
+        double var_lb[2] = {-RALPH_INFINITY, 0.0};
+        double var_ub[2] = {10.0, 5.0};
+        RowBounds rb;
+        compute_row_bounds(row, 2, var_lb, var_ub, NULL, &rb);
+
+        /* lb: 1*(-inf) + 2*0 = -inf */
+        /* ub: 1*10 + 2*5 = 20 */
+        ASSERT(rb.lb_finite == 0, "Infinite var lb makes row lb infinite");
+        ASSERT(rb.lb <= -RALPH_INFINITY/2, "Row lb is -INFINITY");
+        ASSERT_NEAR(rb.ub, 20.0, TOLERANCE, "Row ub = 20 (finite part)");
+        ASSERT(rb.ub_finite == 1, "Row ub is finite");
+    }
+
+    /* Case 3: Negative coefficient with infinite upper bound */
+    {
+        double row[2] = {-1.0, 3.0};
+        double var_lb[2] = {0.0, 0.0};
+        double var_ub[2] = {RALPH_INFINITY, 5.0};
+        RowBounds rb;
+        compute_row_bounds(row, 2, var_lb, var_ub, NULL, &rb);
+
+        /* lb: (-1)*inf + 3*0 = -inf  (negative coeff * ub) */
+        /* ub: (-1)*0 + 3*5 = 15 */
+        ASSERT(rb.lb_finite == 0, "Neg coeff with inf ub makes row lb infinite");
+        ASSERT_NEAR(rb.ub, 15.0, TOLERANCE, "Row ub = 15");
+    }
+
+    /* Case 4: col_deleted skips columns */
+    {
+        double row[3] = {1.0, 100.0, 2.0};
+        double var_lb[3] = {0.0, 0.0, 0.0};
+        double var_ub[3] = {5.0, 5.0, 3.0};
+        int col_deleted[3] = {0, 1, 0};  /* Skip column 1 */
+        RowBounds rb;
+        compute_row_bounds(row, 3, var_lb, var_ub, col_deleted, &rb);
+
+        /* lb: 1*0 + 2*0 = 0  (column 1 skipped) */
+        /* ub: 1*5 + 2*3 = 11 */
+        ASSERT_NEAR(rb.lb, 0.0, TOLERANCE, "Deleted col skipped: lb = 0");
+        ASSERT_NEAR(rb.ub, 11.0, TOLERANCE, "Deleted col skipped: ub = 11");
+    }
+
+    /* Case 5: Zero coefficients ignored */
+    {
+        double row[3] = {0.0, 4.0, 1e-15};
+        double var_lb[3] = {-100.0, 1.0, -100.0};
+        double var_ub[3] = {100.0, 3.0, 100.0};
+        RowBounds rb;
+        compute_row_bounds(row, 3, var_lb, var_ub, NULL, &rb);
+
+        /* Only column 1 contributes: lb = 4*1 = 4, ub = 4*3 = 12 */
+        ASSERT_NEAR(rb.lb, 4.0, TOLERANCE, "Zero coeff ignored: lb = 4");
+        ASSERT_NEAR(rb.ub, 12.0, TOLERANCE, "Zero coeff ignored: ub = 12");
+    }
+
+    /* Case 6: abs_sum tracks cancellation risk */
+    {
+        double row[2] = {1.0, -1.0};
+        double var_lb[2] = {0.0, 0.0};
+        double var_ub[2] = {100.0, 100.0};
+        RowBounds rb;
+        compute_row_bounds(row, 2, var_lb, var_ub, NULL, &rb);
+
+        /* lb: 1*0 + (-1)*100 = -100, abs_sum for lb contribs: |0| + |-100| = 100 */
+        /* ub: 1*100 + (-1)*0 = 100 */
+        ASSERT_NEAR(rb.lb, -100.0, TOLERANCE, "Cancellation case: lb = -100");
+        ASSERT_NEAR(rb.ub, 100.0, TOLERANCE, "Cancellation case: ub = 100");
+        ASSERT(rb.abs_sum >= 100.0, "abs_sum tracks contribution magnitude");
+    }
+
+    /* Case 7: Empty row (all zero or all deleted) */
+    {
+        double row[2] = {0.0, 0.0};
+        double var_lb[2] = {-10.0, -10.0};
+        double var_ub[2] = {10.0, 10.0};
+        RowBounds rb;
+        compute_row_bounds(row, 2, var_lb, var_ub, NULL, &rb);
+
+        ASSERT_NEAR(rb.lb, 0.0, TOLERANCE, "Empty row: lb = 0");
+        ASSERT_NEAR(rb.ub, 0.0, TOLERANCE, "Empty row: ub = 0");
+        ASSERT(rb.lb_finite == 1, "Empty row: lb finite");
+        ASSERT(rb.ub_finite == 1, "Empty row: ub finite");
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1349,6 +1461,7 @@ int main(void) {
     test_combined_presolve();
     test_probing_infeasibility();
     test_probing_bound_tightening();
+    test_compute_row_bounds();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Presolve Tests: %d/%d passed (%.1f%%)\n",
