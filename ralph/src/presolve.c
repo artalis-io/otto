@@ -1651,37 +1651,49 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
 }
 
 /* ============================================================================
- * MIP-Specific Presolve: Probing
+ * MIP-Specific Presolve: Probing with Implication Propagation
  * ============================================================================ */
 
 /*
- * Probing: Fix binary variables by checking if fixing to 0 or 1 leads to
- * infeasibility. Also tighten bounds by computing implied bounds when
- * a binary is set to each value.
+ * Probing with implication propagation.
+ *
+ * For each binary variable x_j:
+ * 1. Fix x_j = 0, run presolve_bound_tightening (multi-pass)
+ * 2. Fix x_j = 1, run presolve_bound_tightening (multi-pass)
+ * 3. If one setting is infeasible, fix x_j to the other
+ * 4. If both feasible, intersect implied bounds: any bound that is tighter
+ *    in BOTH probes is globally valid and can be applied permanently
+ *
+ * Reuses the existing presolve_bound_tightening rather than reimplementing
+ * constraint-based bound propagation.  Probing is the orchestrator; bound
+ * tightening is the shared primitive.
  */
 int presolve_probing(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int n = model->num_vars;
     int count = 0;
 
-    /* Allocate working arrays for implied bounds */
-    double *implied_lb0 = (double*)calloc(n, sizeof(double));
-    double *implied_ub0 = (double*)calloc(n, sizeof(double));
-    double *implied_lb1 = (double*)calloc(n, sizeof(double));
-    double *implied_ub1 = (double*)calloc(n, sizeof(double));
-    double *row = (double*)calloc(n, sizeof(double));
+    /* Save original bounds — restored after each probe */
+    double *saved_lb = (double*)malloc(n * sizeof(double));
+    double *saved_ub = (double*)malloc(n * sizeof(double));
+    /* Capture implied bounds after each probe */
+    double *implied_lb0 = (double*)malloc(n * sizeof(double));
+    double *implied_ub0 = (double*)malloc(n * sizeof(double));
 
-    if (!implied_lb0 || !implied_ub0 || !implied_lb1 || !implied_ub1 || !row) {
+    if (!saved_lb || !saved_ub || !implied_lb0 || !implied_ub0) {
+        free(saved_lb);
+        free(saved_ub);
         free(implied_lb0);
         free(implied_ub0);
-        free(implied_lb1);
-        free(implied_ub1);
-        free(row);
         return 0;
     }
 
-    /* Limit probing iterations to avoid expensive O(n*m*n) worst case */
+    memcpy(saved_lb, model->lb, n * sizeof(double));
+    memcpy(saved_ub, model->ub, n * sizeof(double));
+
+    /* Limit probing to avoid expensive O(n * passes * m * n) worst case */
     int max_probe_vars = 100;
+    int max_propagation_passes = 3;
     int probed = 0;
 
     for (int j = 0; j < n && probed < max_probe_vars; j++) {
@@ -1689,150 +1701,113 @@ int presolve_probing(PresolveContext *ctx) {
 
         /* Only probe binary variables */
         if (model->var_type[j] != 'B') continue;
-        if (model->lb[j] > 0.5 || model->ub[j] < 0.5) continue;  /* Already fixed */
+        if (saved_lb[j] > 0.5 || saved_ub[j] < 0.5) continue;  /* Already fixed */
 
         probed++;
 
-        /* Initialize implied bounds for both settings */
-        for (int k = 0; k < n; k++) {
-            implied_lb0[k] = model->lb[k];
-            implied_ub0[k] = model->ub[k];
-            implied_lb1[k] = model->lb[k];
-            implied_ub1[k] = model->ub[k];
-        }
+        /* --- Probe x_j = 0 --- */
+        memcpy(model->lb, saved_lb, n * sizeof(double));
+        memcpy(model->ub, saved_ub, n * sizeof(double));
+        model->lb[j] = 0.0;
+        model->ub[j] = 0.0;
 
-        /* Try x_j = 0 */
-        implied_lb0[j] = 0.0;
-        implied_ub0[j] = 0.0;
         int infeas_0 = 0;
-
-        /* Propagate bounds when x_j = 0 */
-        for (int i = 0; i < model->num_cons && !infeas_0; i++) {
-            if (ctx->row_deleted[i]) continue;
-
-            sparse_get_row(model->A, i, row);
-            double a_j = row[j];
-            if (fabs(a_j) < RALPH_ZERO_TOL) continue;
-
-            double rhs = model->b[i];
-
-            /* Compute row activity bounds with x_j = 0 */
-            double row_lb = 0.0, row_ub = 0.0;
-            int row_lb_finite = 1, row_ub_finite = 1;
-
-            for (int k = 0; k < n; k++) {
-                if (ctx->col_deleted[k]) continue;
-                double a_k = row[k];
-                if (fabs(a_k) < RALPH_ZERO_TOL) continue;
-
-                double lb_k = (k == j) ? 0.0 : implied_lb0[k];
-                double ub_k = (k == j) ? 0.0 : implied_ub0[k];
-
-                if (a_k > 0) {
-                    if (lb_k <= -RALPH_INFINITY/2) row_lb_finite = 0;
-                    else row_lb += a_k * lb_k;
-                    if (ub_k >= RALPH_INFINITY/2) row_ub_finite = 0;
-                    else row_ub += a_k * ub_k;
-                } else {
-                    if (ub_k >= RALPH_INFINITY/2) row_lb_finite = 0;
-                    else row_lb += a_k * ub_k;
-                    if (lb_k <= -RALPH_INFINITY/2) row_ub_finite = 0;
-                    else row_ub += a_k * lb_k;
-                }
-            }
-
-            /* Check feasibility */
-            if (model->sense[i] == 'L') {
-                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_0 = 1;
-            } else if (model->sense[i] == 'G') {
-                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_0 = 1;
-            } else {  /* 'E' */
-                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_0 = 1;
-                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_0 = 1;
-            }
+        for (int pass = 0; pass < max_propagation_passes; pass++) {
+            int r = presolve_bound_tightening(ctx);
+            if (r < 0) { infeas_0 = 1; break; }
+            if (r == 0) break;  /* Converged */
         }
 
-        /* Try x_j = 1 */
-        implied_lb1[j] = 1.0;
-        implied_ub1[j] = 1.0;
+        /* Capture probe-0 implied bounds */
+        memcpy(implied_lb0, model->lb, n * sizeof(double));
+        memcpy(implied_ub0, model->ub, n * sizeof(double));
+
+        /* --- Probe x_j = 1 --- */
+        memcpy(model->lb, saved_lb, n * sizeof(double));
+        memcpy(model->ub, saved_ub, n * sizeof(double));
+        model->lb[j] = 1.0;
+        model->ub[j] = 1.0;
+
         int infeas_1 = 0;
-
-        /* Propagate bounds when x_j = 1 */
-        for (int i = 0; i < model->num_cons && !infeas_1; i++) {
-            if (ctx->row_deleted[i]) continue;
-
-            sparse_get_row(model->A, i, row);
-            double a_j = row[j];
-            if (fabs(a_j) < RALPH_ZERO_TOL) continue;
-
-            double rhs = model->b[i];
-
-            /* Compute row activity bounds with x_j = 1 */
-            double row_lb = 0.0, row_ub = 0.0;
-            int row_lb_finite = 1, row_ub_finite = 1;
-
-            for (int k = 0; k < n; k++) {
-                if (ctx->col_deleted[k]) continue;
-                double a_k = row[k];
-                if (fabs(a_k) < RALPH_ZERO_TOL) continue;
-
-                double lb_k = (k == j) ? 1.0 : implied_lb1[k];
-                double ub_k = (k == j) ? 1.0 : implied_ub1[k];
-
-                if (a_k > 0) {
-                    if (lb_k <= -RALPH_INFINITY/2) row_lb_finite = 0;
-                    else row_lb += a_k * lb_k;
-                    if (ub_k >= RALPH_INFINITY/2) row_ub_finite = 0;
-                    else row_ub += a_k * ub_k;
-                } else {
-                    if (ub_k >= RALPH_INFINITY/2) row_lb_finite = 0;
-                    else row_lb += a_k * ub_k;
-                    if (lb_k <= -RALPH_INFINITY/2) row_ub_finite = 0;
-                    else row_ub += a_k * lb_k;
-                }
-            }
-
-            /* Check feasibility */
-            if (model->sense[i] == 'L') {
-                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_1 = 1;
-            } else if (model->sense[i] == 'G') {
-                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_1 = 1;
-            } else {  /* 'E' */
-                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_1 = 1;
-                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_1 = 1;
-            }
+        for (int pass = 0; pass < max_propagation_passes; pass++) {
+            int r = presolve_bound_tightening(ctx);
+            if (r < 0) { infeas_1 = 1; break; }
+            if (r == 0) break;  /* Converged */
         }
+        /* model->lb/ub now hold probe-1 implied bounds.
+         * implied_lb0/ub0 hold probe-0 implied bounds.
+         * Analyze results and apply before restoring. */
 
-        /* Analyze probing results */
         if (infeas_0 && infeas_1) {
-            /* Both settings infeasible - problem is infeasible */
+            memcpy(model->lb, saved_lb, n * sizeof(double));
+            memcpy(model->ub, saved_ub, n * sizeof(double));
+            free(saved_lb);
+            free(saved_ub);
             free(implied_lb0);
             free(implied_ub0);
-            free(implied_lb1);
-            free(implied_ub1);
-            free(row);
-            return -1;  /* Infeasible */
-        } else if (infeas_0) {
-            /* x_j = 0 infeasible -> fix x_j = 1 */
+            return -1;
+        }
+
+        if (infeas_0) {
+            /* x_j = 0 infeasible → fix x_j = 1 */
+            memcpy(model->lb, saved_lb, n * sizeof(double));
+            memcpy(model->ub, saved_ub, n * sizeof(double));
             model->lb[j] = 1.0;
             model->ub[j] = 1.0;
+            saved_lb[j] = 1.0;
+            saved_ub[j] = 1.0;
             count++;
         } else if (infeas_1) {
-            /* x_j = 1 infeasible -> fix x_j = 0 */
+            /* x_j = 1 infeasible → fix x_j = 0 */
+            memcpy(model->lb, saved_lb, n * sizeof(double));
+            memcpy(model->ub, saved_ub, n * sizeof(double));
             model->lb[j] = 0.0;
             model->ub[j] = 0.0;
+            saved_lb[j] = 0.0;
+            saved_ub[j] = 0.0;
             count++;
+        } else {
+            /* Both feasible: intersect implied bounds.
+             * x_j ∈ {0,1}, so a bound valid in BOTH probes is globally valid.
+             * Take the weaker (more conservative) of the two:
+             *   global lb = min(lb_probe0, lb_probe1)
+             *   global ub = max(ub_probe0, ub_probe1)
+             *
+             * model->lb/ub still hold probe-1 bounds; read before restoring. */
+            for (int k = 0; k < n; k++) {
+                if (ctx->col_deleted[k] || k == j) continue;
+
+                double new_lb = fmin(implied_lb0[k], model->lb[k]);
+                double new_ub = fmax(implied_ub0[k], model->ub[k]);
+
+                /* Apply to saved_lb/ub so subsequent probes see the tightening */
+                if (new_lb > saved_lb[k] + RALPH_FEAS_TOL) {
+                    saved_lb[k] = new_lb;
+                    count++;
+                }
+                if (new_ub < saved_ub[k] - RALPH_FEAS_TOL) {
+                    saved_ub[k] = new_ub;
+                    count++;
+                }
+
+                /* Snap to fixed if bounds converged */
+                if (saved_lb[k] > saved_ub[k] - RALPH_FEAS_TOL) {
+                    double avg = (saved_lb[k] + saved_ub[k]) / 2.0;
+                    saved_lb[k] = avg;
+                    saved_ub[k] = avg;
+                }
+            }
+
+            /* Restore from (possibly tightened) saved bounds */
+            memcpy(model->lb, saved_lb, n * sizeof(double));
+            memcpy(model->ub, saved_ub, n * sizeof(double));
         }
-        /* If neither infeasible, could derive tighter bounds on other variables
-         * via constraint propagation within each probe. Currently we only use
-         * probing for variable fixing (infeasibility detection). */
     }
 
+    free(saved_lb);
+    free(saved_ub);
     free(implied_lb0);
     free(implied_ub0);
-    free(implied_lb1);
-    free(implied_ub1);
-    free(row);
     return count;
 }
 

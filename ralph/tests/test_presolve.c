@@ -1190,6 +1190,133 @@ static void test_combined_presolve(void) {
 }
 
 /* ============================================================================
+ * Test 21: Probing — infeasibility detection
+ *
+ * min x + 10y
+ * s.t. 5x + y >= 4       (if y=0: 5x >= 4 → x >= 0.8, feasible)
+ *      x + 3y >= 3       (if y=0: x >= 3, combined with 5x>=4 → feasible)
+ *     -x + 2y >= 1       (if y=0: -x >= 1 → x <= -1, contradicts x >= 0)
+ *      x ∈ [0,10] continuous
+ *      y ∈ {0,1} binary
+ *
+ * When y=0: constraint 3 gives -x >= 1 → x <= -1, but x >= 0. Infeasible.
+ * Probing should fix y=1.
+ * With y=1: -x+2>=1 → x<=1, x+3>=3 → x>=0, 5x+1>=4 → x>=0.6
+ * Optimal: x=0.6, y=1, obj=10.6
+ * ============================================================================ */
+static void test_probing_infeasibility(void) {
+    printf("\n=== Test: Probing infeasibility detection ===\n");
+
+    RalphModel *rm = ralph_create();
+    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_add_var(rm, 0.0, 10.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(rm, 0.0, 1.0, 10.0, RALPH_BINARY);      /* y */
+
+    /* 5x + y >= 4 */
+    int i0[] = {0, 1}; double v0[] = {5.0, 1.0};
+    ralph_add_constraint(rm, 2, i0, v0, RALPH_GREATER_EQUAL, 4.0);
+
+    /* x + 3y >= 3 */
+    int i1[] = {0, 1}; double v1[] = {1.0, 3.0};
+    ralph_add_constraint(rm, 2, i1, v1, RALPH_GREATER_EQUAL, 3.0);
+
+    /* -x + 2y >= 1 */
+    int i2[] = {0, 1}; double v2[] = {-1.0, 2.0};
+    ralph_add_constraint(rm, 2, i2, v2, RALPH_GREATER_EQUAL, 1.0);
+
+    ralph_set_int_param(rm, "presolve", 1);
+    ralph_optimize(rm);
+
+    RalphStatus status = ralph_get_status(rm);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal (probing fixed y=1)");
+
+    double sol[2];
+    ralph_get_solution(rm, sol);
+    ASSERT_NEAR(sol[1], 1.0, TOLERANCE, "y = 1 (probing detected y=0 infeasible)");
+
+    double obj = ralph_get_objval(rm);
+    ASSERT_NEAR(obj, 10.6, TOLERANCE, "Objective = 10.6");
+
+    ralph_free(rm);
+}
+
+/* ============================================================================
+ * Test 22: Probing — bound tightening via implication propagation
+ *
+ * min x + y + 10z
+ * s.t. x + 2z <= 5     (z=0 → x<=5;  z=1 → x<=3)
+ *      y + 3z <= 7     (z=0 → y<=7;  z=1 → y<=4)
+ *      x + y >= 2
+ *      x ∈ [0, 100], y ∈ [0, 100] continuous
+ *      z ∈ {0,1} binary
+ *
+ * Probing z=0: x<=5, y<=7 (from constraints 1,2)
+ * Probing z=1: x<=3, y<=4 (from constraints 1,2)
+ * Intersection (global valid): x<=max(5,3)=5, y<=max(7,4)=7
+ *
+ * Optimal: z=0, x+y=2 at minimum, say x=0,y=2 (both have cost 1).
+ * Obj = 0+2+0 = 2.
+ *
+ * This test verifies probing runs without errors and produces correct results.
+ * The bound tightening from probing (x<=5 instead of 100) won't change the
+ * optimal but should reduce the feasible region.
+ * ============================================================================ */
+static void test_probing_bound_tightening(void) {
+    printf("\n=== Test: Probing bound tightening ===\n");
+
+    /* Solve with presolve (probing enabled for MIP) */
+    RalphModel *rm_pre = ralph_create();
+    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_add_var(rm_pre, 0.0, 1.0, 10.0, RALPH_BINARY);       /* z */
+
+    int i0[] = {0, 2}; double v0[] = {1.0, 2.0};
+    ralph_add_constraint(rm_pre, 2, i0, v0, RALPH_LESS_EQUAL, 5.0);
+
+    int i1[] = {1, 2}; double v1[] = {1.0, 3.0};
+    ralph_add_constraint(rm_pre, 2, i1, v1, RALPH_LESS_EQUAL, 7.0);
+
+    int i2[] = {0, 1}; double v2[] = {1.0, 1.0};
+    ralph_add_constraint(rm_pre, 2, i2, v2, RALPH_GREATER_EQUAL, 2.0);
+
+    ralph_set_int_param(rm_pre, "presolve", 1);
+    ralph_optimize(rm_pre);
+
+    /* Solve without presolve */
+    RalphModel *rm_nopre = ralph_create();
+    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 1.0, 10.0, RALPH_BINARY);
+
+    ralph_add_constraint(rm_nopre, 2, i0, v0, RALPH_LESS_EQUAL, 5.0);
+    ralph_add_constraint(rm_nopre, 2, i1, v1, RALPH_LESS_EQUAL, 7.0);
+    ralph_add_constraint(rm_nopre, 2, i2, v2, RALPH_GREATER_EQUAL, 2.0);
+
+    ralph_set_int_param(rm_nopre, "presolve", 0);
+    ralph_optimize(rm_nopre);
+
+    RalphStatus s1 = ralph_get_status(rm_pre);
+    RalphStatus s2 = ralph_get_status(rm_nopre);
+    ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with probing presolve");
+    ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
+
+    double obj1 = ralph_get_objval(rm_pre);
+    double obj2 = ralph_get_objval(rm_nopre);
+    ASSERT_NEAR(obj1, obj2, TOLERANCE,
+                "Same objective with and without probing presolve");
+    ASSERT_NEAR(obj1, 2.0, TOLERANCE, "Objective = 2.0 (z=0, x+y=2)");
+
+    double sol[3];
+    ralph_get_solution(rm_pre, sol);
+    ASSERT_NEAR(sol[2], 0.0, TOLERANCE, "z = 0 (cheapest binary setting)");
+
+    ralph_free(rm_pre);
+    ralph_free(rm_nopre);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1220,6 +1347,8 @@ int main(void) {
     test_shift_bounds_maximize();
     test_forcing_constraint();
     test_combined_presolve();
+    test_probing_infeasibility();
+    test_probing_bound_tightening();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Presolve Tests: %d/%d passed (%.1f%%)\n",
