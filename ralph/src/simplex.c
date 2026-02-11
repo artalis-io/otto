@@ -1406,6 +1406,16 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
         dir = -1.0;
     }
 
+    /* Relative pivot filter: avoid accepting numerically tiny pivots. */
+    double max_abs_dk = 0.0;
+    for (int k = 0; k < tab->m; k++) {
+        double abs_dk = fabs(tab->work2[k] * dir);
+        if (abs_dk > max_abs_dk) {
+            max_abs_dk = abs_dk;
+        }
+    }
+    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+
     *leaving = -1;
     *theta = RALPH_INFINITY;
     int leaving_var = tab->n;  /* Track actual variable index for Bland's tie-breaking */
@@ -1416,9 +1426,9 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
         double xj = tab->x[j];
 
         double ratio = RALPH_INFINITY;
-        if (dk > RALPH_PIVOT_TOL) {
+        if (dk > pivot_tol) {
             ratio = (xj - tab->lb_ext[j]) / dk;
-        } else if (dk < -RALPH_PIVOT_TOL) {
+        } else if (dk < -pivot_tol) {
             ratio = (tab->ub_ext[j] - xj) / (-dk);
         }
 
@@ -1462,6 +1472,16 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
         dir = -1.0;
     }
 
+    /* Relative pivot filter: avoid numerically fragile leaving choices. */
+    double max_abs_dk = 0.0;
+    for (int k = 0; k < tab->m; k++) {
+        double abs_dk = fabs(tab->work2[k] * dir);
+        if (abs_dk > max_abs_dk) {
+            max_abs_dk = abs_dk;
+        }
+    }
+    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+
     /* Single-pass Harris ratio test (merged from two passes)
      *
      * Harris ratio test allows small infeasibility (FEAS_TOL) when computing
@@ -1486,7 +1506,7 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     /* Single pass: compute theta_max and select best leaving simultaneously */
     for (int k = 0; k < tab->m; k++) {
         double dk = tab->work2[k] * dir;
-        if (fabs(dk) < RALPH_PIVOT_TOL) continue;  /* Skip tiny pivots */
+        if (fabs(dk) < pivot_tol) continue;  /* Skip tiny pivots */
 
         int j = tab->basis[k];
         double xj = tab->x[j];
@@ -1546,7 +1566,7 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
 
         for (int k = 0; k < tab->m; k++) {
             double dk = tab->work2[k] * dir;
-            if (fabs(dk) < RALPH_PIVOT_TOL) continue;
+            if (fabs(dk) < pivot_tol) continue;
 
             int j = tab->basis[k];
             double xj = tab->x[j];
@@ -1604,6 +1624,7 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
 
 static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, double theta) {
     double dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
+    double x_enter_old = tab->x[entering];
 
     /* Update entering variable */
     if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
@@ -1631,6 +1652,8 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
 
     /* Normal pivot: swap entering and leaving */
     int leaving = tab->basis[leaving_pos];
+    double x_leave_old = tab->x[leaving];
+    VarStatus entering_old_status = tab->var_status[entering];
 
     /* Update basis */
     tab->basis[leaving_pos] = entering;
@@ -1687,7 +1710,7 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
 
     /* Update LU factorization */
     if (!tab->A_ext || entering < 0 || entering >= tab->A_ext->ncols) {
-        return -1;  /* Invalid state */
+        goto pivot_fail_rollback;  /* Invalid state */
     }
     sparse_get_column(tab->A_ext, entering, tab->work1);
     if (lu_update(tab->lu, leaving_pos, tab->work1) != 0) {
@@ -1695,7 +1718,7 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         if (tableau_refactorize(tab) != 0) {
             /* Refactorization failed, try basis repair */
             if (repair_singular_basis(tab) != 0) {
-                return -1;  /* All recovery attempts failed */
+                goto pivot_fail_rollback;  /* All recovery attempts failed */
             }
         }
     }
@@ -1794,6 +1817,20 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     }
 
     return 0;
+
+pivot_fail_rollback:
+    /* Restore pre-pivot basis/status bookkeeping so caller can recover from a
+     * known-good basis by refactorizing and re-running pricing/ratio. */
+    tab->basis[leaving_pos] = leaving;
+    tab->basis_pos[leaving] = leaving_pos;
+    tab->basis_pos[entering] = -1;
+    tab->var_status[leaving] = RALPH_BASIC;
+    tab->var_status[entering] = entering_old_status;
+    tab->x[entering] = x_enter_old;
+    tab->x[leaving] = x_leave_old;
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    return -1;
 }
 
 /* ============================================================================
@@ -1935,6 +1972,19 @@ static void extract_farkas_ray(SimplexSolver *solver) {
 #define PRIMAL_PERTURB_BASE 1e-6
 #define PRIMAL_PERTURB_MULT 7
 
+/* Linear scan is fine here: perturbation is infrequent and num_artificial << n. */
+static int is_artificial_var(const SimplexTableau *tab, int var_idx) {
+    if (!tab || !tab->artificial_vars || tab->num_artificial <= 0) {
+        return 0;
+    }
+    for (int k = 0; k < tab->num_artificial; k++) {
+        if (tab->artificial_vars[k] == var_idx) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void primal_apply_perturbation(SimplexTableau *tab) {
     int n = tab->n;
 
@@ -1966,6 +2016,13 @@ static void primal_apply_perturbation(SimplexTableau *tab) {
      * for the ratio test, only basic variable slacks matter, and those
      * are computed from (x_j - lb_j) where x_j is unchanged and lb_j is now lower. */
     for (int j = 0; j < n; j++) {
+        /* In Phase 1, keep artificial bounds exact.
+         * Perturbing artificials changes the feasibility objective geometry and
+         * can produce false "optimal" Phase 1 terminations on hard instances. */
+        if (tab->phase == 1 && is_artificial_var(tab, j)) {
+            continue;
+        }
+
         /* Pseudo-random perturbation factor */
         double factor = 1.0 + (j * PRIMAL_PERTURB_MULT) % 13;
 
@@ -2161,18 +2218,20 @@ static int simplex_phase1(SimplexSolver *solver) {
 
     /* Cycling detection and anti-cycling measures */
     int degenerate_count = 0;
-    const int PERTURB_THRESHOLD = 30;  /* Apply perturbation after this many degenerate pivots */
     const int DEGEN_THRESHOLD = 50;    /* Switch to Bland's rule after this many */
+    const int RECOMPUTE_INTERVAL = 25; /* Periodic drift correction in Phase 1 */
+    const int FAIL_REPEAT_LIMIT = 20;  /* Avoid endless retries on same failing pivot */
+    int refactor_interval = tab->use_two_phase ? 12 : 0;
     int use_bland = 0;
-    int perturbation_active = 0;
+    int fail_entering = -1;
+    int fail_leaving_pos = -1;
+    int fail_repeat_count = 0;
 
-    /* Apply proactive perturbation for highly degenerate problems (>80% equalities).
-     * Don't apply when ALL constraints are equalities (breaks afiro-like problems).
-     * For beaconfd: 140/173 = 81% equalities - this threshold catches it.
-     * For afiro: 27/27 = 100% equalities - excluded by the < m check. */
-    if (tab->num_equalities > (tab->m * 4) / 5 && tab->num_equalities < tab->m) {
+    /* Apply proactive perturbation only for extremely degenerate two-phase starts.
+     * A lower threshold can destabilize hard Phase 1 bases (e.g., beaconfd),
+     * so we keep this conservative and rely on reactive perturbation first. */
+    if (tab->num_equalities > (tab->m * 9) / 10 && tab->num_equalities < tab->m) {
         primal_apply_perturbation(tab);
-        perturbation_active = 1;
         if (solver->verbose) {
             fprintf(stderr, "[simplex_phase1] Proactive perturbation: %d equalities out of %d constraints (%.0f%%)\n",
                     tab->num_equalities, tab->m, 100.0 * tab->num_equalities / tab->m);
@@ -2221,6 +2280,28 @@ static int simplex_phase1(SimplexSolver *solver) {
                  * Use a relaxed tolerance (1e-4) to distinguish true infeasibility
                  * from numerical noise. */
                 if (art_sum > 1e-4) {
+                    /* Revalidate on a freshly factorized basis before certifying infeasible.
+                     * This guards against RC/solution drift on numerically hard instances. */
+                    if (tableau_refactorize(tab) == 0) {
+                        tableau_compute_solution(tab);
+                        tableau_compute_reduced_costs(tab);
+
+                        double refined_art_sum = 0.0;
+                        for (int k = 0; k < tab->num_artificial; k++) {
+                            int j = tab->artificial_vars[k];
+                            refined_art_sum += fabs(tab->x[j]);
+                        }
+
+                        if (refined_art_sum <= 1e-4) {
+                            if (solver->verbose) {
+                                fprintf(stderr, "[simplex_phase1] Refactorized cleanup: art_sum %g -> %g\n",
+                                        art_sum, refined_art_sum);
+                            }
+                            continue;
+                        }
+                        art_sum = refined_art_sum;
+                    }
+
                     /* Truly infeasible - extract Farkas ray from Phase 1 duals.
                      * The Phase 1 duals y = c_B^T * B^{-1} provide the certificate. */
                     if (solver->verbose) {
@@ -2255,12 +2336,25 @@ static int simplex_phase1(SimplexSolver *solver) {
         int ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
 
         if (ratio_status != 0) {
-            /* Unbounded in Phase 1 - this shouldn't happen for properly formulated problems */
+            /* "Unbounded" in Phase 1 is typically numerical, not structural.
+             * Try to recover via refactorization and conservative pricing first. */
+            if (tableau_refactorize(tab) == 0) {
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                use_bland = 1;
+                continue;
+            }
+            if (!use_bland) {
+                use_bland = 1;
+                tableau_compute_reduced_costs(tab);
+                continue;
+            }
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase1] ERROR: unbounded in Phase 1 at iter %d\n", iter);
+                fprintf(stderr, "[simplex_phase1] ERROR: unbounded in Phase 1 at iter %d (after recovery)\n", iter);
             }
             primal_remove_perturbation(tab);
-            solver->status = RALPH_STATUS_ERROR;
+            /* Treat unrecoverable Phase 1 "unbounded" as numerical breakdown. */
+            solver->status = RALPH_STATUS_ITERATION_LIMIT;
             solver->iterations = iter;
             return -1;
         }
@@ -2269,20 +2363,8 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (theta < RALPH_FEAS_TOL) {
             degenerate_count++;
 
-            /* First try perturbation (less restrictive than Bland's rule) */
-            if (degenerate_count >= PERTURB_THRESHOLD && !perturbation_active && !use_bland) {
-                primal_apply_perturbation(tab);
-                perturbation_active = 1;
-                if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] Applying bound perturbation after %d degenerate pivots\n",
-                            degenerate_count);
-                }
-                /* Recompute solution with perturbed bounds */
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-            }
-
-            /* If still cycling after perturbation, use Bland's rule */
+            /* In Phase 1, avoid reactive bound perturbation because it can
+             * destabilize the feasibility objective; switch directly to Bland. */
             if (degenerate_count > DEGEN_THRESHOLD && !use_bland) {
                 use_bland = 1;
                 if (solver->verbose) {
@@ -2294,27 +2376,80 @@ static int simplex_phase1(SimplexSolver *solver) {
 
         /* Perform pivot */
         if (simplex_pivot(tab, entering, leaving, theta) != 0) {
+            if (entering == fail_entering && leaving == fail_leaving_pos) {
+                fail_repeat_count++;
+            } else {
+                fail_entering = entering;
+                fail_leaving_pos = leaving;
+                fail_repeat_count = 1;
+            }
+
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase1] ERROR: pivot failed at iter %d\n", iter);
+                if (fail_repeat_count <= 3 || fail_repeat_count % 10 == 0) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Pivot failed at iter %d (repeat %d), attempting recovery\n",
+                            iter, fail_repeat_count);
+                }
+            }
+
+            if (fail_repeat_count >= FAIL_REPEAT_LIMIT) {
+                if (solver->verbose) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Repeated pivot failure (%d) for entering=%d leaving_pos=%d, terminating as ITERATION_LIMIT\n",
+                            fail_repeat_count, entering, leaving);
+                }
+                primal_remove_perturbation(tab);
+                solver->status = RALPH_STATUS_ITERATION_LIMIT;
+                solver->iterations = iter;
+                return -1;
+            }
+
+            /* simplex_pivot can leave basis/LU partially updated on failure.
+             * Try the same recovery ladder used in Phase 2. */
+            if (tableau_refactorize(tab) == 0) {
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                continue;
+            }
+            if (repair_singular_basis(tab) == 0) {
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                continue;
+            }
+            if (solver->verbose) {
+                fprintf(stderr, "[simplex_phase1] ERROR: all pivot recovery attempts failed at iter %d\n", iter);
             }
             primal_remove_perturbation(tab);
-            solver->status = RALPH_STATUS_ERROR;
+            /* Treat unrecoverable Phase 1 pivot breakdown as numerical breakdown. */
+            solver->status = RALPH_STATUS_ITERATION_LIMIT;
             solver->iterations = iter;
             return -1;
         }
+        fail_repeat_count = 0;
 
         /* Periodic refactorization */
-        if (lu_needs_refactorization(tab->lu)) {
+        int needs_refactor = lu_needs_refactorization(tab->lu);
+        if (!needs_refactor && refactor_interval > 0 && iter > 0 && iter % refactor_interval == 0) {
+            needs_refactor = 1;
+        }
+
+        if (needs_refactor) {
             if (tableau_refactorize(tab) != 0) {
                 if (solver->verbose) {
                     fprintf(stderr, "[simplex_phase1] ERROR: refactorization failed at iter %d\n", iter);
                 }
                 primal_remove_perturbation(tab);
-                solver->status = RALPH_STATUS_ERROR;
+                /* Treat unrecoverable Phase 1 refactorization failure as numerical breakdown. */
+                solver->status = RALPH_STATUS_ITERATION_LIMIT;
                 solver->iterations = iter;
                 return -1;
             }
-            /* Recompute reduced costs after refactorization */
+            /* Recompute primal solution and reduced costs after refactorization. */
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        } else if (iter > 0 && iter % RECOMPUTE_INTERVAL == 0) {
+            /* Drift control even when LU updates are still accepted. */
+            tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
         }
     }

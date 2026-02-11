@@ -197,6 +197,11 @@ static int find_or_add_column(MPSParser *parser, const char *name) {
     parser->obj[idx] = 0.0;
 
     parser->num_cols++;
+    /* Keep triplet matrix dimensions in sync with discovered columns.
+     * triplets_add validates indices against trips->ncols. */
+    if (parser->matrix && parser->matrix->ncols < parser->num_cols) {
+        parser->matrix->ncols = parser->num_cols;
+    }
     return idx;
 }
 
@@ -272,6 +277,11 @@ static int parse_rows_line(MPSParser *parser, const char *line) {
     }
 
     parser->num_rows++;
+    /* Keep triplet matrix dimensions in sync with discovered rows.
+     * triplets_add validates indices against trips->nrows. */
+    if (parser->matrix && parser->matrix->nrows < parser->num_rows) {
+        parser->matrix->nrows = parser->num_rows;
+    }
     return 0;
 }
 
@@ -314,7 +324,12 @@ static int parse_columns_line(MPSParser *parser, const char *line) {
         if (row_idx == parser->obj_row) {
             parser->obj[col_idx] = val1;
         } else {
-            triplets_add(parser->matrix, row_idx, col_idx, val1);
+            if (triplets_add(parser->matrix, row_idx, col_idx, val1) != 0) {
+                set_error(parser,
+                          "line %d: failed to add matrix coefficient (%s,%s)",
+                          parser->line_num, row_name1, col_name);
+                return -1;
+            }
         }
     }
     /* Note: unknown row names are silently ignored (common in some MPS files) */
@@ -326,7 +341,12 @@ static int parse_columns_line(MPSParser *parser, const char *line) {
             if (row_idx == parser->obj_row) {
                 parser->obj[col_idx] = val2;
             } else {
-                triplets_add(parser->matrix, row_idx, col_idx, val2);
+                if (triplets_add(parser->matrix, row_idx, col_idx, val2) != 0) {
+                    set_error(parser,
+                              "line %d: failed to add matrix coefficient (%s,%s)",
+                              parser->line_num, row_name2, col_name);
+                    return -1;
+                }
             }
         }
     }
