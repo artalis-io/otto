@@ -32,6 +32,18 @@ static double get_time_sec(void) {
     return (double)clock() / CLOCKS_PER_SEC;
 }
 
+/* Sense-aware certificate scalar in original subproblem row space.
+ * For >= rows, multiply RHS by -1 to map to <= orientation. */
+static double benders_farkas_rhs_dot(const LPModel *sub, const double *ray) {
+    double dot = 0.0;
+    for (int i = 0; i < sub->num_cons; i++) {
+        double rhs = sub->b[i];
+        if (sub->sense[i] == 'G') rhs = -rhs;
+        dot += ray[i] * rhs;
+    }
+    return dot;
+}
+
 /* ============================================================================
  * Context Creation/Destruction
  * ============================================================================ */
@@ -534,9 +546,11 @@ int benders_update_subproblem_rhs(BendersContext *ctx, int scenario,
             rhs -= lc->master_coeffs[t] * x_master[master_j];
         }
 
+        if (lc->sub_row_idx < 0 || lc->sub_row_idx >= sub->num_cons) {
+            return -1;
+        }
         sub->b[lc->sub_row_idx] = rhs;
     }
-
     return 0;
 }
 
@@ -562,6 +576,7 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
         /* Force two-phase simplex for Benders subproblems.
          * This prevents BigM dual contamination that invalidates cuts. */
         ctx->sub_solvers[scenario]->force_two_phase = 1;
+        ctx->sub_solvers[scenario]->verbose = ctx->config.verbose;
     }
 
     SimplexSolver *solver = ctx->sub_solvers[scenario];
@@ -583,6 +598,9 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
         if (duals && solver->dual_solution) {
             for (int k = 0; k < ctx->num_linking; k++) {
                 LinkingConstraint *lc = &ctx->linking[k];
+                if (lc->sub_row_idx < 0 || lc->sub_row_idx >= solver->model->num_cons) {
+                    return -1;
+                }
                 duals[k] = solver->dual_solution[lc->sub_row_idx];
             }
         }
@@ -597,39 +615,61 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
         *obj = RALPH_INFINITY;
 
         /* Extract Farkas ray for linking constraints + compute sub-only RHS contribution */
-        if (farkas && solver->farkas_valid && solver->farkas_ray) {
-            /* Extract linking constraint Farkas multipliers using explicit row indices */
-            for (int k = 0; k < ctx->num_linking; k++) {
-                LinkingConstraint *lc = &ctx->linking[k];
-                farkas[k] = solver->farkas_ray[lc->sub_row_idx];
-            }
-
-            /* Compute sub-only constraint RHS contribution: sum(y_sub[i] * b_sub[i])
-             * This is needed for the feasibility cut RHS: y'b = y_sub'b_sub + y_link'b_link
-             * We store this in farkas[num_linking] as a special "RHS constant" slot */
-            double sub_rhs_contrib = 0.0;
-            LPModel *sub = ctx->sub_models[scenario];
-            for (int i = 0; i < ctx->num_sub_cons; i++) {
-                sub_rhs_contrib += solver->farkas_ray[i] * sub->b[i];
-            }
-
-            /* Normalize the Farkas ray to avoid numerical issues with huge coefficients.
-             * We scale so the largest coefficient is 1.0. */
-            double max_abs = fabs(sub_rhs_contrib);
-            for (int k = 0; k < ctx->num_linking; k++) {
-                double absval = fabs(farkas[k]);
-                if (absval > max_abs) max_abs = absval;
-            }
-            if (max_abs > 1e-9) {
-                for (int k = 0; k < ctx->num_linking; k++) {
-                    farkas[k] /= max_abs;
-                }
-                sub_rhs_contrib /= max_abs;
-            }
-
-            /* Store in a special slot - caller should allocate num_linking+1 */
-            farkas[ctx->num_linking] = sub_rhs_contrib;
+        if (!farkas || !solver->farkas_valid || !solver->farkas_ray) {
+            return -1;
         }
+
+        memset(farkas, 0, (ctx->num_linking + 1) * sizeof(double));
+
+        /* Strict mode: validate in original constraint space (sense-aware),
+         * and try sign flip if needed. */
+        double ray_sign = 1.0;
+        if (ctx->config.strict_farkas) {
+            double yb = benders_farkas_rhs_dot(sub, solver->farkas_ray);
+            if (yb >= -1e-9) {
+                double yb_flip = -yb;
+                if (yb_flip < -1e-9) {
+                    ray_sign = -1.0;
+                } else {
+                    return -1;
+                }
+            }
+        }
+
+        /* Extract linking constraint Farkas multipliers using explicit row indices */
+        for (int k = 0; k < ctx->num_linking; k++) {
+            LinkingConstraint *lc = &ctx->linking[k];
+            if (lc->sub_row_idx < 0 || lc->sub_row_idx >= solver->model->num_cons) {
+                return -1;
+            }
+            farkas[k] = ray_sign * solver->farkas_ray[lc->sub_row_idx];
+        }
+
+        /* Compute sub-only constraint RHS contribution: sum(y_sub[i] * b_sub[i])
+         * This is needed for the feasibility cut RHS: y'b = y_sub'b_sub + y_link'b_link
+         * We store this in farkas[num_linking] as a special "RHS constant" slot */
+        double sub_rhs_contrib = 0.0;
+        LPModel *sub = ctx->sub_models[scenario];
+        for (int i = 0; i < ctx->num_sub_cons; i++) {
+            sub_rhs_contrib += (ray_sign * solver->farkas_ray[i]) * sub->b[i];
+        }
+
+        /* Normalize the Farkas ray to avoid numerical issues with huge coefficients.
+         * We scale so the largest coefficient is 1.0. */
+        double max_abs = fabs(sub_rhs_contrib);
+        for (int k = 0; k < ctx->num_linking; k++) {
+            double absval = fabs(farkas[k]);
+            if (absval > max_abs) max_abs = absval;
+        }
+        if (max_abs > 1e-9) {
+            for (int k = 0; k < ctx->num_linking; k++) {
+                farkas[k] /= max_abs;
+            }
+            sub_rhs_contrib /= max_abs;
+        }
+
+        /* Store in a special slot - caller should allocate num_linking+1 */
+        farkas[ctx->num_linking] = sub_rhs_contrib;
 
     } else {
         /* Solver error */
@@ -840,6 +880,62 @@ int benders_add_feasibility_cut(BendersContext *ctx, int scenario,
         constant += y_k * lc->original_rhs;
     }
 
+    if (ctx->config.strict_farkas) {
+        /* The feasibility cut must cut the current infeasible master point.
+         * If orientation is wrong, try sign-flipping once and re-check. */
+        double lhs = 0.0;
+        for (int j = 0; j < ctx->num_master_vars; j++) {
+            lhs += master_coeffs[j] * ctx->master_solution[j];
+        }
+
+        if (lhs >= constant - BENDERS_CUT_TOLERANCE) {
+            for (int j = 0; j < ctx->num_master_vars; j++) {
+                master_coeffs[j] = -master_coeffs[j];
+            }
+            constant = -constant;
+
+            lhs = 0.0;
+            for (int j = 0; j < ctx->num_master_vars; j++) {
+                lhs += master_coeffs[j] * ctx->master_solution[j];
+            }
+
+            if (lhs >= constant - BENDERS_CUT_TOLERANCE) {
+                free(master_coeffs);
+                free(cut->master_var_indices);
+                free(cut->coeffs);
+                cut->master_var_indices = NULL;
+                cut->coeffs = NULL;
+                return -1;
+            }
+        }
+
+        /* Normalize for numerical stability and re-check violation. */
+        double scale = fabs(constant);
+        for (int j = 0; j < ctx->num_master_vars; j++) {
+            double a = fabs(master_coeffs[j]);
+            if (a > scale) scale = a;
+        }
+        if (scale > 1e-12) {
+            for (int j = 0; j < ctx->num_master_vars; j++) {
+                master_coeffs[j] /= scale;
+            }
+            constant /= scale;
+        }
+
+        lhs = 0.0;
+        for (int j = 0; j < ctx->num_master_vars; j++) {
+            lhs += master_coeffs[j] * ctx->master_solution[j];
+        }
+        if (lhs >= constant - BENDERS_CUT_TOLERANCE) {
+            free(master_coeffs);
+            free(cut->master_var_indices);
+            free(cut->coeffs);
+            cut->master_var_indices = NULL;
+            cut->coeffs = NULL;
+            return -1;
+        }
+    }
+
     int num_terms = 0;
     for (int j = 0; j < ctx->num_master_vars; j++) {
         if (fabs(master_coeffs[j]) > BENDERS_CUT_TOLERANCE) {
@@ -847,6 +943,15 @@ int benders_add_feasibility_cut(BendersContext *ctx, int scenario,
             cut->coeffs[num_terms] = master_coeffs[j];
             num_terms++;
         }
+    }
+
+    if (num_terms == 0) {
+        free(master_coeffs);
+        free(cut->master_var_indices);
+        free(cut->coeffs);
+        cut->master_var_indices = NULL;
+        cut->coeffs = NULL;
+        return -1;
     }
 
     free(master_coeffs);
@@ -973,6 +1078,7 @@ int benders_check_convergence(BendersContext *ctx, double master_obj,
 
 int benders_solve_classic(BendersContext *ctx) {
     double start_time = get_time_sec();
+    RalphStatus final_status = RALPH_STATUS_UNKNOWN;
 
     /* Allocate dual/Farkas arrays
      * farkas has num_linking+1 slots: [0..num_linking-1] for link duals,
@@ -1017,13 +1123,14 @@ int benders_solve_classic(BendersContext *ctx) {
                 printf("Master problem not optimal (ret=%d, status %d)\n", ret, master_status);
             }
 
-            if (master_status == RALPH_STATUS_INFEASIBLE && iter == 0) {
-                /* Original problem infeasible */
-                free(duals);
-                free(farkas);
-                return RALPH_STATUS_INFEASIBLE;
+            if (master_status == RALPH_STATUS_INFEASIBLE) {
+                final_status = RALPH_STATUS_INFEASIBLE;
+            } else if (master_status == RALPH_STATUS_UNKNOWN && ret != 0) {
+                final_status = RALPH_STATUS_ERROR;
+            } else {
+                final_status = master_status;
             }
-            break;
+            goto done;
         }
 
         /* Get master solution */
@@ -1046,10 +1153,14 @@ int benders_solve_classic(BendersContext *ctx) {
         double total_sub_obj = 0.0;
         int any_infeasible = 0;
         int cuts_added = 0;
+        int subproblem_failed = 0;
 
         for (int s = 0; s < ctx->config.num_scenarios; s++) {
             /* Update subproblem RHS */
-            benders_update_subproblem_rhs(ctx, s, ctx->master_solution);
+            if (benders_update_subproblem_rhs(ctx, s, ctx->master_solution) != 0) {
+                subproblem_failed = 1;
+                break;
+            }
 
             /* Solve subproblem */
             double sub_obj;
@@ -1060,7 +1171,8 @@ int benders_solve_classic(BendersContext *ctx) {
                 if (ctx->config.verbose) {
                     fprintf(stderr, "Subproblem %d solve failed\n", s);
                 }
-                continue;
+                subproblem_failed = 1;
+                break;
             }
 
             double prob = (ctx->config.scenario_probs) ?
@@ -1072,7 +1184,10 @@ int benders_solve_classic(BendersContext *ctx) {
 
                 /* Check if we need optimality cut */
                 if (sub_obj > theta_val + BENDERS_CUT_TOLERANCE) {
-                    benders_add_optimality_cut(ctx, s, duals, sub_obj);
+                    if (benders_add_optimality_cut(ctx, s, duals, sub_obj) != 0) {
+                        subproblem_failed = 1;
+                        break;
+                    }
                     cuts_added++;
                 }
 
@@ -1081,7 +1196,10 @@ int benders_solve_classic(BendersContext *ctx) {
                 }
             } else {
                 any_infeasible = 1;
-                benders_add_feasibility_cut(ctx, s, farkas);
+                if (benders_add_feasibility_cut(ctx, s, farkas) != 0) {
+                    subproblem_failed = 1;
+                    break;
+                }
                 cuts_added++;
 
                 if (ctx->config.verbose) {
@@ -1090,17 +1208,41 @@ int benders_solve_classic(BendersContext *ctx) {
             }
         }
 
+        if (subproblem_failed) {
+            final_status = RALPH_STATUS_ERROR;
+            goto done;
+        }
+
         /* Check convergence */
         if (!any_infeasible && cuts_added == 0) {
+            /* Compute bounds */
+            double ub = master_obj - theta_val + total_sub_obj;
+            double lb = master_obj;
+
+            /* Check if UB < LB - this can happen when theta is over-estimated
+             * due to cuts from different z values. In this case, we should add
+             * an optimality cut to bring theta down. */
+            if (ub < lb - 1e-6) {
+                if (ctx->config.verbose) {
+                    printf("UB (%.6f) < LB (%.6f) - inconsistent bounds\n", ub, lb);
+                    printf("  theta = %.6f but sub_obj = %.6f\n", theta_val, total_sub_obj);
+                }
+                final_status = RALPH_STATUS_ERROR;
+                goto done;
+            }
+
             /* No cuts added - optimal */
-            ctx->best_ub = master_obj - theta_val + total_sub_obj;
-            ctx->best_lb = master_obj;
+            ctx->best_ub = ub;
+            ctx->best_lb = lb;
 
             if (ctx->config.verbose) {
                 printf("Converged! UB = %.6f, LB = %.6f\n",
                        ctx->best_ub, ctx->best_lb);
+                printf("  master_obj = %.6f, theta_val = %.6f, total_sub_obj = %.6f\n",
+                       master_obj, theta_val, total_sub_obj);
             }
-            break;
+            final_status = RALPH_STATUS_OPTIMAL;
+            goto done;
         }
 
         double gap;
@@ -1109,11 +1251,15 @@ int benders_solve_classic(BendersContext *ctx) {
             if (ctx->config.verbose) {
                 printf("Converged within tolerance (gap = %.2e)\n", gap);
             }
-            break;
+            final_status = RALPH_STATUS_OPTIMAL;
+            goto done;
         }
 
         /* Apply cuts to master and re-solve */
-        benders_apply_cuts_to_master(ctx);
+        if (benders_apply_cuts_to_master(ctx) != 0) {
+            final_status = RALPH_STATUS_ERROR;
+            goto done;
+        }
         ctx->num_cuts = 0; /* Clear applied cuts */
 
         if (ctx->config.verbose >= 2) {
@@ -1132,32 +1278,7 @@ int benders_solve_classic(BendersContext *ctx) {
             }
             free(duals);
             free(farkas);
-            return -1;
-        }
-
-        if (ctx->config.verbose >= 2) {
-            SparseMatrix *A = ctx->master_model->A;
-            printf("  After finalize: A has %d nnz, %d rows, %d cols\n",
-                   A ? A->colptr[ctx->master_model->num_vars] : -1,
-                   ctx->master_model->num_cons, ctx->master_model->num_vars);
-
-            /* Print sparse matrix */
-            if (A) {
-                printf("  Matrix coefficients:\n");
-                for (int j = 0; j < ctx->master_model->num_vars; j++) {
-                    for (int p = A->colptr[j]; p < A->colptr[j+1]; p++) {
-                        printf("    A[%d,%d] = %.4f\n", A->rowidx[p], j, A->values[p]);
-                    }
-                }
-            }
-
-            /* Print variable bounds */
-            printf("  Variable bounds:\n");
-            for (int j = 0; j < ctx->master_model->num_vars; j++) {
-                printf("    x[%d]: lb=%.4f ub=%.4f c=%.4f type=%c\n",
-                       j, ctx->master_model->lb[j], ctx->master_model->ub[j],
-                       ctx->master_model->c[j], ctx->master_model->var_type[j]);
-            }
+            return RALPH_STATUS_ERROR;
         }
 
         /* Recreate master solver with new constraints */
@@ -1166,18 +1287,23 @@ int benders_solve_classic(BendersContext *ctx) {
         if (!ctx->master_solver) {
             free(duals);
             free(farkas);
-            return -1;
+            return RALPH_STATUS_ERROR;
         }
         ctx->master_solver->max_cut_rounds = 0;  /* Disable Gomory/MIR cuts */
         ctx->master_solver->verbose = ctx->config.verbose;
     }
 
+    if (final_status == RALPH_STATUS_UNKNOWN) {
+        final_status = RALPH_STATUS_ITERATION_LIMIT;
+    }
+
+done:
     ctx->total_time = get_time_sec() - start_time;
 
     free(duals);
     free(farkas);
 
-    return 0;
+    return final_status;
 }
 
 /* ============================================================================
@@ -1195,8 +1321,12 @@ int benders_extract_solution(BendersContext *ctx, double *x) {
     }
 
     /* Copy subproblem variables from last solve */
-    if (ctx->sub_solvers[0] && ctx->sub_solvers[0]->solution) {
+    if (ctx->sub_solvers[0] &&
+        ctx->sub_solvers[0]->status == RALPH_STATUS_OPTIMAL &&
+        ctx->sub_solvers[0]->solution &&
+        ctx->num_sub_vars == ctx->sub_solvers[0]->model->num_vars) {
         SimplexSolver *solver = ctx->sub_solvers[0];
+
         for (int j = 0; j < ctx->num_sub_vars; j++) {
             int orig_j = ctx->sub_to_orig[j];
             x[orig_j] = solver->solution[j];
@@ -1252,13 +1382,17 @@ int benders_solve(
     }
 
     /* Extract solution */
-    if (status == 0 && x) {
+    if (status == RALPH_STATUS_OPTIMAL && x) {
         benders_extract_solution(ctx, x);
     }
 
     /* Fill result */
     if (result) {
-        result->status = (status == 0) ? RALPH_STATUS_OPTIMAL : RALPH_STATUS_ERROR;
+        if (status == RALPH_STATUS_ERROR || status < 0) {
+            result->status = RALPH_STATUS_ERROR;
+        } else {
+            result->status = (RalphStatus)status;
+        }
         result->objective = ctx->best_ub;
         result->master_obj = ctx->best_lb;
         result->subproblem_obj = ctx->best_ub - ctx->best_lb;
@@ -1273,5 +1407,8 @@ int benders_solve(
 
     benders_free(ctx);
 
-    return status;
+    if (status == RALPH_STATUS_ERROR || status < 0) {
+        return -1;
+    }
+    return 0;
 }
