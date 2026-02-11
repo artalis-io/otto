@@ -30,6 +30,12 @@ static void compute_reach_U(const LUFactorization *lu,
                             int *reach_out, int *reach_nnz,
                             int *marked);
 
+static void lu_set_failure(LUFactorization *lu, int reason) {
+    if (lu) {
+        lu->last_failure_reason = reason;
+    }
+}
+
 /* ============================================================================
  * LU Factorization Creation/Destruction
  * ============================================================================ */
@@ -194,6 +200,7 @@ LUFactorization* lu_create(int m) {
     lu->allow_regularization = 0;
     lu->max_regularizations = 0;
     lu->num_regularized = 0;
+    lu->last_failure_reason = LU_FAIL_NONE;
 
     /* Pre-allocate dense workspace for fallback factorization (m×m matrix)
      * Allocated separately due to large size O(m²) */
@@ -289,12 +296,25 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B);
  * reduction. Falls back to dense if sparse fails.
  */
 int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
+    if (!lu || !B) {
+        lu_set_failure(lu, LU_FAIL_BAD_INPUT);
+        return -1;
+    }
+    lu_set_failure(lu, LU_FAIL_NONE);
+
     /* Try efficient sparse factorization first */
     int result = lu_factorize_sparse_efficient(lu, B);
-    if (result == 0) return 0;
+    if (result == 0) {
+        lu_set_failure(lu, LU_FAIL_NONE);
+        return 0;
+    }
 
     /* Fall back to dense */
-    return lu_factorize_dense(lu, B);
+    result = lu_factorize_dense(lu, B);
+    if (result == 0) {
+        lu_set_failure(lu, LU_FAIL_NONE);
+    }
+    return result;
 }
 
 /* ============================================================================
@@ -303,14 +323,24 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
 
 /* Perform LU factorization: PA = LU using partial pivoting */
 int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
-    if (!lu || !B) return -1;
-    if (B->nrows != B->ncols || B->nrows != lu->m) return -1;
+    if (!lu || !B) {
+        lu_set_failure(lu, LU_FAIL_BAD_INPUT);
+        return -1;
+    }
+    lu_set_failure(lu, LU_FAIL_NONE);
+    if (B->nrows != B->ncols || B->nrows != lu->m) {
+        lu_set_failure(lu, LU_FAIL_BAD_INPUT);
+        return -1;
+    }
 
     int m = lu->m;
 
     /* Use pre-allocated dense workspace (m×m matrix) */
     double *A = lu->dense_work;
-    if (!A) return -1;
+    if (!A) {
+        lu_set_failure(lu, LU_FAIL_FACTOR_ALLOC);
+        return -1;
+    }
 
     /* Zero the workspace */
     memset(A, 0, (size_t)m * (size_t)m * sizeof(double));
@@ -402,6 +432,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
                         k, max_val, (void*)lu->redundant_rows, lu->num_redundant,
                         lu->allow_regularization, lu->max_regularizations);
 #endif
+                lu_set_failure(lu, LU_FAIL_FACTOR_SINGULAR);
                 return -1;  /* Truly singular, no redundant row to help */
             }
         }
@@ -468,6 +499,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
 
     if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
         !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
+        lu_set_failure(lu, LU_FAIL_FACTOR_ALLOC);
         return -1;
     }
 
@@ -559,6 +591,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     lu->growth_factor = 1.0;
 
     /* Note: A is pre-allocated lu->dense_work, no free needed */
+    lu_set_failure(lu, LU_FAIL_NONE);
     return 0;
 }
 
@@ -1709,8 +1742,15 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
 
 /* Update factorization when basis column changes */
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) {
-    if (!lu || !entering_col) return -1;
-    if (lu->num_updates >= lu->max_updates) return -1;  /* Need refactorization */
+    if (!lu || !entering_col) {
+        lu_set_failure(lu, LU_FAIL_BAD_INPUT);
+        return -1;
+    }
+    lu_set_failure(lu, LU_FAIL_NONE);
+    if (lu->num_updates >= lu->max_updates) {
+        lu_set_failure(lu, LU_FAIL_MAX_UPDATES);
+        return -1;  /* Need refactorization */
+    }
 
     int m = lu->m;
 
@@ -1737,6 +1777,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
 
     /* Check pivot element (in step coordinates) */
     if (fabs(spike[step_pos]) < RALPH_PIVOT_TOL) {
+        lu_set_failure(lu, LU_FAIL_SINGULAR_UPDATE);
         return -1;  /* Singular update */
     }
 
@@ -1764,6 +1805,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     if (fabs(spike[step_pos]) < RALPH_UPDATE_PIVOT_THRESHOLD * max_abs_spike) {
         /* Pivot is too small relative to column magnitude.
          * Force refactorization to get a more stable basis representation. */
+        lu_set_failure(lu, LU_FAIL_UPDATE_PIVOT_TOO_SMALL);
         return -1;
     }
 
@@ -1787,6 +1829,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     if (lu->use_ft_updates) {
         /* Check if pool has room for this spike */
         if (lu->spike_pool_used + off_diag_nnz > lu->spike_pool_capacity) {
+            lu_set_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
             return -1;  /* Pool full - need refactorization */
         }
 
@@ -1819,6 +1862,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         if (!indices || !values) {
             free(indices);
             free(values);
+            lu_set_failure(lu, LU_FAIL_ETA_ALLOC);
             return -1;
         }
 
@@ -1852,6 +1896,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         }
     }
 
+    lu_set_failure(lu, LU_FAIL_NONE);
     return 0;
 }
 
@@ -1876,6 +1921,21 @@ int lu_needs_refactorization(const LUFactorization *lu) {
 /* ============================================================================
  * Utility
  * ============================================================================ */
+
+const char* lu_failure_reason_string(int reason) {
+    switch ((LUFailureReason)reason) {
+        case LU_FAIL_NONE: return "none";
+        case LU_FAIL_BAD_INPUT: return "bad_input";
+        case LU_FAIL_MAX_UPDATES: return "max_updates";
+        case LU_FAIL_SINGULAR_UPDATE: return "singular_update";
+        case LU_FAIL_UPDATE_PIVOT_TOO_SMALL: return "update_pivot_too_small";
+        case LU_FAIL_SPIKE_POOL_FULL: return "spike_pool_full";
+        case LU_FAIL_ETA_ALLOC: return "eta_alloc";
+        case LU_FAIL_FACTOR_SINGULAR: return "factor_singular";
+        case LU_FAIL_FACTOR_ALLOC: return "factor_alloc";
+        default: return "unknown";
+    }
+}
 
 void lu_print(const LUFactorization *lu) {
     if (!lu) {

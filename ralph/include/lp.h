@@ -52,6 +52,19 @@ typedef enum {
 /* Forward declaration for build state (opaque) */
 typedef struct LPModelBuildState LPModelBuildState;
 
+/* LU failure reason codes (stored in LUFactorization::last_failure_reason). */
+typedef enum {
+    LU_FAIL_NONE = 0,
+    LU_FAIL_BAD_INPUT,
+    LU_FAIL_MAX_UPDATES,
+    LU_FAIL_SINGULAR_UPDATE,
+    LU_FAIL_UPDATE_PIVOT_TOO_SMALL,
+    LU_FAIL_SPIKE_POOL_FULL,
+    LU_FAIL_ETA_ALLOC,
+    LU_FAIL_FACTOR_SINGULAR,
+    LU_FAIL_FACTOR_ALLOC
+} LUFailureReason;
+
 /* LP model internal representation */
 typedef struct {
     /* Problem dimensions */
@@ -162,6 +175,7 @@ typedef struct {
     int allow_regularization;   /* 1 to allow regularizing zero pivots (for rank-deficient problems) */
     int max_regularizations;    /* Limit on number of rows to regularize */
     int num_regularized;        /* Count of rows regularized in current factorization */
+    int last_failure_reason;    /* LUFailureReason (last failed lu_factorize/lu_update reason) */
 
     /* Pre-allocated workspace for hyper-sparse operations */
     double *hs_work1;       /* Dense workspace 1 */
@@ -315,8 +329,13 @@ typedef struct {
     int trace_phase1_pivot_failures;
     int trace_phase1_fail_small_pivot;
     int trace_phase1_fail_invalid_column;
-    int trace_phase1_fail_refactor_forced;
-    int trace_phase1_fail_refactor_after_update;
+    int trace_phase1_fail_lu_max_updates;
+    int trace_phase1_fail_lu_spike_pool_full;
+    int trace_phase1_fail_lu_update_pivot_small;
+    int trace_phase1_fail_lu_singular_update;
+    int trace_phase1_fail_factor_singular;
+    int trace_phase1_fail_refactor_forced_other;
+    int trace_phase1_fail_refactor_after_update_other;
     int trace_phase1_no_entering_events;
     int trace_phase1_first_fail_iter;
     int trace_phase1_last_fail_iter;
@@ -355,6 +374,7 @@ void lu_solve(const LUFactorization *lu, double *rhs, double *solution);
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution);
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
 int lu_needs_refactorization(const LUFactorization *lu);
+const char* lu_failure_reason_string(int reason);
 
 /* Sparse LU solves - exploit sparsity in RHS */
 void lu_solve_sparse(const LUFactorization *lu,
