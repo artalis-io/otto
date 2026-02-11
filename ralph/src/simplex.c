@@ -18,6 +18,108 @@
 /* Forward declarations */
 int lp_model_finalize(LPModel *model);
 
+/* Phase-1 pivot-failure reasons used by deterministic tracing. */
+enum {
+    PHASE1_PIVOT_FAIL_NONE = 0,
+    PHASE1_PIVOT_FAIL_SMALL_PIVOT = 1,
+    PHASE1_PIVOT_FAIL_INVALID_COLUMN = 2,
+    PHASE1_PIVOT_FAIL_REFACTOR_FORCED = 3,
+    PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE = 4
+};
+
+static const char* phase1_pivot_fail_reason_str(int reason) {
+    switch (reason) {
+        case PHASE1_PIVOT_FAIL_SMALL_PIVOT: return "small_pivot";
+        case PHASE1_PIVOT_FAIL_INVALID_COLUMN: return "invalid_entering_column";
+        case PHASE1_PIVOT_FAIL_REFACTOR_FORCED: return "refactor_after_forced_pivot";
+        case PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE: return "refactor_after_update_fail";
+        default: return "unknown";
+    }
+}
+
+/* FNV-1a style mixer for deterministic trace signatures. */
+static unsigned long long phase1_trace_mix(unsigned long long sig, unsigned long long word) {
+    sig ^= word;
+    sig *= 1099511628211ULL;
+    return sig;
+}
+
+static void phase1_trace_record_no_entering(SimplexSolver *solver, int iter, int status_code) {
+    if (!solver || !solver->trace_phase1) return;
+    solver->trace_phase1_no_entering_events++;
+    solver->trace_phase1_signature = phase1_trace_mix(
+        solver->trace_phase1_signature,
+        ((unsigned long long)0x2u << 60) ^
+        ((unsigned long long)(iter & 0xFFFFF) << 20) ^
+        (unsigned long long)(status_code & 0xFFFFF));
+
+    fprintf(stderr,
+            "[phase1_trace] event=no_entering iter=%d code=%d\n",
+            iter, status_code);
+}
+
+static void phase1_trace_record_pivot_failure(SimplexSolver *solver,
+                                              const SimplexTableau *tab,
+                                              int iter,
+                                              int repeat_count) {
+    if (!solver || !tab || !solver->trace_phase1) return;
+
+    int reason = tab->trace_last_fail_reason;
+    solver->trace_phase1_pivot_failures++;
+    if (solver->trace_phase1_first_fail_iter < 0) {
+        solver->trace_phase1_first_fail_iter = iter;
+    }
+    solver->trace_phase1_last_fail_iter = iter;
+
+    if (reason == PHASE1_PIVOT_FAIL_SMALL_PIVOT) {
+        solver->trace_phase1_fail_small_pivot++;
+    } else if (reason == PHASE1_PIVOT_FAIL_INVALID_COLUMN) {
+        solver->trace_phase1_fail_invalid_column++;
+    } else if (reason == PHASE1_PIVOT_FAIL_REFACTOR_FORCED) {
+        solver->trace_phase1_fail_refactor_forced++;
+    } else if (reason == PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE) {
+        solver->trace_phase1_fail_refactor_after_update++;
+    }
+
+    solver->trace_phase1_signature = phase1_trace_mix(
+        solver->trace_phase1_signature,
+        ((unsigned long long)0x1u << 60) ^
+        ((unsigned long long)(iter & 0xFFFFF) << 40) ^
+        ((unsigned long long)(tab->trace_last_entering & 0xFFFFF) << 20) ^
+        (unsigned long long)(tab->trace_last_leaving_pos & 0xFFFFF));
+    solver->trace_phase1_signature = phase1_trace_mix(
+        solver->trace_phase1_signature,
+        (unsigned long long)(reason & 0xFFFF));
+
+    fprintf(stderr,
+            "[phase1_trace] event=pivot_fail iter=%d repeat=%d entering=%d leaving=%d theta=%.12e reason=%s pivot=%.12e dir_inf=%.12e\n",
+            iter,
+            repeat_count,
+            tab->trace_last_entering,
+            tab->trace_last_leaving_pos,
+            tab->trace_last_theta,
+            phase1_pivot_fail_reason_str(reason),
+            tab->trace_last_pivot,
+            tab->trace_last_dir_inf);
+}
+
+static void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status) {
+    if (!solver || !solver->trace_phase1) return;
+
+    fprintf(stderr,
+            "[phase1_trace] summary status=%s piv_fail=%d small_pivot=%d invalid_col=%d refactor_forced=%d refactor_after_update=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%016llx\n",
+            ralph_status_string(phase1_status),
+            solver->trace_phase1_pivot_failures,
+            solver->trace_phase1_fail_small_pivot,
+            solver->trace_phase1_fail_invalid_column,
+            solver->trace_phase1_fail_refactor_forced,
+            solver->trace_phase1_fail_refactor_after_update,
+            solver->trace_phase1_no_entering_events,
+            solver->trace_phase1_first_fail_iter,
+            solver->trace_phase1_last_fail_iter,
+            solver->trace_phase1_signature);
+}
+
 /* ============================================================================
  * Geometric Mean Scaling
  * ============================================================================ */
@@ -1723,6 +1825,21 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     double dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
     double x_enter_old = tab->x[entering];
 
+    if (tab->trace_phase1_enabled) {
+        tab->trace_last_entering = entering;
+        tab->trace_last_leaving_pos = leaving_pos;
+        tab->trace_last_theta = theta;
+        tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_NONE;
+        tab->trace_last_pivot = 0.0;
+        tab->trace_last_dir_inf = 0.0;
+        for (int k = 0; k < tab->m; k++) {
+            double absval = fabs(tab->work2[k]);
+            if (absval > tab->trace_last_dir_inf) {
+                tab->trace_last_dir_inf = absval;
+            }
+        }
+    }
+
     /* Update entering variable */
     if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
         tab->x[entering] += theta;
@@ -1773,6 +1890,17 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     double pivot = tab->work2[leaving_pos];
     double pivot_sq = pivot * pivot;
 
+    if (tab->trace_phase1_enabled) {
+        tab->trace_last_pivot = pivot;
+    }
+
+    if (!isfinite(pivot) || fabs(pivot) < RALPH_PIVOT_TOL) {
+        if (tab->trace_phase1_enabled) {
+            tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_SMALL_PIVOT;
+        }
+        goto pivot_fail_rollback;
+    }
+
     /* Compute exact entering column weight: gamma_e = ||d_entering||^2 = ||work2||^2 */
     double gamma_e = 0.0;
     for (int k = 0; k < tab->m; k++) {
@@ -1810,12 +1938,18 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
      * avoid accumulating unstable updates on near-singular bases. */
     const int force_refactor = fabs(pivot) < 1e-4;
     if (!tab->A_ext || entering < 0 || entering >= tab->A_ext->ncols) {
+        if (tab->trace_phase1_enabled) {
+            tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_INVALID_COLUMN;
+        }
         goto pivot_fail_rollback;  /* Invalid state */
     }
 
     if (force_refactor) {
         if (tableau_refactorize(tab) != 0) {
             if (repair_singular_basis(tab) != 0) {
+                if (tab->trace_phase1_enabled) {
+                    tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_REFACTOR_FORCED;
+                }
                 goto pivot_fail_rollback;  /* All recovery attempts failed */
             }
         }
@@ -1826,6 +1960,9 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
             if (tableau_refactorize(tab) != 0) {
                 /* Refactorization failed, try basis repair */
                 if (repair_singular_basis(tab) != 0) {
+                    if (tab->trace_phase1_enabled) {
+                        tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE;
+                    }
                     goto pivot_fail_rollback;  /* All recovery attempts failed */
                 }
             }
@@ -1962,7 +2099,10 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->scaling = 1;   /* Enable scaling for numerical stability */
     solver->pricing_strategy = 2;  /* Devex pricing (better than Dantzig) */
     solver->verbose = 0;
+    solver->trace_phase1 = 0;
     solver->is_scaled = 0;
+    solver->trace_phase1_first_fail_iter = -1;
+    solver->trace_phase1_last_fail_iter = -1;
 
     return solver;
 }
@@ -2352,6 +2492,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (solver->verbose) {
             fprintf(stderr, "[simplex_phase1] Already feasible, skipping Phase 1\n");
         }
+        phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
         return 0;
     }
 
@@ -2383,6 +2524,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
+        tab->trace_phase1_iter = iter;
 
         /* Pricing: select entering variable */
         int entering;
@@ -2401,6 +2543,8 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         if (price_status != 0) {
+            phase1_trace_record_no_entering(solver, iter, price_status);
+
             /* Optimal for Phase 1 - remove perturbation first, then check */
             primal_remove_perturbation(tab);
 
@@ -2450,6 +2594,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     extract_farkas_ray(solver);
                     solver->status = RALPH_STATUS_INFEASIBLE;
                     solver->iterations = iter;
+                    phase1_trace_emit_summary(solver, RALPH_STATUS_INFEASIBLE);
                     return -1;
                 }
 
@@ -2466,6 +2611,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 fprintf(stderr, "[simplex_phase1] Phase 1 complete: feasible in %d iterations\n", iter);
             }
             solver->iterations = iter;
+            phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
             return 0;
         }
 
@@ -2475,6 +2621,8 @@ static int simplex_phase1(SimplexSolver *solver) {
         int ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
 
         if (ratio_status != 0) {
+            phase1_trace_record_no_entering(solver, iter, ratio_status);
+
             /* "Unbounded" in Phase 1 is typically numerical, not structural.
              * Try to recover via refactorization and conservative pricing first. */
             if (tableau_refactorize(tab) == 0) {
@@ -2495,6 +2643,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             /* Treat unrecoverable Phase 1 "unbounded" as numerical breakdown. */
             solver->status = RALPH_STATUS_ITERATION_LIMIT;
             solver->iterations = iter;
+            phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
             return -1;
         }
 
@@ -2544,6 +2693,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                 fail_repeat_count = 1;
             }
 
+            phase1_trace_record_pivot_failure(solver, tab, iter, fail_repeat_count);
+
             if (solver->verbose) {
                 if (fail_repeat_count <= 3 || fail_repeat_count % 10 == 0) {
                     fprintf(stderr,
@@ -2569,6 +2720,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                     if (simplex_pivot(tab, entering, alt_leaving, alt_theta) == 0) {
                         fail_repeat_count = 0;
                         continue;
+                    } else {
+                        phase1_trace_record_pivot_failure(solver, tab, iter, fail_repeat_count);
                     }
                 }
             }
@@ -2582,6 +2735,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 primal_remove_perturbation(tab);
                 solver->status = RALPH_STATUS_ITERATION_LIMIT;
                 solver->iterations = iter;
+                phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
                 return -1;
             }
 
@@ -2658,6 +2812,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             /* Treat unrecoverable Phase 1 pivot breakdown as numerical breakdown. */
             solver->status = RALPH_STATUS_ITERATION_LIMIT;
             solver->iterations = iter;
+            phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
             return -1;
         }
         fail_repeat_count = 0;
@@ -2728,6 +2883,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 /* Treat unrecoverable Phase 1 refactorization failure as numerical breakdown. */
                 solver->status = RALPH_STATUS_ITERATION_LIMIT;
                 solver->iterations = iter;
+                phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
                 return -1;
             }
             /* Recompute primal solution and reduced costs after refactorization. */
@@ -2746,6 +2902,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         fprintf(stderr, "[simplex_phase1] Iteration limit (%d) reached\n", solver->max_iterations);
     }
     solver->status = RALPH_STATUS_ITERATION_LIMIT;
+    phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
     return -1;
 }
 
@@ -3287,6 +3444,16 @@ int simplex_solve(SimplexSolver *solver) {
     solver->reduced_costs = NULL;
     solver->farkas_valid = 0;
 
+    solver->trace_phase1_pivot_failures = 0;
+    solver->trace_phase1_fail_small_pivot = 0;
+    solver->trace_phase1_fail_invalid_column = 0;
+    solver->trace_phase1_fail_refactor_forced = 0;
+    solver->trace_phase1_fail_refactor_after_update = 0;
+    solver->trace_phase1_no_entering_events = 0;
+    solver->trace_phase1_first_fail_iter = -1;
+    solver->trace_phase1_last_fail_iter = -1;
+    solver->trace_phase1_signature = solver->trace_phase1 ? 1469598103934665603ULL : 0ULL;
+
     if (solver->verbose) printf("[simplex_solve] Starting...\n");
 
     /* Finalize model if needed (required before scaling) */
@@ -3326,6 +3493,14 @@ int simplex_solve(SimplexSolver *solver) {
     /* Only use steepest edge weights for strategies that need them (1=SE, 2=Devex) */
     tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2);
     tab->pricing_strategy = solver->pricing_strategy;
+    tab->trace_phase1_enabled = solver->trace_phase1;
+    tab->trace_phase1_iter = -1;
+    tab->trace_last_entering = -1;
+    tab->trace_last_leaving_pos = -1;
+    tab->trace_last_theta = 0.0;
+    tab->trace_last_pivot = 0.0;
+    tab->trace_last_dir_inf = 0.0;
+    tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_NONE;
 
     if (solver->verbose) {
         printf("[simplex_solve] Tableau: n=%d (extended), m=%d\n", tab->n, tab->m);
