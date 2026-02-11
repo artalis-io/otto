@@ -14,6 +14,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
 | **Presolve** | ✅ Phase 1 | Singleton, redundant rows, bound tightening |
 | **NETLIB Suite** | 67% Pass | 8/12 problems (see below) |
+| **REST API** | ✅ Complete | HTTP + WASM, LP/MPS input (§5) |
 | **MIP Infrastructure** | ⏳ Planned | Branching priorities, cut callbacks, Benders (§6) |
 
 ---
@@ -180,10 +181,12 @@ For deep-dive documentation, see [docs/internals/](../internals/):
 
 ---
 
-## Chapter 5: REST API & WASM Demo
+## Chapter 5: REST API & WASM Demo ✅
 
 Transport-agnostic API for solving small LP/MIP problems, primarily for WASM demos
 on the documentation site. Follows patterns from Carta, Velo, Locus.
+
+**Status: Complete (Feb 2026)**
 
 ### 5.1 Scope
 
@@ -257,19 +260,6 @@ tables >= 0;
 ```
 
 Supports: `min`/`max` objective, `<=`/`>=`/`=` constraints, named constraints, bounds, comments.
-
-### 5.5 Implementation TODOs
-
-| Phase | Duration | Deliverables |
-|-------|----------|--------------|
-| 1. Handler | 2-3 days | `ralph_api.h`, `ralph_api.c`, `ralph_parse_lp.c` |
-| 2. HTTP Server | 1 day | `ralph/api/src/main.c`, Makefile |
-| 3. WASM | 1 day | `ralph/wasm/ralph_wasm_api.c`, Makefile |
-| 4. JS Handler | 1 day | `site/js/handlers/ralph.js`, api-config.json |
-| 5. Demo | 0.5 day | Example LP, documentation |
-| 6. Testing | 1 day | Integration, api-docs, test script |
-
-**Total: ~6-7 days**
 
 ---
 
@@ -693,6 +683,6 @@ and provides better performance for FuelWise/HoSE problem classes.
 |------|---------|
 | `ralph/CLAUDE.md` | Development guide, API reference |
 | `ralph/include/ralph.h` | Public API |
-| `ralph/include/ralph_api.h` | REST API (planned) |
+| `ralph/include/ralph_api.h` | REST API |
 | `ralph/include/lap.h` | LAP solver API |
 | `ralph/include/netflow.h` | Network flow API |
