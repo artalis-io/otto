@@ -367,6 +367,7 @@ int simplex_solve(SimplexSolver *solver);
 /* Dual simplex */
 int dual_simplex_solve(SimplexSolver *solver);
 int dual_simplex_solve_from_scratch(SimplexSolver *solver);
+int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters);
 
 /* Pricing strategies */
 int pricing_dantzig(SimplexTableau *tableau, int *entering);

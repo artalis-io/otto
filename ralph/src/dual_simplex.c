@@ -216,7 +216,34 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
 
 static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, double theta) {
     (void)theta;  /* Step size already computed in caller */
+    if (!tab || entering < 0 || entering >= tab->n || leaving < 0 || leaving >= tab->m) {
+        return -1;
+    }
+
     int leaving_var = tab->basis[leaving];
+    double saved_obj = tab->obj_value;
+
+    /* Keep pivot failures non-destructive: restore full basis/state on error. */
+    double *x_backup = (double*)malloc((size_t)tab->n * sizeof(double));
+    double *rc_backup = (double*)malloc((size_t)tab->n * sizeof(double));
+    int *basis_backup = (int*)malloc((size_t)tab->m * sizeof(int));
+    int *basis_pos_backup = (int*)malloc((size_t)tab->n * sizeof(int));
+    VarStatus *status_backup = (VarStatus*)malloc((size_t)tab->n * sizeof(VarStatus));
+
+    if (!x_backup || !rc_backup || !basis_backup || !basis_pos_backup || !status_backup) {
+        free(x_backup);
+        free(rc_backup);
+        free(basis_backup);
+        free(basis_pos_backup);
+        free(status_backup);
+        return -1;
+    }
+
+    memcpy(x_backup, tab->x, (size_t)tab->n * sizeof(double));
+    memcpy(rc_backup, tab->rc, (size_t)tab->n * sizeof(double));
+    memcpy(basis_backup, tab->basis, (size_t)tab->m * sizeof(int));
+    memcpy(basis_pos_backup, tab->basis_pos, (size_t)tab->n * sizeof(int));
+    memcpy(status_backup, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
 
     /* Compute entering column in basis representation using sparse solve */
     int col_nnz;
@@ -226,6 +253,9 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
     lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work3);  /* d = B^{-1} * a_entering */
 
     double pivot = tab->work3[leaving];
+    if (!isfinite(pivot) || fabs(pivot) < RALPH_PIVOT_TOL) {
+        goto pivot_fail_rollback;
+    }
 
     /* Save rc_entering BEFORE updating reduced costs (needed for bound selection) */
     double rc_entering_orig = tab->rc[entering];
@@ -309,10 +339,17 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
     (void)rc_entering_orig;  /* Suppress unused warning */
 
     /* Update LU factorization */
-    sparse_get_column(tab->A_ext, entering, tab->work1);
-    if (lu_update(tab->lu, leaving, tab->work1) != 0) {
+    const int force_refactor = fabs(pivot) < 1e-4;
+    if (force_refactor) {
         if (tableau_refactorize(tab) != 0) {
-            return -1;
+            goto pivot_fail_rollback;
+        }
+    } else {
+        sparse_get_column(tab->A_ext, entering, tab->work1);
+        if (lu_update(tab->lu, leaving, tab->work1) != 0) {
+            if (tableau_refactorize(tab) != 0) {
+                goto pivot_fail_rollback;
+            }
         }
     }
 
@@ -322,7 +359,27 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
         tab->obj_value += tab->c_ext[j] * tab->x[j];
     }
 
+    free(x_backup);
+    free(rc_backup);
+    free(basis_backup);
+    free(basis_pos_backup);
+    free(status_backup);
     return 0;
+
+pivot_fail_rollback:
+    memcpy(tab->x, x_backup, (size_t)tab->n * sizeof(double));
+    memcpy(tab->rc, rc_backup, (size_t)tab->n * sizeof(double));
+    memcpy(tab->basis, basis_backup, (size_t)tab->m * sizeof(int));
+    memcpy(tab->basis_pos, basis_pos_backup, (size_t)tab->n * sizeof(int));
+    memcpy(tab->var_status, status_backup, (size_t)tab->n * sizeof(VarStatus));
+    tab->obj_value = saved_obj;
+
+    free(x_backup);
+    free(rc_backup);
+    free(basis_backup);
+    free(basis_pos_backup);
+    free(status_backup);
+    return -1;
 }
 
 /* ============================================================================
@@ -629,6 +686,283 @@ int dual_simplex_solve(SimplexSolver *solver) {
     remove_bound_perturbation(tab);
     solver->status = RALPH_STATUS_ITERATION_LIMIT;
     return -1;
+}
+
+/*
+ * Fallback ratio test used by Phase-1 rescue when strict dual-ratio selection
+ * fails for a leaving row. This mirrors the robust row-wise dual-pivot logic
+ * used in primal Phase-1 recovery and does not require global dual feasibility.
+ */
+static int phase1_rescue_ratio_test(SimplexTableau *tab, int leaving,
+                                    int *entering, double *theta) {
+    if (!tab || !entering || !theta || leaving < 0 || leaving >= tab->m) {
+        return -1;
+    }
+
+    int leaving_var = tab->basis[leaving];
+    double x_leave = tab->x[leaving_var];
+    int dir;
+
+    if (x_leave < tab->lb_ext[leaving_var] - RALPH_FEAS_TOL) {
+        dir = 1;
+    } else if (x_leave > tab->ub_ext[leaving_var] + RALPH_FEAS_TOL) {
+        dir = -1;
+    } else {
+        return -1;
+    }
+
+    vec_set_zero(tab->work1, tab->m);
+    tab->work1[leaving] = 1.0;
+    lu_solve_transpose(tab->lu, tab->work1, tab->work2);
+
+    *entering = -1;
+    *theta = RALPH_INFINITY;
+
+    for (int j = 0; j < tab->n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC || tab->var_status[j] == RALPH_FIXED) {
+            continue;
+        }
+
+        double alpha = sparse_dot_column(tab->A_ext, j, tab->work2);
+        if (!isfinite(alpha) || fabs(alpha) < RALPH_PIVOT_TOL) {
+            continue;
+        }
+
+        double rc = tab->rc[j];
+        if (!isfinite(rc)) {
+            continue;
+        }
+
+        double ratio = RALPH_INFINITY;
+
+        if (dir > 0 && alpha > RALPH_PIVOT_TOL &&
+            tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+            ratio = -rc / alpha;
+        } else if (dir > 0 && alpha < -RALPH_PIVOT_TOL &&
+                   tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+            ratio = rc / (-alpha);
+        } else if (dir < 0 && alpha < -RALPH_PIVOT_TOL &&
+                   tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+            ratio = -rc / (-alpha);
+        } else if (dir < 0 && alpha > RALPH_PIVOT_TOL &&
+                   tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+            ratio = rc / alpha;
+        }
+
+        if (!isfinite(ratio)) {
+            continue;
+        }
+
+        if (ratio >= -RALPH_OPT_TOL && ratio < *theta) {
+            *theta = ratio;
+            *entering = j;
+        }
+    }
+
+    return (*entering >= 0) ? 0 : -1;
+}
+
+static int phase1_rescue_has_bad_numerics(const SimplexTableau *tab) {
+    if (!tab) return 1;
+
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        if (!isfinite(tab->x[j])) {
+            return 1;
+        }
+    }
+
+    for (int j = 0; j < tab->n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (!isfinite(tab->rc[j])) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * Phase-1 rescue using dual simplex pivots on an existing tableau.
+ *
+ * This is intentionally limited and self-contained:
+ * - no fallback to primal simplex (avoids recursion from simplex_phase1)
+ * - no status mutation (caller decides terminal behavior)
+ * - returns 0 only when primal feasibility is restored for current tableau
+ */
+int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
+    if (!solver || !solver->tableau) return -1;
+
+    SimplexTableau *tab = solver->tableau;
+    if (tab->phase != 1) return -1;
+
+    if (max_iters <= 0) {
+        max_iters = 3 * tab->m;
+    }
+
+    /* Start from a clean factorization when possible, but do not hard-fail
+     * rescue on a single refactorization error. */
+    if (tableau_refactorize(tab) != 0 && solver->verbose >= 2) {
+        fprintf(stderr, "[dual_phase1_rescue] Initial refactorization failed, trying in-place recovery pivots\n");
+    }
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+
+    /* Try to improve dual feasibility via bound flips first. */
+    int changes = make_dual_feasible(tab, solver->model ? solver->model->obj_sense : 1);
+    if (changes > 0) {
+        tableau_compute_solution(tab);
+        tableau_compute_reduced_costs(tab);
+    }
+
+    unsigned char *tried_rows = (unsigned char*)calloc((size_t)tab->m, sizeof(unsigned char));
+    if (!tried_rows) {
+        return 1;
+    }
+
+    const int MAX_REFACTOR_FAILURES = 12;
+    int refactor_failures = 0;
+
+    for (int iter = 0; iter < max_iters; iter++) {
+        tableau_compute_solution(tab);
+
+        if (phase1_rescue_has_bad_numerics(tab)) {
+            if (solver->verbose >= 2) {
+                fprintf(stderr, "[dual_phase1_rescue] Non-finite x/rc at iter %d, trying refactorization repair\n", iter);
+            }
+            if (tableau_refactorize(tab) == 0) {
+                refactor_failures = 0;
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                continue;
+            }
+            refactor_failures++;
+            if (refactor_failures >= MAX_REFACTOR_FAILURES) {
+                if (solver->verbose >= 2) {
+                    fprintf(stderr, "[dual_phase1_rescue] Aborting after repeated non-finite recovery failures\n");
+                }
+                free(tried_rows);
+                return 1;
+            }
+            continue;
+        }
+
+        int has_infeasible = 0;
+        for (int k = 0; k < tab->m; k++) {
+            int j = tab->basis[k];
+            if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL ||
+                tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
+                has_infeasible = 1;
+                break;
+            }
+        }
+        if (!has_infeasible) {
+            if (solver->verbose >= 2) {
+                fprintf(stderr, "[dual_phase1_rescue] Primal feasibility restored after %d iterations\n", iter);
+            }
+            free(tried_rows);
+            return 0;
+        }
+
+        int leaving = -1;
+        int entering = -1;
+        double theta = RALPH_INFINITY;
+        memset(tried_rows, 0, (size_t)tab->m * sizeof(unsigned char));
+
+        /* Try multiple infeasible leaving rows to avoid getting stuck on a
+         * single row with no stable entering candidate. */
+        for (int attempt = 0; attempt < tab->m; attempt++) {
+            int candidate = -1;
+            double max_infeas = RALPH_FEAS_TOL;
+
+            for (int k = 0; k < tab->m; k++) {
+                if (tried_rows[k]) continue;
+
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL) {
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                } else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                }
+
+                if (infeas > max_infeas) {
+                    max_infeas = infeas;
+                    candidate = k;
+                }
+            }
+
+            if (candidate < 0) {
+                break;
+            }
+
+            tried_rows[candidate] = 1;
+
+            if (dual_ratio_test(tab, candidate, &entering, &theta) == 0 && entering >= 0) {
+                leaving = candidate;
+                break;
+            }
+
+            if (phase1_rescue_ratio_test(tab, candidate, &entering, &theta) == 0 && entering >= 0) {
+                leaving = candidate;
+                break;
+            }
+        }
+
+        if (leaving < 0 || entering < 0) {
+            /* No valid repair pivot found for remaining infeasible rows. */
+            if (solver->verbose >= 2) {
+                fprintf(stderr, "[dual_phase1_rescue] No valid entering column for infeasible rows at iter %d\n", iter);
+            }
+            free(tried_rows);
+            return 1;
+        }
+
+        if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+            if (tableau_refactorize(tab) != 0) {
+                refactor_failures++;
+                if (solver->verbose >= 2) {
+                    fprintf(stderr, "[dual_phase1_rescue] Pivot/refactor recovery failed at iter %d (count=%d)\n",
+                            iter, refactor_failures);
+                }
+                if (refactor_failures >= MAX_REFACTOR_FAILURES) {
+                    free(tried_rows);
+                    return 1;
+                }
+            } else {
+                refactor_failures = 0;
+            }
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+            continue;
+        }
+
+        /* Keep numerics under control during rescue. */
+        int need_refactor = lu_needs_refactorization(tab->lu) ||
+                           (iter > 0 && iter % 25 == 0);
+        if (need_refactor) {
+            if (tableau_refactorize(tab) != 0) {
+                refactor_failures++;
+                if (solver->verbose >= 2) {
+                    fprintf(stderr, "[dual_phase1_rescue] Periodic refactor failed at iter %d (count=%d)\n",
+                            iter, refactor_failures);
+                }
+                if (refactor_failures >= MAX_REFACTOR_FAILURES) {
+                    free(tried_rows);
+                    return 1;
+                }
+            } else {
+                refactor_failures = 0;
+            }
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        } else if (iter > 0 && iter % 10 == 0) {
+            tableau_compute_reduced_costs(tab);
+        }
+    }
+
+    free(tried_rows);
+    return 1;
 }
 
 /* ============================================================================

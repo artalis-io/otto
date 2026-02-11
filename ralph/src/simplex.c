@@ -879,13 +879,16 @@ int tableau_refactorize(SimplexTableau *tab) {
     tab->lu->redundant_rows = tab->redundant_rows;
     tab->lu->num_redundant = tab->num_redundant;
 
-    /* For two-phase problems with many equalities, allow limited regularization
-     * to handle near-singular bases. Currently DISABLED because:
-     * - Regularization with small diagonal (1e-6) causes NaN via 1/1e-6 = 1e6 multipliers
-     * - Regularization with large diagonal (1.0) causes UNBOUNDED (constraint structure lost)
-     * TODO: Implement threshold pivoting in LU to avoid near-singular bases entirely */
-    tab->lu->allow_regularization = 0;
-    tab->lu->max_regularizations = 0;
+    /* Allow limited regularization during Phase 1 only.
+     * This helps two-phase recovery on near-singular artificial bases.
+     * Keep disabled in Phase 2 to preserve structural constraints. */
+    if (tab->phase == 1 && tab->use_two_phase) {
+        tab->lu->allow_regularization = 1;
+        tab->lu->max_regularizations = 8;
+    } else {
+        tab->lu->allow_regularization = 0;
+        tab->lu->max_regularizations = 0;
+    }
     tab->lu->num_regularized = 0;
 
     int status = lu_factorize(tab->lu, B);
@@ -1618,6 +1621,100 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
 }
 
+/* Fallback ratio test for already-computed direction (tab->work2) while
+ * excluding a specific leaving position. Used to avoid repeated failing pivots.
+ */
+static int ratio_test_harris_excluding_current(SimplexTableau *tab, int entering,
+                                               int exclude_pos, int *leaving, double *theta) {
+    if (!tab || !leaving || !theta) return -1;
+
+    double dir = 1.0;
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        dir = -1.0;
+    }
+
+    double max_abs_dk = 0.0;
+    for (int k = 0; k < tab->m; k++) {
+        if (k == exclude_pos) continue;
+        double abs_dk = fabs(tab->work2[k] * dir);
+        if (abs_dk > max_abs_dk) {
+            max_abs_dk = abs_dk;
+        }
+    }
+    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+
+    double theta_max = RALPH_INFINITY;
+    double best_pivot = 0.0;
+    int best_is_degen = 1;
+    *leaving = -1;
+    *theta = RALPH_INFINITY;
+
+    double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+    if (enter_range < RALPH_INFINITY / 2) {
+        theta_max = enter_range;
+    }
+
+    for (int k = 0; k < tab->m; k++) {
+        if (k == exclude_pos) continue;
+
+        double dk = tab->work2[k] * dir;
+        if (fabs(dk) < pivot_tol) continue;
+
+        int j = tab->basis[k];
+        double xj = tab->x[j];
+
+        double ratio_harris;
+        double ratio_exact;
+        if (dk > 0) {
+            double slack = xj - tab->lb_ext[j];
+            ratio_harris = (slack + RALPH_FEAS_TOL) / dk;
+            ratio_exact = slack / dk;
+        } else {
+            double slack = tab->ub_ext[j] - xj;
+            ratio_harris = (slack + RALPH_FEAS_TOL) / (-dk);
+            ratio_exact = slack / (-dk);
+        }
+
+        if (ratio_harris < theta_max) {
+            theta_max = ratio_harris;
+        }
+
+        if (ratio_exact <= theta_max + RALPH_FEAS_TOL) {
+            int is_degen = (ratio_exact < 1e-8);
+            double pivot_size = fabs(dk);
+
+            int select = 0;
+            if (*leaving < 0) {
+                select = 1;
+            } else if (!is_degen && best_is_degen) {
+                select = 1;
+            } else if (is_degen == best_is_degen && pivot_size > best_pivot * 1.1) {
+                select = 1;
+            }
+
+            if (select) {
+                best_pivot = pivot_size;
+                best_is_degen = is_degen;
+                *leaving = k;
+                *theta = ratio_exact > 0 ? ratio_exact : 0;
+            }
+        }
+    }
+
+    if (theta_max >= RALPH_INFINITY / 2) {
+        return -1;
+    }
+
+    if (enter_range <= theta_max && enter_range < RALPH_INFINITY / 2) {
+        if (*leaving < 0 || enter_range < *theta) {
+            *theta = enter_range;
+            *leaving = -2;
+        }
+    }
+
+    return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
+}
+
 /* ============================================================================
  * Simplex Iteration
  * ============================================================================ */
@@ -1708,17 +1805,29 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         lu_solve_transpose(tab->lu, tab->work2, tau_helper);
     }
 
-    /* Update LU factorization */
+    /* Update LU factorization.
+     * For very small pivots, skip eta updates and refactorize immediately to
+     * avoid accumulating unstable updates on near-singular bases. */
+    const int force_refactor = fabs(pivot) < 1e-4;
     if (!tab->A_ext || entering < 0 || entering >= tab->A_ext->ncols) {
         goto pivot_fail_rollback;  /* Invalid state */
     }
-    sparse_get_column(tab->A_ext, entering, tab->work1);
-    if (lu_update(tab->lu, leaving_pos, tab->work1) != 0) {
-        /* Update failed, try refactorize */
+
+    if (force_refactor) {
         if (tableau_refactorize(tab) != 0) {
-            /* Refactorization failed, try basis repair */
             if (repair_singular_basis(tab) != 0) {
                 goto pivot_fail_rollback;  /* All recovery attempts failed */
+            }
+        }
+    } else {
+        sparse_get_column(tab->A_ext, entering, tab->work1);
+        if (lu_update(tab->lu, leaving_pos, tab->work1) != 0) {
+            /* Update failed, try refactorize */
+            if (tableau_refactorize(tab) != 0) {
+                /* Refactorization failed, try basis repair */
+                if (repair_singular_basis(tab) != 0) {
+                    goto pivot_fail_rollback;  /* All recovery attempts failed */
+                }
             }
         }
     }
@@ -1983,6 +2092,36 @@ static int is_artificial_var(const SimplexTableau *tab, int var_idx) {
         }
     }
     return 0;
+}
+
+/* Mark basic rows backed by artificial variables as redundant hints for LU.
+ * If only_infeasible is non-zero, only rows with bound-infeasible basic
+ * artificials are marked. */
+static int mark_basic_artificial_rows_redundant(SimplexTableau *tab, int only_infeasible) {
+    if (!tab || !tab->redundant_rows) {
+        return 0;
+    }
+
+    int marked = 0;
+    for (int k = 0; k < tab->m; k++) {
+        if (tab->redundant_rows[k]) continue;
+
+        int bj = tab->basis[k];
+        if (!is_artificial_var(tab, bj)) continue;
+
+        if (only_infeasible) {
+            if (tab->x[bj] >= tab->lb_ext[bj] - RALPH_FEAS_TOL &&
+                tab->x[bj] <= tab->ub_ext[bj] + RALPH_FEAS_TOL) {
+                continue;
+            }
+        }
+
+        tab->redundant_rows[k] = 1;
+        tab->num_redundant++;
+        marked++;
+    }
+
+    return marked;
 }
 
 static void primal_apply_perturbation(SimplexTableau *tab) {
@@ -2359,6 +2498,27 @@ static int simplex_phase1(SimplexSolver *solver) {
             return -1;
         }
 
+        /* If we are retrying the same failing entering/leaving pair, force an
+         * alternate leaving choice from the current direction to escape loops. */
+        if (fail_repeat_count > 0 &&
+            entering == fail_entering &&
+            leaving == fail_leaving_pos &&
+            leaving >= 0) {
+            int alt_leaving = -1;
+            double alt_theta = RALPH_INFINITY;
+            if (ratio_test_harris_excluding_current(tab, entering, leaving,
+                                                    &alt_leaving, &alt_theta) == 0 &&
+                alt_leaving >= 0) {
+                if (solver->verbose >= 2) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Using alternate leaving row %d instead of repeatedly failing row %d\n",
+                            alt_leaving, leaving);
+                }
+                leaving = alt_leaving;
+                theta = alt_theta;
+            }
+        }
+
         /* Track degeneracy and apply anti-cycling measures */
         if (theta < RALPH_FEAS_TOL) {
             degenerate_count++;
@@ -2392,6 +2552,27 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
             }
 
+            /* First recovery attempt: choose a different leaving row for the
+             * same entering column to avoid a numerically singular pivot pair. */
+            if (leaving >= 0) {
+                int alt_leaving = -1;
+                double alt_theta = RALPH_INFINITY;
+                if (ratio_test_harris_excluding_current(tab, entering, leaving,
+                                                        &alt_leaving, &alt_theta) == 0 &&
+                    alt_leaving >= 0 &&
+                    alt_leaving != leaving) {
+                    if (solver->verbose >= 2) {
+                        fprintf(stderr,
+                                "[simplex_phase1] Retrying with alternate leaving row %d (failed row %d)\n",
+                                alt_leaving, leaving);
+                    }
+                    if (simplex_pivot(tab, entering, alt_leaving, alt_theta) == 0) {
+                        fail_repeat_count = 0;
+                        continue;
+                    }
+                }
+            }
+
             if (fail_repeat_count >= FAIL_REPEAT_LIMIT) {
                 if (solver->verbose) {
                     fprintf(stderr,
@@ -2416,6 +2597,60 @@ static int simplex_phase1(SimplexSolver *solver) {
                 tableau_compute_reduced_costs(tab);
                 continue;
             }
+
+            /* Last structural recovery in Phase 1: if the problematic leaving
+             * row is driven by an artificial basic variable, treat the row as
+             * redundant and allow LU regularization to proceed. */
+            if (leaving >= 0 && leaving < tab->m) {
+                int leave_var = tab->basis[leaving];
+                if (is_artificial_var(tab, leave_var) &&
+                    tab->redundant_rows &&
+                    !tab->redundant_rows[leaving]) {
+                    tab->redundant_rows[leaving] = 1;
+                    tab->num_redundant++;
+                    if (solver->verbose >= 2) {
+                        fprintf(stderr,
+                                "[simplex_phase1] Marking row %d as redundant due to stuck artificial %d\n",
+                                leaving, leave_var);
+                    }
+                    if (tableau_refactorize(tab) == 0) {
+                        tableau_compute_solution(tab);
+                        tableau_compute_reduced_costs(tab);
+                        continue;
+                    }
+                }
+            }
+
+            /* Broader recovery for heavily degenerate Phase 1 states:
+             * mark all currently-basic artificial rows as potentially redundant
+             * and retry a full refactorization. */
+            int marked = mark_basic_artificial_rows_redundant(tab, 0);
+            if (marked > 0) {
+                if (solver->verbose >= 2) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Marked %d additional artificial rows as redundant for recovery\n",
+                            marked);
+                }
+                if (tableau_refactorize(tab) == 0) {
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+            }
+
+            /* Final fallback for stuck Phase 1 states: try a bounded dual-simplex
+             * rescue on the current tableau (no recursion to primal simplex). */
+            int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * 6);
+            if (rescue_status == 0) {
+                if (solver->verbose) {
+                    fprintf(stderr, "[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
+                }
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                fail_repeat_count = 0;
+                continue;
+            }
+
             if (solver->verbose) {
                 fprintf(stderr, "[simplex_phase1] ERROR: all pivot recovery attempts failed at iter %d\n", iter);
             }
@@ -2428,15 +2663,66 @@ static int simplex_phase1(SimplexSolver *solver) {
         fail_repeat_count = 0;
 
         /* Periodic refactorization */
-        int needs_refactor = lu_needs_refactorization(tab->lu);
-        if (!needs_refactor && refactor_interval > 0 && iter > 0 && iter % refactor_interval == 0) {
-            needs_refactor = 1;
-        }
+        int lu_refactor_needed = lu_needs_refactorization(tab->lu);
+        int periodic_refactor = (!lu_refactor_needed &&
+                                 refactor_interval > 0 &&
+                                 iter > 0 &&
+                                 iter % refactor_interval == 0);
+        int needs_refactor = lu_refactor_needed || periodic_refactor;
 
         if (needs_refactor) {
             if (tableau_refactorize(tab) != 0) {
+                if (periodic_refactor) {
+                    if (solver->verbose) {
+                        fprintf(stderr,
+                                "[simplex_phase1] Periodic refactorization failed at iter %d, continuing with existing LU\n",
+                                iter);
+                    }
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] ERROR: refactorization failed at iter %d\n", iter);
+                    fprintf(stderr, "[simplex_phase1] Refactorization failed at iter %d, trying dual rescue\n", iter);
+                }
+
+                int marked = mark_basic_artificial_rows_redundant(tab, 1);
+                if (marked > 0) {
+                    if (solver->verbose >= 2) {
+                        fprintf(stderr,
+                                "[simplex_phase1] Marked %d infeasible artificial rows as redundant after refactorization failure\n",
+                                marked);
+                    }
+                    if (tableau_refactorize(tab) == 0) {
+                        tableau_compute_solution(tab);
+                        tableau_compute_reduced_costs(tab);
+                        continue;
+                    }
+                }
+
+                int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * 6);
+                if (rescue_status == 0) {
+                    if (solver->verbose) {
+                        fprintf(stderr, "[simplex_phase1] Dual rescue recovered after refactorization failure at iter %d\n", iter);
+                    }
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    fail_repeat_count = 0;
+                    continue;
+                }
+
+                if (repair_singular_basis(tab) == 0) {
+                    if (solver->verbose) {
+                        fprintf(stderr, "[simplex_phase1] Basis repair recovered after refactorization failure at iter %d\n", iter);
+                    }
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+
+                if (solver->verbose) {
+                    fprintf(stderr, "[simplex_phase1] ERROR: all refactorization recoveries failed at iter %d\n", iter);
                 }
                 primal_remove_perturbation(tab);
                 /* Treat unrecoverable Phase 1 refactorization failure as numerical breakdown. */
