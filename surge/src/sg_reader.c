@@ -17,6 +17,18 @@ typedef struct {
     int service_time;
 } SGSolomonRow;
 
+typedef struct {
+    int id;
+    double x;
+    double y;
+    double demand;
+    int ready_time;
+    int due_time;
+    int service_time;
+    int pickup_ref;
+    int delivery_ref;
+} SGLiLimRow;
+
 static const char *sg_skip_ws(const char *s) {
     while (s && *s && isspace((unsigned char)*s)) {
         s++;
@@ -70,6 +82,71 @@ static int sg_parse_customer_line(const char *line, SGSolomonRow *row) {
 
     *row = parsed;
     return 1;
+}
+
+static int sg_parse_li_lim_vehicle_line(const char *line, int *vehicle_count, double *capacity) {
+    int count = 0;
+    double cap = 0.0;
+    double speed = 0.0;
+    int matched = 0;
+
+    if (!line || !vehicle_count || !capacity) {
+        return 0;
+    }
+    matched = sscanf(line, "%d %lf %lf", &count, &cap, &speed);
+    if ((matched == 2 || matched == 3) && count > 0 && isfinite(cap) && cap > 0.0) {
+        *vehicle_count = count;
+        *capacity = cap;
+        return 1;
+    }
+    return 0;
+}
+
+static int sg_parse_li_lim_row(const char *line, SGLiLimRow *row) {
+    int matched;
+    SGLiLimRow parsed;
+
+    if (!line || !row) {
+        return 0;
+    }
+
+    memset(&parsed, 0, sizeof(parsed));
+    matched = sscanf(line, "%d %lf %lf %lf %d %d %d %d %d",
+                     &parsed.id, &parsed.x, &parsed.y, &parsed.demand,
+                     &parsed.ready_time, &parsed.due_time, &parsed.service_time,
+                     &parsed.pickup_ref, &parsed.delivery_ref);
+    if (matched != 9) {
+        return 0;
+    }
+    if (!isfinite(parsed.x) || !isfinite(parsed.y) || !isfinite(parsed.demand)) {
+        return 0;
+    }
+    if (parsed.due_time < parsed.ready_time || parsed.service_time < 0) {
+        return 0;
+    }
+    if (parsed.pickup_ref < 0 || parsed.delivery_ref < 0) {
+        return 0;
+    }
+
+    *row = parsed;
+    return 1;
+}
+
+static int sg_find_li_lim_row_index(const SGLiLimRow *rows, size_t row_count,
+                                    int node_id, size_t *idx_out) {
+    size_t i;
+
+    if (!rows || !idx_out) {
+        return 0;
+    }
+
+    for (i = 0; i < row_count; i++) {
+        if (rows[i].id == node_id) {
+            *idx_out = i;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 SGStatus sg_load_solomon_vrptw(SGContext *ctx, const char *file_path) {
@@ -262,6 +339,281 @@ done:
         fclose(fp);
         fp = NULL;
     }
+    free(rows);
+    return status;
+}
+
+SGStatus sg_load_li_lim_pdptw(SGContext *ctx, const char *file_path) {
+    FILE *fp = NULL;
+    SGStatus status = SG_STATUS_OK;
+    SGLiLimRow *rows = NULL;
+    uint8_t *consumed = NULL;
+    size_t row_count = 0;
+    size_t row_capacity = 0;
+    int vehicle_count = 0;
+    double vehicle_capacity = 0.0;
+    char line[512];
+    size_t i;
+    size_t depot_idx = SIZE_MAX;
+    SGDemandSignConvention demand_convention;
+
+    if (!ctx || !file_path) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (sg_get_request_count(ctx) != 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    status = sg_set_dimension_count(ctx, 1);
+    if (status != SG_STATUS_OK) {
+        return status;
+    }
+
+    fp = fopen(file_path, "r");
+    if (!fp) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        const char *trim = sg_skip_ws(line);
+
+        if (!trim || *trim == '\0') {
+            continue;
+        }
+        if (vehicle_count <= 0 || vehicle_capacity <= 0.0) {
+            if (sg_parse_li_lim_vehicle_line(trim, &vehicle_count, &vehicle_capacity)) {
+                continue;
+            }
+        }
+
+        {
+            SGLiLimRow row;
+            if (sg_parse_li_lim_row(trim, &row)) {
+                SGLiLimRow *new_rows;
+                if (row_count == row_capacity) {
+                    size_t new_capacity = row_capacity > 0 ? row_capacity * 2U : 128U;
+                    if (new_capacity < row_capacity ||
+                        new_capacity > SIZE_MAX / sizeof(*rows)) {
+                        status = SG_STATUS_OUT_OF_MEMORY;
+                        goto done;
+                    }
+                    new_rows = (SGLiLimRow *)realloc(rows, new_capacity * sizeof(*rows));
+                    if (!new_rows) {
+                        status = SG_STATUS_OUT_OF_MEMORY;
+                        goto done;
+                    }
+                    rows = new_rows;
+                    row_capacity = new_capacity;
+                }
+                rows[row_count++] = row;
+            }
+        }
+    }
+
+    if (vehicle_count <= 0 || vehicle_capacity <= 0.0 || row_count < 3) {
+        status = SG_STATUS_INVALID_ARG;
+        goto done;
+    }
+
+    for (i = 0; i < row_count; i++) {
+        if (rows[i].id == 0) {
+            depot_idx = i;
+            break;
+        }
+    }
+    if (depot_idx == SIZE_MAX) {
+        depot_idx = 0;
+    }
+
+    {
+        const SGLiLimRow *depot = &rows[depot_idx];
+        uint32_t depot_id = sg_add_depot(ctx);
+        double cap[1];
+
+        if (depot_id == UINT32_MAX) {
+            status = SG_STATUS_OUT_OF_MEMORY;
+            goto done;
+        }
+        status = sg_depot_set_location(ctx, depot_id, depot->x, depot->y);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+        status = sg_depot_set_time_window(ctx, depot_id, depot->ready_time, depot->due_time);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+
+        cap[0] = vehicle_capacity;
+        for (i = 0; i < (size_t)vehicle_count; i++) {
+            uint32_t vehicle_id = sg_add_vehicle(ctx);
+            if (vehicle_id == UINT32_MAX) {
+                status = SG_STATUS_OUT_OF_MEMORY;
+                goto done;
+            }
+            status = sg_vehicle_set_depots(ctx, vehicle_id, depot_id, depot_id);
+            if (status != SG_STATUS_OK) {
+                goto done;
+            }
+            status = sg_vehicle_set_shift_time_window(ctx, vehicle_id,
+                                                      depot->ready_time, depot->due_time);
+            if (status != SG_STATUS_OK) {
+                goto done;
+            }
+            status = sg_vehicle_set_capacity(ctx, vehicle_id, cap, 1);
+            if (status != SG_STATUS_OK) {
+                goto done;
+            }
+        }
+    }
+
+    consumed = (uint8_t *)calloc(row_count, sizeof(uint8_t));
+    if (!consumed) {
+        status = SG_STATUS_OUT_OF_MEMORY;
+        goto done;
+    }
+    consumed[depot_idx] = 1;
+
+    demand_convention = sg_get_demand_sign_convention(ctx);
+    for (i = 0; i < row_count; i++) {
+        const SGLiLimRow *pickup_row;
+        const SGLiLimRow *delivery_row;
+        size_t delivery_idx;
+        uint32_t request_id;
+        uint32_t pickup_task_id;
+        uint32_t delivery_task_id;
+        int32_t hint_early;
+        int32_t hint_late;
+        double quantity;
+        double pickup_demand[1];
+        double delivery_demand[1];
+
+        if (i == depot_idx || consumed[i]) {
+            continue;
+        }
+        pickup_row = &rows[i];
+
+        if (pickup_row->pickup_ref != 0 && pickup_row->delivery_ref == 0) {
+            /* Delivery nodes are attached when their pickup row is processed. */
+            continue;
+        }
+        if (pickup_row->pickup_ref != 0 || pickup_row->delivery_ref <= 0) {
+            status = SG_STATUS_INVALID_ARG;
+            goto done;
+        }
+        if (!sg_find_li_lim_row_index(rows, row_count, pickup_row->delivery_ref, &delivery_idx)) {
+            status = SG_STATUS_INVALID_ARG;
+            goto done;
+        }
+        if (delivery_idx == i || delivery_idx == depot_idx || consumed[delivery_idx]) {
+            status = SG_STATUS_INVALID_ARG;
+            goto done;
+        }
+        delivery_row = &rows[delivery_idx];
+        if (delivery_row->pickup_ref != pickup_row->id || delivery_row->delivery_ref != 0) {
+            status = SG_STATUS_INVALID_ARG;
+            goto done;
+        }
+
+        quantity = fabs(pickup_row->demand);
+        if (quantity <= 1e-9) {
+            quantity = fabs(delivery_row->demand);
+        }
+        if (!isfinite(quantity) || quantity <= 1e-9) {
+            status = SG_STATUS_INVALID_ARG;
+            goto done;
+        }
+
+        request_id = sg_add_request(ctx);
+        if (request_id == UINT32_MAX) {
+            status = SG_STATUS_OUT_OF_MEMORY;
+            goto done;
+        }
+
+        pickup_task_id = sg_add_task(ctx, SG_TASK_PICKUP);
+        delivery_task_id = sg_add_task(ctx, SG_TASK_DELIVERY);
+        if (pickup_task_id == UINT32_MAX || delivery_task_id == UINT32_MAX) {
+            status = SG_STATUS_OUT_OF_MEMORY;
+            goto done;
+        }
+
+        status = sg_task_set_location(ctx, pickup_task_id, pickup_row->x, pickup_row->y);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+        status = sg_task_set_time_window(ctx, pickup_task_id,
+                                         pickup_row->ready_time, pickup_row->due_time);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+        status = sg_task_set_service_seconds(ctx, pickup_task_id, pickup_row->service_time);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+
+        status = sg_task_set_location(ctx, delivery_task_id, delivery_row->x, delivery_row->y);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+        status = sg_task_set_time_window(ctx, delivery_task_id,
+                                         delivery_row->ready_time, delivery_row->due_time);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+        status = sg_task_set_service_seconds(ctx, delivery_task_id, delivery_row->service_time);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+
+        if (demand_convention == SG_DEMAND_PICKUP_POSITIVE_DELIVERY_NEGATIVE) {
+            pickup_demand[0] = quantity;
+            delivery_demand[0] = -quantity;
+        } else {
+            pickup_demand[0] = -quantity;
+            delivery_demand[0] = quantity;
+        }
+        status = sg_task_set_demand(ctx, pickup_task_id, pickup_demand, 1);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+        status = sg_task_set_demand(ctx, delivery_task_id, delivery_demand, 1);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+
+        status = sg_request_bind_pickup_delivery_tasks(ctx, request_id,
+                                                       pickup_task_id, delivery_task_id);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+
+        hint_early = pickup_row->ready_time < delivery_row->ready_time
+                     ? pickup_row->ready_time
+                     : delivery_row->ready_time;
+        hint_late = pickup_row->due_time > delivery_row->due_time
+                    ? pickup_row->due_time
+                    : delivery_row->due_time;
+        status = sg_request_set_time_window_hint(ctx, request_id, hint_early, hint_late);
+        if (status != SG_STATUS_OK) {
+            goto done;
+        }
+
+        consumed[i] = 1;
+        consumed[delivery_idx] = 1;
+    }
+
+    for (i = 0; i < row_count; i++) {
+        if (!consumed[i]) {
+            status = SG_STATUS_INVALID_ARG;
+            goto done;
+        }
+    }
+
+done:
+    if (fp) {
+        fclose(fp);
+        fp = NULL;
+    }
+    free(consumed);
     free(rows);
     return status;
 }

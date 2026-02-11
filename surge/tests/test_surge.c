@@ -180,6 +180,34 @@ static void test_solomon_loader_smoke(void) {
     sg_free(ctx);
 }
 
+static void test_li_lim_loader_smoke(void) {
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    SGStatus status;
+
+    assert(ctx != NULL);
+
+    sg_config_default(&cfg);
+    cfg.max_iterations = 250;
+    cfg.seed = 202;
+    cfg.deterministic = true;
+    status = sg_set_config(ctx, &cfg);
+    assert(status == SG_STATUS_OK);
+
+    status = sg_load_li_lim_pdptw(ctx, "benchmarks/li_lim/LC101-mini.txt");
+    assert(status == SG_STATUS_OK);
+    assert(sg_get_request_count(ctx) == 2);
+
+    status = sg_validate_model(ctx);
+    assert(status == SG_STATUS_OK);
+
+    status = sg_solve(ctx);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
 int main(void) {
     SGContext *ctx = sg_create();
     SGConfig cfg;
@@ -261,6 +289,7 @@ int main(void) {
     test_domain_model();
     test_bound_request_gate();
     test_solomon_loader_smoke();
+    test_li_lim_loader_smoke();
     printf("surge bootstrap test passed\n");
     return 0;
 }

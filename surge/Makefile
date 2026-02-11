@@ -33,9 +33,10 @@ OBJS = $(SRCS:.c=.o)
 
 LIB = libsurge.a
 TEST_BIN = test_surge
-BENCH_BIN = bench_solomon
+BENCH_SOL_BIN = bench_solomon
+BENCH_PD_BIN = bench_li_lim
 
-.PHONY: all clean test lib debug bench
+.PHONY: all clean test lib debug bench bench-li-lim
 
 all: lib $(TEST_BIN)
 
@@ -50,7 +51,10 @@ src/%.o: src/%.c
 $(TEST_BIN): tests/test_surge.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
-$(BENCH_BIN): benchmarks/bench_solomon.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
+$(BENCH_SOL_BIN): benchmarks/bench_solomon.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+
+$(BENCH_PD_BIN): benchmarks/bench_li_lim.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
 ../arbor/libarbor.a:
@@ -62,15 +66,18 @@ $(BENCH_BIN): benchmarks/bench_solomon.c $(LIB) ../arbor/libarbor.a ../shared/li
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
-bench: $(BENCH_BIN)
-	./$(BENCH_BIN) --dir benchmarks/solomon
+bench: $(BENCH_SOL_BIN)
+	./$(BENCH_SOL_BIN) --dir benchmarks/solomon
+
+bench-li-lim: $(BENCH_PD_BIN)
+	./$(BENCH_PD_BIN) --dir benchmarks/li_lim
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_BIN)
+	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN)
 
 help:
 	@echo "Surge Build System"
@@ -80,5 +87,6 @@ help:
 	@echo "  lib      - Build static library (libsurge.a)"
 	@echo "  test     - Build and run tests"
 	@echo "  bench    - Build and run Solomon benchmark suite"
+	@echo "  bench-li-lim - Build and run Li & Lim PDPTW benchmark suite"
 	@echo "  debug    - Build with debug symbols"
 	@echo "  clean    - Remove build artifacts"
