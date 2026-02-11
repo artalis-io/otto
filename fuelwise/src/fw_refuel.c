@@ -288,6 +288,22 @@ int fw_solve_refuel_lp(
  * These strengthen the LP relaxation and prune infeasible branches.
  * ============================================================================ */
 
+/* Hint flags for controlling which MIP enhancements are active.
+ * Default (0) enables all hints. Individual flags disable specific hints. */
+#define FW_HINT_NO_PRIORITIES     (1 << 0)  /* Disable branching priorities */
+#define FW_HINT_NO_DIRECTIONS     (1 << 1)  /* Disable branching directions */
+#define FW_HINT_NO_REACH_CUTS     (1 << 2)  /* Disable reach-cut callback */
+#define FW_HINT_NO_MANDATORY_FIX  (1 << 3)  /* Disable mandatory station fixing */
+#define FW_HINT_NO_DOMINATED_ELIM (1 << 4)  /* Disable dominated station elimination */
+#define FW_HINT_NO_SYMMETRY_BREAK (1 << 5)  /* Disable symmetry-breaking constraints */
+
+/* Global hint flags. Default 0 = all enabled.
+ * Set before solving, NOT thread-safe if modified concurrently. */
+static int fw_mip_hint_flags = 0;
+
+void fw_set_mip_hint_flags(int flags) { fw_mip_hint_flags = flags; }
+int fw_get_mip_hint_flags(void) { return fw_mip_hint_flags; }
+
 /* Context for reach-cut callback */
 typedef struct {
     const FWRefuelProblem *problem;
@@ -438,6 +454,7 @@ static void fw_setup_mip_hints(RalphModel *model,
                                 int k, int z_start,
                                 FWReachCutContext *cut_ctx)
 {
+    int flags = fw_mip_hint_flags;
     int num_vars = ralph_get_num_vars(model);
 
     /* Compute median price for direction threshold */
@@ -470,22 +487,26 @@ static void fw_setup_mip_hints(RalphModel *model,
     free(prices);
 
     /* Set priorities and directions for z variables */
-    for (int i = 0; i < k; i++) {
-        double price = problem->stations[i].price;
+    if (!(flags & FW_HINT_NO_PRIORITIES) || !(flags & FW_HINT_NO_DIRECTIONS)) {
+        for (int i = 0; i < k; i++) {
+            double price = problem->stations[i].price;
 
-        /* Higher priority = branched first; cheaper stations get higher priority */
-        priorities[z_start + i] = (price > 0.001) ? (int)(1000.0 / price) : 1000;
+            /* Higher priority = branched first; cheaper stations get higher priority */
+            priorities[z_start + i] = (price > 0.001) ? (int)(1000.0 / price) : 1000;
 
-        /* Cheap stations: try z=1 first; expensive: try z=0 first */
-        if (price <= median_price) {
-            directions[z_start + i] = RALPH_BRANCH_UP;
-        } else {
-            directions[z_start + i] = RALPH_BRANCH_DOWN;
+            /* Cheap stations: try z=1 first; expensive: try z=0 first */
+            if (price <= median_price) {
+                directions[z_start + i] = RALPH_BRANCH_UP;
+            } else {
+                directions[z_start + i] = RALPH_BRANCH_DOWN;
+            }
         }
-    }
 
-    ralph_set_branch_priorities(model, priorities);
-    ralph_set_branch_directions(model, directions);
+        if (!(flags & FW_HINT_NO_PRIORITIES))
+            ralph_set_branch_priorities(model, priorities);
+        if (!(flags & FW_HINT_NO_DIRECTIONS))
+            ralph_set_branch_directions(model, directions);
+    }
 
     free(priorities);
     free(directions);
@@ -498,7 +519,7 @@ static void fw_setup_mip_hints(RalphModel *model,
 
     fw_compute_reach_intervals(cut_ctx, problem, k);
 
-    if (cut_ctx->num_intervals > 0) {
+    if (!(flags & FW_HINT_NO_REACH_CUTS) && cut_ctx->num_intervals > 0) {
         RalphCutCallback cb;
         cb.generate_cuts = fw_reach_cut_generate;
         cb.user_data = cut_ctx;
@@ -524,12 +545,14 @@ static void fw_setup_mip_hints(RalphModel *model,
         cut_ctx->interval_start && cut_ctx->interval_end) {
 
         /* Pass 1: Fix z[i] = 1 for single-station intervals */
-        for (int iv = 0; iv < cut_ctx->num_intervals; iv++) {
-            int start = cut_ctx->interval_start[iv];
-            int end = cut_ctx->interval_end[iv];
-            if (end - start == 1) {
-                is_mandatory[start] = 1;
-                ralph_set_var_bounds(model, z_start + start, 1.0, 1.0);
+        if (!(flags & FW_HINT_NO_MANDATORY_FIX)) {
+            for (int iv = 0; iv < cut_ctx->num_intervals; iv++) {
+                int start = cut_ctx->interval_start[iv];
+                int end = cut_ctx->interval_end[iv];
+                if (end - start == 1) {
+                    is_mandatory[start] = 1;
+                    ralph_set_var_bounds(model, z_start + start, 1.0, 1.0);
+                }
             }
         }
 
@@ -541,40 +564,42 @@ static void fw_setup_mip_hints(RalphModel *model,
          *   - Neighbors can reach each other with a full tank
          *   - Removing i doesn't leave any interval with zero eligible stations
          */
-        for (int i = 1; i < k - 1; i++) {
-            if (is_mandatory[i]) continue;
+        if (!(flags & FW_HINT_NO_DOMINATED_ELIM)) {
+            for (int i = 1; i < k - 1; i++) {
+                if (is_mandatory[i]) continue;
 
-            double price_i = problem->stations[i].price;
-            double price_left = problem->stations[i - 1].price;
-            double price_right = problem->stations[i + 1].price;
+                double price_i = problem->stations[i].price;
+                double price_left = problem->stations[i - 1].price;
+                double price_right = problem->stations[i + 1].price;
 
-            /* Must be strictly more expensive than both neighbors */
-            if (price_i <= price_left || price_i <= price_right) continue;
+                /* Must be strictly more expensive than both neighbors */
+                if (price_i <= price_left || price_i <= price_right) continue;
 
-            /* Neighbors must be able to reach each other directly */
-            double consumed = fw_calc_fuel_consumed(problem,
-                problem->stations[i - 1].distance_from_start,
-                problem->stations[i + 1].distance_from_start);
-            if (problem->tank_capacity - consumed < problem->minimum_fuel) continue;
+                /* Neighbors must be able to reach each other directly */
+                double consumed = fw_calc_fuel_consumed(problem,
+                    problem->stations[i - 1].distance_from_start,
+                    problem->stations[i + 1].distance_from_start);
+                if (problem->tank_capacity - consumed < problem->minimum_fuel) continue;
 
-            /* Safety: check that fixing z[i]=0 doesn't empty any interval */
-            int safe = 1;
-            for (int iv = 0; iv < cut_ctx->num_intervals; iv++) {
-                int s = cut_ctx->interval_start[iv];
-                int e = cut_ctx->interval_end[iv];
-                if (i >= s && i < e) {
-                    /* Count other eligible stations in this interval */
-                    int others = 0;
-                    for (int j = s; j < e; j++) {
-                        if (j != i && !is_fixed_zero[j]) others++;
+                /* Safety: check that fixing z[i]=0 doesn't empty any interval */
+                int safe = 1;
+                for (int iv = 0; iv < cut_ctx->num_intervals; iv++) {
+                    int s = cut_ctx->interval_start[iv];
+                    int e = cut_ctx->interval_end[iv];
+                    if (i >= s && i < e) {
+                        /* Count other eligible stations in this interval */
+                        int others = 0;
+                        for (int j = s; j < e; j++) {
+                            if (j != i && !is_fixed_zero[j]) others++;
+                        }
+                        if (others == 0) { safe = 0; break; }
                     }
-                    if (others == 0) { safe = 0; break; }
                 }
-            }
 
-            if (safe) {
-                is_fixed_zero[i] = 1;
-                ralph_set_var_bounds(model, z_start + i, 0.0, 0.0);
+                if (safe) {
+                    is_fixed_zero[i] = 1;
+                    ralph_set_var_bounds(model, z_start + i, 0.0, 0.0);
+                }
             }
         }
     }
@@ -588,19 +613,21 @@ static void fw_setup_mip_hints(RalphModel *model,
      * produces the same objective value.
      * ================================================================ */
 
-    for (int i = 0; i < k - 1; i++) {
-        /* Skip pairs where either station is already fixed */
-        if (is_mandatory && (is_mandatory[i] || is_mandatory[i + 1])) continue;
-        if (is_fixed_zero && (is_fixed_zero[i] || is_fixed_zero[i + 1])) continue;
+    if (!(flags & FW_HINT_NO_SYMMETRY_BREAK)) {
+        for (int i = 0; i < k - 1; i++) {
+            /* Skip pairs where either station is already fixed */
+            if (is_mandatory && (is_mandatory[i] || is_mandatory[i + 1])) continue;
+            if (is_fixed_zero && (is_fixed_zero[i] || is_fixed_zero[i + 1])) continue;
 
-        double price_diff = problem->stations[i].price - problem->stations[i + 1].price;
-        if (price_diff < 0) price_diff = -price_diff;
+            double price_diff = problem->stations[i].price - problem->stations[i + 1].price;
+            if (price_diff < 0) price_diff = -price_diff;
 
-        if (price_diff < 1e-6) {
-            /* z[i] - z[i+1] >= 0: prefer earlier station */
-            int indices[2] = {z_start + i, z_start + i + 1};
-            double values[2] = {1.0, -1.0};
-            ralph_add_constraint(model, 2, indices, values, RALPH_GREATER_EQUAL, 0.0);
+            if (price_diff < 1e-6) {
+                /* z[i] - z[i+1] >= 0: prefer earlier station */
+                int indices[2] = {z_start + i, z_start + i + 1};
+                double values[2] = {1.0, -1.0};
+                ralph_add_constraint(model, 2, indices, values, RALPH_GREATER_EQUAL, 0.0);
+            }
         }
     }
 
