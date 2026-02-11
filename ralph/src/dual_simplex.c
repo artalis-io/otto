@@ -383,6 +383,141 @@ pivot_fail_rollback:
 }
 
 /* ============================================================================
+ * Lightweight Dual Re-optimization for B&B
+ * ============================================================================ */
+
+/*
+ * Lightweight dual re-optimization after bound changes (branching).
+ *
+ * After branching, only variable bounds change — the basis matrix B is
+ * unchanged, so dual feasibility is preserved. Basic variables may violate
+ * their new bounds (primal infeasibility). Dual simplex pivots them out
+ * in typically 1-10 iterations.
+ *
+ * This function exists because dual_simplex_solve() is too heavy for B&B
+ * node solving (5 fallback paths, perturbation, stalling detection). If
+ * dual simplex becomes the primary LP algorithm (P8 in ralph_vs_glop.md),
+ * this function should be deprecated in favor of calling the rewritten
+ * dual_simplex_solve() directly after updating bounds.
+ *
+ * Prerequisites:
+ *   - solver->tableau exists with valid LU factorization
+ *   - Bounds in tab->lb_ext/ub_ext already updated
+ *   - Non-basic x values already pushed to their new bounds
+ *
+ * Returns:
+ *   0  - OPTIMAL (solver->status and solution set)
+ *   1  - INFEASIBLE or pruned by objective cutoff
+ *  -1  - FAILED (exceeded max_pivots or numerical issue)
+ */
+int dual_reopt(SimplexSolver *solver, int max_pivots) {
+    if (!solver || !solver->tableau) return -1;
+
+    SimplexTableau *tab = solver->tableau;
+
+    /* Check for artificial variables in basis — if any are present, bail out.
+     * Artificials can be basic at value 0 (degenerate) after Phase 2. When
+     * bounds change for a child node, tableau_compute_solution recomputes x_B
+     * and the artificial can become non-zero, corrupting the objective with
+     * BIG_M terms. Cold start handles this correctly via fresh Phase 1. */
+    if (tab->num_artificial > 0) {
+        for (int a = 0; a < tab->num_artificial; a++) {
+            int j = tab->artificial_vars[a];
+            if (tab->var_status[j] == RALPH_BASIC) {
+                return -1;  /* Fall through to cold start */
+            }
+        }
+    }
+
+    /* Recompute x_B = B^{-1}(b - N*x_N) with updated bounds */
+    tableau_compute_solution(tab);
+
+    /* Recompute reduced costs (needed for ratio test) */
+    tableau_compute_reduced_costs(tab);
+
+    int num_refactors = 0;
+
+    for (int iter = 0; iter < max_pivots; iter++) {
+        /* Find most infeasible basic variable (leaving candidate) */
+        int leaving = -1;
+        double max_infeas = RALPH_FEAS_TOL;
+
+        for (int k = 0; k < tab->m; k++) {
+            int j = tab->basis[k];
+            double infeas = 0.0;
+
+            if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL) {
+                infeas = tab->lb_ext[j] - tab->x[j];
+            } else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
+                infeas = tab->x[j] - tab->ub_ext[j];
+            }
+
+            if (infeas > max_infeas) {
+                max_infeas = infeas;
+                leaving = k;
+            }
+        }
+
+        if (leaving < 0) {
+            /* Primal feasible — OPTIMAL */
+            solver->status = RALPH_STATUS_OPTIMAL;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+            solver->iterations = iter;
+
+            int n_orig = solver->model->num_vars;
+            if (!solver->solution) {
+                solver->solution = (double*)calloc(n_orig, sizeof(double));
+            }
+            if (solver->solution) {
+                for (int j = 0; j < n_orig; j++) {
+                    solver->solution[j] = tab->x[j];
+                }
+            }
+            return 0;
+        }
+
+        /* TODO: Objective cutoff pruning — requires verifying that
+         * tab->obj_value is updated after each dual pivot. Currently
+         * obj_value is only accurate after tableau_compute_solution(). */
+
+        /* Dual ratio test to find entering variable */
+        int entering;
+        double theta;
+
+        if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
+            /* No valid entering variable — INFEASIBLE */
+            solver->status = RALPH_STATUS_INFEASIBLE;
+            return 1;
+        }
+
+        /* Perform dual pivot */
+        if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+            /* Pivot failed — try refactorization (at most twice total) */
+            if (num_refactors < 2 && tableau_refactorize(tab) == 0) {
+                num_refactors++;
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                continue;  /* Retry this iteration */
+            }
+            return -1;
+        }
+
+        /* Periodic refactorization for numerical stability */
+        if (lu_needs_refactorization(tab->lu)) {
+            if (tableau_refactorize(tab) != 0) {
+                return -1;
+            }
+            num_refactors++;
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        }
+    }
+
+    /* Exceeded max_pivots — caller should cold start */
+    return -1;
+}
+
+/* ============================================================================
  * Dual Simplex Algorithm
  * ============================================================================ */
 

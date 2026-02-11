@@ -2367,6 +2367,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->is_scaled = 0;
     solver->trace_phase1_first_fail_iter = -1;
     solver->trace_phase1_last_fail_iter = -1;
+    solver->objective_cutoff = RALPH_INFINITY;
 
     return solver;
 }
