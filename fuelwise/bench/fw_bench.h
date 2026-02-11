@@ -75,6 +75,9 @@ typedef struct {
 
     /* Unit system (for display/reporting only - internal always metric) */
     SHUnitSystem units;             /* Default: SH_UNITS_METRIC */
+
+    /* GLPK comparison mode (bench-only) */
+    int glpk_compare;               /* 1 to enable GLPK comparison */
 } FWBenchConfig;
 
 /* ============================================================================
@@ -140,6 +143,15 @@ typedef struct {
     double cost_min;
     double cost_max;
     double stops_avg;
+
+    /* GLPK comparison (only populated when glpk_compare enabled) */
+    int glpk_enabled;
+    int glpk_num_solved;
+    int glpk_num_match;             /* Objectives match within tolerance */
+    double glpk_solve_time_avg;
+    double glpk_solve_time_min;
+    double glpk_solve_time_max;
+    double glpk_speedup_avg;        /* GLPK time / Ralph time (> 1 means Ralph faster) */
 } FWBenchResults;
 
 /* ============================================================================
