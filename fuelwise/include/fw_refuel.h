@@ -164,11 +164,11 @@ void fw_free_solution(FWRefuelSolution *solution);
  *
  * Parameters:
  *   problem       - The refueling problem (for consumption rates)
- *   from_distance - Starting distance in miles
- *   to_distance   - Ending distance in miles
+ *   from_distance - Starting distance in meters
+ *   to_distance   - Ending distance in meters
  *
  * Returns:
- *   Fuel consumed in gallons
+ *   Fuel consumed in liters
  */
 double fw_calc_fuel_consumed(
     const FWRefuelProblem *problem,
@@ -183,7 +183,7 @@ double fw_calc_fuel_consumed(
  *   problem - The refueling problem
  *
  * Returns:
- *   Total fuel consumed in gallons
+ *   Total fuel consumed in liters
  */
 double fw_calc_total_fuel_consumed(const FWRefuelProblem *problem);
 

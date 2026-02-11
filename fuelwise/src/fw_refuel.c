@@ -800,7 +800,9 @@ int fw_solve_refuel_milp(
  * This scales to k > 30 stations where enumeration (2^k) would timeout.
  * ============================================================================ */
 
-/* Threshold for using Benders vs MILP. 0 = always use Benders. */
+/* Threshold for using Benders vs MILP. 0 = always use Benders.
+ * Note: global configuration — set once at startup before solving.
+ * NOT thread-safe if modified concurrently with fw_solve_refuel_benders(). */
 static int fw_benders_threshold = 0;
 
 /*
