@@ -86,10 +86,8 @@ typedef SHCoord FWCoord;
  *   - Price: currency per liter ($/L, €/L, etc.)
  *
  * Unit conversions happen at API boundaries (JSON parsing/serialization).
- * The API accepts both metric (default) and imperial units via "units" field.
- *
- * Legacy field names (e.g., "price_per_gallon") are kept for backward
- * compatibility but now represent SI values internally.
+ * The API accepts SI units by default. Legacy imperial keys (e.g.,
+ * "consumption_mpg") are converted to SI at the API boundary via sh_units.h.
  * ============================================================================ */
 
 /* ============================================================================

@@ -14,6 +14,7 @@
 #include "fuelwise.h"
 #include "sh_json.h"
 #include "sh_arena.h"
+#include "sh_units.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,8 +83,11 @@ static int parse_segments(const ShJsonValue *arr, FWRouteSegment **segments, int
         if ((v = sh_json_get(seg, "cargo_weight")) || (v = sh_json_get(seg, "weight"))) {
             (*segments)[i].cargo_weight = sh_json_as_double(v, 0.0);
         }
-        if ((v = sh_json_get(seg, "consumption")) || (v = sh_json_get(seg, "mpg"))) {
+        if ((v = sh_json_get(seg, "consumption"))) {
             (*segments)[i].consumption = sh_json_as_double(v, 0.0);
+        } else if ((v = sh_json_get(seg, "mpg"))) {
+            /* Legacy: convert MPG to L/100km at API boundary */
+            (*segments)[i].consumption = sh_mpg_to_l100km(sh_json_as_double(v, 0.0));
         }
     }
 
@@ -166,8 +170,11 @@ static int parse_solve_request(const ShJsonValue *root, FWRefuelProblem *problem
     problem->current_fuel = sh_json_as_double(sh_json_get(root, "current_fuel"), 0.0);
 
     ShJsonValue *v;
-    if ((v = sh_json_get(root, "consumption")) || (v = sh_json_get(root, "consumption_mpg"))) {
+    if ((v = sh_json_get(root, "consumption"))) {
         problem->base_consumption = sh_json_as_double(v, 0.0);
+    } else if ((v = sh_json_get(root, "consumption_mpg"))) {
+        /* Legacy: convert MPG to L/100km at API boundary */
+        problem->base_consumption = sh_mpg_to_l100km(sh_json_as_double(v, 0.0));
     }
 
     problem->minimum_fuel = sh_json_as_double(sh_json_get(root, "minimum_fuel"), 0.0);
@@ -304,7 +311,7 @@ static char *process_solve(const char *body, size_t body_len, int *status_code) 
             sh_json_write_object_start(&jw);
             sh_json_write_key(&jw, "station_id");
             sh_json_write_int(&jw, problem.stations[i].station_id);
-            sh_json_write_key(&jw, "gallons");
+            sh_json_write_key(&jw, "purchase");
             sh_json_write_double(&jw, solution.purchases[i]);
             sh_json_write_key(&jw, "cost");
             sh_json_write_double(&jw, solution.purchases[i] * problem.stations[i].price);
@@ -510,11 +517,14 @@ static char *process_optimize(const char *body, size_t body_len, int *status_cod
     double stop_cost = sh_json_as_double(sh_json_get(root, "stop_cost"), 0.0);
     double remaining_fuel_value = sh_json_as_double(sh_json_get(root, "remaining_fuel_value"), 0.0);
 
-    /* Consumption with fallback key */
-    double consumption = 6.5;
+    /* Consumption: L/100km (with legacy MPG fallback) */
+    double consumption = 36.19;  /* ~6.5 MPG for trucks */
     ShJsonValue *cons_v;
-    if ((cons_v = sh_json_get(root, "consumption")) || (cons_v = sh_json_get(root, "consumption_mpg"))) {
-        consumption = sh_json_as_double(cons_v, 6.5);
+    if ((cons_v = sh_json_get(root, "consumption"))) {
+        consumption = sh_json_as_double(cons_v, 36.19);
+    } else if ((cons_v = sh_json_get(root, "consumption_mpg"))) {
+        /* Legacy: convert MPG to L/100km at API boundary */
+        consumption = sh_mpg_to_l100km(sh_json_as_double(cons_v, 6.5));
     }
 
     /* Parse segments (optional) */
@@ -629,7 +639,7 @@ static char *process_optimize(const char *body, size_t body_len, int *status_cod
             sh_json_write_int(&jw, filtered[i].station_id);
             sh_json_write_key(&jw, "distance_from_start");
             sh_json_write_double(&jw, filtered[i].distance_from_start);
-            sh_json_write_key(&jw, "gallons");
+            sh_json_write_key(&jw, "purchase");
             sh_json_write_double(&jw, solution.purchases[i]);
             sh_json_write_key(&jw, "cost");
             sh_json_write_double(&jw, solution.purchases[i] * filtered[i].price);
