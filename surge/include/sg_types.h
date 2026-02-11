@@ -61,7 +61,9 @@ typedef struct {
 typedef struct {
     int64_t iterations;
     double total_cost;
+    double total_distance;
     uint32_t unassigned;
+    uint32_t vehicles_used;
 } SGStats;
 
 #endif /* SURGE_SG_TYPES_H */
