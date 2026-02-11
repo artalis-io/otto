@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include "ralph.h"
 
-#define EXPECTED_TRACE_SIG 0x708bff020ee204a9ULL
+#define EXPECTED_TRACE_SIG 0x2629fb3048395f1cULL
 
 static int test_count = 0;
 static int pass_count = 0;

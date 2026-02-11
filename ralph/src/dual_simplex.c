@@ -820,7 +820,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
         return 1;
     }
 
-    const int MAX_REFACTOR_FAILURES = 12;
+    const int MAX_REFACTOR_FAILURES = RALPH_PHASE1_RESCUE_MAX_REFACTOR_FAILURES;
     int refactor_failures = 0;
 
     for (int iter = 0; iter < max_iters; iter++) {
