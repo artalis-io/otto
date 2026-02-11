@@ -23,17 +23,46 @@ enum {
     PHASE1_PIVOT_FAIL_NONE = 0,
     PHASE1_PIVOT_FAIL_SMALL_PIVOT = 1,
     PHASE1_PIVOT_FAIL_INVALID_COLUMN = 2,
-    PHASE1_PIVOT_FAIL_REFACTOR_FORCED = 3,
-    PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE = 4
+    PHASE1_PIVOT_FAIL_LU_MAX_UPDATES = 3,
+    PHASE1_PIVOT_FAIL_LU_SPIKE_POOL_FULL = 4,
+    PHASE1_PIVOT_FAIL_LU_UPDATE_PIVOT_SMALL = 5,
+    PHASE1_PIVOT_FAIL_LU_SINGULAR_UPDATE = 6,
+    PHASE1_PIVOT_FAIL_FACTOR_SINGULAR = 7,
+    PHASE1_PIVOT_FAIL_REFACTOR_FORCED_OTHER = 8,
+    PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE_OTHER = 9
 };
 
 static const char* phase1_pivot_fail_reason_str(int reason) {
     switch (reason) {
         case PHASE1_PIVOT_FAIL_SMALL_PIVOT: return "small_pivot";
         case PHASE1_PIVOT_FAIL_INVALID_COLUMN: return "invalid_entering_column";
-        case PHASE1_PIVOT_FAIL_REFACTOR_FORCED: return "refactor_after_forced_pivot";
-        case PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE: return "refactor_after_update_fail";
+        case PHASE1_PIVOT_FAIL_LU_MAX_UPDATES: return "lu_max_updates";
+        case PHASE1_PIVOT_FAIL_LU_SPIKE_POOL_FULL: return "lu_spike_pool_full";
+        case PHASE1_PIVOT_FAIL_LU_UPDATE_PIVOT_SMALL: return "lu_update_pivot_too_small";
+        case PHASE1_PIVOT_FAIL_LU_SINGULAR_UPDATE: return "lu_singular_update";
+        case PHASE1_PIVOT_FAIL_FACTOR_SINGULAR: return "factor_singular";
+        case PHASE1_PIVOT_FAIL_REFACTOR_FORCED_OTHER: return "refactor_after_forced_pivot_other";
+        case PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE_OTHER: return "refactor_after_update_fail_other";
         default: return "unknown";
+    }
+}
+
+static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refactor_path) {
+    switch ((LUFailureReason)lu_reason) {
+        case LU_FAIL_MAX_UPDATES:
+            return PHASE1_PIVOT_FAIL_LU_MAX_UPDATES;
+        case LU_FAIL_SPIKE_POOL_FULL:
+            return PHASE1_PIVOT_FAIL_LU_SPIKE_POOL_FULL;
+        case LU_FAIL_UPDATE_PIVOT_TOO_SMALL:
+            return PHASE1_PIVOT_FAIL_LU_UPDATE_PIVOT_SMALL;
+        case LU_FAIL_SINGULAR_UPDATE:
+            return PHASE1_PIVOT_FAIL_LU_SINGULAR_UPDATE;
+        case LU_FAIL_FACTOR_SINGULAR:
+            return PHASE1_PIVOT_FAIL_FACTOR_SINGULAR;
+        default:
+            return forced_refactor_path
+                ? PHASE1_PIVOT_FAIL_REFACTOR_FORCED_OTHER
+                : PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE_OTHER;
     }
 }
 
@@ -75,10 +104,20 @@ static void phase1_trace_record_pivot_failure(SimplexSolver *solver,
         solver->trace_phase1_fail_small_pivot++;
     } else if (reason == PHASE1_PIVOT_FAIL_INVALID_COLUMN) {
         solver->trace_phase1_fail_invalid_column++;
-    } else if (reason == PHASE1_PIVOT_FAIL_REFACTOR_FORCED) {
-        solver->trace_phase1_fail_refactor_forced++;
-    } else if (reason == PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE) {
-        solver->trace_phase1_fail_refactor_after_update++;
+    } else if (reason == PHASE1_PIVOT_FAIL_LU_MAX_UPDATES) {
+        solver->trace_phase1_fail_lu_max_updates++;
+    } else if (reason == PHASE1_PIVOT_FAIL_LU_SPIKE_POOL_FULL) {
+        solver->trace_phase1_fail_lu_spike_pool_full++;
+    } else if (reason == PHASE1_PIVOT_FAIL_LU_UPDATE_PIVOT_SMALL) {
+        solver->trace_phase1_fail_lu_update_pivot_small++;
+    } else if (reason == PHASE1_PIVOT_FAIL_LU_SINGULAR_UPDATE) {
+        solver->trace_phase1_fail_lu_singular_update++;
+    } else if (reason == PHASE1_PIVOT_FAIL_FACTOR_SINGULAR) {
+        solver->trace_phase1_fail_factor_singular++;
+    } else if (reason == PHASE1_PIVOT_FAIL_REFACTOR_FORCED_OTHER) {
+        solver->trace_phase1_fail_refactor_forced_other++;
+    } else if (reason == PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE_OTHER) {
+        solver->trace_phase1_fail_refactor_after_update_other++;
     }
 
     solver->trace_phase1_signature = phase1_trace_mix(
@@ -107,13 +146,18 @@ static void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_
     if (!solver || !solver->trace_phase1) return;
 
     fprintf(stderr,
-            "[phase1_trace] summary status=%s piv_fail=%d small_pivot=%d invalid_col=%d refactor_forced=%d refactor_after_update=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%016llx\n",
+            "[phase1_trace] summary status=%s piv_fail=%d small_pivot=%d invalid_col=%d lu_max_updates=%d lu_spike_pool_full=%d lu_update_pivot_small=%d lu_singular_update=%d factor_singular=%d refactor_forced_other=%d refactor_after_update_other=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%016llx\n",
             ralph_status_string(phase1_status),
             solver->trace_phase1_pivot_failures,
             solver->trace_phase1_fail_small_pivot,
             solver->trace_phase1_fail_invalid_column,
-            solver->trace_phase1_fail_refactor_forced,
-            solver->trace_phase1_fail_refactor_after_update,
+            solver->trace_phase1_fail_lu_max_updates,
+            solver->trace_phase1_fail_lu_spike_pool_full,
+            solver->trace_phase1_fail_lu_update_pivot_small,
+            solver->trace_phase1_fail_lu_singular_update,
+            solver->trace_phase1_fail_factor_singular,
+            solver->trace_phase1_fail_refactor_forced_other,
+            solver->trace_phase1_fail_refactor_after_update_other,
             solver->trace_phase1_no_entering_events,
             solver->trace_phase1_first_fail_iter,
             solver->trace_phase1_last_fail_iter,
@@ -1948,7 +1992,9 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         if (tableau_refactorize(tab) != 0) {
             if (repair_singular_basis(tab) != 0) {
                 if (tab->trace_phase1_enabled) {
-                    tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_REFACTOR_FORCED;
+                    int lu_reason = (tab->lu) ? tab->lu->last_failure_reason : LU_FAIL_NONE;
+                    tab->trace_last_fail_reason =
+                        phase1_trace_reason_from_lu_failure(lu_reason, 1);
                 }
                 goto pivot_fail_rollback;  /* All recovery attempts failed */
             }
@@ -1956,12 +2002,21 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     } else {
         sparse_get_column(tab->A_ext, entering, tab->work1);
         if (lu_update(tab->lu, leaving_pos, tab->work1) != 0) {
+            int update_reason = (tab->lu) ? tab->lu->last_failure_reason : LU_FAIL_NONE;
             /* Update failed, try refactorize */
             if (tableau_refactorize(tab) != 0) {
                 /* Refactorization failed, try basis repair */
                 if (repair_singular_basis(tab) != 0) {
                     if (tab->trace_phase1_enabled) {
-                        tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE;
+                        int lu_reason = (tab->lu) ? tab->lu->last_failure_reason : LU_FAIL_NONE;
+                        if (update_reason == LU_FAIL_MAX_UPDATES ||
+                            update_reason == LU_FAIL_SPIKE_POOL_FULL ||
+                            update_reason == LU_FAIL_UPDATE_PIVOT_TOO_SMALL ||
+                            update_reason == LU_FAIL_SINGULAR_UPDATE) {
+                            lu_reason = update_reason;
+                        }
+                        tab->trace_last_fail_reason =
+                            phase1_trace_reason_from_lu_failure(lu_reason, 0);
                     }
                     goto pivot_fail_rollback;  /* All recovery attempts failed */
                 }
@@ -3447,8 +3502,13 @@ int simplex_solve(SimplexSolver *solver) {
     solver->trace_phase1_pivot_failures = 0;
     solver->trace_phase1_fail_small_pivot = 0;
     solver->trace_phase1_fail_invalid_column = 0;
-    solver->trace_phase1_fail_refactor_forced = 0;
-    solver->trace_phase1_fail_refactor_after_update = 0;
+    solver->trace_phase1_fail_lu_max_updates = 0;
+    solver->trace_phase1_fail_lu_spike_pool_full = 0;
+    solver->trace_phase1_fail_lu_update_pivot_small = 0;
+    solver->trace_phase1_fail_lu_singular_update = 0;
+    solver->trace_phase1_fail_factor_singular = 0;
+    solver->trace_phase1_fail_refactor_forced_other = 0;
+    solver->trace_phase1_fail_refactor_after_update_other = 0;
     solver->trace_phase1_no_entering_events = 0;
     solver->trace_phase1_first_fail_iter = -1;
     solver->trace_phase1_last_fail_iter = -1;

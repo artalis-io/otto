@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include "ralph.h"
 
-#define EXPECTED_TRACE_SIG 0x0c685a961c99ee21ULL
+#define EXPECTED_TRACE_SIG 0x708bff020ee204a9ULL
 
 static int test_count = 0;
 static int pass_count = 0;
@@ -24,8 +24,13 @@ typedef struct {
     int piv_fail;
     int small_pivot;
     int invalid_col;
-    int refactor_forced;
-    int refactor_after_update;
+    int lu_max_updates;
+    int lu_spike_pool_full;
+    int lu_update_pivot_small;
+    int lu_singular_update;
+    int factor_singular;
+    int refactor_forced_other;
+    int refactor_after_update_other;
     int no_entering;
     int first_iter;
     int last_iter;
@@ -35,18 +40,23 @@ typedef struct {
 static int parse_summary(const char *line, TraceSummary *s) {
     if (!line || !s) return 0;
     int n = sscanf(line,
-                   "[phase1_trace] summary status=%31s piv_fail=%d small_pivot=%d invalid_col=%d refactor_forced=%d refactor_after_update=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%llx",
+                   "[phase1_trace] summary status=%31s piv_fail=%d small_pivot=%d invalid_col=%d lu_max_updates=%d lu_spike_pool_full=%d lu_update_pivot_small=%d lu_singular_update=%d factor_singular=%d refactor_forced_other=%d refactor_after_update_other=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%llx",
                    s->status,
                    &s->piv_fail,
                    &s->small_pivot,
                    &s->invalid_col,
-                   &s->refactor_forced,
-                   &s->refactor_after_update,
+                   &s->lu_max_updates,
+                   &s->lu_spike_pool_full,
+                   &s->lu_update_pivot_small,
+                   &s->lu_singular_update,
+                   &s->factor_singular,
+                   &s->refactor_forced_other,
+                   &s->refactor_after_update_other,
                    &s->no_entering,
                    &s->first_iter,
                    &s->last_iter,
                    &s->sig);
-    return n == 10;
+    return n == 15;
 }
 
 int main(void) {
@@ -116,8 +126,15 @@ int main(void) {
     int pivot_event_count = 0;
     int first_event_iter = -1;
     int last_event_iter = -1;
-    int reason_update_fail_count = 0;
     int reason_small_pivot_count = 0;
+    int reason_invalid_col_count = 0;
+    int reason_lu_max_updates_count = 0;
+    int reason_lu_spike_pool_full_count = 0;
+    int reason_lu_update_pivot_small_count = 0;
+    int reason_lu_singular_update_count = 0;
+    int reason_factor_singular_count = 0;
+    int reason_refactor_forced_other_count = 0;
+    int reason_refactor_after_update_other_count = 0;
     int summary_found = 0;
     TraceSummary summary;
     memset(&summary, 0, sizeof(summary));
@@ -152,10 +169,24 @@ int main(void) {
                 if (iter > last_event_iter) {
                     last_event_iter = iter;
                 }
-                if (strcmp(reason, "refactor_after_update_fail") == 0) {
-                    reason_update_fail_count++;
-                } else if (strcmp(reason, "small_pivot") == 0) {
+                if (strcmp(reason, "small_pivot") == 0) {
                     reason_small_pivot_count++;
+                } else if (strcmp(reason, "invalid_entering_column") == 0) {
+                    reason_invalid_col_count++;
+                } else if (strcmp(reason, "lu_max_updates") == 0) {
+                    reason_lu_max_updates_count++;
+                } else if (strcmp(reason, "lu_spike_pool_full") == 0) {
+                    reason_lu_spike_pool_full_count++;
+                } else if (strcmp(reason, "lu_update_pivot_too_small") == 0) {
+                    reason_lu_update_pivot_small_count++;
+                } else if (strcmp(reason, "lu_singular_update") == 0) {
+                    reason_lu_singular_update_count++;
+                } else if (strcmp(reason, "factor_singular") == 0) {
+                    reason_factor_singular_count++;
+                } else if (strcmp(reason, "refactor_after_forced_pivot_other") == 0) {
+                    reason_refactor_forced_other_count++;
+                } else if (strcmp(reason, "refactor_after_update_fail_other") == 0) {
+                    reason_refactor_after_update_other_count++;
                 }
             }
         } else if (strstr(line, "[phase1_trace] summary")) {
@@ -177,14 +208,40 @@ int main(void) {
     TEST(pivot_event_count > 0, "Captured pivot-failure trace events");
 
     if (summary_found) {
+        int summary_reason_total =
+            summary.small_pivot +
+            summary.invalid_col +
+            summary.lu_max_updates +
+            summary.lu_spike_pool_full +
+            summary.lu_update_pivot_small +
+            summary.lu_singular_update +
+            summary.factor_singular +
+            summary.refactor_forced_other +
+            summary.refactor_after_update_other;
+
         TEST(summary.piv_fail == pivot_event_count, "Summary pivot-failure count matches event count");
+        TEST(summary_reason_total == summary.piv_fail, "Summary reason counters add up to pivot-failure count");
         TEST(summary.first_iter == first_event_iter, "Summary first fail iteration matches parsed events");
         TEST(summary.last_iter == last_event_iter, "Summary last fail iteration matches parsed events");
         TEST(summary.first_iter >= 140, "First failing pivot is in expected late Phase-1 cluster");
-        TEST(summary.refactor_after_update >= reason_update_fail_count,
-             "Summary refactor-after-update count is consistent");
         TEST(summary.small_pivot >= reason_small_pivot_count,
              "Summary small-pivot count is consistent");
+        TEST(summary.invalid_col >= reason_invalid_col_count,
+             "Summary invalid-column count is consistent");
+        TEST(summary.lu_max_updates >= reason_lu_max_updates_count,
+             "Summary LU max-updates count is consistent");
+        TEST(summary.lu_spike_pool_full >= reason_lu_spike_pool_full_count,
+             "Summary LU spike-pool-full count is consistent");
+        TEST(summary.lu_update_pivot_small >= reason_lu_update_pivot_small_count,
+             "Summary LU update-pivot-small count is consistent");
+        TEST(summary.lu_singular_update >= reason_lu_singular_update_count,
+             "Summary LU singular-update count is consistent");
+        TEST(summary.factor_singular >= reason_factor_singular_count,
+             "Summary factor-singular count is consistent");
+        TEST(summary.refactor_forced_other >= reason_refactor_forced_other_count,
+             "Summary refactor-forced-other count is consistent");
+        TEST(summary.refactor_after_update_other >= reason_refactor_after_update_other_count,
+             "Summary refactor-after-update-other count is consistent");
         printf("Trace signature: 0x%016llx\n", summary.sig);
         if (EXPECTED_TRACE_SIG != 0ULL) {
             TEST(summary.sig == EXPECTED_TRACE_SIG, "Trace signature matches expected beaconfd baseline");
