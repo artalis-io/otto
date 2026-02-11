@@ -260,6 +260,16 @@ typedef struct {
     int iterations;
     int phase;              /* 1 or 2 */
 
+    /* Phase-1 failure tracing (deterministic diagnostics for numerical stalls) */
+    int trace_phase1_enabled;      /* 1 to emit trace lines */
+    int trace_phase1_iter;         /* Iteration index at current pivot attempt */
+    int trace_last_entering;       /* Entering var for last pivot attempt */
+    int trace_last_leaving_pos;    /* Leaving row position for last pivot attempt */
+    double trace_last_theta;       /* Ratio-test step for last pivot attempt */
+    double trace_last_pivot;       /* Pivot element d[leaving_pos] */
+    double trace_last_dir_inf;     /* ||direction||_inf for last pivot attempt */
+    int trace_last_fail_reason;    /* Failure reason code from simplex_pivot */
+
     /* Pre-allocated sparse workspace for reduced cost computation */
     int *cb_sparse_idx;     /* Sparse indices for c_B (size m) */
     double *cb_sparse_val;  /* Sparse values for c_B (size m) */
@@ -282,6 +292,7 @@ typedef struct {
     int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial */
     int verbose;
     int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
+    int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
 
     /* Scaling factors (used if scaling enabled) */
     double *row_scale;      /* Row scaling factors */
@@ -299,6 +310,17 @@ typedef struct {
     int iterations;
     double solve_time;
     int degenerate_pivots;
+
+    /* Phase-1 trace summary */
+    int trace_phase1_pivot_failures;
+    int trace_phase1_fail_small_pivot;
+    int trace_phase1_fail_invalid_column;
+    int trace_phase1_fail_refactor_forced;
+    int trace_phase1_fail_refactor_after_update;
+    int trace_phase1_no_entering_events;
+    int trace_phase1_first_fail_iter;
+    int trace_phase1_last_fail_iter;
+    unsigned long long trace_phase1_signature;
 
     /* Farkas ray (certificate of infeasibility) */
     double *farkas_ray;     /* Size num_cons, valid when status == INFEASIBLE */

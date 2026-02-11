@@ -40,6 +40,7 @@ struct RalphModel {
     int detect_special; /* 1=detect LAP/network structure, 0=disable */
     int node_pool_capacity; /* Pre-allocated B&B node pool size (default 1024) */
     int force_two_phase; /* 1=force two-phase simplex for clean Farkas duals */
+    int trace_phase1; /* 1=emit deterministic Phase-1 failure trace */
 
     /* Solution */
     RalphStatus status;
@@ -102,6 +103,7 @@ RalphModel* ralph_create(void) {
     model->pricing = 2; /* Default: Devex */
     model->detect_special = 0; /* Default: disabled for fair benchmarking */
     model->node_pool_capacity = 1024; /* Default B&B node pool size */
+    model->trace_phase1 = 0;
 
     model->status = RALPH_STATUS_UNKNOWN;
 
@@ -517,6 +519,7 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->presolve = 0;  /* Already done */
         model->lp_solver->pricing_strategy = model->pricing;
         model->lp_solver->force_two_phase = model->force_two_phase;
+        model->lp_solver->trace_phase1 = model->trace_phase1;
 
         /* Solve using selected method */
         if (model->method == 1) {
@@ -961,6 +964,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (STREQ(name, "force_two_phase") || STREQ(name, "TwoPhase")) {
         /* 1=force two-phase simplex for clean Farkas duals, 0=default (Big-M) */
         model->force_two_phase = value;
+    } else if (STREQ(name, "trace_phase1") || STREQ(name, "TracePhase1")) {
+        /* 1=emit deterministic phase-1 pivot-failure trace to stderr */
+        model->trace_phase1 = value;
     } else {
         return -1;  /* Unknown parameter */
     }
@@ -999,6 +1005,8 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
         *value = model->method;
     } else if (STREQ(name, "node_pool_capacity")) {
         *value = model->node_pool_capacity;
+    } else if (STREQ(name, "trace_phase1")) {
+        *value = model->trace_phase1;
     } else {
         return -1;
     }

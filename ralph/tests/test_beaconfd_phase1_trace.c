@@ -1,0 +1,209 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include "ralph.h"
+
+#define EXPECTED_TRACE_SIG 0x0c685a961c99ee21ULL
+
+static int test_count = 0;
+static int pass_count = 0;
+
+#define TEST(cond, msg) do { \
+    test_count++; \
+    if (cond) { \
+        pass_count++; \
+        printf("  PASS: %s\n", msg); \
+    } else { \
+        printf("  FAIL: %s\n", msg); \
+    } \
+} while (0)
+
+typedef struct {
+    char status[32];
+    int piv_fail;
+    int small_pivot;
+    int invalid_col;
+    int refactor_forced;
+    int refactor_after_update;
+    int no_entering;
+    int first_iter;
+    int last_iter;
+    unsigned long long sig;
+} TraceSummary;
+
+static int parse_summary(const char *line, TraceSummary *s) {
+    if (!line || !s) return 0;
+    int n = sscanf(line,
+                   "[phase1_trace] summary status=%31s piv_fail=%d small_pivot=%d invalid_col=%d refactor_forced=%d refactor_after_update=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%llx",
+                   s->status,
+                   &s->piv_fail,
+                   &s->small_pivot,
+                   &s->invalid_col,
+                   &s->refactor_forced,
+                   &s->refactor_after_update,
+                   &s->no_entering,
+                   &s->first_iter,
+                   &s->last_iter,
+                   &s->sig);
+    return n == 10;
+}
+
+int main(void) {
+    printf("\n=== Test: beaconfd Phase-1 trace signature ===\n\n");
+
+    RalphModel *model = ralph_create();
+    TEST(model != NULL, "Created model");
+    if (!model) return 1;
+
+    int rc = ralph_read_mps(model, "benchmarks/netlib/beaconfd.mps");
+    TEST(rc == 0, "Loaded beaconfd.mps");
+    if (rc != 0) {
+        ralph_free(model);
+        return 1;
+    }
+
+    ralph_set_int_param(model, "presolve", 0);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "detect_special", 0);
+    ralph_set_int_param(model, "max_iterations", 4000);
+    ralph_set_int_param(model, "trace_phase1", 1);
+
+    char trace_path[] = "/tmp/ralph_phase1_trace_XXXXXX";
+    int trace_fd = mkstemp(trace_path);
+    TEST(trace_fd >= 0, "Created trace temp file");
+    if (trace_fd < 0) {
+        ralph_free(model);
+        return 1;
+    }
+
+    int old_stderr = dup(STDERR_FILENO);
+    TEST(old_stderr >= 0, "Duplicated stderr");
+    if (old_stderr < 0) {
+        close(trace_fd);
+        unlink(trace_path);
+        ralph_free(model);
+        return 1;
+    }
+
+    fflush(stderr);
+    int dup_ok = dup2(trace_fd, STDERR_FILENO);
+    TEST(dup_ok >= 0, "Redirected stderr to trace file");
+    if (dup_ok < 0) {
+        close(old_stderr);
+        close(trace_fd);
+        unlink(trace_path);
+        ralph_free(model);
+        return 1;
+    }
+
+    ralph_optimize(model);
+
+    fflush(stderr);
+    dup2(old_stderr, STDERR_FILENO);
+    close(old_stderr);
+
+    lseek(trace_fd, 0, SEEK_SET);
+    FILE *trace = fdopen(trace_fd, "r");
+    TEST(trace != NULL, "Opened trace file for parsing");
+    if (!trace) {
+        close(trace_fd);
+        unlink(trace_path);
+        ralph_free(model);
+        return 1;
+    }
+
+    int pivot_event_count = 0;
+    int first_event_iter = -1;
+    int last_event_iter = -1;
+    int reason_update_fail_count = 0;
+    int reason_small_pivot_count = 0;
+    int summary_found = 0;
+    TraceSummary summary;
+    memset(&summary, 0, sizeof(summary));
+
+    char line[1024];
+    while (fgets(line, sizeof(line), trace)) {
+        if (strstr(line, "[phase1_trace] event=pivot_fail")) {
+            int iter = -1;
+            char reason[64] = {0};
+            const char *iter_ptr = strstr(line, "iter=");
+            const char *reason_ptr = strstr(line, "reason=");
+            if (iter_ptr) {
+                iter = atoi(iter_ptr + 5);
+            }
+            if (reason_ptr) {
+                reason_ptr += 7;
+                int r = 0;
+                while (reason_ptr[r] != '\0' &&
+                       reason_ptr[r] != ' ' &&
+                       reason_ptr[r] != '\n' &&
+                       r < (int)sizeof(reason) - 1) {
+                    reason[r] = reason_ptr[r];
+                    r++;
+                }
+                reason[r] = '\0';
+            }
+            if (iter >= 0 && reason[0] != '\0') {
+                pivot_event_count++;
+                if (first_event_iter < 0 || iter < first_event_iter) {
+                    first_event_iter = iter;
+                }
+                if (iter > last_event_iter) {
+                    last_event_iter = iter;
+                }
+                if (strcmp(reason, "refactor_after_update_fail") == 0) {
+                    reason_update_fail_count++;
+                } else if (strcmp(reason, "small_pivot") == 0) {
+                    reason_small_pivot_count++;
+                }
+            }
+        } else if (strstr(line, "[phase1_trace] summary")) {
+            summary_found = parse_summary(line, &summary);
+        }
+    }
+
+    fclose(trace);
+    unlink(trace_path);
+
+    RalphStatus status = ralph_get_status(model);
+    int iters = ralph_get_iterations(model);
+
+    printf("Solver status: %s\n", ralph_status_string(status));
+    printf("Iterations: %d\n", iters);
+
+    TEST(status == RALPH_STATUS_ITERATION_LIMIT, "Expected current terminal status ITERATION_LIMIT");
+    TEST(summary_found, "Found and parsed phase1 trace summary");
+    TEST(pivot_event_count > 0, "Captured pivot-failure trace events");
+
+    if (summary_found) {
+        TEST(summary.piv_fail == pivot_event_count, "Summary pivot-failure count matches event count");
+        TEST(summary.first_iter == first_event_iter, "Summary first fail iteration matches parsed events");
+        TEST(summary.last_iter == last_event_iter, "Summary last fail iteration matches parsed events");
+        TEST(summary.first_iter >= 140, "First failing pivot is in expected late Phase-1 cluster");
+        TEST(summary.refactor_after_update >= reason_update_fail_count,
+             "Summary refactor-after-update count is consistent");
+        TEST(summary.small_pivot >= reason_small_pivot_count,
+             "Summary small-pivot count is consistent");
+        printf("Trace signature: 0x%016llx\n", summary.sig);
+        if (EXPECTED_TRACE_SIG != 0ULL) {
+            TEST(summary.sig == EXPECTED_TRACE_SIG, "Trace signature matches expected beaconfd baseline");
+        } else {
+            TEST(summary.sig != 0ULL, "Trace signature is non-zero (baseline not yet pinned)");
+        }
+    }
+
+    ralph_free(model);
+
+    printf("\n══════════════════════════════════════════════════════════\n");
+    printf("Test Summary: %d/%d passed (%.1f%%)\n", pass_count, test_count,
+           test_count > 0 ? (100.0 * pass_count / test_count) : 0.0);
+
+    if (pass_count == test_count) {
+        printf("\n✓ All tests passed!\n");
+        return 0;
+    }
+
+    printf("\n✗ Some tests failed\n");
+    return 1;
+}
