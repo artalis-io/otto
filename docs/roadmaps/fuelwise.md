@@ -1872,6 +1872,7 @@ performance at scale.
 5. **Best-first node selection** (Ralph, ~200 LoC) — biggest generic B&B improvement
 6. **Pseudocost branching** (Ralph, ~200 LoC) — replaces static priorities
 7. **Fix Benders suboptimality** (Ralph, investigate) — unlocks scaling to k>100
+8. **Model export for GLPK comparison** — when `ralph_write_mps()` / `ralph_write_lp()` are implemented (both declared but unimplemented), FuelWise can export its MILP model for side-by-side presolve quality and solve-time comparison against GLPK
 
 ### 8.7 Per-Component Hint Breakdown (Feb 2026)
 

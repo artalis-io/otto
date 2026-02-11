@@ -262,6 +262,34 @@ This is a significant architectural change. `dual_reopt` was the easy win — it
 B&B case (95% of MIP time) with a focused 130-line function. Making dual the default LP
 algorithm is a different scale of work.
 
+## Presolve Quality: Ralph vs GLPK/GLOP
+
+### Current State
+
+Ralph tracks presolve stats (`vars_removed`, `cons_removed`, `bounds_tightened`) but has
+**no public getter API** — stats are only visible via `verbose=1` printf output in
+`ralph_optimize()`. The `PresolveResult` is created and consumed internally.
+
+### Comparison Infrastructure
+
+Existing GLPK comparison tools (`compare_glpk.c`, `bench_vs_glpk.c`, `bench_mip.c`) exist
+but **don't capture presolve stats from GLPK**. They only compare solve time, iteration
+count, and objective match.
+
+### Gaps to Fill
+
+| Gap | Impact | Effort |
+|-----|--------|--------|
+| Public presolve stats API (`ralph_get_presolve_stats()`) | Enables programmatic comparison | Low |
+| `ralph_write_mps` implementation (declared but unimplemented) | Blocks easy export for side-by-side comparison | Medium |
+| Benchmark tools capturing reduction ratios from both solvers | Enables direct presolve quality comparison | Medium |
+
+### Known Numbers
+
+**beaconfd (NETLIB):**
+- Ralph presolve: 262 vars → 148 vars (43.5%), 173 cons → 87 cons (49.7%)
+- Result: `OPTIMAL` in 149 iterations (was `ITERATION_LIMIT` without presolve)
+
 ## References
 
 - Forrest & Goldfarb (1992) — Steepest edge for dual simplex
