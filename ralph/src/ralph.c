@@ -550,6 +550,11 @@ int ralph_optimize(RalphModel *model) {
         if (model->status == RALPH_STATUS_OPTIMAL) {
             model->obj_value = model->lp_solver->obj_value;
 
+            /* Add obj_offset from presolve (e.g., doubleton elimination) */
+            if (presolved && presolved->reduced_model) {
+                model->obj_value += presolved->reduced_model->obj_offset;
+            }
+
             /* Allocate solution arrays for original problem size */
             model->solution = (double*)calloc(n_orig, sizeof(double));
             model->dual_solution = (double*)calloc(m_orig, sizeof(double));
