@@ -56,8 +56,8 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 | Priority | Task | Expected Impact |
 |----------|------|-----------------|
-| **High** | Supernodal factorization | 3-5x factorization speedup |
-| **High** | Symbolic analysis phase | 1.5-2x for repeated factorization |
+| **High** | Supernodal LU factorization (§1.9) | 3-5x factorization speedup |
+| **High** | Symbolic analysis phase (§1.9) | 1.5-2x for repeated factorization |
 | **Medium** | Better fill-reducing ordering (COLAMD) | 1.2-1.5x from reduced fill-in |
 | **Medium** | Compressed sparse storage | Eliminate linked-list overhead |
 | **Low** | Parallel pricing | Multi-core utilization |
@@ -176,6 +176,49 @@ cover cuts, mandatory station fixing).
 **Files:** `presolve.c` (~2400 lines), `presolve.h`, `ralph.c` (obj_offset integration)
 **Tests:** 40 assertions in `test_presolve.c` covering all techniques + edge cases
 **Commits:** `94c3808 ralph: implement LP presolve improvements (P3)`
+
+### 1.9 Supernodal LU Factorization (Planned)
+
+**Problem:** LU factorization is 42% of total solve time. Ralph currently does column-by-column
+sparse factorization with linked-list operations. The per-iteration cost gap vs GLPK grows from
+1.3x at small sizes to 13.7x at 1000x500 — dominated by LU operations (factorization 42%,
+BTRAN 27%, FTRAN 26%).
+
+**Solution:** Supernodal factorization groups columns with similar sparsity structures into
+dense blocks ("supernodes") and uses dense BLAS kernels (dgemm/dtrsm) for inner operations.
+This converts many small sparse operations into fewer large dense operations that exploit
+CPU cache hierarchy and SIMD.
+
+```
+Before: 250 individual pivots, each with linked-list ops → cache misses
+After:  ~50 supernodes, each using dense matrix multiply → cache-friendly
+```
+
+**Implementation phases:**
+
+| Phase | Task | Description | Effort |
+|-------|------|-------------|--------|
+| 1 | **Symbolic/numeric separation** | Separate structure analysis from numeric factorization. Reuse symbolic analysis across refactorizations (basis structure is often similar). Pre-allocate exact memory needed. | Medium |
+| 2 | **Elimination tree** | Build column dependency tree during symbolic analysis. Required for supernode detection. | Medium |
+| 3 | **Supernode detection** | Identify consecutive columns with identical row structure (fundamental supernodes). Merge adjacent supernodes with similar structure (relaxed supernodes). | Medium |
+| 4 | **Dense BLAS kernels** | Replace sparse column ops within supernodes with dense dgemm/dtrsm. No external BLAS dependency — implement focused kernels in Ralph (small dense matrices, typically 2-20 columns). | High |
+| 5 | **Supernodal triangular solves** | Extend supernodal structure to FTRAN/BTRAN. Use dense kernels for panel solves within supernodes. | Medium |
+
+**Expected impact:**
+- Phase 1 alone: 1.5-2x for refactorization (reuse symbolic analysis)
+- Phases 1-4: 3-5x for factorization (42% of total → ~10%)
+- Phase 5: Additional 1.5-2x for FTRAN/BTRAN (53% of total)
+- Combined: potential 3-6x overall iteration speedup
+
+**Key design decisions:**
+- No external BLAS dependency (WASM compatibility, zero-dependency mandate)
+- Inline dense kernels sized for typical LP supernodes (2-20 columns)
+- Hyper-sparse threshold: skip supernodal path when RHS density < 10%
+- LP-specific optimization: order singleton columns (identity/slack) last, apply
+  supernodal only to the non-trivial submatrix
+
+**Files:** `src/lu.c` (major refactor), new `src/lu_symbolic.c`, new `src/lu_supernode.c`
+**References:** SuperLU (Demmel et al.), CHOLMOD, GLPK `bflib/`
 
 ---
 
