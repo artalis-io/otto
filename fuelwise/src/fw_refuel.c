@@ -512,40 +512,21 @@ static void fw_free_cut_context(FWReachCutContext *ctx)
 }
 
 /* ============================================================================
- * Refueling Problem Solving - MILP
+ * Refueling Problem Solving - MILP Model Builder
+ *
+ * Shared helper that builds the raw MILP model (without domain hints).
+ * Used by both fw_solve_refuel_milp() and fw_export_milp_lp().
+ *
+ * Variable layout: x[0..k-1] purchases, y[k..2k-1] cumulative, z[2k..3k-1] binary
+ * Returns RalphModel* on success, NULL on error.
  * ============================================================================ */
 
-int fw_solve_refuel_milp(
-    const FWRefuelProblem *problem,
-    FWRefuelSolution *solution)
+static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
 {
-    if (!problem || !solution) return -1;
-
-    /* Initialize solution */
-    memset(solution, 0, sizeof(FWRefuelSolution));
-
     int k = problem->num_stations;
-    if (k == 0) {
-        solution->status = FW_STATUS_OPTIMAL;
-        solution->total_cost = 0.0;
-        solution->remaining_fuel = problem->current_fuel -
-            fw_calc_total_fuel_consumed(problem);
-        return 0;
-    }
-
-    /* Validate k to prevent integer overflow in allocations */
-    if (k < 0 || k > FW_MAX_STATIONS) {
-        solution->status = FW_STATUS_ERROR;
-        return -1;
-    }
-
-    int num_vars = 3 * k;
 
     RalphModel *model = ralph_create();
-    if (!model) {
-        solution->status = FW_STATUS_ERROR;
-        return -1;
-    }
+    if (!model) return NULL;
 
     ralph_set_obj_sense(model, RALPH_MINIMIZE);
 
@@ -580,8 +561,7 @@ int fw_solve_refuel_milp(
             free(indices);
             free(values);
             ralph_free(model);
-            solution->status = FW_STATUS_ERROR;
-            return -1;
+            return NULL;
         }
 
         indices[0] = y_start + i;
@@ -645,8 +625,7 @@ int fw_solve_refuel_milp(
             free(indices);
             free(values);
             ralph_free(model);
-            solution->status = FW_STATUS_ERROR;
-            return -1;
+            return NULL;
         }
 
         for (int i = 0; i < k; i++) {
@@ -665,6 +644,68 @@ int fw_solve_refuel_milp(
 
         free(indices);
         free(values);
+    }
+
+    return model;
+}
+
+/* ============================================================================
+ * Export MILP as LP file (without domain hints)
+ * ============================================================================ */
+
+int fw_export_milp_lp(const FWRefuelProblem *problem, const char *path)
+{
+    if (!problem || !path) return -1;
+
+    int k = problem->num_stations;
+    if (k <= 0 || k > FW_MAX_STATIONS) return -1;
+
+    RalphModel *model = fw_build_milp_model(problem);
+    if (!model) return -1;
+
+    int rc = ralph_write_lp(model, path);
+    ralph_free(model);
+    return rc;
+}
+
+/* ============================================================================
+ * Refueling Problem Solving - MILP
+ * ============================================================================ */
+
+int fw_solve_refuel_milp(
+    const FWRefuelProblem *problem,
+    FWRefuelSolution *solution)
+{
+    if (!problem || !solution) return -1;
+
+    /* Initialize solution */
+    memset(solution, 0, sizeof(FWRefuelSolution));
+
+    int k = problem->num_stations;
+    if (k == 0) {
+        solution->status = FW_STATUS_OPTIMAL;
+        solution->total_cost = 0.0;
+        solution->remaining_fuel = problem->current_fuel -
+            fw_calc_total_fuel_consumed(problem);
+        return 0;
+    }
+
+    /* Validate k to prevent integer overflow in allocations */
+    if (k < 0 || k > FW_MAX_STATIONS) {
+        solution->status = FW_STATUS_ERROR;
+        return -1;
+    }
+
+    int num_vars = 3 * k;
+    int x_start = 0;
+    int z_start = 2 * k;
+    double est_price = problem->remaining_fuel_value;
+
+    /* Build the raw MILP model */
+    RalphModel *model = fw_build_milp_model(problem);
+    if (!model) {
+        solution->status = FW_STATUS_ERROR;
+        return -1;
     }
 
     /* Apply domain-specific MIP hints: priorities, directions, reach cuts */

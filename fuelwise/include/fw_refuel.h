@@ -127,6 +127,25 @@ void fw_set_benders_threshold(int threshold);
 int fw_get_benders_threshold(void);
 
 /*
+ * Export the MILP model as an LP file (without domain hints).
+ *
+ * Builds the raw MILP formulation and writes it in CPLEX LP format.
+ * The exported model does not include reach cuts, branching priorities,
+ * or directions — suitable for solving with external solvers like GLPK.
+ *
+ * Parameters:
+ *   problem - The refueling problem definition
+ *   path    - Output file path (.lp)
+ *
+ * Returns:
+ *   0 on success, -1 on error
+ */
+int fw_export_milp_lp(
+    const FWRefuelProblem *problem,
+    const char *path
+);
+
+/*
  * Free resources allocated in a solution.
  *
  * Parameters:

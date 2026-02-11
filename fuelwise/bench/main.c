@@ -50,6 +50,7 @@ static void print_usage(const char *prog)
     printf("  --seed N         Random seed (default: time-based)\n");
     printf("  --milp           Use MILP solver (default: LP)\n");
     printf("  --benders        Use Benders decomposition solver\n");
+    printf("  --glpk           Compare against GLPK (requires glpsol)\n");
     printf("  --json           Output as JSON\n");
     printf("  --verbose        Print per-run details\n");
     printf("  --all            Run all scenarios\n");
@@ -61,6 +62,7 @@ typedef struct {
     int num_runs;
     uint64_t seed;
     FWSolverType solver_type;
+    int glpk_compare;
     int as_json;
     int verbose;
     int run_all;
@@ -72,6 +74,7 @@ static int parse_args(int argc, char **argv, BenchOptions *opts)
     opts->num_runs = 100;
     opts->seed = 0;
     opts->solver_type = FW_SOLVER_LP;
+    opts->glpk_compare = 0;
     opts->as_json = 0;
     opts->verbose = 0;
     opts->run_all = 0;
@@ -90,6 +93,8 @@ static int parse_args(int argc, char **argv, BenchOptions *opts)
             opts->solver_type = FW_SOLVER_MILP;
         } else if (strcmp(argv[i], "--benders") == 0) {
             opts->solver_type = FW_SOLVER_BENDERS;
+        } else if (strcmp(argv[i], "--glpk") == 0) {
+            opts->glpk_compare = 1;
         } else if (strcmp(argv[i], "--json") == 0) {
             opts->as_json = 1;
         } else if (strcmp(argv[i], "--verbose") == 0) {
@@ -154,6 +159,7 @@ static int run_scenario(
     const BenchOptions *opts)
 {
     FWBenchConfig cfg = get_config(scenario, opts->seed);
+    cfg.glpk_compare = opts->glpk_compare;
     FWBenchResults results;
 
     if (opts->verbose && !opts->as_json) {
