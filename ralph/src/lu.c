@@ -1789,20 +1789,13 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
      * Threshold = 0.001 (0.1%) is less aggressive than MARKOWITZ_THRESHOLD (10%)
      * to avoid excessive refactorization while still catching very bad pivots.
      * This is more conservative than RALPH_PIVOT_TOL (1e-10) alone. */
-/* Threshold for accepting pivots during LU updates.
- * Lower values allow more updates (fewer refactorizations) but may accumulate error.
- * Higher values force more refactorizations but maintain better stability.
- * Original: 0.001 (0.1%) caused issues with highly degenerate problems like beaconfd
- * Current: 1e-4 (0.01%) - moderate compromise */
-#define RALPH_UPDATE_PIVOT_THRESHOLD 1e-4
-
     double max_abs_spike = fabs(spike[step_pos]);
     for (int i = 0; i < m; i++) {
         double absval = fabs(spike[i]);
         if (absval > max_abs_spike) max_abs_spike = absval;
     }
 
-    if (fabs(spike[step_pos]) < RALPH_UPDATE_PIVOT_THRESHOLD * max_abs_spike) {
+    if (fabs(spike[step_pos]) < RALPH_LU_UPDATE_PIVOT_THRESHOLD * max_abs_spike) {
         /* Pivot is too small relative to column magnitude.
          * Force refactorization to get a more stable basis representation. */
         lu_set_failure(lu, LU_FAIL_UPDATE_PIVOT_TOO_SMALL);

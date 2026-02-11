@@ -108,6 +108,10 @@ BEACONFD_TEST_EXEC = test_presolve_beaconfd
 BEACONFD_TRACE_TEST_SOURCES = $(TEST_DIR)/test_beaconfd_phase1_trace.c
 BEACONFD_TRACE_TEST_EXEC = test_beaconfd_phase1_trace
 
+# Simplex basis-action policy test
+SIMPLEX_POLICY_TEST_SOURCES = $(TEST_DIR)/test_simplex_policy.c
+SIMPLEX_POLICY_TEST_EXEC = test_simplex_policy
+
 # Benchmarks
 BENCH_DIR = benchmarks
 BENCH_SIZES_EXEC = bench_sizes
@@ -156,10 +160,11 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC)
+test: $(TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC)
 	./$(TEST_EXEC)
 	./$(BEACONFD_TEST_EXEC)
 	./$(BEACONFD_TRACE_TEST_EXEC)
+	./$(SIMPLEX_POLICY_TEST_EXEC)
 
 # Build edge case tests
 $(EDGE_TEST_EXEC): $(EDGE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
@@ -236,6 +241,14 @@ $(BEACONFD_TRACE_TEST_EXEC): $(BEACONFD_TRACE_TEST_SOURCES) $(LIB_NAME) $(SHARED
 # Run beaconfd phase-1 trace regression test
 test-beaconfd-trace: $(BEACONFD_TRACE_TEST_EXEC)
 	./$(BEACONFD_TRACE_TEST_EXEC)
+
+# Build simplex basis-action policy test
+$(SIMPLEX_POLICY_TEST_EXEC): $(SIMPLEX_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run simplex basis-action policy test
+test-simplex-policy: $(SIMPLEX_POLICY_TEST_EXEC)
+	./$(SIMPLEX_POLICY_TEST_EXEC)
 
 # Run optimization module tests
 test-optim: $(OPTIM_TEST_EXEC)
@@ -332,7 +345,7 @@ download-netlib:
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -346,7 +359,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
@@ -377,6 +390,7 @@ help:
 	@echo "  test-detect - Run network detection tests"
 	@echo "  test-optim  - Run optimization module tests"
 	@echo "  test-beaconfd - Run beaconfd numerical-regression test"
+	@echo "  test-simplex-policy - Run simplex basis-action policy tests"
 	@echo "  bench      - Run size scaling benchmark"
 	@echo "  bench-lap  - Run LAP benchmark (JVC vs LP)"
 	@echo "  bench-netflow - Run network flow benchmark"

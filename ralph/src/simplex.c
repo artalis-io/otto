@@ -66,6 +66,63 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
     }
 }
 
+typedef enum {
+    BASIS_ACTION_UPDATE = 0,
+    BASIS_ACTION_REFACTOR = 1,
+    BASIS_ACTION_REPAIR = 2,
+    BASIS_ACTION_ABORT = 3
+} BasisAction;
+
+/*
+ * Centralized basis-update policy used by simplex_pivot().
+ * lu_update_status convention:
+ *   0  = no LU update attempt yet
+ *  -1  = LU update failed
+ *  -2  = refactorization failed
+ *  -3  = repair failed
+ */
+static BasisAction choose_basis_action(double pivot,
+                                       int force_refactor,
+                                       int lu_update_status,
+                                       int lu_reason,
+                                       int repeat_pattern,
+                                       double growth_factor) {
+    (void)lu_reason;
+
+    if (!isfinite(pivot) || fabs(pivot) < RALPH_PIVOT_TOL) {
+        return BASIS_ACTION_ABORT;
+    }
+    if (lu_update_status <= -3) {
+        return BASIS_ACTION_ABORT;
+    }
+    if (lu_update_status == -2) {
+        return BASIS_ACTION_REPAIR;
+    }
+    if (lu_update_status == -1) {
+        return BASIS_ACTION_REFACTOR;
+    }
+    if (force_refactor ||
+        repeat_pattern >= RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER ||
+        growth_factor > RALPH_LU_GROWTH_REFACTOR_THRESHOLD) {
+        return BASIS_ACTION_REFACTOR;
+    }
+    return BASIS_ACTION_UPDATE;
+}
+
+int simplex_choose_basis_action_for_test(double pivot,
+                                         int force_refactor,
+                                         int lu_update_status,
+                                         int lu_reason,
+                                         int repeat_pattern,
+                                         double growth_factor) {
+    return (int)choose_basis_action(pivot,
+                                    force_refactor,
+                                    lu_update_status,
+                                    lu_reason,
+                                    repeat_pattern,
+                                    growth_factor);
+}
+
 /* FNV-1a style mixer for deterministic trace signatures. */
 static unsigned long long phase1_trace_mix(unsigned long long sig, unsigned long long word) {
     sig ^= word;
@@ -1865,7 +1922,11 @@ static int ratio_test_harris_excluding_current(SimplexTableau *tab, int entering
  * Simplex Iteration
  * ============================================================================ */
 
-static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, double theta) {
+static int simplex_pivot(SimplexTableau *tab,
+                         int entering,
+                         int leaving_pos,
+                         double theta,
+                         int repeat_pattern_count) {
     double dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
     double x_enter_old = tab->x[entering];
 
@@ -1980,7 +2041,7 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     /* Update LU factorization.
      * For very small pivots, skip eta updates and refactorize immediately to
      * avoid accumulating unstable updates on near-singular bases. */
-    const int force_refactor = fabs(pivot) < 1e-4;
+    const int force_refactor = fabs(pivot) < RALPH_FORCE_REFACTOR_PIVOT_TOL;
     if (!tab->A_ext || entering < 0 || entering >= tab->A_ext->ncols) {
         if (tab->trace_phase1_enabled) {
             tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_INVALID_COLUMN;
@@ -1988,41 +2049,88 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         goto pivot_fail_rollback;  /* Invalid state */
     }
 
-    if (force_refactor) {
-        if (tableau_refactorize(tab) != 0) {
-            if (repair_singular_basis(tab) != 0) {
+    int lu_update_status = 0;
+    int lu_reason = LU_FAIL_NONE;
+    int update_reason = LU_FAIL_NONE;
+    int refactor_forced_path = 0;
+    int skip_se_update = 0;  /* Flag to skip SE update after reset */
+    double growth_factor = (tab->lu) ? tab->lu->growth_factor : 0.0;
+    BasisAction action = choose_basis_action(pivot,
+                                             force_refactor,
+                                             lu_update_status,
+                                             lu_reason,
+                                             repeat_pattern_count,
+                                             growth_factor);
+
+    for (;;) {
+        switch (action) {
+            case BASIS_ACTION_UPDATE:
+                sparse_get_column(tab->A_ext, entering, tab->work1);
+                if (lu_update(tab->lu, leaving_pos, tab->work1) == 0) {
+                    goto basis_update_done;
+                }
+                lu_update_status = -1;
+                update_reason = (tab->lu) ? tab->lu->last_failure_reason : LU_FAIL_NONE;
+                lu_reason = update_reason;
+                growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
+                action = choose_basis_action(pivot,
+                                             force_refactor,
+                                             lu_update_status,
+                                             lu_reason,
+                                             repeat_pattern_count,
+                                             growth_factor);
+                continue;
+
+            case BASIS_ACTION_REFACTOR:
+                refactor_forced_path = (lu_update_status == 0);
+                if (tableau_refactorize(tab) == 0) {
+                    goto basis_update_done;
+                }
+                lu_update_status = -2;
+                lu_reason = (tab->lu) ? tab->lu->last_failure_reason : lu_reason;
+                growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
+                action = choose_basis_action(pivot,
+                                             force_refactor,
+                                             lu_update_status,
+                                             lu_reason,
+                                             repeat_pattern_count,
+                                             growth_factor);
+                continue;
+
+            case BASIS_ACTION_REPAIR:
+                if (repair_singular_basis(tab) == 0) {
+                    goto basis_update_done;
+                }
+                lu_update_status = -3;
+                lu_reason = (tab->lu) ? tab->lu->last_failure_reason : lu_reason;
+                growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
+                action = choose_basis_action(pivot,
+                                             force_refactor,
+                                             lu_update_status,
+                                             lu_reason,
+                                             repeat_pattern_count,
+                                             growth_factor);
+                continue;
+
+            case BASIS_ACTION_ABORT:
+            default:
                 if (tab->trace_phase1_enabled) {
-                    int lu_reason = (tab->lu) ? tab->lu->last_failure_reason : LU_FAIL_NONE;
-                    tab->trace_last_fail_reason =
-                        phase1_trace_reason_from_lu_failure(lu_reason, 1);
-                }
-                goto pivot_fail_rollback;  /* All recovery attempts failed */
-            }
-        }
-    } else {
-        sparse_get_column(tab->A_ext, entering, tab->work1);
-        if (lu_update(tab->lu, leaving_pos, tab->work1) != 0) {
-            int update_reason = (tab->lu) ? tab->lu->last_failure_reason : LU_FAIL_NONE;
-            /* Update failed, try refactorize */
-            if (tableau_refactorize(tab) != 0) {
-                /* Refactorization failed, try basis repair */
-                if (repair_singular_basis(tab) != 0) {
-                    if (tab->trace_phase1_enabled) {
-                        int lu_reason = (tab->lu) ? tab->lu->last_failure_reason : LU_FAIL_NONE;
-                        if (update_reason == LU_FAIL_MAX_UPDATES ||
-                            update_reason == LU_FAIL_SPIKE_POOL_FULL ||
-                            update_reason == LU_FAIL_UPDATE_PIVOT_TOO_SMALL ||
-                            update_reason == LU_FAIL_SINGULAR_UPDATE) {
-                            lu_reason = update_reason;
-                        }
-                        tab->trace_last_fail_reason =
-                            phase1_trace_reason_from_lu_failure(lu_reason, 0);
+                    int fail_lu_reason = lu_reason;
+                    if (!refactor_forced_path &&
+                        (update_reason == LU_FAIL_MAX_UPDATES ||
+                         update_reason == LU_FAIL_SPIKE_POOL_FULL ||
+                         update_reason == LU_FAIL_UPDATE_PIVOT_TOO_SMALL ||
+                         update_reason == LU_FAIL_SINGULAR_UPDATE)) {
+                        fail_lu_reason = update_reason;
                     }
-                    goto pivot_fail_rollback;  /* All recovery attempts failed */
+                    tab->trace_last_fail_reason =
+                        phase1_trace_reason_from_lu_failure(fail_lu_reason, refactor_forced_path);
                 }
-            }
+                goto pivot_fail_rollback;
         }
     }
+
+basis_update_done:
 
     /* Update steepest edge pricing weights
      *
@@ -2037,7 +2145,7 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
      *   gamma_j = max(gamma_j, (alpha_j^2 * gamma_e) / pivot^2)
      * This doesn't need tau_helper, making it O(n) instead of O(n*m).
      */
-    int skip_se_update = 0;  /* Flag to skip SE update after reset */
+    skip_se_update = 0;
     if (tab->use_steepest_edge) {
         tab->devex_refcount++;
         double pivot_inv_sq = 1.0 / (pivot * pivot);
@@ -2513,7 +2621,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);
 
             double theta = max_infeas / fabs(tab->work2[leaving]);
-            simplex_pivot(tab, entering, leaving, theta);
+            simplex_pivot(tab, entering, leaving, theta, 0);
 
             if (lu_needs_refactorization(tab->lu)) {
                 tableau_refactorize(tab);
@@ -2555,11 +2663,11 @@ static int simplex_phase1(SimplexSolver *solver) {
     int degenerate_count = 0;
     const int DEGEN_THRESHOLD = 50;    /* Switch to Bland's rule after this many */
     const int RECOMPUTE_INTERVAL = 25; /* Periodic drift correction in Phase 1 */
-    const int FAIL_REPEAT_LIMIT = 20;  /* Avoid endless retries on same failing pivot */
     int refactor_interval = tab->use_two_phase ? 24 : 0;
     int use_bland = 0;
     int fail_entering = -1;
     int fail_leaving_pos = -1;
+    int fail_reason = PHASE1_PIVOT_FAIL_NONE;
     int fail_repeat_count = 0;
 
     /* Apply proactive perturbation only for extremely degenerate two-phase starts.
@@ -2739,19 +2847,24 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         /* Perform pivot */
-        if (simplex_pivot(tab, entering, leaving, theta) != 0) {
-            if (entering == fail_entering && leaving == fail_leaving_pos) {
+        if (simplex_pivot(tab, entering, leaving, theta, fail_repeat_count) != 0) {
+            int pivot_fail_reason = tab->trace_last_fail_reason;
+            if (entering == fail_entering &&
+                leaving == fail_leaving_pos &&
+                pivot_fail_reason == fail_reason) {
                 fail_repeat_count++;
             } else {
                 fail_entering = entering;
                 fail_leaving_pos = leaving;
+                fail_reason = pivot_fail_reason;
                 fail_repeat_count = 1;
             }
 
             phase1_trace_record_pivot_failure(solver, tab, iter, fail_repeat_count);
 
             if (solver->verbose) {
-                if (fail_repeat_count <= 3 || fail_repeat_count % 10 == 0) {
+                if (fail_repeat_count <= RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER ||
+                    fail_repeat_count % 10 == 0) {
                     fprintf(stderr,
                             "[simplex_phase1] Pivot failed at iter %d (repeat %d), attempting recovery\n",
                             iter, fail_repeat_count);
@@ -2772,7 +2885,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 "[simplex_phase1] Retrying with alternate leaving row %d (failed row %d)\n",
                                 alt_leaving, leaving);
                     }
-                    if (simplex_pivot(tab, entering, alt_leaving, alt_theta) == 0) {
+                    if (simplex_pivot(tab, entering, alt_leaving, alt_theta, fail_repeat_count) == 0) {
+                        fail_reason = PHASE1_PIVOT_FAIL_NONE;
                         fail_repeat_count = 0;
                         continue;
                     } else {
@@ -2781,7 +2895,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
             }
 
-            if (fail_repeat_count >= FAIL_REPEAT_LIMIT) {
+            if (fail_repeat_count >= RALPH_PHASE1_FAIL_REPEAT_LIMIT) {
                 if (solver->verbose) {
                     fprintf(stderr,
                             "[simplex_phase1] Repeated pivot failure (%d) for entering=%d leaving_pos=%d, terminating as ITERATION_LIMIT\n",
@@ -2856,6 +2970,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
+                fail_reason = PHASE1_PIVOT_FAIL_NONE;
                 fail_repeat_count = 0;
                 continue;
             }
@@ -2870,6 +2985,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
             return -1;
         }
+        fail_reason = PHASE1_PIVOT_FAIL_NONE;
         fail_repeat_count = 0;
 
         /* Periodic refactorization */
@@ -2918,6 +3034,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     }
                     tableau_compute_solution(tab);
                     tableau_compute_reduced_costs(tab);
+                    fail_reason = PHASE1_PIVOT_FAIL_NONE;
                     fail_repeat_count = 0;
                     continue;
                 }
@@ -3101,7 +3218,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
             /* Try to pivot if we found any candidate */
             if (best_j >= 0 && fabs(best_coef) > RALPH_PIVOT_TOL) {
                 /* Pivot with zero theta since artificial is at zero value */
-                if (simplex_pivot(tab, best_j, basis_pos, 0.0) == 0) {
+                if (simplex_pivot(tab, best_j, basis_pos, 0.0, 0) == 0) {
                     found_replacement = 1;
                     if (solver->verbose) {
                         fprintf(stderr, "[simplex_transition] Pivoted out artificial %d with var %d (coef=%.2e)\n",
@@ -3380,7 +3497,7 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         /* Perform pivot */
-        if (simplex_pivot(tab, entering, leaving, theta) != 0) {
+        if (simplex_pivot(tab, entering, leaving, theta, 0) != 0) {
             if (solver->verbose) {
                 fprintf(stderr, "[primal_simplex] Pivot failed at iter %d (entering=%d, leaving=%d, theta=%e), attempting recovery\n",
                         iter, entering, leaving, theta);

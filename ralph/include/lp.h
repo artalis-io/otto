@@ -19,6 +19,13 @@
 #define RALPH_INT_TOL 1e-5
 #define RALPH_BIG_M 1e8       /* Artificial variable cost for Big-M method */
 
+/* Numerical stabilization policy defaults */
+#define RALPH_FORCE_REFACTOR_PIVOT_TOL 1e-4
+#define RALPH_LU_UPDATE_PIVOT_THRESHOLD 1e-4
+#define RALPH_LU_GROWTH_REFACTOR_THRESHOLD 1e8
+#define RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER 3
+#define RALPH_PHASE1_FAIL_REPEAT_LIMIT 20
+
 /* NOTE: SAFE_FREE macro is provided by shared.h */
 
 /* ============================================================================
