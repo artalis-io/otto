@@ -1123,8 +1123,33 @@ int benders_solve_classic(BendersContext *ctx) {
     ctx->master_solver->max_cut_rounds = 0;  /* Disable Gomory/MIR cuts */
     ctx->master_solver->verbose = ctx->config.verbose;
 
-    /* Apply user's branching priorities to master variables */
-    /* (Integration with §6 infrastructure) */
+    /* Apply user's branching priorities/directions to master variables */
+    if (ctx->config.branch_priorities) {
+        int n_master = ctx->master_model->num_vars;
+        int *mp = (int*)calloc(n_master, sizeof(int));
+        if (mp) {
+            for (int j = 0; j < ctx->config.num_master_vars; j++) {
+                int orig_j = ctx->master_to_orig[j];
+                int master_j = ctx->orig_to_master[orig_j];
+                if (master_j >= 0 && master_j < n_master)
+                    mp[master_j] = ctx->config.branch_priorities[orig_j];
+            }
+            ctx->master_solver->branch_priorities = mp;
+        }
+    }
+    if (ctx->config.branch_directions) {
+        int n_master = ctx->master_model->num_vars;
+        int *md = (int*)calloc(n_master, sizeof(int));
+        if (md) {
+            for (int j = 0; j < ctx->config.num_master_vars; j++) {
+                int orig_j = ctx->master_to_orig[j];
+                int master_j = ctx->orig_to_master[orig_j];
+                if (master_j >= 0 && master_j < n_master)
+                    md[master_j] = ctx->config.branch_directions[orig_j];
+            }
+            ctx->master_solver->branch_directions = md;
+        }
+    }
 
     for (int iter = 0; iter < ctx->config.max_iterations; iter++) {
         ctx->iterations = iter + 1;
@@ -1310,6 +1335,34 @@ int benders_solve_classic(BendersContext *ctx) {
         }
         ctx->master_solver->max_cut_rounds = 0;  /* Disable Gomory/MIR cuts */
         ctx->master_solver->verbose = ctx->config.verbose;
+
+        /* Re-apply branching priorities/directions after master recreation */
+        if (ctx->config.branch_priorities) {
+            int n_master = ctx->master_model->num_vars;
+            int *mp = (int*)calloc(n_master, sizeof(int));
+            if (mp) {
+                for (int j = 0; j < ctx->config.num_master_vars; j++) {
+                    int orig_j = ctx->master_to_orig[j];
+                    int master_j = ctx->orig_to_master[orig_j];
+                    if (master_j >= 0 && master_j < n_master)
+                        mp[master_j] = ctx->config.branch_priorities[orig_j];
+                }
+                ctx->master_solver->branch_priorities = mp;
+            }
+        }
+        if (ctx->config.branch_directions) {
+            int n_master = ctx->master_model->num_vars;
+            int *md = (int*)calloc(n_master, sizeof(int));
+            if (md) {
+                for (int j = 0; j < ctx->config.num_master_vars; j++) {
+                    int orig_j = ctx->master_to_orig[j];
+                    int master_j = ctx->orig_to_master[orig_j];
+                    if (master_j >= 0 && master_j < n_master)
+                        md[master_j] = ctx->config.branch_directions[orig_j];
+                }
+                ctx->master_solver->branch_directions = md;
+            }
+        }
     }
 
     if (final_status == RALPH_STATUS_UNKNOWN) {
