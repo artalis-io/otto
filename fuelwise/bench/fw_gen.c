@@ -230,6 +230,162 @@ FWBenchConfig fw_bench_config_benders_100(void)
     return cfg;
 }
 
+/* MIP benchmark: ~15 stations, sub-millisecond sanity check */
+FWBenchConfig fw_bench_config_milp_15(void)
+{
+    FWBenchConfig cfg = {0};
+    cfg.route_length_m = 1200000;       /* 1200 km → ~15 stations at 80km gap */
+    cfg.mean_station_gap_m = 80000;
+    cfg.gap_shape = 3.0;
+    cfg.tank_capacity_l = 500;
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 2;
+    cfg.cargo_weight_mean_kg = 7000;
+    cfg.cargo_weight_stddev_kg = 2000;
+    cfg.min_fuel_l = 50;
+    cfg.min_purchase_l = 25;            /* Binary decision trigger */
+    cfg.stop_cost = 5.0;               /* Moderate stop penalty */
+    cfg.start_fuel_fraction = 0.5;
+    cfg.base_price_per_l = 1.55;
+    cfg.price_stddev = 0.15;
+    cfg.price_correlation = 0.4;
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    return cfg;
+}
+
+/* MIP benchmark: ~30 stations, high stop cost forces fewer stops */
+FWBenchConfig fw_bench_config_milp_30(void)
+{
+    FWBenchConfig cfg = {0};
+    cfg.route_length_m = 2400000;       /* 2400 km → ~30 stations */
+    cfg.mean_station_gap_m = 80000;
+    cfg.gap_shape = 3.0;
+    cfg.tank_capacity_l = 500;
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 4;
+    cfg.cargo_weight_mean_kg = 8000;
+    cfg.cargo_weight_stddev_kg = 2000;
+    cfg.min_fuel_l = 50;
+    cfg.min_purchase_l = 20;
+    cfg.stop_cost = 15.0;              /* High stop cost — branching quality matters */
+    cfg.start_fuel_fraction = 0.5;
+    cfg.base_price_per_l = 1.50;
+    cfg.price_stddev = 0.15;
+    cfg.price_correlation = 0.4;
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    return cfg;
+}
+
+/* MIP benchmark: ~50 stations, high price variance tests priority heuristic */
+FWBenchConfig fw_bench_config_milp_50(void)
+{
+    FWBenchConfig cfg = {0};
+    cfg.route_length_m = 4000000;       /* 4000 km → ~50 stations */
+    cfg.mean_station_gap_m = 80000;
+    cfg.gap_shape = 3.0;
+    cfg.tank_capacity_l = 600;
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 6;
+    cfg.cargo_weight_mean_kg = 9000;
+    cfg.cargo_weight_stddev_kg = 2500;
+    cfg.min_fuel_l = 60;
+    cfg.min_purchase_l = 20;
+    cfg.stop_cost = 8.0;               /* Moderate stop cost */
+    cfg.start_fuel_fraction = 0.5;
+    cfg.base_price_per_l = 1.50;
+    cfg.price_stddev = 0.30;            /* High variance — priorities matter */
+    cfg.price_correlation = 0.2;        /* Low correlation — more diverse */
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    return cfg;
+}
+
+/* MIP benchmark: ~75 stations, tight tank exercises reach cuts */
+FWBenchConfig fw_bench_config_milp_75(void)
+{
+    FWBenchConfig cfg = {0};
+    cfg.route_length_m = 4500000;       /* 4500 km → ~75 stations at 60km gap */
+    cfg.mean_station_gap_m = 60000;     /* Denser stations */
+    cfg.gap_shape = 2.5;
+    cfg.tank_capacity_l = 400;          /* Tight tank for reach-cut testing */
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 5;
+    cfg.cargo_weight_mean_kg = 10000;
+    cfg.cargo_weight_stddev_kg = 2500;
+    cfg.min_fuel_l = 50;
+    cfg.min_purchase_l = 15;
+    cfg.stop_cost = 5.0;
+    cfg.start_fuel_fraction = 0.4;      /* Low starting fuel */
+    cfg.base_price_per_l = 1.45;
+    cfg.price_stddev = 0.20;
+    cfg.price_correlation = 0.3;
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    return cfg;
+}
+
+/* MIP benchmark: ~100 stations, scalability test */
+FWBenchConfig fw_bench_config_milp_100(void)
+{
+    FWBenchConfig cfg = {0};
+    cfg.route_length_m = 8000000;       /* 8000 km → ~100 stations */
+    cfg.mean_station_gap_m = 80000;
+    cfg.gap_shape = 3.0;
+    cfg.tank_capacity_l = 800;
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 8;
+    cfg.cargo_weight_mean_kg = 10000;
+    cfg.cargo_weight_stddev_kg = 3000;
+    cfg.min_fuel_l = 80;
+    cfg.min_purchase_l = 20;
+    cfg.stop_cost = 10.0;
+    cfg.start_fuel_fraction = 0.5;
+    cfg.base_price_per_l = 1.45;
+    cfg.price_stddev = 0.22;
+    cfg.price_correlation = 0.3;
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    return cfg;
+}
+
+/* MIP benchmark: ~200 stations, stress test */
+FWBenchConfig fw_bench_config_milp_200(void)
+{
+    FWBenchConfig cfg = {0};
+    cfg.route_length_m = 10000000;      /* 10000 km → ~200 stations at 50km gap */
+    cfg.mean_station_gap_m = 50000;
+    cfg.gap_shape = 3.0;
+    cfg.tank_capacity_l = 800;
+    cfg.tare_weight_kg = 15000;
+    cfg.max_gvw_kg = 40000;
+    cfg.curve = NULL;
+    cfg.num_weight_events = 10;
+    cfg.cargo_weight_mean_kg = 10000;
+    cfg.cargo_weight_stddev_kg = 3000;
+    cfg.min_fuel_l = 80;
+    cfg.min_purchase_l = 15;
+    cfg.stop_cost = 5.0;
+    cfg.start_fuel_fraction = 0.5;
+    cfg.base_price_per_l = 1.45;
+    cfg.price_stddev = 0.25;
+    cfg.price_correlation = 0.2;
+    cfg.rng_type = SH_RNG_XORSHIFT128;
+    cfg.seed = 0;
+    return cfg;
+}
+
 /* ============================================================================
  * Problem Generation
  * ============================================================================ */
@@ -401,7 +557,7 @@ int fw_bench_generate(const FWBenchConfig *config, FWBenchInstance *out)
     out->problem.num_stations = num_stations;
     out->problem.stations = stations;
     out->problem.min_purchase = config->min_purchase_l;
-    out->problem.stop_cost = 0;
+    out->problem.stop_cost = config->stop_cost;
     out->problem.remaining_fuel_value = 0;
 
     /* Calculate total fuel required (for reference) */

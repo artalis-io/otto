@@ -40,6 +40,12 @@ static void print_usage(const char *prog)
     printf("                     benders30 - ~30 stations, Benders scalability test\n");
     printf("                     benders50 - ~50 stations, Benders scalability test\n");
     printf("                     benders100- ~100 stations, Benders stress test\n");
+    printf("                     milp15    - ~15 stations, MIP sanity (sub-ms)\n");
+    printf("                     milp30    - ~30 stations, MIP with high stop cost\n");
+    printf("                     milp50    - ~50 stations, MIP high price variance\n");
+    printf("                     milp75    - ~75 stations, MIP tight tank (reach cuts)\n");
+    printf("                     milp100   - ~100 stations, MIP scalability\n");
+    printf("                     milp200   - ~200 stations, MIP stress test\n");
     printf("  --runs N         Number of runs per scenario (default: 100)\n");
     printf("  --seed N         Random seed (default: time-based)\n");
     printf("  --milp           Use MILP solver (default: LP)\n");
@@ -119,6 +125,18 @@ static FWBenchConfig get_config(const char *scenario, uint64_t seed)
         cfg = fw_bench_config_benders_50();
     } else if (strcmp(scenario, "benders100") == 0) {
         cfg = fw_bench_config_benders_100();
+    } else if (strcmp(scenario, "milp15") == 0) {
+        cfg = fw_bench_config_milp_15();
+    } else if (strcmp(scenario, "milp30") == 0) {
+        cfg = fw_bench_config_milp_30();
+    } else if (strcmp(scenario, "milp50") == 0) {
+        cfg = fw_bench_config_milp_50();
+    } else if (strcmp(scenario, "milp75") == 0) {
+        cfg = fw_bench_config_milp_75();
+    } else if (strcmp(scenario, "milp100") == 0) {
+        cfg = fw_bench_config_milp_100();
+    } else if (strcmp(scenario, "milp200") == 0) {
+        cfg = fw_bench_config_milp_200();
     } else {
         fprintf(stderr, "Unknown scenario: %s\n", scenario);
         cfg = fw_bench_config_highway();
@@ -177,7 +195,10 @@ int main(int argc, char **argv)
     int failures = 0;
 
     if (opts.run_all) {
-        const char *scenarios[] = {"urban", "highway", "long", "tight", "us"};
+        const char *scenarios[] = {
+            "urban", "highway", "long", "tight", "us",
+            "milp15", "milp30", "milp50", "milp75", "milp100"
+        };
         int num_scenarios = sizeof(scenarios) / sizeof(scenarios[0]);
 
         if (opts.as_json) {
