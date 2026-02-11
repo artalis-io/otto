@@ -7,6 +7,20 @@
 
 #include "lp.h"
 
+/* Postsolve operation types for LIFO replay */
+typedef enum {
+    POSTSOLVE_FIXED_VAR,       /* Variable fixed to a value */
+    POSTSOLVE_SUBSTITUTION,    /* x_elim = offset + factor * x_remain */
+} PostsolveOpType;
+
+typedef struct {
+    PostsolveOpType type;
+    int var;                   /* Primary variable (original index) */
+    int var2;                  /* Secondary variable (for substitution, original index) */
+    double value;              /* Fixed value or offset */
+    double factor;             /* Multiplication factor (for substitution) */
+} PostsolveOp;
+
 /* Presolve result */
 typedef struct {
     LPModel *reduced_model;     /* Presolved model */
@@ -34,6 +48,11 @@ typedef struct {
     int *bound_change_vars;
     double *old_lb;
     double *old_ub;
+
+    /* Postsolve stack (LIFO — replay in reverse order) */
+    int num_postsolve_ops;
+    int postsolve_capacity;
+    PostsolveOp *postsolve_stack;
 
     /* Statistics */
     int vars_removed;
@@ -120,6 +139,12 @@ int presolve_coefficient_reduction(PresolveContext *ctx);
  * make rows empty or reveal hidden redundancy.
  */
 int presolve_detect_redundant_rows(PresolveContext *ctx);
+
+/* Doubleton equality elimination: a*x + b*y = c → substitute one variable */
+int presolve_doubleton_equality(PresolveContext *ctx, PresolveResult *result);
+
+/* Implied free variable detection: remove redundant variable bounds */
+int presolve_implied_free(PresolveContext *ctx);
 
 /* MIP-specific presolve */
 int presolve_probing(PresolveContext *ctx);
