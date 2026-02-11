@@ -46,16 +46,42 @@ flipping (P5), and a cleaner `dual_simplex_solve()` without primal fallbacks.
 
 | Aspect | GLOP | Ralph |
 |--------|------|-------|
-| Fixed variables | Yes (lb == ub elimination) | No |
-| Singleton rows/columns | Yes (tighten bounds, fix vars) | No |
-| Forcing constraints | Yes (all vars at bounds) | No |
-| Implied free | Yes (bounds implied by constraints) | No |
-| Doubleton equality | Yes (substitution elimination) | No |
+| Fixed variables | Yes (lb == ub elimination) | ✅ Yes |
+| Singleton rows/columns | Yes (tighten bounds, fix vars) | ✅ Yes (bound tightening + deletion) |
+| Forcing constraints | Yes (all vars at bounds) | ✅ Yes |
+| Implied free | Yes (bounds implied by constraints) | ✅ Yes (tightens to finite implied bounds) |
+| Doubleton equality | Yes (substitution elimination) | ✅ Yes (with postsolve stack) |
 | Proportional columns/rows | Yes (dominated column detection) | No |
 | Dualization | Yes (auto-dual when constraints >> vars) | No |
-| Presolve loop | Up to 20 passes until fixed-point | None |
+| Presolve loop | Up to 20 passes until fixed-point | ✅ Up to 10 passes |
+| Redundant row detection | Implicit via reductions | ✅ Explicit Gaussian elimination |
+| Empty row/col removal | Yes | ✅ Yes |
+| Bound tightening | Yes | ✅ Yes (with cancellation guards) |
 
-**Expected impact:** 30-80% problem size reduction.
+**Status: IMPLEMENTED** (P3 in `ralph/src/presolve.c`, Feb 2026)
+
+Benchmarks (FuelWise MILP, seed=42, post-P3 vs pre-P3):
+
+| Scenario | Before (ms) | After (ms) | Speedup |
+|----------|-------------|------------|---------|
+| milp15 (10 runs) | 1.72 | 1.07 | **1.6x** |
+| milp30 (5 runs) | 65.50 | 22.21 | **2.9x** |
+| milp50 (3 runs) | 124.14 | 52.68 | **2.4x** |
+| milp75 (3 runs) | 1231.65 | 573.14 | **2.1x** |
+| milp100 (3 runs) | 7223.45 | 175.89 | **41.1x** |
+| milp200 (3 runs) | 19472.76 | 8987.79 | **2.2x** |
+
+**Key implementation details:**
+- Multi-round fixed-point loop (10 iterations, up from 1)
+- Singleton row bound tightening for LE/GE/EQ constraints
+- Doubleton equality elimination with CSC fill-in check, integer variable guard
+- Implied free variable detection (tightens to finite bounds, not ±infinity, to avoid
+  breaking Big-M in simplex Phase 1)
+- LIFO postsolve stack (`PostsolveOp`) for recovering original variable values
+
+**Remaining gap vs GLOP:** Proportional column/row detection, dualization for constraint-heavy
+problems, and more aggressive probing (integer variable implications). Ralph also lacks
+GLOP's shift-variable-bounds preprocessor.
 
 ### 3. Crash Basis (Advanced Initial Basis)
 
@@ -159,7 +185,7 @@ tableau creation). Ralph's `simplex_solve()` creates a new tableau from scratch 
 | **P0** | Dual simplex for B&B reopt | 2-5x MIP solves | Medium | None | **DONE** |
 | **P1** | Objective cutoff in `dual_reopt` | 30-50% fewer iters on pruned nodes | Low | P0 | Stub exists |
 | **P2** | Crash basis (triangular) | 2-5x cold starts | Medium | None | |
-| **P3** | LP Presolve | 30-80% smaller | High | None | |
+| **P3** | LP Presolve | 2-3x avg (41x best) | High | None | **DONE** |
 | **P4** | DynamicMaximum pricing | 2-5x pricing | Low-Medium | None | |
 | **P5** | Bound flipping in dual | Fewer basis updates | Low | P0 | |
 | **P6** | Dual steepest edge | 2-3x fewer pivots | Medium | P0 | |
