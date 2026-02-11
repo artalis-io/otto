@@ -1167,77 +1167,106 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ## Implementation Plan
 
-### Phase 1: Core Foundation (1-2 weeks)
-- [ ] Core data structures (SGRequest, SGVehicle, SGRoute, SGSolution)
-- [ ] Request types: PDPTW, VRPTW delivery, pickup, service
-- [ ] Single-dimension capacity (weight only initially)
-- [ ] Single time window per stop
-- [ ] Problem builder API
-- [ ] Greedy construction heuristic
-- [ ] Basic feasibility checking (TW, capacity, precedence)
-- [ ] Euclidean distance matrix
+### Current Status (as of 2026-02-11)
 
-### Phase 2: Basic ALNS (1 week)
-- [ ] Basic destroy: random, worst
-- [ ] Basic repair: greedy, regret-2
-- [ ] Arbor solution ops callbacks (copy, cost, free)
-- [ ] Register operators with Arbor ALNS
-- [ ] Unit tests for operators
+Implemented and active today:
+- C domain model for depots, vehicles, tasks, requests, and multi-dimensional capacities.
+- Model validation for delivery-only and pickup-delivery demand sign consistency.
+- Arbor ALNS integration in both solver paths.
+- Route-native ALNS path for delivery-only VRPTW with explicit routes, TW/capacity feasibility checks, and lexicographic objective proxy.
+- Advanced destroy/repair operators for route-native delivery-only solve:
+  random, worst, shaw, criticality-worst, route-cluster, time-cluster, paired-shaw,
+  route-removal, time-window-removal, greedy and regret-k repairs.
+- Post-ALNS route elimination and fixed-vehicle distance polishing for delivery-only solve.
+- Solomon benchmark harness with BKS comparison in `surge/benchmarks/bench_solomon.c`.
 
-### Phase 3: Rich Capacity Constraints (1 week)
-- [ ] Multi-dimensional capacity (weight, volume, pallets, etc.)
-- [ ] SGLoadVector operations (add, subtract, compare)
-- [ ] Incremental capacity tracking on route
-- [ ] Update feasibility checker for multi-dim
+Current measured quality (Solomon 100-customer set, deterministic seed 42):
+- 300 iterations: `avgVehGap=+0.88`, `avgDistGap=+9.3%`, `equalVehicles=22`, `lexiNonWorse=4`.
+- 1000 iterations: `avgVehGap=+0.75`, `avgDistGap=+5.5%`, `equalVehicles=25`, `lexiNonWorse=7`.
 
-### Phase 4: Rich Time Constraints (1 week)
-- [ ] Disjunct time windows (multiple windows per stop)
-- [ ] Soft time windows with tardiness penalties
-- [ ] Max ride time (DARP support)
-- [ ] Waiting cost in objective
-- [ ] Efficient TW propagation for disjunct windows
+Glaring architectural gaps:
+- Route-native solver is delivery-only gated (`sg_route_solver_eligible()` requires every request be `SG_REQUEST_KIND_DELIVERY_ONLY`), so PDPTW does not use the stronger route engine.
+- Feasibility kernel used by route-native insertion/removal is delivery-only (`sg_request_delivery_task_for_metrics()` and `sg_route_sequence_feasible_distance()`).
+- Fallback PD path optimizes assignment proxy cost (`sg_bootstrap_cost()` + `sg_vehicle_request_cost()`) rather than true route objective.
+- Non-delivery route metrics are still a heuristic fallback (`sg_compute_solution_route_metrics()`), not exact PD route reconstruction.
+- Solver currently uses Euclidean travel and does not expose/consume a proper travel-time matrix in public API.
 
-### Phase 5: Compatibility Constraints (1 week)
-- [ ] Vehicle qualifications (refrigerated, ADR, tail-lift, etc.)
-- [ ] Commodity types and conflicts
-- [ ] Request exclusion groups
-- [ ] Incremental commodity tracking on route
-- [ ] Compatibility-aware insertion
+Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
+- Disjunct time windows.
+- Soft TW tardiness/waiting penalties in objective.
+- Max ride-time constraints for PD requests.
+- Vehicle qualifications, commodity conflicts, exclusion groups.
+- Open routes, per-depot dispatch limits, multi-trip semantics.
+- Driver break/HoSE constraints in route feasibility.
 
-### Phase 6: Multi-Depot & Route Types (1 week)
-- [ ] Multiple depots with constraints
-- [ ] Per-depot vehicle limits
-- [ ] Open routes (no return to depot)
-- [ ] Different start/end depots
-- [ ] Depot time windows
+### Actualized Plan (Unified VRPTW/PDPTW)
 
-### Phase 7: Advanced Operators (1 week)
-- [ ] Shaw removal (distance + time + load + commodity similarity)
-- [ ] Route removal
-- [ ] Zone-based removal (geographic clusters)
-- [ ] Regret-k insertion (k=2,3,4)
-- [ ] Parallel insertion evaluation
+### Phase 1: Consolidate Current Delivery-Only Engine (done/in progress)
+- [x] Route-native state with explicit routes and lexicographic objective weighting.
+- [x] Delivery-only TW/capacity route feasibility checks and insertion/removal.
+- [x] Expanded destroy/repair operator portfolio (including route/time-window removals).
+- [x] Postprocess route elimination and distance polish.
+- [ ] Add per-operator telemetry reporting in benchmark output for focused tuning.
 
-### Phase 8: Integration (1 week)
-- [ ] Velo integration (road distance/time matrices)
-- [ ] Ralph integration (exact MIP for small instances)
-- [ ] HoSE integration (driver breaks)
-- [ ] API server endpoints
-- [ ] JSON input/output
-- [ ] WASM compilation
+### Phase 2: Unified Route State for VRPTW + PDPTW (now active)
+- [x] Replace delivery-only route sequence assumptions with stop-level representation supporting both stop types.
+- [x] Encode request pair mapping (pickup stop id, delivery stop id) in solution state and maintain predecessor/successor links.
+- [x] Enforce same-vehicle and precedence constraints directly via the stop sequence; route validation now relies on the unified kernel.
 
-### Phase 9: Testing & Benchmarking (1-2 weeks)
-- [ ] Unit tests for all constraint types
-- [ ] Benchmark on Solomon VRPTW instances
-- [ ] Benchmark on Li & Lim PDPTW instances
-- [ ] Benchmark on Cordeau DARP instances
-- [ ] Rich VRP instances (custom)
-- [ ] Parameter tuning
-- [ ] Performance profiling and optimization
+### Phase 3: Unified Incremental Feasibility and Cost Kernel
+- [ ] Build one incremental feasibility engine for both VRPTW and PDPTW (TW propagation, signed load tracking, route-duration checks).
+- [ ] Add PD-specific checks: precedence, maximum ride time, pickup/drop consistency.
+- [ ] Replace full route recomputation per move with cached forward/backward slack and load deltas.
 
-**Note:** The ALNS framework (main loop, operator selection, acceptance criteria,
-adaptive weights) is provided by Arbor. Surge implements VRP/PDPTW-specific operators
-and constraint checking, integrating via Arbor's callback interface.
+### Phase 4: Unified ALNS Operators and Intensification
+- [x] Make ALNS remover/repair steps operate on the shared route state with explicit stops.
+- [x] Added exchange + 2-opt* intensification heuristics that now respect PD pair structure.
+- [x] Pair-aware Shaw + regret insertions operate against the unified feasibility kernel.
+
+### Phase 5: Objective and Acceptance Modernization
+- [ ] Move from scalar proxy toward explicit lexicographic compare (unassigned -> vehicles -> distance -> soft penalties).
+- [ ] Expose acceptance policy in `SGConfig` (SA/RRT/Improving) and tune per problem class.
+- [ ] Add adaptive destroy size policy based on request count and stagnation.
+
+### Phase 6: Rich Constraint Completion
+- [ ] Disjunct TW support.
+- [ ] Soft TW penalties and waiting-cost terms in objective.
+- [ ] Vehicle qualifications, commodity conflicts, exclusion groups.
+- [ ] Open routes and depot-level dispatch constraints.
+- [ ] HoSE/break constraints (with Tempo/HoSE integration).
+
+- [ ] Add optional travel-time/distance matrix API and use it in construction + route feasibility.
+- [ ] Integrate Velo matrices for realistic routing costs/times.
+- [ ] Keep Ralph exact mode for small instances as baseline verifier.
+
+### Recent progress
+- Unified route state now drives both delivery-only and PDPTW solves (no longer gated to delivery-only). The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time implicitly.
+- Added Li & Lim PDPTW loader + benchmark driver with BKS gap reporting + 100-task instance download. Benchmarks show the current solver runs all 56 standard Li & Lim cases but with large vehicle/distance gaps, highlighting that more PD-focused tuning is still required.
+- Solomon regression now reports lexicographic gaps (avgVehGap=+0.84; avgDistGap=+7.1%), confirming the new kernel remains competitive for pure VRPTW.
+
+### Next step proposal
+- **Extend PD-aware feasibility checks**: add precise load balancing (signed flows) and precedence slack propagation so the insertion kernel rejects PD violations without rebuilding routes from scratch; targeted instrumentation should quantify ride-time slack failures on the Li & Lim 100 instances.
+- **Introduce pair-preserving local search**: implement PDPDW-specific relocation/exchange (pickup+delivery moved together) plus route-based double-bridge moves that respect pairing; measure their impact on the calibrated gaps.
+- **Tune lexicographic acceptance + destroy schedule**: expose `SGConfig` knobs for acceptance curves and adaptive removal sizes to limit vehicle use on high-gap Li & Lim cases while continuing to polish Solomon performance; capturing per-case metrics will guide reweighting of objectives.
+
+### Phase 8: Verification and Benchmark Expansion
+- [ ] Keep Solomon VRPTW as regression benchmark (already wired).
+- [ ] Add Li & Lim PDPTW harness and BKS comparator.
+- [ ] Add Cordeau DARP harness (including ride-time constraints).
+- [ ] Expand unit tests from smoke coverage to operator and feasibility regression suites.
+- [ ] Add profiling-driven performance work (allocation hot paths, insertion complexity, cache reuse).
+
+Execution order:
+1. Phase 2
+2. Phase 3
+3. Phase 4
+4. Phase 5
+5. Phase 6
+6. Phase 7
+7. Phase 8
+
+This order is required because performance and quality on rich PDPTW depend primarily on
+having one unified route/feasibility engine before additional constraints and integrations.
 
 ---
 

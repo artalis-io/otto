@@ -159,6 +159,7 @@ The next session can `cd` to the worktree and continue. Delete the WIP section w
 | Carta | `carta/` | 8081 | Map tiles (MVT/PNG) |
 | Locus | `locus/` | 8083 | Geocoding |
 | FuelWise | `fuelwise/` | 8080 | Refueling optimization |
+| Surge | `surge/` | - | Unified VRP/PDPTW engine (stop-based state, ALNS, Li & Lim benchmarks) |
 | ClayShards | `clayshards/` | - | Immediate mode UI |
 | Shared | `shared/` | - | Geo, protobuf, rate limiting |
 
