@@ -2360,7 +2360,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     const int DEGEN_THRESHOLD = 50;    /* Switch to Bland's rule after this many */
     const int RECOMPUTE_INTERVAL = 25; /* Periodic drift correction in Phase 1 */
     const int FAIL_REPEAT_LIMIT = 20;  /* Avoid endless retries on same failing pivot */
-    int refactor_interval = tab->use_two_phase ? 12 : 0;
+    int refactor_interval = tab->use_two_phase ? 24 : 0;
     int use_bland = 0;
     int fail_entering = -1;
     int fail_leaving_pos = -1;
