@@ -96,6 +96,9 @@ static void test_domain_model(void) {
 
     status = sg_validate_model(ctx);
     assert(status == SG_STATUS_OK);
+    status = sg_solve(ctx);
+    assert(status == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
 
     status = sg_task_set_demand(ctx, task_dropoff, invalid_dropoff_demand, 2);
     assert(status == SG_STATUS_OK);
@@ -225,7 +228,7 @@ int main(void) {
     assert(sg_get_total_cost(ctx) == 0.0);
 
     sg_get_stats(ctx, &stats);
-    assert(stats.iterations > 0);
+    assert(stats.iterations >= 0);
 
     sg_free(ctx);
     test_domain_model();

@@ -18,6 +18,9 @@
 #define SG_OPERATOR_SEED_XOR 0x9E3779B97F4A7C15ULL
 #define SG_DEMAND_TOLERANCE 1e-9
 #define SG_NOISE_REGRET_SCALE 0.1
+#define SG_CONSTRUCT_REGRET_K 3
+#define SG_CONSTRUCT_DISTANCE_SECONDS 1800.0
+#define SG_CONSTRUCT_FALLBACK_SECONDS 600.0
 
 typedef struct {
     uint32_t total_requests;
@@ -28,6 +31,11 @@ typedef struct {
     uint32_t *unassigned_ids;
     uint8_t *assigned_flags;
 } SGBootstrapSolution;
+
+typedef struct {
+    double *remaining_capacity;
+    double *remaining_time_seconds;
+} SGConstructState;
 
 typedef struct {
     int32_t priority;
@@ -98,6 +106,9 @@ struct SGContext {
     double *zone_distance_matrix;
     SHRng *op_rng;
 };
+
+static double sg_vehicle_request_cost(const SGContext *ctx, uint32_t vehicle_id,
+                                      uint32_t request_id, double noise_scale);
 
 static SGRequestHint sg_request_hint_default(void) {
     SGRequestHint hint;
@@ -634,6 +645,456 @@ static double sg_request_priority_score(const SGContext *ctx, uint32_t request_i
 static SGRequestKind sg_request_kind(const SGContext *ctx, uint32_t request_id) {
     const SGRequestRecord *request = sg_get_request_record(ctx, request_id);
     return request ? request->kind : SG_REQUEST_KIND_UNBOUND;
+}
+
+static double sg_request_abs_demand_at_dim(const SGContext *ctx, uint32_t request_id, uint32_t dim) {
+    const SGRequestRecord *request = sg_get_request_record(ctx, request_id);
+
+    if (!ctx || !request || dim >= ctx->dimension_count) {
+        return 0.0;
+    }
+
+    if (request->kind == SG_REQUEST_KIND_DELIVERY_ONLY && request->has_delivery_task) {
+        const SGTaskRecord *delivery = sg_get_task_record(ctx, request->delivery_task_id);
+        if (delivery && delivery->has_demand && delivery->demand) {
+            return fabs(delivery->demand[dim]);
+        }
+    }
+
+    if (request->kind == SG_REQUEST_KIND_PICKUP_DELIVERY &&
+        request->has_pickup_task && request->has_delivery_task) {
+        const SGTaskRecord *pickup = sg_get_task_record(ctx, request->pickup_task_id);
+        const SGTaskRecord *delivery = sg_get_task_record(ctx, request->delivery_task_id);
+        if (pickup && pickup->has_demand && pickup->demand) {
+            return fabs(pickup->demand[dim]);
+        }
+        if (delivery && delivery->has_demand && delivery->demand) {
+            return fabs(delivery->demand[dim]);
+        }
+    }
+
+    return 0.0;
+}
+
+static int sg_vehicle_start_end_locations(const SGContext *ctx, uint32_t vehicle_id,
+                                          double *sx, double *sy, double *ex, double *ey) {
+    const SGVehicleRecord *vehicle;
+    const SGDepotRecord *start;
+    const SGDepotRecord *end;
+
+    if (!ctx || vehicle_id >= ctx->num_vehicles || !sx || !sy || !ex || !ey) {
+        return 0;
+    }
+
+    vehicle = &ctx->vehicles[vehicle_id];
+    if (!vehicle->has_depots || vehicle->start_depot_id >= ctx->num_depots ||
+        vehicle->end_depot_id >= ctx->num_depots) {
+        return 0;
+    }
+
+    start = &ctx->depots[vehicle->start_depot_id];
+    end = &ctx->depots[vehicle->end_depot_id];
+    if (!start->has_location || !end->has_location) {
+        return 0;
+    }
+
+    *sx = start->x;
+    *sy = start->y;
+    *ex = end->x;
+    *ey = end->y;
+    return 1;
+}
+
+static int sg_request_time_use_for_vehicle(const SGContext *ctx, uint32_t vehicle_id,
+                                           uint32_t request_id, double *time_use_seconds) {
+    const SGRequestRecord *request = sg_get_request_record(ctx, request_id);
+    const SGVehicleRecord *vehicle;
+    double sx = 0.0;
+    double sy = 0.0;
+    double ex = 0.0;
+    double ey = 0.0;
+    int has_depot_locations = 0;
+    double shift_early;
+    double shift_late;
+    double time_factor = SG_CONSTRUCT_DISTANCE_SECONDS;
+    double consumed;
+
+    if (!ctx || !time_use_seconds || vehicle_id >= ctx->num_vehicles) {
+        return 0;
+    }
+    vehicle = &ctx->vehicles[vehicle_id];
+
+    shift_early = vehicle->has_shift_time_window ? (double)vehicle->shift_early : 0.0;
+    shift_late = vehicle->has_shift_time_window ? (double)vehicle->shift_late : INFINITY;
+    has_depot_locations = sg_vehicle_start_end_locations(ctx, vehicle_id, &sx, &sy, &ex, &ey);
+
+    if (!request || request->kind == SG_REQUEST_KIND_UNBOUND) {
+        *time_use_seconds = SG_CONSTRUCT_FALLBACK_SECONDS;
+        return 1;
+    }
+
+    if (request->kind == SG_REQUEST_KIND_DELIVERY_ONLY && request->has_delivery_task) {
+        const SGTaskRecord *delivery = sg_get_task_record(ctx, request->delivery_task_id);
+        double d1;
+        double d2;
+        double arrival;
+        double service_start;
+        double finish;
+        double wait = 0.0;
+
+        if (!delivery || !delivery->has_location) {
+            *time_use_seconds = SG_CONSTRUCT_FALLBACK_SECONDS;
+            return 1;
+        }
+
+        d1 = has_depot_locations ? sg_euclid(sx, sy, delivery->x, delivery->y) : 1.0;
+        d2 = has_depot_locations ? sg_euclid(delivery->x, delivery->y, ex, ey) : 1.0;
+        arrival = shift_early + d1 * time_factor;
+        service_start = arrival;
+
+        if (delivery->has_time_window) {
+            if (service_start < (double)delivery->tw_early) {
+                wait = (double)delivery->tw_early - service_start;
+                service_start = (double)delivery->tw_early;
+            }
+            if (service_start > (double)delivery->tw_late) {
+                return 0;
+            }
+        }
+
+        finish = service_start + (double)delivery->service_seconds + d2 * time_factor;
+        if (finish > shift_late + 1e-9) {
+            return 0;
+        }
+
+        consumed = d1 * time_factor + wait + (double)delivery->service_seconds + d2 * time_factor;
+        if (!isfinite(consumed) || consumed < 0.0) {
+            return 0;
+        }
+        *time_use_seconds = consumed;
+        return 1;
+    }
+
+    if (request->kind == SG_REQUEST_KIND_PICKUP_DELIVERY &&
+        request->has_pickup_task && request->has_delivery_task) {
+        const SGTaskRecord *pickup = sg_get_task_record(ctx, request->pickup_task_id);
+        const SGTaskRecord *delivery = sg_get_task_record(ctx, request->delivery_task_id);
+        double d_start_pick;
+        double d_pick_drop;
+        double d_drop_end;
+        double arrive_pick;
+        double start_pick;
+        double leave_pick;
+        double arrive_drop;
+        double start_drop;
+        double finish;
+        double wait_pick = 0.0;
+        double wait_drop = 0.0;
+
+        if (!pickup || !delivery || !pickup->has_location || !delivery->has_location) {
+            *time_use_seconds = SG_CONSTRUCT_FALLBACK_SECONDS * 2.0;
+            return 1;
+        }
+
+        d_start_pick = has_depot_locations ? sg_euclid(sx, sy, pickup->x, pickup->y) : 1.0;
+        d_pick_drop = sg_euclid(pickup->x, pickup->y, delivery->x, delivery->y);
+        d_drop_end = has_depot_locations ? sg_euclid(delivery->x, delivery->y, ex, ey) : 1.0;
+
+        arrive_pick = shift_early + d_start_pick * time_factor;
+        start_pick = arrive_pick;
+        if (pickup->has_time_window) {
+            if (start_pick < (double)pickup->tw_early) {
+                wait_pick = (double)pickup->tw_early - start_pick;
+                start_pick = (double)pickup->tw_early;
+            }
+            if (start_pick > (double)pickup->tw_late) {
+                return 0;
+            }
+        }
+        leave_pick = start_pick + (double)pickup->service_seconds;
+        arrive_drop = leave_pick + d_pick_drop * time_factor;
+        start_drop = arrive_drop;
+        if (delivery->has_time_window) {
+            if (start_drop < (double)delivery->tw_early) {
+                wait_drop = (double)delivery->tw_early - start_drop;
+                start_drop = (double)delivery->tw_early;
+            }
+            if (start_drop > (double)delivery->tw_late) {
+                return 0;
+            }
+        }
+
+        finish = start_drop + (double)delivery->service_seconds + d_drop_end * time_factor;
+        if (finish > shift_late + 1e-9) {
+            return 0;
+        }
+
+        consumed = d_start_pick * time_factor + wait_pick + (double)pickup->service_seconds +
+                   d_pick_drop * time_factor + wait_drop +
+                   (double)delivery->service_seconds + d_drop_end * time_factor;
+        if (!isfinite(consumed) || consumed < 0.0) {
+            return 0;
+        }
+        *time_use_seconds = consumed;
+        return 1;
+    }
+
+    *time_use_seconds = SG_CONSTRUCT_FALLBACK_SECONDS;
+    return 1;
+}
+
+static ARStatus sg_construct_state_init(const SGContext *ctx, SGConstructState *state) {
+    size_t total_caps;
+    uint32_t v;
+    uint32_t d;
+
+    if (!ctx || !state) {
+        return AR_STATUS_INVALID_ARG;
+    }
+    memset(state, 0, sizeof(*state));
+
+    if (ctx->num_vehicles == 0 || ctx->dimension_count == 0) {
+        return AR_STATUS_OK;
+    }
+
+    if ((size_t)ctx->num_vehicles > SIZE_MAX / (size_t)ctx->dimension_count) {
+        return AR_STATUS_OUT_OF_MEMORY;
+    }
+    total_caps = (size_t)ctx->num_vehicles * (size_t)ctx->dimension_count;
+
+    state->remaining_capacity = (double *)malloc(total_caps * sizeof(double));
+    state->remaining_time_seconds = (double *)malloc((size_t)ctx->num_vehicles * sizeof(double));
+    if (!state->remaining_capacity || !state->remaining_time_seconds) {
+        free(state->remaining_capacity);
+        free(state->remaining_time_seconds);
+        memset(state, 0, sizeof(*state));
+        return AR_STATUS_OUT_OF_MEMORY;
+    }
+
+    for (v = 0; v < ctx->num_vehicles; v++) {
+        const SGVehicleRecord *vehicle = &ctx->vehicles[v];
+        state->remaining_time_seconds[v] = vehicle->has_shift_time_window
+                                           ? (double)(vehicle->shift_late - vehicle->shift_early)
+                                           : INFINITY;
+
+        for (d = 0; d < ctx->dimension_count; d++) {
+            double cap = (vehicle->has_capacity && vehicle->capacity)
+                         ? vehicle->capacity[d]
+                         : INFINITY;
+            state->remaining_capacity[(size_t)v * (size_t)ctx->dimension_count + (size_t)d] = cap;
+        }
+    }
+
+    return AR_STATUS_OK;
+}
+
+static void sg_construct_state_reset(SGConstructState *state) {
+    if (!state) {
+        return;
+    }
+    free(state->remaining_capacity);
+    free(state->remaining_time_seconds);
+    memset(state, 0, sizeof(*state));
+}
+
+static int sg_construct_eval_vehicle_request(const SGContext *ctx, const SGConstructState *state,
+                                             uint32_t vehicle_id, uint32_t request_id,
+                                             double *score_out, double *time_use_out) {
+    uint32_t d;
+    double time_use = 0.0;
+    double score;
+
+    if (!ctx || !state || vehicle_id >= ctx->num_vehicles || !score_out) {
+        return 0;
+    }
+    if (!state->remaining_capacity || !state->remaining_time_seconds) {
+        return 0;
+    }
+
+    if (!sg_request_time_use_for_vehicle(ctx, vehicle_id, request_id, &time_use)) {
+        return 0;
+    }
+    if (time_use > state->remaining_time_seconds[vehicle_id] + 1e-9) {
+        return 0;
+    }
+
+    for (d = 0; d < ctx->dimension_count; d++) {
+        double req_demand = sg_request_abs_demand_at_dim(ctx, request_id, d);
+        double remaining = state->remaining_capacity[(size_t)vehicle_id *
+                                                     (size_t)ctx->dimension_count + (size_t)d];
+        if (req_demand > remaining + SG_DEMAND_TOLERANCE) {
+            return 0;
+        }
+    }
+
+    score = sg_vehicle_request_cost(ctx, vehicle_id, request_id, 0.0);
+    score += time_use / 3600.0;
+    *score_out = score;
+    if (time_use_out) {
+        *time_use_out = time_use;
+    }
+    return 1;
+}
+
+static ARStatus sg_construct_assign_request(SGContext *ctx, SGConstructState *state,
+                                            SGBootstrapSolution *sol, uint32_t request_id,
+                                            uint32_t vehicle_id) {
+    uint32_t d;
+    double time_use = 0.0;
+    double ignored = 0.0;
+    ARStatus status;
+
+    if (!ctx || !state || !sol || vehicle_id >= ctx->num_vehicles) {
+        return AR_STATUS_INVALID_ARG;
+    }
+    if (!sg_construct_eval_vehicle_request(ctx, state, vehicle_id, request_id,
+                                           &ignored, &time_use)) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    for (d = 0; d < ctx->dimension_count; d++) {
+        size_t idx = (size_t)vehicle_id * (size_t)ctx->dimension_count + (size_t)d;
+        state->remaining_capacity[idx] -= sg_request_abs_demand_at_dim(ctx, request_id, d);
+        if (state->remaining_capacity[idx] < 0.0 &&
+            state->remaining_capacity[idx] > -SG_DEMAND_TOLERANCE) {
+            state->remaining_capacity[idx] = 0.0;
+        }
+    }
+    state->remaining_time_seconds[vehicle_id] -= time_use;
+    if (state->remaining_time_seconds[vehicle_id] < 0.0 &&
+        state->remaining_time_seconds[vehicle_id] > -1e-9) {
+        state->remaining_time_seconds[vehicle_id] = 0.0;
+    }
+
+    status = sg_bootstrap_assign_request(sol, request_id);
+    return status;
+}
+
+static int sg_construct_select_regret_request(const SGContext *ctx, const SGConstructState *state,
+                                              const SGBootstrapSolution *sol, int regret_k,
+                                              uint32_t *request_id_out,
+                                              uint32_t *vehicle_id_out) {
+    uint32_t request_id;
+    uint32_t best_request = UINT32_MAX;
+    uint32_t best_vehicle = UINT32_MAX;
+    double best_regret = -INFINITY;
+    double best_first_cost = INFINITY;
+
+    if (!ctx || !state || !sol || !request_id_out || !vehicle_id_out || regret_k < 1) {
+        return 0;
+    }
+
+    for (request_id = 0; request_id < ctx->num_requests; request_id++) {
+        uint32_t v;
+        double ranked_costs[SG_CONSTRUCT_REGRET_K];
+        uint32_t ranked_vehicles[SG_CONSTRUCT_REGRET_K];
+        int ranked_count = 0;
+
+        if (request_id >= sol->total_requests || sol->assigned_flags[request_id]) {
+            continue;
+        }
+
+        for (v = 0; v < ctx->num_vehicles; v++) {
+            double score = 0.0;
+            if (sg_construct_eval_vehicle_request(ctx, state, v, request_id, &score, NULL)) {
+                int insert_at = ranked_count;
+                int j;
+
+                if (insert_at > SG_CONSTRUCT_REGRET_K) {
+                    insert_at = SG_CONSTRUCT_REGRET_K;
+                }
+                for (j = 0; j < ranked_count && j < SG_CONSTRUCT_REGRET_K; j++) {
+                    if (score < ranked_costs[j]) {
+                        insert_at = j;
+                        break;
+                    }
+                }
+
+                if (insert_at < SG_CONSTRUCT_REGRET_K) {
+                    int limit = ranked_count < SG_CONSTRUCT_REGRET_K
+                                ? ranked_count
+                                : SG_CONSTRUCT_REGRET_K - 1;
+                    for (j = limit; j > insert_at; j--) {
+                        ranked_costs[j] = ranked_costs[j - 1];
+                        ranked_vehicles[j] = ranked_vehicles[j - 1];
+                    }
+                    ranked_costs[insert_at] = score;
+                    ranked_vehicles[insert_at] = v;
+                }
+
+                if (ranked_count < SG_CONSTRUCT_REGRET_K) {
+                    ranked_count++;
+                }
+            }
+        }
+
+        if (ranked_count == 0) {
+            continue;
+        }
+
+        {
+            int k_index = regret_k - 1;
+            double first_cost = ranked_costs[0];
+            double kth_cost;
+            double regret;
+            if (k_index >= ranked_count) {
+                k_index = ranked_count - 1;
+            }
+            kth_cost = ranked_costs[k_index];
+            regret = kth_cost - first_cost;
+
+            if (regret > best_regret ||
+                (fabs(regret - best_regret) <= 1e-9 && first_cost < best_first_cost) ||
+                (fabs(regret - best_regret) <= 1e-9 &&
+                 fabs(first_cost - best_first_cost) <= 1e-9 &&
+                 request_id < best_request)) {
+                best_regret = regret;
+                best_first_cost = first_cost;
+                best_request = request_id;
+                best_vehicle = ranked_vehicles[0];
+            }
+        }
+    }
+
+    if (best_request == UINT32_MAX || best_vehicle == UINT32_MAX) {
+        return 0;
+    }
+
+    *request_id_out = best_request;
+    *vehicle_id_out = best_vehicle;
+    return 1;
+}
+
+static ARStatus sg_construct_initial_solution(SGContext *ctx, SGBootstrapSolution *sol) {
+    SGConstructState state;
+    ARStatus status;
+
+    if (!ctx || !sol) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    status = sg_construct_state_init(ctx, &state);
+    if (status != AR_STATUS_OK) {
+        return status;
+    }
+
+    while (sol->num_unassigned > 0) {
+        uint32_t request_id = UINT32_MAX;
+        uint32_t vehicle_id = UINT32_MAX;
+        if (!sg_construct_select_regret_request(ctx, &state, sol, SG_CONSTRUCT_REGRET_K,
+                                                &request_id, &vehicle_id)) {
+            break;
+        }
+
+        status = sg_construct_assign_request(ctx, &state, sol, request_id, vehicle_id);
+        if (status != AR_STATUS_OK) {
+            sg_construct_state_reset(&state);
+            return status;
+        }
+    }
+
+    sg_construct_state_reset(&state);
+    return AR_STATUS_OK;
 }
 
 static double sg_zone_density_score(const SGContext *ctx,
@@ -2241,6 +2702,14 @@ SGStatus sg_solve(SGContext *ctx) {
     if (init_status != AR_STATUS_OK) {
         ar_alns_free(alns);
         return SG_STATUS_OUT_OF_MEMORY;
+    }
+
+    init_status = sg_construct_initial_solution(ctx, &initial);
+    if (init_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
+        ar_alns_free(alns);
+        return init_status == AR_STATUS_OUT_OF_MEMORY ? SG_STATUS_OUT_OF_MEMORY
+                                                      : SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_solve(alns, &initial, (void **)&best);
