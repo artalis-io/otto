@@ -15,7 +15,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | **Presolve** | ✅ Phase 1 | Singleton, redundant rows, bound tightening |
 | **NETLIB Suite** | 67% Pass | 8/12 problems (see below) |
 | **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
-| **Benders Decomposition** | ✅ Complete | Generic solver, ~1100 LoC, 24 tests (§7) |
+| **Benders Decomposition** | ✅ Complete | Generic solver, ~1430 LoC, 8 tests (§7) |
 
 ---
 
@@ -72,6 +72,39 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | Threshold Pivoting | ✅ Complete | In factorization + updates |
 | Harris Ratio Test | ⏳ TODO | Needed for beaconfd |
 | Bound Perturbation | ⏳ TODO | Anti-degeneracy |
+
+### 1.5 Phase-1 Recovery Hardening (Feb 2026)
+
+Hardening pass targeting phase-1 simplex failure modes observed with NETLIB beaconfd.
+
+| Feature | Status | Commit | Notes |
+|---------|--------|--------|-------|
+| Phase-1 failure trace | ✅ Complete | `600d025` | Deterministic LU pivot-failure classification |
+| LU failure reason tracking | ✅ Complete | `06981e7` | Classifies zero-pivot, threshold, singular causes |
+| Basis action policy | ✅ Complete | `a3ce8b4` | Policy-driven simplex stabilization (exclude/cooldown/restore) |
+| Beaconfd recovery | ✅ Complete | `67020ac` | Dual-simplex rescue on phase-1 stall |
+
+**Phase-1 trace infrastructure:** When phase-1 fails (artificial variables remain), the solver
+now records a deterministic trace of which basis actions were attempted (variable exclusions,
+cooldowns, pivot retries) and why they failed. This enables root-cause analysis of numerical
+instability without debug builds.
+
+**Dual-simplex rescue:** If primal phase-1 stalls (max iterations without progress), the solver
+attempts a dual-simplex recovery before declaring infeasibility. This resolved false-INFEASIBLE
+results on beaconfd-class problems.
+
+### 1.6 C-Audit Hardening (Feb 2026)
+
+Full `/c-audit` pass on MIP infrastructure. 15 findings fixed (3 critical, 6 high, 4 medium, 2 low).
+
+| File | Fixes | Key Issues |
+|------|-------|------------|
+| `benders.c` | 8 | Memory leak on partial alloc, bounds checks on master_var_indices, overflow guard on cut capacity |
+| `ralph.c` | 4 | Grouped alloc failure check, calloc for overflow-safe basis, backup/restore on refactorize failure |
+| `branch_bound.c` | 3 | INT_MIN return removed, bounds checks on variable indices in branching |
+| `simplex.c` | 1 | Documentation of phase1_exclude_entering_var validation |
+
+Commit: `e794dac ralph: harden MIP infrastructure from c-audit findings`
 
 ---
 
@@ -694,7 +727,7 @@ and provides better performance for FuelWise/HoSE problem classes.
 
 ## Chapter 7: Generic Benders Decomposition ✅
 
-**Status:** Complete (Feb 2026) - 24 tests passing
+**Status:** Complete (Feb 2026) - 8 tests passing
 
 This chapter describes the generic Benders decomposition solver in Ralph, replacing
 domain-specific implementations (e.g., FuelWise enumeration) with a reusable algorithm.
@@ -968,8 +1001,8 @@ weighted cuts: `θ[k] ≥ π[k]'(h[k] - T[k]x)` for each scenario.
 | 5 | B&B integration | 100 | ⏳ Planned (modern B&B&C) |
 | 6 | Warm start | 50 | ✅ Complete |
 | 7 | Stochastic | 150 | ✅ Complete (multi-scenario) |
-| 8 | Testing | 200 | ✅ 24 tests passing |
-| **Total** | | **~1100** | |
+| 8 | Testing | 200 | ✅ 8 tests passing |
+| **Total** | | **~1430** | |
 
 **Files:**
 - `ralph/src/benders.c` - Main implementation
@@ -985,7 +1018,7 @@ weighted cuts: `θ[k] ≥ π[k]'(h[k] - T[k]x)` for each scenario.
 
 | Limitation | Impact | Workaround |
 |------------|--------|------------|
-| **Classic Benders only** | Modern B&B&C (cuts at LP nodes) not implemented | Classic algorithm works well for structured problems |
+| **Classic Benders only** | Modern B&B&C (cuts at LP nodes) not yet implemented | Classic algorithm works well for structured problems; code comments corrected to reflect this |
 | **Numerical sensitivity** | Very large bounds (1e30) can cause simplex instability | Use reasonable bounds (<1e6) for theta variable |
 | **0 master constraints** | Edge case returns error | Add dummy constraint if needed |
 | **Feasibility cuts** | Less tested than optimality cuts | Most problems have feasible subproblems |
