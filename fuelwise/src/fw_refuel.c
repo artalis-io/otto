@@ -422,11 +422,16 @@ static int fw_reach_cut_generate(
 }
 
 /*
- * Configure MIP hints on a RalphModel: priorities, directions, cut callback.
+ * Configure MIP hints on a RalphModel: priorities, directions, cut callback,
+ * presolve (mandatory station fixing, dominated station elimination),
+ * and symmetry-breaking constraints.
  *
  * Priorities: cheaper stations get higher priority (branched first).
  * Directions: cheap stations branch up (try z=1), expensive branch down.
  * Cuts: reach-cut callback for violated intervals.
+ * Presolve: fix z[i]=1 for single-station reach intervals,
+ *           fix z[i]=0 for dominated expensive stations.
+ * Symmetry: z[i] >= z[i+1] for equal-price adjacent pairs.
  */
 static void fw_setup_mip_hints(RalphModel *model,
                                 const FWRefuelProblem *problem,
@@ -499,6 +504,108 @@ static void fw_setup_mip_hints(RalphModel *model,
         cb.user_data = cut_ctx;
         ralph_set_cut_callback(model, &cb);
     }
+
+    /* ================================================================
+     * Presolve: Mandatory Station Fixing & Dominated Elimination
+     *
+     * 1. Single-station intervals: if a reach interval [s, e) has
+     *    exactly one station, that station must be visited → z[s] = 1.
+     *
+     * 2. Dominated stations: if station i is strictly more expensive
+     *    than both neighbors, and neighbors can reach each other
+     *    directly (full tank), station i is never optimal → z[i] = 0.
+     *    Only applied if removal doesn't leave any interval empty.
+     * ================================================================ */
+
+    int *is_mandatory = (int*)calloc(k, sizeof(int));
+    int *is_fixed_zero = (int*)calloc(k, sizeof(int));
+
+    if (is_mandatory && is_fixed_zero &&
+        cut_ctx->interval_start && cut_ctx->interval_end) {
+
+        /* Pass 1: Fix z[i] = 1 for single-station intervals */
+        for (int iv = 0; iv < cut_ctx->num_intervals; iv++) {
+            int start = cut_ctx->interval_start[iv];
+            int end = cut_ctx->interval_end[iv];
+            if (end - start == 1) {
+                is_mandatory[start] = 1;
+                ralph_set_var_bounds(model, z_start + start, 1.0, 1.0);
+            }
+        }
+
+        /* Pass 2: Dominated station elimination
+         * Station i is dominated if:
+         *   - Not mandatory
+         *   - Has neighbors on both sides (0 < i < k-1)
+         *   - Strictly more expensive than both neighbors
+         *   - Neighbors can reach each other with a full tank
+         *   - Removing i doesn't leave any interval with zero eligible stations
+         */
+        for (int i = 1; i < k - 1; i++) {
+            if (is_mandatory[i]) continue;
+
+            double price_i = problem->stations[i].price;
+            double price_left = problem->stations[i - 1].price;
+            double price_right = problem->stations[i + 1].price;
+
+            /* Must be strictly more expensive than both neighbors */
+            if (price_i <= price_left || price_i <= price_right) continue;
+
+            /* Neighbors must be able to reach each other directly */
+            double consumed = fw_calc_fuel_consumed(problem,
+                problem->stations[i - 1].distance_from_start,
+                problem->stations[i + 1].distance_from_start);
+            if (problem->tank_capacity - consumed < problem->minimum_fuel) continue;
+
+            /* Safety: check that fixing z[i]=0 doesn't empty any interval */
+            int safe = 1;
+            for (int iv = 0; iv < cut_ctx->num_intervals; iv++) {
+                int s = cut_ctx->interval_start[iv];
+                int e = cut_ctx->interval_end[iv];
+                if (i >= s && i < e) {
+                    /* Count other eligible stations in this interval */
+                    int others = 0;
+                    for (int j = s; j < e; j++) {
+                        if (j != i && !is_fixed_zero[j]) others++;
+                    }
+                    if (others == 0) { safe = 0; break; }
+                }
+            }
+
+            if (safe) {
+                is_fixed_zero[i] = 1;
+                ralph_set_var_bounds(model, z_start + i, 0.0, 0.0);
+            }
+        }
+    }
+
+    /* ================================================================
+     * Symmetry Breaking: Equal-Price Adjacent Pairs
+     *
+     * For adjacent stations with identical prices, add z[i] >= z[i+1]
+     * to prefer the earlier station. This eliminates symmetric solutions
+     * where swapping stop decisions between equal-price neighbors
+     * produces the same objective value.
+     * ================================================================ */
+
+    for (int i = 0; i < k - 1; i++) {
+        /* Skip pairs where either station is already fixed */
+        if (is_mandatory && (is_mandatory[i] || is_mandatory[i + 1])) continue;
+        if (is_fixed_zero && (is_fixed_zero[i] || is_fixed_zero[i + 1])) continue;
+
+        double price_diff = problem->stations[i].price - problem->stations[i + 1].price;
+        if (price_diff < 0) price_diff = -price_diff;
+
+        if (price_diff < 1e-6) {
+            /* z[i] - z[i+1] >= 0: prefer earlier station */
+            int indices[2] = {z_start + i, z_start + i + 1};
+            double values[2] = {1.0, -1.0};
+            ralph_add_constraint(model, 2, indices, values, RALPH_GREATER_EQUAL, 0.0);
+        }
+    }
+
+    free(is_mandatory);
+    free(is_fixed_zero);
 }
 
 static void fw_free_cut_context(FWReachCutContext *ctx)
