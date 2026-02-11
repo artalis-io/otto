@@ -58,6 +58,7 @@ typedef struct {
     /* Fuel parameters */
     double min_fuel_l;              /* Minimum fuel level to maintain */
     double min_purchase_l;          /* Minimum purchase per stop (0 = LP, >0 = MILP) */
+    double stop_cost;               /* Fixed cost per stop (0 = no stop penalty) */
     double start_fuel_fraction;     /* Starting fuel as fraction of tank (0.3-0.8) */
 
     /* Price distribution (AR(1) spatial correlation model)
@@ -190,6 +191,14 @@ FWBenchConfig fw_bench_config_us_interstate(void);
 FWBenchConfig fw_bench_config_benders_30(void);   /* 30 stations */
 FWBenchConfig fw_bench_config_benders_50(void);   /* 50 stations */
 FWBenchConfig fw_bench_config_benders_100(void);  /* 100 stations */
+
+/* MIP benchmarks: stop_cost + min_purchase, scaling from trivial to stress */
+FWBenchConfig fw_bench_config_milp_15(void);      /* ~15 stations, sub-ms sanity */
+FWBenchConfig fw_bench_config_milp_30(void);      /* ~30 stations, high stop cost */
+FWBenchConfig fw_bench_config_milp_50(void);      /* ~50 stations, high price variance */
+FWBenchConfig fw_bench_config_milp_75(void);      /* ~75 stations, tight tank (reach cuts) */
+FWBenchConfig fw_bench_config_milp_100(void);     /* ~100 stations, scalability */
+FWBenchConfig fw_bench_config_milp_200(void);     /* ~200 stations, stress test */
 
 /* ============================================================================
  * Validation API
