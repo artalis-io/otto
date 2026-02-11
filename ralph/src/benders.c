@@ -2,8 +2,8 @@
  * Ralph - Generic Benders Decomposition Implementation
  *
  * Implements Benders decomposition for MIP problems with complicating variables.
- * Supports both classic Benders (cuts at integer solutions) and modern
- * branch-and-Benders-cut (cuts at LP nodes).
+ * Currently implements classic Benders (cuts at integer solutions).
+ * Modern branch-and-Benders-cut (cuts at LP nodes) is planned but not yet implemented.
  */
 
 #include <stdlib.h>
@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
+#include <limits.h>
 
 #include "benders.h"
 #include "ralph.h"
@@ -303,6 +304,12 @@ int benders_partition(BendersContext *ctx) {
 
             if (!lc->master_var_indices || !lc->master_coeffs ||
                 !lc->sub_var_indices || !lc->sub_coeffs) {
+                /* Free partially allocated arrays for this linking constraint */
+                free(lc->master_var_indices); lc->master_var_indices = NULL;
+                free(lc->master_coeffs); lc->master_coeffs = NULL;
+                free(lc->sub_var_indices); lc->sub_var_indices = NULL;
+                free(lc->sub_coeffs); lc->sub_coeffs = NULL;
+                /* benders_free will clean up ctx->linking and previous entries */
                 return -1;
             }
 
@@ -377,13 +384,8 @@ int benders_build_master(BendersContext *ctx) {
         ctx->theta_in_master = ctx->orig_to_master[ctx->config.theta_var];
     }
 
-    /* Map original constraint indices to master indices */
-    int *orig_to_master_con = (int*)malloc(orig->num_cons * sizeof(int));
-    if (!orig_to_master_con) return -1;
-
     /* Add master-only constraints */
     for (int i = 0; i < orig->num_cons; i++) {
-        orig_to_master_con[i] = -1;
         if (ctx->constraint_class[i] != 0) continue; /* Skip non-master */
 
         /* Build constraint in master variable space */
@@ -411,8 +413,6 @@ int benders_build_master(BendersContext *ctx) {
         free(indices);
         free(values);
     }
-
-    free(orig_to_master_con);
 
     /* Finalize master model */
     if (lp_model_finalize(master) != 0) {
@@ -543,6 +543,7 @@ int benders_update_subproblem_rhs(BendersContext *ctx, int scenario,
         /* Subtract T*x contribution */
         for (int t = 0; t < lc->num_master_terms; t++) {
             int master_j = lc->master_var_indices[t];
+            if (master_j < 0 || master_j >= ctx->num_master_vars) return -1;
             rhs -= lc->master_coeffs[t] * x_master[master_j];
         }
 
@@ -686,7 +687,9 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
 
 static int benders_ensure_cut_capacity(BendersContext *ctx) {
     if (ctx->num_cuts >= ctx->cuts_capacity) {
-        int new_cap = ctx->cuts_capacity * 2;
+        int new_cap = (ctx->cuts_capacity <= INT_MAX / 2)
+                      ? ctx->cuts_capacity * 2
+                      : INT_MAX;
         BendersCut *new_cuts = (BendersCut*)realloc(ctx->cuts,
                                                      new_cap * sizeof(BendersCut));
         if (!new_cuts) return -1;
@@ -732,20 +735,23 @@ int benders_add_optimality_cut(BendersContext *ctx, int scenario,
 
     /* Count non-zero coefficients for master variables */
     int max_terms = ctx->num_master_vars;
+    cut->master_var_indices = NULL;
+    cut->coeffs = NULL;
+
     cut->master_var_indices = (int*)malloc(max_terms * sizeof(int));
     cut->coeffs = (double*)malloc(max_terms * sizeof(double));
 
     if (!cut->master_var_indices || !cut->coeffs) {
-        free(cut->master_var_indices);
-        free(cut->coeffs);
+        free(cut->master_var_indices); cut->master_var_indices = NULL;
+        free(cut->coeffs); cut->coeffs = NULL;
         return -1;
     }
 
     /* Accumulate coefficients for each master variable */
     double *master_coeffs = (double*)calloc(ctx->num_master_vars, sizeof(double));
     if (!master_coeffs) {
-        free(cut->master_var_indices);
-        free(cut->coeffs);
+        free(cut->master_var_indices); cut->master_var_indices = NULL;
+        free(cut->coeffs); cut->coeffs = NULL;
         return -1;
     }
 
@@ -780,6 +786,12 @@ int benders_add_optimality_cut(BendersContext *ctx, int scenario,
         /* Add contribution to x coefficients: π_k * T_kj for each master var j */
         for (int t = 0; t < lc->num_master_terms; t++) {
             int master_j = lc->master_var_indices[t];
+            if (master_j < 0 || master_j >= ctx->num_master_vars) {
+                free(master_coeffs);
+                free(cut->master_var_indices); cut->master_var_indices = NULL;
+                free(cut->coeffs); cut->coeffs = NULL;
+                return -1;
+            }
             double T_kj = lc->master_coeffs[t];
             master_coeffs[master_j] += pi_k * T_kj;
         }
@@ -787,6 +799,7 @@ int benders_add_optimality_cut(BendersContext *ctx, int scenario,
         /* Add to constant: π_k * T_k * x_current */
         for (int t = 0; t < lc->num_master_terms; t++) {
             int master_j = lc->master_var_indices[t];
+            /* Already bounds-checked above */
             double T_kj = lc->master_coeffs[t];
             constant += pi_k * T_kj * ctx->master_solution[master_j];
         }
@@ -873,6 +886,12 @@ int benders_add_feasibility_cut(BendersContext *ctx, int scenario,
 
         for (int t = 0; t < lc->num_master_terms; t++) {
             int master_j = lc->master_var_indices[t];
+            if (master_j < 0 || master_j >= ctx->num_master_vars) {
+                free(master_coeffs);
+                free(cut->master_var_indices); cut->master_var_indices = NULL;
+                free(cut->coeffs); cut->coeffs = NULL;
+                return -1;
+            }
             master_coeffs[master_j] += y_k * lc->master_coeffs[t];
         }
 

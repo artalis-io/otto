@@ -555,6 +555,15 @@ int ralph_optimize(RalphModel *model) {
             model->dual_solution = (double*)calloc(m_orig, sizeof(double));
             model->reduced_costs = (double*)calloc(n_orig, sizeof(double));
 
+            if (!model->solution || !model->dual_solution || !model->reduced_costs) {
+                free(model->solution); model->solution = NULL;
+                free(model->dual_solution); model->dual_solution = NULL;
+                free(model->reduced_costs); model->reduced_costs = NULL;
+                if (presolved) presolve_free(presolved);
+                model->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+
             if (presolved && presolved->reduced_model) {
                 /* Postsolve: recover original solution */
                 if (model->solution && model->lp_solver->solution) {
@@ -798,22 +807,22 @@ RalphBasis* ralph_save_basis(const RalphModel *model) {
     basis->m = tab->m;
     basis->n = tab->n;
 
-    /* Copy basis array */
-    basis->basis = (int*)malloc(tab->m * sizeof(int));
+    /* Copy basis array (use calloc for overflow-safe size calculation) */
+    basis->basis = (int*)calloc(tab->m, sizeof(int));
     if (!basis->basis) {
         free(basis);
         return NULL;
     }
-    memcpy(basis->basis, tab->basis, tab->m * sizeof(int));
+    memcpy(basis->basis, tab->basis, (size_t)tab->m * sizeof(int));
 
-    /* Copy variable status array */
-    basis->var_status = (VarStatus*)malloc(tab->n * sizeof(VarStatus));
+    /* Copy variable status array (use calloc for overflow-safe size calculation) */
+    basis->var_status = (VarStatus*)calloc(tab->n, sizeof(VarStatus));
     if (!basis->var_status) {
         free(basis->basis);
         free(basis);
         return NULL;
     }
-    memcpy(basis->var_status, tab->var_status, tab->n * sizeof(VarStatus));
+    memcpy(basis->var_status, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
 
     return basis;
 }
@@ -834,9 +843,25 @@ int ralph_load_basis(RalphModel *model, const RalphBasis *basis) {
             return -1;  /* Dimensions don't match */
         }
 
+        /* Validate basis structure is complete */
+        if (!basis->basis || !basis->var_status) {
+            return -1;
+        }
+
+        /* Save backup before modification so we can restore on refactorize failure */
+        int *orig_basis = (int*)calloc(tab->m, sizeof(int));
+        VarStatus *orig_status = (VarStatus*)calloc(tab->n, sizeof(VarStatus));
+        if (!orig_basis || !orig_status) {
+            free(orig_basis);
+            free(orig_status);
+            return -1;
+        }
+        memcpy(orig_basis, tab->basis, (size_t)tab->m * sizeof(int));
+        memcpy(orig_status, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
+
         /* Copy basis data */
-        memcpy(tab->basis, basis->basis, tab->m * sizeof(int));
-        memcpy(tab->var_status, basis->var_status, tab->n * sizeof(VarStatus));
+        memcpy(tab->basis, basis->basis, (size_t)tab->m * sizeof(int));
+        memcpy(tab->var_status, basis->var_status, (size_t)tab->n * sizeof(VarStatus));
 
         /* Rebuild basis_pos from basis */
         for (int j = 0; j < tab->n; j++) {
@@ -855,8 +880,21 @@ int ralph_load_basis(RalphModel *model, const RalphBasis *basis) {
 
         /* Force refactorization with new basis */
         if (tableau_refactorize(tab) != 0) {
+            /* Restore original basis to avoid corrupted state */
+            memcpy(tab->basis, orig_basis, (size_t)tab->m * sizeof(int));
+            memcpy(tab->var_status, orig_status, (size_t)tab->n * sizeof(VarStatus));
+            for (int j2 = 0; j2 < tab->n; j2++) tab->basis_pos[j2] = -1;
+            for (int i2 = 0; i2 < tab->m; i2++) {
+                int bv = tab->basis[i2];
+                if (bv >= 0 && bv < tab->n) tab->basis_pos[bv] = i2;
+            }
+            free(orig_basis);
+            free(orig_status);
             return -1;
         }
+
+        free(orig_basis);
+        free(orig_status);
 
         return 0;
     }
@@ -933,7 +971,8 @@ int ralph_solve_benders(
  * Parameters
  * ============================================================================ */
 
-/* Helper macro for safe string comparison with literals */
+/* Helper macro for safe string comparison with string literals only.
+ * sizeof(lit) includes the null terminator, so strncmp is bounded. */
 #define STREQ(s, lit) (strncmp((s), (lit), sizeof(lit)) == 0)
 
 int ralph_set_int_param(RalphModel *model, const char *name, int value) {
