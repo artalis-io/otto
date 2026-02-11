@@ -1457,6 +1457,8 @@ static void phase1_exclude_entering_var(int var,
                                         int *exclude_b,
                                         int *ttl_b) {
     if (var < 0 || ttl <= 0 || !exclude_a || !ttl_a || !exclude_b || !ttl_b) return;
+    /* Note: var is validated by callers (pricing functions return valid indices),
+     * but we skip storing obviously invalid indices defensively. */
 
     if (*exclude_a == var || *ttl_a <= 0) {
         *exclude_a = var;

@@ -744,7 +744,7 @@ static int select_reliability_branch(MIPSolver *solver, const double *solution) 
 
 /*
  * Find the maximum priority among fractional integer variables.
- * Returns the max priority, or INT_MIN if no fractional variables.
+ * Returns the max priority, or 0 if no fractional variables exist.
  */
 static int find_max_priority(MIPSolver *solver, const double *solution) {
     if (!solver->branch_priorities) return 0;  /* All equal priority */
@@ -753,9 +753,11 @@ static int find_max_priority(MIPSolver *solver, const double *solution) {
     const int * restrict int_vars = solver->integer_vars;
     const int num_int = solver->num_integers;
     const int * restrict prios = solver->branch_priorities;
+    const int num_vars = solver->original_model->num_vars;
 
     for (int k = 0; k < num_int; k++) {
         int j = int_vars[k];
+        if (j < 0 || j >= num_vars) continue;
         double val = solution[j];
         double frac = val - (double)(long)val;
         if (frac < 0.0) frac += 1.0;
@@ -766,7 +768,7 @@ static int find_max_priority(MIPSolver *solver, const double *solution) {
             }
         }
     }
-    return max_prio;
+    return (max_prio == INT_MIN) ? 0 : max_prio;
 }
 
 /*
@@ -813,9 +815,11 @@ static int select_pseudo_cost_with_priority(MIPSolver *solver, const double *sol
     const double * restrict pc_up = solver->pseudo_cost_up;
     const int num_int = solver->num_integers;
     const int * restrict prios = solver->branch_priorities;
+    const int num_vars = solver->original_model->num_vars;
 
     for (int k = 0; k < num_int; k++) {
         int j = int_vars[k];
+        if (j < 0 || j >= num_vars) continue;
 
         /* Skip if not at max priority */
         if (prios && prios[j] < max_prio) continue;
@@ -989,7 +993,8 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
      * The first child (child_down in original output slot) is explored first
      * in depth-first search. By swapping, we control which direction is tried first.
      */
-    if (solver->branch_directions) {
+    if (solver->branch_directions &&
+        branch_var >= 0 && branch_var < solver->original_model->num_vars) {
         int pref = solver->branch_directions[branch_var];
         if (pref > 0) {  /* RALPH_BRANCH_UP: prefer up first */
             BBNode *tmp = *child_down;
