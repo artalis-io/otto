@@ -15,7 +15,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | **Presolve** | ✅ Phase 1 | Singleton, redundant rows, bound tightening |
 | **NETLIB Suite** | 67% Pass | 8/12 problems (see below) |
 | **REST API** | ✅ Complete | HTTP + WASM, LP/MPS input (§5) |
-| **MIP Infrastructure** | ⏳ Planned | Branching priorities, cut callbacks, Benders (§6) |
+| **MIP Infrastructure** | ✅ Complete | Branching priorities, cut callbacks, Benders (WIP) |
 
 ---
 
