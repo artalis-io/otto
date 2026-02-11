@@ -11,6 +11,7 @@
 typedef enum {
     POSTSOLVE_FIXED_VAR,       /* Variable fixed to a value */
     POSTSOLVE_SUBSTITUTION,    /* x_elim = offset + factor * x_remain */
+    POSTSOLVE_SHIFT,           /* x_orig = x_shifted + value (bound shift) */
 } PostsolveOpType;
 
 typedef struct {
@@ -58,7 +59,6 @@ typedef struct {
     int vars_removed;
     int cons_removed;
     int bounds_tightened;
-    int coefficients_reduced;
     int matrix_rank;            /* Computed rank of constraint matrix (0 if not computed) */
     int redundant_rows_found;   /* Count of linearly dependent rows removed */
 
@@ -77,7 +77,6 @@ typedef struct {
     int remove_singleton_cols;
     int remove_forcing_cons;
     int bound_tightening;
-    int coefficient_reduction;
     int probing;                /* For MIP only */
     int detect_redundant_rows;  /* Detect linearly dependent rows via rank */
 
@@ -113,7 +112,14 @@ int presolve_singleton_rows(PresolveContext *ctx);
 int presolve_singleton_cols(PresolveContext *ctx);
 int presolve_forcing_constraints(PresolveContext *ctx);
 int presolve_bound_tightening(PresolveContext *ctx);
-int presolve_coefficient_reduction(PresolveContext *ctx);
+/* Proportional row detection: remove duplicate/dominated parallel rows */
+int presolve_proportional_rows(PresolveContext *ctx);
+
+/* Proportional column detection: fix dominated parallel columns */
+int presolve_proportional_cols(PresolveContext *ctx);
+
+/* Shift variable bounds: x' = x - lb so all lower bounds are zero */
+int presolve_shift_bounds(PresolveContext *ctx, PresolveResult *result);
 
 /*
  * Detect and remove linearly dependent (redundant) rows.
@@ -148,7 +154,6 @@ int presolve_implied_free(PresolveContext *ctx);
 
 /* MIP-specific presolve */
 int presolve_probing(PresolveContext *ctx);
-int presolve_clique_detection(PresolveContext *ctx);
 
 /* Set covering/partitioning specific presolve */
 

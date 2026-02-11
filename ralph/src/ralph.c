@@ -345,6 +345,59 @@ int ralph_optimize(RalphModel *model) {
         }
     }
 
+    /* Handle trivially solved model: presolve eliminated all constraints.
+     * With 0 constraints, the optimal is determined by bounds alone:
+     * set each variable to its best bound for the objective. */
+    if (solve_model->num_cons == 0 && solve_model->num_vars > 0) {
+        double *trivial_sol = (double*)calloc(solve_model->num_vars, sizeof(double));
+        if (trivial_sol) {
+            double obj = solve_model->obj_offset;
+            for (int j = 0; j < solve_model->num_vars; j++) {
+                double c_eff = solve_model->c[j] * solve_model->obj_sense;
+                if (c_eff > RALPH_ZERO_TOL) {
+                    trivial_sol[j] = solve_model->lb[j];
+                } else if (c_eff < -RALPH_ZERO_TOL) {
+                    trivial_sol[j] = solve_model->ub[j];
+                } else {
+                    trivial_sol[j] = solve_model->lb[j] > -RALPH_INFINITY/2 ?
+                                     solve_model->lb[j] : 0.0;
+                }
+                obj += solve_model->c[j] * trivial_sol[j];
+            }
+
+            model->status = RALPH_STATUS_OPTIMAL;
+            model->obj_value = obj;
+            model->iteration_count = 0;
+
+            model->solution = (double*)calloc(n_orig, sizeof(double));
+            if (model->solution) {
+                if (presolved && presolved->reduced_model) {
+                    postsolve(presolved, trivial_sol, model->solution);
+                } else {
+                    memcpy(model->solution, trivial_sol, solve_model->num_vars * sizeof(double));
+                }
+            }
+            free(trivial_sol);
+            if (presolved) presolve_free(presolved);
+            return 0;
+        }
+    }
+
+    /* Handle completely empty model: 0 vars, 0 constraints */
+    if (solve_model->num_vars == 0) {
+        model->status = RALPH_STATUS_OPTIMAL;
+        model->obj_value = solve_model->obj_offset;
+        model->iteration_count = 0;
+
+        model->solution = (double*)calloc(n_orig, sizeof(double));
+        if (model->solution && presolved && presolved->reduced_model) {
+            double empty = 0.0;
+            postsolve(presolved, &empty, model->solution);
+        }
+        if (presolved) presolve_free(presolved);
+        return 0;
+    }
+
     /* Try LAP detection for pure LP (not MIP) - post-presolve fallback.
      * This is a backup in case presolve reveals LAP structure that wasn't
      * detected in the original model (rare but possible). */

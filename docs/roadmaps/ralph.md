@@ -12,7 +12,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 | **LAP Solver** | ✅ Complete | JVC algorithm, 358 tests |
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
-| **Presolve** | ✅ Phase 2 | Multi-round, singleton/doubleton, implied free (P3) |
+| **Presolve** | ✅ Phase 3 | 10 techniques, 20-round fixed-point, proportional rows/cols (P3) |
 | **NETLIB Suite** | 67% Pass | 8/12 problems (see below) |
 | **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
 | **Benders Decomposition** | ✅ Complete | Generic solver, ~1430 LoC, 8 tests (§7) |
@@ -154,28 +154,42 @@ cover cuts, mandatory station fixing).
 
 ### 1.8 LP Presolve (P3) ✅
 
-**Implemented:** Multi-round fixed-point presolve with 4 techniques:
+**Implemented:** 20-round fixed-point presolve with 10 techniques (matching GLOP iteration count):
 
 | Technique | Description | Status |
 |-----------|-------------|--------|
-| Multi-round loop | Up to 10 fixed-point iterations (was 1) | ✅ |
+| Multi-round loop | Up to 20 fixed-point iterations (matching GLOP) | ✅ |
 | Singleton row tightening | Derive variable bounds from single-variable constraints | ✅ |
 | Doubleton equality elimination | Substitute x_j from `a*x_j + b*x_k = c`, reduce model | ✅ |
 | Implied free detection | Remove redundant bounds when constraints already restrict | ✅ |
-| Postsolve stack | LIFO replay of substitutions to recover original solution | ✅ |
+| Proportional row detection | Remove duplicate/redundant rows that are scalar multiples | ✅ |
+| Proportional column detection | Fix dominated variables when columns have proportional coefficients | ✅ |
+| Shift-variable-bounds | Transform x' = x - lb so lower bounds become zero (reduces simplex degeneracy) | ✅ |
+| Forcing constraints | Detect constraints that force all variables to their bounds | ✅ |
+| Bound tightening | Tighten variable bounds from constraint information | ✅ |
+| Postsolve stack | LIFO replay of substitutions, shifts, and fixed-var ops | ✅ |
 
 **Key implementation details:**
 - Doubleton elimination: avoids integer variables, skips when fill-in exceeds 2x non-zeros,
   pivots on larger coefficient for numerical stability
 - Implied free: tightens to finite computed implied bounds (not ±infinity) to avoid
   breaking Big-M method in simplex Phase 1
-- Postsolve uses `PostsolveOp` stack with types: `FIXED_VAR`, `SUBSTITUTION`, `BOUND_CHANGE`
+- Proportional columns: only eliminates when dominated var has non-negative effective cost
+  (fixing at lb is provably correct); skips negative-ratio and negative-cost cases that
+  would require bound expansion on the non-dominated variable
+- Shift-variable-bounds: records `POSTSOLVE_SHIFT` ops for correct solution recovery;
+  skips integer/binary variables (would change integrality)
+- Postsolve uses `PostsolveOp` stack with types: `FIXED_VAR`, `SUBSTITUTION`, `BOUND_CHANGE`, `SHIFT`
+- Sweep after presolve loop scans `ctx->working` (not original model) for deleted columns
+  with `lb == ub` and pushes `POSTSOLVE_FIXED_VAR` ops for recovery
 - `build_reduced_model()` populates identity var_map/con_map on 0-reduction early return
 - `ralph_optimize()` adds `obj_offset` from presolve to reported objective
+- Trivial model handling: when presolve eliminates all constraints/variables, sets each
+  variable to its optimal bound and runs postsolve
 
-**Files:** `presolve.c` (~2400 lines), `presolve.h`, `ralph.c` (obj_offset integration)
-**Tests:** 40 assertions in `test_presolve.c` covering all techniques + edge cases
-**Commits:** `94c3808 ralph: implement LP presolve improvements (P3)`
+**Files:** `presolve.c` (~2800 lines), `presolve.h`, `ralph.c` (obj_offset + trivial model)
+**Tests:** 75 assertions in `test_presolve.c` covering all techniques + edge cases + regressions
+**Commits:** `94c3808` (initial P3), subsequent commits for proportional/shift/bugfixes
 
 ### 1.9 Supernodal LU Factorization (Planned)
 
@@ -310,8 +324,8 @@ GLPK benchmark (§1.7) confirmed these are the critical gaps:
 | **Best-first node selection** | **Critical** | 2-5x for deep trees | Ralph uses depth-first only; GLPK uses best-bound |
 | **MIR cuts** | **High** | 1.5-3x tighter relaxation | GLPK generates these automatically |
 | **Dual simplex for node resolves** | **High** | 2-3x per-node speedup | Adding/removing bounds is dual-friendly |
-| **LP presolve (P3)** | ✅ **Done** | 2-3x avg improvement | Multi-round, doubleton equality, implied free |
-| **Aggressive presolve** (probing) | **High** | 1.5-2x smaller problems | GLPK's presolve reduces problem before B&B |
+| **LP presolve (P3)** | ✅ **Done** | 2-3x avg improvement | 10 techniques, 20-round, proportional rows/cols, shift-bounds |
+| **Aggressive presolve** (probing) | **Medium** | 1.5-2x smaller problems | Basic probing exists; implication propagation planned |
 | Pseudocost branching | High | 1.5-2x better variable selection | Replaces static priorities with learned costs |
 | Solution pool / incumbents | Medium | Faster pruning from good bounds | LP rounding for initial incumbent |
 | Clique detection | Medium | From set-packing constraints | |

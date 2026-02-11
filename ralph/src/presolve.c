@@ -42,11 +42,10 @@ static PresolveContext* presolve_context_create(LPModel *model) {
     ctx->remove_singleton_cols = 1;
     ctx->remove_forcing_cons = 1;
     ctx->bound_tightening = 1;
-    ctx->coefficient_reduction = 0; /* Can be expensive */
     ctx->probing = 0;               /* MIP only */
     ctx->detect_redundant_rows = 1; /* Only removes redundant equality constraints */
 
-    ctx->max_rounds = 10;  /* Multiple rounds for fixed-point convergence */
+    ctx->max_rounds = 20;  /* Multiple rounds for fixed-point convergence (GLOP uses 20) */
     ctx->current_round = 0;
 
     /* Redundant row detection stats */
@@ -1090,6 +1089,336 @@ int presolve_bound_tightening(PresolveContext *ctx) {
 }
 
 /* ============================================================================
+ * Proportional Row Detection
+ * ============================================================================ */
+
+/*
+ * Detect and remove proportional (parallel) rows.
+ *
+ * Two rows i and j are proportional if row_i = k * row_j for some scalar k.
+ * For <= constraints: keep the tighter one.
+ * For = constraints: check RHS consistency (else infeasible).
+ *
+ * Algorithm: For each pair of rows with the same sparsity pattern,
+ * check if coefficients are proportional.
+ */
+int presolve_proportional_rows(PresolveContext *ctx) {
+    LPModel *model = ctx->working;
+    int m = model->num_cons;
+    int n = model->num_vars;
+    int count = 0;
+
+    /* Allocate two dense row buffers */
+    double *row_i = (double*)calloc(n, sizeof(double));
+    double *row_j = (double*)calloc(n, sizeof(double));
+    if (!row_i || !row_j) {
+        free(row_i);
+        free(row_j);
+        return 0;
+    }
+
+    for (int i = 0; i < m; i++) {
+        if (ctx->row_deleted[i]) continue;
+
+        sparse_get_row(model->A, i, row_i);
+
+        /* Find first non-zero for normalization */
+        int first_nz_i = -1;
+        for (int k = 0; k < n; k++) {
+            if (!ctx->col_deleted[k] && fabs(row_i[k]) > RALPH_ZERO_TOL) {
+                first_nz_i = k;
+                break;
+            }
+        }
+        if (first_nz_i < 0) continue;  /* Empty row handled elsewhere */
+
+        for (int j = i + 1; j < m; j++) {
+            if (ctx->row_deleted[j]) continue;
+
+            sparse_get_row(model->A, j, row_j);
+
+            /* Check first non-zero of row j */
+            double val_i = row_i[first_nz_i];
+            double val_j = row_j[first_nz_i];
+            if (fabs(val_j) < RALPH_ZERO_TOL) continue;  /* Different sparsity */
+
+            double ratio = val_i / val_j;
+
+            /* Check proportionality: row_i[k] == ratio * row_j[k] for all k */
+            int proportional = 1;
+            for (int k = 0; k < n && proportional; k++) {
+                if (ctx->col_deleted[k]) continue;
+                double diff = row_i[k] - ratio * row_j[k];
+                double scale = fmax(fabs(row_i[k]), fabs(row_j[k]));
+                double tol = fmax(RALPH_FEAS_TOL, RALPH_FEAS_TOL * scale);
+                if (fabs(diff) > tol) proportional = 0;
+            }
+            if (!proportional) continue;
+
+            /* Rows i and j are proportional: row_i = ratio * row_j
+             * Normalize both: row_i (sense_i) rhs_i  and  ratio*row_j (sense_j) ratio*rhs_j */
+            double rhs_i = model->b[i];
+            double rhs_j_scaled = ratio * model->b[j];
+
+            if (model->sense[i] == 'E' && model->sense[j] == 'E') {
+                /* Both equalities: must have same RHS (after scaling) */
+                if (fabs(rhs_i - rhs_j_scaled) > RALPH_FEAS_TOL * fmax(1.0, fabs(rhs_i))) {
+                    free(row_i);
+                    free(row_j);
+                    return -1;  /* Infeasible: inconsistent equalities */
+                }
+                /* Remove duplicate */
+                ctx->row_deleted[j] = 1;
+                count++;
+            } else if (model->sense[i] == 'L' && model->sense[j] == 'L') {
+                /* Both <=: keep the tighter one */
+                if (ratio > 0) {
+                    /* Same direction: row_i <= rhs_i, row_j <= rhs_j
+                     * After scaling: row_i <= rhs_i and row_i <= ratio*rhs_j
+                     * Keep the one with smaller RHS */
+                    if (rhs_i <= rhs_j_scaled + RALPH_FEAS_TOL) {
+                        ctx->row_deleted[j] = 1;  /* i is tighter */
+                    } else {
+                        ctx->row_deleted[i] = 1;  /* j is tighter */
+                    }
+                    count++;
+                } else {
+                    /* Opposite direction after scaling — not truly parallel for <= */
+                    /* ratio < 0 means row_i = ratio*row_j with sign flip.
+                     * row_j <= rhs_j becomes -row_j >= -rhs_j, i.e., (row_i/ratio) >= -rhs_j
+                     * This gives us a bound pair, not a redundancy. Skip. */
+                }
+            } else if (model->sense[i] == 'G' && model->sense[j] == 'G') {
+                /* Both >=: keep the tighter one */
+                if (ratio > 0) {
+                    if (rhs_i >= rhs_j_scaled - RALPH_FEAS_TOL) {
+                        ctx->row_deleted[j] = 1;  /* i is tighter */
+                    } else {
+                        ctx->row_deleted[i] = 1;  /* j is tighter */
+                    }
+                    count++;
+                }
+            }
+            /* Mixed sense (L/G, L/E, G/E): more complex, skip for now */
+
+            if (ctx->row_deleted[i]) break;  /* Row i was removed, move on */
+        }
+    }
+
+    free(row_i);
+    free(row_j);
+    return count;
+}
+
+/* ============================================================================
+ * Proportional Column Detection
+ * ============================================================================ */
+
+/*
+ * Detect proportional (parallel) columns for continuous variables.
+ *
+ * Two columns j and k are proportional if A[*,j] = r * A[*,k] for some r > 0.
+ * If c[j]/r >= c[k] (cost per unit of j is no better than k), then j is
+ * dominated: we can substitute x_j out (set to its bound that helps the
+ * objective most) and keep only x_k.
+ *
+ * For minimization with positive ratio r > 0:
+ *   If c[j] >= r * c[k], then column k dominates j.
+ *   Fix x_j at its lower bound (for positive obj coeff) or upper bound.
+ */
+int presolve_proportional_cols(PresolveContext *ctx) {
+    LPModel *model = ctx->working;
+    int n = model->num_vars;
+    int count = 0;
+
+    for (int j = 0; j < n; j++) {
+        if (ctx->col_deleted[j]) continue;
+        /* Only continuous variables */
+        if (model->var_type[j] == 'I' || model->var_type[j] == 'B') continue;
+
+        /* Get column j non-zeros */
+        int nnz_j = 0;
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            if (!ctx->row_deleted[model->A->rowidx[p]] &&
+                fabs(model->A->values[p]) > RALPH_ZERO_TOL) {
+                nnz_j++;
+            }
+        }
+        if (nnz_j == 0) continue;
+
+        for (int k = j + 1; k < n; k++) {
+            if (ctx->col_deleted[k]) continue;
+            if (model->var_type[k] == 'I' || model->var_type[k] == 'B') continue;
+
+            /* Quick check: same number of active non-zeros */
+            int nnz_k = 0;
+            for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
+                if (!ctx->row_deleted[model->A->rowidx[p]] &&
+                    fabs(model->A->values[p]) > RALPH_ZERO_TOL) {
+                    nnz_k++;
+                }
+            }
+            if (nnz_k != nnz_j) continue;
+
+            /* Check proportionality by walking both columns */
+            double ratio = 0.0;
+            int proportional = 1;
+            int pj = model->A->colptr[j];
+            int pk = model->A->colptr[k];
+            int pj_end = model->A->colptr[j + 1];
+            int pk_end = model->A->colptr[k + 1];
+
+            while (pj < pj_end && pk < pk_end && proportional) {
+                /* Skip deleted rows */
+                while (pj < pj_end && (ctx->row_deleted[model->A->rowidx[pj]] ||
+                       fabs(model->A->values[pj]) < RALPH_ZERO_TOL)) pj++;
+                while (pk < pk_end && (ctx->row_deleted[model->A->rowidx[pk]] ||
+                       fabs(model->A->values[pk]) < RALPH_ZERO_TOL)) pk++;
+
+                if (pj >= pj_end && pk >= pk_end) break;
+                if (pj >= pj_end || pk >= pk_end) { proportional = 0; break; }
+
+                int rj = model->A->rowidx[pj];
+                int rk = model->A->rowidx[pk];
+                if (rj != rk) { proportional = 0; break; }
+
+                double vj = model->A->values[pj];
+                double vk = model->A->values[pk];
+
+                if (ratio == 0.0) {
+                    ratio = vj / vk;
+                } else {
+                    double expected = ratio * vk;
+                    double tol = fmax(RALPH_FEAS_TOL, RALPH_FEAS_TOL * fabs(expected));
+                    if (fabs(vj - expected) > tol) proportional = 0;
+                }
+                pj++; pk++;
+            }
+            /* Check remaining entries */
+            while (pj < pj_end && proportional) {
+                if (!ctx->row_deleted[model->A->rowidx[pj]] &&
+                    fabs(model->A->values[pj]) > RALPH_ZERO_TOL) proportional = 0;
+                pj++;
+            }
+            while (pk < pk_end && proportional) {
+                if (!ctx->row_deleted[model->A->rowidx[pk]] &&
+                    fabs(model->A->values[pk]) > RALPH_ZERO_TOL) proportional = 0;
+                pk++;
+            }
+            if (!proportional || ratio == 0.0) continue;
+
+            /* Only handle positive ratio (same-direction columns).
+             * Negative ratio means opposite constraint contributions — skip. */
+            if (ratio < 0.0) continue;
+
+            /* Columns j and k are proportional: A[*,j] = ratio * A[*,k]
+             * For the internal minimizer: effective cost of j per unit of
+             * constraint contribution is c[j]*obj_sense vs ratio*c[k]*obj_sense.
+             * If cj_eff >= ck_eff, then j is dominated by k. */
+            double cj_eff = model->c[j] * model->obj_sense;
+            double ck_eff = model->c[k] * model->obj_sense * ratio;
+
+            int dominated = -1;  /* Which column to fix */
+            if (cj_eff >= ck_eff - RALPH_FEAS_TOL) {
+                dominated = j;  /* j is dominated by k */
+            } else {
+                dominated = k;  /* k is dominated by j */
+            }
+
+            if (dominated >= 0) {
+                /* Fix dominated variable at lower bound.
+                 * The non-dominated column can substitute more efficiently.
+                 * Only safe when the dominated var has non-negative effective
+                 * cost (fixing at lb helps or is neutral for the objective).
+                 * Skip when negative effective cost — the full textbook rule
+                 * requires expanding the non-dominated var's upper bound. */
+                double obj_coef = model->c[dominated] * model->obj_sense;
+                if (obj_coef < -RALPH_ZERO_TOL) continue;
+
+                if (model->lb[dominated] <= -RALPH_INFINITY/2) continue;
+                double fixed_val = model->lb[dominated];
+
+                model->lb[dominated] = fixed_val;
+                model->ub[dominated] = fixed_val;
+                count++;
+
+                if (dominated == j) break;  /* j will be fixed next round */
+            }
+        }
+    }
+
+    return count;
+}
+
+/* ============================================================================
+ * Shift Variable Bounds
+ * ============================================================================ */
+
+/*
+ * Shift variables so that lower bound is zero: x' = x - lb.
+ *
+ * This simplifies the simplex (fewer bound flips) and can help with
+ * numerical conditioning. Only shifts continuous variables with finite,
+ * non-zero lower bounds.
+ *
+ * After shift:
+ *   - lb' = 0, ub' = ub - lb
+ *   - Constraint coefficients unchanged
+ *   - RHS: b_i -= a_ij * lb_j for each constraint
+ *   - Objective offset: obj_offset += c_j * lb_j
+ *
+ * Postsolve: x_j = x'_j + lb_j (original lower bound)
+ */
+int presolve_shift_bounds(PresolveContext *ctx, PresolveResult *result) {
+    LPModel *model = ctx->working;
+    int n = model->num_vars;
+    int count = 0;
+
+    for (int j = 0; j < n; j++) {
+        if (ctx->col_deleted[j]) continue;
+
+        double lb = model->lb[j];
+
+        /* Only shift if lb is finite and non-zero */
+        if (fabs(lb) < RALPH_ZERO_TOL) continue;
+        if (lb <= -RALPH_INFINITY/2) continue;
+
+        /* Don't shift integer/binary variables (changes integrality) */
+        if (model->var_type[j] == 'I' || model->var_type[j] == 'B') continue;
+
+        /* Record shift for postsolve: x_orig = x_shifted + lb */
+        if (result) {
+            PostsolveOp op = {
+                .type = POSTSOLVE_SHIFT,
+                .var = j,
+                .var2 = -1,
+                .value = lb,
+                .factor = 0.0,
+            };
+            postsolve_push(result, op);
+        }
+
+        /* Update RHS for all constraints */
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            int i = model->A->rowidx[p];
+            if (!ctx->row_deleted[i]) {
+                model->b[i] -= model->A->values[p] * lb;
+            }
+        }
+
+        /* Update objective offset */
+        model->obj_offset += model->c[j] * lb;
+
+        /* Shift bounds */
+        model->ub[j] -= lb;
+        model->lb[j] = 0.0;
+        count++;
+    }
+
+    return count;
+}
+
+/* ============================================================================
  * Redundant Row Detection via Gaussian Elimination
  * ============================================================================ */
 
@@ -1494,8 +1823,9 @@ int presolve_probing(PresolveContext *ctx) {
             model->ub[j] = 0.0;
             count++;
         }
-        /* If neither infeasible, we could derive tighter bounds on other variables
-         * by taking the intersection, but we skip this for simplicity */
+        /* If neither infeasible, could derive tighter bounds on other variables
+         * via constraint propagation within each probe. Currently we only use
+         * probing for variable fixing (infeasibility detection). */
     }
 
     free(implied_lb0);
@@ -2232,6 +2562,22 @@ PresolveResult* presolve(LPModel *model) {
             result->bounds_tightened += n;
         }
 
+        /* Proportional row detection */
+        {
+            int n = presolve_proportional_rows(ctx);
+            if (n < 0) { status = -1; break; }
+            changed += n;
+            result->cons_removed += n;
+        }
+
+        /* Proportional column detection */
+        {
+            int n = presolve_proportional_cols(ctx);
+            if (n < 0) { status = -1; break; }
+            changed += n;
+            result->vars_removed += n;
+        }
+
         /* MIP-specific: probing for binary variables */
         if (ctx->probing && model->num_binary > 0) {
             int n = presolve_probing(ctx);
@@ -2239,6 +2585,13 @@ PresolveResult* presolve(LPModel *model) {
             changed += n;
             result->vars_removed += n;  /* Probing fixes variables */
         }
+    }
+
+    /* Shift variable bounds (one-time, after main loop stabilizes).
+     * x' = x - lb so all lower bounds become zero. */
+    if (status >= 0) {
+        int n = presolve_shift_bounds(ctx, result);
+        result->bounds_tightened += n;
     }
 
     /* Redundant row detection via rank computation.
@@ -2261,6 +2614,34 @@ PresolveResult* presolve(LPModel *model) {
         free(result);
         presolve_context_free(ctx);
         return NULL;
+    }
+
+    /* Record all fixed (deleted) variables for postsolve recovery.
+     * Variables get fixed by remove_fixed_vars, remove_empty_cols,
+     * proportional_cols (via remove_fixed_vars), etc. None of these
+     * push postsolve ops, so we do a sweep here to ensure every fixed
+     * variable's value is recoverable during postsolve.
+     * Push POSTSOLVE_FIXED_VAR for each col_deleted variable with lb==ub.
+     * These must be pushed AFTER shift_bounds so they're replayed BEFORE
+     * shifts in the LIFO postsolve order.
+     * IMPORTANT: Use ctx->working (not parameter 'model') since presolve
+     * operations modify the working copy's bounds. */
+    {
+        LPModel *working = ctx->working;
+        for (int j = 0; j < working->num_vars; j++) {
+            if (ctx->col_deleted[j]) {
+                if (fabs(working->lb[j] - working->ub[j]) < RALPH_ZERO_TOL) {
+                    PostsolveOp op = {
+                        .type = POSTSOLVE_FIXED_VAR,
+                        .var = j,
+                        .var2 = -1,
+                        .value = working->lb[j],
+                        .factor = 0.0,
+                    };
+                    postsolve_push(result, op);
+                }
+            }
+        }
     }
 
     /* Preserve original variable types for MIP */
@@ -2391,6 +2772,10 @@ int postsolve(const PresolveResult *result, const double *reduced_solution,
                 /* x_elim = offset + factor * x_remain */
                 original_solution[op->var] =
                     op->value + op->factor * original_solution[op->var2];
+                break;
+            case POSTSOLVE_SHIFT:
+                /* x_orig = x_shifted + shift_amount */
+                original_solution[op->var] += op->value;
                 break;
         }
     }
