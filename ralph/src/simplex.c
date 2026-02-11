@@ -221,6 +221,18 @@ static void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_
             solver->trace_phase1_signature);
 }
 
+static double vec_abs_max(const double *x, int n) {
+    double max_abs = 0.0;
+    if (!x || n <= 0) return max_abs;
+    for (int i = 0; i < n; i++) {
+        double absval = fabs(x[i]);
+        if (absval > max_abs) {
+            max_abs = absval;
+        }
+    }
+    return max_abs;
+}
+
 /* ============================================================================
  * Geometric Mean Scaling
  * ============================================================================ */
@@ -1086,8 +1098,15 @@ int tableau_refactorize(SimplexTableau *tab) {
      * This helps two-phase recovery on near-singular artificial bases.
      * Keep disabled in Phase 2 to preserve structural constraints. */
     if (tab->phase == 1 && tab->use_two_phase) {
+        int reg_limit = RALPH_PHASE1_MAX_REGULARIZATIONS;
+        if (tab->num_redundant > reg_limit) {
+            reg_limit = tab->num_redundant;
+        }
+        if (reg_limit > tab->m) {
+            reg_limit = tab->m;
+        }
         tab->lu->allow_regularization = 1;
-        tab->lu->max_regularizations = 8;
+        tab->lu->max_regularizations = reg_limit;
     } else {
         tab->lu->allow_regularization = 0;
         tab->lu->max_regularizations = 0;
@@ -1377,6 +1396,86 @@ int pricing_bland(SimplexTableau *tab, int *entering) {
     }
 
     return 1;  /* 1 = optimal */
+}
+
+/* Bland-style pricing with one excluded variable index. */
+static int pricing_bland_excluding(SimplexTableau *tab, int excluded_var, int *entering) {
+    *entering = -1;
+
+    for (int j = 0; j < tab->n; j++) {
+        if (j == excluded_var) continue;
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        double rc = tab->rc[j];
+
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int pricing_bland_excluding_two(SimplexTableau *tab,
+                                       int excluded_a,
+                                       int excluded_b,
+                                       int *entering) {
+    *entering = -1;
+
+    for (int j = 0; j < tab->n; j++) {
+        if (j == excluded_a || j == excluded_b) continue;
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        double rc = tab->rc[j];
+
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static void phase1_exclude_entering_var(int var,
+                                        int ttl,
+                                        int *exclude_a,
+                                        int *ttl_a,
+                                        int *exclude_b,
+                                        int *ttl_b) {
+    if (var < 0 || ttl <= 0 || !exclude_a || !ttl_a || !exclude_b || !ttl_b) return;
+
+    if (*exclude_a == var || *ttl_a <= 0) {
+        *exclude_a = var;
+        *ttl_a = ttl;
+        return;
+    }
+    if (*exclude_b == var || *ttl_b <= 0) {
+        *exclude_b = var;
+        *ttl_b = ttl;
+        return;
+    }
+
+    if (*ttl_a <= *ttl_b) {
+        *exclude_a = var;
+        *ttl_a = ttl;
+    } else {
+        *exclude_b = var;
+        *ttl_b = ttl;
+    }
 }
 
 int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
@@ -2669,6 +2768,11 @@ static int simplex_phase1(SimplexSolver *solver) {
     int fail_leaving_pos = -1;
     int fail_reason = PHASE1_PIVOT_FAIL_NONE;
     int fail_repeat_count = 0;
+    int ratio_breakdown_count = 0;
+    int excluded_entering_a = -1;
+    int excluded_entering_ttl_a = 0;
+    int excluded_entering_b = -1;
+    int excluded_entering_ttl_b = 0;
 
     /* Apply proactive perturbation only for extremely degenerate two-phase starts.
      * A lower threshold can destabilize hard Phase 1 bases (e.g., beaconfd),
@@ -2688,6 +2792,18 @@ static int simplex_phase1(SimplexSolver *solver) {
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
         tab->trace_phase1_iter = iter;
+        if (excluded_entering_ttl_a > 0) {
+            excluded_entering_ttl_a--;
+            if (excluded_entering_ttl_a == 0) {
+                excluded_entering_a = -1;
+            }
+        }
+        if (excluded_entering_ttl_b > 0) {
+            excluded_entering_ttl_b--;
+            if (excluded_entering_ttl_b == 0) {
+                excluded_entering_b = -1;
+            }
+        }
 
         /* Pricing: select entering variable */
         int entering;
@@ -2703,6 +2819,22 @@ static int simplex_phase1(SimplexSolver *solver) {
             price_status = pricing_partial(tab, &entering);
         } else {
             price_status = pricing_devex(tab, &entering);
+        }
+
+        if ((excluded_entering_ttl_a > 0 || excluded_entering_ttl_b > 0) &&
+            entering >= 0 &&
+            (entering == excluded_entering_a || entering == excluded_entering_b)) {
+            int alt_entering = -1;
+            int exclude_a = (excluded_entering_ttl_a > 0) ? excluded_entering_a : -1;
+            int exclude_b = (excluded_entering_ttl_b > 0) ? excluded_entering_b : -1;
+            if (pricing_bland_excluding_two(tab, exclude_a, exclude_b, &alt_entering) == 0) {
+                if (solver->verbose >= 2) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Excluding unstable entering (%d,%d), using %d instead\n",
+                            exclude_a, exclude_b, alt_entering);
+                }
+                entering = alt_entering;
+            }
         }
 
         if (price_status != 0) {
@@ -2799,6 +2931,54 @@ static int simplex_phase1(SimplexSolver *solver) {
                 tableau_compute_reduced_costs(tab);
                 continue;
             }
+
+            /* Last-chance recovery before treating Phase-1 "unbounded" as
+             * numerical breakdown. */
+            int marked = mark_basic_artificial_rows_redundant(tab, 1);
+            if (marked > 0) {
+                if (solver->verbose >= 2) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Marked %d infeasible artificial rows as redundant after ratio-test breakdown\n",
+                            marked);
+                }
+                if (tableau_refactorize(tab) == 0) {
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+            }
+
+            int rescue_status = dual_simplex_phase1_rescue(
+                solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
+            if (rescue_status == 0) {
+                if (solver->verbose) {
+                    fprintf(stderr, "[simplex_phase1] Dual rescue recovered after ratio-test breakdown at iter %d\n", iter);
+                }
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                ratio_breakdown_count = 0;
+                continue;
+            }
+
+            ratio_breakdown_count++;
+            phase1_exclude_entering_var(entering,
+                                        RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                        &excluded_entering_a,
+                                        &excluded_entering_ttl_a,
+                                        &excluded_entering_b,
+                                        &excluded_entering_ttl_b);
+            if (ratio_breakdown_count < RALPH_PHASE1_RATIO_BREAKDOWN_LIMIT) {
+                if (solver->verbose >= 2) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Continuing after ratio-test breakdown (count=%d), excluding entering %d for %d iterations\n",
+                            ratio_breakdown_count, entering, RALPH_PHASE1_ENTERING_EXCLUDE_ITERS);
+                }
+                use_bland = 1;
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                continue;
+            }
+
             if (solver->verbose) {
                 fprintf(stderr, "[simplex_phase1] ERROR: unbounded in Phase 1 at iter %d (after recovery)\n", iter);
             }
@@ -2808,6 +2988,80 @@ static int simplex_phase1(SimplexSolver *solver) {
             solver->iterations = iter;
             phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
             return -1;
+        }
+
+        /* Guard against numerically explosive search directions before pivoting.
+         * Re-factorize and recompute ratio test from the same entering column. */
+        double dir_inf = vec_abs_max(tab->work2, tab->m);
+        if (dir_inf > RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+            if (solver->verbose >= 2) {
+                fprintf(stderr,
+                        "[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), re-factorizing before pivot\n",
+                        dir_inf, iter, entering);
+            }
+            int stabilized = 0;
+            int original_entering = entering;
+            for (int stab_try = 0; stab_try < 2; stab_try++) {
+                if (tableau_refactorize(tab) != 0) {
+                    break;
+                }
+                ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+                if (ratio_status != 0) {
+                    phase1_trace_record_no_entering(solver, iter, ratio_status);
+                    use_bland = 1;
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+
+                dir_inf = vec_abs_max(tab->work2, tab->m);
+                if (solver->verbose >= 2) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Direction norm after re-factorization: %.2e\n",
+                            dir_inf);
+                }
+                if (dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+                    stabilized = 1;
+                    break;
+                }
+
+                if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
+                    break;
+                }
+                ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+                if (ratio_status != 0) {
+                    break;
+                }
+                dir_inf = vec_abs_max(tab->work2, tab->m);
+                if (solver->verbose >= 2) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Alternate entering %d direction norm: %.2e\n",
+                            entering, dir_inf);
+                }
+                if (dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+                    stabilized = 1;
+                    break;
+                }
+            }
+
+            if (!stabilized) {
+                if (solver->verbose >= 2) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Skipping unstable entering column after stabilization attempts (iter=%d, entering=%d, dir_inf=%.2e)\n",
+                            iter, entering, dir_inf);
+                }
+                phase1_exclude_entering_var(entering,
+                                            RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                            &excluded_entering_a,
+                                            &excluded_entering_ttl_a,
+                                            &excluded_entering_b,
+                                            &excluded_entering_ttl_b);
+                use_bland = 1;
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                continue;
+            }
+            use_bland = 1;
         }
 
         /* If we are retrying the same failing entering/leaving pair, force an
@@ -2963,7 +3217,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
             /* Final fallback for stuck Phase 1 states: try a bounded dual-simplex
              * rescue on the current tableau (no recursion to primal simplex). */
-            int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * 6);
+            int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
             if (rescue_status == 0) {
                 if (solver->verbose) {
                     fprintf(stderr, "[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
@@ -2987,6 +3241,11 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
         fail_reason = PHASE1_PIVOT_FAIL_NONE;
         fail_repeat_count = 0;
+        ratio_breakdown_count = 0;
+        excluded_entering_a = -1;
+        excluded_entering_ttl_a = 0;
+        excluded_entering_b = -1;
+        excluded_entering_ttl_b = 0;
 
         /* Periodic refactorization */
         int lu_refactor_needed = lu_needs_refactorization(tab->lu);
@@ -3027,7 +3286,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     }
                 }
 
-                int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * 6);
+                int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
                 if (rescue_status == 0) {
                     if (solver->verbose) {
                         fprintf(stderr, "[simplex_phase1] Dual rescue recovered after refactorization failure at iter %d\n", iter);
@@ -3074,6 +3333,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         fprintf(stderr, "[simplex_phase1] Iteration limit (%d) reached\n", solver->max_iterations);
     }
     solver->status = RALPH_STATUS_ITERATION_LIMIT;
+    solver->iterations = solver->max_iterations;
     phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
     return -1;
 }
