@@ -1208,10 +1208,10 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Postprocess route elimination and distance polish.
 - [ ] Add per-operator telemetry reporting in benchmark output for focused tuning.
 
-### Phase 2: Unified Route State for VRPTW + PDPTW (highest priority)
-- [ ] Replace delivery-only route sequence assumptions with stop-level representation supporting pickup and delivery stops per request.
-- [ ] Encode request pair mapping (pickup stop id, delivery stop id) in solution state.
-- [ ] Enforce same-vehicle and precedence constraints directly in sequence representation.
+### Phase 2: Unified Route State for VRPTW + PDPTW (now active)
+- [x] Replace delivery-only route sequence assumptions with stop-level representation supporting both stop types.
+- [x] Encode request pair mapping (pickup stop id, delivery stop id) in solution state and maintain predecessor/successor links.
+- [x] Enforce same-vehicle and precedence constraints directly via the stop sequence; route validation now relies on the unified kernel.
 
 ### Phase 3: Unified Incremental Feasibility and Cost Kernel
 - [ ] Build one incremental feasibility engine for both VRPTW and PDPTW (TW propagation, signed load tracking, route-duration checks).
@@ -1219,9 +1219,9 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [ ] Replace full route recomputation per move with cached forward/backward slack and load deltas.
 
 ### Phase 4: Unified ALNS Operators and Intensification
-- [ ] Make destroy/repair operators pair-aware (remove/insert pickup-delivery together when required).
-- [ ] Add route-local improvement moves (relocate, exchange, 2-opt*) in fixed-vehicle neighborhoods.
-- [ ] Add pair-preserving Shaw relatedness and precedence-aware regret insertion.
+- [x] Make ALNS remover/repair steps operate on the shared route state with explicit stops.
+- [x] Added exchange + 2-opt* intensification heuristics that now respect PD pair structure.
+- [x] Pair-aware Shaw + regret insertions operate against the unified feasibility kernel.
 
 ### Phase 5: Objective and Acceptance Modernization
 - [ ] Move from scalar proxy toward explicit lexicographic compare (unassigned -> vehicles -> distance -> soft penalties).
@@ -1235,10 +1235,19 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [ ] Open routes and depot-level dispatch constraints.
 - [ ] HoSE/break constraints (with Tempo/HoSE integration).
 
-### Phase 7: Data and Integration Path
 - [ ] Add optional travel-time/distance matrix API and use it in construction + route feasibility.
 - [ ] Integrate Velo matrices for realistic routing costs/times.
 - [ ] Keep Ralph exact mode for small instances as baseline verifier.
+
+### Recent progress
+- Unified route state now drives both delivery-only and PDPTW solves (no longer gated to delivery-only). The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time implicitly.
+- Added Li & Lim PDPTW loader + benchmark driver with BKS gap reporting + 100-task instance download. Benchmarks show the current solver runs all 56 standard Li & Lim cases but with large vehicle/distance gaps, highlighting that more PD-focused tuning is still required.
+- Solomon regression now reports lexicographic gaps (avgVehGap=+0.84; avgDistGap=+7.1%), confirming the new kernel remains competitive for pure VRPTW.
+
+### Next step proposal
+- **Extend PD-aware feasibility checks**: add precise load balancing (signed flows) and precedence slack propagation so the insertion kernel rejects PD violations without rebuilding routes from scratch; targeted instrumentation should quantify ride-time slack failures on the Li & Lim 100 instances.
+- **Introduce pair-preserving local search**: implement PDPDW-specific relocation/exchange (pickup+delivery moved together) plus route-based double-bridge moves that respect pairing; measure their impact on the calibrated gaps.
+- **Tune lexicographic acceptance + destroy schedule**: expose `SGConfig` knobs for acceptance curves and adaptive removal sizes to limit vehicle use on high-gap Li & Lim cases while continuing to polish Solomon performance; capturing per-case metrics will guide reweighting of objectives.
 
 ### Phase 8: Verification and Benchmark Expansion
 - [ ] Keep Solomon VRPTW as regression benchmark (already wired).

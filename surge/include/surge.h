@@ -58,6 +58,7 @@ SGStatus sg_set_zone_distance_matrix(SGContext *ctx, uint32_t zone_count,
 SGStatus sg_clear_zone_distance_matrix(SGContext *ctx);
 SGStatus sg_validate_model(const SGContext *ctx);
 SGStatus sg_load_solomon_vrptw(SGContext *ctx, const char *file_path);
+SGStatus sg_load_li_lim_pdptw(SGContext *ctx, const char *file_path);
 
 SGStatus sg_solve(SGContext *ctx);
 
