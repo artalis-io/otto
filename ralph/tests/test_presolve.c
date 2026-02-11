@@ -698,6 +698,498 @@ static void test_presolve_diet(void) {
 }
 
 /* ============================================================================
+ * Test 13: Proportional rows (duplicate <=)
+ *
+ * Two proportional <= constraints: 2x + 4y <= 20 and x + 2y <= 8
+ * Row 1 = 2 * Row 2, so they're proportional with ratio=2.
+ * After scaling: Row 1 says x + 2y <= 10, Row 2 says x + 2y <= 8.
+ * Row 2 is tighter (8 < 10), so Row 1 should be removed.
+ * ============================================================================ */
+static void test_proportional_rows(void) {
+    printf("\n=== Test: Proportional rows (keep tighter) ===\n");
+
+    RalphModel *rm = ralph_create();
+    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+
+    /* 2x + 4y <= 20  (equivalent to x + 2y <= 10) */
+    int idx0[] = {0, 1}; double v0[] = {2.0, 4.0};
+    ralph_add_constraint(rm, 2, idx0, v0, RALPH_LESS_EQUAL, 20.0);
+
+    /* x + 2y <= 8  (tighter) */
+    int idx1[] = {0, 1}; double v1[] = {1.0, 2.0};
+    ralph_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 8.0);
+
+    /* x + y >= 1  (extra constraint) */
+    int idx2[] = {0, 1}; double v2[] = {1.0, 1.0};
+    ralph_add_constraint(rm, 2, idx2, v2, RALPH_GREATER_EQUAL, 1.0);
+
+    ralph_set_int_param(rm, "presolve", 1);
+    ralph_optimize(rm);
+
+    RalphStatus status = ralph_get_status(rm);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal with proportional rows");
+
+    /* min x + y, x + 2y <= 8, x + y >= 1, x,y >= 0
+     * Optimal: x=1, y=0 => obj=1 */
+    double obj_val = ralph_get_objval(rm);
+    ASSERT_NEAR(obj_val, 1.0, TOLERANCE, "Objective = 1.0");
+
+    ralph_free(rm);
+}
+
+/* ============================================================================
+ * Test 14: Proportional rows detect infeasibility
+ *
+ * Two proportional equality rows with inconsistent RHS:
+ *   x + y = 5
+ *   2x + 2y = 12   (=> x + y = 6, contradicts x + y = 5)
+ * ============================================================================ */
+static void test_proportional_rows_infeasible(void) {
+    printf("\n=== Test: Proportional rows detect infeasibility ===\n");
+
+    RalphModel *rm = ralph_create();
+    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+
+    /* x + y = 5 */
+    int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
+    ralph_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 5.0);
+
+    /* 2x + 2y = 12 (inconsistent: implies x + y = 6) */
+    int idx1[] = {0, 1}; double v1[] = {2.0, 2.0};
+    ralph_add_constraint(rm, 2, idx1, v1, RALPH_EQUAL, 12.0);
+
+    ralph_set_int_param(rm, "presolve", 1);
+    ralph_optimize(rm);
+
+    RalphStatus status = ralph_get_status(rm);
+    ASSERT(status == RALPH_STATUS_INFEASIBLE || status == RALPH_STATUS_ERROR,
+           "Infeasibility detected from inconsistent proportional equalities");
+
+    ralph_free(rm);
+}
+
+/* ============================================================================
+ * Test 15: Proportional columns (dominated variable elimination)
+ *
+ * min x + y + z
+ * s.t. x + y + 2z <= 10   (columns x and y have identical coefficients)
+ *      x + y + z <= 8
+ *      x, y, z >= 0
+ *
+ * Columns 0 (x) and 1 (y) are proportional (ratio=1).
+ * Same cost c[x]=c[y]=1. One should be fixed at lb=0.
+ * After fixing one, the problem reduces. Verify optimal is correct.
+ * ============================================================================ */
+static void test_proportional_cols(void) {
+    printf("\n=== Test: Proportional columns (dominated variable) ===\n");
+
+    /* Solve with presolve */
+    RalphModel *rm_pre = ralph_create();
+    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* z */
+
+    int idx0[] = {0, 1, 2}; double v0[] = {1.0, 1.0, 2.0};
+    ralph_add_constraint(rm_pre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    int idx1[] = {0, 1, 2}; double v1[] = {1.0, 1.0, 1.0};
+    ralph_add_constraint(rm_pre, 3, idx1, v1, RALPH_LESS_EQUAL, 8.0);
+
+    ralph_set_int_param(rm_pre, "presolve", 1);
+    ralph_optimize(rm_pre);
+
+    /* Solve without presolve for reference */
+    RalphModel *rm_nopre = ralph_create();
+    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+
+    ralph_add_constraint(rm_nopre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    ralph_add_constraint(rm_nopre, 3, idx1, v1, RALPH_LESS_EQUAL, 8.0);
+
+    ralph_set_int_param(rm_nopre, "presolve", 0);
+    ralph_optimize(rm_nopre);
+
+    RalphStatus s1 = ralph_get_status(rm_pre);
+    RalphStatus s2 = ralph_get_status(rm_nopre);
+    ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
+    ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
+
+    double obj1 = ralph_get_objval(rm_pre);
+    double obj2 = ralph_get_objval(rm_nopre);
+    ASSERT_NEAR(obj1, obj2, TOLERANCE,
+                "Same objective with and without presolve");
+
+    /* min x+y+z, all >= 0 and constraints are satisfied by x=y=z=0 => obj=0 */
+    ASSERT_NEAR(obj1, 0.0, TOLERANCE, "Objective = 0.0");
+
+    ralph_free(rm_pre);
+    ralph_free(rm_nopre);
+}
+
+/* ============================================================================
+ * Test 16: Proportional columns with cost dominance
+ *
+ * min 2x + y + z
+ * s.t. x + y + z <= 10      (columns x and y are proportional, ratio=1)
+ *      x + y + 2z <= 15
+ *      x, y, z >= 0
+ *
+ * Columns 0 (x) and 1 (y) are proportional with ratio=1.
+ * c[x]=2 > c[y]=1, so x is dominated. Fix x at lb=0.
+ * Verify objective matches solving without presolve.
+ * ============================================================================ */
+static void test_proportional_cols_cost(void) {
+    printf("\n=== Test: Proportional columns with cost dominance ===\n");
+
+    /* Solve with presolve */
+    RalphModel *rm_pre = ralph_create();
+    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    ralph_add_var(rm_pre, 0.0, 100.0, 2.0, RALPH_CONTINUOUS);  /* x (more expensive) */
+    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y (cheaper) */
+    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* z */
+
+    int idx0[] = {0, 1, 2}; double v0[] = {1.0, 1.0, 1.0};
+    ralph_add_constraint(rm_pre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    int idx1[] = {0, 1, 2}; double v1[] = {1.0, 1.0, 2.0};
+    ralph_add_constraint(rm_pre, 3, idx1, v1, RALPH_LESS_EQUAL, 15.0);
+
+    ralph_set_int_param(rm_pre, "presolve", 1);
+    ralph_optimize(rm_pre);
+
+    /* Solve without presolve */
+    RalphModel *rm_nopre = ralph_create();
+    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+
+    ralph_add_constraint(rm_nopre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    ralph_add_constraint(rm_nopre, 3, idx1, v1, RALPH_LESS_EQUAL, 15.0);
+
+    ralph_set_int_param(rm_nopre, "presolve", 0);
+    ralph_optimize(rm_nopre);
+
+    RalphStatus s1 = ralph_get_status(rm_pre);
+    RalphStatus s2 = ralph_get_status(rm_nopre);
+    ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
+    ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
+
+    double obj1 = ralph_get_objval(rm_pre);
+    double obj2 = ralph_get_objval(rm_nopre);
+    ASSERT_NEAR(obj1, obj2, TOLERANCE,
+                "Same objective with and without presolve");
+
+    /* x should be 0 (dominated), so solution uses y and z instead */
+    double sol[3];
+    ralph_get_solution(rm_pre, sol);
+    ASSERT_NEAR(sol[0], 0.0, TOLERANCE, "x = 0 (dominated, fixed at lb)");
+
+    ralph_free(rm_pre);
+    ralph_free(rm_nopre);
+}
+
+/* ============================================================================
+ * Test 16b: Proportional columns with maximization (regression)
+ *
+ * Regression test for bug where proportional_cols fixed dominated variable
+ * at upper bound for maximization problems with negative effective cost,
+ * producing suboptimal solutions.
+ *
+ * max 2x + 3y
+ * s.t. x + y <= 10
+ *      x, y in [0, 7]
+ *
+ * Columns are proportional (ratio=1). For max, y is more valuable (c_y=3 > c_x=2).
+ * Optimal: y=7, x=3, obj=6+21=27.
+ * Bug was: x fixed at ub=7, y=3, obj=14+9=23 (suboptimal).
+ * Fix: skip proportional col elimination when dominated var has negative
+ * effective cost (would need bound expansion on non-dominated variable).
+ * ============================================================================ */
+static void test_proportional_cols_maximize(void) {
+    printf("\n=== Test: Proportional columns with maximization (regression) ===\n");
+
+    /* Solve with presolve */
+    RalphModel *rm_pre = ralph_create();
+    ralph_set_obj_sense(rm_pre, RALPH_MAXIMIZE);
+    ralph_add_var(rm_pre, 0.0, 7.0, 2.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(rm_pre, 0.0, 7.0, 3.0, RALPH_CONTINUOUS);  /* y */
+
+    int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
+    ralph_add_constraint(rm_pre, 2, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+
+    ralph_set_int_param(rm_pre, "presolve", 1);
+    ralph_optimize(rm_pre);
+
+    /* Solve without presolve for reference */
+    RalphModel *rm_nopre = ralph_create();
+    ralph_set_obj_sense(rm_nopre, RALPH_MAXIMIZE);
+    ralph_add_var(rm_nopre, 0.0, 7.0, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 7.0, 3.0, RALPH_CONTINUOUS);
+
+    ralph_add_constraint(rm_nopre, 2, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+
+    ralph_set_int_param(rm_nopre, "presolve", 0);
+    ralph_optimize(rm_nopre);
+
+    RalphStatus s1 = ralph_get_status(rm_pre);
+    RalphStatus s2 = ralph_get_status(rm_nopre);
+    ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
+    ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
+
+    double obj1 = ralph_get_objval(rm_pre);
+    double obj2 = ralph_get_objval(rm_nopre);
+    ASSERT_NEAR(obj1, obj2, TOLERANCE,
+                "Same objective with and without presolve");
+
+    /* max 2x + 3y, x+y<=10, x,y in [0,7] => y=7, x=3, obj=27 */
+    ASSERT_NEAR(obj1, 27.0, TOLERANCE, "Objective = 27.0 (not 23)");
+
+    ralph_free(rm_pre);
+    ralph_free(rm_nopre);
+}
+
+/* ============================================================================
+ * Test 17: Shift-variable-bounds postsolve
+ *
+ * min x + y
+ * s.t. x + y <= 20
+ *      x >= 5, y >= 3  (non-zero lower bounds trigger shifting)
+ *      x <= 15, y <= 10
+ *
+ * After shifting: x' = x - 5, y' = y - 3
+ *   min (x'+5) + (y'+3) = x' + y' + 8
+ *   s.t. (x'+5) + (y'+3) <= 20 => x' + y' <= 12
+ *        x' >= 0, y' >= 0, x' <= 10, y' <= 7
+ *
+ * Optimal: x'=0, y'=0 => x=5, y=3, obj=8
+ * ============================================================================ */
+static void test_shift_bounds(void) {
+    printf("\n=== Test: Shift-variable-bounds postsolve ===\n");
+
+    RalphModel *rm = ralph_create();
+    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_add_var(rm, 5.0, 15.0, 1.0, RALPH_CONTINUOUS);  /* x: lb=5, ub=15 */
+    ralph_add_var(rm, 3.0, 10.0, 1.0, RALPH_CONTINUOUS);  /* y: lb=3, ub=10 */
+
+    /* x + y <= 20 */
+    int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
+    ralph_add_constraint(rm, 2, idx0, v0, RALPH_LESS_EQUAL, 20.0);
+
+    ralph_set_int_param(rm, "presolve", 1);
+    ralph_optimize(rm);
+
+    RalphStatus status = ralph_get_status(rm);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal");
+
+    double obj_val = ralph_get_objval(rm);
+    ASSERT_NEAR(obj_val, 8.0, TOLERANCE, "Objective = 8.0 (x=5, y=3)");
+
+    double sol[2];
+    ralph_get_solution(rm, sol);
+    ASSERT_NEAR(sol[0], 5.0, TOLERANCE, "x = 5.0 (shifted back from lb)");
+    ASSERT_NEAR(sol[1], 3.0, TOLERANCE, "y = 3.0 (shifted back from lb)");
+
+    ralph_free(rm);
+}
+
+/* ============================================================================
+ * Test 18: Shift-variable-bounds with maximization
+ *
+ * max 2x + 3y
+ * s.t. x + 2y <= 18    (non-proportional columns to avoid prop-cols interaction)
+ *      x + y <= 10
+ *      x >= 2, y >= 1
+ *      x <= 8, y <= 7
+ *
+ * Columns are NOT proportional (coefficients [1,1] vs [2,1]).
+ * Shift-bounds transforms: x'=x-2, y'=y-1
+ * Optimal: max 2x + 3y, x+2y<=18, x+y<=10 => y=7, x=3, obj=6+21=27
+ * (x+2y = 3+14 = 17 <= 18, x+y = 10 <= 10)
+ * ============================================================================ */
+static void test_shift_bounds_maximize(void) {
+    printf("\n=== Test: Shift-variable-bounds with maximization ===\n");
+
+    /* Solve with presolve */
+    RalphModel *rm_pre = ralph_create();
+    ralph_set_obj_sense(rm_pre, RALPH_MAXIMIZE);
+    ralph_add_var(rm_pre, 2.0, 8.0, 2.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(rm_pre, 1.0, 7.0, 3.0, RALPH_CONTINUOUS);  /* y */
+
+    int idx0[] = {0, 1}; double v0[] = {1.0, 2.0};
+    ralph_add_constraint(rm_pre, 2, idx0, v0, RALPH_LESS_EQUAL, 18.0);
+    int idx1[] = {0, 1}; double v1[] = {1.0, 1.0};
+    ralph_add_constraint(rm_pre, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
+
+    ralph_set_int_param(rm_pre, "presolve", 1);
+    ralph_optimize(rm_pre);
+
+    /* Solve without presolve */
+    RalphModel *rm_nopre = ralph_create();
+    ralph_set_obj_sense(rm_nopre, RALPH_MAXIMIZE);
+    ralph_add_var(rm_nopre, 2.0, 8.0, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 1.0, 7.0, 3.0, RALPH_CONTINUOUS);
+
+    ralph_add_constraint(rm_nopre, 2, idx0, v0, RALPH_LESS_EQUAL, 18.0);
+    ralph_add_constraint(rm_nopre, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
+
+    ralph_set_int_param(rm_nopre, "presolve", 0);
+    ralph_optimize(rm_nopre);
+
+    RalphStatus s1 = ralph_get_status(rm_pre);
+    RalphStatus s2 = ralph_get_status(rm_nopre);
+    ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
+    ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
+
+    double obj1 = ralph_get_objval(rm_pre);
+    double obj2 = ralph_get_objval(rm_nopre);
+    ASSERT_NEAR(obj1, obj2, TOLERANCE,
+                "Same objective with and without presolve");
+
+    /* max 2x + 3y => y=7, x=3, obj=27 */
+    ASSERT_NEAR(obj1, 27.0, TOLERANCE, "Objective = 27.0");
+
+    double sol[2];
+    ralph_get_solution(rm_pre, sol);
+    ASSERT_NEAR(sol[0], 3.0, TOLERANCE, "x = 3.0");
+    ASSERT_NEAR(sol[1], 7.0, TOLERANCE, "y = 7.0");
+
+    ralph_free(rm_pre);
+    ralph_free(rm_nopre);
+}
+
+/* ============================================================================
+ * Test 19: Forcing constraint
+ *
+ * min x + y + z
+ * s.t. x + y + z <= 0   (forcing: all vars must be at lb=0)
+ *      x, y, z >= 0
+ *
+ * Row lower bound = 0+0+0 = 0 >= rhs=0, so this is forcing.
+ * All variables fixed at lower bounds: x=y=z=0, obj=0.
+ * ============================================================================ */
+static void test_forcing_constraint(void) {
+    printf("\n=== Test: Forcing constraint ===\n");
+
+    RalphModel *rm = ralph_create();
+    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* z */
+
+    /* x + y + z <= 0 (all non-negative vars, so forces all to 0) */
+    int idx0[] = {0, 1, 2}; double v0[] = {1.0, 1.0, 1.0};
+    ralph_add_constraint(rm, 3, idx0, v0, RALPH_LESS_EQUAL, 0.0);
+
+    ralph_set_int_param(rm, "presolve", 1);
+    ralph_optimize(rm);
+
+    RalphStatus status = ralph_get_status(rm);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal (forcing constraint)");
+
+    double obj_val = ralph_get_objval(rm);
+    ASSERT_NEAR(obj_val, 0.0, TOLERANCE, "Objective = 0.0 (all at lb)");
+
+    double sol[3];
+    ralph_get_solution(rm, sol);
+    ASSERT_NEAR(sol[0], 0.0, TOLERANCE, "x = 0");
+    ASSERT_NEAR(sol[1], 0.0, TOLERANCE, "y = 0");
+    ASSERT_NEAR(sol[2], 0.0, TOLERANCE, "z = 0");
+
+    ralph_free(rm);
+}
+
+/* ============================================================================
+ * Test 20: Combined presolve stress test
+ *
+ * A problem that exercises multiple presolve techniques together:
+ * - Singleton rows
+ * - Proportional columns
+ * - Doubleton equality
+ * - Shift-variable-bounds
+ * - Bound tightening
+ *
+ * min 3a + 2b + c + d
+ * s.t. a <= 5             (singleton row)
+ *      b + c = 10         (doubleton equality)
+ *      b + d + e <= 20    (b and d proportional in constraints)
+ *      a + c + e <= 15
+ *      a >= 2, b >= 1, c >= 0, d >= 0, e >= 0
+ * ============================================================================ */
+static void test_combined_presolve(void) {
+    printf("\n=== Test: Combined presolve stress test ===\n");
+
+    /* Solve with presolve */
+    RalphModel *rm_pre = ralph_create();
+    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    ralph_add_var(rm_pre, 2.0, 100.0, 3.0, RALPH_CONTINUOUS);  /* a: lb=2 (shift) */
+    ralph_add_var(rm_pre, 1.0, 100.0, 2.0, RALPH_CONTINUOUS);  /* b: lb=1 (shift) */
+    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* c */
+    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* d */
+    ralph_add_var(rm_pre, 0.0, 100.0, 0.0, RALPH_CONTINUOUS);  /* e */
+
+    /* a <= 5 (singleton) */
+    int ia[] = {0}; double va[] = {1.0};
+    ralph_add_constraint(rm_pre, 1, ia, va, RALPH_LESS_EQUAL, 5.0);
+
+    /* b + c = 10 (doubleton equality) */
+    int ibc[] = {1, 2}; double vbc[] = {1.0, 1.0};
+    ralph_add_constraint(rm_pre, 2, ibc, vbc, RALPH_EQUAL, 10.0);
+
+    /* b + d + e <= 20 */
+    int ibde[] = {1, 3, 4}; double vbde[] = {1.0, 1.0, 1.0};
+    ralph_add_constraint(rm_pre, 3, ibde, vbde, RALPH_LESS_EQUAL, 20.0);
+
+    /* a + c + e <= 15 */
+    int iace[] = {0, 2, 4}; double vace[] = {1.0, 1.0, 1.0};
+    ralph_add_constraint(rm_pre, 3, iace, vace, RALPH_LESS_EQUAL, 15.0);
+
+    ralph_set_int_param(rm_pre, "presolve", 1);
+    ralph_optimize(rm_pre);
+
+    /* Solve without presolve */
+    RalphModel *rm_nopre = ralph_create();
+    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    ralph_add_var(rm_nopre, 2.0, 100.0, 3.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 1.0, 100.0, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(rm_nopre, 0.0, 100.0, 0.0, RALPH_CONTINUOUS);
+
+    ralph_add_constraint(rm_nopre, 1, ia, va, RALPH_LESS_EQUAL, 5.0);
+    ralph_add_constraint(rm_nopre, 2, ibc, vbc, RALPH_EQUAL, 10.0);
+    ralph_add_constraint(rm_nopre, 3, ibde, vbde, RALPH_LESS_EQUAL, 20.0);
+    ralph_add_constraint(rm_nopre, 3, iace, vace, RALPH_LESS_EQUAL, 15.0);
+
+    ralph_set_int_param(rm_nopre, "presolve", 0);
+    ralph_optimize(rm_nopre);
+
+    RalphStatus s1 = ralph_get_status(rm_pre);
+    RalphStatus s2 = ralph_get_status(rm_nopre);
+    ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
+    ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
+
+    double obj1 = ralph_get_objval(rm_pre);
+    double obj2 = ralph_get_objval(rm_nopre);
+    ASSERT_NEAR(obj1, obj2, TOLERANCE,
+                "Same objective with and without presolve");
+
+    /* Verify constraint satisfaction */
+    double sol[5];
+    ralph_get_solution(rm_pre, sol);
+    ASSERT(sol[0] <= 5.0 + TOLERANCE, "a <= 5 satisfied");
+    ASSERT_NEAR(sol[1] + sol[2], 10.0, TOLERANCE, "b + c = 10 satisfied");
+
+    ralph_free(rm_pre);
+    ralph_free(rm_nopre);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -719,6 +1211,15 @@ int main(void) {
     test_singleton_infeasible();
     test_doubleton_large_ratio();
     test_presolve_diet();
+    test_proportional_rows();
+    test_proportional_rows_infeasible();
+    test_proportional_cols();
+    test_proportional_cols_cost();
+    test_proportional_cols_maximize();
+    test_shift_bounds();
+    test_shift_bounds_maximize();
+    test_forcing_constraint();
+    test_combined_presolve();
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Presolve Tests: %d/%d passed (%.1f%%)\n",
