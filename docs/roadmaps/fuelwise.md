@@ -1749,7 +1749,132 @@ For k > 50, Benders becomes necessary regardless of solver. At that point, Ralph
 
 ---
 
-## Chapter 8: Known Issues & TODOs
+## Chapter 8: GLPK Comparison Benchmark (Feb 2026)
+
+### 8.1 Methodology
+
+Added `--glpk` flag to `fuelwise-bench` that exports each MILP (without domain hints) as
+an LP file via `fw_export_milp_lp()`, solves with `glpsol`, and compares objectives and
+timing against Ralph (with domain hints: reach cuts, branching priorities/directions).
+
+Both solvers solve the identical constraint set; Ralph additionally uses domain-specific
+MIP hints that GLPK cannot.
+
+### 8.2 Results (20 runs per scenario, Feb 2026)
+
+| Scenario | ~Stations | Ralph avg | GLPK avg | Speedup | Obj Match |
+|----------|-----------|-----------|----------|---------|-----------|
+| milp15 | ~15 | **1.72 ms** | 6.39 ms | **5.5x Ralph** | 20/20 |
+| milp30 | ~30 | 65.50 ms | **7.65 ms** | 0.5x | 20/20 |
+| milp50 | ~50 | 124.14 ms | **9.64 ms** | 0.1x | 20/20 |
+| milp75 | ~75 | 1231.65 ms | **19.11 ms** | 0.02x | 20/20 |
+| milp100 | ~100 | 7223.45 ms | **31.88 ms** | 0.004x | 10/10 |
+| milp200 | ~200 | 19472.76 ms | **43.75 ms** | 0.002x | 5/5 |
+
+**Correctness: 100/100 objective matches** across all scenarios at 0.01% tolerance.
+
+**Key observations:**
+- Ralph wins at small sizes (milp15: 5.5x) where domain hints dominate
+- GLPK's mature MIP solver (presolve, cutting planes, dual simplex) dominates at scale
+- Ralph's B&B scales roughly exponentially; GLPK stays nearly linear
+- The gap widens dramatically: 226x at milp100, 445x at milp200
+
+### 8.3 Root Cause Analysis
+
+Ralph's MIP solver lacks several features that GLPK uses to control tree growth:
+
+| GLPK Feature | Ralph Status | Impact |
+|--------------|-------------|--------|
+| **Presolve** (probe, clique) | Phase 1 only (singleton, bound tightening) | High — reduces problem size before B&B |
+| **Gomory/MIR cuts** | Basic Gomory, no MIR | High — tightens LP relaxation |
+| **Dual simplex** | Partial (rescue path only) | Medium — faster node resolves |
+| **Node selection** (best-first) | Depth-first only | Medium — avoids exploring bad subtrees |
+| **Symmetry breaking** | None | Medium — see §8.4 |
+| **Probing / clique detection** | None | Medium — finds implications of variable fixing |
+
+### 8.4 FuelWise-Specific MIP Optimizations
+
+#### Symmetry-Breaking Constraints
+
+FuelWise's path structure contains exploitable symmetry. If two adjacent stations have
+identical prices and the solver doesn't need both, it wastes time exploring both orderings.
+
+**Lexicographic ordering for equal-price stations:**
+```
+If price[i] == price[i+1] (within tolerance):
+    z[i] >= z[i+1]   (prefer earlier station)
+```
+
+This halves the search space for each pair of equal-price stations.
+
+**Station clustering:** Group nearby stations with similar prices. If reach cuts already
+require one stop in the cluster, add a symmetry-breaking constraint that selects the
+cheapest (or lexicographically first) station in the cluster.
+
+#### LP Relaxation Strengthening
+
+**Flow cover cuts:** The linking constraint `x[i] <= tank_capacity * z[i]` creates a
+knapsack-like structure. Flow cover inequalities tighten the LP relaxation:
+```
+For each interval [a, b] where sum(x[i]) must exceed some threshold:
+    sum(x[i]) <= sum(tank_capacity * z[i]) - slack
+```
+
+**Lifted reach cuts:** Current reach cuts are `sum(z[j]) >= 1` for mandatory-stop intervals.
+Coefficient lifting can strengthen these: if station j can only partially satisfy the
+fuel need, its coefficient should be < 1.
+
+#### Presolve Improvements
+
+**Implied bounds:** If `min_fuel` constraint forces `y[i] >= L` and tank capacity forces
+`y[i] + x[i] <= U`, then `x[i] <= U - L`. Tighter than `x[i] <= tank_capacity`.
+
+**Redundant variable fixing:** If a station is dominated (more expensive than all neighbors
+AND the truck can skip it), fix `z[i] = 0` before solving.
+
+**Mandatory station detection:** If a reach cut interval has only one station, fix `z[i] = 1`.
+
+#### Warm Starting from LP Relaxation
+
+Solve the LP relaxation first (without binary constraints), then use the LP solution to:
+1. Round fractional z values to get an initial feasible solution (incumbent)
+2. Use LP basis as warm start for root node
+3. Set branching priorities based on fractionality (most fractional first)
+
+#### Benders vs Full MIP
+
+For k > 50, Benders decomposition should outperform full MIP because:
+1. Master problem has only k binary variables (no x, y)
+2. Subproblem is a trivial path-flow LP
+3. Domain-specific feasibility cuts (from reach analysis) warm-start the master
+
+The current Benders implementation has a known suboptimality issue (§9.2). Fixing this
+and combining with symmetry-breaking in the master would be the fastest path to competitive
+performance at scale.
+
+### 8.5 Ralph-Side Improvements (see also ralph.md §4.3)
+
+| Improvement | Expected Impact | Effort |
+|-------------|----------------|--------|
+| **Best-first node selection** | 2-5x for deep trees | ~200 LoC in branch_bound.c |
+| **MIR cuts** | 1.5-3x tighter relaxation | ~400 LoC |
+| **Dual simplex for node resolves** | 2-3x per-node speedup | ~800 LoC |
+| **Aggressive presolve** (probing) | 1.5-2x smaller problems | ~500 LoC |
+| **Pseudocost branching** | 1.5-2x better variable selection | ~200 LoC |
+| **Solution pool / incumbents** | Faster pruning from good bounds | ~150 LoC |
+
+### 8.6 Implementation Priority
+
+1. **Symmetry-breaking** (FuelWise, ~50 LoC) — immediate, zero Ralph changes
+2. **Mandatory station fixing** (FuelWise, ~30 LoC) — presolve, zero Ralph changes
+3. **LP relaxation warm start** (FuelWise, ~80 LoC) — incumbent from LP rounding
+4. **Best-first node selection** (Ralph, ~200 LoC) — biggest generic B&B improvement
+5. **Pseudocost branching** (Ralph, ~200 LoC) — replaces static priorities
+6. **Fix Benders suboptimality** (Ralph, investigate) — unlocks scaling to k>100
+
+---
+
+## Chapter 9: Known Issues & TODOs
 
 ### 8.1 Benders Decomposition Known Issues (Feb 2026)
 

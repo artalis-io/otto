@@ -106,6 +106,34 @@ Full `/c-audit` pass on MIP infrastructure. 15 findings fixed (3 critical, 6 hig
 
 Commit: `e794dac ralph: harden MIP infrastructure from c-audit findings`
 
+### 1.7 GLPK MIP Comparison (Feb 2026)
+
+**Context:** FuelWise benchmark with `--glpk` flag comparing Ralph's B&B (with domain hints:
+reach cuts, branching priorities/directions) against GLPK `glpsol` (solving the identical
+LP-format MILP without hints). Both solvers get the same constraint set; Ralph has additional
+domain-specific guidance.
+
+| Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
+|----------|-----------|-----------|----------|-------|-----------|
+| milp15 | ~15 | **1.72 ms** | 6.39 ms | **5.5x Ralph** | 20/20 |
+| milp30 | ~30 | 65.50 ms | **7.65 ms** | 0.5x | 20/20 |
+| milp50 | ~50 | 124.14 ms | **9.64 ms** | 0.1x | 20/20 |
+| milp75 | ~75 | 1231.65 ms | **19.11 ms** | 0.02x | 20/20 |
+| milp100 | ~100 | 7223.45 ms | **31.88 ms** | 0.004x | 10/10 |
+| milp200 | ~200 | 19472.76 ms | **43.75 ms** | 0.002x | 5/5 |
+
+**Correctness: 100/100 objective matches** at 0.01% tolerance.
+
+**Analysis:**
+- Ralph wins at small sizes (milp15) where domain hints keep the tree small
+- GLPK's mature MIP infrastructure (presolve, Gomory/MIR cuts, dual simplex, best-first
+  node selection) dominates at scale — GLPK stays nearly linear while Ralph grows exponentially
+- Closing the gap requires the improvements in §4.3: best-first node selection, pseudocost
+  branching, MIR cuts, and aggressive presolve (probing/clique detection)
+
+See `fuelwise.md` §8 for FuelWise-specific optimization ideas (symmetry-breaking, flow
+cover cuts, mandatory station fixing).
+
 ---
 
 ## Chapter 2: LAP Solver
@@ -189,13 +217,18 @@ Commit: `e794dac ralph: harden MIP infrastructure from c-audit findings`
 
 ### 4.3 MIP Improvements
 
-| Task | Priority | Notes |
-|------|----------|-------|
-| Pseudocost branching | High | Better variable selection |
-| Diving heuristics | High | Faster incumbent finding |
-| Node presolve | Medium | Bound tightening, probing |
-| Clique detection | Medium | From set-packing constraints |
-| Cut pool management | Low | Reuse cuts across nodes |
+GLPK benchmark (§1.7) confirmed these are the critical gaps:
+
+| Task | Priority | Expected Impact | Notes |
+|------|----------|-----------------|-------|
+| **Best-first node selection** | **Critical** | 2-5x for deep trees | Ralph uses depth-first only; GLPK uses best-bound |
+| **MIR cuts** | **High** | 1.5-3x tighter relaxation | GLPK generates these automatically |
+| **Dual simplex for node resolves** | **High** | 2-3x per-node speedup | Adding/removing bounds is dual-friendly |
+| **Aggressive presolve** (probing) | **High** | 1.5-2x smaller problems | GLPK's presolve reduces problem before B&B |
+| Pseudocost branching | High | 1.5-2x better variable selection | Replaces static priorities with learned costs |
+| Solution pool / incumbents | Medium | Faster pruning from good bounds | LP rounding for initial incumbent |
+| Clique detection | Medium | From set-packing constraints | |
+| Cut pool management | Low | Reuse cuts across nodes | |
 
 **Note:** For domain-specific MIP improvements targeting FuelWise and HoSE, see **§6**.
 The domain-specific approach (branching priorities, reach cuts, clock cuts) provides
