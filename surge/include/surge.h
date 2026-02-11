@@ -57,11 +57,15 @@ SGStatus sg_set_zone_distance_matrix(SGContext *ctx, uint32_t zone_count,
                                      const double *matrix_row_major);
 SGStatus sg_clear_zone_distance_matrix(SGContext *ctx);
 SGStatus sg_validate_model(const SGContext *ctx);
+SGStatus sg_load_solomon_vrptw(SGContext *ctx, const char *file_path);
 
 SGStatus sg_solve(SGContext *ctx);
 
 double sg_get_total_cost(const SGContext *ctx);
+double sg_get_total_distance(const SGContext *ctx);
 uint32_t sg_get_unassigned(const SGContext *ctx);
+uint32_t sg_get_used_vehicle_count(const SGContext *ctx);
+uint32_t sg_get_request_count(const SGContext *ctx);
 void sg_get_stats(const SGContext *ctx, SGStats *stats);
 
 #endif /* SURGE_H */

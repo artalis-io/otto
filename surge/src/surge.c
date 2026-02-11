@@ -317,12 +317,32 @@ static void sg_bootstrap_free(void *solution, void *user_ctx) {
 static double sg_bootstrap_cost(const void *solution, void *user_ctx) {
     const SGBootstrapSolution *sol = (const SGBootstrapSolution *)solution;
     const SGContext *ctx = (const SGContext *)user_ctx;
+    uint32_t i;
+    double assigned_proxy = 0.0;
 
     if (ctx->num_vehicles == 0 && ctx->num_requests > 0) {
         return 1e9;
     }
 
-    return (double)sol->num_unassigned * SG_UNASSIGNED_PENALTY;
+    for (i = 0; i < sol->num_assigned; i++) {
+        uint32_t request_id = sol->assigned_ids[i];
+        uint32_t v;
+        double best = INFINITY;
+
+        for (v = 0; v < ctx->num_vehicles; v++) {
+            double score = sg_vehicle_request_cost(ctx, v, request_id, 0.0);
+            if (score < best) {
+                best = score;
+            }
+        }
+
+        if (!isfinite(best)) {
+            best = (double)request_id + 1.0;
+        }
+        assigned_proxy += best;
+    }
+
+    return (double)sol->num_unassigned * SG_UNASSIGNED_PENALTY + assigned_proxy;
 }
 
 static int sg_bootstrap_size(const void *solution, void *user_ctx) {
@@ -703,6 +723,395 @@ static int sg_vehicle_start_end_locations(const SGContext *ctx, uint32_t vehicle
     *ex = end->x;
     *ey = end->y;
     return 1;
+}
+
+static int sg_request_delivery_task_for_metrics(const SGContext *ctx, uint32_t request_id,
+                                                const SGTaskRecord **task_out) {
+    const SGRequestRecord *request;
+    const SGTaskRecord *task;
+
+    if (!ctx || !task_out) {
+        return 0;
+    }
+
+    request = sg_get_request_record(ctx, request_id);
+    if (!request || request->kind != SG_REQUEST_KIND_DELIVERY_ONLY ||
+        !request->has_delivery_task || request->delivery_task_id >= ctx->num_tasks) {
+        return 0;
+    }
+
+    task = sg_get_task_record(ctx, request->delivery_task_id);
+    if (!task || !task->has_location || !task->has_time_window) {
+        return 0;
+    }
+
+    *task_out = task;
+    return 1;
+}
+
+static int sg_route_sequence_feasible_distance(const SGContext *ctx, uint32_t vehicle_id,
+                                               const uint32_t *request_ids, uint32_t request_count,
+                                               double *distance_out, double *capacity_scratch) {
+    const SGVehicleRecord *vehicle;
+    const SGDepotRecord *start_depot;
+    const SGDepotRecord *end_depot;
+    double sx = 0.0;
+    double sy = 0.0;
+    double ex = 0.0;
+    double ey = 0.0;
+    double px;
+    double py;
+    double distance = 0.0;
+    double time_cursor;
+    uint32_t i;
+    uint32_t d;
+
+    if (!ctx || !distance_out || !capacity_scratch || vehicle_id >= ctx->num_vehicles) {
+        return 0;
+    }
+
+    if (request_count == 0) {
+        *distance_out = 0.0;
+        return 1;
+    }
+
+    vehicle = &ctx->vehicles[vehicle_id];
+    if (!vehicle->has_depots || vehicle->start_depot_id >= ctx->num_depots ||
+        vehicle->end_depot_id >= ctx->num_depots) {
+        return 0;
+    }
+
+    start_depot = &ctx->depots[vehicle->start_depot_id];
+    end_depot = &ctx->depots[vehicle->end_depot_id];
+    if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &sx, &sy, &ex, &ey)) {
+        return 0;
+    }
+
+    for (d = 0; d < ctx->dimension_count; d++) {
+        capacity_scratch[d] = 0.0;
+    }
+
+    for (i = 0; i < request_count; i++) {
+        uint32_t request_id = request_ids[i];
+        uint32_t dim;
+        const SGTaskRecord *task;
+
+        if (!sg_request_delivery_task_for_metrics(ctx, request_id, &task)) {
+            return 0;
+        }
+
+        for (dim = 0; dim < ctx->dimension_count; dim++) {
+            double cap = (vehicle->has_capacity && vehicle->capacity)
+                         ? vehicle->capacity[dim]
+                         : INFINITY;
+            double demand = sg_request_abs_demand_at_dim(ctx, request_id, dim);
+            capacity_scratch[dim] += demand;
+            if (capacity_scratch[dim] > cap + SG_DEMAND_TOLERANCE) {
+                return 0;
+            }
+        }
+    }
+
+    time_cursor = vehicle->has_shift_time_window ? (double)vehicle->shift_early : 0.0;
+    if (start_depot->has_time_window) {
+        if (time_cursor < (double)start_depot->tw_early) {
+            time_cursor = (double)start_depot->tw_early;
+        }
+        if (time_cursor > (double)start_depot->tw_late + 1e-9) {
+            return 0;
+        }
+    }
+
+    px = sx;
+    py = sy;
+    for (i = 0; i < request_count; i++) {
+        const SGTaskRecord *task;
+        double leg_distance;
+
+        if (!sg_request_delivery_task_for_metrics(ctx, request_ids[i], &task)) {
+            return 0;
+        }
+
+        leg_distance = sg_euclid(px, py, task->x, task->y);
+        if (!isfinite(leg_distance) || leg_distance < 0.0) {
+            return 0;
+        }
+
+        distance += leg_distance;
+        time_cursor += leg_distance;
+        if (time_cursor < (double)task->tw_early) {
+            time_cursor = (double)task->tw_early;
+        }
+        if (time_cursor > (double)task->tw_late + 1e-9) {
+            return 0;
+        }
+        time_cursor += (double)task->service_seconds;
+        px = task->x;
+        py = task->y;
+    }
+
+    {
+        double leg_distance = sg_euclid(px, py, ex, ey);
+        if (!isfinite(leg_distance) || leg_distance < 0.0) {
+            return 0;
+        }
+        distance += leg_distance;
+        time_cursor += leg_distance;
+    }
+
+    if (end_depot->has_time_window) {
+        if (time_cursor < (double)end_depot->tw_early) {
+            time_cursor = (double)end_depot->tw_early;
+        }
+        if (time_cursor > (double)end_depot->tw_late + 1e-9) {
+            return 0;
+        }
+    }
+    if (vehicle->has_shift_time_window && time_cursor > (double)vehicle->shift_late + 1e-9) {
+        return 0;
+    }
+
+    *distance_out = distance;
+    return isfinite(distance) && distance >= 0.0;
+}
+
+static void sg_route_insert_request(uint32_t *route, uint32_t *route_len, uint32_t insert_pos,
+                                    uint32_t request_id) {
+    uint32_t len;
+
+    if (!route || !route_len || insert_pos > *route_len) {
+        return;
+    }
+
+    len = *route_len;
+    if (insert_pos < len) {
+        memmove(&route[insert_pos + 1], &route[insert_pos],
+                (size_t)(len - insert_pos) * sizeof(uint32_t));
+    }
+    route[insert_pos] = request_id;
+    *route_len = len + 1;
+}
+
+static int sg_compute_delivery_only_route_metrics(const SGContext *ctx,
+                                                  const SGBootstrapSolution *sol,
+                                                  uint32_t *vehicles_used_out,
+                                                  double *total_distance_out) {
+    uint32_t *remaining = NULL;
+    uint32_t *routes = NULL;
+    uint32_t *route_lens = NULL;
+    uint32_t *candidate = NULL;
+    double *route_distances = NULL;
+    double *capacity_scratch = NULL;
+    uint32_t remaining_count;
+    size_t route_stride;
+    uint32_t v;
+    uint32_t used_vehicles = 0;
+    double total_distance = 0.0;
+    int ok = 0;
+
+    if (!ctx || !sol || !vehicles_used_out || !total_distance_out ||
+        ctx->num_vehicles == 0 || ctx->num_requests == 0) {
+        return 0;
+    }
+    if (sol->num_assigned == 0) {
+        *vehicles_used_out = 0;
+        *total_distance_out = 0.0;
+        return 1;
+    }
+
+    route_stride = (size_t)sol->num_assigned;
+    if (route_stride == 0 || (size_t)ctx->num_vehicles > SIZE_MAX / route_stride) {
+        return 0;
+    }
+
+    remaining = (uint32_t *)malloc((size_t)sol->num_assigned * sizeof(uint32_t));
+    routes = (uint32_t *)malloc((size_t)ctx->num_vehicles * route_stride * sizeof(uint32_t));
+    route_lens = (uint32_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint32_t));
+    route_distances = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
+    candidate = (uint32_t *)malloc((route_stride + 1U) * sizeof(uint32_t));
+    capacity_scratch = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));
+
+    if (!remaining || !routes || !route_lens || !route_distances || !candidate ||
+        !capacity_scratch) {
+        goto done;
+    }
+
+    memcpy(remaining, sol->assigned_ids, (size_t)sol->num_assigned * sizeof(uint32_t));
+    remaining_count = sol->num_assigned;
+
+    while (remaining_count > 0) {
+        int selected_idx = -1;
+        uint32_t selected_vehicle = UINT32_MAX;
+        uint32_t selected_pos = 0;
+        uint32_t selected_request = UINT32_MAX;
+        uint32_t selected_feasible_count = UINT32_MAX;
+        double selected_route_distance = 0.0;
+        double selected_delta = INFINITY;
+        uint32_t ri;
+
+        for (ri = 0; ri < remaining_count; ri++) {
+            uint32_t request_id = remaining[ri];
+            uint32_t req_feasible_count = 0;
+            uint32_t req_best_vehicle = UINT32_MAX;
+            uint32_t req_best_pos = 0;
+            double req_best_route_distance = 0.0;
+            double req_best_delta = INFINITY;
+
+            for (v = 0; v < ctx->num_vehicles; v++) {
+                uint32_t *route = &routes[(size_t)v * route_stride];
+                uint32_t len = route_lens[v];
+                uint32_t pos;
+
+                for (pos = 0; pos <= len; pos++) {
+                    double candidate_distance = 0.0;
+                    double delta;
+
+                    if (pos > 0) {
+                        memcpy(candidate, route, (size_t)pos * sizeof(uint32_t));
+                    }
+                    candidate[pos] = request_id;
+                    if (pos < len) {
+                        memcpy(&candidate[pos + 1], &route[pos],
+                               (size_t)(len - pos) * sizeof(uint32_t));
+                    }
+
+                    if (!sg_route_sequence_feasible_distance(ctx, v, candidate, len + 1,
+                                                             &candidate_distance,
+                                                             capacity_scratch)) {
+                        continue;
+                    }
+
+                    req_feasible_count++;
+                    delta = candidate_distance - route_distances[v];
+                    if (delta < req_best_delta - 1e-9 ||
+                        (fabs(delta - req_best_delta) <= 1e-9 &&
+                         (v < req_best_vehicle ||
+                          (v == req_best_vehicle && pos < req_best_pos)))) {
+                        req_best_delta = delta;
+                        req_best_vehicle = v;
+                        req_best_pos = pos;
+                        req_best_route_distance = candidate_distance;
+                    }
+                }
+            }
+
+            if (req_feasible_count == 0) {
+                continue;
+            }
+
+            if (req_feasible_count < selected_feasible_count ||
+                (req_feasible_count == selected_feasible_count &&
+                 req_best_delta < selected_delta - 1e-9) ||
+                (req_feasible_count == selected_feasible_count &&
+                 fabs(req_best_delta - selected_delta) <= 1e-9 &&
+                 request_id < selected_request)) {
+                selected_idx = (int)ri;
+                selected_request = request_id;
+                selected_vehicle = req_best_vehicle;
+                selected_pos = req_best_pos;
+                selected_route_distance = req_best_route_distance;
+                selected_feasible_count = req_feasible_count;
+                selected_delta = req_best_delta;
+            }
+        }
+
+        if (selected_idx < 0 || selected_vehicle == UINT32_MAX || selected_request == UINT32_MAX) {
+            goto done;
+        }
+
+        {
+            uint32_t *route = &routes[(size_t)selected_vehicle * route_stride];
+            uint32_t len = route_lens[selected_vehicle];
+            sg_route_insert_request(route, &len, selected_pos, selected_request);
+            route_lens[selected_vehicle] = len;
+            route_distances[selected_vehicle] = selected_route_distance;
+        }
+
+        remaining_count--;
+        remaining[(uint32_t)selected_idx] = remaining[remaining_count];
+    }
+
+    for (v = 0; v < ctx->num_vehicles; v++) {
+        if (route_lens[v] > 0) {
+            used_vehicles++;
+            total_distance += route_distances[v];
+        }
+    }
+
+    *vehicles_used_out = used_vehicles;
+    *total_distance_out = total_distance;
+    ok = 1;
+
+done:
+    free(remaining);
+    free(routes);
+    free(route_lens);
+    free(route_distances);
+    free(candidate);
+    free(capacity_scratch);
+    return ok;
+}
+
+static void sg_compute_solution_route_metrics(const SGContext *ctx, const SGBootstrapSolution *sol,
+                                              uint32_t *vehicles_used_out,
+                                              double *total_distance_out) {
+    uint32_t vehicles_used = 0;
+    double total_distance = 0.0;
+    uint32_t i;
+
+    if (!vehicles_used_out || !total_distance_out) {
+        return;
+    }
+
+    if (!ctx || !sol) {
+        *vehicles_used_out = 0;
+        *total_distance_out = 0.0;
+        return;
+    }
+
+    if (sg_compute_delivery_only_route_metrics(ctx, sol, &vehicles_used, &total_distance)) {
+        *vehicles_used_out = vehicles_used;
+        *total_distance_out = total_distance;
+        return;
+    }
+
+    if (ctx->num_vehicles > 0) {
+        vehicles_used = sol->num_assigned < ctx->num_vehicles ? sol->num_assigned : ctx->num_vehicles;
+    }
+    for (i = 0; i < sol->num_assigned; i++) {
+        uint32_t request_id = sol->assigned_ids[i];
+        uint32_t v;
+        double rx = 0.0;
+        double ry = 0.0;
+        double best_leg = INFINITY;
+
+        if (!sg_request_centroid(ctx, request_id, &rx, &ry)) {
+            continue;
+        }
+
+        for (v = 0; v < ctx->num_vehicles; v++) {
+            double sx = 0.0;
+            double sy = 0.0;
+            double ex = 0.0;
+            double ey = 0.0;
+            double leg;
+
+            if (!sg_vehicle_start_end_locations(ctx, v, &sx, &sy, &ex, &ey)) {
+                continue;
+            }
+            leg = sg_euclid(sx, sy, rx, ry) + sg_euclid(rx, ry, ex, ey);
+            if (leg < best_leg) {
+                best_leg = leg;
+            }
+        }
+
+        if (isfinite(best_leg)) {
+            total_distance += best_leg;
+        }
+    }
+
+    *vehicles_used_out = vehicles_used;
+    *total_distance_out = total_distance;
 }
 
 static int sg_request_time_use_for_vehicle(const SGContext *ctx, uint32_t vehicle_id,
@@ -2724,6 +3133,9 @@ SGStatus sg_solve(SGContext *ctx) {
     ctx->stats.unassigned = best ? best->num_unassigned : initial.num_unassigned;
     ctx->stats.total_cost = best ? sg_bootstrap_cost(best, ctx)
                                  : sg_bootstrap_cost(&initial, ctx);
+    sg_compute_solution_route_metrics(ctx, best ? best : &initial,
+                                      &ctx->stats.vehicles_used,
+                                      &ctx->stats.total_distance);
 
     sg_bootstrap_solution_reset(&initial);
     sg_bootstrap_free(best, NULL);
@@ -2743,11 +3155,32 @@ double sg_get_total_cost(const SGContext *ctx) {
     return ctx->stats.total_cost;
 }
 
+double sg_get_total_distance(const SGContext *ctx) {
+    if (!ctx) {
+        return 0.0;
+    }
+    return ctx->stats.total_distance;
+}
+
 uint32_t sg_get_unassigned(const SGContext *ctx) {
     if (!ctx) {
         return 0;
     }
     return ctx->stats.unassigned;
+}
+
+uint32_t sg_get_used_vehicle_count(const SGContext *ctx) {
+    if (!ctx) {
+        return 0;
+    }
+    return ctx->stats.vehicles_used;
+}
+
+uint32_t sg_get_request_count(const SGContext *ctx) {
+    if (!ctx) {
+        return 0;
+    }
+    return ctx->num_requests;
 }
 
 void sg_get_stats(const SGContext *ctx, SGStats *stats) {
