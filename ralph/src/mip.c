@@ -115,6 +115,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     }
 
     solver->status = RALPH_STATUS_UNKNOWN;
+    solver->last_solved_node_id = -1;
 
     /* Try to detect LAP structure for specialized solving */
     solver->use_lap_solver = 0;
@@ -583,6 +584,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     if (solver->use_lap_solver) {
         int lap_result = solve_node_lp_as_lap(solver, node);
         if (lap_result == 0) {
+            solver->last_solved_node_id = node->id;
             return 0;  /* Successfully solved with LAP */
         }
         /* LAP failed (infeasible) - this is a valid result for pruning */
@@ -598,13 +600,12 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     if (!solver->lp_solver) {
         solver->lp_solver = simplex_create(model);
         if (!solver->lp_solver) return -1;
-        /* Disable scaling for MIP */
         solver->lp_solver->scaling = 0;
     }
 
     SimplexSolver *lp = solver->lp_solver;
 
-    /* Update model bounds */
+    /* Update model bounds from node */
     for (int j = 0; j < model->num_vars; j++) {
         model->lb[j] = node->lb[j];
         model->ub[j] = node->ub[j];
@@ -612,141 +613,126 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     solver->simplex_nodes_solved++;
     int warm_start_success = 0;
+    int attempted_warm_start = 0;
 
-    /* Try warm start from parent basis if available */
-    if (solver->verbose) {
-        printf("  [solve_node_lp] node=%d: tableau=%p, basis=%p, var_status=%p, basis_size=%d, var_status_size=%d\n",
-               node->id, (void*)lp->tableau, (void*)node->basis, (void*)node->var_status,
-               node->basis_size, node->var_status_size);
+    /* Set objective cutoff for early pruning in dual_reopt */
+    if (solver->has_incumbent) {
+        lp->objective_cutoff = solver->best_obj * model->obj_sense;
+    } else {
+        lp->objective_cutoff = RALPH_INFINITY;
     }
-    if (lp->tableau && node->basis && node->var_status &&
+
+    /* === PATH A: Direct child — skip refactorization ===
+     *
+     * When this node's parent was the last node solved, the tableau still
+     * contains the parent's basis and LU factors. Only bounds changed (not
+     * the constraint matrix A), so the LU is still valid. Just update bounds,
+     * push non-basic x values, and run lightweight dual re-optimization.
+     *
+     * This is the common case in depth-first or best-first B&B.
+     */
+    if (lp->tableau && solver->last_solved_node_id >= 0 &&
+        node->parent_id == solver->last_solved_node_id) {
+
+        SimplexTableau *tab = lp->tableau;
+        attempted_warm_start = 1;
+
+        /* Update structural variable bounds in tableau */
+        for (int j = 0; j < model->num_vars; j++) {
+            tab->lb_ext[j] = node->lb[j];
+            tab->ub_ext[j] = node->ub[j];
+        }
+
+        /* Push non-basic variables to their (possibly changed) bounds */
+        for (int j = 0; j < tab->n; j++) {
+            if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+                tab->x[j] = tab->lb_ext[j];
+            } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+                tab->x[j] = tab->ub_ext[j];
+            } else if (tab->var_status[j] == RALPH_FIXED) {
+                tab->x[j] = tab->lb_ext[j];
+            }
+        }
+
+        int budget = 3 * tab->m;
+        if (budget > 500) budget = 500;
+
+        int result = dual_reopt(lp, budget);
+        if (result == 0) {
+            warm_start_success = 1;
+        } else if (result == 1) {
+            node->lp_status = RALPH_STATUS_INFEASIBLE;
+            node->lp_bound = lp->obj_value;
+            solver->last_solved_node_id = node->id;
+            return -1;
+        }
+    }
+
+    /* === PATH B: Non-child with saved basis — restore + refactorize ===
+     *
+     * The node has a saved basis (copied from its parent when the child was
+     * created) but the tableau's current LU doesn't match. Restore the basis,
+     * refactorize, then run dual re-optimization.
+     *
+     * Only attempted if PATH A wasn't applicable (different subtree).
+     */
+    if (!warm_start_success && !attempted_warm_start &&
+        lp->tableau && node->basis && node->var_status &&
         node->basis_size > 0 && node->var_status_size > 0) {
 
         SimplexTableau *tab = lp->tableau;
 
-        if (solver->verbose) {
-            printf("  [solve_node_lp] tab->m=%d, tab->n=%d\n", tab->m, tab->n);
-        }
-
-        /* Check sizes match - they should if the model hasn't changed */
-        if (solver->verbose) {
-            printf("  [solve_node_lp] Size check: tab->m=%d vs basis_size=%d, tab->n=%d vs var_status_size=%d\n",
-                   tab->m, node->basis_size, tab->n, node->var_status_size);
-        }
         if (tab->m == node->basis_size && tab->n == node->var_status_size) {
+            attempted_warm_start = 1;
 
-            /* Update bounds in tableau */
+            /* Update structural variable bounds in tableau */
             for (int j = 0; j < model->num_vars; j++) {
                 tab->lb_ext[j] = node->lb[j];
                 tab->ub_ext[j] = node->ub[j];
             }
 
-            if (solver->verbose) {
-                printf("  [warm_start] Updated bounds for node %d\n", node->id);
-                for (int j = 0; j < model->num_vars; j++) {
-                    printf("    x%d: [%.2f, %.2f]\n", j, tab->lb_ext[j], tab->ub_ext[j]);
-                }
-            }
-
-            /* Restore parent basis */
+            /* Restore basis from node (includes LU refactorization) */
             if (restore_basis_from_node(lp, node) == 0) {
-                /* Handle bound changes due to branching.
-                 *
-                 * CRITICAL: If a basic variable becomes FIXED (lb == ub), we must
-                 * fall back to cold start. This is because tableau_compute_solution
-                 * computes x_B = B^{-1}(b - N*x_N), which may differ from the fixed
-                 * value. Dual simplex cannot detect this since the computed value
-                 * might be within the (now-equal) bounds.
-                 */
-                int has_fixed_basic = 0;
-                for (int j = 0; j < model->num_vars; j++) {
-                    double new_lb = tab->lb_ext[j];
-                    double new_ub = tab->ub_ext[j];
-
-                    if (tab->var_status[j] == RALPH_BASIC) {
-                        /* Check if this basic variable is now fixed */
-                        if (fabs(new_lb - new_ub) < RALPH_FEAS_TOL) {
-                            has_fixed_basic = 1;
-                        }
-                    } else if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                        tab->x[j] = new_lb;
+                /* Push non-basic variables to their new bounds */
+                for (int j = 0; j < tab->n; j++) {
+                    if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+                        tab->x[j] = tab->lb_ext[j];
                     } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                        tab->x[j] = new_ub;
+                        tab->x[j] = tab->ub_ext[j];
+                    } else if (tab->var_status[j] == RALPH_FIXED) {
+                        tab->x[j] = tab->lb_ext[j];
                     }
                 }
 
-                if (has_fixed_basic) {
-                    /* Fall back to cold start for correctness */
-                    if (solver->verbose) {
-                        printf("  [warm_start] Fixed basic var detected, using cold start\n");
-                    }
-                } else {
-                    /* Safe to warm start - no basic variables became fixed */
-                    tableau_compute_solution(tab);
+                int budget = 3 * tab->m;
+                if (budget > 500) budget = 500;
 
-                    if (solver->verbose) {
-                        printf("  [warm_start] After compute_solution: obj=%.4f\n", tab->obj_value);
-                    }
-
-                    /* Use dual simplex for re-optimization */
-                    dual_simplex_solve(lp);
-
-                    if (solver->verbose) {
-                        printf("  [solve_node_lp] After dual_simplex: status=%d, obj=%.4f\n",
-                               lp->status, lp->obj_value);
-                    }
-
-                    if (lp->status == RALPH_STATUS_OPTIMAL) {
-                        warm_start_success = 1;
-                    }
+                int result = dual_reopt(lp, budget);
+                if (result == 0) {
+                    warm_start_success = 1;
+                } else if (result == 1) {
+                    node->lp_status = RALPH_STATUS_INFEASIBLE;
+                    node->lp_bound = lp->obj_value;
+                    solver->last_solved_node_id = node->id;
+                    return -1;
                 }
             }
-        } else if (solver->verbose) {
-            printf("  [solve_node_lp] Size mismatch, falling back to cold start\n");
         }
     }
 
-    /* Cold start if warm start failed or wasn't available */
+    /* === PATH C: Cold start (fallback) === */
     if (!warm_start_success) {
-        if (solver->verbose) {
-            printf("  [solve_node_lp] Cold start for node %d\n", node->id);
-            printf("  [solve_node_lp] Bounds being used:\n");
-            for (int j = 0; j < (model->num_vars < 5 ? model->num_vars : 5); j++) {
-                printf("    x%d: [%.2f, %.2f]\n", j, model->lb[j], model->ub[j]);
-            }
-        }
         if (lp->tableau) {
             tableau_free(lp->tableau);
             lp->tableau = NULL;
         }
         simplex_solve(lp);
-        if (solver->verbose) {
-            printf("  [solve_node_lp] Cold start result: obj=%.4f, status=%d\n",
-                   lp->obj_value, lp->status);
-        }
     }
 
     node->lp_status = lp->status;
     node->lp_bound = lp->obj_value;
     node->lp_iterations = lp->iterations;
 
-    /* Verify model bounds match node bounds after LP solve */
-    if (solver->verbose) {
-        int mismatch = 0;
-        for (int j = 0; j < model->num_vars && j < 3; j++) {
-            if (fabs(model->lb[j] - node->lb[j]) > 1e-6 ||
-                fabs(model->ub[j] - node->ub[j]) > 1e-6) {
-                printf("  [solve_node_lp] BOUND MISMATCH x%d: model[%.2f,%.2f] vs node[%.2f,%.2f]\n",
-                       j, model->lb[j], model->ub[j], node->lb[j], node->ub[j]);
-                mismatch = 1;
-            }
-        }
-        if (!mismatch) {
-            printf("  [solve_node_lp] Final: obj=%.4f, bounds OK for first 3 vars\n", lp->obj_value);
-        }
-    }
-
-    /* Debug output for non-optimal status */
     if (solver->verbose && lp->status != RALPH_STATUS_OPTIMAL) {
         printf("  solve_node_lp: status=%d, obj=%.4f\n", lp->status, lp->obj_value);
     }
@@ -755,6 +741,8 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     if (lp->status == RALPH_STATUS_OPTIMAL) {
         save_basis_to_node(lp, node, model->num_vars);
     }
+
+    solver->last_solved_node_id = node->id;
 
     return (lp->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
 }

@@ -358,6 +358,9 @@ typedef struct {
     double *farkas_ray;     /* Size num_cons, valid when status == INFEASIBLE */
     int farkas_valid;       /* 1 if farkas_ray contains valid certificate */
 
+    /* Objective cutoff for early termination in dual_reopt (internal objective) */
+    double objective_cutoff;
+
 } SimplexSolver;
 
 /* LP model functions */
@@ -423,6 +426,7 @@ int simplex_solve(SimplexSolver *solver);
 int dual_simplex_solve(SimplexSolver *solver);
 int dual_simplex_solve_from_scratch(SimplexSolver *solver);
 int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters);
+int dual_reopt(SimplexSolver *solver, int max_pivots);  /* Deprecate when P8 lands */
 
 /* Pricing strategies */
 int pricing_dantzig(SimplexTableau *tableau, int *entering);

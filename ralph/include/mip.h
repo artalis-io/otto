@@ -188,6 +188,7 @@ typedef struct {
     MIPLAPSignature *lap_sig;    /* LAP signature for LP relaxations */
     int lap_nodes_solved;        /* Number of nodes solved with LAP */
     int simplex_nodes_solved;    /* Number of nodes solved with simplex */
+    int last_solved_node_id;     /* ID of last node whose LP was solved (for child detection) */
 
     /* SCP-specific optimizations (for set covering/partitioning MIPs) */
     int use_scp_solver;          /* 1 if SCP structure detected and enabled */
