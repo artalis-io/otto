@@ -45,8 +45,9 @@ LUFactorization* lu_create(int m) {
      * Profiling shows: too few updates = excessive refactorization (60% of time),
      * too many updates = excessive spike application.
      * Optimal balance: around 150-200 updates for large problems.
-     * Rule: m/5 for small, m/10 for medium, ~150 for large (capped). */
-    lu->max_updates = (m < 100) ? 50 : (m < 500) ? m/5 : 200;
+     * Rule: m/2 for medium-size problems to reduce forced refactorizations on
+     * degenerate phase-1 paths, capped for large matrices. */
+    lu->max_updates = (m < 100) ? 50 : (m < 500) ? m/2 : 200;
     int max_upd = lu->max_updates;
 
     /* Calculate arena size for fixed-size arrays (with 8-byte alignment padding).
