@@ -310,6 +310,10 @@ typedef struct {
     int warm_start_subproblems;     /* 1 = reuse subproblem basis */
     int strict_farkas;              /* 1 = require strict Farkas validation */
     int verbose;                    /* Verbosity level (0-2) */
+
+    /* Branching hints (original variable space, applied to master MIP) */
+    const int *branch_priorities;   /* NULL = no priorities */
+    const int *branch_directions;   /* NULL = no directions */
 } RalphBendersConfig;
 
 /* Default configuration */
@@ -324,7 +328,9 @@ typedef struct {
     .cuts_at_lp_nodes = 1,             \
     .warm_start_subproblems = 1,       \
     .strict_farkas = 0,                \
-    .verbose = 0                       \
+    .verbose = 0,                      \
+    .branch_priorities = NULL,         \
+    .branch_directions = NULL          \
 }
 
 /* Benders result information */

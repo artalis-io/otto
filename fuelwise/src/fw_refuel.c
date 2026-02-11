@@ -281,6 +281,237 @@ int fw_solve_refuel_lp(
 }
 
 /* ============================================================================
+ * Domain-Specific MIP Infrastructure
+ *
+ * Reach cuts: if fuel capacity prevents traversing an interval without
+ * refueling, at least one station in that interval must be selected.
+ * These strengthen the LP relaxation and prune infeasible branches.
+ * ============================================================================ */
+
+/* Context for reach-cut callback */
+typedef struct {
+    const FWRefuelProblem *problem;
+    int k, z_start;
+    int num_intervals;
+    int *interval_start;    /* start index of each mandatory-stop interval */
+    int *interval_end;      /* end index (exclusive) of each interval */
+    int *scratch_indices;   /* pre-allocated for callback */
+    double *scratch_coeffs;
+} FWReachCutContext;
+
+/*
+ * Precompute mandatory-stop intervals based on fuel reach.
+ *
+ * From origin: walk forward; if current_fuel - consumed < min_fuel before
+ * reaching station i, the interval [0, i) must contain a stop.
+ *
+ * From each station j (assuming full tank): walk forward; if
+ * tank_capacity - consumed < min_fuel before reaching station i,
+ * the interval (j, i) must contain a stop.
+ */
+static void fw_compute_reach_intervals(FWReachCutContext *ctx,
+                                        const FWRefuelProblem *problem,
+                                        int k)
+{
+    ctx->num_intervals = 0;
+
+    /* Worst-case: k origin intervals + k*k inter-station intervals.
+     * In practice much fewer; k*(k+1)/2 is a safe upper bound. */
+    int max_intervals = k + k * k;
+    if (max_intervals > 100000) max_intervals = 100000;
+
+    ctx->interval_start = (int*)malloc(max_intervals * sizeof(int));
+    ctx->interval_end = (int*)malloc(max_intervals * sizeof(int));
+    if (!ctx->interval_start || !ctx->interval_end) return;
+
+    /* From origin */
+    for (int i = 1; i < k; i++) {
+        double consumed = fw_calc_fuel_consumed(problem, 0,
+            problem->stations[i].distance_from_start);
+        double fuel_at_i = problem->current_fuel - consumed;
+
+        if (fuel_at_i < problem->minimum_fuel) {
+            /* Need at least one stop in [0, i) */
+            ctx->interval_start[ctx->num_intervals] = 0;
+            ctx->interval_end[ctx->num_intervals] = i;
+            ctx->num_intervals++;
+            if (ctx->num_intervals >= max_intervals) return;
+        }
+    }
+
+    /* From each station j with full tank */
+    for (int j = 0; j < k; j++) {
+        for (int i = j + 2; i < k; i++) {
+            double consumed = fw_calc_fuel_consumed(problem,
+                problem->stations[j].distance_from_start,
+                problem->stations[i].distance_from_start);
+            double fuel_at_i = problem->tank_capacity - consumed;
+
+            if (fuel_at_i < problem->minimum_fuel) {
+                /* Need at least one stop in (j, i) */
+                if (i - j > 1) {  /* interval must be non-empty */
+                    ctx->interval_start[ctx->num_intervals] = j + 1;
+                    ctx->interval_end[ctx->num_intervals] = i;
+                    ctx->num_intervals++;
+                    if (ctx->num_intervals >= max_intervals) return;
+                }
+                break;  /* further stations are even farther */
+            }
+        }
+    }
+
+    /* Allocate scratch buffers for callback (max size = k) */
+    ctx->scratch_indices = (int*)malloc(k * sizeof(int));
+    ctx->scratch_coeffs = (double*)malloc(k * sizeof(double));
+}
+
+/*
+ * Cut callback matching RalphCutCallback signature.
+ * Checks each precomputed interval; if sum(z[j]) < 1 - eps in the LP
+ * relaxation, adds cut sum(z[j]) >= 1.
+ */
+static int fw_reach_cut_generate(
+    void *user_data,
+    const double *x_relaxation,
+    int num_vars,
+    RalphCut *cuts,
+    int max_cuts)
+{
+    FWReachCutContext *ctx = (FWReachCutContext*)user_data;
+    if (!ctx || !ctx->scratch_indices || !ctx->scratch_coeffs) return 0;
+
+    int num_cuts = 0;
+    double eps = 1e-4;
+
+    for (int iv = 0; iv < ctx->num_intervals && num_cuts < max_cuts; iv++) {
+        int start = ctx->interval_start[iv];
+        int end = ctx->interval_end[iv];
+
+        /* Check if violated: sum z[j] for j in [start, end) < 1 - eps */
+        double sum_z = 0.0;
+        for (int j = start; j < end; j++) {
+            int z_idx = ctx->z_start + j;
+            if (z_idx < num_vars) {
+                sum_z += x_relaxation[z_idx];
+            }
+        }
+
+        if (sum_z < 1.0 - eps) {
+            /* Build cut using pre-allocated scratch buffers */
+            int nnz = 0;
+            for (int j = start; j < end; j++) {
+                ctx->scratch_indices[nnz] = ctx->z_start + j;
+                ctx->scratch_coeffs[nnz] = 1.0;
+                nnz++;
+            }
+
+            cuts[num_cuts].indices = ctx->scratch_indices;
+            cuts[num_cuts].coeffs = ctx->scratch_coeffs;
+            cuts[num_cuts].num_vars = nnz;
+            cuts[num_cuts].sense = RALPH_GREATER_EQUAL;
+            cuts[num_cuts].rhs = 1.0;
+            num_cuts++;
+
+            /* Only generate one cut per callback invocation to avoid
+             * reusing scratch buffers for multiple cuts simultaneously */
+            break;
+        }
+    }
+
+    return num_cuts;
+}
+
+/*
+ * Configure MIP hints on a RalphModel: priorities, directions, cut callback.
+ *
+ * Priorities: cheaper stations get higher priority (branched first).
+ * Directions: cheap stations branch up (try z=1), expensive branch down.
+ * Cuts: reach-cut callback for violated intervals.
+ */
+static void fw_setup_mip_hints(RalphModel *model,
+                                const FWRefuelProblem *problem,
+                                int k, int z_start,
+                                FWReachCutContext *cut_ctx)
+{
+    int num_vars = ralph_get_num_vars(model);
+
+    /* Compute median price for direction threshold */
+    double *prices = (double*)malloc(k * sizeof(double));
+    int *priorities = (int*)calloc(num_vars, sizeof(int));
+    int *directions = (int*)calloc(num_vars, sizeof(int));
+
+    if (!prices || !priorities || !directions) {
+        free(prices);
+        free(priorities);
+        free(directions);
+        return;
+    }
+
+    for (int i = 0; i < k; i++) {
+        prices[i] = problem->stations[i].price;
+    }
+
+    /* Simple median: sort prices and take middle */
+    for (int i = 0; i < k - 1; i++) {
+        for (int j = i + 1; j < k; j++) {
+            if (prices[j] < prices[i]) {
+                double tmp = prices[i];
+                prices[i] = prices[j];
+                prices[j] = tmp;
+            }
+        }
+    }
+    double median_price = prices[k / 2];
+    free(prices);
+
+    /* Set priorities and directions for z variables */
+    for (int i = 0; i < k; i++) {
+        double price = problem->stations[i].price;
+
+        /* Higher priority = branched first; cheaper stations get higher priority */
+        priorities[z_start + i] = (price > 0.001) ? (int)(1000.0 / price) : 1000;
+
+        /* Cheap stations: try z=1 first; expensive: try z=0 first */
+        if (price <= median_price) {
+            directions[z_start + i] = RALPH_BRANCH_UP;
+        } else {
+            directions[z_start + i] = RALPH_BRANCH_DOWN;
+        }
+    }
+
+    ralph_set_branch_priorities(model, priorities);
+    ralph_set_branch_directions(model, directions);
+
+    free(priorities);
+    free(directions);
+
+    /* Set up reach-cut callback */
+    memset(cut_ctx, 0, sizeof(FWReachCutContext));
+    cut_ctx->problem = problem;
+    cut_ctx->k = k;
+    cut_ctx->z_start = z_start;
+
+    fw_compute_reach_intervals(cut_ctx, problem, k);
+
+    if (cut_ctx->num_intervals > 0) {
+        RalphCutCallback cb;
+        cb.generate_cuts = fw_reach_cut_generate;
+        cb.user_data = cut_ctx;
+        ralph_set_cut_callback(model, &cb);
+    }
+}
+
+static void fw_free_cut_context(FWReachCutContext *ctx)
+{
+    if (!ctx) return;
+    free(ctx->interval_start);
+    free(ctx->interval_end);
+    free(ctx->scratch_indices);
+    free(ctx->scratch_coeffs);
+    memset(ctx, 0, sizeof(FWReachCutContext));
+}
+
+/* ============================================================================
  * Refueling Problem Solving - MILP
  * ============================================================================ */
 
@@ -436,10 +667,16 @@ int fw_solve_refuel_milp(
         free(values);
     }
 
+    /* Apply domain-specific MIP hints: priorities, directions, reach cuts */
+    FWReachCutContext cut_ctx;
+    fw_setup_mip_hints(model, problem, k, z_start, &cut_ctx);
+
     /* Solve */
     ralph_set_int_param(model, "verbose", 0);
     int ret = ralph_optimize(model);
     RalphStatus status = ralph_get_status(model);
+
+    fw_free_cut_context(&cut_ctx);
 
     if (ret == 0 && status == RALPH_STATUS_OPTIMAL) {
         double *x = malloc(num_vars * sizeof(double));
@@ -804,6 +1041,46 @@ int fw_solve_refuel_benders(
         }
     }
 
+    /* Inter-station reach cuts: from station j with full tank, if can't reach
+     * station i, add sum(z[l] for l in (j, i)) >= 1 as a static constraint.
+     * More effective than dynamic cuts for Benders because they constrain
+     * the master problem from iteration 1. */
+    for (int j = 0; j < k; j++) {
+        for (int i = j + 2; i < k; i++) {
+            double consumed = fw_calc_fuel_consumed(problem,
+                problem->stations[j].distance_from_start,
+                problem->stations[i].distance_from_start);
+            double fuel_at_i = problem->tank_capacity - consumed;
+
+            if (fuel_at_i < problem->minimum_fuel) {
+                /* Need at least one stop in (j, i) */
+                int span = i - j - 1;
+                if (span > 0) {
+                    int *indices = malloc(span * sizeof(int));
+                    double *values = malloc(span * sizeof(double));
+                    if (!indices || !values) {
+                        free(indices);
+                        free(values);
+                        ralph_free(model);
+                        solution->status = FW_STATUS_ERROR;
+                        return -1;
+                    }
+
+                    for (int l = 0; l < span; l++) {
+                        indices[l] = z_start + j + 1 + l;
+                        values[l] = 1.0;
+                    }
+
+                    ralph_add_constraint(model, span, indices, values,
+                                         RALPH_GREATER_EQUAL, 1.0);
+                    free(indices);
+                    free(values);
+                }
+                break;  /* further stations are even farther */
+            }
+        }
+    }
+
     /* Configure Benders decomposition */
     int *master_vars = malloc(k * sizeof(int));
     if (!master_vars) {
@@ -821,13 +1098,47 @@ int fw_solve_refuel_benders(
     config.master_var_indices = master_vars;
     config.num_master_vars = k;
     config.theta_var = theta_idx;
-    config.verbose = 2;  /* Debug: enable verbose output (level 2 for cut details) */
+    config.verbose = 0;
+
+    /* Compute priorities and directions for Benders master (original var space) */
+    int *benders_priorities = (int*)calloc(num_vars, sizeof(int));
+    int *benders_directions = (int*)calloc(num_vars, sizeof(int));
+    if (benders_priorities && benders_directions) {
+        /* Compute median price */
+        double *prices = (double*)malloc(k * sizeof(double));
+        double median_price = 0.0;
+        if (prices) {
+            for (int i = 0; i < k; i++) prices[i] = problem->stations[i].price;
+            for (int i = 0; i < k - 1; i++) {
+                for (int j = i + 1; j < k; j++) {
+                    if (prices[j] < prices[i]) {
+                        double tmp = prices[i]; prices[i] = prices[j]; prices[j] = tmp;
+                    }
+                }
+            }
+            median_price = prices[k / 2];
+            free(prices);
+        }
+
+        for (int i = 0; i < k; i++) {
+            double price = problem->stations[i].price;
+            benders_priorities[z_start + i] =
+                (price > 0.001) ? (int)(1000.0 / price) : 1000;
+            benders_directions[z_start + i] =
+                (price <= median_price) ? RALPH_BRANCH_UP : RALPH_BRANCH_DOWN;
+        }
+
+        config.branch_priorities = benders_priorities;
+        config.branch_directions = benders_directions;
+    }
 
     /* Solve with Benders */
     double *x = malloc(num_vars * sizeof(double));
     RalphBendersResult result;
 
     if (!x) {
+        free(benders_priorities);
+        free(benders_directions);
         free(master_vars);
         ralph_free(model);
         solution->status = FW_STATUS_ERROR;
@@ -836,6 +1147,8 @@ int fw_solve_refuel_benders(
 
     int ret = ralph_solve_benders(model, &config, x, &result);
 
+    free(benders_priorities);
+    free(benders_directions);
     free(master_vars);
 
     if (ret == 0 && result.status == RALPH_STATUS_OPTIMAL) {
