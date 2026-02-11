@@ -1865,12 +1865,82 @@ performance at scale.
 
 ### 8.6 Implementation Priority
 
-1. **Symmetry-breaking** (FuelWise, ~50 LoC) — immediate, zero Ralph changes
-2. **Mandatory station fixing** (FuelWise, ~30 LoC) — presolve, zero Ralph changes
-3. **LP relaxation warm start** (FuelWise, ~80 LoC) — incumbent from LP rounding
-4. **Best-first node selection** (Ralph, ~200 LoC) — biggest generic B&B improvement
-5. **Pseudocost branching** (Ralph, ~200 LoC) — replaces static priorities
-6. **Fix Benders suboptimality** (Ralph, investigate) — unlocks scaling to k>100
+1. ~~**Symmetry-breaking** (FuelWise, ~50 LoC) — immediate, zero Ralph changes~~ **DONE** (Feb 2026)
+2. ~~**Mandatory station fixing** (FuelWise, ~30 LoC) — presolve, zero Ralph changes~~ **DONE** (Feb 2026)
+3. ~~**Dominated station elimination** (FuelWise, ~40 LoC) — presolve, zero Ralph changes~~ **DONE** (Feb 2026)
+4. **LP relaxation warm start** (FuelWise, ~80 LoC) — incumbent from LP rounding
+5. **Best-first node selection** (Ralph, ~200 LoC) — biggest generic B&B improvement
+6. **Pseudocost branching** (Ralph, ~200 LoC) — replaces static priorities
+7. **Fix Benders suboptimality** (Ralph, investigate) — unlocks scaling to k>100
+
+### 8.7 Per-Component Hint Breakdown (Feb 2026)
+
+Each MIP hint can now be toggled independently via `FW_HINT_NO_*` flags
+(`fw_set_mip_hint_flags()`). Test on a 20-station problem (10 L/100km, tight
+200L tank, min_purchase=15L, stop_cost=$5):
+
+| Configuration | Time | Speedup vs Raw | Notes |
+|---------------|------|----------------|-------|
+| **All hints enabled** | 14.7ms | **6.6x** | Combined effect |
+| No hints (raw MILP) | 96.4ms | baseline | |
+| Only priorities+directions | **4.6ms** | **21x** | Most impactful single hint |
+| Only symmetry breaking | 27.6ms | 3.5x | Equal-price pairs pruned |
+| Only dominated elimination | 41.4ms | 2.3x | Expensive stations fixed to z=0 |
+| Only reach cuts | 92.8ms | ~1x | Minimal solo impact on this problem |
+| Only mandatory fixing | 94.4ms | ~1x | Minimal solo impact on this problem |
+
+**Key findings:**
+
+1. **Branching priorities/directions dominate** — telling Ralph to try cheap
+   stations first gives 21x alone. This is Ralph's single strongest advantage
+   over GLPK on small problems.
+
+2. **Symmetry breaking is second** — 3.5x from eliminating equal-price
+   symmetric solutions. Impact scales with number of equal-price pairs.
+
+3. **Dominated elimination gives 2.3x** — fixing expensive surrounded
+   stations to z=0 reduces effective problem size.
+
+4. **Reach cuts and mandatory fixing have minimal solo impact** on this
+   problem class. They matter more on very tight-tank scenarios where they
+   prevent infeasible branches early.
+
+5. **Combined 6.6x < sum of parts** — hints interact; priorities already
+   guide the solver away from dominated/symmetric solutions.
+
+### 8.8 Benders vs MILP vs GLPK Comparison (Feb 2026)
+
+Side-by-side comparison of all three solvers on the same MILP scenarios:
+
+| Scenario | MILP (B&B) | Benders | GLPK | MILP Solved | Benders Solved | GLPK Match |
+|----------|------------|---------|------|-------------|----------------|------------|
+| milp15 | **2.5ms** | 2.6ms | 6.4ms | 5/5 (100%) | 3/5 (60%) | 5/5 MILP, 2/3 Benders |
+| milp30 | 47ms | 22ms | **8ms** | 5/5 (100%) | 4/5 (80%) | 5/5 MILP, 3/4 Benders |
+| milp50 | 142ms | 241ms | **9ms** | 5/5 (100%) | 1/5 (20%) | 5/5 MILP, 0/1 Benders |
+
+**Benders issues identified:**
+
+1. **Reliability**: Benders fails on 40-80% of problems (reports INFEASIBLE or
+   ERROR on problems that MILP and GLPK solve successfully). This is the known
+   suboptimality/convergence issue from §9.2.
+
+2. **Objective mismatch**: Even when Benders finds a solution, it often doesn't
+   match the GLPK/MILP optimal (only 5/8 matches vs 15/15 for MILP).
+
+3. **Speed**: Benders is faster than MILP B&B at milp30 (22ms vs 47ms) but
+   slower at milp50 (241ms vs 142ms). Neither competes with GLPK at scale.
+
+4. **MILP B&B is more reliable**: 100% solve rate across all scenarios with
+   100% objective match against GLPK. The domain hints (priorities, directions,
+   reach cuts, symmetry-breaking, presolve) make it the recommended path.
+
+**Conclusion:** Benders decomposition is currently broken and should not be used
+in production. The MILP solver with domain hints is correct and reliable but
+slow beyond ~30 stations. For production use at scale, the priority path is:
+
+1. Fix Ralph's B&B core (best-first node selection, pseudocost branching)
+2. Add LP warm start to MILP solver
+3. Only then revisit Benders (after fixing convergence issues in §9.2)
 
 ---
 
