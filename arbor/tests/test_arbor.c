@@ -1,0 +1,175 @@
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+
+#include "arbor.h"
+
+typedef struct {
+    int value;
+} TestSolution;
+
+static void *test_copy(const void *solution, void *user_ctx) {
+    const TestSolution *src = (const TestSolution *)solution;
+    TestSolution *dst = (TestSolution *)malloc(sizeof(*dst));
+    (void)user_ctx;
+    if (!dst) {
+        return NULL;
+    }
+    *dst = *src;
+    return dst;
+}
+
+static void test_free(void *solution, void *user_ctx) {
+    (void)user_ctx;
+    free(solution);
+}
+
+static double test_cost(const void *solution, void *user_ctx) {
+    const TestSolution *sol = (const TestSolution *)solution;
+    (void)user_ctx;
+    return (double)sol->value;
+}
+
+static int test_size(const void *solution, void *user_ctx) {
+    const TestSolution *sol = (const TestSolution *)solution;
+    (void)user_ctx;
+    return sol->value;
+}
+
+static int test_validate(const void *solution, void *user_ctx) {
+    const TestSolution *sol = (const TestSolution *)solution;
+    (void)user_ctx;
+    return sol->value >= 0;
+}
+
+static ARStatus test_destroy(void *op_ctx, void *solution, int count,
+                             uint32_t *removed_ids, int *removed_count) {
+    TestSolution *sol = (TestSolution *)solution;
+    (void)op_ctx;
+    (void)removed_ids;
+
+    if (!sol || !removed_count || count < 0) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    if (count > sol->value) {
+        count = sol->value;
+    }
+
+    sol->value -= count;
+    *removed_count = count;
+    return AR_STATUS_OK;
+}
+
+static ARStatus test_repair(void *op_ctx, void *solution,
+                            const uint32_t *removed_ids, int removed_count) {
+    (void)op_ctx;
+    (void)removed_ids;
+    (void)removed_count;
+    (void)solution;
+    return AR_STATUS_OK;
+}
+
+static ARStatus test_destroy_noop(void *op_ctx, void *solution, int count,
+                                  uint32_t *removed_ids, int *removed_count) {
+    (void)op_ctx;
+    (void)solution;
+    (void)count;
+    (void)removed_ids;
+    if (!removed_count) {
+        return AR_STATUS_INVALID_ARG;
+    }
+    *removed_count = 0;
+    return AR_STATUS_OK;
+}
+
+int main(void) {
+    ARALNSParams params;
+    ARSolutionOps ops;
+    ARALNSContext *ctx = NULL;
+    TestSolution initial = { .value = 30 };
+    TestSolution *best = NULL;
+    ARStatus status;
+    ARALNSStats stats;
+
+    ar_alns_params_default(&params);
+    params.max_iterations = 50;
+    params.segment_size = 10;
+    params.q_min = 1;
+    params.q_max = 3;
+    params.accept_type = AR_ACCEPT_IMPROVING;
+
+    ops.copy = test_copy;
+    ops.free = test_free;
+    ops.cost = test_cost;
+    ops.size = test_size;
+    ops.validate = test_validate;
+    ops.user_ctx = NULL;
+
+    ctx = ar_alns_create(&params, &ops, NULL);
+    assert(ctx != NULL);
+
+    status = ar_alns_set_seed(ctx, 12345);
+    assert(status == AR_STATUS_OK);
+
+    status = ar_alns_add_destroy(ctx, "decrement", test_destroy, NULL, 1.0);
+    assert(status == AR_STATUS_OK);
+    status = ar_alns_add_repair(ctx, "noop", test_repair, NULL, 1.0);
+    assert(status == AR_STATUS_OK);
+
+    status = ar_alns_solve(ctx, &initial, (void **)&best);
+    assert(status == AR_STATUS_OK);
+    assert(best != NULL);
+    assert(best->value == 0);
+
+    ar_alns_get_stats(ctx, &stats);
+    assert(stats.iterations > 0);
+    assert(stats.best_cost == 0.0);
+    assert(stats.accepted > 0);
+    assert(stats.stop_reason == AR_STOP_MAX_ITERATIONS);
+
+    test_free(best, NULL);
+    best = NULL;
+
+    status = ar_alns_get_best_copy(ctx, (void **)&best);
+    assert(status == AR_STATUS_OK);
+    assert(best != NULL);
+    assert(best->value == 0);
+
+    test_free(best, NULL);
+    ar_alns_free(ctx);
+
+    ar_alns_params_default(&params);
+    params.max_iterations = 100;
+    params.max_stagnation_iterations = 5;
+    params.q_min = 0;
+    params.q_max = 0;
+    params.accept_type = AR_ACCEPT_IMPROVING;
+
+    ctx = ar_alns_create(&params, &ops, NULL);
+    assert(ctx != NULL);
+    status = ar_alns_add_destroy(ctx, "noop-d", test_destroy_noop, NULL, 1.0);
+    assert(status == AR_STATUS_OK);
+    status = ar_alns_add_repair(ctx, "noop-r", test_repair, NULL, 1.0);
+    assert(status == AR_STATUS_OK);
+
+    initial.value = 0;
+    status = ar_alns_solve(ctx, &initial, (void **)&best);
+    assert(status == AR_STATUS_LIMIT);
+    assert(best != NULL);
+    assert(best->value == 0);
+    ar_alns_get_stats(ctx, &stats);
+    assert(stats.stop_reason == AR_STOP_STAGNATION);
+    test_free(best, NULL);
+    ar_alns_free(ctx);
+
+    ar_alns_params_default(&params);
+    params.q_min = 5;
+    params.q_max = 4;
+    ctx = ar_alns_create(&params, &ops, NULL);
+    assert(ctx == NULL);
+
+    printf("arbor ALNS test passed\n");
+    return 0;
+}
