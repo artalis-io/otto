@@ -260,6 +260,13 @@ void test_infeasible_subproblem(void) {
         ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 10.0);
     }
 
+    /* Pure-master constraint required by current Benders implementation. */
+    {
+        int idx[] = {x};
+        double val[] = {1.0};
+        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
+    }
+
     int master_vars[] = {x};
     RalphBendersConfig config = RALPH_BENDERS_CONFIG_DEFAULT;
     config.master_var_indices = master_vars;
@@ -274,8 +281,67 @@ void test_infeasible_subproblem(void) {
     printf("Result: ret=%d, iters=%d, feas_cuts=%d\n",
            ret, result.iterations, result.feasibility_cuts);
 
-    /* Benders should add feasibility cuts to force x >= 4 */
-    /* Then find optimal with x=4, y1=8, y2=4 or similar */
+    ASSERT(ret == 0, "Infeasible-subproblem test returns success");
+    ASSERT(result.status == RALPH_STATUS_OPTIMAL, "Infeasible-subproblem test converges to optimal");
+    ASSERT(result.feasibility_cuts > 0, "Feasibility cuts are generated");
+    ASSERT(result.iterations >= 1, "At least one iteration executed");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test 3b: Infeasible Subproblem + strict_farkas
+ * ============================================================================
+ */
+void test_infeasible_subproblem_strict_farkas(void) {
+    printf("\n=== Test: Infeasible Subproblem + strict_farkas ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+    if (!model) return;
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    int x = ralph_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
+    int y1 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int y2 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+
+    {
+        int idx[] = {y1, x};
+        double val[] = {1.0, -2.0};
+        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+    }
+    {
+        int idx[] = {y2, x};
+        double val[] = {1.0, -1.0};
+        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+    }
+    {
+        int idx[] = {y1, y2};
+        double val[] = {1.0, 1.0};
+        ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 10.0);
+    }
+    {
+        int idx[] = {x};
+        double val[] = {1.0};
+        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
+    }
+
+    int master_vars[] = {x};
+    RalphBendersConfig config = RALPH_BENDERS_CONFIG_DEFAULT;
+    config.master_var_indices = master_vars;
+    config.num_master_vars = 1;
+    config.theta_var = -1;
+    config.strict_farkas = 1;
+    config.verbose = 1;
+
+    RalphBendersResult result;
+    int ret = ralph_solve_benders(model, &config, NULL, &result);
+
+    ASSERT(ret == 0, "strict_farkas infeasible-subproblem test returns success");
+    ASSERT(result.status == RALPH_STATUS_OPTIMAL, "strict_farkas converges to optimal");
+    ASSERT(result.feasibility_cuts > 0, "strict_farkas generates feasibility cuts");
+    ASSERT(result.iterations >= 1, "strict_farkas executes at least one iteration");
 
     ralph_free(model);
 }
@@ -313,6 +379,13 @@ void test_stochastic_benders(void) {
         ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 3.0);
     }
 
+    /* Pure-master constraint required by current Benders implementation. */
+    {
+        int idx[] = {x};
+        double val[] = {1.0};
+        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
+    }
+
     int master_vars[] = {x};
     double probs[] = {0.6, 0.4}; /* Two scenarios with probabilities */
 
@@ -329,6 +402,60 @@ void test_stochastic_benders(void) {
     int ret = ralph_solve_benders(model, &config, NULL, &result);
 
     printf("Result: ret=%d, obj=%.4f, iters=%d\n", ret, result.objective, result.iterations);
+
+    ASSERT(ret == 0, "Stochastic Benders returns success");
+    ASSERT(result.status == RALPH_STATUS_OPTIMAL, "Stochastic Benders status is OPTIMAL");
+    ASSERT(result.iterations >= 1, "Stochastic Benders runs at least one iteration");
+    ASSERT(result.objective < 1e8, "Stochastic Benders objective is finite");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test 5: Zero Master Constraints Should Error
+ * ============================================================================
+ */
+void test_zero_master_constraints_error(void) {
+    printf("\n=== Test: Zero Master Constraints -> Error ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+    if (!model) return;
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* x is master, y is sub. No pure-master constraints are added. */
+    int x = ralph_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
+    int y = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+
+    /* Linking and sub-only constraints */
+    {
+        int idx[] = {y, x};
+        double val[] = {1.0, -1.0};
+        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+    }
+    {
+        int idx[] = {y};
+        double val[] = {1.0};
+        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
+    }
+
+    int master_vars[] = {x};
+    RalphBendersConfig config = RALPH_BENDERS_CONFIG_DEFAULT;
+    config.master_var_indices = master_vars;
+    config.num_master_vars = 1;
+    config.theta_var = -1;
+    config.verbose = 1;
+
+    RalphBendersResult result;
+    double solution[2] = {-1234.0, -1234.0};
+
+    int ret = ralph_solve_benders(model, &config, solution, &result);
+
+    ASSERT(ret == -1, "Zero-master-constraint model returns error");
+    ASSERT(result.status == RALPH_STATUS_ERROR, "Result status is ERROR");
+    ASSERT(solution[0] == -1234.0 && solution[1] == -1234.0,
+           "Solution buffer is untouched on failure");
 
     ralph_free(model);
 }
@@ -350,6 +477,7 @@ void test_config_defaults(void) {
     ASSERT(config.max_iterations > 0, "Default max_iterations is positive");
     ASSERT(config.cuts_at_lp_nodes == 1, "Default cuts_at_lp_nodes is 1 (modern)");
     ASSERT(config.warm_start_subproblems == 1, "Default warm_start is 1");
+    ASSERT(config.strict_farkas == 0, "Default strict_farkas is 0");
 }
 
 /* ============================================================================
@@ -398,9 +526,11 @@ int main(void) {
 
     test_config_defaults();
     test_error_handling();
+    test_zero_master_constraints_error();
     test_continuous_master();
     test_simple_two_stage();
     test_infeasible_subproblem();
+    test_infeasible_subproblem_strict_farkas();
     test_stochastic_benders();
 
     printf("\n==================================\n");

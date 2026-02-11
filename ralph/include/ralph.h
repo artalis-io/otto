@@ -308,6 +308,7 @@ typedef struct {
     int max_iterations;             /* Iteration limit (default 1000) */
     int cuts_at_lp_nodes;           /* 1 = modern branch-and-Benders-cut */
     int warm_start_subproblems;     /* 1 = reuse subproblem basis */
+    int strict_farkas;              /* 1 = require strict Farkas validation */
     int verbose;                    /* Verbosity level (0-2) */
 } RalphBendersConfig;
 
@@ -322,6 +323,7 @@ typedef struct {
     .max_iterations = 1000,            \
     .cuts_at_lp_nodes = 1,             \
     .warm_start_subproblems = 1,       \
+    .strict_farkas = 0,                \
     .verbose = 0                       \
 }
 

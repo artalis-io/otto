@@ -2855,6 +2855,17 @@ int simplex_solve(SimplexSolver *solver) {
 
     clock_t start = clock();
 
+    /* Invalidate cached outputs from any previous solve.
+     * This prevents stale primal/dual data from being reused when the current
+     * solve fails before producing new solution vectors. */
+    free(solver->solution);
+    solver->solution = NULL;
+    free(solver->dual_solution);
+    solver->dual_solution = NULL;
+    free(solver->reduced_costs);
+    solver->reduced_costs = NULL;
+    solver->farkas_valid = 0;
+
     if (solver->verbose) printf("[simplex_solve] Starting...\n");
 
     /* Finalize model if needed (required before scaling) */
