@@ -1389,6 +1389,50 @@ void test_cmir_cuts_no_regression_presolve(void) {
 }
 
 /* ============================================================================
+ * Regression Test: c-MIR Invalid Cut on Binary Knapsack
+ *
+ * 10-variable binary knapsack with 3 constraints. c-MIR back-substitution
+ * produces a trivially infeasible cut (all positive coefs, negative RHS) on
+ * this problem. The safety check in cmir_build_cut should reject the invalid
+ * cut, allowing the solver to find the correct optimal.
+ *
+ * Reproducer for the known c-MIR back-substitution bug.
+ * ============================================================================ */
+void test_cmir_binary_knapsack_regression(void) {
+    printf("\n=== Test: c-MIR Binary Knapsack Regression ===\n");
+
+    double obj_c[] = {-16, -22, -12, -8, -11, -19, -7, -14, -9, -13};
+    double a1[]    = { 5,   7,   4,  3,   6,   2,  8,   4,  3,   6};
+    double a2[]    = { 3,   2,   6,  5,   1,   7,  2,   5,  4,   3};
+    double a3[]    = { 4,   5,   3,  6,   4,   3,  5,   7,  2,   4};
+    int n = 10;
+    int idx[10];
+    for (int j = 0; j < n; j++) idx[j] = j;
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "max_cut_rounds", 5);
+    ralph_set_int_param(model, "max_nodes", 10000);
+
+    for (int j = 0; j < n; j++)
+        ralph_add_var(model, 0.0, 1.0, obj_c[j], RALPH_BINARY);
+    ralph_add_constraint(model, n, idx, a1, RALPH_LESS_EQUAL, 15.0);
+    ralph_add_constraint(model, n, idx, a2, RALPH_LESS_EQUAL, 12.0);
+    ralph_add_constraint(model, n, idx, a3, RALPH_LESS_EQUAL, 18.0);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL,
+           "c-MIR binary knapsack: should be OPTIMAL (not INFEASIBLE)");
+    ASSERT_NEAR(ralph_get_objval(model), -57.0, TOLERANCE,
+                "c-MIR binary knapsack: optimal obj = -57");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Regression Test: MIP Warm Start Bound Adjustment
  *
  * Tests that non-basic variable values are properly adjusted when bounds
@@ -2611,6 +2655,7 @@ int main(int argc, char **argv) {
         test_cmir_cuts_facility_location();
         test_cmir_cuts_validity();
         test_cmir_cuts_no_regression_presolve();
+        test_cmir_binary_knapsack_regression();     /* c-MIR invalid cut bug */
 
         /* Regression tests for MIP bugs */
         test_mip_bound_adjustment_regression();     /* Suboptimal solution bug */

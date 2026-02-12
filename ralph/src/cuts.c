@@ -1152,7 +1152,8 @@ static Cut* cmir_build_cut(const CMIRWork *work, double delta, SimplexTableau *t
          *
          * If complemented (j in C):
          *   x' = eff_ub - x_sub, so mir_coef * x' = mir_coef * eff_ub - mir_coef * x_sub
-         *   cut_rhs += mir_coef * eff_ub, and we use -mir_coef for x_sub
+         *   The constant mir_coef * eff_ub moves from LHS to RHS with sign flip:
+         *   cut_rhs -= mir_coef * eff_ub, and we use -mir_coef for x_sub
          *
          * If sub_type[j] == 0 (lower-bound sub):
          *   x_sub = x_j - lb_j, so coef * x_sub = coef * x_j - coef * lb_j
@@ -1160,13 +1161,14 @@ static Cut* cmir_build_cut(const CMIRWork *work, double delta, SimplexTableau *t
          *
          * If sub_type[j] == 1 (upper-bound sub):
          *   x_sub = ub_j - x_j, so coef * x_sub = coef * ub_j - coef * x_j
-         *   orig_coefs[j] = -coef, cut_rhs += coef * ub_j
+         *   The constant coef * ub_j moves from LHS to RHS with sign flip:
+         *   orig_coefs[j] = -coef, cut_rhs -= coef * ub_j
          */
 
         double coef_for_sub = mir_coef;
 
         if (complemented) {
-            cut_rhs += mir_coef * eff_ub;
+            cut_rhs -= mir_coef * eff_ub;
             coef_for_sub = -mir_coef;
         }
 
@@ -1177,7 +1179,7 @@ static Cut* cmir_build_cut(const CMIRWork *work, double delta, SimplexTableau *t
         } else {
             /* Upper bound sub: x_sub = ub - x_j */
             orig_coefs[j] = -coef_for_sub;
-            cut_rhs += coef_for_sub * work->ub[j];
+            cut_rhs -= coef_for_sub * work->ub[j];
         }
 
         if (fabs(orig_coefs[j]) > RALPH_ZERO_TOL) {
@@ -1224,6 +1226,25 @@ static Cut* cmir_build_cut(const CMIRWork *work, double delta, SimplexTableau *t
     if (cut->violation < RALPH_FEAS_TOL || cut->nnz == 0) {
         cut_free(cut);
         return NULL;
+    }
+
+    /* Reject trivially infeasible cuts: compute minimum possible LHS
+     * given variable bounds. If min_lhs > rhs, no feasible point can
+     * satisfy the cut, indicating a back-substitution error. */
+    {
+        double min_lhs = 0.0;
+        for (int k = 0; k < cut->nnz; k++) {
+            int j = cut->indices[k];
+            double v = cut->values[k];
+            if (v > 0)
+                min_lhs += v * work->lb[j];
+            else
+                min_lhs += v * work->ub[j];
+        }
+        if (min_lhs > cut->rhs + RALPH_FEAS_TOL) {
+            cut_free(cut);
+            return NULL;
+        }
     }
 
     return cut;

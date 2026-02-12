@@ -13,14 +13,14 @@
 
 ## Cut Generation Bugs
 
-### `cut_normalize` Invalidates Violation Field (cuts.c:131-158)
-- **Severity**: High — causes incorrect INFEASIBLE status on valid problems
-- **Trigger**: Problems where GMI/c-MIR cuts have a negative leading coefficient after index sorting
-- **Root cause**: `cut_normalize()` negates all coefficients and flips the constraint sense (G↔L) when the leading coefficient is negative, but does NOT recompute `cut->violation`. The stale violation value causes `apply_cuts()` (line 1589) to add non-violated or invalid cuts to the LP, which can make it infeasible.
-- **Impact**: The MIP solver reports `RALPH_STATUS_INFEASIBLE` even though a valid incumbent was found by the diving heuristic before cuts were added. The incumbent objective (`ralph_get_objval`) is correct, but the status is wrong.
-- **Reproducer**: 10-variable binary knapsack with 3 constraints and `max_cut_rounds=5`, or mixed 6-variable problem (2 int + 2 cont + 2 bin) with 4 constraints.
-- **Workaround**: Use `max_cut_rounds=0` to disable cuts on affected problems, or use facility-location-style mixed problems where the bug is less likely to trigger.
-- **Fix**: Recompute violation after normalization, or compute it after `cut_pool_add` calls `cut_normalize`.
+### c-MIR Back-Substitution Sign Errors (cuts.c:cmir_build_cut)
+- **Severity**: High — produces trivially infeasible cuts on pure binary/integer problems
+- **Trigger**: Binary knapsack or all-integer MIP problems where c-MIR generates cuts
+- **Root cause**: `cmir_build_cut()` had two sign errors in the back-substitution logic that converts from the complemented/bound-substituted space back to original variables. The complementation constant and upper-bound substitution constant were added instead of subtracted. Additionally, there may be a remaining issue producing cuts with impossibly negative RHS values on all-integer problems (partially fixed).
+- **Partial fix applied**: Two sign errors corrected in back-substitution. Safety check added to reject trivially infeasible cuts (where minimum possible LHS exceeds RHS given variable bounds).
+- **Impact**: Without the safety check, the MIP solver reports `RALPH_STATUS_INFEASIBLE` on valid problems. With the safety check, invalid cuts are silently rejected and the solver finds the correct optimal.
+- **Reproducer**: 10-variable binary knapsack with 3 constraints and `max_cut_rounds=5` (see `test_cmir_binary_knapsack_regression` in test_main.c).
+- **Remaining work**: Find root cause of why c-MIR produces negative RHS with all-positive coefficients on pure binary problems. The safety check masks this but doesn't fix it.
 
 ### No Recovery When LP Becomes Infeasible After Cuts (mip.c:1146-1154)
 - **Severity**: Medium — compounds the above bug
