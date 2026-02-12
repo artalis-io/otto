@@ -7,6 +7,23 @@
 
 #include "lp.h"
 
+/* Presolve technique bitmask (for selective enable/disable) */
+#define PRESOLVE_FIXED_VARS        (1u << 0)
+#define PRESOLVE_EMPTY_ROWS        (1u << 1)
+#define PRESOLVE_EMPTY_COLS        (1u << 2)
+#define PRESOLVE_SINGLETON_ROWS    (1u << 3)
+#define PRESOLVE_SINGLETON_COLS    (1u << 4)
+#define PRESOLVE_IMPLIED_FREE      (1u << 5)
+#define PRESOLVE_DOUBLETON_EQ      (1u << 6)
+#define PRESOLVE_FORCING           (1u << 7)
+#define PRESOLVE_BOUND_TIGHTENING  (1u << 8)
+#define PRESOLVE_PROPORTIONAL_ROWS (1u << 9)
+#define PRESOLVE_PROPORTIONAL_COLS (1u << 10)
+#define PRESOLVE_PROBING           (1u << 11)
+#define PRESOLVE_SHIFT_BOUNDS      (1u << 12)
+#define PRESOLVE_REDUNDANT_ROWS    (1u << 13)
+#define PRESOLVE_ALL               0xFFFFu
+
 /* Postsolve operation types for LIFO replay */
 typedef enum {
     POSTSOLVE_FIXED_VAR,       /* Variable fixed to a value */
@@ -79,6 +96,7 @@ typedef struct {
     int bound_tightening;
     int probing;                /* For MIP only */
     int detect_redundant_rows;  /* Detect linearly dependent rows via rank */
+    unsigned int technique_mask; /* Bitmask controlling individual techniques (0xFFFF=all) */
 
     /* Iteration control */
     int max_rounds;
@@ -98,6 +116,7 @@ typedef struct {
 
 /* Main presolve interface */
 PresolveResult* presolve(LPModel *model);
+PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask);
 void presolve_free(PresolveResult *result);
 
 /* Postsolve: recover original solution from presolved solution */

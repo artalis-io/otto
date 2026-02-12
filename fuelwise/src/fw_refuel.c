@@ -300,9 +300,12 @@ int fw_solve_refuel_lp(
 /* Global hint flags. Default 0 = all enabled.
  * Set before solving, NOT thread-safe if modified concurrently. */
 static int fw_mip_hint_flags = 0;
+static int fw_presolve = 0;
+static unsigned int fw_presolve_mask = 0xFFFF;
 
 void fw_set_mip_hint_flags(int flags) { fw_mip_hint_flags = flags; }
 int fw_get_mip_hint_flags(void) { return fw_mip_hint_flags; }
+void fw_set_presolve(int enable, unsigned int mask) { fw_presolve = enable; fw_presolve_mask = mask; }
 
 /* Context for reach-cut callback */
 typedef struct {
@@ -848,6 +851,10 @@ int fw_solve_refuel_milp(
 
     /* Solve */
     ralph_set_int_param(model, "verbose", 0);
+    if (fw_presolve) {
+        ralph_set_int_param(model, "presolve", 1);
+        ralph_set_int_param(model, "presolve_mask", (int)fw_presolve_mask);
+    }
     int ret = ralph_optimize(model);
     RalphStatus status = ralph_get_status(model);
 

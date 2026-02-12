@@ -40,6 +40,7 @@ struct RalphModel {
     int detect_special; /* 1=detect LAP/network structure, 0=disable */
     int node_pool_capacity; /* Pre-allocated B&B node pool size (default 1024) */
     int node_select;  /* 0=best-first, 1=DFS, 2=best-estimate, 3=hybrid (default) */
+    unsigned int presolve_mask; /* Bitmask controlling presolve techniques (0xFFFF=all) */
     int force_two_phase; /* 1=force two-phase simplex for clean Farkas duals */
     int trace_phase1; /* 1=emit deterministic Phase-1 failure trace */
 
@@ -96,6 +97,7 @@ RalphModel* ralph_create(void) {
     model->max_iterations = RALPH_DEFAULT_MAX_ITER;
     model->time_limit = RALPH_DEFAULT_TIME_LIMIT;
     model->presolve = 0;  /* Disabled by default - adds overhead on random LPs */
+    model->presolve_mask = PRESOLVE_ALL;
     model->verbose = 0;
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
@@ -332,7 +334,7 @@ int ralph_optimize(RalphModel *model) {
     LPModel *solve_model = model->lp_model;
 
     if (model->presolve) {
-        presolved = presolve(model->lp_model);
+        presolved = presolve_with_mask(model->lp_model, model->presolve_mask);
         if (presolved && presolved->reduced_model) {
             solve_model = presolved->reduced_model;
             if (model->verbose) {
@@ -1076,6 +1078,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (STREQ(name, "trace_phase1") || STREQ(name, "TracePhase1")) {
         /* 1=emit deterministic phase-1 pivot-failure trace to stderr */
         model->trace_phase1 = value;
+    } else if (STREQ(name, "presolve_mask") || STREQ(name, "PresolveMask")) {
+        /* Bitmask controlling individual presolve techniques (see presolve.h) */
+        model->presolve_mask = (unsigned int)value;
     } else {
         return -1;  /* Unknown parameter */
     }
@@ -1118,6 +1123,8 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
         *value = model->node_select;
     } else if (STREQ(name, "trace_phase1")) {
         *value = model->trace_phase1;
+    } else if (STREQ(name, "presolve_mask")) {
+        *value = (int)model->presolve_mask;
     } else {
         return -1;
     }
