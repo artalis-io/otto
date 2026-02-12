@@ -362,9 +362,12 @@ int main(int argc, char **argv) {
     /* Medium MIP */
     benchmark_mip(50, 25, 0.3, 0.3, 3);
 
+    /* Larger MIPs */
+    benchmark_mip(100, 50, 0.2, 0.2, 2);
+
     if (!quick_mode) {
-        /* Larger MIP */
-        benchmark_mip(100, 50, 0.2, 0.2, 2);
+        benchmark_mip(200, 100, 0.15, 0.3, 2);
+        benchmark_mip(300, 150, 0.10, 0.3, 2);
     }
 
     printf("\n═══════════════════════════════════════════════════════════\n");

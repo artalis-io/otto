@@ -81,7 +81,7 @@ static int parse_args(int argc, char **argv, BenchOptions *opts)
     opts->solver_type = FW_SOLVER_LP;
     opts->glpk_compare = 0;
     opts->presolve = 0;
-    opts->presolve_mask = 0xFFFF;
+    opts->presolve_mask = 0x110F;  /* Lightweight: matches fw_refuel.c default */
     opts->as_json = 0;
     opts->verbose = 0;
     opts->run_all = 0;

@@ -520,186 +520,707 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
 }
 
 /* ============================================================================
- * Mixed Integer Rounding Cuts
+ * Complemented Mixed Integer Rounding (c-MIR) Cuts
+ *
+ * Implements the c-MIR separation procedure with:
+ * 1. Bound substitution: transform variables to non-negative
+ * 2. Complement set search: find best subset C of integer variables to complement
+ * 3. Delta search: find best divisor for MIR rounding
+ * 4. Row aggregation: combine multiple constraint rows for stronger cuts
+ *
+ * References:
+ * - Marchand & Wolsey, "Aggregation and MIR closures" (2001)
+ * - GLPK mirgen.c implementation
  * ============================================================================ */
 
+/* c-MIR local constants */
+#define CMIR_MAX_AGGR     3      /* Max rows to aggregate */
+#define CMIR_FRAC_TOL     0.01   /* Min fractionality for MIR RHS */
+#define CMIR_COEF_MAX     1e6    /* Reject cuts with coefficients beyond this */
+#define CMIR_PIVOT_MIN    0.001  /* Min coefficient for aggregation pivot */
+#define CMIR_DELTA_MIN    1e-6   /* Min divisor to avoid numerical instability */
+
+/* Working data for c-MIR separation pipeline */
+typedef struct {
+    double *a;          /* Dense source row coefficients [num_orig] */
+    double b;           /* Source row RHS */
+    double *x_val;      /* LP solution snapshot [num_orig] */
+    double *lb;         /* Variable lower bounds [num_orig] */
+    double *ub;         /* Variable upper bounds [num_orig] */
+    const int *is_int;  /* Integer flags [num_orig] (borrowed, not owned) */
+    int num_orig;       /* Number of original variables */
+    double *a_sub;      /* After bound substitution [num_orig] */
+    double b_sub;       /* Substituted RHS */
+    int *sub_type;      /* 0=lower-bound sub, 1=upper-bound sub [num_orig] */
+    int *in_C;          /* Complement set: 1 if j complemented [num_orig] */
+} CMIRWork;
+
 /*
- * MIR cuts from optimal simplex tableau rows.
+ * Extract a (possibly aggregated) source row from the simplex tableau.
  *
- * For a tableau row: x_B[i] + sum_j (a_ij * x_j) = beta_i
- * (where j ranges over non-basic variables)
+ * Base case (aggr_depth==0): extracts the tableau row for basic_pos and
+ * substitutes slacks back to original variables.
  *
- * If beta_i has fractional part f_0 and there are integer non-basic variables,
- * apply the MIR inequality:
- *
- *   sum_j mir_coef(a_ij) * x_j <= floor(beta_i)
- *
- * where:
- *   - For integer x_j: mir_coef = floor(a_ij) + max(frac(a_ij) - f_0, 0)/(1-f_0)
- *   - For continuous x_j >= 0: mir_coef = a_ij / (1 - f_0) if a_ij > 0, else 0
- *
- * MIR cuts differ from GMI in that they generate <= inequalities and can be
- * applied to any tableau row with fractional RHS, not just rows with integer
- * basic variables.
+ * Aggregated case (aggr_depth>0): finds a continuous pivot variable in the
+ * current row, locates an original constraint containing it, and performs
+ * Gaussian elimination to combine the rows.
  */
-static Cut* generate_mir_cut_from_tableau(SimplexTableau *tab, int basic_pos,
-                                          const int *is_integer) {
+static int cmir_extract_source_row(
+    SimplexTableau *tab, int basic_pos, const int *is_integer,
+    double *row_coefs, double *row_rhs,
+    int aggr_depth, int *used_rows, const double *x_val)
+{
     int m = tab->m;
     int n = tab->n;
     int num_orig = tab->model->num_vars;
+    LPModel *model = tab->model;
     int basic_var = tab->basis[basic_pos];
 
-    /* Get the RHS (value of basic variable) */
-    double beta = tab->x[basic_var];
-    double f_0 = beta - floor(beta);
+    if (aggr_depth == 0) {
+        /* Base case: compute tableau row e_i' * B^{-1} * A */
+        double *pi = (double*)calloc(m, sizeof(double));
+        if (!pi) return 0;
 
-    /* Need sufficient fractionality in the RHS */
-    if (f_0 < 0.05 || f_0 > 0.95) return NULL;
+        pi[basic_pos] = 1.0;
+        lu_solve_transpose(tab->lu, pi, pi);
 
-    /* Check if row has integer non-basic variables (otherwise MIR won't help) */
-    int has_int_nonbasic = 0;
+        /* Zero out the result */
+        memset(row_coefs, 0, num_orig * sizeof(double));
+
+        /* For each non-basic variable, compute tableau coefficient */
+        for (int j = 0; j < n; j++) {
+            if (tab->var_status[j] == RALPH_BASIC) continue;
+
+            double a_ij = 0.0;
+            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+                a_ij += pi[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+            }
+
+            if (fabs(a_ij) < RALPH_ZERO_TOL) continue;
+
+            if (j < num_orig) {
+                /* Original variable: accumulate directly
+                 * Tableau row: x_B = beta - sum_NB a_ij x_j
+                 * Rearrange: sum_NB a_ij x_j <= beta
+                 */
+                row_coefs[j] += a_ij;
+            } else {
+                /* Slack variable: substitute using constraint mapping */
+                int aux_idx = j - num_orig;
+                if (aux_idx >= 0 && aux_idx < tab->num_aux &&
+                    tab->aux_row && tab->aux_coef) {
+                    int con_row = tab->aux_row[aux_idx];
+                    double aux_c = tab->aux_coef[aux_idx];
+                    double con_rhs = model->b[con_row];
+
+                    /* s = aux_c * (b - Ax), so a_ij * s contributes:
+                     * -a_ij * aux_c * a_rk to each x_k
+                     * +a_ij * aux_c * b to RHS */
+                    for (int k = 0; k < num_orig; k++) {
+                        double a_rk = 0.0;
+                        for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
+                            if (model->A->rowidx[p] == con_row) {
+                                a_rk = model->A->values[p];
+                                break;
+                            }
+                        }
+                        if (fabs(a_rk) > RALPH_ZERO_TOL) {
+                            row_coefs[k] -= a_ij * aux_c * a_rk;
+                        }
+                    }
+                    *row_rhs += a_ij * aux_c * con_rhs;
+                }
+            }
+        }
+
+        /* RHS = basic variable value + slack adjustments.
+         * The basic variable is NOT added to the LHS — its value is fully
+         * captured in the RHS via tab->x[basic_var], same as GMI treatment.
+         * Adding it to LHS causes degenerate complement decisions after
+         * presolve tightens its bounds. */
+        *row_rhs = tab->x[basic_var] + (*row_rhs);
+
+        free(pi);
+
+        /* Reject if row is trivially empty or has exploded coefficients */
+        double max_coef = 0.0;
+        int nnz = 0;
+        for (int j = 0; j < num_orig; j++) {
+            if (fabs(row_coefs[j]) > RALPH_ZERO_TOL) {
+                nnz++;
+                if (fabs(row_coefs[j]) > max_coef)
+                    max_coef = fabs(row_coefs[j]);
+            }
+        }
+        if (nnz == 0 || max_coef > 1e8) return 0;
+
+        return 1;
+    }
+
+    /* Aggregation case: find a continuous pivot variable in the current row */
+    int kappa = -1;
+    double best_slack = -1.0;
+
     for (int j = 0; j < num_orig; j++) {
-        if (tab->var_status[j] != RALPH_BASIC && is_integer && is_integer[j]) {
-            has_int_nonbasic = 1;
-            break;
+        if (fabs(row_coefs[j]) < CMIR_PIVOT_MIN) continue;
+        if (is_integer && is_integer[j]) continue;
+
+        double dist_lb = (tab->lb_ext[j] > -RALPH_INFINITY + 1.0) ?
+                          x_val[j] - tab->lb_ext[j] : RALPH_INFINITY;
+        double dist_ub = (tab->ub_ext[j] < RALPH_INFINITY - 1.0) ?
+                          tab->ub_ext[j] - x_val[j] : RALPH_INFINITY;
+
+        if (dist_lb < CMIR_PIVOT_MIN && dist_ub < CMIR_PIVOT_MIN) continue;
+
+        double min_dist = (dist_lb < dist_ub) ? dist_lb : dist_ub;
+        if (min_dist > best_slack) {
+            best_slack = min_dist;
+            kappa = j;
         }
     }
-    if (!has_int_nonbasic) return NULL;
 
-    /* Compute tableau row: e_i' * B^{-1} */
-    double *row = (double*)calloc(m, sizeof(double));
-    if (!row) return NULL;
+    if (kappa < 0) return 0;
 
-    row[basic_pos] = 1.0;
-    lu_solve_transpose(tab->lu, row, row);
+    /* Find an original constraint row containing kappa that isn't used yet */
+    int pivot_row = -1;
+    double pivot_val = 0.0;
 
-    /* Allocate dense array for cut coefficients */
-    double *cut_coefs = (double*)calloc(num_orig, sizeof(double));
-    if (!cut_coefs) {
-        free(row);
+    for (int p = model->A->colptr[kappa]; p < model->A->colptr[kappa + 1]; p++) {
+        int row = model->A->rowidx[p];
+        if (used_rows[row]) continue;
+        double val = model->A->values[p];
+        if (fabs(val) < CMIR_PIVOT_MIN) continue;
+
+        /* Prefer the constraint with the largest pivot element */
+        if (fabs(val) > fabs(pivot_val)) {
+            pivot_val = val;
+            pivot_row = row;
+        }
+    }
+
+    if (pivot_row < 0) return 0;
+
+    /* Extract the constraint row into a temp array */
+    double *con_row = (double*)calloc(num_orig, sizeof(double));
+    if (!con_row) return 0;
+    sparse_get_row(model->A, pivot_row, con_row);
+
+    /* Gaussian eliminate: scale and add to cancel kappa */
+    double scale = -row_coefs[kappa] / pivot_val;
+
+    /* Check for coefficient explosion before committing */
+    for (int j = 0; j < num_orig; j++) {
+        if (fabs(con_row[j]) > RALPH_ZERO_TOL) {
+            double new_val = row_coefs[j] + scale * con_row[j];
+            if (fabs(new_val) > 1e8) {
+                free(con_row);
+                return 0;
+            }
+        }
+    }
+
+    for (int j = 0; j < num_orig; j++) {
+        row_coefs[j] += scale * con_row[j];
+        if (fabs(row_coefs[j]) < RALPH_ZERO_TOL)
+            row_coefs[j] = 0.0;
+    }
+    *row_rhs += scale * model->b[pivot_row];
+
+    used_rows[pivot_row] = 1;
+    free(con_row);
+
+    return 1;
+}
+
+/*
+ * Bound substitution: transform all variables to non-negative.
+ *
+ * For each variable x_j with coefficient a_j:
+ *   Lower sub: x_j' = x_j - lb_j >= 0, a_j unchanged, b -= a_j * lb_j
+ *   Upper sub: x_j' = ub_j - x_j >= 0, a_j = -a_j, b += a_j * ub_j
+ *
+ * For integer vars: choose bound with smaller |coef * bound| (less growth).
+ * For continuous vars: choose closer bound (less slack).
+ */
+static void cmir_bound_substitute(CMIRWork *work)
+{
+    int num_orig = work->num_orig;
+
+    memcpy(work->a_sub, work->a, num_orig * sizeof(double));
+    work->b_sub = work->b;
+
+    for (int j = 0; j < num_orig; j++) {
+        if (fabs(work->a_sub[j]) < RALPH_ZERO_TOL) {
+            work->sub_type[j] = 0;
+            continue;
+        }
+
+        int has_lb = (work->lb[j] > -RALPH_INFINITY + 1.0);
+        int has_ub = (work->ub[j] < RALPH_INFINITY - 1.0);
+
+        if (!has_lb && !has_ub) {
+            /* Free variable: leave as-is */
+            work->sub_type[j] = 0;
+            continue;
+        }
+
+        if (!has_ub) {
+            /* Only lower bound available */
+            work->b_sub -= work->a_sub[j] * work->lb[j];
+            work->sub_type[j] = 0;
+            continue;
+        }
+
+        if (!has_lb) {
+            /* Only upper bound available */
+            work->b_sub -= work->a_sub[j] * work->ub[j];
+            work->a_sub[j] = -work->a_sub[j];
+            work->sub_type[j] = 1;
+            continue;
+        }
+
+        /* Both bounds available: choose based on variable type */
+        int use_upper;
+        if (work->is_int && work->is_int[j]) {
+            /* Integer: minimize coefficient growth */
+            double lb_cost = fabs(work->a_sub[j] * work->lb[j]);
+            double ub_cost = fabs(work->a_sub[j] * work->ub[j]);
+            use_upper = (ub_cost < lb_cost);
+        } else {
+            /* Continuous: choose closer bound */
+            use_upper = (work->ub[j] - work->x_val[j]) <
+                        (work->x_val[j] - work->lb[j]);
+        }
+
+        if (use_upper) {
+            work->b_sub -= work->a_sub[j] * work->ub[j];
+            work->a_sub[j] = -work->a_sub[j];
+            work->sub_type[j] = 1;
+        } else {
+            work->b_sub -= work->a_sub[j] * work->lb[j];
+            work->sub_type[j] = 0;
+        }
+    }
+}
+
+/*
+ * Evaluate the c-MIR cut violation for a given complement set and divisor delta.
+ *
+ * Applies complementation (for j in C), divides by delta, drops positive
+ * continuous terms, then applies the MIR formula. Returns the violation
+ * (LHS - floor(b_d)) where positive means the cut is violated.
+ *
+ * Does NOT modify work->a_sub or work->in_C; uses local temporaries.
+ */
+static double cmir_eval(const CMIRWork *work, double delta)
+{
+    int num_orig = work->num_orig;
+    double b_d = work->b_sub;
+
+    /* Apply complementation to RHS */
+    for (int j = 0; j < num_orig; j++) {
+        if (work->in_C[j] && work->is_int[j] && fabs(work->a_sub[j]) > RALPH_ZERO_TOL) {
+            /* Complementing j: x_j' -> ub_j' - x_j', coef -> -coef */
+            /* ub_j' = ub[j] - lb[j] if lower-sub, or ub[j] - lb[j] if upper-sub
+             * But after bound sub, the effective upper bound is ub - lb (for lower)
+             * or ub - lb (for upper, but sign flipped) */
+            double eff_ub;
+            if (work->sub_type[j] == 0) {
+                /* Lower-bound sub: x' = x - lb, so x' in [0, ub - lb] */
+                eff_ub = work->ub[j] - work->lb[j];
+            } else {
+                /* Upper-bound sub: x' = ub - x, so x' in [0, ub - lb] */
+                eff_ub = work->ub[j] - work->lb[j];
+            }
+            if (eff_ub < 0.5 || eff_ub > 1e8) continue;  /* Skip if no meaningful ub */
+            b_d -= work->a_sub[j] * eff_ub;
+        }
+    }
+
+    /* Divide by delta */
+    if (fabs(delta) < CMIR_DELTA_MIN) return -1.0;
+    b_d /= delta;
+
+    double f_0 = b_d - floor(b_d);
+    if (f_0 < CMIR_FRAC_TOL || f_0 > 1.0 - CMIR_FRAC_TOL) return -1.0;
+
+    /* Compute MIR LHS and violation */
+    double lhs = 0.0;
+    double rhs_floor = floor(b_d);
+
+    for (int j = 0; j < num_orig; j++) {
+        double a_d = work->a_sub[j];
+        if (fabs(a_d) < RALPH_ZERO_TOL) continue;
+
+        /* Apply complementation */
+        double eff_ub = 0.0;
+        int complemented = 0;
+        if (work->in_C[j] && work->is_int[j]) {
+            if (work->sub_type[j] == 0) {
+                eff_ub = work->ub[j] - work->lb[j];
+            } else {
+                eff_ub = work->ub[j] - work->lb[j];
+            }
+            if (eff_ub >= 0.5 && eff_ub <= 1e8) {
+                a_d = -a_d;
+                complemented = 1;
+            }
+        }
+
+        a_d /= delta;
+
+        /* Get substituted LP value for this variable */
+        double x_sub;
+        if (work->sub_type[j] == 0) {
+            x_sub = work->x_val[j] - work->lb[j];
+        } else {
+            x_sub = work->ub[j] - work->x_val[j];
+        }
+        if (complemented) {
+            x_sub = eff_ub - x_sub;
+        }
+
+        double mir_coef;
+        if (work->is_int && work->is_int[j]) {
+            /* Integer: MIR formula */
+            double f_j = a_d - floor(a_d);
+            mir_coef = floor(a_d) + fmax(f_j - f_0, 0.0) / (1.0 - f_0);
+        } else {
+            /* Continuous: drop positive, scale negative */
+            if (a_d > RALPH_ZERO_TOL) {
+                continue;  /* Drop positive continuous terms */
+            }
+            mir_coef = a_d / (1.0 - f_0);
+        }
+
+        lhs += mir_coef * x_sub;
+    }
+
+    return lhs - rhs_floor;
+}
+
+/*
+ * Search for the best complement set C and divisor delta.
+ *
+ * Initial C: for each integer j with finite ub, set in_C[j] if the
+ * substituted value is in the upper half of its range.
+ *
+ * Delta candidates: |a_sub[j]| for each fractional integer j, plus
+ * halved/quartered variants. Complement flipping: try flipping the
+ * most ambiguous variables and keep improvements.
+ *
+ * Returns best violation; stores winning delta in *best_delta.
+ */
+static double cmir_separate(CMIRWork *work, double *best_delta)
+{
+    int num_orig = work->num_orig;
+
+    /* Initialize complement set C */
+    for (int j = 0; j < num_orig; j++) {
+        work->in_C[j] = 0;
+        if (!work->is_int || !work->is_int[j]) continue;
+        if (fabs(work->a_sub[j]) < RALPH_ZERO_TOL) continue;
+
+        double eff_ub;
+        int has_lb = (work->lb[j] > -RALPH_INFINITY + 1.0);
+        int has_ub = (work->ub[j] < RALPH_INFINITY - 1.0);
+        if (!has_lb || !has_ub) continue;
+        eff_ub = work->ub[j] - work->lb[j];
+        if (eff_ub < 0.5) continue;
+
+        /* Substituted LP value */
+        double x_sub;
+        if (work->sub_type[j] == 0) {
+            x_sub = work->x_val[j] - work->lb[j];
+        } else {
+            x_sub = work->ub[j] - work->x_val[j];
+        }
+
+        work->in_C[j] = (x_sub >= 0.5 * eff_ub) ? 1 : 0;
+    }
+
+    /* Collect delta candidates from integer variable coefficients */
+    double best_viol = -1.0;
+    *best_delta = 1.0;
+
+    /* Try delta = |a_sub[j]| for each fractional integer variable, and scaled versions */
+    for (int j = 0; j < num_orig; j++) {
+        if (!work->is_int || !work->is_int[j]) continue;
+        if (fabs(work->a_sub[j]) < CMIR_DELTA_MIN) continue;
+
+        /* Check if variable is fractional */
+        double x_sub;
+        if (work->sub_type[j] == 0) {
+            x_sub = work->x_val[j] - work->lb[j];
+        } else {
+            x_sub = work->ub[j] - work->x_val[j];
+        }
+        if (work->in_C[j]) {
+            double eff_ub = work->ub[j] - work->lb[j];
+            x_sub = eff_ub - x_sub;
+        }
+        double frac = x_sub - floor(x_sub);
+        if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) continue;
+
+        double base_d = fabs(work->a_sub[j]);
+        if (work->in_C[j]) base_d = fabs(-work->a_sub[j]);  /* After complementation */
+
+        /* Try d, d/2, d/4, d/8 */
+        double d = base_d;
+        for (int s = 0; s < 4; s++) {
+            if (d < CMIR_DELTA_MIN) break;
+            double viol = cmir_eval(work, d);
+            if (viol > best_viol) {
+                best_viol = viol;
+                *best_delta = d;
+            }
+            d *= 0.5;
+        }
+    }
+
+    /* Also try delta = 1.0 as a baseline */
+    {
+        double viol = cmir_eval(work, 1.0);
+        if (viol > best_viol) {
+            best_viol = viol;
+            *best_delta = 1.0;
+        }
+    }
+
+    /* Complement flipping: sort integer variables by ambiguity and try flips */
+    /* Build list of flippable integers */
+    int *flip_order = (int*)calloc(num_orig, sizeof(int));
+    double *flip_score = (double*)calloc(num_orig, sizeof(double));
+    int nflip = 0;
+
+    if (flip_order && flip_score) {
+        for (int j = 0; j < num_orig; j++) {
+            if (!work->is_int || !work->is_int[j]) continue;
+            if (fabs(work->a_sub[j]) < RALPH_ZERO_TOL) continue;
+            int has_lb = (work->lb[j] > -RALPH_INFINITY + 1.0);
+            int has_ub = (work->ub[j] < RALPH_INFINITY - 1.0);
+            if (!has_lb || !has_ub) continue;
+
+            double eff_ub = work->ub[j] - work->lb[j];
+            if (eff_ub < 0.5) continue;
+
+            double x_sub;
+            if (work->sub_type[j] == 0)
+                x_sub = work->x_val[j] - work->lb[j];
+            else
+                x_sub = work->ub[j] - work->x_val[j];
+
+            /* Score: how ambiguous is the complement decision (closer to 0.5 = more ambiguous) */
+            flip_order[nflip] = j;
+            flip_score[nflip] = fabs(x_sub - 0.5 * eff_ub);
+            nflip++;
+        }
+
+        /* Sort by score ascending (most ambiguous first) - simple insertion sort */
+        for (int i = 1; i < nflip; i++) {
+            int idx = flip_order[i];
+            double sc = flip_score[i];
+            int k = i - 1;
+            while (k >= 0 && flip_score[k] > sc) {
+                flip_order[k + 1] = flip_order[k];
+                flip_score[k + 1] = flip_score[k];
+                k--;
+            }
+            flip_order[k + 1] = idx;
+            flip_score[k + 1] = sc;
+        }
+
+        /* Try flipping up to 10 most ambiguous variables.
+         * Only evaluate the incumbent delta + the flipped variable's own
+         * |a_sub[j]| and halved variants (up to 5 candidates per flip)
+         * instead of re-searching all integer variables. Reduces flip phase
+         * from O(10 × K × 4 × N) to O(10 × 5 × N). */
+        int max_flips = (nflip < 10) ? nflip : 10;
+        for (int i = 0; i < max_flips; i++) {
+            int j = flip_order[i];
+            work->in_C[j] = 1 - work->in_C[j];  /* Flip */
+
+            /* Evaluate incumbent delta with new C */
+            double flip_best_delta = *best_delta;
+            double flip_best_viol = cmir_eval(work, *best_delta);
+
+            /* Evaluate flipped variable's own |a_sub[j]| and halved variants */
+            if (fabs(work->a_sub[j]) >= CMIR_DELTA_MIN) {
+                double d = fabs(work->a_sub[j]);
+                for (int s = 0; s < 4; s++) {
+                    if (d < CMIR_DELTA_MIN) break;
+                    double viol = cmir_eval(work, d);
+                    if (viol > flip_best_viol) {
+                        flip_best_viol = viol;
+                        flip_best_delta = d;
+                    }
+                    d *= 0.5;
+                }
+            }
+
+            if (flip_best_viol > best_viol) {
+                best_viol = flip_best_viol;
+                *best_delta = flip_best_delta;
+                /* Keep the flip */
+            } else {
+                work->in_C[j] = 1 - work->in_C[j];  /* Revert */
+            }
+        }
+    }
+
+    free(flip_order);
+    free(flip_score);
+
+    return best_viol;
+}
+
+/*
+ * Build the final cut from the c-MIR formula with winning (C, delta).
+ *
+ * Applies the c-MIR transformation, computes MIR coefficients, then
+ * back-substitutes through complementation and bound substitution
+ * to get coefficients in terms of the original variables.
+ */
+static Cut* cmir_build_cut(const CMIRWork *work, double delta, SimplexTableau *tab)
+{
+    int num_orig = work->num_orig;
+
+    /* Compute floor(b_d) for the RHS */
+    double b_d = work->b_sub;
+    for (int j = 0; j < num_orig; j++) {
+        if (work->in_C[j] && work->is_int[j] && fabs(work->a_sub[j]) > RALPH_ZERO_TOL) {
+            double eff_ub;
+            if (work->sub_type[j] == 0)
+                eff_ub = work->ub[j] - work->lb[j];
+            else
+                eff_ub = work->ub[j] - work->lb[j];
+            if (eff_ub >= 0.5 && eff_ub <= 1e8)
+                b_d -= work->a_sub[j] * eff_ub;
+        }
+    }
+    b_d /= delta;
+
+    double f_0 = b_d - floor(b_d);
+    if (f_0 < CMIR_FRAC_TOL || f_0 > 1.0 - CMIR_FRAC_TOL) return NULL;
+
+    /* Compute MIR coefficients in substituted space, then back-substitute */
+    double *orig_coefs = (double*)calloc(num_orig, sizeof(double));
+    if (!orig_coefs) return NULL;
+
+    double cut_rhs = floor(b_d);
+    double max_coef = 0.0;
+    int nnz = 0;
+
+    for (int j = 0; j < num_orig; j++) {
+        double a_d = work->a_sub[j];
+        if (fabs(a_d) < RALPH_ZERO_TOL) continue;
+
+        /* Apply complementation */
+        double eff_ub = 0.0;
+        int complemented = 0;
+        if (work->in_C[j] && work->is_int[j]) {
+            if (work->sub_type[j] == 0)
+                eff_ub = work->ub[j] - work->lb[j];
+            else
+                eff_ub = work->ub[j] - work->lb[j];
+            if (eff_ub >= 0.5 && eff_ub <= 1e8) {
+                a_d = -a_d;
+                complemented = 1;
+            }
+        }
+
+        a_d /= delta;
+
+        double mir_coef;
+        if (work->is_int && work->is_int[j]) {
+            double f_j = a_d - floor(a_d);
+            mir_coef = floor(a_d) + fmax(f_j - f_0, 0.0) / (1.0 - f_0);
+        } else {
+            if (a_d > RALPH_ZERO_TOL) {
+                continue;  /* Drop positive continuous */
+            }
+            mir_coef = a_d / (1.0 - f_0);
+        }
+
+        if (fabs(mir_coef) < RALPH_ZERO_TOL) continue;
+
+        /* Back-substitute: undo delta scaling (already done above),
+         * undo complementation, undo bound substitution */
+
+        /* mir_coef is in terms of the substituted+complemented variable x'.
+         * We need to express in terms of original x_j.
+         *
+         * If complemented (j in C):
+         *   x' = eff_ub - x_sub, so mir_coef * x' = mir_coef * eff_ub - mir_coef * x_sub
+         *   cut_rhs += mir_coef * eff_ub, and we use -mir_coef for x_sub
+         *
+         * If sub_type[j] == 0 (lower-bound sub):
+         *   x_sub = x_j - lb_j, so coef * x_sub = coef * x_j - coef * lb_j
+         *   orig_coefs[j] = coef, cut_rhs += coef * lb_j
+         *
+         * If sub_type[j] == 1 (upper-bound sub):
+         *   x_sub = ub_j - x_j, so coef * x_sub = coef * ub_j - coef * x_j
+         *   orig_coefs[j] = -coef, cut_rhs += coef * ub_j
+         */
+
+        double coef_for_sub = mir_coef;
+
+        if (complemented) {
+            cut_rhs += mir_coef * eff_ub;
+            coef_for_sub = -mir_coef;
+        }
+
+        if (work->sub_type[j] == 0) {
+            /* Lower bound sub: x_sub = x_j - lb */
+            orig_coefs[j] = coef_for_sub;
+            cut_rhs += coef_for_sub * work->lb[j];
+        } else {
+            /* Upper bound sub: x_sub = ub - x_j */
+            orig_coefs[j] = -coef_for_sub;
+            cut_rhs += coef_for_sub * work->ub[j];
+        }
+
+        if (fabs(orig_coefs[j]) > RALPH_ZERO_TOL) {
+            nnz++;
+            if (fabs(orig_coefs[j]) > max_coef)
+                max_coef = fabs(orig_coefs[j]);
+        }
+    }
+
+    /* Reject if empty or coefficients too large */
+    if (nnz == 0 || max_coef > CMIR_COEF_MAX) {
+        free(orig_coefs);
         return NULL;
     }
 
-    Cut *cut = cut_create(num_orig);
+    /* Build the Cut structure */
+    Cut *cut = cut_create(nnz);
     if (!cut) {
-        free(row);
-        free(cut_coefs);
+        free(orig_coefs);
         return NULL;
     }
 
     cut->type = CUT_MIR;
-    cut->sense = 'L';  /* MIR generates <= cuts */
-    cut->rhs = floor(beta);
+    cut->sense = 'L';
+    cut->rhs = cut_rhs;
 
-    /* Process each non-basic variable */
-    for (int j = 0; j < n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
-
-        /* Get tableau coefficient a_ij = row' * A_j */
-        double a_ij = 0.0;
-        for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
-            a_ij += row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
-        }
-
-        if (fabs(a_ij) < RALPH_ZERO_TOL) continue;
-
-        /* Adjust for variables at upper bound */
-        double coef = a_ij;
-        if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-            coef = -a_ij;  /* Complement: x_j -> u_j - x_j */
-        }
-
-        double mir_coef = 0.0;
-
-        if (j < num_orig && is_integer && is_integer[j]) {
-            /* Integer variable: use MIR formula */
-            double f_j = coef - floor(coef);
-            mir_coef = floor(coef) + fmax(f_j - f_0, 0.0) / (1.0 - f_0);
-        } else {
-            /* Continuous variable (including slacks) */
-            if (coef > RALPH_ZERO_TOL) {
-                mir_coef = coef / (1.0 - f_0);
-            }
-            /* Negative coefficients contribute 0 in MIR */
-        }
-
-        if (fabs(mir_coef) > RALPH_ZERO_TOL) {
-            if (j < num_orig) {
-                /* Original variable */
-                if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                    /* Undo complementation: mir_coef * (u_j - x_j) */
-                    cut_coefs[j] -= mir_coef;
-                    cut->rhs -= mir_coef * tab->ub_ext[j];
-                } else {
-                    cut_coefs[j] += mir_coef;
-                    cut->rhs += mir_coef * tab->lb_ext[j];
-                }
-            } else {
-                /* Slack variable: substitute back using constraint mapping */
-                int aux_idx = j - num_orig;
-                if (aux_idx >= 0 && aux_idx < tab->num_aux && tab->aux_row && tab->aux_coef) {
-                    int con_row = tab->aux_row[aux_idx];
-                    double aux_c = tab->aux_coef[aux_idx];
-                    LPModel *model = tab->model;
-                    double con_rhs = model->b[con_row];
-
-                    /* s = aux_c * (b - Ax), so mir_coef * s contributes:
-                     * -mir_coef * aux_c * a_k to x_k, and mir_coef * aux_c * b to RHS */
-                    if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                        /* Complemented slack */
-                        cut->rhs += mir_coef * aux_c * con_rhs;
-                        for (int k = 0; k < num_orig; k++) {
-                            double a_rk = 0.0;
-                            for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
-                                if (model->A->rowidx[p] == con_row) {
-                                    a_rk = model->A->values[p];
-                                    break;
-                                }
-                            }
-                            if (fabs(a_rk) > RALPH_ZERO_TOL) {
-                                cut_coefs[k] += mir_coef * aux_c * a_rk;
-                            }
-                        }
-                    } else {
-                        cut->rhs -= mir_coef * aux_c * con_rhs;
-                        for (int k = 0; k < num_orig; k++) {
-                            double a_rk = 0.0;
-                            for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
-                                if (model->A->rowidx[p] == con_row) {
-                                    a_rk = model->A->values[p];
-                                    break;
-                                }
-                            }
-                            if (fabs(a_rk) > RALPH_ZERO_TOL) {
-                                cut_coefs[k] -= mir_coef * aux_c * a_rk;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    free(row);
-
-    /* Convert dense to sparse */
-    for (int k = 0; k < num_orig; k++) {
-        if (fabs(cut_coefs[k]) > RALPH_ZERO_TOL) {
-            cut->indices[cut->nnz] = k;
-            cut->values[cut->nnz] = cut_coefs[k];
+    for (int j = 0; j < num_orig; j++) {
+        if (fabs(orig_coefs[j]) > RALPH_ZERO_TOL) {
+            cut->indices[cut->nnz] = j;
+            cut->values[cut->nnz] = orig_coefs[j];
             cut->nnz++;
         }
     }
-    free(cut_coefs);
 
-    /* Calculate violation: LHS - RHS for <= cut */
+    free(orig_coefs);
+
+    /* Compute violation against current LP solution */
     double lhs = 0.0;
     for (int k = 0; k < cut->nnz; k++) {
         lhs += cut->values[k] * tab->x[cut->indices[k]];
     }
     cut->violation = lhs - cut->rhs;
 
-    /* Reject if not violated or empty */
     if (cut->violation < RALPH_FEAS_TOL || cut->nnz == 0) {
         cut_free(cut);
         return NULL;
@@ -708,12 +1229,54 @@ static Cut* generate_mir_cut_from_tableau(SimplexTableau *tab, int basic_pos,
     return cut;
 }
 
-int generate_mir_cuts(MIPSolver *solver, CutPool *pool) {
+/*
+ * Generate c-MIR cuts from the LP relaxation.
+ *
+ * For each tableau row with fractional RHS (where GMI doesn't apply),
+ * tries increasing aggregation depths (0, 1, ..., CMIR_MAX_AGGR).
+ * At each depth:
+ *   1. Extract (possibly aggregated) source row
+ *   2. Bound-substitute to make variables non-negative
+ *   3. Search for best complement set C and divisor delta
+ *   4. If violation > tolerance, build cut and add to pool
+ */
+int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
+{
     SimplexTableau *tab = solver->lp_solver->tableau;
+    int num_orig = tab->model->num_vars;
+    int m = tab->m;
     int cuts_added = 0;
 
-    /* Generate MIR cuts from tableau rows with fractional RHS */
-    for (int k = 0; k < tab->m; k++) {
+    /* Allocate CMIRWork arrays once */
+    CMIRWork work;
+    memset(&work, 0, sizeof(work));
+    work.num_orig = num_orig;
+    work.is_int = solver->is_integer;
+
+    work.a = (double*)calloc(num_orig, sizeof(double));
+    work.x_val = (double*)calloc(num_orig, sizeof(double));
+    work.lb = (double*)calloc(num_orig, sizeof(double));
+    work.ub = (double*)calloc(num_orig, sizeof(double));
+    work.a_sub = (double*)calloc(num_orig, sizeof(double));
+    work.sub_type = (int*)calloc(num_orig, sizeof(int));
+    work.in_C = (int*)calloc(num_orig, sizeof(int));
+
+    int *used_rows = (int*)calloc(m, sizeof(int));
+
+    if (!work.a || !work.x_val || !work.lb || !work.ub ||
+        !work.a_sub || !work.sub_type || !work.in_C || !used_rows) {
+        goto cleanup;
+    }
+
+    /* Snapshot LP solution and bounds for original variables */
+    for (int j = 0; j < num_orig; j++) {
+        work.x_val[j] = tab->x[j];
+        work.lb[j] = tab->lb_ext[j];
+        work.ub[j] = tab->ub_ext[j];
+    }
+
+    /* Scan tableau rows */
+    for (int k = 0; k < m; k++) {
         int basic_var = tab->basis[k];
         double val = tab->x[basic_var];
         double frac = val - floor(val);
@@ -721,20 +1284,68 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool) {
         /* Skip rows with nearly-integer RHS */
         if (frac < 0.05 || frac > 0.95) continue;
 
-        /* Skip rows where GMI already applies (integer basic var) */
-        if (basic_var < solver->original_model->num_vars &&
-            solver->is_integer[basic_var]) {
-            continue;  /* GMI handles these */
+        /* Skip rows where GMI already applies (integer basic variable) */
+        if (basic_var < num_orig && solver->is_integer[basic_var]) {
+            continue;
         }
 
-        Cut *cut = generate_mir_cut_from_tableau(tab, k, solver->is_integer);
-        if (cut) {
-            cut_pool_add(pool, cut);
-            cuts_added++;
+        /* Try increasing aggregation depth */
+        int found_cut = 0;
+        for (int depth = 0; depth <= CMIR_MAX_AGGR && !found_cut; depth++) {
 
-            if (cuts_added >= solver->max_cuts_per_round) break;
+            /* Reset source row */
+            memset(work.a, 0, num_orig * sizeof(double));
+            work.b = 0.0;
+            memset(used_rows, 0, m * sizeof(int));
+
+            /* Extract base row */
+            if (!cmir_extract_source_row(tab, k, solver->is_integer,
+                                         work.a, &work.b, 0, used_rows,
+                                         work.x_val)) {
+                break;  /* Base extraction failed, skip this row */
+            }
+
+            /* Apply aggregation steps */
+            int aggr_ok = 1;
+            for (int d = 0; d < depth; d++) {
+                if (!cmir_extract_source_row(tab, k, solver->is_integer,
+                                             work.a, &work.b, 1, used_rows,
+                                             work.x_val)) {
+                    aggr_ok = 0;
+                    break;
+                }
+            }
+            if (!aggr_ok) continue;
+
+            /* Bound substitution */
+            cmir_bound_substitute(&work);
+
+            /* Search for best (C, delta) */
+            double best_delta = 1.0;
+            double best_viol = cmir_separate(&work, &best_delta);
+
+            if (best_viol > RALPH_FEAS_TOL) {
+                Cut *cut = cmir_build_cut(&work, best_delta, tab);
+                if (cut) {
+                    cut_pool_add(pool, cut);
+                    cuts_added++;
+                    found_cut = 1;
+                }
+            }
         }
+
+        if (cuts_added >= solver->max_cuts_per_round) break;
     }
+
+cleanup:
+    free(work.a);
+    free(work.x_val);
+    free(work.lb);
+    free(work.ub);
+    free(work.a_sub);
+    free(work.sub_type);
+    free(work.in_C);
+    free(used_rows);
 
     return cuts_added;
 }
