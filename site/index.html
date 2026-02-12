@@ -1790,6 +1790,201 @@
             top: 0;
         }
 
+        /* Ralph Optimization Visualization */
+        .ralph-viz-container {
+            background: linear-gradient(135deg, #1a1a1a 0%, #222 100%);
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 20px 20px 12px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .ralph-viz-container::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.12) 0px,
+                rgba(0, 0, 0, 0.12) 1px,
+                transparent 1px,
+                transparent 3px
+            );
+            pointer-events: none;
+            z-index: 2;
+            animation: crt-scanline-roll-gray 8s linear infinite;
+        }
+
+        .ralph-viz-container::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(255, 255, 255, 0.04) 0px,
+                rgba(255, 255, 255, 0.04) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+        }
+
+        .ralph-viz-canvas {
+            display: block;
+            width: 100%;
+            max-width: 720px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .ralph-viz-label {
+            font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            color: #555;
+            text-align: center;
+            margin-top: 8px;
+            position: relative;
+            z-index: 3;
+        }
+
+        .ralph-viz-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+            align-items: start;
+        }
+
+        .ralph-viz-info p {
+            font-size: 14px;
+            color: var(--text-muted);
+            line-height: 1.7;
+            margin-bottom: 16px;
+        }
+
+        .ralph-viz-info .highlight {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .ralph-viz-features {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .ralph-viz-feature {
+            font-size: 12px;
+            color: var(--text-muted);
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+
+        /* Arbor ALNS + Beam Search Visualization */
+        .arbor-viz-container {
+            background: linear-gradient(135deg, #1a1a1a 0%, #222 100%);
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 20px 20px 12px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .arbor-viz-container::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.12) 0px,
+                rgba(0, 0, 0, 0.12) 1px,
+                transparent 1px,
+                transparent 3px
+            );
+            pointer-events: none;
+            z-index: 2;
+            animation: crt-scanline-roll-gray 8s linear infinite;
+        }
+
+        .arbor-viz-container::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(255, 255, 255, 0.04) 0px,
+                rgba(255, 255, 255, 0.04) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+        }
+
+        .arbor-viz-canvas {
+            display: block;
+            width: 100%;
+            max-width: 720px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .arbor-viz-label {
+            font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            color: #555;
+            text-align: center;
+            margin-top: 8px;
+            position: relative;
+            z-index: 3;
+        }
+
+        .arbor-viz-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+            align-items: start;
+        }
+
+        .arbor-viz-info p {
+            font-size: 14px;
+            color: var(--text-muted);
+            line-height: 1.7;
+            margin-bottom: 16px;
+        }
+
+        .arbor-viz-info .highlight {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .arbor-viz-features {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .arbor-viz-feature {
+            font-size: 12px;
+            color: var(--text-muted);
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+
+        @media (max-width: 768px) {
+            .ralph-viz-grid,
+            .arbor-viz-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
         /* Responsive */
         @media (max-width: 600px) {
             .logo { font-size: 24px; }
@@ -2595,6 +2790,87 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                 </p>
             </div>
 
+            <!-- Optimization Visualization -->
+            <div class="subsection">
+                <h3 class="subsection-title">Under the Hood: Linear &amp; Integer Optimization</h3>
+                <div class="ralph-viz-grid">
+                    <div class="ralph-viz-container">
+                        <canvas id="ralph-viz" class="ralph-viz-canvas"></canvas>
+                        <div class="ralph-viz-label">Ralph: Revised Simplex &rarr; Branch &amp; Bound</div>
+                    </div>
+                    <div class="ralph-viz-info">
+                        <p>
+                            <span class="highlight">Every fleet decision is an optimization problem.</span>
+                            Which fuel stops minimize cost? Which routes satisfy time windows? How do you assign
+                            100 shipments to 30 trucks?
+                        </p>
+                        <p>
+                            Ralph solves these with the <strong>Revised Simplex</strong> method&mdash;walking
+                            the vertices of a high-dimensional polytope to find the optimum. For integer
+                            decisions (which truck, which stop), <strong>Branch &amp; Bound</strong> builds
+                            a search tree on top, pruning impossible branches and converging on the optimal
+                            integer solution.
+                        </p>
+                        <p>
+                            <strong>FuelWise</strong> uses Ralph to solve minimum-cost refueling LPs.
+                            <strong>Sigma</strong> formulates fleet plan selection as SCP/SPP and solves
+                            via Ralph&rsquo;s MIP engine. <strong>HoSE</strong> builds a time-indexed
+                            scheduling model verified through Ralph&rsquo;s LP solver.
+                        </p>
+                        <p>
+                            No external solver dependencies. The same engine runs server-side and in-browser
+                            via WebAssembly&mdash;under 100ms for 1,000 variables.
+                        </p>
+                        <div class="ralph-viz-features">
+                            <div class="ralph-viz-feature">Revised Simplex</div>
+                            <div class="ralph-viz-feature">LU Factorization</div>
+                            <div class="ralph-viz-feature">Branch &amp; Bound</div>
+                            <div class="ralph-viz-feature">Gomory Cuts</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Arbor Metaheuristic Visualization -->
+            <div class="subsection">
+                <h3 class="subsection-title">Under the Hood: Metaheuristic Search</h3>
+                <div class="arbor-viz-grid">
+                    <div class="arbor-viz-container">
+                        <canvas id="arbor-viz" class="arbor-viz-canvas"></canvas>
+                        <div class="arbor-viz-label">Arbor: ALNS Destroy/Repair &rarr; Beam Search</div>
+                    </div>
+                    <div class="arbor-viz-info">
+                        <p>
+                            <span class="highlight">Some problems are too large for exact solvers.</span>
+                            Scheduling 1,000 deliveries across 50 trucks with time windows, capacity limits,
+                            and driver constraints? The search space is astronomical.
+                        </p>
+                        <p>
+                            Arbor&rsquo;s <strong>Adaptive Large Neighborhood Search</strong> starts with a
+                            feasible solution and iteratively <em>destroys</em> parts of it (removing requests),
+                            then <em>repairs</em> (reinserting optimally). Operators that find improvements get
+                            higher selection weights&mdash;the algorithm learns which strategies work.
+                        </p>
+                        <p>
+                            For structured search, <strong>Beam Search</strong> explores a tree of partial
+                            solutions, keeping only the most promising &lsquo;beams&rsquo; at each level.
+                            Combined with lower-bound pruning, it finds near-optimal solutions in bounded time.
+                        </p>
+                        <p>
+                            <strong>Surge</strong> uses Arbor&rsquo;s ALNS to solve rich VRP/PDPTW problems.
+                            Acceptance criteria (simulated annealing, record-to-record travel) let it escape
+                            local optima and converge within 5% of best known benchmarks.
+                        </p>
+                        <div class="arbor-viz-features">
+                            <div class="arbor-viz-feature">ALNS Framework</div>
+                            <div class="arbor-viz-feature">Adaptive Weights</div>
+                            <div class="arbor-viz-feature">Beam Search</div>
+                            <div class="arbor-viz-feature">Simulated Annealing</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Core Engines -->
             <div class="subsection">
                 <h3 class="subsection-title">Core Engines</h3>
@@ -3127,6 +3403,999 @@ Dependencies:
         for (var i = 0; i < links.length; i++) {
             links[i].href = 'mailto:' + e;
         }
+    })();
+    </script>
+
+    <!-- Ralph Simplex + Branch & Bound Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('ralph-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_XL = '15px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 20000; /* ms total loop */
+
+        /* Feasible region in world coords */
+        var poly = [
+            {x: 0, y: 0},
+            {x: 4.5, y: 0},
+            {x: 3.8, y: 1.75},
+            {x: 2, y: 3.2},
+            {x: 0, y: 3.8}
+        ];
+        /* Simplex walk order & objective values */
+        var walk = [0, 1, 2, 3]; /* vertex indices */
+        var zvals = [0, 18.0, 20.3, 21.6];
+
+        /* B&B tree nodes: {x,y,label,bound,status,parent,branchLabel} */
+        var nodes = [
+            {x: 0.5, y: 0.08, label: 'LP', bound: 21.6, status: 'frac'},
+            {x: 0.25, y: 0.35, label: 'x\u2082\u22641', bound: 19.8, status: 'frac', parent: 0, branchLabel: 'x\u2082 \u2264 1'},
+            {x: 0.75, y: 0.35, label: 'x\u2082\u22652', bound: 18.5, status: 'int', parent: 0, branchLabel: 'x\u2082 \u2265 2'},
+            {x: 0.12, y: 0.62, label: 'x\u2081\u22643', bound: 17.0, status: 'int', parent: 1, branchLabel: 'x\u2081 \u2264 3'},
+            {x: 0.38, y: 0.62, label: 'x\u2081\u22654', bound: 19.0, status: 'int', parent: 1, branchLabel: 'x\u2081 \u2265 4'}
+        ];
+        /* Best integer node index */
+        var bestNode = 4;
+
+        /* World-to-canvas mapping for simplex region */
+        var ox = 60, oy = 40, pw = 260, ph = 260;
+        function wx(v) { return ox + (v / 5) * pw; }
+        function wy(v) { return oy + ph - (v / 4.2) * ph; }
+
+        /* Easing */
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        /* Lerp between two points */
+        function lerp(a, b, t) { return {x: a.x+(b.x-a.x)*t, y: a.y+(b.y-a.y)*t}; }
+
+        /* Draw dashed line */
+        function dashed(x1,y1,x2,y2,col,alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.strokeStyle = col;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4,4]);
+            ctx.beginPath();
+            ctx.moveTo(x1,y1);
+            ctx.lineTo(x2,y2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+        }
+
+        /* Draw filled circle */
+        function dot(cx,cy,r,col) {
+            ctx.beginPath();
+            ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col;
+            ctx.fill();
+        }
+
+        /* Draw text */
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        /* ─── SIMPLEX PHASE ─── */
+        function drawSimplex(t) {
+            /* t: 0→1 over simplex phase */
+            var fadeIn = Math.min(t / 0.08, 1);
+
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Axes */
+            ctx.strokeStyle = DIM;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(ox, oy);
+            ctx.lineTo(ox, oy + ph + 10);
+            ctx.lineTo(ox + pw + 10, oy + ph + 10);
+            ctx.stroke();
+
+            /* Axis labels */
+            txt('x\u2081', ox + pw + 16, oy + ph + 10, DIM, FONT_SM);
+            txt('x\u2082', ox - 4, oy - 10, DIM, FONT_SM, 'center');
+
+            /* Grid lines */
+            ctx.globalAlpha = fadeIn * 0.3;
+            for (var i = 1; i <= 4; i++) {
+                var gx = wx(i * 1.25);
+                ctx.beginPath(); ctx.moveTo(gx, oy); ctx.lineTo(gx, oy+ph+10); ctx.stroke();
+            }
+            for (var j = 1; j <= 3; j++) {
+                var gy = wy(j * 1.4);
+                ctx.beginPath(); ctx.moveTo(ox, gy); ctx.lineTo(ox+pw+10, gy); ctx.stroke();
+            }
+            ctx.globalAlpha = fadeIn;
+
+            /* Feasible region fill */
+            var regionAlpha = Math.min((t - 0.05) / 0.1, 1);
+            if (regionAlpha > 0) {
+                ctx.globalAlpha = fadeIn * regionAlpha * 0.12;
+                ctx.fillStyle = ACCENT;
+                ctx.beginPath();
+                ctx.moveTo(wx(poly[0].x), wy(poly[0].y));
+                for (var k = 1; k < poly.length; k++) {
+                    ctx.lineTo(wx(poly[k].x), wy(poly[k].y));
+                }
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            /* Feasible region border */
+            ctx.globalAlpha = fadeIn * Math.min((t - 0.05) / 0.1, 1);
+            ctx.strokeStyle = ACCENT;
+            ctx.lineWidth = 1.5;
+            ctx.globalAlpha = Math.max(ctx.globalAlpha, 0) * 0.5;
+            ctx.beginPath();
+            ctx.moveTo(wx(poly[0].x), wy(poly[0].y));
+            for (var m = 1; m < poly.length; m++) {
+                ctx.lineTo(wx(poly[m].x), wy(poly[m].y));
+            }
+            ctx.closePath();
+            ctx.stroke();
+
+            ctx.globalAlpha = fadeIn;
+
+            /* Constraint labels */
+            if (t > 0.12) {
+                var clAlpha = Math.min((t - 0.12) / 0.08, 1) * 0.5;
+                ctx.globalAlpha = clAlpha;
+                txt('c\u2081', wx(4.7), wy(-0.3), DIM, FONT_SM);
+                txt('c\u2082', wx(4.3), wy(1.2), DIM, FONT_SM);
+                txt('c\u2083', wx(3.2), wy(2.7), DIM, FONT_SM);
+                txt('c\u2084', wx(0.8), wy(3.8), DIM, FONT_SM);
+            }
+
+            ctx.globalAlpha = fadeIn;
+
+            /* Vertices (dim) */
+            if (t > 0.1) {
+                for (var vi = 0; vi < poly.length; vi++) {
+                    dot(wx(poly[vi].x), wy(poly[vi].y), 3, DIM);
+                }
+            }
+
+            /* Simplex walk animation */
+            var walkStart = 0.2;
+            var walkEnd = 0.85;
+            var walkT = Math.max(0, Math.min((t - walkStart) / (walkEnd - walkStart), 1));
+            var stepCount = walk.length - 1;
+            var currentStep = Math.min(Math.floor(walkT * stepCount), stepCount - 1);
+            var stepProgress = (walkT * stepCount) - currentStep;
+            if (walkT >= 1) { currentStep = stepCount - 1; stepProgress = 1; }
+
+            /* Draw walked path segments */
+            if (walkT > 0) {
+                ctx.strokeStyle = ACCENT;
+                ctx.lineWidth = 2;
+                ctx.shadowColor = ACCENT;
+                ctx.shadowBlur = 6;
+                for (var si = 0; si < currentStep; si++) {
+                    var from = poly[walk[si]];
+                    var to = poly[walk[si+1]];
+                    ctx.beginPath();
+                    ctx.moveTo(wx(from.x), wy(from.y));
+                    ctx.lineTo(wx(to.x), wy(to.y));
+                    ctx.stroke();
+                }
+                /* Current segment (partial) */
+                if (currentStep < stepCount) {
+                    var cfrom = poly[walk[currentStep]];
+                    var cto = poly[walk[currentStep+1]];
+                    var ep = ease(stepProgress);
+                    ctx.beginPath();
+                    ctx.moveTo(wx(cfrom.x), wy(cfrom.y));
+                    ctx.lineTo(
+                        wx(cfrom.x + (cto.x - cfrom.x) * ep),
+                        wy(cfrom.y + (cto.y - cfrom.y) * ep)
+                    );
+                    ctx.stroke();
+                }
+                ctx.shadowBlur = 0;
+
+                /* Highlight visited vertices */
+                for (var hi = 0; hi <= currentStep; hi++) {
+                    dot(wx(poly[walk[hi]].x), wy(poly[walk[hi]].y), 4, ACCENT);
+                }
+
+                /* Current position dot */
+                if (currentStep < stepCount) {
+                    var cp = poly[walk[currentStep]];
+                    var np = poly[walk[currentStep+1]];
+                    var ep2 = ease(stepProgress);
+                    var cx2 = wx(cp.x + (np.x - cp.x) * ep2);
+                    var cy2 = wy(cp.y + (np.y - cp.y) * ep2);
+                    dot(cx2, cy2, 6, ACCENT);
+                    /* Glow */
+                    ctx.beginPath();
+                    ctx.arc(cx2, cy2, 10, 0, Math.PI*2);
+                    ctx.fillStyle = ACCENT;
+                    ctx.globalAlpha = 0.15;
+                    ctx.fill();
+                    ctx.globalAlpha = fadeIn;
+                } else {
+                    /* At optimal - pulse green */
+                    var optV = poly[walk[stepCount]];
+                    var pulse = 0.5 + 0.5 * Math.sin(t * 20);
+                    dot(wx(optV.x), wy(optV.y), 5 + pulse * 2, GREEN);
+                    ctx.beginPath();
+                    ctx.arc(wx(optV.x), wy(optV.y), 12, 0, Math.PI*2);
+                    ctx.fillStyle = GREEN;
+                    ctx.globalAlpha = 0.1 + 0.05 * pulse;
+                    ctx.fill();
+                    ctx.globalAlpha = fadeIn;
+                }
+            }
+
+            /* Objective function line (sweeping) */
+            if (walkT > 0 && walkT < 1) {
+                var zNow = zvals[currentStep] + (zvals[Math.min(currentStep+1, stepCount)] - zvals[currentStep]) * ease(stepProgress);
+                /* Draw iso-profit line perpendicular to gradient (5,4) direction */
+                var intercept = zNow / 5;
+                dashed(wx(intercept), wy(0), wx(0), wy(intercept * 5/4.2), YELLOW, 0.25);
+            }
+
+            /* Status text on right side */
+            var rx = 370, ry = 60;
+            txt('REVISED SIMPLEX', rx, ry, DIM, FONT_LG);
+            ctx.strokeStyle = DIM;
+            ctx.lineWidth = 0.5;
+            ctx.beginPath(); ctx.moveTo(rx, ry+10); ctx.lineTo(rx+180, ry+10); ctx.stroke();
+
+            if (walkT > 0) {
+                var dispStep = walkT >= 1 ? stepCount : currentStep + 1;
+                var dispZ = walkT >= 1 ? zvals[stepCount] : zvals[currentStep] + (zvals[Math.min(currentStep+1, stepCount)] - zvals[currentStep]) * ease(stepProgress);
+
+                txt('Iteration ' + dispStep + ' / ' + stepCount, rx, ry + 34, GRAY, FONT);
+                txt('z = ' + dispZ.toFixed(1), rx, ry + 56, BRIGHT, FONT_LG);
+
+                /* Progress bar */
+                var barW = 160, barH = 4;
+                var barX = rx, barY = ry + 74;
+                ctx.fillStyle = '#2a2a2a';
+                ctx.fillRect(barX, barY, barW, barH);
+                ctx.fillStyle = ACCENT;
+                ctx.fillRect(barX, barY, barW * (dispStep / stepCount), barH);
+            }
+
+            if (walkT >= 1) {
+                var fracAlpha = Math.min((t - (walkStart + (walkEnd-walkStart))) / 0.08, 1);
+                ctx.globalAlpha = fracAlpha;
+                txt('LP Optimal: z* = ' + zvals[stepCount].toFixed(1), rx, ry + 104, GREEN, FONT);
+                txt('x\u2082 = 1.75  (fractional)', rx, ry + 124, YELLOW, FONT);
+                txt('Integer solution needed...', rx, ry + 154, DIM, FONT_SM);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── BRANCH & BOUND PHASE ─── */
+        function drawBB(t) {
+            /* t: 0→1 over B&B phase */
+            var treeX = 60, treeY = 30, treeW = W - 120, treeH = H - 60;
+
+            ctx.save();
+
+            /* Title */
+            txt('BRANCH & BOUND', W/2, 22, DIM, FONT_LG, 'center');
+
+            /* How many nodes visible */
+            var nodeTimings = [0, 0.15, 0.15, 0.42, 0.42];
+            var nodeRevealed = [0, 0.25, 0.30, 0.55, 0.60];
+
+            /* Draw edges first */
+            for (var i = 1; i < nodes.length; i++) {
+                if (t < nodeTimings[i]) continue;
+                var edgeT = Math.min((t - nodeTimings[i]) / 0.1, 1);
+                var parent = nodes[nodes[i].parent];
+                var child = nodes[i];
+                var px = treeX + parent.x * treeW;
+                var py = treeY + parent.y * treeH;
+                var cx = treeX + child.x * treeW;
+                var cy = treeY + child.y * treeH;
+
+                var mx = px + (cx - px) * edgeT;
+                var my = py + (cy - py) * edgeT;
+
+                ctx.strokeStyle = DIM;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(px, py + 16);
+                ctx.lineTo(mx, my - (my > py + 16 ? 16 : 0));
+                ctx.stroke();
+
+                /* Branch label */
+                if (edgeT > 0.5) {
+                    var lx = (px + cx) / 2;
+                    var ly = (py + cy) / 2 - 8;
+                    ctx.globalAlpha = (edgeT - 0.5) * 2;
+                    txt(child.branchLabel, lx, ly, DIM, FONT_SM, 'center');
+                    ctx.globalAlpha = 1;
+                }
+            }
+
+            /* Draw nodes */
+            for (var ni = 0; ni < nodes.length; ni++) {
+                if (t < nodeRevealed[ni]) continue;
+                var nodeT = Math.min((t - nodeRevealed[ni]) / 0.08, 1);
+                var n = nodes[ni];
+                var nx = treeX + n.x * treeW;
+                var ny = treeY + n.y * treeH;
+
+                var boxW = 90, boxH = 32;
+                var scale = ease(nodeT);
+
+                ctx.save();
+                ctx.translate(nx, ny);
+                ctx.scale(scale, scale);
+
+                /* Node box */
+                var isBest = ni === bestNode && t > 0.75;
+                var borderCol = isBest ? GREEN : (n.status === 'frac' ? ACCENT : '#555');
+                ctx.fillStyle = '#1a1a1a';
+                ctx.strokeStyle = borderCol;
+                ctx.lineWidth = isBest ? 2 : 1;
+                ctx.beginPath();
+                ctx.roundRect(-boxW/2, -boxH/2, boxW, boxH, 4);
+                ctx.fill();
+                ctx.stroke();
+
+                /* Glow for best node */
+                if (isBest) {
+                    var glowT = (t - 0.75) / 0.25;
+                    ctx.shadowColor = GREEN;
+                    ctx.shadowBlur = 8 + 4 * Math.sin(glowT * 12);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+
+                /* Node text */
+                txt('z = ' + n.bound.toFixed(1), 0, -4, isBest ? GREEN : BRIGHT, FONT, 'center');
+
+                /* Status indicator */
+                if (n.status === 'int') {
+                    var statusCol = isBest ? GREEN : GRAY;
+                    txt(isBest ? 'optimal' : 'integer', 0, 10, statusCol, FONT_SM, 'center');
+                } else {
+                    txt('fractional', 0, 10, YELLOW, FONT_SM, 'center');
+                }
+
+                ctx.restore();
+            }
+
+            /* Pruning marks */
+            if (t > 0.68) {
+                var pruneAlpha = Math.min((t - 0.68) / 0.08, 1);
+                ctx.globalAlpha = pruneAlpha;
+                /* Node 3 is pruned (z=17.0 < 18.5 incumbent from node 2) */
+                var pn = nodes[3];
+                var pnx = treeX + pn.x * treeW;
+                var pny = treeY + pn.y * treeH;
+                ctx.strokeStyle = RED;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(pnx - 52, pny - 20);
+                ctx.lineTo(pnx + 52, pny + 20);
+                ctx.moveTo(pnx + 52, pny - 20);
+                ctx.lineTo(pnx - 52, pny + 20);
+                ctx.stroke();
+                txt('pruned', pnx, pny + 28, RED, FONT_SM, 'center');
+                ctx.globalAlpha = 1;
+            }
+
+            /* Result text */
+            if (t > 0.8) {
+                var resAlpha = Math.min((t - 0.8) / 0.1, 1);
+                ctx.globalAlpha = resAlpha;
+                var resultY = treeY + 0.85 * treeH;
+                txt('MIP Optimal: z* = ' + nodes[bestNode].bound.toFixed(1), W/2, resultY, GREEN, FONT_XL, 'center');
+                txt('Integer solution found in 4 LP solves', W/2, resultY + 22, DIM, FONT, 'center');
+                ctx.globalAlpha = 1;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false;
+        var startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.48) {
+                /* Simplex phase: 0 - 48% */
+                drawSimplex(t / 0.48);
+            } else if (t < 0.52) {
+                /* Crossfade transition */
+                var fadeT = (t - 0.48) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawSimplex(1);
+                ctx.globalAlpha = fadeT;
+                drawBB(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                /* B&B phase: 52% - 95% */
+                drawBB((t - 0.52) / 0.43);
+            } else {
+                /* Hold result, fade out */
+                var fadeOut = 1 - (t - 0.95) / 0.05;
+                ctx.globalAlpha = fadeOut;
+                drawBB(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        /* Only animate when visible */
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true;
+                    startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) {
+                    running = false;
+                }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
+    })();
+    </script>
+
+    <!-- Arbor ALNS + Beam Search Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('arbor-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var ORANGE = '#f97316';
+        var PURPLE = '#a855f7';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_XL = '15px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 24000;
+
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        function dot(cx,cy,r,col) {
+            ctx.beginPath();
+            ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col;
+            ctx.fill();
+        }
+
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        /* ─── ROUTE DATA ─── */
+        /* Depot + 12 customer nodes arranged in a rough cluster */
+        var depot = {x: 360, y: 200};
+        var customers = [
+            {x: 140, y: 80},  {x: 200, y: 140}, {x: 120, y: 200},
+            {x: 180, y: 280}, {x: 260, y: 100}, {x: 300, y: 300},
+            {x: 440, y: 80},  {x: 520, y: 150}, {x: 580, y: 90},
+            {x: 480, y: 280}, {x: 560, y: 240}, {x: 600, y: 310}
+        ];
+
+        /* Route colors for 3 vehicles */
+        var routeColors = [ACCENT, GREEN, ORANGE];
+
+        /* Initial (suboptimal) routes: vehicle assignments */
+        var initRoutes = [
+            [0, 4, 6, 8, 2],       /* blue: scattered */
+            [1, 7, 10, 3],          /* green: scattered */
+            [5, 9, 11]              /* orange: ok cluster */
+        ];
+
+        /* Improved routes after ALNS iterations */
+        var midRoutes = [
+            [0, 1, 2, 3],          /* blue: left cluster */
+            [4, 6, 8, 7],          /* green: top-right */
+            [5, 9, 10, 11]         /* orange: bottom-right */
+        ];
+
+        /* Final optimized routes */
+        var finalRoutes = [
+            [0, 1, 2, 3],
+            [4, 6, 8, 7],
+            [5, 9, 10, 11]
+        ];
+
+        /* Cost values over ALNS iterations */
+        var costHistory = [
+            2480, 2350, 2280, 2180, 2120, 2050, 1980, 1940,
+            1920, 1905, 1895, 1880, 1870, 1862, 1858, 1855
+        ];
+
+        /* Operator weights (evolving) */
+        var operators = [
+            {name: 'remove_worst', weights: [0.25, 0.35, 0.40, 0.38]},
+            {name: 'remove_related', weights: [0.25, 0.30, 0.35, 0.40]},
+            {name: 'remove_random', weights: [0.25, 0.20, 0.15, 0.12]},
+            {name: 'remove_segment', weights: [0.25, 0.15, 0.10, 0.10]}
+        ];
+
+        /* Draw a route as depot → customers → depot */
+        function drawRoute(route, color, alpha, lineWidth) {
+            if (route.length === 0) return;
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = lineWidth || 1.5;
+            ctx.beginPath();
+            ctx.moveTo(depot.x, depot.y);
+            for (var i = 0; i < route.length; i++) {
+                ctx.lineTo(customers[route[i]].x, customers[route[i]].y);
+            }
+            ctx.lineTo(depot.x, depot.y);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        /* Draw all customers and depot */
+        function drawNodes(highlightSet, destroyedSet) {
+            /* Depot */
+            ctx.fillStyle = BRIGHT;
+            ctx.fillRect(depot.x - 5, depot.y - 5, 10, 10);
+            ctx.strokeStyle = BRIGHT;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(depot.x - 5, depot.y - 5, 10, 10);
+
+            /* Customers */
+            for (var i = 0; i < customers.length; i++) {
+                var c = customers[i];
+                if (destroyedSet && destroyedSet.indexOf(i) >= 0) {
+                    /* Destroyed node - hollow red */
+                    ctx.beginPath();
+                    ctx.arc(c.x, c.y, 5, 0, Math.PI*2);
+                    ctx.strokeStyle = RED;
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                    /* X mark */
+                    ctx.beginPath();
+                    ctx.moveTo(c.x-3, c.y-3); ctx.lineTo(c.x+3, c.y+3);
+                    ctx.moveTo(c.x+3, c.y-3); ctx.lineTo(c.x-3, c.y+3);
+                    ctx.stroke();
+                } else if (highlightSet && highlightSet.indexOf(i) >= 0) {
+                    /* Highlighted (being reinserted) */
+                    dot(c.x, c.y, 5, GREEN);
+                    ctx.beginPath();
+                    ctx.arc(c.x, c.y, 9, 0, Math.PI*2);
+                    ctx.strokeStyle = GREEN;
+                    ctx.lineWidth = 1;
+                    ctx.globalAlpha = 0.4;
+                    ctx.stroke();
+                    ctx.globalAlpha = 1;
+                } else {
+                    dot(c.x, c.y, 4, GRAY);
+                }
+            }
+        }
+
+        /* Draw cost chart */
+        function drawCostChart(x, y, w, h, progress) {
+            var visibleCount = Math.max(2, Math.ceil(progress * costHistory.length));
+            var maxC = costHistory[0], minC = costHistory[costHistory.length-1];
+            var range = maxC - minC + 200;
+
+            /* Axes */
+            ctx.strokeStyle = DIM;
+            ctx.lineWidth = 0.5;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y + h);
+            ctx.lineTo(x + w, y + h);
+            ctx.stroke();
+
+            /* Cost line */
+            ctx.strokeStyle = ACCENT;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            for (var i = 0; i < visibleCount; i++) {
+                var px = x + (i / (costHistory.length - 1)) * w;
+                var py = y + h - ((costHistory[i] - minC + 100) / range) * h;
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+
+            /* Current cost dot */
+            var lastIdx = visibleCount - 1;
+            var lx = x + (lastIdx / (costHistory.length - 1)) * w;
+            var ly = y + h - ((costHistory[lastIdx] - minC + 100) / range) * h;
+            dot(lx, ly, 3, ACCENT);
+
+            /* Labels */
+            txt('cost', x - 4, y - 8, DIM, FONT_SM, 'center');
+            txt('iteration', x + w / 2, y + h + 14, DIM, FONT_SM, 'center');
+            txt(costHistory[lastIdx].toString(), lx + 8, ly - 8, BRIGHT, FONT_SM);
+        }
+
+        /* Draw operator weight bars */
+        function drawWeights(x, y, progress) {
+            var phase = Math.min(Math.floor(progress * 4), 3);
+            txt('OPERATOR WEIGHTS', x, y, DIM, FONT_SM);
+            for (var i = 0; i < operators.length; i++) {
+                var oy = y + 18 + i * 22;
+                var w = operators[i].weights[phase];
+                /* Name */
+                txt(operators[i].name, x, oy, GRAY, FONT_SM);
+                /* Bar background */
+                ctx.fillStyle = '#2a2a2a';
+                ctx.fillRect(x + 110, oy - 4, 80, 8);
+                /* Bar fill */
+                var barCol = w >= 0.35 ? GREEN : (w >= 0.2 ? ACCENT : DIM);
+                ctx.fillStyle = barCol;
+                ctx.fillRect(x + 110, oy - 4, 80 * w / 0.5, 8);
+                /* Value */
+                txt((w * 100).toFixed(0) + '%', x + 196, oy, DIM, FONT_SM);
+            }
+        }
+
+        /* ─── ALNS PHASE ─── */
+        function drawALNS(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Title */
+            txt('ADAPTIVE LARGE NEIGHBORHOOD SEARCH', 30, 22, DIM, FONT_LG);
+            ctx.strokeStyle = DIM; ctx.lineWidth = 0.5;
+            ctx.beginPath(); ctx.moveTo(30, 32); ctx.lineTo(340, 32); ctx.stroke();
+
+            /* Determine which ALNS iteration we're showing */
+            var iterPhase = Math.min(t / 0.9, 1);
+            var totalIters = 8;
+            var currentIter = Math.min(Math.floor(iterPhase * totalIters), totalIters - 1);
+            var iterFrac = (iterPhase * totalIters) - currentIter;
+
+            /* Which route set to show */
+            var routes;
+            if (currentIter < 2) routes = initRoutes;
+            else if (currentIter < 5) routes = midRoutes;
+            else routes = finalRoutes;
+
+            /* Destroy phase (first half of each iteration) */
+            var destroying = iterFrac < 0.4;
+            var repairing = iterFrac >= 0.4 && iterFrac < 0.7;
+            var destroyedNodes = [];
+            var repairNodes = [];
+
+            if (destroying || repairing) {
+                /* Pick 2-3 nodes to destroy based on iteration */
+                var seed = currentIter * 3;
+                destroyedNodes = [
+                    customers.length > 0 ? (seed) % customers.length : 0,
+                    customers.length > 0 ? (seed + 3) % customers.length : 1,
+                    customers.length > 0 ? (seed + 7) % customers.length : 2
+                ];
+            }
+            if (repairing) {
+                repairNodes = destroyedNodes;
+                destroyedNodes = [];
+            }
+
+            /* Draw routes */
+            for (var r = 0; r < routes.length; r++) {
+                var routeAlpha = 0.6;
+                drawRoute(routes[r], routeColors[r], routeAlpha, 1.5);
+            }
+
+            /* Draw nodes */
+            drawNodes(repairNodes, destroyedNodes);
+
+            /* Status text */
+            var statusX = 30, statusY = 52;
+            txt('Iteration ' + (currentIter + 1) + ' / ' + totalIters, statusX, statusY, GRAY, FONT);
+
+            if (destroying) {
+                txt('DESTROY', statusX + 140, statusY, RED, FONT);
+                txt('removing worst requests...', statusX, statusY + 18, DIM, FONT_SM);
+            } else if (repairing) {
+                txt('REPAIR', statusX + 140, statusY, GREEN, FONT);
+                txt('reinserting at best positions...', statusX, statusY + 18, DIM, FONT_SM);
+            } else {
+                var accepted = iterFrac > 0.85;
+                if (accepted) {
+                    txt('ACCEPT', statusX + 140, statusY, GREEN, FONT);
+                    txt('solution improved \u2192 accepted', statusX, statusY + 18, DIM, FONT_SM);
+                } else {
+                    txt('EVALUATE', statusX + 140, statusY, YELLOW, FONT);
+                    txt('SA: T=' + (800 - currentIter * 90).toFixed(0) + ', \u0394cost=' + (-30 - currentIter * 8).toFixed(0), statusX, statusY + 18, DIM, FONT_SM);
+                }
+            }
+
+            /* Depot label */
+            txt('depot', depot.x + 10, depot.y - 10, DIM, FONT_SM);
+
+            /* Cost chart - bottom right area */
+            drawCostChart(490, 20, 190, 90, iterPhase);
+
+            /* Operator weights - bottom right */
+            drawWeights(470, 150, iterPhase);
+
+            /* Temperature curve label */
+            if (t > 0.3) {
+                var tempAlpha = Math.min((t - 0.3) / 0.1, 1);
+                ctx.globalAlpha = tempAlpha * fadeIn;
+                txt('SA Temperature', 490, 270, DIM, FONT_SM);
+                /* Small temp bar */
+                var temp = 1.0 - iterPhase * 0.8;
+                ctx.fillStyle = '#2a2a2a';
+                ctx.fillRect(490, 282, 190, 6);
+                var tempGrad = ctx.createLinearGradient(490, 0, 680, 0);
+                tempGrad.addColorStop(0, RED);
+                tempGrad.addColorStop(1, ACCENT);
+                ctx.fillStyle = tempGrad;
+                ctx.fillRect(490, 282, 190 * temp, 6);
+                txt(temp > 0.5 ? 'exploring' : 'exploiting', 490, 298, temp > 0.5 ? ORANGE : ACCENT, FONT_SM);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            /* Result at end */
+            if (t > 0.92) {
+                var resAlpha = Math.min((t - 0.92) / 0.06, 1);
+                ctx.globalAlpha = resAlpha;
+                txt('Cost: ' + costHistory[costHistory.length-1] + '  (-25.2%)', 30, H - 20, GREEN, FONT_LG);
+                txt('16 iterations \u00b7 3 vehicles \u00b7 12 stops', 30, H - 4, DIM, FONT_SM);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── BEAM SEARCH PHASE ─── */
+        function drawBeam(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Title */
+            txt('BEAM SEARCH (width=3)', W/2, 22, DIM, FONT_LG, 'center');
+
+            /* Tree structure: 5 levels, each with expanding then pruned nodes */
+            var levels = 5;
+            var beamWidth = 3;
+            /* Nodes per level before pruning */
+            var nodesPerLevel = [1, 3, 6, 6, 5];
+            /* Which survive (indices into that level) */
+            var survivors = [
+                [0],
+                [0, 1, 2],
+                [0, 2, 4],
+                [1, 3, 5],
+                [0, 2, 4]
+            ];
+            /* Lower bounds for each surviving node */
+            var bounds = [
+                [0],
+                [42, 38, 45],
+                [35, 31, 40],
+                [28, 25, 33],
+                [22, 19, 26]
+            ];
+
+            var levelH = (H - 80) / levels;
+            var treeTop = 42;
+
+            /* How far through the tree we are */
+            var buildT = Math.min(t / 0.85, 1);
+            var levelsShown = Math.min(Math.floor(buildT * (levels + 1)), levels);
+            var levelFrac = (buildT * (levels + 1)) - levelsShown;
+
+            for (var lv = 0; lv < levelsShown; lv++) {
+                var ly = treeTop + lv * levelH + levelH * 0.5;
+                var totalNodes = nodesPerLevel[lv];
+                var surv = survivors[lv];
+                var levelBounds = bounds[lv];
+                var nodeW = W / (totalNodes + 1);
+
+                for (var ni = 0; ni < totalNodes; ni++) {
+                    var nx = nodeW * (ni + 1);
+                    var isSurvivor = surv.indexOf(ni) >= 0;
+                    var survIdx = surv.indexOf(ni);
+
+                    /* Draw edge from parent */
+                    if (lv > 0) {
+                        var parentSurv = survivors[lv-1];
+                        var parentLevel = nodesPerLevel[lv-1];
+                        /* Each parent spawns ~2 children */
+                        var parentIdx = Math.min(Math.floor(ni / 2), parentSurv.length - 1);
+                        var parentNi = parentSurv[parentIdx];
+                        var parentNodeW = W / (parentLevel + 1);
+                        var px = parentNodeW * (parentNi + 1);
+                        var py = treeTop + (lv-1) * levelH + levelH * 0.5;
+
+                        ctx.strokeStyle = isSurvivor ? DIM : '#2a2a2a';
+                        ctx.lineWidth = isSurvivor ? 1 : 0.5;
+                        ctx.beginPath();
+                        ctx.moveTo(px, py + 14);
+                        ctx.lineTo(nx, ly - 14);
+                        ctx.stroke();
+                    }
+
+                    /* Node circle/box */
+                    if (isSurvivor) {
+                        var isLeaf = lv === levelsShown - 1;
+                        var isBest = lv === levels - 1 && survIdx === 1;
+                        var col = isBest ? GREEN : ACCENT;
+                        ctx.fillStyle = '#1a1a1a';
+                        ctx.strokeStyle = col;
+                        ctx.lineWidth = isBest ? 2 : 1;
+                        ctx.beginPath();
+                        ctx.roundRect(nx - 28, ly - 12, 56, 24, 4);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        if (isBest) {
+                            ctx.shadowColor = GREEN;
+                            ctx.shadowBlur = 8;
+                            ctx.stroke();
+                            ctx.shadowBlur = 0;
+                        }
+
+                        txt('lb=' + levelBounds[survIdx], nx, ly, isBest ? GREEN : BRIGHT, FONT_SM, 'center');
+                    } else {
+                        /* Pruned node */
+                        ctx.fillStyle = '#1a1a1a';
+                        ctx.strokeStyle = '#333';
+                        ctx.lineWidth = 0.5;
+                        ctx.beginPath();
+                        ctx.roundRect(nx - 20, ly - 10, 40, 20, 3);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        /* X through it */
+                        ctx.strokeStyle = RED;
+                        ctx.lineWidth = 1;
+                        ctx.globalAlpha = 0.5 * fadeIn;
+                        ctx.beginPath();
+                        ctx.moveTo(nx-12, ly-6); ctx.lineTo(nx+12, ly+6);
+                        ctx.moveTo(nx+12, ly-6); ctx.lineTo(nx-12, ly+6);
+                        ctx.stroke();
+                        ctx.globalAlpha = fadeIn;
+                    }
+                }
+
+                /* Level label */
+                txt('d=' + lv, 16, ly, DIM, FONT_SM);
+            }
+
+            /* Current level animation (partial) */
+            if (levelsShown < levels && levelFrac > 0.3) {
+                var animLv = levelsShown;
+                var animLy = treeTop + animLv * levelH + levelH * 0.5;
+                var expandAlpha = Math.min((levelFrac - 0.3) / 0.4, 1);
+                ctx.globalAlpha = expandAlpha * fadeIn;
+                txt('expanding...', W/2, animLy, YELLOW, FONT_SM, 'center');
+                ctx.globalAlpha = fadeIn;
+            }
+
+            /* Beam width indicator */
+            txt('beam width = ' + beamWidth, W - 120, H - 40, ACCENT, FONT);
+
+            /* Result */
+            if (t > 0.88) {
+                var resAlpha = Math.min((t - 0.88) / 0.08, 1);
+                ctx.globalAlpha = resAlpha;
+                txt('Best: lb = 19  (depth 4)', W/2, H - 16, GREEN, FONT_LG, 'center');
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false;
+        var startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.48) {
+                /* ALNS phase */
+                drawALNS(t / 0.48);
+            } else if (t < 0.52) {
+                /* Crossfade */
+                var fadeT = (t - 0.48) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawALNS(1);
+                ctx.globalAlpha = fadeT;
+                drawBeam(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                /* Beam search phase */
+                drawBeam((t - 0.52) / 0.43);
+            } else {
+                /* Hold + fade */
+                var fadeOut = 1 - (t - 0.95) / 0.05;
+                ctx.globalAlpha = fadeOut;
+                drawBeam(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true;
+                    startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) {
+                    running = false;
+                }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
     })();
     </script>
 </body>
