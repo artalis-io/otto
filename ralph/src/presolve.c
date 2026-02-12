@@ -45,6 +45,8 @@ static PresolveContext* presolve_context_create(LPModel *model) {
     ctx->probing = 0;               /* MIP only */
     ctx->detect_redundant_rows = 1; /* Only removes redundant equality constraints */
 
+    ctx->technique_mask = 0xFFFF;  /* All techniques enabled by default */
+
     ctx->max_rounds = 20;  /* Multiple rounds for fixed-point convergence (GLOP uses 20) */
     ctx->current_round = 0;
 
@@ -2433,10 +2435,16 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
  * ============================================================================ */
 
 PresolveResult* presolve(LPModel *model) {
+    return presolve_with_mask(model, PRESOLVE_ALL);
+}
+
+PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) {
     if (!model) return NULL;
 
     PresolveContext *ctx = presolve_context_create(model);
     if (!ctx) return NULL;
+
+    ctx->technique_mask = technique_mask;
 
     /* Enable probing for MIP (models with binary variables) */
     if (model->num_binary > 0) {
@@ -2453,55 +2461,55 @@ PresolveResult* presolve(LPModel *model) {
     int changed = 1;
     int status = 0;
 
+    unsigned int mask = ctx->technique_mask;
+
     while (changed && ctx->current_round < ctx->max_rounds && status >= 0) {
         changed = 0;
         ctx->current_round++;
 
-        if (ctx->remove_fixed_vars) {
+        if (ctx->remove_fixed_vars && (mask & PRESOLVE_FIXED_VARS)) {
             int n = presolve_remove_fixed_vars(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->vars_removed += n;
         }
 
-        if (ctx->remove_empty_rows) {
+        if (ctx->remove_empty_rows && (mask & PRESOLVE_EMPTY_ROWS)) {
             int n = presolve_remove_empty_rows(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->cons_removed += n;
         }
 
-        if (ctx->remove_empty_cols) {
+        if (ctx->remove_empty_cols && (mask & PRESOLVE_EMPTY_COLS)) {
             int n = presolve_remove_empty_cols(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->vars_removed += n;
         }
 
-        if (ctx->remove_singleton_rows) {
+        if (ctx->remove_singleton_rows && (mask & PRESOLVE_SINGLETON_ROWS)) {
             int n = presolve_singleton_rows(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->cons_removed += n;
         }
 
-        if (ctx->remove_singleton_cols) {
+        if (ctx->remove_singleton_cols && (mask & PRESOLVE_SINGLETON_COLS)) {
             int n = presolve_singleton_cols(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->bounds_tightened += n;
         }
 
-        /* Implied free variable detection (enables more doubleton eliminations) */
-        {
+        if (mask & PRESOLVE_IMPLIED_FREE) {
             int n = presolve_implied_free(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->bounds_tightened += n;
         }
 
-        /* Doubleton equality elimination (highest-impact LP technique) */
-        {
+        if (mask & PRESOLVE_DOUBLETON_EQ) {
             int n = presolve_doubleton_equality(ctx, result);
             if (n < 0) { status = -1; break; }
             changed += n;
@@ -2509,60 +2517,53 @@ PresolveResult* presolve(LPModel *model) {
             result->cons_removed += n;
         }
 
-        if (ctx->remove_forcing_cons) {
+        if (ctx->remove_forcing_cons && (mask & PRESOLVE_FORCING)) {
             int n = presolve_forcing_constraints(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->cons_removed += n;
         }
 
-        if (ctx->bound_tightening) {
+        if (ctx->bound_tightening && (mask & PRESOLVE_BOUND_TIGHTENING)) {
             int n = presolve_bound_tightening(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->bounds_tightened += n;
         }
 
-        /* Proportional row detection */
-        {
+        if (mask & PRESOLVE_PROPORTIONAL_ROWS) {
             int n = presolve_proportional_rows(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->cons_removed += n;
         }
 
-        /* Proportional column detection */
-        {
+        if (mask & PRESOLVE_PROPORTIONAL_COLS) {
             int n = presolve_proportional_cols(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->vars_removed += n;
         }
 
-        /* MIP-specific: probing for binary variables */
-        if (ctx->probing && model->num_binary > 0) {
+        if (ctx->probing && model->num_binary > 0 && (mask & PRESOLVE_PROBING)) {
             int n = presolve_probing(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
-            result->vars_removed += n;  /* Probing fixes variables */
+            result->vars_removed += n;
         }
     }
 
-    /* Shift variable bounds (one-time, after main loop stabilizes).
-     * x' = x - lb so all lower bounds become zero. */
-    if (status >= 0) {
+    /* Shift variable bounds (one-time, after main loop stabilizes) */
+    if (status >= 0 && (mask & PRESOLVE_SHIFT_BOUNDS)) {
         int n = presolve_shift_bounds(ctx, result);
         result->bounds_tightened += n;
     }
 
-    /* Redundant row detection via rank computation.
-     * This is expensive O(m*n*min(m,n)) so we do it once AFTER other
-     * reductions have stabilized. Critical for equality-heavy problems
-     * like beaconfd (140 equalities out of 173 constraints). */
-    if (status >= 0 && ctx->detect_redundant_rows) {
+    /* Redundant row detection via rank computation */
+    if (status >= 0 && ctx->detect_redundant_rows && (mask & PRESOLVE_REDUNDANT_ROWS)) {
         int n = presolve_detect_redundant_rows(ctx);
         if (n < 0) {
-            status = -1;  /* Inconsistent system detected */
+            status = -1;
         } else {
             result->cons_removed += n;
             result->matrix_rank = ctx->matrix_rank;

@@ -476,9 +476,17 @@ int dual_reopt(SimplexSolver *solver, int max_pivots) {
             return 0;
         }
 
-        /* TODO: Objective cutoff pruning — requires verifying that
-         * tab->obj_value is updated after each dual pivot. Currently
-         * obj_value is only accurate after tableau_compute_solution(). */
+        /* Objective cutoff pruning. tab->obj_value is updated after each
+         * dual_simplex_pivot() (line ~357). In dual simplex the objective
+         * monotonically increases (internal minimization), so once it
+         * exceeds the cutoff the node's LP optimal is provably worse
+         * than the incumbent — prune immediately. */
+        if (solver->objective_cutoff < RALPH_INFINITY &&
+            tab->obj_value >= solver->objective_cutoff - RALPH_OPT_TOL) {
+            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+            solver->iterations = iter;
+            return 1;  /* Fathomed by bound */
+        }
 
         /* Dual ratio test to find entering variable */
         int entering;

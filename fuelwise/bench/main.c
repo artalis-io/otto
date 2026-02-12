@@ -20,7 +20,8 @@
  */
 
 #include "fw_bench.h"
-#include "sh_args.h"  /* For sh_parse_int */
+#include "fw_refuel.h"  /* For fw_set_presolve */
+#include "sh_args.h"    /* For sh_parse_int */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +52,8 @@ static void print_usage(const char *prog)
     printf("  --milp           Use MILP solver (default: LP)\n");
     printf("  --benders        Use Benders decomposition solver\n");
     printf("  --glpk           Compare against GLPK (requires glpsol)\n");
+    printf("  --presolve       Enable Ralph presolve for MILP\n");
+    printf("  --presolve-mask N  Presolve technique bitmask (hex, default 0xFFFF=all)\n");
     printf("  --json           Output as JSON\n");
     printf("  --verbose        Print per-run details\n");
     printf("  --all            Run all scenarios\n");
@@ -63,6 +66,8 @@ typedef struct {
     uint64_t seed;
     FWSolverType solver_type;
     int glpk_compare;
+    int presolve;
+    unsigned int presolve_mask;
     int as_json;
     int verbose;
     int run_all;
@@ -75,6 +80,8 @@ static int parse_args(int argc, char **argv, BenchOptions *opts)
     opts->seed = 0;
     opts->solver_type = FW_SOLVER_LP;
     opts->glpk_compare = 0;
+    opts->presolve = 0;
+    opts->presolve_mask = 0xFFFF;
     opts->as_json = 0;
     opts->verbose = 0;
     opts->run_all = 0;
@@ -95,6 +102,11 @@ static int parse_args(int argc, char **argv, BenchOptions *opts)
             opts->solver_type = FW_SOLVER_BENDERS;
         } else if (strcmp(argv[i], "--glpk") == 0) {
             opts->glpk_compare = 1;
+        } else if (strcmp(argv[i], "--presolve") == 0) {
+            opts->presolve = 1;
+        } else if (strcmp(argv[i], "--presolve-mask") == 0 && i + 1 < argc) {
+            opts->presolve_mask = (unsigned int)strtoul(argv[++i], NULL, 0);
+            opts->presolve = 1;
         } else if (strcmp(argv[i], "--json") == 0) {
             opts->as_json = 1;
         } else if (strcmp(argv[i], "--verbose") == 0) {
@@ -196,6 +208,11 @@ int main(int argc, char **argv)
     /* Default seed from time if not specified */
     if (opts.seed == 0) {
         opts.seed = (uint64_t)time(NULL);
+    }
+
+    /* Configure presolve if requested */
+    if (opts.presolve) {
+        fw_set_presolve(1, opts.presolve_mask);
     }
 
     int failures = 0;

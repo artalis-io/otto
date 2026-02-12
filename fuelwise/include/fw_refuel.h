@@ -147,6 +147,7 @@ int fw_get_benders_threshold(void);
 
 void fw_set_mip_hint_flags(int flags);
 int fw_get_mip_hint_flags(void);
+void fw_set_presolve(int enable, unsigned int mask);
 
 /*
  * Export the MILP model as an LP file (without domain hints).
