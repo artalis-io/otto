@@ -1790,8 +1790,8 @@
             top: 0;
         }
 
-        /* Ralph Optimization Visualization */
-        .ralph-viz-container {
+        /* Algorithm Visualization - shared styles */
+        .algo-viz-crt {
             background: linear-gradient(135deg, #1a1a1a 0%, #222 100%);
             border: 1px solid #333;
             border-radius: 6px;
@@ -1800,7 +1800,7 @@
             overflow: hidden;
         }
 
-        .ralph-viz-container::before {
+        .algo-viz-crt::before {
             content: '';
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -1816,7 +1816,7 @@
             animation: crt-scanline-roll-gray 8s linear infinite;
         }
 
-        .ralph-viz-container::after {
+        .algo-viz-crt::after {
             content: '';
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -1830,7 +1830,7 @@
             pointer-events: none;
         }
 
-        .ralph-viz-canvas {
+        .algo-viz-canvas {
             display: block;
             width: 100%;
             max-width: 720px;
@@ -1839,7 +1839,7 @@
             z-index: 1;
         }
 
-        .ralph-viz-label {
+        .algo-viz-label {
             font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
             font-size: 11px;
             color: #555;
@@ -1849,127 +1849,33 @@
             z-index: 3;
         }
 
-        .ralph-viz-grid {
+        .algo-viz-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 32px;
             align-items: start;
         }
 
-        .ralph-viz-info p {
+        .algo-viz-info p {
             font-size: 14px;
             color: var(--text-muted);
             line-height: 1.7;
             margin-bottom: 16px;
         }
 
-        .ralph-viz-info .highlight {
+        .algo-viz-info .highlight {
             color: var(--text);
             font-weight: 500;
         }
 
-        .ralph-viz-features {
+        .algo-viz-features {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 10px;
             margin-top: 8px;
         }
 
-        .ralph-viz-feature {
-            font-size: 12px;
-            color: var(--text-muted);
-            padding: 8px 12px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-        }
-
-        /* Arbor ALNS + Beam Search Visualization */
-        .arbor-viz-container {
-            background: linear-gradient(135deg, #1a1a1a 0%, #222 100%);
-            border: 1px solid #333;
-            border-radius: 6px;
-            padding: 20px 20px 12px;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .arbor-viz-container::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: repeating-linear-gradient(
-                0deg,
-                rgba(0, 0, 0, 0.12) 0px,
-                rgba(0, 0, 0, 0.12) 1px,
-                transparent 1px,
-                transparent 3px
-            );
-            pointer-events: none;
-            z-index: 2;
-            animation: crt-scanline-roll-gray 8s linear infinite;
-        }
-
-        .arbor-viz-container::after {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: repeating-linear-gradient(
-                0deg,
-                rgba(255, 255, 255, 0.04) 0px,
-                rgba(255, 255, 255, 0.04) 1px,
-                transparent 1px,
-                transparent 2px
-            );
-            pointer-events: none;
-        }
-
-        .arbor-viz-canvas {
-            display: block;
-            width: 100%;
-            max-width: 720px;
-            margin: 0 auto;
-            position: relative;
-            z-index: 1;
-        }
-
-        .arbor-viz-label {
-            font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
-            font-size: 11px;
-            color: #555;
-            text-align: center;
-            margin-top: 8px;
-            position: relative;
-            z-index: 3;
-        }
-
-        .arbor-viz-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 32px;
-            align-items: start;
-        }
-
-        .arbor-viz-info p {
-            font-size: 14px;
-            color: var(--text-muted);
-            line-height: 1.7;
-            margin-bottom: 16px;
-        }
-
-        .arbor-viz-info .highlight {
-            color: var(--text);
-            font-weight: 500;
-        }
-
-        .arbor-viz-features {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-top: 8px;
-        }
-
-        .arbor-viz-feature {
+        .algo-viz-feature {
             font-size: 12px;
             color: var(--text-muted);
             padding: 8px 12px;
@@ -1979,8 +1885,7 @@
         }
 
         @media (max-width: 768px) {
-            .ralph-viz-grid,
-            .arbor-viz-grid {
+            .algo-viz-grid {
                 grid-template-columns: 1fr;
             }
         }
@@ -2793,12 +2698,12 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
             <!-- Optimization Visualization -->
             <div class="subsection">
                 <h3 class="subsection-title">Under the Hood: Linear &amp; Integer Optimization</h3>
-                <div class="ralph-viz-grid">
-                    <div class="ralph-viz-container">
-                        <canvas id="ralph-viz" class="ralph-viz-canvas"></canvas>
-                        <div class="ralph-viz-label">Ralph: Revised Simplex &rarr; Branch &amp; Bound</div>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="ralph-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Ralph: Revised Simplex &rarr; Branch &amp; Bound</div>
                     </div>
-                    <div class="ralph-viz-info">
+                    <div class="algo-viz-info">
                         <p>
                             <span class="highlight">Every fleet decision is an optimization problem.</span>
                             Which fuel stops minimize cost? Which routes satisfy time windows? How do you assign
@@ -2821,11 +2726,11 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                             No external solver dependencies. The same engine runs server-side and in-browser
                             via WebAssembly&mdash;under 100ms for 1,000 variables.
                         </p>
-                        <div class="ralph-viz-features">
-                            <div class="ralph-viz-feature">Revised Simplex</div>
-                            <div class="ralph-viz-feature">LU Factorization</div>
-                            <div class="ralph-viz-feature">Branch &amp; Bound</div>
-                            <div class="ralph-viz-feature">Gomory Cuts</div>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Revised Simplex</div>
+                            <div class="algo-viz-feature">LU Factorization</div>
+                            <div class="algo-viz-feature">Branch &amp; Bound</div>
+                            <div class="algo-viz-feature">Gomory Cuts</div>
                         </div>
                     </div>
                 </div>
@@ -2834,12 +2739,12 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
             <!-- Arbor Metaheuristic Visualization -->
             <div class="subsection">
                 <h3 class="subsection-title">Under the Hood: Metaheuristic Search</h3>
-                <div class="arbor-viz-grid">
-                    <div class="arbor-viz-container">
-                        <canvas id="arbor-viz" class="arbor-viz-canvas"></canvas>
-                        <div class="arbor-viz-label">Arbor: ALNS Destroy/Repair &rarr; Beam Search</div>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="arbor-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Arbor: ALNS Destroy/Repair &rarr; Beam Search</div>
                     </div>
-                    <div class="arbor-viz-info">
+                    <div class="algo-viz-info">
                         <p>
                             <span class="highlight">Some problems are too large for exact solvers.</span>
                             Scheduling 1,000 deliveries across 50 trucks with time windows, capacity limits,
@@ -2861,11 +2766,51 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                             Acceptance criteria (simulated annealing, record-to-record travel) let it escape
                             local optima and converge within 5% of best known benchmarks.
                         </p>
-                        <div class="arbor-viz-features">
-                            <div class="arbor-viz-feature">ALNS Framework</div>
-                            <div class="arbor-viz-feature">Adaptive Weights</div>
-                            <div class="arbor-viz-feature">Beam Search</div>
-                            <div class="arbor-viz-feature">Simulated Annealing</div>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">ALNS Framework</div>
+                            <div class="algo-viz-feature">Adaptive Weights</div>
+                            <div class="algo-viz-feature">Beam Search</div>
+                            <div class="algo-viz-feature">Simulated Annealing</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Velo Routing Visualization -->
+            <div class="subsection">
+                <h3 class="subsection-title">Under the Hood: Graph Routing</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="velo-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Velo: Bidirectional A* &rarr; ALT Landmarks</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Routing is graph search at scale.</span>
+                            A country-scale OSM graph has millions of nodes and edges. Naive Dijkstra
+                            explores them all. Smarter algorithms explore far fewer.
+                        </p>
+                        <p>
+                            <strong>Bidirectional A*</strong> searches from both ends simultaneously.
+                            The forward frontier expands from origin, the backward from destination,
+                            guided by a Haversine heuristic. When they meet, the shortest path is found
+                            having explored a fraction of the graph.
+                        </p>
+                        <p>
+                            <strong>ALT</strong> (A* with Landmarks and Triangle inequality) precomputes
+                            distances to strategic landmark nodes. The triangle inequality
+                            <em>d(s,t) &ge; |d(s,L) &minus; d(t,L)|</em> gives a much tighter lower bound
+                            than Haversine alone, pruning 5&ndash;10x more of the search space.
+                        </p>
+                        <p>
+                            Velo builds a CSR graph from OSM PBF files, supports truck/car/bike/foot
+                            profiles, and serves routes under 100ms at country scale.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Bidirectional A*</div>
+                            <div class="algo-viz-feature">ALT Landmarks</div>
+                            <div class="algo-viz-feature">CSR Graph</div>
+                            <div class="algo-viz-feature">Truck Profiles</div>
                         </div>
                     </div>
                 </div>
@@ -4377,6 +4322,487 @@ Dependencies:
                 var fadeOut = 1 - (t - 0.95) / 0.05;
                 ctx.globalAlpha = fadeOut;
                 drawBeam(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true;
+                    startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) {
+                    running = false;
+                }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
+    })();
+    </script>
+
+    <!-- Velo Bidirectional A* + ALT Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('velo-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var ORANGE = '#f97316';
+        var PURPLE = '#a855f7';
+        var CYAN = '#06b6d4';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_XL = '15px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 22000;
+
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        function dot(cx,cy,r,col) {
+            ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col; ctx.fill();
+        }
+
+        function ring(cx,cy,r,col,lw) {
+            ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.strokeStyle = col; ctx.lineWidth = lw || 1; ctx.stroke();
+        }
+
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        /* ─── GRAPH DATA ─── */
+        /* 6×9 grid with jitter → road-network-like graph */
+        var COLS = 9, ROWS = 6;
+        var gNodes = [];
+        /* Deterministic jitter via simple hash */
+        function jitter(r,c,axis) {
+            var v = Math.sin(r*17.3 + c*13.7 + axis*7.1) * 14;
+            return v;
+        }
+        var graphL = 40, graphR = 660, graphT = 55, graphB = 355;
+        for (var r = 0; r < ROWS; r++) {
+            for (var c = 0; c < COLS; c++) {
+                gNodes.push({
+                    x: graphL + c * ((graphR-graphL)/(COLS-1)) + jitter(r,c,0),
+                    y: graphT + r * ((graphB-graphT)/(ROWS-1)) + jitter(r,c,1),
+                    id: r * COLS + c
+                });
+            }
+        }
+
+        /* Edges: horizontal + vertical neighbors, some diagonals, some removed */
+        var gEdges = [];
+        function addEdge(a,b) { gEdges.push([a,b]); }
+        for (var r = 0; r < ROWS; r++) {
+            for (var c = 0; c < COLS; c++) {
+                var id = r * COLS + c;
+                /* right */
+                if (c < COLS-1) {
+                    var skip = Math.sin(r*11+c*23) > 0.7;
+                    if (!skip) addEdge(id, id+1);
+                }
+                /* down */
+                if (r < ROWS-1) {
+                    var skip2 = Math.sin(r*23+c*11) > 0.75;
+                    if (!skip2) addEdge(id, id+COLS);
+                }
+                /* diagonal */
+                if (c < COLS-1 && r < ROWS-1 && Math.sin(r*7+c*19) > 0.4) {
+                    addEdge(id, id+COLS+1);
+                }
+            }
+        }
+
+        /* Source: left-middle, Target: right-middle */
+        var SRC = 2 * COLS + 0;  /* row 2, col 0 */
+        var TGT = 3 * COLS + 8;  /* row 3, col 8 */
+
+        /* BFS-like distances from source and target for animation ordering */
+        function bfsOrder(start) {
+            var visited = {}; visited[start] = 0;
+            var queue = [start]; var order = [start];
+            while (queue.length > 0) {
+                var cur = queue.shift();
+                var d = visited[cur];
+                for (var e = 0; e < gEdges.length; e++) {
+                    var nb = -1;
+                    if (gEdges[e][0] === cur) nb = gEdges[e][1];
+                    else if (gEdges[e][1] === cur) nb = gEdges[e][0];
+                    if (nb >= 0 && visited[nb] === undefined) {
+                        visited[nb] = d + 1;
+                        queue.push(nb);
+                        order.push(nb);
+                    }
+                }
+            }
+            return {order: order, dist: visited};
+        }
+
+        var fwdBFS = bfsOrder(SRC);
+        var bwdBFS = bfsOrder(TGT);
+
+        /* Approximate shortest path (greedy toward target) */
+        function greedyPath(src, tgt) {
+            var path = [src]; var visited = {}; visited[src] = true;
+            var cur = src;
+            for (var step = 0; step < 20 && cur !== tgt; step++) {
+                var bestNb = -1, bestDist = Infinity;
+                for (var e = 0; e < gEdges.length; e++) {
+                    var nb = -1;
+                    if (gEdges[e][0] === cur) nb = gEdges[e][1];
+                    else if (gEdges[e][1] === cur) nb = gEdges[e][0];
+                    if (nb >= 0 && !visited[nb]) {
+                        var dx = gNodes[nb].x - gNodes[tgt].x;
+                        var dy = gNodes[nb].y - gNodes[tgt].y;
+                        var d = dx*dx + dy*dy;
+                        if (d < bestDist) { bestDist = d; bestNb = nb; }
+                    }
+                }
+                if (bestNb < 0) break;
+                visited[bestNb] = true;
+                path.push(bestNb);
+                cur = bestNb;
+            }
+            return path;
+        }
+
+        var shortPath = greedyPath(SRC, TGT);
+
+        /* Landmarks for ALT phase: 3 corners */
+        var landmarks = [
+            {node: 0, label: 'L\u2081'},                      /* top-left */
+            {node: (ROWS-1)*COLS + COLS-1, label: 'L\u2082'},  /* bottom-right */
+            {node: COLS-1, label: 'L\u2083'}                   /* top-right */
+        ];
+
+        /* ─── DRAWING HELPERS ─── */
+        function drawGraph(alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            /* Edges */
+            ctx.strokeStyle = '#2a2a2a';
+            ctx.lineWidth = 1;
+            for (var e = 0; e < gEdges.length; e++) {
+                var a = gNodes[gEdges[e][0]], b = gNodes[gEdges[e][1]];
+                ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+            }
+            /* Nodes */
+            for (var i = 0; i < gNodes.length; i++) {
+                dot(gNodes[i].x, gNodes[i].y, 2.5, '#444');
+            }
+            ctx.restore();
+        }
+
+        function drawSourceTarget() {
+            /* Source */
+            dot(gNodes[SRC].x, gNodes[SRC].y, 6, GREEN);
+            ring(gNodes[SRC].x, gNodes[SRC].y, 10, GREEN, 1);
+            txt('S', gNodes[SRC].x - 18, gNodes[SRC].y, GREEN, FONT, 'center');
+            /* Target */
+            dot(gNodes[TGT].x, gNodes[TGT].y, 6, RED);
+            ring(gNodes[TGT].x, gNodes[TGT].y, 10, RED, 1);
+            txt('T', gNodes[TGT].x + 18, gNodes[TGT].y, RED, FONT, 'center');
+        }
+
+        function drawPath(path, col, alpha, lineWidth) {
+            if (path.length < 2) return;
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.strokeStyle = col;
+            ctx.lineWidth = lineWidth || 2.5;
+            ctx.shadowColor = col;
+            ctx.shadowBlur = 6;
+            ctx.beginPath();
+            ctx.moveTo(gNodes[path[0]].x, gNodes[path[0]].y);
+            for (var i = 1; i < path.length; i++) {
+                ctx.lineTo(gNodes[path[i]].x, gNodes[path[i]].y);
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.restore();
+        }
+
+        /* ─── BIDIRECTIONAL A* PHASE ─── */
+        function drawBidir(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Title */
+            txt('BIDIRECTIONAL A*', W/2, 18, DIM, FONT_LG, 'center');
+
+            drawGraph(0.7);
+
+            /* Expand forward and backward frontiers */
+            var expandEnd = 0.75;
+            var expandT = Math.min(t / expandEnd, 1);
+
+            /* Forward explored nodes (sorted by distance from source) */
+            var fwdCount = Math.floor(expandT * fwdBFS.order.length * 0.55);
+            var fwdExplored = {};
+            for (var fi = 0; fi < fwdCount; fi++) {
+                var fn = fwdBFS.order[fi];
+                fwdExplored[fn] = true;
+                var a = ease(Math.min((expandT - fi/(fwdBFS.order.length*0.55)) * 6, 1));
+                ctx.globalAlpha = fadeIn * a * 0.35;
+                dot(gNodes[fn].x, gNodes[fn].y, 8, ACCENT);
+                ctx.globalAlpha = fadeIn;
+                dot(gNodes[fn].x, gNodes[fn].y, 3.5, ACCENT);
+            }
+
+            /* Backward explored nodes */
+            var bwdCount = Math.floor(expandT * bwdBFS.order.length * 0.55);
+            var bwdExplored = {};
+            for (var bi = 0; bi < bwdCount; bi++) {
+                var bn = bwdBFS.order[bi];
+                bwdExplored[bn] = true;
+                var ab = ease(Math.min((expandT - bi/(bwdBFS.order.length*0.55)) * 6, 1));
+                ctx.globalAlpha = fadeIn * ab * 0.35;
+                dot(gNodes[bn].x, gNodes[bn].y, 8, ORANGE);
+                ctx.globalAlpha = fadeIn;
+                dot(gNodes[bn].x, gNodes[bn].y, 3.5, ORANGE);
+            }
+
+            /* Meeting point flash */
+            var meetT = t - expandEnd;
+            if (meetT > 0) {
+                /* Find meeting nodes (explored by both) */
+                for (var mi = 0; mi < gNodes.length; mi++) {
+                    if (fwdExplored[mi] && bwdExplored[mi]) {
+                        var pulse = 0.5 + 0.5 * Math.sin(meetT * 30);
+                        ctx.globalAlpha = fadeIn * (0.3 + 0.2 * pulse);
+                        dot(gNodes[mi].x, gNodes[mi].y, 10, BRIGHT);
+                        ctx.globalAlpha = fadeIn;
+                    }
+                }
+            }
+
+            /* Show path once frontiers have met */
+            if (t > expandEnd + 0.05) {
+                var pathAlpha = Math.min((t - expandEnd - 0.05) / 0.1, 1);
+                drawPath(shortPath, BRIGHT, pathAlpha, 2.5);
+            }
+
+            drawSourceTarget();
+
+            /* Stats panel */
+            var sx = 30, sy = H - 55;
+            var fwdN = fwdCount, bwdN = bwdCount, totalN = gNodes.length;
+            txt('Forward:  ' + fwdN + ' nodes', sx, sy, ACCENT, FONT);
+            txt('Backward: ' + bwdN + ' nodes', sx, sy + 16, ORANGE, FONT);
+            var explored = fwdN + bwdN;
+            txt('Total explored: ' + explored + ' / ' + totalN + '  (' + Math.round(explored/totalN*100) + '%)', sx, sy + 36, GRAY, FONT);
+
+            if (t > expandEnd + 0.1) {
+                var ra = Math.min((t - expandEnd - 0.1) / 0.08, 1);
+                ctx.globalAlpha = ra * fadeIn;
+                txt('Path found: ' + shortPath.length + ' hops', W - 200, sy + 36, GREEN, FONT);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── ALT LANDMARKS PHASE ─── */
+        function drawALT(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Title */
+            txt('ALT: A* + LANDMARKS + TRIANGLE INEQUALITY', W/2, 18, DIM, FONT_LG, 'center');
+
+            drawGraph(0.7);
+
+            /* Draw landmarks as diamonds */
+            for (var li = 0; li < landmarks.length; li++) {
+                var lm = landmarks[li];
+                var ln = gNodes[lm.node];
+                var lAlpha = Math.min(t / 0.15, 1);
+                ctx.save();
+                ctx.globalAlpha = fadeIn * lAlpha;
+                ctx.translate(ln.x, ln.y);
+                /* Diamond shape */
+                ctx.fillStyle = YELLOW;
+                ctx.beginPath();
+                ctx.moveTo(0, -8); ctx.lineTo(7, 0);
+                ctx.lineTo(0, 8); ctx.lineTo(-7, 0);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = YELLOW;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                /* Glow */
+                ctx.globalAlpha = fadeIn * lAlpha * 0.15;
+                ctx.beginPath();
+                ctx.arc(0, 0, 16, 0, Math.PI*2);
+                ctx.fill();
+                ctx.restore();
+                /* Label */
+                ctx.globalAlpha = fadeIn * lAlpha;
+                txt(lm.label, ln.x, ln.y - 16, YELLOW, FONT_SM, 'center');
+            }
+
+            ctx.globalAlpha = fadeIn;
+
+            /* Triangle inequality visualization (lines from S and T to landmark) */
+            if (t > 0.1 && t < 0.4) {
+                var triAlpha = Math.min((t - 0.1) / 0.1, 1) * Math.min((0.4 - t) / 0.1, 1);
+                ctx.save();
+                ctx.globalAlpha = fadeIn * triAlpha * 0.3;
+                ctx.setLineDash([4,4]);
+                var lmNode = gNodes[landmarks[0].node];
+                ctx.strokeStyle = YELLOW;
+                ctx.lineWidth = 1;
+                /* S → L */
+                ctx.beginPath();
+                ctx.moveTo(gNodes[SRC].x, gNodes[SRC].y);
+                ctx.lineTo(lmNode.x, lmNode.y);
+                ctx.stroke();
+                /* T → L */
+                ctx.beginPath();
+                ctx.moveTo(gNodes[TGT].x, gNodes[TGT].y);
+                ctx.lineTo(lmNode.x, lmNode.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+
+                /* Triangle inequality text */
+                ctx.globalAlpha = fadeIn * triAlpha;
+                txt('d(S,T) \u2265 |d(S,L) \u2212 d(T,L)|', W/2, H - 20, YELLOW, FONT, 'center');
+                txt('tighter lower bound \u2192 less exploration', W/2, H - 4, DIM, FONT_SM, 'center');
+                ctx.globalAlpha = fadeIn;
+            }
+
+            /* ALT search: much tighter expansion (only ~25% of nodes) */
+            var searchStart = 0.2;
+            var searchEnd = 0.72;
+            if (t > searchStart) {
+                var searchT = Math.min((t - searchStart) / (searchEnd - searchStart), 1);
+
+                /* Only explore nodes near the path corridor */
+                var pathSet = {};
+                for (var pi = 0; pi < shortPath.length; pi++) pathSet[shortPath[pi]] = true;
+
+                /* Explore nodes near the path + small neighborhood */
+                var altExplored = [];
+                for (var ni = 0; ni < gNodes.length; ni++) {
+                    /* Distance to nearest path node */
+                    var minDist = Infinity;
+                    for (var pj = 0; pj < shortPath.length; pj++) {
+                        var pn = gNodes[shortPath[pj]];
+                        var dx = gNodes[ni].x - pn.x;
+                        var dy = gNodes[ni].y - pn.y;
+                        var d = Math.sqrt(dx*dx + dy*dy);
+                        if (d < minDist) minDist = d;
+                    }
+                    if (minDist < 80) altExplored.push({node: ni, dist: minDist});
+                }
+                altExplored.sort(function(a,b) { return a.dist - b.dist; });
+
+                var altCount = Math.floor(searchT * altExplored.length);
+                for (var ai = 0; ai < altCount; ai++) {
+                    var an = altExplored[ai].node;
+                    var aa = ease(Math.min((searchT - ai/altExplored.length) * 4, 1));
+                    ctx.globalAlpha = fadeIn * aa * 0.3;
+                    dot(gNodes[an].x, gNodes[an].y, 7, PURPLE);
+                    ctx.globalAlpha = fadeIn;
+                    dot(gNodes[an].x, gNodes[an].y, 3, PURPLE);
+                }
+
+                /* Path highlight */
+                if (t > searchEnd) {
+                    var pathA = Math.min((t - searchEnd) / 0.08, 1);
+                    drawPath(shortPath, BRIGHT, pathA, 2.5);
+                }
+
+                /* Stats */
+                ctx.globalAlpha = fadeIn;
+                var altN = altCount;
+                txt('ALT explored: ' + altN + ' / ' + gNodes.length + '  (' + Math.round(altN/gNodes.length*100) + '%)', 30, H - 55, PURPLE, FONT);
+            }
+
+            drawSourceTarget();
+
+            /* Comparison stats at bottom */
+            if (t > searchEnd + 0.05) {
+                var cmpA = Math.min((t - searchEnd - 0.05) / 0.1, 1);
+                ctx.globalAlpha = cmpA * fadeIn;
+
+                /* A* bar */
+                var barX = 30, barY = H - 36;
+                txt('Bidir A*:', barX, barY, ACCENT, FONT_SM);
+                ctx.fillStyle = '#2a2a2a'; ctx.fillRect(barX+68, barY-4, 160, 8);
+                ctx.fillStyle = ACCENT; ctx.fillRect(barX+68, barY-4, 160 * 0.55, 8);
+                txt('55%', barX+235, barY, ACCENT, FONT_SM);
+
+                /* ALT bar */
+                txt('ALT:', barX, barY + 18, PURPLE, FONT_SM);
+                ctx.fillStyle = '#2a2a2a'; ctx.fillRect(barX+68, barY+14, 160, 8);
+                ctx.fillStyle = PURPLE; ctx.fillRect(barX+68, barY+14, 160 * 0.20, 8);
+                txt('20%', barX+235, barY + 18, PURPLE, FONT_SM);
+
+                txt('5\u201310x fewer nodes explored', W - 220, H - 16, GREEN, FONT);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false;
+        var startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.46) {
+                drawBidir(t / 0.46);
+            } else if (t < 0.50) {
+                var fadeT = (t - 0.46) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawBidir(1);
+                ctx.globalAlpha = fadeT;
+                drawALT(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                drawALT((t - 0.50) / 0.45);
+            } else {
+                var fadeOut = 1 - (t - 0.95) / 0.05;
+                ctx.globalAlpha = fadeOut;
+                drawALT(1);
                 ctx.globalAlpha = 1;
             }
 
