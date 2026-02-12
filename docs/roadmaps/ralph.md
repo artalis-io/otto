@@ -4,8 +4,11 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**`4387869`** (2026-02-12) — HYBRID node selection + PATH B LU reuse. Ralph beats GLPK on
-milp15 (9x) and milp30 (1.9x), 24/24 objective matches. All tests pass (Ralph 150, FuelWise 123).
+**`b1d0e8c`** (2026-02-12) — Objective cutoff + lightweight presolve with priority remapping.
+Ralph beats GLPK through milp75: milp15 (6.4x), milp30 (2.5x), milp50 (1.3x), milp75 (~tied).
+30/30 objective matches. All tests pass (Ralph 194, FuelWise 123).
+
+Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 
 ## Status Summary (Feb 2026)
 
