@@ -81,11 +81,11 @@ int main(void) {
     printf("Status without presolve: %s\n", ralph_status_string(status_no_presolve));
     printf("Iterations without presolve: %d\n", iters_no_presolve);
 
-    /* Without presolve, beaconfd typically fails due to numerical issues */
-    TEST(status_no_presolve != RALPH_STATUS_OPTIMAL,
-         "Without presolve, problem fails (expected - numerically challenging)");
+    /* beaconfd was originally numerically challenging without presolve,
+     * but solver improvements (dual rescue, basis stabilization) now
+     * allow it to solve. Accept OPTIMAL or non-stall (>120 iters). */
     TEST(status_no_presolve == RALPH_STATUS_OPTIMAL || iters_no_presolve > 120,
-         "No-presolve path progresses beyond old Phase-1 stall (~120 iterations)");
+         "No-presolve path solves or progresses beyond old Phase-1 stall (~120 iterations)");
 
     /* Test WITH presolve */
     printf("\n--- Test 2: Solve WITH presolve ---\n");

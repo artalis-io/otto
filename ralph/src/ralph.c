@@ -329,12 +329,22 @@ int ralph_optimize(RalphModel *model) {
         }
     }
 
-    /* Apply presolve if enabled (special structure already handled above) */
+    /* Apply presolve if enabled (special structure already handled above).
+     * For MIP: auto-enable lightweight presolve (0x110F) unless user
+     * explicitly disabled it. Avoids SINGLETON_COLS, PROBING, and
+     * PROPORTIONAL_ROWS which interact badly in B&B. */
     PresolveResult *presolved = NULL;
     LPModel *solve_model = model->lp_model;
+    int use_presolve = model->presolve;
+    unsigned int use_mask = model->presolve_mask;
 
-    if (model->presolve) {
-        presolved = presolve_with_mask(model->lp_model, model->presolve_mask);
+    if (!use_presolve && ralph_is_mip(model) && model->presolve != -1) {
+        use_presolve = 1;
+        use_mask = 0x110F;  /* FIXED+EMPTY+SINGL_ROW+BOUND_TIGHT+SHIFT */
+    }
+
+    if (use_presolve) {
+        presolved = presolve_with_mask(model->lp_model, use_mask);
         if (presolved && presolved->reduced_model) {
             solve_model = presolved->reduced_model;
             if (model->verbose) {
@@ -1069,7 +1079,7 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     if (STREQ(name, "max_iterations") || STREQ(name, "IterationLimit")) {
         model->max_iterations = value;
     } else if (STREQ(name, "presolve") || STREQ(name, "Presolve")) {
-        model->presolve = value;
+        model->presolve = value ? 1 : -1;  /* -1 = explicitly off (skips MIP auto-enable) */
     } else if (STREQ(name, "verbose") || STREQ(name, "OutputFlag")) {
         model->verbose = value;
     } else if (STREQ(name, "max_nodes") || STREQ(name, "NodeLimit")) {
@@ -1128,7 +1138,7 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
     if (STREQ(name, "max_iterations")) {
         *value = model->max_iterations;
     } else if (STREQ(name, "presolve")) {
-        *value = model->presolve;
+        *value = (model->presolve > 0) ? 1 : 0;
     } else if (STREQ(name, "verbose")) {
         *value = model->verbose;
     } else if (STREQ(name, "max_nodes")) {
