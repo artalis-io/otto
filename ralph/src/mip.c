@@ -669,55 +669,48 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         }
     }
 
-    /* === PATH B: Non-child with saved basis — restore + refactorize ===
+    /* === PATH B: Non-child — reuse current LU, update bounds ===
      *
-     * The node has a saved basis (copied from its parent when the child was
-     * created) but the tableau's current LU doesn't match. Restore the basis,
-     * refactorize, then run dual re-optimization.
-     *
-     * Only attempted if PATH A wasn't applicable (different subtree).
+     * The tableau has valid LU factors from the last solved node. Instead of
+     * restoring the node's saved basis (which requires O(m³) refactorization),
+     * just update bounds and run dual_reopt from the current basis. Each dual
+     * pivot is O(m) with LU update — far cheaper than full refactorization
+     * even if more pivots are needed to reach optimality.
      */
-    if (!warm_start_success && !attempted_warm_start &&
-        lp->tableau && node->basis && node->var_status &&
-        node->basis_size > 0 && node->var_status_size > 0) {
+    if (!warm_start_success && !attempted_warm_start && lp->tableau) {
 
         SimplexTableau *tab = lp->tableau;
+        attempted_warm_start = 1;
 
-        if (tab->m == node->basis_size && tab->n == node->var_status_size) {
-            attempted_warm_start = 1;
+        /* Update structural variable bounds in tableau */
+        for (int j = 0; j < model->num_vars; j++) {
+            tab->lb_ext[j] = node->lb[j];
+            tab->ub_ext[j] = node->ub[j];
+        }
 
-            /* Update structural variable bounds in tableau */
-            for (int j = 0; j < model->num_vars; j++) {
-                tab->lb_ext[j] = node->lb[j];
-                tab->ub_ext[j] = node->ub[j];
+        /* Push non-basic variables to their (possibly changed) bounds */
+        for (int j = 0; j < tab->n; j++) {
+            if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
+                tab->x[j] = tab->lb_ext[j];
+            } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
+                tab->x[j] = tab->ub_ext[j];
+            } else if (tab->var_status[j] == RALPH_FIXED) {
+                tab->x[j] = tab->lb_ext[j];
             }
+        }
 
-            /* Restore basis from node (includes LU refactorization) */
-            if (restore_basis_from_node(lp, node) == 0) {
-                /* Push non-basic variables to their new bounds */
-                for (int j = 0; j < tab->n; j++) {
-                    if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                        tab->x[j] = tab->lb_ext[j];
-                    } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                        tab->x[j] = tab->ub_ext[j];
-                    } else if (tab->var_status[j] == RALPH_FIXED) {
-                        tab->x[j] = tab->lb_ext[j];
-                    }
-                }
+        /* Larger budget: basis may be far from optimal for this node */
+        int budget = 10 * tab->m;
+        if (budget > 2000) budget = 2000;
 
-                int budget = 3 * tab->m;
-                if (budget > 500) budget = 500;
-
-                int result = dual_reopt(lp, budget);
-                if (result == 0) {
-                    warm_start_success = 1;
-                } else if (result == 1) {
-                    node->lp_status = RALPH_STATUS_INFEASIBLE;
-                    node->lp_bound = lp->obj_value;
-                    solver->last_solved_node_id = node->id;
-                    return -1;
-                }
-            }
+        int result = dual_reopt(lp, budget);
+        if (result == 0) {
+            warm_start_success = 1;
+        } else if (result == 1) {
+            node->lp_status = RALPH_STATUS_INFEASIBLE;
+            node->lp_bound = lp->obj_value;
+            solver->last_solved_node_id = node->id;
+            return -1;
         }
     }
 

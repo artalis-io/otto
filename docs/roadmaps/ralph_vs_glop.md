@@ -16,7 +16,7 @@ MIP branch-and-bound performance.
 | Aspect | GLOP | Ralph (before) | Ralph (after `dual_reopt`) |
 |--------|------|----------------|---------------------------|
 | Default for LP | Dual simplex | Primal simplex | Primal (cold start), Dual (B&B reopt) |
-| B&B re-optimization | Load parent basis, dual simplex does 1-5 pivots | `has_fixed_basic` check aborted warm start on ALL binary MIPs → cold start every node | `dual_reopt()`: 1-3 pivots avg, PATH A (skip refactorize) / PATH B (restore+refactorize) / PATH C (cold start fallback) |
+| B&B re-optimization | Load parent basis, dual simplex does 1-5 pivots | `has_fixed_basic` check aborted warm start on ALL binary MIPs → cold start every node | `dual_reopt()`: 1-3 pivots avg, PATH A (direct child, skip refactorize) / PATH B (non-child, reuse LU + larger budget) / PATH C (cold start fallback) |
 | Dual steepest edge | Exact Forrest-Goldfarb DSE with incremental updates | Most-infeasible leaving variable, basic Harris | Same as before (most-infeasible) |
 | Bound flipping | Flips boxed variable bounds without basis change | Every pivot does full LU update | Same as before |
 
@@ -24,11 +24,19 @@ MIP branch-and-bound performance.
 
 Benchmarks (FuelWise MILP, seed=42):
 
-| Scenario | Before (ms) | After (ms) | Speedup | Correctness |
-|----------|-------------|------------|---------|-------------|
-| milp15 (10 runs) | 2.28 | 1.07 | **2.2x** | 10/10, same objectives |
-| milp30 (5 runs) | 111.72 | 22.40 | **5.0x** | 5/5, same objectives |
-| milp50 (3 runs) | 197.36 | 53.39 | **3.7x** | 3/3, same objectives |
+| Scenario | Before (ms) | After dual_reopt (ms) | After HYBRID+PATH B (ms) | Total Speedup | vs GLPK |
+|----------|-------------|----------------------|--------------------------|---------------|---------|
+| milp15 (5 runs) | 2.28 | 1.07 | **0.99** | **2.3x** | **9.0x faster** |
+| milp30 (5 runs) | 111.72 | 22.40 | **5.97** | **18.7x** | **1.9x faster** |
+| milp50 (5 runs) | 197.36 | 53.39 | **19.09** | **10.3x** | 0.7x (1.5x slower) |
+
+**Improvements beyond initial dual_reopt:**
+- **HYBRID node selection** (`a3cd864`): DFS until first incumbent, then best-bound.
+  `NodeQueue.has_incumbent` flag with one-time O(n) heap rebuild.
+- **PATH B LU reuse**: Profiling milp50 showed 90% of time in `lu_factorize_dense` from
+  PATH B's `restore_basis_from_node()` → `tableau_refactorize()` (O(m³)). Fix: skip basis
+  restore, reuse current LU factors, update bounds, run `dual_reopt` with larger budget
+  (10×m, cap 2000). Each pivot O(m) vs O(m³) refactorize. If budget exceeded, fall to PATH C.
 
 **Bug found during implementation:** Degenerate artificial variables (basic at value 0 after
 Phase 2) become non-zero when bounds change, corrupting the objective with BIG_M terms.
