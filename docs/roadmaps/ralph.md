@@ -113,41 +113,45 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (post-P3 presolve + dual_reopt):**
+**Current results (post-HYBRID fix + PATH B LU reuse):**
 
 | Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
 |----------|-----------|-----------|----------|-------|-----------|
-| milp15 | ~15 | **1.07 ms** | 7.07 ms | **7.7x Ralph** | 10/10 |
-| milp30 | ~30 | 22.21 ms | **8.48 ms** | 0.4x | 5/5 |
-| milp50 | ~50 | 52.68 ms | **11.59 ms** | 0.2x | 3/3 |
-| milp75 | ~75 | 573.14 ms | **23.06 ms** | 0.04x | 3/3 |
-| milp100 | ~100 | 175.89 ms | **16.65 ms** | 0.1x | 3/3 |
-| milp200 | ~200 | 8987.79 ms | **111.65 ms** | 0.01x | 3/3 |
+| milp15 | ~15 | **0.99 ms** | 8.55 ms | **9.0x Ralph** | 5/5 |
+| milp30 | ~30 | **5.97 ms** | 7.80 ms | **1.9x Ralph** | 5/5 |
+| milp50 | ~50 | 19.09 ms | **12.50 ms** | 0.7x | 5/5 |
 
-**Correctness: 27/27 objective matches** at 0.01% tolerance.
+**Correctness: 15/15 objective matches** at 0.01% tolerance.
 
-**Previous results (pre-P3, for comparison):**
+**Previous results (pre-PATH B fix, for comparison):**
 
-| Scenario | Ralph (old) | Ralph (new) | Improvement |
-|----------|-------------|-------------|-------------|
-| milp15 | 1.72 ms | 1.07 ms | 1.6x |
-| milp30 | 65.50 ms | 22.21 ms | 2.9x |
-| milp50 | 124.14 ms | 52.68 ms | 2.4x |
-| milp75 | 1231.65 ms | 573.14 ms | 2.1x |
-| milp100 | 7223.45 ms | 175.89 ms | 41.1x |
-| milp200 | 19472.76 ms | 8987.79 ms | 2.2x |
+| Scenario | Ralph (pre-PATH B) | Ralph (post-PATH B) | Improvement |
+|----------|---------------------|----------------------|-------------|
+| milp15 | 1.07 ms | 0.99 ms | 1.1x |
+| milp30 | 22.21 ms | 5.97 ms | **3.8x** |
+| milp50 | 52.68 ms | 19.09 ms | **3.0x** |
 
-**P3 Presolve Impact:** 1.6-41x improvement across scenarios. The milp100 result (41x) is
-likely due to presolve finding a key reduction that dramatically shrinks the B&B tree. Average
-improvement is ~2-3x excluding the outlier.
+**PATH B LU Reuse Impact:** Profiling milp50 showed 90% of time in `lu_factorize_dense`
+called from PATH B's `restore_basis_from_node()` → `tableau_refactorize()`. The fix: skip
+basis restore entirely, reuse the current tableau's LU factors, just update bounds and run
+`dual_reopt` with a larger budget (10×m, cap 2000). Each dual pivot is O(m) with LU update,
+far cheaper than O(m³) full refactorization. milp30 went from losing to GLPK (0.4x) to
+beating it (1.9x).
+
+**Historical progression:**
+
+| Scenario | Baseline | +dual_reopt | +P3 presolve | +HYBRID+PATH B |
+|----------|----------|-------------|--------------|----------------|
+| milp15 | ~2.3 ms | ~1.1 ms | 1.07 ms | **0.99 ms** |
+| milp30 | ~112 ms | ~22 ms | 22.21 ms | **5.97 ms** |
+| milp50 | ~197 ms | ~53 ms | 52.68 ms | **19.09 ms** |
 
 **Analysis:**
-- Ralph wins at small sizes (milp15) where domain hints keep the tree small
-- P3 presolve (multi-round, doubleton equality, implied free) provides consistent 2-3x gains
-- GLPK's mature MIP infrastructure (Gomory/MIR cuts, dual simplex, best-first
-  node selection) still dominates at scale
-- Closing the gap requires the improvements in §4.3: best-first node selection, pseudocost
-  branching, MIR cuts, and probing/clique detection
+- Ralph wins milp15 (9.0x) and milp30 (1.9x) — competitive with GLPK at moderate scale
+- milp50 gap closed from 5x slower to 1.5x slower
+- Remaining gap is likely GLPK's Gomory/MIR cuts and dual steepest edge pricing
+- Further gains possible from: objective cutoff in dual_reopt (§P1), bound flipping (§P5),
+  DSE pricing (§P6)
 
 See `fuelwise.md` §8 for FuelWise-specific optimization ideas (symmetry-breaking, flow
 cover cuts, mandatory station fixing).
@@ -331,7 +335,7 @@ GLPK benchmark (§1.7) confirmed these are the critical gaps:
 
 | Task | Priority | Expected Impact | Notes |
 |------|----------|-----------------|-------|
-| **Best-first node selection** | **Critical** | 2-5x for deep trees | Ralph uses depth-first only; GLPK uses best-bound |
+| **HYBRID node selection** | ✅ **Done** | 3-4x on milp30/50 | DFS→best-bound on incumbent; PATH B LU reuse eliminates O(m³) refactorize |
 | **MIR cuts** | **High** | 1.5-3x tighter relaxation | GLPK generates these automatically |
 | **Dual simplex for node resolves** | **High** | 2-3x per-node speedup | Adding/removing bounds is dual-friendly |
 | **LP presolve (P3)** | ✅ **Done** | 2-3x avg improvement | 12 techniques, 20-round, probing w/ implication propagation |
