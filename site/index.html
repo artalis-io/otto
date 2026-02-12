@@ -1921,6 +1921,7 @@
                     </div>
                     <span class="nav-separator">|</span>
                     <div class="nav-group">
+                        <a href="#algorithms">Algorithms</a>
                         <a href="#developers">Developers</a>
                         <a href="api.html">API</a>
                         <a href="https://github.com/ottofleet/otto">GitHub</a>
@@ -2497,6 +2498,225 @@
         </section>
 
         <!-- ============================================================ -->
+        <!-- UNDER THE HOOD -->
+        <!-- ============================================================ -->
+        <section id="algorithms" class="persona-section">
+            <div class="persona-section-header">
+                <div class="persona-section-icon">&#x2699;</div>
+                <div>
+                    <div class="persona-section-title">Under the Hood</div>
+                    <div class="persona-section-subtitle">The algorithms that power every OTTO decision</div>
+                </div>
+            </div>
+
+            <!-- Ralph: Linear & Integer Optimization -->
+            <div class="subsection">
+                <h3 class="subsection-title">Linear &amp; Integer Optimization</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="ralph-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Ralph: Revised Simplex &rarr; Branch &amp; Bound</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Every fleet decision is an optimization problem.</span>
+                            Which fuel stops minimize cost? Which routes satisfy time windows? How do you assign
+                            100 shipments to 30 trucks?
+                        </p>
+                        <p>
+                            Ralph solves these with the <strong>Revised Simplex</strong> method&mdash;walking
+                            the vertices of a high-dimensional polytope to find the optimum. For integer
+                            decisions (which truck, which stop), <strong>Branch &amp; Bound</strong> builds
+                            a search tree on top, pruning impossible branches and converging on the optimal
+                            integer solution.
+                        </p>
+                        <p>
+                            <strong>FuelWise</strong> uses Ralph to solve minimum-cost refueling LPs.
+                            <strong>Sigma</strong> formulates fleet plan selection as SCP/SPP and solves
+                            via Ralph&rsquo;s MIP engine. <strong>HoSE</strong> builds a time-indexed
+                            scheduling model verified through Ralph&rsquo;s LP solver.
+                        </p>
+                        <p>
+                            No external solver dependencies. The same engine runs server-side and in-browser
+                            via WebAssembly&mdash;under 100ms for 1,000 variables.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Revised Simplex</div>
+                            <div class="algo-viz-feature">LU Factorization</div>
+                            <div class="algo-viz-feature">Branch &amp; Bound</div>
+                            <div class="algo-viz-feature">Gomory Cuts</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Arbor: Metaheuristic Search -->
+            <div class="subsection">
+                <h3 class="subsection-title">Metaheuristic Search</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="arbor-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Arbor: ALNS Destroy/Repair &rarr; Beam Search</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Some problems are too large for exact solvers.</span>
+                            Scheduling 1,000 deliveries across 50 trucks with time windows, capacity limits,
+                            and driver constraints? The search space is astronomical.
+                        </p>
+                        <p>
+                            Arbor&rsquo;s <strong>Adaptive Large Neighborhood Search</strong> starts with a
+                            feasible solution and iteratively <em>destroys</em> parts of it (removing requests),
+                            then <em>repairs</em> (reinserting optimally). Operators that find improvements get
+                            higher selection weights&mdash;the algorithm learns which strategies work.
+                        </p>
+                        <p>
+                            For structured search, <strong>Beam Search</strong> explores a tree of partial
+                            solutions, keeping only the most promising &lsquo;beams&rsquo; at each level.
+                            Combined with lower-bound pruning, it finds near-optimal solutions in bounded time.
+                        </p>
+                        <p>
+                            <strong>Surge</strong> uses Arbor&rsquo;s ALNS to solve rich VRP/PDPTW problems.
+                            Acceptance criteria (simulated annealing, record-to-record travel) let it escape
+                            local optima and converge within 5% of best known benchmarks.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">ALNS Framework</div>
+                            <div class="algo-viz-feature">Adaptive Weights</div>
+                            <div class="algo-viz-feature">Beam Search</div>
+                            <div class="algo-viz-feature">Simulated Annealing</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Velo: Graph Routing -->
+            <div class="subsection">
+                <h3 class="subsection-title">Graph Routing</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="velo-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Velo: Bidirectional A* &rarr; ALT Landmarks</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Routing is graph search at scale.</span>
+                            A country-scale OSM graph has millions of nodes and edges. Naive Dijkstra
+                            explores them all. Smarter algorithms explore far fewer.
+                        </p>
+                        <p>
+                            <strong>Bidirectional A*</strong> searches from both ends simultaneously.
+                            The forward frontier expands from origin, the backward from destination,
+                            guided by a Haversine heuristic. When they meet, the shortest path is found
+                            having explored a fraction of the graph.
+                        </p>
+                        <p>
+                            <strong>ALT</strong> (A* with Landmarks and Triangle inequality) precomputes
+                            distances to strategic landmark nodes. The triangle inequality
+                            <em>d(s,t) &ge; |d(s,L) &minus; d(t,L)|</em> gives a much tighter lower bound
+                            than Haversine alone, pruning 5&ndash;10x more of the search space.
+                        </p>
+                        <p>
+                            Velo builds a CSR graph from OSM PBF files, supports truck/car/bike/foot
+                            profiles, and serves routes under 100ms at country scale.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Bidirectional A*</div>
+                            <div class="algo-viz-feature">ALT Landmarks</div>
+                            <div class="algo-viz-feature">CSR Graph</div>
+                            <div class="algo-viz-feature">Truck Profiles</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Carta: Tile Rendering Pipeline -->
+            <div class="subsection">
+                <h3 class="subsection-title">Tile Rendering Pipeline</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="carta-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Carta: Clip &rarr; Simplify &rarr; Rasterize</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Every map tile is a geometry pipeline.</span>
+                            A single 512&times;512 tile at zoom 14 may intersect hundreds of roads,
+                            buildings, and land-use polygons. Each must be clipped to the tile boundary,
+                            simplified for the zoom level, and rasterized&mdash;in under 75ms.
+                        </p>
+                        <p>
+                            <strong>Sutherland&ndash;Hodgman</strong> clips polygons against the tile
+                            rectangle edge by edge. Vertices outside are discarded, new intersection
+                            points are inserted. The result is a clean polygon that fits exactly within
+                            the tile.
+                        </p>
+                        <p>
+                            <strong>Douglas&ndash;Peucker</strong> then simplifies the geometry.
+                            Points that deviate less than a pixel from the line between their neighbors
+                            are removed. At low zoom levels this eliminates 90%+ of vertices, keeping
+                            tiles fast without visible quality loss.
+                        </p>
+                        <p>
+                            Carta outputs both PNG raster tiles and Mapbox Vector Tiles (MVT) from
+                            the same pipeline. R-tree spatial indexing ensures only relevant features
+                            are processed per tile.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Sutherland&ndash;Hodgman</div>
+                            <div class="algo-viz-feature">Douglas&ndash;Peucker</div>
+                            <div class="algo-viz-feature">MVT + PNG</div>
+                            <div class="algo-viz-feature">R-tree Index</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Locus: Geocoding Search -->
+            <div class="subsection">
+                <h3 class="subsection-title">Geocoding Search</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="locus-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Locus: Trie Traversal &rarr; Trigram Fuzzy Match</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Turn text into coordinates in microseconds.</span>
+                            Type &ldquo;Buda&rdquo; and get &ldquo;Budapest&rdquo; before your finger
+                            leaves the key. Misspell it as &ldquo;Budepest&rdquo; and still get the
+                            right result.
+                        </p>
+                        <p>
+                            <strong>Prefix trie</strong> traversal handles exact prefix matching.
+                            Each keystroke walks one level deeper in the tree, instantly narrowing
+                            candidates from millions to hundreds. Autocomplete results appear in
+                            under 20&mu;s.
+                        </p>
+                        <p>
+                            <strong>Trigram fuzzy search</strong> handles typos and misspellings.
+                            Every place name is decomposed into overlapping 3-character sequences.
+                            A query like &ldquo;Budepest&rdquo; shares enough trigrams with
+                            &ldquo;Budapest&rdquo; to rank it first, even with the transposition.
+                        </p>
+                        <p>
+                            <strong>Reverse geocoding</strong> uses a spatial grid to find the
+                            nearest named place to any coordinate. The grid partitions the map
+                            into cells&mdash;only the local cell and its neighbors are searched.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Prefix Trie</div>
+                            <div class="algo-viz-feature">Trigram Index</div>
+                            <div class="algo-viz-feature">Spatial Grid</div>
+                            <div class="algo-viz-feature">&lt;20&mu;s Queries</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ============================================================ -->
         <!-- DEVELOPERS -->
         <!-- ============================================================ -->
         <section id="developers" class="persona-section">
@@ -2693,127 +2913,6 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                 <p style="margin-top: 16px; font-size: 14px; color: var(--text-muted);">
                     See <a href="https://github.com/ottofleet/otto/blob/main/docs/internals/security-model.md">Security Model</a> for the full architecture and <a href="https://github.com/ottofleet/otto/blob/main/docs/roadmaps/security.md">Security Roadmap</a> for implementation status.
                 </p>
-            </div>
-
-            <!-- Optimization Visualization -->
-            <div class="subsection">
-                <h3 class="subsection-title">Under the Hood: Linear &amp; Integer Optimization</h3>
-                <div class="algo-viz-grid">
-                    <div class="algo-viz-crt">
-                        <canvas id="ralph-viz" class="algo-viz-canvas"></canvas>
-                        <div class="algo-viz-label">Ralph: Revised Simplex &rarr; Branch &amp; Bound</div>
-                    </div>
-                    <div class="algo-viz-info">
-                        <p>
-                            <span class="highlight">Every fleet decision is an optimization problem.</span>
-                            Which fuel stops minimize cost? Which routes satisfy time windows? How do you assign
-                            100 shipments to 30 trucks?
-                        </p>
-                        <p>
-                            Ralph solves these with the <strong>Revised Simplex</strong> method&mdash;walking
-                            the vertices of a high-dimensional polytope to find the optimum. For integer
-                            decisions (which truck, which stop), <strong>Branch &amp; Bound</strong> builds
-                            a search tree on top, pruning impossible branches and converging on the optimal
-                            integer solution.
-                        </p>
-                        <p>
-                            <strong>FuelWise</strong> uses Ralph to solve minimum-cost refueling LPs.
-                            <strong>Sigma</strong> formulates fleet plan selection as SCP/SPP and solves
-                            via Ralph&rsquo;s MIP engine. <strong>HoSE</strong> builds a time-indexed
-                            scheduling model verified through Ralph&rsquo;s LP solver.
-                        </p>
-                        <p>
-                            No external solver dependencies. The same engine runs server-side and in-browser
-                            via WebAssembly&mdash;under 100ms for 1,000 variables.
-                        </p>
-                        <div class="algo-viz-features">
-                            <div class="algo-viz-feature">Revised Simplex</div>
-                            <div class="algo-viz-feature">LU Factorization</div>
-                            <div class="algo-viz-feature">Branch &amp; Bound</div>
-                            <div class="algo-viz-feature">Gomory Cuts</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Arbor Metaheuristic Visualization -->
-            <div class="subsection">
-                <h3 class="subsection-title">Under the Hood: Metaheuristic Search</h3>
-                <div class="algo-viz-grid">
-                    <div class="algo-viz-crt">
-                        <canvas id="arbor-viz" class="algo-viz-canvas"></canvas>
-                        <div class="algo-viz-label">Arbor: ALNS Destroy/Repair &rarr; Beam Search</div>
-                    </div>
-                    <div class="algo-viz-info">
-                        <p>
-                            <span class="highlight">Some problems are too large for exact solvers.</span>
-                            Scheduling 1,000 deliveries across 50 trucks with time windows, capacity limits,
-                            and driver constraints? The search space is astronomical.
-                        </p>
-                        <p>
-                            Arbor&rsquo;s <strong>Adaptive Large Neighborhood Search</strong> starts with a
-                            feasible solution and iteratively <em>destroys</em> parts of it (removing requests),
-                            then <em>repairs</em> (reinserting optimally). Operators that find improvements get
-                            higher selection weights&mdash;the algorithm learns which strategies work.
-                        </p>
-                        <p>
-                            For structured search, <strong>Beam Search</strong> explores a tree of partial
-                            solutions, keeping only the most promising &lsquo;beams&rsquo; at each level.
-                            Combined with lower-bound pruning, it finds near-optimal solutions in bounded time.
-                        </p>
-                        <p>
-                            <strong>Surge</strong> uses Arbor&rsquo;s ALNS to solve rich VRP/PDPTW problems.
-                            Acceptance criteria (simulated annealing, record-to-record travel) let it escape
-                            local optima and converge within 5% of best known benchmarks.
-                        </p>
-                        <div class="algo-viz-features">
-                            <div class="algo-viz-feature">ALNS Framework</div>
-                            <div class="algo-viz-feature">Adaptive Weights</div>
-                            <div class="algo-viz-feature">Beam Search</div>
-                            <div class="algo-viz-feature">Simulated Annealing</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Velo Routing Visualization -->
-            <div class="subsection">
-                <h3 class="subsection-title">Under the Hood: Graph Routing</h3>
-                <div class="algo-viz-grid">
-                    <div class="algo-viz-crt">
-                        <canvas id="velo-viz" class="algo-viz-canvas"></canvas>
-                        <div class="algo-viz-label">Velo: Bidirectional A* &rarr; ALT Landmarks</div>
-                    </div>
-                    <div class="algo-viz-info">
-                        <p>
-                            <span class="highlight">Routing is graph search at scale.</span>
-                            A country-scale OSM graph has millions of nodes and edges. Naive Dijkstra
-                            explores them all. Smarter algorithms explore far fewer.
-                        </p>
-                        <p>
-                            <strong>Bidirectional A*</strong> searches from both ends simultaneously.
-                            The forward frontier expands from origin, the backward from destination,
-                            guided by a Haversine heuristic. When they meet, the shortest path is found
-                            having explored a fraction of the graph.
-                        </p>
-                        <p>
-                            <strong>ALT</strong> (A* with Landmarks and Triangle inequality) precomputes
-                            distances to strategic landmark nodes. The triangle inequality
-                            <em>d(s,t) &ge; |d(s,L) &minus; d(t,L)|</em> gives a much tighter lower bound
-                            than Haversine alone, pruning 5&ndash;10x more of the search space.
-                        </p>
-                        <p>
-                            Velo builds a CSR graph from OSM PBF files, supports truck/car/bike/foot
-                            profiles, and serves routes under 100ms at country scale.
-                        </p>
-                        <div class="algo-viz-features">
-                            <div class="algo-viz-feature">Bidirectional A*</div>
-                            <div class="algo-viz-feature">ALT Landmarks</div>
-                            <div class="algo-viz-feature">CSR Graph</div>
-                            <div class="algo-viz-feature">Truck Profiles</div>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <!-- Core Engines -->
@@ -4818,6 +4917,805 @@ Dependencies:
                 } else if (!entry.isIntersecting) {
                     running = false;
                 }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
+    })();
+    </script>
+
+    <!-- Carta Tile Rendering Pipeline Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('carta-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var ORANGE = '#f97316';
+        var CYAN = '#06b6d4';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 20000;
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        function dot(cx,cy,r,col) {
+            ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col; ctx.fill();
+        }
+
+        /* ─── POLYGON DATA ─── */
+        /* An irregular polygon that extends beyond a tile boundary */
+        var tileL = 120, tileT = 60, tileR = 380, tileB = 320;
+        var tileW = tileR - tileL, tileH = tileB - tileT;
+
+        /* Original polygon (some vertices outside tile) */
+        var origPoly = [
+            {x: 90, y: 100}, {x: 200, y: 40}, {x: 340, y: 55},
+            {x: 410, y: 120}, {x: 420, y: 240}, {x: 380, y: 340},
+            {x: 280, y: 360}, {x: 160, y: 330}, {x: 100, y: 260},
+            {x: 70, y: 180}
+        ];
+
+        /* Sutherland-Hodgman clip */
+        function clipPoly(poly, edgeX, edgeY, edgeNx, edgeNy) {
+            var out = [];
+            for (var i = 0; i < poly.length; i++) {
+                var cur = poly[i];
+                var nxt = poly[(i+1) % poly.length];
+                var curInside = (cur.x - edgeX) * edgeNx + (cur.y - edgeY) * edgeNy >= 0;
+                var nxtInside = (nxt.x - edgeX) * edgeNx + (nxt.y - edgeY) * edgeNy >= 0;
+                if (curInside) out.push(cur);
+                if (curInside !== nxtInside) {
+                    var dx = nxt.x - cur.x, dy = nxt.y - cur.y;
+                    var den = dx * edgeNx + dy * edgeNy;
+                    if (Math.abs(den) > 0.001) {
+                        var t = ((edgeX - cur.x) * edgeNx + (edgeY - cur.y) * edgeNy) / den;
+                        out.push({x: cur.x + dx*t, y: cur.y + dy*t});
+                    }
+                }
+            }
+            return out;
+        }
+
+        function clipToTile(poly) {
+            var p = poly.slice();
+            p = clipPoly(p, tileL, tileT, 1, 0);   /* left */
+            p = clipPoly(p, tileR, tileT, -1, 0);   /* right */
+            p = clipPoly(p, tileL, tileT, 0, 1);    /* top */
+            p = clipPoly(p, tileL, tileB, 0, -1);   /* bottom */
+            return p;
+        }
+
+        var clippedPoly = clipToTile(origPoly);
+
+        /* Douglas-Peucker simplification */
+        function dpSimplify(pts, epsilon) {
+            if (pts.length <= 2) return pts;
+            var maxDist = 0, maxIdx = 0;
+            var a = pts[0], b = pts[pts.length-1];
+            var dx = b.x - a.x, dy = b.y - a.y;
+            var len = Math.sqrt(dx*dx + dy*dy);
+            for (var i = 1; i < pts.length - 1; i++) {
+                var d;
+                if (len < 0.001) {
+                    var ex = pts[i].x - a.x, ey = pts[i].y - a.y;
+                    d = Math.sqrt(ex*ex + ey*ey);
+                } else {
+                    d = Math.abs((pts[i].x - a.x)*dy - (pts[i].y - a.y)*dx) / len;
+                }
+                if (d > maxDist) { maxDist = d; maxIdx = i; }
+            }
+            if (maxDist > epsilon) {
+                var left = dpSimplify(pts.slice(0, maxIdx+1), epsilon);
+                var right = dpSimplify(pts.slice(maxIdx), epsilon);
+                return left.slice(0, -1).concat(right);
+            }
+            return [a, b];
+        }
+
+        var simplifiedPoly = dpSimplify(clippedPoly, 20);
+
+        /* Road segments crossing the tile */
+        var roads = [
+            [{x: 80, y: 150}, {x: 160, y: 140}, {x: 240, y: 160}, {x: 320, y: 130}, {x: 400, y: 145}, {x: 440, y: 140}],
+            [{x: 200, y: 30}, {x: 210, y: 100}, {x: 220, y: 200}, {x: 200, y: 280}, {x: 190, y: 360}],
+            [{x: 100, y: 280}, {x: 180, y: 250}, {x: 260, y: 230}, {x: 340, y: 250}, {x: 420, y: 270}]
+        ];
+
+        function drawPoly(poly, fillCol, strokeCol, alpha) {
+            if (poly.length < 3) return;
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.beginPath();
+            ctx.moveTo(poly[0].x, poly[0].y);
+            for (var i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+            ctx.closePath();
+            if (fillCol) { ctx.fillStyle = fillCol; ctx.fill(); }
+            if (strokeCol) { ctx.strokeStyle = strokeCol; ctx.lineWidth = 1.5; ctx.stroke(); }
+            ctx.restore();
+        }
+
+        function drawPolyVerts(poly, col, alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            for (var i = 0; i < poly.length; i++) dot(poly[i].x, poly[i].y, 3, col);
+            ctx.restore();
+        }
+
+        function drawTileBorder(alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.strokeStyle = ACCENT;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6,4]);
+            ctx.strokeRect(tileL, tileT, tileW, tileH);
+            ctx.setLineDash([]);
+            ctx.restore();
+        }
+
+        function drawRoads(alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            for (var ri = 0; ri < roads.length; ri++) {
+                ctx.strokeStyle = '#444';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(roads[ri][0].x, roads[ri][0].y);
+                for (var rj = 1; rj < roads[ri].length; rj++)
+                    ctx.lineTo(roads[ri][rj].x, roads[ri][rj].y);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        /* ─── CLIP PHASE ─── */
+        function drawClip(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            txt('SUTHERLAND\u2013HODGMAN CLIPPING', W/2, 18, DIM, FONT_LG, 'center');
+
+            /* Tile border */
+            drawTileBorder(0.6);
+            txt('tile boundary', tileR + 8, tileT + 10, ACCENT, FONT_SM);
+
+            /* Roads (background) */
+            drawRoads(0.2);
+
+            /* Original polygon (dim, outside tile) */
+            var origAlpha = Math.max(0, 1 - t * 2) * 0.3;
+            if (origAlpha > 0) {
+                drawPoly(origPoly, 'rgba(255,255,255,0.05)', DIM, origAlpha);
+                drawPolyVerts(origPoly, DIM, origAlpha);
+            }
+
+            /* Clip animation: show edges being clipped one at a time */
+            var clipStart = 0.1, clipEnd = 0.65;
+            var clipT = Math.max(0, Math.min((t - clipStart) / (clipEnd - clipStart), 1));
+            var edges = 4; /* left, right, top, bottom */
+            var currentEdge = Math.min(Math.floor(clipT * edges), edges - 1);
+            var edgeFrac = (clipT * edges) - currentEdge;
+            if (clipT >= 1) { currentEdge = edges - 1; edgeFrac = 1; }
+
+            /* Progressive clipping */
+            var partialPoly = origPoly.slice();
+            var edgeNames = ['left', 'right', 'top', 'bottom'];
+            var edgeColors = [RED, ORANGE, YELLOW, GREEN];
+            for (var ei = 0; ei <= currentEdge; ei++) {
+                if (ei === 0) partialPoly = clipPoly(partialPoly, tileL, tileT, 1, 0);
+                else if (ei === 1) partialPoly = clipPoly(partialPoly, tileR, tileT, -1, 0);
+                else if (ei === 2) partialPoly = clipPoly(partialPoly, tileL, tileT, 0, 1);
+                else partialPoly = clipPoly(partialPoly, tileL, tileB, 0, -1);
+            }
+
+            /* Draw current clipped state */
+            var polyAlpha = 0.15 + 0.1 * clipT;
+            drawPoly(partialPoly, 'rgba(59,130,246,'+polyAlpha+')', ACCENT, 0.7);
+            drawPolyVerts(partialPoly, BRIGHT, 0.8);
+
+            /* Highlight current edge being clipped */
+            if (clipT < 1) {
+                ctx.save();
+                ctx.strokeStyle = edgeColors[currentEdge];
+                ctx.lineWidth = 2;
+                ctx.globalAlpha = 0.6 + 0.4 * Math.sin(edgeFrac * Math.PI * 4);
+                ctx.beginPath();
+                if (currentEdge === 0) { ctx.moveTo(tileL, tileT); ctx.lineTo(tileL, tileB); }
+                else if (currentEdge === 1) { ctx.moveTo(tileR, tileT); ctx.lineTo(tileR, tileB); }
+                else if (currentEdge === 2) { ctx.moveTo(tileL, tileT); ctx.lineTo(tileR, tileT); }
+                else { ctx.moveTo(tileL, tileB); ctx.lineTo(tileR, tileB); }
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            /* Status text */
+            var sx = 440, sy = 70;
+            txt('Clip edges:', sx, sy, GRAY, FONT);
+            for (var ci = 0; ci < edges; ci++) {
+                var done = ci < currentEdge || (ci === currentEdge && edgeFrac > 0.9) || clipT >= 1;
+                var active = ci === currentEdge && clipT < 1;
+                var col = done ? GREEN : (active ? edgeColors[ci] : DIM);
+                var prefix = done ? '\u2713 ' : (active ? '\u25b6 ' : '  ');
+                txt(prefix + edgeNames[ci], sx + 10, sy + 20 + ci * 18, col, FONT);
+            }
+
+            txt('vertices: ' + origPoly.length + ' \u2192 ' + partialPoly.length, sx, sy + 100, BRIGHT, FONT);
+
+            /* Final result */
+            if (t > 0.75) {
+                var ra = Math.min((t - 0.75) / 0.1, 1);
+                ctx.globalAlpha = ra * fadeIn;
+                txt('Clipped to tile boundary', sx, sy + 130, GREEN, FONT);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── SIMPLIFY PHASE ─── */
+        function drawSimplify(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            txt('DOUGLAS\u2013PEUCKER SIMPLIFICATION', W/2, 18, DIM, FONT_LG, 'center');
+
+            drawTileBorder(0.4);
+            drawRoads(0.2);
+
+            /* Show clipped polygon */
+            drawPoly(clippedPoly, 'rgba(59,130,246,0.1)', null, 0.5);
+
+            /* Animate simplification: progressively remove vertices */
+            var simpStart = 0.08, simpEnd = 0.6;
+            var simpT = Math.max(0, Math.min((t - simpStart) / (simpEnd - simpStart), 1));
+
+            /* Interpolate between full and simplified polygon */
+            /* Show epsilon threshold growing */
+            var maxEps = 20;
+            var currentEps = simpT * maxEps;
+
+            var currentSimp = dpSimplify(clippedPoly, currentEps);
+
+            /* Draw simplified polygon */
+            drawPoly(currentSimp, 'rgba(34,197,94,0.15)', GREEN, 0.8);
+
+            /* Draw all original vertices, highlight removed ones */
+            var simpSet = {};
+            for (var si = 0; si < currentSimp.length; si++) {
+                for (var oj = 0; oj < clippedPoly.length; oj++) {
+                    if (Math.abs(currentSimp[si].x - clippedPoly[oj].x) < 0.5 &&
+                        Math.abs(currentSimp[si].y - clippedPoly[oj].y) < 0.5) {
+                        simpSet[oj] = true;
+                    }
+                }
+            }
+
+            for (var vi = 0; vi < clippedPoly.length; vi++) {
+                if (simpSet[vi]) {
+                    dot(clippedPoly[vi].x, clippedPoly[vi].y, 4, GREEN);
+                } else {
+                    /* Removed vertex */
+                    ctx.save();
+                    ctx.globalAlpha = 0.4 * fadeIn;
+                    dot(clippedPoly[vi].x, clippedPoly[vi].y, 3, RED);
+                    /* Small X */
+                    ctx.strokeStyle = RED;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(clippedPoly[vi].x-4, clippedPoly[vi].y-4);
+                    ctx.lineTo(clippedPoly[vi].x+4, clippedPoly[vi].y+4);
+                    ctx.moveTo(clippedPoly[vi].x+4, clippedPoly[vi].y-4);
+                    ctx.lineTo(clippedPoly[vi].x-4, clippedPoly[vi].y+4);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
+
+            /* Epsilon threshold visualization */
+            var sx = 440, sy = 70;
+            txt('Simplification', sx, sy, GRAY, FONT_LG);
+
+            /* Epsilon bar */
+            txt('\u03b5 = ' + currentEps.toFixed(1) + 'px', sx, sy + 26, BRIGHT, FONT);
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(sx, sy + 38, 180, 6);
+            ctx.fillStyle = YELLOW;
+            ctx.fillRect(sx, sy + 38, 180 * simpT, 6);
+
+            txt('vertices: ' + clippedPoly.length + ' \u2192 ' + currentSimp.length, sx, sy + 62, BRIGHT, FONT);
+            var reduction = Math.round((1 - currentSimp.length / clippedPoly.length) * 100);
+            txt(reduction + '% reduction', sx, sy + 82, GREEN, FONT);
+
+            /* Rasterize preview at the end */
+            if (t > 0.7) {
+                var ra = Math.min((t - 0.7) / 0.15, 1);
+                ctx.globalAlpha = ra * fadeIn;
+
+                /* Draw a small "pixel grid" overlay in bottom right as raster preview */
+                var prevX = 470, prevY = 180, prevS = 150, gridN = 16;
+                var cellS = prevS / gridN;
+                ctx.strokeStyle = '#2a2a2a';
+                ctx.lineWidth = 0.5;
+                ctx.strokeRect(prevX, prevY, prevS, prevS);
+
+                /* Fill cells that are inside the simplified polygon */
+                for (var gy = 0; gy < gridN; gy++) {
+                    for (var gx = 0; gx < gridN; gx++) {
+                        var cx = prevX + (gx + 0.5) * cellS;
+                        var cy = prevY + (gy + 0.5) * cellS;
+                        /* Map preview coords to tile coords */
+                        var tx = tileL + (cx - prevX) / prevS * tileW;
+                        var ty = tileT + (cy - prevY) / prevS * tileH;
+                        /* Point-in-polygon test */
+                        var inside = false;
+                        for (var pi = 0, pj = currentSimp.length-1; pi < currentSimp.length; pj = pi++) {
+                            if ((currentSimp[pi].y > ty) !== (currentSimp[pj].y > ty) &&
+                                tx < (currentSimp[pj].x - currentSimp[pi].x) * (ty - currentSimp[pi].y) /
+                                (currentSimp[pj].y - currentSimp[pi].y) + currentSimp[pi].x) {
+                                inside = !inside;
+                            }
+                        }
+                        if (inside) {
+                            ctx.fillStyle = 'rgba(59,130,246,0.3)';
+                            ctx.fillRect(prevX + gx*cellS, prevY + gy*cellS, cellS-0.5, cellS-0.5);
+                        }
+                    }
+                }
+                /* Grid lines */
+                ctx.strokeStyle = '#333';
+                ctx.lineWidth = 0.3;
+                for (var gl = 0; gl <= gridN; gl++) {
+                    ctx.beginPath();
+                    ctx.moveTo(prevX + gl*cellS, prevY);
+                    ctx.lineTo(prevX + gl*cellS, prevY + prevS);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(prevX, prevY + gl*cellS);
+                    ctx.lineTo(prevX + prevS, prevY + gl*cellS);
+                    ctx.stroke();
+                }
+                txt('512\u00d7512 raster', prevX + prevS/2, prevY + prevS + 14, DIM, FONT_SM, 'center');
+                txt('~75ms per tile', prevX + prevS/2, prevY + prevS + 28, GREEN, FONT_SM, 'center');
+
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false, startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.46) {
+                drawClip(t / 0.46);
+            } else if (t < 0.50) {
+                var fadeT = (t - 0.46) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawClip(1);
+                ctx.globalAlpha = fadeT;
+                drawSimplify(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                drawSimplify((t - 0.50) / 0.45);
+            } else {
+                ctx.globalAlpha = 1 - (t - 0.95) / 0.05;
+                drawSimplify(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true; startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) { running = false; }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
+    })();
+    </script>
+
+    <!-- Locus Trie + Trigram Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('locus-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var ORANGE = '#f97316';
+        var PURPLE = '#a855f7';
+        var CYAN = '#06b6d4';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_XL = '15px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 22000;
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        function dot(cx,cy,r,col) {
+            ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col; ctx.fill();
+        }
+
+        /* ─── TRIE DATA ─── */
+        /* Simulated trie for "Budapest" with branches */
+        var query = 'Budapest';
+        var trieNodes = [
+            /* depth 0 */ {ch: '', x: 60, y: 50, children: [1,2,3]},
+            /* depth 1 */ {ch: 'B', x: 60, y: 100, children: [4,5]},
+            /* depth 1 */ {ch: 'P', x: 160, y: 100, children: [10]},
+            /* depth 1 */ {ch: 'M', x: 260, y: 100, children: [11]},
+            /* depth 2 */ {ch: 'u', x: 40, y: 150, children: [6]},
+            /* depth 2 */ {ch: 'r', x: 110, y: 150, children: [12]},
+            /* depth 3 */ {ch: 'd', x: 30, y: 200, children: [7,8]},
+            /* depth 4 */ {ch: 'a', x: 20, y: 250, children: [9]},
+            /* depth 4 */ {ch: 'e', x: 80, y: 250, children: []},  /* dead end */
+            /* depth 5 */ {ch: 'p', x: 20, y: 300, children: []},  /* → Budapest */
+            /* branch */  {ch: 'r', x: 160, y: 150, children: []}, /* Prague */
+            /* branch */  {ch: 'u', x: 260, y: 150, children: []}, /* Munich */
+            /* branch */  {ch: 'a', x: 110, y: 200, children: []}  /* Bratislava */
+        ];
+
+        /* Path through trie for "Budapest": root → B → u → d → a → p */
+        var triePath = [0, 1, 4, 6, 7, 9];
+        /* Autocomplete results at each depth */
+        var autoResults = [
+            [],
+            ['Budapest', 'Bucharest', 'Brussels', 'Bratislava'],
+            ['Budapest', 'Bucharest', 'Buenos Aires'],
+            ['Budapest', 'Budweis'],
+            ['Budapest', 'Budaörs'],
+            ['Budapest']
+        ];
+
+        /* ─── TRIGRAM DATA ─── */
+        var misspelled = 'Budepest';
+        var correct = 'Budapest';
+        /* Trigrams of the misspelled query */
+        var queryTrigrams = [];
+        for (var i = 0; i <= misspelled.length - 3; i++)
+            queryTrigrams.push(misspelled.substring(i, i+3).toLowerCase());
+        /* Trigrams of correct answer */
+        var correctTrigrams = [];
+        for (var j = 0; j <= correct.length - 3; j++)
+            correctTrigrams.push(correct.substring(j, j+3).toLowerCase());
+        /* Matching trigrams */
+        var matchingTrigrams = [];
+        for (var qi = 0; qi < queryTrigrams.length; qi++) {
+            for (var ci = 0; ci < correctTrigrams.length; ci++) {
+                if (queryTrigrams[qi] === correctTrigrams[ci]) {
+                    matchingTrigrams.push(queryTrigrams[qi]);
+                    break;
+                }
+            }
+        }
+
+        /* Other candidates with their match counts */
+        var candidates = [
+            {name: 'Budapest',  score: 5, trigrams: correctTrigrams},
+            {name: 'Bucharest', score: 2, trigrams: ['buc','uch','cha','har','are','res','est']},
+            {name: 'Budweis',   score: 2, trigrams: ['bud','udw','dwe','wei','eis']},
+            {name: 'Budaörs',  score: 2, trigrams: ['bud','uda','dab','aör','örs']}
+        ];
+
+        /* ─── TRIE PHASE ─── */
+        function drawTrie(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            txt('PREFIX TRIE TRAVERSAL', W/2, 18, DIM, FONT_LG, 'center');
+
+            /* Query being typed */
+            var typeT = Math.min(t / 0.7, 1);
+            var charsTyped = Math.min(Math.floor(typeT * (triePath.length + 1)), triePath.length);
+
+            /* Draw search box */
+            var sbx = 400, sby = 50, sbw = 280, sbh = 30;
+            ctx.strokeStyle = ACCENT;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(sbx, sby, sbw, sbh);
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(sbx+1, sby+1, sbw-2, sbh-2);
+
+            var typedStr = query.substring(0, charsTyped);
+            txt(typedStr, sbx + 10, sby + sbh/2, BRIGHT, FONT_LG);
+            /* Blinking cursor */
+            if (Math.sin(t * 20) > 0) {
+                ctx.font = FONT_LG;
+                var tw = ctx.measureText(typedStr).width;
+                ctx.fillStyle = ACCENT;
+                ctx.fillRect(sbx + 10 + tw + 2, sby + 6, 1.5, sbh - 12);
+            }
+
+            /* Draw trie edges */
+            for (var ni = 0; ni < trieNodes.length; ni++) {
+                var node = trieNodes[ni];
+                for (var ci2 = 0; ci2 < node.children.length; ci2++) {
+                    var child = trieNodes[node.children[ci2]];
+                    ctx.strokeStyle = '#2a2a2a';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(node.x, node.y + 12);
+                    ctx.lineTo(child.x, child.y - 12);
+                    ctx.stroke();
+                }
+            }
+
+            /* Draw trie nodes */
+            for (var ti = 0; ti < trieNodes.length; ti++) {
+                var tn = trieNodes[ti];
+                var isOnPath = triePath.indexOf(ti) >= 0;
+                var pathIdx = triePath.indexOf(ti);
+                var isActive = isOnPath && pathIdx < charsTyped;
+                var isCurrent = isOnPath && pathIdx === charsTyped - 1;
+
+                /* Node circle */
+                var nodeCol = isCurrent ? GREEN : (isActive ? ACCENT : '#333');
+                var borderCol = isCurrent ? GREEN : (isActive ? ACCENT : DIM);
+
+                ctx.fillStyle = '#1a1a1a';
+                ctx.strokeStyle = borderCol;
+                ctx.lineWidth = isCurrent ? 2 : 1;
+                ctx.beginPath();
+                ctx.arc(tn.x, tn.y, 14, 0, Math.PI*2);
+                ctx.fill();
+                ctx.stroke();
+
+                if (isCurrent) {
+                    ctx.save();
+                    ctx.shadowColor = GREEN;
+                    ctx.shadowBlur = 8;
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                    ctx.restore();
+                }
+
+                /* Character label */
+                var chCol = isActive ? BRIGHT : GRAY;
+                txt(tn.ch || '\u25cb', tn.x, tn.y, chCol, FONT, 'center');
+
+                /* Highlight active path edges */
+                if (isActive && pathIdx > 0) {
+                    var parentIdx = triePath[pathIdx - 1];
+                    var parent = trieNodes[parentIdx];
+                    ctx.strokeStyle = ACCENT;
+                    ctx.lineWidth = 2;
+                    ctx.shadowColor = ACCENT;
+                    ctx.shadowBlur = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(parent.x, parent.y + 12);
+                    ctx.lineTo(tn.x, tn.y - 12);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+            }
+
+            /* Autocomplete results */
+            if (charsTyped > 0 && charsTyped <= autoResults.length) {
+                var results = autoResults[Math.min(charsTyped, autoResults.length - 1)];
+                var ry = 100;
+                txt('Results (' + results.length + '):', sbx, ry, GRAY, FONT);
+                for (var ri = 0; ri < Math.min(results.length, 4); ri++) {
+                    var isMatch = results[ri] === 'Budapest';
+                    txt(results[ri], sbx + 10, ry + 18 + ri * 18,
+                        isMatch && charsTyped >= 5 ? GREEN : GRAY, FONT);
+                }
+                txt('<20\u00b5s', sbx + 180, ry, GREEN, FONT_SM);
+            }
+
+            /* Depth indicator */
+            txt('depth: ' + charsTyped + ' / ' + query.length, 30, H - 20, DIM, FONT);
+
+            /* Final result */
+            if (t > 0.85) {
+                var ra = Math.min((t - 0.85) / 0.1, 1);
+                ctx.globalAlpha = ra * fadeIn;
+                txt('\u2713 Budapest', sbx + 10, 220, GREEN, FONT_LG);
+                txt('47.497\u00b0N, 19.040\u00b0E', sbx + 10, 240, GRAY, FONT);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── TRIGRAM PHASE ─── */
+        function drawTrigram(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            txt('TRIGRAM FUZZY SEARCH', W/2, 18, DIM, FONT_LG, 'center');
+
+            /* Show misspelled query */
+            var qx = 60, qy = 60;
+            txt('Query:', qx, qy, GRAY, FONT);
+            txt('"' + misspelled + '"', qx + 58, qy, ORANGE, FONT_LG);
+            txt('(misspelled)', qx + 180, qy, DIM, FONT_SM);
+
+            /* Show query trigrams appearing */
+            var triStart = 0.05, triEnd = 0.35;
+            var triT = Math.max(0, Math.min((t - triStart) / (triEnd - triStart), 1));
+            var visibleTri = Math.ceil(triT * queryTrigrams.length);
+
+            var tx2 = 60, ty2 = 95;
+            txt('Trigrams:', tx2, ty2, GRAY, FONT);
+            for (var qi2 = 0; qi2 < visibleTri; qi2++) {
+                var isMatch2 = matchingTrigrams.indexOf(queryTrigrams[qi2]) >= 0;
+                var bx = tx2 + qi2 * 56, by = ty2 + 22;
+                ctx.fillStyle = isMatch2 ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)';
+                ctx.strokeStyle = isMatch2 ? GREEN : '#444';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.roundRect(bx, by - 10, 48, 22, 3);
+                ctx.fill();
+                ctx.stroke();
+                txt(queryTrigrams[qi2], bx + 24, by + 1, isMatch2 ? GREEN : GRAY, FONT, 'center');
+            }
+
+            /* Candidate ranking */
+            var rankStart = 0.3, rankEnd = 0.8;
+            var rankT = Math.max(0, Math.min((t - rankStart) / (rankEnd - rankStart), 1));
+            if (rankT > 0) {
+                var rx2 = 60, ry2 = 170;
+                txt('Candidate ranking:', rx2, ry2, GRAY, FONT);
+
+                var visibleCands = Math.ceil(rankT * candidates.length);
+                /* Sort by score desc */
+                var sorted = candidates.slice().sort(function(a,b) { return b.score - a.score; });
+
+                for (var ci3 = 0; ci3 < visibleCands; ci3++) {
+                    var cand = sorted[ci3];
+                    var cy2 = ry2 + 28 + ci3 * 40;
+                    var isTop = ci3 === 0;
+
+                    /* Name */
+                    txt(cand.name, rx2 + 10, cy2, isTop ? GREEN : GRAY, isTop ? FONT_LG : FONT);
+
+                    /* Score bar */
+                    var maxScore = sorted[0].score;
+                    var barW2 = 120 * (cand.score / maxScore);
+                    ctx.fillStyle = '#2a2a2a';
+                    ctx.fillRect(rx2 + 130, cy2 - 5, 120, 10);
+                    ctx.fillStyle = isTop ? GREEN : DIM;
+                    ctx.fillRect(rx2 + 130, cy2 - 5, barW2, 10);
+                    txt(cand.score + '/' + queryTrigrams.length + ' match', rx2 + 260, cy2, isTop ? GREEN : DIM, FONT_SM);
+
+                    /* Show matching trigrams for top result */
+                    if (isTop && rankT > 0.5) {
+                        var mtAlpha = Math.min((rankT - 0.5) * 4, 1);
+                        ctx.globalAlpha = mtAlpha * fadeIn;
+                        for (var mi2 = 0; mi2 < cand.trigrams.length; mi2++) {
+                            var isM = matchingTrigrams.indexOf(cand.trigrams[mi2]) >= 0;
+                            var mbx = rx2 + 10 + mi2 * 50, mby = cy2 + 16;
+                            ctx.fillStyle = isM ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.03)';
+                            ctx.strokeStyle = isM ? GREEN : '#333';
+                            ctx.lineWidth = 0.5;
+                            ctx.beginPath();
+                            ctx.roundRect(mbx, mby - 8, 44, 18, 2);
+                            ctx.fill();
+                            ctx.stroke();
+                            txt(cand.trigrams[mi2], mbx + 22, mby + 1, isM ? GREEN : '#444', FONT_SM, 'center');
+                        }
+                        ctx.globalAlpha = fadeIn;
+                    }
+                }
+            }
+
+            /* Result */
+            if (t > 0.85) {
+                var ra2 = Math.min((t - 0.85) / 0.1, 1);
+                ctx.globalAlpha = ra2 * fadeIn;
+                txt('"Budepest" \u2192 Budapest', W/2, H - 30, GREEN, FONT_LG, 'center');
+                txt('fuzzy match despite transposition error', W/2, H - 12, DIM, FONT_SM, 'center');
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false, startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.46) {
+                drawTrie(t / 0.46);
+            } else if (t < 0.50) {
+                var fadeT = (t - 0.46) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawTrie(1);
+                ctx.globalAlpha = fadeT;
+                drawTrigram(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                drawTrigram((t - 0.50) / 0.45);
+            } else {
+                ctx.globalAlpha = 1 - (t - 0.95) / 0.05;
+                drawTrigram(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true; startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) { running = false; }
             });
         }, {threshold: 0.1});
 
