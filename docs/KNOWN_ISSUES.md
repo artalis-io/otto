@@ -9,20 +9,28 @@
 ### MIP Solver
 - **Set partitioning problems**: Very slow on equality-constrained MIP problems (e.g., 37s vs 0.0002s for GLPK on 30-variable problems)
 - **Large facility location**: Times out on medium-sized problems (210 variables, 10 integer)
-- **No presolve for MIP**: MIP solver doesn't use presolve, limiting its effectiveness
+- **Limited presolve for MIP**: Lightweight presolve (mask 0x110F) is enabled by default for MIP but aggressive techniques (singleton cols, probing, proportional rows) cause slowdowns
 
-## GMI Cuts Limitations
+## Cut Generation Bugs
 
-### Slack Variable Projection
+### `cut_normalize` Invalidates Violation Field (cuts.c:131-158)
+- **Severity**: High — causes incorrect INFEASIBLE status on valid problems
+- **Trigger**: Problems where GMI/c-MIR cuts have a negative leading coefficient after index sorting
+- **Root cause**: `cut_normalize()` negates all coefficients and flips the constraint sense (G↔L) when the leading coefficient is negative, but does NOT recompute `cut->violation`. The stale violation value causes `apply_cuts()` (line 1589) to add non-violated or invalid cuts to the LP, which can make it infeasible.
+- **Impact**: The MIP solver reports `RALPH_STATUS_INFEASIBLE` even though a valid incumbent was found by the diving heuristic before cuts were added. The incumbent objective (`ralph_get_objval`) is correct, but the status is wrong.
+- **Reproducer**: 10-variable binary knapsack with 3 constraints and `max_cut_rounds=5`, or mixed 6-variable problem (2 int + 2 cont + 2 bin) with 4 constraints.
+- **Workaround**: Use `max_cut_rounds=0` to disable cuts on affected problems, or use facility-location-style mixed problems where the bug is less likely to trigger.
+- **Fix**: Recompute violation after normalization, or compute it after `cut_pool_add` calls `cut_normalize`.
+
+### No Recovery When LP Becomes Infeasible After Cuts (mip.c:1146-1154)
+- **Severity**: Medium — compounds the above bug
+- **Root cause**: When the LP becomes infeasible after adding cuts, `mip.c` blindly sets `solver->status = solver->lp_solver->status` (INFEASIBLE) and returns immediately, without checking `solver->has_incumbent`. If the diving heuristic already found a valid integer solution, the solver should report OPTIMAL.
+- **Fix**: Check for existing incumbent before propagating LP infeasibility. Optionally attempt recovery by removing the last batch of cuts.
+
+### GMI Slack Variable Projection
 - GMI cuts with significant positive slack coefficients (>0.1) are rejected to prevent cutting off integer feasible points
 - This makes GMI cuts mostly ineffective for >= constraints
 - See `cuts.c:generate_gmi_cut()` for the rejection logic
-
-### Cut Types Not Implemented
-- MIR (Mixed Integer Rounding) cuts
-- Knapsack cover cuts
-- Clique cuts
-- Flow cover cuts
 
 ## Numerical Issues
 
@@ -53,16 +61,8 @@
 ### MIP Features
 - Primal heuristics (RINS, feasibility pump)
 - Conflict analysis and learning
-- Pseudo-cost branching
-- Strong branching
-- Symmetry breaking
+- Dual steepest edge pricing
 - Parallel branch and bound
-
-### Presolve
-- No bound tightening based on constraint propagation
-- No probing
-- No clique detection
-- Limited variable/constraint removal
 
 ## Test Coverage Gaps
 
