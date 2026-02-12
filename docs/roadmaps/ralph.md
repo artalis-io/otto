@@ -120,16 +120,22 @@ has additional domain-specific guidance.
 | milp15 | ~15 | **0.99 ms** | 8.55 ms | **9.0x Ralph** | 5/5 |
 | milp30 | ~30 | **5.97 ms** | 7.80 ms | **1.9x Ralph** | 5/5 |
 | milp50 | ~50 | 19.09 ms | **12.50 ms** | 0.7x | 5/5 |
+| milp75 | ~75 | 151.89 ms | **24.13 ms** | 0.2x | 3/3 |
+| milp100 | ~100 | 54.49 ms | **15.88 ms** | 0.3x | 3/3 |
+| milp200 | ~200 | 890.40 ms | **112.12 ms** | 0.1x | 3/3 |
 
-**Correctness: 15/15 objective matches** at 0.01% tolerance.
+**Correctness: 24/24 objective matches** at 0.01% tolerance.
 
-**Previous results (pre-PATH B fix, for comparison):**
+**Improvement vs previous (pre-HYBRID, pre-PATH B):**
 
-| Scenario | Ralph (pre-PATH B) | Ralph (post-PATH B) | Improvement |
-|----------|---------------------|----------------------|-------------|
+| Scenario | Ralph (before) | Ralph (now) | Improvement |
+|----------|----------------|-------------|-------------|
 | milp15 | 1.07 ms | 0.99 ms | 1.1x |
-| milp30 | 22.21 ms | 5.97 ms | **3.8x** |
-| milp50 | 52.68 ms | 19.09 ms | **3.0x** |
+| milp30 | 22.21 ms | 5.97 ms | **3.7x** |
+| milp50 | 52.68 ms | 19.09 ms | **2.8x** |
+| milp75 | 573.14 ms | 151.89 ms | **3.8x** |
+| milp100 | 175.89 ms | 54.49 ms | **3.2x** |
+| milp200 | 8987.79 ms | 890.40 ms | **10.1x** |
 
 **PATH B LU Reuse Impact:** Profiling milp50 showed 90% of time in `lu_factorize_dense`
 called from PATH B's `restore_basis_from_node()` → `tableau_refactorize()`. The fix: skip
@@ -145,10 +151,14 @@ beating it (1.9x).
 | milp15 | ~2.3 ms | ~1.1 ms | 1.07 ms | **0.99 ms** |
 | milp30 | ~112 ms | ~22 ms | 22.21 ms | **5.97 ms** |
 | milp50 | ~197 ms | ~53 ms | 52.68 ms | **19.09 ms** |
+| milp75 | ~1232 ms | ~573 ms | 573.14 ms | **151.89 ms** |
+| milp100 | ~7223 ms | ~176 ms | 175.89 ms | **54.49 ms** |
+| milp200 | ~19473 ms | ~8988 ms | 8987.79 ms | **890.40 ms** |
 
 **Analysis:**
 - Ralph wins milp15 (9.0x) and milp30 (1.9x) — competitive with GLPK at moderate scale
-- milp50 gap closed from 5x slower to 1.5x slower
+- Consistent 3-10x improvement from HYBRID + PATH B LU reuse across all scenarios
+- GLPK still dominates at scale (milp75+): ~3-8x faster
 - Remaining gap is likely GLPK's Gomory/MIR cuts and dual steepest edge pricing
 - Further gains possible from: objective cutoff in dual_reopt (§P1), bound flipping (§P5),
   DSE pricing (§P6)

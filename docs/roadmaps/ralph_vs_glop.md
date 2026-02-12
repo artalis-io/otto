@@ -26,9 +26,12 @@ Benchmarks (FuelWise MILP, seed=42):
 
 | Scenario | Before (ms) | After dual_reopt (ms) | After HYBRID+PATH B (ms) | Total Speedup | vs GLPK |
 |----------|-------------|----------------------|--------------------------|---------------|---------|
-| milp15 (5 runs) | 2.28 | 1.07 | **0.99** | **2.3x** | **9.0x faster** |
-| milp30 (5 runs) | 111.72 | 22.40 | **5.97** | **18.7x** | **1.9x faster** |
-| milp50 (5 runs) | 197.36 | 53.39 | **19.09** | **10.3x** | 0.7x (1.5x slower) |
+| milp15 | 2.28 | 1.07 | **0.99** | **2.3x** | **9.0x faster** |
+| milp30 | 111.72 | 22.40 | **5.97** | **18.7x** | **1.9x faster** |
+| milp50 | 197.36 | 53.39 | **19.09** | **10.3x** | 0.7x (1.5x slower) |
+| milp75 | ~1232 | 573.14 | **151.89** | **8.1x** | 0.2x (6.3x slower) |
+| milp100 | ~7223 | 175.89 | **54.49** | **132.6x** | 0.3x (3.4x slower) |
+| milp200 | ~19473 | 8987.79 | **890.40** | **21.9x** | 0.1x (7.9x slower) |
 
 **Improvements beyond initial dual_reopt:**
 - **HYBRID node selection** (`a3cd864`): DFS until first incumbent, then best-bound.
