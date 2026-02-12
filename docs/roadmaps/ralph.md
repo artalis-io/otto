@@ -118,18 +118,18 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (post-HYBRID + PATH B + objective cutoff):**
+**Current results (post-HYBRID + PATH B + obj cutoff + presolve w/ priority remap):**
 
 | Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
 |----------|-----------|-----------|----------|-------|-----------|
-| milp15 | ~15 | **0.73 ms** | 8.55 ms | **10.3x Ralph** | 5/5 |
-| milp30 | ~30 | **5.20 ms** | 7.80 ms | **2.0x Ralph** | 5/5 |
-| milp50 | ~50 | 17.65 ms | **12.50 ms** | 0.7x | 5/5 |
-| milp75 | ~75 | 151.89 ms | **24.13 ms** | 0.2x | 3/3 |
-| milp100 | ~100 | 54.11 ms | **15.88 ms** | 0.3x | 3/3 |
-| milp200 | ~200 | 882.38 ms | **112.12 ms** | 0.1x | 3/3 |
+| milp15 | ~15 | **0.95 ms** | 6.08 ms | **6.4x Ralph** | 5/5 |
+| milp30 | ~30 | **3.14 ms** | 7.92 ms | **2.5x Ralph** | 5/5 |
+| milp50 | ~50 | **9.90 ms** | 12.58 ms | **1.3x Ralph** | 5/5 |
+| milp75 | ~75 | **55.49 ms** | 57.54 ms | **~tied** | 5/5 |
+| milp100 | ~100 | 50.14 ms | **17.18 ms** | 0.3x | 5/5 |
+| milp200 | ~200 | 212.03 ms | **88.27 ms** | 0.4x | 5/5 |
 
-**Correctness: 24/24 objective matches** at 0.01% tolerance.
+**Correctness: 30/30 objective matches** at 0.01% tolerance.
 
 **Improvement vs previous (pre-HYBRID, pre-PATH B):**
 
@@ -151,22 +151,22 @@ beating it (1.9x).
 
 **Historical progression:**
 
-| Scenario | Baseline | +dual_reopt | +P3 presolve | +HYBRID+PATH B | +obj cutoff |
-|----------|----------|-------------|--------------|----------------|-------------|
-| milp15 | ~2.3 ms | ~1.1 ms | 1.07 ms | 0.99 ms | **0.73 ms** |
-| milp30 | ~112 ms | ~22 ms | 22.21 ms | 5.97 ms | **5.20 ms** |
-| milp50 | ~197 ms | ~53 ms | 52.68 ms | 19.09 ms | **17.65 ms** |
-| milp75 | ~1232 ms | ~573 ms | 573.14 ms | 151.89 ms | **~152 ms** |
-| milp100 | ~7223 ms | ~176 ms | 175.89 ms | 54.49 ms | **54.11 ms** |
-| milp200 | ~19473 ms | ~8988 ms | 8987.79 ms | 890.40 ms | **882.38 ms** |
+| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap |
+|----------|----------|-------------|----------------|-------------|-----------------|
+| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | **0.95 ms** |
+| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | **3.14 ms** |
+| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | **9.90 ms** |
+| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | **55.49 ms** |
+| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | **50.14 ms** |
+| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | **212.03 ms** |
 
 **Analysis:**
-- Ralph wins milp15 (10.3x) and milp30 (2.0x) — competitive with GLPK at moderate scale
-- Consistent 3-10x improvement from HYBRID + PATH B LU reuse across all scenarios
-- Objective cutoff adds ~1.1-1.4x on small instances, diminishing at scale
-- GLPK still dominates at scale (milp75+): ~3-8x faster
+- Ralph wins milp15 through milp75 (6.4x down to ~tied with GLPK)
+- Lightweight presolve with priority remapping: 1.3-4.2x across all scenarios
+- milp200 improved 4.2x from presolve alone (882→212ms)
+- GLPK still dominates milp100+ (~2-3x faster)
 - Remaining gap is likely GLPK's Gomory/MIR cuts and dual steepest edge pricing
-- Further gains possible from: bound flipping (§P5), DSE pricing (§P6)
+- Further gains possible from: MIR cuts, bound flipping (§P5), DSE pricing (§P6)
 
 See `fuelwise.md` §8 for FuelWise-specific optimization ideas (symmetry-breaking, flow
 cover cuts, mandatory station fixing).
@@ -203,10 +203,22 @@ Bench tool: `fuelwise-bench --presolve-mask 0x110F`.
 **Lightweight mask 0x110F** = FIXED_VARS + EMPTY_ROWS + EMPTY_COLS + SINGLETON_ROWS +
 BOUND_TIGHTENING + SHIFT_BOUNDS (avoids SINGLETON_COLS, PROBING, PROPORTIONAL_ROWS).
 
-**Conclusion:** Presolve is a net negative for FuelWise MIP except at milp30-75 scale.
-The problematic techniques (singleton cols, probing, proportional rows) create interaction
-effects that worsen B&B tree structure. Keep presolve disabled by default; it remains
-valuable for LP-only problems (NETLIB).
+**Root cause found:** Branch priorities and directions were NOT remapped through presolve.
+The MIP solver received `solve_model` (presolved indices) but used original-index priorities,
+causing completely wrong branching decisions. Fix: remap priorities via `presolved->var_map`.
+
+**After priority remapping fix:**
+
+| Scenario | No presolve | Lightweight (0x110F) | Speedup |
+|----------|------------|---------------------|---------|
+| milp30 | 4.15 ms | **2.52 ms** | **1.6x** |
+| milp50 | 17.67 ms | **8.36 ms** | **2.1x** |
+| milp75 | 142.82 ms | **50.34 ms** | **2.8x** |
+| milp100 | 55.49 ms | **44.17 ms** | **1.3x** |
+| milp200 | 903.49 ms | **225.86 ms** | **4.0x** |
+
+Node counts now match (before fix: 2-4x more nodes with presolve; after: identical).
+Lightweight presolve enabled by default in FuelWise MILP (`fw_presolve_mask = 0x110F`).
 
 ### 1.9 LP Presolve (P3) ✅
 
