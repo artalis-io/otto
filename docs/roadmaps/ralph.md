@@ -2,13 +2,18 @@
 
 Development roadmap for Ralph LP/MIP solver covering algorithms, performance, and planned features.
 
+## Stable Baseline
+
+**`4387869`** (2026-02-12) — HYBRID node selection + PATH B LU reuse. Ralph beats GLPK on
+milp15 (9x) and milp30 (1.9x), 24/24 objective matches. All tests pass (Ralph 150, FuelWise 123).
+
 ## Status Summary (Feb 2026)
 
 | Area | Status | Notes |
 |------|--------|-------|
 | **Revised Simplex** | ✅ Complete | Primal simplex with LU factorization |
 | **LU Factorization** | ✅ Complete | Sparse factorization, eta updates |
-| **Branch & Bound MIP** | ✅ Complete | Basic B&B with cuts |
+| **Branch & Bound MIP** | ✅ Complete | HYBRID node selection, PATH B LU reuse, dual_reopt |
 | **LAP Solver** | ✅ Complete | JVC algorithm, 358 tests |
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
