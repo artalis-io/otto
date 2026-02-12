@@ -964,6 +964,431 @@ void test_gmi_cuts_knapsack(void) {
 }
 
 /* ============================================================================
+ * Test: c-MIR Cuts on Mixed Knapsack
+ *
+ * Mixed-integer knapsack with continuous + integer variables.
+ * c-MIR targets rows with continuous basic variables.
+ *
+ * min  -8x - 5y - 3z    (x integer, y continuous, z integer)
+ * s.t. 3x + 2y + z <= 10
+ *      x + 4y + 2z <= 14
+ *      x in {0..5}, y in [0, 10], z in {0..4}
+ * ============================================================================ */
+void test_cmir_cuts_mixed_knapsack(void) {
+    printf("\n=== Test: c-MIR Cuts Mixed Knapsack ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "max_cut_rounds", 5);
+
+    ralph_add_var(model, 0.0, 5.0, -8.0, RALPH_INTEGER);     /* x */
+    ralph_add_var(model, 0.0, 10.0, -5.0, RALPH_CONTINUOUS);  /* y */
+    ralph_add_var(model, 0.0, 4.0, -3.0, RALPH_INTEGER);      /* z */
+
+    /* 3x + 2y + z <= 10 */
+    int idx1[] = {0, 1, 2};
+    double val1[] = {3.0, 2.0, 1.0};
+    ralph_add_constraint(model, 3, idx1, val1, RALPH_LESS_EQUAL, 10.0);
+
+    /* x + 4y + 2z <= 14 */
+    int idx2[] = {0, 1, 2};
+    double val2[] = {1.0, 4.0, 2.0};
+    ralph_add_constraint(model, 3, idx2, val2, RALPH_LESS_EQUAL, 14.0);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "c-MIR knapsack: OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT(obj < 0.0, "c-MIR knapsack: negative objective (minimizing negative costs)");
+
+    double sol[3];
+    ralph_get_solution(model, sol);
+
+    /* Verify integer variables are integral */
+    ASSERT(fabs(sol[0] - round(sol[0])) < TOLERANCE, "c-MIR knapsack: x is integral");
+    ASSERT(fabs(sol[2] - round(sol[2])) < TOLERANCE, "c-MIR knapsack: z is integral");
+
+    /* Verify bounds */
+    ASSERT(sol[0] >= -TOLERANCE && sol[0] <= 5.0 + TOLERANCE, "c-MIR knapsack: x in [0,5]");
+    ASSERT(sol[1] >= -TOLERANCE && sol[1] <= 10.0 + TOLERANCE, "c-MIR knapsack: y in [0,10]");
+    ASSERT(sol[2] >= -TOLERANCE && sol[2] <= 4.0 + TOLERANCE, "c-MIR knapsack: z in [0,4]");
+
+    /* Verify constraints */
+    double lhs1 = 3*sol[0] + 2*sol[1] + sol[2];
+    double lhs2 = sol[0] + 4*sol[1] + 2*sol[2];
+    ASSERT(lhs1 <= 10.0 + TOLERANCE, "c-MIR knapsack: constraint 1 satisfied");
+    ASSERT(lhs2 <= 14.0 + TOLERANCE, "c-MIR knapsack: constraint 2 satisfied");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: c-MIR Cuts Reduce B&B Nodes
+ *
+ * Compare node count with cuts enabled vs disabled on a small facility
+ * location MIP (binary + continuous). c-MIR targets mixed rows with
+ * continuous basic variables, so this structure exercises it properly.
+ *
+ * 3 facilities, 6 customers:
+ *   min  sum(f_j * y_j) + sum(t_ij * x_ij)
+ *   s.t. sum_j(x_ij) = 1           for each customer i
+ *        x_ij <= y_j                for each i,j
+ *        y_j binary, x_ij in [0,1]
+ * ============================================================================ */
+static void build_small_facility(RalphModel *model) {
+    int nf = 3, nc = 6;
+    double fixed[3] = {80, 100, 90};
+    double trans[6][3] = {
+        {10, 20, 15}, {25, 8, 12}, {14, 18, 9},
+        {22, 11, 16}, {8, 15, 20}, {17, 13, 7},
+    };
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    for (int j = 0; j < nf; j++)
+        ralph_add_var(model, 0.0, 1.0, fixed[j], RALPH_BINARY);
+    for (int i = 0; i < nc; i++)
+        for (int j = 0; j < nf; j++)
+            ralph_add_var(model, 0.0, 1.0, trans[i][j], RALPH_CONTINUOUS);
+
+    int dem_idx[3];
+    double dem_val[3] = {1.0, 1.0, 1.0};
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++)
+            dem_idx[j] = nf + i * nf + j;
+        ralph_add_constraint(model, nf, dem_idx, dem_val, RALPH_EQUAL, 1.0);
+    }
+
+    int lnk_idx[2];
+    double lnk_val[2] = {1.0, -1.0};
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            lnk_idx[0] = nf + i * nf + j;
+            lnk_idx[1] = j;
+            ralph_add_constraint(model, 2, lnk_idx, lnk_val, RALPH_LESS_EQUAL, 0.0);
+        }
+    }
+}
+
+void test_cmir_cuts_reduce_nodes(void) {
+    printf("\n=== Test: c-MIR Cuts Reduce Nodes ===\n");
+
+    /* Solve with cuts enabled */
+    RalphModel *model_on = ralph_create();
+    build_small_facility(model_on);
+    ralph_set_int_param(model_on, "verbose", 0);
+    ralph_set_int_param(model_on, "max_cut_rounds", 5);
+    ralph_set_int_param(model_on, "max_nodes", 10000);
+
+    ralph_optimize(model_on);
+    RalphStatus status_on = ralph_get_status(model_on);
+    ASSERT(status_on == RALPH_STATUS_OPTIMAL, "c-MIR nodes: cuts ON optimal");
+    double obj_on = ralph_get_objval(model_on);
+    int nodes_on = ralph_get_node_count(model_on);
+
+    /* Solve with cuts disabled */
+    RalphModel *model_off = ralph_create();
+    build_small_facility(model_off);
+    ralph_set_int_param(model_off, "verbose", 0);
+    ralph_set_int_param(model_off, "max_cut_rounds", 0);
+    ralph_set_int_param(model_off, "max_nodes", 10000);
+
+    ralph_optimize(model_off);
+    RalphStatus status_off = ralph_get_status(model_off);
+    ASSERT(status_off == RALPH_STATUS_OPTIMAL, "c-MIR nodes: cuts OFF optimal");
+    double obj_off = ralph_get_objval(model_off);
+    int nodes_off = ralph_get_node_count(model_off);
+
+    /* Both should find same optimal */
+    ASSERT_NEAR(obj_on, obj_off, TOLERANCE, "c-MIR nodes: same optimal objective");
+
+    /* Cuts should not increase node count */
+    printf("  INFO: nodes with cuts=%d, without cuts=%d\n", nodes_on, nodes_off);
+    ASSERT(nodes_on <= nodes_off + 1, "c-MIR nodes: cuts don't increase node count");
+
+    ralph_free(model_on);
+    ralph_free(model_off);
+}
+
+/* ============================================================================
+ * Test: c-MIR Cuts with Presolve
+ *
+ * Same mixed knapsack as test_cmir_cuts_mixed_knapsack but with lightweight
+ * presolve enabled. Verifies correct presolve + cut interaction.
+ * ============================================================================ */
+void test_cmir_cuts_with_presolve(void) {
+    printf("\n=== Test: c-MIR Cuts with Presolve ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "max_cut_rounds", 5);
+    ralph_set_int_param(model, "presolve", 1);
+
+    ralph_add_var(model, 0.0, 5.0, -8.0, RALPH_INTEGER);     /* x */
+    ralph_add_var(model, 0.0, 10.0, -5.0, RALPH_CONTINUOUS);  /* y */
+    ralph_add_var(model, 0.0, 4.0, -3.0, RALPH_INTEGER);      /* z */
+
+    int idx1[] = {0, 1, 2};
+    double val1[] = {3.0, 2.0, 1.0};
+    ralph_add_constraint(model, 3, idx1, val1, RALPH_LESS_EQUAL, 10.0);
+
+    int idx2[] = {0, 1, 2};
+    double val2[] = {1.0, 4.0, 2.0};
+    ralph_add_constraint(model, 3, idx2, val2, RALPH_LESS_EQUAL, 14.0);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "c-MIR+presolve: OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT(obj < 0.0, "c-MIR+presolve: negative objective");
+
+    double sol[3];
+    ralph_get_solution(model, sol);
+
+    /* Verify integrality */
+    ASSERT(fabs(sol[0] - round(sol[0])) < TOLERANCE, "c-MIR+presolve: x is integral");
+    ASSERT(fabs(sol[2] - round(sol[2])) < TOLERANCE, "c-MIR+presolve: z is integral");
+
+    /* Verify constraints */
+    double lhs1 = 3*sol[0] + 2*sol[1] + sol[2];
+    double lhs2 = sol[0] + 4*sol[1] + 2*sol[2];
+    ASSERT(lhs1 <= 10.0 + TOLERANCE, "c-MIR+presolve: constraint 1 satisfied");
+    ASSERT(lhs2 <= 14.0 + TOLERANCE, "c-MIR+presolve: constraint 2 satisfied");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: c-MIR Cuts on Small Facility Location
+ *
+ * 5 facilities, 10 customers. Binary open/close + continuous allocation.
+ * Classic mixed-integer problem that exercises c-MIR on structured MIP.
+ * ============================================================================ */
+void test_cmir_cuts_facility_location(void) {
+    printf("\n=== Test: c-MIR Cuts Facility Location ===\n");
+
+    int nf = 5, nc = 10;
+    int nvars = nf + nc * nf;  /* y[j] + x[i][j] */
+
+    /* Deterministic costs */
+    double fixed_cost[5] = {120, 150, 100, 180, 130};
+    double transport[10][5] = {
+        { 8, 15, 10, 22, 12},
+        {14,  6, 18,  9, 11},
+        {10, 12,  7, 16, 14},
+        {20,  8, 14,  5, 17},
+        { 6, 18, 11, 13,  9},
+        {16,  7, 15, 10, 13},
+        {12, 14,  9, 18,  8},
+        { 9, 11, 16,  7, 15},
+        {15, 10, 13, 12,  6},
+        {11, 13,  8, 14, 10},
+    };
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "max_cut_rounds", 5);
+    ralph_set_int_param(model, "max_nodes", 5000);
+
+    /* y[j]: binary facility decisions */
+    for (int j = 0; j < nf; j++)
+        ralph_add_var(model, 0.0, 1.0, fixed_cost[j], RALPH_BINARY);
+
+    /* x[i][j]: continuous allocation (0 to 1) */
+    for (int i = 0; i < nc; i++)
+        for (int j = 0; j < nf; j++)
+            ralph_add_var(model, 0.0, 1.0, transport[i][j], RALPH_CONTINUOUS);
+
+    /* Demand constraints: sum_j x[i][j] = 1 for each customer */
+    int demand_idx[5];
+    double demand_val[5];
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            demand_idx[j] = nf + i * nf + j;
+            demand_val[j] = 1.0;
+        }
+        ralph_add_constraint(model, nf, demand_idx, demand_val, RALPH_EQUAL, 1.0);
+    }
+
+    /* Linking: x[i][j] <= y[j] */
+    int link_idx[2];
+    double link_val[2] = {1.0, -1.0};
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            link_idx[0] = nf + i * nf + j;
+            link_idx[1] = j;
+            ralph_add_constraint(model, 2, link_idx, link_val, RALPH_LESS_EQUAL, 0.0);
+        }
+    }
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "c-MIR facility: OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    printf("  INFO: facility location obj = %.2f\n", obj);
+    ASSERT(obj > 0.0, "c-MIR facility: positive objective");
+
+    double *sol = malloc(nvars * sizeof(double));
+    ralph_get_solution(model, sol);
+
+    /* Verify facility variables are binary */
+    for (int j = 0; j < nf; j++) {
+        ASSERT(fabs(sol[j] - 0.0) < TOLERANCE || fabs(sol[j] - 1.0) < TOLERANCE,
+               "c-MIR facility: y[j] is binary");
+    }
+
+    /* Verify each customer is assigned to exactly one facility */
+    for (int i = 0; i < nc; i++) {
+        double total = 0;
+        for (int j = 0; j < nf; j++)
+            total += sol[nf + i * nf + j];
+        ASSERT(fabs(total - 1.0) < TOLERANCE, "c-MIR facility: customer fully assigned");
+    }
+
+    /* Verify linking: x[i][j] <= y[j] */
+    int link_ok = 1;
+    for (int i = 0; i < nc; i++)
+        for (int j = 0; j < nf; j++)
+            if (sol[nf + i * nf + j] > sol[j] + TOLERANCE) link_ok = 0;
+    ASSERT(link_ok, "c-MIR facility: linking constraints satisfied");
+
+    free(sol);
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: c-MIR Cut Validity
+ *
+ * Solve with cuts, extract solution, verify ALL original constraints
+ * and integrality. Uses a small facility location (same as reduce_nodes
+ * helper) to exercise c-MIR on mixed rows.
+ * ============================================================================ */
+void test_cmir_cuts_validity(void) {
+    printf("\n=== Test: c-MIR Cut Validity ===\n");
+
+    int nf = 3, nc = 6;
+    int nvars = nf + nc * nf;
+    double fixed[3] = {80, 100, 90};
+    double trans[6][3] = {
+        {10, 20, 15}, {25, 8, 12}, {14, 18, 9},
+        {22, 11, 16}, {8, 15, 20}, {17, 13, 7},
+    };
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "max_cut_rounds", 5);
+
+    for (int j = 0; j < nf; j++)
+        ralph_add_var(model, 0.0, 1.0, fixed[j], RALPH_BINARY);
+    for (int i = 0; i < nc; i++)
+        for (int j = 0; j < nf; j++)
+            ralph_add_var(model, 0.0, 1.0, trans[i][j], RALPH_CONTINUOUS);
+
+    int dem_idx[3];
+    double dem_val[3] = {1.0, 1.0, 1.0};
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++)
+            dem_idx[j] = nf + i * nf + j;
+        ralph_add_constraint(model, nf, dem_idx, dem_val, RALPH_EQUAL, 1.0);
+    }
+
+    int lnk_idx[2];
+    double lnk_val[2] = {1.0, -1.0};
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            lnk_idx[0] = nf + i * nf + j;
+            lnk_idx[1] = j;
+            ralph_add_constraint(model, 2, lnk_idx, lnk_val, RALPH_LESS_EQUAL, 0.0);
+        }
+    }
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "c-MIR validity: OPTIMAL");
+
+    double *sol = malloc(nvars * sizeof(double));
+    ralph_get_solution(model, sol);
+
+    /* Verify binary variables are integral */
+    for (int j = 0; j < nf; j++)
+        ASSERT(fabs(sol[j] - round(sol[j])) < TOLERANCE, "c-MIR validity: y[j] integral");
+
+    /* Verify bounds: all vars in [0, 1] */
+    int bounds_ok = 1;
+    for (int j = 0; j < nvars; j++)
+        if (sol[j] < -TOLERANCE || sol[j] > 1.0 + TOLERANCE) bounds_ok = 0;
+    ASSERT(bounds_ok, "c-MIR validity: all bounds satisfied");
+
+    /* Verify demand constraints: sum_j x[i][j] = 1 */
+    int demand_ok = 1;
+    for (int i = 0; i < nc; i++) {
+        double sum = 0;
+        for (int j = 0; j < nf; j++)
+            sum += sol[nf + i * nf + j];
+        if (fabs(sum - 1.0) > TOLERANCE) demand_ok = 0;
+    }
+    ASSERT(demand_ok, "c-MIR validity: demand constraints satisfied");
+
+    /* Verify linking: x[i][j] <= y[j] */
+    int link_ok = 1;
+    for (int i = 0; i < nc; i++)
+        for (int j = 0; j < nf; j++)
+            if (sol[nf + i * nf + j] > sol[j] + TOLERANCE) link_ok = 0;
+    ASSERT(link_ok, "c-MIR validity: linking constraints satisfied");
+
+    free(sol);
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: c-MIR Cuts No Regression with Presolve
+ *
+ * Solve the same facility location with and without presolve (both with
+ * cuts). Both must find the same optimal objective. Catches presolve + cut
+ * interaction bugs.
+ * ============================================================================ */
+void test_cmir_cuts_no_regression_presolve(void) {
+    printf("\n=== Test: c-MIR Cuts No Regression Presolve ===\n");
+
+    double obj_no_presolve = 0;
+
+    for (int pass = 0; pass < 2; pass++) {
+        RalphModel *m = ralph_create();
+        build_small_facility(m);
+        ralph_set_int_param(m, "verbose", 0);
+        ralph_set_int_param(m, "max_cut_rounds", 5);
+        if (pass == 1)
+            ralph_set_int_param(m, "presolve", 1);
+
+        ralph_optimize(m);
+        RalphStatus status = ralph_get_status(m);
+
+        if (pass == 0) {
+            ASSERT(status == RALPH_STATUS_OPTIMAL, "c-MIR presolve regression: no-presolve OPTIMAL");
+            obj_no_presolve = ralph_get_objval(m);
+        } else {
+            ASSERT(status == RALPH_STATUS_OPTIMAL, "c-MIR presolve regression: presolve OPTIMAL");
+            double obj = ralph_get_objval(m);
+            ASSERT_NEAR(obj, obj_no_presolve, TOLERANCE,
+                        "c-MIR presolve regression: same optimal with/without presolve");
+        }
+
+        ralph_free(m);
+    }
+}
+
+/* ============================================================================
  * Regression Test: MIP Warm Start Bound Adjustment
  *
  * Tests that non-basic variable values are properly adjusted when bounds
@@ -2178,6 +2603,14 @@ int main(int argc, char **argv) {
         test_mixed_integer();
         test_facility_location();
         test_gmi_cuts_knapsack();  /* Test GMI cut generation */
+
+        /* c-MIR cut tests */
+        test_cmir_cuts_mixed_knapsack();
+        test_cmir_cuts_reduce_nodes();
+        test_cmir_cuts_with_presolve();
+        test_cmir_cuts_facility_location();
+        test_cmir_cuts_validity();
+        test_cmir_cuts_no_regression_presolve();
 
         /* Regression tests for MIP bugs */
         test_mip_bound_adjustment_regression();     /* Suboptimal solution bug */
