@@ -66,7 +66,7 @@ typedef struct {
     uint64_t seed;
     FWSolverType solver_type;
     int glpk_compare;
-    int presolve;
+    int presolve;       /* 1=explicitly enable, -1=explicitly disable, 0=default */
     unsigned int presolve_mask;
     int as_json;
     int verbose;
@@ -104,6 +104,8 @@ static int parse_args(int argc, char **argv, BenchOptions *opts)
             opts->glpk_compare = 1;
         } else if (strcmp(argv[i], "--presolve") == 0) {
             opts->presolve = 1;
+        } else if (strcmp(argv[i], "--no-presolve") == 0) {
+            opts->presolve = -1;
         } else if (strcmp(argv[i], "--presolve-mask") == 0 && i + 1 < argc) {
             opts->presolve_mask = (unsigned int)strtoul(argv[++i], NULL, 0);
             opts->presolve = 1;
@@ -210,9 +212,11 @@ int main(int argc, char **argv)
         opts.seed = (uint64_t)time(NULL);
     }
 
-    /* Configure presolve if requested */
-    if (opts.presolve) {
+    /* Configure presolve */
+    if (opts.presolve == 1) {
         fw_set_presolve(1, opts.presolve_mask);
+    } else if (opts.presolve == -1) {
+        fw_set_presolve(0, 0);
     }
 
     int failures = 0;
