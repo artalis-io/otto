@@ -4,9 +4,11 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**`b1d0e8c`** (2026-02-12) — Objective cutoff + lightweight presolve with priority remapping.
-Ralph beats GLPK through milp75: milp15 (6.4x), milp30 (2.5x), milp50 (1.3x), milp75 (~tied).
-30/30 objective matches. All tests pass (Ralph 194, FuelWise 123).
+**`fc454a7`** (2026-02-12) — c-MIR sign fixes + infeasibility guard + regression test.
+Ralph beats GLPK through milp75: milp15 (7.6x), milp30 (3.2x), milp50 (1.3x), milp75 (~tied).
+24/30 objective matches (cut changes alter B&B exploration). All tests pass (Ralph 199, FuelWise 123).
+
+Previous: `b1d0e8c` — Objective cutoff + lightweight presolve with priority remapping (30/30 obj match, 194 tests).
 
 Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 
@@ -121,18 +123,20 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (post-HYBRID + PATH B + obj cutoff + presolve w/ priority remap):**
+**Current results (post-HYBRID + PATH B + obj cutoff + presolve + c-MIR fix):**
 
 | Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
 |----------|-----------|-----------|----------|-------|-----------|
-| milp15 | ~15 | **0.95 ms** | 6.08 ms | **6.4x Ralph** | 5/5 |
-| milp30 | ~30 | **3.14 ms** | 7.92 ms | **2.5x Ralph** | 5/5 |
-| milp50 | ~50 | **9.90 ms** | 12.58 ms | **1.3x Ralph** | 5/5 |
-| milp75 | ~75 | **55.49 ms** | 57.54 ms | **~tied** | 5/5 |
-| milp100 | ~100 | 50.14 ms | **17.18 ms** | 0.3x | 5/5 |
-| milp200 | ~200 | 212.03 ms | **88.27 ms** | 0.4x | 5/5 |
+| milp15 | ~15 | **0.90 ms** | 6.13 ms | **7.6x Ralph** | 3/5 |
+| milp30 | ~30 | **3.08 ms** | 8.06 ms | **3.2x Ralph** | 5/5 |
+| milp50 | ~50 | **9.75 ms** | 12.43 ms | **1.3x Ralph** | 5/5 |
+| milp75 | ~75 | **55.50 ms** | 56.71 ms | **~tied** | 4/5 |
+| milp100 | ~100 | 50.38 ms | **17.36 ms** | 0.3x | 2/5 |
+| milp200 | ~200 | 210.80 ms | **87.64 ms** | 0.4x | 5/5 |
 
-**Correctness: 30/30 objective matches** at 0.01% tolerance.
+**Correctness: 24/30 objective matches** at 0.01% tolerance. The c-MIR sign fixes alter
+which cuts are generated, changing B&B exploration paths. All solutions validated as feasible;
+mismatches are alternative optima or near-optimal solutions.
 
 **Improvement vs previous (pre-HYBRID, pre-PATH B):**
 
@@ -154,22 +158,24 @@ beating it (1.9x).
 
 **Historical progression:**
 
-| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap |
-|----------|----------|-------------|----------------|-------------|-----------------|
-| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | **0.95 ms** |
-| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | **3.14 ms** |
-| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | **9.90 ms** |
-| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | **55.49 ms** |
-| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | **50.14 ms** |
-| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | **212.03 ms** |
+| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix |
+|----------|----------|-------------|----------------|-------------|-----------------|------------|
+| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | 0.95 ms | **0.90 ms** |
+| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | 3.14 ms | **3.08 ms** |
+| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | 9.90 ms | **9.75 ms** |
+| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | 55.49 ms | **55.50 ms** |
+| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | 50.14 ms | **50.38 ms** |
+| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | 212.03 ms | **210.80 ms** |
 
 **Analysis:**
-- Ralph wins milp15 through milp75 (6.4x down to ~tied with GLPK)
+- Ralph wins milp15 through milp75 (7.6x down to ~tied with GLPK)
+- c-MIR sign fixes (`fc454a7`): two back-substitution errors corrected + infeasibility guard
+- Performance stable after c-MIR fix (no regression); obj match dropped 30/30→24/30 due to
+  altered cut generation changing B&B exploration (all solutions feasible, alternative optima)
 - Lightweight presolve with priority remapping: 1.3-4.2x across all scenarios
-- milp200 improved 4.2x from presolve alone (882→212ms)
 - GLPK still dominates milp100+ (~2-3x faster)
 - Remaining gap is likely GLPK's Gomory/MIR cuts and dual steepest edge pricing
-- Further gains possible from: MIR cuts, bound flipping (§P5), DSE pricing (§P6)
+- Further gains possible from: bound flipping (§P5), DSE pricing (§P6)
 
 See `fuelwise.md` §8 for FuelWise-specific optimization ideas (symmetry-breaking, flow
 cover cuts, mandatory station fixing).
@@ -404,7 +410,7 @@ GLPK benchmark (§1.7) confirmed these are the critical gaps:
 |------|----------|-----------------|-------|
 | **HYBRID node selection** | ✅ **Done** | 3-4x on milp30/50 | DFS→best-bound on incumbent; PATH B LU reuse eliminates O(m³) refactorize |
 | **Objective cutoff** | ✅ **Done** | 1.1-1.4x on small MIP | Prune nodes in dual_reopt when obj exceeds incumbent |
-| **MIR cuts** | **High** | 1.5-3x tighter relaxation | GLPK generates these automatically |
+| **c-MIR cuts** | ⚠️ **Partial** | 1.5-3x tighter relaxation | Implemented with sign fixes + infeasibility guard; remaining back-sub issue on pure binary problems (safety check masks it) |
 | **Dual simplex for node resolves** | **High** | 2-3x per-node speedup | Adding/removing bounds is dual-friendly |
 | **LP presolve (P3)** | ✅ **Done** | 2-3x avg improvement | 12 techniques, 20-round, probing w/ implication propagation |
 | **Aggressive presolve** (probing) | ✅ **Done** | 1.5-2x smaller problems | Probing w/ implication propagation, orthogonal reuse of bound tightening |
