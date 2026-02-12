@@ -24,14 +24,14 @@ MIP branch-and-bound performance.
 
 Benchmarks (FuelWise MILP, seed=42):
 
-| Scenario | Before (ms) | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | Total Speedup | vs GLPK |
-|----------|-------------|-------------|----------------|-------------|-----------------|---------------|---------|
-| milp15 | 2.28 | 1.07 | 0.99 | 0.73 | **0.95** | **2.4x** | **6.4x faster** |
-| milp30 | 111.72 | 22.40 | 5.97 | 5.20 | **3.14** | **35.6x** | **2.5x faster** |
-| milp50 | 197.36 | 53.39 | 19.09 | 17.65 | **9.90** | **19.9x** | **1.3x faster** |
-| milp75 | ~1232 | 573.14 | 151.89 | ~152 | **55.49** | **22.2x** | **~tied** |
-| milp100 | ~7223 | 175.89 | 54.49 | 54.11 | **50.14** | **144.1x** | 0.3x (2.9x slower) |
-| milp200 | ~19473 | 8987.79 | 890.40 | 882.38 | **212.03** | **91.8x** | 0.4x (2.4x slower) |
+| Scenario | Before (ms) | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix | Total Speedup | vs GLPK |
+|----------|-------------|-------------|----------------|-------------|-----------------|------------|---------------|---------|
+| milp15 | 2.28 | 1.07 | 0.99 | 0.73 | 0.95 | **0.90** | **2.5x** | **7.6x faster** |
+| milp30 | 111.72 | 22.40 | 5.97 | 5.20 | 3.14 | **3.08** | **36.3x** | **3.2x faster** |
+| milp50 | 197.36 | 53.39 | 19.09 | 17.65 | 9.90 | **9.75** | **20.2x** | **1.3x faster** |
+| milp75 | ~1232 | 573.14 | 151.89 | ~152 | 55.49 | **55.50** | **22.2x** | **~tied** |
+| milp100 | ~7223 | 175.89 | 54.49 | 54.11 | 50.14 | **50.38** | **143.4x** | 0.3x (2.9x slower) |
+| milp200 | ~19473 | 8987.79 | 890.40 | 882.38 | 212.03 | **210.80** | **92.4x** | 0.4x (2.4x slower) |
 
 **Improvements beyond initial dual_reopt:**
 - **HYBRID node selection** (`a3cd864`): DFS until first incumbent, then best-bound.
@@ -48,6 +48,11 @@ Benchmarks (FuelWise MILP, seed=42):
   original to presolved variable indices via `presolved->var_map`. Without remapping,
   presolve caused 2-4x more nodes (wrong branching decisions). With remapping: 1.3-4.2x
   faster, node counts identical. Ralph now beats GLPK through milp75.
+- **c-MIR sign fixes** (`fc454a7`): Two back-substitution sign errors fixed in
+  `cmir_build_cut()` (upper-bound substitution constants added instead of subtracted).
+  Added infeasibility guard that rejects trivially infeasible cuts (min LHS > RHS).
+  Performance stable; obj match dropped 30/30→24/30 due to altered B&B exploration from
+  different cut generation (all solutions feasible, alternative optima).
 
 **Bug found during implementation:** Degenerate artificial variables (basic at value 0 after
 Phase 2) become non-zero when bounds change, corrupting the objective with BIG_M terms.
@@ -212,7 +217,7 @@ tableau creation). Ralph's `simplex_solve()` creates a new tableau from scratch 
 | Priority | Improvement | Impact | Effort | Dependencies | Status |
 |----------|-------------|--------|--------|-------------|--------|
 | **P0** | Dual simplex for B&B reopt | 2-5x MIP solves | Medium | None | **DONE** |
-| **P1** | Objective cutoff in `dual_reopt` | 30-50% fewer iters on pruned nodes | Low | P0 | Stub exists |
+| **P1** | Objective cutoff in `dual_reopt` | 30-50% fewer iters on pruned nodes | Low | P0 | **DONE** |
 | **P2** | Crash basis (triangular) | 2-5x cold starts | Medium | None | |
 | **P3** | LP Presolve | 2-3x avg (41x best) | High | None | **DONE** |
 | **P4** | DynamicMaximum pricing | 2-5x pricing | Low-Medium | None | |
