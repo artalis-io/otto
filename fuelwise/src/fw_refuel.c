@@ -300,8 +300,8 @@ int fw_solve_refuel_lp(
 /* Global hint flags. Default 0 = all enabled.
  * Set before solving, NOT thread-safe if modified concurrently. */
 static int fw_mip_hint_flags = 0;
-static int fw_presolve = 0;
-static unsigned int fw_presolve_mask = 0xFFFF;
+static int fw_presolve = 1;
+static unsigned int fw_presolve_mask = 0x110F;  /* Lightweight: fixed+empty+singleton_rows+bound_tight+shift */
 
 void fw_set_mip_hint_flags(int flags) { fw_mip_hint_flags = flags; }
 int fw_get_mip_hint_flags(void) { return fw_mip_hint_flags; }
@@ -850,13 +850,18 @@ int fw_solve_refuel_milp(
     fw_setup_mip_hints(model, problem, k, z_start, &cut_ctx);
 
     /* Solve */
-    ralph_set_int_param(model, "verbose", 0);
+    int fw_verbose = (getenv("FW_VERBOSE") != NULL);
+    ralph_set_int_param(model, "verbose", fw_verbose ? 1 : 0);
     if (fw_presolve) {
         ralph_set_int_param(model, "presolve", 1);
         ralph_set_int_param(model, "presolve_mask", (int)fw_presolve_mask);
     }
     int ret = ralph_optimize(model);
     RalphStatus status = ralph_get_status(model);
+    if (fw_verbose) {
+        printf("  [fw] k=%d vars=%d nodes=%d status=%d\n",
+               k, num_vars, ralph_get_node_count(model), (int)status);
+    }
 
     fw_free_cut_context(&cut_ctx);
 

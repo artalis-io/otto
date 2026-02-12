@@ -511,19 +511,39 @@ int ralph_optimize(RalphModel *model) {
             model->mip_solver->node_queue->strategy = (NodeSelectStrategy)model->node_select;
         }
 
-        /* Pass branching control data to MIP solver */
+        /* Pass branching control data to MIP solver.
+         * When presolve is active, remap from original to presolved indices
+         * using var_map[reduced_j] → original_j. */
         if (model->branch_priorities) {
-            int n = model->lp_model->num_vars;
-            model->mip_solver->branch_priorities = (int*)malloc(n * sizeof(int));
+            int n_solve = solve_model->num_vars;
+            model->mip_solver->branch_priorities = (int*)malloc(n_solve * sizeof(int));
             if (model->mip_solver->branch_priorities) {
-                memcpy(model->mip_solver->branch_priorities, model->branch_priorities, n * sizeof(int));
+                if (presolved && presolved->var_map) {
+                    for (int j = 0; j < n_solve; j++) {
+                        int orig = presolved->var_map[j];
+                        model->mip_solver->branch_priorities[j] =
+                            (orig >= 0) ? model->branch_priorities[orig] : 0;
+                    }
+                } else {
+                    memcpy(model->mip_solver->branch_priorities, model->branch_priorities,
+                           n_solve * sizeof(int));
+                }
             }
         }
         if (model->branch_directions) {
-            int n = model->lp_model->num_vars;
-            model->mip_solver->branch_directions = (int*)malloc(n * sizeof(int));
+            int n_solve = solve_model->num_vars;
+            model->mip_solver->branch_directions = (int*)malloc(n_solve * sizeof(int));
             if (model->mip_solver->branch_directions) {
-                memcpy(model->mip_solver->branch_directions, model->branch_directions, n * sizeof(int));
+                if (presolved && presolved->var_map) {
+                    for (int j = 0; j < n_solve; j++) {
+                        int orig = presolved->var_map[j];
+                        model->mip_solver->branch_directions[j] =
+                            (orig >= 0) ? model->branch_directions[orig] : 0;
+                    }
+                } else {
+                    memcpy(model->mip_solver->branch_directions, model->branch_directions,
+                           n_solve * sizeof(int));
+                }
             }
         }
 

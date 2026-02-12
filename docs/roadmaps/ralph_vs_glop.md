@@ -24,14 +24,14 @@ MIP branch-and-bound performance.
 
 Benchmarks (FuelWise MILP, seed=42):
 
-| Scenario | Before (ms) | +dual_reopt (ms) | +HYBRID+PATH B (ms) | +obj cutoff (ms) | Total Speedup | vs GLPK |
-|----------|-------------|-----------------|---------------------|------------------|---------------|---------|
-| milp15 | 2.28 | 1.07 | 0.99 | **0.73** | **3.1x** | **10.3x faster** |
-| milp30 | 111.72 | 22.40 | 5.97 | **5.20** | **21.5x** | **2.0x faster** |
-| milp50 | 197.36 | 53.39 | 19.09 | **17.65** | **11.2x** | 0.7x (1.4x slower) |
-| milp75 | ~1232 | 573.14 | 151.89 | **~152** | **8.1x** | 0.2x (6.3x slower) |
-| milp100 | ~7223 | 175.89 | 54.49 | **54.11** | **133.5x** | 0.3x (3.4x slower) |
-| milp200 | ~19473 | 8987.79 | 890.40 | **882.38** | **22.1x** | 0.1x (7.9x slower) |
+| Scenario | Before (ms) | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | Total Speedup | vs GLPK |
+|----------|-------------|-------------|----------------|-------------|-----------------|---------------|---------|
+| milp15 | 2.28 | 1.07 | 0.99 | 0.73 | **0.95** | **2.4x** | **6.4x faster** |
+| milp30 | 111.72 | 22.40 | 5.97 | 5.20 | **3.14** | **35.6x** | **2.5x faster** |
+| milp50 | 197.36 | 53.39 | 19.09 | 17.65 | **9.90** | **19.9x** | **1.3x faster** |
+| milp75 | ~1232 | 573.14 | 151.89 | ~152 | **55.49** | **22.2x** | **~tied** |
+| milp100 | ~7223 | 175.89 | 54.49 | 54.11 | **50.14** | **144.1x** | 0.3x (2.9x slower) |
+| milp200 | ~19473 | 8987.79 | 890.40 | 882.38 | **212.03** | **91.8x** | 0.4x (2.4x slower) |
 
 **Improvements beyond initial dual_reopt:**
 - **HYBRID node selection** (`a3cd864`): DFS until first incumbent, then best-bound.
@@ -43,6 +43,11 @@ Benchmarks (FuelWise MILP, seed=42):
 - **Objective cutoff** (`8c12c0f`): `dual_reopt()` now prunes nodes when `tab->obj_value`
   exceeds incumbent. `dual_simplex_pivot()` already recomputes `obj_value` after each pivot,
   so the check is always accurate. ~1.1-1.4x on small instances, diminishing at scale.
+- **Presolve with priority remapping**: Lightweight presolve (0x110F) enabled by default
+  for FuelWise MILP. Key bug fix: branch priorities/directions must be remapped from
+  original to presolved variable indices via `presolved->var_map`. Without remapping,
+  presolve caused 2-4x more nodes (wrong branching decisions). With remapping: 1.3-4.2x
+  faster, node counts identical. Ralph now beats GLPK through milp75.
 
 **Bug found during implementation:** Degenerate artificial variables (basic at value 0 after
 Phase 2) become non-zero when bounds change, corrupting the objective with BIG_M terms.
