@@ -28,6 +28,7 @@ NodeQueue* node_queue_create(int capacity, NodeSelectStrategy strategy, int obj_
     queue->size = 0;
     queue->strategy = strategy;
     queue->obj_sense = obj_sense;
+    queue->has_incumbent = 0;
 
     queue->nodes = (BBNode**)calloc(queue->capacity, sizeof(BBNode*));
     if (!queue->nodes) {
@@ -53,7 +54,9 @@ void node_queue_free_with_pool(NodeQueue *queue, BBNodePool *pool) {
 }
 
 /* Compare nodes based on strategy */
-static int node_compare(const BBNode *a, const BBNode *b, NodeSelectStrategy strategy, int obj_sense) {
+static int node_compare(const BBNode *a, const BBNode *b,
+                        NodeSelectStrategy strategy, int obj_sense,
+                        int has_incumbent) {
     switch (strategy) {
         case NODE_SELECT_BEST_FIRST:
             /* Lower bound is better for minimization */
@@ -76,16 +79,21 @@ static int node_compare(const BBNode *a, const BBNode *b, NodeSelectStrategy str
             }
 
         case NODE_SELECT_HYBRID:
-            /* Depth-first until first solution, then best-first */
-            /* Handled in pop by checking has_incumbent */
-            if (a->depth != b->depth) {
-                return (a->depth > b->depth) ? -1 : 1;
+            if (!has_incumbent) {
+                /* Pre-incumbent: depth-first to find feasible solution fast */
+                if (a->depth != b->depth)
+                    return (a->depth > b->depth) ? -1 : 1;
+                /* Tiebreak by LP bound */
+                if (obj_sense == 1)
+                    return (a->lp_bound < b->lp_bound) ? -1 : 1;
+                else
+                    return (a->lp_bound > b->lp_bound) ? -1 : 1;
             }
-            if (obj_sense == 1) {
+            /* Post-incumbent: best-first to close gap efficiently */
+            if (obj_sense == 1)
                 return (a->lp_bound < b->lp_bound) ? -1 : 1;
-            } else {
+            else
                 return (a->lp_bound > b->lp_bound) ? -1 : 1;
-            }
 
         default:
             return 0;
@@ -97,7 +105,8 @@ static void heapify_up(NodeQueue *queue, int idx) {
     while (idx > 0) {
         int parent = (idx - 1) / 2;
         if (node_compare(queue->nodes[idx], queue->nodes[parent],
-                        queue->strategy, queue->obj_sense) < 0) {
+                        queue->strategy, queue->obj_sense,
+                        queue->has_incumbent) < 0) {
             BBNode *tmp = queue->nodes[idx];
             queue->nodes[idx] = queue->nodes[parent];
             queue->nodes[parent] = tmp;
@@ -118,12 +127,14 @@ static void heapify_down(NodeQueue *queue, int idx) {
 
         if (left < size &&
             node_compare(queue->nodes[left], queue->nodes[smallest],
-                        queue->strategy, queue->obj_sense) < 0) {
+                        queue->strategy, queue->obj_sense,
+                        queue->has_incumbent) < 0) {
             smallest = left;
         }
         if (right < size &&
             node_compare(queue->nodes[right], queue->nodes[smallest],
-                        queue->strategy, queue->obj_sense) < 0) {
+                        queue->strategy, queue->obj_sense,
+                        queue->has_incumbent) < 0) {
             smallest = right;
         }
 
@@ -227,6 +238,17 @@ double node_queue_best_bound(const NodeQueue *queue) {
         }
     }
     return best;
+}
+
+/* Notify queue that an incumbent was found (for HYBRID strategy switch) */
+void node_queue_set_incumbent_found(NodeQueue *queue) {
+    if (!queue || queue->has_incumbent) return;
+    queue->has_incumbent = 1;
+    /* HYBRID ordering changes — rebuild heap */
+    if (queue->strategy == NODE_SELECT_HYBRID && queue->size > 1) {
+        for (int i = queue->size / 2 - 1; i >= 0; i--)
+            heapify_down(queue, i);
+    }
 }
 
 /* ============================================================================

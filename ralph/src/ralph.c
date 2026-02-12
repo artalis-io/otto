@@ -39,6 +39,7 @@ struct RalphModel {
     int pricing; /* 0=Dantzig, 1=Steepest edge, 2=Devex (default), 3=Partial */
     int detect_special; /* 1=detect LAP/network structure, 0=disable */
     int node_pool_capacity; /* Pre-allocated B&B node pool size (default 1024) */
+    int node_select;  /* 0=best-first, 1=DFS, 2=best-estimate, 3=hybrid (default) */
     int force_two_phase; /* 1=force two-phase simplex for clean Farkas duals */
     int trace_phase1; /* 1=emit deterministic Phase-1 failure trace */
 
@@ -103,6 +104,7 @@ RalphModel* ralph_create(void) {
     model->pricing = 2; /* Default: Devex */
     model->detect_special = 0; /* Default: disabled for fair benchmarking */
     model->node_pool_capacity = 1024; /* Default B&B node pool size */
+    model->node_select = 3; /* Default: hybrid */
     model->trace_phase1 = 0;
 
     model->status = RALPH_STATUS_UNKNOWN;
@@ -500,6 +502,12 @@ int ralph_optimize(RalphModel *model) {
         model->mip_solver->mip_gap = model->mip_gap;
         model->mip_solver->verbose = model->verbose;
         model->mip_solver->max_cut_rounds = model->max_cut_rounds;
+
+        /* Set node selection strategy */
+        model->mip_solver->node_select = (NodeSelectStrategy)model->node_select;
+        if (model->mip_solver->node_queue) {
+            model->mip_solver->node_queue->strategy = (NodeSelectStrategy)model->node_select;
+        }
 
         /* Pass branching control data to MIP solver */
         if (model->branch_priorities) {
@@ -1058,6 +1066,10 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (STREQ(name, "node_pool_capacity") || STREQ(name, "PoolCapacity")) {
         /* Pre-allocated B&B node pool size (0 = use default 1024) */
         model->node_pool_capacity = value > 0 ? value : 1024;
+    } else if (STREQ(name, "node_select") || STREQ(name, "NodeSelect")) {
+        /* 0=best-first, 1=DFS, 2=best-estimate, 3=hybrid */
+        if (value < 0 || value > 3) return -1;
+        model->node_select = value;
     } else if (STREQ(name, "force_two_phase") || STREQ(name, "TwoPhase")) {
         /* 1=force two-phase simplex for clean Farkas duals, 0=default (Big-M) */
         model->force_two_phase = value;
@@ -1102,6 +1114,8 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
         *value = model->method;
     } else if (STREQ(name, "node_pool_capacity")) {
         *value = model->node_pool_capacity;
+    } else if (STREQ(name, "node_select")) {
+        *value = model->node_select;
     } else if (STREQ(name, "trace_phase1")) {
         *value = model->trace_phase1;
     } else {
