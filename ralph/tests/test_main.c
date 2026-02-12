@@ -2048,6 +2048,106 @@ void test_branch_callback(void) {
 }
 
 /* ============================================================================
+ * Test: Node Selection Strategies
+ *
+ * Verify that BEST_FIRST, DEPTH_FIRST, and HYBRID all find the same optimal
+ * objective on a small facility location MIP. Also test the node_select
+ * parameter API.
+ * ============================================================================ */
+
+/* Helper: build and solve a facility location MIP with a given node_select value.
+ * Returns objective value (or 1e30 on error). */
+static double solve_facility_with_strategy(int strategy) {
+    RalphModel *model = ralph_create();
+    if (!model) return 1e30;
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* 2 facilities, 3 customers (same as test_facility_location) */
+    ralph_add_var(model, 0, 1, 100, RALPH_BINARY);  /* y[0] */
+    ralph_add_var(model, 0, 1, 150, RALPH_BINARY);  /* y[1] */
+
+    double cost[2][3] = {{10, 20, 15}, {25, 10, 20}};
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < 3; j++)
+            ralph_add_var(model, 0, 1, cost[i][j], RALPH_CONTINUOUS);
+
+    /* Each customer must be fully served */
+    for (int j = 0; j < 3; j++) {
+        int idx[] = {2 + j, 2 + 3 + j};
+        double val[] = {1.0, 1.0};
+        ralph_add_constraint(model, 2, idx, val, RALPH_EQUAL, 1.0);
+    }
+
+    /* Can only serve from open facility */
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 3; j++) {
+            int idx[] = {2 + i*3 + j, i};
+            double val[] = {1.0, -1.0};
+            ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+        }
+    }
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "node_select", strategy);
+
+    ralph_optimize(model);
+
+    double obj = 1e30;
+    if (ralph_get_status(model) == RALPH_STATUS_OPTIMAL) {
+        obj = ralph_get_objval(model);
+    }
+
+    ralph_free(model);
+    return obj;
+}
+
+void test_node_selection_strategies(void) {
+    printf("\n=== Test: Node Selection Strategies ===\n");
+
+    /* 1. Parameter API tests */
+    {
+        RalphModel *m = ralph_create();
+
+        /* Default should be 3 (HYBRID) */
+        int val = -1;
+        ralph_get_int_param(m, "node_select", &val);
+        ASSERT(val == 3, "Default node_select is HYBRID (3)");
+
+        /* Set and get each valid value */
+        ASSERT(ralph_set_int_param(m, "node_select", 0) == 0, "Set node_select=0 (BEST_FIRST)");
+        ralph_get_int_param(m, "node_select", &val);
+        ASSERT(val == 0, "Get node_select returns 0");
+
+        ASSERT(ralph_set_int_param(m, "node_select", 1) == 0, "Set node_select=1 (DEPTH_FIRST)");
+        ASSERT(ralph_set_int_param(m, "node_select", 2) == 0, "Set node_select=2 (BEST_ESTIMATE)");
+        ASSERT(ralph_set_int_param(m, "node_select", 3) == 0, "Set node_select=3 (HYBRID)");
+
+        /* Reject invalid values */
+        ASSERT(ralph_set_int_param(m, "node_select", -1) == -1, "Reject node_select=-1");
+        ASSERT(ralph_set_int_param(m, "node_select", 4) == -1, "Reject node_select=4");
+
+        /* Also accept the Gurobi-style name */
+        ASSERT(ralph_set_int_param(m, "NodeSelect", 1) == 0, "Set NodeSelect=1");
+
+        ralph_free(m);
+    }
+
+    /* 2. Correctness: all strategies find the same optimal objective */
+    double obj_bf = solve_facility_with_strategy(0);       /* BEST_FIRST */
+    double obj_dfs = solve_facility_with_strategy(1);      /* DEPTH_FIRST */
+    double obj_hybrid = solve_facility_with_strategy(3);   /* HYBRID */
+
+    ASSERT(fabs(obj_bf - obj_dfs) < TOLERANCE,
+           "BEST_FIRST and DEPTH_FIRST find same optimum");
+    ASSERT(fabs(obj_bf - obj_hybrid) < TOLERANCE,
+           "BEST_FIRST and HYBRID find same optimum");
+
+    printf("  Objectives: BF=%.2f, DFS=%.2f, HYBRID=%.2f\n",
+           obj_bf, obj_dfs, obj_hybrid);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -2100,6 +2200,9 @@ int main(int argc, char **argv) {
 
         /* Branch callback tests */
         test_branch_callback();
+
+        /* Node selection strategy tests */
+        test_node_selection_strategies();
 
         /* LAP-based MIP tests */
         test_lap_mip_assignment();

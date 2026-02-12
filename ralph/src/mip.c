@@ -233,6 +233,7 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
         solver->best_obj = obj;
         memcpy(solver->best_solution, solution, model->num_vars * sizeof(double));
         solver->has_incumbent = 1;
+        node_queue_set_incumbent_found(solver->node_queue);
 
         /* Update cutoff for pruning */
         solver->cutoff = obj;

@@ -116,6 +116,7 @@ typedef struct {
     BBNode **nodes;
     NodeSelectStrategy strategy;
     int obj_sense;      /* For comparison direction */
+    int has_incumbent;  /* For HYBRID: 0=depth-first phase, 1=best-first phase */
 } NodeQueue;
 
 /* MIP solver state */
@@ -212,6 +213,7 @@ int node_queue_is_empty(const NodeQueue *queue);
 void node_queue_update_bound(NodeQueue *queue, double cutoff);
 void node_queue_update_bound_with_pool(NodeQueue *queue, double cutoff, BBNodePool *pool);
 double node_queue_best_bound(const NodeQueue *queue);
+void node_queue_set_incumbent_found(NodeQueue *queue);
 
 BBNode* bb_node_create(int num_vars);
 void bb_node_free(BBNode *node);
