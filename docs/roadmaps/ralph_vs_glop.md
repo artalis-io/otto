@@ -24,14 +24,14 @@ MIP branch-and-bound performance.
 
 Benchmarks (FuelWise MILP, seed=42):
 
-| Scenario | Before (ms) | After dual_reopt (ms) | After HYBRID+PATH B (ms) | Total Speedup | vs GLPK |
-|----------|-------------|----------------------|--------------------------|---------------|---------|
-| milp15 | 2.28 | 1.07 | **0.99** | **2.3x** | **9.0x faster** |
-| milp30 | 111.72 | 22.40 | **5.97** | **18.7x** | **1.9x faster** |
-| milp50 | 197.36 | 53.39 | **19.09** | **10.3x** | 0.7x (1.5x slower) |
-| milp75 | ~1232 | 573.14 | **151.89** | **8.1x** | 0.2x (6.3x slower) |
-| milp100 | ~7223 | 175.89 | **54.49** | **132.6x** | 0.3x (3.4x slower) |
-| milp200 | ~19473 | 8987.79 | **890.40** | **21.9x** | 0.1x (7.9x slower) |
+| Scenario | Before (ms) | +dual_reopt (ms) | +HYBRID+PATH B (ms) | +obj cutoff (ms) | Total Speedup | vs GLPK |
+|----------|-------------|-----------------|---------------------|------------------|---------------|---------|
+| milp15 | 2.28 | 1.07 | 0.99 | **0.73** | **3.1x** | **10.3x faster** |
+| milp30 | 111.72 | 22.40 | 5.97 | **5.20** | **21.5x** | **2.0x faster** |
+| milp50 | 197.36 | 53.39 | 19.09 | **17.65** | **11.2x** | 0.7x (1.4x slower) |
+| milp75 | ~1232 | 573.14 | 151.89 | **~152** | **8.1x** | 0.2x (6.3x slower) |
+| milp100 | ~7223 | 175.89 | 54.49 | **54.11** | **133.5x** | 0.3x (3.4x slower) |
+| milp200 | ~19473 | 8987.79 | 890.40 | **882.38** | **22.1x** | 0.1x (7.9x slower) |
 
 **Improvements beyond initial dual_reopt:**
 - **HYBRID node selection** (`a3cd864`): DFS until first incumbent, then best-bound.
@@ -40,6 +40,9 @@ Benchmarks (FuelWise MILP, seed=42):
   PATH B's `restore_basis_from_node()` → `tableau_refactorize()` (O(m³)). Fix: skip basis
   restore, reuse current LU factors, update bounds, run `dual_reopt` with larger budget
   (10×m, cap 2000). Each pivot O(m) vs O(m³) refactorize. If budget exceeded, fall to PATH C.
+- **Objective cutoff** (`8c12c0f`): `dual_reopt()` now prunes nodes when `tab->obj_value`
+  exceeds incumbent. `dual_simplex_pivot()` already recomputes `obj_value` after each pivot,
+  so the check is always accurate. ~1.1-1.4x on small instances, diminishing at scale.
 
 **Bug found during implementation:** Degenerate artificial variables (basic at value 0 after
 Phase 2) become non-zero when bounds change, corrupting the objective with BIG_M terms.

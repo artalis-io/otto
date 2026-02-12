@@ -118,16 +118,16 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (post-HYBRID fix + PATH B LU reuse):**
+**Current results (post-HYBRID + PATH B + objective cutoff):**
 
 | Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
 |----------|-----------|-----------|----------|-------|-----------|
-| milp15 | ~15 | **0.99 ms** | 8.55 ms | **9.0x Ralph** | 5/5 |
-| milp30 | ~30 | **5.97 ms** | 7.80 ms | **1.9x Ralph** | 5/5 |
-| milp50 | ~50 | 19.09 ms | **12.50 ms** | 0.7x | 5/5 |
+| milp15 | ~15 | **0.73 ms** | 8.55 ms | **10.3x Ralph** | 5/5 |
+| milp30 | ~30 | **5.20 ms** | 7.80 ms | **2.0x Ralph** | 5/5 |
+| milp50 | ~50 | 17.65 ms | **12.50 ms** | 0.7x | 5/5 |
 | milp75 | ~75 | 151.89 ms | **24.13 ms** | 0.2x | 3/3 |
-| milp100 | ~100 | 54.49 ms | **15.88 ms** | 0.3x | 3/3 |
-| milp200 | ~200 | 890.40 ms | **112.12 ms** | 0.1x | 3/3 |
+| milp100 | ~100 | 54.11 ms | **15.88 ms** | 0.3x | 3/3 |
+| milp200 | ~200 | 882.38 ms | **112.12 ms** | 0.1x | 3/3 |
 
 **Correctness: 24/24 objective matches** at 0.01% tolerance.
 
@@ -151,27 +151,64 @@ beating it (1.9x).
 
 **Historical progression:**
 
-| Scenario | Baseline | +dual_reopt | +P3 presolve | +HYBRID+PATH B |
-|----------|----------|-------------|--------------|----------------|
-| milp15 | ~2.3 ms | ~1.1 ms | 1.07 ms | **0.99 ms** |
-| milp30 | ~112 ms | ~22 ms | 22.21 ms | **5.97 ms** |
-| milp50 | ~197 ms | ~53 ms | 52.68 ms | **19.09 ms** |
-| milp75 | ~1232 ms | ~573 ms | 573.14 ms | **151.89 ms** |
-| milp100 | ~7223 ms | ~176 ms | 175.89 ms | **54.49 ms** |
-| milp200 | ~19473 ms | ~8988 ms | 8987.79 ms | **890.40 ms** |
+| Scenario | Baseline | +dual_reopt | +P3 presolve | +HYBRID+PATH B | +obj cutoff |
+|----------|----------|-------------|--------------|----------------|-------------|
+| milp15 | ~2.3 ms | ~1.1 ms | 1.07 ms | 0.99 ms | **0.73 ms** |
+| milp30 | ~112 ms | ~22 ms | 22.21 ms | 5.97 ms | **5.20 ms** |
+| milp50 | ~197 ms | ~53 ms | 52.68 ms | 19.09 ms | **17.65 ms** |
+| milp75 | ~1232 ms | ~573 ms | 573.14 ms | 151.89 ms | **~152 ms** |
+| milp100 | ~7223 ms | ~176 ms | 175.89 ms | 54.49 ms | **54.11 ms** |
+| milp200 | ~19473 ms | ~8988 ms | 8987.79 ms | 890.40 ms | **882.38 ms** |
 
 **Analysis:**
-- Ralph wins milp15 (9.0x) and milp30 (1.9x) — competitive with GLPK at moderate scale
+- Ralph wins milp15 (10.3x) and milp30 (2.0x) — competitive with GLPK at moderate scale
 - Consistent 3-10x improvement from HYBRID + PATH B LU reuse across all scenarios
+- Objective cutoff adds ~1.1-1.4x on small instances, diminishing at scale
 - GLPK still dominates at scale (milp75+): ~3-8x faster
 - Remaining gap is likely GLPK's Gomory/MIR cuts and dual steepest edge pricing
-- Further gains possible from: objective cutoff in dual_reopt (§P1), bound flipping (§P5),
-  DSE pricing (§P6)
+- Further gains possible from: bound flipping (§P5), DSE pricing (§P6)
 
 See `fuelwise.md` §8 for FuelWise-specific optimization ideas (symmetry-breaking, flow
 cover cuts, mandatory station fixing).
 
-### 1.8 LP Presolve (P3) ✅
+### 1.8 Presolve Impact on FuelWise MIP (Investigation)
+
+**Question:** Presolve helps LP (beaconfd, lotfi) but makes FuelWise MIP 20-100x slower. Why?
+
+**Infrastructure:** `presolve_with_mask()` enables selective technique control via bitmask.
+Exposed through `ralph_set_int_param("presolve_mask")` and `fw_set_presolve()`.
+Bench tool: `fuelwise-bench --presolve-mask 0x110F`.
+
+**All-minus-one analysis (milp30, baseline 5ms no-presolve, 111ms all-presolve):**
+
+| Removed Technique | Time | Impact |
+|-------------------|------|--------|
+| w/o SHIFT_BOUNDS | **INFEASIBLE** | Required for correctness with other techniques |
+| w/o SINGLETON_COLS | 20 ms | Major offender (111→20) |
+| w/o PROBING | 46 ms | Significant (111→46) |
+| w/o PROPORTIONAL_ROWS | 79 ms | Moderate (111→79) |
+| w/o others | ~111 ms | No impact |
+
+**Cross-scenario comparison (best lightweight mask: 0x110F):**
+
+| Scenario | No presolve | Lightweight (0x110F) | All (0xFFFF) |
+|----------|------------|---------------------|--------------|
+| milp15 | **0.77 ms** | 0.99 ms | 10.43 ms |
+| milp30 | 4.94 ms | **3.25 ms** | 110.59 ms |
+| milp50 | 18.20 ms | **14.38 ms** | 717.20 ms |
+| milp75 | 218.96 ms | **99.70 ms** | 2725.80 ms |
+| milp100 | **58.69 ms** | 76.90 ms | 8639.20 ms |
+| milp200 | **875.96 ms** | 2204.33 ms | timeout |
+
+**Lightweight mask 0x110F** = FIXED_VARS + EMPTY_ROWS + EMPTY_COLS + SINGLETON_ROWS +
+BOUND_TIGHTENING + SHIFT_BOUNDS (avoids SINGLETON_COLS, PROBING, PROPORTIONAL_ROWS).
+
+**Conclusion:** Presolve is a net negative for FuelWise MIP except at milp30-75 scale.
+The problematic techniques (singleton cols, probing, proportional rows) create interaction
+effects that worsen B&B tree structure. Keep presolve disabled by default; it remains
+valuable for LP-only problems (NETLIB).
+
+### 1.9 LP Presolve (P3) ✅
 
 **Implemented:** 20-round fixed-point presolve with 12 techniques (matching GLOP iteration count):
 
@@ -351,10 +388,12 @@ GLPK benchmark (§1.7) confirmed these are the critical gaps:
 | Task | Priority | Expected Impact | Notes |
 |------|----------|-----------------|-------|
 | **HYBRID node selection** | ✅ **Done** | 3-4x on milp30/50 | DFS→best-bound on incumbent; PATH B LU reuse eliminates O(m³) refactorize |
+| **Objective cutoff** | ✅ **Done** | 1.1-1.4x on small MIP | Prune nodes in dual_reopt when obj exceeds incumbent |
 | **MIR cuts** | **High** | 1.5-3x tighter relaxation | GLPK generates these automatically |
 | **Dual simplex for node resolves** | **High** | 2-3x per-node speedup | Adding/removing bounds is dual-friendly |
 | **LP presolve (P3)** | ✅ **Done** | 2-3x avg improvement | 12 techniques, 20-round, probing w/ implication propagation |
 | **Aggressive presolve** (probing) | ✅ **Done** | 1.5-2x smaller problems | Probing w/ implication propagation, orthogonal reuse of bound tightening |
+| **Presolve mask for MIP** | ✅ **Done** | Investigation only | See §1.8 — presolve hurts FuelWise MIP; keep disabled |
 | Pseudocost branching | High | 1.5-2x better variable selection | Replaces static priorities with learned costs |
 | Solution pool / incumbents | Medium | Faster pruning from good bounds | LP rounding for initial incumbent |
 | Clique detection | Medium | From set-packing constraints | |
