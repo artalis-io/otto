@@ -103,6 +103,7 @@ nexus/nx_pipeline
 # Shared test binaries
 shared/test_sha256
 shared/test_xml
+shared/test_pdf2struc
 
 # Build artifacts
 ralph/api/ralph-solver-server

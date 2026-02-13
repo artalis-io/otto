@@ -87,7 +87,13 @@ TEST_JSON_BIN = test_sh_json
 TEST_XML_BIN = test_xml
 TEST_SHA256_BIN = test_sha256
 
-.PHONY: all clean test test-font test-json test-xml test-sha256 font-compare lib debug generate-font-data
+# PDF2struc - separate sub-system (not compiled into libshared.a)
+PDF2STRUC_SRCS = src/sh_pdf2struc.c src/sh_pdf2struc_text.c
+PDF2STRUC_OBJS = $(PDF2STRUC_SRCS:.c=.o)
+PDF2STRUC_LIB = libsh_pdf2struc.a
+TEST_PDF2STRUC_BIN = test_pdf2struc
+
+.PHONY: all clean test test-font test-json test-xml test-sha256 test-pdf2struc font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -141,6 +147,17 @@ test-xml: $(TEST_XML_BIN)
 test-sha256: $(TEST_SHA256_BIN)
 	./$(TEST_SHA256_BIN)
 
+# PDF2struc library (separate sub-system)
+$(PDF2STRUC_LIB): $(PDF2STRUC_OBJS)
+	ar rcs $@ $^
+
+$(TEST_PDF2STRUC_BIN): tests/test_pdf2struc.c $(PDF2STRUC_LIB) $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsh_pdf2struc -lshared $(LDFLAGS) -o $@
+
+# Run PDF2struc tests only
+test-pdf2struc: $(TEST_PDF2STRUC_BIN)
+	./$(TEST_PDF2STRUC_BIN)
+
 # Run font tests only
 test-font: $(TEST_FONT_BIN)
 	./$(TEST_FONT_BIN)
@@ -170,6 +187,7 @@ debug: clean all
 # Clean
 clean:
 	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_SHA256_BIN) $(FONT_COMPARE_BIN)
+	rm -f $(PDF2STRUC_OBJS) $(PDF2STRUC_LIB) $(TEST_PDF2STRUC_BIN)
 	rm -f tests/soft_*.png tests/compare.html
 
 # Dependencies
@@ -203,6 +221,8 @@ src/sh_polyline.o: include/sh_polyline.h include/sh_geo.h
 src/sh_json.o: include/sh_json.h include/sh_arena.h
 src/sh_xml.o: include/sh_xml.h include/sh_arena.h
 src/sh_hash_sha256.o: include/sh_hash_sha256.h
+src/sh_pdf2struc.o: include/sh_pdf2struc.h include/sh_arena.h include/sh_inflate.h src/sh_pdf2struc_internal.h
+src/sh_pdf2struc_text.o: include/sh_pdf2struc.h include/sh_arena.h src/sh_pdf2struc_internal.h
 
 # Help
 help:

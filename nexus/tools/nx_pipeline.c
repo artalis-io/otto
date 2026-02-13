@@ -2,7 +2,7 @@
  * nx_pipeline.c - Unified Nexus Document Ingestion Pipeline (C)
  *
  * End-to-end pipeline: document → raw JSON → canonical JSON.
- * All processing in-process except PDF text extraction (pdfplumber via popen).
+ * All processing fully in-process (no external dependencies).
  *
  * Usage:
  *   nx_pipeline input.pdf [--schema schema.json] [--row-tol N] [--col-gap N]
@@ -21,14 +21,15 @@
 #include "nx_xform.h"
 #include "sh_arena.h"
 #include "sh_json.h"
+#include "sh_pdf2struc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <libgen.h>
 
 #define PIPELINE_ARENA_SIZE (64 * 1024 * 1024) /* 64 MB */
 #define MAX_PDF_TEXT_SIZE   (32 * 1024 * 1024)  /* 32 MB max text-run JSON */
-#define SCRIPT_NAME         "pdf-to-text-json.py"
 
 /* ============================================================================
  * File I/O
@@ -88,100 +89,160 @@ static const char *format_name(FileFormat fmt)
 }
 
 /* ============================================================================
- * PDF Text Extraction via popen (calls Python pdfplumber)
+ * PDF Text Extraction via sh_pdf2struc (pure C, no external dependencies)
  * ============================================================================ */
 
-/*
- * Find the pdf-to-text-json.py script relative to the executable.
- * Searches: ./scripts/, ../scripts/, ../nexus/scripts/
- */
-static int find_script(char *out, size_t out_size)
-{
-    const char *search[] = {
-        "scripts/" SCRIPT_NAME,
-        "../scripts/" SCRIPT_NAME,
-        "../nexus/scripts/" SCRIPT_NAME,
-        "nexus/scripts/" SCRIPT_NAME,
-        NULL
-    };
+/* Collector for sh_pdf2struc blocks → text-run JSON */
+typedef struct {
+    char  *buf;
+    size_t len;
+    size_t cap;
+    int    cur_page;   /* Current page being written (-1 = none) */
+    int    text_count; /* Texts in current page */
+    int    error;      /* 1 if OOM */
+} PdfJsonCollector;
 
-    for (int i = 0; search[i]; i++) {
-        FILE *f = fopen(search[i], "r");
-        if (f) {
-            fclose(f);
-            snprintf(out, out_size, "%s", search[i]);
-            return 0;
+static void json_append(PdfJsonCollector *c, const char *s, size_t slen)
+{
+    if (c->error) return;
+    while (c->len + slen + 1 > c->cap) {
+        size_t newcap = c->cap * 2;
+        if (newcap > MAX_PDF_TEXT_SIZE) { c->error = 1; return; }
+        char *nb = (char *)realloc(c->buf, newcap);
+        if (!nb) { c->error = 1; return; }
+        c->buf = nb;
+        c->cap = newcap;
+    }
+    memcpy(c->buf + c->len, s, slen);
+    c->len += slen;
+}
+
+static void json_appendf(PdfJsonCollector *c, const char *fmt, ...)
+{
+    char tmp[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(tmp, sizeof(tmp), fmt, ap);
+    va_end(ap);
+    if (n > 0) json_append(c, tmp, (size_t)n);
+}
+
+/* Escape a string for JSON output */
+static void json_append_escaped(PdfJsonCollector *c, const char *s)
+{
+    json_append(c, "\"", 1);
+    for (const char *p = s; *p; p++) {
+        switch (*p) {
+            case '"':  json_append(c, "\\\"", 2); break;
+            case '\\': json_append(c, "\\\\", 2); break;
+            case '\b': json_append(c, "\\b", 2); break;
+            case '\f': json_append(c, "\\f", 2); break;
+            case '\n': json_append(c, "\\n", 2); break;
+            case '\r': json_append(c, "\\r", 2); break;
+            case '\t': json_append(c, "\\t", 2); break;
+            default:
+                if ((unsigned char)*p < 0x20) {
+                    char esc[8];
+                    snprintf(esc, sizeof(esc), "\\u%04x", (unsigned char)*p);
+                    json_append(c, esc, 6);
+                } else {
+                    json_append(c, p, 1);
+                }
+                break;
         }
     }
+    json_append(c, "\"", 1);
+}
 
-    /* Try NEXUS_SCRIPT_DIR env var */
-    const char *dir = getenv("NEXUS_SCRIPT_DIR");
-    if (dir) {
-        snprintf(out, out_size, "%s/" SCRIPT_NAME, dir);
-        FILE *f = fopen(out, "r");
-        if (f) { fclose(f); return 0; }
+static void close_current_page(PdfJsonCollector *c)
+{
+    if (c->cur_page >= 0) {
+        json_append(c, "]}", 2); /* Close texts array and page object */
+    }
+}
+
+static void pdf_block_callback(void *user, const ShPdf2strucBlock *block)
+{
+    PdfJsonCollector *c = (PdfJsonCollector *)user;
+    if (c->error) return;
+
+    /* Start new page if needed */
+    if (block->page_index != c->cur_page) {
+        close_current_page(c);
+        if (c->cur_page >= 0) json_append(c, ",", 1);
+        json_appendf(c, "{\"page\":%d,\"width\":842.0,\"height\":595.0,\"texts\":[",
+                     block->page_index + 1);
+        c->cur_page = block->page_index;
+        c->text_count = 0;
     }
 
-    return -1;
+    /* Add text entry */
+    if (c->text_count > 0) json_append(c, ",", 1);
+    json_append(c, "{\"text\":", 8);
+    json_append_escaped(c, block->text);
+    json_appendf(c, ",\"x\":%.1f,\"y\":%.1f,\"w\":%.1f,\"h\":%.1f}",
+                 block->x, block->y, block->w, block->h);
+    c->text_count++;
 }
 
 /*
- * Extract text runs from PDF via popen to Python pdfplumber.
- * Returns heap-allocated JSON string (caller must free).
+ * Extract text runs from PDF using sh_pdf2struc (pure C).
+ * Returns heap-allocated JSON string in pdfplumber-compatible format.
  */
 static char *extract_pdf_text(const char *pdf_path, size_t *out_len)
 {
-    char script[512];
-    if (find_script(script, sizeof(script)) != 0) {
-        fprintf(stderr, "Error: cannot find %s\n", SCRIPT_NAME);
-        fprintf(stderr, "Set NEXUS_SCRIPT_DIR or run from nexus/ directory\n");
+    ShPdf2strucCtx *ctx = sh_pdf2struc_create();
+    if (!ctx) {
+        fprintf(stderr, "Error: sh_pdf2struc_create failed\n");
         return NULL;
     }
 
-    /* Build command: python3 script.py "pdf_path" */
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "python3 \"%s\" \"%s\"", script, pdf_path);
+    ShPdf2strucOpts opts;
+    sh_pdf2struc_opts_default(&opts);
+    opts.emit_mode = SH_PDF2STRUC_EMIT_BLOCKS;
+    opts.origin_top_left = 1;
 
-    FILE *pp = popen(cmd, "r");
-    if (!pp) {
-        fprintf(stderr, "Error: popen failed for PDF extraction\n");
+    /* Set up JSON collector */
+    PdfJsonCollector collector = {0};
+    collector.cap = 256 * 1024;
+    collector.cur_page = -1;
+    collector.buf = (char *)malloc(collector.cap);
+    if (!collector.buf) {
+        sh_pdf2struc_destroy(ctx);
         return NULL;
     }
 
-    /* Read all output */
-    size_t cap = 256 * 1024;
-    size_t len = 0;
-    char *buf = (char *)malloc(cap);
-    if (!buf) { pclose(pp); return NULL; }
+    /* Start JSON */
+    json_append(&collector, "{\"pages\":[", 10);
 
-    while (!feof(pp)) {
-        if (len + 4096 > cap) {
-            cap *= 2;
-            if (cap > MAX_PDF_TEXT_SIZE) {
-                fprintf(stderr, "Error: PDF text output exceeds %d MB\n",
-                        (int)(MAX_PDF_TEXT_SIZE / (1024 * 1024)));
-                free(buf);
-                pclose(pp);
-                return NULL;
-            }
-            char *nb = (char *)realloc(buf, cap);
-            if (!nb) { free(buf); pclose(pp); return NULL; }
-            buf = nb;
-        }
-        size_t rd = fread(buf + len, 1, 4096, pp);
-        len += rd;
-    }
+    /* Extract */
+    ShPdf2strucStatus st = sh_pdf2struc_extract_file(
+        ctx, pdf_path, &opts, pdf_block_callback, &collector);
 
-    int status = pclose(pp);
-    if (status != 0) {
-        fprintf(stderr, "Error: PDF extraction failed (exit %d)\n", status);
-        free(buf);
+    if (st != SH_PDF2STRUC_OK) {
+        fprintf(stderr, "Error: PDF extraction failed: %s\n",
+                sh_pdf2struc_last_error(ctx));
+        sh_pdf2struc_destroy(ctx);
+        free(collector.buf);
         return NULL;
     }
 
-    buf[len] = '\0';
-    *out_len = len;
-    return buf;
+    sh_pdf2struc_destroy(ctx);
+
+    if (collector.error) {
+        fprintf(stderr, "Error: PDF text output exceeds %d MB\n",
+                (int)(MAX_PDF_TEXT_SIZE / (1024 * 1024)));
+        free(collector.buf);
+        return NULL;
+    }
+
+    /* Close JSON */
+    close_current_page(&collector);
+    json_append(&collector, "]}", 2);
+    collector.buf[collector.len] = '\0';
+
+    *out_len = collector.len;
+    return collector.buf;
 }
 
 /* ============================================================================
@@ -217,8 +278,8 @@ static int process_file(const PipelineOpts *po)
     if (!arena) { fprintf(stderr, "Error: arena allocation failed\n"); return 1; }
 
     if (fmt == FMT_PDF) {
-        /* PDF: extract text via pdfplumber, then cluster */
-        fprintf(stderr, "  Stage A.1: Extracting text runs (pdfplumber)...\n");
+        /* PDF: extract text via sh_pdf2struc (pure C), then cluster */
+        fprintf(stderr, "  Stage A.1: Extracting text runs (sh_pdf2struc)...\n");
         size_t text_len = 0;
         char *text_json = extract_pdf_text(po->input_path, &text_len);
         if (!text_json) { sh_arena_free(arena); return 1; }

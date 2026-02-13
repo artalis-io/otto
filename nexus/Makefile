@@ -36,6 +36,7 @@ NX_XFORM_RUN_BIN = nx_xform_run
 NX_PIPELINE_BIN = nx_pipeline
 
 SHARED_LIB = ../shared/libshared.a
+PDF2STRUC_LIB = ../shared/libsh_pdf2struc.a
 VENDOR_DIR = ../vendor/miniz
 
 # Vendor miniz objects (ZIP support for XLSX)
@@ -43,6 +44,7 @@ MINIZ_ZIP_SRC = $(VENDOR_DIR)/miniz_zip.c
 MINIZ_ZIP_OBJ = $(MINIZ_ZIP_SRC:.c=.o)
 
 LINK_LIBS = -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lshared $(LDFLAGS)
+LINK_LIBS_PDF = -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lsh_pdf2struc -lshared $(LDFLAGS)
 
 .PHONY: all clean test lib debug tools
 
@@ -80,8 +82,11 @@ $(NX_PDF_RUN_BIN): tools/nx_pdf_run.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 $(NX_XFORM_RUN_BIN): tools/nx_xform_run.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS) -o $@
 
-$(NX_PIPELINE_BIN): tools/nx_pipeline.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
-	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS) -o $@
+$(PDF2STRUC_LIB):
+	$(MAKE) -C ../shared libsh_pdf2struc.a
+
+$(NX_PIPELINE_BIN): tools/nx_pipeline.c $(LIB) $(PDF2STRUC_LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS_PDF) -o $@
 
 test: $(TEST_INGEST_BIN) $(TEST_XFORM_BIN)
 	./$(TEST_INGEST_BIN)
