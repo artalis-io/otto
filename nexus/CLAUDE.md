@@ -44,6 +44,7 @@ make clean    # Remove artifacts
 ## Dependencies
 
 - `shared/libshared.a` — `sh_arena`, `sh_json`, `sh_xml`, `sh_hash_sha256`
+- `shared/libsh_pdf2struc.a` — Pure C PDF text extraction (used by `nx_pipeline`)
 - `vendor/miniz/` — ZIP reading for XLSX
 
 ## Test Counts
@@ -84,8 +85,8 @@ Build with `make tools`:
 
 ## Pipeline Runner (`nx_pipeline`)
 
-The C pipeline tool handles end-to-end processing. All stages run in-process
-except PDF text extraction (calls `pdfplumber` via `popen()`).
+The C pipeline tool handles end-to-end processing. All stages run fully
+in-process using `sh_pdf2struc` for PDF text extraction (no Python dependency).
 
 ```bash
 # Single file (auto-detects format from extension)
@@ -96,7 +97,7 @@ except PDF text extraction (calls `pdfplumber` via `popen()`).
 # With PDF tuning overrides
 ./nx_pipeline input.pdf --row-tol 1.0 --col-gap 4.0
 
-# Pre-extracted text-run JSON (skips pdfplumber)
+# Pre-extracted text-run JSON (bypasses sh_pdf2struc)
 ./nx_pipeline text-runs.json --schema schemas/gls-hu-pudo-v1.json
 
 # Batch mode from config
@@ -118,11 +119,8 @@ except PDF text extraction (calls `pdfplumber` via `popen()`).
 }
 ```
 
-**Script discovery**: The tool finds `pdf-to-text-json.py` via:
-1. `./scripts/`, `../scripts/`, `../nexus/scripts/`, `nexus/scripts/`
-2. `NEXUS_SCRIPT_DIR` environment variable
-
-Requires: `pip install pdfplumber` (for PDF files only)
+No external dependencies required (Python/pdfplumber no longer needed).
+The `scripts/pdf-to-text-json.py` is retained as a reference/comparison tool.
 
 ## Auto-Detection
 
