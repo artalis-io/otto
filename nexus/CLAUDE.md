@@ -48,9 +48,9 @@ make clean    # Remove artifacts
 
 ## Test Counts
 
-- test_ingest: 22 tests (11 XLSX + 11 PDF)
+- test_ingest: 25 tests (11 XLSX + 14 PDF including auto-detection)
 - test_xform: 17 tests (5 slug + 8 xform + 4 pipeline)
-- Total: 39 tests
+- Total: 42 tests
 
 ## Schemas
 
@@ -71,13 +71,38 @@ Transform schemas live in `schemas/`. Format:
 }
 ```
 
-## PDF Preprocessing
+## CLI Tools
 
-PDF files require a Python preprocessing step:
+Build with `make tools`:
+
+| Tool | Purpose |
+|------|---------|
+| `nx_run` | General pipeline: XLSX/PDF-JSON → raw JSON, with optional schema |
+| `nx_pdf_run` | PDF clustering: text-run JSON → raw JSON (with --row-tol, --col-gap) |
+| `nx_xform_run` | Schema transform: raw JSON + schema → canonical JSON |
+
+## Pipeline Runner
+
+The unified pipeline handles end-to-end processing:
 
 ```bash
-python3 scripts/pdf-to-text-json.py input.pdf > text_runs.json
-# Then feed text_runs.json to nx_pdf_extract_tables() or nx_ingest()
+# Single file (auto-detects format from extension)
+python3 scripts/nx-pipeline.py input.pdf --schema schemas/gls-hu-automata-v1.json
+python3 scripts/nx-pipeline.py input.xlsx --schema schemas/gls-hu-depots-v1.json
+
+# With PDF tuning overrides
+python3 scripts/nx-pipeline.py input.pdf --row-tol 1.0 --col-gap 4.0
+
+# Batch mode from config
+python3 scripts/nx-pipeline.py --config pipeline.json
 ```
 
-Requires: `pip install pdfplumber`
+Requires: `pip install pdfplumber` (for PDF files)
+
+## Auto-Detection
+
+When no `--row-tol` or `--col-gap` is specified, the PDF clusterer auto-detects from text heights:
+- `row_tolerance ≈ 0.7 * median_text_height`
+- `col_gap_min ≈ 3.0 * median_text_height`
+
+Use explicit values when auto-detection produces suboptimal results (e.g., dense PDFs with small gaps).

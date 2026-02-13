@@ -61,8 +61,8 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
     }
     case NX_FORMAT_PDF_JSON: {
         NxPdfStatus ps = nx_pdf_extract_tables((const char *)data, len,
-                                                NULL, filename,
-                                                arena_a, &raw_json, &raw_len);
+                                               NULL, filename,
+                                               arena_a, &raw_json, &raw_len);
         if (ps != NX_PDF_OK) {
             sh_arena_free(arena_a);
             return NX_INGEST_ERR_STAGE_A;

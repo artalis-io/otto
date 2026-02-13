@@ -567,6 +567,75 @@ TEST(pdf_custom_tolerance)
     sh_arena_free(arena);
 }
 
+TEST(pdf_auto_detect)
+{
+    /* Test auto-detection: negative values should be resolved to positive */
+    NxPdfOptions opts = NX_PDF_AUTO_OPTIONS;
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+
+    NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                                           &opts, "sample.pdf",
+                                           arena, &json, &json_len);
+    ASSERT_EQ(s, NX_PDF_OK);
+
+    /* Auto-detected values should now be positive */
+    ASSERT(opts.row_tolerance > 0);
+    ASSERT(opts.col_gap_min > 0);
+
+    /* Should still produce valid output */
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    ASSERT(sh_json_as_int(sh_json_get(t0, "row_count"), -1) >= 0);
+    ASSERT(sh_json_as_int(sh_json_get(t0, "col_count"), -1) >= 1);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_auto_detect_null_opts)
+{
+    /* Test that NULL opts triggers auto-detection (same as NX_PDF_AUTO_OPTIONS) */
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+
+    NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                                           NULL, "sample.pdf",
+                                           arena, &json, &json_len);
+    ASSERT_EQ(s, NX_PDF_OK);
+    ASSERT(json != NULL);
+    ASSERT(json_len > 0);
+
+    free(json);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_auto_detect_partial)
+{
+    /* Test partial auto-detection: only col_gap is auto, row_tol is explicit */
+    NxPdfOptions opts = { 2.0, -1.0, -1 };
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+
+    NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                                           &opts, "sample.pdf",
+                                           arena, &json, &json_len);
+    ASSERT_EQ(s, NX_PDF_OK);
+
+    /* row_tolerance should be unchanged, col_gap should be resolved */
+    ASSERT(opts.row_tolerance == 2.0);
+    ASSERT(opts.col_gap_min > 0);
+
+    free(json);
+    sh_arena_free(arena);
+}
+
 TEST(pdf_pipeline_integration)
 {
     /* Test PDF through the full pipeline orchestrator (Stage A only, no schema) */
@@ -623,6 +692,9 @@ int main(void)
     RUN_TEST(pdf_sha256_matches);
     RUN_TEST(pdf_status_strings);
     RUN_TEST(pdf_custom_tolerance);
+    RUN_TEST(pdf_auto_detect);
+    RUN_TEST(pdf_auto_detect_null_opts);
+    RUN_TEST(pdf_auto_detect_partial);
     RUN_TEST(pdf_pipeline_integration);
 
     printf("\nNexus Ingestion: %d passed, %d total\n", tests_passed, tests_run);

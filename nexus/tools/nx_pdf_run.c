@@ -3,6 +3,8 @@
  *
  * Usage:
  *   nx_pdf_run [--row-tol N] [--col-gap N] text_runs.json
+ *
+ * Defaults to auto-detection (from text heights) if no options given.
  */
 
 #include "nx_pdf.h"
@@ -30,7 +32,7 @@ static char *read_file(const char *path, size_t *out_len)
 
 int main(int argc, char **argv)
 {
-    NxPdfOptions opts = NX_PDF_DEFAULT_OPTIONS;
+    NxPdfOptions opts = NX_PDF_AUTO_OPTIONS;
     const char *input_path = NULL;
 
     for (int i = 1; i < argc; i++) {
@@ -38,6 +40,10 @@ int main(int argc, char **argv)
             opts.row_tolerance = atof(argv[++i]);
         } else if (strcmp(argv[i], "--col-gap") == 0 && i + 1 < argc) {
             opts.col_gap_min = atof(argv[++i]);
+        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            fprintf(stderr, "Usage: %s [--row-tol N] [--col-gap N] input.json\n", argv[0]);
+            fprintf(stderr, "\nAuto-detects parameters from text heights when not specified.\n");
+            return 0;
         } else if (argv[i][0] != '-') {
             input_path = argv[i];
         } else {
@@ -61,7 +67,11 @@ int main(int argc, char **argv)
     char *json = NULL;
     size_t json_len = 0;
 
-    fprintf(stderr, "Options: row_tol=%.1f, col_gap=%.1f\n", opts.row_tolerance, opts.col_gap_min);
+    if (opts.row_tolerance < 0 || opts.col_gap_min < 0)
+        fprintf(stderr, "Auto-detecting clustering parameters...\n");
+    else
+        fprintf(stderr, "Options: row_tol=%.1f, col_gap=%.1f\n",
+                opts.row_tolerance, opts.col_gap_min);
 
     NxPdfStatus s = nx_pdf_extract_tables(data, data_len, &opts, input_path,
                                            arena, &json, &json_len);
@@ -71,6 +81,9 @@ int main(int argc, char **argv)
         free(data);
         return 1;
     }
+
+    fprintf(stderr, "Effective: row_tol=%.2f, col_gap=%.2f\n",
+            opts.row_tolerance, opts.col_gap_min);
 
     fwrite(json, 1, json_len, stdout);
     printf("\n");
