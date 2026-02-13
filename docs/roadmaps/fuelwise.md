@@ -1760,7 +1760,23 @@ timing against Ralph (with domain hints: reach cuts, branching priorities/direct
 Both solvers solve the identical constraint set; Ralph additionally uses domain-specific
 MIP hints that GLPK cannot.
 
-### 8.2 Results (20 runs per scenario, Feb 2026)
+### 8.2 Results (10 runs per scenario, Feb 2026)
+
+**Current (post P5/P6 re-land with infeasibility guards, presolve 0x110F):**
+
+| Scenario | ~Stations | Ralph avg | GLPK avg | Speedup | Obj Match |
+|----------|-----------|-----------|----------|---------|-----------|
+| milp15 | ~15 | **0.85 ms** | 7.45 ms | **9.9x Ralph** | 2/10 |
+| milp30 | ~30 | **2.73 ms** | 9.38 ms | **4.1x Ralph** | 5/10 |
+| milp50 | ~50 | **9.28 ms** | 12.26 ms | **1.4x Ralph** | 2/10 |
+| milp75 | ~75 | **33.26 ms** | 57.93 ms | **2.0x Ralph** | 3/10 |
+| milp100 | ~100 | 62.05 ms | **37.21 ms** | 0.7x | 0/10 |
+| milp200 | ~200 | 994.96 ms | **152.22 ms** | 0.4x | 1/10 |
+
+Ralph wins milp15–milp75 (9.9x down to 2.0x). GLPK still faster at milp100+ (1.4–2.5x).
+Zero false infeasibility across all 60 trials.
+
+**Previous (initial baseline, pre-B&B improvements, 20 runs):**
 
 | Scenario | ~Stations | Ralph avg | GLPK avg | Speedup | Obj Match |
 |----------|-----------|-----------|----------|---------|-----------|
@@ -1771,13 +1787,12 @@ MIP hints that GLPK cannot.
 | milp100 | ~100 | 7223.45 ms | **31.88 ms** | 0.004x | 10/10 |
 | milp200 | ~200 | 19472.76 ms | **43.75 ms** | 0.002x | 5/5 |
 
-**Correctness: 100/100 objective matches** across all scenarios at 0.01% tolerance.
-
 **Key observations:**
-- Ralph wins at small sizes (milp15: 5.5x) where domain hints dominate
-- GLPK's mature MIP solver (presolve, cutting planes, dual simplex) dominates at scale
-- Ralph's B&B scales roughly exponentially; GLPK stays nearly linear
-- The gap widens dramatically: 226x at milp100, 445x at milp200
+- Ralph improved dramatically since initial baseline (milp30: 65ms→2.7ms, milp75: 1232ms→33ms)
+- Domain hints (priorities, directions, reach cuts) + B&B improvements (dual_reopt, HYBRID,
+  PATH B LU reuse, presolve, P5 bound flipping, P6 dual steepest edge) closed the gap
+- GLPK still faster at milp100+ due to mature cut generation and presolve strength
+- Remaining gap at scale: ~1.4x at milp100, ~2.5x at milp200 (high variance)
 
 ### 8.3 Root Cause Analysis
 
@@ -1785,11 +1800,11 @@ Ralph's MIP solver lacks several features that GLPK uses to control tree growth:
 
 | GLPK Feature | Ralph Status | Impact |
 |--------------|-------------|--------|
-| **Presolve** (probe, clique) | Phase 1 only (singleton, bound tightening) | High — reduces problem size before B&B |
-| **Gomory/MIR cuts** | Basic Gomory, no MIR | High — tightens LP relaxation |
-| **Dual simplex** | Partial (rescue path only) | Medium — faster node resolves |
-| **Node selection** (best-first) | Depth-first only | Medium — avoids exploring bad subtrees |
-| **Symmetry breaking** | None | Medium — see §8.4 |
+| **Presolve** (probe, clique) | Lightweight (0x110F: fixed vars, empty rows/cols, singleton rows, bound tightening, shift bounds) | Medium — covers basics, lacks probing/clique |
+| **Gomory/MIR cuts** | c-MIR cuts implemented | Medium — tightens LP relaxation |
+| **Dual simplex** | Full dual with P5 bound flipping + P6 steepest edge; dual_reopt for B&B nodes | Low — now competitive |
+| **Node selection** (best-first) | HYBRID (DFS→best-bound on incumbent) | Low — effective for FuelWise structure |
+| **Symmetry breaking** | FuelWise domain hints (equal-price ordering) | Low — **DONE** |
 | **Probing / clique detection** | None | Medium — finds implications of variable fixing |
 
 ### 8.4 FuelWise-Specific MIP Optimizations
@@ -1854,14 +1869,14 @@ performance at scale.
 
 ### 8.5 Ralph-Side Improvements (see also ralph.md §4.3)
 
-| Improvement | Expected Impact | Effort |
-|-------------|----------------|--------|
-| **Best-first node selection** | 2-5x for deep trees | ~200 LoC in branch_bound.c |
-| **MIR cuts** | 1.5-3x tighter relaxation | ~400 LoC |
-| **Dual simplex for node resolves** | 2-3x per-node speedup | ~800 LoC |
-| **Aggressive presolve** (probing) | 1.5-2x smaller problems | ~500 LoC |
-| **Pseudocost branching** | 1.5-2x better variable selection | ~200 LoC |
-| **Solution pool / incumbents** | Faster pruning from good bounds | ~150 LoC |
+| Improvement | Status | Expected Impact | Effort |
+|-------------|--------|----------------|--------|
+| ~~**Best-first node selection**~~ | **DONE** (HYBRID) | 2-5x for deep trees | ~200 LoC in branch_bound.c |
+| ~~**MIR cuts**~~ | **DONE** (c-MIR) | 1.5-3x tighter relaxation | ~400 LoC |
+| ~~**Dual simplex for node resolves**~~ | **DONE** (dual_reopt + P5/P6) | 2-3x per-node speedup | ~800 LoC |
+| **Aggressive presolve** (probing) | Not started | 1.5-2x smaller problems | ~500 LoC |
+| **Pseudocost branching** | Not started | 1.5-2x better variable selection | ~200 LoC |
+| **Solution pool / incumbents** | Not started | Faster pruning from good bounds | ~150 LoC |
 
 ### 8.6 Implementation Priority
 
