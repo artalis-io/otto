@@ -17,6 +17,7 @@
 #include "nx_ingest.h"
 #include "nx_xform.h"
 #include "nx_validate.h"
+#include "nx_discover.h"
 #include "sh_arena.h"
 #include "sh_pdf2struc.h"
 
@@ -37,6 +38,7 @@
 static char  *g_extract_buf   = NULL;  static size_t g_extract_len   = 0;
 static char  *g_transform_buf = NULL;  static size_t g_transform_len = 0;
 static char  *g_validate_buf  = NULL;  static size_t g_validate_len  = 0;
+static char  *g_discover_buf  = NULL;  static size_t g_discover_len  = 0;
 
 /* ============================================================================
  * PDF Text Extraction (copied from nx_pipeline.c, adapted for memory input)
@@ -348,4 +350,46 @@ WASM_EXPORT
 int nx_wasm_validate_result_len(void)
 {
     return (int)g_validate_len;
+}
+
+/*
+ * Auto-discover schema from raw JSON (Stage A output).
+ * Returns 0 on success, -1 on error.
+ */
+WASM_EXPORT
+int nx_wasm_discover(const char *raw_json, int raw_len)
+{
+    free(g_discover_buf);
+    g_discover_buf = NULL;
+    g_discover_len = 0;
+
+    if (!raw_json || raw_len <= 0) return -1;
+
+    SHArena *arena = sh_arena_create(NX_WASM_ARENA_SIZE);
+    if (!arena) return -1;
+
+    char *out = NULL;
+    size_t out_len = 0;
+    NxDiscoverStatus st = nx_discover_schema(
+        raw_json, (size_t)raw_len,
+        arena, &out, &out_len);
+
+    sh_arena_free(arena);
+
+    if (st != NX_DISCOVER_OK || !out) return -1;
+    g_discover_buf = out;
+    g_discover_len = out_len;
+    return 0;
+}
+
+WASM_EXPORT
+const char *nx_wasm_discover_result(void)
+{
+    return g_discover_buf ? g_discover_buf : "";
+}
+
+WASM_EXPORT
+int nx_wasm_discover_result_len(void)
+{
+    return (int)g_discover_len;
 }

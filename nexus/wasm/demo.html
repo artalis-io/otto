@@ -509,6 +509,8 @@ h1 {
             <label for="schema-select">Schema:</label>
             <select id="schema-select">
                 <option value="">-- Select schema --</option>
+                <option value="__auto__">Auto-discover schema</option>
+                <option disabled>────────────────────</option>
                 <option value="gls-hu-depots-v2">gls-hu-depots-v2 (with validation)</option>
                 <option value="gls-hu-depots-v1">gls-hu-depots-v1</option>
                 <option value="gls-hu-automata-v2">gls-hu-automata-v2 (with validation)</option>
@@ -766,6 +768,14 @@ function callValidate(canonicalJSON, schemaJSON) {
     return Module.UTF8ToString(Module._nx_wasm_validate_result());
 }
 
+function callDiscover(rawJSON) {
+    const [rawPtr, rawLen] = allocUTF8(rawJSON);
+    const status = Module._nx_wasm_discover(rawPtr, rawLen);
+    Module._free(rawPtr);
+    if (status !== 0) throw new Error('Schema discovery failed');
+    return Module.UTF8ToString(Module._nx_wasm_discover_result());
+}
+
 /* ============================================================================
  * JSON Syntax Highlighting
  * ============================================================================ */
@@ -998,14 +1008,22 @@ async function runPipeline() {
     runBtn.disabled = true;
 
     const schemaKey = schemaSelect.value;
-    const schema = SCHEMAS[schemaKey];
-    if (!schema) {
-        showError('Unknown schema: ' + schemaKey);
-        runBtn.disabled = false;
-        return;
+    const isAutoDiscover = (schemaKey === '__auto__');
+
+    let schema = null;
+    let schemaJSON = '';
+    let hasValidation = false;
+
+    if (!isAutoDiscover) {
+        schema = SCHEMAS[schemaKey];
+        if (!schema) {
+            showError('Unknown schema: ' + schemaKey);
+            runBtn.disabled = false;
+            return;
+        }
+        schemaJSON = JSON.stringify(schema);
+        hasValidation = !!schema.validate;
     }
-    const schemaJSON = JSON.stringify(schema);
-    const hasValidation = !!schema.validate;
 
     const loading = document.getElementById('loading');
     const loadingText = document.getElementById('loading-text');
@@ -1033,10 +1051,35 @@ async function runPipeline() {
             addExpandButton('stage-a-expand', rawJSON, rawTrunc.totalRecords, 'stage-a-block');
         }
 
-        /* ── Schema Preview ──────────────────────────────────── */
-        showStage('schema-preview');
-        const schemaHTML = highlightJSON(JSON.stringify(schema, null, 2));
-        await typeAnimateContentAsync(document.getElementById('schema-block'), schemaHTML);
+        /* ── Auto-discover Schema (if selected) ──────────────── */
+        if (isAutoDiscover) {
+            loading.classList.add('visible');
+            loadingText.textContent = 'Discovering schema...';
+            await sleep(50);
+
+            const td0 = performance.now();
+            schemaJSON = callDiscover(rawJSON);
+            const td1 = performance.now();
+
+            loading.classList.remove('visible');
+
+            schema = JSON.parse(schemaJSON);
+            hasValidation = !!schema.validate;
+
+            /* Show discovered schema with a label */
+            showStage('schema-preview');
+            document.querySelector('#schema-preview .stage-label').innerHTML =
+                '<span class="stage-name">DISCOVERED SCHEMA</span>' +
+                '<span style="color: var(--warning); margin-left: 8px; font-size: 10px; letter-spacing: 1px;">' +
+                (td1 - td0).toFixed(0) + ' ms</span>';
+            const schemaHTML = highlightJSON(JSON.stringify(schema, null, 2));
+            await typeAnimateContentAsync(document.getElementById('schema-block'), schemaHTML);
+        } else {
+            /* ── Schema Preview (deterministic) ──────────────── */
+            showStage('schema-preview');
+            const schemaHTML = highlightJSON(JSON.stringify(schema, null, 2));
+            await typeAnimateContentAsync(document.getElementById('schema-block'), schemaHTML);
+        }
 
         /* ── Stage B: Transform ──────────────────────────────── */
         loading.classList.add('visible');
