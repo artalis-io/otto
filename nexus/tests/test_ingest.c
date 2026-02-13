@@ -1163,6 +1163,132 @@ static void test_golden_pdf01_raw(int *skip)
     sh_arena_free(arena);
 }
 
+/* Golden: PDF01 column count and header separation */
+static void test_golden_pdf01_columns(int *skip)
+{
+    size_t raw_len = 0;
+    char *raw = read_golden_file(GOLDEN_DIR "PDF01_raw.json", &raw_len);
+    if (!raw) { *skip = 1; return; }
+
+    SHArena *arena = sh_arena_create(4 * 1024 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(raw, raw_len, arena, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    int col_count = (int)sh_json_as_double(sh_json_get(t0, "col_count"), 0);
+
+    /* PDF01 has 18 columns after header-based detection */
+    ASSERT_EQ(col_count, 18);
+
+    /* Check that EOV X, EOV Y, GPS lat, GPS lon are separate columns */
+    ShJsonValue *headers = sh_json_get(t0, "headers");
+    int found_eov_x = 0, found_eov_y = 0, found_gps_lat = 0, found_gps_lon = 0;
+    for (size_t i = 0; i < sh_json_array_len(headers); i++) {
+        const char *h = sh_json_as_string(sh_json_array_get(headers, i), "");
+        if (strstr(h, "EOV X")) found_eov_x = 1;
+        if (strstr(h, "EOV Y")) found_eov_y = 1;
+        if (strstr(h, "GPS") && strstr(h, "ss")) found_gps_lat = 1;
+        if (strstr(h, "GPS") && strstr(h, "xx")) found_gps_lon = 1;
+    }
+    ASSERT(found_eov_x);
+    ASSERT(found_eov_y);
+    ASSERT(found_gps_lat);
+    ASSERT(found_gps_lon);
+
+    free(raw);
+    sh_arena_free(arena);
+}
+
+/* Golden: PDF01 data rows have content in city column */
+static void test_golden_pdf01_data_quality(int *skip)
+{
+    size_t raw_len = 0;
+    char *raw = read_golden_file(GOLDEN_DIR "PDF01_raw.json", &raw_len);
+    if (!raw) { *skip = 1; return; }
+
+    SHArena *arena = sh_arena_create(4 * 1024 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(raw, raw_len, arena, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    ShJsonValue *rows = sh_json_get(t0, "rows");
+    int row_count = (int)sh_json_as_double(sh_json_get(t0, "row_count"), 0);
+    ASSERT(row_count >= 680); /* ~689 data rows */
+
+    /* Count rows with non-empty city (col 1) */
+    int cities = 0;
+    for (size_t r = 0; r < sh_json_array_len(rows); r++) {
+        ShJsonValue *row = sh_json_array_get(rows, r);
+        ShJsonValue *cells = sh_json_get(row, "cells");
+        if (sh_json_array_len(cells) > 1) {
+            const char *city = sh_json_as_string(sh_json_array_get(cells, 1), "");
+            if (city[0] != '\0') cities++;
+        }
+    }
+    /* Most rows should have a city name (>95%) */
+    ASSERT(cities > row_count * 95 / 100);
+
+    free(raw);
+    sh_arena_free(arena);
+}
+
+/* Golden: PDF02 PUDO list extracts columns correctly */
+static void test_golden_pdf02_columns(int *skip)
+{
+    size_t raw_len = 0;
+    char *raw = read_golden_file(GOLDEN_DIR "PDF02_raw.json", &raw_len);
+    if (!raw) { *skip = 1; return; }
+
+    SHArena *arena = sh_arena_create(4 * 1024 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(raw, raw_len, arena, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    int col_count = (int)sh_json_as_double(sh_json_get(t0, "col_count"), 0);
+
+    /* PDF02 has 7-8 columns: ZIP, City, Name, Address, Hours, Phone, Pickup/Notes */
+    ASSERT(col_count >= 7);
+
+    /* Verify data rows exist */
+    int row_count = (int)sh_json_as_double(sh_json_get(t0, "row_count"), 0);
+    ASSERT(row_count >= 1000); /* ~1074 rows */
+
+    free(raw);
+    sh_arena_free(arena);
+}
+
+/* Golden: PDF02 data quality - ZIP codes and cities extracted */
+static void test_golden_pdf02_data_quality(int *skip)
+{
+    size_t raw_len = 0;
+    char *raw = read_golden_file(GOLDEN_DIR "PDF02_raw.json", &raw_len);
+    if (!raw) { *skip = 1; return; }
+
+    SHArena *arena = sh_arena_create(4 * 1024 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(raw, raw_len, arena, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    ShJsonValue *rows = sh_json_get(t0, "rows");
+    int row_count = (int)sh_json_as_double(sh_json_get(t0, "row_count"), 0);
+
+    /* Count rows with non-empty city (col 1) */
+    int cities = 0;
+    for (size_t r = 0; r < sh_json_array_len(rows); r++) {
+        ShJsonValue *row = sh_json_array_get(rows, r);
+        ShJsonValue *cells = sh_json_get(row, "cells");
+        if (sh_json_array_len(cells) > 1) {
+            const char *city = sh_json_as_string(sh_json_array_get(cells, 1), "");
+            if (city[0] != '\0') cities++;
+        }
+    }
+    /* >75% of rows should have a city (some are continuation rows) */
+    ASSERT(cities > row_count * 75 / 100);
+
+    free(raw);
+    sh_arena_free(arena);
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -1219,6 +1345,10 @@ int main(void)
     RUN_GOLDEN(xlsx01_parse);
     RUN_GOLDEN(xlsx01_canonical);
     RUN_GOLDEN(pdf01_raw);
+    RUN_GOLDEN(pdf01_columns);
+    RUN_GOLDEN(pdf01_data_quality);
+    RUN_GOLDEN(pdf02_columns);
+    RUN_GOLDEN(pdf02_data_quality);
 
     printf("\nNexus Ingestion: %d passed, %d total", tests_passed, tests_run);
     if (golden_skipped > 0) printf(" (%d golden skipped)", golden_skipped);

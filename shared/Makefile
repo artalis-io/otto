@@ -63,7 +63,8 @@ SRCS = src/sh_geo.c \
        src/sh_xml.c \
        src/sh_csv.c \
        src/sh_hash_sha256.c \
-       src/sh_fs.c
+       src/sh_fs.c \
+       src/sh_eov.c
 
 # HTTP server components (requires mongoose - compile separately by API servers)
 # API servers should compile sh_httpserver.c directly with mongoose includes.
@@ -90,6 +91,7 @@ TEST_XML_BIN = test_xml
 TEST_SHA256_BIN = test_sha256
 TEST_CSV_BIN = test_csv
 TEST_FS_BIN = test_fs
+TEST_EOV_BIN = test_eov
 
 # PDF2struc - separate sub-system (not compiled into libshared.a)
 PDF2STRUC_SRCS = src/sh_pdf2struc.c src/sh_pdf2struc_text.c
@@ -97,7 +99,7 @@ PDF2STRUC_OBJS = $(PDF2STRUC_SRCS:.c=.o)
 PDF2STRUC_LIB = libsh_pdf2struc.a
 TEST_PDF2STRUC_BIN = test_pdf2struc
 
-.PHONY: all clean test test-font test-json test-xml test-csv test-fs test-sha256 test-pdf2struc font-compare lib debug generate-font-data
+.PHONY: all clean test test-font test-json test-xml test-csv test-fs test-sha256 test-eov test-pdf2struc font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -137,8 +139,11 @@ $(TEST_CSV_BIN): tests/test_csv.c $(LIB)
 $(TEST_FS_BIN): tests/test_fs.c $(LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
 
+$(TEST_EOV_BIN): tests/test_eov.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+
 # Run all tests
-test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN)
+test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN)
 	./$(TEST_BIN)
 	./$(TEST_FONT_BIN)
 	./$(TEST_JSON_BIN)
@@ -146,6 +151,7 @@ test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_B
 	./$(TEST_CSV_BIN)
 	./$(TEST_FS_BIN)
 	./$(TEST_SHA256_BIN)
+	./$(TEST_EOV_BIN)
 
 # Run JSON tests only
 test-json: $(TEST_JSON_BIN)
@@ -166,6 +172,10 @@ test-fs: $(TEST_FS_BIN)
 # Run SHA-256 tests only
 test-sha256: $(TEST_SHA256_BIN)
 	./$(TEST_SHA256_BIN)
+
+# Run EOV tests only
+test-eov: $(TEST_EOV_BIN)
+	./$(TEST_EOV_BIN)
 
 # PDF2struc library (separate sub-system)
 $(PDF2STRUC_LIB): $(PDF2STRUC_OBJS)
@@ -206,7 +216,7 @@ debug: clean all
 
 # Clean
 clean:
-	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(FONT_COMPARE_BIN)
+	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_CSV_BIN) $(TEST_FS_BIN) $(TEST_SHA256_BIN) $(TEST_EOV_BIN) $(FONT_COMPARE_BIN)
 	rm -f $(PDF2STRUC_OBJS) $(PDF2STRUC_LIB) $(TEST_PDF2STRUC_BIN)
 	rm -f tests/soft_*.png tests/compare.html
 

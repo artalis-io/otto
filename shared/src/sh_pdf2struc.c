@@ -793,7 +793,7 @@ uint8_t *pdf_decompress_stream(ShPdf2strucCtx *ctx, PdfObj *stream_obj,
     /* Retry loop: if buffer too small, double and try again */
     uint8_t *decomp = NULL;
     size_t actual = 0;
-    for (int attempt = 0; attempt < 3; attempt++) {
+    for (;;) {
         decomp = (uint8_t *)sh_arena_alloc(ctx->arena, decomp_cap + 1);
         if (!decomp) {
             pdf_set_error(ctx, "OOM for stream decompression");
@@ -812,10 +812,6 @@ uint8_t *pdf_decompress_stream(ShPdf2strucCtx *ctx, PdfObj *stream_obj,
         decomp_cap = (decomp_cap < (size_t)PDF_MAX_DECOMPRESS / 2)
                       ? decomp_cap * 2 : (size_t)PDF_MAX_DECOMPRESS;
         decomp = NULL;
-    }
-    if (!decomp) {
-        pdf_set_error(ctx, "FlateDecode decompression failed after retries");
-        return NULL;
     }
     decomp[actual] = '\0';
 
