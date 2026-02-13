@@ -5,7 +5,7 @@
  *   Stage A: Document → Raw rows JSON (format-specific parser)
  *   Stage B: Raw rows JSON → Canonical JSON (schema-driven transform)
  *
- * Supports XLSX and PDF (via pre-processed text-run JSON).
+ * Supports XLSX, CSV, and PDF (via pre-processed text-run JSON).
  */
 
 #ifndef NX_INGEST_H
@@ -23,7 +23,8 @@ extern "C" {
 
 typedef enum {
     NX_FORMAT_XLSX,
-    NX_FORMAT_PDF_JSON   /* Pre-processed PDF text-run JSON */
+    NX_FORMAT_PDF_JSON,  /* Pre-processed PDF text-run JSON */
+    NX_FORMAT_CSV        /* CSV/TSV text data */
 } NxIngestFormat;
 
 typedef enum {
@@ -42,7 +43,7 @@ typedef enum {
 /*
  * Run full ingestion pipeline: document → raw JSON → canonical JSON.
  *
- * @param data          Document bytes (XLSX) or text-run JSON (PDF)
+ * @param data          Document bytes (XLSX), text-run JSON (PDF), or CSV text
  * @param len           Length of data
  * @param format        Document format
  * @param filename      Original filename (for metadata)

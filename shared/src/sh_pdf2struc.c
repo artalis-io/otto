@@ -758,10 +758,19 @@ uint8_t *pdf_decompress_stream(ShPdf2strucCtx *ctx, PdfObj *stream_obj,
 
     const uint8_t *raw = ctx->data + offset;
 
-    /* Check filter */
+    /* Check filter — may be a name or an array like [/FlateDecode] */
     const char *filter = pdf_dict_get_name(ctx, d, "Filter");
     if (!filter) {
-        /* Uncompressed stream */
+        PdfObj *filter_obj = pdf_resolve(ctx, pdf_dict_get(d, "Filter"));
+        if (filter_obj && filter_obj->type == PDF_OBJ_ARRAY &&
+            filter_obj->array_val.count > 0) {
+            PdfObj *first = pdf_resolve(ctx, filter_obj->array_val.items[0]);
+            if (first && first->type == PDF_OBJ_NAME)
+                filter = first->name_val;
+        }
+    }
+    if (!filter) {
+        /* Truly uncompressed stream */
         uint8_t *buf = (uint8_t *)sh_arena_alloc(ctx->arena, length + 1);
         if (!buf) return NULL;
         memcpy(buf, raw, length);
@@ -781,26 +790,40 @@ uint8_t *pdf_decompress_stream(ShPdf2strucCtx *ctx, PdfObj *stream_obj,
     if (dl_hint > PDF_MAX_DECOMPRESS) dl_hint = PDF_MAX_DECOMPRESS;
     size_t decomp_cap = (size_t)dl_hint;
 
-    uint8_t *decomp = (uint8_t *)sh_arena_alloc(ctx->arena, decomp_cap + 1);
-    if (!decomp) {
-        pdf_set_error(ctx, "OOM for stream decompression");
-        return NULL;
-    }
-
+    /* Retry loop: if buffer too small, double and try again */
+    uint8_t *decomp = NULL;
     size_t actual = 0;
-    SHStatus st = sh_inflate(raw, length, decomp, decomp_cap, &actual);
-    if (st != SH_OK) {
-        /* Try raw deflate */
+    for (int attempt = 0; attempt < 3; attempt++) {
+        decomp = (uint8_t *)sh_arena_alloc(ctx->arena, decomp_cap + 1);
+        if (!decomp) {
+            pdf_set_error(ctx, "OOM for stream decompression");
+            return NULL;
+        }
+        actual = 0;
+        SHStatus st = sh_inflate(raw, length, decomp, decomp_cap, &actual);
+        if (st == SH_OK) break;
         st = sh_inflate_raw(raw, length, decomp, decomp_cap, &actual);
-        if (st != SH_OK) {
+        if (st == SH_OK) break;
+        /* Double the buffer for retry (cap at PDF_MAX_DECOMPRESS) */
+        if (decomp_cap >= (size_t)PDF_MAX_DECOMPRESS) {
             pdf_set_error(ctx, "FlateDecode decompression failed");
             return NULL;
         }
+        decomp_cap = (decomp_cap < (size_t)PDF_MAX_DECOMPRESS / 2)
+                      ? decomp_cap * 2 : (size_t)PDF_MAX_DECOMPRESS;
+        decomp = NULL;
+    }
+    if (!decomp) {
+        pdf_set_error(ctx, "FlateDecode decompression failed after retries");
+        return NULL;
     }
     decomp[actual] = '\0';
 
-    /* Check for PNG predictor in DecodeParms */
+    /* Check for PNG predictor in DecodeParms (may also be array) */
     PdfObj *dp_obj = pdf_resolve(ctx, pdf_dict_get(d, "DecodeParms"));
+    if (dp_obj && dp_obj->type == PDF_OBJ_ARRAY && dp_obj->array_val.count > 0) {
+        dp_obj = pdf_resolve(ctx, dp_obj->array_val.items[0]);
+    }
     if (dp_obj) {
         PdfDict *dp = pdf_get_dict_ptr(ctx, dp_obj);
         if (dp) {
@@ -1153,7 +1176,8 @@ static PdfObj *pdf_parse_from_objstm(ShPdf2strucCtx *ctx, int stm_obj, int stm_i
 
 static void pdf_collect_pages(ShPdf2strucCtx *ctx, PdfObj *node,
                                PdfObj *inherited_resources,
-                               PdfObj *inherited_mediabox)
+                               PdfObj *inherited_mediabox,
+                               int inherited_rotate)
 {
     node = pdf_resolve(ctx, node);
     if (!node) return;
@@ -1163,11 +1187,17 @@ static void pdf_collect_pages(ShPdf2strucCtx *ctx, PdfObj *node,
 
     const char *type = pdf_dict_get_name(ctx, d, "Type");
 
-    /* Inherit resources and mediabox */
+    /* Inherit resources, mediabox, and rotate */
     PdfObj *res = pdf_dict_get(d, "Resources");
     if (res) inherited_resources = res;
     PdfObj *mbox = pdf_dict_get(d, "MediaBox");
     if (mbox) inherited_mediabox = mbox;
+    PdfObj *rot = pdf_dict_get(d, "Rotate");
+    if (rot) {
+        PdfObj *rv = pdf_resolve(ctx, rot);
+        if (rv && rv->type == PDF_OBJ_INT)
+            inherited_rotate = ((int)rv->int_val % 360 + 360) % 360;
+    }
 
     if (type && strcmp(type, "Pages") == 0) {
         PdfObj *kids = pdf_resolve(ctx, pdf_dict_get(d, "Kids"));
@@ -1175,7 +1205,8 @@ static void pdf_collect_pages(ShPdf2strucCtx *ctx, PdfObj *node,
             int n = pdf_array_len(kids);
             for (int i = 0; i < n; i++) {
                 pdf_collect_pages(ctx, pdf_array_get(kids, i),
-                                   inherited_resources, inherited_mediabox);
+                                   inherited_resources, inherited_mediabox,
+                                   inherited_rotate);
             }
         }
     } else if (type && strcmp(type, "Page") == 0) {
@@ -1185,6 +1216,7 @@ static void pdf_collect_pages(ShPdf2strucCtx *ctx, PdfObj *node,
         pi->resources = inherited_resources;
         pi->contents = pdf_dict_get(d, "Contents");
         pi->mediabox = inherited_mediabox;
+        pi->rotate = inherited_rotate;
 
         /* Parse MediaBox for dimensions */
         PdfObj *mb = pdf_resolve(ctx, pi->mediabox);
@@ -1209,6 +1241,13 @@ static void pdf_collect_pages(ShPdf2strucCtx *ctx, PdfObj *node,
             double y1 = pdf_obj_as_num(pdf_resolve(ctx, pdf_array_get(crop, 3)), 792);
             pi->width = x1 - x0;
             pi->height = y1 - y0;
+        }
+
+        /* Swap width/height for 90/270 rotation */
+        if (pi->rotate == 90 || pi->rotate == 270) {
+            double tmp = pi->width;
+            pi->width = pi->height;
+            pi->height = tmp;
         }
 
         ctx->page_count++;
@@ -1350,7 +1389,7 @@ static ShPdf2strucStatus pdf_do_extract(ShPdf2strucCtx *ctx,
     ctx->page_count = 0;
 
     /* Walk page tree */
-    pdf_collect_pages(ctx, pages, NULL, NULL);
+    pdf_collect_pages(ctx, pages, NULL, NULL, 0);
     if (ctx->page_count == 0) {
         pdf_set_error(ctx, "no pages found");
         return SH_PDF2STRUC_ERR_INVALID_PDF;

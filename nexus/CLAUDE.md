@@ -1,6 +1,6 @@
 # Nexus — Document Ingestion Pipeline
 
-Two-stage pipeline for extracting tabular data from Excel/PDF into canonical JSON.
+Three-stage pipeline for extracting tabular data from XLSX, PDF, and CSV into canonical JSON.
 
 ## Architecture
 
@@ -8,7 +8,7 @@ Two-stage pipeline for extracting tabular data from Excel/PDF into canonical JSO
 Document Bytes → Stage A (extraction) → Raw Rows JSON → Stage B (transform) → Canonical JSON
 ```
 
-**Stage A**: Format-specific parsers (XLSX, PDF text-run JSON) → `nx_raw` format
+**Stage A**: Format-specific parsers (XLSX, PDF text-run JSON, CSV) → `nx_raw` format
 **Stage B**: Schema-driven transform (`nx_xform`) → `nx_canonical` format
 
 ## Key Files
@@ -18,40 +18,43 @@ Document Bytes → Stage A (extraction) → Raw Rows JSON → Stage B (transform
 | `include/nx_ingest.h` | Pipeline orchestrator API |
 | `include/nx_xlsx.h` | XLSX parser (ZIP→XML→cells) |
 | `include/nx_pdf.h` | PDF table reconstructor (text-run clustering) |
+| `include/nx_csv.h` | CSV/TSV parser (RFC 4180, auto-detect delimiter) |
 | `include/nx_xform.h` | Schema-driven transform engine |
 | `include/nx_slug.h` | Slugification for row IDs |
 | `src/nx_xlsx.c` | XLSX implementation (~500 lines) |
 | `src/nx_pdf.c` | PDF clustering implementation (~400 lines) |
+| `src/nx_csv.c` | CSV → nx_raw JSON (~260 lines) |
 | `src/nx_xform.c` | Transform implementation (~600 lines) |
 | `src/nx_slug.c` | Slug utility (~100 lines) |
-| `src/nx_ingest.c` | Pipeline orchestrator (~100 lines) |
+| `src/nx_ingest.c` | Pipeline orchestrator (~120 lines) |
 
 ## Naming
 
 - Functions: `nx_*` prefix
-- Types: `Nx*` (e.g., `NxXlsxStatus`, `NxPdfOptions`)
-- Constants: `NX_*` (e.g., `NX_PDF_OK`)
+- Types: `Nx*` (e.g., `NxXlsxStatus`, `NxPdfOptions`, `NxCsvLimits`)
+- Constants: `NX_*` (e.g., `NX_PDF_OK`, `NX_CSV_OK`)
 
 ## Build
 
 ```bash
 make all      # Build library + tests
 make test     # Run all tests
+make tools    # Build CLI tools
 make debug    # Build with ASan/UBSan
 make clean    # Remove artifacts
 ```
 
 ## Dependencies
 
-- `shared/libshared.a` — `sh_arena`, `sh_json`, `sh_xml`, `sh_hash_sha256`
+- `shared/libshared.a` — `sh_arena`, `sh_json`, `sh_xml`, `sh_csv`, `sh_hash_sha256`, `sh_fs`
 - `shared/libsh_pdf2struc.a` — Pure C PDF text extraction (used by `nx_pipeline`)
 - `vendor/miniz/` — ZIP reading for XLSX
 
 ## Test Counts
 
-- test_ingest: 25 tests (11 XLSX + 14 PDF including auto-detection)
+- test_ingest: 38 tests (11 XLSX + 14 PDF + 13 CSV)
 - test_xform: 17 tests (5 slug + 8 xform + 4 pipeline)
-- Total: 42 tests
+- Total: 55 tests
 
 ## Schemas
 
@@ -78,8 +81,8 @@ Build with `make tools`:
 
 | Tool | Purpose |
 |------|---------|
-| `nx_pipeline` | **Main tool**: end-to-end pipeline (XLSX/PDF → raw/canonical JSON) |
-| `nx_run` | Stage A only: XLSX/PDF-JSON → raw JSON |
+| `nx_pipeline` | **Main tool**: end-to-end pipeline (XLSX/PDF/CSV → raw/canonical JSON) |
+| `nx_run` | Stage A only: XLSX/PDF-JSON/CSV → raw JSON |
 | `nx_pdf_run` | PDF clustering: text-run JSON → raw JSON (with --row-tol, --col-gap) |
 | `nx_xform_run` | Stage B only: raw JSON + schema → canonical JSON |
 
@@ -92,7 +95,12 @@ in-process using `sh_pdf2struc` for PDF text extraction (no Python dependency).
 # Single file (auto-detects format from extension)
 ./nx_pipeline input.xlsx --schema schemas/gls-hu-depots-v1.json
 ./nx_pipeline input.pdf --schema schemas/gls-hu-automata-v1.json
+./nx_pipeline input.csv --schema schemas/config.json
 ./nx_pipeline input.pdf --raw   # Raw JSON only, no schema
+
+# CSV options
+./nx_pipeline input.csv --delimiter ";" --no-header
+./nx_pipeline input.tsv --schema schemas/config.json
 
 # With PDF tuning overrides
 ./nx_pipeline input.pdf --row-tol 1.0 --col-gap 4.0
@@ -114,18 +122,18 @@ in-process using `sh_pdf2struc` for PDF text extraction (no Python dependency).
   "sources": [
     {"file": "depot.xlsx", "schema": "schemas/gls-hu-depots-v1.json"},
     {"file": "automata.pdf"},
+    {"file": "data.csv", "schema": "schemas/csv-config.json"},
     {"file": "pudo.pdf", "pdf_options": {"row_tolerance": 3.0, "col_gap_min": 10.0}}
   ]
 }
 ```
 
 No external dependencies required (Python/pdfplumber no longer needed).
-The `scripts/pdf-to-text-json.py` is retained as a reference/comparison tool.
 
 ## Auto-Detection
 
-When no `--row-tol` or `--col-gap` is specified, the PDF clusterer auto-detects from text heights:
+**PDF clustering:** When no `--row-tol` or `--col-gap` is specified, the PDF clusterer auto-detects from text heights:
 - `row_tolerance ≈ 0.7 * median_text_height`
 - `col_gap_min ≈ 3.0 * median_text_height`
 
-Use explicit values when auto-detection produces suboptimal results (e.g., dense PDFs with small gaps).
+**CSV delimiter:** When no `--delimiter` is specified, `sh_csv` auto-detects from the first line (supports `,`, `;`, `\t`, `|`).

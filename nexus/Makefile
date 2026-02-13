@@ -22,7 +22,7 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
                -fsanitize=address,undefined -fno-omit-frame-pointer
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
-SRCS = src/nx_xlsx.c src/nx_pdf.c src/nx_xform.c src/nx_slug.c src/nx_ingest.c
+SRCS = src/nx_xlsx.c src/nx_pdf.c src/nx_csv.c src/nx_xform.c src/nx_slug.c src/nx_ingest.c
 OBJS = $(SRCS:.c=.o)
 
 LIB = libnexus.a

@@ -28,6 +28,7 @@
 #define PDF_MAX_DECOMPRESS     (64 * 1024 * 1024)  /* 64 MB */
 #define PDF_MAX_OBJSTM_OBJS   500
 #define PDF_MAX_XREF_SIZE     100000
+#define PDF_ENCODING_ENTRIES  256   /* Single-byte encoding = 256 char codes */
 
 /* ============================================================================
  * PDF Scanner (shared tokenizer state)
@@ -124,7 +125,8 @@ typedef enum {
 
 typedef struct {
     uint32_t glyph_id;
-    uint32_t codepoint;   /* Unicode codepoint */
+    uint32_t codepoint;   /* Primary Unicode codepoint (for single-char) */
+    char     text[16];    /* UTF-8 string (for multi-codepoint sequences) */
 } PdfToUnicodeEntry;
 
 typedef struct {
@@ -143,6 +145,8 @@ typedef struct {
     int            last_char;
     double        *widths;        /* widths[charcode - first_char], 1/1000 units */
     int            widths_count;
+    const uint16_t *encoding;     /* Custom encoding table (NULL = WinAnsi) */
+    uint16_t       encoding_buf[PDF_ENCODING_ENTRIES]; /* Storage for custom encoding */
 
     /* CID / composite font */
     PdfCidWidth   *cid_widths;
@@ -193,6 +197,7 @@ typedef struct {
     int     obj_num;
     double  width;
     double  height;
+    int     rotate;      /* /Rotate value (0, 90, 180, 270) */
     PdfObj *resources;   /* /Resources dict (may be inherited) */
     PdfObj *contents;    /* /Contents ref or array */
     PdfObj *mediabox;    /* /MediaBox array */
@@ -233,6 +238,16 @@ struct ShPdf2strucCtx {
     int            run_count;
     int            run_capacity;
 };
+
+/* ============================================================================
+ * Inline Helpers (shared between .c files)
+ * ============================================================================ */
+
+static inline int pdf_is_ws(uint8_t c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+           c == '\f' || c == '\0';
+}
 
 /* ============================================================================
  * Internal Functions (sh_pdf2struc.c -> used by sh_pdf2struc_text.c)
