@@ -20,11 +20,15 @@ Document Bytes → Stage A (extraction) → Raw Rows JSON → Stage B (transform
 | `include/nx_pdf.h` | PDF table reconstructor (text-run clustering) |
 | `include/nx_csv.h` | CSV/TSV parser (RFC 4180, auto-detect delimiter) |
 | `include/nx_xform.h` | Schema-driven transform engine |
+| `include/nx_compute.h` | Compute function registry API |
+| `include/nx_validate.h` | Semantic validation engine (Stage X) |
 | `include/nx_slug.h` | Slugification for row IDs |
 | `src/nx_xlsx.c` | XLSX implementation (~500 lines) |
 | `src/nx_pdf.c` | PDF clustering implementation (~400 lines) |
 | `src/nx_csv.c` | CSV → nx_raw JSON (~260 lines) |
-| `src/nx_xform.c` | Transform implementation (~600 lines) |
+| `src/nx_xform.c` | Transform implementation (~1300 lines) |
+| `src/nx_compute.c` | Compute functions: EOV, DMS, coalesce, phone, ZIP, hours (~320 lines) |
+| `src/nx_validate.c` | Validation rules: geo_bounds, format, unique, outlier (~750 lines) |
 | `src/nx_slug.c` | Slug utility (~100 lines) |
 | `src/nx_ingest.c` | Pipeline orchestrator (~120 lines) |
 
@@ -53,9 +57,9 @@ make clean    # Remove artifacts
 ## Test Counts
 
 - test_ingest: 45 tests (11 XLSX + 14 PDF + 13 CSV + 7 golden)
-- test_xform: 33 tests (5 slug + 8 xform + 16 multi-transform + 4 pipeline)
+- test_xform: 37 tests (5 slug + 8 xform + 16 multi-transform + 4 trucking + 4 pipeline)
 - test_validate: 9 tests (geo_bounds, format, unique, outlier)
-- Total: 87 tests
+- Total: 91 tests
 
 ## Schemas
 
@@ -96,8 +100,30 @@ Transform schemas live in `schemas/`. Format (v2 with multi-transforms):
 
 **Virtual columns**: Multi-transforms produce virtual columns appended after original columns. Reference by index: if raw has N columns, first virtual is at index N.
 
-**Available compute functions**: `eov_to_wgs84`, `dms_to_dd`, `coalesce`, `phone_normalize`
-```
+**Available compute functions**:
+
+| Function | Inputs | Outputs | Use Case |
+|----------|--------|---------|----------|
+| `eov_to_wgs84` | EOV Y, EOV X | lat, lon | Hungarian cadastral data |
+| `dms_to_dd` | degrees, minutes, seconds | decimal degrees | GPS in DMS format |
+| `coalesce` | N fields | 1 field (first non-empty) | Fallback chains |
+| `phone_normalize` | raw phone string | E.164 format | Hungarian phone numbers |
+| `zip_to_region` | ZIP code | region name | Hungarian postal regions |
+| `opening_hours` | Hungarian hours string | ISO format | "H-P: 8-17" → "Mo-Fr 08:00-17:00" |
+
+**Validation rules** (in `"validate"` array, runs after transform as Stage X):
+
+| Rule | Fields | Check | Default Severity |
+|------|--------|-------|-----------------|
+| `geo_bounds` | lat, lon | Bounding box check | error |
+| `format` | any field | Regex pattern match | error |
+| `unique` | field(s) | No duplicate values (first kept) | error |
+| `outlier` | numeric field | IQR-based outlier detection | warning |
+
+**Hungarian validation presets** (used in v2 schemas):
+- Hungary geo bounds: 45.7-48.6N, 16.1-22.9E
+- Hungarian ZIP: 4 digits, first digit 1-9
+- Facility dedup: unique on city+name
 
 ## CLI Tools
 

@@ -1063,6 +1063,242 @@ TEST(multi_split_three_pieces)
 }
 
 /* ============================================================================
+ * Trucking Extension Tests (Phase 2D)
+ * ============================================================================ */
+
+TEST(compute_zip_to_region)
+{
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"zip\"],"
+        "\"header_row\":0,"
+        "\"rows\":["
+            "{\"row\":1,\"cells\":[\"1052\"]},"
+            "{\"row\":2,\"cells\":[\"4032\"]},"
+            "{\"row\":3,\"cells\":[\"7621\"]},"
+            "{\"row\":4,\"cells\":[\"9021\"]}"
+        "],\"row_count\":4,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-zip-region\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"compute\",\"function\":\"zip_to_region\","
+            "\"sources\":[0],"
+            "\"targets\":[{\"field\":\"region\",\"type\":\"string\"}]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":0,\"target\":\"zip\",\"type\":\"string\"},"
+            "{\"source\":1,\"target\":\"region\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *records = sh_json_get(root, "records");
+    ASSERT_EQ(sh_json_array_len(records), 4);
+
+    /* 1052 → Budapest */
+    ShJsonValue *r0 = sh_json_array_get(records, 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "region"), ""), "Budapest");
+
+    /* 4032 → Northern Great Plain */
+    ShJsonValue *r1 = sh_json_array_get(records, 1);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "region"), ""), "Northern Great Plain");
+
+    /* 7621 → Southern Transdanubia */
+    ShJsonValue *r2 = sh_json_array_get(records, 2);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r2, "region"), ""), "Southern Transdanubia");
+
+    /* 9021 → Western Transdanubia */
+    ShJsonValue *r3 = sh_json_array_get(records, 3);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r3, "region"), ""), "Western Transdanubia");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(compute_zip_to_region_invalid)
+{
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"zip\"],"
+        "\"header_row\":0,"
+        "\"rows\":["
+            "{\"row\":1,\"cells\":[\"ABC\"]},"
+            "{\"row\":2,\"cells\":[\"12345\"]}"
+        "],\"row_count\":2,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-zip-bad\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"compute\",\"function\":\"zip_to_region\","
+            "\"sources\":[0],"
+            "\"targets\":[{\"field\":\"region\",\"type\":\"string\"}]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"region\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *records = sh_json_get(root, "records");
+    /* Invalid ZIPs return as-is */
+    ShJsonValue *r0 = sh_json_array_get(records, 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "region"), ""), "ABC");
+
+    ShJsonValue *r1 = sh_json_array_get(records, 1);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "region"), ""), "12345");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(compute_opening_hours)
+{
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"hours\"],"
+        "\"header_row\":0,"
+        "\"rows\":["
+            "{\"row\":1,\"cells\":[\"H-P: 8-17\"]},"
+            "{\"row\":2,\"cells\":[\"H-Szo: 8:00-20:00\"]},"
+            "{\"row\":3,\"cells\":[\"H-V: 0-24\"]}"
+        "],\"row_count\":3,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-hours\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"compute\",\"function\":\"opening_hours\","
+            "\"sources\":[0],"
+            "\"targets\":[{\"field\":\"hours\",\"type\":\"string\"}]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"hours\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *records = sh_json_get(root, "records");
+    ASSERT_EQ(sh_json_array_len(records), 3);
+
+    /* "H-P: 8-17" → "Mo-Fr 08:00-17:00" */
+    ShJsonValue *r0 = sh_json_array_get(records, 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "hours"), ""), "Mo-Fr 08:00-17:00");
+
+    /* "H-Szo: 8:00-20:00" → "Mo-Sa 08:00-20:00" */
+    ShJsonValue *r1 = sh_json_array_get(records, 1);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "hours"), ""), "Mo-Sa 08:00-20:00");
+
+    /* "H-V: 0-24" → "Mo-Su 00:00-24:00" */
+    ShJsonValue *r2 = sh_json_array_get(records, 2);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r2, "hours"), ""), "Mo-Su 00:00-24:00");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(v2_schema_with_validation)
+{
+    /* Full v2 pipeline: multi-transforms + column mappings + validation */
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"test.csv\",\"sha256\":\"abc\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"Sheet\",\"index\":0,"
+        "\"headers\":[\"zip_city\",\"name\",\"phone\",\"lat\",\"lon\"],"
+        "\"header_row\":0,"
+        "\"rows\":["
+            "{\"row\":1,\"cells\":[\"1052 Budapest\",\"GLS Depot\",\"06-30-123-4567\",\"47.4979\",\"19.0402\"]},"
+            "{\"row\":2,\"cells\":[\"4032 Debrecen\",\"GLS Depot East\",\"+36201234567\",\"47.5316\",\"21.6273\"]},"
+            "{\"row\":3,\"cells\":[\"9999 Nowhere\",\"Bad Location\",\"06-70-999-9999\",\"44.0\",\"19.0\"]}"
+        "],\"row_count\":3,\"col_count\":5}],\"warnings\":[]}";
+
+    /* v2 schema: regex split zip/city, phone normalize, validation */
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-v2-full\","
+        "\"output_type\":\"facility\","
+        "\"multi_transforms\":["
+            "{\"type\":\"regex\",\"source\":0,"
+             "\"pattern\":\"^([0-9]{4}) (.+)$\","
+             "\"targets\":["
+                "{\"field\":\"zip\",\"group\":1,\"type\":\"string\"},"
+                "{\"field\":\"city\",\"group\":2,\"type\":\"string\"}"
+             "]},"
+            "{\"type\":\"compute\",\"function\":\"phone_normalize\","
+             "\"sources\":[2],"
+             "\"targets\":[{\"field\":\"phone\",\"type\":\"string\"}]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":5,\"target\":\"zip\",\"type\":\"string\",\"required\":true},"
+            "{\"source\":6,\"target\":\"city\",\"type\":\"string\",\"required\":true},"
+            "{\"source\":1,\"target\":\"name\",\"type\":\"string\",\"transforms\":[\"trim\"]},"
+            "{\"source\":7,\"target\":\"phone\",\"type\":\"string\"},"
+            "{\"source\":3,\"target\":\"lat\",\"type\":\"double\",\"precision\":6},"
+            "{\"source\":4,\"target\":\"lon\",\"type\":\"double\",\"precision\":6}"
+        "],"
+        "\"derived\":["
+            "{\"target\":\"country\",\"value\":\"HU\"},"
+            "{\"target\":\"operator\",\"value\":\"GLS\"}"
+        "],"
+        "\"row_id\":{\"template\":\"gls-hu-{city}-{name}\",\"slugify\":true}"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *records = sh_json_get(root, "records");
+    ASSERT_EQ(sh_json_array_len(records), 3);
+
+    /* Record 0: Budapest */
+    ShJsonValue *r0 = sh_json_array_get(records, 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "zip"), ""), "1052");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "city"), ""), "Budapest");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "phone"), ""), "+36301234567");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "country"), ""), "HU");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "id"), ""),
+                 "gls-hu-budapest-gls-depot");
+
+    /* Record 1: Debrecen */
+    ShJsonValue *r1 = sh_json_array_get(records, 1);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "zip"), ""), "4032");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "city"), ""), "Debrecen");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "phone"), ""), "+36201234567");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+/* ============================================================================
  * Full Pipeline Tests
  * ============================================================================ */
 
@@ -1188,6 +1424,12 @@ int main(void)
     RUN_TEST(multi_unknown_compute_function);
     RUN_TEST(multi_v1_schema_backward_compat);
     RUN_TEST(multi_virtual_col_with_original);
+
+    /* Trucking extension tests (Phase 2D) */
+    RUN_TEST(compute_zip_to_region);
+    RUN_TEST(compute_zip_to_region_invalid);
+    RUN_TEST(compute_opening_hours);
+    RUN_TEST(v2_schema_with_validation);
 
     /* Pipeline tests */
     RUN_TEST(pipeline_xlsx_to_canonical);
