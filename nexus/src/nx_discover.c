@@ -578,10 +578,10 @@ NxDiscoverStatus nx_discover_schema(const char *raw_json, size_t raw_len,
             sh_json_write_kv_string(&w, "lon_field", "lon");
             sh_json_write_key(&w, "bounds");
             sh_json_write_object_start(&w);
-            sh_json_write_kv_double_fmt(&w, "min_lat", cols[lat_idx].min_val - lat_pad, 1);
-            sh_json_write_kv_double_fmt(&w, "max_lat", cols[lat_idx].max_val + lat_pad, 1);
-            sh_json_write_kv_double_fmt(&w, "min_lon", cols[lon_idx].min_val - lon_pad, 1);
-            sh_json_write_kv_double_fmt(&w, "max_lon", cols[lon_idx].max_val + lon_pad, 1);
+            sh_json_write_kv_double_fmt(&w, "min_lat", cols[lat_idx].min_val - lat_pad, 4);
+            sh_json_write_kv_double_fmt(&w, "max_lat", cols[lat_idx].max_val + lat_pad, 4);
+            sh_json_write_kv_double_fmt(&w, "min_lon", cols[lon_idx].min_val - lon_pad, 4);
+            sh_json_write_kv_double_fmt(&w, "max_lon", cols[lon_idx].max_val + lon_pad, 4);
             sh_json_write_object_end(&w);
             sh_json_write_kv_string(&w, "severity", "error");
             sh_json_write_object_end(&w);
