@@ -573,6 +573,31 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
             prev = curr;
         }
 
+        /* Remove consecutive duplicate points (within ±1 unit tolerance).
+         * Clamping intersection points to clip bounds can create duplicates
+         * that confuse the scanline fill's even-odd rule. */
+        int deduped_count = 0;
+        for (int i = 0; i < output_count; i++) {
+            if (deduped_count == 0) {
+                output[deduped_count++] = output[i];
+            } else {
+                int dx = output[i].x - output[deduped_count - 1].x;
+                int dy = output[i].y - output[deduped_count - 1].y;
+                if (dx < -1 || dx > 1 || dy < -1 || dy > 1) {
+                    output[deduped_count++] = output[i];
+                }
+            }
+        }
+        /* Also check wrap-around: last vs first */
+        if (deduped_count > 1) {
+            int dx = output[deduped_count - 1].x - output[0].x;
+            int dy = output[deduped_count - 1].y - output[0].y;
+            if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) {
+                deduped_count--;
+            }
+        }
+        output_count = deduped_count;
+
         /* Swap buffers */
         CTTilePoint *tmp = input;
         input = output;
@@ -682,6 +707,31 @@ static int clip_ring_to_buffer(const CTTilePoint *points, int ring_start, int ri
 
             prev = curr;
         }
+
+        /* Remove consecutive duplicate points (within ±1 unit tolerance).
+         * Clamping intersection points to clip bounds can create duplicates
+         * that confuse the scanline fill's even-odd rule. */
+        int deduped_count = 0;
+        for (int i = 0; i < output_count; i++) {
+            if (deduped_count == 0) {
+                output[deduped_count++] = output[i];
+            } else {
+                int dx = output[i].x - output[deduped_count - 1].x;
+                int dy = output[i].y - output[deduped_count - 1].y;
+                if (dx < -1 || dx > 1 || dy < -1 || dy > 1) {
+                    output[deduped_count++] = output[i];
+                }
+            }
+        }
+        /* Also check wrap-around: last vs first */
+        if (deduped_count > 1) {
+            int dx = output[deduped_count - 1].x - output[0].x;
+            int dy = output[deduped_count - 1].y - output[0].y;
+            if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) {
+                deduped_count--;
+            }
+        }
+        output_count = deduped_count;
 
         /* Swap buffers */
         CTTilePoint *tmp = input;
