@@ -6,6 +6,7 @@
 
 #include "nx_ingest.h"
 #include "nx_xlsx.h"
+#include "nx_pdf.h"
 #include "nx_xform.h"
 #include "sh_arena.h"
 #include <stdlib.h>
@@ -58,18 +59,16 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
         }
         break;
     }
-    case NX_FORMAT_PDF_JSON:
-        /* PDF text-run JSON is already in raw-ish format;
-         * for now, pass through to Stage B */
-        raw_json = (char *)malloc(len + 1);
-        if (!raw_json) {
+    case NX_FORMAT_PDF_JSON: {
+        NxPdfStatus ps = nx_pdf_extract_tables((const char *)data, len,
+                                                NULL, filename,
+                                                arena_a, &raw_json, &raw_len);
+        if (ps != NX_PDF_OK) {
             sh_arena_free(arena_a);
-            return NX_INGEST_ERR_ARENA;
+            return NX_INGEST_ERR_STAGE_A;
         }
-        memcpy(raw_json, data, len);
-        raw_json[len] = '\0';
-        raw_len = len;
         break;
+    }
     default:
         sh_arena_free(arena_a);
         return NX_INGEST_ERR_FORMAT;
