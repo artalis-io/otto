@@ -42,6 +42,7 @@ typedef struct {
 } NxPdfOptions;
 
 #define NX_PDF_DEFAULT_OPTIONS { 3.0, 10.0, -1 }
+#define NX_PDF_AUTO_OPTIONS    { -1.0, -1.0, -1 }  /* Auto-detect from text heights */
 
 /* ============================================================================
  * API
@@ -66,7 +67,8 @@ typedef struct {
  *
  * @param json_data  Text-run JSON from PDF preprocessor
  * @param json_len   Length of JSON
- * @param opts       Clustering options (NULL for defaults)
+ * @param opts       Clustering options (NULL for auto-detect). If auto values
+ *                   (negative) are used, resolved values are written back.
  * @param filename   Original PDF filename (for metadata)
  * @param arena      Arena for intermediate allocations
  * @param out_json   Output: heap-allocated raw rows JSON (caller must free)
@@ -74,7 +76,7 @@ typedef struct {
  * @return NX_PDF_OK on success
  */
 NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
-                                  const NxPdfOptions *opts, const char *filename,
+                                  NxPdfOptions *opts, const char *filename,
                                   SHArena *arena, char **out_json, size_t *out_len);
 
 /*

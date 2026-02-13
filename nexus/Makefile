@@ -29,6 +29,11 @@ LIB = libnexus.a
 TEST_INGEST_BIN = test_ingest
 TEST_XFORM_BIN = test_xform
 
+# CLI tools
+NX_RUN_BIN = nx_run
+NX_PDF_RUN_BIN = nx_pdf_run
+NX_XFORM_RUN_BIN = nx_xform_run
+
 SHARED_LIB = ../shared/libshared.a
 VENDOR_DIR = ../vendor/miniz
 
@@ -36,9 +41,13 @@ VENDOR_DIR = ../vendor/miniz
 MINIZ_ZIP_SRC = $(VENDOR_DIR)/miniz_zip.c
 MINIZ_ZIP_OBJ = $(MINIZ_ZIP_SRC:.c=.o)
 
-.PHONY: all clean test lib debug
+LINK_LIBS = -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lshared $(LDFLAGS)
+
+.PHONY: all clean test lib debug tools
 
 all: lib $(TEST_INGEST_BIN) $(TEST_XFORM_BIN)
+
+tools: $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN)
 
 lib: $(LIB)
 
@@ -56,10 +65,19 @@ $(MINIZ_ZIP_OBJ): $(MINIZ_ZIP_SRC)
 	$(CC) $(CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
 
 $(TEST_INGEST_BIN): tests/test_ingest.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
-	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< $(LINK_LIBS) -o $@
 
 $(TEST_XFORM_BIN): tests/test_xform.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
-	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< $(LINK_LIBS) -o $@
+
+$(NX_RUN_BIN): tools/nx_run.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS) -o $@
+
+$(NX_PDF_RUN_BIN): tools/nx_pdf_run.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS) -o $@
+
+$(NX_XFORM_RUN_BIN): tools/nx_xform_run.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS) -o $@
 
 test: $(TEST_INGEST_BIN) $(TEST_XFORM_BIN)
 	./$(TEST_INGEST_BIN)
@@ -70,7 +88,7 @@ debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN)
+	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN)
 
 help:
 	@echo "Nexus Build System"
@@ -78,6 +96,7 @@ help:
 	@echo "Targets:"
 	@echo "  all      - Build library and tests (default)"
 	@echo "  lib      - Build static library (libnexus.a)"
+	@echo "  tools    - Build CLI tools (nx_run, nx_pdf_run)"
 	@echo "  test     - Build and run tests"
 	@echo "  debug    - Build with sanitizers"
 	@echo "  clean    - Remove build artifacts"

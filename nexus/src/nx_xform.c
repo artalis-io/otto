@@ -55,8 +55,17 @@ typedef enum {
 typedef enum {
     XFORM_TRIM,
     XFORM_LOWERCASE,
-    XFORM_UPPERCASE
+    XFORM_UPPERCASE,
+    XFORM_REPLACE
 } XformTransform;
+
+#define XFORM_PARAM_LEN 64
+
+typedef struct {
+    XformTransform type;
+    char param_a[XFORM_PARAM_LEN]; /* For replace: "from" string */
+    char param_b[XFORM_PARAM_LEN]; /* For replace: "to" string */
+} XformTransformEntry;
 
 typedef struct {
     int source_col;            /* Column index in raw data */
@@ -70,7 +79,7 @@ typedef struct {
     int has_validate_max;
     char default_val[MAX_FIELD_LEN];
     int has_default;
-    XformTransform transforms[MAX_TRANSFORMS];
+    XformTransformEntry transforms[MAX_TRANSFORMS];
     int transform_count;
 } ColumnMapping;
 
@@ -211,16 +220,33 @@ static int parse_schema(const char *json, size_t len,
                 }
             }
 
-            /* Transforms */
+            /* Transforms (string or object) */
             ShJsonValue *xforms = sh_json_get(col, "transforms");
             cm->transform_count = 0;
             if (xforms) {
                 int tn = (int)sh_json_array_len(xforms);
                 if (tn > MAX_TRANSFORMS) tn = MAX_TRANSFORMS;
                 for (int j = 0; j < tn; j++) {
-                    const char *ts = sh_json_as_string(
-                        sh_json_array_get(xforms, (size_t)j), "");
-                    cm->transforms[cm->transform_count++] = parse_transform(ts);
+                    ShJsonValue *tv = sh_json_array_get(xforms, (size_t)j);
+                    XformTransformEntry *te = &cm->transforms[cm->transform_count];
+                    memset(te, 0, sizeof(*te));
+
+                    if (sh_json_type(tv) == SH_JSON_STRING) {
+                        /* Simple string transform: "trim", "lowercase", "uppercase" */
+                        te->type = parse_transform(sh_json_as_string(tv, ""));
+                        cm->transform_count++;
+                    } else if (sh_json_type(tv) == SH_JSON_OBJECT) {
+                        /* Parameterized transform: {"replace": ["~", ""]} */
+                        ShJsonValue *rep = sh_json_get(tv, "replace");
+                        if (rep && sh_json_array_len(rep) >= 2) {
+                            te->type = XFORM_REPLACE;
+                            snprintf(te->param_a, XFORM_PARAM_LEN, "%s",
+                                     sh_json_as_string(sh_json_array_get(rep, 0), ""));
+                            snprintf(te->param_b, XFORM_PARAM_LEN, "%s",
+                                     sh_json_as_string(sh_json_array_get(rep, 1), ""));
+                            cm->transform_count++;
+                        }
+                    }
                 }
             }
         }
@@ -260,10 +286,10 @@ static int parse_schema(const char *json, size_t len,
  * ============================================================================ */
 
 static void apply_transforms(char *buf, size_t *len,
-                             const XformTransform *transforms, int count)
+                             const XformTransformEntry *transforms, int count)
 {
     for (int t = 0; t < count; t++) {
-        switch (transforms[t]) {
+        switch (transforms[t].type) {
         case XFORM_TRIM: {
             /* Trim leading whitespace */
             size_t start = 0;
@@ -287,6 +313,31 @@ static void apply_transforms(char *buf, size_t *len,
             for (size_t i = 0; i < *len; i++)
                 buf[i] = (char)toupper((unsigned char)buf[i]);
             break;
+        case XFORM_REPLACE: {
+            const char *from = transforms[t].param_a;
+            const char *to = transforms[t].param_b;
+            size_t from_len = strlen(from);
+            size_t to_len = strlen(to);
+            if (from_len == 0) break;
+
+            /* Simple in-place replace (first occurrence only for safety) */
+            char *pos = strstr(buf, from);
+            while (pos) {
+                size_t offset = (size_t)(pos - buf);
+                size_t tail_len = *len - offset - from_len;
+
+                if (to_len != from_len) {
+                    /* Check buffer overflow */
+                    if (*len - from_len + to_len >= MAX_FIELD_LEN) break;
+                    memmove(pos + to_len, pos + from_len, tail_len + 1);
+                }
+                memcpy(pos, to, to_len);
+                *len = *len - from_len + to_len;
+                buf[*len] = '\0';
+                pos = strstr(pos + to_len, from);
+            }
+            break;
+        }
         }
     }
 }

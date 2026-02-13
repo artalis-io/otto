@@ -115,6 +115,68 @@ static int parse_text_runs(const char *json, size_t json_len,
 }
 
 /* ============================================================================
+ * Auto-Detection of Clustering Parameters
+ * ============================================================================ */
+
+static int cmp_double(const void *a, const void *b)
+{
+    double da = *(const double *)a;
+    double db = *(const double *)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
+/*
+ * Compute median text height from parsed text runs.
+ * Returns 0 if no valid heights found.
+ */
+static double compute_median_height(TextRun *runs, int count, SHArena *arena)
+{
+    if (count == 0) return 0;
+
+    double *heights = (double *)sh_arena_alloc(arena,
+        (size_t)count * sizeof(double));
+    if (!heights) return 0;
+
+    int nh = 0;
+    for (int i = 0; i < count; i++) {
+        if (runs[i].h > 0.1) /* Skip degenerate heights */
+            heights[nh++] = runs[i].h;
+    }
+
+    if (nh == 0) return 0;
+
+    qsort(heights, (size_t)nh, sizeof(double), cmp_double);
+    return heights[nh / 2]; /* Median */
+}
+
+/*
+ * Auto-detect row_tolerance and col_gap_min from text run statistics.
+ *
+ * Heuristic: Text runs in a PDF row are roughly one text-height apart.
+ * - row_tolerance = 0.7 * median_text_height (rows within ~70% of line height)
+ * - col_gap_min   = 3.0 * median_text_height (columns need ~3x line height gap)
+ */
+static void auto_detect_options(TextRun *runs, int count, SHArena *arena,
+                                NxPdfOptions *opts)
+{
+    double median_h = compute_median_height(runs, count, arena);
+
+    if (median_h < 0.5) {
+        /* Fallback to defaults if heights are too small/missing */
+        if (opts->row_tolerance < 0) opts->row_tolerance = 3.0;
+        if (opts->col_gap_min < 0) opts->col_gap_min = 10.0;
+        return;
+    }
+
+    if (opts->row_tolerance < 0)
+        opts->row_tolerance = 0.7 * median_h;
+    if (opts->col_gap_min < 0)
+        opts->col_gap_min = 3.0 * median_h;
+}
+
+/* ============================================================================
  * Row Clustering
  * ============================================================================ */
 
@@ -166,15 +228,6 @@ static int cluster_rows(TextRun *runs, int count, double tolerance,
 /* ============================================================================
  * Column Detection
  * ============================================================================ */
-
-static int cmp_double(const void *a, const void *b)
-{
-    double da = *(const double *)a;
-    double db = *(const double *)b;
-    if (da < db) return -1;
-    if (da > db) return 1;
-    return 0;
-}
 
 /* Detect column boundaries by finding consistent x-positions across rows */
 static int detect_columns(ClusterRow *rows, int nrows, double col_gap_min,
@@ -297,14 +350,11 @@ static void write_pdf_raw_json(ShJsonWriter *w, const char *filename,
                     int copy = (int)rows[r].runs[t].text_len;
                     if (copy > avail) copy = avail;
                     /* Don't truncate mid-UTF-8 sequence */
-                    while (copy > 0 && (rows[r].runs[t].text[copy - 1] & 0xC0) == 0x80)
-                        copy--; /* Back up past continuation bytes */
-                    if (copy > 0 && (unsigned char)rows[r].runs[t].text[copy - 1] >= 0xC0) {
-                        /* Check if lead byte's sequence fits */
-                        unsigned char lead = (unsigned char)rows[r].runs[t].text[copy - 1];
-                        int need = (lead >= 0xF0) ? 4 : (lead >= 0xE0) ? 3 : 2;
-                        int have = (int)rows[r].runs[t].text_len - (copy - 1);
-                        if (have < need) copy--; /* Drop incomplete lead byte */
+                    if (copy < (int)rows[r].runs[t].text_len) {
+                        while (copy > 0 && (rows[r].runs[t].text[copy - 1] & 0xC0) == 0x80)
+                            copy--; /* Back up past continuation bytes */
+                        if (copy > 0 && (unsigned char)rows[r].runs[t].text[copy - 1] >= 0xC0)
+                            copy--; /* Lead byte at end of truncated copy is always incomplete */
                     }
                     if (copy > 0) {
                         memcpy(cell_buf + cell_len, rows[r].runs[t].text, (size_t)copy);
@@ -352,14 +402,17 @@ const char *nx_pdf_status_str(NxPdfStatus status)
 }
 
 NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
-                                  const NxPdfOptions *opts, const char *filename,
+                                  NxPdfOptions *opts, const char *filename,
                                   SHArena *arena, char **out_json, size_t *out_len)
 {
-    NxPdfOptions default_opts = NX_PDF_DEFAULT_OPTIONS;
+    NxPdfOptions auto_opts = NX_PDF_AUTO_OPTIONS;
 
     if (!json_data || !out_json || !out_len) return NX_PDF_ERR_NULL;
     if (!arena) return NX_PDF_ERR_ARENA;
-    if (!opts) opts = &default_opts;
+
+    /* Use caller's options, or auto-detect if NULL */
+    if (!opts)
+        opts = &auto_opts;
 
     *out_json = NULL;
     *out_len = 0;
@@ -376,6 +429,10 @@ NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
     int nruns = parse_text_runs(json_data, json_len, arena, runs, MAX_TEXT_RUNS);
     if (nruns < 0) return NX_PDF_ERR_JSON;
     if (nruns == 0) return NX_PDF_ERR_NO_TEXT;
+
+    /* Auto-detect clustering parameters if requested (writes back to opts) */
+    if (opts->row_tolerance < 0 || opts->col_gap_min < 0)
+        auto_detect_options(runs, nruns, arena, opts);
 
     /* Cluster into rows */
     ClusterRow *cluster_rows_arr = (ClusterRow *)sh_arena_alloc(arena,
