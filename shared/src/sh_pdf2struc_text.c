@@ -570,7 +570,8 @@ static const char *decode_text_simple(ShPdf2strucCtx *ctx, const PdfFont *font,
                                        int approx_widths,
                                        double *out_advance)
 {
-    /* Worst case: 4 UTF-8 bytes per char */
+    /* Worst case: 4 UTF-8 bytes per char; check overflow */
+    if (len > (SIZE_MAX - 1) / 4) return NULL;
     char *buf = (char *)sh_arena_alloc(ctx->arena, len * 4 + 1);
     if (!buf) return NULL;
 
@@ -620,8 +621,9 @@ static const char *decode_text_cid(ShPdf2strucCtx *ctx, const PdfFont *font,
                                      int approx_widths,
                                      double *out_advance)
 {
-    /* 2 bytes per glyph, 4 UTF-8 bytes per char max */
+    /* 2 bytes per glyph, 4 UTF-8 bytes per char max; check overflow */
     size_t max_chars = len / 2;
+    if (max_chars > (SIZE_MAX - 1) / 4) return NULL;
     char *buf = (char *)sh_arena_alloc(ctx->arena, max_chars * 4 + 1);
     if (!buf) return NULL;
 
@@ -1191,8 +1193,11 @@ ShPdf2strucStatus pdf_group_runs(ShPdf2strucCtx *ctx, const ShPdf2strucOpts *opt
     if (ctx->run_count == 0) return SH_PDF2STRUC_OK;
     if (!cb) return SH_PDF2STRUC_OK;
 
-    double page_heights[PDF_MAX_PAGES];
-    for (int i = 0; i < ctx->page_count && i < PDF_MAX_PAGES; i++) {
+    /* Arena-allocate page heights (PDF_MAX_PAGES * 8 bytes could be ~80KB) */
+    double *page_heights = (double *)sh_arena_alloc(ctx->arena,
+                                (size_t)ctx->page_count * sizeof(double));
+    if (!page_heights) return SH_PDF2STRUC_ERR_OOM;
+    for (int i = 0; i < ctx->page_count; i++) {
         page_heights[i] = ctx->pages[i].height;
     }
 
