@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEXUS — Document Ingestion Pipeline</title>
+<style>
+/* IBM Plex Mono - loaded from Google Fonts for portability */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap');
+
+/* ============================================================================
+ * CSS Variables (from site/style.css)
+ * ============================================================================ */
+
+:root {
+    --bg: #0a0a0a;
+    --bg-secondary: #141414;
+    --bg-tertiary: #1a1a1a;
+    --text: #e5e5e5;
+    --text-muted: #9ca3af;
+    --accent: #3b82f6;
+    --accent-dim: #1e40af;
+    --border: #2a2a2a;
+    --success: #22c55e;
+    --warning: #eab308;
+    --error: #ef4444;
+}
+
+/* ============================================================================
+ * Base Styles
+ * ============================================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+}
+
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 24px 60px;
+}
+
+h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0 0 8px;
+    color: var(--text);
+    letter-spacing: -0.5px;
+}
+
+.subtitle {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 0 0 32px;
+}
+
+/* ============================================================================
+ * Drop Zone
+ * ============================================================================ */
+
+.drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 40px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: var(--bg-secondary);
+    margin-bottom: 20px;
+}
+
+.drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(59, 130, 246, 0.05);
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.1);
+}
+
+.drop-zone-icon {
+    font-size: 32px;
+    margin-bottom: 12px;
+    display: block;
+}
+
+.drop-zone-text {
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.drop-zone-text strong {
+    color: var(--text);
+}
+
+.drop-zone-formats {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 8px;
+    opacity: 0.7;
+}
+
+.file-input { display: none; }
+
+.file-info {
+    color: var(--success);
+    font-size: 13px;
+    margin-top: 8px;
+    display: none;
+}
+
+/* ============================================================================
+ * Controls
+ * ============================================================================ */
+
+.controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+}
+
+.controls label {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.controls select {
+    background: var(--bg-secondary);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    min-width: 200px;
+}
+
+.controls select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.run-btn {
+    background: var(--accent-dim);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 8px 20px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-left: auto;
+}
+
+.run-btn:hover:not(:disabled) {
+    background: var(--accent);
+}
+
+.run-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* ============================================================================
+ * Pipeline Stages
+ * ============================================================================ */
+
+.stage {
+    opacity: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: opacity 0.5s ease, max-height 0.5s ease;
+    margin-bottom: 0;
+}
+
+.stage.visible {
+    opacity: 1;
+    max-height: 100000px;
+    margin-bottom: 24px;
+}
+
+.stage-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.stage-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.stage-label .stage-name {
+    color: var(--success);
+    text-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
+}
+
+.stage-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: auto;
+    opacity: 0.7;
+}
+
+/* ============================================================================
+ * CRT Code Blocks (from site/style.css)
+ * ============================================================================ */
+
+.code-block {
+    background: linear-gradient(135deg, #0a0a0a 0%, #141414 100%);
+    border: 1px solid #2a2a2a;
+    border-radius: 6px;
+    overflow-x: auto;
+    position: relative;
+    overflow: hidden;
+}
+
+.code-block::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.15) 0px,
+        rgba(0, 0, 0, 0.15) 1px,
+        transparent 1px,
+        transparent 3px
+    );
+    pointer-events: none;
+    z-index: 2;
+    animation: crt-scanline-roll 8s linear infinite;
+}
+
+.code-block::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(255, 255, 255, 0.03) 0px,
+        rgba(255, 255, 255, 0.03) 1px,
+        transparent 1px,
+        transparent 2px
+    );
+    pointer-events: none;
+}
+
+.code-block pre {
+    margin: 0;
+    padding: 20px;
+    font-size: 13px;
+    font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+    position: relative;
+    z-index: 3;
+    animation: crt-flicker-gray 4s infinite;
+    color: #b0b0b0;
+    text-shadow:
+        0 0 2px rgba(180, 180, 180, 0.8),
+        0 0 5px rgba(180, 180, 180, 0.4),
+        0 0 10px rgba(180, 180, 180, 0.2);
+    letter-spacing: 0;
+    word-spacing: 0;
+    font-variant-ligatures: none;
+    font-feature-settings: "calt" 0;
+    white-space: pre;
+    overflow-x: auto;
+}
+
+.code-block .key {
+    color: #90caf9;
+    text-shadow: 0 0 2px rgba(144, 202, 249, 0.8), 0 0 5px rgba(144, 202, 249, 0.5), 0 0 10px rgba(144, 202, 249, 0.3);
+}
+
+.code-block .string {
+    color: #a5d6a7;
+    text-shadow: 0 0 2px rgba(165, 214, 167, 0.8), 0 0 5px rgba(165, 214, 167, 0.5), 0 0 10px rgba(165, 214, 167, 0.3);
+}
+
+.code-block .number {
+    color: #ffcc80;
+    text-shadow: 0 0 2px rgba(255, 204, 128, 0.8), 0 0 5px rgba(255, 204, 128, 0.5), 0 0 10px rgba(255, 204, 128, 0.3);
+}
+
+.code-block .command {
+    color: #50c878;
+    text-shadow: 0 0 2px rgba(80, 200, 120, 0.8), 0 0 5px rgba(80, 200, 120, 0.5), 0 0 10px rgba(80, 200, 120, 0.3), 0 0 20px rgba(80, 200, 120, 0.1);
+}
+
+/* ============================================================================
+ * CRT Animations
+ * ============================================================================ */
+
+@keyframes crt-flicker-gray {
+    0%, 100% { opacity: 1; filter: brightness(1); }
+    10% { opacity: 1; filter: brightness(1.01); }
+    20% { opacity: 0.99; filter: brightness(0.99); }
+    40% { opacity: 0.98; filter: brightness(1.02); }
+    60% { opacity: 0.99; filter: brightness(0.98); }
+    80% { opacity: 0.98; filter: brightness(1); }
+    95% { opacity: 0.95; filter: brightness(0.97); }
+    96% { opacity: 1; filter: brightness(1); }
+}
+
+@keyframes crt-scanline-roll {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 60px; }
+}
+
+.code-block.typing pre::after {
+    content: '\2588';
+    color: #50c878;
+    animation: cursor-blink 0.7s step-end infinite;
+    text-shadow: 0 0 8px rgba(80, 200, 120, 0.6);
+}
+
+.code-block.typed pre::after {
+    content: '\2588';
+    color: #50c878;
+    animation: cursor-blink 1s step-end infinite;
+    text-shadow: 0 0 8px rgba(80, 200, 120, 0.6);
+}
+
+@keyframes cursor-blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+}
+
+/* ============================================================================
+ * Truncation / Expand
+ * ============================================================================ */
+
+.expand-btn {
+    display: inline-block;
+    margin-top: 8px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.expand-btn:hover {
+    border-color: var(--accent);
+    background: rgba(59, 130, 246, 0.1);
+}
+
+/* ============================================================================
+ * Audit Summary Cards
+ * ============================================================================ */
+
+.audit-cards {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+
+.audit-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 24px;
+    text-align: center;
+    min-width: 100px;
+    flex: 1;
+}
+
+.audit-card .card-value {
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.audit-card .card-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.audit-card.total .card-value { color: var(--text); }
+.audit-card.accepted .card-value { color: var(--success); }
+.audit-card.rejected .card-value { color: var(--error); }
+.audit-card.warnings .card-value { color: var(--warning); }
+
+/* ============================================================================
+ * Error Display
+ * ============================================================================ */
+
+.error-msg {
+    color: var(--error);
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 4px;
+    padding: 12px 16px;
+    font-size: 13px;
+    margin-bottom: 16px;
+    display: none;
+}
+
+/* ============================================================================
+ * Footer
+ * ============================================================================ */
+
+.footer {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+/* ============================================================================
+ * Loading Spinner
+ * ============================================================================ */
+
+.loading {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+
+.loading.visible { display: flex; }
+
+.spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* WASM loading overlay */
+.wasm-loading {
+    text-align: center;
+    padding: 60px 24px;
+    color: var(--text-muted);
+}
+
+.wasm-loading .spinner {
+    width: 32px;
+    height: 32px;
+    margin: 0 auto 16px;
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+    <!-- WASM Loading State -->
+    <div id="wasm-loading" class="wasm-loading">
+        <div class="spinner"></div>
+        <div>Loading Nexus pipeline engine...</div>
+    </div>
+
+    <!-- Main Content (hidden until WASM loaded) -->
+    <div id="main-content" style="display: none;">
+        <h1>NEXUS</h1>
+        <p class="subtitle">Upload a document to see data flow through each processing stage in real time.</p>
+
+        <!-- Error Display -->
+        <div id="error-msg" class="error-msg"></div>
+
+        <!-- Drop Zone -->
+        <div id="drop-zone" class="drop-zone">
+            <span class="drop-zone-icon">&#128193;</span>
+            <div class="drop-zone-text">
+                <strong>Drop XLSX, PDF, or CSV file here</strong><br>
+                or click to browse
+            </div>
+            <div class="drop-zone-formats">Supported: .xlsx, .pdf, .csv, .tsv</div>
+            <div id="file-info" class="file-info"></div>
+        </div>
+        <input type="file" id="file-input" class="file-input" accept=".xlsx,.pdf,.csv,.tsv">
+
+        <!-- Controls -->
+        <div class="controls">
+            <label for="schema-select">Schema:</label>
+            <select id="schema-select">
+                <option value="">-- Select schema --</option>
+                <option value="gls-hu-depots-v2">gls-hu-depots-v2 (with validation)</option>
+                <option value="gls-hu-depots-v1">gls-hu-depots-v1</option>
+                <option value="gls-hu-automata-v2">gls-hu-automata-v2 (with validation)</option>
+                <option value="gls-hu-automata-v1">gls-hu-automata-v1</option>
+                <option value="gls-hu-pudo-v2">gls-hu-pudo-v2 (with validation)</option>
+                <option value="gls-hu-pudo-v1">gls-hu-pudo-v1</option>
+            </select>
+            <button id="run-btn" class="run-btn" disabled>Run Pipeline</button>
+        </div>
+
+        <!-- Processing Indicator -->
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <span id="loading-text">Processing...</span>
+        </div>
+
+        <!-- Stage A: Extraction -->
+        <div id="stage-a" class="stage">
+            <div class="stage-header">
+                <span class="stage-label">STAGE A: <span class="stage-name">EXTRACTION</span></span>
+                <span id="stage-a-time" class="stage-time"></span>
+            </div>
+            <div id="stage-a-block" class="code-block"><pre id="stage-a-code"></pre></div>
+            <div id="stage-a-expand"></div>
+        </div>
+
+        <!-- Schema Preview -->
+        <div id="schema-preview" class="stage">
+            <div class="stage-header">
+                <span class="stage-label"><span class="stage-name">SCHEMA</span></span>
+            </div>
+            <div id="schema-block" class="code-block"><pre id="schema-code"></pre></div>
+        </div>
+
+        <!-- Stage B: Transform -->
+        <div id="stage-b" class="stage">
+            <div class="stage-header">
+                <span class="stage-label">STAGE B: <span class="stage-name">TRANSFORM</span></span>
+                <span id="stage-b-time" class="stage-time"></span>
+            </div>
+            <div id="stage-b-block" class="code-block"><pre id="stage-b-code"></pre></div>
+            <div id="stage-b-expand"></div>
+        </div>
+
+        <!-- Stage X: Validation -->
+        <div id="stage-x" class="stage">
+            <div class="stage-header">
+                <span class="stage-label">STAGE X: <span class="stage-name">VALIDATION</span></span>
+                <span id="stage-x-time" class="stage-time"></span>
+            </div>
+            <div id="stage-x-block" class="code-block"><pre id="stage-x-code"></pre></div>
+            <div id="stage-x-expand"></div>
+        </div>
+
+        <!-- Audit Summary -->
+        <div id="audit-summary" class="stage">
+            <div class="stage-header">
+                <span class="stage-label"><span class="stage-name">AUDIT SUMMARY</span></span>
+            </div>
+            <div id="audit-cards" class="audit-cards"></div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            Powered by OTTO &mdash; zero dependencies, runs entirely in your browser via WebAssembly.
+        </div>
+    </div>
+</div>
+
+<!-- WASM Module -->
+<script src="build/nexus-demo.js"></script>
+
+<script>
+'use strict';
+
+/* ============================================================================
+ * Embedded Schemas
+ * ============================================================================ */
+
+const SCHEMAS = {
+'gls-hu-depots-v1': {"nx_schema":1,"version":"gls-hu-depots-v1","output_type":"facility","table_selector":{"index":0},"skip_rows":0,"columns":[{"source":0,"target":"name","type":"string","transforms":["trim"],"required":true},{"source":1,"target":"address","type":"string","transforms":["trim"],"required":true},{"source":2,"target":"lat","type":"double","precision":6,"required":true,"transforms":[{"replace":["~",""]}],"validate":{"min":-90.0,"max":90.0}},{"source":3,"target":"lon","type":"double","precision":6,"required":true,"transforms":[{"replace":["~",""]}],"validate":{"min":-180.0,"max":180.0}}],"derived":[{"target":"facility_type","value":"depot"},{"target":"operator","value":"GLS"},{"target":"country","value":"HU"}],"row_id":{"template":"gls-hu-depot-{name}","slugify":true}},
+
+'gls-hu-depots-v2': {"nx_schema":2,"version":"gls-hu-depots-v2","output_type":"facility","table_selector":{"index":0},"skip_rows":0,"multi_transforms":[{"type":"compute","function":"zip_to_region","sources":[5],"targets":[{"field":"region","type":"string"}]}],"columns":[{"source":0,"target":"name","type":"string","transforms":["trim"],"required":true},{"source":1,"target":"address","type":"string","transforms":["trim"],"required":true},{"source":2,"target":"lat","type":"double","precision":6,"required":true,"transforms":[{"replace":["~",""]}],"validate":{"min":-90.0,"max":90.0}},{"source":3,"target":"lon","type":"double","precision":6,"required":true,"transforms":[{"replace":["~",""]}],"validate":{"min":-180.0,"max":180.0}},{"source":4,"target":"zip","type":"string"},{"source":6,"target":"region","type":"string"}],"derived":[{"target":"facility_type","value":"depot"},{"target":"operator","value":"GLS"},{"target":"country","value":"HU"}],"row_id":{"template":"gls-hu-depot-{name}","slugify":true},"validate":[{"type":"geo_bounds","lat_field":"lat","lon_field":"lon","bounds":{"min_lat":45.7,"max_lat":48.6,"min_lon":16.1,"max_lon":22.9},"severity":"error"},{"type":"format","field":"zip","pattern":"^[1-9][0-9]{3}$","message":"Hungarian ZIP must be 4 digits, first digit 1-9","severity":"warning"},{"type":"unique","fields":["name"],"severity":"error"}]},
+
+'gls-hu-automata-v1': {"nx_schema":1,"version":"gls-hu-automata-v1","output_type":"facility","table_selector":{"index":0},"skip_rows":0,"columns":[{"source":0,"target":"city","type":"string","transforms":["trim"],"required":true},{"source":1,"target":"name","type":"string","transforms":["trim"],"required":true},{"source":2,"target":"address","type":"string","transforms":["trim"],"default":""},{"source":3,"target":"lat","type":"double","precision":6,"required":true,"validate":{"min":-90.0,"max":90.0}},{"source":4,"target":"lon","type":"double","precision":6,"required":true,"validate":{"min":-180.0,"max":180.0}}],"derived":[{"target":"facility_type","value":"parcel_automata"},{"target":"operator","value":"GLS"},{"target":"country","value":"HU"}],"row_id":{"template":"gls-hu-{city}-{name}","slugify":true}},
+
+'gls-hu-automata-v2': {"nx_schema":2,"version":"gls-hu-automata-v2","output_type":"facility","table_selector":{"index":0},"skip_rows":0,"multi_transforms":[{"type":"compute","function":"phone_normalize","sources":[4],"targets":[{"field":"phone","type":"string"}]},{"type":"compute","function":"zip_to_region","sources":[5],"targets":[{"field":"region","type":"string"}]}],"columns":[{"source":0,"target":"city","type":"string","transforms":["trim"],"required":true},{"source":1,"target":"name","type":"string","transforms":["trim"],"required":true},{"source":2,"target":"address","type":"string","transforms":["trim"],"default":""},{"source":3,"target":"lat","type":"double","precision":6,"required":true,"validate":{"min":-90.0,"max":90.0}},{"source":4,"target":"lon","type":"double","precision":6,"required":true,"validate":{"min":-180.0,"max":180.0}},{"source":5,"target":"zip","type":"string"},{"source":6,"target":"phone_raw","type":"string"},{"source":7,"target":"phone","type":"string"},{"source":8,"target":"region","type":"string"}],"derived":[{"target":"facility_type","value":"parcel_automata"},{"target":"operator","value":"GLS"},{"target":"country","value":"HU"}],"row_id":{"template":"gls-hu-{city}-{name}","slugify":true},"validate":[{"type":"geo_bounds","lat_field":"lat","lon_field":"lon","bounds":{"min_lat":45.7,"max_lat":48.6,"min_lon":16.1,"max_lon":22.9},"severity":"error"},{"type":"format","field":"zip","pattern":"^[1-9][0-9]{3}$","message":"Hungarian ZIP must be 4 digits, first digit 1-9","severity":"warning"},{"type":"unique","fields":["city","name"],"severity":"error"}]},
+
+'gls-hu-pudo-v1': {"nx_schema":1,"version":"gls-hu-pudo-v1","output_type":"facility","table_selector":{"index":0},"skip_rows":0,"columns":[{"source":0,"target":"city","type":"string","transforms":["trim"],"required":true},{"source":1,"target":"name","type":"string","transforms":["trim"],"required":true},{"source":2,"target":"address","type":"string","transforms":["trim"],"default":""},{"source":3,"target":"lat","type":"double","precision":6,"required":true,"validate":{"min":-90.0,"max":90.0}},{"source":4,"target":"lon","type":"double","precision":6,"required":true,"validate":{"min":-180.0,"max":180.0}}],"derived":[{"target":"facility_type","value":"parcel_shop"},{"target":"operator","value":"GLS"},{"target":"country","value":"HU"}],"row_id":{"template":"gls-hu-pudo-{city}-{name}","slugify":true}},
+
+'gls-hu-pudo-v2': {"nx_schema":2,"version":"gls-hu-pudo-v2","output_type":"facility","table_selector":{"index":0},"skip_rows":0,"multi_transforms":[{"type":"compute","function":"phone_normalize","sources":[5],"targets":[{"field":"phone","type":"string"}]},{"type":"compute","function":"opening_hours","sources":[6],"targets":[{"field":"hours","type":"string"}]}],"columns":[{"source":0,"target":"city","type":"string","transforms":["trim"],"required":true},{"source":1,"target":"name","type":"string","transforms":["trim"],"required":true},{"source":2,"target":"address","type":"string","transforms":["trim"],"default":""},{"source":3,"target":"lat","type":"double","precision":6,"required":true,"validate":{"min":-90.0,"max":90.0}},{"source":4,"target":"lon","type":"double","precision":6,"required":true,"validate":{"min":-180.0,"max":180.0}},{"source":7,"target":"phone","type":"string"},{"source":8,"target":"hours","type":"string"}],"derived":[{"target":"facility_type","value":"parcel_shop"},{"target":"operator","value":"GLS"},{"target":"country","value":"HU"}],"row_id":{"template":"gls-hu-pudo-{city}-{name}","slugify":true},"validate":[{"type":"geo_bounds","lat_field":"lat","lon_field":"lon","bounds":{"min_lat":45.7,"max_lat":48.6,"min_lon":16.1,"max_lon":22.9},"severity":"error"},{"type":"unique","fields":["city","name"],"severity":"error"}]}
+};
+
+/* ============================================================================
+ * State
+ * ============================================================================ */
+
+let Module = null;
+let fileData = null;   /* ArrayBuffer */
+let fileFormat = -1;   /* 0=XLSX, 2=CSV, 3=PDF */
+let fileName = '';
+
+/* ============================================================================
+ * WASM Module Loading
+ * ============================================================================ */
+
+NexusDemo().then(function(m) {
+    Module = m;
+    document.getElementById('wasm-loading').style.display = 'none';
+    document.getElementById('main-content').style.display = 'block';
+    updateRunButton();
+}).catch(function(err) {
+    document.getElementById('wasm-loading').innerHTML =
+        '<div style="color: var(--error);">Failed to load WASM module: ' + err.message + '</div>';
+});
+
+/* ============================================================================
+ * File Upload
+ * ============================================================================ */
+
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+const fileInfo = document.getElementById('file-info');
+
+dropZone.addEventListener('click', function() { fileInput.click(); });
+
+dropZone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+});
+
+dropZone.addEventListener('dragleave', function() {
+    dropZone.classList.remove('drag-over');
+});
+
+dropZone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files.length > 0) {
+        handleFile(e.dataTransfer.files[0]);
+    }
+});
+
+fileInput.addEventListener('change', function() {
+    if (fileInput.files.length > 0) {
+        handleFile(fileInput.files[0]);
+    }
+});
+
+function handleFile(file) {
+    fileName = file.name;
+    const ext = fileName.split('.').pop().toLowerCase();
+
+    switch (ext) {
+        case 'xlsx': fileFormat = 0; break;
+        case 'csv':
+        case 'tsv':  fileFormat = 2; break;
+        case 'pdf':  fileFormat = 3; break;
+        default:
+            showError('Unsupported file format: .' + ext);
+            return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function() {
+        fileData = reader.result;
+        fileInfo.textContent = fileName + ' (' + formatBytes(file.size) + ')';
+        fileInfo.style.display = 'block';
+        hideError();
+        updateRunButton();
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+/* ============================================================================
+ * Controls
+ * ============================================================================ */
+
+const schemaSelect = document.getElementById('schema-select');
+const runBtn = document.getElementById('run-btn');
+
+schemaSelect.addEventListener('change', updateRunButton);
+
+function updateRunButton() {
+    runBtn.disabled = !Module || !fileData || !schemaSelect.value;
+}
+
+runBtn.addEventListener('click', runPipeline);
+
+/* ============================================================================
+ * Error Handling
+ * ============================================================================ */
+
+function showError(msg) {
+    const el = document.getElementById('error-msg');
+    el.textContent = msg;
+    el.style.display = 'block';
+}
+
+function hideError() {
+    document.getElementById('error-msg').style.display = 'none';
+}
+
+/* ============================================================================
+ * WASM Interop
+ * ============================================================================ */
+
+/* UTF-8 byte length (not JS char count - differs for multibyte chars) */
+function utf8ByteLength(str) {
+    return new TextEncoder().encode(str).length;
+}
+
+/* Allocate UTF-8 string in WASM heap, return [ptr, byteLen] */
+function allocUTF8(str) {
+    const encoded = new TextEncoder().encode(str);
+    const ptr = Module._malloc(encoded.length + 1);
+    Module.HEAPU8.set(encoded, ptr);
+    Module.HEAPU8[ptr + encoded.length] = 0;
+    return [ptr, encoded.length];
+}
+
+function callExtract(data, format) {
+    const bytes = new Uint8Array(data);
+    const ptr = Module._malloc(bytes.length);
+    Module.HEAPU8.set(bytes, ptr);
+    const status = Module._nx_wasm_extract(ptr, bytes.length, format);
+    Module._free(ptr);
+    if (status !== 0) throw new Error('Extraction failed (format=' + format + ')');
+    return Module.UTF8ToString(Module._nx_wasm_extract_result());
+}
+
+function callTransform(rawJSON, schemaJSON) {
+    const [rawPtr, rawLen] = allocUTF8(rawJSON);
+    const [schemaPtr, schemaLen] = allocUTF8(schemaJSON);
+    const status = Module._nx_wasm_transform(rawPtr, rawLen, schemaPtr, schemaLen);
+    Module._free(rawPtr);
+    Module._free(schemaPtr);
+    if (status !== 0) throw new Error('Transform failed');
+    return Module.UTF8ToString(Module._nx_wasm_transform_result());
+}
+
+function callValidate(canonicalJSON, schemaJSON) {
+    const [canonPtr, canonLen] = allocUTF8(canonicalJSON);
+    const [schemaPtr, schemaLen] = allocUTF8(schemaJSON);
+    const status = Module._nx_wasm_validate(canonPtr, canonLen, schemaPtr, schemaLen);
+    Module._free(canonPtr);
+    Module._free(schemaPtr);
+    if (status !== 0) throw new Error('Validation failed');
+    return Module.UTF8ToString(Module._nx_wasm_validate_result());
+}
+
+/* ============================================================================
+ * JSON Syntax Highlighting
+ * ============================================================================ */
+
+function highlightJSON(jsonStr) {
+    /* Escape HTML first */
+    let html = jsonStr
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    /* Apply syntax highlighting */
+    html = html
+        .replace(/"([^"\\]|\\.)*"\s*:/g, function(m) {
+            return '<span class="key">' + m.slice(0, -1) + '</span>:';
+        })
+        .replace(/:\s*"([^"\\]|\\.)*"/g, function(m) {
+            const colonSpace = m.match(/^:\s*/)[0];
+            return colonSpace + '<span class="string">' + m.slice(colonSpace.length) + '</span>';
+        })
+        .replace(/:\s*(-?\d+\.?\d*([eE][+-]?\d+)?)/g, function(m, num) {
+            const colonSpace = m.match(/^:\s*/)[0];
+            return colonSpace + '<span class="number">' + num + '</span>';
+        })
+        .replace(/:\s*(true|false|null)/g, function(m, kw) {
+            const colonSpace = m.match(/^:\s*/)[0];
+            return colonSpace + '<span class="command">' + kw + '</span>';
+        });
+
+    return html;
+}
+
+/* ============================================================================
+ * JSON Truncation
+ * ============================================================================ */
+
+const MAX_DISPLAY_RECORDS = 5;
+
+function truncateJSON(jsonStr) {
+    try {
+        const obj = JSON.parse(jsonStr);
+
+        /* Check for records arrays in various locations */
+        let records = null;
+        let recordsKey = null;
+
+        if (obj.records && Array.isArray(obj.records)) {
+            records = obj.records;
+            recordsKey = 'records';
+        } else if (obj.tables && Array.isArray(obj.tables)) {
+            /* Stage A raw output has tables[].rows */
+            for (const t of obj.tables) {
+                if (t.rows && t.rows.length > MAX_DISPLAY_RECORDS) {
+                    records = t.rows;
+                    recordsKey = 'rows';
+                }
+            }
+        }
+
+        if (!records || records.length <= MAX_DISPLAY_RECORDS) {
+            return { json: jsonStr, totalRecords: records ? records.length : 0, truncated: false };
+        }
+
+        const totalRecords = records.length;
+
+        /* Create truncated copy */
+        const truncated = JSON.parse(jsonStr);
+        if (recordsKey === 'records') {
+            truncated.records = truncated.records.slice(0, MAX_DISPLAY_RECORDS);
+        } else if (recordsKey === 'rows') {
+            for (const t of truncated.tables) {
+                if (t.rows && t.rows.length > MAX_DISPLAY_RECORDS) {
+                    t.rows = t.rows.slice(0, MAX_DISPLAY_RECORDS);
+                }
+            }
+        }
+
+        return {
+            json: JSON.stringify(truncated, null, 2),
+            totalRecords: totalRecords,
+            truncated: true
+        };
+    } catch (e) {
+        return { json: jsonStr, totalRecords: 0, truncated: false };
+    }
+}
+
+/* ============================================================================
+ * Typing Animation (inlined from site/js/typing-animation.js, Promise-based)
+ * ============================================================================ */
+
+let activeAnimations = new Map();
+let animationIdCounter = 0;
+
+function typeAnimateContentAsync(block, html) {
+    return new Promise(function(resolve) {
+        const pre = block.querySelector('pre');
+        if (!pre) { resolve(); return; }
+
+        const thisAnimationId = ++animationIdCounter;
+        activeAnimations.set(block, thisAnimationId);
+
+        pre.innerHTML = '';
+        pre.style.whiteSpace = 'pre';
+        block.classList.remove('typed');
+        block.classList.add('typing');
+
+        const tempDiv = document.createElement('pre');
+        tempDiv.style.whiteSpace = 'pre';
+        tempDiv.innerHTML = html;
+
+        const segments = [];
+        function extractSegments(node, wrapper) {
+            if (node.nodeType === Node.TEXT_NODE) {
+                const text = node.textContent;
+                for (let i = 0; i < text.length; i++) {
+                    segments.push({ char: text[i], wrapper: wrapper });
+                }
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                const newWrapper = { tag: node.tagName.toLowerCase(), className: node.className };
+                for (const child of node.childNodes) {
+                    extractSegments(child, newWrapper);
+                }
+            }
+        }
+        for (const child of tempDiv.childNodes) {
+            extractSegments(child, null);
+        }
+
+        let index = 0;
+        let currentSpan = null;
+        let currentWrapper = null;
+
+        function typeNext() {
+            if (activeAnimations.get(block) !== thisAnimationId) {
+                resolve();
+                return;
+            }
+
+            if (index >= segments.length) {
+                block.classList.remove('typing');
+                block.classList.add('typed');
+                activeAnimations.delete(block);
+                resolve();
+                return;
+            }
+
+            const segment = segments[index];
+            const wrapperKey = segment.wrapper ? segment.wrapper.tag + '.' + segment.wrapper.className : null;
+
+            if (wrapperKey !== currentWrapper) {
+                currentWrapper = wrapperKey;
+                if (segment.wrapper) {
+                    currentSpan = document.createElement(segment.wrapper.tag);
+                    currentSpan.className = segment.wrapper.className;
+                    pre.appendChild(currentSpan);
+                } else {
+                    currentSpan = null;
+                }
+            }
+
+            const textNode = document.createTextNode(segment.char);
+            if (currentSpan) {
+                currentSpan.appendChild(textNode);
+            } else {
+                pre.appendChild(textNode);
+            }
+
+            index++;
+
+            let delay;
+            if (segment.char === '\n') {
+                delay = 10 + Math.random() * 8;
+            } else if (segment.char === ' ') {
+                delay = 3 + Math.random() * 3;
+            } else {
+                delay = 4 + Math.random() * 6;
+            }
+
+            setTimeout(typeNext, delay);
+        }
+
+        typeNext();
+    });
+}
+
+/* Fast render: set content immediately without animation */
+function renderContentImmediate(block, html) {
+    const pre = block.querySelector('pre');
+    if (!pre) return;
+    pre.innerHTML = html;
+    block.classList.remove('typing');
+    block.classList.add('typed');
+}
+
+/* ============================================================================
+ * Stage Visibility
+ * ============================================================================ */
+
+function hideAllStages() {
+    const stages = ['stage-a', 'schema-preview', 'stage-b', 'stage-x', 'audit-summary'];
+    stages.forEach(function(id) {
+        const el = document.getElementById(id);
+        el.classList.remove('visible');
+        /* Clear expand containers */
+        const expand = document.getElementById(id + '-expand');
+        if (expand) expand.innerHTML = '';
+    });
+    /* Clear code blocks */
+    document.querySelectorAll('.code-block pre').forEach(function(pre) {
+        pre.innerHTML = '';
+    });
+    document.querySelectorAll('.code-block').forEach(function(block) {
+        block.classList.remove('typing', 'typed');
+    });
+    document.getElementById('audit-cards').innerHTML = '';
+}
+
+function showStage(id) {
+    document.getElementById(id).classList.add('visible');
+}
+
+/* ============================================================================
+ * Pipeline Execution
+ * ============================================================================ */
+
+async function runPipeline() {
+    hideError();
+    hideAllStages();
+    runBtn.disabled = true;
+
+    const schemaKey = schemaSelect.value;
+    const schema = SCHEMAS[schemaKey];
+    if (!schema) {
+        showError('Unknown schema: ' + schemaKey);
+        runBtn.disabled = false;
+        return;
+    }
+    const schemaJSON = JSON.stringify(schema);
+    const hasValidation = !!schema.validate;
+
+    const loading = document.getElementById('loading');
+    const loadingText = document.getElementById('loading-text');
+
+    try {
+        /* ── Stage A: Extract ────────────────────────────────── */
+        loading.classList.add('visible');
+        loadingText.textContent = 'Stage A: Extracting...';
+
+        await sleep(50); /* Let UI update */
+        const t0 = performance.now();
+        const rawJSON = callExtract(fileData, fileFormat);
+        const t1 = performance.now();
+
+        loading.classList.remove('visible');
+        showStage('stage-a');
+        document.getElementById('stage-a-time').textContent = (t1 - t0).toFixed(0) + ' ms';
+
+        /* Truncate and display */
+        const rawTrunc = truncateJSON(rawJSON);
+        const rawHTML = highlightJSON(rawTrunc.json);
+        await typeAnimateContentAsync(document.getElementById('stage-a-block'), rawHTML);
+
+        if (rawTrunc.truncated) {
+            addExpandButton('stage-a-expand', rawJSON, rawTrunc.totalRecords, 'stage-a-block');
+        }
+
+        /* ── Schema Preview ──────────────────────────────────── */
+        showStage('schema-preview');
+        const schemaHTML = highlightJSON(JSON.stringify(schema, null, 2));
+        await typeAnimateContentAsync(document.getElementById('schema-block'), schemaHTML);
+
+        /* ── Stage B: Transform ──────────────────────────────── */
+        loading.classList.add('visible');
+        loadingText.textContent = 'Stage B: Transforming...';
+        await sleep(50);
+
+        const t2 = performance.now();
+        const canonJSON = callTransform(rawJSON, schemaJSON);
+        const t3 = performance.now();
+
+        loading.classList.remove('visible');
+        showStage('stage-b');
+        document.getElementById('stage-b-time').textContent = (t3 - t2).toFixed(0) + ' ms';
+
+        const canonTrunc = truncateJSON(canonJSON);
+        const canonHTML = highlightJSON(canonTrunc.json);
+        await typeAnimateContentAsync(document.getElementById('stage-b-block'), canonHTML);
+
+        if (canonTrunc.truncated) {
+            addExpandButton('stage-b-expand', canonJSON, canonTrunc.totalRecords, 'stage-b-block');
+        }
+
+        /* ── Stage X: Validate (conditional) ─────────────────── */
+        let finalJSON = canonJSON;
+        if (hasValidation) {
+            loading.classList.add('visible');
+            loadingText.textContent = 'Stage X: Validating...';
+            await sleep(50);
+
+            const t4 = performance.now();
+            const validatedJSON = callValidate(canonJSON, schemaJSON);
+            const t5 = performance.now();
+
+            loading.classList.remove('visible');
+            showStage('stage-x');
+            document.getElementById('stage-x-time').textContent = (t5 - t4).toFixed(0) + ' ms';
+
+            const validTrunc = truncateJSON(validatedJSON);
+            const validHTML = highlightJSON(validTrunc.json);
+            await typeAnimateContentAsync(document.getElementById('stage-x-block'), validHTML);
+
+            if (validTrunc.truncated) {
+                addExpandButton('stage-x-expand', validatedJSON, validTrunc.totalRecords, 'stage-x-block');
+            }
+
+            finalJSON = validatedJSON;
+        }
+
+        /* ── Audit Summary ───────────────────────────────────── */
+        showAuditSummary(finalJSON);
+        showStage('audit-summary');
+
+    } catch (err) {
+        loading.classList.remove('visible');
+        showError('Pipeline error: ' + err.message);
+    }
+
+    updateRunButton();
+}
+
+function sleep(ms) {
+    return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+/* ============================================================================
+ * Expand Button for Truncated Output
+ * ============================================================================ */
+
+function addExpandButton(containerId, fullJSON, totalRecords, blockId) {
+    const container = document.getElementById(containerId);
+    const btn = document.createElement('button');
+    btn.className = 'expand-btn';
+    btn.textContent = 'Show all ' + totalRecords + ' records';
+    btn.addEventListener('click', function() {
+        const block = document.getElementById(blockId);
+        const html = highlightJSON(JSON.stringify(JSON.parse(fullJSON), null, 2));
+        renderContentImmediate(block, html);
+        container.innerHTML = '';
+    });
+    container.appendChild(btn);
+}
+
+/* ============================================================================
+ * Audit Summary
+ * ============================================================================ */
+
+function showAuditSummary(jsonStr) {
+    try {
+        const obj = JSON.parse(jsonStr);
+        const audit = obj.audit;
+        if (!audit) return;
+
+        const total = audit.rows_processed || 0;
+        const accepted = audit.rows_accepted || 0;
+        const rejected = audit.rows_rejected || 0;
+
+        /* Count warnings from validation details */
+        let warnings = 0;
+        if (audit.validation && audit.validation.details) {
+            for (const d of audit.validation.details) {
+                if (d.severity === 'warning') warnings++;
+            }
+        }
+
+        const cardsEl = document.getElementById('audit-cards');
+        cardsEl.innerHTML = '';
+
+        function addCard(value, label, cls) {
+            const card = document.createElement('div');
+            card.className = 'audit-card ' + cls;
+            card.innerHTML = '<div class="card-value">' + value + '</div>' +
+                             '<div class="card-label">' + label + '</div>';
+            cardsEl.appendChild(card);
+        }
+
+        addCard(total, 'total', 'total');
+        addCard(accepted, 'accepted', 'accepted');
+        addCard(rejected, 'rejected', 'rejected');
+        addCard(warnings, 'warnings', 'warnings');
+    } catch (e) {
+        /* Ignore parse errors */
+    }
+}
+</script>
+</body>
+</html>
