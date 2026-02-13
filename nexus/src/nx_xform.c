@@ -30,16 +30,23 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <math.h>
+#include <regex.h>
+#include "nx_compute.h"
 
 /* ============================================================================
  * Configuration Limits
  * ============================================================================ */
 
-#define MAX_COLUMNS   64
-#define MAX_DERIVED   32
-#define MAX_TRANSFORMS 8
-#define MAX_FIELD_LEN  256
-#define MAX_ID_LEN     512
+#define MAX_COLUMNS          64
+#define MAX_DERIVED          32
+#define MAX_TRANSFORMS       8
+#define MAX_FIELD_LEN        256
+#define MAX_ID_LEN           512
+#define MAX_VIRTUAL_COLS     32
+#define MAX_MULTI_TRANSFORMS 16
+#define MAX_MULTI_TARGETS    8
+#define MAX_MULTI_SOURCES    8
+#define MAX_CONDITIONS       8
 
 /* ============================================================================
  * Schema Structures (parsed from JSON)
@@ -88,6 +95,72 @@ typedef struct {
     char value[MAX_FIELD_LEN];
 } DerivedField;
 
+/* ============================================================================
+ * Multi-Transform Structures (split, merge, regex, compute, conditional)
+ * ============================================================================ */
+
+typedef enum {
+    MULTI_SPLIT,
+    MULTI_MERGE,
+    MULTI_REGEX,
+    MULTI_COMPUTE,
+    MULTI_CONDITIONAL
+} MultiTransformType;
+
+typedef struct {
+    char field[MAX_FIELD_LEN];
+    int index;         /* Split: piece index; Regex: capture group */
+    XformType type;
+    int precision;
+    XformTransformEntry transforms[MAX_TRANSFORMS];
+    int transform_count;
+} MultiTarget;
+
+typedef struct {
+    char match[MAX_FIELD_LEN];    /* Regex pattern */
+    char field[MAX_FIELD_LEN];    /* Target field name */
+    char value[MAX_FIELD_LEN];    /* Value (may contain {0}) */
+} Condition;
+
+typedef struct {
+    MultiTransformType type;
+
+    /* Single source (split, regex, conditional) */
+    int source;
+
+    /* Multiple sources (merge, compute) */
+    int sources[MAX_MULTI_SOURCES];
+    int source_count;
+
+    /* Split */
+    char delimiter[64];
+    int widths[MAX_MULTI_TARGETS];
+    int width_count;
+    int mode_fixed_width;
+
+    /* Merge */
+    char separator[64];
+    char merge_template[MAX_FIELD_LEN];
+    int has_template;
+
+    /* Regex */
+    char pattern[MAX_FIELD_LEN];
+
+    /* Compute */
+    char function[MAX_FIELD_LEN];
+
+    /* Conditional */
+    Condition conditions[MAX_CONDITIONS];
+    int condition_count;
+
+    /* Targets */
+    MultiTarget targets[MAX_MULTI_TARGETS];
+    int target_count;
+
+    /* Virtual column base index (assigned during parsing) */
+    int virtual_base;
+} MultiTransform;
+
 typedef struct {
     char version[MAX_FIELD_LEN];
     char output_type[MAX_FIELD_LEN];
@@ -99,6 +172,10 @@ typedef struct {
 
     DerivedField derived[MAX_DERIVED];
     int derived_count;
+
+    MultiTransform multi[MAX_MULTI_TRANSFORMS];
+    int multi_count;
+    int virtual_col_count;
 
     char id_template[MAX_ID_LEN];
     int id_slugify;
@@ -155,6 +232,470 @@ static XformTransform parse_transform(const char *s)
     if (strcmp(s, "lowercase") == 0) return XFORM_LOWERCASE;
     if (strcmp(s, "uppercase") == 0) return XFORM_UPPERCASE;
     return XFORM_TRIM;
+}
+
+/* Forward declaration (defined in String Transforms section below) */
+static void apply_transforms(char *buf, size_t *len,
+                             const XformTransformEntry *transforms, int count);
+
+/* ============================================================================
+ * Multi-Transform Parsing
+ * ============================================================================ */
+
+static int parse_multi_target_transforms(ShJsonValue *t, MultiTarget *tgt)
+{
+    ShJsonValue *txf = sh_json_get(t, "transforms");
+    if (!txf) return 0;
+    int tn = (int)sh_json_array_len(txf);
+    if (tn > MAX_TRANSFORMS) tn = MAX_TRANSFORMS;
+    for (int k = 0; k < tn; k++) {
+        ShJsonValue *tv = sh_json_array_get(txf, (size_t)k);
+        if (sh_json_type(tv) == SH_JSON_STRING) {
+            tgt->transforms[tgt->transform_count].type =
+                parse_transform(sh_json_as_string(tv, ""));
+            tgt->transform_count++;
+        }
+    }
+    return tgt->transform_count;
+}
+
+static void parse_multi_targets(ShJsonValue *mt, MultiTransform *m)
+{
+    ShJsonValue *targets = sh_json_get(mt, "targets");
+    if (!targets) return;
+    m->target_count = (int)sh_json_array_len(targets);
+    if (m->target_count > MAX_MULTI_TARGETS)
+        m->target_count = MAX_MULTI_TARGETS;
+    for (int j = 0; j < m->target_count; j++) {
+        ShJsonValue *t = sh_json_array_get(targets, (size_t)j);
+        MultiTarget *tgt = &m->targets[j];
+        memset(tgt, 0, sizeof(*tgt));
+        snprintf(tgt->field, MAX_FIELD_LEN, "%s",
+                 sh_json_as_string(sh_json_get(t, "field"), ""));
+        tgt->index = sh_json_as_int(sh_json_get(t, "index"), j);
+        /* "group" for regex targets (overrides index) */
+        ShJsonValue *grp = sh_json_get(t, "group");
+        if (grp) tgt->index = sh_json_as_int(grp, j);
+        tgt->type = parse_type(
+            sh_json_as_string(sh_json_get(t, "type"), "string"));
+        tgt->precision = sh_json_as_int(sh_json_get(t, "precision"), 6);
+        parse_multi_target_transforms(t, tgt);
+    }
+}
+
+static int parse_multi_transforms(ShJsonValue *arr, XformSchema *schema)
+{
+    if (!arr) return 0;
+    int n = (int)sh_json_array_len(arr);
+    if (n > MAX_MULTI_TRANSFORMS) n = MAX_MULTI_TRANSFORMS;
+
+    int virtual_base = 0;
+
+    for (int i = 0; i < n; i++) {
+        ShJsonValue *mt = sh_json_array_get(arr, (size_t)i);
+        MultiTransform *m = &schema->multi[schema->multi_count];
+        memset(m, 0, sizeof(*m));
+
+        const char *type_str = sh_json_as_string(sh_json_get(mt, "type"), "");
+
+        if (strcmp(type_str, "split") == 0) {
+            m->type = MULTI_SPLIT;
+            m->source = sh_json_as_int(sh_json_get(mt, "source"), 0);
+            const char *mode = sh_json_as_string(
+                sh_json_get(mt, "mode"), "delimiter");
+            if (strcmp(mode, "fixed_width") == 0) {
+                m->mode_fixed_width = 1;
+                ShJsonValue *widths = sh_json_get(mt, "widths");
+                if (widths) {
+                    m->width_count = (int)sh_json_array_len(widths);
+                    if (m->width_count > MAX_MULTI_TARGETS)
+                        m->width_count = MAX_MULTI_TARGETS;
+                    for (int j = 0; j < m->width_count; j++)
+                        m->widths[j] = sh_json_as_int(
+                            sh_json_array_get(widths, (size_t)j), 0);
+                }
+            } else {
+                snprintf(m->delimiter, sizeof(m->delimiter), "%s",
+                         sh_json_as_string(sh_json_get(mt, "delimiter"), ","));
+            }
+        } else if (strcmp(type_str, "merge") == 0) {
+            m->type = MULTI_MERGE;
+            ShJsonValue *sources = sh_json_get(mt, "sources");
+            if (sources) {
+                m->source_count = (int)sh_json_array_len(sources);
+                if (m->source_count > MAX_MULTI_SOURCES)
+                    m->source_count = MAX_MULTI_SOURCES;
+                for (int j = 0; j < m->source_count; j++)
+                    m->sources[j] = sh_json_as_int(
+                        sh_json_array_get(sources, (size_t)j), 0);
+            }
+            snprintf(m->separator, sizeof(m->separator), "%s",
+                     sh_json_as_string(sh_json_get(mt, "separator"), " "));
+            ShJsonValue *tmpl = sh_json_get(mt, "template");
+            if (tmpl && sh_json_type(tmpl) == SH_JSON_STRING) {
+                m->has_template = 1;
+                snprintf(m->merge_template, MAX_FIELD_LEN, "%s",
+                         sh_json_as_string(tmpl, ""));
+            }
+        } else if (strcmp(type_str, "regex") == 0) {
+            m->type = MULTI_REGEX;
+            m->source = sh_json_as_int(sh_json_get(mt, "source"), 0);
+            snprintf(m->pattern, MAX_FIELD_LEN, "%s",
+                     sh_json_as_string(sh_json_get(mt, "pattern"), ""));
+        } else if (strcmp(type_str, "compute") == 0) {
+            m->type = MULTI_COMPUTE;
+            snprintf(m->function, MAX_FIELD_LEN, "%s",
+                     sh_json_as_string(sh_json_get(mt, "function"), ""));
+            ShJsonValue *sources = sh_json_get(mt, "sources");
+            if (sources) {
+                m->source_count = (int)sh_json_array_len(sources);
+                if (m->source_count > MAX_MULTI_SOURCES)
+                    m->source_count = MAX_MULTI_SOURCES;
+                for (int j = 0; j < m->source_count; j++)
+                    m->sources[j] = sh_json_as_int(
+                        sh_json_array_get(sources, (size_t)j), 0);
+            }
+        } else if (strcmp(type_str, "conditional") == 0) {
+            m->type = MULTI_CONDITIONAL;
+            m->source = sh_json_as_int(sh_json_get(mt, "source"), 0);
+            ShJsonValue *conds = sh_json_get(mt, "conditions");
+            if (conds) {
+                m->condition_count = (int)sh_json_array_len(conds);
+                if (m->condition_count > MAX_CONDITIONS)
+                    m->condition_count = MAX_CONDITIONS;
+                for (int j = 0; j < m->condition_count; j++) {
+                    ShJsonValue *cond = sh_json_array_get(conds, (size_t)j);
+                    Condition *c = &m->conditions[j];
+                    snprintf(c->match, MAX_FIELD_LEN, "%s",
+                             sh_json_as_string(sh_json_get(cond, "match"), ".*"));
+                    ShJsonValue *set = sh_json_get(cond, "set");
+                    if (set) {
+                        snprintf(c->field, MAX_FIELD_LEN, "%s",
+                                 sh_json_as_string(sh_json_get(set, "field"), ""));
+                        snprintf(c->value, MAX_FIELD_LEN, "%s",
+                                 sh_json_as_string(sh_json_get(set, "value"), ""));
+                    }
+                }
+            }
+        } else {
+            continue; /* Unknown type, skip */
+        }
+
+        /* Parse targets array */
+        parse_multi_targets(mt, m);
+
+        /* For merge without explicit targets: single output from "target" key */
+        if (m->type == MULTI_MERGE && m->target_count == 0) {
+            m->target_count = 1;
+            snprintf(m->targets[0].field, MAX_FIELD_LEN, "%s",
+                     sh_json_as_string(sh_json_get(mt, "target"), ""));
+            m->targets[0].type = parse_type(
+                sh_json_as_string(sh_json_get(mt, "target_type"), "string"));
+        }
+
+        /* For conditional without explicit targets: single output */
+        if (m->type == MULTI_CONDITIONAL && m->target_count == 0) {
+            m->target_count = 1;
+            if (m->condition_count > 0)
+                snprintf(m->targets[0].field, MAX_FIELD_LEN, "%s",
+                         m->conditions[0].field);
+        }
+
+        m->virtual_base = virtual_base;
+        virtual_base += m->target_count;
+        schema->multi_count++;
+    }
+
+    schema->virtual_col_count = virtual_base;
+    return 0;
+}
+
+/* ============================================================================
+ * Multi-Transform Execution
+ * ============================================================================ */
+
+/*
+ * Get cell value from original cells or prior virtual columns.
+ */
+static const char *get_cell(const char **cells, int ncells,
+                            char virtual_vals[][MAX_FIELD_LEN],
+                            int total_virtual, int idx)
+{
+    if (idx < ncells) return cells[idx];
+    int vi = idx - ncells;
+    if (vi >= 0 && vi < total_virtual) return virtual_vals[vi];
+    return "";
+}
+
+/*
+ * Execute all multi-transforms on a row, producing virtual column values.
+ *
+ * @param multis        Array of multi-transforms from schema
+ * @param multi_count   Number of multi-transforms
+ * @param cells         Original cell string pointers
+ * @param ncells        Number of original cells
+ * @param virtual_vals  Output: virtual column values [MAX_VIRTUAL_COLS][MAX_FIELD_LEN]
+ * @return Number of virtual columns produced
+ */
+static int execute_multi_transforms(const MultiTransform *multis, int multi_count,
+                                     const char **cells, int ncells,
+                                     char virtual_vals[][MAX_FIELD_LEN])
+{
+    int total_virtual = 0;
+
+    for (int mi = 0; mi < multi_count; mi++) {
+        const MultiTransform *mt = &multis[mi];
+
+        switch (mt->type) {
+        case MULTI_SPLIT: {
+            const char *src = get_cell(cells, ncells, virtual_vals,
+                                       total_virtual, mt->source);
+
+            if (mt->mode_fixed_width) {
+                /* Fixed-width split */
+                size_t offset = 0;
+                size_t slen = strlen(src);
+                for (int t = 0; t < mt->target_count; t++) {
+                    int vi = mt->virtual_base + t;
+                    if (vi >= MAX_VIRTUAL_COLS) break;
+
+                    int w = (t < mt->width_count) ? mt->widths[t] : 0;
+                    if (w <= 0 || offset >= slen) {
+                        virtual_vals[vi][0] = '\0';
+                    } else {
+                        size_t copy_len = (size_t)w;
+                        if (offset + copy_len > slen)
+                            copy_len = slen - offset;
+                        if (copy_len >= MAX_FIELD_LEN)
+                            copy_len = MAX_FIELD_LEN - 1;
+                        memcpy(virtual_vals[vi], src + offset, copy_len);
+                        virtual_vals[vi][copy_len] = '\0';
+                    }
+                    offset += (size_t)w;
+
+                    /* Apply per-target transforms */
+                    size_t vlen = strlen(virtual_vals[vi]);
+                    apply_transforms(virtual_vals[vi], &vlen,
+                                     mt->targets[t].transforms,
+                                     mt->targets[t].transform_count);
+                }
+            } else {
+                /* Delimiter split */
+                size_t dlen = strlen(mt->delimiter);
+                const char *p = src;
+                int piece = 0;
+
+                /* Initialize all targets to empty */
+                for (int t = 0; t < mt->target_count; t++) {
+                    int vi = mt->virtual_base + t;
+                    if (vi < MAX_VIRTUAL_COLS)
+                        virtual_vals[vi][0] = '\0';
+                }
+
+                while (*p) {
+                    const char *next = (dlen > 0) ? strstr(p, mt->delimiter) : NULL;
+                    size_t frag_len = next ? (size_t)(next - p) : strlen(p);
+
+                    /* Find target that wants this piece */
+                    for (int t = 0; t < mt->target_count; t++) {
+                        if (mt->targets[t].index == piece) {
+                            int vi = mt->virtual_base + t;
+                            if (vi < MAX_VIRTUAL_COLS) {
+                                if (frag_len >= MAX_FIELD_LEN)
+                                    frag_len = MAX_FIELD_LEN - 1;
+                                memcpy(virtual_vals[vi], p, frag_len);
+                                virtual_vals[vi][frag_len] = '\0';
+
+                                /* Apply per-target transforms */
+                                size_t vlen = frag_len;
+                                apply_transforms(virtual_vals[vi], &vlen,
+                                                 mt->targets[t].transforms,
+                                                 mt->targets[t].transform_count);
+                            }
+                            break;
+                        }
+                    }
+
+                    piece++;
+                    if (!next) break;
+                    p = next + dlen;
+                }
+            }
+            break;
+        }
+
+        case MULTI_MERGE: {
+            int vi = mt->virtual_base;
+            if (vi >= MAX_VIRTUAL_COLS) break;
+
+            if (mt->has_template) {
+                /* Template merge: replace {0}, {1}, ... with source values */
+                char result[MAX_FIELD_LEN];
+                size_t w = 0;
+                const char *p = mt->merge_template;
+                while (*p && w < MAX_FIELD_LEN - 1) {
+                    if (*p == '{' && p[1] >= '0' && p[1] <= '9') {
+                        int idx = p[1] - '0';
+                        p += 2;
+                        if (*p == '}') p++;
+
+                        const char *val = "";
+                        if (idx < mt->source_count)
+                            val = get_cell(cells, ncells, virtual_vals,
+                                           total_virtual, mt->sources[idx]);
+                        size_t vl = strlen(val);
+                        if (w + vl >= MAX_FIELD_LEN) vl = MAX_FIELD_LEN - 1 - w;
+                        memcpy(result + w, val, vl);
+                        w += vl;
+                    } else {
+                        result[w++] = *p++;
+                    }
+                }
+                result[w] = '\0';
+                snprintf(virtual_vals[vi], MAX_FIELD_LEN, "%s", result);
+            } else {
+                /* Separator merge */
+                size_t w = 0;
+                size_t sep_len = strlen(mt->separator);
+                for (int s = 0; s < mt->source_count; s++) {
+                    const char *val = get_cell(cells, ncells, virtual_vals,
+                                               total_virtual, mt->sources[s]);
+                    size_t vl = strlen(val);
+                    if (s > 0 && w + sep_len < MAX_FIELD_LEN - 1) {
+                        memcpy(virtual_vals[vi] + w, mt->separator, sep_len);
+                        w += sep_len;
+                    }
+                    if (w + vl >= MAX_FIELD_LEN) vl = MAX_FIELD_LEN - 1 - w;
+                    memcpy(virtual_vals[vi] + w, val, vl);
+                    w += vl;
+                }
+                virtual_vals[vi][w] = '\0';
+            }
+            break;
+        }
+
+        case MULTI_REGEX: {
+            const char *src = get_cell(cells, ncells, virtual_vals,
+                                       total_virtual, mt->source);
+
+            /* Initialize targets to empty */
+            for (int t = 0; t < mt->target_count; t++) {
+                int vi = mt->virtual_base + t;
+                if (vi < MAX_VIRTUAL_COLS)
+                    virtual_vals[vi][0] = '\0';
+            }
+
+            regex_t re;
+            if (regcomp(&re, mt->pattern, REG_EXTENDED) == 0) {
+                regmatch_t matches[10];
+                if (regexec(&re, src, 10, matches, 0) == 0) {
+                    for (int t = 0; t < mt->target_count; t++) {
+                        int grp = mt->targets[t].index;
+                        if (grp >= 0 && grp < 10 && matches[grp].rm_so >= 0) {
+                            int vi = mt->virtual_base + t;
+                            if (vi >= MAX_VIRTUAL_COLS) continue;
+
+                            size_t mlen = (size_t)(matches[grp].rm_eo -
+                                                   matches[grp].rm_so);
+                            if (mlen >= MAX_FIELD_LEN) mlen = MAX_FIELD_LEN - 1;
+                            memcpy(virtual_vals[vi],
+                                   src + matches[grp].rm_so, mlen);
+                            virtual_vals[vi][mlen] = '\0';
+
+                            /* Apply per-target transforms */
+                            apply_transforms(virtual_vals[vi], &mlen,
+                                             mt->targets[t].transforms,
+                                             mt->targets[t].transform_count);
+                        }
+                    }
+                }
+                regfree(&re);
+            }
+            break;
+        }
+
+        case MULTI_COMPUTE: {
+            /* Gather source values */
+            const char *src_vals[MAX_MULTI_SOURCES];
+            for (int s = 0; s < mt->source_count; s++)
+                src_vals[s] = get_cell(cells, ncells, virtual_vals,
+                                       total_virtual, mt->sources[s]);
+
+            /* Initialize targets to empty */
+            for (int t = 0; t < mt->target_count; t++) {
+                int vi = mt->virtual_base + t;
+                if (vi < MAX_VIRTUAL_COLS)
+                    virtual_vals[vi][0] = '\0';
+            }
+
+            NxComputeFunc fn = nx_compute_find(mt->function);
+            if (fn) {
+                char outputs[MAX_MULTI_TARGETS][256];
+                int nout = fn(src_vals, mt->source_count,
+                              outputs, mt->target_count);
+                for (int t = 0; t < nout && t < mt->target_count; t++) {
+                    int vi = mt->virtual_base + t;
+                    if (vi < MAX_VIRTUAL_COLS)
+                        snprintf(virtual_vals[vi], MAX_FIELD_LEN,
+                                 "%s", outputs[t]);
+                }
+            }
+            break;
+        }
+
+        case MULTI_CONDITIONAL: {
+            int vi = mt->virtual_base;
+            if (vi >= MAX_VIRTUAL_COLS) break;
+            virtual_vals[vi][0] = '\0';
+
+            const char *src = get_cell(cells, ncells, virtual_vals,
+                                       total_virtual, mt->source);
+
+            for (int c = 0; c < mt->condition_count; c++) {
+                regex_t re;
+                if (regcomp(&re, mt->conditions[c].match,
+                            REG_EXTENDED | REG_NOSUB) == 0) {
+                    int matched = (regexec(&re, src, 0, NULL, 0) == 0);
+                    regfree(&re);
+
+                    if (matched) {
+                        const char *val = mt->conditions[c].value;
+                        if (strstr(val, "{0}")) {
+                            /* Replace {0} with source value */
+                            char result[MAX_FIELD_LEN];
+                            size_t w = 0;
+                            const char *p = val;
+                            while (*p && w < MAX_FIELD_LEN - 1) {
+                                if (p[0] == '{' && p[1] == '0' && p[2] == '}') {
+                                    size_t slen = strlen(src);
+                                    if (w + slen >= MAX_FIELD_LEN)
+                                        slen = MAX_FIELD_LEN - 1 - w;
+                                    memcpy(result + w, src, slen);
+                                    w += slen;
+                                    p += 3;
+                                } else {
+                                    result[w++] = *p++;
+                                }
+                            }
+                            result[w] = '\0';
+                            snprintf(virtual_vals[vi], MAX_FIELD_LEN,
+                                     "%s", result);
+                        } else {
+                            snprintf(virtual_vals[vi], MAX_FIELD_LEN,
+                                     "%s", val);
+                        }
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        }
+
+        total_virtual = mt->virtual_base + mt->target_count;
+    }
+
+    return total_virtual;
 }
 
 static int parse_schema(const char *json, size_t len,
@@ -251,6 +792,11 @@ static int parse_schema(const char *json, size_t len,
             }
         }
     }
+
+    /* Multi-transforms (Phase 2A) */
+    schema->multi_count = 0;
+    schema->virtual_col_count = 0;
+    parse_multi_transforms(sh_json_get(root, "multi_transforms"), schema);
 
     /* Derived fields */
     ShJsonValue *derived = sh_json_get(root, "derived");
@@ -501,6 +1047,26 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
 
         audit.rows_processed++;
 
+        /* Build flat array of original cell strings */
+        const char *cell_strs[MAX_COLUMNS + MAX_VIRTUAL_COLS];
+        int total_cols = ncells;
+        if (total_cols > MAX_COLUMNS) total_cols = MAX_COLUMNS;
+        for (int j = 0; j < total_cols; j++)
+            cell_strs[j] = sh_json_as_string(
+                sh_json_array_get(cells, (size_t)j), "");
+
+        /* Execute multi-transforms → virtual columns */
+        char virtual_vals[MAX_VIRTUAL_COLS][MAX_FIELD_LEN];
+        if (schema.multi_count > 0) {
+            int nv = execute_multi_transforms(
+                schema.multi, schema.multi_count,
+                cell_strs, total_cols, virtual_vals);
+            for (int v = 0; v < nv &&
+                 total_cols + v < MAX_COLUMNS + MAX_VIRTUAL_COLS; v++)
+                cell_strs[total_cols + v] = virtual_vals[v];
+            total_cols += nv;
+        }
+
         /* Extract and validate all column values */
         char field_bufs[MAX_COLUMNS][MAX_FIELD_LEN];
         const char *field_names[MAX_COLUMNS];
@@ -511,11 +1077,10 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
             ColumnMapping *cm = &schema.columns[c];
             field_names[c] = cm->target;
 
-            /* Get raw cell value */
+            /* Get raw cell value (from original or virtual columns) */
             const char *raw_val = "";
-            if (cm->source_col < ncells) {
-                raw_val = sh_json_as_string(
-                    sh_json_array_get(cells, (size_t)cm->source_col), "");
+            if (cm->source_col < total_cols) {
+                raw_val = cell_strs[cm->source_col];
             }
 
             /* Copy to mutable buffer */
