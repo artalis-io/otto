@@ -28,7 +28,8 @@ NEXUS_SRC = ../../nexus/src/nx_ingest.c \
             ../../nexus/src/nx_xform.c \
             ../../nexus/src/nx_compute.c \
             ../../nexus/src/nx_validate.c \
-            ../../nexus/src/nx_slug.c
+            ../../nexus/src/nx_slug.c \
+            ../../nexus/src/nx_discover.c
 
 # Shared library sources (what nexus needs)
 SHARED_SRC = ../../shared/src/sh_arena.c \
@@ -56,6 +57,7 @@ EXPORTS = _nx_wasm_version
 EXPORTS += ,_nx_wasm_extract,_nx_wasm_extract_result,_nx_wasm_extract_result_len
 EXPORTS += ,_nx_wasm_transform,_nx_wasm_transform_result,_nx_wasm_transform_result_len
 EXPORTS += ,_nx_wasm_validate,_nx_wasm_validate_result,_nx_wasm_validate_result_len
+EXPORTS += ,_nx_wasm_discover,_nx_wasm_discover_result,_nx_wasm_discover_result_len
 EXPORTS += ,_malloc,_free
 
 # Output
