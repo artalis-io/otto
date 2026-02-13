@@ -52,19 +52,34 @@ make clean    # Remove artifacts
 
 ## Test Counts
 
-- test_ingest: 38 tests (11 XLSX + 14 PDF + 13 CSV)
-- test_xform: 17 tests (5 slug + 8 xform + 4 pipeline)
-- Total: 55 tests
+- test_ingest: 45 tests (11 XLSX + 14 PDF + 13 CSV + 7 golden)
+- test_xform: 33 tests (5 slug + 8 xform + 16 multi-transform + 4 pipeline)
+- test_validate: 9 tests (geo_bounds, format, unique, outlier)
+- Total: 87 tests
 
 ## Schemas
 
-Transform schemas live in `schemas/`. Format:
+Transform schemas live in `schemas/`. Format (v2 with multi-transforms):
 
 ```json
 {
-  "nx_schema": 1,
-  "version": "gls-hu-automata-v1",
+  "nx_schema": 2,
+  "version": "gls-hu-automata-v2",
   "output_type": "facility",
+  "multi_transforms": [
+    {"type": "split", "source": 8, "delimiter": ",",
+     "targets": [{"field": "lat", "index": 0}, {"field": "lon", "index": 1}]},
+    {"type": "merge", "sources": [0, 1], "separator": ", ", "target": "addr"},
+    {"type": "regex", "source": 3, "pattern": "^(\\d{4}) (.+)$",
+     "targets": [{"field": "zip", "group": 1}, {"field": "city", "group": 2}]},
+    {"type": "compute", "function": "coalesce", "sources": [5, 6],
+     "targets": [{"field": "val"}]},
+    {"type": "conditional", "source": 7,
+     "conditions": [
+       {"match": "^[A-Z]{2}$", "set": {"field": "country", "value": "{0}"}},
+       {"match": ".*", "set": {"field": "country", "value": "HU"}}
+     ]}
+  ],
   "columns": [
     {"source": 0, "target": "city", "type": "string", "transforms": ["trim"], "required": true}
   ],
@@ -73,6 +88,15 @@ Transform schemas live in `schemas/`. Format:
   ],
   "row_id": {"template": "gls-hu-{city}-{name}", "slugify": true}
 }
+```
+
+**Schema v1** (without `multi_transforms`) is fully backward-compatible.
+
+**Processing order**: `multi_transforms` → virtual columns → `columns` (1:1 mapping) → `derived` → `row_id`
+
+**Virtual columns**: Multi-transforms produce virtual columns appended after original columns. Reference by index: if raw has N columns, first virtual is at index N.
+
+**Available compute functions**: `eov_to_wgs84`, `dms_to_dd`, `coalesce`, `phone_normalize`
 ```
 
 ## CLI Tools

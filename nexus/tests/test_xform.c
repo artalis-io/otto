@@ -369,6 +369,700 @@ TEST(xform_validation_range)
 }
 
 /* ============================================================================
+ * Multi-Transform Tests (Phase 2A)
+ * ============================================================================ */
+
+/* Helper: apply schema to raw data and return parsed output root */
+static ShJsonValue *apply_and_parse(const char *raw, const char *schema,
+                                     SHArena **out_arena, char **out_json)
+{
+    size_t out_len = 0;
+    SHArena *work = sh_arena_create(256 * 1024);
+    NxXformStatus s = nx_xform_apply(raw, strlen(raw), schema, strlen(schema),
+                                      work, out_json, &out_len);
+    sh_arena_free(work);
+    if (s != NX_XFORM_OK || !*out_json) return NULL;
+
+    *out_arena = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(*out_json, out_len, *out_arena, &root);
+    return root;
+}
+
+/* Raw data: 3 columns, 2 rows */
+static const char *RAW_MULTI =
+    "{"
+    "\"nx_raw\":1,"
+    "\"source\":{\"filename\":\"test\",\"sha256\":\"abc\",\"format\":\"csv\"},"
+    "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"A\",\"B\",\"C\"],"
+    "\"header_row\":0,"
+    "\"rows\":["
+        "{\"row\":1,\"cells\":[\"hello,world\",\"Budapest\",\"47.4979 19.0402\"]},"
+        "{\"row\":2,\"cells\":[\"foo,bar,baz\",\"Debrecen\",\"47.5316 21.6273\"]}"
+    "],\"row_count\":2,\"col_count\":3}],\"warnings\":[]}";
+
+TEST(multi_split_delimiter)
+{
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-split\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"split\",\"source\":0,\"delimiter\":\",\","
+            "\"targets\":["
+                "{\"field\":\"first\",\"index\":0,\"type\":\"string\"},"
+                "{\"field\":\"second\",\"index\":1,\"type\":\"string\"}"
+            "]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":3,\"target\":\"first\",\"type\":\"string\"},"
+            "{\"source\":4,\"target\":\"second\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(RAW_MULTI, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *records = sh_json_get(root, "records");
+    ASSERT_EQ(sh_json_array_len(records), 2);
+
+    /* Row 1: "hello,world" → first="hello", second="world" */
+    ShJsonValue *r0 = sh_json_array_get(records, 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "first"), ""), "hello");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "second"), ""), "world");
+
+    /* Row 2: "foo,bar,baz" → first="foo", second="bar" */
+    ShJsonValue *r1 = sh_json_array_get(records, 1);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "first"), ""), "foo");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "second"), ""), "bar");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_split_fixed_width)
+{
+    /* Raw with fixed-width data in col 2 */
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"data\"],"
+        "\"header_row\":0,"
+        "\"rows\":[{\"row\":1,\"cells\":[\"ABCD1234WXYZ\"]}],"
+        "\"row_count\":1,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-fw\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"split\",\"source\":0,\"mode\":\"fixed_width\","
+            "\"widths\":[4,4,4],"
+            "\"targets\":["
+                "{\"field\":\"p1\",\"index\":0,\"type\":\"string\"},"
+                "{\"field\":\"p2\",\"index\":1,\"type\":\"string\"},"
+                "{\"field\":\"p3\",\"index\":2,\"type\":\"string\"}"
+            "]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"p1\",\"type\":\"string\"},"
+            "{\"source\":2,\"target\":\"p2\",\"type\":\"string\"},"
+            "{\"source\":3,\"target\":\"p3\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "p1"), ""), "ABCD");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "p2"), ""), "1234");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "p3"), ""), "WXYZ");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_split_with_trim)
+{
+    /* Split with per-target trim transforms */
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"data\"],"
+        "\"header_row\":0,"
+        "\"rows\":[{\"row\":1,\"cells\":[\" hello ; world \"]}],"
+        "\"row_count\":1,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-split-trim\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"split\",\"source\":0,\"delimiter\":\";\","
+            "\"targets\":["
+                "{\"field\":\"a\",\"index\":0,\"type\":\"string\",\"transforms\":[\"trim\"]},"
+                "{\"field\":\"b\",\"index\":1,\"type\":\"string\",\"transforms\":[\"trim\"]}"
+            "]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"a\",\"type\":\"string\"},"
+            "{\"source\":2,\"target\":\"b\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "a"), ""), "hello");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "b"), ""), "world");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_merge_separator)
+{
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-merge\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"merge\",\"sources\":[1,0],\"separator\":\", \","
+            "\"target\":\"full\",\"target_type\":\"string\"}"
+        "],"
+        "\"columns\":["
+            "{\"source\":3,\"target\":\"full\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(RAW_MULTI, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    /* sources [1, 0] = ["Budapest", "hello,world"] joined with ", " */
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "full"), ""),
+                 "Budapest, hello,world");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_merge_template)
+{
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-merge-tpl\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"merge\",\"sources\":[1,0],"
+            "\"template\":\"{0} ({1})\","
+            "\"target\":\"label\",\"target_type\":\"string\"}"
+        "],"
+        "\"columns\":["
+            "{\"source\":3,\"target\":\"label\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(RAW_MULTI, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    /* {0}=Budapest, {1}=hello,world → "Budapest (hello,world)" */
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "label"), ""),
+                 "Budapest (hello,world)");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_regex_extract)
+{
+    /* col 2 has "47.4979 19.0402" — extract lat/lon with regex */
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-regex\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"regex\",\"source\":2,"
+            "\"pattern\":\"^([0-9.]+) ([0-9.]+)$\","
+            "\"targets\":["
+                "{\"field\":\"lat\",\"group\":1,\"type\":\"double\"},"
+                "{\"field\":\"lon\",\"group\":2,\"type\":\"double\"}"
+            "]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":3,\"target\":\"lat\",\"type\":\"double\",\"precision\":6},"
+            "{\"source\":4,\"target\":\"lon\",\"type\":\"double\",\"precision\":6}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(RAW_MULTI, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    ASSERT_NEAR(sh_json_as_double(sh_json_get(r0, "lat"), 0), 47.4979, 0.001);
+    ASSERT_NEAR(sh_json_as_double(sh_json_get(r0, "lon"), 0), 19.0402, 0.001);
+
+    ShJsonValue *r1 = sh_json_array_get(sh_json_get(root, "records"), 1);
+    ASSERT_NEAR(sh_json_as_double(sh_json_get(r1, "lat"), 0), 47.5316, 0.001);
+    ASSERT_NEAR(sh_json_as_double(sh_json_get(r1, "lon"), 0), 21.6273, 0.001);
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_regex_zip_city)
+{
+    /* Parse "1052 Budapest" → zip=1052, city=Budapest */
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"addr\"],"
+        "\"header_row\":0,"
+        "\"rows\":["
+            "{\"row\":1,\"cells\":[\"1052 Budapest\"]},"
+            "{\"row\":2,\"cells\":[\"4032 Debrecen\"]}"
+        "],\"row_count\":2,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-zip-city\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"regex\",\"source\":0,"
+            "\"pattern\":\"^([0-9]{4}) (.+)$\","
+            "\"targets\":["
+                "{\"field\":\"zip\",\"group\":1,\"type\":\"string\"},"
+                "{\"field\":\"city\",\"group\":2,\"type\":\"string\"}"
+            "]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"zip\",\"type\":\"string\"},"
+            "{\"source\":2,\"target\":\"city\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "zip"), ""), "1052");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "city"), ""), "Budapest");
+
+    ShJsonValue *r1 = sh_json_array_get(sh_json_get(root, "records"), 1);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "zip"), ""), "4032");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "city"), ""), "Debrecen");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_compute_coalesce)
+{
+    /* Test coalesce: first non-empty from columns 0, 1, 2 */
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"a\",\"b\",\"c\"],"
+        "\"header_row\":0,"
+        "\"rows\":["
+            "{\"row\":1,\"cells\":[\"\",\"\",\"fallback\"]},"
+            "{\"row\":2,\"cells\":[\"primary\",\"secondary\",\"tertiary\"]}"
+        "],\"row_count\":2,\"col_count\":3}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-coalesce\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"compute\",\"function\":\"coalesce\","
+            "\"sources\":[0,1,2],"
+            "\"targets\":[{\"field\":\"val\",\"type\":\"string\"}]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":3,\"target\":\"val\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *records = sh_json_get(root, "records");
+    ASSERT_EQ(sh_json_array_len(records), 2);
+
+    /* Row 1: "", "", "fallback" → coalesce = "fallback" */
+    ShJsonValue *r0 = sh_json_array_get(records, 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "val"), ""), "fallback");
+
+    /* Row 2: "primary", ... → coalesce = "primary" */
+    ShJsonValue *r1 = sh_json_array_get(records, 1);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "val"), ""), "primary");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_compute_phone_normalize)
+{
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"phone\"],"
+        "\"header_row\":0,"
+        "\"rows\":["
+            "{\"row\":1,\"cells\":[\"06-30-123-4567\"]},"
+            "{\"row\":2,\"cells\":[\"+36 20 987 6543\"]}"
+        "],\"row_count\":2,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-phone\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"compute\",\"function\":\"phone_normalize\","
+            "\"sources\":[0],"
+            "\"targets\":[{\"field\":\"phone\",\"type\":\"string\"}]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"phone\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "phone"), ""), "+36301234567");
+
+    ShJsonValue *r1 = sh_json_array_get(sh_json_get(root, "records"), 1);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "phone"), ""), "+36209876543");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_conditional_basic)
+{
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"code\"],"
+        "\"header_row\":0,"
+        "\"rows\":["
+            "{\"row\":1,\"cells\":[\"HU\"]},"
+            "{\"row\":2,\"cells\":[\"Budapest\"]},"
+            "{\"row\":3,\"cells\":[\"DE\"]}"
+        "],\"row_count\":3,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-cond\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"conditional\",\"source\":0,"
+            "\"conditions\":["
+                "{\"match\":\"^[A-Z]{2}$\",\"set\":{\"field\":\"country\",\"value\":\"{0}\"}},"
+                "{\"match\":\".*\",\"set\":{\"field\":\"country\",\"value\":\"HU\"}}"
+            "]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"country\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *records = sh_json_get(root, "records");
+    ASSERT_EQ(sh_json_array_len(records), 3);
+
+    /* "HU" matches ^[A-Z]{2}$ → country = "HU" (via {0}) */
+    ShJsonValue *r0 = sh_json_array_get(records, 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "country"), ""), "HU");
+
+    /* "Budapest" doesn't match ^[A-Z]{2}$, matches .* → country = "HU" */
+    ShJsonValue *r1 = sh_json_array_get(records, 1);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r1, "country"), ""), "HU");
+
+    /* "DE" matches ^[A-Z]{2}$ → country = "DE" */
+    ShJsonValue *r2 = sh_json_array_get(records, 2);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r2, "country"), ""), "DE");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_chained_transforms)
+{
+    /* Split col 0, then merge the pieces with col 1 */
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"coords\",\"name\"],"
+        "\"header_row\":0,"
+        "\"rows\":[{\"row\":1,\"cells\":[\"47.50,19.04\",\"Budapest\"]}],"
+        "\"row_count\":1,\"col_count\":2}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-chain\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"split\",\"source\":0,\"delimiter\":\",\","
+            "\"targets\":["
+                "{\"field\":\"lat\",\"index\":0,\"type\":\"string\"},"
+                "{\"field\":\"lon\",\"index\":1,\"type\":\"string\"}"
+            "]},"
+            "{\"type\":\"merge\",\"sources\":[1,2,3],"
+            "\"template\":\"{0} at ({1},{2})\","
+            "\"target\":\"label\",\"target_type\":\"string\"}"
+        "],"
+        "\"columns\":["
+            "{\"source\":2,\"target\":\"lat\",\"type\":\"double\",\"precision\":6},"
+            "{\"source\":3,\"target\":\"lon\",\"type\":\"double\",\"precision\":6},"
+            "{\"source\":4,\"target\":\"label\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    ASSERT_NEAR(sh_json_as_double(sh_json_get(r0, "lat"), 0), 47.50, 0.01);
+    ASSERT_NEAR(sh_json_as_double(sh_json_get(r0, "lon"), 0), 19.04, 0.01);
+    /* merge: {0}=name(col1), {1}=lat(virtual2), {2}=lon(virtual3) */
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "label"), ""),
+                 "Budapest at (47.50,19.04)");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_unknown_compute_function)
+{
+    /* Unknown compute function should produce empty virtual columns */
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"a\"],"
+        "\"header_row\":0,"
+        "\"rows\":[{\"row\":1,\"cells\":[\"test\"]}],"
+        "\"row_count\":1,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-unknown\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"compute\",\"function\":\"nonexistent\","
+            "\"sources\":[0],"
+            "\"targets\":[{\"field\":\"out\",\"type\":\"string\"}]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"out\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    /* Unknown function → empty output */
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "out"), ""), "");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_v1_schema_backward_compat)
+{
+    /* v1 schema (no multi_transforms) still works fine */
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(RAW_JSON, SCHEMA_BASIC, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *records = sh_json_get(root, "records");
+    ASSERT_EQ(sh_json_array_len(records), 2);
+
+    ShJsonValue *r0 = sh_json_array_get(records, 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "city"), ""), "Budapest");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_virtual_col_with_original)
+{
+    /* Mix original columns and virtual columns in output */
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-mix\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"split\",\"source\":0,\"delimiter\":\",\","
+            "\"targets\":["
+                "{\"field\":\"a\",\"index\":0,\"type\":\"string\"},"
+                "{\"field\":\"b\",\"index\":1,\"type\":\"string\"}"
+            "]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"city\",\"type\":\"string\"},"
+            "{\"source\":3,\"target\":\"first_part\",\"type\":\"string\"},"
+            "{\"source\":4,\"target\":\"second_part\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(RAW_MULTI, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    /* col 1 = "Budapest" (original), virtual 3 = "hello", virtual 4 = "world" */
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "city"), ""), "Budapest");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "first_part"), ""), "hello");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "second_part"), ""), "world");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_regex_no_match)
+{
+    /* When regex doesn't match, virtual columns should be empty */
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"data\"],"
+        "\"header_row\":0,"
+        "\"rows\":[{\"row\":1,\"cells\":[\"no-match-here\"]}],"
+        "\"row_count\":1,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-nomatch\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"regex\",\"source\":0,"
+            "\"pattern\":\"^([0-9]{4}) (.+)$\","
+            "\"targets\":["
+                "{\"field\":\"zip\",\"group\":1,\"type\":\"string\"},"
+                "{\"field\":\"city\",\"group\":2,\"type\":\"string\"}"
+            "]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"zip\",\"type\":\"string\"},"
+            "{\"source\":2,\"target\":\"city\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "zip"), ""), "");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "city"), ""), "");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+TEST(multi_split_three_pieces)
+{
+    /* Split with 3 pieces, select specific indices */
+    const char *raw =
+        "{"
+        "\"nx_raw\":1,"
+        "\"source\":{\"filename\":\"\",\"sha256\":\"\",\"format\":\"csv\"},"
+        "\"tables\":[{\"name\":\"S\",\"index\":0,\"headers\":[\"data\"],"
+        "\"header_row\":0,"
+        "\"rows\":[{\"row\":1,\"cells\":[\"alpha|beta|gamma|delta\"]}],"
+        "\"row_count\":1,\"col_count\":1}],\"warnings\":[]}";
+
+    const char *schema =
+        "{"
+        "\"nx_schema\":2,"
+        "\"version\":\"test-split3\","
+        "\"output_type\":\"test\","
+        "\"multi_transforms\":["
+            "{\"type\":\"split\",\"source\":0,\"delimiter\":\"|\","
+            "\"targets\":["
+                "{\"field\":\"first\",\"index\":0,\"type\":\"string\"},"
+                "{\"field\":\"third\",\"index\":2,\"type\":\"string\"}"
+            "]}"
+        "],"
+        "\"columns\":["
+            "{\"source\":1,\"target\":\"first\",\"type\":\"string\"},"
+            "{\"source\":2,\"target\":\"third\",\"type\":\"string\"}"
+        "]"
+        "}";
+
+    char *out = NULL;
+    SHArena *pa = NULL;
+    ShJsonValue *root = apply_and_parse(raw, schema, &pa, &out);
+    ASSERT(root != NULL);
+
+    ShJsonValue *r0 = sh_json_array_get(sh_json_get(root, "records"), 0);
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "first"), ""), "alpha");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "third"), ""), "gamma");
+
+    free(out);
+    sh_arena_free(pa);
+}
+
+/* ============================================================================
  * Full Pipeline Tests
  * ============================================================================ */
 
@@ -476,6 +1170,24 @@ int main(void)
     RUN_TEST(xform_deterministic);
     RUN_TEST(xform_validation_range);
     RUN_TEST(xform_status_strings);
+
+    /* Multi-transform tests (Phase 2A) */
+    RUN_TEST(multi_split_delimiter);
+    RUN_TEST(multi_split_fixed_width);
+    RUN_TEST(multi_split_with_trim);
+    RUN_TEST(multi_split_three_pieces);
+    RUN_TEST(multi_merge_separator);
+    RUN_TEST(multi_merge_template);
+    RUN_TEST(multi_regex_extract);
+    RUN_TEST(multi_regex_zip_city);
+    RUN_TEST(multi_regex_no_match);
+    RUN_TEST(multi_compute_coalesce);
+    RUN_TEST(multi_compute_phone_normalize);
+    RUN_TEST(multi_conditional_basic);
+    RUN_TEST(multi_chained_transforms);
+    RUN_TEST(multi_unknown_compute_function);
+    RUN_TEST(multi_v1_schema_backward_compat);
+    RUN_TEST(multi_virtual_col_with_original);
 
     /* Pipeline tests */
     RUN_TEST(pipeline_xlsx_to_canonical);
