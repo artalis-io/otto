@@ -163,10 +163,13 @@ void ct_lod_default(CTLODConfig *config)
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_INDUSTRIAL, 11, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_MILITARY, 10, -1, 0, 0);
 
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 8, -1, 10000000, 0);   /* >10km² at z8 */
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 12, -1, 0, 0);         /* All at z12 */
+    /* Farmland: OSM Carto renders farmland with a near-invisible crosshatch pattern.
+     * Since we don't support pattern fills, skip farmland entirely — solid fill
+     * over rural areas (e.g. Hungary) makes tiles unusable. */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_FARMLAND, 30, 30, 0, 0);  /* Never visible (z30 unreachable) */
 
-    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_GRASS, 14, -1, 0, 0);  /* Delay: reduces clutter */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_GRASS, 12, -1, 100000, 0);  /* >0.1km² at z12 */
+    ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_GRASS, 14, -1, 0, 0);       /* All at z14 */
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_CEMETERY, 15, -1, 0, 0);
     ct_lod_add_rule(config, CT_LAYER_LANDUSE, CT_LANDUSE_OTHER, 15, -1, 0, 0);
 
