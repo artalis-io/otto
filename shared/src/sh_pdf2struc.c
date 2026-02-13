@@ -1274,7 +1274,7 @@ static int pdf_check_encrypted(ShPdf2strucCtx *ctx)
 
 ShPdf2strucCtx *sh_pdf2struc_create(void)
 {
-    SHArena *arena = sh_arena_create(16 * 1024 * 1024); /* 16 MB initial */
+    SHArena *arena = sh_arena_create(128 * 1024 * 1024); /* 128 MB for real-world PDFs */
     if (!arena) return NULL;
 
     ShPdf2strucCtx *ctx = (ShPdf2strucCtx *)sh_arena_calloc(arena, 1,

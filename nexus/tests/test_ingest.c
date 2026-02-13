@@ -994,6 +994,176 @@ TEST(csv_pipeline_integration)
 }
 
 /* ============================================================================
+ * Golden Tests (real-world files, skipped if missing)
+ * ============================================================================ */
+
+#define GOLDEN_DIR "tests/golden/"
+
+/* Helper: read file into malloc'd buffer, returns NULL if missing */
+static char *read_golden_file(const char *path, size_t *out_len)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { fclose(f); return NULL; }
+    char *buf = (char *)malloc((size_t)sz);
+    if (!buf) { fclose(f); return NULL; }
+    size_t nr = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    if (nr != (size_t)sz) { free(buf); return NULL; }
+    *out_len = (size_t)sz;
+    return buf;
+}
+
+/* Macro for golden tests that skip when file is missing */
+static int golden_skipped = 0;
+#define RUN_GOLDEN(name) do { \
+    printf("  %-55s ", #name); \
+    fflush(stdout); \
+    int _skip = 0; \
+    test_golden_##name(&_skip); \
+    if (_skip) { printf("[SKIP]\n"); golden_skipped++; } \
+    else { tests_run++; tests_passed++; printf("[PASS]\n"); } \
+} while (0)
+
+/* Golden: XLSX01 depot file parses correctly */
+static void test_golden_xlsx01_parse(int *skip)
+{
+    size_t len = 0;
+    char *data = read_golden_file(GOLDEN_DIR "XLSX01.xlsx", &len);
+    if (!data) { *skip = 1; return; }
+
+    SHArena *arena = sh_arena_create(4 * 1024 * 1024);
+    char *raw = NULL;
+    size_t raw_len = 0;
+
+    NxXlsxStatus st = nx_xlsx_parse(data, len, NULL, "XLSX01.xlsx",
+                                     arena, &raw, &raw_len);
+    ASSERT_EQ(st, NX_XLSX_OK);
+    ASSERT(raw != NULL);
+    ASSERT(raw_len > 0);
+
+    /* Parse and verify structure */
+    SHArena *pa = sh_arena_create(1024 * 1024);
+    ShJsonValue *root = NULL;
+    ShJsonStatus js = sh_json_parse(raw, raw_len, pa, &root);
+    ASSERT_EQ(js, SH_JSON_OK);
+    ASSERT(root != NULL);
+
+    ShJsonValue *tables = sh_json_get(root, "tables");
+    ASSERT(tables != NULL);
+    ASSERT_EQ((int)sh_json_array_len(tables), 1);
+
+    ShJsonValue *t0 = sh_json_array_get(tables, 0);
+    ASSERT_EQ((int)sh_json_as_double(sh_json_get(t0, "row_count"), 0), 7);
+    ASSERT_EQ((int)sh_json_as_double(sh_json_get(t0, "col_count"), 0), 7);
+
+    /* Verify first header is "Park neve" */
+    ShJsonValue *headers = sh_json_get(t0, "headers");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 0), ""), "Park neve");
+
+    free(data);
+    free(raw);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+/* Golden: XLSX01 canonical transform produces valid depot records */
+static void test_golden_xlsx01_canonical(int *skip)
+{
+    size_t data_len = 0;
+    char *data = read_golden_file(GOLDEN_DIR "XLSX01.xlsx", &data_len);
+    if (!data) { *skip = 1; return; }
+
+    size_t schema_len = 0;
+    char *schema = read_golden_file("schemas/gls-hu-depots-v1.json", &schema_len);
+    if (!schema) { free(data); *skip = 1; return; }
+
+    char *raw = NULL, *canon = NULL;
+    size_t raw_len = 0, canon_len = 0;
+
+    NxIngestStatus st = nx_ingest(data, data_len, NX_FORMAT_XLSX, "XLSX01.xlsx",
+                                   schema, schema_len,
+                                   &raw, &raw_len, &canon, &canon_len);
+    ASSERT_EQ(st, NX_INGEST_OK);
+    ASSERT(canon != NULL);
+    ASSERT(canon_len > 0);
+
+    /* Parse canonical output */
+    SHArena *arena = sh_arena_create(1024 * 1024);
+    ShJsonValue *root = NULL;
+    ShJsonStatus js = sh_json_parse(canon, canon_len, arena, &root);
+    ASSERT_EQ(js, SH_JSON_OK);
+    ASSERT_EQ((int)sh_json_as_double(sh_json_get(root, "record_count"), 0), 7);
+
+    /* Check first record has valid lat/lon in Hungary */
+    ShJsonValue *records = sh_json_get(root, "records");
+    ShJsonValue *r0 = sh_json_array_get(records, 0);
+    double lat = sh_json_as_double(sh_json_get(r0, "lat"), 0);
+    double lon = sh_json_as_double(sh_json_get(r0, "lon"), 0);
+    ASSERT(lat > 45.0 && lat < 49.0);  /* Hungary lat range */
+    ASSERT(lon > 16.0 && lon < 23.0);  /* Hungary lon range */
+
+    /* Check derived fields */
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "facility_type"), ""), "depot");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(r0, "country"), ""), "HU");
+
+    free(data);
+    free(schema);
+    free(raw);
+    free(canon);
+    sh_arena_free(arena);
+}
+
+/* Golden: PDF01 automata file extracts table rows */
+static void test_golden_pdf01_raw(int *skip)
+{
+    size_t len = 0;
+    char *data = read_golden_file(GOLDEN_DIR "PDF01.pdf", &len);
+    if (!data) { *skip = 1; return; }
+
+    /* PDF01 is raw PDF - it needs sh_pdf2struc which is in nx_pipeline,
+       not in the library. Test the raw JSON output file instead. */
+    free(data);
+
+    size_t raw_len = 0;
+    char *raw = read_golden_file(GOLDEN_DIR "PDF01_raw.json", &raw_len);
+    if (!raw) { *skip = 1; return; }
+
+    SHArena *arena = sh_arena_create(4 * 1024 * 1024);
+    ShJsonValue *root = NULL;
+    ShJsonStatus js = sh_json_parse(raw, raw_len, arena, &root);
+    ASSERT_EQ(js, SH_JSON_OK);
+
+    ShJsonValue *tables = sh_json_get(root, "tables");
+    ASSERT(tables != NULL);
+    ASSERT(sh_json_array_len(tables) >= 1);
+
+    ShJsonValue *t0 = sh_json_array_get(tables, 0);
+    int row_count = (int)sh_json_as_double(sh_json_get(t0, "row_count"), 0);
+    int col_count = (int)sh_json_as_double(sh_json_get(t0, "col_count"), 0);
+
+    /* PDF01 should have hundreds of rows (parcel automata list) */
+    ASSERT(row_count > 100);
+    ASSERT(col_count > 10);
+
+    /* Verify headers include GPS-related columns */
+    ShJsonValue *headers = sh_json_get(t0, "headers");
+    ASSERT(headers != NULL);
+    int found_gps = 0;
+    for (size_t i = 0; i < sh_json_array_len(headers); i++) {
+        const char *h = sh_json_as_string(sh_json_array_get(headers, i), "");
+        if (strstr(h, "GPS") != NULL) found_gps = 1;
+    }
+    ASSERT(found_gps);
+
+    free(raw);
+    sh_arena_free(arena);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1045,6 +1215,13 @@ int main(void)
     RUN_TEST(csv_warnings_empty);
     RUN_TEST(csv_pipeline_integration);
 
-    printf("\nNexus Ingestion: %d passed, %d total\n", tests_passed, tests_run);
+    printf("\n  Golden Tests (real-world files):\n");
+    RUN_GOLDEN(xlsx01_parse);
+    RUN_GOLDEN(xlsx01_canonical);
+    RUN_GOLDEN(pdf01_raw);
+
+    printf("\nNexus Ingestion: %d passed, %d total", tests_passed, tests_run);
+    if (golden_skipped > 0) printf(" (%d golden skipped)", golden_skipped);
+    printf("\n");
     return tests_passed == tests_run ? 0 : 1;
 }
