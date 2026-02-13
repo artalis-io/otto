@@ -1762,7 +1762,22 @@ MIP hints that GLPK cannot.
 
 ### 8.2 Results (10 runs per scenario, Feb 2026)
 
-**Current (post P5/P6 re-land with infeasibility guards, presolve 0x110F):**
+**Current (pseudocost branching + aggressive probing, presolve 0x110F):**
+
+| Scenario | ~Stations | Ralph avg | GLPK avg | Speedup | Obj Match |
+|----------|-----------|-----------|----------|---------|-----------|
+| milp15 | ~15 | **0.99 ms** | 8.60 ms | **10.2x Ralph** | 4/10 |
+| milp30 | ~30 | **2.05 ms** | 8.64 ms | **4.7x Ralph** | 5/10 |
+| milp50 | ~50 | **12.00 ms** | 12.85 ms | **1.1x Ralph** | 2/10 |
+| milp75 | ~75 | **33.11 ms** | 41.97 ms | **1.8x Ralph** | 0/10 |
+| milp100 | ~100 | **59.74 ms** | 60.26 ms | **1.3x Ralph** | 2/10 |
+| milp200 | ~200 | 255.88 ms | **136.25 ms** | 0.6x | 5/10 |
+
+Ralph wins milp15–milp100 (10.2x down to 1.3x). milp100 breakthrough: was GLPK 1.4x
+faster → now Ralph 1.3x faster. GLPK still faster only at milp200 (1.7x). milp200
+improved from 995ms to 256ms (3.9x). Zero false infeasibility across all 60 trials.
+
+**Previous (P5/P6 re-landed with infeasibility guards, 10 runs):**
 
 | Scenario | ~Stations | Ralph avg | GLPK avg | Speedup | Obj Match |
 |----------|-----------|-----------|----------|---------|-----------|
@@ -1772,9 +1787,6 @@ MIP hints that GLPK cannot.
 | milp75 | ~75 | **33.26 ms** | 57.93 ms | **2.0x Ralph** | 3/10 |
 | milp100 | ~100 | 62.05 ms | **37.21 ms** | 0.7x | 0/10 |
 | milp200 | ~200 | 994.96 ms | **152.22 ms** | 0.4x | 1/10 |
-
-Ralph wins milp15–milp75 (9.9x down to 2.0x). GLPK still faster at milp100+ (1.4–2.5x).
-Zero false infeasibility across all 60 trials.
 
 **Previous (initial baseline, pre-B&B improvements, 20 runs):**
 
@@ -1788,11 +1800,13 @@ Zero false infeasibility across all 60 trials.
 | milp200 | ~200 | 19472.76 ms | **43.75 ms** | 0.002x | 5/5 |
 
 **Key observations:**
-- Ralph improved dramatically since initial baseline (milp30: 65ms→2.7ms, milp75: 1232ms→33ms)
+- Ralph improved dramatically since initial baseline (milp30: 65ms→2.1ms, milp100: 7223ms→60ms)
 - Domain hints (priorities, directions, reach cuts) + B&B improvements (dual_reopt, HYBRID,
-  PATH B LU reuse, presolve, P5 bound flipping, P6 dual steepest edge) closed the gap
-- GLPK still faster at milp100+ due to mature cut generation and presolve strength
-- Remaining gap at scale: ~1.4x at milp100, ~2.5x at milp200 (high variance)
+  PATH B LU reuse, presolve, P5 bound flipping, P6 dual steepest edge, pseudocost branching,
+  root strong branching, root+node probing) closed the gap through milp100
+- milp100 breakthrough: pseudocost fix + probing flipped from GLPK 1.4x faster to Ralph 1.3x faster
+- GLPK still faster only at milp200 (1.7x) due to mature cut pool management and heuristics
+- milp200 improved 3.9x (995ms→256ms) from better variable selection at depth
 
 ### 8.3 Root Cause Analysis
 
@@ -1800,12 +1814,13 @@ Ralph's MIP solver lacks several features that GLPK uses to control tree growth:
 
 | GLPK Feature | Ralph Status | Impact |
 |--------------|-------------|--------|
-| **Presolve** (probe, clique) | Lightweight (0x110F: fixed vars, empty rows/cols, singleton rows, bound tightening, shift bounds) | Medium — covers basics, lacks probing/clique |
+| **Presolve** (probe, clique) | Lightweight (0x110F) + root probing + node probing | Low — probing now implemented at root and nodes |
 | **Gomory/MIR cuts** | c-MIR cuts implemented | Medium — tightens LP relaxation |
 | **Dual simplex** | Full dual with P5 bound flipping + P6 steepest edge; dual_reopt for B&B nodes | Low — now competitive |
 | **Node selection** (best-first) | HYBRID (DFS→best-bound on incumbent) | Low — effective for FuelWise structure |
 | **Symmetry breaking** | FuelWise domain hints (equal-price ordering) | Low — **DONE** |
-| **Probing / clique detection** | None | Medium — finds implications of variable fixing |
+| **Pseudocost branching** | Fixed update bug + obj-coeff init + root strong branching | Low — **DONE** |
+| **Clique detection** | None | Low — finds implications from set-packing |
 
 ### 8.4 FuelWise-Specific MIP Optimizations
 
@@ -1874,8 +1889,8 @@ performance at scale.
 | ~~**Best-first node selection**~~ | **DONE** (HYBRID) | 2-5x for deep trees | ~200 LoC in branch_bound.c |
 | ~~**MIR cuts**~~ | **DONE** (c-MIR) | 1.5-3x tighter relaxation | ~400 LoC |
 | ~~**Dual simplex for node resolves**~~ | **DONE** (dual_reopt + P5/P6) | 2-3x per-node speedup | ~800 LoC |
-| **Aggressive presolve** (probing) | Not started | 1.5-2x smaller problems | ~500 LoC |
-| **Pseudocost branching** | Not started | 1.5-2x better variable selection | ~200 LoC |
+| ~~**Aggressive presolve**~~ (probing) | **DONE** (root+node) | 1.5-2x smaller problems | Root: presolve_probe_model(); Node: probing_bound_tightening() |
+| ~~**Pseudocost branching**~~ | **DONE** (update+init+RSB) | 15-30% at milp50+ | Fix update bug + obj-coeff init + root strong branching |
 | **Solution pool / incumbents** | Not started | Faster pruning from good bounds | ~150 LoC |
 
 ### 8.6 Implementation Priority
@@ -1884,8 +1899,8 @@ performance at scale.
 2. ~~**Mandatory station fixing** (FuelWise, ~30 LoC) — presolve, zero Ralph changes~~ **DONE** (Feb 2026)
 3. ~~**Dominated station elimination** (FuelWise, ~40 LoC) — presolve, zero Ralph changes~~ **DONE** (Feb 2026)
 4. **LP relaxation warm start** (FuelWise, ~80 LoC) — incumbent from LP rounding
-5. **Best-first node selection** (Ralph, ~200 LoC) — biggest generic B&B improvement
-6. **Pseudocost branching** (Ralph, ~200 LoC) — replaces static priorities
+5. ~~**Best-first node selection**~~ (Ralph, ~200 LoC) — **DONE** (HYBRID)
+6. ~~**Pseudocost branching**~~ (Ralph, ~200 LoC) — **DONE** (fix update bug + obj-coeff init + root SB + root/node probing)
 7. **Fix Benders suboptimality** (Ralph, investigate) — unlocks scaling to k>100
 8. **Model export for GLPK comparison** — when `ralph_write_mps()` / `ralph_write_lp()` are implemented (both declared but unimplemented), FuelWise can export its MILP model for side-by-side presolve quality and solve-time comparison against GLPK
 
@@ -1951,11 +1966,12 @@ Side-by-side comparison of all three solvers on the same MILP scenarios:
    reach cuts, symmetry-breaking, presolve) make it the recommended path.
 
 **Conclusion:** Benders decomposition is currently broken and should not be used
-in production. The MILP solver with domain hints is correct and reliable but
-slow beyond ~30 stations. For production use at scale, the priority path is:
+in production. The MILP solver with domain hints is correct and reliable and
+now competitive with GLPK through milp100 (~100 stations). For production use
+at larger scale, the priority path is:
 
-1. Fix Ralph's B&B core (best-first node selection, pseudocost branching)
-2. Add LP warm start to MILP solver
+1. ~~Fix Ralph's B&B core (best-first node selection, pseudocost branching)~~ **DONE**
+2. Add LP warm start to MILP solver (incumbent from LP rounding)
 3. Only then revisit Benders (after fixing convergence issues in §9.2)
 
 ---
