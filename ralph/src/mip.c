@@ -15,6 +15,15 @@
 #include <time.h>
 #include "mip.h"
 
+/* Apply P5/P6 feature flags from MIP solver to LP sub-solver */
+static void mip_apply_dual_flags(MIPSolver *solver) {
+    if (!solver->lp_solver) return;
+    if (solver->dual_bound_flip >= 0)
+        solver->lp_solver->use_dual_bound_flip = solver->dual_bound_flip;
+    if (solver->dual_steepest_edge >= 0)
+        solver->lp_solver->use_dual_steepest_edge = solver->dual_steepest_edge;
+}
+
 /* ============================================================================
  * MIP Solver Creation/Destruction
  * ============================================================================ */
@@ -93,6 +102,8 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->max_cuts_per_round = 50;
     solver->max_cut_rounds = 5;  /* Enable cuts with conservative limit */
     solver->verbose = 0;
+    solver->dual_bound_flip = -1;    /* use default */
+    solver->dual_steepest_edge = -1; /* use default */
 
     /* Create node queue */
     solver->node_queue = node_queue_create(1024, solver->node_select, model->obj_sense);
@@ -552,6 +563,7 @@ static int solve_node_lp_as_lap(MIPSolver *solver, BBNode *node) {
         solver->lp_solver = simplex_create(solver->working_model);
         if (!solver->lp_solver) return -1;
         solver->lp_solver->scaling = 0;
+        mip_apply_dual_flags(solver);
     }
 
     SimplexSolver *lp = solver->lp_solver;
@@ -717,6 +729,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     /* === PATH C: Cold start (fallback) === */
     if (!warm_start_success) {
         if (lp->tableau) {
+            lp->tableau->dse_initialized = 0;  /* Reset DSE weights for fresh start */
             tableau_free(lp->tableau);
             lp->tableau = NULL;
         }
@@ -975,6 +988,7 @@ static int solve_root_node(MIPSolver *solver) {
         /* Disable scaling for MIP - cuts are generated from tableau which would need unscaling */
         solver->lp_solver->scaling = 0;
         solver->lp_solver->verbose = solver->verbose;
+        mip_apply_dual_flags(solver);
 
         simplex_solve(solver->lp_solver);
     }
@@ -1129,6 +1143,7 @@ static int solve_root_node(MIPSolver *solver) {
             /* Disable scaling for MIP and propagate verbose flag */
             solver->lp_solver->scaling = 0;
             solver->lp_solver->verbose = solver->verbose;
+            mip_apply_dual_flags(solver);
 
             if (solver->verbose) {
                 printf("  Re-solving LP with %d constraints...\n",
