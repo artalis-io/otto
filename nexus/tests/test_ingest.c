@@ -4,6 +4,7 @@
 
 #include "nx_xlsx.h"
 #include "nx_pdf.h"
+#include "nx_csv.h"
 #include "nx_ingest.h"
 #include "sh_json.h"
 #include "sh_arena.h"
@@ -661,6 +662,338 @@ TEST(pdf_pipeline_integration)
 }
 
 /* ============================================================================
+ * CSV Parser Tests
+ * ============================================================================ */
+
+static const char CSV_FIXTURE[] =
+    "City,Name,Address,GPS Lat,GPS Lon\n"
+    "Budapest,Depot #1,\"Futó u. 35-37\",47.4799,19.07\n"
+    "Debrecen,Depot #2,\"Balmazújvárosi út 11\",47.5316,21.6273\n";
+
+static const char CSV_TSV_FIXTURE[] =
+    "City\tName\tLat\tLon\n"
+    "Budapest\tDepot #1\t47.4799\t19.07\n"
+    "Debrecen\tDepot #2\t47.5316\t21.6273\n";
+
+static const char CSV_NO_HEADER_FIXTURE[] =
+    "Budapest,Depot #1,47.4799,19.07\n"
+    "Debrecen,Depot #2,47.5316,21.6273\n";
+
+TEST(csv_null_input)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(64 * 1024);
+    NxCsvStatus s = nx_csv_parse(NULL, 0, NULL, NULL, NULL, arena, &json, &json_len);
+    ASSERT_EQ(s, NX_CSV_ERR_NULL);
+    sh_arena_free(arena);
+}
+
+TEST(csv_empty_input)
+{
+    const char *empty = "";
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(64 * 1024);
+    NxCsvStatus s = nx_csv_parse(empty, 0, NULL, NULL, "test.csv",
+                                  arena, &json, &json_len);
+    ASSERT_EQ(s, NX_CSV_ERR_NO_DATA);
+    sh_arena_free(arena);
+}
+
+TEST(csv_basic_parse)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+
+    NxCsvStatus s = nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                                  NULL, NULL, "locations.csv",
+                                  arena, &json, &json_len);
+    ASSERT_EQ(s, NX_CSV_OK);
+    ASSERT(json != NULL);
+    ASSERT(json_len > 0);
+
+    /* Parse output */
+    SHArena *pa = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ASSERT_EQ(sh_json_as_int(sh_json_get(root, "nx_raw"), -1), 1);
+
+    ShJsonValue *source = sh_json_get(root, "source");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(source, "filename"), ""), "locations.csv");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(source, "format"), ""), "csv");
+
+    /* SHA-256 should be 64 hex chars */
+    const char *sha = sh_json_as_string(sh_json_get(source, "sha256"), "");
+    ASSERT_EQ(strlen(sha), 64);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(csv_headers)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+
+    nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                  NULL, NULL, "test.csv", arena, &json, &json_len);
+
+    SHArena *pa = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    ShJsonValue *headers = sh_json_get(t0, "headers");
+    ASSERT_EQ(sh_json_array_len(headers), 5);
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 0), ""), "City");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 1), ""), "Name");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 2), ""), "Address");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 3), ""), "GPS Lat");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 4), ""), "GPS Lon");
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(csv_rows)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+
+    nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                  NULL, NULL, "test.csv", arena, &json, &json_len);
+
+    SHArena *pa = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    ShJsonValue *rows = sh_json_get(t0, "rows");
+    ASSERT_EQ(sh_json_array_len(rows), 2);
+    ASSERT_EQ(sh_json_as_int(sh_json_get(t0, "row_count"), -1), 2);
+    ASSERT_EQ(sh_json_as_int(sh_json_get(t0, "col_count"), -1), 5);
+
+    /* Row 0: Budapest */
+    ShJsonValue *r0 = sh_json_array_get(rows, 0);
+    ShJsonValue *cells0 = sh_json_get(r0, "cells");
+    ASSERT_EQ(sh_json_array_len(cells0), 5);
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 0), ""), "Budapest");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 1), ""), "Depot #1");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 2), ""), "Futó u. 35-37");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 3), ""), "47.4799");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 4), ""), "19.07");
+
+    /* Row 1: Debrecen */
+    ShJsonValue *r1 = sh_json_array_get(rows, 1);
+    ShJsonValue *cells1 = sh_json_get(r1, "cells");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells1, 0), ""), "Debrecen");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells1, 1), ""), "Depot #2");
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(csv_sha256_matches)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+
+    nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                  NULL, NULL, "test.csv", arena, &json, &json_len);
+
+    char expected[65];
+    sh_sha256_hex(CSV_FIXTURE, strlen(CSV_FIXTURE), expected);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+    const char *actual = sh_json_as_string(
+        sh_json_get(sh_json_get(root, "source"), "sha256"), "");
+    ASSERT_STREQ(actual, expected);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(csv_deterministic)
+{
+    SHArena *arena1 = sh_arena_create(256 * 1024);
+    SHArena *arena2 = sh_arena_create(256 * 1024);
+    char *json1 = NULL, *json2 = NULL;
+    size_t len1 = 0, len2 = 0;
+
+    nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                  NULL, NULL, "test.csv", arena1, &json1, &len1);
+    nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                  NULL, NULL, "test.csv", arena2, &json2, &len2);
+
+    ASSERT_EQ(len1, len2);
+    ASSERT(memcmp(json1, json2, len1) == 0);
+
+    free(json1);
+    free(json2);
+    sh_arena_free(arena1);
+    sh_arena_free(arena2);
+}
+
+TEST(csv_status_strings)
+{
+    ASSERT(strlen(nx_csv_status_str(NX_CSV_OK)) > 0);
+    ASSERT(strlen(nx_csv_status_str(NX_CSV_ERR_NULL)) > 0);
+    ASSERT(strlen(nx_csv_status_str(NX_CSV_ERR_PARSE)) > 0);
+    ASSERT(strlen(nx_csv_status_str(NX_CSV_ERR_NO_DATA)) > 0);
+    ASSERT(strlen(nx_csv_status_str(NX_CSV_ERR_ARENA)) > 0);
+}
+
+TEST(csv_tsv_auto_detect)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+
+    NxCsvStatus s = nx_csv_parse(CSV_TSV_FIXTURE, strlen(CSV_TSV_FIXTURE),
+                                  NULL, NULL, "data.tsv",
+                                  arena, &json, &json_len);
+    ASSERT_EQ(s, NX_CSV_OK);
+
+    SHArena *pa = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    ShJsonValue *headers = sh_json_get(t0, "headers");
+    ASSERT_EQ(sh_json_array_len(headers), 4);
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 0), ""), "City");
+    ASSERT_EQ(sh_json_as_int(sh_json_get(t0, "row_count"), -1), 2);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(csv_no_header)
+{
+    ShCsvOpts opts;
+    sh_csv_opts_default(&opts);
+    opts.has_header = 0;
+
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+
+    NxCsvStatus s = nx_csv_parse(CSV_NO_HEADER_FIXTURE,
+                                  strlen(CSV_NO_HEADER_FIXTURE),
+                                  &opts, NULL, "noheader.csv",
+                                  arena, &json, &json_len);
+    ASSERT_EQ(s, NX_CSV_OK);
+
+    SHArena *pa = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+
+    /* No header → headers should be empty strings */
+    ShJsonValue *headers = sh_json_get(t0, "headers");
+    ASSERT_EQ(sh_json_array_len(headers), 4);
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 0), "x"), "");
+
+    /* All rows are data rows */
+    ASSERT_EQ(sh_json_as_int(sh_json_get(t0, "row_count"), -1), 2);
+
+    ShJsonValue *rows = sh_json_get(t0, "rows");
+    ShJsonValue *r0 = sh_json_array_get(rows, 0);
+    ShJsonValue *cells0 = sh_json_get(r0, "cells");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 0), ""), "Budapest");
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(csv_unicode_strings)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+
+    nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                  NULL, NULL, "test.csv", arena, &json, &json_len);
+
+    SHArena *pa = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ShJsonValue *rows = sh_json_get(sh_json_array_get(sh_json_get(root, "tables"), 0), "rows");
+    ShJsonValue *r1 = sh_json_array_get(rows, 1);
+    ShJsonValue *cells = sh_json_get(r1, "cells");
+    const char *addr = sh_json_as_string(sh_json_array_get(cells, 2), "");
+    ASSERT(strstr(addr, "Balmazújvárosi") != NULL);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(csv_warnings_empty)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+
+    nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                  NULL, NULL, "test.csv", arena, &json, &json_len);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ShJsonValue *warnings = sh_json_get(root, "warnings");
+    ASSERT(warnings != NULL);
+    ASSERT_EQ(sh_json_array_len(warnings), 0);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(csv_pipeline_integration)
+{
+    /* Test CSV through the full pipeline orchestrator */
+    char *raw = NULL, *canon = NULL;
+    size_t raw_len = 0, canon_len = 0;
+
+    NxIngestStatus s = nx_ingest(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                                  NX_FORMAT_CSV, "data.csv",
+                                  NULL, 0,
+                                  &raw, &raw_len, &canon, &canon_len);
+    ASSERT_EQ(s, NX_INGEST_OK);
+    ASSERT(raw != NULL);
+    ASSERT(raw_len > 0);
+
+    SHArena *pa = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(raw, raw_len, pa, &root);
+    ASSERT_EQ(sh_json_as_int(sh_json_get(root, "nx_raw"), -1), 1);
+
+    ShJsonValue *source = sh_json_get(root, "source");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(source, "format"), ""), "csv");
+
+    free(raw);
+    sh_arena_free(pa);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -696,6 +1029,21 @@ int main(void)
     RUN_TEST(pdf_auto_detect_null_opts);
     RUN_TEST(pdf_auto_detect_partial);
     RUN_TEST(pdf_pipeline_integration);
+
+    printf("\n  CSV Parser:\n");
+    RUN_TEST(csv_null_input);
+    RUN_TEST(csv_empty_input);
+    RUN_TEST(csv_basic_parse);
+    RUN_TEST(csv_headers);
+    RUN_TEST(csv_rows);
+    RUN_TEST(csv_sha256_matches);
+    RUN_TEST(csv_deterministic);
+    RUN_TEST(csv_status_strings);
+    RUN_TEST(csv_tsv_auto_detect);
+    RUN_TEST(csv_no_header);
+    RUN_TEST(csv_unicode_strings);
+    RUN_TEST(csv_warnings_empty);
+    RUN_TEST(csv_pipeline_integration);
 
     printf("\nNexus Ingestion: %d passed, %d total\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;

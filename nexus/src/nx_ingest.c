@@ -7,6 +7,7 @@
 #include "nx_ingest.h"
 #include "nx_xlsx.h"
 #include "nx_pdf.h"
+#include "nx_csv.h"
 #include "nx_xform.h"
 #include "sh_arena.h"
 #include <stdlib.h>
@@ -64,6 +65,16 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
                                                NULL, filename,
                                                arena_a, &raw_json, &raw_len);
         if (ps != NX_PDF_OK) {
+            sh_arena_free(arena_a);
+            return NX_INGEST_ERR_STAGE_A;
+        }
+        break;
+    }
+    case NX_FORMAT_CSV: {
+        NxCsvStatus cs = nx_csv_parse((const char *)data, len,
+                                       NULL, NULL, filename,
+                                       arena_a, &raw_json, &raw_len);
+        if (cs != NX_CSV_OK) {
             sh_arena_free(arena_a);
             return NX_INGEST_ERR_STAGE_A;
         }

@@ -18,10 +18,13 @@
 
 #include "nx_xlsx.h"
 #include "nx_pdf.h"
+#include "nx_csv.h"
 #include "nx_xform.h"
 #include "sh_arena.h"
 #include "sh_json.h"
+#include "sh_csv.h"
 #include "sh_pdf2struc.h"
+#include "sh_fs.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,7 +69,7 @@ static int write_file(const char *path, const char *data, size_t len)
  * Format Detection
  * ============================================================================ */
 
-typedef enum { FMT_XLSX, FMT_PDF, FMT_PDF_JSON, FMT_UNKNOWN } FileFormat;
+typedef enum { FMT_XLSX, FMT_PDF, FMT_PDF_JSON, FMT_CSV, FMT_UNKNOWN } FileFormat;
 
 static FileFormat detect_format(const char *path)
 {
@@ -75,6 +78,8 @@ static FileFormat detect_format(const char *path)
     if (strcasecmp(dot, ".xlsx") == 0) return FMT_XLSX;
     if (strcasecmp(dot, ".pdf") == 0) return FMT_PDF;
     if (strcasecmp(dot, ".json") == 0) return FMT_PDF_JSON;
+    if (strcasecmp(dot, ".csv") == 0) return FMT_CSV;
+    if (strcasecmp(dot, ".tsv") == 0) return FMT_CSV;
     return FMT_UNKNOWN;
 }
 
@@ -84,6 +89,7 @@ static const char *format_name(FileFormat fmt)
         case FMT_XLSX:     return "xlsx";
         case FMT_PDF:      return "pdf";
         case FMT_PDF_JSON: return "pdf-json";
+        case FMT_CSV:      return "csv";
         default:           return "unknown";
     }
 }
@@ -170,8 +176,8 @@ static void pdf_block_callback(void *user, const ShPdf2strucBlock *block)
     if (block->page_index != c->cur_page) {
         close_current_page(c);
         if (c->cur_page >= 0) json_append(c, ",", 1);
-        json_appendf(c, "{\"page\":%d,\"width\":842.0,\"height\":595.0,\"texts\":[",
-                     block->page_index + 1);
+        json_appendf(c, "{\"page\":%d,\"width\":%.1f,\"height\":%.1f,\"texts\":[",
+                     block->page_index + 1, block->page_width, block->page_height);
         c->cur_page = block->page_index;
         c->text_count = 0;
     }
@@ -256,6 +262,8 @@ typedef struct {
     double row_tol;          /* -1 = auto */
     double col_gap;          /* -1 = auto */
     int output_raw;          /* 1 = output raw, 0 = output canonical if schema */
+    char csv_delimiter;      /* 0 = auto-detect */
+    int csv_no_header;       /* 1 = no header row in CSV */
 } PipelineOpts;
 
 static int process_file(const PipelineOpts *po)
@@ -342,6 +350,32 @@ static int process_file(const PipelineOpts *po)
         if (xs != NX_XLSX_OK) {
             fprintf(stderr, "  Error: XLSX parse failed: %s\n",
                     nx_xlsx_status_str(xs));
+            sh_arena_free(arena);
+            return 1;
+        }
+
+    } else if (fmt == FMT_CSV) {
+        /* CSV/TSV: parse directly */
+        fprintf(stderr, "  Stage A: Parsing CSV...\n");
+        size_t data_len = 0;
+        char *data = read_file(po->input_path, &data_len);
+        if (!data) { sh_arena_free(arena); return 1; }
+
+        ShCsvOpts csv_opts;
+        sh_csv_opts_default(&csv_opts);
+        csv_opts.delimiter = po->csv_delimiter;   /* 0 = auto-detect */
+        csv_opts.has_header = po->csv_no_header ? 0 : 1;
+        csv_opts.trim_fields = 1;
+        csv_opts.skip_empty_rows = 1;
+
+        NxCsvStatus cs = nx_csv_parse(data, data_len, &csv_opts, NULL,
+                                       basename_str, arena,
+                                       &raw_json, &raw_len);
+        free(data);
+
+        if (cs != NX_CSV_OK) {
+            fprintf(stderr, "  Error: CSV parse failed: %s\n",
+                    nx_csv_status_str(cs));
             sh_arena_free(arena);
             return 1;
         }
@@ -486,9 +520,12 @@ static int run_batch(const char *config_path)
                  config_dir, output_dir);
 
     /* Create output directory */
-    char mkdir_cmd[600];
-    snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", abs_output_dir);
-    (void)system(mkdir_cmd);
+    if (sh_mkdirs(abs_output_dir) != 0) {
+        fprintf(stderr, "Error: cannot create output directory %s\n", abs_output_dir);
+        sh_arena_free(arena);
+        free(config_data);
+        return 1;
+    }
 
     ShJsonValue *sources = sh_json_get(root, "sources");
     if (!sources) {
@@ -624,14 +661,17 @@ static void usage(const char *prog)
     fprintf(stderr, "Usage:\n");
     fprintf(stderr, "  %s input.pdf [--schema s.json] [--row-tol N] [--col-gap N]\n", prog);
     fprintf(stderr, "  %s input.xlsx [--schema s.json]\n", prog);
+    fprintf(stderr, "  %s input.csv [--schema s.json] [--delimiter ,] [--no-header]\n", prog);
     fprintf(stderr, "  %s --config batch.json\n\n", prog);
     fprintf(stderr, "Options:\n");
-    fprintf(stderr, "  --schema    Transform schema for Stage B\n");
-    fprintf(stderr, "  --row-tol   PDF row tolerance (default: auto-detect)\n");
-    fprintf(stderr, "  --col-gap   PDF column gap minimum (default: auto-detect)\n");
-    fprintf(stderr, "  --config    Batch config JSON file\n");
-    fprintf(stderr, "  --raw       Output raw JSON even when schema given\n");
-    fprintf(stderr, "  -o FILE     Write output to file\n");
+    fprintf(stderr, "  --schema      Transform schema for Stage B\n");
+    fprintf(stderr, "  --row-tol     PDF row tolerance (default: auto-detect)\n");
+    fprintf(stderr, "  --col-gap     PDF column gap minimum (default: auto-detect)\n");
+    fprintf(stderr, "  --delimiter   CSV field delimiter (default: auto-detect)\n");
+    fprintf(stderr, "  --no-header   CSV has no header row\n");
+    fprintf(stderr, "  --config      Batch config JSON file\n");
+    fprintf(stderr, "  --raw         Output raw JSON even when schema given\n");
+    fprintf(stderr, "  -o FILE       Write output to file\n");
 }
 
 int main(int argc, char **argv)
@@ -645,14 +685,36 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "--schema") == 0 && i + 1 < argc) {
             po.schema_path = argv[++i];
         } else if (strcmp(argv[i], "--row-tol") == 0 && i + 1 < argc) {
-            po.row_tol = atof(argv[++i]);
+            char *end = NULL;
+            po.row_tol = strtod(argv[++i], &end);
+            if (end == argv[i]) {
+                fprintf(stderr, "Error: invalid --row-tol value: %s\n", argv[i]);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--col-gap") == 0 && i + 1 < argc) {
-            po.col_gap = atof(argv[++i]);
+            char *end = NULL;
+            po.col_gap = strtod(argv[++i], &end);
+            if (end == argv[i]) {
+                fprintf(stderr, "Error: invalid --col-gap value: %s\n", argv[i]);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
             config_path = argv[++i];
         } else if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0)
                    && i + 1 < argc) {
             po.output_path = argv[++i];
+        } else if (strcmp(argv[i], "--delimiter") == 0 && i + 1 < argc) {
+            const char *d = argv[++i];
+            if (strcmp(d, "tab") == 0 || strcmp(d, "\\t") == 0)
+                po.csv_delimiter = '\t';
+            else if (d[0] && !d[1])
+                po.csv_delimiter = d[0];
+            else {
+                fprintf(stderr, "Error: --delimiter must be a single character or 'tab'\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--no-header") == 0) {
+            po.csv_no_header = 1;
         } else if (strcmp(argv[i], "--raw") == 0) {
             po.output_raw = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {

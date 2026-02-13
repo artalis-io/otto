@@ -30,6 +30,8 @@ typedef struct ShPdf2strucCtx ShPdf2strucCtx;
 typedef struct {
     int    page_index;   /* 0-based */
     double x, y, w, h;  /* PDF points */
+    double page_width;   /* Actual page width (from MediaBox/CropBox) */
+    double page_height;  /* Actual page height (from MediaBox/CropBox) */
     const char *text;    /* UTF-8, null-terminated, valid until ctx destroyed */
 } ShPdf2strucBlock;
 

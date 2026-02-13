@@ -133,6 +133,74 @@ static uint32_t parse_cmap_hex(const uint8_t *data, size_t len)
     return val;
 }
 
+/* Parse hex-encoded multi-codepoint sequence into UTF-8 string.
+ * CMap values >4 hex digits represent multiple 16-bit codepoints (e.g. ligatures).
+ * Returns the primary (first) codepoint. */
+static uint32_t parse_cmap_hex_to_utf8(const uint8_t *data, size_t len, char *out)
+{
+    /* Count actual hex digits */
+    size_t ndigits = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (hex_val(data[i]) >= 0) ndigits++;
+    }
+
+    /* Single codepoint: up to 4 hex digits (16-bit) */
+    if (ndigits <= 4) {
+        uint32_t cp = parse_cmap_hex(data, len);
+        int n = utf8_encode(cp, out);
+        out[n] = '\0';
+        return cp;
+    }
+
+    /* Multi-codepoint: pairs of 4 hex digits = 16-bit codepoints each */
+    size_t out_pos = 0;
+    uint32_t first_cp = 0;
+    uint32_t cur = 0;
+    int digit_count = 0;
+
+    for (size_t i = 0; i < len && out_pos < 14; i++) {
+        int d = hex_val(data[i]);
+        if (d < 0) continue;
+        cur = (cur << 4) | (uint32_t)d;
+        digit_count++;
+        if (digit_count == 4) {
+            if (first_cp == 0) first_cp = cur;
+            int n = utf8_encode(cur, out + out_pos);
+            out_pos += (size_t)n;
+            cur = 0;
+            digit_count = 0;
+        }
+    }
+    /* Handle remaining digits (shouldn't happen for well-formed CMaps) */
+    if (digit_count > 0 && out_pos < 14) {
+        if (first_cp == 0) first_cp = cur;
+        int n = utf8_encode(cur, out + out_pos);
+        out_pos += (size_t)n;
+    }
+    out[out_pos] = '\0';
+    return first_cp;
+}
+
+/* Comparator for sorting ToUnicode entries by glyph_id */
+static int tounicode_compare(const void *a, const void *b)
+{
+    const PdfToUnicodeEntry *ea = (const PdfToUnicodeEntry *)a;
+    const PdfToUnicodeEntry *eb = (const PdfToUnicodeEntry *)b;
+    if (ea->glyph_id < eb->glyph_id) return -1;
+    if (ea->glyph_id > eb->glyph_id) return 1;
+    return 0;
+}
+
+/* Comparator for sorting CID widths by cid */
+static int cid_width_compare(const void *a, const void *b)
+{
+    const PdfCidWidth *wa = (const PdfCidWidth *)a;
+    const PdfCidWidth *wb = (const PdfCidWidth *)b;
+    if (wa->cid < wb->cid) return -1;
+    if (wa->cid > wb->cid) return 1;
+    return 0;
+}
+
 /* Parse a ToUnicode CMap stream */
 static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
                               const uint8_t *data, size_t len)
@@ -204,11 +272,10 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
                 size_t dst_len = (size_t)(p - dst_start);
                 if (p < end) p++; /* skip > */
 
-                uint32_t codepoint = parse_cmap_hex(dst_start, dst_len);
-
                 if (font->tounicode_count < PDF_MAX_TOUNICODE) {
-                    font->tounicode[font->tounicode_count].glyph_id = glyph_id;
-                    font->tounicode[font->tounicode_count].codepoint = codepoint;
+                    PdfToUnicodeEntry *e = &font->tounicode[font->tounicode_count];
+                    e->glyph_id = glyph_id;
+                    e->codepoint = parse_cmap_hex_to_utf8(dst_start, dst_len, e->text);
                     font->tounicode_count++;
                 }
             }
@@ -263,10 +330,10 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
                         size_t d_len = (size_t)(p - d_start);
                         if (p < end) p++;
 
-                        uint32_t cp = parse_cmap_hex(d_start, d_len);
                         if (font->tounicode_count < PDF_MAX_TOUNICODE) {
-                            font->tounicode[font->tounicode_count].glyph_id = gid;
-                            font->tounicode[font->tounicode_count].codepoint = cp;
+                            PdfToUnicodeEntry *e = &font->tounicode[font->tounicode_count];
+                            e->glyph_id = gid;
+                            e->codepoint = parse_cmap_hex_to_utf8(d_start, d_len, e->text);
                             font->tounicode_count++;
                         }
                     }
@@ -283,9 +350,11 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
 
                     for (uint32_t gid = lo; gid <= hi; gid++) {
                         if (font->tounicode_count < PDF_MAX_TOUNICODE) {
-                            font->tounicode[font->tounicode_count].glyph_id = gid;
-                            font->tounicode[font->tounicode_count].codepoint =
-                                base + (gid - lo);
+                            PdfToUnicodeEntry *e = &font->tounicode[font->tounicode_count];
+                            e->glyph_id = gid;
+                            e->codepoint = base + (gid - lo);
+                            int n = utf8_encode(e->codepoint, e->text);
+                            e->text[n] = '\0';
                             font->tounicode_count++;
                         }
                     }
@@ -293,24 +362,37 @@ static void parse_tounicode(ShPdf2strucCtx *ctx, PdfFont *font,
             }
         }
     }
-}
 
-/* Look up glyph ID in ToUnicode CMap */
-static uint32_t tounicode_lookup(const PdfFont *font, uint32_t glyph_id)
-{
-    for (int i = 0; i < font->tounicode_count; i++) {
-        if (font->tounicode[i].glyph_id == glyph_id)
-            return font->tounicode[i].codepoint;
+    /* Sort entries by glyph_id for binary search */
+    if (font->tounicode_count > 1) {
+        qsort(font->tounicode, (size_t)font->tounicode_count,
+              sizeof(PdfToUnicodeEntry), tounicode_compare);
     }
-    return 0xFFFD; /* replacement character */
 }
 
-/* Get glyph width from CID /W array */
+/* Look up glyph ID in ToUnicode CMap (binary search) */
+static const PdfToUnicodeEntry *tounicode_find(const PdfFont *font, uint32_t glyph_id)
+{
+    int lo = 0, hi = font->tounicode_count - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (font->tounicode[mid].glyph_id == glyph_id)
+            return &font->tounicode[mid];
+        if (font->tounicode[mid].glyph_id < glyph_id) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return NULL;
+}
+
+/* Get glyph width from CID /W array (binary search) */
 static double cid_width_lookup(const PdfFont *font, uint32_t cid)
 {
-    for (int i = 0; i < font->cid_width_count; i++) {
-        if (font->cid_widths[i].cid == cid)
-            return font->cid_widths[i].width;
+    int lo = 0, hi = font->cid_width_count - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (font->cid_widths[mid].cid == cid) return font->cid_widths[mid].width;
+        if (font->cid_widths[mid].cid < cid) lo = mid + 1;
+        else hi = mid - 1;
     }
     return font->default_width;
 }
@@ -372,6 +454,205 @@ static void parse_cid_widths(ShPdf2strucCtx *ctx, PdfFont *font, PdfObj *w_arr)
             break;
         }
     }
+
+    /* Sort by CID for binary search */
+    if (font->cid_width_count > 1) {
+        qsort(font->cid_widths, (size_t)font->cid_width_count,
+              sizeof(PdfCidWidth), cid_width_compare);
+    }
+}
+
+/* ============================================================================
+ * Encoding Tables (MacRoman, Standard)
+ * ============================================================================ */
+
+static const uint16_t MACROMAN_TO_UNICODE[256] = {
+    /* 0x00-0x7F: identical to ASCII */
+    0x0000,0x0001,0x0002,0x0003,0x0004,0x0005,0x0006,0x0007,
+    0x0008,0x0009,0x000A,0x000B,0x000C,0x000D,0x000E,0x000F,
+    0x0010,0x0011,0x0012,0x0013,0x0014,0x0015,0x0016,0x0017,
+    0x0018,0x0019,0x001A,0x001B,0x001C,0x001D,0x001E,0x001F,
+    0x0020,0x0021,0x0022,0x0023,0x0024,0x0025,0x0026,0x0027,
+    0x0028,0x0029,0x002A,0x002B,0x002C,0x002D,0x002E,0x002F,
+    0x0030,0x0031,0x0032,0x0033,0x0034,0x0035,0x0036,0x0037,
+    0x0038,0x0039,0x003A,0x003B,0x003C,0x003D,0x003E,0x003F,
+    0x0040,0x0041,0x0042,0x0043,0x0044,0x0045,0x0046,0x0047,
+    0x0048,0x0049,0x004A,0x004B,0x004C,0x004D,0x004E,0x004F,
+    0x0050,0x0051,0x0052,0x0053,0x0054,0x0055,0x0056,0x0057,
+    0x0058,0x0059,0x005A,0x005B,0x005C,0x005D,0x005E,0x005F,
+    0x0060,0x0061,0x0062,0x0063,0x0064,0x0065,0x0066,0x0067,
+    0x0068,0x0069,0x006A,0x006B,0x006C,0x006D,0x006E,0x006F,
+    0x0070,0x0071,0x0072,0x0073,0x0074,0x0075,0x0076,0x0077,
+    0x0078,0x0079,0x007A,0x007B,0x007C,0x007D,0x007E,0x007F,
+    /* 0x80-0xFF: MacRoman high range */
+    0x00C4,0x00C5,0x00C7,0x00C9,0x00D1,0x00D6,0x00DC,0x00E1,
+    0x00E0,0x00E2,0x00E4,0x00E3,0x00E5,0x00E7,0x00E9,0x00E8,
+    0x00EA,0x00EB,0x00ED,0x00EC,0x00EE,0x00EF,0x00F1,0x00F3,
+    0x00F2,0x00F4,0x00F6,0x00F5,0x00FA,0x00F9,0x00FB,0x00FC,
+    0x2020,0x00B0,0x00A2,0x00A3,0x00A7,0x2022,0x00B6,0x00DF,
+    0x00AE,0x00A9,0x2122,0x00B4,0x00A8,0x2260,0x00C6,0x00D8,
+    0x221E,0x00B1,0x2264,0x2265,0x00A5,0x00B5,0x2202,0x2211,
+    0x220F,0x03C0,0x222B,0x00AA,0x00BA,0x03A9,0x00E6,0x00F8,
+    0x00BF,0x00A1,0x00AC,0x221A,0x0192,0x2248,0x2206,0x00AB,
+    0x00BB,0x2026,0x00A0,0x00C0,0x00C3,0x00D5,0x0152,0x0153,
+    0x2013,0x2014,0x201C,0x201D,0x2018,0x2019,0x00F7,0x25CA,
+    0x00FF,0x0178,0x2044,0x20AC,0x2039,0x203A,0xFB01,0xFB02,
+    0x2021,0x00B7,0x201A,0x201E,0x2030,0x00C2,0x00CA,0x00C1,
+    0x00CB,0x00C8,0x00CD,0x00CE,0x00CF,0x00CC,0x00D3,0x00D4,
+    0xF8FF,0x00D2,0x00DA,0x00DB,0x00D9,0x0131,0x02C6,0x02DC,
+    0x00AF,0x02D8,0x02D9,0x02DA,0x00B8,0x02DD,0x02DB,0x02C7,
+};
+
+/* Adobe glyph name → Unicode (common entries for /Differences parsing) */
+typedef struct { const char *name; uint16_t cp; } AdobeGlyphEntry;
+
+static const AdobeGlyphEntry ADOBE_GLYPH_TABLE[] = {
+    {"A",0x0041},{"AE",0x00C6},{"Aacute",0x00C1},{"Acircumflex",0x00C2},
+    {"Adieresis",0x00C4},{"Agrave",0x00C0},{"Aring",0x00C5},{"Atilde",0x00C3},
+    {"B",0x0042},{"C",0x0043},{"Ccedilla",0x00C7},{"D",0x0044},
+    {"E",0x0045},{"Eacute",0x00C9},{"Ecircumflex",0x00CA},
+    {"Edieresis",0x00CB},{"Egrave",0x00C8},{"Eth",0x00D0},{"Euro",0x20AC},
+    {"F",0x0046},{"G",0x0047},{"H",0x0048},{"I",0x0049},
+    {"Iacute",0x00CD},{"Icircumflex",0x00CE},{"Idieresis",0x00CF},
+    {"Igrave",0x00CC},{"J",0x004A},{"K",0x004B},{"L",0x004C},
+    {"M",0x004D},{"N",0x004E},{"Ntilde",0x00D1},{"O",0x004F},
+    {"OE",0x0152},{"Oacute",0x00D3},{"Ocircumflex",0x00D4},
+    {"Odieresis",0x00D6},{"Ograve",0x00D2},{"Oslash",0x00D8},
+    {"Otilde",0x00D5},{"P",0x0050},{"Q",0x0051},{"R",0x0052},
+    {"S",0x0053},{"Scaron",0x0160},{"T",0x0054},{"Thorn",0x00DE},
+    {"U",0x0055},{"Uacute",0x00DA},{"Ucircumflex",0x00DB},
+    {"Udieresis",0x00DC},{"Ugrave",0x00D9},{"V",0x0056},{"W",0x0057},
+    {"X",0x0058},{"Y",0x0059},{"Yacute",0x00DD},{"Ydieresis",0x0178},
+    {"Z",0x005A},{"Zcaron",0x017D},
+    {"a",0x0061},{"aacute",0x00E1},{"acircumflex",0x00E2},
+    {"acute",0x00B4},{"adieresis",0x00E4},{"ae",0x00E6},{"agrave",0x00E0},
+    {"ampersand",0x0026},{"aring",0x00E5},{"asciicircum",0x005E},
+    {"asciitilde",0x007E},{"asterisk",0x002A},{"at",0x0040},
+    {"atilde",0x00E3},{"b",0x0062},{"backslash",0x005C},{"bar",0x007C},
+    {"braceleft",0x007B},{"braceright",0x007D},{"bracketleft",0x005B},
+    {"bracketright",0x005D},{"breve",0x02D8},{"brokenbar",0x00A6},
+    {"bullet",0x2022},{"c",0x0063},{"caron",0x02C7},{"ccedilla",0x00E7},
+    {"cedilla",0x00B8},{"cent",0x00A2},{"circumflex",0x02C6},
+    {"colon",0x003A},{"comma",0x002C},{"copyright",0x00A9},
+    {"currency",0x00A4},{"d",0x0064},{"dagger",0x2020},
+    {"daggerdbl",0x2021},{"degree",0x00B0},{"dieresis",0x00A8},
+    {"divide",0x00F7},{"dollar",0x0024},{"dotaccent",0x02D9},
+    {"dotlessi",0x0131},{"e",0x0065},{"eacute",0x00E9},
+    {"ecircumflex",0x00EA},{"edieresis",0x00EB},{"egrave",0x00E8},
+    {"eight",0x0038},{"ellipsis",0x2026},{"emdash",0x2014},
+    {"endash",0x2013},{"equal",0x003D},{"eth",0x00F0},
+    {"exclam",0x0021},{"exclamdown",0x00A1},{"f",0x0066},
+    {"fi",0xFB01},{"five",0x0035},{"fl",0xFB02},{"florin",0x0192},
+    {"four",0x0034},{"fraction",0x2044},{"g",0x0067},
+    {"germandbls",0x00DF},{"grave",0x0060},{"greater",0x003E},
+    {"guillemotleft",0x00AB},{"guillemotright",0x00BB},
+    {"guilsinglleft",0x2039},{"guilsinglright",0x203A},{"h",0x0068},
+    {"hungarumlaut",0x02DD},{"hyphen",0x002D},{"i",0x0069},
+    {"iacute",0x00ED},{"icircumflex",0x00EE},{"idieresis",0x00EF},
+    {"igrave",0x00EC},{"j",0x006A},{"k",0x006B},{"l",0x006C},
+    {"less",0x003C},{"logicalnot",0x00AC},{"lslash",0x0142},
+    {"m",0x006D},{"macron",0x00AF},{"minus",0x2212},{"mu",0x00B5},
+    {"multiply",0x00D7},{"n",0x006E},{"nine",0x0039},{"ntilde",0x00F1},
+    {"numbersign",0x0023},{"o",0x006F},{"oacute",0x00F3},
+    {"ocircumflex",0x00F4},{"odieresis",0x00F6},{"oe",0x0153},
+    {"ogonek",0x02DB},{"ograve",0x00F2},{"one",0x0031},
+    {"onehalf",0x00BD},{"onequarter",0x00BC},{"onesuperior",0x00B9},
+    {"ordfeminine",0x00AA},{"ordmasculine",0x00BA},{"oslash",0x00F8},
+    {"otilde",0x00F5},{"p",0x0070},{"paragraph",0x00B6},
+    {"parenleft",0x0028},{"parenright",0x0029},{"percent",0x0025},
+    {"period",0x002E},{"periodcentered",0x00B7},{"perthousand",0x2030},
+    {"plus",0x002B},{"plusminus",0x00B1},{"q",0x0071},
+    {"question",0x003F},{"questiondown",0x00BF},{"quotedbl",0x0022},
+    {"quotedblbase",0x201E},{"quotedblleft",0x201C},
+    {"quotedblright",0x201D},{"quoteleft",0x2018},{"quoteright",0x2019},
+    {"quotesinglbase",0x201A},{"quotesingle",0x0027},{"r",0x0072},
+    {"registered",0x00AE},{"ring",0x02DA},{"s",0x0073},
+    {"scaron",0x0161},{"section",0x00A7},{"semicolon",0x003B},
+    {"seven",0x0037},{"six",0x0036},{"slash",0x002F},{"space",0x0020},
+    {"sterling",0x00A3},{"t",0x0074},{"thorn",0x00FE},
+    {"three",0x0033},{"threequarters",0x00BE},{"threesuperior",0x00B3},
+    {"tilde",0x02DC},{"trademark",0x2122},{"two",0x0032},
+    {"twosuperior",0x00B2},{"u",0x0075},{"uacute",0x00FA},
+    {"ucircumflex",0x00FB},{"udieresis",0x00FC},{"ugrave",0x00F9},
+    {"underscore",0x005F},{"v",0x0076},{"w",0x0077},{"x",0x0078},
+    {"y",0x0079},{"yacute",0x00FD},{"ydieresis",0x00FF},{"yen",0x00A5},
+    {"z",0x007A},{"zcaron",0x017E},{"zero",0x0030},
+    {NULL, 0}
+};
+
+static uint16_t adobe_glyph_to_unicode(const char *name)
+{
+    for (int i = 0; ADOBE_GLYPH_TABLE[i].name; i++) {
+        if (strcmp(ADOBE_GLYPH_TABLE[i].name, name) == 0)
+            return ADOBE_GLYPH_TABLE[i].cp;
+    }
+    return 0;
+}
+
+/* ============================================================================
+ * /Encoding Dictionary Parsing
+ * ============================================================================ */
+
+typedef enum {
+    PDF_ENC_WINANSI = 0,
+    PDF_ENC_MACROMAN,
+    PDF_ENC_STANDARD,   /* treat as WinAnsi for now (mostly overlaps) */
+} PdfEncoding;
+
+/* Build encoding table: base encoding + /Differences overrides.
+ * Returns the encoding table to use (or NULL to use default WinAnsi). */
+static const uint16_t *resolve_encoding(ShPdf2strucCtx *ctx, PdfDict *fd,
+                                         uint16_t *custom_table)
+{
+    PdfObj *enc_obj = pdf_resolve(ctx, pdf_dict_get(fd, "Encoding"));
+    if (!enc_obj) return NULL; /* default WinAnsi */
+
+    const uint16_t *base_table = WINANSI_TO_UNICODE;
+
+    if (enc_obj->type == PDF_OBJ_NAME) {
+        if (strcmp(enc_obj->name_val, "MacRomanEncoding") == 0)
+            base_table = MACROMAN_TO_UNICODE;
+        /* WinAnsiEncoding and StandardEncoding both use WinAnsi table */
+        /* No /Differences to apply for plain name encoding */
+        if (base_table != WINANSI_TO_UNICODE) {
+            memcpy(custom_table, base_table, PDF_ENCODING_ENTRIES * sizeof(uint16_t));
+            return custom_table;
+        }
+        return NULL; /* use default */
+    }
+
+    if (enc_obj->type != PDF_OBJ_DICT) return NULL;
+    PdfDict *enc_d = &enc_obj->dict_val;
+
+    /* Base encoding */
+    const char *base_name = pdf_dict_get_name(ctx, enc_d, "BaseEncoding");
+    if (base_name && strcmp(base_name, "MacRomanEncoding") == 0)
+        base_table = MACROMAN_TO_UNICODE;
+
+    /* Start with base */
+    memcpy(custom_table, base_table, PDF_ENCODING_ENTRIES * sizeof(uint16_t));
+
+    /* Apply /Differences array: [code /name /name code /name ...] */
+    PdfObj *diff = pdf_resolve(ctx, pdf_dict_get(enc_d, "Differences"));
+    if (diff && diff->type == PDF_OBJ_ARRAY) {
+        int code = 0;
+        int n = pdf_array_len(diff);
+        for (int i = 0; i < n; i++) {
+            PdfObj *item = pdf_resolve(ctx, pdf_array_get(diff, i));
+            if (!item) continue;
+            if (item->type == PDF_OBJ_INT) {
+                code = (int)item->int_val;
+            } else if (item->type == PDF_OBJ_NAME) {
+                if (code >= 0 && code < PDF_ENCODING_ENTRIES) {
+                    uint16_t cp = adobe_glyph_to_unicode(item->name_val);
+                    if (cp > 0) custom_table[code] = cp;
+                }
+                code++;
+            }
+        }
+    }
+
+    return custom_table;
 }
 
 /* Parse a font resource and add to ctx->fonts */
@@ -468,6 +749,9 @@ static int parse_font(ShPdf2strucCtx *ctx, const char *name, PdfObj *font_obj)
                 parse_tounicode(ctx, font, tu_data, tu_len);
             }
         }
+
+        /* Parse /Encoding (name or dict with /Differences) */
+        font->encoding = resolve_encoding(ctx, fd, font->encoding_buf);
 
         /* /FirstChar, /LastChar, /Widths */
         font->first_char = (int)pdf_dict_get_int(ctx, fd, "FirstChar", 0);
@@ -580,17 +864,27 @@ static const char *decode_text_simple(ShPdf2strucCtx *ctx, const PdfFont *font,
 
     for (size_t i = 0; i < len; i++) {
         uint8_t code = bytes[i];
-        uint32_t cp;
 
-        if (font->has_tounicode) {
-            cp = tounicode_lookup(font, code);
+        if (font && font->has_tounicode) {
+            const PdfToUnicodeEntry *e = tounicode_find(font, code);
+            if (e && e->text[0]) {
+                size_t tlen = strlen(e->text);
+                if (out + tlen < len * 4) {
+                    memcpy(buf + out, e->text, tlen);
+                    out += tlen;
+                }
+            } else {
+                uint32_t cp = e ? e->codepoint : 0xFFFD;
+                if (cp > 0 && cp != 0xFFFD)
+                    out += (size_t)utf8_encode(cp, buf + out);
+            }
         } else {
-            cp = WINANSI_TO_UNICODE[code];
+            const uint16_t *enc_table = (font && font->encoding)
+                                         ? font->encoding : WINANSI_TO_UNICODE;
+            uint32_t cp = enc_table[code];
             if (cp == 0 && code != 0) cp = code;
-        }
-
-        if (cp > 0 && cp != 0xFFFD) {
-            out += (size_t)utf8_encode(cp, buf + out);
+            if (cp > 0 && cp != 0xFFFD)
+                out += (size_t)utf8_encode(cp, buf + out);
         }
 
         /* Advance */
@@ -633,9 +927,19 @@ static const char *decode_text_cid(ShPdf2strucCtx *ctx, const PdfFont *font,
     for (size_t i = 0; i + 1 < len; i += 2) {
         uint32_t gid = ((uint32_t)bytes[i] << 8) | bytes[i + 1];
 
-        uint32_t cp;
+        uint32_t cp = 0xFFFD;
         if (font->has_tounicode) {
-            cp = tounicode_lookup(font, gid);
+            const PdfToUnicodeEntry *e = tounicode_find(font, gid);
+            if (e && e->text[0]) {
+                size_t tlen = strlen(e->text);
+                if (out + tlen < max_chars * 4) {
+                    memcpy(buf + out, e->text, tlen);
+                    out += tlen;
+                }
+                cp = e->codepoint;
+                goto advance_cid;
+            }
+            cp = e ? e->codepoint : 0xFFFD;
         } else {
             cp = gid; /* Identity mapping fallback */
         }
@@ -643,7 +947,8 @@ static const char *decode_text_cid(ShPdf2strucCtx *ctx, const PdfFont *font,
         if (cp > 0 && cp != 0xFFFD) {
             out += (size_t)utf8_encode(cp, buf + out);
         }
-
+advance_cid:
+        ;  /* empty statement after label (C11 compat) */
         double w = cid_width_lookup(font, gid);
         if (w > 0) {
             advance += (w / 1000.0) * font_size;
@@ -1098,6 +1403,32 @@ static void process_content_stream(ShPdf2strucCtx *ctx, int page_idx,
                     tm = mat_mul(adv, tm);
                 }
             }
+            /* BI/ID/EI: inline image — skip past the data */
+            else if (OP_IS("BI")) {
+                /* Scan forward to find ID marker */
+                while (s.pos < s.size - 1) {
+                    if (s.data[s.pos] == 'I' && s.data[s.pos + 1] == 'D' &&
+                        (s.pos == 0 || pdf_is_ws(s.data[s.pos - 1]))) {
+                        s.pos += 2;
+                        /* Skip one whitespace byte after ID */
+                        if (s.pos < s.size) s.pos++;
+                        /* Scan for EI preceded by whitespace */
+                        while (s.pos < s.size - 1) {
+                            if (s.data[s.pos] == 'E' && s.data[s.pos + 1] == 'I' &&
+                                (s.pos > 0 && pdf_is_ws(s.data[s.pos - 1])) &&
+                                (s.pos + 2 >= s.size || pdf_is_ws(s.data[s.pos + 2]))) {
+                                s.pos += 2;
+                                goto bi_done;
+                            }
+                            s.pos++;
+                        }
+                        break;
+                    }
+                    s.pos++;
+                }
+                bi_done:
+                ops.top = 0;
+            }
             /* All other operators: just consume and clear the operand stack */
             else {
                 ops.top = 0;
@@ -1127,6 +1458,14 @@ ShPdf2strucStatus pdf_extract_text(ShPdf2strucCtx *ctx, const ShPdf2strucOpts *o
         /* Get content stream(s) */
         PdfObj *contents = pdf_resolve(ctx, pi->contents);
         if (!contents) continue;
+
+        /* Apply /Rotate to page's initial CTM.
+         * Note: process_content_stream starts with identity CTM.
+         * For rotated pages the viewer adjusts, but the content stream
+         * coordinates are in the original (unrotated) space.
+         * We don't adjust CTM here — instead we swapped width/height
+         * during page collection so that origin_top_left conversion
+         * uses the correct effective dimensions. */
 
         if (contents->type == PDF_OBJ_STREAM) {
             size_t decomp_len = 0;
@@ -1204,6 +1543,14 @@ ShPdf2strucStatus pdf_group_runs(ShPdf2strucCtx *ctx, const ShPdf2strucOpts *opt
     /* Sort runs */
     qsort(ctx->runs, (size_t)ctx->run_count, sizeof(PdfTextRun), run_compare);
 
+    /* Page widths for block output */
+    double *page_widths = (double *)sh_arena_alloc(ctx->arena,
+                               (size_t)ctx->page_count * sizeof(double));
+    if (!page_widths) return SH_PDF2STRUC_ERR_OOM;
+    for (int i = 0; i < ctx->page_count; i++) {
+        page_widths[i] = ctx->pages[i].width;
+    }
+
     if (opt->emit_mode == SH_PDF2STRUC_EMIT_RUNS) {
         /* Emit each run as a separate block */
         for (int i = 0; i < ctx->run_count; i++) {
@@ -1215,6 +1562,10 @@ ShPdf2strucStatus pdf_group_runs(ShPdf2strucCtx *ctx, const ShPdf2strucOpts *opt
                      page_heights[r->page_index] - r->y - r->h : r->y;
             blk.w = r->w;
             blk.h = r->h;
+            blk.page_width = (r->page_index < ctx->page_count) ?
+                              page_widths[r->page_index] : 612.0;
+            blk.page_height = (r->page_index < ctx->page_count) ?
+                               page_heights[r->page_index] : 792.0;
             blk.text = r->text;
             cb(user, &blk);
         }
@@ -1297,6 +1648,10 @@ ShPdf2strucStatus pdf_group_runs(ShPdf2strucCtx *ctx, const ShPdf2strucOpts *opt
                      merged_y;
             blk.w = merged_right - merged_x;
             blk.h = merged_h;
+            blk.page_width = (first->page_index < ctx->page_count) ?
+                              page_widths[first->page_index] : 612.0;
+            blk.page_height = (first->page_index < ctx->page_count) ?
+                               page_heights[first->page_index] : 792.0;
             blk.text = text_buf;
 
             /* Only emit non-empty blocks */
