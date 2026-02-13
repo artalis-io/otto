@@ -177,8 +177,6 @@ typedef struct {
     int max_cuts_per_round;
     int max_cut_rounds;
     int verbose;
-    int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
-    int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
 
     /* Statistics */
     RalphStatus status;

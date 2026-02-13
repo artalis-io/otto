@@ -458,12 +458,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)num_artificial * sizeof(int) +
         /* int array: redundant_rows for two-phase (m) */
         (size_t)m * sizeof(int) +
-        /* double array: dse_weights for dual steepest edge (m) */
-        (size_t)m * sizeof(double) +
-        /* int array: flip_list for bound flipping (n) */
-        (size_t)n * sizeof(int) +
-        /* Alignment padding (27 allocations * 8 bytes) */
-        216;
+        /* Alignment padding (25 allocations * 8 bytes) */
+        200;
 
     /* Create arena */
     tab->arena = sh_arena_create(arena_size);
@@ -521,14 +517,6 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->redundant_rows = (int*)sh_arena_calloc(tab->arena, m, sizeof(int));
     tab->num_redundant = 0;
 
-    /* Dual steepest edge weights (P6) */
-    tab->dse_weights = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
-    tab->dse_initialized = 0;
-
-    /* Bound flipping scratch (P5) */
-    tab->flip_list = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
-    tab->flip_count = 0;
-
     /* Single check for all allocations */
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
@@ -538,7 +526,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         !tab->cb_sparse_idx || !tab->cb_sparse_val ||
         !tab->aux_row || !tab->aux_coef || !tab->partial_candidates ||
         !tab->c_original || (num_artificial > 0 && !tab->artificial_vars) ||
-        !tab->redundant_rows || !tab->dse_weights || !tab->flip_list) {
+        !tab->redundant_rows) {
         return -1;
     }
     return 0;
@@ -2380,8 +2368,6 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->trace_phase1_first_fail_iter = -1;
     solver->trace_phase1_last_fail_iter = -1;
     solver->objective_cutoff = RALPH_INFINITY;
-    solver->use_dual_bound_flip = 1;
-    solver->use_dual_steepest_edge = 1;
 
     return solver;
 }
