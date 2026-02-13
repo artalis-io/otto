@@ -77,27 +77,52 @@ Build with `make tools`:
 
 | Tool | Purpose |
 |------|---------|
-| `nx_run` | General pipeline: XLSX/PDF-JSON → raw JSON, with optional schema |
+| `nx_pipeline` | **Main tool**: end-to-end pipeline (XLSX/PDF → raw/canonical JSON) |
+| `nx_run` | Stage A only: XLSX/PDF-JSON → raw JSON |
 | `nx_pdf_run` | PDF clustering: text-run JSON → raw JSON (with --row-tol, --col-gap) |
-| `nx_xform_run` | Schema transform: raw JSON + schema → canonical JSON |
+| `nx_xform_run` | Stage B only: raw JSON + schema → canonical JSON |
 
-## Pipeline Runner
+## Pipeline Runner (`nx_pipeline`)
 
-The unified pipeline handles end-to-end processing:
+The C pipeline tool handles end-to-end processing. All stages run in-process
+except PDF text extraction (calls `pdfplumber` via `popen()`).
 
 ```bash
 # Single file (auto-detects format from extension)
-python3 scripts/nx-pipeline.py input.pdf --schema schemas/gls-hu-automata-v1.json
-python3 scripts/nx-pipeline.py input.xlsx --schema schemas/gls-hu-depots-v1.json
+./nx_pipeline input.xlsx --schema schemas/gls-hu-depots-v1.json
+./nx_pipeline input.pdf --schema schemas/gls-hu-automata-v1.json
+./nx_pipeline input.pdf --raw   # Raw JSON only, no schema
 
 # With PDF tuning overrides
-python3 scripts/nx-pipeline.py input.pdf --row-tol 1.0 --col-gap 4.0
+./nx_pipeline input.pdf --row-tol 1.0 --col-gap 4.0
+
+# Pre-extracted text-run JSON (skips pdfplumber)
+./nx_pipeline text-runs.json --schema schemas/gls-hu-pudo-v1.json
 
 # Batch mode from config
-python3 scripts/nx-pipeline.py --config pipeline.json
+./nx_pipeline --config pipeline.json
+
+# Write to file instead of stdout
+./nx_pipeline input.xlsx --schema s.json -o output.json
 ```
 
-Requires: `pip install pdfplumber` (for PDF files)
+**Batch config format** (`pipeline.json`):
+```json
+{
+  "output_dir": "./output",
+  "sources": [
+    {"file": "depot.xlsx", "schema": "schemas/gls-hu-depots-v1.json"},
+    {"file": "automata.pdf"},
+    {"file": "pudo.pdf", "pdf_options": {"row_tolerance": 3.0, "col_gap_min": 10.0}}
+  ]
+}
+```
+
+**Script discovery**: The tool finds `pdf-to-text-json.py` via:
+1. `./scripts/`, `../scripts/`, `../nexus/scripts/`, `nexus/scripts/`
+2. `NEXUS_SCRIPT_DIR` environment variable
+
+Requires: `pip install pdfplumber` (for PDF files only)
 
 ## Auto-Detection
 

@@ -92,6 +92,18 @@ __pycache__/
 # Claude Code session locks
 .claude/locks/
 
+# Nexus binaries
+nexus/test_ingest
+nexus/test_xform
+nexus/nx_run
+nexus/nx_pdf_run
+nexus/nx_xform_run
+nexus/nx_pipeline
+
+# Shared test binaries
+shared/test_sha256
+shared/test_xml
+
 # Build artifacts
 ralph/api/ralph-solver-server
 site/test-results/
