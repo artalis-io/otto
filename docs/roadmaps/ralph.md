@@ -4,12 +4,17 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** `fc454a7` (2026-02-12) — c-MIR sign fixes + infeasibility guard + regression test.
-All tests pass (Ralph 199, FuelWise 123). MILP benchmarks 100/100 (milp30, milp75, milp100).
+**Current** (2026-02-13) — P5/P6 re-landed with infeasibility guards.
+All tests pass (Ralph 208, FuelWise 123). MILP benchmarks 100/100 (milp30, milp75, milp100).
+Three defense-in-depth fixes eliminated 14-22% false infeasibility from original P5/P6:
+1. Refactorize-and-retry on ratio test failure in `dual_reopt()` (critical fix)
+2. Recompute reduced costs after pure-flip iterations (drift prevention)
+3. Disable P5/P6 in diving heuristic + post-diving refactorization (corruption vector)
 
-Reverted: `7c6ce0f` P5 bound flipping + P6 dual steepest edge — introduced false infeasibility
-in FuelWise MILP benchmarks (14-22% failure rate). Diving heuristic corrupts dual simplex
-state, propagating into B&B tree. Needs rework before re-landing.
+Previous: `fc454a7` — c-MIR sign fixes + infeasibility guard (199 tests, 100/100 MILP).
+
+Reverted then re-landed: `7c6ce0f` P5/P6 — original had false infeasibility from stale
+reduced costs after bound flips and diving heuristic corrupting DSE weights.
 
 Previous: `b1d0e8c` — Objective cutoff + lightweight presolve with priority remapping (30/30 obj match, 194 tests).
 

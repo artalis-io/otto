@@ -211,6 +211,142 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
 }
 
 /* ============================================================================
+ * Bound Flipping Dual Ratio Test (P5)
+ * ============================================================================ */
+
+static int dual_ratio_test_bflip(SimplexTableau *tab, int leaving,
+                                 int *entering, double *theta,
+                                 double *leaving_shift) {
+    int leaving_var = tab->basis[leaving];
+    double x_leave = tab->x[leaving_var];
+
+    *entering = -1;
+    *theta = RALPH_INFINITY;
+    *leaving_shift = 0.0;
+    tab->flip_count = 0;
+
+    int dir;
+    if (x_leave < tab->lb_ext[leaving_var] - RALPH_FEAS_TOL) {
+        dir = 1;
+    } else if (x_leave > tab->ub_ext[leaving_var] + RALPH_FEAS_TOL) {
+        dir = -1;
+    } else {
+        return -1;
+    }
+
+    /* BTRAN: compute pivot row */
+    vec_set_zero(tab->work1, tab->m);
+    tab->work1[leaving] = 1.0;
+    lu_solve_transpose(tab->lu, tab->work1, tab->work2);
+
+    int n = tab->n;
+    int max_flips = tab->m / 2;
+    if (max_flips < 4) max_flips = 4;
+
+    /* Pass 1: Find theta_min */
+    double theta_min = RALPH_INFINITY;
+
+    for (int j = 0; j < n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        double alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
+        if (fabs(alpha_j) < RALPH_PIVOT_TOL) continue;
+
+        double rc_j = tab->rc[j];
+        double ratio = RALPH_INFINITY;
+
+        if (dir > 0) {
+            if (alpha_j < -RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_LOWER)
+                ratio = -rc_j / alpha_j;
+            else if (alpha_j > RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_UPPER)
+                ratio = -rc_j / alpha_j;
+        } else {
+            if (alpha_j > RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_LOWER)
+                ratio = rc_j / alpha_j;
+            else if (alpha_j < -RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_UPPER)
+                ratio = rc_j / alpha_j;
+        }
+
+        if (ratio >= -RALPH_OPT_TOL && ratio < theta_min)
+            theta_min = ratio;
+    }
+
+    if (theta_min >= RALPH_INFINITY)
+        return -1;
+
+    double theta_harris = theta_min + HARRIS_TOL * (1.0 + fabs(theta_min));
+
+    /* Pass 2: Flip boxed variables, select entering */
+    double best_pivot = 0.0;
+
+    for (int j = 0; j < n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        double alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
+        if (fabs(alpha_j) < RALPH_PIVOT_TOL) continue;
+
+        double rc_j = tab->rc[j];
+        double ratio = RALPH_INFINITY;
+
+        if (dir > 0) {
+            if (alpha_j < -RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_LOWER)
+                ratio = -rc_j / alpha_j;
+            else if (alpha_j > RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_UPPER)
+                ratio = -rc_j / alpha_j;
+        } else {
+            if (alpha_j > RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_LOWER)
+                ratio = rc_j / alpha_j;
+            else if (alpha_j < -RALPH_PIVOT_TOL && tab->var_status[j] == RALPH_NONBASIC_UPPER)
+                ratio = rc_j / alpha_j;
+        }
+
+        if (ratio < -RALPH_OPT_TOL || ratio > theta_harris) continue;
+
+        double lb_j = tab->lb_ext[j];
+        double ub_j = tab->ub_ext[j];
+        int is_boxed = (lb_j > -RALPH_INFINITY/2 && ub_j < RALPH_INFINITY/2 &&
+                       (ub_j - lb_j) > RALPH_FEAS_TOL);
+
+        if (is_boxed && ratio < theta_harris - RALPH_FEAS_TOL &&
+            tab->flip_count < max_flips) {
+            tab->flip_list[tab->flip_count++] = j;
+            double signed_delta = (tab->var_status[j] == RALPH_NONBASIC_LOWER)
+                                  ? (ub_j - lb_j) : (lb_j - ub_j);
+            *leaving_shift += alpha_j * signed_delta;
+        } else {
+            if (fabs(alpha_j) > best_pivot) {
+                *entering = j;
+                best_pivot = fabs(alpha_j);
+            }
+        }
+    }
+
+    *theta = theta_min;
+    return (*entering >= 0 || tab->flip_count > 0) ? 0 : -1;
+}
+
+/* ============================================================================
+ * DSE Initialization (P6)
+ * ============================================================================ */
+
+static void dse_init_approx(SimplexTableau *tab) {
+    for (int k = 0; k < tab->m; k++)
+        tab->dse_weights[k] = 1.0;
+    tab->dse_initialized = 1;
+}
+
+static void dse_init_exact(SimplexTableau *tab) {
+    for (int k = 0; k < tab->m; k++) {
+        vec_set_zero(tab->work1, tab->m);
+        tab->work1[k] = 1.0;
+        lu_solve_transpose(tab->lu, tab->work1, tab->tau_work);
+        double norm_sq = vec_dot(tab->m, tab->tau_work, tab->tau_work);
+        tab->dse_weights[k] = (norm_sq < 1e-12) ? 1.0 : norm_sq;
+    }
+    tab->dse_initialized = 1;
+}
+
+/* ============================================================================
  * Dual Simplex Iteration
  * ============================================================================ */
 
@@ -338,6 +474,28 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
     }
     (void)rc_entering_orig;  /* Suppress unused warning */
 
+    /* DSE weight update (P6): must happen before LU update (uses old B^{-1}).
+     * w_i_new = w_i - 2*(d_i/d_r)*sigma_i + (d_i/d_r)^2 * w_r
+     * where sigma = B^{-1} * pi, pi = work2 (pivot row = B^{-T} * e_r) */
+    if (tab->dse_initialized) {
+        double w_r = tab->dse_weights[leaving];
+        vec_copy_data(tab->pivot_row, tab->work2, tab->m);
+        lu_solve(tab->lu, tab->pivot_row, tab->tau_work);
+
+        double pivot_inv = 1.0 / pivot;
+        for (int k = 0; k < tab->m; k++) {
+            double d_k = tab->work3[k];
+            double sigma_k = tab->tau_work[k];
+            double ratio_k = d_k * pivot_inv;
+            double w_new = tab->dse_weights[k]
+                         - 2.0 * ratio_k * sigma_k
+                         + ratio_k * ratio_k * w_r;
+            tab->dse_weights[k] = (w_new < 1e-8) ? 1e-8 : w_new;
+        }
+        double w_enter = w_r * pivot_inv * pivot_inv;
+        tab->dse_weights[leaving] = (w_enter < 1e-8) ? 1e-8 : w_enter;
+    }
+
     /* Update LU factorization */
     const int force_refactor = fabs(pivot) < 1e-4;
     if (force_refactor) {
@@ -436,25 +594,49 @@ int dual_reopt(SimplexSolver *solver, int max_pivots) {
     tableau_compute_reduced_costs(tab);
 
     int num_refactors = 0;
+    int use_bflip = solver->use_dual_bound_flip;
+    int use_dse = solver->use_dual_steepest_edge;
+
+    /* Initialize DSE weights (approximate for reopt — few pivots per call) */
+    if (use_dse && !tab->dse_initialized) {
+        dse_init_approx(tab);
+    }
 
     for (int iter = 0; iter < max_pivots; iter++) {
-        /* Find most infeasible basic variable (leaving candidate) */
+        /* Find leaving variable: DSE scoring or most-infeasible */
         int leaving = -1;
-        double max_infeas = RALPH_FEAS_TOL;
 
-        for (int k = 0; k < tab->m; k++) {
-            int j = tab->basis[k];
-            double infeas = 0.0;
+        if (use_dse && tab->dse_initialized) {
+            double best_score = 0.0;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas <= RALPH_FEAS_TOL) continue;
 
-            if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL) {
-                infeas = tab->lb_ext[j] - tab->x[j];
-            } else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
-                infeas = tab->x[j] - tab->ub_ext[j];
+                double w = tab->dse_weights[k];
+                double score = (infeas * infeas) / w;
+                if (score > best_score) {
+                    best_score = score;
+                    leaving = k;
+                }
             }
-
-            if (infeas > max_infeas) {
-                max_infeas = infeas;
-                leaving = k;
+        } else {
+            double max_infeas = RALPH_FEAS_TOL;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas > max_infeas) {
+                    max_infeas = infeas;
+                    leaving = k;
+                }
             }
         }
 
@@ -476,11 +658,7 @@ int dual_reopt(SimplexSolver *solver, int max_pivots) {
             return 0;
         }
 
-        /* Objective cutoff pruning. tab->obj_value is updated after each
-         * dual_simplex_pivot() (line ~357). In dual simplex the objective
-         * monotonically increases (internal minimization), so once it
-         * exceeds the cutoff the node's LP optimal is provably worse
-         * than the incumbent — prune immediately. */
+        /* Objective cutoff pruning */
         if (solver->objective_cutoff < RALPH_INFINITY &&
             tab->obj_value >= solver->objective_cutoff - RALPH_OPT_TOL) {
             solver->obj_value = tab->obj_value * solver->model->obj_sense;
@@ -488,26 +666,95 @@ int dual_reopt(SimplexSolver *solver, int max_pivots) {
             return 1;  /* Fathomed by bound */
         }
 
-        /* Dual ratio test to find entering variable */
+        /* Dual ratio test (with optional bound flipping) */
         int entering;
         double theta;
 
-        if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
-            /* No valid entering variable — INFEASIBLE */
-            solver->status = RALPH_STATUS_INFEASIBLE;
-            return 1;
-        }
+        if (use_bflip) {
+            double leaving_shift = 0.0;
+            if (dual_ratio_test_bflip(tab, leaving, &entering, &theta, &leaving_shift) != 0) {
+                /* Ratio test failed — may be stale rc. Refactorize and retry. */
+                if (num_refactors < 2 && tableau_refactorize(tab) == 0) {
+                    num_refactors++;
+                    tab->dse_initialized = 0;
+                    if (use_dse) dse_init_approx(tab);
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+                solver->status = RALPH_STATUS_INFEASIBLE;
+                return 1;
+            }
 
-        /* Perform dual pivot */
-        if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
-            /* Pivot failed — try refactorization (at most twice total) */
-            if (num_refactors < 2 && tableau_refactorize(tab) == 0) {
-                num_refactors++;
+            /* Apply bound flips */
+            if (tab->flip_count > 0) {
+                int leaving_var = tab->basis[leaving];
+                for (int f = 0; f < tab->flip_count; f++) {
+                    int fj = tab->flip_list[f];
+                    if (tab->var_status[fj] == RALPH_NONBASIC_LOWER) {
+                        tab->var_status[fj] = RALPH_NONBASIC_UPPER;
+                        tab->x[fj] = tab->ub_ext[fj];
+                    } else {
+                        tab->var_status[fj] = RALPH_NONBASIC_LOWER;
+                        tab->x[fj] = tab->lb_ext[fj];
+                    }
+                }
+                tab->x[leaving_var] -= leaving_shift;
+            }
+
+            if (entering >= 0) {
+                if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+                    if (num_refactors < 2 && tableau_refactorize(tab) == 0) {
+                        num_refactors++;
+                        tab->dse_initialized = 0;
+                        if (use_dse) dse_init_approx(tab);
+                        tableau_compute_solution(tab);
+                        tableau_compute_reduced_costs(tab);
+                        continue;
+                    }
+                    return -1;
+                }
+                if (tab->flip_count > 0) {
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    tab->obj_value = 0.0;
+                    for (int j = 0; j < tab->n; j++)
+                        tab->obj_value += tab->c_ext[j] * tab->x[j];
+                }
+            } else {
+                /* Pure flip iteration: no basis change */
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
-                continue;  /* Retry this iteration */
+                tab->obj_value = 0.0;
+                for (int j = 0; j < tab->n; j++)
+                    tab->obj_value += tab->c_ext[j] * tab->x[j];
             }
-            return -1;
+        } else {
+            if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
+                /* Ratio test failed — may be stale rc. Refactorize and retry. */
+                if (num_refactors < 2 && tableau_refactorize(tab) == 0) {
+                    num_refactors++;
+                    tab->dse_initialized = 0;
+                    if (use_dse) dse_init_approx(tab);
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+                solver->status = RALPH_STATUS_INFEASIBLE;
+                return 1;
+            }
+
+            if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+                if (num_refactors < 2 && tableau_refactorize(tab) == 0) {
+                    num_refactors++;
+                    tab->dse_initialized = 0;
+                    if (use_dse) dse_init_approx(tab);
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+                return -1;
+            }
         }
 
         /* Periodic refactorization for numerical stability */
@@ -516,6 +763,8 @@ int dual_reopt(SimplexSolver *solver, int max_pivots) {
                 return -1;
             }
             num_refactors++;
+            tab->dse_initialized = 0;
+            if (use_dse) dse_init_approx(tab);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
         }
@@ -618,6 +867,15 @@ int dual_simplex_solve(SimplexSolver *solver) {
         printf("  [dual_simplex] After apply_bound_perturbation: obj=%.4f\n", tab->obj_value);
     }
 
+    /* Bound flipping disabled in full dual solve: perturbation shifts ub,
+     * which corrupts flip magnitude (ub - lb). Only DSE is safe here. */
+    int use_dse = solver->use_dual_steepest_edge;
+
+    /* Initialize DSE weights (exact for full solve — may run many pivots) */
+    if (use_dse) {
+        dse_init_exact(tab);
+    }
+
     /* Degeneracy and stalling detection for cycling prevention */
     int degenerate_count = 0;
     const int DEGEN_PERTURB_THRESHOLD = 15;
@@ -643,23 +901,40 @@ int dual_simplex_solve(SimplexSolver *solver) {
             printf("  [dual_simplex] After first compute_solution in loop: obj=%.4f\n", tab->obj_value);
         }
 
-        /* Find most infeasible basic variable (leaving) */
+        /* Find leaving variable: DSE scoring or most-infeasible */
         int leaving = -1;
-        double max_infeas = RALPH_FEAS_TOL;
 
-        for (int k = 0; k < tab->m; k++) {
-            int j = tab->basis[k];
-            double infeas = 0.0;
+        if (use_dse && tab->dse_initialized) {
+            double best_score = 0.0;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas <= RALPH_FEAS_TOL) continue;
 
-            if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL) {
-                infeas = tab->lb_ext[j] - tab->x[j];
-            } else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
-                infeas = tab->x[j] - tab->ub_ext[j];
+                double w = tab->dse_weights[k];
+                double score = (infeas * infeas) / w;
+                if (score > best_score) {
+                    best_score = score;
+                    leaving = k;
+                }
             }
-
-            if (infeas > max_infeas) {
-                max_infeas = infeas;
-                leaving = k;
+        } else {
+            double max_infeas = RALPH_FEAS_TOL;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas > max_infeas) {
+                    max_infeas = infeas;
+                    leaving = k;
+                }
             }
         }
 
@@ -689,7 +964,6 @@ int dual_simplex_solve(SimplexSolver *solver) {
         double theta;
 
         if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
-            /* No valid entering variable - infeasible */
             remove_bound_perturbation(tab);
             extract_farkas_ray_dual(solver);
             solver->status = RALPH_STATUS_INFEASIBLE;
@@ -698,12 +972,13 @@ int dual_simplex_solve(SimplexSolver *solver) {
 
         /* Perform dual pivot */
         if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
-            /* Pivot failed, try refactorization */
             if (tableau_refactorize(tab) != 0) {
                 remove_bound_perturbation(tab);
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
             }
+            tab->dse_initialized = 0;
+            if (use_dse) dse_init_exact(tab);
         }
 
         /* Detect degenerate pivots (theta ≈ 0 means no dual objective change) */
@@ -821,8 +1096,8 @@ int dual_simplex_solve(SimplexSolver *solver) {
         }
 
         if (solver->verbose && iter % 100 == 0) {
-            printf("Dual iter %d: infeas = %.6e, obj = %.6f, dual_viol=%d\n",
-                   iter, max_infeas, tab->obj_value, dual_violations);
+            printf("Dual iter %d: obj = %.6f, dual_viol=%d\n",
+                   iter, tab->obj_value, dual_violations);
         }
     }
 
@@ -1373,6 +1648,15 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
         printf("[dual_simplex] Running dual Phase 2 to achieve primal feasibility...\n");
     }
 
+    /* Bound flipping disabled in full dual solve: perturbation shifts ub,
+     * which corrupts flip magnitude (ub - lb). Only DSE is safe here. */
+    int use_dse2 = solver->use_dual_steepest_edge;
+
+    /* Initialize DSE weights (exact for full solve) */
+    if (use_dse2) {
+        dse_init_exact(tab);
+    }
+
     /* Degeneracy tracking for cycling prevention.
      * In dual simplex, a degenerate pivot has theta ≈ 0 (no dual objective change).
      * Too many consecutive degenerate pivots suggests cycling.
@@ -1384,23 +1668,40 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         solver->iterations = iter;
 
-        /* Find most infeasible basic variable (leaving) */
+        /* Find leaving variable: DSE scoring or most-infeasible */
         int leaving = -1;
-        double max_infeas = RALPH_FEAS_TOL;
 
-        for (int k = 0; k < tab->m; k++) {
-            int j = tab->basis[k];
-            double infeas = 0.0;
+        if (use_dse2 && tab->dse_initialized) {
+            double best_score = 0.0;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas <= RALPH_FEAS_TOL) continue;
 
-            if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL) {
-                infeas = tab->lb_ext[j] - tab->x[j];
-            } else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
-                infeas = tab->x[j] - tab->ub_ext[j];
+                double w = tab->dse_weights[k];
+                double score = (infeas * infeas) / w;
+                if (score > best_score) {
+                    best_score = score;
+                    leaving = k;
+                }
             }
-
-            if (infeas > max_infeas) {
-                max_infeas = infeas;
-                leaving = k;
+        } else {
+            double max_infeas = RALPH_FEAS_TOL;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas > max_infeas) {
+                    max_infeas = infeas;
+                    leaving = k;
+                }
             }
         }
 
@@ -1432,7 +1733,6 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
         double theta;
 
         if (dual_ratio_test(tab, leaving, &entering, &theta) != 0 || entering < 0) {
-            /* No valid entering variable - problem is infeasible */
             extract_farkas_ray_dual(solver);
             solver->status = RALPH_STATUS_INFEASIBLE;
             solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
@@ -1441,11 +1741,12 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
 
         /* Perform dual pivot */
         if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
-            /* Pivot failed, try refactorization */
             if (tableau_refactorize(tab) != 0) {
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
             }
+            tab->dse_initialized = 0;
+            if (use_dse2) dse_init_exact(tab);
         }
 
         /* Detect degenerate pivots (theta ≈ 0 means no dual objective change).
@@ -1514,8 +1815,8 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
         }
 
         if (solver->verbose && iter % 50 == 0) {
-            printf("Dual iter %d: infeas=%.2e, obj=%.2f, dual_viol=%d\n",
-                   iter, max_infeas, tab->obj_value * solver->model->obj_sense, dual_violations);
+            printf("Dual iter %d: obj=%.2f, dual_viol=%d\n",
+                   iter, tab->obj_value * solver->model->obj_sense, dual_violations);
         }
     }
 
