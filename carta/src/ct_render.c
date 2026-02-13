@@ -673,10 +673,12 @@ void ct_render_polygon(CTRenderContext *ctx,
             }
         }
 
-        /* Fill between pairs of edges using fast span fill */
+        /* Fill between pairs of edges using fast span fill.
+         * Use floor() to match the rounding in ct_clip_polygon() — using
+         * round-to-nearest here caused 0-1px mismatches at tile boundaries. */
         for (int i = 0; i + 1 < num_active; i += 2) {
-            int x_start = (int)(active[i].x + 0.5);
-            int x_end = (int)(active[i + 1].x + 0.5);
+            int x_start = (int)floor(active[i].x);
+            int x_end = (int)floor(active[i + 1].x);
             fill_span(ctx, y, x_start, x_end, color);
         }
 
@@ -845,10 +847,11 @@ void ct_render_multipolygon(CTRenderContext *ctx,
             }
         }
 
-        /* Fill between pairs of edges (even-odd rule) using fast span fill */
+        /* Fill between pairs of edges (even-odd rule) using fast span fill.
+         * Use floor() to match the rounding in ct_clip_polygon(). */
         for (int i = 0; i + 1 < num_active; i += 2) {
-            int x_start = (int)(active[i].x + 0.5);
-            int x_end = (int)(active[i + 1].x + 0.5);
+            int x_start = (int)floor(active[i].x);
+            int x_end = (int)floor(active[i + 1].x);
             fill_span(ctx, y, x_start, x_end, color);
         }
 
@@ -1350,8 +1353,10 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
 
     float scale = (float)ctx->width / CT_MVT_EXTENT;
 
-    /* Clipping buffer: allow 64 pixels overshoot to avoid edge artifacts */
-    int clip_buffer = 64;
+    /* Clipping buffer: allow 16 pixels overshoot to avoid edge artifacts.
+     * Reduced from 64 — larger buffers cause floating-point precision errors
+     * on long edge vectors of landuse polygons spanning many tiles. */
+    int clip_buffer = 16;
 
     for (size_t i = 0; i < count; i++) {
         CTFeature *f = &features[i];
