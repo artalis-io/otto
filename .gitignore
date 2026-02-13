@@ -103,7 +103,13 @@ nexus/nx_pipeline
 # Shared test binaries
 shared/test_sha256
 shared/test_xml
+shared/test_csv
+shared/test_fs
+shared/test_sh_json
 shared/test_pdf2struc
+
+# Golden test data (binary files, not in git)
+nexus/tests/golden/
 
 # Build artifacts
 ralph/api/ralph-solver-server
