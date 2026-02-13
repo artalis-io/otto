@@ -1802,6 +1802,54 @@ int presolve_probing(PresolveContext *ctx) {
     return count;
 }
 
+/*
+ * Probe binary variables and tighten bounds in-place.
+ * Creates a temporary PresolveContext, runs probing with limited scope,
+ * and copies tightened bounds back to the model.
+ *
+ * This is designed for use at the MIP root node (after root LP + cuts)
+ * to tighten variable bounds before B&B begins.
+ */
+int presolve_probe_model(LPModel *model) {
+    if (!model || !model->A) return 0;
+
+    /* Count binary variables; skip if none */
+    int num_binary = 0;
+    for (int j = 0; j < model->num_vars; j++) {
+        if (model->var_type[j] == 'B' &&
+            model->lb[j] < 0.5 && model->ub[j] > 0.5) {
+            num_binary++;
+        }
+    }
+    if (num_binary == 0) return 0;
+
+    int n = model->num_vars;
+    int m = model->num_cons;
+
+    /* Build a temporary PresolveContext */
+    PresolveContext ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.working = model;
+    ctx.bound_tightening = 1;
+    ctx.probing = 1;
+    ctx.technique_mask = PRESOLVE_BOUND_TIGHTENING | PRESOLVE_PROBING;
+
+    ctx.row_deleted = (int *)calloc(m, sizeof(int));
+    ctx.col_deleted = (int *)calloc(n, sizeof(int));
+    if (!ctx.row_deleted || !ctx.col_deleted) {
+        free(ctx.row_deleted);
+        free(ctx.col_deleted);
+        return 0;
+    }
+
+    int result = presolve_probing(&ctx);
+
+    free(ctx.row_deleted);
+    free(ctx.col_deleted);
+
+    return result;
+}
+
 /* ============================================================================
  * Set Covering/Partitioning Specific Presolve
  * ============================================================================ */

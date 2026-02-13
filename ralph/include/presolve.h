@@ -174,6 +174,11 @@ int presolve_implied_free(PresolveContext *ctx);
 /* MIP-specific presolve */
 int presolve_probing(PresolveContext *ctx);
 
+/* Probe binary variables and tighten bounds in-place.
+ * Creates a temporary PresolveContext internally.
+ * Returns number of bounds tightened, or -1 if problem is infeasible. */
+int presolve_probe_model(LPModel *model);
+
 /* Set covering/partitioning specific presolve */
 
 /*

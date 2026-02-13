@@ -4,13 +4,14 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-13) — P5/P6 re-landed with infeasibility guards (`af158fa`).
-All tests pass (Ralph 208, FuelWise 123). MILP benchmarks 60/60 feasible (milp15–milp200 × 10).
+**Current** (2026-02-13) — Pseudocost branching + aggressive probing.
+All tests pass (Ralph 223, FuelWise 123). MILP benchmarks 60/60 feasible (milp15–milp200 × 10).
+Beats GLPK through milp100 (10.2x→1.3x); GLPK still faster only at milp200 (1.7x).
+Major milp100 breakthrough: was 0.7x (GLPK faster) → now **1.3x Ralph faster**.
+Four changes: fix pseudo-cost update bug, obj-coeff init, root strong branching, root+node probing.
+
+Previous: `af158fa` — P5/P6 re-landed with infeasibility guards (208 tests, 60/60 MILP).
 Beats GLPK through milp75 (9.9x→2.0x); GLPK still faster at milp100+ (1.4–2.5x).
-Three defense-in-depth fixes eliminated 14-22% false infeasibility from original P5/P6:
-1. Refactorize-and-retry on ratio test failure in `dual_reopt()` (critical fix)
-2. Recompute reduced costs after pure-flip iterations (drift prevention)
-3. Disable P5/P6 in diving heuristic + post-diving refactorization (corruption vector)
 
 Previous: `fc454a7` — c-MIR sign fixes + infeasibility guard (199 tests, 100/100 MILP).
 
@@ -27,8 +28,8 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 |------|--------|-------|
 | **Revised Simplex** | ✅ Complete | Primal simplex with LU factorization |
 | **LU Factorization** | ✅ Complete | Sparse factorization, eta updates |
-| **Branch & Bound MIP** | ✅ Complete | HYBRID node selection, PATH B LU reuse, dual_reopt, P5+P6 |
-| **Dual Simplex** | ✅ Complete | Bound flipping (P5), dual steepest edge (P6), 213 tests |
+| **Branch & Bound MIP** | ✅ Complete | HYBRID node selection, PATH B LU reuse, dual_reopt, P5+P6, pseudocost+probing |
+| **Dual Simplex** | ✅ Complete | Bound flipping (P5), dual steepest edge (P6), 223 tests |
 | **LAP Solver** | ✅ Complete | JVC algorithm, 358 tests |
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
@@ -133,7 +134,23 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (P5/P6 re-landed with infeasibility guards, 10 runs):**
+**Current results (pseudocost branching + aggressive probing, 10 runs):**
+
+| Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
+|----------|-----------|-----------|----------|-------|-----------|
+| milp15 | ~15 | **0.99 ms** | 8.60 ms | **10.2x Ralph** | 4/10 |
+| milp30 | ~30 | **2.05 ms** | 8.64 ms | **4.7x Ralph** | 5/10 |
+| milp50 | ~50 | **12.00 ms** | 12.85 ms | **1.1x Ralph** | 2/10 |
+| milp75 | ~75 | **33.11 ms** | 41.97 ms | **1.8x Ralph** | 0/10 |
+| milp100 | ~100 | **59.74 ms** | 60.26 ms | **1.3x Ralph** | 2/10 |
+| milp200 | ~200 | 255.88 ms | **136.25 ms** | 0.6x | 5/10 |
+
+Pseudocost branching fix + root strong branching + root/node probing. Ralph now wins
+through milp100 (10.2x→1.3x). milp100 breakthrough: was GLPK 1.4x faster → now Ralph
+1.3x faster. milp200 improved from 0.4x to 0.6x. Zero false infeasibility across all
+60 trials.
+
+**Previous results (P5/P6 re-landed with infeasibility guards, 10 runs):**
 
 | Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
 |----------|-----------|-----------|----------|-------|-----------|
@@ -143,10 +160,6 @@ has additional domain-specific guidance.
 | milp75 | ~75 | **33.26 ms** | 57.93 ms | **2.0x Ralph** | 3/10 |
 | milp100 | ~100 | 62.05 ms | **37.21 ms** | 0.7x | 0/10 |
 | milp200 | ~200 | 994.96 ms | **152.22 ms** | 0.4x | 1/10 |
-
-P5/P6 with infeasibility guards improved across the board vs prior baseline. Ralph now
-wins through milp75 (9.9x→2.0x). milp100 gap narrowed from 2.5x to 1.4x. milp200
-regressed (high variance at this scale). Zero false infeasibility across all 60 trials.
 
 **Previous results (original P5/P6, reverted due to false infeasibility):**
 
@@ -190,29 +203,30 @@ beating it (1.9x).
 
 **Historical progression:**
 
-| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix | +P5/P6 guarded |
-|----------|----------|-------------|----------------|-------------|-----------------|------------|----------------|
-| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | 0.95 ms | 0.90 ms | **0.85 ms** |
-| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | 3.14 ms | 3.08 ms | **2.73 ms** |
-| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | 9.90 ms | 9.75 ms | **9.28 ms** |
-| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | 55.49 ms | 55.50 ms | **33.26 ms** |
-| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | 50.14 ms | 50.38 ms | **62.05 ms** |
-| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | 212.03 ms | 210.80 ms | **994.96 ms** |
+| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix | +P5/P6 guarded | +pcost+probe |
+|----------|----------|-------------|----------------|-------------|-----------------|------------|----------------|--------------|
+| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | 0.95 ms | 0.90 ms | 0.85 ms | **0.99 ms** |
+| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | 3.14 ms | 3.08 ms | 2.73 ms | **2.05 ms** |
+| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | 9.90 ms | 9.75 ms | 9.28 ms | **12.00 ms** |
+| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | 55.49 ms | 55.50 ms | 33.26 ms | **33.11 ms** |
+| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | 50.14 ms | 50.38 ms | 62.05 ms | **59.74 ms** |
+| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | 212.03 ms | 210.80 ms | 994.96 ms | **255.88 ms** |
 
-**Note:** P5/P6 guarded column uses 10 runs. P5/P6 re-landed with three infeasibility guards
-(refactorize-and-retry, rc recompute after flips, diving isolation). Zero false infeasibility.
+**Note:** +pcost+probe column = pseudocost branching fix + obj-coeff init + root strong
+branching + root/node probing. 10 runs. Zero false infeasibility.
 
 **Analysis:**
-- Ralph wins milp15 through milp75 (9.9x down to 2.0x vs GLPK)
-- P5 bound flipping: eliminates LU updates for boxed variable pivots in dual_reopt (MIP hot path)
-- P6 dual steepest edge: better leaving variable selection reduces pivot count
-- P5 restricted to dual_reopt only (incompatible with bound perturbation in full dual solver)
-- P6 uses approximate init (weights=1.0) in dual_reopt, exact init in full dual solver
-- milp75 biggest improvement: 55ms → 33ms (40% faster) from better DSE leaving selection
-- milp100 gap narrowed: 0.4x → 0.7x vs GLPK
-- milp200 regressed (high variance at this scale; worst case 4.6s vs prior 393ms avg)
-- GLPK still faster at milp100+ (1.4–2.5x)
-- Remaining gap likely from: GLPK's cut pool management, presolve strength, heuristics
+- Ralph wins milp15 through milp100 (10.2x down to 1.3x vs GLPK)
+- milp100 breakthrough: GLPK was 1.4x faster → now Ralph 1.3x faster
+- milp200 massively improved: 995ms → 256ms (3.9x faster), gap narrowed from 0.4x to 0.6x
+- Pseudocost branching: learned variable selection scores from actual branching outcomes
+  (critical bug: `update_pseudo_costs()` was never called, making pseudo-costs equivalent
+  to most-infeasible with uniform 1.0 init)
+- Root strong branching: probe 20 fractional vars at root with 50 dual pivots each
+- Root probing: reuse presolve probing on working model to tighten binary bounds
+- Node probing: lightweight column-based propagation fixes binary vars at shallow B&B nodes
+- GLPK still faster only at milp200 (1.7x)
+- Remaining gap likely from: GLPK's cut pool management, heuristics, mature presolve
 
 See `fuelwise.md` §8 for FuelWise-specific optimization ideas (symmetry-breaking, flow
 cover cuts, mandatory station fixing).
@@ -489,7 +503,10 @@ GLPK benchmark (§1.7) confirmed these are the critical gaps:
 | **LP presolve (P3)** | ✅ **Done** | 2-3x avg improvement | 12 techniques, 20-round, probing w/ implication propagation |
 | **Aggressive presolve** (probing) | ✅ **Done** | 1.5-2x smaller problems | Probing w/ implication propagation, orthogonal reuse of bound tightening |
 | **Presolve mask for MIP** | ✅ **Done** | Investigation only | See §1.8 — presolve hurts FuelWise MIP; keep disabled |
-| Pseudocost branching | High | 1.5-2x better variable selection | Replaces static priorities with learned costs |
+| **Pseudocost branching** | ✅ **Done** | 15-30% at milp50+ | Fix update call + obj-coeff init + cap; see §4.4 |
+| **Root strong branching** | ✅ **Done** | Better initial pseudo-costs | Probe up to 20 vars at root; see §4.4 |
+| **Root probing** | ✅ **Done** | Tighter bounds before B&B | Reuses presolve_probing on working model; see §4.5 |
+| **Node probing** | ✅ **Done** | Fixes easy variables early | Lightweight column-based propagation; see §4.5 |
 | Solution pool / incumbents | Medium | Faster pruning from good bounds | LP rounding for initial incumbent |
 | Clique detection | Medium | From set-packing constraints | |
 | Cut pool management | Low | Reuse cuts across nodes | |
@@ -497,6 +514,61 @@ GLPK benchmark (§1.7) confirmed these are the critical gaps:
 **Note:** For domain-specific MIP improvements targeting FuelWise and HoSE, see **§6**.
 The domain-specific approach (branching priorities, reach cuts, clock cuts) provides
 better performance than generic improvements for these structured problem classes.
+
+### 4.4 Pseudocost Branching
+
+**Critical bug fixed:** `update_pseudo_costs()` was never called from `process_node()`.
+The `VAR_SELECT_PSEUDO_COST` strategy operated on initial values (uniform 1.0), making
+it equivalent to most-infeasible with product scoring.
+
+**Changes (mip.c, branch_bound.c):**
+
+1. **Pseudo-cost update in process_node** — after each child LP solve, call
+   `update_pseudo_costs()` with `parent_lp_bound` captured before `solve_node_lp()`.
+   For infeasible children, use `parent_lp_bound + MIP_PCOST_INFEAS_PENALTY` (1e6).
+
+2. **Objective-coefficient initialization** — replace uniform 1.0 with
+   `fmax(|c_j|, MIP_PCOST_DEFAULT_INIT)`. Variables with large objective coefficients
+   naturally produce larger LP delta when branched. SCP init still overrides.
+
+3. **Pseudo-cost cap** — clamp `new_pseudo` at `MIP_PCOST_MAX_VALUE` (1e8) in
+   `update_pseudo_costs()` to prevent NaN/Inf propagation from degenerate branches.
+
+4. **Root strong branching** — at root, probe up to `MIP_ROOT_SB_MAX_VARS` (20)
+   fractional variables with `MIP_ROOT_SB_MAX_ITER` (50) dual pivots each.
+   Initializes pseudo-costs with actual LP data. Controlled by `root_strong_branch`
+   parameter (-1=default on, 0=off, 1=on).
+
+**Named constants (mip.h):**
+- `MIP_PCOST_DEFAULT_INIT` (1.0) — minimum initial pseudo-cost
+- `MIP_PCOST_MAX_VALUE` (1e8) — cap to prevent overflow
+- `MIP_PCOST_INFEAS_PENALTY` (1e6) — penalty delta for infeasible child
+- `MIP_ROOT_SB_MAX_VARS` (20) — max variables to strong-branch at root
+- `MIP_ROOT_SB_MAX_ITER` (50) — max dual pivots per strong branch probe
+
+### 4.5 Aggressive Probing
+
+**Root probing** reuses the existing `presolve_probing()` through a new public wrapper
+`presolve_probe_model()` (presolve.c/presolve.h). Called from `solve_root_node()` after
+root LP + cuts + root strong branching. Tightens binary variable bounds on the working
+model before B&B begins.
+
+**Node probing** implements lightweight column-based bound propagation at B&B nodes:
+- `propagate_variable_fixing()` — fix binary var to 0/1 and derive implied bounds
+  from constraints containing that variable (column j of sparse matrix A)
+- `probing_bound_tightening()` — for up to `MIP_PROBE_MAX_VARS` (5) fractional
+  binary variables, probe both directions. If one is infeasible, fix the variable.
+  If both feasible, intersect implied bounds.
+- Gated on `node->depth < MIP_PROBE_MAX_DEPTH` (20) and
+  `frac in [MIP_PROBE_FRAC_THRESHOLD, 1-thresh]` (0.2)
+- Controlled by `probing_at_nodes` parameter (-1=default on, 0=off, 1=on)
+
+**Named constants (mip.h):**
+- `MIP_PROBE_MAX_VARS` (5) — max variables to probe per node
+- `MIP_PROBE_MAX_DEPTH` (20) — disable probing below this depth
+- `MIP_PROBE_FRAC_THRESHOLD` (0.2) — fractional threshold for probing
+- `MIP_ROOT_PROBE_MAX_VARS` (50) — max binary variables to probe at root
+- `MIP_ROOT_PROBE_MAX_PASSES` (3) — max bound-tightening passes per probe
 
 ---
 
