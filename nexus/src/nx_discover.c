@@ -459,6 +459,92 @@ NxDiscoverStatus nx_discover_schema(const char *raw_json, size_t raw_len,
         }
     }
 
+    /* Detect continuation rows (PDF line-wrap pattern).
+     *
+     * Strategy: find rows that are "partial" (some cells empty, some not).
+     * Then find columns that are consistently empty across these partial rows.
+     * Those columns are likely key columns for merge detection.
+     */
+    int cont_key_cols[MAX_COLS];
+    int cont_key_count = 0;
+    bool emit_row_merge = false;
+
+    /* Pass 1: identify potential continuation rows (some cells empty, some not) */
+    int *partial_empty = (int *)sh_arena_calloc(arena, ncols, sizeof(int));
+    int partial_count = 0;
+
+    if (partial_empty) {
+        for (size_t r = 0; r < nrows; r++) {
+            ShJsonValue *row = sh_json_array_get(rows_arr, r);
+            ShJsonValue *cells = row ? sh_json_get(row, "cells") : NULL;
+            if (!cells) continue;
+
+            size_t row_ncols = sh_json_array_len(cells);
+            int empty_count = 0;
+            int nonempty_count = 0;
+            for (size_t c = 0; c < ncols && c < row_ncols; c++) {
+                const char *val = sh_json_as_string(sh_json_array_get(cells, c), "");
+                if (val[0] == '\0') empty_count++;
+                else nonempty_count++;
+            }
+
+            /* Partial row: has both empty and non-empty cells */
+            if (empty_count > 0 && nonempty_count > 0 && empty_count >= nonempty_count) {
+                partial_count++;
+                /* Track which columns are empty in partial rows */
+                for (size_t c = 0; c < ncols && c < row_ncols; c++) {
+                    const char *val = sh_json_as_string(sh_json_array_get(cells, c), "");
+                    if (val[0] == '\0') partial_empty[c]++;
+                }
+            }
+        }
+
+        /* Pass 2: key columns are those empty in >90% of partial rows */
+        if (partial_count > 0 && (double)partial_count / (double)nrows >= 0.05) {
+            for (size_t c = 0; c < ncols; c++) {
+                double empty_rate = (double)partial_empty[c] / (double)partial_count;
+                if (empty_rate >= 0.90 && cont_key_count < MAX_COLS) {
+                    cont_key_cols[cont_key_count++] = (int)c;
+                }
+            }
+
+            /* Verify: count rows where ALL key cols are empty AND some other has data */
+            if (cont_key_count > 0) {
+                int verified_count = 0;
+                for (size_t r = 0; r < nrows; r++) {
+                    ShJsonValue *row = sh_json_array_get(rows_arr, r);
+                    ShJsonValue *cells = row ? sh_json_get(row, "cells") : NULL;
+                    if (!cells) continue;
+
+                    size_t row_ncols = sh_json_array_len(cells);
+                    bool all_keys_empty = true;
+                    for (int k = 0; k < cont_key_count; k++) {
+                        int ci = cont_key_cols[k];
+                        if (ci >= (int)row_ncols) continue;
+                        const char *val = sh_json_as_string(
+                            sh_json_array_get(cells, ci), "");
+                        if (val[0] != '\0') { all_keys_empty = false; break; }
+                    }
+                    if (!all_keys_empty) continue;
+
+                    bool has_other = false;
+                    for (size_t c = 0; c < row_ncols; c++) {
+                        const char *val = sh_json_as_string(
+                            sh_json_array_get(cells, c), "");
+                        if (val[0] != '\0') { has_other = true; break; }
+                    }
+                    if (has_other) verified_count++;
+                }
+
+                if ((double)verified_count / (double)nrows >= 0.05) {
+                    emit_row_merge = true;
+                } else {
+                    cont_key_count = 0;
+                }
+            }
+        }
+    }
+
     /* Detect lat/lon */
     int lat_idx = -1, lon_idx = -1;
     detect_lat_lon(cols, (int)ncols, &lat_idx, &lon_idx);
@@ -517,6 +603,19 @@ NxDiscoverStatus nx_discover_schema(const char *raw_json, size_t raw_len,
     sh_json_write_object_end(&w);
 
     sh_json_write_kv_int(&w, "skip_rows", 0);
+
+    /* row_merge (if continuation pattern detected) */
+    if (emit_row_merge) {
+        sh_json_write_key(&w, "row_merge");
+        sh_json_write_object_start(&w);
+        sh_json_write_key(&w, "key_columns");
+        sh_json_write_array_start(&w);
+        for (int k = 0; k < cont_key_count; k++)
+            sh_json_write_int(&w, cont_key_cols[k]);
+        sh_json_write_array_end(&w);
+        sh_json_write_kv_string(&w, "separator", " ");
+        sh_json_write_object_end(&w);
+    }
 
     /* columns */
     sh_json_write_key(&w, "columns");

@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include "nx_ingest.h"
+#include "nx_merge.h"
 #include "nx_xform.h"
 #include "nx_validate.h"
 #include "nx_discover.h"
@@ -281,14 +282,31 @@ int nx_wasm_transform(const char *raw_json, int raw_len,
     SHArena *arena = sh_arena_create(NX_WASM_ARENA_SIZE);
     if (!arena) return -1;
 
+    /* Merge continuation rows if schema has row_merge config */
+    const char *xform_input = raw_json;
+    size_t xform_input_len = (size_t)raw_len;
+    char *merged = NULL;
+    size_t merged_len = 0;
+    NxMergeStatus ms = nx_merge_rows(raw_json, (size_t)raw_len,
+                                      schema_json, (size_t)schema_len,
+                                      arena, &merged, &merged_len);
+    if (ms == NX_MERGE_OK && merged) {
+        xform_input = merged;
+        xform_input_len = merged_len;
+    }
+
+    /* Reset arena for transform (merge output is heap-allocated) */
+    sh_arena_reset(arena);
+
     char *out = NULL;
     size_t out_len = 0;
     NxXformStatus st = nx_xform_apply(
-        raw_json, (size_t)raw_len,
+        xform_input, xform_input_len,
         schema_json, (size_t)schema_len,
         arena, &out, &out_len);
 
     sh_arena_free(arena);
+    free(merged);
 
     if (st != NX_XFORM_OK || !out) return -1;
     g_transform_buf = out;

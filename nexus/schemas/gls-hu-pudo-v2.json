@@ -4,6 +4,11 @@
   "output_type": "facility",
   "table_selector": {"index": 0},
   "skip_rows": 0,
+  "row_merge": {
+    "key_columns": [0, 1, 2],
+    "separator": " ",
+    "strip_pattern": "GLS CsomagPontok"
+  },
   "multi_transforms": [
     {"type": "compute", "function": "phone_normalize",
      "sources": [5],
