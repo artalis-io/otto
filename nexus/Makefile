@@ -1,0 +1,78 @@
+# Nexus Makefile
+# Document ingestion pipeline for OTTO
+
+CC ?= gcc
+
+# Platform-specific settings
+UNAME_S := $(shell uname -s)
+
+# Production build (with hardening)
+CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE \
+         -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
+ifeq ($(UNAME_S),Linux)
+    LDFLAGS = -lm -pie -Wl,-z,relro,-z,now
+else
+    LDFLAGS = -lm
+endif
+
+INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz
+
+# Debug build (with sanitizers)
+DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
+               -fsanitize=address,undefined -fno-omit-frame-pointer
+DEBUG_LDFLAGS = -fsanitize=address,undefined
+
+SRCS = src/nx_xlsx.c
+OBJS = $(SRCS:.c=.o)
+
+LIB = libnexus.a
+TEST_INGEST_BIN = test_ingest
+
+SHARED_LIB = ../shared/libshared.a
+VENDOR_DIR = ../vendor/miniz
+
+# Vendor miniz objects (ZIP support for XLSX)
+MINIZ_ZIP_SRC = $(VENDOR_DIR)/miniz_zip.c
+MINIZ_ZIP_OBJ = $(MINIZ_ZIP_SRC:.c=.o)
+
+.PHONY: all clean test lib debug
+
+all: lib $(TEST_INGEST_BIN)
+
+lib: $(LIB)
+
+$(LIB): $(OBJS)
+	ar rcs $@ $^
+
+src/%.o: src/%.c
+	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(SHARED_LIB):
+	$(MAKE) -C ../shared lib
+
+# miniz_zip.o may already exist from shared build, but we need it linked
+$(MINIZ_ZIP_OBJ): $(MINIZ_ZIP_SRC)
+	$(CC) $(CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
+
+$(TEST_INGEST_BIN): tests/test_ingest.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lshared $(LDFLAGS) -o $@
+
+test: $(TEST_INGEST_BIN)
+	./$(TEST_INGEST_BIN)
+
+debug: CFLAGS = $(DEBUG_CFLAGS)
+debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
+debug: clean all
+
+clean:
+	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN)
+
+help:
+	@echo "Nexus Build System"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all      - Build library and tests (default)"
+	@echo "  lib      - Build static library (libnexus.a)"
+	@echo "  test     - Build and run tests"
+	@echo "  debug    - Build with sanitizers"
+	@echo "  clean    - Remove build artifacts"
