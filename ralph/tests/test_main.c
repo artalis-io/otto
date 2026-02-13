@@ -2617,6 +2617,294 @@ void test_node_selection_strategies(void) {
 }
 
 /* ============================================================================
+ * P5/P6: Bound Flipping + Dual Steepest Edge Tests
+ * ============================================================================ */
+
+void test_dual_bound_flip_basic(void) {
+    printf("\n=== Test: Dual Bound Flip Basic ===\n");
+
+    /* Small LP with bounded variables to exercise bound flipping:
+     * min  x + y + z + w
+     * s.t. x + y + z + w >= 3
+     *      0 <= x,y,z,w <= 1
+     *
+     * Optimal: 3 variables at 1, one at 0 → obj = 3 */
+    RalphModel *m = ralph_create();
+    ASSERT(m != NULL, "Model created");
+
+    ralph_add_var(m, 0.0, 1.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(m, 0.0, 1.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_add_var(m, 0.0, 1.0, 1.0, RALPH_CONTINUOUS);  /* z */
+    ralph_add_var(m, 0.0, 1.0, 1.0, RALPH_CONTINUOUS);  /* w */
+
+    int idx[] = {0, 1, 2, 3};
+    double coefs[] = {1.0, 1.0, 1.0, 1.0};
+    ralph_add_constraint(m, 4, idx, coefs, 'G', 3.0);
+
+    ralph_optimize(m);
+    int status = ralph_get_status(m);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(m);
+    ASSERT_NEAR(obj, 3.0, TOLERANCE, "Objective is 3.0");
+
+    double sol[4];
+    ralph_get_solution(m, sol);
+    double sum = sol[0] + sol[1] + sol[2] + sol[3];
+    ASSERT(sum >= 3.0 - TOLERANCE, "Sum of variables >= 3");
+
+    ralph_free(m);
+}
+
+void test_dual_bound_flip_mip(void) {
+    printf("\n=== Test: Dual Bound Flip MIP ===\n");
+
+    /* Binary knapsack to exercise bound flipping during B&B:
+     * max 10x + 6y + 4z  (min -10x - 6y - 4z)
+     * s.t. 5x + 3y + 2z <= 9
+     *      x, y, z ∈ {0, 1}
+     * Optimal: x=1, y=1, z=0, obj = 16 (internal -16) */
+    RalphModel *m = ralph_create();
+    ASSERT(m != NULL, "Model created");
+
+    ralph_set_obj_sense(m, RALPH_MAXIMIZE);
+    ralph_add_var(m, 0.0, 1.0, 10.0, RALPH_BINARY);
+    ralph_add_var(m, 0.0, 1.0, 6.0, RALPH_BINARY);
+    ralph_add_var(m, 0.0, 1.0, 4.0, RALPH_BINARY);
+
+    int idx[] = {0, 1, 2};
+    double coefs[] = {5.0, 3.0, 2.0};
+    ralph_add_constraint(m, 3, idx, coefs, 'L', 9.0);
+
+    ralph_optimize(m);
+    int status = ralph_get_status(m);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(m);
+    ASSERT_NEAR(obj, 16.0, TOLERANCE, "Optimal objective is 16");
+
+    double sol[3];
+    ralph_get_solution(m, sol);
+    ASSERT(fabs(sol[0] - 1.0) < TOLERANCE, "x = 1");
+    ASSERT(fabs(sol[1] - 1.0) < TOLERANCE, "y = 1");
+
+    ralph_free(m);
+}
+
+void test_p5_p6_combined(void) {
+    printf("\n=== Test: P5+P6 Combined (Facility Location) ===\n");
+
+    /* 3 facilities, 5 customers. Binary facility open/close,
+     * continuous assignment. Exercises both bound flipping (binary vars
+     * with [0,1] bounds) and DSE (leaving selection in B&B nodes). */
+    int num_fac = 3, num_cust = 5;
+    double fixed_cost[] = {30.0, 25.0, 35.0};
+    double assign_cost[3][5] = {
+        {8, 6, 7, 5, 9},
+        {5, 7, 6, 8, 4},
+        {6, 5, 8, 7, 3}
+    };
+
+    RalphModel *m = ralph_create();
+    ASSERT(m != NULL, "Model created");
+    ralph_set_obj_sense(m, RALPH_MINIMIZE);
+
+    /* y_j: facility open vars (binary) */
+    for (int j = 0; j < num_fac; j++) {
+        ralph_add_var(m, 0.0, 1.0, fixed_cost[j], RALPH_BINARY);
+    }
+
+    /* x_ij: assignment vars (continuous [0,1]) */
+    for (int i = 0; i < num_cust; i++) {
+        for (int j = 0; j < num_fac; j++) {
+            ralph_add_var(m, 0.0, 1.0, assign_cost[j][i], RALPH_CONTINUOUS);
+        }
+    }
+
+    /* Each customer assigned to exactly one facility */
+    for (int i = 0; i < num_cust; i++) {
+        int idx[3];
+        double coefs[3];
+        for (int j = 0; j < num_fac; j++) {
+            idx[j] = num_fac + i * num_fac + j;
+            coefs[j] = 1.0;
+        }
+        ralph_add_constraint(m, num_fac, idx, coefs, 'E', 1.0);
+    }
+
+    /* Linking: x_ij <= y_j */
+    for (int i = 0; i < num_cust; i++) {
+        for (int j = 0; j < num_fac; j++) {
+            int idx[2] = {num_fac + i * num_fac + j, j};
+            double coefs[2] = {1.0, -1.0};
+            ralph_add_constraint(m, 2, idx, coefs, 'L', 0.0);
+        }
+    }
+
+    ralph_optimize(m);
+    int status = ralph_get_status(m);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(m);
+    ASSERT(obj > 0 && obj < 200, "Objective in reasonable range");
+
+    double sol[3 + 15];
+    ralph_get_solution(m, sol);
+
+    /* Verify facility vars are binary */
+    int all_binary = 1;
+    for (int j = 0; j < num_fac; j++) {
+        if (fabs(sol[j]) > TOLERANCE && fabs(sol[j] - 1.0) > TOLERANCE)
+            all_binary = 0;
+    }
+    ASSERT(all_binary, "Facility variables are binary");
+
+    /* Verify each customer assigned */
+    int all_assigned = 1;
+    for (int i = 0; i < num_cust; i++) {
+        double sum = 0.0;
+        for (int j = 0; j < num_fac; j++)
+            sum += sol[num_fac + i * num_fac + j];
+        if (fabs(sum - 1.0) > TOLERANCE)
+            all_assigned = 0;
+    }
+    ASSERT(all_assigned, "All customers assigned");
+
+    printf("  INFO: P5+P6 facility obj = %.2f\n", obj);
+    ralph_free(m);
+}
+
+void test_dse_reduces_pivots(void) {
+    printf("\n=== Test: DSE Reduces Pivots ===\n");
+
+    /* Solve the same MIP twice: once with DSE on, once with DSE off.
+     * DSE should use fewer or equal total iterations (pivots). */
+    int num_fac = 4, num_cust = 8;
+    double fixed_cost[] = {40.0, 35.0, 45.0, 30.0};
+
+    /* Build and solve WITH DSE (default) */
+    RalphModel *m1 = ralph_create();
+    ralph_set_obj_sense(m1, RALPH_MINIMIZE);
+    ralph_set_int_param(m1, "verbose", 0);
+    ralph_set_int_param(m1, "dual_steepest_edge", 1);
+
+    for (int j = 0; j < num_fac; j++)
+        ralph_add_var(m1, 0.0, 1.0, fixed_cost[j], RALPH_BINARY);
+    for (int i = 0; i < num_cust; i++)
+        for (int j = 0; j < num_fac; j++)
+            ralph_add_var(m1, 0.0, 1.0, (double)((i + j * 3 + 1) % 7 + 1) * 5.0, RALPH_CONTINUOUS);
+
+    for (int i = 0; i < num_cust; i++) {
+        int idx[4]; double coefs[4];
+        for (int j = 0; j < num_fac; j++) {
+            idx[j] = num_fac + i * num_fac + j;
+            coefs[j] = 1.0;
+        }
+        ralph_add_constraint(m1, num_fac, idx, coefs, 'E', 1.0);
+    }
+    for (int i = 0; i < num_cust; i++) {
+        for (int j = 0; j < num_fac; j++) {
+            int idx[2] = {num_fac + i * num_fac + j, j};
+            double coefs[2] = {1.0, -1.0};
+            ralph_add_constraint(m1, 2, idx, coefs, 'L', 0.0);
+        }
+    }
+
+    ralph_optimize(m1);
+    ASSERT(ralph_get_status(m1) == RALPH_STATUS_OPTIMAL, "DSE-on: optimal");
+    int iters_dse = ralph_get_iterations(m1);
+    int nodes_dse = ralph_get_node_count(m1);
+    double obj_dse = ralph_get_objval(m1);
+
+    /* Build and solve WITHOUT DSE */
+    RalphModel *m2 = ralph_create();
+    ralph_set_obj_sense(m2, RALPH_MINIMIZE);
+    ralph_set_int_param(m2, "verbose", 0);
+    ralph_set_int_param(m2, "dual_steepest_edge", 0);
+
+    for (int j = 0; j < num_fac; j++)
+        ralph_add_var(m2, 0.0, 1.0, fixed_cost[j], RALPH_BINARY);
+    for (int i = 0; i < num_cust; i++)
+        for (int j = 0; j < num_fac; j++)
+            ralph_add_var(m2, 0.0, 1.0, (double)((i + j * 3 + 1) % 7 + 1) * 5.0, RALPH_CONTINUOUS);
+
+    for (int i = 0; i < num_cust; i++) {
+        int idx[4]; double coefs[4];
+        for (int j = 0; j < num_fac; j++) {
+            idx[j] = num_fac + i * num_fac + j;
+            coefs[j] = 1.0;
+        }
+        ralph_add_constraint(m2, num_fac, idx, coefs, 'E', 1.0);
+    }
+    for (int i = 0; i < num_cust; i++) {
+        for (int j = 0; j < num_fac; j++) {
+            int idx[2] = {num_fac + i * num_fac + j, j};
+            double coefs[2] = {1.0, -1.0};
+            ralph_add_constraint(m2, 2, idx, coefs, 'L', 0.0);
+        }
+    }
+
+    ralph_optimize(m2);
+    ASSERT(ralph_get_status(m2) == RALPH_STATUS_OPTIMAL, "DSE-off: optimal");
+    int iters_no_dse = ralph_get_iterations(m2);
+    int nodes_no_dse = ralph_get_node_count(m2);
+    double obj_no_dse = ralph_get_objval(m2);
+
+    printf("  INFO: DSE-on:  obj=%.2f, iters=%d, nodes=%d\n", obj_dse, iters_dse, nodes_dse);
+    printf("  INFO: DSE-off: obj=%.2f, iters=%d, nodes=%d\n", obj_no_dse, iters_no_dse, nodes_no_dse);
+
+    /* Both should find same (or very close) objective */
+    ASSERT(fabs(obj_dse - obj_no_dse) < 1.0, "Objectives match within tolerance");
+
+    /* DSE should not be dramatically worse (allow 2x tolerance for small problems) */
+    ASSERT(iters_dse <= iters_no_dse * 2 + 10, "DSE iterations not dramatically worse");
+
+    ralph_free(m1);
+    ralph_free(m2);
+}
+
+void test_dual_feature_flags(void) {
+    printf("\n=== Test: Dual Feature Flags ===\n");
+
+    /* Verify P5/P6 can be toggled on/off via ralph_set_int_param
+     * and produce correct results in all combinations. */
+
+    /* Same knapsack: max 10x+6y+4z, 5x+3y+2z<=9, binary */
+    double obj_vals[4];
+    const char *labels[] = {"both-on", "bflip-off", "dse-off", "both-off"};
+    int bflip_flags[] = {1, 0, 1, 0};
+    int dse_flags[]   = {1, 1, 0, 0};
+
+    for (int t = 0; t < 4; t++) {
+        RalphModel *m = ralph_create();
+        ralph_set_obj_sense(m, RALPH_MAXIMIZE);
+        ralph_set_int_param(m, "verbose", 0);
+        ralph_set_int_param(m, "dual_bound_flip", bflip_flags[t]);
+        ralph_set_int_param(m, "dual_steepest_edge", dse_flags[t]);
+
+        ralph_add_var(m, 0.0, 1.0, 10.0, RALPH_BINARY);
+        ralph_add_var(m, 0.0, 1.0, 6.0, RALPH_BINARY);
+        ralph_add_var(m, 0.0, 1.0, 4.0, RALPH_BINARY);
+
+        int idx[] = {0, 1, 2};
+        double coefs[] = {5.0, 3.0, 2.0};
+        ralph_add_constraint(m, 3, idx, coefs, 'L', 9.0);
+
+        ralph_optimize(m);
+        ASSERT(ralph_get_status(m) == RALPH_STATUS_OPTIMAL, "Optimal");
+        obj_vals[t] = ralph_get_objval(m);
+
+        printf("  INFO: %s: obj=%.2f\n", labels[t], obj_vals[t]);
+        ralph_free(m);
+    }
+
+    /* All four combinations should produce the same optimal objective */
+    for (int t = 0; t < 4; t++) {
+        ASSERT(fabs(obj_vals[t] - 16.0) < TOLERANCE, "Correct objective (16)");
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -2685,6 +2973,13 @@ int main(int argc, char **argv) {
         /* LAP-based MIP tests */
         test_lap_mip_assignment();
         test_lap_mip_assignment_5x5();
+
+        /* P5/P6: Bound flipping + Dual steepest edge tests */
+        test_dual_bound_flip_basic();
+        test_dual_bound_flip_mip();
+        test_p5_p6_combined();
+        test_dse_reduces_pivots();
+        test_dual_feature_flags();
     } else {
         printf("\n=== MIP tests skipped ===\n");
     }

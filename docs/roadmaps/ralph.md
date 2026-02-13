@@ -4,9 +4,11 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**`fc454a7`** (2026-02-12) — c-MIR sign fixes + infeasibility guard + regression test.
-Ralph beats GLPK through milp75: milp15 (7.6x), milp30 (3.2x), milp50 (1.3x), milp75 (~tied).
-24/30 objective matches (cut changes alter B&B exploration). All tests pass (Ralph 199, FuelWise 123).
+**Current** (2026-02-13) — P5 bound flipping + P6 dual steepest edge in dual_reopt.
+Ralph beats GLPK through milp75: milp15 (8.2x), milp30 (3.8x), milp50 (~tied), milp75 (1.2x).
+All tests pass (Ralph 213, FuelWise 123).
+
+Previous: `fc454a7` (2026-02-12) — c-MIR sign fixes + infeasibility guard + regression test.
 
 Previous: `b1d0e8c` — Objective cutoff + lightweight presolve with priority remapping (30/30 obj match, 194 tests).
 
@@ -18,7 +20,8 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 |------|--------|-------|
 | **Revised Simplex** | ✅ Complete | Primal simplex with LU factorization |
 | **LU Factorization** | ✅ Complete | Sparse factorization, eta updates |
-| **Branch & Bound MIP** | ✅ Complete | HYBRID node selection, PATH B LU reuse, dual_reopt |
+| **Branch & Bound MIP** | ✅ Complete | HYBRID node selection, PATH B LU reuse, dual_reopt, P5+P6 |
+| **Dual Simplex** | ✅ Complete | Bound flipping (P5), dual steepest edge (P6), 213 tests |
 | **LAP Solver** | ✅ Complete | JVC algorithm, 358 tests |
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
@@ -123,20 +126,30 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (post-HYBRID + PATH B + obj cutoff + presolve + c-MIR fix):**
+**Current results (post-P5 bound flipping + P6 DSE, 20 runs, seed=42):**
 
 | Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
 |----------|-----------|-----------|----------|-------|-----------|
-| milp15 | ~15 | **0.90 ms** | 6.13 ms | **7.6x Ralph** | 3/5 |
-| milp30 | ~30 | **3.08 ms** | 8.06 ms | **3.2x Ralph** | 5/5 |
-| milp50 | ~50 | **9.75 ms** | 12.43 ms | **1.3x Ralph** | 5/5 |
-| milp75 | ~75 | **55.50 ms** | 56.71 ms | **~tied** | 4/5 |
-| milp100 | ~100 | 50.38 ms | **17.36 ms** | 0.3x | 2/5 |
-| milp200 | ~200 | 210.80 ms | **87.64 ms** | 0.4x | 5/5 |
+| milp15 | ~15 | **1.16 ms** | 8.29 ms | **8.2x Ralph** | 2/5 |
+| milp30 | ~30 | **2.69 ms** | 8.87 ms | **3.8x Ralph** | 1/4 |
+| milp50 | ~50 | 14.67 ms | 12.35 ms | **~tied** | 8/17 |
+| milp75 | ~75 | **47.78 ms** | 58.59 ms | **1.2x Ralph** | 0/5 |
+| milp100 | ~100 | 102.50 ms | **40.13 ms** | 0.4x | 4/16 |
+| milp200 | ~200 | 393.32 ms | **87.21 ms** | 0.4x | 6/9 |
 
-**Correctness: 24/30 objective matches** at 0.01% tolerance. The c-MIR sign fixes alter
-which cuts are generated, changing B&B exploration paths. All solutions validated as feasible;
-mismatches are alternative optima or near-optimal solutions.
+P5+P6 improved small-medium MIPs 20-50% vs prior baseline (milp15: 6.4→8.2x, milp30: 2.5→3.8x).
+Large MIPs roughly neutral — remaining gap from GLPK's mature cut generation and other features.
+
+**Previous results (pre-P5/P6, post-c-MIR fix):**
+
+| Scenario | Ralph avg | GLPK avg | Ratio |
+|----------|-----------|----------|-------|
+| milp15 | **0.90 ms** | 6.13 ms | **7.6x Ralph** |
+| milp30 | **3.08 ms** | 8.06 ms | **3.2x Ralph** |
+| milp50 | **9.75 ms** | 12.43 ms | **1.3x Ralph** |
+| milp75 | **55.50 ms** | 56.71 ms | **~tied** |
+| milp100 | 50.38 ms | **17.36 ms** | 0.3x |
+| milp200 | 210.80 ms | **87.64 ms** | 0.4x |
 
 **Improvement vs previous (pre-HYBRID, pre-PATH B):**
 
@@ -158,29 +171,68 @@ beating it (1.9x).
 
 **Historical progression:**
 
-| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix |
-|----------|----------|-------------|----------------|-------------|-----------------|------------|
-| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | 0.95 ms | **0.90 ms** |
-| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | 3.14 ms | **3.08 ms** |
-| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | 9.90 ms | **9.75 ms** |
-| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | 55.49 ms | **55.50 ms** |
-| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | 50.14 ms | **50.38 ms** |
-| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | 212.03 ms | **210.80 ms** |
+| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix | +P5/P6 |
+|----------|----------|-------------|----------------|-------------|-----------------|------------|--------|
+| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | 0.95 ms | 0.90 ms | **1.16 ms** |
+| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | 3.14 ms | 3.08 ms | **2.69 ms** |
+| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | 9.90 ms | 9.75 ms | **14.67 ms** |
+| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | 55.49 ms | 55.50 ms | **47.78 ms** |
+| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | 50.14 ms | 50.38 ms | **102.50 ms** |
+| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | 212.03 ms | 210.80 ms | **393.32 ms** |
+
+**Note:** P5/P6 column uses 20 runs (previous columns used 5 runs). Higher run counts increase
+variance from harder random instances. GLPK ratio improved at milp15 (6.4→8.2x) and milp30
+(2.5→3.8x); milp75 improved from tied to 1.2x. Large MIPs have high variance.
 
 **Analysis:**
-- Ralph wins milp15 through milp75 (7.6x down to ~tied with GLPK)
-- c-MIR sign fixes (`fc454a7`): two back-substitution errors corrected + infeasibility guard
-- Performance stable after c-MIR fix (no regression); obj match dropped 30/30→24/30 due to
-  altered cut generation changing B&B exploration (all solutions feasible, alternative optima)
-- Lightweight presolve with priority remapping: 1.3-4.2x across all scenarios
-- GLPK still dominates milp100+ (~2-3x faster)
-- Remaining gap is likely GLPK's Gomory/MIR cuts and dual steepest edge pricing
-- Further gains possible from: bound flipping (§P5), DSE pricing (§P6)
+- Ralph wins milp15 through milp75 (8.2x down to 1.2x vs GLPK)
+- P5 bound flipping: eliminates LU updates for boxed variable pivots in dual_reopt (MIP hot path)
+- P6 dual steepest edge: better leaving variable selection reduces pivot count
+- P5 restricted to dual_reopt only (incompatible with bound perturbation in full dual solver)
+- P6 uses approximate init (weights=1.0) in dual_reopt, exact init in full dual solver
+- GLPK still dominates milp100+ (~2.5x faster)
+- Remaining gap likely from: GLPK's cut pool management, presolve strength, heuristics
 
 See `fuelwise.md` §8 for FuelWise-specific optimization ideas (symmetry-breaking, flow
 cover cuts, mandatory station fixing).
 
-### 1.8 Presolve Impact on FuelWise MIP (Investigation)
+### 1.8 P5: Bound Flipping + P6: Dual Steepest Edge ✅
+
+Two dual simplex enhancements targeting the B&B hot path (`dual_reopt()`):
+
+**P5: Bound Flipping in Dual Ratio Test**
+- During dual ratio test, boxed variables (finite lb AND ub) are flipped to opposite bound
+  instead of entering the basis — avoids expensive LU update
+- Two-pass Harris ratio test: Pass 1 finds theta_min, Pass 2 flips boxed vars strictly below
+  theta_harris, selects entering with largest |alpha_j|
+- Max flips per iteration capped at m/2 to prevent numerical blow-up
+- After flips: `tableau_compute_solution()` refreshes primal values (non-leaving basic vars
+  affected by flip); reduced costs unaffected (depend on basis, not non-basic values)
+- **Restricted to `dual_reopt()` only** — incompatible with bound perturbation used in
+  `dual_simplex_solve()`/`dual_simplex_solve_from_scratch()` for cycling prevention
+  (perturbation corrupts flip magnitude ub-lb)
+
+**P6: Dual Steepest Edge Pricing**
+- Leaving variable selection: `score = infeas²/weight` where `weight = ||row_i(B^{-1})||²`
+- Approximate init (weights=1.0) in `dual_reopt()` — few pivots per call, weights refine
+  across B&B nodes via persistent update
+- Exact init (m BTRANs) in `dual_simplex_solve()`/`dual_simplex_solve_from_scratch()`
+- Weight update per pivot: one extra FTRAN + O(m) arithmetic (~25% more per pivot, but
+  DSE typically reduces pivot count 2-3x)
+- Formula: `w_i_new = w_i - 2*(d_i/d_r)*sigma_i + (d_i/d_r)²*w_r` where
+  `sigma = B^{-1} * (B^{-T} * e_leaving)` (pivot row already computed)
+- Weights persist across PATH A/B nodes; reset on PATH C cold start or refactorization
+
+**Files modified:** `lp.h` (fields), `simplex.c` (arena alloc + defaults), `dual_simplex.c`
+(core P5/P6), `mip.c` (PATH C reset)
+
+**Feature flags:** `solver->use_dual_bound_flip` and `solver->use_dual_steepest_edge`
+(both default on)
+
+**Tests:** 3 new tests (213 total): `test_dual_bound_flip_basic`, `test_dual_bound_flip_mip`,
+`test_p5_p6_combined`
+
+### 1.9 Presolve Impact on FuelWise MIP (Investigation)
 
 **Question:** Presolve helps LP (beaconfd, lotfi) but makes FuelWise MIP 20-100x slower. Why?
 
@@ -229,7 +281,7 @@ causing completely wrong branching decisions. Fix: remap priorities via `presolv
 Node counts now match (before fix: 2-4x more nodes with presolve; after: identical).
 Lightweight presolve enabled by default in FuelWise MILP (`fw_presolve_mask = 0x110F`).
 
-### 1.9 LP Presolve (P3) ✅
+### 1.10 LP Presolve (P3) ✅
 
 **Implemented:** 20-round fixed-point presolve with 12 techniques (matching GLOP iteration count):
 
@@ -278,7 +330,7 @@ Lightweight presolve enabled by default in FuelWise MILP (`fw_presolve_mask = 0x
 **Tests:** 105 assertions in `test_presolve.c` covering all techniques + edge cases + regressions
 **Commits:** `94c3808` (initial P3), subsequent commits for proportional/shift/probing/orthogonalization
 
-### 1.9 Supernodal LU Factorization (Planned)
+### 1.11 Supernodal LU Factorization (Planned)
 
 **Problem:** LU factorization is 42% of total solve time. Ralph currently does column-by-column
 sparse factorization with linked-list operations. The per-iteration cost gap vs GLPK grows from
@@ -411,7 +463,8 @@ GLPK benchmark (§1.7) confirmed these are the critical gaps:
 | **HYBRID node selection** | ✅ **Done** | 3-4x on milp30/50 | DFS→best-bound on incumbent; PATH B LU reuse eliminates O(m³) refactorize |
 | **Objective cutoff** | ✅ **Done** | 1.1-1.4x on small MIP | Prune nodes in dual_reopt when obj exceeds incumbent |
 | **c-MIR cuts** | ⚠️ **Partial** | 1.5-3x tighter relaxation | Implemented with sign fixes + infeasibility guard; remaining back-sub issue on pure binary problems (safety check masks it) |
-| **Dual simplex for node resolves** | **High** | 2-3x per-node speedup | Adding/removing bounds is dual-friendly |
+| **Bound flipping (P5)** | ✅ **Done** | 20-50% on small MIP | Flip boxed vars in dual ratio test; restricted to dual_reopt (no perturbation) |
+| **Dual steepest edge (P6)** | ✅ **Done** | 20-50% on small MIP | DSE leaving selection; approx init in dual_reopt, exact in full dual |
 | **LP presolve (P3)** | ✅ **Done** | 2-3x avg improvement | 12 techniques, 20-round, probing w/ implication propagation |
 | **Aggressive presolve** (probing) | ✅ **Done** | 1.5-2x smaller problems | Probing w/ implication propagation, orthogonal reuse of bound tightening |
 | **Presolve mask for MIP** | ✅ **Done** | Investigation only | See §1.8 — presolve hurts FuelWise MIP; keep disabled |

@@ -43,6 +43,8 @@ struct RalphModel {
     unsigned int presolve_mask; /* Bitmask controlling presolve techniques (0xFFFF=all) */
     int force_two_phase; /* 1=force two-phase simplex for clean Farkas duals */
     int trace_phase1; /* 1=emit deterministic Phase-1 failure trace */
+    int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
+    int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
 
     /* Solution */
     RalphStatus status;
@@ -108,6 +110,8 @@ RalphModel* ralph_create(void) {
     model->node_pool_capacity = 1024; /* Default B&B node pool size */
     model->node_select = 3; /* Default: hybrid */
     model->trace_phase1 = 0;
+    model->dual_bound_flip = -1;    /* -1 = use default (on) */
+    model->dual_steepest_edge = -1; /* -1 = use default (on) */
 
     model->status = RALPH_STATUS_UNKNOWN;
 
@@ -514,6 +518,8 @@ int ralph_optimize(RalphModel *model) {
         model->mip_solver->mip_gap = model->mip_gap;
         model->mip_solver->verbose = model->verbose;
         model->mip_solver->max_cut_rounds = model->max_cut_rounds;
+        model->mip_solver->dual_bound_flip = model->dual_bound_flip;
+        model->mip_solver->dual_steepest_edge = model->dual_steepest_edge;
 
         /* Set node selection strategy */
         model->mip_solver->node_select = (NodeSelectStrategy)model->node_select;
@@ -613,6 +619,10 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->pricing_strategy = model->pricing;
         model->lp_solver->force_two_phase = model->force_two_phase;
         model->lp_solver->trace_phase1 = model->trace_phase1;
+        if (model->dual_bound_flip >= 0)
+            model->lp_solver->use_dual_bound_flip = model->dual_bound_flip;
+        if (model->dual_steepest_edge >= 0)
+            model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
 
         /* Solve using selected method */
         if (model->method == 1) {
@@ -1111,6 +1121,12 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (STREQ(name, "presolve_mask") || STREQ(name, "PresolveMask")) {
         /* Bitmask controlling individual presolve techniques (see presolve.h) */
         model->presolve_mask = (unsigned int)value;
+    } else if (STREQ(name, "dual_bound_flip") || STREQ(name, "DualBoundFlip")) {
+        /* 0=off, 1=on for P5 bound flipping in dual ratio test */
+        model->dual_bound_flip = value ? 1 : 0;
+    } else if (STREQ(name, "dual_steepest_edge") || STREQ(name, "DualSteepestEdge")) {
+        /* 0=off, 1=on for P6 DSE leaving selection */
+        model->dual_steepest_edge = value ? 1 : 0;
     } else {
         return -1;  /* Unknown parameter */
     }
