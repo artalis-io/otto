@@ -130,6 +130,184 @@ static int nx_compute_phone_normalize(const char **sources, int nsources,
     return 1;
 }
 
+/**
+ * zip_to_region - Map Hungarian ZIP code to postal region name
+ *
+ * Sources: [ZIP code string]
+ * Outputs: [region name]
+ *
+ * Hungarian ZIP first digit → region:
+ *   1 = Budapest, 2 = Pest, 3 = Northern Hungary,
+ *   4 = Northern Great Plain, 5 = Southern Great Plain,
+ *   6 = Bacs-Kiskun, 7 = Southern Transdanubia,
+ *   8 = Central/Western Transdanubia, 9 = Western Transdanubia
+ */
+static int nx_compute_zip_to_region(const char **sources, int nsources,
+                                     char outputs[][256], int max_outputs)
+{
+    if (nsources < 1 || max_outputs < 1) return -1;
+    if (!sources[0] || !sources[0][0]) return -1;
+
+    /* Validate: must be 4 digits, first digit 1-9 */
+    const char *zip = sources[0];
+    int len = 0;
+    for (const char *p = zip; *p; p++) {
+        if (!isdigit((unsigned char)*p)) {
+            snprintf(outputs[0], 256, "%s", zip);
+            return 1; /* Return as-is if not numeric */
+        }
+        len++;
+    }
+    if (len != 4) {
+        snprintf(outputs[0], 256, "%s", zip);
+        return 1;
+    }
+
+    static const char *regions[] = {
+        NULL,                           /* 0 - invalid */
+        "Budapest",                     /* 1xxx */
+        "Pest",                         /* 2xxx */
+        "Northern Hungary",             /* 3xxx */
+        "Northern Great Plain",         /* 4xxx */
+        "Southern Great Plain",         /* 5xxx */
+        "Bacs-Kiskun",                  /* 6xxx */
+        "Southern Transdanubia",        /* 7xxx */
+        "Central/Western Transdanubia", /* 8xxx */
+        "Western Transdanubia"          /* 9xxx */
+    };
+
+    int first = zip[0] - '0';
+    if (first < 1 || first > 9) {
+        snprintf(outputs[0], 256, "%s", zip);
+        return 1;
+    }
+
+    snprintf(outputs[0], 256, "%s", regions[first]);
+    return 1;
+}
+
+/**
+ * opening_hours_normalize - Normalize Hungarian opening hours to ISO format
+ *
+ * Sources: [Hungarian opening hours string]
+ * Outputs: [ISO-style opening hours]
+ *
+ * Input formats:
+ *   "H-P: 8-17"      → "Mo-Fr 08:00-17:00"
+ *   "H-Szo: 8:00-20" → "Mo-Sa 08:00-20:00"
+ *   "H-V: 0-24"      → "Mo-Su 00:00-24:00"
+ *
+ * Hungarian day abbreviations:
+ *   H=Monday, K=Tuesday, Sze=Wednesday, Cs=Thursday,
+ *   P=Friday, Szo=Saturday, V=Sunday
+ */
+static int nx_compute_opening_hours(const char **sources, int nsources,
+                                     char outputs[][256], int max_outputs)
+{
+    if (nsources < 1 || max_outputs < 1) return -1;
+    if (!sources[0] || !sources[0][0]) return -1;
+
+    const char *src = sources[0];
+
+    /* Hungarian day abbreviations → English ISO abbreviations */
+    typedef struct { const char *hu; int hu_len; const char *en; } DayMap;
+    static const DayMap days[] = {
+        {"Sze", 3, "We"}, {"Szo", 3, "Sa"}, /* 3-char first (greedy) */
+        {"Cs",  2, "Th"},
+        {"H",   1, "Mo"}, {"K",   1, "Tu"},
+        {"P",   1, "Fr"}, {"V",   1, "Su"},
+        {NULL,  0, NULL}
+    };
+
+    /* Try to find day-day range: look for "X-Y:" or "X-Y " */
+    const char *p = src;
+    while (*p == ' ') p++;
+
+    /* Parse start day */
+    const char *start_en = NULL;
+    for (int i = 0; days[i].hu; i++) {
+        if (strncmp(p, days[i].hu, (size_t)days[i].hu_len) == 0) {
+            start_en = days[i].en;
+            p += days[i].hu_len;
+            break;
+        }
+    }
+
+    if (!start_en) {
+        /* Can't parse, return as-is */
+        snprintf(outputs[0], 256, "%s", src);
+        return 1;
+    }
+
+    /* Expect '-' separator */
+    if (*p != '-') {
+        snprintf(outputs[0], 256, "%s", src);
+        return 1;
+    }
+    p++;
+
+    /* Parse end day */
+    const char *end_en = NULL;
+    for (int i = 0; days[i].hu; i++) {
+        if (strncmp(p, days[i].hu, (size_t)days[i].hu_len) == 0) {
+            end_en = days[i].en;
+            p += days[i].hu_len;
+            break;
+        }
+    }
+
+    if (!end_en) {
+        snprintf(outputs[0], 256, "%s", src);
+        return 1;
+    }
+
+    /* Skip ':' or ' ' separator to time part */
+    while (*p == ':' || *p == ' ') p++;
+
+    /* Parse start time (H, HH, H:MM, HH:MM) */
+    int start_h = 0, start_m = 0;
+    if (!isdigit((unsigned char)*p)) {
+        snprintf(outputs[0], 256, "%s", src);
+        return 1;
+    }
+    start_h = *p++ - '0';
+    if (isdigit((unsigned char)*p)) start_h = start_h * 10 + (*p++ - '0');
+    if (*p == ':') {
+        p++;
+        if (isdigit((unsigned char)*p)) {
+            start_m = *p++ - '0';
+            if (isdigit((unsigned char)*p)) start_m = start_m * 10 + (*p++ - '0');
+        }
+    }
+
+    /* Expect '-' */
+    if (*p != '-') {
+        snprintf(outputs[0], 256, "%s", src);
+        return 1;
+    }
+    p++;
+
+    /* Parse end time */
+    int end_h = 0, end_m = 0;
+    if (!isdigit((unsigned char)*p)) {
+        snprintf(outputs[0], 256, "%s", src);
+        return 1;
+    }
+    end_h = *p++ - '0';
+    if (isdigit((unsigned char)*p)) end_h = end_h * 10 + (*p++ - '0');
+    if (*p == ':') {
+        p++;
+        if (isdigit((unsigned char)*p)) {
+            end_m = *p++ - '0';
+            if (isdigit((unsigned char)*p)) end_m = end_m * 10 + (*p++ - '0');
+        }
+    }
+
+    snprintf(outputs[0], 256, "%s-%s %02d:%02d-%02d:%02d",
+             start_en, end_en, start_h, start_m, end_h, end_m);
+    return 1;
+}
+
 /* ========================================================================
  * Registry
  * ======================================================================== */
@@ -144,6 +322,8 @@ static const NxComputeEntry nx_compute_registry[] = {
     {"dms_to_dd", nx_compute_dms_to_dd},
     {"coalesce", nx_compute_coalesce},
     {"phone_normalize", nx_compute_phone_normalize},
+    {"zip_to_region", nx_compute_zip_to_region},
+    {"opening_hours", nx_compute_opening_hours},
     {NULL, NULL}  /* Sentinel */
 };
 
