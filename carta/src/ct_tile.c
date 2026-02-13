@@ -491,9 +491,12 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
     int min = -buffer;
     int max = extent + buffer;
 
-    /* Allocate temporary buffers */
-    CTTilePoint *input = malloc(num_points * 4 * sizeof(CTTilePoint));
-    CTTilePoint *output = malloc(num_points * 4 * sizeof(CTTilePoint));
+    /* Allocate temporary buffers.
+     * Each Sutherland-Hodgman pass can at most double the point count
+     * (every edge crosses the clip boundary). With 4 passes: up to 16x. */
+    int buf_size = num_points * 8 + 16;
+    CTTilePoint *input = malloc(buf_size * sizeof(CTTilePoint));
+    CTTilePoint *output = malloc(buf_size * sizeof(CTTilePoint));
     if (!input || !output) {
         free(input);
         free(output);
@@ -533,40 +536,42 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
 
             if (curr_inside) {
                 if (!prev_inside) {
-                    /* Compute intersection - use floor() for consistent rounding,
-                     * then clamp to clip bounds to handle floating-point precision */
+                    /* Compute intersection with clip edge.
+                     * Since all clip edges are axis-aligned, snap the on-axis
+                     * coordinate exactly to avoid floor() rounding errors.
+                     * The cross-axis coordinate is left unclamped — subsequent
+                     * passes will clip it correctly. */
                     double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
-                    if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
+                    if (fabs(denom) > 1e-10) {
                         double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
                         int ix = (int)floor(prev.x + t * (curr.x - prev.x));
                         int iy = (int)floor(prev.y + t * (curr.y - prev.y));
-                        /* Clamp to clip bounds */
-                        if (ix < min) ix = min;
-                        if (ix > max) ix = max;
-                        if (iy < min) iy = min;
-                        if (iy > max) iy = max;
+                        /* Snap on-axis coordinate to exact edge value */
+                        if (x1 == x2) ix = x1;  /* Vertical edge */
+                        if (y1 == y2) iy = y1;  /* Horizontal edge */
+                        if (output_count < buf_size) {
+                            output[output_count].x = ix;
+                            output[output_count].y = iy;
+                            output_count++;
+                        }
+                    }
+                }
+                if (output_count < buf_size) {
+                    output[output_count++] = curr;
+                }
+            } else if (prev_inside) {
+                double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
+                if (fabs(denom) > 1e-10) {
+                    double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
+                    int ix = (int)floor(prev.x + t * (curr.x - prev.x));
+                    int iy = (int)floor(prev.y + t * (curr.y - prev.y));
+                    if (x1 == x2) ix = x1;
+                    if (y1 == y2) iy = y1;
+                    if (output_count < buf_size) {
                         output[output_count].x = ix;
                         output[output_count].y = iy;
                         output_count++;
                     }
-                }
-                output[output_count++] = curr;
-            } else if (prev_inside) {
-                /* Compute intersection - use floor() for consistent rounding,
-                 * then clamp to clip bounds to handle floating-point precision */
-                double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
-                if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
-                    double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
-                    int ix = (int)floor(prev.x + t * (curr.x - prev.x));
-                    int iy = (int)floor(prev.y + t * (curr.y - prev.y));
-                    /* Clamp to clip bounds */
-                    if (ix < min) ix = min;
-                    if (ix > max) ix = max;
-                    if (iy < min) iy = min;
-                    if (iy > max) iy = max;
-                    output[output_count].x = ix;
-                    output[output_count].y = iy;
-                    output_count++;
                 }
             }
 
@@ -574,7 +579,7 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
         }
 
         /* Remove consecutive duplicate points (within ±1 unit tolerance).
-         * Clamping intersection points to clip bounds can create duplicates
+         * Floor rounding of intersection points can create near-duplicates
          * that confuse the scanline fill's even-odd rule. */
         int deduped_count = 0;
         for (int i = 0; i < output_count; i++) {
@@ -628,8 +633,9 @@ static int clip_ring_to_buffer(const CTTilePoint *points, int ring_start, int ri
 {
     if (ring_count < 3) return 0;
 
-    /* Allocate temporary buffers for this ring (4x for potential growth) */
-    int buf_size = ring_count * 4;
+    /* Allocate temporary buffers for this ring.
+     * Each Sutherland-Hodgman pass can at most double the point count. */
+    int buf_size = ring_count * 8 + 16;
     CTTilePoint *input = malloc(buf_size * sizeof(CTTilePoint));
     CTTilePoint *output = malloc(buf_size * sizeof(CTTilePoint));
     if (!input || !output) {
@@ -670,16 +676,14 @@ static int clip_ring_to_buffer(const CTTilePoint *points, int ring_start, int ri
 
             if (curr_inside) {
                 if (!prev_inside) {
-                    /* Compute intersection - use floor() then clamp to bounds */
+                    /* Compute intersection — snap on-axis coordinate exactly. */
                     double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
                     if (fabs(denom) > 1e-10 && output_count < buf_size) {
                         double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
                         int ix = (int)floor(prev.x + t * (curr.x - prev.x));
                         int iy = (int)floor(prev.y + t * (curr.y - prev.y));
-                        if (ix < min) ix = min;
-                        if (ix > max) ix = max;
-                        if (iy < min) iy = min;
-                        if (iy > max) iy = max;
+                        if (x1 == x2) ix = x1;
+                        if (y1 == y2) iy = y1;
                         output[output_count].x = ix;
                         output[output_count].y = iy;
                         output_count++;
@@ -689,16 +693,13 @@ static int clip_ring_to_buffer(const CTTilePoint *points, int ring_start, int ri
                     output[output_count++] = curr;
                 }
             } else if (prev_inside) {
-                /* Compute intersection - use floor() then clamp to bounds */
                 double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
                 if (fabs(denom) > 1e-10 && output_count < buf_size) {
                     double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
                     int ix = (int)floor(prev.x + t * (curr.x - prev.x));
                     int iy = (int)floor(prev.y + t * (curr.y - prev.y));
-                    if (ix < min) ix = min;
-                    if (ix > max) ix = max;
-                    if (iy < min) iy = min;
-                    if (iy > max) iy = max;
+                    if (x1 == x2) ix = x1;
+                    if (y1 == y2) iy = y1;
                     output[output_count].x = ix;
                     output[output_count].y = iy;
                     output_count++;
@@ -709,7 +710,7 @@ static int clip_ring_to_buffer(const CTTilePoint *points, int ring_start, int ri
         }
 
         /* Remove consecutive duplicate points (within ±1 unit tolerance).
-         * Clamping intersection points to clip bounds can create duplicates
+         * Floor rounding of intersection points can create near-duplicates
          * that confuse the scanline fill's even-odd rule. */
         int deduped_count = 0;
         for (int i = 0; i < output_count; i++) {

@@ -232,18 +232,18 @@ static int classify_landuse(const char *value)
     if (strcmp(value, "industrial") == 0) {
         return CT_LANDUSE_INDUSTRIAL;
     }
-    /* Farmland and agricultural */
+    /* Farmland and agricultural (rendered very subtly or not at all) */
     if (strcmp(value, "farmland") == 0 ||
-        strcmp(value, "meadow") == 0 ||
-        strcmp(value, "farmyard") == 0 ||
-        strcmp(value, "orchard") == 0 ||
-        strcmp(value, "vineyard") == 0) {
+        strcmp(value, "farmyard") == 0) {
         return CT_LANDUSE_FARMLAND;
     }
-    /* Grass and village greens */
+    /* Grass, meadows, and village greens (rendered as green) */
     if (strcmp(value, "grass") == 0 ||
+        strcmp(value, "meadow") == 0 ||
         strcmp(value, "village_green") == 0 ||
-        strcmp(value, "recreation_ground") == 0) {
+        strcmp(value, "recreation_ground") == 0 ||
+        strcmp(value, "orchard") == 0 ||
+        strcmp(value, "vineyard") == 0) {
         return CT_LANDUSE_GRASS;
     }
     /* Cemeteries */
