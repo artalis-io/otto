@@ -867,9 +867,13 @@ static int pdf_parse_classic_xref(ShPdf2strucCtx *ctx, size_t offset)
 
         int start = (int)start_obj->int_val;
         int count = (int)count_obj->int_val;
-        if (count < 0 || count > PDF_MAX_XREF_SIZE) break;
+        if (start < 0 || count < 0 || count > PDF_MAX_XREF_SIZE) break;
 
-        /* Expand xref table if needed */
+        /* Expand xref table if needed; check for integer overflow */
+        if (start > PDF_MAX_OBJECTS - count) {
+            pdf_set_error(ctx, "xref subsection overflow: %d + %d", start, count);
+            return -1;
+        }
         int needed = start + count;
         if (needed > ctx->xref_size) {
             if (needed > PDF_MAX_OBJECTS) {
