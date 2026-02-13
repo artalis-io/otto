@@ -2617,6 +2617,117 @@ void test_node_selection_strategies(void) {
 }
 
 /* ============================================================================
+ * P5/P6: Bound Flipping + Dual Steepest Edge Tests
+ * ============================================================================ */
+
+void test_p5p6_no_false_infeasibility(void) {
+    printf("\n=== Test: P5/P6 No False Infeasibility ===\n");
+
+    /* Facility location MIP that is known feasible.
+     * 6 facilities, 12 customers. Solve 10 times with perturbations.
+     * Regression test: P5/P6 must never declare this INFEASIBLE. */
+    int num_fac = 6, num_cust = 12;
+    double fixed_cost[] = {30.0, 25.0, 35.0, 20.0, 40.0, 28.0};
+    double base_assign[6][12] = {
+        {8,6,7,5,9,4,6,8,5,7,3,9},
+        {5,7,6,8,4,9,7,5,8,6,4,3},
+        {6,5,8,7,3,6,4,9,7,5,8,6},
+        {7,4,5,6,8,3,9,6,4,7,5,8},
+        {4,8,3,9,6,7,5,4,6,8,7,5},
+        {9,3,4,8,5,6,8,7,3,4,6,7}
+    };
+
+    int all_optimal = 1;
+    for (int trial = 0; trial < 10; trial++) {
+        RalphModel *m = ralph_create();
+        ralph_set_obj_sense(m, RALPH_MINIMIZE);
+
+        /* y_j: facility open vars (binary) */
+        for (int j = 0; j < num_fac; j++) {
+            double cost = fixed_cost[j] + (trial * 3 + j) % 5;
+            ralph_add_var(m, 0.0, 1.0, cost, RALPH_BINARY);
+        }
+
+        /* x_ij: assignment vars (continuous [0,1]) */
+        for (int i = 0; i < num_cust; i++) {
+            for (int j = 0; j < num_fac; j++) {
+                double cost = base_assign[j][i] + (double)((trial * 7 + i + j) % 4);
+                ralph_add_var(m, 0.0, 1.0, cost, RALPH_CONTINUOUS);
+            }
+        }
+
+        /* Each customer assigned to exactly one facility */
+        for (int i = 0; i < num_cust; i++) {
+            int idx[6];
+            double coefs[6];
+            for (int j = 0; j < num_fac; j++) {
+                idx[j] = num_fac + i * num_fac + j;
+                coefs[j] = 1.0;
+            }
+            ralph_add_constraint(m, num_fac, idx, coefs, 'E', 1.0);
+        }
+
+        /* Linking: x_ij <= y_j */
+        for (int i = 0; i < num_cust; i++) {
+            for (int j = 0; j < num_fac; j++) {
+                int idx[2] = {num_fac + i * num_fac + j, j};
+                double coefs[2] = {1.0, -1.0};
+                ralph_add_constraint(m, 2, idx, coefs, 'L', 0.0);
+            }
+        }
+
+        ralph_optimize(m);
+        int status = ralph_get_status(m);
+        if (status != RALPH_STATUS_OPTIMAL) {
+            printf("  TRIAL %d: got status %d (expected OPTIMAL)\n", trial, status);
+            all_optimal = 0;
+        }
+        ralph_free(m);
+    }
+
+    ASSERT(all_optimal, "P5/P6: all 10 trials OPTIMAL (no false infeasibility)");
+}
+
+void test_p5p6_flags(void) {
+    printf("\n=== Test: P5/P6 Flags ===\n");
+
+    /* Verify P5/P6 can be toggled via ralph_set_int_param and produce
+     * correct results in all 4 combinations. */
+    double obj_vals[4];
+    const char *labels[] = {"both-on", "bflip-off", "dse-off", "both-off"};
+    int bflip_flags[] = {1, 0, 1, 0};
+    int dse_flags[]   = {1, 1, 0, 0};
+
+    for (int t = 0; t < 4; t++) {
+        RalphModel *m = ralph_create();
+        ralph_set_obj_sense(m, RALPH_MAXIMIZE);
+        ralph_set_int_param(m, "verbose", 0);
+        ralph_set_int_param(m, "dual_bound_flip", bflip_flags[t]);
+        ralph_set_int_param(m, "dual_steepest_edge", dse_flags[t]);
+
+        ralph_add_var(m, 0.0, 1.0, 10.0, RALPH_BINARY);
+        ralph_add_var(m, 0.0, 1.0, 6.0, RALPH_BINARY);
+        ralph_add_var(m, 0.0, 1.0, 4.0, RALPH_BINARY);
+
+        int idx[] = {0, 1, 2};
+        double coefs[] = {5.0, 3.0, 2.0};
+        ralph_add_constraint(m, 3, idx, coefs, 'L', 9.0);
+
+        ralph_optimize(m);
+        ASSERT(ralph_get_status(m) == RALPH_STATUS_OPTIMAL, "Optimal");
+        obj_vals[t] = ralph_get_objval(m);
+
+        printf("  INFO: %s: obj=%.2f\n", labels[t], obj_vals[t]);
+        ralph_free(m);
+    }
+
+    /* All four combinations should produce the same optimal objective */
+    for (int t = 0; t < 4; t++) {
+        ASSERT(fabs(obj_vals[t] - 16.0) < TOLERANCE, "Correct objective (16)");
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -2685,6 +2796,10 @@ int main(int argc, char **argv) {
         /* LAP-based MIP tests */
         test_lap_mip_assignment();
         test_lap_mip_assignment_5x5();
+
+        /* P5/P6: Bound flipping + Dual steepest edge tests */
+        test_p5p6_no_false_infeasibility();
+        test_p5p6_flags();
     } else {
         printf("\n=== MIP tests skipped ===\n");
     }
