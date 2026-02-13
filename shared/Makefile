@@ -59,7 +59,9 @@ SRCS = src/sh_geo.c \
        src/sh_piecewise.c \
        src/sh_stepfunc.c \
        src/sh_dist.c \
-       src/sh_json.c
+       src/sh_json.c \
+       src/sh_xml.c \
+       src/sh_hash_sha256.c
 
 # HTTP server components (requires mongoose - compile separately by API servers)
 # API servers should compile sh_httpserver.c directly with mongoose includes.
@@ -82,8 +84,10 @@ LIB = libshared.a
 TEST_BIN = test_shared
 TEST_FONT_BIN = test_font
 TEST_JSON_BIN = test_sh_json
+TEST_XML_BIN = test_xml
+TEST_SHA256_BIN = test_sha256
 
-.PHONY: all clean test test-font test-json font-compare lib debug generate-font-data
+.PHONY: all clean test test-font test-json test-xml test-sha256 font-compare lib debug generate-font-data
 
 # Default target
 all: lib $(TEST_BIN)
@@ -111,15 +115,31 @@ $(TEST_FONT_BIN): tests/test_font.c $(LIB)
 $(TEST_JSON_BIN): tests/test_sh_json.c $(LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
 
+$(TEST_XML_BIN): tests/test_xml.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+
+$(TEST_SHA256_BIN): tests/test_sha256.c $(LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lshared $(LDFLAGS) -o $@
+
 # Run all tests
-test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN)
+test: $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_SHA256_BIN)
 	./$(TEST_BIN)
 	./$(TEST_FONT_BIN)
 	./$(TEST_JSON_BIN)
+	./$(TEST_XML_BIN)
+	./$(TEST_SHA256_BIN)
 
 # Run JSON tests only
 test-json: $(TEST_JSON_BIN)
 	./$(TEST_JSON_BIN)
+
+# Run XML tests only
+test-xml: $(TEST_XML_BIN)
+	./$(TEST_XML_BIN)
+
+# Run SHA-256 tests only
+test-sha256: $(TEST_SHA256_BIN)
+	./$(TEST_SHA256_BIN)
 
 # Run font tests only
 test-font: $(TEST_FONT_BIN)
@@ -149,7 +169,7 @@ debug: clean all
 
 # Clean
 clean:
-	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(FONT_COMPARE_BIN)
+	rm -f $(OBJS) $(MINIZ_OBJS) $(LIB) $(TEST_BIN) $(TEST_FONT_BIN) $(TEST_JSON_BIN) $(TEST_XML_BIN) $(TEST_SHA256_BIN) $(FONT_COMPARE_BIN)
 	rm -f tests/soft_*.png tests/compare.html
 
 # Dependencies
@@ -181,6 +201,8 @@ src/sh_render.o: include/sh_render.h
 src/sh_units.o: include/sh_units.h
 src/sh_polyline.o: include/sh_polyline.h include/sh_geo.h
 src/sh_json.o: include/sh_json.h include/sh_arena.h
+src/sh_xml.o: include/sh_xml.h include/sh_arena.h
+src/sh_hash_sha256.o: include/sh_hash_sha256.h
 
 # Help
 help:
