@@ -4,11 +4,12 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-13) — P5 bound flipping + P6 dual steepest edge in dual_reopt.
-Ralph beats GLPK through milp75: milp15 (8.2x), milp30 (3.8x), milp50 (~tied), milp75 (1.2x).
-All tests pass (Ralph 213, FuelWise 123).
+**Current** `fc454a7` (2026-02-12) — c-MIR sign fixes + infeasibility guard + regression test.
+All tests pass (Ralph 199, FuelWise 123). MILP benchmarks 100/100 (milp30, milp75, milp100).
 
-Previous: `fc454a7` (2026-02-12) — c-MIR sign fixes + infeasibility guard + regression test.
+Reverted: `7c6ce0f` P5 bound flipping + P6 dual steepest edge — introduced false infeasibility
+in FuelWise MILP benchmarks (14-22% failure rate). Diving heuristic corrupts dual simplex
+state, propagating into B&B tree. Needs rework before re-landing.
 
 Previous: `b1d0e8c` — Objective cutoff + lightweight presolve with priority remapping (30/30 obj match, 194 tests).
 

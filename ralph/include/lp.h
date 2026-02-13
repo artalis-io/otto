@@ -249,14 +249,6 @@ typedef struct {
     int pricing_strategy;   /* 0=Dantzig, 1=SE, 2=Devex, 3=Partial - for pivot fn */
     int devex_refcount;     /* Reference count for Devex weight resets */
 
-    /* Dual steepest edge weights (P6) */
-    double *dse_weights;     /* Size m: ||row_i(B^{-1})||^2 per basis position */
-    int dse_initialized;     /* 1 = weights valid, 0 = need init */
-
-    /* Bound flipping scratch (P5) */
-    int *flip_list;          /* Size n: indices of flipped vars this iteration */
-    int flip_count;          /* Number of flips this iteration */
-
     /* Bound perturbation backup (for dual simplex anti-cycling) */
     double *perturb_backup; /* Original upper bounds before perturbation */
 
@@ -368,10 +360,6 @@ typedef struct {
 
     /* Objective cutoff for early termination in dual_reopt (internal objective) */
     double objective_cutoff;
-
-    /* Dual simplex enhancements */
-    int use_dual_bound_flip;    /* 0=off, 1=on (default 1) */
-    int use_dual_steepest_edge; /* 0=off, 1=on (default 1) */
 
 } SimplexSolver;
 
