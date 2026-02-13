@@ -127,14 +127,16 @@ Transform schemas live in `schemas/`. Format (v2 with multi-transforms):
 
 ## CLI Tools
 
-Build with `make tools`:
+Build C tools with `make tools`. Python tools require `pip install anthropic`.
 
-| Tool | Purpose |
-|------|---------|
-| `nx_pipeline` | **Main tool**: end-to-end pipeline (XLSX/PDF/CSV → raw/canonical JSON) |
-| `nx_run` | Stage A only: XLSX/PDF-JSON/CSV → raw JSON |
-| `nx_pdf_run` | PDF clustering: text-run JSON → raw JSON (with --row-tol, --col-gap) |
-| `nx_xform_run` | Stage B only: raw JSON + schema → canonical JSON |
+| Tool | Language | Purpose |
+|------|----------|---------|
+| `nx_pipeline` | C | **Main tool**: end-to-end pipeline (XLSX/PDF/CSV → raw/canonical JSON) |
+| `nx_run` | C | Stage A only: XLSX/PDF-JSON/CSV → raw JSON |
+| `nx_pdf_run` | C | PDF clustering: text-run JSON → raw JSON (with --row-tol, --col-gap) |
+| `nx_xform_run` | C | Stage B only: raw JSON + schema → canonical JSON |
+| `nx_schema_gen.py` | Python | LLM schema generation (Claude ensemble, confidence scores) |
+| `nx_schema_review.py` | Python | Interactive schema review/approve/edit |
 
 ## Pipeline Runner (`nx_pipeline`)
 
@@ -187,3 +189,28 @@ No external dependencies required (Python/pdfplumber no longer needed).
 - `col_gap_min ≈ 3.0 * median_text_height`
 
 **CSV delimiter:** When no `--delimiter` is specified, `sh_csv` auto-detects from the first line (supports `,`, `;`, `\t`, `|`).
+
+## LLM Schema Generation
+
+For new document types where manual schema writing is tedious, use LLM-assisted generation:
+
+```bash
+# 1. Extract raw JSON from the document
+./nx_pipeline input.xlsx --raw > raw.json
+
+# 2. Generate draft schema with Claude (requires ANTHROPIC_API_KEY)
+python3 tools/nx_schema_gen.py raw.json --runs 5 -o draft.json
+
+# 3. Review and approve the draft interactively
+python3 tools/nx_schema_review.py draft.json --output schemas/
+
+# 4. Run pipeline with the approved schema
+./nx_pipeline input.xlsx --schema schemas/approved-v1.json
+```
+
+**Design principles:**
+- LLM generates, human approves — never auto-apply a generated schema
+- Ensemble voting (5 runs by default) with per-field confidence scores
+- Structured output via Claude tool_use for guaranteed valid JSON
+- Few-shot prompting from `schemas/examples/` directory
+- Versioned output: `{domain}-{region}-{entity}-v{N}`
