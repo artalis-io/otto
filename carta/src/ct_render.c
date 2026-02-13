@@ -1523,25 +1523,56 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
                                   b->admin_level, coord.z,
                                   &color, &width, &dash, &gap);
 
-                /* Allocate tile points for this boundary */
+                /* Convert lat/lon to fixed-point and batch transform (LUT, no trig) */
                 CTTilePoint *pts = malloc(b->num_coords * sizeof(CTTilePoint));
                 if (!pts) continue;
 
-                /* Transform lat/lon to tile pixel coordinates */
                 for (int j = 0; j < b->num_coords; j++) {
-                    int px, py;
-                    ct_latlon_to_tile_pixel(b->coords[j].lat, b->coords[j].lon,
-                                           coord, ctx->width, &px, &py);
-                    pts[j].x = px;
-                    pts[j].y = py;
+                    pts[j].x = (int32_t)(b->coords[j].lon * 1e7);
+                    pts[j].y = (int32_t)(b->coords[j].lat * 1e7);
                 }
+                ct_batch_transform_points(coord, ctx->width, pts, b->num_coords);
 
-                /* Render the boundary - dashed or solid based on options */
-                if (ctx->options.render_boundary_dashes && dash > 0.0f) {
-                    ct_render_polyline_dashed(ctx, pts, b->num_coords,
-                                              color, width, dash, gap);
-                } else {
-                    ct_render_polyline(ctx, pts, b->num_coords, color, width);
+                /* Render only segments near the tile (skip distant parts of
+                 * country-scale boundaries that span tens of thousands of points).
+                 * margin = 2x tile size to avoid clipping visible segments. */
+                int margin = ctx->width * 2;
+                int lo = -margin, hi_x = ctx->width + margin, hi_y = ctx->height + margin;
+                int run_start = -1;
+
+                for (int j = 0; j < b->num_coords; j++) {
+                    int near = (pts[j].x >= lo && pts[j].x <= hi_x &&
+                                pts[j].y >= lo && pts[j].y <= hi_y);
+                    if (near) {
+                        /* Include previous point for continuity */
+                        if (run_start < 0)
+                            run_start = (j > 0) ? j - 1 : 0;
+                    } else if (run_start >= 0) {
+                        /* End of visible run — include this point for last segment */
+                        int run_end = j + 1;
+                        int run_len = run_end - run_start;
+                        if (run_len >= 2) {
+                            if (ctx->options.render_boundary_dashes && dash > 0.0f) {
+                                ct_render_polyline_dashed(ctx, pts + run_start, run_len,
+                                                          color, width, dash, gap);
+                            } else {
+                                ct_render_polyline(ctx, pts + run_start, run_len, color, width);
+                            }
+                        }
+                        run_start = -1;
+                    }
+                }
+                /* Flush final run */
+                if (run_start >= 0) {
+                    int run_len = b->num_coords - run_start;
+                    if (run_len >= 2) {
+                        if (ctx->options.render_boundary_dashes && dash > 0.0f) {
+                            ct_render_polyline_dashed(ctx, pts + run_start, run_len,
+                                                      color, width, dash, gap);
+                        } else {
+                            ct_render_polyline(ctx, pts + run_start, run_len, color, width);
+                        }
+                    }
                 }
 
                 free(pts);
