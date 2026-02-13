@@ -3,6 +3,8 @@
  */
 
 #include "nx_xlsx.h"
+#include "nx_pdf.h"
+#include "nx_ingest.h"
 #include "sh_json.h"
 #include "sh_arena.h"
 #include "sh_hash_sha256.h"
@@ -46,6 +48,26 @@ static int tests_passed = 0;
         exit(1); \
     } \
 } while (0)
+
+/* ============================================================================
+ * PDF Text-Run Fixture (inline)
+ * ============================================================================ */
+
+static const char PDF_FIXTURE[] =
+    "{\"pages\":[{\"page\":1,\"width\":595.0,\"height\":842.0,\"texts\":["
+    "{\"text\":\"City\",\"x\":50.0,\"y\":100.0,\"w\":40.0,\"h\":12.0},"
+    "{\"text\":\"Name\",\"x\":150.0,\"y\":100.0,\"w\":50.0,\"h\":12.0},"
+    "{\"text\":\"Lat\",\"x\":300.0,\"y\":100.0,\"w\":30.0,\"h\":12.0},"
+    "{\"text\":\"Lon\",\"x\":400.0,\"y\":100.0,\"w\":30.0,\"h\":12.0},"
+    "{\"text\":\"Budapest\",\"x\":50.0,\"y\":120.0,\"w\":70.0,\"h\":12.0},"
+    "{\"text\":\"Depot #1\",\"x\":150.0,\"y\":120.0,\"w\":60.0,\"h\":12.0},"
+    "{\"text\":\"47.4799\",\"x\":300.0,\"y\":120.0,\"w\":50.0,\"h\":12.0},"
+    "{\"text\":\"19.0700\",\"x\":400.0,\"y\":120.0,\"w\":50.0,\"h\":12.0},"
+    "{\"text\":\"Debrecen\",\"x\":50.0,\"y\":140.0,\"w\":70.0,\"h\":12.0},"
+    "{\"text\":\"Depot #2\",\"x\":150.0,\"y\":140.0,\"w\":60.0,\"h\":12.0},"
+    "{\"text\":\"47.5316\",\"x\":300.0,\"y\":140.0,\"w\":50.0,\"h\":12.0},"
+    "{\"text\":\"21.6273\",\"x\":400.0,\"y\":140.0,\"w\":50.0,\"h\":12.0}"
+    "]}]}";
 
 /* ============================================================================
  * XLSX Parser Tests
@@ -324,6 +346,252 @@ TEST(xlsx_warnings_empty)
 }
 
 /* ============================================================================
+ * PDF Table Reconstructor Tests
+ * ============================================================================ */
+
+/* PDF parser pre-allocates MAX_TEXT_RUNS (16384) slots + row clusters,
+ * needs ~1.1 MB of arena space */
+#define PDF_ARENA_SIZE (2 * 1024 * 1024)
+
+TEST(pdf_null_input)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+    NxPdfStatus s = nx_pdf_extract_tables(NULL, 0, NULL, NULL, arena, &json, &json_len);
+    ASSERT_EQ(s, NX_PDF_ERR_NULL);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_invalid_json)
+{
+    const char *garbage = "not json at all";
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+    NxPdfStatus s = nx_pdf_extract_tables(garbage, strlen(garbage), NULL, "test.pdf",
+                                           arena, &json, &json_len);
+    ASSERT_EQ(s, NX_PDF_ERR_JSON);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_empty_texts)
+{
+    const char *empty = "{\"pages\":[{\"page\":1,\"width\":595,\"height\":842,\"texts\":[]}]}";
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+    NxPdfStatus s = nx_pdf_extract_tables(empty, strlen(empty), NULL, "empty.pdf",
+                                           arena, &json, &json_len);
+    ASSERT_EQ(s, NX_PDF_ERR_NO_TEXT);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_basic_parse)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+
+    NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                                           NULL, "sample.pdf",
+                                           arena, &json, &json_len);
+    ASSERT_EQ(s, NX_PDF_OK);
+    ASSERT(json != NULL);
+    ASSERT(json_len > 0);
+
+    /* Parse output */
+    SHArena *pa = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ASSERT_EQ(sh_json_as_int(sh_json_get(root, "nx_raw"), -1), 1);
+
+    ShJsonValue *source = sh_json_get(root, "source");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(source, "filename"), ""), "sample.pdf");
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(source, "format"), ""), "pdf");
+
+    /* SHA-256 should be 64 hex chars */
+    const char *sha = sh_json_as_string(sh_json_get(source, "sha256"), "");
+    ASSERT_EQ(strlen(sha), 64);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_headers)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+
+    nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                          NULL, "sample.pdf", arena, &json, &json_len);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    ShJsonValue *headers = sh_json_get(t0, "headers");
+    ASSERT_EQ(sh_json_array_len(headers), 4);
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 0), ""), "City");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 1), ""), "Name");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 2), ""), "Lat");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(headers, 3), ""), "Lon");
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_rows)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+
+    nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                          NULL, "sample.pdf", arena, &json, &json_len);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    ShJsonValue *rows = sh_json_get(t0, "rows");
+    ASSERT_EQ(sh_json_array_len(rows), 2);
+    ASSERT_EQ(sh_json_as_int(sh_json_get(t0, "row_count"), -1), 2);
+    ASSERT_EQ(sh_json_as_int(sh_json_get(t0, "col_count"), -1), 4);
+
+    /* Row 0: Budapest */
+    ShJsonValue *r0 = sh_json_array_get(rows, 0);
+    ShJsonValue *cells0 = sh_json_get(r0, "cells");
+    ASSERT_EQ(sh_json_array_len(cells0), 4);
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 0), ""), "Budapest");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 1), ""), "Depot #1");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 2), ""), "47.4799");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells0, 3), ""), "19.0700");
+
+    /* Row 1: Debrecen */
+    ShJsonValue *r1 = sh_json_array_get(rows, 1);
+    ShJsonValue *cells1 = sh_json_get(r1, "cells");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells1, 0), ""), "Debrecen");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells1, 1), ""), "Depot #2");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells1, 2), ""), "47.5316");
+    ASSERT_STREQ(sh_json_as_string(sh_json_array_get(cells1, 3), ""), "21.6273");
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_deterministic)
+{
+    SHArena *a1 = sh_arena_create(PDF_ARENA_SIZE);
+    SHArena *a2 = sh_arena_create(PDF_ARENA_SIZE);
+    char *j1 = NULL, *j2 = NULL;
+    size_t l1 = 0, l2 = 0;
+
+    nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                          NULL, "sample.pdf", a1, &j1, &l1);
+    nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                          NULL, "sample.pdf", a2, &j2, &l2);
+
+    ASSERT_EQ(l1, l2);
+    ASSERT(memcmp(j1, j2, l1) == 0);
+
+    free(j1);
+    free(j2);
+    sh_arena_free(a1);
+    sh_arena_free(a2);
+}
+
+TEST(pdf_sha256_matches)
+{
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+
+    nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                          NULL, "sample.pdf", arena, &json, &json_len);
+
+    char expected[65];
+    sh_sha256_hex(PDF_FIXTURE, strlen(PDF_FIXTURE), expected);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+    const char *actual = sh_json_as_string(
+        sh_json_get(sh_json_get(root, "source"), "sha256"), "");
+    ASSERT_STREQ(actual, expected);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_status_strings)
+{
+    ASSERT(strlen(nx_pdf_status_str(NX_PDF_OK)) > 0);
+    ASSERT(strlen(nx_pdf_status_str(NX_PDF_ERR_NULL)) > 0);
+    ASSERT(strlen(nx_pdf_status_str(NX_PDF_ERR_JSON)) > 0);
+    ASSERT(strlen(nx_pdf_status_str(NX_PDF_ERR_NO_TEXT)) > 0);
+    ASSERT(strlen(nx_pdf_status_str(NX_PDF_ERR_ARENA)) > 0);
+}
+
+TEST(pdf_custom_tolerance)
+{
+    /* Use tight row tolerance so each y-level is its own row */
+    NxPdfOptions opts = { 1.0, 10.0, -1 };
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
+
+    NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                                           &opts, "sample.pdf",
+                                           arena, &json, &json_len);
+    ASSERT_EQ(s, NX_PDF_OK);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+
+    ShJsonValue *t0 = sh_json_array_get(sh_json_get(root, "tables"), 0);
+    /* Should still get 3 rows (header + 2 data), same as default tolerance */
+    ASSERT_EQ(sh_json_as_int(sh_json_get(t0, "row_count"), -1), 2);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(pdf_pipeline_integration)
+{
+    /* Test PDF through the full pipeline orchestrator (Stage A only, no schema) */
+    char *raw = NULL, *canon = NULL;
+    size_t raw_len = 0, canon_len = 0;
+
+    NxIngestStatus s = nx_ingest(PDF_FIXTURE, strlen(PDF_FIXTURE),
+                                  NX_FORMAT_PDF_JSON, "sample.pdf",
+                                  NULL, 0,
+                                  &raw, &raw_len, &canon, &canon_len);
+    ASSERT_EQ(s, NX_INGEST_OK);
+    ASSERT(raw != NULL);
+    ASSERT(raw_len > 0);
+
+    /* Verify raw output has nx_raw structure */
+    SHArena *pa = sh_arena_create(256 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(raw, raw_len, pa, &root);
+    ASSERT_EQ(sh_json_as_int(sh_json_get(root, "nx_raw"), -1), 1);
+
+    free(raw);
+    sh_arena_free(pa);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -331,6 +599,7 @@ int main(void)
 {
     printf("\nNexus Ingestion Tests:\n");
 
+    printf("\n  XLSX Parser:\n");
     RUN_TEST(xlsx_null_input);
     RUN_TEST(xlsx_invalid_zip);
     RUN_TEST(xlsx_minimal_parse);
@@ -342,6 +611,19 @@ int main(void)
     RUN_TEST(xlsx_unicode_strings);
     RUN_TEST(xlsx_status_strings);
     RUN_TEST(xlsx_warnings_empty);
+
+    printf("\n  PDF Table Reconstructor:\n");
+    RUN_TEST(pdf_null_input);
+    RUN_TEST(pdf_invalid_json);
+    RUN_TEST(pdf_empty_texts);
+    RUN_TEST(pdf_basic_parse);
+    RUN_TEST(pdf_headers);
+    RUN_TEST(pdf_rows);
+    RUN_TEST(pdf_deterministic);
+    RUN_TEST(pdf_sha256_matches);
+    RUN_TEST(pdf_status_strings);
+    RUN_TEST(pdf_custom_tolerance);
+    RUN_TEST(pdf_pipeline_integration);
 
     printf("\nNexus Ingestion: %d passed, %d total\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;
