@@ -12,8 +12,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Arena size for ingestion (4 MB) */
-#define INGEST_ARENA_SIZE (4 * 1024 * 1024)
+/* Arena size for ingestion (32 MB - must hold JSON DOM + text run arrays) */
+#define INGEST_ARENA_SIZE (32 * 1024 * 1024)
 
 const char *nx_ingest_status_str(NxIngestStatus status)
 {

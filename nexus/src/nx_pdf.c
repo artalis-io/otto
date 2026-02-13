@@ -24,8 +24,8 @@
  * Internal Structures
  * ============================================================================ */
 
-#define MAX_TEXT_RUNS  16384
-#define MAX_ROWS       4096
+#define MAX_TEXT_RUNS  65536
+#define MAX_ROWS       8192
 #define MAX_COLS        256
 #define MAX_TEXT_LEN    1024
 
@@ -50,6 +50,9 @@ static int cmp_by_y(const void *a, const void *b)
 {
     const TextRun *ra = (const TextRun *)a;
     const TextRun *rb = (const TextRun *)b;
+    /* Sort by page first, then y, then x */
+    if (ra->page < rb->page) return -1;
+    if (ra->page > rb->page) return 1;
     if (ra->y < rb->y) return -1;
     if (ra->y > rb->y) return 1;
     if (ra->x < rb->x) return -1;
@@ -133,8 +136,9 @@ static int cluster_rows(TextRun *runs, int count, double tolerance,
         double y_sum = runs[i].y;
         i++;
 
-        /* Absorb runs with similar y */
+        /* Absorb runs with similar y on the same page */
         while (i < count) {
+            if (runs[i].page != runs[i - 1].page) break; /* Page boundary */
             double dy = runs[i].y - runs[i - 1].y;
             if (dy < 0) dy = -dy;
             if (dy > tolerance) break;
@@ -163,18 +167,30 @@ static int cluster_rows(TextRun *runs, int count, double tolerance,
  * Column Detection
  * ============================================================================ */
 
+static int cmp_double(const void *a, const void *b)
+{
+    double da = *(const double *)a;
+    double db = *(const double *)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
 /* Detect column boundaries by finding consistent x-positions across rows */
 static int detect_columns(ClusterRow *rows, int nrows, double col_gap_min,
-                          double *col_starts, int max_cols)
+                          double *col_starts, int max_cols,
+                          SHArena *arena, int total_runs)
 {
     if (nrows == 0) return 0;
 
-    /* Collect all x-positions */
-    double all_x[MAX_TEXT_RUNS];
+    /* Collect all x-positions (heap-allocated via arena) */
+    double *all_x = (double *)sh_arena_alloc(arena,
+        (size_t)total_runs * sizeof(double));
+    if (!all_x) return 0;
     int nx = 0;
 
     for (int r = 0; r < nrows; r++) {
-        for (int c = 0; c < rows[r].count && nx < MAX_TEXT_RUNS; c++) {
+        for (int c = 0; c < rows[r].count && nx < total_runs; c++) {
             all_x[nx++] = rows[r].runs[c].x;
         }
     }
@@ -182,15 +198,7 @@ static int detect_columns(ClusterRow *rows, int nrows, double col_gap_min,
     if (nx == 0) return 0;
 
     /* Sort x-positions */
-    for (int i = 1; i < nx; i++) {
-        double key = all_x[i];
-        int j = i - 1;
-        while (j >= 0 && all_x[j] > key) {
-            all_x[j + 1] = all_x[j];
-            j--;
-        }
-        all_x[j + 1] = key;
-    }
+    qsort(all_x, (size_t)nx, sizeof(double), cmp_double);
 
     /* Cluster x-positions into columns */
     int ncols = 0;
@@ -288,8 +296,20 @@ static void write_pdf_raw_json(ShJsonWriter *w, const char *filename,
                     int avail = (int)sizeof(cell_buf) - cell_len - 1;
                     int copy = (int)rows[r].runs[t].text_len;
                     if (copy > avail) copy = avail;
-                    memcpy(cell_buf + cell_len, rows[r].runs[t].text, (size_t)copy);
-                    cell_len += copy;
+                    /* Don't truncate mid-UTF-8 sequence */
+                    while (copy > 0 && (rows[r].runs[t].text[copy - 1] & 0xC0) == 0x80)
+                        copy--; /* Back up past continuation bytes */
+                    if (copy > 0 && (unsigned char)rows[r].runs[t].text[copy - 1] >= 0xC0) {
+                        /* Check if lead byte's sequence fits */
+                        unsigned char lead = (unsigned char)rows[r].runs[t].text[copy - 1];
+                        int need = (lead >= 0xF0) ? 4 : (lead >= 0xE0) ? 3 : 2;
+                        int have = (int)rows[r].runs[t].text_len - (copy - 1);
+                        if (have < need) copy--; /* Drop incomplete lead byte */
+                    }
+                    if (copy > 0) {
+                        memcpy(cell_buf + cell_len, rows[r].runs[t].text, (size_t)copy);
+                        cell_len += copy;
+                    }
                 }
             }
             cell_buf[cell_len] = '\0';
@@ -370,7 +390,7 @@ NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
     /* Detect columns */
     double col_starts[MAX_COLS];
     int ncols = detect_columns(cluster_rows_arr, nrows, opts->col_gap_min,
-                               col_starts, MAX_COLS);
+                               col_starts, MAX_COLS, arena, nruns);
     if (ncols == 0) return NX_PDF_ERR_NO_TEXT;
 
     /* Generate JSON */

@@ -349,9 +349,9 @@ TEST(xlsx_warnings_empty)
  * PDF Table Reconstructor Tests
  * ============================================================================ */
 
-/* PDF parser pre-allocates MAX_TEXT_RUNS (16384) slots + row clusters,
- * needs ~1.1 MB of arena space */
-#define PDF_ARENA_SIZE (2 * 1024 * 1024)
+/* PDF parser pre-allocates MAX_TEXT_RUNS (65536) slots + row clusters,
+ * needs ~5 MB of arena space */
+#define PDF_ARENA_SIZE (8 * 1024 * 1024)
 
 TEST(pdf_null_input)
 {
