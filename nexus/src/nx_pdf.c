@@ -152,11 +152,11 @@ static double compute_median_height(TextRun *runs, int count, SHArena *arena)
 }
 
 /*
- * Auto-detect row_tolerance and col_gap_min from text run statistics.
+ * Auto-detect row_tolerance from text run statistics.
  *
- * Heuristic: Text runs in a PDF row are roughly one text-height apart.
- * - row_tolerance = 0.7 * median_text_height (rows within ~70% of line height)
- * - col_gap_min   = 3.0 * median_text_height (columns need ~3x line height gap)
+ * Row tolerance uses the median text height heuristic.
+ * Column gap detection uses the percentile-gap algorithm in detect_columns()
+ * when col_gap_min remains negative (auto mode).
  */
 static void auto_detect_options(TextRun *runs, int count, SHArena *arena,
                                 NxPdfOptions *opts)
@@ -166,14 +166,13 @@ static void auto_detect_options(TextRun *runs, int count, SHArena *arena,
     if (median_h < 0.5) {
         /* Fallback to defaults if heights are too small/missing */
         if (opts->row_tolerance < 0) opts->row_tolerance = 3.0;
-        if (opts->col_gap_min < 0) opts->col_gap_min = 10.0;
+        /* col_gap_min stays negative → detect_columns() will use adaptive P75 */
         return;
     }
 
     if (opts->row_tolerance < 0)
         opts->row_tolerance = 0.7 * median_h;
-    if (opts->col_gap_min < 0)
-        opts->col_gap_min = 3.0 * median_h;
+    /* col_gap_min stays negative → detect_columns() will use adaptive P75 */
 }
 
 /* ============================================================================
@@ -226,58 +225,366 @@ static int cluster_rows(TextRun *runs, int count, double tolerance,
 }
 
 /* ============================================================================
+ * Run Splitting — Break wide text runs at multi-space gaps
+ * ============================================================================ */
+
+/*
+ * Some PDFs emit a single text run for what should be multiple columns,
+ * using internal whitespace (3+ consecutive spaces) to separate values.
+ * This pass splits such runs into separate TextRuns with estimated
+ * x-positions so that column detection can properly separate them.
+ *
+ * Example: "68 7 308               21 6 35247.2901607" at x=152.5, w=23.1
+ * → split into "68 7 308", "21 6 352", "47.2901607" as separate runs.
+ */
+static int split_wide_runs(ClusterRow *rows, int nrows, SHArena *arena,
+                           int *total_runs)
+{
+    int added = 0;
+
+    for (int r = 0; r < nrows; r++) {
+        ClusterRow *cr = &rows[r];
+        int orig_count = cr->count;
+        /* Max fragments: each run could split into many pieces */
+        int max_new = orig_count * 8;
+        TextRun *new_runs = (TextRun *)sh_arena_alloc(arena,
+            (size_t)max_new * sizeof(TextRun));
+        if (!new_runs) continue;
+        int nout = 0;
+
+        for (int i = 0; i < orig_count && nout < max_new; i++) {
+            TextRun *run = &cr->runs[i];
+            const char *text = run->text;
+            int len = (int)run->text_len;
+
+            /* Scan for runs of 3+ spaces */
+            int frag_start = 0;
+            int in_space = 0;
+            int space_start = 0;
+            int nsplits = 0;
+
+            for (int j = 0; j <= len && nout < max_new; j++) {
+                if (j < len && text[j] == ' ') {
+                    if (!in_space) {
+                        space_start = j;
+                        in_space = 1;
+                    }
+                } else {
+                    if (in_space && (j - space_start) >= 3) {
+                        /* Split here: emit fragment before the space run */
+                        int frag_len = space_start - frag_start;
+                        if (frag_len > 0) {
+                            /* Estimate x offset proportionally */
+                            double frac_start = (double)frag_start / len;
+                            double frac_end = (double)space_start / len;
+                            TextRun *nr = &new_runs[nout++];
+                            *nr = *run; /* Copy base properties */
+                            nr->x = run->x + frac_start * run->w;
+                            nr->w = (frac_end - frac_start) * run->w;
+                            nr->text = text + frag_start;
+                            nr->text_len = (size_t)frag_len;
+                            nsplits++;
+                        }
+                        frag_start = j; /* Start next fragment after the space run */
+                    }
+                    in_space = 0;
+                }
+            }
+
+            /* Emit final fragment */
+            if (nsplits > 0) {
+                int frag_len = len - frag_start;
+                if (frag_len > 0 && nout < max_new) {
+                    double frac_start = (double)frag_start / len;
+                    TextRun *nr = &new_runs[nout++];
+                    *nr = *run;
+                    nr->x = run->x + frac_start * run->w;
+                    nr->w = run->w * (1.0 - frac_start);
+                    nr->text = text + frag_start;
+                    nr->text_len = (size_t)frag_len;
+                }
+                added += nsplits; /* We replaced 1 run with nsplits+1 */
+            } else {
+                /* No splits needed, keep original */
+                new_runs[nout++] = *run;
+            }
+        }
+
+        if (nout != orig_count) {
+            cr->runs = new_runs;
+            cr->count = nout;
+            /* Re-sort by x after splitting */
+            qsort(cr->runs, (size_t)cr->count, sizeof(TextRun), cmp_by_x);
+        }
+    }
+
+    *total_runs += added;
+    return added;
+}
+
+/*
+ * Split data runs that span multiple column boundaries.
+ * Uses detected columns (from header) to split proportionally.
+ * This handles the case where the PDF encodes separate column values
+ * as a single text run with fine kerning (no whitespace separator).
+ */
+static void split_cross_column_runs(ClusterRow *rows, int nrows,
+                                     const double *col_starts, int ncols,
+                                     SHArena *arena, int *total_runs)
+{
+    int added = 0;
+
+    /* Process all rows — split any that span multiple column boundaries */
+    for (int r = 0; r < nrows; r++) {
+        ClusterRow *cr = &rows[r];
+        int orig_count = cr->count;
+        int max_new = orig_count * 4; /* Each run could split into several */
+        TextRun *new_runs = (TextRun *)sh_arena_alloc(arena,
+            (size_t)max_new * sizeof(TextRun));
+        if (!new_runs) continue;
+        int nout = 0;
+
+        for (int i = 0; i < orig_count && nout < max_new; i++) {
+            TextRun *run = &cr->runs[i];
+            double run_left = run->x;
+            double run_right = run->x + run->w;
+            int len = (int)run->text_len;
+
+            if (run->w <= 0 || len <= 1) {
+                new_runs[nout++] = *run;
+                continue;
+            }
+
+            /* Find all column boundaries that fall within this run */
+            int splits[32];
+            int nsplits = 0;
+            for (int c = 0; c < ncols && nsplits < 30; c++) {
+                double cs = col_starts[c];
+                /* Column boundary falls inside this run (with some margin) */
+                if (cs > run_left + 1.0 && cs < run_right - 1.0) {
+                    splits[nsplits++] = c;
+                }
+            }
+
+            if (nsplits == 0) {
+                new_runs[nout++] = *run;
+                continue;
+            }
+
+            /* Split the text at column boundaries, proportionally */
+            double chars_per_unit = (double)len / run->w;
+            int prev_char = 0;
+            double prev_x = run_left;
+
+            for (int s = 0; s < nsplits && nout < max_new; s++) {
+                double split_x = col_starts[splits[s]];
+                int char_pos = (int)((split_x - run_left) * chars_per_unit + 0.5);
+                if (char_pos <= prev_char) char_pos = prev_char + 1;
+                if (char_pos >= len) char_pos = len - 1;
+
+                /* Try to split at a space boundary if one is nearby */
+                int best_pos = char_pos;
+                for (int d = -3; d <= 3; d++) {
+                    int p = char_pos + d;
+                    if (p > prev_char && p < len && run->text[p] == ' ') {
+                        best_pos = p;
+                        break;
+                    }
+                }
+                char_pos = best_pos;
+
+                /* Ensure we don't split in the middle of a UTF-8 sequence */
+                while (char_pos > prev_char && char_pos < len &&
+                       ((unsigned char)run->text[char_pos] & 0xC0) == 0x80)
+                    char_pos++; /* Advance past continuation bytes */
+
+                /* Emit fragment before split point */
+                int frag_len = char_pos - prev_char;
+                if (frag_len > 0) {
+                    /* Ensure fragment doesn't end with an incomplete UTF-8 sequence.
+                     * Walk back from the end to find the start of the last multi-byte
+                     * char, then check if the full sequence fits within frag_len. */
+                    {
+                        int pos = prev_char + frag_len - 1;
+                        /* Back up past continuation bytes */
+                        while (pos > prev_char &&
+                               ((unsigned char)run->text[pos] & 0xC0) == 0x80)
+                            pos--;
+                        unsigned char lead = (unsigned char)run->text[pos];
+                        if (lead >= 0xC0) {
+                            /* Determine expected sequence length */
+                            int seq_len = (lead < 0xE0) ? 2 :
+                                          (lead < 0xF0) ? 3 : 4;
+                            /* Only strip if the sequence is incomplete */
+                            if (pos + seq_len > prev_char + frag_len)
+                                frag_len = pos - prev_char;
+                        }
+                    }
+                    /* Trim trailing spaces */
+                    while (frag_len > 0 && run->text[prev_char + frag_len - 1] == ' ')
+                        frag_len--;
+                    if (frag_len > 0) {
+                        TextRun *nr = &new_runs[nout++];
+                        *nr = *run;
+                        nr->x = prev_x;
+                        nr->w = split_x - prev_x;
+                        nr->text = run->text + prev_char;
+                        nr->text_len = (size_t)frag_len;
+                    }
+                }
+
+                /* Skip leading spaces for next fragment */
+                prev_char = char_pos;
+                while (prev_char < len && run->text[prev_char] == ' ')
+                    prev_char++;
+                prev_x = split_x;
+            }
+
+            /* Emit final fragment */
+            int frag_len = len - prev_char;
+            if (frag_len > 0 && nout < max_new) {
+                TextRun *nr = &new_runs[nout++];
+                *nr = *run;
+                nr->x = prev_x;
+                nr->w = run_right - prev_x;
+                nr->text = run->text + prev_char;
+                nr->text_len = (size_t)frag_len;
+            }
+
+            added += (nsplits > 0 ? nsplits : 0);
+        }
+
+        if (nout != orig_count) {
+            cr->runs = new_runs;
+            cr->count = nout;
+            qsort(cr->runs, (size_t)cr->count, sizeof(TextRun), cmp_by_x);
+        }
+    }
+
+    *total_runs += added;
+}
+
+/* ============================================================================
  * Column Detection
  * ============================================================================ */
 
-/* Detect column boundaries by finding consistent x-positions across rows */
-static int detect_columns(ClusterRow *rows, int nrows, double col_gap_min,
+/*
+ * Detect column boundaries from the header row.
+ *
+ * Strategy: The header row (row 0) defines the intended column structure.
+ * Each text run in the header starts a column. Text runs with x-positions
+ * within merge_tol of each other are treated as the same column (handles
+ * multi-line headers where rows stack above each other).
+ *
+ * If col_gap_min is explicitly set (>= 0), falls back to all-rows gap-based
+ * detection for backward compatibility.
+ */
+static int detect_columns(ClusterRow *rows, int nrows, double *col_gap_min,
                           double *col_starts, int max_cols,
                           SHArena *arena, int total_runs)
 {
     if (nrows == 0) return 0;
 
-    /* Collect all x-positions (heap-allocated via arena) */
-    double *all_x = (double *)sh_arena_alloc(arena,
-        (size_t)total_runs * sizeof(double));
-    if (!all_x) return 0;
-    int nx = 0;
+    /* If caller explicitly set col_gap_min, use all-rows gap-based detection */
+    if (*col_gap_min >= 0) {
+        double *all_x = (double *)sh_arena_alloc(arena,
+            (size_t)total_runs * sizeof(double));
+        if (!all_x) return 0;
+        int nx = 0;
 
-    for (int r = 0; r < nrows; r++) {
-        for (int c = 0; c < rows[r].count && nx < total_runs; c++) {
-            all_x[nx++] = rows[r].runs[c].x;
+        for (int r = 0; r < nrows; r++) {
+            ClusterRow *cr = &rows[r];
+            for (int c = 0; c < cr->count && nx < total_runs; c++)
+                all_x[nx++] = cr->runs[c].x;
+        }
+        if (nx == 0) return 0;
+
+        qsort(all_x, (size_t)nx, sizeof(double), cmp_double);
+
+        int ncols = 0;
+        col_starts[ncols++] = all_x[0];
+        for (int i = 1; i < nx && ncols < max_cols; i++) {
+            if (all_x[i] - all_x[i - 1] > *col_gap_min)
+                col_starts[ncols++] = all_x[i];
+        }
+        return ncols;
+    }
+
+    /*
+     * Adaptive: Find the best reference row to define columns.
+     * Instead of assuming row 0 is the header, find the row with the most
+     * text runs — this handles both cases:
+     *   - PDF01: header IS row 0 (20 runs, more than any data row)
+     *   - PDF02: header is at the bottom of the page, but data rows
+     *            have 7-8 runs which is still the most populated row type
+     * We pick the row with the most runs as the column template.
+     */
+    int best_row = 0;
+    int best_count = rows[0].count;
+    for (int r = 1; r < nrows; r++) {
+        if (rows[r].count > best_count) {
+            best_count = rows[r].count;
+            best_row = r;
         }
     }
 
-    if (nx == 0) return 0;
+    ClusterRow *hdr = &rows[best_row];
+    if (hdr->count == 0) return 0;
 
-    /* Sort x-positions */
-    qsort(all_x, (size_t)nx, sizeof(double), cmp_double);
+    /* Collect all header x-positions, filtering out corrupted runs */
+    double *hdr_x = (double *)sh_arena_alloc(arena,
+        (size_t)(hdr->count + 1) * sizeof(double));
+    if (!hdr_x) return 0;
 
-    /* Cluster x-positions into columns */
+    int nhdr = 0;
+    for (int i = 0; i < hdr->count; i++) {
+        /* Skip runs with negative x positions (off-page) */
+        if (hdr->runs[i].x < 0) continue;
+        hdr_x[nhdr++] = hdr->runs[i].x;
+    }
+    if (nhdr == 0) return 0;
+
+    qsort(hdr_x, (size_t)nhdr, sizeof(double), cmp_double);
+
+    /* Merge x-positions that are very close (same column, multi-line header) */
+    double merge_tol = 2.0; /* 2pt tolerance for same-column merging */
     int ncols = 0;
-    col_starts[ncols++] = all_x[0];
+    col_starts[ncols++] = hdr_x[0];
 
-    for (int i = 1; i < nx && ncols < max_cols; i++) {
-        if (all_x[i] - all_x[i - 1] > col_gap_min) {
-            col_starts[ncols++] = all_x[i];
+    for (int i = 1; i < nhdr && ncols < max_cols; i++) {
+        if (hdr_x[i] - hdr_x[i - 1] > merge_tol) {
+            col_starts[ncols++] = hdr_x[i];
         }
+    }
+
+    /* Write back estimated gap for diagnostics */
+    if (ncols >= 2) {
+        /* Compute minimum gap between detected columns */
+        double min_gap = col_starts[1] - col_starts[0];
+        for (int i = 2; i < ncols; i++) {
+            double g = col_starts[i] - col_starts[i - 1];
+            if (g < min_gap) min_gap = g;
+        }
+        *col_gap_min = min_gap;
     }
 
     return ncols;
 }
 
-/* Find which column a text run belongs to */
+/* Find which column a text run belongs to.
+ * Uses midpoint boundaries: the boundary between columns c and c+1 is the
+ * midpoint of their start positions. This handles data runs that start
+ * slightly before their column header (common in PDFs with centered headers).
+ */
 static int find_column(double x, const double *col_starts, int ncols)
 {
-    /* Find the column whose start is closest to (but not after) x */
-    int best = 0;
-    for (int c = 1; c < ncols; c++) {
-        if (col_starts[c] <= x + 1.0) /* small tolerance */
-            best = c;
-        else
-            break;
+    if (ncols <= 1) return 0;
+    for (int c = ncols - 1; c >= 1; c--) {
+        double mid = (col_starts[c - 1] + col_starts[c]) / 2.0;
+        if (x >= mid)
+            return c;
     }
-    return best;
+    return 0;
 }
 
 /* ============================================================================
@@ -444,11 +751,21 @@ NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
     if (nrows < 0) return NX_PDF_ERR_ARENA;
     if (nrows == 0) return NX_PDF_ERR_NO_TEXT;
 
+    /* Split wide text runs that contain multi-space gaps (column separators
+     * encoded as whitespace within a single TJ/Tj text run) */
+    split_wide_runs(cluster_rows_arr, nrows, arena, &nruns);
+
     /* Detect columns */
     double col_starts[MAX_COLS];
-    int ncols = detect_columns(cluster_rows_arr, nrows, opts->col_gap_min,
+    int ncols = detect_columns(cluster_rows_arr, nrows, &opts->col_gap_min,
                                col_starts, MAX_COLS, arena, nruns);
     if (ncols == 0) return NX_PDF_ERR_NO_TEXT;
+
+    /* Split data runs that span multiple column boundaries.
+     * This handles PDFs where column values are encoded in a single text run
+     * with fine kerning adjustments instead of separate text operations. */
+    split_cross_column_runs(cluster_rows_arr, nrows, col_starts, ncols,
+                            arena, &nruns);
 
     /* Generate JSON */
     ShJsonBuf jb;
