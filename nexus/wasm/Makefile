@@ -25,6 +25,7 @@ NEXUS_SRC = ../../nexus/src/nx_ingest.c \
             ../../nexus/src/nx_xlsx.c \
             ../../nexus/src/nx_pdf.c \
             ../../nexus/src/nx_csv.c \
+            ../../nexus/src/nx_merge.c \
             ../../nexus/src/nx_xform.c \
             ../../nexus/src/nx_compute.c \
             ../../nexus/src/nx_validate.c \

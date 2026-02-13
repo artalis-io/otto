@@ -8,6 +8,7 @@
 #include "nx_xlsx.h"
 #include "nx_pdf.h"
 #include "nx_csv.h"
+#include "nx_merge.h"
 #include "nx_xform.h"
 #include "sh_arena.h"
 #include <stdlib.h>
@@ -86,6 +87,24 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
     }
 
     sh_arena_free(arena_a); /* Stage A arena freed before Stage B */
+
+    /* Row merge: merge continuation rows before transform */
+    if (schema_json && schema_len > 0) {
+        SHArena *arena_m = sh_arena_create(INGEST_ARENA_SIZE);
+        if (arena_m) {
+            char *merged = NULL;
+            size_t merged_len = 0;
+            NxMergeStatus ms = nx_merge_rows(raw_json, raw_len,
+                                              schema_json, schema_len,
+                                              arena_m, &merged, &merged_len);
+            sh_arena_free(arena_m);
+            if (ms == NX_MERGE_OK && merged) {
+                free(raw_json);
+                raw_json = merged;
+                raw_len = merged_len;
+            }
+        }
+    }
 
     /* Stage B: Transform */
     if (schema_json && schema_len > 0) {

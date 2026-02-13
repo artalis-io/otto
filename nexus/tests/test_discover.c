@@ -738,6 +738,77 @@ static void test_golden_pdf01_discover_transform(int *skip)
 }
 
 /* ============================================================================
+ * Unit Tests: Continuation Row Detection
+ * ============================================================================ */
+
+TEST(discover_continuation_detection)
+{
+    /* Synthetic data with 20% continuation rows — should emit row_merge */
+    SHArena *arena = sh_arena_create(1024 * 1024);
+
+    /* Build raw JSON: 8 data rows + 2 continuation rows = 10 total (20%) */
+    const char *raw =
+        "{\"tables\":[{\"headers\":[\"ZIP\",\"City\",\"Name\",\"Hours\"],"
+        "\"rows\":["
+        "{\"cells\":[\"1111\",\"A\",\"S1\",\"H-P\"]},"
+        "{\"cells\":[\"2222\",\"B\",\"S2\",\"H-P\"]},"
+        "{\"cells\":[\"\",\"\",\"\",\"Szo\"]},"
+        "{\"cells\":[\"3333\",\"C\",\"S3\",\"H-P\"]},"
+        "{\"cells\":[\"4444\",\"D\",\"S4\",\"H-P\"]},"
+        "{\"cells\":[\"\",\"\",\"\",\"V\"]},"
+        "{\"cells\":[\"5555\",\"E\",\"S5\",\"H-P\"]},"
+        "{\"cells\":[\"6666\",\"F\",\"S6\",\"H-P\"]},"
+        "{\"cells\":[\"7777\",\"G\",\"S7\",\"H-P\"]},"
+        "{\"cells\":[\"8888\",\"H\",\"S8\",\"H-P\"]}"
+        "]}]}";
+
+    char *out = NULL; size_t out_len = 0;
+    ASSERT_EQ(nx_discover_schema(raw, strlen(raw), arena, &out, &out_len), NX_DISCOVER_OK);
+
+    ShJsonValue *schema = parse_schema(out, out_len, arena);
+    ASSERT(schema != NULL);
+
+    /* Should have row_merge config */
+    ShJsonValue *rm = sh_json_get(schema, "row_merge");
+    ASSERT(rm != NULL);
+
+    ShJsonValue *keys = sh_json_get(rm, "key_columns");
+    ASSERT(keys != NULL);
+    ASSERT(sh_json_array_len(keys) > 0);
+
+    ASSERT_STREQ(sh_json_as_string(sh_json_get(rm, "separator"), ""), " ");
+
+    free(out);
+    sh_arena_free(arena);
+}
+
+TEST(discover_no_continuation)
+{
+    /* All rows have non-empty key columns — 0% continuation, no row_merge */
+    SHArena *arena = sh_arena_create(1024 * 1024);
+    const char *raw =
+        "{\"tables\":[{\"headers\":[\"ZIP\",\"City\",\"Name\"],"
+        "\"rows\":["
+        "{\"cells\":[\"1111\",\"A\",\"X\"]},"
+        "{\"cells\":[\"2222\",\"B\",\"Y\"]},"
+        "{\"cells\":[\"3333\",\"C\",\"Z\"]}"
+        "]}]}";
+
+    char *out = NULL; size_t out_len = 0;
+    ASSERT_EQ(nx_discover_schema(raw, strlen(raw), arena, &out, &out_len), NX_DISCOVER_OK);
+
+    ShJsonValue *schema = parse_schema(out, out_len, arena);
+    ASSERT(schema != NULL);
+
+    /* Should NOT have row_merge */
+    ShJsonValue *rm = sh_json_get(schema, "row_merge");
+    ASSERT(rm == NULL);
+
+    free(out);
+    sh_arena_free(arena);
+}
+
+/* ============================================================================
  * Golden Tests: PDF02 (GLS Hungary PuDo)
  * ============================================================================ */
 
@@ -768,6 +839,33 @@ static void test_golden_pdf02_discover(int *skip)
     /* Schema metadata */
     ASSERT_EQ(sh_json_as_int(sh_json_get(schema, "nx_schema"), 0), 1);
     ASSERT_STREQ(sh_json_as_string(sh_json_get(schema, "version"), ""), "auto-discovered");
+
+    free(out);
+    free(raw);
+    sh_arena_free(arena);
+}
+
+static void test_golden_pdf02_discover_row_merge(int *skip)
+{
+    size_t raw_len = 0;
+    char *raw = read_golden_file(GOLDEN_DIR "PDF02_raw.json", &raw_len);
+    if (!raw) { *skip = 1; return; }
+
+    SHArena *arena = sh_arena_create(4 * 1024 * 1024);
+    char *out = NULL; size_t out_len = 0;
+    NxDiscoverStatus st = nx_discover_schema(raw, raw_len, arena, &out, &out_len);
+    ASSERT_EQ(st, NX_DISCOVER_OK);
+
+    ShJsonValue *schema = parse_schema(out, out_len, arena);
+    ASSERT(schema != NULL);
+
+    /* PDF02 has ~18% continuation rows — should detect row_merge */
+    ShJsonValue *rm = sh_json_get(schema, "row_merge");
+    ASSERT(rm != NULL);
+
+    ShJsonValue *keys = sh_json_get(rm, "key_columns");
+    ASSERT(keys != NULL);
+    ASSERT(sh_json_array_len(keys) > 0);
 
     free(out);
     free(raw);
@@ -814,12 +912,17 @@ int main(void)
     RUN_TEST(header_slugify);
     RUN_TEST(duplicate_header_dedup);
 
+    printf("\n  Continuation Detection:\n");
+    RUN_TEST(discover_continuation_detection);
+    RUN_TEST(discover_no_continuation);
+
     printf("\n  Golden Tests (real-world files):\n");
     RUN_GOLDEN(xlsx01_discover);
     RUN_GOLDEN(xlsx01_discover_transform);
     RUN_GOLDEN(pdf01_discover);
     RUN_GOLDEN(pdf01_discover_transform);
     RUN_GOLDEN(pdf02_discover);
+    RUN_GOLDEN(pdf02_discover_row_merge);
 
     printf("\nSchema Discovery: %d passed, %d total", tests_passed, tests_run);
     if (golden_skipped > 0) printf(" (%d golden skipped)", golden_skipped);
