@@ -22,11 +22,12 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
                -fsanitize=address,undefined -fno-omit-frame-pointer
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
-SRCS = src/nx_xlsx.c
+SRCS = src/nx_xlsx.c src/nx_xform.c src/nx_slug.c src/nx_ingest.c
 OBJS = $(SRCS:.c=.o)
 
 LIB = libnexus.a
 TEST_INGEST_BIN = test_ingest
+TEST_XFORM_BIN = test_xform
 
 SHARED_LIB = ../shared/libshared.a
 VENDOR_DIR = ../vendor/miniz
@@ -37,7 +38,7 @@ MINIZ_ZIP_OBJ = $(MINIZ_ZIP_SRC:.c=.o)
 
 .PHONY: all clean test lib debug
 
-all: lib $(TEST_INGEST_BIN)
+all: lib $(TEST_INGEST_BIN) $(TEST_XFORM_BIN)
 
 lib: $(LIB)
 
@@ -57,15 +58,19 @@ $(MINIZ_ZIP_OBJ): $(MINIZ_ZIP_SRC)
 $(TEST_INGEST_BIN): tests/test_ingest.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lshared $(LDFLAGS) -o $@
 
-test: $(TEST_INGEST_BIN)
+$(TEST_XFORM_BIN): tests/test_xform.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lshared $(LDFLAGS) -o $@
+
+test: $(TEST_INGEST_BIN) $(TEST_XFORM_BIN)
 	./$(TEST_INGEST_BIN)
+	./$(TEST_XFORM_BIN)
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN)
+	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN)
 
 help:
 	@echo "Nexus Build System"
