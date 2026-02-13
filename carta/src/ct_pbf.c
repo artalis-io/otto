@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 
 #ifndef _WIN32
 #include <sys/mman.h>
@@ -2059,13 +2060,88 @@ static CTStatus add_way_as_feature(const CTOSMWay *way, CTFeature **features,
 }
 
 /*
- * Helper to add a multipolygon as a feature with multiple rings.
+ * Estimate area in square meters from lat/lon coordinates (Shoelace formula).
+ */
+static float estimate_ring_area_sqm(const CTCoord *coords, int count)
+{
+    if (count < 3) return 0.0f;
+
+    double centroid_lat = 0;
+    for (int i = 0; i < count; i++) {
+        centroid_lat += coords[i].lat;
+    }
+    centroid_lat /= count;
+
+    double lat_scale = 111320.0;
+    double lon_scale = 111320.0 * cos(centroid_lat * 3.14159265358979 / 180.0);
+
+    double area = 0.0;
+    for (int i = 0; i < count; i++) {
+        int j = (i + 1) % count;
+        double x1 = coords[i].lon * lon_scale;
+        double y1 = coords[i].lat * lat_scale;
+        double x2 = coords[j].lon * lon_scale;
+        double y2 = coords[j].lat * lat_scale;
+        area += x1 * y2 - x2 * y1;
+    }
+    return (float)fabs(area / 2.0);
+}
+
+/*
+ * Helper to add a multipolygon as feature(s).
+ *
+ * Landuse/natural: each outer ring becomes a separate simple polygon.
+ * Inner rings (holes) are omitted — smaller landuse features render on top.
+ *
+ * Water: all rings kept together with even-odd fill (islands stay unfilled).
  */
 static CTStatus add_multipolygon_as_feature(const CTAssembledMultipolygon *mp,
                                             CTFeature **features,
                                             size_t *count, size_t *capacity)
 {
     if (mp->num_rings == 0) return CT_OK;
+
+    /* Landuse/natural: emit each outer ring as a separate simple polygon */
+    if (mp->feature_class == CT_OSM_LANDUSE || mp->feature_class == CT_OSM_NATURAL) {
+        for (int r = 0; r < mp->num_rings; r++) {
+            const CTMultipolygonRing *ring = &mp->rings[r];
+            if (!ring->is_outer || ring->num_coords == 0) continue;
+
+            /* Expand array if needed */
+            if (*count >= *capacity) {
+                *capacity *= 2;
+                CTFeature *new_features = realloc(*features, *capacity * sizeof(CTFeature));
+                if (!new_features) return CT_ERROR_OUT_OF_MEMORY;
+                *features = new_features;
+            }
+
+            CTFeature *f = &(*features)[*count];
+            memset(f, 0, sizeof(CTFeature));
+
+            f->type = CT_GEOM_POLYGON;
+            f->layer = layer_from_osm_class(mp->feature_class);
+            f->feature_type = mp->feature_type;
+            f->area_sqm = estimate_ring_area_sqm(ring->coords, ring->num_coords);
+            f->length_m = 0;
+
+            f->points = malloc(ring->num_coords * sizeof(CTTilePoint));
+            if (!f->points) continue;  /* Skip this ring but continue */
+
+            f->num_points = ring->num_coords;
+            f->num_rings = 1;
+            f->ring_ends = NULL;  /* Simple polygon */
+
+            for (int j = 0; j < ring->num_coords; j++) {
+                f->points[j].x = (int32_t)(ring->coords[j].lon * 1e7);
+                f->points[j].y = (int32_t)(ring->coords[j].lat * 1e7);
+            }
+
+            (*count)++;
+        }
+        return CT_OK;
+    }
+
+    /* Water and other classes: keep multi-ring behavior (even-odd fill) */
 
     /* Expand array if needed */
     if (*count >= *capacity) {
