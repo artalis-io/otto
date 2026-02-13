@@ -29,6 +29,7 @@ LIB = libnexus.a
 TEST_INGEST_BIN = test_ingest
 TEST_XFORM_BIN = test_xform
 TEST_VALIDATE_BIN = test_validate
+TEST_DISCOVER_BIN = test_discover
 
 # CLI tools
 NX_RUN_BIN = nx_run
@@ -49,7 +50,7 @@ LINK_LIBS_PDF = -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lsh_pdf2struc -lshared
 
 .PHONY: all clean test lib debug tools
 
-all: lib $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN)
+all: lib $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN)
 
 tools: $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)
 
@@ -77,6 +78,9 @@ $(TEST_XFORM_BIN): tests/test_xform.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 $(TEST_VALIDATE_BIN): tests/test_validate.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< $(LINK_LIBS) -o $@
 
+$(TEST_DISCOVER_BIN): tests/test_discover.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< $(LINK_LIBS) -o $@
+
 $(NX_RUN_BIN): tools/nx_run.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS) -o $@
 
@@ -92,17 +96,18 @@ $(PDF2STRUC_LIB):
 $(NX_PIPELINE_BIN): tools/nx_pipeline.c $(LIB) $(PDF2STRUC_LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS_PDF) -o $@
 
-test: $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN)
+test: $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN)
 	./$(TEST_INGEST_BIN)
 	./$(TEST_XFORM_BIN)
 	./$(TEST_VALIDATE_BIN)
+	./$(TEST_DISCOVER_BIN)
 
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)
+	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)
 
 help:
 	@echo "Nexus Build System"
