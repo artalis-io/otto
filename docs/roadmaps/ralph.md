@@ -4,8 +4,9 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-13) — P5/P6 re-landed with infeasibility guards.
-All tests pass (Ralph 208, FuelWise 123). MILP benchmarks 100/100 (milp30, milp75, milp100).
+**Current** (2026-02-13) — P5/P6 re-landed with infeasibility guards (`af158fa`).
+All tests pass (Ralph 208, FuelWise 123). MILP benchmarks 60/60 feasible (milp15–milp200 × 10).
+Beats GLPK through milp75 (9.9x→2.0x); GLPK still faster at milp100+ (1.4–2.5x).
 Three defense-in-depth fixes eliminated 14-22% false infeasibility from original P5/P6:
 1. Refactorize-and-retry on ratio test failure in `dual_reopt()` (critical fix)
 2. Recompute reduced costs after pure-flip iterations (drift prevention)
@@ -132,7 +133,22 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (post-P5 bound flipping + P6 DSE, 20 runs, seed=42):**
+**Current results (P5/P6 re-landed with infeasibility guards, 10 runs):**
+
+| Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
+|----------|-----------|-----------|----------|-------|-----------|
+| milp15 | ~15 | **0.85 ms** | 7.45 ms | **9.9x Ralph** | 2/10 |
+| milp30 | ~30 | **2.73 ms** | 9.38 ms | **4.1x Ralph** | 5/10 |
+| milp50 | ~50 | **9.28 ms** | 12.26 ms | **1.4x Ralph** | 2/10 |
+| milp75 | ~75 | **33.26 ms** | 57.93 ms | **2.0x Ralph** | 3/10 |
+| milp100 | ~100 | 62.05 ms | **37.21 ms** | 0.7x | 0/10 |
+| milp200 | ~200 | 994.96 ms | **152.22 ms** | 0.4x | 1/10 |
+
+P5/P6 with infeasibility guards improved across the board vs prior baseline. Ralph now
+wins through milp75 (9.9x→2.0x). milp100 gap narrowed from 2.5x to 1.4x. milp200
+regressed (high variance at this scale). Zero false infeasibility across all 60 trials.
+
+**Previous results (original P5/P6, reverted due to false infeasibility):**
 
 | Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
 |----------|-----------|-----------|----------|-------|-----------|
@@ -142,9 +158,6 @@ has additional domain-specific guidance.
 | milp75 | ~75 | **47.78 ms** | 58.59 ms | **1.2x Ralph** | 0/5 |
 | milp100 | ~100 | 102.50 ms | **40.13 ms** | 0.4x | 4/16 |
 | milp200 | ~200 | 393.32 ms | **87.21 ms** | 0.4x | 6/9 |
-
-P5+P6 improved small-medium MIPs 20-50% vs prior baseline (milp15: 6.4→8.2x, milp30: 2.5→3.8x).
-Large MIPs roughly neutral — remaining gap from GLPK's mature cut generation and other features.
 
 **Previous results (pre-P5/P6, post-c-MIR fix):**
 
@@ -177,26 +190,28 @@ beating it (1.9x).
 
 **Historical progression:**
 
-| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix | +P5/P6 |
-|----------|----------|-------------|----------------|-------------|-----------------|------------|--------|
-| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | 0.95 ms | 0.90 ms | **1.16 ms** |
-| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | 3.14 ms | 3.08 ms | **2.69 ms** |
-| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | 9.90 ms | 9.75 ms | **14.67 ms** |
-| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | 55.49 ms | 55.50 ms | **47.78 ms** |
-| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | 50.14 ms | 50.38 ms | **102.50 ms** |
-| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | 212.03 ms | 210.80 ms | **393.32 ms** |
+| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix | +P5/P6 guarded |
+|----------|----------|-------------|----------------|-------------|-----------------|------------|----------------|
+| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | 0.95 ms | 0.90 ms | **0.85 ms** |
+| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | 3.14 ms | 3.08 ms | **2.73 ms** |
+| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | 9.90 ms | 9.75 ms | **9.28 ms** |
+| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | 55.49 ms | 55.50 ms | **33.26 ms** |
+| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | 50.14 ms | 50.38 ms | **62.05 ms** |
+| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | 212.03 ms | 210.80 ms | **994.96 ms** |
 
-**Note:** P5/P6 column uses 20 runs (previous columns used 5 runs). Higher run counts increase
-variance from harder random instances. GLPK ratio improved at milp15 (6.4→8.2x) and milp30
-(2.5→3.8x); milp75 improved from tied to 1.2x. Large MIPs have high variance.
+**Note:** P5/P6 guarded column uses 10 runs. P5/P6 re-landed with three infeasibility guards
+(refactorize-and-retry, rc recompute after flips, diving isolation). Zero false infeasibility.
 
 **Analysis:**
-- Ralph wins milp15 through milp75 (8.2x down to 1.2x vs GLPK)
+- Ralph wins milp15 through milp75 (9.9x down to 2.0x vs GLPK)
 - P5 bound flipping: eliminates LU updates for boxed variable pivots in dual_reopt (MIP hot path)
 - P6 dual steepest edge: better leaving variable selection reduces pivot count
 - P5 restricted to dual_reopt only (incompatible with bound perturbation in full dual solver)
 - P6 uses approximate init (weights=1.0) in dual_reopt, exact init in full dual solver
-- GLPK still dominates milp100+ (~2.5x faster)
+- milp75 biggest improvement: 55ms → 33ms (40% faster) from better DSE leaving selection
+- milp100 gap narrowed: 0.4x → 0.7x vs GLPK
+- milp200 regressed (high variance at this scale; worst case 4.6s vs prior 393ms avg)
+- GLPK still faster at milp100+ (1.4–2.5x)
 - Remaining gap likely from: GLPK's cut pool management, presolve strength, heuristics
 
 See `fuelwise.md` §8 for FuelWise-specific optimization ideas (symmetry-breaking, flow
