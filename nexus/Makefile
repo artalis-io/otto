@@ -33,6 +33,7 @@ TEST_XFORM_BIN = test_xform
 NX_RUN_BIN = nx_run
 NX_PDF_RUN_BIN = nx_pdf_run
 NX_XFORM_RUN_BIN = nx_xform_run
+NX_PIPELINE_BIN = nx_pipeline
 
 SHARED_LIB = ../shared/libshared.a
 VENDOR_DIR = ../vendor/miniz
@@ -47,7 +48,7 @@ LINK_LIBS = -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lshared $(LDFLAGS)
 
 all: lib $(TEST_INGEST_BIN) $(TEST_XFORM_BIN)
 
-tools: $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN)
+tools: $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)
 
 lib: $(LIB)
 
@@ -79,6 +80,9 @@ $(NX_PDF_RUN_BIN): tools/nx_pdf_run.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 $(NX_XFORM_RUN_BIN): tools/nx_xform_run.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS) -o $@
 
+$(NX_PIPELINE_BIN): tools/nx_pipeline.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) $< $(LINK_LIBS) -o $@
+
 test: $(TEST_INGEST_BIN) $(TEST_XFORM_BIN)
 	./$(TEST_INGEST_BIN)
 	./$(TEST_XFORM_BIN)
@@ -88,7 +92,7 @@ debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN)
+	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)
 
 help:
 	@echo "Nexus Build System"
@@ -96,7 +100,7 @@ help:
 	@echo "Targets:"
 	@echo "  all      - Build library and tests (default)"
 	@echo "  lib      - Build static library (libnexus.a)"
-	@echo "  tools    - Build CLI tools (nx_run, nx_pdf_run)"
+	@echo "  tools    - Build CLI tools (nx_run, nx_pdf_run, nx_pipeline)"
 	@echo "  test     - Build and run tests"
 	@echo "  debug    - Build with sanitizers"
 	@echo "  clean    - Remove build artifacts"
