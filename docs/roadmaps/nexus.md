@@ -170,9 +170,11 @@ Build with `make tools`:
 
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
-| `test_ingest` | 38 | 11 XLSX + 14 PDF + 13 CSV |
-| `test_xform` | 17 | 5 slug + 8 xform + 4 pipeline |
-| **Total** | **55** | |
+| `test_ingest` | 45 | 11 XLSX + 14 PDF + 13 CSV + 7 golden |
+| `test_xform` | 37 | 5 slug + 8 xform + 16 multi-transform + 4 trucking + 4 pipeline |
+| `test_validate` | 9 | geo_bounds, format, unique, outlier |
+| `test_discover` | 23 | 18 unit + 5 golden (XLSX01/PDF01/PDF02) |
+| **Total** | **114** | |
 
 ## Schemas
 
@@ -192,6 +194,116 @@ Transform schemas in `schemas/`:
   "row_id": {"template": "gls-hu-{city}-{name}", "slugify": true}
 }
 ```
+
+## Downstream Pipeline (Planned)
+
+### The Problem
+
+A single delivery target (e.g., Surge VRP instance, database upsert) rarely maps 1:1
+to a single ingested file. Real workflows combine multiple canonical outputs:
+
+```
+PDF01 (automata)     → canonical → ┐
+PDF02 (PuDo)         → canonical → ├─ JOIN/MERGE → DELIVER → Surge / DB / PTV
+XLSX01 (depots)      → canonical → ┤
+XLSX03 (demand)      → canonical → ┘
+```
+
+Each canonical dataset has a different `output_type` and the delivery target needs
+to correlate them — typically by `row_id`, ZIP, or city+name.
+
+### Example: Girteka Last-Mile Network
+
+| Source | output_type | Key fields | Role |
+|--------|-------------|------------|------|
+| PDF01 automata | `facility` | city, name, lat/lon, hours | Where parcels go |
+| PDF02 PuDo | `facility` | city, name, address, hours | Where parcels go |
+| XLSX01 depots | `depot` | name, lat/lon | Where trucks start |
+| XLSX03 demand | `demand` | facility_id, volume, date | How much goes where |
+
+### Stage J: Join
+
+Merge multiple canonical outputs into a unified dataset. Operations:
+
+| Operation | Purpose | Example |
+|-----------|---------|---------|
+| **union** | Stack datasets of same type | automata + PuDo = all facilities |
+| **left_join** | Attach related data by key | facilities + demand by row_id |
+| **filter** | Subset by field value | only facilities with demand > 0 |
+
+Join specification (draft):
+
+```json
+{
+  "nx_join": 1,
+  "sources": [
+    {"file": "automata_canonical.json", "alias": "automata"},
+    {"file": "pudo_canonical.json",     "alias": "pudo"},
+    {"file": "depots_canonical.json",   "alias": "depots"},
+    {"file": "demand_canonical.json",   "alias": "demand"}
+  ],
+  "steps": [
+    {
+      "type": "union",
+      "inputs": ["automata", "pudo"],
+      "output": "all_facilities",
+      "tag_field": "source"
+    },
+    {
+      "type": "left_join",
+      "left": "all_facilities",
+      "right": "demand",
+      "on": {"left": "row_id", "right": "facility_id"},
+      "output": "facilities_with_demand"
+    }
+  ]
+}
+```
+
+Because canonical JSON is already clean-typed and validated, joins are simple key
+matching — no fuzzy matching, no type coercion, no cleanup. All messiness was
+resolved in Stages A/B/X.
+
+### Stage D: Deliver
+
+Transform joined canonical data into target-specific payloads:
+
+| Target | Payload | Use case |
+|--------|---------|----------|
+| **Surge** | `{depots: [...], stops: [...], requests: [...]}` | VRP/PDPTW solving |
+| **Velo** | Waypoint list with lat/lon | Multi-stop route planning |
+| **FuelWise** | Station records with coordinates | Refueling optimization |
+| **Locus** | Facility records | Seed geocoding index |
+| **Database** | Upsert by `row_id` | Living dataset (re-ingest monthly) |
+| **PTV xRoute** | `calculateRoute` POST body | External route planning |
+| **GeoJSON** | Feature collection | Carta visualization |
+| **CSV export** | Clean flat file | Customer handback |
+
+The delivery layer is a thin, deterministic mapper per target — the hard work
+(extracting clean data from messy PDFs) is already done upstream.
+
+### Full Pipeline Vision
+
+```
+  ┌─────────────────────────────────────────────────────────────────┐
+  │ Stage A: Extract    XLSX/PDF/CSV → nx_raw JSON                 │
+  │ Stage B: Transform  nx_raw + schema → nx_canonical JSON        │
+  │ Stage X: Validate   geo_bounds, format, unique, outlier        │
+  ├─────────────────────────────────────────────────────────────────┤
+  │ Stage J: Join       union/left_join/filter across canonicals   │
+  │ Stage D: Deliver    canonical → Surge/DB/PTV/GeoJSON/CSV       │
+  └─────────────────────────────────────────────────────────────────┘
+```
+
+Stages A/B/X are built (114 tests). Stages J/D are planned — build when driven
+by a concrete customer integration (Surge for Paketa, or DB upsert for Girteka).
+
+### Implementation Notes
+
+- Stage J is ~500 lines of C: iterate records, hash-join by key field
+- Stage D is per-target: ~100-200 lines each for simple mappers
+- Both compile to WASM for browser demos (same pattern as existing pipeline demo)
+- Join specs and delivery configs are JSON files, same as transform schemas
 
 ## Future
 
