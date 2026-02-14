@@ -63,6 +63,7 @@ EXPORTS += ,_nx_wasm_transform,_nx_wasm_transform_result,_nx_wasm_transform_resu
 EXPORTS += ,_nx_wasm_validate,_nx_wasm_validate_result,_nx_wasm_validate_result_len
 EXPORTS += ,_nx_wasm_discover,_nx_wasm_discover_result,_nx_wasm_discover_result_len
 EXPORTS += ,_nx_wasm_emit_geojson,_nx_wasm_emit_csv,_nx_wasm_emit_result,_nx_wasm_emit_result_len
+EXPORTS += ,_nx_wasm_issues_clear,_nx_wasm_issues_json,_nx_wasm_issues_result,_nx_wasm_issues_result_len
 EXPORTS += ,_malloc,_free
 
 # Output

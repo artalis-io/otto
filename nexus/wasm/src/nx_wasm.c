@@ -15,12 +15,14 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include "nx_ingest.h"
+#include "nx_issue.h"
 #include "nx_merge.h"
 #include "nx_xform.h"
 #include "nx_validate.h"
 #include "nx_discover.h"
 #include "nx_emit.h"
 #include "sh_arena.h"
+#include "sh_json.h"
 #include "sh_pdf2struc.h"
 
 #ifdef __EMSCRIPTEN__
@@ -42,6 +44,11 @@ static char  *g_transform_buf = NULL;  static size_t g_transform_len = 0;
 static char  *g_validate_buf  = NULL;  static size_t g_validate_len  = 0;
 static char  *g_discover_buf  = NULL;  static size_t g_discover_len  = 0;
 static char  *g_emit_buf     = NULL;  static size_t g_emit_len     = 0;
+static char  *g_issues_buf   = NULL;  static size_t g_issues_len   = 0;
+
+/* Accumulates issues across all pipeline stage calls.
+ * Call nx_wasm_issues_clear() before a new pipeline run. */
+static NxIssueList g_issues = {0};
 
 /* ============================================================================
  * PDF Text Extraction (copied from nx_pipeline.c, adapted for memory input)
@@ -189,6 +196,77 @@ int nx_wasm_version(void)
     return 1;
 }
 
+/* ============================================================================
+ * Issue Tracking (accumulated across stage calls)
+ * ============================================================================ */
+
+/*
+ * Clear accumulated issues. Call before starting a new pipeline run.
+ */
+WASM_EXPORT
+void nx_wasm_issues_clear(void)
+{
+    nx_issue_list_free(&g_issues);
+    nx_issue_list_init(&g_issues);
+    free(g_issues_buf);
+    g_issues_buf = NULL;
+    g_issues_len = 0;
+}
+
+/*
+ * Serialize accumulated issues to JSON. Call after all stages complete.
+ * Returns 0 on success, -1 on error.
+ */
+WASM_EXPORT
+int nx_wasm_issues_json(void)
+{
+    free(g_issues_buf);
+    g_issues_buf = NULL;
+    g_issues_len = 0;
+
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter w;
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&w);
+    sh_json_write_key(&w, "count");
+    sh_json_write_int(&w, g_issues.count);
+    sh_json_write_key(&w, "errors");
+    sh_json_write_int(&w, nx_issue_count(&g_issues, -1, NX_ISSUE_ERROR));
+    sh_json_write_key(&w, "warnings");
+    sh_json_write_int(&w, nx_issue_count(&g_issues, -1, NX_ISSUE_WARNING));
+    sh_json_write_key(&w, "info");
+    sh_json_write_int(&w, nx_issue_count(&g_issues, -1, NX_ISSUE_INFO));
+
+    sh_json_write_key(&w, "issues");
+    nx_issue_write_json(&g_issues, -1, &w);
+
+    sh_json_write_object_end(&w);
+
+    if (sh_json_writer_error(&w) || !jb.buf) {
+        sh_json_buf_free(&jb);
+        return -1;
+    }
+
+    g_issues_len = jb.len;  /* Save before take resets it */
+    g_issues_buf = sh_json_buf_take(&jb);
+    return 0;
+}
+
+WASM_EXPORT
+const char *nx_wasm_issues_result(void)
+{
+    return g_issues_buf ? g_issues_buf : "{}";
+}
+
+WASM_EXPORT
+int nx_wasm_issues_result_len(void)
+{
+    return (int)g_issues_len;
+}
+
 /*
  * Stage A: Extract raw rows from document bytes.
  *
@@ -219,7 +297,7 @@ int nx_wasm_extract(const uint8_t *data, int len, int format)
             NULL, 0,           /* No schema for Stage A only */
             &raw, &raw_len,
             &canon, &canon_len,
-            NULL);
+            &g_issues);
 
         free(pdf_json);
         free(canon);
@@ -248,7 +326,7 @@ int nx_wasm_extract(const uint8_t *data, int len, int format)
         NULL, 0,
         &raw, &raw_len,
         &canon, &canon_len,
-        NULL);
+        &g_issues);
 
     free(canon);
     if (st != NX_INGEST_OK || !raw) return -1;
@@ -293,7 +371,7 @@ int nx_wasm_transform(const char *raw_json, int raw_len,
     size_t merged_len = 0;
     NxMergeStatus ms = nx_merge_rows(raw_json, (size_t)raw_len,
                                       schema_json, (size_t)schema_len,
-                                      arena, NULL, &merged, &merged_len);
+                                      arena, &g_issues, &merged, &merged_len);
     if (ms == NX_MERGE_OK && merged) {
         xform_input = merged;
         xform_input_len = merged_len;
@@ -307,7 +385,7 @@ int nx_wasm_transform(const char *raw_json, int raw_len,
     NxXformStatus st = nx_xform_apply(
         xform_input, xform_input_len,
         schema_json, (size_t)schema_len,
-        arena, NULL, &out, &out_len);
+        arena, &g_issues, &out, &out_len);
 
     sh_arena_free(arena);
     free(merged);
@@ -352,7 +430,7 @@ int nx_wasm_validate(const char *canonical_json, int canon_len,
     NxValidateStatus st = nx_validate(
         canonical_json, (size_t)canon_len,
         schema_json, (size_t)schema_len,
-        arena, NULL, &out, &out_len);
+        arena, &g_issues, &out, &out_len);
 
     sh_arena_free(arena);
 
@@ -442,7 +520,7 @@ int nx_wasm_emit_geojson(const char *canonical_json, int canon_len,
     char *out = NULL;
     size_t out_len = 0;
     NxEmitStatus st = nx_emit_geojson(canonical_json, (size_t)canon_len,
-                                       &opts, arena, NULL, &out, &out_len);
+                                       &opts, arena, &g_issues, &out, &out_len);
     sh_arena_free(arena);
 
     if (st != NX_EMIT_OK || !out) return -1;
@@ -470,7 +548,7 @@ int nx_wasm_emit_csv(const char *canonical_json, int canon_len)
     char *out = NULL;
     size_t out_len = 0;
     NxEmitStatus st = nx_emit_csv(canonical_json, (size_t)canon_len,
-                                    NULL, arena, NULL, &out, &out_len);
+                                    NULL, arena, &g_issues, &out, &out_len);
     sh_arena_free(arena);
 
     if (st != NX_EMIT_OK || !out) return -1;
