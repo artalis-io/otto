@@ -152,6 +152,12 @@ typedef struct {
     double glpk_solve_time_min;
     double glpk_solve_time_max;
     double glpk_speedup_avg;        /* GLPK time / Ralph time (> 1 means Ralph faster) */
+
+    /* Objective gap vs GLPK: (ralph_obj - glpk_obj) / glpk_obj * 100 */
+    double glpk_gap_min_pct;        /* Best case (smallest gap) */
+    double glpk_gap_avg_pct;        /* Average gap */
+    double glpk_gap_max_pct;        /* Worst case (largest gap) */
+    int glpk_gap_count;             /* Number of instances with valid gap */
 } FWBenchResults;
 
 /* ============================================================================

@@ -45,8 +45,6 @@ struct RalphModel {
     int trace_phase1; /* 1=emit deterministic Phase-1 failure trace */
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
     int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
-    int root_strong_branch; /* -1=default(on), 0=off, 1=on */
-    int probing_at_nodes;   /* -1=default(on), 0=off, 1=on */
 
     /* Solution */
     RalphStatus status;
@@ -114,8 +112,6 @@ RalphModel* ralph_create(void) {
     model->trace_phase1 = 0;
     model->dual_bound_flip = -1;    /* -1 = use default (on) */
     model->dual_steepest_edge = -1; /* -1 = use default (on) */
-    model->root_strong_branch = -1; /* -1 = use default (on) */
-    model->probing_at_nodes = -1;   /* -1 = use default (on) */
 
     model->status = RALPH_STATUS_UNKNOWN;
 
@@ -524,8 +520,6 @@ int ralph_optimize(RalphModel *model) {
         model->mip_solver->max_cut_rounds = model->max_cut_rounds;
         model->mip_solver->dual_bound_flip = model->dual_bound_flip;
         model->mip_solver->dual_steepest_edge = model->dual_steepest_edge;
-        model->mip_solver->root_strong_branch = model->root_strong_branch;
-        model->mip_solver->probing_at_nodes = model->probing_at_nodes;
 
         /* Set node selection strategy */
         model->mip_solver->node_select = (NodeSelectStrategy)model->node_select;
@@ -1133,12 +1127,6 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (STREQ(name, "dual_steepest_edge") || STREQ(name, "DualSteepestEdge")) {
         /* 0=off, 1=on for P6 DSE leaving selection */
         model->dual_steepest_edge = value ? 1 : 0;
-    } else if (STREQ(name, "root_strong_branch") || STREQ(name, "RootStrongBranch")) {
-        /* 0=off, 1=on for root strong branching pseudo-cost init */
-        model->root_strong_branch = value ? 1 : 0;
-    } else if (STREQ(name, "probing_at_nodes") || STREQ(name, "ProbingAtNodes")) {
-        /* 0=off, 1=on for probing bound tightening at B&B nodes */
-        model->probing_at_nodes = value ? 1 : 0;
     } else {
         return -1;  /* Unknown parameter */
     }

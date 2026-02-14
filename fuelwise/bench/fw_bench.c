@@ -59,6 +59,7 @@ int fw_bench_run(
     }
     double total_glpk_time = 0;
     double total_speedup = 0;
+    double total_gap_pct = 0;
 
     double total_solve_time = 0;
     double total_validate_time = 0;
@@ -196,6 +197,20 @@ int fw_bench_run(
                 if (rel_diff < 0.0001) {
                     results->glpk_num_match++;
                 }
+
+                /* Track objective gap: (ralph - glpk) / glpk * 100 */
+                if (fabs(glpk_obj) > 1e-10) {
+                    double gap_pct = (ralph_obj - glpk_obj) / fabs(glpk_obj) * 100.0;
+                    if (results->glpk_gap_count == 0) {
+                        results->glpk_gap_min_pct = gap_pct;
+                        results->glpk_gap_max_pct = gap_pct;
+                    } else {
+                        if (gap_pct < results->glpk_gap_min_pct) results->glpk_gap_min_pct = gap_pct;
+                        if (gap_pct > results->glpk_gap_max_pct) results->glpk_gap_max_pct = gap_pct;
+                    }
+                    total_gap_pct += gap_pct;
+                    results->glpk_gap_count++;
+                }
             }
         }
 
@@ -218,6 +233,9 @@ int fw_bench_run(
     if (results->glpk_num_solved > 0) {
         results->glpk_solve_time_avg = total_glpk_time / results->glpk_num_solved;
         results->glpk_speedup_avg = total_speedup / results->glpk_num_solved;
+    }
+    if (results->glpk_gap_count > 0) {
+        results->glpk_gap_avg_pct = total_gap_pct / results->glpk_gap_count;
     }
 
     return 0;
@@ -341,6 +359,12 @@ void fw_bench_print_results(
                    results->glpk_speedup_avg);
             printf("  Objective match: %d/%d (tolerance: 0.01%%)\n",
                    results->glpk_num_match, results->glpk_num_solved);
+            if (results->glpk_gap_count > 0) {
+                printf("  Objective gap vs GLPK: %.2f%% avg (%.2f%% - %.2f%%)\n",
+                       results->glpk_gap_avg_pct,
+                       results->glpk_gap_min_pct,
+                       results->glpk_gap_max_pct);
+            }
             printf("\n");
         }
     }

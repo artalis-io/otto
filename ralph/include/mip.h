@@ -14,24 +14,6 @@
 #define RALPH_DEFAULT_ABS_MIP_GAP 1e-6  /* 1e-6 absolute gap */
 #define RALPH_DEFAULT_CUTOFF RALPH_INFINITY
 
-/* Pseudo-cost parameters */
-#define MIP_PCOST_DEFAULT_INIT      1.0     /* Minimum initial pseudo-cost */
-#define MIP_PCOST_MAX_VALUE         1e8     /* Cap to prevent NaN/Inf propagation */
-#define MIP_PCOST_INFEAS_PENALTY    1e6     /* Penalty delta for infeasible child */
-
-/* Root strong branching parameters */
-#define MIP_ROOT_SB_MAX_VARS        20      /* Max variables to strong-branch at root */
-#define MIP_ROOT_SB_MAX_ITER        50      /* Max dual pivots per strong branch probe */
-
-/* Node probing parameters */
-#define MIP_PROBE_MAX_VARS          5       /* Max variables to probe per node */
-#define MIP_PROBE_MAX_DEPTH         20      /* Disable probing below this depth */
-#define MIP_PROBE_FRAC_THRESHOLD    0.2     /* Only probe vars with frac in [thresh, 1-thresh] */
-
-/* Root probing parameters */
-#define MIP_ROOT_PROBE_MAX_VARS     50      /* Max binary variables to probe at root */
-#define MIP_ROOT_PROBE_MAX_PASSES   3       /* Max bound-tightening passes per probe */
-
 /* Node selection strategy */
 typedef enum {
     NODE_SELECT_BEST_FIRST = 0,
@@ -197,8 +179,6 @@ typedef struct {
     int verbose;
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
     int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
-    int root_strong_branch; /* -1=default(on), 0=off, 1=on */
-    int probing_at_nodes;   /* -1=default(on), 0=off, 1=on */
 
     /* Statistics */
     RalphStatus status;
