@@ -720,6 +720,20 @@ h1 {
             <div id="issues-content"></div>
         </div>
 
+        <!-- Stage D: Emit -->
+        <div id="stage-d" class="stage">
+            <div class="stage-header">
+                <span class="stage-label">STAGE D: <span class="stage-name">EMIT</span></span>
+                <span id="stage-d-time" class="stage-time"></span>
+            </div>
+            <div id="emit-controls" style="display: flex; gap: 8px; margin-bottom: 12px;">
+                <button id="emit-geojson-btn" class="expand-btn" style="margin-top: 0;">Export GeoJSON</button>
+                <button id="emit-csv-btn" class="expand-btn" style="margin-top: 0;">Export CSV</button>
+            </div>
+            <div id="stage-d-block" class="code-block" style="display: none;"><pre id="stage-d-code"></pre></div>
+            <div id="stage-d-expand"></div>
+        </div>
+
         <!-- Baseline Bar -->
         <div id="baseline-bar" class="baseline-bar">
             <button id="baseline-btn" class="baseline-btn">Save as Baseline</button>
@@ -963,6 +977,26 @@ function callDiff(oldJSON, newJSON) {
     return Module.UTF8ToString(Module._nx_wasm_diff_result());
 }
 
+function callEmitGeoJSON(canonicalJSON, latField, lonField) {
+    const [canonPtr, canonLen] = allocUTF8(canonicalJSON);
+    const [latPtr] = allocUTF8(latField);
+    const [lonPtr] = allocUTF8(lonField);
+    const status = Module._nx_wasm_emit_geojson(canonPtr, canonLen, latPtr, lonPtr);
+    Module._free(canonPtr);
+    Module._free(latPtr);
+    Module._free(lonPtr);
+    if (status !== 0) throw new Error('GeoJSON emit failed');
+    return Module.UTF8ToString(Module._nx_wasm_emit_result());
+}
+
+function callEmitCSV(canonicalJSON) {
+    const [canonPtr, canonLen] = allocUTF8(canonicalJSON);
+    const status = Module._nx_wasm_emit_csv(canonPtr, canonLen);
+    Module._free(canonPtr);
+    if (status !== 0) throw new Error('CSV emit failed');
+    return Module.UTF8ToString(Module._nx_wasm_emit_result());
+}
+
 /* ============================================================================
  * JSON Syntax Highlighting
  * ============================================================================ */
@@ -1163,7 +1197,7 @@ function renderContentImmediate(block, html) {
  * ============================================================================ */
 
 function hideAllStages() {
-    const stages = ['stage-a', 'schema-preview', 'stage-b', 'stage-x', 'audit-summary', 'issues-panel', 'stage-diff'];
+    const stages = ['stage-a', 'schema-preview', 'stage-b', 'stage-x', 'audit-summary', 'stage-d', 'issues-panel', 'stage-diff'];
     stages.forEach(function(id) {
         const el = document.getElementById(id);
         el.classList.remove('visible');
@@ -1326,6 +1360,26 @@ async function runPipeline() {
         /* ── Audit Summary ───────────────────────────────────── */
         showAuditSummary(finalJSON);
         showStage('audit-summary');
+
+        /* ── Stage D: Show emit buttons ─────────────────────── */
+        showStage('stage-d');
+        document.getElementById('stage-d-block').style.display = 'none';
+        document.getElementById('stage-d-expand').innerHTML = '';
+
+        /* Detect lat/lon fields from schema for GeoJSON emit */
+        let emitLatField = 'lat', emitLonField = 'lon';
+        if (schema && schema.validate) {
+            for (const rule of schema.validate) {
+                if (rule.type === 'geo_bounds') {
+                    if (rule.lat_field) emitLatField = rule.lat_field;
+                    if (rule.lon_field) emitLonField = rule.lon_field;
+                    break;
+                }
+            }
+        }
+
+        /* Store for button handlers */
+        window._emitState = { finalJSON: finalJSON, latField: emitLatField, lonField: emitLonField };
 
         /* ── Issues Panel ───────────────────────────────────── */
         const issuesData = JSON.parse(callIssuesJSON());
@@ -1552,6 +1606,73 @@ document.getElementById('baseline-btn').addEventListener('click', function() {
     baselineJSON = lastCanonicalJSON;
     showBaselineBar();
 });
+
+/* ============================================================================
+ * Stage D: Emit Handlers
+ * ============================================================================ */
+
+document.getElementById('emit-geojson-btn').addEventListener('click', function() {
+    if (!window._emitState) return;
+    const { finalJSON, latField, lonField } = window._emitState;
+    try {
+        const t0 = performance.now();
+        const geojson = callEmitGeoJSON(finalJSON, latField, lonField);
+        const t1 = performance.now();
+
+        document.getElementById('stage-d-time').textContent = (t1 - t0).toFixed(0) + ' ms (GeoJSON)';
+        const block = document.getElementById('stage-d-block');
+        block.style.display = '';
+
+        const trunc = truncateJSON(geojson);
+        renderContentImmediate(block, highlightJSON(trunc.json));
+        if (trunc.truncated) {
+            addExpandButton('stage-d-expand', geojson, trunc.totalRecords, 'stage-d-block');
+        }
+    } catch (err) {
+        showError('GeoJSON emit error: ' + err.message);
+    }
+});
+
+document.getElementById('emit-csv-btn').addEventListener('click', function() {
+    if (!window._emitState) return;
+    const { finalJSON } = window._emitState;
+    try {
+        const t0 = performance.now();
+        const csv = callEmitCSV(finalJSON);
+        const t1 = performance.now();
+
+        document.getElementById('stage-d-time').textContent = (t1 - t0).toFixed(0) + ' ms (CSV)';
+        const block = document.getElementById('stage-d-block');
+        block.style.display = '';
+
+        /* CSV is plain text — show without JSON highlighting */
+        const pre = block.querySelector('pre');
+        const lines = csv.split('\n');
+        if (lines.length > 50) {
+            pre.textContent = lines.slice(0, 50).join('\n');
+            const expand = document.getElementById('stage-d-expand');
+            expand.innerHTML = '';
+            const btn = document.createElement('button');
+            btn.className = 'expand-btn';
+            btn.textContent = 'Show all ' + lines.length + ' lines';
+            btn.addEventListener('click', function() {
+                pre.textContent = csv;
+                expand.innerHTML = '';
+            });
+            expand.appendChild(btn);
+        } else {
+            pre.textContent = csv;
+        }
+        block.classList.remove('typing');
+        block.classList.add('typed');
+    } catch (err) {
+        showError('CSV emit error: ' + err.message);
+    }
+});
+
+/* ============================================================================
+ * Diff Display
+ * ============================================================================ */
 
 function showDiffResult(diffJSON) {
     const diff = JSON.parse(diffJSON);

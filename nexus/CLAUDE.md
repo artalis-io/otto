@@ -62,7 +62,7 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 ## Build
 
 ```bash
-make all      # Build library + tests (169 tests)
+make all      # Build library + tests (192 tests)
 make test     # Run all tests
 make tools    # Build CLI tools
 make debug    # Build with ASan/UBSan + -Werror
@@ -88,7 +88,8 @@ Hardening: `-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common`.
 - test_emit: 19 tests (9 GeoJSON + 10 CSV)
 - test_issue: 13 tests (init/free, add, dynamic growth, count, JSON output)
 - test_diff: 14 tests (null input, identical/added/removed/modified, mixed, empty, parse error)
-- Total: 183 tests
+- test_pipeline: 9 tests (end-to-end pipeline, issues threading, GeoJSON/CSV emit, diff identical/modified/removed, manifest JSON/counts)
+- Total: 192 tests
 
 ## Schemas
 
@@ -194,6 +195,9 @@ in-process using `sh_pdf2struc` for PDF text extraction (no Python dependency).
 # Emit downstream formats (Stage D)
 ./nx_pipeline input.xlsx --schema s.json --emit geojson
 ./nx_pipeline input.xlsx --schema s.json --emit csv
+
+# Diff against previous run (change detection)
+./nx_pipeline input.xlsx --schema s.json --baseline prev.json
 
 # CSV options
 ./nx_pipeline input.csv --delimiter ";" --no-header
