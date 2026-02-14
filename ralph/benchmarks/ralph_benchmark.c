@@ -335,6 +335,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     ralph_set_int_param(model, "verbose", 0);
     ralph_set_dbl_param(model, "time_limit", time_limit_sec);
     ralph_set_int_param(model, "max_iterations", 10000000);
+    ralph_set_int_param(model, "presolve", 1);
 
     /* Solve */
     double start_time = get_time_ms();
