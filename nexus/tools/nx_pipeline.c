@@ -39,6 +39,27 @@
 #define PIPELINE_ARENA_SIZE (64 * 1024 * 1024) /* 64 MB */
 #define MAX_PDF_TEXT_SIZE   (32 * 1024 * 1024)  /* 32 MB max text-run JSON */
 
+/* Write a JSON-escaped string (without surrounding quotes) to a file. */
+static void json_escape_fputs(FILE *f, const char *s)
+{
+    for (; *s; s++) {
+        switch (*s) {
+        case '"':  fputs("\\\"", f); break;
+        case '\\': fputs("\\\\", f); break;
+        case '\b': fputs("\\b", f); break;
+        case '\f': fputs("\\f", f); break;
+        case '\n': fputs("\\n", f); break;
+        case '\r': fputs("\\r", f); break;
+        case '\t': fputs("\\t", f); break;
+        default:
+            if ((unsigned char)*s < 0x20)
+                fprintf(f, "\\u%04x", (unsigned char)*s);
+            else
+                fputc(*s, f);
+        }
+    }
+}
+
 /* ============================================================================
  * File I/O
  * ============================================================================ */
@@ -1007,8 +1028,10 @@ batch_file_done:
         /* Write manifest entry */
         if (mf) {
             if (i > 0) fprintf(mf, ",\n");
-            fprintf(mf, "{\"file\":\"%s\",\"status\":\"%s\"",
-                    file, file_failed ? "failed" : "ok");
+            fputs("{\"file\":\"", mf);
+            json_escape_fputs(mf, file);
+            fprintf(mf, "\",\"status\":\"%s\"",
+                    file_failed ? "failed" : "ok");
 
             /* Per-stage counts */
             fprintf(mf, ",\"stages\":{");
@@ -1039,9 +1062,19 @@ batch_file_done:
                             nx_stage_tag(iss->stage),
                             nx_issue_severity_str(iss->severity));
                     if (iss->row >= 0) fprintf(mf, ",\"row\":%d", iss->row);
-                    if (iss->field[0]) fprintf(mf, ",\"field\":\"%s\"", iss->field);
-                    if (iss->code[0]) fprintf(mf, ",\"code\":\"%s\"", iss->code);
-                    fprintf(mf, ",\"message\":\"%s\"}", iss->message);
+                    if (iss->field[0]) {
+                        fputs(",\"field\":\"", mf);
+                        json_escape_fputs(mf, iss->field);
+                        fputc('"', mf);
+                    }
+                    if (iss->code[0]) {
+                        fputs(",\"code\":\"", mf);
+                        json_escape_fputs(mf, iss->code);
+                        fputc('"', mf);
+                    }
+                    fputs(",\"message\":\"", mf);
+                    json_escape_fputs(mf, iss->message);
+                    fputs("\"}", mf);
                 }
                 fprintf(mf, "]");
             }

@@ -203,6 +203,22 @@ const char *sh_args_prefix(ShApiType api_type);
 int sh_parse_int(const char *str, int default_val, int min_val, int max_val);
 
 /*
+ * Parse long from string with bounds validation.
+ *
+ * Uses strtol() for proper error detection. Returns default_val if:
+ * - str is NULL or empty
+ * - str is not a valid integer (no digits consumed or trailing garbage)
+ * - parsed value is outside [min_val, max_val] range
+ *
+ * @param str         String to parse
+ * @param default_val Value to return on parse failure or out-of-range
+ * @param min_val     Minimum acceptable value (inclusive)
+ * @param max_val     Maximum acceptable value (inclusive)
+ * @return Parsed long clamped to [min_val, max_val], or default_val on error
+ */
+long sh_parse_long(const char *str, long default_val, long min_val, long max_val);
+
+/*
  * Parse double from string with bounds validation.
  *
  * Uses strtod() for proper error detection. Returns default_val if:
