@@ -100,6 +100,9 @@ typedef struct {
     char problem_path[MAX_PATH];
     char netlib_name[256];
 
+    /* Solver method */
+    int method;  /* 0=primal, 1=dual, 2=auto */
+
     /* Output */
     char output_dir[MAX_PATH];
 } Options;
@@ -298,6 +301,7 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
  * ============================================================================ */
 
 static SolveResult solve_with_ralph(const char *problem_path, double time_limit_sec,
+                                     int method,
                                      int *out_num_vars, int *out_num_cons, int *out_nnz,
                                      int *out_is_mip) {
     SolveResult result = {0};
@@ -337,6 +341,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     ralph_set_int_param(model, "max_iterations", 10000000);
     ralph_set_int_param(model, "presolve", 1);
     ralph_set_int_param(model, "verify", 1);
+    ralph_set_int_param(model, "method", method);
 
     /* Solve */
     double start_time = get_time_ms();
@@ -731,6 +736,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
     /* Solve with Ralph */
     int num_vars = 0, num_cons = 0, nnz = 0, is_mip = 0;
     SolveResult ralph = solve_with_ralph(problem_path, ralph_time_limit,
+                                          opts->method,
                                           &num_vars, &num_cons, &nnz, &is_mip);
 
     /* Validate if both solved optimally */
@@ -828,6 +834,9 @@ static void print_help(const char *prog) {
     printf("  --hard-cap <SEC>              Maximum time per problem (default: %.0f sec)\n",
            DEFAULT_HARD_CAP_SEC);
     printf("\n");
+    printf("Solver:\n");
+    printf("  --method <N>                  LP method: 0=primal, 1=dual, 2=auto (default: 0)\n");
+    printf("\n");
     printf("Problem Filtering:\n");
     printf("  --lp-only                     Only benchmark LP problems (default)\n");
     printf("  --mip-only                    Only benchmark MIP problems\n");
@@ -910,6 +919,8 @@ static int parse_args(int argc, char **argv, Options *opts) {
             opts->obj_abs_tol = atof(argv[++i]);
         } else if (strcmp(arg, "--feas-tol") == 0 && i + 1 < argc) {
             opts->feas_tol = atof(argv[++i]);
+        } else if (strcmp(arg, "--method") == 0 && i + 1 < argc) {
+            opts->method = atoi(argv[++i]);
         } else if (strcmp(arg, "-o") == 0 && i + 1 < argc) {
             strncpy(opts->output_dir, argv[++i], sizeof(opts->output_dir) - 1);
         } else if (arg[0] != '-') {
