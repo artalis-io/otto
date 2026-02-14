@@ -216,6 +216,12 @@ static char *extract_pdf_text(const char *pdf_path, size_t *out_len)
     sh_pdf2struc_opts_default(&opts);
     opts.emit_mode = SH_PDF2STRUC_EMIT_BLOCKS;
     opts.origin_top_left = 1;
+    /* Tighter block merging to avoid fusing adjacent table columns.
+     * Default merge_x_gap=3.0 is too wide for dense tables where
+     * inter-column gaps can be as small as 2pt (e.g. EOV/GPS columns).
+     * 1.5pt still merges characters within words (gaps < 0.5pt) while
+     * keeping separate columns apart. */
+    opts.merge_x_gap = 1.5;
 
     /* Set up JSON collector */
     PdfJsonCollector collector = {0};
