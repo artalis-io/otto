@@ -13,6 +13,7 @@
 #define NX_PDF_H
 
 #include "sh_arena.h"
+#include "nx_issue.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -71,13 +72,15 @@ typedef struct {
  *                   (negative) are used, resolved values are written back.
  * @param filename   Original PDF filename (for metadata)
  * @param arena      Arena for intermediate allocations
+ * @param issues     Issue list for structured reporting (NULL to skip)
  * @param out_json   Output: heap-allocated raw rows JSON (caller must free)
  * @param out_len    Output: length of JSON
  * @return NX_PDF_OK on success
  */
 NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
                                   NxPdfOptions *opts, const char *filename,
-                                  SHArena *arena, char **out_json, size_t *out_len);
+                                  SHArena *arena, NxIssueList *issues,
+                                  char **out_json, size_t *out_len);
 
 /*
  * Get human-readable error message.

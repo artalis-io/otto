@@ -218,7 +218,8 @@ int nx_wasm_extract(const uint8_t *data, int len, int format)
             NX_FORMAT_PDF_JSON, "upload.pdf",
             NULL, 0,           /* No schema for Stage A only */
             &raw, &raw_len,
-            &canon, &canon_len);
+            &canon, &canon_len,
+            NULL);
 
         free(pdf_json);
         free(canon);
@@ -246,7 +247,8 @@ int nx_wasm_extract(const uint8_t *data, int len, int format)
         nx_fmt, filename,
         NULL, 0,
         &raw, &raw_len,
-        &canon, &canon_len);
+        &canon, &canon_len,
+        NULL);
 
     free(canon);
     if (st != NX_INGEST_OK || !raw) return -1;
@@ -291,7 +293,7 @@ int nx_wasm_transform(const char *raw_json, int raw_len,
     size_t merged_len = 0;
     NxMergeStatus ms = nx_merge_rows(raw_json, (size_t)raw_len,
                                       schema_json, (size_t)schema_len,
-                                      arena, &merged, &merged_len);
+                                      arena, NULL, &merged, &merged_len);
     if (ms == NX_MERGE_OK && merged) {
         xform_input = merged;
         xform_input_len = merged_len;
@@ -305,7 +307,7 @@ int nx_wasm_transform(const char *raw_json, int raw_len,
     NxXformStatus st = nx_xform_apply(
         xform_input, xform_input_len,
         schema_json, (size_t)schema_len,
-        arena, &out, &out_len);
+        arena, NULL, &out, &out_len);
 
     sh_arena_free(arena);
     free(merged);
@@ -350,7 +352,7 @@ int nx_wasm_validate(const char *canonical_json, int canon_len,
     NxValidateStatus st = nx_validate(
         canonical_json, (size_t)canon_len,
         schema_json, (size_t)schema_len,
-        arena, &out, &out_len);
+        arena, NULL, &out, &out_len);
 
     sh_arena_free(arena);
 
@@ -440,7 +442,7 @@ int nx_wasm_emit_geojson(const char *canonical_json, int canon_len,
     char *out = NULL;
     size_t out_len = 0;
     NxEmitStatus st = nx_emit_geojson(canonical_json, (size_t)canon_len,
-                                       &opts, arena, &out, &out_len);
+                                       &opts, arena, NULL, &out, &out_len);
     sh_arena_free(arena);
 
     if (st != NX_EMIT_OK || !out) return -1;
@@ -468,7 +470,7 @@ int nx_wasm_emit_csv(const char *canonical_json, int canon_len)
     char *out = NULL;
     size_t out_len = 0;
     NxEmitStatus st = nx_emit_csv(canonical_json, (size_t)canon_len,
-                                    NULL, arena, &out, &out_len);
+                                    NULL, arena, NULL, &out, &out_len);
     sh_arena_free(arena);
 
     if (st != NX_EMIT_OK || !out) return -1;

@@ -17,6 +17,7 @@
 #define NX_XLSX_H
 
 #include "sh_arena.h"
+#include "nx_issue.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -67,13 +68,15 @@ typedef struct {
  * @param limits    Parsing limits (NULL for defaults)
  * @param filename  Original filename (for metadata, may be NULL)
  * @param arena     Arena for intermediate allocations
+ * @param issues    Issue list for structured reporting (NULL to skip)
  * @param out_json  Output: heap-allocated JSON string (caller must free)
  * @param out_len   Output: length of JSON string
  * @return NX_XLSX_OK on success
  */
 NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
                            const NxXlsxLimits *limits, const char *filename,
-                           SHArena *arena, char **out_json, size_t *out_len);
+                           SHArena *arena, NxIssueList *issues,
+                           char **out_json, size_t *out_len);
 
 /*
  * Get human-readable error message.

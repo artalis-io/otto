@@ -68,7 +68,8 @@ typedef struct {
 } SharedStrings;
 
 static int parse_shared_strings(const char *xml, size_t xml_len,
-                                SHArena *arena, SharedStrings *ss)
+                                SHArena *arena, NxIssueList *issues,
+                                SharedStrings *ss)
 {
     ShXmlReader r;
     ShXmlToken tok;
@@ -119,6 +120,12 @@ static int parse_shared_strings(const char *xml, size_t xml_len,
                     if (!s) return -1;
                     memcpy(s, concat_buf, (size_t)concat_len + 1);
                     ss->strings[ss->count++] = s;
+                } else {
+                    if (issues && ss->count == MAX_SHARED_STRINGS)
+                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                      -1, "", "shared_string_limit",
+                                      "Hit MAX_SHARED_STRINGS=%d cap",
+                                      MAX_SHARED_STRINGS);
                 }
                 in_si = 0;
                 concat_len = 0;
@@ -191,7 +198,8 @@ static int ensure_row_cap(ParsedSheet *sheet, SHArena *arena)
 
 static int parse_worksheet(const char *xml, size_t xml_len,
                            SHArena *arena, const SharedStrings *ss,
-                           const NxXlsxLimits *limits, ParsedSheet *sheet)
+                           const NxXlsxLimits *limits, NxIssueList *issues,
+                           ParsedSheet *sheet)
 {
     ShXmlReader r;
     ShXmlToken tok;
@@ -251,7 +259,14 @@ static int parse_worksheet(const char *xml, size_t xml_len,
             if (in_v) {
                 int avail = (int)sizeof(value_buf) - value_len - 1;
                 int copy = (int)tok.text_len;
-                if (copy > avail) copy = avail;
+                if (copy > avail) {
+                    if (issues)
+                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                      cur_row, "", "cell_truncated",
+                                      "Cell value truncated at %d bytes",
+                                      (int)sizeof(value_buf));
+                    copy = avail;
+                }
                 if (copy > 0) {
                     memcpy(value_buf + value_len, tok.text, (size_t)copy);
                     value_len += copy;
@@ -489,7 +504,8 @@ const char *nx_xlsx_status_str(NxXlsxStatus status)
 
 NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
                            const NxXlsxLimits *limits, const char *filename,
-                           SHArena *arena, char **out_json, size_t *out_len)
+                           SHArena *arena, NxIssueList *issues,
+                           char **out_json, size_t *out_len)
 {
     NxXlsxLimits default_limits = NX_XLSX_DEFAULT_LIMITS;
     mz_zip_archive zip;
@@ -520,7 +536,7 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
     size_t ss_size = 0;
     void *ss_xml = zip_extract(&zip, "xl/sharedStrings.xml", &ss_size);
     if (ss_xml) {
-        if (parse_shared_strings((const char *)ss_xml, ss_size, arena, &ss) < 0) {
+        if (parse_shared_strings((const char *)ss_xml, ss_size, arena, issues, &ss) < 0) {
             mz_free(ss_xml);
             mz_zip_reader_end(&zip);
             return NX_XLSX_ERR_XML;
@@ -573,7 +589,7 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
         }
 
         if (parse_worksheet((const char *)ws_xml, ws_size, arena, &ss,
-                           limits, &parsed_sheets[s]) < 0) {
+                           limits, issues, &parsed_sheets[s]) < 0) {
             mz_free(ws_xml);
             result = NX_XLSX_ERR_XML;
             break;

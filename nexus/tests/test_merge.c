@@ -147,7 +147,7 @@ static const char *SCHEMA_NO_MERGE =
 
 TEST(null_input)
 {
-    ASSERT_EQ(nx_merge_rows(NULL, 0, NULL, 0, NULL, NULL, NULL), NX_MERGE_ERR_NULL);
+    ASSERT_EQ(nx_merge_rows(NULL, 0, NULL, 0, NULL, NULL, NULL, NULL), NX_MERGE_ERR_NULL);
 }
 
 TEST(invalid_json)
@@ -156,7 +156,7 @@ TEST(invalid_json)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows("not json", 8,
                                       SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_ERR_JSON);
     sh_arena_free(arena);
 }
@@ -168,7 +168,7 @@ TEST(no_config_passthrough)
     const char *raw = "{\"tables\":[{\"rows\":[{\"row\":1,\"cells\":[\"a\"]}]}]}";
     NxMergeStatus st = nx_merge_rows(raw, strlen(raw),
                                       SCHEMA_NO_MERGE, strlen(SCHEMA_NO_MERGE),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
     ASSERT(out == NULL); /* No-op signal */
     sh_arena_free(arena);
@@ -207,7 +207,7 @@ TEST(basic_single_continuation)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, strlen(raw),
                                       SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
     ASSERT(out != NULL);
 
@@ -245,7 +245,7 @@ TEST(multi_continuation)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, strlen(raw),
                                       SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
     ASSERT(out != NULL);
 
@@ -279,7 +279,7 @@ TEST(no_continuations)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, strlen(raw),
                                       SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
     ASSERT(out != NULL);
 
@@ -308,7 +308,7 @@ TEST(custom_separator)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, strlen(raw),
                                       SCHEMA_CUSTOM_SEP, strlen(SCHEMA_CUSTOM_SEP),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
     ASSERT(out != NULL);
 
@@ -339,7 +339,7 @@ TEST(default_separator)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, strlen(raw),
                                       SCHEMA_DEFAULT_SEP, strlen(SCHEMA_DEFAULT_SEP),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
     ASSERT(out != NULL);
 
@@ -374,7 +374,7 @@ TEST(strip_pattern)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, strlen(raw),
                                       SCHEMA_WITH_STRIP, strlen(SCHEMA_WITH_STRIP),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
     ASSERT(out != NULL);
 
@@ -412,7 +412,7 @@ TEST(empty_continuation_cells)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, strlen(raw),
                                       SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
 
     SHArena *arena2 = sh_arena_create(1024 * 1024);
@@ -445,7 +445,7 @@ TEST(first_row_continuation)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, strlen(raw),
                                       SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
 
     SHArena *arena2 = sh_arena_create(1024 * 1024);
@@ -478,7 +478,7 @@ TEST(row_count_updated)
     char *out = NULL; size_t out_len = 0;
     nx_merge_rows(raw, strlen(raw),
                   SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                  arena, &out, &out_len);
+                  arena, NULL, &out, &out_len);
 
     SHArena *arena2 = sh_arena_create(1024 * 1024);
     ShJsonValue *root = parse_json(out, out_len, arena2);
@@ -510,7 +510,7 @@ TEST(row_numbers_sequential)
     char *out = NULL; size_t out_len = 0;
     nx_merge_rows(raw, strlen(raw),
                   SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                  arena, &out, &out_len);
+                  arena, NULL, &out, &out_len);
 
     SHArena *arena2 = sh_arena_create(1024 * 1024);
     ShJsonValue *root = parse_json(out, out_len, arena2);
@@ -543,7 +543,7 @@ TEST(preserves_source_metadata)
     char *out = NULL; size_t out_len = 0;
     nx_merge_rows(raw, strlen(raw),
                   SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                  arena, &out, &out_len);
+                  arena, NULL, &out, &out_len);
 
     SHArena *arena2 = sh_arena_create(1024 * 1024);
     ShJsonValue *root = parse_json(out, out_len, arena2);
@@ -586,7 +586,7 @@ TEST(mixed_data_and_continuations)
     char *out = NULL; size_t out_len = 0;
     nx_merge_rows(raw, strlen(raw),
                   SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                  arena, &out, &out_len);
+                  arena, NULL, &out, &out_len);
 
     SHArena *arena2 = sh_arena_create(1024 * 1024);
     ASSERT_EQ(get_merged_row_count(out, out_len, arena2), (size_t)3);
@@ -621,7 +621,7 @@ static void test_golden_pdf02_merge_row_count(int *skip)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, raw_len,
                                       SCHEMA_PDF02, strlen(SCHEMA_PDF02),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
     ASSERT(out != NULL);
 
@@ -653,7 +653,7 @@ static void test_golden_pdf02_merge_hours_joined(int *skip)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, raw_len,
                                       SCHEMA_PDF02, strlen(SCHEMA_PDF02),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
 
     /* Find the Ács row (KoKo Autósbolt) - should have merged hours */
@@ -695,7 +695,7 @@ static void test_golden_pdf02_merge_notes_joined(int *skip)
     char *out = NULL; size_t out_len = 0;
     NxMergeStatus st = nx_merge_rows(raw, raw_len,
                                       SCHEMA_PDF02, strlen(SCHEMA_PDF02),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(st, NX_MERGE_OK);
 
     /* Find Abaújszántó row - notes should merge "BANKKÁRTYÁS FIZETÉS IS" + "CSAK CSOMAGÁTADÁS" */
@@ -741,7 +741,7 @@ static void test_golden_pdf02_merge_transform_e2e(int *skip)
     char *merged = NULL; size_t merged_len = 0;
     NxMergeStatus ms = nx_merge_rows(raw, raw_len,
                                       schema, schema_len,
-                                      arena, &merged, &merged_len);
+                                      arena, NULL, &merged, &merged_len);
     ASSERT_EQ(ms, NX_MERGE_OK);
 
     /* If schema has row_merge, use merged; otherwise use raw */
@@ -753,7 +753,7 @@ static void test_golden_pdf02_merge_transform_e2e(int *skip)
     char *canon = NULL; size_t canon_len = 0;
     NxXformStatus xst = nx_xform_apply(xform_input, xform_input_len,
                                         schema, schema_len,
-                                        arena_b, &canon, &canon_len);
+                                        arena_b, NULL, &canon, &canon_len);
     ASSERT_EQ(xst, NX_XFORM_OK);
     ASSERT(canon != NULL);
 

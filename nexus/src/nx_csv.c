@@ -298,9 +298,10 @@ NxCsvStatus nx_csv_parse(const char *data, size_t len,
                           const ShCsvOpts *csv_opts,
                           const NxCsvLimits *limits,
                           const char *filename,
-                          SHArena *arena,
+                          SHArena *arena, NxIssueList *issues,
                           char **out_json, size_t *out_len)
 {
+    (void)issues;
     if (!data || !out_json || !out_len) return NX_CSV_ERR_NULL;
     if (!arena) return NX_CSV_ERR_ARENA;
 

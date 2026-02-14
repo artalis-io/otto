@@ -125,11 +125,11 @@ TEST(validate_null_input)
     size_t out_len = 0;
 
     NxValidateStatus s = nx_validate(NULL, 0, SCHEMA_NO_VALIDATION, strlen(SCHEMA_NO_VALIDATION),
-                                     arena, &out_json, &out_len);
+                                     arena, NULL, &out_json, &out_len);
     ASSERT_EQ(s, NX_VALIDATE_ERR_NULL);
 
     s = nx_validate(CANONICAL_JSON, strlen(CANONICAL_JSON), NULL, 0,
-                   arena, &out_json, &out_len);
+                   arena, NULL, &out_json, &out_len);
     ASSERT_EQ(s, NX_VALIDATE_ERR_NULL);
 
     sh_arena_free(arena);
@@ -143,7 +143,7 @@ TEST(validate_no_rules_passthrough)
 
     NxValidateStatus s = nx_validate(CANONICAL_JSON, strlen(CANONICAL_JSON),
                                      SCHEMA_NO_VALIDATION, strlen(SCHEMA_NO_VALIDATION),
-                                     arena, &out_json, &out_len);
+                                     arena, NULL, &out_json, &out_len);
     ASSERT_EQ(s, NX_VALIDATE_OK);
     ASSERT(out_json != NULL);
     ASSERT(out_len > 0);
@@ -164,7 +164,7 @@ TEST(validate_geo_bounds_pass)
     /* All records within bounds [45,49] x [16,23] */
     NxValidateStatus s = nx_validate(CANONICAL_JSON, strlen(CANONICAL_JSON),
                                      SCHEMA_GEO_BOUNDS, strlen(SCHEMA_GEO_BOUNDS),
-                                     arena, &out_json, &out_len);
+                                     arena, NULL, &out_json, &out_len);
     ASSERT_EQ(s, NX_VALIDATE_OK);
     ASSERT(out_json != NULL);
 
@@ -197,7 +197,7 @@ TEST(validate_format_pass)
     /* All zip codes are 4 digits */
     NxValidateStatus s = nx_validate(CANONICAL_JSON, strlen(CANONICAL_JSON),
                                      SCHEMA_FORMAT, strlen(SCHEMA_FORMAT),
-                                     arena, &out_json, &out_len);
+                                     arena, NULL, &out_json, &out_len);
     ASSERT_EQ(s, NX_VALIDATE_OK);
     ASSERT(out_json != NULL);
 
@@ -225,7 +225,7 @@ TEST(validate_unique_removes_duplicates)
     /* Record 0 and 2 have same id "loc-1" - duplicate should be removed */
     NxValidateStatus s = nx_validate(CANONICAL_JSON, strlen(CANONICAL_JSON),
                                      SCHEMA_UNIQUE, strlen(SCHEMA_UNIQUE),
-                                     arena, &out_json, &out_len);
+                                     arena, NULL, &out_json, &out_len);
     ASSERT_EQ(s, NX_VALIDATE_OK);
     ASSERT(out_json != NULL);
 
@@ -269,7 +269,7 @@ TEST(validate_outlier_warning)
     /* This test mainly checks that outlier rule doesn't crash */
     NxValidateStatus s = nx_validate(CANONICAL_JSON, strlen(CANONICAL_JSON),
                                      SCHEMA_OUTLIER, strlen(SCHEMA_OUTLIER),
-                                     arena, &out_json, &out_len);
+                                     arena, NULL, &out_json, &out_len);
     ASSERT_EQ(s, NX_VALIDATE_OK);
     ASSERT(out_json != NULL);
 
@@ -327,7 +327,7 @@ TEST(validate_geo_bounds_out_of_bounds)
 
     NxValidateStatus s = nx_validate(bad_json, strlen(bad_json),
                                      SCHEMA_GEO_BOUNDS, strlen(SCHEMA_GEO_BOUNDS),
-                                     arena, &out_json, &out_len);
+                                     arena, NULL, &out_json, &out_len);
     ASSERT_EQ(s, NX_VALIDATE_OK);
     ASSERT(out_json != NULL);
 
@@ -378,7 +378,7 @@ TEST(validate_format_invalid)
 
     NxValidateStatus s = nx_validate(bad_json, strlen(bad_json),
                                      SCHEMA_FORMAT, strlen(SCHEMA_FORMAT),
-                                     arena, &out_json, &out_len);
+                                     arena, NULL, &out_json, &out_len);
     ASSERT_EQ(s, NX_VALIDATE_OK);
     ASSERT(out_json != NULL);
 

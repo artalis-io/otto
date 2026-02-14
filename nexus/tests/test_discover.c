@@ -456,7 +456,7 @@ TEST(discovered_schema_transforms)
     /* Transform with discovered schema */
     char *canon = NULL; size_t canon_len = 0;
     NxXformStatus xst = nx_xform_apply(raw, strlen(raw), schema_json, schema_len,
-                                        arena, &canon, &canon_len);
+                                        arena, NULL, &canon, &canon_len);
     ASSERT_EQ(xst, NX_XFORM_OK);
     ASSERT(canon != NULL);
 
@@ -640,7 +640,7 @@ static void test_golden_xlsx01_discover_transform(int *skip)
     /* Transform */
     char *canon = NULL; size_t canon_len = 0;
     NxXformStatus xst = nx_xform_apply(raw, raw_len, schema, schema_len,
-                                        arena, &canon, &canon_len);
+                                        arena, NULL, &canon, &canon_len);
     ASSERT_EQ(xst, NX_XFORM_OK);
 
     /* Parse canonical output */
@@ -716,7 +716,7 @@ static void test_golden_pdf01_discover_transform(int *skip)
     SHArena *xform_arena = sh_arena_create(16 * 1024 * 1024);
     char *canon = NULL; size_t canon_len = 0;
     NxXformStatus xst = nx_xform_apply(raw, raw_len, schema, schema_len,
-                                        xform_arena, &canon, &canon_len);
+                                        xform_arena, NULL, &canon, &canon_len);
     ASSERT_EQ(xst, NX_XFORM_OK);
 
     /* Parse and check record count (PDF01 has ~689 rows) */

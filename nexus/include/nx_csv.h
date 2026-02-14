@@ -12,6 +12,7 @@
 
 #include "sh_arena.h"
 #include "sh_csv.h"
+#include "nx_issue.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -58,6 +59,7 @@ typedef struct {
  * @param limits    Row/column limits (NULL for defaults)
  * @param filename  Original filename (for metadata, may be NULL)
  * @param arena     Arena for intermediate allocations
+ * @param issues    Issue list for structured reporting (NULL to skip)
  * @param out_json  Output: heap-allocated JSON string (caller must free)
  * @param out_len   Output: length of JSON string
  * @return NX_CSV_OK on success
@@ -66,7 +68,7 @@ NxCsvStatus nx_csv_parse(const char *data, size_t len,
                           const ShCsvOpts *csv_opts,
                           const NxCsvLimits *limits,
                           const char *filename,
-                          SHArena *arena,
+                          SHArena *arena, NxIssueList *issues,
                           char **out_json, size_t *out_len);
 
 /*

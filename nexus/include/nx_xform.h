@@ -17,6 +17,7 @@
 #define NX_XFORM_H
 
 #include "sh_arena.h"
+#include "nx_issue.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -48,13 +49,15 @@ typedef enum {
  * @param schema_json Transform schema JSON (nx_schema format)
  * @param schema_len  Length of schema JSON
  * @param arena       Arena for intermediate allocations
+ * @param issues      Issue list for structured reporting (NULL to skip)
  * @param out_json    Output: heap-allocated canonical JSON (caller must free)
  * @param out_len     Output: length of canonical JSON
  * @return NX_XFORM_OK on success
  */
 NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
                              const char *schema_json, size_t schema_len,
-                             SHArena *arena, char **out_json, size_t *out_len);
+                             SHArena *arena, NxIssueList *issues,
+                             char **out_json, size_t *out_len);
 
 /*
  * Get human-readable error message.

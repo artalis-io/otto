@@ -186,31 +186,22 @@ typedef struct {
  * ============================================================================ */
 
 typedef struct {
-    int row;
-    char field[MAX_FIELD_LEN];
-    char reason[MAX_FIELD_LEN];
-} Rejection;
-
-#define MAX_REJECTIONS 1024
-
-typedef struct {
     int rows_processed;
     int rows_accepted;
     int rows_rejected;
-    Rejection rejections[MAX_REJECTIONS];
-    int rejection_count;
+    NxIssueList local_issues;   /* Always used for JSON audit section */
+    NxIssueList *ext_issues;    /* Caller's list (may be NULL) */
 } AuditTrail;
 
 static void audit_reject(AuditTrail *audit, int row,
                          const char *field, const char *reason)
 {
     audit->rows_rejected++;
-    if (audit->rejection_count < MAX_REJECTIONS) {
-        Rejection *r = &audit->rejections[audit->rejection_count++];
-        r->row = row;
-        snprintf(r->field, MAX_FIELD_LEN, "%s", field);
-        snprintf(r->reason, MAX_FIELD_LEN, "%s", reason);
-    }
+    nx_issue_add(&audit->local_issues, NX_STAGE_B, NX_ISSUE_ERROR,
+                 row, field, "rejection", reason);
+    if (audit->ext_issues)
+        nx_issue_add(audit->ext_issues, NX_STAGE_B, NX_ISSUE_ERROR,
+                     row, field, "rejection", reason);
 }
 
 /* ============================================================================
@@ -964,7 +955,8 @@ const char *nx_xform_status_str(NxXformStatus status)
 
 NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
                              const char *schema_json, size_t schema_len,
-                             SHArena *arena, char **out_json, size_t *out_len)
+                             SHArena *arena, NxIssueList *issues,
+                             char **out_json, size_t *out_len)
 {
     if (!raw_json || !schema_json || !out_json || !out_len)
         return NX_XFORM_ERR_NULL;
@@ -1016,6 +1008,8 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
     /* Initialize audit trail */
     AuditTrail audit;
     memset(&audit, 0, sizeof(audit));
+    nx_issue_list_init(&audit.local_issues);
+    audit.ext_issues = issues;
 
     /* Build output JSON */
     ShJsonBuf jb;
@@ -1220,12 +1214,12 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
 
     sh_json_write_key(&w, "rejections");
     sh_json_write_array_start(&w);
-    for (int i = 0; i < audit.rejection_count; i++) {
-        Rejection *r = &audit.rejections[i];
+    for (int i = 0; i < audit.local_issues.count; i++) {
+        NxIssue *issue = &audit.local_issues.items[i];
         sh_json_write_object_start(&w);
-        sh_json_write_kv_int(&w, "row", r->row);
-        sh_json_write_kv_string(&w, "field", r->field);
-        sh_json_write_kv_string(&w, "reason", r->reason);
+        sh_json_write_kv_int(&w, "row", issue->row);
+        sh_json_write_kv_string(&w, "field", issue->field);
+        sh_json_write_kv_string(&w, "reason", issue->message);
         sh_json_write_object_end(&w);
     }
     sh_json_write_array_end(&w);
@@ -1240,6 +1234,7 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
 
     if (sh_json_writer_error(&w) || !jb.buf) {
         sh_json_buf_free(&jb);
+        nx_issue_list_free(&audit.local_issues);
         return NX_XFORM_ERR_ARENA;
     }
 
@@ -1247,5 +1242,6 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
     if (*out_json)
         *out_len = strlen(*out_json);
 
+    nx_issue_list_free(&audit.local_issues);
     return NX_XFORM_OK;
 }

@@ -101,7 +101,8 @@ int main(int argc, char **argv)
 
     NxIngestStatus s = nx_ingest(data, data_len, format, filename,
                                   schema, schema_len,
-                                  &raw, &raw_len, &canon, &canon_len);
+                                  &raw, &raw_len, &canon, &canon_len,
+                                  NULL);
 
     if (s != NX_INGEST_OK) {
         fprintf(stderr, "Pipeline failed: %s\n", nx_ingest_status_str(s));

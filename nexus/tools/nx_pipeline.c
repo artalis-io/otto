@@ -23,6 +23,7 @@
 #include "nx_xform.h"
 #include "nx_validate.h"
 #include "nx_emit.h"
+#include "nx_issue.h"
 #include "sh_arena.h"
 #include "sh_json.h"
 #include "sh_csv.h"
@@ -259,6 +260,54 @@ static char *extract_pdf_text(const char *pdf_path, size_t *out_len)
 }
 
 /* ============================================================================
+ * Issue Summary Printing
+ * ============================================================================ */
+
+static void print_issue_summary(const NxIssueList *issues)
+{
+    if (!issues || issues->count == 0) return;
+
+    fprintf(stderr, "  ────────────────────────────────────────\n");
+
+    /* Per-stage counts */
+    static const NxStage stages[] = {
+        NX_STAGE_A, NX_STAGE_M, NX_STAGE_B, NX_STAGE_X, NX_STAGE_D
+    };
+    static const char *stage_names[] = {
+        "A (extract)", "M (merge)", "B (transform)", "X (validate)", "D (emit)"
+    };
+    for (int s = 0; s < 5; s++) {
+        int errs = nx_issue_count(issues, (int)stages[s], NX_ISSUE_ERROR);
+        int warns = nx_issue_count(issues, (int)stages[s], NX_ISSUE_WARNING);
+        int infos = nx_issue_count(issues, (int)stages[s], NX_ISSUE_INFO);
+        int total = errs + warns + infos;
+        if (total == 0) continue;
+        fprintf(stderr, "  Stage %s: %d error%s, %d warning%s, %d info\n",
+                stage_names[s],
+                errs, errs == 1 ? "" : "s",
+                warns, warns == 1 ? "" : "s",
+                infos);
+    }
+
+    /* Print individual issues: errors first, then warnings, then info */
+    fprintf(stderr, "  Issues (%d):\n", issues->count);
+    for (int sev = NX_ISSUE_ERROR; sev >= NX_ISSUE_INFO; sev--) {
+        for (int i = 0; i < issues->count; i++) {
+            const NxIssue *iss = &issues->items[i];
+            if ((int)iss->severity != sev) continue;
+            fprintf(stderr, "    [%c] ", nx_stage_tag(iss->stage));
+            if (iss->row >= 0) fprintf(stderr, "row %d", iss->row);
+            if (iss->field[0]) {
+                if (iss->row >= 0) fprintf(stderr, ", ");
+                fprintf(stderr, "field \"%s\"", iss->field);
+            }
+            if (iss->row >= 0 || iss->field[0]) fprintf(stderr, ": ");
+            fprintf(stderr, "%s\n", iss->message);
+        }
+    }
+}
+
+/* ============================================================================
  * Pipeline Processing
  * ============================================================================ */
 
@@ -286,19 +335,23 @@ static int process_file(const PipelineOpts *po)
     basename_str = basename_str ? basename_str + 1 : po->input_path;
     fprintf(stderr, "\n[%s] format=%s\n", basename_str, format_name(fmt));
 
+    /* Issue tracking for all stages */
+    NxIssueList issues;
+    nx_issue_list_init(&issues);
+
     /* Stage A: Extract raw rows JSON */
     char *raw_json = NULL;
     size_t raw_len = 0;
 
     SHArena *arena = sh_arena_create(PIPELINE_ARENA_SIZE);
-    if (!arena) { fprintf(stderr, "Error: arena allocation failed\n"); return 1; }
+    if (!arena) { fprintf(stderr, "Error: arena allocation failed\n"); nx_issue_list_free(&issues); return 1; }
 
     if (fmt == FMT_PDF) {
         /* PDF: extract text via sh_pdf2struc (pure C), then cluster */
         fprintf(stderr, "  Stage A.1: Extracting text runs (sh_pdf2struc)...\n");
         size_t text_len = 0;
         char *text_json = extract_pdf_text(po->input_path, &text_len);
-        if (!text_json) { sh_arena_free(arena); return 1; }
+        if (!text_json) { sh_arena_free(arena); nx_issue_list_free(&issues); return 1; }
 
         fprintf(stderr, "  Stage A.2: Clustering into table rows...\n");
         NxPdfOptions opts = NX_PDF_AUTO_OPTIONS;
@@ -307,13 +360,14 @@ static int process_file(const PipelineOpts *po)
 
         NxPdfStatus ps = nx_pdf_extract_tables(text_json, text_len,
                                                 &opts, basename_str,
-                                                arena, &raw_json, &raw_len);
+                                                arena, &issues, &raw_json, &raw_len);
         free(text_json);
 
         if (ps != NX_PDF_OK) {
             fprintf(stderr, "  Error: PDF clustering failed: %s\n",
                     nx_pdf_status_str(ps));
             sh_arena_free(arena);
+            nx_issue_list_free(&issues);
             return 1;
         }
         fprintf(stderr, "  Effective: row_tol=%.2f, col_gap=%.2f\n",
@@ -324,7 +378,7 @@ static int process_file(const PipelineOpts *po)
         fprintf(stderr, "  Stage A: Clustering text runs...\n");
         size_t data_len = 0;
         char *data = read_file(po->input_path, &data_len);
-        if (!data) { sh_arena_free(arena); return 1; }
+        if (!data) { sh_arena_free(arena); nx_issue_list_free(&issues); return 1; }
 
         NxPdfOptions opts = NX_PDF_AUTO_OPTIONS;
         if (po->row_tol >= 0) opts.row_tolerance = po->row_tol;
@@ -332,13 +386,14 @@ static int process_file(const PipelineOpts *po)
 
         NxPdfStatus ps = nx_pdf_extract_tables(data, data_len,
                                                 &opts, basename_str,
-                                                arena, &raw_json, &raw_len);
+                                                arena, &issues, &raw_json, &raw_len);
         free(data);
 
         if (ps != NX_PDF_OK) {
             fprintf(stderr, "  Error: PDF clustering failed: %s\n",
                     nx_pdf_status_str(ps));
             sh_arena_free(arena);
+            nx_issue_list_free(&issues);
             return 1;
         }
         fprintf(stderr, "  Effective: row_tol=%.2f, col_gap=%.2f\n",
@@ -349,16 +404,17 @@ static int process_file(const PipelineOpts *po)
         fprintf(stderr, "  Stage A: Parsing XLSX...\n");
         size_t data_len = 0;
         char *data = read_file(po->input_path, &data_len);
-        if (!data) { sh_arena_free(arena); return 1; }
+        if (!data) { sh_arena_free(arena); nx_issue_list_free(&issues); return 1; }
 
         NxXlsxStatus xs = nx_xlsx_parse(data, data_len, NULL, basename_str,
-                                         arena, &raw_json, &raw_len);
+                                         arena, &issues, &raw_json, &raw_len);
         free(data);
 
         if (xs != NX_XLSX_OK) {
             fprintf(stderr, "  Error: XLSX parse failed: %s\n",
                     nx_xlsx_status_str(xs));
             sh_arena_free(arena);
+            nx_issue_list_free(&issues);
             return 1;
         }
 
@@ -367,7 +423,7 @@ static int process_file(const PipelineOpts *po)
         fprintf(stderr, "  Stage A: Parsing CSV...\n");
         size_t data_len = 0;
         char *data = read_file(po->input_path, &data_len);
-        if (!data) { sh_arena_free(arena); return 1; }
+        if (!data) { sh_arena_free(arena); nx_issue_list_free(&issues); return 1; }
 
         ShCsvOpts csv_opts;
         sh_csv_opts_default(&csv_opts);
@@ -377,7 +433,7 @@ static int process_file(const PipelineOpts *po)
         csv_opts.skip_empty_rows = 1;
 
         NxCsvStatus cs = nx_csv_parse(data, data_len, &csv_opts, NULL,
-                                       basename_str, arena,
+                                       basename_str, arena, &issues,
                                        &raw_json, &raw_len);
         free(data);
 
@@ -385,6 +441,7 @@ static int process_file(const PipelineOpts *po)
             fprintf(stderr, "  Error: CSV parse failed: %s\n",
                     nx_csv_status_str(cs));
             sh_arena_free(arena);
+            nx_issue_list_free(&issues);
             return 1;
         }
     }
@@ -393,6 +450,7 @@ static int process_file(const PipelineOpts *po)
 
     if (!raw_json) {
         fprintf(stderr, "  Error: Stage A produced no output\n");
+        nx_issue_list_free(&issues);
         return 1;
     }
 
@@ -421,7 +479,7 @@ static int process_file(const PipelineOpts *po)
     if (po->schema_path) {
         size_t schema_file_len = 0;
         char *schema = read_file(po->schema_path, &schema_file_len);
-        if (!schema) { free(raw_json); return 1; }
+        if (!schema) { free(raw_json); nx_issue_list_free(&issues); return 1; }
 
         const char *schema_base = strrchr(po->schema_path, '/');
         schema_base = schema_base ? schema_base + 1 : po->schema_path;
@@ -435,7 +493,7 @@ static int process_file(const PipelineOpts *po)
                 fprintf(stderr, "  Stage M: Merging continuation rows...\n");
                 NxMergeStatus ms = nx_merge_rows(raw_json, raw_len,
                                                   schema, schema_file_len,
-                                                  arena_m, &merged, &merged_len);
+                                                  arena_m, &issues, &merged, &merged_len);
                 sh_arena_free(arena_m);
                 if (ms == NX_MERGE_OK && merged) {
                     free(raw_json);
@@ -467,13 +525,14 @@ static int process_file(const PipelineOpts *po)
         if (!arena_b) {
             free(schema);
             free(raw_json);
+            nx_issue_list_free(&issues);
             fprintf(stderr, "  Error: arena allocation failed\n");
             return 1;
         }
 
         NxXformStatus ts = nx_xform_apply(raw_json, raw_len,
                                            schema, schema_file_len,
-                                           arena_b, &canon_json, &canon_len);
+                                           arena_b, &issues, &canon_json, &canon_len);
         sh_arena_free(arena_b);
 
         if (ts != NX_XFORM_OK) {
@@ -481,6 +540,7 @@ static int process_file(const PipelineOpts *po)
                     nx_xform_status_str(ts));
             free(schema);
             free(raw_json);
+            nx_issue_list_free(&issues);
             return 1;
         }
 
@@ -493,7 +553,7 @@ static int process_file(const PipelineOpts *po)
             size_t validated_len = 0;
             NxValidateStatus vs = nx_validate(canon_json, canon_len,
                                                schema, schema_file_len,
-                                               arena_x, &validated,
+                                               arena_x, &issues, &validated,
                                                &validated_len);
             sh_arena_free(arena_x);
             if (vs == NX_VALIDATE_OK && validated) {
@@ -537,7 +597,7 @@ static int process_file(const PipelineOpts *po)
                     char *geojson = NULL; size_t geojson_len = 0;
                     NxEmitStatus es = nx_emit_geojson(canon_json, canon_len,
                                                        &geo_opts, arena_e,
-                                                       &geojson, &geojson_len);
+                                                       &issues, &geojson, &geojson_len);
                     sh_arena_free(arena_e);
                     if (arena_s) sh_arena_free(arena_s);
 
@@ -561,7 +621,7 @@ static int process_file(const PipelineOpts *po)
                     char *csv = NULL; size_t csv_len = 0;
                     NxEmitStatus es = nx_emit_csv(canon_json, canon_len,
                                                     &csv_opts, arena_e,
-                                                    &csv, &csv_len);
+                                                    &issues, &csv, &csv_len);
                     sh_arena_free(arena_e);
 
                     if (es == NX_EMIT_OK && csv) {
@@ -604,6 +664,12 @@ static int process_file(const PipelineOpts *po)
         }
     }
 
+    /* Print issue summary */
+    if (issues.count > 0) {
+        print_issue_summary(&issues);
+    }
+    fprintf(stderr, "  Pipeline complete.\n");
+
     /* Output */
     const char *output;
     size_t output_len;
@@ -625,6 +691,7 @@ static int process_file(const PipelineOpts *po)
 
     free(raw_json);
     free(canon_json);
+    nx_issue_list_free(&issues);
     return 0;
 }
 
@@ -688,6 +755,17 @@ static int run_batch(const char *config_path)
             nsources, abs_output_dir);
 
     int failures = 0;
+    int total_errors = 0, total_warnings = 0;
+
+    /* Open manifest file */
+    char manifest_path[512];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.json",
+             abs_output_dir);
+    FILE *mf = fopen(manifest_path, "w");
+    if (mf) {
+        fprintf(mf, "{\"nx_manifest\":1,\"files\":[\n");
+    }
+
     for (int i = 0; i < nsources; i++) {
         ShJsonValue *src = sh_json_array_get(sources, (size_t)i);
 
@@ -735,6 +813,11 @@ static int run_batch(const char *config_path)
         snprintf(out_raw, sizeof(out_raw), "%s/%s_raw.json",
                  abs_output_dir, name);
 
+        /* Per-file issue tracking */
+        NxIssueList file_issues;
+        nx_issue_list_init(&file_issues);
+        int file_failed = 0;
+
         /* Process: always output raw */
         PipelineOpts po = {0};
         po.input_path = abs_file;
@@ -745,23 +828,22 @@ static int run_batch(const char *config_path)
         po.output_raw = 1;
 
         if (process_file(&po) != 0) {
-            failures++;
-            continue;
+            file_failed = 1;
         }
 
         /* If schema given, also produce canonical */
-        if (schema_ptr) {
+        if (!file_failed && schema_ptr) {
             snprintf(out_canon, sizeof(out_canon), "%s/%s_canonical.json",
                      abs_output_dir, name);
 
             /* Read back the raw output and apply schema */
             size_t raw_len = 0;
             char *raw = read_file(out_raw, &raw_len);
-            if (!raw) { failures++; continue; }
+            if (!raw) { file_failed = 1; goto batch_file_done; }
 
             size_t schema_len = 0;
             char *schema_data = read_file(schema_ptr, &schema_len);
-            if (!schema_data) { free(raw); failures++; continue; }
+            if (!schema_data) { free(raw); file_failed = 1; goto batch_file_done; }
 
             /* Stage M: Merge continuation rows (PDF only) */
             FileFormat batch_fmt = detect_format(abs_file);
@@ -772,8 +854,8 @@ static int run_batch(const char *config_path)
                     size_t merged_len = 0;
                     NxMergeStatus ms = nx_merge_rows(raw, raw_len,
                                                       schema_data, schema_len,
-                                                      arena_m, &merged,
-                                                      &merged_len);
+                                                      arena_m, &file_issues,
+                                                      &merged, &merged_len);
                     sh_arena_free(arena_m);
                     if (ms == NX_MERGE_OK && merged) {
                         free(raw);
@@ -785,7 +867,11 @@ static int run_batch(const char *config_path)
 
             /* Stage B: Transform */
             SHArena *arena_b = sh_arena_create(PIPELINE_ARENA_SIZE);
-            if (!arena_b) { free(raw); free(schema_data); failures++; continue; }
+            if (!arena_b) {
+                free(raw); free(schema_data);
+                file_failed = 1;
+                goto batch_file_done;
+            }
 
             char *canon = NULL;
             size_t canon_len = 0;
@@ -795,7 +881,8 @@ static int run_batch(const char *config_path)
 
             NxXformStatus ts = nx_xform_apply(raw, raw_len,
                                                schema_data, schema_len,
-                                               arena_b, &canon, &canon_len);
+                                               arena_b, &file_issues,
+                                               &canon, &canon_len);
             sh_arena_free(arena_b);
             free(raw);
 
@@ -803,8 +890,8 @@ static int run_batch(const char *config_path)
                 fprintf(stderr, "  Error: transform failed: %s\n",
                         nx_xform_status_str(ts));
                 free(schema_data);
-                failures++;
-                continue;
+                file_failed = 1;
+                goto batch_file_done;
             }
 
             /* Stage X: Validate */
@@ -814,8 +901,8 @@ static int run_batch(const char *config_path)
                 size_t validated_len = 0;
                 NxValidateStatus vs = nx_validate(canon, canon_len,
                                                    schema_data, schema_len,
-                                                   arena_x, &validated,
-                                                   &validated_len);
+                                                   arena_x, &file_issues,
+                                                   &validated, &validated_len);
                 sh_arena_free(arena_x);
                 if (vs == NX_VALIDATE_OK && validated) {
                     free(canon);
@@ -829,6 +916,77 @@ static int run_batch(const char *config_path)
             fprintf(stderr, "  Wrote: %s\n", out_canon);
             free(canon);
         }
+
+batch_file_done:
+        if (file_failed) failures++;
+
+        /* Accumulate totals */
+        int ferrs = nx_issue_count(&file_issues, -1, NX_ISSUE_ERROR);
+        int fwarns = nx_issue_count(&file_issues, -1, NX_ISSUE_WARNING);
+        total_errors += ferrs;
+        total_warnings += fwarns;
+
+        /* Write manifest entry */
+        if (mf) {
+            if (i > 0) fprintf(mf, ",\n");
+            fprintf(mf, "{\"file\":\"%s\",\"status\":\"%s\"",
+                    file, file_failed ? "failed" : "ok");
+
+            /* Per-stage counts */
+            fprintf(mf, ",\"stages\":{");
+            int first_stage = 1;
+            static const NxStage batch_stages[] = {
+                NX_STAGE_A, NX_STAGE_M, NX_STAGE_B, NX_STAGE_X, NX_STAGE_D
+            };
+            static const char *batch_stage_tags[] = {"A","M","B","X","D"};
+            for (int s = 0; s < 5; s++) {
+                int se = nx_issue_count(&file_issues, (int)batch_stages[s], NX_ISSUE_ERROR);
+                int sw = nx_issue_count(&file_issues, (int)batch_stages[s], NX_ISSUE_WARNING);
+                int si = nx_issue_count(&file_issues, (int)batch_stages[s], NX_ISSUE_INFO);
+                if (se + sw + si == 0) continue;
+                if (!first_stage) fprintf(mf, ",");
+                fprintf(mf, "\"%s\":{\"errors\":%d,\"warnings\":%d,\"info\":%d}",
+                        batch_stage_tags[s], se, sw, si);
+                first_stage = 0;
+            }
+            fprintf(mf, "}");
+
+            /* Individual issues */
+            if (file_issues.count > 0) {
+                fprintf(mf, ",\"issues\":[");
+                for (int j = 0; j < file_issues.count; j++) {
+                    const NxIssue *iss = &file_issues.items[j];
+                    if (j > 0) fprintf(mf, ",");
+                    fprintf(mf, "{\"stage\":\"%c\",\"severity\":\"%s\"",
+                            nx_stage_tag(iss->stage),
+                            nx_issue_severity_str(iss->severity));
+                    if (iss->row >= 0) fprintf(mf, ",\"row\":%d", iss->row);
+                    if (iss->field[0]) fprintf(mf, ",\"field\":\"%s\"", iss->field);
+                    if (iss->code[0]) fprintf(mf, ",\"code\":\"%s\"", iss->code);
+                    fprintf(mf, ",\"message\":\"%s\"}", iss->message);
+                }
+                fprintf(mf, "]");
+            }
+
+            fprintf(mf, "}");
+        }
+
+        /* Print per-file summary */
+        if (file_issues.count > 0) {
+            print_issue_summary(&file_issues);
+        }
+
+        nx_issue_list_free(&file_issues);
+    }
+
+    /* Close manifest */
+    if (mf) {
+        fprintf(mf, "\n],\"summary\":{\"total_files\":%d,\"succeeded\":%d,"
+                "\"failed\":%d,\"total_errors\":%d,\"total_warnings\":%d}}\n",
+                nsources, nsources - failures, failures,
+                total_errors, total_warnings);
+        fclose(mf);
+        fprintf(stderr, "  Manifest: %s\n", manifest_path);
     }
 
     sh_arena_free(arena);

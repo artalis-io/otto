@@ -38,7 +38,8 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
                          NxIngestFormat format, const char *filename,
                          const char *schema_json, size_t schema_len,
                          char **out_raw, size_t *out_raw_len,
-                         char **out_canon, size_t *out_canon_len)
+                         char **out_canon, size_t *out_canon_len,
+                         NxIssueList *issues)
 {
     char *raw_json = NULL;
     size_t raw_len = 0;
@@ -58,7 +59,7 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
     switch (format) {
     case NX_FORMAT_XLSX: {
         NxXlsxStatus xs = nx_xlsx_parse(data, len, NULL, filename,
-                                         arena_a, &raw_json, &raw_len);
+                                         arena_a, issues, &raw_json, &raw_len);
         if (xs != NX_XLSX_OK) {
             sh_arena_free(arena_a);
             return NX_INGEST_ERR_STAGE_A;
@@ -68,7 +69,7 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
     case NX_FORMAT_PDF_JSON: {
         NxPdfStatus ps = nx_pdf_extract_tables((const char *)data, len,
                                                NULL, filename,
-                                               arena_a, &raw_json, &raw_len);
+                                               arena_a, issues, &raw_json, &raw_len);
         if (ps != NX_PDF_OK) {
             sh_arena_free(arena_a);
             return NX_INGEST_ERR_STAGE_A;
@@ -78,7 +79,7 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
     case NX_FORMAT_CSV: {
         NxCsvStatus cs = nx_csv_parse((const char *)data, len,
                                        NULL, NULL, filename,
-                                       arena_a, &raw_json, &raw_len);
+                                       arena_a, issues, &raw_json, &raw_len);
         if (cs != NX_CSV_OK) {
             sh_arena_free(arena_a);
             return NX_INGEST_ERR_STAGE_A;
@@ -100,7 +101,7 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
             size_t merged_len = 0;
             NxMergeStatus ms = nx_merge_rows(raw_json, raw_len,
                                               schema_json, schema_len,
-                                              arena_m, &merged, &merged_len);
+                                              arena_m, issues, &merged, &merged_len);
             sh_arena_free(arena_m);
             if (ms == NX_MERGE_OK && merged) {
                 free(raw_json);
@@ -120,7 +121,8 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
 
         NxXformStatus ts = nx_xform_apply(raw_json, raw_len,
                                            schema_json, schema_len,
-                                           arena_b, out_canon, out_canon_len);
+                                           arena_b, issues,
+                                           out_canon, out_canon_len);
         sh_arena_free(arena_b);
 
         if (ts != NX_XFORM_OK) {
@@ -142,7 +144,8 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
         size_t validated_len = 0;
         NxValidateStatus vs = nx_validate(*out_canon, *out_canon_len,
                                            schema_json, schema_len,
-                                           arena_x, &validated, &validated_len);
+                                           arena_x, issues,
+                                           &validated, &validated_len);
         sh_arena_free(arena_x);
 
         if (vs != NX_VALIDATE_OK) {

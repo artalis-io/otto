@@ -6,6 +6,7 @@
  */
 
 #include "nx_merge.h"
+#include "nx_issue.h"
 #include "sh_json.h"
 #include <stdlib.h>
 #include <string.h>
@@ -128,7 +129,7 @@ static void parent_load(ParentRow *p, const ShJsonValue *cells, size_t ncells,
 }
 
 static void parent_merge(ParentRow *p, const ShJsonValue *cells, size_t ncells,
-                         const char *separator)
+                         const char *separator, NxIssueList *issues)
 {
     if (!p->active) return;
 
@@ -149,9 +150,16 @@ static void parent_merge(ParentRow *p, const ShJsonValue *cells, size_t ncells,
             size_t remain = MAX_MERGE_CELL_LEN - plen - 1;
             size_t seplen = strlen(separator);
             if (remain > seplen) {
+                size_t needed = plen + seplen + strlen(val);
                 memcpy(p->cells[c] + plen, separator, seplen);
                 snprintf(p->cells[c] + plen + seplen,
                          MAX_MERGE_CELL_LEN - plen - seplen, "%s", val);
+                if (needed >= MAX_MERGE_CELL_LEN && issues) {
+                    nx_issue_addf(issues, NX_STAGE_M, NX_ISSUE_WARNING,
+                                  p->row_num, "", "cell_truncated",
+                                  "Merged cell in row %d col %d truncated at %d bytes",
+                                  p->row_num, c, MAX_MERGE_CELL_LEN);
+                }
             }
         }
     }
@@ -201,7 +209,7 @@ const char *nx_merge_status_str(NxMergeStatus status)
 
 NxMergeStatus nx_merge_rows(const char *raw_json, size_t raw_len,
                             const char *schema_json, size_t schema_len,
-                            SHArena *arena,
+                            SHArena *arena, NxIssueList *issues,
                             char **out_json, size_t *out_len)
 {
     if (!raw_json || !schema_json || !out_json || !out_len)
@@ -309,22 +317,42 @@ NxMergeStatus nx_merge_rows(const char *raw_json, size_t raw_len,
         if (!cells) continue;
 
         size_t ncells = sh_json_array_len(cells);
+        int row_num = (int)sh_json_as_int(sh_json_get(row, "row"), 0);
 
         /* Strip matching rows */
-        if (should_strip(cells, ncells, cfg.strip_pattern))
+        if (should_strip(cells, ncells, cfg.strip_pattern)) {
+            if (issues) {
+                nx_issue_addf(issues, NX_STAGE_M, NX_ISSUE_INFO,
+                              row_num, "", "rows_stripped",
+                              "Row %d stripped (matched pattern \"%s\")",
+                              row_num, cfg.strip_pattern);
+            }
             continue;
+        }
 
         if (is_continuation(cells, ncells, &cfg)) {
             /* Merge into parent (if exists) */
             if (parent.active) {
-                parent_merge(&parent, cells, ncells, cfg.separator);
+                parent_merge(&parent, cells, ncells, cfg.separator, issues);
+                if (issues) {
+                    nx_issue_addf(issues, NX_STAGE_M, NX_ISSUE_INFO,
+                                  row_num, "", "continuation_merged",
+                                  "Row %d merged into row %d",
+                                  row_num, parent.row_num);
+                }
+            } else {
+                /* Continuation before first data row — orphan */
+                if (issues) {
+                    nx_issue_addf(issues, NX_STAGE_M, NX_ISSUE_WARNING,
+                                  row_num, "", "orphan_continuation",
+                                  "Continuation row %d before any data row",
+                                  row_num);
+                }
             }
-            /* If no parent yet, discard (continuation before first data row) */
         } else {
             /* Flush previous parent */
             flush_parent(&w, &parent, &out_row, &first_row);
             /* Start new parent */
-            int row_num = (int)sh_json_as_int(sh_json_get(row, "row"), 0);
             parent_load(&parent, cells, ncells, row_num);
         }
     }

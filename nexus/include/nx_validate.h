@@ -21,6 +21,7 @@
 #define NX_VALIDATE_H
 
 #include "sh_arena.h"
+#include "nx_issue.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -92,7 +93,7 @@ typedef enum {
  */
 NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
                              const char *schema_json, size_t schema_len,
-                             SHArena *arena,
+                             SHArena *arena, NxIssueList *issues,
                              char **out_json, size_t *out_len);
 
 /*
