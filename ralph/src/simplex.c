@@ -4479,12 +4479,10 @@ int simplex_solve(SimplexSolver *solver) {
         /* Try dual from scratch (has its own tableau creation + Phase 1) */
         int drc = dual_simplex_solve_from_scratch_v2(solver);
 
-        if (drc == 0) {
-            /* In auto mode: quick Ax=b sanity check before committing.
-             * Catches catastrophically wrong dual results (obj off by 1000x).
-             * Computes A_ext * x for ALL variables (structural + auxiliary)
-             * and checks against normalized RHS. */
-            if (solver->method == 2 && solver->status == RALPH_STATUS_OPTIMAL) {
+        if (drc == 0 && solver->method == 2) {
+            if (solver->status == RALPH_STATUS_OPTIMAL) {
+                /* Auto mode: Ax=b sanity check before committing.
+                 * Catches catastrophically wrong dual results. */
                 SimplexTableau *dtab = solver->tableau;
                 int bad = 0;
                 for (int i = 0; i < dtab->m && !bad; i++) {
@@ -4498,27 +4496,30 @@ int simplex_solve(SimplexSolver *solver) {
                             }
                         }
                     }
-                    double rhs = dtab->rhs[i];
-                    if (fabs(ax - rhs) > 1e-4) bad = 1;
+                    if (fabs(ax - dtab->rhs[i]) > 1e-4) bad = 1;
                 }
                 if (bad) {
                     if (solver->verbose)
-                        printf("[simplex_solve] Dual solution failed sanity check, falling back to primal\n");
-                    tableau_free(solver->tableau);
-                    solver->tableau = NULL;
+                        printf("[simplex_solve] Dual solution failed Ax=b check, falling back to primal\n");
                     drc = -1;
                 }
+            } else {
+                /* Auto mode: don't trust dual INFEASIBLE/OBJ_LIMIT — fall back.
+                 * Dual infeasibility detection is unreliable; primal Phase 1 is robust. */
+                if (solver->verbose)
+                    printf("[simplex_solve] Dual returned non-optimal status %d, falling back to primal\n",
+                           solver->status);
+                drc = -1;
             }
         }
+
         if (drc == 0) {
             /* Commit to dual result */
             solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
-
-            /* Unscale if needed */
             unscale_solution(solver);
             restore_model(solver);
 
-            /* Auto mode: always verify dual result to catch suboptimal solutions.
+            /* Auto mode: always verify to flag suboptimal dual solutions.
              * Dual can terminate with feasible but non-optimal basis. */
             if (solver->status == RALPH_STATUS_OPTIMAL &&
                 (solver->verify || solver->method == 2))
@@ -4527,10 +4528,16 @@ int simplex_solve(SimplexSolver *solver) {
             return 0;
         }
 
-        /* Dual failed */
+        /* Dual failed or rejected — fall back to primal (method=2) or error (method=1) */
         if (solver->method == 2) {
             if (solver->verbose)
-                printf("[simplex_solve] Dual simplex failed, falling back to primal\n");
+                printf("[simplex_solve] Falling back to primal\n");
+
+            /* Free dual tableau if still present */
+            if (solver->tableau) {
+                tableau_free(solver->tableau);
+                solver->tableau = NULL;
+            }
 
             /* Recreate primal tableau */
             solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase, 0);
