@@ -327,6 +327,7 @@ typedef struct {
     int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial */
     int verbose;
     int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
+    int crash;              /* 0=off, 1=triangular crash basis */
     int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
 
     /* Scaling factors (used if scaling enabled) */

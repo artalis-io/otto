@@ -44,6 +44,7 @@ struct RalphModel {
     int force_two_phase; /* 1=force two-phase simplex for clean Farkas duals */
     int trace_phase1; /* 1=emit deterministic Phase-1 failure trace */
     int scaling;            /* 0=off, 1=single-round (default), N=N geo rounds + equilibrium */
+    int crash;              /* 0=off, 1=triangular crash basis */
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
     int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
     int var_select;         /* -1=default, 0=most_infeas, 1=pseudo_cost, 2=strong, 3=reliability */
@@ -109,6 +110,7 @@ RalphModel* ralph_create(void) {
     model->method = 0;  /* Default: primal simplex */
     model->pricing = 2; /* Default: Devex */
     model->scaling = 1;    /* Default: single-round geometric mean */
+    model->crash = 0;      /* Default: off (all-slack basis) */
     model->detect_special = 0; /* Default: disabled for fair benchmarking */
     model->node_pool_capacity = 1024; /* Default B&B node pool size */
     model->node_select = 3; /* Default: hybrid */
@@ -627,6 +629,7 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->presolve = 0;  /* Already done */
         model->lp_solver->pricing_strategy = model->pricing;
         model->lp_solver->scaling = model->scaling;
+        model->lp_solver->crash = model->crash;
         model->lp_solver->force_two_phase = model->force_two_phase;
         model->lp_solver->trace_phase1 = model->trace_phase1;
         if (model->dual_bound_flip >= 0)
@@ -1141,6 +1144,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
                STREQ(name, "scaling_rounds") || STREQ(name, "ScalingRounds")) {
         /* 0=off, 1=single-round geometric mean (default), N=N geo rounds + equilibrium */
         model->scaling = value >= 0 ? value : 0;
+    } else if (STREQ(name, "crash") || STREQ(name, "Crash")) {
+        /* 0=off, 1=triangular crash basis */
+        model->crash = value ? 1 : 0;
     } else if (STREQ(name, "var_select") || STREQ(name, "VarSelect")) {
         /* 0=most_infeasible, 1=pseudo_cost, 2=strong_branch, 3=reliability */
         if (value < 0 || value > 4) return -1;
