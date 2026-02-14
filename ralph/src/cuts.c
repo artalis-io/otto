@@ -1585,6 +1585,77 @@ int generate_cover_cuts(MIPSolver *solver, CutPool *pool) {
 }
 
 /* ============================================================================
+ * Cut Quality Filters
+ * ============================================================================ */
+
+/*
+ * Check individual cut quality.
+ * Rejects cuts with:
+ *   - Coefficient dynamism > MIP_CUT_MAX_DYNAMISM
+ *   - Fewer than 2 nonzeros (trivial/degenerate)
+ */
+static int cut_quality_ok(const Cut *cut) {
+    if (!cut || cut->nnz < 2) return 0;
+
+    double max_abs = 0.0;
+    double min_abs = RALPH_INFINITY;
+
+    for (int k = 0; k < cut->nnz; k++) {
+        double a = fabs(cut->values[k]);
+        if (a > RALPH_ZERO_TOL) {
+            if (a > max_abs) max_abs = a;
+            if (a < min_abs) min_abs = a;
+        }
+    }
+
+    if (min_abs < RALPH_ZERO_TOL) return 0;
+    if (max_abs / min_abs > MIP_CUT_MAX_DYNAMISM) return 0;
+
+    return 1;
+}
+
+/*
+ * Check if two cuts are nearly parallel using cosine similarity.
+ * Two cuts with cosine similarity > MIP_CUT_PARALLEL_TOL are considered parallel.
+ */
+static int cuts_are_parallel(const Cut *a, const Cut *b) {
+    if (!a || !b) return 0;
+    if (a->nnz == 0 || b->nnz == 0) return 0;
+
+    /* Compute dot product and norms using merge of sorted index arrays */
+    double dot = 0.0, norm_a = 0.0, norm_b = 0.0;
+    int ia = 0, ib = 0;
+
+    while (ia < a->nnz && ib < b->nnz) {
+        if (a->indices[ia] == b->indices[ib]) {
+            dot += a->values[ia] * b->values[ib];
+            norm_a += a->values[ia] * a->values[ia];
+            norm_b += b->values[ib] * b->values[ib];
+            ia++; ib++;
+        } else if (a->indices[ia] < b->indices[ib]) {
+            norm_a += a->values[ia] * a->values[ia];
+            ia++;
+        } else {
+            norm_b += b->values[ib] * b->values[ib];
+            ib++;
+        }
+    }
+    while (ia < a->nnz) {
+        norm_a += a->values[ia] * a->values[ia];
+        ia++;
+    }
+    while (ib < b->nnz) {
+        norm_b += b->values[ib] * b->values[ib];
+        ib++;
+    }
+
+    if (norm_a < RALPH_ZERO_TOL || norm_b < RALPH_ZERO_TOL) return 0;
+
+    double cosine = dot / sqrt(norm_a * norm_b);
+    return fabs(cosine) > MIP_CUT_PARALLEL_TOL;
+}
+
+/* ============================================================================
  * Cut Application
  * ============================================================================ */
 
@@ -1605,19 +1676,42 @@ int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts) {
         }
     }
 
+    /* Track applied cuts for parallel filtering */
+    int applied_cap = max_cuts < pool->count ? max_cuts : pool->count;
+    Cut **applied = (Cut **)calloc(applied_cap, sizeof(Cut *));
     int cuts_applied = 0;
 
     for (int i = 0; i < pool->count && cuts_applied < max_cuts; i++) {
         Cut *cut = pool->cuts[i];
 
         /* Skip if not violated enough */
-        if (cut->violation < RALPH_FEAS_TOL) continue;
+        if (cut->violation < MIP_CUT_MIN_VIOLATION) continue;
+
+        /* Skip if poor coefficient quality */
+        if (!cut_quality_ok(cut)) continue;
+
+        /* Skip if parallel to an already-applied cut */
+        if (applied) {
+            int is_parallel = 0;
+            for (int a = 0; a < cuts_applied; a++) {
+                if (cuts_are_parallel(cut, applied[a])) {
+                    is_parallel = 1;
+                    break;
+                }
+            }
+            if (is_parallel) continue;
+        }
 
         /* Add cut as new constraint */
         lp_model_add_constraint(model, cut->nnz, cut->indices, cut->values,
                                cut->sense, cut->rhs);
+        if (applied) {
+            applied[cuts_applied] = cut;
+        }
         cuts_applied++;
     }
+
+    free(applied);
 
     /* Rebuild the LP if cuts were added */
     if (cuts_applied > 0) {

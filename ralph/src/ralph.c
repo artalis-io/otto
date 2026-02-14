@@ -45,6 +45,7 @@ struct RalphModel {
     int trace_phase1; /* 1=emit deterministic Phase-1 failure trace */
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
     int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
+    int var_select;         /* -1=default, 0=most_infeas, 1=pseudo_cost, 2=strong, 3=reliability */
 
     /* Solution */
     RalphStatus status;
@@ -112,6 +113,7 @@ RalphModel* ralph_create(void) {
     model->trace_phase1 = 0;
     model->dual_bound_flip = -1;    /* -1 = use default (on) */
     model->dual_steepest_edge = -1; /* -1 = use default (on) */
+    model->var_select = -1;         /* -1 = use MIP solver default */
 
     model->status = RALPH_STATUS_UNKNOWN;
 
@@ -525,6 +527,11 @@ int ralph_optimize(RalphModel *model) {
         model->mip_solver->node_select = (NodeSelectStrategy)model->node_select;
         if (model->mip_solver->node_queue) {
             model->mip_solver->node_queue->strategy = (NodeSelectStrategy)model->node_select;
+        }
+
+        /* Set variable selection strategy (overrides default if explicitly set) */
+        if (model->var_select >= 0) {
+            model->mip_solver->var_select = (VarSelectStrategy)model->var_select;
         }
 
         /* Pass branching control data to MIP solver.
@@ -1127,6 +1134,10 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (STREQ(name, "dual_steepest_edge") || STREQ(name, "DualSteepestEdge")) {
         /* 0=off, 1=on for P6 DSE leaving selection */
         model->dual_steepest_edge = value ? 1 : 0;
+    } else if (STREQ(name, "var_select") || STREQ(name, "VarSelect")) {
+        /* 0=most_infeasible, 1=pseudo_cost, 2=strong_branch, 3=reliability */
+        if (value < 0 || value > 4) return -1;
+        model->var_select = value;
     } else {
         return -1;  /* Unknown parameter */
     }
@@ -1171,6 +1182,8 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
         *value = model->trace_phase1;
     } else if (STREQ(name, "presolve_mask")) {
         *value = (int)model->presolve_mask;
+    } else if (STREQ(name, "var_select")) {
+        *value = model->var_select;
     } else {
         return -1;
     }

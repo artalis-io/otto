@@ -13,7 +13,7 @@ endif
 
 # Production build (with hardening)
 # Note: -pie is implicit on macOS, only add on Linux
-CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math \
+CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math -fno-finite-math-only \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
 
 # Debug build (with sanitizers)
