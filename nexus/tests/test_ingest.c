@@ -996,6 +996,150 @@ TEST(csv_pipeline_integration)
 }
 
 /* ============================================================================
+ * Limit Enforcement Tests (P7)
+ * ============================================================================ */
+
+TEST(xlsx_limit_max_rows)
+{
+    /* minimal.xlsx has 2 data rows — cap at 1 */
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+    NxXlsxLimits limits = { 1, 0, 0, 0, 0 };
+
+    NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, &limits,
+                                    "test.xlsx", arena, NULL, &json, &json_len);
+    ASSERT_EQ(s, NX_XLSX_OK);
+    ASSERT(json != NULL);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+    ShJsonValue *tables = sh_json_get(root, "tables");
+    ShJsonValue *t0 = sh_json_array_get(tables, 0);
+    int row_count = (int)sh_json_as_int(sh_json_get(t0, "row_count"), -1);
+    ASSERT(row_count <= 1);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(xlsx_limit_max_cols)
+{
+    /* minimal.xlsx has 5 columns — cap at 2 */
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+    NxXlsxLimits limits = { 0, 2, 0, 0, 0 };
+
+    NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, &limits,
+                                    "test.xlsx", arena, NULL, &json, &json_len);
+    ASSERT_EQ(s, NX_XLSX_OK);
+    ASSERT(json != NULL);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+    ShJsonValue *tables = sh_json_get(root, "tables");
+    ShJsonValue *t0 = sh_json_array_get(tables, 0);
+    int col_count = (int)sh_json_as_int(sh_json_get(t0, "col_count"), -1);
+    ASSERT(col_count <= 2);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(xlsx_limit_max_file_size)
+{
+    /* minimal.xlsx is ~2KB — cap at 100 bytes */
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(64 * 1024);
+    NxXlsxLimits limits = { 0, 0, 0, 100, 0 };
+
+    NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, &limits,
+                                    "test.xlsx", arena, NULL, &json, &json_len);
+    ASSERT_EQ(s, NX_XLSX_ERR_LIMITS);
+    ASSERT(json == NULL);
+
+    sh_arena_free(arena);
+}
+
+TEST(xlsx_limit_max_shared_strings)
+{
+    /* minimal.xlsx has shared strings — cap at 1 */
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+    NxXlsxLimits limits = { 0, 0, 0, 0, 1 };
+
+    NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, &limits,
+                                    "test.xlsx", arena, NULL, &json, &json_len);
+    /* Should still succeed, just with truncated shared strings */
+    ASSERT_EQ(s, NX_XLSX_OK);
+    ASSERT(json != NULL);
+
+    free(json);
+    sh_arena_free(arena);
+}
+
+TEST(csv_limit_max_rows)
+{
+    /* CSV fixture has 2 data rows — cap at 1 */
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+    NxCsvLimits limits = { 1, 0 };
+
+    NxCsvStatus s = nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                                  NULL, &limits, "test.csv",
+                                  arena, NULL, &json, &json_len);
+    ASSERT_EQ(s, NX_CSV_OK);
+    ASSERT(json != NULL);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+    ShJsonValue *tables = sh_json_get(root, "tables");
+    ShJsonValue *t0 = sh_json_array_get(tables, 0);
+    int row_count = (int)sh_json_as_int(sh_json_get(t0, "row_count"), -1);
+    ASSERT(row_count <= 1);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+TEST(csv_limit_max_cols)
+{
+    /* CSV fixture has 5 columns — cap at 2 */
+    char *json = NULL;
+    size_t json_len = 0;
+    SHArena *arena = sh_arena_create(256 * 1024);
+    NxCsvLimits limits = { 0, 2 };
+
+    NxCsvStatus s = nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
+                                  NULL, &limits, "test.csv",
+                                  arena, NULL, &json, &json_len);
+    ASSERT_EQ(s, NX_CSV_OK);
+    ASSERT(json != NULL);
+
+    SHArena *pa = sh_arena_create(64 * 1024);
+    ShJsonValue *root = NULL;
+    sh_json_parse(json, json_len, pa, &root);
+    ShJsonValue *tables = sh_json_get(root, "tables");
+    ShJsonValue *t0 = sh_json_array_get(tables, 0);
+    int col_count = (int)sh_json_as_int(sh_json_get(t0, "col_count"), -1);
+    ASSERT(col_count <= 2);
+
+    free(json);
+    sh_arena_free(pa);
+    sh_arena_free(arena);
+}
+
+/* ============================================================================
  * Golden Tests (real-world files, skipped if missing)
  * ============================================================================ */
 
@@ -1343,6 +1487,14 @@ int main(void)
     RUN_TEST(csv_unicode_strings);
     RUN_TEST(csv_warnings_empty);
     RUN_TEST(csv_pipeline_integration);
+
+    printf("\n  Limit Enforcement (P7):\n");
+    RUN_TEST(xlsx_limit_max_rows);
+    RUN_TEST(xlsx_limit_max_cols);
+    RUN_TEST(xlsx_limit_max_file_size);
+    RUN_TEST(xlsx_limit_max_shared_strings);
+    RUN_TEST(csv_limit_max_rows);
+    RUN_TEST(csv_limit_max_cols);
 
     printf("\n  Golden Tests (real-world files):\n");
     RUN_GOLDEN(xlsx01_parse);

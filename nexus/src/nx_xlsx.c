@@ -26,8 +26,9 @@
  * Internal Constants
  * ============================================================================ */
 
-#define MAX_CELL_REF_LEN   16
-#define MAX_SHEET_NAME_LEN 256
+#define MAX_CELL_REF_LEN        16
+#define MAX_SHEET_NAME_LEN      256
+#define MAX_ZIP_ENTRY_SIZE      (50 * 1024 * 1024)  /* 50MB per ZIP entry (zip bomb guard) */
 #define INITIAL_ROW_CAP    256
 #define INITIAL_COL_CAP    64
 
@@ -538,6 +539,12 @@ static void *zip_extract(mz_zip_archive *zip, const char *name,
 {
     int idx = mz_zip_reader_locate_file(zip, name, NULL, 0);
     if (idx < 0) return NULL;
+
+    /* Guard against zip bombs: check claimed uncompressed size */
+    mz_zip_archive_file_stat stat;
+    if (!mz_zip_reader_file_stat(zip, (mz_uint)idx, &stat)) return NULL;
+    if (stat.m_uncomp_size > MAX_ZIP_ENTRY_SIZE) return NULL;
+
     return mz_zip_reader_extract_to_heap(zip, (mz_uint)idx, out_size, 0);
 }
 

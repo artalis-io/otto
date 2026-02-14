@@ -53,7 +53,7 @@ MINIZ_ZIP_OBJ = $(MINIZ_ZIP_SRC:.c=.o)
 LINK_LIBS = -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lshared $(LDFLAGS)
 LINK_LIBS_PDF = -L. -lnexus $(MINIZ_ZIP_OBJ) -L../shared -lsh_pdf2struc -lshared $(LDFLAGS)
 
-.PHONY: all clean test lib debug tools
+.PHONY: all clean test lib debug tools fuzz fuzz-lib fuzz-xlsx fuzz-pdf fuzz-csv
 
 all: lib $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN)
 
@@ -71,8 +71,10 @@ $(SHARED_LIB):
 	$(MAKE) -C ../shared lib
 
 # miniz_zip.o may already exist from shared build, but we need it linked
+# Vendor code: no -Werror (upstream warnings are not our problem)
+VENDOR_CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -fPIE
 $(MINIZ_ZIP_OBJ): $(MINIZ_ZIP_SRC)
-	$(CC) $(CFLAGS) -isystem $(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
+	$(CC) $(VENDOR_CFLAGS) -isystem $(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
 
 $(TEST_INGEST_BIN): tests/test_ingest.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< $(LINK_LIBS) -o $@
@@ -131,8 +133,39 @@ debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
+# Fuzzing build (requires clang with libFuzzer)
+FUZZ_CC = clang
+FUZZ_CFLAGS = -fsanitize=fuzzer,address,undefined -g -O1 -std=c11 -D_GNU_SOURCE
+FUZZ_LDFLAGS = -Wl,-ld_classic
+FUZZ_LIB = libnexus_fuzz.a
+FUZZ_LINK = -L. -lnexus_fuzz $(MINIZ_ZIP_OBJ) -L../shared -lshared -lm
+
+fuzz: fuzz-xlsx fuzz-pdf fuzz-csv
+
+fuzz-lib:
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(INCLUDES) -c $(SRCS)
+	ar rcs $(FUZZ_LIB) $(OBJS)
+	$(MAKE) -C ../shared CC=$(FUZZ_CC) CFLAGS="$(FUZZ_CFLAGS)" clean lib
+	$(FUZZ_CC) $(FUZZ_CFLAGS) -isystem $(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $(MINIZ_ZIP_SRC) -o $(MINIZ_ZIP_OBJ)
+
+fuzz-xlsx: fuzz-lib
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(FUZZ_LDFLAGS) $(INCLUDES) tests/fuzz/fuzz_xlsx.c \
+		$(FUZZ_LINK) -o fuzz_xlsx
+	@echo "Run: ./fuzz_xlsx tests/fuzz/corpus_xlsx/ -max_len=1000000 -max_total_time=60"
+
+fuzz-pdf: fuzz-lib
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(FUZZ_LDFLAGS) $(INCLUDES) tests/fuzz/fuzz_pdf.c \
+		$(FUZZ_LINK) -o fuzz_pdf
+	@echo "Run: ./fuzz_pdf tests/fuzz/corpus_pdf/ -max_len=1000000 -max_total_time=60"
+
+fuzz-csv: fuzz-lib
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(FUZZ_LDFLAGS) $(INCLUDES) tests/fuzz/fuzz_csv.c \
+		$(FUZZ_LINK) -o fuzz_csv
+	@echo "Run: ./fuzz_csv tests/fuzz/corpus_csv/ -max_len=1000000 -max_total_time=60"
+
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN) $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)
+	rm -f $(OBJS) $(LIB) $(FUZZ_LIB) fuzz_xlsx fuzz_pdf fuzz_csv $(MINIZ_ZIP_OBJ)
+	rm -f $(TEST_INGEST_BIN) $(TEST_XFORM_BIN) $(TEST_VALIDATE_BIN) $(TEST_DISCOVER_BIN) $(TEST_MERGE_BIN) $(TEST_EMIT_BIN) $(TEST_ISSUE_BIN) $(TEST_DIFF_BIN) $(TEST_PIPELINE_BIN) $(NX_RUN_BIN) $(NX_PDF_RUN_BIN) $(NX_XFORM_RUN_BIN) $(NX_PIPELINE_BIN)
 
 help:
 	@echo "Nexus Build System"
