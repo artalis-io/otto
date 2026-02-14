@@ -18,6 +18,7 @@
 #include "sh_hash_sha256.h"
 #include "miniz.h"
 #include "miniz_zip.h"
+#include "sh_args.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -36,25 +37,32 @@
  * Column Reference Parsing
  * ============================================================================ */
 
-/* Parse cell reference "AB12" -> (col_index, row_index) both 0-based */
+/* Parse cell reference "AB12" -> (col_index, row_index) both 0-based.
+ * Caps at 16384 columns (XFD) and 1048576 rows (XLSX max). */
 static void parse_cell_ref(const char *ref, int *col, int *row)
 {
     int c = 0, r = 0;
     const char *p = ref;
+    int letters = 0;
 
-    /* Parse column letters */
-    while (*p >= 'A' && *p <= 'Z') {
+    /* Parse column letters (max 3: A-XFD = 1-16384) */
+    while (*p >= 'A' && *p <= 'Z' && letters < 3) {
         c = c * 26 + (*p - 'A' + 1);
         p++;
+        letters++;
     }
-    *col = c > 0 ? c - 1 : 0;
+    /* Skip remaining letters if malformed */
+    while (*p >= 'A' && *p <= 'Z') p++;
+    *col = (c > 0 && c <= 16384) ? c - 1 : 0;
 
-    /* Parse row number */
-    while (*p >= '0' && *p <= '9') {
+    /* Parse row number (max 1048576 = XLSX limit) */
+    int digits = 0;
+    while (*p >= '0' && *p <= '9' && digits < 7) {
         r = r * 10 + (*p - '0');
         p++;
+        digits++;
     }
-    *row = r > 0 ? r - 1 : 0;
+    *row = (r > 0 && r <= 1048576) ? r - 1 : 0;
 }
 
 /* ============================================================================
@@ -267,7 +275,8 @@ static int parse_worksheet(const char *xml, size_t xml_len,
             if (tok.name_len == 3 && memcmp(tok.name, "row", 3) == 0) {
                 in_row = 1;
                 const char *r_attr = sh_xml_attr(&tok, "r");
-                cur_row = r_attr ? atoi(r_attr) - 1 : sheet->row_count;
+                cur_row = r_attr ? sh_parse_int(r_attr, sheet->row_count + 1, 1, 1048576) - 1
+                                 : sheet->row_count;
             } else if (in_row && tok.name_len == 1 && tok.name[0] == 'c') {
                 in_c = 1;
                 value_len = 0;
@@ -334,8 +343,8 @@ static int parse_worksheet(const char *xml, size_t xml_len,
 
                 if (cell_type == 's' && value_len > 0) {
                     /* Shared string reference */
-                    int idx = atoi(value_buf);
-                    if (ss && idx >= 0 && idx < ss->count)
+                    int idx = sh_parse_int(value_buf, -1, 0, ss ? ss->count - 1 : 0);
+                    if (ss && idx >= 0)
                         cell_value = ss->strings[idx];
                 } else if (cell_type == 'i' && inline_len > 0) {
                     /* inlineStr */
