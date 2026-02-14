@@ -3938,6 +3938,168 @@ static int simplex_phase2(SimplexSolver *solver) {
     return -1;
 }
 
+/* ============================================================================
+ * Triangular crash basis (Maros LTSF)
+ *
+ * Replace slack variables (from <= rows) in the initial basis with structural
+ * columns that have good pivot elements. This reduces Phase 1 iterations
+ * by starting closer to a feasible basis.
+ *
+ * IMPORTANT: Only displace slacks (from <= rows). Never displace artificials
+ * or surplus variables — these are needed for Phase 1 feasibility tracking.
+ *
+ * Algorithm:
+ *   Pass 1: Scan structural columns for singletons — if the singleton element
+ *           is in an eligible row with |a_ij| > PIVOT_TOL, swap into basis.
+ *   Pass 2: Scan remaining columns for the best pivot in eligible unclaimed rows.
+ *
+ * Returns: number of structural columns placed in basis.
+ * ============================================================================ */
+static int crash_triangular(SimplexTableau *tab, int verbose) {
+    if (!tab || !tab->A_ext) return 0;
+
+    int m = tab->m;
+    int n_structural = tab->model->num_vars;
+    SparseMatrix *A = tab->A_ext;
+    int placed = 0;
+
+    /* Identify which rows are eligible for crash (only slack-basic rows).
+     * A row is eligible if its basic variable is a slack (not artificial/surplus).
+     * Slacks are aux variables with +1 coefficient in their row. Artificials
+     * and surplus variables must not be displaced. */
+    int *row_eligible = (int *)calloc(m, sizeof(int));
+    if (!row_eligible) return 0;
+
+    for (int i = 0; i < m; i++) {
+        int bv = tab->basis[i];
+        /* Only eligible if basic var is an auxiliary (slack/surplus/artificial) */
+        if (bv >= n_structural) {
+            /* Check if this is a simple slack: +1 coefficient, zero cost.
+             * Artificials have cost BIG_M (or 1.0 in two-phase Phase 1).
+             * Surplus have -1 coefficient. */
+            int is_slack = 0;
+            for (int p = A->colptr[bv]; p < A->colptr[bv + 1]; p++) {
+                if (A->rowidx[p] == i) {
+                    /* Slack: coef = +1, cost = 0 */
+                    if (fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL &&
+                        fabs(tab->c_ext[bv]) < RALPH_ZERO_TOL) {
+                        is_slack = 1;
+                    }
+                    break;
+                }
+            }
+            row_eligible[i] = is_slack;
+        }
+    }
+
+    /* Track which rows have been claimed by a structural variable */
+    int *row_claimed = (int *)calloc(m, sizeof(int));
+    int *col_used = (int *)calloc(n_structural, sizeof(int));
+    if (!row_claimed || !col_used) {
+        free(row_eligible); free(row_claimed); free(col_used);
+        return 0;
+    }
+
+    /* Pass 1: Singletons in eligible rows.
+     * For singletons, we can exactly compute x_j = rhs[i] / a[i,j].
+     * Only accept if x_j is within bounds [lb, ub]. */
+    for (int j = 0; j < n_structural; j++) {
+        if (fabs(tab->ub_ext[j] - tab->lb_ext[j]) < RALPH_ZERO_TOL) continue;
+
+        int nnz = 0;
+        int singleton_row = -1;
+        double singleton_val = 0.0;
+
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int row = A->rowidx[p];
+            if (row < m) {
+                nnz++;
+                singleton_row = row;
+                singleton_val = A->values[p];
+            }
+        }
+
+        if (nnz == 1 && singleton_row >= 0 &&
+            row_eligible[singleton_row] && !row_claimed[singleton_row] &&
+            fabs(singleton_val) > RALPH_PIVOT_TOL) {
+            /* Check feasibility: x_j = rhs / a_ij */
+            double xval = tab->rhs[singleton_row] / singleton_val;
+            if (xval < tab->lb_ext[j] - RALPH_FEAS_TOL ||
+                xval > tab->ub_ext[j] + RALPH_FEAS_TOL) continue;
+
+            int old_basic = tab->basis[singleton_row];
+            tab->var_status[old_basic] = RALPH_NONBASIC_LOWER;
+            tab->x[old_basic] = tab->lb_ext[old_basic];
+            tab->basis_pos[old_basic] = -1;
+
+            tab->basis[singleton_row] = j;
+            tab->basis_pos[j] = singleton_row;
+            tab->var_status[j] = RALPH_BASIC;
+
+            row_claimed[singleton_row] = 1;
+            col_used[j] = 1;
+            placed++;
+        }
+    }
+
+    /* Pass 2: Multi-element columns in eligible unclaimed rows */
+    for (int j = 0; j < n_structural; j++) {
+        if (col_used[j]) continue;
+        if (fabs(tab->ub_ext[j] - tab->lb_ext[j]) < RALPH_ZERO_TOL) continue;
+
+        int unclaimed_nnz = 0;
+        int best_row = -1;
+        double best_val = 0.0;
+        double best_actual_val = 0.0;
+
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int row = A->rowidx[p];
+            if (row < m && row_eligible[row] && !row_claimed[row]) {
+                unclaimed_nnz++;
+                double absval = fabs(A->values[p]);
+                if (absval > best_val) {
+                    best_val = absval;
+                    best_actual_val = A->values[p];
+                    best_row = row;
+                }
+            }
+        }
+
+        if (best_row >= 0 && best_val > RALPH_PIVOT_TOL && unclaimed_nnz <= m / 2 + 1) {
+            /* Approximate feasibility: x_j ~ rhs[best_row] / a[best_row,j].
+             * For multi-element columns this is approximate (ignores other basics),
+             * but filters out clearly infeasible placements. */
+            double approx_xval = tab->rhs[best_row] / best_actual_val;
+            if (approx_xval < tab->lb_ext[j] - RALPH_FEAS_TOL ||
+                approx_xval > tab->ub_ext[j] + RALPH_FEAS_TOL) continue;
+
+            int old_basic = tab->basis[best_row];
+            tab->var_status[old_basic] = RALPH_NONBASIC_LOWER;
+            tab->x[old_basic] = tab->lb_ext[old_basic];
+            tab->basis_pos[old_basic] = -1;
+
+            tab->basis[best_row] = j;
+            tab->basis_pos[j] = best_row;
+            tab->var_status[j] = RALPH_BASIC;
+
+            row_claimed[best_row] = 1;
+            col_used[j] = 1;
+            placed++;
+        }
+    }
+
+    free(row_eligible);
+    free(row_claimed);
+    free(col_used);
+
+    if (verbose && placed > 0) {
+        printf("[crash] Placed %d structural columns in basis (of %d rows)\n",
+               placed, m);
+    }
+
+    return placed;
+}
+
 int simplex_solve(SimplexSolver *solver) {
     if (!solver || !solver->model) return -1;
 
@@ -4023,12 +4185,88 @@ int simplex_solve(SimplexSolver *solver) {
 
     /* Basis is already initialized in tableau_create with proper slack/artificial vars */
 
+    /* Apply crash basis if enabled — replace slacks with structural columns.
+     * Save original basis so we can revert if crash produces singular or
+     * infeasible basis (the original has correct slack/artificial assignments). */
+    int *saved_basis = NULL;
+    int *saved_basis_pos = NULL;
+    VarStatus *saved_var_status = NULL;
+    if (solver->crash) {
+        saved_basis = (int *)malloc(tab->m * sizeof(int));
+        saved_basis_pos = (int *)malloc(tab->n * sizeof(int));
+        saved_var_status = (VarStatus *)malloc(tab->n * sizeof(VarStatus));
+        if (saved_basis && saved_basis_pos && saved_var_status) {
+            memcpy(saved_basis, tab->basis, tab->m * sizeof(int));
+            memcpy(saved_basis_pos, tab->basis_pos, tab->n * sizeof(int));
+            memcpy(saved_var_status, tab->var_status, tab->n * sizeof(VarStatus));
+        }
+        crash_triangular(tab, solver->verbose);
+    }
+
     /* Factorize initial basis */
     if (solver->verbose) printf("[simplex_solve] Factorizing initial basis...\n");
-    if (tableau_refactorize(tab) != 0) {
+    int factorize_ok = (tableau_refactorize(tab) == 0);
+
+    /* If crash produced a singular basis, restore original */
+    if (!factorize_ok && solver->crash && saved_basis) {
+        if (solver->verbose)
+            printf("[simplex_solve] Crash basis singular, restoring original basis\n");
+        memcpy(tab->basis, saved_basis, tab->m * sizeof(int));
+        memcpy(tab->basis_pos, saved_basis_pos, tab->n * sizeof(int));
+        memcpy(tab->var_status, saved_var_status, tab->n * sizeof(VarStatus));
+        for (int j = 0; j < tab->n; j++)
+            tab->x[j] = tab->lb_ext[j];
+        factorize_ok = (tableau_refactorize(tab) == 0);
+    }
+
+    if (!factorize_ok) {
+        free(saved_basis); free(saved_basis_pos); free(saved_var_status);
         solver->status = RALPH_STATUS_ERROR;
         return -1;
     }
+
+    /* After crash or initial factorization, recompute solution and reduced costs.
+     * Crash modifies the basis but tab->x[] still has values from the old basis,
+     * so we must recompute x_B = B^{-1} * (b - N*x_N) and reduced costs. */
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+
+    /* Post-verify crash basis: if any basic variable is outside its bounds,
+     * the Big-M Phase 1 won't have artificials to fix it. Restore original. */
+    if (solver->crash && saved_basis) {
+        int crash_infeasible = 0;
+        for (int i = 0; i < tab->m; i++) {
+            int bv = tab->basis[i];
+            double val = tab->x[bv];
+            if (val < tab->lb_ext[bv] - RALPH_FEAS_TOL ||
+                val > tab->ub_ext[bv] + RALPH_FEAS_TOL) {
+                crash_infeasible = 1;
+                if (solver->verbose)
+                    printf("[crash] Basic var %d in row %d: x=%.6e outside [%.6e, %.6e], reverting\n",
+                           bv, i, val, tab->lb_ext[bv], tab->ub_ext[bv]);
+                break;
+            }
+        }
+        if (crash_infeasible) {
+            if (solver->verbose)
+                printf("[crash] Post-verify failed, restoring original basis\n");
+            memcpy(tab->basis, saved_basis, tab->m * sizeof(int));
+            memcpy(tab->basis_pos, saved_basis_pos, tab->n * sizeof(int));
+            memcpy(tab->var_status, saved_var_status, tab->n * sizeof(VarStatus));
+            for (int j = 0; j < tab->n; j++)
+                tab->x[j] = tab->lb_ext[j];
+            if (tableau_refactorize(tab) != 0) {
+                free(saved_basis); free(saved_basis_pos); free(saved_var_status);
+                solver->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        }
+    }
+
+    free(saved_basis); free(saved_basis_pos); free(saved_var_status);
+
     if (solver->verbose) printf("[simplex_solve] Initial factorization OK\n");
 
     /* Phase 1: Find feasible solution */

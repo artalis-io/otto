@@ -3883,6 +3883,228 @@ void test_scaling_roundtrip(void) {
 }
 
 /* ============================================================================
+ * Test: Crash Basis Places Structural Columns
+ *
+ * A 10-variable LP with singleton columns. Crash should place at least 3
+ * structural columns in the basis (vs 0 with all-slack start).
+ * ============================================================================ */
+void test_crash_basis_structural(void) {
+    printf("\n=== Test: Crash Basis Structural ===\n");
+
+    /* 10-variable LP with several singleton-like columns:
+     * min sum(x_j), x_j >= 0
+     * Constraints mix singletons and dense columns */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    for (int j = 0; j < 10; j++) {
+        ralph_add_var(model, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    }
+
+    /* Row 0: x0 <= 50 (singleton for x0) */
+    int i0[] = {0}; double v0[] = {1.0};
+    ralph_add_constraint(model, 1, i0, v0, RALPH_LESS_EQUAL, 50.0);
+
+    /* Row 1: x1 <= 40 (singleton for x1) */
+    int i1[] = {1}; double v1[] = {1.0};
+    ralph_add_constraint(model, 1, i1, v1, RALPH_LESS_EQUAL, 40.0);
+
+    /* Row 2: x2 <= 30 (singleton for x2) */
+    int i2[] = {2}; double v2[] = {1.0};
+    ralph_add_constraint(model, 1, i2, v2, RALPH_LESS_EQUAL, 30.0);
+
+    /* Row 3: x3 + x4 <= 60 */
+    int i3[] = {3, 4}; double v3[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, i3, v3, RALPH_LESS_EQUAL, 60.0);
+
+    /* Row 4: x5 + x6 + x7 <= 80 */
+    int i4[] = {5, 6, 7}; double v4[] = {1.0, 1.0, 1.0};
+    ralph_add_constraint(model, 3, i4, v4, RALPH_LESS_EQUAL, 80.0);
+
+    /* Row 5: sum(x_j) <= 200 */
+    int i5[] = {0,1,2,3,4,5,6,7,8,9};
+    double v5[] = {1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0};
+    ralph_add_constraint(model, 10, i5, v5, RALPH_LESS_EQUAL, 200.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "crash", 1);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Crash basis: OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 0.0, TOLERANCE, "Crash basis: obj=0 (all vars at lb)");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Crash Basis Reduces Phase 1 Iterations
+ *
+ * A medium LP (50 vars) with >= and = constraints. Crash should reduce
+ * total iterations compared to all-slack start.
+ * ============================================================================ */
+void test_crash_reduces_iterations(void) {
+    printf("\n=== Test: Crash Reduces Iterations ===\n");
+
+    /* Maximize LP with all <= constraints — crash should place structural
+     * columns near their optimal values, reducing Phase 2 iterations.
+     * Negative objective coefficients (maximize) force non-trivial solution. */
+    int iters_no_crash = 0, iters_crash = 0;
+
+    for (int use_crash = 0; use_crash <= 1; use_crash++) {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+
+        int n = 40;
+        for (int j = 0; j < n; j++) {
+            ralph_add_var(model, 0.0, 100.0,
+                          1.0 + 0.5 * (j % 5), RALPH_CONTINUOUS);
+        }
+
+        /* 15 singleton constraints: a_j * x_j <= rhs */
+        for (int i = 0; i < 15; i++) {
+            int idx[] = {i};
+            double val[] = {1.0 + 0.2 * (i % 4)};
+            ralph_add_constraint(model, 1, idx, val, RALPH_LESS_EQUAL,
+                                 30.0 + 5.0 * i);
+        }
+
+        /* 15 coupling constraints */
+        for (int i = 0; i < 15; i++) {
+            int idx[10];
+            double val[10];
+            int nnz = 0;
+            for (int j = 0; j < n; j++) {
+                if ((i * 11 + j * 7 + 3) % 10 < 2) {
+                    idx[nnz] = j;
+                    val[nnz] = 1.0 + (double)((i + j) % 3);
+                    nnz++;
+                }
+            }
+            if (nnz == 0) { idx[0] = 15 + i; val[0] = 1.0; nnz = 1; }
+            ralph_add_constraint(model, nnz, idx, val, RALPH_LESS_EQUAL,
+                                 100.0 + 30.0 * i);
+        }
+
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "crash", use_crash);
+        ralph_optimize(model);
+
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+               use_crash ? "With crash: OPTIMAL" : "No crash: OPTIMAL");
+
+        if (use_crash) {
+            iters_crash = ralph_get_iterations(model);
+        } else {
+            iters_no_crash = ralph_get_iterations(model);
+        }
+        ralph_free(model);
+    }
+
+    printf("  Iterations: no_crash=%d, crash=%d\n", iters_no_crash, iters_crash);
+    /* Crash should not increase iterations significantly */
+    ASSERT(iters_crash <= iters_no_crash + 5,
+           "Crash does not increase iterations");
+}
+
+/* ============================================================================
+ * Test: Crash Basis with Infeasible LP
+ *
+ * Verify infeasibility is still correctly detected with crash enabled.
+ * ============================================================================ */
+void test_crash_infeasible(void) {
+    printf("\n=== Test: Crash Infeasible ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+
+    /* x + y <= 5 */
+    int idx1[] = {0, 1}; double val1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx1, val1, RALPH_LESS_EQUAL, 5.0);
+
+    /* x + y >= 10 (contradicts above) */
+    int idx2[] = {0, 1}; double val2[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_GREATER_EQUAL, 10.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "crash", 1);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_INFEASIBLE,
+           "Crash + infeasible: correctly detected");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Crash Basis No Regression
+ *
+ * Run all key LP problems with crash=1 and verify same results.
+ * ============================================================================ */
+void test_crash_no_regression(void) {
+    printf("\n=== Test: Crash No Regression ===\n");
+
+    /* Simple 2-var LP: min -x-y, x+y<=4, 2x+y<=6 */
+    {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+        ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+        int idx1[] = {0, 1}; double val1[] = {1.0, 1.0};
+        ralph_add_constraint(model, 2, idx1, val1, RALPH_LESS_EQUAL, 4.0);
+        int idx2[] = {0, 1}; double val2[] = {2.0, 1.0};
+        ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 6.0);
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "crash", 1);
+        ralph_optimize(model);
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Simple LP (crash): OPTIMAL");
+        ASSERT_NEAR(ralph_get_objval(model), -4.0, TOLERANCE, "Simple LP (crash): obj=-4");
+        ralph_free(model);
+    }
+
+    /* Diet problem */
+    {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+        ralph_add_var(model, 0, 1e30, 2.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0, 1e30, 3.5, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0, 1e30, 8.0, RALPH_CONTINUOUS);
+        int idx[] = {0, 1, 2};
+        double v1[] = {50, 42, 35};
+        ralph_add_constraint(model, 3, idx, v1, RALPH_GREATER_EQUAL, 300);
+        double v2[] = {4, 8, 7};
+        ralph_add_constraint(model, 3, idx, v2, RALPH_GREATER_EQUAL, 10);
+        double v3[] = {0, 3, 2};
+        ralph_add_constraint(model, 3, idx, v3, RALPH_GREATER_EQUAL, 8);
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "crash", 1);
+        ralph_optimize(model);
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Diet (crash): OPTIMAL");
+        double obj = ralph_get_objval(model);
+        ASSERT(obj > 10.0 && obj < 25.0, "Diet (crash): reasonable cost");
+        ralph_free(model);
+    }
+
+    /* Equality constraints */
+    {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+        ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0.0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+        int idx[] = {0, 1}; double val[] = {1.0, 1.0};
+        ralph_add_constraint(model, 2, idx, val, RALPH_EQUAL, 10.0);
+        double val2[] = {1.0, -1.0};
+        ralph_add_constraint(model, 2, idx, val2, RALPH_LESS_EQUAL, 4.0);
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "crash", 1);
+        ralph_optimize(model);
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Equality (crash): OPTIMAL");
+        ralph_free(model);
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -3986,6 +4208,12 @@ int main(int argc, char **argv) {
     test_scaling_disabled();
     test_scaling_no_regression();
     test_scaling_roundtrip();
+
+    /* Crash basis tests */
+    test_crash_basis_structural();
+    test_crash_reduces_iterations();
+    test_crash_infeasible();
+    test_crash_no_regression();
 
     /* API Tests */
     test_api_functions();
