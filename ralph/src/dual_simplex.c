@@ -18,6 +18,7 @@
 
 /* Forward declarations */
 SimplexTableau* tableau_create(LPModel *model);
+SimplexTableau* tableau_create_dual(LPModel *model);
 int tableau_refactorize(SimplexTableau *tab);
 int tableau_compute_solution(SimplexTableau *tab);
 int tableau_compute_reduced_costs(SimplexTableau *tab);
@@ -2283,9 +2284,9 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
         printf("[dual_v2_scratch] Starting from scratch...\n");
     }
 
-    /* Create tableau if needed */
+    /* Create dual tableau if needed (no artificials — one aux per constraint) */
     if (!solver->tableau) {
-        solver->tableau = tableau_create(solver->model);
+        solver->tableau = tableau_create_dual(solver->model);
         if (!solver->tableau) {
             solver->status = RALPH_STATUS_ERROR;
             return -1;
@@ -2294,36 +2295,9 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
 
     SimplexTableau *tab = solver->tableau;
 
-    /* For dual simplex: fix artificial variables at zero (non-basic at lb=0)
-     * and replace them with surplus/slack in the basis. Also fix their upper
-     * bounds to 0 so they can never enter the basis during dual pivots. */
-    if (tab->num_artificial > 0) {
-        for (int a = 0; a < tab->num_artificial; a++) {
-            int art = tab->artificial_vars[a];
-            int row = tab->basis_pos[art];
-
-            if (row >= 0 && row < tab->m) {
-                /* Artificial is basic — swap with surplus (one index before) */
-                int surplus = art - 1;
-
-                if (surplus >= solver->model->num_vars &&
-                    tab->var_status[surplus] != RALPH_BASIC) {
-                    tab->basis[row] = surplus;
-                    tab->basis_pos[surplus] = row;
-                    tab->var_status[surplus] = RALPH_BASIC;
-
-                    tab->basis_pos[art] = -1;
-                    tab->var_status[art] = RALPH_FIXED;
-                    tab->x[art] = 0.0;
-                }
-            }
-
-            /* Fix artificial: cost=0, lb=ub=0 so it can never leave FIXED status */
-            tab->c_ext[art] = 0.0;
-            tab->lb_ext[art] = 0.0;
-            tab->ub_ext[art] = 0.0;
-        }
-    }
+    /* Note: crash is NOT used for dual from-scratch.  The all-auxiliary basis
+     * gives y=0, rc=c — ideal for make_dual_feasible + dual_phase1.  Crashing
+     * structural vars into the basis contaminates y with non-zero costs. */
 
     /* Factorize initial basis (slacks/surplus) */
     if (tableau_refactorize(tab) != 0) {
