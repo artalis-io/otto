@@ -2064,6 +2064,7 @@
                             <li>Velo &ndash; Routing engine</li>
                             <li>Carta &ndash; Tile generator</li>
                             <li>Locus &ndash; Geocoding</li>
+                            <li>Nexus &ndash; Document ingestion pipeline</li>
                             <li>FuelWise, Arbor, Surge, HoSE, Tempo, Sigma, Pulse, Fuse</li>
                         </ul>
                     </div>
@@ -2075,7 +2076,7 @@
                         </p>
                         <ul class="license-list">
                             <li>SaaS vendors offering OTTO as a service</li>
-                            <li>Nexus &ndash; TMS/ELD/LoadBoard connectors</li>
+                            <li>Nexus Gateway &ndash; TMS/ELD/LoadBoard connectors</li>
                             <li>Managed hosting &ndash; Fully operated platform</li>
                             <li>Priority support &ndash; SLAs and dedicated help</li>
                         </ul>
@@ -2975,6 +2976,15 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                     </div>
                     <div class="card">
                         <div class="card-header">
+                            <span class="card-name">Nexus</span>
+                            <span class="card-lang">C</span>
+                        </div>
+                        <div class="card-desc">Document ingestion pipeline. XLSX, PDF, CSV extraction with schema-driven transforms, validation, and change detection.</div>
+                        <div class="card-meta">192 tests &middot; 9K loc &middot; 6-stage pipeline + WASM demo</div>
+                        <div class="card-roadmap">Roadmap: TMS/ELD integration gateway, streaming Stage A for large files</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-header">
                             <span class="card-name">ClayShards</span>
                             <span class="card-lang">C + JS</span>
                         </div>
@@ -3030,14 +3040,6 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                             <span class="badge-planned">planned</span>
                         </div>
                         <div class="card-desc"><strong>S</strong>election and <strong>I</strong>ntegration for <strong>G</strong>lobal <strong>M</strong>ulti-assignment <strong>A</strong>llocation. Fleet plan selection via MIP.</div>
-                    </div>
-                    <div class="card planned">
-                        <div class="card-header">
-                            <span class="card-name">Nexus</span>
-                            <span class="card-lang">C</span>
-                            <span class="badge-planned">planned</span>
-                        </div>
-                        <div class="card-desc"><strong>N</strong>ormalized <strong>Ex</strong>ternal <strong>U</strong>nified <strong>S</strong>napshots. TMS/ELD/LoadBoard integration gateway.</div>
                     </div>
                     <div class="card planned">
                         <div class="card-header">
@@ -3103,48 +3105,48 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                 <h3 class="subsection-title">Architecture</h3>
                 <div class="ascii-art">
 <pre>
-┌─────────────────────────────────────────────┐
-│                                             │
-│     UI: React + ClayShards + WASM + APIs    │
-│                                             │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                                             │
-│ Fleet: Arbor + Surge                          │
-│        HoSE + Tempo + Sigma + Pulse            │  ◄── planned
-│ State: Fuse (signal fusion + state estim.)  │  ◄── planned
-│       Network: Atlas + Quota                │  ◄── planned
-│                                             │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                                             │
-│   Domain: FuelWise + Velo + Carta + Locus   │
-│                                             │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                                             │
-│             Core: Ralph + Shared            │
-│                                             │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                                             │
-│       Vendor: miniz + mongoose + Clay       │
-│                                             │
-└─────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│      UI: React + ClayShards + WASM + APIs         │
+│                                                   │
+└─────────────────────────┬─────────────────────────┘
+                          ▼
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│  Fleet: Arbor + Surge                             │
+│         HoSE + Tempo + Sigma + Pulse              │  ◄── planned
+│  State: Fuse (signal fusion + state estimation)   │  ◄── planned
+│  Network: Atlas + Quota                           │  ◄── planned
+│                                                   │
+└─────────────────────────┬─────────────────────────┘
+                          ▼
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│  Domain: FuelWise + Velo + Carta + Locus + Nexus  │
+│                                                   │
+└─────────────────────────┬─────────────────────────┘
+                          ▼
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│              Core: Ralph + Shared                 │
+│                                                   │
+└─────────────────────────┬─────────────────────────┘
+                          ▼
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│        Vendor: miniz + mongoose + Clay            │
+│                                                   │
+└───────────────────────────────────────────────────┘
 
 Dependencies:
   FuelWise ──► Ralph (LP solver)
   FuelWise ──► Velo (routing)
+  Nexus ──► Shared (arena, JSON, XML, CSV, SHA-256)
   Velo, Carta, Locus ──► Shared (geo, protobuf)
   Shared ──► miniz (compression)
   ClayShards ──► Clay (layout)
   APIs ──► mongoose (HTTP)
 </pre>
-                </div>
             </div>
 
             <!-- Why C -->
