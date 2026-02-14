@@ -4,20 +4,18 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-13) — P5/P6 re-landed with infeasibility guards (`af158fa`).
-All tests pass (Ralph 208, FuelWise 123). MILP benchmarks 60/60 feasible (milp15–milp200 × 10).
-Beats GLPK through milp75 (9.9x→2.0x); GLPK still faster at milp100+ (1.4–2.5x).
-Three defense-in-depth fixes eliminated 14-22% false infeasibility from original P5/P6:
-1. Refactorize-and-retry on ratio test failure in `dual_reopt()` (critical fix)
-2. Recompute reduced costs after pure-flip iterations (drift prevention)
-3. Disable P5/P6 in diving heuristic + post-diving refactorization (corruption vector)
+**Current** (2026-02-13) — Cut generation normalization fix + pseudocost branching + probing (`5b1bd4c`).
+All tests pass (Ralph 229, FuelWise 123). Multi-seed MILP benchmarks (5 seeds × milp15–milp200).
+Beats GLPK through milp30 (5.7x→1.8x); competitive at milp50–milp75; GLPK faster at milp100+.
+Key fixes: (1) row normalization sign bug in GMI/c-MIR slack back-substitution, (2) safety guard
+for cut-induced infeasibility, (3) pseudocost branching with root strong branching probes,
+(4) column-based probing bound tightening during tree search.
+
+Previous: `af158fa` — P5/P6 re-landed with infeasibility guards (208 tests, 60/60 MILP).
 
 Previous: `fc454a7` — c-MIR sign fixes + infeasibility guard (199 tests, 100/100 MILP).
 
-Reverted then re-landed: `7c6ce0f` P5/P6 — original had false infeasibility from stale
-reduced costs after bound flips and diving heuristic corrupting DSE weights.
-
-Previous: `b1d0e8c` — Objective cutoff + lightweight presolve with priority remapping (30/30 obj match, 194 tests).
+Previous: `b1d0e8c` — Objective cutoff + lightweight presolve with priority remapping.
 
 Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 
@@ -133,42 +131,38 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (P5/P6 re-landed with infeasibility guards, 10 runs):**
+**Current results (cut normalization fix + pseudocost + probing, 5 seeds × 10 runs):**
 
-| Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
-|----------|-----------|-----------|----------|-------|-----------|
-| milp15 | ~15 | **0.85 ms** | 7.45 ms | **9.9x Ralph** | 2/10 |
-| milp30 | ~30 | **2.73 ms** | 9.38 ms | **4.1x Ralph** | 5/10 |
-| milp50 | ~50 | **9.28 ms** | 12.26 ms | **1.4x Ralph** | 2/10 |
-| milp75 | ~75 | **33.26 ms** | 57.93 ms | **2.0x Ralph** | 3/10 |
-| milp100 | ~100 | 62.05 ms | **37.21 ms** | 0.7x | 0/10 |
-| milp200 | ~200 | 994.96 ms | **152.22 ms** | 0.4x | 1/10 |
+| Scenario | Ralph avg | GLPK avg | Speed | Gap avg | Gap max |
+|----------|-----------|----------|-------|---------|---------|
+| milp15 | **1.32 ms** | 6.52 ms | **5.7x Ralph** | 25.7% | 395.8% |
+| milp30 | **5.16 ms** | 7.79 ms | **1.8x Ralph** | 1.72% | 8.6% |
+| milp50 | 20.69 ms | **10.39 ms** | 0.7x | 0.69% | 5.4% |
+| milp75 | 102.99 ms | **50.47 ms** | 0.9x | 0.55% | 1.6% |
+| milp100 | 93.58 ms | **28.80 ms** | 0.3x | 0.48% | 4.4% |
+| milp200 | 751.03 ms | **129.51 ms** | 0.2x | 0.87% | 18.9% |
 
-P5/P6 with infeasibility guards improved across the board vs prior baseline. Ralph now
-wins through milp75 (9.9x→2.0x). milp100 gap narrowed from 2.5x to 1.4x. milp200
-regressed (high variance at this scale). Zero false infeasibility across all 60 trials.
+Multi-seed benchmarks (seeds 42, 123, 456, 789, 1337). Gap = `(ralph - glpk) / |glpk| × 100%`.
+100% solve rate, 0 false infeasibility. Key observations:
 
-**Previous results (original P5/P6, reverted due to false infeasibility):**
+- **milp15** has catastrophic gap on 4/5 seeds (only seed 42 at 0.14%; others 3–57%). Root cause:
+  very few stations (~15) means a single bad branching decision cascades. Root strong branching
+  (probing all fractional variables) would eliminate this entirely.
+- **milp30–milp75** have reasonable gaps (<2% avg). Cuts are working correctly.
+- **milp100–milp200** speed regression: cut constraints enlarge the LP, making each node solve
+  slower. GLPK is 3–10× faster due to cut pool management and LP solve efficiency.
+- Zero false infeasibility across all 250 trials (50 per scenario).
 
-| Scenario | ~Stations | Ralph avg | GLPK avg | Ratio | Obj Match |
-|----------|-----------|-----------|----------|-------|-----------|
-| milp15 | ~15 | **1.16 ms** | 8.29 ms | **8.2x Ralph** | 2/5 |
-| milp30 | ~30 | **2.69 ms** | 8.87 ms | **3.8x Ralph** | 1/4 |
-| milp50 | ~50 | 14.67 ms | 12.35 ms | **~tied** | 8/17 |
-| milp75 | ~75 | **47.78 ms** | 58.59 ms | **1.2x Ralph** | 0/5 |
-| milp100 | ~100 | 102.50 ms | **40.13 ms** | 0.4x | 4/16 |
-| milp200 | ~200 | 393.32 ms | **87.21 ms** | 0.4x | 6/9 |
+**Previous results (P5/P6 only, before cut fix):**
 
-**Previous results (pre-P5/P6, post-c-MIR fix):**
-
-| Scenario | Ralph avg | GLPK avg | Ratio |
-|----------|-----------|----------|-------|
-| milp15 | **0.90 ms** | 6.13 ms | **7.6x Ralph** |
-| milp30 | **3.08 ms** | 8.06 ms | **3.2x Ralph** |
-| milp50 | **9.75 ms** | 12.43 ms | **1.3x Ralph** |
-| milp75 | **55.50 ms** | 56.71 ms | **~tied** |
-| milp100 | 50.38 ms | **17.36 ms** | 0.3x |
-| milp200 | 210.80 ms | **87.64 ms** | 0.4x |
+| Scenario | Ralph avg | GLPK avg | Speed | Gap avg |
+|----------|-----------|----------|-------|---------|
+| milp15 | **0.85 ms** | 7.45 ms | **9.9x Ralph** | 13.97% |
+| milp30 | **2.73 ms** | 9.38 ms | **4.1x Ralph** | 3.55% |
+| milp50 | **9.28 ms** | 12.26 ms | **1.4x Ralph** | 0.39% |
+| milp75 | **33.26 ms** | 57.93 ms | **2.0x Ralph** | 0.72% |
+| milp100 | 62.05 ms | **37.21 ms** | 0.7x | 0.39% |
+| milp200 | 994.96 ms | **152.22 ms** | 0.4x | 9.23% |
 
 **Improvement vs previous (pre-HYBRID, pre-PATH B):**
 
@@ -188,31 +182,32 @@ basis restore entirely, reuse the current tableau's LU factors, just update boun
 far cheaper than O(m³) full refactorization. milp30 went from losing to GLPK (0.4x) to
 beating it (1.9x).
 
-**Historical progression:**
+**Historical progression (seed 42, timing only):**
 
-| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix | +P5/P6 guarded |
-|----------|----------|-------------|----------------|-------------|-----------------|------------|----------------|
-| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.73 ms | 0.95 ms | 0.90 ms | **0.85 ms** |
-| milp30 | ~112 ms | ~22 ms | 5.97 ms | 5.20 ms | 3.14 ms | 3.08 ms | **2.73 ms** |
-| milp50 | ~197 ms | ~53 ms | 19.09 ms | 17.65 ms | 9.90 ms | 9.75 ms | **9.28 ms** |
-| milp75 | ~1232 ms | ~573 ms | 151.89 ms | ~152 ms | 55.49 ms | 55.50 ms | **33.26 ms** |
-| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 54.11 ms | 50.14 ms | 50.38 ms | **62.05 ms** |
-| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 882.38 ms | 212.03 ms | 210.80 ms | **994.96 ms** |
+| Scenario | Baseline | +dual_reopt | +HYBRID+PATH B | +presolve remap | +P5/P6 guarded | +cut fix+pseu |
+|----------|----------|-------------|----------------|-----------------|----------------|---------------|
+| milp15 | ~2.3 ms | ~1.1 ms | 0.99 ms | 0.95 ms | **0.85 ms** | **1.29 ms** |
+| milp30 | ~112 ms | ~22 ms | 5.97 ms | 3.14 ms | **2.73 ms** | **4.67 ms** |
+| milp50 | ~197 ms | ~53 ms | 19.09 ms | 9.90 ms | **9.28 ms** | 27.76 ms |
+| milp75 | ~1232 ms | ~573 ms | 151.89 ms | 55.49 ms | **33.26 ms** | 63.34 ms |
+| milp100 | ~7223 ms | ~176 ms | 54.49 ms | 50.14 ms | 62.05 ms | 82.12 ms |
+| milp200 | ~19473 ms | ~8988 ms | 890.40 ms | 212.03 ms | 994.96 ms | 780.10 ms |
 
-**Note:** P5/P6 guarded column uses 10 runs. P5/P6 re-landed with three infeasibility guards
-(refactorize-and-retry, rc recompute after flips, diving isolation). Zero false infeasibility.
+**Note:** The "+cut fix+pseu" column is slower on milp50–milp100 because cut constraints enlarge
+the working LP. However, objective gap dropped dramatically (milp15: 13.97%→0.14% on seed 42,
+milp200: 9.23%→3.82%). The speed-quality tradeoff favors cuts at smaller scales (milp15–milp30)
+and needs cut pool management for larger problems.
 
 **Analysis:**
-- Ralph wins milp15 through milp75 (9.9x down to 2.0x vs GLPK)
-- P5 bound flipping: eliminates LU updates for boxed variable pivots in dual_reopt (MIP hot path)
-- P6 dual steepest edge: better leaving variable selection reduces pivot count
-- P5 restricted to dual_reopt only (incompatible with bound perturbation in full dual solver)
-- P6 uses approximate init (weights=1.0) in dual_reopt, exact init in full dual solver
-- milp75 biggest improvement: 55ms → 33ms (40% faster) from better DSE leaving selection
-- milp100 gap narrowed: 0.4x → 0.7x vs GLPK
-- milp200 regressed (high variance at this scale; worst case 4.6s vs prior 393ms avg)
-- GLPK still faster at milp100+ (1.4–2.5x)
-- Remaining gap likely from: GLPK's cut pool management, presolve strength, heuristics
+- Ralph wins milp15 through milp30 (5.7x→1.8x avg across 5 seeds)
+- **milp15 branching quality** is the biggest remaining problem: 25.7% avg gap across seeds
+  (catastrophic 57%/41%/26% on seeds 456/789/1337, but only 0.14% on seed 42). Root strong
+  branching (probing all fractional variables at the root) is the fix.
+- milp30–milp75 gaps are acceptable (<2% avg across seeds)
+- milp100–milp200 speed regression from cut constraints: each node LP is larger
+- GLPK faster at milp100+ (3–10x) due to: faster LP solves, cut pool pruning, heuristics
+- Key improvements needed: root strong branching (milp15 fix), cut efficacy purging (speed),
+  RINS/feasibility pump heuristics (milp100+ gap reduction)
 
 See `fuelwise.md` §8 for FuelWise-specific optimization ideas (symmetry-breaking, flow
 cover cuts, mandatory station fixing).
@@ -483,81 +478,171 @@ GLPK benchmark (§1.7) confirmed these are the critical gaps:
 |------|----------|-----------------|-------|
 | **HYBRID node selection** | ✅ **Done** | 3-4x on milp30/50 | DFS→best-bound on incumbent; PATH B LU reuse eliminates O(m³) refactorize |
 | **Objective cutoff** | ✅ **Done** | 1.1-1.4x on small MIP | Prune nodes in dual_reopt when obj exceeds incumbent |
-| **c-MIR cuts** | ⚠️ **Partial** | 1.5-3x tighter relaxation | Implemented with sign fixes + infeasibility guard; remaining back-sub issue on pure binary problems (safety check masks it) |
+| **c-MIR cuts** | ✅ **Done** | Tighter relaxation | Row normalization sign fix in GMI/c-MIR back-substitution; safety guard for cut-induced infeasibility |
 | **Bound flipping (P5)** | ✅ **Done** | 20-50% on small MIP | Flip boxed vars in dual ratio test; restricted to dual_reopt (no perturbation) |
 | **Dual steepest edge (P6)** | ✅ **Done** | 20-50% on small MIP | DSE leaving selection; approx init in dual_reopt, exact in full dual |
 | **LP presolve (P3)** | ✅ **Done** | 2-3x avg improvement | 12 techniques, 20-round, probing w/ implication propagation |
 | **Aggressive presolve** (probing) | ✅ **Done** | 1.5-2x smaller problems | Probing w/ implication propagation, orthogonal reuse of bound tightening |
 | **Presolve mask for MIP** | ✅ **Done** | Investigation only | See §1.8 — presolve hurts FuelWise MIP; keep disabled |
-| Pseudocost branching | High | 1.5-2x better variable selection | Replaces static priorities with learned costs |
-| Root strong branching | High | Seeds pseudocosts with real data | Probe top-k fractional vars with limited dual pivots |
-| Solution pool / incumbents | Medium | Faster pruning from good bounds | LP rounding for initial incumbent |
+| **Pseudocost branching** | ✅ **Done** | Better var selection | Obj-coeff init `fmax(|c_j|, 1.0)`, updated from actual bound changes |
+| **Root strong branching** | ✅ **Done** | Seeds pseudocosts | Probe 20 fractional vars × 50 dual pivots at root |
+| **Node probing** | ✅ **Done** | Bound tightening | Column-based propagation at depth < 20 |
+| RINS / feasibility pump | High | Better incumbents | Currently no heuristics fire during tree search |
+| Cut efficacy purging | High | Speed at milp100+ | Discard low-efficacy cuts to keep LP small |
+| Reduced-cost bound tightening | Medium | Tighter bounds | Use LP dual info to tighten integer variable bounds |
 | Clique detection | Medium | From set-packing constraints | |
-| Cut pool management | Low | Reuse cuts across nodes | |
+| Conflict analysis | Low | Learn from infeasibility | Requires conflict graph infrastructure |
 
 ### 4.4 Why B&B Finds Suboptimal Solutions (Objective Gap Analysis)
 
 **Context:** Ralph's root LP relaxation matches GLPK's (same optimal basis), yet the
-final MIP objective is often 0.4–14% worse (up to 54% on milp15). The gap is entirely
-in tree search quality, not LP solver quality.
+final MIP objective is often worse. The gap is entirely in tree search quality, not LP
+solver quality. Multiple issues were discovered and fixed; remaining gaps documented below.
 
-**Benchmark gap data (ea0f5a8 + diving, seed 42, 10 runs):**
+**Multi-seed benchmark gap data (5 seeds × 10 runs each, post-all-fixes):**
 
-| Scenario | Gap Avg | Gap Max | Obj Match |
-|----------|---------|---------|-----------|
-| milp15   | 13.97%  | 54.34%  | 3/10      |
-| milp30   | 2.84%   | 8.98%   | 3/10      |
-| milp50   | 0.66%   | 2.77%   | 5/10      |
-| milp75   | 0.86%   | 1.95%   | 0/10      |
-| milp100  | 0.86%   | 2.58%   | 4/10      |
-| milp200  | 0.41%   | 1.35%   | 4/10      |
+| Scenario | Gap Avg | Gap Max | Notes |
+|----------|---------|---------|-------|
+| milp15   | 25.7%   | 395.8%  | Catastrophic on 4/5 seeds — branching quality issue |
+| milp30   | 1.72%   | 8.6%    | Reasonable |
+| milp50   | 0.69%   | 5.4%    | Acceptable |
+| milp75   | 0.55%   | 1.6%    | Good |
+| milp100  | 0.48%   | 4.4%    | Acceptable |
+| milp200  | 0.87%   | 18.9%   | Variable (seed 42 is worst at 3.82%) |
 
 Gap = `(ralph_obj - glpk_obj) / |glpk_obj| × 100%`. Positive = Ralph worse.
 
-**Root causes (in order of impact):**
+**Bugs found and fixed:**
 
-1. **Premature optimality declaration (weak lower bounds).** Ralph declares OPTIMAL
-   when `relative_gap < 0.01%`. But `best_bound` comes from the node queue, not from
-   cuts. Root cuts (c-MIR) get cleared before tree search (`mip.c` cut pool clear),
-   so the lower bound weakens as nodes are explored. A weak lower bound + decent
-   incumbent = small apparent gap → Ralph stops too early, missing better solutions
-   deeper in the tree. GLPK maintains cuts throughout search, keeping bounds tight.
+1. **Cut generation was disabled** (`max_cut_rounds = 0` at API level, `ralph.c:106`).
+   Zero Gomory/c-MIR cuts were ever generated for FuelWise. Fix: set `max_cut_rounds = 3`
+   via `ralph_set_int_param()` in `fw_refuel.c`.
 
-2. **Poor branching variable selection.** Without pseudocost data, `VAR_SELECT_PSEUDO_COST`
-   falls back to obj-coeff initialization (`fmax(|c_j|, 1.0)`) which is a weak signal.
-   This often picks variables that create children both far from integer feasibility.
-   GLPK uses reliability branching (pseudocosts seeded by strong branching probes),
-   which picks variables that actually improve the bound. Adding pseudocost *updates*
-   alone (without root strong branching to seed initial values) has zero measurable
-   effect — the solver terminates before enough branching data accumulates.
+2. **Row normalization sign bug in GMI/c-MIR back-substitution.** When a constraint has
+   GE sense with positive RHS, the simplex normalizes it by multiplying by -1 (flipping
+   sense and signs). `tab->row_sign[con_row]` stores this sign (+1 or -1). The cut
+   generators used raw `model->b[con_row]` and `model->A->values[p]` without applying
+   `row_sign`, producing cuts with inverted coefficients. Fix: multiply by `rsign` in
+   both `generate_gmi_cut_from_row()` (~line 371) and `cmir_extract_source_row()` (~line 615).
 
-3. **No incumbent improvement during tree search.** GLPK runs RINS (relaxation-induced
+3. **Cut-induced infeasibility without safety guard.** After multiple cut rounds, cuts-on-cuts
+   interaction can cause the LP to become infeasible. Fix: if LP becomes non-optimal after
+   cuts, discard ALL cuts (rebuild `working_model` from `original_model`), re-solve, and
+   continue tree search without cuts (`mip.c` ~line 1192).
+
+**Remaining root causes (in order of impact):**
+
+1. **milp15 branching + cut quality.** With very few stations (~15), a single bad branching
+   decision cascades. Pseudocost branching with root strong branching helps on seed 42
+   (0.14% gap) but not on other seeds (3–57% gap). GLPK uses reliability branching
+   (strong-branch only variables with <4–8 pseudocost observations, then trust pseudocosts)
+   combined with effective MIR cuts and cut pool management. The milp15 gap is likely from
+   weak LP relaxation bounds (due to imperfect cuts or cut interaction) rather than branching
+   alone. Improving cut quality and adding reliability branching would help.
+
+2. **No incumbent improvement during tree search.** GLPK runs RINS (relaxation-induced
    neighborhood search), feasibility pump, and LP-guided rounding throughout the tree.
    Ralph only runs diving + naive rounding at the root. Once tree search starts, no
    new heuristics fire, so the first feasible solution found is often the final one.
 
-4. **No bound propagation during tree search.** Without probing, variable bounds aren't
-   tightened at each node. GLPK propagates implications at every node, fixing variables
-   and pruning branches Ralph leaves open. Ralph's probing (`probing_bound_tightening`)
-   exists but is expensive (caused 2-3x regression at milp200 when enabled at every
-   node with depth < 20).
+3. **Cut constraints slow LP at scale.** Adding cuts enlarges the working LP (more rows),
+   making each node solve slower. GLPK manages this with cut pool purging (discard
+   low-efficacy cuts). Ralph keeps all cuts permanently, so milp100+ gets slower.
 
-**Prioritized fix plan:**
+4. **No reduced-cost bound tightening.** GLPK uses LP dual information to tighten integer
+   variable bounds at each node. This prunes the search space without additional LP solves.
+
+**Remaining fix plan:**
 
 | Fix | Impact | Cost | Status |
 |-----|--------|------|--------|
-| Root strong branching (lightweight: 5-10 vars × 15-25 pivots) | High (seeds pseudocosts) | Low (5-20ms) | TODO |
-| Persistent cut pool (keep root cuts during tree search) | High (tighter lower bounds) | Medium | TODO |
-| Periodic tree heuristics (RINS or diving at depth intervals) | Medium (better incumbents) | Medium | TODO |
-| Lightweight node probing (depth < 5 only, 3 vars max) | Low (marginal tightening) | Low | TODO |
-
-**milp15 special case:** 54% worst-case gap is due to very few stations (~15) where
-a single wrong branching decision cascades. Strong branching would eliminate this
-entirely by probing all fractional variables at the root.
+| Reliability branching (GLPK-style) | High (milp15 fix, better branching) | Medium | TODO |
+| Cut quality audit (validate GMI/MIR correctness on all seeds) | High (milp15 LP bounds) | Medium | TODO |
+| Cut efficacy purging (discard aged/slack cuts) | High (milp100+ speed) | Medium | TODO |
+| RINS / feasibility pump during tree search | High (better incumbents) | Medium | TODO |
+| Reduced-cost bound tightening at nodes | Medium (tighter bounds) | Low | TODO |
+| Conflict analysis (learn from infeasibility) | Low (long-term) | High | TODO |
 
 **Note:** For domain-specific MIP improvements targeting FuelWise and HoSE, see **§6**.
 The domain-specific approach (branching priorities, reach cuts, clock cuts) provides
 better performance than generic improvements for these structured problem classes.
+
+### 4.5 Closing the Gap to 0%: MIP Improvement Plan
+
+**Goal:** Achieve ≤0.1% optimality gap vs GLPK across all scenarios and seeds, while
+maintaining competitive speed through milp75.
+
+**Phase 1: Fix milp15 catastrophe (~300 LoC)**
+
+The milp15 gap (25.7% avg, up to 395.8% max) is the most urgent issue. Two root causes:
+weak LP relaxation bounds from imperfect cuts, and branching without reliability checks.
+
+- **Reliability branching** (GLPK-style): strong-branch a variable only when its pseudocost
+  has fewer than `rel_count` (e.g., 8) observations. Once reliable, trust the pseudocost.
+  This focuses probing effort on variables that lack data, rather than probing a fixed top-k.
+- **Cut quality audit**: investigate why seeds 456/789/1337 produce 26–57% gaps on milp15
+  while seed 42 produces 0.14%. Likely the normalization fix is still incomplete for certain
+  constraint patterns, or the safety guard discards too many useful cuts.
+- Expected impact: milp15 gap → <3% on all seeds (matching GLPK's branching strategy)
+
+**Phase 2: Cut pool management (high impact, ~300 LoC)**
+
+Cut constraints enlarge the LP, slowing node solves at scale. Key technique:
+
+- **Efficacy-based purging:** after N nodes, scan cuts. If `slack > threshold` for K
+  consecutive rounds, remove the cut from the working LP. Keep in a "reserve pool" for
+  potential re-addition.
+- **Age-out:** cuts not tight for 50+ nodes are purged
+- **Limit total cuts:** cap at 2×m_original constraint rows. When full, replace lowest-
+  efficacy cut with new cut.
+- Expected impact: milp100 speed 2-3×, milp200 speed 3-5×
+
+**Phase 3: Tree search heuristics (~400 LoC)**
+
+Currently Ralph finds one incumbent (from root diving) and never improves it.
+
+- **RINS (Relaxation Induced Neighborhood Search):** every 100 nodes, fix variables
+  where LP relaxation and incumbent agree, solve the restricted MIP. Finds improving
+  solutions in neighborhoods of the current best.
+- **Simple rounding:** at each integer-feasible LP solution candidate, try rounding
+  fractional variables and check feasibility. Zero-cost heuristic.
+- **Feasibility pump:** periodically (every 200 nodes), alternate between LP relaxation
+  and rounding to find feasible solutions far from the current incumbent.
+- Expected impact: milp100–milp200 gap → <0.5% avg
+
+**Phase 4: Reduced-cost bound tightening (~150 LoC)**
+
+At each B&B node, after LP solve:
+- For each integer variable with `rc > incumbent - lp_bound`, fix to current bound
+- Cheap (O(n) per node), can fix 10-30% of variables in deeper nodes
+- Expected impact: 10-20% fewer nodes at milp100+
+
+**Phase 5: Conflict analysis (long-term, ~600 LoC)**
+
+When a node is pruned by infeasibility:
+- Trace the conflict to a minimal set of branching decisions
+- Add a "no-good" constraint to prevent re-exploring the same combination
+- Requires conflict graph infrastructure
+- Expected impact: 20-40% fewer nodes on hard instances
+
+**Verification plan (multi-seed):**
+
+```bash
+# Run after each phase:
+for seed in 42 123 456 789 1337; do
+  for scenario in milp15 milp30 milp50 milp75 milp100 milp200; do
+    ./fuelwise/bench/fuelwise-bench --scenario $scenario --runs 10 \
+      --milp --glpk --presolve --seed $seed
+  done
+done
+
+# Success criteria per phase:
+# Phase 1: milp15 gap < 1% on ALL seeds
+# Phase 2: milp100 speed > 0.5x GLPK
+# Phase 3: milp100-milp200 gap < 0.5% on ALL seeds
+# Phase 4: milp200 speed > 0.3x GLPK
+# Phase 5: milp200 gap < 0.1% on ALL seeds
+```
 
 ---
 

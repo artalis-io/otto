@@ -1190,14 +1190,31 @@ static int solve_root_node(MIPSolver *solver) {
             }
 
             if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL) {
-                /* LP became infeasible with cuts - shouldn't happen */
+                /* LP became infeasible with cuts - discard all cuts and continue.
+                 * Safety: rebuild working model from original, re-solve. */
                 if (solver->verbose) {
-                    printf("  WARNING: LP became non-optimal after cuts (status=%d)\n",
+                    printf("  WARNING: LP non-optimal after cuts (status=%d), discarding cuts\n",
                            solver->lp_solver->status);
                 }
-                solver->status = solver->lp_solver->status;
-                bb_node_pool_return(solver->node_pool, root);
-                return 0;
+                simplex_free(solver->lp_solver);
+                lp_model_free(solver->working_model);
+                solver->working_model = lp_model_copy(solver->original_model);
+                if (!solver->working_model) {
+                    bb_node_pool_return(solver->node_pool, root);
+                    return -1;
+                }
+                solver->lp_solver = simplex_create(solver->working_model);
+                if (!solver->lp_solver) {
+                    bb_node_pool_return(solver->node_pool, root);
+                    return -1;
+                }
+                solver->lp_solver->scaling = 0;
+                solver->lp_solver->verbose = solver->verbose;
+                mip_apply_dual_flags(solver);
+                simplex_solve(solver->lp_solver);
+                root->lp_bound = solver->lp_solver->obj_value;
+                solver->cuts_applied = 0;
+                break;
             }
 
             double new_bound = solver->lp_solver->obj_value;
