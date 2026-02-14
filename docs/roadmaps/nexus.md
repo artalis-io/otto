@@ -1,603 +1,398 @@
-# Nexus - External System Integration Gateway
+# Nexus — Document Ingestion Pipeline
 
-**Nexus** (**N**ormalized **Ex**ternal **U**nified **S**napshots) is OTTO's data ingress layer for integrating with external systems like TMS, ELD, and load boards.
-
-## Design Philosophy
-
-**OTTO is a computation engine, not a system of record.**
-
-- TMS remains the source of truth for assignments, drivers, loads
-- ELD remains the source of truth for HOS and location
-- OTTO receives snapshots, computes optimizations, returns recommendations
-- TMS decides what to accept and persists decisions
-
-### What OTTO Does NOT Store
-
-| Never Store | Why |
-|-------------|-----|
-| Driver records | TMS is system of record |
-| Load/shipment history | TMS is system of record |
-| Assignment decisions | TMS is system of record |
-| HOS logs | ELD is system of record |
-| Customer data | TMS is system of record |
-
-### What OTTO Can Cache
-
-| OK to Cache | Refresh Strategy |
-|-------------|------------------|
-| Road network (Velo) | Weekly or on OSM update |
-| Fuel station locations | Daily |
-| Facility operating hours | Daily |
-| Historical travel times | Rolling 30-day |
-| Fuel price snapshots | Hourly |
+**Nexus** is OTTO's document ingestion pipeline for extracting tabular data from XLSX, PDF, and CSV files into structured JSON. It powers facility imports for logistics customers (GLS Hungary, Girteka, Waberer's).
 
 ## Architecture
 
+Six-stage pipeline (A/M/B/X/D implemented, J planned) + change detection:
+
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    External Systems (Source of Truth)            │
-├─────────────┬─────────────┬─────────────┬──────────────────────┤
-│     TMS     │     ELD     │ Load Boards │   Fuel Price APIs    │
-│  (tasks,    │  (HOS,      │  (spot,     │   (OPIS, etc.)       │
-│  assignments)│  locations) │  contract)  │                      │
-└──────┬──────┴──────┬──────┴──────┬──────┴──────────┬───────────┘
-       │             │             │                  │
-       ▼             ▼             ▼                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         Nexus Gateway                            │
-│  ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐       │
-│  │ TMS       │ │ ELD       │ │ LoadBoard │ │ FuelPrice │       │
-│  │ Adapter   │ │ Adapter   │ │ Adapter   │ │ Adapter   │       │
-│  └─────┬─────┘ └─────┬─────┘ └─────┬─────┘ └─────┬─────┘       │
-│        └─────────────┴─────────────┴─────────────┘              │
-│                         ▼                                        │
-│              Canonical Planning Request                          │
-│              (drivers, trucks, loads, constraints)               │
-└─────────────────────────────┬───────────────────────────────────┘
-                              │
+                         ┌──────────────┐
+                         │  Input File  │
+                         └──────┬───────┘
+                                │
+                      Format Detection (extension)
+                                │
+          ┌─────────────────────┼──────────────────┐
+          ▼                     ▼                   ▼
+   ┌──────────────┐    ┌───────────────┐   ┌──────────────┐
+   │    XLSX      │    │     PDF       │   │     CSV      │
+   │              │    │               │   │              │
+   │              │    │ sh_pdf2struc  │   │              │
+   │              │    │ → text blocks │   │              │
+   │              │    │      │        │   │              │
+   │ STAGE A:     │    │ STAGE A:      │   │ STAGE A:     │
+   │ nx_xlsx      │    │ nx_pdf        │   │ nx_csv       │
+   │ ZIP→XML→     │    │ Y-align→rows  │   │ RFC 4180→    │
+   │ rows × cols  │    │ X-gap→columns │   │ rows × cols  │
+   └──────┬───────┘    └──────┬────────┘   └──────┬───────┘
+          │                   │                    │
+          └───────────────────┼────────────────────┘
                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    OTTO Optimization Core                        │
-│  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐        │
-│  │ HoSE   │ │ Tempo  │ │ Velo   │ │FuelWise│ │ Sigma  │        │
-│  │ (HOS)  │ │(TimeWin)│ │(Route) │ │ (Fuel) │ │(Assign)│        │
-│  └────────┘ └────────┘ └────────┘ └────────┘ └────────┘        │
-│                         │                                        │
-│              ┌──────────┴──────────┐                            │
-│              │ Ralph (LP/MIP/LAP)  │                            │
-│              └─────────────────────┘                            │
-└─────────────────────────────┬───────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Planning Response                             │
-│  • Recommended assignments (load → driver)                       │
-│  • Optimized routes with ETAs                                    │
-│  • Fuel stop recommendations                                     │
-│  • HOS-compliant schedules with breaks                          │
-│  • Confidence scores / alternatives                              │
-└─────────────────────────────┬───────────────────────────────────┘
-                              │
-                              ▼
-                    TMS accepts/rejects/modifies
-                    TMS persists decisions
+                     ┌──────────────────┐
+                     │   nx_raw JSON    │  (common tabular format)
+                     └──────┬───────────┘
+                            │
+                  STAGE M: nx_merge (if schema has "row_merge")
+                     Merge PDF continuation rows, strip page headers
+                            │
+                            ▼
+                  ┌─────────┴──────────┐
+                  │ Schema provided?   │
+                  └─────┬────────┬─────┘
+                    yes │        │ no
+                        ▼        ▼
+               ┌──────────────┐  Output nx_raw JSON
+               │ STAGE B:     │
+               │ nx_xform     │
+               │ + nx_compute │
+               │ schema-driven│
+               │ transform    │
+               └──────┬───────┘
+                      ▼
+               ┌──────────────┐
+               │ STAGE X:     │
+               │ nx_validate  │
+               │ geo_bounds,  │
+               │ format,      │
+               │ unique,      │
+               │ outlier      │
+               └──────┬───────┘
+                      ▼
+               ┌──────────────┐
+               │ nx_canonical │
+               │    JSON      │
+               └──────┬───────┘
+                      │
+               ┌──────────────┐
+               │ STAGE D:     │
+               │ nx_emit      │
+               │ --emit fmt   │
+               │ geojson, csv │
+               └──────┬───────┘
+                      ▼
+               ┌──────────────┐
+               │  GeoJSON /   │
+               │  CSV / JSON  │
+               └──────────────┘
 ```
 
-## Module Structure
-
-```
-nexus/
-├── include/
-│   ├── nexus.h               # Main API: NxPlanningRequest, NxPlanningResponse
-│   ├── nx_driver.h           # Driver/HOS state structures
-│   ├── nx_load.h             # Load/shipment structures
-│   ├── nx_vehicle.h          # Vehicle/equipment structures
-│   ├── nx_facility.h         # Facility/location structures
-│   └── nx_constraint.h       # Business rules/constraints
-├── src/
-│   ├── nx_request.c          # Request building and validation
-│   ├── nx_response.c         # Response formatting
-│   ├── nx_validate.c         # Input validation
-│   └── nx_normalize.c        # Unit conversion, canonicalization
-├── adapters/                 # Format-specific adapters
-│   ├── tms/
-│   │   ├── mcleod.c          # McLeod TMS format
-│   │   ├── trimble.c         # Trimble TMS format
-│   │   ├── mercurygate.c     # MercuryGate format
-│   │   └── generic_edi.c     # EDI 204/214/990 formats
-│   ├── eld/
-│   │   ├── samsara.c         # Samsara ELD API
-│   │   ├── motive.c          # Motive (KeepTruckin) API
-│   │   ├── omnitracs.c       # Omnitracs API
-│   │   └── generic_aobrd.c   # Generic AOBRD format
-│   └── loadboard/
-│       ├── dat.c             # DAT load board
-│       ├── truckstop.c       # Truckstop.com
-│       └── uber_freight.c    # Uber Freight API
-├── api/
-│   └── nexus-api/            # REST API server
-│       ├── main.c
-│       └── handlers.c
-└── tests/
-    ├── test_nexus.c
-    └── test_adapters.c
-```
-
-## Core Data Structures
-
-### Driver State (from ELD/TMS)
-
-```c
-/* nx_driver.h */
-typedef struct {
-    char id[64];                  /* External ID (from TMS) */
-    char name[128];
-
-    /* Current location (from ELD) */
-    double lat, lon;
-    time_t location_time;
-
-    /* HOS clocks (from ELD) - current state snapshot */
-    int drive_remaining_min;      /* Minutes left on 11h drive clock */
-    int shift_remaining_min;      /* Minutes left on 14h shift clock */
-    int cycle_remaining_min;      /* Minutes left on 70h/8day cycle */
-    int break_required_min;       /* Minutes until 30-min break needed */
-    time_t shift_start;           /* When current shift started */
-    NxDutyStatus duty_status;     /* OFF_DUTY, SLEEPER, DRIVING, ON_DUTY */
-
-    /* Qualifications */
-    int num_endorsements;
-    char endorsements[16][8];     /* HAZMAT, TANKER, DOUBLES, etc. */
-
-    /* Home base (for deadhead calculations) */
-    double home_lat, home_lon;
-    int max_days_out;             /* Driver preference */
-
-    /* Current assignment (from TMS) - NULL if available */
-    char current_load_id[64];
-    char current_vehicle_id[64];
-} NxDriver;
-
-typedef enum {
-    NX_DUTY_OFF_DUTY,
-    NX_DUTY_SLEEPER_BERTH,
-    NX_DUTY_DRIVING,
-    NX_DUTY_ON_DUTY_NOT_DRIVING
-} NxDutyStatus;
-```
-
-### Load (from TMS/LoadBoard)
-
-```c
-/* nx_load.h */
-typedef struct {
-    char id[64];                  /* External ID */
-    NxLoadSource source;          /* TMS, SPOT, CONTRACT */
-
-    /* Origin */
-    double origin_lat, origin_lon;
-    char origin_facility_id[64];
-    char origin_name[128];
-    time_t pickup_earliest;       /* Appointment window */
-    time_t pickup_latest;
-    int pickup_duration_min;      /* Expected dwell time */
-
-    /* Destination */
-    double dest_lat, dest_lon;
-    char dest_facility_id[64];
-    char dest_name[128];
-    time_t delivery_earliest;
-    time_t delivery_latest;
-    int delivery_duration_min;
-
-    /* Requirements */
-    double weight_lbs;
-    int length_ft;
-    NxEquipmentType equipment;    /* VAN, REEFER, FLATBED, etc. */
-    int temp_min_f, temp_max_f;   /* For reefer */
-    int requires_hazmat;
-    int requires_tanker;
-    int requires_twic;
-    int team_required;            /* Needs team drivers */
-
-    /* Economics */
-    double revenue;               /* Total line haul */
-    double fuel_surcharge;
-    double accessorial_estimate;
-    double deadhead_allowance;    /* Max acceptable deadhead */
-
-    /* Status (from TMS) */
-    NxLoadStatus status;
-    char assigned_driver_id[64];  /* If already assigned */
-    char assigned_vehicle_id[64];
-} NxLoad;
-
-typedef enum {
-    NX_LOAD_SOURCE_TMS,           /* From carrier's TMS */
-    NX_LOAD_SOURCE_SPOT,          /* Spot market */
-    NX_LOAD_SOURCE_CONTRACT       /* Contract/dedicated */
-} NxLoadSource;
-
-typedef enum {
-    NX_LOAD_AVAILABLE,            /* Open for assignment */
-    NX_LOAD_ASSIGNED,             /* Assigned but not started */
-    NX_LOAD_IN_TRANSIT,           /* Currently being executed */
-    NX_LOAD_DELIVERED             /* Completed */
-} NxLoadStatus;
-
-typedef enum {
-    NX_EQUIP_VAN,
-    NX_EQUIP_REEFER,
-    NX_EQUIP_FLATBED,
-    NX_EQUIP_STEP_DECK,
-    NX_EQUIP_TANKER,
-    NX_EQUIP_HOPPER,
-    NX_EQUIP_LOWBOY
-} NxEquipmentType;
-```
-
-### Vehicle (from TMS)
-
-```c
-/* nx_vehicle.h */
-typedef struct {
-    char id[64];
-    char unit_number[32];
-
-    NxEquipmentType type;
-    int length_ft;
-    double max_weight_lbs;
-
-    /* For reefer */
-    int has_reefer;
-    int reefer_operational;
-
-    /* Current state */
-    double current_lat, current_lon;
-    time_t location_time;
-    double fuel_level_gallons;
-    double tank_capacity_gallons;
-    double mpg_estimate;
-
-    /* Maintenance */
-    time_t next_service_due;
-    int miles_to_service;
-
-    /* Assignment */
-    char assigned_driver_id[64];
-} NxVehicle;
-```
-
-### Planning Request/Response
-
-```c
-/* nexus.h */
-typedef struct {
-    /* Snapshot metadata */
-    time_t snapshot_time;
-    char request_id[64];          /* For tracking/correlation */
-
-    /* Available resources */
-    int num_drivers;
-    NxDriver *drivers;
-
-    int num_vehicles;
-    NxVehicle *vehicles;
-
-    /* Loads to plan */
-    int num_loads;
-    NxLoad *loads;
-
-    /* Facilities (for dwell times, hours) */
-    int num_facilities;
-    NxFacility *facilities;
-
-    /* Business constraints */
-    NxConstraints constraints;
-
-    /* Optimization preferences */
-    NxObjective objective;        /* REVENUE, UTILIZATION, SERVICE */
-    int max_planning_horizon_hrs;
-    double max_deadhead_miles;
-    int include_spot_market;      /* Consider spot loads? */
-    int max_solutions;            /* For k-best alternatives */
-} NxPlanningRequest;
-
-typedef struct {
-    char request_id[64];          /* Correlation with request */
-    time_t computed_at;
-    int computation_time_ms;
-
-    /* Recommended assignments */
-    int num_assignments;
-    NxAssignment *assignments;
-
-    /* Unassigned loads with reasons */
-    int num_unassigned;
-    NxUnassigned *unassigned;
-
-    /* Fleet-level metrics */
-    double total_revenue;
-    double total_miles;
-    double total_deadhead_miles;
-    double total_fuel_cost;
-    double utilization_pct;       /* % of available hours used */
-} NxPlanningResponse;
-
-typedef struct {
-    char load_id[64];
-    char driver_id[64];
-    char vehicle_id[64];
-
-    double score;                 /* Quality/confidence 0-100 */
-    int rank;                     /* 1 = best option for this load */
-
-    /* Predicted execution */
-    time_t depart_time;
-    time_t eta_pickup;
-    time_t eta_delivery;
-
-    /* Distances */
-    double deadhead_miles;        /* Empty miles to pickup */
-    double loaded_miles;          /* Pickup to delivery */
-    double total_miles;
-
-    /* Economics */
-    double revenue;
-    double fuel_cost;
-    double cost_per_mile;
-    double profit_estimate;
-
-    /* HOS analysis */
-    int hos_feasible;
-    int requires_break;
-    int requires_reset;
-    NxBreakPlan break_plan;       /* Where/when to take breaks */
-
-    /* Fuel plan */
-    int num_fuel_stops;
-    NxFuelStop *fuel_stops;
-
-    /* Route summary */
-    int num_route_points;
-    NxRoutePoint *route;          /* Key waypoints */
-} NxAssignment;
-
-typedef struct {
-    char load_id[64];
-    NxUnassignedReason reason;
-    char reason_detail[256];
-
-    /* Nearest feasible option (if any) */
-    char nearest_driver_id[64];
-    double nearest_driver_miles;
-    char infeasibility[256];      /* Why nearest can't do it */
-} NxUnassigned;
-
-typedef enum {
-    NX_UNASSIGNED_NO_CAPACITY,        /* No drivers available */
-    NX_UNASSIGNED_NO_EQUIPMENT,       /* No matching equipment */
-    NX_UNASSIGNED_HOS_INFEASIBLE,     /* Can't make it legally */
-    NX_UNASSIGNED_OUTSIDE_NETWORK,    /* Too far from any driver */
-    NX_UNASSIGNED_TIME_WINDOW,        /* Can't meet appointment */
-    NX_UNASSIGNED_QUALIFICATION,      /* No qualified driver */
-    NX_UNASSIGNED_UNPROFITABLE        /* Below minimum revenue */
-} NxUnassignedReason;
-```
-
-## REST API
-
-### Endpoints
-
-```
-POST /api/v1/plan
-  Full planning request with complete snapshot
-  Request: NxPlanningRequest
-  Response: NxPlanningResponse
-
-POST /api/v1/plan/incremental
-  Update existing plan with changes
-  Request: { base_request_id, changes: [...] }
-  Response: NxPlanningResponse
-
-POST /api/v1/validate
-  Check feasibility of a specific assignment
-  Request: { driver_id, load_id, vehicle_id }
-  Response: { feasible, issues: [...] }
-
-POST /api/v1/simulate
-  Simulate execution of an assignment
-  Request: NxAssignment
-  Response: { timeline: [...], risks: [...] }
-
-POST /api/v1/eta
-  Get ETA for a driver to a location
-  Request: { driver_id, dest_lat, dest_lon }
-  Response: { eta, route_miles, hos_feasible }
-
-GET /api/v1/health
-  Health check
-  Response: { status: "ok", version: "..." }
-```
-
-### Example Request
-
-```json
-POST /api/v1/plan
-{
-  "snapshot_time": "2024-01-29T14:00:00Z",
-  "request_id": "plan-123",
-
-  "drivers": [
-    {
-      "id": "DRV-001",
-      "name": "John Smith",
-      "lat": 41.8781,
-      "lon": -87.6298,
-      "location_time": "2024-01-29T13:55:00Z",
-      "drive_remaining_min": 540,
-      "shift_remaining_min": 720,
-      "cycle_remaining_min": 3600,
-      "duty_status": "ON_DUTY_NOT_DRIVING",
-      "endorsements": ["HAZMAT", "TANKER"],
-      "current_load_id": null
-    }
-  ],
-
-  "loads": [
-    {
-      "id": "LOAD-456",
-      "source": "CONTRACT",
-      "origin_lat": 41.8819,
-      "origin_lon": -87.6278,
-      "pickup_earliest": "2024-01-29T16:00:00Z",
-      "pickup_latest": "2024-01-29T20:00:00Z",
-      "dest_lat": 39.7392,
-      "dest_lon": -104.9903,
-      "delivery_earliest": "2024-01-30T08:00:00Z",
-      "delivery_latest": "2024-01-30T16:00:00Z",
-      "weight_lbs": 42000,
-      "equipment": "VAN",
-      "revenue": 2850.00
-    }
-  ],
-
-  "objective": "REVENUE",
-  "max_deadhead_miles": 150
-}
-```
-
-### Example Response
+### Stage A: Extract
+
+Format-specific parsers produce a common `nx_raw` JSON format:
+
+| Parser | Input | Method |
+|--------|-------|--------|
+| `nx_xlsx` | XLSX bytes | ZIP → XML → shared strings → cells |
+| `nx_pdf` | PDF bytes (via sh_pdf2struc) or text-run JSON | Y-alignment clustering → X-gap column detection |
+| `nx_csv` | CSV/TSV text | RFC 4180 with auto-detect delimiter (`,` `;` `\t` `\|`) |
+
+### Stage M: Merge (PDF continuation rows)
+
+PDF tables often split long cell text across multiple physical rows. `nx_merge` detects continuation rows (where key columns are empty) and appends their content to the parent row. Controlled by `"row_merge"` in the schema. Also strips repeated page headers via `"strip_pattern"`.
+
+### Stage B: Transform
+
+`nx_xform` applies a schema to map raw columns to canonical fields. Features:
+
+- **1:1 column mapping** with type coercion (string, int, double, bool)
+- **Multi-transforms** (v2 schemas): split, merge, regex, compute, conditional
+- **Compute functions** (`nx_compute`): eov_to_wgs84, dms_to_dd, coalesce, phone_normalize, zip_to_region, opening_hours
+- **Row ID generation** with slugification
+- **Derived fields**: constants added to every record
+- **Per-field transforms**: trim, lowercase, uppercase, replace
+
+### Stage X: Validate
+
+`nx_validate` runs semantic validation rules on canonical JSON:
+
+| Rule | Check | Effect |
+|------|-------|--------|
+| `geo_bounds` | Lat/lon within bounding box | Remove or warn |
+| `format` | POSIX regex match on field | Remove or warn |
+| `unique` | No duplicate values (first kept) | Remove duplicates |
+| `outlier` | IQR-based outlier detection | Warn |
+
+Rules have configurable severity (`"error"` = remove record, `"warning"` = flag only).
+
+### Stage D: Emit
+
+`nx_emit` converts canonical JSON to downstream formats:
+
+| Format | Output | Use Case |
+|--------|--------|----------|
+| GeoJSON | RFC 7946 FeatureCollection with Point geometry | Carta map visualization |
+| CSV | RFC 4180 with header row | Operations team export |
+
+Features:
+- **GeoJSON**: Auto-detects lat/lon fields from schema's `geo_bounds` validation rule. Coordinates in `[lon, lat]` order per RFC 7946. Non-geo fields become Feature properties.
+- **CSV**: Discovers field names from first record. RFC 4180 quoting (double-quote fields containing commas, quotes, or newlines).
+- **Callback-based streaming**: Both CSV (`ShCsvWriter`) and GeoJSON (`ShJsonWriter`) use callback-based writers, decoupled from output target.
+
+CLI: `./nx_pipeline input.xlsx --schema s.json --emit geojson|csv`
+
+### Schema Discovery
+
+`nx_discover` profiles Stage A output and generates a draft schema without LLMs:
+- Type inference (double/int/string by parse success rate)
+- Lat/lon detection (range + header name matching, incl. Hungarian headers)
+- Required field detection (non-empty in all rows)
+- Auto-transforms (trim, tilde-prefix replace)
+- Geo bounds with padding from detected lat/lon
+- Uniqueness detection for row ID candidates
+- Continuation row detection (emits `row_merge` config)
+
+## nx_raw JSON Format
 
 ```json
 {
-  "request_id": "plan-123",
-  "computed_at": "2024-01-29T14:00:05Z",
-  "computation_time_ms": 127,
-
-  "assignments": [
-    {
-      "load_id": "LOAD-456",
-      "driver_id": "DRV-001",
-      "score": 94.5,
-      "rank": 1,
-
-      "eta_pickup": "2024-01-29T16:15:00Z",
-      "eta_delivery": "2024-01-30T09:30:00Z",
-
-      "deadhead_miles": 2.3,
-      "loaded_miles": 1004.2,
-      "total_miles": 1006.5,
-
-      "revenue": 2850.00,
-      "fuel_cost": 423.50,
-      "profit_estimate": 2426.50,
-
-      "hos_feasible": true,
-      "requires_break": true,
-      "break_plan": {
-        "break_location": "Kearney, NE",
-        "break_lat": 40.6995,
-        "break_lon": -99.0817,
-        "break_start": "2024-01-29T22:30:00Z",
-        "break_duration_min": 30
-      },
-
-      "fuel_stops": [
-        {
-          "station_id": "FS-789",
-          "name": "Pilot Travel Center",
-          "lat": 40.8207,
-          "lon": -96.7002,
-          "gallons": 85.0,
-          "price_per_gallon": 3.45,
-          "cost": 293.25
-        }
-      ]
-    }
-  ],
-
-  "unassigned": [],
-
-  "total_revenue": 2850.00,
-  "total_miles": 1006.5,
-  "total_deadhead_miles": 2.3,
-  "total_fuel_cost": 423.50,
-  "utilization_pct": 78.5
+  "nx_raw": 1,
+  "source": {
+    "filename": "data.xlsx",
+    "format": "xlsx",
+    "sha256": "abc123..."
+  },
+  "tables": [{
+    "name": "Sheet1",
+    "row_count": 100,
+    "col_count": 5,
+    "headers": ["city", "name", "address", "zip", "phone"],
+    "rows": [["Budapest", "Main Depot", "Fo utca 1", "1011", "+36..."]]
+  }]
 }
 ```
 
-## Adapter Interface
+## Schema Format (v2)
 
-Each adapter implements a standard interface for translating external formats:
-
-```c
-/* Adapter interface */
-typedef struct {
-    const char *name;
-    const char *version;
-
-    /* Parse external format to canonical */
-    int (*parse_drivers)(const char *json, NxDriver **drivers, int *count);
-    int (*parse_loads)(const char *json, NxLoad **loads, int *count);
-    int (*parse_vehicles)(const char *json, NxVehicle **vehicles, int *count);
-
-    /* Format canonical to external (for responses) */
-    char* (*format_assignments)(const NxAssignment *assignments, int count);
-
-    /* Webhook handlers */
-    int (*handle_webhook)(const char *event_type, const char *payload);
-} NxAdapter;
-
-/* Register adapters */
-void nx_register_adapter(const NxAdapter *adapter);
-const NxAdapter* nx_get_adapter(const char *name);
+```json
+{
+  "nx_schema": 2,
+  "version": "gls-hu-automata-v2",
+  "output_type": "facility",
+  "row_merge": {
+    "key_columns": [0, 1, 2],
+    "separator": " ",
+    "strip_pattern": "GLS CsomagPontok"
+  },
+  "multi_transforms": [
+    {"type": "split", "source": 8, "delimiter": ",",
+     "targets": [{"field": "lat", "index": 0}, {"field": "lon", "index": 1}]},
+    {"type": "compute", "function": "coalesce", "sources": [5, 6],
+     "targets": [{"field": "val"}]},
+    {"type": "regex", "source": 3, "pattern": "^(\\d{4}) (.+)$",
+     "targets": [{"field": "zip", "group": 1}, {"field": "city", "group": 2}]}
+  ],
+  "columns": [
+    {"source": 0, "target": "city", "type": "string", "transforms": ["trim"], "required": true}
+  ],
+  "derived": [
+    {"target": "facility_type", "value": "parcel_automata"}
+  ],
+  "row_id": {"template": "gls-hu-{city}-{name}", "slugify": true},
+  "validate": [
+    {"type": "geo_bounds", "lat_field": "lat", "lon_field": "lon",
+     "bounds": {"min_lat": 45.7, "max_lat": 48.6, "min_lon": 16.1, "max_lon": 22.9},
+     "severity": "error"},
+    {"type": "format", "field": "zip", "pattern": "^[1-9][0-9]{3}$", "severity": "error"},
+    {"type": "unique", "fields": ["city", "name"], "severity": "error"}
+  ]
+}
 ```
 
-## Implementation Priority
+Processing order: `row_merge` → `multi_transforms` → virtual columns → `columns` → `derived` → `row_id` → `validate`
 
-1. **Core structures** - NxDriver, NxLoad, NxVehicle, NxPlanningRequest/Response
-2. **Validation** - Input validation, constraint checking
-3. **Generic adapter** - JSON-based generic format
-4. **REST API** - Basic /plan endpoint
-5. **TMS adapters** - Start with most common (McLeod, Trimble)
-6. **ELD adapters** - Samsara, Motive
+## Key Files
+
+| File | Purpose | Lines |
+|------|---------|-------|
+| `include/nx_ingest.h` | Pipeline orchestrator API | 73 |
+| `include/nx_xlsx.h` | XLSX parser API | 87 |
+| `include/nx_pdf.h` | PDF table reconstructor API | 91 |
+| `include/nx_csv.h` | CSV parser API | 81 |
+| `include/nx_xform.h` | Transform engine API | 68 |
+| `include/nx_compute.h` | Compute function registry | 40 |
+| `include/nx_validate.h` | Validation engine API | 107 |
+| `include/nx_merge.h` | Continuation row merging API | 66 |
+| `include/nx_discover.h` | Schema discovery API | 58 |
+| `include/nx_emit.h` | Output emitter API (GeoJSON, CSV) | 50 |
+| `include/nx_slug.h` | Slugification utility | 30 |
+| `include/nx_issue.h` | Structured issue tracking API | 70 |
+| `include/nx_diff.h` | Change detection between runs API | 63 |
+| `src/nx_ingest.c` | Pipeline orchestrator | 174 |
+| `src/nx_xlsx.c` | XLSX implementation | 631 |
+| `src/nx_pdf.c` | PDF clustering | 810 |
+| `src/nx_csv.c` | CSV parser | 343 |
+| `src/nx_xform.c` | Transform engine | 1247 |
+| `src/nx_compute.c` | Compute functions | 345 |
+| `src/nx_validate.c` | Validation engine | 766 |
+| `src/nx_merge.c` | Continuation row merging | 396 |
+| `src/nx_discover.c` | Schema discovery | 720 |
+| `src/nx_emit.c` | Output emitters | 280 |
+| `src/nx_slug.c` | Slug utility | 51 |
+| `src/nx_issue.c` | Issue list (dynamic, no caps) | 170 |
+| `src/nx_diff.c` | Change detection (FNV-1a, hashmap diff) | 348 |
+| `tools/nx_pipeline.c` | CLI pipeline (batch + single + diff) | 1165 |
+| `tools/nx_run.c` | Stage A CLI | 131 |
+| `tools/nx_pdf_run.c` | PDF clustering CLI | 99 |
+| `tools/nx_xform_run.c` | Transform CLI | 81 |
+| `wasm/src/nx_wasm.c` | WASM wrapper | 620 |
+| `tests/test_pipeline.c` | Integration tests (pipeline, emit, diff, manifest) | 503 |
+| **Total** | | **~9400** |
+
+## Error Handling
+
+Each stage has typed error codes with `*_status_str()` for human-readable messages:
+
+| Stage | Component | Error Codes |
+|-------|-----------|-------------|
+| Stage A (XLSX) | `nx_xlsx` | `ERR_{NULL,ZIP,NO_SHEETS,XML,ARENA,LIMITS}` |
+| Stage A (PDF) | `nx_pdf` | `ERR_{NULL,JSON,NO_TEXT,ARENA}` |
+| Stage A (CSV) | `nx_csv` | `ERR_{NULL,PARSE,NO_DATA,ARENA}` |
+| Stage M | `nx_merge` | `ERR_{NULL,JSON,SCHEMA,NO_TABLE,ARENA}` |
+| Stage B | `nx_xform` | `ERR_{NULL,SCHEMA,RAW,NO_TABLE,ARENA}` |
+| Stage X | `nx_validate` | `ERR_{NULL,JSON,ARENA}` |
+| Stage D | `nx_emit` | `ERR_{NULL,JSON,NO_RECORDS,NO_LATLON,ALLOC}` |
+| Discovery | `nx_discover` | `ERR_{NULL,JSON,NO_TABLE,NO_ROWS,ARENA}` |
+| Change Detection | `nx_diff` | `ERR_{NULL,PARSE_OLD,PARSE_NEW,NO_RECORDS,ARENA}` |
+| Orchestrator | `nx_ingest` | `ERR_{NULL,FORMAT,STAGE_A,STAGE_B,ARENA}` |
+
+## CLI Tools
+
+Build with `make tools`:
+
+| Tool | Purpose |
+|------|---------|
+| `nx_pipeline` | End-to-end: XLSX/PDF/CSV → raw/canonical JSON (single + batch) |
+| `nx_run` | Stage A only: XLSX/PDF-JSON/CSV → raw JSON |
+| `nx_pdf_run` | PDF clustering: text-run JSON → raw JSON (--row-tol, --col-gap) |
+| `nx_xform_run` | Stage B only: raw JSON + schema → canonical JSON |
+
+```bash
+# Auto-detects format from extension
+./nx_pipeline input.xlsx --schema schemas/config.json
+./nx_pipeline input.pdf --raw
+./nx_pipeline input.csv --delimiter ";" --no-header
+
+# Emit downstream formats (Stage D)
+./nx_pipeline input.xlsx --schema s.json --emit geojson
+./nx_pipeline input.xlsx --schema s.json --emit csv
+
+# Diff against previous run (change detection)
+./nx_pipeline input.xlsx --schema s.json --baseline prev.json
+
+# Batch mode
+./nx_pipeline --config pipeline.json
+
+# Output to file
+./nx_pipeline input.xlsx --schema s.json -o output.json
+```
+
+## Test Coverage
+
+| Test File | Tests | Coverage |
+|-----------|-------|----------|
+| `test_ingest` | 45 | 11 XLSX + 14 PDF + 13 CSV + 7 golden |
+| `test_xform` | 37 | 5 slug + 8 xform + 16 multi-transform + 4 trucking + 4 pipeline |
+| `test_validate` | 9 | geo_bounds, format, unique, outlier |
+| `test_discover` | 26 | 18 unit + 2 continuation + 6 golden |
+| `test_merge` | 20 | 4 error + 5 basic + 1 strip + 6 edge + 4 golden (PDF02) |
+| `test_emit` | 19 | 9 GeoJSON + 10 CSV |
+| `test_issue` | 13 | init/free, add, dynamic growth, count, JSON output |
+| `test_diff` | 14 | null input, identical/added/removed/modified, mixed, empty, parse error |
+| `test_pipeline` | 9 | end-to-end pipeline, issues threading, emit GeoJSON/CSV, diff, manifest |
+| **Total** | **192** | |
+
+## Schemas
+
+Six schemas in `schemas/` for GLS Hungary:
+
+| Schema | Type | v1 | v2 |
+|--------|------|----|----|
+| `gls-hu-automata` | Parcel automata | Basic columns | + multi-transforms, validation |
+| `gls-hu-pudo` | PuDo locations | Basic columns | + row_merge, validation |
+| `gls-hu-depots` | Depots | Basic columns | + EOV compute, validation |
 
 ## Dependencies
 
-| Nexus Uses | For |
-|------------|-----|
-| HoSE | HOS feasibility checking |
-| Velo | Route calculations, ETA |
-| FuelWise | Fuel stop optimization |
-| Tempo | Time window validation |
-| Sigma | Assignment optimization |
-| Ralph | Core optimization (via Sigma) |
+| Library | Purpose |
+|---------|---------|
+| `shared/libshared.a` | sh_arena, sh_json, sh_xml, sh_csv, sh_geojson, sh_hash_sha256, sh_fs, sh_eov |
+| `shared/libsh_pdf2struc.a` | Pure C PDF text extraction (nx_pipeline only) |
+| `vendor/miniz/` | ZIP reading for XLSX |
 
-## Files to Create
+## Build
 
-| File | Purpose |
-|------|---------|
-| `nexus/include/nexus.h` | Main API, request/response types |
-| `nexus/include/nx_driver.h` | Driver structures |
-| `nexus/include/nx_load.h` | Load structures |
-| `nexus/include/nx_vehicle.h` | Vehicle structures |
-| `nexus/include/nx_facility.h` | Facility structures |
-| `nexus/include/nx_constraint.h` | Constraint structures |
-| `nexus/src/nx_request.c` | Request handling |
-| `nexus/src/nx_response.c` | Response formatting |
-| `nexus/src/nx_validate.c` | Input validation |
-| `nexus/adapters/generic.c` | Generic JSON adapter |
-| `nexus/api/main.c` | REST API server |
-| `nexus/tests/test_nexus.c` | Unit tests |
+```bash
+make all      # Library + tests
+make test     # Run 192 tests
+make tools    # CLI tools (nx_pipeline, nx_run, nx_pdf_run, nx_xform_run)
+make debug    # Build with ASan/UBSan + -Werror
+make clean    # Remove artifacts
+```
+
+Build flags: `-Wall -Wextra -Werror -O3`, vendor headers via `-isystem`.
+Hardening: `-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common`.
 
 ---
 
-## Implementation TODOs
+## Production Gaps (Prioritized)
 
-- [ ] Define NxDriver, NxLoad, NxVehicle, NxLocation structures
-- [ ] Define NxPlanningRequest and NxPlanningResponse
-- [ ] Implement adapter interface (TMS, ELD, LoadBoard)
-- [ ] Implement REST API endpoints
-- [ ] Create sample adapters for common TMS systems
-- [ ] Add webhook support for async results
+### P0: Wire Stage X into Pipeline Orchestrator — DONE
+
+Stage X (validation) is now wired into `nx_ingest()`, `nx_pipeline.c` (single-file and batch modes). Stage M (merge) is guarded to PDF-only formats. The WASM wrapper keeps validate as a separate call for browser flexibility.
+
+Changes: `nx_ingest.h` (+1 error code), `nx_ingest.c` (+25 lines), `nx_pipeline.c` (+70 lines merge+validate+summary).
+
+### P1: Downstream Output (Stage D) — DONE
+
+Stage D emitters implemented: GeoJSON (RFC 7946 FeatureCollection) and CSV (RFC 4180). Shared library gains `sh_geojson.h/c` (GeoJSON encoder) and CSV writer extension in `sh_csv.h/c`. Both use callback-based streaming writers decoupled from output target.
+
+Changes: `shared/include/sh_csv.h` (+75 lines writer API), `shared/src/sh_csv.c` (+154 lines), `shared/include/sh_geojson.h` (new, 50 lines), `shared/src/sh_geojson.c` (new, 120 lines), `nexus/include/nx_emit.h` (new, 50 lines), `nexus/src/nx_emit.c` (new, 256 lines), `nexus/tools/nx_pipeline.c` (+82 lines `--emit` flag), `nexus/wasm/src/nx_wasm.c` (+77 lines WASM exports). Tests: 12 CSV writer + 12 GeoJSON + 19 nexus emit = 43 new tests.
+
+**Remaining for P1:** Stage J (join/union/filter across multiple files) and Surge adapter (deferred until Surge is implemented).
+
+### P2: Structured Error Reporting — DONE
+
+`NxIssueList` — heap-allocated, realloc-doubling, growable issue tracker threaded through all six stages as an optional parameter (NULL = same behavior as before). No caps on issue count. Each issue carries stage, severity, row, field, code, and message.
+
+Changes: `nx_issue.h` (new, 70 lines), `nx_issue.c` (new, 170 lines), all stage headers/implementations gain `NxIssueList *issues` parameter, `nx_xform.c` replaces fixed `Rejection[1024]` with dynamic list, `nx_validate.c` replaces fixed `NxValidationDetail[1024]` with dynamic list, `nx_pipeline.c` gains per-stage summary and batch manifest.json, WASM wrapper gains 4 new exports (`issues_clear`, `issues_json`, `issues_result`, `issues_result_len`), demo.html gains issues panel with stage badges. 13 new tests in `test_issue`.
+
+### P3: Change Detection Between Runs — DONE
+
+`nx_diff` compares two canonical JSON documents by `row_id`, producing a structured diff with added/removed/modified/unchanged categories. Uses FNV-1a 64-bit hashing for both key lookup (via `SHHashmapI64`) and content comparison. Modified records include field-level old/new values.
+
+Changes: `nx_diff.h` (new, 63 lines), `nx_diff.c` (new, 348 lines), WASM wrapper gains 3 exports (`diff`, `diff_result`, `diff_result_len`), demo.html gains baseline save/compare workflow with summary cards and detail tables. 14 new tests in `test_diff`.
+
+### Stage A: Partial Results (Stability Fix) — DONE
+
+Stage A parsers (XLSX, PDF, CSV) now recover from mid-parse errors and return partial results instead of failing entirely. If a document has 100 rows and row 50 triggers a parse error, the first 49 rows are still returned with issues logged via `NxIssueList`.
+
+### P4: Dynamic Growth (No Hard Caps) — DONE
+
+Removed all fixed-size caps that caused silent data loss:
+
+- **PDF**: `MAX_TEXT_RUNS` (65536) and `MAX_ROWS` (8192) removed. `parse_text_runs` restructured to two-pass (count from parsed JSON tree, then exact arena alloc). `cluster_rows` array sized to `nruns` (natural upper bound).
+- **XLSX**: `MAX_SHARED_STRINGS` (65536) removed. SharedStrings pointer array switched from arena to heap with realloc-doubling. Individual strings still arena-allocated.
+
+Changes: `nx_pdf.c` (~30 lines changed), `nx_xlsx.c` (~20 lines changed). All 169 tests pass.
+
+### Production Hardening — DONE
+
+Four orthogonal improvements to close the gap between "all stages work" and "production-ready CLI + demo":
+
+1. **CLI diff (`--baseline`)**: `nx_pipeline` gains `--baseline prev.json` flag. Compares current run against previous canonical JSON via `nx_diff()`, prints summary to stderr (`N added, N removed, N modified, N unchanged`), outputs diff JSON to stdout. Enables batch change-tracking workflows.
+
+2. **Stage D in WASM demo**: Export GeoJSON / Export CSV buttons added to `demo.html`. Auto-detects lat/lon fields from schema's `geo_bounds` validation rule. Full timing display and truncation-with-expand for large outputs.
+
+3. **Integration tests**: `test_pipeline.c` with 9 tests covering: full end-to-end pipeline (extract→transform→validate), issues threading across stages, GeoJSON/CSV emit from pipeline output, diff (identical/modified/removed runs), and manifest JSON structure with per-stage counts.
+
+4. **Error messages**: File size guard before arena allocation (clear "file too large X MB, max Y MB" instead of silent failure). Arena allocation failures now report size in MB.
+
+Changes: `nx_pipeline.c` (+75 lines), `demo.html` (+123 lines), `test_pipeline.c` (new, 503 lines), `Makefile` (+8 lines). Total: 183→192 tests.
+
+---
+
+## Future
+
+- **Nexus Gateway**: TMS/ELD integration REST API (see `docs/roadmaps/nexus-gateway.md`)
+- **Streaming Stage A**: Parse and emit rows incrementally for large files

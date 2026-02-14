@@ -1,0 +1,43 @@
+{
+  "nx_schema": 2,
+  "version": "gls-hu-pudo-v2",
+  "output_type": "facility",
+  "table_selector": {"index": 0},
+  "skip_rows": 0,
+  "row_merge": {
+    "key_columns": [0, 1, 2],
+    "separator": " ",
+    "strip_pattern": "GLS CsomagPontok"
+  },
+  "multi_transforms": [
+    {"type": "compute", "function": "phone_normalize",
+     "sources": [5],
+     "targets": [{"field": "phone", "type": "string"}]},
+    {"type": "compute", "function": "opening_hours",
+     "sources": [6],
+     "targets": [{"field": "hours", "type": "string"}]}
+  ],
+  "columns": [
+    {"source": 0, "target": "city", "type": "string", "transforms": ["trim"], "required": true},
+    {"source": 1, "target": "name", "type": "string", "transforms": ["trim"], "required": true},
+    {"source": 2, "target": "address", "type": "string", "transforms": ["trim"], "default": ""},
+    {"source": 3, "target": "lat", "type": "double", "precision": 6, "required": true,
+     "validate": {"min": -90.0, "max": 90.0}},
+    {"source": 4, "target": "lon", "type": "double", "precision": 6, "required": true,
+     "validate": {"min": -180.0, "max": 180.0}},
+    {"source": 7, "target": "phone", "type": "string"},
+    {"source": 8, "target": "hours", "type": "string"}
+  ],
+  "derived": [
+    {"target": "facility_type", "value": "parcel_shop"},
+    {"target": "operator", "value": "GLS"},
+    {"target": "country", "value": "HU"}
+  ],
+  "row_id": {"template": "gls-hu-pudo-{city}-{name}", "slugify": true},
+  "validate": [
+    {"type": "geo_bounds", "lat_field": "lat", "lon_field": "lon",
+     "bounds": {"min_lat": 45.7, "max_lat": 48.6, "min_lon": 16.1, "max_lon": 22.9},
+     "severity": "error"},
+    {"type": "unique", "fields": ["city", "name"], "severity": "error"}
+  ]
+}
