@@ -37,9 +37,13 @@ int main(int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--row-tol") == 0 && i + 1 < argc) {
-            opts.row_tolerance = atof(argv[++i]);
+            char *end;
+            opts.row_tolerance = strtod(argv[++i], &end);
+            if (end == argv[i]) { fprintf(stderr, "Error: invalid --row-tol value\n"); return 1; }
         } else if (strcmp(argv[i], "--col-gap") == 0 && i + 1 < argc) {
-            opts.col_gap_min = atof(argv[++i]);
+            char *end;
+            opts.col_gap_min = strtod(argv[++i], &end);
+            if (end == argv[i]) { fprintf(stderr, "Error: invalid --col-gap value\n"); return 1; }
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             fprintf(stderr, "Usage: %s [--row-tol N] [--col-gap N] input.json\n", argv[0]);
             fprintf(stderr, "\nAuto-detects parameters from text heights when not specified.\n");

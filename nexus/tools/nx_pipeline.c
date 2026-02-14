@@ -59,7 +59,11 @@ static int write_file(const char *path, const char *data, size_t len)
 {
     FILE *f = fopen(path, "wb");
     if (!f) { fprintf(stderr, "Error: cannot write %s\n", path); return -1; }
-    fwrite(data, 1, len, f);
+    if (fwrite(data, 1, len, f) != len) {
+        fprintf(stderr, "Error: write failed for %s\n", path);
+        fclose(f);
+        return -1;
+    }
     fputc('\n', f);
     fclose(f);
     return 0;
@@ -113,7 +117,7 @@ static void json_append(PdfJsonCollector *c, const char *s, size_t slen)
     if (c->error) return;
     while (c->len + slen + 1 > c->cap) {
         size_t newcap = c->cap * 2;
-        if (newcap > MAX_PDF_TEXT_SIZE) { c->error = 1; return; }
+        if (newcap < c->cap || newcap > MAX_PDF_TEXT_SIZE) { c->error = 1; return; }
         char *nb = (char *)realloc(c->buf, newcap);
         if (!nb) { c->error = 1; return; }
         c->buf = nb;

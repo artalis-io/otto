@@ -36,18 +36,6 @@
  * Column Reference Parsing
  * ============================================================================ */
 
-/* Parse column letters to 0-based index: A=0, B=1, ..., Z=25, AA=26 */
-static int parse_col_ref(const char *ref, size_t len)
-{
-    int col = 0;
-    size_t i = 0;
-    while (i < len && ref[i] >= 'A' && ref[i] <= 'Z') {
-        col = col * 26 + (ref[i] - 'A' + 1);
-        i++;
-    }
-    return col > 0 ? col - 1 : 0;
-}
-
 /* Parse cell reference "AB12" -> (col_index, row_index) both 0-based */
 static void parse_cell_ref(const char *ref, int *col, int *row)
 {

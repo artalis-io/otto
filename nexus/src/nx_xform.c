@@ -868,7 +868,9 @@ static void apply_transforms(char *buf, size_t *len,
 
             /* Simple in-place replace (first occurrence only for safety) */
             char *pos = strstr(buf, from);
-            while (pos) {
+            int replace_iter = 0;
+            while (pos && replace_iter < 1000) {
+                replace_iter++;
                 size_t offset = (size_t)(pos - buf);
                 size_t tail_len = *len - offset - from_len;
 
@@ -1037,6 +1039,13 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
 
     int records_written = 0;
 
+    /* Per-row buffers hoisted outside loop to reduce stack pressure (~24 KB) */
+    char virtual_vals[MAX_VIRTUAL_COLS][MAX_FIELD_LEN];
+    char field_bufs[MAX_COLUMNS][MAX_FIELD_LEN];
+    const char *field_names[MAX_COLUMNS];
+    const char *field_vals[MAX_COLUMNS];
+    const char *cell_strs[MAX_COLUMNS + MAX_VIRTUAL_COLS];
+
     for (int i = 0; i < nrows; i++) {
         if (i < schema.skip_rows) continue;
 
@@ -1048,7 +1057,6 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
         audit.rows_processed++;
 
         /* Build flat array of original cell strings */
-        const char *cell_strs[MAX_COLUMNS + MAX_VIRTUAL_COLS];
         int total_cols = ncells;
         if (total_cols > MAX_COLUMNS) total_cols = MAX_COLUMNS;
         for (int j = 0; j < total_cols; j++)
@@ -1056,7 +1064,6 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
                 sh_json_array_get(cells, (size_t)j), "");
 
         /* Execute multi-transforms → virtual columns */
-        char virtual_vals[MAX_VIRTUAL_COLS][MAX_FIELD_LEN];
         if (schema.multi_count > 0) {
             int nv = execute_multi_transforms(
                 schema.multi, schema.multi_count,
@@ -1068,9 +1075,6 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
         }
 
         /* Extract and validate all column values */
-        char field_bufs[MAX_COLUMNS][MAX_FIELD_LEN];
-        const char *field_names[MAX_COLUMNS];
-        const char *field_vals[MAX_COLUMNS];
         int valid = 1;
 
         for (int c = 0; c < schema.column_count; c++) {

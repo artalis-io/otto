@@ -59,7 +59,7 @@ static void pdf_json_append(PdfJsonCollector *c, const char *s, size_t slen)
     if (c->error) return;
     while (c->len + slen + 1 > c->cap) {
         size_t newcap = c->cap * 2;
-        if (newcap > MAX_PDF_TEXT_SIZE) { c->error = 1; return; }
+        if (newcap < c->cap || newcap > MAX_PDF_TEXT_SIZE) { c->error = 1; return; }
         char *nb = (char *)realloc(c->buf, newcap);
         if (!nb) { c->error = 1; return; }
         c->buf = nb;

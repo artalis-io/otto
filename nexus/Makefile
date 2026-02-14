@@ -7,7 +7,7 @@ CC ?= gcc
 UNAME_S := $(shell uname -s)
 
 # Production build (with hardening)
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE \
+CFLAGS = -Wall -Wextra -Werror -O3 -std=c11 -D_GNU_SOURCE \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
 ifeq ($(UNAME_S),Linux)
     LDFLAGS = -lm -pie -Wl,-z,relro,-z,now
@@ -15,10 +15,10 @@ else
     LDFLAGS = -lm
 endif
 
-INCLUDES = -Iinclude -I../shared/include -I../vendor/miniz
+INCLUDES = -Iinclude -I../shared/include -isystem ../vendor/miniz
 
 # Debug build (with sanitizers)
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
+DEBUG_CFLAGS = -Wall -Wextra -Werror -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
                -fsanitize=address,undefined -fno-omit-frame-pointer
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
@@ -68,7 +68,7 @@ $(SHARED_LIB):
 
 # miniz_zip.o may already exist from shared build, but we need it linked
 $(MINIZ_ZIP_OBJ): $(MINIZ_ZIP_SRC)
-	$(CC) $(CFLAGS) -I$(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
+	$(CC) $(CFLAGS) -isystem $(VENDOR_DIR) -DMINIZ_NO_STDIO -DMINIZ_NO_TIME -c $< -o $@
 
 $(TEST_INGEST_BIN): tests/test_ingest.c $(LIB) $(SHARED_LIB) $(MINIZ_ZIP_OBJ)
 	$(CC) $(CFLAGS) $(INCLUDES) -Itests $< $(LINK_LIBS) -o $@
