@@ -1,0 +1,38 @@
+{
+  "nx_schema": 2,
+  "version": "gls-hu-depots-v2",
+  "output_type": "facility",
+  "table_selector": {"index": 0},
+  "skip_rows": 0,
+  "multi_transforms": [
+    {"type": "compute", "function": "zip_to_region",
+     "sources": [5],
+     "targets": [{"field": "region", "type": "string"}]}
+  ],
+  "columns": [
+    {"source": 0, "target": "name", "type": "string", "transforms": ["trim"], "required": true},
+    {"source": 1, "target": "address", "type": "string", "transforms": ["trim"], "required": true},
+    {"source": 2, "target": "lat", "type": "double", "precision": 6, "required": true,
+     "transforms": [{"replace": ["~", ""]}],
+     "validate": {"min": -90.0, "max": 90.0}},
+    {"source": 3, "target": "lon", "type": "double", "precision": 6, "required": true,
+     "transforms": [{"replace": ["~", ""]}],
+     "validate": {"min": -180.0, "max": 180.0}},
+    {"source": 4, "target": "zip", "type": "string"},
+    {"source": 6, "target": "region", "type": "string"}
+  ],
+  "derived": [
+    {"target": "facility_type", "value": "depot"},
+    {"target": "operator", "value": "GLS"},
+    {"target": "country", "value": "HU"}
+  ],
+  "row_id": {"template": "gls-hu-depot-{name}", "slugify": true},
+  "validate": [
+    {"type": "geo_bounds", "lat_field": "lat", "lon_field": "lon",
+     "bounds": {"min_lat": 45.7, "max_lat": 48.6, "min_lon": 16.1, "max_lon": 22.9},
+     "severity": "error"},
+    {"type": "format", "field": "zip", "pattern": "^[1-9][0-9]{3}$",
+     "message": "Hungarian ZIP must be 4 digits, first digit 1-9", "severity": "warning"},
+    {"type": "unique", "fields": ["name"], "severity": "error"}
+  ]
+}
