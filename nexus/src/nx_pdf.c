@@ -24,8 +24,6 @@
  * Internal Structures
  * ============================================================================ */
 
-#define MAX_TEXT_RUNS  65536
-#define MAX_ROWS       8192
 #define MAX_COLS        256
 #define MAX_TEXT_LEN    1024
 
@@ -74,7 +72,7 @@ static int cmp_by_x(const void *a, const void *b)
  * ============================================================================ */
 
 static int parse_text_runs(const char *json, size_t json_len,
-                           SHArena *arena, TextRun *runs, int max_runs)
+                           SHArena *arena, TextRun **out_runs)
 {
     ShJsonValue *root = NULL;
     if (sh_json_parse(json, json_len, arena, &root) != SH_JSON_OK)
@@ -83,10 +81,34 @@ static int parse_text_runs(const char *json, size_t json_len,
     ShJsonValue *pages = sh_json_get(root, "pages");
     if (!pages) return -1;
 
-    int count = 0;
     size_t npages = sh_json_array_len(pages);
 
-    for (size_t p = 0; p < npages && count < max_runs; p++) {
+    /* First pass: count non-empty text entries */
+    int total = 0;
+    for (size_t p = 0; p < npages; p++) {
+        ShJsonValue *page = sh_json_array_get(pages, p);
+        ShJsonValue *texts = sh_json_get(page, "texts");
+        if (!texts) continue;
+        size_t ntexts = sh_json_array_len(texts);
+        for (size_t t = 0; t < ntexts; t++) {
+            ShJsonValue *txt = sh_json_array_get(texts, t);
+            const char *text = sh_json_as_string(sh_json_get(txt, "text"), "");
+            if (text[0]) total++;
+        }
+    }
+
+    if (total == 0) {
+        *out_runs = NULL;
+        return 0;
+    }
+
+    /* Allocate exact size */
+    *out_runs = (TextRun *)sh_arena_alloc(arena, (size_t)total * sizeof(TextRun));
+    if (!*out_runs) return -1;
+
+    /* Second pass: fill */
+    int count = 0;
+    for (size_t p = 0; p < npages; p++) {
         ShJsonValue *page = sh_json_array_get(pages, p);
         int page_num = sh_json_as_int(sh_json_get(page, "page"), (int)p + 1);
 
@@ -94,19 +116,19 @@ static int parse_text_runs(const char *json, size_t json_len,
         if (!texts) continue;
 
         size_t ntexts = sh_json_array_len(texts);
-        for (size_t t = 0; t < ntexts && count < max_runs; t++) {
+        for (size_t t = 0; t < ntexts; t++) {
             ShJsonValue *txt = sh_json_array_get(texts, t);
 
             const char *text = sh_json_as_string(sh_json_get(txt, "text"), "");
-            if (!text[0]) continue; /* Skip empty text */
+            if (!text[0]) continue;
 
-            runs[count].text = text;
-            runs[count].text_len = strlen(text);
-            runs[count].x = sh_json_as_double(sh_json_get(txt, "x"), 0);
-            runs[count].y = sh_json_as_double(sh_json_get(txt, "y"), 0);
-            runs[count].w = sh_json_as_double(sh_json_get(txt, "w"), 0);
-            runs[count].h = sh_json_as_double(sh_json_get(txt, "h"), 0);
-            runs[count].page = page_num;
+            (*out_runs)[count].text = text;
+            (*out_runs)[count].text_len = strlen(text);
+            (*out_runs)[count].x = sh_json_as_double(sh_json_get(txt, "x"), 0);
+            (*out_runs)[count].y = sh_json_as_double(sh_json_get(txt, "y"), 0);
+            (*out_runs)[count].w = sh_json_as_double(sh_json_get(txt, "w"), 0);
+            (*out_runs)[count].h = sh_json_as_double(sh_json_get(txt, "h"), 0);
+            (*out_runs)[count].page = page_num;
             count++;
         }
     }
@@ -714,6 +736,7 @@ NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
                                   char **out_json, size_t *out_len)
 {
     NxPdfOptions auto_opts = NX_PDF_AUTO_OPTIONS;
+    (void)issues; /* Reserved for future per-run issue reporting */
 
     if (!json_data || !out_json || !out_len) return NX_PDF_ERR_NULL;
     if (!arena) return NX_PDF_ERR_ARENA;
@@ -729,36 +752,25 @@ NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
     char sha256_hex[65];
     sh_sha256_hex(json_data, json_len, sha256_hex);
 
-    /* Parse text runs */
-    TextRun *runs = (TextRun *)sh_arena_alloc(arena,
-        MAX_TEXT_RUNS * sizeof(TextRun));
-    if (!runs) return NX_PDF_ERR_ARENA;
-
-    int nruns = parse_text_runs(json_data, json_len, arena, runs, MAX_TEXT_RUNS);
+    /* Parse text runs (two-pass: count then fill, exact arena alloc) */
+    TextRun *runs = NULL;
+    int nruns = parse_text_runs(json_data, json_len, arena, &runs);
     if (nruns < 0) return NX_PDF_ERR_JSON;
     if (nruns == 0) return NX_PDF_ERR_NO_TEXT;
-    if (nruns == MAX_TEXT_RUNS && issues)
-        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
-                      -1, "", "text_runs_limit",
-                      "Hit MAX_TEXT_RUNS=%d cap", MAX_TEXT_RUNS);
 
     /* Auto-detect clustering parameters if requested (writes back to opts) */
     if (opts->row_tolerance < 0 || opts->col_gap_min < 0)
         auto_detect_options(runs, nruns, arena, opts);
 
-    /* Cluster into rows */
+    /* Cluster into rows (max rows bounded by nruns) */
     ClusterRow *cluster_rows_arr = (ClusterRow *)sh_arena_alloc(arena,
-        MAX_ROWS * sizeof(ClusterRow));
+        (size_t)nruns * sizeof(ClusterRow));
     if (!cluster_rows_arr) return NX_PDF_ERR_ARENA;
 
     int nrows = cluster_rows(runs, nruns, opts->row_tolerance,
-                             arena, cluster_rows_arr, MAX_ROWS);
+                             arena, cluster_rows_arr, nruns);
     if (nrows < 0) return NX_PDF_ERR_ARENA;
     if (nrows == 0) return NX_PDF_ERR_NO_TEXT;
-    if (nrows == MAX_ROWS && issues)
-        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
-                      -1, "", "rows_limit",
-                      "Hit MAX_ROWS=%d cap", MAX_ROWS);
 
     /* Split wide text runs that contain multi-space gaps (column separators
      * encoded as whitespace within a single TJ/Tj text run) */
