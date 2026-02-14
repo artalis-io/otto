@@ -2592,6 +2592,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->phase1_pricing = -1;  /* Default: disabled (use solver pricing) */
     solver->use_dual_bound_flip = 1;
     solver->use_dual_steepest_edge = 1;
+    solver->method = 0;  /* Default: primal simplex */
 
     return solver;
 }
@@ -4347,11 +4348,12 @@ int simplex_solve(SimplexSolver *solver) {
 
     /* Apply crash basis if enabled — replace slacks with structural columns.
      * Save original basis so we can revert if crash produces singular or
-     * infeasible basis (the original has correct slack/artificial assignments). */
+     * infeasible basis (the original has correct slack/artificial assignments).
+     * Crash is only beneficial for primal simplex — dual starts from slack basis. */
     int *saved_basis = NULL;
     int *saved_basis_pos = NULL;
     VarStatus *saved_var_status = NULL;
-    if (solver->crash) {
+    if (solver->crash && solver->method == 0) {
         saved_basis = (int *)malloc(tab->m * sizeof(int));
         saved_basis_pos = (int *)malloc(tab->n * sizeof(int));
         saved_var_status = (VarStatus *)malloc(tab->n * sizeof(VarStatus));
@@ -4428,6 +4430,69 @@ int simplex_solve(SimplexSolver *solver) {
     free(saved_basis); free(saved_basis_pos); free(saved_var_status);
 
     if (solver->verbose) printf("[simplex_solve] Initial factorization OK\n");
+
+    /* T1.3: Method dispatch — dual simplex path.
+     * The dual simplex needs its own tableau setup (no Big-M artificials),
+     * so we delegate to the dedicated from-scratch solver. */
+    if (solver->method == 1 || solver->method == 2) {
+        if (solver->verbose)
+            printf("[simplex_solve] Trying dual simplex path (method=%d)\n", solver->method);
+
+        /* Destroy primal tableau — dual creates its own without artificials */
+        tableau_free(solver->tableau);
+        solver->tableau = NULL;
+        tab = NULL;
+
+        /* Try dual from scratch (has its own tableau creation + Phase 1) */
+        int drc = dual_simplex_solve_from_scratch_v2(solver);
+
+        if (drc == 0) {
+            /* Success (OPTIMAL, INFEASIBLE, or OBJ_LIMIT) */
+            solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+
+            /* Unscale if needed */
+            unscale_solution(solver);
+            restore_model(solver);
+
+            if (solver->verify && solver->status == RALPH_STATUS_OPTIMAL)
+                verify_solution(solver);
+
+            return 0;
+        }
+
+        /* Dual failed */
+        if (solver->method == 2) {
+            if (solver->verbose)
+                printf("[simplex_solve] Dual simplex failed, falling back to primal\n");
+
+            /* Recreate primal tableau */
+            solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase);
+            if (!solver->tableau) {
+                solver->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+            tab = solver->tableau;
+            tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2);
+            tab->pricing_strategy = solver->pricing_strategy;
+            tab->trace_phase1_enabled = solver->trace_phase1;
+
+            if (solver->crash) {
+                crash_triangular(tab, solver->verbose);
+            }
+
+            if (tableau_refactorize(tab) != 0) {
+                solver->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+            /* Fall through to primal path */
+        } else {
+            solver->status = RALPH_STATUS_ERROR;
+            solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+            return -1;
+        }
+    }
 
     /* T3.4: Override pricing strategy for Phase 1 if configured */
     int saved_pricing = solver->pricing_strategy;

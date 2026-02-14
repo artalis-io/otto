@@ -1881,6 +1881,15 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         lu->growth_factor = max_spike;
     }
 
+    /* T3.2: Update condition estimate from new pivot diagonal.
+     * The diagonal of the updated U matrix is approximated by 1/pivot.
+     * Track min/max to estimate condition degradation during updates. */
+    double abs_diag = fabs(diag_val);
+    if (abs_diag > 0 && abs_diag < lu->min_diag_U) lu->min_diag_U = abs_diag;
+    if (abs_diag > lu->max_diag_U) lu->max_diag_U = abs_diag;
+    if (lu->min_diag_U > RALPH_ZERO_TOL)
+        lu->cond_estimate = lu->max_diag_U / lu->min_diag_U;
+
     /* Trigger spike compaction if interval reached and using FT updates */
     if (lu->use_ft_updates && lu->ft_compact_interval > 0) {
         int uncompacted = lu->ft_num_updates - lu->ft_num_compacted;
@@ -1899,8 +1908,24 @@ int lu_needs_refactorization(const LUFactorization *lu) {
     /* Refactorize if max updates reached */
     if (lu->num_updates >= lu->max_updates) return 1;
 
-    /* Refactorize early if condition has degraded significantly */
-    if (lu->growth_factor > 1e6) return 1;
+    /* Refactorize early if growth factor is large */
+    if (lu->growth_factor > RALPH_LU_GROWTH_REFACTOR_THRESHOLD) return 1;
+
+    /* T3.2: Condition-based early refactorization.
+     * If condition estimate has grown significantly since last factorization,
+     * refactorize early to prevent numerical drift. */
+    if (lu->num_updates >= 10) {
+        double cond_ratio = lu->growth_factor * lu->cond_estimate;
+        if (cond_ratio > 1e10) return 1;  /* Severe conditioning */
+
+        /* Adaptive: refactorize earlier when condition is poor */
+        int adaptive_limit = lu->max_updates;
+        if (lu->cond_estimate > 1e8)
+            adaptive_limit = lu->max_updates / 4;
+        else if (lu->cond_estimate > 1e6)
+            adaptive_limit = lu->max_updates / 2;
+        if (lu->num_updates >= adaptive_limit) return 1;
+    }
 
     /* Refactorize early if spike pool is nearly full
      * This prevents update failures when spike density is higher than expected */

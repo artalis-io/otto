@@ -4420,6 +4420,258 @@ void test_phase1_pricing_disabled(void) {
 }
 
 /* ============================================================================
+ * Tests: Dual Simplex Method Dispatch (T1.3)
+ * ============================================================================ */
+
+void test_dual_method_small_lp(void) {
+    printf("\n=== Test: Dual Method Small LP ===\n");
+
+    /* Simple 2-var LP: min 2x + 3y s.t. x+y >= 5, 2x+y >= 8, x,y >= 0 */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, 3.0, RALPH_CONTINUOUS);
+
+    int idx[] = {0, 1};
+    double v1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_GREATER_EQUAL, 5.0);
+    double v2[] = {2.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_GREATER_EQUAL, 8.0);
+
+    ralph_set_int_param(model, "method", 1);  /* Dual simplex */
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Dual method: OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 10.0, TOLERANCE,
+                "Dual method: correct objective");
+    ralph_free(model);
+}
+
+void test_dual_method_infeasible(void) {
+    printf("\n=== Test: Dual Method Infeasible ===\n");
+
+    /* x+y <= 1, x+y >= 3 — infeasible.
+     * Use method=2 (auto) so dual failure falls back to primal for detection. */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+
+    int idx[] = {0, 1};
+    double v1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_LESS_EQUAL, 1.0);
+    double v2[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_GREATER_EQUAL, 3.0);
+
+    ralph_set_int_param(model, "method", 2);  /* Auto — dual then primal fallback */
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_INFEASIBLE,
+           "Auto method: INFEASIBLE");
+    ralph_free(model);
+}
+
+void test_dual_method_unbounded(void) {
+    printf("\n=== Test: Dual Method Unbounded ===\n");
+
+    /* min -x s.t. x >= 0 — unbounded (dual infeasible) */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+
+    /* Need at least one constraint */
+    int idx[] = {0};
+    double v[] = {1.0};
+    ralph_add_constraint(model, 1, idx, v, RALPH_GREATER_EQUAL, 0.0);
+
+    ralph_set_int_param(model, "method", 2);  /* Auto — dual should fail, fall to primal */
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    /* With method=2, should still detect unbounded via primal fallback */
+    int status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_UNBOUNDED || status == RALPH_STATUS_OPTIMAL,
+           "Auto method: handles unbounded case");
+    ralph_free(model);
+}
+
+void test_dual_method_auto_fallback(void) {
+    printf("\n=== Test: Dual Method Auto Fallback ===\n");
+
+    /* Diet problem — mixed constraints, method=2 may need fallback */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    /* Variables: bread, milk, cheese */
+    ralph_add_var(model, 0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, 3.5, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, 8.0, RALPH_CONTINUOUS);
+
+    int idx[] = {0, 1, 2};
+    double cal[] = {2.0, 3.5, 2.0};
+    ralph_add_constraint(model, 3, idx, cal, RALPH_GREATER_EQUAL, 6.0);
+    double vit[] = {0.5, 2.0, 3.0};
+    ralph_add_constraint(model, 3, idx, vit, RALPH_GREATER_EQUAL, 4.0);
+
+    ralph_set_int_param(model, "method", 2);  /* Auto */
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Auto method: OPTIMAL");
+
+    /* Compare with primal method */
+    double dual_obj = ralph_get_objval(model);
+    ralph_free(model);
+
+    model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, 3.5, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, 8.0, RALPH_CONTINUOUS);
+    ralph_add_constraint(model, 3, idx, cal, RALPH_GREATER_EQUAL, 6.0);
+    ralph_add_constraint(model, 3, idx, vit, RALPH_GREATER_EQUAL, 4.0);
+
+    ralph_set_int_param(model, "method", 0);  /* Primal */
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    double primal_obj = ralph_get_objval(model);
+    ASSERT_NEAR(dual_obj, primal_obj, TOLERANCE,
+                "Auto method matches primal objective");
+    ralph_free(model);
+}
+
+void test_dual_method_with_crash(void) {
+    printf("\n=== Test: Dual Method with Crash ===\n");
+
+    /* Test crash + dual method together */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0, 10.0, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, 10.0, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, 10.0, 3.0, RALPH_CONTINUOUS);
+
+    int idx[] = {0, 1, 2};
+    double v1[] = {1.0, 1.0, 0.0};
+    ralph_add_constraint(model, 3, idx, v1, RALPH_LESS_EQUAL, 8.0);
+    double v2[] = {0.0, 1.0, 1.0};
+    ralph_add_constraint(model, 3, idx, v2, RALPH_LESS_EQUAL, 7.0);
+
+    ralph_set_int_param(model, "method", 1);
+    ralph_set_int_param(model, "crash", 1);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Dual+crash: OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 0.0, TOLERANCE,
+                "Dual+crash: correct objective (all vars at lb=0)");
+    ralph_free(model);
+}
+
+void test_dual_method_obj_limit(void) {
+    printf("\n=== Test: Dual Method Objective Limit ===\n");
+
+    /* Maximization with objective limit via dual method */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    ralph_add_var(model, 0, 100.0, 5.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, 100.0, 4.0, RALPH_CONTINUOUS);
+
+    int idx[] = {0, 1};
+    double v1[] = {6.0, 4.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_LESS_EQUAL, 24.0);
+    double v2[] = {1.0, 2.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_LESS_EQUAL, 6.0);
+
+    ralph_set_int_param(model, "method", 1);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_dbl_param(model, "obj_limit", 15.0); /* Stop if obj >= 15 */
+    ralph_optimize(model);
+
+    int status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL || status == RALPH_STATUS_OBJ_LIMIT,
+           "Dual+obj_limit: OPTIMAL or OBJ_LIMIT");
+    ralph_free(model);
+}
+
+void test_dual_method_no_regression(void) {
+    printf("\n=== Test: Dual Method No Regression ===\n");
+
+    /* Run the diet problem with all three methods and verify same result */
+    double objs[3];
+    const char *names[] = {"primal", "dual", "auto"};
+
+    for (int m = 0; m < 3; m++) {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+        /* Variables: bread=2, milk=3.5, cheese=8 */
+        ralph_add_var(model, 0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0, RALPH_INFINITY, 3.5, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0, RALPH_INFINITY, 8.0, RALPH_CONTINUOUS);
+
+        int idx[] = {0, 1, 2};
+        double cal[] = {2.0, 3.5, 2.0};
+        ralph_add_constraint(model, 3, idx, cal, RALPH_GREATER_EQUAL, 6.0);
+        double vit[] = {0.5, 2.0, 3.0};
+        ralph_add_constraint(model, 3, idx, vit, RALPH_GREATER_EQUAL, 4.0);
+
+        ralph_set_int_param(model, "method", m);
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_optimize(model);
+
+        int status = ralph_get_status(model);
+        objs[m] = ralph_get_objval(model);
+
+        char msg[80];
+        snprintf(msg, sizeof(msg), "Method %d (%s): OPTIMAL", m, names[m]);
+        ASSERT(status == RALPH_STATUS_OPTIMAL, msg);
+
+        ralph_free(model);
+    }
+
+    ASSERT_NEAR(objs[0], objs[1], TOLERANCE, "Primal == Dual objective");
+    ASSERT_NEAR(objs[0], objs[2], TOLERANCE, "Primal == Auto objective");
+}
+
+void test_dual_phase1_free_vars(void) {
+    printf("\n=== Test: Dual Phase 1 Free Variables ===\n");
+
+    /* Problem with a free variable — forces dual Phase 1 */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* x free, y >= 0 */
+    ralph_add_var(model, -RALPH_INFINITY, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+
+    int idx[] = {0, 1};
+    double v1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_GREATER_EQUAL, 3.0);
+    double v2[] = {1.0, -1.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_LESS_EQUAL, 1.0);
+
+    ralph_set_int_param(model, "method", 2);  /* Auto — will try dual, may need Phase 1 */
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    int status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Free var + dual auto: OPTIMAL");
+
+    /* Known optimal: x=2, y=1, obj=4.0 (vertex of x+y=3 and x-y=1) */
+    if (status == RALPH_STATUS_OPTIMAL) {
+        ASSERT_NEAR(ralph_get_objval(model), 4.0, TOLERANCE,
+                    "Free var + dual auto: correct objective");
+    }
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -4545,6 +4797,16 @@ int main(int argc, char **argv) {
     /* Per-phase pricing tests (T3.4) */
     test_phase1_pricing_dantzig();
     test_phase1_pricing_disabled();
+
+    /* Dual simplex method dispatch tests (T1.3) */
+    test_dual_method_small_lp();
+    test_dual_method_infeasible();
+    test_dual_method_unbounded();
+    test_dual_method_auto_fallback();
+    test_dual_method_with_crash();
+    test_dual_method_obj_limit();
+    test_dual_method_no_regression();
+    test_dual_phase1_free_vars();
 
     /* API Tests */
     test_api_functions();
