@@ -1,36 +1,48 @@
 # Nexus — Document Ingestion Pipeline
 
-Three-stage pipeline for extracting tabular data from XLSX, PDF, and CSV into canonical JSON.
+Five-stage pipeline for extracting tabular data from XLSX, PDF, and CSV into canonical JSON.
 
 ## Architecture
 
 ```
-Document Bytes → Stage A (extraction) → Raw Rows JSON → Stage B (transform) → Canonical JSON
+Document Bytes → Stage A (extract) → nx_raw JSON
+                                       ↓
+                               Stage M (merge continuation rows, if schema)
+                                       ↓
+                               Stage B (transform) → nx_canonical JSON
+                                       ↓
+                               Stage X (validate) → validated JSON
 ```
 
-**Stage A**: Format-specific parsers (XLSX, PDF text-run JSON, CSV) → `nx_raw` format
-**Stage B**: Schema-driven transform (`nx_xform`) → `nx_canonical` format
+**Stage A**: Format-specific parsers (XLSX, PDF, CSV) → `nx_raw` format
+**Stage M**: Continuation row merging for PDF tables (`nx_merge`)
+**Stage B**: Schema-driven transform (`nx_xform` + `nx_compute`) → `nx_canonical` format
+**Stage X**: Semantic validation (`nx_validate`) — geo_bounds, format, unique, outlier
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `include/nx_ingest.h` | Pipeline orchestrator API |
-| `include/nx_xlsx.h` | XLSX parser (ZIP→XML→cells) |
-| `include/nx_pdf.h` | PDF table reconstructor (text-run clustering) |
-| `include/nx_csv.h` | CSV/TSV parser (RFC 4180, auto-detect delimiter) |
-| `include/nx_xform.h` | Schema-driven transform engine |
-| `include/nx_compute.h` | Compute function registry API |
-| `include/nx_validate.h` | Semantic validation engine (Stage X) |
-| `include/nx_slug.h` | Slugification for row IDs |
-| `src/nx_xlsx.c` | XLSX implementation (~500 lines) |
-| `src/nx_pdf.c` | PDF clustering implementation (~400 lines) |
-| `src/nx_csv.c` | CSV → nx_raw JSON (~260 lines) |
-| `src/nx_xform.c` | Transform implementation (~1300 lines) |
-| `src/nx_compute.c` | Compute functions: EOV, DMS, coalesce, phone, ZIP, hours (~320 lines) |
-| `src/nx_validate.c` | Validation rules: geo_bounds, format, unique, outlier (~750 lines) |
-| `src/nx_slug.c` | Slug utility (~100 lines) |
-| `src/nx_ingest.c` | Pipeline orchestrator (~120 lines) |
+| File | Purpose | Lines |
+|------|---------|-------|
+| `include/nx_ingest.h` | Pipeline orchestrator API | 73 |
+| `include/nx_xlsx.h` | XLSX parser (ZIP→XML→cells) | 87 |
+| `include/nx_pdf.h` | PDF table reconstructor (text-run clustering) | 91 |
+| `include/nx_csv.h` | CSV/TSV parser (RFC 4180, auto-detect delimiter) | 81 |
+| `include/nx_xform.h` | Schema-driven transform engine | 68 |
+| `include/nx_compute.h` | Compute function registry API | 40 |
+| `include/nx_validate.h` | Semantic validation engine (Stage X) | 107 |
+| `include/nx_merge.h` | Continuation row merging API | 66 |
+| `include/nx_discover.h` | Auto schema discovery API | 58 |
+| `include/nx_slug.h` | Slugification for row IDs | 30 |
+| `src/nx_xlsx.c` | XLSX implementation | 609 |
+| `src/nx_pdf.c` | PDF clustering implementation | 789 |
+| `src/nx_csv.c` | CSV → nx_raw JSON | 342 |
+| `src/nx_xform.c` | Transform engine (multi-transforms, type coercion) | 1251 |
+| `src/nx_compute.c` | Compute functions: EOV, DMS, coalesce, phone, ZIP, hours | 345 |
+| `src/nx_validate.c` | Validation rules: geo_bounds, format, unique, outlier | 750 |
+| `src/nx_merge.c` | Continuation row merging | 368 |
+| `src/nx_discover.c` | Heuristic schema discovery | 720 |
+| `src/nx_slug.c` | Slug utility | 51 |
+| `src/nx_ingest.c` | Pipeline orchestrator | 137 |
 
 ## Naming
 
@@ -41,16 +53,19 @@ Document Bytes → Stage A (extraction) → Raw Rows JSON → Stage B (transform
 ## Build
 
 ```bash
-make all      # Build library + tests
+make all      # Build library + tests (137 tests)
 make test     # Run all tests
 make tools    # Build CLI tools
-make debug    # Build with ASan/UBSan
+make debug    # Build with ASan/UBSan + -Werror
 make clean    # Remove artifacts
 ```
 
+Build flags: `-Wall -Wextra -Werror -O3`. Vendor headers via `-isystem`.
+Hardening: `-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common`.
+
 ## Dependencies
 
-- `shared/libshared.a` — `sh_arena`, `sh_json`, `sh_xml`, `sh_csv`, `sh_hash_sha256`, `sh_fs`
+- `shared/libshared.a` — `sh_arena`, `sh_json`, `sh_xml`, `sh_csv`, `sh_hash_sha256`, `sh_fs`, `sh_eov`
 - `shared/libsh_pdf2struc.a` — Pure C PDF text extraction (used by `nx_pipeline`)
 - `vendor/miniz/` — ZIP reading for XLSX
 
@@ -59,7 +74,9 @@ make clean    # Remove artifacts
 - test_ingest: 45 tests (11 XLSX + 14 PDF + 13 CSV + 7 golden)
 - test_xform: 37 tests (5 slug + 8 xform + 16 multi-transform + 4 trucking + 4 pipeline)
 - test_validate: 9 tests (geo_bounds, format, unique, outlier)
-- Total: 91 tests
+- test_discover: 26 tests (18 unit + 2 continuation + 6 golden)
+- test_merge: 20 tests (4 error + 5 basic + 1 strip + 6 edge + 4 golden PDF02)
+- Total: 137 tests
 
 ## Schemas
 
@@ -70,6 +87,11 @@ Transform schemas live in `schemas/`. Format (v2 with multi-transforms):
   "nx_schema": 2,
   "version": "gls-hu-automata-v2",
   "output_type": "facility",
+  "row_merge": {
+    "key_columns": [0, 1, 2],
+    "separator": " ",
+    "strip_pattern": "GLS CsomagPontok"
+  },
   "multi_transforms": [
     {"type": "split", "source": 8, "delimiter": ",",
      "targets": [{"field": "lat", "index": 0}, {"field": "lon", "index": 1}]},
@@ -90,13 +112,20 @@ Transform schemas live in `schemas/`. Format (v2 with multi-transforms):
   "derived": [
     {"target": "facility_type", "value": "parcel_automata"}
   ],
-  "row_id": {"template": "gls-hu-{city}-{name}", "slugify": true}
+  "row_id": {"template": "gls-hu-{city}-{name}", "slugify": true},
+  "validate": [
+    {"type": "geo_bounds", "lat_field": "lat", "lon_field": "lon",
+     "bounds": {"min_lat": 45.7, "max_lat": 48.6, "min_lon": 16.1, "max_lon": 22.9},
+     "severity": "error"},
+    {"type": "format", "field": "zip", "pattern": "^[1-9][0-9]{3}$", "severity": "error"},
+    {"type": "unique", "fields": ["city", "name"], "severity": "error"}
+  ]
 }
 ```
 
 **Schema v1** (without `multi_transforms`) is fully backward-compatible.
 
-**Processing order**: `multi_transforms` → virtual columns → `columns` (1:1 mapping) → `derived` → `row_id`
+**Processing order**: `row_merge` → `multi_transforms` → virtual columns → `columns` (1:1 mapping) → `derived` → `row_id` → `validate`
 
 **Virtual columns**: Multi-transforms produce virtual columns appended after original columns. Reference by index: if raw has N columns, first virtual is at index N.
 

@@ -1,9 +1,11 @@
 /*
  * nx_ingest.h - Nexus Document Ingestion Pipeline
  *
- * Two-stage pipeline for extracting tabular data from documents:
+ * Five-stage pipeline for extracting tabular data from documents:
  *   Stage A: Document → Raw rows JSON (format-specific parser)
+ *   Stage M: Merge continuation rows (PDF only, if schema has "row_merge")
  *   Stage B: Raw rows JSON → Canonical JSON (schema-driven transform)
+ *   Stage X: Semantic validation (geo_bounds, format, unique, outlier)
  *
  * Supports XLSX, CSV, and PDF (via pre-processed text-run JSON).
  */
@@ -33,6 +35,7 @@ typedef enum {
     NX_INGEST_ERR_FORMAT,        /* Unknown/unsupported format */
     NX_INGEST_ERR_STAGE_A,       /* Raw extraction failed */
     NX_INGEST_ERR_STAGE_B,       /* Transform failed */
+    NX_INGEST_ERR_STAGE_X,       /* Validation failed */
     NX_INGEST_ERR_ARENA
 } NxIngestStatus;
 

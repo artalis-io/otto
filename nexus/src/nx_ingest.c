@@ -1,7 +1,9 @@
 /*
  * nx_ingest.c - Pipeline Orchestrator
  *
- * Runs the two-stage pipeline: Stage A (extraction) → Stage B (transform).
+ * Runs the five-stage pipeline:
+ *   Stage A (extraction) → Stage M (merge, PDF only) →
+ *   Stage B (transform) → Stage X (validation).
  */
 
 #include "nx_ingest.h"
@@ -10,6 +12,7 @@
 #include "nx_csv.h"
 #include "nx_merge.h"
 #include "nx_xform.h"
+#include "nx_validate.h"
 #include "sh_arena.h"
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +28,7 @@ const char *nx_ingest_status_str(NxIngestStatus status)
         case NX_INGEST_ERR_FORMAT:  return "Unsupported format";
         case NX_INGEST_ERR_STAGE_A: return "Stage A (extraction) failed";
         case NX_INGEST_ERR_STAGE_B: return "Stage B (transform) failed";
+        case NX_INGEST_ERR_STAGE_X: return "Stage X (validation) failed";
         case NX_INGEST_ERR_ARENA:   return "Arena allocation failure";
         default:                    return "Unknown error";
     }
@@ -88,8 +92,8 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
 
     sh_arena_free(arena_a); /* Stage A arena freed before Stage B */
 
-    /* Row merge: merge continuation rows before transform */
-    if (schema_json && schema_len > 0) {
+    /* Stage M: merge continuation rows (PDF only — XLSX/CSV don't have this artifact) */
+    if (format == NX_FORMAT_PDF_JSON && schema_json && schema_len > 0) {
         SHArena *arena_m = sh_arena_create(INGEST_ARENA_SIZE);
         if (arena_m) {
             char *merged = NULL;
@@ -123,6 +127,36 @@ NxIngestStatus nx_ingest(const void *data, size_t len,
             free(raw_json);
             return NX_INGEST_ERR_STAGE_B;
         }
+
+        /* Stage X: Validate canonical JSON */
+        SHArena *arena_x = sh_arena_create(INGEST_ARENA_SIZE);
+        if (!arena_x) {
+            free(raw_json);
+            free(*out_canon);
+            *out_canon = NULL;
+            *out_canon_len = 0;
+            return NX_INGEST_ERR_ARENA;
+        }
+
+        char *validated = NULL;
+        size_t validated_len = 0;
+        NxValidateStatus vs = nx_validate(*out_canon, *out_canon_len,
+                                           schema_json, schema_len,
+                                           arena_x, &validated, &validated_len);
+        sh_arena_free(arena_x);
+
+        if (vs != NX_VALIDATE_OK) {
+            free(raw_json);
+            free(*out_canon);
+            *out_canon = NULL;
+            *out_canon_len = 0;
+            return NX_INGEST_ERR_STAGE_X;
+        }
+
+        /* Replace canonical with validated output */
+        free(*out_canon);
+        *out_canon = validated;
+        *out_canon_len = validated_len;
     }
 
     /* Return raw JSON if requested */
