@@ -304,6 +304,45 @@ h1 {
 }
 
 /* ============================================================================
+ * Code Block Action Buttons (Copy, Skip)
+ * ============================================================================ */
+
+.code-block-actions {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    z-index: 4;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.code-block:hover .code-block-actions,
+.code-block.typing .code-block-actions {
+    opacity: 1;
+}
+
+.code-block-actions button {
+    background: rgba(10, 10, 10, 0.9);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    line-height: 1.4;
+}
+
+.code-block-actions button:hover {
+    color: var(--text);
+    border-color: var(--accent);
+    background: rgba(30, 64, 175, 0.4);
+}
+
+/* ============================================================================
  * CRT Animations
  * ============================================================================ */
 
@@ -1104,6 +1143,7 @@ function typeAnimateContentAsync(block, html) {
         pre.style.whiteSpace = 'pre';
         block.classList.remove('typed');
         block.classList.add('typing');
+        addSkipButton(block, html);
 
         const tempDiv = document.createElement('pre');
         tempDiv.style.whiteSpace = 'pre';
@@ -1141,6 +1181,9 @@ function typeAnimateContentAsync(block, html) {
                 block.classList.remove('typing');
                 block.classList.add('typed');
                 activeAnimations.delete(block);
+                const skipBtn = block.querySelector('.skip-btn');
+                if (skipBtn) skipBtn.remove();
+                addCopyButton(block);
                 resolve();
                 return;
             }
@@ -1191,6 +1234,67 @@ function renderContentImmediate(block, html) {
     pre.innerHTML = html;
     block.classList.remove('typing');
     block.classList.add('typed');
+    addCopyButton(block);
+}
+
+/* ============================================================================
+ * Code Block Action Buttons (Copy, Skip-to-End)
+ * ============================================================================ */
+
+function ensureBlockActions(block) {
+    let actions = block.querySelector('.code-block-actions');
+    if (!actions) {
+        actions = document.createElement('div');
+        actions.className = 'code-block-actions';
+        block.appendChild(actions);
+    }
+    return actions;
+}
+
+function addCopyButton(block) {
+    const actions = ensureBlockActions(block);
+    if (actions.querySelector('.copy-btn')) return;
+    const btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.textContent = 'Copy';
+    btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const pre = block.querySelector('pre');
+        if (!pre) return;
+        navigator.clipboard.writeText(pre.textContent).then(function() {
+            btn.textContent = 'Copied!';
+            setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+        }).catch(function() {
+            /* Fallback for non-HTTPS contexts */
+            const ta = document.createElement('textarea');
+            ta.value = pre.textContent;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            btn.textContent = 'Copied!';
+            setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+        });
+    });
+    actions.appendChild(btn);
+}
+
+function addSkipButton(block, fullHTML) {
+    const actions = ensureBlockActions(block);
+    let existing = actions.querySelector('.skip-btn');
+    if (existing) existing.remove();
+    const btn = document.createElement('button');
+    btn.className = 'skip-btn';
+    btn.textContent = 'Skip';
+    btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        activeAnimations.delete(block);
+        renderContentImmediate(block, fullHTML);
+        btn.remove();
+    });
+    actions.insertBefore(btn, actions.firstChild);
 }
 
 /* ============================================================================
@@ -1213,6 +1317,7 @@ function hideAllStages() {
     document.querySelectorAll('.code-block').forEach(function(block) {
         block.classList.remove('typing', 'typed');
     });
+    document.querySelectorAll('.code-block-actions').forEach(function(el) { el.remove(); });
     document.getElementById('audit-cards').innerHTML = '';
     document.getElementById('diff-cards').innerHTML = '';
     document.getElementById('diff-detail').innerHTML = '';
@@ -1697,6 +1802,7 @@ document.getElementById('emit-csv-btn').addEventListener('click', function() {
         }
         block.classList.remove('typing');
         block.classList.add('typed');
+        addCopyButton(block);
     } catch (err) {
         let detail = err.message;
         try {
