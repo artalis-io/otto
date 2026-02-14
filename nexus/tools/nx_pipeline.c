@@ -22,6 +22,7 @@
 #include "nx_merge.h"
 #include "nx_xform.h"
 #include "nx_validate.h"
+#include "nx_emit.h"
 #include "sh_arena.h"
 #include "sh_json.h"
 #include "sh_csv.h"
@@ -270,6 +271,7 @@ typedef struct {
     int output_raw;          /* 1 = output raw, 0 = output canonical if schema */
     char csv_delimiter;      /* 0 = auto-detect */
     int csv_no_header;       /* 1 = no header row in CSV */
+    const char *emit_format; /* NULL, "geojson", or "csv" */
 } PipelineOpts;
 
 static int process_file(const PipelineOpts *po)
@@ -500,6 +502,83 @@ static int process_file(const PipelineOpts *po)
                 canon_len = validated_len;
             }
         }
+        /* Stage D: Emit downstream format (if --emit specified) */
+        if (po->emit_format && canon_json) {
+            fprintf(stderr, "  Stage D: Emitting %s...\n", po->emit_format);
+
+            if (strcmp(po->emit_format, "geojson") == 0) {
+                NxEmitGeoJsonOpts geo_opts = NX_EMIT_GEOJSON_DEFAULTS;
+
+                /* Auto-detect lat/lon fields from schema validate rules */
+                SHArena *arena_s = sh_arena_create(256 * 1024);
+                if (arena_s) {
+                    ShJsonValue *sroot = NULL;
+                    if (sh_json_parse(schema, schema_file_len, arena_s, &sroot) == SH_JSON_OK) {
+                        ShJsonValue *validate = sh_json_get(sroot, "validate");
+                        if (validate) {
+                            for (size_t vi = 0; vi < sh_json_array_len(validate); vi++) {
+                                ShJsonValue *rule = sh_json_array_get(validate, vi);
+                                const char *rtype = sh_json_as_string(sh_json_get(rule, "type"), "");
+                                if (strcmp(rtype, "geo_bounds") == 0) {
+                                    const char *lf = sh_json_as_string(sh_json_get(rule, "lat_field"), NULL);
+                                    const char *nf = sh_json_as_string(sh_json_get(rule, "lon_field"), NULL);
+                                    if (lf) geo_opts.lat_field = lf;
+                                    if (nf) geo_opts.lon_field = nf;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    /* Note: arena_s keeps lat/lon field strings alive */
+                }
+
+                SHArena *arena_e = sh_arena_create(PIPELINE_ARENA_SIZE);
+                if (arena_e) {
+                    char *geojson = NULL; size_t geojson_len = 0;
+                    NxEmitStatus es = nx_emit_geojson(canon_json, canon_len,
+                                                       &geo_opts, arena_e,
+                                                       &geojson, &geojson_len);
+                    sh_arena_free(arena_e);
+                    if (arena_s) sh_arena_free(arena_s);
+
+                    if (es == NX_EMIT_OK && geojson) {
+                        free(canon_json);
+                        canon_json = geojson;
+                        canon_len = geojson_len;
+                    } else if (es != NX_EMIT_OK) {
+                        fprintf(stderr, "  Warning: GeoJSON emit failed: %s\n",
+                                nx_emit_status_str(es));
+                    }
+                } else {
+                    if (arena_s) sh_arena_free(arena_s);
+                }
+
+            } else if (strcmp(po->emit_format, "csv") == 0) {
+                NxEmitCsvOpts csv_opts = NX_EMIT_CSV_DEFAULTS;
+
+                SHArena *arena_e = sh_arena_create(PIPELINE_ARENA_SIZE);
+                if (arena_e) {
+                    char *csv = NULL; size_t csv_len = 0;
+                    NxEmitStatus es = nx_emit_csv(canon_json, canon_len,
+                                                    &csv_opts, arena_e,
+                                                    &csv, &csv_len);
+                    sh_arena_free(arena_e);
+
+                    if (es == NX_EMIT_OK && csv) {
+                        free(canon_json);
+                        canon_json = csv;
+                        canon_len = csv_len;
+                    } else if (es != NX_EMIT_OK) {
+                        fprintf(stderr, "  Warning: CSV emit failed: %s\n",
+                                nx_emit_status_str(es));
+                    }
+                }
+            } else {
+                fprintf(stderr, "  Warning: unknown emit format '%s'\n",
+                        po->emit_format);
+            }
+        }
+
         free(schema);
 
         /* Print final summary (after validation) */
@@ -779,6 +858,7 @@ static void usage(const char *prog)
     fprintf(stderr, "  --delimiter   CSV field delimiter (default: auto-detect)\n");
     fprintf(stderr, "  --no-header   CSV has no header row\n");
     fprintf(stderr, "  --config      Batch config JSON file\n");
+    fprintf(stderr, "  --emit FMT    Emit format: geojson, csv (default: canonical JSON)\n");
     fprintf(stderr, "  --raw         Output raw JSON even when schema given\n");
     fprintf(stderr, "  -o FILE       Write output to file\n");
 }
@@ -824,6 +904,8 @@ int main(int argc, char **argv)
             }
         } else if (strcmp(argv[i], "--no-header") == 0) {
             po.csv_no_header = 1;
+        } else if (strcmp(argv[i], "--emit") == 0 && i + 1 < argc) {
+            po.emit_format = argv[++i];
         } else if (strcmp(argv[i], "--raw") == 0) {
             po.output_raw = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {

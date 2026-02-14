@@ -19,6 +19,7 @@
 #include "nx_xform.h"
 #include "nx_validate.h"
 #include "nx_discover.h"
+#include "nx_emit.h"
 #include "sh_arena.h"
 #include "sh_pdf2struc.h"
 
@@ -40,6 +41,7 @@ static char  *g_extract_buf   = NULL;  static size_t g_extract_len   = 0;
 static char  *g_transform_buf = NULL;  static size_t g_transform_len = 0;
 static char  *g_validate_buf  = NULL;  static size_t g_validate_len  = 0;
 static char  *g_discover_buf  = NULL;  static size_t g_discover_len  = 0;
+static char  *g_emit_buf     = NULL;  static size_t g_emit_len     = 0;
 
 /* ============================================================================
  * PDF Text Extraction (copied from nx_pipeline.c, adapted for memory input)
@@ -410,4 +412,79 @@ WASM_EXPORT
 int nx_wasm_discover_result_len(void)
 {
     return (int)g_discover_len;
+}
+
+/*
+ * Stage D: Emit canonical JSON as GeoJSON.
+ *
+ * lat_field/lon_field: field names for coordinates (e.g. "lat", "lon")
+ * Returns 0 on success, -1 on error.
+ */
+WASM_EXPORT
+int nx_wasm_emit_geojson(const char *canonical_json, int canon_len,
+                          const char *lat_field, const char *lon_field)
+{
+    free(g_emit_buf);
+    g_emit_buf = NULL;
+    g_emit_len = 0;
+
+    if (!canonical_json || canon_len <= 0) return -1;
+
+    NxEmitGeoJsonOpts opts = NX_EMIT_GEOJSON_DEFAULTS;
+    if (lat_field && lat_field[0]) opts.lat_field = lat_field;
+    if (lon_field && lon_field[0]) opts.lon_field = lon_field;
+
+    SHArena *arena = sh_arena_create(NX_WASM_ARENA_SIZE);
+    if (!arena) return -1;
+
+    char *out = NULL;
+    size_t out_len = 0;
+    NxEmitStatus st = nx_emit_geojson(canonical_json, (size_t)canon_len,
+                                       &opts, arena, &out, &out_len);
+    sh_arena_free(arena);
+
+    if (st != NX_EMIT_OK || !out) return -1;
+    g_emit_buf = out;
+    g_emit_len = out_len;
+    return 0;
+}
+
+/*
+ * Stage D: Emit canonical JSON as CSV.
+ * Returns 0 on success, -1 on error.
+ */
+WASM_EXPORT
+int nx_wasm_emit_csv(const char *canonical_json, int canon_len)
+{
+    free(g_emit_buf);
+    g_emit_buf = NULL;
+    g_emit_len = 0;
+
+    if (!canonical_json || canon_len <= 0) return -1;
+
+    SHArena *arena = sh_arena_create(NX_WASM_ARENA_SIZE);
+    if (!arena) return -1;
+
+    char *out = NULL;
+    size_t out_len = 0;
+    NxEmitStatus st = nx_emit_csv(canonical_json, (size_t)canon_len,
+                                    NULL, arena, &out, &out_len);
+    sh_arena_free(arena);
+
+    if (st != NX_EMIT_OK || !out) return -1;
+    g_emit_buf = out;
+    g_emit_len = out_len;
+    return 0;
+}
+
+WASM_EXPORT
+const char *nx_wasm_emit_result(void)
+{
+    return g_emit_buf ? g_emit_buf : "";
+}
+
+WASM_EXPORT
+int nx_wasm_emit_result_len(void)
+{
+    return (int)g_emit_len;
 }

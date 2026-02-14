@@ -682,6 +682,225 @@ TEST(csv_multiple_escaped_quotes)
 }
 
 /* ============================================================================
+ * CSV Writer Tests
+ * ============================================================================ */
+
+TEST(csv_write_simple)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "a");
+    sh_csv_write_field_str(&w, "b");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_EQ(len, 5);
+    ASSERT_STREQ(out, "a,b\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_quoting_comma)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "a,b");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "\"a,b\"\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_quoting_quote)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "he said \"hi\"");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "\"he said \"\"hi\"\"\"\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_quoting_newline)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "line1\nline2");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "\"line1\nline2\"\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_quoting_crlf)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "line1\r\nline2");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "\"line1\r\nline2\"\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_no_quoting)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "hello123");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "hello123\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_empty_field)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "a");
+    sh_csv_write_field_str(&w, "");
+    sh_csv_write_field_str(&w, "c");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "a,,c\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_semicolon_delimiter)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, ';');
+    sh_csv_write_field_str(&w, "a");
+    sh_csv_write_field_str(&w, "b;c");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "a;\"b;c\"\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_multiple_rows)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "h1");
+    sh_csv_write_field_str(&w, "h2");
+    sh_csv_write_row_end(&w);
+    sh_csv_write_field_str(&w, "v1");
+    sh_csv_write_field_str(&w, "v2");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "h1,h2\r\nv1,v2\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_take)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "x");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_EQ(len, 3); /* "x\r\n" */
+
+    /* After take, buffer is empty */
+    char *out2 = sh_csv_buf_take(&cb, &len);
+    ASSERT(out2 == NULL);
+    ASSERT_EQ(len, 0);
+
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_reset)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "before");
+    sh_csv_write_row_end(&w);
+    sh_csv_buf_reset(&cb);
+
+    /* After reset, write new data */
+    w.col = 0; /* Reset writer column state too */
+    sh_csv_write_field_str(&w, "after");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "after\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+TEST(csv_write_null_value)
+{
+    ShCsvBuf cb;
+    sh_csv_buf_init(&cb);
+    ShCsvWriter w;
+    sh_csv_writer_init(&w, sh_csv_buf_write, &cb, 0);
+    sh_csv_write_field_str(&w, "a");
+    sh_csv_write_field_str(&w, NULL);
+    sh_csv_write_field_str(&w, "c");
+    sh_csv_write_row_end(&w);
+    size_t len;
+    char *out = sh_csv_buf_take(&cb, &len);
+    ASSERT(out != NULL);
+    ASSERT_STREQ(out, "a,,c\r\n");
+    free(out);
+    sh_csv_buf_free(&cb);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -720,6 +939,21 @@ int main(void)
     RUN_TEST(csv_trim_does_not_affect_quoted);
     RUN_TEST(csv_multiple_escaped_quotes);
 
-    printf("\nCSV Parser: %d passed, %d total\n", tests_passed, tests_run);
+    printf("\nCSV Writer Tests:\n");
+
+    RUN_TEST(csv_write_simple);
+    RUN_TEST(csv_write_quoting_comma);
+    RUN_TEST(csv_write_quoting_quote);
+    RUN_TEST(csv_write_quoting_newline);
+    RUN_TEST(csv_write_quoting_crlf);
+    RUN_TEST(csv_write_no_quoting);
+    RUN_TEST(csv_write_empty_field);
+    RUN_TEST(csv_write_semicolon_delimiter);
+    RUN_TEST(csv_write_multiple_rows);
+    RUN_TEST(csv_write_take);
+    RUN_TEST(csv_write_reset);
+    RUN_TEST(csv_write_null_value);
+
+    printf("\nCSV: %d passed, %d total\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;
 }

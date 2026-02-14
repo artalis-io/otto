@@ -1,6 +1,6 @@
 # Nexus — Document Ingestion Pipeline
 
-Five-stage pipeline for extracting tabular data from XLSX, PDF, and CSV into canonical JSON.
+Six-stage pipeline for extracting tabular data from XLSX, PDF, and CSV into canonical JSON, GeoJSON, or CSV.
 
 ## Architecture
 
@@ -12,12 +12,15 @@ Document Bytes → Stage A (extract) → nx_raw JSON
                                Stage B (transform) → nx_canonical JSON
                                        ↓
                                Stage X (validate) → validated JSON
+                                       ↓
+                               Stage D (emit) → GeoJSON / CSV / JSON
 ```
 
 **Stage A**: Format-specific parsers (XLSX, PDF, CSV) → `nx_raw` format
 **Stage M**: Continuation row merging for PDF tables (`nx_merge`)
 **Stage B**: Schema-driven transform (`nx_xform` + `nx_compute`) → `nx_canonical` format
 **Stage X**: Semantic validation (`nx_validate`) — geo_bounds, format, unique, outlier
+**Stage D**: Output emitters (`nx_emit`) — GeoJSON (RFC 7946), CSV (RFC 4180)
 
 ## Key Files
 
@@ -32,6 +35,7 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 | `include/nx_validate.h` | Semantic validation engine (Stage X) | 107 |
 | `include/nx_merge.h` | Continuation row merging API | 66 |
 | `include/nx_discover.h` | Auto schema discovery API | 58 |
+| `include/nx_emit.h` | Output emitter API (GeoJSON, CSV) | 50 |
 | `include/nx_slug.h` | Slugification for row IDs | 30 |
 | `src/nx_xlsx.c` | XLSX implementation | 609 |
 | `src/nx_pdf.c` | PDF clustering implementation | 789 |
@@ -41,6 +45,7 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 | `src/nx_validate.c` | Validation rules: geo_bounds, format, unique, outlier | 750 |
 | `src/nx_merge.c` | Continuation row merging | 368 |
 | `src/nx_discover.c` | Heuristic schema discovery | 720 |
+| `src/nx_emit.c` | Output emitters (GeoJSON, CSV) | 256 |
 | `src/nx_slug.c` | Slug utility | 51 |
 | `src/nx_ingest.c` | Pipeline orchestrator | 137 |
 
@@ -53,7 +58,7 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 ## Build
 
 ```bash
-make all      # Build library + tests (137 tests)
+make all      # Build library + tests (156 tests)
 make test     # Run all tests
 make tools    # Build CLI tools
 make debug    # Build with ASan/UBSan + -Werror
@@ -76,7 +81,8 @@ Hardening: `-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common`.
 - test_validate: 9 tests (geo_bounds, format, unique, outlier)
 - test_discover: 26 tests (18 unit + 2 continuation + 6 golden)
 - test_merge: 20 tests (4 error + 5 basic + 1 strip + 6 edge + 4 golden PDF02)
-- Total: 137 tests
+- test_emit: 19 tests (9 GeoJSON + 10 CSV)
+- Total: 156 tests
 
 ## Schemas
 
@@ -178,6 +184,10 @@ in-process using `sh_pdf2struc` for PDF text extraction (no Python dependency).
 ./nx_pipeline input.pdf --schema schemas/gls-hu-automata-v1.json
 ./nx_pipeline input.csv --schema schemas/config.json
 ./nx_pipeline input.pdf --raw   # Raw JSON only, no schema
+
+# Emit downstream formats (Stage D)
+./nx_pipeline input.xlsx --schema s.json --emit geojson
+./nx_pipeline input.xlsx --schema s.json --emit csv
 
 # CSV options
 ./nx_pipeline input.csv --delimiter ";" --no-header

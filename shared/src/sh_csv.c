@@ -412,3 +412,157 @@ int sh_csv_column_number(const ShCsvReader *r)
     if (!r) return -1;
     return r->col;
 }
+
+/* ============================================================================
+ * CSV Writer (RFC 4180) — Streaming via callback
+ * ============================================================================ */
+
+#include <stdlib.h>
+
+static int csv_emit(ShCsvWriter *w, const char *data, size_t len)
+{
+    if (w->error) return -1;
+    int rc = w->write_fn(w->ctx, data, len);
+    if (rc != 0) w->error = 1;
+    return rc;
+}
+
+void sh_csv_writer_init(ShCsvWriter *w, ShCsvWriteFn write_fn, void *ctx,
+                        char delimiter)
+{
+    if (!w) return;
+    memset(w, 0, sizeof(*w));
+    w->write_fn = write_fn;
+    w->ctx = ctx;
+    w->delimiter = delimiter ? delimiter : ',';
+}
+
+int sh_csv_writer_error(const ShCsvWriter *w)
+{
+    return w ? w->error : 1;
+}
+
+int sh_csv_write_field(ShCsvWriter *w, const char *value, size_t len)
+{
+    if (!w || !w->write_fn) return -1;
+
+    /* Prepend delimiter if not first column */
+    if (w->col > 0) {
+        if (csv_emit(w, &w->delimiter, 1) != 0) return -1;
+    }
+
+    if (!value) { value = ""; len = 0; }
+
+    /* Check if quoting needed */
+    int needs_quote = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = value[i];
+        if (c == w->delimiter || c == '"' || c == '\r' || c == '\n') {
+            needs_quote = 1;
+            break;
+        }
+    }
+
+    if (!needs_quote) {
+        if (len > 0 && csv_emit(w, value, len) != 0) return -1;
+    } else {
+        if (csv_emit(w, "\"", 1) != 0) return -1;
+        /* Write value with quote doubling */
+        size_t start = 0;
+        for (size_t i = 0; i < len; i++) {
+            if (value[i] == '"') {
+                /* Flush segment before quote */
+                if (i > start) {
+                    if (csv_emit(w, value + start, i - start) != 0) return -1;
+                }
+                if (csv_emit(w, "\"\"", 2) != 0) return -1;
+                start = i + 1;
+            }
+        }
+        /* Flush remaining */
+        if (len > start) {
+            if (csv_emit(w, value + start, len - start) != 0) return -1;
+        }
+        if (csv_emit(w, "\"", 1) != 0) return -1;
+    }
+
+    w->col++;
+    return 0;
+}
+
+int sh_csv_write_field_str(ShCsvWriter *w, const char *value)
+{
+    return sh_csv_write_field(w, value, value ? strlen(value) : 0);
+}
+
+int sh_csv_write_row_end(ShCsvWriter *w)
+{
+    if (!w || !w->write_fn) return -1;
+    if (csv_emit(w, "\r\n", 2) != 0) return -1;
+    w->col = 0;
+    return 0;
+}
+
+/* ============================================================================
+ * CSV Buffer Helper (like ShJsonBuf)
+ * ============================================================================ */
+
+void sh_csv_buf_init(ShCsvBuf *cb)
+{
+    if (!cb) return;
+    cb->buf = NULL;
+    cb->len = 0;
+    cb->cap = 0;
+}
+
+void sh_csv_buf_free(ShCsvBuf *cb)
+{
+    if (!cb) return;
+    free(cb->buf);
+    cb->buf = NULL;
+    cb->len = 0;
+    cb->cap = 0;
+}
+
+void sh_csv_buf_reset(ShCsvBuf *cb)
+{
+    if (!cb) return;
+    cb->len = 0;
+    if (cb->buf) cb->buf[0] = '\0';
+}
+
+int sh_csv_buf_write(void *ctx, const char *data, size_t len)
+{
+    ShCsvBuf *cb = (ShCsvBuf *)ctx;
+    if (!cb || !data) return -1;
+    if (len == 0) return 0;
+
+    while (cb->len + len + 1 > cb->cap) {
+        size_t new_cap = cb->cap * 2;
+        if (new_cap < 1024) new_cap = 1024;
+        if (new_cap < cb->len + len + 1) new_cap = cb->len + len + 1;
+        char *nb = (char *)realloc(cb->buf, new_cap);
+        if (!nb) return -1;
+        cb->buf = nb;
+        cb->cap = new_cap;
+    }
+
+    memcpy(cb->buf + cb->len, data, len);
+    cb->len += len;
+    cb->buf[cb->len] = '\0';
+    return 0;
+}
+
+char *sh_csv_buf_take(ShCsvBuf *cb, size_t *out_len)
+{
+    if (!cb || !cb->buf || cb->len == 0) {
+        if (out_len) *out_len = 0;
+        return NULL;
+    }
+    char *result = cb->buf;
+    if (out_len) *out_len = cb->len;
+    cb->buf = NULL;
+    cb->len = 0;
+    cb->cap = 0;
+    return result;
+}

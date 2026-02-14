@@ -4,7 +4,7 @@
 
 ## Architecture
 
-Five-stage pipeline (A/M/B/X implemented, J/D planned):
+Six-stage pipeline (A/M/B/X/D implemented, J planned):
 
 ```
                          ┌──────────────┐
@@ -62,6 +62,18 @@ Five-stage pipeline (A/M/B/X implemented, J/D planned):
                ┌──────────────┐
                │ nx_canonical │
                │    JSON      │
+               └──────┬───────┘
+                      │
+               ┌──────────────┐
+               │ STAGE D:     │
+               │ nx_emit      │
+               │ --emit fmt   │
+               │ geojson, csv │
+               └──────┬───────┘
+                      ▼
+               ┌──────────────┐
+               │  GeoJSON /   │
+               │  CSV / JSON  │
                └──────────────┘
 ```
 
@@ -102,6 +114,22 @@ PDF tables often split long cell text across multiple physical rows. `nx_merge` 
 | `outlier` | IQR-based outlier detection | Warn |
 
 Rules have configurable severity (`"error"` = remove record, `"warning"` = flag only).
+
+### Stage D: Emit
+
+`nx_emit` converts canonical JSON to downstream formats:
+
+| Format | Output | Use Case |
+|--------|--------|----------|
+| GeoJSON | RFC 7946 FeatureCollection with Point geometry | Carta map visualization |
+| CSV | RFC 4180 with header row | Operations team export |
+
+Features:
+- **GeoJSON**: Auto-detects lat/lon fields from schema's `geo_bounds` validation rule. Coordinates in `[lon, lat]` order per RFC 7946. Non-geo fields become Feature properties.
+- **CSV**: Discovers field names from first record. RFC 4180 quoting (double-quote fields containing commas, quotes, or newlines).
+- **Callback-based streaming**: Both CSV (`ShCsvWriter`) and GeoJSON (`ShJsonWriter`) use callback-based writers, decoupled from output target.
+
+CLI: `./nx_pipeline input.xlsx --schema s.json --emit geojson|csv`
 
 ### Schema Discovery
 
@@ -186,6 +214,7 @@ Processing order: `row_merge` → `multi_transforms` → virtual columns → `co
 | `include/nx_validate.h` | Validation engine API | 107 |
 | `include/nx_merge.h` | Continuation row merging API | 66 |
 | `include/nx_discover.h` | Schema discovery API | 58 |
+| `include/nx_emit.h` | Output emitter API (GeoJSON, CSV) | 50 |
 | `include/nx_slug.h` | Slugification utility | 30 |
 | `src/nx_ingest.c` | Pipeline orchestrator | 137 |
 | `src/nx_xlsx.c` | XLSX implementation | 609 |
@@ -196,13 +225,14 @@ Processing order: `row_merge` → `multi_transforms` → virtual columns → `co
 | `src/nx_validate.c` | Validation engine | 750 |
 | `src/nx_merge.c` | Continuation row merging | 368 |
 | `src/nx_discover.c` | Schema discovery | 720 |
+| `src/nx_emit.c` | Output emitters | 256 |
 | `src/nx_slug.c` | Slug utility | 51 |
-| `tools/nx_pipeline.c` | CLI pipeline (batch + single) | 745 |
+| `tools/nx_pipeline.c` | CLI pipeline (batch + single) | 932 |
 | `tools/nx_run.c` | Stage A CLI | 131 |
 | `tools/nx_pdf_run.c` | PDF clustering CLI | 99 |
 | `tools/nx_xform_run.c` | Transform CLI | 81 |
-| `wasm/src/nx_wasm.c` | WASM wrapper | 413 |
-| **Total** | | **~7500** |
+| `wasm/src/nx_wasm.c` | WASM wrapper | 490 |
+| **Total** | | **~8200** |
 
 ## Error Handling
 
@@ -216,6 +246,7 @@ Each stage has typed error codes with `*_status_str()` for human-readable messag
 | Stage M | `nx_merge` | `ERR_{NULL,JSON,SCHEMA,NO_TABLE,ARENA}` |
 | Stage B | `nx_xform` | `ERR_{NULL,SCHEMA,RAW,NO_TABLE,ARENA}` |
 | Stage X | `nx_validate` | `ERR_{NULL,JSON,ARENA}` |
+| Stage D | `nx_emit` | `ERR_{NULL,JSON,NO_RECORDS,NO_LATLON,ALLOC}` |
 | Discovery | `nx_discover` | `ERR_{NULL,JSON,NO_TABLE,NO_ROWS,ARENA}` |
 | Orchestrator | `nx_ingest` | `ERR_{NULL,FORMAT,STAGE_A,STAGE_B,ARENA}` |
 
@@ -236,6 +267,10 @@ Build with `make tools`:
 ./nx_pipeline input.pdf --raw
 ./nx_pipeline input.csv --delimiter ";" --no-header
 
+# Emit downstream formats (Stage D)
+./nx_pipeline input.xlsx --schema s.json --emit geojson
+./nx_pipeline input.xlsx --schema s.json --emit csv
+
 # Batch mode
 ./nx_pipeline --config pipeline.json
 
@@ -252,7 +287,8 @@ Build with `make tools`:
 | `test_validate` | 9 | geo_bounds, format, unique, outlier |
 | `test_discover` | 26 | 18 unit + 2 continuation + 6 golden |
 | `test_merge` | 20 | 4 error + 5 basic + 1 strip + 6 edge + 4 golden (PDF02) |
-| **Total** | **137** | |
+| `test_emit` | 19 | 9 GeoJSON + 10 CSV |
+| **Total** | **156** | |
 
 ## Schemas
 
@@ -268,7 +304,7 @@ Six schemas in `schemas/` for GLS Hungary:
 
 | Library | Purpose |
 |---------|---------|
-| `shared/libshared.a` | sh_arena, sh_json, sh_xml, sh_csv, sh_hash_sha256, sh_fs, sh_eov |
+| `shared/libshared.a` | sh_arena, sh_json, sh_xml, sh_csv, sh_geojson, sh_hash_sha256, sh_fs, sh_eov |
 | `shared/libsh_pdf2struc.a` | Pure C PDF text extraction (nx_pipeline only) |
 | `vendor/miniz/` | ZIP reading for XLSX |
 
@@ -276,7 +312,7 @@ Six schemas in `schemas/` for GLS Hungary:
 
 ```bash
 make all      # Library + tests
-make test     # Run 137 tests
+make test     # Run 156 tests
 make tools    # CLI tools (nx_pipeline, nx_run, nx_pdf_run, nx_xform_run)
 make debug    # Build with ASan/UBSan + -Werror
 make clean    # Remove artifacts
@@ -295,16 +331,13 @@ Stage X (validation) is now wired into `nx_ingest()`, `nx_pipeline.c` (single-fi
 
 Changes: `nx_ingest.h` (+1 error code), `nx_ingest.c` (+25 lines), `nx_pipeline.c` (+70 lines merge+validate+summary).
 
-### P1: Downstream Output (Stage J + Stage D)
+### P1: Downstream Output (Stage D) — DONE
 
-**Status: Planned, not implemented.** The pipeline produces canonical JSON that no other OTTO module can consume directly. There is no adapter to Surge `SGRequest`, no GeoJSON emitter, no database upsert.
+Stage D emitters implemented: GeoJSON (RFC 7946 FeatureCollection) and CSV (RFC 4180). Shared library gains `sh_geojson.h/c` (GeoJSON encoder) and CSV writer extension in `sh_csv.h/c`. Both use callback-based streaming writers decoupled from output target.
 
-**Impact:** The demo stops at "here's clean JSON." For the Girteka/Paketa pitch ("ingest PDFs, route trucks"), steps 2-4 are entirely manual.
+Changes: `shared/include/sh_csv.h` (+75 lines writer API), `shared/src/sh_csv.c` (+154 lines), `shared/include/sh_geojson.h` (new, 50 lines), `shared/src/sh_geojson.c` (new, 120 lines), `nexus/include/nx_emit.h` (new, 50 lines), `nexus/src/nx_emit.c` (new, 256 lines), `nexus/tools/nx_pipeline.c` (+82 lines `--emit` flag), `nexus/wasm/src/nx_wasm.c` (+77 lines WASM exports). Tests: 12 CSV writer + 12 GeoJSON + 19 nexus emit = 43 new tests.
 
-**Estimated scope:**
-- Stage J (join/union/filter): ~500 lines
-- Stage D per target: ~100-200 lines each
-- Priority targets: GeoJSON (Carta visualization), Surge (VRP), CSV export
+**Remaining for P1:** Stage J (join/union/filter across multiple files) and Surge adapter (deferred until Surge is implemented).
 
 ### P2: Partial Results and Structured Error Reporting
 
