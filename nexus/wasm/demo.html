@@ -404,6 +404,94 @@ h1 {
 .audit-card.accepted .card-value { color: var(--success); }
 .audit-card.rejected .card-value { color: var(--error); }
 .audit-card.warnings .card-value { color: var(--warning); }
+.audit-card.info .card-value { color: var(--accent); }
+
+/* ============================================================================
+ * Stage Issue Badges
+ * ============================================================================ */
+
+.stage-badges {
+    display: flex;
+    gap: 8px;
+    margin-left: 12px;
+}
+
+.stage-badge {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+}
+
+.stage-badge.error {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--error);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.stage-badge.warning {
+    background: rgba(234, 179, 8, 0.15);
+    color: var(--warning);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+.stage-badge.info-badge {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+/* ============================================================================
+ * Issues Table
+ * ============================================================================ */
+
+.issues-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+.issues-table th {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.issues-table td {
+    padding: 6px 12px;
+    border-bottom: 1px solid rgba(42, 42, 42, 0.5);
+    color: var(--text);
+    font-family: inherit;
+}
+
+.issues-table tr:last-child td {
+    border-bottom: none;
+}
+
+.issues-table .sev-error { color: var(--error); }
+.issues-table .sev-warning { color: var(--warning); }
+.issues-table .sev-info { color: var(--accent); }
+
+.issues-table .stage-tag {
+    display: inline-block;
+    width: 20px;
+    text-align: center;
+    font-weight: 700;
+    color: var(--success);
+}
+
+.issues-empty {
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 12px 0;
+    opacity: 0.7;
+}
 
 /* ============================================================================
  * Error Display
@@ -571,6 +659,15 @@ h1 {
                 <span class="stage-label"><span class="stage-name">AUDIT SUMMARY</span></span>
             </div>
             <div id="audit-cards" class="audit-cards"></div>
+        </div>
+
+        <!-- Issues Panel -->
+        <div id="issues-panel" class="stage">
+            <div class="stage-header">
+                <span class="stage-label"><span class="stage-name">PIPELINE ISSUES</span></span>
+                <span id="issues-count" class="stage-time"></span>
+            </div>
+            <div id="issues-content"></div>
         </div>
 
         <!-- Footer -->
@@ -776,6 +873,16 @@ function callDiscover(rawJSON) {
     return Module.UTF8ToString(Module._nx_wasm_discover_result());
 }
 
+function callIssuesClear() {
+    Module._nx_wasm_issues_clear();
+}
+
+function callIssuesJSON() {
+    const status = Module._nx_wasm_issues_json();
+    if (status !== 0) return '{"count":0,"errors":0,"warnings":0,"info":0,"issues":[]}';
+    return Module.UTF8ToString(Module._nx_wasm_issues_result());
+}
+
 /* ============================================================================
  * JSON Syntax Highlighting
  * ============================================================================ */
@@ -976,7 +1083,7 @@ function renderContentImmediate(block, html) {
  * ============================================================================ */
 
 function hideAllStages() {
-    const stages = ['stage-a', 'schema-preview', 'stage-b', 'stage-x', 'audit-summary'];
+    const stages = ['stage-a', 'schema-preview', 'stage-b', 'stage-x', 'audit-summary', 'issues-panel'];
     stages.forEach(function(id) {
         const el = document.getElementById(id);
         el.classList.remove('visible');
@@ -992,6 +1099,9 @@ function hideAllStages() {
         block.classList.remove('typing', 'typed');
     });
     document.getElementById('audit-cards').innerHTML = '';
+    document.getElementById('issues-content').innerHTML = '';
+    /* Clear stage badges */
+    document.querySelectorAll('.stage-badges').forEach(function(el) { el.remove(); });
 }
 
 function showStage(id) {
@@ -1029,6 +1139,9 @@ async function runPipeline() {
     const loadingText = document.getElementById('loading-text');
 
     try {
+        /* Clear accumulated issues from previous run */
+        callIssuesClear();
+
         /* ── Stage A: Extract ────────────────────────────────── */
         loading.classList.add('visible');
         loadingText.textContent = 'Stage A: Extracting...';
@@ -1132,6 +1245,11 @@ async function runPipeline() {
         showAuditSummary(finalJSON);
         showStage('audit-summary');
 
+        /* ── Issues Panel ───────────────────────────────────── */
+        const issuesData = JSON.parse(callIssuesJSON());
+        showIssuesPanel(issuesData);
+        addStageBadges(issuesData.issues || []);
+
     } catch (err) {
         loading.classList.remove('visible');
         showError('Pipeline error: ' + err.message);
@@ -1202,6 +1320,107 @@ function showAuditSummary(jsonStr) {
     } catch (e) {
         /* Ignore parse errors */
     }
+}
+
+/* ============================================================================
+ * Issues Panel
+ * ============================================================================ */
+
+function showIssuesPanel(data) {
+    const count = data.count || 0;
+    const countEl = document.getElementById('issues-count');
+    const contentEl = document.getElementById('issues-content');
+
+    if (count === 0) {
+        countEl.textContent = '';
+        contentEl.innerHTML = '<div class="issues-empty">No issues detected across all pipeline stages.</div>';
+        showStage('issues-panel');
+        return;
+    }
+
+    countEl.textContent = count + ' issue' + (count === 1 ? '' : 's') +
+        ' (' + (data.errors || 0) + ' error' + (data.errors === 1 ? '' : 's') +
+        ', ' + (data.warnings || 0) + ' warning' + (data.warnings === 1 ? '' : 's') +
+        ', ' + (data.info || 0) + ' info)';
+
+    const issues = data.issues || [];
+
+    /* Sort: errors first, then warnings, then info */
+    const sevOrder = { error: 0, warning: 1, info: 2 };
+    issues.sort(function(a, b) {
+        return (sevOrder[a.severity] || 3) - (sevOrder[b.severity] || 3);
+    });
+
+    let html = '<table class="issues-table">';
+    html += '<thead><tr><th>Stage</th><th>Severity</th><th>Row</th><th>Field</th><th>Code</th><th>Message</th></tr></thead>';
+    html += '<tbody>';
+
+    for (const iss of issues) {
+        const sevClass = 'sev-' + (iss.severity || 'info');
+        html += '<tr>';
+        html += '<td><span class="stage-tag">' + escapeHTML(iss.stage || '?') + '</span></td>';
+        html += '<td class="' + sevClass + '">' + escapeHTML(iss.severity || '') + '</td>';
+        html += '<td>' + (iss.row >= 0 ? iss.row : '') + '</td>';
+        html += '<td>' + escapeHTML(iss.field || '') + '</td>';
+        html += '<td>' + escapeHTML(iss.code || '') + '</td>';
+        html += '<td>' + escapeHTML(iss.message || '') + '</td>';
+        html += '</tr>';
+    }
+
+    html += '</tbody></table>';
+    contentEl.innerHTML = html;
+    showStage('issues-panel');
+}
+
+function addStageBadges(issues) {
+    /* Count issues per stage */
+    const stageCounts = {};
+    for (const iss of issues) {
+        const stage = iss.stage || '?';
+        if (!stageCounts[stage]) stageCounts[stage] = { error: 0, warning: 0, info: 0 };
+        const sev = iss.severity || 'info';
+        if (stageCounts[stage][sev] !== undefined) stageCounts[stage][sev]++;
+    }
+
+    /* Map stage letters to DOM element IDs */
+    const stageMap = { A: 'stage-a', B: 'stage-b', X: 'stage-x' };
+
+    for (const [stage, counts] of Object.entries(stageCounts)) {
+        const elId = stageMap[stage];
+        if (!elId) continue;
+
+        const header = document.querySelector('#' + elId + ' .stage-header');
+        if (!header) continue;
+
+        const badgesEl = document.createElement('span');
+        badgesEl.className = 'stage-badges';
+
+        if (counts.error > 0) {
+            badgesEl.innerHTML += '<span class="stage-badge error">' +
+                counts.error + ' error' + (counts.error === 1 ? '' : 's') + '</span>';
+        }
+        if (counts.warning > 0) {
+            badgesEl.innerHTML += '<span class="stage-badge warning">' +
+                counts.warning + ' warning' + (counts.warning === 1 ? '' : 's') + '</span>';
+        }
+        if (counts.info > 0) {
+            badgesEl.innerHTML += '<span class="stage-badge info-badge">' +
+                counts.info + ' info</span>';
+        }
+
+        /* Insert before the time element */
+        const timeEl = header.querySelector('.stage-time');
+        if (timeEl) {
+            header.insertBefore(badgesEl, timeEl);
+        } else {
+            header.appendChild(badgesEl);
+        }
+    }
+}
+
+function escapeHTML(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;');
 }
 </script>
 </body>
