@@ -772,8 +772,12 @@ static void tableau_init_weights(SimplexTableau *tab) {
     tab->rc_all_valid = 0;
 }
 
-/* Internal: create tableau with explicit two-phase control */
-static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase) {
+/* Internal: create tableau with explicit two-phase control.
+ * dual_mode: if set, creates auxiliaries without artificials:
+ *   <= : slack (+1, cost 0, [0,inf))
+ *   >= : surplus (-1, cost 0, [0,inf))  — no artificial
+ *   =  : fixed slack (+1, cost 0, [0,0]) — dual drives to zero */
+static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, int dual_mode) {
     if (!model) return NULL;
 
     /* Finalize model if not done */
@@ -823,7 +827,10 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase) {
         }
 
         /* Count auxiliary variables needed */
-        if (norm_sense[i] == 'L') {
+        if (dual_mode) {
+            /* Dual mode: one auxiliary per constraint, no artificials */
+            num_aux_vars += 1;
+        } else if (norm_sense[i] == 'L') {
             num_aux_vars += 1;  /* slack only */
         } else if (norm_sense[i] == 'G') {
             num_aux_vars += 2;  /* surplus + artificial */
@@ -847,7 +854,7 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase) {
      *
      * IMPORTANT: For Benders decomposition, force_two_phase=1 ensures clean
      * duals without BigM contamination. */
-    int use_two_phase = force_two_phase || (num_equalities > (4 * model->num_cons) / 5);
+    int use_two_phase = !dual_mode && (force_two_phase || (num_equalities > (4 * model->num_cons) / 5));
     tab->use_two_phase = use_two_phase;
 
     /* Allocate all tableau arrays */
@@ -902,32 +909,53 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase) {
     }
 
     /* Compute initial Ax values (x at lower bounds) for each row to decide
-     * whether surplus or artificial should be basic for >= constraints */
-    double *ax_initial = (double*)calloc(model->num_cons, sizeof(double));
-    if (!ax_initial) {
-        free(norm_sense);
-        free(norm_sign);
-        triplets_free(trips);
-        tableau_free(tab);
-        return NULL;
-    }
-    for (int j = 0; j < model->num_vars; j++) {
-        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
-            int row = model->A->rowidx[p];
-            double val = model->A->values[p] * norm_sign[row];  /* Apply row normalization */
-            ax_initial[row] += val * model->lb[j];  /* x starts at lower bound */
+     * whether surplus or artificial should be basic for >= constraints.
+     * Not needed in dual_mode (no artificials to choose between). */
+    double *ax_initial = NULL;
+    if (!dual_mode) {
+        ax_initial = (double*)calloc(model->num_cons, sizeof(double));
+        if (!ax_initial) {
+            free(norm_sense);
+            free(norm_sign);
+            triplets_free(trips);
+            tableau_free(tab);
+            return NULL;
+        }
+        for (int j = 0; j < model->num_vars; j++) {
+            for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+                int row = model->A->rowidx[p];
+                double val = model->A->values[p] * norm_sign[row];
+                ax_initial[row] += val * model->lb[j];
+            }
         }
     }
 
     /* Add auxiliary variables and record their mapping to constraints.
      * For two-phase simplex, artificial variable costs are 1.0 (Phase 1 objective).
-     * For Big-M method, artificial variable costs are RALPH_BIG_M. */
+     * For Big-M method, artificial variable costs are RALPH_BIG_M.
+     * For dual_mode: no artificials — one aux per constraint with zero cost. */
     double artificial_cost = use_two_phase ? 1.0 : RALPH_BIG_M;
     int aux_idx = model->num_vars;
     int aux_map_idx = 0;  /* Index into aux_row/aux_coef arrays */
     int art_idx = 0;  /* Index into artificial_vars array */
     for (int i = 0; i < model->num_cons; i++) {
-        if (norm_sense[i] == 'L') {
+        if (dual_mode) {
+            /* Dual mode: one auxiliary per constraint, no artificials.
+             * <= : slack (+1, [0,inf))
+             * >= : surplus (-1, [0,inf))
+             * =  : fixed slack (+1, [0,0]) — dual simplex drives to zero */
+            double coef = (norm_sense[i] == 'G') ? -1.0 : 1.0;
+            triplets_add(trips, i, aux_idx, coef);
+            tab->c_ext[aux_idx] = 0.0;
+            tab->lb_ext[aux_idx] = 0.0;
+            tab->ub_ext[aux_idx] = (norm_sense[i] == 'E') ? 0.0 : RALPH_INFINITY;
+            basic_var_for_row[i] = aux_idx;
+
+            tab->aux_row[aux_map_idx] = i;
+            tab->aux_coef[aux_map_idx] = coef;
+            aux_map_idx++;
+            aux_idx++;
+        } else if (norm_sense[i] == 'L') {
             /* <= : add slack with coef +1, slack is basic */
             triplets_add(trips, i, aux_idx, 1.0);
             tab->c_ext[aux_idx] = 0.0;
@@ -1122,7 +1150,12 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase) {
 
 /* Public wrapper: create tableau with automatic two-phase decision */
 SimplexTableau* tableau_create(LPModel *model) {
-    return tableau_create_ex(model, 0);
+    return tableau_create_ex(model, 0, 0);
+}
+
+/* Dual mode wrapper: no artificials, one auxiliary per constraint */
+SimplexTableau* tableau_create_dual(LPModel *model) {
+    return tableau_create_ex(model, 0, 1);
 }
 
 void tableau_free(SimplexTableau *tab) {
@@ -4135,14 +4168,14 @@ static int crash_triangular(SimplexTableau *tab, int verbose) {
         int bv = tab->basis[i];
         /* Only eligible if basic var is an auxiliary (slack/surplus/artificial) */
         if (bv >= n_structural) {
-            /* Check if this is a simple slack: +1 coefficient, zero cost.
+            /* Check if this is a simple slack or surplus: |coeff| == 1, zero cost.
              * Artificials have cost BIG_M (or 1.0 in two-phase Phase 1).
-             * Surplus have -1 coefficient. */
+             * Slacks have +1 coeff, surplus have -1 coeff — both displaceable. */
             int is_slack = 0;
             for (int p = A->colptr[bv]; p < A->colptr[bv + 1]; p++) {
                 if (A->rowidx[p] == i) {
-                    /* Slack: coef = +1, cost = 0 */
-                    if (fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL &&
+                    if ((fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL ||
+                         fabs(A->values[p] + 1.0) < RALPH_ZERO_TOL) &&
                         fabs(tab->c_ext[bv]) < RALPH_ZERO_TOL) {
                         is_slack = 1;
                     }
@@ -4320,7 +4353,7 @@ int simplex_solve(SimplexSolver *solver) {
 
     /* Create tableau (force two-phase if requested, e.g., for Benders subproblems) */
     if (solver->verbose) printf("[simplex_solve] Creating tableau...\n");
-    solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase);
+    solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase, 0);
     if (!solver->tableau) {
         solver->status = RALPH_STATUS_ERROR;
         return -1;
@@ -4447,14 +4480,48 @@ int simplex_solve(SimplexSolver *solver) {
         int drc = dual_simplex_solve_from_scratch_v2(solver);
 
         if (drc == 0) {
-            /* Success (OPTIMAL, INFEASIBLE, or OBJ_LIMIT) */
+            /* In auto mode: quick Ax=b sanity check before committing.
+             * Catches catastrophically wrong dual results (obj off by 1000x).
+             * Computes A_ext * x for ALL variables (structural + auxiliary)
+             * and checks against normalized RHS. */
+            if (solver->method == 2 && solver->status == RALPH_STATUS_OPTIMAL) {
+                SimplexTableau *dtab = solver->tableau;
+                int bad = 0;
+                for (int i = 0; i < dtab->m && !bad; i++) {
+                    double ax = 0.0;
+                    for (int j = 0; j < dtab->n; j++) {
+                        if (fabs(dtab->x[j]) < RALPH_ZERO_TOL) continue;
+                        for (int p = dtab->A_ext->colptr[j]; p < dtab->A_ext->colptr[j+1]; p++) {
+                            if (dtab->A_ext->rowidx[p] == i) {
+                                ax += dtab->A_ext->values[p] * dtab->x[j];
+                                break;
+                            }
+                        }
+                    }
+                    double rhs = dtab->rhs[i];
+                    if (fabs(ax - rhs) > 1e-4) bad = 1;
+                }
+                if (bad) {
+                    if (solver->verbose)
+                        printf("[simplex_solve] Dual solution failed sanity check, falling back to primal\n");
+                    tableau_free(solver->tableau);
+                    solver->tableau = NULL;
+                    drc = -1;
+                }
+            }
+        }
+        if (drc == 0) {
+            /* Commit to dual result */
             solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
 
             /* Unscale if needed */
             unscale_solution(solver);
             restore_model(solver);
 
-            if (solver->verify && solver->status == RALPH_STATUS_OPTIMAL)
+            /* Auto mode: always verify dual result to catch suboptimal solutions.
+             * Dual can terminate with feasible but non-optimal basis. */
+            if (solver->status == RALPH_STATUS_OPTIMAL &&
+                (solver->verify || solver->method == 2))
                 verify_solution(solver);
 
             return 0;
@@ -4466,7 +4533,7 @@ int simplex_solve(SimplexSolver *solver) {
                 printf("[simplex_solve] Dual simplex failed, falling back to primal\n");
 
             /* Recreate primal tableau */
-            solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase);
+            solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase, 0);
             if (!solver->tableau) {
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
