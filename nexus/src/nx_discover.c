@@ -553,9 +553,9 @@ NxDiscoverStatus nx_discover_schema(const char *raw_json, size_t raw_len,
     char targets[MAX_COLS][64];
     for (size_t c = 0; c < ncols; c++) {
         if ((int)c == lat_idx) {
-            strcpy(targets[c], "lat");
+            snprintf(targets[c], sizeof(targets[c]), "lat");
         } else if ((int)c == lon_idx) {
-            strcpy(targets[c], "lon");
+            snprintf(targets[c], sizeof(targets[c]), "lon");
         } else {
             slugify_header(cols[c].header, targets[c], sizeof(targets[c]));
         }
@@ -567,7 +567,7 @@ NxDiscoverStatus nx_discover_schema(const char *raw_json, size_t raw_len,
             if (strcmp(targets[c], targets[j]) == 0) {
                 char tmp[64];
                 snprintf(tmp, sizeof(tmp), "%s_%zu", targets[c], c);
-                strcpy(targets[c], tmp);
+                snprintf(targets[c], sizeof(targets[c]), "%s", tmp);
                 break;
             }
         }

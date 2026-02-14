@@ -22,8 +22,10 @@ static int nx_compute_eov_to_wgs84(const char **sources, int nsources,
     if (nsources < 2 || max_outputs < 2) return -1;
     if (!sources[0] || !sources[1]) return -1;
 
-    double eov_y = atof(sources[0]);
-    double eov_x = atof(sources[1]);
+    char *end_y, *end_x;
+    double eov_y = strtod(sources[0], &end_y);
+    double eov_x = strtod(sources[1], &end_x);
+    if (end_y == sources[0] || end_x == sources[1]) return -1;
     double lat, lon;
 
     if (sh_eov_to_wgs84(eov_y, eov_x, &lat, &lon) != 0) {
@@ -47,9 +49,11 @@ static int nx_compute_dms_to_dd(const char **sources, int nsources,
     if (nsources < 3 || max_outputs < 1) return -1;
     if (!sources[0] || !sources[1] || !sources[2]) return -1;
 
-    double degrees = atof(sources[0]);
-    double minutes = atof(sources[1]);
-    double seconds = atof(sources[2]);
+    char *end_d, *end_m, *end_s;
+    double degrees = strtod(sources[0], &end_d);
+    double minutes = strtod(sources[1], &end_m);
+    double seconds = strtod(sources[2], &end_s);
+    if (end_d == sources[0] || end_m == sources[1] || end_s == sources[2]) return -1;
 
     double dd = degrees + minutes / 60.0 + seconds / 3600.0;
     snprintf(outputs[0], 256, "%.6f", dd);

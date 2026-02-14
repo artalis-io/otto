@@ -501,7 +501,8 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
                         "Duplicate value for unique field(s)");
 
                 if (rule->severity == NX_SEVERITY_ERROR) {
-                    records_to_remove[remove_count++] = dup_idx;
+                    if (remove_count < (int)record_count)
+                        records_to_remove[remove_count++] = dup_idx;
                     error_count++;
                 } else {
                     warning_count++;
@@ -530,7 +531,8 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
                         rule->outlier_field, val, q1, q3, rule->outlier_factor);
 
                 if (rule->severity == NX_SEVERITY_ERROR) {
-                    records_to_remove[remove_count++] = out_idx;
+                    if (remove_count < (int)record_count)
+                        records_to_remove[remove_count++] = out_idx;
                     error_count++;
                 } else {
                     warning_count++;
@@ -559,7 +561,8 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
                     details[detail_count++] = detail_buf;
 
                     if (rule->severity == NX_SEVERITY_ERROR) {
-                        records_to_remove[remove_count++] = (int)i;
+                        if (remove_count < (int)record_count)
+                            records_to_remove[remove_count++] = (int)i;
                         error_count++;
                     } else {
                         warning_count++;
@@ -727,8 +730,8 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
         return NX_VALIDATE_ERR_ARENA;
     }
 
-    *out_json = jb.buf;
-    *out_len = jb.len;
+    *out_json = sh_json_buf_take(&jb);
+    *out_len = strlen(*out_json);
     return NX_VALIDATE_OK;
 }
 

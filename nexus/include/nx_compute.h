@@ -9,6 +9,10 @@
  * Each function takes N source columns (as strings) and produces M target values.
  */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * Compute function signature.
  *
@@ -28,5 +32,9 @@ typedef int (*NxComputeFunc)(const char **sources, int nsources,
  * @return Function pointer, or NULL if not found
  */
 NxComputeFunc nx_compute_find(const char *name);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* NX_COMPUTE_H */
