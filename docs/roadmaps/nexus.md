@@ -216,23 +216,24 @@ Processing order: `row_merge` → `multi_transforms` → virtual columns → `co
 | `include/nx_discover.h` | Schema discovery API | 58 |
 | `include/nx_emit.h` | Output emitter API (GeoJSON, CSV) | 50 |
 | `include/nx_slug.h` | Slugification utility | 30 |
-| `src/nx_ingest.c` | Pipeline orchestrator | 137 |
-| `src/nx_xlsx.c` | XLSX implementation | 609 |
-| `src/nx_pdf.c` | PDF clustering | 789 |
-| `src/nx_csv.c` | CSV parser | 342 |
-| `src/nx_xform.c` | Transform engine | 1251 |
+| `src/nx_ingest.c` | Pipeline orchestrator | 174 |
+| `src/nx_xlsx.c` | XLSX implementation | 631 |
+| `src/nx_pdf.c` | PDF clustering | 810 |
+| `src/nx_csv.c` | CSV parser | 343 |
+| `src/nx_xform.c` | Transform engine | 1247 |
 | `src/nx_compute.c` | Compute functions | 345 |
-| `src/nx_validate.c` | Validation engine | 750 |
-| `src/nx_merge.c` | Continuation row merging | 368 |
+| `src/nx_validate.c` | Validation engine | 766 |
+| `src/nx_merge.c` | Continuation row merging | 396 |
 | `src/nx_discover.c` | Schema discovery | 720 |
-| `src/nx_emit.c` | Output emitters | 256 |
+| `src/nx_emit.c` | Output emitters | 280 |
 | `src/nx_slug.c` | Slug utility | 51 |
-| `tools/nx_pipeline.c` | CLI pipeline (batch + single) | 932 |
+| `src/nx_issue.c` | Issue list (dynamic, no caps) | 170 |
+| `tools/nx_pipeline.c` | CLI pipeline (batch + single) | 1090 |
 | `tools/nx_run.c` | Stage A CLI | 131 |
 | `tools/nx_pdf_run.c` | PDF clustering CLI | 99 |
 | `tools/nx_xform_run.c` | Transform CLI | 81 |
-| `wasm/src/nx_wasm.c` | WASM wrapper | 490 |
-| **Total** | | **~8200** |
+| `wasm/src/nx_wasm.c` | WASM wrapper | 570 |
+| **Total** | | **~8800** |
 
 ## Error Handling
 
@@ -288,7 +289,8 @@ Build with `make tools`:
 | `test_discover` | 26 | 18 unit + 2 continuation + 6 golden |
 | `test_merge` | 20 | 4 error + 5 basic + 1 strip + 6 edge + 4 golden (PDF02) |
 | `test_emit` | 19 | 9 GeoJSON + 10 CSV |
-| **Total** | **156** | |
+| `test_issue` | 13 | init/free, add, dynamic growth, count, JSON output |
+| **Total** | **169** | |
 
 ## Schemas
 
@@ -312,7 +314,7 @@ Six schemas in `schemas/` for GLS Hungary:
 
 ```bash
 make all      # Library + tests
-make test     # Run 156 tests
+make test     # Run 169 tests
 make tools    # CLI tools (nx_pipeline, nx_run, nx_pdf_run, nx_xform_run)
 make debug    # Build with ASan/UBSan + -Werror
 make clean    # Remove artifacts
@@ -339,13 +341,11 @@ Changes: `shared/include/sh_csv.h` (+75 lines writer API), `shared/src/sh_csv.c`
 
 **Remaining for P1:** Stage J (join/union/filter across multiple files) and Surge adapter (deferred until Surge is implemented).
 
-### P2: Partial Results and Structured Error Reporting
+### P2: Structured Error Reporting — DONE
 
-**Status: All-or-nothing.** One bad row in Stage A kills the entire file. Rejections capped at `MAX_REJECTIONS = 1024` in nx_xform.c (silently dropped after that). Batch mode reports only a count, not per-file structured errors.
+`NxIssueList` — heap-allocated, realloc-doubling, growable issue tracker threaded through all six stages as an optional parameter (NULL = same behavior as before). No caps on issue count. Each issue carries stage, severity, row, field, code, and message.
 
-**Impact:** 50K-row XLSX with 1 corrupt cell = zero output. Operations team cannot use the 49,999 good rows.
-
-**Fix:** Per-sheet error tracking in nx_xlsx.c, dynamic rejection accumulator, batch result manifest (JSON). ~500 lines.
+Changes: `nx_issue.h` (new, 70 lines), `nx_issue.c` (new, 170 lines), all stage headers/implementations gain `NxIssueList *issues` parameter, `nx_xform.c` replaces fixed `Rejection[1024]` with dynamic list, `nx_validate.c` replaces fixed `NxValidationDetail[1024]` with dynamic list, `nx_pipeline.c` gains per-stage summary and batch manifest.json, WASM wrapper gains 4 new exports (`issues_clear`, `issues_json`, `issues_result`, `issues_result_len`), demo.html gains issues panel with stage badges. 13 new tests in `test_issue`.
 
 ### P3: Change Detection Between Runs
 
@@ -353,15 +353,16 @@ Changes: `shared/include/sh_csv.h` (+75 lines writer API), `shared/src/sh_csv.c`
 
 **Impact:** Cannot answer "what changed this month?" for monthly facility re-ingestion. Database upsert target (Stage D) requires full replace instead of efficient delta.
 
-**Estimated scope:** ~300 lines — hashmap of `row_id` → record for old vs. new, emit `{added, removed, modified, unchanged_count}`.
+**Estimated scope:** ~300 lines — hashmap of `row_id` → record hash for old vs. new, emit `{added, removed, modified, unchanged_count}`.
 
-### P4: Configurable Memory Limits
+### P4: Dynamic Growth (No Hard Caps) — DONE
 
-**Status: Hardcoded ceilings.** PDF max 8192 rows, arenas 32-64 MB, `MAX_REJECTIONS = 1024`.
+Removed all fixed-size caps that caused silent data loss:
 
-**Impact:** Silent data loss on large documents. A 40-page PDF manifest exceeds the PDF row limit.
+- **PDF**: `MAX_TEXT_RUNS` (65536) and `MAX_ROWS` (8192) removed. `parse_text_runs` restructured to two-pass (count from parsed JSON tree, then exact arena alloc). `cluster_rows` array sized to `nruns` (natural upper bound).
+- **XLSX**: `MAX_SHARED_STRINGS` (65536) removed. SharedStrings pointer array switched from arena to heap with realloc-doubling. Individual strings still arena-allocated.
 
-**Fix (interim):** Make limits configurable via CLI/env, raise defaults, add explicit error messages when limits are hit. ~100 lines. Full streaming architecture is a separate, larger effort.
+Changes: `nx_pdf.c` (~30 lines changed), `nx_xlsx.c` (~20 lines changed). All 169 tests pass.
 
 ---
 
@@ -369,4 +370,3 @@ Changes: `shared/include/sh_csv.h` (+75 lines writer API), `shared/src/sh_csv.c`
 
 - **Nexus Gateway**: TMS/ELD integration REST API (see `docs/roadmaps/nexus-gateway.md`)
 - **Streaming Stage A**: Parse and emit rows incrementally for large files
-- **WASM demo enhancements**: Wire Stage X into the browser demo pipeline
