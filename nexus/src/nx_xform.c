@@ -982,6 +982,11 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
         return NX_XFORM_ERR_NULL;
     if (!arena) return NX_XFORM_ERR_ARENA;
 
+    /* Reject absurdly large schemas (DoS protection) */
+#define NX_MAX_SCHEMA_SIZE (1024 * 1024)  /* 1MB */
+    if (schema_len > NX_MAX_SCHEMA_SIZE)
+        return NX_XFORM_ERR_SCHEMA;
+
     *out_json = NULL;
     *out_len = 0;
 
@@ -1183,12 +1188,16 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
                 sh_json_write_kv_string(&rw, cm->target, val);
                 break;
             case XFORM_TYPE_INT: {
-                int64_t ival = (int64_t)strtol(val, NULL, 10);
+                char *endp;
+                int64_t ival = (int64_t)strtol(val, &endp, 10);
+                if (endp == val) ival = 0; /* parse failure → 0 */
                 sh_json_write_kv_int(&rw, cm->target, ival);
                 break;
             }
             case XFORM_TYPE_DOUBLE: {
-                double dval = strtod(val, NULL);
+                char *endp;
+                double dval = strtod(val, &endp);
+                if (endp == val) dval = 0.0; /* parse failure → 0.0 */
                 sh_json_write_kv_double_fmt(&rw, cm->target, dval, cm->precision);
                 break;
             }

@@ -9,6 +9,7 @@
 #include "nx_issue.h"
 #include "sh_json.h"
 #include "sh_arena.h"
+#include "sh_hash.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -269,6 +270,23 @@ static int validate_format(const NxValidationRule *rule, ShJsonValue *record,
     return 1;
 }
 
+static uint64_t unique_hash_record(const NxValidationRule *rule, ShJsonValue *rec)
+{
+    uint64_t h = SH_FNV1A_64_OFFSET;
+    for (int i = 0; i < rule->unique_field_count; i++) {
+        ShJsonValue *v = sh_json_get(rec, rule->unique_fields[i]);
+        const char *s = v ? sh_json_as_string(v, "") : "";
+        for (const char *p = s; *p; p++) {
+            h ^= (uint8_t)*p;
+            h *= SH_FNV1A_64_PRIME;
+        }
+        /* Field separator to avoid "ab"+"c" == "a"+"bc" */
+        h ^= 0xFF;
+        h *= SH_FNV1A_64_PRIME;
+    }
+    return h;
+}
+
 /* Check if two records match on unique fields */
 static int records_match_unique_fields(const NxValidationRule *rule,
                                        ShJsonValue *rec1, ShJsonValue *rec2) {
@@ -279,7 +297,6 @@ static int records_match_unique_fields(const NxValidationRule *rule,
 
         if (!v1 || !v2) return 0;
 
-        /* Compare as strings */
         const char *s1 = sh_json_as_string(v1, "");
         const char *s2 = sh_json_as_string(v2, "");
 
@@ -289,7 +306,7 @@ static int records_match_unique_fields(const NxValidationRule *rule,
     return 1; /* All fields match */
 }
 
-/* Validate unique rule - returns array of duplicate indices */
+/* Validate unique rule - O(n) hash-based dedup. Returns array of duplicate indices. */
 static int *validate_unique(const NxValidationRule *rule, ShJsonValue *records_array,
                            SHArena *arena, int *dup_count) {
     size_t record_count = sh_json_array_len(records_array);
@@ -304,23 +321,57 @@ static int *validate_unique(const NxValidationRule *rule, ShJsonValue *records_a
         return NULL;
     }
 
+    /* Open-addressing hash set: slot stores record index + 1 (0 = empty) */
+    size_t cap = record_count < 16 ? 32 : record_count * 2;
+    size_t *slots = sh_arena_calloc(arena, cap, sizeof(size_t));
+    if (!slots) {
+        /* Fallback to O(n²) if arena exhausted */
+        int dup_idx = 0;
+        for (size_t i = 0; i < record_count; i++) {
+            ShJsonValue *rec_i = sh_json_array_get(records_array, i);
+            if (!rec_i) continue;
+            for (size_t j = 0; j < i; j++) {
+                ShJsonValue *rec_j = sh_json_array_get(records_array, j);
+                if (!rec_j) continue;
+                if (records_match_unique_fields(rule, rec_i, rec_j)) {
+                    duplicates[dup_idx++] = (int)i;
+                    break;
+                }
+            }
+        }
+        *dup_count = dup_idx;
+        return duplicates;
+    }
+
     int dup_idx = 0;
 
-    /* O(n²) uniqueness check - first occurrence kept, duplicates marked */
     for (size_t i = 0; i < record_count; i++) {
         ShJsonValue *rec_i = sh_json_array_get(records_array, i);
         if (!rec_i) continue;
 
-        /* Check if this record is a duplicate of any earlier record */
-        for (size_t j = 0; j < i; j++) {
-            ShJsonValue *rec_j = sh_json_array_get(records_array, j);
-            if (!rec_j) continue;
+        uint64_t h = unique_hash_record(rule, rec_i);
+        size_t idx = (size_t)(h % cap);
+        int is_dup = 0;
 
-            if (records_match_unique_fields(rule, rec_i, rec_j)) {
-                duplicates[dup_idx++] = (int)i;
+        /* Linear probing */
+        for (size_t probe = 0; probe < cap; probe++) {
+            size_t slot = (idx + probe) % cap;
+            if (slots[slot] == 0) {
+                /* Empty slot — first occurrence, insert */
+                slots[slot] = i + 1;
                 break;
             }
+            /* Occupied — check for actual match (hash collision resolution) */
+            size_t prev = slots[slot] - 1;
+            ShJsonValue *rec_prev = sh_json_array_get(records_array, prev);
+            if (rec_prev && records_match_unique_fields(rule, rec_i, rec_prev)) {
+                duplicates[dup_idx++] = (int)i;
+                is_dup = 1;
+                break;
+            }
+            /* Hash collision but different record — continue probing */
         }
+        (void)is_dup;
     }
 
     *dup_count = dup_idx;

@@ -20,31 +20,14 @@
 #include "nx_diff.h"
 #include "sh_json.h"
 #include "sh_hashmap.h"
+#include "sh_hash.h"
 #include <string.h>
 #include <stdlib.h>
-
-/* ============================================================================
- * FNV-1a 64-bit Hashing
- * ============================================================================ */
-
-#define FNV_OFFSET 14695981039346656037ULL
-#define FNV_PRIME  1099511628211ULL
-
-static uint64_t fnv1a(const void *data, size_t len)
-{
-    const uint8_t *p = (const uint8_t *)data;
-    uint64_t h = FNV_OFFSET;
-    for (size_t i = 0; i < len; i++) {
-        h ^= p[i];
-        h *= FNV_PRIME;
-    }
-    return h;
-}
 
 /* Hash a string to int64_t key (avoid 0 sentinel for SHHashmapI64) */
 static int64_t hash_str_key(const char *s)
 {
-    uint64_t h = fnv1a(s, strlen(s));
+    uint64_t h = sh_fnv1a_64_str(s);
     int64_t key = (int64_t)(h | 1); /* Ensure non-zero */
     return key;
 }
@@ -52,41 +35,41 @@ static int64_t hash_str_key(const char *s)
 /* Hash a JSON value recursively for content comparison */
 static uint64_t hash_json_value(const ShJsonValue *v)
 {
-    if (!v) return FNV_OFFSET;
-    uint64_t h = FNV_OFFSET;
+    if (!v) return SH_FNV1A_64_OFFSET;
+    uint64_t h = SH_FNV1A_64_OFFSET;
     uint8_t tag = (uint8_t)v->type;
     h ^= tag;
-    h *= FNV_PRIME;
+    h *= SH_FNV1A_64_PRIME;
 
     switch (v->type) {
     case SH_JSON_NULL:
         break;
     case SH_JSON_BOOL:
         h ^= v->u.bool_val ? 1u : 0u;
-        h *= FNV_PRIME;
+        h *= SH_FNV1A_64_PRIME;
         break;
     case SH_JSON_NUMBER: {
         uint64_t bits;
         memcpy(&bits, &v->u.num_val, sizeof(bits));
-        h ^= fnv1a(&bits, sizeof(bits));
+        h ^= sh_fnv1a_64(&bits, sizeof(bits));
         break;
     }
     case SH_JSON_STRING:
-        h ^= fnv1a(v->u.string_val.str, v->u.string_val.len);
+        h ^= sh_fnv1a_64(v->u.string_val.str, v->u.string_val.len);
         break;
     case SH_JSON_ARRAY:
         for (size_t i = 0; i < v->u.array_val.count; i++) {
             h ^= hash_json_value(v->u.array_val.items[i]);
-            h *= FNV_PRIME;
+            h *= SH_FNV1A_64_PRIME;
         }
         break;
     case SH_JSON_OBJECT:
         for (size_t i = 0; i < v->u.object_val.count; i++) {
-            h ^= fnv1a(v->u.object_val.members[i].key,
+            h ^= sh_fnv1a_64(v->u.object_val.members[i].key,
                         v->u.object_val.members[i].key_len);
-            h *= FNV_PRIME;
+            h *= SH_FNV1A_64_PRIME;
             h ^= hash_json_value(v->u.object_val.members[i].value);
-            h *= FNV_PRIME;
+            h *= SH_FNV1A_64_PRIME;
         }
         break;
     }
@@ -97,14 +80,14 @@ static uint64_t hash_json_value(const ShJsonValue *v)
 static uint64_t hash_record_content(const ShJsonValue *record)
 {
     if (!record || record->type != SH_JSON_OBJECT) return 0;
-    uint64_t h = FNV_OFFSET;
+    uint64_t h = SH_FNV1A_64_OFFSET;
     for (size_t i = 0; i < record->u.object_val.count; i++) {
         ShJsonMember *m = &record->u.object_val.members[i];
         if (m->key_len == 2 && memcmp(m->key, "id", 2) == 0) continue;
-        h ^= fnv1a(m->key, m->key_len);
-        h *= FNV_PRIME;
+        h ^= sh_fnv1a_64(m->key, m->key_len);
+        h *= SH_FNV1A_64_PRIME;
         h ^= hash_json_value(m->value);
-        h *= FNV_PRIME;
+        h *= SH_FNV1A_64_PRIME;
     }
     return h;
 }
