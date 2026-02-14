@@ -14,7 +14,6 @@
 #include <math.h>
 #include <time.h>
 #include "mip.h"
-#include "presolve.h"
 
 /* Apply P5/P6 feature flags from MIP solver to LP sub-solver */
 static void mip_apply_dual_flags(MIPSolver *solver) {
@@ -87,13 +86,12 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     }
 
     /* Initialize pseudo-costs from objective coefficients.
-     * |c_j| is a better prior than uniform 1.0 because variables with large
-     * objective coefficients naturally produce larger LP objective changes
-     * when branched. SCP init (init_pseudo_costs_scp) still overrides this. */
+     * fmax(|c_j|, 1.0) gives a reasonable prior: variables with large
+     * objective impact get higher pseudo-costs, biasing branching toward them. */
     for (int j = 0; j < model->num_vars; j++) {
-        double obj_init = fmax(fabs(model->c[j]), MIP_PCOST_DEFAULT_INIT);
-        solver->pseudo_cost_down[j] = obj_init;
-        solver->pseudo_cost_up[j] = obj_init;
+        double init = fmax(fabs(model->c[j]), 1.0);
+        solver->pseudo_cost_down[j] = init;
+        solver->pseudo_cost_up[j] = init;
     }
 
     /* Default parameters */
@@ -109,8 +107,6 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->verbose = 0;
     solver->dual_bound_flip = -1;    /* use default */
     solver->dual_steepest_edge = -1; /* use default */
-    solver->root_strong_branch = -1; /* use default (on) */
-    solver->probing_at_nodes = -1;   /* use default (on) */
 
     /* Create node queue */
     solver->node_queue = node_queue_create(1024, solver->node_select, model->obj_sense);
@@ -787,20 +783,12 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 static int process_node(MIPSolver *solver, BBNode *node) {
     LPModel *model = solver->original_model;
 
-    /* Capture parent LP bound before solve_node_lp() overwrites node->lp_bound.
-     * bb_node_pool_copy() copies parent->lp_bound into child->lp_bound
-     * (branch_bound.c:493). solve_node_lp() then overwrites it (mip.c:764). */
+    /* Capture parent LP bound for pseudocost update */
     double parent_lp_bound = node->lp_bound;
 
     /* Solve LP relaxation */
     if (solve_node_lp(solver, node) != 0) {
-        /* LP infeasible or error - prune node.
-         * Update pseudo-costs with infeasibility penalty. */
-        if (node->branch_var >= 0 && node->depth > 0) {
-            double penalty = parent_lp_bound + MIP_PCOST_INFEAS_PENALTY;
-            update_pseudo_costs(solver, node->branch_var, node->branch_val,
-                               parent_lp_bound, penalty, node->branch_dir);
-        }
+        /* LP infeasible or error - prune node */
         if (solver->verbose) {
             printf("  [process_node] Pruned: LP infeasible/error\n");
         }
@@ -808,12 +796,6 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     }
 
     double lp_obj = solver->lp_solver->obj_value;
-
-    /* Update pseudo-costs from branching outcome */
-    if (node->branch_var >= 0 && node->depth > 0) {
-        update_pseudo_costs(solver, node->branch_var, node->branch_val,
-                           parent_lp_bound, lp_obj, node->branch_dir);
-    }
     double *lp_sol = solver->lp_solver->solution;
 
     /* Invoke user-provided cut callback if available */
@@ -888,6 +870,12 @@ static int process_node(MIPSolver *solver, BBNode *node) {
      * We don't update it here (from closed node). The root bound is used
      * initially, and we update it from the queue after pruning. */
 
+    /* Update pseudo-costs from actual branching data */
+    if (node->depth > 0 && node->branch_var >= 0) {
+        update_pseudo_costs(solver, node->branch_var, node->branch_val,
+                           parent_lp_bound, lp_obj, node->branch_dir);
+    }
+
     /* Check integer feasibility */
     if (check_integer_feasibility(solver, lp_sol)) {
         /* Found integer solution */
@@ -946,17 +934,6 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
     }
 
-    /* Node probing: tighten bounds on binary variables before branching */
-    if (solver->probing_at_nodes != 0 && node->depth < MIP_PROBE_MAX_DEPTH) {
-        int probed = probing_bound_tightening(solver);
-        if (probed < 0) {
-            if (solver->verbose) {
-                printf("  [process_node] Pruned by node probing (infeasible)\n");
-            }
-            return 0;
-        }
-    }
-
     /* Select branching variable */
     int branch_var;
     if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
@@ -993,44 +970,6 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     }
 
     return 0;
-}
-
-/* ============================================================================
- * Root Strong Branching Initialization
- *
- * At the root node, probe up to MIP_ROOT_SB_MAX_VARS fractional integer
- * variables with limited dual pivots to initialize pseudo-costs with actual
- * branching data rather than relying on objective-coefficient priors.
- * ============================================================================ */
-
-static void initialize_pseudo_costs_strong(MIPSolver *solver) {
-    if (!solver->lp_solver || !solver->lp_solver->solution) return;
-    if (!solver->lp_solver->tableau) return;
-
-    double *sol = solver->lp_solver->solution;
-    double parent_obj = solver->lp_solver->obj_value;
-    int count = 0;
-
-    for (int k = 0; k < solver->num_integers && count < MIP_ROOT_SB_MAX_VARS; k++) {
-        int j = solver->integer_vars[k];
-        double val = sol[j];
-        double frac = val - floor(val);
-        if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) continue;
-
-        double down_obj, up_obj;
-        if (strong_branch(solver, j, val, &down_obj, &up_obj,
-                         MIP_ROOT_SB_MAX_ITER) == 0) {
-            if (down_obj < RALPH_INFINITY / 2)
-                update_pseudo_costs(solver, j, val, parent_obj, down_obj, BRANCH_DOWN);
-            if (up_obj < RALPH_INFINITY / 2)
-                update_pseudo_costs(solver, j, val, parent_obj, up_obj, BRANCH_UP);
-            count++;
-        }
-    }
-
-    if (solver->verbose && count > 0) {
-        printf("Root strong branching: initialized %d variables\n", count);
-    }
 }
 
 /* ============================================================================
@@ -1369,32 +1308,6 @@ static int solve_root_node(MIPSolver *solver) {
                 }
             }
             free(lagr_solution);
-        }
-    }
-
-    /* Root strong branching: initialize pseudo-costs from actual LP probes */
-    if (solver->root_strong_branch != 0) {
-        initialize_pseudo_costs_strong(solver);
-    }
-
-    /* Root probing: tighten bounds on binary variables */
-    if (solver->working_model->num_binary > 0) {
-        int probed = presolve_probe_model(solver->working_model);
-        if (probed < 0) {
-            /* Probing proved root infeasible */
-            solver->status = RALPH_STATUS_INFEASIBLE;
-            bb_node_pool_return(solver->node_pool, root);
-            return 0;
-        }
-        if (probed > 0) {
-            if (solver->verbose) {
-                printf("Root probing: tightened %d bounds\n", probed);
-            }
-            /* Update root node bounds from working model */
-            for (int j = 0; j < model->num_vars; j++) {
-                root->lb[j] = solver->working_model->lb[j];
-                root->ub[j] = solver->working_model->ub[j];
-            }
         }
     }
 
