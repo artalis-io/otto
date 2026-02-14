@@ -231,12 +231,13 @@ Processing order: `row_merge` → `multi_transforms` → virtual columns → `co
 | `src/nx_slug.c` | Slug utility | 51 |
 | `src/nx_issue.c` | Issue list (dynamic, no caps) | 170 |
 | `src/nx_diff.c` | Change detection (FNV-1a, hashmap diff) | 348 |
-| `tools/nx_pipeline.c` | CLI pipeline (batch + single) | 1090 |
+| `tools/nx_pipeline.c` | CLI pipeline (batch + single + diff) | 1165 |
 | `tools/nx_run.c` | Stage A CLI | 131 |
 | `tools/nx_pdf_run.c` | PDF clustering CLI | 99 |
 | `tools/nx_xform_run.c` | Transform CLI | 81 |
 | `wasm/src/nx_wasm.c` | WASM wrapper | 620 |
-| **Total** | | **~9300** |
+| `tests/test_pipeline.c` | Integration tests (pipeline, emit, diff, manifest) | 503 |
+| **Total** | | **~9400** |
 
 ## Error Handling
 
@@ -276,6 +277,9 @@ Build with `make tools`:
 ./nx_pipeline input.xlsx --schema s.json --emit geojson
 ./nx_pipeline input.xlsx --schema s.json --emit csv
 
+# Diff against previous run (change detection)
+./nx_pipeline input.xlsx --schema s.json --baseline prev.json
+
 # Batch mode
 ./nx_pipeline --config pipeline.json
 
@@ -295,7 +299,8 @@ Build with `make tools`:
 | `test_emit` | 19 | 9 GeoJSON + 10 CSV |
 | `test_issue` | 13 | init/free, add, dynamic growth, count, JSON output |
 | `test_diff` | 14 | null input, identical/added/removed/modified, mixed, empty, parse error |
-| **Total** | **183** | |
+| `test_pipeline` | 9 | end-to-end pipeline, issues threading, emit GeoJSON/CSV, diff, manifest |
+| **Total** | **192** | |
 
 ## Schemas
 
@@ -319,7 +324,7 @@ Six schemas in `schemas/` for GLS Hungary:
 
 ```bash
 make all      # Library + tests
-make test     # Run 183 tests
+make test     # Run 192 tests
 make tools    # CLI tools (nx_pipeline, nx_run, nx_pdf_run, nx_xform_run)
 make debug    # Build with ASan/UBSan + -Werror
 make clean    # Remove artifacts
@@ -370,6 +375,20 @@ Removed all fixed-size caps that caused silent data loss:
 - **XLSX**: `MAX_SHARED_STRINGS` (65536) removed. SharedStrings pointer array switched from arena to heap with realloc-doubling. Individual strings still arena-allocated.
 
 Changes: `nx_pdf.c` (~30 lines changed), `nx_xlsx.c` (~20 lines changed). All 169 tests pass.
+
+### Production Hardening — DONE
+
+Four orthogonal improvements to close the gap between "all stages work" and "production-ready CLI + demo":
+
+1. **CLI diff (`--baseline`)**: `nx_pipeline` gains `--baseline prev.json` flag. Compares current run against previous canonical JSON via `nx_diff()`, prints summary to stderr (`N added, N removed, N modified, N unchanged`), outputs diff JSON to stdout. Enables batch change-tracking workflows.
+
+2. **Stage D in WASM demo**: Export GeoJSON / Export CSV buttons added to `demo.html`. Auto-detects lat/lon fields from schema's `geo_bounds` validation rule. Full timing display and truncation-with-expand for large outputs.
+
+3. **Integration tests**: `test_pipeline.c` with 9 tests covering: full end-to-end pipeline (extract→transform→validate), issues threading across stages, GeoJSON/CSV emit from pipeline output, diff (identical/modified/removed runs), and manifest JSON structure with per-stage counts.
+
+4. **Error messages**: File size guard before arena allocation (clear "file too large X MB, max Y MB" instead of silent failure). Arena allocation failures now report size in MB.
+
+Changes: `nx_pipeline.c` (+75 lines), `demo.html` (+123 lines), `test_pipeline.c` (new, 503 lines), `Makefile` (+8 lines). Total: 183→192 tests.
 
 ---
 
