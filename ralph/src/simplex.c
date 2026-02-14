@@ -254,6 +254,9 @@ static int apply_scaling(SimplexSolver *solver) {
     int n = model->num_vars;
     SparseMatrix *A = model->A;
 
+    int geo_rounds = solver->scaling;    /* N geometric mean rounds */
+    int eq_rounds = (geo_rounds > 1) ? 20 : 0;  /* equilibrium only for multi-round */
+
     /* Allocate scaling factors */
     solver->row_scale = (double*)calloc(m, sizeof(double));
     solver->col_scale = (double*)calloc(n, sizeof(double));
@@ -269,51 +272,112 @@ static int apply_scaling(SimplexSolver *solver) {
     for (int i = 0; i < m; i++) solver->row_scale[i] = 1.0;
     for (int j = 0; j < n; j++) solver->col_scale[j] = 1.0;
 
-    /* Compute row max absolute values */
+    /* Workspace for row/column extremes */
     double *row_max = (double*)calloc(m, sizeof(double));
-    if (!row_max) return -1;
-
-    for (int j = 0; j < n; j++) {
-        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-            int i = A->rowidx[p];
-            double absval = fabs(A->values[p]);
-            if (absval > row_max[i]) row_max[i] = absval;
-        }
-    }
-
-    /* Compute row scaling factors */
-    for (int i = 0; i < m; i++) {
-        if (row_max[i] > RALPH_ZERO_TOL) {
-            solver->row_scale[i] = 1.0 / sqrt(row_max[i]);
-        }
-    }
-    free(row_max);
-
-    /* Apply row scaling to matrix, then compute column max */
     double *col_max = (double*)calloc(n, sizeof(double));
-    if (!col_max) return -1;
+    if (!row_max || !col_max) {
+        free(row_max);
+        free(col_max);
+        return -1;
+    }
 
-    for (int j = 0; j < n; j++) {
-        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-            int i = A->rowidx[p];
-            double scaled_val = fabs(A->values[p]) * solver->row_scale[i];
-            if (scaled_val > col_max[j]) col_max[j] = scaled_val;
+    /* Geometric mean scaling rounds: R[i] *= 1/sqrt(max), C[j] *= 1/sqrt(max)
+     * Each round shrinks the ratio between largest and smallest elements.
+     * Uses virtual scaling: A is not modified, just R[] and C[] accumulate. */
+    for (int round = 0; round < geo_rounds; round++) {
+        /* Compute row maxes of |R[i] * A[i,j] * C[j]| */
+        for (int i = 0; i < m; i++) row_max[i] = 0.0;
+        for (int j = 0; j < n; j++) {
+            double cj = solver->col_scale[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int i = A->rowidx[p];
+                double scaled = fabs(A->values[p]) * solver->row_scale[i] * cj;
+                if (scaled > row_max[i]) row_max[i] = scaled;
+            }
+        }
+
+        /* Update row factors */
+        for (int i = 0; i < m; i++) {
+            if (row_max[i] > RALPH_ZERO_TOL) {
+                solver->row_scale[i] *= 1.0 / sqrt(row_max[i]);
+            }
+        }
+
+        /* Compute col maxes of |R[i] * A[i,j] * C[j]| with updated R */
+        for (int j = 0; j < n; j++) col_max[j] = 0.0;
+        for (int j = 0; j < n; j++) {
+            double cj = solver->col_scale[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int i = A->rowidx[p];
+                double scaled = fabs(A->values[p]) * solver->row_scale[i] * cj;
+                if (scaled > col_max[j]) col_max[j] = scaled;
+            }
+        }
+
+        /* Update column factors */
+        for (int j = 0; j < n; j++) {
+            if (col_max[j] > RALPH_ZERO_TOL) {
+                solver->col_scale[j] *= 1.0 / sqrt(col_max[j]);
+            }
         }
     }
 
-    /* Compute column scaling factors */
-    for (int j = 0; j < n; j++) {
-        if (col_max[j] > RALPH_ZERO_TOL) {
-            solver->col_scale[j] = 1.0 / sqrt(col_max[j]);
+    /* Equilibrium scaling rounds: R[i] *= 1/max, C[j] *= 1/max
+     * Drives every row and column max toward 1.0.
+     * Converges quickly — typically 3-5 rounds sufficient. */
+    for (int round = 0; round < eq_rounds; round++) {
+        /* Compute row maxes */
+        for (int i = 0; i < m; i++) row_max[i] = 0.0;
+        for (int j = 0; j < n; j++) {
+            double cj = solver->col_scale[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int i = A->rowidx[p];
+                double scaled = fabs(A->values[p]) * solver->row_scale[i] * cj;
+                if (scaled > row_max[i]) row_max[i] = scaled;
+            }
         }
+
+        /* Update row factors (equilibrium: scale max to 1.0) */
+        for (int i = 0; i < m; i++) {
+            if (row_max[i] > RALPH_ZERO_TOL) {
+                solver->row_scale[i] *= 1.0 / row_max[i];
+            }
+        }
+
+        /* Compute col maxes with updated R */
+        double max_deviation = 0.0;
+        for (int j = 0; j < n; j++) col_max[j] = 0.0;
+        for (int j = 0; j < n; j++) {
+            double cj = solver->col_scale[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int i = A->rowidx[p];
+                double scaled = fabs(A->values[p]) * solver->row_scale[i] * cj;
+                if (scaled > col_max[j]) col_max[j] = scaled;
+            }
+        }
+
+        /* Update column factors and check convergence */
+        for (int j = 0; j < n; j++) {
+            if (col_max[j] > RALPH_ZERO_TOL) {
+                double dev = fabs(col_max[j] - 1.0);
+                if (dev > max_deviation) max_deviation = dev;
+                solver->col_scale[j] *= 1.0 / col_max[j];
+            }
+        }
+
+        /* Converged: all column maxes within 10% of 1.0 */
+        if (max_deviation < 0.1) break;
     }
+
+    free(row_max);
     free(col_max);
 
-    /* Apply scaling to matrix A: A_scaled[i,j] = R[i] * A[i,j] * C[j] */
+    /* Apply accumulated scaling to matrix A: A_scaled[i,j] = R[i] * A[i,j] * C[j] */
     for (int j = 0; j < n; j++) {
+        double cj = solver->col_scale[j];
         for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
             int i = A->rowidx[p];
-            A->values[p] *= solver->row_scale[i] * solver->col_scale[j];
+            A->values[p] *= solver->row_scale[i] * cj;
         }
     }
 
@@ -327,10 +391,7 @@ static int apply_scaling(SimplexSolver *solver) {
         model->c[j] *= solver->col_scale[j];
     }
 
-    /* Scale variable bounds: x_scaled = C^-1 * x, so bounds scale by C */
-    /* lb_scaled[j] = lb[j] / C[j], but we store C[j] and apply later */
-    /* Actually for bounds: if x = C * x_scaled, then lb <= C * x_scaled <= ub */
-    /* So: lb/C <= x_scaled <= ub/C */
+    /* Scale variable bounds: x = C * x_scaled, so lb/C <= x_scaled <= ub/C */
     for (int j = 0; j < n; j++) {
         if (model->lb[j] > -RALPH_INFINITY/2) {
             model->lb[j] /= solver->col_scale[j];
