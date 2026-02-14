@@ -75,24 +75,33 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 
 ### 1.3 Performance TODO
 
-| Priority | Task | Expected Impact |
-|----------|------|-----------------|
-| **High** | Supernodal LU factorization (§1.9) | 3-5x factorization speedup |
-| **High** | Symbolic analysis phase (§1.9) | 1.5-2x for repeated factorization |
-| **Medium** | Better fill-reducing ordering (COLAMD) | 1.2-1.5x from reduced fill-in |
-| **Medium** | Compressed sparse storage | Eliminate linked-list overhead |
-| **Low** | Parallel pricing | Multi-core utilization |
+See **§1.12** for the full state-of-the-art gap analysis with prioritized implementation order.
+
+| Priority | Task | Expected Impact | §1.12 ID |
+|----------|------|-----------------|----------|
+| **High** | Multi-round equilibrium scaling | Better numerics, may fix blend | T1.2 |
+| **High** | Triangular crash basis | 2-5x cold starts | T1.1 |
+| **High** | Symbolic/numeric LU separation (§1.11) | 1.5-2x refactorization | T1.4 |
+| **High** | Supernodal LU factorization (§1.11) | 3-5x factorization | T2.1 |
+| **Medium** | Heap-based pricing (DynamicMaximum) | 2-5x pricing on large problems | T2.2 |
+| **Medium** | Post-solve verification | Correctness, catch silent failures | T2.3 |
+| **Medium** | Objective limits in simplex_solve | 30-50% fewer pruned-node iters | T3.1 |
+| **Long-term** | Dual simplex as default LP | ~2x initial solves (arch change) | T1.3 |
 
 ### 1.4 Numerical Stability TODO
 
 | Task | Status | Notes |
 |------|--------|-------|
 | Two-Phase Simplex | ✅ Complete | For >80% equality problems |
-| Equilibration Scaling | ✅ Complete | Geometric mean scaling |
+| Geometric Mean Scaling (1 round) | ✅ Complete | `apply_scaling()` in simplex.c |
+| Multi-Round Equilibrium Scaling | ⏳ TODO | 5 geometric + 20 equilibrium (§1.12 T1.2) |
 | Iterative Refinement | ✅ Complete | Residual correction |
 | Threshold Pivoting | ✅ Complete | In factorization + updates |
-| Harris Ratio Test | ⏳ TODO | Needed for beaconfd |
-| Bound Perturbation | ⏳ TODO | Anti-degeneracy |
+| Harris Ratio Test | ✅ Complete | In both primal and dual |
+| Bound Perturbation | ✅ Complete | Primal + dual, reactive + proactive |
+| Cost Perturbation | ⏳ TODO | Alternative anti-degeneracy (§1.12 T3.3) |
+| Post-Solve Verification | ⏳ TODO | Primal/dual feasibility + complementary slackness (§1.12 T2.3) |
+| Basis Conditioning Report | ⏳ TODO | Expose condition estimate to user (§1.12 T3.6) |
 
 ### 1.5 Phase-1 Recovery Hardening (Feb 2026)
 
@@ -395,6 +404,383 @@ After:  ~50 supernodes, each using dense matrix multiply → cache-friendly
 
 **Files:** `src/lu.c` (major refactor), new `src/lu_symbolic.c`, new `src/lu_supernode.c`
 **References:** SuperLU (Demmel et al.), CHOLMOD, GLPK `bflib/`
+
+### 1.12 State-of-the-Art LP Gap Analysis (Feb 2026)
+
+Comprehensive comparison of Ralph's LP solver against production solvers (GLOP, CLP, GLPK).
+See `docs/roadmaps/ralph_vs_glop.md` for the original GLOP comparison. This section extends
+it with a full codebase audit.
+
+**Current position:** Ralph is ~60% of state-of-the-art. The per-iteration cost gap vs GLPK
+is 8.8x on 1000x500 problems (§1.1). The gap is dominated by LU operations (42% factorize,
+27% BTRAN, 26% FTRAN). blend (NETLIB) fails due to numerical instability. milp100+ loses
+to GLPK on LP speed per B&B node.
+
+#### What Ralph Does Well
+
+| Feature | Quality | Location | Notes |
+|---------|---------|----------|-------|
+| LP-aware LU factorization | Excellent | `lu_sparse.c:1630` | Separates identity/structural columns; factorizes only the k×k structural submatrix |
+| Hyper-sparse FTRAN/BTRAN | Excellent | `lu.c:1345,1441` | DFS-based reach computation, 12.5% density threshold |
+| FT spike pool | Very good | `lu.c` | Contiguous cache-friendly storage with offset indexing |
+| Phase 1 recovery | Very good | `simplex.c`, `dual_simplex.c` | Dual rescue, entering exclusion, alternate leaving, redundant row marking |
+| dual_reopt for B&B | Very good | `dual_simplex.c:571` | PATH A/B/C design, objective cutoff, P5+P6 |
+| LP Presolve | Good | `presolve.c` | 12 techniques, 20-round fixed-point, probing with implication propagation |
+| Devex pricing | Good | `simplex.c:1533` | Approximate SE with periodic reference reset every 2n iterations |
+| Sparse Markowitz LU | Good | `lu_sparse.c:974` | AMD ordering, singleton detection, threshold pivoting |
+| Bound flipping (P5) | Good | `dual_simplex.c:217` | Two-pass Harris, restricted to dual_reopt |
+| DSE pricing (P6) | Good | `dual_simplex.c:332` | Approx init in reopt, exact in full dual |
+
+#### Tier 1: Critical Gaps (2-5x impact each)
+
+**T1.1 Crash Basis — No initial basis heuristic**
+
+| Aspect | Current | Target |
+|--------|---------|--------|
+| Initial basis | All-slack/artificial (`tableau_create_ex`, simplex.c:568) | Triangular crash (Maros LTSF) |
+| Phase 1 cost | Always full Phase 1 or Big-M (30-50% of solve time) | Often eliminated entirely |
+| Cold start quality | Worst possible starting point | Near-feasible basis from constraint structure |
+
+Every LP starts from the identity basis. A triangular crash scans the constraint matrix for
+structural columns that can enter the basis without bound violation: singleton columns first,
+then columns with good pivot elements. This is well-documented (Maros Chapter 9, Bixby 1992).
+
+- **Impact**: 2-5x on cold starts. Root LP in MIP is cold start. Every PATH C fallback is cold start.
+- **Effort**: Medium (~300 LoC). New function `crash_triangular()` in `simplex.c`.
+- **Dependencies**: None.
+- **Who has it**: GLPK (triangular), GLOP (Bixby), CLP (Idiot + triangular).
+
+**T1.2 Multi-Round Scaling — Only 1 round of geometric mean**
+
+| Aspect | Current | Target |
+|--------|---------|--------|
+| Method | 1 round geometric mean (`apply_scaling`, simplex.c:249) | 5 rounds geometric + 20 rounds equilibrium |
+| Row scaling | `1/sqrt(max\|a_ij\|)` | Iterative until all row/col norms ≈ 1.0 |
+| Cost scaling | Scales c with column factors | Multiple cost scaling variants (contain-one, mean, median) |
+
+One round is the bare minimum. GLPK does up to 200 equilibrium iterations. CLP does 5
+geometric + 20 equilibrium. Better scaling → fewer degenerate pivots → fewer iterations.
+The blend NETLIB failure is likely a scaling issue.
+
+- **Impact**: 10-30% fewer iterations broadly. May fix blend. Compounds with other improvements.
+- **Effort**: Low (~100 LoC). Equilibrium scaling is a simple iterative loop.
+- **Dependencies**: None.
+
+**T1.3 Dual Simplex as Default — Primal is default, dual is a helper**
+
+| Aspect | Current | Target |
+|--------|---------|--------|
+| Default LP algorithm | Primal simplex | Dual simplex |
+| `dual_simplex_solve()` | 5 fallback paths to primal, helper role | Standalone primary solver |
+| Initial dual feasibility | `make_dual_feasible()` via flipping (fragile) | Crash basis + proper dual Phase 1 |
+
+Modern solvers default to dual because: (1) with crash basis, no Phase 1 needed (just flip
+non-basics for dual feasibility), (2) DSE gives better pivot selection, (3) bound changes
+(B&B operations) only affect dual feasibility — cheap to restore.
+
+- **Impact**: ~2x on initial LP solves. Architectural endgame for the LP solver.
+- **Effort**: High. Requires rewriting `dual_simplex_solve()` without primal fallbacks.
+- **Dependencies**: T1.1 (crash), P5 (done), P6 (done).
+- **Path**: crash → clean dual_simplex_solve → make default → keep primal as fallback.
+
+**T1.4 Symbolic/Numeric Separation in LU**
+
+| Aspect | Current | Target |
+|--------|---------|--------|
+| Factorization | `lu_factorize_sparse()` mixes symbolic + numeric | Separate `lu_symbolic_analyze()` + `lu_numeric_factorize()` |
+| Symbolic reuse | Recomputes elimination tree every refactorization | Reuse symbolic analysis when sparsity pattern unchanged |
+| Memory | Allocated during factorization | Pre-allocated from symbolic analysis |
+
+Basis sparsity structure changes slowly during simplex. Separating symbolic analysis
+(pivot ordering, elimination tree, memory layout) from numeric computation allows reuse
+across refactorizations. Also prerequisite for supernodal factorization (§1.11).
+
+- **Impact**: 1.5-2x on refactorization (42% of per-iteration cost → ~25%).
+- **Effort**: Medium-High (~500 LoC). Refactor `lu_factorize_sparse()` into two phases.
+- **Dependencies**: None (but enables §1.11 supernodal).
+
+#### Tier 2: High-Impact Gaps (1.5-3x on specific scenarios)
+
+**T2.1 Supernodal LU Factorization**
+
+Already planned in §1.11. Groups columns with similar sparsity into dense blocks, uses
+BLAS-3 kernels (no external dependency). Would reduce LU from 42% → ~10% of iteration time.
+
+- **Impact**: 3-5x factorization, ~2x overall for m > 500.
+- **Effort**: High (~1500 LoC, 5 phases).
+- **Dependencies**: T1.4 (symbolic/numeric separation).
+
+**T2.2 Heap-Based Pricing (DynamicMaximum)**
+
+| Aspect | Current | Target |
+|--------|---------|--------|
+| Pricing scan | O(n) scan all non-basics every iteration | Top-32 heap, O(log n) updates |
+| Partial pricing | Block-of-100 round-robin (`pricing_partial`, simplex.c:1614) | Heap serves 98% of queries from cache |
+| Cache efficiency | Full scan touches all RC values | Heap maintains hot candidates |
+
+GLOP's DynamicMaximum pricing maintains a priority queue of the best pricing candidates.
+After each pivot, only affected reduced costs are updated in the heap. 98% of pricing
+queries served from cache without scanning.
+
+- **Impact**: 2-5x on pricing for n > 500. Becomes important as LU gets faster.
+- **Effort**: Low-Medium (~200 LoC). New `pricing_heap()` strategy.
+- **Dependencies**: None.
+
+**T2.3 Post-Solve Verification**
+
+| Aspect | Current | Target |
+|--------|---------|--------|
+| Primal feasibility | Only iterative refinement during solve | Explicit `\|\|Ax - b\|\|` check post-solve |
+| Dual feasibility | Not checked | Verify `c - A'y - s = 0`, `s ≥ 0` for non-basics at lower |
+| Complementary slackness | Not checked | Verify `x_j * s_j = 0` |
+| Status downgrade | Not possible | Downgrade OPTIMAL → IMPRECISE if tolerances exceeded |
+| Objective accuracy | Recomputed from original vars (avoids Big-M) | Add Kahan summation |
+
+Not a speed improvement, but essential for solver credibility. Would catch silent numerical
+failures like the blend NETLIB problem. GLOP has 7 independent post-solve metrics.
+
+- **Impact**: Correctness. Catches failures that currently go undetected.
+- **Effort**: Low (~150 LoC). New `verify_solution()` function.
+- **Dependencies**: None.
+
+#### Tier 3: Moderate Gaps (10-30% improvements)
+
+| ID | Gap | Current | Target | Impact | Effort |
+|----|-----|---------|--------|--------|--------|
+| T3.1 | **Objective limits in `simplex_solve`** | Only `dual_reopt` has cutoff | Early termination when LP bound exceeds incumbent | 30-50% fewer iters on pruned B&B nodes | Low (~50 LoC) |
+| T3.2 | **Dynamic refactorization period** | Fixed `min(m/2, 200)` max updates | Adapt based on fill-in rate and condition estimate | 10-20% better LU amortization | Low (~50 LoC) |
+| T3.3 | **Cost perturbation** | Only bound perturbation (`primal_apply_perturbation`) | Shift objective coefficients as alternative anti-degeneracy | Fewer degenerate pivots on specific problems | Low (~80 LoC) |
+| T3.4 | **Per-phase pricing strategy** | Same pricing in Phase 1 and Phase 2 | Dantzig in Phase 1 (robust), Devex in Phase 2 (fast convergence) | 10-15% fewer Phase 1 pivots | Low (~30 LoC) |
+| T3.5 | **Dual Phase 1 with auxiliary objective** | `make_dual_feasible()` just flips non-basics | Proper dual Phase 1 via auxiliary objective | More robust dual simplex starts | Medium (~200 LoC) |
+| T3.6 | **Basis conditioning report** | `min_diag_u`/`max_diag_u` tracked but not exposed | Report condition estimate to user, auto-refactorize on drift | Better numerical diagnostics | Low (~30 LoC) |
+
+#### Tier 4: Nice-to-Have
+
+| Gap | Notes |
+|-----|-------|
+| IIS computation (Irreducible Infeasible Subsystem) | Diagnostic, not performance |
+| Column generation interface | Only needed for Dantzig-Wolfe decomposition |
+| Adaptive pricing strategy switching | Auto-switch Dantzig/Devex/SE based on progress |
+| Curtis-Reid scaling | More sophisticated than equilibrium, diminishing returns |
+| Parallel LU operations | Diminishing returns at Ralph's target problem sizes |
+| Dualization (auto-dual when constraints >> vars) | GLOP has it; rarely triggers on FuelWise problems |
+
+#### Implementation Guide
+
+Each feature is designed for orthogonal, incremental delivery. Every feature defaults to OFF
+behind a feature flag, must pass the full regression gate before being turned ON, and can be
+reverted by flipping a single flag.
+
+**Regression gate:** `make clean && make test` in ralph/ (272+ tests) AND fuelwise/ (29+ tests),
+plus ASAN build (`CFLAGS="-fsanitize=address,undefined -g" make test`).
+
+**T1.2 Multi-Round Scaling — Implementation**
+
+| Aspect | Detail |
+|--------|--------|
+| **Pipeline slot** | Replaces body of `apply_scaling()` in `simplex.c:249-345`. Existing call site at `simplex_solve:3930` unchanged. |
+| **Orthogonality** | Self-contained in `apply_scaling()`. No interaction with any other feature. |
+| **Feature flag** | `ralph_set_int_param(model, "scaling_rounds", N)` — 0=off, 1=current, 5=multi-round (default stays 1 until validated) |
+| **Implementation** | Outer loop: 5 rounds of geometric mean (existing logic). Then inner loop: up to 20 rounds equilibrium — row scale = 1/max|a_ij|, col scale = 1/max|a_ij|, repeat until max change < 1%. Keep existing cost scaling. |
+| **Tests** | (1) Scaling with N=5 produces tighter row/col norm spread than N=1 on random 50x50. (2) blend NETLIB solves with N=5 (currently fails). (3) All existing LP tests pass with N=5. (4) Scaling roundtrip: scale→unscale returns original A within tolerance. |
+| **Risk** | Very low. Replaces function body, fallback is `scaling_rounds=1` (current behavior). |
+
+**T1.1 Crash Basis — Implementation**
+
+| Aspect | Detail |
+|--------|--------|
+| **Pipeline slot** | New function `crash_triangular()` called between `tableau_create_ex()` (line 3939) and `tableau_refactorize()` (line 3967). Modifies `tab->basis[]` and `tab->var_status[]` before first LU factorization. |
+| **Orthogonality** | Only writes initial basis state. Does not touch LU, pricing, or Phase 1 logic. If crash produces zero improvements, simplex proceeds exactly as before (all-slack). |
+| **Feature flag** | `ralph_set_int_param(model, "crash", 1)` — 0=off (default initially), 1=triangular |
+| **Implementation** | Maros LTSF: (1) Scan structural columns for singletons — if singleton element in row i and |a_ij| > PIVOT_TOL, replace slack/artificial in basis position i. (2) Scan remaining columns for columns with one element exceeding pivoting threshold in an unclaimed row. (3) Mark structural vars as RALPH_BASIC, displaced slacks/artificials as RALPH_NONBASIC_LOWER. ~300 LoC. |
+| **Tests** | (1) Crash on 10x10 LP produces basis with ≥ 3 structural columns (vs 0 without). (2) Phase 1 iterations reduced by ≥ 30% on medium LP (50 vars). (3) Infeasible LP still detected correctly with crash. (4) All existing tests pass with crash=1. |
+| **Risk** | Low. Worst case: crash inserts bad pivots → LU factorization fails → Phase 1 falls back to all-slack (standard behavior). Explicit fallback: if `tableau_refactorize()` returns error after crash, reset basis to all-slack and refactorize. |
+
+**T2.3 Post-Solve Verification — Implementation**
+
+| Aspect | Detail |
+|--------|--------|
+| **Pipeline slot** | New function `verify_solution()` called at `simplex_solve:4002` inside the `status == OPTIMAL` block, after solution copy and unscaling. Read-only: only inspects `solver->solution`, `solver->dual_solution`, `solver->reduced_costs`, model A/b/c. |
+| **Orthogonality** | Purely diagnostic — reads solution, never modifies solver state except potentially downgrading `solver->status` from OPTIMAL to a new IMPRECISE status. |
+| **Feature flag** | `ralph_set_int_param(model, "verify", 1)` — 0=off (default), 1=verify post-solve |
+| **Implementation** | (1) Primal feasibility: compute `||Ax - b||_inf`, flag if > 1e-6. (2) Bound feasibility: check `lb ≤ x ≤ ub` for all vars. (3) Dual feasibility: check `rc[j] ≥ -tol` for non-basics at lower bound. (4) Complementary slackness: `|x_j - lb_j| * |rc_j|` should be ≈ 0. (5) Kahan summation for objective recomputation. Downgrade OPTIMAL → IMPRECISE if any check fails. ~150 LoC. |
+| **Tests** | (1) Clean LP returns OPTIMAL with verify=1. (2) Deliberately perturbed solution triggers IMPRECISE. (3) No performance regression (verify adds < 1% overhead). |
+| **Risk** | Zero. Read-only post-processing. If verify has a bug, worst case is false IMPRECISE — easily diagnosed. |
+
+**T3.1 Objective Limits — Implementation**
+
+| Aspect | Detail |
+|--------|--------|
+| **Pipeline slot** | Early-exit check in `simplex_phase2()` main loop, after each objective recomputation. Compare `tab->obj_value` against `solver->objective_limit`. |
+| **Orthogonality** | Single `if` statement in phase2 loop. No interaction with pricing, ratio test, or LU. |
+| **Feature flag** | `ralph_set_dbl_param(model, "obj_limit", val)` — default RALPH_INFINITY (no limit). Already partially exists for `objective_cutoff` in MIP context. |
+| **Implementation** | In `simplex_phase2` loop: `if (tab->obj_value >= solver->objective_limit) { solver->status = RALPH_STATUS_OBJ_LIMIT; return 0; }`. Also add to full `dual_simplex_solve()` loop. ~50 LoC. |
+| **Tests** | (1) Set obj_limit below optimal → returns OBJ_LIMIT. (2) Set obj_limit above optimal → returns OPTIMAL normally. |
+| **Risk** | Zero. Simple comparison, no state mutation. |
+
+**T3.4 Per-Phase Pricing — Implementation**
+
+| Aspect | Detail |
+|--------|--------|
+| **Pipeline slot** | Override `tab->pricing_strategy` at two points: before `simplex_phase1()` (set to Dantzig=0) and after phase1/before phase2 (restore to solver's chosen strategy). |
+| **Orthogonality** | Two lines of code. Pricing strategy dispatch (`select_entering_variable`) already handles all strategies — just changes which one is active. |
+| **Feature flag** | `ralph_set_int_param(model, "phase1_pricing", 0)` — default 0 (Dantzig for Phase 1), -1 to disable (use same pricing for both phases) |
+| **Implementation** | Before phase1: `int saved = tab->pricing_strategy; tab->pricing_strategy = phase1_pricing;`. After phase1: `tab->pricing_strategy = saved;` ~30 LoC. |
+| **Tests** | (1) Phase 1 iteration count with Dantzig ≤ count with Devex on degenerate problem. |
+| **Risk** | Zero. Pricing strategy is already hot-swappable. |
+
+**T1.4 Symbolic/Numeric LU Separation — Implementation**
+
+| Aspect | Detail |
+|--------|--------|
+| **Pipeline slot** | Refactors `lu_factorize_sparse()` (lu_sparse.c:974) into two functions. `lu_symbolic_analyze()` produces an `LUSymbolic` struct (pivot ordering, elimination tree, memory layout). `lu_numeric_factorize()` takes `LUSymbolic*` and numeric values, produces `LUFactor*`. Existing `lu_factorize_sparse()` becomes a wrapper calling both. |
+| **Orthogonality** | Internal to LU module. All callers (simplex, dual simplex) use `tableau_refactorize()` which calls `lu_factorize_sparse()` — wrapper preserves API. |
+| **Feature flag** | `ralph_set_int_param(model, "lu_symbolic_reuse", 1)` — 0=recompute symbolic every time (current), 1=cache and reuse when pattern unchanged |
+| **Implementation** | New `lu_symbolic.c` (~500 LoC). Pattern change detection: compare column pointer array diff — if `colptr[j+1]-colptr[j]` unchanged for all j, reuse symbolic. Invalidate on basis structure change (rare after initial iterations). |
+| **Tests** | (1) Symbolic+numeric produces identical LU to current monolithic. (2) Symbolic reuse across 10 refactorizations gives same results. (3) Pattern change correctly triggers re-analysis. |
+| **Risk** | Medium. LU is the most sensitive code. Extensive comparison testing required. Fallback: `lu_symbolic_reuse=0` reverts to monolithic. |
+
+**T2.2 Heap-Based Pricing — Implementation**
+
+| Aspect | Detail |
+|--------|--------|
+| **Pipeline slot** | New pricing strategy `PRICING_HEAP=4` in the `select_entering_variable()` dispatch (simplex.c:1745). Sits alongside Dantzig(0), SE(1), Devex(2), Partial(3). |
+| **Orthogonality** | New case in existing switch. Heap state lives in `SimplexTableau` (new fields: `heap_data[]`, `heap_size`, `heap_pos[]`). No interaction with ratio test, LU, or phase logic. |
+| **Feature flag** | `ralph_set_int_param(model, "pricing", 4)` — dispatched through existing `solver->pricing_strategy` |
+| **Implementation** | Binary max-heap of (|rc_j|, j) pairs. After each pivot, update rc for affected non-basics (computed from BTRAN result), sift in heap. `pricing_heap()` pops top candidate. Heap rebuild on refactorization (all rc recomputed). Top-32 cache for partial re-scan between rebuilds. ~200 LoC. |
+| **Tests** | (1) Heap pricing produces same optimal as Dantzig on 10 test problems. (2) Iteration count within 5% of Dantzig. |
+| **Risk** | Low. New strategy, doesn't touch existing pricing code. If buggy, use pricing=0/1/2/3. |
+
+**T1.3 Dual Simplex as Default — Implementation**
+
+This is the architectural endgame. Current `dual_simplex_solve()` has 6 primal fallback paths
+that make it a helper, not a standalone solver. Requires phased rewrite.
+
+*Current dual_simplex_solve fallback paths (all route to `simplex_solve`):*
+
+| # | Location | Trigger | Action |
+|---|----------|---------|--------|
+| 1 | dual_simplex.c:788 | No tableau exists | Full primal from scratch |
+| 2 | dual_simplex.c:857 | Can't achieve dual feasibility via flipping | Full primal from scratch |
+| 3 | dual_simplex.c:1020 | Stalled after 3 perturbation attempts | Destroy tableau + full primal |
+| 4 | dual_simplex.c:1044 | Too many dual violations (>n/5) | Destroy tableau + full primal |
+| 5 | dual_simplex.c:1056 | Persistent violations (200+ iters) | Destroy tableau + full primal |
+| 6 | dual_simplex.c:1071 | Too many iterations (>5m) | Destroy tableau + full primal |
+
+*Phased plan:*
+
+**Phase A: Crash basis enables dual start (depends on T1.1)**
+
+With crash basis, the initial basis contains structural columns. Non-basic variables
+can be flipped to achieve dual feasibility without destroying the basis. This eliminates
+fallback #1 (no tableau) and makes #2 (can't achieve DF) rare.
+
+```
+simplex_solve pipeline with crash + dual:
+  apply_scaling()
+  → tableau_create_ex()
+  → crash_triangular()         [T1.1: structural columns in basis]
+  → tableau_refactorize()
+  → make_dual_feasible()       [flip non-basics for dual feasibility]
+  → dual Phase 1 if needed     [T3.5: auxiliary objective for remaining infeasibilities]
+  → dual Phase 2               [main dual simplex iterations]
+```
+
+**Phase B: Clean dual solver function (~400 LoC)**
+
+New function `dual_simplex_solve_standalone()` that does NOT fall back to primal:
+- Takes a tableau with a valid basis (from crash + refactorize)
+- Achieves dual feasibility (flip + optional dual Phase 1)
+- Runs dual simplex iterations with DSE + bound perturbation
+- On stalling: re-perturb (up to 5 attempts), then return STALLED status
+- On too many iterations: return ITERATION_LIMIT
+- **No tableau destruction, no primal fallback**
+- Caller (`simplex_solve`) decides whether to fall back to primal
+
+This keeps the existing `dual_simplex_solve()` untouched (MIP dual_reopt still uses it).
+
+**Phase C: Method dispatch in simplex_solve**
+
+```c
+// In simplex_solve(), after tableau creation and refactorization:
+if (solver->method == 1 || (solver->method == 2 && should_use_dual(solver))) {
+    crash_triangular(tab);        // T1.1
+    tableau_refactorize(tab);
+    int rc = dual_simplex_solve_standalone(solver);
+    if (rc == 0) goto post_solve;  // Optimal or infeasible
+    // Dual failed — fall back to primal
+    // Reset basis to all-slack, refactorize, run Phase 1 + Phase 2
+}
+// Existing primal path (Phase 1 → Phase 2) unchanged
+```
+
+Feature flag: `ralph_set_int_param(model, "method", M)`:
+- 0 = primal simplex (current default)
+- 1 = dual simplex (forces dual, primal fallback on failure)
+- 2 = auto (heuristic: dual if m > 50 and crash covers > 50% of rows)
+
+**Phase D: Make dual the default**
+
+After Phase C is validated on full NETLIB suite + FuelWise benchmarks:
+- Change default `method` from 0 to 2 (auto)
+- Keep primal as fallback for the 2-5% of problems where dual struggles
+- This is a one-line change with the full safety net of `method=0` revert
+
+*Dependencies:*
+- Phase A requires T1.1 (crash basis)
+- Phase B requires P5 (bound flipping, done) and P6 (DSE, done)
+- Phase C requires Phase A + B
+- Phase D requires Phase C + full validation
+- Optional: T3.5 (dual Phase 1) makes Phase A more robust but is not blocking
+
+*Tests for each phase:*
+- Phase A: (1) After crash, `make_dual_feasible()` succeeds on 90%+ of test LPs. (2) Crash+dual solves 20-variable LP correctly.
+- Phase B: (1) `dual_simplex_solve_standalone()` solves 10 LPs to optimality. (2) Returns correct INFEASIBLE on infeasible LP. (3) Returns STALLED (not crash) on adversarial degenerate LP.
+- Phase C: (1) method=1 solves all existing LP tests. (2) method=2 auto-selects correctly. (3) method=2 falls back to primal on problems where dual fails. (4) No regression on any existing test with method=2.
+- Phase D: (1) All 272+ ralph tests pass with method=2 as default. (2) All 29+ fuelwise tests pass. (3) NETLIB suite: ≥ same solve rate as method=0. (4) FuelWise benchmarks: no regression on milp15/30/50/100.
+
+*Risk assessment:*
+- Phase A-B: Low. New function, old code untouched.
+- Phase C: Medium. Modifies `simplex_solve` pipeline but with explicit fallback to existing primal path.
+- Phase D: Medium. Default change affects all users. One-line revert to `method=0` if issues found.
+
+#### Implementation Order (Prioritized by Impact/Effort)
+
+| Order | ID | Feature | Impact | Effort | Deps | Flag |
+|-------|-----|---------|--------|--------|------|------|
+| 1 | T1.2 | Multi-round equilibrium scaling | Better numerics, may fix blend | ~100 LoC | None | `scaling_rounds` |
+| 2 | T1.1 | Triangular crash basis | 2-5x cold starts | ~300 LoC | None | `crash` |
+| 3 | T2.3 | Post-solve verification | Correctness | ~150 LoC | None | `verify` |
+| 4 | T3.1 | Objective limits in simplex_solve | 30-50% fewer pruned-node iters | ~50 LoC | None | `obj_limit` |
+| 5 | T3.4 | Per-phase pricing strategy | 10-15% Phase 1 improvement | ~30 LoC | None | `phase1_pricing` |
+| 6 | T3.6 | Basis conditioning report | Diagnostics | ~30 LoC | None | `verify` (shared) |
+| 7 | T1.4 | Symbolic/numeric LU separation | 1.5-2x refactorization | ~500 LoC | None | `lu_symbolic_reuse` |
+| 8 | T2.2 | Heap-based pricing | 2-5x pricing on large problems | ~200 LoC | None | `pricing=4` |
+| 9 | T3.2 | Dynamic refactorization period | 10-20% LU amortization | ~50 LoC | None | `refac_dynamic` |
+| 10 | T3.3 | Cost perturbation | Fewer degenerate pivots | ~80 LoC | None | `cost_perturb` |
+| 11 | T2.1 | Supernodal LU (§1.11) | 3-5x factorization | ~1500 LoC | #7 (T1.4) | `lu_supernode` |
+| 12 | T3.5 | Dual Phase 1 with auxiliary objective | Robust dual starts | ~200 LoC | None | `dual_phase1` |
+| 13 | T1.3 | Dual simplex as default | ~2x initial solves | ~400 LoC | #2 (T1.1), P5, P6 | `method` |
+
+Items 1-6 total ~660 LoC with zero dependencies. They move Ralph from ~60% to ~75% of
+state-of-the-art. Items 7-11 push to ~90%. Item 13 (dual-as-default) is the architectural
+endgame that gets to ~95%.
+
+**Milestone targets:**
+
+| Milestone | Requirements | Expected Result |
+|-----------|-------------|-----------------|
+| **75% SotA** | T1.2, T1.1, T2.3, T3.1, T3.4, T3.6 | blend NETLIB passes, 2-3x cold start improvement, numerical diagnostics |
+| **85% SotA** | + T1.4, T2.2, T3.2, T3.3 | Competitive per-iteration speed on m < 2000, proper LU reuse |
+| **90% SotA** | + T2.1 (supernodal) | Competitive per-iteration speed on m < 5000 |
+| **95% SotA** | + T1.3 (dual-as-default) | Competitive with GLPK/CLP on most NETLIB/MIPLIB instances |
+
+**Testing strategy:** Every item must pass this gate before changing defaults:
+1. `make clean && make test` in ralph/ — all 272+ tests pass
+2. `make clean && make test` in fuelwise/ — all 29+ tests pass
+3. ASAN build: `CFLAGS="-fsanitize=address,undefined -g" make test` in ralph/
+4. FuelWise multi-seed benchmark: no regression on milp15/30/50 (5 seeds each)
+5. NETLIB subset: afiro, adlittle, blend, share2b, israel, bandm, beaconfd
 
 ---
 
