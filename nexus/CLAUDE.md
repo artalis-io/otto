@@ -38,6 +38,7 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 | `include/nx_emit.h` | Output emitter API (GeoJSON, CSV) | 50 |
 | `include/nx_slug.h` | Slugification for row IDs | 30 |
 | `include/nx_issue.h` | Structured issue tracking API | 70 |
+| `include/nx_diff.h` | Change detection between runs API | 63 |
 | `src/nx_xlsx.c` | XLSX implementation | 631 |
 | `src/nx_pdf.c` | PDF clustering implementation | 810 |
 | `src/nx_csv.c` | CSV → nx_raw JSON | 343 |
@@ -50,6 +51,7 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 | `src/nx_slug.c` | Slug utility | 51 |
 | `src/nx_ingest.c` | Pipeline orchestrator | 174 |
 | `src/nx_issue.c` | Issue list implementation | 170 |
+| `src/nx_diff.c` | Change detection (FNV-1a hashing, hashmap diff) | 348 |
 
 ## Naming
 
@@ -85,7 +87,8 @@ Hardening: `-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common`.
 - test_merge: 20 tests (4 error + 5 basic + 1 strip + 6 edge + 4 golden PDF02)
 - test_emit: 19 tests (9 GeoJSON + 10 CSV)
 - test_issue: 13 tests (init/free, add, dynamic growth, count, JSON output)
-- Total: 169 tests
+- test_diff: 14 tests (null input, identical/added/removed/modified, mixed, empty, parse error)
+- Total: 183 tests
 
 ## Schemas
 
