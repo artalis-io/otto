@@ -27,8 +27,8 @@ void tableau_free(SimplexTableau *tab);
 static void apply_bound_perturbation(SimplexTableau *tab);
 static void remove_bound_perturbation(SimplexTableau *tab);
 
-/* Forward declaration for dual feasibility function */
-static int make_dual_feasible(SimplexTableau *tab, int obj_sense);
+/* Forward declaration for dual feasibility function (non-static for simplex.c access) */
+int make_dual_feasible(SimplexTableau *tab, int obj_sense);
 
 /*
  * Extract Farkas ray (certificate of infeasibility) for dual simplex.
@@ -1449,7 +1449,7 @@ int dual_simplex_reoptimize(SimplexSolver *solver, int var, double new_lb, doubl
  * After flipping, basic variable values are recomputed and may become infeasible,
  * which dual Phase 2 will fix.
  */
-static int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
+int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
     (void)obj_sense;  /* Not needed - rc is already for internal minimization */
 
     /* Compute reduced costs with current basis */
@@ -1535,6 +1535,433 @@ static void remove_bound_perturbation(SimplexTableau *tab) {
             tab->x[j] = tab->perturb_backup[j];
         }
     }
+}
+
+/* ============================================================================
+ * Clean Dual Phase 2 (T1.3) — No primal fallbacks
+ *
+ * Takes a dual-feasible tableau, runs dual simplex to primal feasibility.
+ * Returns: 0=OPTIMAL, 1=INFEASIBLE, -1=FAILED (caller decides fallback)
+ * ============================================================================ */
+
+int dual_simplex_solve_v2(SimplexSolver *solver) {
+    if (!solver || !solver->tableau) return -1;
+
+    SimplexTableau *tab = solver->tableau;
+    int n_orig = solver->model->num_vars;
+
+    /* Apply bound perturbation for cycling prevention */
+    apply_bound_perturbation(tab);
+
+    /* P5 bound flipping is disabled when perturbation is active
+     * (perturbation shifts ub, corrupts flip magnitude) */
+    int use_dse = solver->use_dual_steepest_edge;
+
+    /* Initialize DSE weights (exact for standalone solve) */
+    if (use_dse) {
+        dse_init_exact(tab);
+    }
+
+    /* Stalling/degeneracy tracking */
+    int degenerate_count = 0;
+    const int DEGEN_PERTURB_THRESHOLD = 15;
+    double last_obj = tab->obj_value;
+    int stall_count = 0;
+    const int STALL_THRESHOLD = 50;
+    int perturb_attempts = 0;
+    const int MAX_PERTURB_ATTEMPTS = 5;
+
+    for (int iter = 0; iter < solver->max_iterations; iter++) {
+        solver->iterations = iter;
+
+        /* Compute primal solution */
+        tableau_compute_solution(tab);
+
+        /* T3.1: Objective limit early-exit (internal minimization space) */
+        if (solver->objective_limit < RALPH_INFINITY &&
+            tab->obj_value >= solver->objective_limit) {
+            remove_bound_perturbation(tab);
+            tableau_compute_solution(tab);
+            solver->status = RALPH_STATUS_OBJ_LIMIT;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+            return 0;
+        }
+
+        /* Find leaving variable: DSE scoring or most-infeasible */
+        int leaving = -1;
+
+        if (use_dse && tab->dse_initialized) {
+            double best_score = 0.0;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas <= RALPH_FEAS_TOL) continue;
+
+                double w = tab->dse_weights[k];
+                double score = (infeas * infeas) / w;
+                if (score > best_score) {
+                    best_score = score;
+                    leaving = k;
+                }
+            }
+        } else {
+            double max_infeas = RALPH_FEAS_TOL;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas > max_infeas) {
+                    max_infeas = infeas;
+                    leaving = k;
+                }
+            }
+        }
+
+        if (leaving < 0) {
+            /* Primal feasible — optimal! */
+            remove_bound_perturbation(tab);
+            tableau_compute_solution(tab);
+            solver->status = RALPH_STATUS_OPTIMAL;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+
+            if (!solver->solution)
+                solver->solution = (double*)calloc(n_orig, sizeof(double));
+            if (solver->solution) {
+                for (int j = 0; j < n_orig; j++)
+                    solver->solution[j] = tab->x[j];
+            }
+            return 0;
+        }
+
+        /* Dual ratio test */
+        int entering;
+        double theta;
+
+        if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
+            /* No entering variable — problem is infeasible */
+            remove_bound_perturbation(tab);
+            extract_farkas_ray_dual(solver);
+            solver->status = RALPH_STATUS_INFEASIBLE;
+            return 1;
+        }
+
+        /* Perform dual pivot */
+        if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+            if (tableau_refactorize(tab) != 0) {
+                remove_bound_perturbation(tab);
+                return -1;  /* FAILED */
+            }
+            tab->dse_initialized = 0;
+            if (use_dse) dse_init_exact(tab);
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+            continue;
+        }
+
+        /* Degeneracy detection */
+        if (fabs(theta) < RALPH_FEAS_TOL) {
+            degenerate_count++;
+            if (degenerate_count >= DEGEN_PERTURB_THRESHOLD) {
+                apply_bound_perturbation(tab);
+                degenerate_count = 0;
+            }
+        } else {
+            degenerate_count = 0;
+        }
+
+        /* Stalling detection */
+        double obj_tol = 1e-4 * (1.0 + fabs(last_obj));
+        double obj_change = fabs(tab->obj_value - last_obj);
+        if (obj_change < obj_tol) {
+            stall_count++;
+            if (stall_count >= STALL_THRESHOLD) {
+                perturb_attempts++;
+                if (perturb_attempts <= MAX_PERTURB_ATTEMPTS) {
+                    remove_bound_perturbation(tab);
+                    apply_bound_perturbation(tab);
+                    stall_count = 0;
+                    if (solver->verbose) {
+                        printf("[dual_v2] Iter %d: stalled, re-perturbing (attempt %d)\n",
+                               iter, perturb_attempts);
+                    }
+                } else {
+                    /* Exhausted perturbation attempts — FAILED */
+                    if (solver->verbose) {
+                        printf("[dual_v2] Iter %d: stalled after %d perturb attempts, giving up\n",
+                               iter, perturb_attempts);
+                    }
+                    remove_bound_perturbation(tab);
+                    return -1;
+                }
+            }
+        } else {
+            stall_count = 0;
+            last_obj = tab->obj_value;
+        }
+
+        /* Periodic refactorization */
+        int need_refactor = lu_needs_refactorization(tab->lu) ||
+                           (iter > 0 && iter % 50 == 0);
+        if (need_refactor) {
+            if (tableau_refactorize(tab) != 0) {
+                remove_bound_perturbation(tab);
+                return -1;
+            }
+            tab->dse_initialized = 0;
+            if (use_dse) dse_init_exact(tab);
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        } else if (iter > 0 && iter % 20 == 0) {
+            tableau_compute_reduced_costs(tab);
+        }
+
+        if (solver->verbose && iter % 100 == 0) {
+            printf("[dual_v2] Iter %d: obj=%.6f\n", iter, tab->obj_value);
+        }
+    }
+
+    /* Exceeded max iterations — FAILED */
+    remove_bound_perturbation(tab);
+    return -1;
+}
+
+/* ============================================================================
+ * Dual Phase 1 (T3.5) — Achieve dual feasibility via auxiliary objective
+ *
+ * When make_dual_feasible() can't fix all dual infeasibilities (free variables,
+ * no finite upper bound), use auxiliary objective pivots (Koberstein 2005):
+ *   1. Save original c_ext[]
+ *   2. Set c_aux[j] = -sign(rc[j]) for dual-infeasible non-basics, 0 otherwise
+ *   3. Run dual pivots on auxiliary objective
+ *   4. After each pivot, check if ORIGINAL objective is now dual feasible
+ *   5. If yes: stop, restore c_ext, done. If auxiliary terminates: failed.
+ * ============================================================================ */
+
+/* Helper: count dual infeasibilities for original objective with current basis */
+static int count_orig_dual_infeas(SimplexTableau *tab, const double *c_orig) {
+    int m = tab->m;
+    int n = tab->n;
+
+    /* Compute y = c_orig_B' * B^{-1} using BTRAN */
+    double *cb = tab->work1;
+    double *y_orig = tab->work3;
+    memset(cb, 0, m * sizeof(double));
+    for (int k = 0; k < m; k++)
+        cb[k] = c_orig[tab->basis[k]];
+    lu_solve_transpose(tab->lu, cb, y_orig);
+
+    int count = 0;
+    for (int j = 0; j < n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        /* rc_orig[j] = c_orig[j] - y_orig' * a_j */
+        double rc_j = c_orig[j] - sparse_dot_column(tab->A_ext, j, y_orig);
+
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc_j < -RALPH_OPT_TOL)
+            count++;
+        else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc_j > RALPH_OPT_TOL)
+            count++;
+        else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc_j) > RALPH_OPT_TOL)
+            count++;
+    }
+    return count;
+}
+
+int dual_phase1(SimplexSolver *solver) {
+    if (!solver || !solver->tableau) return -1;
+
+    SimplexTableau *tab = solver->tableau;
+    int n = tab->n;
+
+    if (solver->verbose) {
+        printf("[dual_phase1] Starting auxiliary-objective dual Phase 1...\n");
+    }
+
+    /* Save original objective */
+    double *c_saved = (double*)malloc(n * sizeof(double));
+    if (!c_saved) return -1;
+    memcpy(c_saved, tab->c_ext, n * sizeof(double));
+
+    /* Count dual infeasibilities and set auxiliary objective */
+    int infeas_count = 0;
+    tableau_compute_reduced_costs(tab);
+
+    for (int j = 0; j < n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) {
+            tab->c_ext[j] = 0.0;
+            continue;
+        }
+
+        double rc_j = tab->rc[j];
+
+        int dual_infeas = 0;
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc_j < -RALPH_OPT_TOL)
+            dual_infeas = 1;
+        else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc_j > RALPH_OPT_TOL)
+            dual_infeas = 1;
+        else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc_j) > RALPH_OPT_TOL)
+            dual_infeas = 1;
+
+        if (dual_infeas) {
+            tab->c_ext[j] = (rc_j > 0) ? -1.0 : 1.0;
+            infeas_count++;
+        } else {
+            tab->c_ext[j] = 0.0;
+        }
+    }
+
+    if (infeas_count == 0) {
+        memcpy(tab->c_ext, c_saved, n * sizeof(double));
+        free(c_saved);
+        return 0;
+    }
+
+    if (solver->verbose) {
+        printf("[dual_phase1] %d dual infeasibilities, running auxiliary pivots...\n",
+               infeas_count);
+    }
+
+    /* Recompute reduced costs with auxiliary objective */
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    tableau_compute_reduced_costs(tab);
+
+    /* Apply bound perturbation for cycling prevention */
+    apply_bound_perturbation(tab);
+
+    int use_dse = solver->use_dual_steepest_edge;
+    if (use_dse) dse_init_exact(tab);
+
+    int max_phase1_iters = 10 * tab->m;
+    int succeeded = 0;
+
+    for (int iter = 0; iter < max_phase1_iters; iter++) {
+        tableau_compute_solution(tab);
+
+        /* Find leaving variable (most infeasible basic) */
+        int leaving = -1;
+        if (use_dse && tab->dse_initialized) {
+            double best_score = 0.0;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas <= RALPH_FEAS_TOL) continue;
+                double w = tab->dse_weights[k];
+                double score = (infeas * infeas) / w;
+                if (score > best_score) { best_score = score; leaving = k; }
+            }
+        } else {
+            double max_infeas = RALPH_FEAS_TOL;
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                double infeas = 0.0;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                if (infeas > max_infeas) { max_infeas = infeas; leaving = k; }
+            }
+        }
+
+        if (leaving < 0) {
+            /* Auxiliary is primal+dual feasible — check original dual feasibility */
+            break;
+        }
+
+        /* Dual ratio test + pivot on auxiliary */
+        int entering;
+        double theta;
+        if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
+            break;  /* Infeasible for auxiliary — can't continue */
+        }
+
+        if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+            if (tableau_refactorize(tab) != 0) break;
+            tab->dse_initialized = 0;
+            if (use_dse) dse_init_exact(tab);
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+            continue;
+        }
+
+        /* Periodic refactorization */
+        if (lu_needs_refactorization(tab->lu) || (iter > 0 && iter % 50 == 0)) {
+            if (tableau_refactorize(tab) != 0) break;
+            tab->dse_initialized = 0;
+            if (use_dse) dse_init_exact(tab);
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        }
+
+        /* Check original dual feasibility after each pivot */
+        if (iter % 5 == 0 || iter > max_phase1_iters - 10) {
+            int orig_infeas = count_orig_dual_infeas(tab, c_saved);
+            if (orig_infeas == 0) {
+                succeeded = 1;
+                if (solver->verbose) {
+                    printf("[dual_phase1] Original dual feasibility achieved at iter %d\n", iter);
+                }
+                break;
+            }
+        }
+    }
+
+    /* Remove perturbation */
+    remove_bound_perturbation(tab);
+
+    /* Restore original objective */
+    memcpy(tab->c_ext, c_saved, n * sizeof(double));
+    free(c_saved);
+
+    /* Recompute everything with original objective */
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+
+    /* Final check: try make_dual_feasible on the new basis */
+    make_dual_feasible(tab, solver->model->obj_sense);
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+
+    /* Verify dual feasibility */
+    int still_infeasible = 0;
+    for (int j = 0; j < n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+        double rc_j = tab->rc[j];
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc_j < -RALPH_OPT_TOL) {
+            still_infeasible = 1; break;
+        }
+        if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc_j > RALPH_OPT_TOL) {
+            still_infeasible = 1; break;
+        }
+        if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc_j) > RALPH_OPT_TOL) {
+            still_infeasible = 1; break;
+        }
+    }
+
+    if (still_infeasible && !succeeded) {
+        if (solver->verbose) {
+            printf("[dual_phase1] Failed to achieve dual feasibility\n");
+        }
+        return -1;
+    }
+
+    if (solver->verbose) {
+        printf("[dual_phase1] Dual feasibility achieved\n");
+    }
+    return 0;
 }
 
 /*
@@ -1831,6 +2258,202 @@ int dual_simplex_solve_from_scratch(SimplexSolver *solver) {
     }
 
     solver->status = RALPH_STATUS_ITERATION_LIMIT;
+    solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+    return -1;
+}
+
+/* ============================================================================
+ * Clean Dual Simplex from Scratch (T1.3)
+ *
+ * Creates tableau without Big-M artificials (slacks only), then:
+ * 1. make_dual_feasible() — flip non-basics to achieve dual feasibility
+ * 2. dual_phase1() — auxiliary pivots if flipping wasn't enough
+ * 3. dual_simplex_solve_v2() — clean Phase 2 to achieve primal feasibility
+ *
+ * Returns 0 on success (OPTIMAL, INFEASIBLE, OBJ_LIMIT), -1 on failure.
+ * No primal fallbacks — caller decides.
+ * ============================================================================ */
+
+int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
+    if (!solver || !solver->model) return -1;
+
+    clock_t start = clock();
+
+    if (solver->verbose) {
+        printf("[dual_v2_scratch] Starting from scratch...\n");
+    }
+
+    /* Create tableau if needed */
+    if (!solver->tableau) {
+        solver->tableau = tableau_create(solver->model);
+        if (!solver->tableau) {
+            solver->status = RALPH_STATUS_ERROR;
+            return -1;
+        }
+    }
+
+    SimplexTableau *tab = solver->tableau;
+
+    /* For dual simplex: fix artificial variables at zero (non-basic at lb=0)
+     * and replace them with surplus/slack in the basis. Also fix their upper
+     * bounds to 0 so they can never enter the basis during dual pivots. */
+    if (tab->num_artificial > 0) {
+        for (int a = 0; a < tab->num_artificial; a++) {
+            int art = tab->artificial_vars[a];
+            int row = tab->basis_pos[art];
+
+            if (row >= 0 && row < tab->m) {
+                /* Artificial is basic — swap with surplus (one index before) */
+                int surplus = art - 1;
+
+                if (surplus >= solver->model->num_vars &&
+                    tab->var_status[surplus] != RALPH_BASIC) {
+                    tab->basis[row] = surplus;
+                    tab->basis_pos[surplus] = row;
+                    tab->var_status[surplus] = RALPH_BASIC;
+
+                    tab->basis_pos[art] = -1;
+                    tab->var_status[art] = RALPH_FIXED;
+                    tab->x[art] = 0.0;
+                }
+            }
+
+            /* Fix artificial: cost=0, lb=ub=0 so it can never leave FIXED status */
+            tab->c_ext[art] = 0.0;
+            tab->lb_ext[art] = 0.0;
+            tab->ub_ext[art] = 0.0;
+        }
+    }
+
+    /* Factorize initial basis (slacks/surplus) */
+    if (tableau_refactorize(tab) != 0) {
+        solver->status = RALPH_STATUS_ERROR;
+        return -1;
+    }
+
+    /* Compute initial solution and reduced costs */
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+
+    if (solver->verbose) {
+        printf("[dual_v2_scratch] Initial: obj=%.2f\n",
+               tab->obj_value * solver->model->obj_sense);
+    }
+
+    /* Step 1: Flip non-basic bounds to achieve dual feasibility */
+    int changes = make_dual_feasible(tab, solver->model->obj_sense);
+
+    if (changes > 0) {
+        tableau_compute_solution(tab);
+        tableau_compute_reduced_costs(tab);
+    }
+
+    if (solver->verbose) {
+        printf("[dual_v2_scratch] Bound flips: %d\n", changes);
+    }
+
+    /* Check if dual feasible */
+    int dual_infeasible = 0;
+    for (int j = 0; j < tab->n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+        double rc = tab->rc[j];
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            dual_infeasible = 1; break;
+        }
+        if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            dual_infeasible = 1; break;
+        }
+        if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) {
+            dual_infeasible = 1; break;
+        }
+    }
+
+    /* Step 2: If still dual infeasible, run dual Phase 1 */
+    if (dual_infeasible) {
+        if (solver->verbose) {
+            printf("[dual_v2_scratch] Dual infeasible after flips, running Phase 1...\n");
+        }
+
+        int p1rc = dual_phase1(solver);
+        if (p1rc != 0) {
+            if (solver->verbose) {
+                printf("[dual_v2_scratch] Dual Phase 1 failed\n");
+            }
+            solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+            return -1;
+        }
+    }
+
+    /* Check if already primal feasible (optimal) */
+    int primal_infeasible = 0;
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL ||
+            tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
+            primal_infeasible = 1;
+            break;
+        }
+    }
+
+    if (!primal_infeasible) {
+        solver->status = RALPH_STATUS_OPTIMAL;
+        solver->obj_value = tab->obj_value * solver->model->obj_sense;
+        solver->iterations = 0;
+
+        int n_orig = solver->model->num_vars;
+        if (!solver->solution)
+            solver->solution = (double*)calloc(n_orig, sizeof(double));
+        if (solver->solution) {
+            for (int j = 0; j < n_orig; j++)
+                solver->solution[j] = tab->x[j];
+        }
+        if (!solver->dual_solution)
+            solver->dual_solution = (double*)calloc(solver->model->num_cons, sizeof(double));
+        if (solver->dual_solution) {
+            for (int i = 0; i < solver->model->num_cons; i++)
+                solver->dual_solution[i] = tab->y[i] * solver->model->obj_sense;
+        }
+        if (!solver->reduced_costs)
+            solver->reduced_costs = (double*)calloc(solver->model->num_vars, sizeof(double));
+        if (solver->reduced_costs) {
+            for (int j = 0; j < solver->model->num_vars; j++)
+                solver->reduced_costs[j] = tab->rc[j] * solver->model->obj_sense;
+        }
+
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        return 0;
+    }
+
+    if (solver->verbose) {
+        printf("[dual_v2_scratch] Running dual Phase 2...\n");
+    }
+
+    /* Step 3: Run clean dual Phase 2 */
+    int rc = dual_simplex_solve_v2(solver);
+
+    if (rc == 0) {
+        /* OPTIMAL — copy dual solution and reduced costs */
+        if (!solver->dual_solution)
+            solver->dual_solution = (double*)calloc(solver->model->num_cons, sizeof(double));
+        if (solver->dual_solution) {
+            for (int i = 0; i < solver->model->num_cons; i++)
+                solver->dual_solution[i] = tab->y[i] * solver->model->obj_sense;
+        }
+        if (!solver->reduced_costs)
+            solver->reduced_costs = (double*)calloc(solver->model->num_vars, sizeof(double));
+        if (solver->reduced_costs) {
+            for (int j = 0; j < solver->model->num_vars; j++)
+                solver->reduced_costs[j] = tab->rc[j] * solver->model->obj_sense;
+        }
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        return 0;
+    } else if (rc == 1) {
+        /* INFEASIBLE */
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        return 0;
+    }
+
+    /* FAILED */
     solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
     return -1;
 }

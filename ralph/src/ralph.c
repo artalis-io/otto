@@ -646,33 +646,14 @@ int ralph_optimize(RalphModel *model) {
         }
         model->lp_solver->force_two_phase = model->force_two_phase;
         model->lp_solver->trace_phase1 = model->trace_phase1;
+        model->lp_solver->method = model->method;
         if (model->dual_bound_flip >= 0)
             model->lp_solver->use_dual_bound_flip = model->dual_bound_flip;
         if (model->dual_steepest_edge >= 0)
             model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
 
-        /* Solve using selected method */
-        if (model->method == 1) {
-            /* Dual simplex - true dual phase 1 */
-            dual_simplex_solve_from_scratch(model->lp_solver);
-        } else if (model->method == 2) {
-            /* Auto: use dual for all-<= constraints, primal otherwise */
-            int use_dual = 1;
-            for (int i = 0; i < solve_model->num_cons; i++) {
-                if (solve_model->sense[i] != 'L') {
-                    use_dual = 0;
-                    break;
-                }
-            }
-            if (use_dual) {
-                dual_simplex_solve_from_scratch(model->lp_solver);
-            } else {
-                simplex_solve(model->lp_solver);
-            }
-        } else {
-            /* Default: primal simplex */
-            simplex_solve(model->lp_solver);
-        }
+        /* Solve — method dispatch (primal/dual/auto) is handled inside simplex_solve */
+        simplex_solve(model->lp_solver);
 
         model->status = model->lp_solver->status;
         model->iteration_count = model->lp_solver->iterations;

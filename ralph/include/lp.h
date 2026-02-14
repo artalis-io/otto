@@ -329,6 +329,7 @@ typedef struct {
     int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
     int crash;              /* 0=off, 1=triangular crash basis */
     int verify;             /* 0=off, 1=post-solve verification (T2.3) */
+    int method;             /* 0=primal, 1=dual, 2=auto (dual first, primal fallback) */
     double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
     int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
     int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
@@ -451,6 +452,10 @@ int dual_simplex_solve(SimplexSolver *solver);
 int dual_simplex_solve_from_scratch(SimplexSolver *solver);
 int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters);
 int dual_reopt(SimplexSolver *solver, int max_pivots);  /* Deprecate when P8 lands */
+int dual_simplex_solve_v2(SimplexSolver *solver);  /* Clean dual Phase 2 — no primal fallbacks */
+int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver);  /* Clean dual from scratch (T1.3) */
+int dual_phase1(SimplexSolver *solver);            /* Auxiliary-objective dual Phase 1 */
+int make_dual_feasible(SimplexTableau *tab, int obj_sense); /* Flip bounds for dual feasibility */
 
 /* Pricing strategies */
 int pricing_dantzig(SimplexTableau *tableau, int *entering);
