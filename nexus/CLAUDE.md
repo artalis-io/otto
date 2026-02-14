@@ -37,17 +37,19 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 | `include/nx_discover.h` | Auto schema discovery API | 58 |
 | `include/nx_emit.h` | Output emitter API (GeoJSON, CSV) | 50 |
 | `include/nx_slug.h` | Slugification for row IDs | 30 |
-| `src/nx_xlsx.c` | XLSX implementation | 609 |
-| `src/nx_pdf.c` | PDF clustering implementation | 789 |
-| `src/nx_csv.c` | CSV → nx_raw JSON | 342 |
-| `src/nx_xform.c` | Transform engine (multi-transforms, type coercion) | 1251 |
+| `include/nx_issue.h` | Structured issue tracking API | 70 |
+| `src/nx_xlsx.c` | XLSX implementation | 631 |
+| `src/nx_pdf.c` | PDF clustering implementation | 810 |
+| `src/nx_csv.c` | CSV → nx_raw JSON | 343 |
+| `src/nx_xform.c` | Transform engine (multi-transforms, type coercion) | 1247 |
 | `src/nx_compute.c` | Compute functions: EOV, DMS, coalesce, phone, ZIP, hours | 345 |
-| `src/nx_validate.c` | Validation rules: geo_bounds, format, unique, outlier | 750 |
-| `src/nx_merge.c` | Continuation row merging | 368 |
+| `src/nx_validate.c` | Validation rules: geo_bounds, format, unique, outlier | 766 |
+| `src/nx_merge.c` | Continuation row merging | 396 |
 | `src/nx_discover.c` | Heuristic schema discovery | 720 |
-| `src/nx_emit.c` | Output emitters (GeoJSON, CSV) | 256 |
+| `src/nx_emit.c` | Output emitters (GeoJSON, CSV) | 280 |
 | `src/nx_slug.c` | Slug utility | 51 |
-| `src/nx_ingest.c` | Pipeline orchestrator | 137 |
+| `src/nx_ingest.c` | Pipeline orchestrator | 174 |
+| `src/nx_issue.c` | Issue list implementation | 170 |
 
 ## Naming
 
@@ -58,7 +60,7 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 ## Build
 
 ```bash
-make all      # Build library + tests (156 tests)
+make all      # Build library + tests (169 tests)
 make test     # Run all tests
 make tools    # Build CLI tools
 make debug    # Build with ASan/UBSan + -Werror
@@ -82,7 +84,8 @@ Hardening: `-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common`.
 - test_discover: 26 tests (18 unit + 2 continuation + 6 golden)
 - test_merge: 20 tests (4 error + 5 basic + 1 strip + 6 edge + 4 golden PDF02)
 - test_emit: 19 tests (9 GeoJSON + 10 CSV)
-- Total: 156 tests
+- test_issue: 13 tests (init/free, add, dynamic growth, count, JSON output)
+- Total: 169 tests
 
 ## Schemas
 
