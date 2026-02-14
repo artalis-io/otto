@@ -19,7 +19,9 @@
 #include "nx_xlsx.h"
 #include "nx_pdf.h"
 #include "nx_csv.h"
+#include "nx_merge.h"
 #include "nx_xform.h"
+#include "nx_validate.h"
 #include "sh_arena.h"
 #include "sh_json.h"
 #include "sh_csv.h"
@@ -410,18 +412,54 @@ static int process_file(const PipelineOpts *po)
         }
     }
 
-    /* Stage B: Schema transform (optional) */
+    /* Read schema once for all stages (M, B, X) */
     char *canon_json = NULL;
     size_t canon_len = 0;
 
     if (po->schema_path) {
-        fprintf(stderr, "  Stage B: Applying schema %s...\n",
-                strrchr(po->schema_path, '/') ?
-                    strrchr(po->schema_path, '/') + 1 : po->schema_path);
-
         size_t schema_file_len = 0;
         char *schema = read_file(po->schema_path, &schema_file_len);
         if (!schema) { free(raw_json); return 1; }
+
+        const char *schema_base = strrchr(po->schema_path, '/');
+        schema_base = schema_base ? schema_base + 1 : po->schema_path;
+
+        /* Stage M: Merge continuation rows (PDF only) */
+        if (fmt == FMT_PDF || fmt == FMT_PDF_JSON) {
+            SHArena *arena_m = sh_arena_create(PIPELINE_ARENA_SIZE);
+            if (arena_m) {
+                char *merged = NULL;
+                size_t merged_len = 0;
+                fprintf(stderr, "  Stage M: Merging continuation rows...\n");
+                NxMergeStatus ms = nx_merge_rows(raw_json, raw_len,
+                                                  schema, schema_file_len,
+                                                  arena_m, &merged, &merged_len);
+                sh_arena_free(arena_m);
+                if (ms == NX_MERGE_OK && merged) {
+                    free(raw_json);
+                    raw_json = merged;
+                    raw_len = merged_len;
+
+                    /* Print merged summary */
+                    SHArena *pa = sh_arena_create(256 * 1024);
+                    if (pa) {
+                        ShJsonValue *root = NULL;
+                        if (sh_json_parse(raw_json, raw_len, pa, &root) == SH_JSON_OK) {
+                            ShJsonValue *tables = sh_json_get(root, "tables");
+                            if (tables && sh_json_array_len(tables) > 0) {
+                                ShJsonValue *t0 = sh_json_array_get(tables, 0);
+                                fprintf(stderr, "  Merged: %d rows\n",
+                                        sh_json_as_int(sh_json_get(t0, "row_count"), 0));
+                            }
+                        }
+                        sh_arena_free(pa);
+                    }
+                }
+            }
+        }
+
+        /* Stage B: Schema transform */
+        fprintf(stderr, "  Stage B: Applying schema %s...\n", schema_base);
 
         SHArena *arena_b = sh_arena_create(PIPELINE_ARENA_SIZE);
         if (!arena_b) {
@@ -435,25 +473,52 @@ static int process_file(const PipelineOpts *po)
                                            schema, schema_file_len,
                                            arena_b, &canon_json, &canon_len);
         sh_arena_free(arena_b);
-        free(schema);
 
         if (ts != NX_XFORM_OK) {
             fprintf(stderr, "  Error: transform failed: %s\n",
                     nx_xform_status_str(ts));
+            free(schema);
             free(raw_json);
             return 1;
         }
 
-        /* Print canonical summary */
+        /* Stage X: Validate canonical JSON */
+        fprintf(stderr, "  Stage X: Validating...\n");
+
+        SHArena *arena_x = sh_arena_create(PIPELINE_ARENA_SIZE);
+        if (arena_x) {
+            char *validated = NULL;
+            size_t validated_len = 0;
+            NxValidateStatus vs = nx_validate(canon_json, canon_len,
+                                               schema, schema_file_len,
+                                               arena_x, &validated,
+                                               &validated_len);
+            sh_arena_free(arena_x);
+            if (vs == NX_VALIDATE_OK && validated) {
+                free(canon_json);
+                canon_json = validated;
+                canon_len = validated_len;
+            }
+        }
+        free(schema);
+
+        /* Print final summary (after validation) */
         SHArena *pa = sh_arena_create(256 * 1024);
         if (pa) {
             ShJsonValue *root = NULL;
             if (sh_json_parse(canon_json, canon_len, pa, &root) == SH_JSON_OK) {
                 ShJsonValue *audit = sh_json_get(root, "audit");
                 if (audit) {
-                    fprintf(stderr, "  Canonical: %d accepted, %d rejected\n",
+                    fprintf(stderr, "  Result: %d accepted, %d rejected\n",
                             sh_json_as_int(sh_json_get(audit, "rows_accepted"), 0),
                             sh_json_as_int(sh_json_get(audit, "rows_rejected"), 0));
+                    ShJsonValue *validation = sh_json_get(audit, "validation");
+                    if (validation) {
+                        fprintf(stderr, "  Validation: %d rules, %d errors, %d warnings\n",
+                                sh_json_as_int(sh_json_get(validation, "rules_applied"), 0),
+                                sh_json_as_int(sh_json_get(validation, "errors"), 0),
+                                sh_json_as_int(sh_json_get(validation, "warnings"), 0));
+                    }
                 }
             }
             sh_arena_free(pa);
@@ -619,6 +684,27 @@ static int run_batch(const char *config_path)
             char *schema_data = read_file(schema_ptr, &schema_len);
             if (!schema_data) { free(raw); failures++; continue; }
 
+            /* Stage M: Merge continuation rows (PDF only) */
+            FileFormat batch_fmt = detect_format(abs_file);
+            if (batch_fmt == FMT_PDF || batch_fmt == FMT_PDF_JSON) {
+                SHArena *arena_m = sh_arena_create(PIPELINE_ARENA_SIZE);
+                if (arena_m) {
+                    char *merged = NULL;
+                    size_t merged_len = 0;
+                    NxMergeStatus ms = nx_merge_rows(raw, raw_len,
+                                                      schema_data, schema_len,
+                                                      arena_m, &merged,
+                                                      &merged_len);
+                    sh_arena_free(arena_m);
+                    if (ms == NX_MERGE_OK && merged) {
+                        free(raw);
+                        raw = merged;
+                        raw_len = merged_len;
+                    }
+                }
+            }
+
+            /* Stage B: Transform */
             SHArena *arena_b = sh_arena_create(PIPELINE_ARENA_SIZE);
             if (!arena_b) { free(raw); free(schema_data); failures++; continue; }
 
@@ -632,18 +718,37 @@ static int run_batch(const char *config_path)
                                                schema_data, schema_len,
                                                arena_b, &canon, &canon_len);
             sh_arena_free(arena_b);
-            free(schema_data);
             free(raw);
 
             if (ts != NX_XFORM_OK) {
                 fprintf(stderr, "  Error: transform failed: %s\n",
                         nx_xform_status_str(ts));
+                free(schema_data);
                 failures++;
-            } else {
-                write_file(out_canon, canon, canon_len);
-                fprintf(stderr, "  Wrote: %s\n", out_canon);
-                free(canon);
+                continue;
             }
+
+            /* Stage X: Validate */
+            SHArena *arena_x = sh_arena_create(PIPELINE_ARENA_SIZE);
+            if (arena_x) {
+                char *validated = NULL;
+                size_t validated_len = 0;
+                NxValidateStatus vs = nx_validate(canon, canon_len,
+                                                   schema_data, schema_len,
+                                                   arena_x, &validated,
+                                                   &validated_len);
+                sh_arena_free(arena_x);
+                if (vs == NX_VALIDATE_OK && validated) {
+                    free(canon);
+                    canon = validated;
+                    canon_len = validated_len;
+                }
+            }
+            free(schema_data);
+
+            write_file(out_canon, canon, canon_len);
+            fprintf(stderr, "  Wrote: %s\n", out_canon);
+            free(canon);
         }
     }
 

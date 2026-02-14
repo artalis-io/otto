@@ -1380,6 +1380,7 @@ TEST(ingest_status_strings)
     ASSERT(strlen(nx_ingest_status_str(NX_INGEST_OK)) > 0);
     ASSERT(strlen(nx_ingest_status_str(NX_INGEST_ERR_STAGE_A)) > 0);
     ASSERT(strlen(nx_ingest_status_str(NX_INGEST_ERR_STAGE_B)) > 0);
+    ASSERT(strlen(nx_ingest_status_str(NX_INGEST_ERR_STAGE_X)) > 0);
 }
 
 /* ============================================================================
