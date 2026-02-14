@@ -26,7 +26,6 @@
  * Internal Constants
  * ============================================================================ */
 
-#define MAX_SHARED_STRINGS 65536
 #define MAX_CELL_REF_LEN   16
 #define MAX_SHEET_NAME_LEN 256
 #define INITIAL_ROW_CAP    256
@@ -71,14 +70,14 @@ static int parse_shared_strings(const char *xml, size_t xml_len,
                                 SHArena *arena, NxIssueList *issues,
                                 SharedStrings *ss)
 {
+    (void)issues;
     ShXmlReader r;
     ShXmlToken tok;
     sh_xml_init(&r, xml, xml_len, arena);
 
     ss->count = 0;
     ss->capacity = 1024;
-    ss->strings = (const char **)sh_arena_alloc(arena,
-        (size_t)ss->capacity * sizeof(char *));
+    ss->strings = (const char **)malloc((size_t)ss->capacity * sizeof(char *));
     if (!ss->strings) return -1;
 
     int in_si = 0, in_t = 0;
@@ -111,22 +110,22 @@ static int parse_shared_strings(const char *xml, size_t xml_len,
             } else if (tok.name_len == 2 && memcmp(tok.name, "si", 2) == 0) {
                 /* End of <si>: store concatenated string */
                 concat_buf[concat_len] = '\0';
-                if (ss->count < MAX_SHARED_STRINGS) {
-                    if (ss->count >= ss->capacity) {
-                        /* Out of pre-allocated space */
-                        return -1;
-                    }
-                    char *s = (char *)sh_arena_alloc(arena, (size_t)concat_len + 1);
-                    if (!s) return -1;
-                    memcpy(s, concat_buf, (size_t)concat_len + 1);
-                    ss->strings[ss->count++] = s;
-                } else {
-                    if (issues && ss->count == MAX_SHARED_STRINGS)
-                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
-                                      -1, "", "shared_string_limit",
-                                      "Hit MAX_SHARED_STRINGS=%d cap",
-                                      MAX_SHARED_STRINGS);
+
+                /* Grow pointer array if needed (realloc-doubling, no cap) */
+                if (ss->count >= ss->capacity) {
+                    int new_cap = ss->capacity * 2;
+                    const char **new_ptrs = (const char **)realloc(
+                        ss->strings, (size_t)new_cap * sizeof(char *));
+                    if (!new_ptrs) return -1;
+                    ss->strings = new_ptrs;
+                    ss->capacity = new_cap;
                 }
+
+                char *s = (char *)sh_arena_alloc(arena, (size_t)concat_len + 1);
+                if (!s) return -1;
+                memcpy(s, concat_buf, (size_t)concat_len + 1);
+                ss->strings[ss->count++] = s;
+
                 in_si = 0;
                 concat_len = 0;
             }
@@ -539,6 +538,7 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
         if (parse_shared_strings((const char *)ss_xml, ss_size, arena, issues, &ss) < 0) {
             mz_free(ss_xml);
             mz_zip_reader_end(&zip);
+            free(ss.strings);
             return NX_XLSX_ERR_XML;
         }
         mz_free(ss_xml);
@@ -568,6 +568,7 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
 
     if (sheet_count == 0) {
         mz_zip_reader_end(&zip);
+        free(ss.strings);
         return NX_XLSX_ERR_NO_SHEETS;
     }
 
@@ -599,7 +600,10 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
 
     mz_zip_reader_end(&zip);
 
-    if (result != NX_XLSX_OK) return result;
+    if (result != NX_XLSX_OK) {
+        free(ss.strings);
+        return result;
+    }
 
     /* Generate JSON */
     ShJsonBuf jb;
@@ -611,6 +615,7 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
 
     if (sh_json_writer_error(&w) || !jb.buf) {
         sh_json_buf_free(&jb);
+        free(ss.strings);
         return NX_XLSX_ERR_ARENA;
     }
 
@@ -621,5 +626,6 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
     if (*out_json)
         *out_len = strlen(*out_json);
 
+    free(ss.strings);
     return NX_XLSX_OK;
 }
