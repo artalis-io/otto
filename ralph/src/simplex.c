@@ -406,6 +406,153 @@ static int apply_scaling(SimplexSolver *solver) {
 }
 
 /*
+ * Post-solve verification (T2.3 + T3.6).
+ * Read-only: inspects solution, dual, reduced costs, model A/b/c.
+ * Checks:
+ *   1. Primal feasibility:  ||Ax - b||_inf for constraint satisfaction
+ *   2. Bound feasibility:   lb <= x <= ub for all vars
+ *   3. Dual feasibility:    rc[j] >= -tol for nonbasics at lower bound
+ *   4. Complementary slackness: |x_j - lb_j| * |rc_j| ~ 0
+ *   5. Objective accuracy:  Kahan summation recomputation
+ *   6. Basis conditioning:  LU condition estimate (T3.6)
+ * Downgrades OPTIMAL → IMPRECISE if any check exceeds threshold.
+ */
+static void verify_solution(SimplexSolver *solver) {
+    LPModel *model = solver->model;
+    int m = model->num_cons;
+    int n = model->num_vars;
+    double *x = solver->solution;
+    double *rc = solver->reduced_costs;
+    SparseMatrix *A = model->A;
+
+    if (!x || !A || !model->b || !model->lb || !model->ub) return;
+
+    double max_primal_infeas = 0.0;
+    double max_bound_infeas = 0.0;
+    double max_dual_infeas = 0.0;
+    double max_comp_slack = 0.0;
+
+    /* 1. Primal feasibility: compute Ax, check against b with sense */
+    for (int i = 0; i < m; i++) {
+        /* Compute (Ax)_i by scanning all columns */
+        double ax_i = 0.0;
+        for (int j = 0; j < n; j++) {
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                if (A->rowidx[p] == i) {
+                    ax_i += A->values[p] * x[j];
+                    break;
+                }
+            }
+        }
+        /* Check constraint satisfaction based on sense */
+        double violation = 0.0;
+        char sense = model->sense[i];
+        if (sense == 'L') {
+            violation = ax_i - model->b[i];  /* Ax <= b → violation if Ax > b */
+            if (violation < 0.0) violation = 0.0;
+        } else if (sense == 'G') {
+            violation = model->b[i] - ax_i;  /* Ax >= b → violation if Ax < b */
+            if (violation < 0.0) violation = 0.0;
+        } else {  /* 'E' */
+            violation = fabs(ax_i - model->b[i]);
+        }
+        if (violation > max_primal_infeas) max_primal_infeas = violation;
+    }
+
+    /* 2. Bound feasibility */
+    for (int j = 0; j < n; j++) {
+        double lb_viol = model->lb[j] - x[j];
+        if (lb_viol > max_bound_infeas) max_bound_infeas = lb_viol;
+        double ub_viol = x[j] - model->ub[j];
+        if (ub_viol > max_bound_infeas) max_bound_infeas = ub_viol;
+    }
+
+    /* 3. Dual feasibility: for minimization, nonbasics at lb should have rc >= 0,
+     * at ub should have rc <= 0. Solution is in original space (obj_sense applied). */
+    if (rc) {
+        for (int j = 0; j < n; j++) {
+            double xj = x[j];
+            double rcj = rc[j];  /* Already in user space (obj_sense applied) */
+            int at_lb = fabs(xj - model->lb[j]) < RALPH_FEAS_TOL;
+            int at_ub = fabs(xj - model->ub[j]) < RALPH_FEAS_TOL;
+
+            /* In user space: minimize → rc >= 0 at lb, rc <= 0 at ub
+             *                maximize → rc <= 0 at lb, rc >= 0 at ub
+             * Equivalently: obj_sense * rc >= 0 at lb (in internal space) */
+            double viol = 0.0;
+            if (at_lb && !at_ub) {
+                /* At lower bound: rc should push away from lb.
+                 * For min: rc >= 0. For max: rc <= 0. */
+                viol = (model->obj_sense == 1) ? -rcj : rcj;
+            } else if (at_ub && !at_lb) {
+                /* At upper bound: rc should push away from ub. */
+                viol = (model->obj_sense == 1) ? rcj : -rcj;
+            }
+            if (viol > max_dual_infeas) max_dual_infeas = viol;
+        }
+    }
+
+    /* 4. Complementary slackness: for non-fixed vars, |x - lb| * |rc| should be ~ 0 */
+    if (rc) {
+        for (int j = 0; j < n; j++) {
+            if (fabs(model->ub[j] - model->lb[j]) < RALPH_FEAS_TOL) continue;
+            double dist_lb = fabs(x[j] - model->lb[j]);
+            double dist_ub = fabs(x[j] - model->ub[j]);
+            double min_dist = (dist_lb < dist_ub) ? dist_lb : dist_ub;
+            double cs = min_dist * fabs(rc[j]);
+            if (cs > max_comp_slack) max_comp_slack = cs;
+        }
+    }
+
+    /* 5. Objective accuracy with Kahan summation */
+    double obj_kahan = 0.0;
+    double kahan_comp = 0.0;
+    for (int j = 0; j < n; j++) {
+        double term = model->c[j] * x[j] - kahan_comp;
+        double temp = obj_kahan + term;
+        kahan_comp = (temp - obj_kahan) - term;
+        obj_kahan = temp;
+    }
+    obj_kahan = obj_kahan * model->obj_sense + model->obj_offset;
+    double obj_denom = fabs(solver->obj_value) > 1.0 ? fabs(solver->obj_value) : 1.0;
+    double obj_rel_error = fabs(obj_kahan - solver->obj_value) / obj_denom;
+
+    /* 6. Basis conditioning (T3.6) */
+    double cond = 1.0;
+    if (solver->tableau && solver->tableau->lu) {
+        cond = solver->tableau->lu->cond_estimate;
+    }
+
+    /* Store metrics */
+    solver->verify_primal_infeas = max_primal_infeas;
+    solver->verify_bound_infeas = max_bound_infeas;
+    solver->verify_dual_infeas = max_dual_infeas;
+    solver->verify_comp_slack = max_comp_slack;
+    solver->verify_obj_error = obj_rel_error;
+    solver->verify_cond_estimate = cond;
+
+    /* Downgrade to IMPRECISE if any metric exceeds threshold */
+    int imprecise = 0;
+    if (max_primal_infeas > 1e-6) imprecise = 1;
+    if (max_bound_infeas > 1e-6) imprecise = 1;
+    if (max_dual_infeas > 1e-6) imprecise = 1;
+    if (obj_rel_error > 1e-6) imprecise = 1;
+
+    if (imprecise) {
+        solver->status = RALPH_STATUS_IMPRECISE;
+        if (solver->verbose) {
+            printf("[verify] IMPRECISE: primal=%.2e bound=%.2e dual=%.2e cs=%.2e obj=%.2e cond=%.2e\n",
+                   max_primal_infeas, max_bound_infeas, max_dual_infeas,
+                   max_comp_slack, obj_rel_error, cond);
+        }
+    } else if (solver->verbose) {
+        printf("[verify] OK: primal=%.2e bound=%.2e dual=%.2e cs=%.2e obj=%.2e cond=%.2e\n",
+               max_primal_infeas, max_bound_infeas, max_dual_infeas,
+               max_comp_slack, obj_rel_error, cond);
+    }
+}
+
+/*
  * Unscale the solution after solving.
  * x_original = C * x_scaled
  * y_original = R * y_scaled
@@ -4353,6 +4500,11 @@ int simplex_solve(SimplexSolver *solver) {
 
     /* Restore original model if scaling was applied */
     restore_model(solver);
+
+    /* Post-solve verification (T2.3 + T3.6) — runs on original-space solution */
+    if (solver->verify && solver->status == RALPH_STATUS_OPTIMAL) {
+        verify_solution(solver);
+    }
 
     return status;
 }

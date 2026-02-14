@@ -336,6 +336,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     ralph_set_dbl_param(model, "time_limit", time_limit_sec);
     ralph_set_int_param(model, "max_iterations", 10000000);
     ralph_set_int_param(model, "presolve", 1);
+    ralph_set_int_param(model, "verify", 1);
 
     /* Solve */
     double start_time = get_time_ms();
@@ -349,6 +350,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     RalphStatus status = ralph_get_status(model);
     switch (status) {
         case RALPH_STATUS_OPTIMAL:
+        case RALPH_STATUS_IMPRECISE:
             result.status = 0;
             result.objective = ralph_get_objval(model);
             break;

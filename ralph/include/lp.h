@@ -328,6 +328,7 @@ typedef struct {
     int verbose;
     int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
     int crash;              /* 0=off, 1=triangular crash basis */
+    int verify;             /* 0=off, 1=post-solve verification (T2.3) */
     int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
 
     /* Scaling factors (used if scaling enabled) */
@@ -346,6 +347,14 @@ typedef struct {
     int iterations;
     double solve_time;
     int degenerate_pivots;
+
+    /* Post-solve verification metrics (T2.3 + T3.6) */
+    double verify_primal_infeas;    /* ||Ax - b||_inf for satisfied constraints */
+    double verify_bound_infeas;     /* max bound violation */
+    double verify_dual_infeas;      /* max dual feasibility violation */
+    double verify_comp_slack;       /* max complementary slackness violation */
+    double verify_obj_error;        /* |recomputed_obj - reported_obj| / max(1, |obj|) */
+    double verify_cond_estimate;    /* Basis condition number from LU */
 
     /* Phase-1 trace summary */
     int trace_phase1_pivot_failures;

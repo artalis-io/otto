@@ -4105,6 +4105,139 @@ void test_crash_no_regression(void) {
 }
 
 /* ============================================================================
+ * Post-Solve Verification Tests (T2.3 + T3.6)
+ * ============================================================================ */
+
+void test_verify_clean_lp(void) {
+    printf("\n=== Test: Verify Clean LP ===\n");
+
+    /* Simple LP that solves cleanly — verify=1 should not downgrade */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    int idx[] = {0, 1}; double val1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, val1, RALPH_LESS_EQUAL, 4.0);
+    double val2[] = {2.0, 1.0};
+    ralph_add_constraint(model, 2, idx, val2, RALPH_LESS_EQUAL, 6.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "verify", 1);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Clean LP with verify=1: OPTIMAL (not IMPRECISE)");
+
+    ASSERT(fabs(ralph_get_objval(model) - (-4.0)) < 1e-6,
+           "Clean LP: obj=-4");
+    ralph_free(model);
+}
+
+void test_verify_diet_with_verify(void) {
+    printf("\n=== Test: Verify Diet Problem ===\n");
+
+    /* Diet problem with >= constraints — should pass verification */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0, 1e30, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, 1e30, 3.5, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, 1e30, 8.0, RALPH_CONTINUOUS);
+    int idx[] = {0, 1, 2};
+    double v1[] = {50, 42, 35};
+    ralph_add_constraint(model, 3, idx, v1, RALPH_GREATER_EQUAL, 300);
+    double v2[] = {4, 8, 7};
+    ralph_add_constraint(model, 3, idx, v2, RALPH_GREATER_EQUAL, 10);
+    double v3[] = {0, 3, 2};
+    ralph_add_constraint(model, 3, idx, v3, RALPH_GREATER_EQUAL, 8);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "verify", 1);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Diet with verify=1: OPTIMAL");
+    ralph_free(model);
+}
+
+void test_verify_network_flow(void) {
+    printf("\n=== Test: Verify Network Flow LP ===\n");
+
+    /* Network flow with equality constraints — tests = constraint handling */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* 4 arcs: costs 2, 3, 1, 4 */
+    ralph_add_var(model, 0.0, 10.0, 2.0, RALPH_CONTINUOUS);  /* 0→1 */
+    ralph_add_var(model, 0.0, 10.0, 3.0, RALPH_CONTINUOUS);  /* 0→2 */
+    ralph_add_var(model, 0.0, 10.0, 1.0, RALPH_CONTINUOUS);  /* 1→3 */
+    ralph_add_var(model, 0.0, 10.0, 4.0, RALPH_CONTINUOUS);  /* 2→3 */
+
+    /* Flow conservation: supply 5 at node 0, demand 5 at node 3 */
+    int i0[] = {0, 1}; double v0[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, i0, v0, RALPH_EQUAL, 5.0);
+    int i1[] = {0, 2}; double v1[] = {-1.0, 1.0};
+    ralph_add_constraint(model, 2, i1, v1, RALPH_EQUAL, 0.0);
+    int i2[] = {1, 3}; double v2[] = {-1.0, 1.0};
+    ralph_add_constraint(model, 2, i2, v2, RALPH_EQUAL, 0.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "verify", 1);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Network flow with verify=1: OPTIMAL");
+    ASSERT(fabs(ralph_get_objval(model) - 15.0) < 1e-6,
+           "Network flow: obj=15");
+    ralph_free(model);
+}
+
+void test_verify_no_regression(void) {
+    printf("\n=== Test: Verify No Regression ===\n");
+
+    /* Run a set of LPs with verify=1, ensure all return OPTIMAL */
+    struct { int n_vars; int n_cons; double expected_obj; } cases[] = {
+        {2, 2, -4.0},   /* Simple 2-var LP */
+        {5, 3, 0.0},    /* Minimize non-negative vars, all at lb */
+        {10, 5, 0.0},   /* 10-var, all at lb */
+    };
+
+    for (int c = 0; c < 3; c++) {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+        if (c == 0) {
+            /* Simple LP: min -x1 - x2 s.t. x1+x2<=4, 2x1+x2<=6 */
+            ralph_add_var(model, 0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+            ralph_add_var(model, 0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+            int idx[] = {0, 1}; double v1[] = {1.0, 1.0};
+            ralph_add_constraint(model, 2, idx, v1, RALPH_LESS_EQUAL, 4.0);
+            double v2[] = {2.0, 1.0};
+            ralph_add_constraint(model, 2, idx, v2, RALPH_LESS_EQUAL, 6.0);
+        } else {
+            /* Generic: min sum(c_j * x_j) s.t. sum(x_j) <= 100 */
+            for (int j = 0; j < cases[c].n_vars; j++) {
+                ralph_add_var(model, 0, RALPH_INFINITY, 1.0 + 0.1 * j, RALPH_CONTINUOUS);
+            }
+            int idx[10]; double val[10];
+            for (int j = 0; j < cases[c].n_vars && j < 10; j++) {
+                idx[j] = j; val[j] = 1.0;
+            }
+            ralph_add_constraint(model, cases[c].n_vars > 10 ? 10 : cases[c].n_vars,
+                                 idx, val, RALPH_LESS_EQUAL, 100.0);
+        }
+
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "verify", 1);
+        ralph_optimize(model);
+
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Verify case %d: OPTIMAL", c);
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, msg);
+        ralph_free(model);
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -4214,6 +4347,12 @@ int main(int argc, char **argv) {
     test_crash_reduces_iterations();
     test_crash_infeasible();
     test_crash_no_regression();
+
+    /* Post-solve verification tests (T2.3 + T3.6) */
+    test_verify_clean_lp();
+    test_verify_diet_with_verify();
+    test_verify_network_flow();
+    test_verify_no_regression();
 
     /* API Tests */
     test_api_functions();
