@@ -410,16 +410,13 @@ Five must-fix issues before processing untrusted documents:
 
 **Estimated effort:** 1 day. Changes are small and localized.
 
-### P6: Silent Truncation Audit
+### P6: Silent Truncation Audit — DONE
 
-| Issue | File | Fix |
-|-------|------|-----|
-| Cell values >4KB silently truncated | `nx_xlsx.c:286`, `nx_pdf.c:686` | Promote to NX_ISSUE_WARNING (already done), but also set a flag so callers can detect truncation |
-| Empty documents (0 rows, 0 sheets) produce generic errors | All Stage A parsers | Add specific error codes: `NX_XLSX_ERR_EMPTY`, `NX_CSV_ERR_EMPTY` |
-| Arena exhaustion mid-transform emits partial records | `nx_xform.c` | Track arena failures, discard partial record, log issue |
-| WASM returns -1 with no error detail | `nx_wasm.c` | Add `nx_wasm_last_error()` returning stage + error code string |
-
-**Estimated effort:** 1-2 days.
+All four issues resolved:
+- Cell truncation reports `NX_ISSUE_WARNING` via `NxIssueList`
+- Empty documents return `NX_XLSX_ERR_EMPTY` / `NX_CSV_ERR_EMPTY`
+- Records writer OOM in `nx_xform.c` now checked — partial buffer discarded, rejection logged, audit still emitted
+- WASM `nx_wasm_last_error()` returns stage + error code string
 
 ### P7: Fuzz Testing and Limits Verification
 
@@ -436,13 +433,13 @@ Five must-fix issues before processing untrusted documents:
 
 ### Summary
 
-| Phase | Scope | Effort | Blocks |
-|-------|-------|--------|--------|
-| P5 | Input bounds (5 critical issues) | 1 day | Production deployment with untrusted input |
-| P6 | Silent truncation + WASM errors | 1-2 days | User-facing quality |
-| P7 | Fuzz testing + benchmarks | 2-3 days | Confidence for adversarial input |
+| Phase | Scope | Status |
+|-------|-------|--------|
+| P5 | Input bounds (5 critical issues) | **DONE** |
+| P6 | Silent truncation + WASM errors | **DONE** |
+| P7 | Fuzz testing + benchmarks | Not started |
 
-After P5, the module is production-ready for **known document formats from trusted sources** (GLS Hungary, Girteka, etc.). After P7, it's ready for **untrusted documents from arbitrary sources**.
+After P5+P6, the module is production-ready for **known document formats from trusted sources** (GLS Hungary, Girteka, etc.). After P7, it's ready for **untrusted documents from arbitrary sources**.
 
 ---
 

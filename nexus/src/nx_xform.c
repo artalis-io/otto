@@ -1213,6 +1213,18 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
 
     sh_json_write_array_end(&rw);
 
+    /* Check if the records writer failed (heap OOM during realloc).
+     * If so, discard the partial buffer to avoid emitting malformed JSON.
+     * We still continue to emit audit info so the caller gets rejection details. */
+    if (sh_json_writer_error(&rw)) {
+        sh_json_buf_free(&records_buf);
+        records_buf.buf = NULL;
+        records_buf.len = 0;
+        records_written = 0;
+        audit_reject(&audit, -1, "",
+                     "output buffer exhausted — records discarded");
+    }
+
     /* Write records to main output */
     sh_json_write_key(&w, "records");
     if (records_buf.buf) {
