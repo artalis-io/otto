@@ -9,6 +9,7 @@
 #include "nx_issue.h"
 #include "sh_json.h"
 #include "sh_arena.h"
+#include "sh_hash.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -269,23 +270,19 @@ static int validate_format(const NxValidationRule *rule, ShJsonValue *record,
     return 1;
 }
 
-/* FNV-1a hash for uniqueness keys */
-#define UNIQUE_FNV_OFFSET 14695981039346656037ULL
-#define UNIQUE_FNV_PRIME  1099511628211ULL
-
 static uint64_t unique_hash_record(const NxValidationRule *rule, ShJsonValue *rec)
 {
-    uint64_t h = UNIQUE_FNV_OFFSET;
+    uint64_t h = SH_FNV1A_64_OFFSET;
     for (int i = 0; i < rule->unique_field_count; i++) {
         ShJsonValue *v = sh_json_get(rec, rule->unique_fields[i]);
         const char *s = v ? sh_json_as_string(v, "") : "";
         for (const char *p = s; *p; p++) {
             h ^= (uint8_t)*p;
-            h *= UNIQUE_FNV_PRIME;
+            h *= SH_FNV1A_64_PRIME;
         }
         /* Field separator to avoid "ab"+"c" == "a"+"bc" */
         h ^= 0xFF;
-        h *= UNIQUE_FNV_PRIME;
+        h *= SH_FNV1A_64_PRIME;
     }
     return h;
 }
