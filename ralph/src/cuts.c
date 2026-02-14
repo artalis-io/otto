@@ -330,10 +330,6 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
             } else {
                 /* For lower bound: x_j - l_j */
                 cut->rhs -= alpha_j * tab->lb_ext[j];
-                if (verbose && fabs(tab->lb_ext[j]) > RALPH_ZERO_TOL) {
-                    printf("[GMI-row]   NB_LOWER adjustment: rhs adjusted by -%.6f*%.6f\n",
-                           alpha_j, tab->lb_ext[j]);
-                }
             }
 
             if (j < num_orig) {
@@ -366,9 +362,14 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
                                j, con_row, aux_c);
                     }
 
-                    /* Get original constraint row coefficients and RHS */
+                    /* Get constraint row coefficients and RHS, applying
+                     * row normalization sign. The tableau normalizes rows so
+                     * RHS >= 0 (multiplying by -1 if needed), and aux_coef
+                     * reflects the normalized form. We must use the same
+                     * normalization when substituting back. */
                     LPModel *model = tab->model;
-                    double con_rhs = model->b[con_row];
+                    double rsign = tab->row_sign[con_row];
+                    double con_rhs = model->b[con_row] * rsign;
 
                     /* Adjust RHS: subtract alpha * aux_coef * b */
                     cut->rhs -= final_coef * aux_c * con_rhs;
@@ -379,7 +380,7 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
                         double a_rk = 0.0;
                         for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
                             if (model->A->rowidx[p] == con_row) {
-                                a_rk = model->A->values[p];
+                                a_rk = model->A->values[p] * rsign;
                                 break;
                             }
                         }
@@ -611,16 +612,19 @@ static int cmir_extract_source_row(
                     tab->aux_row && tab->aux_coef) {
                     int con_row = tab->aux_row[aux_idx];
                     double aux_c = tab->aux_coef[aux_idx];
-                    double con_rhs = model->b[con_row];
+                    double rsign = tab->row_sign[con_row];
+                    double con_rhs = model->b[con_row] * rsign;
 
-                    /* s = aux_c * (b - Ax), so a_ij * s contributes:
-                     * -a_ij * aux_c * a_rk to each x_k
-                     * +a_ij * aux_c * b to RHS */
+                    /* s = aux_c * (norm_b - norm_A*x), so a_ij * s contributes:
+                     * -a_ij * aux_c * norm_a_rk to each x_k
+                     * +a_ij * aux_c * norm_b to RHS
+                     * Row normalization sign (rsign) must be applied since
+                     * aux_coef reflects the normalized constraint form. */
                     for (int k = 0; k < num_orig; k++) {
                         double a_rk = 0.0;
                         for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
                             if (model->A->rowidx[p] == con_row) {
-                                a_rk = model->A->values[p];
+                                a_rk = model->A->values[p] * rsign;
                                 break;
                             }
                         }

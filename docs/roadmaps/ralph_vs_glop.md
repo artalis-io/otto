@@ -24,35 +24,44 @@ MIP branch-and-bound performance.
 
 Benchmarks (FuelWise MILP, seed=42):
 
-| Scenario | Before (ms) | +dual_reopt | +HYBRID+PATH B | +obj cutoff | +presolve remap | +c-MIR fix | Total Speedup | vs GLPK |
-|----------|-------------|-------------|----------------|-------------|-----------------|------------|---------------|---------|
-| milp15 | 2.28 | 1.07 | 0.99 | 0.73 | 0.95 | **0.90** | **2.5x** | **7.6x faster** |
-| milp30 | 111.72 | 22.40 | 5.97 | 5.20 | 3.14 | **3.08** | **36.3x** | **3.2x faster** |
-| milp50 | 197.36 | 53.39 | 19.09 | 17.65 | 9.90 | **9.75** | **20.2x** | **1.3x faster** |
-| milp75 | ~1232 | 573.14 | 151.89 | ~152 | 55.49 | **55.50** | **22.2x** | **~tied** |
-| milp100 | ~7223 | 175.89 | 54.49 | 54.11 | 50.14 | **50.38** | **143.4x** | 0.3x (2.9x slower) |
-| milp200 | ~19473 | 8987.79 | 890.40 | 882.38 | 212.03 | **210.80** | **92.4x** | 0.4x (2.4x slower) |
+| Scenario | Before (ms) | +dual_reopt | +HYBRID+PATH B | +presolve remap | +P5/P6 | +cut fix+pseu | Total Speedup | vs GLPK |
+|----------|-------------|-------------|----------------|-----------------|--------|---------------|---------------|---------|
+| milp15 | 2.28 | 1.07 | 0.99 | 0.95 | 0.85 | **1.29** | **1.8x** | **5.7x faster** |
+| milp30 | 111.72 | 22.40 | 5.97 | 3.14 | 2.73 | **4.67** | **23.9x** | **1.8x faster** |
+| milp50 | 197.36 | 53.39 | 19.09 | 9.90 | 9.28 | **27.76** | **7.1x** | 0.7x (1.5x slower) |
+| milp75 | ~1232 | 573.14 | 151.89 | 55.49 | 33.26 | **63.34** | **19.5x** | ~tied |
+| milp100 | ~7223 | 175.89 | 54.49 | 50.14 | 62.05 | **82.12** | **88.0x** | 0.3x (3x slower) |
+| milp200 | ~19473 | 8987.79 | 890.40 | 212.03 | 994.96 | **780.10** | **25.0x** | 0.1x (9x slower) |
+
+**"+cut fix+pseu" column** (seed 42): Cut generation normalization fix + pseudocost branching
++ root strong branching + node probing. Multi-seed results (5 seeds × 10 runs) in `ralph.md` §1.7.
+
+**Key improvement: objective gap vs GLPK** (the "+cut fix" column trades speed for quality):
+
+| Scenario | Gap Before (P5/P6) | Gap After (cut fix, seed 42) | Gap After (5-seed avg) |
+|----------|--------------------|------------------------------|------------------------|
+| milp15   | 13.97%             | **0.14%**                    | 25.7% (seed-dependent) |
+| milp30   | 3.55%              | **1.83%**                    | 1.72% |
+| milp50   | 0.39%              | 0.66%                        | 0.69% |
+| milp75   | 0.72%              | **0.60%**                    | 0.55% |
+| milp100  | 0.39%              | **0.21%**                    | 0.48% |
+| milp200  | 9.23%              | **3.82%**                    | 0.87% |
 
 **Improvements beyond initial dual_reopt:**
-- **HYBRID node selection** (`a3cd864`): DFS until first incumbent, then best-bound.
-  `NodeQueue.has_incumbent` flag with one-time O(n) heap rebuild.
-- **PATH B LU reuse**: Profiling milp50 showed 90% of time in `lu_factorize_dense` from
-  PATH B's `restore_basis_from_node()` → `tableau_refactorize()` (O(m³)). Fix: skip basis
-  restore, reuse current LU factors, update bounds, run `dual_reopt` with larger budget
-  (10×m, cap 2000). Each pivot O(m) vs O(m³) refactorize. If budget exceeded, fall to PATH C.
-- **Objective cutoff** (`8c12c0f`): `dual_reopt()` now prunes nodes when `tab->obj_value`
-  exceeds incumbent. `dual_simplex_pivot()` already recomputes `obj_value` after each pivot,
-  so the check is always accurate. ~1.1-1.4x on small instances, diminishing at scale.
-- **Presolve with priority remapping**: Lightweight presolve (0x110F) enabled by default
-  for FuelWise MILP. Key bug fix: branch priorities/directions must be remapped from
-  original to presolved variable indices via `presolved->var_map`. Without remapping,
-  presolve caused 2-4x more nodes (wrong branching decisions). With remapping: 1.3-4.2x
-  faster, node counts identical. Ralph now beats GLPK through milp75.
-- **c-MIR sign fixes** (`fc454a7`): Two back-substitution sign errors fixed in
-  `cmir_build_cut()` (upper-bound substitution constants added instead of subtracted).
-  Added infeasibility guard that rejects trivially infeasible cuts (min LHS > RHS).
-  Performance stable; obj match dropped 30/30→24/30 due to altered B&B exploration from
-  different cut generation (all solutions feasible, alternative optima).
+- **HYBRID node selection**: DFS until first incumbent, then best-bound.
+- **PATH B LU reuse**: Skip basis restore, reuse current LU factors. O(m) vs O(m³).
+- **Presolve with priority remapping**: Lightweight mask 0x110F. Branch priorities/directions
+  remapped via `presolved->var_map`. Without remapping: 2-4x more nodes.
+- **P5 bound flipping + P6 dual steepest edge**: Restricted to `dual_reopt`. Three
+  infeasibility guards (refactorize-retry, rc recompute, diving isolation).
+- **Cut generation normalization fix** (`5b1bd4c`): Row normalization sign bug in GMI/c-MIR
+  back-substitution. `tab->row_sign[con_row]` must be applied when accessing model coefficients
+  during slack variable substitution. Without fix: cuts have inverted coefficients → invalid.
+- **Safety guard for cut-induced infeasibility**: If LP becomes non-optimal after cuts, discard
+  all cuts (rebuild from original model) and continue tree search.
+- **Pseudocost branching + root strong branching**: Probe 20 fractional vars × 50 dual pivots.
+  Obj-coeff init `fmax(|c_j|, 1.0)`, updated from actual bound changes.
+- **Column-based probing**: Bound tightening at nodes with depth < 20.
 
 **Bug found during implementation:** Degenerate artificial variables (basic at value 0 after
 Phase 2) become non-zero when bounds change, corrupting the objective with BIG_M terms.
@@ -221,8 +230,8 @@ tableau creation). Ralph's `simplex_solve()` creates a new tableau from scratch 
 | **P2** | Crash basis (triangular) | 2-5x cold starts | Medium | None | |
 | **P3** | LP Presolve | 2-3x avg (41x best) | High | None | **DONE** |
 | **P4** | DynamicMaximum pricing | 2-5x pricing | Low-Medium | None | |
-| **P5** | Bound flipping in dual | Fewer basis updates | Low | P0 | |
-| **P6** | Dual steepest edge | 2-3x fewer pivots | Medium | P0 | |
+| **P5** | Bound flipping in dual | Fewer basis updates | Low | P0 | **DONE** |
+| **P6** | Dual steepest edge | 2-3x fewer pivots | Medium | P0 | **DONE** |
 | **P7** | Multi-pass scaling | Better numerics | Low | None | |
 | **P8** | Dual simplex as default LP | ~2x on initial solves | High | P2, P5, P6 | |
 
@@ -244,21 +253,17 @@ Option 3 is what GLOP does. Requires verifying the delta formula for dual pivots
 `delta_obj = theta_dual * (x_leaving - bound_leaving)`. Low effort, moderate impact on
 large B&B trees where many nodes are pruned by bound.
 
-### P5: Bound flipping in dual ratio test
+### P5: Bound flipping in dual ratio test ✅
 
-During `dual_ratio_test`, when a boxed variable hits its opposite bound, GLOP flips the
-bound without a basis change (no LU update). This is especially valuable for FuelWise MILPs
-where binary variables are boxed [0,1]. Currently every dual pivot does a full LU update
-via `dual_simplex_pivot()`.
+**Status: IMPLEMENTED** in `dual_simplex.c`. During `dual_ratio_test`, boxed variables hitting
+their opposite bound are flipped without a basis change. Restricted to `dual_reopt()` only
+(incompatible with bound perturbation in `dual_simplex_solve()`). Max flips/iter capped at m/2.
 
-### P6: Dual steepest edge pricing
+### P6: Dual steepest edge pricing ✅
 
-`dual_reopt` currently uses most-infeasible leaving variable selection. DSE (Forrest &
-Goldfarb 1992) maintains edge norms incrementally and selects the leaving variable that
-gives the steepest descent. Typically reduces pivot count by 2-3x. Requires:
-1. Initialize DSE norms from current basis
-2. Update norms after each pivot (one BTRAN + inner products)
-3. Monitor precision and full-recompute when drift exceeds threshold
+**Status: IMPLEMENTED** in `dual_simplex.c`. DSE leaving variable selection with
+`score = infeas²/weight`. Approximate init (weights=1.0) in `dual_reopt()`, exact init
+(m BTRANs) in `dual_simplex_solve()`. Weights persist across PATH A/B nodes.
 
 ### P8: Dual simplex as default LP algorithm
 

@@ -852,6 +852,7 @@ int fw_solve_refuel_milp(
     /* Solve */
     int fw_verbose = (getenv("FW_VERBOSE") != NULL);
     ralph_set_int_param(model, "verbose", fw_verbose ? 1 : 0);
+    ralph_set_int_param(model, "max_cut_rounds", 3);
     if (fw_presolve) {
         ralph_set_int_param(model, "presolve", 1);
         ralph_set_int_param(model, "presolve_mask", (int)fw_presolve_mask);

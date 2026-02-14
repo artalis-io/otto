@@ -2728,6 +2728,192 @@ void test_p5p6_flags(void) {
 }
 
 /* ============================================================================
+ * Test: Cut Normalization with GE Constraints (row_sign fix)
+ *
+ * Exercises the row normalization sign fix in cut generators. When a
+ * constraint has GE sense with positive RHS, the simplex normalizes it
+ * by multiplying by -1, giving row_sign = -1. The cut generators must
+ * apply this sign when back-substituting slack/surplus variables.
+ *
+ * Uses GE constraints exclusively so that cuts exercise the row_sign path.
+ * Without the fix: cuts have wrong coefficients → infeasibility or suboptimal.
+ * With the fix: correct optimal solution.
+ *
+ * Problem:
+ *   min  -7x - 5y - 3z - 4w    (x,y,z,w binary)
+ *   s.t. 2x + 3y + z + 2w >= 4    (GE, row_sign = -1)
+ *        x + 2y + 2z + w  >= 3    (GE, row_sign = -1)
+ *        3x + y + z + 3w  <= 6    (LE, row_sign = +1)
+ * ============================================================================ */
+void test_cuts_ge_constraint_normalization(void) {
+    printf("\n=== Test: Cut Normalization with GE Constraints ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "max_cut_rounds", 5);
+    ralph_set_int_param(model, "max_nodes", 1000);
+
+    /* Binary variables with negative obj (minimization = maximize profit) */
+    ralph_add_var(model, 0.0, 1.0, -7.0, RALPH_BINARY);  /* x */
+    ralph_add_var(model, 0.0, 1.0, -5.0, RALPH_BINARY);  /* y */
+    ralph_add_var(model, 0.0, 1.0, -3.0, RALPH_BINARY);  /* z */
+    ralph_add_var(model, 0.0, 1.0, -4.0, RALPH_BINARY);  /* w */
+
+    /* GE constraint 1: 2x + 3y + z + 2w >= 4 (triggers row_sign = -1) */
+    int idx1[] = {0, 1, 2, 3};
+    double val1[] = {2.0, 3.0, 1.0, 2.0};
+    ralph_add_constraint(model, 4, idx1, val1, RALPH_GREATER_EQUAL, 4.0);
+
+    /* GE constraint 2: x + 2y + 2z + w >= 3 (triggers row_sign = -1) */
+    int idx2[] = {0, 1, 2, 3};
+    double val2[] = {1.0, 2.0, 2.0, 1.0};
+    ralph_add_constraint(model, 4, idx2, val2, RALPH_GREATER_EQUAL, 3.0);
+
+    /* LE constraint: 3x + y + z + 3w <= 6 (row_sign = +1) */
+    int idx3[] = {0, 1, 2, 3};
+    double val3[] = {3.0, 1.0, 1.0, 3.0};
+    ralph_add_constraint(model, 4, idx3, val3, RALPH_LESS_EQUAL, 6.0);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL,
+           "GE normalization: status is OPTIMAL (not INFEASIBLE)");
+
+    double obj = ralph_get_objval(model);
+    /* Optimal: x=1, y=1, z=0, w=1 gives obj = -7-5+0-4 = -16
+     * Check: 2+3+0+2=7>=4, 1+2+0+1=4>=3, 3+1+0+3=7>6 FAIL
+     * Try x=1, y=1, z=1, w=0: obj = -7-5-3+0 = -15
+     * Check: 2+3+1+0=6>=4, 1+2+2+0=5>=3, 3+1+1+0=5<=6 OK
+     * Try x=1, y=1, z=0, w=0: obj = -7-5 = -12
+     * Check: 2+3=5>=4, 1+2=3>=3, 3+1=4<=6 OK. But obj=-12 > -15.
+     * x=1,y=0,z=1,w=1: obj=-14. Check: 2+0+1+2=5>=4, 1+0+2+1=4>=3, 3+0+1+3=7>6 FAIL
+     * x=1,y=1,z=1,w=0 gives -15. Best feasible so far.
+     * x=0,y=1,z=1,w=1: obj=-12. Check: 0+3+1+2=6>=4, 0+2+2+1=5>=3, 0+1+1+3=5<=6 OK
+     * But -12 > -15.
+     * Actually let's check x=1,y=1,z=1,w=1: obj=-19, check: 2+3+1+2=8>=4, 1+2+2+1=6>=3, 3+1+1+3=8>6 FAIL.
+     * So the optimum should be x=1,y=1,z=1,w=0 → obj = -15 */
+    ASSERT(obj <= -14.9, "GE normalization: optimal obj <= -15");
+    ASSERT(obj >= -15.1, "GE normalization: optimal obj >= -15 (exactly -15)");
+
+    double sol[4];
+    ralph_get_solution(model, sol);
+
+    /* Verify solution is binary */
+    for (int j = 0; j < 4; j++) {
+        ASSERT(fabs(sol[j] - round(sol[j])) < TOLERANCE,
+               "GE normalization: variable is binary");
+    }
+
+    /* Verify GE constraints */
+    double lhs1 = 2*sol[0] + 3*sol[1] + sol[2] + 2*sol[3];
+    double lhs2 = sol[0] + 2*sol[1] + 2*sol[2] + sol[3];
+    double lhs3 = 3*sol[0] + sol[1] + sol[2] + 3*sol[3];
+    ASSERT(lhs1 >= 4.0 - TOLERANCE, "GE normalization: constraint 1 (GE) satisfied");
+    ASSERT(lhs2 >= 3.0 - TOLERANCE, "GE normalization: constraint 2 (GE) satisfied");
+    ASSERT(lhs3 <= 6.0 + TOLERANCE, "GE normalization: constraint 3 (LE) satisfied");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Cut Normalization with Mixed Constraint Senses
+ *
+ * Tests that cuts work correctly when the model has a mix of LE, GE, and EQ
+ * constraints. Each sense type has different normalization behavior:
+ *   LE with positive RHS → row_sign = +1 (no flip)
+ *   GE with positive RHS → row_sign = -1 (flipped)
+ *   EQ → row_sign depends on sign of RHS
+ *
+ * Compares MIP with cuts to MIP without cuts — both must find the same
+ * optimal objective. This verifies cuts are valid (don't cut off the optimum).
+ * ============================================================================ */
+void test_cuts_mixed_sense_normalization(void) {
+    printf("\n=== Test: Cut Normalization with Mixed Senses ===\n");
+
+    double obj_without_cuts = 0.0;
+    double obj_with_cuts = 0.0;
+
+    for (int pass = 0; pass < 2; pass++) {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "max_nodes", 5000);
+
+        /* 6 integer variables */
+        ralph_add_var(model, 0.0, 3.0, -5.0, RALPH_INTEGER);  /* x0 */
+        ralph_add_var(model, 0.0, 3.0, -3.0, RALPH_INTEGER);  /* x1 */
+        ralph_add_var(model, 0.0, 3.0, -4.0, RALPH_INTEGER);  /* x2 */
+        ralph_add_var(model, 0.0, 5.0, -2.0, RALPH_CONTINUOUS); /* x3 cont */
+        ralph_add_var(model, 0.0, 3.0, -6.0, RALPH_INTEGER);  /* x4 */
+        ralph_add_var(model, 0.0, 4.0, -1.0, RALPH_CONTINUOUS); /* x5 cont */
+
+        /* LE: 2x0 + x1 + 3x2 + x3 + x4 + 2x5 <= 12 */
+        int idx1[] = {0, 1, 2, 3, 4, 5};
+        double val1[] = {2.0, 1.0, 3.0, 1.0, 1.0, 2.0};
+        ralph_add_constraint(model, 6, idx1, val1, RALPH_LESS_EQUAL, 12.0);
+
+        /* GE: x0 + 2x1 + x2 + x4 >= 5 (row_sign = -1) */
+        int idx2[] = {0, 1, 2, 4};
+        double val2[] = {1.0, 2.0, 1.0, 1.0};
+        ralph_add_constraint(model, 4, idx2, val2, RALPH_GREATER_EQUAL, 5.0);
+
+        /* EQ: x0 + x1 + x2 + x4 = 6 */
+        int idx3[] = {0, 1, 2, 4};
+        double val3[] = {1.0, 1.0, 1.0, 1.0};
+        ralph_add_constraint(model, 4, idx3, val3, RALPH_EQUAL, 6.0);
+
+        /* GE: x3 + x5 >= 2 (row_sign = -1) */
+        int idx4[] = {3, 5};
+        double val4[] = {1.0, 1.0};
+        ralph_add_constraint(model, 2, idx4, val4, RALPH_GREATER_EQUAL, 2.0);
+
+        if (pass == 0) {
+            ralph_set_int_param(model, "max_cut_rounds", 0);
+        } else {
+            ralph_set_int_param(model, "max_cut_rounds", 5);
+        }
+
+        ralph_optimize(model);
+
+        RalphStatus status = ralph_get_status(model);
+        if (pass == 0) {
+            ASSERT(status == RALPH_STATUS_OPTIMAL,
+                   "Mixed sense normalization: OPTIMAL without cuts");
+            obj_without_cuts = ralph_get_objval(model);
+        } else {
+            ASSERT(status == RALPH_STATUS_OPTIMAL,
+                   "Mixed sense normalization: OPTIMAL with cuts");
+            obj_with_cuts = ralph_get_objval(model);
+        }
+
+        /* Verify solution feasibility */
+        if (status == RALPH_STATUS_OPTIMAL) {
+            double sol[6];
+            ralph_get_solution(model, sol);
+
+            double c1 = 2*sol[0] + sol[1] + 3*sol[2] + sol[3] + sol[4] + 2*sol[5];
+            double c2 = sol[0] + 2*sol[1] + sol[2] + sol[4];
+            double c3 = sol[0] + sol[1] + sol[2] + sol[4];
+            double c4 = sol[3] + sol[5];
+            ASSERT(c1 <= 12.0 + TOLERANCE, "Mixed sense: LE constraint satisfied");
+            ASSERT(c2 >= 5.0 - TOLERANCE, "Mixed sense: GE constraint 1 satisfied");
+            ASSERT(fabs(c3 - 6.0) < TOLERANCE, "Mixed sense: EQ constraint satisfied");
+            ASSERT(c4 >= 2.0 - TOLERANCE, "Mixed sense: GE constraint 2 satisfied");
+        }
+
+        ralph_free(model);
+    }
+
+    /* Cuts must not make the solution worse (cut off the optimum) */
+    ASSERT(obj_with_cuts <= obj_without_cuts + TOLERANCE,
+           "Mixed sense normalization: cuts do not worsen objective");
+    printf("  INFO: obj without cuts = %.4f, with cuts = %.4f\n",
+           obj_without_cuts, obj_with_cuts);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -2796,6 +2982,10 @@ int main(int argc, char **argv) {
         /* LAP-based MIP tests */
         test_lap_mip_assignment();
         test_lap_mip_assignment_5x5();
+
+        /* Cut normalization tests (row_sign fix) */
+        test_cuts_ge_constraint_normalization();
+        test_cuts_mixed_sense_normalization();
 
         /* P5/P6: Bound flipping + Dual steepest edge tests */
         test_p5p6_no_false_infeasibility();
