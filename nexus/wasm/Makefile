@@ -45,6 +45,7 @@ SHARED_SRC = ../../shared/src/sh_arena.c \
              ../../shared/src/sh_fs.c \
              ../../shared/src/sh_eov.c \
              ../../shared/src/sh_hash_sha256.c \
+             ../../shared/src/sh_hashmap.c \
              ../../shared/src/sh_pdf2struc.c \
              ../../shared/src/sh_pdf2struc_text.c
 
