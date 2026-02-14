@@ -4,7 +4,7 @@
 
 ## Architecture
 
-Six-stage pipeline (A/M/B/X/D implemented, J planned):
+Six-stage pipeline (A/M/B/X/D implemented, J planned) + change detection:
 
 ```
                          ┌──────────────┐
@@ -216,6 +216,8 @@ Processing order: `row_merge` → `multi_transforms` → virtual columns → `co
 | `include/nx_discover.h` | Schema discovery API | 58 |
 | `include/nx_emit.h` | Output emitter API (GeoJSON, CSV) | 50 |
 | `include/nx_slug.h` | Slugification utility | 30 |
+| `include/nx_issue.h` | Structured issue tracking API | 70 |
+| `include/nx_diff.h` | Change detection between runs API | 63 |
 | `src/nx_ingest.c` | Pipeline orchestrator | 174 |
 | `src/nx_xlsx.c` | XLSX implementation | 631 |
 | `src/nx_pdf.c` | PDF clustering | 810 |
@@ -228,12 +230,13 @@ Processing order: `row_merge` → `multi_transforms` → virtual columns → `co
 | `src/nx_emit.c` | Output emitters | 280 |
 | `src/nx_slug.c` | Slug utility | 51 |
 | `src/nx_issue.c` | Issue list (dynamic, no caps) | 170 |
+| `src/nx_diff.c` | Change detection (FNV-1a, hashmap diff) | 348 |
 | `tools/nx_pipeline.c` | CLI pipeline (batch + single) | 1090 |
 | `tools/nx_run.c` | Stage A CLI | 131 |
 | `tools/nx_pdf_run.c` | PDF clustering CLI | 99 |
 | `tools/nx_xform_run.c` | Transform CLI | 81 |
-| `wasm/src/nx_wasm.c` | WASM wrapper | 570 |
-| **Total** | | **~8800** |
+| `wasm/src/nx_wasm.c` | WASM wrapper | 620 |
+| **Total** | | **~9300** |
 
 ## Error Handling
 
@@ -249,6 +252,7 @@ Each stage has typed error codes with `*_status_str()` for human-readable messag
 | Stage X | `nx_validate` | `ERR_{NULL,JSON,ARENA}` |
 | Stage D | `nx_emit` | `ERR_{NULL,JSON,NO_RECORDS,NO_LATLON,ALLOC}` |
 | Discovery | `nx_discover` | `ERR_{NULL,JSON,NO_TABLE,NO_ROWS,ARENA}` |
+| Change Detection | `nx_diff` | `ERR_{NULL,PARSE_OLD,PARSE_NEW,NO_RECORDS,ARENA}` |
 | Orchestrator | `nx_ingest` | `ERR_{NULL,FORMAT,STAGE_A,STAGE_B,ARENA}` |
 
 ## CLI Tools
@@ -290,7 +294,8 @@ Build with `make tools`:
 | `test_merge` | 20 | 4 error + 5 basic + 1 strip + 6 edge + 4 golden (PDF02) |
 | `test_emit` | 19 | 9 GeoJSON + 10 CSV |
 | `test_issue` | 13 | init/free, add, dynamic growth, count, JSON output |
-| **Total** | **169** | |
+| `test_diff` | 14 | null input, identical/added/removed/modified, mixed, empty, parse error |
+| **Total** | **183** | |
 
 ## Schemas
 
@@ -314,7 +319,7 @@ Six schemas in `schemas/` for GLS Hungary:
 
 ```bash
 make all      # Library + tests
-make test     # Run 169 tests
+make test     # Run 183 tests
 make tools    # CLI tools (nx_pipeline, nx_run, nx_pdf_run, nx_xform_run)
 make debug    # Build with ASan/UBSan + -Werror
 make clean    # Remove artifacts
@@ -347,13 +352,15 @@ Changes: `shared/include/sh_csv.h` (+75 lines writer API), `shared/src/sh_csv.c`
 
 Changes: `nx_issue.h` (new, 70 lines), `nx_issue.c` (new, 170 lines), all stage headers/implementations gain `NxIssueList *issues` parameter, `nx_xform.c` replaces fixed `Rejection[1024]` with dynamic list, `nx_validate.c` replaces fixed `NxValidationDetail[1024]` with dynamic list, `nx_pipeline.c` gains per-stage summary and batch manifest.json, WASM wrapper gains 4 new exports (`issues_clear`, `issues_json`, `issues_result`, `issues_result_len`), demo.html gains issues panel with stage badges. 13 new tests in `test_issue`.
 
-### P3: Change Detection Between Runs
+### P3: Change Detection Between Runs — DONE
 
-**Status: Not implemented.** Every run is a full reprocess. `row_id` provides the natural diff key but nothing uses it for comparison.
+`nx_diff` compares two canonical JSON documents by `row_id`, producing a structured diff with added/removed/modified/unchanged categories. Uses FNV-1a 64-bit hashing for both key lookup (via `SHHashmapI64`) and content comparison. Modified records include field-level old/new values.
 
-**Impact:** Cannot answer "what changed this month?" for monthly facility re-ingestion. Database upsert target (Stage D) requires full replace instead of efficient delta.
+Changes: `nx_diff.h` (new, 63 lines), `nx_diff.c` (new, 348 lines), WASM wrapper gains 3 exports (`diff`, `diff_result`, `diff_result_len`), demo.html gains baseline save/compare workflow with summary cards and detail tables. 14 new tests in `test_diff`.
 
-**Estimated scope:** ~300 lines — hashmap of `row_id` → record hash for old vs. new, emit `{added, removed, modified, unchanged_count}`.
+### Stage A: Partial Results (Stability Fix) — DONE
+
+Stage A parsers (XLSX, PDF, CSV) now recover from mid-parse errors and return partial results instead of failing entirely. If a document has 100 rows and row 50 triggers a parse error, the first 49 rows are still returned with issues logged via `NxIssueList`.
 
 ### P4: Dynamic Growth (No Hard Caps) — DONE
 
