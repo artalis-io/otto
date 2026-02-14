@@ -351,6 +351,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     switch (status) {
         case RALPH_STATUS_OPTIMAL:
         case RALPH_STATUS_IMPRECISE:
+        case RALPH_STATUS_OBJ_LIMIT:
             result.status = 0;
             result.objective = ralph_get_objval(model);
             break;

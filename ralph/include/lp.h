@@ -329,6 +329,8 @@ typedef struct {
     int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
     int crash;              /* 0=off, 1=triangular crash basis */
     int verify;             /* 0=off, 1=post-solve verification (T2.3) */
+    double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
+    int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
     int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
 
     /* Scaling factors (used if scaling enabled) */

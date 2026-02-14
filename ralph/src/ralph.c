@@ -46,6 +46,8 @@ struct RalphModel {
     int scaling;            /* 0=off, 1=single-round (default), N=N geo rounds + equilibrium */
     int crash;              /* 0=off, 1=triangular crash basis */
     int verify;             /* 0=off, 1=post-solve verification */
+    double objective_limit; /* Early-exit obj limit (user space) */
+    int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled */
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
     int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
     int var_select;         /* -1=default, 0=most_infeas, 1=pseudo_cost, 2=strong, 3=reliability */
@@ -113,6 +115,8 @@ RalphModel* ralph_create(void) {
     model->scaling = 1;    /* Default: single-round geometric mean */
     model->crash = 0;      /* Default: off (all-slack basis) */
     model->verify = 0;     /* Default: off (no post-solve verification) */
+    model->objective_limit = RALPH_INFINITY; /* Default: no limit */
+    model->phase1_pricing = -1; /* Default: disabled (use solver pricing) */
     model->detect_special = 0; /* Default: disabled for fair benchmarking */
     model->node_pool_capacity = 1024; /* Default B&B node pool size */
     model->node_select = 3; /* Default: hybrid */
@@ -633,6 +637,13 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->scaling = model->scaling;
         model->lp_solver->crash = model->crash;
         model->lp_solver->verify = model->verify;
+        model->lp_solver->phase1_pricing = model->phase1_pricing;
+        /* Convert objective limit from user space to internal minimization space */
+        if (model->objective_limit < RALPH_INFINITY) {
+            model->lp_solver->objective_limit = model->objective_limit * solve_model->obj_sense;
+        } else {
+            model->lp_solver->objective_limit = RALPH_INFINITY;
+        }
         model->lp_solver->force_two_phase = model->force_two_phase;
         model->lp_solver->trace_phase1 = model->trace_phase1;
         if (model->dual_bound_flip >= 0)
@@ -667,7 +678,8 @@ int ralph_optimize(RalphModel *model) {
         model->iteration_count = model->lp_solver->iterations;
 
         if (model->status == RALPH_STATUS_OPTIMAL ||
-            model->status == RALPH_STATUS_IMPRECISE) {
+            model->status == RALPH_STATUS_IMPRECISE ||
+            model->status == RALPH_STATUS_OBJ_LIMIT) {
             model->obj_value = model->lp_solver->obj_value;
 
             /* Add obj_offset from presolve (e.g., doubleton elimination) */
@@ -1154,6 +1166,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (STREQ(name, "verify") || STREQ(name, "Verify")) {
         /* 0=off, 1=post-solve verification (primal/dual/complementary slackness) */
         model->verify = value ? 1 : 0;
+    } else if (STREQ(name, "phase1_pricing") || STREQ(name, "Phase1Pricing")) {
+        /* Override pricing strategy for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
+        model->phase1_pricing = (value >= 0) ? value : -1;
     } else if (STREQ(name, "var_select") || STREQ(name, "VarSelect")) {
         /* 0=most_infeasible, 1=pseudo_cost, 2=strong_branch, 3=reliability */
         if (value < 0 || value > 4) return -1;
@@ -1172,6 +1187,8 @@ int ralph_set_dbl_param(RalphModel *model, const char *name, double value) {
         model->time_limit = value;
     } else if (STREQ(name, "mip_gap") || STREQ(name, "MIPGap")) {
         model->mip_gap = value;
+    } else if (STREQ(name, "obj_limit") || STREQ(name, "ObjLimit")) {
+        model->objective_limit = value;
     } else {
         return -1;  /* Unknown parameter */
     }
@@ -1218,6 +1235,8 @@ int ralph_get_dbl_param(const RalphModel *model, const char *name, double *value
         *value = model->time_limit;
     } else if (STREQ(name, "mip_gap")) {
         *value = model->mip_gap;
+    } else if (STREQ(name, "obj_limit")) {
+        *value = model->objective_limit;
     } else {
         return -1;
     }
@@ -1240,6 +1259,7 @@ const char* ralph_status_string(RalphStatus status) {
         case RALPH_STATUS_TIME_LIMIT:     return "TIME_LIMIT";
         case RALPH_STATUS_NODE_LIMIT:     return "NODE_LIMIT";
         case RALPH_STATUS_IMPRECISE:     return "IMPRECISE";
+        case RALPH_STATUS_OBJ_LIMIT:    return "OBJ_LIMIT";
         case RALPH_STATUS_ERROR:          return "ERROR";
         default:                          return "UNKNOWN";
     }

@@ -2588,6 +2588,8 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->trace_phase1_first_fail_iter = -1;
     solver->trace_phase1_last_fail_iter = -1;
     solver->objective_cutoff = RALPH_INFINITY;
+    solver->objective_limit = RALPH_INFINITY;
+    solver->phase1_pricing = -1;  /* Default: disabled (use solver pricing) */
     solver->use_dual_bound_flip = 1;
     solver->use_dual_steepest_edge = 1;
 
@@ -3860,6 +3862,17 @@ static int simplex_phase2(SimplexSolver *solver) {
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
 
+        /* T3.1: Objective limit early-exit (internal minimization space) */
+        if (solver->objective_limit < RALPH_INFINITY &&
+            tab->obj_value >= solver->objective_limit) {
+            primal_remove_perturbation(tab);
+            tableau_compute_solution(tab);
+            solver->status = RALPH_STATUS_OBJ_LIMIT;
+            solver->iterations = iter;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+            return 0;
+        }
+
         /* Reduced costs are updated incrementally in simplex_pivot().
          * Full recomputation only needed:
          * - After refactorization (for numerical stability)
@@ -4416,15 +4429,23 @@ int simplex_solve(SimplexSolver *solver) {
 
     if (solver->verbose) printf("[simplex_solve] Initial factorization OK\n");
 
+    /* T3.4: Override pricing strategy for Phase 1 if configured */
+    int saved_pricing = solver->pricing_strategy;
+    if (solver->phase1_pricing >= 0) {
+        solver->pricing_strategy = solver->phase1_pricing;
+    }
+
     /* Phase 1: Find feasible solution */
     if (solver->verbose) printf("[simplex_solve] Starting Phase 1...\n");
     if (simplex_phase1(solver) != 0) {
+        solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing */
         if (solver->status == RALPH_STATUS_INFEASIBLE) {
             if (solver->verbose) printf("[simplex_solve] Phase 1: INFEASIBLE\n");
             return 0;  /* Infeasible is a valid result */
         }
         return -1;
     }
+    solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing for Phase 2 */
     if (solver->verbose) printf("[simplex_solve] Phase 1 complete\n");
 
     /* Transition to Phase 2 if using two-phase simplex */
