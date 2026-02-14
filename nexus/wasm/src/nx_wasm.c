@@ -21,6 +21,7 @@
 #include "nx_validate.h"
 #include "nx_discover.h"
 #include "nx_emit.h"
+#include "nx_diff.h"
 #include "sh_arena.h"
 #include "sh_json.h"
 #include "sh_pdf2struc.h"
@@ -44,6 +45,7 @@ static char  *g_transform_buf = NULL;  static size_t g_transform_len = 0;
 static char  *g_validate_buf  = NULL;  static size_t g_validate_len  = 0;
 static char  *g_discover_buf  = NULL;  static size_t g_discover_len  = 0;
 static char  *g_emit_buf     = NULL;  static size_t g_emit_len     = 0;
+static char  *g_diff_buf    = NULL;  static size_t g_diff_len    = 0;
 static char  *g_issues_buf   = NULL;  static size_t g_issues_len   = 0;
 
 /* Accumulates issues across all pipeline stage calls.
@@ -567,4 +569,52 @@ WASM_EXPORT
 int nx_wasm_emit_result_len(void)
 {
     return (int)g_emit_len;
+}
+
+/* ============================================================================
+ * Change Detection (compare two canonical JSON documents)
+ * ============================================================================ */
+
+/*
+ * Compare old and new canonical JSON documents.
+ * Returns 0 on success, -1 on error.
+ */
+WASM_EXPORT
+int nx_wasm_diff(const char *old_json, int old_len,
+                  const char *new_json, int new_len)
+{
+    free(g_diff_buf);
+    g_diff_buf = NULL;
+    g_diff_len = 0;
+
+    if (!old_json || old_len <= 0 || !new_json || new_len <= 0) return -1;
+
+    SHArena *arena = sh_arena_create(NX_WASM_ARENA_SIZE);
+    if (!arena) return -1;
+
+    char *out = NULL;
+    size_t out_len = 0;
+    NxDiffStatus st = nx_diff(
+        old_json, (size_t)old_len,
+        new_json, (size_t)new_len,
+        arena, &out, &out_len);
+
+    sh_arena_free(arena);
+
+    if (st != NX_DIFF_OK || !out) return -1;
+    g_diff_buf = out;
+    g_diff_len = out_len;
+    return 0;
+}
+
+WASM_EXPORT
+const char *nx_wasm_diff_result(void)
+{
+    return g_diff_buf ? g_diff_buf : "";
+}
+
+WASM_EXPORT
+int nx_wasm_diff_result_len(void)
+{
+    return (int)g_diff_len;
 }

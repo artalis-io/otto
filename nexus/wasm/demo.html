@@ -405,6 +405,10 @@ h1 {
 .audit-card.rejected .card-value { color: var(--error); }
 .audit-card.warnings .card-value { color: var(--warning); }
 .audit-card.info .card-value { color: var(--accent); }
+.audit-card.added .card-value { color: var(--success); }
+.audit-card.removed .card-value { color: var(--error); }
+.audit-card.modified .card-value { color: var(--warning); }
+.audit-card.unchanged .card-value { color: var(--text-muted); }
 
 /* ============================================================================
  * Stage Issue Badges
@@ -491,6 +495,52 @@ h1 {
     font-size: 13px;
     padding: 12px 0;
     opacity: 0.7;
+}
+
+/* ============================================================================
+ * Baseline Button
+ * ============================================================================ */
+
+.baseline-bar {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+.baseline-bar.visible { display: flex; }
+
+.baseline-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-family: inherit;
+    font-size: 12px;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.baseline-btn:hover {
+    border-color: var(--accent);
+    background: rgba(59, 130, 246, 0.1);
+}
+
+.baseline-info {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex: 1;
+}
+
+.baseline-info .baseline-active {
+    color: var(--success);
+    font-weight: 700;
 }
 
 /* ============================================================================
@@ -670,6 +720,24 @@ h1 {
             <div id="issues-content"></div>
         </div>
 
+        <!-- Baseline Bar -->
+        <div id="baseline-bar" class="baseline-bar">
+            <button id="baseline-btn" class="baseline-btn">Save as Baseline</button>
+            <span id="baseline-info" class="baseline-info"></span>
+        </div>
+
+        <!-- Diff Stage -->
+        <div id="stage-diff" class="stage">
+            <div class="stage-header">
+                <span class="stage-label">STAGE <span class="stage-name">DIFF</span></span>
+                <span id="stage-diff-time" class="stage-time"></span>
+            </div>
+            <div id="diff-cards" class="audit-cards"></div>
+            <div id="diff-detail" style="margin-top: 16px;"></div>
+            <div id="diff-block" class="code-block" style="margin-top: 16px;"><pre id="diff-code"></pre></div>
+            <div id="stage-diff-expand"></div>
+        </div>
+
         <!-- Footer -->
         <div class="footer">
             Powered by OTTO &mdash; zero dependencies, runs entirely in your browser via WebAssembly.
@@ -709,6 +777,8 @@ let Module = null;
 let fileData = null;   /* ArrayBuffer */
 let fileFormat = -1;   /* 0=XLSX, 2=CSV, 3=PDF */
 let fileName = '';
+let baselineJSON = null; /* Saved canonical JSON for diff */
+let lastCanonicalJSON = null; /* Most recent pipeline output */
 
 /* ============================================================================
  * WASM Module Loading
@@ -881,6 +951,16 @@ function callIssuesJSON() {
     const status = Module._nx_wasm_issues_json();
     if (status !== 0) return '{"count":0,"errors":0,"warnings":0,"info":0,"issues":[]}';
     return Module.UTF8ToString(Module._nx_wasm_issues_result());
+}
+
+function callDiff(oldJSON, newJSON) {
+    const [oldPtr, oldLen] = allocUTF8(oldJSON);
+    const [newPtr, newLen] = allocUTF8(newJSON);
+    const status = Module._nx_wasm_diff(oldPtr, oldLen, newPtr, newLen);
+    Module._free(oldPtr);
+    Module._free(newPtr);
+    if (status !== 0) throw new Error('Diff failed');
+    return Module.UTF8ToString(Module._nx_wasm_diff_result());
 }
 
 /* ============================================================================
@@ -1083,7 +1163,7 @@ function renderContentImmediate(block, html) {
  * ============================================================================ */
 
 function hideAllStages() {
-    const stages = ['stage-a', 'schema-preview', 'stage-b', 'stage-x', 'audit-summary', 'issues-panel'];
+    const stages = ['stage-a', 'schema-preview', 'stage-b', 'stage-x', 'audit-summary', 'issues-panel', 'stage-diff'];
     stages.forEach(function(id) {
         const el = document.getElementById(id);
         el.classList.remove('visible');
@@ -1099,6 +1179,8 @@ function hideAllStages() {
         block.classList.remove('typing', 'typed');
     });
     document.getElementById('audit-cards').innerHTML = '';
+    document.getElementById('diff-cards').innerHTML = '';
+    document.getElementById('diff-detail').innerHTML = '';
     document.getElementById('issues-content').innerHTML = '';
     /* Clear stage badges */
     document.querySelectorAll('.stage-badges').forEach(function(el) { el.remove(); });
@@ -1249,6 +1331,29 @@ async function runPipeline() {
         const issuesData = JSON.parse(callIssuesJSON());
         showIssuesPanel(issuesData);
         addStageBadges(issuesData.issues || []);
+
+        /* ── Save canonical for diff ──────────────────────── */
+        lastCanonicalJSON = finalJSON;
+
+        /* ── Diff (if baseline exists) ────────────────────── */
+        if (baselineJSON) {
+            loading.classList.add('visible');
+            loadingText.textContent = 'Computing diff...';
+            await sleep(50);
+
+            const td0 = performance.now();
+            const diffJSON = callDiff(baselineJSON, finalJSON);
+            const td1 = performance.now();
+
+            loading.classList.remove('visible');
+            showStage('stage-diff');
+            document.getElementById('stage-diff-time').textContent = (td1 - td0).toFixed(0) + ' ms';
+
+            showDiffResult(diffJSON);
+        }
+
+        /* ── Baseline bar ─────────────────────────────────── */
+        showBaselineBar();
 
     } catch (err) {
         loading.classList.remove('visible');
@@ -1421,6 +1526,120 @@ function addStageBadges(issues) {
 function escapeHTML(str) {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
               .replace(/"/g, '&quot;');
+}
+
+/* ============================================================================
+ * Baseline & Diff
+ * ============================================================================ */
+
+function showBaselineBar() {
+    const bar = document.getElementById('baseline-bar');
+    const info = document.getElementById('baseline-info');
+    bar.classList.add('visible');
+
+    if (baselineJSON) {
+        const obj = JSON.parse(baselineJSON);
+        const count = obj.records ? obj.records.length : 0;
+        info.innerHTML = '<span class="baseline-active">Baseline active</span> &mdash; ' +
+            count + ' records. Upload a new file and run again to see diff.';
+    } else {
+        info.textContent = 'Save current output as baseline, then re-run with a different file to compare.';
+    }
+}
+
+document.getElementById('baseline-btn').addEventListener('click', function() {
+    if (!lastCanonicalJSON) return;
+    baselineJSON = lastCanonicalJSON;
+    showBaselineBar();
+});
+
+function showDiffResult(diffJSON) {
+    const diff = JSON.parse(diffJSON);
+    const summary = diff.summary || {};
+
+    /* Summary cards */
+    const cardsEl = document.getElementById('diff-cards');
+    cardsEl.innerHTML = '';
+
+    function addCard(value, label, cls) {
+        const card = document.createElement('div');
+        card.className = 'audit-card ' + cls;
+        card.innerHTML = '<div class="card-value">' + value + '</div>' +
+                         '<div class="card-label">' + label + '</div>';
+        cardsEl.appendChild(card);
+    }
+
+    addCard(summary.added || 0, 'added', 'added');
+    addCard(summary.removed || 0, 'removed', 'removed');
+    addCard(summary.modified || 0, 'modified', 'modified');
+    addCard(summary.unchanged || 0, 'unchanged', 'unchanged');
+
+    /* Detail table for modified records */
+    const detailEl = document.getElementById('diff-detail');
+    const modified = diff.modified || [];
+    const added = diff.added || [];
+    const removed = diff.removed || [];
+
+    if (modified.length === 0 && added.length === 0 && removed.length === 0) {
+        detailEl.innerHTML = '<div class="issues-empty">No changes detected between baseline and current run.</div>';
+    } else {
+        let html = '';
+
+        if (added.length > 0) {
+            html += '<div style="margin-bottom: 12px; color: var(--success); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;">Added Records</div>';
+            html += '<table class="issues-table"><thead><tr><th>ID</th><th>Fields</th></tr></thead><tbody>';
+            for (const rec of added.slice(0, 20)) {
+                const id = rec.id || '?';
+                const fields = Object.keys(rec).filter(function(k) { return k !== 'id'; }).join(', ');
+                html += '<tr><td class="sev-info">' + escapeHTML(id) + '</td><td>' + escapeHTML(fields) + '</td></tr>';
+            }
+            if (added.length > 20) html += '<tr><td colspan="2" style="color: var(--text-muted);">... and ' + (added.length - 20) + ' more</td></tr>';
+            html += '</tbody></table>';
+        }
+
+        if (removed.length > 0) {
+            html += '<div style="margin-top: 16px; margin-bottom: 12px; color: var(--error); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;">Removed Records</div>';
+            html += '<table class="issues-table"><thead><tr><th>ID</th><th>Fields</th></tr></thead><tbody>';
+            for (const rec of removed.slice(0, 20)) {
+                const id = rec.id || '?';
+                const fields = Object.keys(rec).filter(function(k) { return k !== 'id'; }).join(', ');
+                html += '<tr><td class="sev-error">' + escapeHTML(id) + '</td><td>' + escapeHTML(fields) + '</td></tr>';
+            }
+            if (removed.length > 20) html += '<tr><td colspan="2" style="color: var(--text-muted);">... and ' + (removed.length - 20) + ' more</td></tr>';
+            html += '</tbody></table>';
+        }
+
+        if (modified.length > 0) {
+            html += '<div style="margin-top: 16px; margin-bottom: 12px; color: var(--warning); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px;">Modified Records</div>';
+            html += '<table class="issues-table"><thead><tr><th>ID</th><th>Changed Fields</th></tr></thead><tbody>';
+            for (const mod of modified.slice(0, 20)) {
+                const id = mod.id || '?';
+                const oldRec = mod.old || {};
+                const newRec = mod.new || {};
+                const changed = [];
+                for (const key of Object.keys(newRec)) {
+                    if (key === 'id') continue;
+                    if (JSON.stringify(oldRec[key]) !== JSON.stringify(newRec[key])) {
+                        changed.push(key);
+                    }
+                }
+                html += '<tr><td class="sev-warning">' + escapeHTML(id) + '</td><td>' + escapeHTML(changed.join(', ') || 'content changed') + '</td></tr>';
+            }
+            if (modified.length > 20) html += '<tr><td colspan="2" style="color: var(--text-muted);">... and ' + (modified.length - 20) + ' more</td></tr>';
+            html += '</tbody></table>';
+        }
+
+        detailEl.innerHTML = html;
+    }
+
+    /* Full diff JSON in code block */
+    const truncDiff = truncateJSON(diffJSON);
+    const diffHTML = highlightJSON(truncDiff.json);
+    renderContentImmediate(document.getElementById('diff-block'), diffHTML);
+
+    if (truncDiff.truncated) {
+        addExpandButton('stage-diff-expand', diffJSON, truncDiff.totalRecords, 'diff-block');
+    }
 }
 </script>
 </body>
