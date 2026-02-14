@@ -70,7 +70,6 @@ static int parse_shared_strings(const char *xml, size_t xml_len,
                                 SHArena *arena, NxIssueList *issues,
                                 SharedStrings *ss)
 {
-    (void)issues;
     ShXmlReader r;
     ShXmlToken tok;
     sh_xml_init(&r, xml, xml_len, arena);
@@ -86,7 +85,14 @@ static int parse_shared_strings(const char *xml, size_t xml_len,
     int concat_len = 0;
 
     while (sh_xml_next(&r, &tok) != SH_XML_EOF) {
-        if (tok.type == SH_XML_ERROR) return -1;
+        if (tok.type == SH_XML_ERROR) {
+            if (issues)
+                nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING, -1, "",
+                              "xml_parse_error",
+                              "Shared strings XML error after %d entries",
+                              ss->count);
+            break;
+        }
 
         if (tok.type == SH_XML_START_TAG) {
             if (tok.name_len == 2 && memcmp(tok.name, "si", 2) == 0) {
@@ -116,13 +122,27 @@ static int parse_shared_strings(const char *xml, size_t xml_len,
                     int new_cap = ss->capacity * 2;
                     const char **new_ptrs = (const char **)realloc(
                         ss->strings, (size_t)new_cap * sizeof(char *));
-                    if (!new_ptrs) return -1;
+                    if (!new_ptrs) {
+                        if (issues)
+                            nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                          -1, "", "alloc_exhausted",
+                                          "Memory exhausted after %d shared strings",
+                                          ss->count);
+                        break;
+                    }
                     ss->strings = new_ptrs;
                     ss->capacity = new_cap;
                 }
 
                 char *s = (char *)sh_arena_alloc(arena, (size_t)concat_len + 1);
-                if (!s) return -1;
+                if (!s) {
+                    if (issues)
+                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                      -1, "", "arena_exhausted",
+                                      "Arena exhausted after %d shared strings",
+                                      ss->count);
+                    break;
+                }
                 memcpy(s, concat_buf, (size_t)concat_len + 1);
                 ss->strings[ss->count++] = s;
 
@@ -222,7 +242,14 @@ static int parse_worksheet(const char *xml, size_t xml_len,
     int inline_len = 0;
 
     while (sh_xml_next(&r, &tok) != SH_XML_EOF) {
-        if (tok.type == SH_XML_ERROR) return -1;
+        if (tok.type == SH_XML_ERROR) {
+            if (issues)
+                nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING, -1, "",
+                              "xml_parse_error",
+                              "Worksheet XML error after %d rows",
+                              sheet->row_count);
+            goto done_parsing;
+        }
 
         if (tok.type == SH_XML_START_TAG || tok.type == SH_XML_SELF_CLOSE) {
             if (tok.name_len == 3 && memcmp(tok.name, "row", 3) == 0) {
@@ -308,7 +335,14 @@ static int parse_worksheet(const char *xml, size_t xml_len,
 
                 /* Ensure we have a row for cur_row */
                 while (sheet->row_count <= cur_row) {
-                    if (ensure_row_cap(sheet, arena) < 0) return -1;
+                    if (ensure_row_cap(sheet, arena) < 0) {
+                        if (issues)
+                            nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                          -1, "", "arena_exhausted",
+                                          "Arena exhausted after %d rows",
+                                          sheet->row_count);
+                        goto done_parsing;
+                    }
                     ParsedRow *row = &sheet->rows[sheet->row_count];
                     row->cells = NULL;
                     row->col_count = 0;
@@ -324,7 +358,13 @@ static int parse_worksheet(const char *xml, size_t xml_len,
                     if (new_cols < INITIAL_COL_CAP) new_cols = INITIAL_COL_CAP;
                     char **new_cells = (char **)sh_arena_calloc(arena,
                         (size_t)new_cols, sizeof(char *));
-                    if (!new_cells) return -1;
+                    if (!new_cells) {
+                        if (issues)
+                            nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                          cur_row, "", "arena_exhausted",
+                                          "Arena exhausted allocating columns");
+                        goto done_parsing;
+                    }
                     if (row->cells && row->col_count > 0)
                         memcpy(new_cells, row->cells, (size_t)row->col_count * sizeof(char *));
                     row->cells = new_cells;
@@ -334,7 +374,13 @@ static int parse_worksheet(const char *xml, size_t xml_len,
                 /* Store cell value */
                 size_t vlen = strlen(cell_value);
                 char *stored = (char *)sh_arena_alloc(arena, vlen + 1);
-                if (!stored) return -1;
+                if (!stored) {
+                    if (issues)
+                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                      cur_row, "", "arena_exhausted",
+                                      "Arena exhausted storing cell value");
+                    goto done_parsing;
+                }
                 memcpy(stored, cell_value, vlen + 1);
                 row->cells[cur_col] = stored;
 
@@ -348,6 +394,7 @@ static int parse_worksheet(const char *xml, size_t xml_len,
         }
     }
 
+done_parsing:
     /* Apply limits */
     if (limits) {
         if (limits->max_rows > 0 && sheet->row_count > limits->max_rows)
@@ -512,7 +559,6 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
     SheetInfo sheets[256];
     ParsedSheet parsed_sheets[256];
     int sheet_count = 0;
-    NxXlsxStatus result = NX_XLSX_OK;
 
     if (!data || !out_json || !out_len) return NX_XLSX_ERR_NULL;
     if (!arena) return NX_XLSX_ERR_ARENA;
@@ -536,10 +582,13 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
     void *ss_xml = zip_extract(&zip, "xl/sharedStrings.xml", &ss_size);
     if (ss_xml) {
         if (parse_shared_strings((const char *)ss_xml, ss_size, arena, issues, &ss) < 0) {
-            mz_free(ss_xml);
-            mz_zip_reader_end(&zip);
-            free(ss.strings);
-            return NX_XLSX_ERR_XML;
+            /* Initial allocation failed — continue without shared strings */
+            if (issues)
+                nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING, -1, "",
+                              "shared_strings_alloc",
+                              "Failed to allocate shared string table");
+            ss.count = 0;
+            ss.strings = NULL;
         }
         mz_free(ss_xml);
     }
@@ -592,18 +641,18 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
         if (parse_worksheet((const char *)ws_xml, ws_size, arena, &ss,
                            limits, issues, &parsed_sheets[s]) < 0) {
             mz_free(ws_xml);
-            result = NX_XLSX_ERR_XML;
-            break;
+            if (issues)
+                nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING, -1, "",
+                              "sheet_parse_error",
+                              "Failed to parse worksheet '%s', skipping",
+                              sheets[s].name);
+            memset(&parsed_sheets[s], 0, sizeof(ParsedSheet));
+            continue;
         }
         mz_free(ws_xml);
     }
 
     mz_zip_reader_end(&zip);
-
-    if (result != NX_XLSX_OK) {
-        free(ss.strings);
-        return result;
-    }
 
     /* Generate JSON */
     ShJsonBuf jb;

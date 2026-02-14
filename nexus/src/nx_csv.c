@@ -66,7 +66,8 @@ static char *arena_strdup(SHArena *arena, const char *data, size_t len)
 static int collect_csv_rows(const char *data, size_t len,
                             const ShCsvOpts *csv_opts,
                             const NxCsvLimits *limits,
-                            SHArena *arena, CsvTable *table)
+                            SHArena *arena, NxIssueList *issues,
+                            CsvTable *table)
 {
     ShCsvReader r;
     ShCsvOpts opts;
@@ -111,7 +112,14 @@ static int collect_csv_rows(const char *data, size_t len,
                 int new_cap = cur_col_cap * 2;
                 char **new_fields = (char **)sh_arena_alloc(arena,
                     (size_t)new_cap * sizeof(char *));
-                if (!new_fields) return -1;
+                if (!new_fields) {
+                    if (issues)
+                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                      -1, "", "arena_exhausted",
+                                      "Arena exhausted growing field buffer at row %d",
+                                      table->row_count);
+                    goto done_csv;
+                }
                 memcpy(new_fields, cur_fields,
                        (size_t)cur_col_count * sizeof(char *));
                 cur_fields = new_fields;
@@ -119,7 +127,14 @@ static int collect_csv_rows(const char *data, size_t len,
             }
 
             char *val = arena_strdup(arena, tok.data, tok.len);
-            if (!val) return -1;
+            if (!val) {
+                if (issues)
+                    nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                  -1, "", "arena_exhausted",
+                                  "Arena exhausted storing field at row %d",
+                                  table->row_count);
+                goto done_csv;
+            }
             cur_fields[cur_col_count++] = val;
 
         } else if (type == SH_CSV_TOKEN_ROW_END) {
@@ -132,7 +147,13 @@ static int collect_csv_rows(const char *data, size_t len,
                 /* Store as header row */
                 table->headers = (char **)sh_arena_alloc(arena,
                     (size_t)cur_col_count * sizeof(char *));
-                if (!table->headers) return -1;
+                if (!table->headers) {
+                    if (issues)
+                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                      -1, "", "arena_exhausted",
+                                      "Arena exhausted storing header row");
+                    goto done_csv;
+                }
                 memcpy(table->headers, cur_fields,
                        (size_t)cur_col_count * sizeof(char *));
                 table->header_count = cur_col_count;
@@ -144,7 +165,14 @@ static int collect_csv_rows(const char *data, size_t len,
                     break;
 
                 /* Store as data row */
-                if (ensure_row_cap(table, arena) < 0) return -1;
+                if (ensure_row_cap(table, arena) < 0) {
+                    if (issues)
+                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                      -1, "", "arena_exhausted",
+                                      "Arena exhausted after %d rows",
+                                      table->row_count);
+                    goto done_csv;
+                }
                 CsvRow *row = &table->rows[table->row_count];
 
                 /* Apply column limit */
@@ -154,7 +182,14 @@ static int collect_csv_rows(const char *data, size_t len,
 
                 row->cells = (char **)sh_arena_alloc(arena,
                     (size_t)ncols * sizeof(char *));
-                if (!row->cells) return -1;
+                if (!row->cells) {
+                    if (issues)
+                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                      -1, "", "arena_exhausted",
+                                      "Arena exhausted allocating cells at row %d",
+                                      table->row_count);
+                    goto done_csv;
+                }
                 memcpy(row->cells, cur_fields,
                        (size_t)ncols * sizeof(char *));
                 row->col_count = ncols;
@@ -174,21 +209,21 @@ static int collect_csv_rows(const char *data, size_t len,
         if (is_header) {
             table->headers = (char **)sh_arena_alloc(arena,
                 (size_t)cur_col_count * sizeof(char *));
-            if (!table->headers) return -1;
+            if (!table->headers) goto done_csv;
             memcpy(table->headers, cur_fields,
                    (size_t)cur_col_count * sizeof(char *));
             table->header_count = cur_col_count;
         } else {
             if (!(limits && limits->max_rows > 0 &&
                   table->row_count >= limits->max_rows)) {
-                if (ensure_row_cap(table, arena) < 0) return -1;
+                if (ensure_row_cap(table, arena) < 0) goto done_csv;
                 CsvRow *row = &table->rows[table->row_count];
                 int ncols = cur_col_count;
                 if (limits && limits->max_cols > 0 && ncols > limits->max_cols)
                     ncols = limits->max_cols;
                 row->cells = (char **)sh_arena_alloc(arena,
                     (size_t)ncols * sizeof(char *));
-                if (!row->cells) return -1;
+                if (!row->cells) goto done_csv;
                 memcpy(row->cells, cur_fields,
                        (size_t)ncols * sizeof(char *));
                 row->col_count = ncols;
@@ -197,6 +232,7 @@ static int collect_csv_rows(const char *data, size_t len,
         }
     }
 
+done_csv:
     /* Apply column limit to max_cols */
     if (limits && limits->max_cols > 0 && table->max_cols > limits->max_cols)
         table->max_cols = limits->max_cols;
@@ -301,7 +337,6 @@ NxCsvStatus nx_csv_parse(const char *data, size_t len,
                           SHArena *arena, NxIssueList *issues,
                           char **out_json, size_t *out_len)
 {
-    (void)issues;
     if (!data || !out_json || !out_len) return NX_CSV_ERR_NULL;
     if (!arena) return NX_CSV_ERR_ARENA;
 
@@ -314,7 +349,7 @@ NxCsvStatus nx_csv_parse(const char *data, size_t len,
 
     /* Parse CSV into table structure */
     CsvTable table = {0};
-    if (collect_csv_rows(data, len, csv_opts, limits, arena, &table) < 0) {
+    if (collect_csv_rows(data, len, csv_opts, limits, arena, issues, &table) < 0) {
         return NX_CSV_ERR_PARSE;
     }
 

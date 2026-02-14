@@ -202,7 +202,8 @@ static void auto_detect_options(TextRun *runs, int count, SHArena *arena,
  * ============================================================================ */
 
 static int cluster_rows(TextRun *runs, int count, double tolerance,
-                        SHArena *arena, ClusterRow *rows, int max_rows)
+                        SHArena *arena, NxIssueList *issues,
+                        ClusterRow *rows, int max_rows)
 {
     if (count == 0) return 0;
 
@@ -232,7 +233,14 @@ static int cluster_rows(TextRun *runs, int count, double tolerance,
         int run_count = i - start;
         cr->runs = (TextRun *)sh_arena_alloc(arena,
             (size_t)run_count * sizeof(TextRun));
-        if (!cr->runs) return -1;
+        if (!cr->runs) {
+            if (issues)
+                nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING, -1, "",
+                              "arena_exhausted",
+                              "Arena exhausted during row clustering after %d rows",
+                              nrows);
+            break;
+        }
         memcpy(cr->runs, runs + start, (size_t)run_count * sizeof(TextRun));
         cr->count = run_count;
         cr->y_mid = y_sum / run_count;
@@ -736,7 +744,6 @@ NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
                                   char **out_json, size_t *out_len)
 {
     NxPdfOptions auto_opts = NX_PDF_AUTO_OPTIONS;
-    (void)issues; /* Reserved for future per-run issue reporting */
 
     if (!json_data || !out_json || !out_len) return NX_PDF_ERR_NULL;
     if (!arena) return NX_PDF_ERR_ARENA;
@@ -768,7 +775,7 @@ NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
     if (!cluster_rows_arr) return NX_PDF_ERR_ARENA;
 
     int nrows = cluster_rows(runs, nruns, opts->row_tolerance,
-                             arena, cluster_rows_arr, nruns);
+                             arena, issues, cluster_rows_arr, nruns);
     if (nrows < 0) return NX_PDF_ERR_ARENA;
     if (nrows == 0) return NX_PDF_ERR_NO_TEXT;
 
