@@ -688,16 +688,20 @@ simplex_solve pipeline with crash + dual:
 
 **Phase B: Clean dual solver function (~400 LoC)**
 
-New function `dual_simplex_solve_standalone()` that does NOT fall back to primal:
-- Takes a tableau with a valid basis (from crash + refactorize)
+New function `dual_simplex_solve_clean()` that does NOT fall back to primal:
+- Takes a tableau with a valid basis (from crash + refactorize, or warm-started from B&B)
 - Achieves dual feasibility (flip + optional dual Phase 1)
-- Runs dual simplex iterations with DSE + bound perturbation
+- Runs dual simplex iterations with **exact DSE** + bound perturbation
 - On stalling: re-perturb (up to 5 attempts), then return STALLED status
 - On too many iterations: return ITERATION_LIMIT
+- Supports objective cutoff (early termination for MIP pruning)
 - **No tableau destruction, no primal fallback**
-- Caller (`simplex_solve`) decides whether to fall back to primal
+- Caller decides whether to fall back to primal
 
-This keeps the existing `dual_simplex_solve()` untouched (MIP dual_reopt still uses it).
+This function serves **both** cold-start LP solving AND B&B warm-start re-optimization.
+The key insight: bound changes in B&B only break primal feasibility — dual feasibility is
+preserved (reduced costs depend on basis and objective, not bounds). So the same dual
+simplex function handles both cases naturally.
 
 **Phase C: Method dispatch in simplex_solve**
 
@@ -706,7 +710,7 @@ This keeps the existing `dual_simplex_solve()` untouched (MIP dual_reopt still u
 if (solver->method == 1 || (solver->method == 2 && should_use_dual(solver))) {
     crash_triangular(tab);        // T1.1
     tableau_refactorize(tab);
-    int rc = dual_simplex_solve_standalone(solver);
+    int rc = dual_simplex_solve_clean(solver);
     if (rc == 0) goto post_solve;  // Optimal or infeasible
     // Dual failed — fall back to primal
     // Reset basis to all-slack, refactorize, run Phase 1 + Phase 2
@@ -726,23 +730,60 @@ After Phase C is validated on full NETLIB suite + FuelWise benchmarks:
 - Keep primal as fallback for the 2-5% of problems where dual struggles
 - This is a one-line change with the full safety net of `method=0` revert
 
+**Phase E: Replace dual_reopt in B&B (delete ~200 LoC, simplify mip.c)**
+
+`dual_reopt` exists because `dual_simplex_solve()` was unreliable (6 primal fallbacks).
+With `dual_simplex_solve_clean()` from Phase B, `dual_reopt` becomes redundant. The B&B
+node solver in `solve_node_lp()` (mip.c:960) collapses from 3 paths to 1:
+
+```c
+// CURRENT: 3 paths, 2 different solvers, inconsistent numerical profiles
+PATH A: update bounds → dual_reopt(budget=500)     [approx DSE, no perturbation]
+PATH B: update bounds → dual_reopt(budget=2000)    [approx DSE, no perturbation]
+PATH C: destroy tableau → simplex_solve()           [primal from scratch, all-slack]
+
+// WITH Phase E: 1 path, 1 solver
+ALL:    update bounds → dual_simplex_solve_clean()  [exact DSE, perturbation, cutoff]
+RARE:   cold start → crash + dual_simplex_solve_clean()
+```
+
+Why `dual_reopt` hurts milp15 quality (even though LP solutions are technically correct):
+1. **Approximate DSE** (`dse_init_approx` sets all weights to 1.0) → poor leaving variable
+   selection → more pivots → more numerical drift between refactorizations
+2. **Two numerical profiles** → pseudocost updates mix LP bounds from dual_reopt (PATH A/B)
+   and primal simplex (PATH C), creating inconsistent branching signals
+3. **Budget-limited** → frequent PATH C fallbacks on non-child nodes → primal cold starts
+   from all-slack basis (the worst possible starting point)
+4. **Unnecessary complexity** → 200 lines of separate code maintaining its own refactorization
+   logic, DSE init, bound flipping dispatch — all of which `dual_simplex_solve_clean()` handles
+
+What Phase E changes in mip.c `solve_node_lp()`:
+- Delete PATH A/B/C dispatch (~80 lines)
+- Replace with: update bounds in tableau → `dual_simplex_solve_clean(lp)`
+- `dual_simplex_solve_clean()` already supports objective cutoff (from its API)
+- If no tableau exists (first node or post-cut-generation): cold start with method=2
+- Delete `dual_reopt()` from dual_simplex.c (~200 lines)
+
 *Dependencies:*
 - Phase A requires T1.1 (crash basis)
 - Phase B requires P5 (bound flipping, done) and P6 (DSE, done)
 - Phase C requires Phase A + B
 - Phase D requires Phase C + full validation
+- **Phase E requires Phase B + C validated** (dual solver must be reliable before replacing dual_reopt)
 - Optional: T3.5 (dual Phase 1) makes Phase A more robust but is not blocking
 
 *Tests for each phase:*
 - Phase A: (1) After crash, `make_dual_feasible()` succeeds on 90%+ of test LPs. (2) Crash+dual solves 20-variable LP correctly.
-- Phase B: (1) `dual_simplex_solve_standalone()` solves 10 LPs to optimality. (2) Returns correct INFEASIBLE on infeasible LP. (3) Returns STALLED (not crash) on adversarial degenerate LP.
+- Phase B: (1) `dual_simplex_solve_clean()` solves 10 LPs to optimality. (2) Returns correct INFEASIBLE on infeasible LP. (3) Returns STALLED (not crash) on adversarial degenerate LP. (4) Supports objective cutoff (returns OBJ_LIMIT when bound exceeds cutoff).
 - Phase C: (1) method=1 solves all existing LP tests. (2) method=2 auto-selects correctly. (3) method=2 falls back to primal on problems where dual fails. (4) No regression on any existing test with method=2.
 - Phase D: (1) All 272+ ralph tests pass with method=2 as default. (2) All 29+ fuelwise tests pass. (3) NETLIB suite: ≥ same solve rate as method=0. (4) FuelWise benchmarks: no regression on milp15/30/50/100.
+- Phase E: (1) All MIP tests pass with dual_reopt removed. (2) milp15 multi-seed gap improves (target: < 15%, from 25.7%). (3) milp30/50/100/200 no regression. (4) B&B node counts within 10% of pre-change on all seeds.
 
 *Risk assessment:*
 - Phase A-B: Low. New function, old code untouched.
 - Phase C: Medium. Modifies `simplex_solve` pipeline but with explicit fallback to existing primal path.
 - Phase D: Medium. Default change affects all users. One-line revert to `method=0` if issues found.
+- Phase E: Medium-High. Removes proven B&B hot path. Validated by multi-seed MIP benchmarks before landing. Revert: re-add `dual_reopt()` and PATH A/B/C dispatch.
 
 #### Implementation Order (Prioritized by Impact/Effort)
 
@@ -761,10 +802,11 @@ After Phase C is validated on full NETLIB suite + FuelWise benchmarks:
 | 11 | T2.1 | Supernodal LU (§1.11) | 3-5x factorization | ~1500 LoC | #7 (T1.4) | `lu_supernode` |
 | 12 | T3.5 | Dual Phase 1 with auxiliary objective | Robust dual starts | ~200 LoC | None | `dual_phase1` |
 | 13 | T1.3 | Dual simplex as default | ~2x initial solves | ~400 LoC | #2 (T1.1), P5, P6 | `method` |
+| 14 | T1.3e | Replace dual_reopt in B&B | Consistent node LP quality, simpler MIP solver | -200 LoC (net delete) | #13 (T1.3) | N/A (removes code) |
 
 Items 1-6 total ~660 LoC with zero dependencies. They move Ralph from ~60% to ~75% of
-state-of-the-art. Items 7-11 push to ~90%. Item 13 (dual-as-default) is the architectural
-endgame that gets to ~95%.
+state-of-the-art. Items 7-11 push to ~90%. Items 13-14 (dual-as-default + replace dual_reopt)
+are the architectural endgame that gets to ~95% and simplifies the MIP solver.
 
 **Milestone targets:**
 
