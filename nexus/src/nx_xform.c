@@ -789,6 +789,26 @@ static int parse_schema(const char *json, size_t len,
     schema->virtual_col_count = 0;
     parse_multi_transforms(sh_json_get(root, "multi_transforms"), schema);
 
+    /* P5.2: Validate all source indices are within bounds.
+     * Max valid index = MAX_COLUMNS + MAX_VIRTUAL_COLS - 1 */
+    {
+        int max_idx = MAX_COLUMNS + MAX_VIRTUAL_COLS - 1;
+        for (int i = 0; i < schema->column_count; i++) {
+            if (schema->columns[i].source_col < 0 ||
+                schema->columns[i].source_col > max_idx)
+                return -1;
+        }
+        for (int i = 0; i < schema->multi_count; i++) {
+            MultiTransform *m = &schema->multi[i];
+            if (m->source < 0 || m->source > max_idx)
+                return -1;
+            for (int j = 0; j < m->source_count; j++) {
+                if (m->sources[j] < 0 || m->sources[j] > max_idx)
+                    return -1;
+            }
+        }
+    }
+
     /* Derived fields */
     ShJsonValue *derived = sh_json_get(root, "derived");
     schema->derived_count = 0;

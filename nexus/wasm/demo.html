@@ -914,6 +914,7 @@ function utf8ByteLength(str) {
 function allocUTF8(str) {
     const encoded = new TextEncoder().encode(str);
     const ptr = Module._malloc(encoded.length + 1);
+    if (!ptr) throw new Error('WASM malloc failed (' + encoded.length + ' bytes)');
     Module.HEAPU8.set(encoded, ptr);
     Module.HEAPU8[ptr + encoded.length] = 0;
     return [ptr, encoded.length];
@@ -1331,30 +1332,41 @@ async function runPipeline() {
             addExpandButton('stage-b-expand', canonJSON, canonTrunc.totalRecords, 'stage-b-block');
         }
 
-        /* ── Stage X: Validate (conditional) ─────────────────── */
+        /* ── Stage X: Validate (conditional, non-fatal) ────────── */
         let finalJSON = canonJSON;
         if (hasValidation) {
             loading.classList.add('visible');
             loadingText.textContent = 'Stage X: Validating...';
             await sleep(50);
 
-            const t4 = performance.now();
-            const validatedJSON = callValidate(canonJSON, schemaJSON);
-            const t5 = performance.now();
+            try {
+                const t4 = performance.now();
+                const validatedJSON = callValidate(canonJSON, schemaJSON);
+                const t5 = performance.now();
 
-            loading.classList.remove('visible');
-            showStage('stage-x');
-            document.getElementById('stage-x-time').textContent = (t5 - t4).toFixed(0) + ' ms';
+                loading.classList.remove('visible');
+                showStage('stage-x');
+                document.getElementById('stage-x-time').textContent = (t5 - t4).toFixed(0) + ' ms';
 
-            const validTrunc = truncateJSON(validatedJSON);
-            const validHTML = highlightJSON(validTrunc.json);
-            await typeAnimateContentAsync(document.getElementById('stage-x-block'), validHTML);
+                const validTrunc = truncateJSON(validatedJSON);
+                const validHTML = highlightJSON(validTrunc.json);
+                await typeAnimateContentAsync(document.getElementById('stage-x-block'), validHTML);
 
-            if (validTrunc.truncated) {
-                addExpandButton('stage-x-expand', validatedJSON, validTrunc.totalRecords, 'stage-x-block');
+                if (validTrunc.truncated) {
+                    addExpandButton('stage-x-expand', validatedJSON, validTrunc.totalRecords, 'stage-x-block');
+                }
+
+                finalJSON = validatedJSON;
+            } catch (valErr) {
+                loading.classList.remove('visible');
+                showStage('stage-x');
+                document.getElementById('stage-x-time').textContent = 'failed';
+                const block = document.getElementById('stage-x-block');
+                block.querySelector('pre').textContent = 'Validation failed: ' + valErr.message + '\nUsing Stage B output for export.';
+                block.classList.remove('typing');
+                block.classList.add('typed');
+                /* finalJSON stays as canonJSON — emit will use Stage B output */
             }
-
-            finalJSON = validatedJSON;
         }
 
         /* ── Audit Summary ───────────────────────────────────── */
@@ -1391,19 +1403,24 @@ async function runPipeline() {
 
         /* ── Diff (if baseline exists) ────────────────────── */
         if (baselineJSON) {
-            loading.classList.add('visible');
-            loadingText.textContent = 'Computing diff...';
-            await sleep(50);
+            try {
+                loading.classList.add('visible');
+                loadingText.textContent = 'Computing diff...';
+                await sleep(50);
 
-            const td0 = performance.now();
-            const diffJSON = callDiff(baselineJSON, finalJSON);
-            const td1 = performance.now();
+                const td0 = performance.now();
+                const diffJSON = callDiff(baselineJSON, finalJSON);
+                const td1 = performance.now();
 
-            loading.classList.remove('visible');
-            showStage('stage-diff');
-            document.getElementById('stage-diff-time').textContent = (td1 - td0).toFixed(0) + ' ms';
+                loading.classList.remove('visible');
+                showStage('stage-diff');
+                document.getElementById('stage-diff-time').textContent = (td1 - td0).toFixed(0) + ' ms';
 
-            showDiffResult(diffJSON);
+                showDiffResult(diffJSON);
+            } catch (diffErr) {
+                loading.classList.remove('visible');
+                /* Diff failure is non-fatal */
+            }
         }
 
         /* ── Baseline bar ─────────────────────────────────── */
@@ -1612,7 +1629,10 @@ document.getElementById('baseline-btn').addEventListener('click', function() {
  * ============================================================================ */
 
 document.getElementById('emit-geojson-btn').addEventListener('click', function() {
-    if (!window._emitState) return;
+    if (!window._emitState) {
+        showError('GeoJSON emit error: no pipeline output available (_emitState is null)');
+        return;
+    }
     const { finalJSON, latField, lonField } = window._emitState;
     try {
         const t0 = performance.now();
@@ -1629,12 +1649,24 @@ document.getElementById('emit-geojson-btn').addEventListener('click', function()
             addExpandButton('stage-d-expand', geojson, trunc.totalRecords, 'stage-d-block');
         }
     } catch (err) {
-        showError('GeoJSON emit error: ' + err.message);
+        let detail = err.message;
+        try {
+            const issues = JSON.parse(callIssuesJSON());
+            const stageD = (issues.issues || []).filter(function(i) { return i.stage === 'D'; });
+            if (stageD.length > 0) {
+                detail += ' | Issues: ' + stageD.map(function(i) { return i.code + ': ' + i.message; }).join('; ');
+            }
+        } catch (e) { /* ignore */ }
+        detail += ' | lat_field=' + latField + ' lon_field=' + lonField + ' json_len=' + finalJSON.length;
+        showError('GeoJSON emit error: ' + detail);
     }
 });
 
 document.getElementById('emit-csv-btn').addEventListener('click', function() {
-    if (!window._emitState) return;
+    if (!window._emitState) {
+        showError('CSV emit error: no pipeline output available (_emitState is null)');
+        return;
+    }
     const { finalJSON } = window._emitState;
     try {
         const t0 = performance.now();
@@ -1666,7 +1698,16 @@ document.getElementById('emit-csv-btn').addEventListener('click', function() {
         block.classList.remove('typing');
         block.classList.add('typed');
     } catch (err) {
-        showError('CSV emit error: ' + err.message);
+        let detail = err.message;
+        try {
+            const issues = JSON.parse(callIssuesJSON());
+            const stageD = (issues.issues || []).filter(function(i) { return i.stage === 'D'; });
+            if (stageD.length > 0) {
+                detail += ' | Issues: ' + stageD.map(function(i) { return i.code + ': ' + i.message; }).join('; ');
+            }
+        } catch (e) { /* ignore */ }
+        detail += ' | json_len=' + finalJSON.length;
+        showError('CSV emit error: ' + detail);
     }
 });
 

@@ -68,6 +68,7 @@ typedef struct {
 
 static int parse_shared_strings(const char *xml, size_t xml_len,
                                 SHArena *arena, NxIssueList *issues,
+                                int max_shared_strings,
                                 SharedStrings *ss)
 {
     ShXmlReader r;
@@ -117,7 +118,17 @@ static int parse_shared_strings(const char *xml, size_t xml_len,
                 /* End of <si>: store concatenated string */
                 concat_buf[concat_len] = '\0';
 
-                /* Grow pointer array if needed (realloc-doubling, no cap) */
+                /* Check shared strings cap */
+                if (max_shared_strings > 0 && ss->count >= max_shared_strings) {
+                    if (issues)
+                        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                                      -1, "", "shared_strings_limit",
+                                      "Hit max_shared_strings=%d cap",
+                                      max_shared_strings);
+                    break;
+                }
+
+                /* Grow pointer array if needed */
                 if (ss->count >= ss->capacity) {
                     int new_cap = ss->capacity * 2;
                     const char **new_ptrs = (const char **)realloc(
@@ -544,6 +555,7 @@ const char *nx_xlsx_status_str(NxXlsxStatus status)
         case NX_XLSX_ERR_XML:    return "XML parse error";
         case NX_XLSX_ERR_ARENA:  return "Arena allocation failure";
         case NX_XLSX_ERR_LIMITS: return "Exceeds configured limits";
+        case NX_XLSX_ERR_EMPTY:  return "No data rows found";
         default:                 return "Unknown error";
     }
 }
@@ -567,6 +579,16 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
     *out_json = NULL;
     *out_len = 0;
 
+    /* P5.3: Enforce max_file_size before any ZIP parsing */
+    if (limits->max_file_size > 0 && len > limits->max_file_size) {
+        if (issues)
+            nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_ERROR, -1, "",
+                          "file_too_large",
+                          "Input size %zu exceeds max_file_size %zu",
+                          len, limits->max_file_size);
+        return NX_XLSX_ERR_LIMITS;
+    }
+
     /* Compute SHA-256 of input */
     char sha256_hex[65];
     sh_sha256_hex(data, len, sha256_hex);
@@ -581,7 +603,8 @@ NxXlsxStatus nx_xlsx_parse(const void *data, size_t len,
     size_t ss_size = 0;
     void *ss_xml = zip_extract(&zip, "xl/sharedStrings.xml", &ss_size);
     if (ss_xml) {
-        if (parse_shared_strings((const char *)ss_xml, ss_size, arena, issues, &ss) < 0) {
+        if (parse_shared_strings((const char *)ss_xml, ss_size, arena, issues,
+                                 limits->max_shared_strings, &ss) < 0) {
             /* Initial allocation failed — continue without shared strings */
             if (issues)
                 nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING, -1, "",
