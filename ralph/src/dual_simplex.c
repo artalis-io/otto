@@ -897,6 +897,16 @@ int dual_simplex_solve(SimplexSolver *solver) {
         /* Compute primal solution */
         tableau_compute_solution(tab);
 
+        /* T3.1: Objective limit early-exit (internal minimization space) */
+        if (solver->objective_limit < RALPH_INFINITY &&
+            tab->obj_value >= solver->objective_limit) {
+            remove_bound_perturbation(tab);
+            tableau_compute_solution(tab);
+            solver->status = RALPH_STATUS_OBJ_LIMIT;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+            return 0;
+        }
+
         if (solver->verbose && iter == 0) {
             printf("  [dual_simplex] After first compute_solution in loop: obj=%.4f\n", tab->obj_value);
         }

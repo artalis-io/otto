@@ -4238,6 +4238,188 @@ void test_verify_no_regression(void) {
 }
 
 /* ============================================================================
+ * T3.1: Objective Limit Tests
+ * ============================================================================ */
+
+void test_obj_limit_below_optimal(void) {
+    printf("\n=== Test: Objective Limit Below Optimal ===\n");
+
+    /* min -x1 - x2 s.t. x1+x2<=4, 2x1+x2<=6, x>=0
+     * Optimal obj = -4.0 (in user minimize space)
+     * Set limit at -3.0 — solver should exit early with OBJ_LIMIT */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    int idx[] = {0, 1}; double v1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_LESS_EQUAL, 4.0);
+    double v2[] = {2.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_LESS_EQUAL, 6.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_dbl_param(model, "obj_limit", -3.0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OBJ_LIMIT,
+           "Should return OBJ_LIMIT when limit is above optimal");
+    /* Obj should be >= -3.0 (hit limit before reaching -4.0) */
+    ASSERT(ralph_get_objval(model) >= -3.0 - 1e-6,
+           "Objective should not exceed the limit");
+
+    ralph_free(model);
+}
+
+void test_obj_limit_not_triggered(void) {
+    printf("\n=== Test: Objective Limit Not Triggered ===\n");
+
+    /* min -x1 - x2 s.t. x1+x2<=4, 2x1+x2<=6, x>=0 (all-<= LP)
+     * Optimal obj = -4.0. Internal space: minimizing, starts at 0 (origin), goes to -4.
+     * Set limit at 1.0 (internal). Since internal obj starts at 0 and decreases,
+     * 0 < 1.0, so the limit is never hit and solver reaches OPTIMAL. */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    int idx[] = {0, 1}; double v1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_LESS_EQUAL, 4.0);
+    double v2[] = {2.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_LESS_EQUAL, 6.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_dbl_param(model, "obj_limit", 1.0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Should reach OPTIMAL when limit is above starting obj");
+    ASSERT(fabs(ralph_get_objval(model) - (-4.0)) < 1e-6,
+           "Objective should be -4.0");
+
+    ralph_free(model);
+}
+
+void test_obj_limit_maximize(void) {
+    printf("\n=== Test: Objective Limit with Maximize ===\n");
+
+    /* max x1 + x2 s.t. x1+x2<=4, 2x1+x2<=6, x>=0
+     * Optimal = 4.0. Set limit at 3.0 — solver should exit at OBJ_LIMIT
+     * because in max space, 3.0 is "below" optimal 4.0 */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    ralph_add_var(model, 0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    int idx[] = {0, 1}; double v1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_LESS_EQUAL, 4.0);
+    double v2[] = {2.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_LESS_EQUAL, 6.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_dbl_param(model, "obj_limit", 3.0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OBJ_LIMIT,
+           "Should return OBJ_LIMIT for max with limit below optimal");
+    ASSERT(ralph_get_objval(model) <= 3.0 + 1e-6,
+           "Objective should not exceed limit in max space");
+
+    ralph_free(model);
+}
+
+void test_obj_limit_no_regression(void) {
+    printf("\n=== Test: Objective Limit No Regression ===\n");
+
+    /* Verify no limit (default) still returns OPTIMAL for known problems */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    int idx[] = {0, 1}; double v1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_LESS_EQUAL, 4.0);
+    double v2[] = {2.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_LESS_EQUAL, 6.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    /* No obj_limit set — should use default (INFINITY) */
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Default (no limit) should reach OPTIMAL");
+    ASSERT(fabs(ralph_get_objval(model) - (-4.0)) < 1e-6,
+           "Objective should be -4.0");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * T3.4: Per-Phase Pricing Tests
+ * ============================================================================ */
+
+void test_phase1_pricing_dantzig(void) {
+    printf("\n=== Test: Phase 1 Pricing Override (Dantzig) ===\n");
+
+    /* Diet problem with >= constraints — needs Phase 1.
+     * Run with default pricing (Devex) and with phase1_pricing=0 (Dantzig).
+     * Both should reach OPTIMAL with same objective. */
+
+    double objs[2];
+    for (int run = 0; run < 2; run++) {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+        /* min 2x+3y+5z s.t. x+2y+z>=10, 2x+y+3z>=15, x,y,z>=0 */
+        ralph_add_var(model, 0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0, RALPH_INFINITY, 3.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0, RALPH_INFINITY, 5.0, RALPH_CONTINUOUS);
+        int idx2[] = {0, 1, 2};
+        double v1[] = {1.0, 2.0, 1.0};
+        ralph_add_constraint(model, 3, idx2, v1, RALPH_GREATER_EQUAL, 10.0);
+        double v2[] = {2.0, 1.0, 3.0};
+        ralph_add_constraint(model, 3, idx2, v2, RALPH_GREATER_EQUAL, 15.0);
+
+        ralph_set_int_param(model, "verbose", 0);
+        if (run == 1) {
+            ralph_set_int_param(model, "phase1_pricing", 0); /* Dantzig for Phase 1 */
+        }
+        ralph_optimize(model);
+
+        objs[run] = ralph_get_objval(model);
+
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+               run == 0 ? "Default pricing: OPTIMAL" : "Dantzig Phase 1: OPTIMAL");
+
+        ralph_free(model);
+    }
+
+    ASSERT(fabs(objs[0] - objs[1]) < 1e-6,
+           "Same objective with both pricing strategies");
+}
+
+void test_phase1_pricing_disabled(void) {
+    printf("\n=== Test: Phase 1 Pricing Disabled ===\n");
+
+    /* Same problem with phase1_pricing=-1 (disabled, use solver pricing).
+     * Should behave identically to default. */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    ralph_add_var(model, 0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0, RALPH_INFINITY, 3.0, RALPH_CONTINUOUS);
+    int idx[] = {0, 1};
+    double v1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_GREATER_EQUAL, 5.0);
+    double v2[] = {2.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_GREATER_EQUAL, 8.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "phase1_pricing", -1);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Disabled Phase 1 pricing override: OPTIMAL");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -4353,6 +4535,16 @@ int main(int argc, char **argv) {
     test_verify_diet_with_verify();
     test_verify_network_flow();
     test_verify_no_regression();
+
+    /* Objective limit tests (T3.1) */
+    test_obj_limit_below_optimal();
+    test_obj_limit_not_triggered();
+    test_obj_limit_maximize();
+    test_obj_limit_no_regression();
+
+    /* Per-phase pricing tests (T3.4) */
+    test_phase1_pricing_dantzig();
+    test_phase1_pricing_disabled();
 
     /* API Tests */
     test_api_functions();
