@@ -829,9 +829,16 @@ static int run_batch(const char *config_path)
     char abs_output_dir[512];
     if (output_dir[0] == '/')
         snprintf(abs_output_dir, sizeof(abs_output_dir), "%s", output_dir);
-    else
-        snprintf(abs_output_dir, sizeof(abs_output_dir), "%s/%s",
-                 config_dir, output_dir);
+    else {
+        int needed = snprintf(abs_output_dir, sizeof(abs_output_dir), "%s/%s",
+                              config_dir, output_dir);
+        if (needed >= (int)sizeof(abs_output_dir)) {
+            fprintf(stderr, "Error: output path too long (max 511 chars)\n");
+            sh_arena_free(arena);
+            free(config_data);
+            return 1;
+        }
+    }
 
     /* Create output directory */
     if (sh_mkdirs(abs_output_dir) != 0) {
@@ -875,16 +882,26 @@ static int run_batch(const char *config_path)
         char abs_file[512], abs_schema[512];
         if (file[0] == '/')
             snprintf(abs_file, sizeof(abs_file), "%s", file);
-        else
-            snprintf(abs_file, sizeof(abs_file), "%s/%s", config_dir, file);
+        else {
+            int needed = snprintf(abs_file, sizeof(abs_file), "%s/%s", config_dir, file);
+            if (needed >= (int)sizeof(abs_file)) {
+                fprintf(stderr, "Error: file path too long: %s\n", file);
+                continue;
+            }
+        }
 
         const char *schema_ptr = NULL;
         if (schema) {
             if (schema[0] == '/')
                 snprintf(abs_schema, sizeof(abs_schema), "%s", schema);
-            else
-                snprintf(abs_schema, sizeof(abs_schema), "%s/%s",
-                         config_dir, schema);
+            else {
+                int needed = snprintf(abs_schema, sizeof(abs_schema), "%s/%s",
+                                      config_dir, schema);
+                if (needed >= (int)sizeof(abs_schema)) {
+                    fprintf(stderr, "Error: schema path too long: %s\n", schema);
+                    continue;
+                }
+            }
             schema_ptr = abs_schema;
         }
 
