@@ -8,6 +8,7 @@
 #include "nx_discover.h"
 #include "sh_json.h"
 #include "sh_arena.h"
+#include "sh_hash.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -45,15 +46,7 @@ typedef struct {
  * Heuristic Helpers
  * ============================================================================ */
 
-static uint32_t fnv1a(const char *s, size_t len)
-{
-    uint32_t h = 2166136261u;
-    for (size_t i = 0; i < len; i++) {
-        h ^= (uint8_t)s[i];
-        h *= 16777619u;
-    }
-    return h;
-}
+/* fnv1a replaced by sh_fnv1a_32 from sh_hash.h */
 
 /* Insert into hash set, return false if duplicate */
 static bool hash_set_insert(ColProfile *p, const char *val, size_t len)
@@ -64,7 +57,7 @@ static bool hash_set_insert(ColProfile *p, const char *val, size_t len)
         p->unique = false;
         return true;
     }
-    uint32_t h = fnv1a(val, len);
+    uint32_t h = sh_fnv1a_32(val, len);
     size_t mask = p->hash_cap - 1;
     size_t idx = h & mask;
     for (size_t i = 0; i < p->hash_cap; i++) {
