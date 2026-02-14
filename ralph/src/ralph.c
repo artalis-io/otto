@@ -45,6 +45,7 @@ struct RalphModel {
     int trace_phase1; /* 1=emit deterministic Phase-1 failure trace */
     int scaling;            /* 0=off, 1=single-round (default), N=N geo rounds + equilibrium */
     int crash;              /* 0=off, 1=triangular crash basis */
+    int verify;             /* 0=off, 1=post-solve verification */
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
     int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
     int var_select;         /* -1=default, 0=most_infeas, 1=pseudo_cost, 2=strong, 3=reliability */
@@ -111,6 +112,7 @@ RalphModel* ralph_create(void) {
     model->pricing = 2; /* Default: Devex */
     model->scaling = 1;    /* Default: single-round geometric mean */
     model->crash = 0;      /* Default: off (all-slack basis) */
+    model->verify = 0;     /* Default: off (no post-solve verification) */
     model->detect_special = 0; /* Default: disabled for fair benchmarking */
     model->node_pool_capacity = 1024; /* Default B&B node pool size */
     model->node_select = 3; /* Default: hybrid */
@@ -630,6 +632,7 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->pricing_strategy = model->pricing;
         model->lp_solver->scaling = model->scaling;
         model->lp_solver->crash = model->crash;
+        model->lp_solver->verify = model->verify;
         model->lp_solver->force_two_phase = model->force_two_phase;
         model->lp_solver->trace_phase1 = model->trace_phase1;
         if (model->dual_bound_flip >= 0)
@@ -663,7 +666,8 @@ int ralph_optimize(RalphModel *model) {
         model->status = model->lp_solver->status;
         model->iteration_count = model->lp_solver->iterations;
 
-        if (model->status == RALPH_STATUS_OPTIMAL) {
+        if (model->status == RALPH_STATUS_OPTIMAL ||
+            model->status == RALPH_STATUS_IMPRECISE) {
             model->obj_value = model->lp_solver->obj_value;
 
             /* Add obj_offset from presolve (e.g., doubleton elimination) */
@@ -1147,6 +1151,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     } else if (STREQ(name, "crash") || STREQ(name, "Crash")) {
         /* 0=off, 1=triangular crash basis */
         model->crash = value ? 1 : 0;
+    } else if (STREQ(name, "verify") || STREQ(name, "Verify")) {
+        /* 0=off, 1=post-solve verification (primal/dual/complementary slackness) */
+        model->verify = value ? 1 : 0;
     } else if (STREQ(name, "var_select") || STREQ(name, "VarSelect")) {
         /* 0=most_infeasible, 1=pseudo_cost, 2=strong_branch, 3=reliability */
         if (value < 0 || value > 4) return -1;
@@ -1232,6 +1239,7 @@ const char* ralph_status_string(RalphStatus status) {
         case RALPH_STATUS_ITERATION_LIMIT: return "ITERATION_LIMIT";
         case RALPH_STATUS_TIME_LIMIT:     return "TIME_LIMIT";
         case RALPH_STATUS_NODE_LIMIT:     return "NODE_LIMIT";
+        case RALPH_STATUS_IMPRECISE:     return "IMPRECISE";
         case RALPH_STATUS_ERROR:          return "ERROR";
         default:                          return "UNKNOWN";
     }
