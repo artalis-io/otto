@@ -61,7 +61,7 @@ int main(int argc, char **argv)
     size_t out_len = 0;
 
     NxXformStatus s = nx_xform_apply(raw, raw_len, schema, schema_len,
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     sh_arena_free(arena);
 
     if (s != NX_XFORM_OK) {

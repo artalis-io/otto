@@ -29,6 +29,7 @@ NEXUS_SRC = ../../nexus/src/nx_ingest.c \
             ../../nexus/src/nx_xform.c \
             ../../nexus/src/nx_compute.c \
             ../../nexus/src/nx_validate.c \
+            ../../nexus/src/nx_issue.c \
             ../../nexus/src/nx_slug.c \
             ../../nexus/src/nx_discover.c \
             ../../nexus/src/nx_emit.c

@@ -13,6 +13,7 @@
 #ifndef NX_EMIT_H
 #define NX_EMIT_H
 
+#include "nx_issue.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -55,12 +56,14 @@ typedef struct {
  * @param canon_len       Length of canonical JSON
  * @param opts            Options (NULL for defaults)
  * @param arena           Arena for JSON parsing
+ * @param issues          Issue list for structured reporting (NULL to skip)
  * @param out_json        Output: heap-allocated GeoJSON string (caller frees)
  * @param out_len         Output: length of GeoJSON string
  * @return NX_EMIT_OK on success
  */
 NxEmitStatus nx_emit_geojson(const char *canonical_json, size_t canon_len,
                               const NxEmitGeoJsonOpts *opts, SHArena *arena,
+                              NxIssueList *issues,
                               char **out_json, size_t *out_len);
 
 /*
@@ -72,12 +75,14 @@ NxEmitStatus nx_emit_geojson(const char *canonical_json, size_t canon_len,
  * @param canon_len       Length of canonical JSON
  * @param opts            Options (NULL for defaults)
  * @param arena           Arena for JSON parsing
+ * @param issues          Issue list for structured reporting (NULL to skip)
  * @param out_csv         Output: heap-allocated CSV string (caller frees)
  * @param out_len         Output: length of CSV string
  * @return NX_EMIT_OK on success
  */
 NxEmitStatus nx_emit_csv(const char *canonical_json, size_t canon_len,
                           const NxEmitCsvOpts *opts, SHArena *arena,
+                          NxIssueList *issues,
                           char **out_csv, size_t *out_len);
 
 /*

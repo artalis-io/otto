@@ -6,6 +6,7 @@
  */
 
 #include "nx_emit.h"
+#include "nx_issue.h"
 #include "sh_json.h"
 #include "sh_geojson.h"
 #include "sh_csv.h"
@@ -48,6 +49,7 @@ static const char *json_value_as_str(const ShJsonValue *v, char *buf, size_t buf
 
 NxEmitStatus nx_emit_geojson(const char *canonical_json, size_t canon_len,
                               const NxEmitGeoJsonOpts *opts, SHArena *arena,
+                              NxIssueList *issues,
                               char **out_json, size_t *out_len)
 {
     if (!canonical_json || !out_json || !out_len) return NX_EMIT_ERR_NULL;
@@ -80,6 +82,7 @@ NxEmitStatus nx_emit_geojson(const char *canonical_json, size_t canon_len,
 
     sh_geojson_begin(&w);
 
+    int emitted = 0;
     for (size_t i = 0; i < nrec; i++) {
         ShJsonValue *rec = sh_json_array_get(records, i);
         if (!rec || sh_json_type(rec) != SH_JSON_OBJECT) continue;
@@ -87,9 +90,17 @@ NxEmitStatus nx_emit_geojson(const char *canonical_json, size_t canon_len,
         /* Extract lat/lon */
         ShJsonValue *lat_v = sh_json_get(rec, opts->lat_field);
         ShJsonValue *lon_v = sh_json_get(rec, opts->lon_field);
-        if (!lat_v || !lon_v) continue;
-        if (sh_json_type(lat_v) != SH_JSON_NUMBER ||
-            sh_json_type(lon_v) != SH_JSON_NUMBER) continue;
+        if (!lat_v || !lon_v ||
+            sh_json_type(lat_v) != SH_JSON_NUMBER ||
+            sh_json_type(lon_v) != SH_JSON_NUMBER) {
+            if (issues) {
+                nx_issue_addf(issues, NX_STAGE_D, NX_ISSUE_WARNING,
+                              (int)i, "", "record_skipped_no_latlon",
+                              "Record %zu skipped: missing %s/%s",
+                              i, opts->lat_field, opts->lon_field);
+            }
+            continue;
+        }
 
         double lat = sh_json_as_double(lat_v, 0.0);
         double lon = sh_json_as_double(lon_v, 0.0);
@@ -131,6 +142,13 @@ NxEmitStatus nx_emit_geojson(const char *canonical_json, size_t canon_len,
 
         sh_geojson_point_feature(&w, id, lon, lat, opts->precision,
                                   props, prop_count);
+        emitted++;
+    }
+
+    if (issues) {
+        nx_issue_addf(issues, NX_STAGE_D, NX_ISSUE_INFO,
+                      -1, "", "records_emitted",
+                      "%d records emitted as geojson", emitted);
     }
 
     sh_geojson_end(&w);
@@ -156,6 +174,7 @@ NxEmitStatus nx_emit_geojson(const char *canonical_json, size_t canon_len,
 
 NxEmitStatus nx_emit_csv(const char *canonical_json, size_t canon_len,
                           const NxEmitCsvOpts *opts, SHArena *arena,
+                          NxIssueList *issues,
                           char **out_csv, size_t *out_len)
 {
     if (!canonical_json || !out_csv || !out_len) return NX_EMIT_ERR_NULL;
@@ -233,6 +252,12 @@ NxEmitStatus nx_emit_csv(const char *canonical_json, size_t canon_len,
 
     *out_csv = sh_csv_buf_take(&cb, out_len);
     sh_csv_buf_free(&cb);
+
+    if (issues) {
+        nx_issue_addf(issues, NX_STAGE_D, NX_ISSUE_INFO,
+                      -1, "", "records_emitted",
+                      "%zu records emitted as csv", nrec);
+    }
 
     return NX_EMIT_OK;
 }

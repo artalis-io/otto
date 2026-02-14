@@ -14,6 +14,7 @@
 #define NX_INGEST_H
 
 #include <stddef.h>
+#include "nx_issue.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,13 +57,15 @@ typedef enum {
  * @param out_raw_len   Output: length of raw JSON
  * @param out_canon     Output: canonical JSON (caller must free)
  * @param out_canon_len Output: length of canonical JSON
+ * @param issues        Optional issue list for cross-stage tracking (NULL = ignore)
  * @return NX_INGEST_OK on success
  */
 NxIngestStatus nx_ingest(const void *data, size_t len,
                          NxIngestFormat format, const char *filename,
                          const char *schema_json, size_t schema_len,
                          char **out_raw, size_t *out_raw_len,
-                         char **out_canon, size_t *out_canon_len);
+                         char **out_canon, size_t *out_canon_len,
+                         NxIssueList *issues);
 
 /*
  * Get human-readable error message.

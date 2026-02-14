@@ -97,9 +97,9 @@ TEST(emit_geojson_null_input)
     SHArena *arena = sh_arena_create(64 * 1024);
     char *out = NULL; size_t len = 0;
 
-    ASSERT_EQ(nx_emit_geojson(NULL, 0, NULL, arena, &out, &len), NX_EMIT_ERR_NULL);
-    ASSERT_EQ(nx_emit_geojson("x", 1, NULL, arena, NULL, &len), NX_EMIT_ERR_NULL);
-    ASSERT_EQ(nx_emit_geojson("x", 1, NULL, NULL, &out, &len), NX_EMIT_ERR_NULL);
+    ASSERT_EQ(nx_emit_geojson(NULL, 0, NULL, arena, NULL, &out, &len), NX_EMIT_ERR_NULL);
+    ASSERT_EQ(nx_emit_geojson("x", 1, NULL, arena, NULL, NULL, &len), NX_EMIT_ERR_NULL);
+    ASSERT_EQ(nx_emit_geojson("x", 1, NULL, NULL, NULL, &out, &len), NX_EMIT_ERR_NULL);
 
     sh_arena_free(arena);
 }
@@ -108,7 +108,7 @@ TEST(emit_geojson_invalid_json)
 {
     SHArena *arena = sh_arena_create(64 * 1024);
     char *out = NULL; size_t len = 0;
-    ASSERT_EQ(nx_emit_geojson("{bad", 4, NULL, arena, &out, &len), NX_EMIT_ERR_JSON);
+    ASSERT_EQ(nx_emit_geojson("{bad", 4, NULL, arena, NULL, &out, &len), NX_EMIT_ERR_JSON);
     sh_arena_free(arena);
 }
 
@@ -119,7 +119,7 @@ TEST(emit_geojson_basic)
     NxEmitGeoJsonOpts opts = NX_EMIT_GEOJSON_DEFAULTS;
 
     ASSERT_EQ(nx_emit_geojson(CANONICAL_2_RECORDS, strlen(CANONICAL_2_RECORDS),
-              &opts, arena, &out, &len), NX_EMIT_OK);
+              &opts, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
     ASSERT(len > 0);
 
@@ -161,7 +161,7 @@ TEST(emit_geojson_coordinate_order)
     char *out = NULL; size_t len = 0;
 
     ASSERT_EQ(nx_emit_geojson(CANONICAL_2_RECORDS, strlen(CANONICAL_2_RECORDS),
-              NULL, arena, &out, &len), NX_EMIT_OK);
+              NULL, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
 
     /* RFC 7946: [lon, lat] — Budapest: lon=19.07, lat=47.48 */
@@ -194,7 +194,7 @@ TEST(emit_geojson_custom_fields)
     char *out = NULL; size_t len = 0;
     NxEmitGeoJsonOpts opts = { "latitude", "longitude", "id", 6 };
 
-    ASSERT_EQ(nx_emit_geojson(json, strlen(json), &opts, arena, &out, &len),
+    ASSERT_EQ(nx_emit_geojson(json, strlen(json), &opts, arena, NULL, &out, &len),
               NX_EMIT_OK);
     ASSERT(out != NULL);
 
@@ -216,7 +216,7 @@ TEST(emit_geojson_missing_latlon)
     char *out = NULL; size_t len = 0;
 
     ASSERT_EQ(nx_emit_geojson(CANONICAL_MIXED_GEO, strlen(CANONICAL_MIXED_GEO),
-              NULL, arena, &out, &len), NX_EMIT_OK);
+              NULL, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
 
     /* Should have 2 features (the one without lat/lon skipped) */
@@ -237,7 +237,7 @@ TEST(emit_geojson_no_records)
     char *out = NULL; size_t len = 0;
 
     ASSERT_EQ(nx_emit_geojson(CANONICAL_EMPTY_RECORDS, strlen(CANONICAL_EMPTY_RECORDS),
-              NULL, arena, &out, &len), NX_EMIT_OK);
+              NULL, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
 
     /* Should be empty FeatureCollection */
@@ -260,7 +260,7 @@ TEST(emit_geojson_precision)
     opts.precision = 2;
 
     ASSERT_EQ(nx_emit_geojson(CANONICAL_2_RECORDS, strlen(CANONICAL_2_RECORDS),
-              &opts, arena, &out, &len), NX_EMIT_OK);
+              &opts, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
     /* precision=2 should show 2 decimal places */
     ASSERT(strstr(out, "19.07") != NULL);
@@ -287,9 +287,9 @@ TEST(emit_csv_null_input)
     SHArena *arena = sh_arena_create(64 * 1024);
     char *out = NULL; size_t len = 0;
 
-    ASSERT_EQ(nx_emit_csv(NULL, 0, NULL, arena, &out, &len), NX_EMIT_ERR_NULL);
-    ASSERT_EQ(nx_emit_csv("x", 1, NULL, arena, NULL, &len), NX_EMIT_ERR_NULL);
-    ASSERT_EQ(nx_emit_csv("x", 1, NULL, NULL, &out, &len), NX_EMIT_ERR_NULL);
+    ASSERT_EQ(nx_emit_csv(NULL, 0, NULL, arena, NULL, &out, &len), NX_EMIT_ERR_NULL);
+    ASSERT_EQ(nx_emit_csv("x", 1, NULL, arena, NULL, NULL, &len), NX_EMIT_ERR_NULL);
+    ASSERT_EQ(nx_emit_csv("x", 1, NULL, NULL, NULL, &out, &len), NX_EMIT_ERR_NULL);
 
     sh_arena_free(arena);
 }
@@ -298,7 +298,7 @@ TEST(emit_csv_invalid_json)
 {
     SHArena *arena = sh_arena_create(64 * 1024);
     char *out = NULL; size_t len = 0;
-    ASSERT_EQ(nx_emit_csv("{bad", 4, NULL, arena, &out, &len), NX_EMIT_ERR_JSON);
+    ASSERT_EQ(nx_emit_csv("{bad", 4, NULL, arena, NULL, &out, &len), NX_EMIT_ERR_JSON);
     sh_arena_free(arena);
 }
 
@@ -308,7 +308,7 @@ TEST(emit_csv_basic)
     char *out = NULL; size_t len = 0;
 
     ASSERT_EQ(nx_emit_csv(CANONICAL_2_RECORDS, strlen(CANONICAL_2_RECORDS),
-              NULL, arena, &out, &len), NX_EMIT_OK);
+              NULL, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
     ASSERT(len > 0);
 
@@ -343,7 +343,7 @@ TEST(emit_csv_quoting)
     SHArena *arena = sh_arena_create(64 * 1024);
     char *out = NULL; size_t len = 0;
 
-    ASSERT_EQ(nx_emit_csv(json, strlen(json), NULL, arena, &out, &len), NX_EMIT_OK);
+    ASSERT_EQ(nx_emit_csv(json, strlen(json), NULL, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
     ASSERT(strstr(out, "\"Foo, Bar\"") != NULL);
 
@@ -359,7 +359,7 @@ TEST(emit_csv_quote_escape)
     SHArena *arena = sh_arena_create(64 * 1024);
     char *out = NULL; size_t len = 0;
 
-    ASSERT_EQ(nx_emit_csv(json, strlen(json), NULL, arena, &out, &len), NX_EMIT_OK);
+    ASSERT_EQ(nx_emit_csv(json, strlen(json), NULL, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
     /* Should have double-quoted quotes: "He said ""hello""" */
     ASSERT(strstr(out, "\"He said \"\"hello\"\"\"") != NULL);
@@ -375,7 +375,7 @@ TEST(emit_csv_custom_delimiter)
     NxEmitCsvOpts opts = { ';' };
 
     ASSERT_EQ(nx_emit_csv(CANONICAL_2_RECORDS, strlen(CANONICAL_2_RECORDS),
-              &opts, arena, &out, &len), NX_EMIT_OK);
+              &opts, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
     /* Fields separated by semicolons */
     ASSERT(strstr(out, ";") != NULL);
@@ -390,7 +390,7 @@ TEST(emit_csv_no_records)
     char *out = NULL; size_t len = 0;
 
     ASSERT_EQ(nx_emit_csv(CANONICAL_EMPTY_RECORDS, strlen(CANONICAL_EMPTY_RECORDS),
-              NULL, arena, &out, &len), NX_EMIT_OK);
+              NULL, arena, NULL, &out, &len), NX_EMIT_OK);
     /* Empty records → NULL output (no header because no first record) */
     ASSERT(out == NULL);
 
@@ -403,7 +403,7 @@ TEST(emit_csv_numeric_fields)
     char *out = NULL; size_t len = 0;
 
     ASSERT_EQ(nx_emit_csv(CANONICAL_NUMERIC, strlen(CANONICAL_NUMERIC),
-              NULL, arena, &out, &len), NX_EMIT_OK);
+              NULL, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
     /* Should contain numeric values as strings */
     ASSERT(strstr(out, "42") != NULL);
@@ -424,7 +424,7 @@ TEST(emit_csv_all_field_types)
     SHArena *arena = sh_arena_create(64 * 1024);
     char *out = NULL; size_t len = 0;
 
-    ASSERT_EQ(nx_emit_csv(json, strlen(json), NULL, arena, &out, &len), NX_EMIT_OK);
+    ASSERT_EQ(nx_emit_csv(json, strlen(json), NULL, arena, NULL, &out, &len), NX_EMIT_OK);
     ASSERT(out != NULL);
 
     /* Header */

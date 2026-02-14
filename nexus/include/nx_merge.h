@@ -21,6 +21,7 @@
 #define NX_MERGE_H
 
 #include "sh_arena.h"
+#include "nx_issue.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -47,6 +48,7 @@ typedef enum {
  * @param schema_json  Transform schema JSON (checked for "row_merge" key)
  * @param schema_len   Length of schema JSON
  * @param arena        Arena for intermediate JSON parsing
+ * @param issues       Issue list for structured reporting (NULL to skip)
  * @param out_json     Output: heap-allocated merged JSON (caller must free),
  *                     or NULL if no row_merge config found (no-op)
  * @param out_len      Output: length of merged JSON
@@ -54,7 +56,7 @@ typedef enum {
  */
 NxMergeStatus nx_merge_rows(const char *raw_json, size_t raw_len,
                             const char *schema_json, size_t schema_len,
-                            SHArena *arena,
+                            SHArena *arena, NxIssueList *issues,
                             char **out_json, size_t *out_len);
 
 const char *nx_merge_status_str(NxMergeStatus status);

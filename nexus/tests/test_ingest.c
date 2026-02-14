@@ -79,7 +79,7 @@ TEST(xlsx_null_input)
     char *json = NULL;
     size_t json_len = 0;
     SHArena *arena = sh_arena_create(64 * 1024);
-    NxXlsxStatus s = nx_xlsx_parse(NULL, 0, NULL, NULL, arena, &json, &json_len);
+    NxXlsxStatus s = nx_xlsx_parse(NULL, 0, NULL, NULL, arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_XLSX_ERR_NULL);
     sh_arena_free(arena);
 }
@@ -91,7 +91,7 @@ TEST(xlsx_invalid_zip)
     size_t json_len = 0;
     SHArena *arena = sh_arena_create(64 * 1024);
     NxXlsxStatus s = nx_xlsx_parse(garbage, strlen(garbage), NULL, "test.xlsx",
-                                    arena, &json, &json_len);
+                                    arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_XLSX_ERR_ZIP);
     sh_arena_free(arena);
 }
@@ -103,7 +103,7 @@ TEST(xlsx_minimal_parse)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NULL,
-                                    "minimal.xlsx", arena, &json, &json_len);
+                                    "minimal.xlsx", arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_XLSX_OK);
     ASSERT(json != NULL);
     ASSERT(json_len > 0);
@@ -149,7 +149,7 @@ TEST(xlsx_headers)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NULL,
-                                    "minimal.xlsx", arena, &json, &json_len);
+                                    "minimal.xlsx", arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_XLSX_OK);
 
     SHArena *pa = sh_arena_create(256 * 1024);
@@ -177,7 +177,7 @@ TEST(xlsx_rows)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NULL,
-                                    "minimal.xlsx", arena, &json, &json_len);
+                                    "minimal.xlsx", arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_XLSX_OK);
 
     SHArena *pa = sh_arena_create(256 * 1024);
@@ -219,7 +219,7 @@ TEST(xlsx_sha256_matches)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NULL,
-                                    "minimal.xlsx", arena, &json, &json_len);
+                                    "minimal.xlsx", arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_XLSX_OK);
 
     /* Compute expected SHA-256 */
@@ -248,9 +248,9 @@ TEST(xlsx_deterministic)
     size_t len1 = 0, len2 = 0;
 
     NxXlsxStatus s1 = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NULL,
-                                     "minimal.xlsx", arena1, &json1, &len1);
+                                     "minimal.xlsx", arena1, NULL, &json1, &len1);
     NxXlsxStatus s2 = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NULL,
-                                     "minimal.xlsx", arena2, &json2, &len2);
+                                     "minimal.xlsx", arena2, NULL, &json2, &len2);
     ASSERT_EQ(s1, NX_XLSX_OK);
     ASSERT_EQ(s2, NX_XLSX_OK);
     ASSERT_EQ(len1, len2);
@@ -269,7 +269,7 @@ TEST(xlsx_col_count)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NULL,
-                                    "minimal.xlsx", arena, &json, &json_len);
+                                    "minimal.xlsx", arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_XLSX_OK);
 
     SHArena *pa = sh_arena_create(64 * 1024);
@@ -292,7 +292,7 @@ TEST(xlsx_unicode_strings)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NULL,
-                                    "test.xlsx", arena, &json, &json_len);
+                                    "test.xlsx", arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_XLSX_OK);
 
     SHArena *pa = sh_arena_create(256 * 1024);
@@ -330,7 +330,7 @@ TEST(xlsx_warnings_empty)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     NxXlsxStatus s = nx_xlsx_parse(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NULL,
-                                    "minimal.xlsx", arena, &json, &json_len);
+                                    "minimal.xlsx", arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_XLSX_OK);
 
     SHArena *pa = sh_arena_create(64 * 1024);
@@ -359,7 +359,7 @@ TEST(pdf_null_input)
     char *json = NULL;
     size_t json_len = 0;
     SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
-    NxPdfStatus s = nx_pdf_extract_tables(NULL, 0, NULL, NULL, arena, &json, &json_len);
+    NxPdfStatus s = nx_pdf_extract_tables(NULL, 0, NULL, NULL, arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_PDF_ERR_NULL);
     sh_arena_free(arena);
 }
@@ -371,7 +371,7 @@ TEST(pdf_invalid_json)
     size_t json_len = 0;
     SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
     NxPdfStatus s = nx_pdf_extract_tables(garbage, strlen(garbage), NULL, "test.pdf",
-                                           arena, &json, &json_len);
+                                           arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_PDF_ERR_JSON);
     sh_arena_free(arena);
 }
@@ -383,7 +383,7 @@ TEST(pdf_empty_texts)
     size_t json_len = 0;
     SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
     NxPdfStatus s = nx_pdf_extract_tables(empty, strlen(empty), NULL, "empty.pdf",
-                                           arena, &json, &json_len);
+                                           arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_PDF_ERR_NO_TEXT);
     sh_arena_free(arena);
 }
@@ -396,7 +396,7 @@ TEST(pdf_basic_parse)
 
     NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
                                            NULL, "sample.pdf",
-                                           arena, &json, &json_len);
+                                           arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_PDF_OK);
     ASSERT(json != NULL);
     ASSERT(json_len > 0);
@@ -428,7 +428,7 @@ TEST(pdf_headers)
     SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
 
     nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
-                          NULL, "sample.pdf", arena, &json, &json_len);
+                          NULL, "sample.pdf", arena, NULL, &json, &json_len);
 
     SHArena *pa = sh_arena_create(64 * 1024);
     ShJsonValue *root = NULL;
@@ -454,7 +454,7 @@ TEST(pdf_rows)
     SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
 
     nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
-                          NULL, "sample.pdf", arena, &json, &json_len);
+                          NULL, "sample.pdf", arena, NULL, &json, &json_len);
 
     SHArena *pa = sh_arena_create(64 * 1024);
     ShJsonValue *root = NULL;
@@ -496,9 +496,9 @@ TEST(pdf_deterministic)
     size_t l1 = 0, l2 = 0;
 
     nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
-                          NULL, "sample.pdf", a1, &j1, &l1);
+                          NULL, "sample.pdf", a1, NULL, &j1, &l1);
     nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
-                          NULL, "sample.pdf", a2, &j2, &l2);
+                          NULL, "sample.pdf", a2, NULL, &j2, &l2);
 
     ASSERT_EQ(l1, l2);
     ASSERT(memcmp(j1, j2, l1) == 0);
@@ -516,7 +516,7 @@ TEST(pdf_sha256_matches)
     SHArena *arena = sh_arena_create(PDF_ARENA_SIZE);
 
     nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
-                          NULL, "sample.pdf", arena, &json, &json_len);
+                          NULL, "sample.pdf", arena, NULL, &json, &json_len);
 
     char expected[65];
     sh_sha256_hex(PDF_FIXTURE, strlen(PDF_FIXTURE), expected);
@@ -552,7 +552,7 @@ TEST(pdf_custom_tolerance)
 
     NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
                                            &opts, "sample.pdf",
-                                           arena, &json, &json_len);
+                                           arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_PDF_OK);
 
     SHArena *pa = sh_arena_create(64 * 1024);
@@ -578,7 +578,7 @@ TEST(pdf_auto_detect)
 
     NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
                                            &opts, "sample.pdf",
-                                           arena, &json, &json_len);
+                                           arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_PDF_OK);
 
     /* Auto-detected values should now be positive */
@@ -607,7 +607,7 @@ TEST(pdf_auto_detect_null_opts)
 
     NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
                                            NULL, "sample.pdf",
-                                           arena, &json, &json_len);
+                                           arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_PDF_OK);
     ASSERT(json != NULL);
     ASSERT(json_len > 0);
@@ -626,7 +626,7 @@ TEST(pdf_auto_detect_partial)
 
     NxPdfStatus s = nx_pdf_extract_tables(PDF_FIXTURE, strlen(PDF_FIXTURE),
                                            &opts, "sample.pdf",
-                                           arena, &json, &json_len);
+                                           arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_PDF_OK);
 
     /* row_tolerance should be unchanged, col_gap should be resolved */
@@ -646,7 +646,8 @@ TEST(pdf_pipeline_integration)
     NxIngestStatus s = nx_ingest(PDF_FIXTURE, strlen(PDF_FIXTURE),
                                   NX_FORMAT_PDF_JSON, "sample.pdf",
                                   NULL, 0,
-                                  &raw, &raw_len, &canon, &canon_len);
+                                  &raw, &raw_len, &canon, &canon_len,
+                                  NULL);
     ASSERT_EQ(s, NX_INGEST_OK);
     ASSERT(raw != NULL);
     ASSERT(raw_len > 0);
@@ -684,7 +685,7 @@ TEST(csv_null_input)
     char *json = NULL;
     size_t json_len = 0;
     SHArena *arena = sh_arena_create(64 * 1024);
-    NxCsvStatus s = nx_csv_parse(NULL, 0, NULL, NULL, NULL, arena, &json, &json_len);
+    NxCsvStatus s = nx_csv_parse(NULL, 0, NULL, NULL, NULL, arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_CSV_ERR_NULL);
     sh_arena_free(arena);
 }
@@ -696,7 +697,7 @@ TEST(csv_empty_input)
     size_t json_len = 0;
     SHArena *arena = sh_arena_create(64 * 1024);
     NxCsvStatus s = nx_csv_parse(empty, 0, NULL, NULL, "test.csv",
-                                  arena, &json, &json_len);
+                                  arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_CSV_ERR_NO_DATA);
     sh_arena_free(arena);
 }
@@ -709,7 +710,7 @@ TEST(csv_basic_parse)
 
     NxCsvStatus s = nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
                                   NULL, NULL, "locations.csv",
-                                  arena, &json, &json_len);
+                                  arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_CSV_OK);
     ASSERT(json != NULL);
     ASSERT(json_len > 0);
@@ -741,7 +742,7 @@ TEST(csv_headers)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
-                  NULL, NULL, "test.csv", arena, &json, &json_len);
+                  NULL, NULL, "test.csv", arena, NULL, &json, &json_len);
 
     SHArena *pa = sh_arena_create(256 * 1024);
     ShJsonValue *root = NULL;
@@ -768,7 +769,7 @@ TEST(csv_rows)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
-                  NULL, NULL, "test.csv", arena, &json, &json_len);
+                  NULL, NULL, "test.csv", arena, NULL, &json, &json_len);
 
     SHArena *pa = sh_arena_create(256 * 1024);
     ShJsonValue *root = NULL;
@@ -808,7 +809,7 @@ TEST(csv_sha256_matches)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
-                  NULL, NULL, "test.csv", arena, &json, &json_len);
+                  NULL, NULL, "test.csv", arena, NULL, &json, &json_len);
 
     char expected[65];
     sh_sha256_hex(CSV_FIXTURE, strlen(CSV_FIXTURE), expected);
@@ -833,9 +834,9 @@ TEST(csv_deterministic)
     size_t len1 = 0, len2 = 0;
 
     nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
-                  NULL, NULL, "test.csv", arena1, &json1, &len1);
+                  NULL, NULL, "test.csv", arena1, NULL, &json1, &len1);
     nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
-                  NULL, NULL, "test.csv", arena2, &json2, &len2);
+                  NULL, NULL, "test.csv", arena2, NULL, &json2, &len2);
 
     ASSERT_EQ(len1, len2);
     ASSERT(memcmp(json1, json2, len1) == 0);
@@ -863,7 +864,7 @@ TEST(csv_tsv_auto_detect)
 
     NxCsvStatus s = nx_csv_parse(CSV_TSV_FIXTURE, strlen(CSV_TSV_FIXTURE),
                                   NULL, NULL, "data.tsv",
-                                  arena, &json, &json_len);
+                                  arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_CSV_OK);
 
     SHArena *pa = sh_arena_create(256 * 1024);
@@ -894,7 +895,7 @@ TEST(csv_no_header)
     NxCsvStatus s = nx_csv_parse(CSV_NO_HEADER_FIXTURE,
                                   strlen(CSV_NO_HEADER_FIXTURE),
                                   &opts, NULL, "noheader.csv",
-                                  arena, &json, &json_len);
+                                  arena, NULL, &json, &json_len);
     ASSERT_EQ(s, NX_CSV_OK);
 
     SHArena *pa = sh_arena_create(256 * 1024);
@@ -928,7 +929,7 @@ TEST(csv_unicode_strings)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
-                  NULL, NULL, "test.csv", arena, &json, &json_len);
+                  NULL, NULL, "test.csv", arena, NULL, &json, &json_len);
 
     SHArena *pa = sh_arena_create(256 * 1024);
     ShJsonValue *root = NULL;
@@ -952,7 +953,7 @@ TEST(csv_warnings_empty)
     SHArena *arena = sh_arena_create(256 * 1024);
 
     nx_csv_parse(CSV_FIXTURE, strlen(CSV_FIXTURE),
-                  NULL, NULL, "test.csv", arena, &json, &json_len);
+                  NULL, NULL, "test.csv", arena, NULL, &json, &json_len);
 
     SHArena *pa = sh_arena_create(64 * 1024);
     ShJsonValue *root = NULL;
@@ -976,7 +977,8 @@ TEST(csv_pipeline_integration)
     NxIngestStatus s = nx_ingest(CSV_FIXTURE, strlen(CSV_FIXTURE),
                                   NX_FORMAT_CSV, "data.csv",
                                   NULL, 0,
-                                  &raw, &raw_len, &canon, &canon_len);
+                                  &raw, &raw_len, &canon, &canon_len,
+                                  NULL);
     ASSERT_EQ(s, NX_INGEST_OK);
     ASSERT(raw != NULL);
     ASSERT(raw_len > 0);
@@ -1040,7 +1042,7 @@ static void test_golden_xlsx01_parse(int *skip)
     size_t raw_len = 0;
 
     NxXlsxStatus st = nx_xlsx_parse(data, len, NULL, "XLSX01.xlsx",
-                                     arena, &raw, &raw_len);
+                                     arena, NULL, &raw, &raw_len);
     ASSERT_EQ(st, NX_XLSX_OK);
     ASSERT(raw != NULL);
     ASSERT(raw_len > 0);
@@ -1086,7 +1088,8 @@ static void test_golden_xlsx01_canonical(int *skip)
 
     NxIngestStatus st = nx_ingest(data, data_len, NX_FORMAT_XLSX, "XLSX01.xlsx",
                                    schema, schema_len,
-                                   &raw, &raw_len, &canon, &canon_len);
+                                   &raw, &raw_len, &canon, &canon_len,
+                                   NULL);
     ASSERT_EQ(st, NX_INGEST_OK);
     ASSERT(canon != NULL);
     ASSERT(canon_len > 0);

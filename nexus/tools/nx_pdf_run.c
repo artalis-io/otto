@@ -78,7 +78,7 @@ int main(int argc, char **argv)
                 opts.row_tolerance, opts.col_gap_min);
 
     NxPdfStatus s = nx_pdf_extract_tables(data, data_len, &opts, input_path,
-                                           arena, &json, &json_len);
+                                           arena, NULL, &json, &json_len);
     if (s != NX_PDF_OK) {
         fprintf(stderr, "Failed: %s\n", nx_pdf_status_str(s));
         sh_arena_free(arena);

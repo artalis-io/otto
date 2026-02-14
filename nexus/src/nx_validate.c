@@ -6,6 +6,7 @@
  */
 
 #include "nx_validate.h"
+#include "nx_issue.h"
 #include "sh_json.h"
 #include "sh_arena.h"
 #include <stdlib.h>
@@ -82,10 +83,6 @@ typedef struct {
 /* ============================================================================
  * Helper Functions
  * ============================================================================ */
-
-static const char *severity_str(NxSeverity sev) {
-    return sev == NX_SEVERITY_ERROR ? "error" : "warning";
-}
 
 static const char *rule_type_str(NxRuleType type) {
     switch (type) {
@@ -418,7 +415,7 @@ static int *validate_outlier(const NxValidationRule *rule, ShJsonValue *records_
 
 NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
                              const char *schema_json, size_t schema_len,
-                             SHArena *arena,
+                             SHArena *arena, NxIssueList *issues,
                              char **out_json, size_t *out_len) {
     if (!canonical_json || !schema_json || !arena || !out_json || !out_len) {
         return NX_VALIDATE_ERR_NULL;
@@ -466,12 +463,10 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
 
     size_t record_count = sh_json_array_len(records_array);
 
-    /* Track validation details */
-    NxValidationDetail *details = sh_arena_calloc(arena, NX_MAX_VALIDATION_DETAILS,
-                                                   sizeof(NxValidationDetail));
-    if (!details) return NX_VALIDATE_ERR_ARENA;
+    /* Track validation details — dynamic, no cap */
+    NxIssueList local_issues;
+    nx_issue_list_init(&local_issues);
 
-    int detail_count = 0;
     int error_count = 0;
     int warning_count = 0;
 
@@ -489,16 +484,19 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
             int dup_count = 0;
             int *duplicates = validate_unique(rule, records_array, arena, &dup_count);
 
-            for (int d = 0; d < dup_count && detail_count < NX_MAX_VALIDATION_DETAILS; d++) {
+            for (int d = 0; d < dup_count; d++) {
                 int dup_idx = duplicates[d];
 
-                NxValidationDetail *detail = &details[detail_count++];
-                detail->row_index = dup_idx;
-                detail->rule_name = "unique";
-                detail->field_name = rule->unique_fields[0];
-                detail->severity = rule->severity;
-                snprintf(detail->message, sizeof(detail->message),
-                        "Duplicate value for unique field(s)");
+                NxIssueSeverity sev = rule->severity == NX_SEVERITY_ERROR
+                    ? NX_ISSUE_ERROR : NX_ISSUE_WARNING;
+                nx_issue_add(&local_issues, NX_STAGE_X, sev,
+                             dup_idx, rule->unique_fields[0], "unique",
+                             "Duplicate value for unique field(s)");
+                if (issues)
+                    nx_issue_add(issues, NX_STAGE_X, sev,
+                                 dup_idx, rule->unique_fields[0], "unique",
+                                 "Duplicate value for unique field(s)");
+
 
                 if (rule->severity == NX_SEVERITY_ERROR) {
                     if (remove_count < (int)record_count)
@@ -515,20 +513,25 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
             double q1 = 0.0, q3 = 0.0;
             int *outliers = validate_outlier(rule, records_array, arena, &outlier_count, &q1, &q3);
 
-            for (int o = 0; o < outlier_count && detail_count < NX_MAX_VALIDATION_DETAILS; o++) {
+            for (int o = 0; o < outlier_count; o++) {
                 int out_idx = outliers[o];
                 ShJsonValue *rec = sh_json_array_get(records_array, out_idx);
                 ShJsonValue *field = sh_json_get(rec, rule->outlier_field);
                 double val = sh_json_as_double(field, 0.0);
 
-                NxValidationDetail *detail = &details[detail_count++];
-                detail->row_index = out_idx;
-                detail->rule_name = "outlier";
-                detail->field_name = rule->outlier_field;
-                detail->severity = rule->severity;
-                snprintf(detail->message, sizeof(detail->message),
+                char msg[NX_MAX_MESSAGE_LEN];
+                snprintf(msg, sizeof(msg),
                         "%s %.6f is outlier (Q1=%.6f, Q3=%.6f, IQR factor=%.1f)",
                         rule->outlier_field, val, q1, q3, rule->outlier_factor);
+
+                NxIssueSeverity sev = rule->severity == NX_SEVERITY_ERROR
+                    ? NX_ISSUE_ERROR : NX_ISSUE_WARNING;
+                nx_issue_add(&local_issues, NX_STAGE_X, sev,
+                             out_idx, rule->outlier_field, "outlier", msg);
+                if (issues)
+                    nx_issue_add(issues, NX_STAGE_X, sev,
+                                 out_idx, rule->outlier_field, "outlier", msg);
+
 
                 if (rule->severity == NX_SEVERITY_ERROR) {
                     if (remove_count < (int)record_count)
@@ -541,7 +544,7 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
 
         } else {
             /* Per-record rules (geo_bounds, format) */
-            for (size_t i = 0; i < record_count && detail_count < NX_MAX_VALIDATION_DETAILS; i++) {
+            for (size_t i = 0; i < record_count; i++) {
                 ShJsonValue *record = sh_json_array_get(records_array, i);
                 if (!record) continue;
 
@@ -558,7 +561,18 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
                 }
 
                 if (!passed) {
-                    details[detail_count++] = detail_buf;
+                    NxIssueSeverity sev = rule->severity == NX_SEVERITY_ERROR
+                        ? NX_ISSUE_ERROR : NX_ISSUE_WARNING;
+                    nx_issue_add(&local_issues, NX_STAGE_X, sev,
+                                 (int)i,
+                                 detail_buf.field_name ? detail_buf.field_name : "",
+                                 rule_type_str(rule->type), detail_buf.message);
+                    if (issues)
+                        nx_issue_add(issues, NX_STAGE_X, sev,
+                                     (int)i,
+                                     detail_buf.field_name ? detail_buf.field_name : "",
+                                     rule_type_str(rule->type), detail_buf.message);
+    
 
                     if (rule->severity == NX_SEVERITY_ERROR) {
                         if (remove_count < (int)record_count)
@@ -698,15 +712,15 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
     sh_json_write_key(&w, "details");
     sh_json_write_array_start(&w);
 
-    for (int d = 0; d < detail_count; d++) {
-        NxValidationDetail *detail = &details[d];
+    for (int d = 0; d < local_issues.count; d++) {
+        NxIssue *issue = &local_issues.items[d];
 
         sh_json_write_object_start(&w);
-        sh_json_write_kv_int(&w, "row", detail->row_index);
-        sh_json_write_kv_string(&w, "rule", detail->rule_name);
-        sh_json_write_kv_string(&w, "field", detail->field_name ? detail->field_name : "");
-        sh_json_write_kv_string(&w, "severity", severity_str(detail->severity));
-        sh_json_write_kv_string(&w, "message", detail->message);
+        sh_json_write_kv_int(&w, "row", issue->row);
+        sh_json_write_kv_string(&w, "rule", issue->code);
+        sh_json_write_kv_string(&w, "field", issue->field);
+        sh_json_write_kv_string(&w, "severity", nx_issue_severity_str(issue->severity));
+        sh_json_write_kv_string(&w, "message", issue->message);
         sh_json_write_object_end(&w);
     }
 
@@ -727,11 +741,13 @@ NxValidateStatus nx_validate(const char *canonical_json, size_t canon_len,
 
     if (sh_json_writer_error(&w) || !jb.buf) {
         sh_json_buf_free(&jb);
+        nx_issue_list_free(&local_issues);
         return NX_VALIDATE_ERR_ARENA;
     }
 
     *out_json = sh_json_buf_take(&jb);
     *out_len = strlen(*out_json);
+    nx_issue_list_free(&local_issues);
     return NX_VALIDATE_OK;
 }
 

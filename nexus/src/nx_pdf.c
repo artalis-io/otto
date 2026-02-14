@@ -710,7 +710,8 @@ const char *nx_pdf_status_str(NxPdfStatus status)
 
 NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
                                   NxPdfOptions *opts, const char *filename,
-                                  SHArena *arena, char **out_json, size_t *out_len)
+                                  SHArena *arena, NxIssueList *issues,
+                                  char **out_json, size_t *out_len)
 {
     NxPdfOptions auto_opts = NX_PDF_AUTO_OPTIONS;
 
@@ -736,6 +737,10 @@ NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
     int nruns = parse_text_runs(json_data, json_len, arena, runs, MAX_TEXT_RUNS);
     if (nruns < 0) return NX_PDF_ERR_JSON;
     if (nruns == 0) return NX_PDF_ERR_NO_TEXT;
+    if (nruns == MAX_TEXT_RUNS && issues)
+        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                      -1, "", "text_runs_limit",
+                      "Hit MAX_TEXT_RUNS=%d cap", MAX_TEXT_RUNS);
 
     /* Auto-detect clustering parameters if requested (writes back to opts) */
     if (opts->row_tolerance < 0 || opts->col_gap_min < 0)
@@ -750,6 +755,10 @@ NxPdfStatus nx_pdf_extract_tables(const char *json_data, size_t json_len,
                              arena, cluster_rows_arr, MAX_ROWS);
     if (nrows < 0) return NX_PDF_ERR_ARENA;
     if (nrows == 0) return NX_PDF_ERR_NO_TEXT;
+    if (nrows == MAX_ROWS && issues)
+        nx_issue_addf(issues, NX_STAGE_A, NX_ISSUE_WARNING,
+                      -1, "", "rows_limit",
+                      "Hit MAX_ROWS=%d cap", MAX_ROWS);
 
     /* Split wide text runs that contain multi-space gaps (column separators
      * encoded as whitespace within a single TJ/Tj text run) */

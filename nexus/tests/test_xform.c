@@ -161,7 +161,7 @@ TEST(xform_null_input)
     char *out = NULL;
     size_t out_len = 0;
     SHArena *arena = sh_arena_create(64 * 1024);
-    NxXformStatus s = nx_xform_apply(NULL, 0, NULL, 0, arena, &out, &out_len);
+    NxXformStatus s = nx_xform_apply(NULL, 0, NULL, 0, arena, NULL, &out, &out_len);
     ASSERT_EQ(s, NX_XFORM_ERR_NULL);
     sh_arena_free(arena);
 }
@@ -174,7 +174,7 @@ TEST(xform_basic_transform)
 
     NxXformStatus s = nx_xform_apply(RAW_JSON, strlen(RAW_JSON),
                                       SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(s, NX_XFORM_OK);
     ASSERT(out != NULL);
 
@@ -220,7 +220,7 @@ TEST(xform_type_coercion)
 
     NxXformStatus s = nx_xform_apply(RAW_JSON, strlen(RAW_JSON),
                                       SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(s, NX_XFORM_OK);
 
     SHArena *pa = sh_arena_create(256 * 1024);
@@ -247,7 +247,7 @@ TEST(xform_row_id_slugify)
 
     NxXformStatus s = nx_xform_apply(RAW_JSON, strlen(RAW_JSON),
                                       SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(s, NX_XFORM_OK);
 
     SHArena *pa = sh_arena_create(256 * 1024);
@@ -276,7 +276,7 @@ TEST(xform_required_rejection)
     NxXformStatus s = nx_xform_apply(RAW_JSON, strlen(RAW_JSON),
                                       SCHEMA_REQUIRED_REJECT,
                                       strlen(SCHEMA_REQUIRED_REJECT),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(s, NX_XFORM_OK);
 
     SHArena *pa = sh_arena_create(256 * 1024);
@@ -310,9 +310,9 @@ TEST(xform_deterministic)
     size_t len1 = 0, len2 = 0;
 
     nx_xform_apply(RAW_JSON, strlen(RAW_JSON), SCHEMA_BASIC,
-                   strlen(SCHEMA_BASIC), a1, &out1, &len1);
+                   strlen(SCHEMA_BASIC), a1, NULL, &out1, &len1);
     nx_xform_apply(RAW_JSON, strlen(RAW_JSON), SCHEMA_BASIC,
-                   strlen(SCHEMA_BASIC), a2, &out2, &len2);
+                   strlen(SCHEMA_BASIC), a2, NULL, &out2, &len2);
 
     ASSERT_EQ(len1, len2);
     ASSERT(memcmp(out1, out2, len1) == 0);
@@ -350,7 +350,7 @@ TEST(xform_validation_range)
     SHArena *arena = sh_arena_create(128 * 1024);
 
     NxXformStatus s = nx_xform_apply(raw, strlen(raw), schema, strlen(schema),
-                                      arena, &out, &out_len);
+                                      arena, NULL, &out, &out_len);
     ASSERT_EQ(s, NX_XFORM_OK);
 
     SHArena *pa = sh_arena_create(64 * 1024);
@@ -379,7 +379,7 @@ static ShJsonValue *apply_and_parse(const char *raw, const char *schema,
     size_t out_len = 0;
     SHArena *work = sh_arena_create(256 * 1024);
     NxXformStatus s = nx_xform_apply(raw, strlen(raw), schema, strlen(schema),
-                                      work, out_json, &out_len);
+                                      work, NULL, out_json, &out_len);
     sh_arena_free(work);
     if (s != NX_XFORM_OK || !*out_json) return NULL;
 
@@ -1311,7 +1311,8 @@ TEST(pipeline_xlsx_to_canonical)
                                   NX_FORMAT_XLSX, "minimal.xlsx",
                                   SCHEMA_BASIC, strlen(SCHEMA_BASIC),
                                   &raw, &raw_len,
-                                  &canon, &canon_len);
+                                  &canon, &canon_len,
+                                  NULL);
     ASSERT_EQ(s, NX_INGEST_OK);
     ASSERT(raw != NULL);
     ASSERT(canon != NULL);
@@ -1346,9 +1347,11 @@ TEST(pipeline_deterministic)
     size_t len1 = 0, len2 = 0;
 
     nx_ingest(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NX_FORMAT_XLSX, "test.xlsx",
-              SCHEMA_BASIC, strlen(SCHEMA_BASIC), NULL, NULL, &canon1, &len1);
+              SCHEMA_BASIC, strlen(SCHEMA_BASIC), NULL, NULL, &canon1, &len1,
+              NULL);
     nx_ingest(MINIMAL_XLSX, MINIMAL_XLSX_LEN, NX_FORMAT_XLSX, "test.xlsx",
-              SCHEMA_BASIC, strlen(SCHEMA_BASIC), NULL, NULL, &canon2, &len2);
+              SCHEMA_BASIC, strlen(SCHEMA_BASIC), NULL, NULL, &canon2, &len2,
+              NULL);
 
     ASSERT_EQ(len1, len2);
     ASSERT(memcmp(canon1, canon2, len1) == 0);
@@ -1363,7 +1366,8 @@ TEST(pipeline_invalid_format)
     size_t canon_len = 0;
     NxIngestStatus s = nx_ingest("data", 4, (NxIngestFormat)99, "test",
                                   SCHEMA_BASIC, strlen(SCHEMA_BASIC),
-                                  NULL, NULL, &canon, &canon_len);
+                                  NULL, NULL, &canon, &canon_len,
+                                  NULL);
     ASSERT_EQ(s, NX_INGEST_ERR_FORMAT);
 }
 
