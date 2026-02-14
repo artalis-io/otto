@@ -14,6 +14,26 @@
 #define RALPH_DEFAULT_ABS_MIP_GAP 1e-6  /* 1e-6 absolute gap */
 #define RALPH_DEFAULT_CUTOFF RALPH_INFINITY
 
+/* Reliability branching parameters */
+#define MIP_RELIABILITY_THRESHOLD   8    /* Strong-branch until this many observations */
+#define MIP_RELIABILITY_MAX_STRONG  5    /* Max strong-branch evaluations per node */
+#define MIP_RELIABILITY_PIVOT_BUDGET 100 /* Dual pivots per strong-branch probe */
+
+/* Cut quality filter parameters */
+#define MIP_CUT_MIN_VIOLATION  1e-4   /* Minimum violation to apply a cut */
+#define MIP_CUT_MAX_DYNAMISM   1e6    /* Max coefficient ratio max|a|/min|a| */
+#define MIP_CUT_PARALLEL_TOL   0.999  /* Cosine similarity threshold for parallel cuts */
+
+/* Reduced-cost fixing parameters */
+#define MIP_RC_FIX_MIN_GAP     1e-4   /* Don't fix when gap is numerically tiny */
+
+/* RINS (Relaxation Induced Neighborhood Search) parameters */
+#define MIP_RINS_INTERVAL       100   /* Nodes between RINS calls */
+#define MIP_RINS_INTERVAL_SMALL  50   /* For problems with < 50 integers */
+#define MIP_RINS_MAX_DIVE        30   /* Max dive depth in RINS */
+#define MIP_RINS_MIN_FREE_PCT   0.1   /* Skip if < 10% integers free */
+#define MIP_RINS_LP_ITER_LIMIT  200   /* LP iterations per RINS dive step */
+
 /* Node selection strategy */
 typedef enum {
     NODE_SELECT_BEST_FIRST = 0,
@@ -192,6 +212,11 @@ typedef struct {
     int lap_nodes_solved;        /* Number of nodes solved with LAP */
     int simplex_nodes_solved;    /* Number of nodes solved with simplex */
     int last_solved_node_id;     /* ID of last node whose LP was solved (for child detection) */
+
+    /* Reduced-cost fixing + RINS statistics */
+    int rc_fixings;              /* Total variables fixed by reduced-cost fixing */
+    int rins_calls;              /* Number of RINS heuristic invocations */
+    int rins_found;              /* Number of incumbents found by RINS */
 
     /* SCP-specific optimizations (for set covering/partitioning MIPs) */
     int use_scp_solver;          /* 1 if SCP structure detected and enabled */

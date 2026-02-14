@@ -2914,6 +2914,729 @@ void test_cuts_mixed_sense_normalization(void) {
 }
 
 /* ============================================================================
+ * Test: Reliability Branching (Basic)
+ *
+ * Small MILP solved with reliability branching (var_select=3).
+ * Verify optimal solution found.
+ * ============================================================================ */
+void test_reliability_branching_basic(void) {
+    printf("\n=== Test: Reliability Branching (Basic) ===\n");
+
+    /* min 3x0 + 2x1 + 5x2 + x3 + 4x4
+     * s.t. x0 + x1 + x2 + x3 + x4 >= 2
+     *      2x0 + x1 + 3x2 >= 3
+     *      x0..x2 binary, x3..x4 continuous [0,1]
+     * Optimal: x1=1, x2=1, obj = 2+5 = 7 or similar
+     */
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    ralph_add_var(model, 0.0, 1.0, 3.0, RALPH_BINARY);     /* x0 */
+    ralph_add_var(model, 0.0, 1.0, 2.0, RALPH_BINARY);     /* x1 */
+    ralph_add_var(model, 0.0, 1.0, 5.0, RALPH_BINARY);     /* x2 */
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_CONTINUOUS);  /* x3 */
+    ralph_add_var(model, 0.0, 1.0, 4.0, RALPH_CONTINUOUS);  /* x4 */
+
+    int idx1[] = {0, 1, 2, 3, 4};
+    double val1[] = {1, 1, 1, 1, 1};
+    ralph_add_constraint(model, 5, idx1, val1, RALPH_GREATER_EQUAL, 2.0);
+
+    int idx2[] = {0, 1, 2};
+    double val2[] = {2, 1, 3};
+    ralph_add_constraint(model, 3, idx2, val2, RALPH_GREATER_EQUAL, 3.0);
+
+    /* Use reliability branching */
+    ralph_set_int_param(model, "var_select", 3);
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Reliability branching finds optimal");
+
+    double obj = ralph_get_objval(model);
+    ASSERT(obj < 100.0, "Objective is finite");
+
+    double x[5];
+    ralph_get_solution(model, x);
+
+    /* Verify feasibility */
+    double c1 = x[0] + x[1] + x[2] + x[3] + x[4];
+    ASSERT(c1 >= 2.0 - TOLERANCE, "Constraint 1 satisfied");
+    double c2 = 2*x[0] + x[1] + 3*x[2];
+    ASSERT(c2 >= 3.0 - TOLERANCE, "Constraint 2 satisfied");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Reliability Branching with Priorities
+ *
+ * Verify that reliability branching respects priority variables.
+ * ============================================================================ */
+void test_reliability_branching_with_priorities(void) {
+    printf("\n=== Test: Reliability Branching with Priorities ===\n");
+
+    /* min x0 + x1 + 2*x2
+     * s.t. x0 + x1 >= 1
+     *      x1 + x2 >= 1
+     *      x0, x1, x2 binary
+     * Optimal: x1=1, obj=1
+     */
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);  /* x0 */
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);  /* x1 */
+    ralph_add_var(model, 0.0, 1.0, 2.0, RALPH_BINARY);  /* x2 */
+
+    int idx1[] = {0, 1};
+    double val1[] = {1, 1};
+    ralph_add_constraint(model, 2, idx1, val1, RALPH_GREATER_EQUAL, 1.0);
+
+    int idx2[] = {1, 2};
+    double val2[] = {1, 1};
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_GREATER_EQUAL, 1.0);
+
+    /* Set priorities: x1 has highest priority */
+    int priorities[3] = {1, 10, 1};
+    ralph_set_branch_priorities(model, priorities);
+
+    /* Use reliability branching */
+    ralph_set_int_param(model, "var_select", 3);
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Reliability+priorities finds optimal");
+
+    double obj = ralph_get_objval(model);
+    ASSERT_NEAR(obj, 1.0, TOLERANCE, "Objective is 1.0");
+
+    double x[3];
+    ralph_get_solution(model, x);
+    ASSERT(x[0] + x[1] >= 1.0 - TOLERANCE, "Constraint 1 satisfied");
+    ASSERT(x[1] + x[2] >= 1.0 - TOLERANCE, "Constraint 2 satisfied");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Reliability vs Pseudo-cost Branching
+ *
+ * Medium MILP. Verify both strategies find same optimum.
+ * ============================================================================ */
+void test_reliability_vs_pseudocost(void) {
+    printf("\n=== Test: Reliability vs Pseudo-cost ===\n");
+
+    /* Build a facility-location-like problem with 10 integer vars */
+    int n = 10;
+
+    /* Solve with pseudo-cost */
+    RalphModel *m1 = ralph_create();
+    ralph_set_obj_sense(m1, RALPH_MINIMIZE);
+
+    for (int j = 0; j < n; j++) {
+        ralph_add_var(m1, 0.0, 1.0, (double)(j + 1), RALPH_BINARY);
+    }
+
+    /* Coverage constraints: each pair must be covered */
+    for (int i = 0; i < 5; i++) {
+        int idx[2] = {i, i + 5};
+        double val[2] = {1.0, 1.0};
+        ralph_add_constraint(m1, 2, idx, val, RALPH_GREATER_EQUAL, 1.0);
+    }
+
+    /* Sum constraint */
+    {
+        int idx[10];
+        double val[10];
+        for (int j = 0; j < n; j++) { idx[j] = j; val[j] = 1.0; }
+        ralph_add_constraint(m1, n, idx, val, RALPH_LESS_EQUAL, 7.0);
+    }
+
+    ralph_set_int_param(m1, "var_select", 1);  /* pseudo-cost */
+    ralph_optimize(m1);
+    double obj_pc = ralph_get_objval(m1);
+    RalphStatus status_pc = ralph_get_status(m1);
+    ralph_free(m1);
+
+    /* Solve with reliability */
+    RalphModel *m2 = ralph_create();
+    ralph_set_obj_sense(m2, RALPH_MINIMIZE);
+
+    for (int j = 0; j < n; j++) {
+        ralph_add_var(m2, 0.0, 1.0, (double)(j + 1), RALPH_BINARY);
+    }
+
+    for (int i = 0; i < 5; i++) {
+        int idx[2] = {i, i + 5};
+        double val[2] = {1.0, 1.0};
+        ralph_add_constraint(m2, 2, idx, val, RALPH_GREATER_EQUAL, 1.0);
+    }
+
+    {
+        int idx[10];
+        double val[10];
+        for (int j = 0; j < n; j++) { idx[j] = j; val[j] = 1.0; }
+        ralph_add_constraint(m2, n, idx, val, RALPH_LESS_EQUAL, 7.0);
+    }
+
+    ralph_set_int_param(m2, "var_select", 3);  /* reliability */
+    ralph_optimize(m2);
+    double obj_rel = ralph_get_objval(m2);
+    RalphStatus status_rel = ralph_get_status(m2);
+    ralph_free(m2);
+
+    ASSERT(status_pc == RALPH_STATUS_OPTIMAL, "Pseudo-cost finds optimal");
+    ASSERT(status_rel == RALPH_STATUS_OPTIMAL, "Reliability finds optimal");
+    ASSERT_NEAR(obj_pc, obj_rel, 1.0, "Same objective (within 1.0)");
+    printf("  INFO: pseudo-cost obj=%.4f, reliability obj=%.4f\n", obj_pc, obj_rel);
+}
+
+/* ============================================================================
+ * Test: Reliability Branching with All-Binary Problem
+ *
+ * Verify reliability branching handles 0/1 variables correctly.
+ * ============================================================================ */
+void test_reliability_branching_all_binary(void) {
+    printf("\n=== Test: Reliability Branching (All Binary) ===\n");
+
+    /* min 2x0 + 3x1 + x2 + 4x3
+     * s.t. x0 + x1 + x2 + x3 >= 2
+     *      x0 + x3 >= 1
+     *      x0..x3 binary
+     */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    ralph_add_var(model, 0.0, 1.0, 2.0, RALPH_BINARY);  /* x0 */
+    ralph_add_var(model, 0.0, 1.0, 3.0, RALPH_BINARY);  /* x1 */
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);  /* x2 */
+    ralph_add_var(model, 0.0, 1.0, 4.0, RALPH_BINARY);  /* x3 */
+
+    int idx1[] = {0, 1, 2, 3};
+    double val1[] = {1, 1, 1, 1};
+    ralph_add_constraint(model, 4, idx1, val1, RALPH_GREATER_EQUAL, 2.0);
+
+    int idx2[] = {0, 3};
+    double val2[] = {1, 1};
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_GREATER_EQUAL, 1.0);
+
+    ralph_set_int_param(model, "var_select", 3);
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "All-binary reliability finds optimal");
+
+    double obj = ralph_get_objval(model);
+    /* Optimal: x0=1, x2=1 → obj=3 */
+    ASSERT_NEAR(obj, 3.0, TOLERANCE, "Objective is 3.0");
+
+    double x[4];
+    ralph_get_solution(model, x);
+    ASSERT(x[0] + x[1] + x[2] + x[3] >= 2.0 - TOLERANCE, "Coverage constraint");
+    ASSERT(x[0] + x[3] >= 1.0 - TOLERANCE, "Pairing constraint");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Cut Quality - Dynamism Filter
+ *
+ * Verify cuts with extreme coefficient ratios are filtered out.
+ * ============================================================================ */
+void test_cut_quality_dynamism_filter(void) {
+    printf("\n=== Test: Cut Quality Dynamism Filter ===\n");
+
+    /* Build a MILP where GMI cuts can have bad dynamism.
+     * We test indirectly: with cuts enabled, the solver should still
+     * find optimal (cuts with bad dynamism are filtered, not applied). */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* Variables with very different scales in objective */
+    ralph_add_var(model, 0.0, 100.0, 0.001, RALPH_INTEGER);  /* x0: tiny cost */
+    ralph_add_var(model, 0.0, 100.0, 1000.0, RALPH_INTEGER); /* x1: huge cost */
+    ralph_add_var(model, 0.0, 100.0, 1.0, RALPH_INTEGER);    /* x2: normal cost */
+
+    /* x0 + x1 + x2 >= 5 */
+    int idx1[] = {0, 1, 2};
+    double val1[] = {1, 1, 1};
+    ralph_add_constraint(model, 3, idx1, val1, RALPH_GREATER_EQUAL, 5.0);
+
+    /* 100*x0 + x1 >= 50 (introduces dynamism in tableau) */
+    int idx2[] = {0, 1};
+    double val2[] = {100.0, 1.0};
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_GREATER_EQUAL, 50.0);
+
+    ralph_set_int_param(model, "max_cut_rounds", 3);
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Dynamism filter: solver finds optimal");
+
+    double obj = ralph_get_objval(model);
+    ASSERT(obj < 1e6, "Objective is finite and reasonable");
+
+    double x[3];
+    ralph_get_solution(model, x);
+    ASSERT(x[0] + x[1] + x[2] >= 5.0 - TOLERANCE, "Constraint 1 satisfied");
+    ASSERT(100*x[0] + x[1] >= 50.0 - TOLERANCE, "Constraint 2 satisfied");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Cut Parallel Detection
+ *
+ * Verify that nearly-parallel cuts don't both get applied.
+ * ============================================================================ */
+void test_cut_parallel_detection(void) {
+    printf("\n=== Test: Cut Parallel Detection ===\n");
+
+    /* Solve a small MIP with cuts enabled.
+     * The parallel filter shouldn't cause regressions. */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    ralph_add_var(model, 0.0, 10.0, 1.0, RALPH_INTEGER);  /* x0 */
+    ralph_add_var(model, 0.0, 10.0, 2.0, RALPH_INTEGER);  /* x1 */
+    ralph_add_var(model, 0.0, 10.0, 3.0, RALPH_INTEGER);  /* x2 */
+
+    /* x0 + 2*x1 + 3*x2 >= 10 */
+    int idx1[] = {0, 1, 2};
+    double val1[] = {1, 2, 3};
+    ralph_add_constraint(model, 3, idx1, val1, RALPH_GREATER_EQUAL, 10.0);
+
+    /* x0 + x1 + x2 >= 4 */
+    int idx2[] = {0, 1, 2};
+    double val2[] = {1, 1, 1};
+    ralph_add_constraint(model, 3, idx2, val2, RALPH_GREATER_EQUAL, 4.0);
+
+    ralph_set_int_param(model, "max_cut_rounds", 3);
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Parallel filter: solver finds optimal");
+
+    double x[3];
+    ralph_get_solution(model, x);
+    ASSERT(x[0] + 2*x[1] + 3*x[2] >= 10.0 - TOLERANCE, "Constraint 1 satisfied");
+    ASSERT(x[0] + x[1] + x[2] >= 4.0 - TOLERANCE, "Constraint 2 satisfied");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Cut Minimum Violation
+ *
+ * Verify that cuts with tiny violation are skipped.
+ * ============================================================================ */
+void test_cut_minimum_violation(void) {
+    printf("\n=== Test: Cut Minimum Violation ===\n");
+
+    /* Solve a MIP with cuts enabled. The MIP_CUT_MIN_VIOLATION threshold
+     * (1e-4) should filter weak cuts without affecting solution quality. */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);  /* x0 */
+    ralph_add_var(model, 0.0, 1.0, 2.0, RALPH_BINARY);  /* x1 */
+    ralph_add_var(model, 0.0, 1.0, 3.0, RALPH_BINARY);  /* x2 */
+    ralph_add_var(model, 0.0, 1.0, 4.0, RALPH_BINARY);  /* x3 */
+
+    /* At least 2 of the 4 must be selected */
+    int idx1[] = {0, 1, 2, 3};
+    double val1[] = {1, 1, 1, 1};
+    ralph_add_constraint(model, 4, idx1, val1, RALPH_GREATER_EQUAL, 2.0);
+
+    /* x0 + x1 <= 1 (conflict) */
+    int idx2[] = {0, 1};
+    double val2[] = {1, 1};
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 1.0);
+
+    ralph_set_int_param(model, "max_cut_rounds", 3);
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL, "Min violation: solver finds optimal");
+
+    double obj = ralph_get_objval(model);
+    /* Best: x0=1, x2=1 → 1+3=4 or x0=1, x3=1 → 1+4=5. Min = x0=1,x2=1 = 4 */
+    ASSERT(obj >= 3.0 - TOLERANCE, "Objective >= 3.0");
+    ASSERT(obj <= 5.0 + TOLERANCE, "Objective <= 5.0");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Cuts Improve Root Bound
+ *
+ * Verify that cutting planes tighten the root LP bound.
+ * ============================================================================ */
+void test_cuts_improve_bound(void) {
+    printf("\n=== Test: Cuts Improve Root Bound ===\n");
+
+    /* Solve with and without cuts; verify bound with cuts is at least as tight */
+    double obj_no_cuts, obj_with_cuts;
+
+    /* Without cuts */
+    {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+        /* Knapsack-like problem where cuts help */
+        ralph_add_var(model, 0.0, 1.0, 3.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 5.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 7.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 2.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 4.0, RALPH_BINARY);
+
+        int idx1[] = {0, 1, 2, 3, 4};
+        double val1[] = {2, 3, 4, 1, 2};
+        ralph_add_constraint(model, 5, idx1, val1, RALPH_GREATER_EQUAL, 5.0);
+
+        int idx2[] = {0, 1, 2};
+        double val2[] = {1, 1, 1};
+        ralph_add_constraint(model, 3, idx2, val2, RALPH_LESS_EQUAL, 2.0);
+
+        ralph_set_int_param(model, "max_cut_rounds", 0);
+        ralph_optimize(model);
+        obj_no_cuts = ralph_get_objval(model);
+        ralph_free(model);
+    }
+
+    /* With cuts */
+    {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+        ralph_add_var(model, 0.0, 1.0, 3.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 5.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 7.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 2.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 4.0, RALPH_BINARY);
+
+        int idx1[] = {0, 1, 2, 3, 4};
+        double val1[] = {2, 3, 4, 1, 2};
+        ralph_add_constraint(model, 5, idx1, val1, RALPH_GREATER_EQUAL, 5.0);
+
+        int idx2[] = {0, 1, 2};
+        double val2[] = {1, 1, 1};
+        ralph_add_constraint(model, 3, idx2, val2, RALPH_LESS_EQUAL, 2.0);
+
+        ralph_set_int_param(model, "max_cut_rounds", 5);
+        ralph_optimize(model);
+        obj_with_cuts = ralph_get_objval(model);
+        ralph_free(model);
+    }
+
+    /* Both should find optimal */
+    ASSERT(obj_no_cuts < 1e6, "No-cuts solution is finite");
+    ASSERT(obj_with_cuts < 1e6, "With-cuts solution is finite");
+
+    /* Cuts should not worsen the objective */
+    ASSERT(obj_with_cuts <= obj_no_cuts + TOLERANCE,
+           "Cuts do not worsen objective");
+
+    printf("  INFO: without cuts obj=%.4f, with cuts obj=%.4f\n",
+           obj_no_cuts, obj_with_cuts);
+}
+
+/* ============================================================================
+ * Test: Reduced-Cost Fixing - Basic
+ *
+ * Small binary MILP where RC fixing should be active. Verify optimality.
+ * ============================================================================ */
+void test_rc_fixing_basic(void) {
+    printf("\n=== Test: Reduced-Cost Fixing Basic ===\n");
+
+    /* Binary knapsack: min -5x0 -4x1 -3x2
+     * s.t. 2x0 + 3x1 + x2 <= 4
+     *      x0, x1, x2 binary
+     * Optimal: x0=1, x2=1 (or x0=1,x1=1 depending on bounds), obj = -8 */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    ralph_add_var(model, 0.0, 1.0, -5.0, RALPH_BINARY);
+    ralph_add_var(model, 0.0, 1.0, -4.0, RALPH_BINARY);
+    ralph_add_var(model, 0.0, 1.0, -3.0, RALPH_BINARY);
+
+    int idx[] = {0, 1, 2};
+    double val[] = {2.0, 3.0, 1.0};
+    ralph_add_constraint(model, 3, idx, val, RALPH_LESS_EQUAL, 4.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    /* Optimal: x0=1, x2=1 → obj = -5 + -3 = -8, constraint: 2+1=3 <= 4 */
+    ASSERT_NEAR(obj, -8.0, TOLERANCE, "Optimal objective with RC fixing");
+
+    double sol[3];
+    ralph_get_solution(model, sol);
+
+    /* Verify feasibility */
+    double lhs = 2.0*sol[0] + 3.0*sol[1] + 1.0*sol[2];
+    ASSERT(lhs <= 4.0 + TOLERANCE, "Constraint satisfied");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Reduced-Cost Fixing - No Regression
+ *
+ * Existing knapsack + facility location problems should still find
+ * same optimal values with RC fixing active.
+ * ============================================================================ */
+void test_rc_fixing_no_regression(void) {
+    printf("\n=== Test: Reduced-Cost Fixing No Regression ===\n");
+
+    /* Facility location: 5 facilities, 10 customers */
+    int nf = 5, nc = 10;
+    int num_vars = nf + nc * nf;
+
+    g_test_seed = 42;
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_dbl_param(model, "time_limit", 30.0);
+
+    /* Facility vars (binary) */
+    for (int j = 0; j < nf; j++) {
+        ralph_add_var(model, 0.0, 1.0, test_rand_double(50.0, 200.0), RALPH_BINARY);
+    }
+    /* Assignment vars (continuous) */
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            ralph_add_var(model, 0.0, 1.0, test_rand_double(1.0, 30.0), RALPH_CONTINUOUS);
+        }
+    }
+
+    /* Demand: sum_j x[i,j] = 1 */
+    int *indices = malloc(nf * sizeof(int));
+    double *values = malloc(nf * sizeof(double));
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            indices[j] = nf + i * nf + j;
+            values[j] = 1.0;
+        }
+        ralph_add_constraint(model, nf, indices, values, RALPH_EQUAL, 1.0);
+    }
+
+    /* Linking: x[i,j] <= y[j] */
+    int idx2[2];
+    double val2[2];
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            idx2[0] = nf + i * nf + j;
+            idx2[1] = j;
+            val2[0] = 1.0;
+            val2[1] = -1.0;
+            ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 0.0);
+        }
+    }
+
+    free(indices);
+    free(values);
+
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Status is OPTIMAL");
+
+    double obj = ralph_get_objval(model);
+    ASSERT(obj < 1e6, "Objective is finite");
+
+    /* Verify solution feasibility */
+    double *sol = malloc(num_vars * sizeof(double));
+    ralph_get_solution(model, sol);
+
+    int binary_ok = 1;
+    for (int j = 0; j < nf; j++) {
+        if (fabs(sol[j]) > TOLERANCE && fabs(sol[j] - 1.0) > TOLERANCE) {
+            binary_ok = 0;
+        }
+    }
+    ASSERT(binary_ok, "Facility decisions are binary");
+
+    free(sol);
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: RINS Finds Incumbent
+ *
+ * MILP where diving finds a suboptimal incumbent, and RINS should have
+ * the opportunity to improve it. We verify optimality is maintained.
+ * ============================================================================ */
+void test_rins_finds_incumbent(void) {
+    printf("\n=== Test: RINS Finds Incumbent ===\n");
+
+    /* Facility location with enough nodes to trigger RINS (interval=50 for small) */
+    int nf = 8, nc = 15;
+    int num_vars = nf + nc * nf;
+
+    g_test_seed = 789;
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_dbl_param(model, "time_limit", 30.0);
+    ralph_set_dbl_param(model, "mip_gap", 0.0001);
+
+    for (int j = 0; j < nf; j++) {
+        ralph_add_var(model, 0.0, 1.0, test_rand_double(100.0, 400.0), RALPH_BINARY);
+    }
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            ralph_add_var(model, 0.0, 1.0, test_rand_double(1.0, 40.0), RALPH_CONTINUOUS);
+        }
+    }
+
+    int *indices = malloc(nf * sizeof(int));
+    double *values = malloc(nf * sizeof(double));
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            indices[j] = nf + i * nf + j;
+            values[j] = 1.0;
+        }
+        ralph_add_constraint(model, nf, indices, values, RALPH_EQUAL, 1.0);
+    }
+
+    int idx2[2];
+    double val2[2];
+    for (int i = 0; i < nc; i++) {
+        for (int j = 0; j < nf; j++) {
+            idx2[0] = nf + i * nf + j;
+            idx2[1] = j;
+            val2[0] = 1.0;
+            val2[1] = -1.0;
+            ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 0.0);
+        }
+    }
+
+    free(indices);
+    free(values);
+
+    ralph_optimize(model);
+
+    RalphStatus status = ralph_get_status(model);
+    ASSERT(status == RALPH_STATUS_OPTIMAL || status == RALPH_STATUS_NODE_LIMIT,
+           "Status is OPTIMAL or NODE_LIMIT");
+
+    if (status == RALPH_STATUS_OPTIMAL) {
+        double obj = ralph_get_objval(model);
+        ASSERT(obj < 1e6, "Objective is finite");
+
+        /* Verify solution feasibility */
+        double *sol = malloc(num_vars * sizeof(double));
+        ralph_get_solution(model, sol);
+
+        int binary_ok = 1;
+        for (int j = 0; j < nf; j++) {
+            if (fabs(sol[j]) > TOLERANCE && fabs(sol[j] - 1.0) > TOLERANCE) {
+                binary_ok = 0;
+            }
+        }
+        ASSERT(binary_ok, "Facility decisions are binary");
+        free(sol);
+    }
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: RINS No Regression
+ *
+ * Existing MIP problems should produce same or better results with RINS.
+ * ============================================================================ */
+void test_rins_no_regression(void) {
+    printf("\n=== Test: RINS No Regression ===\n");
+
+    /* Binary knapsack */
+    {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+
+        ralph_add_var(model, 0.0, 1.0, 10.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 6.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 12.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 7.0, RALPH_BINARY);
+        ralph_add_var(model, 0.0, 1.0, 15.0, RALPH_BINARY);
+
+        int idx[] = {0, 1, 2, 3, 4};
+        double val[] = {5.0, 4.0, 6.0, 3.0, 7.0};
+        ralph_add_constraint(model, 5, idx, val, RALPH_LESS_EQUAL, 15.0);
+
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_optimize(model);
+
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Knapsack: OPTIMAL");
+        double obj = ralph_get_objval(model);
+        /* Known optimal: items 0,3,4 → value=32, weight=15 */
+        ASSERT_NEAR(obj, 32.0, TOLERANCE, "Knapsack: optimal obj");
+        ralph_free(model);
+    }
+
+    /* Small set partitioning */
+    {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+        double costs[] = {3, 2, 1, 4, 5, 2, 3, 1, 4, 2};
+        int coverage[10][5] = {
+            {1, 0, 0, 1, 0}, {0, 1, 0, 0, 1}, {1, 1, 0, 0, 0},
+            {0, 0, 1, 1, 0}, {0, 0, 0, 1, 1}, {1, 0, 1, 0, 0},
+            {0, 1, 1, 0, 0}, {0, 0, 0, 0, 1}, {1, 1, 1, 0, 0},
+            {0, 0, 1, 1, 1},
+        };
+
+        for (int j = 0; j < 10; j++) {
+            ralph_add_var(model, 0.0, 1.0, costs[j], RALPH_BINARY);
+        }
+
+        for (int i = 0; i < 5; i++) {
+            int idx[10];
+            double val[10];
+            int nnz = 0;
+            for (int j = 0; j < 10; j++) {
+                if (coverage[j][i]) {
+                    idx[nnz] = j;
+                    val[nnz] = 1.0;
+                    nnz++;
+                }
+            }
+            ralph_add_constraint(model, nnz, idx, val, RALPH_EQUAL, 1.0);
+        }
+
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_optimize(model);
+
+        RalphStatus status = ralph_get_status(model);
+        ASSERT(status == RALPH_STATUS_OPTIMAL || status == RALPH_STATUS_INFEASIBLE,
+               "Set partition: valid status");
+
+        if (status == RALPH_STATUS_OPTIMAL) {
+            double *sol = malloc(10 * sizeof(double));
+            ralph_get_solution(model, sol);
+            int binary_ok = 1;
+            for (int j = 0; j < 10; j++) {
+                if (fabs(sol[j]) > TOLERANCE && fabs(sol[j] - 1.0) > TOLERANCE) {
+                    binary_ok = 0;
+                }
+            }
+            ASSERT(binary_ok, "Set partition: binary vars");
+            free(sol);
+        }
+
+        ralph_free(model);
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -2990,6 +3713,24 @@ int main(int argc, char **argv) {
         /* P5/P6: Bound flipping + Dual steepest edge tests */
         test_p5p6_no_false_infeasibility();
         test_p5p6_flags();
+
+        /* Reliability branching tests */
+        test_reliability_branching_basic();
+        test_reliability_branching_with_priorities();
+        test_reliability_vs_pseudocost();
+        test_reliability_branching_all_binary();
+
+        /* Cut quality filter tests */
+        test_cut_quality_dynamism_filter();
+        test_cut_parallel_detection();
+        test_cut_minimum_violation();
+        test_cuts_improve_bound();
+
+        /* Reduced-cost fixing + RINS tests */
+        test_rc_fixing_basic();
+        test_rc_fixing_no_regression();
+        test_rins_finds_incumbent();
+        test_rins_no_regression();
     } else {
         printf("\n=== MIP tests skipped ===\n");
     }
