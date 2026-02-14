@@ -62,10 +62,11 @@ Document Bytes → Stage A (extract) → nx_raw JSON
 ## Build
 
 ```bash
-make all      # Build library + tests (192 tests)
+make all      # Build library + tests (199 tests)
 make test     # Run all tests
 make tools    # Build CLI tools
 make debug    # Build with ASan/UBSan + -Werror
+make fuzz     # Build fuzz harnesses (requires clang with libFuzzer)
 make clean    # Remove artifacts
 ```
 
@@ -80,8 +81,8 @@ Hardening: `-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common`.
 
 ## Test Counts
 
-- test_ingest: 45 tests (11 XLSX + 14 PDF + 13 CSV + 7 golden)
-- test_xform: 37 tests (5 slug + 8 xform + 16 multi-transform + 4 trucking + 4 pipeline)
+- test_ingest: 51 tests (11 XLSX + 14 PDF + 13 CSV + 6 limits + 7 golden)
+- test_xform: 38 tests (5 slug + 8 xform + 16 multi-transform + 4 trucking + 4 pipeline + 1 schema cap)
 - test_validate: 9 tests (geo_bounds, format, unique, outlier)
 - test_discover: 26 tests (18 unit + 2 continuation + 6 golden)
 - test_merge: 20 tests (4 error + 5 basic + 1 strip + 6 edge + 4 golden PDF02)
@@ -89,7 +90,7 @@ Hardening: `-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common`.
 - test_issue: 13 tests (init/free, add, dynamic growth, count, JSON output)
 - test_diff: 14 tests (null input, identical/added/removed/modified, mixed, empty, parse error)
 - test_pipeline: 9 tests (end-to-end pipeline, issues threading, GeoJSON/CSV emit, diff identical/modified/removed, manifest JSON/counts)
-- Total: 192 tests
+- Total: 199 tests
 
 ## Schemas
 

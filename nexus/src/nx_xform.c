@@ -982,6 +982,11 @@ NxXformStatus nx_xform_apply(const char *raw_json, size_t raw_len,
         return NX_XFORM_ERR_NULL;
     if (!arena) return NX_XFORM_ERR_ARENA;
 
+    /* Reject absurdly large schemas (DoS protection) */
+#define NX_MAX_SCHEMA_SIZE (1024 * 1024)  /* 1MB */
+    if (schema_len > NX_MAX_SCHEMA_SIZE)
+        return NX_XFORM_ERR_SCHEMA;
+
     *out_json = NULL;
     *out_len = 0;
 

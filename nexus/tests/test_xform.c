@@ -1387,6 +1387,31 @@ TEST(ingest_status_strings)
     ASSERT(strlen(nx_ingest_status_str(NX_INGEST_ERR_STAGE_X)) > 0);
 }
 
+TEST(xform_schema_size_cap)
+{
+    /* Schema larger than 1MB should be rejected */
+    size_t big_len = 2 * 1024 * 1024;
+    char *big_schema = (char *)malloc(big_len);
+    ASSERT(big_schema != NULL);
+    memset(big_schema, ' ', big_len);
+    big_schema[0] = '{';
+    big_schema[big_len - 1] = '}';
+
+    const char *raw = "{\"nx_raw\":1,\"tables\":[]}";
+    char *out = NULL;
+    size_t out_len = 0;
+    SHArena *arena = sh_arena_create(64 * 1024);
+
+    NxXformStatus s = nx_xform_apply(raw, strlen(raw),
+                                      big_schema, big_len,
+                                      arena, NULL, &out, &out_len);
+    ASSERT_EQ(s, NX_XFORM_ERR_SCHEMA);
+    ASSERT(out == NULL);
+
+    free(big_schema);
+    sh_arena_free(arena);
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -1441,6 +1466,9 @@ int main(void)
     RUN_TEST(pipeline_deterministic);
     RUN_TEST(pipeline_invalid_format);
     RUN_TEST(ingest_status_strings);
+
+    /* Schema size cap (P7) */
+    RUN_TEST(xform_schema_size_cap);
 
     printf("\nTransform + Pipeline: %d passed, %d total\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;
