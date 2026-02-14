@@ -35,7 +35,8 @@ typedef enum {
     NX_XLSX_ERR_NO_SHEETS,      /* No worksheets found */
     NX_XLSX_ERR_XML,            /* XML parse error */
     NX_XLSX_ERR_ARENA,          /* Arena allocation failure */
-    NX_XLSX_ERR_LIMITS          /* Exceeds configured limits */
+    NX_XLSX_ERR_LIMITS,         /* Exceeds configured limits */
+    NX_XLSX_ERR_EMPTY           /* File parsed but contains no data rows */
 } NxXlsxStatus;
 
 /* ============================================================================
@@ -43,14 +44,15 @@ typedef enum {
  * ============================================================================ */
 
 typedef struct {
-    int max_rows;        /* Max rows per sheet (0 = unlimited) */
-    int max_cols;        /* Max columns per sheet (0 = unlimited) */
-    int max_sheets;      /* Max sheets to parse (0 = unlimited) */
-    size_t max_file_size; /* Max decompressed file size (0 = unlimited) */
+    int max_rows;           /* Max rows per sheet (0 = unlimited) */
+    int max_cols;           /* Max columns per sheet (0 = unlimited) */
+    int max_sheets;         /* Max sheets to parse (0 = unlimited) */
+    size_t max_file_size;   /* Max input file size (0 = unlimited) */
+    int max_shared_strings; /* Max shared string table entries (0 = unlimited) */
 } NxXlsxLimits;
 
 /* Default limits for safety */
-#define NX_XLSX_DEFAULT_LIMITS { 100000, 1000, 100, 100 * 1024 * 1024 }
+#define NX_XLSX_DEFAULT_LIMITS { 100000, 1000, 100, 100 * 1024 * 1024, 1000000 }
 
 /* ============================================================================
  * API

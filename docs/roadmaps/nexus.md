@@ -392,6 +392,60 @@ Changes: `nx_pipeline.c` (+75 lines), `demo.html` (+123 lines), `test_pipeline.c
 
 ---
 
+## Production Hardening (Next)
+
+Audit findings from Feb 2026. Module is architecturally sound (192 tests, arena memory model, no unsafe string functions) but has latent risks for untrusted input processing.
+
+### P5: Input Bounds Enforcement (Critical)
+
+Five must-fix issues before processing untrusted documents:
+
+| # | Issue | File | Fix |
+|---|-------|------|-----|
+| 1 | XLSX shared strings grow unbounded via realloc | `nx_xlsx.c:119` | Add `max_shared_strings` to `NxXlsxLimits` (default 1M), return error when exceeded |
+| 2 | Transform doesn't validate `source` index vs `MAX_COLUMNS=64` | `nx_xform.c` | Validate all `source` fields during schema parsing, reject out-of-bounds |
+| 3 | `max_file_size` defined in limits struct but never checked | `nx_xlsx.c` | Check `len > limits->max_file_size` before ZIP parsing |
+| 4 | Validation regex has no complexity/timeout guard (ReDoS) | `nx_validate.c:168` | Add `REG_NOSUB` (already present), add execution timeout or pattern length cap (e.g., 1KB) |
+| 5 | WASM global buffers undocumented as non-thread-safe | `nx_wasm.c` | Add thread-safety warning to header comment; consider mutex if SharedArrayBuffer is ever used |
+
+**Estimated effort:** 1 day. Changes are small and localized.
+
+### P6: Silent Truncation Audit
+
+| Issue | File | Fix |
+|-------|------|-----|
+| Cell values >4KB silently truncated | `nx_xlsx.c:286`, `nx_pdf.c:686` | Promote to NX_ISSUE_WARNING (already done), but also set a flag so callers can detect truncation |
+| Empty documents (0 rows, 0 sheets) produce generic errors | All Stage A parsers | Add specific error codes: `NX_XLSX_ERR_EMPTY`, `NX_CSV_ERR_EMPTY` |
+| Arena exhaustion mid-transform emits partial records | `nx_xform.c` | Track arena failures, discard partial record, log issue |
+| WASM returns -1 with no error detail | `nx_wasm.c` | Add `nx_wasm_last_error()` returning stage + error code string |
+
+**Estimated effort:** 1-2 days.
+
+### P7: Fuzz Testing and Limits Verification
+
+| Task | Target |
+|------|--------|
+| Fuzz `nx_xlsx_parse()` with AFL/libFuzzer | Malformed ZIP, XML, shared strings |
+| Fuzz `nx_pdf_extract_tables()` | Malformed text-run JSON, negative coordinates |
+| Fuzz `nx_csv_parse()` | BOM, embedded nulls, ragged rows, 100MB input |
+| Limit enforcement tests | Verify all `NxXlsxLimits` and `NxCsvLimits` fields trigger truncation/error |
+| Large document benchmarks | 100K rows XLSX, 1000-page PDF, 10MB CSV |
+| Schema size cap | Reject schemas >1MB |
+
+**Estimated effort:** 2-3 days (including fuzzer harness setup).
+
+### Summary
+
+| Phase | Scope | Effort | Blocks |
+|-------|-------|--------|--------|
+| P5 | Input bounds (5 critical issues) | 1 day | Production deployment with untrusted input |
+| P6 | Silent truncation + WASM errors | 1-2 days | User-facing quality |
+| P7 | Fuzz testing + benchmarks | 2-3 days | Confidence for adversarial input |
+
+After P5, the module is production-ready for **known document formats from trusted sources** (GLS Hungary, Girteka, etc.). After P7, it's ready for **untrusted documents from arbitrary sources**.
+
+---
+
 ## Future
 
 - **Nexus Gateway**: TMS/ELD integration REST API (see `docs/roadmaps/nexus-gateway.md`)

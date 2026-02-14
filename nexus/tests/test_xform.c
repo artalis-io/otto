@@ -87,7 +87,7 @@ static const char *SCHEMA_REQUIRED_REJECT =
     "\"table_selector\":{\"index\":0},"
     "\"columns\":["
         "{\"source\":0,\"target\":\"name\",\"type\":\"string\",\"required\":true},"
-        "{\"source\":99,\"target\":\"missing\",\"type\":\"string\",\"required\":true}"
+        "{\"source\":50,\"target\":\"missing\",\"type\":\"string\",\"required\":true}"
     "]"
     "}";
 

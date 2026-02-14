@@ -164,6 +164,12 @@ static int parse_validation_rules(ShJsonValue *validate_array, SHArena *arena,
             snprintf(rule->pattern, sizeof(rule->pattern), "%s", pattern);
             snprintf(rule->message, sizeof(rule->message), "%s", message);
 
+            /* P5.4: Reject patterns that are empty or were truncated */
+            if (rule->pattern[0] == '\0' ||
+                strlen(pattern) >= NX_MAX_PATTERN_LEN) {
+                continue; /* Skip this rule */
+            }
+
             /* Compile regex */
             if (regcomp(&rule->regex, rule->pattern, REG_EXTENDED | REG_NOSUB) == 0) {
                 rule->regex_compiled = 1;

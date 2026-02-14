@@ -28,7 +28,8 @@ typedef enum {
     NX_CSV_ERR_NULL,        /* NULL input */
     NX_CSV_ERR_PARSE,       /* CSV parse error */
     NX_CSV_ERR_NO_DATA,     /* No data rows found */
-    NX_CSV_ERR_ARENA        /* Arena allocation failure */
+    NX_CSV_ERR_ARENA,       /* Arena allocation failure */
+    NX_CSV_ERR_EMPTY        /* File parsed but contains no data rows */
 } NxCsvStatus;
 
 /* ============================================================================

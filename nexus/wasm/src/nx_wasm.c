@@ -38,6 +38,10 @@
 
 /* ============================================================================
  * Global Response Buffers (heap-allocated, freed on next call)
+ *
+ * WARNING: NOT thread-safe. All global buffers and g_issues are shared mutable
+ * state. This is acceptable because WASM runs single-threaded in the browser.
+ * Do NOT use this module from multiple threads without adding synchronization.
  * ============================================================================ */
 
 static char  *g_extract_buf   = NULL;  static size_t g_extract_len   = 0;
@@ -198,6 +202,31 @@ int nx_wasm_version(void)
     return 1;
 }
 
+/* Last error message (set on failure for quick diagnosis) */
+static char g_last_error[512] = "";
+
+static void set_last_error(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_last_error, sizeof(g_last_error), fmt, ap);
+    va_end(ap);
+}
+
+/* ============================================================================
+ * Last Error API
+ * ============================================================================ */
+
+/*
+ * Returns the last error message from any WASM stage call.
+ * Useful for JS to get a human-readable error without parsing issues JSON.
+ */
+WASM_EXPORT
+const char *nx_wasm_last_error(void)
+{
+    return g_last_error;
+}
+
 /* ============================================================================
  * Issue Tracking (accumulated across stage calls)
  * ============================================================================ */
@@ -282,13 +311,19 @@ int nx_wasm_extract(const uint8_t *data, int len, int format)
     g_extract_buf = NULL;
     g_extract_len = 0;
 
-    if (!data || len <= 0) return -1;
+    if (!data || len <= 0) {
+        set_last_error("extract: null data or len=%d", len);
+        return -1;
+    }
 
     /* PDF bytes: extract text-run JSON first, then pass to nx_ingest as PDF_JSON */
     if (format == 3) {
         size_t pdf_json_len = 0;
         char *pdf_json = extract_pdf_mem(data, (size_t)len, &pdf_json_len);
-        if (!pdf_json) return -1;
+        if (!pdf_json) {
+            set_last_error("extract: PDF text extraction failed");
+            return -1;
+        }
 
         /* Now run Stage A with the text-run JSON */
         char *raw = NULL, *canon = NULL;
@@ -304,7 +339,10 @@ int nx_wasm_extract(const uint8_t *data, int len, int format)
         free(pdf_json);
         free(canon);
 
-        if (st != NX_INGEST_OK || !raw) return -1;
+        if (st != NX_INGEST_OK || !raw) {
+            set_last_error("extract: PDF ingest failed (status=%d)", st);
+            return -1;
+        }
         g_extract_buf = raw;
         g_extract_len = raw_len;
         return 0;
@@ -317,7 +355,9 @@ int nx_wasm_extract(const uint8_t *data, int len, int format)
         case 0: nx_fmt = NX_FORMAT_XLSX;     filename = "upload.xlsx"; break;
         case 1: nx_fmt = NX_FORMAT_PDF_JSON; filename = "upload.pdf";  break;
         case 2: nx_fmt = NX_FORMAT_CSV;      filename = "upload.csv";  break;
-        default: return -1;
+        default:
+            set_last_error("extract: unknown format=%d", format);
+            return -1;
     }
 
     char *raw = NULL, *canon = NULL;
@@ -331,7 +371,10 @@ int nx_wasm_extract(const uint8_t *data, int len, int format)
         &g_issues);
 
     free(canon);
-    if (st != NX_INGEST_OK || !raw) return -1;
+    if (st != NX_INGEST_OK || !raw) {
+        set_last_error("extract: ingest failed (status=%d, format=%d)", st, format);
+        return -1;
+    }
     g_extract_buf = raw;
     g_extract_len = raw_len;
     return 0;
@@ -361,10 +404,18 @@ int nx_wasm_transform(const char *raw_json, int raw_len,
     g_transform_buf = NULL;
     g_transform_len = 0;
 
-    if (!raw_json || raw_len <= 0 || !schema_json || schema_len <= 0) return -1;
+    if (!raw_json || raw_len <= 0 || !schema_json || schema_len <= 0) {
+        set_last_error("transform: null input (raw=%p/%d, schema=%p/%d)",
+                       (const void *)raw_json, raw_len,
+                       (const void *)schema_json, schema_len);
+        return -1;
+    }
 
     SHArena *arena = sh_arena_create(NX_WASM_ARENA_SIZE);
-    if (!arena) return -1;
+    if (!arena) {
+        set_last_error("transform: arena allocation failed");
+        return -1;
+    }
 
     /* Merge continuation rows if schema has row_merge config */
     const char *xform_input = raw_json;
@@ -392,7 +443,11 @@ int nx_wasm_transform(const char *raw_json, int raw_len,
     sh_arena_free(arena);
     free(merged);
 
-    if (st != NX_XFORM_OK || !out) return -1;
+    if (st != NX_XFORM_OK || !out) {
+        set_last_error("transform: xform failed (status=%d: %s)",
+                       st, nx_xform_status_str(st));
+        return -1;
+    }
     g_transform_buf = out;
     g_transform_len = out_len;
     return 0;
@@ -422,10 +477,16 @@ int nx_wasm_validate(const char *canonical_json, int canon_len,
     g_validate_buf = NULL;
     g_validate_len = 0;
 
-    if (!canonical_json || canon_len <= 0 || !schema_json || schema_len <= 0) return -1;
+    if (!canonical_json || canon_len <= 0 || !schema_json || schema_len <= 0) {
+        set_last_error("validate: null input");
+        return -1;
+    }
 
     SHArena *arena = sh_arena_create(NX_WASM_ARENA_SIZE);
-    if (!arena) return -1;
+    if (!arena) {
+        set_last_error("validate: arena allocation failed");
+        return -1;
+    }
 
     char *out = NULL;
     size_t out_len = 0;
@@ -436,7 +497,11 @@ int nx_wasm_validate(const char *canonical_json, int canon_len,
 
     sh_arena_free(arena);
 
-    if (st != NX_VALIDATE_OK || !out) return -1;
+    if (st != NX_VALIDATE_OK || !out) {
+        set_last_error("validate: failed (status=%d: %s)",
+                       st, nx_validate_status_str(st));
+        return -1;
+    }
     g_validate_buf = out;
     g_validate_len = out_len;
     return 0;
@@ -510,14 +575,22 @@ int nx_wasm_emit_geojson(const char *canonical_json, int canon_len,
     g_emit_buf = NULL;
     g_emit_len = 0;
 
-    if (!canonical_json || canon_len <= 0) return -1;
+    if (!canonical_json || canon_len <= 0) {
+        nx_issue_addf(&g_issues, NX_STAGE_D, NX_ISSUE_ERROR, -1, "", "emit_geojson_null",
+                       "GeoJSON emit: null input or len=%d", canon_len);
+        return -1;
+    }
 
     NxEmitGeoJsonOpts opts = NX_EMIT_GEOJSON_DEFAULTS;
     if (lat_field && lat_field[0]) opts.lat_field = lat_field;
     if (lon_field && lon_field[0]) opts.lon_field = lon_field;
 
     SHArena *arena = sh_arena_create(NX_WASM_ARENA_SIZE);
-    if (!arena) return -1;
+    if (!arena) {
+        nx_issue_add(&g_issues, NX_STAGE_D, NX_ISSUE_ERROR, -1, "", "emit_geojson_arena",
+                      "GeoJSON emit: arena allocation failed (32MB)");
+        return -1;
+    }
 
     char *out = NULL;
     size_t out_len = 0;
@@ -525,7 +598,13 @@ int nx_wasm_emit_geojson(const char *canonical_json, int canon_len,
                                        &opts, arena, &g_issues, &out, &out_len);
     sh_arena_free(arena);
 
-    if (st != NX_EMIT_OK || !out) return -1;
+    if (st != NX_EMIT_OK || !out) {
+        nx_issue_addf(&g_issues, NX_STAGE_D, NX_ISSUE_ERROR, -1, "", "emit_geojson_failed",
+                       "GeoJSON emit failed: %s (out=%s)", nx_emit_status_str(st),
+                       out ? "non-null" : "null");
+        free(out);
+        return -1;
+    }
     g_emit_buf = out;
     g_emit_len = out_len;
     return 0;
@@ -542,10 +621,18 @@ int nx_wasm_emit_csv(const char *canonical_json, int canon_len)
     g_emit_buf = NULL;
     g_emit_len = 0;
 
-    if (!canonical_json || canon_len <= 0) return -1;
+    if (!canonical_json || canon_len <= 0) {
+        nx_issue_addf(&g_issues, NX_STAGE_D, NX_ISSUE_ERROR, -1, "", "emit_csv_null",
+                       "CSV emit: null input or len=%d", canon_len);
+        return -1;
+    }
 
     SHArena *arena = sh_arena_create(NX_WASM_ARENA_SIZE);
-    if (!arena) return -1;
+    if (!arena) {
+        nx_issue_add(&g_issues, NX_STAGE_D, NX_ISSUE_ERROR, -1, "", "emit_csv_arena",
+                      "CSV emit: arena allocation failed (32MB)");
+        return -1;
+    }
 
     char *out = NULL;
     size_t out_len = 0;
@@ -553,7 +640,13 @@ int nx_wasm_emit_csv(const char *canonical_json, int canon_len)
                                     NULL, arena, &g_issues, &out, &out_len);
     sh_arena_free(arena);
 
-    if (st != NX_EMIT_OK || !out) return -1;
+    if (st != NX_EMIT_OK || !out) {
+        nx_issue_addf(&g_issues, NX_STAGE_D, NX_ISSUE_ERROR, -1, "", "emit_csv_failed",
+                       "CSV emit failed: %s (out=%s)", nx_emit_status_str(st),
+                       out ? "non-null" : "null");
+        free(out);
+        return -1;
+    }
     g_emit_buf = out;
     g_emit_len = out_len;
     return 0;

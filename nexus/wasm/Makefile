@@ -59,7 +59,7 @@ MINIZ_SRC = ../../vendor/miniz/miniz.c \
 ALL_SRC = $(WASM_SRC) $(NEXUS_SRC) $(SHARED_SRC) $(MINIZ_SRC)
 
 # Exported functions
-EXPORTS = _nx_wasm_version
+EXPORTS = _nx_wasm_version,_nx_wasm_last_error
 EXPORTS += ,_nx_wasm_extract,_nx_wasm_extract_result,_nx_wasm_extract_result_len
 EXPORTS += ,_nx_wasm_transform,_nx_wasm_transform_result,_nx_wasm_transform_result_len
 EXPORTS += ,_nx_wasm_validate,_nx_wasm_validate_result,_nx_wasm_validate_result_len

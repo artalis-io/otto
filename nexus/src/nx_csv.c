@@ -326,6 +326,7 @@ const char *nx_csv_status_str(NxCsvStatus status)
         case NX_CSV_ERR_PARSE:  return "CSV parse error";
         case NX_CSV_ERR_NO_DATA: return "No data rows found";
         case NX_CSV_ERR_ARENA:  return "Arena allocation failure";
+        case NX_CSV_ERR_EMPTY:  return "No data rows found (empty document)";
         default:                return "Unknown error";
     }
 }
