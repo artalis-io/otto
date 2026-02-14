@@ -710,7 +710,7 @@ static void test_golden_pdf02_merge_notes_joined(int *skip)
         ShJsonValue *cells = sh_json_get(row, "cells");
         const char *city = sh_json_as_string(sh_json_array_get(cells, 1), "");
         if (strcmp(city, "Abaújszántó") == 0) {
-            const char *notes = sh_json_as_string(sh_json_array_get(cells, 6), "");
+            const char *notes = sh_json_as_string(sh_json_array_get(cells, 7), "");
             ASSERT(strstr(notes, "BANKKÁRTYÁS FIZETÉS IS") != NULL);
             ASSERT(strstr(notes, "CSAK CSOMAGÁTADÁS") != NULL);
             found = true;

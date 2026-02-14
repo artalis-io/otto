@@ -826,11 +826,11 @@ static void test_golden_pdf02_discover(int *skip)
     ShJsonValue *schema = parse_schema(out, out_len, arena);
     ASSERT(schema != NULL);
 
-    /* PDF02 is a PuDo list: ZIP, city, name, address, hours, phone, notes.
-     * No GPS data at all — lat/lon should NOT be detected. */
+    /* PDF02 is a PuDo list: ZIP, city, name, address, hours, phone,
+     * pickup time, notes.  No GPS data — lat/lon should NOT be detected. */
     ShJsonValue *cols = sh_json_get(schema, "columns");
     ASSERT(cols != NULL);
-    ASSERT_EQ(sh_json_array_len(cols), (size_t)7);
+    ASSERT_EQ(sh_json_array_len(cols), (size_t)8);
 
     /* No geo_bounds since no lat/lon */
     ShJsonValue *geo = get_validation_by_type(schema, "geo_bounds");
