@@ -24,6 +24,7 @@
 #include "nx_validate.h"
 #include "nx_emit.h"
 #include "nx_issue.h"
+#include "nx_diff.h"
 #include "sh_arena.h"
 #include "sh_json.h"
 #include "sh_csv.h"
@@ -320,7 +321,8 @@ typedef struct {
     int output_raw;          /* 1 = output raw, 0 = output canonical if schema */
     char csv_delimiter;      /* 0 = auto-detect */
     int csv_no_header;       /* 1 = no header row in CSV */
-    const char *emit_format; /* NULL, "geojson", or "csv" */
+    const char *emit_format;    /* NULL, "geojson", or "csv" */
+    const char *baseline_path;  /* NULL, or path to previous canonical JSON for diff */
 } PipelineOpts;
 
 static int process_file(const PipelineOpts *po)
@@ -343,8 +345,32 @@ static int process_file(const PipelineOpts *po)
     char *raw_json = NULL;
     size_t raw_len = 0;
 
+    /* Check file size before allocating arena */
+    {
+        FILE *szf = fopen(po->input_path, "rb");
+        if (szf) {
+            fseek(szf, 0, SEEK_END);
+            long fsz = ftell(szf);
+            fclose(szf);
+            if (fsz > PIPELINE_ARENA_SIZE) {
+                fprintf(stderr, "Error: file too large (%ld MB). "
+                        "Maximum supported: %d MB.\n",
+                        fsz / (1024L * 1024L),
+                        PIPELINE_ARENA_SIZE / (1024 * 1024));
+                nx_issue_list_free(&issues);
+                return 1;
+            }
+        }
+    }
+
     SHArena *arena = sh_arena_create(PIPELINE_ARENA_SIZE);
-    if (!arena) { fprintf(stderr, "Error: arena allocation failed\n"); nx_issue_list_free(&issues); return 1; }
+    if (!arena) {
+        fprintf(stderr, "Error: failed to allocate %d MB processing arena. "
+                "System may be low on memory.\n",
+                PIPELINE_ARENA_SIZE / (1024 * 1024));
+        nx_issue_list_free(&issues);
+        return 1;
+    }
 
     if (fmt == FMT_PDF) {
         /* PDF: extract text via sh_pdf2struc (pure C), then cluster */
@@ -526,7 +552,9 @@ static int process_file(const PipelineOpts *po)
             free(schema);
             free(raw_json);
             nx_issue_list_free(&issues);
-            fprintf(stderr, "  Error: arena allocation failed\n");
+            fprintf(stderr, "  Error: failed to allocate %d MB for Stage B. "
+                    "Document may have too many rows/columns.\n",
+                    PIPELINE_ARENA_SIZE / (1024 * 1024));
             return 1;
         }
 
@@ -664,16 +692,59 @@ static int process_file(const PipelineOpts *po)
         }
     }
 
+    /* ── Diff against baseline (if --baseline specified) ── */
+    char *diff_json = NULL;
+    size_t diff_len = 0;
+    if (po->baseline_path && canon_json) {
+        size_t baseline_file_len = 0;
+        char *baseline_data = read_file(po->baseline_path, &baseline_file_len);
+        if (baseline_data) {
+            fprintf(stderr, "  Diff: comparing against %s...\n", po->baseline_path);
+            SHArena *arena_d = sh_arena_create(PIPELINE_ARENA_SIZE);
+            if (arena_d) {
+                NxDiffStatus ds = nx_diff(baseline_data, baseline_file_len,
+                                          canon_json, canon_len,
+                                          arena_d, &diff_json, &diff_len);
+                sh_arena_free(arena_d);
+                if (ds == NX_DIFF_OK && diff_json) {
+                    /* Print diff summary to stderr */
+                    SHArena *pa = sh_arena_create(256 * 1024);
+                    if (pa) {
+                        ShJsonValue *dr = NULL;
+                        if (sh_json_parse(diff_json, diff_len, pa, &dr) == SH_JSON_OK) {
+                            ShJsonValue *summ = sh_json_get(dr, "summary");
+                            if (summ) {
+                                fprintf(stderr, "  Diff: %d added, %d removed, %d modified, %d unchanged\n",
+                                        sh_json_as_int(sh_json_get(summ, "added"), 0),
+                                        sh_json_as_int(sh_json_get(summ, "removed"), 0),
+                                        sh_json_as_int(sh_json_get(summ, "modified"), 0),
+                                        sh_json_as_int(sh_json_get(summ, "unchanged"), 0));
+                            }
+                        }
+                        sh_arena_free(pa);
+                    }
+                } else {
+                    fprintf(stderr, "  Warning: diff failed: %s\n",
+                            nx_diff_status_str(ds));
+                }
+            }
+            free(baseline_data);
+        }
+    }
+
     /* Print issue summary */
     if (issues.count > 0) {
         print_issue_summary(&issues);
     }
     fprintf(stderr, "  Pipeline complete.\n");
 
-    /* Output */
+    /* Output: diff JSON takes priority if baseline was provided */
     const char *output;
     size_t output_len;
-    if (po->output_raw || !canon_json) {
+    if (diff_json) {
+        output = diff_json;
+        output_len = diff_len;
+    } else if (po->output_raw || !canon_json) {
         output = raw_json;
         output_len = raw_len;
     } else {
@@ -691,6 +762,7 @@ static int process_file(const PipelineOpts *po)
 
     free(raw_json);
     free(canon_json);
+    free(diff_json);
     nx_issue_list_free(&issues);
     return 0;
 }
@@ -1017,6 +1089,7 @@ static void usage(const char *prog)
     fprintf(stderr, "  --no-header   CSV has no header row\n");
     fprintf(stderr, "  --config      Batch config JSON file\n");
     fprintf(stderr, "  --emit FMT    Emit format: geojson, csv (default: canonical JSON)\n");
+    fprintf(stderr, "  --baseline F  Compare against previous canonical JSON (outputs diff)\n");
     fprintf(stderr, "  --raw         Output raw JSON even when schema given\n");
     fprintf(stderr, "  -o FILE       Write output to file\n");
 }
@@ -1064,6 +1137,8 @@ int main(int argc, char **argv)
             po.csv_no_header = 1;
         } else if (strcmp(argv[i], "--emit") == 0 && i + 1 < argc) {
             po.emit_format = argv[++i];
+        } else if (strcmp(argv[i], "--baseline") == 0 && i + 1 < argc) {
+            po.baseline_path = argv[++i];
         } else if (strcmp(argv[i], "--raw") == 0) {
             po.output_raw = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
