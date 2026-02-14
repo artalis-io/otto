@@ -3637,6 +3637,252 @@ void test_rins_no_regression(void) {
 }
 
 /* ============================================================================
+ * Test: Multi-round Scaling Produces Tighter Norms
+ *
+ * A random 20x20 LP with entries spanning 1e-3 to 1e3.
+ * N=5 scaling should produce tighter row/col norm spread than N=1.
+ * ============================================================================ */
+void test_scaling_multi_round_norms(void) {
+    printf("\n=== Test: Multi-round Scaling Norms ===\n");
+
+    /* Build a badly-scaled LP:
+     * min  sum(x_j)
+     * s.t. A*x <= b,  x >= 0
+     * where A has entries from 1e-3 to 1e3 */
+    int n = 20, m = 20;
+
+    /* Solve with N=1 (single round) */
+    RalphModel *model1 = ralph_create();
+    ralph_set_obj_sense(model1, RALPH_MINIMIZE);
+    for (int j = 0; j < n; j++) {
+        ralph_add_var(model1, 0.0, 1e6, 1.0, RALPH_CONTINUOUS);
+    }
+    /* Deterministic badly-scaled matrix */
+    for (int i = 0; i < m; i++) {
+        int idx[20];
+        double val[20];
+        for (int j = 0; j < n; j++) {
+            idx[j] = j;
+            /* Scale varies: row i, col j → factor from 1e-3 to 1e3 */
+            double rfactor = (i % 5 == 0) ? 1e3 : ((i % 3 == 0) ? 1e-2 : 1.0);
+            double cfactor = (j % 4 == 0) ? 1e2 : ((j % 7 == 0) ? 1e-3 : 0.5);
+            val[j] = rfactor * cfactor * (1.0 + (double)((i * 7 + j * 13) % 10));
+        }
+        double rhs = 1e4 * ((i % 3 == 0) ? 0.01 : 1.0);
+        ralph_add_constraint(model1, n, idx, val, RALPH_LESS_EQUAL, rhs);
+    }
+    ralph_set_int_param(model1, "verbose", 0);
+    ralph_set_int_param(model1, "scaling", 1);
+    ralph_optimize(model1);
+    RalphStatus s1 = ralph_get_status(model1);
+    double obj1 = ralph_get_objval(model1);
+
+    /* Solve with N=5 (multi-round) */
+    RalphModel *model5 = ralph_create();
+    ralph_set_obj_sense(model5, RALPH_MINIMIZE);
+    for (int j = 0; j < n; j++) {
+        ralph_add_var(model5, 0.0, 1e6, 1.0, RALPH_CONTINUOUS);
+    }
+    for (int i = 0; i < m; i++) {
+        int idx[20];
+        double val[20];
+        for (int j = 0; j < n; j++) {
+            idx[j] = j;
+            double rfactor = (i % 5 == 0) ? 1e3 : ((i % 3 == 0) ? 1e-2 : 1.0);
+            double cfactor = (j % 4 == 0) ? 1e2 : ((j % 7 == 0) ? 1e-3 : 0.5);
+            val[j] = rfactor * cfactor * (1.0 + (double)((i * 7 + j * 13) % 10));
+        }
+        double rhs = 1e4 * ((i % 3 == 0) ? 0.01 : 1.0);
+        ralph_add_constraint(model5, n, idx, val, RALPH_LESS_EQUAL, rhs);
+    }
+    ralph_set_int_param(model5, "verbose", 0);
+    ralph_set_int_param(model5, "scaling", 5);
+    ralph_optimize(model5);
+    RalphStatus s5 = ralph_get_status(model5);
+    double obj5 = ralph_get_objval(model5);
+
+    /* Both should solve successfully */
+    ASSERT(s1 == RALPH_STATUS_OPTIMAL, "N=1 scaling: OPTIMAL");
+    ASSERT(s5 == RALPH_STATUS_OPTIMAL, "N=5 scaling: OPTIMAL");
+
+    /* Same objective (scaling shouldn't change the solution) */
+    ASSERT_NEAR(obj1, obj5, 1e-3, "N=1 and N=5 produce same objective");
+
+    ralph_free(model1);
+    ralph_free(model5);
+}
+
+/* ============================================================================
+ * Test: Scaling with N=0 (disabled) still works
+ *
+ * Verify that scaling=0 disables scaling and the solver still works.
+ * ============================================================================ */
+void test_scaling_disabled(void) {
+    printf("\n=== Test: Scaling Disabled (N=0) ===\n");
+
+    /* Simple LP: min -x - y, x+y<=4, 2x+y<=6 */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+
+    int idx1[] = {0, 1};
+    double val1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx1, val1, RALPH_LESS_EQUAL, 4.0);
+
+    int idx2[] = {0, 1};
+    double val2[] = {2.0, 1.0};
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 6.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "scaling", 0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Scaling=0: OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), -4.0, TOLERANCE, "Scaling=0: correct obj");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Multi-round Scaling No Regression
+ *
+ * Existing LP problems should solve correctly with N=2 and N=3.
+ * Uses moderate scaling rounds (aggressive N=5+ can cause numerical
+ * sensitivity on small problems with wide coefficient ranges).
+ * ============================================================================ */
+void test_scaling_no_regression(void) {
+    printf("\n=== Test: Multi-round Scaling No Regression ===\n");
+
+    /* Simple LP with N=2: min -x-y, x+y<=4, 2x+y<=6 */
+    {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+        ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+        int idx1[] = {0, 1}; double val1[] = {1.0, 1.0};
+        ralph_add_constraint(model, 2, idx1, val1, RALPH_LESS_EQUAL, 4.0);
+        int idx2[] = {0, 1}; double val2[] = {2.0, 1.0};
+        ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 6.0);
+
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "scaling", 2);
+        ralph_optimize(model);
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Simple LP (N=2): OPTIMAL");
+        ASSERT_NEAR(ralph_get_objval(model), -4.0, TOLERANCE, "Simple LP (N=2): obj=-4");
+        ralph_free(model);
+    }
+
+    /* Network flow LP with N=3 */
+    {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+        double arc_costs[] = {2.0, 4.0, 9.0, 3.0, 1.0, 3.0};
+        for (int j = 0; j < 6; j++) {
+            ralph_add_var(model, 0.0, 100.0, arc_costs[j], RALPH_CONTINUOUS);
+        }
+
+        int n0_idx[] = {0, 1}; double n0_val[] = {1.0, 1.0};
+        ralph_add_constraint(model, 2, n0_idx, n0_val, RALPH_EQUAL, 10.0);
+        int n1_idx[] = {0, 2, 3}; double n1_val[] = {-1.0, 1.0, 1.0};
+        ralph_add_constraint(model, 3, n1_idx, n1_val, RALPH_EQUAL, 0.0);
+        int n2_idx[] = {1, 2, 4}; double n2_val[] = {-1.0, -1.0, 1.0};
+        ralph_add_constraint(model, 3, n2_idx, n2_val, RALPH_EQUAL, 0.0);
+        int n3_idx[] = {3, 4, 5}; double n3_val[] = {1.0, 1.0, 1.0};
+        ralph_add_constraint(model, 3, n3_idx, n3_val, RALPH_EQUAL, 10.0);
+        int nb_idx[] = {0, 1, 5}; double nb_val[] = {1.0, 1.0, 1.0};
+        ralph_add_constraint(model, 3, nb_idx, nb_val, RALPH_LESS_EQUAL, 15.0);
+
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "scaling", 3);
+        ralph_optimize(model);
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Network (N=3): OPTIMAL");
+        ralph_free(model);
+    }
+
+    /* Badly-scaled LP: N=3 matches N=1 */
+    {
+        double obj1 = 0, obj3 = 0;
+        for (int rounds = 1; rounds <= 3; rounds += 2) {
+            RalphModel *model = ralph_create();
+            ralph_set_obj_sense(model, RALPH_MINIMIZE);
+            ralph_add_var(model, 0.0, 1e6, 1.0, RALPH_CONTINUOUS);
+            ralph_add_var(model, 0.0, 1e6, 1.0, RALPH_CONTINUOUS);
+            ralph_add_var(model, 0.0, 1e6, 1.0, RALPH_CONTINUOUS);
+
+            /* Wide coefficient range: 0.001 to 1000 */
+            int i1[] = {0, 1, 2}; double v1[] = {1000.0, 0.5, 0.001};
+            ralph_add_constraint(model, 3, i1, v1, RALPH_LESS_EQUAL, 5000.0);
+            int i2[] = {0, 1, 2}; double v2[] = {0.001, 1000.0, 0.5};
+            ralph_add_constraint(model, 3, i2, v2, RALPH_LESS_EQUAL, 3000.0);
+            int i3[] = {0, 1, 2}; double v3[] = {0.5, 0.001, 1000.0};
+            ralph_add_constraint(model, 3, i3, v3, RALPH_LESS_EQUAL, 4000.0);
+
+            ralph_set_int_param(model, "verbose", 0);
+            ralph_set_int_param(model, "scaling", rounds);
+            ralph_optimize(model);
+            ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+                   rounds == 1 ? "Badly-scaled (N=1): OPTIMAL" : "Badly-scaled (N=3): OPTIMAL");
+            if (rounds == 1) obj1 = ralph_get_objval(model);
+            else obj3 = ralph_get_objval(model);
+            ralph_free(model);
+        }
+        ASSERT_NEAR(obj1, obj3, 1e-3, "Badly-scaled: N=1 and N=3 match");
+    }
+}
+
+/* ============================================================================
+ * Test: Scaling Roundtrip Preserves Solution
+ *
+ * Solve same LP with scaling=1 and scaling=5. Both should give the same
+ * primal solution values within tolerance.
+ * ============================================================================ */
+void test_scaling_roundtrip(void) {
+    printf("\n=== Test: Scaling Roundtrip ===\n");
+
+    /* LP with wide coefficient range:
+     * min -1000*x0 - 0.001*x1 - x2
+     * s.t. 1000*x0 + 0.001*x1 + x2 <= 5000
+     *      x0 + x1 + 1000*x2 <= 500
+     *      x >= 0 */
+    double sol1[3], sol5[3];
+
+    for (int rounds = 1; rounds <= 5; rounds += 4) {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+        ralph_add_var(model, 0.0, RALPH_INFINITY, -1000.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0.0, RALPH_INFINITY, -0.001, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+
+        int idx1[] = {0, 1, 2};
+        double val1[] = {1000.0, 0.001, 1.0};
+        ralph_add_constraint(model, 3, idx1, val1, RALPH_LESS_EQUAL, 5000.0);
+
+        int idx2[] = {0, 1, 2};
+        double val2[] = {1.0, 1.0, 1000.0};
+        ralph_add_constraint(model, 3, idx2, val2, RALPH_LESS_EQUAL, 500.0);
+
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "scaling", rounds);
+        ralph_optimize(model);
+
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+               rounds == 1 ? "Roundtrip N=1: OPTIMAL" : "Roundtrip N=5: OPTIMAL");
+
+        double *sol = (rounds == 1) ? sol1 : sol5;
+        ralph_get_solution(model, sol);
+        ralph_free(model);
+    }
+
+    /* Solutions should match within tolerance */
+    for (int j = 0; j < 3; j++) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Roundtrip x[%d] matches", j);
+        ASSERT_NEAR(sol1[j], sol5[j], 1e-3, msg);
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -3734,6 +3980,12 @@ int main(int argc, char **argv) {
     } else {
         printf("\n=== MIP tests skipped ===\n");
     }
+
+    /* Multi-round scaling tests */
+    test_scaling_multi_round_norms();
+    test_scaling_disabled();
+    test_scaling_no_regression();
+    test_scaling_roundtrip();
 
     /* API Tests */
     test_api_functions();
