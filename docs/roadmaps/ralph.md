@@ -86,7 +86,7 @@ See **§1.12** for the full state-of-the-art gap analysis with prioritized imple
 | ✅ **Done** | Heap-based pricing (DynamicMaximum) | 2-5x pricing on large problems | T2.2 |
 | **Medium** | Post-solve verification | Correctness, catch silent failures | T2.3 |
 | **Medium** | Objective limits in simplex_solve | 30-50% fewer pruned-node iters | T3.1 |
-| **Long-term** | Dual simplex as default LP | ~2x initial solves (arch change) | T1.3 |
+| ✅ **Done** | Dual simplex as default LP | ~2x initial solves (arch change) | T1.3 |
 
 ### 1.4 Numerical Stability TODO
 
@@ -411,13 +411,11 @@ Comprehensive comparison of Ralph's LP solver against production solvers (GLOP, 
 See `docs/roadmaps/ralph_vs_glop.md` for the original GLOP comparison. This section extends
 it with a full codebase audit.
 
-**Current position (Feb 2026):** Ralph is ~85% of state-of-the-art. All Tier 1-3 gaps have been
-closed. NETLIB primal: 16/17 pass (blend LP reports unbounded — benchmark data issue with duplicate
-entry). NETLIB auto (dual+fallback): 16/17 pass (blend same issue — brandy FIXED). T1.4
-(symbolic/numeric LU separation with fingerprint caching) and T2.2 (heap-based pricing) are now
-implemented. Brandy's 0.18% dual objective error was fixed (perturbation backup corruption on
-re-perturbation). Remaining gaps: T2.1 supernodal LU (performance) and Phase D/E (dual-as-default,
-now unblocked).
+**Current position (Feb 2026):** Ralph is ~90% of state-of-the-art. All Tier 1-3 gaps closed plus
+Phase D (dual-as-default). NETLIB: 16/17 pass both primal and auto (blend reports unbounded —
+benchmark data issue with duplicate entry). Dual simplex is now the default method (method=2, auto
+with primal fallback). MIP forces method=0 for dual_reopt compatibility. T1.4, T2.2, T1.3 all done.
+Remaining gaps: T2.1 supernodal LU (performance) and Phase E (replace dual_reopt in B&B).
 
 #### What Ralph Does Well
 
@@ -634,11 +632,12 @@ Implemented at `simplex_solve:4470`. Method dispatch:
 
 The `method=2` auto mode catches dual failures via forced verification (line 4525).
 
-**Phase D: Make dual the default** — TODO (unblocked, brandy fixed)
+**Phase D: Make dual the default** — ✅ DONE (`dac309a`)
 
-Change default `method` from 0 to 2 (auto). Brandy's 0.18% obj error is now fixed
-(perturbation backup corruption). One-line change with full safety net of `method=0` revert.
-NETLIB: 16/17 pass with method=2 (same as primal).
+Changed default `method` from 0 to 2 (auto: dual first, primal fallback with Ax=b verification).
+MIP solver forces method=0 at all 5 `simplex_create()` sites in mip.c (dual_reopt depends on
+primal tableau format). All tests pass: 359 LP/MIP + 123 FuelWise + 358 LAP + 153 netflow.
+NETLIB: 16/17 pass (unchanged).
 
 **Phase E: Replace dual_reopt in B&B** — TODO (depends on Phase D)
 
@@ -711,11 +710,11 @@ What Phase E changes in mip.c `solve_node_lp()`:
 | 10 | T3.3 | Cost perturbation | Fewer degenerate pivots | ~80 LoC | None | `cost_perturb` |
 | 11 | T2.1 | Supernodal LU (§1.11) | 3-5x factorization | ~1500 LoC | #7 (T1.4) | `lu_supernode` |
 | 12 | T3.5 | Dual Phase 1 with auxiliary objective | Robust dual starts | ~200 LoC | None | `dual_phase1` |
-| 13 | T1.3 | Dual simplex as default | ~2x initial solves | ~400 LoC | #2 (T1.1), P5, P6 | `method` |
+| 13 | T1.3 | Dual simplex as default | ~2x initial solves | ~400 LoC | #2 (T1.1), P5, P6 | `method` | ✅ DONE |
 | 14 | T1.3e | Replace dual_reopt in B&B | Consistent node LP quality, simpler MIP solver | -200 LoC (net delete) | #13 (T1.3) | N/A (removes code) |
 
-Items 1-8 are complete (~85% of state-of-the-art). Items 9-11 push to ~90%.
-Items 13-14 (dual-as-default + replace dual_reopt) are the architectural endgame
+Items 1-8 and 13 are complete (~90% of state-of-the-art). Items 9-11 push to ~92%.
+Item 14 (replace dual_reopt) is the architectural endgame
 that gets to ~95% and simplifies the MIP solver.
 
 **Milestone targets:**
@@ -724,8 +723,8 @@ that gets to ~95% and simplifies the MIP solver.
 |-----------|-------------|-----------------|
 | **75% SotA** | T1.2, T1.1, T2.3, T3.1, T3.4, T3.6 | ✅ REACHED — blend NETLIB passes, 2-3x cold start improvement, numerical diagnostics |
 | **85% SotA** | + T1.4, T2.2, T3.2, T3.3 | ✅ REACHED — Competitive per-iteration speed on m < 2000, proper LU reuse, heap pricing |
-| **90% SotA** | + T2.1 (supernodal) | Competitive per-iteration speed on m < 5000 |
-| **95% SotA** | + T1.3 (dual-as-default) | Competitive with GLPK/CLP on most NETLIB/MIPLIB instances |
+| **90% SotA** | + T1.3 (dual-as-default) | ✅ REACHED — Dual simplex default, competitive with GLPK/CLP on NETLIB |
+| **95% SotA** | + T2.1 (supernodal) + T1.3e (replace dual_reopt) | Competitive per-iteration speed on m < 5000, clean MIP node solver |
 
 **Testing strategy:** Every item must pass this gate before changing defaults:
 1. `make clean && make test` in ralph/ — all 272+ tests pass
