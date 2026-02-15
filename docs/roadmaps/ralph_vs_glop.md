@@ -151,13 +151,16 @@ Phase 1 → Phase 2 (or Big-M), adding 30-50% overhead.
 
 ### 5. DynamicMaximum Pricing (Top-K Heap)
 
-GLOP maintains a top-32 heap of best pricing candidates. Serves 98% of queries from cache,
-reducing pricing overhead from ~60% to ~3% of total time.
+**Status: IMPLEMENTED** (`pricing=4` in `ralph/src/simplex.c`, Feb 2026, commit `b3594c6`)
 
-Ralph scans all non-basic variables every iteration (O(n)). Partial pricing helps but
-is less sophisticated (round-robin scan of 100 variables).
+Binary max-heap over non-basic variables keyed by improvement score. Heap maintained incrementally
+during `simplex_pivot()`. Critical bound-flip bug found and fixed (zombied heap entries from status
+changes in bound-flip early-return path). NETLIB: 14/17 with heap pricing (matches Dantzig).
 
-**Expected impact:** 2-5x on larger problems (100+ variables).
+**Limitation:** Heap accelerates Dantzig's O(n) scan to O(1) extraction. NOT composable with
+Devex or Steepest Edge — weighted scoring changes for ALL non-basic vars every pivot, making
+heap maintenance O(n log n) which is worse than O(n) scan. Devex remains the default pricing
+strategy. Heap pricing is available as `pricing=4` for Dantzig-style use cases.
 
 ### 6. Bound Flipping in Dual Ratio Test
 
@@ -229,7 +232,7 @@ tableau creation). Ralph's `simplex_solve()` creates a new tableau from scratch 
 | **P1** | Objective cutoff in `dual_reopt` | 30-50% fewer iters on pruned nodes | Low | P0 | **DONE** |
 | **P2** | Crash basis (triangular) | 2-5x cold starts | Medium | None | |
 | **P3** | LP Presolve | 2-3x avg (41x best) | High | None | **DONE** |
-| **P4** | DynamicMaximum pricing | 2-5x pricing | Low-Medium | None | |
+| **P4** | DynamicMaximum pricing | 2-5x pricing | Low-Medium | None | **DONE** |
 | **P5** | Bound flipping in dual | Fewer basis updates | Low | P0 | **DONE** |
 | **P6** | Dual steepest edge | 2-3x fewer pivots | Medium | P0 | **DONE** |
 | **P7** | Multi-pass scaling | Better numerics | Low | None | |
