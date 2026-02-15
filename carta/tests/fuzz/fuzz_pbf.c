@@ -58,15 +58,5 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     return 0;
 }
 
-/*
- * Optional: Custom mutator for PBF-aware fuzzing.
- * This helps the fuzzer generate more structurally valid PBF inputs.
- * Uncomment if you want to improve fuzzing efficiency.
- */
-#if 0
-size_t LLVMFuzzerCustomMutator(uint8_t *data, size_t size, size_t max_size,
-                                unsigned int seed) {
-    /* Default mutator - can be enhanced to understand PBF structure */
-    return LLVMFuzzerMutate(data, size, max_size);
-}
-#endif
+/* TODO: Add PBF-aware custom mutator (LLVMFuzzerCustomMutator) to improve
+ * fuzzing efficiency by generating structurally valid PBF inputs. */

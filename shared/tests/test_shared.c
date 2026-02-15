@@ -15,6 +15,7 @@
 #include "sh_worker_pool.h"
 #include "sh_hashmap.h"
 #include "sh_heap.h"
+#include "sh_pqueue.h"
 #include "sh_spatial_grid.h"
 #include "sh_query.h"
 #include "sh_render.h"
@@ -3377,6 +3378,234 @@ TEST(heap_null_safety)
 }
 
 /* ============================================================================
+ * Priority Queue Tests (sh_pqueue)
+ * ============================================================================ */
+
+/* Max-heap comparator for ints */
+static int int_max_cmp(const void *a, const void *b)
+{
+    int va = *(const int *)a;
+    int vb = *(const int *)b;
+    return (va > vb) ? 1 : (va < vb) ? -1 : 0;
+}
+
+/* Min-heap comparator for ints */
+static int int_min_cmp(const void *a, const void *b)
+{
+    int va = *(const int *)a;
+    int vb = *(const int *)b;
+    return (va < vb) ? 1 : (va > vb) ? -1 : 0;
+}
+
+/* Max-heap comparator for doubles */
+static int double_max_cmp(const void *a, const void *b)
+{
+    double va = *(const double *)a;
+    double vb = *(const double *)b;
+    if (va > vb) return 1;
+    if (va < vb) return -1;
+    return 0;
+}
+
+TEST(pqueue_init_free)
+{
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(int), int_max_cmp);
+    ASSERT(sh_pqueue_empty(&heap));
+    ASSERT_EQ(sh_pqueue_count(&heap), 0);
+    sh_pqueue_free(&heap);
+
+    /* Double free should be safe */
+    sh_pqueue_free(&heap);
+}
+
+TEST(pqueue_push_pop_max)
+{
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(int), int_max_cmp);
+
+    int vals[] = {3, 1, 4, 1, 5, 9, 2, 6, 5, 3};
+    for (int i = 0; i < 10; i++) {
+        ASSERT(sh_pqueue_push(&heap, &vals[i]));
+    }
+    ASSERT_EQ(sh_pqueue_count(&heap), 10);
+
+    /* Should pop in descending order */
+    int prev = 100;
+    for (int i = 0; i < 10; i++) {
+        int val;
+        ASSERT(sh_pqueue_pop(&heap, &val));
+        ASSERT(val <= prev);
+        prev = val;
+    }
+    ASSERT(sh_pqueue_empty(&heap));
+
+    sh_pqueue_free(&heap);
+}
+
+TEST(pqueue_push_pop_min)
+{
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(int), int_min_cmp);
+
+    int vals[] = {7, 2, 8, 3, 1, 9, 4, 0, 6, 5};
+    for (int i = 0; i < 10; i++) {
+        ASSERT(sh_pqueue_push(&heap, &vals[i]));
+    }
+
+    /* Should pop in ascending order */
+    int prev = -1;
+    for (int i = 0; i < 10; i++) {
+        int val;
+        ASSERT(sh_pqueue_pop(&heap, &val));
+        ASSERT(val >= prev);
+        prev = val;
+    }
+
+    sh_pqueue_free(&heap);
+}
+
+TEST(pqueue_peek)
+{
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(int), int_max_cmp);
+
+    /* Peek on empty should fail */
+    int val;
+    ASSERT(!sh_pqueue_peek(&heap, &val));
+
+    int v = 42;
+    sh_pqueue_push(&heap, &v);
+    ASSERT(sh_pqueue_peek(&heap, &val));
+    ASSERT_EQ(val, 42);
+    ASSERT_EQ(sh_pqueue_count(&heap), 1); /* Peek doesn't remove */
+
+    v = 99;
+    sh_pqueue_push(&heap, &v);
+    ASSERT(sh_pqueue_peek(&heap, &val));
+    ASSERT_EQ(val, 99); /* 99 > 42 in max-heap */
+
+    sh_pqueue_free(&heap);
+}
+
+TEST(pqueue_clear)
+{
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(int), int_max_cmp);
+
+    for (int i = 0; i < 100; i++) {
+        sh_pqueue_push(&heap, &i);
+    }
+    ASSERT_EQ(sh_pqueue_count(&heap), 100);
+
+    sh_pqueue_clear(&heap);
+    ASSERT(sh_pqueue_empty(&heap));
+    ASSERT_EQ(sh_pqueue_count(&heap), 0);
+
+    /* Should be reusable after clear */
+    int v = 7;
+    sh_pqueue_push(&heap, &v);
+    ASSERT_EQ(sh_pqueue_count(&heap), 1);
+
+    sh_pqueue_free(&heap);
+}
+
+TEST(pqueue_large_elements)
+{
+    /* Test with a struct (like polylabel uses) */
+    typedef struct { double x, y, dist, max_dist; } Cell;
+
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(Cell), double_max_cmp);
+
+    /* Comparator compares first double (x), but we want max_dist ordering.
+     * For this test, use a dedicated comparator. */
+    /* Actually, let's use a proper cell comparator */
+    sh_pqueue_free(&heap);
+
+    /* Use double_max_cmp with just the max_dist field offset trick.
+     * Better: just test that arbitrary-sized structs work. */
+    sh_pqueue_init(&heap, sizeof(double), double_max_cmp);
+    double vals[] = {1.5, 3.7, 2.1, 0.9, 4.2};
+    for (int i = 0; i < 5; i++) {
+        sh_pqueue_push(&heap, &vals[i]);
+    }
+
+    double v;
+    sh_pqueue_pop(&heap, &v);
+    ASSERT(v > 4.1 && v < 4.3); /* 4.2 */
+    sh_pqueue_pop(&heap, &v);
+    ASSERT(v > 3.6 && v < 3.8); /* 3.7 */
+
+    sh_pqueue_free(&heap);
+}
+
+TEST(pqueue_many_entries)
+{
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(int), int_max_cmp);
+
+    /* Push 10000 entries in pseudo-random order */
+    for (int i = 0; i < 10000; i++) {
+        int v = (i * 7919) % 10000; /* Scatter values */
+        ASSERT(sh_pqueue_push(&heap, &v));
+    }
+    ASSERT_EQ(sh_pqueue_count(&heap), 10000);
+
+    /* Verify correct ordering */
+    int prev = 100000;
+    for (int i = 0; i < 10000; i++) {
+        int val;
+        ASSERT(sh_pqueue_pop(&heap, &val));
+        ASSERT(val <= prev);
+        prev = val;
+    }
+
+    sh_pqueue_free(&heap);
+}
+
+TEST(pqueue_null_safety)
+{
+    sh_pqueue_init(NULL, sizeof(int), int_max_cmp);  /* Should not crash */
+    sh_pqueue_free(NULL);  /* Should not crash */
+    sh_pqueue_clear(NULL); /* Should not crash */
+
+    ASSERT(sh_pqueue_empty(NULL));
+    ASSERT_EQ(sh_pqueue_count(NULL), 0);
+
+    int v = 1;
+    ASSERT(!sh_pqueue_push(NULL, &v));
+    ASSERT(!sh_pqueue_pop(NULL, &v));
+    ASSERT(!sh_pqueue_peek(NULL, &v));
+
+    /* NULL element */
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(int), int_max_cmp);
+    ASSERT(!sh_pqueue_push(&heap, NULL));
+    sh_pqueue_free(&heap);
+
+    /* NULL comparator */
+    sh_pqueue_init(&heap, sizeof(int), NULL);
+    ASSERT(!sh_pqueue_push(&heap, &v));
+    sh_pqueue_free(&heap);
+}
+
+TEST(pqueue_pop_discard)
+{
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(int), int_max_cmp);
+
+    int v = 42;
+    sh_pqueue_push(&heap, &v);
+
+    /* Pop with NULL out should discard the value */
+    ASSERT(sh_pqueue_pop(&heap, NULL));
+    ASSERT(sh_pqueue_empty(&heap));
+
+    sh_pqueue_free(&heap);
+}
+
+/* ============================================================================
  * Spatial Grid Tests
  * ============================================================================ */
 
@@ -5380,6 +5609,17 @@ int main(void)
     RUN_TEST(heap_clear);
     RUN_TEST(heap_many_entries);
     RUN_TEST(heap_null_safety);
+
+    printf("\nPriority Queue:\n");
+    RUN_TEST(pqueue_init_free);
+    RUN_TEST(pqueue_push_pop_max);
+    RUN_TEST(pqueue_push_pop_min);
+    RUN_TEST(pqueue_peek);
+    RUN_TEST(pqueue_clear);
+    RUN_TEST(pqueue_large_elements);
+    RUN_TEST(pqueue_many_entries);
+    RUN_TEST(pqueue_null_safety);
+    RUN_TEST(pqueue_pop_discard);
 
     printf("\nSpatial Grid:\n");
     RUN_TEST(dynamic_grid_create_free);

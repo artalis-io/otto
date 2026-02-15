@@ -52,6 +52,7 @@ SRCS = src/sh_geo.c \
        src/sh_metrics.c \
        src/sh_hashmap.c \
        src/sh_heap.c \
+       src/sh_pqueue.c \
        src/sh_spatial_grid.c \
        src/sh_query.c \
        src/sh_render.c \
@@ -254,6 +255,7 @@ src/sh_trace.o: include/sh_trace.h include/sh_log.h
 src/sh_metrics.o: include/sh_metrics.h
 src/sh_hashmap.o: include/sh_hashmap.h
 src/sh_heap.o: include/sh_heap.h
+src/sh_pqueue.o: include/sh_pqueue.h
 src/sh_spatial_grid.o: include/sh_spatial_grid.h include/sh_geo.h
 src/sh_render.o: include/sh_render.h
 src/sh_units.o: include/sh_units.h
