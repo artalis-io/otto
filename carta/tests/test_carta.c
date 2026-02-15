@@ -2924,6 +2924,198 @@ TEST(area_label_null_safety)
 }
 
 /* ============================================================================
+ * Metatile Coordinate Tests
+ * ============================================================================ */
+
+TEST(metatile_from_tile_alignment)
+{
+    /* Tiles 0,0 and 1,1 at z=2 should both map to metatile origin 0,0 */
+    CTTileCoord t00 = {2, 0, 0};
+    CTMetatileCoord mt00 = ct_metatile_from_tile(t00);
+    ASSERT_EQ(mt00.z, 2);
+    ASSERT_EQ(mt00.mx, 0);
+    ASSERT_EQ(mt00.my, 0);
+    ASSERT_EQ(mt00.size, CT_METATILE_SIZE);
+
+    CTTileCoord t11 = {2, 1, 1};
+    CTMetatileCoord mt11 = ct_metatile_from_tile(t11);
+    ASSERT_EQ(mt11.mx, 0);
+    ASSERT_EQ(mt11.my, 0);
+
+    /* Tiles 2,2 and 3,3 should map to metatile origin 2,2 */
+    CTTileCoord t22 = {2, 2, 2};
+    CTMetatileCoord mt22 = ct_metatile_from_tile(t22);
+    ASSERT_EQ(mt22.mx, 2);
+    ASSERT_EQ(mt22.my, 2);
+
+    CTTileCoord t33 = {2, 3, 3};
+    CTMetatileCoord mt33 = ct_metatile_from_tile(t33);
+    ASSERT_EQ(mt33.mx, 2);
+    ASSERT_EQ(mt33.my, 2);
+
+    return 1;
+}
+
+TEST(metatile_from_tile_z0)
+{
+    /* z=0 has only 1 tile, metatile should clamp */
+    CTTileCoord t = {0, 0, 0};
+    CTMetatileCoord mt = ct_metatile_from_tile(t);
+    ASSERT_EQ(mt.z, 0);
+    ASSERT_EQ(mt.mx, 0);
+    ASSERT_EQ(mt.my, 0);
+    return 1;
+}
+
+TEST(metatile_from_tile_z1)
+{
+    /* z=1 has 2x2 tiles, all should map to origin 0,0 */
+    CTTileCoord t = {1, 1, 1};
+    CTMetatileCoord mt = ct_metatile_from_tile(t);
+    ASSERT_EQ(mt.z, 1);
+    ASSERT_EQ(mt.mx, 0);
+    ASSERT_EQ(mt.my, 0);
+    return 1;
+}
+
+TEST(metatile_from_tile_edge_clamp)
+{
+    /* At z=3, max tile is 7. Tile (7,7) should map to metatile (6,6) */
+    CTTileCoord t = {3, 7, 7};
+    CTMetatileCoord mt = ct_metatile_from_tile(t);
+    ASSERT_EQ(mt.mx, 6);
+    ASSERT_EQ(mt.my, 6);
+
+    /* Verify sub-tile indices are valid (0 or 1) */
+    int sub_i = t.x - mt.mx;
+    int sub_j = t.y - mt.my;
+    ASSERT(sub_i >= 0 && sub_i < CT_METATILE_SIZE);
+    ASSERT(sub_j >= 0 && sub_j < CT_METATILE_SIZE);
+
+    return 1;
+}
+
+TEST(metatile_geo_to_pixel_corners)
+{
+    /* Use z=1, tile (0,0) as metatile origin - covers top-left quadrant of world */
+    CTMetatileCoord mt = {1, 0, 0, CT_METATILE_SIZE};
+    int tile_size = 256;
+    int padding = CT_METATILE_PAD;
+    int px, py;
+
+    /* Top-left corner of the metatile bbox should map to (padding, padding) */
+    CTBBox tl_bbox = ct_tile_bounds((CTTileCoord){1, 0, 0});
+    ct_metatile_geo_to_pixel(mt, tl_bbox.max_lat, tl_bbox.min_lon,
+                              tile_size, padding, &px, &py);
+    ASSERT(abs(px - padding) <= 2);
+    ASSERT(abs(py - padding) <= 2);
+
+    /* Bottom-right of metatile bbox should map near (2*tile_size + padding) */
+    CTBBox br_bbox = ct_tile_bounds((CTTileCoord){1, 1, 1});
+    ct_metatile_geo_to_pixel(mt, br_bbox.min_lat, br_bbox.max_lon,
+                              tile_size, padding, &px, &py);
+    int expected = CT_METATILE_SIZE * tile_size + padding;
+    ASSERT(abs(px - expected) <= 2);
+    ASSERT(abs(py - expected) <= 2);
+
+    return 1;
+}
+
+TEST(metatile_sub_tile_indices)
+{
+    /* Verify sub_i/sub_j computation for all tiles in a metatile at z=4 */
+    CTTileCoord tiles[] = {
+        {4, 8, 6}, {4, 9, 6},
+        {4, 8, 7}, {4, 9, 7}
+    };
+
+    CTMetatileCoord mt = ct_metatile_from_tile(tiles[0]);
+    ASSERT_EQ(mt.mx, 8);
+    ASSERT_EQ(mt.my, 6);
+
+    /* Expected sub_i, sub_j */
+    int expected_i[] = {0, 1, 0, 1};
+    int expected_j[] = {0, 0, 1, 1};
+
+    for (int k = 0; k < 4; k++) {
+        int si = tiles[k].x - mt.mx;
+        int sj = tiles[k].y - mt.my;
+        ASSERT_EQ(si, expected_i[k]);
+        ASSERT_EQ(sj, expected_j[k]);
+    }
+
+    return 1;
+}
+
+TEST(metatile_placements_free_null)
+{
+    /* Should not crash on NULL */
+    ct_metatile_placements_free(NULL);
+    return 1;
+}
+
+TEST(metatile_render_labels_null_safety)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+
+    /* NULL mtp */
+    int result = ct_render_labels_metatile(ctx, NULL, 0, 0, NULL,
+                                            CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+    ASSERT_EQ(result, 0);
+
+    /* NULL ctx */
+    result = ct_render_labels_metatile(NULL, NULL, 0, 0, NULL,
+                                        CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+    ASSERT_EQ(result, 0);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(metatile_render_road_labels_null_safety)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+
+    /* NULL mtp */
+    int result = ct_render_road_labels_metatile(ctx, NULL, 0, 0, NULL,
+                                                 CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+    ASSERT_EQ(result, 0);
+
+    /* NULL ctx */
+    result = ct_render_road_labels_metatile(NULL, NULL, 0, 0, NULL,
+                                             CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+    ASSERT_EQ(result, 0);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(metatile_placement_name_field)
+{
+    /* Verify the name field is set correctly in placements */
+    const SHFont *font = sh_font_get_default();
+    if (!font) return 1;
+
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+    ASSERT(placer != NULL);
+
+    CTLabeledPoint point = {
+        .id = 1, .coord = {47.5, 19.0}, .type = CT_PLACE_CITY,
+        .name = "TestCity", .population = 100000, .min_zoom = 6, .priority = 90
+    };
+
+    int result = ct_label_place_single(placer, &point, 128, 128, font, 12.0f);
+    if (result) {
+        /* Verify name field was set */
+        ASSERT(placer->placements[0].name != NULL);
+        ASSERT(strcmp(placer->placements[0].name, "TestCity") == 0);
+    }
+
+    ct_label_placer_free(placer);
+    return 1;
+}
+
+/* ============================================================================
  * Text Along Path Rendering (Phase 4)
  * ============================================================================ */
 
@@ -3202,6 +3394,18 @@ int main(void)
     run_test_road_label_placement_null_safety();
     run_test_road_label_placements_free_null();
     run_test_area_label_null_safety();
+
+    printf("\nMetatile Labels:\n");
+    run_test_metatile_from_tile_alignment();
+    run_test_metatile_from_tile_z0();
+    run_test_metatile_from_tile_z1();
+    run_test_metatile_from_tile_edge_clamp();
+    run_test_metatile_geo_to_pixel_corners();
+    run_test_metatile_sub_tile_indices();
+    run_test_metatile_placements_free_null();
+    run_test_metatile_render_labels_null_safety();
+    run_test_metatile_render_road_labels_null_safety();
+    run_test_metatile_placement_name_field();
 
     printf("\nPath Text Rendering:\n");
     run_test_render_text_path_null_safety();
