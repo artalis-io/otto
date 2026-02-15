@@ -4420,6 +4420,144 @@ void test_phase1_pricing_disabled(void) {
 }
 
 /* ============================================================================
+ * Tests: Heap Pricing (T2.2)
+ * ============================================================================ */
+
+/* Solve 5 diverse LP problems with heap pricing (4) and Dantzig (0).
+ * Both must reach OPTIMAL with matching objectives. */
+void test_pricing_heap(void) {
+    printf("\n=== Test: Heap Pricing (T2.2) ===\n");
+
+    /* Problem 1: Diet (>= constraints) — min 2x+3y+5z s.t. x+2y+z>=10, 2x+y+3z>=15 */
+    /* Problem 2: Transport (= constraints) — min 4x+5y s.t. x+y=10, 2x+3y=25 */
+    /* Problem 3: Bounded vars — min x+y s.t. x+y<=10, x<=6, y<=7 */
+    /* Problem 4: Free vars — min x+y s.t. x+y>=5, -inf<=x<=inf */
+    /* Problem 5: Mixed — min 3x+2y+z s.t. x+y<=10, y+z>=4, x+z=6, 0<=x<=8 */
+
+    for (int prob = 0; prob < 5; prob++) {
+        double objs[2];
+        for (int run = 0; run < 2; run++) {
+            RalphModel *model = ralph_create();
+            ralph_set_obj_sense(model, RALPH_MINIMIZE);
+            ralph_set_int_param(model, "verbose", 0);
+            ralph_set_int_param(model, "pricing", run == 0 ? 0 : 4);
+
+            int idx2[] = {0, 1};
+            int idx3[] = {0, 1, 2};
+
+            if (prob == 0) {
+                /* Diet */
+                ralph_add_var(model, 0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+                ralph_add_var(model, 0, RALPH_INFINITY, 3.0, RALPH_CONTINUOUS);
+                ralph_add_var(model, 0, RALPH_INFINITY, 5.0, RALPH_CONTINUOUS);
+                double v1[] = {1.0, 2.0, 1.0};
+                ralph_add_constraint(model, 3, idx3, v1, RALPH_GREATER_EQUAL, 10.0);
+                double v2[] = {2.0, 1.0, 3.0};
+                ralph_add_constraint(model, 3, idx3, v2, RALPH_GREATER_EQUAL, 15.0);
+            } else if (prob == 1) {
+                /* Transport (equalities) */
+                ralph_add_var(model, 0, RALPH_INFINITY, 4.0, RALPH_CONTINUOUS);
+                ralph_add_var(model, 0, RALPH_INFINITY, 5.0, RALPH_CONTINUOUS);
+                double v1[] = {1.0, 1.0};
+                ralph_add_constraint(model, 2, idx2, v1, RALPH_EQUAL, 10.0);
+                double v2[] = {2.0, 3.0};
+                ralph_add_constraint(model, 2, idx2, v2, RALPH_EQUAL, 25.0);
+            } else if (prob == 2) {
+                /* Bounded vars */
+                ralph_add_var(model, 0, 6.0, 1.0, RALPH_CONTINUOUS);
+                ralph_add_var(model, 0, 7.0, 1.0, RALPH_CONTINUOUS);
+                double v1[] = {1.0, 1.0};
+                ralph_add_constraint(model, 2, idx2, v1, RALPH_LESS_EQUAL, 10.0);
+            } else if (prob == 3) {
+                /* Maximize — max 3x+5y s.t. x<=4, 2y<=12, 3x+5y<=25 */
+                ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+                ralph_add_var(model, 0, RALPH_INFINITY, 3.0, RALPH_CONTINUOUS);
+                ralph_add_var(model, 0, RALPH_INFINITY, 5.0, RALPH_CONTINUOUS);
+                int ix[] = {0};
+                double vx[] = {1.0};
+                ralph_add_constraint(model, 1, ix, vx, RALPH_LESS_EQUAL, 4.0);
+                int iy[] = {1};
+                double vy[] = {2.0};
+                ralph_add_constraint(model, 1, iy, vy, RALPH_LESS_EQUAL, 12.0);
+                double v3[] = {3.0, 5.0};
+                ralph_add_constraint(model, 2, idx2, v3, RALPH_LESS_EQUAL, 25.0);
+            } else {
+                /* Mixed */
+                ralph_add_var(model, 0, 8.0, 3.0, RALPH_CONTINUOUS);
+                ralph_add_var(model, 0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+                ralph_add_var(model, 0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+                double v1[] = {1.0, 1.0, 0.0};
+                ralph_add_constraint(model, 2, idx2, v1, RALPH_LESS_EQUAL, 10.0);
+                int idx_yz[] = {1, 2};
+                double v2[] = {1.0, 1.0};
+                ralph_add_constraint(model, 2, idx_yz, v2, RALPH_GREATER_EQUAL, 4.0);
+                int idx_xz[] = {0, 2};
+                double v3[] = {1.0, 1.0};
+                ralph_add_constraint(model, 2, idx_xz, v3, RALPH_EQUAL, 6.0);
+            }
+
+            ralph_optimize(model);
+            objs[run] = ralph_get_objval(model);
+
+            char msg[80];
+            snprintf(msg, sizeof(msg), "Problem %d, pricing=%d: OPTIMAL", prob + 1, run == 0 ? 0 : 4);
+            ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, msg);
+
+            ralph_free(model);
+        }
+
+        char msg[80];
+        snprintf(msg, sizeof(msg), "Problem %d: Heap obj matches Dantzig (%.6f vs %.6f)", prob + 1, objs[1], objs[0]);
+        ASSERT(fabs(objs[0] - objs[1]) < 1e-6, msg);
+    }
+}
+
+/* Solve one problem with all 5 pricing strategies (0-4).
+ * All must reach OPTIMAL with consistent objectives. */
+void test_pricing_all_strategies(void) {
+    printf("\n=== Test: All Pricing Strategies (T2.2) ===\n");
+
+    double objs[5];
+    for (int strat = 0; strat < 5; strat++) {
+        RalphModel *model = ralph_create();
+        ralph_set_obj_sense(model, RALPH_MINIMIZE);
+        ralph_set_int_param(model, "verbose", 0);
+        ralph_set_int_param(model, "pricing", strat);
+
+        /* 3-var LP: min 2x+3y+z s.t. x+y+z>=10, 2x+y>=8, y+2z>=6, x,y,z>=0 */
+        ralph_add_var(model, 0, RALPH_INFINITY, 2.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0, RALPH_INFINITY, 3.0, RALPH_CONTINUOUS);
+        ralph_add_var(model, 0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+
+        int idx3[] = {0, 1, 2};
+        double v1[] = {1.0, 1.0, 1.0};
+        ralph_add_constraint(model, 3, idx3, v1, RALPH_GREATER_EQUAL, 10.0);
+        int idx2a[] = {0, 1};
+        double v2[] = {2.0, 1.0};
+        ralph_add_constraint(model, 2, idx2a, v2, RALPH_GREATER_EQUAL, 8.0);
+        int idx2b[] = {1, 2};
+        double v3[] = {1.0, 2.0};
+        ralph_add_constraint(model, 2, idx2b, v3, RALPH_GREATER_EQUAL, 6.0);
+
+        ralph_optimize(model);
+        objs[strat] = ralph_get_objval(model);
+
+        char msg[80];
+        snprintf(msg, sizeof(msg), "Pricing strategy %d: OPTIMAL", strat);
+        ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, msg);
+
+        ralph_free(model);
+    }
+
+    /* All strategies should produce same objective */
+    for (int strat = 1; strat < 5; strat++) {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "Strategy %d matches strategy 0 (%.6f vs %.6f)", strat, objs[strat], objs[0]);
+        ASSERT(fabs(objs[strat] - objs[0]) < 1e-6, msg);
+    }
+}
+
+/* ============================================================================
  * Tests: Dual Simplex Method Dispatch (T1.3)
  * ============================================================================ */
 
@@ -4797,6 +4935,10 @@ int main(int argc, char **argv) {
     /* Per-phase pricing tests (T3.4) */
     test_phase1_pricing_dantzig();
     test_phase1_pricing_disabled();
+
+    /* Heap pricing tests (T2.2) */
+    test_pricing_heap();
+    test_pricing_all_strategies();
 
     /* Dual simplex method dispatch tests (T1.3) */
     test_dual_method_small_lp();

@@ -102,6 +102,7 @@ typedef struct {
 
     /* Solver method */
     int method;  /* 0=primal, 1=dual, 2=auto */
+    int pricing; /* -1=default, 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap */
 
     /* Output */
     char output_dir[MAX_PATH];
@@ -301,7 +302,7 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
  * ============================================================================ */
 
 static SolveResult solve_with_ralph(const char *problem_path, double time_limit_sec,
-                                     int method,
+                                     int method, int pricing,
                                      int *out_num_vars, int *out_num_cons, int *out_nnz,
                                      int *out_is_mip) {
     SolveResult result = {0};
@@ -342,6 +343,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     ralph_set_int_param(model, "presolve", 1);
     ralph_set_int_param(model, "verify", 1);
     ralph_set_int_param(model, "method", method);
+    if (pricing >= 0) {
+        ralph_set_int_param(model, "pricing", pricing);
+    }
 
     /* Solve */
     double start_time = get_time_ms();
@@ -736,7 +740,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
     /* Solve with Ralph */
     int num_vars = 0, num_cons = 0, nnz = 0, is_mip = 0;
     SolveResult ralph = solve_with_ralph(problem_path, ralph_time_limit,
-                                          opts->method,
+                                          opts->method, opts->pricing,
                                           &num_vars, &num_cons, &nnz, &is_mip);
 
     /* Validate if both solved optimally */
@@ -882,6 +886,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->obj_abs_tol = DEFAULT_OBJ_ABS_TOL;
     opts->feas_tol = DEFAULT_FEAS_TOL;
     opts->lp_only = 1;  /* Default: LP only */
+    opts->pricing = -1;  /* Default: solver default */
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -921,6 +926,8 @@ static int parse_args(int argc, char **argv, Options *opts) {
             opts->feas_tol = atof(argv[++i]);
         } else if (strcmp(arg, "--method") == 0 && i + 1 < argc) {
             opts->method = atoi(argv[++i]);
+        } else if (strcmp(arg, "--pricing") == 0 && i + 1 < argc) {
+            opts->pricing = atoi(argv[++i]);
         } else if (strcmp(arg, "-o") == 0 && i + 1 < argc) {
             strncpy(opts->output_dir, argv[++i], sizeof(opts->output_dir) - 1);
         } else if (arg[0] != '-') {
