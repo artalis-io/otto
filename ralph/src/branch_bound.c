@@ -593,11 +593,8 @@ static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
     return best_var;
 }
 
-/* Strong branching - solve LP relaxations to evaluate branching choices
- *
- * IMPORTANT: dual_simplex_solve can fall back to simplex_solve, which may
- * free and recreate the tableau. We track if the tableau pointer changes
- * and abort restoration if it does (saved basis is incompatible).
+/* Strong branching - solve LP relaxations to evaluate branching choices.
+ * Uses dual_simplex_solve_v2 which never replaces the tableau.
  */
 int strong_branch(MIPSolver *solver, int var, double val,
                   double *down_obj, double *up_obj, int max_iter) {
@@ -608,7 +605,6 @@ int strong_branch(MIPSolver *solver, int var, double val,
         return -1;
     }
     SimplexTableau *tab = lp->tableau;
-    SimplexTableau *original_tab = tab;  /* Track if tableau gets replaced */
 
     if (!tab->lb_ext || !tab->ub_ext || !tab->basis || !tab->var_status || !tab->basis_pos) {
         *down_obj = RALPH_INFINITY;
@@ -639,19 +635,11 @@ int strong_branch(MIPSolver *solver, int var, double val,
 
     /* Try branching down */
     tab->ub_ext[var] = floor(val);
+    dual_v2_clear_perturbation(tab);
     tableau_compute_solution(tab);
-    dual_simplex_solve(lp);
+    tableau_compute_reduced_costs(tab);
+    dual_simplex_solve_v2(lp);
     *down_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
-
-    /* Check if tableau was replaced by dual_simplex falling back to primal */
-    if (lp->tableau != original_tab) {
-        /* Tableau was replaced - saved basis is incompatible, must abort */
-        free(save_basis);
-        free(save_var_status);
-        lp->max_iterations = save_max_iter;
-        *up_obj = RALPH_INFINITY;
-        return -1;
-    }
 
     /* Restore basis before trying up branch */
     memcpy(tab->basis, save_basis, m * sizeof(int));
@@ -668,18 +656,11 @@ int strong_branch(MIPSolver *solver, int var, double val,
     /* Try branching up */
     tab->ub_ext[var] = orig_ub;
     tab->lb_ext[var] = ceil(val);
+    dual_v2_clear_perturbation(tab);
     tableau_compute_solution(tab);
-    dual_simplex_solve(lp);
+    tableau_compute_reduced_costs(tab);
+    dual_simplex_solve_v2(lp);
     *up_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
-
-    /* Check if tableau was replaced again */
-    if (lp->tableau != original_tab) {
-        /* Tableau was replaced - can't restore original state */
-        free(save_basis);
-        free(save_var_status);
-        lp->max_iterations = save_max_iter;
-        return -1;
-    }
 
     /* Restore original bounds and basis */
     tab->lb_ext[var] = orig_lb;

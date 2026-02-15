@@ -277,9 +277,8 @@ static int diving_heuristic(MIPSolver *solver) {
     SimplexSolver *lp = solver->lp_solver;
     int num_vars = model->num_vars;
 
-    /* Disable P5/P6 during diving — repeated dual_simplex_solve() calls
-     * accumulate DSE weight errors and LU drift that corrupt the tableau.
-     * The restoration solve inherits this corruption. */
+    /* Disable P5/P6 during diving — v2 reinitializes DSE per call, but
+     * disabling prevents any interaction with the outer solve state. */
     int saved_bflip = lp->use_dual_bound_flip;
     int saved_dse = lp->use_dual_steepest_edge;
     lp->use_dual_bound_flip = 0;
@@ -414,11 +413,11 @@ static int diving_heuristic(MIPSolver *solver) {
                 tab->x[best_var] = rounded;
             }
 
-            /* Recompute basic variable values */
+            /* Recompute and use v2 dual simplex to restore feasibility */
+            dual_v2_clear_perturbation(tab);
             tableau_compute_solution(tab);
-
-            /* Use dual simplex to restore feasibility */
-            dual_simplex_solve(lp);
+            tableau_compute_reduced_costs(tab);
+            dual_simplex_solve_v2(lp);
 
             if (lp->status == RALPH_STATUS_OPTIMAL) {
                 memcpy(sol, lp->solution, num_vars * sizeof(double));
@@ -443,9 +442,7 @@ static int diving_heuristic(MIPSolver *solver) {
     memcpy(model->lb, orig_lb, num_vars * sizeof(double));
     memcpy(model->ub, orig_ub, num_vars * sizeof(double));
 
-    /* Restore tableau bounds and re-solve to get back to original state.
-     * Note: dual_simplex_solve may have freed and NULLed lp->tableau,
-     * so we must refresh tab from the current lp->tableau pointer. */
+    /* Restore tableau bounds and re-solve to get back to original state */
     tab = lp->tableau;
     if (tab && orig_tab_lb && orig_tab_ub) {
         memcpy(tab->lb_ext, orig_tab_lb, tab->n * sizeof(double));
@@ -460,9 +457,11 @@ static int diving_heuristic(MIPSolver *solver) {
             }
         }
 
-        /* Recompute and re-optimize */
+        /* Recompute and re-optimize with clean dual */
+        dual_v2_clear_perturbation(tab);
         tableau_compute_solution(tab);
-        dual_simplex_solve(lp);
+        tableau_compute_reduced_costs(tab);
+        dual_simplex_solve_v2(lp);
     } else if (lp->tableau) {
         /* Fallback: cold start */
         tableau_free(lp->tableau);
@@ -474,14 +473,12 @@ static int diving_heuristic(MIPSolver *solver) {
     lp->use_dual_bound_flip = saved_bflip;
     lp->use_dual_steepest_edge = saved_dse;
 
-    /* Force refactorization to clear any numerical drift from diving.
-     * This ensures the next solve_node_lp() starts with clean LU. */
+    /* Force refactorization to clear any numerical drift from diving */
     tab = lp->tableau;
     if (tab) {
         tableau_refactorize(tab);
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
-        tab->dse_initialized = 0;  /* Force DSE reinit on next dual_reopt */
     }
 
     free(orig_lb);
@@ -665,8 +662,10 @@ static int rins_heuristic(MIPSolver *solver) {
     int orig_max_iter = lp->max_iterations;
     lp->max_iterations = MIP_RINS_LP_ITER_LIMIT;
 
+    dual_v2_clear_perturbation(tab);
     tableau_compute_solution(tab);
-    dual_simplex_solve(lp);
+    tableau_compute_reduced_costs(tab);
+    dual_simplex_solve_v2(lp);
 
     int found_incumbent = 0;
     double *sol = (double*)calloc(num_vars, sizeof(double));
@@ -749,8 +748,10 @@ static int rins_heuristic(MIPSolver *solver) {
             tab->x[best_var] = rounded;
         }
 
+        dual_v2_clear_perturbation(tab);
         tableau_compute_solution(tab);
-        dual_simplex_solve(lp);
+        tableau_compute_reduced_costs(tab);
+        dual_simplex_solve_v2(lp);
 
         if (lp->status != RALPH_STATUS_OPTIMAL) break;
         memcpy(sol, lp->solution, num_vars * sizeof(double));
@@ -778,8 +779,10 @@ rins_cleanup:
             }
         }
 
+        dual_v2_clear_perturbation(tab);
         tableau_compute_solution(tab);
-        dual_simplex_solve(lp);
+        tableau_compute_reduced_costs(tab);
+        dual_simplex_solve_v2(lp);
     } else if (lp->tableau) {
         tableau_free(lp->tableau);
         lp->tableau = NULL;
@@ -796,7 +799,6 @@ rins_cleanup:
         tableau_refactorize(tab);
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
-        tab->dse_initialized = 0;
     }
 
     free(orig_lb);
@@ -838,39 +840,6 @@ static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars) {
     }
 }
 
-/* Restore basis from node to tableau */
-static int restore_basis_from_node(SimplexSolver *lp, BBNode *node) {
-    if (!lp || !lp->tableau || !node || !node->basis || !node->var_status) {
-        return -1;  /* No basis to restore */
-    }
-
-    SimplexTableau *tab = lp->tableau;
-    int m = tab->m;
-    int n = tab->n;
-
-    /* Restore basis indices and variable status */
-    memcpy(tab->basis, node->basis, m * sizeof(int));
-    memcpy(tab->var_status, node->var_status, n * sizeof(VarStatus));
-
-    /* Update basis_pos from basis array */
-    for (int j = 0; j < n; j++) {
-        tab->basis_pos[j] = -1;
-    }
-    for (int k = 0; k < m; k++) {
-        int j = tab->basis[k];
-        if (j >= 0 && j < n) {
-            tab->basis_pos[j] = k;
-        }
-    }
-
-    /* Refactorize to ensure LU is consistent with restored basis */
-    if (tableau_refactorize(tab) != 0) {
-        return -1;
-    }
-
-    return 0;
-}
-
 /* ============================================================================
  * Solve LP Relaxation at a Node
  * ============================================================================ */
@@ -898,7 +867,7 @@ static int solve_node_lp_as_lap(MIPSolver *solver, BBNode *node) {
     if (!solver->lp_solver) {
         solver->lp_solver = simplex_create(solver->working_model);
         if (!solver->lp_solver) return -1;
-        solver->lp_solver->method = 0;  /* MIP requires primal tableau for dual_reopt */
+        solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
         solver->lp_solver->scaling = 0;
         mip_apply_dual_flags(solver);
     }
@@ -934,7 +903,6 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     if (solver->use_lap_solver) {
         int lap_result = solve_node_lp_as_lap(solver, node);
         if (lap_result == 0) {
-            solver->last_solved_node_id = node->id;
             return 0;  /* Successfully solved with LAP */
         }
         /* LAP failed (infeasible) - this is a valid result for pruning */
@@ -946,15 +914,16 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     LPModel *model = solver->working_model;
 
-    /* Create or reuse LP solver */
+    /* Create LP solver if needed — method=2 (auto: dual first, primal fallback) */
     if (!solver->lp_solver) {
         solver->lp_solver = simplex_create(model);
         if (!solver->lp_solver) return -1;
-        solver->lp_solver->method = 0;  /* MIP requires primal tableau for dual_reopt */
+        solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
         solver->lp_solver->scaling = 0;
     }
 
     SimplexSolver *lp = solver->lp_solver;
+    SimplexTableau *tab = lp->tableau;
 
     /* Update model bounds from node */
     for (int j = 0; j < model->num_vars; j++) {
@@ -963,38 +932,24 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     }
 
     solver->simplex_nodes_solved++;
-    int warm_start_success = 0;
-    int attempted_warm_start = 0;
 
-    /* Set objective cutoff for early pruning in dual_reopt */
+    /* Set objective limit for early pruning in dual_simplex_solve_v2.
+     * obj_sense converts to internal minimization space (1=min, -1=max). */
     if (solver->has_incumbent) {
-        lp->objective_cutoff = solver->best_obj * model->obj_sense;
+        lp->objective_limit = solver->best_obj * model->obj_sense;
     } else {
-        lp->objective_cutoff = RALPH_INFINITY;
+        lp->objective_limit = RALPH_INFINITY;
     }
 
-    /* === PATH A: Direct child — skip refactorization ===
-     *
-     * When this node's parent was the last node solved, the tableau still
-     * contains the parent's basis and LU factors. Only bounds changed (not
-     * the constraint matrix A), so the LU is still valid. Just update bounds,
-     * push non-basic x values, and run lightweight dual re-optimization.
-     *
-     * This is the common case in depth-first or best-first B&B.
-     */
-    if (lp->tableau && solver->last_solved_node_id >= 0 &&
-        node->parent_id == solver->last_solved_node_id) {
-
-        SimplexTableau *tab = lp->tableau;
-        attempted_warm_start = 1;
-
-        /* Update structural variable bounds in tableau */
+    /* Warm start: reuse existing tableau with updated bounds.
+     * Skip if tableau has Big-M artificials (primal fallback tableau) —
+     * v2 can't handle artificial variables corrupting reduced costs. */
+    if (tab && tab->num_artificial == 0) {
+        /* Update tableau bounds and push non-basics */
         for (int j = 0; j < model->num_vars; j++) {
             tab->lb_ext[j] = node->lb[j];
             tab->ub_ext[j] = node->ub[j];
         }
-
-        /* Push non-basic variables to their (possibly changed) bounds */
         for (int j = 0; j < tab->n; j++) {
             if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
                 tab->x[j] = tab->lb_ext[j];
@@ -1005,75 +960,33 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             }
         }
 
-        int budget = 3 * tab->m;
-        if (budget > 500) budget = 500;
+        /* Clear stale perturbation backup before re-solving */
+        dual_v2_clear_perturbation(tab);
 
-        int result = dual_reopt(lp, budget);
-        if (result == 0) {
-            warm_start_success = 1;
-        } else if (result == 1) {
-            node->lp_status = RALPH_STATUS_INFEASIBLE;
-            node->lp_bound = lp->obj_value;
-            solver->last_solved_node_id = node->id;
-            return -1;
+        /* Recompute solution and reduced costs with updated bounds */
+        tableau_compute_solution(tab);
+        tableau_compute_reduced_costs(tab);
+
+        int rc = dual_simplex_solve_v2(lp);
+        if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
+            goto node_lp_done;
         }
+        /* v2 detected infeasible or hit objective limit — valid result */
+        if (lp->status == RALPH_STATUS_INFEASIBLE ||
+            lp->status == RALPH_STATUS_OBJ_LIMIT) {
+            goto node_lp_done;
+        }
+        /* v2 failed — fall through to cold start */
     }
 
-    /* === PATH B: Non-child — reuse current LU, update bounds ===
-     *
-     * The tableau has valid LU factors from the last solved node. Instead of
-     * restoring the node's saved basis (which requires O(m³) refactorization),
-     * just update bounds and run dual_reopt from the current basis. Each dual
-     * pivot is O(m) with LU update — far cheaper than full refactorization
-     * even if more pivots are needed to reach optimality.
-     */
-    if (!warm_start_success && !attempted_warm_start && lp->tableau) {
-
-        SimplexTableau *tab = lp->tableau;
-        attempted_warm_start = 1;
-
-        /* Update structural variable bounds in tableau */
-        for (int j = 0; j < model->num_vars; j++) {
-            tab->lb_ext[j] = node->lb[j];
-            tab->ub_ext[j] = node->ub[j];
-        }
-
-        /* Push non-basic variables to their (possibly changed) bounds */
-        for (int j = 0; j < tab->n; j++) {
-            if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                tab->x[j] = tab->lb_ext[j];
-            } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                tab->x[j] = tab->ub_ext[j];
-            } else if (tab->var_status[j] == RALPH_FIXED) {
-                tab->x[j] = tab->lb_ext[j];
-            }
-        }
-
-        /* Larger budget: basis may be far from optimal for this node */
-        int budget = 10 * tab->m;
-        if (budget > 2000) budget = 2000;
-
-        int result = dual_reopt(lp, budget);
-        if (result == 0) {
-            warm_start_success = 1;
-        } else if (result == 1) {
-            node->lp_status = RALPH_STATUS_INFEASIBLE;
-            node->lp_bound = lp->obj_value;
-            solver->last_solved_node_id = node->id;
-            return -1;
-        }
+    /* Cold start: destroy tableau, full solve */
+    if (lp->tableau) {
+        tableau_free(lp->tableau);
+        lp->tableau = NULL;
     }
+    simplex_solve(lp);
 
-    /* === PATH C: Cold start (fallback) === */
-    if (!warm_start_success) {
-        if (lp->tableau) {
-            lp->tableau->dse_initialized = 0;  /* Reset DSE weights for fresh start */
-            tableau_free(lp->tableau);
-            lp->tableau = NULL;
-        }
-        simplex_solve(lp);
-    }
-
+node_lp_done:
     node->lp_status = lp->status;
     node->lp_bound = lp->obj_value;
     node->lp_iterations = lp->iterations;
@@ -1081,13 +994,6 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     if (solver->verbose && lp->status != RALPH_STATUS_OPTIMAL) {
         printf("  solve_node_lp: status=%d, obj=%.4f\n", lp->status, lp->obj_value);
     }
-
-    /* Save basis to node for warm starting children */
-    if (lp->status == RALPH_STATUS_OPTIMAL) {
-        save_basis_to_node(lp, node, model->num_vars);
-    }
-
-    solver->last_solved_node_id = node->id;
 
     return (lp->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
 }
@@ -1356,8 +1262,7 @@ static int solve_root_node(MIPSolver *solver) {
             return -1;
         }
 
-        /* MIP requires primal tableau for dual_reopt node solves */
-        solver->lp_solver->method = 0;
+        solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
         /* Disable scaling for MIP - cuts are generated from tableau which would need unscaling */
         solver->lp_solver->scaling = 0;
         solver->lp_solver->verbose = solver->verbose;
@@ -1513,8 +1418,7 @@ static int solve_root_node(MIPSolver *solver) {
                 return -1;
             }
 
-            /* MIP requires primal tableau for dual_reopt node solves */
-            solver->lp_solver->method = 0;
+            solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
             /* Disable scaling for MIP and propagate verbose flag */
             solver->lp_solver->scaling = 0;
             solver->lp_solver->verbose = solver->verbose;
@@ -1552,7 +1456,7 @@ static int solve_root_node(MIPSolver *solver) {
                     bb_node_pool_return(solver->node_pool, root);
                     return -1;
                 }
-                solver->lp_solver->method = 0;  /* MIP requires primal tableau for dual_reopt */
+                solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
                 solver->lp_solver->scaling = 0;
                 solver->lp_solver->verbose = solver->verbose;
                 mip_apply_dual_flags(solver);

@@ -423,9 +423,6 @@ typedef struct {
     double *farkas_ray;     /* Size num_cons, valid when status == INFEASIBLE */
     int farkas_valid;       /* 1 if farkas_ray contains valid certificate */
 
-    /* Objective cutoff for early termination in dual_reopt (internal objective) */
-    double objective_cutoff;
-
     /* Dual simplex enhancements */
     int use_dual_bound_flip;    /* 0=off, 1=on (default 1) */
     int use_dual_steepest_edge; /* 0=off, 1=on (default 1) */
@@ -492,10 +489,8 @@ void simplex_free(SimplexSolver *solver);
 int simplex_solve(SimplexSolver *solver);
 
 /* Dual simplex */
-int dual_simplex_solve(SimplexSolver *solver);
-int dual_simplex_solve_from_scratch(SimplexSolver *solver);
 int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters);
-int dual_reopt(SimplexSolver *solver, int max_pivots);  /* Deprecate when P8 lands */
+void dual_v2_clear_perturbation(SimplexTableau *tab);  /* Clear stale perturbation backup before warm start */
 int dual_simplex_solve_v2(SimplexSolver *solver);  /* Clean dual Phase 2 — no primal fallbacks */
 int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver);  /* Clean dual from scratch (T1.3) */
 int dual_phase1(SimplexSolver *solver);            /* Auxiliary-objective dual Phase 1 */
