@@ -670,8 +670,10 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)m * sizeof(double) +
         /* int array: flip_list for bound flipping (n) */
         (size_t)n * sizeof(int) +
-        /* Alignment padding (28 allocations * 8 bytes) */
-        224;
+        /* int arrays: heap, heap_pos for heap pricing (n each) */
+        2 * (size_t)n * sizeof(int) +
+        /* Alignment padding (30 allocations * 8 bytes) */
+        240;
 
     /* Create arena */
     tab->arena = sh_arena_create(arena_size);
@@ -743,6 +745,12 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->flip_list = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
     tab->flip_count = 0;
 
+    /* Heap pricing (T2.2) */
+    tab->heap = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->heap_pos = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->heap_size = 0;
+    if (tab->heap_pos) memset(tab->heap_pos, -1, n * sizeof(int));
+
     /* Single check for all allocations */
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
@@ -752,7 +760,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         !tab->cb_sparse_idx || !tab->cb_sparse_val ||
         !tab->aux_row || !tab->aux_coef || !tab->partial_candidates || !tab->dual_candidates ||
         !tab->c_original || (num_artificial > 0 && !tab->artificial_vars) ||
-        !tab->redundant_rows || !tab->dse_weights || !tab->flip_list) {
+        !tab->redundant_rows || !tab->dse_weights || !tab->flip_list ||
+        !tab->heap || !tab->heap_pos) {
         return -1;
     }
     return 0;
@@ -1542,6 +1551,9 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
     /* Invalidate dual candidate list — RC recomputed from scratch */
     tab->dual_cand_valid = 0;
 
+    /* Invalidate heap — must be rebuilt from scratch (T2.2) */
+    tab->heap_size = 0;
+
     return 0;
 }
 
@@ -1602,6 +1614,137 @@ static inline double tableau_get_rc(SimplexTableau *tab, int j) {
 static inline void tableau_invalidate_rc(SimplexTableau *tab) {
     tab->duals_valid = 0;
     tab->rc_all_valid = 0;
+}
+
+/* ============================================================================
+ * Heap Pricing Infrastructure (T2.2)
+ *
+ * Binary max-heap of non-basic variable indices, keyed by improvement score.
+ * Score = effective Dantzig improvement considering variable status:
+ *   NONBASIC_LOWER with rc < 0: score = -rc
+ *   NONBASIC_UPPER with rc > 0: score = +rc
+ *   NONBASIC_FREE:              score = |rc|
+ *   Otherwise (wrong sign):     score = 0 (sinks to bottom)
+ * This eliminates stale entries: ineligible variables have score 0.
+ * Maintained incrementally during RC updates in simplex_pivot().
+ * ============================================================================ */
+
+static inline double heap_score(const SimplexTableau *tab, int j) {
+    double rc = tab->rc[j];
+    VarStatus st = tab->var_status[j];
+    if (st == RALPH_NONBASIC_LOWER && rc < 0) return -rc;
+    if (st == RALPH_NONBASIC_UPPER && rc > 0) return rc;
+    if (st == RALPH_NONBASIC_FREE) return fabs(rc);
+    return 0.0;
+}
+
+static inline void heap_swap(SimplexTableau *tab, int a, int b) {
+    int va = tab->heap[a], vb = tab->heap[b];
+    tab->heap[a] = vb;
+    tab->heap[b] = va;
+    tab->heap_pos[va] = b;
+    tab->heap_pos[vb] = a;
+}
+
+static void heap_sift_up(SimplexTableau *tab, int pos) {
+    const int *heap = tab->heap;
+    while (pos > 0) {
+        int parent = (pos - 1) >> 1;
+        if (heap_score(tab, heap[pos]) > heap_score(tab, heap[parent])) {
+            heap_swap(tab, pos, parent);
+            pos = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+static void heap_sift_down(SimplexTableau *tab, int pos) {
+    const int *heap = tab->heap;
+    int size = tab->heap_size;
+    for (;;) {
+        int best = pos;
+        int left = 2 * pos + 1;
+        int right = left + 1;
+        if (left < size && heap_score(tab, heap[left]) > heap_score(tab, heap[best]))
+            best = left;
+        if (right < size && heap_score(tab, heap[right]) > heap_score(tab, heap[best]))
+            best = right;
+        if (best == pos) break;
+        heap_swap(tab, pos, best);
+        pos = best;
+    }
+}
+
+static void heap_build(SimplexTableau *tab) {
+    tab->heap_size = 0;
+    for (int j = 0; j < tab->n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) {
+            tab->heap_pos[j] = -1;
+        } else {
+            tab->heap_pos[j] = tab->heap_size;
+            tab->heap[tab->heap_size++] = j;
+        }
+    }
+    /* Bottom-up heapify in O(n) */
+    for (int i = (tab->heap_size >> 1) - 1; i >= 0; i--) {
+        heap_sift_down(tab, i);
+    }
+}
+
+static void heap_remove(SimplexTableau *tab, int var_j) {
+    int pos = tab->heap_pos[var_j];
+    if (pos < 0) return;  /* not in heap */
+    tab->heap_pos[var_j] = -1;
+    int last = --tab->heap_size;
+    if (pos == last) return;  /* was last element */
+    int moved = tab->heap[last];
+    tab->heap[pos] = moved;
+    tab->heap_pos[moved] = pos;
+    /* Sift in the correct direction */
+    if (pos > 0 && heap_score(tab, moved) > heap_score(tab, tab->heap[(pos - 1) >> 1])) {
+        heap_sift_up(tab, pos);
+    } else {
+        heap_sift_down(tab, pos);
+    }
+}
+
+static void heap_insert(SimplexTableau *tab, int var_j) {
+    int pos = tab->heap_size++;
+    tab->heap[pos] = var_j;
+    tab->heap_pos[var_j] = pos;
+    heap_sift_up(tab, pos);
+}
+
+static void heap_update(SimplexTableau *tab, int var_j) {
+    int pos = tab->heap_pos[var_j];
+    if (pos < 0) return;  /* basic var, not in heap */
+    /* Sift up or down based on new score */
+    if (pos > 0 && heap_score(tab, var_j) > heap_score(tab, tab->heap[(pos - 1) >> 1])) {
+        heap_sift_up(tab, pos);
+    } else {
+        heap_sift_down(tab, pos);
+    }
+}
+
+/* Heap-based Dantzig pricing: O(1) extraction of max-improvement variable.
+ * Ineligible variables have score 0 and naturally sit at the bottom. */
+int pricing_heap(SimplexTableau *tab, int *entering) {
+    /* Lazy rebuild: heap was invalidated by full RC recomputation */
+    if (tab->heap_size == 0 && tab->rc_all_valid) heap_build(tab);
+    /* Pop ineligible entries (safety net for status changes missed by
+     * incremental maintenance, e.g. bound flips in ratio test). */
+    while (tab->heap_size > 0) {
+        int j = tab->heap[0];
+        double sc = heap_score(tab, j);
+        if (sc >= RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        }
+        /* Ineligible root — remove and try next */
+        heap_remove(tab, j);
+    }
+    return 1;  /* optimal */
 }
 
 /* ============================================================================
@@ -2329,6 +2472,8 @@ static int simplex_pivot(SimplexTableau *tab,
             tab->var_status[entering] = RALPH_NONBASIC_LOWER;
             tab->x[entering] = tab->lb_ext[entering];
         }
+        /* Status changed → heap score changed; re-sift to correct position */
+        if (tab->pricing_strategy == 4) heap_update(tab, entering);
         return 0;
     }
 
@@ -2552,6 +2697,8 @@ basis_update_done:
         double rc_ratio = rc_enter / pivot;
         double pivot_inv = 1.0 / pivot;
         int do_se_update = tab->use_steepest_edge && !skip_se_update;
+        int use_heap = (tab->pricing_strategy == 4);
+        if (use_heap) heap_remove(tab, entering);  /* entering → basic */
 
         /* For all non-basic variables, update reduced costs and optionally weights */
         for (int j = 0; j < tab->n; j++) {
@@ -2566,6 +2713,7 @@ basis_update_done:
 
             /* Update reduced cost */
             tab->rc[j] -= rc_ratio * alpha_j;
+            if (use_heap) heap_update(tab, j);
 
             /* Update steepest edge weights if enabled */
             if (do_se_update && j != leaving) {
@@ -2586,6 +2734,7 @@ basis_update_done:
 
         /* Reduced cost for leaving variable (now non-basic) */
         tab->rc[leaving] = -rc_enter / pivot;
+        if (use_heap) heap_insert(tab, leaving);  /* leaving → non-basic */
     }
 
     return 0;
@@ -3058,6 +3207,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
     /* Compute initial reduced costs */
     tableau_compute_reduced_costs(tab);
+    if (solver->pricing_strategy == 4) heap_build(tab);
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
@@ -3087,6 +3237,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             price_status = pricing_steepest_edge(tab, &entering);
         } else if (solver->pricing_strategy == 3) {
             price_status = pricing_partial(tab, &entering);
+        } else if (solver->pricing_strategy == 4) {
+            price_status = pricing_heap(tab, &entering);
         } else {
             price_status = pricing_devex(tab, &entering);
         }
@@ -3590,10 +3742,12 @@ static int simplex_phase1(SimplexSolver *solver) {
             /* Recompute primal solution and reduced costs after refactorization. */
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
+            if (solver->pricing_strategy == 4) heap_build(tab);
         } else if (iter > 0 && iter % RECOMPUTE_INTERVAL == 0) {
             /* Drift control even when LU updates are still accepted. */
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
+            if (solver->pricing_strategy == 4) heap_build(tab);
         }
     }
 
@@ -3900,6 +4054,7 @@ static int simplex_phase2(SimplexSolver *solver) {
         tableau_compute_duals(tab);  /* Lazy mode: duals only */
     } else {
         tableau_compute_reduced_costs(tab);
+        if (solver->pricing_strategy == 4) heap_build(tab);
     }
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
@@ -3935,6 +4090,8 @@ static int simplex_phase2(SimplexSolver *solver) {
             price_status = pricing_steepest_edge(tab, &entering);
         } else if (solver->pricing_strategy == 3) {
             price_status = pricing_partial(tab, &entering);
+        } else if (solver->pricing_strategy == 4) {
+            price_status = pricing_heap(tab, &entering);
         } else {
             price_status = pricing_devex(tab, &entering);
         }
@@ -4052,6 +4209,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                     tableau_compute_duals(tab);
                 } else {
                     tableau_compute_reduced_costs(tab);
+                    if (solver->pricing_strategy == 4) heap_build(tab);
                 }
                 if (solver->verbose) {
                     fprintf(stderr, "[primal_simplex] Recovery via refactorization at iter %d\n", iter);
@@ -4065,6 +4223,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                     tableau_compute_duals(tab);
                 } else {
                     tableau_compute_reduced_costs(tab);
+                    if (solver->pricing_strategy == 4) heap_build(tab);
                 }
                 if (solver->verbose) {
                     fprintf(stderr, "[primal_simplex] Recovery via basis repair at iter %d\n", iter);
@@ -4114,6 +4273,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 tableau_compute_duals(tab);  /* Lazy mode: duals only */
             } else {
                 tableau_compute_reduced_costs(tab);  /* Full RC for incremental updates */
+                if (solver->pricing_strategy == 4) heap_build(tab);
             }
         }
 
@@ -4125,6 +4285,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 tableau_compute_duals(tab);  /* Lazy mode */
             } else {
                 tableau_compute_reduced_costs(tab);  /* Full recomputation */
+                if (solver->pricing_strategy == 4) heap_build(tab);
             }
             if (solver->verbose) {
                 int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;

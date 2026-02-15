@@ -1110,7 +1110,7 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
         /* 0=primal simplex, 1=dual simplex, 2=auto */
         model->method = value;
     } else if (STREQ(name, "pricing") || STREQ(name, "Pricing")) {
-        /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial */
+        /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial, 4=Heap */
         model->pricing = value;
     } else if (STREQ(name, "detect_special") || STREQ(name, "DetectSpecial")) {
         /* 1=detect LAP/network structure, 0=disable */

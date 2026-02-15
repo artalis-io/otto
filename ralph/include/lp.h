@@ -279,7 +279,7 @@ typedef struct {
     /* Steepest edge / Devex weights */
     double *se_weights;     /* Steepest edge weights */
     int use_steepest_edge;
-    int pricing_strategy;   /* 0=Dantzig, 1=SE, 2=Devex, 3=Partial - for pivot fn */
+    int pricing_strategy;   /* 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap - for pivot fn */
     int devex_refcount;     /* Reference count for Devex weight resets */
 
     /* Dual steepest edge weights (P6) */
@@ -311,6 +311,11 @@ typedef struct {
     int dual_cand_count;        /* Current number of candidates */
     int dual_cand_capacity;     /* Allocated capacity */
     int dual_cand_valid;        /* 1 if list was populated from last RC update */
+
+    /* Heap pricing (T2.2) */
+    int *heap;                  /* [n] max-heap of non-basic var indices by |rc| */
+    int *heap_pos;              /* [n] position in heap, -1 if not in heap */
+    int heap_size;              /* entries in heap */
 
     /* Lazy reduced cost computation */
     int duals_valid;            /* 1 if y[] contains valid dual values */
@@ -363,7 +368,7 @@ typedef struct {
     double time_limit;
     int presolve;
     int scaling;
-    int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial */
+    int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial, 4=Heap */
     int verbose;
     int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
     int crash;              /* 0=off, 1=triangular crash basis */
@@ -501,6 +506,7 @@ int pricing_dantzig(SimplexTableau *tableau, int *entering);
 int pricing_steepest_edge(SimplexTableau *tableau, int *entering);
 int pricing_devex(SimplexTableau *tableau, int *entering);
 int pricing_partial(SimplexTableau *tableau, int *entering);
+int pricing_heap(SimplexTableau *tableau, int *entering);
 
 /* Ratio test */
 int ratio_test_harris(SimplexTableau *tableau, int entering, int *leaving, double *theta);
