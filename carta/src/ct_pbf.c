@@ -1312,6 +1312,16 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     way->flags = flags;
     way->name = NULL;
 
+    /* Extract "name" tag for road/area labels */
+    for (int i = 0; i < num_tags; i++) {
+        const char *key = sh_string_table_get(st, keys[i]);
+        if (strcmp(key, "name") == 0) {
+            const char *val = sh_string_table_get(st, vals[i]);
+            if (val && val[0]) way->name = strdup(val);
+            break;
+        }
+    }
+
     /* Register in way_map for relation member lookup */
     way_map_insert(ctx, id, way_idx);
 
@@ -2610,4 +2620,110 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
 size_t ct_pbf_get_label_count(const CTPBFContext *ctx)
 {
     return ctx ? ctx->num_labeled_points : 0;
+}
+
+/* ============================================================================
+ * Named Ways (for road/area labels)
+ * ============================================================================ */
+
+CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
+                                     const CTOSMWay ***ways, size_t *count)
+{
+    if (!ctx || !ways || !count) {
+        if (ways) *ways = NULL;
+        if (count) *count = 0;
+        return CT_ERROR_INVALID_ARGUMENT;
+    }
+
+    *ways = NULL;
+    *count = 0;
+
+    if (ctx->num_ways == 0) {
+        return CT_OK;
+    }
+
+    CTBBox bbox = ct_tile_bounds(coord);
+
+    /* Allocate result array */
+    size_t capacity = 256;
+    const CTOSMWay **result = malloc(capacity * sizeof(CTOSMWay *));
+    if (!result) {
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+
+    size_t result_count = 0;
+
+    if (ctx->rtree) {
+        /* R-tree query for candidate ways */
+        size_t max_candidates = ctx->num_ways;
+        uint32_t *candidates = malloc(max_candidates * sizeof(uint32_t));
+        if (!candidates) {
+            free(result);
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+
+        size_t num_candidates = ct_rtree_query(ctx->rtree, bbox, candidates, max_candidates);
+
+        for (size_t i = 0; i < num_candidates; i++) {
+            uint32_t way_idx = candidates[i];
+            if (way_idx >= ctx->num_ways) continue;
+
+            const CTOSMWay *way = &ctx->ways[way_idx];
+
+            /* Only named highway ways */
+            if (!way->name || way->name[0] == '\0') continue;
+            if (way->feature_class != CT_OSM_HIGHWAY) continue;
+
+            /* Grow if needed */
+            if (result_count >= capacity) {
+                capacity *= 2;
+                const CTOSMWay **grown = realloc(result, capacity * sizeof(CTOSMWay *));
+                if (!grown) { free(candidates); free(result); return CT_ERROR_OUT_OF_MEMORY; }
+                result = grown;
+            }
+
+            result[result_count++] = way;
+        }
+
+        free(candidates);
+    } else {
+        /* Fallback: linear scan */
+        for (size_t i = 0; i < ctx->num_ways; i++) {
+            const CTOSMWay *way = &ctx->ways[i];
+
+            if (!way->name || way->name[0] == '\0') continue;
+            if (way->feature_class != CT_OSM_HIGHWAY) continue;
+
+            /* Quick bbox check */
+            int intersects = 0;
+            for (int j = 0; j < way->num_coords; j++) {
+                if (way->coords[j].lat >= bbox.min_lat &&
+                    way->coords[j].lat <= bbox.max_lat &&
+                    way->coords[j].lon >= bbox.min_lon &&
+                    way->coords[j].lon <= bbox.max_lon) {
+                    intersects = 1;
+                    break;
+                }
+            }
+            if (!intersects) continue;
+
+            if (result_count >= capacity) {
+                capacity *= 2;
+                const CTOSMWay **grown = realloc(result, capacity * sizeof(CTOSMWay *));
+                if (!grown) { free(result); return CT_ERROR_OUT_OF_MEMORY; }
+                result = grown;
+            }
+
+            result[result_count++] = way;
+        }
+    }
+
+    if (result_count == 0) {
+        free(result);
+    } else {
+        *ways = result;
+    }
+    *count = result_count;
+
+    return CT_OK;
 }

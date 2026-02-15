@@ -393,6 +393,45 @@ int ct_render_labels(CTRenderContext *ctx,
                      float halo_width);
 
 /* ============================================================================
+ * Path Text Rendering
+ * ============================================================================ */
+
+/*
+ * Render text along a path (per-glyph rotation).
+ *
+ * @param ctx         Render context
+ * @param text        UTF-8 text to render
+ * @param glyphs      Per-glyph placement (position + angle)
+ * @param num_glyphs  Number of glyphs
+ * @param font        MSDF font
+ * @param font_size   Font size in pixels
+ * @param fill        Text fill color
+ * @param halo        Halo color
+ * @param halo_width  Halo width in pixels
+ */
+void ct_render_text_path(CTRenderContext *ctx, const char *text,
+                         const CTPathGlyph *glyphs, int num_glyphs,
+                         const SHFont *font, float font_size,
+                         CTColor fill, CTColor halo, float halo_width);
+
+/*
+ * Render road labels from placements.
+ *
+ * @param ctx         Render context
+ * @param placements  Road label placements
+ * @param count       Number of placements
+ * @param font        MSDF font
+ * @param fill        Text fill color
+ * @param halo        Halo color
+ * @param halo_width  Halo width in pixels
+ * @return            Number of labels rendered
+ */
+int ct_render_road_labels(CTRenderContext *ctx,
+                          const CTRoadLabelPlacement *placements, size_t count,
+                          const SHFont *font,
+                          CTColor fill, CTColor halo, float halo_width);
+
+/* ============================================================================
  * Pixel Access
  * ============================================================================ */
 

@@ -69,6 +69,36 @@ typedef struct {
     int point_offset;             /* Offset from point to text */
 } CTLabelPlacer;
 
+/* Per-glyph placement along a path */
+typedef struct {
+    float x, y;       /* Glyph center position in tile pixels */
+    float angle;       /* Rotation in radians */
+} CTPathGlyph;
+
+/* A road label placed along a path */
+typedef struct {
+    const char *name;
+    CTPathGlyph *glyphs;     /* Per-glyph placement (owned) */
+    int num_glyphs;
+    float font_size;
+    int priority;
+} CTRoadLabelPlacement;
+
+/* ============================================================================
+ * Font Sizing
+ * ============================================================================ */
+
+/*
+ * Get zoom-adaptive base font size for labels.
+ * Returns a base size that varies with zoom level and scales
+ * proportionally for larger tile sizes (512px = ~2x of 256px).
+ *
+ * @param zoom      Zoom level (0-22)
+ * @param tile_size Tile size in pixels (256 or 512)
+ * @return          Base font size in pixels
+ */
+float ct_label_base_font_size(int zoom, int tile_size);
+
 /* ============================================================================
  * Placer Lifecycle
  * ============================================================================ */
@@ -163,6 +193,55 @@ void ct_label_set_padding(CTLabelPlacer *placer, int padding_x, int padding_y);
  * Default: 2px.
  */
 void ct_label_set_point_offset(CTLabelPlacer *placer, int offset);
+
+/* ============================================================================
+ * Road Label Placement
+ * ============================================================================ */
+
+/*
+ * Place road labels along named highway ways in a tile.
+ * Uses the same collision grid as point labels to prevent overlaps.
+ *
+ * @param placer      Label placer (shared collision grid with point labels)
+ * @param ctx         PBF context with parsed data
+ * @param coord       Tile coordinates
+ * @param font        Font for text measurement
+ * @param tile_size   Tile size in pixels
+ * @param out         Output: array of road label placements (caller owns)
+ * @param out_count   Output: number of placements
+ * @return            Number of road labels placed
+ */
+int ct_label_place_roads(CTLabelPlacer *placer,
+                         const CTPBFContext *ctx, CTTileCoord coord,
+                         const SHFont *font, int tile_size,
+                         CTRoadLabelPlacement **out, size_t *out_count);
+
+/*
+ * Free road label placements.
+ */
+void ct_label_road_placements_free(CTRoadLabelPlacement *p, size_t count);
+
+/* ============================================================================
+ * Area Label Placement
+ * ============================================================================ */
+
+/*
+ * Place area labels on named polygons (lakes, parks, forests).
+ * Uses pole of inaccessibility to find optimal interior point.
+ * Labels are horizontal and use the shared collision grid.
+ *
+ * @param placer      Label placer (shared collision grid)
+ * @param ctx         PBF context with parsed data
+ * @param coord       Tile coordinates
+ * @param font        Font for text measurement
+ * @param font_size   Base font size in pixels
+ * @return            Number of area labels placed
+ */
+int ct_label_place_areas(CTLabelPlacer *placer,
+                         const CTPBFContext *ctx,
+                         CTTileCoord coord,
+                         const SHFont *font,
+                         float font_size);
 
 /* ============================================================================
  * Statistics
