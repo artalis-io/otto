@@ -472,6 +472,7 @@ static int compare_roads_by_priority(const void *a, const void *b)
 
 /*
  * Place glyphs along a polyline path.
+ * Path must already be oriented left-to-right for readability.
  * Returns the number of glyphs placed, or 0 if the path is too short/curved.
  */
 static int place_glyphs_along_path(const float *px, const float *py,
@@ -492,53 +493,19 @@ static int place_glyphs_along_path(const float *px, const float *py,
 
     /* Measure text width */
     float text_width = sh_font_text_width(font, text, font_size);
-    float text_height = sh_font_line_height(font, font_size);
-    (void)text_height;
 
     /* Need enough space for text + padding */
     if (total_length < text_width + font_size) return 0;
 
-    /* Check max angle between segments */
-    for (int i = 0; i < num_points - 2; i++) {
-        float dx1 = px[i + 1] - px[i];
-        float dy1 = py[i + 1] - py[i];
-        float dx2 = px[i + 2] - px[i + 1];
-        float dy2 = py[i + 2] - py[i + 1];
-
-        float len1 = sqrtf(dx1 * dx1 + dy1 * dy1);
-        float len2 = sqrtf(dx2 * dx2 + dy2 * dy2);
-        if (len1 < 0.001f || len2 < 0.001f) continue;
-
-        float dot = (dx1 * dx2 + dy1 * dy2) / (len1 * len2);
-        if (dot < -1.0f) dot = -1.0f;
-        if (dot > 1.0f) dot = 1.0f;
-        float angle = acosf(dot);
-
-        if (angle > ROAD_LABEL_MAX_ANGLE) return 0;
-    }
-
     /* Center text on path */
     float start_offset = (total_length - text_width) / 2.0f;
 
-    /* Determine text direction - flip if text would read right-to-left */
-    float dist = 0;
-    int flip = 0;
-    for (int i = 0; i < num_points - 1; i++) {
-        float seg_len = sqrtf((px[i + 1] - px[i]) * (px[i + 1] - px[i]) +
-                              (py[i + 1] - py[i]) * (py[i + 1] - py[i]));
-        if (dist + seg_len > start_offset + text_width / 2.0f) {
-            /* Midpoint segment - check direction */
-            if (px[i + 1] < px[i]) flip = 1;
-            break;
-        }
-        dist += seg_len;
-    }
-
-    /* Place each glyph along the path */
+    /* Place each glyph along the path, checking curvature per-glyph */
     int glyph_count = 0;
     float cursor = start_offset;
     int seg_idx = 0;
     float seg_dist = 0;
+    float prev_angle = -999.0f;
 
     const char *p = text;
     while (*p && glyph_count < max_glyphs) {
@@ -585,9 +552,13 @@ static int place_glyphs_along_path(const float *px, const float *py,
         float gy = py[seg_idx] + dy * t;
         float angle = atan2f(dy, dx);
 
-        if (flip) {
-            angle += (float)M_PI;
+        /* Check angle change between consecutive glyphs */
+        if (prev_angle > -900.0f) {
+            float delta = fabsf(angle - prev_angle);
+            if (delta > (float)M_PI) delta = 2.0f * (float)M_PI - delta;
+            if (delta > ROAD_LABEL_MAX_ANGLE) return 0;  /* Too curved here */
         }
+        prev_angle = angle;
 
         glyphs[glyph_count].x = gx;
         glyphs[glyph_count].y = gy;
@@ -671,16 +642,37 @@ int ct_label_place_roads(CTLabelPlacer *placer,
             if (!scratch_px || !scratch_py) break;
         }
 
-        for (int i = 0; i < way->num_coords; i++) {
-            int px_i, py_i;
-            ct_label_geo_to_pixel(coord, way->coords[i].lat, way->coords[i].lon,
-                                  tile_size, &px_i, &py_i);
-            scratch_px[i] = (float)px_i;
-            scratch_py[i] = (float)py_i;
+        /* Convert coords to tile pixels with Mercator projection (float precision) */
+        {
+            double n = (double)(1 << coord.z);
+            double lon_scale = n * tile_size / 360.0;
+            double lon_offset = 180.0 * lon_scale - (double)coord.x * tile_size;
+            double lat_py_scale = -n * tile_size / (2.0 * M_PI);
+            double lat_py_offset = n * tile_size / 2.0 - (double)coord.y * tile_size;
+
+            for (int i = 0; i < way->num_coords; i++) {
+                double lon = way->coords[i].lon;
+                double lat = way->coords[i].lat;
+                double lat_rad = lat * M_PI / 180.0;
+                double merc_y = log(tan(lat_rad) + 1.0 / cos(lat_rad));
+
+                scratch_px[i] = (float)(lon * lon_scale + lon_offset);
+                scratch_py[i] = (float)(merc_y * lat_py_scale + lat_py_offset);
+            }
         }
 
-        /* Get font size for this road type */
-        float fsize = road_label_font_size[road_type];
+        /* Reverse path if it goes right-to-left so text reads naturally */
+        if (way->num_coords >= 2 &&
+            scratch_px[way->num_coords - 1] < scratch_px[0]) {
+            for (int i = 0, j = way->num_coords - 1; i < j; i++, j--) {
+                float tmp;
+                tmp = scratch_px[i]; scratch_px[i] = scratch_px[j]; scratch_px[j] = tmp;
+                tmp = scratch_py[i]; scratch_py[i] = scratch_py[j]; scratch_py[j] = tmp;
+            }
+        }
+
+        /* Get font size for this road type, scaled for tile size */
+        float fsize = road_label_font_size[road_type] * (float)tile_size / 256.0f;
 
         /* Allocate glyph scratch if needed */
         size_t name_len = strlen(way->name);
