@@ -2,13 +2,13 @@
  * ct_polylabel.c - Pole of Inaccessibility for Polygon Labeling
  *
  * Iterative cell subdivision to find the internal point with maximum
- * distance to any polygon edge. Uses sh_dheap as the priority queue.
+ * distance to any polygon edge. Uses sh_pqueue as the priority queue.
  *
  * Based on the Mapbox polylabel algorithm (ISC license).
  */
 
 #include "ct_polylabel.h"
-#include "sh_dheap.h"
+#include "sh_pqueue.h"
 #include <math.h>
 #include <float.h>
 
@@ -130,15 +130,15 @@ int ct_polylabel_with_holes(const CTCoord **rings, const int *ring_sizes,
     double half = cell_size / 2.0;
 
     /* Create priority queue */
-    SHDHeap heap;
-    sh_dheap_init(&heap, sizeof(PolyCell), cell_compare);
+    SHPQueue heap;
+    sh_pqueue_init(&heap, sizeof(PolyCell), cell_compare);
 
     /* Seed grid with initial cells */
     for (double x = min_x; x < max_x; x += cell_size) {
         for (double y = min_y; y < max_y; y += cell_size) {
             PolyCell c = make_cell(x + half, y + half, half,
                                    rings, ring_sizes, num_rings);
-            sh_dheap_push(&heap, &c);
+            sh_pqueue_push(&heap, &c);
         }
     }
 
@@ -167,9 +167,9 @@ int ct_polylabel_with_holes(const CTCoord **rings, const int *ring_sizes,
     int iterations = 0;
     int max_iterations = 10000;
 
-    while (!sh_dheap_empty(&heap) && iterations < max_iterations) {
+    while (!sh_pqueue_empty(&heap) && iterations < max_iterations) {
         PolyCell cell;
-        if (!sh_dheap_pop(&heap, &cell)) break;
+        if (!sh_pqueue_pop(&heap, &cell)) break;
         iterations++;
 
         /* Update best if this cell's center is better */
@@ -189,13 +189,13 @@ int ct_polylabel_with_holes(const CTCoord **rings, const int *ring_sizes,
         PolyCell c3 = make_cell(cell.cx - h, cell.cy + h, h, rings, ring_sizes, num_rings);
         PolyCell c4 = make_cell(cell.cx + h, cell.cy + h, h, rings, ring_sizes, num_rings);
 
-        sh_dheap_push(&heap, &c1);
-        sh_dheap_push(&heap, &c2);
-        sh_dheap_push(&heap, &c3);
-        sh_dheap_push(&heap, &c4);
+        sh_pqueue_push(&heap, &c1);
+        sh_pqueue_push(&heap, &c2);
+        sh_pqueue_push(&heap, &c3);
+        sh_pqueue_push(&heap, &c4);
     }
 
-    sh_dheap_free(&heap);
+    sh_pqueue_free(&heap);
 
     if (out_x) *out_x = best_cell.cx;
     if (out_y) *out_y = best_cell.cy;
