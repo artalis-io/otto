@@ -2,15 +2,14 @@
  * ct_polylabel.c - Pole of Inaccessibility for Polygon Labeling
  *
  * Iterative cell subdivision to find the internal point with maximum
- * distance to any polygon edge. Uses a simple inline max-heap.
+ * distance to any polygon edge. Uses sh_dheap as the priority queue.
  *
  * Based on the Mapbox polylabel algorithm (ISC license).
  */
 
 #include "ct_polylabel.h"
+#include "sh_dheap.h"
 #include <math.h>
-#include <stdlib.h>
-#include <string.h>
 #include <float.h>
 
 /* Cell in the subdivision grid */
@@ -21,84 +20,14 @@ typedef struct {
     double max_dist; /* Maximum possible distance in this cell */
 } PolyCell;
 
-/* Simple max-heap of PolyCells (ordered by max_dist) */
-typedef struct {
-    PolyCell *data;
-    size_t count;
-    size_t capacity;
-} CellHeap;
-
-static void cell_heap_init(CellHeap *h)
+/* Comparator: higher max_dist = higher priority (max-heap) */
+static int cell_compare(const void *a, const void *b)
 {
-    h->data = NULL;
-    h->count = 0;
-    h->capacity = 0;
-}
-
-static void cell_heap_free(CellHeap *h)
-{
-    free(h->data);
-    h->data = NULL;
-    h->count = 0;
-    h->capacity = 0;
-}
-
-static int cell_heap_push(CellHeap *h, const PolyCell *cell)
-{
-    if (h->count >= h->capacity) {
-        size_t new_cap = h->capacity ? h->capacity * 2 : 256;
-        PolyCell *new_data = realloc(h->data, new_cap * sizeof(PolyCell));
-        if (!new_data) return 0;
-        h->data = new_data;
-        h->capacity = new_cap;
-    }
-
-    /* Insert at end and bubble up */
-    size_t i = h->count++;
-    h->data[i] = *cell;
-
-    while (i > 0) {
-        size_t parent = (i - 1) / 2;
-        if (h->data[parent].max_dist >= h->data[i].max_dist) break;
-        PolyCell tmp = h->data[parent];
-        h->data[parent] = h->data[i];
-        h->data[i] = tmp;
-        i = parent;
-    }
-    return 1;
-}
-
-static int cell_heap_pop(CellHeap *h, PolyCell *out)
-{
-    if (h->count == 0) return 0;
-
-    *out = h->data[0];
-    h->count--;
-
-    if (h->count > 0) {
-        h->data[0] = h->data[h->count];
-
-        /* Bubble down */
-        size_t i = 0;
-        for (;;) {
-            size_t left = 2 * i + 1;
-            size_t right = 2 * i + 2;
-            size_t largest = i;
-
-            if (left < h->count && h->data[left].max_dist > h->data[largest].max_dist)
-                largest = left;
-            if (right < h->count && h->data[right].max_dist > h->data[largest].max_dist)
-                largest = right;
-
-            if (largest == i) break;
-
-            PolyCell tmp = h->data[i];
-            h->data[i] = h->data[largest];
-            h->data[largest] = tmp;
-            i = largest;
-        }
-    }
-    return 1;
+    const PolyCell *ca = (const PolyCell *)a;
+    const PolyCell *cb = (const PolyCell *)b;
+    if (ca->max_dist > cb->max_dist) return 1;
+    if (ca->max_dist < cb->max_dist) return -1;
+    return 0;
 }
 
 /*
@@ -201,15 +130,15 @@ int ct_polylabel_with_holes(const CTCoord **rings, const int *ring_sizes,
     double half = cell_size / 2.0;
 
     /* Create priority queue */
-    CellHeap heap;
-    cell_heap_init(&heap);
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(PolyCell), cell_compare);
 
     /* Seed grid with initial cells */
     for (double x = min_x; x < max_x; x += cell_size) {
         for (double y = min_y; y < max_y; y += cell_size) {
             PolyCell c = make_cell(x + half, y + half, half,
                                    rings, ring_sizes, num_rings);
-            cell_heap_push(&heap, &c);
+            sh_dheap_push(&heap, &c);
         }
     }
 
@@ -238,9 +167,9 @@ int ct_polylabel_with_holes(const CTCoord **rings, const int *ring_sizes,
     int iterations = 0;
     int max_iterations = 10000;
 
-    while (heap.count > 0 && iterations < max_iterations) {
+    while (!sh_dheap_empty(&heap) && iterations < max_iterations) {
         PolyCell cell;
-        if (!cell_heap_pop(&heap, &cell)) break;
+        if (!sh_dheap_pop(&heap, &cell)) break;
         iterations++;
 
         /* Update best if this cell's center is better */
@@ -260,13 +189,13 @@ int ct_polylabel_with_holes(const CTCoord **rings, const int *ring_sizes,
         PolyCell c3 = make_cell(cell.cx - h, cell.cy + h, h, rings, ring_sizes, num_rings);
         PolyCell c4 = make_cell(cell.cx + h, cell.cy + h, h, rings, ring_sizes, num_rings);
 
-        cell_heap_push(&heap, &c1);
-        cell_heap_push(&heap, &c2);
-        cell_heap_push(&heap, &c3);
-        cell_heap_push(&heap, &c4);
+        sh_dheap_push(&heap, &c1);
+        sh_dheap_push(&heap, &c2);
+        sh_dheap_push(&heap, &c3);
+        sh_dheap_push(&heap, &c4);
     }
 
-    cell_heap_free(&heap);
+    sh_dheap_free(&heap);
 
     if (out_x) *out_x = best_cell.cx;
     if (out_y) *out_y = best_cell.cy;
