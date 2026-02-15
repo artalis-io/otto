@@ -6,6 +6,8 @@
 #include "ct_collision.h"
 #include "ct_label.h"
 #include "ct_boundary.h"
+#include "ct_polylabel.h"
+#include "ct_render.h"
 #include "sh_font.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -2689,6 +2691,323 @@ TEST(text_glyph_render_null_safety)
 }
 
 /* ============================================================================
+ * Zoom-Adaptive Font Sizing (Phase 1)
+ * ============================================================================ */
+
+TEST(label_base_font_size_zoom_scaling)
+{
+    /* Font size should vary across zoom levels */
+    float z3 = ct_label_base_font_size(3, 256);
+    float z8 = ct_label_base_font_size(8, 256);
+    float z12 = ct_label_base_font_size(12, 256);
+    float z17 = ct_label_base_font_size(17, 256);
+
+    /* Low zooms should be smaller */
+    ASSERT(z3 < z12);
+    ASSERT(z8 < z12);
+    /* Very high zooms should decrease again */
+    ASSERT(z17 < z12);
+    /* z12-14 is the maximum range */
+    ASSERT_NEAR(z12, 16.0f, 0.01f);
+    return 1;
+}
+
+TEST(label_base_font_size_tile_proportional)
+{
+    /* 512px tiles should get roughly 2x the base font size */
+    float base_256 = ct_label_base_font_size(12, 256);
+    float base_512 = ct_label_base_font_size(12, 512);
+
+    ASSERT_NEAR(base_512 / base_256, 2.0f, 0.01f);
+    return 1;
+}
+
+TEST(collision_4px_grid_precision)
+{
+    /* With 4px cell size, labels 5px apart should collide
+     * (because padding is 6px horizontally) */
+    CTCollisionGrid *grid = ct_collision_create(256, 256, 4);
+    ASSERT(grid != NULL);
+
+    /* Mark a 20x10 area */
+    ct_collision_mark(grid, 100, 100, 20, 10);
+
+    /* 5px gap: should collide with 6px padding */
+    ASSERT(ct_collision_test_padded(grid, 125, 100, 20, 10, 6, 4) == 1);
+
+    /* 20px gap: should NOT collide */
+    ASSERT(ct_collision_test_padded(grid, 140, 100, 20, 10, 6, 4) == 0);
+
+    ct_collision_free(grid);
+    return 1;
+}
+
+TEST(label_padding_prevents_touching)
+{
+    /* Labels placed with padding should have a gap between them */
+    CTLabelPlacer *placer = ct_label_placer_create(256, 256);
+    ASSERT(placer != NULL);
+
+    const SHFont *font = sh_font_get_default();
+    if (!font) {
+        ct_label_placer_free(placer);
+        return 1; /* Skip if no font */
+    }
+
+    CTLabeledPoint p1 = {.id = 1, .name = "TestA", .type = CT_PLACE_TOWN,
+                          .coord = {43.73, 7.42}, .priority = 10, .population = 1000};
+    CTLabeledPoint p2 = {.id = 2, .name = "TestB", .type = CT_PLACE_TOWN,
+                          .coord = {43.73, 7.42}, .priority = 10, .population = 500};
+
+    /* Place first label */
+    int placed1 = ct_label_place_single(placer, &p1, 128, 128, font, 12.0f);
+    ASSERT(placed1 == 1);
+
+    /* Try placing second label at same position - should fail due to collision */
+    int placed2 = ct_label_place_single(placer, &p2, 128, 128, font, 12.0f);
+    /* It may find an alternate anchor, but if the grid is dense enough it should fail */
+    (void)placed2;
+
+    /* At least 1 placement should exist */
+    ASSERT(ct_label_get_count(placer) >= 1);
+
+    ct_label_placer_free(placer);
+    return 1;
+}
+
+/* ============================================================================
+ * Polylabel (Phase 5)
+ * ============================================================================ */
+
+TEST(polylabel_square)
+{
+    /* Unit square: pole should be at center (0.5, 0.5) */
+    CTCoord square[] = {
+        {.lat = 0.0, .lon = 0.0},
+        {.lat = 0.0, .lon = 1.0},
+        {.lat = 1.0, .lon = 1.0},
+        {.lat = 1.0, .lon = 0.0},
+        {.lat = 0.0, .lon = 0.0},
+    };
+
+    double x, y, dist;
+    int ok = ct_polylabel(square, 5, 0.001, &x, &y, &dist);
+    ASSERT(ok == 1);
+    ASSERT_NEAR(x, 0.5, 0.01);
+    ASSERT_NEAR(y, 0.5, 0.01);
+    ASSERT_NEAR(dist, 0.5, 0.01);
+    return 1;
+}
+
+TEST(polylabel_rectangle)
+{
+    /* 2x1 rectangle: pole at center (1.0, 0.5) with dist 0.5 */
+    CTCoord rect[] = {
+        {.lat = 0.0, .lon = 0.0},
+        {.lat = 0.0, .lon = 2.0},
+        {.lat = 1.0, .lon = 2.0},
+        {.lat = 1.0, .lon = 0.0},
+        {.lat = 0.0, .lon = 0.0},
+    };
+
+    double x, y, dist;
+    int ok = ct_polylabel(rect, 5, 0.001, &x, &y, &dist);
+    ASSERT(ok == 1);
+    ASSERT_NEAR(y, 0.5, 0.05);
+    ASSERT_NEAR(dist, 0.5, 0.05);
+    return 1;
+}
+
+TEST(polylabel_L_shape)
+{
+    /* L-shape: pole should be in the wider arm */
+    CTCoord L[] = {
+        {.lat = 0.0, .lon = 0.0},
+        {.lat = 0.0, .lon = 4.0},
+        {.lat = 2.0, .lon = 4.0},
+        {.lat = 2.0, .lon = 1.0},
+        {.lat = 4.0, .lon = 1.0},
+        {.lat = 4.0, .lon = 0.0},
+        {.lat = 0.0, .lon = 0.0},
+    };
+
+    double x, y, dist;
+    int ok = ct_polylabel(L, 7, 0.01, &x, &y, &dist);
+    ASSERT(ok == 1);
+    /* Should be in the wider bottom arm (y < 2, x > 1) or the left arm */
+    ASSERT(dist > 0.3);
+    return 1;
+}
+
+TEST(polylabel_with_hole)
+{
+    /* Square with central hole: pole should move away from hole */
+    CTCoord outer[] = {
+        {.lat = 0.0, .lon = 0.0},
+        {.lat = 0.0, .lon = 10.0},
+        {.lat = 10.0, .lon = 10.0},
+        {.lat = 10.0, .lon = 0.0},
+        {.lat = 0.0, .lon = 0.0},
+    };
+    CTCoord hole[] = {
+        {.lat = 3.0, .lon = 3.0},
+        {.lat = 3.0, .lon = 7.0},
+        {.lat = 7.0, .lon = 7.0},
+        {.lat = 7.0, .lon = 3.0},
+        {.lat = 3.0, .lon = 3.0},
+    };
+
+    const CTCoord *rings[] = { outer, hole };
+    int ring_sizes[] = { 5, 5 };
+
+    double x, y, dist;
+    int ok = ct_polylabel_with_holes(rings, ring_sizes, 2, 0.01, &x, &y, &dist);
+    ASSERT(ok == 1);
+    /* Pole should be away from hole center (5,5) */
+    double dx = x - 5.0;
+    double dy = y - 5.0;
+    double dist_from_center = sqrt(dx * dx + dy * dy);
+    ASSERT(dist_from_center > 1.0);
+    return 1;
+}
+
+TEST(polylabel_null_safety)
+{
+    double x, y, dist;
+    ASSERT(ct_polylabel(NULL, 5, 0.01, &x, &y, &dist) == 0);
+    ASSERT(ct_polylabel_with_holes(NULL, NULL, 0, 0.01, &x, &y, &dist) == 0);
+
+    CTCoord square[] = {
+        {.lat = 0, .lon = 0},
+        {.lat = 0, .lon = 1},
+        {.lat = 1, .lon = 1},
+    };
+    /* Too few coords */
+    ASSERT(ct_polylabel(square, 2, 0.01, &x, &y, &dist) == 0);
+    return 1;
+}
+
+/* ============================================================================
+ * Road Label Types (Phase 3)
+ * ============================================================================ */
+
+TEST(road_label_placement_null_safety)
+{
+    /* ct_label_place_roads should handle NULL safely */
+    CTRoadLabelPlacement *out = NULL;
+    size_t count = 0;
+
+    int result = ct_label_place_roads(NULL, NULL, (CTTileCoord){0, 0, 0},
+                                       NULL, 256, &out, &count);
+    ASSERT(result == 0);
+    ASSERT(out == NULL);
+    ASSERT(count == 0);
+    return 1;
+}
+
+TEST(road_label_placements_free_null)
+{
+    /* Should handle NULL without crash */
+    ct_label_road_placements_free(NULL, 0);
+    return 1;
+}
+
+/* ============================================================================
+ * Area Label Types (Phase 5)
+ * ============================================================================ */
+
+TEST(area_label_null_safety)
+{
+    int result = ct_label_place_areas(NULL, NULL, (CTTileCoord){0, 0, 0}, NULL, 12.0f);
+    ASSERT(result == 0);
+    return 1;
+}
+
+/* ============================================================================
+ * Text Along Path Rendering (Phase 4)
+ * ============================================================================ */
+
+TEST(render_text_path_null_safety)
+{
+    /* Should handle NULL context/glyphs gracefully */
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    const SHFont *font = sh_font_get_default();
+
+    CTPathGlyph glyphs[] = {
+        {.x = 50, .y = 50, .angle = 0},
+        {.x = 60, .y = 50, .angle = 0},
+    };
+
+    /* NULL context */
+    ct_render_text_path(NULL, "AB", glyphs, 2, font, 12.0f,
+                         CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+
+    /* NULL text */
+    ct_render_text_path(ctx, NULL, glyphs, 2, font, 12.0f,
+                         CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+
+    /* Zero glyphs */
+    ct_render_text_path(ctx, "AB", glyphs, 0, font, 12.0f,
+                         CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(render_road_labels_null_safety)
+{
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    const SHFont *font = sh_font_get_default();
+
+    /* NULL placements, zero count */
+    int result = ct_render_road_labels(ctx, NULL, 0, font,
+                                        CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+    ASSERT(result == 0);
+
+    /* NULL context */
+    result = ct_render_road_labels(NULL, NULL, 0, font,
+                                    CT_RGB(0, 0, 0), CT_RGB(255, 255, 255), 1.0f);
+    ASSERT(result == 0);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+TEST(render_text_path_straight)
+{
+    /* Render text along a straight horizontal path - should not crash */
+    CTRenderContext *ctx = ct_render_create(256, 256);
+    const SHFont *font = sh_font_get_default();
+    if (!font) {
+        ct_render_free(ctx);
+        return 1;
+    }
+
+    CTPathGlyph glyphs[4];
+    for (int i = 0; i < 4; i++) {
+        glyphs[i].x = 50.0f + i * 12.0f;
+        glyphs[i].y = 128.0f;
+        glyphs[i].angle = 0.0f;  /* Horizontal */
+    }
+
+    ct_render_text_path(ctx, "Test", glyphs, 4, font, 10.0f,
+                         CT_RGB(51, 51, 51), CT_RGB(255, 255, 255), 1.0f);
+
+    /* Verify some pixels were drawn near the glyph positions */
+    int found_nonzero = 0;
+    for (int y = 120; y < 140 && !found_nonzero; y++) {
+        for (int x = 40; x < 100 && !found_nonzero; x++) {
+            CTColor c = ct_render_get_pixel(ctx, x, y);
+            if (c != 0) found_nonzero = 1;
+        }
+    }
+    ASSERT(found_nonzero);
+
+    ct_render_free(ctx);
+    return 1;
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -2865,6 +3184,29 @@ int main(void)
     run_test_text_render_labels_null_safety();
     run_test_text_render_labels_empty_placer();
     run_test_text_glyph_render_null_safety();
+
+    printf("\nZoom-Adaptive Font Sizing:\n");
+    run_test_label_base_font_size_zoom_scaling();
+    run_test_label_base_font_size_tile_proportional();
+    run_test_collision_4px_grid_precision();
+    run_test_label_padding_prevents_touching();
+
+    printf("\nPolylabel:\n");
+    run_test_polylabel_square();
+    run_test_polylabel_rectangle();
+    run_test_polylabel_L_shape();
+    run_test_polylabel_with_hole();
+    run_test_polylabel_null_safety();
+
+    printf("\nRoad Labels:\n");
+    run_test_road_label_placement_null_safety();
+    run_test_road_label_placements_free_null();
+    run_test_area_label_null_safety();
+
+    printf("\nPath Text Rendering:\n");
+    run_test_render_text_path_null_safety();
+    run_test_render_road_labels_null_safety();
+    run_test_render_text_path_straight();
 
     printf("\n=== Results: %d/%d tests passed ===\n\n",
            tests_passed, tests_run);

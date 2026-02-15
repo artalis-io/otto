@@ -709,7 +709,8 @@ CTPBFContext *ct_index_mmap(const char *path) {
         way->area_sqm = bway->area_sqm;
         way->length_m = bway->length_m;
 
-        /* Name from string pool */
+        /* Name from string pool (strdup may return NULL on OOM; consumers
+         * filter on way->name != NULL so missing labels degrade gracefully) */
         if (bway->name_offset > 0 && bway->name_offset < header->string_pool_size) {
             way->name = strdup(string_pool + bway->name_offset);
         } else {
@@ -778,7 +779,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
             lp->min_zoom = blp->min_zoom;
             lp->priority = blp->priority;
 
-            /* Name from string pool */
+            /* Name from string pool (NULL on OOM degrades gracefully) */
             if (blp->name_offset > 0 && blp->name_offset < header->string_pool_size) {
                 lp->name = strdup(string_pool + blp->name_offset);
             } else {
@@ -841,7 +842,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
                         mp->bbox.max_lat = bmp->max_lat;
                         mp->bbox.max_lon = bmp->max_lon;
 
-                        /* Name from string pool */
+                        /* Name from string pool (NULL on OOM degrades gracefully) */
                         if (bmp->name_offset > 0 && bmp->name_offset < header->string_pool_size) {
                             mp->name = strdup(string_pool + bmp->name_offset);
                         } else {
@@ -923,7 +924,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
                     b->admin_level = bb->admin_level;
                     b->length_m = bb->length_m;
 
-                    /* Name from string pool */
+                    /* Name from string pool (NULL on OOM degrades gracefully) */
                     if (bb->name_offset > 0 && bb->name_offset < header->string_pool_size) {
                         b->name = strdup(string_pool + bb->name_offset);
                     } else {

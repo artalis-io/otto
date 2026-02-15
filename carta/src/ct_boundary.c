@@ -303,7 +303,7 @@ static CTStatus assemble_one_boundary(CTPBFContext *ctx,
         b->num_coords = coord_count;
         compute_bbox(coords, coord_count, &b->bbox);
         b->length_m = compute_length_m(coords, coord_count);
-        b->name = rel->name ? strdup(rel->name) : NULL;
+        b->name = (rel->name && rel->name[0]) ? strdup(rel->name) : NULL;
 
         /* Extract boundary type and admin level from feature_type encoding */
         int feature_type = rel->feature_type;

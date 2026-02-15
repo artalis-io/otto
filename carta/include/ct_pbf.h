@@ -212,6 +212,26 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
 size_t ct_pbf_get_label_count(const CTPBFContext *ctx);
 
 /* ============================================================================
+ * Named Ways (for road/area labels)
+ * ============================================================================ */
+
+/*
+ * Get named highway ways that intersect a tile.
+ * Uses the R-tree spatial index for fast lookup.
+ *
+ * @param ctx       PBF context with spatial index
+ * @param coord     Tile coordinates
+ * @param ways      Output: array of pointers to named ways (caller frees array)
+ * @param count     Output: number of ways
+ * @return CT_OK on success
+ *
+ * Note: The returned pointers reference data owned by ctx. Do not free the
+ * CTOSMWay structures themselves, only the array.
+ */
+CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
+                                     const CTOSMWay ***ways, size_t *count);
+
+/* ============================================================================
  * Statistics
  * ============================================================================ */
 

@@ -84,6 +84,11 @@ CTRenderContext *ct_render_create(int width, int height)
     ctx->edge_buffer = malloc(ctx->edge_buffer_capacity * sizeof(CTEdge));
     ctx->active_buffer = malloc(ctx->edge_buffer_capacity * sizeof(CTEdge));
 
+    if (!ctx->scale_buffer || !ctx->edge_buffer || !ctx->active_buffer) {
+        ct_render_free(ctx);
+        return NULL;
+    }
+
     ct_default_style(&ctx->style);
     ct_render_options_default(&ctx->options);
     return ctx;
@@ -1317,14 +1322,35 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
     if (ctx->options.render_labels && coord.z >= labels_min_zoom) {
         const SHFont *font = sh_font_get_default();
         if (font) {
+            float base_size = ct_label_base_font_size(coord.z, ctx->width);
             CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
             if (placer) {
-                ct_label_place_points(placer, pbf, coord, font, 16.0f);
+                /* Place point labels (cities, towns, etc.) */
+                ct_label_place_points(placer, pbf, coord, font, base_size);
+
+                /* Place area labels (lakes, parks, forests) */
+                ct_label_place_areas(placer, pbf, coord, font, base_size);
+
+                /* Place road labels along named ways */
+                CTRoadLabelPlacement *road_labels = NULL;
+                size_t road_count = 0;
+                ct_label_place_roads(placer, pbf, coord, font, ctx->width,
+                                     &road_labels, &road_count);
+
+                /* Render point + area labels with halo */
                 float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
                 ct_render_labels(ctx, placer, font,
                                 CT_RGB(51, 51, 51),
                                 CT_RGB(255, 255, 255),
                                 halo_width);
+
+                /* Render road labels along paths */
+                ct_render_road_labels(ctx, road_labels, road_count, font,
+                                     CT_RGB(51, 51, 51),
+                                     CT_RGB(255, 255, 255),
+                                     halo_width);
+                ct_label_road_placements_free(road_labels, road_count);
+
                 ct_label_placer_free(placer);
             }
         }
@@ -1353,10 +1379,16 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
 
     float scale = (float)ctx->width / CT_MVT_EXTENT;
 
-    /* Clipping buffer: allow 16 pixels overshoot to avoid edge artifacts.
-     * Reduced from 64 — larger buffers cause floating-point precision errors
-     * on long edge vectors of landuse polygons spanning many tiles. */
-    int clip_buffer = 16;
+    /* Clipping buffer: how far beyond tile extent to clip polygons.
+     * Pushes clip edges outside the visible tile area, preventing artificial
+     * straight edges from being visible at tile boundaries. The scanline
+     * rasterizer already clamps to [0, width] x [0, height].
+     *
+     * 64 = 4px overshoot at 256px tiles, 8px at 512px. Enough to hide clip
+     * edges. Previously reduced to 16 due to "precision errors" that were
+     * actually int32 overflow in Sutherland-Hodgman (now fixed with int64_t
+     * in ct_tile.c). */
+    int clip_buffer = 64;
 
     for (size_t i = 0; i < count; i++) {
         CTFeature *f = &features[i];
@@ -1588,17 +1620,34 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
     if (ctx->options.render_labels && coord.z >= lod_labels_min_zoom) {
         const SHFont *font = sh_font_get_default();
         if (font) {
+            float base_size = ct_label_base_font_size(coord.z, ctx->width);
             CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
             if (placer) {
                 /* Place point labels (cities, towns, etc.) */
-                ct_label_place_points(placer, pbf, coord, font, 16.0f);
+                ct_label_place_points(placer, pbf, coord, font, base_size);
 
-                /* Render with halo for readability (if enabled) */
+                /* Place area labels (lakes, parks, forests) */
+                ct_label_place_areas(placer, pbf, coord, font, base_size);
+
+                /* Place road labels along named ways */
+                CTRoadLabelPlacement *road_labels = NULL;
+                size_t road_count = 0;
+                ct_label_place_roads(placer, pbf, coord, font, ctx->width,
+                                     &road_labels, &road_count);
+
+                /* Render point + area labels with halo */
                 float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
                 ct_render_labels(ctx, placer, font,
                                 CT_RGB(51, 51, 51),      /* Dark gray text */
                                 CT_RGB(255, 255, 255),   /* White halo */
                                 halo_width);
+
+                /* Render road labels along paths */
+                ct_render_road_labels(ctx, road_labels, road_count, font,
+                                     CT_RGB(51, 51, 51),
+                                     CT_RGB(255, 255, 255),
+                                     halo_width);
+                ct_label_road_placements_free(road_labels, road_count);
 
                 ct_label_placer_free(placer);
             }
@@ -1763,6 +1812,191 @@ int ct_render_labels(CTRenderContext *ctx,
         ct_render_text_halo(ctx, p->point->name, p->x, p->y,
                             font, p->font_size,
                             fill_color, halo_color, halo_width);
+        rendered++;
+    }
+
+    return rendered;
+}
+
+/* ============================================================================
+ * Rotated Glyph Rendering (for road labels)
+ * ============================================================================ */
+
+/*
+ * Render a single glyph at position (cx, cy) rotated by angle.
+ * Uses inverse rotation to sample the MSDF atlas.
+ */
+/* Render a single glyph rotated around its center position.
+ * (cx, cy) is the glyph center in pixel coords, angle in radians.
+ * For each pixel in the rotated AABB, inverse-rotate to glyph-local
+ * [0,1] coords and sample the MSDF. */
+static void ct_render_glyph_rotated(CTRenderContext *ctx,
+                                     const SHGlyph *glyph,
+                                     float cx, float cy, float angle,
+                                     const SHFont *font, float font_size,
+                                     CTColor color, float threshold)
+{
+    if (!ctx || !ctx->pixels || !glyph || !font) return;
+
+    /* Glyph dimensions in pixels */
+    float gw = (glyph->plane.right - glyph->plane.left) * font_size;
+    float gh = (glyph->plane.top - glyph->plane.bottom) * font_size;
+    if (gw <= 0.0f || gh <= 0.0f) return;
+
+    /* Half-extents of the glyph box */
+    float hw = gw * 0.5f;
+    float hh = gh * 0.5f;
+
+    /* Glyph center offset from the advance center:
+     * advance center is at (advance/2, ascent - (ascent - top*fs))
+     * but we need the visual center of the glyph box */
+    float ascent = sh_font_ascent(font, font_size);
+    float offset_x = (glyph->plane.left + glyph->plane.right) * 0.5f * font_size
+                    - glyph->advance * font_size * 0.5f;
+    float offset_y = ascent - (glyph->plane.top + glyph->plane.bottom) * 0.5f * font_size
+                    - ascent * 0.5f;
+
+    /* Rotated glyph center */
+    float cos_a = cosf(angle);
+    float sin_a = sinf(angle);
+    float gcx = cx + offset_x * cos_a - offset_y * sin_a;
+    float gcy = cy + offset_x * sin_a + offset_y * cos_a;
+
+    /* Compute rotated AABB: rotate the 4 corners, find min/max */
+    float corners_x[4], corners_y[4];
+    float dx[2] = { -hw, hw };
+    float dy[2] = { -hh, hh };
+    for (int i = 0; i < 4; i++) {
+        float lx = dx[i & 1];
+        float ly = dy[i >> 1];
+        corners_x[i] = gcx + lx * cos_a - ly * sin_a;
+        corners_y[i] = gcy + lx * sin_a + ly * cos_a;
+    }
+
+    float min_x = corners_x[0], max_x = corners_x[0];
+    float min_y = corners_y[0], max_y = corners_y[0];
+    for (int i = 1; i < 4; i++) {
+        if (corners_x[i] < min_x) min_x = corners_x[i];
+        if (corners_x[i] > max_x) max_x = corners_x[i];
+        if (corners_y[i] < min_y) min_y = corners_y[i];
+        if (corners_y[i] > max_y) max_y = corners_y[i];
+    }
+
+    /* Clamp to tile bounds */
+    int px0 = (int)floorf(min_x);
+    int py0 = (int)floorf(min_y);
+    int px1 = (int)ceilf(max_x);
+    int py1 = (int)ceilf(max_y);
+    if (px0 < 0) px0 = 0;
+    if (py0 < 0) py0 = 0;
+    if (px1 >= ctx->width) px1 = ctx->width - 1;
+    if (py1 >= ctx->height) py1 = ctx->height - 1;
+
+    uint8_t cr = CT_COLOR_R(color);
+    uint8_t cg = CT_COLOR_G(color);
+    uint8_t cb = CT_COLOR_B(color);
+    uint8_t ca = CT_COLOR_A(color);
+
+    /* For each pixel in AABB, inverse-rotate to glyph-local coords */
+    for (int py = py0; py <= py1; py++) {
+        float rel_y = (float)py - gcy;
+        /* Pre-compute partial inverse rotation for this row */
+        float inv_x_base = rel_y * sin_a;  /* -(-sin_a) * rel_y */
+        float inv_y_base = rel_y * cos_a;
+        for (int px = px0; px <= px1; px++) {
+            float rel_x = (float)px - gcx;
+            /* Inverse rotate: [cos_a, sin_a; -sin_a, cos_a] */
+            float lx = rel_x * cos_a + inv_x_base;
+            float ly = -rel_x * sin_a + inv_y_base;
+
+            /* Map to [0,1] within glyph bounds */
+            float u = (lx + hw) / gw;
+            float v = (ly + hh) / gh;
+
+            /* Skip if outside glyph */
+            if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) continue;
+
+            float coverage = sh_font_msdf_coverage_threshold(
+                font, glyph, u, v, font_size, threshold);
+            if (coverage <= 0.0f) continue;
+
+            uint8_t alpha = (uint8_t)(ca * coverage);
+            if (alpha == 0) continue;
+
+            CTColor c = CT_RGBA(cr, cg, cb, alpha);
+            ct_render_blend_pixel(ctx, px, py, c);
+        }
+    }
+}
+
+void ct_render_text_path(CTRenderContext *ctx, const char *text,
+                         const CTPathGlyph *path_glyphs, int num_glyphs,
+                         const SHFont *font, float font_size,
+                         CTColor fill, CTColor halo, float halo_width)
+{
+    if (!ctx || !text || !path_glyphs || !font || num_glyphs <= 0) return;
+
+    float halo_threshold = 0.5f - (halo_width * 0.08f);
+    if (halo_threshold < 0.1f) halo_threshold = 0.1f;
+
+    const char *p = text;
+    int gi = 0;
+
+    /* First pass: halo */
+    if (halo_width > 0.0f && CT_COLOR_A(halo) > 0) {
+        p = text;
+        gi = 0;
+        while (*p && gi < num_glyphs) {
+            uint32_t codepoint;
+            int len = sh_utf8_decode(p, &codepoint);
+            if (len == 0 || codepoint == 0) break;
+            p += len;
+
+            const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
+            if (!glyph) continue;
+
+            ct_render_glyph_rotated(ctx, glyph,
+                                     path_glyphs[gi].x, path_glyphs[gi].y,
+                                     path_glyphs[gi].angle,
+                                     font, font_size, halo, halo_threshold);
+            gi++;
+        }
+    }
+
+    /* Second pass: fill */
+    p = text;
+    gi = 0;
+    while (*p && gi < num_glyphs) {
+        uint32_t codepoint;
+        int len = sh_utf8_decode(p, &codepoint);
+        if (len == 0 || codepoint == 0) break;
+        p += len;
+
+        const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
+        if (!glyph) continue;
+
+        ct_render_glyph_rotated(ctx, glyph,
+                                 path_glyphs[gi].x, path_glyphs[gi].y,
+                                 path_glyphs[gi].angle,
+                                 font, font_size, fill, 0.5f);
+        gi++;
+    }
+}
+
+int ct_render_road_labels(CTRenderContext *ctx,
+                          const CTRoadLabelPlacement *placements, size_t count,
+                          const SHFont *font,
+                          CTColor fill, CTColor halo, float halo_width)
+{
+    if (!ctx || !placements || !font || count == 0) return 0;
+
+    int rendered = 0;
+    for (size_t i = 0; i < count; i++) {
+        const CTRoadLabelPlacement *rp = &placements[i];
+        if (!rp->name || !rp->glyphs || rp->num_glyphs <= 0) continue;
+
+        ct_render_text_path(ctx, rp->name, rp->glyphs, rp->num_glyphs,
+                            font, rp->font_size, fill, halo, halo_width);
         rendered++;
     }
 

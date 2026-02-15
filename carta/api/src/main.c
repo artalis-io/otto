@@ -252,7 +252,8 @@ static void process_png_render(RenderWorkItem *item)
                 memcpy(item->response_data, cached_data, cached_size);
                 item->response_size = cached_size;
                 item->status_code = 200;
-                strncpy(item->content_type, "image/png", sizeof(item->content_type));
+                strncpy(item->content_type, "image/png", sizeof(item->content_type) - 1);
+                item->content_type[sizeof(item->content_type) - 1] = '\0';
             }
             pthread_mutex_unlock(&s_cache_mutex);
             if (item->response_data) return;
@@ -269,13 +270,15 @@ static void process_png_render(RenderWorkItem *item)
         item->response_data = NULL;
         item->status_code = 500;
         strncpy(item->error_msg, "Tile generation failed",
-                sizeof(item->error_msg));
+                sizeof(item->error_msg) - 1);
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
         return;
     }
 
     item->response_size = size;
     item->status_code = 200;
-    strncpy(item->content_type, "image/png", sizeof(item->content_type));
+    strncpy(item->content_type, "image/png", sizeof(item->content_type) - 1);
+    item->content_type[sizeof(item->content_type) - 1] = '\0';
 
     /* Cache the result */
     if (s_png_cache) {
@@ -303,7 +306,8 @@ static void process_mvt_render(RenderWorkItem *item)
                 item->response_size = cached_size;
                 item->status_code = 200;
                 strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
-                        sizeof(item->content_type));
+                        sizeof(item->content_type) - 1);
+                item->content_type[sizeof(item->content_type) - 1] = '\0';
             }
             pthread_mutex_unlock(&s_cache_mutex);
             if (item->response_data) return;
@@ -318,14 +322,16 @@ static void process_mvt_render(RenderWorkItem *item)
     if (!item->response_data) {
         item->status_code = 500;
         strncpy(item->error_msg, "Tile generation failed",
-                sizeof(item->error_msg));
+                sizeof(item->error_msg) - 1);
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
         return;
     }
 
     item->response_size = size;
     item->status_code = 200;
     strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
-            sizeof(item->content_type));
+            sizeof(item->content_type) - 1);
+    item->content_type[sizeof(item->content_type) - 1] = '\0';
 
     /* Cache the result */
     if (s_mvt_cache) {
@@ -364,14 +370,16 @@ static void process_ascii_render(RenderWorkItem *item)
         item->response_data = NULL;
         item->status_code = 500;
         strncpy(item->error_msg, "ASCII tile generation failed",
-                sizeof(item->error_msg));
+                sizeof(item->error_msg) - 1);
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
         return;
     }
 
     item->response_size = size;
     item->status_code = 200;
     strncpy(item->content_type, "text/plain; charset=utf-8",
-            sizeof(item->content_type));
+            sizeof(item->content_type) - 1);
+    item->content_type[sizeof(item->content_type) - 1] = '\0';
 }
 
 /* Render worker callback function (called by ShWorkerPool) */
@@ -390,7 +398,8 @@ static void render_worker_callback(ShWorkItem *queue_item, void *ctx)
         sh_completion_is_cancelled(&item->completion)) {
         item->status_code = 504;  /* Gateway Timeout */
         strncpy(item->error_msg, "Request timeout",
-                sizeof(item->error_msg));
+                sizeof(item->error_msg) - 1);
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
         render_work_item_complete(item);
         sh_workqueue_item_free(queue_item);
         return;

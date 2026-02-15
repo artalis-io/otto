@@ -82,6 +82,7 @@ CTAPIContext *ct_api_create_from_pbf(CTPBFContext *pbf_ctx,
         ctx->name[sizeof(ctx->name) - 1] = '\0';
     } else {
         strncpy(ctx->name, "Carta Tile Server", sizeof(ctx->name) - 1);
+        ctx->name[sizeof(ctx->name) - 1] = '\0';
     }
 
     /* Initialize LOD config */
@@ -263,6 +264,10 @@ char *ct_api_generate_tilejson(CTAPIContext *ctx,
         bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
         center_lon, center_lat);
 
+    if (len < 0 || len >= 2048) {
+        free(buffer);
+        return NULL;
+    }
     *out_len = (size_t)len;
     return buffer;
 }
@@ -282,6 +287,10 @@ char *ct_api_generate_health(CTAPIContext *ctx, size_t *out_len) {
         "}\n",
         ct_version());
 
+    if (len < 0 || len >= 256) {
+        free(buffer);
+        return NULL;
+    }
     *out_len = (size_t)len;
     return buffer;
 
@@ -319,6 +328,10 @@ char *ct_api_generate_stats(CTAPIContext *ctx, size_t *out_len) {
         bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
         ctx->min_zoom, ctx->max_zoom, ctx->tile_size);
 
+    if (len < 0 || len >= 1024) {
+        free(buffer);
+        return NULL;
+    }
     *out_len = (size_t)len;
     return buffer;
 }

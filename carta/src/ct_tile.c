@@ -5,6 +5,7 @@
 #include "ct_tile.h"
 #include "shared.h"
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
@@ -426,25 +427,27 @@ void ct_clip_linestring(const CTTilePoint *points, int num_points,
                 int code_out = code0 ? code0 : code1;
                 int x, y;
 
+                /* Use int64_t for intersection to prevent overflow with
+                 * distant coordinates (e.g., multipolygon edges at z18+). */
                 if (code_out & OUTCODE_TOP) {
                     int dy = y1 - y0;
                     if (dy == 0) break;  /* Degenerate: horizontal line at edge */
-                    x = x0 + (x1 - x0) * (max - y0) / dy;
+                    x = x0 + (int)((int64_t)(x1 - x0) * (max - y0) / dy);
                     y = max;
                 } else if (code_out & OUTCODE_BOTTOM) {
                     int dy = y1 - y0;
                     if (dy == 0) break;  /* Degenerate: horizontal line at edge */
-                    x = x0 + (x1 - x0) * (min - y0) / dy;
+                    x = x0 + (int)((int64_t)(x1 - x0) * (min - y0) / dy);
                     y = min;
                 } else if (code_out & OUTCODE_RIGHT) {
                     int dx = x1 - x0;
                     if (dx == 0) break;  /* Degenerate: vertical line at edge */
-                    y = y0 + (y1 - y0) * (max - x0) / dx;
+                    y = y0 + (int)((int64_t)(y1 - y0) * (max - x0) / dx);
                     x = max;
                 } else {
                     int dx = x1 - x0;
                     if (dx == 0) break;  /* Degenerate: vertical line at edge */
-                    y = y0 + (y1 - y0) * (min - x0) / dx;
+                    y = y0 + (int)((int64_t)(y1 - y0) * (min - x0) / dx);
                     x = min;
                 }
 
@@ -491,9 +494,13 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
     int min = -buffer;
     int max = extent + buffer;
 
-    /* Allocate temporary buffers */
-    CTTilePoint *input = malloc(num_points * 4 * sizeof(CTTilePoint));
-    CTTilePoint *output = malloc(num_points * 4 * sizeof(CTTilePoint));
+    /* Allocate temporary buffers.
+     * Each edge clip can at most double the vertex count (worst case 16x after
+     * 4 edges), but typical polygons only clip 1-2 edges. 4x is sufficient
+     * with bounds checks below to prevent overflow. */
+    int capacity = num_points * 4;
+    CTTilePoint *input = malloc(capacity * sizeof(CTTilePoint));
+    CTTilePoint *output = malloc(capacity * sizeof(CTTilePoint));
     if (!input || !output) {
         free(input);
         free(output);
@@ -527,16 +534,18 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
 
             /* Check if points are inside edge.
              * Cross product is negative when point is to the right of edge direction.
-             * Since edges go CCW, interior of rectangle is on the right (cross <= 0). */
-            int prev_inside = (x2 - x1) * (prev.y - y1) - (y2 - y1) * (prev.x - x1) <= 0;
-            int curr_inside = (x2 - x1) * (curr.y - y1) - (y2 - y1) * (curr.x - x1) <= 0;
+             * Since edges go CCW, interior of rectangle is on the right (cross <= 0).
+             * Use int64_t to prevent overflow: at z18, multipolygon coordinates can be
+             * 1.5M+ extent units from tile origin, and 4128 * 1.5M > INT32_MAX. */
+            int prev_inside = (int64_t)(x2 - x1) * (prev.y - y1) - (int64_t)(y2 - y1) * (prev.x - x1) <= 0;
+            int curr_inside = (int64_t)(x2 - x1) * (curr.y - y1) - (int64_t)(y2 - y1) * (curr.x - x1) <= 0;
 
             if (curr_inside) {
                 if (!prev_inside) {
                     /* Compute intersection - use floor() for consistent rounding,
                      * then clamp to clip bounds to handle floating-point precision */
                     double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
-                    if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
+                    if (fabs(denom) > 1e-10 && output_count < capacity) {
                         double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
                         int ix = (int)floor(prev.x + t * (curr.x - prev.x));
                         int iy = (int)floor(prev.y + t * (curr.y - prev.y));
@@ -550,12 +559,14 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
                         output_count++;
                     }
                 }
-                output[output_count++] = curr;
+                if (output_count < capacity) {
+                    output[output_count++] = curr;
+                }
             } else if (prev_inside) {
                 /* Compute intersection - use floor() for consistent rounding,
                  * then clamp to clip bounds to handle floating-point precision */
                 double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
-                if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
+                if (fabs(denom) > 1e-10 && output_count < capacity) {
                     double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
                     int ix = (int)floor(prev.x + t * (curr.x - prev.x));
                     int iy = (int)floor(prev.y + t * (curr.y - prev.y));
@@ -664,9 +675,10 @@ static int clip_ring_to_buffer(const CTTilePoint *points, int ring_start, int ri
         for (int i = 0; i < input_count; i++) {
             CTTilePoint curr = input[i];
 
-            /* Check if points are inside edge */
-            int prev_inside = (x2 - x1) * (prev.y - y1) - (y2 - y1) * (prev.x - x1) <= 0;
-            int curr_inside = (x2 - x1) * (curr.y - y1) - (y2 - y1) * (curr.x - x1) <= 0;
+            /* Check if points are inside edge.
+             * Use int64_t to prevent overflow with distant multipolygon coordinates. */
+            int prev_inside = (int64_t)(x2 - x1) * (prev.y - y1) - (int64_t)(y2 - y1) * (prev.x - x1) <= 0;
+            int curr_inside = (int64_t)(x2 - x1) * (curr.y - y1) - (int64_t)(y2 - y1) * (curr.x - x1) <= 0;
 
             if (curr_inside) {
                 if (!prev_inside) {
