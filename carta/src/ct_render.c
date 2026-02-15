@@ -1828,18 +1828,14 @@ static void render_glyph_rotated(CTRenderContext *ctx,
     float glyph_h = (glyph->plane.top - glyph->plane.bottom) * font_size;
     if (glyph_w <= 0 || glyph_h <= 0) return;
 
-    /* Glyph center offset from baseline cursor position */
-    float glyph_cx = (glyph->plane.left + glyph->plane.right) / 2.0f * font_size;
-    float glyph_cy = (glyph->plane.top + glyph->plane.bottom) / 2.0f * font_size;
-
     float cos_a = cosf(angle);
     float sin_a = sinf(angle);
 
-    /* Compute AABB of rotated glyph for iteration bounds */
+    /* Half-sizes for scanning (extend 1px for MSDF anti-aliasing) */
     float half_w = glyph_w / 2.0f + 1.0f;
     float half_h = glyph_h / 2.0f + 1.0f;
 
-    /* Four corners of the unrotated glyph (centered) */
+    /* Compute AABB of rotated glyph for pixel iteration bounds */
     float corners_x[4] = { -half_w, half_w, half_w, -half_w };
     float corners_y[4] = { -half_h, -half_h, half_h, half_h };
 
@@ -1854,17 +1850,11 @@ static void render_glyph_rotated(CTRenderContext *ctx,
         if (ry > max_ry) max_ry = ry;
     }
 
-    /* Offset glyph center position */
-    float offset_x = glyph_cx * cos_a - (-glyph_cy) * sin_a;
-    float offset_y = glyph_cx * sin_a + (-glyph_cy) * cos_a;
-
-    float center_x = cx + offset_x;
-    float center_y = cy + offset_y;
-
-    int x_min = (int)floorf(center_x + min_rx);
-    int x_max = (int)ceilf(center_x + max_rx);
-    int y_min = (int)floorf(center_y + min_ry);
-    int y_max = (int)ceilf(center_y + max_ry);
+    /* (cx, cy) is the glyph center on the path - render centered here */
+    int x_min = (int)floorf(cx + min_rx);
+    int x_max = (int)ceilf(cx + max_rx);
+    int y_min = (int)floorf(cy + min_ry);
+    int y_max = (int)ceilf(cy + max_ry);
 
     /* Clamp to render bounds */
     if (x_min < 0) x_min = 0;
@@ -1874,9 +1864,9 @@ static void render_glyph_rotated(CTRenderContext *ctx,
 
     for (int py = y_min; py <= y_max; py++) {
         for (int px = x_min; px <= x_max; px++) {
-            /* Inverse rotate: pixel -> glyph-local space */
-            float dx = (float)px - center_x;
-            float dy = (float)py - center_y;
+            /* Inverse rotate: pixel -> glyph-local space centered at (cx, cy) */
+            float dx = (float)px - cx;
+            float dy = (float)py - cy;
             float local_x = dx * cos_a + dy * sin_a;
             float local_y = -dx * sin_a + dy * cos_a;
 
