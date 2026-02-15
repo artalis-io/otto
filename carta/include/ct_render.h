@@ -432,6 +432,51 @@ int ct_render_road_labels(CTRenderContext *ctx,
                           CTColor fill, CTColor halo, float halo_width);
 
 /* ============================================================================
+ * Metatile Label Rendering
+ * ============================================================================ */
+
+/*
+ * Render point/area labels from metatile placements for a specific sub-tile.
+ * Offsets placements from metatile pixel space to sub-tile pixel space.
+ * Labels that cross the sub-tile boundary are naturally split by the
+ * font renderer's existing pixel clipping.
+ *
+ * @param ctx         Render context (tile-sized)
+ * @param mtp         Metatile placements
+ * @param sub_i       Sub-tile column (0 or 1)
+ * @param sub_j       Sub-tile row (0 or 1)
+ * @param font        MSDF font
+ * @param fill        Text fill color
+ * @param halo        Halo color
+ * @param halo_width  Halo width in pixels
+ * @return            Number of labels rendered
+ */
+int ct_render_labels_metatile(CTRenderContext *ctx,
+                               const CTMetatilePlacements *mtp,
+                               int sub_i, int sub_j,
+                               const SHFont *font,
+                               CTColor fill, CTColor halo, float halo_width);
+
+/*
+ * Render road labels from metatile placements for a specific sub-tile.
+ *
+ * @param ctx         Render context (tile-sized)
+ * @param mtp         Metatile placements
+ * @param sub_i       Sub-tile column (0 or 1)
+ * @param sub_j       Sub-tile row (0 or 1)
+ * @param font        MSDF font
+ * @param fill        Text fill color
+ * @param halo        Halo color
+ * @param halo_width  Halo width in pixels
+ * @return            Number of labels rendered
+ */
+int ct_render_road_labels_metatile(CTRenderContext *ctx,
+                                    const CTMetatilePlacements *mtp,
+                                    int sub_i, int sub_j,
+                                    const SHFont *font,
+                                    CTColor fill, CTColor halo, float halo_width);
+
+/* ============================================================================
  * Pixel Access
  * ============================================================================ */
 

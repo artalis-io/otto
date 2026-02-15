@@ -203,6 +203,7 @@ static int add_placement(CTLabelPlacer *placer,
 
     CTLabelPlacement *p = &placer->placements[placer->num_placements++];
     p->point = point;
+    p->name = point ? point->name : NULL;
     p->x = x;
     p->y = y;
     p->width = width;
@@ -876,7 +877,11 @@ int ct_label_place_areas(CTLabelPlacer *placer,
             continue;
         }
 
-        /* Create a temporary labeled point for placement */
+        /* Create a temporary labeled point for placement.
+         * The point pointer will dangle after this scope, but the name
+         * field in CTLabelPlacement (set by add_placement) points directly
+         * into the PBF context and remains valid. Set point=NULL after
+         * placement to prevent use-after-free via point->name. */
         CTLabeledPoint area_point;
         area_point.id = 0;
         area_point.coord.lat = pole_y;
@@ -888,10 +893,516 @@ int ct_label_place_areas(CTLabelPlacer *placer,
         area_point.priority = 5;
 
         if (ct_label_place_single(placer, &area_point, px, py, font, area_size)) {
+            /* Clear point pointer since area_point is stack-allocated.
+             * Rendering uses p->name which is safe (points into PBF context). */
+            placer->placements[placer->num_placements - 1].point = NULL;
             placed++;
         }
     }
 
     free(candidates);
     return placed;
+}
+
+/* ============================================================================
+ * Metatile Coordinate Math
+ * ============================================================================ */
+
+CTMetatileCoord ct_metatile_from_tile(CTTileCoord tile)
+{
+    CTMetatileCoord mt;
+    mt.z = tile.z;
+    mt.size = CT_METATILE_SIZE;
+
+    /* At z=0, there's only one tile (0,0) */
+    int max_tile = (1 << tile.z);
+
+    /* Align to metatile grid */
+    mt.mx = (tile.x / CT_METATILE_SIZE) * CT_METATILE_SIZE;
+    mt.my = (tile.y / CT_METATILE_SIZE) * CT_METATILE_SIZE;
+
+    /* Clamp: if metatile extends beyond grid, pull back */
+    if (mt.mx + CT_METATILE_SIZE > max_tile) {
+        mt.mx = max_tile - CT_METATILE_SIZE;
+        if (mt.mx < 0) mt.mx = 0;
+    }
+    if (mt.my + CT_METATILE_SIZE > max_tile) {
+        mt.my = max_tile - CT_METATILE_SIZE;
+        if (mt.my < 0) mt.my = 0;
+    }
+
+    return mt;
+}
+
+void ct_metatile_geo_to_pixel(CTMetatileCoord mt, double lat, double lon,
+                               int tile_size, int padding, int *px, int *py)
+{
+    if (!px || !py) return;
+
+    /* Get bbox of top-left tile and bottom-right tile of the metatile */
+    CTTileCoord tl = { mt.z, mt.mx, mt.my };
+    CTTileCoord br = { mt.z, mt.mx + mt.size - 1, mt.my + mt.size - 1 };
+
+    CTBBox tl_bbox = ct_tile_bounds(tl);
+    CTBBox br_bbox = ct_tile_bounds(br);
+
+    /* Combined metatile bbox */
+    double min_lon = tl_bbox.min_lon;
+    double max_lon = br_bbox.max_lon;
+    double max_lat = tl_bbox.max_lat;  /* Top-left has highest lat */
+    double min_lat = br_bbox.min_lat;  /* Bottom-right has lowest lat */
+
+    /* Map to pixel space [padding, size*tile_size + padding) */
+    int total_pixels = mt.size * tile_size;
+    double rel_x = (lon - min_lon) / (max_lon - min_lon);
+    double rel_y = (max_lat - lat) / (max_lat - min_lat);  /* Y inverted */
+
+    *px = (int)(rel_x * total_pixels) + padding;
+    *py = (int)(rel_y * total_pixels) + padding;
+}
+
+/* ============================================================================
+ * Metatile Label Placement
+ * ============================================================================ */
+
+/* Maximum road labels per metatile (4x single-tile budget) */
+#define METATILE_ROAD_LABEL_MAX  (ROAD_LABEL_MAX_PER_TILE * 4)
+
+/* Get font size for a place type (shared between per-tile and metatile paths) */
+static float place_type_font_size(CTPlaceType type, float base_size)
+{
+    switch (type) {
+        case CT_PLACE_COUNTRY:
+        case CT_PLACE_STATE:
+            return base_size * 1.6f;
+        case CT_PLACE_CITY:
+            return base_size * 1.3f;
+        case CT_PLACE_TOWN:
+            return base_size * 1.0f;
+        case CT_PLACE_VILLAGE:
+            return base_size * 0.85f;
+        case CT_PLACE_HAMLET:
+        case CT_PLACE_LOCALITY:
+            return base_size * 0.75f;
+        case CT_PLACE_SUBURB:
+        case CT_PLACE_NEIGHBOURHOOD:
+            return base_size * 0.8f;
+        default:
+            return base_size;
+    }
+}
+
+CTMetatilePlacements *ct_label_place_metatile(
+    const CTPBFContext *pbf, CTMetatileCoord mt,
+    const SHFont *font, int tile_size)
+{
+    if (!pbf || !font || tile_size <= 0) return NULL;
+
+    int padding = CT_METATILE_PAD;
+    int total_w = mt.size * tile_size + 2 * padding;
+    int total_h = total_w;
+
+    /* Allocate result */
+    CTMetatilePlacements *mtp = calloc(1, sizeof(CTMetatilePlacements));
+    if (!mtp) return NULL;
+
+    mtp->coord = mt;
+    mtp->tile_size = tile_size;
+    mtp->padding = padding;
+    mtp->total_width = total_w;
+    mtp->total_height = total_h;
+
+    /* Create collision grid sized to full metatile + padding */
+    CTLabelPlacer *placer = ct_label_placer_create(total_w, total_h);
+    if (!placer) {
+        free(mtp);
+        return NULL;
+    }
+
+    float base_size = ct_label_base_font_size(mt.z, tile_size);
+
+    /* ---------- Phase 1: Point labels ---------- */
+
+    /* Collect labels from all sub-tiles, deduplicate by pointer identity */
+    const CTLabeledPoint **all_labels = NULL;
+    size_t all_label_count = 0;
+    size_t all_label_cap = 0;
+
+    for (int si = 0; si < mt.size; si++) {
+        for (int sj = 0; sj < mt.size; sj++) {
+            CTTileCoord sub = { mt.z, mt.mx + si, mt.my + sj };
+            const CTLabeledPoint **labels = NULL;
+            size_t label_count = 0;
+
+            if (ct_pbf_get_tile_labels(pbf, sub, &labels, &label_count) != CT_OK
+                || label_count == 0) {
+                continue;
+            }
+
+            /* Merge into all_labels, dedup by pointer */
+            for (size_t i = 0; i < label_count; i++) {
+                /* Check for duplicate by pointer identity */
+                int dup = 0;
+                for (size_t j = 0; j < all_label_count; j++) {
+                    if (all_labels[j] == labels[i]) { dup = 1; break; }
+                }
+                if (dup) continue;
+
+                /* Add to merged list */
+                if (all_label_count >= all_label_cap) {
+                    size_t new_cap = all_label_cap ? all_label_cap * 2 : 256;
+                    const CTLabeledPoint **grown = realloc(all_labels,
+                        new_cap * sizeof(CTLabeledPoint *));
+                    if (!grown) break;
+                    all_labels = grown;
+                    all_label_cap = new_cap;
+                }
+                all_labels[all_label_count++] = labels[i];
+            }
+            free((void *)labels);
+        }
+    }
+
+    if (all_label_count > 0) {
+        /* Sort by priority */
+        qsort((void *)all_labels, all_label_count, sizeof(CTLabeledPoint *),
+              compare_labels_by_priority);
+
+        /* Place each label in metatile pixel space */
+        for (size_t i = 0; i < all_label_count; i++) {
+            const CTLabeledPoint *point = all_labels[i];
+
+            int px, py;
+            ct_metatile_geo_to_pixel(mt, point->coord.lat, point->coord.lon,
+                                      tile_size, padding, &px, &py);
+
+            /* Skip if too far outside metatile grid */
+            if (px < -100 || px > total_w + 100 ||
+                py < -100 || py > total_h + 100) {
+                continue;
+            }
+
+            float size = place_type_font_size(point->type, base_size);
+            ct_label_place_single(placer, point, px, py, font, size);
+        }
+    }
+    free(all_labels);
+
+    /* ---------- Phase 2: Area labels ---------- */
+
+    if (mt.z >= 10 && pbf->mp_rtree && pbf->num_multipolygons > 0) {
+        /* Get metatile bbox for R-tree query */
+        CTTileCoord tl = { mt.z, mt.mx, mt.my };
+        CTTileCoord br = { mt.z, mt.mx + mt.size - 1, mt.my + mt.size - 1 };
+        CTBBox tl_bbox = ct_tile_bounds(tl);
+        CTBBox br_bbox = ct_tile_bounds(br);
+        CTBBox mt_bbox = {
+            br_bbox.min_lat, tl_bbox.min_lon,
+            tl_bbox.max_lat, br_bbox.max_lon
+        };
+
+        uint32_t *candidates = malloc(AREA_LABEL_MAX_CANDIDATES * sizeof(uint32_t));
+        if (candidates) {
+            size_t num_candidates = ct_rtree_query(pbf->mp_rtree, mt_bbox,
+                                                    candidates, AREA_LABEL_MAX_CANDIDATES);
+            double polylabel_precision = 0.01;
+            int area_placed = 0;
+
+            for (size_t ci = 0; ci < num_candidates && area_placed < AREA_LABEL_MAX_PER_TILE * 2; ci++) {
+                uint32_t mp_idx = candidates[ci];
+                if (mp_idx >= pbf->num_multipolygons) continue;
+
+                const CTAssembledMultipolygon *mp = &pbf->multipolygons[mp_idx];
+                if (!mp->name || mp->name[0] == '\0') continue;
+                if (mp->num_rings < 1) continue;
+
+                double pole_x = 0, pole_y = 0, pole_dist = 0;
+                const CTCoord **rings = malloc(mp->num_rings * sizeof(CTCoord *));
+                int *ring_sizes = malloc(mp->num_rings * sizeof(int));
+                if (!rings || !ring_sizes) {
+                    free(rings);
+                    free(ring_sizes);
+                    continue;
+                }
+
+                for (int r = 0; r < mp->num_rings; r++) {
+                    rings[r] = mp->rings[r].coords;
+                    ring_sizes[r] = mp->rings[r].num_coords;
+                }
+
+                int found = ct_polylabel_with_holes(rings, ring_sizes, mp->num_rings,
+                                                     polylabel_precision, &pole_x, &pole_y, &pole_dist);
+                free(rings);
+                free(ring_sizes);
+                if (!found) continue;
+
+                /* Check if pole is in metatile bbox */
+                if (pole_x < mt_bbox.min_lon || pole_x > mt_bbox.max_lon ||
+                    pole_y < mt_bbox.min_lat || pole_y > mt_bbox.max_lat) {
+                    continue;
+                }
+
+                float area_size = base_size * 0.85f;
+                float text_width = sh_font_text_width(font, mp->name, area_size);
+
+                double deg_per_pixel = (mt_bbox.max_lon - mt_bbox.min_lon) / (double)(mt.size * tile_size);
+                if (deg_per_pixel > 0) {
+                    double pole_dist_px = pole_dist / deg_per_pixel;
+                    if (pole_dist_px * 2.0 < text_width) continue;
+                }
+
+                int px, py;
+                ct_metatile_geo_to_pixel(mt, pole_y, pole_x, tile_size, padding, &px, &py);
+
+                if (px < -50 || px > total_w + 50 ||
+                    py < -50 || py > total_h + 50) {
+                    continue;
+                }
+
+                CTLabeledPoint area_point;
+                area_point.id = 0;
+                area_point.coord.lat = pole_y;
+                area_point.coord.lon = pole_x;
+                area_point.type = CT_PLACE_UNKNOWN;
+                area_point.name = mp->name;
+                area_point.population = 0;
+                area_point.min_zoom = 10;
+                area_point.priority = 5;
+
+                if (ct_label_place_single(placer, &area_point, px, py, font, area_size)) {
+                    placer->placements[placer->num_placements - 1].point = NULL;
+                    area_placed++;
+                }
+            }
+            free(candidates);
+        }
+    }
+
+    /* ---------- Phase 3: Road labels ---------- */
+
+    /* Collect named ways for the metatile bbox */
+    CTRoadLabelPlacement *road_placements = NULL;
+    size_t road_count = 0;
+    {
+        /* Get metatile bbox for road query */
+        CTTileCoord tl = { mt.z, mt.mx, mt.my };
+        CTTileCoord br = { mt.z, mt.mx + mt.size - 1, mt.my + mt.size - 1 };
+        CTBBox tl_bbox = ct_tile_bounds(tl);
+        CTBBox br_bbox = ct_tile_bounds(br);
+        CTBBox mt_bbox = {
+            br_bbox.min_lat, tl_bbox.min_lon,
+            tl_bbox.max_lat, br_bbox.max_lon
+        };
+
+        /* Collect ways from each sub-tile, deduplicate by way ID */
+        const CTOSMWay **all_ways = NULL;
+        size_t all_way_count = 0;
+        size_t all_way_cap = 0;
+
+        for (int si = 0; si < mt.size; si++) {
+            for (int sj = 0; sj < mt.size; sj++) {
+                CTTileCoord sub = { mt.z, mt.mx + si, mt.my + sj };
+                const CTOSMWay **ways = NULL;
+                size_t way_count = 0;
+
+                if (ct_pbf_get_tile_named_ways(pbf, sub, &ways, &way_count) != CT_OK
+                    || way_count == 0) {
+                    continue;
+                }
+
+                for (size_t i = 0; i < way_count; i++) {
+                    /* Dedup by pointer identity (same PBF context) */
+                    int dup = 0;
+                    for (size_t j = 0; j < all_way_count; j++) {
+                        if (all_ways[j] == ways[i]) { dup = 1; break; }
+                    }
+                    if (dup) continue;
+
+                    if (all_way_count >= all_way_cap) {
+                        size_t new_cap = all_way_cap ? all_way_cap * 2 : 256;
+                        const CTOSMWay **grown = realloc(all_ways,
+                            new_cap * sizeof(CTOSMWay *));
+                        if (!grown) break;
+                        all_ways = grown;
+                        all_way_cap = new_cap;
+                    }
+                    all_ways[all_way_count++] = ways[i];
+                }
+                free((void *)ways);
+            }
+        }
+
+        if (all_way_count > 0) {
+            /* Sort by priority */
+            qsort((void *)all_ways, all_way_count, sizeof(CTOSMWay *),
+                  compare_roads_by_priority);
+
+            /* Precompute Mercator constants for metatile space */
+            double merc_n = (double)(1 << mt.z);
+            double merc_lon_scale = merc_n * tile_size / 360.0;
+            double merc_lon_offset = 180.0 * merc_lon_scale - (double)mt.mx * tile_size + padding;
+            double merc_lat_scale = -merc_n * tile_size / (2.0 * M_PI);
+            double merc_lat_offset = merc_n * tile_size / 2.0 - (double)mt.my * tile_size + padding;
+
+            size_t road_cap = 64;
+            road_placements = malloc(road_cap * sizeof(CTRoadLabelPlacement));
+            int placed = 0;
+
+            float *scratch_px = NULL;
+            float *scratch_py = NULL;
+            size_t scratch_cap = 0;
+            CTPathGlyph *scratch_glyphs = NULL;
+            size_t glyph_cap = 0;
+
+            for (size_t w = 0; w < all_way_count && placed < METATILE_ROAD_LABEL_MAX; w++) {
+                const CTOSMWay *way = all_ways[w];
+                int road_type = way->feature_type;
+                if (road_type < 0 || road_type >= CT_ROAD_TYPE_COUNT) road_type = CT_ROAD_OTHER;
+                if (mt.z < road_label_min_zoom[road_type]) continue;
+                if (way->num_coords < 3) continue;
+
+                /* Dedup: only label if midpoint is in metatile bbox */
+                int mid = way->num_coords / 2;
+                if (way->coords[mid].lat < mt_bbox.min_lat ||
+                    way->coords[mid].lat > mt_bbox.max_lat ||
+                    way->coords[mid].lon < mt_bbox.min_lon ||
+                    way->coords[mid].lon > mt_bbox.max_lon) {
+                    continue;
+                }
+
+                if ((size_t)way->num_coords > scratch_cap) {
+                    scratch_cap = (size_t)way->num_coords * 2;
+                    free(scratch_px);
+                    free(scratch_py);
+                    scratch_px = malloc(scratch_cap * sizeof(float));
+                    scratch_py = malloc(scratch_cap * sizeof(float));
+                    if (!scratch_px || !scratch_py) break;
+                }
+
+                /* Convert coords to metatile pixels with Mercator projection */
+                for (int i = 0; i < way->num_coords; i++) {
+                    double lon = way->coords[i].lon;
+                    double lat_rad = way->coords[i].lat * M_PI / 180.0;
+                    double merc_y = log(tan(lat_rad) + 1.0 / cos(lat_rad));
+
+                    scratch_px[i] = (float)(lon * merc_lon_scale + merc_lon_offset);
+                    scratch_py[i] = (float)(merc_y * merc_lat_scale + merc_lat_offset);
+                }
+
+                /* Reverse if right-to-left */
+                if (way->num_coords >= 2 &&
+                    scratch_px[way->num_coords - 1] < scratch_px[0]) {
+                    for (int i = 0, j = way->num_coords - 1; i < j; i++, j--) {
+                        float tmp;
+                        tmp = scratch_px[i]; scratch_px[i] = scratch_px[j]; scratch_px[j] = tmp;
+                        tmp = scratch_py[i]; scratch_py[i] = scratch_py[j]; scratch_py[j] = tmp;
+                    }
+                }
+
+                float fsize = road_label_font_size[road_type] * (float)tile_size / 256.0f;
+
+                size_t name_len = strlen(way->name);
+                if (name_len > glyph_cap) {
+                    glyph_cap = name_len * 2;
+                    free(scratch_glyphs);
+                    scratch_glyphs = malloc(glyph_cap * sizeof(CTPathGlyph));
+                    if (!scratch_glyphs) break;
+                }
+
+                int num_glyphs = place_glyphs_along_path(
+                    scratch_px, scratch_py, way->num_coords,
+                    way->name, font, fsize,
+                    scratch_glyphs, (int)glyph_cap);
+
+                if (num_glyphs <= 0) continue;
+
+                /* Collision check against shared grid */
+                float line_height = sh_font_line_height(font, fsize);
+                int collides = 0;
+                for (int g = 0; g < num_glyphs; g++) {
+                    float half_w = fsize * 0.4f;
+                    float half_h = line_height / 2.0f;
+                    int gx = (int)(scratch_glyphs[g].x - half_w);
+                    int gy = (int)(scratch_glyphs[g].y - half_h);
+                    int gw = (int)(half_w * 2);
+                    int gh = (int)(half_h * 2);
+
+                    if (ct_collision_test_padded(placer->collision, gx, gy, gw, gh,
+                                                 placer->padding_x, placer->padding_y)) {
+                        collides = 1;
+                        break;
+                    }
+                }
+                if (collides) continue;
+
+                if ((size_t)placed >= road_cap) {
+                    road_cap *= 2;
+                    CTRoadLabelPlacement *grown = realloc(road_placements,
+                        road_cap * sizeof(CTRoadLabelPlacement));
+                    if (!grown) break;
+                    road_placements = grown;
+                }
+
+                CTPathGlyph *glyph_copy = malloc(num_glyphs * sizeof(CTPathGlyph));
+                if (!glyph_copy) continue;
+                memcpy(glyph_copy, scratch_glyphs, num_glyphs * sizeof(CTPathGlyph));
+
+                /* Mark collision grid */
+                for (int g = 0; g < num_glyphs; g++) {
+                    float half_w = fsize * 0.4f;
+                    float half_h = line_height / 2.0f;
+                    int gx = (int)(scratch_glyphs[g].x - half_w);
+                    int gy = (int)(scratch_glyphs[g].y - half_h);
+                    int gw = (int)(half_w * 2);
+                    int gh = (int)(half_h * 2);
+
+                    ct_collision_mark_padded(placer->collision, gx, gy, gw, gh,
+                                             placer->padding_x, placer->padding_y);
+                }
+
+                CTRoadLabelPlacement *rp = &road_placements[placed];
+                rp->name = way->name;
+                rp->num_glyphs = num_glyphs;
+                rp->font_size = fsize;
+                rp->priority = road_label_priority[road_type];
+                rp->glyphs = glyph_copy;
+
+                placed++;
+            }
+
+            free(scratch_px);
+            free(scratch_py);
+            free(scratch_glyphs);
+            road_count = (size_t)placed;
+        }
+        free(all_ways);
+    }
+
+    /* Transfer placements from placer to result struct */
+    mtp->placements = placer->placements;
+    mtp->num_placements = placer->num_placements;
+    placer->placements = NULL;  /* Prevent double-free */
+    placer->num_placements = 0;
+
+    mtp->road_placements = road_placements;
+    mtp->num_road_placements = road_count;
+
+    ct_label_placer_free(placer);
+    return mtp;
+}
+
+void ct_metatile_placements_free(CTMetatilePlacements *mtp)
+{
+    if (!mtp) return;
+
+    free(mtp->placements);
+
+    if (mtp->road_placements) {
+        for (size_t i = 0; i < mtp->num_road_placements; i++) {
+            free(mtp->road_placements[i].glyphs);
+        }
+        free(mtp->road_placements);
+    }
+
+    free(mtp);
 }

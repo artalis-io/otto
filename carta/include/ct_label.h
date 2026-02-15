@@ -45,8 +45,9 @@ typedef enum {
 
 /* A placed label */
 typedef struct {
-    const CTLabeledPoint *point;  /* Source labeled point (owned by PBF context) */
-    int x, y;                     /* Text position in tile pixels */
+    const CTLabeledPoint *point;  /* Source labeled point (owned by PBF context, NULL for area labels) */
+    const char *name;             /* Label text (always set, points into PBF context) */
+    int x, y;                     /* Text position in pixel coordinates */
     int width, height;            /* Text bounding box */
     CTLabelAnchor anchor;         /* Anchor used for placement */
     float font_size;              /* Font size used */
@@ -256,6 +257,79 @@ int ct_label_get_count(const CTLabelPlacer *placer);
  * Get collision grid occupancy.
  */
 float ct_label_get_occupancy(const CTLabelPlacer *placer);
+
+/* ============================================================================
+ * Metatile Label Placement
+ *
+ * Labels near tile boundaries get clipped when each tile renders labels
+ * independently. Metatile rendering places labels across NxN tiles using
+ * a shared collision grid, then each sub-tile renders its visible portion.
+ * ============================================================================ */
+
+#define CT_METATILE_SIZE  2    /* 2x2 tiles per metatile */
+#define CT_METATILE_PAD   128  /* Pixels of padding around metatile edges */
+
+/* Metatile coordinate: identifies the top-left tile of a 2x2 group */
+typedef struct {
+    int z;
+    int mx, my;    /* Top-left tile of the metatile group */
+    int size;      /* Tiles per side (CT_METATILE_SIZE) */
+} CTMetatileCoord;
+
+/* All label placements for a metatile, in metatile pixel space */
+typedef struct {
+    CTMetatileCoord coord;
+    int tile_size, padding;
+    int total_width, total_height;   /* size*tile_size + 2*padding */
+
+    /* Point/area labels in metatile pixel coords */
+    CTLabelPlacement *placements;
+    size_t num_placements;
+
+    /* Road labels in metatile pixel coords */
+    CTRoadLabelPlacement *road_placements;
+    size_t num_road_placements;
+} CTMetatilePlacements;
+
+/*
+ * Compute the metatile origin from any tile coordinate.
+ * The metatile groups tiles into CT_METATILE_SIZE x CT_METATILE_SIZE blocks.
+ * Result: mx = (x / size) * size, my = (y / size) * size, clamped to grid.
+ */
+CTMetatileCoord ct_metatile_from_tile(CTTileCoord tile);
+
+/*
+ * Convert geographic coordinates to metatile pixel space.
+ * Maps the metatile's combined bbox to [padding, size*tile_size + padding).
+ *
+ * @param mt        Metatile coordinate
+ * @param lat, lon  Geographic position
+ * @param tile_size Tile size in pixels
+ * @param padding   Padding around metatile edges
+ * @param px, py    Output: pixel coordinates in metatile space
+ */
+void ct_metatile_geo_to_pixel(CTMetatileCoord mt, double lat, double lon,
+                               int tile_size, int padding, int *px, int *py);
+
+/*
+ * Place all labels (point, area, road) for a metatile.
+ * Uses a shared collision grid across the full metatile extent.
+ * Labels are deduplicated across sub-tile queries.
+ *
+ * @param pbf       PBF context with parsed data
+ * @param mt        Metatile coordinate
+ * @param font      Font for text measurement
+ * @param tile_size Tile size in pixels
+ * @return          Metatile placements (caller must free with ct_metatile_placements_free)
+ */
+CTMetatilePlacements *ct_label_place_metatile(
+    const CTPBFContext *pbf, CTMetatileCoord mt,
+    const SHFont *font, int tile_size);
+
+/*
+ * Free metatile placements.
+ */
+void ct_metatile_placements_free(CTMetatilePlacements *mtp);
 
 #ifdef __cplusplus
 }
