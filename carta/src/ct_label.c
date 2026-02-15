@@ -275,6 +275,15 @@ static int try_anchor(CTLabelPlacer *placer,
             break;
     }
 
+    /* Reject labels that extend past tile boundaries.
+     * The adjacent tile will place the same label if the anchor falls
+     * within its feature buffer zone and the text fits there. */
+    if (x < 0 || y < 0 ||
+        x + text_width > placer->tile_width ||
+        y + text_height > placer->tile_height) {
+        return 0;  /* Would be clipped at tile edge */
+    }
+
     /* Test collision with padding */
     if (ct_collision_test_padded(placer->collision, x, y, text_width, text_height,
                                  placer->padding_x, placer->padding_y)) {
@@ -697,9 +706,9 @@ int ct_label_place_roads(CTLabelPlacer *placer,
 
         if (num_glyphs <= 0) continue;
 
-        /* Collision check: test each glyph AABB against collision grid */
+        /* Bounds + collision check: test each glyph AABB */
         float line_height = sh_font_line_height(font, fsize);
-        int collides = 0;
+        int rejected = 0;
         for (int g = 0; g < num_glyphs; g++) {
             float half_w = fsize * 0.4f;
             float half_h = line_height / 2.0f;
@@ -708,14 +717,21 @@ int ct_label_place_roads(CTLabelPlacer *placer,
             int gw = (int)(half_w * 2);
             int gh = (int)(half_h * 2);
 
+            /* Reject if any glyph extends past tile boundary */
+            if (gx < 0 || gy < 0 ||
+                gx + gw > tile_size || gy + gh > tile_size) {
+                rejected = 1;
+                break;
+            }
+
             if (ct_collision_test_padded(placer->collision, gx, gy, gw, gh,
                                          placer->padding_x, placer->padding_y)) {
-                collides = 1;
+                rejected = 1;
                 break;
             }
         }
 
-        if (collides) continue;
+        if (rejected) continue;
 
         /* Grow output if needed */
         if ((size_t)placed >= capacity) {
