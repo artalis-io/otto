@@ -1831,6 +1831,17 @@ static void render_glyph_rotated(CTRenderContext *ctx,
     float cos_a = cosf(angle);
     float sin_a = sinf(angle);
 
+    /* (cx, cy) = advance center on baseline from path placer.
+     * Compute offset to glyph visual center so all characters share
+     * a common baseline (prevents vertical "jumping" between glyphs). */
+    float em_off_x = ((glyph->plane.left + glyph->plane.right) / 2.0f
+                       - glyph->advance / 2.0f) * font_size;
+    float em_off_y = -((glyph->plane.top + glyph->plane.bottom) / 2.0f) * font_size;
+
+    /* Rotate offset into path direction */
+    float vcx = cx + em_off_x * cos_a - em_off_y * sin_a;
+    float vcy = cy + em_off_x * sin_a + em_off_y * cos_a;
+
     /* Half-sizes for scanning (extend 1px for MSDF anti-aliasing) */
     float half_w = glyph_w / 2.0f + 1.0f;
     float half_h = glyph_h / 2.0f + 1.0f;
@@ -1850,11 +1861,10 @@ static void render_glyph_rotated(CTRenderContext *ctx,
         if (ry > max_ry) max_ry = ry;
     }
 
-    /* (cx, cy) is the glyph center on the path - render centered here */
-    int x_min = (int)floorf(cx + min_rx);
-    int x_max = (int)ceilf(cx + max_rx);
-    int y_min = (int)floorf(cy + min_ry);
-    int y_max = (int)ceilf(cy + max_ry);
+    int x_min = (int)floorf(vcx + min_rx);
+    int x_max = (int)ceilf(vcx + max_rx);
+    int y_min = (int)floorf(vcy + min_ry);
+    int y_max = (int)ceilf(vcy + max_ry);
 
     /* Clamp to render bounds */
     if (x_min < 0) x_min = 0;
@@ -1864,9 +1874,9 @@ static void render_glyph_rotated(CTRenderContext *ctx,
 
     for (int py = y_min; py <= y_max; py++) {
         for (int px = x_min; px <= x_max; px++) {
-            /* Inverse rotate: pixel -> glyph-local space centered at (cx, cy) */
-            float dx = (float)px - cx;
-            float dy = (float)py - cy;
+            /* Inverse rotate: pixel -> glyph-local space centered at visual center */
+            float dx = (float)px - vcx;
+            float dy = (float)py - vcy;
             float local_x = dx * cos_a + dy * sin_a;
             float local_y = -dx * sin_a + dy * cos_a;
 
@@ -1900,6 +1910,12 @@ void ct_render_text_path(CTRenderContext *ctx, const char *text,
     float halo_threshold = 0.5f - (halo_width * 0.08f);
     if (halo_threshold < 0.1f) halo_threshold = 0.1f;
 
+    /* Shift baseline perpendicular to road so text visually centers on road.
+     * Without this, baseline sits ON the road and text extends mostly above. */
+    float ascent = sh_font_ascent(font, font_size);
+    float descent = sh_font_descent(font, font_size);
+    float baseline_shift = (ascent - descent) / 2.0f;
+
     /* Iterate text codepoints in sync with path glyph positions */
     const char *p = text;
     int gi = 0;
@@ -1917,9 +1933,14 @@ void ct_render_text_path(CTRenderContext *ctx, const char *text,
             const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
             if (!glyph) { gi++; continue; }
 
+            /* Shift perpendicular to road: (-sin, cos) = "below" direction */
+            float sa = sinf(path_glyphs[gi].angle);
+            float ca = cosf(path_glyphs[gi].angle);
+            float bx = path_glyphs[gi].x - baseline_shift * sa;
+            float by = path_glyphs[gi].y + baseline_shift * ca;
+
             render_glyph_rotated(ctx, glyph, font, font_size,
-                                 path_glyphs[gi].x, path_glyphs[gi].y,
-                                 path_glyphs[gi].angle,
+                                 bx, by, path_glyphs[gi].angle,
                                  halo, halo_threshold);
             gi++;
         }
@@ -1937,9 +1958,13 @@ void ct_render_text_path(CTRenderContext *ctx, const char *text,
         const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
         if (!glyph) { gi++; continue; }
 
+        float sa = sinf(path_glyphs[gi].angle);
+        float ca = cosf(path_glyphs[gi].angle);
+        float bx = path_glyphs[gi].x - baseline_shift * sa;
+        float by = path_glyphs[gi].y + baseline_shift * ca;
+
         render_glyph_rotated(ctx, glyph, font, font_size,
-                             path_glyphs[gi].x, path_glyphs[gi].y,
-                             path_glyphs[gi].angle,
+                             bx, by, path_glyphs[gi].angle,
                              fill, 0.5f);
         gi++;
     }

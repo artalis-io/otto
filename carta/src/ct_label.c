@@ -605,6 +605,14 @@ int ct_label_place_roads(CTLabelPlacer *placer,
 
     CTBBox tile_bbox = ct_tile_bounds(coord);
     int placed = 0;
+    int max_labels = 30;  /* Cap road labels per tile for performance */
+
+    /* Precompute Mercator transform constants (same for all ways in this tile) */
+    double merc_n = (double)(1 << coord.z);
+    double merc_lon_scale = merc_n * tile_size / 360.0;
+    double merc_lon_offset = 180.0 * merc_lon_scale - (double)coord.x * tile_size;
+    double merc_lat_scale = -merc_n * tile_size / (2.0 * M_PI);
+    double merc_lat_offset = merc_n * tile_size / 2.0 - (double)coord.y * tile_size;
 
     /* Scratch buffers for coordinate conversion */
     float *scratch_px = NULL;
@@ -615,13 +623,16 @@ int ct_label_place_roads(CTLabelPlacer *placer,
     CTPathGlyph *scratch_glyphs = NULL;
     size_t glyph_cap = 0;
 
-    for (size_t w = 0; w < way_count; w++) {
+    for (size_t w = 0; w < way_count && placed < max_labels; w++) {
         const CTOSMWay *way = ways[w];
 
         /* Check min zoom for this road type */
         int road_type = way->feature_type;
         if (road_type < 0 || road_type >= CT_ROAD_TYPE_COUNT) road_type = CT_ROAD_OTHER;
         if (coord.z < road_label_min_zoom[road_type]) continue;
+
+        /* Skip very short ways early (< 3 coords can't form a useful path) */
+        if (way->num_coords < 3) continue;
 
         /* Tile boundary deduplication: only label if midpoint is in tile */
         int mid = way->num_coords / 2;
@@ -643,22 +654,13 @@ int ct_label_place_roads(CTLabelPlacer *placer,
         }
 
         /* Convert coords to tile pixels with Mercator projection (float precision) */
-        {
-            double n = (double)(1 << coord.z);
-            double lon_scale = n * tile_size / 360.0;
-            double lon_offset = 180.0 * lon_scale - (double)coord.x * tile_size;
-            double lat_py_scale = -n * tile_size / (2.0 * M_PI);
-            double lat_py_offset = n * tile_size / 2.0 - (double)coord.y * tile_size;
+        for (int i = 0; i < way->num_coords; i++) {
+            double lon = way->coords[i].lon;
+            double lat_rad = way->coords[i].lat * M_PI / 180.0;
+            double merc_y = log(tan(lat_rad) + 1.0 / cos(lat_rad));
 
-            for (int i = 0; i < way->num_coords; i++) {
-                double lon = way->coords[i].lon;
-                double lat = way->coords[i].lat;
-                double lat_rad = lat * M_PI / 180.0;
-                double merc_y = log(tan(lat_rad) + 1.0 / cos(lat_rad));
-
-                scratch_px[i] = (float)(lon * lon_scale + lon_offset);
-                scratch_py[i] = (float)(merc_y * lat_py_scale + lat_py_offset);
-            }
+            scratch_px[i] = (float)(lon * merc_lon_scale + merc_lon_offset);
+            scratch_py[i] = (float)(merc_y * merc_lat_scale + merc_lat_offset);
         }
 
         /* Reverse path if it goes right-to-left so text reads naturally */
