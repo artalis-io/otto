@@ -494,9 +494,13 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
     int min = -buffer;
     int max = extent + buffer;
 
-    /* Allocate temporary buffers */
-    CTTilePoint *input = malloc(num_points * 4 * sizeof(CTTilePoint));
-    CTTilePoint *output = malloc(num_points * 4 * sizeof(CTTilePoint));
+    /* Allocate temporary buffers.
+     * Each edge clip can at most double the vertex count (worst case 16x after
+     * 4 edges), but typical polygons only clip 1-2 edges. 4x is sufficient
+     * with bounds checks below to prevent overflow. */
+    int capacity = num_points * 4;
+    CTTilePoint *input = malloc(capacity * sizeof(CTTilePoint));
+    CTTilePoint *output = malloc(capacity * sizeof(CTTilePoint));
     if (!input || !output) {
         free(input);
         free(output);
@@ -541,7 +545,7 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
                     /* Compute intersection - use floor() for consistent rounding,
                      * then clamp to clip bounds to handle floating-point precision */
                     double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
-                    if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
+                    if (fabs(denom) > 1e-10 && output_count < capacity) {
                         double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
                         int ix = (int)floor(prev.x + t * (curr.x - prev.x));
                         int iy = (int)floor(prev.y + t * (curr.y - prev.y));
@@ -555,12 +559,14 @@ void ct_clip_polygon(const CTTilePoint *points, int num_points,
                         output_count++;
                     }
                 }
-                output[output_count++] = curr;
+                if (output_count < capacity) {
+                    output[output_count++] = curr;
+                }
             } else if (prev_inside) {
                 /* Compute intersection - use floor() for consistent rounding,
                  * then clamp to clip bounds to handle floating-point precision */
                 double denom = (double)(y2 - y1) * (curr.x - prev.x) - (double)(x2 - x1) * (curr.y - prev.y);
-                if (fabs(denom) > 1e-10) {  /* Skip degenerate (parallel) case */
+                if (fabs(denom) > 1e-10 && output_count < capacity) {
                     double t = ((double)(x2 - x1) * (prev.y - y1) - (double)(y2 - y1) * (prev.x - x1)) / denom;
                     int ix = (int)floor(prev.x + t * (curr.x - prev.x));
                     int iy = (int)floor(prev.y + t * (curr.y - prev.y));
