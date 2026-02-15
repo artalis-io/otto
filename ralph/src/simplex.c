@@ -2783,7 +2783,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->phase1_pricing = -1;  /* Default: disabled (use solver pricing) */
     solver->use_dual_bound_flip = 1;
     solver->use_dual_steepest_edge = 1;
-    solver->method = 0;  /* Default: primal simplex */
+    solver->method = 2;  /* Default: auto (dual first, primal fallback) */
 
     return solver;
 }

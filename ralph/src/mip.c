@@ -898,6 +898,7 @@ static int solve_node_lp_as_lap(MIPSolver *solver, BBNode *node) {
     if (!solver->lp_solver) {
         solver->lp_solver = simplex_create(solver->working_model);
         if (!solver->lp_solver) return -1;
+        solver->lp_solver->method = 0;  /* MIP requires primal tableau for dual_reopt */
         solver->lp_solver->scaling = 0;
         mip_apply_dual_flags(solver);
     }
@@ -949,6 +950,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     if (!solver->lp_solver) {
         solver->lp_solver = simplex_create(model);
         if (!solver->lp_solver) return -1;
+        solver->lp_solver->method = 0;  /* MIP requires primal tableau for dual_reopt */
         solver->lp_solver->scaling = 0;
     }
 
@@ -1354,6 +1356,8 @@ static int solve_root_node(MIPSolver *solver) {
             return -1;
         }
 
+        /* MIP requires primal tableau for dual_reopt node solves */
+        solver->lp_solver->method = 0;
         /* Disable scaling for MIP - cuts are generated from tableau which would need unscaling */
         solver->lp_solver->scaling = 0;
         solver->lp_solver->verbose = solver->verbose;
@@ -1509,6 +1513,8 @@ static int solve_root_node(MIPSolver *solver) {
                 return -1;
             }
 
+            /* MIP requires primal tableau for dual_reopt node solves */
+            solver->lp_solver->method = 0;
             /* Disable scaling for MIP and propagate verbose flag */
             solver->lp_solver->scaling = 0;
             solver->lp_solver->verbose = solver->verbose;
@@ -1546,6 +1552,7 @@ static int solve_root_node(MIPSolver *solver) {
                     bb_node_pool_return(solver->node_pool, root);
                     return -1;
                 }
+                solver->lp_solver->method = 0;  /* MIP requires primal tableau for dual_reopt */
                 solver->lp_solver->scaling = 0;
                 solver->lp_solver->verbose = solver->verbose;
                 mip_apply_dual_flags(solver);
