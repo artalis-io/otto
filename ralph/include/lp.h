@@ -6,6 +6,7 @@
 #define RALPH_LP_H
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include "sparse.h"
 #include "ralph.h"
@@ -213,6 +214,7 @@ typedef struct {
     int *ws_L_pos;           /* [m] L CSC column position counters */
     int *ws_U_pos;           /* [m] U CSC column position counters */
     int *ws_row_pos;         /* [m] inverse of row_perm (for identity O(1) lookup) */
+    int *ws_struct_nnz;      /* [m] column nnz counts for sorting + fingerprint */
 
     /* Capacity tracking for L/U output arrays (T1.4) */
     int LU_out_capacity;     /* Allocated nnz capacity for L/U rowidx/values arrays */
@@ -230,6 +232,7 @@ typedef struct {
     int sym_valid;           /* 1 if cached symbolic analysis is valid */
     int sym_num_identity;    /* Cached identity column count */
     int sym_k;               /* Cached structural column count (m - num_identity) */
+    uint64_t sym_fingerprint;    /* FNV-1a hash of basis sparsity pattern */
     /* sym uses ws_is_identity, ws_identity_row, ws_identity_val, ws_col_order, ws_col_order_inv */
 
     /* Arena allocator for fixed-size arrays (reduces ~20 mallocs to 1) */
