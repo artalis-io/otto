@@ -2654,17 +2654,22 @@ CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
     size_t result_count = 0;
 
     if (ctx->rtree) {
-        /* R-tree query for candidate ways */
-        size_t max_candidates = ctx->num_ways;
-        uint32_t *candidates = malloc(max_candidates * sizeof(uint32_t));
+        /* R-tree query for candidate ways.
+         * Cap candidates to avoid huge allocations (5.6M ways = 22MB).
+         * A single tile rarely intersects more than a few thousand ways. */
+        #define NAMED_WAY_MAX_CANDIDATES  4096
+        #define NAMED_WAY_MAX_RESULTS      200
+
+        uint32_t *candidates = malloc(NAMED_WAY_MAX_CANDIDATES * sizeof(uint32_t));
         if (!candidates) {
             free(result);
             return CT_ERROR_OUT_OF_MEMORY;
         }
 
-        size_t num_candidates = ct_rtree_query(ctx->rtree, bbox, candidates, max_candidates);
+        size_t num_candidates = ct_rtree_query(ctx->rtree, bbox, candidates,
+                                                NAMED_WAY_MAX_CANDIDATES);
 
-        for (size_t i = 0; i < num_candidates; i++) {
+        for (size_t i = 0; i < num_candidates && result_count < NAMED_WAY_MAX_RESULTS; i++) {
             uint32_t way_idx = candidates[i];
             if (way_idx >= ctx->num_ways) continue;
 

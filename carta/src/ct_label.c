@@ -9,6 +9,7 @@
 #include "ct_pbf.h"
 #include "ct_tile.h"
 #include "ct_polylabel.h"
+#include "ct_rtree.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -57,6 +58,9 @@ static const int road_label_priority[] = {
 
 /* Maximum angle between consecutive segments for road labels (radians) */
 #define ROAD_LABEL_MAX_ANGLE  (30.0f * (float)M_PI / 180.0f)
+
+/* Maximum road labels placed per tile (performance cap) */
+#define ROAD_LABEL_MAX_PER_TILE  30
 
 /* ============================================================================
  * Zoom-Adaptive Font Sizing
@@ -605,7 +609,7 @@ int ct_label_place_roads(CTLabelPlacer *placer,
 
     CTBBox tile_bbox = ct_tile_bounds(coord);
     int placed = 0;
-    int max_labels = 30;  /* Cap road labels per tile for performance */
+    int max_labels = ROAD_LABEL_MAX_PER_TILE;
 
     /* Precompute Mercator transform constants (same for all ways in this tile) */
     double merc_n = (double)(1 << coord.z);
@@ -777,6 +781,10 @@ void ct_label_road_placements_free(CTRoadLabelPlacement *p, size_t count)
  * Area Label Placement (stub - requires polylabel)
  * ============================================================================ */
 
+/* Maximum area labels per tile and R-tree candidates */
+#define AREA_LABEL_MAX_PER_TILE    20
+#define AREA_LABEL_MAX_CANDIDATES  512
+
 int ct_label_place_areas(CTLabelPlacer *placer,
                          const CTPBFContext *ctx,
                          CTTileCoord coord,
@@ -785,18 +793,33 @@ int ct_label_place_areas(CTLabelPlacer *placer,
 {
     if (!placer || !ctx || !font) return 0;
 
+    /* Only show at reasonable zoom levels */
+    if (coord.z < 10) return 0;
+
     int placed = 0;
     CTBBox tile_bbox = ct_tile_bounds(coord);
 
-    /* Label named multipolygons (lakes, parks, forests) */
-    for (size_t i = 0; i < ctx->num_multipolygons; i++) {
-        const CTAssembledMultipolygon *mp = &ctx->multipolygons[i];
+    /* Use MP R-tree to find candidate multipolygons instead of scanning all 75K+ */
+    if (!ctx->mp_rtree || ctx->num_multipolygons == 0) return 0;
+
+    uint32_t *candidates = malloc(AREA_LABEL_MAX_CANDIDATES * sizeof(uint32_t));
+    if (!candidates) return 0;
+
+    size_t num_candidates = ct_rtree_query(ctx->mp_rtree, tile_bbox, candidates,
+                                            AREA_LABEL_MAX_CANDIDATES);
+
+    /* Polylabel precision: 0.01 degrees (~1km) is plenty for label placement.
+     * Was 0.001 (~100m) which makes polylabel iterate much deeper. */
+    double polylabel_precision = 0.01;
+
+    for (size_t ci = 0; ci < num_candidates && placed < AREA_LABEL_MAX_PER_TILE; ci++) {
+        uint32_t mp_idx = candidates[ci];
+        if (mp_idx >= ctx->num_multipolygons) continue;
+
+        const CTAssembledMultipolygon *mp = &ctx->multipolygons[mp_idx];
 
         if (!mp->name || mp->name[0] == '\0') continue;
         if (mp->num_rings < 1) continue;
-
-        /* Only show at reasonable zoom levels */
-        if (coord.z < 10) continue;
 
         /* Find pole of inaccessibility using polylabel */
         double pole_x = 0, pole_y = 0, pole_dist = 0;
@@ -816,7 +839,7 @@ int ct_label_place_areas(CTLabelPlacer *placer,
         }
 
         int found = ct_polylabel_with_holes(rings, ring_sizes, mp->num_rings,
-                                             0.001, &pole_x, &pole_y, &pole_dist);
+                                             polylabel_precision, &pole_x, &pole_y, &pole_dist);
         free(rings);
         free(ring_sizes);
 
@@ -832,11 +855,7 @@ int ct_label_place_areas(CTLabelPlacer *placer,
         float area_size = font_size * 0.85f;
         float text_width = sh_font_text_width(font, mp->name, area_size);
 
-        /* pole_dist is in degrees; convert roughly to meters for comparison
-         * with text width in pixels. At zoom 12, 1 degree ~ 111km and
-         * 256px ~ 40km, so 1px ~ 156m, so 1 degree ~ 711px.
-         * Use a simpler heuristic: check if pole_dist * tile_pixels_per_degree
-         * is at least half the text width. */
+        /* pole_dist is in degrees; convert to pixels for comparison */
         double deg_per_pixel = (tile_bbox.max_lon - tile_bbox.min_lon) / (double)placer->tile_width;
         if (deg_per_pixel > 0) {
             double pole_dist_px = pole_dist / deg_per_pixel;
@@ -869,5 +888,6 @@ int ct_label_place_areas(CTLabelPlacer *placer,
         }
     }
 
+    free(candidates);
     return placed;
 }
