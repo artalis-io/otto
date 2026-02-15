@@ -636,6 +636,7 @@ int strong_branch(MIPSolver *solver, int var, double val,
     /* Try branching down */
     tab->ub_ext[var] = floor(val);
     dual_v2_clear_perturbation(tab);
+    tab->dse_initialized = 0;  /* Force reinit — probing changes basis */
     tableau_compute_solution(tab);
     tableau_compute_reduced_costs(tab);
     dual_simplex_solve_v2(lp);
@@ -657,6 +658,7 @@ int strong_branch(MIPSolver *solver, int var, double val,
     tab->ub_ext[var] = orig_ub;
     tab->lb_ext[var] = ceil(val);
     dual_v2_clear_perturbation(tab);
+    tab->dse_initialized = 0;  /* Force reinit — probing changes basis */
     tableau_compute_solution(tab);
     tableau_compute_reduced_costs(tab);
     dual_simplex_solve_v2(lp);

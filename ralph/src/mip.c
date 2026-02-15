@@ -15,13 +15,20 @@
 #include <time.h>
 #include "mip.h"
 
-/* Apply P5/P6 feature flags from MIP solver to LP sub-solver */
+/* Apply P5/P6 feature flags and iteration budget from MIP solver to LP sub-solver.
+ * MIP LP solves should NEVER run for 1M+ iterations — if v2 cycles for >2000
+ * iterations on a node LP, something is wrong and cold-start fallback handles it. */
 static void mip_apply_dual_flags(MIPSolver *solver) {
     if (!solver->lp_solver) return;
     if (solver->dual_bound_flip >= 0)
         solver->lp_solver->use_dual_bound_flip = solver->dual_bound_flip;
     if (solver->dual_steepest_edge >= 0)
         solver->lp_solver->use_dual_steepest_edge = solver->dual_steepest_edge;
+    /* Cap iteration limit for MIP LP solves.  The old dual_reopt had a 500-pivot
+     * budget; if dual v2 hasn't converged in 500 iterations, fall back to primal.
+     * This prevents stall-detection-fooling cycling from burning minutes. */
+    if (solver->lp_solver->max_iterations > 500)
+        solver->lp_solver->max_iterations = 500;
 }
 
 /* ============================================================================
@@ -413,11 +420,17 @@ static int diving_heuristic(MIPSolver *solver) {
                 tab->x[best_var] = rounded;
             }
 
-            /* Recompute and use v2 dual simplex to restore feasibility */
+            /* Recompute and use v2 dual simplex to restore feasibility.
+             * Invalidate DSE weights — basis changes significantly each
+             * dive step, stale weights cause degenerate cycling. */
             dual_v2_clear_perturbation(tab);
+            tab->dse_initialized = 0;
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
+            int save_max = lp->max_iterations;
+            lp->max_iterations = 500;  /* Budget: bail if stuck */
             dual_simplex_solve_v2(lp);
+            lp->max_iterations = save_max;
 
             if (lp->status == RALPH_STATUS_OPTIMAL) {
                 memcpy(sol, lp->solution, num_vars * sizeof(double));
@@ -435,10 +448,7 @@ static int diving_heuristic(MIPSolver *solver) {
         }
     }
 
-    /* Restore original iteration limit */
-    lp->max_iterations = orig_max_iter;
-
-    /* Restore original bounds */
+    /* Restore original bounds (max_iterations restored AFTER cold-start below) */
     memcpy(model->lb, orig_lb, num_vars * sizeof(double));
     memcpy(model->ub, orig_ub, num_vars * sizeof(double));
 
@@ -457,17 +467,35 @@ static int diving_heuristic(MIPSolver *solver) {
             }
         }
 
-        /* Recompute and re-optimize with clean dual */
+        /* Recompute and re-optimize with clean dual.
+         * Invalidate DSE — basis is very different after diving. */
         dual_v2_clear_perturbation(tab);
+        tab->dse_initialized = 0;
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
+        int save_max2 = lp->max_iterations;
+        lp->max_iterations = 500;
         dual_simplex_solve_v2(lp);
+        lp->max_iterations = save_max2;
+        if (lp->status != RALPH_STATUS_OPTIMAL && lp->tableau) {
+            /* Budget exceeded — cold start with primal (dual already failed) */
+            tableau_free(lp->tableau);
+            lp->tableau = NULL;
+            lp->method = 0;
+            simplex_solve(lp);
+            lp->method = 2;
+        }
     } else if (lp->tableau) {
-        /* Fallback: cold start */
+        /* Fallback: cold start with primal */
         tableau_free(lp->tableau);
         lp->tableau = NULL;
+        lp->method = 0;
         simplex_solve(lp);
+        lp->method = 2;
     }
+
+    /* Restore original iteration limit AFTER all cold-start paths */
+    lp->max_iterations = orig_max_iter;
 
     /* Restore P5/P6 flags */
     lp->use_dual_bound_flip = saved_bflip;
@@ -658,11 +686,13 @@ static int rins_heuristic(MIPSolver *solver) {
         }
     }
 
-    /* Re-solve LP with fixed neighborhood */
+    /* Re-solve LP with fixed neighborhood.
+     * Invalidate DSE — many vars fixed, basis very different. */
     int orig_max_iter = lp->max_iterations;
     lp->max_iterations = MIP_RINS_LP_ITER_LIMIT;
 
     dual_v2_clear_perturbation(tab);
+    tab->dse_initialized = 0;
     tableau_compute_solution(tab);
     tableau_compute_reduced_costs(tab);
     dual_simplex_solve_v2(lp);
@@ -749,6 +779,7 @@ static int rins_heuristic(MIPSolver *solver) {
         }
 
         dual_v2_clear_perturbation(tab);
+        tab->dse_initialized = 0;
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
         dual_simplex_solve_v2(lp);
@@ -759,9 +790,8 @@ static int rins_heuristic(MIPSolver *solver) {
 
 rins_cleanup:
     free(sol);
-    lp->max_iterations = orig_max_iter;
 
-    /* Restore original bounds */
+    /* Restore original bounds (max_iterations restored AFTER cold-start below) */
     memcpy(model->lb, orig_lb, num_vars * sizeof(double));
     memcpy(model->ub, orig_ub, num_vars * sizeof(double));
 
@@ -780,14 +810,30 @@ rins_cleanup:
         }
 
         dual_v2_clear_perturbation(tab);
+        tab->dse_initialized = 0;
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
+        int rins_save = lp->max_iterations;
+        lp->max_iterations = 500;
         dual_simplex_solve_v2(lp);
+        lp->max_iterations = rins_save;
+        if (lp->status != RALPH_STATUS_OPTIMAL && lp->tableau) {
+            tableau_free(lp->tableau);
+            lp->tableau = NULL;
+            lp->method = 0;
+            simplex_solve(lp);
+            lp->method = 2;
+        }
     } else if (lp->tableau) {
         tableau_free(lp->tableau);
         lp->tableau = NULL;
+        lp->method = 0;
         simplex_solve(lp);
+        lp->method = 2;
     }
+
+    /* Restore original iteration limit AFTER all cold-start paths */
+    lp->max_iterations = orig_max_iter;
 
     /* Restore P5/P6 flags */
     lp->use_dual_bound_flip = saved_bflip;
@@ -920,6 +966,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         if (!solver->lp_solver) return -1;
         solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
         solver->lp_solver->scaling = 0;
+        mip_apply_dual_flags(solver);
     }
 
     SimplexSolver *lp = solver->lp_solver;
@@ -960,14 +1007,24 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             }
         }
 
-        /* Clear stale perturbation backup before re-solving */
+        /* Clear stale perturbation backup before re-solving.
+         * DSE weights remain valid — branching changes bounds on a non-basic
+         * variable, which doesn't change the basis or weight computation. */
         dual_v2_clear_perturbation(tab);
 
         /* Recompute solution and reduced costs with updated bounds */
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
 
+        /* Budget: old dual_reopt used 500 pivots; bail to cold start if stuck */
+        int save_max_iter = lp->max_iterations;
+        lp->max_iterations = 500;
         int rc = dual_simplex_solve_v2(lp);
+        lp->max_iterations = save_max_iter;
+        if (solver->verbose >= 2) {
+            printf("  [solve_node_lp] warm v2: rc=%d status=%d iters=%d obj=%.4f\n",
+                   rc, lp->status, lp->iterations, lp->obj_value);
+        }
         if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
             goto node_lp_done;
         }
@@ -977,14 +1034,26 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             goto node_lp_done;
         }
         /* v2 failed — fall through to cold start */
+        if (solver->verbose >= 2) {
+            printf("  [solve_node_lp] warm v2 FAILED, cold starting\n");
+        }
+    } else if (solver->verbose >= 2) {
+        printf("  [solve_node_lp] no warm start (tab=%p, nart=%d)\n",
+               (void*)tab, tab ? tab->num_artificial : -1);
     }
 
-    /* Cold start: destroy tableau, full solve */
+    /* Cold start: destroy tableau, full solve with primal (dual already failed) */
     if (lp->tableau) {
         tableau_free(lp->tableau);
         lp->tableau = NULL;
     }
+    lp->method = 0;
     simplex_solve(lp);
+    lp->method = 2;
+    if (solver->verbose >= 2) {
+        printf("  [solve_node_lp] cold: status=%d iters=%d obj=%.4f\n",
+               lp->status, lp->iterations, lp->obj_value);
+    }
 
 node_lp_done:
     node->lp_status = lp->status;
