@@ -717,6 +717,20 @@ int ct_label_place_roads(CTLabelPlacer *placer,
 
         if (collides) continue;
 
+        /* Grow output if needed */
+        if ((size_t)placed >= capacity) {
+            capacity *= 2;
+            CTRoadLabelPlacement *grown = realloc(placements, capacity * sizeof(CTRoadLabelPlacement));
+            if (!grown) break;
+            placements = grown;
+        }
+
+        /* Allocate glyph copy BEFORE marking collision grid, so a failed
+         * allocation doesn't consume collision space for a label that won't render */
+        CTPathGlyph *glyph_copy = malloc(num_glyphs * sizeof(CTPathGlyph));
+        if (!glyph_copy) continue;
+        memcpy(glyph_copy, scratch_glyphs, num_glyphs * sizeof(CTPathGlyph));
+
         /* Mark all glyph AABBs in collision grid */
         for (int g = 0; g < num_glyphs; g++) {
             float half_w = fsize * 0.4f;
@@ -730,23 +744,13 @@ int ct_label_place_roads(CTLabelPlacer *placer,
                                      placer->padding_x, placer->padding_y);
         }
 
-        /* Grow output if needed */
-        if ((size_t)placed >= capacity) {
-            capacity *= 2;
-            CTRoadLabelPlacement *grown = realloc(placements, capacity * sizeof(CTRoadLabelPlacement));
-            if (!grown) break;
-            placements = grown;
-        }
-
-        /* Store placement (copy glyphs) */
+        /* Store placement */
         CTRoadLabelPlacement *rp = &placements[placed];
         rp->name = way->name;
         rp->num_glyphs = num_glyphs;
         rp->font_size = fsize;
         rp->priority = road_label_priority[road_type];
-        rp->glyphs = malloc(num_glyphs * sizeof(CTPathGlyph));
-        if (!rp->glyphs) continue;
-        memcpy(rp->glyphs, scratch_glyphs, num_glyphs * sizeof(CTPathGlyph));
+        rp->glyphs = glyph_copy;
 
         placed++;
     }

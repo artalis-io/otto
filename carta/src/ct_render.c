@@ -84,6 +84,11 @@ CTRenderContext *ct_render_create(int width, int height)
     ctx->edge_buffer = malloc(ctx->edge_buffer_capacity * sizeof(CTEdge));
     ctx->active_buffer = malloc(ctx->edge_buffer_capacity * sizeof(CTEdge));
 
+    if (!ctx->scale_buffer || !ctx->edge_buffer || !ctx->active_buffer) {
+        ct_render_free(ctx);
+        return NULL;
+    }
+
     ct_default_style(&ctx->style);
     ct_render_options_default(&ctx->options);
     return ctx;

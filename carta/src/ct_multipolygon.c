@@ -438,7 +438,7 @@ static CTStatus assemble_one_multipolygon(CTPBFContext *ctx,
     mp->area_sqm = total_area;
     mp->feature_class = rel->feature_class;
     mp->feature_type = rel->feature_type;
-    mp->name = rel->name ? strdup(rel->name) : NULL;
+    mp->name = (rel->name && rel->name[0]) ? strdup(rel->name) : NULL;
 
     return CT_OK;
 

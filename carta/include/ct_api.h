@@ -11,8 +11,8 @@
  * that the caller must free.
  */
 
-#ifndef CARTA_CT_API_H
-#define CARTA_CT_API_H
+#ifndef CT_API_H
+#define CT_API_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -338,4 +338,4 @@ char *ct_api_generate_ascii(CTAPIContext *ctx,
 }
 #endif
 
-#endif /* CARTA_CT_API_H */
+#endif /* CT_API_H */
