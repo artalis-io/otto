@@ -199,8 +199,23 @@ typedef struct {
     int *hs_stack;          /* Stack for DFS in reach computation */
     double *perm_work;      /* Workspace for permutation operations */
 
-    /* Pre-allocated workspace for dense LU fallback (m×m matrix, column-major) */
+    /* Pre-allocated workspace for dense LU fallback (m×m matrix) */
     double *dense_work;     /* Reused across factorizations to avoid O(m²) alloc */
+
+    /* Pre-allocated workspace for sparse-efficient factorization (T1.4) */
+    int *ws_is_identity;     /* [m] identity column classification */
+    int *ws_identity_row;    /* [m] row of identity entry */
+    double *ws_identity_val; /* [m] value (+-1) of identity entry */
+    int *ws_row_used;        /* [m] rows claimed by identity cols */
+    int *ws_col_order;       /* [m] column ordering */
+    int *ws_col_order_inv;   /* [m] inverse column ordering */
+    int *ws_row_perm;        /* [m] row permutation */
+    int *ws_L_pos;           /* [m] L CSC column position counters */
+    int *ws_U_pos;           /* [m] U CSC column position counters */
+    int *ws_row_pos;         /* [m] inverse of row_perm (for identity O(1) lookup) */
+
+    /* Capacity tracking for L/U output arrays (T1.4) */
+    int LU_out_capacity;     /* Allocated nnz capacity for L/U rowidx/values arrays */
 
     /* Arena allocator for fixed-size arrays (reduces ~20 mallocs to 1) */
     SHArena *arena;

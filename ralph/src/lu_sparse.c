@@ -1650,16 +1650,13 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         return lu_factorize_dense(lu, B);
     }
 
-    /* Identify identity columns */
-    int *is_identity_col = (int*)calloc(m, sizeof(int));
-    int *identity_row = (int*)calloc(m, sizeof(int));    /* Row where identity col has its ±1 */
-    double *identity_val = (double*)calloc(m, sizeof(double)); /* The ±1 value */
-    int *row_used = (int*)calloc(m, sizeof(int));  /* Track which rows are used by identity cols */
-
-    if (!is_identity_col || !identity_row || !identity_val || !row_used) {
-        free(is_identity_col); free(identity_row); free(identity_val); free(row_used);
-        return lu_factorize_dense(lu, B);
-    }
+    /* T1.4: Use pre-allocated workspace arrays instead of malloc */
+    int *is_identity_col = lu->ws_is_identity;
+    int *identity_row = lu->ws_identity_row;
+    double *identity_val = lu->ws_identity_val;
+    int *row_used = lu->ws_row_used;
+    memset(is_identity_col, 0, m * sizeof(int));
+    memset(row_used, 0, m * sizeof(int));
 
     int num_identity = 0;
     for (int j = 0; j < m; j++) {
@@ -1680,20 +1677,14 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
     /* If few identity columns, not worth the overhead */
     if (num_identity < m / 4) {
-        free(is_identity_col); free(identity_row); free(identity_val); free(row_used);
         return lu_factorize_dense(lu, B);
     }
 
     int k = m - num_identity;  /* Number of structural columns */
 
     /* Build column ordering: structural first, then identity */
-    int *col_order = (int*)calloc(m, sizeof(int));
-    int *col_order_inv = (int*)calloc(m, sizeof(int));
-    if (!col_order || !col_order_inv) {
-        free(is_identity_col); free(identity_row); free(identity_val); free(row_used);
-        free(col_order); free(col_order_inv);
-        return lu_factorize_dense(lu, B);
-    }
+    int *col_order = lu->ws_col_order;
+    int *col_order_inv = lu->ws_col_order_inv;
 
     int struct_idx = 0, ident_idx = k;
     for (int j = 0; j < m; j++) {
@@ -1708,26 +1699,24 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         }
     }
 
-    /* Extract dense m×k matrix of structural columns (in original row order) */
-    double *A_struct = (double*)calloc((size_t)m * k, sizeof(double));
-    if (!A_struct) {
-        free(is_identity_col); free(identity_row); free(identity_val); free(row_used);
-        free(col_order); free(col_order_inv);
-        return lu_factorize_dense(lu, B);
-    }
+    /* T1.4: Use dense_work for A_struct (m×k fits in m×m, row-major layout) */
+    double *A_struct = lu->dense_work;
+    memset(A_struct, 0, (size_t)m * k * sizeof(double));
 
+    /* T1.4: Row-major layout A_struct[row * k + col] for cache-friendly GE */
     for (int jj = 0; jj < k; jj++) {
         int j = col_order[jj];  /* Original column index */
         for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
             int row = B->rowidx[p];
-            A_struct[row + jj * m] = B->values[p];
+            A_struct[row * k + jj] = B->values[p];
         }
     }
 
     /* Do dense LU with partial pivoting on the m×k structural part
      * This gives us the full row permutation */
-    int *row_perm = (int*)calloc(m, sizeof(int));
-    for (int i = 0; i < m; i++) row_perm[i] = i;
+    int *row_perm = lu->ws_row_perm;
+    int *row_pos = lu->ws_row_pos;  /* T1.4: inverse of row_perm for O(1) lookup */
+    for (int i = 0; i < m; i++) { row_perm[i] = i; row_pos[i] = i; }
 
     /* Allocate L and U storage for full matrix */
     int L_cap = m * k + m;  /* Structural L entries + identity diagonals */
@@ -1740,9 +1729,7 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     int *U_col = (int*)calloc(U_cap, sizeof(int));
     double *U_val = (double*)calloc(U_cap, sizeof(double));
 
-    if (!row_perm || !L_row || !L_col || !L_val || !U_row || !U_col || !U_val) {
-        free(is_identity_col); free(identity_row); free(identity_val); free(row_used);
-        free(col_order); free(col_order_inv); free(A_struct); free(row_perm);
+    if (!L_row || !L_col || !L_val || !U_row || !U_col || !U_val) {
         free(L_row); free(L_col); free(L_val);
         free(U_row); free(U_col); free(U_val);
         return lu_factorize_dense(lu, B);
@@ -1758,7 +1745,7 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
         for (int i = step; i < m; i++) {
             int orig_row = row_perm[i];
-            double val = fabs(A_struct[orig_row + step * m]);
+            double val = fabs(A_struct[orig_row * k + step]);
             if (val > max_val) {
                 max_val = val;
                 pivot_row = i;
@@ -1767,22 +1754,20 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
         if (max_val < RALPH_PIVOT_TOL) {
             /* Structural part is singular - fall back to dense */
-            free(is_identity_col); free(identity_row); free(identity_val); free(row_used);
-            free(col_order); free(col_order_inv); free(A_struct); free(row_perm);
             free(L_row); free(L_col); free(L_val);
             free(U_row); free(U_col); free(U_val);
             return lu_factorize_dense(lu, B);
         }
 
-        /* Swap rows in permutation */
+        /* Swap rows in permutation + inverse (T1.4) */
         if (pivot_row != step) {
-            int tmp = row_perm[step];
-            row_perm[step] = row_perm[pivot_row];
-            row_perm[pivot_row] = tmp;
+            int a = row_perm[step], b = row_perm[pivot_row];
+            row_perm[step] = b; row_perm[pivot_row] = a;
+            row_pos[b] = step; row_pos[a] = pivot_row;
         }
 
         int piv_orig = row_perm[step];
-        double pivot_val = A_struct[piv_orig + step * m];
+        double pivot_val = A_struct[piv_orig * k + step];
 
         /* Store L diagonal */
         L_row[L_nnz] = step;
@@ -1792,7 +1777,7 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
         /* Store U row: U[step, jj] for jj >= step */
         for (int jj = step; jj < k; jj++) {
-            double val = A_struct[piv_orig + jj * m];
+            double val = A_struct[piv_orig * k + jj];
             if (fabs(val) > RALPH_ZERO_TOL || jj == step) {
                 U_row[U_nnz] = step;
                 U_col[U_nnz] = jj;
@@ -1804,7 +1789,7 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         /* Eliminate: compute multipliers and update remaining rows */
         for (int i = step + 1; i < m; i++) {
             int row_orig = row_perm[i];
-            double a_ik = A_struct[row_orig + step * m];
+            double a_ik = A_struct[row_orig * k + step];
 
             if (fabs(a_ik) < RALPH_ZERO_TOL) continue;
 
@@ -1816,44 +1801,36 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
             L_val[L_nnz] = mult;
             L_nnz++;
 
-            /* Update row */
+            /* T1.4: Row-major inner loop — stride-1 for cache + auto-vectorization */
             for (int jj = step + 1; jj < k; jj++) {
-                A_struct[row_orig + jj * m] -= mult * A_struct[piv_orig + jj * m];
+                A_struct[row_orig * k + jj] -= mult * A_struct[piv_orig * k + jj];
             }
         }
     }
 
     /* Now handle identity columns (steps k..m-1)
      * Each identity column j has a single entry at row identity_row[j] with value identity_val[j].
-     * We need to find which step this row corresponds to in the row permutation. */
+     * T1.4: Use row_pos[] for O(1) lookup instead of O(n) linear scan. */
     for (int step = k; step < m; step++) {
         int orig_col = col_order[step];  /* Original identity column */
         int orig_row = identity_row[orig_col];
         double val = identity_val[orig_col];
 
-        /* Find which permuted position this row is at */
-        int perm_pos = -1;
-        for (int i = step; i < m; i++) {
-            if (row_perm[i] == orig_row) {
-                perm_pos = i;
-                break;
-            }
-        }
+        /* T1.4: O(1) lookup via inverse permutation array */
+        int perm_pos = row_pos[orig_row];
 
-        if (perm_pos < 0) {
+        if (perm_pos < step) {
             /* Row already used - shouldn't happen if identity detection is correct */
-            free(is_identity_col); free(identity_row); free(identity_val); free(row_used);
-            free(col_order); free(col_order_inv); free(A_struct); free(row_perm);
             free(L_row); free(L_col); free(L_val);
             free(U_row); free(U_col); free(U_val);
             return lu_factorize_dense(lu, B);
         }
 
-        /* Swap to bring this row to position step */
+        /* Swap to bring this row to position step + update inverse */
         if (perm_pos != step) {
-            int tmp = row_perm[step];
-            row_perm[step] = row_perm[perm_pos];
-            row_perm[perm_pos] = tmp;
+            int a = row_perm[step], b = row_perm[perm_pos];
+            row_perm[step] = b; row_perm[perm_pos] = a;
+            row_pos[b] = step; row_pos[a] = perm_pos;
         }
 
         /* L diagonal = 1, U diagonal = val (±1) */
@@ -1876,25 +1853,25 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         lu->col_perm_inv[col_order[i]] = i;
     }
 
-    /* Convert L and U from COO to CSC */
-    free(lu->L_colptr); free(lu->L_rowidx); free(lu->L_values);
-    free(lu->U_colptr); free(lu->U_rowidx); free(lu->U_values);
-
-    lu->L_colptr = (int*)calloc(m + 1, sizeof(int));
-    lu->L_rowidx = (int*)calloc(L_nnz, sizeof(int));
-    lu->L_values = (double*)calloc(L_nnz, sizeof(double));
-    lu->U_colptr = (int*)calloc(m + 1, sizeof(int));
-    lu->U_rowidx = (int*)calloc(U_nnz, sizeof(int));
-    lu->U_values = (double*)calloc(U_nnz, sizeof(double));
-
-    if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
-        !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
-        free(is_identity_col); free(identity_row); free(identity_val); free(row_used);
-        free(col_order); free(col_order_inv); free(A_struct); free(row_perm);
-        free(L_row); free(L_col); free(L_val);
-        free(U_row); free(U_col); free(U_val);
-        return -1;
+    /* T1.4: Convert L and U from COO to CSC — reuse pre-allocated arrays */
+    int needed = L_nnz > U_nnz ? L_nnz : U_nnz;
+    if (needed > lu->LU_out_capacity) {
+        int new_cap = needed * 2;
+        SAFE_FREE(lu->L_rowidx); SAFE_FREE(lu->L_values);
+        SAFE_FREE(lu->U_rowidx); SAFE_FREE(lu->U_values);
+        lu->L_rowidx = (int*)calloc(new_cap, sizeof(int));
+        lu->L_values = (double*)calloc(new_cap, sizeof(double));
+        lu->U_rowidx = (int*)calloc(new_cap, sizeof(int));
+        lu->U_values = (double*)calloc(new_cap, sizeof(double));
+        lu->LU_out_capacity = new_cap;
+        if (!lu->L_rowidx || !lu->L_values || !lu->U_rowidx || !lu->U_values) {
+            free(L_row); free(L_col); free(L_val);
+            free(U_row); free(U_col); free(U_val);
+            return -1;
+        }
     }
+    memset(lu->L_colptr, 0, (m + 1) * sizeof(int));
+    memset(lu->U_colptr, 0, (m + 1) * sizeof(int));
 
     /* Count entries per column for L */
     for (int i = 0; i < L_nnz; i++) {
@@ -1904,14 +1881,15 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         lu->L_colptr[j + 1] += lu->L_colptr[j];
     }
 
-    int *L_pos = (int*)calloc(m, sizeof(int));
+    /* T1.4: Use pre-allocated workspace for position counters */
+    int *L_pos = lu->ws_L_pos;
+    memset(L_pos, 0, m * sizeof(int));
     for (int i = 0; i < L_nnz; i++) {
         int col = L_col[i];
         int pos = lu->L_colptr[col] + L_pos[col]++;
         lu->L_rowidx[pos] = L_row[i];
         lu->L_values[pos] = L_val[i];
     }
-    free(L_pos);
     lu->nnz_L = L_nnz;
 
     /* Count entries per column for U */
@@ -1922,14 +1900,14 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         lu->U_colptr[j + 1] += lu->U_colptr[j];
     }
 
-    int *U_pos = (int*)calloc(m, sizeof(int));
+    int *U_pos = lu->ws_U_pos;
+    memset(U_pos, 0, m * sizeof(int));
     for (int i = 0; i < U_nnz; i++) {
         int col = U_col[i];
         int pos = lu->U_colptr[col] + U_pos[col]++;
         lu->U_rowidx[pos] = U_row[i];
         lu->U_values[pos] = U_val[i];
     }
-    free(U_pos);
     lu->nnz_U = U_nnz;
 
     /* Extract U diagonals */
@@ -1970,9 +1948,7 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         lu->ft_col_order_inv[i] = i;
     }
 
-    /* Cleanup */
-    free(is_identity_col); free(identity_row); free(identity_val); free(row_used);
-    free(col_order); free(col_order_inv); free(A_struct); free(row_perm);
+    /* Cleanup — only COO arrays need freeing (workspace arrays are pre-allocated) */
     free(L_row); free(L_col); free(L_val);
     free(U_row); free(U_col); free(U_val);
 
