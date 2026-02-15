@@ -303,6 +303,12 @@ typedef struct {
     int partial_cand_count;     /* Current number of candidates in hot set */
     int partial_cand_capacity;  /* Allocated capacity for candidates */
 
+    /* Dual candidate list for ratio test (T2.2) */
+    int *dual_candidates;       /* Hot set of variables with attractive |rc| */
+    int dual_cand_count;        /* Current number of candidates */
+    int dual_cand_capacity;     /* Allocated capacity */
+    int dual_cand_valid;        /* 1 if list was populated from last RC update */
+
     /* Lazy reduced cost computation */
     int duals_valid;            /* 1 if y[] contains valid dual values */
     int rc_all_valid;           /* 1 if rc[] contains all valid reduced costs */

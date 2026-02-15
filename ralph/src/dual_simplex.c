@@ -24,6 +24,10 @@ int tableau_compute_solution(SimplexTableau *tab);
 int tableau_compute_reduced_costs(SimplexTableau *tab);
 void tableau_free(SimplexTableau *tab);
 
+/* Dual candidate-list pricing constants (T2.2) */
+#define DUAL_CAND_CAPACITY    200    /* Max candidates in dual hot set */
+#define DUAL_CAND_RC_THRESH   1e-4   /* |rc| threshold for candidate inclusion */
+
 /* Bound perturbation for degeneracy prevention (defined below) */
 static void apply_bound_perturbation(SimplexTableau *tab);
 static void remove_bound_perturbation(SimplexTableau *tab);
@@ -407,8 +411,10 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
 
     /* Update all reduced costs using sparse dot products:
      * rc'[j] = rc[j] - (rc_entering / pivot) * (pivot_row * a_j)
+     * Also collect dual candidate list (T2.2) inline — zero extra cost.
      */
     double rc_factor = tab->rc[entering] / pivot;
+    tab->dual_cand_count = 0;
     for (int j = 0; j < tab->n; j++) {
         if (tab->var_status[j] == RALPH_BASIC) {
             tab->rc[j] = 0.0;
@@ -416,10 +422,16 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
             /* Compute pivot_row * a_j via sparse dot product */
             double dot = sparse_dot_column(tab->A_ext, j, tab->work2);
             tab->rc[j] -= rc_factor * dot;
+            /* T2.2: Collect candidates with attractive |rc| */
+            if (fabs(tab->rc[j]) > DUAL_CAND_RC_THRESH &&
+                tab->dual_cand_count < tab->dual_cand_capacity) {
+                tab->dual_candidates[tab->dual_cand_count++] = j;
+            }
         }
     }
     tab->rc[leaving_var] = -rc_factor;
     tab->rc[entering] = 0.0;
+    tab->dual_cand_valid = 1;
 
     /* Determine step size from infeasibility.
      * The basic variable update is: x_B = x_B - delta * d

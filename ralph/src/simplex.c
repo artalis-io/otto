@@ -660,8 +660,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)m * sizeof(int) + (size_t)n * sizeof(int) +
         /* int arrays: nonbasis, var_status (n-m and n) */
         (size_t)(n - m) * sizeof(int) + (size_t)n * sizeof(VarStatus) +
-        /* int arrays: cb_sparse_idx, aux_row, partial_candidates */
-        (size_t)m * sizeof(int) + (size_t)num_aux_vars * sizeof(int) + 100 * sizeof(int) +
+        /* int arrays: cb_sparse_idx, aux_row, partial_candidates, dual_candidates */
+        (size_t)m * sizeof(int) + (size_t)num_aux_vars * sizeof(int) + 100 * sizeof(int) + 200 * sizeof(int) +
         /* int array: artificial_vars for two-phase */
         (size_t)num_artificial * sizeof(int) +
         /* int array: redundant_rows for two-phase (m) */
@@ -670,8 +670,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)m * sizeof(double) +
         /* int array: flip_list for bound flipping (n) */
         (size_t)n * sizeof(int) +
-        /* Alignment padding (27 allocations * 8 bytes) */
-        216;
+        /* Alignment padding (28 allocations * 8 bytes) */
+        224;
 
     /* Create arena */
     tab->arena = sh_arena_create(arena_size);
@@ -716,6 +716,12 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->partial_candidates = (int*)sh_arena_alloc(tab->arena, tab->partial_cand_capacity * sizeof(int));
     tab->partial_cand_count = 0;
 
+    /* Dual candidate list for ratio test (T2.2) */
+    tab->dual_cand_capacity = 200;
+    tab->dual_candidates = (int*)sh_arena_alloc(tab->arena, 200 * sizeof(int));
+    tab->dual_cand_count = 0;
+    tab->dual_cand_valid = 0;
+
     /* Two-phase simplex arrays */
     tab->c_original = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
     tab->num_artificial = num_artificial;
@@ -744,7 +750,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs || !tab->row_sign ||
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
         !tab->cb_sparse_idx || !tab->cb_sparse_val ||
-        !tab->aux_row || !tab->aux_coef || !tab->partial_candidates ||
+        !tab->aux_row || !tab->aux_coef || !tab->partial_candidates || !tab->dual_candidates ||
         !tab->c_original || (num_artificial > 0 && !tab->artificial_vars) ||
         !tab->redundant_rows || !tab->dse_weights || !tab->flip_list) {
         return -1;
@@ -1532,6 +1538,9 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
     /* Mark both duals and full rc as valid */
     tab->duals_valid = 1;
     tab->rc_all_valid = 1;
+
+    /* Invalidate dual candidate list — RC recomputed from scratch */
+    tab->dual_cand_valid = 0;
 
     return 0;
 }
