@@ -71,8 +71,15 @@ LUFactorization* lu_create(int m) {
         5 * (size_t)max_upd * sizeof(int) +
         /* double array of size max_updates: ft_spike_diag (1 array) */
         (size_t)max_upd * sizeof(double) +
-        /* Alignment padding */
-        160;
+        /* T1.4: workspace for sparse-efficient factorization
+         * int arrays of size m: ws_is_identity, ws_identity_row, ws_row_used,
+         * ws_col_order, ws_col_order_inv, ws_row_perm, ws_L_pos, ws_U_pos,
+         * ws_row_pos (9 arrays) */
+        9 * (size_t)m * sizeof(int) +
+        /* double array of size m: ws_identity_val (1 array) */
+        1 * (size_t)m * sizeof(double) +
+        /* Alignment padding (30 arrays total × 8 bytes) */
+        240;
 
     lu->arena = sh_arena_create(arena_size);
     if (!lu->arena) {
@@ -152,13 +159,28 @@ LUFactorization* lu_create(int m) {
     lu->hs_stack = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
     lu->perm_work = (double*)sh_arena_alloc(lu->arena, m * sizeof(double));
 
+    /* T1.4: Sparse-efficient factorization workspace */
+    lu->ws_is_identity = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_identity_row = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_identity_val = (double*)sh_arena_alloc(lu->arena, m * sizeof(double));
+    lu->ws_row_used = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_col_order = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_col_order_inv = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_perm = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_L_pos = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_U_pos = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_pos = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+
     /* Single check for all arena allocations */
     if (!lu->perm || !lu->perm_inv || !lu->col_perm || !lu->col_perm_inv ||
         !lu->U_diag || !lu->eta_col || !lu->eta_nnz ||
         !lu->ft_col_order || !lu->ft_col_order_inv ||
         !lu->ft_spike_col || !lu->ft_spike_diag || !lu->ft_spike_nnz || !lu->ft_spike_start ||
         !lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked ||
-        !lu->hs_idx || !lu->hs_val || !lu->hs_stack || !lu->perm_work) {
+        !lu->hs_idx || !lu->hs_val || !lu->hs_stack || !lu->perm_work ||
+        !lu->ws_is_identity || !lu->ws_identity_row || !lu->ws_identity_val ||
+        !lu->ws_row_used || !lu->ws_col_order || !lu->ws_col_order_inv ||
+        !lu->ws_row_perm || !lu->ws_L_pos || !lu->ws_U_pos || !lu->ws_row_pos) {
         lu_free(lu);
         return NULL;
     }
@@ -207,6 +229,22 @@ LUFactorization* lu_create(int m) {
     lu->dense_work = (double*)calloc((size_t)m * (size_t)m, sizeof(double));
 
     if (!lu->dense_work) {
+        lu_free(lu);
+        return NULL;
+    }
+
+    /* T1.4: Pre-allocate L/U output arrays with initial capacity.
+     * Capacity grows as needed; after 1-2 factorizations it stabilizes. */
+    lu->LU_out_capacity = m * 4;
+    lu->L_colptr = (int*)calloc(m + 1, sizeof(int));
+    lu->L_rowidx = (int*)calloc(lu->LU_out_capacity, sizeof(int));
+    lu->L_values = (double*)calloc(lu->LU_out_capacity, sizeof(double));
+    lu->U_colptr = (int*)calloc(m + 1, sizeof(int));
+    lu->U_rowidx = (int*)calloc(lu->LU_out_capacity, sizeof(int));
+    lu->U_values = (double*)calloc(lu->LU_out_capacity, sizeof(double));
+
+    if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
+        !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
         lu_free(lu);
         return NULL;
     }
@@ -278,6 +316,16 @@ void lu_free(LUFactorization *lu) {
     lu->hs_val = NULL;
     lu->hs_stack = NULL;
     lu->perm_work = NULL;
+    lu->ws_is_identity = NULL;
+    lu->ws_identity_row = NULL;
+    lu->ws_identity_val = NULL;
+    lu->ws_row_used = NULL;
+    lu->ws_col_order = NULL;
+    lu->ws_col_order_inv = NULL;
+    lu->ws_row_perm = NULL;
+    lu->ws_L_pos = NULL;
+    lu->ws_U_pos = NULL;
+    lu->ws_row_pos = NULL;
 
     free(lu);
 }
@@ -481,27 +529,24 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     /* Add diagonal of L (implicit ones) */
     nnz_L += m;
 
-    /* Free old storage */
-    free(lu->L_colptr);
-    free(lu->L_rowidx);
-    free(lu->L_values);
-    free(lu->U_colptr);
-    free(lu->U_rowidx);
-    free(lu->U_values);
-
-    /* Allocate new storage */
-    lu->L_colptr = (int*)calloc((m + 1), sizeof(int));
-    lu->L_rowidx = (int*)calloc(nnz_L, sizeof(int));
-    lu->L_values = (double*)calloc(nnz_L, sizeof(double));
-    lu->U_colptr = (int*)calloc((m + 1), sizeof(int));
-    lu->U_rowidx = (int*)calloc(nnz_U, sizeof(int));
-    lu->U_values = (double*)calloc(nnz_U, sizeof(double));
-
-    if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
-        !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
-        lu_set_failure(lu, LU_FAIL_FACTOR_ALLOC);
-        return -1;
+    /* T1.4: Reuse pre-allocated L/U arrays, grow only if needed */
+    int needed = nnz_L > nnz_U ? nnz_L : nnz_U;
+    if (needed > lu->LU_out_capacity) {
+        int new_cap = needed * 2;
+        SAFE_FREE(lu->L_rowidx); SAFE_FREE(lu->L_values);
+        SAFE_FREE(lu->U_rowidx); SAFE_FREE(lu->U_values);
+        lu->L_rowidx = (int*)calloc(new_cap, sizeof(int));
+        lu->L_values = (double*)calloc(new_cap, sizeof(double));
+        lu->U_rowidx = (int*)calloc(new_cap, sizeof(int));
+        lu->U_values = (double*)calloc(new_cap, sizeof(double));
+        lu->LU_out_capacity = new_cap;
+        if (!lu->L_rowidx || !lu->L_values || !lu->U_rowidx || !lu->U_values) {
+            lu_set_failure(lu, LU_FAIL_FACTOR_ALLOC);
+            return -1;
+        }
     }
+    memset(lu->L_colptr, 0, (m + 1) * sizeof(int));
+    memset(lu->U_colptr, 0, (m + 1) * sizeof(int));
 
     /* Fill L (unit lower triangular stored with explicit diagonal) */
     int idx = 0;
