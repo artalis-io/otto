@@ -1519,14 +1519,19 @@ int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
 #define PERTURB_MULT 7  /* Prime for pseudo-randomness */
 
 static void apply_bound_perturbation(SimplexTableau *tab) {
-    /* Allocate backup storage if needed */
+    /* Allocate backup storage and save original bounds only on FIRST call.
+     * Re-perturbation (for cycling) adds more perturbation to ub_ext but must
+     * NOT overwrite the backup — remove_bound_perturbation must always restore
+     * to the original (unperturbed) bounds. */
+    int fresh = 0;
     if (!tab->perturb_backup) {
         tab->perturb_backup = (double*)calloc(tab->n, sizeof(double));
         if (!tab->perturb_backup) return;
+        fresh = 1;
     }
 
     for (int j = 0; j < tab->n; j++) {
-        tab->perturb_backup[j] = tab->ub_ext[j];
+        if (fresh) tab->perturb_backup[j] = tab->ub_ext[j];
 
         /* Only perturb finite upper bounds */
         if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
@@ -1638,9 +1643,116 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         }
 
         if (leaving < 0) {
-            /* Primal feasible — optimal! */
-            remove_bound_perturbation(tab);
-            tableau_compute_solution(tab);
+            /* Primal feasible under (possibly perturbed) bounds.
+             * Remove perturbation and check if still feasible. */
+            if (solver->verbose >= 2) {
+                printf("[dual_v2] leaving<0 at iter %d, perturb_backup=%s\n",
+                       iter, tab->perturb_backup ? "yes" : "no");
+            }
+            if (tab->perturb_backup) {
+                remove_bound_perturbation(tab);
+                /* Refactorize for accurate solution after perturbation removal.
+                 * Eta-file drift at high condition numbers causes the basis
+                 * to appear feasible when it isn't. */
+                tableau_refactorize(tab);
+                tab->dse_initialized = 0;
+                if (use_dse) dse_init_exact(tab);
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+
+                /* Cleanup: continue dual pivots without perturbation
+                 * until primal feasibility is restored under original bounds.
+                 * This is the standard "unshift" procedure (CLP, GLOP). */
+                int cleanup_iters = 0;
+                const int MAX_CLEANUP = 200;
+                while (cleanup_iters < MAX_CLEANUP) {
+                    /* Find a primal-infeasible basic variable */
+                    int cl_leaving = -1;
+                    if (use_dse && tab->dse_initialized) {
+                        double best_score = 0.0;
+                        for (int k = 0; k < tab->m; k++) {
+                            int j = tab->basis[k];
+                            double infeas = 0.0;
+                            if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                                infeas = tab->lb_ext[j] - tab->x[j];
+                            else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                                infeas = tab->x[j] - tab->ub_ext[j];
+                            if (infeas <= RALPH_FEAS_TOL) continue;
+                            double w = tab->dse_weights[k];
+                            double score = (infeas * infeas) / w;
+                            if (score > best_score) {
+                                best_score = score;
+                                cl_leaving = k;
+                            }
+                        }
+                    } else {
+                        double max_infeas = RALPH_FEAS_TOL;
+                        for (int k = 0; k < tab->m; k++) {
+                            int j = tab->basis[k];
+                            double infeas = 0.0;
+                            if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL)
+                                infeas = tab->lb_ext[j] - tab->x[j];
+                            else if (tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL)
+                                infeas = tab->x[j] - tab->ub_ext[j];
+                            if (infeas > max_infeas) {
+                                max_infeas = infeas;
+                                cl_leaving = k;
+                            }
+                        }
+                    }
+
+                    if (cl_leaving < 0) {
+                        if (solver->verbose >= 2) {
+                            /* Double-check: scan for any violations */
+                            double max_v = 0.0;
+                            for (int k = 0; k < tab->m; k++) {
+                                int j = tab->basis[k];
+                                double v = 0.0;
+                                if (tab->x[j] < tab->lb_ext[j] - 1e-12)
+                                    v = tab->lb_ext[j] - tab->x[j];
+                                else if (tab->x[j] > tab->ub_ext[j] + 1e-12)
+                                    v = tab->x[j] - tab->ub_ext[j];
+                                if (v > max_v) max_v = v;
+                            }
+                            printf("[dual_v2] Cleanup: no leaving found, max_basic_infeas=%.6e\n", max_v);
+                        }
+                        break;  /* Truly feasible now */
+                    }
+
+                    int cl_entering;
+                    double cl_theta;
+                    if (dual_ratio_test(tab, cl_leaving, &cl_entering, &cl_theta) != 0) {
+                        /* Infeasible after unshift — should not happen, bail */
+                        break;
+                    }
+                    if (dual_simplex_pivot(tab, cl_entering, cl_leaving, cl_theta) != 0) {
+                        if (tableau_refactorize(tab) != 0) break;
+                        tab->dse_initialized = 0;
+                        if (use_dse) dse_init_exact(tab);
+                        tableau_compute_solution(tab);
+                        tableau_compute_reduced_costs(tab);
+                    }
+                    cleanup_iters++;
+                    solver->iterations++;
+
+                    /* Periodic refactorization during cleanup */
+                    if (cleanup_iters % 50 == 0) {
+                        tableau_refactorize(tab);
+                        tab->dse_initialized = 0;
+                        if (use_dse) dse_init_exact(tab);
+                        tableau_compute_solution(tab);
+                        tableau_compute_reduced_costs(tab);
+                    }
+                }
+
+                if (solver->verbose && cleanup_iters > 0) {
+                    printf("[dual_v2] Unshift cleanup: %d pivots\n", cleanup_iters);
+                }
+
+                /* Recompute solution after cleanup */
+                tableau_compute_solution(tab);
+            }
+
             solver->status = RALPH_STATUS_OPTIMAL;
             solver->obj_value = tab->obj_value * solver->model->obj_sense;
 

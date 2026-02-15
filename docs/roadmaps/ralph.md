@@ -413,10 +413,11 @@ it with a full codebase audit.
 
 **Current position (Feb 2026):** Ralph is ~85% of state-of-the-art. All Tier 1-3 gaps have been
 closed. NETLIB primal: 16/17 pass (blend LP reports unbounded — benchmark data issue with duplicate
-entry). NETLIB auto (dual+fallback): 15/17 pass (brandy has 0.18% objective error in dual mode,
-blend same issue). T1.4 (symbolic/numeric LU separation with fingerprint caching) and T2.2
-(heap-based pricing) are now implemented. Remaining gaps: T2.1 supernodal LU (performance) and
-Phase D/E (dual-as-default).
+entry). NETLIB auto (dual+fallback): 16/17 pass (blend same issue — brandy FIXED). T1.4
+(symbolic/numeric LU separation with fingerprint caching) and T2.2 (heap-based pricing) are now
+implemented. Brandy's 0.18% dual objective error was fixed (perturbation backup corruption on
+re-perturbation). Remaining gaps: T2.1 supernodal LU (performance) and Phase D/E (dual-as-default,
+now unblocked).
 
 #### What Ralph Does Well
 
@@ -462,8 +463,8 @@ Both paths benefit from better-conditioned matrix. Configurable via `scaling_rou
 
 `dual_simplex_solve_from_scratch_v2()` in `dual_simplex.c:2278` with proper `dual_phase1()`.
 Auto mode (method=2) tries dual first, falls back to primal if verification fails.
-NETLIB auto: 15/17 pass (brandy has 0.18% obj error). Remaining work: make dual the default
-solver (Phase D) once brandy is fixed.
+NETLIB auto: 16/17 pass (brandy FIXED — perturbation backup bug). Remaining work: make dual the
+default solver (Phase D), now unblocked.
 
 **T1.4 Symbolic/Numeric Separation in LU** — ✅ DONE
 
@@ -591,9 +592,9 @@ Standalone dual simplex is implemented via `dual_simplex_solve_from_scratch_v2()
 has primal fallback paths (used only by `dual_reopt` in B&B). Remaining work is Phase D
 (make method=2 the default) and Phase E (replace `dual_reopt` with clean dual solver).
 
-**Current NETLIB status with method=2:** 15/17 pass. Blockers:
-- brandy: 0.18% objective error (dual produces slightly suboptimal solution)
+**Current NETLIB status with method=2:** 16/17 pass. Only blocker:
 - blend LP (83-var): falsely reports unbounded (benchmark data issue with duplicate entry)
+- brandy: ✅ FIXED — perturbation backup corruption on re-perturbation (obj_rel_error < 1e-9)
 
 *Legacy dual_simplex_solve fallback paths (still used by dual_reopt):*
 
@@ -632,13 +633,12 @@ Implemented at `simplex_solve:4470`. Method dispatch:
   falls back to primal if dual fails or produces wrong result (Ax=b check)
 
 The `method=2` auto mode catches dual failures via forced verification (line 4525).
-This is how brandy's 0.18% error is currently detected and handled (falls back to primal).
 
-**Phase D: Make dual the default** — TODO (blocked by brandy)
+**Phase D: Make dual the default** — TODO (unblocked, brandy fixed)
 
-Change default `method` from 0 to 2 (auto). Requires fixing brandy's 0.18% obj error first.
-One-line change with full safety net of `method=0` revert. Prerequisite: 17/17 NETLIB pass
-with method=2.
+Change default `method` from 0 to 2 (auto). Brandy's 0.18% obj error is now fixed
+(perturbation backup corruption). One-line change with full safety net of `method=0` revert.
+NETLIB: 16/17 pass with method=2 (same as primal).
 
 **Phase E: Replace dual_reopt in B&B** — TODO (depends on Phase D)
 
