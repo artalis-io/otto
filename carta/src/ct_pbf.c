@@ -1317,7 +1317,10 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
         const char *key = sh_string_table_get(st, keys[i]);
         if (strcmp(key, "name") == 0) {
             const char *val = sh_string_table_get(st, vals[i]);
-            if (val && val[0]) way->name = strdup(val);
+            if (val && val[0]) {
+                way->name = strdup(val);
+                if (!way->name) break;  /* OOM - leave name as NULL */
+            }
             break;
         }
     }
@@ -1570,7 +1573,8 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
             for (int i = 0; i < num_tags; i++) {
                 const char *key = sh_string_table_get(st, keys[i]);
                 if (strcmp(key, "name") == 0) {
-                    rel->name = strdup(sh_string_table_get(st, vals[i]));
+                    const char *val = sh_string_table_get(st, vals[i]);
+                    if (val && val[0]) rel->name = strdup(val);
                     break;
                 }
             }
@@ -1660,7 +1664,8 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
     for (int i = 0; i < num_tags; i++) {
         const char *key = sh_string_table_get(st, keys[i]);
         if (strcmp(key, "name") == 0) {
-            rel->name = strdup(sh_string_table_get(st, vals[i]));
+            const char *val = sh_string_table_get(st, vals[i]);
+            if (val && val[0]) rel->name = strdup(val);
             break;
         }
     }
