@@ -513,7 +513,7 @@ static void verify_solution(SimplexSolver *solver) {
         kahan_comp = (temp - obj_kahan) - term;
         obj_kahan = temp;
     }
-    obj_kahan = obj_kahan * model->obj_sense + model->obj_offset;
+    obj_kahan = obj_kahan + model->obj_offset;
     double obj_denom = fabs(solver->obj_value) > 1.0 ? fabs(solver->obj_value) : 1.0;
     double obj_rel_error = fabs(obj_kahan - solver->obj_value) / obj_denom;
 
@@ -2778,7 +2778,6 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->is_scaled = 0;
     solver->trace_phase1_first_fail_iter = -1;
     solver->trace_phase1_last_fail_iter = -1;
-    solver->objective_cutoff = RALPH_INFINITY;
     solver->objective_limit = RALPH_INFINITY;
     solver->phase1_pricing = -1;  /* Default: disabled (use solver pricing) */
     solver->use_dual_bound_flip = 1;
@@ -4695,7 +4694,16 @@ int simplex_solve(SimplexSolver *solver) {
                 (solver->verify || solver->method == 2))
                 verify_solution(solver);
 
-            return 0;
+            /* Auto mode: if verify downgraded to IMPRECISE, fall back to primal
+             * rather than returning a bad dual solution. */
+            if (solver->method == 2 && solver->status == RALPH_STATUS_IMPRECISE) {
+                if (solver->verbose)
+                    printf("[simplex_solve] Dual solution imprecise, falling back to primal\n");
+                solver->status = RALPH_STATUS_UNKNOWN;
+                drc = -1;  /* Trigger primal fallback below */
+            } else {
+                return 0;
+            }
         }
 
         /* Dual failed or rejected — fall back to primal (method=2) or error (method=1) */
