@@ -217,6 +217,21 @@ typedef struct {
     /* Capacity tracking for L/U output arrays (T1.4) */
     int LU_out_capacity;     /* Allocated nnz capacity for L/U rowidx/values arrays */
 
+    /* Pre-allocated COO arrays for sparse-efficient factorization (T1.4 full) */
+    int *coo_L_row;          /* [coo_capacity] L entries: row indices */
+    int *coo_L_col;          /* [coo_capacity] L entries: column indices */
+    double *coo_L_val;       /* [coo_capacity] L entries: values */
+    int *coo_U_row;          /* [coo_capacity] U entries: row indices */
+    int *coo_U_col;          /* [coo_capacity] U entries: column indices */
+    double *coo_U_val;       /* [coo_capacity] U entries: values */
+    int coo_capacity;        /* Allocated capacity for COO arrays */
+
+    /* Cached symbolic analysis for sparse-efficient path (T1.4 full) */
+    int sym_valid;           /* 1 if cached symbolic analysis is valid */
+    int sym_num_identity;    /* Cached identity column count */
+    int sym_k;               /* Cached structural column count (m - num_identity) */
+    /* sym uses ws_is_identity, ws_identity_row, ws_identity_val, ws_col_order, ws_col_order_inv */
+
     /* Arena allocator for fixed-size arrays (reduces ~20 mallocs to 1) */
     SHArena *arena;
 } LUFactorization;

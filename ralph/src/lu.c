@@ -249,6 +249,26 @@ LUFactorization* lu_create(int m) {
         return NULL;
     }
 
+    /* T1.4 full: Pre-allocate COO arrays for sparse-efficient factorization.
+     * These replace per-call malloc/free of 6 arrays (L_row/col/val, U_row/col/val).
+     * Initial capacity m*4; grows as needed, stabilizes after 1-2 factorizations. */
+    lu->coo_capacity = m * 4;
+    lu->coo_L_row = (int*)calloc(lu->coo_capacity, sizeof(int));
+    lu->coo_L_col = (int*)calloc(lu->coo_capacity, sizeof(int));
+    lu->coo_L_val = (double*)calloc(lu->coo_capacity, sizeof(double));
+    lu->coo_U_row = (int*)calloc(lu->coo_capacity, sizeof(int));
+    lu->coo_U_col = (int*)calloc(lu->coo_capacity, sizeof(int));
+    lu->coo_U_val = (double*)calloc(lu->coo_capacity, sizeof(double));
+
+    if (!lu->coo_L_row || !lu->coo_L_col || !lu->coo_L_val ||
+        !lu->coo_U_row || !lu->coo_U_col || !lu->coo_U_val) {
+        lu_free(lu);
+        return NULL;
+    }
+
+    /* T1.4 full: Symbolic cache starts invalid */
+    lu->sym_valid = 0;
+
     return lu;
 }
 
@@ -262,6 +282,14 @@ void lu_free(LUFactorization *lu) {
     SAFE_FREE(lu->U_colptr);
     SAFE_FREE(lu->U_rowidx);
     SAFE_FREE(lu->U_values);
+
+    /* Free COO arrays (T1.4 full: pre-allocated, not in arena) */
+    SAFE_FREE(lu->coo_L_row);
+    SAFE_FREE(lu->coo_L_col);
+    SAFE_FREE(lu->coo_L_val);
+    SAFE_FREE(lu->coo_U_row);
+    SAFE_FREE(lu->coo_U_col);
+    SAFE_FREE(lu->coo_U_val);
 
     /* Free eta file contents (dynamically allocated during updates) */
     if (lu->eta_indices) {

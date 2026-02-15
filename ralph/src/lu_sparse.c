@@ -1718,22 +1718,31 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     int *row_pos = lu->ws_row_pos;  /* T1.4: inverse of row_perm for O(1) lookup */
     for (int i = 0; i < m; i++) { row_perm[i] = i; row_pos[i] = i; }
 
-    /* Allocate L and U storage for full matrix */
-    int L_cap = m * k + m;  /* Structural L entries + identity diagonals */
-    int U_cap = m * k + m;
-
-    int *L_row = (int*)calloc(L_cap, sizeof(int));
-    int *L_col = (int*)calloc(L_cap, sizeof(int));
-    double *L_val = (double*)calloc(L_cap, sizeof(double));
-    int *U_row = (int*)calloc(U_cap, sizeof(int));
-    int *U_col = (int*)calloc(U_cap, sizeof(int));
-    double *U_val = (double*)calloc(U_cap, sizeof(double));
-
-    if (!L_row || !L_col || !L_val || !U_row || !U_col || !U_val) {
-        free(L_row); free(L_col); free(L_val);
-        free(U_row); free(U_col); free(U_val);
-        return lu_factorize_dense(lu, B);
+    /* T1.4 full: Use pre-allocated COO arrays, grow if needed */
+    int coo_needed = m * k + m;  /* Structural entries + identity diagonals */
+    if (coo_needed > lu->coo_capacity) {
+        int new_cap = coo_needed * 2;
+        SAFE_FREE(lu->coo_L_row); SAFE_FREE(lu->coo_L_col); SAFE_FREE(lu->coo_L_val);
+        SAFE_FREE(lu->coo_U_row); SAFE_FREE(lu->coo_U_col); SAFE_FREE(lu->coo_U_val);
+        lu->coo_L_row = (int*)calloc(new_cap, sizeof(int));
+        lu->coo_L_col = (int*)calloc(new_cap, sizeof(int));
+        lu->coo_L_val = (double*)calloc(new_cap, sizeof(double));
+        lu->coo_U_row = (int*)calloc(new_cap, sizeof(int));
+        lu->coo_U_col = (int*)calloc(new_cap, sizeof(int));
+        lu->coo_U_val = (double*)calloc(new_cap, sizeof(double));
+        lu->coo_capacity = new_cap;
+        if (!lu->coo_L_row || !lu->coo_L_col || !lu->coo_L_val ||
+            !lu->coo_U_row || !lu->coo_U_col || !lu->coo_U_val) {
+            return lu_factorize_dense(lu, B);
+        }
     }
+
+    int *L_row = lu->coo_L_row;
+    int *L_col = lu->coo_L_col;
+    double *L_val = lu->coo_L_val;
+    int *U_row = lu->coo_U_row;
+    int *U_col = lu->coo_U_col;
+    double *U_val = lu->coo_U_val;
 
     int L_nnz = 0, U_nnz = 0;
 
@@ -1754,8 +1763,6 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
         if (max_val < RALPH_PIVOT_TOL) {
             /* Structural part is singular - fall back to dense */
-            free(L_row); free(L_col); free(L_val);
-            free(U_row); free(U_col); free(U_val);
             return lu_factorize_dense(lu, B);
         }
 
@@ -1821,8 +1828,6 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
         if (perm_pos < step) {
             /* Row already used - shouldn't happen if identity detection is correct */
-            free(L_row); free(L_col); free(L_val);
-            free(U_row); free(U_col); free(U_val);
             return lu_factorize_dense(lu, B);
         }
 
@@ -1865,8 +1870,6 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         lu->U_values = (double*)calloc(new_cap, sizeof(double));
         lu->LU_out_capacity = new_cap;
         if (!lu->L_rowidx || !lu->L_values || !lu->U_rowidx || !lu->U_values) {
-            free(L_row); free(L_col); free(L_val);
-            free(U_row); free(U_col); free(U_val);
             return -1;
         }
     }
@@ -1948,9 +1951,7 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         lu->ft_col_order_inv[i] = i;
     }
 
-    /* Cleanup — only COO arrays need freeing (workspace arrays are pre-allocated) */
-    free(L_row); free(L_col); free(L_val);
-    free(U_row); free(U_col); free(U_val);
+    /* T1.4 full: COO arrays are pre-allocated — no cleanup needed */
 
     /* Suppress unused function warnings for old code */
     (void)analyze_lp_basis;
