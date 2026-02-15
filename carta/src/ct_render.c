@@ -1379,10 +1379,19 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
 
     float scale = (float)ctx->width / CT_MVT_EXTENT;
 
-    /* Clipping buffer: allow 16 pixels overshoot to avoid edge artifacts.
-     * Reduced from 64 — larger buffers cause floating-point precision errors
-     * on long edge vectors of landuse polygons spanning many tiles. */
-    int clip_buffer = 16;
+    /* Clipping buffer: how far beyond tile extent to clip polygons.
+     * A generous buffer pushes clip edges far outside the visible tile area,
+     * preventing artificial straight edges from being visible at tile boundaries.
+     * The scanline rasterizer already clamps to [0, width] x [0, height],
+     * so extra buffer costs nothing in pixel fill work.
+     *
+     * Previously 16, which created visible triangle artifacts at z16+ where
+     * large polygon edges were clipped near the visible tile area. The original
+     * reduction from 64 was due to "precision errors" that were actually int32
+     * overflow in the Sutherland-Hodgman inside/outside test (now fixed with
+     * int64_t in ct_tile.c). With correct 64-bit arithmetic, large buffers
+     * are safe. 1024 = ~128 pixels of overshoot at 512px tiles. */
+    int clip_buffer = 1024;
 
     for (size_t i = 0; i < count; i++) {
         CTFeature *f = &features[i];
