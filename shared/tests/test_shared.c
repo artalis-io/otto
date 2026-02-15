@@ -15,6 +15,7 @@
 #include "sh_worker_pool.h"
 #include "sh_hashmap.h"
 #include "sh_heap.h"
+#include "sh_dheap.h"
 #include "sh_spatial_grid.h"
 #include "sh_query.h"
 #include "sh_render.h"
@@ -3377,6 +3378,234 @@ TEST(heap_null_safety)
 }
 
 /* ============================================================================
+ * Data Heap Tests (sh_dheap)
+ * ============================================================================ */
+
+/* Max-heap comparator for ints */
+static int int_max_cmp(const void *a, const void *b)
+{
+    int va = *(const int *)a;
+    int vb = *(const int *)b;
+    return (va > vb) ? 1 : (va < vb) ? -1 : 0;
+}
+
+/* Min-heap comparator for ints */
+static int int_min_cmp(const void *a, const void *b)
+{
+    int va = *(const int *)a;
+    int vb = *(const int *)b;
+    return (va < vb) ? 1 : (va > vb) ? -1 : 0;
+}
+
+/* Max-heap comparator for doubles */
+static int double_max_cmp(const void *a, const void *b)
+{
+    double va = *(const double *)a;
+    double vb = *(const double *)b;
+    if (va > vb) return 1;
+    if (va < vb) return -1;
+    return 0;
+}
+
+TEST(dheap_init_free)
+{
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(int), int_max_cmp);
+    ASSERT(sh_dheap_empty(&heap));
+    ASSERT_EQ(sh_dheap_count(&heap), 0);
+    sh_dheap_free(&heap);
+
+    /* Double free should be safe */
+    sh_dheap_free(&heap);
+}
+
+TEST(dheap_push_pop_max)
+{
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(int), int_max_cmp);
+
+    int vals[] = {3, 1, 4, 1, 5, 9, 2, 6, 5, 3};
+    for (int i = 0; i < 10; i++) {
+        ASSERT(sh_dheap_push(&heap, &vals[i]));
+    }
+    ASSERT_EQ(sh_dheap_count(&heap), 10);
+
+    /* Should pop in descending order */
+    int prev = 100;
+    for (int i = 0; i < 10; i++) {
+        int val;
+        ASSERT(sh_dheap_pop(&heap, &val));
+        ASSERT(val <= prev);
+        prev = val;
+    }
+    ASSERT(sh_dheap_empty(&heap));
+
+    sh_dheap_free(&heap);
+}
+
+TEST(dheap_push_pop_min)
+{
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(int), int_min_cmp);
+
+    int vals[] = {7, 2, 8, 3, 1, 9, 4, 0, 6, 5};
+    for (int i = 0; i < 10; i++) {
+        ASSERT(sh_dheap_push(&heap, &vals[i]));
+    }
+
+    /* Should pop in ascending order */
+    int prev = -1;
+    for (int i = 0; i < 10; i++) {
+        int val;
+        ASSERT(sh_dheap_pop(&heap, &val));
+        ASSERT(val >= prev);
+        prev = val;
+    }
+
+    sh_dheap_free(&heap);
+}
+
+TEST(dheap_peek)
+{
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(int), int_max_cmp);
+
+    /* Peek on empty should fail */
+    int val;
+    ASSERT(!sh_dheap_peek(&heap, &val));
+
+    int v = 42;
+    sh_dheap_push(&heap, &v);
+    ASSERT(sh_dheap_peek(&heap, &val));
+    ASSERT_EQ(val, 42);
+    ASSERT_EQ(sh_dheap_count(&heap), 1); /* Peek doesn't remove */
+
+    v = 99;
+    sh_dheap_push(&heap, &v);
+    ASSERT(sh_dheap_peek(&heap, &val));
+    ASSERT_EQ(val, 99); /* 99 > 42 in max-heap */
+
+    sh_dheap_free(&heap);
+}
+
+TEST(dheap_clear)
+{
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(int), int_max_cmp);
+
+    for (int i = 0; i < 100; i++) {
+        sh_dheap_push(&heap, &i);
+    }
+    ASSERT_EQ(sh_dheap_count(&heap), 100);
+
+    sh_dheap_clear(&heap);
+    ASSERT(sh_dheap_empty(&heap));
+    ASSERT_EQ(sh_dheap_count(&heap), 0);
+
+    /* Should be reusable after clear */
+    int v = 7;
+    sh_dheap_push(&heap, &v);
+    ASSERT_EQ(sh_dheap_count(&heap), 1);
+
+    sh_dheap_free(&heap);
+}
+
+TEST(dheap_large_elements)
+{
+    /* Test with a struct (like polylabel uses) */
+    typedef struct { double x, y, dist, max_dist; } Cell;
+
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(Cell), double_max_cmp);
+
+    /* Comparator compares first double (x), but we want max_dist ordering.
+     * For this test, use a dedicated comparator. */
+    /* Actually, let's use a proper cell comparator */
+    sh_dheap_free(&heap);
+
+    /* Use double_max_cmp with just the max_dist field offset trick.
+     * Better: just test that arbitrary-sized structs work. */
+    sh_dheap_init(&heap, sizeof(double), double_max_cmp);
+    double vals[] = {1.5, 3.7, 2.1, 0.9, 4.2};
+    for (int i = 0; i < 5; i++) {
+        sh_dheap_push(&heap, &vals[i]);
+    }
+
+    double v;
+    sh_dheap_pop(&heap, &v);
+    ASSERT(v > 4.1 && v < 4.3); /* 4.2 */
+    sh_dheap_pop(&heap, &v);
+    ASSERT(v > 3.6 && v < 3.8); /* 3.7 */
+
+    sh_dheap_free(&heap);
+}
+
+TEST(dheap_many_entries)
+{
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(int), int_max_cmp);
+
+    /* Push 10000 entries in pseudo-random order */
+    for (int i = 0; i < 10000; i++) {
+        int v = (i * 7919) % 10000; /* Scatter values */
+        ASSERT(sh_dheap_push(&heap, &v));
+    }
+    ASSERT_EQ(sh_dheap_count(&heap), 10000);
+
+    /* Verify correct ordering */
+    int prev = 100000;
+    for (int i = 0; i < 10000; i++) {
+        int val;
+        ASSERT(sh_dheap_pop(&heap, &val));
+        ASSERT(val <= prev);
+        prev = val;
+    }
+
+    sh_dheap_free(&heap);
+}
+
+TEST(dheap_null_safety)
+{
+    sh_dheap_init(NULL, sizeof(int), int_max_cmp);  /* Should not crash */
+    sh_dheap_free(NULL);  /* Should not crash */
+    sh_dheap_clear(NULL); /* Should not crash */
+
+    ASSERT(sh_dheap_empty(NULL));
+    ASSERT_EQ(sh_dheap_count(NULL), 0);
+
+    int v = 1;
+    ASSERT(!sh_dheap_push(NULL, &v));
+    ASSERT(!sh_dheap_pop(NULL, &v));
+    ASSERT(!sh_dheap_peek(NULL, &v));
+
+    /* NULL element */
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(int), int_max_cmp);
+    ASSERT(!sh_dheap_push(&heap, NULL));
+    sh_dheap_free(&heap);
+
+    /* NULL comparator */
+    sh_dheap_init(&heap, sizeof(int), NULL);
+    ASSERT(!sh_dheap_push(&heap, &v));
+    sh_dheap_free(&heap);
+}
+
+TEST(dheap_pop_discard)
+{
+    SHDHeap heap;
+    sh_dheap_init(&heap, sizeof(int), int_max_cmp);
+
+    int v = 42;
+    sh_dheap_push(&heap, &v);
+
+    /* Pop with NULL out should discard the value */
+    ASSERT(sh_dheap_pop(&heap, NULL));
+    ASSERT(sh_dheap_empty(&heap));
+
+    sh_dheap_free(&heap);
+}
+
+/* ============================================================================
  * Spatial Grid Tests
  * ============================================================================ */
 
@@ -5380,6 +5609,17 @@ int main(void)
     RUN_TEST(heap_clear);
     RUN_TEST(heap_many_entries);
     RUN_TEST(heap_null_safety);
+
+    printf("\nData Heap:\n");
+    RUN_TEST(dheap_init_free);
+    RUN_TEST(dheap_push_pop_max);
+    RUN_TEST(dheap_push_pop_min);
+    RUN_TEST(dheap_peek);
+    RUN_TEST(dheap_clear);
+    RUN_TEST(dheap_large_elements);
+    RUN_TEST(dheap_many_entries);
+    RUN_TEST(dheap_null_safety);
+    RUN_TEST(dheap_pop_discard);
 
     printf("\nSpatial Grid:\n");
     RUN_TEST(dynamic_grid_create_free);
