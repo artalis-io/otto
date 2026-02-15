@@ -844,15 +844,16 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     SimplexTableau *tab = solver->tableau;
     int n_orig = solver->model->num_vars;
 
-    /* Apply bound perturbation for cycling prevention */
+    /* Apply bound perturbation for cycling prevention.
+     * Cost is O(n) — cheap even for warm starts. */
     apply_bound_perturbation(tab);
 
-    /* P5 bound flipping is disabled when perturbation is active
-     * (perturbation shifts ub, corrupts flip magnitude) */
     int use_dse = solver->use_dual_steepest_edge;
 
-    /* Initialize DSE weights (exact for standalone solve) */
-    if (use_dse) {
+    /* Initialize DSE weights (exact for standalone solve).
+     * For warm starts, caller should set dse_initialized=0 to force reinit,
+     * or leave it if weights are still approximately valid from previous solve. */
+    if (use_dse && !tab->dse_initialized) {
         dse_init_exact(tab);
     }
 
