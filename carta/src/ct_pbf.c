@@ -2572,12 +2572,16 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
     /* Get tile bounding box with buffer for labels near edges */
     CTBBox bbox = ct_tile_bounds(coord);
 
-    /* Add small buffer (~500m at equator) for labels near tile edges */
-    double buffer = 0.005;  /* ~500m at equator */
-    bbox.min_lat -= buffer;
-    bbox.max_lat += buffer;
-    bbox.min_lon -= buffer;
-    bbox.max_lon += buffer;
+    /* Zoom-adaptive buffer so adjacent tiles also see near-edge labels.
+     * At z8 a tile is ~1.4° wide; a label can span ~0.5° → need ~0.35° buffer.
+     * At z14 a tile is ~0.022° wide; 25% gives ~0.005° (previous fixed value).
+     * 25% of tile width on each side ensures both tiles see the same label. */
+    double buf_lon = (bbox.max_lon - bbox.min_lon) * 0.25;
+    double buf_lat = (bbox.max_lat - bbox.min_lat) * 0.25;
+    bbox.min_lat -= buf_lat;
+    bbox.max_lat += buf_lat;
+    bbox.min_lon -= buf_lon;
+    bbox.max_lon += buf_lon;
 
     /* Allocate result array (worst case: all points) */
     const CTLabeledPoint **result = malloc(ctx->num_labeled_points * sizeof(CTLabeledPoint *));
@@ -2648,6 +2652,15 @@ CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
     }
 
     CTBBox bbox = ct_tile_bounds(coord);
+
+    /* Expand bbox so adjacent tiles also see roads near the boundary.
+     * Road labels can extend well past the tile edge. */
+    double buf_lon = (bbox.max_lon - bbox.min_lon) * 0.25;
+    double buf_lat = (bbox.max_lat - bbox.min_lat) * 0.25;
+    bbox.min_lat -= buf_lat;
+    bbox.max_lat += buf_lat;
+    bbox.min_lon -= buf_lon;
+    bbox.max_lon += buf_lon;
 
     /* Allocate result array */
     size_t capacity = 256;
