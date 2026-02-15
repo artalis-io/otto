@@ -1820,6 +1820,109 @@ int ct_render_labels(CTRenderContext *ctx,
  * Render a single glyph at position (cx, cy) rotated by angle.
  * Uses inverse rotation to sample the MSDF atlas.
  */
+/* Render a single glyph rotated around its center position.
+ * (cx, cy) is the glyph center in pixel coords, angle in radians.
+ * For each pixel in the rotated AABB, inverse-rotate to glyph-local
+ * [0,1] coords and sample the MSDF. */
+static void ct_render_glyph_rotated(CTRenderContext *ctx,
+                                     const SHGlyph *glyph,
+                                     float cx, float cy, float angle,
+                                     const SHFont *font, float font_size,
+                                     CTColor color, float threshold)
+{
+    if (!ctx || !ctx->pixels || !glyph || !font) return;
+
+    /* Glyph dimensions in pixels */
+    float gw = (glyph->plane.right - glyph->plane.left) * font_size;
+    float gh = (glyph->plane.top - glyph->plane.bottom) * font_size;
+    if (gw <= 0.0f || gh <= 0.0f) return;
+
+    /* Half-extents of the glyph box */
+    float hw = gw * 0.5f;
+    float hh = gh * 0.5f;
+
+    /* Glyph center offset from the advance center:
+     * advance center is at (advance/2, ascent - (ascent - top*fs))
+     * but we need the visual center of the glyph box */
+    float ascent = sh_font_ascent(font, font_size);
+    float offset_x = (glyph->plane.left + glyph->plane.right) * 0.5f * font_size
+                    - glyph->advance * font_size * 0.5f;
+    float offset_y = ascent - (glyph->plane.top + glyph->plane.bottom) * 0.5f * font_size
+                    - ascent * 0.5f;
+
+    /* Rotated glyph center */
+    float cos_a = cosf(angle);
+    float sin_a = sinf(angle);
+    float gcx = cx + offset_x * cos_a - offset_y * sin_a;
+    float gcy = cy + offset_x * sin_a + offset_y * cos_a;
+
+    /* Compute rotated AABB: rotate the 4 corners, find min/max */
+    float corners_x[4], corners_y[4];
+    float dx[2] = { -hw, hw };
+    float dy[2] = { -hh, hh };
+    for (int i = 0; i < 4; i++) {
+        float lx = dx[i & 1];
+        float ly = dy[i >> 1];
+        corners_x[i] = gcx + lx * cos_a - ly * sin_a;
+        corners_y[i] = gcy + lx * sin_a + ly * cos_a;
+    }
+
+    float min_x = corners_x[0], max_x = corners_x[0];
+    float min_y = corners_y[0], max_y = corners_y[0];
+    for (int i = 1; i < 4; i++) {
+        if (corners_x[i] < min_x) min_x = corners_x[i];
+        if (corners_x[i] > max_x) max_x = corners_x[i];
+        if (corners_y[i] < min_y) min_y = corners_y[i];
+        if (corners_y[i] > max_y) max_y = corners_y[i];
+    }
+
+    /* Clamp to tile bounds */
+    int px0 = (int)floorf(min_x);
+    int py0 = (int)floorf(min_y);
+    int px1 = (int)ceilf(max_x);
+    int py1 = (int)ceilf(max_y);
+    if (px0 < 0) px0 = 0;
+    if (py0 < 0) py0 = 0;
+    if (px1 >= ctx->width) px1 = ctx->width - 1;
+    if (py1 >= ctx->height) py1 = ctx->height - 1;
+
+    uint8_t cr = CT_COLOR_R(color);
+    uint8_t cg = CT_COLOR_G(color);
+    uint8_t cb = CT_COLOR_B(color);
+    uint8_t ca = CT_COLOR_A(color);
+
+    /* For each pixel in AABB, inverse-rotate to glyph-local coords */
+    for (int py = py0; py <= py1; py++) {
+        float rel_y = (float)py - gcy;
+        /* Pre-compute partial inverse rotation for this row */
+        float inv_x_base = rel_y * sin_a;  /* -(-sin_a) * rel_y */
+        float inv_y_base = rel_y * cos_a;
+        for (int px = px0; px <= px1; px++) {
+            float rel_x = (float)px - gcx;
+            /* Inverse rotate: [cos_a, sin_a; -sin_a, cos_a] */
+            float lx = rel_x * cos_a + inv_x_base;
+            float ly = -rel_x * sin_a + inv_y_base;
+
+            /* Map to [0,1] within glyph bounds */
+            float u = (lx + hw) / gw;
+            float v = (ly + hh) / gh;
+
+            /* Skip if outside glyph */
+            if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) continue;
+
+            float coverage = sh_font_msdf_coverage_threshold(
+                font, glyph, u, v, font_size, threshold);
+            if (coverage <= 0.0f) continue;
+
+            uint8_t alpha = (uint8_t)(ca * coverage);
+            if (alpha == 0) continue;
+
+            CTColor c = CT_RGBA(cr, cg, cb, alpha);
+            ct_render_blend_pixel(ctx, px, py, c);
+        }
+    }
+}
+
 void ct_render_text_path(CTRenderContext *ctx, const char *text,
                          const CTPathGlyph *path_glyphs, int num_glyphs,
                          const SHFont *font, float font_size,
@@ -1829,12 +1932,6 @@ void ct_render_text_path(CTRenderContext *ctx, const char *text,
 
     float halo_threshold = 0.5f - (halo_width * 0.08f);
     if (halo_threshold < 0.1f) halo_threshold = 0.1f;
-
-    /* Use fast axis-aligned glyph rendering positioned along the path.
-     * Characters are rendered upright at each path position rather than
-     * individually rotated - same approach as Google Maps road labels.
-     * This is ~100x faster than per-pixel rotated MSDF sampling. */
-    float ascent = sh_font_ascent(font, font_size);
 
     const char *p = text;
     int gi = 0;
@@ -1850,17 +1947,12 @@ void ct_render_text_path(CTRenderContext *ctx, const char *text,
             p += len;
 
             const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
-            if (!glyph) continue;  /* Don't advance gi - placer skipped this too */
+            if (!glyph) continue;
 
-            /* Position glyph at path point: convert advance center to top-left */
-            float cx = path_glyphs[gi].x;
-            float cy = path_glyphs[gi].y;
-            int gx = (int)(cx - glyph->advance * font_size / 2.0f
-                          + glyph->plane.left * font_size);
-            int gy = (int)(cy - ascent + (ascent - glyph->plane.top * font_size));
-
-            ct_render_glyph(ctx, glyph, gx, gy, font, font_size,
-                            halo, halo_threshold);
+            ct_render_glyph_rotated(ctx, glyph,
+                                     path_glyphs[gi].x, path_glyphs[gi].y,
+                                     path_glyphs[gi].angle,
+                                     font, font_size, halo, halo_threshold);
             gi++;
         }
     }
@@ -1875,15 +1967,12 @@ void ct_render_text_path(CTRenderContext *ctx, const char *text,
         p += len;
 
         const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
-        if (!glyph) continue;  /* Don't advance gi - placer skipped this too */
+        if (!glyph) continue;
 
-        float cx = path_glyphs[gi].x;
-        float cy = path_glyphs[gi].y;
-        int gx = (int)(cx - glyph->advance * font_size / 2.0f
-                      + glyph->plane.left * font_size);
-        int gy = (int)(cy - ascent + (ascent - glyph->plane.top * font_size));
-
-        ct_render_glyph(ctx, glyph, gx, gy, font, font_size, fill, 0.5f);
+        ct_render_glyph_rotated(ctx, glyph,
+                                 path_glyphs[gi].x, path_glyphs[gi].y,
+                                 path_glyphs[gi].angle,
+                                 font, font_size, fill, 0.5f);
         gi++;
     }
 }
