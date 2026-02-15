@@ -4,13 +4,17 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-14) — Strong branching UAF fix + NaN safety + RC fixing + RINS (`9315fd3`).
-All tests pass (Ralph 272, FuelWise 123). All benchmark seeds crash-free (42/456/789/1337/9999).
-Key fixes: (1) heap-use-after-free in `select_reliability_branch_impl` — `solution` pointer
-invalidated by `simplex_solve` fallback in `strong_branch`, (2) `-ffinite-math-only` removed
-from CFLAGS (caused NaN/Inf checks to be optimized away), (3) reduced-cost fixing at B&B nodes,
-(4) RINS heuristic for incumbent improvement during tree search, (5) reliability branching with
-priority awareness, (6) named constants for all MIP parameters.
+**Current** (2026-02-15) — Phase E: replace dual_reopt with clean dual simplex (`140a1f2`).
+All tests pass (Ralph 359, LAP 358, Netflow 153, FuelWise 123). NETLIB 16/17.
+Phase E collapses `solve_node_lp()` from 3-path dispatch (PATH A/B/C with dual_reopt) to single
+warm-start path using `dual_simplex_solve_v2()`. Net -1124 LoC. MIP now uses method=2 (auto:
+dual first, primal fallback) instead of method=0. Three bugs fixed: (1) non-basic variable unshift
+after perturbation removal, (2) verify_solution obj_sense error on maximization, (3) IMPRECISE
+primal fallback in method=2.
+
+Previous: `7d78375` — Phase D: dual simplex default, 90% SotA.
+
+Previous: `9315fd3` — Strong branching UAF fix + NaN safety + RC fixing + RINS.
 
 Previous: `64f6cdc` — Cut generation normalization fix + pseudocost branching + probing.
 
@@ -28,7 +32,7 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 |------|--------|-------|
 | **Revised Simplex** | ✅ Complete | Primal simplex with LU factorization |
 | **LU Factorization** | ✅ Complete | Sparse factorization, eta updates |
-| **Branch & Bound MIP** | ✅ Complete | HYBRID node, PATH B LU, dual_reopt, P5+P6, reliability branching, RC fixing, RINS |
+| **Branch & Bound MIP** | ✅ Complete | HYBRID node, dual_simplex_solve_v2 warm-start, reliability branching, cuts, RC fixing, RINS |
 | **Dual Simplex** | ✅ Complete | Bound flipping (P5), dual steepest edge (P6), 213 tests |
 | **LAP Solver** | ✅ Complete | JVC algorithm, 358 tests |
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
@@ -411,11 +415,11 @@ Comprehensive comparison of Ralph's LP solver against production solvers (GLOP, 
 See `docs/roadmaps/ralph_vs_glop.md` for the original GLOP comparison. This section extends
 it with a full codebase audit.
 
-**Current position (Feb 2026):** Ralph is ~90% of state-of-the-art. All Tier 1-3 gaps closed plus
-Phase D (dual-as-default). NETLIB: 16/17 pass both primal and auto (blend reports unbounded —
-benchmark data issue with duplicate entry). Dual simplex is now the default method (method=2, auto
-with primal fallback). MIP forces method=0 for dual_reopt compatibility. T1.4, T2.2, T1.3 all done.
-Remaining gaps: T2.1 supernodal LU (performance) and Phase E (replace dual_reopt in B&B).
+**Current position (Feb 2026):** Ralph is ~92% of state-of-the-art. All Tier 1-3 gaps closed plus
+Phase D (dual-as-default) and Phase E (dual_reopt replaced). NETLIB: 16/17 pass both primal and
+auto (blend reports unbounded — benchmark data issue with duplicate entry). Dual simplex is the
+default method (method=2, auto with primal fallback) for both standalone LP and MIP node solving.
+T1.4, T2.2, T1.3 (including Phase E) all done. Remaining gap: T2.1 supernodal LU (performance).
 
 #### What Ralph Does Well
 
@@ -427,16 +431,16 @@ Remaining gaps: T2.1 supernodal LU (performance) and Phase E (replace dual_reopt
 | FT spike pool | Very good | `lu.c` | Contiguous cache-friendly storage with offset indexing |
 | Multi-round scaling | Very good | `simplex.c:249` | T1.2: geometric mean + equilibrium scaling, orthogonal to primal/dual |
 | Crash basis | Very good | `simplex.c:4152` | T1.1: triangular crash for primal simplex, with singular/infeasible fallback |
-| Dual simplex standalone | Very good | `dual_simplex.c:2278` | T1.3: `dual_simplex_solve_from_scratch_v2` + `dual_phase1`, auto mode with primal fallback |
-| Post-solve verification | Very good | `simplex.c:420` | T2.3: Ax=b, bound, dual, complementary slackness checks; OPTIMAL→IMPRECISE downgrade |
+| Dual simplex standalone | Very good | `dual_simplex.c` | T1.3: `dual_simplex_solve_from_scratch_v2` + `dual_phase1`, auto mode with primal fallback |
+| Dual warm-start for B&B | Very good | `mip.c:solve_node_lp` | Phase E: single warm-start path via `dual_simplex_solve_v2`, with bound perturbation, exact DSE, unshift cleanup |
+| Post-solve verification | Very good | `simplex.c:420` | T2.3: Ax=b, bound, dual, complementary slackness checks; OPTIMAL→IMPRECISE downgrade; IMPRECISE triggers primal fallback in method=2 |
 | Phase 1 recovery | Very good | `simplex.c`, `dual_simplex.c` | Dual rescue, entering exclusion, alternate leaving, redundant row marking |
-| dual_reopt for B&B | Very good | `dual_simplex.c:571` | PATH A/B/C design, objective cutoff, P5+P6 |
 | LP Presolve | Good | `presolve.c` | 12 techniques, 20-round fixed-point, probing with implication propagation |
 | Devex pricing | Good | `simplex.c:1533` | Approximate SE with periodic reference reset every 2n iterations |
 | Heap pricing (T2.2) | Good | `simplex.c` | Binary max-heap with improvement scoring, incremental maintenance, bound-flip fix |
 | Sparse Markowitz LU | Good | `lu_sparse.c:974` | AMD ordering, singleton detection, threshold pivoting |
-| Bound flipping (P5) | Good | `dual_simplex.c:217` | Two-pass Harris, restricted to dual_reopt |
-| DSE pricing (P6) | Good | `dual_simplex.c:332` | Approx init in reopt, exact in full dual |
+| Bound flipping (P5) | Good | `dual_simplex.c` | Two-pass Harris in dual ratio test |
+| DSE pricing (P6) | Good | `dual_simplex.c` | Exact init in `dual_simplex_solve_v2`, weights persist across B&B nodes |
 | Objective limits | Good | `simplex.c:3899` | T3.1: early-exit in phase2 when obj exceeds limit |
 | Dynamic refactorization | Good | `lu.c:1959` | T3.2: condition-based adaptive refactorization period |
 | Per-phase pricing | Good | `simplex.c:4571` | T3.4: Dantzig in Phase 1, Devex in Phase 2 |
@@ -565,7 +569,7 @@ plus ASAN build (`CFLAGS="-fsanitize=address,undefined -g" make test`).
 | Scaling (T1.2) | ✅ | ✅ | Applied before method dispatch in `simplex_solve` |
 | Crash (T1.1) | ✅ | ❌ | Primal only; dual needs y=0 from slack basis |
 | Verify (T2.3) | ✅ | ✅ | Runs after both paths; always-on for method=2 |
-| Obj limits (T3.1) | ✅ | via cutoff | Primal has `objective_limit`; dual uses `objective_cutoff` |
+| Obj limits (T3.1) | ✅ | ✅ | `objective_limit` in both primal and dual |
 | Per-phase pricing (T3.4) | ✅ | N/A | Primal Phase 1/2 only |
 | Perturbation (T3.3) | ✅ | separate | Primal bound perturb; dual has own dual perturbation |
 
@@ -583,116 +587,55 @@ leaving→non-basic, `heap_update()` on bound flips. Lazy `heap_build()` after f
 Critical bound-flip bug found/fixed (Fix A + Fix B safety net). NETLIB: 14/17 (matches Dantzig).
 Not composable with Devex/SE (weighted scoring). Commit: `b3594c6`.
 
-**T1.3 Dual Simplex as Default — Implementation** (Phases A-C done, D-E remaining)
+**T1.3 Dual Simplex as Default — ✅ ALL PHASES COMPLETE** (Phases A-E done)
 
-Standalone dual simplex is implemented via `dual_simplex_solve_from_scratch_v2()` with
-`dual_phase1()`, but dual is not yet the default solver. The old `dual_simplex_solve()` still
-has primal fallback paths (used only by `dual_reopt` in B&B). Remaining work is Phase D
-(make method=2 the default) and Phase E (replace `dual_reopt` with clean dual solver).
+Standalone dual simplex implemented and deployed as default for both LP and MIP. The old
+`dual_reopt()` has been deleted and replaced by `dual_simplex_solve_v2()` warm-start in B&B.
 
-**Current NETLIB status with method=2:** 16/17 pass. Only blocker:
+**NETLIB status with method=2:** 16/17 pass.
 - blend LP (83-var): falsely reports unbounded (benchmark data issue with duplicate entry)
-- brandy: ✅ FIXED — perturbation backup corruption on re-perturbation (obj_rel_error < 1e-9)
+- brandy: ✅ FIXED — perturbation backup corruption on re-perturbation
 
-*Legacy dual_simplex_solve fallback paths (still used by dual_reopt):*
-
-| # | Location | Trigger | Action |
-|---|----------|---------|--------|
-| 1 | dual_simplex.c:788 | No tableau exists | Full primal from scratch |
-| 2 | dual_simplex.c:857 | Can't achieve dual feasibility via flipping | Full primal from scratch |
-| 3 | dual_simplex.c:1020 | Stalled after 3 perturbation attempts | Destroy tableau + full primal |
-| 4 | dual_simplex.c:1044 | Too many dual violations (>n/5) | Destroy tableau + full primal |
-| 5 | dual_simplex.c:1056 | Persistent violations (200+ iters) | Destroy tableau + full primal |
-| 6 | dual_simplex.c:1071 | Too many iterations (>5m) | Destroy tableau + full primal |
-
-*Phased plan:*
+*Phases (all complete):*
 
 **Phase A: Crash basis enables dual start** — ✅ DONE (T1.1)
 
-Crash implemented but only used for primal (method=0). Dual from-scratch uses independent
-tableau (`tableau_create_dual`) without Big-M artificials — all c_B=0 gives y=0, rc=c,
-ideal for `make_dual_feasible` + `dual_phase1`.
+Crash implemented for primal (method=0). Dual from-scratch uses independent tableau
+(`tableau_create_dual`) without Big-M artificials — all c_B=0 gives y=0, rc=c.
 
 **Phase B: Clean dual solver function** — ✅ DONE
 
-`dual_simplex_solve_from_scratch_v2()` in `dual_simplex.c:2278`:
-- Creates its own dual tableau (no Big-M artificials)
-- `make_dual_feasible()` flips non-basics
-- `dual_phase1()` via auxiliary objective if flipping insufficient
-- `dual_simplex_solve_v2()` for Phase 2
-- No primal fallback — caller (method dispatch in `simplex_solve`) decides
+`dual_simplex_solve_from_scratch_v2()` with `dual_phase1()`, `make_dual_feasible()`,
+`dual_simplex_solve_v2()`. No primal fallback — caller decides.
 
 **Phase C: Method dispatch in simplex_solve** — ✅ DONE
 
-Implemented at `simplex_solve:4470`. Method dispatch:
-- `method=0`: primal simplex with crash (current default)
-- `method=1`: dual forced, error on failure
-- `method=2`: auto — tries dual first, verifies with `verify_solution()`,
-  falls back to primal if dual fails or produces wrong result (Ax=b check)
-
-The `method=2` auto mode catches dual failures via forced verification (line 4525).
+Method dispatch: method=0 (primal), method=1 (dual forced), method=2 (auto: dual first,
+verify, primal fallback if dual fails or IMPRECISE).
 
 **Phase D: Make dual the default** — ✅ DONE (`dac309a`)
 
-Changed default `method` from 0 to 2 (auto: dual first, primal fallback with Ax=b verification).
-MIP solver forces method=0 at all 5 `simplex_create()` sites in mip.c (dual_reopt depends on
-primal tableau format). All tests pass: 359 LP/MIP + 123 FuelWise + 358 LAP + 153 netflow.
-NETLIB: 16/17 pass (unchanged).
+Changed default `method` from 0 to 2. All tests pass. NETLIB: 16/17.
 
-**Phase E: Replace dual_reopt in B&B** — TODO (depends on Phase D)
+**Phase E: Replace dual_reopt in B&B** — ✅ DONE (`140a1f2`)
 
-Delete `dual_reopt` (~200 LoC) and simplify `solve_node_lp()` in mip.c from 3 paths to 1.
-Depends on Phase D (dual must be reliable enough to be the default). The B&B node solver
-in `solve_node_lp()` (mip.c:960) would collapse from 3 paths to 1:
+Collapsed `solve_node_lp()` from 3-path dispatch (PATH A/B/C with `dual_reopt`) to single
+warm-start path using `dual_simplex_solve_v2()`. MIP now uses method=2 instead of method=0.
 
-```c
-// CURRENT: 3 paths, 2 different solvers, inconsistent numerical profiles
-PATH A: update bounds → dual_reopt(budget=500)     [approx DSE, no perturbation]
-PATH B: update bounds → dual_reopt(budget=2000)    [approx DSE, no perturbation]
-PATH C: destroy tableau → simplex_solve()           [primal from scratch, all-slack]
+Code deleted: `dual_reopt()` (~205 LoC), old `dual_simplex_solve()` (~340 LoC), old
+`dual_simplex_solve_from_scratch()` (~290 LoC), `dual_ratio_test_bflip()`, `dse_init_approx()`,
+`restore_basis_from_node()`. Net: +113 -1237 lines across 5 files.
 
-// WITH Phase E: 1 path, 1 solver
-ALL:    update bounds → dual_simplex_solve_clean()  [exact DSE, perturbation, cutoff]
-RARE:   cold start → crash + dual_simplex_solve_clean()
-```
+Bugs found and fixed during Phase E:
+1. **Non-basic variable unshift**: After `remove_bound_perturbation`, non-basic vars at UB
+   still held perturbed x values (e.g., 1+ε instead of 1). Fix: snap to restored bounds.
+2. **verify_solution obj_sense**: Recomputed objective was multiplied by `model->obj_sense`,
+   causing 2x relative error on maximization problems. Latent bug exposed by method=2
+   forced verification in MIP. Fix: removed spurious multiplication.
+3. **IMPRECISE primal fallback**: method=2 now falls back to primal when `verify_solution`
+   downgrades to IMPRECISE (was returning bad dual solution on ill-conditioned subproblems).
 
-Why `dual_reopt` hurts milp15 quality (even though LP solutions are technically correct):
-1. **Approximate DSE** (`dse_init_approx` sets all weights to 1.0) → poor leaving variable
-   selection → more pivots → more numerical drift between refactorizations
-2. **Two numerical profiles** → pseudocost updates mix LP bounds from dual_reopt (PATH A/B)
-   and primal simplex (PATH C), creating inconsistent branching signals
-3. **Budget-limited** → frequent PATH C fallbacks on non-child nodes → primal cold starts
-   from all-slack basis (the worst possible starting point)
-4. **Unnecessary complexity** → 200 lines of separate code maintaining its own refactorization
-   logic, DSE init, bound flipping dispatch — all of which `dual_simplex_solve_clean()` handles
-
-What Phase E changes in mip.c `solve_node_lp()`:
-- Delete PATH A/B/C dispatch (~80 lines)
-- Replace with: update bounds in tableau → `dual_simplex_solve_clean(lp)`
-- `dual_simplex_solve_clean()` already supports objective cutoff (from its API)
-- If no tableau exists (first node or post-cut-generation): cold start with method=2
-- Delete `dual_reopt()` from dual_simplex.c (~200 lines)
-
-*Dependencies:*
-- Phase A requires T1.1 (crash basis)
-- Phase B requires P5 (bound flipping, done) and P6 (DSE, done)
-- Phase C requires Phase A + B
-- Phase D requires Phase C + full validation
-- **Phase E requires Phase B + C validated** (dual solver must be reliable before replacing dual_reopt)
-- Optional: T3.5 (dual Phase 1) makes Phase A more robust but is not blocking
-
-*Tests for each phase:*
-- Phase A: (1) After crash, `make_dual_feasible()` succeeds on 90%+ of test LPs. (2) Crash+dual solves 20-variable LP correctly.
-- Phase B: (1) `dual_simplex_solve_clean()` solves 10 LPs to optimality. (2) Returns correct INFEASIBLE on infeasible LP. (3) Returns STALLED (not crash) on adversarial degenerate LP. (4) Supports objective cutoff (returns OBJ_LIMIT when bound exceeds cutoff).
-- Phase C: (1) method=1 solves all existing LP tests. (2) method=2 auto-selects correctly. (3) method=2 falls back to primal on problems where dual fails. (4) No regression on any existing test with method=2.
-- Phase D: (1) All 272+ ralph tests pass with method=2 as default. (2) All 29+ fuelwise tests pass. (3) NETLIB suite: ≥ same solve rate as method=0. (4) FuelWise benchmarks: no regression on milp15/30/50/100.
-- Phase E: (1) All MIP tests pass with dual_reopt removed. (2) milp15 multi-seed gap improves (target: < 15%, from 25.7%). (3) milp30/50/100/200 no regression. (4) B&B node counts within 10% of pre-change on all seeds.
-
-*Risk assessment:*
-- Phase A-B: Low. New function, old code untouched.
-- Phase C: Medium. Modifies `simplex_solve` pipeline but with explicit fallback to existing primal path.
-- Phase D: Medium. Default change affects all users. One-line revert to `method=0` if issues found.
-- Phase E: Medium-High. Removes proven B&B hot path. Validated by multi-seed MIP benchmarks before landing. Revert: re-add `dual_reopt()` and PATH A/B/C dispatch.
+All tests pass: Ralph 359/359, LAP 358/358, Netflow 153/153, FuelWise 123/123.
 
 #### Implementation Order (Prioritized by Impact/Effort)
 
@@ -711,11 +654,10 @@ What Phase E changes in mip.c `solve_node_lp()`:
 | 11 | T2.1 | Supernodal LU (§1.11) | 3-5x factorization | ~1500 LoC | #7 (T1.4) | `lu_supernode` |
 | 12 | T3.5 | Dual Phase 1 with auxiliary objective | Robust dual starts | ~200 LoC | None | `dual_phase1` |
 | 13 | T1.3 | Dual simplex as default | ~2x initial solves | ~400 LoC | #2 (T1.1), P5, P6 | `method` | ✅ DONE |
-| 14 | T1.3e | Replace dual_reopt in B&B | Consistent node LP quality, simpler MIP solver | -200 LoC (net delete) | #13 (T1.3) | N/A (removes code) |
+| 14 | T1.3e | Replace dual_reopt in B&B | Consistent node LP quality, simpler MIP solver | -1124 LoC (net delete) | #13 (T1.3) | N/A (removes code) | ✅ DONE |
 
-Items 1-8 and 13 are complete (~90% of state-of-the-art). Items 9-11 push to ~92%.
-Item 14 (replace dual_reopt) is the architectural endgame
-that gets to ~95% and simplifies the MIP solver.
+Items 1-8, 13, and 14 are complete (~92% of state-of-the-art). Item 11 (supernodal LU)
+is the only remaining gap to push to ~95%.
 
 **Milestone targets:**
 
@@ -724,7 +666,8 @@ that gets to ~95% and simplifies the MIP solver.
 | **75% SotA** | T1.2, T1.1, T2.3, T3.1, T3.4, T3.6 | ✅ REACHED — blend NETLIB passes, 2-3x cold start improvement, numerical diagnostics |
 | **85% SotA** | + T1.4, T2.2, T3.2, T3.3 | ✅ REACHED — Competitive per-iteration speed on m < 2000, proper LU reuse, heap pricing |
 | **90% SotA** | + T1.3 (dual-as-default) | ✅ REACHED — Dual simplex default, competitive with GLPK/CLP on NETLIB |
-| **95% SotA** | + T2.1 (supernodal) + T1.3e (replace dual_reopt) | Competitive per-iteration speed on m < 5000, clean MIP node solver |
+| **92% SotA** | + T1.3e (replace dual_reopt) | ✅ REACHED — Clean MIP node solver, single warm-start path, -1124 LoC |
+| **95% SotA** | + T2.1 (supernodal LU) | Competitive per-iteration speed on m < 5000 |
 
 **Testing strategy:** Every item must pass this gate before changing defaults:
 1. `make clean && make test` in ralph/ — all 272+ tests pass
@@ -821,10 +764,10 @@ GLPK benchmark (§1.7) confirmed these are the critical gaps:
 | Task | Priority | Expected Impact | Notes |
 |------|----------|-----------------|-------|
 | **HYBRID node selection** | ✅ **Done** | 3-4x on milp30/50 | DFS→best-bound on incumbent; PATH B LU reuse eliminates O(m³) refactorize |
-| **Objective cutoff** | ✅ **Done** | 1.1-1.4x on small MIP | Prune nodes in dual_reopt when obj exceeds incumbent |
+| **Objective cutoff** | ✅ **Done** | 1.1-1.4x on small MIP | Prune nodes via `objective_limit` when obj exceeds incumbent |
 | **c-MIR cuts** | ✅ **Done** | Tighter relaxation | Row normalization sign fix in GMI/c-MIR back-substitution; safety guard for cut-induced infeasibility |
-| **Bound flipping (P5)** | ✅ **Done** | 20-50% on small MIP | Flip boxed vars in dual ratio test; restricted to dual_reopt (no perturbation) |
-| **Dual steepest edge (P6)** | ✅ **Done** | 20-50% on small MIP | DSE leaving selection; approx init in dual_reopt, exact in full dual |
+| **Bound flipping (P5)** | ✅ **Done** | 20-50% on small MIP | Flip boxed vars in dual ratio test |
+| **Dual steepest edge (P6)** | ✅ **Done** | 20-50% on small MIP | DSE leaving selection; exact init in `dual_simplex_solve_v2` |
 | **LP presolve (P3)** | ✅ **Done** | 2-3x avg improvement | 12 techniques, 20-round, probing w/ implication propagation |
 | **Aggressive presolve** (probing) | ✅ **Done** | 1.5-2x smaller problems | Probing w/ implication propagation, orthogonal reuse of bound tightening |
 | **Presolve mask for MIP** | ✅ **Done** | Investigation only | See §1.8 — presolve hurts FuelWise MIP; keep disabled |

@@ -13,14 +13,14 @@ MIP branch-and-bound performance.
 
 ### 1. Dual Simplex as Primary Algorithm
 
-| Aspect | GLOP | Ralph (before) | Ralph (after `dual_reopt`) |
-|--------|------|----------------|---------------------------|
-| Default for LP | Dual simplex | Primal simplex | Primal (cold start), Dual (B&B reopt) |
-| B&B re-optimization | Load parent basis, dual simplex does 1-5 pivots | `has_fixed_basic` check aborted warm start on ALL binary MIPs → cold start every node | `dual_reopt()`: 1-3 pivots avg, PATH A (direct child, skip refactorize) / PATH B (non-child, reuse LU + larger budget) / PATH C (cold start fallback) |
-| Dual steepest edge | Exact Forrest-Goldfarb DSE with incremental updates | Most-infeasible leaving variable, basic Harris | Same as before (most-infeasible) |
-| Bound flipping | Flips boxed variable bounds without basis change | Every pivot does full LU update | Same as before |
+| Aspect | GLOP | Ralph (before) | Ralph (current) |
+|--------|------|----------------|-----------------|
+| Default for LP | Dual simplex | Primal simplex | Dual simplex (method=2 auto with primal fallback) |
+| B&B re-optimization | Load parent basis, dual simplex does 1-5 pivots | `has_fixed_basic` check aborted warm start on ALL binary MIPs → cold start every node | `dual_simplex_solve_v2()` warm-start: update bounds, clear perturbation, recompute solution, dual pivots to restore primal feasibility |
+| Dual steepest edge | Exact Forrest-Goldfarb DSE with incremental updates | Most-infeasible leaving variable, basic Harris | Exact DSE with incremental weight updates, persists across B&B nodes |
+| Bound flipping | Flips boxed variable bounds without basis change | Every pivot does full LU update | Two-pass Harris bound flipping in dual ratio test |
 
-**Status: IMPLEMENTED** (`dual_reopt` in `ralph/src/dual_simplex.c`, Feb 2026)
+**Status: IMPLEMENTED** (Phase E complete, `140a1f2`, Feb 2026)
 
 Benchmarks (FuelWise MILP, seed=42):
 
@@ -47,13 +47,12 @@ Benchmarks (FuelWise MILP, seed=42):
 | milp100  | 0.39%              | **0.21%**                    | 0.48% |
 | milp200  | 9.23%              | **3.82%**                    | 0.87% |
 
-**Improvements beyond initial dual_reopt:**
+**Improvements over original implementation:**
 - **HYBRID node selection**: DFS until first incumbent, then best-bound.
-- **PATH B LU reuse**: Skip basis restore, reuse current LU factors. O(m) vs O(m³).
 - **Presolve with priority remapping**: Lightweight mask 0x110F. Branch priorities/directions
   remapped via `presolved->var_map`. Without remapping: 2-4x more nodes.
-- **P5 bound flipping + P6 dual steepest edge**: Restricted to `dual_reopt`. Three
-  infeasibility guards (refactorize-retry, rc recompute, diving isolation).
+- **P5 bound flipping + P6 dual steepest edge**: In `dual_simplex_solve_v2`. Exact DSE
+  with incremental weight updates persisting across B&B nodes.
 - **Cut generation normalization fix** (`5b1bd4c`): Row normalization sign bug in GMI/c-MIR
   back-substitution. `tab->row_sign[con_row]` must be applied when accessing model coefficients
   during slack variable substitution. Without fix: cuts have inverted coefficients → invalid.
@@ -62,18 +61,14 @@ Benchmarks (FuelWise MILP, seed=42):
 - **Pseudocost branching + root strong branching**: Probe 20 fractional vars × 50 dual pivots.
   Obj-coeff init `fmax(|c_j|, 1.0)`, updated from actual bound changes.
 - **Column-based probing**: Bound tightening at nodes with depth < 20.
+- **Phase E (`140a1f2`)**: Replaced `dual_reopt` (3-path dispatch) with single warm-start
+  path via `dual_simplex_solve_v2()`. Net -1124 LoC. MIP uses method=2 (auto: dual first,
+  primal fallback) — same solver for LP and MIP.
 
-**Bug found during implementation:** Degenerate artificial variables (basic at value 0 after
-Phase 2) become non-zero when bounds change, corrupting the objective with BIG_M terms.
-Fix: `dual_reopt` checks for basic artificials and bails to cold start if found.
-
-**Remaining gap vs GLOP:** Ralph still uses primal simplex for initial LP solves and cold
-starts. GLOP uses dual simplex as the *default* LP algorithm — not just for B&B reopt.
-This matters because dual simplex benefits from crash basis (no Phase 1 needed) and steepest
-edge pricing. Ralph's `dual_simplex_solve()` is too heavy for this role — it has 5 internal
-fallback paths to primal simplex, bound perturbation, and complex stalling detection. A
-production dual-as-default would need: crash basis (P2), dual steepest edge (P6), bound
-flipping (P5), and a cleaner `dual_simplex_solve()` without primal fallbacks.
+**Remaining gap vs GLOP:** Ralph is now architecturally aligned with GLOP (dual simplex as
+default for both LP and MIP). The main performance gap is supernodal LU factorization (T2.1)
+for larger problems. GLOP also has dualization for constraint-heavy problems and more aggressive
+probing (non-binary integer implications, clique detection).
 
 ### 2. Presolve (15+ Preprocessors)
 
@@ -129,23 +124,20 @@ GLOP's more aggressive probing (non-binary integer implications, clique detectio
 | Aspect | GLOP | Ralph |
 |--------|------|-------|
 | Bixby (1992) | Yes — near-triangular basis | No |
-| Triangular (GLPK-style) | Yes — singleton column priority | No |
+| Triangular (GLPK-style) | Yes — singleton column priority | ✅ Yes (`crash_triangular`) |
 | Maros LTSF | Yes — row/column priority scores | No |
-| Default | Triangular crash | All-slack/artificial basis |
+| Default | Triangular crash | Triangular crash (primal), slack basis (dual) |
 
-**Why it matters:** Crash eliminates Phase 1 entirely on many problems. Ralph always does
-Phase 1 → Phase 2 (or Big-M), adding 30-50% overhead.
-
-**Expected impact:** 2-5x on cold starts.
+**Status: IMPLEMENTED** (`crash_triangular()` in `simplex.c`, primal simplex only)
 
 ### 4. Objective Limits for MIP Pruning
 
 | Aspect | GLOP | Ralph |
 |--------|------|-------|
-| Early termination | `objective_lower_limit` / `objective_upper_limit` | None |
-| MIP integration | LP terminates when bound exceeds incumbent | LP solves to full optimality |
+| Early termination | `objective_lower_limit` / `objective_upper_limit` | ✅ `objective_limit` |
+| MIP integration | LP terminates when bound exceeds incumbent | ✅ LP terminates when bound exceeds incumbent |
 
-**Expected impact:** 30-50% fewer LP iterations in later B&B nodes.
+**Status: IMPLEMENTED** (`objective_limit` in `simplex.c`, used by B&B node solver)
 
 ## High Impact Gaps
 
@@ -207,7 +199,8 @@ Ralph: Fixed thresholds (50-200), growth-triggered.
 
 GLOP: 7 independent post-solve metrics (primal/dual infeasibility, reduced cost, activity,
 objective error), status downgrade to IMPRECISE. Kahan summation for objective.
-Ralph: No post-solve verification.
+Ralph: ✅ `verify_solution()` with Ax=b, bound, dual, complementary slackness, objective
+checks. OPTIMAL→IMPRECISE downgrade. Kahan summation. Always-on for method=2.
 
 ### 12. Re-optimization Detection
 
@@ -229,70 +222,37 @@ tableau creation). Ralph's `simplex_solve()` creates a new tableau from scratch 
 | Priority | Improvement | Impact | Effort | Dependencies | Status |
 |----------|-------------|--------|--------|-------------|--------|
 | **P0** | Dual simplex for B&B reopt | 2-5x MIP solves | Medium | None | **DONE** |
-| **P1** | Objective cutoff in `dual_reopt` | 30-50% fewer iters on pruned nodes | Low | P0 | **DONE** |
-| **P2** | Crash basis (triangular) | 2-5x cold starts | Medium | None | |
+| **P1** | Objective cutoff in dual | 30-50% fewer iters on pruned nodes | Low | P0 | **DONE** |
+| **P2** | Crash basis (triangular) | 2-5x cold starts | Medium | None | **DONE** |
 | **P3** | LP Presolve | 2-3x avg (41x best) | High | None | **DONE** |
 | **P4** | DynamicMaximum pricing | 2-5x pricing | Low-Medium | None | **DONE** |
 | **P5** | Bound flipping in dual | Fewer basis updates | Low | P0 | **DONE** |
 | **P6** | Dual steepest edge | 2-3x fewer pivots | Medium | P0 | **DONE** |
-| **P7** | Multi-pass scaling | Better numerics | Low | None | |
-| **P8** | Dual simplex as default LP | ~2x on initial solves | High | P2, P5, P6 | |
+| **P7** | Multi-pass scaling | Better numerics | Low | None | **DONE** |
+| **P8** | Dual simplex as default LP + MIP | ~2x on initial solves | High | P2, P5, P6 | **DONE** (Phase D+E) |
 
-## Still TODO (from dual_reopt implementation)
+## Completed Items
 
-### P1: Objective cutoff in `dual_reopt`
+All priority items P0-P8 are now implemented. Key milestones:
 
-The `objective_cutoff` field exists in `SimplexSolver` and is set to `solver->best_obj *
-obj_sense` before each `dual_reopt` call. The cutoff check itself is commented out because
-`tab->obj_value` is only accurate after `tableau_compute_solution()` — it's NOT updated
-after each `dual_simplex_pivot()`.
+### P8: Dual simplex as default LP + MIP — ✅ DONE
 
-**Fix options:**
-1. Call `tableau_compute_solution()` every N pivots (cheap but not every pivot)
-2. Track objective delta during pivot: `delta_obj = theta * reduced_cost[entering]`
-3. Maintain a running objective by updating `tab->obj_value += delta` after each pivot
+Completed in two phases:
+- **Phase D** (`dac309a`): Changed default `method` from 0 to 2 (auto: dual first, primal fallback).
+  `dual_simplex_solve_from_scratch_v2()` with proper `dual_phase1()`, exact DSE, bound
+  perturbation with unshift cleanup, and `verify_solution()` safety net.
+- **Phase E** (`140a1f2`): Replaced `dual_reopt()` in B&B with `dual_simplex_solve_v2()` warm-start.
+  Collapsed `solve_node_lp()` from 3-path dispatch to single path. Deleted ~1124 net LoC including
+  old `dual_simplex_solve()`, `dual_reopt()`, and associated helpers.
 
-Option 3 is what GLOP does. Requires verifying the delta formula for dual pivots:
-`delta_obj = theta_dual * (x_leaving - bound_leaving)`. Low effort, moderate impact on
-large B&B trees where many nodes are pruned by bound.
+Ralph is now architecturally aligned with GLOP: dual simplex is the default for both
+standalone LP and MIP node solving, with primal as automatic fallback.
 
-### P5: Bound flipping in dual ratio test ✅
+### Remaining gap: Supernodal LU (T2.1)
 
-**Status: IMPLEMENTED** in `dual_simplex.c`. During `dual_ratio_test`, boxed variables hitting
-their opposite bound are flipped without a basis change. Restricted to `dual_reopt()` only
-(incompatible with bound perturbation in `dual_simplex_solve()`). Max flips/iter capped at m/2.
-
-### P6: Dual steepest edge pricing ✅
-
-**Status: IMPLEMENTED** in `dual_simplex.c`. DSE leaving variable selection with
-`score = infeas²/weight`. Approximate init (weights=1.0) in `dual_reopt()`, exact init
-(m BTRANs) in `dual_simplex_solve()`. Weights persist across PATH A/B nodes.
-
-### P8: Dual simplex as default LP algorithm
-
-**Why we're NOT doing this yet:** Ralph's `dual_simplex_solve()` is designed as a
-re-optimization tool, not a standalone LP solver. It has:
-- 5 internal fallback paths to `simplex_solve()` (primal cold start)
-- Bound perturbation machinery (unnecessary for short reopt, essential for default)
-- Complex stalling/cycling detection with 50-iteration thresholds
-- No crash basis support (starts from whatever basis the tableau has)
-
-GLOP uses dual simplex as default because it has:
-- Crash basis that provides a dual-feasible starting point (no Phase 1)
-- Steepest edge pricing that avoids degenerate cycling
-- Bound flipping that handles boxed variables efficiently
-- Clean separation: dual simplex IS the solver, not a helper
-
-**Path to dual-as-default:**
-1. Implement crash basis (P2) — eliminates Phase 1 for dual simplex
-2. Implement bound flipping (P5) — makes dual efficient on bounded problems
-3. Implement DSE (P6) — avoids degenerate cycling without perturbation
-4. Rewrite `dual_simplex_solve()` as a standalone solver without primal fallbacks
-5. Make it the default, keep primal as fallback for edge cases
-
-This is a significant architectural change. `dual_reopt` was the easy win — it handles the
-B&B case (95% of MIP time) with a focused 130-line function. Making dual the default LP
-algorithm is a different scale of work.
+The only remaining high-impact gap vs GLOP/CLP is supernodal LU factorization. Groups columns
+with similar sparsity into dense blocks and uses BLAS-3 kernels. Would reduce LU from ~25% →
+~10% of iteration time. ~1500 LoC effort, depends on T1.4 (done).
 
 ## Presolve Quality: Ralph vs GLPK/GLOP
 
