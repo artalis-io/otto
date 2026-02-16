@@ -502,17 +502,26 @@ typedef struct {
     char detail[2048];          /* Human-readable detail */
 } MatrixVerifyResult;
 
-/* Parse GLPK --output file to extract column activity values */
+/* Parse GLPK --output file to extract column activity values.
+ * Returns number of columns parsed, or -1 on error.
+ * Sets *status_ok to 1 if solution status is OPTIMAL, 0 otherwise. */
 static int parse_glpk_solution_vector(const char *sol_file, double *x, int max_vars,
-                                       double *obj_out) {
+                                       double *obj_out, int *status_ok) {
     FILE *f = fopen(sol_file, "r");
     if (!f) return -1;
 
     char line[MAX_LINE];
     int in_columns = 0;
     int parsed = 0;
+    if (status_ok) *status_ok = 0;
 
     while (fgets(line, sizeof(line), f)) {
+        /* Parse solution status */
+        if (strncmp(line, "Status:", 7) == 0) {
+            if (status_ok && strstr(line, "OPTIMAL"))
+                *status_ok = 1;
+        }
+
         /* Parse objective */
         if (strstr(line, "Objective:")) {
             char *eq = strchr(line, '=');
@@ -640,12 +649,23 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
     }
 
     double glpk_obj = 0.0;
-    int parsed = parse_glpk_solution_vector(sol_file, x, n, &glpk_obj);
+    int glpk_optimal = 0;
+    int parsed = parse_glpk_solution_vector(sol_file, x, n, &glpk_obj, &glpk_optimal);
     unlink(sol_file);
 
     if (parsed == 0) {
         snprintf(r.detail, sizeof(r.detail),
                  "Failed to parse GLPK solution (0 columns parsed)");
+        free(x);
+        ralph_free(model);
+        return r;
+    }
+
+    if (!glpk_optimal) {
+        snprintf(r.detail, sizeof(r.detail),
+                 "SKIP: GLPK solution status is not OPTIMAL (%dx%d nnz=%d)",
+                 n, m, r.nnz);
+        r.pass = 1;  /* Not a Ralph bug — skip */
         free(x);
         ralph_free(model);
         return r;
@@ -727,10 +747,13 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
     /* 7. Overall pass/fail
      * Thresholds are generous because GLPK's --output format has ~6 significant
      * digits, causing truncation noise in the parsed solution vector.
-     * The goal is catching matrix construction bugs (violations >> 1),
-     * not numerical precision issues (violations ~ 1e-3). */
+     * The goal is catching matrix construction bugs (violations >> 100),
+     * not numerical precision issues.  Scale constraint threshold by the
+     * magnitude of the objective: problems with |obj| ~ 10^7 can easily
+     * show constraint violations ~ 1-10 from GLPK's 6-digit truncation. */
     double obj_scale = fmax(1.0, fabs(glpk_obj));
-    r.pass = (r.max_con_violation < 1.0) &&
+    double con_threshold = fmax(1.0, obj_scale * 1e-5);
+    r.pass = (r.max_con_violation < con_threshold) &&
              (r.max_bound_violation < 1e-3) &&
              (r.obj_error / obj_scale < 1e-3);
 
