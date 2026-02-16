@@ -4,14 +4,14 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-15) — Phase E: replace dual_reopt with clean dual simplex (`140a1f2`).
+**Current** (2026-02-15) — Phase E perf fix: 500-iter budget + primal cold-start (`f80487e`).
+Phase E regression (milp15: ~1ms → 92s) fixed via: (1) conditional DSE init (skip O(m²)
+`dse_init_exact` when `tab->dse_initialized` is set), (2) 500-iteration cap for all MIP LP
+solves in `mip_apply_dual_flags()` matching old dual_reopt budget, (3) primal fallback for
+cold starts (method=0 instead of method=2 which wastes budget retrying failed dual).
 All tests pass (Ralph 359, LAP 358, Netflow 153, FuelWise 123). NETLIB 16/17.
-Phase E collapses `solve_node_lp()` from 3-path dispatch (PATH A/B/C with dual_reopt) to single
-warm-start path using `dual_simplex_solve_v2()`. Net -1124 LoC. MIP now uses method=2 (auto:
-dual first, primal fallback) instead of method=0. Three bugs fixed: (1) non-basic variable unshift
-after perturbation removal, (2) verify_solution obj_sense error on maximization, (3) IMPRECISE
-primal fallback in method=2.
 
+Previous: `140a1f2` — Phase E: replace dual_reopt with clean dual simplex in MIP.
 Previous: `7d78375` — Phase D: dual simplex default, 90% SotA.
 
 Previous: `9315fd3` — Strong branching UAF fix + NaN safety + RC fixing + RINS.
@@ -147,7 +147,30 @@ reach cuts, branching priorities/directions, LP presolve P3) against GLPK `glpso
 the identical LP-format MILP without hints). Both solvers get the same constraint set; Ralph
 has additional domain-specific guidance.
 
-**Current results (cut normalization fix + pseudocost + probing, 5 seeds × 10 runs):**
+**Current results (post Phase E + perf fix, seed 42, 5 runs, `f80487e`):**
+
+| Scenario | Ralph avg | GLPK avg | Speed | Obj match | Gap avg |
+|----------|-----------|----------|-------|-----------|---------|
+| milp15 | 20 ms | **7.8 ms** | 0.4x | 3/5 | 124.5% |
+| milp30 | 176 ms | **9.0 ms** | 0.05x | 4/5 | 0.21% |
+| milp50 | 1,581 ms | **13 ms** | 0.01x | 3/5 | 36.5% |
+| milp75 | 5,527 ms | **59 ms** | 0.01x | 4/5 | 0.20% |
+| milp100 | 39,210 ms | **18 ms** | 0.0x | 2/5 | 7.2% |
+| milp200 | 223,675 ms | **91 ms** | 0.0x | 2/5 | 5.9% |
+
+Single-seed (42), 5 runs each. Gap = `(ralph - glpk) / |glpk| × 100%`. 100% solve rate.
+
+**Key observations (post Phase E):**
+- **Phase E regression fixed** but overall speed is WORSE than pre-Phase-E due to `dual_simplex_solve_v2`
+  overhead vs old `dual_reopt` (exact DSE init, bound perturbation, unshift cleanup per node).
+- **milp15/milp50** have catastrophic objective gaps (124.5% / 36.5%) — branching quality issue.
+- **milp30/milp75** have good objective quality (<0.25% avg).
+- **Speed gap is enormous at milp50+**: GLPK is 100-2000x faster. Root cause: Ralph's per-node
+  LP solve cost is O(m²) with v2 (perturbation + DSE + unshift) vs GLPK's optimized warm-start.
+- The old dual_reopt was faster for MIP (approximate DSE, no perturbation, no unshift) at the
+  cost of less precise solutions. Phase E traded speed for correctness.
+
+**Previous results (pre-Phase-E, cut fix + pseudocost + probing, 5 seeds × 10 runs):**
 
 | Scenario | Ralph avg | GLPK avg | Speed | Gap avg | Gap max |
 |----------|-----------|----------|-------|---------|---------|
@@ -158,16 +181,16 @@ has additional domain-specific guidance.
 | milp100 | 93.58 ms | **28.80 ms** | 0.3x | 0.48% | 4.4% |
 | milp200 | 751.03 ms | **129.51 ms** | 0.2x | 0.87% | 18.9% |
 
-Multi-seed benchmarks (seeds 42, 123, 456, 789, 1337). Gap = `(ralph - glpk) / |glpk| × 100%`.
-100% solve rate, 0 false infeasibility. Key observations:
+Multi-seed benchmarks (seeds 42, 123, 456, 789, 1337). 100% solve rate.
 
-- **milp15** has catastrophic gap on 4/5 seeds (only seed 42 at 0.14%; others 3–57%). Root cause:
-  very few stations (~15) means a single bad branching decision cascades. Root strong branching
-  (probing all fractional variables) would eliminate this entirely.
-- **milp30–milp75** have reasonable gaps (<2% avg). Cuts are working correctly.
-- **milp100–milp200** speed regression: cut constraints enlarge the LP, making each node solve
-  slower. GLPK is 3–10× faster due to cut pool management and LP solve efficiency.
-- Zero false infeasibility across all 250 trials (50 per scenario).
+**Phase E impact analysis:** Phase E regressed MIP performance significantly. The old `dual_reopt`
+was purpose-built for B&B: approximate DSE (weights=1.0, refine over nodes), no perturbation
+(budget-limited instead), no unshift (primal values snapped directly). The replacement
+`dual_simplex_solve_v2` is correct but expensive: exact DSE O(m²), perturbation O(n), unshift O(n).
+For small MIPs where nodes are cheap, this overhead dominates. Options:
+1. **Restore dual_reopt** — revert Phase E (loses code simplicity)
+2. **Optimize v2 for warm-start** — skip perturbation/unshift when budget < 500 pivots
+3. **Accept the tradeoff** — Phase E is correct, speed gaps are in MIP tree search quality not LP
 
 **Previous results (P5/P6 only, before cut fix):**
 
@@ -415,11 +438,11 @@ Comprehensive comparison of Ralph's LP solver against production solvers (GLOP, 
 See `docs/roadmaps/ralph_vs_glop.md` for the original GLOP comparison. This section extends
 it with a full codebase audit.
 
-**Current position (Feb 2026):** Ralph is ~92% of state-of-the-art. All Tier 1-3 gaps closed plus
-Phase D (dual-as-default) and Phase E (dual_reopt replaced). NETLIB: 16/17 pass both primal and
-auto (blend reports unbounded — benchmark data issue with duplicate entry). Dual simplex is the
-default method (method=2, auto with primal fallback) for both standalone LP and MIP node solving.
-T1.4, T2.2, T1.3 (including Phase E) all done. Remaining gap: T2.1 supernodal LU (performance).
+**Current position (Feb 2026):** Ralph's LP solver has all standard features of a production
+solver (~92% of state-of-the-art feature coverage). All Tier 1-3 gaps closed plus Phase D
+(dual-as-default) and Phase E (dual_reopt replaced). NETLIB: 16/17 pass. Remaining LP gap:
+T2.1 supernodal LU (performance on m > 500). See `docs/roadmaps/ralph-vs-glop.md` for a
+frank assessment of what "92% SoTA" means vs production solvers.
 
 #### What Ralph Does Well
 
@@ -636,6 +659,20 @@ Bugs found and fixed during Phase E:
    downgrades to IMPRECISE (was returning bad dual solution on ill-conditioned subproblems).
 
 All tests pass: Ralph 359/359, LAP 358/358, Netflow 153/153, FuelWise 123/123.
+
+**Phase E Performance Fix** (`f80487e`):
+
+Phase E caused catastrophic MIP regression (milp15: ~1ms → 92s). Three root causes:
+1. `dse_init_exact()` (O(m²)) called unconditionally every v2 call. Fix: conditional on
+   `!tab->dse_initialized`; callers invalidate explicitly when basis changes significantly.
+2. No iteration budget on v2 calls in diving/RINS/node-solve. Default 1M iterations let
+   stall-detection-fooling cycling burn minutes. Fix: 500-iter cap in `mip_apply_dual_flags()`
+   + explicit save/restore at each call site.
+3. Cold-start `simplex_solve` with method=2 wasted 500 iterations retrying dual (which already
+   failed). Fix: use method=0 (primal) for cold-start paths.
+
+Post-fix: milp15 10-23ms avg (24/25 solved), all tests pass. But overall MIP speed is still
+worse than pre-Phase-E due to v2 overhead (exact DSE, perturbation, unshift per warm start).
 
 #### Implementation Order (Prioritized by Impact/Effort)
 
