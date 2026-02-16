@@ -1437,24 +1437,29 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
     int m_orig = model->num_cons;
     int n_orig = model->num_vars;
 
-    /* Count active rows and columns */
-    int m_active = 0, n_active = 0;
+    /* Count active EQUALITY rows and active columns.
+     * Only equality rows participate in redundancy detection.
+     * An equality row is redundant only if it's a linear combination of
+     * OTHER equality rows. Mixing inequalities is wrong — an equality
+     * in the span of inequalities is NOT redundant (inequalities only
+     * imply one direction, not the equality). */
+    int m_eq = 0, n_active = 0;
     for (int i = 0; i < m_orig; i++) {
-        if (!ctx->row_deleted[i]) m_active++;
+        if (!ctx->row_deleted[i] && model->sense[i] == 'E') m_eq++;
     }
     for (int j = 0; j < n_orig; j++) {
         if (!ctx->col_deleted[j]) n_active++;
     }
 
-    if (m_active == 0 || n_active == 0) {
+    if (m_eq == 0 || n_active == 0) {
         ctx->matrix_rank = 0;
         return 0;
     }
 
-    /* Build mapping from active indices to dense indices */
+    /* Build mapping from active equality indices to dense indices */
     int *row_to_dense = (int *)malloc((size_t)m_orig * sizeof(int));
     int *col_to_dense = (int *)malloc((size_t)n_orig * sizeof(int));
-    int *dense_to_row = (int *)malloc((size_t)m_active * sizeof(int));
+    int *dense_to_row = (int *)malloc((size_t)m_eq * sizeof(int));
 
     if (!row_to_dense || !col_to_dense || !dense_to_row) {
         free(row_to_dense);
@@ -1465,7 +1470,7 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
 
     int dense_row = 0;
     for (int i = 0; i < m_orig; i++) {
-        if (!ctx->row_deleted[i]) {
+        if (!ctx->row_deleted[i] && model->sense[i] == 'E') {
             row_to_dense[i] = dense_row;
             dense_to_row[dense_row] = i;
             dense_row++;
@@ -1485,10 +1490,10 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
     }
 
     /* Allocate dense augmented matrix [A | b] in column-major order
-     * Size: m_active rows x (n_active + 1) columns */
+     * Size: m_eq rows x (n_active + 1) columns */
     size_t aug_cols = (size_t)n_active + 1;
-    double *A = (double *)calloc((size_t)m_active * aug_cols, sizeof(double));
-    int *pivot_col = (int *)malloc((size_t)m_active * sizeof(int));
+    double *A = (double *)calloc((size_t)m_eq * aug_cols, sizeof(double));
+    int *pivot_col = (int *)malloc((size_t)m_eq * sizeof(int));
 
     if (!A || !pivot_col) {
         free(row_to_dense);
@@ -1499,29 +1504,46 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
         return 0;
     }
 
-    /* Fill the dense matrix from sparse CSC */
+    /* Fill the dense matrix from sparse CSC (only equality rows) */
     for (int j = 0; j < n_orig; j++) {
         if (ctx->col_deleted[j]) continue;
         int dc = col_to_dense[j];
 
         for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
             int i = model->A->rowidx[p];
-            if (ctx->row_deleted[i]) continue;
-            int dr = row_to_dense[i];
-            A[dr + (size_t)dc * m_active] = model->A->values[p];
+            int dr = row_to_dense[i];  /* -1 for non-equality or deleted rows */
+            if (dr < 0) continue;
+            A[dr + (size_t)dc * m_eq] = model->A->values[p];
         }
     }
 
     /* Fill the RHS column (last column of augmented matrix) */
     for (int i = 0; i < m_orig; i++) {
-        if (ctx->row_deleted[i]) continue;
         int dr = row_to_dense[i];
-        A[dr + (size_t)n_active * m_active] = model->b[i];
+        if (dr < 0) continue;
+        A[dr + (size_t)n_active * m_eq] = model->b[i];
     }
+
+    /* Compute matrix infinity norm for relative pivot threshold.
+     * Using absolute thresholds (like 1e-6) causes false rank deficiency
+     * on ill-conditioned matrices where valid pivots are small. */
+    double anorm = 0.0;
+    for (int i = 0; i < m_eq; i++) {
+        double row_sum = 0.0;
+        for (int j = 0; j < n_active; j++) {
+            row_sum += fabs(A[i + (size_t)j * m_eq]);
+        }
+        if (row_sum > anorm) anorm = row_sum;
+    }
+    /* Pivot threshold: relative to matrix norm, scaled by dimension.
+     * This accounts for O(n) growth in Gaussian elimination. */
+    int max_dim = (m_eq > n_active) ? m_eq : n_active;
+    double pivot_tol = anorm * max_dim * 1e-13;
+    if (pivot_tol < 1e-15) pivot_tol = 1e-15;  /* Floor for zero matrices */
 
     /* Gaussian elimination with partial pivoting */
     int rank = 0;
-    int min_dim = (m_active < n_active) ? m_active : n_active;
+    int min_dim = (m_eq < n_active) ? m_eq : n_active;
 
     for (int k = 0; k < min_dim; k++) {
         pivot_col[k] = -1;
@@ -1531,10 +1553,10 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
     for (int k = 0; k < min_dim && col < n_active; ) {
         /* Find pivot: largest absolute value in column 'col' from row k onwards */
         int best_row = -1;
-        double best_val = RALPH_PIVOT_TOL;
+        double best_val = pivot_tol;
 
-        for (int i = k; i < m_active; i++) {
-            double val = fabs(A[i + (size_t)col * m_active]);
+        for (int i = k; i < m_eq; i++) {
+            double val = fabs(A[i + (size_t)col * m_eq]);
             if (val > best_val) {
                 best_val = val;
                 best_row = i;
@@ -1550,9 +1572,9 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
         /* Swap rows k and best_row */
         if (best_row != k) {
             for (int j = col; j <= n_active; j++) {  /* Include RHS column */
-                double tmp = A[k + (size_t)j * m_active];
-                A[k + (size_t)j * m_active] = A[best_row + (size_t)j * m_active];
-                A[best_row + (size_t)j * m_active] = tmp;
+                double tmp = A[k + (size_t)j * m_eq];
+                A[k + (size_t)j * m_eq] = A[best_row + (size_t)j * m_eq];
+                A[best_row + (size_t)j * m_eq] = tmp;
             }
             /* Swap in dense_to_row mapping too */
             int tmp_idx = dense_to_row[k];
@@ -1561,14 +1583,14 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
         }
 
         /* Eliminate below pivot */
-        double pivot = A[k + (size_t)col * m_active];
-        for (int i = k + 1; i < m_active; i++) {
-            double factor = A[i + (size_t)col * m_active] / pivot;
+        double pivot = A[k + (size_t)col * m_eq];
+        for (int i = k + 1; i < m_eq; i++) {
+            double factor = A[i + (size_t)col * m_eq] / pivot;
             if (fabs(factor) < RALPH_ZERO_TOL) continue;
 
-            A[i + (size_t)col * m_active] = 0.0;  /* Exact zero */
+            A[i + (size_t)col * m_eq] = 0.0;  /* Exact zero */
             for (int j = col + 1; j <= n_active; j++) {  /* Include RHS */
-                A[i + (size_t)j * m_active] -= factor * A[k + (size_t)j * m_active];
+                A[i + (size_t)j * m_eq] -= factor * A[k + (size_t)j * m_eq];
             }
         }
 
@@ -1580,53 +1602,36 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
 
     ctx->matrix_rank = rank;
 
-    /* Check rows rank..m_active-1 for redundancy/infeasibility */
+    /* Check rows rank..m_eq-1 for redundancy/infeasibility */
     int count = 0;
     int infeasible = 0;
 
-    for (int k = rank; k < m_active; k++) {
-        /* Row k should be all zeros in A part */
+    /* Zero-row tolerance: scale with matrix norm and dimension.
+     * After elimination, residuals from rounding are O(anorm * n * eps). */
+    double zero_tol = anorm * max_dim * 1e-12;
+    if (zero_tol < RALPH_ZERO_TOL) zero_tol = RALPH_ZERO_TOL;
+
+    for (int k = rank; k < m_eq; k++) {
+        /* Row k should be all zeros in A part (all rows are equalities) */
         int is_zero_row = 1;
         for (int j = 0; j < n_active; j++) {
-            if (fabs(A[k + (size_t)j * m_active]) > RALPH_ZERO_TOL) {
+            if (fabs(A[k + (size_t)j * m_eq]) > zero_tol) {
                 is_zero_row = 0;
                 break;
             }
         }
 
         if (is_zero_row) {
-            /* Check RHS */
-            double rhs = A[k + (size_t)n_active * m_active];
+            double rhs_val = A[k + (size_t)n_active * m_eq];
             int orig_row = dense_to_row[k];
-            char sense = model->sense[orig_row];
-
-            if (sense == 'E') {
-                /* Equality: 0 = rhs must have rhs = 0 */
-                if (fabs(rhs) > RALPH_FEAS_TOL) {
-                    infeasible = 1;
-                    break;
-                }
-                /* Equality row is redundant - mark for deletion */
-                ctx->row_deleted[orig_row] = 1;
-                count++;
-            } else if (sense == 'L') {
-                /* 0 <= rhs: check for infeasibility only
-                 * NOTE: We do NOT mark 'L' rows as redundant because
-                 * a row being a linear combination of others doesn't
-                 * mean the inequality is redundant - it could be tighter.
-                 * This fixes the bnl1 bug where inequalities were incorrectly
-                 * removed, changing the optimal solution. */
-                if (rhs < -RALPH_FEAS_TOL) {
-                    infeasible = 1;
-                    break;
-                }
-            } else if (sense == 'G') {
-                /* 0 >= rhs: check for infeasibility only (same reasoning) */
-                if (rhs > RALPH_FEAS_TOL) {
-                    infeasible = 1;
-                    break;
-                }
+            /* Equality: 0x = rhs must have rhs = 0 for redundancy */
+            if (fabs(rhs_val) > zero_tol) {
+                infeasible = 1;
+                break;
             }
+            /* Equality row is redundant - mark for deletion */
+            ctx->row_deleted[orig_row] = 1;
+            count++;
         }
     }
 
