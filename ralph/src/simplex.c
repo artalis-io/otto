@@ -740,6 +740,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     /* Redundant row tracking (for handling singular basis from stuck artificials) */
     tab->redundant_rows = (int*)sh_arena_calloc(tab->arena, m, sizeof(int));
     tab->num_redundant = 0;
+    tab->redundant_rows_zeroed = 0;
 
     /* Dual steepest edge weights (P6) */
     tab->dse_weights = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
@@ -1398,11 +1399,13 @@ int tableau_refactorize(SimplexTableau *tab) {
     tab->lu->redundant_rows = tab->redundant_rows;
     tab->lu->num_redundant = tab->num_redundant;
 
-    /* Allow limited regularization during Phase 1 only.
-     * Phase 1 has many artificial variables that create near-singular bases
-     * during early iterations.  Phase 2 redundant rows are handled by zeroing
-     * them in A_ext (simplex_transition_phase2), not by regularization. */
-    if (tab->use_two_phase && tab->phase == 1) {
+    /* Allow limited regularization for near-singular bases.
+     * Phase 1: many artificial variables create near-singular bases.
+     * Phase 2 with redundant rows: always allow (even after zeroing A_ext).
+     * After zeroing, the sparse LU may still encounter zero pivots at zeroed
+     * rows if its column ordering doesn't process artificials first. */
+    if (tab->use_two_phase && (tab->phase == 1 ||
+        (tab->phase == 2 && tab->num_redundant > 0))) {
         int reg_limit = RALPH_PHASE1_MAX_REGULARIZATIONS;
         if (tab->num_redundant > reg_limit) {
             reg_limit = tab->num_redundant;
@@ -1418,12 +1421,11 @@ int tableau_refactorize(SimplexTableau *tab) {
     }
     tab->lu->num_regularized = 0;
 
-    /* When Phase 2 has redundant rows, relax pivot tolerance to accept
-     * small but valid structural pivots that would fail at RALPH_PIVOT_TOL.
-     * The artificial-first reordering gives clean 1.0 pivots for the truly
-     * redundant rows; this tolerance handles residual ill-conditioning. */
+    /* When Phase 2 has redundant rows (not yet zeroed), relax pivot tolerance
+     * to accept small but valid structural pivots. After zeroing, use normal
+     * tolerance since the basis is well-conditioned. */
     double saved_tol = tab->lu->pivot_tol;
-    if (tab->phase == 2 && tab->num_redundant > 0) {
+    if (tab->phase == 2 && tab->num_redundant > 0 && !tab->redundant_rows_zeroed) {
         tab->lu->pivot_tol = 1e-15;
     }
 
@@ -2161,6 +2163,22 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
     /* Use hyper-sparse FTRAN for better performance on sparse columns */
     lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
 
+    /* Zero FTRAN values for stuck artificial positions.
+     * LU regularization (diagonal=1.0) produces meaningless values for
+     * redundant rows. Zeroing prevents them from affecting the ratio test
+     * and the solution update in simplex_pivot. */
+    if (tab->num_redundant > 0) {
+        for (int a = 0; a < tab->num_artificial; a++) {
+            int art_j = tab->artificial_vars[a];
+            if (tab->var_status[art_j] == RALPH_BASIC) {
+                int pos = tab->basis_pos[art_j];
+                if (pos >= 0 && pos < tab->m) {
+                    tab->work2[pos] = 0.0;
+                }
+            }
+        }
+    }
+
     double dir = 1.0;
     if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
         dir = -1.0;
@@ -2226,6 +2244,19 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
 
     /* Use hyper-sparse FTRAN for better performance on sparse columns */
     lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+
+    /* Zero FTRAN values for stuck artificial positions (see ratio_test_bland). */
+    if (tab->num_redundant > 0) {
+        for (int a = 0; a < tab->num_artificial; a++) {
+            int art_j = tab->artificial_vars[a];
+            if (tab->var_status[art_j] == RALPH_BASIC) {
+                int pos = tab->basis_pos[art_j];
+                if (pos >= 0 && pos < tab->m) {
+                    tab->work2[pos] = 0.0;
+                }
+            }
+        }
+    }
 
     double dir = 1.0;  /* Direction of movement */
     if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
@@ -3260,8 +3291,9 @@ static int simplex_phase1(SimplexSolver *solver) {
     /* Apply proactive perturbation in Phase 1 for highly-degenerate two-phase
      * problems. Phase 1 is inherently degenerate (many bases give art_sum=0).
      * Only apply when equality ratio is very high (>90%) — lower thresholds
-     * can destabilize hard Phase 1 bases (e.g., beaconfd). For problems with
-     * fewer equalities, reactive perturbation (cycling detection) suffices.
+     * cause -O3 code layout shifts that regress brandy (instruction cache
+     * alignment sensitivity). For problems with fewer equalities (e.g.,
+     * beaconfd at 81%), reactive perturbation via cycling detection suffices.
      * Perturbation is removed at Phase 1 completion (primal_remove_perturbation). */
     if (tab->use_two_phase && tab->num_equalities > (tab->m * 9) / 10) {
         primal_apply_perturbation(tab);
@@ -4012,30 +4044,82 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
                 art_in_basis, art_stuck, tab->num_redundant);
     }
 
-    /* Handle stuck artificials (redundant rows):
-     * Set their costs to zero so they don't affect the Phase 2 objective.
-     * The artificial stays in the basis at value zero — the constraint is
-     * linearly dependent on others and doesn't restrict the feasible region. */
+    /* Handle all artificial variables for Phase 2:
+     * - Non-basic: fix at [0,0] (FIXED status)
+     * - Basic (stuck): set cost=0, bounds=[0,0]. The artificial stays in
+     *   basis at value 0. Fixing bounds to [0,0] ensures the ratio test
+     *   treats it as a degenerate variable that blocks unbounded steps
+     *   (prevents spurious UNBOUNDED from regularized LU giving non-zero
+     *   FTRAN values in redundant rows). */
     for (int k = 0; k < tab->num_artificial; k++) {
         int art_j = tab->artificial_vars[k];
-        if (tab->var_status[art_j] == RALPH_BASIC) {
-            tab->c_ext[art_j] = 0.0;
-        }
-    }
-
-    /* Fix all non-basic artificial variables at zero */
-    for (int k = 0; k < tab->num_artificial; k++) {
-        int art_j = tab->artificial_vars[k];
+        tab->lb_ext[art_j] = 0.0;
+        tab->ub_ext[art_j] = 0.0;
+        tab->c_ext[art_j] = 0.0;
+        tab->x[art_j] = 0.0;
         if (tab->var_status[art_j] != RALPH_BASIC) {
-            tab->lb_ext[art_j] = 0.0;
-            tab->ub_ext[art_j] = 0.0;
             tab->var_status[art_j] = RALPH_FIXED;
-            tab->x[art_j] = 0.0;
-            tab->c_ext[art_j] = 0.0;
         }
     }
 
-    /* Refactorize basis for Phase 2 */
+    /* Zero redundant rows in A_ext and RHS.
+     * Stuck artificials indicate truly redundant constraints (linearly dependent
+     * on other constraints). By zeroing the row in A_ext (except the artificial's
+     * own 1.0 coefficient) and zeroing the RHS, we make the basis well-conditioned:
+     *   - Artificial column has identity-like structure: 1.0 at its row, 0 elsewhere
+     *   - All other columns have 0 at redundant rows
+     * This eliminates the need for LU regularization and prevents garbage values
+     * in FTRAN/BTRAN results for redundant row positions. */
+    if (tab->num_redundant > 0) {
+        /* Build a quick lookup for artificial variable columns */
+        int *is_art_col = (int*)calloc(tab->n, sizeof(int));
+        if (is_art_col) {
+            for (int k = 0; k < tab->num_artificial; k++) {
+                is_art_col[tab->artificial_vars[k]] = 1;
+            }
+
+            /* Zero redundant rows in A_ext for non-artificial columns */
+            for (int j = 0; j < tab->n; j++) {
+                if (is_art_col[j]) continue;  /* Keep artificial 1.0 entries */
+                for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+                    int row = tab->A_ext->rowidx[p];
+                    if (tab->redundant_rows[row]) {
+                        tab->A_ext->values[p] = 0.0;
+                    }
+                }
+            }
+
+            free(is_art_col);
+        }
+
+        /* Zero RHS for redundant rows */
+        for (int i = 0; i < tab->m; i++) {
+            if (tab->redundant_rows[i]) {
+                tab->rhs[i] = 0.0;
+            }
+        }
+
+        if (solver->verbose) {
+            fprintf(stderr, "[simplex_transition] Zeroed %d redundant rows in A_ext and RHS\n",
+                    tab->num_redundant);
+        }
+
+        /* Mark that redundant rows have been zeroed. This tells tableau_refactorize
+         * to skip the relaxed pivot tolerance (which would corrupt non-zeroed rows).
+         * Regularization is still allowed — if the sparse LU processes columns out
+         * of order, it may need to regularize a zeroed row, which is correct
+         * (diagonal=1.0 encodes "x_art = 0" for the artificial at that row). */
+        tab->redundant_rows_zeroed = 1;
+
+        /* Invalidate LU symbolic analysis cache. The A_ext values changed (zeroed
+         * rows) but the CSC structure didn't, so the fingerprint would still match.
+         * Without invalidation, the sparse LU reuses a stale elimination order. */
+        tab->lu->sym_valid = 0;
+    }
+
+    /* Refactorize basis for Phase 2.
+     * With redundant rows zeroed in A_ext, stuck artificial columns provide
+     * identity-like structure that makes the basis well-conditioned. */
     if (tableau_refactorize(tab) != 0) {
         if (solver->verbose) {
             fprintf(stderr, "[simplex_transition] Refactorization failed, attempting basis repair...\n");
@@ -4179,13 +4263,55 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         if (ratio_status != 0) {
-            /* No leaving variable found — problem is unbounded.
-             * (With two-phase simplex, Phase 1 already certified feasibility,
-             * so this can only happen for genuinely unbounded problems.) */
-            primal_remove_perturbation(tab);
-            solver->status = RALPH_STATUS_UNBOUNDED;
-            solver->iterations = iter;
-            return -1;
+            /* No leaving variable found — possibly unbounded.
+             * Stale LU factors can produce spurious theta=inf (e.g., lotfi).
+             * Refactorize and retry once before declaring UNBOUNDED. */
+            if (tableau_refactorize(tab) == 0) {
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                if (solver->pricing_strategy == 4) heap_build(tab);
+
+                /* Re-price: the entering variable may no longer be eligible */
+                if (use_bland || iter < bland_start_iters) {
+                    price_status = pricing_bland(tab, &entering);
+                } else if (solver->pricing_strategy == 0) {
+                    price_status = pricing_dantzig(tab, &entering);
+                } else if (solver->pricing_strategy == 1) {
+                    price_status = pricing_steepest_edge(tab, &entering);
+                } else if (solver->pricing_strategy == 3) {
+                    price_status = pricing_partial(tab, &entering);
+                } else if (solver->pricing_strategy == 4) {
+                    price_status = pricing_heap(tab, &entering);
+                } else {
+                    price_status = pricing_devex(tab, &entering);
+                }
+
+                if (price_status != 0) {
+                    /* Actually optimal after refactorization */
+                    primal_remove_perturbation(tab);
+                    solver->status = RALPH_STATUS_OPTIMAL;
+                    solver->iterations = iter;
+                    solver->degenerate_pivots = degenerate_count;
+                    tableau_compute_solution(tab);
+                    solver->obj_value = tab->obj_value * solver->model->obj_sense;
+                    return 0;
+                }
+
+                /* Retry ratio test with fresh LU */
+                if (use_bland) {
+                    ratio_status = ratio_test_bland(tab, entering, &leaving, &theta);
+                } else {
+                    ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+                }
+            }
+
+            if (ratio_status != 0) {
+                primal_remove_perturbation(tab);
+                solver->status = RALPH_STATUS_UNBOUNDED;
+                solver->iterations = iter;
+                return -1;
+            }
+            /* Recovery succeeded — fall through to pivot */
         }
 
         /* Track degenerate/near-degenerate pivots for cycling prevention
@@ -4195,6 +4321,7 @@ static int simplex_phase2(SimplexSolver *solver) {
          * 2. After 100 more degenerate pivots: switch to Bland's rule
          * 3. After 100 non-degenerate pivots: reset and try faster methods
          */
+        {
         const double NEAR_DEGEN_TOL = 1e-3;
         const int PERTURB_THRESHOLD = 30;
 
@@ -4231,6 +4358,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 }
             }
         }
+        }  /* end degeneracy tracking block */
 
         /* Perform pivot */
         if (simplex_pivot(tab, entering, leaving, theta, 0) != 0) {

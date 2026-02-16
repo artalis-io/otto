@@ -427,9 +427,15 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
         }
     }
 
-    /* Initialize permutation to identity */
+    /* Initialize permutations to identity.
+     * col_perm MUST be reset here: when lu_factorize_sparse_efficient fails
+     * and falls back to dense, col_perm retains the non-trivial column ordering
+     * from a previous sparse factorization. Dense LU uses no column pivoting,
+     * so col_perm must be identity for lu_solve to produce correct results. */
     for (int i = 0; i < m; i++) {
         lu->perm[i] = i;
+        lu->col_perm[i] = i;
+        lu->col_perm_inv[i] = i;
     }
 
     /* Gaussian elimination with partial pivoting */

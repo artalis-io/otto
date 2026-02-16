@@ -330,6 +330,7 @@ typedef struct {
     int num_equalities;         /* Count of equality constraints */
     int *redundant_rows;        /* Bitmap: row[i]=1 if redundant (stuck artificial) */
     int num_redundant;          /* Count of redundant rows */
+    int redundant_rows_zeroed;  /* 1 if redundant rows have been zeroed in A_ext */
 
     /* Statistics */
     int iterations;

@@ -1810,9 +1810,44 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             }
         }
 
-        if (max_val < RALPH_PIVOT_TOL) {
-            /* Structural part is singular */
-            return -1;
+        if (max_val < lu->pivot_tol) {
+            /* Structural part is singular at this step.
+             * Check for redundant rows that can be regularized. */
+            int can_regularize = 0;
+
+            /* Check pre-marked redundant rows */
+            if (lu->redundant_rows && lu->num_redundant > 0) {
+                for (int i = step; i < m; i++) {
+                    int orig_row = row_perm[i];
+                    if (lu->redundant_rows[orig_row]) {
+                        can_regularize = 1;
+                        pivot_row = i;
+                        break;
+                    }
+                }
+            }
+
+            /* Check allow_regularization flag */
+            if (!can_regularize && lu->allow_regularization &&
+                lu->num_regularized < lu->max_regularizations) {
+                can_regularize = 1;
+                pivot_row = step;
+            }
+
+            if (can_regularize) {
+                /* Regularize: set diagonal to 1.0 */
+                lu->num_regularized++;
+                if (pivot_row != step) {
+                    int a = row_perm[step], b = row_perm[pivot_row];
+                    row_perm[step] = b; row_perm[pivot_row] = a;
+                    row_pos[b] = step; row_pos[a] = pivot_row;
+                }
+                int piv_orig = row_perm[step];
+                A_struct[piv_orig * k + step] = 1.0;
+                max_val = 1.0;
+            } else {
+                return -1;
+            }
         }
 
         /* Swap rows in permutation + inverse */
