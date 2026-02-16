@@ -4,12 +4,16 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-15) — Phase E perf fix: 500-iter budget + primal cold-start (`f80487e`).
-Phase E regression (milp15: ~1ms → 92s) fixed via: (1) conditional DSE init (skip O(m²)
-`dse_init_exact` when `tab->dse_initialized` is set), (2) 500-iteration cap for all MIP LP
-solves in `mip_apply_dual_flags()` matching old dual_reopt budget, (3) primal fallback for
-cold starts (method=0 instead of method=2 which wastes budget retrying failed dual).
-All tests pass (Ralph 359, LAP 358, Netflow 153, FuelWise 123). NETLIB 16/17.
+**Current** (2026-02-16) — Week 1 LP perf: B1-B6 low-hanging fruit (`a67f09f`).
+Removed per-iteration `tableau_compute_solution` in dual (B1), pre-allocated dual pivot
+backup arrays (B2), deleted O(m²) FT spike compaction (B4), approximate DSE init at
+mid-loop refactorization (B5), fixed `verify_solution` to O(nnz) sparse matvec (B6).
+Net -138 LoC. Negligible speedup on tier 0-1 (fixes target dual path + large problems).
+All tests pass (Ralph 359, LAP 358, Netflow 153, FuelWise 123). NETLIB 21/24 fast, 84 problems.
+
+Previous: `5ccab2e` — NETLIB suite extended to 84 problems, full test infrastructure.
+
+Previous: `f80487e` — Phase E perf fix: 500-iter budget + primal cold-start.
 
 Previous: `140a1f2` — Phase E: replace dual_reopt with clean dual simplex in MIP.
 Previous: `7d78375` — Phase D: dual simplex default, 90% SotA.
@@ -1939,21 +1943,41 @@ Based on deep analysis of `simplex.c` (4865 LoC), `dual_simplex.c` (1546 LoC), `
 
 ### 8.3 Implementation Plan
 
-#### Week 1: Low-Hanging Fruit (2-5x speedup, ~100 lines)
-1. Remove per-iteration `tableau_compute_solution` in dual_v2 (B1)
-2. Pre-allocate backup arrays in `dual_simplex_pivot` (B2)
-3. Delete FT spike compaction + tune refactorization threshold (B4)
-4. Approximate DSE init — weights=1.0, exact only on first factorization (B5)
-5. Fix `verify_solution` to O(nnz) sparse matvec (B6)
+#### Week 1: Low-Hanging Fruit — ✅ DONE (`a67f09f`)
+1. ✅ Remove per-iteration `tableau_compute_solution` in dual_v2 (B1)
+2. ✅ Pre-allocate backup arrays in `dual_simplex_pivot` (B2)
+3. ✅ Delete FT spike compaction + tune refactorization threshold (B4)
+4. ✅ Approximate DSE init — weights=1.0, exact only on first factorization (B5)
+5. ✅ Fix `verify_solution` to O(nnz) sparse matvec (B6)
 
-#### Week 2: Devex/SE Fix (2-3x speedup, ~50 lines)
-6. Implement proper Devex weight formula without tau BTRAN (B3)
-   - Or switch to proper SE and accept iteration overhead
+**Result:** -138 LoC, zero regressions. Negligible speedup on tier 0-1 (~1%) because
+the hot path is primal simplex (Devex pricing + FTRAN/BTRAN), not dual. These fixes
+clean up dead code paths and eliminate per-pivot allocations for when dual is used
+heavily (MIP warm-starts, large dual-preferred LPs).
 
-#### Week 3: Phase 1 Robustness (correctness, ~200 lines)
-7. True two-phase simplex or adaptive Big-M
-   - Fixes: kb2, recipe, capri, finnis, etamacro, bore3d
-8. Fix forplan MPS parsing (integer markers in COLUMNS section)
+#### Week 2: Devex/SE Fix — ✅ DONE
+6. ✅ Proper Devex weight formula without tau BTRAN (B3)
+   - Phase 1 (artificials in basis): uses exact SE (tau BTRAN) for accuracy
+   - Phase 2 (all artificials out): uses Devex approximation (Harris 1973)
+   - Devex formula: `w_j' = max(0.999 * w_j, (alpha_j/pivot)^2 * gamma_e)`
+   - Saves O(m^2) BTRAN per pivot in Phase 2 (bulk of iterations)
+
+**Result:** 1-4% speedup on tier 1, 2-4% on tier 2 (except bnl1 -9% due to
+extra iterations from approximate weights). Modest because true SE was already
+integrated into the merged RC/weight update loop — the BTRAN is only one of
+several O(m) operations per pivot. Bigger gains require Supernodal LU (T2.1).
+
+#### Week 3: Phase 1 Robustness — PARTIAL
+7. Two-phase simplex and adaptive Big-M investigated but not viable:
+   - Universal two-phase: breaks beaconfd, lotfi (Phase 1→2 transition fragile)
+   - Adaptive Big-M (1e4 * max|c| * max|b|): doesn't help kb2/recipe
+   - Root cause for kb2/recipe: likely dual simplex (method=2) returning wrong answer,
+     not a Big-M/Phase 1 issue. Needs deeper investigation.
+7a. ✅ Fixed partial pricing + two-phase interaction (stale RC bug):
+   - Phase 1 pricing override: partial/heap → Devex for two-phase Phase 1
+   - Phase 2 full RC recomputation after two-phase transition
+   - `tab->pricing_strategy` and `tab->use_steepest_edge` saved/restored with `solver->pricing_strategy`
+8. forplan MPS parsing (integer markers in COLUMNS section) — not yet implemented
 
 #### Week 4: Row-Form RC Update (1.5-3x, ~300 lines)
 9. Build CSR copy of A_ext at tableau creation (B7)
