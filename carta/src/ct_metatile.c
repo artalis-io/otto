@@ -489,22 +489,25 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
 
     int mt_size = tile_size * CT_METATILE_SIZE;  /* 2x tile_size */
 
-    /* Create collision grid for the full metatile */
-    CTLabelPlacer *placer = ct_label_placer_create(mt_size, mt_size);
-    if (!placer) return NULL;
-
     float base_size = ct_label_base_font_size(mt.z, tile_size);
-
-    /* Pre-declare for cleanup path */
-    CTRoadLabelPlacement *road_placements = NULL;
-    size_t road_count = 0;
-    size_t road_cap = 0;
 
     /* Maximum label pixel extent: country/state labels use 1.6x base font,
      * and long names (~20 chars at ~0.6 advance) can reach this width.
      * Used for both the query overlap buffer and the "too far outside" check. */
     int label_margin = (int)(base_size * 1.6f * 20.0f * 0.6f);
     if (label_margin < 100) label_margin = 100;
+
+    /* Create collision grid extended by label_margin on each side so that
+     * overlap-zone labels get full collision coverage.  All placement coords
+     * are offset by +label_margin; results are de-offset before packaging. */
+    int extended_size = mt_size + 2 * label_margin;
+    CTLabelPlacer *placer = ct_label_placer_create(extended_size, extended_size);
+    if (!placer) return NULL;
+
+    /* Pre-declare for cleanup path */
+    CTRoadLabelPlacement *road_placements = NULL;
+    size_t road_count = 0;
+    size_t road_cap = 0;
 
     /* ---- 1. Query labeled points using expanded metatile bbox ---- */
     const CTLabeledPoint **all_points = NULL;
@@ -572,7 +575,7 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
                 default: break;
             }
 
-            ct_label_place_single(placer, point, px, py, font, size);
+            ct_label_place_single(placer, point, px + label_margin, py + label_margin, font, size);
         }
     }
     free(all_points);
@@ -665,7 +668,7 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
                 area_point.min_zoom = 10;
                 area_point.priority = 5;
 
-                if (ct_label_place_single(placer, &area_point, px, py, font, area_size)) {
+                if (ct_label_place_single(placer, &area_point, px + label_margin, py + label_margin, font, area_size)) {
                     /* Fix up: area_point is stack-allocated */
                     CTLabelPlacement *last = &placer->placements[placer->num_placements - 1];
                     last->name = mp->name;
@@ -767,8 +770,8 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
                     double lon = way->coords[i].lon;
                     double lat_rad = way->coords[i].lat * M_PI / 180.0;
                     double merc_y = log(tan(lat_rad) + 1.0 / cos(lat_rad));
-                    scratch_px[i] = (float)(lon * merc_lon_scale + merc_lon_offset);
-                    scratch_py[i] = (float)(merc_y * merc_lat_scale + merc_lat_offset);
+                    scratch_px[i] = (float)(lon * merc_lon_scale + merc_lon_offset + label_margin);
+                    scratch_py[i] = (float)(merc_y * merc_lat_scale + merc_lat_offset + label_margin);
                 }
 
                 /* Reverse if right-to-left */
@@ -873,9 +876,22 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
         }
     }
 
+    /* De-offset: convert from extended grid coords back to metatile space */
+    for (size_t i = 0; i < result->num_labels; i++) {
+        result->labels[i].x -= label_margin;
+        result->labels[i].y -= label_margin;
+    }
+
     result->roads = road_placements;
     result->num_roads = road_count;
     road_placements = NULL;  /* Ownership transferred */
+
+    for (size_t i = 0; i < result->num_roads; i++) {
+        for (int g = 0; g < result->roads[i].num_glyphs; g++) {
+            result->roads[i].glyphs[g].x -= (float)label_margin;
+            result->roads[i].glyphs[g].y -= (float)label_margin;
+        }
+    }
 
     ct_label_placer_free(placer);
     return result;
