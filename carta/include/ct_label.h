@@ -45,7 +45,8 @@ typedef enum {
 
 /* A placed label */
 typedef struct {
-    const CTLabeledPoint *point;  /* Source labeled point (owned by PBF context) */
+    const CTLabeledPoint *point;  /* Source labeled point (owned by PBF context, may be NULL for area labels) */
+    const char *name;             /* Label text (for area labels where point is stack-allocated) */
     int x, y;                     /* Text position in tile pixels */
     int width, height;            /* Text bounding box */
     CTLabelAnchor anchor;         /* Anchor used for placement */

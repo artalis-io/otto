@@ -9,6 +9,7 @@
 
 #include "ct_types.h"
 #include "ct_label.h"
+#include "ct_metatile.h"
 #include "sh_font.h"
 
 #ifdef __cplusplus
@@ -79,6 +80,36 @@ struct CTLODConfig;
  */
 void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
                             CTTileCoord coord, const struct CTLODConfig *lod);
+
+/*
+ * Render tile from PBF context with metatile label caching.
+ *
+ * Uses the metatile cache for cross-tile consistent label placement.
+ * When mt_cache is NULL, falls back to per-tile label placement.
+ *
+ * @param ctx       Render context
+ * @param pbf       PBF context with parsed data
+ * @param coord     Tile coordinates
+ * @param mt_cache  Metatile label cache (NULL = per-tile labels)
+ */
+void ct_render_from_pbf_mt(CTRenderContext *ctx, const CTPBFContext *pbf,
+                            CTTileCoord coord,
+                            CTMetatileLabelCache *mt_cache);
+
+/*
+ * Render tile from PBF with LOD filtering and metatile label caching.
+ *
+ * This is the recommended function for tile generation with metatile labels.
+ *
+ * @param ctx       Render context
+ * @param pbf       PBF context with parsed data
+ * @param coord     Tile coordinates
+ * @param lod       LOD configuration (NULL = no filtering)
+ * @param mt_cache  Metatile label cache (NULL = per-tile labels)
+ */
+void ct_render_from_pbf_lod_mt(CTRenderContext *ctx, const CTPBFContext *pbf,
+                                CTTileCoord coord, const struct CTLODConfig *lod,
+                                CTMetatileLabelCache *mt_cache);
 
 /* ============================================================================
  * Primitive Drawing

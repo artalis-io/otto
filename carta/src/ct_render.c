@@ -8,6 +8,7 @@
 #include "ct_lod.h"
 #include "ct_simplify.h"
 #include "ct_label.h"
+#include "ct_metatile.h"
 #include "ct_boundary.h"
 #include "sh_font.h"
 #include "sh_render.h"
@@ -1287,8 +1288,99 @@ static int feature_is_visible(const CTFeature *f, float scale)
     return 1;
 }
 
-void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
-                        CTTileCoord coord)
+/*
+ * Shared label rendering: metatile path or per-tile fallback.
+ *
+ * When mt_cache is non-NULL and zoom >= 8, labels are computed across the
+ * 2x2 metatile group with a shared collision grid, cached, and the sub-tile
+ * portion is extracted.  Otherwise, labels are placed per-tile (original path).
+ */
+static void render_tile_labels(CTRenderContext *ctx, const CTPBFContext *pbf,
+                                CTTileCoord coord, CTMetatileLabelCache *mt_cache)
+{
+    int labels_min_zoom = ctx->options.labels_min_zoom;
+    if (labels_min_zoom == 0) labels_min_zoom = 8;
+
+    if (!ctx->options.render_labels || coord.z < labels_min_zoom)
+        return;
+
+    const SHFont *font = sh_font_get_default();
+    if (!font) return;
+
+    float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
+
+    /* ---- Metatile path ---- */
+    if (mt_cache && coord.z >= 8) {
+        CTMetatileCoord mt = ct_metatile_coord(coord);
+        int sx, sy;
+        ct_metatile_subtile(coord, &sx, &sy);
+
+        /* Try cache first */
+        const CTMetatileLabelResult *result = ct_metatile_cache_get(mt_cache, mt);
+        if (!result) {
+            /* Cache miss: compute and store */
+            CTMetatileLabelResult *computed =
+                ct_metatile_compute_labels(pbf, mt, ctx->width);
+            if (computed) {
+                ct_metatile_cache_put(mt_cache, mt, computed);
+                result = ct_metatile_cache_get(mt_cache, mt);
+            }
+        }
+
+        if (result) {
+            CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
+            if (placer) {
+                CTRoadLabelPlacement *road_labels = NULL;
+                size_t road_count = 0;
+                ct_metatile_extract_subtile(result, sx, sy, placer,
+                                             &road_labels, &road_count);
+
+                ct_render_labels(ctx, placer, font,
+                                 CT_RGB(51, 51, 51),
+                                 CT_RGB(255, 255, 255),
+                                 halo_width);
+
+                ct_render_road_labels(ctx, road_labels, road_count, font,
+                                      CT_RGB(51, 51, 51),
+                                      CT_RGB(255, 255, 255),
+                                      halo_width);
+                ct_label_road_placements_free(road_labels, road_count);
+                ct_label_placer_free(placer);
+            }
+            ct_metatile_cache_release(mt_cache, result);
+            return;
+        }
+    }
+
+    /* ---- Per-tile fallback ---- */
+    float base_size = ct_label_base_font_size(coord.z, ctx->width);
+    CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
+    if (placer) {
+        ct_label_place_points(placer, pbf, coord, font, base_size);
+        ct_label_place_areas(placer, pbf, coord, font, base_size);
+
+        CTRoadLabelPlacement *road_labels = NULL;
+        size_t road_count = 0;
+        ct_label_place_roads(placer, pbf, coord, font, ctx->width,
+                             &road_labels, &road_count);
+
+        ct_render_labels(ctx, placer, font,
+                         CT_RGB(51, 51, 51),
+                         CT_RGB(255, 255, 255),
+                         halo_width);
+
+        ct_render_road_labels(ctx, road_labels, road_count, font,
+                              CT_RGB(51, 51, 51),
+                              CT_RGB(255, 255, 255),
+                              halo_width);
+        ct_label_road_placements_free(road_labels, road_count);
+        ct_label_placer_free(placer);
+    }
+}
+
+void ct_render_from_pbf_mt(CTRenderContext *ctx, const CTPBFContext *pbf,
+                            CTTileCoord coord,
+                            CTMetatileLabelCache *mt_cache)
 {
     /* Get features for this tile */
     CTBBox bbox = ct_tile_bounds(coord);
@@ -1315,46 +1407,8 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
     /* Render features */
     ct_render_tile(ctx, &tile);
 
-    /* Render labels on top (if enabled) */
-    int labels_min_zoom = ctx->options.labels_min_zoom;
-    if (labels_min_zoom == 0) labels_min_zoom = 8;  /* Default */
-
-    if (ctx->options.render_labels && coord.z >= labels_min_zoom) {
-        const SHFont *font = sh_font_get_default();
-        if (font) {
-            float base_size = ct_label_base_font_size(coord.z, ctx->width);
-            CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
-            if (placer) {
-                /* Place point labels (cities, towns, etc.) */
-                ct_label_place_points(placer, pbf, coord, font, base_size);
-
-                /* Place area labels (lakes, parks, forests) */
-                ct_label_place_areas(placer, pbf, coord, font, base_size);
-
-                /* Place road labels along named ways */
-                CTRoadLabelPlacement *road_labels = NULL;
-                size_t road_count = 0;
-                ct_label_place_roads(placer, pbf, coord, font, ctx->width,
-                                     &road_labels, &road_count);
-
-                /* Render point + area labels with halo */
-                float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
-                ct_render_labels(ctx, placer, font,
-                                CT_RGB(51, 51, 51),
-                                CT_RGB(255, 255, 255),
-                                halo_width);
-
-                /* Render road labels along paths */
-                ct_render_road_labels(ctx, road_labels, road_count, font,
-                                     CT_RGB(51, 51, 51),
-                                     CT_RGB(255, 255, 255),
-                                     halo_width);
-                ct_label_road_placements_free(road_labels, road_count);
-
-                ct_label_placer_free(placer);
-            }
-        }
-    }
+    /* Render labels on top */
+    render_tile_labels(ctx, pbf, coord, mt_cache);
 
     /* Cleanup - ct_tile_free handles freeing the points arrays
      * since ct_tile_add_feature took ownership via shallow copy */
@@ -1362,8 +1416,15 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
     ct_tile_free(&tile);
 }
 
-void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
-                            CTTileCoord coord, const CTLODConfig *lod)
+void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
+                        CTTileCoord coord)
+{
+    ct_render_from_pbf_mt(ctx, pbf, coord, NULL);
+}
+
+void ct_render_from_pbf_lod_mt(CTRenderContext *ctx, const CTPBFContext *pbf,
+                                CTTileCoord coord, const CTLODConfig *lod,
+                                CTMetatileLabelCache *mt_cache)
 {
     /* Get features for this tile with LOD filtering */
     CTFeature *features;
@@ -1613,50 +1674,18 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
         }
     }
 
-    /* Render labels on top (if enabled) */
-    int lod_labels_min_zoom = ctx->options.labels_min_zoom;
-    if (lod_labels_min_zoom == 0) lod_labels_min_zoom = 8;  /* Default */
-
-    if (ctx->options.render_labels && coord.z >= lod_labels_min_zoom) {
-        const SHFont *font = sh_font_get_default();
-        if (font) {
-            float base_size = ct_label_base_font_size(coord.z, ctx->width);
-            CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
-            if (placer) {
-                /* Place point labels (cities, towns, etc.) */
-                ct_label_place_points(placer, pbf, coord, font, base_size);
-
-                /* Place area labels (lakes, parks, forests) */
-                ct_label_place_areas(placer, pbf, coord, font, base_size);
-
-                /* Place road labels along named ways */
-                CTRoadLabelPlacement *road_labels = NULL;
-                size_t road_count = 0;
-                ct_label_place_roads(placer, pbf, coord, font, ctx->width,
-                                     &road_labels, &road_count);
-
-                /* Render point + area labels with halo */
-                float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
-                ct_render_labels(ctx, placer, font,
-                                CT_RGB(51, 51, 51),      /* Dark gray text */
-                                CT_RGB(255, 255, 255),   /* White halo */
-                                halo_width);
-
-                /* Render road labels along paths */
-                ct_render_road_labels(ctx, road_labels, road_count, font,
-                                     CT_RGB(51, 51, 51),
-                                     CT_RGB(255, 255, 255),
-                                     halo_width);
-                ct_label_road_placements_free(road_labels, road_count);
-
-                ct_label_placer_free(placer);
-            }
-        }
-    }
+    /* Render labels on top */
+    render_tile_labels(ctx, pbf, coord, mt_cache);
 
     /* Cleanup */
     free(features);
     ct_tile_free(&tile);
+}
+
+void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
+                            CTTileCoord coord, const CTLODConfig *lod)
+{
+    ct_render_from_pbf_lod_mt(ctx, pbf, coord, lod, NULL);
 }
 
 /* ============================================================================
@@ -1806,10 +1835,11 @@ int ct_render_labels(CTRenderContext *ctx,
 
     for (size_t i = 0; i < placer->num_placements; i++) {
         const CTLabelPlacement *p = &placer->placements[i];
-        if (!p->point || !p->point->name) continue;
+        const char *label_name = p->name ? p->name : (p->point ? p->point->name : NULL);
+        if (!label_name) continue;
 
         /* Render text with halo at the placement position */
-        ct_render_text_halo(ctx, p->point->name, p->x, p->y,
+        ct_render_text_halo(ctx, label_name, p->x, p->y,
                             font, p->font_size,
                             fill_color, halo_color, halo_width);
         rendered++;
