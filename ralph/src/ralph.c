@@ -40,7 +40,7 @@ struct RalphModel {
     int detect_special; /* 1=detect LAP/network structure, 0=disable */
     int node_pool_capacity; /* Pre-allocated B&B node pool size (default 1024) */
     int node_select;  /* 0=best-first, 1=DFS, 2=best-estimate, 3=hybrid (default) */
-    unsigned int presolve_mask; /* Bitmask controlling presolve techniques (0xFFFF=all) */
+    unsigned int presolve_mask; /* Bitmask controlling presolve techniques (default PRESOLVE_SAFE=0x110F) */
     int force_two_phase; /* 1=force two-phase simplex for clean Farkas duals */
     int trace_phase1; /* 1=emit deterministic Phase-1 failure trace */
     int scaling;            /* 0=off, 1=single-round (default), N=N geo rounds + equilibrium */
@@ -105,7 +105,7 @@ RalphModel* ralph_create(void) {
     model->max_iterations = RALPH_DEFAULT_MAX_ITER;
     model->time_limit = RALPH_DEFAULT_TIME_LIMIT;
     model->presolve = 0;  /* Disabled by default - adds overhead on random LPs */
-    model->presolve_mask = PRESOLVE_ALL;
+    model->presolve_mask = PRESOLVE_SAFE;
     model->verbose = 0;
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;

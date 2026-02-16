@@ -22,7 +22,14 @@
 #define PRESOLVE_PROBING           (1u << 11)
 #define PRESOLVE_SHIFT_BOUNDS      (1u << 12)
 #define PRESOLVE_REDUNDANT_ROWS    (1u << 13)
-#define PRESOLVE_ALL               0xFFFFu
+/* Safe presolve mask: lightweight techniques that are numerically reliable.
+ * FIXED_VARS + EMPTY_ROWS + EMPTY_COLS + SINGLETON_ROWS + BOUND_TIGHTENING + SHIFT_BOUNDS */
+#define PRESOLVE_SAFE              0x110Fu
+
+/* PRESOLVE_ALL includes all techniques except REDUNDANT_ROWS. Use with
+ * caution — some combinations (IMPLIED_FREE, PROPORTIONAL_COLS) have known
+ * correctness issues on certain problem classes. */
+#define PRESOLVE_ALL               (0xFFFFu & ~PRESOLVE_REDUNDANT_ROWS)
 
 /* Postsolve operation types for LIFO replay */
 typedef enum {

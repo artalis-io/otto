@@ -18,7 +18,6 @@
 #define RALPH_PIVOT_TOL 1e-6  /* Increased for numerical stability */
 #define RALPH_ZERO_TOL 1e-12
 #define RALPH_INT_TOL 1e-5
-#define RALPH_BIG_M 1e8       /* Artificial variable cost for Big-M method */
 
 /* Numerical stabilization policy defaults */
 #define RALPH_FORCE_REFACTOR_PIVOT_TOL 1e-4
@@ -185,6 +184,7 @@ typedef struct {
     int allow_regularization;   /* 1 to allow regularizing zero pivots (for rank-deficient problems) */
     int max_regularizations;    /* Limit on number of rows to regularize */
     int num_regularized;        /* Count of rows regularized in current factorization */
+    double pivot_tol;           /* Dynamic pivot tolerance (default RALPH_PIVOT_TOL) */
     int last_failure_reason;    /* LUFailureReason (last failed lu_factorize/lu_update reason) */
 
     /* Pre-allocated workspace for hyper-sparse operations */
