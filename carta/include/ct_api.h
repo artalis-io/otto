@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "ct_types.h"  /* For CTPBFContext, CTLODConfig */
+#include "ct_metatile.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -148,6 +149,7 @@ typedef struct {
     int tile_size;          /* PNG tile size (default: 512) */
     int enable_lod;         /* Enable LOD filtering (default: 1) */
     const char *name;       /* Server name for TileJSON (optional) */
+    size_t metatile_cache_size;  /* Metatile label cache entries (0 = disabled, default: 4096) */
 } CTAPIConfig;
 
 /*
@@ -209,6 +211,12 @@ void ct_api_set_render_opts(CTAPIContext *ctx, const CTRenderOptions *opts);
  * Disable LOD filtering entirely.
  */
 void ct_api_disable_lod(CTAPIContext *ctx);
+
+/*
+ * Get the metatile label cache (for use outside the API handler).
+ * Returns NULL if metatile caching is disabled.
+ */
+CTMetatileLabelCache *ct_api_get_metatile_cache(CTAPIContext *ctx);
 
 /* ============================================================================
  * Request/Response

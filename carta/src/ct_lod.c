@@ -3,6 +3,7 @@
  */
 
 #include "ct_lod.h"
+#include "sh_geo.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -13,9 +14,8 @@
 
 #define LOD_INITIAL_CAPACITY 32
 
-/* Earth radius for distance calculations */
-#define EARTH_RADIUS_M 6371000.0
-#define DEG_TO_RAD(d) ((d) * 3.14159265358979323846 / 180.0)
+/* Use shared geo constants for area estimation */
+#define DEG_TO_RAD(d) ((d) * M_PI / 180.0)
 
 /* ============================================================================
  * LOD Configuration Management
@@ -372,7 +372,7 @@ float ct_lod_estimate_area(const CTCoord *coords, int num_coords)
     center_lat /= num_coords;
 
     /* Meters per degree at this latitude */
-    double lat_scale = EARTH_RADIUS_M * DEG_TO_RAD(1.0);
+    double lat_scale = SH_EARTH_RADIUS_M * DEG_TO_RAD(1.0);
     double lon_scale = lat_scale * cos(DEG_TO_RAD(center_lat));
 
     /* Shoelace formula */
@@ -397,20 +397,9 @@ float ct_lod_estimate_length(const CTCoord *coords, int num_coords)
     double total = 0;
 
     for (int i = 0; i < num_coords - 1; i++) {
-        /* Haversine distance */
-        double lat1 = DEG_TO_RAD(coords[i].lat);
-        double lon1 = DEG_TO_RAD(coords[i].lon);
-        double lat2 = DEG_TO_RAD(coords[i + 1].lat);
-        double lon2 = DEG_TO_RAD(coords[i + 1].lon);
-
-        double dlat = lat2 - lat1;
-        double dlon = lon2 - lon1;
-
-        double a = sin(dlat / 2) * sin(dlat / 2) +
-                   cos(lat1) * cos(lat2) * sin(dlon / 2) * sin(dlon / 2);
-        double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-        total += EARTH_RADIUS_M * c;
+        SHCoord a = { .lat = coords[i].lat, .lon = coords[i].lon };
+        SHCoord b = { .lat = coords[i + 1].lat, .lon = coords[i + 1].lon };
+        total += sh_haversine(a, b);
     }
 
     return (float)total;
