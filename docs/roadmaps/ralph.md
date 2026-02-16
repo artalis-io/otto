@@ -38,7 +38,7 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
 | **Presolve** | ✅ Phase 3 | 12 techniques, 20-round fixed-point, probing w/ implication propagation (P3) |
-| **NETLIB Suite** | 92% Pass | 11/12 problems (bandm, lotfi, beaconfd fixed) |
+| **NETLIB Suite** | 81% T0-1 | 21/26 fast pass, 84 problems downloaded, full suite integrated |
 | **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
 | **Benders Decomposition** | ✅ Complete | Generic solver, ~1430 LoC, 8 tests (§7) |
 
@@ -1866,3 +1866,110 @@ The domain-specific value in FuelWise is now:
 | `ralph/include/ralph_api.h` | REST API (planned) |
 | `ralph/include/lap.h` | LAP solver API |
 | `ralph/include/netflow.h` | Network flow API |
+
+---
+
+## Chapter 8: LP Performance Improvement Plan (Feb 2026)
+
+Based on deep analysis of `simplex.c` (4865 LoC), `dual_simplex.c` (1546 LoC), `lu.c` (2050 LoC),
+`sparse.c` (648 LoC), and full NETLIB test results (84 problems, 5 tiers).
+
+### 8.1 Current State
+
+**NETLIB Correctness (Tier 0-1, fast):** 21/26 PASS, 3 FAIL, 1 ERROR, 1 SKIP
+**NETLIB Correctness (Tier 2, partial):** 5+ PASS, 3 ERROR, 1 marginal FAIL
+
+| Problem | Issue | Cause |
+|---------|-------|-------|
+| kb2 | 19% wrong obj | Phase 1 / Big-M too small |
+| recipe | 18% wrong obj | Phase 1 / Big-M too small |
+| scorpion | 0.5% wrong obj | Numerical drift |
+| capri, etamacro, finnis | False infeasible | Phase 1 can't find feasible basis |
+| bore3d | Hangs | Cycling in Phase 1 |
+| forplan | MPS parse error | Integer markers in COLUMNS section |
+
+**Performance:** 3-20x slower than GLPK, 30-200x slower than CLP/GLOP.
+
+### 8.2 Identified Bottlenecks
+
+#### B1. Redundant `tableau_compute_solution()` every dual iteration
+- **File:** `dual_simplex.c:873`
+- Dual pivot at lines 330-332 incrementally updates `x_B -= step * d`
+- Then line 873 recomputes the entire solution from scratch via FTRAN
+- CLP/GLPK rely on incremental update, recompute only after refactorization
+- **Impact:** ~20-30% of dual simplex time. **Fix:** ~5 lines
+
+#### B2. `dual_simplex_pivot()` mallocs 5 arrays per pivot
+- **File:** `dual_simplex.c:247-266`
+- 5 malloc + 5 memcpy + 5 free per pivot for rollback-on-failure
+- 5000 pivots = 25,000 malloc/free pairs of large arrays
+- **Impact:** ~5-15%. **Fix:** ~30 lines (pre-allocate in tableau)
+
+#### B3. Devex paying full Steepest Edge cost
+- **File:** `simplex.c:2540-2546`
+- Every primal pivot does 1 extra BTRAN + n sparse dot products for SE weights
+- Applied even when pricing_strategy=Devex, defeating Devex's purpose
+- Comment: "Devex approximation leads to worse pivot selection"
+- **Impact:** 2-3x slowdown on primal. **Fix:** ~50 lines
+
+#### B4. FT spike compaction is O(m^2 * N)
+- **File:** `lu.c:1612-1666`
+- After 300 spikes, computes dense m x m product matrix
+- For m=500: 75M ops, then O(m^2) per subsequent FTRAN/BTRAN
+- Destroys sparse LU benefits for medium/large problems
+- **Impact:** Makes tier 2+ unusably slow. **Fix:** ~20 lines (delete + tune refactor threshold)
+
+#### B5. `dse_init_exact()` is O(m^2) per refactorization
+- **File:** `dual_simplex.c:222-231`
+- m BTRAN solves to initialize DSE weights exactly
+- Called on every refactorization in dual simplex
+- **Impact:** 2-5x on dual for medium+ problems. **Fix:** ~20 lines
+
+#### B6. `verify_solution()` is O(n*m) instead of O(nnz)
+- **File:** `simplex.c:436-446`
+- Triple-nested loop scanning all columns for each row
+- For m=1000, n=2000: ~10M ops vs ~10K with sparse matvec
+- **Impact:** 100x on verify (small total, but big for MIP). **Fix:** 10 lines
+
+#### B7. No row-form (CSR) for RC update
+- Both `simplex.c:2704-2730` and `dual_simplex.c:297-310`
+- O(n) sparse dot products per pivot for RC update
+- CSR copy enables row-scatter with better cache behavior
+- **Impact:** 1.5-3x on RC kernel (~40% of pivot time). **Fix:** ~300 lines
+
+### 8.3 Implementation Plan
+
+#### Week 1: Low-Hanging Fruit (2-5x speedup, ~100 lines)
+1. Remove per-iteration `tableau_compute_solution` in dual_v2 (B1)
+2. Pre-allocate backup arrays in `dual_simplex_pivot` (B2)
+3. Delete FT spike compaction + tune refactorization threshold (B4)
+4. Approximate DSE init — weights=1.0, exact only on first factorization (B5)
+5. Fix `verify_solution` to O(nnz) sparse matvec (B6)
+
+#### Week 2: Devex/SE Fix (2-3x speedup, ~50 lines)
+6. Implement proper Devex weight formula without tau BTRAN (B3)
+   - Or switch to proper SE and accept iteration overhead
+
+#### Week 3: Phase 1 Robustness (correctness, ~200 lines)
+7. True two-phase simplex or adaptive Big-M
+   - Fixes: kb2, recipe, capri, finnis, etamacro, bore3d
+8. Fix forplan MPS parsing (integer markers in COLUMNS section)
+
+#### Week 4: Row-Form RC Update (1.5-3x, ~300 lines)
+9. Build CSR copy of A_ext at tableau creation (B7)
+10. Row-scatter RC update in both primal and dual pivot
+
+#### Future: Supernodal LU (T2.1, ~1500 lines, 3-5x)
+- BLAS-3 dense blocks within sparse structure
+- Closes remaining gap to CLP/GLOP
+
+### 8.4 Expected Outcome
+
+After weeks 1-4 (~650 lines total):
+- Ralph within 2-5x of GLPK on tier 0-2 problems
+- 90%+ NETLIB pass rate
+- Tier 2 problems solvable in seconds instead of minutes
+
+After Supernodal LU:
+- Within 2x of GLPK
+- Competitive with embedded solvers (SoPlex-lite, GLPK)
