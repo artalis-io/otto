@@ -86,8 +86,8 @@ static void lru_touch(CTMetatileLabelCache *cache, CTMetatileCacheEntry *entry)
     if (!cache->lru_tail) cache->lru_tail = entry;
 }
 
-/* Remove entry from hash table */
-static void cache_remove_entry(CTMetatileLabelCache *cache, CTMetatileCacheEntry *entry)
+/* Unlink entry from hash table and LRU (does NOT free — caller frees after unlock) */
+static void cache_unlink_entry(CTMetatileLabelCache *cache, CTMetatileCacheEntry *entry)
 {
     size_t bucket = mt_bucket(entry->key);
     CTMetatileCacheEntry **pp = &cache->buckets[bucket];
@@ -106,7 +106,14 @@ static void cache_remove_entry(CTMetatileLabelCache *cache, CTMetatileCacheEntry
     if (cache->lru_tail == entry) cache->lru_tail = entry->lru_prev;
 
     cache->num_entries--;
+    entry->hash_next = NULL;
+    entry->lru_prev = NULL;
+    entry->lru_next = NULL;
+}
 
+/* Free an unlinked entry (call outside lock) */
+static void cache_free_entry(CTMetatileCacheEntry *entry)
+{
     ct_metatile_result_free(entry->result);
     free(entry);
 }
@@ -137,13 +144,12 @@ void ct_metatile_cache_free(CTMetatileLabelCache *cache)
 {
     if (!cache) return;
 
-    /* Free all entries */
+    /* Free all entries (no lock needed — shutting down) */
     for (size_t i = 0; i < MT_CACHE_BUCKETS; i++) {
         CTMetatileCacheEntry *entry = cache->buckets[i];
         while (entry) {
             CTMetatileCacheEntry *next = entry->hash_next;
-            ct_metatile_result_free(entry->result);
-            free(entry);
+            cache_free_entry(entry);
             entry = next;
         }
     }
@@ -236,7 +242,8 @@ void ct_metatile_cache_put(
         existing = existing->hash_next;
     }
 
-    /* Evict LRU entries if at capacity */
+    /* Evict LRU entries if at capacity — collect victims, free after unlock */
+    CTMetatileCacheEntry *evict_list = NULL;
     while (cache->num_entries >= cache->max_entries && cache->lru_tail) {
         CTMetatileCacheEntry *victim = cache->lru_tail;
         /* Skip entries that are still in use */
@@ -248,7 +255,9 @@ void ct_metatile_cache_put(
             }
             if (!victim) break;  /* All entries in use, allow over-capacity */
         }
-        cache_remove_entry(cache, victim);
+        cache_unlink_entry(cache, victim);
+        victim->hash_next = evict_list;  /* Reuse hash_next as singly-linked evict chain */
+        evict_list = victim;
     }
 
     /* Create new entry */
@@ -281,6 +290,13 @@ void ct_metatile_cache_put(
 #ifndef __EMSCRIPTEN__
     pthread_rwlock_unlock(&cache->lock);
 #endif
+
+    /* Free evicted entries outside the lock */
+    while (evict_list) {
+        CTMetatileCacheEntry *next = evict_list->hash_next;
+        cache_free_entry(evict_list);
+        evict_list = next;
+    }
 }
 
 /* ============================================================================

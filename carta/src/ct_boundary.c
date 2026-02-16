@@ -7,16 +7,13 @@
 #include "ct_boundary.h"
 #include "ct_rtree.h"
 #include "sh_hashmap.h"
+#include "sh_geo.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
 /* Tolerance for endpoint matching (in degrees, ~1m at equator) */
 #define COORD_EPSILON 0.00001
-
-/* Earth radius for length calculation */
-#define EARTH_RADIUS_M 6371000.0
-#define DEG_TO_RAD(d) ((d) * 3.14159265358979323846 / 180.0)
 
 /* ============================================================================
  * Helper Functions
@@ -51,7 +48,7 @@ static void compute_bbox(const CTCoord *coords, int count, CTBBox *bbox)
 }
 
 /*
- * Compute total length in meters using Haversine formula.
+ * Compute total length in meters using shared Haversine.
  */
 static float compute_length_m(const CTCoord *coords, int count)
 {
@@ -59,19 +56,9 @@ static float compute_length_m(const CTCoord *coords, int count)
 
     double total = 0.0;
     for (int i = 0; i < count - 1; i++) {
-        double lat1 = DEG_TO_RAD(coords[i].lat);
-        double lon1 = DEG_TO_RAD(coords[i].lon);
-        double lat2 = DEG_TO_RAD(coords[i + 1].lat);
-        double lon2 = DEG_TO_RAD(coords[i + 1].lon);
-
-        double dlat = lat2 - lat1;
-        double dlon = lon2 - lon1;
-
-        double a = sin(dlat / 2) * sin(dlat / 2) +
-                   cos(lat1) * cos(lat2) * sin(dlon / 2) * sin(dlon / 2);
-        double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-        total += EARTH_RADIUS_M * c;
+        SHCoord a = { .lat = coords[i].lat, .lon = coords[i].lon };
+        SHCoord b = { .lat = coords[i + 1].lat, .lon = coords[i + 1].lon };
+        total += sh_haversine(a, b);
     }
     return (float)total;
 }

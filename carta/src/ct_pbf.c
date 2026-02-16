@@ -1061,7 +1061,10 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
 
     if (ctx->nodes.count + count > ctx->nodes.capacity) {
         size_t new_cap = ctx->nodes.capacity ? ctx->nodes.capacity * 2 : 100000;
-        while (new_cap < ctx->nodes.count + count) new_cap *= 2;
+        while (new_cap < ctx->nodes.count + count) {
+            if (new_cap > SIZE_MAX / 2) { goto error; }
+            new_cap *= 2;
+        }
 
         /* Realloc one at a time to avoid dangling pointer on partial failure */
         int64_t *new_ids = realloc(ctx->nodes.ids, new_cap * sizeof(int64_t));
