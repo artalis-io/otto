@@ -877,8 +877,8 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
     /* Decide whether to use two-phase simplex based on equality count.
      * Two-phase is more numerically stable when there are many equalities,
      * but can have issues with stuck artificials (redundant rows).
-     * Threshold: use two-phase only when equalities > 80% of constraints.
-     * This targets extreme cases like beaconfd (81% equalities).
+     * Use two-phase for problems with many equalities (>80% of constraints)
+     * where Big-M contamination is most severe.
      *
      * IMPORTANT: For Benders decomposition, force_two_phase=1 ensures clean
      * duals without BigM contamination. */
@@ -2552,14 +2552,23 @@ static int simplex_pivot(SimplexTableau *tab,
     double rhs_val = 1.0;
     lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
 
-    /* For steepest edge weight updates: compute tau_helper = B^{-T} * d_entering
-     * This enables exact weight updates using: gamma_j' = gamma_j - 2*(alpha_j/p)*tau_j + (alpha_j/p)^2*gamma_e
-     *
-     * Note: We use exact SE weights for both SE and Devex pricing because the
-     * Devex approximation (max formula) leads to worse pivot selection and
-     * significantly more iterations, which outweighs the BTRAN savings.
+    /* Weight update strategy:
+     * - SE (pricing_strategy==1): always use exact tau BTRAN
+     * - Devex (pricing_strategy==2): use exact tau BTRAN while artificials remain
+     *   in the basis (Big-M Phase 1), then switch to cheap Devex formula once all
+     *   artificials are driven out. Accuracy matters in Phase 1 for feasibility;
+     *   speed matters in Phase 2 for the bulk of iterations.
      */
-    int use_true_se = tab->use_steepest_edge;
+    int artificials_in_basis = 0;
+    if (tab->pricing_strategy == 2 && tab->num_artificial > 0) {
+        for (int k = 0; k < tab->num_artificial; k++) {
+            if (tab->var_status[tab->artificial_vars[k]] == RALPH_BASIC) {
+                artificials_in_basis = 1;
+                break;
+            }
+        }
+    }
+    int use_true_se = (tab->pricing_strategy == 1) || artificials_in_basis;
     if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
         lu_solve_transpose(tab->lu, tab->work2, tau_helper);
     }
@@ -2733,14 +2742,22 @@ basis_update_done:
             tab->rc[j] -= rc_ratio * alpha_j;
             if (use_heap) heap_update(tab, j);
 
-            /* Update steepest edge weights if enabled */
+            /* Update pricing weights if enabled */
             if (do_se_update && j != leaving) {
-                /* True Steepest Edge: exact formula using tau_helper */
-                double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
                 double alpha_ratio = alpha_j * pivot_inv;
-                double new_weight = tab->se_weights[j]
-                                  - 2.0 * alpha_ratio * tau_j
-                                  + alpha_ratio * alpha_ratio * gamma_e;
+                double new_weight;
+                if (use_true_se) {
+                    /* True Steepest Edge: exact formula using tau_helper */
+                    double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
+                    new_weight = tab->se_weights[j]
+                               - 2.0 * alpha_ratio * tau_j
+                               + alpha_ratio * alpha_ratio * gamma_e;
+                } else {
+                    /* Devex: approximate formula (Harris 1973) */
+                    double candidate = alpha_ratio * alpha_ratio * gamma_e;
+                    new_weight = tab->se_weights[j] * 0.999;
+                    if (candidate > new_weight) new_weight = candidate;
+                }
                 if (new_weight < 1.0) new_weight = 1.0;
                 if (new_weight > 1e8) new_weight = 1e8;
                 tab->se_weights[j] = new_weight;
@@ -4066,8 +4083,10 @@ static int simplex_phase2(SimplexSolver *solver) {
     int refactor_interval = tab->use_two_phase ? 10 : 0;  /* 0 = use normal LU update count */
 
     /* Compute initial reduced costs.
-     * For partial pricing, use lazy mode (duals only) for efficiency. */
-    if (solver->pricing_strategy == 3) {
+     * After two-phase transition, ALWAYS compute full RCs because Bland's rule
+     * (used for the first bland_start_iters) reads tab->rc[] directly.
+     * For non-two-phase, partial pricing can use lazy mode (duals only). */
+    if (solver->pricing_strategy == 3 && !tab->use_two_phase) {
         tableau_compute_duals(tab);  /* Lazy mode: duals only */
     } else {
         tableau_compute_reduced_costs(tab);
@@ -4764,16 +4783,29 @@ int simplex_solve(SimplexSolver *solver) {
         }
     }
 
-    /* T3.4: Override pricing strategy for Phase 1 if configured */
+    /* T3.4: Override pricing strategy for Phase 1 if configured.
+     * Two-phase simplex requires full pricing during Phase 1 — partial pricing
+     * can miss improving directions for artificial variables. Default to Devex
+     * for Phase 1 when partial/heap pricing is selected. */
     int saved_pricing = solver->pricing_strategy;
+    int saved_tab_pricing = tab->pricing_strategy;
+    int saved_tab_se = tab->use_steepest_edge;
     if (solver->phase1_pricing >= 0) {
         solver->pricing_strategy = solver->phase1_pricing;
+        tab->pricing_strategy = solver->phase1_pricing;
+        tab->use_steepest_edge = (solver->phase1_pricing == 1 || solver->phase1_pricing == 2);
+    } else if (tab->use_two_phase && (solver->pricing_strategy == 3 || solver->pricing_strategy == 4)) {
+        solver->pricing_strategy = 2;  /* Devex for Phase 1 */
+        tab->pricing_strategy = 2;
+        tab->use_steepest_edge = 1;
     }
 
     /* Phase 1: Find feasible solution */
     if (solver->verbose) printf("[simplex_solve] Starting Phase 1...\n");
     if (simplex_phase1(solver) != 0) {
         solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing */
+        tab->pricing_strategy = saved_tab_pricing;
+        tab->use_steepest_edge = saved_tab_se;
         if (solver->status == RALPH_STATUS_INFEASIBLE) {
             if (solver->verbose) printf("[simplex_solve] Phase 1: INFEASIBLE\n");
             return 0;  /* Infeasible is a valid result */
@@ -4781,6 +4813,8 @@ int simplex_solve(SimplexSolver *solver) {
         return -1;
     }
     solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing for Phase 2 */
+    tab->pricing_strategy = saved_tab_pricing;
+    tab->use_steepest_edge = saved_tab_se;
     if (solver->verbose) printf("[simplex_solve] Phase 1 complete\n");
 
     /* Transition to Phase 2 if using two-phase simplex */
