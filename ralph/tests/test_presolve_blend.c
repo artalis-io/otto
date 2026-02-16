@@ -2,15 +2,10 @@
  * Regression test for blend - a NETLIB blending problem (Bruce Murtagh).
  *
  * blend is a small problem: 83 variables, 74 constraints.
+ * Known optimal objective: -30.812149846 (NETLIB reference).
  *
- * Current status (Feb 2026):
- * - Without presolve: returns INFEASIBLE incorrectly
- * - With presolve: returns UNBOUNDED incorrectly
- * - Known optimal objective: -30.812149846 (NETLIB reference)
- * - Root cause likely numerical/degeneracy issue — needs investigation
- *
- * This test guards against crashes and tracks progress toward correctness.
- * Once the solver handles blend correctly, tighten assertions to require OPTIMAL.
+ * Previously failed due to duplicate entries in MPS not being merged
+ * by triplets_to_csc(). Now fixed: duplicates are summed.
  */
 
 #include <stdio.h>
@@ -57,24 +52,14 @@ int main(void) {
         int iters = ralph_get_iterations(model);
         printf("  Status: %s, Iterations: %d\n", ralph_status_string(status), iters);
 
-        /* blend currently fails without presolve — guard against crash/unknown */
-        TEST(status != RALPH_STATUS_ERROR && status != RALPH_STATUS_UNKNOWN,
-             "Solver returns a terminal status (no crash)");
+        TEST(status == RALPH_STATUS_OPTIMAL, "blend returns OPTIMAL without presolve");
 
         if (status == RALPH_STATUS_OPTIMAL) {
             double obj = ralph_get_objval(model);
             double rel_err = fabs(obj - BLEND_OPT) / (fabs(BLEND_OPT) + 1e-10);
             printf("  Objective: %.10f (expected: %.10f, rel_err: %.2e)\n",
                    obj, BLEND_OPT, rel_err);
-            TEST(rel_err < 0.01, "Objective within 1% of NETLIB reference");
-        } else {
-            printf("  Note: blend returns %s without presolve (known issue)\n",
-                   ralph_status_string(status));
-            /* Accept known-incorrect status as regression guard */
-            TEST(status == RALPH_STATUS_INFEASIBLE ||
-                 status == RALPH_STATUS_UNBOUNDED ||
-                 status == RALPH_STATUS_ITERATION_LIMIT,
-                 "Known incorrect status reproduced (regression guard)");
+            TEST(rel_err < 1e-4, "Objective within 0.01% of NETLIB reference");
         }
 
         ralph_free(model);
@@ -101,23 +86,14 @@ int main(void) {
         int iters = ralph_get_iterations(model);
         printf("  Status: %s, Iterations: %d\n", ralph_status_string(status), iters);
 
-        /* blend currently fails with presolve too — guard against crash */
-        TEST(status != RALPH_STATUS_ERROR && status != RALPH_STATUS_UNKNOWN,
-             "Solver returns a terminal status with presolve (no crash)");
+        TEST(status == RALPH_STATUS_OPTIMAL, "blend returns OPTIMAL with presolve");
 
         if (status == RALPH_STATUS_OPTIMAL) {
             double obj = ralph_get_objval(model);
             double rel_err = fabs(obj - BLEND_OPT) / (fabs(BLEND_OPT) + 1e-10);
             printf("  Objective: %.10f (expected: %.10f, rel_err: %.2e)\n",
                    obj, BLEND_OPT, rel_err);
-            TEST(rel_err < 0.01, "Objective within 1% of NETLIB reference (presolve)");
-        } else {
-            printf("  Note: blend returns %s with presolve (known issue)\n",
-                   ralph_status_string(status));
-            TEST(status == RALPH_STATUS_INFEASIBLE ||
-                 status == RALPH_STATUS_UNBOUNDED ||
-                 status == RALPH_STATUS_ITERATION_LIMIT,
-                 "Known incorrect status with presolve reproduced (regression guard)");
+            TEST(rel_err < 1e-4, "Objective within 0.01% of NETLIB reference (presolve)");
         }
 
         ralph_free(model);

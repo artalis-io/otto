@@ -24,6 +24,7 @@
 #include <errno.h>
 
 #include "ralph.h"
+#include "lp.h"
 
 /* ============================================================================
  * Constants and Configuration
@@ -83,6 +84,7 @@ typedef struct {
     int verbose;
     int lp_only;         /* Default: 1 (skip MIP) */
     int mip_only;
+    int verify_matrix;   /* Deep matrix verification via GLPK solution */
 
     /* Time limits */
     double time_multiplier;
@@ -461,6 +463,386 @@ static ValidationResult validate_solution(double *solution, int num_vars,
 }
 
 /* ============================================================================
+ * Matrix Verification via GLPK Reference Solution
+ *
+ * Loads an MPS/LP file into Ralph (no solve), runs GLPK to get a reference
+ * solution, then verifies Ralph's internal constraint matrix by computing
+ * Ax and checking against b/sense/bounds. Catches matrix construction bugs
+ * (MPS parsing, triplet-to-CSC conversion) that objective-only checks miss.
+ * ============================================================================ */
+
+/* Access Ralph's internal model (defined in ralph.c) */
+extern LPModel* ralph_get_lp_model(const RalphModel *model);
+extern int lp_model_finalize(LPModel *model);
+
+/* Forward declaration (defined in Problem Discovery section below) */
+static int list_netlib_problems(ProblemInfo *problems, int max_problems, int lp_only);
+
+typedef struct {
+    int num_vars;
+    int num_cons;
+    int nnz;
+
+    /* Per-row constraint check */
+    int num_con_violations;
+    double max_con_violation;
+    int worst_con_row;
+
+    /* Per-variable bound check */
+    int num_bound_violations;
+    double max_bound_violation;
+    int worst_bound_var;
+
+    /* Objective check */
+    double ralph_obj;           /* c'x computed from Ralph's c vector */
+    double glpk_obj;            /* Objective from GLPK's solution output */
+    double obj_error;
+
+    int pass;                   /* Overall pass/fail */
+    char detail[2048];          /* Human-readable detail */
+} MatrixVerifyResult;
+
+/* Parse GLPK --output file to extract column activity values */
+static int parse_glpk_solution_vector(const char *sol_file, double *x, int max_vars,
+                                       double *obj_out) {
+    FILE *f = fopen(sol_file, "r");
+    if (!f) return -1;
+
+    char line[MAX_LINE];
+    int in_columns = 0;
+    int parsed = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        /* Parse objective */
+        if (strstr(line, "Objective:")) {
+            char *eq = strchr(line, '=');
+            if (eq && obj_out) {
+                *obj_out = atof(eq + 1);
+            }
+        }
+
+        /* Detect column section header */
+        if (strstr(line, "Column name") && strstr(line, "Activity")) {
+            /* Skip the dashed separator line */
+            if (fgets(line, sizeof(line), f)) { /* separator */ }
+            in_columns = 1;
+            continue;
+        }
+
+        /* End of column section */
+        if (in_columns && (line[0] == '\n' || line[0] == '\r' || line[0] == '\0')) {
+            break;
+        }
+        /* KKT section also ends columns */
+        if (in_columns && strstr(line, "Karush-Kuhn-Tucker")) {
+            break;
+        }
+
+        if (in_columns) {
+            /* Format: "     1 colname    St   Activity     LB    UB    Marginal"
+             * Column number is 1-based */
+            int col_num;
+            char col_name[256], status[8];
+            double activity;
+
+            /* Try parsing with activity value */
+            int n = sscanf(line, " %d %255s %7s %lf",
+                           &col_num, col_name, status, &activity);
+            if (n >= 4 && col_num >= 1 && col_num <= max_vars) {
+                x[col_num - 1] = activity;
+                parsed++;
+            } else if (n >= 3 && col_num >= 1 && col_num <= max_vars) {
+                /* Activity might be empty (value = 0) */
+                x[col_num - 1] = 0.0;
+                parsed++;
+            }
+        }
+    }
+
+    fclose(f);
+    return parsed;
+}
+
+static MatrixVerifyResult verify_matrix_single(const char *problem_path,
+                                                const char *name,
+                                                const Options *opts) {
+    (void)name;
+    MatrixVerifyResult r = {0};
+
+    /* 1. Load model in Ralph (parse only, no solve) */
+    RalphModel *model = ralph_create();
+    if (!model) {
+        snprintf(r.detail, sizeof(r.detail), "Failed to create Ralph model");
+        return r;
+    }
+
+    const char *ext = strrchr(problem_path, '.');
+    int load_ret;
+    if (ext && strcasecmp(ext, ".lp") == 0) {
+        load_ret = ralph_read_lp(model, problem_path);
+    } else {
+        load_ret = ralph_read_mps(model, problem_path);
+    }
+    if (load_ret != 0) {
+        snprintf(r.detail, sizeof(r.detail), "Failed to load %s", problem_path);
+        ralph_free(model);
+        return r;
+    }
+
+    /* Get internal model and finalize (builds CSC matrix) */
+    LPModel *lp = ralph_get_lp_model(model);
+    if (!lp) {
+        snprintf(r.detail, sizeof(r.detail), "No internal LPModel");
+        ralph_free(model);
+        return r;
+    }
+    if (!lp->A) {
+        lp_model_finalize(lp);
+    }
+    if (!lp->A) {
+        snprintf(r.detail, sizeof(r.detail), "No constraint matrix after finalize");
+        ralph_free(model);
+        return r;
+    }
+
+    int m = lp->num_cons;
+    int n = lp->num_vars;
+    r.num_vars = n;
+    r.num_cons = m;
+    r.nnz = lp->A->colptr[n];
+
+    /* 2. Solve with GLPK to get reference solution */
+    char sol_file[MAX_PATH];
+    snprintf(sol_file, sizeof(sol_file), "/tmp/ralph_verify_%d.txt", getpid());
+
+    const char *fmt_flag = "--mps";
+    if (ext && strcasecmp(ext, ".lp") == 0) fmt_flag = "--lp";
+
+    char cmd[MAX_PATH * 2];
+    snprintf(cmd, sizeof(cmd), "glpsol %s '%s' -o '%s' 2>/dev/null",
+             fmt_flag, problem_path, sol_file);
+
+    int ret = system(cmd);
+    if (ret != 0) {
+        snprintf(r.detail, sizeof(r.detail), "GLPK failed to solve");
+        ralph_free(model);
+        unlink(sol_file);
+        return r;
+    }
+
+    /* Parse GLPK's solution vector */
+    double *x = (double*)calloc(n, sizeof(double));
+    if (!x) {
+        snprintf(r.detail, sizeof(r.detail), "Memory allocation failed");
+        ralph_free(model);
+        unlink(sol_file);
+        return r;
+    }
+
+    double glpk_obj = 0.0;
+    int parsed = parse_glpk_solution_vector(sol_file, x, n, &glpk_obj);
+    unlink(sol_file);
+
+    if (parsed == 0) {
+        snprintf(r.detail, sizeof(r.detail),
+                 "Failed to parse GLPK solution (0 columns parsed)");
+        free(x);
+        ralph_free(model);
+        return r;
+    }
+
+    r.glpk_obj = glpk_obj;
+
+    /* 3. Compute Ax using Ralph's CSC matrix */
+    double *ax = (double*)calloc(m, sizeof(double));
+    if (!ax) {
+        free(x);
+        ralph_free(model);
+        return r;
+    }
+
+    for (int j = 0; j < n; j++) {
+        double xj = x[j];
+        if (fabs(xj) < 1e-15) continue;
+        for (int p = lp->A->colptr[j]; p < lp->A->colptr[j + 1]; p++) {
+            int row = lp->A->rowidx[p];
+            if (row >= 0 && row < m) {
+                ax[row] += lp->A->values[p] * xj;
+            }
+        }
+    }
+
+    /* 4. Check constraint violations */
+    r.worst_con_row = -1;
+    for (int i = 0; i < m; i++) {
+        double viol = 0.0;
+        if (lp->sense[i] == 'E') {
+            viol = fabs(ax[i] - lp->b[i]);
+        } else if (lp->sense[i] == 'L') {
+            if (ax[i] > lp->b[i] + opts->feas_tol)
+                viol = ax[i] - lp->b[i];
+        } else if (lp->sense[i] == 'G') {
+            if (ax[i] < lp->b[i] - opts->feas_tol)
+                viol = lp->b[i] - ax[i];
+        }
+
+        if (viol > opts->feas_tol) {
+            r.num_con_violations++;
+        }
+        if (viol > r.max_con_violation) {
+            r.max_con_violation = viol;
+            r.worst_con_row = i;
+        }
+    }
+
+    /* 5. Check bound violations */
+    r.worst_bound_var = -1;
+    for (int j = 0; j < n; j++) {
+        double viol = 0.0;
+        if (lp->lb && x[j] < lp->lb[j] - opts->feas_tol) {
+            viol = lp->lb[j] - x[j];
+        }
+        if (lp->ub && x[j] > lp->ub[j] + opts->feas_tol) {
+            double bv = x[j] - lp->ub[j];
+            if (bv > viol) viol = bv;
+        }
+
+        if (viol > opts->feas_tol) {
+            r.num_bound_violations++;
+        }
+        if (viol > r.max_bound_violation) {
+            r.max_bound_violation = viol;
+            r.worst_bound_var = j;
+        }
+    }
+
+    /* 6. Check objective: c'x */
+    r.ralph_obj = 0.0;
+    for (int j = 0; j < n; j++) {
+        r.ralph_obj += lp->c[j] * x[j];
+    }
+    /* Apply obj_sense: Ralph stores c in original sense, GLPK reports in original sense */
+    r.obj_error = fabs(r.ralph_obj - glpk_obj);
+
+    /* 7. Overall pass/fail
+     * Thresholds are generous because GLPK's --output format has ~6 significant
+     * digits, causing truncation noise in the parsed solution vector.
+     * The goal is catching matrix construction bugs (violations >> 1),
+     * not numerical precision issues (violations ~ 1e-3). */
+    double obj_scale = fmax(1.0, fabs(glpk_obj));
+    r.pass = (r.max_con_violation < 1.0) &&
+             (r.max_bound_violation < 1e-3) &&
+             (r.obj_error / obj_scale < 1e-3);
+
+    /* Build detail string */
+    snprintf(r.detail, sizeof(r.detail),
+             "%dx%d nnz=%d | cons: %d violations (max %.2e row %d) | "
+             "bounds: %d violations (max %.2e) | "
+             "obj: c'x=%.8g glpk=%.8g err=%.2e",
+             n, m, r.nnz,
+             r.num_con_violations, r.max_con_violation, r.worst_con_row,
+             r.num_bound_violations, r.max_bound_violation,
+             r.ralph_obj, r.glpk_obj, r.obj_error);
+
+    free(ax);
+    free(x);
+    ralph_free(model);
+    return r;
+}
+
+static void print_verify_json(const char *name, const MatrixVerifyResult *r, FILE *out) {
+    char escaped_name[512];
+    json_escape_string(escaped_name, sizeof(escaped_name), name);
+    char escaped_detail[4096];
+    json_escape_string(escaped_detail, sizeof(escaped_detail), r->detail);
+
+    fprintf(out, "{\n");
+    fprintf(out, "  \"problem\": \"%s\",\n", escaped_name);
+    fprintf(out, "  \"pass\": %s,\n", r->pass ? "true" : "false");
+    fprintf(out, "  \"vars\": %d,\n", r->num_vars);
+    fprintf(out, "  \"cons\": %d,\n", r->num_cons);
+    fprintf(out, "  \"nnz\": %d,\n", r->nnz);
+    fprintf(out, "  \"constraint_violations\": %d,\n", r->num_con_violations);
+    fprintf(out, "  \"max_constraint_violation\": %.6e,\n", r->max_con_violation);
+    fprintf(out, "  \"worst_constraint_row\": %d,\n", r->worst_con_row);
+    fprintf(out, "  \"bound_violations\": %d,\n", r->num_bound_violations);
+    fprintf(out, "  \"max_bound_violation\": %.6e,\n", r->max_bound_violation);
+    fprintf(out, "  \"worst_bound_var\": %d,\n", r->worst_bound_var);
+    fprintf(out, "  \"ralph_objective\": %.10g,\n", r->ralph_obj);
+    fprintf(out, "  \"glpk_objective\": %.10g,\n", r->glpk_obj);
+    fprintf(out, "  \"objective_error\": %.6e,\n", r->obj_error);
+    fprintf(out, "  \"detail\": \"%s\"\n", escaped_detail);
+    fprintf(out, "}\n");
+}
+
+static int run_verify_matrix(const char *problem_path, const char *name,
+                              const Options *opts, FILE *out) {
+    if (opts->verbose) {
+        fprintf(stderr, "Verifying: %s\n", name);
+    }
+
+    MatrixVerifyResult r = verify_matrix_single(problem_path, name, opts);
+
+    if (opts->verbose) {
+        fprintf(stderr, "  %s  %s\n",
+                r.pass ? "PASS" : "FAIL", r.detail);
+    }
+
+    print_verify_json(name, &r, out);
+    return r.pass ? 0 : 1;
+}
+
+static int run_verify_suite(const char *suite_name, const Options *opts) {
+    ProblemInfo problems[MAX_PROBLEMS];
+    int count = list_netlib_problems(problems, MAX_PROBLEMS, opts->lp_only);
+
+    if (count == 0) {
+        fprintf(stderr, "Error: No NETLIB problems found.\n");
+        fprintf(stderr, "Run: ./ralph-benchmark --download-netlib\n");
+        return 1;
+    }
+
+    int start = 0, end = count;
+    if (strcmp(suite_name, "tiny") == 0) {
+        end = (count < 5) ? count : 5;
+    } else if (strcmp(suite_name, "small") == 0) {
+        end = (count < 15) ? count : 15;
+    } else if (strcmp(suite_name, "medium") == 0) {
+        end = (count < 40) ? count : 40;
+    }
+
+    int pass_count = 0, fail_count = 0;
+
+    fprintf(stdout, "[\n");
+    for (int i = start; i < end; i++) {
+        if (i > start) fprintf(stdout, ",\n");
+
+        MatrixVerifyResult r = verify_matrix_single(problems[i].path,
+                                                     problems[i].name, opts);
+        if (r.pass) pass_count++;
+        else fail_count++;
+
+        if (opts->verbose) {
+            fprintf(stderr, "  %s  %-12s  %s\n",
+                    r.pass ? "PASS" : "FAIL",
+                    problems[i].name, r.detail);
+        }
+
+        print_verify_json(problems[i].name, &r, stdout);
+    }
+    fprintf(stdout, "]\n");
+
+    if (opts->verbose) {
+        fprintf(stderr, "\nMatrix verification: %d/%d pass",
+                pass_count, pass_count + fail_count);
+        if (fail_count > 0) fprintf(stderr, " (%d FAIL)", fail_count);
+        fprintf(stderr, "\n");
+    }
+
+    return fail_count > 0 ? 1 : 0;
+}
+
+/* ============================================================================
  * Problem Discovery
  * ============================================================================ */
 
@@ -827,9 +1209,14 @@ static void print_help(const char *prog) {
     printf("  %s --list                     List available NETLIB problems\n", prog);
     printf("  %s --download-netlib          Download NETLIB problems\n", prog);
     printf("\n");
+    printf("Verification:\n");
+    printf("  %s --verify-matrix --suite all -v    # Verify all NETLIB matrices\n", prog);
+    printf("  %s --verify-matrix --netlib blend -v # Verify single problem\n", prog);
+    printf("\n");
     printf("Options:\n");
     printf("  -h, --help                    Show this help message\n");
     printf("  -v, --verbose                 Print progress to stderr\n");
+    printf("  --verify-matrix               Deep matrix verification via GLPK solution\n");
     printf("  --version                     Show version\n");
     printf("\n");
     printf("Time Limits:\n");
@@ -907,6 +1294,8 @@ static int parse_args(int argc, char **argv, Options *opts) {
         } else if (strcmp(arg, "--mip-only") == 0) {
             opts->mip_only = 1;
             opts->lp_only = 0;
+        } else if (strcmp(arg, "--verify-matrix") == 0) {
+            opts->verify_matrix = 1;
         } else if (strcmp(arg, "--all-types") == 0) {
             opts->lp_only = 0;
             opts->mip_only = 0;
@@ -1007,6 +1396,31 @@ int main(int argc, char **argv) {
                    problems[i].is_mip ? "MIP" : "LP");
         }
         return 0;
+    }
+
+    /* Verify-matrix mode */
+    if (opts.verify_matrix) {
+        if (opts.suite[0] != '\0') {
+            return run_verify_suite(opts.suite, &opts);
+        }
+        if (opts.netlib_name[0] != '\0') {
+            char problem_path[MAX_PATH];
+            if (!find_netlib_problem(opts.netlib_name, problem_path,
+                                      sizeof(problem_path))) {
+                fprintf(stderr, "Error: NETLIB problem '%s' not found.\n",
+                        opts.netlib_name);
+                return 1;
+            }
+            return run_verify_matrix(problem_path, opts.netlib_name,
+                                      &opts, stdout);
+        }
+        if (opts.problem_path[0] != '\0') {
+            const char *name = strrchr(opts.problem_path, '/');
+            name = name ? name + 1 : opts.problem_path;
+            return run_verify_matrix(opts.problem_path, name, &opts, stdout);
+        }
+        /* Default: verify all */
+        return run_verify_suite("all", &opts);
     }
 
     /* Run suite */
