@@ -383,6 +383,14 @@ build-ralph-benchmark: $(RALPH_BENCHMARK_EXEC)
 	@echo "Built: ./ralph-benchmark"
 	@echo "Run: ./ralph-benchmark --help"
 
+# Fast NETLIB correctness test (tiers 0-1)
+test-netlib: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && ./$(RALPH_BENCHMARK_EXEC) --test fast
+
+# Full NETLIB correctness test (all tiers)
+test-netlib-full: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && ./$(RALPH_BENCHMARK_EXEC) --test full
+
 # Download NETLIB problems
 download-netlib:
 	cd $(BENCH_DIR) && bash download_netlib.sh
@@ -403,7 +411,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-netlib test-netlib-full bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
@@ -450,11 +458,15 @@ help:
 	@echo "Quick benchmark variants (smaller problem sizes):"
 	@echo "  bench-mip-quick, bench-mip-specialized-quick, bench-mip-compare-quick"
 	@echo ""
+	@echo "NETLIB Correctness Tests:"
+	@echo "  test-netlib            - Fast test (tiers 0-1, ~30s)"
+	@echo "  test-netlib-full       - Full test (all tiers, ~10min)"
+	@echo "  download-netlib        - Download all NETLIB problems"
+	@echo ""
 	@echo "NETLIB Benchmark Tool:"
 	@echo "  build-ralph-benchmark  - Build the benchmark tool"
-	@echo "  download-netlib        - Download NETLIB LP problems"
 	@echo ""
-	@echo "  ./ralph-benchmark --help              # Show benchmark options"
-	@echo "  ./ralph-benchmark --download-netlib   # Download problems"
-	@echo "  ./ralph-benchmark --suite tiny        # Quick smoke test"
+	@echo "  ./ralph-benchmark --test              # Correctness test (fast)"
+	@echo "  ./ralph-benchmark --test full          # Correctness test (all)"
+	@echo "  ./ralph-benchmark --suite tiny -v     # GLPK comparison"
 	@echo "  ./ralph-benchmark --netlib afiro -v   # Single problem"

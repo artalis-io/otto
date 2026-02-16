@@ -217,6 +217,7 @@ test-ralph:
 	$(MAKE) -C ralph test
 	$(MAKE) -C ralph test-lap
 	$(MAKE) -C ralph test-netflow
+	$(MAKE) -C ralph test-netlib
 	$(MAKE) -C ralph test-detect
 
 test-fuelwise: fuelwise
