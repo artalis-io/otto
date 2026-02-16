@@ -206,11 +206,7 @@ LUFactorization* lu_create(int m) {
         return NULL;
     }
 
-    /* Spike compaction settings */
-    lu->ft_compact_interval = 300;
-    lu->ft_num_compacted = 0;
-    lu->ft_compact_matrix = NULL;  /* Allocated lazily if needed */
-    lu->ft_compact_valid = 0;
+    /* (B4: spike compaction removed) */
 
     /* Initialize condition number tracking */
     lu->min_diag_U = RALPH_INFINITY;
@@ -308,8 +304,7 @@ void lu_free(LUFactorization *lu) {
         SAFE_FREE(lu->eta_values);
     }
 
-    /* Free compact matrix (allocated lazily, not in arena) */
-    SAFE_FREE(lu->ft_compact_matrix);
+    /* (B4: spike compaction removed) */
 
     /* Free spike pool (large variable-size arrays, not in arena) */
     SAFE_FREE(lu->spike_pool_idx);
@@ -633,8 +628,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
         lu->ft_spike_start[i] = 0;
     }
     lu->ft_num_updates = 0;
-    lu->ft_num_compacted = 0;
-    lu->ft_compact_valid = 0;
+    /* (B4: spike compaction removed) */
     lu->spike_pool_used = 0;  /* Reset contiguous pool */
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
@@ -1604,87 +1598,9 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
  * the way eta matrices do.
  */
 
-/*
- * Compact multiple FT spikes into a dense matrix for faster application.
- * The product M = E_N * ... * E_1 is computed and stored.
- * This is O(N * m) but applying M is just O(m²) instead of O(N * nnz).
+/* (B4: compact_ft_spikes and apply_compacted_matrix removed —
+ * they built a dense m×m matrix which is O(m^2) per solve, destroying sparsity)
  */
-static void compact_ft_spikes(LUFactorization *lu, int start, int end) {
-    int m = lu->m;
-
-    /* Allocate compact matrix if needed (stored row-major for cache efficiency) */
-    if (!lu->ft_compact_matrix) {
-        lu->ft_compact_matrix = (double*)calloc((size_t)m * m, sizeof(double));
-        if (!lu->ft_compact_matrix) return;
-    }
-
-    double *M = lu->ft_compact_matrix;
-
-    /* Initialize to identity */
-    memset(M, 0, m * m * sizeof(double));
-    for (int i = 0; i < m; i++) {
-        M[i * m + i] = 1.0;
-    }
-
-    /* Apply spikes to M: M = E_k * M for k = start..end-1
-     * E_k * M:
-     *   row[col] = diag * row[col]
-     *   row[i] = row[i] + spike[i] * row[col]  (for i in off-diag)
-     * IMPORTANT: Must use original row[col] for off-diag updates!
-     */
-    double *row_copy = lu->perm_work;  /* Temporary for row copy */
-
-    for (int k = start; k < end; k++) {
-        int col = lu->ft_spike_col[k];
-        double diag = lu->ft_spike_diag[k];
-        int spike_start = lu->ft_spike_start[k];
-        int nnz = lu->ft_spike_nnz[k];
-
-        double *row_col = &M[col * m];
-
-        /* Save original row[col] for off-diagonal updates */
-        memcpy(row_copy, row_col, m * sizeof(double));
-
-        /* Scale row[col] by diag */
-        for (int j = 0; j < m; j++) {
-            row_col[j] *= diag;
-        }
-
-        /* Update other affected rows using ORIGINAL row[col] values */
-        for (int p = 0; p < nnz; p++) {
-            int i = lu->spike_pool_idx[spike_start + p];
-            double v = lu->spike_pool_val[spike_start + p];
-            double *row_i = &M[i * m];
-            for (int j = 0; j < m; j++) {
-                row_i[j] += v * row_copy[j];
-            }
-        }
-    }
-
-    lu->ft_num_compacted = end;
-    lu->ft_compact_valid = 1;
-}
-
-/* Apply compacted matrix M to x: x = M * x */
-static void apply_compacted_matrix(const LUFactorization *lu, double *x) {
-    int m = lu->m;
-    const double *M = lu->ft_compact_matrix;
-    double *work = lu->perm_work;  /* Temporary storage */
-
-    /* Dense matrix-vector multiply with SIMD */
-    for (int i = 0; i < m; i++) {
-        double sum = 0.0;
-        const double *row = &M[i * m];
-        #pragma omp simd reduction(+:sum)
-        for (int j = 0; j < m; j++) {
-            sum += row[j] * x[j];
-        }
-        work[i] = sum;
-    }
-
-    /* Copy result back */
-    memcpy(x, work, m * sizeof(double));
-}
 
 /* Apply Forrest-Tomlin spikes during forward solve
  * FT spikes are stored with the same format as eta matrices:
@@ -1697,36 +1613,7 @@ static void apply_compacted_matrix(const LUFactorization *lu, double *x) {
 static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
     const int n = lu->ft_num_updates;
 
-    /* If we have compacted spikes, apply the compacted matrix first */
-    if (lu->ft_compact_valid && lu->ft_num_compacted > 0) {
-        apply_compacted_matrix(lu, x);
-
-        /* Apply only the non-compacted spikes from contiguous pool */
-        const int start_spike = lu->ft_num_compacted;
-        const int *cols = lu->ft_spike_col;
-        const double *diags = lu->ft_spike_diag;
-        const int *starts = lu->ft_spike_start;
-        const int *nnzs = lu->ft_spike_nnz;
-        const int *pool_idx = lu->spike_pool_idx;
-        const double *pool_val = lu->spike_pool_val;
-
-        for (int k = start_spike; k < n; k++) {
-            int col = cols[k];
-            double xc = x[col];
-            if (fabs(xc) < RALPH_ZERO_TOL) continue;
-            x[col] = diags[k] * xc;
-            int start = starts[k];
-            int nnz = nnzs[k];
-            const int *idx = pool_idx + start;
-            const double *val = pool_val + start;
-            for (int p = 0; p < nnz; p++) {
-                x[idx[p]] += val[p] * xc;
-            }
-        }
-        return;
-    }
-
-    /* No compaction - apply all spikes individually using contiguous pool */
+    /* Apply all spikes individually using contiguous pool */
     const int *cols = lu->ft_spike_col;
     const double *diags = lu->ft_spike_diag;
     const int *starts = lu->ft_spike_start;
@@ -1757,26 +1644,6 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
     }
 }
 
-/* Apply compacted matrix transpose M' to x: x = M' * x */
-static void apply_compacted_matrix_transpose(const LUFactorization *lu, double *x) {
-    int m = lu->m;
-    const double *M = lu->ft_compact_matrix;
-    double *work = lu->perm_work;
-
-    /* Dense matrix-vector multiply with M' (column-major access of row-major M)
-     * Note: Strided access (stride=m) is less SIMD-friendly but still benefits */
-    for (int j = 0; j < m; j++) {
-        double sum = 0.0;
-        #pragma omp simd reduction(+:sum)
-        for (int i = 0; i < m; i++) {
-            sum += M[i * m + j] * x[i];  /* M'[j,i] = M[i,j] */
-        }
-        work[j] = sum;
-    }
-
-    memcpy(x, work, m * sizeof(double));
-}
-
 /* Apply Forrest-Tomlin spikes during backward solve (transpose)
  * For transpose: (E^-1)' * x computes x[col] = spike' * x = sum_i spike[i] * x[i]
  * Applied in reverse order.
@@ -1790,16 +1657,12 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
     const int *pool_idx = lu->spike_pool_idx;
     const double *pool_val = lu->spike_pool_val;
 
-    /* Apply non-compacted spikes first (in reverse order) */
-    int start_spike = lu->ft_compact_valid ? lu->ft_num_compacted : 0;
-
-    for (int k = n - 1; k >= start_spike; k--) {
+    for (int k = n - 1; k >= 0; k--) {
         int col = cols[k];
         int start = starts[k];
         int nnz = nnzs[k];
 
-        /* Compute new x[col] = diag * x[col] + sum(off_diag * x)
-         * SIMD reduction on the sparse dot product */
+        /* Compute new x[col] = diag * x[col] + sum(off_diag * x) */
         double xc = diags[k] * x[col];
         const int *idx = pool_idx + start;
         const double *val = pool_val + start;
@@ -1808,11 +1671,6 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
             xc += val[p] * x[idx[p]];
         }
         x[col] = xc;
-    }
-
-    /* Then apply compacted matrix transpose if available */
-    if (lu->ft_compact_valid && lu->ft_num_compacted > 0) {
-        apply_compacted_matrix_transpose(lu, x);
     }
 }
 
@@ -1966,13 +1824,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     if (lu->min_diag_U > RALPH_ZERO_TOL)
         lu->cond_estimate = lu->max_diag_U / lu->min_diag_U;
 
-    /* Trigger spike compaction if interval reached and using FT updates */
-    if (lu->use_ft_updates && lu->ft_compact_interval > 0) {
-        int uncompacted = lu->ft_num_updates - lu->ft_num_compacted;
-        if (uncompacted >= lu->ft_compact_interval) {
-            compact_ft_spikes(lu, 0, lu->ft_num_updates);
-        }
-    }
+    /* (B4: spike compaction removed — refactorization handles accumulated fill) */
 
     lu_set_failure(lu, LU_FAIL_NONE);
     return 0;

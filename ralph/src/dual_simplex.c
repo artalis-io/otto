@@ -230,6 +230,16 @@ static void dse_init_exact(SimplexTableau *tab) {
     tab->dse_initialized = 1;
 }
 
+/* Approximate DSE init: set all weights to 1.0 (B5 fix).
+ * Used after mid-loop refactorization where exact init is O(m^2).
+ * The incremental weight update formula self-corrects within a few pivots. */
+static void dse_init_approx(SimplexTableau *tab) {
+    for (int k = 0; k < tab->m; k++) {
+        tab->dse_weights[k] = 1.0;
+    }
+    tab->dse_initialized = 1;
+}
+
 /* ============================================================================
  * Dual Simplex Iteration
  * ============================================================================ */
@@ -243,21 +253,13 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
     int leaving_var = tab->basis[leaving];
     double saved_obj = tab->obj_value;
 
-    /* Keep pivot failures non-destructive: restore full basis/state on error. */
-    double *x_backup = (double*)malloc((size_t)tab->n * sizeof(double));
-    double *rc_backup = (double*)malloc((size_t)tab->n * sizeof(double));
-    int *basis_backup = (int*)malloc((size_t)tab->m * sizeof(int));
-    int *basis_pos_backup = (int*)malloc((size_t)tab->n * sizeof(int));
-    VarStatus *status_backup = (VarStatus*)malloc((size_t)tab->n * sizeof(VarStatus));
-
-    if (!x_backup || !rc_backup || !basis_backup || !basis_pos_backup || !status_backup) {
-        free(x_backup);
-        free(rc_backup);
-        free(basis_backup);
-        free(basis_pos_backup);
-        free(status_backup);
-        return -1;
-    }
+    /* Keep pivot failures non-destructive: restore full basis/state on error.
+     * Uses pre-allocated backup arrays in tableau (B2 fix: no per-pivot malloc). */
+    double *x_backup = tab->dual_x_backup;
+    double *rc_backup = tab->dual_rc_backup;
+    int *basis_backup = tab->dual_basis_backup;
+    int *basis_pos_backup = tab->dual_basis_pos_backup;
+    VarStatus *status_backup = tab->dual_status_backup;
 
     memcpy(x_backup, tab->x, (size_t)tab->n * sizeof(double));
     memcpy(rc_backup, tab->rc, (size_t)tab->n * sizeof(double));
@@ -409,11 +411,6 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
         tab->obj_value += tab->c_ext[j] * tab->x[j];
     }
 
-    free(x_backup);
-    free(rc_backup);
-    free(basis_backup);
-    free(basis_pos_backup);
-    free(status_backup);
     return 0;
 
 pivot_fail_rollback:
@@ -423,12 +420,6 @@ pivot_fail_rollback:
     memcpy(tab->basis_pos, basis_pos_backup, (size_t)tab->n * sizeof(int));
     memcpy(tab->var_status, status_backup, (size_t)tab->n * sizeof(VarStatus));
     tab->obj_value = saved_obj;
-
-    free(x_backup);
-    free(rc_backup);
-    free(basis_backup);
-    free(basis_pos_backup);
-    free(status_backup);
     return -1;
 }
 
@@ -860,17 +851,19 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     /* Stalling/degeneracy tracking */
     int degenerate_count = 0;
     const int DEGEN_PERTURB_THRESHOLD = 15;
-    double last_obj = tab->obj_value;
     int stall_count = 0;
     const int STALL_THRESHOLD = 50;
     int perturb_attempts = 0;
     const int MAX_PERTURB_ATTEMPTS = 5;
 
+    /* Compute primal solution once before entering the main loop.
+     * After this, dual_simplex_pivot() maintains x incrementally via
+     * x_B -= step * d.  Full recomputation only after refactorization. */
+    tableau_compute_solution(tab);
+    double last_obj = tab->obj_value;
+
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         solver->iterations = iter;
-
-        /* Compute primal solution */
-        tableau_compute_solution(tab);
 
         /* T3.1: Objective limit early-exit (internal minimization space) */
         if (solver->objective_limit < RALPH_INFINITY &&
@@ -943,7 +936,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                  * to appear feasible when it isn't. */
                 tableau_refactorize(tab);
                 tab->dse_initialized = 0;
-                if (use_dse) dse_init_exact(tab);
+                if (use_dse) dse_init_approx(tab);
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
 
@@ -1015,7 +1008,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     if (dual_simplex_pivot(tab, cl_entering, cl_leaving, cl_theta) != 0) {
                         if (tableau_refactorize(tab) != 0) break;
                         tab->dse_initialized = 0;
-                        if (use_dse) dse_init_exact(tab);
+                        if (use_dse) dse_init_approx(tab);
                         tableau_compute_solution(tab);
                         tableau_compute_reduced_costs(tab);
                     }
@@ -1026,7 +1019,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     if (cleanup_iters % 50 == 0) {
                         tableau_refactorize(tab);
                         tab->dse_initialized = 0;
-                        if (use_dse) dse_init_exact(tab);
+                        if (use_dse) dse_init_approx(tab);
                         tableau_compute_solution(tab);
                         tableau_compute_reduced_costs(tab);
                     }
@@ -1071,7 +1064,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 return -1;  /* FAILED */
             }
             tab->dse_initialized = 0;
-            if (use_dse) dse_init_exact(tab);
+            if (use_dse) dse_init_approx(tab);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
             continue;
@@ -1127,7 +1120,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 return -1;
             }
             tab->dse_initialized = 0;
-            if (use_dse) dse_init_exact(tab);
+            if (use_dse) dse_init_approx(tab);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
         } else if (iter > 0 && iter % 20 == 0) {
@@ -1301,7 +1294,7 @@ int dual_phase1(SimplexSolver *solver) {
         if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
             if (tableau_refactorize(tab) != 0) break;
             tab->dse_initialized = 0;
-            if (use_dse) dse_init_exact(tab);
+            if (use_dse) dse_init_approx(tab);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
             continue;
@@ -1311,7 +1304,7 @@ int dual_phase1(SimplexSolver *solver) {
         if (lu_needs_refactorization(tab->lu) || (iter > 0 && iter % 50 == 0)) {
             if (tableau_refactorize(tab) != 0) break;
             tab->dse_initialized = 0;
-            if (use_dse) dse_init_exact(tab);
+            if (use_dse) dse_init_approx(tab);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
         }
